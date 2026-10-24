@@ -196,6 +196,7 @@ impl<'a> Unit<'a> {
             registers: None,
             pointers: None,
             annotated: None,
+            lazy: None,
             assumptions: None,
             counted: None,
             followers: None,
@@ -879,6 +880,130 @@ impl Analysis for Annotated {
     }
 }
 
+/// Each access's reference, made when first asked: `Annotated` for the one
+/// instruction (`alias::annotate_one`), over the same inputs.
+///
+/// An entry is of the body as it stands when asked, so a holder that lives past
+/// edits must have the inputs carried past them too (`Annotated` is kept past
+/// an edit by `preserve` alone).
+pub struct References {
+    pointers: Rc<Result<alias::PointValues, String>>,
+    registers: Rc<IndexMap<ValueId, Known>>,
+    shape: Rc<Shape>,
+    assumptions: Rc<crate::assumptions::Assumptions>,
+    exposed: Rc<BTreeSet<ValueId>>,
+    counted: Rc<induction::Counted>,
+    edges: Rc<Result<crate::ranger::EdgeFacts, String>>,
+    outer: Rc<Outer>,
+    annotation: alias::Annotation,
+    made: std::cell::RefCell<IndexMap<InstId, Option<MemRef>>>,
+    /// `LLRM_CHECK_LAZY`: what `Annotated` finds, for each entry made to equal.
+    eager: std::cell::OnceCell<IndexMap<InstId, MemRef>>,
+}
+
+impl std::fmt::Debug for References {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(out, "References({} made)", self.made.borrow().len())
+    }
+}
+
+/// Two are equal when what they annotate from is: the same results, or equal
+/// ones.
+impl PartialEq for References {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        fn same<T: PartialEq>(
+            a: &Rc<T>,
+            b: &Rc<T>,
+        ) -> bool {
+            Rc::ptr_eq(a, b) || **a == **b
+        }
+        same(&self.pointers, &other.pointers)
+            && same(&self.registers, &other.registers)
+            && same(&self.shape, &other.shape)
+            && same(&self.assumptions, &other.assumptions)
+            && same(&self.exposed, &other.exposed)
+            && same(&self.counted, &other.counted)
+            && same(&self.edges, &other.edges)
+            && Rc::ptr_eq(&self.outer, &other.outer)
+    }
+}
+
+impl References {
+    /// `inst`'s reference, as `Annotated` holds it, over `host`'s body.
+    pub fn get(
+        &self,
+        host: &Unit,
+        inst: InstId,
+    ) -> Option<MemRef> {
+        if let Some(found) = self.made.borrow().get(&inst) {
+            return found.clone();
+        }
+        let pointers = Result::as_ref(&*self.pointers).ok()?;
+        let mut unit = Unit::within(host.context, host.layout, host.function, &self.outer)
+            .with_shape(&self.shape)
+            .with_assumptions(&self.assumptions)
+            .with_registers(&self.registers)
+            .with_point_values(pointers)
+            .with_exposed(&self.exposed)
+            .with_counted(&self.counted);
+        if let Ok(edges) = &*self.edges {
+            unit = unit.with_edges(edges);
+        }
+        let made = alias::annotate_one(&unit, pointers, &self.registers, &self.annotation, inst);
+        if llrm_support::env_flag!("LLRM_CHECK_LAZY") {
+            let eager = self
+                .eager
+                .get_or_init(|| alias::annotated_with(&unit, pointers, &self.registers).expect("the eager references"));
+            assert_eq!(
+                made.as_ref(),
+                eager.get(&inst),
+                "LLRM_CHECK_LAZY: a reference made when asked differs from the one made up front"
+            );
+        }
+        self.made.borrow_mut().insert(inst, made.clone());
+        made
+    }
+}
+
+/// `References`: the inputs of `Annotated`, nothing annotated until asked.
+pub struct LazyReferences;
+
+impl Analysis for LazyReferences {
+    type Result = Result<References, String>;
+    const NAME: &'static str = "lazy-references";
+    fn run(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self::Result {
+        let pointers = analyses.get::<PointerValues>(context, layout, function);
+        if let Err(error) = &*pointers {
+            return Err(error.clone());
+        }
+        let registers = analyses.get::<Registers>(context, layout, function);
+        Ok(References {
+            annotation: alias::Annotation::new(&registers),
+            pointers,
+            registers,
+            shape: analyses.get::<Shape>(context, layout, function),
+            assumptions: analyses.get::<AssumptionCache>(context, layout, function),
+            exposed: analyses.get::<ExposedFrames>(context, layout, function),
+            counted: analyses.get::<Counted>(context, layout, function),
+            edges: analyses.get::<DominatedEdges>(context, layout, function),
+            outer: Rc::clone(analyses.outer()),
+            made: Default::default(),
+            eager: Default::default(),
+        })
+    }
+}
+
 /// The constants the body holds as values, which is none: see `Registers::run`.
 pub struct Registers;
 
@@ -1215,11 +1340,21 @@ impl Analysis for PlainAccesses {
         let held = previous.as_ref().ok()?;
         let was = held.plain_source()?;
         let writes = analyses.get::<Writes>(context, layout, function);
-        let annotated = analyses.get::<Annotated>(context, layout, function);
         let same = std::rc::Rc::ptr_eq(analyses.outer(), &was.outer)
             && (std::rc::Rc::ptr_eq(&writes, &was.writes) || *writes == *was.writes)
-            && (std::rc::Rc::ptr_eq(&annotated, &was.annotated) || *annotated == *was.annotated);
-        (same && memoryssa::structure_kept(changes, function)).then(|| Ok(std::rc::Rc::new(held.carried(function))))
+            && memoryssa::structure_kept(changes, function);
+        if !same {
+            return None;
+        }
+        // The references the held accesses were made from, asked again of the
+        // body as it stands.
+        let references = analyses.get::<LazyReferences>(context, layout, function);
+        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        let unit = Unit::within(context, layout, function, analyses.outer())
+            .with_lazy(Result::as_ref(&*references).ok()?)
+            .with_exposed(&exposed);
+        let same = function.walk().all(|(_, inst)| unit.reference(inst).as_ref() == held.references.get(&inst));
+        same.then(|| Ok(std::rc::Rc::new(held.carried(function))))
     }
     fn run(
         context: &Context,
@@ -1229,14 +1364,13 @@ impl Analysis for PlainAccesses {
     ) -> Self::Result {
         let writes_rc = analyses.get::<Writes>(context, layout, function);
         let calls = Result::as_ref(&*writes_rc).map_err(String::clone)?.clone();
-        let annotated_rc = analyses.get::<Annotated>(context, layout, function);
-        let references = Result::as_ref(&*annotated_rc).map_err(String::clone)?;
+        let references_rc = analyses.get::<LazyReferences>(context, layout, function);
+        let references = Result::as_ref(&*references_rc).map_err(String::clone)?;
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        let unit = Unit::within(context, layout, function, analyses.outer())
-            .with_references(references)
-            .with_exposed(&exposed);
+        let unit =
+            Unit::within(context, layout, function, analyses.outer()).with_lazy(references).with_exposed(&exposed);
         let source = memoryssa::PlainSource {
-            annotated: std::rc::Rc::clone(&annotated_rc),
+            annotated: std::rc::Rc::clone(&references_rc),
             writes: std::rc::Rc::clone(&writes_rc),
             outer: std::rc::Rc::clone(analyses.outer()),
         };

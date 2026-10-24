@@ -3667,32 +3667,16 @@ fn signed_range_at(
 }
 
 /// What annotating an access reads that is the same for every access of a
-/// body: the ranges of the registers, the strides of the indexes (made when
-/// an access with a variable index asks), the dominator tree.
-pub struct Annotation<'u> {
+/// body: the ranges of the registers, and the strides of the indexes (made when
+/// an access with a variable index asks).
+pub struct Annotation {
     constants: ranges::Intervals,
     strides: std::cell::OnceCell<Congruences>,
-    tree: Option<&'u llrm_mir::domtree::DomTree>,
 }
 
-impl<'u> Annotation<'u> {
-    pub fn new(
-        unit: &Unit<'u>,
-        known: &IndexMap<ValueId, Known>,
-    ) -> Annotation<'u> {
-        Annotation {
-            constants: ranges::intervals(known),
-            strides: std::cell::OnceCell::new(),
-            tree: None,
-        }
-        .with_tree(unit.shape.map(|shape| shape.dominance.tree(unit.function)))
-    }
-
-    fn with_tree(
-        self,
-        tree: Option<&'u llrm_mir::domtree::DomTree>,
-    ) -> Self {
-        Self { tree, ..self }
+impl Annotation {
+    pub fn new(known: &IndexMap<ValueId, Known>) -> Annotation {
+        Annotation { constants: ranges::intervals(known), strides: std::cell::OnceCell::new() }
     }
 }
 
@@ -3712,19 +3696,18 @@ pub fn annotate_one(
         return None;
     }
     let reference = MemRef::of(unit, inst).or_else(|| MemRef::filled(unit, inst))?;
-    let (constants, tree, at) = (&annotation.constants, annotation.tree, inst);
+    let tree = unit.shape.map(|shape| shape.dominance.tree(unit.function));
+    let (constants, at) = (&annotation.constants, inst);
     // Only an access with a variable index asks: 4,185 lookups in 123 solves.
     let strides = || annotation.strides.get_or_init(|| congruences_of(unit, known, None, None));
     let reference = &reference;
     let mut got = facts.reference(unit, reference);
-    let interval = reference
-        .base
-        .and_then(|base| signed_range_at(unit, tree, at, base).or_else(|| constants.get(&base).cloned()));
+    let interval =
+        reference.base.and_then(|base| signed_range_at(unit, tree, at, base).or_else(|| constants.get(&base).cloned()));
     if let (Some(current), true, Some(base), Some(interval)) = (&got, reference.object, reference.base, interval) {
         if interval.width == reference.base_width && current.slices.len() == 1 && reference.scale > 0 {
             let source = current.slices.first().expect("one slice");
-            let (modulus, residue) =
-                strides().get(&base).cloned().unwrap_or((BigInt::from(1_u8), BigInt::from(0_u8)));
+            let (modulus, residue) = strides().get(&base).cloned().unwrap_or((BigInt::from(1_u8), BigInt::from(0_u8)));
             let modulus = if modulus > BigInt::from(1_u8) { modulus } else { BigInt::from(1_u8) };
             let first = &interval.low + mod_floor(&(residue - &interval.low), &modulus);
             let width = i64::from(reference.width.max(1));
@@ -3759,9 +3742,7 @@ pub fn annotate_one(
     // names those linear bytes, whatever its pointer's provenance.
     if let (None, Some(Operand::Value(segment))) = (reference.selector, reference.segment) {
         let lookup = |value: ValueId| {
-            signed_range_at(unit, tree, at, value)
-                .or_else(|| constants.get(&value).cloned())
-                .map(|one| (value, one))
+            signed_range_at(unit, tree, at, value).or_else(|| constants.get(&value).cloned()).map(|one| (value, one))
         };
         let known = [Some(segment), reference.base].into_iter().flatten().filter_map(lookup).collect();
         if let Some(foreign) = regions::foreign_provenance(reference, &known, unit.program) {
@@ -3794,7 +3775,7 @@ pub fn annotated_with(
     facts: &impl Resolves,
     known: &IndexMap<ValueId, Known>,
 ) -> Result<IndexMap<InstId, MemRef>, String> {
-    let annotation = Annotation::new(unit, known);
+    let annotation = Annotation::new(known);
     let mut out = IndexMap::default();
     for (_, inst) in unit.function.walk() {
         if let Some(reference) = annotate_one(unit, facts, known, &annotation, inst) {

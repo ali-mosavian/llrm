@@ -332,6 +332,30 @@ entry:
     assert!(reaches_g("p"), "@p's unknown call may call back into @entry");
 }
 
+/// A reference made when asked is the one `Annotated` makes up front, for every
+/// instruction of every corpus function.
+#[test]
+fn every_reference_made_when_asked_is_the_one_made_up_front() {
+    for (name, module) in corpus() {
+        let layout = layout(&module);
+        let mut outer = Outer::of(&module, None);
+        outer.require::<Summaries>(&module);
+        let outer = Rc::new(outer);
+        for (_, global, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
+            let at = format!("{name}/@{}", global.name.as_deref().unwrap_or(""));
+            let mut analyses = Analyses::new(Rc::clone(&outer));
+            let eager = analyses.get::<Annotated>(&module.context, &layout, function);
+            let lazy = analyses.get::<super::LazyReferences>(&module.context, &layout, function);
+            let (Ok(eager), Ok(lazy)) = (&*eager, &*lazy) else { continue };
+            let unit = Unit::within(&module.context, &layout, function, &outer).with_references(eager);
+            let asked = Unit::within(&module.context, &layout, function, &outer).with_lazy(lazy);
+            for (_, inst) in function.walk() {
+                assert_eq!(asked.reference(inst), unit.reference(inst), "{at} {inst:?}");
+            }
+        }
+    }
+}
+
 /// Each access asked of its own alloca's uses whether the address is exposed,
 /// and the answer was never kept: `mir decide` and `gvn` grew with slope
 /// 2.5–2.9 in a function's blocks, `exposes` 21% of the compile of 300 (#557).

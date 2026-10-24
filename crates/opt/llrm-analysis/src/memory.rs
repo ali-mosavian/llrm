@@ -1101,6 +1101,9 @@ pub struct Unit<'a> {
     /// Each access's reference as alias finds it, the manager's
     /// `Annotated`; unlike `references`, the unit does not read through it.
     pub annotated: Option<&'a Result<IndexMap<InstId, MemRef>, String>>,
+    /// Each access's reference made when asked, over the manager's inputs of
+    /// `Annotated`; `reference` reads through it.
+    pub lazy: Option<&'a crate::manager::References>,
     /// What each block assumes; without it each ask finds it.
     pub assumptions: Option<&'a Assumptions>,
     /// Each loop's counted proofs under `registers`, the manager's `Counted`;
@@ -1190,6 +1193,7 @@ impl<'a> Unit<'a> {
             registers: None,
             pointers: None,
             annotated: None,
+            lazy: None,
             assumptions: None,
             counted: None,
             followers: None,
@@ -1300,6 +1304,13 @@ impl<'a> Unit<'a> {
         Self { pointers: Some(pointers), ..self }
     }
 
+    pub fn with_lazy(
+        self,
+        lazy: &'a crate::manager::References,
+    ) -> Self {
+        Self { lazy: Some(lazy), ..self }
+    }
+
     pub fn with_annotated(
         self,
         annotated: &'a Result<IndexMap<InstId, MemRef>, String>,
@@ -1368,6 +1379,9 @@ impl<'a> Unit<'a> {
         &self,
         inst: InstId,
     ) -> Option<MemRef> {
+        if let Some(lazy) = self.lazy {
+            return lazy.get(self, inst).or_else(|| MemRef::of(self, inst));
+        }
         self.references.and_then(|all| all.get(&inst).cloned()).or_else(|| MemRef::of(self, inst))
     }
 

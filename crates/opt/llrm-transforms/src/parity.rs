@@ -654,6 +654,12 @@ pub const ANALYSES: &[AnalysisEntry] = &[
     ),
     old_analysis("points-to", "Pointers", "BasicAA", "basicaa-port (aa.rs): alias::pointers goes"),
     old_analysis("annotated", "Annotated", "MemoryLocation", "basicaa-port: references.rs MemoryLocation callers"),
+    old_analysis(
+        "lazy-references",
+        "LazyReferences",
+        "MemoryLocation",
+        "basicaa-port: the references annotated when asked",
+    ),
     old_analysis("writes", "Writes", "AAResults::getModRefInfo", "basicaa-port with GlobalsModRef"),
     old_analysis(
         "call-footprints",

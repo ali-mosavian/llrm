@@ -207,7 +207,7 @@ pub struct Accesses {
 /// What `PlainAccesses` reads.
 #[derive(Clone)]
 pub struct PlainSource {
-    pub annotated: Rc<<Annotated as Analysis>::Result>,
+    pub annotated: Rc<<crate::manager::LazyReferences as Analysis>::Result>,
     pub writes: Rc<<crate::manager::Writes as Analysis>::Result>,
     pub outer: Rc<llrm_mir::passes::Outer>,
 }
