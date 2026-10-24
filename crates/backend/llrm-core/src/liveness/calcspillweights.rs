@@ -40,6 +40,28 @@ use super::liverange::LiveInterval;
 use super::slotindex::{InstrKey, SlotIndex};
 use crate::support::hash::{HashMap, HashSet};
 
+/// What each instruction does to the register whose operands these are
+/// (`readsWritesVirtualRegister`): reads, writes, in order of first appearance.
+/// The operands of one instruction need not be next to each other: a join that
+/// renames another register into this one appends the renamed operands.
+pub(crate) fn by_instruction(operands: &[crate::liveness::liverangecalc::Operand]) -> Vec<(InstrKey, bool, bool)> {
+    let mut out: Vec<(InstrKey, bool, bool)> = Vec::new();
+    let mut at: HashMap<InstrKey, usize> = HashMap::default();
+    for op in operands {
+        let slot = *at
+            .entry(op.instr)
+            .or_insert_with(
+                || {
+                    out.push((op.instr, false, false));
+                    out.len() - 1
+                },
+            );
+        out[slot].1 |= op.reads_reg;
+        out[slot].2 |= op.is_def;
+    }
+    out
+}
+
 /// `normalizeSpillWeight` (CalcSpillWeights.h#L35): the weight of
 /// `use_def_freq` over an interval of `size`.
 pub fn normalize_spill_weight(
@@ -311,16 +333,7 @@ impl<'a> VirtRegAuxInfo<'a> {
         let mut hint: HashMap<Hint, f32> = HashMap::default();
         let mut hint_order: Vec<Hint> = Vec::new();
         // The instructions that name the register, once each, in body order.
-        let operands: Vec<_> = lis.operands(li.reg()).to_vec();
-        let mut at = 0;
-        while at < operands.len() {
-            let instr = operands[at].instr;
-            let (mut reads, mut writes) = (false, false);
-            while at < operands.len() && operands[at].instr == instr {
-                reads |= operands[at].reads_reg;
-                writes |= operands[at].is_def;
-                at += 1;
-            }
+        for (instr, reads, writes) in by_instruction(lis.operands(li.reg())) {
             num_instr += 1;
             let insn = lis.instr(instr).clone();
             let copy = self.env.copy_of(&insn);
@@ -419,6 +432,19 @@ fn is_live_out_of_mbb(
 
 #[cfg(test)]
 mod tests {
+
+    /// The operands of `add v1, v1`'s register were listed as use, another
+    /// instruction's, def: read as two groups, the def was dropped as a repeat
+    /// and the induction variable of x_fir lost its x3 for an update at the
+    /// loop exit (weight 0.0041 against the pin's 0.025, the index spilled
+    /// before each use, #4269's AM-IO-2).
+    #[test]
+    fn test_the_operands_of_one_instruction_need_not_be_adjacent() {
+        use crate::liveness::liverangecalc::Operand;
+        let operand = |instr, is_def, reads_reg| Operand { instr, is_def, reads_reg, early_clobber: false };
+        let got = by_instruction(&[operand(7, false, true), operand(9, false, true), operand(7, true, false)]);
+        assert_eq!(got, vec![(7, true, true), (9, true, false)]);
+    }
     use std::sync::Arc;
 
     use super::*;
