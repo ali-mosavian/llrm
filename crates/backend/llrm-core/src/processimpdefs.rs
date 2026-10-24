@@ -14,10 +14,6 @@
 //! DEVIATE PI-1 (no number): no physical-register implicit defs; the target has
 //! none before allocation.
 //!
-//! DEVIATE PI-2 (exit: PHIElimination's undef operands, P2 in
-//! `phielimination.rs`): a phi that reads the value is left alone, where the
-//! pin turns a phi of undefs into an `IMPLICIT_DEF` too.
-//!
 //! DEVIATE PI-3 (exit: none): only a full copy is turned into an
 //! `implicit_def`; the pin also turns `INSERT_SUBREG` and `REG_SEQUENCE`, which
 //! LIR has not.
@@ -27,8 +23,9 @@
 //! `implicit_def` too, and `v3 := add v4, v2` reads `v2` as undef; both
 //! definitions go.
 //!
-//! A definition a phi still reads is left as `mov v, 0` (`left_as_zero`): the
-//! copy a phi makes of it reads a register, as before.
+//! A definition a phi still reads stays: PHIElimination takes a phi of such
+//! values for an `implicit_def` and makes no copy of one
+//! (`allPhiOperandsUndefined`, `SrcUndef`).
 //!
 //! # Used by
 //! `flow::machine_with`, after `SharedConstants`; `isel`'s `held` makes the
@@ -37,7 +34,6 @@
 use std::sync::Arc;
 
 use crate::coalescer::pair::full_copy;
-use crate::model::ir::Imm;
 use crate::model::ir::{Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
@@ -46,7 +42,7 @@ use crate::support::hash::HashSet;
 pub const IMPLICIT_DEF: &str = "implicit_def";
 
 /// `one` defines a value and nothing else: an `implicit_def`.
-fn implicit_def_of(one: &Insn) -> Option<u32> {
+pub(crate) fn implicit_def_of(one: &Insn) -> Option<u32> {
     let what = one.what.as_ref()?;
     (what.name.as_deref() == Some(IMPLICIT_DEF) && one.defines.len() == 1 && one.uses.is_empty())
         .then(|| one.defines[0])
@@ -73,40 +69,8 @@ fn made_implicit(
     Arc::new(made)
 }
 
-/// `body` with each `implicit_def` that is left a `mov v, 0` (DEVIATE PI-2).
-pub fn left_as_zero(body: &LirBody) -> LirBody {
-    let blocks = body
-        .blocks
-        .iter()
-        .map(|block| {
-            let insns: Vec<Arc<Insn>> = block
-                .insns
-                .iter()
-                .map(|one| {
-                    let Some(value) = implicit_def_of(one) else { return Arc::clone(one) };
-                    let width = match one.what.as_ref().map(|what| &what.dests[0]) {
-                        Some(crate::model::ir::Loc::Held(held)) => held.width,
-                        _ => return Arc::clone(one),
-                    };
-                    let mut made = (**one).clone();
-                    made.what = Some(Semantics {
-                        op: Operation::Move,
-                        name: Some("mov".into()),
-                        dests: one.what.as_ref().expect("semantics").dests.clone(),
-                        sources: vec![crate::model::ir::Loc::Imm(Imm { value: 0, width, address: None })],
-                        ..Semantics::new(Operation::Move)
-                    });
-                    made.defines = vec![value];
-                    Arc::new(made)
-                })
-                .collect();
-            block.with_insns(insns)
-        })
-        .collect();
-    body.with_blocks(blocks)
-}
-
-/// The pass as a phase: processed, the rest left as zero.
+/// The pass as a phase: what a phi reads stays an `implicit_def`, for
+/// PHIElimination.
 pub struct ProcessImplicitDefs;
 
 impl LIRTransform for ProcessImplicitDefs {
@@ -125,7 +89,7 @@ impl LIRTransform for ProcessImplicitDefs {
         if !body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| implicit_def_of(one).is_some()) {
             return Ok(body);
         }
-        Ok(left_as_zero(&processed(&body)))
+        Ok(processed(&body))
     }
 }
 
@@ -294,7 +258,8 @@ mod tests {
         assert_eq!(names(&got), ["add"]);
     }
 
-    /// DEVIATE PI-2: a phi that reads the value keeps the definition.
+    /// A phi that reads the value keeps the definition: PHIElimination takes
+    /// it.
     #[test]
     fn test_a_definition_a_phi_reads_stays() {
         let phi = Phi { result: 5, incoming: vec![(0, 1)] };

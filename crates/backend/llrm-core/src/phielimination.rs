@@ -165,6 +165,22 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
     };
     let at_of: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut next = body.next_value();
+    // `isImplicitlyDefined`: every definition is an `implicit_def`.
+    let undefined: crate::support::hash::HashSet<u32> = {
+        let mut seen: HashMap<u32, (usize, usize)> = HashMap::default();
+        for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+            let implicit = crate::processimpdefs::implicit_def_of(one).is_some();
+            for &value in &one.defines {
+                let entry = seen.entry(value).or_insert((0, 0));
+                entry.0 += 1;
+                entry.1 += usize::from(implicit);
+            }
+        }
+        seen.into_iter().filter(|&(_, (all, implicit))| all == implicit).map(|(value, _)| value).collect()
+    };
+    // `ImpDefs`: the `implicit_def`s a phi read, erased once nothing reads
+    // them.
+    let mut imp_defs: crate::support::hash::HashSet<u32> = crate::support::hash::HashSet::default();
     let mut head: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     let mut tails: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     let mut born: IndexMap<u32, u32> = IndexMap::default();
@@ -182,6 +198,12 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
         let mut lowered_phis: HashMap<Vec<(i64, u32)>, u32> = HashMap::default();
         for phi in block.phis.iter() {
             let width = widths[&phi.result];
+            // `allPhiOperandsUndefined`: an `implicit_def` of the result, and
+            // no copy on any edge.
+            if phi.incoming.iter().all(|(_, value)| undefined.contains(value)) {
+                head.entry(block.at).or_default().push(_implicit_def(block, phi.result, width));
+                continue;
+            }
             let key = {
                 let mut key = phi.incoming.clone();
                 key.sort_unstable();
@@ -211,7 +233,15 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
                     continue;
                 }
                 done.push(pre);
-                tails.entry(pre).or_default().push(phielim::_copy(at_of[&pre], incoming, source, None, width));
+                // `SrcUndef`: nothing to copy, but a definition to keep the
+                // temporary jointly dominated.
+                let made = if undefined.contains(&source) {
+                    imp_defs.insert(source);
+                    _implicit_def(at_of[&pre], incoming, width)
+                } else {
+                    phielim::_copy(at_of[&pre], incoming, source, None, width)
+                };
+                tails.entry(pre).or_default().push(made);
             }
         }
     }
@@ -228,7 +258,51 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
         insns.extend(tail[first..].iter().cloned());
         *block = LirBlock { insns: insns.into(), phis: Vec::new().into(), ..(**block).clone() }.into();
     }
+    if !imp_defs.is_empty() {
+        // Remove dead `implicit_def`s: the definitions no phi's source copy
+        // reads now.
+        let read: crate::support::hash::HashSet<u32> =
+            out.blocks.iter().flat_map(|block| block.insns.iter()).flat_map(|one| one.uses.iter().copied()).collect();
+        for block in &mut out.blocks {
+            if block.insns.iter().any(|one| {
+                crate::processimpdefs::implicit_def_of(one)
+                    .is_some_and(|value| imp_defs.contains(&value) && !read.contains(&value))
+            }) {
+                let insns: Vec<Arc<Insn>> = block
+                    .insns
+                    .iter()
+                    .filter(|one| {
+                        !crate::processimpdefs::implicit_def_of(one)
+                            .is_some_and(|value| imp_defs.contains(&value) && !read.contains(&value))
+                    })
+                    .cloned()
+                    .collect();
+                *block = LirBlock { insns: insns.into(), ..(**block).clone() }.into();
+            }
+        }
+    }
     Ok(out)
+}
+
+/// An `implicit_def` of `value`, placed like a copy into `block` (`_copy`).
+fn _implicit_def(
+    block: &LirBlock,
+    value: u32,
+    width: u32,
+) -> Arc<Insn> {
+    let last = block.insns.last();
+    let at = last.map_or(block.at, |last| last.at);
+    let edge = phielim::_nothing(last.map(|last| &**last), at);
+    let what = crate::model::ir::Semantics {
+        op: crate::model::ir::Operation::Nothing,
+        name: Some(crate::processimpdefs::IMPLICIT_DEF.into()),
+        dests: vec![crate::model::ir::Loc::Held(Held { value, width })],
+        sources: Vec::new(),
+        ..crate::model::ir::Semantics::new(crate::model::ir::Operation::Nothing)
+    };
+    let mut one = Insn::new(at, Some(edge), Some(what), vec![value], Vec::new());
+    one.call = last.and_then(|last| last.call.clone());
+    Arc::new(one)
 }
 
 #[allow(dead_code)]
@@ -293,6 +367,56 @@ mod tests {
 
     fn copies(block: &Block) -> Vec<(u32, u32)> {
         block.insns.iter().filter_map(|one| one.copy_of()).collect()
+    }
+
+    fn undef(v: u32) -> Arc<Insn> {
+        let what = Semantics {
+            name: Some(crate::processimpdefs::IMPLICIT_DEF.into()),
+            dests: vec![held(v)],
+            ..Semantics::new(Operation::Nothing)
+        };
+        Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![v], vec![]))
+    }
+
+    fn implicit_defs(block: &Block) -> Vec<u32> {
+        block.insns.iter().filter_map(|one| crate::processimpdefs::implicit_def_of(one)).collect()
+    }
+
+    /// A phi of values only `implicit_def`s define was lowered like any other:
+    /// a copy of each into the temporary on every edge, then a copy out. The
+    /// pin makes it one `implicit_def` of the result and no copy
+    /// (`allPhiOperandsUndefined`).
+    #[test]
+    fn test_a_phi_of_undefined_values_is_an_implicit_def_of_its_result_and_no_copy() {
+        let phis = vec![Phi { result: 10, incoming: vec![(0, 1), (1, 2)] }];
+        let was = body(vec![
+            block(0, vec![undef(1), branch(2)], &[1, 2], vec![]),
+            block(1, vec![undef(2), jump(2)], &[2], vec![]),
+            block(2, vec![read(10)], &[], phis),
+        ]);
+        let got = lowered(&was).expect("lowers");
+        assert!(got.blocks.iter().all(|block| copies(block).is_empty()), "no copy on any edge");
+        assert_eq!(implicit_defs(&got.blocks[2]), [10], "the result is undefined where the phi was");
+    }
+
+    /// An incoming value only an `implicit_def` defines was copied into the
+    /// temporary on its edge, and its definition stayed: the pin makes it an
+    /// `implicit_def` of the temporary there (`SrcUndef`) and erases the old
+    /// one once nothing reads it (`ImpDefs`).
+    #[test]
+    fn test_an_undefined_incoming_value_is_an_implicit_def_of_the_temporary_on_its_edge() {
+        let phis = vec![Phi { result: 10, incoming: vec![(0, 1), (1, 2)] }];
+        let was = body(vec![
+            block(0, vec![undef(1), branch(2)], &[1, 2], vec![]),
+            block(1, vec![def(2), jump(2)], &[2], vec![]),
+            block(2, vec![read(10)], &[], phis),
+        ]);
+        let got = lowered(&was).expect("lowers");
+        let temporary = copies(&got.blocks[2])[0].1;
+        assert_eq!(implicit_defs(&got.blocks[0]), [temporary], "the undefined edge defines the temporary");
+        assert!(copies(&got.blocks[0]).is_empty(), "and copies nothing");
+        assert_eq!(copies(&got.blocks[1]), [(temporary, 2)], "the defined edge still copies");
+        assert!(!implicit_defs(&got.blocks[0]).contains(&1), "the old definition went");
     }
 
     /// `SplitPHIEdges` asks whether one value is live into one block, and was

@@ -180,6 +180,25 @@ struct Spare<'a> {
     free: &'a [RegId],
 }
 
+/// `body` without its `implicit_def`s: a value nothing defines has a register
+/// and no code (`ExpandPostRAPseudos`'s `IMPLICIT_DEF` case, here because this
+/// is the first phase after allocation).
+pub fn expanded(body: &LirBody) -> LirBody {
+    let is_implicit = |one: &Insn| {
+        one.uses.is_empty()
+            && one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some(crate::processimpdefs::IMPLICIT_DEF))
+    };
+    if !body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| is_implicit(one)) {
+        return body.clone();
+    }
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| block.with_insns(block.insns.iter().filter(|one| !is_implicit(one)).cloned().collect()))
+        .collect();
+    body.with_blocks(blocks)
+}
+
 impl LIRTransform for ParallelCopy {
     fn class_name(&self) -> &'static str {
         "ParallelCopy"
@@ -193,14 +212,15 @@ impl LIRTransform for ParallelCopy {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        scheduled_with(&body, self.prices, &self.available, &self.saved).map_err(|refused| refused.to_string())
+        scheduled_with(&expanded(&body), self.prices, &self.available, &self.saved)
+            .map_err(|refused| refused.to_string())
     }
 
     fn transform_raising(
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, Exception> {
-        scheduled_with(&body, self.prices, &self.available, &self.saved)
+        scheduled_with(&expanded(&body), self.prices, &self.available, &self.saved)
             .map_err(|malformed| Exception::defined_in("qbopt.backend.parcopy", "Malformed", malformed.to_string()))
     }
 }
@@ -1005,5 +1025,43 @@ mod tests {
         let mut other = _other(0x100);
         other.group = Some(1);
         assert!(matches!(scheduled(&_body(vec![other])), Err(Malformed(_))));
+    }
+
+    /// PHIElimination makes `implicit_def`s the allocator gives registers; one
+    /// left in the body after allocation printed as an instruction no
+    /// assembler knows (`implicit_def` in the listing).
+    #[test]
+    fn test_an_implicit_def_is_gone_after_allocation_and_the_rest_stays() {
+        let held = |value: u32| Loc::Held(crate::model::ir::Held { value, width: 4 });
+        let undef = Insn::new(
+            0,
+            Some((0, 0)),
+            semantics(Operation::Nothing, crate::processimpdefs::IMPLICIT_DEF, vec![held(1)], vec![]),
+            vec![1],
+            vec![],
+        );
+        let other = Insn::new(
+            1,
+            Some((1, 1)),
+            semantics(
+                Operation::Move,
+                "mov",
+                vec![held(2)],
+                vec![Loc::Imm(crate::model::ir::Imm { value: 3, width: 4, address: None })],
+            ),
+            vec![2],
+            vec![],
+        );
+        let body = LirBody::new(
+            "expanded",
+            0,
+            vec![LirBlock::new(0, vec![Arc::new(undef), Arc::new(other)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let got = super::expanded(&body);
+        let names: Vec<String> =
+            got.insns().iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+        assert_eq!(names, ["mov"]);
     }
 }
