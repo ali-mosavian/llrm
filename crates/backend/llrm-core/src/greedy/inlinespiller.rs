@@ -16,12 +16,13 @@
 //! returned for the queue; the interval of `reg` is erased.
 //!
 //! DEVIATE D-B: no snippets (`collectRegsToSpill`: the tiny copies to a
-//! sibling are not spilled with the register) and no
-//! `hoistAllSpills` (`HoistSpillHelper`: spills of one value in several blocks
-//! are not merged up the dominator tree). `hoistSpillInsideBB`,
-//! `eliminateRedundantSpills` and `coalesceStackAccess` are translated, and
-//! `StackSlotColoring::RemoveDeadStores` in `spiller::_identities_dropped`.
-//! Exit: `hoistAllSpills` and the snippets translated.
+//! sibling are not spilled with the register). `hoistAllSpills`
+//! (`HoistSpillHelper`: spills of one value in several blocks merged up the
+//! dominator tree, `greedy/hoistspill.rs` for the decision) runs after the
+//! allocation; `hoistSpillInsideBB`, `eliminateRedundantSpills` and
+//! `coalesceStackAccess` are translated, and `StackSlotColoring::
+//! RemoveDeadStores` in `spiller::_identities_dropped`. Exit: the snippets
+//! translated.
 //!
 //! DEVIATE D-G: a spilled phi value is not read from its home cell
 //! (`storedhomes`); it is stored and reloaded. Exit: the homes worked out
@@ -1168,7 +1169,8 @@ impl InlineSpiller<'_> {
                 let lis_ref: &LiveIntervals = lis;
                 let sibs = siblings.get(&records[members[0]].original);
                 run_hoist_spills(&tree, root, &spills, &mut |block| {
-                    // `isSpillCandBB`: a sibling is live at the last insert point.
+                    // `isSpillCandBB`: a sibling is live at the last insert
+                    // point.
                     let idx = match terminator(lis_ref, block) {
                         Some(term) => lis_ref.indexes.get_instruction_index(term.id()),
                         None => lis_ref.indexes.get_mbb_end_idx(block),
@@ -1194,8 +1196,11 @@ impl InlineSpiller<'_> {
             // Stack live range update.
             {
                 let stack = self.stacks.entry(home).or_insert_with(LiveRange::new);
-                let first =
-                    if stack.get_num_val_nums() > 0 { stack.get_val_num_info(0) } else { stack.get_next_value(value.def()) };
+                let first = if stack.get_num_val_nums() > 0 {
+                    stack.get_val_num_info(0)
+                } else {
+                    stack.get_next_value(value.def())
+                };
                 stack.merge_value_in_as_value(original, &value, &first);
             }
             // Insert the hoisted spills before the terminator.
@@ -1575,5 +1580,111 @@ mod tests {
         let after = lis.block_insns(0);
         assert_eq!(stores(&lis).len(), 1, "one store for the two spills: {after:?}");
         assert_eq!(frame.slots.len(), 1, "one home for the two: {:?}", frame.slots);
+    }
+
+    /// Two equal stores of one value, one in each arm of a diamond whose head
+    /// runs as often as both arms together, become one store at the end of the
+    /// head, from the sibling that is live there (`hoistAllSpills`).
+    #[test]
+    fn test_equal_stores_in_both_arms_become_one_in_the_head() {
+        use crate::model::ir::Imm;
+        let word = |value: u32| Loc::Held(Held { value, width: 4 });
+        let cell = Mem::new(Some(Addr::new(Space::Frame, -4)), 4);
+        let mov = |at: i64, dest: Loc, source: Loc, defines: Vec<u32>, uses: Vec<u32>| {
+            let what = Semantics {
+                name: Some("mov".into()),
+                dests: vec![dest],
+                sources: vec![source],
+                ..Semantics::new(Operation::Move)
+            };
+            Insn::new(at, Some((at, at + 1)), Some(what), defines, uses)
+        };
+        let jump = |at: i64, op: Operation, name: &str| {
+            let what = Semantics { name: Some(name.into()), ..Semantics::new(op) };
+            Arc::new(Insn::new(at, Some((at, at + 1)), Some(what), vec![], vec![]))
+        };
+        let imm = Loc::Imm(Imm { value: 5, width: 4, address: None });
+        let def = Arc::new(mov(0, word(1), imm, vec![1], vec![]));
+        let copy = Arc::new(mov(1, word(2), word(1), vec![2], vec![1]));
+        let mut left = mov(10, Loc::Mem(cell.clone()), word(2), vec![], vec![2]);
+        left.spill_store = true;
+        let mut right = mov(20, Loc::Mem(cell.clone()), word(2), vec![], vec![2]);
+        right.spill_store = true;
+        let (left, right) = (Arc::new(left), Arc::new(right));
+        let tail = Arc::new(mov(30, word(3), word(1), vec![3], vec![1]));
+        let blocks = vec![
+            LirBlock {
+                succ: vec![1, 2].into(),
+                ..LirBlock::new(0, vec![def, copy, jump(2, Operation::Branch, "jne")])
+            },
+            LirBlock {
+                succ: vec![3].into(),
+                ..LirBlock::new(1, vec![Arc::clone(&left), jump(11, Operation::Jump, "jmp")])
+            },
+            LirBlock {
+                succ: vec![3].into(),
+                ..LirBlock::new(2, vec![Arc::clone(&right), jump(21, Operation::Jump, "jmp")])
+            },
+            LirBlock::new(3, vec![tail, jump(31, Operation::Return, "")]),
+        ];
+        let body = LirBody::new(
+            "diamond",
+            0,
+            blocks.into_iter().map(crate::model::lir::Block::from).collect(),
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let mut lis = LiveIntervals::new(&body);
+        for value in 1..=3 {
+            let li = lis.compute_virt_reg_interval(value);
+            lis.insert_interval(li);
+        }
+        let mut matrix = LiveRegMatrix::new(RegisterInfo::new(Regs(&llrm_x86_m16::REGISTER_INFO)), Box::new(NoFixed));
+        matrix.vrm.set_is_split_from_reg(2, 1);
+        let mut frame = Frame::new(0);
+        let classes = RegisterClasses::m16();
+        let order_of = |_: u32| Vec::new();
+        let mut spiller = InlineSpiller::new(&body, &mut frame, &classes, &order_of, Rc::new(Tables::default()));
+        spiller.originals.insert(7, lis.get_interval(1).range.clone());
+        for store in [&left, &right] {
+            spiller
+                .stored
+                .push(
+                    StoreRecord {
+                        key: store.id(),
+                        home: 7,
+                        original: 1,
+                        cell: cell.clone(),
+                        template: Arc::clone(store),
+                    },
+                );
+        }
+        let count = |lis: &LiveIntervals| -> usize {
+            (0..4)
+                .map(|block| {
+                    lis.block_insns(block)
+                        .iter()
+                        .filter(|one| one.what.as_ref().is_some_and(|w| matches!(w.dests.as_slice(), [Loc::Mem(_)])))
+                        .count()
+                })
+                .sum()
+        };
+        assert_eq!(count(&lis), 2, "premise: a store in each arm");
+        spiller.hoist_all_spills(&mut lis, &mut matrix, &body);
+        let stores: Vec<(usize, Vec<u32>)> = (0..4)
+            .flat_map(|block| {
+                lis.block_insns(block)
+                    .iter()
+                    .filter(|one| one.what.as_ref().is_some_and(|w| matches!(w.dests.as_slice(), [Loc::Mem(_)])))
+                    .map(move |one| (block, one.uses.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(stores, vec![(0, vec![2])], "one store, in the head, of the sibling: {stores:?}");
+        let head = lis.block_insns(0);
+        assert!(
+            head.last().and_then(|one| one.what.as_ref()).is_some_and(|w| w.op == Operation::Branch),
+            "the store goes before the terminator"
+        );
     }
 }

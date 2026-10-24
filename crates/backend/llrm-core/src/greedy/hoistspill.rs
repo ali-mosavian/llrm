@@ -1,4 +1,5 @@
-//! `HoistSpillHelper::runHoistSpills`: where the stores of one spilled value go.
+//! `HoistSpillHelper::runHoistSpills`: where the stores of one spilled value
+//! go.
 //!
 //! # How it works
 //! Translated from InlineSpiller.cpp at d1106deb71cc (`rmRedundantSpills`,
@@ -172,7 +173,10 @@ mod tests {
     use super::*;
 
     /// A diamond 0 -> {1, 2} -> 3 with the value defined in 0.
-    fn diamond(freq: [u128; 4], spills: &[Spill]) -> Hoisted {
+    fn diamond(
+        freq: [u128; 4],
+        spills: &[Spill],
+    ) -> Hoisted {
         let idom = |block: usize| match block {
             0 => None,
             _ => Some(0),
