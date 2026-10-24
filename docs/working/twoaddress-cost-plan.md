@@ -26,3 +26,10 @@ Each step: ledger d_faces Ir before and after, objects on the 568 sweep.
 `tied` is 9.14 M Ir on d_faces -O2 (11.73 M at #4121), against the pin's `TwoAddressInstructionImpl::run` 1.20 M plus its `LiveVariables::analyze` 6.0 M, a separate pass: 1.27x. `BodyFacts::of` is 4.50 M of it (the dataflow 3.4 M, LV3, exit 2026-12-11). Done: `replace` -0.35 M (#4312), `_reused` -0.74, `process_copy` -0.76, the maps -0.22, in-place intervals -2.5 (#4188, since replaced by LV3).
 
 TA-R1 (numbered row, owner w-1, exit 2026-11-14): what is left, each under 0.4 M and mostly inherent: `_untied` 0.53 (the 140 tied instructions build their copies), `finish` 0.35 (`body_like` clones 7 bodies), `_reused` 0.39 (its index for 679 candidate blocks), `three_address`, `try_instruction_commute`, the two reschedules and `scan_uses` 0.12-0.15 each. Re-profile at the tip on the exit date; a callee that still shows over 0.3 M gets a PR, the rest is recorded as inherent.
+
+## m16 `add` to `lea` (textfill; owner w-1 with w-2, plan 2026-11-06)
+`llrm-c -m16 -O2 -march=i386 -S bench/textfill/textfill.c` loops with `add ax,2; cmp bx,3997; mov bx,ax; jb`. The pin at m32 (and BC at m16, with a changed constant) has no extra `mov`: `cmp eax,3997; lea eax,[eax+2]; jb`.
+
+Cause: `three_address` returns None for anything but dwords (`into.width != 4`), so the word add stays two-address and its result needs the copy. `lea ax,[bx+2]` is flag-free in 16-bit addressing, but only `bx`, `si`, `di`, `bp` can be the base, so the conversion needs a register-class constraint on the source before allocation.
+
+Plan: (1) fail-first test on the m16 listing: no `mov` between `cmp` and `jb` in the textfill loop; (2) word `add`/`sub` with an immediate converts when the target's 16-bit address form takes the source's class, with the constraint recorded on the new `lea`; (3) w-2: row 65 keeps the `cmp` before the `lea`.
