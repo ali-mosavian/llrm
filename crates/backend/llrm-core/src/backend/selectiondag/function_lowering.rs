@@ -5,6 +5,12 @@ use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::module::{Function, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
 
+/// Virtual registers number from here: below it the numbers are the pin's
+/// physical registers, which the matcher names as `Register(n)` too (ES is 31,
+/// `$noreg` 0). A virtual register numbered 31 was taken for ES and its copy
+/// dropped (huge_runs' `copy` read the selector of a far pointer never set).
+pub const FIRST_VIRTUAL: u32 = 4096;
+
 /// What `FunctionLoweringInfo::set` decides before any block is selected.
 pub struct FunctionLoweringInfo {
     /// `ValueMap`: a value used outside its block (or by a phi) and the
@@ -46,7 +52,7 @@ impl FunctionLoweringInfo {
             static_allocas: IdMap::new(),
             sret_reg: None,
             bpi: None,
-            next_reg: 0,
+            next_reg: FIRST_VIRTUAL,
             second: Default::default(),
             next_jump_table: 0,
             next_frame_index: 0,
