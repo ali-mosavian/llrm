@@ -2363,3 +2363,215 @@ fn a_memmove_proved_forward_is_a_copy() {
     assert!(refused.contains("memmove"), "{refused}");
     assert!(select_m32(&memmove_ir("")).is_err());
 }
+
+const SCALED_INDEX_AT_M16: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+declare cc 1006 void @\"_far_get@3\"(ptr, ptr addrspace(1))
+declare cc 1006 i16 @\"_con_gfx_trim@3\"(ptr addrspace(1))
+declare cc 1006 i16 @\"_con_back_load@3\"(ptr addrspace(1), ptr)
+declare cc 1006 i16 @\"_con_chars_load@3\"(ptr addrspace(1), ptr)
+declare cc 1006 void @\"_con_text@3\"(ptr addrspace(1), i32, i16, ptr)
+declare cc 1006 void @\"_con_back_draw@3\"(ptr addrspace(1), i32, i16)
+declare i16 @_strlen(ptr) addrspace(1)
+declare ptr @_strcpy(ptr, ptr) addrspace(1)
+declare i16 @llvm.smin.i16(i16, i16)
+define cc 1005 void @\"_con_draw@3\"(ptr addrspace(1) noundef nocapture %0, ptr noundef %1, i32 noundef %2, i16 noundef %3, float noundef %4) addrspace(1) \"llrm-fp-eval\"=\"x87-extended\" {
+b1:
+  %5 = alloca [82 x i8]
+  %6 = alloca [80 x i8]
+  %7 = getelementptr inbounds nuw i8, ptr addrspace(1) %0, i16 2
+  %8 = load float, ptr addrspace(1) %7
+  %9 = fcmp ole float %8, 0.000000e+00
+  br i1 %9, label %b3, label %b2
+
+b2:
+  %10 = tail call cc 1006 i16 @\"_con_back_load@3\"(ptr addrspace(1) noundef %0, ptr noundef %1)
+  %11 = icmp eq i16 %10, 0
+  br i1 %11, label %b9, label %b18
+
+b3:
+  %12 = getelementptr inbounds nuw i8, ptr addrspace(1) %0, i16 8
+  %13 = load i16, ptr addrspace(1) %12
+  %14 = icmp slt i16 %13, 4
+  %15 = select i1 %14, i16 %13, i16 4
+  %16 = tail call cc 1006 i16 @\"_con_gfx_trim@3\"(ptr addrspace(1) noundef %0)
+  %17 = icmp eq i16 %16, 0
+  br i1 %17, label %b9, label %b7
+
+b7:
+  %18 = tail call cc 1006 i16 @\"_con_chars_load@3\"(ptr addrspace(1) noundef %0, ptr noundef %1)
+  %19 = icmp ne i16 %18, 0
+  %20 = icmp sgt i16 %15, 0
+  %or.cond = select i1 %19, i1 %20, i1 false
+  br i1 %or.cond, label %110, label %b9
+
+b9:
+  ret void
+
+b14:
+  %21 = phi i16 [ %114, %110 ], [ %45, %b17 ]
+  %22 = phi i16 [ %113, %110 ], [ %44, %b17 ]
+  %23 = phi i16 [ 0, %110 ], [ %43, %b17 ]
+  %24 = getelementptr i8, ptr addrspace(1) %0, i16 6
+  %25 = load i16, ptr addrspace(1) %24
+  %26 = add i16 %21, %25
+  %27 = icmp slt i16 %26, 0
+  %28 = select i1 %27, i16 15, i16 0
+  %29 = add i16 %28, %25
+  %30 = add i16 %29, %21
+  %31 = lshr i16 %30, 4
+  %32 = shl nuw i16 %31, 4
+  %33 = sub i16 %25, %32
+  %34 = add i16 %21, %33
+  %35 = shl nsw i16 %34, 2
+  %36 = getelementptr i8, ptr addrspace(1) %0, i16 %35
+  %37 = getelementptr i8, ptr addrspace(1) %36, i16 1292
+  %38 = load float, ptr addrspace(1) %37
+  %39 = fcmp ole float %38, 0.000000e+00
+  br i1 %39, label %b17, label %b15
+
+b15:
+  %40 = mul nsw i16 %34, 80
+  %41 = getelementptr inbounds i8, ptr addrspace(1) %111, i16 %40
+  call cc 1006 void @\"_far_get@3\"(ptr noundef %5, ptr addrspace(1) noundef %41)
+  call cc 1006 void @\"_con_text@3\"(ptr addrspace(1) noundef %0, i32 noundef %2, i16 noundef %23, ptr noundef %5)
+  %42 = add nsw i16 %23, 8
+  br label %b17
+
+b17:
+  %43 = phi i16 [ %23, %b14 ], [ %42, %b15 ]
+  %44 = add i16 %22, -1
+  %45 = add i16 %21, 1
+  %46 = icmp samesign ugt i16 %44, 1
+  br i1 %46, label %b14, label %b9
+
+b18:
+  %47 = getelementptr i8, ptr addrspace(1) %0, i16 2
+  %48 = load float, ptr addrspace(1) %47
+  %49 = fptosi float %48 to i16
+  %50 = add nsw i16 %49, -200
+  tail call cc 1006 void @\"_con_back_draw@3\"(ptr addrspace(1) noundef %0, i32 noundef %2, i16 noundef %50)
+  %51 = icmp slt i16 %49, 16
+  br i1 %51, label %b9, label %b20
+
+b20:
+  %52 = tail call cc 1006 i16 @\"_con_chars_load@3\"(ptr addrspace(1) noundef %0, ptr noundef %1)
+  %53 = icmp eq i16 %52, 0
+  br i1 %53, label %b9, label %b22
+
+b22:
+  %54 = add nsw i16 %49, -16
+  %55 = lshr i16 %54, 3
+  %56 = getelementptr inbounds nuw i8, ptr addrspace(1) %0, i16 8
+  %57 = load i16, ptr addrspace(1) %56
+  %58 = getelementptr inbounds nuw i8, ptr addrspace(1) %0, i16 10
+  %59 = load i16, ptr addrspace(1) %58
+  %60 = sub nsw i16 %57, %59
+  %61 = icmp sgt i16 %55, %60
+  %62 = select i1 %61, i16 %60, i16 %55
+  %63 = icmp sgt i16 %62, 0
+  br i1 %63, label %115, label %b27
+
+b27:
+  store i8 93, ptr %5
+  %64 = getelementptr inbounds nuw i8, ptr addrspace(1) %0, i16 1356
+  call cc 1006 void @\"_far_get@3\"(ptr noundef %6, ptr addrspace(1) noundef nonnull %64)
+  %65 = icmp slt i16 %3, 0
+  %66 = select i1 %65, i16 7, i16 0
+  %67 = add i16 %3, %66
+  %68 = ashr i16 %67, 3
+  %69 = call addrspace(1) i16 @_strlen(ptr noundef nonnull %6)
+  %70 = add nsw i16 %68, -4
+  %71 = icmp sgt i16 %69, %70
+  %72 = sub nsw i16 %69, %70
+  %73 = select i1 %71, i16 %72, i16 0
+  %74 = getelementptr inbounds nuw i8, ptr %6, i16 %73
+  %75 = getelementptr inbounds nuw i8, ptr %5, i16 1
+  %76 = call addrspace(1) ptr @_strcpy(ptr noundef nonnull %75, ptr noundef nonnull %74)
+  %77 = call addrspace(1) i16 @_strlen(ptr noundef nonnull %5)
+  %78 = fmul float %4, 4.000000e+00
+  %79 = fptosi float %78 to i32
+  %80 = trunc i32 %79 to i8
+  %81 = and i8 %80, 1
+  %82 = or i8 %81, 10
+  %83 = getelementptr i8, ptr %5, i16 %77
+  store i8 %82, ptr %83
+  %84 = getelementptr i8, ptr %83, i16 1
+  store i8 0, ptr %84
+  call cc 1006 void @\"_con_text@3\"(ptr addrspace(1) noundef %0, i32 noundef %2, i16 noundef %54, ptr noundef %5)
+  br label %b9
+
+b28:
+  %85 = phi i16 [ %124, %115 ], [ %108, %b28 ]
+  %86 = phi i16 [ %123, %115 ], [ %107, %b28 ]
+  %87 = phi i16 [ %117, %115 ], [ %106, %b28 ]
+  %88 = getelementptr i8, ptr addrspace(1) %0, i16 6
+  %89 = load i16, ptr addrspace(1) %88
+  %90 = getelementptr i8, ptr addrspace(1) %0, i16 10
+  %91 = load i16, ptr addrspace(1) %90
+  %92 = sub i16 %89, %91
+  %93 = add i16 %85, %92
+  %94 = icmp slt i16 %93, 0
+  %95 = select i1 %94, i16 15, i16 0
+  %96 = sub i16 %89, %91
+  %97 = add i16 %95, %89
+  %98 = add i16 %97, %85
+  %99 = sub i16 %98, %91
+  %100 = lshr i16 %99, 4
+  %101 = shl nuw i16 %100, 4
+  %102 = sub i16 %96, %101
+  %103 = add i16 %85, %102
+  %104 = mul nsw i16 %103, 80
+  %105 = getelementptr inbounds i8, ptr addrspace(1) %118, i16 %104
+  call cc 1006 void @\"_far_get@3\"(ptr noundef %5, ptr addrspace(1) noundef %105)
+  call cc 1006 void @\"_con_text@3\"(ptr addrspace(1) noundef %0, i32 noundef %2, i16 noundef %87, ptr noundef %5)
+  %106 = add nsw i16 %87, 8
+  %107 = add i16 %86, -1
+  %108 = add i16 %85, 1
+  %109 = icmp samesign ugt i16 %107, 1
+  br i1 %109, label %b28, label %b27
+
+110:
+  %111 = getelementptr inbounds nuw i8, ptr addrspace(1) %0, i16 12
+  %112 = call i16 @llvm.smin.i16(i16 %13, i16 4)
+  %113 = add nsw i16 %112, 1
+  %114 = sub i16 16, %112
+  br label %b14
+
+115:
+  %116 = shl nuw nsw i16 %62, 3
+  %117 = sub nsw i16 %54, %116
+  %118 = getelementptr inbounds nuw i8, ptr addrspace(1) %0, i16 12
+  %119 = add i16 %49, -16
+  %120 = lshr i16 %119, 3
+  %121 = sub i16 %57, %59
+  %122 = call i16 @llvm.smin.i16(i16 %120, i16 %121)
+  %123 = add nsw i16 %122, 1
+  %124 = sub i16 16, %122
+  br label %b28
+}
+";
+
+/// A scaled index beside a base is the 386's 32-bit address form. The `lea`
+/// kept a literal place (`abs`) beside the scale, which no encoding takes: the
+/// QCport modules console and screen failed to compile once their float
+/// functions were selected (`[abs+bx+si*8]`, `_con_draw@3`).
+#[test]
+fn a_scaled_lea_at_m16_has_no_literal_place() {
+    use crate::model::ir::{Loc, Operation};
+    let module = llrm_mir::parse::module(SCALED_INDEX_AT_M16).expect("parses");
+    let done =
+        selected(&module, "_con_draw@3", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+            .unwrap_or_else(|e| panic!("{}", e.0));
+    let mut scaled = 0;
+    for insn in done.body.insns().iter() {
+        let Some(what) = insn.what.as_ref().filter(|w| w.op == Operation::Address) else { continue };
+        let (scale, place) = match &what.sources[..] {
+            [Loc::Address(a)] => (a.scale, a.addr),
+            [Loc::Mem(m)] => (m.scale, m.addr),
+            _ => continue,
+        };
+        scaled += usize::from(scale != 1);
+        assert!(scale == 1 || place.is_none(), "{what:?}");
+    }
+    assert!(scaled > 0, "the function has a scaled lea");
+}
