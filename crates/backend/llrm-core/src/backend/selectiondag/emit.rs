@@ -1738,8 +1738,13 @@ impl Emitter<'_, '_> {
                 // symbol's displacement beside a lone index: the unscaled
                 // index is the address's base.
                 let mut cell = cell;
+                //
+                // A frame cell (`through` is `bp`) is not the symbol's case:
+                // its index is already beside a base, and
+                // moving it made `bp` its own index.
                 if self.ctx.address_mode == AddrMode::Real16
                     && cell.addr.is_some()
+                    && cell.through == llrm_lir::registers::RegId::default()
                     && cell.base.is_none()
                     && cell.index.is_some()
                 {
