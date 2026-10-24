@@ -216,6 +216,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::Mul => self.visit_mul(node),
             ISD::And => self.visit_and(node),
             ISD::Or => self.visit_or(node),
+            ISD::Shl | ISD::Srl | ISD::Sra => self.visit_shift(node),
             ISD::SDiv => self.visit_sdiv(node),
             ISD::UDiv => self.visit_udiv(node),
             ISD::SRem | ISD::URem => self.visit_rem(node),
@@ -645,6 +646,41 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         None
+    }
+
+    /// `visitSHL`, `visitSRL` and `visitSRA`, the constant-amount folds: the
+    /// result is 0 when every bit is known zero; a shift of a shift of the
+    /// same kind is one shift by the sum (0 once the sum reaches the width,
+    /// for `sra` the sign fill).
+    fn visit_shift(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let op = self.dag.opcode(node);
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let vt = self.dag.value_type(node);
+        let width = u128::from(vt.size_in_bits());
+        if op != ISD::Sra {
+            let all = super::fold::mask(vt.size_in_bits());
+            let known = super::known_bits::known_bits(self.dag, node);
+            if all & !known.zero == 0 {
+                return Some(self.dag.get_constant(0, vt));
+            }
+        }
+        if self.dag.opcode(n0) != op {
+            return None;
+        }
+        let (c2, inner) = (self.dag.constant(n1)?, self.dag.constant(self.dag.operand(n0, 1))?);
+        let (x, sum) = (self.dag.operand(n0, 0), c2 + inner);
+        if sum < width {
+            let amount = self.dag.get_constant(sum, self.dag.value_type(n1));
+            return Some(self.dag.get_node(op, vt, &[x, amount]));
+        }
+        if op == ISD::Sra {
+            let amount = self.dag.get_constant(width - 1, self.dag.value_type(n1));
+            return Some(self.dag.get_node(op, vt, &[x, amount]));
+        }
+        Some(self.dag.get_constant(0, vt))
     }
 
     /// `visitMUL`, up to the multiply-by-power-of-two folds.
