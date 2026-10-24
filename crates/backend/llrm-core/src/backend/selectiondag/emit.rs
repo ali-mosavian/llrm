@@ -1736,9 +1736,11 @@ impl Emitter<'_, '_> {
                     .cell(node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short lea".to_owned()))?, width)?;
                 // The object encoder has no field for the displacement of a
                 // symbol beside a lone index register in a 16-bit address
-                // (strlen_idiom did not assemble); a base is encoded.
+                // (strlen_idiom did not assemble); a base is encoded. A frame
+                // cell is `bp`-relative (`through`), so its index is not alone.
                 if self.ctx.address_mode == AddrMode::Real16
                     && cell.addr.is_some()
+                    && cell.through == llrm_lir::registers::RegId::default()
                     && cell.base.is_none()
                     && cell.index.is_some()
                 {

@@ -1962,3 +1962,27 @@ fn a_far_null_is_two_zero_words() {
     selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
+
+const M16_FRAME_INDEX: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define cc 1005 i16 @f(i16 %i) addrspace(1) {
+entry:
+  %a = alloca [64 x i8]
+  call void @llvm.lifetime.start.p0(i64 64, ptr %a)
+  %p = getelementptr i8, ptr %a, i16 %i
+  store i8 1, ptr %p
+  %q = ptrtoint ptr %p to i16
+  ret i16 %q
+}
+declare void @llvm.lifetime.start.p0(i64, ptr)
+";
+
+/// The address of a local plus an index register is a `lea [bp + index +
+/// disp]`: the frame is the base, so the index is not alone. The emitter
+/// refused it as "a lea of a symbol and a lone index at m16" (fill_nest,
+/// spill_store_order).
+#[test]
+fn a_local_plus_an_index_is_a_bp_relative_lea_at_m16() {
+    let module = llrm_mir::parse::module(M16_FRAME_INDEX).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}
