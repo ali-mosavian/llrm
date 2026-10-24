@@ -26,7 +26,7 @@ use llrm_analysis::occurrence::{arms, from_arms};
 use llrm_mir::constantrange::ConstantRange;
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::edit::Position;
-use llrm_mir::module::{BlockId, Function, InstId, Operand};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::valuetracking::guarantee::is_guaranteed_not_to_be_undef_or_poison;
 use llrm_mir::valuetracking::{Query, pattern};
@@ -237,6 +237,12 @@ impl<'q, 'a> Gatherer<'q, 'a> {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The branches `folded` gathered a chain from.
+    pub(crate) static GATHERED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `block`'s `br` on a chain of compares turned into a switch: whether it was.
 pub fn folded(
     context: &Context,
@@ -248,6 +254,23 @@ pub fn folded(
     let &[cond, Operand::Block(if_true), Operand::Block(if_false)] = &function.instruction(last).operands[..] else {
         return false;
     };
+    // `gather` starts from a logical or/and (`or`, `and`, `select`): anything
+    // else gathers nothing, and a lone compare is refused (`used <= 1`).
+    let chain_root = match cond {
+        Operand::Value(v) => match function.value(v).def {
+            ValueDef::Instruction(def) => matches!(
+                function.instruction(def).opcode,
+                Opcode::Binary(BinaryOp::Or | BinaryOp::And) | Opcode::Select
+            ),
+            _ => false,
+        },
+        _ => false,
+    };
+    if !chain_root {
+        return false;
+    }
+    #[cfg(test)]
+    GATHERED.with(|one| one.set(one.get() + 1));
     let (gathered, extra_is_safe, ty, width) = {
         let q = Query {
             context,
