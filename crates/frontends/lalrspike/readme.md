@@ -336,3 +336,17 @@ A stage that refuses a source knows two things: BC's name for the error ("Array 
   vbdos)". `front::parse_coded` leaves the BC name alone, for the tools that compare with BC.
 * `qbfront::driver` prints `file:line:col: message`, the source line with the place marked, and the help; a compile
   error from the later passes (`line N: ...`) gets the file and line the person wrote, through the `$INCLUDE` map.
+
+How a message gets its specifics, from the plainest to the most particular:
+
+* `messages.txt` row for the error, and `messages.txt` variants: `name /WORD` is tried first when the error's text holds
+  that word (`Identifier expected /TAB`, `Formal parameter specification illegal /BYVAL`), and `name /end` when it is
+  at the end of the line.
+* `syntax_forms.txt`: how a statement is written, shown as help for a syntax error in it.
+* The parser names what it knows at the end of the file (`this FOR loop is never closed`) and for a closer with
+  nothing, or the wrong block, open (`NEXT belongs to a FOR loop, but none is open here`).
+* The checker passes a `Reason` (headline, help, the word at fault, a second place for `{other}`) where it knows more
+  than the code says: both types of a mismatch, the argument of a bad call, the range an overflow missed.
+
+`cargo run --release -p qbfront --example diagsurvey -- DIALECT FILE...` prints the distinct messages per BC error over a
+set of sources; it is how the wording was reviewed over the corpus.
