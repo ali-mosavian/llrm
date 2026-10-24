@@ -2960,3 +2960,22 @@ fn the_flags_of_a_sub_are_made_again_after_another_unit_wrote_them() {
     selected(&module, "_con_draw", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
+
+const SMUL_FIX: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a, i32 %b) {
+entry:
+  %r = call i32 @llvm.smul.fix.i32(i32 %a, i32 %b, i32 12)
+  ret i32 %r
+}
+declare i32 @llvm.smul.fix.i32(i32, i32, i32 immarg)
+";
+
+/// `smul.fix` is the product's two halves and a funnel shift by the scale
+/// (the pin's `IMUL32r` and `SHRD32rri8`); `CannotSelect("SMulFix")` stopped
+/// the `mandel` example, which does its arithmetic in 20.12 fixed point.
+#[test]
+fn a_fixed_point_multiply_is_a_widening_multiply_and_a_funnel_shift() {
+    let names = names(SMUL_FIX).unwrap_or_else(|why| panic!("{why}"));
+    assert!(names.iter().any(|n| n == "imul" || n == "mul"), "{names:?}");
+    assert!(names.iter().any(|n| n == "shrd"), "{names:?}");
+}
