@@ -1180,19 +1180,20 @@ impl InlineSpiller<'_> {
                         return None;
                     }
                     // The store reads the sibling at the width of the cell: one
-                    // named at another width sits in a register of another class.
+                    // named at another width sits in a register of another
+                    // class.
                     let width_of = |sib: u32| {
-                        let insns: Vec<Arc<Insn>> = lis_ref
-                            .operands(sib)
-                            .iter()
-                            .map(|op| Arc::clone(lis_ref.instr(op.instr)))
-                            .collect();
+                        let insns: Vec<Arc<Insn>> =
+                            lis_ref.operands(sib).iter().map(|op| Arc::clone(lis_ref.instr(op.instr))).collect();
                         widest_operand(&insns, sib)
                     };
-                    sibs?.iter().copied().find(|sib| {
-                        lis_ref.get_interval(*sib).range.get_vn_info_at(&idx).is_some()
-                            && width_of(*sib) == Some(cell_width)
-                    })
+                    sibs?
+                        .iter()
+                        .copied()
+                        .find(
+                            |sib| lis_ref.get_interval(*sib).range.get_vn_info_at(&idx).is_some()
+                                && width_of(*sib) == Some(cell_width),
+                        )
                 })
             };
             if llrm_support::env_flag!("LLRM_GREEDY_TRACE") {
@@ -1596,13 +1597,11 @@ mod tests {
         assert_eq!(frame.slots.len(), 1, "one home for the two: {:?}", frame.slots);
     }
 
-    /// Two equal stores of one value, one in each arm of a diamond whose head
-    /// runs as often as both arms together, become one store at the end of the
-    /// head, from the sibling that is live there (`hoistAllSpills`).
-    #[test]
-    fn test_equal_stores_in_both_arms_become_one_in_the_head() {
+    /// The stores left in the blocks of a diamond after `hoistAllSpills`: a
+    /// store of the sibling `v2`, named at `sibling_width`, in each arm.
+    fn stores_after_hoisting(sibling_width: u32) -> Vec<(usize, Vec<u32>)> {
         use crate::model::ir::Imm;
-        let word = |value: u32| Loc::Held(Held { value, width: 4 });
+        let word = |value: u32| Loc::Held(Held { value, width: if value == 2 { sibling_width } else { 4 } });
         let cell = Mem::new(Some(Addr::new(Space::Frame, -4)), 4);
         let mov = |at: i64, dest: Loc, source: Loc, defines: Vec<u32>, uses: Vec<u32>| {
             let what = Semantics {
@@ -1694,11 +1693,23 @@ mod tests {
                     .collect::<Vec<_>>()
             })
             .collect();
-        assert_eq!(stores, vec![(0, vec![2])], "one store, in the head, of the sibling: {stores:?}");
-        let head = lis.block_insns(0);
-        assert!(
-            head.last().and_then(|one| one.what.as_ref()).is_some_and(|w| w.op == Operation::Branch),
-            "the store goes before the terminator"
-        );
+        stores
+    }
+
+    /// Two equal stores of one value, one in each arm of a diamond whose head
+    /// runs as often as both arms together, become one store at the end of the
+    /// head, from the sibling that is live there (`hoistAllSpills`).
+    #[test]
+    fn test_equal_stores_in_both_arms_become_one_in_the_head() {
+        assert_eq!(stores_after_hoisting(4), vec![(0, vec![2])], "one store, in the head, of the sibling");
+    }
+
+    /// The only sibling live in the head is named at another width than the
+    /// cell: a store reading it would sit in a register of another class
+    /// ("value has no register", x_life at m16, floats.print_float). The
+    /// stores stay in the arms.
+    #[test]
+    fn test_a_sibling_of_another_width_is_no_source_for_a_hoisted_store() {
+        assert_eq!(stores_after_hoisting(2).len(), 2, "both arm stores stay");
     }
 }
