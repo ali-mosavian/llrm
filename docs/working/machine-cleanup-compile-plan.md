@@ -58,3 +58,9 @@ register via a cell, a float-to-int store into an owned cell, and `_aliased` loa
 (the flat assignment and its own liveness), once selection feeds RFP values to the allocator. Step 9 is that switch-over
 plus the deletion; the 32.8 M is those two passes.
 
+## Callee views (d_faces -O2 m32, callgrind inclusive, dist 4700242708, 2026-10-24)
+
+`fpstack::converted` 16.2 M (row 9): `_split_for_the_stack` 2.1, `Ahead::order` 2.0 (cached in #4368: -1.1 M), `fpregs::valued` 1.8, `live_among` x2 3.3, block rebuild 1.0, `spillplacement::bundles` 0.6. No single cost dominates.
+
+`machinesink::sunk` 12.5 M for 7 bodies, 9 rounds (pin: `MachineSinkingLegacy` 4.3 M): `MachineBlockFrequencyInfo::of` 1.7 (9 calls; it builds its own graph and cycle info), `loops::irreducible` 1.4, `liveness::effect` 1.3 (2,328 first-time decodes), the flag-liveness solve 1.3, `loops::loops` 0.7, `find_succ_to_sink_to` 0.3, `DomTree::of` 0.5; the rest, about 4.5 M, is the walk itself. The lever is sharing: the frequency info, the branch-probability info, the sinker's loops and its dominator tree each rebuild the graph and the cycles of the same body. That needs `MachineBlockFrequencyInfo` and `MachineBranchProbabilityInfo` to take a graph and cycle info already built (w-5's module), then one build per body feeds all four: up to 4 M, not measured.
+
