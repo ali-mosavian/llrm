@@ -60,7 +60,8 @@ pub struct Spliced {
     pub copies: Vec<InstId>,
     /// The copy of the body's entry block.
     pub entry: BlockId,
-    /// The branches back that stand for the body's returns.
+    /// What stands for each of the body's returns: the branch back, or for a
+    /// single return the first instruction after the call.
     pub returns: Vec<InstId>,
 }
 
@@ -171,5 +172,23 @@ pub fn spliced(
         function.replace_all_uses_with(result, with);
     }
     function.erase(call).expect("its uses were replaced");
-    Spliced { copies, entry: blocks[&entry], returns: returned_from }
+    let mut entry = blocks[&entry];
+    let mut returned_from = returned_from;
+    // One return: its block's code goes to the head of what followed the call
+    // and the block goes, as `InlineFunction` splices ReturnBB into AfterCallBB
+    // (L3524); the join keeps AfterCallBB's place in the layout.
+    if let [back] = returned_from[..] {
+        let from = function.parent(back).expect("a placed return");
+        let head = function.block(rest).first().expect("the call's block had a terminator");
+        function.erase(back).expect("a branch has no value");
+        let run: Vec<InstId> = function.iter_block(from).collect();
+        function.splice(&run, Position::Before(head)).expect("placed instructions");
+        function.replace_block_uses_with(from, rest);
+        function.erase_block(from).expect("an emptied block nothing names");
+        if entry == from {
+            entry = rest;
+        }
+        returned_from = vec![head];
+    }
+    Spliced { copies, entry, returns: returned_from }
 }
