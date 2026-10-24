@@ -40,3 +40,7 @@ Input: `d_faces -O2`'s IR just before `indvars` in the function that has loops, 
 | exit optimization (`optimizeLoopExits`) | <2.9 (rest of the pass) | 5.40 | >1.9 |
 
 The ratio is 1.25 to 1.9 on every SCEV function, not one defect: a constant factor in how expressions are built and looked up, with `getBackedgeTakenCount` (1.89), `isBasicBlockEntryGuardedByCond` (1.75) and `createSCEVIter` (1.73) the widest, and the exit optimization (ours 5.4 M, the pin's under 2.9 of all its other work) the one block ours does that the pin does not itemize. One function, one pass, so the ratios are a guide to where to profile by line, not a promise of savings.
+
+## Exit limit, by line (w-5)
+
+`compute_exit_limit_from_icmp_pred` is 14.3 M inclusive (toggle-collect on it agrees) and has no self cost worth naming (8 K): it is its callees. Inside it, `how_far_to_zero` is 4.4 M, `how_many_less_thans` 3.4 M, and `LoopGuards::collect` about 4.9 M of those and the rest (`collect_from_block` recurses through `collect_from_phi`: 576 calls to the closure, 218 `guard_rewrite`, 103 `guard_calls`), so the inclusive figure of `collect` counts its recursion again. No line or call is a defect: guards, range and `get_add_expr` are the same 1.4 to 1.9x constant factor the IndVars table shows. The row is closed as "no single change"; what is left is that factor, the pin's `get_add_expr` at 970 Ir against ours 2,300, which is `strengthen_no_wrap_flags` (L2, w-3's) and interning (tried, no gain).
