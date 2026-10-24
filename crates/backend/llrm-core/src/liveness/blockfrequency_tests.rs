@@ -82,3 +82,24 @@ fn test_an_edge_is_read_by_block_and_successor_index() {
     assert!(mbpi.is_edge_hot(0, 0) && !mbpi.is_edge_hot(0, 1));
     assert_eq!(mbpi.get_edge_probability(1, 0), BranchProbability::new(1, 2));
 }
+
+/// One graph and cycle info feed the frequencies and the edge probabilities of
+/// a body: the same numbers as `of` builds for each on its own (MBFI::of and
+/// MBPI::of built the graph, and MBFI the cycle info, again for every ask:
+/// 1.7 M Ir for 9 bodies of d_faces -O2).
+#[test]
+fn test_one_graph_feeds_the_frequencies_and_the_probabilities() {
+    let looped = body(&[&[1], &[1, 2], &[]], &[((1, 1), ((31u64 << 31) / 32) as u32)]);
+    let graph = std::rc::Rc::new(Graph::of(&looped));
+    let ci = graph.cycle_info();
+    let shared = MachineBlockFrequencyInfo::of_with(&graph, &ci);
+    let own = MachineBlockFrequencyInfo::of(&looped);
+    for block in 0..3 {
+        assert_eq!(shared.get_block_freq(block), own.get_block_freq(block), "block {block}");
+    }
+    let probabilities = MachineBranchProbabilityInfo::of_with(std::rc::Rc::clone(&graph));
+    let alone = MachineBranchProbabilityInfo::of(&looped);
+    for (block, edge) in [(1, 0), (1, 1)] {
+        assert_eq!(probabilities.get_edge_probability(block, edge), alone.get_edge_probability(block, edge));
+    }
+}
