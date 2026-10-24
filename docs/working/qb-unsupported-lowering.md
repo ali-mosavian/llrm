@@ -34,3 +34,11 @@ array access under /D) to a path that mostly never errors; the resume switch is 
 
 **Test.** A program that OPENs a missing file under ON ERROR RESUME NEXT, then PRINTs ERR, run in DOSBox: 53 as BC prints;
 and the MIR has one handler block and no per-statement check.
+
+## REDIM PRESERVE
+BC (PDS 7.1) calls `B$RDMP` with `B$RDIM`'s operands. The only real file using it (vbdos `INC/HELP.BAS`) preserves a
+UDT array and a STRING array. The runtime (#4404) preserves raw-byte elements; a string array raises Subscript out of
+range at run time. The compiler keeps the call and does NOT refuse a string array at compile time: a compile failure
+would stop HELP.BAS compiling at all, a run-time error only the path that reaches it. String-array preserve (move the
+string descriptors, re-own their strings) is due 2026-11-06 with a fail-first `tests/run/qb` program under DOSBox.
+Order after #4329: PALETTE USING row, RESUME NEXT, string-array preserve.
