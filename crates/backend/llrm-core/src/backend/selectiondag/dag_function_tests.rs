@@ -1188,10 +1188,11 @@ entry:
 ";
 
 /// A float call result is the stack's top after the call (an unnamed load of no
-/// cell). One live across another call is selected too: the float allocator
-/// spills it around the call.
+/// cell); one live across another call that returns a float cannot stay on the
+/// x87 stack (the stackifier refuses it: RFP-5) and the function is refused,
+/// not left to fail the compile.
 #[test]
-fn a_float_result_is_the_stack_top_and_one_may_live_across_a_call() {
+fn a_float_result_is_the_stack_top_and_none_lives_across_a_call() {
     use crate::model::ir::{Loc, Operation};
     let module = llrm_mir::parse::module(FLOAT_CALL).expect("parses");
     let cpu = crate::backend::cpu::profile("486").expect("a cpu");
@@ -1206,7 +1207,28 @@ fn a_float_result_is_the_stack_top_and_one_may_live_across_a_call() {
         }),
         "an unnamed load of the stack top"
     );
-    selected(&module, "h", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let why = selected(&module, "h", &llrm_x86_m32::M32, cpu, &[]).err().map(|e| e.0);
+    assert!(why.as_deref().is_some_and(|why| why.contains("live across")), "{why:?}");
+}
+
+const FLOAT_ACROSS_VOID_CALL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @note(i32)
+define double @f(double %x, i32 %n) {
+entry:
+  %y = fadd double %x, 1.000000e+00
+  call void @note(i32 %n)
+  %z = fadd double %y, %x
+  ret double %z
+}
+";
+
+/// A float live across a call that returns no float is selected: the float
+/// allocator spills it around the call (the net refused every such function).
+#[test]
+fn a_float_live_across_a_call_that_returns_no_float_is_selected() {
+    let module = llrm_mir::parse::module(FLOAT_ACROSS_VOID_CALL).expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu");
+    selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
 }
 
 const GLOBAL_INDEXED: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
