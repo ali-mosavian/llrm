@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 128 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 131 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -45,6 +45,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 128 documented
 | farcall | Give a far indirect call the memory operand the 16-bit ISA requires. | First machine phase (`far-indirect-calls`), before `ssaspill`, once per | [farcall](farcall.md) |
 | farload | Select a far pointer's two word loads as one `les`-form load. | Per block in isel's cross-instruction selection (`isel/combined.rs`), | [farload](farload.md) |
 | fixupbw | A byte or word load, copy or extension is the dword form when the rest of its register is dead: `X86FixupBWInsts`. | After `Peephole`, optimizing levels only. | [fixupbw](fixupbw.md) |
+| fixupleas | `X86FixupLEAs`. | After `FixupBW`, optimizing levels only. | [fixupleas](fixupleas.md) |
 | fixupsetcc | `setcc` into a register zeroed before the compare, not a `movzx` of a byte after it: `X86FixupSetCC`. | After `PressureSink`, before the float phases. Optimizing levels only. | [fixupsetcc](fixupsetcc.md) |
 | flagscopy | Flags kept across an instruction that clobbers them: `X86FlagsCopyLowering`. | After `FixupSetCC`, before the float phases. Every level (the pin's pass is | [flagscopy](flagscopy.md) |
 | floatalloc | Converts floating values held in flat x87 registers to stack form: `fld`, `fxch`, `fstp st(i)` and `st(i)` operands. | After `floatassign` in the machine phases, once per function, on bodies with | [floatalloc](floatalloc.md) |
@@ -84,10 +85,12 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 128 documented
 | machinecse | Removes a repeated pure register computation after allocation, by value numbering the byte lanes each instruction reads and writes. | A peephole sub-pass, once per `peephole` run, after `sharedstores` and | [machinecse](machinecse.md) |
 | machinedce | Removes a pure allocated instruction whose whole result is dead. | The last body rewrite of `peephole` before `popped_arguments`, and | [machinedce](machinedce.md) |
 | machinelicm | Early `MachineLICM`: a pure computation of values defined outside a loop, made in the loop, is made once in its preheader. | A machine phase before `precse` (`flow::machine_with`), at every -O level | [machinelicm](machinelicm.md) |
-| machinesched | The dependency graph of a scheduling region of LIR, before allocation: `ScheduleDAGInstrs` for the pre-RA machine scheduler (row 65). | The bottom-up list scheduler (pieces 2 and 3 of | [machinesched](machinesched.md) |
+| machinesched | The dependency graph of a scheduling region of LIR, before allocation: `ScheduleDAGInstrs` for the pre-RA machine scheduler (row 65). | `MachineScheduler`, a machine phase after `pressuresink` and before | [machinesched](machinesched.md) |
 | machinesink | Moves a computation into the one successor block that uses it, breaking a critical edge where that is what lets it go. | A machine phase before `phielim` (`flow::machine_with`), in every machine | [machinesink](machinesink.md) |
 | masm | The assembly-level module: allocated LIR with its frame sequences written out, as the items `objbuild` encodes and the jwasm source `-S` prints. | Once per procedure after the machine phases. `cleaned_returns` runs in | [masm](masm.md) |
+| memcpycall | Turns an `llvm.memcpy` the target should not copy inline into a call of `memcpy`, as the pin's `EmitTargetCodeForMemcpy` leaves it: a call for a length the target cannot move in a few loads and stores. | Once per module in `driver::optimized`, when the target names `memcpy` | [memcpycall](memcpycall.md) |
 | memsetpattern | Expands `llvm.experimental.memset.pattern` into a store loop in MIR before instruction selection, as the pin's `PreISelIntrinsicLowering` does (the DAG never sees the intrinsic). | Once per module in `driver::optimized`, for `--isel=dag`: the old selector | [memsetpattern](memsetpattern.md) |
+| mirprint | Pre-allocation LIR as LLVM MIR, so the pin's `llc -run-pass=greedy` allocates the same function (a like-for-like check of quality and cost). | `LLRM_MIR_PRINT=<function>` in the greedy shadow run; | [mirprint](mirprint.md) |
 | nativeframe | The frame plan of a procedure whose prologue already exists (native-code input): where it reserves the frame, where it releases it, and which registers hold values on entry. | `frame` (`Frame::native`), `prologue`, `relayout`, `assemble` and | [nativeframe](nativeframe.md) |
 | nearcode | Puts a function a frontend allows near, which only its own module calls and only directly, in the near code space, so callers enter it by a near call. | Once per module at the start of `assemble::assembled_by` (`mir near code`), | [nearcode](nearcode.md) |
 | needs | What a body contains that a peephole sub-pass could act on, so that `peephole` skips a sub-pass whose subject is absent. | `peephole`. | [needs](needs.md) |

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/interprocedural.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/interprocedural.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/interprocedural.rs sha256:d6fa9e2b42092f1bc18bb883915b9ba046087de758cdf51fb61a63ac1c8e3739 -->
+<!-- src: crates/opt/llrm-transforms/src/interprocedural.rs sha256:4b01c2e0221b54d8964a62e8399a76e7f8c468d002140a55bf206e5a0425a7c3 -->
 
 # interprocedural
 
@@ -26,11 +26,12 @@ fewer.
 
 The stages, in order:
 
-1. `stamped_all`: each exactly defined body is stamped with what is proved
-   of it, callees first: `memory(...)`, `nocapture`/`readonly`/`readnone`/
-   `writeonly`/`initializes` on pointer parameters, `willreturn`,
-   `norecurse`, `nounwind`. A stated attribute is only narrowed. The same
-   stamp is stated on the declarations of the body in other modules.
+1. `stamped_all` (the `stamp` slot, before the walk): each exactly defined
+   body is stamped with what is proved of it, callees first: `memory(...)`,
+   `nocapture`/`readonly`/`readnone`/ `writeonly`/`initializes` on pointer
+   parameters, `willreturn`, `norecurse`, `nounwind`. A stated attribute is
+   only narrowed. The same stamp is stated on the declarations of the body
+   in other modules.
 2. The private bodies nothing reaches any more, the ones the walk
    ([`crate::walk::Walk`](walk.md)) inlined into every caller, lose their bodies
    (`bare_the_unreached`). Inlining is the walk's alone.
@@ -47,9 +48,9 @@ The stages, in order:
 6. `ipa-range<N>.`, up to four rounds, if `ranges` is set: the range every
    caller passes a parameter is stated on it for the body's own proofs.
 7. `ipa-deadargs.` ([`crate::deadargs`](deadargs.md)): parameters nothing reads go.
-8. `stamped_all` again, then `ipa-pure.` removes unused calls to bodies
-   proved pure and terminating, and `ipa-noreturn.` cuts the code after a
-   call to a private body every path of which stops, keeping the call.
+8. `ipa-pure.` removes unused calls to bodies proved pure and terminating,
+   and `ipa-noreturn.` cuts the code after a call to a private body every
+   path of which stops, keeping the call.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%

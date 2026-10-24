@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/selectiondag.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/selectiondag.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:826250f27428bfb7dec9c07aa5b97a6568ce9d6aec54a2aff90a368e9a0aec36 -->
+<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:9930cd57c6292c0db2d155227835f1c9990f1d3f29922f2403093ec3a5fdc181 -->
 
 # selectiondag
 
@@ -88,6 +88,15 @@ Owner sdag-a. Review 2026-11-13.
 DEVIATE SD100: a call's `TargetGlobalAddress` carries no relocation flag
 (`[TF=7]`, PLT, in the pin): the object writer picks the relocation.
 Exit: none. Owner sdag-a.
+
+DEVIATE SD101: `freeze` folds away only for a constant or another
+`freeze` (`isGuaranteedNotToBeUndefOrPoison` also looks through
+arithmetic on frozen operands, `Register`s of known width and the like).
+Exit: with the known-bits translation (sdag-b). Owner sdag-a.
+
+DEVIATE SD102: an `invoke` has no `EH_LABEL`s around its call and a
+`landingpad` builds nothing: the QB personality's pad is entered by the
+runtime (`ehprepare`), with no unwind tables. Exit: none. Owner sdag-a.
 
 ## See also
 LLVM's `SelectionDAG::getNode`
