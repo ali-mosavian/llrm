@@ -12,14 +12,17 @@
 //!
 //! Done here: [`is_lea`] (L227), the block loop, [`previous_instr`] (L295),
 //! [`uses_register`] (L270) and [`search_backwards`] (L308), which finds the
-//! write of a register within five cycles before an instruction.
+//! write of a register within five cycles before an instruction;
+//! [`inefficient_lea_base`] (L331-347); [`alu_names`], the pin's opcode maps
+//! `getADDrrFromLEA` to `getINCDECFromLEA` (L351-400), which on our
+//! name-keyed instructions are one table; and [`check_reg_usage`] (L466).
 //!
 //! # Runs
 //! After `FixupBW`, optimizing levels only.
 
 use llrm_lir::registers::{RegId, Regs};
 
-use crate::backend::peephole::_lanes;
+use crate::backend::peephole::{_lanes, DeadAfter, id};
 use crate::model::ir::{Loc, Operation};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
@@ -56,6 +59,115 @@ impl LIRTransform for FixupLeas {
 /// `isLEA`: `LEA32r`.
 pub fn is_lea(one: &Insn) -> bool {
     one.what.as_ref().is_some_and(|what| what.op == Operation::Address && what.name.as_deref() == Some("lea"))
+}
+
+/// `isInefficientLEAReg` with `hasInefficientLEABaseReg`: a base of EBP with an
+/// index register (`R13` has no counterpart before x86-64).
+pub fn inefficient_lea_base(
+    base: RegId,
+    index: RegId,
+) -> bool {
+    base == RegId::EBP && index != RegId::None
+}
+
+/// The mnemonics the opcode maps give for a LEA: `ADDrr`, `SUBrr`, `ADDri`,
+/// `SUBri`, `INC`, `DEC`. `ADD32ri` and `ADD64ri32` differ only in the
+/// pin's immediate width, which our `add` takes from its operand.
+pub const fn alu_names() -> AluNames {
+    AluNames { add: "add", sub: "sub", inc: "inc", dec: "dec" }
+}
+
+pub struct AluNames {
+    pub add: &'static str,
+    pub sub: &'static str,
+    pub inc: &'static str,
+    pub dec: &'static str,
+}
+
+/// The base and index registers of a LEA's address (`RegId::None` where
+/// absent).
+pub fn lea_base_index(one: &Insn) -> Option<(RegId, RegId)> {
+    match one.what.as_ref()?.sources.as_slice() {
+        [Loc::Address(address)] => Some((address.through, address.index_through)),
+        _ => None,
+    }
+}
+
+/// What `checkRegUsage` found between a LEA and the ALU instruction after it.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RegUsageCheck {
+    /// A def of the base or index register.
+    pub base_index_def: bool,
+    /// The ALU destination is named.
+    pub alu_dest_ref: bool,
+    /// The instruction that reads the base, and ends it.
+    pub killed_base: Option<usize>,
+    /// The instruction that reads the index, and ends it.
+    pub killed_index: Option<usize>,
+}
+
+/// `checkRegUsage`: the instructions strictly between `lea` and `alu`. A read
+/// is a kill where no lane of the register is live after the instruction
+/// (`isKill`).
+pub fn check_reg_usage(
+    regs: Regs,
+    block: &LirBlock,
+    lea: usize,
+    alu: usize,
+    dead: &DeadAfter,
+) -> RegUsageCheck {
+    let mut found = RegUsageCheck::default();
+    let (base, index) = lea_base_index(&block.insns[lea]).unwrap_or((RegId::None, RegId::None));
+    let alu_dest = block
+        .insns[alu]
+        .what
+        .as_ref()
+        .and_then(
+            |what| match what.dests.as_slice() {
+                [Loc::Reg(reg)] => Some(reg.register),
+                _ => None,
+            },
+        );
+    let overlaps =
+        |a: RegId, b: RegId| a != RegId::None && b != RegId::None && !_lanes(regs, a).is_disjoint(&_lanes(regs, b));
+    for at in lea + 1..alu {
+        let one = &block.insns[at];
+        let Some(what) = one.what.as_ref() else { continue };
+        let mut operands: Vec<(RegId, bool)> = Vec::new();
+        for dest in &what.dests {
+            if let Loc::Reg(reg) = dest {
+                operands.push((reg.register, true));
+            }
+        }
+        for loc in what.dests.iter().chain(&what.sources) {
+            match loc {
+                Loc::Mem(mem) => operands.extend([(mem.through, false), (mem.index_through, false)]),
+                Loc::Address(address) => operands.extend([(address.through, false), (address.index_through, false)]),
+                _ => {}
+            }
+        }
+        for source in &what.sources {
+            if let Loc::Reg(reg) = source {
+                operands.push((reg.register, false));
+            }
+        }
+        for (register, is_def) in operands {
+            if alu_dest.is_some_and(|d| overlaps(register, d)) {
+                found.alu_dest_ref = true;
+            }
+            let ends = || dead.get(&id(one)).is_some_and(|lanes| _lanes(regs, register).is_subset(lanes));
+            for (mine, killed) in [(base, &mut found.killed_base), (index, &mut found.killed_index)] {
+                if overlaps(register, mine) {
+                    if is_def {
+                        found.base_index_def = true;
+                    } else if ends() {
+                        *killed = Some(at);
+                    }
+                }
+            }
+        }
+    }
+    found
 }
 
 /// `RegUsageState`.
@@ -262,5 +374,90 @@ mod tests {
     fn the_pass_leaves_a_body_alone() {
         let b = LirBody::new("f", 0, vec![block(vec![lea(0)], vec![]).into()], Default::default(), Default::default());
         assert_eq!(FixupLeas.transform(b.clone()).unwrap(), b);
+    }
+
+    fn lea_of(
+        at: i64,
+        dest: RegId,
+        base: RegId,
+        index: RegId,
+    ) -> Arc<Insn> {
+        let address = crate::model::ir::AddressRef {
+            through: base,
+            index_through: index,
+            ..crate::model::ir::AddressRef::new(None)
+        };
+        insn(at, Operation::Address, "lea", vec![reg(dest, 4)], vec![Loc::Address(address)])
+    }
+
+    fn add(
+        at: i64,
+        dest: RegId,
+        source: RegId,
+    ) -> Arc<Insn> {
+        insn(at, Operation::Binary, "add", vec![reg(dest, 4)], vec![reg(dest, 4), reg(source, 4)])
+    }
+
+    fn dead_after(
+        block: &LirBlock,
+        dead: &[(usize, &[RegId])],
+    ) -> DeadAfter {
+        dead.iter()
+            .map(|(at, registers)| (id(&block.insns[*at]), registers.iter().flat_map(|r| _lanes(regs(), *r)).collect()))
+            .collect()
+    }
+
+    #[test]
+    fn an_ebp_base_with_an_index_is_inefficient() {
+        assert!(inefficient_lea_base(RegId::EBP, RegId::ECX));
+        assert!(!inefficient_lea_base(RegId::EBP, RegId::None));
+        assert!(!inefficient_lea_base(RegId::EAX, RegId::ECX));
+    }
+
+    #[test]
+    fn the_opcode_maps_name_add_sub_inc_dec() {
+        let names = alu_names();
+        assert_eq!([names.add, names.sub, names.inc, names.dec], ["add", "sub", "inc", "dec"]);
+    }
+
+    /// `lea eax,[ebx+ecx]`; `mov edx,ebx` (last use of ebx); `mov ecx,5`
+    /// (defines the index); `add esi,eax`.
+    #[test]
+    fn check_reg_usage_finds_a_killed_base_and_a_defined_index() {
+        let b = block(
+            vec![
+                lea_of(0, RegId::EAX, RegId::EBX, RegId::ECX),
+                mov(1, RegId::EDX, RegId::EBX),
+                insn(
+                    2,
+                    Operation::Move,
+                    "mov",
+                    vec![reg(RegId::ECX, 4)],
+                    vec![Loc::Imm(crate::model::ir::Imm { value: 5, width: 4, address: None })],
+                ),
+                add(3, RegId::ESI, RegId::EAX),
+            ],
+            vec![],
+        );
+        let dead = dead_after(&b, &[(1, &[RegId::EBX])]);
+        let found = check_reg_usage(regs(), &b, 0, 3, &dead);
+        assert_eq!(
+            found,
+            RegUsageCheck { base_index_def: true, alu_dest_ref: false, killed_base: Some(1), killed_index: None }
+        );
+    }
+
+    #[test]
+    fn check_reg_usage_sees_a_reference_to_the_alu_destination() {
+        let b = block(
+            vec![
+                lea_of(0, RegId::EAX, RegId::EBX, RegId::ECX),
+                mov(1, RegId::EDX, RegId::ESI),
+                add(2, RegId::ESI, RegId::EAX),
+            ],
+            vec![],
+        );
+        let found = check_reg_usage(regs(), &b, 0, 2, &DeadAfter::default());
+        assert!(found.alu_dest_ref && !found.base_index_def && found.killed_base.is_none());
     }
 }
