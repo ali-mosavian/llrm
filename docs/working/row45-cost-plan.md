@@ -103,3 +103,14 @@ Counted in a throwaway build over the 65 QCport modules at -O2 (m16 and m32): 10
 ### `constants` under each selector (2026-10-25)
 The 106 extension folds above are the old selector's (the default today). With `--isel=dag` the same count over the modules that compile is 0 folds and 1 removed load (old: 106 and 54): the DAG folds an extension of a constant at node creation (`fold_constant_arithmetic`), so R45-3 has no DAG work for it; `constants` goes when the DAG selector is the default (w12's flip), not before. Compiled: m16 65 of 65 modules (old) and 63 of 65 (dag, two refuse); m32 14 and 15 of 65 (the others fail in the front end on this include set), so the m32 figures say little. xor, inc/dec and test are the matcher's (w11): to be asked which are landed.
 
+### `zeroes`, `increments`, `zero_compares` under each selector (2026-10-25)
+w11 (matcher owner): under `--isel=dag` all three forms are pin table patterns, already selected. Checked, not assumed: a throwaway build counted the instructions each sub-pass changed over the 65 QCport modules at m16 -O2 (positions, so a rewrite that moved later instructions would inflate it; these rewrites keep the length):
+
+| sub-pass | old selector | dag selector |
+|---|--:|--:|
+| `zero_compares` | 1731 | 0 |
+| `increments` | 937 | 130 |
+| `zeroes` | 1337 | 1190 |
+
+So: `zero_compares` is dead under dag and goes with the default flip. `increments` leaves 130 the matcher does not make: to be found (a pass after selection that makes an add). `zeroes` still fires 1190 times under dag because it is the pin's own post-RA step, `X86InstrInfo::expandPostRAPseudo` of `MOV32r0` into `xor`; its home is a translation of that expansion, and its cost (2.28 M) is the walk, which R45-2's index reaches. R45-3 is therefore: delete `zero_compares` and `constants` at the flip, trace the 130, rename `zeroes` as the expansion.
+
