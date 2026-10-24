@@ -36,3 +36,20 @@ def test_positional_arguments_are_refused_not_ignored(tmp_path):
 def test_one_missing_variable_is_named(tmp_path):
     done = run(tmp_path, LEDGER_OURS="a", LEDGER_CLANG="b", LEDGER_OT="1")
     assert done.returncode != 0 and "LEDGER_PT not set" in done.stderr
+
+
+def test_a_backend_pass_in_no_bucket_is_refused_not_left_to_the_residual(tmp_path):
+    """24 M of backend passes (machinesched, latecleanup, machinecp, machinelicm, ...) were in no bucket
+    for weeks, so the ledger's residual held them and the clean-up bucket read 28.7 M low."""
+    ours = tmp_path / "ours.incl"
+    ours.write_text(
+        "     500,000 (50.0%)  ???:llrm_core::backend::objbuild::written_in [x]\n"
+        "     400,000 (40.0%)  ???:<llrm_core::backend::newpass::NewPass as llrm_core::model::passes::LIRTransform>::transform_raising [x]\n"
+    )
+    clang = tmp_path / "clang.incl"
+    clang.write_text("     300,000 (30.0%)  /x/y.cpp:clang::BackendConsumer::HandleTranslationUnit(int) [x]\n")
+    done = run(
+        tmp_path, LEDGER_OURS=str(ours), LEDGER_CLANG=str(clang), LEDGER_OT="1000000", LEDGER_PT="500000"
+    )
+    assert done.returncode != 0
+    assert "backend passes in no bucket" in done.stderr and "newpass::NewPass" in done.stderr, done.stderr
