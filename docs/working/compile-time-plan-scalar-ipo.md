@@ -41,13 +41,13 @@ Scalar, ours 137.6 / pin 81.8, excess 55.8 (the pin's 81.8 holds IPSCCP 4.1):
 | DeadStoreElimination: `fork` + `Context` clone, as EarlyCse's | 1.7 | 0 | 1.7 | handed to w-3, 11-20 |
 | DeadStoreElimination: the walk (`eliminate_dead_defs_of` 3.9, 72 calls) and the rest | 4.3 | 2.8 | 1.5 | unexplained |
 | SCCP + IPSCCP | 11.7 | 8.3 | 3.4 | flat, no gap to mirror |
-| `Together` (llrm-only combined pass) | 9.3 | 0 | 9.3 | unexplained |
-| `Dead` (llrm-only) | 6.4 | 0 | 6.4 | unexplained |
+| `Together` (SROA then Mem2Reg, one slot): ledger4 counts SROA twice, as `Sroa` and as `Together` | 9.3 | 0 | 9.3 | instrument error: not a cost, the bucket is 128.3 and its excess 46.5 |
+| `Dead` (62 runs of 100 K, at the slots of the pin's InstCombine runs, L677/768/801/837/1242; the pin's ADCE is 11 runs of 87 K) | 6.4 | 0 | 6.4 | stand-in for InstCombine's dead-code removal: w-6's InstCombine buy-back, 11-08 |
 | ADCE, BDCE, TRE, Float2Int | 3.7 | 3.1 | 0.6 | unexplained, small |
 | GVN | 40.6 | 49.2 | -8.6 | below the pin |
 | SROA, Mem2Reg | 9.3 | 9.8 | -0.5 | below the pin |
 
-Handed 37.9, flat 3.4, below the pin -9.1, unexplained 23.4.
+Handed 37.9 (w-3, w-5) and 6.4 (w-6), flat 3.4, below the pin -9.1, instrument error 9.3, unexplained 7.6 (EarlyCse walk 5.5, DSE walk 1.5, MemCpyOpt body 0.6).
 
 IPO, ours 47.0 / pin 13.3, excess 33.7:
 
