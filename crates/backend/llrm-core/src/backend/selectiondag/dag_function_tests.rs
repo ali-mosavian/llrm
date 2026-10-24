@@ -1659,3 +1659,24 @@ fn a_call_through_a_far_pointer_receives_its_arguments() {
     let call = insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.op == crate::model::ir::Operation::Call));
     assert!(call.is_some_and(|call| !call.requires.is_empty()), "{insns:?}");
 }
+
+const FAR_GLOBAL_ELEMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+@cells = addrspace(1) global [4 x i16] zeroinitializer
+define i16 @f() {
+entry:
+  %p = getelementptr [4 x i16], ptr addrspace(1) @cells, i16 0, i16 3
+  %v = load i16, ptr addrspace(1) %p
+  ret i16 %v
+}
+";
+
+/// An element of a far global is a cell through ES whose displacement is the
+/// global's symbol and offset. The emitter wanted a number there ("a
+/// non-constant address part": far_return, es_across_copy, farstruct,
+/// wide_globals at m16).
+#[test]
+fn an_element_of_a_far_global_is_a_cell_through_es() {
+    let module = llrm_mir::parse::module(FAR_GLOBAL_ELEMENT).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}
