@@ -422,7 +422,10 @@ pub(crate) fn _cell_move(
 ) -> Option<(u32, (i64, u32))> {
     let what = one.what.as_ref()?;
     // An x87 value read from or written to its cell is the same move.
-    let float = floats && what.op == if load { Operation::FloatLoad } else { Operation::FloatStore };
+    // `fld`/`fstp` only: `fistp` stores the value as an integer, not as it was.
+    let float = floats
+        && what.op == if load { Operation::FloatLoad } else { Operation::FloatStore }
+        && matches!(what.name.as_deref(), Some("fld" | "fst" | "fstp"));
     if !float && (what.op != Operation::Move || what.name.as_deref() != Some("mov"))
         || one.group.is_some()
         || !one.requires.is_empty()
@@ -1380,6 +1383,48 @@ mod tests {
             ..Semantics::new(Operation::Move)
         };
         Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
+    }
+
+    /// `fld dword [slot]; fistp dword [slot]` converts a float to an integer in
+    /// place; dropping it as an identity made fpdeep print 1125122048, not 144.
+    #[test]
+    fn test_a_float_load_stored_back_as_an_integer_is_kept() {
+        let mut frame = Frame::new(0);
+        let at = frame.slot(1i64, 4).expect("slot");
+        let cell = Loc::Mem(Mem {
+            through: llrm_lir::registers::RegId::BP,
+            disp_width: 4,
+            ..Mem::new(Some(Addr::new(Space::Frame, at).in_slot(at)), 4)
+        });
+        let held = Loc::Held(Held { value: 7, width: 4 });
+        let x87 = |at: i64,
+                   op: Operation,
+                   name: &str,
+                   dests: Vec<Loc>,
+                   sources: Vec<Loc>,
+                   defines: Vec<u32>,
+                   uses: Vec<u32>| {
+            let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
+            Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
+        };
+        let body = LirBody::new(
+            "f",
+            0,
+            vec![
+                LirBlock::new(
+                    0,
+                    vec![
+                        x87(0, Operation::FloatLoad, "fld", vec![held.clone()], vec![cell.clone()], vec![7], vec![]),
+                        x87(1, Operation::FloatStore, "fistp", vec![cell], vec![held], vec![], vec![7]),
+                    ],
+                )
+                .into(),
+            ],
+            Default::default(),
+            Default::default(),
+        );
+        let out = slots_colored(&body, &mut frame);
+        assert_eq!(out.insns().len(), 2, "fistp converts, it is no store back");
     }
 
     /// x_ll_arith kept `ecx := [slot]; [slot] := ecx` when the colouring had
