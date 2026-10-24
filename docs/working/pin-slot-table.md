@@ -290,8 +290,7 @@ module
   ports                          target I/O ports                 pin: -
   stamp                          interprocedural::Stamp           pin: inferattrs
   function  Early list           per body, all bodies             pin: function(Early)
-  ModuleIpo                      ipa-args, ipa-range, deadargelim pin: ipsccp, deadargelim (W1: before the Simplify list; the pin runs it after the CGSCC block)
-  sccp                           ipsccp's per-body half
+  ModuleIpo                      ipsccp, ipa-cp, deadargelim      pin: ipsccp, deadargelim (W1: before the Simplify list; the pin runs it after the CGSCC block)
   function  Cleanup list         GlobalCleanup                    pin: function(mem2reg, instcombine, simplifycfg)
   Walk (program pass)            callees first, per function: inline sites (inlinecost::sites), then the Simplify list over it, once
   function  Late list            DEVIATE: before the interprocedural step; the pin runs it after the module passes below
@@ -396,7 +395,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Module | inferattrs |  | EXECUTED |  | stamp (interprocedural::Stamp): states what a body does, llrm's own form |  |
 | -O1 | Module | coro-early |  | N/A |  | coroutines: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O1 | Module | openmp-opt |  | N/A |  | OpenMP: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -O1 | Module | ipsccp |  | DEVIATE |  | DEVIATE (pipeline.rs): ipo-early (walk::ModuleIpo: ipa-args, ipa-range) + sccp; what flows between bodies is ModuleIpo's, not the solver's; exit: ModuleIpo runs the solver over the program |  |
+| -O1 | Module | ipsccp |  | DEVIATE |  | DEVIATE (ipsccp.rs): ipo-early (walk::ModuleIpo: run_ipsccp); no FunctionSpecializer, ipa-cp clones stand for it (ipsccp.rs DEVIATE 1) |  |
 | -O1 | Module | called-value-propagation |  | MISSING |  | indirect calls only; not measured | w-6, 11-09 |
 | -O1 | Module | globalopt |  | EXECUTED |  | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
 | -O1 | Module | always-inline |  | EXECUTED |  | walk (the CGSCC walk's inliner) |  |
@@ -511,7 +510,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Module | inferattrs |  | EXECUTED |  | stamp (interprocedural::Stamp): states what a body does, llrm's own form |  |
 | -O2 | Module | coro-early |  | N/A |  | coroutines: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O2 | Module | openmp-opt |  | N/A |  | OpenMP: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -O2 | Module | ipsccp |  | DEVIATE |  | DEVIATE (pipeline.rs): ipo-early (walk::ModuleIpo: ipa-args, ipa-range) + sccp; what flows between bodies is ModuleIpo's, not the solver's; exit: ModuleIpo runs the solver over the program |  |
+| -O2 | Module | ipsccp |  | DEVIATE |  | DEVIATE (ipsccp.rs): ipo-early (walk::ModuleIpo: run_ipsccp); no FunctionSpecializer, ipa-cp clones stand for it (ipsccp.rs DEVIATE 1) |  |
 | -O2 | Module | called-value-propagation |  | MISSING |  | indirect calls only; not measured | w-6, 11-09 |
 | -O2 | Module | globalopt |  | EXECUTED |  | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
 | -O2 | Module | always-inline |  | EXECUTED |  | walk (the CGSCC walk's inliner) |  |
@@ -630,7 +629,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Module | inferattrs |  | EXECUTED |  | stamp (interprocedural::Stamp): states what a body does, llrm's own form |  |
 | -O3 | Module | coro-early |  | N/A |  | coroutines: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O3 | Module | openmp-opt |  | N/A |  | OpenMP: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -O3 | Module | ipsccp |  | DEVIATE |  | DEVIATE (pipeline.rs): ipo-early (walk::ModuleIpo: ipa-args, ipa-range) + sccp; what flows between bodies is ModuleIpo's, not the solver's; exit: ModuleIpo runs the solver over the program |  |
+| -O3 | Module | ipsccp |  | DEVIATE |  | DEVIATE (ipsccp.rs): ipo-early (walk::ModuleIpo: run_ipsccp); no FunctionSpecializer, ipa-cp clones stand for it (ipsccp.rs DEVIATE 1) |  |
 | -O3 | Module | called-value-propagation |  | MISSING |  | indirect calls only; not measured | w-6, 11-09 |
 | -O3 | Module | globalopt |  | EXECUTED |  | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
 | -O3 | Module | always-inline |  | EXECUTED |  | walk (the CGSCC walk's inliner) |  |
@@ -747,7 +746,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Module | inferattrs |  | EXECUTED |  | stamp (interprocedural::Stamp): states what a body does, llrm's own form |  |
 | -Os | Module | coro-early |  | N/A |  | coroutines: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -Os | Module | openmp-opt |  | N/A |  | OpenMP: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -Os | Module | ipsccp |  | DEVIATE |  | DEVIATE (pipeline.rs): ipo-early (walk::ModuleIpo: ipa-args, ipa-range) + sccp; what flows between bodies is ModuleIpo's, not the solver's; exit: ModuleIpo runs the solver over the program |  |
+| -Os | Module | ipsccp |  | DEVIATE |  | DEVIATE (ipsccp.rs): ipo-early (walk::ModuleIpo: run_ipsccp); no FunctionSpecializer, ipa-cp clones stand for it (ipsccp.rs DEVIATE 1) |  |
 | -Os | Module | called-value-propagation |  | MISSING |  | indirect calls only; not measured | w-6, 11-09 |
 | -Os | Module | globalopt |  | EXECUTED |  | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
 | -Os | Module | always-inline |  | EXECUTED |  | walk (the CGSCC walk's inliner) |  |

@@ -51,9 +51,8 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | `promote.` (argpromotion) | x | on | on | on | on | on |
 | `narrow.` (narrowspace) | x | on | on | on | on | on |
 | `ipa<N>.` (constant returns) | x | on | on | on | on | on |
-| `ipa-args` (constant parameters) | x | on | on | on | on | on |
+| `ipsccp` (in `ipo-early`: constant and range parameters, constant returns, globals) | x | on | on | on | on | on |
 | `ipa-cp.` (clone for constants, growth allowed) | x | x | x | on | on | x |
-| `ipa-range` | x | x | on | on | on | x |
 | `ipa-deadargs` | x | on | on | on | on | on |
 | `ipa-recursive`: body budget, operations (m32 / m16); depth 8, size 450 | x | x | 6 / 9 | 6 / 10 | 6 / 10 | x |
 | `ipa-pure` | x | on | on | on | on | on |
@@ -147,8 +146,7 @@ Sources read:
 | `interchange` / `loop-interchange` | `-floop-interchange` | -O3 ([677](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L677)); the pass runs after distribution ([`passes.def:288`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/passes.def#L288)) | every level but -O0: `PTO.LoopInterchange` is `enable-loopinterchange`, true ([PassBuilderPipelines.cpp#L219](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L219)), in the loop pass manager after `loop-rotate` and `loop-deletion` ([L1631](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L1631)) | every level but -O0, in the `Late` stage, as LLVM's: `LoopInterchange.cpp` translated ([`loopinterchange.rs`](../optimizations/passes/loopinterchange.md)); `-fno-loop-interchange` turns it off. The `cache` profitability rule is absent (no `LoopCacheAnalysis`), so `-cache-line-size` has no use |
 | `unroll_and_jam` / `loop-unroll-and-jam` | none: gcc has no unroll-and-jam | none | -O3 and -Omax; the pin's default pipelines have it off (`enable-unroll-and-jam`, PassBuilderPipelines.cpp#L222), llrm turns it on where the particle row gains |
 | `inline.cp_clone` / `ipa-cp-clone` | `-fipa-cp-clone` | -O3 ([676](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L676)) | -O3: `ipacp` copies a function for the constants a hot call passes |
-| (`program_parameters`) | `-fipa-cp` | -O2 ([629](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L629)) | every level above -O0: a constant every call passes is the parameter's value |
-| `ipa_ranges` / `ipa-vrp` | `-fipa-vrp` | -O2 ([633](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L633)) | -O2 and up; off at -O1 (compile -1.0% on bench + QCport, code +0.00% geomean) |
+| (`ipsccp`) | `-fipa-cp`, `-fipa-vrp` | -O2 ([629](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L629), [633](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L633)) | every level above -O0, as the pin runs IPSCCP: a parameter every call passes one constant or range is stated so |
 | (`deadargs`, `interprocedural`) | `-fipa-sra` | -O2 ([632](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L632)) | every level above -O0, -O1 too. Kept: off at -O1, hanoi is +27% code, console.c +1.2% |
 | (`lir peephole`) | `-fpeephole2` | -O2 ([638](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L638)) | every level above -O0: the same rounds at -O1 (507 M of d_faces' 34 G) |
 | (`lir scheduler`) | `-fschedule-insns2` | -O2 ([642](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L642)) | every level above -O0: `Scheduler` is a phase of every machine ([`flow.rs:126`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/flow.rs#L126)) |

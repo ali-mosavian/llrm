@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/ipsccp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/ipsccp.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/ipsccp.rs sha256:1240459891a9d704a32fe8e065d27f7ccf55a54c86338ff021e32df326487d5d -->
+<!-- src: crates/opt/llrm-transforms/src/ipsccp.rs sha256:ee7ea95e7144c19a9012cbf1359afc3e29d6a50684e36a30bc7456f1a31c3813 -->
 
 # ipsccp
 
@@ -86,11 +86,15 @@ unit test `test_a_callee_called_with_1_and_3_gets_the_range_1_to_4` in
 `crates/opt/llrm-transforms/src/ipsccp_tests.rs`.
 
 ## Runs
-On no pipeline yet: `run_ipsccp` is called by its tests. It is to replace
-`ipa-args` and `ipa-range` in [`crate::walk::ModuleIpo`](walk.md) (AM-BD-6).
+Once per compile at -O1 and up, first in [`crate::walk::ModuleIpo`](walk.md)
+(`run_ipsccp_with`): after the early function pipeline, before the
+CGSCC walk, where the pin's `buildModuleSimplificationPipeline` runs
+`IPSCCPPass`.
+
+Under `LLRM_NO_LLVM_ORDER` (the legacy rounds) it does not run:
+`ModuleIpo` is `llvm_order` only, and the stand-in the rounds fell back on
+(`ipa-args`, `ipa-range`) is deleted.
 
 ## See also
 - Uses: [`crate::sccpsolver`](sccpsolver.md), [`crate::sccp`](sccp.md)'s rewrites,
   [`crate::predicateinfo`](predicateinfo.md)
-- Stand-in it replaces: `llrm_analysis::parameter_ranges`,
-  `llrm_analysis::interprocedural::program_parameters`

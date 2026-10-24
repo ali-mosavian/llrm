@@ -23,8 +23,8 @@
 //!   [`regions`], [`alias`] (points-to, summaries), [`effects`],
 //!   [`frameescape`], [`globalsaa`], [`sliceset`] and [`cellmap`] (containers),
 //!   [`memoryssa`], [`avail`] (the cells loads and stores name).
-//! - Calls and control: [`interprocedural`], [`noreturn`],
-//!   [`parameter_ranges`], [`branchprob`] (static frequencies).
+//! - Calls and control: [`interprocedural`], [`noreturn`], [`branchprob`]
+//!   (static frequencies).
 //! - [`manager`] caches the facts that are expensive or asked repeatedly.
 //!   `testing` and `generated` are test support, behind the `testing` feature.
 //!
@@ -44,7 +44,7 @@
 //!   ind["<b>induction</b>"]:::mid
 //!   loop["<b>peelsize, depanalysis</b>"]:::out
 //!   mem["<b>memory, regions, pointerfacts,</b><br/><small>alias, effects, frameescape,<br/>globalsaa, sliceset, cellmap</small>"]:::opt
-//!   ssa["<b>memoryssa, avail,</b><br/><small>noreturn,<br/>interprocedural,<br/>parameter_ranges</small>"]:::out
+//!   ssa["<b>memoryssa, avail,</b><br/><small>noreturn,<br/>interprocedural</small>"]:::out
 //!   man["<b>manager (cache)</b>"]:::data
 //!   use["<b>llrm-transforms passes,</b><br/><small>backend</small>"]:::src
 //!   mir --> base
@@ -153,7 +153,6 @@ mod nocapture_agreement_tests;
 pub mod noreturn;
 pub mod num;
 pub mod occurrence;
-pub mod parameter_ranges;
 pub mod peelsize;
 pub mod pointerfacts;
 pub mod ranger;

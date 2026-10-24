@@ -62,7 +62,6 @@
 
 use std::collections::BTreeSet;
 
-use llrm_analysis::interprocedural as facts;
 use llrm_analysis::manager::GlobalsAA;
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::Module;
@@ -72,18 +71,15 @@ use llrm_mir::program::{Program, ProgramAnalyses, ProgramPass};
 
 use crate::interprocedural::{
     Liveness, calls_of, declared, function_mut, managers, private, procedures, reporting_marked, roots, roots_here,
-    unexported, vouched,
+    vouched,
 };
 
 /// What the interprocedural step does to a body before the Simplify list:
-/// a parameter every call passes the same constant uses it (`ipa-args`), a
-/// function called with a constant is copied for it (`ipa-cp`, the clone at
-/// -O3), and a parameter nothing reads is not passed (`ipa-deadargs`).
+/// `ipsccp` ([`crate::ipsccp::run_ipsccp`]), a function called with a constant
+/// is copied for it (`ipa-cp`, the clone at -O3), and a parameter nothing reads
+/// is not passed (`ipa-deadargs`).
 pub struct ModuleIpo {
     pub inline: crate::inline::Threshold,
-    /// The range every caller passes a parameter is stated on it (`ipa-range`,
-    /// gcc's `-fipa-vrp`).
-    pub ranges: bool,
 }
 
 impl ProgramPass for ModuleIpo {
@@ -99,20 +95,12 @@ impl ProgramPass for ModuleIpo {
         let count = program.modules.len();
         let mut procedures: Vec<Vec<GlobalId>> = (0..count).map(|at| procedures(program, at)).collect();
         let mut private: Vec<BTreeSet<GlobalId>> = (0..count).map(|at| private(program, at)).collect();
-        let unexported = unexported(program);
         let costs = program.target.size_costs();
         let mut modules = managers(program, analyses);
         let mut changed = false;
-        let constants = facts::program_parameters(program, &unexported);
-        for at in 0..count {
-            for &id in &procedures[at] {
-                let Some(known) = constants[at].get(&id) else { continue };
-                let (context, function) = function_mut(&mut program.modules[at], id);
-                if facts::specialize_parameters(context, function, known) {
-                    modules[at].changed(id);
-                    changed = true;
-                }
-            }
+        for (at, id) in crate::ipsccp::run_ipsccp_with(program, &mut modules) {
+            modules[at].changed(id);
+            changed = true;
         }
         let mut cloning = crate::ipacp::Cloning::default();
         for at in 0..count {
@@ -137,12 +125,6 @@ impl ProgramPass for ModuleIpo {
                     &mut function_mut(&mut program.modules[at], id).1.attrs,
                     llrm_mir::memory::Moved::OutOfArguments,
                 );
-                modules[at].changed(id);
-                changed = true;
-            }
-        }
-        if self.ranges {
-            for (at, id) in llrm_analysis::parameter_ranges::stamp(program, &unexported) {
                 modules[at].changed(id);
                 changed = true;
             }

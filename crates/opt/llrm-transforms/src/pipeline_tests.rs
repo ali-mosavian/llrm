@@ -639,11 +639,11 @@ b:
     assert_eq!(llrm_mir::print::module(&module).matches("call i16 @mix").count(), 3);
 }
 
-/// gcc states what a function's callers pass as a range on its parameters at
-/// -O2 and up (`-fipa-vrp`). -O1 ran it too, 1.0% of the compile of bench and
-/// QCport for no change in size to within 0.2% of four files.
+/// The pin's IPSCCP states what a function's callers pass as a range on its
+/// parameters at -O1 too. The stand-in it replaced (gcc's `-fipa-vrp`) ran at
+/// -O2 and up, and -O1 stated nothing.
 #[test]
-fn test_o1_states_no_ranges_from_the_callers_arguments_and_o2_does() {
+fn test_o1_states_the_ranges_from_the_callers_arguments_as_o2_does() {
     let text = "define internal i16 @pick(i16 %x) {
 b:
   %small = icmp ult i16 %x, 10
@@ -672,9 +672,8 @@ b:
             .unwrap();
         crate::testing::printed(&module).contains("range(")
     };
-    assert!(!pipeline::Options::basic().ipa_ranges && pipeline::Options::standard().ipa_ranges);
     assert!(ranged(pipeline::Options::standard()), "premise: -O2 states the range");
-    assert!(!ranged(pipeline::Options::basic()), "-O1 stated a range from the callers' arguments");
+    assert!(ranged(pipeline::Options::basic()), "-O1 stated no range from the callers' arguments");
 }
 
 /// `decide` and `ports` asked the counted loops' intervals (`Bounded`,

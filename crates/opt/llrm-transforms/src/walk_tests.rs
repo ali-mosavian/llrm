@@ -1039,3 +1039,31 @@ b0:
     .expect("the walk runs");
     assert!(!stale.get(), "the held declarations differ from a fresh listing");
 }
+
+/// AM-BD-6: `ModuleIpo` states what the pin's `opt -passes=ipsccp` states.
+/// The counted loop's `%r` reaches `@sink` below `%row`, in [0, 8): the pin's
+/// `range(i16 -32768, 6)`. The stand-in (`parameter_ranges`) stated
+/// [-32768, 32767), and nothing at -O1.
+#[test]
+fn test_module_ipo_states_the_argument_ranges_the_pins_ipsccp_does() {
+    use llrm_mir::program::ProgramPass;
+    let mut module = parsed(crate::ipsccp::tests::AM_BD_6);
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none() };
+            ipo.run(program, &mut Default::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("ModuleIpo runs");
+    let text = crate::testing::printed(&module);
+    let header = |name: &str| {
+        let at = format!("@{name}(");
+        text.lines().find(|line| line.starts_with("define") && line.contains(&at)).unwrap_or_default().to_owned()
+    };
+    assert!(header("sink").contains("range(i16 -32768, 6) %x"), "{text}");
+    assert!(header("place").contains("range(i16 0, 8) %row"), "{text}");
+    assert!(text.contains("icmp eq i16 %row, 7"), "{text}");
+}
