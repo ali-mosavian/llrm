@@ -2190,3 +2190,17 @@ fn palette_using_passes_the_array_element_and_its_descriptor_to_b_palu() {
     let hir = compile(&module, "palette_using", Dialect::Pds71, "pds71").unwrap();
     assert_eq!(hir.matches("\"callee\":\"B$PALU\"").count(), 1, "{hir}");
 }
+
+#[test]
+fn on_error_resume_next_registers_a_handler_that_resumes_at_the_next_statement() {
+    // ON ERROR RESUME NEXT was refused. PDS 7.1 BC registers 0FFFEh for the handler; here the
+    // handler is a block of its own that only does RESUME NEXT.
+    let module = parse(
+        "DEFINT A-Z\r\nON ERROR RESUME NEXT\r\nOPEN \"NOFILE.TXT\" FOR INPUT AS #1\r\nPRINT ERR\r\n",
+        Dialect::Pds71,
+    )
+    .unwrap();
+    let hir = compile(&module, "resume_next", Dialect::Pds71, "pds71").unwrap();
+    assert_eq!(hir.matches("\"callee\":\"B$RESN\"").count(), 1, "{hir}");
+    assert!(hir.contains("$QB$OERG:"), "{hir}");
+}

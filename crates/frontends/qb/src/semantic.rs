@@ -1121,6 +1121,10 @@ fn error_targets(
             Statement::OnError { label, .. } if label != "0" => {
                 targets.insert(canonical(label).into());
             }
+            // No label names its handler; the procedure still handles errors.
+            Statement::OnErrorResumeNext { .. } => {
+                targets.insert("$RESUME".into());
+            }
             Statement::If { then_branch, else_branch, .. } => {
                 error_targets(then_branch, targets);
                 error_targets(else_branch, targets);
@@ -1434,7 +1438,7 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
     fn localize_error_handlers(statements: &mut [Statement]) {
         for statement in statements {
             match statement {
-                Statement::OnError { local, .. } => *local = true,
+                Statement::OnError { local, .. } | Statement::OnErrorResumeNext { local, .. } => *local = true,
                 Statement::If { then_branch, else_branch, .. } => {
                     localize_error_handlers(then_branch);
                     localize_error_handlers(else_branch);
@@ -3309,7 +3313,18 @@ impl Compiler {
                 self.begin_resumable_statement(line);
             }
             match statement {
-                Statement::OnErrorResumeNext { .. } => return self.unsupported("ON ERROR RESUME NEXT"),
+                Statement::OnErrorResumeNext { local, .. } => {
+                    // PDS 7.1 BC registers 0FFFEh for the handler. Here it is an ON ERROR whose
+                    // handler is just RESUME NEXT, so the resume switch an explicit handler has
+                    // serves it.
+                    let here = self.blocks[self.current_block].id;
+                    let handler = self.new_block();
+                    self.select_block(handler);
+                    self.emit_runtime_call("B$RESN", Vec::new(), Vec::new());
+                    self.terminate("unreachable", Vec::new(), Vec::new())?;
+                    self.select_block(here);
+                    self.register_error_handler(handler, *local);
+                }
                 Statement::Dim(items) | Statement::Common { declarations: items, .. } => {
                     for item in items {
                         self.allocate(item)?;
@@ -3874,22 +3889,7 @@ impl Compiler {
                             .get(label)
                             .ok_or_else(|| SemanticError { message: format!("unknown ON ERROR label {label}") })?
                     };
-                    if handler != 0 {
-                        self.error_handlers.insert(handler);
-                        if self.error_handler.is_none() {
-                            self.error_handler = Some(handler);
-                            self.error_handler_local = *local;
-                        }
-                    }
-                    // Registration changes at this exact source position.
-                    // The handler address is a code-layout fact, so retain a
-                    // zero-argument marker through HIR/MIR and materialize the
-                    // measured B$OEGA/B$OEGP sequence in the source adapter.
-                    self.emit_runtime_call(
-                        &format!("$QB$OERG:{handler}:{}", if *local { "L" } else { "G" }),
-                        Vec::new(),
-                        Vec::new(),
-                    );
+                    self.register_error_handler(handler, *local);
                 }
                 Statement::Resume { target, .. } => {
                     // RESUME 0 is RESUME: the statement again.
@@ -9507,6 +9507,30 @@ impl Compiler {
                 },
             );
         self.invalidate_descriptor_cache();
+    }
+
+    /// ON ERROR: the runtime takes `handler` (0 for none) from this exact source position.
+    fn register_error_handler(
+        &mut self,
+        handler: u32,
+        local: bool,
+    ) {
+        if handler != 0 {
+            self.error_handlers.insert(handler);
+            if self.error_handler.is_none() {
+                self.error_handler = Some(handler);
+                self.error_handler_local = local;
+            }
+        }
+        // Registration changes at this exact source position.
+        // The handler address is a code-layout fact, so retain a
+        // zero-argument marker through HIR/MIR and materialize the
+        // measured B$OEGA/B$OEGP sequence in the source adapter.
+        self.emit_runtime_call(
+            &format!("$QB$OERG:{handler}:{}", if local { "L" } else { "G" }),
+            Vec::new(),
+            Vec::new(),
+        );
     }
 
     fn new_block(&mut self) -> u32 {
