@@ -28,7 +28,7 @@ DEVIATE LV2: a kill is an instruction id (`Insn::id`) with a block lookup, as th
 | Date | PR |
 |---|---|
 | 2026-11-06 | this note |
-| 2026-11-13 | PR1: `livevariables.rs` (analyze, the update API), a pre-phielim phase that builds it, tests against hand-made SSA bodies and the pin's own examples; no consumer yet |
-| 2026-11-20 | PR2: `phielim.rs` maintains it; TwoAddress reads it; `BodyFacts` loses `LiveIntervals` and `finish` stops handing intervals over (the coalescer builds its own until the eager build of intervals-once step 3); ledger Ir and the 568 objects, unchanged |
+| 2026-11-13 | PR1: `livevariables.rs` (analyze, the update API; no consumer), tests against hand-made SSA bodies and the pin's example |
+| 2026-11-20 | PR2: a pre-phielim phase builds it and hands it down; `phielim.rs` maintains it; TwoAddress reads it; `BodyFacts` loses `LiveIntervals` and `finish` stops handing intervals over (the coalescer builds its own until the eager build of intervals-once step 3); ledger Ir and the 568 objects, unchanged |
 
 If PR1 or PR2 cannot make 2026-11-24 by 2026-11-06: the interim is a liveness dataflow after phielim behind the same API, numbered DEVIATE LV3, exit date written then.
