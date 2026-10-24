@@ -1025,7 +1025,7 @@ fn main() -> i16:
     let registers = llrm_analysis::consts::known(&unit);
     let shape = llrm_analysis::cfg::Shape::of(function);
     let unit = unit.with_registers(&registers).with_shape(&shape);
-    let known = llrm_analysis::ranges::scoped(&unit).expect("ranges");
+    let known = llrm_analysis::ranges::dominated_edges(&unit).expect("ranges");
     let tag_loads: Vec<_> = function
         .walk()
         .filter(|&(_, inst)| {

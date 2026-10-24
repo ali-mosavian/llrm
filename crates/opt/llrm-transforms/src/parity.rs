@@ -640,12 +640,6 @@ pub const ANALYSES: &[AnalysisEntry] = &[
         "LVI and CVP callers; ranges::dominated_edges goes (vt-constantfolding)",
     ),
     old_analysis(
-        "bounded",
-        "Bounded",
-        "LazyValueInfo / ScalarEvolution getRange",
-        "LVI and SCEV getRange; ranges::bounded goes (vt-constantfolding, scev-createscev-2239)",
-    ),
-    old_analysis(
         "pointer-values",
         "PointerValues",
         "BasicAA + CaptureTracking",
