@@ -267,6 +267,26 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(self.dag.get_setcc(vt, n1, n0, cond.swapped_operands()));
         }
         let c1 = c1?;
+        // `(x + c0) == c1` is `x == c1 - c0`, `(x ^ c0) == c1` is `x == c0 ^
+        // c1` and `(c0 - x) == c1` is `x == c0 - c1`, for a single-use
+        // operand.
+        if matches!(cond, CondCode::SetEq | CondCode::SetNe)
+            && matches!(self.dag.opcode(n0), ISD::Add | ISD::Xor | ISD::Sub)
+            && self.dag.use_count(n0.node) == 1
+        {
+            let (a, b) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            let width = op_type.size_in_bits();
+            let folded = match (self.dag.opcode(n0), self.dag.constant(a), self.dag.constant(b)) {
+                (ISD::Add, _, Some(c0)) => Some((a, c1.wrapping_sub(c0))),
+                (ISD::Xor, _, Some(c0)) => Some((a, c0 ^ c1)),
+                (ISD::Sub, Some(c0), _) => Some((b, c0.wrapping_sub(c1))),
+                _ => None,
+            };
+            if let Some((x, value)) = folded {
+                let value = self.dag.get_constant(value & super::fold::mask(width), op_type);
+                return Some(self.dag.get_setcc(vt, x, value, cond));
+            }
+        }
         if !matches!(cond, CondCode::SetEq | CondCode::SetNe)
             || self.level != CombineLevel::BeforeLegalizeTypes
             || self.dag.use_count(n0.node) != 1
@@ -297,6 +317,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let min_vt = EVT::integer(min_bits);
+        // `isTypeDesirableForOp`: x86 does not narrow to an illegal type.
+        if self.tli.is_some_and(|tli| !tli.types.is_type_legal(min_vt)) {
+            return None;
+        }
         let trunc = self.dag.get_node(ISD::Truncate, min_vt, &[pre_ext]);
         let (rhs, cond) = if min_bits == 1 && c1 == 1 {
             let flipped = if cond == CondCode::SetEq { CondCode::SetNe } else { CondCode::SetEq };
@@ -354,7 +378,37 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_select(arm_vt, or, n1, y));
             }
         }
-        None
+        self.select_single_bit_test(n0, n1, n2)
+    }
+
+    /// `SimplifySelectCC`, the single-bit test: `select ((x & 2^k) == 0), 0, a`
+    /// is `a & ((x << (31-k)) >>s 31)`, a mask of the bit instead of a branch
+    /// or a `cmov` (an `i486` has none; the pin's x86 does not avoid it).
+    fn select_single_bit_test(
+        &mut self,
+        cond: SDValue,
+        then: SDValue,
+        other: SDValue,
+    ) -> Option<SDValue> {
+        if self.dag.opcode(cond) != ISD::SetCC || self.dag.constant(then) != Some(0) {
+            return None;
+        }
+        let NodeData::CondCode(CondCode::SetEq) = self.dag.node(self.dag.operand(cond, 2)).data else { return None };
+        let (and, zero) = (self.dag.operand(cond, 0), self.dag.operand(cond, 1));
+        let vt = self.dag.value_type(then);
+        if self.dag.opcode(and) != ISD::And || self.dag.value_type(and) != vt || self.dag.constant(zero) != Some(0) {
+            return None;
+        }
+        let (x, mask) = (self.dag.operand(and, 0), self.dag.constant(self.dag.operand(and, 1))?);
+        if !mask.is_power_of_two() {
+            return None;
+        }
+        let width = vt.size_in_bits();
+        let up = self.dag.get_constant(u128::from(width - 1 - mask.trailing_zeros()), EVT::I8);
+        let shl = self.dag.get_node(ISD::Shl, vt, &[x, up]);
+        let down = self.dag.get_constant(u128::from(width - 1), EVT::I8);
+        let sra = self.dag.get_node(ISD::Sra, vt, &[shl, down]);
+        Some(self.dag.get_node(ISD::And, vt, &[sra, other]))
     }
 
     /// `foldBoolSelectToLogic`: a select of `i1`s is an `or`/`and` of the
