@@ -369,6 +369,7 @@ pub fn emit_in(
     }
     let mut blocks = emitter.blocks;
     if ctx.address_mode == AddrMode::Real16 {
+        based_areas(&mut blocks, ctx.stack_pointer, emitter.state, &mut emitter.classes);
         for block in &mut blocks {
             pushed_arguments(&mut block.insns, ctx.stack_pointer, emitter.state, &mut emitter.classes)?;
         }
@@ -522,6 +523,70 @@ fn pushed_arguments(
         return Err(EmitError::Unsupported("a store through the stack pointer at m16".to_owned()));
     }
     Ok(())
+}
+
+/// An outgoing argument area whose call is in a later block (a select split the
+/// block between the area and the call): its stores go through a register that
+/// holds SP, from the area to the call, whichever block they are in.
+fn based_areas(
+    blocks: &mut [EmitBlock],
+    sp: llrm_lir::registers::RegId,
+    state: &mut EmitState,
+    classes: &mut Vec<(u32, &'static str)>,
+) {
+    let through_sp =
+        |cell: &Mem| cell.through == sp && cell.base.is_none() && cell.index.is_none() && cell.addr.is_none();
+    let is_area = |insn: &Insn| {
+        insn.what
+            .as_ref()
+            .is_some_and(
+                |what| what.name.as_deref() == Some("sub")
+                    && matches!(&what.dests[..], [Loc::Reg(reg)] if reg.register == sp)
+                    && matches!(&what.sources[..], [_, Loc::Imm(_)]),
+            )
+    };
+    let is_call = |insn: &Insn| insn.what.as_ref().is_some_and(|what| what.op == Operation::Call);
+    let mut open: Option<Held> = None;
+    for block in blocks {
+        let mut at = 0;
+        while at < block.insns.len() {
+            let insn = block.insns[at].clone();
+            if let Some(base) = open {
+                if is_call(&insn) {
+                    open = None;
+                } else if let Some(mut what) = insn.what.clone()
+                    && let [Loc::Mem(cell)] = &mut what.dests[..]
+                    && through_sp(cell)
+                {
+                    cell.through = llrm_lir::registers::RegId::None;
+                    cell.base = Some(base);
+                    let mut uses = insn.uses.clone();
+                    uses.push(base.value);
+                    block.insns[at] = Arc::new(Insn::new(insn.at, insn.covers, Some(what), insn.defines.clone(), uses));
+                }
+            } else if is_area(&insn) && !block.insns[at..].iter().any(|one| is_call(one)) {
+                let value = state.next_value;
+                state.next_value += 1;
+                let base = Held { value, width: 2 };
+                if let Some(tag) = class_tag(AddrMode::Real16, Role::Base) {
+                    classes.push((value, tag));
+                }
+                let from = Semantics {
+                    name: Some("mov".into()),
+                    dests: vec![Loc::Held(base)],
+                    sources: vec![Loc::Reg(Reg { register: sp, width: 2 })],
+                    ..Semantics::new(Operation::Move)
+                };
+                let made = state.next_address();
+                block
+                    .insns
+                    .insert(at + 1, Arc::new(Insn::new(made, Some((made, made)), Some(from), vec![value], vec![])));
+                open = Some(base);
+                at += 1;
+            }
+            at += 1;
+        }
+    }
 }
 
 /// `X86::CondCode` order, the jump on each.

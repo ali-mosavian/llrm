@@ -44,6 +44,7 @@ TEST_PY = re.compile(r"^-\s*def (test_\w+)")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from stages import PREFIX, stage  # noqa: E402
+import pidfile  # noqa: E402
 
 
 def git(*args: str, cwd: Path = ROOT) -> str:
@@ -454,7 +455,9 @@ def land_lock(path: str = LAND_LOCK, wait: bool = True):
     with open(path, "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
         try:
-            yield
+            # the holder's pid, for the stage sampler and the runner's restart guards: they wait on this pid, not on a `pgrep -f` pattern
+            with pidfile.recorded(f"{path}.pid"):
+                yield
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
 
