@@ -6,7 +6,7 @@
 
 use std::sync::LazyLock;
 
-use iced_x86::{Code, Decoder, DecoderOptions, Encoder, Instruction, MemoryOperand, Register, RepPrefixKind};
+use iced_x86::{Code, Encoder, Instruction, MemoryOperand, Register, RepPrefixKind};
 use llrm_lir::registers::RegId;
 use llrm_lir::{self as ir, Loc, Operation, Semantics, Space};
 use llrm_support::hash::IndexMap;
@@ -241,13 +241,11 @@ pub fn _assemble(
     if encoder.encode(made, at.ip).is_err() {
         return None;
     }
+    // The encoder records the field offsets as it writes them
+    // (`X86MCCodeEmitter` fixups); decoding the bytes again found the same
+    // ones.
+    let offsets = encoder.get_constant_offsets();
     let code = encoder.take_buffer();
-    let mut decoder = Decoder::with_ip(at.bits, &code, at.ip, DecoderOptions::NONE);
-    if !decoder.can_decode() {
-        return None;
-    }
-    let decoded = decoder.decode();
-    let offsets = decoder.get_constant_offsets(&decoded);
     // A displacement is a relocatable field only where the operand names a
     // symbol; a frame slot's displacement is an offset from bp.
     let absolute = offsets.has_displacement() && symbolic;
