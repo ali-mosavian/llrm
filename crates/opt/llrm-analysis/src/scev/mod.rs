@@ -501,7 +501,7 @@ impl ScalarEvolution {
     pub(super) fn intern(
         &mut self,
         key: Key,
-        kind: Kind,
+        kind: impl FnOnce() -> Kind,
         ty: Option<Ty>,
         size: u16,
     ) -> Scev {
@@ -511,7 +511,7 @@ impl ScalarEvolution {
             std::collections::hash_map::Entry::Occupied(found) => return *found.get(),
             std::collections::hash_map::Entry::Vacant(slot) => slot.insert(at),
         };
-        self.nodes.push(Node { kind, ty, size, flags: 0, canonical: at });
+        self.nodes.push(Node { kind: kind(), ty, size, flags: 0, canonical: at });
         // `LoopUsers[L].push_back(S)` and `registerUser(S, Ops)`, made where
         // each constructor makes a node.
         if let Kind::AddRec(_, header) = self.nodes[at.0 as usize].kind {
@@ -542,7 +542,7 @@ impl ScalarEvolution {
             value: None,
             header: None,
         };
-        self.intern(key, Kind::Constant(value), Some(Ty::Int(value.width)), 1)
+        self.intern(key, || Kind::Constant(value), Some(Ty::Int(value.width)), 1)
     }
 
     /// `ScalarEvolution::getConstant(Type *, uint64_t, bool)`.
@@ -583,7 +583,7 @@ impl ScalarEvolution {
         let ty = self.operand_ty(cx, v);
         let key =
             Key { tag: Type::Unknown, ops: Vec::new(), ty: Some(ty), constant: None, value: Some(v), header: None };
-        self.intern(key, Kind::Unknown(v), Some(ty), 1)
+        self.intern(key, || Kind::Unknown(v), Some(ty), 1)
     }
 
     /// The constant `s` is, if it is one.

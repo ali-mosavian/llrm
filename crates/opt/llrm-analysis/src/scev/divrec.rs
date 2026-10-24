@@ -42,7 +42,7 @@ impl ScalarEvolution {
         let key = Key { tag: Type::UDiv, ops: vec![lhs, rhs], ty: None, constant: None, value: None, header: None };
         let ty = self.type_of(lhs.scev);
         let size = self.compute_expression_size(&[lhs, rhs]);
-        self.intern(key, Kind::UDiv(lhs, rhs), Some(ty), size)
+        self.intern(key, || Kind::UDiv(lhs, rhs), Some(ty), size)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L3016
@@ -57,7 +57,7 @@ impl ScalarEvolution {
         let key = Key { tag: Type::AddRec, ops: ops.to_vec(), ty: None, constant: None, value: None, header: Some(l) };
         let ty = self.type_of(ops[0].scev);
         let size = self.compute_expression_size(ops);
-        let s = self.intern(key, Kind::AddRec(ops.to_vec(), l), Some(ty), size);
+        let s = self.intern(key, || Kind::AddRec(ops.to_vec(), l), Some(ty), size);
         self.set_no_wrap_flags(s, f);
         let _ = cx;
         s
