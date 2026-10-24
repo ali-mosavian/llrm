@@ -1006,3 +1006,19 @@ fn test_code_of_finds_the_code_its_built_name_finds() {
     assert!(code_of!("NO_SUCH_R", 16u32).is_none());
     assert_eq!(code_of!("MOV_R", -1i64), _code("MOV_R-1"));
 }
+
+/// A `lea` of a frame place and an index kept the register and dropped the
+/// place's displacement: `lea ebx,[esp+edx*4+12]` encoded `[esp+edx*4]`, and
+/// bench/bintree under `--isel=dag` wrote its children into the wrong nodes.
+#[test]
+fn test_a_lea_of_a_place_and_an_index_keeps_the_places_displacement() {
+    let address = ir::AddressRef {
+        through: RegId::ESP,
+        index_through: RegId::EDX,
+        scale: 4,
+        ..ir::AddressRef::new(Some(at(Space::Frame, 12, RegId::None, RegId::None)))
+    };
+    let lea = sem(Operation::Address, Some("lea"), vec![rg(RegId::EBX, 4)], vec![Loc::Address(address)], None, false);
+    let code = hex(&made(emitted(&lea)).code);
+    assert!(code.ends_with("8d5c940c"), "{code}");
+}

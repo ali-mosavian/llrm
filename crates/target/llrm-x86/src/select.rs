@@ -1475,6 +1475,11 @@ pub fn address_operand(
             bits,
         );
     }
+    // A place and an index: the place's displacement is part of the address
+    // (`lea ebx,[esp+edx*4+12]` lost its 12: bintree under --isel=dag).
+    if cell.addr.is_some() && cell.through != RegId::None {
+        return _scaled_operand(cell, bits);
+    }
     if cell.through == RegId::None && cell.index_through == RegId::None {
         return None;
     }
