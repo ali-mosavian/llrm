@@ -112,6 +112,28 @@ fn walk(
             // The new high bits are zero.
             KnownBits { zero: inner.zero | (all & !mask(inner.width)), one: inner.one, width }
         }
+        ISD::Add => {
+            // `KnownBits::computeForAddSub` without a carry in.
+            let (lhs, rhs) = (operand(0), operand(1));
+            let max = |k: KnownBits| !k.zero & all;
+            let sum_zero = max(lhs).wrapping_add(max(rhs)).wrapping_add(0) & all;
+            let sum_one = lhs.one.wrapping_add(rhs.one) & all;
+            let carry_zero = !(sum_zero ^ lhs.zero ^ rhs.zero);
+            let carry_one = sum_one ^ lhs.one ^ rhs.one;
+            let known = (lhs.zero | lhs.one) & (rhs.zero | rhs.one) & (carry_zero | carry_one) & all;
+            KnownBits { zero: !sum_zero & known, one: sum_one & known, width }
+        }
+        ISD::SignExtend => {
+            let inner = operand(0);
+            let high = all & !mask(inner.width);
+            let sign = 1u128 << (inner.width - 1);
+            // The new high bits copy the sign bit when it is known.
+            KnownBits {
+                zero: inner.zero | if inner.zero & sign != 0 { high } else { 0 },
+                one: inner.one | if inner.one & sign != 0 { high } else { 0 },
+                width,
+            }
+        }
         ISD::Truncate => {
             let inner = operand(0);
             KnownBits { zero: inner.zero & all, one: inner.one & all, width }
@@ -129,4 +151,43 @@ fn walk(
         },
         _ => KnownBits::unknown(width),
     }
+}
+
+/// `MaskedValueIsZero`: every bit of `bits` is known zero.
+pub fn masked_value_is_zero(
+    dag: &SelectionDAG,
+    value: SDValue,
+    bits: u128,
+) -> bool {
+    known_bits(dag, value).zero & bits == bits
+}
+
+/// `ComputeNumSignBits`, from the sign extension and the known bits.
+pub fn num_sign_bits(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> u32 {
+    let width = dag.value_type(value).size_in_bits();
+    if dag.opcode(value) == ISD::SignExtend {
+        let inner = dag.operand(value, 0);
+        return num_sign_bits(dag, inner) + width - dag.value_type(inner).size_in_bits();
+    }
+    let known = known_bits(dag, value);
+    let sign = 1u128 << (width - 1);
+    let run = |bits: u128| (0..width).take_while(|i| bits & (sign >> i) != 0).count() as u32;
+    if known.zero & sign != 0 {
+        run(known.zero)
+    } else if known.one & sign != 0 {
+        run(known.one)
+    } else {
+        1
+    }
+}
+
+/// `ComputeMaxSignificantBits`.
+pub fn max_significant_bits(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> u32 {
+    dag.value_type(value).size_in_bits() - num_sign_bits(dag, value) + 1
 }

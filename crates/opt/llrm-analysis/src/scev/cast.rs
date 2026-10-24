@@ -39,7 +39,7 @@ impl ScalarEvolution {
         ty: Ty,
     ) -> Scev {
         let key = Key { tag, ops: vec![op], ty: Some(ty), constant: None, value: None, header: None };
-        let kind = match tag {
+        let kind = || match tag {
             Type::Truncate => Kind::Truncate(op),
             Type::ZeroExtend => Kind::ZeroExtend(op),
             Type::SignExtend => Kind::SignExtend(op),

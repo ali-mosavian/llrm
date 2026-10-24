@@ -305,6 +305,7 @@ pub mod spares;
 pub mod speculate;
 pub mod spill;
 pub mod splitcopy;
+pub mod splitstore;
 pub mod sroa;
 pub mod switcharms;
 pub mod switchcg;

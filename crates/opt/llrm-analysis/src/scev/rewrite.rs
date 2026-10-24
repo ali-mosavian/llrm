@@ -172,7 +172,7 @@ impl ScalarEvolution {
                 header: None,
             };
             let size = se.compute_expression_size(&[Use::of(u)]);
-            se.intern(key, Kind::PtrToAddr(Use::of(u)), Some(ty), size)
+            se.intern(key, || Kind::PtrToAddr(Use::of(u)), Some(ty), size)
         });
         debug_assert!(
             self.type_of(int_op).is_integer(),
