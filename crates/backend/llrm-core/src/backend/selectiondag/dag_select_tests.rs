@@ -121,6 +121,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         convention.parameters.iter().filter_map(|p| if let Parameter::Cell(disp) = p { Some(*disp) } else { None });
     let frame = Frame(cells.collect());
     let ctx = EmitContext {
+        tables: &[],
         caller_saved: &Default::default(),
         conventions: &super::emit::NoConventions,
         constants: &super::emit::NoConstants,

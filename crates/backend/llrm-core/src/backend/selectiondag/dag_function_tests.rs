@@ -1659,3 +1659,101 @@ fn a_call_through_a_far_pointer_receives_its_arguments() {
     let call = insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.op == crate::model::ir::Operation::Call));
     assert!(call.is_some_and(|call| !call.requires.is_empty()), "{insns:?}");
 }
+
+const TWO_TABLES: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %x, i32 %y) {
+entry:
+  switch i32 %x, label %ad [
+    i32 0, label %a0
+    i32 1, label %a1
+    i32 2, label %a2
+    i32 3, label %a3
+    i32 4, label %a4
+    i32 5, label %a5
+  ]
+a0:
+  %av0 = add i32 %x, 1
+  br label %ajoin
+a1:
+  %av1 = add i32 %x, 8
+  br label %ajoin
+a2:
+  %av2 = add i32 %x, 15
+  br label %ajoin
+a3:
+  %av3 = add i32 %x, 22
+  br label %ajoin
+a4:
+  %av4 = add i32 %x, 29
+  br label %ajoin
+a5:
+  %av5 = add i32 %x, 36
+  br label %ajoin
+ad:
+  br label %ajoin
+ajoin:
+  %ar = phi i32 [ %x, %ad ], [ %av0, %a0 ], [ %av1, %a1 ], [ %av2, %a2 ], [ %av3, %a3 ], [ %av4, %a4 ], [ %av5, %a5 ]
+  br label %second
+second:
+  switch i32 %y, label %bd [
+    i32 0, label %b0
+    i32 1, label %b1
+    i32 2, label %b2
+    i32 3, label %b3
+    i32 4, label %b4
+    i32 5, label %b5
+  ]
+b0:
+  %bv0 = add i32 %x, 100
+  br label %bjoin
+b1:
+  %bv1 = add i32 %x, 107
+  br label %bjoin
+b2:
+  %bv2 = add i32 %x, 114
+  br label %bjoin
+b3:
+  %bv3 = add i32 %x, 121
+  br label %bjoin
+b4:
+  %bv4 = add i32 %x, 128
+  br label %bjoin
+b5:
+  %bv5 = add i32 %x, 135
+  br label %bjoin
+bd:
+  br label %bjoin
+bjoin:
+  %br = phi i32 [ %x, %bd ], [ %bv0, %b0 ], [ %bv1, %b1 ], [ %bv2, %b2 ], [ %bv3, %b3 ], [ %bv4, %b4 ], [ %bv5, %b5 ]
+  %s = add i32 %ar, %br
+  ret i32 %s
+}
+";
+
+/// A dense `switch` is a jump through a table of the case blocks (the pin's
+/// `JMP32m` on the table), and two of them in one function number their
+/// blocks apart: both started at the function's block count, so the second's
+/// table block was the first's and `switch_jump_table` read a value its
+/// header never set (and, before that, refused on `TargetJumpTable`).
+#[test]
+fn two_dense_switches_are_two_jumps_through_tables() {
+    let module = llrm_mir::parse::module(TWO_TABLES).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let at: Vec<i64> = done.body.blocks.iter().map(|b| b.at).collect();
+    let mut unique = at.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(unique.len(), at.len(), "a block address is used twice: {at:?}");
+    let tables: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.indirect && !w.table.is_empty())
+        .map(|w| w.table.clone())
+        .collect();
+    assert_eq!(tables.len(), 2, "one jump through a table for each switch");
+    assert!(tables.iter().all(|table| table.len() == 6 && table.iter().all(|t| at.contains(t))), "{tables:?}");
+    assert_ne!(tables[0], tables[1]);
+}
