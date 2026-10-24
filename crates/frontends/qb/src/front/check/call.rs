@@ -423,7 +423,16 @@ impl Checker {
                 let (a_typed, b_typed) = (self.argument_of_class(Class::Var, a), self.argument_of_class(Class::Var, b));
                 if let (Some(a), Some(b)) = (a_typed, b_typed) {
                     if a.ty.plain() != b.ty.plain() {
-                        self.err(span, "Type mismatch");
+                        self.err_because(
+                            span,
+                            "Type mismatch",
+                            Reason::headline(format!(
+                                "SWAP needs two variables of the same type, but the first is {} and the second is {}",
+                                a.ty.label(),
+                                b.ty.label()
+                            ))
+                            .help("convert one of them into a variable of the other's type first"),
+                        );
                     }
                 }
             } else {
