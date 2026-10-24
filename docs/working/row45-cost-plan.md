@@ -76,8 +76,8 @@ Read from each function's own comment; a home is the pin's pass that does the sa
 | `extensions`, `zeroed_loads` | load plus extension as one `movzx`; `xor r; mov r8,m8` | home: isel patterns (R45-3, with `zeroes`); `zeroed_loads` is priced by the target |
 | `high_extracts` | `mov r,[slot]; shr r,16` as a word load, or `shld` | home: load narrowing in selection (`DAGCombiner::reduceLoadWidth`) |
 | `pushes` | two immediate word pushes as one dword push | premise: 16-bit stack layout; belongs with the call-frame lowering |
-| `popped_arguments` | `add sp,n` as pops at `-Os` | home: `X86FrameLowering::eliminateCallFramePseudoInstr` (the `callframe` pass) |
+| `popped_arguments` | `add sp,n` as pops at `-Os` | home: `X86FrameLowering::eliminateCallFramePseudoInstr`, which runs in prologue insertion after allocation (row 80, w-6, `framelowering.rs`; not `callframe`, which runs before allocation and cannot see a dead scratch register) |
 | `transferred`, `shuttles` | tied work done in the source register when a copy restores the result | home: coalescer hints and `MachineCopyPropagation`; symptoms of allocation, measure after the allocator rows |
 | `compares_again` | a compare repeated in the next block entered from one block | premise: gcc's `cse_condition_code_reg`; the pin has `optimizeCompareInstr` only inside a block |
 
-First PRs, in order: `popped_arguments` into `callframe` (1.69 M), `constants` into a `MachineLateInstrsCleanup` translation, `high_extracts` and `extensions` with R45-3.
+First PRs, in order: `constants` into `latecleanup.rs` (the slot-81 translation, which keeps immediates only), `high_extracts` and `extensions` with R45-3; `popped_arguments` (1.69 M) waits for row 80's frame indices (w-6, 2026-11-20) and is asked of w-6 then.
