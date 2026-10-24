@@ -730,14 +730,17 @@ def new_lib_failures(
     smoke.LAST_LIB.clear()
     failed = (on_merged or smoke.dependants_lib_failures)(touched) if touched else set()
     print(lib_tests_line(touched, smoke.LAST_LIB))
+    # `xpass unit ...`: a listed test that passes. Not the head's to excuse: the entry goes.
+    xpass = {name for name in failed if name.startswith("xpass ")}
+    failed -= xpass
     if not failed:
-        return set()
+        return xpass
     by_package: dict[str, set[str]] = {}
     for name in failed:
         package, test = name[len("unit "):].split("::", 1)
         by_package.setdefault(package, set()).add(test)
     also = (on_head or _failing_on_head)(by_package)
-    return failed - also
+    return (failed - also) | xpass
 
 
 # Scanners the landing runner runs on every batch, whatever LAND_FAST_TESTS says (the user's call of 2026-10-19 is no tests at landing): reading docs costs milliseconds. A runner

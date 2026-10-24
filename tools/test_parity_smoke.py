@@ -530,6 +530,20 @@ def test_a_crate_that_did_not_run_shows_why_in_its_refusal():
     assert ps.causes_of({"unit llrm-core::some_test"}) == ""
 
 
+def test_a_listed_test_that_passes_is_reported(monkeypatch):
+    """tools/xfail.toml still listed 17 tests after they passed or were gone, and PRs landed: the header says a listed test that passes fails the gate."""
+    import xfail
+
+    monkeypatch.setattr(xfail, "load", lambda *a, **k: {"unit llrm-nib::test_debug::fixed": {"issue": 1}, "unit llrm-nib::test_debug::still_red": {"issue": 1}})
+
+    class Done:
+        returncode = 101
+        stdout = "test test_debug::fixed ... ok\ntest test_debug::still_red ... FAILED\nfailures:\n\nfailures:\n    test_debug::still_red\n\ntest result: FAILED. 1 passed; 1 failed\n"
+        stderr = ""
+
+    assert ps.dependants_lib_failures({"llrm-nib"}, run=lambda command, **kwargs: Done()) == {"xpass unit llrm-nib::test_debug::fixed"}
+
+
 def test_every_integration_target_is_mapped_and_an_unmapped_one_is_refused():
     """A transforms PR that breaks loop_rotation must run it: each root integration target is mapped from what its source imports and the compilers it runs. A new target with
     no crate behind it that is neither a scanner nor nightly-only fails here."""
