@@ -450,7 +450,20 @@ fn pushed_arguments(
                 (place, cell.offset, cell.width)
             })
             .collect();
-        if refused {
+        // Pushes stand for the stores only when they tile the whole area: a gap
+        // or a tail the stores leave (the padding of a 41-byte byval struct)
+        // keeps the stores in place, each based on a copy of SP.
+        let tiled = {
+            let mut sorted: Vec<(i64, u32)> = stores.iter().map(|&(_, offset, width)| (offset, width)).collect();
+            sorted.sort_unstable();
+            let mut next = 0;
+            sorted.iter().all(|&(offset, width)| {
+                let here = offset == next;
+                next += i64::from(width);
+                here
+            }) && next == size.value
+        };
+        if refused || !tiled {
             // The stores keep their places; each is based on a copy of SP.
             let value = state.next_value;
             state.next_value += 1;
@@ -485,16 +498,6 @@ fn pushed_arguments(
             continue;
         }
         stores.sort_by_key(|&(_, offset, _)| offset);
-        let mut next = 0;
-        for &(_, offset, width) in &stores {
-            if offset != next {
-                return Err(EmitError::Unsupported("an outgoing argument area with a gap at m16".to_owned()));
-            }
-            next += i64::from(width);
-        }
-        if next != size.value {
-            return Err(EmitError::Unsupported("an outgoing argument area the stores do not cover at m16".to_owned()));
-        }
         // The pushes go where the last store was; the area and the stores go.
         let last = stores.iter().map(|&(place, _, _)| place).max().unwrap_or(end - 1);
         let mut pushes = Vec::new();

@@ -219,6 +219,6 @@ impl ScalarEvolution {
             return existing;
         }
         let size = self.compute_expression_size(&ops);
-        self.intern(key, Kind::SequentialUMin(ops), Some(ty), size)
+        self.intern(key, || Kind::SequentialUMin(ops), Some(ty), size)
     }
 }
