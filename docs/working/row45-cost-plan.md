@@ -77,3 +77,19 @@ Steps, each with the dist ledger before and after:
 3. **2026-11-27 - the other `each`/`window` sub-passes** that are still hand-written join the index (up to 4.6 M), after R45-3 and R45-5 have moved the ones that leave.
 
 Test (fail first): a body where a group's only candidate sits after a block another group rewrote must still match; reading a stale position misses it.
+
+## R45-5 reading: where each remaining hand-written sub-pass goes (2026-10-24)
+Read from each function's own comment; a home is the pin's pass that does the same work, a premise is why the pin has none. Each gets one PR (or a deletion), dated on its row.
+
+| Sub-pass | What it does | Home or premise |
+|---|---|---|
+| `constants` | reuses identical register contents until overwritten | home: `MachineLateInstrsCleanup` (redundant immediate defs after allocation) |
+| `overwritten` | removes overwritten moves, pure arithmetic, owned spill reloads | home: `machinedce` and `MachineLateInstrsCleanup`; fold into R45-5's `machinedce` row |
+| `extensions`, `zeroed_loads` | load plus extension as one `movzx`; `xor r; mov r8,m8` | home: isel patterns (R45-3, with `zeroes`); `zeroed_loads` is priced by the target |
+| `high_extracts` | `mov r,[slot]; shr r,16` as a word load, or `shld` | home: load narrowing in selection (`DAGCombiner::reduceLoadWidth`) |
+| `pushes` | two immediate word pushes as one dword push | premise: 16-bit stack layout; belongs with the call-frame lowering |
+| `popped_arguments` | `add sp,n` as pops at `-Os` | home: `X86FrameLowering::eliminateCallFramePseudoInstr` (the `callframe` pass) |
+| `transferred`, `shuttles` | tied work done in the source register when a copy restores the result | home: coalescer hints and `MachineCopyPropagation`; symptoms of allocation, measure after the allocator rows |
+| `compares_again` | a compare repeated in the next block entered from one block | premise: gcc's `cse_condition_code_reg`; the pin has `optimizeCompareInstr` only inside a block |
+
+First PRs, in order: `popped_arguments` into `callframe` (1.69 M), `constants` into a `MachineLateInstrsCleanup` translation, `high_extracts` and `extensions` with R45-3.
