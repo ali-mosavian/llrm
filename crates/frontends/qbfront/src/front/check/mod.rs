@@ -21,6 +21,7 @@ mod call;
 mod constant;
 mod declare;
 mod expr;
+mod fold;
 mod record;
 mod stmt;
 mod types;
@@ -53,6 +54,11 @@ struct Checker {
     static_scope: bool,
     /// An OPTION BASE has been read.
     option_base_seen: bool,
+    /// The lower bound an array gets when it names none (OPTION BASE).
+    option_base: i64,
+    /// The bytes of the static arrays declared so far: BC has 64 KB of data for
+    /// them and the rest.
+    static_bytes: usize,
     /// A STATIC statement is being declared.
     static_statement: bool,
     /// The names being read are made by their statement (FOR, INPUT, READ), as
@@ -88,6 +94,8 @@ impl Checker {
             procedure: None,
             static_scope: false,
             option_base_seen: false,
+            option_base: 0,
+            static_bytes: 0,
             static_statement: false,
             declaring: false,
             assigning: false,

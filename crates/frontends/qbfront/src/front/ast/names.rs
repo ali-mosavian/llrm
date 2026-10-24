@@ -125,6 +125,19 @@ impl Ast<'_> {
 
     /// The head of a NameRef, and whether it is already an applied form
     /// (`name(...)`).
+    /// A DEF FN written without a parameter list takes no arguments: the
+    /// parenthesis after it starts the next item (`PRINT FNa (1)`).
+    pub(super) fn takes_no_arguments(
+        &self,
+        name: &str,
+    ) -> bool {
+        name.starts_with("FN")
+            && self
+                .procedures
+                .iter()
+                .any(|one| one.name == name && one.module_scope && one.parameters.is_empty() && !one.empty_list)
+    }
+
     pub(super) fn name_base(&mut self) -> R<(Expr, bool)> {
         let at = self.i;
         let fn_word = matches!(self.tok_n(0), Some(Tok::FnWord));
@@ -140,12 +153,7 @@ impl Ast<'_> {
             };
             // a DEF FN written without a parameter list takes no arguments: in
             // `PRINT FNa (1)` the parenthesis starts the next item
-            let takes_none = name.starts_with("FN")
-                && self
-                    .procedures
-                    .iter()
-                    .any(|one| one.name == name && one.module_scope && one.parameters.is_empty() && !one.empty_list);
-            if !takes_none && self.eat(Kw::LParen) {
+            if !self.takes_no_arguments(&name) && self.eat(Kw::LParen) {
                 let arguments = self.arguments()?;
                 let span = Span { line: start.line, start: start.start, end: self.previous_end() };
                 return Ok((Expr::Apply { name, arguments, span }, true));
@@ -210,7 +218,7 @@ impl Ast<'_> {
                 let (name, field) = self.field_name()?;
                 let span = span_of(value.span(), field);
                 value = Expr::Field { base: Box::new(value), name, span };
-            } else if self.is(Kw::LParen) {
+            } else if self.is(Kw::LParen) && !matches!(&value, Expr::Name(name, _) if self.takes_no_arguments(name)) {
                 self.i += 1;
                 let indices = self.arguments()?;
                 let span = Span { line: value.span().line, start: value.span().start, end: self.previous_end() };

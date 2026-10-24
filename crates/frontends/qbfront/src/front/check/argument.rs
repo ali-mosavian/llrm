@@ -11,7 +11,6 @@ impl Checker {
         arguments: &[Expr],
         span: Span,
     ) -> Option<Typed> {
-        let _ = name;
         let candidates: Vec<&Vec<(Class, bool)>> = sig
             .alternatives
             .iter()
@@ -34,7 +33,11 @@ impl Checker {
                 }
             }
             if ok {
-                return Some(Typed::value(self.result_type(sig.ret, &typed_args)));
+                let result = Typed::value(self.result_type(sig.ret, &typed_args));
+                // CINT, CLNG, CSNG and CDBL of a folded constant are folded
+                let value =
+                    typed_args.first().and_then(|argument| fold::conversion(&name.to_ascii_uppercase(), argument));
+                return Some(Typed { constant: value, ..result });
             }
             if n + 1 < candidates.len() {
                 self.errors.truncate(mark);
@@ -66,6 +69,16 @@ impl Checker {
                 let typed = self.numeric(argument)?;
                 if let (Some(c), false) = (typed.constant, typed.variable) {
                     if !(-2147483648.0..=2147483647.0).contains(&c.round()) {
+                        self.err(argument.span(), "Math overflow");
+                        return None;
+                    }
+                }
+                Some(typed)
+            }
+            Class::Single => {
+                let typed = self.numeric(argument)?;
+                if let (Some(c), false) = (typed.constant, typed.variable) {
+                    if c.abs() > f64::from(f32::MAX) {
                         self.err(argument.span(), "Math overflow");
                         return None;
                     }
@@ -115,9 +128,13 @@ impl Checker {
             }
             Class::ArrayStart => match argument {
                 Expr::Apply { name, arguments, span } if !arguments.is_empty() => match self.array_var(name) {
-                    Some(var) => {
-                        Some(Typed { ty: var.ty, variable: true, constant: None, array: Some(var.rank.unwrap_or(1)) })
-                    }
+                    Some(var) => Some(Typed {
+                        ty: var.ty,
+                        variable: true,
+                        constant: None,
+                        unfolded: None,
+                        array: Some(var.rank.unwrap_or(1)),
+                    }),
                     None => {
                         self.err(*span, "Array not defined");
                         None
@@ -166,7 +183,13 @@ impl Checker {
             }
         };
         match self.array_var(&name) {
-            Some(var) => Some(Typed { ty: var.ty, variable: true, constant: None, array: Some(var.rank.unwrap_or(1)) }),
+            Some(var) => Some(Typed {
+                ty: var.ty,
+                variable: true,
+                constant: None,
+                unfolded: None,
+                array: Some(var.rank.unwrap_or(1)),
+            }),
             None => {
                 self.err(span, "Array not defined");
                 None
@@ -242,7 +265,9 @@ impl Checker {
                 (a, b) if a.numeric() && b.numeric() => {
                     // a value converts to the parameter's type, but a variable
                     // or the result of a DEF FN is passed as it is
-                    !(typed.variable || self.is_def_fn_call(argument)) || a == b || parameter.by_value
+                    !(typed.variable || (self.dialect != Dialect::VbDos && self.is_def_fn_call(argument)))
+                        || a == b
+                        || parameter.by_value
                 }
                 _ => false,
             };
@@ -253,6 +278,19 @@ impl Checker {
                     argument.span(),
                     if by_reference || numeric_pair { "Parameter type mismatch" } else { "Type mismatch" },
                 );
+            } else if let (Some(c), false) = (typed.constant, typed.variable) {
+                // a constant is converted to the parameter's type where the
+                // call stands
+                let (low, high) = match parameter.ty {
+                    Ty::Int => (-32768.0, 32767.0),
+                    Ty::Long => (-2147483648.0, 2147483647.0),
+                    Ty::Single => (-f64::from(f32::MAX), f64::from(f32::MAX)),
+                    _ => (f64::MIN, f64::MAX),
+                };
+                let value = if parameter.ty == Ty::Single { c } else { c.round() };
+                if !(low..=high).contains(&value) {
+                    self.err(argument.span(), "Math overflow");
+                }
             }
         }
     }
@@ -311,6 +349,12 @@ impl Checker {
         };
         let var = self.array_var(&name);
         let _ = span;
-        var.map(|var| Typed { ty: var.ty, variable: true, constant: None, array: Some(var.rank.unwrap_or(1)) })
+        var.map(|var| Typed {
+            ty: var.ty,
+            variable: true,
+            constant: None,
+            unfolded: None,
+            array: Some(var.rank.unwrap_or(1)),
+        })
     }
 }
