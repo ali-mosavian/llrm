@@ -16,6 +16,7 @@ mod codecall;
 mod mathops;
 mod memops;
 mod switch;
+mod tailcall;
 
 use llrm_lir::registers::RegId;
 
@@ -62,7 +63,7 @@ pub struct BuilderTarget {
     /// For a program whose ABI gives its runtime routines contracts: whether
     /// the convention models each call of a `llrm.qb.` routine, by call. A call
     /// not listed, or listed with a reason, is refused.
-    pub runtime_calls: Option<HashMap<InstId, Result<RuntimeAnswer, &'static str>>>,
+    pub runtime_calls: Option<IdMap<InstId, Result<RuntimeAnswer, &'static str>>>,
 }
 
 impl BuilderTarget {
@@ -87,7 +88,7 @@ impl BuilderTarget {
     /// This target with the verdict on each call of a runtime routine.
     pub fn with_runtime_call_verdicts(
         mut self,
-        verdicts: Option<HashMap<InstId, Result<RuntimeAnswer, &'static str>>>,
+        verdicts: Option<IdMap<InstId, Result<RuntimeAnswer, &'static str>>>,
     ) -> BuilderTarget {
         self.runtime_calls = verdicts;
         self
@@ -150,6 +151,9 @@ pub struct BlockDag {
     /// The blocks a `switch` lowering made, built after it: their ids start
     /// at the function's block capacity.
     pub extra: Vec<(BlockId, BlockDag)>,
+    /// The calls in tail position (`isInTailCallPosition`); step 3 makes them
+    /// `TC_RETURN`s.
+    pub tail_calls: Vec<InstId>,
 }
 
 /// `SelectionDAGISel::SelectBasicBlock` for `block`; the entry block also
@@ -190,7 +194,7 @@ pub fn build_block(
     let root = builder.control_root();
     builder.dag.set_root(root);
     let switch_name = dag_name(&builder.dag, block);
-    let Builder { dag, phi_updates, live_ins, deferred, order, info, next_synthetic, .. } = builder;
+    let Builder { dag, phi_updates, live_ins, deferred, order, info, next_synthetic, tail_calls, .. } = builder;
     // `FinishBasicBlock`: the blocks the switch lowering made, in a layout that
     // is final
     let mut extra = Vec::new();
@@ -214,11 +218,19 @@ pub fn build_block(
         let root = one.control_root();
         one.dag.set_root(root);
         next = one.next_synthetic;
-        extra
-            .push((block, BlockDag { dag: one.dag, phi_updates: Vec::new(), live_ins: Vec::new(), extra: Vec::new() }));
+        extra.push((
+            block,
+            BlockDag {
+                dag: one.dag,
+                phi_updates: Vec::new(),
+                live_ins: Vec::new(),
+                extra: Vec::new(),
+                tail_calls: one.tail_calls,
+            },
+        ));
     }
     info.next_block = next;
-    Ok(BlockDag { dag, phi_updates, live_ins, extra })
+    Ok(BlockDag { dag, phi_updates, live_ins, extra, tail_calls })
 }
 
 fn dag_name(
@@ -280,6 +292,7 @@ impl<'a> Builder<'a> {
             pending_exports: Vec::new(),
             constants_out: HashMap::new(),
             phi_updates: Vec::new(),
+            tail_calls: Vec::new(),
             block,
             order,
             deferred: Vec::new(),
@@ -293,7 +306,7 @@ struct Builder<'a> {
     /// The instruction being visited.
     current: Option<InstId>,
     /// Compares made early, at the call whose flags they read.
-    prelowered: std::collections::HashSet<InstId>,
+    prelowered: llrm_mir::dense::IdSet<InstId>,
     module: &'a Module,
     function: &'a Function,
     layout: &'a DataLayout,
@@ -308,6 +321,7 @@ struct Builder<'a> {
     pending_exports: Vec<SDValue>,
     constants_out: HashMap<ConstantId, u32>,
     phi_updates: Vec<(ValueId, u32)>,
+    tail_calls: Vec<InstId>,
     block: BlockId,
     /// The blocks in layout order, with the ones a switch lowering adds.
     order: Vec<BlockId>,
@@ -1337,7 +1351,12 @@ impl Builder<'_> {
             Opcode::Unreachable => {}
             Opcode::Ret => self.visit_ret(&instruction)?,
             Opcode::Switch => self.visit_switch(&instruction)?,
-            Opcode::Call(info) => self.visit_call(&instruction, info)?,
+            Opcode::Call(info) => {
+                if self.in_tail_position(inst) {
+                    self.tail_calls.push(inst);
+                }
+                self.visit_call(&instruction, info)?
+            }
             Opcode::Invoke(info) => self.visit_invoke(&instruction, info)?,
             // QB's pad is entered by the runtime, which `ehprepare` set up
             // and whose selector it took out: nothing to build

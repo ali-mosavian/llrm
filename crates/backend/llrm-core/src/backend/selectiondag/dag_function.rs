@@ -201,10 +201,10 @@ pub(crate) fn runtime_call_verdicts(
     layout: &DataLayout,
     arch: &dyn Target,
     abi: &dyn crate::backend::assemble::Abi,
-) -> HashMap<llrm_mir::module::InstId, Result<RuntimeAnswer, &'static str>> {
+) -> llrm_mir::dense::IdMap<llrm_mir::module::InstId, Result<RuntimeAnswer, &'static str>> {
     use llrm_mir::module::Operand;
     use llrm_mir::opcode::Opcode;
-    let mut out = HashMap::new();
+    let mut out = llrm_mir::dense::IdMap::new();
     for &block in function.layout() {
         for inst in function.iter_block(block) {
             let instruction = function.instruction(inst);

@@ -860,7 +860,14 @@ impl Emitter<'_, '_> {
         if matches!(name, "CMOV_GR8" | "CMOV_GR16" | "CMOV_GR32") {
             return self.lowered_select(n);
         }
-        let form = self.ctx.map.form(name).map_err(|_| EmitError::Unmapped(name.to_owned()))?;
+        // `MOVZX32rr8_NOREX` is `movzx` of a byte register that needs no REX
+        // prefix to name (AH): the same form at this target.
+        let form = self
+            .ctx
+            .map
+            .form(name)
+            .or_else(|_| self.ctx.map.form(name.strip_suffix("_NOREX").unwrap_or(name)))
+            .map_err(|_| EmitError::Unmapped(name.to_owned()))?;
         let form = &self.ctx.map.forms()[form];
         let node = self.dag.node(SDValue { node: n, res: 0 });
         // The results: the first `num_defs` values that are not chain or glue.
@@ -1612,12 +1619,26 @@ impl Emitter<'_, '_> {
                 // AH of the status word (`FNSTSW16r`) is read by `SAHF`
                 // alone, which the compare's `fcom` stands for.
                 let status = self.is_machine_named(node.ops[0], "FNSTSW16r");
-                if !matches!(index, 1 | 4 | 6) && !(index == 2 && status) {
+                if !matches!(index, 1 | 2 | 4 | 6) {
                     return Err(EmitError::Unsupported(format!("EXTRACT_SUBREG index {index}")));
                 }
                 let Loc::Held(source) = self.operand(node.ops[0])? else {
                     return Err(EmitError::Unsupported("EXTRACT_SUBREG of a non-value".to_owned()));
                 };
+                // The high byte of a word is the word shifted right by eight,
+                // viewed as its low byte.
+                if index == 2 && !status {
+                    let shifted = self.fresh(source.width);
+                    let eight = Imm { value: 8, width: 1, address: None };
+                    self.push(
+                        Operation::Binary,
+                        "shr",
+                        vec![Loc::Held(shifted)],
+                        vec![Loc::Held(source), Loc::Imm(eight)],
+                    );
+                    self.values.insert(result, shifted.value);
+                    return Ok(Some(()));
+                }
                 self.values.insert(result, source.value);
                 return Ok(Some(()));
             }
