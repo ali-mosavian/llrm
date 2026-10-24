@@ -30,3 +30,23 @@ After L1 to L7 the bucket is near 108 M against 86.8 M. What is left, with what 
 | R4 | LoopLoadElim ~4.5 (pin 2.3), LCSSA ~2 (0.8), LoopSimplify ~2 (1.0 + 1.0), LSR ~14 (12.8) | after L3, L4, L6, L7 are measured |
 | R6 | `CallFootprints` + `Writes` (38.9 M, 76 runs) and their five readers: `consts::_killed`, `floatfacts`, `floatloop`, `ThroughMemory`, `FloatFacts` (all llrm-only) | blocker: they are a forward dataflow that kills known cells (abstract resolved addresses with no pointer operand) by overlap with each call's write list, so a per-(call, cell) AA query has no operand to ask about. The pin has no such pass: the values it finds in memory come from per-load walks (GVN / MemDep and EarlyCSE through `MemorySSA::getClobberingMemoryAccess`, whose call test is `getModRefInfo(Call, Loc)`), and float facts from `ValueTracking` / `LazyValueInfo`. Owner w-3. First design note 11-27 (docs/working: which pin walk replaces each reader, with the readers' call sites counted on the ledger command); no code date until it names the pin pass per reader. |
 | R5 | rotate 2.9, deletion 6.3, unroll 10.5 against the pin's 7.8, 7.3, 9.1 | none: at or below the pin; keep out of the way |
+
+## Per pass, ours against the pin (d_faces -O2, 10-24)
+
+Inclusive M and call edges of each loop pass's entry, ours on the dist tip a206759f8 (`callgrind_annotate --tree`), the pin's on `ct-pin.cg` (clang's own compile of the same file). Unit of a call: ours is one run over a function body (11 functions), the pin's is one visit of a loop in the loop pass manager (LICM 124, IndVars 41), so counts compare only for the function passes (LoopSimplify, LCSSA). The pin's LSR (not matched in this profile) is 12.8 M in `ledger2/clang.incl`.
+
+| pass | ours M | calls | pin M | calls | excess M | where it is |
+|---|---|---|---|---|---|---|
+| LICM | 48.0 | 53 | 19.9 | 124 | +28.1 | 35.1 is the MemorySSA build (S2/S3, L1); the pin's MemorySSA is outside its LICM figure (3.0 M for the compile) |
+| IndVars | 45.0 | 19 | 29.6 | 41 | +15.4 | SCEV per-op cost, spread (L2b, L2c) |
+| LCSSA | 7.0 | 58 | 1.0 | 45 | +6.0 | 58 runs against 45 and 121 K Ir a run against 22 K: per run 5.6x (L3) |
+| LSR | 17.1 | 7 | 12.8 | - | +4.3 | formula generation (L7) |
+| LoopLoadElim | 7.5 | 11 | 3.1 | 6 | +4.4 | trip counts and access analysis (L4) |
+| Unroll | 10.5 | 11 | 7.4 | 43 | +3.1 | `get_backedge_taken_info`, cost estimator |
+| LoopSimplify | 4.1 | 58 | 2.0 | 45 | +2.1 | 58 runs against 45, 71 K a run against 44 K (L6) |
+| idioms (two implementations) | 5.1 + 6.0 | 11 + 11 | 6.2 | 41 | +4.9 | the llrm-only `loopidioms` still runs (L5) |
+| Rotate | 2.2 | 11 | 10.3 | 57 | -8.1 | below the pin |
+| Deletion | 6.3 | 11 | 6.4 | 65 | -0.1 | at the pin |
+| Unswitch | 0.5 | 11 | 0.2 | 35 | +0.3 | |
+
+The excess adds to the bucket's 73.6 M within a few M. Where it sits: LICM's MemorySSA (S2/S3) is 35 of the 70, IndVars 15, LCSSA, LoopLoadElim, LSR and the second idiom pass 4 to 6 each. The count differences that matter are the function passes: LoopSimplify and LCSSA run 1.3x as often as the pin's (58 against 45) and cost 1.6x and 5.6x more a run; they run after each pass that changes a loop, where the pin keeps the form (it reruns only on a loop pass that asks for it). Next measurement (11-06): which of our 58 runs changed nothing, per slot.
