@@ -1823,3 +1823,37 @@ fn a_string_operation_on_an_element_of_a_global_knows_its_segment() {
     selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
+
+const M16_DOUBLE_ARGUMENT: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+declare void @g(double)
+define void @f(double %x) {
+entry:
+  %y = fadd double %x, 1.000000e+00
+  call void @g(double %y)
+  ret void
+}
+";
+
+/// A double passed on the stack at m16 is stored with `fstp` into the argument
+/// area, which no push can do and `[sp+k]` cannot address: it goes through a
+/// register that holds SP (`byval_struct`, `float_return`, `wide_frame` and 5
+/// more were refused 'a floating argument stored into the area').
+#[test]
+fn a_double_argument_is_stored_through_a_copy_of_sp_at_m16() {
+    use crate::model::ir::{Loc, Operation};
+    let module = llrm_mir::parse::module(M16_DOUBLE_ARGUMENT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let store = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| {
+            w.op == Operation::FloatStore
+                && matches!(&w.dests[..], [Loc::Mem(_)])
+                && w.name.as_deref().is_some_and(|n| n.starts_with("fst"))
+        })
+        .expect("an fstp into the area");
+    let Loc::Mem(cell) = &store.dests[0] else { unreachable!() };
+    assert!(cell.base.is_some() && cell.through == llrm_lir::registers::RegId::None, "{cell:?}");
+}
