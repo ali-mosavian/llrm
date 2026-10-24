@@ -185,6 +185,49 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         node: SDValue,
     ) -> Option<SDValue> {
         let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
-        self.fold_logic_of_setccs(false, n0, n1)
+        let vt = self.dag.value_type(n0);
+        let all = super::fold::mask(vt.size_in_bits());
+        if n0 == n1 {
+            return Some(n0);
+        }
+        if self.dag.constant(n0).is_some() && self.dag.constant(n1).is_none() {
+            return Some(self.dag.get_node(ISD::Or, vt, &[n1, n0]));
+        }
+        let c1 = self.dag.constant(n1).filter(|_| !self.dag.is_opaque(n1));
+        if c1 == Some(all) {
+            return Some(n1);
+        }
+        // `(or x, c)` is `c` when `x` is known zero wherever `c` is clear.
+        if let Some(c) = c1 {
+            if !c & all & !super::known_bits::known_bits(self.dag, n0).zero == 0 {
+                return Some(n1);
+            }
+        }
+        if let Some(folded) = self.fold_logic_of_setccs(false, n0, n1) {
+            return Some(folded);
+        }
+        let c1 = c1?;
+        if self.dag.opcode(n0) == ISD::Or {
+            // `reassociateOps`: `(or (or x, c0), c1)` is `(or x, c0 | c1)`.
+            let (x, inner) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            if self.dag.constant(inner).is_some() && !self.dag.is_opaque(inner) {
+                let both = self.dag.get_node(ISD::Or, vt, &[inner, n1]);
+                return Some(self.dag.get_node(ISD::Or, vt, &[x, both]));
+            }
+        }
+        // `(or (and x, c0), c1)` with `c0` and `c1` sharing a bit is
+        // `(and (or x, c1), c0 | c1)`.
+        if self.dag.opcode(n0) == ISD::And && self.dag.use_count(n0.node) == 1 {
+            let (x, mask) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            if let Some(c0) = self.dag.constant(mask) {
+                if c0 & c1 != 0 {
+                    let both = self.dag.get_constant(c0 | c1, vt);
+                    let inner = self.dag.get_node(ISD::Or, vt, &[x, n1]);
+                    self.add_to_worklist(inner.node);
+                    return Some(self.dag.get_node(ISD::And, vt, &[both, inner]));
+                }
+            }
+        }
+        None
     }
 }
