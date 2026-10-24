@@ -46,7 +46,7 @@ use llrm_mir::module::{BlockId, Function, InstId, Instruction, Linkage, Metadata
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Flags, IntPredicate, Opcode, Tail};
 use llrm_mir::passes::{Analyses, FunctionPass, Outer, PreservedAnalyses, Unit};
 use llrm_mir::types::{Type, TypeId};
-use llrm_mir::valuelattice::LatticeConstant;
+use llrm_mir::valuelattice::{LatticeConstant, ValueLatticeElement};
 use llrm_mir::valuetracking::pattern::{self, IntrinsicId, add_like, binary, call_arguments};
 use llrm_mir::valuetracking::{AssumptionCache, Query};
 
@@ -103,7 +103,25 @@ fn can_track_returns_interprocedurally(
     id: Option<GlobalId>,
 ) -> bool {
     let Some(id) = id else { return false };
-    let linkage = outer.globals[id.0 as usize].linkage;
+    can_track_returns(outer.globals[id.0 as usize].linkage, function)
+}
+
+/// `canTrackReturnsInterprocedurally` of a function of linkage `linkage`.
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueLatticeUtils.cpp#L24>
+pub(crate) fn can_track_returns(
+    linkage: Linkage,
+    function: &Function,
+) -> bool {
+    let has_flag = |name: &str| function.attrs.iter().any(|one| matches!(one, Attribute::Flag(flag) if flag == name));
+    has_exact_definition(linkage, function) && !has_flag("naked")
+}
+
+/// `GlobalValue::hasExactDefinition`.
+pub(crate) fn has_exact_definition(
+    linkage: Linkage,
+    function: &Function,
+) -> bool {
     let has_flag = |name: &str| function.attrs.iter().any(|one| matches!(one, Attribute::Flag(flag) if flag == name));
     let may_be_derefined = match linkage {
         Linkage::WeakOdr | Linkage::LinkOnceOdr | Linkage::AvailableExternally => true,
@@ -116,7 +134,7 @@ fn can_track_returns_interprocedurally(
             interposable || has_flag("nobuiltin")
         }
     };
-    !function.is_declaration() && !may_be_derefined && !has_flag("naked")
+    !function.is_declaration() && !may_be_derefined
 }
 
 /// `runSCCP`.
@@ -153,7 +171,7 @@ pub fn run_sccp(
     };
 
     let mut changed = Changed::default();
-    let mut rewrite = Rewrite { context: &*context, layout, outer, metadata, results, inserted: IdSet::new() };
+    let mut rewrite = Rewrite::new(&*context, layout, outer, metadata, results);
     // If we decided that there are basic blocks that are dead in this
     // function, delete their contents now. Note that we cannot actually delete
     // the blocks yet, as the edges into them are still to be cut.
@@ -184,7 +202,17 @@ pub fn run_sccp(
         rewrite.delete_block(function, dead);
     }
     changed.control_flow |= !blocks_to_erase.is_empty();
-    // `removeSSACopies`.
+    remove_ssa_copies(function, &predicates);
+    changed.anything |= rewrite.infer_return_attributes(function);
+    changed
+}
+
+/// `removeSSACopies`: each copy `PredicateInfo` made goes, its uses reading
+/// the value again.
+pub(crate) fn remove_ssa_copies(
+    function: &mut Function,
+    predicates: &PredicateInfo,
+) {
     let mut copies: Vec<InstId> = predicates.copies().collect();
     copies.sort_by_key(|one| one.0);
     for copy in copies {
@@ -196,8 +224,6 @@ pub fn run_sccp(
         function.replace_all_uses_with(result, source);
         function.erase(copy).expect("its uses were replaced");
     }
-    changed.anything |= rewrite.infer_return_attributes(function);
-    changed
 }
 
 /// `function`'s `inst` as the rewrites read it: without the metadata, whose
@@ -220,17 +246,30 @@ fn detached(
 }
 
 /// The rewrites, over the solved function.
-struct Rewrite<'a> {
+pub(crate) struct Rewrite<'a> {
     context: &'a Context,
     layout: &'a DataLayout,
     outer: &'a Outer,
     metadata: &'a [MetadataNode],
-    results: Results,
+    pub(crate) results: Results,
     /// `InsertedValues`: values made by the rewrites, unknown to the solver.
     inserted: IdSet<ValueId>,
+    /// `addToMustPreserveReturnsInFunctions`: the callees of the `musttail`
+    /// calls whose result was not replaced.
+    pub(crate) preserved: Vec<GlobalId>,
 }
 
-impl Rewrite<'_> {
+impl<'a> Rewrite<'a> {
+    pub(crate) fn new(
+        context: &'a Context,
+        layout: &'a DataLayout,
+        outer: &'a Outer,
+        metadata: &'a [MetadataNode],
+        results: Results,
+    ) -> Self {
+        Self { context, layout, outer, metadata, results, inserted: IdSet::new(), preserved: Vec::new() }
+    }
+
     fn query<'f>(
         &'f self,
         function: &'f Function,
@@ -268,17 +307,29 @@ impl Rewrite<'_> {
         }
     }
 
-    /// `SCCPSolver::tryToReplaceWithConstant`.
+    /// `SCCPSolver::tryToReplaceWithConstant` of an instruction.
     fn try_to_replace_with_constant(
-        &self,
+        &mut self,
         function: &mut Function,
         inst: InstId,
     ) -> bool {
         let Some(result) = function.instruction(inst).result else { return false };
+        self.try_to_replace_value_with_constant(function, result, Some(inst))
+    }
+
+    /// `SCCPSolver::tryToReplaceWithConstant` of `result`: the value of
+    /// `inst`, or an argument.
+    pub(crate) fn try_to_replace_value_with_constant(
+        &mut self,
+        function: &mut Function,
+        result: ValueId,
+        inst: Option<InstId>,
+    ) -> bool {
         let Some(constant) = self.results.constant_or_null(self.context, function, result) else { return false };
         // Replacing `musttail` instructions with constant breaks `musttail`
         // invariant unless the call itself can be removed.
-        if let Opcode::Call(info) | Opcode::Invoke(info) = &function.instruction(inst).opcode
+        if let Some(inst) = inst
+            && let Opcode::Call(info) | Opcode::Invoke(info) = &function.instruction(inst).opcode
             && info.tail == Tail::MustTail
             && !local::would_instruction_be_trivially_dead(
                 self.context,
@@ -288,6 +339,10 @@ impl Rewrite<'_> {
                 inst,
             )
         {
+            // Don't zap returns of the callee.
+            if let Some(callee) = llrm_mir::memory::callee(self.context, function, inst) {
+                self.preserved.push(callee);
+            }
             return false;
         }
         // For pointer constants derived from PredicateInfo, the constant may
@@ -321,7 +376,7 @@ impl Rewrite<'_> {
     }
 
     /// `simplifyInstsInBlock`.
-    fn simplify_insts_in_block(
+    pub(crate) fn simplify_insts_in_block(
         &mut self,
         function: &mut Function,
         block: BlockId,
@@ -641,7 +696,7 @@ impl Rewrite<'_> {
     }
 
     /// `SCCPSolver::removeNonFeasibleEdges`.
-    fn remove_non_feasible_edges(
+    pub(crate) fn remove_non_feasible_edges(
         &self,
         function: &mut Function,
         block: BlockId,
@@ -743,7 +798,7 @@ impl Rewrite<'_> {
 
     /// `DomTreeUpdater::deleteBB` of a dead block: the block and what is left
     /// of it (its phis and the `unreachable`) go.
-    fn delete_block(
+    pub(crate) fn delete_block(
         &self,
         function: &mut Function,
         block: BlockId,
@@ -763,53 +818,63 @@ impl Rewrite<'_> {
     }
 
     /// `inferReturnAttributes`.
-    fn infer_return_attributes(
+    pub(crate) fn infer_return_attributes(
         &self,
         function: &mut Function,
     ) -> bool {
         let Some(value) = self.results.tracked_return().cloned() else { return false };
         let Type::Function { returns, .. } = self.context.types.get(function.ty).clone() else { return false };
-        // If there is a known constant range for the value, add range
-        // attribute.
-        if value.is_constant_range(true) && !value.get_constant_range(true).is_single_element() {
-            // Do not add range attribute if the value may include undef.
-            if value.is_constant_range_including_undef() {
-                return false;
-            }
-            // Take the intersection of the existing attribute and the
-            // inferred range.
-            let mut range = *value.get_constant_range(false);
-            let old = function
-                .return_attrs
-                .iter()
-                .find_map(
-                    |one| match one {
-                        Attribute::Range { ty, lower, upper } => Some(ConstantRange::new(
-                            self.context.types.int_bits(*ty).expect("an integer range"),
-                            *lower,
-                            *upper,
-                        )),
-                        _ => None,
-                    },
-                );
-            if let Some(old) = old {
-                range = range.intersect_with(&old, PreferredRangeType::Smallest);
-            }
-            function.return_attrs.retain(|one| !matches!(one, Attribute::Range { .. }));
-            function.return_attrs.push(Attribute::Range { ty: returns, lower: range.lower, upper: range.upper });
-            return true;
-        }
-        // Infer nonnull attribute.
-        if value.is_not_constant()
-            && matches!(self.context.types.get(returns), Type::Pointer(_))
-            && value.get_not_constant().is_null_value()
-            && !Facts::of(&function.return_attrs).non_null()
-        {
-            function.return_attrs.push(Fact::NonNull.attribute().expect("nonnull is an attribute"));
-            return true;
-        }
-        false
+        infer_attribute(self.context, &mut function.return_attrs, returns, &value)
     }
+}
+
+/// `inferAttribute`: what the lattice value `value` of a return or an
+/// argument of type `ty` states, as a `range` or `nonnull` in `attrs`;
+/// whether `attrs` changed.
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SCCPSolver.cpp#L522>
+pub(crate) fn infer_attribute(
+    context: &Context,
+    attrs: &mut Vec<Attribute>,
+    ty: TypeId,
+    value: &ValueLatticeElement,
+) -> bool {
+    // If there is a known constant range for the value, add range attribute.
+    if value.is_constant_range(true) && !value.get_constant_range(true).is_single_element() {
+        // Do not add range attribute if the value may include undef.
+        if value.is_constant_range_including_undef() {
+            return false;
+        }
+        // Take the intersection of the existing attribute and the inferred
+        // range.
+        let mut range = *value.get_constant_range(false);
+        let old = attrs
+            .iter()
+            .find_map(
+                |one| match one {
+                    Attribute::Range { ty, lower, upper } => {
+                        Some(ConstantRange::new(context.types.int_bits(*ty).expect("an integer range"), *lower, *upper))
+                    }
+                    _ => None,
+                },
+            );
+        if let Some(old) = old {
+            range = range.intersect_with(&old, PreferredRangeType::Smallest);
+        }
+        attrs.retain(|one| !matches!(one, Attribute::Range { .. }));
+        attrs.push(Attribute::Range { ty, lower: range.lower, upper: range.upper });
+        return true;
+    }
+    // Infer nonnull attribute.
+    if value.is_not_constant()
+        && matches!(context.types.get(ty), Type::Pointer(_))
+        && value.get_not_constant().is_null_value()
+        && !Facts::of(attrs).non_null()
+    {
+        attrs.push(Fact::NonNull.attribute().expect("nonnull is an attribute"));
+        return true;
+    }
+    false
 }
 
 /// `setIsExact(I.isExact())` onto a fresh instruction.

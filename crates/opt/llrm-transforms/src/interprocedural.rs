@@ -824,6 +824,14 @@ pub fn optimized_with<E: From<String>>(
             reoptimised(&mut program.modules[at], &mut modules[at], id, "ipa-deadargs.")?;
         }
     }
+    // DEVIATE F6 (`stamped`): the `stamp` slot runs on raw bodies, whose
+    // pointers are spilled, so a function that writes only through its
+    // parameter states `memory(write)`, not `argmem: write`. This run, on the
+    // simplified bodies, states it; `ipa-pure` below reads it. Exit: the pin's
+    // position, `PostOrderFunctionAttrs` of each component after its function
+    // pipeline inside the walk (w-6, 2026-11-13); until then dropping this run
+    // lost the nib effects test (#4202).
+    stamped_all(program, modules).map_err(E::from)?;
     for at in 0..count {
         let declarations = modules[at].get::<Declarations>(&program.modules[at]);
         for &id in &procedures[at] {
