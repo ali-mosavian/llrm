@@ -124,6 +124,7 @@ use llrm_analysis::cfg;
 use llrm_analysis::manager::{AssumptionCache, ExposedFrames};
 use llrm_analysis::num::Num as BigInt;
 use llrm_mir::context::{ConstantKind, Context, signed};
+use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
@@ -166,7 +167,7 @@ impl FunctionPass for CgpAddr {
         // nothing after this needs loop-closed form, and isel cannot
         // fold a phi into an addressing mode.
         let merged = crate::emptyblocks::eliminated(unit.context, unit.function);
-        let closed = trivial_phis(unit.function);
+        let closed = trivial_phis(unit.context, unit.layout, unit.function);
         // Blocks and edges are as they were.
         let one_flag = !analyses.outer().target().multiple_condition_registers();
         let sunk_compares = one_flag && compares_sunk(unit.function);
@@ -592,13 +593,16 @@ fn remade(
     current
 }
 
-/// Each phi read only as an address whose arms are one value, or itself,
-/// replaced by that value, and the phis that read it looked at again; whether
-/// any was. One visit of each phi, not a pass over the function until nothing
-/// changes. A phi of anything else costs the allocator nothing it does not
-/// coalesce, and a changed shape of it costs a search round (nest 32 at -O2:
-/// one more of every machine phase).
-fn trivial_phis(function: &mut Function) -> bool {
+/// CodeGenPrepare's `optimizeInst` phi case
+/// ([L8947](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/CodeGenPrepare.cpp#L8947)):
+/// each phi that `simplifyInstruction` reduces to a value is replaced by it,
+/// and the phis that read it looked at again; whether any was. One visit of
+/// each phi, not a pass over the function until nothing changes.
+fn trivial_phis(
+    context: &Context,
+    layout: &DataLayout,
+    function: &mut Function,
+) -> bool {
     let mut pending: Vec<InstId> = function
         .walk()
         .filter(|&(_, inst)| function.instruction(inst).opcode == Opcode::Phi)
@@ -610,25 +614,10 @@ fn trivial_phis(function: &mut Function) -> bool {
             continue;
         }
         let Some(result) = function.instruction(phi).result else { continue };
-        if !crate::spill::address_only(function, result, 3) {
+        let Some(value) = llrm_mir::simplify::simplify_instruction(context, layout, function, phi) else { continue };
+        if value == Operand::Value(result) {
             continue;
         }
-        let mut only: Option<Operand> = None;
-        let mut single = true;
-        for pair in function.instruction(phi).operands.chunks(2) {
-            if pair[0] == Operand::Value(result) {
-                continue;
-            }
-            match only {
-                None => only = Some(pair[0]),
-                Some(seen) if seen == pair[0] => {}
-                Some(_) => {
-                    single = false;
-                    break;
-                }
-            }
-        }
-        let (true, Some(value)) = (single, only) else { continue };
         pending.extend(
             function
                 .users(result)
