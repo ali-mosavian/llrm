@@ -121,7 +121,6 @@ impl FunctionPass for MemCpyOpt {
         let shape = analyses.get::<Shape>(&*unit.context, unit.layout, &*unit.function);
         let registers = analyses.get::<llrm_analysis::manager::Registers>(&*unit.context, unit.layout, &*unit.function);
         let dt = analyses.get::<Dominators>(&*unit.context, unit.layout, &*unit.function);
-        let pointers = analyses.get::<llrm_analysis::manager::Pointers>(&*unit.context, unit.layout, &*unit.function);
         let held = analyses.get::<llrm_analysis::manager::MemorySsa>(&*unit.context, unit.layout, &*unit.function);
         let (mssa, accesses) = match &*held {
             Ok(held) => (held.mssa.clone(), (*held.accesses).clone()),
@@ -141,7 +140,6 @@ impl FunctionPass for MemCpyOpt {
             outer,
             shape,
             registers,
-            pointers,
             dt,
             mssa,
             accesses,
@@ -187,7 +185,6 @@ struct State<'a> {
     outer: Rc<Outer>,
     shape: Rc<Shape>,
     registers: Rc<<llrm_analysis::manager::Registers as llrm_mir::passes::Analysis>::Result>,
-    pointers: Rc<<llrm_analysis::manager::Pointers as llrm_mir::passes::Analysis>::Result>,
     dt: Rc<DomTree>,
     mssa: Mssa,
     accesses: Accesses,
@@ -226,27 +223,20 @@ impl State<'_> {
 
     /// The view the alias model reads the function through.
     fn view(&self) -> View<'_> {
-        let view = View::within(&*self.context, self.layout, &*self.function, &self.outer)
+        View::within(&*self.context, self.layout, &*self.function, &self.outer)
             .with_registers(&self.registers)
-            .with_shape(&self.shape);
-        match &*self.pointers {
-            Ok(pointers) => view.with_pointers(pointers),
-            Err(_) => view,
-        }
+            .with_shape(&self.shape)
     }
 
-    /// `width` bytes at `pointer`, with the objects the pointer reaches.
+    /// `width` bytes at `pointer`: the pointer alone, as `MemoryLocation(Ptr,
+    /// Size)`.
     fn reference_at(
         &self,
         unit: &View,
         pointer: Operand,
         width: u32,
     ) -> MemRef {
-        let mut reference = MemRef::at(unit, pointer, width);
-        if let Ok(pointers) = unit.pointers() {
-            reference.provenance = llrm_analysis::alias::Resolves::reference(&*pointers, unit, &reference);
-        }
-        reference
+        MemRef::at(unit, pointer, width)
     }
 
     /// The memory intrinsic `inst` is, if it is one.

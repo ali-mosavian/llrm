@@ -462,10 +462,20 @@ impl<'a> Commuter<'a> {
         facts: &'a BodyFacts,
         block: usize,
     ) -> Self {
+        Self::sized(facts, block, 0)
+    }
+
+    /// [`Commuter::new`] for a block of `size` instructions: the distance map
+    /// is made at its length, not grown by doubling.
+    pub fn sized(
+        facts: &'a BodyFacts,
+        block: usize,
+        size: usize,
+    ) -> Self {
         Self {
             facts,
             block,
-            distance: HashMap::default(),
+            distance: HashMap::with_capacity_and_hasher(size, Default::default()),
             dist: 0,
             src: HashMap::default(),
             dst: HashMap::default(),
@@ -673,6 +683,9 @@ impl<'a> Commuter<'a> {
         &mut self,
         one: &Insn,
     ) {
+        if one.clobbers.is_empty() && one.clobbers_high.is_empty() && one.requires.is_empty() {
+            return;
+        }
         // A copy from a register into a value writes no register (the pin
         // returns early for it); one to a register writes it, unless
         // the value was mapped to it already (`%100 = COPY $r8 ... $r8
@@ -1277,5 +1290,16 @@ mod tests {
         assert_eq!(walk.processed.len(), 0, "a plain instruction is not remembered");
         walk.process_copy(&arriving);
         assert_eq!(walk.processed.len(), 1, "the premise: one that carries a copy is");
+    }
+
+    /// The distance map grew by doubling as a block was passed (2,409 inserts
+    /// on d_faces at 150 Ir, rehashes among them); a block's walk starts with
+    /// room for its instructions.
+    #[test]
+    fn test_a_blocks_distance_map_starts_with_room_for_its_instructions() {
+        let body =
+            LirBody::new("t", 0, vec![LirBlock::new(0, vec![]).into()], IndexMap::default(), IndexMap::default());
+        let facts = BodyFacts::of(&body);
+        assert!(Commuter::sized(&facts, 0, 100).distance.capacity() >= 100);
     }
 }

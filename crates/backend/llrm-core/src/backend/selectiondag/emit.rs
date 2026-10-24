@@ -370,7 +370,7 @@ pub fn emit_in(
     let mut blocks = emitter.blocks;
     if ctx.address_mode == AddrMode::Real16 {
         for block in &mut blocks {
-            pushed_arguments(&mut block.insns, ctx.stack_pointer)?;
+            pushed_arguments(&mut block.insns, ctx.stack_pointer, emitter.state, &mut emitter.classes)?;
         }
     }
     Ok(Emitted { blocks, classes: emitter.classes, calls: emitter.calls })
@@ -383,9 +383,15 @@ pub fn emit_in(
 /// pushes. The stores must cover the area; one left over is refused, as an
 /// address no instruction encodes (`mov [sp+2], ax` stopped 32 QCport modules
 /// from assembling).
+///
+/// A floating argument cannot be pushed (`fstp` stores to memory): an area with
+/// one is stored through a register that holds the stack pointer, `mov bx, sp`
+/// and `fstp [bx+k]`, as the old selector does.
 fn pushed_arguments(
     insns: &mut Vec<Arc<Insn>>,
     sp: llrm_lir::registers::RegId,
+    state: &mut EmitState,
+    classes: &mut Vec<(u32, &'static str)>,
 ) -> Result<(), EmitError> {
     let through_sp =
         |cell: &Mem| cell.through == sp && cell.base.is_none() && cell.index.is_none() && cell.addr.is_none();
@@ -404,8 +410,10 @@ fn pushed_arguments(
     };
     let mut at = 0;
     let mut refused = false;
+    // The areas stored through a register already.
+    let mut based: Vec<i64> = Vec::new();
     while at < insns.len() {
-        if !is_area(&insns[at]) {
+        if !is_area(&insns[at]) || based.contains(&insns[at].at) {
             at += 1;
             continue;
         }
@@ -437,7 +445,38 @@ fn pushed_arguments(
             })
             .collect();
         if refused {
-            return Err(EmitError::Unsupported("a floating argument stored into the area at m16".to_owned()));
+            // The stores keep their places; each is based on a copy of SP.
+            let value = state.next_value;
+            state.next_value += 1;
+            let base = Held { value, width: 2 };
+            if let Some(tag) = class_tag(AddrMode::Real16, Role::Base) {
+                classes.push((value, tag));
+            }
+            let places: Vec<usize> = stores.iter().map(|&(place, _, _)| place).collect();
+            for place in places {
+                let old = insns[place].clone();
+                let mut what = old.what.clone().expect("a store");
+                if let [Loc::Mem(cell)] = &mut what.dests[..] {
+                    cell.through = llrm_lir::registers::RegId::None;
+                    cell.base = Some(base);
+                }
+                let mut uses = old.uses.clone();
+                uses.push(value);
+                insns[place] = Arc::new(Insn::new(old.at, old.covers, Some(what), old.defines.clone(), uses));
+            }
+            let from = Semantics {
+                name: Some("mov".into()),
+                dests: vec![Loc::Held(base)],
+                sources: vec![Loc::Reg(Reg { register: sp, width: 2 })],
+                ..Semantics::new(Operation::Move)
+            };
+            let made = state.next_address();
+            insns.insert(at + 1, Arc::new(Insn::new(made, Some((made, made)), Some(from), vec![value], vec![])));
+            refused = false;
+            based.push(insns[at].at);
+            // Past the area; its stores are not pushes.
+            at += 2;
+            continue;
         }
         stores.sort_by_key(|&(_, offset, _)| offset);
         let mut next = 0;
