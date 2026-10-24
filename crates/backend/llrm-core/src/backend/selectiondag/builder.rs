@@ -562,7 +562,13 @@ impl Builder<'_> {
                             ext: None,
                             space: 0,
                         };
-                        pieces.push(self.dag.get_load(part_vt, entry_node, ptr, info));
+                        let load = self.dag.get_load(part_vt, entry_node, ptr, info);
+                        // `LowerMemArgument` makes the object immutable unless
+                        // it is byval
+                        // (`isImmutableObjectIndex`): the load is
+                        // `isDereferenceableInvariantLoad`.
+                        self.dag.invariant_loads.insert(load.node);
+                        pieces.push(load);
                     }
                 }
                 Some(Parameter::Registers(regs)) if regs.len() == parts => {
