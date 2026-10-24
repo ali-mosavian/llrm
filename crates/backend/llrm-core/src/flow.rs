@@ -190,6 +190,10 @@ pub fn machine_with<'a>(
             has_var_sized: false,
             slow_two_mem_ops: false,
         }),
+        // On SSA, as the pin's `addPreRegAlloc` has it: flags kept across an
+        // instruction that clobbers them become a byte per condition
+        // (X86FlagsCopyLowering, every level).
+        Box::new(crate::backend::flagscopy::FlagsCopy),
         Box::new(phielim::PhiElimination),
         // Before any value is placed: a load made where its reader is.
         Box::new(crate::backend::pressuresink::PressureSink {
@@ -202,9 +206,6 @@ pub fn machine_with<'a>(
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
         Box::new(crate::backend::fixupsetcc::FixupSetCc),
-        // Flags kept across an instruction that clobbers them become a byte
-        // per condition (the pin: X86FlagsCopyLowering, every level).
-        Box::new(crate::backend::flagscopy::FlagsCopy),
         // A float load only one arithmetic instruction reads is its memory
         // operand.
         Box::new(crate::backend::floatfold::FloatFold { cpu: target }),
