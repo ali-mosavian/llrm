@@ -3626,25 +3626,45 @@ fn sum(
 #[test]
 fn test_two_address_lea_sum_is_an_add_where_flags_are_dead() {
     for (through, index) in [(RegId::EAX, RegId::ECX), (RegId::ECX, RegId::EAX)] {
-        let done = lea_fixed(rules(), &lea_body(sum(through, index, 1, 0), false));
+        let done = fixed_leas(&lea_body(sum(through, index, 1, 0), false));
         let what = done.insns()[0].what.clone().unwrap();
         assert_eq!(what.name.as_deref(), Some("add"));
         assert_eq!(what.sources, [rl(RegId::EAX, 4), rl(RegId::ECX, 4)]);
-        let kept = lea_fixed(rules(), &lea_body(sum(through, index, 1, 0), true));
+        let kept = fixed_leas(&lea_body(sum(through, index, 1, 0), true));
         assert_eq!(names(&kept.insns())[0], "lea", "a jb reads the flags the add would set");
     }
 }
 
-/// `lea eax,[eax+8]` is `add eax,8`; a step of one is the `add eax,1` that
-/// `increments` makes `inc`.
+/// `lea eax,[eax+8]` is `add eax,8`; a step of one is `inc`, of minus one
+/// `dec`.
 #[test]
 fn test_two_address_lea_step_is_an_add_where_flags_are_dead() {
-    let done = lea_fixed(rules(), &lea_body(sum(RegId::EAX, RegId::None, 1, 8), false));
+    let done = fixed_leas(&lea_body(sum(RegId::EAX, RegId::None, 1, 8), false));
     let what = done.insns()[0].what.clone().unwrap();
     assert_eq!(what.name.as_deref(), Some("add"));
     assert_eq!(what.sources, [rl(RegId::EAX, 4), im(8, 4)]);
-    let one = increments(rules(), &lea_fixed(rules(), &lea_body(sum(RegId::EAX, RegId::None, 1, 1), false)));
+    let one = fixed_leas(&lea_body(sum(RegId::EAX, RegId::None, 1, 1), false));
     assert_eq!(names(&one.insns())[0], "inc");
+    let minus = fixed_leas(&lea_body(sum(RegId::EAX, RegId::None, 1, -1), false));
+    assert_eq!(names(&minus.insns())[0], "dec");
+}
+
+/// The two-address pass spells an `lea` as a memory operand. The pin's case 1
+/// does not care how the address is spelled or what follows: `lea
+/// eax,[eax+ecx]` is `add eax,ecx` alone. Only one followed by an add was
+/// (`lea_term_then_alu`), so a bare one stayed a 3-byte `lea`.
+#[test]
+fn test_a_two_address_lea_spelled_as_a_memory_operand_is_an_add_too() {
+    let mut lea = lea_body(sum(RegId::EAX, RegId::ECX, 1, 0), false);
+    let cell = Loc::Mem(Mem { through: RegId::EAX, index_through: RegId::ECX, scale: 1, ..Mem::new(None, 4) });
+    let first = lea.blocks[0].insns.iter().next().cloned().expect("the lea");
+    let mut moved = (*first).clone();
+    moved.what.as_mut().unwrap().sources = vec![cell];
+    let block = lea.blocks[0]
+        .with_insns(std::iter::once(Arc::new(moved)).chain(lea.blocks[0].insns.iter().skip(1).cloned()).collect());
+    lea.blocks[0] = block;
+    let done = fixed_leas(&lea);
+    assert_eq!(names(&done.insns())[0], "add", "{:?}", steps(&done));
 }
 
 /// The pin leaves a three-address or scaled LEA alone: only the two-address
@@ -3657,7 +3677,7 @@ fn test_lea_that_is_not_two_address_stays() {
         sum(RegId::EAX, RegId::ECX, 1, 4),
         sum(RegId::ECX, RegId::None, 1, 8),
     ] {
-        let done = lea_fixed(rules(), &lea_body(address, false));
+        let done = fixed_leas(&lea_body(address, false));
         assert_eq!(names(&done.insns())[0], "lea");
     }
 }
@@ -3814,10 +3834,8 @@ fn test_the_destination_that_is_an_address_register_is_added_first() {
 /// adds.
 #[test]
 fn test_an_lea_that_sums_into_its_own_register_before_an_add_is_an_add() {
-    let done = steps(&lea_alus(
-        rules(),
-        &lea_alu_body_at(sum(RegId::EAX, RegId::ECX, 1, 0), "add", RegId::EBX, vec![], false),
-    ));
+    let done =
+        steps(&fixed_leas(&lea_alu_body_at(sum(RegId::EAX, RegId::ECX, 1, 0), "add", RegId::EBX, vec![], false)));
     assert_eq!(done[0], ("add".to_owned(), vec![rl(RegId::ECX, 4), rl(RegId::EAX, 4)]), "{done:?}");
     assert_eq!(done[1], ("add".to_owned(), vec![rl(RegId::EBX, 4), rl(RegId::ECX, 4)]), "{done:?}");
 }

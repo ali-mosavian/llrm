@@ -625,50 +625,6 @@ pub fn lea_cell(one: &Loc) -> Option<(bool, RegId, RegId, i64, i64)> {
     }
 }
 
-/// `lea d,[x+y]`: an address of scale 1, no displacement, no symbol or
-/// segment, that names `d` and a second register (`optTwoAddrLEA`, case 1).
-pub fn sums_into(
-    _cx: &Cx,
-    one: &Loc,
-    d: Reg,
-) -> bool {
-    let Loc::Address(a) = one else { return false };
-    a.addr.is_none()
-        && a.scale == 1
-        && a.offset == 0
-        && a.through != RegId::None
-        && a.index_through != RegId::None
-        && (a.through == d.register || a.index_through == d.register)
-}
-
-/// `sums_into` for an `lea` spelled as a memory operand, as the two-address
-/// pass makes it: `lea t,[x+t]` that an add reads next is `add t,x`
-/// (`optTwoAddrLEA` case 1, in the one shape `optLEAALU` meets it).
-pub fn sums_into_cell(
-    _cx: &Cx,
-    one: &Loc,
-    d: Reg,
-) -> bool {
-    let Some((symbol, base, index, scale, offset)) = lea_cell(one) else { return false };
-    !symbol
-        && scale == 1
-        && offset == 0
-        && base != RegId::None
-        && index != RegId::None
-        && (base == d.register || index == d.register)
-}
-
-/// `lea d,[d+disp]`: a base and a displacement alone, no symbol or segment
-/// (`optTwoAddrLEA`, case 2).
-pub fn steps_in_place(
-    _cx: &Cx,
-    one: &Loc,
-    d: Reg,
-) -> bool {
-    let Loc::Address(a) = one else { return false };
-    a.addr.is_none() && a.through == d.register && a.index_through == RegId::None
-}
-
 /// `r` is how the cell is reached.
 pub fn addresses(
     _cx: &Cx,

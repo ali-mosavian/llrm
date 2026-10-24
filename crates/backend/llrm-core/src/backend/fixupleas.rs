@@ -6,8 +6,8 @@
 //! # How it works
 //! The pass visits every LEA of every block in order. On i486 none of
 //! `slowLEA`, `slow3OpsLEA` or `leaUsesAG` is set, so only `optTwoAddrLEA`
-//! (L564) runs on each; until it moves here (row 100, PR 4) the rules in
-//! `peephole.peep` (`lea_fixed`, and `lea_alu`'s case 1) do its work.
+//! (L564) runs on each: [`opt_two_addr_lea`], its cases 1 and 2 and then
+//! `optLEAALU` as case 3.
 //!
 //! `optLEAALU` (L500, with `searchALUInst` L405) is [`opt_lea_alu`]: `lea
 //! t,[x+y]` whose only reader, within five instructions, is `add d,t` or `sub
@@ -41,7 +41,7 @@ use crate::backend::peep::guards::{free_fields, lea_cell};
 use crate::backend::peep::{field, make};
 use crate::backend::peephole::{_lanes, DeadAfter, id};
 use crate::backend::regthrash::_dead_after;
-use crate::model::ir::{Loc, Operation, Reg};
+use crate::model::ir::{Imm, Loc, Operation, Reg};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
 
@@ -73,7 +73,7 @@ impl LIRTransform for FixupLeas {
             // `runOnMachineFunction`: every LEA of the block, in order.
             while at < current.insns.len() {
                 if is_lea(&current.insns[at])
-                    && let Some(rewritten) = opt_lea_alu(regs, &current, at, &dead)
+                    && let Some(rewritten) = opt_two_addr_lea(regs, &current, at, &dead)
                 {
                     current = current.with_insns(rewritten);
                 }
@@ -84,6 +84,18 @@ impl LIRTransform for FixupLeas {
         Ok(out)
     }
 }
+
+/// What a replaced LEA may carry (`exact` in `peephole.peep`).
+const EXACT: u32 = field::CLOBBERS
+    | field::CLOBBERS_HIGH
+    | field::REQUIRES
+    | field::DELIVERS
+    | field::SPREAD
+    | field::GROUP
+    | field::SYMBOL
+    | field::FRAME_ADJUST
+    | field::SPILL_RELOAD
+    | field::SPILL_STORE;
 
 const REWRITABLE: u32 = field::CLOBBERS | field::REQUIRES | field::DELIVERS | field::SPREAD | field::GROUP;
 
@@ -136,6 +148,56 @@ pub fn search_alu_inst(
             return (mine.is_subset(after) && arithmetic_flags().is_subset(after)).then_some(cur);
         }
         distance += 1;
+    }
+    None
+}
+
+/// `optTwoAddrLEA`: the block's instructions with the LEA at `at` made an
+/// `add`, `inc` or `dec` (cases 1 and 2) or, for case 3, `optLEAALU`'s two
+/// steps; `None` where the pin leaves it. No segment, scale above 1 or symbol
+/// displacement, and no flag read after it. `OptIncDec` is true on every
+/// target but `slow-incdec` ones, which row 100's x86-64 PR handles.
+pub fn opt_two_addr_lea(
+    regs: Regs,
+    block: &LirBlock,
+    at: usize,
+    dead: &DeadAfter,
+) -> Option<Vec<Arc<Insn>>> {
+    let lea = &block.insns[at];
+    let what = lea.what.as_ref()?;
+    let ([Loc::Reg(d)], [source]) = (what.dests.as_slice(), what.sources.as_slice()) else { return None };
+    let (symbol, base, index, scale, offset) = lea_cell(source)?;
+    if symbol || scale > 1 || !arithmetic_flags().is_subset(dead.get(&id(lea))?) || !free_fields(lea, EXACT) {
+        return None;
+    }
+    let made = |op: Operation, name: &str, sources: Vec<Loc>| {
+        let mut what = what.clone();
+        (what.op, what.name, what.sources) = (op, Some(name.into()), sources);
+        let mut out = block.insns.iter().cloned().collect::<Vec<_>>();
+        out[at] = Arc::new(Insn { what: Some(what), ..(**lea).clone() });
+        Some(out)
+    };
+    let reg = |register: RegId| Loc::Reg(Reg { register, width: d.width });
+    let names = alu_names();
+    // Case 1: `lea r1,[r1+r2]` or `lea r1,[r2+r1]` is `add r1,r2`.
+    if base != RegId::None && index != RegId::None && offset == 0 && (d.register == base || d.register == index) {
+        let other = if d.register == base { index } else { base };
+        return made(Operation::Binary, names.add, vec![Loc::Reg(*d), reg(other)]);
+    }
+    // Case 2: `lea r,[r+disp]` is `inc`, `dec` or `add r,disp`.
+    if base == d.register && index == RegId::None {
+        return match offset {
+            1 | -1 => made(Operation::Unary, if offset == 1 { names.inc } else { names.dec }, vec![Loc::Reg(*d)]),
+            _ => made(
+                Operation::Binary,
+                names.add,
+                vec![Loc::Reg(*d), Loc::Imm(Imm { value: offset, width: d.width, address: None })],
+            ),
+        };
+    }
+    // Case 3.
+    if base != RegId::None && index != RegId::None && offset == 0 {
+        return opt_lea_alu(regs, block, at, dead);
     }
     None
 }

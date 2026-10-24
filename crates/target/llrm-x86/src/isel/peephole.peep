@@ -237,32 +237,6 @@ rule step_after_compare
     rewrite @1 ; @0: =@0 x, a ; drop @2
 
 
-// X86FixupLEAs `optTwoAddrLEA` (X86FixupLEAs.cpp#L564), the two cases i486
-// reaches: an LEA that is a two-address add, where no flag is read after it.
-// A step of one is the INC or DEC `increments` then makes, as the pin's case 2.
-group lea_fixup
-    walk each
-
-rule lea_sum_as_add
-    match   lea d:reg, a:any
-    when    free(@0, exact), flags_dead(@0), sums_into(a, d)
-    rewrite @0: add d, d, other_term(a, d)
-
-rule lea_step_as_add
-    match   lea d:reg, a:any
-    when    free(@0, exact), flags_dead(@0), steps_in_place(a, d)
-    rewrite @0: add d, d, step(a, d)
-
-// X86FixupLEAs `optTwoAddrLEA` case 1 before the add that reads the LEA. `optLEAALU` (case 3) is fixupleas.rs.
-group lea_alu
-    walk window
-
-// The same pair when the LEA's own register is one of its terms: `lea t,[x+t]` is `add t,x` (case 1), and the add that reads it stays.
-rule lea_term_then_alu
-    match   lea t:reg, a:any ; op=(add|sub) d:reg, d, t
-    when    free(@0, exact), free(@1, exact), flags_dead(@0), sums_into_cell(a, t), !same_root(d, t)
-    rewrite @0: add t, t, other_term(a, t) ; @1
-
 // Select compact INC/DEC for a unit add whose carry result is dead: they
 // differ from it only in keeping CF.
 group increments
