@@ -96,3 +96,7 @@ First PRs, in order: `constants` (count what each of its three parts changes on 
 
 ### Count (2026-10-25, step 1)
 On `d_faces -O2` the groups' first-pattern test (`Matcher::head`) ran 24,604 times and passed 856 (3.5%), counted at the one `run` all walks call. The walks cost 10.7 M outside the shared `upper_zero` solution, about 435 Ir per test, of which the 856 passes' tails are a part: an upper bound of the saving is most of 10.7 M, an estimate until the index exists. Step 2 (2026-11-20) measures it on the dist build; under 3 M it is dropped.
+
+### `constants`, what each part changes (2026-10-25)
+Counted in a throwaway build over the 65 QCport modules at -O2 (m16 and m32): 106 extensions folded to a constant, 36 loads or extensions removed because a register already holds the same known constant, 11 register copies removed, 7 immediate reloads removed (the part `latecleanup.rs` takes). The 41 bench kernels at -O1/-O2/-Os, both modes: 1 copy. Each `Peephole::once` run counts, so the totals include repeats; the proportions are what matter. The extension fold is most of the work, so `constants` is deleted only after the DAG fold (R45-3) covers it; the other parts are 18 of 160.
+
