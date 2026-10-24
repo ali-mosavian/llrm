@@ -979,3 +979,30 @@ fn test_assemble_locates_the_fields_where_a_decoder_does() {
         }
     }
 }
+
+/// `code_of!` hashes a name from its pieces, as `_code` hashes it built: the
+/// 9,750 `format!` writes of the encoders were 1.8 M Ir of an emit. Every
+/// piece kind (text, upper-cased text, numbers) gives the Code the built
+/// string gave, for every width the encoders use.
+#[test]
+fn test_code_of_finds_the_code_its_built_name_finds() {
+    for name in ["add", "mov", "sub", "xchg", "imul", "nothing"] {
+        for width in [1usize, 2, 4, 8] {
+            let bits = width * 8;
+            assert_eq!(
+                code_of!(Upper(name), "_R", bits, "_RM", bits),
+                _code(&format!("{}_R{bits}_RM{bits}", name.to_uppercase())),
+                "{name} {bits}"
+            );
+            assert_eq!(
+                code_of!("MOV_RM", bits, "_IMM", (bits).min(32)),
+                _code(&format!("MOV_RM{bits}_IMM{}", bits.min(32))),
+                "mov {bits}"
+            );
+            assert_eq!(code_of!("PUSH_R", bits as u32), _code(&format!("PUSH_R{}", bits)), "push {bits}");
+        }
+    }
+    assert!(code_of!("MOV_R", 16u32, "_IMM", 16u32).is_some());
+    assert!(code_of!("NO_SUCH_R", 16u32).is_none());
+    assert_eq!(code_of!("MOV_R", -1i64), _code("MOV_R-1"));
+}
