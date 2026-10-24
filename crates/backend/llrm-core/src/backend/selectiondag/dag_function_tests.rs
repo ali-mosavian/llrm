@@ -2272,3 +2272,21 @@ fn a_carry_survives_a_flag_writer_scheduled_between_the_add_and_its_reader() {
     let saved = done.body.insns().iter().filter_map(|i| i.what.as_ref()).any(|w| w.name.as_deref() == Some("setb"));
     assert!(saved, "the carry is saved in a byte");
 }
+
+const LRINT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(double %x) {
+entry:
+  %r = call i32 @llvm.lrint.i32.f64(double %x)
+  ret i32 %r
+}
+declare i32 @llvm.lrint.i32.f64(double)
+";
+
+/// `lrint` of an x87 value is `fist` into a stack slot and a load (the pin's
+/// `IST_Fp32m64`); `CannotSelect(LRint)` refused 7 qb functions, the ones that
+/// round a float to an integer (`CINT`).
+#[test]
+fn an_lrint_of_a_double_is_a_fist_and_a_load() {
+    let made = names(LRINT).unwrap_or_else(|why| panic!("{why}"));
+    assert!(made.iter().any(|name| name.starts_with("fist")), "{made:?}");
+}
