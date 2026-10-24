@@ -224,24 +224,30 @@ fn folded(
 }
 
 /// `optimizeURem` for each `urem` of `function`; whether any was replaced.
+/// The loops are derived only for a function that has a `urem` (a pass over
+/// every function paid for them: +0.24 M Ir on d_faces -O2).
 pub fn remainders_folded(
     context: &Context,
     layout: &DataLayout,
-    loops: &[Loop],
+    loops: impl FnOnce(&Function) -> Vec<Loop>,
     function: &mut Function,
 ) -> bool {
-    if loops.is_empty() {
-        return false;
-    }
     let rems: Vec<InstId> = function
         .walk()
         .map(|(_, inst)| inst)
         .filter(|&inst| function.instruction(inst).opcode == Opcode::Binary(BinaryOp::URem))
         .collect();
+    if rems.is_empty() {
+        return false;
+    }
+    let loops = loops(function);
+    if loops.is_empty() {
+        return false;
+    }
     let mut changed = false;
     for rem in rems {
         if !function.is_erased(rem) {
-            changed |= folded(context, layout, loops, function, rem);
+            changed |= folded(context, layout, &loops, function, rem);
         }
     }
     changed

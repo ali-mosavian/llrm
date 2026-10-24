@@ -193,11 +193,15 @@ impl FunctionPass for CgpAddr {
             None => false,
         };
         // `optimizeInst`'s urem case: the remainder of a loop counter.
-        let remainders = {
-            let info = analyses.get::<Loops>(&*unit.context, unit.layout, &*unit.function);
-            let loops = llrm_analysis::cfg::natural(unit.function, &info);
-            crate::uremloop::remainders_folded(unit.context, unit.layout, &loops, unit.function)
-        };
+        let remainders = crate::uremloop::remainders_folded(
+            unit.context,
+            unit.layout,
+            |function| {
+                let info = analyses.get::<Loops>(&*unit.context, unit.layout, function);
+                llrm_analysis::cfg::natural(function, &info)
+            },
+            unit.function,
+        );
         let addresses = match analyses.outer().target().tti() {
             Some(tti) => sunk(unit, &*tti),
             None => false,
