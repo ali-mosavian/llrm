@@ -108,6 +108,12 @@ pub trait Abi {
         &self,
         name: &str,
     ) -> String;
+    /// Whether a call of a `llrm.qb.` routine has a contract of its own (stack
+    /// arguments, flags results, the registers it keeps) the DAG path does not
+    /// translate.
+    fn runtime_contracts(&self) -> bool {
+        false
+    }
     /// Where the runtime keeps its stack's lower limit and what overflowing it
     /// calls, where the program checks its stack.
     fn stack_check(&self) -> Option<&masm::StackCheck> {
@@ -843,6 +849,7 @@ fn staged(
                 target.arch,
                 target.cpu,
                 target.libcalls,
+                abi.runtime_contracts(),
                 &mut pool.borrow_mut(),
             )
         })),
@@ -854,6 +861,7 @@ fn staged(
                     target.arch,
                     target.cpu,
                     target.libcalls,
+                    abi.runtime_contracts(),
                     &mut pool.borrow_mut(),
                 )
             }) {

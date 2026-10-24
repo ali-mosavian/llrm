@@ -49,6 +49,9 @@ pub struct BuilderTarget {
     /// `-fexcess-precision=standard`: an integer too wide for its float type's
     /// mantissa is rounded to that type (x87 would keep it exact).
     pub float_store: bool,
+    /// A `llrm.qb.` routine has a contract of its own (stack arguments, flags
+    /// results) that is not translated: a call of one is refused.
+    pub runtime_contracts: bool,
 }
 
 impl BuilderTarget {
@@ -67,6 +70,15 @@ impl BuilderTarget {
         bytes: u64,
     ) -> BuilderTarget {
         self.stack_align = Some(bytes);
+        self
+    }
+
+    /// This target refusing calls of `llrm.qb.` routines when `on`.
+    pub fn with_runtime_contracts(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.runtime_contracts = on;
         self
     }
 
@@ -98,6 +110,7 @@ impl BuilderTarget {
             libcalls: None,
             stack_align: None,
             float_store: false,
+            runtime_contracts: false,
         }
     }
 
@@ -111,6 +124,7 @@ impl BuilderTarget {
             libcalls: None,
             stack_align: None,
             float_store: false,
+            runtime_contracts: false,
         }
     }
 }
@@ -678,6 +692,13 @@ impl Builder<'_> {
                         why
                     },
                 );
+        }
+        if self.target.runtime_contracts
+            && direct
+                .and_then(|global| self.module.global(global).name.owned())
+                .is_some_and(|name| name.starts_with(llrm_hir::mir::RUNTIME))
+        {
+            return Err(Refused("call of a QB runtime routine: its contract is not translated"));
         }
         let mut arg_types = Vec::new();
         for argument in arguments {
