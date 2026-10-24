@@ -65,3 +65,19 @@ Each PR reports what it got on the dist build, as the F3 and TwoAddress rows did
 | shared liveness/effects facts | 12.4 | w-1, R45-8: one `LiveRows` per body, read by the sub-passes that ask; profile first | design 2026-11-13 |
 | post-RA sinks, `machinecse`, `machinedce` | 10.4 | w-2 (row 44 #24, `machinecse` step 1); `machinedce` R45-5 w-1 | 2026-11-06 |
 | hand-written non-walk passes | 12.5 | w-1, R45-5 reading, then one PR each | 2026-11-06 |
+
+## R45-5 reading: where each remaining hand-written sub-pass goes (2026-10-24)
+Read from each function's own comment; a home is the pin's pass that does the same work, a premise is why the pin has none. Each gets one PR (or a deletion), dated on its row.
+
+| Sub-pass | What it does | Home or premise |
+|---|---|---|
+| `constants` | reuses identical register contents until overwritten | home: `MachineLateInstrsCleanup` (redundant immediate defs after allocation) |
+| `overwritten` | removes overwritten moves, pure arithmetic, owned spill reloads | home: `machinedce` and `MachineLateInstrsCleanup`; fold into R45-5's `machinedce` row |
+| `extensions`, `zeroed_loads` | load plus extension as one `movzx`; `xor r; mov r8,m8` | home: isel patterns (R45-3, with `zeroes`); `zeroed_loads` is priced by the target |
+| `high_extracts` | `mov r,[slot]; shr r,16` as a word load, or `shld` | home: load narrowing in selection (`DAGCombiner::reduceLoadWidth`) |
+| `pushes` | two immediate word pushes as one dword push | premise: 16-bit stack layout; belongs with the call-frame lowering |
+| `popped_arguments` | `add sp,n` as pops at `-Os` | home: `X86FrameLowering::eliminateCallFramePseudoInstr` (the `callframe` pass) |
+| `transferred`, `shuttles` | tied work done in the source register when a copy restores the result | home: coalescer hints and `MachineCopyPropagation`; symptoms of allocation, measure after the allocator rows |
+| `compares_again` | a compare repeated in the next block entered from one block | premise: gcc's `cse_condition_code_reg`; the pin has `optimizeCompareInstr` only inside a block |
+
+First PRs, in order: `popped_arguments` into `callframe` (1.69 M), `constants` into a `MachineLateInstrsCleanup` translation, `high_extracts` and `extensions` with R45-3.
