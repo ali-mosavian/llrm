@@ -113,6 +113,7 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("tree-sink", |options, on| options.sink = on),
     ("llrm-spares", |options, on| options.spare_loads = on),
     ("llrm-homes", |options, on| options.stored_homes = on),
+    ("llrm-stable-loads", |options, on| options.stable_loads = on),
     ("tree-sra", |options, on| options.promote = on),
     ("move-loop-invariants", |options, on| options.hoist = on),
     ("tree-loop-distribute-patterns", |options, on| options.loopidioms = on),

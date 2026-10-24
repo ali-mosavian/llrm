@@ -2831,6 +2831,6 @@ fn the_llrm_only_module_passes_are_off_by_default_at_every_level() {
         pipeline::Options::size(),
         pipeline::Options::min_size(),
     ] {
-        assert!(!level.spare_loads && !level.stored_homes);
+        assert!(!level.spare_loads && !level.stored_homes && !level.stable_loads);
     }
 }

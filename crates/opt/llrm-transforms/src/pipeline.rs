@@ -197,6 +197,10 @@ pub struct Options {
     /// (gcc `REG_EQUIV`). llrm only; off by default, `-fllrm-homes`. DEVIATE
     /// (no number), 8.4 M Ir at d_faces.
     pub stored_homes: bool,
+    /// The spiller makes a load of a cell nothing writes again where it is read
+    /// (D-I). llrm only; off by default, `-fllrm-stable-loads`. Read by the
+    /// backend through the CPU profile.
+    pub stable_loads: bool,
     pub promote: bool,
     pub strength: bool,
     /// The translated `LoopStrengthReduce` slot (LLVM's `-disable-lsr` turns it
@@ -300,6 +304,7 @@ impl Default for Options {
             sink: true,
             spare_loads: false,
             stored_homes: false,
+            stable_loads: false,
             promote: true,
             strength: true,
             lsr: true,
