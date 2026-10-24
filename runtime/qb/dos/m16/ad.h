@@ -59,6 +59,10 @@ void ad_forget(AD *ad);
 /* The local heap moved a near array's elements `delta` bytes up. */
 void ad_near_moved(AD *ad, int delta);
 
+/* The bytes of the elements from `from`, a pointer into them, to their end:
+   what B$PALU counts the palette from. Nothing for a pointer outside them. */
+unsigned long ad_remaining(const AD *ad, qb_data_ptr from);
+
 /* Zeros `bytes` of the elements, as ERASE of a static array does. */
 void ad_clear(AD *ad, unsigned long bytes);
 
