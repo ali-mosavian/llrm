@@ -23,6 +23,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [qb-float-rows](qb-float-rows.md) | The 41 QB float rows above main after BC's per-assignment rounding (#3352): the numbers, owner and exit |
 | [qcport-os-rows](qcport-os-rows.md) | The QCport modules bigger at -Os after #3369 and after its re-land: numbers, owner and exit |
 | [phi-pre-ra-translation](phi-pre-ra-translation.md) | PHIElimination, TwoAddressInstruction and the pass order before greedy, against the pin: same, differs, missing |
+| [livevariables-plan](livevariables-plan.md) | The pin's LiveVariables translated for TwoAddress and PHIElimination: functions, callers, dates (2026-10-24) |
 | [twoaddress-translation-plan](twoaddress-translation-plan.md) | Translating TwoAddressInstructionPass: the copy-count premise, the data LIR lacks, seven pieces in the pin's order |
 | [process-implicit-defs-premise](process-implicit-defs-premise.md) | ProcessImplicitDefs: what the pin's pass does (IMPLICIT_DEF to undef on 16 to 32 widening), ours, the extends compared |
 | [vreg-class-field-plan](vreg-class-field-plan.md) | A register class on each virtual register: pin sites, touched types, caller counts, order |
