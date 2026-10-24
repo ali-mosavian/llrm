@@ -265,35 +265,36 @@ fn _unfolded(
 /// is `a := a + b`. `c` is defined once and read only by that copy, so the
 /// copy the coalescer may refuse is gone and no interval grows.
 fn _reused(body: &LirBody) -> LirBody {
-    let mut defined: IndexMap<u32, usize> = IndexMap::default();
-    let mut read: IndexMap<u32, usize> = IndexMap::default();
+    // How many times each value is defined and read in the whole body.
+    let mut defined: Vec<u32> = Vec::new();
+    let mut read: Vec<u32> = Vec::new();
+    let count = |counts: &mut Vec<u32>, value: u32| {
+        let value = value as usize;
+        if counts.len() <= value {
+            counts.resize(value + 1, 0);
+        }
+        counts[value] += 1;
+    };
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
-        for value in &one.defines {
-            *defined.entry(*value).or_insert(0) += 1;
-        }
-        for value in &one.uses {
-            *read.entry(*value).or_insert(0) += 1;
-        }
+        one.defines.iter().for_each(|&value| count(&mut defined, value));
+        one.uses.iter().for_each(|&value| count(&mut read, value));
     }
+    let times = |counts: &Vec<u32>, value: u32| counts.get(value as usize).copied().unwrap_or(0);
     let mut changed = false;
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
         // Where each value is read and written in the block, in order: what the
-        // scans below ask, in a log of the block's length.
-        let mut reads: IndexMap<u32, BTreeSet<usize>> = IndexMap::default();
-        let mut writes: IndexMap<u32, BTreeSet<usize>> = IndexMap::default();
-        let index = |reads: &mut IndexMap<u32, BTreeSet<usize>>,
-                     writes: &mut IndexMap<u32, BTreeSet<usize>>,
-                     at: usize,
-                     one: &Insn,
-                     add: bool| {
+        // scans below ask, by bisection.
+        let mut reads = Places::default();
+        let mut writes = Places::default();
+        let index = |reads: &mut Places, writes: &mut Places, at: usize, one: &Insn, add: bool| {
             for (places, values) in [(&mut *reads, &one.uses), (&mut *writes, &one.defines)] {
-                for value in values {
+                for &value in values {
                     if add {
-                        places.entry(*value).or_default().insert(at);
-                    } else if let Some(found) = places.get_mut(value) {
-                        found.remove(&at);
+                        places.add(value, at);
+                    } else {
+                        places.remove(value, at);
                     }
                 }
             }
@@ -301,7 +302,6 @@ fn _reused(body: &LirBody) -> LirBody {
         for (at, one) in insns.iter().enumerate() {
             index(&mut reads, &mut writes, at, one, true);
         }
-        let none = BTreeSet::new();
         for at in 0..insns.len() {
             let Some(what) = insns[at].what.as_ref().filter(|what| ties(what)) else { continue };
             let (Some(Loc::Held(into)), Some(Loc::Held(first))) = (what.dests.first(), what.sources.first()) else {
@@ -320,21 +320,21 @@ fn _reused(body: &LirBody) -> LirBody {
             }
             // Defined once and read once in the whole body: not live out, and
             // the one reader is found below.
-            if defined.get(&into.value) != Some(&1)
-                || read.get(&into.value) != Some(&1)
-                || reads.get(&into.value).unwrap_or(&none).range(..at).next().is_some()
+            if times(&defined, into.value) != 1
+                || times(&read, into.value) != 1
+                || reads.at(into.value).first().is_some_and(|&place| place < at)
             {
                 continue;
             }
-            // `first` dies here: nothing after reads it, not even a parallel
+            // `first` dies here: nothing after it reads it, not even a parallel
             // copy beside the one that writes it, which reads the old value.
-            if reads.get(&first.value).unwrap_or(&none).range(at + 1..).next().is_some() {
+            if !reads.in_range(first.value, at + 1, usize::MAX).is_empty() {
                 continue;
             }
             // Only `first := into` reads it: the copy back of an update in
             // place.
-            let readers: Vec<usize> = reads.get(&into.value).unwrap_or(&none).range(at + 1..).copied().collect();
-            let [last] = readers[..] else { continue };
+            let readers = reads.in_range(into.value, at + 1, usize::MAX);
+            let [last] = *readers else { continue };
             let back = insns[last]
                 .what
                 .as_ref()
@@ -347,7 +347,7 @@ fn _reused(body: &LirBody) -> LirBody {
             if !back {
                 continue;
             }
-            if writes.get(&first.value).unwrap_or(&none).range(at + 1..last).next().is_some() {
+            if !writes.in_range(first.value, at + 1, last).is_empty() {
                 continue;
             }
             let swap = |value: u32| if value == into.value { first.value } else { value };
@@ -361,6 +361,54 @@ fn _reused(body: &LirBody) -> LirBody {
         blocks.push(block.with_insns(insns));
     }
     if changed { body.with_blocks(blocks) } else { body.clone() }
+}
+
+/// The places in a block each value is named, ascending.
+#[derive(Default)]
+struct Places(IndexMap<u32, Vec<usize>>);
+
+impl Places {
+    fn add(
+        &mut self,
+        value: u32,
+        at: usize,
+    ) {
+        let places = self.0.entry(value).or_default();
+        if let Err(found) = places.binary_search(&at) {
+            places.insert(found, at);
+        }
+    }
+
+    fn remove(
+        &mut self,
+        value: u32,
+        at: usize,
+    ) {
+        if let Some(places) = self.0.get_mut(&value)
+            && let Ok(found) = places.binary_search(&at)
+        {
+            places.remove(found);
+        }
+    }
+
+    fn at(
+        &self,
+        value: u32,
+    ) -> &[usize] {
+        self.0.get(&value).map_or(&[], Vec::as_slice)
+    }
+
+    /// The places from `from` up to, not including, `to`.
+    fn in_range(
+        &self,
+        value: u32,
+        from: usize,
+        to: usize,
+    ) -> &[usize] {
+        let places = self.at(value);
+        let (low, high) = (places.partition_point(|&place| place < from), places.partition_point(|&place| place < to));
+        &places[low..high]
+    }
 }
 
 /// The values a commutative instruction writes and reads, where
@@ -1427,6 +1475,24 @@ mod tests {
         let twice: Vec<u32> =
             computed.iter().copied().filter(|reg| computed.iter().filter(|r| *r == reg).count() > 1).collect();
         assert!(twice.is_empty(), "computed more than once: {twice:?} of {computed:?}");
+    }
+
+    /// `_reused` kept where each value is read in a `BTreeSet` per value (2,862
+    /// inserts and their node allocations on d_faces); the sorted places answer
+    /// the same asks: the first place, a range, and a place moved.
+    #[test]
+    fn test_the_places_a_value_is_named_answer_a_range_and_follow_a_move() {
+        let mut places = Places::default();
+        for at in [5, 1, 3, 3, 9] {
+            places.add(7, at);
+        }
+        assert_eq!(places.at(7), [1, 3, 5, 9], "ascending, once each");
+        assert_eq!(places.in_range(7, 2, usize::MAX), [3, 5, 9]);
+        assert_eq!(places.in_range(7, 4, 9), [5], "up to, not including, the end");
+        places.remove(7, 3);
+        places.add(7, 4);
+        assert_eq!(places.at(7), [1, 4, 5, 9]);
+        assert!(places.in_range(8, 0, usize::MAX).is_empty(), "a value never named");
     }
 
     /// The walk of one block of `insns`, every instruction passed and its
