@@ -793,8 +793,12 @@ impl Builder<'_> {
         // old-style `()` definition): the callee pops what it declares, the
         // rest is the caller's to remove.
         let mut plan = plan;
+        // A runtime routine pops what its contract says, which the verdict
+        // checked against what is pushed: its declaration names no parameters.
+        let runtime = is_runtime_routine(self, direct);
         let declared = direct.and_then(|id| self.module.global(id).function()).map(|one| one.parameters().len());
-        if let Some(declared) = declared.filter(|declared| *declared < arg_types.len() && !variadic && plan.popped > 0)
+        if let Some(declared) =
+            declared.filter(|declared| !runtime && *declared < arg_types.len() && !variadic && plan.popped > 0)
         {
             plan.popped = convention_for(
                 self.module,
@@ -2203,4 +2207,14 @@ mod f80_tests {
             assert_eq!(f80_from_double_bits(value.to_bits()), extended, "{value}");
         }
     }
+}
+
+/// Whether `direct` names a `llrm.qb.` routine.
+fn is_runtime_routine(
+    builder: &Builder<'_>,
+    direct: Option<llrm_mir::context::GlobalId>,
+) -> bool {
+    direct
+        .and_then(|global| builder.module.global(global).name.owned())
+        .is_some_and(|name| name.starts_with(llrm_hir::mir::RUNTIME))
 }
