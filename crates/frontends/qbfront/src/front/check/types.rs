@@ -152,14 +152,27 @@ pub(super) struct Record {
 pub(super) struct Typed {
     pub(super) ty: Ty,
     pub(super) variable: bool,
+    /// The value BC folds at compile time: a literal, a sign or NOT of one, a
+    /// conversion (CINT ...) of one, and arithmetic on those where an operand
+    /// is wider than INTEGER. A folded value outside its target's range is
+    /// an error where it is converted; the same arithmetic on two INTEGERs is
+    /// left to run time.
     pub(super) constant: Option<f64>,
+    /// The value of a constant expression BC does not fold (two INTEGERs added,
+    /// a power): known, so it can size an array, but converted without a check.
+    pub(super) unfolded: Option<f64>,
     /// An array named without subscripts (`a()`), for whole-array arguments.
     pub(super) array: Option<usize>,
 }
 
 impl Typed {
+    /// The value of the expression when it is a constant, folded or not.
+    pub(super) fn known(&self) -> Option<f64> {
+        self.constant.or(self.unfolded)
+    }
+
     pub(super) fn value(ty: Ty) -> Self {
-        Self { ty, variable: false, constant: None, array: None }
+        Self { ty, variable: false, constant: None, unfolded: None, array: None }
     }
 }
 

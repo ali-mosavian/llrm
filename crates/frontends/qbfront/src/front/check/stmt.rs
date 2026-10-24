@@ -178,7 +178,8 @@ impl Checker {
                 }
             }
             Statement::Comment(_) | Statement::OptionExplicit(_) => {}
-            Statement::OptionBase(_, span) => {
+            Statement::OptionBase(base, span) => {
+                self.option_base = *base;
                 if std::mem::replace(&mut self.option_base_seen, true) {
                     self.err(*span, "Syntax error");
                 }

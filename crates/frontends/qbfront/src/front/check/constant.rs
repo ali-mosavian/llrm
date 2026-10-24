@@ -116,6 +116,9 @@ impl Checker {
             }
             None => typed.ty.clone(),
         };
-        self.consts.insert(key, Typed { ty, variable: false, constant: typed.constant, array: None });
+        self.consts.insert(
+            key,
+            Typed { ty, variable: false, constant: typed.constant, unfolded: typed.unfolded, array: None },
+        );
     }
 }

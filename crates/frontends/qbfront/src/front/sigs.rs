@@ -18,6 +18,8 @@ pub enum Class {
     /// a numeric expression that must fit a 32-bit integer when it is a
     /// constant
     Long,
+    /// a numeric expression that must fit a SINGLE when it is a constant
+    Single,
     /// a string expression
     Str,
     /// a number or a string
@@ -82,8 +84,8 @@ SGN n=>Int
 INT n=>Same
 FIX n=>Same
 CINT i=>Int
-CLNG n=>Long
-CSNG n=>Single
+CLNG q=>Long
+CSNG f=>Single
 CDBL n=>Double
 SQR n=>Float
 SIN n=>Float
@@ -199,6 +201,7 @@ fn class_of(letter: char) -> Class {
         'n' => Class::Num,
         'i' => Class::Int,
         'q' => Class::Long,
+        'f' => Class::Single,
         's' => Class::Str,
         'x' => Class::Any,
         'v' => Class::Var,
