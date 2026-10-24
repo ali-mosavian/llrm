@@ -2249,3 +2249,24 @@ fn a_remainder_used_by_a_store_and_an_address_is_selected() {
     selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
+
+const FPROUND_F32: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+define cc 1000 ptr @h(ptr %0, ptr %1) addrspace(1) {
+b1:
+  %2 = load float, ptr %0
+  %3 = fmul float %2, 5.000000e-01
+  %4 = fpround float %3 to float
+  store float %4, ptr %1
+  ret ptr %1
+}
+";
+
+/// `fpround float to float` stores to a slot and loads it back; the slot was a
+/// frame object the frame did not know (`Emit(Unsupported("frame index 0"))`:
+/// `byref2.bas`, a rounded SINGLE).
+#[test]
+fn a_rounded_float_has_its_slot_in_the_frame() {
+    let module = llrm_mir::parse::module(FPROUND_F32).expect("parses");
+    selected(&module, "h", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+}
