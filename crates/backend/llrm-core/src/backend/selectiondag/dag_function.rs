@@ -348,7 +348,10 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
                     .iter()
                     .copied()
                     .chain(llrm_dagisel::generated::ids::x86::NAMES.iter().copied())
-                    .chain([(llrm_dagisel::x86_llrm::FARCALL_OPCODE, "CALL_FAR")])
+                    .chain([
+                        (llrm_dagisel::x86_llrm::FARCALL_OPCODE, "CALL_FAR"),
+                        (llrm_dagisel::x86_llrm::CODE_OPCODE, "CALL_CODE"),
+                    ])
                     .collect(),
             })
         })
@@ -651,6 +654,7 @@ fn selected_in(
     };
     let mut emitted: Vec<EmitBlock> = Vec::new();
     let mut calls = IndexMap::default();
+    let mut inline_places = IndexMap::default();
     // the call sites whose callee is far code (address space 1): a far call
     let mut far = std::collections::BTreeSet::new();
     // The LIR blocks each MIR block became, and the phi inputs each exports.
@@ -707,7 +711,8 @@ fn selected_in(
                 // the runtime's routines are far procedures where code is in
                 // segments
                 Callee::Named(name) => {
-                    if arch.object().bitness == 16 {
+                    // inline code is laid down at the site: no call
+                    if arch.object().bitness == 16 && llrm_mir::intrinsics::code(name).is_none() {
                         far.insert(*at);
                     }
                     name.clone()
@@ -715,6 +720,7 @@ fn selected_in(
             };
             (*at, name)
         }));
+        inline_places.extend(done.inline_places.iter().cloned());
         emitted.extend(done.blocks);
         let start = made.get(&parent.0).map_or(from, |range| range.start);
         made.insert(parent.0, start..emitted.len());
@@ -825,12 +831,24 @@ fn selected_in(
             }
         }
     }
+    // Inline code: its bytes with each frame place patched as a displacement
+    // from BP (the old route's `inline_code`).
+    for (at, name) in &calls {
+        if let Some((mut bytes, places)) = llrm_mir::intrinsics::code(name) {
+            for (offset, disp, addend) in inline_places.get(at).map_or(&[][..], |one: &Vec<(usize, i64, i64)>| &one[..])
+            {
+                bytes[*offset..*offset + 2].copy_from_slice(&((disp + addend) as u16).to_le_bytes());
+            }
+            let _ = places;
+            inline.insert(*at, bytes);
+        }
+    }
     Ok(Selected {
         body,
         convention,
         calls,
         inline,
-        inline_places: IndexMap::default(),
+        inline_places,
         inline_symbols: IndexMap::default(),
         far,
         pops: IndexMap::default(),
