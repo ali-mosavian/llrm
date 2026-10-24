@@ -749,6 +749,19 @@ def test_a_head_cached_with_a_bare_step_name_covers_that_steps_tests():
     assert ps.new_names({"ratchet:x"}, {"ratchet:x::t", "ratchet:y::t"}) == ["ratchet:y::t"]
 
 
+def _closure(path):
+    smoke = ps.parity_smoke_module()
+    packages, graph = smoke.workspace_graph()
+    return smoke.dependants(smoke.touched_packages([path], packages), graph)
+
+
+def test_a_red_test_in_a_crate_that_depends_on_the_changed_one_is_refused():
+    """llrm-c's lib tests were red on parity while PRs merged: each PR changed a crate llrm-c depends on, and the fast tier ran the changed crates only."""
+    red = {"unit llrm-c::compile::tests::a_call_boundary_listing"}
+    on_merged = lambda packages: set(red) if "llrm-c" in packages else set()  # noqa: E731
+    assert ps.new_lib_failures(["crates/backend/llrm-core/src/backend/peephole.rs"], on_merged=on_merged, on_head=lambda by_package: set()) == red
+
+
 def test_a_red_test_in_a_changed_crate_is_refused_and_one_the_head_fails_too_is_not():
     """#3578 landed with four red llrm-transforms lib tests: the fast path ran no test. With LAND_FAST_TESTS the changed crates' lib tests run on the merged tree and a failing one the head
     passes refuses the batch. Control on the real functions (a planted `assert!(false)` in llrm-transforms): refused naming it in 88 s; none on the clean head."""
@@ -761,7 +774,7 @@ def test_a_red_test_in_a_changed_crate_is_refused_and_one_the_head_fails_too_is_
         return set(red)
 
     assert ps.new_lib_failures(files, on_merged=on_merged, on_head=lambda by_package: set()) == red
-    assert asked["packages"] == {"llrm-transforms", "llrm-mir"}
+    assert asked["packages"] == _closure("crates/opt/llrm-transforms/src/memcpyoptimizer.rs") | {"llrm-mir"}
     assert ps.new_lib_failures(files, on_merged=on_merged, on_head=lambda by_package: {next(iter(red))}) == set()
     assert ps.new_lib_failures(["docs/x.md"], on_merged=on_merged, on_head=lambda by_package: set()) == set()
 
@@ -775,7 +788,8 @@ def test_a_passing_batch_prints_what_the_lib_layer_ran(capsys):
         return set()
 
     assert ps.new_lib_failures(["crates/opt/llrm-transforms/src/gvn.rs"], on_merged=on_merged, on_head=lambda by_package: set()) == set()
-    assert "lib tests: 2 crates, 940 tests passed (abcd1234), 12s" in capsys.readouterr().out
+    crates = len(_closure("crates/opt/llrm-transforms/src/gvn.rs") | {"llrm-mir"})
+    assert f"lib tests: {crates} crates, 940 tests passed (abcd1234), 12s" in capsys.readouterr().out
     assert ps.new_lib_failures(["docs/x.md"], on_merged=on_merged, on_head=lambda by_package: set()) == set()
     assert "lib tests: 0 crates, 0 tests passed (no crate changed)" in capsys.readouterr().out
 
@@ -790,7 +804,7 @@ def test_a_change_to_any_crate_source_also_runs_the_scan_crates_lib_tests():
 
     ps.new_lib_failures(["crates/opt/llrm-transforms/src/extload.rs"], on_merged=on_merged, on_head=lambda by_package: set())
     ps.new_lib_failures(["docs/x.md"], on_merged=on_merged, on_head=lambda by_package: set())
-    assert asked == [{"llrm-transforms", "llrm-mir"}]
+    assert asked == [_closure("crates/opt/llrm-transforms/src/extload.rs") | {"llrm-mir"}]
 
 
 def test_a_unit_the_head_passes_names_the_offender_and_the_rest_are_tested_once():
@@ -980,7 +994,7 @@ def test_a_change_to_llrm_hir_also_runs_llrm_cs_toolchain_lib_tests():
     ps.new_lib_failures(["crates/ir/llrm-hir/src/mir.rs"], on_merged=on_merged, on_head=lambda by_package: set())
     ps.new_lib_failures(["crates/opt/llrm-transforms/src/gvn.rs"], on_merged=on_merged, on_head=lambda by_package: set())
     assert "llrm-c" in asked[0] and "llrm-hir" in asked[0]
-    assert "llrm-c" not in asked[1]
+    assert "llrm-c" in asked[1]
 
 
 def test_the_tool_modules_are_loaded_before_a_landing_can_change_them(tmp_path, monkeypatch):

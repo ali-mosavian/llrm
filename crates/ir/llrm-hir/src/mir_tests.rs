@@ -39,7 +39,7 @@ fn a_function_becomes_its_llvm_ir() {
     // With no ABI of its own, a procedure is far and C's.
     assert!(
         text.contains(
-            "define i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) noinline {\nb1:\n  %2 = sub i16 %0, %1\n  ret i16 %2\n}\n"
+            "define i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) noinline \"llrm-fp-eval\"=\"x87-extended\" {\nb1:\n  %2 = sub i16 %0, %1\n  ret i16 %2\n}\n"
         ),
         "{text}"
     );
@@ -86,7 +86,12 @@ fn a_call_repeats_its_callees_convention() {
     let emitted = emit(&program(function.clone())).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    assert!(text.contains("define cc 1000 i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) noinline {"), "{text}");
+    assert!(
+        text.contains(
+            "define cc 1000 i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) noinline \"llrm-fp-eval\"=\"x87-extended\" {"
+        ),
+        "{text}"
+    );
     assert!(text.contains("call i16 @llrm.qb.B$NEAR(i16 %2, i16 %0)"), "{text}");
     assert!(text.contains("declare i16 @llrm.qb.B$NEAR(i16, i16)\n"), "{text}");
 
@@ -928,7 +933,7 @@ fn a_languages_promises_reach_mir() {
     let emitted = emit(&program).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    let body = "(ptr noalias %0) addrspace(1) {\nb1:\n  %1 = alloca i16\n  %2 = getelementptr inbounds i8, ptr %0, i16 2\n  %3 = load i16, ptr %2, !tbaa !7\n  %4 = icmp slt i16 %3, 0\n  %5 = zext i1 %4 to i16\n  store i16 %5, ptr %1, !tbaa !2\n  ret i16 poison\n}";
+    let body = "(ptr noalias %0) addrspace(1) \"llrm-fp-eval\"=\"x87-extended\" {\nb1:\n  %1 = alloca i16\n  %2 = getelementptr inbounds i8, ptr %0, i16 2\n  %3 = load i16, ptr %2, !tbaa !7\n  %4 = icmp slt i16 %3, 0\n  %5 = zext i1 %4 to i16\n  store i16 %5, ptr %1, !tbaa !2\n  ret i16 poison\n}";
     assert!(text.contains(body), "{text}");
     assert!(text.contains("!6 = !{!\"int2\", !5, i64 0}\n!7 = !{!6, !6, i64 0}"), "{text}");
 }
@@ -2035,7 +2040,7 @@ fn a_flat_target_has_one_space_and_a_32_bit_layout() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
     assert!(text.contains("p:32:32") && !text.contains("p1:"), "{text}");
-    assert!(text.contains("define ptr @same(ptr %0) noinline {"), "{text}");
+    assert!(text.contains("define ptr @same(ptr %0) noinline \"llrm-fp-eval\"=\"x87-extended\" {"), "{text}");
     // Real mode's description makes the same 4-byte pointer a far one.
     assert!(llrm_mir::print::module(&emit(&program).remove(0).module).contains("ptr addrspace(1)"));
     // A pointer kind the flat target has no space for is refused, not made
@@ -2044,4 +2049,15 @@ fn a_flat_target_has_one_space_and_a_32_bit_layout() {
     huge.modules[0].types[2].address = AddressKind::Huge;
     let refused = crate::mir::emit(&huge, &flat).remove(0).refused;
     assert!(refused.iter().any(|(_, why)| why.contains("no huge address space")), "{refused:?}");
+}
+
+/// BASIC's float math runs on the x87 at extended precision: a function the
+/// lowering makes carries `"llrm-fp-eval"="x87-extended"`, which tells the
+/// constant folder not to fold `llvm.log` and its kin to a host double (a
+/// different last digit from BC's FLDLN2; FXCH; FYL2X).
+#[test]
+fn a_lowered_function_says_its_float_math_is_extended() {
+    let emitted = emit(&program(difference())).remove(0);
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("\"llrm-fp-eval\"=\"x87-extended\""), "{text}");
 }
