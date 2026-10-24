@@ -73,11 +73,13 @@ pub enum Event {
     ExitSinkPhis,
     /// The edges leaving a loop found (`Around::exits`).
     LoopExitScans,
+    /// A pattern of an `icmp` operand tried by LVI (`match_icmp_operand`).
+    LviIcmpPatterns,
 }
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 23] = [
+const NAMES: [&str; 24] = [
     "function_clones",
     "function_forks",
     "machinings",
@@ -101,6 +103,7 @@ const NAMES: [&str; 23] = [
     "scev_nodes",
     "exitsink_phis",
     "loop_exit_scans",
+    "lvi_icmp_patterns",
 ];
 
 /// A pass's runs and the instructions of the functions it ran over.
@@ -117,7 +120,7 @@ thread_local! {
     static PASSES: RefCell<Vec<PassRow>> = const { RefCell::new(Vec::new()) };
     /// (pass, analysis, misses): the analyses a pass made the manager compute.
     static ASKS: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    static EVENTS: [Cell<u64>; 23] = const { [const { Cell::new(0) }; 23] };
+    static EVENTS: [Cell<u64>; 24] = const { [const { Cell::new(0) }; 24] };
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };
