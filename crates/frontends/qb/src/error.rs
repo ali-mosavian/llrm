@@ -24,6 +24,12 @@ pub struct ParseError {
     pub expected: Option<String>,
     /// The name the error is about, when it is one word of a longer span.
     pub subject: Option<String>,
+    /// What was found and what was wanted, when the code alone would not say.
+    pub detail: Option<String>,
+    /// A sentence in place of the usual one, where the checker knows more.
+    pub headline: Option<String>,
+    /// Another place in the source the message talks about.
+    pub related: Option<Span>,
 }
 
 impl ParseError {
@@ -33,7 +39,7 @@ impl ParseError {
         code: impl Into<String>,
     ) -> Self {
         let code = code.into();
-        Self { span, message: code.clone(), code, help: None, expected: None, subject: None }
+        Self { span, message: code.clone(), code, help: None, expected: None, subject: None, detail: None, headline: None, related: None }
     }
 }
 

@@ -32,10 +32,38 @@ fn an_array_used_before_it_is_dimensioned_names_the_array() {
 }
 
 #[test]
-fn an_unfinished_statement_says_which_statement_and_that_the_line_ended() {
+fn an_unfinished_statement_says_which_statement_and_what_it_waits_for() {
     let (at, error) = refused("PRINT (1 +\r\n", Dialect::VbDos);
     assert_eq!(at, "1:11");
-    assert!(error.message.contains("the PRINT statement is incomplete"), "{}", error.message);
+    assert!(error.message.contains("the PRINT statement ends after `+`, which needs a value"), "{}", error.message);
+    assert!(error.help.as_deref().is_some_and(|help| help.contains("PRINT is written:")), "{error:?}");
+    let (_, error) = refused("PRINT\r\nFOR i = 1 TO\r\n", Dialect::VbDos);
+    assert!(error.message.contains("the FOR statement is incomplete"), "{}", error.message);
+}
+
+#[test]
+fn a_wrong_argument_count_says_how_many_were_given_and_taken() {
+    let (at, error) = refused("SUB Show\r\nEND SUB\r\nCALL Show(1)\r\n", Dialect::QuickBasic45);
+    assert_eq!(at, "3:6");
+    assert!(error.message.contains("`Show` is called with 1 argument, but takes no arguments"), "{}", error.message);
+}
+
+#[test]
+fn a_mismatched_next_names_both_variables() {
+    let (_, error) = refused("FOR i = 1 TO 3\r\nNEXT j\r\n", Dialect::QuickBasic45);
+    assert!(error.message.contains("this NEXT names `j`, but the FOR loop it closes counts with `i`"), "{}", error.message);
+}
+
+#[test]
+fn a_type_mismatch_says_what_each_side_is() {
+    let (_, error) = refused("x = 5\r\nPRINT y$ + x\r\n", Dialect::QuickBasic45);
+    assert!(error.message.contains("mixes a string with a number"), "{}", error.message);
+}
+
+#[test]
+fn a_const_says_what_it_cannot_hold() {
+    let (_, error) = refused("CONST k = 2 ^ 3\r\n", Dialect::QuickBasic45);
+    assert!(error.message.contains("BC does not allow `^` there"), "{}", error.message);
 }
 
 #[test]

@@ -100,7 +100,7 @@ impl Checker {
                 self.err(span, "Equal sign missing");
             }
             Some(procedure) if procedure.kind == ProcedureKind::Sub => {
-                self.check_arguments(&procedure, arguments, span, true);
+                self.check_arguments(name, &procedure, arguments, span, true);
             }
             Some(_) => self.err(span, if explicit { "Name of subprogram illegal" } else { "Variable required" }),
             None if sigs::function(name, self.dialect).is_some_and(|sig| sig.statement) => {
@@ -422,7 +422,13 @@ impl Checker {
                     }
                 }
             } else {
-                self.err(span, "Argument-count mismatch");
+                self.err_because(
+                    span,
+                    "Argument-count mismatch",
+                    Reason::headline("SWAP needs exactly two variables")
+                        .about("SWAP")
+                        .help("write `SWAP a, b`; both must be variables of the same type"),
+                );
             }
             return;
         }

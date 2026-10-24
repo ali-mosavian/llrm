@@ -19,7 +19,16 @@ impl Checker {
             })
             .collect();
         if candidates.is_empty() {
-            self.err(span, "Argument-count mismatch");
+            let given = arguments.len();
+            let headline = format!(
+                "`{{name}}` is called with {given} argument{}, which this function does not take",
+                if given == 1 { "" } else { "s" }
+            );
+            self.err_because(
+                span,
+                "Argument-count mismatch",
+                Reason::headline(headline).about(name).help("check the argument list of this function in the manual"),
+            );
             return None;
         }
         for (n, alternative) in candidates.iter().enumerate() {
@@ -199,6 +208,7 @@ impl Checker {
 
     pub(super) fn check_arguments(
         &mut self,
+        name: &str,
         procedure: &ProcInfo,
         arguments: &[Expr],
         span: Span,
@@ -230,7 +240,21 @@ impl Checker {
             return;
         }
         if procedure.params.len() != arguments.len() {
-            self.err(span, "Argument-count mismatch");
+            let count = |n: usize| match n {
+                0 => "no arguments".to_owned(),
+                1 => "1 argument".to_owned(),
+                n => format!("{n} arguments"),
+            };
+            let headline = format!(
+                "`{{name}}` is called with {}, but takes {}",
+                count(arguments.len()),
+                count(procedure.params.len())
+            );
+            self.err_because(
+                span,
+                "Argument-count mismatch",
+                Reason::headline(headline).about(name).help("give the call exactly the arguments the SUB or FUNCTION declares"),
+            );
             return;
         }
         for (parameter, argument) in procedure.params.iter().zip(arguments) {

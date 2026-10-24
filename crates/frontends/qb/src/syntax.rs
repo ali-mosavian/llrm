@@ -1,7 +1,7 @@
 //! Parser-private typed syntax. Name and storage resolution consumes this;
 //! these nodes never cross the common-HIR boundary.
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Span {
     pub line: usize,
     pub start: usize,

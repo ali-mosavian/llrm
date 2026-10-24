@@ -152,7 +152,13 @@ impl Checker {
                 }
                 let typed = self.scalar(typed, *span)?;
                 if !typed.ty.numeric() {
-                    self.err(*span, "Type mismatch");
+                    let headline =
+                        format!("`{{text}}` needs a number after the operator, but the operand is {}", typed.ty.describe());
+                    self.err_because(
+                        *span,
+                        "Type mismatch",
+                        Reason::headline(headline).help("convert it with VAL, or use a number"),
+                    );
                     return None;
                 }
                 let ty = match op {
@@ -211,7 +217,17 @@ impl Checker {
             _ => {}
         }
         if !(l.ty.numeric() && r.ty.numeric()) {
-            self.err(span, "Type mismatch");
+            let headline = format!(
+                "`{{text}}` mixes {} with {}: this operator needs two numbers{}",
+                l.ty.describe(),
+                r.ty.describe(),
+                if matches!(op, Add) { " (or two strings, to join them)" } else { "" }
+            );
+            self.err_because(
+                span,
+                "Type mismatch",
+                Reason::headline(headline).help("convert one side (VAL turns a string into a number, STR$ a number into a string)"),
+            );
             return None;
         }
         let promoted = promote(&l.ty, &r.ty);
@@ -339,7 +355,16 @@ impl Checker {
                 if procedure.params.is_empty() {
                     return procedure.result.map(Typed::value);
                 }
-                self.err(span, "Argument-count mismatch");
+                let n = procedure.params.len();
+                let headline = format!(
+                    "`{{name}}` is called with no arguments, but takes {n} argument{}",
+                    if n == 1 { "" } else { "s" }
+                );
+                self.err_because(
+                    span,
+                    "Argument-count mismatch",
+                    Reason::headline(headline).about(name).help("write the arguments in parentheses after the name"),
+                );
                 return None;
             }
         }
@@ -433,7 +458,7 @@ impl Checker {
                 return None;
             }
             if procedure.kind == ProcedureKind::Function {
-                self.check_arguments(&procedure, arguments, span, false);
+                self.check_arguments(name, &procedure, arguments, span, false);
                 return procedure.result.map(Typed::value);
             }
             self.err(span, "Type mismatch");

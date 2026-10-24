@@ -26,7 +26,7 @@ mod record;
 mod stmt;
 mod types;
 
-pub use types::Diagnostic;
+pub use types::{Diagnostic, Reason};
 use types::*;
 
 pub fn check(
@@ -118,7 +118,7 @@ impl Checker {
         span: Span,
         message: &str,
     ) {
-        self.errors.push(Diagnostic { span, message: message.into(), subject: None });
+        self.errors.push(Diagnostic { span, message: message.into(), ..Diagnostic::default() });
     }
 
     /// `err`, naming the word of the span at fault.
@@ -128,7 +128,25 @@ impl Checker {
         message: &str,
         subject: &str,
     ) {
-        self.errors.push(Diagnostic { span, message: message.into(), subject: Some(subject.to_owned()) });
+        self.errors.push(Diagnostic { span, message: message.into(), subject: Some(subject.to_owned()), ..Diagnostic::default() });
+    }
+
+    /// `err` with the reason in words, and the word of the span at fault when
+    /// there is one.
+    fn err_because(
+        &mut self,
+        span: Span,
+        message: &str,
+        reason: Reason,
+    ) {
+        self.errors.push(Diagnostic {
+            span,
+            message: message.into(),
+            subject: reason.subject,
+            headline: reason.headline,
+            detail: reason.help,
+            related: reason.related,
+        });
     }
 
     // ---- the module
