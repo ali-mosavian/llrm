@@ -88,6 +88,9 @@ struct Where {
     before: String,
     /// The error is at the first word of its statement.
     starts: bool,
+    /// The letters, digits and dots right before the error, with no blank
+    /// between: the start of a malformed number or name.
+    run: String,
     /// The name the statement is about: the first word that is no statement
     /// keyword (`p` in `SUB p (a%)`).
     name: String,
@@ -134,6 +137,24 @@ fn locate(
         (true, _) => String::new(),
         _ => word.to_ascii_uppercase(),
     };
+    // a variable at the start of `x = ...` is no statement keyword
+    let statement = if forms().contains_key(statement.as_str())
+        || crate::front::reserved::is_reserved_name(crate::Dialect::VbDos, &statement)
+    {
+        statement
+    } else {
+        String::new()
+    };
+    let run: String = {
+        let mut end = span.start.min(chars.len());
+        let begin = loop {
+            if end == 0 || !(chars[end - 1].is_ascii_alphanumeric() || matches!(chars[end - 1], '.' | '&')) {
+                break end;
+            }
+            end -= 1;
+        };
+        chars[begin..span.start.min(chars.len())].iter().collect()
+    };
     // the name: skip the statement keywords at the start of the rest
     let mut name = String::new();
     let mut words = rest.split_whitespace();
@@ -160,6 +181,7 @@ fn locate(
     let before: String = chars[..span.start.min(chars.len())].iter().collect();
     Where {
         starts,
+        run,
         name,
         text: shown,
         statement,
@@ -240,6 +262,23 @@ fn syntax(
     let own = if first { place.text.to_ascii_uppercase() } else { place.statement.clone() };
     let statement = if own.is_empty() { "statement".to_owned() } else { format!("{own} statement") };
     let found = if place.at_end { "the end of the line".to_owned() } else { format!("`{}`", place.text) };
+    // a number cut short by a stray letter or dot: `1E`, `1.2.3`
+    if place.run.starts_with(|c: char| c.is_ascii_digit() || c == '.')
+        && place.text.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '.')
+    {
+        let number = format!("{}{}", place.run, place.text);
+        return (
+            format!("`{number}` is not a valid number"),
+            "check the digits, the exponent (`1E5`) and the type character".to_owned(),
+        );
+    }
+    // `FNa(1)` where `DEF FNa` was written without parameters
+    if place.text == "(" && place.run.to_ascii_uppercase().starts_with("FN") {
+        return (
+            format!("`{}` takes no arguments: it was defined without a parameter list", place.run),
+            format!("remove the parentheses, or give `DEF {}` parameters", place.run),
+        );
+    }
     let summary = match &error.expected {
         Some(wanted) => format!("expected {wanted} in the {statement}, but found {found}"),
         None if place.at_end => match place.before.chars().last() {
