@@ -729,6 +729,8 @@ no:
 ";
     let got = listing(text, "f");
     // An i1 is a byte of 0 or 1: sext is movzx and neg, BASIC's -1.
+    // The registers are those of the allocator started from the coalescer's
+    // intervals (the pin's, un-renumbered): the same instructions as before.
     // Greedy's register choice (#2312): the old pin's instructions, memory
     // operands, prefixes and adjacent dependencies, other registers. The
     // extensions and the negate sink into the arm that reads them (a88a614969,
@@ -741,19 +743,19 @@ no:
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "mov cx, word ptr [bp+6]",
-            "cmp cx, word ptr [bp+8]",
-            "setl al",
-            "cmp cx, 3",
-            "sete cl",
-            "mov dl, al",
-            "and dl, cl",
+            "mov ax, word ptr [bp+6]",
+            "cmp ax, word ptr [bp+8]",
+            "setl cl",
+            "cmp ax, 3",
+            "sete al",
+            "mov dl, cl",
+            "and dl, al",
             "je L0_8",
             "L0_6:",
-            "movzx dx, al",
-            "neg dx",
-            "movzx ax, cl",
-            "add ax, dx",
+            "movzx cx, cl",
+            "neg cx",
+            "movzx ax, al",
+            "add ax, cx",
             "pop bp",
             "retf",
             "L0_8:",

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inlinecost.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inlinecost.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:4a93a110bacaaac713284ff3bb4b524370dcca7a1178a7c8d4f1a0612d93e724 -->
+<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:c9ac59255e858cc8cf529763d7a1b13f36c5eb7e001fbc13146b98f6c6688af9 -->
 
 # inlinecost
 
@@ -88,9 +88,10 @@ each site's cost and threshold beside the existing decision; with
   attribute decision.
 - D7: the minsize loop penalty counts retreating-edge headers, not
   `LoopInfo`.
-- D10: a callee that calls itself is priced as any (LLVM: "recursive",
-  `IsRecursiveCall`), and `decide` leaves a call of the caller itself to the
-  copies `walk::SelfInline` makes (gcc's `recursive_inlining`,
+- D10 (`-finline-recursive`, off by default): a callee that calls itself is
+  priced as any (LLVM: "recursive", `IsRecursiveCall`, unless
+  `AllowRecursiveCall`), and `decide` leaves a call of the caller itself to
+  the copies `walk::SelfInline` makes (gcc's `recursive_inlining`,
   ipa-inline.cc:1645: depth `MAX_INLINE_RECURSIVE_DEPTH` 3 against gcc's 8,
   `MAX_INLINE_INSNS_RECURSIVE` 150 against 450, the call's frequency above
   10%; none at -Os; calls of a function that reads and writes nothing with

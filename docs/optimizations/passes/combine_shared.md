@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_shared.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_shared.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_shared.rs sha256:cc80fd46105e1b970d8659b306ba278310f416d8429f19c4c04b8d18a52777c0 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_shared.rs sha256:f1dcc697ba781a20d7664a03cc05f1f8d43789e9edc3fc5d0f81f0acc5e674f2 -->
 
 # combine_shared
 
@@ -22,10 +22,9 @@ only; the `phi` pair (`matchSymmetricPhiNodesPair`) belongs to the phi
 family, whose helpers the `combine_phi` translation owns. Until it lands a
 pair of phis is no pair.
 
-DEVIATE 2: only the integer operations (`add`, `mul`, `and`, `or`, `xor`)
-are associative here. LLVM's float `isAssociative` needs `reassoc nsz` on
-the instruction; the float families bring it. `fadd` and `fmul` are
-commutative and are ordered by complexity.
+MIRROR: `Instruction::isAssociative` is the integer operations and `fadd`
+and `fmul` with `reassoc` and `nsz` (`combine_phi::is_associative`); `fadd`
+and `fmul` are commutative and ordered by complexity.
 
 DEVIATE 3: a new instruction does not take the name of the one it stands
 for (`takeName`): MIR names are not read by any pass.
