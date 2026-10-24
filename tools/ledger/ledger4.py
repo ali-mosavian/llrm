@@ -8,12 +8,7 @@ def parse(path, pin=False):
         if not m: continue
         if m.group(2).lstrip().startswith("=>"): continue
         ir = int(m.group(1).replace(",", ""))
-        sym = re.sub(r"\s*\[[^\]]*\]\s*$", "", m.group(2))
-        if pin:
-            sym = re.sub(r"^\S*?:(?=\S)", "", sym, count=1) if not sym.startswith(("llvm", "(")) else sym
-            sym = re.sub(r"^/[^ ]*?\.(?:cpp|h):", "", sym)
-        else:
-            sym = re.sub(r"^\?\?\?:", "", sym)
+        sym = nested.clean(m.group(2), pin)
         d[sym] += ir
     return d
 ours = parse(os.environ.get("LEDGER_OURS", "ours.incl")); clang = parse(os.environ.get("LEDGER_CLANG", "../ledger2/clang.incl"), pin=True)
@@ -55,6 +50,11 @@ _calling = os.environ.get("LEDGER_CALLING")
 _double = None
 if _calling:
     _double = nested.check(nested.parse_calling(_calling), {n: set(total(ours, op)[1]) for n, (op, pp) in B.items()})
+_pin_calling = os.environ.get("LEDGER_PIN_CALLING")
+if _pin_calling:
+    _double = (_double or "") + "\n" + "pin " + nested.check(
+        nested.parse_calling(_pin_calling, pin=True), {n: set(total(clang, pp)[1]) for n, (op, pp) in B.items()}
+    )
 rows = []; so = sp = 0
 for name, (op, pp) in B.items():
     o, os_ = total(ours, op); p, ps = total(clang, pp)
