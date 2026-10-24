@@ -305,6 +305,7 @@ pub mod spares;
 pub mod speculate;
 pub mod spill;
 pub mod splitcopy;
+pub mod splitstore;
 pub mod sroa;
 pub mod switcharms;
 pub mod switchcg;
@@ -329,6 +330,7 @@ pub mod twoentryphi;
 pub mod typepromotion;
 pub mod uncondicmp;
 pub mod undefpred;
+pub mod uremloop;
 pub mod vncoercion;
 #[cfg(test)]
 mod vncoercion_tests;

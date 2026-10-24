@@ -83,6 +83,8 @@ pub mod x86isd {
     pub const FP_TO_INT_IN_MEM: ISD = ISD::Target(617);
     /// `X86ISD::FILD`: `fild` of an integer in memory to an x87 value.
     pub const FILD: ISD = ISD::Target(586);
+    /// `X86ISD::FIST`: `fist` of an x87 value in the current rounding mode.
+    pub const FIST: ISD = ISD::Target(587);
     /// `X86ISD::FCMP`: the flags of an x87 compare (`fucom`, `fnstsw`,
     /// `sahf` on a 486).
     pub const FCMP: ISD = ISD::Target(576);
@@ -156,6 +158,7 @@ impl Hooks for X86Lowering {
             ISD::GlobalAddress => lower_global_address(dag, node),
             ISD::VAStart => lower_vastart(dag, node),
             ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node),
+            ISD::LRint => lower_lrint(dag, node),
             ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node),
             ISD::ConstantPool => lower_constant_pool(dag, node),
             ISD::JumpTable => lower_jump_table(dag, node),
@@ -523,6 +526,78 @@ fn may_fold_load(
     dag.opcode(value) == ISD::Load && dag.users(value).count() == 1
 }
 
+/// `LowerSELECTWithCmpZero`, the `(x & 1) == 0` part: a select on the low bit
+/// is arithmetic on the bit's mask `-(x & 1)`. Without `cmov`, a select of two
+/// constants and a select between `y` and `y op z` become a mask, an `and` and
+/// the operation. The `x - 1` / `0 - x` carry forms (`sbb`) are not translated.
+fn select_with_cmp_zero(
+    dag: &mut SelectionDAG,
+    cmp_val: SDValue,
+    lhs: SDValue,
+    rhs: SDValue,
+    code: u128,
+    can_cmov: bool,
+) -> Option<SDValue> {
+    let (cmp_vt, vt) = (dag.value_type(cmp_val), dag.value_type(lhs));
+    if !cmp_vt.is_integer() || !vt.is_integer() {
+        return None;
+    }
+    if code != cond::E || dag.opcode(cmp_val) != ISD::And || dag.constant(dag.operand(cmp_val, 1)) != Some(1) {
+        return None;
+    }
+    // `-(x & 1)` in `splat_vt`.
+    let splat_lsb = |dag: &mut SelectionDAG, splat_vt: EVT| {
+        let neg = if cmp_vt.size_in_bits() > splat_vt.size_in_bits() {
+            dag.get_node(ISD::Truncate, splat_vt, &[cmp_val])
+        } else if cmp_vt.size_in_bits() < splat_vt.size_in_bits() {
+            let wide = dag.get_node(ISD::AnyExtend, splat_vt, &[dag.operand(cmp_val, 0)]);
+            let one = dag.get_constant(1, splat_vt);
+            dag.get_node(ISD::And, splat_vt, &[wide, one])
+        } else {
+            cmp_val
+        };
+        dag.get_negative(neg, splat_vt)
+    };
+    let all_ones = |dag: &SelectionDAG, v: SDValue| dag.constant(v) == Some(super::fold::mask(dag.width(v)));
+    if dag.is_null_constant(lhs) && all_ones(dag, rhs) {
+        return Some(splat_lsb(dag, vt));
+    }
+    if !can_cmov && dag.constant(lhs).is_some() && dag.constant(rhs).is_some() {
+        let mask = splat_lsb(dag, vt);
+        let diff = dag.get_node(ISD::Xor, vt, &[lhs, rhs]);
+        let flip = dag.get_node(ISD::And, vt, &[mask, diff]);
+        return Some(dag.get_node(ISD::Xor, vt, &[lhs, flip]));
+    }
+    if can_cmov {
+        return None;
+    }
+    // `select (x & 1) == 0, y, (y op z)` is `y op (-(x & 1) & z)`.
+    let rop = dag.opcode(rhs);
+    let (r0, r1) = if dag.node(rhs).ops.len() == 2 { (dag.operand(rhs, 0), dag.operand(rhs, 1)) } else { (rhs, rhs) };
+    let identity = match rop {
+        ISD::Or | ISD::Xor | ISD::Add if r0 == lhs || r1 == lhs => Some((if r0 == lhs { r1 } else { r0 }, lhs)),
+        ISD::Shl | ISD::Sra | ISD::Srl | ISD::Sub if r0 == lhs => Some((r1, lhs)),
+        _ => None,
+    };
+    if let Some((src1, src2)) = identity {
+        let src_vt = dag.value_type(src1);
+        let mask = splat_lsb(dag, src_vt);
+        let and = dag.get_node(ISD::And, src_vt, &[mask, src1]);
+        return Some(dag.get_node(rop, vt, &[src2, and]));
+    }
+    // `select (x & 1) == 0, (y & z), y` is `y & (-(x & 1) | z)`.
+    if dag.opcode(lhs) == ISD::And {
+        let (l0, l1) = (dag.operand(lhs, 0), dag.operand(lhs, 1));
+        if l0 == rhs || l1 == rhs {
+            let src1 = if l0 == rhs { l1 } else { l0 };
+            let mask = splat_lsb(dag, vt);
+            let or = dag.get_node(ISD::Or, vt, &[mask, src1]);
+            return Some(dag.get_node(ISD::And, vt, &[rhs, or]));
+        }
+    }
+    None
+}
+
 /// `LowerSELECT`, integers: `cmov` of a compare's flags.
 fn lower_select(
     dag: &mut SelectionDAG,
@@ -537,6 +612,22 @@ fn lower_select(
     if dag.opcode(cond) == ISD::SetCC {
         if let Some(lowered) = lower_setcc(dag, cond) {
             cond = lowered;
+        }
+    }
+    // A raw condition `x & 1` is `(x & 1) == 0` with the arms swapped.
+    if dag.opcode(cond) == ISD::And && dag.constant(dag.operand(cond, 1)) == Some(1) {
+        if let Some(lowered) = select_with_cmp_zero(dag, cond, op2, op1, cond::E, can_cmov) {
+            return Some(lowered);
+        }
+    }
+    if dag.opcode(cond) == x86isd::SETCC && dag.opcode(dag.operand(cond, 1)) == x86isd::CMP {
+        let cmp = dag.operand(cond, 1);
+        if dag.is_null_constant(dag.operand(cmp, 1)) {
+            if let Some(code) = dag.constant(dag.operand(cond, 0)) {
+                if let Some(lowered) = select_with_cmp_zero(dag, dag.operand(cmp, 0), op1, op2, code, can_cmov) {
+                    return Some(lowered);
+                }
+            }
         }
     }
     let (code, flags);
@@ -911,6 +1002,26 @@ fn lower_fp_to_int(
         result = dag.get_node(ISD::Xor, EVT::I64, &[result, adjust]);
     }
     Some(result)
+}
+
+/// `LRINT_LLRINTHelper` for the x87: `fist` of the value, in the current
+/// rounding mode, to a stack slot of the result's size, then a load of it.
+fn lower_lrint(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let result_vt = dag.value_type(node);
+    let value = dag.operand(node, 0);
+    let EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80) = dag.value_type(value) else { return None };
+    let size = result_vt.size_in_bits() / 8;
+    let index = dag.create_stack_temporary(size, size);
+    let slot = dag.get_frame_index(dag.config().pointer, index);
+    let chain = dag.entry_node();
+    let info =
+        MemInfo { mem_vt: result_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
+    let fist =
+        dag.intern(x86isd::FIST, &[EVT::OTHER], &[chain, value, slot], SDNodeFlags::default(), NodeData::Mem(info));
+    Some(dag.get_load(result_vt, fist, slot, info))
 }
 
 /// `BuildFILD` without SSE: `fild` of the `src_vt` integer at `slot`.

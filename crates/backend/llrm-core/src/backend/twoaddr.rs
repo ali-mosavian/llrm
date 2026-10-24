@@ -147,6 +147,12 @@ pub fn tied(
             // flags nothing reads makes no copy.
             if let Some(three) = crate::twoaddress::three_address(&one, lea)
                 && let Some(Loc::Held(base)) = one.what.as_ref().and_then(|what| what.sources.first())
+                // A word source copied out of a register it arrives in
+                // (`SrcRegMap`) is in ax, cx or dx, none of which is a 16-bit
+                // address base: the
+                // `lea` would need `mov bx,ax` first, and the peephole already
+                // makes `lea cx,[eax+k]` of the copy and the add.
+                && (base.width != 2 || walk.src_register(base.value).is_none())
                 && (!walk.killed_at(&work[place], base.value)
                     || profitable_to_convert(&walk, &one, base.value, body.regs()))
                 && crate::twoaddress::flags_dead_after(&work, place, body.regs(), body.bits)
@@ -1113,10 +1119,18 @@ mod tests {
         step: i64,
         name: &str,
     ) -> Vec<Arc<Insn>> {
+        live_source_add_of(step, name, 4)
+    }
+
+    fn live_source_add_of(
+        step: i64,
+        name: &str,
+        width: u32,
+    ) -> Vec<Arc<Insn>> {
         let what = Semantics {
             name: Some(name.into()),
-            dests: vec![held(8, 4)],
-            sources: vec![held(7, 4), Loc::Imm(Imm { value: step, width: 4, address: None })],
+            dests: vec![held(8, width)],
+            sources: vec![held(7, width), Loc::Imm(Imm { value: step, width, address: None })],
             ..Semantics::new(Operation::Binary)
         };
         let add = Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![8], vec![7]));
@@ -1207,6 +1221,22 @@ mod tests {
         let lea = |got: &LirBody| names_of(got).contains(&"lea".to_owned());
         assert!(lea(&tied(&of(live_source_add(-1, "add")), AddSub)));
         assert!(!lea(&tied(&of(live_source_add(1, "shl")), AddSub)));
+    }
+
+    /// textfill at m16 looped `add ax,2; cmp bx,3997; mov bx,ax; jb`: a word
+    /// add was never a `lea`, so its result needed the copy back. A prefixed
+    /// target converts it (`cmp bx,3997; lea bx,[bx+2]; jb`); a word add of
+    /// two registers stays an add (only bx+si and bx+di address).
+    #[test]
+    fn test_a_word_add_of_a_live_source_is_a_lea_on_a_prefixed_target() {
+        use crate::twoaddress::ThreeAddress::{AddSub, AddSubWords};
+        let lea = |got: &LirBody| names_of(got).contains(&"lea".to_owned());
+        assert!(lea(&tied(&of(live_source_add_of(2, "add", 2)), AddSubWords)));
+        assert!(!lea(&tied(&of(live_source_add_of(2, "add", 2)), AddSub)));
+        // A unit step keeps its INC (the regparm3 `_incs` listing at -Os).
+        for (step, name) in [(1, "add"), (1, "sub"), (-1, "add")] {
+            assert!(!lea(&tied(&of(live_source_add_of(step, name, 2)), AddSubWords)), "{name} {step}");
+        }
     }
 
     /// `v5 := lea [v1+4]`: reads `v1`, writes no flags, is no copy and no tied

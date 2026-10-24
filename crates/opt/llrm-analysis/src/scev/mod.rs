@@ -61,6 +61,7 @@ pub mod normalize;
 pub mod pattern;
 pub mod poison;
 pub mod predicate;
+pub mod predicate_rewrite;
 pub mod print;
 pub mod quadratic;
 pub mod range;
@@ -210,6 +211,12 @@ pub struct ScalarEvolution {
     pub(super) signed_ranges: HashMap<Scev, llrm_mir::constantrange::ConstantRange>,
     /// `ConstantMultipleCache`.
     pub(super) constant_multiple_cache: HashMap<Scev, Ap>,
+    /// `getNotSCEV` of a non-constant: built once per expression (it is
+    /// asked 728 times for 426 builds on d_faces, 11 K Ir each).
+    pub(super) not_cache: HashMap<Scev, Scev>,
+    /// `PredicatedSCEVRewrites`: the recurrence a header phi is under
+    /// predicates, by phi and loop; the phi itself where it is none.
+    pub(super) predicated_rewrites: HashMap<(Scev, BlockId), (Scev, Vec<wrap_predicate::Predicate>)>,
     /// `LoopDispositions`: by expression, as LLVM's, so that forgetting one
     /// does not scan them all.
     pub(super) loop_dispositions: HashMap<Scev, Vec<(Option<BlockId>, disposition::LoopDisposition)>>,
@@ -263,6 +270,8 @@ impl ScalarEvolution {
             unsigned_ranges: HashMap::default(),
             signed_ranges: HashMap::default(),
             constant_multiple_cache: HashMap::default(),
+            not_cache: HashMap::default(),
+            predicated_rewrites: HashMap::default(),
             loop_dispositions: HashMap::default(),
             block_dispositions: HashMap::default(),
             value_expr_map: IdMap::new(),
@@ -497,7 +506,7 @@ impl ScalarEvolution {
     pub(super) fn intern(
         &mut self,
         key: Key,
-        kind: Kind,
+        kind: impl FnOnce() -> Kind,
         ty: Option<Ty>,
         size: u16,
     ) -> Scev {
@@ -507,7 +516,7 @@ impl ScalarEvolution {
             std::collections::hash_map::Entry::Occupied(found) => return *found.get(),
             std::collections::hash_map::Entry::Vacant(slot) => slot.insert(at),
         };
-        self.nodes.push(Node { kind, ty, size, flags: 0, canonical: at });
+        self.nodes.push(Node { kind: kind(), ty, size, flags: 0, canonical: at });
         // `LoopUsers[L].push_back(S)` and `registerUser(S, Ops)`, made where
         // each constructor makes a node.
         if let Kind::AddRec(_, header) = self.nodes[at.0 as usize].kind {
@@ -538,7 +547,7 @@ impl ScalarEvolution {
             value: None,
             header: None,
         };
-        self.intern(key, Kind::Constant(value), Some(Ty::Int(value.width)), 1)
+        self.intern(key, || Kind::Constant(value), Some(Ty::Int(value.width)), 1)
     }
 
     /// `ScalarEvolution::getConstant(Type *, uint64_t, bool)`.
@@ -579,7 +588,7 @@ impl ScalarEvolution {
         let ty = self.operand_ty(cx, v);
         let key =
             Key { tag: Type::Unknown, ops: Vec::new(), ty: Some(ty), constant: None, value: Some(v), header: None };
-        self.intern(key, Kind::Unknown(v), Some(ty), 1)
+        self.intern(key, || Kind::Unknown(v), Some(ty), 1)
     }
 
     /// The constant `s` is, if it is one.
