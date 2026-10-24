@@ -61,7 +61,12 @@ impl Checker {
         let key = stem(&d.name).to_owned();
         let as_declared = d.type_name.is_some() && Ty::of_suffix(&d.name).is_none();
         if !d.array && self.consts.contains_key(&key) {
-            self.err(span, "Duplicate definition");
+            self.err_because(
+                span,
+                "Duplicate definition",
+                Reason::headline("`{name}` is already a CONST: a CONST owns its name whatever type character is written")
+                    .help("give the variable another name"),
+            );
             return;
         }
         let local_existing: Vec<Var> = self.scope.vars.get(&key).cloned().unwrap_or_default();
