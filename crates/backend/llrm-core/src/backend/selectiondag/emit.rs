@@ -793,8 +793,19 @@ impl Emitter<'_, '_> {
             .is_some_and(|desc| desc.implicit_defs.contains(&llrm_dagisel::generated::ids::x86::EFLAGS))
         {
             self.flags_now = Some(n);
+            // a `sub` is the pin's compare (`EmitCmp` uses `SUB` to share with
+            // a real one); with its value unread it is as cheap to
+            // make again
+            let value_unread =
+                || !self.dag.nodes().iter().any(|user| user.ops.iter().any(|op| op.node == n && op.res == 0));
             if let Some(last) = self.blocks.last().and_then(|block| block.insns.last())
-                && last.what.as_ref().is_some_and(|what| what.op == Operation::Compare && what.dests.is_empty())
+                && last.what.as_ref().is_some_and(|what| {
+                    (what.op == Operation::Compare && what.dests.is_empty())
+                        || (what.op == Operation::Binary
+                            && what.name.as_deref() == Some("sub")
+                            && matches!(&what.dests[..], [Loc::Held(_)])
+                            && value_unread())
+                })
             {
                 self.flag_insns.insert(n, Arc::clone(last));
             }
@@ -897,13 +908,21 @@ impl Emitter<'_, '_> {
             return Ok(());
         }
         let Some(compare) = self.flag_insns.get(&producer).cloned() else {
-            if std::env::var_os("SDAGC_TMP").is_some() {
-                eprintln!("FLAGS producer t{producer} flags_now {:?}\n{}", self.flags_now, self.dag.dump());
-            }
             return Err(EmitError::Unsupported("flags overwritten between their producer and a consumer".to_owned()));
         };
         let at = self.next_address();
-        let again = Insn { at, covers: Some((at, at)), ..(*compare).clone() };
+        let mut again = Insn { at, covers: Some((at, at)), ..(*compare).clone() };
+        // A `sub` whose value nothing reads, made again for its flags, writes a
+        // value of its own: LIR defines each value once.
+        if let Some(what) = again.what.as_mut() {
+            for dest in &mut what.dests {
+                if let Loc::Held(held) = dest {
+                    let fresh = self.fresh(held.width);
+                    *held = fresh;
+                    again.defines = vec![fresh.value];
+                }
+            }
+        }
         self.blocks.last_mut().expect("a block").insns.push(Arc::new(again));
         self.flags_now = Some(producer);
         Ok(())
@@ -1265,7 +1284,11 @@ impl Emitter<'_, '_> {
     ) -> bool {
         self.glue_reaches(n, |name| {
             let name = name.split('|').next().unwrap_or(name);
-            matches!(name, "CDQ" | "CWD") || is_div_or_mul(name) || name.starts_with("REP_") || name.ends_with("rCL") || name.ends_with("mCL")
+            matches!(name, "CDQ" | "CWD")
+                || is_div_or_mul(name)
+                || name.starts_with("REP_")
+                || name.ends_with("rCL")
+                || name.ends_with("mCL")
         })
     }
 

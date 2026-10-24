@@ -2599,12 +2599,32 @@ fn a_variable_shift_in_memory_reads_cl() {
         .unwrap_or_else(|why| panic!("{}", why.0));
 }
 
+const THREE_WAY_COMPARE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i8 @f(i32 %a, i32 %b) {
+entry:
+  %lt = icmp ult i32 %a, %b
+  %min = select i1 %lt, i32 %a, i32 %b
+  %any = icmp ne i32 %min, 0
+  br i1 %any, label %longer, label %done
+longer:
+  ret i8 7
+done:
+  %lt2 = icmp ult i32 %a, %b
+  %eq = icmp eq i32 %a, %b
+  %neg = select i1 %lt2, i8 -1, i8 1
+  %r = select i1 %eq, i8 0, i8 %neg
+  ret i8 %r
+}
+";
+
+/// One compare feeds an unsigned less-than, an equality and a branch, with
+/// instructions that rewrite the flags between them: the compare is `sub`
+/// whose value nothing reads, made again for the next reader (the nib
+/// runtime's `N$VCMP` stopped with `flags overwritten between their producer
+/// and a consumer`, 3 of 51 nib programs and 25 examples under `--isel=dag`).
 #[test]
-fn tmp_probe_file() {
-    let Ok(path) = std::env::var("SDAGC_LL") else { return };
-    let name = std::env::var("SDAGC_FN").unwrap();
-    let text = std::fs::read_to_string(path).unwrap();
-    let module = llrm_mir::parse::module(&text).expect("parses");
-    let r = selected(&module, &name, &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[]);
-    panic!("{:?}", r.err().map(|e| e.0));
+fn a_compare_read_after_the_flags_changed_is_made_again() {
+    let module = llrm_mir::parse::module(THREE_WAY_COMPARE).expect("parses");
+    selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
 }
