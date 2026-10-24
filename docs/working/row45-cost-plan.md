@@ -93,3 +93,6 @@ Read from each function's own comment; a home is the pin's pass that does the sa
 | `compares_again` | a compare repeated in the next block entered from one block | premise: gcc's `cse_condition_code_reg`; the pin has `optimizeCompareInstr` only inside a block |
 
 First PRs, in order: `popped_arguments` into `callframe` (1.69 M), `constants` into a `MachineLateInstrsCleanup` translation, `high_extracts` and `extensions` with R45-3.
+
+### Count (2026-10-25, step 1)
+On `d_faces -O2` the groups' first-pattern test (`Matcher::head`) ran 24,604 times and passed 856 (3.5%), counted at the one `run` all walks call. The walks cost 10.7 M outside the shared `upper_zero` solution, about 435 Ir per test, of which the 856 passes' tails are a part: an upper bound of the saving is most of 10.7 M, an estimate until the index exists. Step 2 (2026-11-20) measures it on the dist build; under 3 M it is dropped.

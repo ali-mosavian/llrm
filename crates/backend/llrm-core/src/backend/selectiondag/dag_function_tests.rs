@@ -2141,6 +2141,110 @@ fn a_near_pointer_cast_to_the_segment_space_is_its_segment_selector() {
     assert_eq!(spaces, [crate::model::ir::Space::Group], "{spaces:?}");
 }
 
+const QB_PAD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define cc 1000 void @f() addrspace(1) personality ptr addrspace(1) @llrm.qb.personality {
+entry:
+  invoke cc 1000 addrspace(1) void @llrm.qb.B$CEND() to label %next unwind label %landing
+next:
+  ret void
+landing:
+  %e = landingpad { ptr, i32 } catch ptr null
+  ret void
+}
+declare cc 1000 void @llrm.qb.B$CEND() addrspace(1)
+declare i32 @llrm.qb.personality(...) addrspace(1)
+";
+
+fn select_with_contracts(text: &str) -> Result<crate::backend::isel::Selected, String> {
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let contracts =
+        super::dag_function::RuntimeContracts { abi: &Stub { flags: false }, segments: &crate::backend::target::BASIC };
+    let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
+    super::dag_function::selected_in_pool(
+        &module,
+        "f",
+        &llrm_x86_m16::M16,
+        crate::backend::cpu::profile("386").expect("a cpu"),
+        &[],
+        Some(&contracts),
+        pool,
+    )
+    .map_err(|e| e.0)
+}
+
+/// The runtime enters a landing pad: no edge reaches it. The DAG path left it
+/// a block nothing led to (`block 0x0004 is not reachable from the entry`,
+/// 13 qb programs that register `ON ERROR`); it needs the old selector's pad
+/// call and a root block that branches to it.
+#[test]
+fn a_landing_pad_is_marked_and_reachable_from_the_entry() {
+    let done = select_with_contracts(QB_PAD).unwrap_or_else(|why| panic!("{why}"));
+    let landing = done.landing.expect("the pad's address");
+    let blocks = &done.body.blocks;
+    let by_at: std::collections::HashMap<i64, &crate::model::lir::Block> = blocks.iter().map(|b| (b.at, b)).collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut work = vec![done.body.entry];
+    while let Some(at) = work.pop() {
+        if seen.insert(at) {
+            work.extend(by_at[&at].succ.iter().copied());
+        }
+    }
+    assert!(seen.contains(&landing), "{seen:?} {landing}");
+    assert_eq!(done.calls.get(&landing).map(String::as_str), Some("__LANDING"));
+}
+
+const DEAD_DEFAULT: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+define i16 @f(i16 %x) {
+entry:
+  switch i16 %x, label %dead [ i16 1, label %a ]
+a:
+  ret i16 7
+dead:
+  unreachable
+}
+";
+
+const CONSTANT_BRANCH: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+define i16 @f(i16 %x) {
+entry:
+  br i1 false, label %a, label %b
+a:
+  ret i16 7
+b:
+  ret i16 %x
+}
+";
+
+/// A branch on a constant leaves one successor; the other block is dropped with
+/// no branch left to it (`logical_value.c -O0` stopped on `block goes to
+/// 0x001a, which is not in this body` when the MIR block was never built).
+#[test]
+fn a_branch_on_a_constant_leaves_no_branch_to_a_dropped_block() {
+    let done = select_with_contracts(CONSTANT_BRANCH).unwrap_or_else(|why| panic!("{why}"));
+    let present: std::collections::HashSet<i64> = done.body.blocks.iter().map(|b| b.at).collect();
+    for block in &done.body.blocks {
+        assert!(block.succ.iter().all(|next| present.contains(next)), "{:?} leaves for a missing block", block.at);
+    }
+}
+
+/// A switch whose default is `unreachable` leaves that block with no edge;
+/// the machine verifier stops at a block nothing reaches. It is dropped, as
+/// `UnreachableMachineBlockElim` does.
+#[test]
+fn a_block_no_edge_reaches_is_dropped() {
+    let done = select_with_contracts(DEAD_DEFAULT).unwrap_or_else(|why| panic!("{why}"));
+    let by_at: std::collections::HashMap<i64, &crate::model::lir::Block> =
+        done.body.blocks.iter().map(|b| (b.at, b)).collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut work = vec![done.body.entry];
+    while let Some(at) = work.pop() {
+        if seen.insert(at) {
+            work.extend(by_at[&at].succ.iter().copied());
+        }
+    }
+    assert_eq!(seen.len(), done.body.blocks.len(), "{} blocks, {} reached", done.body.blocks.len(), seen.len());
+}
+
 const I1_FREEZE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
 define i16 @f(i1 %a, i16 %x) {
 entry:
@@ -2576,6 +2680,57 @@ fn a_scaled_lea_at_m16_has_no_literal_place() {
         assert!(scale == 1 || place.is_none(), "{what:?}");
     }
     assert!(scaled > 0, "the function has a scaled lea");
+}
+
+const SHIFT_IN_MEMORY: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define void @f(ptr %p, i16 %n) {
+entry:
+  %v = load i16, ptr %p
+  %c = and i16 %n, 15
+  %r = shl i16 %v, %c
+  store i16 %r, ptr %p
+  ret void
+}
+";
+
+/// A variable shift of a value in memory is `shl [p], cl`: the form pins its
+/// amount to `cl`, which the glued copy wrote. Only the register forms read
+/// it, and `SHL16mCL` stopped the nib runtime's `N$PR4` with `missing source`.
+#[test]
+fn a_variable_shift_in_memory_reads_cl() {
+    let module = llrm_mir::parse::module(SHIFT_IN_MEMORY).expect("parses");
+    selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+}
+
+const THREE_WAY_COMPARE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i8 @f(i32 %a, i32 %b) {
+entry:
+  %lt = icmp ult i32 %a, %b
+  %min = select i1 %lt, i32 %a, i32 %b
+  %any = icmp ne i32 %min, 0
+  br i1 %any, label %longer, label %done
+longer:
+  ret i8 7
+done:
+  %lt2 = icmp ult i32 %a, %b
+  %eq = icmp eq i32 %a, %b
+  %neg = select i1 %lt2, i8 -1, i8 1
+  %r = select i1 %eq, i8 0, i8 %neg
+  ret i8 %r
+}
+";
+
+/// One compare feeds an unsigned less-than, an equality and a branch, with
+/// instructions that rewrite the flags between them: the compare is `sub`
+/// whose value nothing reads, made again for the next reader (the nib
+/// runtime's `N$VCMP` stopped with `flags overwritten between their producer
+/// and a consumer`, 3 of 51 nib programs and 25 examples under `--isel=dag`).
+#[test]
+fn a_compare_read_after_the_flags_changed_is_made_again() {
+    let module = llrm_mir::parse::module(THREE_WAY_COMPARE).expect("parses");
+    selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
 }
 
 const FLAGS_OF_A_SUB_AFTER_A_SHIFT: &str = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"

@@ -916,7 +916,18 @@ impl Emitter<'_, '_> {
             return Err(EmitError::Unsupported("flags overwritten between their producer and a consumer".to_owned()));
         };
         let at = self.next_address();
-        let again = Insn { at, covers: Some((at, at)), ..(*compare).clone() };
+        let mut again = Insn { at, covers: Some((at, at)), ..(*compare).clone() };
+        // A `sub` whose value nothing reads, made again for its flags, writes a
+        // value of its own: LIR defines each value once.
+        if let Some(what) = again.what.as_mut() {
+            for dest in &mut what.dests {
+                if let Loc::Held(held) = dest {
+                    let fresh = self.fresh(held.width);
+                    *held = fresh;
+                    again.defines = vec![fresh.value];
+                }
+            }
+        }
         self.blocks.last_mut().expect("a block").insns.push(Arc::new(again));
         self.flags_now = Some(producer);
         Ok(())
@@ -1022,7 +1033,7 @@ impl Emitter<'_, '_> {
             // a shift by `cl` has the amount as the value the `CopyToReg` glued
             // to it wrote to `CL`; the form pins that source to `cx`
             let implicit = || {
-                name.ends_with("rCL")
+                (name.ends_with("rCL") || name.ends_with("mCL"))
                     .then(|| self.accumulator.get(&llrm_lir::registers::RegId::CL).map(|held| Loc::Held(*held)))
                     .flatten()
             };
@@ -1278,7 +1289,11 @@ impl Emitter<'_, '_> {
     ) -> bool {
         self.glue_reaches(n, |name| {
             let name = name.split('|').next().unwrap_or(name);
-            matches!(name, "CDQ" | "CWD") || is_div_or_mul(name) || name.starts_with("REP_") || name.ends_with("rCL")
+            matches!(name, "CDQ" | "CWD")
+                || is_div_or_mul(name)
+                || name.starts_with("REP_")
+                || name.ends_with("rCL")
+                || name.ends_with("mCL")
         })
     }
 
@@ -1939,8 +1954,11 @@ impl Emitter<'_, '_> {
                 Ok(Some(()))
             }
             "LEA32r" | "LEA16r" => {
-                let cell = self
-                    .cell(node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short lea".to_owned()))?, width)?;
+                // a `lea` only computes the address: a scaled index is fine
+                let cell = self.cell_unchecked(
+                    node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short lea".to_owned()))?,
+                    width,
+                )?;
                 // 16-bit addressing has no scale and the encoder no field for a
                 // symbol's displacement beside a lone index: the unscaled
                 // index is the address's base.
@@ -2192,6 +2210,23 @@ impl Emitter<'_, '_> {
 
     /// base, scale, index, displacement, segment.
     fn cell(
+        &mut self,
+        group: &[SDValue],
+        cell_width: u32,
+    ) -> Result<Mem, EmitError> {
+        let cell = self.cell_unchecked(group, cell_width)?;
+        // 16-bit addressing has no scale (SD3): a 16-bit index beside one is
+        // a cell no instruction encodes.
+        if self.ctx.address_mode == AddrMode::Real16
+            && cell.scale != 1
+            && cell.index.is_some_and(|index| index.width == 2)
+        {
+            return Err(EmitError::Unsupported("a scaled 16-bit index at m16".to_owned()));
+        }
+        Ok(cell)
+    }
+
+    fn cell_unchecked(
         &mut self,
         group: &[SDValue],
         cell_width: u32,
