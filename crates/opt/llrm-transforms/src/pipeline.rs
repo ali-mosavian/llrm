@@ -108,6 +108,7 @@
 //! | `ipa_ranges` | argument ranges in the interprocedural step |
 //! | `unswitch`, `interchange`, `unroll_and_jam` | the passes of that name (`unswitch` and `unroll_and_jam` on at -O3 and -Omax; `interchange` on at every level but -O0) |
 //! | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
+//! | `loop_opened` | `opened`, the exit phis folded after LSR (off by default; `-fllrm-loop-opened`; AM-LO-1) |
 //!
 //! `pre` makes `gvn` insert on the path that lacks a value; `for_size` prices
 //! `hoist`, `algebraic`, `loopidioms`, `lsr`, `window` and
@@ -194,6 +195,10 @@ pub struct Options {
     /// (gcc `REG_EQUIV`). llrm only; off by default, `-fllrm-homes`. DEVIATE
     /// (no number), 8.4 M Ir at d_faces.
     pub stored_homes: bool,
+    /// `LoopOpened`: the exit phis LSR's LCSSA made, folded after LSR. llrm
+    /// only (the pin folds them in CodeGenPrepare's phi fold); off by default,
+    /// `-fllrm-loop-opened`. DEVIATE AM-LO-1: on, d_faces costs 10.9 M Ir less.
+    pub loop_opened: bool,
     pub promote: bool,
     pub strength: bool,
     /// The translated `LoopStrengthReduce` slot (LLVM's `-disable-lsr` turns it
@@ -297,6 +302,7 @@ impl Default for Options {
             sink: true,
             spare_loads: false,
             stored_homes: false,
+            loop_opened: false,
             promote: true,
             strength: true,
             lsr: true,
@@ -1219,8 +1225,10 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // SimplifyInstructions.
         passes.push(Box::new(algebraic::Differences));
         // The exit phis `lcssa` made go again: the code generator copies each
-        // (recmany -Os grew 189 bytes).
-        passes.push(Box::new(lcssa::LoopOpened));
+        // (recmany -Os grew 189 bytes). The pin leaves them to CodeGenPrepare.
+        if applied.options.loop_opened {
+            passes.push(Box::new(lcssa::LoopOpened));
+        }
     }
     passes
 }

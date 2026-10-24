@@ -424,3 +424,34 @@ b0:
         "the copy of the local went ({non_integral})"
     );
 }
+
+/// MemCpyOpt asked the manager for `Pointers`, the escape phase of the whole
+/// body's points-to (2.7 M of d_faces -O2's compile), to give its alias
+/// questions a provenance; its questions are `MemoryLocation(Ptr, Size)`, and
+/// the stack answers them. `PointerValues` stays: MemorySSA's accesses read it.
+#[test]
+fn memcpyopt_asks_no_points_to() {
+    struct Watching(std::rc::Rc<std::cell::Cell<bool>>);
+
+    impl llrm_mir::passes::FunctionPass for Watching {
+        fn name(&self) -> &'static str {
+            "memcpyopt"
+        }
+
+        fn run(
+            &mut self,
+            unit: &mut llrm_mir::passes::Unit,
+            analyses: &mut llrm_mir::passes::Analyses,
+        ) -> llrm_mir::passes::PreservedAnalyses {
+            let kept = MemCpyOpt.run(unit, analyses);
+            self.0.set(analyses.cached::<llrm_analysis::manager::Pointers>().is_some());
+            kept
+        }
+    }
+
+    let asked = std::rc::Rc::new(std::cell::Cell::new(false));
+    let mut module =
+        parsed(&format!("{DECLARES}\n{GLOBALS}\n{}", body(&[memcpy("@b", "@a", 16), memcpy("@c", "@b", 16)])));
+    managed(&mut module, Watching(std::rc::Rc::clone(&asked)));
+    assert!(!asked.get(), "memcpyopt solved the whole body's points-to");
+}

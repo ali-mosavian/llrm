@@ -21,7 +21,8 @@
 //!
 //! Phis are only added, as `formLCSSA` does: a phi outside any loop exit whose
 //! inputs are all one value stays for the passes that fold it
-//! ([`LoopOpened`] removes the exit ones after LSR). The new phi is named after
+//! ([`LoopOpened`] removes the exit ones after LSR under
+//! `-fllrm-loop-opened`, off by default). The new phi is named after
 //! its value with `.lcssa`. The pass is idempotent.
 //!
 //! The helpers `arms`, `from_arms`, `operations`, `definitions`, `exit_phi` and
