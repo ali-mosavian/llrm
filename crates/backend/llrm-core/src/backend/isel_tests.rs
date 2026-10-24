@@ -182,27 +182,38 @@ done:
     let got = listing(text, "sum");
     // The comparison stays flags beside its branch; the phis' zeros are made in
     // the entry, which runs a copy of the test and falls into the loop (the
-    // likelier way) rather than copy the return over it.
+    // likelier way) rather than copy the return over it. The scheduler may put
+    // the load of n and the two zeros in any order and register names, so the
+    // test pins the shape: three entry instructions (the load and two zeros),
+    // the test, and the loop with the registers its instructions name.
+    assert_eq!(&got[..3], ["push bp", "mov bp, sp", "L0_0:"], "{got:?}");
+    let entry = &got[3..6];
+    let load = entry.iter().find(|one| one.contains("[bp+6]")).unwrap_or_else(|| panic!("{got:?}"));
+    let n = load.trim_start_matches("mov ").split(',').next().unwrap().to_owned();
+    let zeros: Vec<&str> = entry
+        .iter()
+        .filter(|one| one.starts_with("xor "))
+        .map(|one| one.trim_start_matches("xor ").split(',').next().unwrap())
+        .collect();
+    assert_eq!(zeros.len(), 2, "{got:?}");
+    let (sum, i) = (zeros[0], zeros[1]);
+    let i_is_counted = got.contains(&format!("inc {i}"));
+    let (sum, i) = if i_is_counted { (sum, i) } else { (zeros[1], zeros[0]) };
     assert_eq!(
-        got,
+        &got[6..],
         [
-            "push bp",
-            "mov bp, sp",
-            "L0_0:",
-            "mov cx, word ptr [bp+6]",
-            "xor ax, ax",
-            "xor dx, dx",
-            "cmp dx, cx",
-            "jge L0_8",
-            "L0_5:",
-            "add ax, dx",
-            "inc dx",
-            "cmp dx, cx",
-            "jl L0_5",
-            "L0_8:",
-            "pop bp",
-            "retf",
-        ]
+            format!("cmp {i}, {n}"),
+            "jge L0_8".to_owned(),
+            "L0_5:".to_owned(),
+            format!("add {sum}, {i}"),
+            format!("inc {i}"),
+            format!("cmp {i}, {n}"),
+            "jl L0_5".to_owned(),
+            "L0_8:".to_owned(),
+            "pop bp".to_owned(),
+            "retf".to_owned(),
+        ],
+        "{got:?}"
     );
 }
 
@@ -6253,7 +6264,10 @@ define i16 @f() addrspace(1) {
 ";
     let got = listing(text, "f");
     // 1342177280 is 0x5000:0000 stored, 1358954496 is 0x5100:0000 read through.
-    assert!(got.contains(&"mov cx, 20480".to_owned()) && got.contains(&"pushw 20736".to_owned()), "{got:?}");
+    // The register the selector is made in is the scheduler's and the
+    // allocator's to pick.
+    assert!(got.iter().any(|one| one.starts_with("mov ") && one.ends_with(", 20480")), "{got:?}");
+    assert!(got.contains(&"pushw 20736".to_owned()), "{got:?}");
 }
 
 /// `ptrtoint` of a far global's GEP to a word is its offset: `at < messages +
@@ -6304,7 +6318,12 @@ define i16 @f(i16 %i) addrspace(1) {
     // DGROUP:offset joined into the dword; -18432 is the selector 0xB800 in
     // `pushw`.
     let has = |text: &str| got.iter().any(|one| one == text);
-    assert!(has("mov ax, DGROUP") && has("mov cx, offset g") && has("shl eax, 16") && has("pushw 47104"), "{got:?}");
+    // Which registers hold the halves is the allocator's.
+    let any = |start: &str, end: &str| got.iter().any(|one| one.starts_with(start) && one.ends_with(end));
+    assert!(
+        any("mov ", ", DGROUP") && any("mov ", ", offset g") && any("shl e", ", 16") && has("pushw 47104"),
+        "{got:?}"
+    );
 }
 
 /// A branch's LIR odds are `BranchProbabilityInfo`'s: `p == null` is the
@@ -6736,8 +6755,12 @@ b6:
 }
 ";
     let got = listing(text, "f");
-    assert!(got.contains(&"mov es, di".to_owned()) && got.contains(&"mov es, bx".to_owned()), "{got:?}");
-    assert!(!got.iter().any(|line| line == "mov ax, bx" || line.starts_with("mov ax, word ptr [bp+8]")), "{got:?}");
+    // The selector goes into es from a register on each path, with no copy
+    // through ax between (which register holds each selector is the
+    // allocator's).
+    let into_es: Vec<_> = got.iter().filter(|line| line.starts_with("mov es, ")).collect();
+    assert_eq!(into_es.len(), 2, "{got:?}");
+    assert!(!got.iter().any(|line| line == "mov ax, bx"), "{got:?}");
 }
 
 /// X86 DynAlloca Expander (the pin's `x86-dyn-alloca-expander`) has nothing to
