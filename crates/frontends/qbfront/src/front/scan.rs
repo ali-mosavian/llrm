@@ -87,7 +87,7 @@ fn name_continues(
     byte: u8,
     dialect: Dialect,
 ) -> bool {
-    byte.is_ascii_alphanumeric() || (byte == b'_' && dialect == Dialect::VbDos)
+    byte.is_ascii_alphanumeric() || (byte == b'_' && dialect.underscore_in_names())
 }
 
 /// The index of the next byte that is not a space or tab.
@@ -158,6 +158,10 @@ fn scan_line(
                     }
                     _ => continue,
                 }
+            }
+            // QuickrBASIC's `f"..."`
+            b'f' | b'F' if dialect.format_strings() && bytes.get(at + 1) == Some(&b'"') => {
+                crate::generated_parser::format_string(line, &mut at, line_index, dialect)?
             }
             b'"' => {
                 at += 1;

@@ -1,10 +1,26 @@
 //! Expressions by BC's precedence.
 
 use super::*;
+use crate::syntax::Haystack;
 
 impl Ast<'_> {
     pub(super) fn exp(&mut self) -> R<Expr> {
-        self.imp(First::Full)
+        let value = self.imp(First::Full)?;
+        // QuickrBASIC's `then IF condition ELSE otherwise` binds loosest, and
+        // nests only to the right
+        if self.dialect.python_expressions() && self.eat(Kw::IF) {
+            let condition = self.imp(First::Full)?;
+            self.expect(Kw::ELSE)?;
+            let otherwise = self.exp()?;
+            let span = span_of(value.span(), otherwise.span());
+            return Ok(Expr::Conditional {
+                condition: Box::new(condition),
+                then: Box::new(value),
+                otherwise: Box::new(otherwise),
+                span,
+            });
+        }
+        Ok(value)
     }
 
     pub(super) fn binary(
@@ -105,13 +121,75 @@ impl Ast<'_> {
         &mut self,
         f: First,
     ) -> R<Expr> {
+        let python = self.dialect.python_expressions();
         let mut l = self.add(f)?;
-        while let Some(op) = self.rel_op() {
+        // whether `l` was built from a comparison, which another comparison
+        // then chains
+        let mut chained = false;
+        loop {
+            if python {
+                if let Some(negated) = self.in_operator() {
+                    self.i += if negated { 2 } else { 1 };
+                    let haystack = self.haystack()?;
+                    let span = Span { end: self.previous_end(), ..l.span() };
+                    l = Expr::In { needle: Box::new(l), haystack, negated, span };
+                    chained = false;
+                    continue;
+                }
+            }
+            let Some(op) = self.rel_op() else { break };
             self.i += 1;
             let r = self.add(First::Full)?;
-            l = Self::binary(op, l, r);
+            let span = span_of(l.span(), r.span());
+            l = match l {
+                Expr::Binary { op: first_op, left: first, right: middle, .. } if chained && python => {
+                    Expr::Chain { first, rest: vec![(first_op, *middle), (op, r)], span }
+                }
+                Expr::Chain { first, mut rest, .. } if chained => {
+                    rest.push((op, r));
+                    Expr::Chain { first, rest, span }
+                }
+                l => Self::binary(op, l, r),
+            };
+            chained = true;
         }
         Ok(l)
+    }
+
+    /// `IN` or `NOT IN` after an operand (QuickrBASIC): whether it is negated.
+    fn in_operator(&self) -> Option<bool> {
+        let is_in = |n: usize| {
+            matches!(
+                self.tokens.get(self.i + n).map(|t| &t.kind),
+                Some(TokenKind::Identifier(w)) if w == "IN"
+            )
+        };
+        if is_in(0) {
+            Some(false)
+        } else if self.is(Kw::NOT) && is_in(1) {
+            Some(true)
+        } else {
+            None
+        }
+    }
+
+    /// IN's right side: `(a, b, ...)` is a list of values; anything else, a
+    /// parenthesized one included, is a string or an array.
+    fn haystack(&mut self) -> R<Haystack> {
+        let start = self.i;
+        if self.eat(Kw::LParen) {
+            let first = self.exp()?;
+            if self.eat(Kw::Comma) {
+                let mut values = vec![first, self.exp()?];
+                while self.eat(Kw::Comma) {
+                    values.push(self.exp()?);
+                }
+                self.expect(Kw::RParen)?;
+                return Ok(Haystack::Values(values));
+            }
+            self.i = start;
+        }
+        Ok(Haystack::Container(Box::new(self.add(First::Full)?)))
     }
 
     pub(super) fn add(
@@ -259,10 +337,50 @@ impl Ast<'_> {
             ),
             TokenKind::Real(value, suffix) => Expr::Literal(Literal::Real(value.clone(), real_type(*suffix)), span),
             TokenKind::String(value) => Expr::Literal(Literal::String(value.clone()), span),
+            TokenKind::FormatString(segments) => {
+                let segments = segments.clone();
+                self.i += 1;
+                return self.format_string(&segments, span);
+            }
             _ => return self.fail(),
         };
         self.i += 1;
         Ok(expr)
+    }
+
+    /// QuickrBASIC's `f"..."` as the concatenation of its text and its
+    /// converted fields, a field's spec passed to the conversion as a string.
+    fn format_string(
+        &mut self,
+        segments: &[crate::generated_parser::FormatSegment],
+        span: Span,
+    ) -> R<Expr> {
+        use crate::generated_parser::FormatSegment;
+        let mut parts = Vec::new();
+        for segment in segments {
+            parts.push(match segment {
+                FormatSegment::Text(text) => Expr::Literal(Literal::String(text.clone()), span),
+                FormatSegment::Field { tokens, spec, span } => {
+                    let kinds: Vec<Tok> = tokens.iter().map(|token| terminal(&token.kind)).collect();
+                    let mut field = Ast::over(tokens, &kinds, self.dialect);
+                    let value = field.exp().map_err(|_| self.i)?;
+                    if field.i != tokens.len() {
+                        return Err(self.i);
+                    }
+                    let mut arguments = vec![value];
+                    arguments.extend(spec.iter().map(|spec| Expr::Literal(Literal::String(spec.clone()), *span)));
+                    Expr::Apply { name: crate::generated_parser::FORMAT_FIELD.into(), arguments, span: *span }
+                }
+            });
+        }
+        let mut parts = parts.into_iter();
+        let first = parts.next().unwrap_or(Expr::Literal(Literal::String(String::new()), span));
+        Ok(parts.fold(first, |left, right| Expr::Binary {
+            op: Binary::Add,
+            left: Box::new(left),
+            right: Box::new(right),
+            span,
+        }))
     }
 
     pub(super) fn prim_base(
@@ -270,7 +388,7 @@ impl Ast<'_> {
         f: First,
     ) -> R<Expr> {
         let k = match self.tok_n(0) {
-            Some(Tok::Int | Tok::Real | Tok::Str) => return self.literal(),
+            Some(Tok::Int | Tok::Real | Tok::Str | Tok::Format) => return self.literal(),
             Some(Tok::Ident | Tok::FnWord) => return self.name_ref(),
             Some(Tok::Kw(k)) => *k,
             _ => return self.fail(),

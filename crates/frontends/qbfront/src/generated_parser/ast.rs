@@ -154,7 +154,7 @@ pub const AUGMENTED: &str = "$AUG";
 /// an ordinary assignment the grammar parses anywhere a statement goes. An
 /// operator written directly against `=` cannot occur in QuickBASIC, so the
 /// rewrite changes no valid program.
-fn augmented(tokens: Vec<Token>) -> Vec<Token> {
+pub(crate) fn augmented(tokens: Vec<Token>) -> Vec<Token> {
     let is = |token: &Token, name: &str| matches!(token.kind, TokenKind::Reserved(id) if id == named(name));
     let operators = ["tkAdd", "tkMinus", "tkMult", "tkDiv", "tkIdiv", "tkPwr", "tkMOD", "tkAND", "tkOR", "tkXOR"];
     let mut out = Vec::with_capacity(tokens.len());
@@ -185,7 +185,7 @@ fn augmented(tokens: Vec<Token>) -> Vec<Token> {
 /// QuickrBASIC's `RETURN value` in a FUNCTION, rewritten into QB's own way
 /// to return: `name = value: EXIT FUNCTION`. A bare RETURN still ends a
 /// GOSUB, and QB's `RETURN label` has no place left in a FUNCTION.
-fn returned(
+pub(crate) fn returned(
     tokens: Vec<Token>,
     dialect: Dialect,
 ) -> Vec<Token> {
@@ -310,7 +310,7 @@ fn depth_zero_comma(tokens: &[Token]) -> Option<usize> {
 /// with a name and has a comma before its `=` is one. A slice target,
 /// `s(1:3) = v`, which the grammar cannot parse either, becomes a one-target
 /// list: `$TUPLE(s(1:3)) = v`.
-fn tuple_assignment(
+pub(crate) fn tuple_assignment(
     tokens: Vec<Token>,
     dialect: Dialect,
 ) -> Vec<Token> {
@@ -408,7 +408,7 @@ pub const EACH: &str = "$EACH";
 /// QuickrBASIC's `FOR x [AS type] IN iterable`, rewritten into a FOR the
 /// grammar parses and pairs with its NEXT. A QB FOR has `=` after its
 /// counter, never AS or IN.
-fn for_in(tokens: Vec<Token>) -> Vec<Token> {
+pub(crate) fn for_in(tokens: Vec<Token>) -> Vec<Token> {
     let is = |token: Option<&Token>, name: &str| {
         token.is_some_and(|token| matches!(token.kind, TokenKind::Reserved(id) if id == named(name)))
     };
@@ -462,7 +462,7 @@ fn for_in(tokens: Vec<Token>) -> Vec<Token> {
 /// `PRIVATE SUB` and `PRIVATE FUNCTION`: the grammar parses an ordinary
 /// header, so PRIVATE leaves the stream and where its SUB or FUNCTION now
 /// stands marks the procedure that statement creates.
-fn without_private(tokens: Vec<Token>) -> (Vec<Token>, BTreeSet<usize>) {
+pub(crate) fn without_private(tokens: Vec<Token>) -> (Vec<Token>, BTreeSet<usize>) {
     let separator = |token: &Token| {
         matches!(
             token.kind,

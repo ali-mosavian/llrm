@@ -54,11 +54,19 @@ pub fn parse(
     dialect: Dialect,
 ) -> Result<Module, crate::ParseError> {
     let fail = |span, message: &str| crate::ParseError::coded(span, message);
-    if dialect.format_strings() {
-        return Err(fail(Span { line: 1, start: 0, end: 0 }, "QuickrBASIC extensions are not in this parser"));
-    }
     let tokens = crate::front::scan::scan(source, dialect).map_err(crate::ParseError::from)?;
     let (tokens, volatile_at) = without_volatile(next_lists(tokens));
+    // QuickrBASIC's statements are rewritten into ones the parser has: `x += 1`
+    // is a call of `$AUG+`
+    let (tokens, private_at) = if dialect.format_strings() {
+        use crate::generated_parser::ast as quickr;
+        quickr::without_private(quickr::for_in(quickr::augmented(quickr::tuple_assignment(
+            quickr::returned(tokens, dialect),
+            dialect,
+        ))))
+    } else {
+        (tokens, BTreeSet::new())
+    };
     let mut kinds: Vec<Tok> = tokens.iter().map(|token| terminal(&token.kind)).collect();
     // `FN twice`: FN written apart from the name it prefixes
     for at in 0..tokens.len().saturating_sub(1) {
@@ -66,21 +74,9 @@ pub fn parse(
             kinds[at] = Tok::FnWord;
         }
     }
-    let mut ast = Ast {
-        tokens: &tokens,
-        kinds: &kinds,
-        i: 0,
-        injected: None,
-        volatile_at,
-        dialect,
-        dynamic_arrays: false,
-        colon_pending: false,
-        out: Vec::new(),
-        procedures: Vec::new(),
-        open_procedure: None,
-        expected: None,
-        reason: None,
-    };
+    let mut ast = Ast::over(&tokens, &kinds, dialect);
+    ast.volatile_at = volatile_at;
+    ast.private_at = private_at;
     ast.module().map_err(|at| {
         let span = tokens.get(at).or(tokens.last()).map_or(Span { line: 1, start: 0, end: 0 }, |token| token.span);
         let mut error = fail(span, ast.reason.unwrap_or("Syntax error"));
@@ -196,6 +192,8 @@ struct Ast<'a> {
     /// A primary already read, for `foo (a) * b`: the next `prim` returns it.
     injected: Option<Expr>,
     volatile_at: BTreeSet<(usize, usize)>,
+    /// The SUB and FUNCTION tokens that PRIVATE came before (QuickrBASIC).
+    private_at: BTreeSet<usize>,
     dialect: Dialect,
     /// `'$DYNAMIC` is in force.
     dynamic_arrays: bool,
@@ -211,6 +209,36 @@ struct Ast<'a> {
     /// BC's name for why the parse stopped, where it is not a plain syntax
     /// error.
     reason: Option<&'static str>,
+    /// A QuickrBASIC slice or format string was read: the program needs the
+    /// prelude.
+    prelude: bool,
+}
+
+impl<'a> Ast<'a> {
+    /// A parser over `tokens`, whose terminals are `kinds`.
+    fn over(
+        tokens: &'a [Token],
+        kinds: &'a [Tok],
+        dialect: Dialect,
+    ) -> Self {
+        Self {
+            tokens,
+            kinds,
+            i: 0,
+            injected: None,
+            volatile_at: BTreeSet::new(),
+            private_at: BTreeSet::new(),
+            dialect,
+            dynamic_arrays: false,
+            colon_pending: false,
+            out: Vec::new(),
+            procedures: Vec::new(),
+            open_procedure: None,
+            expected: None,
+            reason: None,
+            prelude: false,
+        }
+    }
 }
 
 fn span_of(
