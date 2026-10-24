@@ -80,7 +80,7 @@ fn test_the_registry_records_mssa_with_its_dependency_and_the_open_vocabulary() 
     );
     let report = parity::report();
     assert!(
-        report.contains("fold@677 (instcombine) -> instcombine-port") && report.contains("shadow_mssa"),
+        report.contains("dead@1242 (instcombine) -> instcombine-port") && report.contains("shadow_mssa"),
         "{report}"
     );
     assert!(parity::TODO.iter().any(|one| one.contains("LICM")), "LICM still drops what it updates");
@@ -113,12 +113,26 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
     assert!(why.contains("ghost@99"), "{why}");
     let why = parity::check_backend(
         &[
+            "cmpsub@1",
+            "processimpdefs@2",
             "optimizephis@1",
+            "fixupsetcc@5",
+            "machinelicm@4",
+            "flagscopy@5",
+            "callframe@5",
+            "fixupbw@14",
             "machinecse@4",
             "machinesink@4",
+            "machinesched@5",
+            "combiner@4",
+            "liverangeshrink@4",
             "floatalloc@8",
+            "pushfold@6",
             "coalesce@10",
+            "latecleanup@13",
+            "leaopt@5",
             "jumps@17",
+            "copyprop@18",
             "allocate@11",
             "unknown@1",
         ],
@@ -288,7 +302,7 @@ fn test_bdce_stands_between_gvn_and_the_next_fold() {
     };
     let built = names(&on, Phase::Simplify);
     let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} missing"));
-    assert!(at("gvn@787") < at("bdce@797") && at("bdce@797") < at("fold@801"), "{built:?}");
+    assert!(at("gvn@787") < at("bdce@797") && at("bdce@797") < at("combine@801"), "{built:?}");
 }
 
 /// ADCE stands where LLVM runs it, after jump threading and before MemCpyOpt
@@ -555,4 +569,17 @@ fn test_marking_a_wired_row_old_is_caught_on_the_real_lists() {
         }
     }
     assert!(checked > 0, "no slot of the built lists holds a translated pass: the scan checks nothing");
+}
+
+/// The three late InstCombines of the pin's default pipeline (l.1403, l.1464,
+/// l.1499) had no slot: a `not` of a condition that SimplifyCFG (l.1438) made
+/// before a branch stayed, 30 QCport objects larger once `fold`, which had
+/// cleaned it, went. They run in a compile of a body, once each.
+#[test]
+fn test_the_late_instcombine_slots_run_in_a_compile() {
+    let lines = runs_of(&Applied::default());
+    for slot in ["combine@1403", "combine@1464", "combine@1499"] {
+        let ran = lines.iter().filter(|line| line.contains(&format!("r01-{slot}"))).count();
+        assert!(ran >= 1, "{slot} did not run: {lines:?}");
+    }
 }

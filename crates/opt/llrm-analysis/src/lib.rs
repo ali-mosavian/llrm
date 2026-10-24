@@ -76,9 +76,9 @@
 //! pass the result is kept if the pass named it preserved; or, for an entry
 //! that reads only the function, if the function is unchanged; or, for an entry
 //! with `depends`, if the change log cannot have altered it; or it is updated
-//! from the log (`INCREMENTAL`: `Counted`, `DominatedEdges`, `Bounded`,
+//! from the log (`INCREMENTAL`: `Counted`, `DominatedEdges`,
 //! `Accesses`); else it is dropped and recomputed on the next ask. Module
-//! entries (`GlobalsAA`, `Summaries`, `Callbacks`) are dropped unless every run
+//! entries (`GlobalsAA`, `Summaries`) are dropped unless every run
 //! of a pass preserved them. `LLRM_CHECK_REPLAY` asserts that kept and updated
 //! results equal a fresh solve. Free-standing analyses (not manager entries)
 //! are recomputed per call; a `Unit` (see [`memory`]) carries the cached ones
@@ -148,6 +148,8 @@ pub mod memoryssa;
 pub mod mssa;
 pub mod mustexecute;
 pub mod nearest;
+#[cfg(test)]
+mod nocapture_agreement_tests;
 pub mod noreturn;
 pub mod num;
 pub mod occurrence;

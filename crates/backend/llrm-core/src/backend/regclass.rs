@@ -132,6 +132,29 @@ pub fn classes(
     classes_with(body, prefer_indexes, segments, registers, false)
 }
 
+/// `MachineRegisterInfo::recomputeRegClass` (MachineRegisterInfo.cpp, called
+/// from `LiveRangeEdit::calculateRegClassAndHint`, LiveRangeEdit.cpp#L426-L430,
+/// and SplitKit.cpp#L628): the registers `value` is confined to by the
+/// instructions that name it, which a value made from another by the spiller or
+/// a split does not inherit. None where its instructions confine it to nothing.
+///
+/// DEVIATE CF-1: the m16 `[base+index]` pairs colour base {BX} and index
+/// {SI,DI}; the pin has no such model. A pair member keeps its side.
+/// DEVIATE CF-4: the answer comes from `classes` over the whole body, so a call
+/// costs a body; a caller that makes many values asks `classes` once.
+///
+/// No caller yet: splitkit's spiller and split sites recompute per value
+/// (`reclass_orders`, #3668); this whole-body entry is for the base/index pair
+/// members they leave to the parent, if a miss shows.
+pub fn recompute_class(
+    body: &LirBody,
+    value: u32,
+    segments: &Segments,
+    registers: &RegisterClasses,
+) -> Option<BTreeSet<RegId>> {
+    classes(body, &BTreeSet::new(), segments, registers).get(&value).cloned()
+}
+
 /// `classes`; `optimistic` is the checker's reading of a body the coalescer has
 /// not merged yet: the two sides of a phi edge's copy also join, and address
 /// classes are read through webs. An allocator cannot take that, the two sides
@@ -1080,7 +1103,7 @@ mod tests {
             ..Mem::new(Some(Addr { segment: (RegId::ES).iced(), ..Addr::new(Space::Far, 0) }), 2)
         };
         let semantics = |op, name: &str, dests, sources, target| Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests,
             sources,
             target,
@@ -1165,4 +1188,96 @@ mod tests {
         assert_eq!(webs.get(&entry_segment), webs.get(&segment));
         assert!(webs.get(&entry_segment).is_some());
     }
+    /// A reload made for a stored word: the spiller gave it its parent's class,
+    /// {EBX} (ls.c `_ls_animate@3`, `[abs+516 + %53 + v16] := mov %51`), where
+    /// its instructions only store it. Recomputed, it is confined to
+    /// nothing and the base keeps the address class.
+    #[test]
+    fn test_a_stored_word_recomputes_to_no_class_and_its_base_keeps_one() {
+        let (base, word) = (1, 2);
+        let held = |value| Loc::Held(Held { value, width: 2 });
+        let semantics = |op, name: &str, dests, sources| Semantics {
+            name: Some(name.into()),
+            dests,
+            sources,
+            ..Semantics::new(op)
+        };
+        let imm = |value| Loc::Imm(crate::model::ir::Imm { value, width: 2, address: None });
+        let make =
+            |at, defines: Vec<u32>, uses: Vec<u32>, what| Arc::new(Insn::new(at, None, Some(what), defines, uses));
+        let cell = Mem { base: Some(Held { value: base, width: 2 }), ..Mem::new(None, 2) };
+        let block = LirBlock {
+            at: 0,
+            insns: vec![
+                make(1, vec![base], vec![], semantics(Operation::Move, "mov", vec![held(base)], vec![imm(2)])),
+                make(2, vec![word], vec![], semantics(Operation::Move, "mov", vec![held(word)], vec![imm(3)])),
+                make(
+                    3,
+                    vec![],
+                    vec![base, word],
+                    semantics(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![held(word)]),
+                ),
+                make(4, vec![], vec![], semantics(Operation::Return, "ret", vec![], vec![])),
+            ]
+            .into(),
+            succ: vec![].into(),
+            phis: vec![].into(),
+            cold: false,
+            align: 0,
+            max_skip: 0,
+        };
+        let body = LirBody::new("f", 0, vec![block.into()], IndexMap::default(), IndexMap::default());
+        let registers = crate::backend::classes::RegisterClasses::m16();
+        let of = |value| recompute_class(&body, value, &target::BUILT_IN, &registers);
+        assert_eq!(of(word), None);
+        assert!(of(base).is_some_and(|class| class.contains(&RegId::BX) && !class.contains(&RegId::AX)));
+    }
+}
+
+/// Values the spiller leaves alone: x87 values, pinned ones, and the body's
+/// inputs.
+pub(crate) fn untouchable(body: &LirBody) -> BTreeSet<u32> {
+    let mut out = floating(body);
+    out.extend(body.pins.keys().copied().chain(body.inputs.iter().copied()));
+    out
+}
+
+/// Values no general register holds: x87 values and wider ones, and every phi
+/// web they join.
+pub(crate) fn floating(body: &LirBody) -> BTreeSet<u32> {
+    let regs = body.regs();
+    let mut out: BTreeSet<u32> = BTreeSet::new();
+    for one in body.insns() {
+        if one.what.as_ref().is_some_and(|what| target::_on_the_stack(regs, what) || what.op.is_x87()) {
+            out.extend(one.uses.iter().chain(&one.defines).copied());
+        }
+        // A value no general register holds: a float, whatever reads it.
+        for place in one.what.iter().flat_map(|what| what.dests.iter().chain(&what.sources)) {
+            for held in crate::model::ir::values(place) {
+                if held.width > 4 {
+                    out.insert(held.value);
+                }
+            }
+        }
+    }
+    // A phi joins its result and arguments: the web is as wide as its widest
+    // member.
+    loop {
+        let mut grew = false;
+        for block in &body.blocks {
+            for phi in &block.phis {
+                let web: Vec<u32> =
+                    std::iter::once(phi.result).chain(phi.incoming.iter().map(|(_, value)| *value)).collect();
+                if web.iter().any(|value| out.contains(value)) {
+                    for value in web {
+                        grew |= out.insert(value);
+                    }
+                }
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    out
 }

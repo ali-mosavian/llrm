@@ -86,7 +86,8 @@ pub fn joined(
     env: &dyn CoalescerEnv,
     depth: &[u32],
 ) -> LirBody {
-    let mut lis = LiveIntervals::new(body);
+    // The intervals TwoAddress edited, where it ran just before.
+    let mut lis = crate::liveness::liveintervals::take_handed_over(body).unwrap_or_else(|| LiveIntervals::new(body));
     let stats = driver::run(&mut lis, env, depth);
     let after = lis.body_like(body);
     if llrm_support::env_flag!("LLRM_COALESCE_WHY") {
@@ -102,17 +103,19 @@ pub fn joined(
     after
 }
 
-/// `LLRM_COALESCE_WHY=1`: the reason for each register copy the joins left. A full copy is
-/// probed by running `join_copy` on the final state; a probe that joins changes the state the
-/// next sees, so the reasons are a count, not a replay. A store of a register is no copy.
+/// `LLRM_COALESCE_WHY=1`: the reason for each register copy the joins left. A
+/// full copy is probed by running `join_copy` on the final state; a probe that
+/// joins changes the state the next sees, so the reasons are a count, not a
+/// replay. A store of a register is no copy.
 pub(super) fn why_left(
     lis: &mut LiveIntervals,
     env: &dyn CoalescerEnv,
 ) -> Vec<&'static str> {
+    use std::collections::HashSet;
+
     use super::pair::full_copy;
     use super::register_coalescer::{JoinResult, State, join_copy};
     use crate::model::ir::{Loc, Operation};
-    use std::collections::HashSet;
     let mut copies = Vec::new();
     for block in 0..lis.cfg.preds.len() {
         for one in lis.block_insns(block) {
@@ -132,7 +135,10 @@ pub(super) fn why_left(
         let what = one.what.as_ref().unwrap();
         reasons.push(if one.group.is_some() {
             "parallel-copy member"
-        } else if !matches!((&what.dests[0], &what.sources[0]), (Loc::Held(_), Loc::Held(_))) {
+        } else if !matches!(
+            (&what.dests[0], &what.sources[0]),
+            (Loc::Held(_), Loc::Held(_))
+        ) {
             "physical register"
         } else if full_copy(&one).is_none() {
             "width differs"

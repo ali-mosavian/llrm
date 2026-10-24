@@ -30,6 +30,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+import llrmbin  # noqa: E402
 MAX_COMMITS = 50
 MAX_AGE_DAYS = 14
 SOURCE_PATHS = ("crates", "src", "Cargo.toml", "Cargo.lock")
@@ -80,7 +82,9 @@ def train(binary: Path, jobs: list[tuple[str, list[str], Path, bool]]) -> tuple[
             wrapped = work / f"{number}-{source.name}"
             wrapped.write_text(HEADER + f'#include "{source}"\n')
             source = wrapped
-        done = sh([binary, *arguments, "-o", "/dev/null", source], check=False)
+        # an object, not /dev/null: llrm-c encodes only for `.o`/`.obj`, so the profile of a compile has the encoder in it
+        with llrmbin.with_object([str(binary), *arguments, "-o", llrmbin.OBJECT, str(source)]) as command:
+            done = sh(command, check=False)
         return "" if done.returncode == 0 else f"{name} {' '.join(arguments)}: " + " ".join((done.stderr or done.stdout).split())[:200]
 
     try:

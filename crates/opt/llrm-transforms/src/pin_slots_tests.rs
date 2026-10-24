@@ -220,7 +220,6 @@ const ROWS: &[Disposition] = &[
         "runs only on a target with divergent branches; x86 has none Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
         "",
     ),
-    row(Simplify, "jump-table-to-switch", Why::Missing, "ablation 0 of 12 IRs", "w-4, 11-09"),
     row(
         Simplify,
         "libcalls-shrinkwrap",
@@ -306,13 +305,6 @@ const ROWS: &[Disposition] = &[
         "",
     ),
     row(Late, "infer-alignment", Why::Missing, "ablation 0 of 12 IRs", "w-1, 11-09"),
-    row(
-        Late,
-        "instcombine",
-        Why::Missing,
-        "the three late runs; ours has no combine slot in the late list",
-        "w-4, 11-09",
-    ),
     row(
         Late,
         "loop-unroll",
@@ -473,7 +465,7 @@ const ROWS: &[Disposition] = &[
         Module,
         "globaldce",
         Why::Executed,
-        "globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned)",
+        "globaldce (once). The pin's second globaldce, after the Late list, has no stage of ours: 0 B on all 65 QCport modules at -Os m16 (pin ablation, 2026-10-23), so N/A until a row moves (owner w-6)",
         "",
     ),
     row(Module, "elim-avail-extern", Why::Executed, "available-externally", ""),
@@ -481,7 +473,7 @@ const ROWS: &[Disposition] = &[
         Module,
         "constmerge",
         Why::Missing,
-        "merging identical constants: data bytes at -Os; not measured",
+        "merging identical constants: -Os m16 on 65 QCport modules through the pin (llc obj sizes, constmerge removed): +58 B of 399336 (0.015%), 2 modules (game/mdl_ai +44, ui/sbar +14); a row of low weight",
         "w-6, 11-09",
     ),
     row(
@@ -523,10 +515,6 @@ const ROWS: &[Disposition] = &[
 
 /// The built slot groups no pin slot is matched to, with why.
 const OURS_ONLY: &[(&str, &str)] = &[
-    (
-        "2376: simplifycfg@2376",
-        "registry Partial: its position in the Late list is not the pin's (unverified which pin simplifycfg it is)",
-    ),
     ("1474: loop-unroll-and-jam@1474", "-O3: the pin's printed list has no unroll-and-jam in this fixture; unverified"),
     (
         "764: loopsimplify@764 + lcssa@764",
@@ -778,6 +766,26 @@ fn every_pin_slot_is_matched_or_accounted_for() {
     errors.sort();
     errors.dedup();
     assert!(errors.is_empty(), "{} problems:\n{}", errors.len(), errors.join("\n"));
+}
+
+/// `simplifycfg@2376` is LateFPM of buildLTODefaultPipeline, not of
+/// `default<O2>`: it ran a ninth SimplifyCFG on every function (+1.4 M Ir on
+/// d_faces -O2, object unchanged).
+#[test]
+fn test_o2_has_the_pins_simplifycfg_slots_and_no_more() {
+    let pin = parse(FIXTURES[1].1).iter().filter(|slot| slot.name == "simplifycfg").count();
+    let ours: usize = [Phase::Early, Phase::Cleanup, Phase::Simplify, Phase::Late]
+        .into_iter()
+        .map(|phase| {
+            built_groups("-O2", phase)
+                .iter()
+                .filter(|(_, entries)| {
+                    entries.iter().any(|entry| llvm_names(entry).iter().any(|name| name == "simplifycfg"))
+                })
+                .count()
+        })
+        .sum();
+    assert_eq!(ours, pin);
 }
 
 /// Every pin slot of every level is in exactly one of six states, and the

@@ -402,3 +402,22 @@ fn test_a_variadic_struct_parameter_address_is_in_its_slots() {
     let built = borland(&source);
     assert!(built.is_ok(), "{:?}", built.err());
 }
+
+/// Borland's interrupt handler takes the nine registers it saved as parameters.
+/// #2936 stated `noundef` on each, and the lowered handler has no parameter to
+/// state it of: `@handler: a fact of no parameter` refused valid input from
+/// 10-19 to 10-23, at every level.
+// It records C through wccq, which only the toolchain feature builds.
+#[cfg(feature = "toolchain")]
+#[test]
+fn test_an_interrupt_handler_with_the_nine_saved_registers_compiles() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("handler.c");
+    std::fs::write(
+        &source,
+        "unsigned saved[9];\nvoid interrupt handler(unsigned bp, unsigned di, unsigned si, unsigned ds, unsigned es,\n    unsigned dx, unsigned cx, unsigned bx, unsigned ax) {\n    saved[0] = bp; saved[8] = ax;\n    ax = 0x7777;\n    bx = ~bx;\n}\n",
+    )
+    .unwrap();
+    let built = borland(&source).unwrap_or_else(|error| panic!("{error}"));
+    assert!(llrm_core::backend::masm::text(&built).unwrap().contains("handler proc"));
+}

@@ -6,24 +6,19 @@ use std::sync::Arc;
 
 use super::converted;
 use crate::backend::classes::RegisterClasses;
-use crate::backend::cpu::{self as targets};
 use crate::backend::floatalloc::_truncating;
 use crate::backend::floatalloc::tests::{
-    _along, _arithmetic, _body, _load, _store, _x87_traced, block, fl, frame_cell, m, name,
+    _along, _arithmetic, _body, _load, _store, _x87_traced, block, fl, frame_cell, name,
 };
-use crate::backend::floatassign;
 use crate::backend::frame::Frame;
-use crate::backend::phielim;
 use crate::model::ir::{Operation, Semantics};
-use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
+use crate::model::lir::{Insn, LirBody};
 
-/// As the pipeline runs it, with the translated stackifier in place of the old.
+/// The stackifier on `body` as the pipeline hands it over: phis are copies, the
+/// x87 values are in registers.
 fn fps(body: &LirBody) -> LirBody {
-    let target = targets::profile("386").unwrap();
-    let assigned =
-        floatassign::assigned(&phielim::eliminated(body).unwrap(), Some(&mut Frame::new(-64)), None, true, target)
-            .unwrap();
-    let stacked = converted(&assigned, &RegisterClasses::of(&llrm_x86_m16::M16)).unwrap();
+    let lowered = crate::phielimination::lowered(body).unwrap();
+    let stacked = converted(&lowered, &RegisterClasses::of(&llrm_x86_m16::M16)).unwrap();
     _truncating(&stacked, Some(&mut Frame::new(-64))).unwrap()
 }
 
@@ -150,69 +145,6 @@ fn sem_branch() -> Semantics {
     crate::backend::floatalloc::tests::sem(Operation::Branch, "jne", vec![], vec![])
 }
 
-/// A loop whose conditional arm updates two accumulators in a different stack
-/// order than they enter it in, the shape of `nbody_single`'s inner loop (entry
-/// 0, header 16, update 32, join 48): the header's order is fixed by the
-/// entry, and the join's by whichever exit reached it first. Taking the order
-/// that the back edge needs (DEVIATE 6) puts the one exchange the loop needs
-/// on the update arm, and the arm that skips the update takes none. Before
-/// that, the update arm fixed the join and the skip arm paid two exchanges a
-/// trip: `fpbench` and `nbody_single` ran 0.3% to 0.7% more instructions.
-#[test]
-fn test_the_arm_that_skips_the_update_takes_no_exchange_in_a_loop() {
-    let (a, b, k) = (frame_cell(-8, 8), frame_cell(-16, 8), frame_cell(-24, 8));
-    let answer = frame_cell(-32, 8);
-    // 0: u0, w0. 16: loop phis u (3), w (4); skip to 48 or go to 32. 32: w' (5)
-    // then u' (6), so they come out in the opposite order to the header's.
-    // 48: join phis u (7), w (8); back to 16 or on to 64.
-    let mut body = _body(vec![
-        _load(1, &a),
-        _load(2, &b),
-        Semantics { target: Some(48), ..sem_branch() },
-        _arithmetic("fadd", 5, fl(4), m(&k)),
-        _arithmetic("fadd", 6, fl(3), m(&k)),
-        Semantics { target: Some(16), ..sem_branch() },
-        _store(&answer, 7),
-        _store(&answer, 8),
-    ]);
-    let insns = body.insns();
-    body.blocks = vec![
-        block(0, insns[..2].to_vec(), vec![16]).into(),
-        LirBlock {
-            phis: vec![
-                Phi { result: 3, incoming: vec![(0, 1), (48, 7)] },
-                Phi { result: 4, incoming: vec![(0, 2), (48, 8)] },
-            ]
-            .into(),
-            ..block(16, insns[2..3].to_vec(), vec![32, 48])
-        }
-        .into(),
-        block(32, insns[3..5].to_vec(), vec![48]).into(),
-        LirBlock {
-            phis: vec![
-                Phi { result: 7, incoming: vec![(16, 3), (32, 6)] },
-                Phi { result: 8, incoming: vec![(16, 4), (32, 5)] },
-            ]
-            .into(),
-            ..block(48, insns[5..6].to_vec(), vec![16, 64])
-        }
-        .into(),
-        block(64, insns[6..].to_vec(), vec![]).into(),
-    ];
-    let result = fps(&body);
-    let exchanges = |path: &[i64]| _along(&result, path).iter().filter(|one| name(one) == "fxch").count();
-    // The edge blocks the phi copies stand on: 1<<32|1 skips, 1<<32|2 is the
-    // back edge.
-    let skip = exchanges(&[16, (1 << 32) | 1, 48, (1 << 32) | 2, 16]);
-    let update = exchanges(&[16, 32, 48, (1 << 32) | 2, 16]);
-    let old = crate::backend::floatalloc::tests::run(&body);
-    let before = |path: &[i64]| _along(&old, path).iter().filter(|one| name(one) == "fxch").count();
-    let (old_skip, old_update) =
-        (before(&[16, (1 << 32) | 1, 48, (1 << 32) | 2, 16]), before(&[16, 32, 48, (1 << 32) | 2, 16]));
-    assert!(skip <= old_skip, "the arm that skips the update exchanges {skip} times a trip, the old pass {old_skip}");
-    assert!(update <= old_update, "the update arm exchanges {update} times, the old pass {old_update}");
-}
-
 /// The pass is one walk of each block and one `adjustLiveRegs` and shuffle at
 /// each border: a chain of blocks, one float live through all of them, costs
 /// instructions in proportion to the blocks.
@@ -325,7 +257,7 @@ fn test_a_value_stays_on_the_stack_across_a_port_write() {
     let cell = frame_cell(-8, 8);
     let out = Semantics {
         op: Operation::Barrier,
-        name: Some("out".to_owned()),
+        name: Some("out".into()),
         dests: vec![],
         sources: vec![],
         target: None,

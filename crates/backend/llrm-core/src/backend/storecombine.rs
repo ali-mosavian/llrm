@@ -93,7 +93,7 @@ fn _literal(one: &Insn) -> Option<(Mem, i64)> {
 #[must_use]
 pub fn combined(body: &LirBody) -> LirBody {
     let mut out = body.clone();
-    let nothing = Semantics { name: Some(String::new()), ..Semantics::new(Operation::Nothing) };
+    let nothing = Semantics { name: Some("".into()), ..Semantics::new(Operation::Nothing) };
     for block in &mut out.blocks {
         let mut insns = block.insns.to_vec();
         let mut pending: Option<(usize, (Mem, i64))> = None;
@@ -150,7 +150,7 @@ mod tests {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Option<Semantics> {
-        Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) })
+        Some(Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) })
     }
 
     fn imm(

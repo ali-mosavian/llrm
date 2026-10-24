@@ -37,8 +37,8 @@
 use std::collections::BTreeSet;
 
 use crate::backend::allocate::live_rows_by;
+use crate::backend::bodyfacts::_may_write;
 use crate::backend::overlap;
-use crate::backend::spiller::_may_write;
 use crate::model::ir::{Loc, Mem, Operation};
 use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::IndexMap;

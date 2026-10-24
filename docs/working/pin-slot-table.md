@@ -17,11 +17,11 @@ Every pin slot is in exactly one state (the test refuses a row without one; `non
 | level | MATCH | N/A | EXECUTED | DEVIATE | MISSING | ORDER | slots |
 |---|---|---|---|---|---|---|---|
 | -O1 | 38 | 20 | 10 | 11 | 24 | 1 | 104 |
-| -O2 | 49 | 25 | 10 | 5 | 28 | 0 | 117 |
-| -O3 | 49 | 26 | 10 | 6 | 30 | 0 | 121 |
-| -Os | 49 | 25 | 10 | 5 | 28 | 0 | 117 |
+| -O2 | 50 | 25 | 10 | 5 | 27 | 0 | 117 |
+| -O3 | 50 | 26 | 10 | 6 | 29 | 0 | 121 |
+| -Os | 50 | 25 | 10 | 5 | 27 | 0 | 117 |
 
-At -O2 the 66 slots the first table called `none` are 10 EXECUTED + 29 MISSING + 25 N/A + 2 DEVIATE (ipsccp, deadargelim); its 3 `ours-only` are DEVIATE rows; 48 + 5 + 10 + 29 + 25 = 117 slots. -Os is the -O2 list. (-O1: the one ORDER slot is memcpyopt.) MISSING counts slots, not passes: the three late `instcombine` runs are three rows of one pass.
+At -O2 the 66 slots the first table called `none` are 10 EXECUTED + 29 MISSING + 25 N/A + 2 DEVIATE (ipsccp, deadargelim); its 2 `ours-only` are DEVIATE rows; 48 + 5 + 10 + 29 + 25 = 117 slots. -Os is the -O2 list. (-O1: the one ORDER slot is memcpyopt.) MISSING counts slots, not passes: the three late `instcombine` runs are three rows of one pass.
 
 ## MISSING rows ranked by effect
 
@@ -97,10 +97,10 @@ and the user's ruling of 10-20 (no vector MIR until 32-bit parity) is what keeps
 | Late | mergeicmps | -O1,-O2,-O3,-Os | ablation 0 of 12 IRs |
 | Late | expand-memcmp | -O1,-O2,-O3,-Os | ablation 0 of 12 IRs |
 | Module | called-value-propagation | -O1,-O2,-O3,-Os | indirect calls only; not measured |
-| Module | globaldce | -O1,-O2,-O3,-Os | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |
+| Module | globaldce | -O1,-O2,-O3,-Os | globaldce (once). The pin's second globaldce, after the Late list, has no stage of ours: 0 B on all 65 QCport modules at -Os m16 (pin ablation, 2026-10-23), so N/A until a row moves (owner w-6) |
 | Module | rpo-function-attrs | -O1,-O2,-O3,-Os | no stage of ours is known to do it; unverified |
-| Module | constmerge | -O1,-O2,-O3,-Os | merging identical constants: data bytes at -Os; not measured |
-| Simplify | jump-table-to-switch | -O2,-O3,-Os | ablation 0 of 12 IRs |
+| Module | constmerge | -O1,-O2,-O3,-Os | merging identical constants: -Os m16 on 65 QCport modules through the pin (llc obj sizes, constmerge removed): +58 B of 399336 (0.015%), 2 modules (game/mdl_ai +44, ui/sbar +14); a row of low weight |
+| Simplify | jump-table-to-switch | -O2,-O3,-Os | x_funcptr: pin -O2 i486 makes 3 switches, none with -enable-jump-table-to-switch=false; the 12-IR ablation (0 differ) has no function-pointer table |
 | Simplify | constraint-elimination | -O2,-O3,-Os | registry Missing entry; ablation 0 of 12 IRs |
 | Simplify | extra-simple-loop-unswitch-passes | -O2,-O3,-Os | ablation 0 of 12 IRs |
 | Simplify | mldst-motion | -O2,-O3,-Os | ablation 0 of 12 IRs |
@@ -131,7 +131,7 @@ Nothing reaches 0.05% of the baseline except the late `loop-unroll` at -O2 (95 i
 the next most is `constraint-elimination` at -Os, 13 of 51432 (0.025%). The ranking of the first table stands, with these eight as
 the ones that move anything on QCport; every other MISSING pass changes 0 of 65 IRs at both levels. Instances our slots already
 match (`tailcallelim`, the early `loop-rotate`, `sroa`, `instcombine`) move code, as expected; they are in the raw output
-(`~/scratch/fa/qcablate_O2.txt`, `qcablate_Os.txt`).
+(`qcablate_O2.txt`, `qcablate_Os.txt`).
 
 ## Order structure
 
@@ -306,7 +306,7 @@ Differences, by order and contents (each a row of the table or of the list below
 2. `function-attrs` inside the SCC: the pin runs `function-attrs<skip-non-recursive-function-attrs>` right after `inline` and `function-attrs` after the function block, so a callee's attributes (readonly, nounwind, norecurse, argmem) are inferred from its simplified body before the caller is simplified. Ours states facts once up front (`stamp`) and infers them in `Interprocedural`, after the walk. Row: MISSING inside the walk, owner funcattrs-port, 2026-11-13 (evidence: w-1's `_cmd_tokenize@3` attr difference).
 3. `deadargelim` position: before the Simplify list in ours, after the CGSCC block in the pin (walk.rs W1). `always-inline` is a separate pass before the SCC block in the pin, inside `Walk`'s site decision in ours. Row: DEVIATE W1.
 4. After the SCC block the pin runs `deadargelim, coro-cleanup, globalopt, globaldce, elim-avail-extern, rpo-function-attrs, recompute-globalsaa`, then the Late function list, then `globaldce` again and `constmerge`. Ours runs the Late list before `Interprocedural`, then `writeonly`, `globaldce` (once), `available-externally`, `calleepop`; no `rpo-function-attrs`, no second `globaldce`, no `constmerge` (Module rows MISSING in the table).
-5. Contents of the function block `function<eager-inv;no-rerun>(...)` against our Simplify list, pass by pass: the pin's `speculative-execution`, `jump-table-to-switch`, `libcalls-shrinkwrap`, `constraint-elimination`, `loop-instsimplify`, `loop-simplifycfg`, `extra-simple-loop-unswitch-passes`, `vector-combine`, `mldst-motion`, `move-auto-init`, `coro-elide` have no slot of ours (classified in the table: N/A for the target and frontends, MISSING for the rest, ablation 0 of 12 IRs); ours has `loopsimplify`/`lcssa` pairs at :764 and :772 the pin's loop adaptors make implicit (ours-only rows). The order of the matched ones is the pin's (no inversion at -O2/-O3/-Os; by position).
+5. Contents of the function block `function<eager-inv;no-rerun>(...)` against our Simplify list, pass by pass: the pin's `speculative-execution`, `jump-table-to-switch`, `libcalls-shrinkwrap`, `constraint-elimination`, `loop-instsimplify`, `loop-simplifycfg`, `extra-simple-loop-unswitch-passes`, `vector-combine`, `mldst-motion`, `move-auto-init`, `coro-elide` have no slot of ours (classified in the table: N/A for the target and frontends, MISSING for the rest, x_funcptr: pin -O2 i486 makes 3 switches, none with -enable-jump-table-to-switch=false; the 12-IR ablation (0 differ) has no function-pointer table); ours has `loopsimplify`/`lcssa` pairs at :764 and :772 the pin's loop adaptors make implicit (ours-only rows). The order of the matched ones is the pin's (no inversion at -O2/-O3/-Os; by position).
 6. Not here: the `_sift` PRE/smax split is with w-1/w-4 via w-5.
 
 ## Table
@@ -321,12 +321,12 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Early | sroa<modify-cfg> | function<eager-inv> | MATCH | sroa@1179:Translated |  |  |
 | -O1 | Early | early-cse<> | function<eager-inv> | MATCH | earlycse@1180:Translated |  |  |
 | -O1 | Cleanup | mem2reg | function<eager-inv> | MATCH | promote@1241:Translated |  |  |
-| -O1 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + fold@1242:Old + dead@1242:Old |  |  |
+| -O1 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + dead@1242:Old |  |  |
 | -O1 | Cleanup | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | MATCH | decide@1244:Partial |  |  |
 | -O1 | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | sroa@646:Translated |  |  |
 | -O1 | Simplify | early-cse<memssa> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | earlycse@649:Translated |  |  |
 | -O1 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@675:Partial |  |  |
-| -O1 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + fold@677:Old + dead@677:Old |  |  |
+| -O1 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + dead@677:Old |  |  |
 | -O1 | Simplify | libcalls-shrinkwrap | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | errno-setting libm calls; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
 | -O1 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@690:Partial |  |  |
 | -O1 | Simplify | reassociate | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | reassociate@696:Translated + algebraic@696:Old |  |  |
@@ -337,7 +337,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Simplify | licm<allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | licm@730:Translated |  |  |
 | -O1 | Simplify | simple-loop-unswitch<no-nontrivial;trivial> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | trivialunswitch@732:Translated |  |  |
 | -O1 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@766:Partial |  |  |
-| -O1 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + fold@768:Old + dead@768:Old |  |  |
+| -O1 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + dead@768:Old |  |  |
 | -O1 | Simplify | loop-idiom | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | loopidiom@737:Translated + loopidioms@737:Old |  |  |
 | -O1 | Simplify | indvars | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | indvars@738:Partial |  |  |
 | -O1 | Simplify | loop-deletion | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | loopdeletion@749:Translated |  |  |
@@ -390,7 +390,6 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Late | tailcallelim | function<eager-inv> | MATCH | tailrec@1677:Translated |  |  |
 | -O1 | Late | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;speculate-unpredictables> | function<eager-inv> | MATCH | simplifycfg@1682:Partial |  |  |
 | -O1 | Late | annotation-remarks | function | N/A |  | remarks off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -O1 | Late |  |  | DEVIATE | 2376: simplifycfg@2376 | registry Partial: its position in the Late list is not the pin's (unverified which pin simplifycfg it is) |  |
 | -O1 | Module | memprof-remove-attributes |  | N/A |  | memprof: no profile Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O1 | Module | annotation2metadata |  | N/A |  | no source annotations Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O1 | Module | forceattrs |  | N/A |  | command-line forced attributes: none given Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
@@ -409,13 +408,13 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Module | deadargelim |  | DEVIATE |  | DEVIATE W1 (walk.rs): ipo-early (walk::ModuleIpo: ipa-deadargs) runs before the Simplify list, the pin's after the CGSCC block |  |
 | -O1 | Module | coro-cleanup |  | N/A |  | coroutines: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O1 | Module | globalopt |  | EXECUTED |  | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
-| -O1 | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
+| -O1 | Module | globaldce |  | EXECUTED |  | globaldce (once). The pin's second globaldce, after the Late list, has no stage of ours: 0 B on all 65 QCport modules at -Os m16 (pin ablation, 2026-10-23), so N/A until a row moves (owner w-6) |  |
 | -O1 | Module | elim-avail-extern |  | EXECUTED |  | available-externally |  |
 | -O1 | Module | rpo-function-attrs |  | MISSING |  | no stage of ours is known to do it; unverified | w-6, 11-09 |
 | -O1 | Module | recompute-globalsaa |  | N/A |  | an analysis recompute; ours holds and freezes GlobalsAA (pipeline.rs) Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O1 | Module | alloc-token |  | N/A |  | clang option, off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -O1 | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
-| -O1 | Module | constmerge |  | MISSING |  | merging identical constants: data bytes at -Os; not measured | w-6, 11-09 |
+| -O1 | Module | globaldce |  | EXECUTED |  | globaldce (once). The pin's second globaldce, after the Late list, has no stage of ours: 0 B on all 65 QCport modules at -Os m16 (pin ablation, 2026-10-23), so N/A until a row moves (owner w-6) |  |
+| -O1 | Module | constmerge |  | MISSING |  | merging identical constants: -Os m16 on 65 QCport modules through the pin (llc obj sizes, constmerge removed): +58 B of 399336 (0.015%), 2 modules (game/mdl_ai +44, ui/sbar +14); a row of low weight | w-6, 11-09 |
 | -O1 | Module | cg-profile |  | N/A |  | profile data Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O1 | Module | rel-lookup-table-converter |  | N/A |  | relative lookup tables are a PIC feature; no PIC targets Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O1 | Module | lower-comment-string |  | N/A |  | #pragma comment strings Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
@@ -425,16 +424,16 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Early | sroa<modify-cfg> | function<eager-inv> | MATCH | sroa@1179:Translated |  |  |
 | -O2 | Early | early-cse<> | function<eager-inv> | MATCH | earlycse@1180:Translated |  |  |
 | -O2 | Cleanup | mem2reg | function<eager-inv> | MATCH | promote@1241:Translated |  |  |
-| -O2 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + fold@1242:Old + dead@1242:Old |  |  |
+| -O2 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + dead@1242:Old |  |  |
 | -O2 | Cleanup | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | MATCH | decide@1244:Partial |  |  |
 | -O2 | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | sroa@646:Translated |  |  |
 | -O2 | Simplify | early-cse<memssa> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | earlycse@649:Translated |  |  |
 | -O2 | Simplify | speculative-execution<only-if-divergent-target> | cgscc/devirt<4>/function<eager-inv;no-rerun> | N/A |  | runs only on a target with divergent branches; x86 has none Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O2 | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@668:Translated |  |  |
 | -O2 | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | cvp@669:Translated |  |  |
-| -O2 | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | ablation 0 of 12 IRs | w-4, 11-09 |
+| -O2 | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumptableswitch@672:Translated |  |  |
 | -O2 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@675:Partial |  |  |
-| -O2 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + fold@677:Old + dead@677:Old |  |  |
+| -O2 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + dead@677:Old |  |  |
 | -O2 | Simplify | aggressive-instcombine | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | aggressive-instcombine@678:Partial |  |  |
 | -O2 | Simplify | libcalls-shrinkwrap | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | errno-setting libm calls; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
 | -O2 | Simplify | tailcallelim | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | tailrec@688:Translated |  |  |
@@ -448,7 +447,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Simplify | licm<allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | licm@730:Translated |  |  |
 | -O2 | Simplify | simple-loop-unswitch<no-nontrivial;trivial> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | trivialunswitch@732:Translated |  |  |
 | -O2 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@766:Partial |  |  |
-| -O2 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + fold@768:Old + dead@768:Old |  |  |
+| -O2 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + dead@768:Old |  |  |
 | -O2 | Simplify | loop-idiom | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | loopidiom@737:Translated + loopidioms@737:Old |  |  |
 | -O2 | Simplify | indvars | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | indvars@738:Partial |  |  |
 | -O2 | Simplify | extra-simple-loop-unswitch-passes | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
@@ -506,7 +505,6 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Late | tailcallelim | function<eager-inv> | MATCH | tailrec@1677:Translated |  |  |
 | -O2 | Late | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;speculate-unpredictables> | function<eager-inv> | MATCH | simplifycfg@1682:Partial |  |  |
 | -O2 | Late | annotation-remarks | function | N/A |  | remarks off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -O2 | Late |  |  | DEVIATE | 2376: simplifycfg@2376 | registry Partial: its position in the Late list is not the pin's (unverified which pin simplifycfg it is) |  |
 | -O2 | Module | memprof-remove-attributes |  | N/A |  | memprof: no profile Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O2 | Module | annotation2metadata |  | N/A |  | no source annotations Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O2 | Module | forceattrs |  | N/A |  | command-line forced attributes: none given Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
@@ -526,13 +524,13 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Module | deadargelim |  | DEVIATE |  | DEVIATE W1 (walk.rs): ipo-early (walk::ModuleIpo: ipa-deadargs) runs before the Simplify list, the pin's after the CGSCC block |  |
 | -O2 | Module | coro-cleanup |  | N/A |  | coroutines: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O2 | Module | globalopt |  | EXECUTED |  | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
-| -O2 | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
+| -O2 | Module | globaldce |  | EXECUTED |  | globaldce (once). The pin's second globaldce, after the Late list, has no stage of ours: 0 B on all 65 QCport modules at -Os m16 (pin ablation, 2026-10-23), so N/A until a row moves (owner w-6) |  |
 | -O2 | Module | elim-avail-extern |  | EXECUTED |  | available-externally |  |
 | -O2 | Module | rpo-function-attrs |  | MISSING |  | no stage of ours is known to do it; unverified | w-6, 11-09 |
 | -O2 | Module | recompute-globalsaa |  | N/A |  | an analysis recompute; ours holds and freezes GlobalsAA (pipeline.rs) Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O2 | Module | alloc-token |  | N/A |  | clang option, off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -O2 | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
-| -O2 | Module | constmerge |  | MISSING |  | merging identical constants: data bytes at -Os; not measured | w-6, 11-09 |
+| -O2 | Module | globaldce |  | EXECUTED |  | globaldce (once). The pin's second globaldce, after the Late list, has no stage of ours: 0 B on all 65 QCport modules at -Os m16 (pin ablation, 2026-10-23), so N/A until a row moves (owner w-6) |  |
+| -O2 | Module | constmerge |  | MISSING |  | merging identical constants: -Os m16 on 65 QCport modules through the pin (llc obj sizes, constmerge removed): +58 B of 399336 (0.015%), 2 modules (game/mdl_ai +44, ui/sbar +14); a row of low weight | w-6, 11-09 |
 | -O2 | Module | cg-profile |  | N/A |  | profile data Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O2 | Module | rel-lookup-table-converter |  | N/A |  | relative lookup tables are a PIC feature; no PIC targets Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O2 | Module | lower-comment-string |  | N/A |  | #pragma comment strings Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
@@ -543,16 +541,16 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Early | early-cse<> | function<eager-inv> | MATCH | earlycse@1180:Translated |  |  |
 | -O3 | Early | callsite-splitting | function<eager-inv> | MISSING |  | -O3 only; not measured | funcattrs-port, 11-09 |
 | -O3 | Cleanup | mem2reg | function<eager-inv> | MATCH | promote@1241:Translated |  |  |
-| -O3 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + fold@1242:Old + dead@1242:Old |  |  |
+| -O3 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + dead@1242:Old |  |  |
 | -O3 | Cleanup | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | MATCH | decide@1244:Partial |  |  |
 | -O3 | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | sroa@646:Translated |  |  |
 | -O3 | Simplify | early-cse<memssa> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | earlycse@649:Translated |  |  |
 | -O3 | Simplify | speculative-execution<only-if-divergent-target> | cgscc/devirt<4>/function<eager-inv;no-rerun> | N/A |  | runs only on a target with divergent branches; x86 has none Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O3 | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@668:Translated |  |  |
 | -O3 | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | cvp@669:Translated |  |  |
-| -O3 | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | ablation 0 of 12 IRs | w-4, 11-09 |
+| -O3 | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumptableswitch@672:Translated |  |  |
 | -O3 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@675:Partial |  |  |
-| -O3 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + fold@677:Old + dead@677:Old |  |  |
+| -O3 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + dead@677:Old |  |  |
 | -O3 | Simplify | aggressive-instcombine | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | aggressive-instcombine@678:Partial |  |  |
 | -O3 | Simplify | libcalls-shrinkwrap | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | errno-setting libm calls; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
 | -O3 | Simplify | tailcallelim | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | tailrec@688:Translated |  |  |
@@ -566,7 +564,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Simplify | licm<allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | licm@730:Translated |  |  |
 | -O3 | Simplify | simple-loop-unswitch<nontrivial;trivial> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | trivialunswitch@732:Translated |  |  |
 | -O3 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@766:Partial |  |  |
-| -O3 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + fold@768:Old + dead@768:Old |  |  |
+| -O3 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + dead@768:Old |  |  |
 | -O3 | Simplify | loop-idiom | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | loopidiom@737:Translated + loopidioms@737:Old |  |  |
 | -O3 | Simplify | indvars | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | indvars@738:Partial |  |  |
 | -O3 | Simplify | extra-simple-loop-unswitch-passes | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
@@ -626,7 +624,6 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Late | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;speculate-unpredictables> | function<eager-inv> | MATCH | simplifycfg@1682:Partial |  |  |
 | -O3 | Late | annotation-remarks | function | N/A |  | remarks off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O3 | Late |  |  | DEVIATE | 1474: loop-unroll-and-jam@1474 | -O3: the pin's printed list has no unroll-and-jam in this fixture; unverified |  |
-| -O3 | Late |  |  | DEVIATE | 2376: simplifycfg@2376 | registry Partial: its position in the Late list is not the pin's (unverified which pin simplifycfg it is) |  |
 | -O3 | Module | memprof-remove-attributes |  | N/A |  | memprof: no profile Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O3 | Module | annotation2metadata |  | N/A |  | no source annotations Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O3 | Module | forceattrs |  | N/A |  | command-line forced attributes: none given Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
@@ -647,13 +644,13 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Module | deadargelim |  | DEVIATE |  | DEVIATE W1 (walk.rs): ipo-early (walk::ModuleIpo: ipa-deadargs) runs before the Simplify list, the pin's after the CGSCC block |  |
 | -O3 | Module | coro-cleanup |  | N/A |  | coroutines: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O3 | Module | globalopt |  | EXECUTED |  | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
-| -O3 | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
+| -O3 | Module | globaldce |  | EXECUTED |  | globaldce (once). The pin's second globaldce, after the Late list, has no stage of ours: 0 B on all 65 QCport modules at -Os m16 (pin ablation, 2026-10-23), so N/A until a row moves (owner w-6) |  |
 | -O3 | Module | elim-avail-extern |  | EXECUTED |  | available-externally |  |
 | -O3 | Module | rpo-function-attrs |  | MISSING |  | no stage of ours is known to do it; unverified | w-6, 11-09 |
 | -O3 | Module | recompute-globalsaa |  | N/A |  | an analysis recompute; ours holds and freezes GlobalsAA (pipeline.rs) Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O3 | Module | alloc-token |  | N/A |  | clang option, off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -O3 | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
-| -O3 | Module | constmerge |  | MISSING |  | merging identical constants: data bytes at -Os; not measured | w-6, 11-09 |
+| -O3 | Module | globaldce |  | EXECUTED |  | globaldce (once). The pin's second globaldce, after the Late list, has no stage of ours: 0 B on all 65 QCport modules at -Os m16 (pin ablation, 2026-10-23), so N/A until a row moves (owner w-6) |  |
+| -O3 | Module | constmerge |  | MISSING |  | merging identical constants: -Os m16 on 65 QCport modules through the pin (llc obj sizes, constmerge removed): +58 B of 399336 (0.015%), 2 modules (game/mdl_ai +44, ui/sbar +14); a row of low weight | w-6, 11-09 |
 | -O3 | Module | cg-profile |  | N/A |  | profile data Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O3 | Module | rel-lookup-table-converter |  | N/A |  | relative lookup tables are a PIC feature; no PIC targets Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O3 | Module | lower-comment-string |  | N/A |  | #pragma comment strings Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
@@ -663,16 +660,16 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Early | sroa<modify-cfg> | function<eager-inv> | MATCH | sroa@1179:Translated |  |  |
 | -Os | Early | early-cse<> | function<eager-inv> | MATCH | earlycse@1180:Translated |  |  |
 | -Os | Cleanup | mem2reg | function<eager-inv> | MATCH | promote@1241:Translated |  |  |
-| -Os | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + fold@1242:Old + dead@1242:Old |  |  |
+| -Os | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + dead@1242:Old |  |  |
 | -Os | Cleanup | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | MATCH | decide@1244:Partial |  |  |
 | -Os | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | sroa@646:Translated |  |  |
 | -Os | Simplify | early-cse<memssa> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | earlycse@649:Translated |  |  |
 | -Os | Simplify | speculative-execution<only-if-divergent-target> | cgscc/devirt<4>/function<eager-inv;no-rerun> | N/A |  | runs only on a target with divergent branches; x86 has none Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -Os | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@668:Translated |  |  |
 | -Os | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | cvp@669:Translated |  |  |
-| -Os | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | ablation 0 of 12 IRs | w-4, 11-09 |
+| -Os | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumptableswitch@672:Translated |  |  |
 | -Os | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@675:Partial |  |  |
-| -Os | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + fold@677:Old + dead@677:Old |  |  |
+| -Os | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + dead@677:Old |  |  |
 | -Os | Simplify | aggressive-instcombine | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | aggressive-instcombine@678:Partial |  |  |
 | -Os | Simplify | libcalls-shrinkwrap | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | errno-setting libm calls; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
 | -Os | Simplify | tailcallelim | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | tailrec@688:Translated |  |  |
@@ -686,7 +683,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Simplify | licm<allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | licm@730:Translated |  |  |
 | -Os | Simplify | simple-loop-unswitch<no-nontrivial;trivial> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | trivialunswitch@732:Translated |  |  |
 | -Os | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@766:Partial |  |  |
-| -Os | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + fold@768:Old + dead@768:Old |  |  |
+| -Os | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + dead@768:Old |  |  |
 | -Os | Simplify | loop-idiom | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | loopidiom@737:Translated + loopidioms@737:Old |  |  |
 | -Os | Simplify | indvars | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | indvars@738:Partial |  |  |
 | -Os | Simplify | extra-simple-loop-unswitch-passes | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
@@ -744,7 +741,6 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Late | tailcallelim | function<eager-inv> | MATCH | tailrec@1677:Translated |  |  |
 | -Os | Late | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;speculate-unpredictables> | function<eager-inv> | MATCH | simplifycfg@1682:Partial |  |  |
 | -Os | Late | annotation-remarks | function | N/A |  | remarks off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -Os | Late |  |  | DEVIATE | 2376: simplifycfg@2376 | registry Partial: its position in the Late list is not the pin's (unverified which pin simplifycfg it is) |  |
 | -Os | Module | memprof-remove-attributes |  | N/A |  | memprof: no profile Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -Os | Module | annotation2metadata |  | N/A |  | no source annotations Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -Os | Module | forceattrs |  | N/A |  | command-line forced attributes: none given Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
@@ -764,13 +760,13 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Module | deadargelim |  | DEVIATE |  | DEVIATE W1 (walk.rs): ipo-early (walk::ModuleIpo: ipa-deadargs) runs before the Simplify list, the pin's after the CGSCC block |  |
 | -Os | Module | coro-cleanup |  | N/A |  | coroutines: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -Os | Module | globalopt |  | EXECUTED |  | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
-| -Os | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
+| -Os | Module | globaldce |  | EXECUTED |  | globaldce (once). The pin's second globaldce, after the Late list, has no stage of ours: 0 B on all 65 QCport modules at -Os m16 (pin ablation, 2026-10-23), so N/A until a row moves (owner w-6) |  |
 | -Os | Module | elim-avail-extern |  | EXECUTED |  | available-externally |  |
 | -Os | Module | rpo-function-attrs |  | MISSING |  | no stage of ours is known to do it; unverified | w-6, 11-09 |
 | -Os | Module | recompute-globalsaa |  | N/A |  | an analysis recompute; ours holds and freezes GlobalsAA (pipeline.rs) Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -Os | Module | alloc-token |  | N/A |  | clang option, off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -Os | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
-| -Os | Module | constmerge |  | MISSING |  | merging identical constants: data bytes at -Os; not measured | w-6, 11-09 |
+| -Os | Module | globaldce |  | EXECUTED |  | globaldce (once). The pin's second globaldce, after the Late list, has no stage of ours: 0 B on all 65 QCport modules at -Os m16 (pin ablation, 2026-10-23), so N/A until a row moves (owner w-6) |  |
+| -Os | Module | constmerge |  | MISSING |  | merging identical constants: -Os m16 on 65 QCport modules through the pin (llc obj sizes, constmerge removed): +58 B of 399336 (0.015%), 2 modules (game/mdl_ai +44, ui/sbar +14); a row of low weight | w-6, 11-09 |
 | -Os | Module | cg-profile |  | N/A |  | profile data Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -Os | Module | rel-lookup-table-converter |  | N/A |  | relative lookup tables are a PIC feature; no PIC targets Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -Os | Module | lower-comment-string |  | N/A |  | #pragma comment strings Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |

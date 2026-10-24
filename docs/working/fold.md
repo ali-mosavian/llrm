@@ -49,6 +49,9 @@ vsgcc (568 compiles, 0 failed): 13 objects change, all bigger without `_numbers`
 | the objects still changed get a fix or a numbered row each; savegame is a row (ours-only gain) | 11-01 |
 | delete `_numbers`, then `writes` with its last caller, then floatfold into combine | 11-02 |
 
+## x_fir after #3569: GlobalOpt's SRA and localize do it (2026-10-22, 25d838613, llrm-c 25d838613b0a+dirty)
+With `_numbers` off x_fir still has 3 loads of `coef` (offsets 0, 2, 4) in the preheader of the dot-product loop (+279 B at m32 -O2, +900 B at m16). `-fno-tree-pre` takes them away in our pipeline (asm 189 -> 182 lines, equal to the `_numbers` arm), and the pin's `gvn` alone removes them from our final dump, but that is the wrong probe: the pin's own order, run from our 09-pipeline MIR (sroa, early-cse, instcombine, loop-unroll-full, instcombine, gvn) also leaves 4 `coef` loads, and its next module pass, `globalopt`, removes the global: it splits `coef` into 16 `i16` allocas in `bench_x_fir` (SRA, then LocalizeGlobalVariable: one accessing function that does not recurse and writes the value before reading it), and the following instcombine/gvn fold the loads. So the plan stands: SRA of the global by accessed pieces, then localize it (`isPointerValueDeadOnEntryToFunction`), as a second GlobalOpt slot after the inliner. A first reading of this table (GVN's load PRE, GlobalOpt dropped) was wrong: it probed the pin's `gvn` on our final dump instead of the pin's own sequence.
+
 ## Dates
 
 - 10-28: attribution of qcport/lights, client and savegame: done 10-22 (table above).

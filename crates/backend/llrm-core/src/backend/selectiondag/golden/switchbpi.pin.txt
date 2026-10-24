@@ -1,0 +1,404 @@
+Initial selection DAG: %bb.0 'unreach_case:e'
+SelectionDAG has 15 nodes:
+  t0: ch,glue = EntryToken
+  t3: i32,ch = load<(load (s32) from %fixed-stack.0)> t0, FrameIndex:i32<-1>, poison:i32
+      t5: ch = CopyToReg t0, Register:i32 %0, t3
+        t8: i1 = setcc t3, Constant:i32<10000>, setlt:ch
+      t10: i1 = xor t8, Constant:i1<-1>
+    t12: ch = brcond t5, t10, BasicBlock:ch<e 0x59000d5c33a0>
+  t14: ch = br t12, BasicBlock:ch<e 0x59000d5c3280>
+
+
+
+Initial selection DAG: %bb.9 'unreach_case:e'
+SelectionDAG has 10 nodes:
+  t0: ch,glue = EntryToken
+        t2: i32,ch = CopyFromReg t0, Register:i32 %0
+      t5: i1 = setcc t2, Constant:i32<10000>, seteq:ch
+    t7: ch = brcond t0, t5, BasicBlock:ch<t3 0x59000d5bb8c8>
+  t9: ch = br t7, BasicBlock:ch<e 0x59000d5c34c0>
+
+
+
+Initial selection DAG: %bb.10 'unreach_case:e'
+SelectionDAG has 10 nodes:
+  t0: ch,glue = EntryToken
+        t2: i32,ch = CopyFromReg t0, Register:i32 %0
+      t5: i1 = setcc t2, Constant:i32<100000>, seteq:ch
+    t7: ch = brcond t0, t5, BasicBlock:ch<t4 0x59000d5bb9e8>
+  t9: ch = br t7, BasicBlock:ch<e 0x59000d5c35e0>
+
+
+
+Initial selection DAG: %bb.11 'unreach_case:e'
+SelectionDAG has 10 nodes:
+  t0: ch,glue = EntryToken
+        t2: i32,ch = CopyFromReg t0, Register:i32 %0
+      t5: i1 = setcc t2, Constant:i32<1000000>, seteq:ch
+    t7: ch = brcond t0, t5, BasicBlock:ch<t5 0x59000d5bbb08>
+  t9: ch = br t7, BasicBlock:ch<d 0x59000d5bbc28>
+
+
+
+Initial selection DAG: %bb.8 'unreach_case:e'
+SelectionDAG has 10 nodes:
+  t0: ch,glue = EntryToken
+        t2: i32,ch = CopyFromReg t0, Register:i32 %0
+      t5: i1 = setcc t2, Constant:i32<1>, seteq:ch
+    t7: ch = brcond t0, t5, BasicBlock:ch<t0 0x59000d5bb568>
+  t9: ch = br t7, BasicBlock:ch<e 0x59000d5c3700>
+
+
+
+Initial selection DAG: %bb.12 'unreach_case:e'
+SelectionDAG has 10 nodes:
+  t0: ch,glue = EntryToken
+        t2: i32,ch = CopyFromReg t0, Register:i32 %0
+      t5: i1 = setcc t2, Constant:i32<100>, seteq:ch
+    t7: ch = brcond t0, t5, BasicBlock:ch<t1 0x59000d5bb688>
+  t9: ch = br t7, BasicBlock:ch<e 0x59000d5c3820>
+
+
+
+Initial selection DAG: %bb.13 'unreach_case:e'
+SelectionDAG has 10 nodes:
+  t0: ch,glue = EntryToken
+        t2: i32,ch = CopyFromReg t0, Register:i32 %0
+      t5: i1 = setcc t2, Constant:i32<1000>, seteq:ch
+    t7: ch = brcond t0, t5, BasicBlock:ch<t2 0x59000d5bb7a8>
+  t9: ch = br t7, BasicBlock:ch<d 0x59000d5bbc28>
+
+
+
+Initial selection DAG: %bb.6 'unreach_case:t5'
+SelectionDAG has 8 nodes:
+  t3: i32 = Constant<0>
+      t0: ch,glue = EntryToken
+    t5: ch = store<(store (s32) into @g)> t0, Constant:i32<5>, GlobalAddress:i32<ptr @g> 0, poison:i32
+  t7: ch = X86ISD::RET_GLUE t5, TargetConstant:i32<0>
+
+
+
+Initial selection DAG: %bb.5 'unreach_case:t4'
+SelectionDAG has 8 nodes:
+  t3: i32 = Constant<0>
+      t0: ch,glue = EntryToken
+    t5: ch = store<(store (s32) into @g)> t0, Constant:i32<4>, GlobalAddress:i32<ptr @g> 0, poison:i32
+  t7: ch = X86ISD::RET_GLUE t5, TargetConstant:i32<0>
+
+
+
+Initial selection DAG: %bb.4 'unreach_case:t3'
+SelectionDAG has 8 nodes:
+  t3: i32 = Constant<0>
+      t0: ch,glue = EntryToken
+    t5: ch = store<(store (s32) into @g)> t0, Constant:i32<3>, GlobalAddress:i32<ptr @g> 0, poison:i32
+  t7: ch = X86ISD::RET_GLUE t5, TargetConstant:i32<0>
+
+
+
+Initial selection DAG: %bb.3 'unreach_case:t2'
+SelectionDAG has 1 nodes:
+  t0: ch,glue = EntryToken
+
+
+
+Initial selection DAG: %bb.2 'unreach_case:t1'
+SelectionDAG has 8 nodes:
+  t3: i32 = Constant<0>
+      t0: ch,glue = EntryToken
+    t5: ch = store<(store (s32) into @g)> t0, Constant:i32<1>, GlobalAddress:i32<ptr @g> 0, poison:i32
+  t7: ch = X86ISD::RET_GLUE t5, TargetConstant:i32<0>
+
+
+
+Initial selection DAG: %bb.1 'unreach_case:t0'
+SelectionDAG has 7 nodes:
+      t0: ch,glue = EntryToken
+    t4: ch = store<(store (s32) into @g)> t0, Constant:i32<0>, GlobalAddress:i32<ptr @g> 0, poison:i32
+  t6: ch = X86ISD::RET_GLUE t4, TargetConstant:i32<0>
+
+
+
+Initial selection DAG: %bb.7 'unreach_case:d'
+SelectionDAG has 3 nodes:
+    t0: ch,glue = EntryToken
+  t2: ch = X86ISD::RET_GLUE t0, TargetConstant:i32<0>
+
+
+
+Initial selection DAG: %bb.0 'noreturn_case:e'
+SelectionDAG has 15 nodes:
+  t0: ch,glue = EntryToken
+  t3: i32,ch = load<(load (s32) from %fixed-stack.0)> t0, FrameIndex:i32<-1>, poison:i32
+      t5: ch = CopyToReg t0, Register:i32 %0, t3
+        t8: i1 = setcc t3, Constant:i32<100000>, setlt:ch
+      t10: i1 = xor t8, Constant:i1<-1>
+    t12: ch = brcond t5, t10, BasicBlock:ch<e 0x59000d5caf70>
+  t14: ch = br t12, BasicBlock:ch<e 0x59000d5cae50>
+
+
+
+Initial selection DAG: %bb.10 'noreturn_case:e'
+SelectionDAG has 10 nodes:
+  t0: ch,glue = EntryToken
+        t2: i32,ch = CopyFromReg t0, Register:i32 %0
+      t5: i1 = setcc t2, Constant:i32<100000>, seteq:ch
+    t7: ch = brcond t0, t5, BasicBlock:ch<t4 0x59000d5c3e88>
+  t9: ch = br t7, BasicBlock:ch<e 0x59000d5cb090>
+
+
+
+Initial selection DAG: %bb.11 'noreturn_case:e'
+SelectionDAG has 10 nodes:
+  t0: ch,glue = EntryToken
+        t2: i32,ch = CopyFromReg t0, Register:i32 %0
+      t5: i1 = setcc t2, Constant:i32<1000000>, seteq:ch
+    t7: ch = brcond t0, t5, BasicBlock:ch<t5 0x59000d5c3fa8>
+  t9: ch = br t7, BasicBlock:ch<e 0x59000d5cb1b0>
+
+
+
+Initial selection DAG: %bb.12 'noreturn_case:e'
+SelectionDAG has 10 nodes:
+  t0: ch,glue = EntryToken
+        t2: i32,ch = CopyFromReg t0, Register:i32 %0
+      t5: i1 = setcc t2, Constant:i32<10000000>, seteq:ch
+    t7: ch = brcond t0, t5, BasicBlock:ch<t6 0x59000d5c40c8>
+  t9: ch = br t7, BasicBlock:ch<d 0x59000d5cacd0>
+
+
+
+Initial selection DAG: %bb.9 'noreturn_case:e'
+SelectionDAG has 12 nodes:
+  t0: ch,glue = EntryToken
+          t2: i32,ch = CopyFromReg t0, Register:i32 %0
+        t5: i1 = setcc t2, Constant:i32<1000>, setlt:ch
+      t7: i1 = xor t5, Constant:i1<-1>
+    t9: ch = brcond t0, t7, BasicBlock:ch<e 0x59000d5cb3f0>
+  t11: ch = br t9, BasicBlock:ch<e 0x59000d5cb2d0>
+
+
+
+Initial selection DAG: %bb.14 'noreturn_case:e'
+SelectionDAG has 10 nodes:
+  t0: ch,glue = EntryToken
+        t2: i32,ch = CopyFromReg t0, Register:i32 %0
+      t5: i1 = setcc t2, Constant:i32<1000>, seteq:ch
+    t7: ch = brcond t0, t5, BasicBlock:ch<t2 0x59000d5c3c48>
+  t9: ch = br t7, BasicBlock:ch<e 0x59000d5cb510>
+
+
+
+Initial selection DAG: %bb.15 'noreturn_case:e'
+SelectionDAG has 10 nodes:
+  t0: ch,glue = EntryToken
+        t2: i32,ch = CopyFromReg t0, Register:i32 %0
+      t5: i1 = setcc t2, Constant:i32<10000>, seteq:ch
+    t7: ch = brcond t0, t5, BasicBlock:ch<t3 0x59000d5c3d68>
+  t9: ch = br t7, BasicBlock:ch<d 0x59000d5cacd0>
+
+
+
+Initial selection DAG: %bb.13 'noreturn_case:e'
+SelectionDAG has 10 nodes:
+  t0: ch,glue = EntryToken
+        t2: i32,ch = CopyFromReg t0, Register:i32 %0
+      t5: i1 = setcc t2, Constant:i32<1>, seteq:ch
+    t7: ch = brcond t0, t5, BasicBlock:ch<t0 0x59000d5c3a08>
+  t9: ch = br t7, BasicBlock:ch<e 0x59000d5cb630>
+
+
+
+Initial selection DAG: %bb.16 'noreturn_case:e'
+SelectionDAG has 10 nodes:
+  t0: ch,glue = EntryToken
+        t2: i32,ch = CopyFromReg t0, Register:i32 %0
+      t5: i1 = setcc t2, Constant:i32<100>, seteq:ch
+    t7: ch = brcond t0, t5, BasicBlock:ch<t1 0x59000d5c3b28>
+  t9: ch = br t7, BasicBlock:ch<d 0x59000d5cacd0>
+
+
+
+Initial selection DAG: %bb.7 'noreturn_case:t6'
+SelectionDAG has 8 nodes:
+  t3: i32 = Constant<0>
+      t0: ch,glue = EntryToken
+    t5: ch = store<(store (s32) into @g)> t0, Constant:i32<6>, GlobalAddress:i32<ptr @g> 0, poison:i32
+  t7: ch = X86ISD::RET_GLUE t5, TargetConstant:i32<0>
+
+
+
+Initial selection DAG: %bb.6 'noreturn_case:t5'
+SelectionDAG has 8 nodes:
+  t3: i32 = Constant<0>
+      t0: ch,glue = EntryToken
+    t5: ch = store<(store (s32) into @g)> t0, Constant:i32<5>, GlobalAddress:i32<ptr @g> 0, poison:i32
+  t7: ch = X86ISD::RET_GLUE t5, TargetConstant:i32<0>
+
+
+
+Initial selection DAG: %bb.5 'noreturn_case:t4'
+SelectionDAG has 8 nodes:
+  t3: i32 = Constant<0>
+      t0: ch,glue = EntryToken
+    t5: ch = store<(store (s32) into @g)> t0, Constant:i32<4>, GlobalAddress:i32<ptr @g> 0, poison:i32
+  t7: ch = X86ISD::RET_GLUE t5, TargetConstant:i32<0>
+
+
+
+Initial selection DAG: %bb.4 'noreturn_case:t3'
+SelectionDAG has 8 nodes:
+  t3: i32 = Constant<0>
+      t0: ch,glue = EntryToken
+    t5: ch = store<(store (s32) into @g)> t0, Constant:i32<3>, GlobalAddress:i32<ptr @g> 0, poison:i32
+  t7: ch = X86ISD::RET_GLUE t5, TargetConstant:i32<0>
+
+
+
+Initial selection DAG: %bb.3 'noreturn_case:t2'
+SelectionDAG has 8 nodes:
+  t3: i32 = Constant<0>
+      t0: ch,glue = EntryToken
+    t5: ch = store<(store (s32) into @g)> t0, Constant:i32<2>, GlobalAddress:i32<ptr @g> 0, poison:i32
+  t7: ch = X86ISD::RET_GLUE t5, TargetConstant:i32<0>
+
+
+
+Initial selection DAG: %bb.2 'noreturn_case:t1'
+SelectionDAG has 8 nodes:
+  t1: i32 = GlobalAddress<ptr @abort> 0
+      t0: ch,glue = EntryToken
+    t3: ch,glue = callseq_start t0, TargetConstant:i32<0>, TargetConstant:i32<0>
+  t6: ch,glue = X86ISD::CALL t3, TargetGlobalAddress:i32<ptr @abort> 0 [TF=7], RegisterMask:Untyped
+  t7: ch,glue = callseq_end t6, TargetConstant:i32<0>, TargetConstant:i32<0>, t6:1
+
+
+
+Initial selection DAG: %bb.1 'noreturn_case:t0'
+SelectionDAG has 7 nodes:
+      t0: ch,glue = EntryToken
+    t4: ch = store<(store (s32) into @g)> t0, Constant:i32<0>, GlobalAddress:i32<ptr @g> 0, poison:i32
+  t6: ch = X86ISD::RET_GLUE t4, TargetConstant:i32<0>
+
+
+
+Initial selection DAG: %bb.8 'noreturn_case:d'
+SelectionDAG has 3 nodes:
+    t0: ch,glue = EntryToken
+  t2: ch = X86ISD::RET_GLUE t0, TargetConstant:i32<0>
+
+
+
+Initial selection DAG: %bb.0 'two_cold:e'
+SelectionDAG has 15 nodes:
+  t0: ch,glue = EntryToken
+  t3: i32,ch = load<(load (s32) from %fixed-stack.0)> t0, FrameIndex:i32<-1>, poison:i32
+      t5: ch = CopyToReg t0, Register:i32 %0, t3
+        t8: i1 = setcc t3, Constant:i32<3000>, setlt:ch
+      t10: i1 = xor t8, Constant:i1<-1>
+    t12: ch = brcond t5, t10, BasicBlock:ch<e 0x59000d5ca0a0>
+  t14: ch = br t12, BasicBlock:ch<e 0x59000d5c4130>
+
+
+
+Initial selection DAG: %bb.8 'two_cold:e'
+SelectionDAG has 10 nodes:
+  t0: ch,glue = EntryToken
+        t2: i32,ch = CopyFromReg t0, Register:i32 %0
+      t5: i1 = setcc t2, Constant:i32<3000>, seteq:ch
+    t7: ch = brcond t0, t5, BasicBlock:ch<t3 0x59000d5c3d68>
+  t9: ch = br t7, BasicBlock:ch<e 0x59000d5ca1c0>
+
+
+
+Initial selection DAG: %bb.9 'two_cold:e'
+SelectionDAG has 10 nodes:
+  t0: ch,glue = EntryToken
+        t2: i32,ch = CopyFromReg t0, Register:i32 %0
+      t5: i1 = setcc t2, Constant:i32<30000>, seteq:ch
+    t7: ch = brcond t0, t5, BasicBlock:ch<t4 0x59000d5c3e88>
+  t9: ch = br t7, BasicBlock:ch<d 0x59000d5c3fa8>
+
+
+
+Initial selection DAG: %bb.7 'two_cold:e'
+SelectionDAG has 10 nodes:
+  t0: ch,glue = EntryToken
+        t2: i32,ch = CopyFromReg t0, Register:i32 %0
+      t5: i1 = setcc t2, Constant:i32<30>, seteq:ch
+    t7: ch = brcond t0, t5, BasicBlock:ch<t1 0x59000d5c3b28>
+  t9: ch = br t7, BasicBlock:ch<e 0x59000d5ca2e0>
+
+
+
+Initial selection DAG: %bb.10 'two_cold:e'
+SelectionDAG has 10 nodes:
+  t0: ch,glue = EntryToken
+        t2: i32,ch = CopyFromReg t0, Register:i32 %0
+      t5: i1 = setcc t2, Constant:i32<300>, seteq:ch
+    t7: ch = brcond t0, t5, BasicBlock:ch<t2 0x59000d5c3c48>
+  t9: ch = br t7, BasicBlock:ch<e 0x59000d5ca400>
+
+
+
+Initial selection DAG: %bb.11 'two_cold:e'
+SelectionDAG has 10 nodes:
+  t0: ch,glue = EntryToken
+        t2: i32,ch = CopyFromReg t0, Register:i32 %0
+      t5: i1 = setcc t2, Constant:i32<3>, seteq:ch
+    t7: ch = brcond t0, t5, BasicBlock:ch<t0 0x59000d5c3a08>
+  t9: ch = br t7, BasicBlock:ch<d 0x59000d5c3fa8>
+
+
+
+Initial selection DAG: %bb.5 'two_cold:t4'
+SelectionDAG has 8 nodes:
+  t3: i32 = Constant<0>
+      t0: ch,glue = EntryToken
+    t5: ch = store<(store (s32) into @g)> t0, Constant:i32<4>, GlobalAddress:i32<ptr @g> 0, poison:i32
+  t7: ch = X86ISD::RET_GLUE t5, TargetConstant:i32<0>
+
+
+
+Initial selection DAG: %bb.4 'two_cold:t3'
+SelectionDAG has 8 nodes:
+  t3: i32 = Constant<0>
+      t0: ch,glue = EntryToken
+    t5: ch = store<(store (s32) into @g)> t0, Constant:i32<3>, GlobalAddress:i32<ptr @g> 0, poison:i32
+  t7: ch = X86ISD::RET_GLUE t5, TargetConstant:i32<0>
+
+
+
+Initial selection DAG: %bb.3 'two_cold:t2'
+SelectionDAG has 8 nodes:
+  t1: i32 = GlobalAddress<ptr @abort> 0
+      t0: ch,glue = EntryToken
+    t3: ch,glue = callseq_start t0, TargetConstant:i32<0>, TargetConstant:i32<0>
+  t6: ch,glue = X86ISD::CALL t3, TargetGlobalAddress:i32<ptr @abort> 0 [TF=7], RegisterMask:Untyped
+  t7: ch,glue = callseq_end t6, TargetConstant:i32<0>, TargetConstant:i32<0>, t6:1
+
+
+
+Initial selection DAG: %bb.2 'two_cold:t1'
+SelectionDAG has 8 nodes:
+  t3: i32 = Constant<0>
+      t0: ch,glue = EntryToken
+    t5: ch = store<(store (s32) into @g)> t0, Constant:i32<1>, GlobalAddress:i32<ptr @g> 0, poison:i32
+  t7: ch = X86ISD::RET_GLUE t5, TargetConstant:i32<0>
+
+
+
+Initial selection DAG: %bb.1 'two_cold:t0'
+SelectionDAG has 1 nodes:
+  t0: ch,glue = EntryToken
+
+
+
+Initial selection DAG: %bb.6 'two_cold:d'
+SelectionDAG has 3 nodes:
+    t0: ch,glue = EntryToken
+  t2: ch = X86ISD::RET_GLUE t0, TargetConstant:i32<0>
+
+
+

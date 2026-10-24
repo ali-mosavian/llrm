@@ -119,11 +119,63 @@ pub struct Unit<'a> {
     pub declared: &'a mut Declared,
 }
 
+/// What a library routine's declaration states: its convention, its
+/// attributes and, on each pointer parameter, `parameter`.
+fn routine_facts(
+    function: &mut crate::module::Function,
+    convention: u32,
+    attrs: &[crate::opcode::Attribute],
+    parameter: &[crate::opcode::Attribute],
+) {
+    function.calling_convention = convention;
+    function.attrs.extend(attrs.iter().cloned());
+    for at in 0..function.parameter_attrs.len() {
+        function.parameter_attrs[at].extend(parameter.iter().cloned());
+    }
+}
+
 /// A global a pass has declared and the module has yet to get.
 #[derive(Clone, Debug)]
 enum Pending {
     Function(String, crate::types::TypeId),
+    /// A library routine: its convention and what the library states of it.
+    Routine(String, crate::types::TypeId, u32, Vec<crate::opcode::Attribute>, Vec<crate::opcode::Attribute>),
     Table(String, crate::module::GlobalVariable),
+}
+
+/// The size of each function a global variable's initializer names.
+fn referenced_sizes(module: &Module) -> HashMap<GlobalId, Size> {
+    use crate::context::{ConstantExpr, ConstantId, ConstantKind};
+    let mut named: Vec<GlobalId> = Vec::new();
+    let mut stack: Vec<ConstantId> = module
+        .globals
+        .iter()
+        .filter_map(|global| match &global.kind {
+            GlobalKind::Variable(variable) => variable.initializer,
+            GlobalKind::Function(_) => None,
+        })
+        .collect();
+    while let Some(id) = stack.pop() {
+        match &module.context.get(id).kind {
+            ConstantKind::Aggregate(members) => stack.extend(members.iter().copied()),
+            ConstantKind::Global(global) => named.push(*global),
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => stack.extend(operands.iter().copied()),
+            ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => stack.push(*value),
+            _ => {}
+        }
+    }
+    named
+        .into_iter()
+        .map(|id| {
+            let size = match &module.globals[id.0 as usize].kind {
+                GlobalKind::Function(function) if !function.is_declaration() => {
+                    Size::Instructions(function.live_instructions())
+                }
+                _ => Size::Declaration,
+            };
+            (id, size)
+        })
+        .collect()
 }
 
 /// What a function pass declares in its module, as LLVM's
@@ -142,9 +194,40 @@ pub struct Declared {
     /// Metadata nodes made, numbered after the module's.
     nodes: Vec<crate::module::MetadataNode>,
     first_node: u32,
+    /// The live instructions of the functions a constant names, while a pass
+    /// that `wants_sizes` runs (`size_of`).
+    sizes: HashMap<GlobalId, Size>,
+}
+
+/// How big another function is (`Function::getInstructionCount`), which a
+/// function pass cannot see: the manager counts the functions a constant names.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Size {
+    /// Named by no constant, or not counted: nothing is known.
+    Unknown,
+    Declaration,
+    Instructions(usize),
 }
 
 impl Declared {
+    /// Counts the functions a global initializer of `module` names, for a
+    /// pass that `wants_sizes` (`size_of`).
+    pub fn count_referenced(
+        &mut self,
+        module: &Module,
+    ) {
+        self.sizes = referenced_sizes(module);
+    }
+
+    /// How many instructions function `id` has, if a constant names it and
+    /// the pass `wants_sizes`.
+    pub fn size_of(
+        &self,
+        id: GlobalId,
+    ) -> Size {
+        self.sizes.get(&id).copied().unwrap_or(Size::Unknown)
+    }
+
     pub fn of(module: &Module) -> Self {
         counted("declared names", false);
         let ids = module
@@ -160,6 +243,7 @@ impl Declared {
             pending: Vec::new(),
             nodes: Vec::new(),
             first_node: module.metadata.len() as u32,
+            sizes: HashMap::default(),
         }
     }
 
@@ -178,6 +262,7 @@ impl Declared {
             pending: Vec::new(),
             nodes: Vec::new(),
             first_node: metadata as u32,
+            sizes: HashMap::default(),
         }
     }
 
@@ -216,6 +301,18 @@ impl Declared {
                         crate::build::function_declaration(context, name, *ty).expect("a declaration that places"),
                     )),
                 },
+                Pending::Routine(name, ty, convention, attrs, parameter) => {
+                    let mut function =
+                        crate::build::function_declaration(context, name, *ty).expect("a declaration that places");
+                    routine_facts(&mut function, *convention, attrs, parameter);
+                    GlobalValue {
+                        name: name.clone().into(),
+                        linkage: crate::module::Linkage::External,
+                        unnamed_addr: Default::default(),
+                        address_space: 0,
+                        kind: GlobalKind::Function(Box::new(function)),
+                    }
+                }
                 Pending::Table(name, variable) => GlobalValue {
                     name: name.clone().into(),
                     linkage: crate::module::Linkage::Private,
@@ -234,7 +331,7 @@ impl Declared {
     ) -> Option<&str> {
         let at = (id.0 as usize).checked_sub(self.next as usize - self.pending.len())?;
         match self.pending.get(at)? {
-            Pending::Function(name, _) => Some(name),
+            Pending::Function(name, _) | Pending::Routine(name, ..) => Some(name),
             Pending::Table(..) => None,
         }
     }
@@ -280,6 +377,28 @@ impl Declared {
         self.next += 1;
         self.names().insert(name.to_owned(), id);
         self.pending.push(Pending::Function(name.to_owned(), ty));
+        id
+    }
+
+    /// A library routine `name` of type `ty`, declared where the module has
+    /// none (`getOrInsertFunction`): in calling convention `convention`, with
+    /// `attrs` on it and `parameter` on each pointer parameter, what the
+    /// library states of it (`inferNonMandatoryLibFuncAttrs`).
+    pub fn routine(
+        &mut self,
+        name: &str,
+        ty: crate::types::TypeId,
+        convention: u32,
+        attrs: Vec<crate::opcode::Attribute>,
+        parameter: Vec<crate::opcode::Attribute>,
+    ) -> GlobalId {
+        if let Some(&id) = self.names().get(name) {
+            return id;
+        }
+        let id = GlobalId(self.next);
+        self.next += 1;
+        self.names().insert(name.to_owned(), id);
+        self.pending.push(Pending::Routine(name.to_owned(), ty, convention, attrs, parameter));
         id
     }
 
@@ -329,6 +448,13 @@ impl Declared {
             let (name, id) = match one {
                 Pending::Function(name, ty) => {
                     let id = module.add_function(&name, ty, crate::module::Linkage::External)?;
+                    (name, id)
+                }
+                Pending::Routine(name, ty, convention, attrs, parameter) => {
+                    let id = module.add_function(&name, ty, crate::module::Linkage::External)?;
+                    if let GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind {
+                        routine_facts(function, convention, &attrs, &parameter);
+                    }
                     (name, id)
                 }
                 Pending::Table(name, variable) => {
@@ -431,6 +557,22 @@ pub trait Analysis: 'static {
         function: &Function,
     ) -> bool {
         Self::depends().is_some_and(|depends| depends.unaffected(changes, context, function))
+    }
+
+    /// Whether a held `old`, the result for the function as it stands, still
+    /// holds beyond `==` with a fresh one: for a result that compares equal to
+    /// any other (a cache of what was asked) the check of its entries.
+    /// `LLRM_CHECK_PRESERVED` and `verify_invalidation` ask it of every entry
+    /// a pass kept.
+    #[allow(unused_variables)]
+    fn consistent(
+        old: &Self::Result,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> bool {
+        true
     }
 
     /// Whether `audit` runs on every result this analysis hands out, kept or
@@ -870,6 +1012,37 @@ pub struct Outer {
     pub globals: Rc<Vec<GlobalValue>>,
     program: Rc<ProgramProxy>,
     modules: HashMap<TypeId, Rc<dyn Any>>,
+    /// What was worked out of these module analyses and nothing else.
+    memo: Memo,
+}
+
+/// Results derived from the module analyses of one [`Outer`] alone, kept for
+/// its life: a clone starts empty, as does one made by `with_declared`, and
+/// `require` empties it, so none outlives the analyses it was made from.
+#[derive(Default)]
+pub struct Memo(std::cell::RefCell<HashMap<(TypeId, u64), Rc<dyn Any>>>);
+
+impl Clone for Memo {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl Outer {
+    /// The `V` kept under `key`, made by `make` the first time it is asked.
+    pub fn memo<V: 'static>(
+        &self,
+        key: u64,
+        make: impl FnOnce() -> V,
+    ) -> Rc<V> {
+        let at = (TypeId::of::<V>(), key);
+        if let Some(found) = self.memo.0.borrow().get(&at) {
+            return Rc::clone(found).downcast::<V>().expect("keyed by its type");
+        }
+        let made = Rc::new(make());
+        self.memo.0.borrow_mut().insert(at, Rc::clone(&made) as Rc<dyn Any>);
+        made
+    }
 }
 
 impl Outer {
@@ -899,7 +1072,13 @@ impl Outer {
             }
             modules.insert(key, Rc::new(callees));
         }
-        Outer { metadata: self.metadata.clone(), globals, program: Rc::clone(&self.program), modules }
+        Outer {
+            metadata: self.metadata.clone(),
+            globals,
+            program: Rc::clone(&self.program),
+            modules,
+            memo: Memo::default(),
+        }
     }
 
     /// `module`'s, a program of its own for `target`, or a neutral one:
@@ -918,11 +1097,7 @@ impl Outer {
     ) {
         let result = ModuleAnalyses::new(Rc::clone(&self.program)).get::<M>(module);
         self.modules.insert(TypeId::of::<M>(), result);
-    }
-
-    /// Whether alias and decisions ask the intervals of counted loops.
-    pub fn loop_intervals(&self) -> bool {
-        self.program.loop_intervals
+        self.memo.0.borrow_mut().clear();
     }
 
     pub fn program(&self) -> &ProgramProxy {
@@ -997,12 +1172,13 @@ pub mod read {
     pub const SUMMARIES: u8 = 2;
     /// What `GlobalsAA` holds.
     pub const GLOBALS: u8 = 4;
-    /// What calling back into the module may do (`Callbacks`).
-    pub const CALLBACKS: u8 = 8;
     /// The other functions' and variables' declarations, and the globals'
     /// sizes.
     pub const DECLARATIONS: u8 = 16;
-    pub const ALL: u8 = 31;
+    /// What `GlobalsModRef` holds: what each function does to each tracked
+    /// global.
+    pub const GLOBALS_MODREF: u8 = 32;
+    pub const ALL: u8 = 55;
 
     thread_local! {
         static READ: Cell<u8> = const { Cell::new(0) };
@@ -1024,7 +1200,7 @@ pub mod read {
             "callee-effects" | "call-registers" => CALLEES,
             "summaries" => SUMMARIES,
             "globals-aa" => GLOBALS,
-            "callbacks" => CALLBACKS,
+            "globals-modref" => GLOBALS_MODREF,
             "declarations" | "global-sizes" | "type-ancestry" => DECLARATIONS,
             _ => ALL,
         }
@@ -1091,7 +1267,9 @@ impl<A: Analysis> Cached for Entry<A> {
         function: &Function,
         outer: &Rc<Outer>,
     ) -> bool {
-        *self.result == A::run(context, layout, function, &mut Analyses::new(Rc::clone(outer)))
+        let mut fresh = Analyses::new(Rc::clone(outer));
+        *self.result == A::run(context, layout, function, &mut fresh)
+            && A::consistent(&self.result, context, layout, function, &mut fresh)
     }
 
     fn preserved(
@@ -2192,6 +2370,7 @@ impl ModuleAnalyses {
                     globals: Rc::default(),
                     program: Rc::clone(&self.program),
                     modules: HashMap::default(),
+                    memo: Memo::default(),
                 }),
             };
             self.functions.insert(id, Analyses::new(outer));
@@ -2299,7 +2478,13 @@ impl ModuleAnalyses {
         let globals = Rc::clone(&modules[&TypeId::of::<Declarations>()])
             .downcast::<Vec<GlobalValue>>()
             .expect("keyed by its type");
-        let now = Outer { metadata: module.metadata.clone(), globals, program: Rc::clone(&self.program), modules };
+        let now = Outer {
+            metadata: module.metadata.clone(),
+            globals,
+            program: Rc::clone(&self.program),
+            modules,
+            memo: Memo::default(),
+        };
         if !self.outer.as_ref().is_some_and(|old| old.same(&now)) {
             self.outer = Some(Rc::new(now));
         }
@@ -2416,6 +2601,14 @@ pub trait FunctionPass {
         true
     }
 
+    /// The pass reads how many instructions another function has
+    /// (`Function::getInstructionCount`): the manager counts the functions a
+    /// global's initializer names, once before the pass runs over the module
+    /// and again for each of them the pass changes (`Declared::size_of`).
+    fn wants_sizes(&self) -> bool {
+        false
+    }
+
     /// The pass dumps the bodies it is run over itself (the pipeline does, per
     /// function), so the manager dumps none.
     fn dumps_inputs_itself(&self) -> bool {
@@ -2502,9 +2695,6 @@ pub struct PassManager {
     /// named on stderr, and those past the limit are skipped.
     pub bisect: Option<usize>,
     pub(crate) required: Vec<Kind>,
-    /// The program is run without the intervals of counted loops for alias and
-    /// decisions (`Program::loop_intervals`).
-    pub without_loop_intervals: bool,
     /// Program analyses computed before each module's run.
     pub(crate) program_required: Vec<fn(&Program, &mut ProgramAnalyses)>,
     /// Pass runs so far, for `bisect`.
@@ -2580,7 +2770,6 @@ impl PassManager {
         &mut self,
         program: &mut Program,
     ) -> Result<Vec<Stage>, String> {
-        program.loop_intervals = !self.without_loop_intervals;
         self.managed(program, &mut ProgramAnalyses::default())
     }
 
@@ -2767,10 +2956,16 @@ impl PassManager {
             // The module analyses every run of the pass preserved.
             let mut kept: HashSet<TypeId> = analyses.results.keys().copied().collect();
             let mut declared = Declared::of(module);
+            // The sizes a pass that `wants_sizes` reads: of the functions a
+            // constant names (a table of them), the only ones it can ask about.
+            let sized = pass.wants_sizes();
+            if sized {
+                declared.sizes = referenced_sizes(module);
+            }
             for at in 0..module.globals.len() {
                 let id = GlobalId(at as u32);
-                // The other bodies as they stand, for an audit that reads a
-                // callee.
+                // The other bodies as they stand, for an audit that
+                // reads a callee.
                 if check_captures() {
                     MODULE_SNAPSHOT.with(|held| *held.borrow_mut() = Some(Rc::new(module.clone())));
                 }
@@ -2813,13 +3008,21 @@ impl PassManager {
                         return Err(format!("{name} claims to preserve {} but changed them", stale.join(", ")));
                     }
                 }
-                // An analysis that reads the log of edits is told of this one.
+                // An analysis that reads the log of edits is told of
+                // this one.
                 let moved = function.mark() != before;
                 stages.push(Stage { pass: name, module: index, function: id, changes: function.take_changes() });
                 if moved {
                     analyses.edit_log.push(id);
                 }
+
                 spanned("declared", || declared.place(module))?;
+                if sized
+                    && let Some(size) = declared.sizes.get_mut(&GlobalId(at as u32))
+                    && let GlobalKind::Function(function) = &module.globals[at].kind
+                {
+                    *size = Size::Instructions(function.live_instructions());
+                }
             }
             if self.verify_invalidation {
                 let stale = analyses.stale(module, &kept);

@@ -24,7 +24,7 @@
 //!
 //! ```text
 //!  frame copies -> machinecp -> extensions -> copysink
-//!    -> spillforward -> postrasink -> storecombine -> pushed constants
+//!    -> postrasink -> storecombine -> pushed constants
 //!    -> pushes, constants, commuted, transferred, high extracts, restored
 //!       copies, shuttles, overwritten, fused, fused calls, far loads
 //!    -> exact addresses -> addresses (LEA) -> stepped after compare
@@ -128,8 +128,7 @@ pub use crate::backend::lanes::{Lane, Lanes};
 use crate::backend::needs::{self, gated};
 use crate::backend::peep::{self, walk::Facts};
 use crate::backend::{
-    affine, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, sharedstores, spillforward,
-    storecombine,
+    affine, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, sharedstores, storecombine,
 };
 use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Block, Insn, LirBlock, LirBody};
@@ -166,7 +165,7 @@ fn semantics(
     dests: Vec<Loc>,
     sources: Vec<Loc>,
 ) -> Semantics {
-    Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+    Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
 }
 
 fn with_what(
@@ -324,7 +323,6 @@ impl Peephole {
         let body = gated(&mut seen, needs::COPY, body, |body| Ok(crate::backend::machinecp::propagated(&body)))?;
         let body = extensions(self.rules, &body);
         let body = copysink::sunk(&body);
-        let body = spillforward::forwarded(&body);
         // After the forwarding: a reload on the other path is gone, and the
         // store need not run there.
         let body = crate::backend::postrasink::latched(&crate::backend::postrasink::sunk(&body));
@@ -358,7 +356,7 @@ impl Peephole {
         let body = addresses(&body, &self.cpu)?;
         let body = stepped_after_compare(self.rules, &body);
         let body = gated(&mut seen, needs::INSERTED | needs::BASED, body, |body| secondary_bases(&body, &self.cpu))?;
-        let body = borrows(self.rules, &increments(self.rules, &body));
+        let body = borrows(self.rules, &increments(self.rules, &lea_alus(self.rules, &lea_fixed(self.rules, &body))));
         let body = doubled(self.rules, &body, &self.cpu)?;
         let body = narrowed_arithmetic(self.rules, &body);
         // A zero upper half proven by the first is what the second reads, and
@@ -1263,21 +1261,29 @@ struct EffectKey<'a> {
 }
 
 impl EffectKey<'_> {
-    fn hash(&self) -> u64 {
+    /// Two hashes of the fields, the second seeded apart from the first.
+    fn hashes(&self) -> (u64, u64) {
         use std::hash::{Hash, Hasher};
-        let mut hasher = rustc_hash::FxHasher::default();
-        (self.bits, self.may_write, self.flags, self.what, self.requires, self.delivers).hash(&mut hasher);
-        hasher.finish()
+        let fields = (self.bits, self.may_write, self.flags, self.what, self.requires, self.delivers);
+        let mut first = rustc_hash::FxHasher::default();
+        fields.hash(&mut first);
+        let mut second = rustc_hash::FxHasher::default();
+        0x9e37_79b9_7f4a_7c15_u64.hash(&mut second);
+        fields.hash(&mut second);
+        (first.finish(), second.finish())
     }
 }
 
 type Effects = Option<(Lanes, Lanes)>;
 
-/// What `_register_effects` answered, by the hash of what it was asked, and the
-/// asked kept to tell a hash that is another's.
+/// What `_register_effects` answered, by two independent 64-bit hashes of what
+/// it was asked. The asked was once kept beside the answer to tell a hash that
+/// is another's: a clone of its `Semantics` (a name and two operand lists) for
+/// each of the 5,559 answers a d_faces -O2 compile remembers, 5.8 M Ir. Two
+/// hashes are one in 2^128 a pair of different asks.
 #[derive(Default)]
 struct EffectsHeld {
-    by_hash: HashMap<u64, Vec<(u32, bool, bool, Semantics, Vec<(Held, RegId)>, Vec<(Held, RegId)>, Effects)>>,
+    by_hash: HashMap<(u64, u64), Effects>,
     count: usize,
 }
 
@@ -1286,18 +1292,7 @@ impl EffectsHeld {
         &self,
         key: &EffectKey,
     ) -> Option<Effects> {
-        self.by_hash
-            .get(&key.hash())?
-            .iter()
-            .find(|(bits, may_write, flags, what, requires, delivers, _)| {
-                *bits == key.bits
-                    && *may_write == key.may_write
-                    && *flags == key.flags
-                    && what == key.what
-                    && requires == key.requires
-                    && delivers == key.delivers
-            })
-            .map(|(.., answer)| answer.clone())
+        self.by_hash.get(&key.hashes()).cloned()
     }
 
     fn remember(
@@ -1310,20 +1305,7 @@ impl EffectsHeld {
             *self = Self::default();
         }
         self.count += 1;
-        self.by_hash
-            .entry(key.hash())
-            .or_default()
-            .push(
-                (
-                    key.bits,
-                    key.may_write,
-                    key.flags,
-                    key.what.clone(),
-                    key.requires.to_vec(),
-                    key.delivers.to_vec(),
-                    answer,
-                ),
-            );
+        self.by_hash.insert(key.hashes(), answer);
     }
 }
 
@@ -2292,6 +2274,24 @@ fn _affine_address(
         None::<fn(&Arc<Insn>) -> Arc<Insn>>,
     );
     Ok(Some((last + 1, made)))
+}
+
+/// An LEA that is a two-address add or step, as the add, where no flag is read
+/// after it (`peephole.peep`; X86FixupLEAs `optTwoAddrLEA`).
+pub fn lea_fixed(
+    rules: &peep::Rules,
+    body: &LirBody,
+) -> LirBody {
+    peep::rewritten(rules.lea_fixup, body, &Facts::new(body, None))
+}
+
+/// `lea t,[x+y]` read once by the add or subtract of `d` after it as two steps
+/// on `d` (`peephole.peep`; X86FixupLEAs `optLEAALU`).
+pub fn lea_alus(
+    rules: &peep::Rules,
+    body: &LirBody,
+) -> LirBody {
+    peep::rewritten(rules.lea_alu, body, &Facts::new(body, None))
 }
 
 /// Select compact INC/DEC for a unit add whose carry result is dead

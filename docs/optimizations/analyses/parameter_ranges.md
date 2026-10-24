@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/parameter_ranges.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/parameter_ranges.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/parameter_ranges.rs sha256:8753decdb558f3a7bf99badf6797af98ec558b520a613b54ad12b3e93ae26390 -->
+<!-- src: crates/opt/llrm-analysis/src/parameter_ranges.rs sha256:24e03b31d42c158e8b5bc5c7de44d1e492f585b371ef6f2c88d9b0645642406f -->
 
 # parameter_ranges
 
@@ -10,10 +10,10 @@ callers pass, so the body's own checks on it can be decided.
 `stamp` takes the bodies that are neither exported nor address-taken. For
 each integer parameter that has users and no `range` attribute, it collects
 what every direct call (`call` or `invoke`) passes. A call's actual is read
-in its caller by [`crate::ranges`](ranges.md) under the interval scope of the call's
-block, with the caller's own parameters' stamps, and for an operand with no
-interval, computed from its operands two levels down. A call in a block
-`ranges` finds unreachable passes nothing. The actuals are joined into
+in its caller by [`crate::ranges`](ranges.md) under the branch edges' intervals at the
+call's block, with the caller's own parameters' stamps, and for an operand
+with no interval, computed from its operands two levels down. The actuals
+are joined into
 `Seen`: `Nothing`, `Within(interval)` or `Anything`. A caller that has not
 itself been seen yet is `waiting` and does not turn an unknown actual into
 `Anything`.
@@ -83,7 +83,8 @@ is set (gcc's `-fipa-vrp`, -O2 and up), re-optimises the bodies it returns
 and stops when none.
 
 ## Needs
-[`crate::ranges`](ranges.md) (`bounds`, interval of an operand), [`crate::consts`](consts.md),
+[`crate::ranges`](ranges.md) (`dominated_edges`, interval of an operand),
+[`crate::consts`](consts.md),
 [`crate::effects`](../backend/effects.md) for `callee`, `llrm_mir::program::Program`.
 
 ## See also

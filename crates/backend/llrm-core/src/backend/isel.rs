@@ -225,6 +225,7 @@ pub mod api {
 mod unwind;
 
 pub use matcher::Compiled;
+pub(crate) use matcher::reads_invariant_memory;
 #[cfg(feature = "fixtures")]
 pub use matcher::selector;
 #[cfg(test)]
@@ -372,7 +373,9 @@ fn slot(
     arch: &dyn llrm_target::Target,
     width: u32,
 ) -> i64 {
-    i64::from(width).max(arch.stack_slot_bytes())
+    let unit = arch.stack_slot_bytes();
+    // A whole number of stack slots: a long double is 12 bytes at m32.
+    (i64::from(width) + unit - 1) / unit * unit
 }
 
 /// Whether a function's code is far: in addrspace(1), entered by a far call.
@@ -449,7 +452,7 @@ fn in_the_frame(attributes: &[Vec<llrm_mir::Attribute>]) -> Result<(), Unselecte
 
 /// `function`'s convention: the return address, BP, then its arguments,
 /// the last pushed nearest.
-fn convention(
+pub fn convention(
     module: &Module,
     layout: &DataLayout,
     global: GlobalId,
@@ -457,22 +460,51 @@ fn convention(
 ) -> Result<Convention, Unselected> {
     let global = module.global(global);
     let Some(function) = global.function() else { return refuse("a variable has no convention") };
-    in_the_frame(&function.parameter_attrs)?;
     let interrupt = function.calling_convention == llrm_mir::opcode::X86_INTR;
     let first = match () {
         _ if interrupt => crate::backend::masm::interrupt_parameters(),
         _ => arch.first_argument_offset(far(global)?),
     };
-    let (_, _, variadic) = module.signature(function.ty);
-    let Passing { in_order, pops, registers } = passing(arch, function.calling_convention, variadic)?;
+    let param_types: Vec<TypeId> = function.parameters().iter().map(|&one| function.value(one).ty).collect();
+    let (result, _, variadic) = module.signature(function.ty);
+    convention_for(
+        module,
+        layout,
+        arch,
+        first,
+        function.calling_convention,
+        result,
+        variadic,
+        &param_types,
+        &function.parameter_attrs,
+    )
+}
+
+/// The convention of a function type's `types`, which is `function`'s
+/// parameters or, for a call, its arguments': where each arrives, where the
+/// result leaves, and what is popped. `first` is the displacement of the
+/// first stack argument.
+pub fn convention_for(
+    module: &Module,
+    layout: &DataLayout,
+    arch: &dyn llrm_target::Target,
+    first: i64,
+    calling_convention: u32,
+    result: TypeId,
+    variadic: bool,
+    param_types: &[TypeId],
+    parameter_attrs: &[Vec<llrm_mir::Attribute>],
+) -> Result<Convention, Unselected> {
+    in_the_frame(parameter_attrs)?;
+    let interrupt = calling_convention == llrm_mir::opcode::X86_INTR;
+    let Passing { in_order, pops, registers } = passing(arch, calling_convention, variadic)?;
     let types = &module.context.types;
-    let sizes = function
-        .parameters()
+    let sizes = param_types
         .iter()
         .enumerate()
-        .map(|(index, &one)| match byval_type(function.parameter_attrs.get(index).map_or(&[], Vec::as_slice)) {
+        .map(|(index, &ty)| match byval_type(parameter_attrs.get(index).map_or(&[], Vec::as_slice)) {
             Some(ty) => byval_bytes(module, layout, arch, ty),
-            None => size_of(module, layout, function.value(one).ty),
+            None => size_of(module, layout, ty),
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut widths = sizes.iter().map(|&width| slot(arch, width)).collect::<Vec<_>>();
@@ -486,18 +518,15 @@ fn convention(
     let mut parameters = Vec::new();
     let mut cursor = first;
     if let Some(entry) = registers {
-        let classes: Vec<Option<&str>> = (0..function.parameters().len())
-            .map(|index| class_of(function.parameter_attrs.get(index).map_or(&[], Vec::as_slice)))
+        let classes: Vec<Option<&str>> = (0..param_types.len())
+            .map(|index| class_of(parameter_attrs.get(index).map_or(&[], Vec::as_slice)))
             .collect();
-        let kinds: Vec<_> = function
-            .parameters()
+        let kinds: Vec<_> = param_types
             .iter()
             .zip(&sizes)
             .zip(&classes)
             .filter(|(_, class)| **class != Some(llrm_mir::opcode::RESULT_POINTER))
-            .map(|((&one, &size), class)| {
-                entry.kind(argument_of(types, function.value(one).ty, size, *class), arch.stack_slot_bytes())
-            })
+            .map(|((&ty, &size), class)| entry.kind(argument_of(types, ty, size, *class), arch.stack_slot_bytes()))
             .collect();
         let placed = entry.place(&kinds);
         let mut places = placed.places.iter();
@@ -540,17 +569,16 @@ fn convention(
     }
     for (index, parameter) in parameters.iter_mut().enumerate() {
         if let (Parameter::Cell(disp), Some(_)) =
-            (&*parameter, byval_type(function.parameter_attrs.get(index).map_or(&[], Vec::as_slice)))
+            (&*parameter, byval_type(parameter_attrs.get(index).map_or(&[], Vec::as_slice)))
         {
             *parameter = Parameter::Bytes(*disp);
         }
     }
-    let (result, _, _) = module.signature(function.ty);
     if interrupt && !types.is_void(result) {
         return refuse("an interrupt handler that returns a value");
     }
     // A float leaves in st(0), which no register names.
-    let described = entry(arch, function.calling_convention, variadic);
+    let described = entry(arch, calling_convention, variadic);
     let returns = if types.is_void(result) || matches!(types.get(result), Type::Float(_)) {
         Vec::new()
     } else {
@@ -561,9 +589,8 @@ fn convention(
     let result_slot = described.is_some_and(|one| {
         hidden_slot_popped_by_callee(
             one,
-            (0..function.parameters().len()).map(|index| {
-                llrm_mir::opcode::argument_class(function.parameter_attrs.get(index).map_or(&[], Vec::as_slice))
-            }),
+            (0..param_types.len())
+                .map(|index| llrm_mir::opcode::argument_class(parameter_attrs.get(index).map_or(&[], Vec::as_slice))),
         )
     });
     let popped = if pops {
@@ -776,7 +803,7 @@ pub(super) fn width_of(
 
 /// The alignment the hardware wants of an object of `ty`: its widest scalar's
 /// size, up to 8, whatever the data layout promises (it gives a double 1).
-fn natural_align(
+pub(crate) fn natural_align(
     types: &llrm_mir::types::Types,
     layout: &DataLayout,
     ty: TypeId,
@@ -2407,6 +2434,16 @@ impl Selector<'_, '_, '_> {
             // A branch reads one condition of the flags.
             Opcode::FCmp(predicate)
                 if float_conditions(predicate).is_some_and(|(_, test)| matches!(test, Test::One(_))) => {}
+            // `X86TargetLowering::LowerBRCOND` tests a boolean truncation's low
+            // bit (`TEST8ri`, X86InstrArithmetic.td#L1330): `test x, 1`, not
+            // an `and` made first.
+            Opcode::Cast(CastOp::Trunc)
+                if self.types().int_bits(instruction.ty) == Some(1)
+                    && function.operand_type(&self.module.context, instruction.operands[0]).is_some_and(|ty| {
+                        self.types().int_bits(ty).is_some_and(|bits| bits <= 32)
+                            && !self.is_wide(ty)
+                            && !self.is_far(ty)
+                    }) => {}
             _ => return,
         }
         let result = instruction.result.expect("a comparison's value");
@@ -3474,6 +3511,20 @@ impl Selector<'_, '_, '_> {
             return self.float(operand, at, out);
         }
         let width = self.width(ty)?;
+        // Poison and undef are any value: an `implicit_def`, which
+        // `ProcessImplicitDefs` turns into undef reads (isel's `IMPLICIT_DEF`).
+        if let Operand::Constant(id) = operand
+            && matches!(
+                self.module.context.get(id).kind,
+                ConstantKind::Poison | ConstantKind::Undef
+            )
+        {
+            let held = Held { value: self.fresh(), width };
+            let what =
+                semantics(Operation::Nothing, crate::processimpdefs::IMPLICIT_DEF, vec![Loc::Held(held)], vec![]);
+            out.push(insn(at, what));
+            return Ok(held);
+        }
         if let Some(value) = self.constant(operand, width) {
             let held = Held { value: self.fresh(), width };
             // A narrow zero is written whole where the target runs narrow
@@ -6883,12 +6934,21 @@ impl Selector<'_, '_, '_> {
     /// bytes it names are read; else `rep movsd` through es:di, the tail by
     /// `movsw` and `movsb`, as `memset` does its fill.
     ///
-    /// DEVIATE I1 (no number yet): beyond the moves the pin's
+    /// DEVIATE I1 (AM-I1, priced): beyond the moves the pin's
     /// `EmitTargetCodeForMemcpy` (X86SelectionDAGInfo.cpp#L328-L421) returns
     /// the generic path, a `memcpy` libcall, for a size over
     /// `getMaxInlineSizeThreshold` (128) and for an alignment under 4; ours is
-    /// `rep movsd` for both, the runtime having no `memcpy`. Exit: a runtime
-    /// `memcpy` (the C runtime's owner, runtime/c), then the libcall here.
+    /// `rep movsd` for both, the runtime having no `memcpy`. Price at -Os,
+    /// 2026-10-23: QCport 5 `rep movsd` copies, none over 128 bytes (0 modules
+    /// would change); tests/run/c and bench m16 16 copies, 5 over 128 bytes
+    /// (scroll 3840, 3840, 4000; es_across_copy 200; mem_length_boundaries_m32
+    /// 20000), m32 36 and 10 (those and huge_runs 65536 x2,
+    /// mem_length_boundaries 32764 and 32768); `scroll` is a vsgcc row a
+    /// libcall would move. Exit: a runtime `_memcpy` in each C target and a
+    /// target "has memcpy" fact, then the libcall here, queued after the
+    /// tuning phase. Progress: the libcall is `memcpycall.rs`, a MIR rewrite
+    /// run where the target's `c.toml` names `libcalls = ["memcpy"]`; off
+    /// until the m32 runtimes ship the routine (#3977).
     ///
     /// DEVIATE I2 (no number yet): under `minsize` (-Oz) the pin copies by
     /// `rep movsb` of the whole length (#L333-L335), saving the tail moves;
@@ -7540,6 +7600,15 @@ impl Selector<'_, '_, '_> {
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<Test, Unselected> {
         let instruction = self.function.instruction(inst);
+        if instruction.opcode == Opcode::Cast(CastOp::Trunc) {
+            let operand = instruction.operands[0];
+            let ty = self.function.operand_type(&self.module.context, operand).expect("a typed operand");
+            let held = self.held(operand, ty, at, out)?;
+            let low = Loc::Held(Held { width: 1, ..held });
+            let one = Loc::Imm(Imm { value: 1, width: 1, address: None });
+            out.push(insn(at, semantics(Operation::Compare, "test", vec![], vec![low, one])));
+            return Ok(Test::One("jne"));
+        }
         if let Opcode::FCmp(predicate) = instruction.opcode {
             return self.float_compare(predicate, inst, at, out);
         }
@@ -7931,7 +8000,7 @@ fn semantics(
     dests: Vec<Loc>,
     sources: Vec<Loc>,
 ) -> Semantics {
-    Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+    Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
 }
 
 fn jump(target: i64) -> Semantics {

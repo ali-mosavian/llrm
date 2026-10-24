@@ -256,7 +256,7 @@ mod tests {
             ..Mem::new(Some(Addr { segment: (RegId::ES).iced(), ..Addr::new(Space::Far, 0) }), 2)
         };
         let semantics = |op, name: &str, dests, sources| Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests,
             sources,
             ..Semantics::new(op)
@@ -314,7 +314,7 @@ mod tests {
             1,
             None,
             Some(Semantics {
-                name: Some("movzx".to_owned()),
+                name: Some("movzx".into()),
                 dests: vec![Loc::Held(Held { value: loaded, width: 2 })],
                 sources: vec![Loc::Mem(cell.clone())],
                 ..Semantics::new(Operation::Extend)
@@ -326,7 +326,7 @@ mod tests {
             2,
             None,
             Some(Semantics {
-                name: Some("cmp".to_owned()),
+                name: Some("cmp".into()),
                 sources: vec![
                     Loc::Held(Held { value: loaded, width: 2 }),
                     Loc::Imm(Imm { value: 0, width: 2, address: None }),
@@ -347,8 +347,7 @@ mod tests {
         let cell = Mem::new(Some(Addr::new(Space::Frame, 8)), 2);
         let [load, compare] = widened(5, &cell, Vec::new());
         let mut plain = (*load).clone();
-        plain.what =
-            Some(Semantics { name: Some("mov".to_owned()), op: Operation::Move, ..plain.what.clone().unwrap() });
+        plain.what = Some(Semantics { name: Some("mov".into()), op: Operation::Move, ..plain.what.clone().unwrap() });
         plain.rematerialized = true;
         let compare = {
             let mut one = (*compare).clone();
@@ -371,7 +370,7 @@ mod tests {
         Arc::new(Insn::new(
             3,
             None,
-            Some(Semantics { name: Some(name.to_owned()), target: Some(9), ..Semantics::new(Operation::Branch) }),
+            Some(Semantics { name: Some(name.into()), target: Some(9), ..Semantics::new(Operation::Branch) }),
             Vec::new(),
             Vec::new(),
         ))

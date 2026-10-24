@@ -11,4 +11,5 @@ pub mod liveintervals;
 pub mod liveintervalunion;
 pub mod liverange;
 pub mod liverangecalc;
+pub mod livevariables;
 pub mod slotindex;

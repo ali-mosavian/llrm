@@ -18,7 +18,7 @@ fn insn(
     Arc::new(Insn::new(
         at,
         Some((at, at)),
-        Some(Semantics { name: Some(name.to_owned()), sources, ..Semantics::new(op) }),
+        Some(Semantics { name: Some(name.into()), sources, ..Semantics::new(op) }),
         vec![],
         vec![],
     ))
