@@ -1894,3 +1894,23 @@ fn a_double_argument_is_stored_through_a_copy_of_sp_at_m16() {
     let Loc::Mem(cell) = &store.dests[0] else { unreachable!() };
     assert!(cell.base.is_some() && cell.through == llrm_lir::registers::RegId::None, "{cell:?}");
 }
+
+const M16_FAR_AND_DOUBLE: &str =
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
+define double @f(ptr addrspace(1) %p, double %x) addrspace(1) {
+entry:
+  store i16 1, ptr addrspace(1) %p
+  %y = fadd double %x, 1.000000e+00
+  ret double %y
+}
+";
+
+/// A far cell and a double in one function were refused as a pair ('floating
+/// values with far cells'); only a double live across the far access is
+/// (the stackifier counts the ES load as a boundary).
+#[test]
+fn a_double_not_live_across_a_far_cell_is_selected() {
+    let module = llrm_mir::parse::module(M16_FAR_AND_DOUBLE).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}
