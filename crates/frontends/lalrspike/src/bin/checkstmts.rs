@@ -22,7 +22,7 @@ fn main() {
         let (id, text) = line.split_once('\t').unwrap();
         let source = format!("{prologue}{text}\n{epilogue}").replace('\n', "\r\n");
         let parsed = if old {
-            qbfront::parse(&source, dialect).map_err(|e| format!("{}:{} {}", e.span.line, e.span.start, e.message))
+            qbfront::front::parse_coded(&source, dialect).map_err(|e| format!("{}:{} {}", e.span.line, e.span.start, e.message))
         } else {
             lalrspike::qb_ast::parse(&source, dialect).map_err(|e| format!("{}:{} {}", e.span.line, e.span.start, e.message))
         };

@@ -1,0 +1,11 @@
+//! The typed tree the grammar-table parser gives, like `dump` for the new
+//! front: `dumpold DIALECT FILE`.
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let dialect = qbfront::Dialect::parse(&args[0]).expect("a dialect");
+    let text = std::fs::read_to_string(&args[1]).expect("a file");
+    match qbfront::generated_parser::parse(&text, dialect) {
+        Ok(module) => println!("{:#?}", module.statements),
+        Err(error) => println!("{}:{}: {}", error.span.line, error.span.start, error.message),
+    }
+}

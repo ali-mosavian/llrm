@@ -1,0 +1,64 @@
+# What BC's error names mean, in the words a person reading their own program needs.
+# One line per error: BC's name | what is wrong | what to do (may be empty).
+# {text} is the source text the error points at, {statement} the statement's first word.
+Argument-count mismatch|the call to `{name}` gives a different number of arguments than the procedure takes|compare the call with the SUB or FUNCTION's parameter list
+Array already dimensioned|`{name}` is dimensioned again, or an OPTION BASE comes after an array was dimensioned|dimension the array once, or use REDIM on a dynamic array; put OPTION BASE before any array
+Array not defined|`{name}` is used as an array here but no array of that name exists|dimension it first, for example `DIM {name}(10)`
+Array not dimensioned|`{name}` is used as an array before any DIM statement has dimensioned it|put `DIM {name}(upper bound)` before the first use
+Array too big|`{name}` would take more than 64 KB, which is as much as an array or a record can hold|use fewer elements or a smaller element type
+Asterisk missing|a fixed-length string needs its length written `STRING * length`|write `AS STRING * 10` (any length from 1 to 32767)
+AS clause required|`{text}` must be declared with `AS type` here|write the type with AS, for example `AS INTEGER`
+AS clause required on first declaration|`{text}` has a type character on one declaration and AS on another; this BC wants AS on the first declaration of a name|declare it once with AS, and use the plain name afterwards
+AS missing|`{text}` is not followed by the AS this declaration needs|write `name AS type`
+Division by zero|`{text}` divides by a constant zero|use a non-zero divisor
+DECLARE required|`{name}` is called with arguments before the SUB is defined or DECLAREd, so BC reads it as an array|put `DECLARE SUB name (...)` at the top of the file
+Duplicate definition|`{text}` is already defined in this scope with a different meaning (another type, a CONST, an array, or a procedure of that name)|rename one of them, or declare both the same way
+Duplicate label|the label `{text}` is already defined in this module or procedure|give every label a different name
+Dynamic array illegal|`{text}` is not a constant, but this array has a fixed size and its bounds must be constants|use a number or a CONST
+Element not defined|`{text}` is not a field of that record, or the record type has no fields|check the field names in the TYPE statement
+Equal sign missing|`{name}` is used as a statement but is not a SUB known at this point, so BC expects an assignment (`name = value`)|DECLARE the SUB above this line, or define it above its first call
+EXIT not within matching block|this EXIT has no enclosing loop or procedure of that kind|EXIT FOR must be inside FOR, EXIT DO inside DO, EXIT SUB inside a SUB
+Expression too complex|`{text}` needs more temporaries than BC can hold|split the expression into several statements
+Feature unavailable|`{text}` exists in this BC's manual but cannot be used in this version|remove it
+Fixed-length string illegal|a fixed-length string is not allowed here|use a variable-length string
+FOR index variable already in use|`{text}` is already the counter of an enclosing FOR loop|use a different counter for the inner loop
+FOR index variable illegal|`{text}` cannot be a FOR counter (it must be a numeric simple variable)|use a numeric variable such as `i%`
+Form variable already in use or illegal|`{text}` cannot be used as a form name here|choose a different name
+Formal parameter specification illegal|`{text}` is not a parameter list this kind of SUB or FUNCTION allows in this dialect|check the parameter syntax; BYVAL, SEG, empty `()` lists and `AS` results depend on the dialect
+Formal parameters not unique|two parameters share the name `{text}`|rename one of them
+Function not defined|`{name}` is not a FUNCTION or DEF FN defined above this line|define or DECLARE it first
+GOTO missing|`{text}` should be followed by GOTO or GOSUB here|write `ON expression GOTO label, label`
+Identifier expected|`{text}` cannot be used as a name here, usually because it is a reserved word|rename it; reserved words such as COLOR, NAME, SECOND or POINT cannot be variable or procedure names
+Identifier too long|`{text}` is longer than the 40 characters a name may have|shorten it
+Illegal inside SUB or FUNCTION|`{statement}` cannot be used inside a SUB or FUNCTION|move it to the module level
+Illegal outside of SUB or FUNCTION|`{statement}` can only be used inside a SUB or FUNCTION|move it into a procedure
+Illegal type character in numeric constant|`{text}` has a type character a number cannot carry, or its value does not fit the type|use a value in range, or a suffix that matches (`%` integer, `&` long, `!` single, `#` double)
+Integer between 1 and 32767 required|`{text}` must be a whole number from 1 to 32767|write a length in that range
+Invalid character|`{text}` is a character BC does not accept here|remove it; `?` is not a shortcut for PRINT in BC, and a type character cannot follow an exponent
+Invalid constant|`{text}` is not a constant, but a CONST value must be built from literals and other CONSTs|use a literal or an earlier CONST
+Label not defined|there is no label `{text}` in this module or procedure|define it with `{text}:` or check the spelling; a GOTO cannot leave a SUB or FUNCTION
+Left parenthesis missing|`{name}` needs a `(` after it|write the arguments in parentheses
+Lower bound exceeds upper bound|`{text}` has a lower bound greater than its upper bound|swap them, or fix the numbers
+Math overflow|`{text}` is a constant outside the range this place allows (an integer argument must be -32768 to 32767)|use a smaller value, or pass a LONG variable where the function allows it
+Name of subprogram illegal|`{text}` cannot be the name of a SUB or FUNCTION (a reserved word, a type character, or a name already used otherwise)|rename it
+NEXT without FOR|this NEXT has no FOR loop open|remove it, or add the FOR
+Overflow in numeric constant|`{text}` is too large for its type|use a smaller number, or a LONG or double suffix
+Parameter type mismatch|`{name}` is not the type the procedure's parameter was declared with|pass a variable of exactly that type; BC does not convert variables passed by reference
+Record variable required|`{name}` is not a record variable|use a variable declared AS a TYPE
+Record/String assignment required|`{text}` must be a string or a record here|use a string or record variable
+Simple or array variable expected|`{text}` is not a variable|name a variable here
+Statement unrecognizable|`{text}` is not a statement BC knows|check the spelling, and that the label or name is not a reserved word
+String assignment required|`{text}` must be a string here|use a string variable
+String expression required|`{text}` must be a string here|use a string, or convert with STR$ or CHR$
+Subprogram error|`{text}` is defined in a way BC refuses for a procedure (for example a nested definition or a bad declaration)|check the SUB/FUNCTION and its DECLARE
+Too many dimensions|`{text}` has more dimensions than BC allows (60)|use fewer dimensions
+Type mismatch|`{text}` has the wrong type for this place (a string where a number is needed, or the reverse)|convert it (VAL, STR$, CINT...) or use a variable of the right type
+TYPE more than 65535 bytes|the record type is larger than 64 KB|remove fields or shrink arrays in it
+TYPE not defined|the TYPE `{text}` was not defined, or its definition was refused|define the TYPE before it is used
+Typed variable not allowed in expression|`{name}` is a whole record and cannot be used as a value|use one of its fields, `{name}.field`
+User-defined type not defined|`{text}` is not a type BC knows (no TYPE statement defines it above this line)|define it with TYPE ... END TYPE before this line
+Variable required|`{text}` cannot be assigned to or passed here because it is not a variable|use a variable or an array element
+Variable-length string required|`{text}` must be a variable-length string, not a fixed-length one|declare it AS STRING without a length
+Wrong number of dimensions|`{name}` is indexed with a different number of subscripts than it was dimensioned with|use as many subscripts as dimensions
+COMMON and DECLARE must precede executable statements|`{statement}` comes after a statement that does something; COMMON and DECLARE must come first|move it to the top of the file, before executable statements
+QuickrBASIC extensions are not in this parser|this is QuickrBASIC syntax|compile it with `--dialect quickr`
