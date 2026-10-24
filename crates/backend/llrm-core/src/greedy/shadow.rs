@@ -781,7 +781,7 @@ pub fn decide_with_split(
     }
     tables.float_bytes.borrow_mut().extend(super::inlinespiller::float_precisions(body));
     let invariant = if !inputs.stable_loads {
-        std::collections::BTreeSet::new()
+        super::remat::argument_loads(body)
     } else {
         crate::backend::postings::following(body, |postings| {
             let defined: std::collections::BTreeSet<u32> = body
