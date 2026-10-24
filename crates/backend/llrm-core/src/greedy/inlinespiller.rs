@@ -154,6 +154,22 @@ pub struct InlineSpiller<'a> {
     /// `LiveStacks`: the range of each home, the segments of what was spilled
     /// to it merged as one value.
     stacks: crate::support::hash::HashMap<i64, LiveRange>,
+    /// `MergeableSpills`: the stores of spilled values to their homes, kept for
+    /// `hoistAllSpills`.
+    stored: Vec<StoreRecord>,
+    /// `StackSlotToOrigLI`: the range of the original register when its first
+    /// store to each home was made (the original's own interval may be gone by
+    /// the end).
+    originals: HashMap<i64, LiveRange>,
+}
+
+/// A spill store as `addToMergeableSpills` keeps it.
+struct StoreRecord {
+    key: InstrKey,
+    home: i64,
+    original: u32,
+    cell: crate::model::ir::Mem,
+    template: Arc<Insn>,
 }
 
 impl<'a> InlineSpiller<'a> {
@@ -192,6 +208,8 @@ impl<'a> InlineSpiller<'a> {
             keys: Default::default(),
             dead: Vec::new(),
             stacks: Default::default(),
+            stored: Vec::new(),
+            originals: Default::default(),
         }
     }
 
@@ -513,8 +531,9 @@ impl<'a> InlineSpiller<'a> {
         if writes {
             let last = renamed.last().expect("a unit has members");
             let store = crate::greedy::tii::store_reg_to_stack_slot(&old[old.len() - 1], new, &cell);
-            lis.insert_instr_after(block, last.id(), store);
+            lis.insert_instr_after(block, last.id(), Arc::clone(&store));
             self.stores += 1;
+            self.note_store(lis, &store, &cell, &old[old.len() - 1]);
         }
         // A register an instruction requires or delivers in one register can be
         // given that one only.
@@ -981,8 +1000,11 @@ impl InlineSpiller<'_> {
         } else {
             crate::greedy::tii::store_reg_to_stack_slot(&def, src, &cell)
         };
-        lis.insert_instr_after(block, def_key, store);
+        lis.insert_instr_after(block, def_key, Arc::clone(&store));
         self.stores += 1;
+        if !float {
+            self.note_store(lis, &store, &cell, &def);
+        }
         // `src` is stored in this home: it is spilled to it when it comes to
         // be.
         self.keys.entry(src).or_insert(self.key);
@@ -1056,6 +1078,29 @@ impl InlineSpiller<'_> {
                     [Loc::Mem(cell)] if cell.addr.is_some_and(|addr| addr.slot_home() == Some(home))
                 ),
             )
+    }
+
+    /// `addToMergeableSpills`: `store` writes the value of the original
+    /// register to its home.
+    fn note_store(
+        &mut self,
+        lis: &LiveIntervals,
+        store: &Arc<Insn>,
+        cell: &crate::model::ir::Mem,
+        template: &Arc<Insn>,
+    ) {
+        let Some(&home) = self.frame.slots.get(&SlotKey::from(self.key)) else { return };
+        if !lis.has_interval(self.original) {
+            return;
+        }
+        self.originals.entry(home).or_insert_with(|| lis.get_interval(self.original).range.clone());
+        self.stored.push(StoreRecord {
+            key: store.id(),
+            home,
+            original: self.original,
+            cell: cell.clone(),
+            template: Arc::clone(template),
+        });
     }
 
     /// `StackInt->MergeValueInAsValue(range, vni, StackInt->getValNumInfo(0))`.
