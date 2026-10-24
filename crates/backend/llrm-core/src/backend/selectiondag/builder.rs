@@ -1341,7 +1341,11 @@ impl Builder<'_> {
             Opcode::Invoke(info) => self.visit_invoke(&instruction, info)?,
             // QB's pad is entered by the runtime, which `ehprepare` set up
             // and whose selector it took out: nothing to build
-            Opcode::LandingPad { .. } => {}
+            Opcode::LandingPad { .. } => {
+                if instruction.result.is_some_and(|value| !self.function.users(value).is_empty()) {
+                    return Err(Refused("a landing pad's value read after the backend prepared it"));
+                }
+            }
             other => return Err(Refused(Box::leak(format!("instruction {}", other.mnemonic()).into_boxed_str()))),
         }
         if !instruction.opcode.is_terminator() {

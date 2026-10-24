@@ -2105,6 +2105,87 @@ fn a_near_pointer_cast_to_the_segment_space_is_its_segment_selector() {
     assert_eq!(spaces, [crate::model::ir::Space::Group], "{spaces:?}");
 }
 
+const QB_PAD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define cc 1000 void @f() addrspace(1) personality ptr addrspace(1) @llrm.qb.personality {
+entry:
+  invoke cc 1000 addrspace(1) void @llrm.qb.B$CEND() to label %next unwind label %landing
+next:
+  ret void
+landing:
+  %e = landingpad { ptr, i32 } catch ptr null
+  ret void
+}
+declare cc 1000 void @llrm.qb.B$CEND() addrspace(1)
+declare i32 @llrm.qb.personality(...) addrspace(1)
+";
+
+fn select_with_contracts(text: &str) -> Result<crate::backend::isel::Selected, String> {
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let contracts =
+        super::dag_function::RuntimeContracts { abi: &Stub { flags: false }, segments: &crate::backend::target::BASIC };
+    let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
+    super::dag_function::selected_in_pool(
+        &module,
+        "f",
+        &llrm_x86_m16::M16,
+        crate::backend::cpu::profile("386").expect("a cpu"),
+        &[],
+        Some(&contracts),
+        pool,
+    )
+    .map_err(|e| e.0)
+}
+
+/// The runtime enters a landing pad: no edge reaches it. The DAG path left it
+/// a block nothing led to (`block 0x0004 is not reachable from the entry`,
+/// 13 qb programs that register `ON ERROR`); it needs the old selector's pad
+/// call and a root block that branches to it.
+#[test]
+fn a_landing_pad_is_marked_and_reachable_from_the_entry() {
+    let done = select_with_contracts(QB_PAD).unwrap_or_else(|why| panic!("{why}"));
+    let landing = done.landing.expect("the pad's address");
+    let blocks = &done.body.blocks;
+    let by_at: std::collections::HashMap<i64, &crate::model::lir::Block> = blocks.iter().map(|b| (b.at, b)).collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut work = vec![done.body.entry];
+    while let Some(at) = work.pop() {
+        if seen.insert(at) {
+            work.extend(by_at[&at].succ.iter().copied());
+        }
+    }
+    assert!(seen.contains(&landing), "{seen:?} {landing}");
+    assert_eq!(done.calls.get(&landing).map(String::as_str), Some("__LANDING"));
+}
+
+const DEAD_DEFAULT: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+define i16 @f(i16 %x) {
+entry:
+  switch i16 %x, label %dead [ i16 1, label %a ]
+a:
+  ret i16 7
+dead:
+  unreachable
+}
+";
+
+/// A switch whose default is `unreachable` leaves that block with no edge;
+/// the machine verifier stops at a block nothing reaches. It is dropped, as
+/// `UnreachableMachineBlockElim` does.
+#[test]
+fn a_block_no_edge_reaches_is_dropped() {
+    let done = select_with_contracts(DEAD_DEFAULT).unwrap_or_else(|why| panic!("{why}"));
+    let by_at: std::collections::HashMap<i64, &crate::model::lir::Block> =
+        done.body.blocks.iter().map(|b| (b.at, b)).collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut work = vec![done.body.entry];
+    while let Some(at) = work.pop() {
+        if seen.insert(at) {
+            work.extend(by_at[&at].succ.iter().copied());
+        }
+    }
+    assert_eq!(seen.len(), done.body.blocks.len(), "{} blocks, {} reached", done.body.blocks.len(), seen.len());
+}
+
 const I1_FREEZE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
 define i16 @f(i1 %a, i16 %x) {
 entry:
