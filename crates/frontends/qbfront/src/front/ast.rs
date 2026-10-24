@@ -42,7 +42,7 @@ pub fn parse(
     source: &str,
     dialect: Dialect,
 ) -> Result<Module, crate::ParseError> {
-    let fail = |span, message: &str| crate::ParseError { span, message: message.into() };
+    let fail = |span, message: &str| crate::ParseError::coded(span, message);
     if dialect.format_strings() {
         return Err(fail(Span { line: 1, start: 0, end: 0 }, "QuickrBASIC extensions are not in this parser"));
     }
@@ -67,10 +67,15 @@ pub fn parse(
         out: Vec::new(),
         procedures: Vec::new(),
         open_procedure: None,
+        expected: None,
     };
     ast.module().map_err(|at| {
         let span = tokens.get(at).or(tokens.last()).map_or(Span { line: 1, start: 0, end: 0 }, |token| token.span);
-        fail(span, "syntax error")
+        let mut error = fail(span, "Syntax error");
+        // what the parser wanted where it stopped, when it knew
+        error.expected =
+            ast.expected.filter(|(index, _)| *index == at).map(|(_, wanted)| crate::front::explain::describe(wanted));
+        error
     })
 }
 
@@ -189,6 +194,8 @@ struct Ast<'a> {
     out: Vec<Statement>,
     procedures: Vec<Procedure>,
     open_procedure: Option<usize>,
+    /// The token index and the token `expect` last looked for and did not find.
+    expected: Option<(usize, Kw)>,
 }
 
 fn span_of(
@@ -295,6 +302,7 @@ impl Ast<'_> {
         if self.eat(k) {
             Ok(())
         } else {
+            self.expected = Some((self.i, k));
             Err(self.i)
         }
     }

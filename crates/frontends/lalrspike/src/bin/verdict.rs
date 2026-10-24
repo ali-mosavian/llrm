@@ -25,7 +25,7 @@ fn main() {
             Ok(text) => {
                 let text = lalrspike::dos_source(text.as_bytes());
                 let parsed = if old {
-                    qbfront::parse(&text, dialect).map_err(|e| format!("{}:{} {}", e.span.line, e.span.start, e.message))
+                    qbfront::front::parse_coded(&text, dialect).map_err(|e| format!("{}:{} {}", e.span.line, e.span.start, e.message))
                 } else {
                     lalrspike::qb_ast::parse(&text, dialect).map_err(|e| format!("{}:{} {}", e.span.line, e.span.start, e.message))
                 };
