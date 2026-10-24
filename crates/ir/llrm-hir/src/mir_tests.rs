@@ -86,7 +86,12 @@ fn a_call_repeats_its_callees_convention() {
     let emitted = emit(&program(function.clone())).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    assert!(text.contains("define cc 1000 i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) noinline \"llrm-fp-eval\"=\"x87-extended\" {"), "{text}");
+    assert!(
+        text.contains(
+            "define cc 1000 i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) noinline \"llrm-fp-eval\"=\"x87-extended\" {"
+        ),
+        "{text}"
+    );
     assert!(text.contains("call i16 @llrm.qb.B$NEAR(i16 %2, i16 %0)"), "{text}");
     assert!(text.contains("declare i16 @llrm.qb.B$NEAR(i16, i16)\n"), "{text}");
 
