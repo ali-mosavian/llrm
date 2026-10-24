@@ -2806,6 +2806,31 @@ fn lsr_runs_on_simplified_loops_in_lcssa_form() {
         let names: Vec<&str> = pipeline::strength_slot(&applied).iter().map(|one| one.name()).collect();
         let at = names.iter().position(|one| *one == "lsr").expect("lsr is in the slot");
         assert_eq!(&names[at.saturating_sub(3)..at], ["loopsimplify", "lcssa", "canonfreeze"], "{names:?}");
-        assert_eq!(names.last(), Some(&"opened"), "the exit phis go again: {names:?}");
+        assert_ne!(names.last(), Some(&"opened"), "the pin opens no exit phi after LSR: {names:?}");
+        let on = Applied {
+            options: pipeline::Options { loop_opened: true, ..applied.options.clone() },
+            ..Applied::default()
+        };
+        let names: Vec<&str> = pipeline::strength_slot(&on).iter().map(|one| one.name()).collect();
+        assert_eq!(names.last(), Some(&"opened"), "-fllrm-loop-opened: the exit phis go again: {names:?}");
+    }
+}
+
+/// `Spares` and `Homes` are llrm-only (the pin has no counterpart for either)
+/// and cost 16.4 M Ir at d_faces; the default pipeline ran both. They are off
+/// at every level until `-fllrm-spares` / `-fllrm-homes`
+/// (docs/working/homes-spares.md).
+#[test]
+fn the_llrm_only_module_passes_are_off_by_default_at_every_level() {
+    for level in [
+        pipeline::Options::none(),
+        pipeline::Options::basic(),
+        pipeline::Options::standard(),
+        pipeline::Options::speed(),
+        pipeline::Options::aggressive(),
+        pipeline::Options::size(),
+        pipeline::Options::min_size(),
+    ] {
+        assert!(!level.spare_loads && !level.stored_homes);
     }
 }

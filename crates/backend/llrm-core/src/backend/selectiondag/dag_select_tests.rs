@@ -121,6 +121,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         convention.parameters.iter().filter_map(|p| if let Parameter::Cell(disp) = p { Some(*disp) } else { None });
     let frame = Frame(cells.collect());
     let ctx = EmitContext {
+        tables: &[],
         caller_saved: &Default::default(),
         conventions: &super::emit::NoConventions,
         constants: &super::emit::NoConstants,
@@ -238,4 +239,15 @@ fn a_symbol_difference_keeps_the_negated_register_in_its_lea() {
     // Either the difference is a `sub`, or an `lea` that reads the register
     // `neg` made.
     assert!(names.contains(&"sub") || lea.is_some_and(|line| line.contains("index: Some")), "{blocks:#?}");
+}
+
+/// `x << (32 - c)`: the shift hook rewrites the count (`32 - c` is `-c` to the
+/// hardware's mask), making new nodes during selection. They stayed generic
+/// (`Truncate`, `Sub`) and the emitter refused the function ("operand Truncate
+/// before its definition", shift_int64_masked_amount).
+#[test]
+fn nodes_a_selection_makes_are_selected_too() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\ndefine i32 @f(i32 %v, i32 %c) {\nentry:\n  %n = sub i32 32, %c\n  %r = shl i32 %v, %n\n  ret i32 %r\n}\n";
+    let blocks = through(text).unwrap_or_else(|e| panic!("refused: {e}"));
+    assert!(blocks[0].iter().any(|line| line.contains("shl")), "{blocks:#?}");
 }
