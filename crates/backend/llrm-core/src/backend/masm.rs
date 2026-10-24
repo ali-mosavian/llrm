@@ -1311,19 +1311,20 @@ fn stack_addressed(
         .filter(|pair| !pair[0].succ.contains(&pair[1].at))
         .map(|pair| label(number, pair[1].at))
         .collect();
-    // The passes that only learn the depths copy nothing; the one that settles
-    // them is made again to build the items (a pass that built them each time
-    // cloned every instruction once per pass: 3 M of the 15.5 M the emitter
-    // cost on d_faces).
+    // The passes that only learn the depths change nothing; the one that
+    // settles them is made again and rewrites the items it owns, in place
+    // (a pass that built a copy each time cloned every instruction once per
+    // pass: 3 M of the 15.5 M the emitter cost on d_faces).
+    let mut items = items;
     loop {
         let before = known.len();
-        match addressed_pass(procedure, number, &items, &mut known, dead, &after_dead_end, false) {
+        match addressed_pass(procedure, number, &mut items, &mut known, dead, &after_dead_end, false) {
             // A label taken for dead that a later branch reached was addressed
             // at the wrong depth: again, with what that branch taught.
-            Ok((_, assumed)) if assumed.iter().all(|one| !known.contains_key(one)) => {
-                return addressed_pass(procedure, number, &items, &mut known, dead, &after_dead_end, true)
+            Ok(assumed) if assumed.iter().all(|one| !known.contains_key(one)) => {
+                return addressed_pass(procedure, number, &mut items, &mut known, dead, &after_dead_end, true)
                     .ok()
-                    .map(|(out, _)| out);
+                    .map(|_| items);
             }
             Ok(_) => {}
             Err(Stop::Refused) => return None,
@@ -1357,26 +1358,21 @@ fn stop(
 fn addressed_pass(
     procedure: &Procedure,
     number: usize,
-    items: &[Item],
+    items: &mut [Item],
     known: &mut IndexMap<String, i64>,
     dead_ok: bool,
     after_dead_end: &BTreeSet<String>,
     build: bool,
-) -> Result<(Vec<Item>, Vec<String>), Stop> {
+) -> Result<Vec<String>, Stop> {
     let registers = &procedure.registers;
     let slot = registers.slot;
-    let mut out = Vec::with_capacity(if build { items.len() } else { 0 });
     let mut depth: Option<i64> = Some(0);
     let mut in_dead = false;
     let mut assumed: Vec<String> = Vec::new();
     let name_of = |target: i64| label(number, target);
-    for item in items {
+    for item in items.iter_mut() {
         match item {
-            Item::Align(align) => {
-                if build {
-                    out.push(Item::Align(*align));
-                }
-            }
+            Item::Align(_) => {}
             Item::Label(label) => {
                 if after_dead_end.contains(&label.name) {
                     depth = None;
@@ -1412,21 +1408,11 @@ fn addressed_pass(
                 if !in_dead {
                     known.insert(label.name.clone(), depth.ok_or(Stop::Refused)?);
                 }
-                if build {
-                    out.push(Item::Label(label.clone()));
-                }
             }
             Item::Callee(callee) => {
                 depth = Some(depth.ok_or(Stop::Refused)? - callee.pops);
-                if build {
-                    out.push(Item::Callee(callee.clone()));
-                }
             }
-            Item::Mark(mark) => {
-                if build {
-                    out.push(Item::Mark(mark.clone()));
-                }
-            }
+            Item::Mark(_) => {}
             Item::Semantics(what) => {
                 let here = depth.ok_or(Stop::Refused)?;
                 // `pop` to memory addresses the cell with the stack already
@@ -1435,18 +1421,21 @@ fn addressed_pass(
                     (Operation::Pop, [place @ Loc::Mem(_)]) => here - width_of(place).unwrap_or(0),
                     _ => here,
                 };
-                // Every operand is checked; only the pass that builds copies
-                // the item, and only that one rewrites its places.
-                let mut placed = build.then(|| what.clone());
-                let rewritten =
-                    placed.as_mut().map(|one| one.dests.iter_mut().chain(one.sources.iter_mut()).collect::<Vec<_>>());
-                let mut rewritten = rewritten.map(Vec::into_iter);
-                for place in what.dests.iter().chain(what.sources.iter()) {
-                    let Some(through) = through_stack(place, at, slot, registers.pointer, registers.free) else {
-                        return Err(stop(procedure, &format!("the frame register is read as a value in {place:?}")));
+                // Every operand is checked; only the pass that builds rewrites
+                // its places, in the item it owns.
+                for place in what.dests.iter_mut().chain(what.sources.iter_mut()) {
+                    let replacement = match through_stack(place, at, slot, registers.pointer, registers.free) {
+                        Some(std::borrow::Cow::Owned(placed)) => Some(placed),
+                        Some(std::borrow::Cow::Borrowed(_)) => None,
+                        None => {
+                            return Err(stop(
+                                procedure,
+                                &format!("the frame register is read as a value in {place:?}"),
+                            ));
+                        }
                     };
-                    if let Some(target) = rewritten.as_mut().and_then(Iterator::next) {
-                        *target = through.into_owned();
+                    if let (true, Some(placed)) = (build, replacement) {
+                        *place = placed;
                     }
                 }
                 match what.op {
@@ -1538,13 +1527,10 @@ fn addressed_pass(
                     }
                     _ => {}
                 }
-                if let Some(one) = placed {
-                    out.push(Item::Semantics(one));
-                }
             }
         }
     }
-    Ok((out, assumed))
+    Ok(assumed)
 }
 
 /// Why `procedure` keeps its frame register, for `LLRM_DEBUG=frame`.
