@@ -2499,3 +2499,34 @@ fn a_scaled_lea_at_m16_has_no_literal_place() {
     }
     assert!(scaled > 0, "the function has a scaled lea");
 }
+
+const SHIFT_IN_MEMORY: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define void @f(ptr %p, i16 %n) {
+entry:
+  %v = load i16, ptr %p
+  %c = and i16 %n, 15
+  %r = shl i16 %v, %c
+  store i16 %r, ptr %p
+  ret void
+}
+";
+
+/// A variable shift of a value in memory is `shl [p], cl`: the form pins its
+/// amount to `cl`, which the glued copy wrote. Only the register forms read
+/// it, and `SHL16mCL` stopped the nib runtime's `N$PR4` with `missing source`.
+#[test]
+fn a_variable_shift_in_memory_reads_cl() {
+    let module = llrm_mir::parse::module(SHIFT_IN_MEMORY).expect("parses");
+    selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+}
+
+#[test]
+fn tmp_probe_file() {
+    let Ok(path) = std::env::var("SDAGC_LL") else { return };
+    let name = std::env::var("SDAGC_FN").unwrap();
+    let text = std::fs::read_to_string(path).unwrap();
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let r = selected(&module, &name, &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[]);
+    panic!("{:?}", r.err().map(|e| e.0));
+}

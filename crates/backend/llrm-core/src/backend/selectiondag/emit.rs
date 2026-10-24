@@ -897,6 +897,9 @@ impl Emitter<'_, '_> {
             return Ok(());
         }
         let Some(compare) = self.flag_insns.get(&producer).cloned() else {
+            if std::env::var_os("SDAGC_TMP").is_some() {
+                eprintln!("FLAGS producer t{producer} flags_now {:?}\n{}", self.flags_now, self.dag.dump());
+            }
             return Err(EmitError::Unsupported("flags overwritten between their producer and a consumer".to_owned()));
         };
         let at = self.next_address();
@@ -1006,7 +1009,7 @@ impl Emitter<'_, '_> {
             // a shift by `cl` has the amount as the value the `CopyToReg` glued
             // to it wrote to `CL`; the form pins that source to `cx`
             let implicit = || {
-                name.ends_with("rCL")
+                (name.ends_with("rCL") || name.ends_with("mCL"))
                     .then(|| self.accumulator.get(&llrm_lir::registers::RegId::CL).map(|held| Loc::Held(*held)))
                     .flatten()
             };
@@ -1262,7 +1265,7 @@ impl Emitter<'_, '_> {
     ) -> bool {
         self.glue_reaches(n, |name| {
             let name = name.split('|').next().unwrap_or(name);
-            matches!(name, "CDQ" | "CWD") || is_div_or_mul(name) || name.starts_with("REP_") || name.ends_with("rCL")
+            matches!(name, "CDQ" | "CWD") || is_div_or_mul(name) || name.starts_with("REP_") || name.ends_with("rCL") || name.ends_with("mCL")
         })
     }
 
