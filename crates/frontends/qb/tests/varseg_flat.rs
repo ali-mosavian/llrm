@@ -1,7 +1,7 @@
 //! DEF SEG where one address space has no segments.
 
-use qbfront::semantic::{compile_with_warnings, Options};
-use qbfront::{parse, Dialect};
+use llrm_qb::semantic::{compile_with_warnings, Options};
+use llrm_qb::{parse, Dialect};
 
 fn compiled(
     source: &str,

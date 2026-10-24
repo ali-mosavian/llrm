@@ -1,6 +1,6 @@
 //! The QB family's front: the scanner, the typed parser and the checker that
 //! holds it to what the real BC (QB 4.5, PDS 7.1, VBDOS) accepts. Calibrated
-//! against BC itself; see crates/frontends/lalrspike.
+//! against BC itself; see crates/frontends/qb/oracle.
 
 pub mod ast;
 pub mod check;

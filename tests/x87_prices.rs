@@ -39,7 +39,7 @@ fn compiled(
 /// qbfront's table.
 fn qb_functions() -> Vec<String> {
     let table = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/frontends/qbfront/src/intrinsics.rs"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/frontends/qb/src/intrinsics.rs"),
     )
     .unwrap();
     let mut names = Vec::new();

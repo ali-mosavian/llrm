@@ -53,7 +53,7 @@ pub(super) fn parsed_runtime_frames(source: &Path) -> Program {
 }
 
 pub(super) fn fixture(name: &str) -> PathBuf {
-    root().join("crates/frontends/qbfront/fixtures").join(name)
+    root().join("crates/frontends/qb/fixtures").join(name)
 }
 
 fn codegen() -> llrm_core::driver::Options {

@@ -16,7 +16,7 @@ parity tip at the time of the rebase). Same content as `origin/spike/lalr-nib-qb
 - Lexing: `front/scan.rs` (hand written, uses the logos `Word` DFA for reserved words) is what the parser
   uses; `front/lexer.rs` is a leftover logos path (only `logical_lines` is still called) and can go.
 - HIR of all fixture programs (vbdos, pds71, qb45, quickr) was byte-identical before and after the old-parser
-  removal. `qbfront` and `lalrspike` tests pass except the red tests below.
+  removal. `llrm-qb` tests pass except the red tests below.
 - Speed (`cargo run --release --example speed -p qbfront -- vbdos FILES`): on 330 programs / 235 KB:
   lex 41 MB/s, lex+parse 13 MB/s, +check 7.5 MB/s. The earlier logos + recursive descent was ~21-27 MB/s
   on a different corpus (737 files), so there is a regression. Callgrind: ~30% malloc/free,

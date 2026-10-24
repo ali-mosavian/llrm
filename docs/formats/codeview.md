@@ -170,5 +170,5 @@ PDS 7.1's CodeView 3, which evaluates BASIC:
 
 `tests/cv4.rs` (LINK `/CO`, CVPACK and CodeView under DOSBox-X; needs VB/DOS's tools, `LLRM_REQUIRE_CODEVIEW`
 makes a missing tool a failure), `crates/target/llrm-omf/src/cv4_tests.rs`, `cvwrite_tests.rs`, and
-`crates/frontends/llrm-qb/src/test_debug.rs`. Open items: [#1514](https://github.com/ali-mosavian/llrm/issues/1514),
+`crates/frontends/qb/src/test_debug.rs`. Open items: [#1514](https://github.com/ali-mosavian/llrm/issues/1514),
 [#892](https://github.com/ali-mosavian/llrm/issues/892), [#883](https://github.com/ali-mosavian/llrm/issues/883).

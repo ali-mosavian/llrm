@@ -2,7 +2,7 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use qbfront::Dialect;
+use llrm_qb::Dialect;
 
 fn main() -> ExitCode {
     let mut flags = llrm_core::driver::flags::Flags::default();
@@ -136,10 +136,10 @@ fn main() -> ExitCode {
         );
         return ExitCode::from(2);
     };
-    let args = qbfront::driver::Args {
+    let args = llrm_qb::hir_driver::Args {
         dialect,
         runtime,
-        options: qbfront::semantic::Options {
+        options: llrm_qb::semantic::Options {
             row_major,
             huge_arrays,
             checked_arrays,
@@ -156,7 +156,7 @@ fn main() -> ExitCode {
             far_bytes,
             // This is BC's command line: its /Zi writes BC's layout.
             bc_codeview: true,
-            ..qbfront::semantic::Options::default()
+            ..llrm_qb::semantic::Options::default()
         },
         debug,
         syntax,
@@ -164,7 +164,7 @@ fn main() -> ExitCode {
         dump_source,
         input: PathBuf::from(input),
     };
-    match qbfront::driver::compile(&args) {
+    match llrm_qb::hir_driver::compile(&args) {
         Ok(compiled) => {
             for warning in &compiled.warnings {
                 eprintln!("{warning}");

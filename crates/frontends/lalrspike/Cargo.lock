@@ -300,8 +300,8 @@ dependencies = [
  "lalrpop",
  "lalrpop-util",
  "llrm-nib",
+ "llrm-qb",
  "logos",
- "qbfront",
 ]
 
 [[package]]
@@ -366,10 +366,12 @@ dependencies = [
  "llrm-coff",
  "llrm-coff32",
  "llrm-coff64",
+ "llrm-dagisel",
  "llrm-dwarf",
  "llrm-elf32",
  "llrm-elf64",
  "llrm-hir",
+ "llrm-instr",
  "llrm-iselgen",
  "llrm-lir",
  "llrm-macho",
@@ -394,17 +396,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-dagisel"
+version = "0.1.0"
+
+[[package]]
 name = "llrm-driver"
 version = "0.1.0"
 dependencies = [
  "llrm-core",
  "llrm-lir",
+ "llrm-mir",
  "llrm-target",
  "llrm-x86",
  "llrm-x86-m16",
  "llrm-x86-m16-select",
  "llrm-x86-m32",
  "llrm-x86-m32-select",
+ "llrm-x86-m64",
+ "llrm-x86-m64-select",
 ]
 
 [[package]]
@@ -440,6 +449,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-env"
+version = "0.1.0"
+
+[[package]]
 name = "llrm-hir"
 version = "0.1.0"
 dependencies = [
@@ -450,9 +463,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-instr"
+version = "0.1.0"
+dependencies = [
+ "llrm-lir",
+ "toml",
+]
+
+[[package]]
 name = "llrm-iselgen"
 version = "0.1.0"
 dependencies = [
+ "llrm-instr",
  "llrm-lir",
  "llrm-peepgen",
  "llrm-support",
@@ -478,6 +500,9 @@ dependencies = [
 [[package]]
 name = "llrm-mir"
 version = "0.1.0"
+dependencies = [
+ "llrm-env",
+]
 
 [[package]]
 name = "llrm-nib"
@@ -486,6 +511,7 @@ dependencies = [
  "indexmap",
  "llrm-core",
  "llrm-driver",
+ "llrm-instr",
  "llrm-mir",
  "llrm-target",
  "llrm-transforms",
@@ -517,11 +543,34 @@ dependencies = [
 name = "llrm-peepgen"
 version = "0.1.0"
 dependencies = [
- "iced-x86",
  "indexmap",
+ "llrm-instr",
  "llrm-lir",
  "llrm-support",
  "serde",
+ "toml",
+]
+
+[[package]]
+name = "llrm-qb"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "llrm-core",
+ "llrm-driver",
+ "llrm-hir",
+ "llrm-mir",
+ "llrm-qbruntime",
+ "llrm-support",
+ "llrm-transforms",
+ "logos",
+ "num-bigint",
+ "num-traits",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
  "toml",
 ]
 
@@ -541,6 +590,7 @@ dependencies = [
  "iced-x86",
  "indexmap",
  "libc",
+ "llrm-env",
  "num-bigint",
  "num-traits",
  "rustc-hash",
@@ -553,6 +603,7 @@ name = "llrm-target"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
+ "llrm-instr",
  "llrm-lir",
  "llrm-mir",
  "toml",
@@ -574,7 +625,9 @@ name = "llrm-x86"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
+ "llrm-instr",
  "llrm-lir",
+ "llrm-mir",
  "llrm-support",
  "llrm-target",
  "toml",
@@ -599,6 +652,7 @@ version = "0.1.0"
 dependencies = [
  "iced-x86",
  "indexmap",
+ "llrm-instr",
  "llrm-iselgen",
  "llrm-lir",
  "llrm-mir",
@@ -628,6 +682,7 @@ name = "llrm-x86-m32"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
+ "llrm-instr",
  "llrm-iselgen",
  "llrm-lir",
  "llrm-mir",
@@ -637,6 +692,29 @@ dependencies = [
 
 [[package]]
 name = "llrm-x86-m32-select"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "llrm-core",
+ "llrm-iselgen",
+ "llrm-x86",
+]
+
+[[package]]
+name = "llrm-x86-m64"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "llrm-instr",
+ "llrm-iselgen",
+ "llrm-lir",
+ "llrm-mir",
+ "llrm-target",
+ "llrm-x86",
+]
+
+[[package]]
+name = "llrm-x86-m64-select"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
@@ -800,17 +878,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "qbfront"
-version = "0.1.0"
-dependencies = [
- "llrm-core",
- "llrm-driver",
- "llrm-hir",
- "llrm-qbruntime",
- "logos",
 ]
 
 [[package]]

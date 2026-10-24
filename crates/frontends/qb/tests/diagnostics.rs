@@ -2,13 +2,13 @@
 //! name or token at fault, and what to do. BC's name for the error stays in the
 //! message for anyone who knows it.
 
-use qbfront::{parse, Dialect};
+use llrm_qb::{parse, Dialect};
 
 /// The error for `source`, with its place as `line:column`.
 fn refused(
     source: &str,
     dialect: Dialect,
-) -> (String, qbfront::ParseError) {
+) -> (String, llrm_qb::ParseError) {
     let error = parse(source, dialect).expect_err("refused");
     (format!("{}:{}", error.span.line, error.span.start + 1), error)
 }
@@ -91,8 +91,8 @@ fn every_error_the_corpus_raises_is_worded() {
         let Ok(text) = std::fs::read_to_string(entry.path()) else { continue };
         let text = text.replace('\n', "\r\n");
         for dialect in [Dialect::QuickBasic45, Dialect::Pds71, Dialect::VbDos] {
-            if let Err(error) = qbfront::front::parse_coded(&text, dialect) {
-                let worded = qbfront::front::explain::explain(error.clone(), &text);
+            if let Err(error) = llrm_qb::front::parse_coded(&text, dialect) {
+                let worded = llrm_qb::front::explain::explain(error.clone(), &text);
                 if !worded.message.contains(" [BC: ") || worded.message.starts_with(&format!("{} (at", error.code)) {
                     unworded.entry(error.code.clone()).or_insert_with(|| entry.path().display().to_string());
                 }

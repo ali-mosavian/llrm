@@ -1855,10 +1855,10 @@ mod tests {
         let mut got: Vec<String> =
             _contracts(None).unwrap().iter().map(|(name, one)| format!("{name} {}", one.repr())).collect();
         got.sort();
-        let want: Vec<&str> = include_str!("../../../../tests/inputs/abi/runtime-contracts.txt").lines().collect();
+        let want: Vec<&str> = include_str!("../../../tests/inputs/abi/runtime-contracts.txt").lines().collect();
         assert_eq!(got, want);
         let order: Vec<&str> =
-            include_str!("../../../../tests/inputs/abi/runtime-contract-order.txt").lines().collect();
+            include_str!("../../../tests/inputs/abi/runtime-contract-order.txt").lines().collect();
         assert_eq!(CONTRACTS.keys().collect::<Vec<_>>(), order);
     }
 
@@ -1867,7 +1867,7 @@ mod tests {
         let mut got: Vec<String> =
             VARIANTS.iter().map(|((name, family), one)| format!("{name} {family} {}", one.repr())).collect();
         got.sort();
-        let want: Vec<&str> = include_str!("../../../../tests/inputs/abi/runtime-variants.txt").lines().collect();
+        let want: Vec<&str> = include_str!("../../../tests/inputs/abi/runtime-variants.txt").lines().collect();
         assert_eq!(got, want);
     }
 

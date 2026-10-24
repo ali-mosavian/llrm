@@ -1,7 +1,7 @@
 //! `x AS LONG` and `x%`.
 
-use qbfront::semantic::{compile_with_options, Options};
-use qbfront::{parse, Dialect};
+use llrm_qb::semantic::{compile_with_options, Options};
+use llrm_qb::{parse, Dialect};
 
 fn compiled(source: &str) -> Result<String, String> {
     let module = parse(source, Dialect::QuickBasic45).map_err(|error| error.message)?;

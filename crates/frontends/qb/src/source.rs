@@ -237,3 +237,11 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 }
+
+/// A DOS source file as text: no byte order mark, and no Ctrl-Z, which ends a
+/// DOS text file and which QB ignores.
+pub fn dos_text(bytes: &[u8]) -> String {
+    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    let text: Vec<u8> = bytes.iter().copied().filter(|&byte| byte != 0x1A).collect();
+    String::from_utf8_lossy(&text).into_owned()
+}

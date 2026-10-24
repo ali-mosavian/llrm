@@ -36,7 +36,7 @@ inferred from another. The Microsoft dialects are normally tested against
 their own runtime.
 
 The dialect is recorded once in the program profile. Feature checks query the
-`Dialect` predicates (`crates/frontends/qbfront/src/dialect.rs`) rather than being spread through action code as version comparisons.
+`Dialect` predicates (`crates/frontends/qb/src/dialect.rs`) rather than being spread through action code as version comparisons.
 
 ## Profile-controlled behavior
 
@@ -208,7 +208,7 @@ Microsoft profiles, `f"x"` is still the name `f` followed by a string.
 A value prints as Python's `str()` would print it: a float as the shortest
 text that reads back as the same SINGLE or DOUBLE. The compiler checks each
 spec against its value's type and reports Python's errors. The formatting
-itself is BASIC, in `crates/frontends/qbfront/src/semantic/prelude.bas`, which the
+itself is BASIC, in `crates/frontends/qb/src/semantic/prelude.bas`, which the
 compiler adds to programs that use f-strings. Its procedures reserve names
 beginning `QUICKR_`. Numbers are formatted from their exact decimal
 expansion, so `f`, `e`, `g` and `%` match Python digit for digit.

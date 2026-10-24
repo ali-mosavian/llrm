@@ -114,7 +114,7 @@ impl Frontend {
 fn _options(
     source: &Path,
     frontend: &Frontend,
-) -> Result<qbfront::driver::Args, FrontendError> {
+) -> Result<crate::hir_driver::Args, FrontendError> {
     let Frontend { dialect, runtime, array_order, .. } = frontend;
     if !DIALECTS.contains(&dialect.as_str()) {
         return Err(FrontendError(format!("unknown QB dialect '{dialect}'")));
@@ -126,11 +126,11 @@ fn _options(
         return Err(FrontendError(format!("unknown QB array order '{array_order}'")));
     }
     let dialect =
-        qbfront::Dialect::parse(dialect).ok_or_else(|| FrontendError(format!("unknown QB dialect '{dialect}'")))?;
-    Ok(qbfront::driver::Args {
+        crate::Dialect::parse(dialect).ok_or_else(|| FrontendError(format!("unknown QB dialect '{dialect}'")))?;
+    Ok(crate::hir_driver::Args {
         dialect,
         runtime: runtime.clone(),
-        options: qbfront::semantic::Options {
+        options: crate::semantic::Options {
             row_major: array_order == "row-major",
             huge_arrays: frontend.huge_arrays,
             float_store: frontend.float_store,
@@ -157,8 +157,8 @@ fn _options(
 }
 
 /// qbfront on `args`: its HIR text, or the refusal.
-fn _run(args: qbfront::driver::Args) -> Result<String, FrontendError> {
-    let compiled = qbfront::driver::compile(&args).map_err(FrontendError)?;
+fn _run(args: crate::hir_driver::Args) -> Result<String, FrontendError> {
+    let compiled = crate::hir_driver::compile(&args).map_err(FrontendError)?;
     // Warnings: the program still compiled.
     for warning in &compiled.warnings {
         eprintln!("{warning}");
@@ -171,7 +171,7 @@ pub fn syntax_checked(
     source: &Path,
     frontend: &Frontend,
 ) -> Result<(), FrontendError> {
-    _run(qbfront::driver::Args { syntax: true, .._options(source, frontend)? }).map(|_| ())
+    _run(crate::hir_driver::Args { syntax: true, .._options(source, frontend)? }).map(|_| ())
 }
 
 pub fn parsed(

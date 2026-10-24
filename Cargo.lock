@@ -560,14 +560,16 @@ dependencies = [
  "llrm-analysis",
  "llrm-core",
  "llrm-driver",
+ "llrm-hir",
  "llrm-mir",
  "llrm-object",
+ "llrm-qbruntime",
  "llrm-support",
  "llrm-transforms",
  "llrm-x86-m16",
+ "logos",
  "num-bigint",
  "num-traits",
- "qbfront",
  "regex",
  "rustc-hash",
  "serde",
@@ -847,17 +849,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "qbfront"
-version = "0.1.0"
-dependencies = [
- "llrm-core",
- "llrm-driver",
- "llrm-hir",
- "llrm-qbruntime",
- "logos",
 ]
 
 [[package]]

@@ -1,8 +1,8 @@
 //! A scalar's DIM that is not the name's first sight zeroes it (BC), and the
 //! first sight is of this procedure.
 
-use qbfront::semantic::{compile_with_options, Options};
-use qbfront::{parse, Dialect};
+use llrm_qb::semantic::{compile_with_options, Options};
+use llrm_qb::{parse, Dialect};
 
 fn compiled(source: &str) -> Result<String, String> {
     let module = parse(source, Dialect::QuickBasic45).expect("parses");

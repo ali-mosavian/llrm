@@ -1,6 +1,6 @@
-use qbfront::semantic::{compile_with_array_order, compile_with_options, Options};
-use qbfront::syntax::{Binary, ExitTarget, Expr, Literal, Procedure, Statement, TypeName};
-use qbfront::{compile, parse, Dialect};
+use llrm_qb::semantic::{compile_with_array_order, compile_with_options, Options};
+use llrm_qb::syntax::{Binary, ExitTarget, Expr, Literal, Procedure, Statement, TypeName};
+use llrm_qb::{compile, parse, Dialect};
 
 fn json_object_with<'a>(
     document: &'a str,
@@ -762,13 +762,13 @@ fn resume_and_on_local_error_are_structured_control_transfers() {
         &statements[0],
         Statement::OnError { label, local: true, .. } if label == "CAUGHT"
     ));
-    assert!(matches!(&statements[4], Statement::Resume { target: qbfront::syntax::ResumeTarget::Next, .. }));
+    assert!(matches!(&statements[4], Statement::Resume { target: llrm_qb::syntax::ResumeTarget::Next, .. }));
     assert!(matches!(
         &statements[5],
-        Statement::Resume { target: qbfront::syntax::ResumeTarget::Label(label), .. }
+        Statement::Resume { target: llrm_qb::syntax::ResumeTarget::Label(label), .. }
             if label == "100"
     ));
-    assert!(matches!(&statements[6], Statement::Resume { target: qbfront::syntax::ResumeTarget::Current, .. }));
+    assert!(matches!(&statements[6], Statement::Resume { target: llrm_qb::syntax::ResumeTarget::Current, .. }));
 }
 
 #[test]
@@ -1832,7 +1832,7 @@ fn eqv_negates_one_xor_without_pre_negating_the_left_operand() {
 
 #[test]
 fn qb_intrinsics_resolve_through_one_declarative_catalogue() {
-    use qbfront::intrinsics::{find, Effect, Lowering, ResultClass};
+    use llrm_qb::intrinsics::{find, Effect, Lowering, ResultClass};
 
     let sine = find("SIN", Dialect::QuickBasic45).expect("SIN is a QB intrinsic");
     assert_eq!(sine.lowering, Lowering::Sin);

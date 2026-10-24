@@ -1,5 +1,5 @@
 //! Parse and check speed: `speed DIALECT FILE...` reports lex, parse and full-front time over the files.
-use qbfront::{front, source, Dialect};
+use llrm_qb::{front, source, Dialect};
 use std::time::Instant;
 
 fn main() {

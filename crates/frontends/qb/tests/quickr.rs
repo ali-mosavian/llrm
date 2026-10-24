@@ -1,8 +1,8 @@
 //! QuickrBASIC's use-before-definition warning.
 
-use qbfront::front::{scan::scan as lex, token::TokenKind};
-use qbfront::semantic::{compile_with_warnings, Options};
-use qbfront::{parse, Dialect};
+use llrm_qb::front::{scan::scan as lex, token::TokenKind};
+use llrm_qb::semantic::{compile_with_warnings, Options};
+use llrm_qb::{parse, Dialect};
 
 fn warnings(source: &str) -> Vec<String> {
     let module = parse(source, Dialect::Quickr).expect("parses");
