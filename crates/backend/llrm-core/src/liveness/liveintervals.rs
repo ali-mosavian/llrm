@@ -510,37 +510,6 @@ impl LiveIntervals {
             .expect("an instruction of the block")
     }
 
-    /// The LiveIntervals update of `processTiedPairs`
-    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp#L1666>):
-    /// the copy `into := source` was put before `mi`, which now reads `into`.
-    /// `into` is live from the copy to `mi`, as a value of its own; `source`,
-    /// if `mi` ended its range and no longer reads it, ends at the copy. An
-    /// interval not held is made from the body as it is.
-    pub fn tied_copy_inserted(
-        &mut self,
-        copy: InstrKey,
-        mi: InstrKey,
-        into: u32,
-        source: u32,
-        mi_reads_source: bool,
-    ) {
-        let copy_at = self.indexes.get_instruction_index(copy).get_reg_slot(false);
-        let mi_at = self.indexes.get_instruction_index(mi);
-        if self.has_interval(into) {
-            let li = self.interval_mut(into);
-            let value = li.get_next_value(copy_at.clone());
-            li.add_segment(Segment::new(copy_at.clone(), mi_at.get_reg_slot(false), Some(value)));
-        }
-        if !mi_reads_source && self.has_interval(source) {
-            let base = mi_at.get_base_index();
-            let li = self.interval_mut(source);
-            let at = li.find_segment_containing(&copy_at);
-            if at != li.segments.len() && li.segments[at].end.get_base_index() == base {
-                li.segments[at].end = copy_at;
-            }
-        }
-    }
-
     /// `insertMachineInstrInMaps` for an instruction put immediately before
     /// `before` (or at the end of the block): the instruction is in the block,
     /// the indexes and the operand lists.

@@ -257,6 +257,27 @@ def failed_tests(output: str) -> list[str]:
     return list(dict.fromkeys(line.strip() for line in block.splitlines() if re.fullmatch(r"    [\w:]+", line)))
 
 
+# `unit X::did-not-run` / `integration-did-not-run` -> why: the first error lines of the cargo output, else the exit status and its last 20 lines. A refusal that named only the
+# token left #4269's author (refused twice) with nothing to read.
+CAUSES: dict[str, str] = {}
+
+
+def did_not_run_cause(
+    output: str,
+    returncode: int,
+) -> str:
+    lines = [line.rstrip() for line in output.splitlines() if line.strip()]
+    first = next((at for at, line in enumerate(lines) if re.match(r"(error|thread .* panicked)", line.lstrip())), None)
+    shown = lines[first : first + 8] if first is not None else [f"exit status {returncode}", *lines[-20:]]
+    return " | ".join(shown)[:600]
+
+
+def causes_of(names) -> str:
+    """` [name: cause; ...]` for the did-not-run names among `names` that have a recorded cause, else an empty string."""
+    text = "; ".join(f"{name}: {CAUSES[name]}" for name in sorted(names) if name in CAUSES)
+    return f" [{text}]" if text else ""
+
+
 def panic_reasons(output: str) -> dict[str, str]:
     """Each test's first panic message from a `cargo test` output: `thread 'NAME' (id) panicked at FILE:L:C:` and the line after it, with a `left:`/`right:` pair appended. A refusal that
     names only the test sent its author to rerun the runner's command to see what failed (#4172's `debug_assert_eq!`, which fires in the debug profile the runner uses and not in release)."""
@@ -528,6 +549,7 @@ def dependants_lib_failures(
         found = {f"unit {package}::{test}" for test in failed_tests(output)}
         if done.returncode and not found and "no library targets" not in output and "error: " in output:
             found = {f"unit {package}::did-not-run"}
+            CAUSES[f"unit {package}::did-not-run"] = did_not_run_cause(output, done.returncode)
         failed |= found
         passed += sum(int(count) for count in re.findall(r"test result: \w+\. (\d+) passed", output))
         names += [f"{package}::{name}" for name in re.findall(r"^test (\S+) \.\.\. (?:ok|FAILED)$", output, re.M)]
@@ -640,6 +662,7 @@ def integration_failures(
     found = set(red_tests(done.stdout))
     if done.returncode and not found:
         found = {"integration-did-not-run"}
+        CAUSES["integration-did-not-run"] = did_not_run_cause(done.stdout, done.returncode)
     return found - xfail.load().keys()
 
 

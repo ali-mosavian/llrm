@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 187 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 188 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -21,6 +21,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | canonical | Canonical forms, as LLVM's InstCombine puts them: compares with the constant on the right, no neutral terms, and a zero test at the width of what it tests, so that every later pass matches one shape of each. | Not a step of the fixed point on its own: `fold` runs `compares` and | [canonical](canonical.md) |
 | cfg | Control-flow cleanup: a block that jumps unconditionally to a block only it reaches takes that block's instructions (LLVM's SimplifyCFG `MergeBlockIntoPredecessor`). | A library function, called by `decide` after it decides branches and by | [cfg](cfg.md) |
 | cgpaddr | CodeGenPrepare: comparison and address sinking, so isel sees one form: LLVM's `sinkCmpExpression`, `sinkAndCmp0Expression` and `optimizeMemoryInst` (address-mode sinking, below), and GVNSink's merge of equal arms. | Once, last of the function passes before `spares` and `homes`, after | [cgpaddr](cgpaddr.md) |
+| cgpbranch | CodeGenPrepare's `optimizeBranch`: a branch on a compare with a constant becomes a branch on a compare with zero of a value a successor computes anyway, where the target prefers one ([CodeGenPrepare.cpp#L8878](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L8878)). | In `cgpaddr`'s run, before the compare sinks. | [cgpbranch](cgpbranch.md) |
 | combine | One worklist over a function's instructions: each is visited, simplified to a value it equals when its operands say so, and what read it is visited again. | `combine_pass::Combine`, the `combine@N` slots of LLVM's order. | [combine](combine.md) |
 | combine_add_idioms | `visitAdd` after `x + x`: the negation and not identities, the reassociations of an add with an add or sub, and the bitwise identities. | `combine_addsub::visit_add`. | [combine_add_idioms](combine_add_idioms.md) |
 | combine_addsub | InstCombine's `visitAdd` and the helpers it calls, from [`InstCombineAddSub.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAddSub.cpp) at d1106deb71cc. | `combine::visit`, once the add family's slot is flipped. | [combine_addsub](combine_addsub.md) |

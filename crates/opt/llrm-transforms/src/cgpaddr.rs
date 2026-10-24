@@ -169,6 +169,11 @@ impl FunctionPass for CgpAddr {
         // fold a phi into an addressing mode.
         let merged = crate::emptyblocks::eliminated(unit.context, unit.function);
         let closed = trivial_phis(unit.context, unit.layout, unit.function);
+        let branched = crate::cgpbranch::branches_optimized(
+            unit.context,
+            unit.function,
+            analyses.outer().target().lowering().as_deref(),
+        );
         // Blocks and edges are as they were.
         let one_flag = !analyses.outer().target().multiple_condition_registers();
         let sunk_compares = one_flag && compares_sunk(unit.function);
@@ -194,7 +199,7 @@ impl FunctionPass for CgpAddr {
         if merged {
             // A block went: the blocks and edges are not as they were.
             PreservedAnalyses::none()
-        } else if phis || sunk_compares || masks || addresses || extended || sunk_casts {
+        } else if phis || branched || sunk_compares || masks || addresses || extended || sunk_casts {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else if closed {
             // A phi's value is replaced by the one it equalled: the blocks and
