@@ -14,10 +14,10 @@ Order is the pin's. Status: done, partial, todo, blocked (blocker, date).
 | 4 | `AllUsesDominatedByBlock` | #L649 | `all_uses_dominated_by` | done |
 | 5 | `mayLoadFromGOTOrConstantPool` | #L709 | none | todo, with 6 |
 | 6 | `FindCycleSinkCandidates` | #L725 | none | deferred: `SinkInstsIntoCycle` is `cl::init(false)` (#L76) and no target enables it; needs 13/14 (row 65 piece 2) and `hasLowDefLatency`. Land after 13/14, flag off |
-| 7 | `run` | #L840 | `sunk` | partial: no `UseBlockFreqInfo` path (#L77), no SinkLoad thresholds (#L91/#L97) |
+| 7 | `run` | #L840 | `sunk` | done: block frequencies order the successors (`frequency`), the SinkLoad thresholds (#L91/#L97) are in `has_store_between`; `onEdgeSplit` n/a (the frequencies are made again each round) |
 | 8 | `ProcessBlock` | #L959 | `process_block` | partial: reverse walk done, cycle candidates missing |
 | 9 | `ProcessDbgInst` | #L1022 | none | n/a: LIR has no debug instructions; note only |
-| 10 | `isWorthBreakingCriticalEdge` | #L1040 | `worth_breaking_critical_edge` | blocked: `SplitEdgeProbabilityThreshold` (#L82) needs `MachineBranchProbabilityInfo::of(&LirBody).get_edge_probability(block, succ_index)` (w-5, accessor done in #3845); MBFI exists (`liveness::blockfrequency::MachineBlockFrequencyInfo`); DEVIATE M5 in size builds |
+| 10 | `isWorthBreakingCriticalEdge` | #L1040 | `worth_breaking_critical_edge` | done: `SplitEdgeProbabilityThreshold` from `edge_probabilities`; DEVIATE M5 in size builds |
 | 11 | `isLegalToBreakCriticalEdge` | #L1111 | `legal_to_break_critical_edge` | done |
 | 12 | `PostponeSplitCriticalEdge` | #L1175 | `postpone_split_critical_edge` | done |
 | 13 | `registerPressureSetExceedsLimit` | #L1242 | none | blocked: region register pressure sets = row 65 piece 2 (w-2, 11-06); M2 stands until then |
@@ -27,7 +27,7 @@ Order is the pin's. Status: done, partial, todo, blocked (blocker, date).
 | 17 | `SinkingPreventsImplicitNullCheck` | #L1521 | none | todo: needs implicit-null-check marking; absent on LIR, note only if no ImplicitNullChecks pass lands |
 | 18 | `attemptDebugCopyProp` | #L1566 | none | n/a: debug info |
 | 19 | `performSink` | #L1618 | in `sink_instruction` | done |
-| 20 | `hasStoreBetween` | #L1660 | `safe_to_move` | partial: ours is whole-path; the pin's per-block cache and thresholds (#L1704) missing; M1 |
+| 20 | `hasStoreBetween` | #L1660 | `safe_to_move` | done but `mayAlias(AA, MI)` (M7: every store, call and ordered access counts; needs memory operands with an alias query on LIR); the per-block cache and thresholds are in |
 | 21 | `aggressivelySinkIntoCycle` | #L1754 | none | deferred with 6; DEVIATE M3 today |
 | 22 | `SinkInstruction` | #L1845 | `sink_instruction` | partial: M1, M4 (size rule), M6 |
 | 23 | `SalvageUnsunkDebugUsersOfCopy` | #L2005 | none | n/a: debug info |
@@ -35,7 +35,7 @@ Order is the pin's. Status: done, partial, todo, blocked (blocker, date).
 
 ## Order of work
 
-1. 11-02: 20 per-block store cache and thresholds; 7/8 SinkLoad thresholds; 1, 2, 5 where LIR has the input.
+1. Done: 7, 10, 20 (see the table). Left with an input: 2 (`PerformTrivialForwardCoalescing`, 5 of 21 copies in d_faces), M7's alias query (needs LIR memory operands with AA).
 2. 11-06: 13/14/15 after row 65 piece 2 lands; 6/8/21 cycle sinking.
-3. 11-10: 24 PostRAMachineSink; 10 once #3845 lands; the `UseBlockFreqInfo` path (#L77) can start now on the existing MBFI.
+3. 11-10: 24 PostRAMachineSink.
 4. Each step: a source test, a premise assertion, and the DEVIATE it retires (M1, M2, M3, M5).
