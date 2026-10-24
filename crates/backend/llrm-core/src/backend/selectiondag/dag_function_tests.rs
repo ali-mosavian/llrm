@@ -1188,11 +1188,11 @@ entry:
 ";
 
 /// A float call result is the stack's top after the call (an unnamed load of no
-/// cell); one live across another call that returns a float cannot stay on the
-/// x87 stack (the stackifier refuses it: RFP-5) and the function is refused,
-/// not left to fail the compile.
+/// cell); one live across another call that returns a float is selected too:
+/// the float allocator spills it around the call and the stackifier takes the
+/// result under the reload (RFP-5, fpstack #4362).
 #[test]
-fn a_float_result_is_the_stack_top_and_none_lives_across_a_call() {
+fn a_float_result_is_the_stack_top_and_one_may_live_across_a_call() {
     use crate::model::ir::{Loc, Operation};
     let module = llrm_mir::parse::module(FLOAT_CALL).expect("parses");
     let cpu = crate::backend::cpu::profile("486").expect("a cpu");
@@ -1207,8 +1207,7 @@ fn a_float_result_is_the_stack_top_and_none_lives_across_a_call() {
         }),
         "an unnamed load of the stack top"
     );
-    let why = selected(&module, "h", &llrm_x86_m32::M32, cpu, &[]).err().map(|e| e.0);
-    assert!(why.as_deref().is_some_and(|why| why.contains("live across")), "{why:?}");
+    selected(&module, "h", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
 }
 
 const FLOAT_ACROSS_VOID_CALL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -1222,8 +1221,7 @@ entry:
 }
 ";
 
-/// A float live across a call that returns no float is selected: the float
-/// allocator spills it around the call (the net refused every such function).
+/// A float live across a call that returns no float is selected too.
 #[test]
 fn a_float_live_across_a_call_that_returns_no_float_is_selected() {
     let module = llrm_mir::parse::module(FLOAT_ACROSS_VOID_CALL).expect("parses");
@@ -1956,8 +1954,7 @@ entry:
 ";
 
 /// A far cell and a double in one function were refused as a pair ('floating
-/// values with far cells'); only a double live across the far access is
-/// (the stackifier counts the ES load as a boundary).
+/// values with far cells'); neither refusal is left.
 #[test]
 fn a_double_not_live_across_a_far_cell_is_selected() {
     let module = llrm_mir::parse::module(M16_FAR_AND_DOUBLE).expect("parses");
@@ -2167,6 +2164,32 @@ fn a_remainder_used_by_a_store_and_an_address_is_selected() {
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
 
+const INLINE_CODE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+declare i32 @llrm.ia16.code.89a60000.2p0(ptr)
+define i32 @f() {
+entry:
+  %slot = alloca i16
+  %r = call i32 @llrm.ia16.code.89a60000.2p0(ptr %slot)
+  ret i32 %r
+}
+";
+
+/// Inline code (`llrm.ia16.code`) is laid down at its site, the frame place it
+/// names patched in as a displacement from BP: the emitter had no arm for the
+/// node and refused "opcode 30013" (QCport's `__emit__`, 3 functions).
+#[test]
+fn inline_code_is_laid_down_at_its_site_with_its_frame_place() {
+    let module = llrm_mir::parse::module(INLINE_CODE).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    assert_eq!(done.inline.len(), 1, "{:?}", done.inline);
+    let (at, bytes) = done.inline.iter().next().unwrap();
+    assert_eq!(done.inline_places.get(at).map(Vec::len), Some(1));
+    assert!(!done.far.contains(at), "inline code is no far call");
+    let (_, disp, addend) = done.inline_places[at][0];
+    assert_eq!(u16::from_le_bytes([bytes[2], bytes[3]]), (disp + addend) as u16);
+}
+
 const BYVAL_ODD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
 declare void @g(ptr byval([41 x i8]) %p)
 define void @f(ptr %q) {
@@ -2185,4 +2208,22 @@ fn an_odd_sized_byval_argument_is_stored_in_place_at_m16() {
     let module = llrm_mir::parse::module(BYVAL_ODD).expect("parses");
     selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
+}
+
+const LRINT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(double %x) {
+entry:
+  %r = call i32 @llvm.lrint.i32.f64(double %x)
+  ret i32 %r
+}
+declare i32 @llvm.lrint.i32.f64(double)
+";
+
+/// `lrint` of an x87 value is `fist` into a stack slot and a load (the pin's
+/// `IST_Fp32m64`); `CannotSelect(LRint)` refused 7 qb functions, the ones that
+/// round a float to an integer (`CINT`).
+#[test]
+fn an_lrint_of_a_double_is_a_fist_and_a_load() {
+    let made = names(LRINT).unwrap_or_else(|why| panic!("{why}"));
+    assert!(made.iter().any(|name| name.starts_with("fist")), "{made:?}");
 }

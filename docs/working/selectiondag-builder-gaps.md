@@ -14,7 +14,7 @@ Survey of `SelectionDAGBuilder.cpp` at the pin (d1106deb71cc) against `selection
 | `visitIntrinsicCall`: port in/out | `Intrinsic::{PortIn, PortOut}` | open, none in the corpus | llrm's own (`llvm.x86.*` are the pin's analogue); a node pair like `LLRM_ASM` |
 | `visitMemCmpBCmpCall`, `visitStrCpyCall`, `visitStrLenCall`, ... | calls of `memcmp`, `strlen`, ... | none | X86 has no `EmitTargetCodeFor*` for them, so the pin makes the same call |
 | `visitMaskedLoad`, `visitVP*`, vector ops, `visitVectorReduce` | no vector MIR | deferred | vectors wait for 32-bit parity |
-| `visitAtomic*`, `visitFence` | no atomic MIR | none | |
+| `visitAtomic*`, `visitFence` | no atomic MIR opcode and no `__atomic`/`__sync` in the Watcom front end (checked 2026-10-24): no program can exist | none | |
 | `visitResume`, `visitCatchPad`, `visitCallBr`, `visitIndirectBr`, `visitStackmap`, `visitPatchpoint` | no MIR source, or QB's runtime handles it | none | |
 | `visitVAArg` | no `va_arg` in MIR | none | frontends lower it |
 | `lowerStartEH`/`lowerEndEH` | `EH_LABEL`s | none | SD102 |

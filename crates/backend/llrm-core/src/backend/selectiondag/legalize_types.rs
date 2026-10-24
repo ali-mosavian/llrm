@@ -1033,9 +1033,9 @@ impl<'a> TypeLegalizer<'a> {
     }
 
     /// `ExpandIntRes_MUL` through `expandMUL_LOHI`: the full product of the low
-    /// halves, plus the two cross products in the high half. The cases that
-    /// need known bits (a zero-extended or sign-extended operand, SD202) and
-    /// the library call are not translated.
+    /// halves, plus the two cross products in the high half. Two operands that
+    /// are both zero-extended or both sign-extended (by their known bits) need
+    /// no cross products. The library call is not translated.
     fn expand_mul(
         &mut self,
         value: SDValue,
@@ -1043,6 +1043,33 @@ impl<'a> TypeLegalizer<'a> {
     ) -> Result<(SDValue, SDValue), LegalizeError> {
         let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
         let ((ll, lh), (rl, rh)) = (self.expanded_integer(lhs), self.expanded_integer(rhs));
+        // "The inputs are both zero-extended" and "both sign-extended".
+        let bits = half.size_in_bits();
+        let outer = self.dag.value_type(value).size_in_bits();
+        let high_mask = super::fold::mask(outer) & !super::fold::mask(bits);
+        let widening = |this: &mut Self, signed: bool| {
+            let (op, other) = if signed { (ISD::SMulLoHi, ISD::MulHS) } else { (ISD::UMulLoHi, ISD::MulHU) };
+            if this.tli.is_operation_legal_or_custom(op, half) {
+                let both = this.dag.get_node_multi(op, &[half, half], &[ll, rl]);
+                Some((both, SDValue { node: both.node, res: 1 }))
+            } else if this.tli.is_operation_legal_or_custom(other, half) {
+                Some((this.dag.get_node(ISD::Mul, half, &[ll, rl]), this.dag.get_node(other, half, &[ll, rl])))
+            } else {
+                None
+            }
+        };
+        if super::known_bits::masked_value_is_zero(self.dag, lhs, high_mask)
+            && super::known_bits::masked_value_is_zero(self.dag, rhs, high_mask)
+            && let Some(pair) = widening(self, false)
+        {
+            return Ok(pair);
+        }
+        if super::known_bits::max_significant_bits(self.dag, lhs) <= bits
+            && super::known_bits::max_significant_bits(self.dag, rhs) <= bits
+            && let Some(pair) = widening(self, true)
+        {
+            return Ok(pair);
+        }
         let (lo, hi) = if self.tli.is_operation_legal_or_custom(ISD::UMulLoHi, half) {
             let both = self.dag.get_node_multi(ISD::UMulLoHi, &[half, half], &[ll, rl]);
             (both, SDValue { node: both.node, res: 1 })

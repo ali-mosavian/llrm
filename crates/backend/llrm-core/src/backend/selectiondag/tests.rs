@@ -13,6 +13,7 @@ fn arg(
 }
 
 mod action_table;
+mod add_simplify;
 mod and_fold;
 mod and_simplify;
 mod bit_counts;
@@ -56,6 +57,7 @@ mod select_i1;
 mod setcc_i1_operands;
 mod setcc_result;
 mod setcc_simplify;
+mod shift_simplify;
 mod switch_dags;
 mod switches;
 mod type_actions;
