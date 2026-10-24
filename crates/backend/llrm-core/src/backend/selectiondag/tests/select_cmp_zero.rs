@@ -72,3 +72,24 @@ fn a_select_on_the_low_bit_without_cmov_is_arithmetic() {
     let (dag, root) = lowered(|dag, [_, y, z]| (dag.get_node(ISD::And, EVT::I32, &[y, z]), y));
     assert!(!has(&dag, root, x86isd::CMOV), "and identity");
 }
+
+/// The CRC step as the IR has it: `select (trunc c to i1), y ^ z, y` is a
+/// select on the raw bit `c & 1`, the same arithmetic with the arms swapped.
+#[test]
+fn a_select_on_a_raw_low_bit_is_arithmetic_too() {
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    let mut dag = dag();
+    let [x, y, z] = [5, 6, 7].map(|r| dag.get_register(EVT::I32, r));
+    let one = dag.get_constant(1, EVT::I32);
+    let bit = dag.get_node(ISD::And, EVT::I32, &[x, one]);
+    let flipped = dag.get_node(ISD::Xor, EVT::I32, &[y, z]);
+    let root = dag.get_select(EVT::I32, bit, flipped, y);
+    dag.set_root(root);
+    let want = |(a, b, c): (u32, u32, u32)| if a & 1 != 0 { b ^ c } else { b };
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false }).run().unwrap();
+    let root = dag.get_root();
+    assert!(!has(&dag, root, x86isd::CMOV));
+    for (a, b) in SAMPLES.iter().flat_map(|&a| SAMPLES.iter().map(move |&b| (a, b))) {
+        assert_eq!(eval(&dag, root, (a, b, 5)), want((a, b, 5)), "x={a:#x} y={b:#x}");
+    }
+}

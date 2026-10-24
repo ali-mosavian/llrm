@@ -610,6 +610,12 @@ fn lower_select(
             cond = lowered;
         }
     }
+    // A raw condition `x & 1` is `(x & 1) == 0` with the arms swapped.
+    if dag.opcode(cond) == ISD::And && dag.constant(dag.operand(cond, 1)) == Some(1) {
+        if let Some(lowered) = select_with_cmp_zero(dag, cond, op2, op1, cond::E, can_cmov) {
+            return Some(lowered);
+        }
+    }
     if dag.opcode(cond) == x86isd::SETCC && dag.opcode(dag.operand(cond, 1)) == x86isd::CMP {
         let cmp = dag.operand(cond, 1);
         if dag.is_null_constant(dag.operand(cmp, 1)) {
