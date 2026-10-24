@@ -57,13 +57,25 @@ impl AaProvider for BasicAaProvider<'_> {
 pub struct LoopIdiom {
     pub options: Options,
     pub library: Library,
+    /// The routines the compile states the program links.
+    pub routines: Vec<llrm_mir::libfunc::Routine>,
 }
 
 impl LoopIdiom {
     /// The library calls a DOS target has: `memset` and `memcpy`, no
     /// `memset_pattern16`.
     pub fn new() -> Self {
-        Self { options: Options::default(), library: Library { memset: true, memset_pattern16: false, memcpy: true } }
+        Self::with_routines(Vec::new())
+    }
+
+    /// The pass over a compile that states the library `routines` its program
+    /// links (the pin's `TargetLibraryInfo`).
+    pub fn with_routines(routines: Vec<llrm_mir::libfunc::Routine>) -> Self {
+        Self {
+            options: Options::default(),
+            library: Library { memset: true, memset_pattern16: false, memcpy: true },
+            routines,
+        }
     }
 }
 
@@ -143,6 +155,7 @@ impl FunctionPass for LoopIdiom {
                 cur_loop,
             };
             let mut idiom = LoopIdiomRecognize::new(self.options, self.library);
+            idiom.routines = self.routines.clone();
             if idiom.run_on_loop(&mut run) == Some(true) {
                 changed = true;
                 let cx = env.cx(&*unit.context, &*unit.function);

@@ -17,7 +17,7 @@ architecture-order: 290
 | `getUnderlyingObject` (ValueTracking.cpp) | `object_of`, `MemRef::of` decomposition | valuetracking-port's API, used from S1 |
 | `BasicAAResult::aliasCheck`, `aliasGEP`, `aliasPHI`, `aliasSelect` (each arm checked) | `Apart`, `regions::overlapping`, provenance sets with join rules | S2 |
 | `CaptureTracking.cpp`: `PointerMayBeCaptured`, `isNonEscapingLocalObject`, `EarliestEscapeAnalysis` | `escapes`, `EscapedBefore`, `ExposedFrames` | S1; the independent check is `capturecheck.rs` (#2146) |
-| `getModRefInfo(Call, Loc)`, `getArgModRefInfo`, `MemoryEffects` | `CallEffects`, `Summaries`, `calls_annotated` | S3, needs per-parameter `nocapture` from function-attrs (cgscc-poc) |
+| `getModRefInfo(Call, Loc)`, `getArgModRefInfo`, `MemoryEffects` | `call_mod_ref`, `get_memory_effects`, `get_arg_mod_ref_info` in `basicaa.rs` (`CallEffects` is deleted); `getModRefInfo(Call1, Call2)` since #3799 (DEVIATE AA-D1) | S3: per-parameter `nocapture` from function-attrs (cgscc-poc) still blocks the inferred ones |
 | `GlobalsModRef` | `GlobalsAA` | S4 |
 | TBAA, scoped noalias | `MemRef.typed`, restrict roots | with S2 |
 | `MemoryLocation::get`, `LocationSize` | `MemRef` width | S1 |
@@ -54,7 +54,7 @@ Each call against each load/store pointer (one entry per pointer and size), then
 | Mod | Mod | 1,445 |
 | NoModRef | ModRef | 18 |
 
-The 18 are call-against-call pairs in `floats-O2`: `bench_floats_` (declared `memory(inaccessiblemem: readwrite)`) against `report_` (no attributes). LLVM says ModRef: an unknown callee may touch inaccessible memory; llrm's `CallEffects` for an unknown callee lists the escaped objects and the tracked globals only, and says nothing of inaccessible memory, so the pair is NoModRef. Reachable on main today? Nothing asks a call about a call (GVN numbers only `memory(none)` calls, and a `TIMER` call stays in its loop beside a `PRINT`), so no; it is a hazard for any client that asks (EarlyCSE's read-only call CSE on MemorySSA, call-use clobbers). The fix is a token for inaccessible memory in the footprint of an unknown call, at S3.
+The 18 are call-against-call pairs in `floats-O2`: `bench_floats_` (declared `memory(inaccessiblemem: readwrite)`) against `report_` (no attributes). LLVM says ModRef. They were a hazard when `CallEffects` listed no inaccessible memory; that table is gone, `call_mod_ref` handles `InaccessibleMem`, and the pair is ModRef as in the pin (checked against the pinned `opt -passes=aa-eval -aa-pipeline=basic-aa`, 2026-10-22). The real gap was `AAResults::getModRefInfo(Call1, Call2)`, which answered ModRef for every pair; it is translated in #3799 (readnone, both read-only, argument-pointee and inaccessible-only pairs).
 
 ### First table (oracle 2, `tools/aliascompare.py --basic` of #2176)
 

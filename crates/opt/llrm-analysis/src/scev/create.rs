@@ -330,6 +330,7 @@ impl ScalarEvolution {
         cx: &Cx,
         v: Operand,
     ) -> Scev {
+        llrm_mir::counts::bump(llrm_mir::counts::Event::ScevNodes);
         // A value that is not an instruction or argument has no entry in the
         // map: it is made at once.
         if !matches!(v, Operand::Value(_)) {

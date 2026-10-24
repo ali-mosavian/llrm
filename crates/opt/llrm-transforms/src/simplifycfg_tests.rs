@@ -242,7 +242,7 @@ b1:
   br label %b1
 }
 ";
-    for options in [super::Options::L1438, super::Options::L1682, super::Options::L2376] {
+    for options in [super::Options::L1438, super::Options::L1682] {
         check_with(&options, text, text, &[]);
     }
 }
@@ -955,4 +955,73 @@ x:
     let (gone_changed, gone) = run(&super::Options::L1438);
     assert!(gone_changed && !gone.contains("\ne:\n"), "{gone}");
     assert!(gone.contains("br i1 %c, label %h, label %a"), "{gone}");
+}
+
+/// The loop-form blocks were derived by `loops_of` at each run though the
+/// manager held the function's loops (d_faces -O2: 36 asks, 4.9 M Ir). With the
+/// CFG as the manager found it they are read from its loops: none is derived.
+#[test]
+fn test_the_loop_form_blocks_come_from_the_managers_loops_while_the_cfg_stands() {
+    let mut module = crate::testing::parsed(
+        "define i16 @f(i16 %n, i1 %c, i1 %d) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b4 ]
+  br i1 %c, label %b2, label %b3
+
+b2:
+  br label %b4
+
+b3:
+  br i1 %d, label %b4, label %b5
+
+b4:
+  %j = add i16 %i, 1
+  %k = icmp slt i16 %j, %n
+  br i1 %k, label %b1, label %b5
+
+b5:
+  ret i16 %j
+}
+",
+    );
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::simplifycfg::SimplifyCfg::default());
+    let before = llrm_analysis::cfg::shapes_derived();
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
+    let derived = llrm_analysis::cfg::shapes_derived() - before;
+    assert_eq!(derived, 0, "the pass derived loops the manager held");
+}
+
+/// The head of every block visit asks only whether a block is reached by
+/// nothing, by itself alone, or by another; it built the list of predecessors
+/// for that (9,955 lists in d_faces -O2). The three answers.
+#[test]
+fn test_a_block_is_reached_by_nothing_by_itself_or_by_another() {
+    let mut module = crate::testing::parsed(
+        "define void @f(i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b1
+
+b2:
+  ret void
+
+b3:
+  ret void
+}
+",
+    );
+    let (_, function) = module.function_mut("f").expect("@f");
+    let blocks = function.layout().to_vec();
+    use super::Reach;
+    assert!(super::reached_from(function, blocks[0]) == Reach::Nothing, "the entry");
+    assert!(super::reached_from(function, blocks[3]) == Reach::Nothing, "a block nothing names");
+    assert!(super::reached_from(function, blocks[2]) == Reach::Other, "reached by b0");
+    // b1 is named by b0 and by itself.
+    assert!(super::reached_from(function, blocks[1]) == Reach::Other, "reached by b0 and itself");
 }

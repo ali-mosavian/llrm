@@ -14,7 +14,7 @@ fn semantics(
     dests: Vec<Loc>,
     sources: Vec<Loc>,
 ) -> Semantics {
-    Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+    Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
 }
 
 fn rl(
@@ -281,7 +281,7 @@ fn test_a_tied_producer_works_on_the_register_that_already_holds_its_value() {
 fn stosd(at: i64) -> Arc<Insn> {
     use crate::model::ir::Mem;
     let what = Semantics {
-        name: Some("stosd".to_owned()),
+        name: Some("stosd".into()),
         dests: vec![Loc::Mem(Mem::new(None, 0)), rl(RegId::DI, 2), rl(RegId::CX, 2)],
         sources: vec![rl(RegId::EAX, 4), rl(RegId::CX, 2), rl(RegId::DI, 2), rl(RegId::ES, 2)],
         ..Semantics::new(Operation::Fill)
@@ -307,7 +307,7 @@ fn test_a_copy_is_not_forwarded_across_a_string_store_that_writes_its_source() {
 fn test_a_copy_is_not_forwarded_across_a_string_move_that_writes_its_source() {
     use crate::model::ir::Mem;
     let what = Semantics {
-        name: Some("movsd".to_owned()),
+        name: Some("movsd".into()),
         dests: vec![Loc::Mem(Mem::new(None, 0)), rl(RegId::SI, 2), rl(RegId::DI, 2), rl(RegId::CX, 2)],
         sources: vec![Loc::Mem(Mem::new(None, 0)), rl(RegId::CX, 2), rl(RegId::SI, 2), rl(RegId::DI, 2)],
         ..Semantics::new(Operation::Copy)

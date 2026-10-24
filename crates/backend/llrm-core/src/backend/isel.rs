@@ -225,6 +225,7 @@ pub mod api {
 mod unwind;
 
 pub use matcher::Compiled;
+pub(crate) use matcher::reads_invariant_memory;
 #[cfg(feature = "fixtures")]
 pub use matcher::selector;
 #[cfg(test)]
@@ -353,7 +354,10 @@ fn passing(
             let Some(found) = entry(arch, convention, variadic) else {
                 return refuse(format!("calling convention {convention}"));
             };
-            let pops = convention == llrm_mir::opcode::FAST || found.cleanup == Cleanup::Callee;
+            // `fastcc` is C's callee-pop twin unless the description states a
+            // `fastcc` of its own.
+            let twin = convention == llrm_mir::opcode::FAST && found.cc.as_deref() != Some("fast");
+            let pops = twin || found.cleanup == Cleanup::Callee;
             Ok(Passing {
                 in_order: found.order == Order::LeftToRight,
                 pops,
@@ -446,7 +450,7 @@ fn in_the_frame(attributes: &[Vec<llrm_mir::Attribute>]) -> Result<(), Unselecte
 
 /// `function`'s convention: the return address, BP, then its arguments,
 /// the last pushed nearest.
-fn convention(
+pub fn convention(
     module: &Module,
     layout: &DataLayout,
     global: GlobalId,
@@ -454,22 +458,51 @@ fn convention(
 ) -> Result<Convention, Unselected> {
     let global = module.global(global);
     let Some(function) = global.function() else { return refuse("a variable has no convention") };
-    in_the_frame(&function.parameter_attrs)?;
     let interrupt = function.calling_convention == llrm_mir::opcode::X86_INTR;
     let first = match () {
         _ if interrupt => crate::backend::masm::interrupt_parameters(),
         _ => arch.first_argument_offset(far(global)?),
     };
-    let (_, _, variadic) = module.signature(function.ty);
-    let Passing { in_order, pops, registers } = passing(arch, function.calling_convention, variadic)?;
+    let param_types: Vec<TypeId> = function.parameters().iter().map(|&one| function.value(one).ty).collect();
+    let (result, _, variadic) = module.signature(function.ty);
+    convention_for(
+        module,
+        layout,
+        arch,
+        first,
+        function.calling_convention,
+        result,
+        variadic,
+        &param_types,
+        &function.parameter_attrs,
+    )
+}
+
+/// The convention of a function type's `types`, which is `function`'s
+/// parameters or, for a call, its arguments': where each arrives, where the
+/// result leaves, and what is popped. `first` is the displacement of the
+/// first stack argument.
+pub fn convention_for(
+    module: &Module,
+    layout: &DataLayout,
+    arch: &dyn llrm_target::Target,
+    first: i64,
+    calling_convention: u32,
+    result: TypeId,
+    variadic: bool,
+    param_types: &[TypeId],
+    parameter_attrs: &[Vec<llrm_mir::Attribute>],
+) -> Result<Convention, Unselected> {
+    in_the_frame(parameter_attrs)?;
+    let interrupt = calling_convention == llrm_mir::opcode::X86_INTR;
+    let Passing { in_order, pops, registers } = passing(arch, calling_convention, variadic)?;
     let types = &module.context.types;
-    let sizes = function
-        .parameters()
+    let sizes = param_types
         .iter()
         .enumerate()
-        .map(|(index, &one)| match byval_type(function.parameter_attrs.get(index).map_or(&[], Vec::as_slice)) {
+        .map(|(index, &ty)| match byval_type(parameter_attrs.get(index).map_or(&[], Vec::as_slice)) {
             Some(ty) => byval_bytes(module, layout, arch, ty),
-            None => size_of(module, layout, function.value(one).ty),
+            None => size_of(module, layout, ty),
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut widths = sizes.iter().map(|&width| slot(arch, width)).collect::<Vec<_>>();
@@ -483,18 +516,15 @@ fn convention(
     let mut parameters = Vec::new();
     let mut cursor = first;
     if let Some(entry) = registers {
-        let classes: Vec<Option<&str>> = (0..function.parameters().len())
-            .map(|index| class_of(function.parameter_attrs.get(index).map_or(&[], Vec::as_slice)))
+        let classes: Vec<Option<&str>> = (0..param_types.len())
+            .map(|index| class_of(parameter_attrs.get(index).map_or(&[], Vec::as_slice)))
             .collect();
-        let kinds: Vec<_> = function
-            .parameters()
+        let kinds: Vec<_> = param_types
             .iter()
             .zip(&sizes)
             .zip(&classes)
             .filter(|(_, class)| **class != Some(llrm_mir::opcode::RESULT_POINTER))
-            .map(|((&one, &size), class)| {
-                entry.kind(argument_of(types, function.value(one).ty, size, *class), arch.stack_slot_bytes())
-            })
+            .map(|((&ty, &size), class)| entry.kind(argument_of(types, ty, size, *class), arch.stack_slot_bytes()))
             .collect();
         let placed = entry.place(&kinds);
         let mut places = placed.places.iter();
@@ -537,17 +567,16 @@ fn convention(
     }
     for (index, parameter) in parameters.iter_mut().enumerate() {
         if let (Parameter::Cell(disp), Some(_)) =
-            (&*parameter, byval_type(function.parameter_attrs.get(index).map_or(&[], Vec::as_slice)))
+            (&*parameter, byval_type(parameter_attrs.get(index).map_or(&[], Vec::as_slice)))
         {
             *parameter = Parameter::Bytes(*disp);
         }
     }
-    let (result, _, _) = module.signature(function.ty);
     if interrupt && !types.is_void(result) {
         return refuse("an interrupt handler that returns a value");
     }
     // A float leaves in st(0), which no register names.
-    let described = entry(arch, function.calling_convention, variadic);
+    let described = entry(arch, calling_convention, variadic);
     let returns = if types.is_void(result) || matches!(types.get(result), Type::Float(_)) {
         Vec::new()
     } else {
@@ -558,9 +587,8 @@ fn convention(
     let result_slot = described.is_some_and(|one| {
         hidden_slot_popped_by_callee(
             one,
-            (0..function.parameters().len()).map(|index| {
-                llrm_mir::opcode::argument_class(function.parameter_attrs.get(index).map_or(&[], Vec::as_slice))
-            }),
+            (0..param_types.len())
+                .map(|index| llrm_mir::opcode::argument_class(parameter_attrs.get(index).map_or(&[], Vec::as_slice))),
         )
     });
     let popped = if pops {
@@ -773,7 +801,7 @@ pub(super) fn width_of(
 
 /// The alignment the hardware wants of an object of `ty`: its widest scalar's
 /// size, up to 8, whatever the data layout promises (it gives a double 1).
-fn natural_align(
+pub(crate) fn natural_align(
     types: &llrm_mir::types::Types,
     layout: &DataLayout,
     ty: TypeId,
@@ -852,6 +880,9 @@ const MEMSET_STORES: i64 = 16;
 /// The most load and store pairs a memcpy expands to, as LLVM's x86
 /// MaxStoresPerMemcpy; past it, `rep movs`.
 const MEMCPY_MOVES: i64 = 8;
+/// `MaxStoresPerMemcpyOptSize` (X86ISelLowering.cpp#L2939 at d1106deb71cc): a
+/// copy tuned for size is inline moves up to this many pairs, else `rep movs`.
+const MEMCPY_MOVES_SIZE: i64 = 4;
 
 /// The bytes of a constant memset's `rep stosb` through es:di, as
 /// `memset` makes it tuned for size: `lea di`, ES saved and set, the byte,
@@ -2262,6 +2293,33 @@ impl Selector<'_, '_, '_> {
             self.function,
         );
         let mut odds = BlockOdds::default();
+        // A branch on a tree of compares is several branches; the probabilities
+        // of the one are shared out among them as FindMergedConditions does,
+        // so that the chain leaves by each target with the probability the
+        // branch gave it.
+        let mut merged: IndexMap<(i64, i64), f64> = IndexMap::default();
+        for block in made.keys() {
+            let terminator = self.function.terminator(*block).expect("a terminator");
+            let Some(merge) = self.merges.get(&terminator) else { continue };
+            let [_, Operand::Block(taken), Operand::Block(otherwise)] =
+                self.function.instruction(terminator).operands[..]
+            else {
+                continue;
+            };
+            let (on_taken, on_otherwise) = (
+                bpi.get_edge_probability_to(self.function, *block, taken).to_f64(),
+                bpi.get_edge_probability_to(self.function, *block, otherwise).to_f64(),
+            );
+            let chain = self.chains.get(&terminator).cloned().unwrap_or_default();
+            merged_odds(
+                merge,
+                block_at[block],
+                [block_at[&taken], block_at[&otherwise]],
+                [on_taken, on_otherwise],
+                &mut chain.iter().copied(),
+                &mut merged,
+            );
+        }
         for (block, chain) in made {
             let taken: IndexMap<i64, f64> = self
                 .successors(*block)
@@ -2273,6 +2331,19 @@ impl Selector<'_, '_, '_> {
             for one in chain {
                 if one.succ.len() < 2 {
                     continue;
+                }
+                if one.succ.iter().all(|to| merged.contains_key(&(one.at, *to))) {
+                    let total: f64 = one.succ.iter().map(|to| merged[&(one.at, *to)]).sum();
+                    if total > 0.0 {
+                        for to in &one.succ {
+                            odds.taken.insert(
+                                (one.at, *to),
+                                (merged[&(one.at, *to)] / total * BlockOdds::CERTAIN).round().min(f64::from(u32::MAX))
+                                    as u32,
+                            );
+                        }
+                        continue;
+                    }
                 }
                 let known: f64 = one.succ.iter().filter_map(|to| taken.get(to)).sum();
                 let inner = one.succ.iter().filter(|to| !taken.contains_key(*to)).count();
@@ -2361,6 +2432,16 @@ impl Selector<'_, '_, '_> {
             // A branch reads one condition of the flags.
             Opcode::FCmp(predicate)
                 if float_conditions(predicate).is_some_and(|(_, test)| matches!(test, Test::One(_))) => {}
+            // `X86TargetLowering::LowerBRCOND` tests a boolean truncation's low
+            // bit (`TEST8ri`, X86InstrArithmetic.td#L1330): `test x, 1`, not
+            // an `and` made first.
+            Opcode::Cast(CastOp::Trunc)
+                if self.types().int_bits(instruction.ty) == Some(1)
+                    && function.operand_type(&self.module.context, instruction.operands[0]).is_some_and(|ty| {
+                        self.types().int_bits(ty).is_some_and(|bits| bits <= 32)
+                            && !self.is_wide(ty)
+                            && !self.is_far(ty)
+                    }) => {}
             _ => return,
         }
         let result = instruction.result.expect("a comparison's value");
@@ -3428,6 +3509,20 @@ impl Selector<'_, '_, '_> {
             return self.float(operand, at, out);
         }
         let width = self.width(ty)?;
+        // Poison and undef are any value: an `implicit_def`, which
+        // `ProcessImplicitDefs` turns into undef reads (isel's `IMPLICIT_DEF`).
+        if let Operand::Constant(id) = operand
+            && matches!(
+                self.module.context.get(id).kind,
+                ConstantKind::Poison | ConstantKind::Undef
+            )
+        {
+            let held = Held { value: self.fresh(), width };
+            let what =
+                semantics(Operation::Nothing, crate::processimpdefs::IMPLICIT_DEF, vec![Loc::Held(held)], vec![]);
+            out.push(insn(at, what));
+            return Ok(held);
+        }
         if let Some(value) = self.constant(operand, width) {
             let held = Held { value: self.fresh(), width };
             // A narrow zero is written whole where the target runs narrow
@@ -5937,7 +6032,7 @@ impl Selector<'_, '_, '_> {
                     match (proved(llrm_mir::intrinsics::FORWARD), proved(llrm_mir::intrinsics::BACKWARD)) {
                         (true, false) => self.memcpy(arguments, false, at, out),
                         (false, true) => self.memcpy(arguments, true, at, out),
-                        _ => refuse("a memmove whose direction no pass proved"),
+                        _ => self.memmove_loads_then_stores(arguments, at, out),
                     }
                 }
                 Some(Intrinsic::Unary(function)) => {
@@ -6832,10 +6927,31 @@ impl Selector<'_, '_, '_> {
     }
 
     /// A memcpy, as LLVM's getMemcpy lowers one: a constant length in at
-    /// most `MEMCPY_MOVES` pairs, each a load into a register and a store
-    /// from it, widest first, where only the bytes it names are read; else
-    /// `rep movsd` through es:di, the tail by `movsw` and `movsb`, as `memset`
-    /// does its fill.
+    /// most `MEMCPY_MOVES` pairs (`MEMCPY_MOVES_SIZE` tuned for size), each a
+    /// load into a register and a store from it, widest first, where only the
+    /// bytes it names are read; else `rep movsd` through es:di, the tail by
+    /// `movsw` and `movsb`, as `memset` does its fill.
+    ///
+    /// DEVIATE I1 (AM-I1, priced): beyond the moves the pin's
+    /// `EmitTargetCodeForMemcpy` (X86SelectionDAGInfo.cpp#L328-L421) returns
+    /// the generic path, a `memcpy` libcall, for a size over
+    /// `getMaxInlineSizeThreshold` (128) and for an alignment under 4; ours is
+    /// `rep movsd` for both, the runtime having no `memcpy`. Price at -Os,
+    /// 2026-10-23: QCport 5 `rep movsd` copies, none over 128 bytes (0 modules
+    /// would change); tests/run/c and bench m16 16 copies, 5 over 128 bytes
+    /// (scroll 3840, 3840, 4000; es_across_copy 200; mem_length_boundaries_m32
+    /// 20000), m32 36 and 10 (those and huge_runs 65536 x2,
+    /// mem_length_boundaries 32764 and 32768); `scroll` is a vsgcc row a
+    /// libcall would move. Exit: a runtime `_memcpy` in each C target and a
+    /// target "has memcpy" fact, then the libcall here, queued after the
+    /// tuning phase. Progress: the libcall is `memcpycall.rs`, a MIR rewrite
+    /// run where the target's `c.toml` names `libcalls = ["memcpy"]`; off
+    /// until the m32 runtimes ship the routine (#3977).
+    ///
+    /// DEVIATE I2 (no number yet): under `minsize` (-Oz) the pin copies by
+    /// `rep movsb` of the whole length (#L333-L335), saving the tail moves;
+    /// ours is `rep movsd` and a tail, `cpu.size` not telling -Os from -Oz.
+    /// Exit: a minsize flag from the driver options to the selector.
     fn memcpy(
         &mut self,
         arguments: &[Operand],
@@ -6855,6 +6971,68 @@ impl Selector<'_, '_, '_> {
         self.copied(to, from, constant, Some(length), volatile, backward, at, out)
     }
 
+    /// `llvm.memmove` whose direction no pass proved, of a constant length that
+    /// fits the inline limit: every chunk is loaded before any is stored, so
+    /// the sides may overlap however they lie
+    /// (`getMemmoveLoadsAndStores`,
+    /// [SelectionDAG.cpp#L9687](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L9687)).
+    /// DEVIATE: past the limit LLVM calls `memmove`; here the call is refused,
+    /// as before. The limit is `MEMCPY_MOVES` (x86's `MaxStoresPerMemmove` is
+    /// 8, 4 when optimizing for size; the memcpy expansion does not tell
+    /// them apart either).
+    fn memmove_loads_then_stores(
+        &mut self,
+        arguments: &[Operand],
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let &[destination, source, length, volatile] = arguments else {
+            return refuse("a memmove of other than four operands");
+        };
+        let refused = || refuse("a memmove whose direction no pass proved");
+        if self.is_huge(destination) || self.is_huge(source) {
+            return refused();
+        }
+        let Some(length) = self.length(length) else { return refused() };
+        let most = if self.cpu.size { MEMCPY_MOVES_SIZE } else { MEMCPY_MOVES };
+        if length / 4 + (length % 4).count_ones() as i64 > most {
+            return refused();
+        }
+        let volatile = self.constant(volatile, 1) != Some(0);
+        let (to, from) = (self.pointer(destination)?, self.pointer(source)?);
+        let regs = self.regs();
+        let mut chunks = Vec::new();
+        let mut offset = 0;
+        for width in [4, 2, 1] {
+            while length - offset >= i64::from(width) {
+                chunks.push((offset, width));
+                offset += i64::from(width);
+            }
+        }
+        let mut held = Vec::new();
+        for &(offset, width) in &chunks {
+            let value = self.fresh_held(width);
+            let load = semantics(
+                Operation::Move,
+                "mov",
+                vec![Loc::Held(value)],
+                vec![Loc::Mem(Self::memory(regs, from.moved(offset), width))],
+            );
+            out.push(Arc::new(Insn { volatile, ..insn_of(at, load) }));
+            held.push(value);
+        }
+        for (&(offset, width), value) in chunks.iter().zip(held) {
+            let store = semantics(
+                Operation::Move,
+                "mov",
+                vec![Loc::Mem(Self::memory(regs, to.moved(offset), width))],
+                vec![Loc::Held(value)],
+            );
+            out.push(Arc::new(Insn { volatile, ..insn_of(at, store) }));
+        }
+        Ok(())
+    }
+
     /// `memcpy`'s lowering, between pointers made by the caller: a constant
     /// `length` (or the operand that holds it).
     #[allow(clippy::too_many_arguments)]
@@ -6872,8 +7050,9 @@ impl Selector<'_, '_, '_> {
         let regs = self.regs();
         let length = length.filter(|_| constant.is_none());
         let counted_operand = || length.expect("a length that is no constant is an operand");
+        let most = if self.cpu.size { MEMCPY_MOVES_SIZE } else { MEMCPY_MOVES };
         if let Some(length) = constant
-            && length / 4 + (length % 4).count_ones() as i64 <= MEMCPY_MOVES
+            && length / 4 + (length % 4).count_ones() as i64 <= most
         {
             let mut offset = 0;
             let mut chunks = Vec::new();
@@ -7419,6 +7598,15 @@ impl Selector<'_, '_, '_> {
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<Test, Unselected> {
         let instruction = self.function.instruction(inst);
+        if instruction.opcode == Opcode::Cast(CastOp::Trunc) {
+            let operand = instruction.operands[0];
+            let ty = self.function.operand_type(&self.module.context, operand).expect("a typed operand");
+            let held = self.held(operand, ty, at, out)?;
+            let low = Loc::Held(Held { width: 1, ..held });
+            let one = Loc::Imm(Imm { value: 1, width: 1, address: None });
+            out.push(insn(at, semantics(Operation::Compare, "test", vec![], vec![low, one])));
+            return Ok(Test::One("jne"));
+        }
         if let Opcode::FCmp(predicate) = instruction.opcode {
             return self.float_compare(predicate, inst, at, out);
         }
@@ -7810,7 +7998,7 @@ fn semantics(
     dests: Vec<Loc>,
     sources: Vec<Loc>,
 ) -> Semantics {
-    Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+    Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
 }
 
 fn jump(target: i64) -> Semantics {
@@ -7830,6 +8018,43 @@ fn insn(
     what: Semantics,
 ) -> Arc<Insn> {
     Arc::new(insn_of(at, what))
+}
+
+/// The probabilities of the blocks of `merge`, started in `cur`, which goes to
+/// `targets` (taken, otherwise) with `probs`: FindMergedConditions'
+/// ([SelectionDAGBuilder.cpp#L2661](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L2661))
+/// split. `X | Y` gives its first branch A/2 and A/2+B and normalises the same
+/// pair for the second; `X & Y` gives A+B/2 and B/2 and normalises (A, B/2).
+/// What the blocks leave by is added to `out` by edge.
+fn merged_odds(
+    merge: &Merge,
+    cur: i64,
+    [taken, otherwise]: [i64; 2],
+    [on_taken, on_otherwise]: [f64; 2],
+    chain: &mut impl Iterator<Item = i64>,
+    out: &mut IndexMap<(i64, i64), f64>,
+) {
+    let normal = |a: f64, b: f64| if a + b > 0.0 { (a / (a + b), b / (a + b)) } else { (0.5, 0.5) };
+    match merge {
+        Merge::Leaf(_) => {
+            *out.entry((cur, taken)).or_insert(0.0) += on_taken;
+            *out.entry((cur, otherwise)).or_insert(0.0) += on_otherwise;
+        }
+        Merge::Node { conjunction, left, right, .. } => {
+            let next = chain.next().expect("a block for each node");
+            if *conjunction {
+                let first = [on_taken + on_otherwise / 2.0, on_otherwise / 2.0];
+                let (a, b) = normal(on_taken, on_otherwise / 2.0);
+                merged_odds(left, cur, [next, otherwise], first, chain, out);
+                merged_odds(right, next, [taken, otherwise], [a, b], chain, out);
+            } else {
+                let first = [on_taken / 2.0, on_taken / 2.0 + on_otherwise];
+                let (a, b) = normal(on_taken / 2.0, on_otherwise);
+                merged_odds(left, cur, [taken, next], first, chain, out);
+                merged_odds(right, next, [taken, otherwise], [a, b], chain, out);
+            }
+        }
+    }
 }
 
 /// The predicate of a compare of the flags of `x` against zero that tests

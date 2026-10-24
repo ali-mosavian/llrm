@@ -72,7 +72,12 @@ impl LoopIdiomRecognize {
 
         // Disable loop idiom recognition if the function's name is a common
         // idiom.
-        if matches!(run.name, "memset" | "memcpy" | "strlen" | "wcslen") {
+        // The name is the symbol's: a C compile decorates it (`_strlen`, Open
+        // Watcom's `strlen_`), which the pin's `getName` never sees.
+        let undecorated = run.name.strip_prefix('_').or_else(|| run.name.strip_suffix('_')).unwrap_or(run.name);
+        if matches!(run.name, "memset" | "memcpy" | "strlen" | "wcslen")
+            || matches!(undecorated, "memset" | "memcpy" | "strlen" | "wcslen")
+        {
             return Some(false);
         }
 
@@ -103,7 +108,7 @@ impl LoopIdiomRecognize {
             }
         }
 
-        None
+        Some(self.run_on_noncountable_loop(run))
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopIdiomRecognize.cpp#L383

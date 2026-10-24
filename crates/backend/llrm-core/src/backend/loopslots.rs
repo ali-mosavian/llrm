@@ -133,7 +133,7 @@ use crate::backend::classes::RegisterClasses;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::Frame;
 use crate::backend::peephole::{self, _lanes, Lanes};
-use crate::backend::{liveness, select, spiller};
+use crate::backend::{liveness, select};
 use crate::model::ir::{self, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::{LIRTransform, OperationCosts};
@@ -555,7 +555,7 @@ fn made(
     dests: Vec<Loc>,
     sources: Vec<Loc>,
 ) -> Arc<Insn> {
-    let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+    let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
     Arc::new(Insn::new(at, Some((at, at)), Some(what), Vec::new(), Vec::new()))
 }
 
@@ -892,7 +892,9 @@ pub fn hoisted(
         }
         if !rename.is_empty() {
             for block in &mut blocks {
-                *block = block.with_insns(block.insns.iter().map(|insn| spiller::_renamed(insn, &rename)).collect());
+                *block = block.with_insns(
+                    block.insns.iter().map(|insn| crate::backend::bodyfacts::_renamed(insn, &rename)).collect(),
+                );
             }
         }
         taken.take(one.body.forest(), one.body.index());
@@ -1357,7 +1359,7 @@ mod tests {
                             Arc::new(Insn::new(
                                 0x13,
                                 Some((0x13, 0x13)),
-                                Some(Semantics { name: Some(String::new()), ..Semantics::new(Operation::Nothing) }),
+                                Some(Semantics { name: Some("".into()), ..Semantics::new(Operation::Nothing) }),
                                 vec![],
                                 vec![],
                             )),
@@ -1396,7 +1398,7 @@ mod tests {
                             0x16,
                             Some((0x16, 0x17)),
                             Some(Semantics {
-                                name: Some("jne".to_owned()),
+                                name: Some("jne".into()),
                                 target: Some(0x10),
                                 ..Semantics::new(Operation::Branch)
                             }),
@@ -1450,7 +1452,7 @@ mod tests {
     fn test_a_register_a_string_move_advances_is_not_loop_invariant() {
         let word = |value: i64| Loc::Imm(Imm { value, width: 2, address: None });
         let copy = Semantics {
-            name: Some("movsd".to_owned()),
+            name: Some("movsd".into()),
             dests: vec![Loc::Mem(crate::model::ir::Mem::new(None, 0)), reg(RegId::SI), reg(RegId::DI), reg(RegId::CX)],
             sources: vec![reg(RegId::CX), reg(RegId::SI), reg(RegId::DI), reg(RegId::DS), reg(RegId::ES)],
             ..Semantics::new(Operation::Copy)
@@ -1472,7 +1474,7 @@ mod tests {
                             0x15,
                             Some((0x15, 0x16)),
                             Some(Semantics {
-                                name: Some("jne".to_owned()),
+                                name: Some("jne".into()),
                                 target: Some(0x10),
                                 ..Semantics::new(Operation::Branch)
                             }),
@@ -1542,7 +1544,7 @@ mod tests {
         loop_body.push(Arc::new(Insn::new(
             0x30,
             Some((0x30, 0x31)),
-            Some(Semantics { name: Some("jne".to_owned()), target: Some(0x10), ..Semantics::new(Operation::Branch) }),
+            Some(Semantics { name: Some("jne".into()), target: Some(0x10), ..Semantics::new(Operation::Branch) }),
             vec![],
             vec![],
         )));
@@ -1606,7 +1608,7 @@ mod tests {
         loop_body.push(Arc::new(Insn::new(
             0x30,
             Some((0x30, 0x31)),
-            Some(Semantics { name: Some("jne".to_owned()), target: Some(0x10), ..Semantics::new(Operation::Branch) }),
+            Some(Semantics { name: Some("jne".into()), target: Some(0x10), ..Semantics::new(Operation::Branch) }),
             vec![],
             vec![],
         )));
@@ -1657,7 +1659,7 @@ mod tests {
         loop_body.push(Arc::new(Insn::new(
             0x500,
             Some((0x500, 0x501)),
-            Some(Semantics { name: Some("jne".to_owned()), target: Some(0x10), ..Semantics::new(Operation::Branch) }),
+            Some(Semantics { name: Some("jne".into()), target: Some(0x10), ..Semantics::new(Operation::Branch) }),
             vec![],
             vec![],
         )));
@@ -1750,7 +1752,7 @@ mod tests {
                             0x18,
                             Some((0x18, 0x19)),
                             Some(Semantics {
-                                name: Some("jne".to_owned()),
+                                name: Some("jne".into()),
                                 target: Some(0x10),
                                 ..Semantics::new(Operation::Branch)
                             }),
@@ -1792,7 +1794,8 @@ mod tests {
     /// `nest(d)` as the front end's pipeline hands it to isel: whether an
     /// instruction fits a slot in a register was asked again for each loop
     /// around it, so that the asks grew with the square of the depth. Asked
-    /// once for each instruction and slot, they grow with the nest.
+    /// once for each instruction and slot, they grow with the nest: doubling
+    /// the depth doubles the step, where the square quadruples it.
     #[test]
     fn test_the_nest_asks_what_fits_a_slot_once_however_deep_the_loops() {
         use crate::backend::regalloc_input::{Calls, before_phase};
@@ -1810,7 +1813,7 @@ mod tests {
             "premise: every loop of the nest but the outermost, which the function's exit bounds, is ranked ({ranked4}, {ranked8}, {ranked16})"
         );
         assert!(
-            fitted16 < 3 * fitted8 && fitted8 < 3 * fitted4,
+            fitted16 - fitted8 < 3 * (fitted8 - fitted4),
             "{fitted4}, {fitted8}, {fitted16} asks for nests 4, 8 and 16 deep"
         );
     }

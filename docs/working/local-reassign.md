@@ -38,7 +38,7 @@ Not held conditions (oversight). Exit: the allocation order of the evicted local
 
 ## Oversight's sweep of d3f08d2438: QCport -Os object bytes, main / parent / head
 
-Source: `~/scratch/democheck-run/qcport-os-3446.tsv` (OMF object-file bytes of `llrm-c -Os`, 65 modules; llrm-c md5 main 56f120bb59fa, parent 804e487fd4c9, head 0eff6c50903f). Modules whose bytes differ between parent and head; the other 50 are equal.
+Source: `qcport-os-3446.tsv` (OMF object-file bytes of `llrm-c -Os`, 65 modules; llrm-c md5 main 56f120bb59fa, parent 804e487fd4c9, head 0eff6c50903f). Modules whose bytes differ between parent and head; the other 50 are equal.
 
 | module | main | parent | head | head - parent |
 |---|--:|--:|--:|--:|

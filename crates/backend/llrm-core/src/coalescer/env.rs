@@ -86,13 +86,71 @@ pub fn joined(
     env: &dyn CoalescerEnv,
     depth: &[u32],
 ) -> LirBody {
-    let mut lis = LiveIntervals::new(body);
+    // The intervals TwoAddress edited, where it ran just before.
+    let mut lis = crate::liveness::liveintervals::take_handed_over(body).unwrap_or_else(|| LiveIntervals::new(body));
     let stats = driver::run(&mut lis, env, depth);
     let after = lis.body_like(body);
+    if llrm_support::env_flag!("LLRM_COALESCE_WHY") {
+        for reason in why_left(&mut lis, env) {
+            eprintln!("WHY\t{}\t{reason}", body.name);
+        }
+    }
     if llrm_support::env_flag!("LLRM_CHECK_LIVEINTERVALS") && stats.joined > 0 {
         // The premise: the intervals the joins left are the ones made afresh.
         let compared = lis.assert_intervals_cover_afresh(&after);
         assert!(compared > 0, "{}: the check compared no interval", body.name);
     }
     after
+}
+
+/// `LLRM_COALESCE_WHY=1`: the reason for each register copy the joins left. A
+/// full copy is probed by running `join_copy` on the final state; a probe that
+/// joins changes the state the next sees, so the reasons are a count, not a
+/// replay. A store of a register is no copy.
+pub(super) fn why_left(
+    lis: &mut LiveIntervals,
+    env: &dyn CoalescerEnv,
+) -> Vec<&'static str> {
+    use std::collections::HashSet;
+
+    use super::pair::full_copy;
+    use super::register_coalescer::{JoinResult, State, join_copy};
+    use crate::model::ir::{Loc, Operation};
+    let mut copies = Vec::new();
+    for block in 0..lis.cfg.preds.len() {
+        for one in lis.block_insns(block) {
+            let Some(what) = one.what.as_ref() else { continue };
+            if what.op != Operation::Move || what.dests.len() != 1 || what.sources.len() != 1 {
+                continue;
+            }
+            let register = |loc: &Loc| matches!(loc, Loc::Held(_) | Loc::Reg(_));
+            if register(&what.dests[0]) && register(&what.sources[0]) {
+                copies.push(std::sync::Arc::clone(one));
+            }
+        }
+    }
+    let mut state = State::default();
+    let mut reasons = Vec::new();
+    for one in copies {
+        let what = one.what.as_ref().unwrap();
+        reasons.push(if one.group.is_some() {
+            "parallel-copy member"
+        } else if !matches!(
+            (&what.dests[0], &what.sources[0]),
+            (Loc::Held(_), Loc::Held(_))
+        ) {
+            "physical register"
+        } else if full_copy(&one).is_none() {
+            "width differs"
+        } else if super::pair::CoalescerPair::set_registers(&one, env).is_none() {
+            "can_share refused"
+        } else {
+            match join_copy(lis, env, &mut state, &mut HashSet::default(), one.id()) {
+                JoinResult::Joined => "joinable now (not tried)",
+                JoinResult::Deferred => "conflict (deferred)",
+                JoinResult::Rejected => "rejected (high cost)",
+            }
+        });
+    }
+    reasons
 }

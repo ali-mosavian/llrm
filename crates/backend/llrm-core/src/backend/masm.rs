@@ -531,7 +531,7 @@ fn semantics(
     dests: Vec<Loc>,
     sources: Vec<Loc>,
 ) -> Semantics {
-    Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+    Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
 }
 
 /// Every return of `body` as `retf bytes`, for a callee that removes its
@@ -677,6 +677,43 @@ fn wrap_of(
     )
 }
 
+/// `procedure` with its callee-saved registers pushed before the space for its
+/// locals, as the pin's frame is (`push ebp; mov ebp, esp; push esi; sub esp,
+/// N`), and every local that much lower. Unchanged where the entry or a piece
+/// of the frame is set up elsewhere: runtime-built, interrupt, stack-checked,
+/// far, `enter`, inline-code, `alloca`, 16-bit and shrink-wrapped frames.
+pub fn saved_first(procedure: Procedure) -> Procedure {
+    let eligible = procedure.entry == 0
+        && procedure.interrupt.is_none()
+        && procedure.stack_check.is_none()
+        && !procedure.far
+        && procedure.body.bits == 32
+        && procedure.reserve != 0
+        && !(procedure.size && procedure.registers.enter)
+        && procedure.callees.values().all(|one| one.code.is_empty())
+        && !moves_stack(&procedure.body)
+        && [false, true]
+            .iter()
+            .all(|omit| wrap_of(&procedure, &procedure.body, true, *omit).is_none_or(|wrap| wrap.wrapped.is_empty()));
+    let pushed = saved_of(&procedure).len() as i64 * procedure.registers.slot;
+    if !eligible || pushed == 0 {
+        return procedure;
+    }
+    // The locals keep their alignment from BP (an 8-byte cell at 4 mod 8
+    // costs a 486 3 clocks): they lie a multiple of it below the registers,
+    // and the gap is reserved with them.
+    let align = procedure.registers.align.max(procedure.registers.slot);
+    let gap = (align - pushed % align) % align;
+    match crate::backend::relayout::pushed_down(&procedure.body, pushed + gap) {
+        Some(body) => Procedure {
+            body: lir::LirBody { saved_first: true, ..body },
+            reserve: procedure.reserve + gap,
+            ..procedure
+        },
+        None => procedure,
+    }
+}
+
 /// The implicit entry and return sequences shared by text and OMF emission.
 pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
     parts(procedure, frame_omitted(procedure, 0, frame_held(procedure)).is_some())
@@ -736,6 +773,7 @@ fn parts(
     let (bp, sp) = (reg(FRAME), reg(STACK));
     // Inline code that moves SP (`alloca`) leaves the saved registers below an
     // unknown distance: SP is set from the frame register first.
+    let first = procedure.body.saved_first;
     let moved = !omit && framed && moves_stack(&procedure.body);
     let mut leave: Vec<Semantics> = Vec::new();
     if moved {
@@ -743,18 +781,33 @@ fn parts(
         let from = ir::Mem { through: FRAME, offset: -below, disp_width: 2, ..ir::Mem::new(None, 2) };
         leave.push(semantics(Operation::Address, "lea", vec![sp_reg()], vec![Loc::Mem(from)]));
     }
-    leave.extend(saved.iter().rev().map(|one| semantics(Operation::Pop, "pop", vec![reg(*one)], vec![])));
-    if omit && reserve != 0 {
-        leave.push(semantics(
+    let pops = || saved.iter().rev().map(|one| semantics(Operation::Pop, "pop", vec![reg(*one)], vec![]));
+    let release = || {
+        semantics(
             Operation::Binary,
             "add",
             vec![sp_reg()],
             vec![sp_reg(), Loc::Imm(ir::Imm { value: reserve, width: 2, address: None })],
-        ));
-    } else if reserve != 0 && framed {
-        leave.push(semantics(Operation::Nothing, "leave", vec![], vec![]));
-    } else if framed {
-        leave.push(semantics(Operation::Pop, "pop", vec![bp.clone()], vec![]));
+        )
+    };
+    if first {
+        // The registers lie between SP and BP: the locals go first.
+        if reserve != 0 {
+            leave.push(release());
+        }
+        leave.extend(pops());
+        if framed {
+            leave.push(semantics(Operation::Pop, "pop", vec![bp.clone()], vec![]));
+        }
+    } else {
+        leave.extend(pops());
+        if omit && reserve != 0 {
+            leave.push(release());
+        } else if reserve != 0 && framed {
+            leave.push(semantics(Operation::Nothing, "leave", vec![], vec![]));
+        } else if framed {
+            leave.push(semantics(Operation::Pop, "pop", vec![bp.clone()], vec![]));
+        }
     }
     // `enter` only where the target's description takes it for size
     // (`frame_enter`).
@@ -797,7 +850,15 @@ fn parts(
             overflow("jb"),
         ]);
     }
-    enter.extend(saved.iter().map(|one| semantics(Operation::Push, "push", vec![], vec![reg(*one)])));
+    let pushes = saved.iter().map(|one| semantics(Operation::Push, "push", vec![], vec![reg(*one)]));
+    if first {
+        // Before `sub sp`: the frame register's `mov` ends the frame's setup,
+        // then the registers, then the locals.
+        let at = enter.iter().position(|one| one.name.as_deref() == Some("sub")).unwrap_or(enter.len());
+        enter.splice(at..at, pushes);
+    } else {
+        enter.extend(pushes);
+    }
     if let Some(group) = procedure.interrupt {
         let (before, after) = _interrupt_parts(group);
         enter.splice(0..0, before);
@@ -918,14 +979,15 @@ fn built(
     // Each piece (the frame, a register kept) is set up where it is first
     // needed and taken back on the returns that path reaches, not at the entry
     // and every return (`shrinkwrap`).
-    let count = saved_of(procedure).len();
-    let wrap = wrap_of(procedure, &procedure.body, enter.len() > count, omit);
+    // The registers a `saved_first` frame pushes are part of `enter`.
+    let first = procedure.body.saved_first;
+    let lows = if first { Vec::new() } else { saved_of(procedure) };
+    let count = lows.len();
+    let wrap = if first { None } else { wrap_of(procedure, &procedure.body, enter.len() > count, omit) };
     let kept = enter.split_off(enter.len() - count);
     let restores: Vec<Semantics> = leave.drain(..count).collect();
-    let saved: Vec<RegId> = {
-        let lows = saved_of(procedure);
-        procedure.registers.saved.iter().filter(|(_, low)| lows.contains(low)).map(|(whole, _)| *whole).collect()
-    };
+    let saved: Vec<RegId> =
+        procedure.registers.saved.iter().filter(|(_, low)| lows.contains(low)).map(|(whole, _)| *whole).collect();
     // The items that set a piece up and take it back.
     let item = |piece: &crate::backend::shrinkwrap::Piece| -> (Vec<Semantics>, Vec<Semantics>) {
         match piece {
@@ -993,6 +1055,10 @@ fn built(
         .chain(cells)
         .chain(enter.into_iter().map(Item::Semantics))
         .collect();
+    // An item or two per instruction, a label and an alignment per block, and
+    // the pieces of the frame: growing it by doubling copied every item some
+    // six times.
+    out.reserve(blocks.iter().map(|block| 2 * block.insns.len() + 2).sum::<usize>());
     for (index, block) in blocks.iter().enumerate() {
         if block.align > 0 {
             out.push(Item::Align(CodeAlign { log2: block.align, max_skip: block.max_skip }));
@@ -1080,7 +1146,7 @@ fn built(
                                 .map(Item::Semantics),
                             );
                             out.push(Item::Semantics(Semantics {
-                                name: Some("ret".to_owned()),
+                                name: Some("ret".into()),
                                 sources: vec![],
                                 ..what.clone()
                             }));
@@ -1092,7 +1158,7 @@ fn built(
                         Some(name) if !name.is_empty() => name.to_owned(),
                         _ => (if procedure.far { "retf" } else { "ret" }).to_owned(),
                     };
-                    out.push(Item::Semantics(Semantics { name: Some(name), ..what.clone() }));
+                    out.push(Item::Semantics(Semantics { name: Some(name.into()), ..what.clone() }));
                 }
                 _ => out.push(Item::Semantics(what.clone())),
             }
@@ -1249,12 +1315,21 @@ fn stack_addressed(
         .filter(|pair| !pair[0].succ.contains(&pair[1].at))
         .map(|pair| label(number, pair[1].at))
         .collect();
+    // The passes that only learn the depths change nothing; the one that
+    // settles them is made again and rewrites the items it owns, in place
+    // (a pass that built a copy each time cloned every instruction once per
+    // pass: 3 M of the 15.5 M the emitter cost on d_faces).
+    let mut items = items;
     loop {
         let before = known.len();
-        match addressed_pass(procedure, number, items.clone(), &mut known, dead, &after_dead_end) {
+        match addressed_pass(procedure, number, &mut items, &mut known, dead, &after_dead_end, false) {
             // A label taken for dead that a later branch reached was addressed
             // at the wrong depth: again, with what that branch taught.
-            Ok((out, assumed)) if assumed.iter().all(|one| !known.contains_key(one)) => return Some(out),
+            Ok(assumed) if assumed.iter().all(|one| !known.contains_key(one)) => {
+                return addressed_pass(procedure, number, &mut items, &mut known, dead, &after_dead_end, true)
+                    .ok()
+                    .map(|_| items);
+            }
             Ok(_) => {}
             Err(Stop::Refused) => return None,
             // What nothing reaches is dead code: no depth is wrong for it, and
@@ -1287,21 +1362,21 @@ fn stop(
 fn addressed_pass(
     procedure: &Procedure,
     number: usize,
-    items: Vec<Item>,
+    items: &mut [Item],
     known: &mut IndexMap<String, i64>,
     dead_ok: bool,
     after_dead_end: &BTreeSet<String>,
-) -> Result<(Vec<Item>, Vec<String>), Stop> {
+    build: bool,
+) -> Result<Vec<String>, Stop> {
     let registers = &procedure.registers;
     let slot = registers.slot;
-    let mut out = Vec::with_capacity(items.len());
     let mut depth: Option<i64> = Some(0);
     let mut in_dead = false;
     let mut assumed: Vec<String> = Vec::new();
     let name_of = |target: i64| label(number, target);
-    for item in items {
+    for item in items.iter_mut() {
         match item {
-            Item::Align(align) => out.push(Item::Align(align)),
+            Item::Align(_) => {}
             Item::Label(label) => {
                 if after_dead_end.contains(&label.name) {
                     depth = None;
@@ -1337,14 +1412,12 @@ fn addressed_pass(
                 if !in_dead {
                     known.insert(label.name.clone(), depth.ok_or(Stop::Refused)?);
                 }
-                out.push(Item::Label(label));
             }
             Item::Callee(callee) => {
                 depth = Some(depth.ok_or(Stop::Refused)? - callee.pops);
-                out.push(Item::Callee(callee));
             }
-            Item::Mark(mark) => out.push(Item::Mark(mark)),
-            Item::Semantics(mut what) => {
+            Item::Mark(_) => {}
+            Item::Semantics(what) => {
                 let here = depth.ok_or(Stop::Refused)?;
                 // `pop` to memory addresses the cell with the stack already
                 // taken back.
@@ -1352,9 +1425,12 @@ fn addressed_pass(
                     (Operation::Pop, [place @ Loc::Mem(_)]) => here - width_of(place).unwrap_or(0),
                     _ => here,
                 };
+                // Every operand is checked; only the pass that builds rewrites
+                // its places, in the item it owns.
                 for place in what.dests.iter_mut().chain(what.sources.iter_mut()) {
-                    *place = match through_stack(place, at, slot, registers.pointer, registers.free) {
-                        Some(placed) => placed,
+                    let replacement = match through_stack(place, at, slot, registers.pointer, registers.free) {
+                        Some(std::borrow::Cow::Owned(placed)) => Some(placed),
+                        Some(std::borrow::Cow::Borrowed(_)) => None,
                         None => {
                             return Err(stop(
                                 procedure,
@@ -1362,6 +1438,9 @@ fn addressed_pass(
                             ));
                         }
                     };
+                    if let (true, Some(placed)) = (build, replacement) {
+                        *place = placed;
+                    }
                 }
                 match what.op {
                     Operation::Push | Operation::Pop => {
@@ -1452,11 +1531,10 @@ fn addressed_pass(
                     }
                     _ => {}
                 }
-                out.push(Item::Semantics(what));
             }
         }
     }
-    Ok((out, assumed))
+    Ok(assumed)
 }
 
 /// Why `procedure` keeps its frame register, for `LLRM_DEBUG=frame`.
@@ -1492,31 +1570,31 @@ fn writes_stack_pointer(place: &Loc) -> bool {
 /// have held the entry's stack pointer less `slot`. A frame cell is
 /// `Space::Frame`, indexed or not; a register of the frame register's name in
 /// any other address is a value (`FrameRegisters::free`).
-fn through_stack(
-    place: &Loc,
+fn through_stack<'a>(
+    place: &'a Loc,
     depth: i64,
     slot: i64,
     pointer: RegId,
     free: bool,
-) -> Option<Loc> {
+) -> Option<std::borrow::Cow<'a, Loc>> {
     let shift = |_disp: i64| depth - slot;
     let is_pointer = |one: RegId| (one == FRAME || one == pointer) && !(free && one != RegId::None);
     if matches!(place, Loc::Reg(one) if is_pointer(one.register)) {
         return None;
     }
-    let Some(at) = place.address() else { return Some(place.clone()) };
+    let Some(at) = place.address() else { return Some(std::borrow::Cow::Borrowed(place)) };
     if is_pointer(at.index_through) {
         return None;
     }
     if let Some(addr) = at.addr.filter(|addr| addr.space == Space::Frame) {
-        return Some(place.map_address(|one| ir::AddressRef {
+        return Some(std::borrow::Cow::Owned(place.map_address(|one| ir::AddressRef {
             through: STACK,
             addr: Some(Addr { disp: addr.disp + shift(addr.disp), ..addr }),
             disp_width: 0,
             ..one
-        }));
+        })));
     }
-    (!is_pointer(at.through)).then(|| place.clone())
+    (!is_pointer(at.through)).then(|| std::borrow::Cow::Borrowed(place))
 }
 
 /// `item` with the frame register and stack pointer LIR calls BP and SP as the
@@ -1976,8 +2054,16 @@ pub fn _operand(
             }
         }
         Loc::Mem(cell) => _memory(regs, cell, names)?,
-        Loc::Address(ir::AddressRef { addr: Some(address), index_through: RegId::None, through, .. }) => {
-            let text = _memory(regs, &ir::Mem { through: *through, ..ir::Mem::new(Some(*address), 2) }, names)?;
+        // A named address keeps its symbol with the registers it is reached
+        // through: `lea eax, b+12[eax]`.
+        Loc::Address(ir::AddressRef { addr: Some(address), index_through, scale, through, .. }) => {
+            let cell = ir::Mem {
+                through: *through,
+                index_through: *index_through,
+                scale: *scale,
+                ..ir::Mem::new(Some(*address), 2)
+            };
+            let text = _memory(regs, &cell, names)?;
             text.strip_prefix("word ptr ").map_or(text.clone(), str::to_owned)
         }
         Loc::Address(ir::AddressRef { through, index_through: index, scale, offset, .. }) => {
@@ -2097,7 +2183,7 @@ mod tests {
         // the last two sources.
         let results = |count: usize| (0..count).map(|one| held(10 + one as u32)).collect::<Vec<_>>();
         let semantics = |dests: usize, sources: Vec<Loc>| Semantics {
-            name: Some("movsw".to_owned()),
+            name: Some("movsw".into()),
             dests: results(dests),
             sources,
             ..Semantics::new(Operation::Copy)
@@ -2114,7 +2200,7 @@ mod tests {
         );
         assert_eq!(_instruction(regs, &semantics(3, vec![held(2), held(3)]), &no_names(), 0).unwrap(), ["movsw"]);
         let ss = |name: &str, sources: Vec<Loc>| Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests: results(4),
             sources,
             ..Semantics::new(Operation::Copy)
@@ -2898,5 +2984,20 @@ mod tests {
         let r#where =
             ir::AddressRef { through: RegId::EBX, index_through: RegId::EBX, scale: 2, ..ir::AddressRef::new(None) };
         assert_eq!(_operand(regs, &Loc::Address(r#where), &no_names()).unwrap(), "[ebx+ebx*2]");
+    }
+
+    /// `lea eax, b+12[eax]`: a named address with an index register kept no
+    /// symbol in its text (`lea eax, [eax]`), so `end_of(t) - t` was 0
+    /// where it was 12 (the DAG selector's `sub(lea sym+12, sym)`,
+    /// `--isel=dag`).
+    #[test]
+    fn test_a_named_address_with_an_index_register_prints_its_symbol() {
+        let regs = crate::backend::registerinfo::test_regs();
+        let mut names = IndexMap::default();
+        names.insert((Space::Segment, 3), "L_b1".to_owned());
+        let address = Addr { index: 3, ..Addr::new(Space::Segment, 12) };
+        let r#where =
+            ir::AddressRef { through: RegId::None, index_through: RegId::EAX, ..ir::AddressRef::new(Some(address)) };
+        assert_eq!(_operand(regs, &Loc::Address(r#where), &names).unwrap(), "L_b1+12[eax]");
     }
 }

@@ -237,6 +237,42 @@ rule step_after_compare
     rewrite @1 ; @0: =@0 x, a ; drop @2
 
 
+// X86FixupLEAs `optTwoAddrLEA` (X86FixupLEAs.cpp#L564), the two cases i486
+// reaches: an LEA that is a two-address add, where no flag is read after it.
+// A step of one is the INC or DEC `increments` then makes, as the pin's case 2.
+group lea_fixup
+    walk each
+
+rule lea_sum_as_add
+    match   lea d:reg, a:any
+    when    free(@0, exact), flags_dead(@0), sums_into(a, d)
+    rewrite @0: add d, d, other_term(a, d)
+
+rule lea_step_as_add
+    match   lea d:reg, a:any
+    when    free(@0, exact), flags_dead(@0), steps_in_place(a, d)
+    rewrite @0: add d, d, step(a, d)
+
+// X86FixupLEAs `optLEAALU` (X86FixupLEAs.cpp#L500, case 3 of `optTwoAddrLEA`):
+// `lea t,[x+y]` read once, killed, by the add or subtract of `d` just after it
+// is two steps on `d`: `d + (x+y)` is `(d+x)+y`, where the flags are dead as the
+// pin tests them. The pin looks five instructions ahead; here only the next one.
+group lea_alu
+    walk window
+
+// The same pair when the LEA's own register is one of its terms: `lea t,[x+t]` is `add t,x` (case 1), and the add that reads it stays.
+rule lea_term_then_alu
+    match   lea t:reg, a:any ; op=(add|sub) d:reg, d, t
+    when    free(@0, exact), free(@1, exact), flags_dead(@0), sums_into_cell(a, t), !same_root(d, t)
+    rewrite @0: add t, t, other_term(a, t) ; @1
+
+rule lea_then_alu
+    match   lea t:reg, a:any ; op=(add|sub) d:reg, d, t
+    when    free(@0, rewritable), free(@1, rewritable), flags_dead(@0), flags_dead(@1), dead(@1, lanes(t)),
+            splits_into(a, t, d), same_width(d, t), !same_root(d, t)
+    rewrite drop @0 ; @1: op d, d, first_term(a, d) {uses: joined_uses(@0, @1), widths: joined_widths(@0, @1)} ;
+            @1: op d, d, second_term(a, d) {uses: joined_uses(@0, @1), widths: joined_widths(@0, @1)}
+
 // Select compact INC/DEC for a unit add whose carry result is dead: they
 // differ from it only in keeping CF.
 group increments

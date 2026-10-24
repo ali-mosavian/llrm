@@ -3,11 +3,12 @@
 //!
 //! # How it works
 //! `Accesses` records what each instruction touches: a load's or store's own
-//! `MemRef`, a call's footprint (its `CallEffects`, or anything its attributes
-//! allow), and the bytes a call fills before reading any. It is the manager's
-//! `accesses` analysis, built from [`crate::manager`]'s `Annotated` and
-//! `CallEffects`, and kept across changes that only move instructions or give a
-//! store another value (`update`).
+//! `MemRef`, a call's footprint (`alias::calls_by_attributes`: its attributes
+//! and `GlobalsModRef`, no points-to solve), and the bytes a call fills before
+//! reading any. A query of a call is the meet of the footprint and `AAResults`
+//! (BasicAA, GlobalsAA). It is the manager's `accesses` analysis, built from
+//! [`crate::manager`]'s `Annotated`, and kept across changes that only move
+//! instructions or give a store another value (`update`).
 //!
 //! `built` numbers the accesses. Every instruction that writes (`None` writes
 //! means anything) is a `Def`; one that only reads memory is a `Use`; one that
@@ -107,7 +108,7 @@
 //! `transform`.
 //!
 //! # Needs
-//! [`crate::manager`] (`Annotated`, `CallEffects`, `ExposedFrames`),
+//! [`crate::manager`] (`Annotated`, `PointerValues`, `ExposedFrames`),
 //! [`crate::cfg`], [`crate::regions`], [`crate::pointerfacts`],
 //! [`crate::memory`].
 //!
@@ -131,11 +132,10 @@ use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, Analysis};
 use llrm_support::hash::IndexMap;
 
-use crate::alias::{self, Effect, Procedure, Summary};
 use crate::cfg;
 use crate::consts::Calls;
 use crate::graph::loops;
-use crate::manager::{Annotated, CallEffects};
+use crate::manager::Annotated;
 use crate::memory::{MemRef, ObjectRef, Unit, own_bytes, unmodeled_write};
 use crate::pointerfacts::{self, Location};
 use crate::ranges::Interval;
@@ -196,7 +196,7 @@ pub struct Accesses {
     fills: IndexMap<InstId, Vec<MemRef>>,
     /// What the manager's accesses were made from: the references annotated
     /// and the calls' effects.
-    source: Option<(Rc<<Annotated as Analysis>::Result>, Rc<<CallEffects as Analysis>::Result>)>,
+    source: Option<Rc<<Annotated as Analysis>::Result>>,
     /// What the manager's plain accesses were made from: the references
     /// annotated, the calls' writes, and the module facts that decide a call.
     plain_source: Option<PlainSource>,
@@ -343,17 +343,21 @@ impl Analysis for Accesses {
         analyses: &mut Analyses,
     ) -> Self::Result {
         let annotated = analyses.get::<Annotated>(context, layout, function);
-        let calls = analyses.get::<CallEffects>(context, layout, function);
         let references = Result::as_ref(&*annotated).map_err(String::clone)?;
-        let effects = Result::as_ref(&*calls).map_err(String::clone)?;
+        let footprints = analyses.get::<crate::manager::CallFootprints>(context, layout, function);
+        let footprints = Result::as_ref(&*footprints).map_err(String::clone)?;
         let shape = analyses.get::<crate::cfg::Shape>(context, layout, function);
         let exposed = analyses.get::<crate::manager::ExposedFrames>(context, layout, function);
-        let made = Self::of(
-            &Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed),
-            references.clone(),
-            effects,
-        );
-        Ok(Rc::new(Self { source: Some((annotated, calls)), ..made }))
+        // The pointer value solve `Annotated` shares: the objects a call's
+        // pointer arguments reach.
+        let values = analyses.get::<crate::manager::PointerValues>(context, layout, function);
+        let mut unit =
+            Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed);
+        if let Ok(values) = &*values {
+            unit = unit.with_point_values(values);
+        }
+        let made = Self::of(&unit, references.clone(), footprints);
+        Ok(Rc::new(Self { source: Some(annotated), ..made }))
     }
 
     /// What an instruction touches is its own: a store or call moved to
@@ -370,7 +374,7 @@ impl Analysis for Accesses {
         analyses: &mut Analyses,
     ) -> Option<Self::Result> {
         let held = previous.as_ref().ok()?;
-        let (was_annotated, was_calls) = held.source.as_ref()?;
+        let was_annotated = held.source.as_ref()?;
         let inert = |inst: InstId| {
             let opcode = &function.instruction(inst).opcode;
             !llrm_mir::touched::touches_memory(opcode) && !opcode.is_terminator()
@@ -390,9 +394,7 @@ impl Analysis for Accesses {
             return None;
         }
         let annotated = analyses.get::<Annotated>(context, layout, function);
-        let calls = analyses.get::<CallEffects>(context, layout, function);
-        let unchanged = (Rc::ptr_eq(&annotated, was_annotated) || *annotated == **was_annotated)
-            && (Rc::ptr_eq(&calls, was_calls) || *calls == **was_calls);
+        let unchanged = Rc::ptr_eq(&annotated, was_annotated) || *annotated == **was_annotated;
         if !unchanged {
             return None;
         }
@@ -467,16 +469,13 @@ impl Accesses {
     }
 
     /// `unit`'s accesses as `alias` resolves them: each reference with its
-    /// provenance, each call's effect instantiated from `known` callees.
-    pub fn resolved(
-        unit: &Unit,
-        known: &IndexMap<String, Summary>,
-    ) -> Result<Self, String> {
-        Ok(Self::of(unit, unit.annotated()?.into_owned(), &alias::calls_annotated(&Procedure::of(*unit), known)?))
+    /// provenance.
+    pub fn resolved(unit: &Unit) -> Result<Self, String> {
+        Ok(Self::of(unit, unit.annotated()?.into_owned(), &crate::alias::calls_by_attributes(unit)))
     }
 
     /// `function`'s accesses, the manager's: from its `Annotated` and
-    /// `CallEffects`; the pipeline must require `Summaries`.
+    /// the unit's `GlobalsModRef`.
     pub fn managed(
         context: &Context,
         layout: &DataLayout,
@@ -486,22 +485,19 @@ impl Accesses {
         (*analyses.get::<Accesses>(context, layout, function)).clone()
     }
 
-    /// `unit`'s accesses from `references` (`alias::annotated`'s) and each
-    /// call's `effects` (`alias::calls_annotated`'s).
+    /// `unit`'s accesses from `references` (`alias::annotated`'s), each call
+    /// reading and writing what its footprint in `calls` says (the manager's
+    /// `CallFootprints`: its attributes and `GlobalsModRef`, no points-to
+    /// solve), and the bytes each call initializes.
     pub fn of(
         unit: &Unit,
         references: IndexMap<InstId, MemRef>,
-        effects: &IndexMap<InstId, Effect>,
+        calls: &llrm_mir::dense::IdMap<InstId, crate::alias::Effect>,
     ) -> Self {
-        let fills = effects
-            .iter()
-            .filter(|(_, effect)| !effect.fills.is_empty())
-            .map(|(&at, effect)| (at, effect.fills.clone()))
-            .collect();
         Self {
-            fills,
+            fills: initialized_by_calls(unit),
             ..Self::new(unit, references, |inst| {
-                effects.get(&inst).map(|effect| (Some(Rc::clone(&effect.loads)), Some(Rc::clone(&effect.stores))))
+                calls.get(&inst).map(|effect| (Some(Rc::clone(&effect.loads)), Some(Rc::clone(&effect.stores))))
             })
         }
     }
@@ -1199,7 +1195,10 @@ impl MemorySSA<'_> {
         } else {
             #[cfg(test)]
             MAY_CLOBBERS.with(|asked| asked.set(asked.get() + stores.len()));
-            let found = stores.iter().any(|store| self.may_clobber_cached(cell, store));
+            let found = match self.call_clobbers(site, cell) {
+                Some(asked) => asked,
+                None => stores.iter().any(|store| self.may_clobber_cached(cell, store)),
+            };
             assert!(!(missed && found), "LLRM_CHECK_CLOBBERS: objects that cannot meet were found to clobber");
             found
         };
@@ -1221,6 +1220,56 @@ impl MemorySSA<'_> {
         }
         asked[access] = 1 + u8::from(found);
         found
+    }
+
+    /// `changes` for the def at `site`: a call with a pointer-bearing cell is
+    /// the AA stack's to rule out, even where its footprint says anything;
+    /// the writes of the footprint decide the rest.
+    fn site_changes(
+        &self,
+        cell: &MemRef,
+        invariant: bool,
+        site: InstId,
+        slot: usize,
+        access: usize,
+    ) -> bool {
+        if cell.pointer.is_some()
+            && !invariant
+            && !cell.unwritable()
+            && matches!(
+                self.unit.function.instruction(site).opcode,
+                Opcode::Call(_) | Opcode::Invoke(_)
+            )
+        {
+            return self.clobbered(slot, cell, access, site);
+        }
+        changes(cell, invariant, self.written[&site].as_deref(), |_| self.clobbered(slot, cell, access, site))
+    }
+
+    /// Whether the call `site` may write `cell`, as the pin's AA stack answers
+    /// `getModRefInfo(Call, Loc)` (TBAA, BasicAA, GlobalsAA; MemorySSA.cpp
+    /// `instructionClobbersQuery` L320); none for another instruction or a
+    /// cell with no pointer, which the footprint answers.
+    fn call_clobbers(
+        &self,
+        site: InstId,
+        cell: &MemRef,
+    ) -> Option<bool> {
+        use crate::aa::{AAQueryInfo, AAResults, LocationSize, MemoryLocation};
+        if !matches!(
+            self.unit.function.instruction(site).opcode,
+            Opcode::Call(_) | Opcode::Invoke(_)
+        ) {
+            return None;
+        }
+        let location = MemoryLocation::new(cell.pointer?, LocationSize::Precise(u64::from(cell.width)));
+        let mut aggregate = crate::aggregate::AggregateAA::new();
+        aggregate.add_aa_result(crate::basicaa::BasicAA::new(&self.unit));
+        aggregate.add_aa_result(crate::typebasedaa::TypeBasedAA::new(&self.unit));
+        if let Some(info) = self.unit.globals_mr {
+            aggregate.add_aa_result(crate::globalsmodref::GlobalsAAResult::new(&self.unit, info));
+        }
+        Some(aggregate.get_mod_ref_info(site, Some(&location), &mut AAQueryInfo::default()).is_mod_set())
     }
 
     /// `may_clobber`, with the offsets of the pointers remembered.
@@ -1530,9 +1579,8 @@ impl MemorySSA<'_> {
                 {
                     continue;
                 }
-                let written = &self.written[&at];
                 let slot = self.slot(memory);
-                if changes(memory, invariant, written.as_deref(), |_| self.clobbered(slot, memory, candidate, at)) {
+                if self.site_changes(memory, invariant, at, slot, candidate) {
                     hit = Some(candidate);
                     break;
                 }
@@ -1544,9 +1592,7 @@ impl MemorySSA<'_> {
                 || nearest.is_none_or(|found| {
                     let at = self.access(found).site.expect("a def has a site");
                     let slot = self.slot(memory);
-                    changes(memory, invariant, self.written[&at].as_deref(), |_| {
-                        self.clobbered(slot, memory, found, at)
-                    })
+                    self.site_changes(memory, invariant, at, slot, found)
                 });
             if confirmed {
                 if let Some(found) = hit.or(nearest) {
@@ -1649,7 +1695,6 @@ impl MemorySSA<'_> {
                         (Some(edge_memory), Some(edge_slot)) if access.block != block => (edge_memory, edge_slot),
                         _ => (memory, slot),
                     };
-                    let written = &self.written[&access.site.expect("a def has a site")];
                     let site = access.site.expect("a def has a site");
                     let fixed_apart = match (
                         self.fixed.get(&site),
@@ -1678,11 +1723,7 @@ impl MemorySSA<'_> {
                             }
                             _ => false,
                         };
-                    if !apart
-                        && changes(queried, invariant, written.as_deref(), |_| {
-                            self.clobbered(queried_slot, queried, current, site)
-                        })
-                    {
+                    if !apart && self.site_changes(queried, invariant, site, queried_slot, current) {
                         ended(table, &mut chain, current);
                         found.insert(current);
                     } else {
@@ -1916,4 +1957,47 @@ impl<'a> Writers<'a> {
         read.unwritable()
             || (!self.anywhere && self.index.all_near(read, |writer, _| spares(accesses, program, read, writer)))
     }
+}
+
+/// The bytes each call of `unit` writes through an argument before it reads
+/// any: `initializes` at the site or on the callee's parameter.
+fn initialized_by_calls(unit: &Unit) -> IndexMap<InstId, Vec<MemRef>> {
+    let mut out = IndexMap::default();
+    for (_, inst) in unit.function.walk() {
+        let op = unit.function.instruction(inst);
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &op.opcode else { continue };
+        let callee = llrm_mir::memory::callee(unit.context, unit.function, inst)
+            .and_then(|one| unit.globals.get(one.0 as usize))
+            .and_then(GlobalValue::function);
+        let mut fills = Vec::new();
+        for (argument, &operand) in op.operands.iter().enumerate().take(info.argument_attrs.len()) {
+            let declared = callee.and_then(|one| one.parameter_attrs.get(argument)).map_or(&[][..], Vec::as_slice);
+            let byval = |attrs: &[llrm_mir::opcode::Attribute]| {
+                attrs
+                    .iter()
+                    .any(
+                        |one| matches!(
+                            one,
+                            llrm_mir::opcode::Attribute::Flag(name) | llrm_mir::opcode::Attribute::Type(name, _) if name == "byval"
+                        ),
+                    )
+            };
+            if byval(&info.argument_attrs[argument]) || byval(declared) {
+                continue;
+            }
+            for &(low, high) in llrm_mir::memory::initializes(&info.argument_attrs[argument])
+                .iter()
+                .chain(llrm_mir::memory::initializes(declared))
+            {
+                let Ok(width) = u32::try_from(high - low) else { continue };
+                let mut one = MemRef::at(unit, operand, width);
+                one.disp += low;
+                fills.push(one);
+            }
+        }
+        if !fills.is_empty() {
+            out.insert(inst, fills);
+        }
+    }
+    out
 }

@@ -25,7 +25,7 @@ Every number below was re-measured on `5334cc1dc` with the emulator rows harness
 
 ## Not in the 13, seen in the same pair
 
-- Code size worse with JumpThreading on: queens -O2 +8.7%, sieve -O3 +13.6%, x_switch -Os +6.6%, x_switch_sparse -O2/-O3/-Os +4 to 6%. Bytes are better in total (m16 -184/-286/-401, m32 -470/-890/-152 at O2/O3/Os). Same family as the switch rows; no separate cause was looked for.
+- Code size worse with JumpThreading on: queens -O2 +8.7%, sieve -O3 +13.6%, x_switch -Os +6.6%, x_switch_sparse -O2/-O3/-Os +4 to 6%. Bytes are better in total (JumpThreading on minus off, 71 vsgcc programs, emitted LEDATA, one build with `LLRM_NO_JUMPTHREADING` as the switch, re-taken 2026-10-22 on parity a9a0289b53 with the kernels written for 32 bits: m16 -937/-2621/-53, m32 -672/-2526/+23 at O2/O3/Os; the earlier -184/-286/-401 and -470/-890/-152 came from different builds and are replaced). The per-program list above is not re-taken. Same family as the switch rows; no separate cause was looked for.
 - Instructions up with clocks better: bintree -O3 +7.3% ins, -4.3% clocks.
 - Wrong output at m32 -Os on both sides, not from JumpThreading: recgcd, switch.
 

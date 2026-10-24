@@ -16,9 +16,10 @@ use llrm_transforms::inline::Threshold;
 use llrm_transforms::pipeline;
 
 use crate::abi::machine::Machine;
+use crate::backend::shadow::Selector;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-fno-inline=NAME]... [-disable-lsr] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-fexcess-precision=standard|fast] [-f[no-]float-store] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [-m[no-]bss-begin] [-mcode-segment=NAME] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-g] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-fno-inline=NAME]... [-disable-lsr] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-fexcess-precision=standard|fast] [-f[no-]float-store] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [-m[no-]bss-begin] [-mcode-segment=NAME] [--isel=old|dag|shadow] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-g] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -78,7 +79,6 @@ impl Level {
 /// gcc's `-f` pass names, each with the options it sets.
 const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("allocation-search", |options, on| options.search = on),
-    ("allocation-routes", |options, on| options.routes = on),
     ("allocation-search-all", |options, on| options.exhaustive = on),
     ("unroll-loops", |options, on| {
         options.unroll = on;
@@ -102,6 +102,7 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("loop-unroll-and-jam", |options, on| options.unroll_and_jam = on),
     ("tree-ch", |options, on| options.copy_headers = on),
     ("ipa-cp-clone", |options, on| options.inline.cp_clone = on),
+    ("inline-recursive", |options, on| options.inline.recursive = on),
     ("ipa-vrp", |options, on| options.ipa_ranges = on),
     ("gcse", |options, on| (options.forward, options.drop_loads) = (on, on)),
     ("tree-pre", |options, on| options.pre = on),
@@ -110,6 +111,9 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("tree-dse", |options, on| options.drop_stores = on),
     ("tree-dce", |options, on| options.dead = on),
     ("tree-sink", |options, on| options.sink = on),
+    ("llrm-spares", |options, on| options.spare_loads = on),
+    ("llrm-homes", |options, on| options.stored_homes = on),
+    ("llrm-loop-opened", |options, on| options.loop_opened = on),
     ("tree-sra", |options, on| options.promote = on),
     ("move-loop-invariants", |options, on| options.hoist = on),
     ("tree-loop-distribute-patterns", |options, on| options.loopidioms = on),
@@ -217,6 +221,8 @@ pub struct Flags {
     pub stack_limit: Option<i64>,
     /// `-fno-inline=NAME`, each: the function NAME is `noinline`.
     pub no_inline: Vec<String>,
+    /// `--isel=`: the instruction selector.
+    pub isel: Selector,
 }
 
 impl Default for Flags {
@@ -246,6 +252,7 @@ impl Default for Flags {
             stack_usage: false,
             stack_limit: None,
             no_inline: Vec::new(),
+            isel: Selector::default(),
         }
     }
 }
@@ -318,6 +325,7 @@ impl Flags {
                         .round() as i64,
                 );
             }
+            "--isel" => self.isel = Selector::parse(&value("--isel")?)?,
             "--machine" => self.machine = Some(PathBuf::from(value("--machine")?)),
             _ if flag.starts_with("-O") => self.level = Level::parse(&flag[2..])?,
             _ if Self::mode_flag(flag).is_some() => self.mode = Self::mode_flag(flag),
@@ -487,6 +495,7 @@ impl Flags {
             stack_usage: self.stack_usage,
             stack_limit: self.stack_limit,
             no_inline: self.no_inline.clone(),
+            isel: self.isel,
             abi: self.abi.clone(),
             float_store: self.float_store,
             code_segment: self.code_segment.clone(),

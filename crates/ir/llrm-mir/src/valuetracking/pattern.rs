@@ -535,7 +535,7 @@ pub fn intrinsic_id(
     q: &Query,
     inst: InstId,
 ) -> Option<IntrinsicId> {
-    intrinsic_id_of_name(q.callee_name(inst)?)
+    q.callee_intrinsic_id(inst)
 }
 
 // ---- nonzero.rs ----

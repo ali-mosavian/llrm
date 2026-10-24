@@ -670,7 +670,7 @@ mod tests {
         op: Operation,
         name: &str,
     ) -> Arc<Insn> {
-        let what = Semantics { name: Some(name.to_owned()), ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), ..Semantics::new(op) };
         Arc::new(Insn::new(at, Some((at, 1)), Some(what), Vec::new(), Vec::new()))
     }
 

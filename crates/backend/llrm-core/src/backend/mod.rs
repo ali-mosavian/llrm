@@ -56,7 +56,7 @@
 //!   #  phase (name)             module        notes
 //!   1  far-indirect-calls       farcall       memory operand for a far call
 //!   2  SharedConstants          phiconst      one value for a constant several phi edges carry
-//!   3  SsaSpill                 ssaspill      spiller route only
+//!   4  liverangeshrink          liverangeshrink  instruction up to its operands' last def
 //!   4  phielim                  phielim       phis -> copy groups; SSA ends
 //!   5  pressuresink             pressuresink  move a load to its one reader
 //!   6  floatfold                floatfold     float load as memory operand
@@ -75,11 +75,11 @@
 //! ```
 //!
 //! Phases 4 to 9 are in `machine_with` before `allocate`; `allocate` calls
-//! `splitkit`, `spillplacement`, `spiller`, `spillforward` and `postings` for
-//! live-range splitting and spilling, and consults `constrain`, `classes`,
+//! `spillplacement`, `slots` and `postings` for live-range splitting and
+//! spilling, and consults `constrain`, `classes`,
 //! `registerinfo` and `datagroup` for what each value may be assigned.
 //! `peephole` calls the sub-passes `regthrash`, `machinecp`, `copysink`,
-//! `spillforward`, `postrasink`, `storecombine`, `sharedstores`,
+//! `postrasink`, `storecombine`, `sharedstores`,
 //! `exactaddress`, `machinecse`, `machinedce` and `upperzero`, and the rule
 //! groups of `peep`.
 //!
@@ -115,8 +115,8 @@
 //! `-m16 -O2`.
 //!
 //! # Runs
-//! `assemble::assembled_by` runs it once per module. The gating of the two
-//! allocation routes (`-fallocation-routes`, `-fallocation-search`,
+//! `assemble::assembled_by` runs it once per module. The gating of the
+//! allocation search (`-fallocation-search`,
 //! `-fallocation-search-all`, at -Os candidates priced in bytes) is described
 //! in `assemble` and `allocate`. `ISEL_DUMP=1` prints the LIR after each
 //! machine phase (`lirtext`).
@@ -141,6 +141,7 @@ pub mod callregs;
 pub mod cfi;
 pub mod classes;
 pub mod coalesce;
+pub mod combiner;
 pub mod comparefold;
 pub mod compares;
 pub mod constpool;
@@ -167,6 +168,8 @@ pub mod fpregs;
 pub mod fpstack;
 pub mod frame;
 pub mod framefree;
+pub mod framelowering;
+pub mod frameobjects;
 pub mod funnel;
 pub mod globals;
 pub mod hintwalk;
@@ -185,27 +188,45 @@ pub mod selectors {
 
     include!(concat!(env!("OUT_DIR"), "/selectors.rs"));
 }
+pub mod booleans;
+pub mod callframe;
+pub mod cmpsub;
 pub mod edges;
+pub mod fixupbw;
+pub mod fixupsetcc;
+pub mod flagscopy;
 pub mod incremental;
 pub mod intbits;
 #[cfg(test)]
 mod isel_tests;
 pub mod jumps;
 pub mod lanes;
+pub mod latecleanup;
 pub mod layout;
+pub mod leaopt;
 pub mod legalize;
 pub mod lifetimes;
 pub mod lirtext;
 pub mod live;
 pub mod liveness;
+pub mod liverangeshrink;
 pub mod liveunion;
 pub mod loopslots;
 pub mod lower_int64;
 pub mod machinecp;
 pub mod machinecse;
 pub mod machinedce;
+pub mod machinelicm;
+pub mod machinesched;
 pub mod machinesink;
 pub mod masm;
+pub mod memcpycall;
+#[cfg(test)]
+mod memcpycall_tests;
+pub mod memsetpattern;
+#[cfg(test)]
+mod memsetpattern_tests;
+pub mod mirprint;
 pub mod nativeframe;
 pub mod nearcode;
 pub mod needs;
@@ -224,13 +245,18 @@ pub mod postrasink;
 pub mod precse;
 pub mod pressuresink;
 pub mod prologue;
+pub mod pushfold;
 pub mod regthrash;
 pub mod relayout;
 pub mod rmw;
 pub mod saverestore;
 pub mod schedule;
 pub mod selectconstants;
+pub mod selectiondag;
 pub mod selects;
+pub mod shadow;
+#[cfg(test)]
+mod shadow_tests;
 pub mod shrinkwrap;
 pub mod slots;
 pub mod stackusage;
@@ -299,15 +325,12 @@ pub mod select {
         emit_in(BITNESS, what, at, r#where, short, relocated, held)
     }
 }
+pub mod bodyfacts;
 pub mod regclass;
 pub mod registerinfo;
+pub mod rewriter;
 pub mod sharedstores;
-pub mod spiller;
-pub mod spillforward;
 pub mod spillplacement;
-pub mod splitkit;
-pub mod ssarepair;
-pub mod ssaspill;
 pub mod storecombine;
 pub mod storedhomes;
 pub mod target;
@@ -324,5 +347,3 @@ pub(crate) mod regalloc_fuzz_tests;
 pub mod regalloc_input;
 #[cfg(test)]
 mod regalloc_total_tests;
-#[cfg(test)]
-mod ssaspill_tests;

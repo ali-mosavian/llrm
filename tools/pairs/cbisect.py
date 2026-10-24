@@ -40,7 +40,6 @@ def measure(sha: str, source: Path, flags: list[str], done: set[str]) -> None:
     s9 = sha[:9]
     if s9 in done:
         return
-    git("checkout", "-q", "--detach", sha, cwd=WORKTREE)
     built = subprocess.run(["bash", str(HERE / "pair_build.sh"), str(SCRATCH), s9], cwd=WORKTREE, capture_output=True, text=True)
     binary = SCRATCH / f"sbp-{s9}" / "dist" / "llrm-c"
     if built.returncode or not binary.exists():

@@ -7,6 +7,7 @@ table's `LLRM_CHECK_REPLAY` caught on tests/run/c/shrink_wrapped_frame.c only in
 import os
 import subprocess
 import sys
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -20,7 +21,8 @@ FIXTURES = sorted((HERE.parent / "tests/run/c").glob("*.c"))
 
 def compiled(source: Path) -> str | None:
     env = {**{k: v for k, v in os.environ.items() if not k.startswith("LLRM_")}, **{f"LLRM_CHECK_{one}": "1" for one in identical.CHECKS}}
-    done = subprocess.run([str(llrmbin.bin_dir() / "llrm-c"), "-m32", "-march=i486", "-O2", "-o", os.devnull, str(source)], capture_output=True, text=True, env=env)
+    with tempfile.TemporaryDirectory() as work:  # an object, not /dev/null: llrm-c encodes only for `.obj`, so the null device never reached the encoder
+        done = subprocess.run([str(llrmbin.bin_dir() / "llrm-c"), "-m32", "-march=i486", "-O2", "-o", str(Path(work) / "out.obj"), str(source)], capture_output=True, text=True, env=env)
     return None if done.returncode == 0 else f"{source.name}: {done.stderr.strip().splitlines()[0][:200] if done.stderr.strip() else done.returncode}"
 
 

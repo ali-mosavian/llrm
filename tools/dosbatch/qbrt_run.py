@@ -127,6 +127,12 @@ def main(argv: list[str]) -> int:
             if (why := unexpected(test_qbrt.KNOWN, name, target, one)) is not None:
                 differing += 1
                 print(f"NOTPASS {name} {target} {one.reference.status} {one.candidate.status} {why}", flush=True)
+    for name in names:
+        stored = test_qbrt.real_bc_text(test_qbrt.SOURCES[name])
+        one = results[name].get(qbbuild.REAL)
+        if stored is not None and one is not None and name not in test_qbrt.BC_KNOWN and (why := test_qbrt.not_real_bc(stored, one.reference.text, one.candidate.text)):
+            differing += 1
+            print(f"NOTPASS {name} {qbbuild.REAL} real-bc {why}", flush=True)
     print(f"RESULT {2 * len(names) - differing} of {2 * len(names)} pass (program x target); {len(failed)} did not compile")
     return len(failed) + differing
 
