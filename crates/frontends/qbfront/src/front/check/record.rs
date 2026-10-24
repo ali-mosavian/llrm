@@ -169,7 +169,12 @@ impl Checker {
         }
         let typed = self.constant_expr(bound)?;
         if typed.ty.string() {
-            self.err(bound.span(), "Type mismatch");
+            self.err_because(
+                bound.span(),
+                "Type mismatch",
+                Reason::headline("an array bound must be a number, but `{text}` is a string")
+                    .help("use a number or a CONST"),
+            );
             return None;
         }
         let value = typed.known()? as i64;

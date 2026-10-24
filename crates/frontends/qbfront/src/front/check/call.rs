@@ -61,7 +61,13 @@ impl Checker {
                             Ty::Record(_) if name == "LSET" => {
                                 if let Some(value) = self.expr(right) {
                                     if !matches!(value.ty, Ty::Record(_)) {
-                                        self.err(right.span(), "Type mismatch");
+                                        let headline =
+                                            format!("LSET of a record needs a record on the right, but `{{text}}` is {}", value.ty.label());
+                                        self.err_because(
+                                            right.span(),
+                                            "Type mismatch",
+                                            Reason::headline(headline).help("use a variable of the same TYPE"),
+                                        );
                                     }
                                 }
                             }

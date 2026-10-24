@@ -263,7 +263,7 @@ fn syntax(
     let statement = if own.is_empty() { "statement".to_owned() } else { format!("{own} statement") };
     let found = if place.at_end { "the end of the line".to_owned() } else { format!("`{}`", place.text) };
     // a number cut short by a stray letter or dot: `1E`, `1.2.3`
-    if place.run.starts_with(|c: char| c.is_ascii_digit() || c == '.')
+    if place.run.starts_with(|c: char| c.is_ascii_digit() || c == '.' || c == '&')
         && place.text.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '.')
     {
         let number = format!("{}{}", place.run, place.text);
@@ -282,11 +282,49 @@ fn syntax(
             "use a smaller number, or a label with a name".to_owned(),
         );
     }
-    // `FNa(1)` where `DEF FNa` was written without parameters
-    if place.text == "(" && place.run.to_ascii_uppercase().starts_with("FN") {
+    // `FNa (1)`, `FN a(1)`, `FNa(1)` where `DEF FNa` was written without parameters
+    if place.text == "(" {
+        let words: Vec<&str> = place.before.split_whitespace().collect();
+        let name = match words.as_slice() {
+            [.., fn_word, name] if fn_word.eq_ignore_ascii_case("FN") => Some(format!("FN{name}")),
+            [.., last] if last.len() > 2 && last[..2].eq_ignore_ascii_case("FN") => {
+                let end = last.rfind(|c: char| !c.is_ascii_alphanumeric() && !matches!(c, '$' | '%' | '&' | '!' | '#')).map_or(0, |at| at + 1);
+                Some(last[end..].to_owned())
+            }
+            _ => None,
+        };
+        if let Some(name) = name.filter(|name| name.len() > 2) {
+            return (
+                format!("`{name}` takes no arguments: it was defined without a parameter list"),
+                format!("remove the parentheses, or give `DEF {name}` parameters"),
+            );
+        }
+    }
+    // two values side by side: `"a" "b"`, `"a""b"`
+    if place.text.starts_with('"') && place.before.ends_with('"') {
         return (
-            format!("`{}` takes no arguments: it was defined without a parameter list", place.run),
-            format!("remove the parentheses, or give `DEF {}` parameters", place.run),
+            format!("`{}` follows another string with nothing between them", place.text),
+            "join strings with `+`; BASIC has no quote escape, write a quote as CHR$(34)".to_owned(),
+        );
+    }
+    // `;` joins items only in PRINT-style lists
+    if place.text == ";" && place.statement.is_empty() {
+        return (
+            "`;` cannot follow a value here".to_owned(),
+            "`;` separates the items of PRINT, LPRINT and INPUT; join strings with `+`".to_owned(),
+        );
+    }
+    // a line number, twice or malformed: `10 10 x = 1`, `-1 x = 1`, `1E3 x = 1`
+    if place.starts && (place.text.starts_with('-') || place.text.starts_with(|c: char| c.is_ascii_digit())) {
+        return (
+            format!("`{}` is not a valid line number", place.text),
+            "a line number is a plain whole number, and a line has at most one".to_owned(),
+        );
+    }
+    if place.text.starts_with(|c: char| c.is_ascii_digit()) && place.before.chars().all(|c| c.is_ascii_digit() || c == ' ') && !place.before.is_empty() {
+        return (
+            "a line can have only one line number".to_owned(),
+            "remove the second number, or put the statement on its own line".to_owned(),
         );
     }
     let summary = match &error.expected {

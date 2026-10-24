@@ -141,7 +141,16 @@ impl Checker {
         let ty = match Ty::of_suffix(name) {
             Some(declared) => {
                 if declared.string() != typed.ty.string() {
-                    self.err(span, "Type mismatch");
+                    self.err_because(
+                        span,
+                        "Type mismatch",
+                        Reason::headline(format!(
+                            "`{{name}}` has the type character of {}, but its value is {}",
+                            declared.label(),
+                            typed.ty.label()
+                        ))
+                        .help("drop the type character, or give the CONST a value of that type"),
+                    );
                     return;
                 }
                 declared

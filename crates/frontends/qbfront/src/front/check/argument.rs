@@ -177,17 +177,19 @@ impl Checker {
                 return self.record_array(argument);
             }
             other => {
-                self.err(
-                    other.span(),
-                    if matches!(
-                        other,
-                        Expr::Apply { arguments, .. } | Expr::Index { indices: arguments, .. } if arguments.is_empty()
-                    ) {
-                        "Syntax error"
-                    } else {
-                        "Array not defined"
-                    },
-                );
+                if matches!(
+                    other,
+                    Expr::Apply { arguments, .. } | Expr::Index { indices: arguments, .. } if arguments.is_empty()
+                ) {
+                    self.err_because(
+                        other.span(),
+                        "Syntax error",
+                        Reason::headline("`{text}` is not an array that can be passed here")
+                            .help("a whole array is passed by its name; an array inside a record only as an argument of a CALL"),
+                    );
+                } else {
+                    self.err(other.span(), "Array not defined");
+                }
                 return None;
             }
         };
