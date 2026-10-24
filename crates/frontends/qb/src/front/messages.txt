@@ -80,3 +80,4 @@ based integer does not fit its type|`{text}` has more digits than a LONG holds|u
 Must be first statement on the line|`{statement}` has to be the first statement on its line (only a line number or a label may come before it)|put it on a line of its own
 $Metacommand Error|the metacommand `{text}` is written wrong|an $INCLUDE needs `'$INCLUDE: 'file'`, a $LINESIZE needs a size
 Form variable already in use or illegal form name|the form name after `$FORM` is missing, already used, or not a name|write `'$FORM name`
+Syntax error /OPTION|`OPTION` is only valid at module level, before any SUB or FUNCTION|put `OPTION BASE 0` or `OPTION BASE 1` at the top of the file, before any array is dimensioned
