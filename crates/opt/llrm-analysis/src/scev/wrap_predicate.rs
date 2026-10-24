@@ -228,9 +228,25 @@ impl ScalarEvolution {
         union: &PredicateUnion,
         other: &Predicate,
     ) -> bool {
-        // D1: no clause for a wrap predicate implied after the equal
-        // predicates rewrite it.
-        union.preds.iter().any(|one| self.predicate_implies(cx, one, other))
+        if union.preds.iter().any(|one| self.predicate_implies(cx, one, other)) {
+            return true;
+        }
+        // A wrap predicate may be implied by a wrap predicate in the union
+        // after applying the equal predicates.
+        let Predicate::Wrap(wanted) = other else { return false };
+        let Kind::AddRec(_, header) = self.node(wanted.ar).kind else { return false };
+        for one in &union.preds {
+            let Predicate::Wrap(held) = one else { continue };
+            let rewritten = self.rewrite_using_predicate(cx, held.ar, header, union);
+            if !matches!(self.node(rewritten).kind, Kind::AddRec(..)) {
+                continue;
+            }
+            let Predicate::Wrap(again) = self.get_wrap_predicate(rewritten, held.flags) else { unreachable!() };
+            if self.wrap_predicate_implies(cx, &again, wanted) {
+                return true;
+            }
+        }
+        false
     }
 
     /// `SCEVUnionPredicate::add`.

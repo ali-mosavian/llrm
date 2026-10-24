@@ -2001,11 +2001,16 @@ fn test_a_dividend_two_instructions_require_is_copied_into_its_register_once() {
 #[test]
 fn test_a_constant_divisor_of_a_non_negative_counter_is_a_reciprocal_without_a_spill() {
     // stride's `i \ 5` was `cdq; idiv` and spilled one of three recurrences;
-    // `i` is DEFINT and counts up from 0, so it is `mul` by the reciprocal.
+    // `i` is DEFINT and counts up from 0, so it was `mul` by the reciprocal.
+    // The division is a counter now (`i \ 5` runs 0, 1, 2 ...: one `inc`), so
+    // the loop holds no division of either kind and no spill.
     let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/run/qb/stride.bas");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let body = backward_loop(&listing(&program));
-    assert!(!body.contains("[bp") && !body.contains("idiv") && body.matches("mul").count() == 1, "{body}");
+    assert!(
+        !body.contains("[bp") && !body.contains("idiv") && !body.contains("mul") && body.contains("inc "),
+        "{body}"
+    );
 }
 
 #[test]
