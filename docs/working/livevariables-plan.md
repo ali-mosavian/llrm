@@ -39,9 +39,9 @@ The pin has PHIElimination directly before TwoAddress and runs its x86 pre-RA pa
 | Ours (between phielim and twoaddr) | Pin slot | Moves before phielim |
 |---|---|---|
 | `pressuresink` | none (the scheduler orders loads) | gone with the pre-RA machine scheduler (w-2, row 65), 2026-11-20 at the earliest |
-| `fixupsetcc` | `addPreRegAlloc`, before PHIE | now |
-| `callframe` | `addPreRegAlloc`, before PHIE | now |
-| `flagscopy` | `addPreRegAlloc` (`X86FlagsCopyLowering`), before PHIE | now |
+| `fixupsetcc` | `addPreRegAlloc`, before PHIE | blocked: its F1 defines a value twice and the SSA check refuses (`value#4 is defined 2 times`); needs sub-register values in LIR, the C1 lanes of `row63-66-plan.md` (owner splitkit-port, with the LIR data model after parity green; no date there yet, asked of the coordinator 2026-10-24) |
+| `callframe` | `addPreRegAlloc`, before PHIE | done (#4275) |
+| `flagscopy` | `addPreRegAlloc` (`X86FlagsCopyLowering`), before PHIE | done (this PR) |
 | `floatfold` | none (folded at selection) | now if it reads no phi copy; else with the selector's folding |
 | `pushfold` | inside `X86CallFrameOptimization`, before PHIE | now, after `callframe` |
 | `FloatPrep`, `FloatAlloc` | `X86FPStackifier`, after register allocation | with machine-cleanup row 9 (w-2 step 9, code 2026-11-20) |
