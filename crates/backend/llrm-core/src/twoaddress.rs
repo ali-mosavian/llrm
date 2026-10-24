@@ -108,6 +108,13 @@ struct State {
     lv: crate::liveness::livevariables::LiveVariables,
 }
 
+// The values whose kills were made again from a block, for a test that an edit
+// remakes only the ones whose naming changed.
+#[cfg(test)]
+thread_local! {
+    static REFRESHED: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 impl State {
     /// The kills of `value` in `block` made again from the block as it is: the
     /// block's boundary is what the edits leave as it was, so what the
@@ -120,6 +127,8 @@ impl State {
         block: usize,
     ) {
         use crate::liveness::livevariables::{Kill, Site};
+        #[cfg(test)]
+        REFRESHED.with(|seen| seen.borrow_mut().push(value));
         let live_in = self.lv.is_live_in_block(value, block);
         let live_out = self.lv.is_live_out_block(value, block);
         let sites = crate::liveness::livevariables::segment_kills(
@@ -144,6 +153,31 @@ impl State {
         values.dedup();
         for value in values {
             self.refresh_kills(value, block);
+        }
+    }
+
+    /// `new` takes the place of `old`: a value both name the same way keeps its
+    /// kill, now at `new` (`replaceKillInstruction`); a value only one names,
+    /// or names as a use in one and a definition in the other, is made
+    /// again from the block (a full rescan of it for every value named was
+    /// 1.18 M Ir of `replace`).
+    fn retarget_kills(
+        &mut self,
+        old: &Insn,
+        new: &Insn,
+        block: usize,
+    ) {
+        let mut values: Vec<u32> =
+            old.uses.iter().chain(&old.defines).chain(&new.uses).chain(&new.defines).copied().collect();
+        values.sort_unstable();
+        values.dedup();
+        for value in values {
+            let role = |one: &Insn| (one.uses.contains(&value), one.defines.contains(&value));
+            if role(old) == role(new) {
+                self.lv.replace_kill_instruction(value, old.id(), new.id());
+            } else {
+                self.refresh_kills(value, block);
+            }
         }
     }
 
@@ -248,8 +282,7 @@ impl BodyFacts {
         state.block_of.insert(new.id(), block);
         state.add_operands(&new);
         state.insns.insert(new.id(), Arc::clone(&new));
-        state.refresh_named(&before, block);
-        state.refresh_named(&new, block);
+        state.retarget_kills(&before, &new, block);
     }
 
     /// The instruction `key` goes before `before` (the end of the block without
@@ -302,8 +335,8 @@ impl BodyFacts {
         state.block_of.insert(last.id(), block);
         state.add_operands(last);
         state.insns.insert(last.id(), Arc::clone(last));
-        state.refresh_named(&before, block);
-        for new in made {
+        state.retarget_kills(&before, last, block);
+        for new in rest {
             state.refresh_named(new, block);
         }
     }
@@ -1387,5 +1420,38 @@ mod tests {
             LirBody::new("t", 0, vec![LirBlock::new(0, vec![]).into()], IndexMap::default(), IndexMap::default());
         let facts = BodyFacts::of(&body);
         assert!(Commuter::sized(&facts, 0, 100).distance.capacity() >= 100);
+    }
+
+    /// `replace` remade the kills of every value `one` and the new instructions
+    /// name, scanning the block for each (1.18 M Ir on d_faces): a value named
+    /// the same way before and after keeps its kill at the new instruction.
+    #[test]
+    fn test_replacing_a_tied_pair_remakes_only_the_kills_whose_naming_changed() {
+        let held = |value: u32| Held { value, width: 4 };
+        let make = |at: i64, op: Operation, name: &str, defines: Vec<u32>, uses: Vec<u32>| {
+            let what = Semantics {
+                name: Some(name.into()),
+                dests: defines.iter().map(|&value| Loc::Held(held(value))).collect(),
+                sources: uses.iter().map(|&value| Loc::Held(held(value))).collect(),
+                ..Semantics::new(op)
+            };
+            Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
+        };
+        let one = make(1, Operation::Binary, "add", vec![3], vec![1, 2]);
+        let body = LirBody::new(
+            "t",
+            0,
+            vec![LirBlock::new(0, vec![make(0, Operation::Move, "mov", vec![1], vec![]), Arc::clone(&one)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let facts = BodyFacts::of(&body);
+        let copy = make(2, Operation::Move, "mov", vec![3], vec![1]);
+        let last = make(3, Operation::Binary, "add", vec![3], vec![3, 2]);
+        REFRESHED.with(|seen| seen.borrow_mut().clear());
+        facts.replace(0, &one, &[copy, last]);
+        let seen = REFRESHED.with(|seen| seen.borrow().clone());
+        assert!(!seen.is_empty(), "the premise: the copy's values are remade");
+        assert!(!seen.contains(&2), "v2 is read by `one` and by the new add alike: {seen:?}");
     }
 }
