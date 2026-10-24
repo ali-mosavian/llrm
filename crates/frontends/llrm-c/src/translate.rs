@@ -771,7 +771,9 @@ struct Body<'a, 't> {
     labels: HashMap<String, usize>,
     slots: HashMap<String, i64>,
     globals: HashMap<i64, i64>,
-    done: HashMap<i64, Got>,
+    /// What each tree node evaluated to, by handle (a dense row: the handles
+    /// are a function's node numbers).
+    done: Vec<Option<Got>>,
     selects: IndexMap<String, (Vec<(i64, String)>, Option<String>)>,
     calls: Vec<h::CallAbi>,
     instructions: i64,
@@ -1166,7 +1168,7 @@ impl<'a, 't> Body<'a, 't> {
             labels: HashMap::default(),
             slots: HashMap::default(),
             globals: HashMap::default(),
-            done: HashMap::default(),
+            done: Vec::new(),
             selects: IndexMap::default(),
             stated_instructions: Vec::new(),
             stated_operands: Vec::new(),
@@ -1419,22 +1421,23 @@ impl<'a, 't> Body<'a, 't> {
     /// The scaled products no instruction reads: an index that counts elements
     /// leaves its multiply behind.
     fn drop_unread_scales(&mut self) {
+        // Only a scale's result can be dead here, so only those are noted.
         fn read(
             operand: &Operand,
+            scales: &HashMap<i64, (i64, i64)>,
             into: &mut HashSet<i64>,
         ) {
+            let mut note = |value: i64| {
+                if scales.contains_key(&value) {
+                    into.insert(value);
+                }
+            };
             match operand {
-                Operand::ValueRef(one) => {
-                    into.insert(one.value);
-                }
-                Operand::ArrayElement(one) => one.indices.iter().for_each(|index| read(index, into)),
-                Operand::ProjectedPlace(one) => one.indices.iter().for_each(|index| read(index, into)),
-                Operand::IndirectPlace(one) => {
-                    into.insert(one.base);
-                }
-                Operand::DescriptorPlace(one) => {
-                    into.insert(one.base);
-                }
+                Operand::ValueRef(one) => note(one.value),
+                Operand::ArrayElement(one) => one.indices.iter().for_each(|index| read(index, scales, into)),
+                Operand::ProjectedPlace(one) => one.indices.iter().for_each(|index| read(index, scales, into)),
+                Operand::IndirectPlace(one) => note(one.base),
+                Operand::DescriptorPlace(one) => note(one.base),
                 Operand::Constant(_) | Operand::PlaceRef(_) => {}
             }
         }
@@ -1445,7 +1448,7 @@ impl<'a, 't> Body<'a, 't> {
         for block in &self.blocks {
             let operands = block.instructions.iter().flat_map(|one| &one.operands);
             let ending = block.terminator.iter().flat_map(|one| &one.operands);
-            operands.chain(ending).for_each(|operand| read(operand, &mut used));
+            operands.chain(ending).for_each(|operand| read(operand, &self.scales, &mut used));
         }
         let scales = &self.scales;
         let dead = |one: &h::Instruction| {
@@ -2065,16 +2068,35 @@ impl<'a, 't> Body<'a, 't> {
 
     // ---- expressions ----
 
+    fn done_of(
+        &self,
+        key: i64,
+    ) -> Option<Got> {
+        usize::try_from(key).ok().and_then(|at| self.done.get(at).copied().flatten())
+    }
+
+    fn remember(
+        &mut self,
+        key: i64,
+        got: Got,
+    ) {
+        let at = usize::try_from(key).expect("a node handle is not negative");
+        if self.done.len() <= at {
+            self.done.resize(at + 1, None);
+        }
+        self.done[at] = Some(got);
+    }
+
     fn eval(
         &mut self,
         node: &str,
     ) -> R<Got> {
         let key = hir::handle(node);
-        if let Some(&done) = self.done.get(&key) {
+        if let Some(done) = self.done_of(key) {
             return Ok(done);
         }
         let got = self.expression(node)?;
-        self.done.insert(key, got);
+        self.remember(key, got);
         Ok(got)
     }
 
@@ -2936,7 +2958,7 @@ impl<'a, 't> Body<'a, 't> {
         if let Some(bytes) = self.whole_constant(size) {
             self.scales.insert(result, (if index == left { a } else { b }, bytes));
         }
-        self.done.insert(hir::handle(node), Got::Value(result));
+        self.remember(hir::handle(node), Got::Value(result));
         Ok(())
     }
 
