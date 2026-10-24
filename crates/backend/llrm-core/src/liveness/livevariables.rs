@@ -20,6 +20,12 @@
 //! register as `requires`, `delivers` and `clobbers` of the instruction, which
 //! TwoAddress reads from it (`processCopy`).
 //!
+//! DEVIATE LV4 (owner w-1, exit with LV3): the body that TwoAddress reads has
+//! values with several definitions (a phi's temporary, the copy of a tied
+//! pair), so a block can hold several kills of one value, one for each segment
+//! that dies in it; the pin's holds one per block and PHIElimination and
+//! TwoAddress keep it by explicit calls.
+//!
 //! DEVIATE LV2 (owner w-1, no exit): a kill is an instruction id with the block
 //! it is in (the pin's pointer and `getParent`), or a phi's result for the dead
 //! definition of a phi (the pin's PHI instruction).
@@ -83,6 +89,15 @@ impl VarInfo {
         }
     }
 
+    /// Whether `site` kills the value (with several segments in a block, which
+    /// of them it ends does not matter to what asks).
+    pub fn is_killed_by(
+        &self,
+        site: Site,
+    ) -> bool {
+        self.kills.iter().any(|kill| kill.site == site)
+    }
+
     /// `findKill`: the kill in `block`.
     pub fn find_kill(
         &self,
@@ -102,6 +117,48 @@ pub struct LiveVariables {
     /// `PHIVarInfo`: the values the phis of the successors read at the end of
     /// each block.
     phi_var_info: Vec<Vec<u32>>,
+    /// Per block, the values live in and out (`from_dataflow` only): what edits
+    /// inside a block leave as they were.
+    live_in: Vec<Bits>,
+    live_out: Vec<Bits>,
+    /// The values the bit rows hold (one more than the largest).
+    top: usize,
+}
+
+/// The kills of one value in a block, in order: the instructions that end a
+/// segment of it (see [`LiveVariables::from_dataflow`]).
+pub fn segment_kills<'a>(
+    reg: u32,
+    insns: impl Iterator<Item = &'a Insn>,
+    live_in: bool,
+    live_out: bool,
+) -> Vec<Site> {
+    let mut kills = Vec::new();
+    // The last instruction naming the segment now open; none while the segment
+    // is the live-in one, not named yet.
+    let mut open: Option<Site> = None;
+    let mut is_open = live_in;
+    for one in insns {
+        let here = Site::Insn(one.id());
+        if one.uses.contains(&reg) {
+            open = Some(here);
+            is_open = true;
+        }
+        if one.defines.contains(&reg) {
+            if is_open && let Some(previous) = open {
+                kills.push(previous);
+            }
+            open = Some(here);
+            is_open = true;
+        }
+    }
+    if is_open
+        && !live_out
+        && let Some(last) = open
+    {
+        kills.push(last);
+    }
+    kills
 }
 
 impl LiveVariables {
@@ -121,8 +178,16 @@ impl LiveVariables {
                 }
             }
         }
-        let mut this =
-            Self { cfg, blocks, info: HashMap::default(), def_block, phi_var_info: vec![Vec::new(); blocks] };
+        let mut this = Self {
+            cfg,
+            blocks,
+            info: HashMap::default(),
+            def_block,
+            phi_var_info: vec![Vec::new(); blocks],
+            live_in: Vec::new(),
+            live_out: Vec::new(),
+            top: 0,
+        };
         this.analyze_phi_nodes(body, &number);
         // Depth first from the entry, successors in order.
         let mut visited = vec![false; blocks];
@@ -135,6 +200,178 @@ impl LiveVariables {
             stack.extend(this.cfg.succs[block].iter().rev().copied().filter(|&next| !visited[next]));
         }
         this
+    }
+
+    /// DEVIATE LV3 (owner w-1, exit 2026-12-11, `livevariables-plan.md`): the
+    /// same `VarInfo`s of a body that is not in SSA form, which the pin never
+    /// recomputes (PHIElimination keeps its own up to date). A value is alive
+    /// through a block that it enters and leaves without defining it; it is
+    /// killed in a block that does not leave it, by the last instruction that
+    /// names it there (a definition no one reads is its own kill).
+    pub fn from_dataflow(body: &LirBody) -> Self {
+        let cfg = Cfg::of(body);
+        let blocks = cfg.len();
+        let number: HashMap<i64, usize> = body.blocks.iter().enumerate().map(|(n, block)| (block.at, n)).collect();
+        let top = body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .flat_map(|one| one.defines.iter().chain(&one.uses))
+            .chain(body.blocks.iter().flat_map(|block| block.phis.iter().map(|phi| &phi.result)))
+            .chain(
+                body.blocks
+                    .iter()
+                    .flat_map(|block| block.phis.iter().flat_map(|phi| phi.incoming.iter().map(|edge| &edge.1))),
+            )
+            .map(|&value| value as usize + 1)
+            .max()
+            .unwrap_or(0);
+        let mut def_block: HashMap<u32, usize> = HashMap::default();
+        let (mut gen_, mut def, mut forced) =
+            (vec![Bits::new(top); blocks], vec![Bits::new(top); blocks], vec![Bits::new(top); blocks]);
+        for (at, block) in body.blocks.iter().enumerate() {
+            for phi in block.phis.iter() {
+                def[at].insert(phi.result as usize);
+                def_block.entry(phi.result).or_insert(at);
+                for &(from, value) in &phi.incoming {
+                    if let Some(&pred) = number.get(&from) {
+                        forced[pred].insert(value as usize);
+                    }
+                }
+            }
+            for one in block.insns.iter() {
+                for &value in &one.uses {
+                    if !def[at].contains(value as usize) {
+                        gen_[at].insert(value as usize);
+                    }
+                }
+                for &value in &one.defines {
+                    def[at].insert(value as usize);
+                    def_block.entry(value).or_insert(at);
+                }
+            }
+        }
+        // `live_in = gen + (live_out - def)`, `live_out = forced + live_in of
+        // the successors`.
+        let mut live_in = vec![Bits::new(top); blocks];
+        let mut live_out = forced;
+        loop {
+            let mut changed = false;
+            for at in (0..blocks).rev() {
+                let mut out = live_out[at].clone();
+                for &next in &cfg.succs[at] {
+                    out.union_with(&live_in[next]);
+                }
+                let mut into = out.clone();
+                into.subtract(&def[at]);
+                into.union_with(&gen_[at]);
+                if out != live_out[at] || into != live_in[at] {
+                    changed = true;
+                    live_out[at] = out;
+                    live_in[at] = into;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let mut this = Self {
+            cfg,
+            blocks,
+            info: HashMap::default(),
+            def_block,
+            phi_var_info: vec![Vec::new(); blocks],
+            live_in: Vec::new(),
+            live_out: Vec::new(),
+            top: 0,
+        };
+        for (at, block) in body.blocks.iter().enumerate() {
+            // Each value's segments in the block, in order: one starts where it
+            // is defined (or at the entry, if it is live in) and ends at its
+            // last use before the next definition or the end of the block. A
+            // segment no later instruction reads ends at its last name (a
+            // definition no one reads is its own kill); the last one is no kill
+            // where the value is live out.
+            // (value, the last instruction naming it in its segment, whether a
+            // segment is open)
+            let mut open: HashMap<u32, Site> = HashMap::default();
+            for value in live_in[at].iter() {
+                // Not named yet: the entry stands for the segment.
+                open.insert(value as u32, Site::Phi(u32::MAX));
+            }
+            let mut kills: Vec<(u32, Site)> = Vec::new();
+            for phi in block.phis.iter() {
+                open.insert(phi.result, Site::Phi(phi.result));
+            }
+            for one in block.insns.iter() {
+                let here = Site::Insn(one.id());
+                for &value in &one.uses {
+                    open.insert(value, here);
+                }
+                for &value in &one.defines {
+                    if let Some(&previous) = open.get(&value)
+                        && previous != Site::Phi(u32::MAX)
+                    {
+                        kills.push((value, previous));
+                    }
+                    open.insert(value, here);
+                }
+            }
+            for (value, site) in open {
+                if site != Site::Phi(u32::MAX) && !live_out[at].contains(value as usize) {
+                    kills.push((value, site));
+                }
+            }
+            for (value, site) in kills {
+                this.get_var_info(value).kills.push(Kill { site, block: at });
+            }
+            for value in live_in[at].iter() {
+                if live_out[at].contains(value) && !def[at].contains(value) {
+                    this.get_var_info(value as u32).alive_blocks.insert(at);
+                }
+            }
+        }
+        this.live_in = live_in;
+        this.live_out = live_out;
+        this.top = top;
+        this
+    }
+
+    /// Whether `reg` is live into `block` (`from_dataflow`); a value made since
+    /// is local to its block.
+    pub fn is_live_in_block(
+        &self,
+        reg: u32,
+        block: usize,
+    ) -> bool {
+        self.live_in.get(block).is_some_and(|bits| (reg as usize) < self.top && bits.contains(reg as usize))
+    }
+
+    /// Whether `reg` is live out of `block` (`from_dataflow`).
+    pub fn is_live_out_block(
+        &self,
+        reg: u32,
+        block: usize,
+    ) -> bool {
+        self.live_out.get(block).is_some_and(|bits| (reg as usize) < self.top && bits.contains(reg as usize))
+    }
+
+    /// What the kills and alive blocks of every value are, to compare two
+    /// `LiveVariables` of one body: `(value, alive blocks, kills by site)`,
+    /// values with neither left out.
+    pub fn shape(&self) -> Vec<(u32, Vec<usize>, Vec<(Site, usize)>)> {
+        let mut rows: Vec<(u32, Vec<usize>, Vec<(Site, usize)>)> = self
+            .info
+            .iter()
+            .map(|(&value, info)| {
+                let mut kills: Vec<(Site, usize)> = info.kills.iter().map(|kill| (kill.site, kill.block)).collect();
+                kills.sort_by_key(|&(site, block)| (block, format!("{site:?}")));
+                (value, info.alive_blocks.iter().collect::<Vec<usize>>(), kills)
+            })
+            .filter(|row| !row.1.is_empty() || !row.2.is_empty())
+            .collect();
+        rows.sort_by_key(|row| row.0);
+        rows
     }
 
     /// `analyzePHINodes`: a phi's operand is read at the end of the block it
@@ -508,6 +745,49 @@ mod tests {
         assert!(lv.is_live_out(1, 0) && lv.is_live_out(1, 1) && !lv.is_live_out(1, 2));
         assert!(!lv.is_live_in(1, 0), "defined there");
         assert!(lv.is_live_in(1, 1) && lv.is_live_in(1, 2));
+    }
+
+    /// The dataflow finds what the pin's analysis finds on an SSA body: the
+    /// diamond, a phi, and a straight line.
+    #[test]
+    fn test_the_dataflow_finds_what_analyze_finds_on_ssa_bodies() {
+        let bodies = {
+            let (def, in1, in2) = (insn(0, "mov", &[1], &[]), insn(1, "add", &[2], &[1]), insn(2, "ret", &[], &[1]));
+            let diamond = body(vec![block(0, &[1, 2], vec![def]), block(1, &[2], vec![in1]), block(2, &[], vec![in2])]);
+            let (d1, d2, ret) = (insn(0, "mov", &[1], &[]), insn(1, "mov", &[2], &[]), insn(2, "ret", &[], &[3]));
+            let mut join = block(2, &[], vec![ret]);
+            join.phis = vec![Phi { result: 3, incoming: vec![(0, 1), (1, 2)] }].into();
+            let phi = body(vec![block(0, &[1, 2], vec![d1]), block(1, &[2], vec![d2]), join]);
+            let line = body(vec![block(
+                0,
+                &[],
+                vec![
+                    insn(0, "mov", &[1], &[]),
+                    insn(1, "add", &[2], &[1]),
+                    insn(2, "add", &[3], &[1, 2]),
+                    insn(3, "mov", &[7], &[]),
+                ],
+            )]);
+            [diamond, phi, line]
+        };
+        for body in &bodies {
+            assert_eq!(LiveVariables::from_dataflow(body).shape(), LiveVariables::analyze(body).shape());
+        }
+    }
+
+    /// A value defined in two blocks and read after them (the temporary of an
+    /// eliminated phi) is killed by its reader only, and is alive through no
+    /// block: the pin's analysis takes the first definition's block for both.
+    #[test]
+    fn test_a_value_defined_in_two_blocks_is_killed_by_its_one_reader() {
+        let (d1, d2, ret) = (insn(0, "mov", &[1], &[]), insn(1, "mov", &[1], &[]), insn(2, "ret", &[], &[1]));
+        let lv = LiveVariables::from_dataflow(&body(vec![
+            block(0, &[1, 2], vec![d1]),
+            block(1, &[2], vec![d2]),
+            block(2, &[], vec![Arc::clone(&ret)]),
+        ]));
+        assert_eq!(kills(&lv, 1), [(Site::Insn(ret.id()), 2)]);
+        assert_eq!(alive(&lv, 1), Vec::<usize>::new());
     }
 
     /// The update API TwoAddress and PHIElimination call: a kill is replaced,
