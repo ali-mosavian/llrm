@@ -1442,6 +1442,7 @@ pub fn greedy_rewritten(
         unspillable: &unspill,
         data: Some(segments.data),
         sets: Some(&sets),
+        stable_loads: targets::profile(cpu).map_or(true, |profile| profile.stable_loads),
     };
     let mode = crate::greedy::shadow::Mode::Inline { frame: &mut *frame, classes };
     let decided = crate::greedy::shadow::decide_with(&inputs, mode);
