@@ -29,6 +29,14 @@ def test_a_quoted_function_name_is_the_name_the_shadow_prints():
     assert tool.defined('define i16 @"_f@3"(i16 %0) {\n ret i16 0\n}\n') == ["_f@3"]
 
 
+def test_an_extract_subreg_is_the_copy_the_pin_prints():
+    """The emitter turns `EXTRACT_SUBREG` into `COPY`: x_dct's `movzx` of a low byte was `differs: ours only EXTRACT_SUBREG`."""
+    ours = {"a": Counter({"MOVZX32rr8": 1, "EXTRACT_SUBREG": 1, "RET": 1})}
+    pinned = {"a": Counter({"MOVZX32rr8": 1, "COPY": 1, "RET": 1})}
+    rows = tool.rows_of("p", {"a": {**func(), "machine": ours["a"]}}, {}, pinned, "define i32 @a() {\n ret i32 0\n}\n")
+    assert [b for _, _, b in rows] == ["equal"]
+
+
 def test_the_example_expands_memset_pattern_as_the_driver_does(tmp_path):
     """`scroll` in the m16 shadow was refused for `intrinsic call llvm.experimental.memset.pattern`: the driver expands it, the example did not."""
     import os

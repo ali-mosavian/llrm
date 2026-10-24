@@ -1711,3 +1711,45 @@ mod decrement_for_flags {
         assert_ne!(selected_with_branch_on(COND_B), "DEC32r");
     }
 }
+
+mod and_with_a_low_mask {
+    use super::*;
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_select::select_node;
+
+    fn selected_names(mask: i64) -> Vec<&'static str> {
+        let mut dag = TestDag::new();
+        let x = dag.input(1, mvt::i32);
+        let constant = dag.make_constant(mask, mvt::i32);
+        let and = dag.node(isd::AND, &[mvt::i32], &[x, constant]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
+        assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, and), Outcome::Selected);
+        dag.nodes.iter().filter_map(|n| n.machine).map(machine_name).collect()
+    }
+
+    /// `x & 255` is `movzx` of the low byte, as the pin selects it. The hook
+    /// for `CheckAndImm` answered false, so `AND32ri` was made (x_dct: 8 of
+    /// them where the pin has `MOVZX32rr8`).
+    #[test]
+    fn and_255_is_a_zero_extension_of_the_low_byte() {
+        assert!(selected_names(255).contains(&"MOVZX32rr8"), "{:?}", selected_names(255));
+    }
+
+    #[test]
+    fn and_65535_is_a_zero_extension_of_the_low_word() {
+        assert!(selected_names(65535).contains(&"MOVZX32rr16"), "{:?}", selected_names(65535));
+    }
+
+    #[test]
+    fn and_with_another_mask_stays_an_and() {
+        assert_eq!(selected_names(4095), ["AND32ri"]);
+    }
+}
