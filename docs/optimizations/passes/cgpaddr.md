@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/cgpaddr.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/cgpaddr.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/cgpaddr.rs sha256:b4226582442df3c7780b36e9229b72ea2fe895096ceda887ace14ac06ea411ce -->
+<!-- src: crates/opt/llrm-transforms/src/cgpaddr.rs sha256:798816606b1fa5ef6b7c36f03c2edfa907d74cea88b47e7275911981576318d9 -->
 
 # cgpaddr
 
@@ -34,8 +34,8 @@ depth 3) over operands that reach the join (they dominate it) is that
 computation made once, before the join's first non-phi. What only the phi
 read, the arms' copies, is erased.
 
-Any phi that `simplifyInstruction` reduces to a value (arms all one value, or
-the phi itself; `optimizeInst`'s phi case, L8947) is that value, whatever
+Any phi that `simplifyInstruction` reduces to a value (arms all one value,
+or the phi itself; `optimizeInst`'s phi case, L8947) is that value, whatever
 reads it; this is how a closing phi left by `lcssa` goes. Each phi is
 visited once, and the phis that read it are queued again.
 

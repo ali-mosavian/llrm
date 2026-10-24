@@ -92,6 +92,7 @@ pub mod canonfreeze;
 pub mod canonical;
 pub mod cfg;
 pub mod cgpaddr;
+pub mod cgpbranch;
 #[cfg(test)]
 mod codegen_slots_tests;
 pub mod combine;
