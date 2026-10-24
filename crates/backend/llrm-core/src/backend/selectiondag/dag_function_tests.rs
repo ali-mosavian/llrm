@@ -1704,3 +1704,24 @@ fn an_i32_is_one_stack_cell_and_an_i64_two_at_m16() {
     assert_eq!(cells[2] - cells[1], 4, "the high half of b is four bytes above its low half: {cells:?}");
     assert!(cells[3] > cells[2], "{cells:?}");
 }
+
+const STRING_OP_ON_ELEMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+@buf = global [64 x i8] zeroinitializer
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define void @f(i16 %i, i16 %n) {
+entry:
+  %p = getelementptr [64 x i8], ptr @buf, i16 0, i16 %i
+  call void @llvm.memset.p0.i16(ptr %p, i8 0, i16 %n, i1 false)
+  ret void
+}
+";
+
+/// A string operation on `&buf[i]` (an `lea` of the global and an index) takes
+/// the global's segment: it refused "a pointer of no known segment" (idioms,
+/// os_more, rep_count at m16).
+#[test]
+fn a_string_operation_on_an_element_of_a_global_knows_its_segment() {
+    let module = llrm_mir::parse::module(STRING_OP_ON_ELEMENT).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}

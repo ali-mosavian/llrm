@@ -1135,6 +1135,12 @@ impl Emitter<'_, '_> {
                 ("LEA16r", Some(NodeData::FrameIndex(_))) => {
                     Loc::Reg(Reg { register: llrm_lir::registers::RegId::SS, width: 2 })
                 }
+                // `lea r, [index*scale + global]`: an element of a global
+                ("LEA16r", _) if self.global_displacement(origin).is_some() => Loc::Imm(Imm {
+                    value: 0,
+                    width: 2,
+                    address: Some(self.ctx.globals.segment(self.global_displacement(origin))),
+                }),
                 ("OR32rr", _) => {
                     // A huge pointer built as `offset | (selector << 16)`.
                     let selector = self
@@ -1144,17 +1150,26 @@ impl Emitter<'_, '_> {
                         )?;
                     return self.held_operand(selector);
                 }
-                _ => {
-                    return Err(EmitError::Unsupported(
-                        "a string operation on a pointer of no known segment".to_owned(),
-                    ));
-                }
+                // any other near pointer is into DGROUP, as the builder takes
+                // it
+                _ => Loc::Imm(Imm { value: 0, width: 2, address: Some(self.ctx.globals.segment(None)) }),
             }
         } else {
-            return Err(EmitError::Unsupported("a string operation on a pointer of no known segment".to_owned()));
+            Loc::Imm(Imm { value: 0, width: 2, address: Some(self.ctx.globals.segment(None)) })
         };
         self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![source]);
         Ok(held)
+    }
+
+    /// The global a `lea`'s displacement names.
+    fn global_displacement(
+        &self,
+        lea: SDValue,
+    ) -> Option<u32> {
+        match self.dag.node(*self.dag.node(lea).ops.get(3)?).data {
+            NodeData::Global { symbol, .. } => Some(symbol),
+            _ => None,
+        }
     }
 
     /// The 16-bit selector of a huge pointer `origin` = `or(offset,
