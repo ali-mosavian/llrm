@@ -4022,6 +4022,11 @@ impl Compiler {
                         let commands = self.string_descriptor(commands)?;
                         self.emit_runtime_call("B$SPLY", Vec::new(), vec![commands]);
                     }
+                    // PALETTE USING array(i): the array alone.
+                    "PALETTE" if arguments.len() == 1 => {
+                        let operands = self.graphics_array(&arguments[0])?;
+                        self.emit_runtime_call("B$PALU", Vec::new(), operands);
+                    }
                     "PALETTE" => {
                         let [attribute, color] = arguments.as_slice() else {
                             return self.fail("PALETTE expects an attribute and color");

@@ -725,6 +725,8 @@ fn emit_module<'h>(
         let reference = module.reference(global);
         tables.data.insert(object.id, reference);
     }
+    let indexes: HashMap<i64, FunctionIndex> =
+        hir.functions.iter().map(|one| (one.id, FunctionIndex::of(one))).collect();
     let mut functions = Vec::new();
     for function in &hir.functions {
         match declare(&mut module, &tables, function) {
@@ -741,7 +743,7 @@ fn emit_module<'h>(
         }
     }
     for (function, global) in &mut functions {
-        if let Err(why) = declare_outside(&mut module, &mut tables, function) {
+        if let Err(why) = declare_outside(&mut module, &mut tables, function, &indexes[&function.id]) {
             // What it calls is undeclared: it stays a declaration, external as
             // LLVM's `deleteBody` leaves one.
             if let Some(global) = global.take() {
@@ -901,7 +903,8 @@ fn emit_module<'h>(
         };
         let mut builder = module.builder(global);
         let rows = statements.as_deref().unwrap_or_default();
-        let emitted = Body::new(&mut builder, &tables, function).and_then(|mut body| body.run(handled, rows));
+        let emitted = Body::new(&mut builder, &tables, function, &indexes[&function.id])
+            .and_then(|mut body| body.run(handled, rows));
         if emitted.is_err() {
             builder.function.delete_body();
         }
@@ -915,7 +918,7 @@ fn emit_module<'h>(
     if let Some((handler, (global, handled), owner)) = outlined {
         let name = module.global(global).name.owned().unwrap_or_default();
         let mut builder = module.builder(global);
-        let emitted = Body::new(&mut builder, &tables, owner).and_then(|mut body| {
+        let emitted = Body::new(&mut builder, &tables, owner, &indexes[&owner.id]).and_then(|mut body| {
             // The handler is its own function; the owner's parameters are not
             // its.
             body.destination = None;
@@ -1775,10 +1778,9 @@ fn declare_outside(
     module: &mut Module,
     tables: &mut Tables,
     function: &model::Function,
+    index: &FunctionIndex,
 ) -> Emit<()> {
-    let values: HashMap<i64, i64> = function.values.iter().map(|one| (one.id, one.r#type)).collect();
-    let places: HashMap<i64, &model::Place> = function.places.iter().map(|one| (one.id, one)).collect();
-    let sites = call_sites(function);
+    let FunctionIndex { values, places, sites } = index;
     if function.error_handler.is_some() && !function.error_handler_local {
         // The module handler run to the module's end raises "No RESUME".
         declare_runtime(module, tables, handling::RAISE, 1)?;
@@ -2212,6 +2214,25 @@ fn three_way(op: Op) -> Option<Op> {
 }
 
 /// An operand's HIR type: a place's is what it holds.
+/// What the emitter looks up by id in one function, built once: the types of
+/// its values, its places, and each call's ABI by its instruction.
+/// `declare_outside` and the body each built their own.
+struct FunctionIndex<'h> {
+    values: HashMap<i64, i64>,
+    places: HashMap<i64, &'h model::Place>,
+    sites: HashMap<i64, &'h model::CallAbi>,
+}
+
+impl<'h> FunctionIndex<'h> {
+    fn of(function: &'h model::Function) -> Self {
+        Self {
+            values: function.values.iter().map(|one| (one.id, one.r#type)).collect(),
+            places: function.places.iter().map(|one| (one.id, one)).collect(),
+            sites: call_sites(function),
+        }
+    }
+}
+
 /// Each call's ABI by the instruction it is of: found once for a function,
 /// where every call instruction used to read all of `calls`.
 fn call_sites(function: &model::Function) -> HashMap<i64, &model::CallAbi> {
@@ -2370,10 +2391,10 @@ struct Body<'b, 'm, 'h> {
     b: &'b mut Builder<'m>,
     tables: &'b Tables<'h>,
     function: &'h model::Function,
-    value_types: HashMap<i64, i64>,
-    places: HashMap<i64, &'h model::Place>,
+    value_types: &'b HashMap<i64, i64>,
+    places: &'b HashMap<i64, &'h model::Place>,
     /// Each call's ABI by its instruction.
-    sites: HashMap<i64, &'h model::CallAbi>,
+    sites: &'b HashMap<i64, &'h model::CallAbi>,
     blocks: HashMap<i64, BlockId>,
     values: HashMap<i64, Value>,
     /// The `i1` each comparison's result was widened from: what an assumption
@@ -2418,6 +2439,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         b: &'b mut Builder<'m>,
         tables: &'b Tables<'h>,
         function: &'h model::Function,
+        index: &'b FunctionIndex<'h>,
     ) -> Emit<Self> {
         let values = match interrupted(function) {
             // Its parameters are only ever its saved registers' memory.
@@ -2429,9 +2451,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             b,
             tables,
             function,
-            value_types: function.values.iter().map(|one| (one.id, one.r#type)).collect(),
-            places: function.places.iter().map(|one| (one.id, one)).collect(),
-            sites: call_sites(function),
+            value_types: &index.values,
+            places: &index.places,
+            sites: &index.sites,
             blocks: HashMap::default(),
             values,
             truths: HashMap::default(),

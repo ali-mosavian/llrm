@@ -25,7 +25,7 @@ use crate::generated::ids::{isd, mvt, x86, x86isd};
 use crate::generated::{x86_i486, x86_m16, x86_p5};
 use crate::instr;
 use crate::matcher::Vt;
-use crate::x86_addr::{AddrDag, AddrMode, Matcher};
+use crate::x86_addr::{AddrDag, AddrMode, Matcher, vt_bits};
 
 /// The CPU whose table is walked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -458,15 +458,25 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
         X86Hooks::is_legal_to_fold(self, dag, value, user, root)
     }
 
+    /// `SelectionDAGISel::CheckAndMask`: the mask is the wanted one, or a
+    /// subset whose missing bits are known zero in the operand.
     fn check_and_mask(
         &self,
-        _: &D,
-        _: SDValue,
-        _: i64,
-        _: i64,
+        dag: &D,
+        lhs: SDValue,
+        rhs: i64,
+        desired: i64,
     ) -> bool {
-        // `CheckAndImm` is not in the x86 table.
-        false
+        let width = vt_bits(dag.value_type(lhs));
+        let all = if width >= 64 { u64::MAX } else { (1u64 << width) - 1 };
+        let (actual, desired) = (rhs as u64 & all, desired as u64 & all);
+        if actual == desired {
+            return true;
+        }
+        if actual & !desired != 0 {
+            return false;
+        }
+        dag.masked_value_is_zero(lhs, desired & !actual)
     }
 
     fn check_or_mask(

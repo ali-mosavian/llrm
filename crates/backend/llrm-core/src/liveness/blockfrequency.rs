@@ -27,8 +27,16 @@ pub(crate) struct Graph<'a> {
     preds: Vec<BlockList>,
 }
 
+thread_local! {
+    /// Graphs built, counted for the test that fixes one a round of the sink.
+    #[cfg(test)]
+    pub(crate) static GRAPH_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl<'a> Graph<'a> {
     pub(crate) fn of(body: &'a LirBody) -> Self {
+        #[cfg(test)]
+        GRAPH_BUILDS.with(|builds| builds.set(builds.get() + 1));
         let index: HashMap<i64, u32> =
             body.blocks.iter().enumerate().map(|(at, block)| (block.at, at as u32)).collect();
         let mut succs = vec![BlockList::new(); body.blocks.len()];
@@ -43,6 +51,13 @@ impl<'a> Graph<'a> {
             }
         }
         Self { body, blocks: (0..body.blocks.len() as u32).map(BlockId).collect(), succs, preds }
+    }
+}
+
+impl Graph<'_> {
+    /// `MachineCycleInfo` of this graph.
+    pub(crate) fn cycle_info(&self) -> CycleInfo {
+        CycleInfo::compute(self)
     }
 }
 
@@ -113,12 +128,18 @@ impl EdgeProbabilities for Graph<'_> {
 /// `MachineBasicBlock`'s are). An edge isel gave no odds shares what the
 /// block's stated edges leave.
 pub struct MachineBranchProbabilityInfo<'a> {
-    graph: Graph<'a>,
+    graph: std::rc::Rc<Graph<'a>>,
 }
 
 impl<'a> MachineBranchProbabilityInfo<'a> {
     pub fn of(body: &'a LirBody) -> Self {
-        Self { graph: Graph::of(body) }
+        Self::of_with(std::rc::Rc::new(Graph::of(body)))
+    }
+
+    /// Over a graph already built: one build of a body feeds this, the
+    /// block frequencies and a caller that walks it too.
+    pub(crate) fn of_with(graph: std::rc::Rc<Graph<'a>>) -> Self {
+        Self { graph }
     }
 
     /// `getEdgeProbability(Src, SuccIdx)`: numerator over 2^31.
@@ -154,8 +175,15 @@ impl MachineBlockFrequencyInfo {
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineBlockFrequencyInfo.cpp#L224>
     pub fn of(body: &LirBody) -> Self {
         let graph = Graph::of(body);
-        let ci = CycleInfo::compute(&graph);
-        Self { bfi: BlockFrequencyInfo::calculate(&graph, &graph, &ci) }
+        Self::of_with(&graph, &graph.cycle_info())
+    }
+
+    /// Over a graph and its cycle info already built.
+    pub(crate) fn of_with(
+        graph: &Graph<'_>,
+        ci: &CycleInfo,
+    ) -> Self {
+        Self { bfi: BlockFrequencyInfo::calculate(graph, graph, ci) }
     }
 
     /// `getBlockFreq` of the block at `index` in `body.blocks`.
