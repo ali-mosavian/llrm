@@ -216,6 +216,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::Mul => self.visit_mul(node),
             ISD::And => self.visit_and(node),
             ISD::Or => self.visit_or(node),
+            ISD::Add => self.visit_add(node),
             ISD::SDiv => self.visit_sdiv(node),
             ISD::UDiv => self.visit_udiv(node),
             ISD::SRem | ISD::URem => self.visit_rem(node),
@@ -595,6 +596,91 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 if all & !(known.zero | c) == 0 {
                     return Some(other);
                 }
+            }
+        }
+        None
+    }
+
+    /// `visitADD` through `visitADDLike`, the folds that need no target
+    /// query: a constant moves right, `x + ~x` is -1, constants merge through
+    /// a `sub` or an `add`, and an `add` of a negation or of a `sub` of the
+    /// other operand is a `sub` or the operand itself.
+    ///
+    /// DEVIATE SD210: an `add` of constants is not reassociated when it feeds
+    /// a memory access (`reassociationCanBreakAddressingModePattern` is not
+    /// translated; the matcher folds the displacement there). Exit: that
+    /// query. Owner sdag-b. Review 2026-12-10.
+    fn visit_add(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let vt = self.dag.value_type(node);
+        if self.dag.constant(n0).is_some() && self.dag.constant(n1).is_none() {
+            return Some(self.dag.get_node(ISD::Add, vt, &[n1, n0]));
+        }
+        let ones = super::fold::mask(vt.size_in_bits());
+        let is_not = |dag: &SelectionDAG, v: SDValue, of: SDValue| {
+            dag.opcode(v) == ISD::Xor && dag.operand(v, 0) == of && dag.constant(dag.operand(v, 1)) == Some(ones)
+        };
+        if is_not(self.dag, n0, n1) || is_not(self.dag, n1, n0) {
+            return Some(self.dag.get_constant(ones, vt));
+        }
+        let plain = |dag: &SelectionDAG, v: SDValue| dag.constant(v).filter(|_| !dag.is_opaque(v)).is_some();
+        if plain(self.dag, n1) {
+            if self.dag.opcode(n0) == ISD::Sub {
+                let (n00, n01) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+                // `(add (sub x, c0), c1)` is `(add x, c1 - c0)`.
+                if plain(self.dag, n01) {
+                    let diff = self.dag.get_node(ISD::Sub, vt, &[n1, n01]);
+                    return Some(self.dag.get_node(ISD::Add, vt, &[n00, diff]));
+                }
+                // `(add (sub c0, x), c1)` is `(sub c0 + c1, x)`.
+                if plain(self.dag, n00) {
+                    let sum = self.dag.get_node(ISD::Add, vt, &[n1, n00]);
+                    return Some(self.dag.get_node(ISD::Sub, vt, &[sum, n01]));
+                }
+            }
+            // `(add (add x, c0), c1)` is `(add x, c0 + c1)`.
+            if self.dag.opcode(n0) == ISD::Add && plain(self.dag, self.dag.operand(n0, 1)) {
+                let feeds_memory = self
+                    .dag
+                    .users(node)
+                    .any(|user| matches!(
+                        self.dag.opcode(SDValue { node: user, res: 0 }),
+                        ISD::Load | ISD::Store
+                    ));
+                if !feeds_memory {
+                    let sum = self.dag.get_node(ISD::Add, vt, &[n1, self.dag.operand(n0, 1)]);
+                    return Some(self.dag.get_node(ISD::Add, vt, &[self.dag.operand(n0, 0), sum]));
+                }
+            }
+        }
+        let is_neg =
+            |dag: &SelectionDAG, v: SDValue| dag.opcode(v) == ISD::Sub && dag.constant(dag.operand(v, 0)) == Some(0);
+        // `(add (sub 0, a), b)` is `(sub b, a)`; likewise on the right.
+        if is_neg(self.dag, n0) {
+            return Some(self.dag.get_node(ISD::Sub, vt, &[n1, self.dag.operand(n0, 1)]));
+        }
+        if is_neg(self.dag, n1) {
+            return Some(self.dag.get_node(ISD::Sub, vt, &[n0, self.dag.operand(n1, 1)]));
+        }
+        // `x + (b - x)` and `(b - y) + y` are `b`.
+        if self.dag.opcode(n1) == ISD::Sub && self.dag.operand(n1, 1) == n0 {
+            return Some(self.dag.operand(n1, 0));
+        }
+        if self.dag.opcode(n0) == ISD::Sub && self.dag.operand(n0, 1) == n1 {
+            return Some(self.dag.operand(n0, 0));
+        }
+        if self.dag.opcode(n0) == ISD::Sub && self.dag.opcode(n1) == ISD::Sub {
+            let (a, b) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            let (c, d) = (self.dag.operand(n1, 0), self.dag.operand(n1, 1));
+            // `(a - b) + (c - a)` is `c - b`; `(a - b) + (b - d)` is `a - d`.
+            if d == a {
+                return Some(self.dag.get_node(ISD::Sub, vt, &[c, b]));
+            }
+            if c == b {
+                return Some(self.dag.get_node(ISD::Sub, vt, &[a, d]));
             }
         }
         None
