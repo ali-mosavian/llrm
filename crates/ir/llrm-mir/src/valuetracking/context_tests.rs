@@ -267,3 +267,45 @@ fn a_global_name_carries_the_intrinsic_id_of_its_text() {
     assert_eq!(GlobalName::default().intrinsic_id(), None);
     assert!(GlobalName::from("llvm.smax.i32".to_owned()).intrinsic_id().is_some(), "premise: smax is an id");
 }
+
+/// `findValuesAffectedByCondition` visits each condition once: ten compares
+/// joined by `and` (past the eight a `SmallPtrSet` keeps inline), the first
+/// and the last of them twice, give each compared value once.
+#[test]
+fn affected_values_of_a_wide_condition_are_each_found_once() {
+    let mut text = String::from("define void @f(");
+    text += &(0..10).map(|i| format!("i8 %x{i}")).collect::<Vec<_>>().join(", ");
+    text += ") {\n";
+    for i in 0..10 {
+        text += &format!("  %c{i} = icmp eq i8 %x{i}, 0\n");
+    }
+    text += "  %a0 = and i1 %c0, %c0\n";
+    for i in 1..10 {
+        text += &format!("  %a{i} = and i1 %a{}, %c{i}\n", i - 1);
+    }
+    text += "  %t = and i1 %c9, %a9\n  ret void\n}\n";
+    let module = parse::module(&text).expect("parses");
+    let layout = DataLayout::default();
+    let function = module
+        .globals
+        .iter()
+        .find_map(|global| match &global.kind {
+            GlobalKind::Function(function) if !function.is_declaration() => Some(function),
+            _ => None,
+        })
+        .expect("@f");
+    let q = Query::new(&module, function, &layout);
+    let cond = function
+        .walk()
+        .filter_map(|(_, inst)| function.instruction(inst).result)
+        .last()
+        .map(Operand::Value)
+        .expect("%t");
+    let mut found = Vec::new();
+    find_values_affected_by_condition(&q, cond, false, &mut |v| found.push(v));
+    assert_eq!(found.len(), 10, "{found:?}");
+    let mut want: Vec<Operand> = function.parameters().iter().map(|&p| Operand::Value(p)).collect();
+    found.sort_by_key(|v| format!("{v:?}"));
+    want.sort_by_key(|v| format!("{v:?}"));
+    assert_eq!(found, want);
+}
