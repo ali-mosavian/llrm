@@ -12,13 +12,17 @@ from collections import Counter, defaultdict
 
 import nested
 
+# The libc routines by name, not any symbol containing `memcpy`: the pass
+# `llrm_transforms::memcpyopt` was counted here (10.9 M, as the top caller).
+LIBC_MEM = r"(^|(?<!:):)_*(mem(cpy|move|set|cmp|chr)|bcmp|strlen|strcmp)(_\w+)?( \(|$)"
+
 # (center, ours pattern, pin pattern); order is priority.
 CENTERS = [
     ("SipHash (DefaultHasher, RandomState)", r"core::hash::sip|DefaultHasher|SipHasher|hash::random::", r"$^"),
-    ("FxHash / other Hasher::write", r"::hash::Fx|FxHasher|core::hash::Hasher>::write|BuildHasher", r"llvm::hash_|xxh|llvm::hashing|::hash_combine"),
-    ("hash table probing (hashbrown / DenseMap, StringMap)", r"hashbrown::|std::collections::hash", r"llvm::DenseMap|LookupBucketFor|llvm::StringMap|llvm::DenseSet|FoldingSet"),
+    ("FxHash / other Hasher::write", r"^(?!.*(core::hash::sip|RandomState|DefaultHasher)).*(rustc_hash|::hash::Fx|FxHasher|Hasher>::write|BuildHasher)", r"llvm::hash_|xxh|llvm::hashing|::hash_combine"),
+    ("hash table probing (hashbrown / DenseMap, StringMap)", r"hashbrown::|std::collections::hash", r"^(?!.*operator new).*(llvm::DenseMap|LookupBucketFor|llvm::StringMap|llvm::DenseSet|FoldingSet)"),
     ("malloc / free / realloc", r"\b(malloc|free|cfree|realloc|calloc|mi_malloc|mi_free|mi_realloc|mi_zalloc|mi_heap|mi_page)\w*|__rust_(alloc|dealloc|realloc)|alloc::alloc::", r"\b(malloc|free|cfree|realloc|calloc|_int_malloc|_int_free|malloc_consolidate)\b|operator (new|delete)|__libc_(malloc|free)"),
-    ("memcpy / memmove / memset / memcmp", r"mem(cpy|move|set|cmp|chr)|bcmp|strlen|strcmp", r"mem(cpy|move|set|cmp|chr)|bcmp|strlen|strcmp"),
+    ("memcpy / memmove / memset / memcmp", LIBC_MEM, LIBC_MEM),
     ("drop_in_place / Drop", r"drop_in_place|::drop\b", r"$^"),
     ("Rc / RefCell / Cell borrow", r"core::cell::|alloc::rc::|RefCell|BorrowRef|Rc<", r"$^"),
     ("Vec / SmallVector growth", r"raw_vec|RawVec|reserve_for_push|finish_grow|grow_one|Vec<.*>::(reserve|push|extend|insert|resize)", r"SmallVectorBase|grow_pod|SmallVectorTemplateBase.*grow|std::vector.*(_M_realloc|reserve|push_back)"),
@@ -60,18 +64,25 @@ def own_name(symbol):
     return "".join(out)
 
 
-def center_of(symbol, pin):
+def centers_of(symbol, pin):
     symbol = own_name(symbol)
-    for name, ours, theirs in CENTERS:
-        if re.search(theirs if pin else ours, symbol):
-            return name
-    return "other"
+    return [name for name, ours, theirs in CENTERS if re.search(theirs if pin else ours, symbol)]
+
+
+def center_of(symbol, pin):
+    """The one center a symbol is in. Two matching is an error, not a priority:
+    first-match-wins hid RandomState::hash_one and sip's write in both the
+    SipHash and the Fx center."""
+    found = centers_of(symbol, pin)
+    if len(found) > 1:
+        raise ValueError(f"{symbol[:100]} is in {len(found)} centers: {found}")
+    return found[0] if found else "other"
 
 
 def by_center(costs, total, pin):
     sums = Counter()
     for symbol, ir in costs.items():
-        sums[center_of(symbol, pin)] += ir
+        sums[center_of(symbol, pin)] += ir  # raises on a symbol in two centers
     # Callgrind attributes everything to some function: a gap is a lost line.
     assert abs(sum(sums.values()) - total) <= total * 0.002, f"centers sum to {sum(sums.values())}, total {total}"
     return sums
@@ -105,6 +116,8 @@ def report(ours, pin, ours_callers=None):
     for name in [c[0] for c in CENTERS] + ["other"]:
         out.append(f"| {name} | {o[name]/1e6:.1f} | {100*o[name]/ot:.2f} | {p[name]/1e6:.1f} | {100*p[name]/pt:.2f} |")
     out.append(f"| total | {ot/1e6:.1f} | 100 | {pt/1e6:.1f} | 100 |")
+    out.append("")
+    out.append(f"cost-center check: 0 symbols in two centers over {len(oc)} ours + {len(pc)} pin symbols")
     if ours_callers:
         out.append("")
         for name in [c[0] for c in CENTERS]:
