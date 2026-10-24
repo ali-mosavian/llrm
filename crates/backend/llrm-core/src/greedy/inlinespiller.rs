@@ -1161,6 +1161,7 @@ impl InlineSpiller<'_> {
                     Spill { id: at as u64, block: lis.indexes.get_mbb_from_index(&idx), order: idx.get_index() }
                 })
                 .collect();
+            let cell_width = records[members[0]].cell.width;
             let entry = lis.cfg.entry;
             let idom = |block: usize| if block == entry { None } else { lis.dom.idom(block) };
             let freq = |block: usize| u128::from(mbfi.get_block_freq(block).get_frequency());
@@ -1178,7 +1179,20 @@ impl InlineSpiller<'_> {
                     if idx < value.def() || original.get_vn_info_at(&idx).is_none_or(|one| one.id() != value.id()) {
                         return None;
                     }
-                    sibs?.iter().copied().find(|sib| lis_ref.get_interval(*sib).range.get_vn_info_at(&idx).is_some())
+                    // The store reads the sibling at the width of the cell: one
+                    // named at another width sits in a register of another class.
+                    let width_of = |sib: u32| {
+                        let insns: Vec<Arc<Insn>> = lis_ref
+                            .operands(sib)
+                            .iter()
+                            .map(|op| Arc::clone(lis_ref.instr(op.instr)))
+                            .collect();
+                        widest_operand(&insns, sib)
+                    };
+                    sibs?.iter().copied().find(|sib| {
+                        lis_ref.get_interval(*sib).range.get_vn_info_at(&idx).is_some()
+                            && width_of(*sib) == Some(cell_width)
+                    })
                 })
             };
             if llrm_support::env_flag!("LLRM_GREEDY_TRACE") {
