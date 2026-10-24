@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/machinesched.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/machinesched.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/machinesched.rs sha256:fc2615aad48971d72cef025dba6b127a8db9814650bc3c4da2a1560b57c6f2d7 -->
+<!-- src: crates/backend/llrm-core/src/backend/machinesched.rs sha256:1dd246798496810da980ae6c2a716df32c00bf2c0fd73351a8c83f3b9ee71237 -->
 
 # machinesched
 
@@ -30,6 +30,10 @@ the add (data), the add feeds the store (data), both loads precede the store
 (a load before a store), and the load of `n` has no edge to the first
 load or the add.
 
-## Used by
-The bottom-up list scheduler (pieces 2 and 3 of
-docs/working/machine-scheduler-plan.md).
+## Runs
+`MachineScheduler`, a machine phase after `pressuresink` and before
+`floatfold` (`machinesched@5`): each region longer than half the allocatable
+registers is ordered by `bottom_up` (pieces 2 and 3 of
+docs/working/machine-scheduler-plan.md). DEVIATE MS3: values that pass
+through a block are not counted in its pressure, and one limit stands for
+every register set.
