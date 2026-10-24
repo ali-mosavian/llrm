@@ -68,3 +68,6 @@ machinelicm, relayout, combiner, machinesched, fixupsetcc: an instrument gap, th
 `globalsmodref` 9.2 + `globalsaa` 2.9 (GlobalsAA computed outside the pass runs, 7 times; the pin computes it once per RecomputeGlobalsAAPass),
 `llrm_hir::mir` 6.4, libc mem* 5.1, `llrm_mir::opcode` 2.9, `cfg` 2.6, `callgraph` 2.3, the rest below 2 M each.
 Steps (w-6): list the backend passes in their pin buckets (11-06); GlobalsAA once (11-13).
+
+## Backend passes now in their buckets (w-6, parity 69b60cafc)
+The residual held 24 M of backend passes no bucket listed (`machinesched`, `latecleanup`, `machinecp`, `machinelicm`, `liverangeshrink`, `fixupsetcc`, `combiner`, `fixupbw`, `pushfold`, `cmpsub`, `leaopt`, `fixupleas`, `flagscopy`, `callframe`, `optimizephis`, `processimpdefs`). The pin's side already listed its counterparts, so the clean-up ratio read low. `ledger4.py` lists them and refuses any `LIRTransform` of 0.1 M or more that no bucket lists. qbq at 69b60cafc, ours/pin M: clean-up 143.6/49.4 (2.91x) -> 172.3/49.4 (3.48x); regalloc 145.4/67.2 -> 146.5/67.3; residual 103.1 -> 73.4; total 943.1 unchanged. QCport: clean-up 101.8/42.5 -> 123.2/42.5 (2.90x), residual 70.9 -> 48.4.
