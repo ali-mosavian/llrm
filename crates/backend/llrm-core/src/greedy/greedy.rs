@@ -367,6 +367,17 @@ pub trait Spiller {
         false
     }
 
+    /// `postOptimization` (`HoistSpillHelper::hoistAllSpills`): the stores of
+    /// one value are merged and moved to the colder places of its dominator
+    /// tree. Run once the allocation is done.
+    fn hoist_spills(
+        &mut self,
+        _lis: &mut LiveIntervals,
+        _matrix: &mut LiveRegMatrix,
+        _body: &crate::model::lir::LirBody,
+    ) {
+    }
+
     /// The ranges of the homes the spills went to (`LiveStacks`), left where
     /// the allocator's caller reads them, once the allocation is done.
     fn stacked(&mut self) {}
@@ -456,6 +467,14 @@ impl<'a> RAGreedy<'a> {
     /// The registers a recording spiller was asked to spill.
     pub fn recorded_spills(&self) -> Vec<u32> {
         self.spiller.recorded()
+    }
+
+    /// `postOptimization`: `hoistAllSpills`.
+    pub fn hoist_spills(
+        &mut self,
+        body: &crate::model::lir::LirBody,
+    ) {
+        self.spiller.hoist_spills(&mut self.lis, &mut self.matrix, body);
     }
 
     /// `LiveStacks` left for the caller (the spiller's homes' ranges).

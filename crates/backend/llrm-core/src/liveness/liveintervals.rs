@@ -249,6 +249,14 @@ impl LiveIntervals {
         !self.operands.contains_key(&reg)
     }
 
+    /// Whether an instruction with this key is still in the function.
+    pub fn has_instr(
+        &self,
+        key: InstrKey,
+    ) -> bool {
+        self.insns.contains_key(&key)
+    }
+
     /// The instruction with this key.
     pub fn instr(
         &self,

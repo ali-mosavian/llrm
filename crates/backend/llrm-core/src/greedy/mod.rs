@@ -7,6 +7,7 @@
 
 pub mod edgebundles;
 pub mod greedy;
+pub mod hoistspill;
 pub mod inlinespiller;
 pub mod interferencecache;
 pub mod liverangeedit;
