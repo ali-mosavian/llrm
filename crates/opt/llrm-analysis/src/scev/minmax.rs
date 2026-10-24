@@ -150,7 +150,7 @@ impl ScalarEvolution {
         }
         let ty = self.type_of(ops[0].scev);
         let size = self.compute_expression_size(&ops);
-        let node = match kind {
+        let node = || match kind {
             Type::SMax => Kind::SMax(ops.clone()),
             Type::UMax => Kind::UMax(ops.clone()),
             Type::SMin => Kind::SMin(ops.clone()),
