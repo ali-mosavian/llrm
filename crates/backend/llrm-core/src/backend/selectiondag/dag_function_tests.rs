@@ -2168,6 +2168,29 @@ dead:
 }
 ";
 
+const CONSTANT_BRANCH: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+define i16 @f(i16 %x) {
+entry:
+  br i1 false, label %a, label %b
+a:
+  ret i16 7
+b:
+  ret i16 %x
+}
+";
+
+/// A branch on a constant leaves one successor; the other block is dropped with
+/// no branch left to it (`logical_value.c -O0` stopped on `block goes to
+/// 0x001a, which is not in this body` when the MIR block was never built).
+#[test]
+fn a_branch_on_a_constant_leaves_no_branch_to_a_dropped_block() {
+    let done = select_with_contracts(CONSTANT_BRANCH).unwrap_or_else(|why| panic!("{why}"));
+    let present: std::collections::HashSet<i64> = done.body.blocks.iter().map(|b| b.at).collect();
+    for block in &done.body.blocks {
+        assert!(block.succ.iter().all(|next| present.contains(next)), "{:?} leaves for a missing block", block.at);
+    }
+}
+
 /// A switch whose default is `unreachable` leaves that block with no edge;
 /// the machine verifier stops at a block nothing reaches. It is dropped, as
 /// `UnreachableMachineBlockElim` does.

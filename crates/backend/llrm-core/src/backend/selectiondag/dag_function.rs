@@ -595,8 +595,7 @@ fn selected_in(
     // after the block that made it and its LIR blocks belong to that block's
     // range, where the phis of its successors look for their edges.
     let mut work: Vec<(BlockId, BlockId, crate::backend::selectiondag::builder::BlockDag)> = Vec::new();
-    let reachable = reachable_blocks(module, function);
-    for &block in function.layout().iter().filter(|block| reachable.contains(block)) {
+    for &block in function.layout() {
         let mut built = build_block(module, function, &layout, &builder_target, arch, &convention, &mut info, block)
             .map_err(|why| Unselected(format!("--isel=dag: {}", why.0)))?;
         let extras = std::mem::take(&mut built.extra);
@@ -917,45 +916,6 @@ fn without_unreachable(
         }
     }
     (emitted, succ)
-}
-
-/// The blocks execution can reach: from the entry and from the landing pads
-/// the runtime enters, along the edges a branch on a constant leaves and an
-/// invoke's normal edge. LLVM's code generator drops the rest, and a block no
-/// edge reaches fails the machine verifier.
-fn reachable_blocks(
-    module: &Module,
-    function: &llrm_mir::module::Function,
-) -> std::collections::HashSet<BlockId> {
-    use llrm_mir::context::ConstantKind;
-    use llrm_mir::module::Operand;
-    use llrm_mir::opcode::Opcode;
-    let mut reached = std::collections::HashSet::new();
-    let mut work: Vec<BlockId> = function.entry().into_iter().collect();
-    work.extend(function.layout().iter().copied().filter(|block| is_pad(function, *block)));
-    while let Some(block) = work.pop() {
-        if !reached.insert(block) {
-            continue;
-        }
-        let Some(terminator) = function.terminator(block).map(|inst| function.instruction(inst)) else { continue };
-        match terminator.operands[..] {
-            [Operand::Constant(condition), Operand::Block(taken), Operand::Block(otherwise)]
-                if terminator.opcode == Opcode::Br =>
-            {
-                let zero = match module.context.get(condition).kind {
-                    ConstantKind::Int(bits) => bits & 1 == 0,
-                    ConstantKind::Null | ConstantKind::Zero => true,
-                    _ => false,
-                };
-                work.push(if zero { otherwise } else { taken });
-            }
-            [.., Operand::Block(normal), Operand::Block(_), _] if matches!(terminator.opcode, Opcode::Invoke(_)) => {
-                work.push(normal);
-            }
-            _ => work.extend(function.successors(block)),
-        }
-    }
-    reached
 }
 
 /// What starts a landing pad: `cld`, the one state it sets, as a call that
