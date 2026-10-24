@@ -349,6 +349,8 @@ impl TargetLowering {
         t.set_ops(&[FpToSInt], &[MVT::I16, MVT::I32, MVT::I64], Custom);
         t.set_ops(&[FpToUInt], &[MVT::I8, MVT::I16], Promote);
         t.set_ops(&[FpToUInt], &[MVT::I32, MVT::I64], Custom);
+        // L300-L303, L850: `lrint` of an x87 value is `fist`
+        t.set_ops(&[LRint], &[MVT::F32, MVT::F64, MVT::F80], Custom);
         // L316: no SSE2
         t.set_ops(&[BitCast], &[MVT::F32, MVT::I32], Expand);
         // L337..L370
