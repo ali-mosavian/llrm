@@ -18,3 +18,25 @@ By pass, inclusive: Combine 85.8, Licm 50.3, Gvn 48.3, IndVars 39.7 (+6.0 `IndVa
 | 10 | `compute_known_bits_into` | 31.4 | Combine, SimplifyCfg, Cvp | funcattrs-port (known bits) |
 
 A row is a profile first (self cost by line, as the F1 rows were) and a change only where the profile names one. Rows 2 to 7 are mine and queue behind L2b/L2c.
+
+## IndVars against the pin, same IR (w-5)
+
+Input: `d_faces -O2`'s IR just before `indvars` in the function that has loops, which `llrm-c --dump DIR` writes as the file before `walk/N/*indvars*.ll` (the file after the pass is the next one). Ours: `valgrind --tool=callgrind --toggle-collect='*indvars*IndVars*run*' llrm-pass -O2 indvars FILE`. The pin: `--toggle-collect='*IndVarSimplify::run*' opt -passes=indvars -S FILE`. Inclusive Ir, in millions.
+
+| function (pin / ours) | pin | ours | ratio |
+|---|--:|--:|--:|
+| the pass in all | 13.84 | 25.37 | 1.83 |
+| `simplifyUsersOfIV` / `simplify_users_of_iv` | 10.90 | 15.66 | 1.44 |
+| `isImpliedCond` | 6.74 | 10.55 | 1.57 |
+| `evaluatePredicateAt` | 6.54 | 10.24 | 1.57 |
+| `isBasicBlockEntryGuardedByCond` | 5.29 | 9.26 | 1.75 |
+| `createSCEVIter` | 4.59 | 7.94 | 1.73 |
+| `getRangeRef` | 5.44 | 7.56 | 1.39 |
+| `getAddExpr` | 4.99 | 6.99 | 1.40 |
+| `getSCEV` | 4.46 | 6.29 | 1.41 |
+| `getBackedgeTakenCount` | 3.00 | 5.67 | 1.89 |
+| `StrengthenNoWrapFlags` | 4.16 | 5.21 | 1.25 |
+| `isKnownViaNonRecursiveReasoning` | 3.06 | 4.45 | 1.45 |
+| exit optimization (`optimizeLoopExits`) | <2.9 (rest of the pass) | 5.40 | >1.9 |
+
+The ratio is 1.25 to 1.9 on every SCEV function, not one defect: a constant factor in how expressions are built and looked up, with `getBackedgeTakenCount` (1.89), `isBasicBlockEntryGuardedByCond` (1.75) and `createSCEVIter` (1.73) the widest, and the exit optimization (ours 5.4 M, the pin's under 2.9 of all its other work) the one block ours does that the pin does not itemize. One function, one pass, so the ratios are a guide to where to profile by line, not a promise of savings.
