@@ -5,10 +5,9 @@ from pathlib import Path
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE.parent))
 os.environ["BCRAW"] = "1"
-os.environ.setdefault("DOSBOX_BIN", "/home/user/dosbox-x-fork/src/dosbox-x")
 import bcprobe
 from tqdm import tqdm
-TOOLS = Path("/home/user/llrm-private-tools")
+TOOLS = Path(os.environ['LLRM_PRIVATE_TOOLS'])
 DIRS = {"qb45": TOOLS / "qb45", "pds71": TOOLS / "pds71", "vbdos": TOOLS / "vbdos"}
 kind = sys.argv[1]
 target = HERE / ("bc_programs.json" if kind == "programs" else "real_bc.json")
@@ -19,7 +18,7 @@ pairs = [(key, fam) for key, v in data.items() for fam, m in v.items() if m == [
 print(len(pairs), "pairs", file=sys.stderr)
 roots = {}
 for key, fam in pairs:
-    root = Path("/home/user/ali-mosavian/mgl") if kind == "real" and str(key).startswith("/home/user/ali-mosavian/mgl") else None
+    root = Path(os.environ['MGL_DIR']) if kind == "real" and str(key).startswith(os.environ['MGL_DIR']) else None
     roots.setdefault(root, []).append((key, fam))
 for root, group in roots.items():
     tasks = [(DIRS[fam], path_of(key)) for key, fam in group]

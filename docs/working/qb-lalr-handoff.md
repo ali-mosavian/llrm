@@ -48,8 +48,7 @@ parity tip at the time of the rebase). Same content as `origin/spike/lalr-nib-qb
 - qbfront `a_power_of_a_variable_base_covers_the_whole_domain`: second assert (B$SERR count) fails.
 Fixed on this branch (stale tests): `log_exp_and_fix_...` (fln/fexp) and `flat_target_varptr_is_a_whole_address`
 (constant DEF SEG), and `test_a_cell_nothing_writes_in_a_handled_sub_folds` (`Show` is reserved in VBDOS).
-A bisect of the poke family against `feat/parity` was running in `/tmp/bisect-wt` (log
-`/tmp/claude-0/bisect/poke.log`); result not yet reported to llrm-coordinator.
+The poke family's bisect result is first bad 4f82e22e1 (MemorySSA queries ask the AA stack with TBAA).
 
 ## Main commits left out of the rebase
 
@@ -61,5 +60,5 @@ block weight saturates), #2387 (ci: merge ref carries main's workflow). They are
 
 - Local branch `backup/pre-parity-rebase` (pre-rebase history; the same commits are what `origin/spike/lalr-nib-qb`
   held before the force-push, a6bdd277c).
-- HIR snapshots `/tmp/claude-0/snap/{before,after}` and verdict snapshots, the BC oracle runner scripts
-  (`/tmp/claude-0/bcq.sh`, `bcshow.py`) and `/tmp/claude-0/quickr/*.bas`. None of these are in git.
+- HIR snapshots (before and after the old-parser removal), verdict snapshots, the BC oracle runner scripts
+  and the Quickr sample programs were scratch files; none are in git.

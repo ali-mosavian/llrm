@@ -19,7 +19,7 @@ from tqdm import tqdm  # noqa: E402
 
 import bcprobe  # noqa: E402
 
-TOOLS = Path("/home/user/llrm-private-tools")
+TOOLS = Path(os.environ['LLRM_PRIVATE_TOOLS'])
 FAMILIES = {"qb45": TOOLS / "qb45", "pds71": TOOLS / "pds71", "vbdos": TOOLS / "vbdos"}
 ISOLATED = re.compile(r"^\s*(DEF|CONST|OPTION|DIM|REDIM|ERASE|SELECT|ON ERROR|ON LOCAL|FOR|DO|WHILE|SYSTEM|END|STOP|RUN|CHAIN)\b", re.I)
 BATCH = int(os.environ.get("BCBATCH", "1"))

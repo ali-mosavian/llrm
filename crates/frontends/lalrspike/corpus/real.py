@@ -10,8 +10,8 @@ from pathlib import Path
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE.parent))
 REPO = HERE.parents[3]
-TOOLS = Path("/home/user/llrm-private-tools")
-MGL = Path("/home/user/ali-mosavian/mgl")
+TOOLS = Path(os.environ['LLRM_PRIVATE_TOOLS'])
+MGL = Path(os.environ['MGL_DIR'])
 FAMILIES = {"qb45": TOOLS / "qb45", "pds71": TOOLS / "pds71", "vbdos": TOOLS / "vbdos"}
 RESULTS = HERE / "real_bc.json"
 EXT = {".bas", ".bi"}
@@ -36,7 +36,6 @@ def files():
 
 def run(limit):
     os.environ["BCRAW"] = "1"
-    os.environ.setdefault("DOSBOX_BIN", "/home/user/dosbox-x-fork/src/dosbox-x")
     import bcprobe
     from tqdm import tqdm
     done = json.loads(RESULTS.read_text()) if RESULTS.exists() else {}
