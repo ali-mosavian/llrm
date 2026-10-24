@@ -1,0 +1,10 @@
+DIM x%, d#, s$, l&, sg!, a%(5)
+DECLARE SUB pp (z AS INTEGER)
+DEF FNa = 1
+DEF FNb$ = "a"
+SELECT CASE CINT(-32768.5)
+CASE 1
+END SELECT
+END
+SUB pp (z AS INTEGER)
+END SUB

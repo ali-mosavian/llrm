@@ -1,0 +1,6 @@
+DIM x%, l&, a%(5)
+DECLARE SUB pp (z AS INTEGER)
+CALL pp(1.5 OR -1)
+END
+SUB pp (z AS INTEGER)
+END SUB

@@ -246,6 +246,48 @@ add("records", "dotted array and record same stem", "TYPE R", "a AS INTEGER", "E
 add("records", "record same name as array", "TYPE R", "a AS INTEGER", "END TYPE", "DIM r AS R", "DIM r(3) AS INTEGER")
 add("records", "def fn with field", "TYPE R", "a(3) AS INTEGER", "END TYPE", "DIM r AS R", "DEF FNa% = r.a(1)", "PRINT FNa%")
 
+# ---- expressions: literals, folding, operators, conversions (appended) -----------------------------------------
+EXPRS = [
+    # literal boundaries
+    "32767", "32768", "-32768", "-32769", "65535", "65536", "&H7FFF", "&H8000", "&HFFFF", "&H10000", "&HFFFFFFFF", "&H100000000", "&HFFFF&", "&H8000&", "&O177777", "&O200000", "&O777777777777", "&O37777777777", "&O40000000000",
+    "2147483647", "2147483648", "-2147483648", "-2147483649", "4294967295", "99999999999", "1E38", "3.4E38", "3.5E38", "1E39", "1E-45", "1E-46", "1D308", "1D309", "1D-324", "1.7976931348623157D308", "1.8D308",
+    "1.5", "1.5!", "1.5#", "1.5%", "1.5&", "15%", "15&", "15!", "15#", "40000%", "70000&", "3000000000&", "&H", "&HG", "&H1G", "&", "&Q1", "1.2.3", "1..2", ".", "1E", "1E+", "1D", "1E5E5", "12 34", "1 000",
+    # arithmetic on constants
+    "32767 + 1", "32767 + 1&", "32767& + 1", "-32768 - 1", "200 * 200", "200& * 200", "300 \\ 0", "300 \\ 0.5", "5 MOD 0", "5 MOD 0.4", "5 / 0", "5! / 0", "5# / 0", "0 / 0", "2 ^ 15", "2 ^ 16", "2 ^ 31", "2 ^ 32", "(-2) ^ 0.5", "-2 ^ 2", "10 ^ 40", "0 ^ 0", "0 ^ -1",
+    "7 \\ 2", "7 / 2", "-7 \\ 2", "7 MOD -2", "-7 MOD 2", "32767 \\ -1", "-32768 \\ -1", "-32768 * -1", "-(-32768)", "ABS(-32768)", "ABS(-32769)", "SGN(-5)", "INT(-5.5)", "FIX(-5.5)", "INT(1E10)", "CINT(40000)", "CINT(32767.5)", "CINT(-32768.5)", "CLNG(3E9)", "CLNG(2147483647.5)", "CSNG(1E40)", "CSNG(1D39)", "CDBL(1)",
+    "SQR(-1)", "LOG(0)", "LOG(-1)", "EXP(100)", "ATN(1)", "SIN(1E10)", "RND", "RND(1)", "TIMER", "5 + 5 * 5 ^ 2", "(5 + 5) * 5", "5 - - 5", "5 - -5", "- - 5", "NOT NOT 5", "5 + NOT 5", "2 * -3", "2 ^ -1", "2 ^ - 1", "-2 ^ -2",
+    # logical
+    "5 AND 3", "5 OR 3", "5 XOR 3", "5 EQV 3", "5 IMP 3", "NOT 5", "NOT -1", "-1 AND 255", "70000 AND 1", "70000& AND 1", "65535 AND 1", "&HFFFF AND &HFF", "1.5 AND 1", "1.5 OR 2.5", "40000 OR 1", "1 < 2", "1 = 1", "1 <> 2", "1 >= 2", "1 <= 2", "1 > 2", "1 < 2 < 3", "1 = 1 = 1", "(1 < 2) + 1", "-(1 < 2)", "1 =< 2", "1 => 2", "1 >< 2", "1 <> 2 <> 3",
+    # strings
+    "\"a\" + \"b\"", "\"a\" - \"b\"", "\"a\" * 2", "\"a\" + 1", "1 + \"a\"", "\"a\" < \"b\"", "\"a\" = 1", "1 = \"a\"", "-\"a\"", "NOT \"a\"", "\"a\" AND \"b\"", "\"a\" AND 1", "LEN(\"a\") + 1", "LEN(1)", "\"a\" + CHR$(65)", "\"\"", "\"a", "\"a\"\"b\"", "\"a\" \"b\"", "\"a\"; \"b\"", "STR$(5) + \"a\"", "VAL(\"5\") + 1", "VAL(5)", "\"5\" + 5", "\"a\" ^ 2", "\"a\" MOD 2", "\"a\" \\ 2", "\"a\" / 2", "\"a\" XOR \"b\"", "\"a\" > \"b\" AND 1", "STRING$(3, \"a\") + SPACE$(2)", "STRING$(3, 65)", "STRING$(40000, 65)", "SPACE$(40000)", "SPACE$(-1)", "CHR$(256)", "CHR$(-1)", "CHR$(65.5)", "ASC(\"\")", "LEFT$(\"abc\", -1)", "LEFT$(\"abc\", 70000)", "MID$(\"abc\", 0)", "MID$(\"abc\", 1, 70000)", "INSTR(70000, \"a\", \"b\")", "INSTR(\"a\", \"b\")", "INSTR(0, \"a\", \"b\")",
+    # conversions between types
+    "5 + 5.5", "5 + 5#", "5& + 5%", "5% + 5%", "5 / 5%", "5 \\ 5.5", "5! + 5#", "CINT(5#)", "CINT(\"5\")", "CLNG(5%)", "CSNG(5&)", "CDBL(\"5\")", "HEX$(255)", "HEX$(-1)", "HEX$(70000)", "HEX$(3000000000#)", "OCT$(8)", "OCT$(-1)", "MKI$(5)", "MKI$(70000)", "MKL$(70000)", "MKS$(1)", "MKD$(1)", "CVI(\"ab\")", "CVI(\"a\")", "CVL(\"abcd\")", "CVS(\"abcd\")", "CVD(\"abcdefgh\")",
+    "PEEK(0)", "PEEK(65536)", "PEEK(-1)", "INP(&H3DA)", "INP(70000)", "FRE(0)", "FRE(\"a\")", "FRE(-1)", "FRE(-2)", "FRE(-3)", "CSRLIN", "POS(0)", "POS(-1)", "LPOS(1)", "ERR", "ERL", "ERDEV", "DATE$", "TIME$", "ENVIRON$(\"PATH\")", "ENVIRON$(1)", "COMMAND$", "INKEY$", "INPUT$(1)", "INPUT$(0)", "EOF(1)", "LOF(1)", "LOC(1)", "SEEK(1)", "FREEFILE", "VARPTR(i%)", "VARSEG(i%)", "SADD(s$)", "VARPTR$(i%)",
+    "x%", "x%(1)", "x", "x$ + x$", "x& * x&", "x% * x%", "x# ^ x#", "x% \\ x%", "x% MOD x%", "x% AND x%", "x$ < x$", "x% < x$", "x$ = x%", "FNa", "FNa(1)", "FNa%(1)", "FNb$", "FNb$(1)", "FN a", "FN a(1)", "FNa (1)",
+]
+EXPR_CONTEXTS = [
+    ("x% = {}", "x% = {}"), ("d# = {}", "d# = {}"), ("s$ = {}", "s$ = {}"), ("l& = {}", "l& = {}"), ("sg! = {}", "sg! = {}"),
+    ("if", "IF {} THEN x% = 1"), ("print", "PRINT {}"), ("paren", "x% = ({})"), ("const", "CONST k = {}"), ("dim", "DIM a({})"), ("for", "FOR x% = 1 TO {}: NEXT"), ("select", "SELECT CASE {}\nCASE 1\nEND SELECT"), ("call", "CALL pp({})"),
+]
+for expr in EXPRS:
+    for name, template in EXPR_CONTEXTS:
+        add("exprs", f"{name} {expr!r}", "DIM x%, d#, s$, l&, sg!, a%(5)", "DECLARE SUB pp (z AS INTEGER)", "DEF FNa = 1", "DEF FNb$ = \"a\"", template.format(expr), "END", "SUB pp (z AS INTEGER)", "END SUB")
+
+# ---- constant folding: every operator on integer-range boundaries, in a few contexts (appended) --------------------
+FOLD_OPERANDS = ["32767", "-32768", "32768", "1", "-1", "0", "40000", "70000&", "1.5"]
+FOLD_OPS = ["+", "-", "*", "\\", "MOD", "/", "AND", "OR", "XOR", "^"]
+FOLD_CONTEXTS = [("x%", "x% = {}"), ("l&", "l& = {}"), ("call", "CALL pp({})"), ("arr", "x% = a%({})")]
+for left in FOLD_OPERANDS:
+    for op in FOLD_OPS:
+        for right in FOLD_OPERANDS:
+            expr = f"{left} {op} {right}"
+            for name, template in FOLD_CONTEXTS[:3]:
+                add("fold", f"{name} '{expr}'", "DIM x%, l&, a%(5)", "DECLARE SUB pp (z AS INTEGER)", template.format(expr), "END", "SUB pp (z AS INTEGER)", "END SUB")
+for operand in FOLD_OPERANDS:
+    for expr in [f"-{operand}", f"NOT {operand}", f"-({operand})", f"NOT ({operand})", f"ABS({operand})", f"INT({operand})", f"FIX({operand})", f"SGN({operand})", f"CINT({operand})", f"CLNG({operand})", f"CSNG({operand})", f"CDBL({operand})", f"{operand} + 0", f"0 + {operand}", f"({operand})"]:
+        for name, template in FOLD_CONTEXTS[:3]:
+            add("fold", f"{name} '{expr}'", "DIM x%, l&, a%(5)", "DECLARE SUB pp (z AS INTEGER)", template.format(expr), "END", "SUB pp (z AS INTEGER)", "END SUB")
+
 
 def write():
     out = HERE / "programs"
