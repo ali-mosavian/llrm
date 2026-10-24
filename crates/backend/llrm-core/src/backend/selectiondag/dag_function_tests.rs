@@ -1756,6 +1756,8 @@ fn two_dense_switches_are_two_jumps_through_tables() {
     assert_eq!(tables.len(), 2, "one jump through a table for each switch");
     assert!(tables.iter().all(|table| table.len() == 6 && table.iter().all(|t| at.contains(t))), "{tables:?}");
     assert_ne!(tables[0], tables[1]);
+}
+
 const M16_STACK: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
 define void @f(i32 %a, i64 %b, i32 %c) addrspace(1) {
 entry:
