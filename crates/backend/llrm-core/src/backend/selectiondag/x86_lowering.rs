@@ -35,6 +35,7 @@
 //! `EmitCmp`
 //! ([L24085](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L24085)).
 
+use super::actions::TargetLowering;
 use super::dag::{MemBase, MemInfo, NodeData, SDNodeFlags, SDValue, SelectionDAG};
 use super::dag_combiner::{CombineHooks, CombineLevel};
 use super::isd::{CondCode, ISD};
@@ -141,6 +142,89 @@ impl CombineHooks for X86Lowering {
             _ => None,
         }
     }
+
+    fn promote_type(
+        &self,
+        dag: &SelectionDAG,
+        tli: &TargetLowering,
+        op: SDValue,
+    ) -> Option<EVT> {
+        is_desirable_to_promote_op(dag, tli, op)
+    }
+}
+
+/// `isTypeDesirableForOp` (undesirable) and `IsDesirableToPromoteOp`: an `i16`
+/// operation, or an `i8` multiply by a constant, is done in `i32` unless an
+/// operand is a load the operation could fold. m32 only: the 16-bit target
+/// has no wider register to promote into.
+fn is_desirable_to_promote_op(
+    dag: &SelectionDAG,
+    tli: &TargetLowering,
+    op: SDValue,
+) -> Option<EVT> {
+    let vt = dag.value_type(op);
+    let opcode = dag.opcode(op);
+    if tli.types.has_far_pointer() || !tli.types.is_type_legal(vt) {
+        return None;
+    }
+    let is8_mul_by_constant = vt == EVT::I8 && opcode == ISD::Mul && dag.constant(dag.operand(op, 1)).is_some();
+    let undesirable = match vt {
+        EVT::I8 => matches!(opcode, ISD::Mul | ISD::Shl),
+        EVT::I16 => matches!(
+            opcode,
+            ISD::SignExtend
+                | ISD::ZeroExtend
+                | ISD::AnyExtend
+                | ISD::Mul
+                | ISD::Shl
+                | ISD::Sra
+                | ISD::Srl
+                | ISD::Sub
+                | ISD::Add
+                | ISD::And
+                | ISD::Or
+                | ISD::Xor
+        ),
+        _ => false,
+    };
+    if !undesirable || (vt != EVT::I16 && !is8_mul_by_constant) {
+        return None;
+    }
+    // `X86::mayFoldLoad`: a single-use plain load.
+    let may_fold_load = |v: SDValue| {
+        dag.opcode(v) == ISD::Load
+            && dag.users(v).count() == 1
+            && matches!(dag.node(v).data, NodeData::Mem(info) if info.ext.is_none())
+    };
+    // `IsFoldableRMW`: the only user is a store to the load's address.
+    let foldable_rmw = |load: SDValue| {
+        let mut users = dag.users(op);
+        let (Some(user), None) = (users.next(), users.next()) else { return false };
+        let user = SDValue { node: user, res: 0 };
+        dag.opcode(user) == ISD::Store && dag.operand(user, 2) == dag.operand(load, 1)
+    };
+    let (n0, n1) =
+        (dag.operand(op, 0), if dag.node(op).ops.len() > 1 { dag.operand(op, 1) } else { dag.operand(op, 0) });
+    match opcode {
+        ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend => {}
+        ISD::Shl | ISD::Sra | ISD::Srl => {
+            if may_fold_load(n0) && foldable_rmw(n0) {
+                return None;
+            }
+        }
+        ISD::Add | ISD::And | ISD::Or | ISD::Xor | ISD::Mul | ISD::Sub => {
+            let commute = opcode != ISD::Sub;
+            let is_const = |v: SDValue| dag.constant(v).is_some();
+            if may_fold_load(n1) && (!commute || !is_const(n0) || (opcode != ISD::Mul && foldable_rmw(n1))) {
+                return None;
+            }
+            if may_fold_load(n0) && ((commute && !is_const(n1)) || (opcode != ISD::Mul && foldable_rmw(n0))) {
+                return None;
+            }
+        }
+        _ => return None,
+    }
+    Some(EVT::I32)
 }
 
 impl Hooks for X86Lowering {
