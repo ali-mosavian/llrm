@@ -85,6 +85,10 @@ def parse_qbrt(text: str) -> tuple[list[Red], str]:
             reds.append(Red(f"qbrt:{words[1]}:compile", COMPILE, ["dosbatch/qbrt_run.py", "--only", words[1]]))
         elif (m := re.match(r"RESULT (\d+) of (\d+) pass", line)):
             result = f"{m[1]}/{m[2]}"
+    if result == "?":
+        # The step died before it counted (a DOSBox job that never ended, a traceback): not a count of "?" but a red with the reason, as the 01:00 sweep of 2026-10-24 printed `qbrt ?`
+        last = next((line.strip() for line in reversed(text.splitlines()) if line.strip()), "no output")
+        reds.append(Red(f"qbrt:no-result: {last[:120]}", OTHER, ["dosbatch/qbrt_run.py", "--all"]))
     return reds, result
 
 

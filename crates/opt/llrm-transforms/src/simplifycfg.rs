@@ -290,19 +290,6 @@ impl Options {
         convert_switch_to_arithmetic: true,
         convert_switch_to_lookup_table: false,
     };
-
-    /// The slot at
-    /// [L2376](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L2376).
-    pub const L2376: Options = Options {
-        need_canonical_loop: true,
-        speculate_blocks: true,
-        hoist_common_insts: true,
-        sink_common_insts: false,
-        forward_switch_cond_to_phi: false,
-        convert_switch_range_to_icmp: true,
-        convert_switch_to_arithmetic: true,
-        convert_switch_to_lookup_table: false,
-    };
 }
 
 impl Default for Options {

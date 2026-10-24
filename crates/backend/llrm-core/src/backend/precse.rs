@@ -40,12 +40,9 @@
 //! two. A copy no one reads is dropped again (the pin leaves it to
 //! `DeadMachineInstructionElim`).
 //!
-//! DEVIATE CSE1 (owner funcattrs-port, exit 2026-11-13):
-//! `isProfitableToHoistInto` reads the block frequencies selection estimated
-//! (`LirBody::frequencies`, kept through rewrites), not
-//! `MachineBlockFrequencyInfo` of the current CFG; a body with no table gets no
-//! PRE. No `hasMinSize` shortcut (the selector has no minsize flag, isel.rs I2)
-//! and no `isLegalToHoistInto` test (no block says it is a landing pad).
+//! DEVIATE CSE1 (owner w-1, exit 2026-11-10): no `hasMinSize` shortcut (the
+//! selector has no minsize flag, isel.rs I2) and no `isLegalToHoistInto` test
+//! (no block says it is a landing pad).
 //!
 //! DEVIATE CSE2 (owner funcattrs-port, exit 2026-11-13): an operation with no
 //! register operand is not a candidate, a load of a constant global with a
@@ -81,6 +78,7 @@ use llrm_mir::domtree_address::AddressDominance;
 
 use crate::backend::classes::RegisterClasses;
 use crate::backend::liveness;
+use crate::liveness::blockfrequency::MachineBlockFrequencyInfo;
 use crate::model::ir::{Held, Loc, Operation, Semantics};
 use crate::model::lir::{Block, Insn, LirBody};
 use crate::model::passes::LIRTransform;
@@ -474,7 +472,8 @@ fn hoisted(
     children: &HashMap<i64, Vec<i64>>,
     by_at: &IndexMap<i64, usize>,
 ) -> Option<(LirBody, HashSet<u64>)> {
-    let frequencies = body.frequencies.as_ref()?;
+    // `MBFI`: asked the first time two blocks compute an expression.
+    let frequencies = std::cell::OnceCell::new();
     let regs = body.regs();
     // `PREMap`: expression -> the block it was last seen in or hoisted to.
     let mut seen: HashMap<Semantics, usize> = HashMap::default();
@@ -508,9 +507,10 @@ fn hoisted(
                 continue;
             }
             let common = by_at[&up];
-            let freq = |at: i64| frequencies.0.get(&at).copied();
-            let (Some(common_freq), Some(a), Some(b)) = (freq(up), freq(here), freq(other_at)) else { continue };
-            if common_freq > a + b {
+            // `isProfitableToHoistInto`: `BlockFrequency` adds saturating.
+            let mbfi = frequencies.get_or_init(|| MachineBlockFrequencyInfo::of(body));
+            let freq = |block: usize| mbfi.get_block_freq(block).get_frequency();
+            if freq(common) > freq(number).saturating_add(freq(other)) {
                 continue;
             }
             if !(reaches(body, by_at, other, number) || reaches(body, by_at, number, other)) {
