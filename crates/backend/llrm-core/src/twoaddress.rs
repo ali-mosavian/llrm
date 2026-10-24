@@ -459,6 +459,9 @@ pub enum ThreeAddress {
     #[default]
     Off,
     AddSub,
+    /// `AddSub`, and the add or sub of a word and an immediate whose source
+    /// takes a 16-bit address form: `lea ax, [bx + k]`.
+    AddSubWords,
     All,
 }
 
@@ -485,7 +488,11 @@ pub fn three_address(
         return None;
     }
     let (Loc::Held(into), Loc::Held(base)) = (&what.dests[0], &what.sources[0]) else { return None };
-    if into.width != 4 || base.width != 4 || into.value == base.value {
+    let width = into.width;
+    let word = width == 2
+        && mode == ThreeAddress::AddSubWords
+        && matches!(what.sources[1], Loc::Imm(Imm { address: None, .. }));
+    if !(width == 4 || word) || base.width != width || into.value == base.value {
         return None;
     }
     let cell = match (&what.sources[1], what.name.as_deref()) {
@@ -502,7 +509,13 @@ pub fn three_address(
         (_, Some("shl")) => return None,
         (Loc::Imm(Imm { value, address: None, .. }), name) => {
             let step = if name == Some("sub") { value.checked_neg()? } else { *value };
-            Mem { base: Some(*base), offset: step, ..Mem::new(None, 4) }
+            // A word unit step stays `inc`: with the source in an address
+            // register the `lea` is three bytes against the INC's one, and
+            // with it elsewhere the copy it needs makes five against three.
+            if word && step.abs() == 1 {
+                return None;
+            }
+            Mem { base: Some(*base), offset: step, ..Mem::new(None, width) }
         }
         (Loc::Held(index), Some("add")) if index.width == 4 && index.value != into.value => {
             Mem { base: Some(*base), index: Some(*index), scale: 1, offset: 0, ..Mem::new(None, 4) }

@@ -143,7 +143,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     ) -> EVT {
         match self.dag.opcode(node) {
             ISD::Br | ISD::BrCond | ISD::BrCC | ISD::BrJT => EVT::OTHER,
-            ISD::SIntToFp | ISD::UIntToFp => self.dag.value_type(self.dag.operand(node, 0)),
+            ISD::SIntToFp | ISD::UIntToFp | ISD::LRint => self.dag.value_type(self.dag.operand(node, 0)),
+            ISD::SignExtendInReg => match self.dag.node(self.dag.operand(node, 1)).data {
+                NodeData::ValueType(inner) => inner,
+                _ => self.dag.value_type(node),
+            },
             ISD::SetCC | ISD::Store => {
                 self.dag.value_type(self.dag.operand(node, if self.dag.opcode(node) == ISD::Store { 1 } else { 0 }))
             }
@@ -364,6 +368,20 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let vt = self.dag.value_type(node);
         let ready = |legalizer: &Self, op: ISD| legalizer.tli.is_operation_legal_or_custom(op, vt);
         match op {
+            ISD::SignExtendInReg => {
+                // An in-register sign extension of a boolean is a negation of
+                // the masked bit; any other width is a shift pair.
+                let NodeData::ValueType(inner) = self.dag.node(self.dag.operand(node, 1)).data else { return None };
+                let x = self.dag.operand(node, 0);
+                if inner.size_in_bits() == 1 {
+                    let one = self.dag.get_constant(1, vt);
+                    let bit = self.dag.get_node(ISD::And, vt, &[x, one]);
+                    return Some(vec![self.dag.get_negative(bit, vt)]);
+                }
+                let by = self.dag.get_constant(u128::from(vt.size_in_bits() - inner.size_in_bits()), EVT::I8);
+                let up = self.dag.get_node(ISD::Shl, vt, &[x, by]);
+                Some(vec![self.dag.get_node(ISD::Sra, vt, &[up, by])])
+            }
             ISD::UDiv | ISD::SDiv => {
                 let divrem = if op == ISD::SDiv { ISD::SDivRem } else { ISD::UDivRem };
                 if !ready(self, divrem) {
@@ -426,6 +444,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 };
                 Some(vec![self.dag.get_node(ISD::Truncate, vt, &[low])])
             }
+            ISD::SMulFix => self.expand_fixed_multiply(node).map(|result| vec![result]),
             ISD::Abs => Some(vec![self.expand_abs(node)]),
             ISD::CtPop => self.expand_ctpop(node).map(|result| vec![result]),
             ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),
@@ -449,6 +468,35 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             }
             _ => None,
         }
+    }
+
+    /// `expandFixedPointMul` for a signed multiply that does not saturate: the
+    /// two halves of the product (`SMUL_LOHI`, else `MULHS` and `MUL`), then a
+    /// funnel shift right by the scale; no shift at scale 0, the high half
+    /// alone at the full width.
+    fn expand_fixed_multiply(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        let (lhs, rhs) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let scale = self.dag.constant(self.dag.operand(node, 2))?;
+        if scale == 0 {
+            return Some(self.dag.get_node(ISD::Mul, vt, &[lhs, rhs]));
+        }
+        let (lo, hi) = if self.tli.is_operation_legal_or_custom(ISD::SMulLoHi, vt) {
+            let both = self.dag.get_node_multi(ISD::SMulLoHi, &[vt, vt], &[lhs, rhs]);
+            (both, SDValue { node: both.node, res: 1 })
+        } else if self.tli.is_operation_legal_or_custom(ISD::MulHS, vt) {
+            (self.dag.get_node(ISD::Mul, vt, &[lhs, rhs]), self.dag.get_node(ISD::MulHS, vt, &[lhs, rhs]))
+        } else {
+            return None;
+        };
+        if scale == u128::from(vt.size_in_bits()) {
+            return Some(hi);
+        }
+        let amount = self.dag.get_constant(scale, EVT::I8);
+        Some(self.dag.get_node(ISD::FShr, vt, &[hi, lo, amount]))
     }
 
     /// `TargetLowering::expandABS` ([L11308][pin]) for scalars: `smax(x, 0 -

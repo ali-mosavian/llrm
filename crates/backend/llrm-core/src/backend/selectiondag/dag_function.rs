@@ -30,7 +30,7 @@
 //! sequence and frame objects in the emitter (D1e). Exit: D1e. Owner: sdag-d.
 //! Review 2026-12-03.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 
 use indexmap::IndexMap;
@@ -43,7 +43,7 @@ use llrm_mir::module::{BlockId, Module, ValueDef, ValueId};
 use llrm_target::Target;
 
 use super::actions::{Features, TargetLowering};
-use super::builder::{BuilderTarget, build_block};
+use super::builder::{BuilderTarget, RuntimeAnswer, build_block};
 use super::dag_select::select_block;
 use super::emit::{Callee, EmitBlock, EmitContext, EmitState, FrameMap, JumpTable};
 use super::function_lowering::FunctionLoweringInfo;
@@ -179,6 +179,91 @@ impl super::emit::GlobalMap for Globals<'_> {
 struct CallConventions<'a> {
     module: &'a Module,
     arch: &'a dyn Target,
+    contracts: Option<&'a RuntimeContracts<'a>>,
+    general: &'a [llrm_lir::registers::RegId],
+}
+
+/// What the program's ABI says about its runtime routines: a QB routine's
+/// contract names the registers it destroys and how it returns, which its
+/// declared convention does not.
+pub struct RuntimeContracts<'a> {
+    pub abi: &'a dyn crate::backend::assemble::Abi,
+    pub segments: &'a crate::backend::target::Segments,
+}
+
+/// For each call in `function` of a `llrm.qb.` routine: `Ok` when the
+/// convention models what its contract says (the callee pops what was pushed,
+/// it returns in a register and to the next instruction), else why not. The old
+/// selector models the rest.
+pub(crate) fn runtime_call_verdicts(
+    module: &Module,
+    function: &llrm_mir::module::Function,
+    layout: &DataLayout,
+    arch: &dyn Target,
+    abi: &dyn crate::backend::assemble::Abi,
+) -> llrm_mir::dense::IdMap<llrm_mir::module::InstId, Result<RuntimeAnswer, &'static str>> {
+    use llrm_mir::module::Operand;
+    use llrm_mir::opcode::Opcode;
+    let mut out = llrm_mir::dense::IdMap::new();
+    for &block in function.layout() {
+        for inst in function.iter_block(block) {
+            let instruction = function.instruction(inst);
+            let (Opcode::Call(info) | Opcode::Invoke(info)) = &instruction.opcode else { continue };
+            let Some(&Operand::Constant(callee)) = instruction.operands.last() else { continue };
+            let llrm_mir::context::ConstantKind::Global(global) = module.context.get(callee).kind else { continue };
+            let name = module.global(global).name.owned().unwrap_or_default();
+            if !name.starts_with(crate::hir::mir::RUNTIME) {
+                continue;
+            }
+            let keep = instruction.operands.len() - if matches!(instruction.opcode, Opcode::Invoke(_)) { 3 } else { 1 };
+            let types: Option<Vec<_>> = instruction.operands[..keep]
+                .iter()
+                .map(|argument| function.operand_type(&module.context, *argument))
+                .collect();
+            let first = arch.first_argument_offset(false);
+            let (result, _, variadic) = module.signature(info.function_type);
+            let plan = types.and_then(|types| {
+                crate::backend::isel::convention_for(
+                    module,
+                    layout,
+                    arch,
+                    first,
+                    info.calling_convention,
+                    result,
+                    variadic,
+                    &types,
+                    &info.argument_attrs,
+                )
+                .ok()
+            });
+            out.insert(inst, modelled(abi, &name, plan.as_ref(), first));
+        }
+    }
+    out
+}
+
+fn modelled(
+    abi: &dyn crate::backend::assemble::Abi,
+    name: &str,
+    plan: Option<&crate::backend::isel::Convention>,
+    first: i64,
+) -> Result<RuntimeAnswer, &'static str> {
+    let plan = plan.ok_or("QB runtime call the convention does not describe")?;
+    let pushed = (plan.stack_arguments - first).max(0);
+    if abi.registers(name).is_some() {
+        return Err("QB runtime routine with a register interface");
+    }
+    let contract = abi.contract(name, plan.popped > 0, pushed).map_err(|_| "QB runtime routine with no contract")?;
+    // Raising an error, entering user code or an unstated way back (a handler
+    // registration, `B$OEGA`) changes no selection: the old selector reads none
+    // of them. A routine that comes back at an inline table does.
+    if contract.control == llrm_qbruntime::Control::InlineTable {
+        return Err("QB runtime routine that returns to an inline table");
+    }
+    if contract.cleanup != Some(plan.popped) || plan.popped != pushed {
+        return Err("QB runtime routine whose stack cleanup the convention does not model");
+    }
+    Ok(if contract.flags_result { RuntimeAnswer::Flags } else { RuntimeAnswer::Registers })
 }
 
 impl super::emit::Conventions for CallConventions<'_> {
@@ -206,6 +291,29 @@ impl super::emit::Conventions for CallConventions<'_> {
         &self,
         callee: Option<&Callee>,
     ) -> Option<std::collections::BTreeSet<llrm_lir::registers::RegId>> {
+        // inline assembly changes the registers its name states
+        if let Some(Callee::Named(name)) = callee
+            && let Some(block) = llrm_mir::intrinsics::asm(name)
+        {
+            let regs = llrm_lir::registers::Regs(self.arch.registers());
+            return Some(
+                block
+                    .clobbers
+                    .iter()
+                    .filter(|name| !matches!(name.as_str(), "flags" | "memory") && !name.starts_with("st"))
+                    .map(|reg| regs.root(self.arch.register_named(reg)))
+                    .collect(),
+            );
+        }
+        // a huge-pointer routine changes what it states and no more
+        if let Some(Callee::Named(name)) = callee {
+            let regs = llrm_lir::registers::Regs(self.arch.registers());
+            let fills = [1u32, 2, 4].into_iter().filter_map(|cell| self.arch.huge_fill_routine(cell).ok());
+            let copies = [false, true].into_iter().filter_map(|backward| self.arch.huge_copy_routine(backward).ok());
+            if let Some(routine) = fills.chain(copies).find(|routine| routine.name == name.as_str()) {
+                return Some(routine.clobbers.iter().map(|reg| regs.root(*reg)).collect());
+            }
+        }
         let number = match callee {
             Some(Callee::Global(id)) => {
                 self.module.global(llrm_mir::context::GlobalId(*id)).function().map_or(0, |f| f.calling_convention)
@@ -214,14 +322,22 @@ impl super::emit::Conventions for CallConventions<'_> {
         };
         let found = self.arch.calling().by_number(number)?;
         let regs = llrm_lir::registers::Regs(self.arch.registers());
-        Some(
-            found
-                .clobbered
-                .iter()
-                .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
-                .map(|name| regs.root(self.arch.register_named(name)))
-                .collect(),
-        )
+        let mut out: std::collections::BTreeSet<_> = found
+            .clobbered
+            .iter()
+            .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
+            .map(|name| regs.root(self.arch.register_named(name)))
+            .collect();
+        // a runtime routine also destroys what its contract says
+        if let (Some(contracts), Some(Callee::Global(id))) = (self.contracts, callee) {
+            let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned().unwrap_or_default();
+            if name.starts_with(crate::hir::mir::RUNTIME)
+                && let Ok(contract) = contracts.abi.contract(&name, false, 0)
+            {
+                out.extend(crate::backend::callregs::call_clobbers(&contract, contracts.segments, self.general));
+            }
+        }
+        Some(out)
     }
 }
 
@@ -249,7 +365,11 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
                     .iter()
                     .copied()
                     .chain(llrm_dagisel::generated::ids::x86::NAMES.iter().copied())
-                    .chain([(llrm_dagisel::x86_llrm::FARCALL_OPCODE, "CALL_FAR")])
+                    .chain([
+                        (llrm_dagisel::x86_llrm::FARCALL_OPCODE, "CALL_FAR"),
+                        (llrm_dagisel::x86_llrm::CODE_OPCODE, "CALL_CODE"),
+                        (llrm_dagisel::x86_llrm::LLRM_ASM_OPCODE, "CALL_ASM"),
+                    ])
                     .collect(),
             })
         })
@@ -258,7 +378,10 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
 
 /// The addresses each LIR block can go to: the targets of its jumps and
 /// branches, and the next block if it does not end in a jump or a return.
-fn successors(emitted: &[EmitBlock]) -> Vec<Vec<i64>> {
+fn successors(
+    emitted: &[EmitBlock],
+    sinks: &HashSet<i64>,
+) -> Vec<Vec<i64>> {
     use crate::model::ir::Operation;
     emitted
         .iter()
@@ -282,7 +405,7 @@ fn successors(emitted: &[EmitBlock]) -> Vec<Vec<i64>> {
                 .last()
                 .and_then(|insn| insn.what.as_ref())
                 .is_some_and(|w| matches!(w.op, Operation::Jump | Operation::Return));
-            if !ends {
+            if !ends && !sinks.contains(&block.at) {
                 if let Some(next) = emitted.get(i + 1) {
                     if !out.contains(&next.at) {
                         out.push(next.at);
@@ -372,7 +495,7 @@ pub fn selected(
     cpu: &crate::backend::cpu::Profile,
     libcalls: &[(String, u32, String)],
 ) -> Result<Selected, Unselected> {
-    selected_in_pool(module, name, arch, cpu, libcalls, false, &mut Pool::new(module.globals.len() as i64))
+    selected_in_pool(module, name, arch, cpu, libcalls, None, &mut Pool::new(module.globals.len() as i64))
 }
 
 pub fn selected_in_pool(
@@ -381,12 +504,12 @@ pub fn selected_in_pool(
     arch: &dyn Target,
     cpu: &crate::backend::cpu::Profile,
     libcalls: &[(String, u32, String)],
-    runtime_contracts: bool,
+    contracts: Option<&RuntimeContracts<'_>>,
     pool: &mut Pool,
 ) -> Result<Selected, Unselected> {
     let mark = pool.mark();
     let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        selected_in(module, name, arch, cpu, libcalls, runtime_contracts, pool)
+        selected_in(module, name, arch, cpu, libcalls, contracts, pool)
     }))
     .unwrap_or_else(|why| {
         let why =
@@ -417,7 +540,7 @@ fn selected_in(
     arch: &dyn Target,
     cpu: &crate::backend::cpu::Profile,
     libcalls: &[(String, u32, String)],
-    runtime_contracts: bool,
+    contracts: Option<&RuntimeContracts<'_>>,
     pool: &mut Pool,
 ) -> Result<Selected, Unselected> {
     let m16 = match arch.object().bitness {
@@ -440,10 +563,10 @@ fn selected_in(
     };
     let (builder_target, address_mode) =
         if m16 { (BuilderTarget::m16(), AddrMode::Real16) } else { (BuilderTarget::m32(), AddrMode::Flat32) };
-    let builder_target = builder_target
-        .with_runtime_calls(libcalls)
-        .with_float_store(cpu.float_store)
-        .with_runtime_contracts(runtime_contracts);
+    let builder_target =
+        builder_target.with_runtime_calls(libcalls).with_float_store(cpu.float_store).with_runtime_call_verdicts(
+            contracts.map(|contracts| runtime_call_verdicts(module, function, &layout, arch, contracts.abi)),
+        );
     let tables = tables(arch);
     // The builder numbers the fixed objects the stack parameters make: a byval
     // aggregate one, a cell one for each register-sized part of its value (an
@@ -540,7 +663,7 @@ fn selected_in(
     let ctx = EmitContext {
         tables: &tables_of_function,
         caller_saved: &caller_saved,
-        conventions: &CallConventions { module, arch },
+        conventions: &CallConventions { module, arch, contracts, general: &cpu.general },
         constants: &PoolCells(std::cell::RefCell::new(pool)),
         stack_pointer,
         globals: &globals,
@@ -552,6 +675,10 @@ fn selected_in(
     };
     let mut emitted: Vec<EmitBlock> = Vec::new();
     let mut calls = IndexMap::default();
+    // the landing pad the runtime enters, which no edge reaches
+    let mut landing: Option<i64> = None;
+    let mut sinks: HashSet<i64> = HashSet::new();
+    let mut inline_places = IndexMap::default();
     // the call sites whose callee is far code (address space 1): a far call
     let mut far = std::collections::BTreeSet::new();
     // The LIR blocks each MIR block became, and the phi inputs each exports.
@@ -608,7 +735,11 @@ fn selected_in(
                 // the runtime's routines are far procedures where code is in
                 // segments
                 Callee::Named(name) => {
-                    if arch.object().bitness == 16 {
+                    // inline code is laid down at the site: no call
+                    if arch.object().bitness == 16
+                        && llrm_mir::intrinsics::code(name).is_none()
+                        && llrm_mir::intrinsics::asm(name).is_none()
+                    {
                         far.insert(*at);
                     }
                     name.clone()
@@ -616,12 +747,34 @@ fn selected_in(
             };
             (*at, name)
         }));
+        inline_places.extend(done.inline_places.iter().cloned());
         emitted.extend(done.blocks);
+        if block == parent && is_pad(function, block) {
+            let Some(contracts) = contracts else {
+                return refuse("a landing pad of a program with no runtime contracts");
+            };
+            if landing.replace(emitted[from].at).is_some() {
+                return refuse("more than one landing pad");
+            }
+            let at = emitted[from].at;
+            let pad = landing_pad_insn(at, contracts.segments, &cpu.general);
+            emitted[from].insns.insert(0, std::sync::Arc::new(pad));
+            calls.insert(at, LANDING.to_owned());
+        }
+        // A block that ends in `unreachable` (after a call that does not
+        // return) leads nowhere: it does not fall into the next one.
+        if block == parent
+            && function
+                .terminator(block)
+                .is_some_and(|inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Unreachable)
+        {
+            sinks.extend(emitted.last().map(|last| last.at));
+        }
         let start = made.get(&parent.0).map_or(from, |range| range.start);
         made.insert(parent.0, start..emitted.len());
         exports.push((parent, built.phi_updates));
     }
-    let succ = successors(&emitted);
+    let succ = successors(&emitted, &sinks);
     // Phis: the successor's phi takes, from each LIR block of the predecessor
     // that leaves for it, the register the predecessor copied its value to.
     for (pred, updates) in &exports {
@@ -653,6 +806,10 @@ fn selected_in(
             }
         }
     }
+    // `UnreachableMachineBlockElim`: a block no edge leads to (the
+    // `unreachable` default of a switch whose cases cover its values) is
+    // dropped, with the phi inputs that came from it.
+    let (emitted, succ) = without_unreachable(emitted, succ, landing);
     // Every value read is defined on every path to the read (a phi, an
     // instruction, an arrival): a LIR that reads one nothing defines on some
     // path stops the allocator's liveness, so it is a refusal here.
@@ -689,22 +846,49 @@ fn selected_in(
     // The x87 stack is empty at a call: a floating value live across one is
     // spilled by the pin's allocator, which no pass here does for this LIR, so
     // the function is refused (the stackifier would fail the compile).
-    if let Some(why) = float_across_call(&emitted, &succ, llrm_lir::registers::Regs(arch.registers())) {
-        return refuse(format!("--isel=dag: {why}"));
-    }
-    let blocks: Vec<Block> = emitted
-        .iter()
-        .zip(succ)
-        .map(|(block, succ)| -> Block {
+    // A function with a pad is entered through a root block that never branches
+    // to it, so the pad is reachable in the machine's graph.
+    let root_at = landing.map(|_| state.next_address());
+    let blocks: Vec<Block> = root_at
+        .zip(landing)
+        .map(|(at, pad)| {
+            let never = [
+                crate::backend::isel::insn(
+                    at,
+                    crate::backend::isel::semantics(
+                        crate::model::ir::Operation::Compare,
+                        "cmp",
+                        vec![],
+                        vec![
+                            crate::model::ir::Loc::Reg(crate::model::ir::Reg {
+                                register: crate::model::ir::STACK,
+                                width: 2,
+                            }),
+                            crate::model::ir::Loc::Imm(crate::model::ir::Imm { value: 0, width: 2, address: None }),
+                        ],
+                    ),
+                ),
+                crate::backend::isel::insn(
+                    at,
+                    crate::model::ir::Semantics {
+                        target: Some(pad),
+                        ..crate::backend::isel::semantics(crate::model::ir::Operation::Branch, "je", vec![], vec![])
+                    },
+                ),
+            ];
+            Block::from(LirBlock { succ: vec![pad, emitted[0].at].into(), ..LirBlock::new(at, never.to_vec().into()) })
+        })
+        .into_iter()
+        .chain(emitted.iter().zip(succ).map(|(block, succ)| -> Block {
             LirBlock {
                 succ: succ.into(),
                 phis: block.phis.clone().into(),
                 ..LirBlock::new(block.at, block.insns.iter().cloned().collect::<Vec<_>>().into())
             }
             .into()
-        })
+        }))
         .collect();
-    let entry = emitted[0].at;
+    let entry = root_at.unwrap_or(emitted[0].at);
     let mut body = LirBody::new(name, entry, blocks, IndexMap::default(), IndexMap::default());
     body.bits = arch.object().bitness;
     body.registers = Some(llrm_lir::registers::Regs(arch.registers()));
@@ -726,128 +910,121 @@ fn selected_in(
             }
         }
     }
+    if let Some(at) = landing {
+        inline.insert(at, vec![CLD]);
+    }
+    // Inline code: its bytes with each frame place patched as a displacement
+    // from BP (the old route's `inline_code`).
+    for (at, name) in &calls {
+        if let Some((mut bytes, places)) = llrm_mir::intrinsics::code(name) {
+            for (offset, disp, addend) in inline_places.get(at).map_or(&[][..], |one: &Vec<(usize, i64, i64)>| &one[..])
+            {
+                bytes[*offset..*offset + 2].copy_from_slice(&((disp + addend) as u16).to_le_bytes());
+            }
+            let _ = places;
+            inline.insert(*at, bytes);
+        }
+    }
+    // The huge-pointer routines the calls name (`huge_memory`): their bytes
+    // are laid down at the call as well.
+    for (at, name) in &calls {
+        let fills = [1u32, 2, 4].into_iter().filter_map(|cell| arch.huge_fill_routine(cell).ok());
+        let copies = [false, true].into_iter().filter_map(|backward| arch.huge_copy_routine(backward).ok());
+        if let Some(routine) = fills.chain(copies).find(|routine| routine.name == name.as_str()) {
+            inline.insert(*at, routine.code);
+        }
+    }
+    // An inline assembly block's bytes are laid down at its site.
+    for (at, name) in &calls {
+        if let Some(block) = llrm_mir::intrinsics::asm(name) {
+            inline.insert(*at, block.code);
+        }
+    }
     Ok(Selected {
         body,
         convention,
         calls,
         inline,
-        inline_places: IndexMap::default(),
+        inline_places,
         inline_symbols: IndexMap::default(),
         far,
         pops: IndexMap::default(),
         depth: frame.depth.get(),
         extents: frame.locals.borrow().clone(),
-        landing: None,
+        landing,
     })
 }
 
-/// Whether a floating value (a 10-byte `Held`) is live across a call: its
-/// liveness by the usual backward flow over the blocks, a phi's input read at
-/// the end of the predecessor it comes from.
-fn float_across_call(
-    blocks: &[EmitBlock],
-    succ: &[Vec<i64>],
-    regs: llrm_lir::registers::Regs,
-) -> Option<&'static str> {
-    use std::collections::{BTreeSet, HashMap};
-    let mut floating: BTreeSet<u32> = blocks
-        .iter()
-        .flat_map(|block| block.insns.iter())
-        .filter_map(|insn| insn.what.as_ref())
-        .flat_map(|what| what.dests.iter())
-        .filter_map(|dest| match dest {
-            crate::model::ir::Loc::Held(held) if held.width == 10 => Some(held.value),
-            _ => None,
-        })
-        .collect();
-    if floating.is_empty() {
-        return None;
-    }
-    // A phi of floating values is floating.
-    loop {
-        let before = floating.len();
-        for phi in blocks.iter().flat_map(|block| block.phis.iter()) {
-            if phi.incoming.iter().any(|(_, value)| floating.contains(value)) {
-                floating.insert(phi.result);
-            }
+/// `emitted` and `succ` without the blocks no path from the entry or the
+/// landing pad reaches.
+fn without_unreachable(
+    mut emitted: Vec<EmitBlock>,
+    succ: Vec<Vec<i64>>,
+    landing: Option<i64>,
+) -> (Vec<EmitBlock>, Vec<Vec<i64>>) {
+    let index: HashMap<i64, usize> = emitted.iter().enumerate().map(|(i, b)| (b.at, i)).collect();
+    let mut reached = vec![false; emitted.len()];
+    let mut work: Vec<usize> = vec![0];
+    work.extend(landing.and_then(|at| index.get(&at).copied()));
+    while let Some(at) = work.pop() {
+        if std::mem::replace(&mut reached[at], true) {
+            continue;
         }
-        if floating.len() == before {
-            break;
+        work.extend(succ[at].iter().filter_map(|next| index.get(next).copied()));
+    }
+    if reached.iter().all(|one| *one) {
+        return (emitted, succ);
+    }
+    let gone: std::collections::HashSet<i64> =
+        emitted.iter().zip(&reached).filter(|(_, kept)| !**kept).map(|(block, _)| block.at).collect();
+    let succ: Vec<Vec<i64>> = succ.into_iter().zip(&reached).filter(|(_, kept)| **kept).map(|(s, _)| s).collect();
+    let mut kept = reached.iter();
+    emitted.retain(|_| *kept.next().expect("a flag for each block"));
+    for block in &mut emitted {
+        for phi in &mut block.phis {
+            phi.incoming.retain(|(from, _)| !gone.contains(from));
         }
     }
-    let index: HashMap<i64, usize> = blocks.iter().enumerate().map(|(i, b)| (b.at, i)).collect();
-    // The floating values each block reads at its end for its successors' phis.
-    let mut phi_reads: Vec<BTreeSet<u32>> = vec![BTreeSet::new(); blocks.len()];
-    for block in blocks {
-        for phi in &block.phis {
-            for (edge, value) in &phi.incoming {
-                if let Some(&from) = index.get(edge)
-                    && floating.contains(value)
-                {
-                    phi_reads[from].insert(*value);
-                }
-            }
-        }
+    (emitted, succ)
+}
+
+/// What starts a landing pad: `cld`, the one state it sets, as a call that
+/// leaves no register as it was (`isel/unwind.rs`).
+const LANDING: &str = "__LANDING";
+const CLD: u8 = 0xFC;
+
+/// Whether `block` starts a landing pad, which the runtime enters.
+fn is_pad(
+    function: &llrm_mir::module::Function,
+    block: BlockId,
+) -> bool {
+    function
+        .iter_block(block)
+        .any(|one| matches!(
+            function.instruction(one).opcode,
+            llrm_mir::opcode::Opcode::LandingPad { .. }
+        ))
+}
+
+fn landing_pad_insn(
+    at: i64,
+    segments: &crate::backend::target::Segments,
+    general: &[llrm_lir::registers::RegId],
+) -> Insn {
+    use crate::backend::callregs::{call_clobbered_high, call_clobbers};
+    let contract =
+        crate::backend::lower_int64::_helper(LANDING, Default::default(), crate::abi::runtime::EVERY.clone());
+    Insn {
+        clobbers: call_clobbers(&contract, segments, general),
+        clobbers_high: call_clobbered_high(&contract, segments, general),
+        ..Insn::new(
+            at,
+            Some((at, at)),
+            Some(crate::backend::isel::semantics(crate::model::ir::Operation::Call, "call", vec![], vec![])),
+            vec![],
+            vec![],
+        )
     }
-    let phi_results: Vec<BTreeSet<u32>> =
-        blocks.iter().map(|block| block.phis.iter().map(|phi| phi.result).collect()).collect();
-    let mut live_in: Vec<BTreeSet<u32>> = vec![BTreeSet::new(); blocks.len()];
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for (at, block) in blocks.iter().enumerate().rev() {
-            let mut live: BTreeSet<u32> = phi_reads[at].clone();
-            for next in &succ[at] {
-                if let Some(&to) = index.get(next) {
-                    live.extend(live_in[to].difference(&phi_results[to]).copied());
-                }
-            }
-            for insn in block.insns.iter().rev() {
-                for def in &insn.defines {
-                    live.remove(def);
-                }
-                live.extend(insn.uses.iter().copied().filter(|value| floating.contains(value)));
-            }
-            if live != live_in[at] {
-                live_in[at] = live;
-                changed = true;
-            }
-        }
-    }
-    for (at, block) in blocks.iter().enumerate() {
-        let mut live: BTreeSet<u32> = phi_reads[at].clone();
-        for next in &succ[at] {
-            if let Some(&to) = index.get(next) {
-                live.extend(live_in[to].difference(&phi_results[to]).copied());
-            }
-        }
-        for insn in block.insns.iter().rev() {
-            for def in &insn.defines {
-                live.remove(def);
-            }
-            // A cell through a far pointer sets ES, which the stackifier counts
-            // among the instructions the x87 stack does not survive.
-            let far = insn
-                .what
-                .as_ref()
-                .is_some_and(
-                    |what| what.dests
-                        .iter()
-                        .chain(&what.sources)
-                        .any(
-                            |loc| matches!(
-                                loc,
-                                crate::model::ir::Loc::Mem(cell) if cell.selector.is_some()
-                            ),
-                        ),
-                );
-            if (far || crate::backend::floatregions::clears_stack(regs, insn)) && !live.is_empty() {
-                return Some("a floating value is live across an instruction that empties the x87 stack");
-            }
-            live.extend(insn.uses.iter().copied().filter(|value| floating.contains(value)));
-        }
-    }
-    None
 }
 
 /// A value read where some path to it defines nothing: (value, instruction).

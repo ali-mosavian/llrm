@@ -136,3 +136,62 @@ fn the_schedule_is_deterministic() {
     let (dag, root, _) = example();
     assert_eq!(schedule(&dag, root, &Info), schedule(&dag, root, &Info));
 }
+
+const ADC: u32 = 7;
+const TEST: u32 = 8;
+const CMOV: u32 = 9;
+
+struct FlagsInfo(u16);
+
+impl SchedInfo for FlagsInfo {
+    fn num_defs(
+        &self,
+        opcode: u32,
+    ) -> usize {
+        usize::from(matches!(opcode, ADD | ADC | CMOV | LOAD))
+    }
+
+    fn implicit_defs(
+        &self,
+        opcode: u32,
+    ) -> &[u16] {
+        if matches!(opcode, ADD | ADC | TEST) { std::slice::from_ref(&self.0) } else { &[] }
+    }
+
+    fn is_call(
+        &self,
+        _opcode: u32,
+    ) -> bool {
+        false
+    }
+}
+
+/// An `add`'s carry is read by an `adc` while another unit that also needs the
+/// flags (`test; cmov`) uses the `add`'s sum: scheduling the `adc` first left
+/// every candidate waiting for EFLAGS, and the first held unit went anyway, a
+/// `test` between the `add` and the `adc` (x_ll_arith's four carry saves). The
+/// pin unschedules back to the `adc` and puts the `cmov` below it
+/// (`BacktrackBottomUp`).
+#[test]
+fn a_unit_waiting_for_flags_backtracks_to_the_reader_of_the_live_ones() {
+    let eflags_id = super::dagisel_adapter::EFLAGS_ID;
+    let eflags = super::dagisel_adapter::pin_register(eflags_id).expect("EFLAGS has a pin number");
+    let mut dag = dag();
+    let entry = dag.entry_node();
+    let a = load(&mut dag, 1, entry);
+    let b = load(&mut dag, 2, chain_of(a));
+    let c = load(&mut dag, 3, chain_of(b));
+    let d = load(&mut dag, 4, chain_of(c));
+    let add = machine(&mut dag, ADD, &[EVT::I32, EVT::I32], &[a, b]);
+    let first = dag.get_copy_to_phys_reg(entry, eflags_id, SDValue { node: add.node, res: 1 }, None);
+    let adc = machine(&mut dag, ADC, &[EVT::I32], &[c, d, SDValue { node: first.node, res: 1 }]);
+    let test = machine(&mut dag, TEST, &[EVT::I32], &[c, d]);
+    let second = dag.get_copy_to_phys_reg(entry, eflags_id, test, None);
+    let cmov = machine(&mut dag, CMOV, &[EVT::I32], &[add, c, SDValue { node: second.node, res: 1 }]);
+    let store_cmov = store(&mut dag, cmov, 5, chain_of(d));
+    let root = store(&mut dag, adc, 6, store_cmov);
+    let order = schedule(&dag, root, &FlagsInfo(eflags));
+    let (at_add, at_adc, at_test) = (position(&order, add), position(&order, adc), position(&order, test));
+    assert!(at_add < at_adc, "{order:?}");
+    assert!(!(at_add < at_test && at_test < at_adc), "a flag writer between the add and the adc: {order:?}");
+}

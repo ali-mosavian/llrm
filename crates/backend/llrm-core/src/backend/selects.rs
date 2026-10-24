@@ -178,6 +178,9 @@ pub fn priced(
             }
         }
         crate::backend::booleans::branched(context, function, price, wanted, word_bits)?;
+        // After the pricing: the pin keeps this `setcc` chain, it branches
+        // none.
+        crate::backend::selectconstants::inverted_setcc_sums(context, function)?;
         loop {
             let found = function
                 .walk()

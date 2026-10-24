@@ -13,7 +13,9 @@ fn arg(
 }
 
 mod action_table;
+mod add_simplify;
 mod and_fold;
+mod and_simplify;
 mod bit_counts;
 mod bit_test;
 mod bitcast_float;
@@ -22,6 +24,7 @@ mod br_jt;
 mod builder;
 mod cmov_constants;
 mod combiner;
+mod demanded_bits;
 mod div_by_constant;
 mod expand_node;
 mod ext_of_load;
@@ -47,12 +50,19 @@ mod m16_coverage;
 mod mem_space;
 mod min_max;
 mod odd_shift;
+mod or_simplify;
 mod pair_arith;
 mod pair_mul;
+mod promote_int_op;
+mod select_cmp_zero;
+mod select_fold;
 mod select_i1;
+mod select_single_bit;
 mod setcc_i1_operands;
 mod setcc_result;
 mod setcc_simplify;
+mod sext_in_reg;
+mod shift_simplify;
 mod switch_dags;
 mod switches;
 mod type_actions;

@@ -157,6 +157,11 @@ pub struct Profile {
     /// the language allows to stay (Nib and BASIC: only a store the program
     /// writes rounds).
     pub rounds_float_spills: bool,
+    /// A load of a cell nothing writes while the value lives is made again
+    /// where it is read (DEVIATE D-I: the pin remats only invariant loads).
+    /// Off by default (`-fllrm-stable-loads` turns it on): it cost 6.6 M Ir
+    /// and saved QCport 1.4% bytes (docs/working/stable-loads.md).
+    pub stable_loads: bool,
     /// A spill of an x87 value keeps the register's 80 bits (`fstp tbyte`),
     /// as real BC keeps a temporary (BASIC). DEVIATE D-RFP5, exit: none, the
     /// pin rounds; QB follows real BC text.
@@ -309,6 +314,7 @@ impl Profile {
             aggressive: false,
             float_store: false,
             rounds_float_spills: false,
+            stable_loads: true,
             spills_extended: false,
             exhaustive: false,
             model: arch.cost_model(),
@@ -454,7 +460,7 @@ fn _profile(
 static _MADE: LazyLock<
     std::sync::Mutex<
         crate::support::hash::HashMap<
-            (&'static str, String, bool, bool, bool, bool, bool, bool, bool, bool),
+            (&'static str, String, bool, bool, bool, bool, bool, bool, bool, bool, bool),
             &'static Profile,
         >,
     >,
@@ -498,7 +504,7 @@ pub fn tuned_with(
     search: bool,
     exhaustive: bool,
 ) -> Result<&'static Profile, String> {
-    tuned_optimizing(arch, name, size, search, exhaustive, true, false, false, false, false)
+    tuned_optimizing(arch, name, size, search, exhaustive, true, false, false, false, false, true)
 }
 
 /// `tuned_with`, the backend's optional phases left out where not
@@ -514,6 +520,7 @@ pub fn tuned_optimizing(
     aggressive: bool,
     rounds_float_spills: bool,
     spills_extended: bool,
+    stable_loads: bool,
 ) -> Result<&'static Profile, String> {
     if !arch.cpus().contains(&name) {
         return Err(format!("unknown CPU target: {name}; {} has {}", arch.name(), arch.cpus().join(", ")));
@@ -530,6 +537,7 @@ pub fn tuned_optimizing(
         aggressive,
         rounds_float_spills,
         spills_extended,
+        stable_loads,
     );
     if let Some(&one) = made.get(&key) {
         return Ok(one);
@@ -543,6 +551,7 @@ pub fn tuned_optimizing(
         aggressive,
         rounds_float_spills,
         spills_extended,
+        stable_loads,
         ..(_profile(arch, name)).expect("every listed CPU has a profile")
     }));
     made.insert(key, one);

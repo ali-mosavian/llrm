@@ -35,6 +35,14 @@ pub const LLRM_PTRDIFF: ISD = ISD::Target(24583);
 /// then the selector to a 4-byte temporary and did `call m16:16` through it.
 /// Exit: none (m16 only). Owner sdag-b. Review 2026-12-10.
 pub const LLRM_FARCALL: ISD = ISD::Target(24584);
+/// A QB runtime routine's answer, which is the flags as `cmp answer, 0` leaves
+/// them: `flags` (the `EFLAGS` copy after the call) -> the answer. Only a
+/// compare with zero reads it, and `EmitCmp` returns the flags operand; no
+/// node of this kind is selected.
+///
+/// DEVIATE SD310: the pin's calls answer in registers. Exit: none (QB only).
+/// Owner sdag-c. Review 2026-12-10.
+pub const LLRM_CALL_FLAGS: ISD = ISD::Target(24585);
 
 /// `getTargetNodeName`.
 pub fn name(code: u16) -> String {
@@ -49,6 +57,7 @@ pub fn name(code: u16) -> String {
         24581 => "X86ISD::LLRM_WINDOW".into(),
         24582 => "X86ISD::LLRM_CODE".into(),
         24584 => "X86ISD::LLRM_FARCALL".into(),
+        24585 => "X86ISD::LLRM_CALL_FLAGS".into(),
         24583 => "X86ISD::LLRM_PTRDIFF".into(),
         other => format!("X86ISD#{other}"),
     }

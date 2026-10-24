@@ -349,6 +349,8 @@ impl TargetLowering {
         t.set_ops(&[FpToSInt], &[MVT::I16, MVT::I32, MVT::I64], Custom);
         t.set_ops(&[FpToUInt], &[MVT::I8, MVT::I16], Promote);
         t.set_ops(&[FpToUInt], &[MVT::I32, MVT::I64], Custom);
+        // L300-L303, L850: `lrint` of an x87 value is `fist`
+        t.set_ops(&[LRint], &[MVT::F32, MVT::F64, MVT::F80], Custom);
         // L316: no SSE2
         t.set_ops(&[BitCast], &[MVT::F32, MVT::I32], Expand);
         // L337..L370
@@ -357,6 +359,9 @@ impl TargetLowering {
         // (BuildSDIV finds neither MULHS nor SMUL_LOHI there); only i32
         // has the two-result multiply (`MUL32r`).
         t.set_ops(&[SMulLoHi, UMulLoHi], &[MVT::I8, MVT::I16], Expand);
+        // fixed-point multiply is expanded by `expandFixedPointMul` (the base
+        // default)
+        t.set_ops(&[SMulFix], &[MVT::I8, MVT::I16, MVT::I32], Expand);
         t.set_operation_action(BrJT, MVT::Other, Expand);
         t.set_operation_action(BrCond, MVT::Other, Custom);
         t.set_ops(&[BrCC, SelectCC], &[MVT::F32, MVT::F64, MVT::F80, MVT::I8, MVT::I16, MVT::I32, MVT::I64], Expand);

@@ -20,16 +20,15 @@ fn qb() -> HirAbi {
     }
 }
 
-/// A double live across a call: refused until the x87 stack can spill
-/// (w-2's RFP-class allocation).
-const FLOAT_ACROSS_CALL: &str =
+/// A copy from a near pointer to a huge one: the DAG path refuses it (the
+/// stepped routine takes two far pointers) while the old selector compiles it.
+const HUGE_COPY: &str =
     "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
-declare double @g(double)
-define double @f(double %x) addrspace(1) {
+declare void @llvm.memcpy.p3.p0.i16(ptr addrspace(3), ptr, i16, i1)
+define void @f(ptr addrspace(3) %a, ptr %b) addrspace(1) {
 entry:
-  %a = call double @g(double %x)
-  %r = fadd double %a, %x
-  ret double %r
+  call void @llvm.memcpy.p3.p0.i16(ptr addrspace(3) %a, ptr %b, i16 64, i1 false)
+  ret void
 }
 ";
 
@@ -55,8 +54,8 @@ fn assembled_text(
 /// is refused when a function is one the DAG cannot select.
 #[test]
 fn test_the_dag_selector_refuses_a_function_it_cannot_select() {
-    assert!(assembled_text(FLOAT_ACROSS_CALL, Selector::Old).is_ok());
-    let error = assembled_text(FLOAT_ACROSS_CALL, Selector::Dag).err().expect("refused");
+    assert!(assembled_text(HUGE_COPY, Selector::Old).is_ok());
+    let error = assembled_text(HUGE_COPY, Selector::Dag).err().expect("refused");
     assert!(error.contains("@f: --isel=dag"), "{error}");
 }
 

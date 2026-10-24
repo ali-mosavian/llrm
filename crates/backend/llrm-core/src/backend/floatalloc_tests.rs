@@ -991,3 +991,91 @@ fn test_a_plain_move_of_a_float_to_and_from_a_cell_is_stored_and_loaded() {
     assert!(!names.contains(&"mov"), "{names:?}");
     assert!(names.contains(&"fld") && names.contains(&"fstp"), "{names:?}");
 }
+
+/// `Ahead::order` read every instruction of each block ahead, three deep, for
+/// every block behind it: a chain of n blocks carrying a float was scanned
+/// about 4n times (d_faces: 2 M instructions in 445 calls). Counted, not timed:
+/// a block is scanned once.
+#[test]
+fn test_a_block_ahead_is_scanned_once_however_many_blocks_ask_for_it() {
+    let source = frame_cell(-10, 10);
+    let cell = frame_cell(-20, 10);
+    let original = _body(vec![_load(1, &source), _store(&cell, 1)]);
+    let (load, store) = (original.insns()[0].clone(), original.insns()[1].clone());
+    let moved = |at: i64| Arc::new(Insn { at, covers: Some((at, at + 8)), ..(*store).clone() });
+    let n = 12;
+    let mut body = original.clone();
+    let mut blocks = vec![block(0, vec![load], vec![16]).into()];
+    for k in 1..n {
+        blocks.push(block(16 * k, Vec::new(), vec![16 * (k + 1)]).into());
+    }
+    blocks.push(block(16 * n, vec![moved(16 * n)], vec![]).into());
+    body.blocks = blocks;
+    let before = crate::backend::fpstack::RENAME_SCANS.with(std::cell::Cell::get);
+    crate::backend::fpstack::converted(&body, &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16))
+        .expect("a chain of blocks carrying a float");
+    let scans = crate::backend::fpstack::RENAME_SCANS.with(std::cell::Cell::get) - before;
+    assert!(scans <= n as usize + 1, "{scans} scans for {} blocks", n + 1);
+}
+
+/// A double live across a call that returns a double: the allocator reloads it
+/// right after the call, ahead of the pseudo-op that takes the call's result,
+/// so the result arrives under it. The stackifier refused that, "a call's
+/// floating result arrives on a stack that is not empty" (RFP-5 through the DAG
+/// path: double_across_a_call_result.c at m16, QCport modules refused under
+/// --isel=shadow). The stack was empty at the call, so the result is the bottom
+/// entry.
+#[test]
+fn test_a_reload_before_the_pseudo_that_takes_a_calls_result_leaves_the_result_below_it() {
+    let cells = _cells([-4, -8, -12], 8);
+    let (spill, out) = (&cells[0], &cells[1]);
+    let body = _body(vec![
+        _load(1, &cells[2]),
+        sem(Operation::FloatStore, "fstp", vec![m(spill)], vec![fl(1)]),
+        sem(Operation::Call, "call", vec![], vec![]),
+        _load(2, spill),
+        sem(Operation::Binary, "add", vec![], vec![]),
+        sem(Operation::FloatLoad, "", vec![fl(3)], vec![]),
+        _arithmetic("fadd", 4, fl(2), fl(3)),
+        _store(out, 4),
+    ]);
+    let converted =
+        crate::backend::fpstack::converted(&body, &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16))
+            .expect("the result arrives under the reload");
+    let insns = converted.insns();
+    let names: Vec<&str> = insns.iter().map(|one| name(one)).filter(|name| !name.is_empty()).collect();
+    assert!(names.contains(&"faddp"), "{names:?}");
+}
+
+/// The stackifier worked liveness out a second time over the body it had split:
+/// a block made on an edge holds nothing, so its rows are those of the block it
+/// leads to, and no other row moves (d_faces: two calls of 0.8 M each).
+/// Counted, not timed: one set-building pass for the entry rows, one for the
+/// exit rows.
+#[test]
+fn test_a_split_edge_asks_no_second_liveness() {
+    let (a, b, out_a, out_b) = (frame_cell(-10, 10), frame_cell(-20, 10), frame_cell(-30, 10), frame_cell(-40, 10));
+    let insn_of = |at: i64, what: Semantics| {
+        let (defines, uses) = (held_values(&what.dests), held_values(&what.sources));
+        Arc::new(Insn::new(at, Some((at, at + 8)), Some(what), defines, uses))
+    };
+    let mut body = _body(vec![]);
+    body.blocks = vec![
+        block(0, vec![insn_of(0, _load(1, &a)), insn_of(8, _load(2, &b))], vec![16, 32]).into(),
+        block(
+            16,
+            vec![insn_of(16, _store(&out_a, 1)), insn_of(24, sem(Operation::Move, "mov", vec![], vec![]))],
+            vec![32],
+        )
+        .into(),
+        block(32, vec![insn_of(32, _store(&out_b, 2))], vec![]).into(),
+    ];
+    let before = body.blocks.len();
+    crate::backend::allocate::SETS_BUILT.with(|one| one.set(0));
+    let converted =
+        crate::backend::fpstack::converted(&body, &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16))
+            .expect("a fork whose join reads fewer values than the fork holds");
+    let built = crate::backend::allocate::SETS_BUILT.with(|one| one.get());
+    assert!(converted.blocks.len() > before, "an edge was split");
+    assert_eq!(built, 2, "sets built: one liveness pass");
+}
