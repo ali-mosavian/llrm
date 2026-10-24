@@ -1943,3 +1943,89 @@ fn a_double_not_live_across_a_far_cell_is_selected() {
     selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
+
+const M16_FAR_NULL: &str =
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
+define i16 @f(ptr addrspace(1) %p) addrspace(1) {
+entry:
+  %c = icmp eq ptr addrspace(1) %p, null
+  %r = zext i1 %c to i16
+  ret i16 %r
+}
+";
+
+/// A far null pointer is two zero words. `get_constant` of the far type
+/// asserted 'integer constant of Far' and stopped 35 QCport functions.
+#[test]
+fn a_far_null_is_two_zero_words() {
+    let module = llrm_mir::parse::module(M16_FAR_NULL).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}
+
+const M16_HUGE_MEMSET: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+define cc 1005 void @f(ptr addrspace(3) %p, i32 %n) addrspace(1) {
+entry:
+  call void @llvm.memset.p3.i32(ptr addrspace(3) %p, i8 1, i32 %n, i1 false)
+  ret void
+}
+declare void @llvm.memset.p3.i32(ptr addrspace(3), i8, i32, i1)
+";
+
+/// A fill of `n` bytes through a huge pointer crosses segment ends and `n`
+/// outgrows `cx`: a `rep stosb` filled only the first 64K (huge_runs gave a
+/// wrong sum). The DAG path refuses it and the old selector's stepped loop
+/// stays.
+#[test]
+fn a_memset_through_a_huge_pointer_is_refused_not_a_rep_stos() {
+    let module = llrm_mir::parse::module(M16_HUGE_MEMSET).expect("parses");
+    let refused = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .err()
+        .expect("refused");
+    assert!(refused.0.contains("huge pointer"), "{}", refused.0);
+}
+
+/// `memcpy` and `memmove` through a huge pointer (destination or source) are
+/// refused like `memset`: a `rep movs` or the runtime's near routine would
+/// stop at the first segment end.
+#[test]
+fn a_memcpy_or_memmove_through_a_huge_pointer_is_refused() {
+    for (name, huge_dst) in [("memcpy", true), ("memcpy", false), ("memmove", true), ("memmove", false)] {
+        let (dst, src) = if huge_dst { ("3", "0") } else { ("0", "3") };
+        let ir = format!(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+define cc 1005 void @f(ptr addrspace({dst}) %d, ptr addrspace({src}) %s, i32 %n) addrspace(1) {{
+entry:
+  call void @llvm.{name}.p{dst}.p{src}.i32(ptr addrspace({dst}) %d, ptr addrspace({src}) %s, i32 %n, i1 false)
+  ret void
+}}
+declare void @llvm.{name}.p{dst}.p{src}.i32(ptr addrspace({dst}), ptr addrspace({src}), i32, i1)
+"
+        );
+        let module = llrm_mir::parse::module(&ir).expect("parses");
+        let refused =
+            selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+                .err()
+                .unwrap_or_else(|| panic!("{name} huge_dst={huge_dst}: selected"));
+        assert!(refused.0.contains("huge pointer"), "{name} huge_dst={huge_dst}: {}", refused.0);
+    }
+}
+
+const I1_FREEZE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+define i16 @f(i1 %a, i16 %x) {
+entry:
+  %f = freeze i1 %a
+  %z = zext i1 %f to i16
+  %r = add i16 %z, %x
+  ret i16 %r
+}
+";
+
+/// Freezing an `i1` promotes the operand and freezes that
+/// (`Freeze` of `Simple(I1)` stopped 2 QCport functions: 'promote result').
+#[test]
+fn an_i1_freeze_is_selected() {
+    let module = llrm_mir::parse::module(I1_FREEZE).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}

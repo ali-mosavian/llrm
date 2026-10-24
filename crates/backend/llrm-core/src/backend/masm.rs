@@ -681,17 +681,14 @@ fn wrap_of(
 /// locals, as the pin's frame is (`push ebp; mov ebp, esp; push esi; sub esp,
 /// N`), and every local that much lower. Unchanged where the entry or a piece
 /// of the frame is set up elsewhere: runtime-built, interrupt, stack-checked,
-/// far, `enter`, inline-code, `alloca`, 16-bit and shrink-wrapped frames.
+/// far, inline-code, 16-bit and shrink-wrapped frames.
 pub fn saved_first(procedure: Procedure) -> Procedure {
     let eligible = procedure.entry == 0
         && procedure.interrupt.is_none()
-        && procedure.stack_check.is_none()
         && !procedure.far
         && procedure.body.bits == 32
         && procedure.reserve != 0
-        && !(procedure.size && procedure.registers.enter)
         && procedure.callees.values().all(|one| one.code.is_empty())
-        && !moves_stack(&procedure.body)
         && [false, true]
             .iter()
             .all(|omit| wrap_of(&procedure, &procedure.body, true, *omit).is_none_or(|wrap| wrap.wrapped.is_empty()));
@@ -775,9 +772,11 @@ fn parts(
     // unknown distance: SP is set from the frame register first.
     let first = procedure.body.saved_first;
     let moved = !omit && framed && moves_stack(&procedure.body);
+    let pushed = slot * saved.len() as i64;
     let mut leave: Vec<Semantics> = Vec::new();
     if moved {
-        let below = reserve + slot * saved.len() as i64;
+        // Registers first: they lie just below BP, the locals below them.
+        let below = if first { pushed } else { reserve + pushed };
         let from = ir::Mem { through: FRAME, offset: -below, disp_width: 2, ..ir::Mem::new(None, 2) };
         leave.push(semantics(Operation::Address, "lea", vec![sp_reg()], vec![Loc::Mem(from)]));
     }
@@ -792,7 +791,7 @@ fn parts(
     };
     if first {
         // The registers lie between SP and BP: the locals go first.
-        if reserve != 0 {
+        if reserve != 0 && !moved {
             leave.push(release());
         }
         leave.extend(pops());
@@ -811,8 +810,12 @@ fn parts(
     }
     // `enter` only where the target's description takes it for size
     // (`frame_enter`).
-    let opened =
-        framed && reserve != 0 && procedure.size && procedure.registers.enter && procedure.stack_check.is_none();
+    let opened = framed
+        && !first
+        && reserve != 0
+        && procedure.size
+        && procedure.registers.enter
+        && procedure.stack_check.is_none();
     let mut enter: Vec<Semantics> = Vec::new();
     if opened {
         let count = |value, width| Loc::Imm(ir::Imm { value, width, address: None });
@@ -2467,6 +2470,76 @@ mod tests {
             "{plain:?}"
         );
         assert_eq!(plain[1..4], ["push bp", "mov bp, sp", "sub sp, 4"]);
+    }
+
+    /// A flat m32 procedure that keeps ESI, with a local at `[ebp-4]`.
+    fn kept(
+        check: Option<StackCheck>,
+        moves_stack: bool,
+    ) -> Vec<String> {
+        let esi = Loc::Reg(ir::Reg { register: RegId::ESI, width: 4 });
+        let cell = ir::Mem { through: RegId::EBP, ..ir::Mem::new(Some(Addr::new(Space::Frame, -4).in_slot(-4)), 4) };
+        let mut insns = vec![insn(0, semantics(Operation::Move, "mov", vec![esi], vec![Loc::Mem(cell)]))];
+        if moves_stack {
+            let esp = Loc::Reg(ir::Reg { register: RegId::ESP, width: 4 });
+            let eax = Loc::Reg(ir::Reg { register: RegId::EAX, width: 4 });
+            insns.push(insn(1, semantics(Operation::Binary, "sub", vec![esp.clone()], vec![esp, eax])));
+        }
+        insns.push(insn(2, semantics(Operation::Return, "ret", vec![], vec![])));
+        let mut body = lir::LirBody::new(
+            "get",
+            1,
+            vec![lir::LirBlock::new(1, insns).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.bits = 32;
+        let procedure = Procedure {
+            name: "_get".into(),
+            public: true,
+            far: false,
+            body,
+            reserve: 4,
+            callees: IndexMap::default(),
+            interrupt: None,
+            size: false,
+            entry: 0,
+            stack_check: check,
+            registers: llrm_target::Target::frame_registers(&llrm_x86_m32::M32),
+        };
+        let procedure = saved_first(procedure);
+        let mut names = no_names();
+        stack_externs(std::slice::from_ref(&procedure), &mut names);
+        _procedure(&procedure, &names, 0).unwrap().iter().map(|line| line.trim().to_owned()).collect()
+    }
+
+    /// A stack-checked or alloca frame kept the old order (`sub esp` before the
+    /// pushes), the carve-outs of the first CSR-first change: entry-built flat
+    /// m32 frames are the pin's order whatever they hold.
+    #[test]
+    fn test_a_stack_checked_frame_pushes_its_registers_before_it_reserves() {
+        let check = StackCheck { limit: "FOO".into(), handler: "BAR".into(), far: false, red_zone: 0, entry: None };
+        let lines = kept(Some(check), false);
+        // No frame register here: the cells are addressed through ESP.
+        assert_eq!(
+            lines[1..6],
+            ["push esi", "sub esp, 12", "jb L0_3", "cmp esp, dword ptr FOO", "jb L0_3"],
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn test_an_alloca_frame_pops_its_registers_from_below_ebp() {
+        let lines = kept(None, true);
+        // The registers take 4 bytes; the 4-byte local keeps its 8-byte
+        // alignment from BP.
+        assert_eq!(lines[1..5], ["push ebp", "mov ebp, esp", "push esi", "sub esp, 8"], "{lines:?}");
+        let at = lines.iter().position(|line| line == "ret").expect("a return");
+        assert_eq!(
+            lines[at - 3..=at],
+            ["lea esp, word ptr [ebp-4]", "pop esi", "pop ebp", "ret"].map(String::from),
+            "{lines:?}"
+        );
     }
 
     /// Return-tail layout must count the pop/leave absent from allocated LIR.

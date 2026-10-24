@@ -50,6 +50,7 @@ mod odd_shift;
 mod pair_arith;
 mod pair_mul;
 mod select_i1;
+mod setcc_i1_operands;
 mod setcc_result;
 mod switch_dags;
 mod switches;
