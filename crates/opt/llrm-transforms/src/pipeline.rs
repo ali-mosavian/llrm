@@ -1218,9 +1218,6 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // counter rebased by it), as LLVM's LSR cleans with
         // SimplifyInstructions.
         passes.push(Box::new(algebraic::Differences));
-        // The exit phis `lcssa` made go again: the code generator copies each
-        // (recmany -Os grew 189 bytes).
-        passes.push(Box::new(lcssa::LoopOpened));
     }
     passes
 }
