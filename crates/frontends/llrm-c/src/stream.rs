@@ -38,7 +38,7 @@ fn is_handle(token: &str) -> bool {
 
 pub fn parse(text: &str) -> Vec<Record<'_>> {
     let mut records = Vec::new();
-    for (index, line) in splitlines(text).into_iter().enumerate() {
+    for (index, line) in lines(text).enumerate() {
         let mut tokens = Tokens { line, at: 0 };
         let Some(mut first) = tokens.next() else { continue };
         let mut result = None;
@@ -66,6 +66,15 @@ pub fn parse(text: &str) -> Vec<Record<'_>> {
         records.push(Record { line: index + 1, result, call: first, args, fields });
     }
     records
+}
+
+/// `splitlines(text)`, one line at a time. The shim escapes everything but
+/// printable ASCII, so a stream with no line break but `\n` splits on that
+/// alone, by the searches `str` makes with SIMD.
+fn lines(text: &str) -> Box<dyn Iterator<Item = &str> + '_> {
+    let plain =
+        text.is_ascii() && !['\r', '\x0b', '\x0c', '\x1c', '\x1d', '\x1e'].iter().any(|one| text.contains(*one));
+    if plain { Box::new(text.split_terminator('\n')) } else { Box::new(splitlines(text).into_iter()) }
 }
 
 /// `str.splitlines`.
@@ -126,12 +135,12 @@ impl<'a> Iterator for Tokens<'a> {
             return None;
         }
         let start = self.at;
-        let mut end = start;
-        while end < bytes.len() && bytes[end] != b' ' {
-            if bytes[end] == b'"' {
-                end = end + 1 + self.line[end + 1..].find('"').expect("the shim closes every quote");
-            }
-            end += 1;
+        let mut end = self.line[start..].find(' ').map_or(bytes.len(), |stop| start + stop);
+        // A quoted string may hold spaces: the token ends at the first space
+        // after its closing quote.
+        while bytes[start..end].contains(&b'"') && bytes[start..end].iter().filter(|b| **b == b'"').count() % 2 == 1 {
+            let closing = self.line[end..].find('"').expect("the shim closes every quote");
+            end = self.line[end + closing + 1..].find(' ').map_or(bytes.len(), |stop| end + closing + 1 + stop);
         }
         self.at = end;
         Some(&self.line[start..end])
@@ -217,5 +226,29 @@ mod tests {
         assert_eq!(splitlines("a\r\nb\u{2028}c"), ["a", "b", "c"]);
         assert_eq!(splitlines("a\n\nb"), ["a", "", "b"]);
         assert_eq!(splitlines(""), Vec::<&str>::new());
+    }
+
+    fn tokens(line: &str) -> Vec<&str> {
+        Tokens { line, at: 0 }.collect()
+    }
+
+    /// A quoted value holds spaces; a token ends at the first space outside
+    /// quotes, and leading, repeated and trailing spaces make none.
+    #[test]
+    fn a_quoted_value_keeps_its_spaces() {
+        assert_eq!(tokens("a \"b c\" d=\"e f\"g h"), ["a", "\"b c\"", "d=\"e f\"g", "h"]);
+        assert_eq!(tokens("  x   y  "), ["x", "y"]);
+        assert_eq!(tokens("n=\"p q\" r=\"s t\""), ["n=\"p q\"", "r=\"s t\""]);
+        assert_eq!(tokens("\"a\"\"b c\" z"), ["\"a\"\"b c\"", "z"]);
+        assert!(tokens("   ").is_empty());
+    }
+
+    /// The lazy lines are `str.splitlines`'s on a stream and on text with the
+    /// other line breaks.
+    #[test]
+    fn lazy_lines_equal_splitlines() {
+        for text in ["a\nb\n", "a\n\nb", "", "\n", "a", "a\r\nb", "a\u{85}b\n", "x\x0cy\n", "é\nz\n"] {
+            assert_eq!(lines(text).collect::<Vec<_>>(), splitlines(text), "{text:?}");
+        }
     }
 }
