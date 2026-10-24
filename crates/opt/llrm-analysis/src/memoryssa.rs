@@ -1196,7 +1196,15 @@ impl MemorySSA<'_> {
             #[cfg(test)]
             MAY_CLOBBERS.with(|asked| asked.set(asked.get() + stores.len()));
             let found = match self.call_clobbers(site, cell) {
-                Some(asked) if stores.is_empty() || !matches!(self.unit.function.instruction(site).opcode, Opcode::Store { .. }) => asked,
+                Some(asked)
+                    if stores.is_empty()
+                        || !matches!(
+                            self.unit.function.instruction(site).opcode,
+                            Opcode::Store { .. }
+                        ) =>
+                {
+                    asked
+                }
                 // The stack knows no far segments or byte ranges of a store:
                 // either answer apart rules it out.
                 Some(asked) => asked && stores.iter().any(|store| self.may_clobber_cached(cell, store)),
@@ -1269,7 +1277,10 @@ impl MemorySSA<'_> {
         let pointer = cell.pointer?;
         // A cell cut from its pointer (another offset or width) names bytes
         // the pointer does not; the footprint answers for it.
-        if matches!(self.unit.function.instruction(site).opcode, Opcode::Store { .. })
+        if matches!(
+            self.unit.function.instruction(site).opcode,
+            Opcode::Store { .. }
+        )
             && MemRef::at(&self.unit, pointer, cell.width) != *cell
         {
             return None;
