@@ -278,7 +278,7 @@ struct Object {
 }
 
 fn number(text: &str) -> R<i64> {
-    text.trim().parse().map_err(|_| Unsupported(format!("not a number: {text}")))
+    hir::parse_int(text).ok_or_else(|| Unsupported(format!("not a number: {text}")))
 }
 
 /// Each data segment's labelled objects, as the stream lays them down.
