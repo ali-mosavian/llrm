@@ -1017,7 +1017,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if not by_package:
             return []
         culprits = [number for number in group if merge_alone(number) and any(failing_on_checkout(package, tests) for package, tests in by_package.items())]
-        named.update({number: f"alone on the head it fails {', '.join(sorted(failed_units))[:160]}" for number in culprits})
+        why = "; ".join(f"{test}: {LAST_PANICS[test]}" for _, test in sorted(units) if test in LAST_PANICS)
+        named.update({number: f"alone on the head it fails {', '.join(sorted(failed_units))[:160]}" + (f" [{why[:300]}]" if why else "") for number in culprits})
         return culprits
 
     def passes(group: list[str]) -> bool:
@@ -1148,6 +1149,9 @@ def head_expanded(head: set[str], merged: set[str], run_on_head) -> set[str]:
     return head | extra
 
 
+LAST_PANICS: dict[str, str] = {}  # test name -> its first panic line, from the last `failing_on_checkout`
+
+
 def failing_on_checkout(crate: str, tests: set[str], cwd: Path = ROOT) -> set[str]:
     """Which of `tests` of `crate` fail on the checkout in `cwd` (exact names, release not needed: the smoke ran them as `cargo test -q --lib`)."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -1156,6 +1160,7 @@ def failing_on_checkout(crate: str, tests: set[str], cwd: Path = ROOT) -> set[st
 
     command = parity_smoke.lib_command(crate)
     done = subprocess.run(slotted([*command, "--", "--exact", *sorted(tests)]), cwd=cwd, capture_output=True, text=True)
+    LAST_PANICS.update(parity_smoke.panic_reasons(done.stdout + done.stderr))
     return {name for name in tests if name in set(parity_smoke.failed_tests(done.stdout + done.stderr))}
 
 
