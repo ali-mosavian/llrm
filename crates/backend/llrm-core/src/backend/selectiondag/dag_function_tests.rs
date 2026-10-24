@@ -1920,6 +1920,8 @@ entry:
 #[test]
 fn an_argument_area_split_by_a_select_is_stored_through_a_copy_of_sp() {
     let module = llrm_mir::parse::module(M16_SELECT_IN_ARGUMENT).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
 }
 
 const M16_FAR_AND_DOUBLE: &str =
