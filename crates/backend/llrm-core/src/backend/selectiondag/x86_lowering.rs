@@ -83,6 +83,8 @@ pub mod x86isd {
     pub const FP_TO_INT_IN_MEM: ISD = ISD::Target(617);
     /// `X86ISD::FILD`: `fild` of an integer in memory to an x87 value.
     pub const FILD: ISD = ISD::Target(586);
+    /// `X86ISD::FIST`: `fist` of an x87 value in the current rounding mode.
+    pub const FIST: ISD = ISD::Target(587);
     /// `X86ISD::FCMP`: the flags of an x87 compare (`fucom`, `fnstsw`,
     /// `sahf` on a 486).
     pub const FCMP: ISD = ISD::Target(576);
@@ -156,6 +158,7 @@ impl Hooks for X86Lowering {
             ISD::GlobalAddress => lower_global_address(dag, node),
             ISD::VAStart => lower_vastart(dag, node),
             ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node),
+            ISD::LRint => lower_lrint(dag, node),
             ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node),
             ISD::ConstantPool => lower_constant_pool(dag, node),
             ISD::JumpTable => lower_jump_table(dag, node),
@@ -911,6 +914,26 @@ fn lower_fp_to_int(
         result = dag.get_node(ISD::Xor, EVT::I64, &[result, adjust]);
     }
     Some(result)
+}
+
+/// `LRINT_LLRINTHelper` for the x87: `fist` of the value, in the current
+/// rounding mode, to a stack slot of the result's size, then a load of it.
+fn lower_lrint(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let result_vt = dag.value_type(node);
+    let value = dag.operand(node, 0);
+    let EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80) = dag.value_type(value) else { return None };
+    let size = result_vt.size_in_bits() / 8;
+    let index = dag.create_stack_temporary(size, size);
+    let slot = dag.get_frame_index(dag.config().pointer, index);
+    let chain = dag.entry_node();
+    let info =
+        MemInfo { mem_vt: result_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
+    let fist =
+        dag.intern(x86isd::FIST, &[EVT::OTHER], &[chain, value, slot], SDNodeFlags::default(), NodeData::Mem(info));
+    Some(dag.get_load(result_vt, fist, slot, info))
 }
 
 /// `BuildFILD` without SSE: `fild` of the `src_vt` integer at `slot`.

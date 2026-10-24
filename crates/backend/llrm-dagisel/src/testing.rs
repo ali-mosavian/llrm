@@ -322,6 +322,13 @@ impl Dag for TestDag {
     ) -> bool {
         false
     }
+    fn masked_value_is_zero(
+        &self,
+        _: SDValue,
+        _: u64,
+    ) -> bool {
+        false
+    }
     fn have_no_common_bits_set(
         &self,
         _: SDValue,

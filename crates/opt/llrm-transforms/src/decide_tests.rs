@@ -801,13 +801,13 @@ fn test_without_constants_decide_keeps_the_implied_branches_only() {
     assert!(!printed(&implied).contains("br i1 %d"), "{}", printed(&implied));
 }
 
-/// SimplifyCfg asked for a function's loop-form blocks at each run, and each
-/// ask derived the loops again (d_faces -O2: 34 asks, 6.4 M Ir) though the
-/// blocks and edges were as the last ask found them. A second ask of the same
-/// graph derives nothing.
+/// Each ask for a function's loop-form blocks built the whole body's graph and
+/// a predecessor map of it (d_faces -O2: 33 asks, 2.9 M Ir) to read the few
+/// blocks round its loops. With the loops held, it builds no graph, and finds
+/// the preheader `b0` and the latch `b2`.
 #[test]
-fn test_the_loop_form_blocks_of_a_graph_met_again_are_not_derived_again() {
-    let module = parsed(
+fn test_the_loop_form_blocks_are_read_without_the_whole_graph() {
+    let mut module = parsed(
         "define void @f(i16 %n) {
 b0:
   br label %b1
@@ -824,13 +824,11 @@ b3:
 }
 ",
     );
-    let mut module = module;
     let (_, function) = module.function_mut("f").expect("@f");
     let function = &*function;
-    let before = llrm_analysis::cfg::shapes_derived();
-    let first = super::loop_form_blocks(function, None);
-    let once = llrm_analysis::cfg::shapes_derived() - before;
-    let second = super::loop_form_blocks(function, None);
-    assert_eq!(first, second);
-    assert_eq!(llrm_analysis::cfg::shapes_derived() - before, once, "the second ask derived the loops again");
+    let loops = llrm_analysis::cfg::loops_of(function);
+    let before = llrm_analysis::cfg::graphs_built();
+    let found = super::loop_form_blocks(function, Some(loops));
+    assert_eq!(llrm_analysis::cfg::graphs_built() - before, 0, "the whole graph was built");
+    assert_eq!(found.into_iter().collect::<Vec<_>>(), [0, 2]);
 }
