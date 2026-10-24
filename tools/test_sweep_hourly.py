@@ -184,3 +184,14 @@ def test_a_qbrt_step_that_died_before_its_count_is_a_red_with_the_reason():
     reds, result = s.parse_qbrt(text)
     assert result == "?" and [one.name for one in reds] == ["qbrt:no-result: RuntimeError: DOSBox ran 19 of 20 jobs (/p/events.txt)"]
     assert s.parse_qbrt("RESULT 218 of 218 pass (program x target); 0 did not compile\n") == ([], "218/218")
+
+
+def test_a_sweep_records_its_pid_for_the_loop_that_waits_for_it(tmp_path, monkeypatch):
+    """The loop waited with `pgrep -f '^python3 tools/sweep_hourly'`, which also matches any session whose command line starts that way; it waits on this pid now."""
+    import os
+
+    seen = []
+    monkeypatch.setattr(s, "RUNNING", tmp_path / "running.pid")
+    monkeypatch.setattr(s, "sweep", lambda argv: seen.append((tmp_path / "running.pid").read_text().strip()) or 0)
+    assert s.main([]) == 0
+    assert seen == [str(os.getpid())] and not (tmp_path / "running.pid").exists()
