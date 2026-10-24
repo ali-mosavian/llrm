@@ -1196,7 +1196,10 @@ impl MemorySSA<'_> {
             #[cfg(test)]
             MAY_CLOBBERS.with(|asked| asked.set(asked.get() + stores.len()));
             let found = match self.call_clobbers(site, cell) {
-                Some(asked) => asked,
+                Some(asked) if stores.is_empty() || !matches!(self.unit.function.instruction(site).opcode, Opcode::Store { .. }) => asked,
+                // The stack knows no far segments or byte ranges of a store:
+                // either answer apart rules it out.
+                Some(asked) => asked && stores.iter().any(|store| self.may_clobber_cached(cell, store)),
                 None => stores.iter().any(|store| self.may_clobber_cached(cell, store)),
             };
             assert!(!(missed && found), "LLRM_CHECK_CLOBBERS: objects that cannot meet were found to clobber");
@@ -1246,10 +1249,11 @@ impl MemorySSA<'_> {
         changes(cell, invariant, self.written[&site].as_deref(), |_| self.clobbered(slot, cell, access, site))
     }
 
-    /// Whether the call `site` may write `cell`, as the pin's AA stack answers
-    /// `getModRefInfo(Call, Loc)` (TBAA, BasicAA, GlobalsAA; MemorySSA.cpp
-    /// `instructionClobbersQuery` L320); none for another instruction or a
-    /// cell with no pointer, which the footprint answers.
+    /// Whether the call or store `site` may write `cell`, as the pin's AA
+    /// stack answers `getModRefInfo(Inst, Loc)` (BasicAA, TBAA, GlobalsAA;
+    /// MemorySSA.cpp `instructionClobbersQuery` L320); none for another
+    /// instruction or a cell with no pointer, which the footprint answers.
+    /// The cell carries no TBAA tag, so the store's own tag rules nothing out.
     fn call_clobbers(
         &self,
         site: InstId,
@@ -1258,11 +1262,19 @@ impl MemorySSA<'_> {
         use crate::aa::{AAQueryInfo, AAResults, LocationSize, MemoryLocation};
         if !matches!(
             self.unit.function.instruction(site).opcode,
-            Opcode::Call(_) | Opcode::Invoke(_)
+            Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Store { .. }
         ) {
             return None;
         }
-        let location = MemoryLocation::new(cell.pointer?, LocationSize::Precise(u64::from(cell.width)));
+        let pointer = cell.pointer?;
+        // A cell cut from its pointer (another offset or width) names bytes
+        // the pointer does not; the footprint answers for it.
+        if matches!(self.unit.function.instruction(site).opcode, Opcode::Store { .. })
+            && MemRef::at(&self.unit, pointer, cell.width) != *cell
+        {
+            return None;
+        }
+        let location = MemoryLocation::new(pointer, LocationSize::Precise(u64::from(cell.width)));
         let mut aggregate = crate::aggregate::AggregateAA::new();
         aggregate.add_aa_result(crate::basicaa::BasicAA::new(&self.unit));
         aggregate.add_aa_result(crate::typebasedaa::TypeBasedAA::new(&self.unit));
