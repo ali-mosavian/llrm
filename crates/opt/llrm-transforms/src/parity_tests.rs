@@ -123,6 +123,7 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
             "fixupbw@14",
             "machinecse@4",
             "machinesink@4",
+            "machinesched@5",
             "combiner@4",
             "liverangeshrink@4",
             "floatalloc@8",
