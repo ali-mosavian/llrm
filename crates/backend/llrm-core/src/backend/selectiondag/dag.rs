@@ -179,6 +179,9 @@ pub struct SelectionDAG {
     /// stale or repeated entries; `users` filters them).
     uses: Vec<Vec<u32>>,
     cse: HashMap<CseKey, u32>,
+    /// Nodes `delete_dead` removed: they stay in the arena but no longer
+    /// count as users.
+    deleted: std::collections::HashSet<u32>,
     pub(super) config: DagConfig,
     entry: SDValue,
     root: SDValue,
@@ -215,6 +218,7 @@ impl SelectionDAG {
             nodes: Vec::new(),
             uses: Vec::new(),
             cse: HashMap::new(),
+            deleted: std::collections::HashSet::new(),
             config,
             entry: zero,
             root: zero,
@@ -257,7 +261,47 @@ impl SelectionDAG {
         &self,
         node: u32,
     ) -> usize {
-        self.nodes.iter().flat_map(|other| &other.ops).filter(|op| op.node == node).count()
+        self.nodes
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| self.deleted.is_empty() || !self.deleted.contains(&(*index as u32)))
+            .flat_map(|(_, other)| &other.ops)
+            .filter(|op| op.node == node)
+            .count()
+    }
+
+    /// `recursivelyDeleteUnusedNodes`: a node nothing reads (and that is
+    /// neither the root nor the entry) lets go of its operands, and so on down.
+    /// The arena keeps the slot; what matters is that a dead node no longer
+    /// counts as a user (`hasOneUse`), nor as a CSE hit.
+    pub fn delete_dead(
+        &mut self,
+        node: u32,
+    ) {
+        let mut work = vec![node];
+        while let Some(n) = work.pop() {
+            // Chain and glue nodes stay: the builder keeps handles on some
+            // (the pin protects them with `HandleSDNode`).
+            if n == self.root.node
+                || n == self.entry.node
+                || self.deleted.contains(&n)
+                || self.nodes[n as usize].ops.is_empty()
+                || self.nodes[n as usize].values.iter().any(|&vt| vt == EVT::OTHER || vt == EVT::GLUE)
+            {
+                continue;
+            }
+            let results = self.nodes[n as usize].values.len() as u8;
+            if (0..results).any(|res| self.users(SDValue { node: n, res }).next().is_some()) {
+                continue;
+            }
+            let dead = &self.nodes[n as usize];
+            let key = (dead.opcode, dead.values.clone(), dead.ops.clone(), dead.data.clone());
+            if self.cse.get(&key) == Some(&n) {
+                self.cse.remove(&key);
+            }
+            self.deleted.insert(n);
+            work.extend(self.nodes[n as usize].ops.iter().map(|op| op.node));
+        }
     }
 
     pub fn nodes(&self) -> &[SDNode] {
@@ -281,7 +325,7 @@ impl SelectionDAG {
             .into_iter()
             .flatten()
             .copied()
-            .filter(|&user| self.nodes[user as usize].ops.contains(&value))
+            .filter(|&user| !self.deleted.contains(&user) && self.nodes[user as usize].ops.contains(&value))
             .collect();
         users.sort_unstable();
         users.dedup();
