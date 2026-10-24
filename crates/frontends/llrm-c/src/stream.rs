@@ -135,12 +135,12 @@ impl<'a> Iterator for Tokens<'a> {
             return None;
         }
         let start = self.at;
-        let mut end = self.line[start..].find(' ').map_or(bytes.len(), |stop| start + stop);
-        // A quoted string may hold spaces: the token ends at the first space
-        // after its closing quote.
-        while bytes[start..end].contains(&b'"') && bytes[start..end].iter().filter(|b| **b == b'"').count() % 2 == 1 {
-            let closing = self.line[end..].find('"').expect("the shim closes every quote");
-            end = self.line[end + closing + 1..].find(' ').map_or(bytes.len(), |stop| end + closing + 1 + stop);
+        let mut end = start;
+        while end < bytes.len() && bytes[end] != b' ' {
+            if bytes[end] == b'"' {
+                end = end + 1 + self.line[end + 1..].find('"').expect("the shim closes every quote");
+            }
+            end += 1;
         }
         self.at = end;
         Some(&self.line[start..end])
