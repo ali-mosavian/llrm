@@ -305,7 +305,7 @@ def steps(
     return reds, counts
 
 
-RUNNING = Path(os.environ.get("SWEEP_PIDFILE") or LOGS / "running.pid")  # the loop waits on this pid (kill -0), not on a `pgrep -f` pattern
+RUNNING = Path(os.environ.get("SWEEP_PIDFILE") or LOGS / "running.pid")  # the loop waits on this pid, not on a command-line pattern
 
 
 def main(argv: list[str]) -> int:
