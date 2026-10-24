@@ -1,4 +1,5 @@
 /* The graphics screen: modes, colours, pixels and points (QB rt/gr*.asm). */
+#include "ad.h"
 #include "cndriver.h"
 #include "gfx.h"
 #include "gfxdev.h"
@@ -280,22 +281,67 @@ int B_PNI2(short x, short y)
     return gfx_pixel(x, y);
 }
 
+/* Whether `color` is one the palette takes: in a DAC mode red, green and blue,
+   0 to 63 each, in the three bytes from the low one; otherwise 0 to 63. */
+static int palette_valid(long color)
+{
+    if (color < 0)
+        return 0;
+    if (gfx_current->dac)
+        return (color & 0xFF) <= 63 && (color >> 8 & 0xFF) <= 63 && (color >> 16) <= 63;
+    return color <= 63;
+}
+
+static void palette_set(short attribute, long color)
+{
+    if (gfx_current->dac)
+        gd_palette_mix(attribute, color & 0xFF, color >> 8 & 0xFF, (unsigned)(color >> 16));
+    else
+        gd_palette(attribute, (byte)color);
+}
+
 /* B$PAL2: PALETTE attribute, colour. */
 void B_PAL2(short attribute, long color)
 {
     need_graphics();
-    if (attribute < 0 || (unsigned)attribute >= gfx_current->colors || color < 0)
+    if (attribute < 0 || (unsigned)attribute >= gfx_current->colors || !palette_valid(color))
         qb_error(BE_ILLFUN);
-    if (gfx_current->dac) {
-        /* red, green and blue, 0 to 63 each, in the three bytes from the low
-         * one */
-        if ((color & 0xFF) > 63 || (color >> 8 & 0xFF) > 63 || (color >> 16) > 63)
+    palette_set(attribute, color);
+}
+
+/* B$PALU: PALETTE USING array(i) (QB rt/gwpal.asm B$PALU, llxgasup.asm
+   B$EgaPalSet).  Attribute n takes element n of the array from the one named
+   to its end: a LONG array in a DAC mode, where an INTEGER one is an illegal
+   function call, and either elsewhere.  The elements counted are the bytes
+   left halved, or quartered for LONG ones, at most 65535, and fewer than the
+   screen has colours is an illegal function call.  An element of -1 leaves its
+   attribute alone; all are checked before any is set. */
+void B_PALU(qb_data_ptr data, const AD *ad)
+{
+    unsigned long bytes;
+    unsigned count, at;
+    const int wide = ad->elem == 4;
+    const short QB_FAR *words = (const short QB_FAR *)data;
+    const long QB_FAR *longs = (const long QB_FAR *)data;
+
+    need_graphics();
+    if (gfx_current->dac && !wide)
+        qb_error(BE_ILLFUN);
+    bytes = ad_remaining(ad, data) >> (wide ? 2 : 1);
+    count = bytes > 65535UL ? 65535U : (unsigned)bytes;
+    if (count < gfx_current->colors)
+        qb_error(BE_ILLFUN);
+    for (at = 0; at < gfx_current->colors; at++) {
+        long color = wide ? longs[at] : words[at];
+
+        if (color != -1 && !palette_valid(color))
             qb_error(BE_ILLFUN);
-        gd_palette_mix(attribute, color & 0xFF, color >> 8 & 0xFF, (unsigned)(color >> 16));
-    } else {
-        if (color > 63)
-            qb_error(BE_ILLFUN);
-        gd_palette(attribute, (byte)color);
+    }
+    for (at = 0; at < gfx_current->colors; at++) {
+        long color = wide ? longs[at] : words[at];
+
+        if (color != -1)
+            palette_set(at, color);
     }
 }
 
@@ -313,6 +359,7 @@ void B_PAL2(short attribute, long color)
 #pragma aux B_PNR4 "B$PNR4"
 #pragma aux B_PNI2 "B$PNI2"
 #pragma aux B_PAL2 "B$PAL2"
+#pragma aux B_PALU "B$PALU"
 
 /* SCREEN is taken here once a program has this linked (screen.c). */
 extern void (*screen_set_mode)(int mode);

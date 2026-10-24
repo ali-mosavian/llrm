@@ -2682,6 +2682,57 @@ fn a_scaled_lea_at_m16_has_no_literal_place() {
     assert!(scaled > 0, "the function has a scaled lea");
 }
 
+const SHIFT_IN_MEMORY: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define void @f(ptr %p, i16 %n) {
+entry:
+  %v = load i16, ptr %p
+  %c = and i16 %n, 15
+  %r = shl i16 %v, %c
+  store i16 %r, ptr %p
+  ret void
+}
+";
+
+/// A variable shift of a value in memory is `shl [p], cl`: the form pins its
+/// amount to `cl`, which the glued copy wrote. Only the register forms read
+/// it, and `SHL16mCL` stopped the nib runtime's `N$PR4` with `missing source`.
+#[test]
+fn a_variable_shift_in_memory_reads_cl() {
+    let module = llrm_mir::parse::module(SHIFT_IN_MEMORY).expect("parses");
+    selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+}
+
+const THREE_WAY_COMPARE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i8 @f(i32 %a, i32 %b) {
+entry:
+  %lt = icmp ult i32 %a, %b
+  %min = select i1 %lt, i32 %a, i32 %b
+  %any = icmp ne i32 %min, 0
+  br i1 %any, label %longer, label %done
+longer:
+  ret i8 7
+done:
+  %lt2 = icmp ult i32 %a, %b
+  %eq = icmp eq i32 %a, %b
+  %neg = select i1 %lt2, i8 -1, i8 1
+  %r = select i1 %eq, i8 0, i8 %neg
+  ret i8 %r
+}
+";
+
+/// One compare feeds an unsigned less-than, an equality and a branch, with
+/// instructions that rewrite the flags between them: the compare is `sub`
+/// whose value nothing reads, made again for the next reader (the nib
+/// runtime's `N$VCMP` stopped with `flags overwritten between their producer
+/// and a consumer`, 3 of 51 nib programs and 25 examples under `--isel=dag`).
+#[test]
+fn a_compare_read_after_the_flags_changed_is_made_again() {
+    let module = llrm_mir::parse::module(THREE_WAY_COMPARE).expect("parses");
+    selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+}
+
 const FLAGS_OF_A_SUB_AFTER_A_SHIFT: &str = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
 declare fastcc void @_far_get(ptr, ptr)
 declare fastcc i16 @_con_gfx_trim(ptr)
@@ -2908,4 +2959,23 @@ fn the_flags_of_a_sub_are_made_again_after_another_unit_wrote_them() {
     let module = llrm_mir::parse::module(FLAGS_OF_A_SUB_AFTER_A_SHIFT).expect("parses");
     selected(&module, "_con_draw", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
+}
+
+const SMUL_FIX: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a, i32 %b) {
+entry:
+  %r = call i32 @llvm.smul.fix.i32(i32 %a, i32 %b, i32 12)
+  ret i32 %r
+}
+declare i32 @llvm.smul.fix.i32(i32, i32, i32 immarg)
+";
+
+/// `smul.fix` is the product's two halves and a funnel shift by the scale
+/// (the pin's `IMUL32r` and `SHRD32rri8`); `CannotSelect("SMulFix")` stopped
+/// the `mandel` example, which does its arithmetic in 20.12 fixed point.
+#[test]
+fn a_fixed_point_multiply_is_a_widening_multiply_and_a_funnel_shift() {
+    let names = names(SMUL_FIX).unwrap_or_else(|why| panic!("{why}"));
+    assert!(names.iter().any(|n| n == "imul" || n == "mul"), "{names:?}");
+    assert!(names.iter().any(|n| n == "shrd"), "{names:?}");
 }

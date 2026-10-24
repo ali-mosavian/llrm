@@ -42,7 +42,7 @@
 use std::collections::HashSet;
 
 use super::actions::{Action, LoadExt, TargetLowering};
-use super::dag::{NodeData, Rauw, SDValue, SelectionDAG};
+use super::dag::{NodeData, Rauw, SDNodeFlags, SDValue, SelectionDAG};
 use super::isd::{CondCode, ISD};
 use super::mvt::EVT;
 
@@ -71,6 +71,17 @@ pub trait CombineHooks {
         _node: SDValue,
         _level: CombineLevel,
     ) -> Option<SDValue> {
+        None
+    }
+
+    /// `IsDesirableToPromoteOp`, with `isTypeDesirableForOp` before it: the
+    /// type a legal operation is better done in, or `None`.
+    fn promote_type(
+        &self,
+        _dag: &SelectionDAG,
+        _tli: &TargetLowering,
+        _op: SDValue,
+    ) -> Option<EVT> {
         None
     }
 }
@@ -200,6 +211,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let mut result = self.visit(node);
         if result.is_none() && (matches!(op, ISD::Target(_)) || self.hooks.has_target_combine(op)) {
             result = self.hooks.perform_dag_combine(self.dag, node, self.level);
+        }
+        // "If nothing happened still, try promoting the operation."
+        if result.is_none() && self.level >= CombineLevel::AfterLegalizeVectorOps {
+            result = self.promote_int_op(node);
         }
         result
     }
@@ -857,6 +872,102 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(self.dag.get_node(op, vt, &[x, amount]));
         }
         Some(self.dag.get_constant(0, vt))
+    }
+
+    /// `PromoteIntBinOp`, `PromoteIntShiftOp` and `PromoteExtend`: an operation
+    /// the target wants in a wider type is done there, and truncated.
+    ///
+    /// DEVIATE SD211: a load operand is any-extended, not replaced by an
+    /// extending load (`PromoteOperand`/`ReplaceLoadWithPromotedLoad`); the
+    /// extend-of-load fold makes the same load. `AssertSext`/`AssertZext` are
+    /// not looked through. Exit: those. Owner sdag-b. Review 2026-12-10.
+    fn promote_int_op(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let op = self.dag.opcode(node);
+        let class = match op {
+            ISD::Add | ISD::Sub | ISD::Mul | ISD::And | ISD::Or | ISD::Xor => 0,
+            ISD::Shl | ISD::Sra | ISD::Srl => 1,
+            ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend => 2,
+            _ => return None,
+        };
+        let vt = self.dag.value_type(node);
+        if !vt.is_integer() {
+            return None;
+        }
+        let tli = self.tli?;
+        let wide = self.hooks.promote_type(self.dag, tli, node)?;
+        match class {
+            2 => {
+                let x = self.dag.operand(node, 0);
+                Some(self.dag.get_node(op, vt, &[x]))
+            }
+            0 => {
+                let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+                let (w0, w1) = (self.promote_operand(n0, wide)?, self.promote_operand(n1, wide)?);
+                let wide_op = self.dag.get_node(op, wide, &[w0, w1]);
+                Some(self.dag.get_node(ISD::Truncate, vt, &[wide_op]))
+            }
+            _ => {
+                let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+                let flags = self.dag.node(node).flags;
+                let w0 = match op {
+                    ISD::Sra => self.sext_promote_operand(n0, wide, tli)?,
+                    ISD::Srl => self.zext_promote_operand(n0, wide)?,
+                    _ if flags.0 & SDNodeFlags::NO_UNSIGNED_WRAP.0 != 0 => self.zext_promote_operand(n0, wide)?,
+                    _ if flags.0 & SDNodeFlags::NO_SIGNED_WRAP.0 != 0 => self.sext_promote_operand(n0, wide, tli)?,
+                    _ => self.promote_operand(n0, wide)?,
+                };
+                let wide_op = self.dag.get_node(op, wide, &[w0, n1]);
+                Some(self.dag.get_node(ISD::Truncate, vt, &[wide_op]))
+            }
+        }
+    }
+
+    /// `PromoteOperand`: a constant is extended, anything else any-extended.
+    fn promote_operand(
+        &mut self,
+        value: SDValue,
+        wide: EVT,
+    ) -> Option<SDValue> {
+        if self.dag.constant(value).is_some() {
+            let byte_sized = self.dag.value_type(value).size_in_bits() % 8 == 0;
+            let ext = if byte_sized { ISD::SignExtend } else { ISD::ZeroExtend };
+            return Some(self.dag.get_node(ext, wide, &[value]));
+        }
+        if !self.tli?.is_operation_legal(ISD::AnyExtend, wide) {
+            return None;
+        }
+        Some(self.dag.get_node(ISD::AnyExtend, wide, &[value]))
+    }
+
+    fn sext_promote_operand(
+        &mut self,
+        value: SDValue,
+        wide: EVT,
+        tli: &TargetLowering,
+    ) -> Option<SDValue> {
+        if !tli.is_operation_legal(ISD::SignExtendInReg, wide) {
+            return None;
+        }
+        let old = self.dag.value_type(value);
+        let promoted = self.promote_operand(value, wide)?;
+        let ty = self.dag.get_value_type_node(old);
+        Some(self.dag.get_node(ISD::SignExtendInReg, wide, &[promoted, ty]))
+    }
+
+    /// `ZExtPromoteOperand`: `getZeroExtendInReg` is an `and` with the old
+    /// type's mask.
+    fn zext_promote_operand(
+        &mut self,
+        value: SDValue,
+        wide: EVT,
+    ) -> Option<SDValue> {
+        let old = self.dag.value_type(value);
+        let promoted = self.promote_operand(value, wide)?;
+        let mask = self.dag.get_constant(super::fold::mask(old.size_in_bits()), wide);
+        Some(self.dag.get_node(ISD::And, wide, &[promoted, mask]))
     }
 
     /// `visitMUL`, up to the multiply-by-power-of-two folds.
