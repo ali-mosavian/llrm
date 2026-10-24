@@ -541,6 +541,9 @@ def dependants_lib_failures(
     import xfail  # noqa: PLC0415
 
     failed = set()
+    # A listed test that passed: its fix removes its entry, and the list says otherwise (17 entries of llrm-nib, qb and transforms stood after their tests passed or went).
+    stale = set()
+    listed = xfail.load()
     started = time.monotonic()
     passed, names = 0, []
     for package in sorted(packages):
@@ -551,6 +554,7 @@ def dependants_lib_failures(
             found = {f"unit {package}::did-not-run"}
             CAUSES[f"unit {package}::did-not-run"] = did_not_run_cause(output, done.returncode)
         failed |= found
+        stale |= {f"xpass unit {package}::{name}" for name in re.findall(r"^test (\S+) \.\.\. ok$", output, re.M) if f"unit {package}::{name}" in listed}
         passed += sum(int(count) for count in re.findall(r"test result: \w+\. (\d+) passed", output))
         names += [f"{package}::{name}" for name in re.findall(r"^test (\S+) \.\.\. (?:ok|FAILED)$", output, re.M)]
     # What ran, kept for the line the gate prints: a pass that says nothing cannot be told from a gate that never ran.
@@ -561,7 +565,7 @@ def dependants_lib_failures(
         names=hashlib.sha1("\n".join(sorted(names)).encode()).hexdigest()[:8],
         seconds=time.monotonic() - started,
     )
-    return failed - xfail.load().keys()
+    return (failed - listed.keys()) | stale
 
 
 # Root integration targets (tests/*.rs) the landing gate does not run per PR, with the reason: the nightly run (tools/gate/nightly_integration.py) does.

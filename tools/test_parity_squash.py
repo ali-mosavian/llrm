@@ -749,6 +749,13 @@ def test_a_head_cached_with_a_bare_step_name_covers_that_steps_tests():
     assert ps.new_names({"ratchet:x"}, {"ratchet:x::t", "ratchet:y::t"}) == ["ratchet:y::t"]
 
 
+def test_a_listed_test_that_passes_refuses_the_batch_and_the_head_does_not_excuse_it():
+    """An `xpass unit ...` name from the lib layer is a refusal of its own: it is not a failure to compare with the head's."""
+    xpass = {"xpass unit llrm-nib::test_debug::fixed"}
+    on_head = lambda by_package: pytest.fail("the head is asked about a pass")  # noqa: E731
+    assert ps.new_lib_failures(["crates/frontends/llrm-nib/src/lib.rs"], on_merged=lambda packages: set(xpass), on_head=on_head) == xpass
+
+
 def _closure(path):
     smoke = ps.parity_smoke_module()
     packages, graph = smoke.workspace_graph()
