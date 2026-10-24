@@ -52,6 +52,7 @@ mod odd_shift;
 mod or_simplify;
 mod pair_arith;
 mod pair_mul;
+mod select_cmp_zero;
 mod select_fold;
 mod select_i1;
 mod setcc_i1_operands;
