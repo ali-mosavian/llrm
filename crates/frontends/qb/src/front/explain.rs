@@ -196,6 +196,15 @@ fn variants(
     place: &Where,
 ) -> Vec<String> {
     let mut keys = vec![format!("{code} /{}", place.text.to_ascii_uppercase())];
+    // a word of the text the table has a wording for (`/BYVAL`, `/CURRENCY`)
+    keys.extend(
+        place.text.split(|c: char| !c.is_ascii_alphanumeric()).filter(|word| !word.is_empty()).map(|word| {
+            format!("{code} /{}", word.to_ascii_uppercase())
+        }),
+    );
+    if place.text.replace(' ', "").contains("()") {
+        keys.push(format!("{code} /()"));
+    }
     let text = place.text.as_str();
     if text.ends_with(['%', '&']) && text.contains(['.', 'E', 'D', 'e', 'd']) && !text.starts_with("&") {
         keys.push(format!("{code} /decimal"));

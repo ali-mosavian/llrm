@@ -24,6 +24,10 @@ Fixed-length string illegal|a fixed-length string is not allowed here|use a vari
 FOR index variable already in use|`{text}` is already the counter of an enclosing FOR loop|use a different counter for the inner loop
 FOR index variable illegal|`{text}` cannot be a FOR counter (it must be a numeric simple variable)|use a numeric variable such as `i%`
 Form variable already in use or illegal|`{text}` cannot be used as a form name here|choose a different name
+Formal parameter specification illegal /BYVAL|`{text}` passes a parameter BYVAL, which this dialect does not allow|BYVAL parameters need PDS 7.1 or VBDOS; in QuickBASIC 4.5 a parameter is always passed by reference
+Formal parameter specification illegal /SEG|`{text}` passes a parameter SEG, which this dialect does not allow|SEG parameters need PDS 7.1 or VBDOS
+Formal parameter specification illegal /()|`{text}` has an empty `()` parameter list, which this dialect does not allow|leave the parentheses out (`SUB name`); an empty `()` needs VBDOS
+User-defined type not defined /CURRENCY|`{text}` uses CURRENCY, which this dialect does not have|CURRENCY needs PDS 7.1 or VBDOS; use a DOUBLE or a LONG scaled by hand
 Formal parameter specification illegal|the parameter list of `{text}` is not allowed in this dialect|check the parameters; BYVAL, SEG, an empty `()` and an `AS` result depend on the dialect
 Formal parameters not unique|two parameters of `{text}` have the same name|rename one of them
 Function not defined|`{name}` is not a FUNCTION or DEF FN defined above this line|define or DECLARE it first

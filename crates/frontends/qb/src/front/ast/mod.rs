@@ -118,6 +118,23 @@ pub fn parse(
                 }
             }
         }
+        // a reserved word where a declaration wants a name: `DIM data AS INTEGER`
+        if error.code == "Syntax error" && error.headline.is_none() && at >= 2 {
+            let declares = matches!(
+                tokens[at - 2].kind,
+                TokenKind::Reserved(
+                    Kw::DIM | Kw::REDIM | Kw::SHARED | Kw::STATIC | Kw::CONST | Kw::SUB | Kw::FUNCTION | Kw::TYPE | Kw::FOR
+                )
+            );
+            if let (true, TokenKind::Reserved(word)) = (declares, &tokens[at - 1].kind) {
+                let spelling = word.spelling();
+                if crate::front::reserved::is_reserved_name(dialect, spelling) {
+                    error.span = tokens[at - 1].span;
+                    error.headline = Some(format!("`{}` is a reserved word and cannot be used as a name here", spelling.to_ascii_uppercase()));
+                    error.detail = Some("rename it; the manual lists the words each dialect reserves".into());
+                }
+            }
+        }
         // inside a TYPE every line is `name AS type`
         if error.code == "Syntax error" && error.headline.is_none() && ast.blocks.last().is_some_and(|open| open.what == "TYPE") {
             error.headline = Some("this line is not a valid field of the TYPE".into());

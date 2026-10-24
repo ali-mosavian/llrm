@@ -359,7 +359,13 @@ impl Checker {
         if name.contains('.') || word_with_suffix || !crate::front::reserved::is_reserved_name(self.dialect, name) {
             return false;
         }
-        self.err(span, "Identifier expected");
+        self.err_because(
+            span,
+            "Identifier expected",
+            Reason::headline("`{text}` is a reserved word and cannot be used as a name")
+                .about(name)
+                .help("rename it; the manual lists the words each dialect reserves, such as COLOR, NAME, SECOND or POINT"),
+        );
         true
     }
 
