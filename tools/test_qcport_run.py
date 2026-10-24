@@ -122,3 +122,39 @@ def test_a_run_that_steps_forever_is_stopped_by_the_cap():
     with tempfile.TemporaryDirectory() as raw:
         src, work = fake_qcport(Path(raw), "while true; do echo step >> dosbox.log; sleep 0.05; done\n")
         assert "after 2s" in qcport_run.run(work, src, stall=30, cap=2, tick=0.1)
+
+
+def _attract_run(tmp_path, steps, **logs):
+    (tmp_path / "cstep.txt").write_text(steps)
+    for name, text in logs.items():
+        (tmp_path / name).write_text(text)
+    return tmp_path
+
+
+PLAYED = "attract demo demo1.qdc map e1m3\r\nattract demo demo2.qdc map e1m4\r\nattract demo demo3.qdc map e1m6\r\n"
+
+
+def test_an_attract_loop_that_starts_all_three_demos_has_no_problem(tmp_path):
+    run = _attract_run(tmp_path, PLAYED)
+    assert qcport_run.attract_problems(run) == []
+    assert qcport_run.attract_over(run)
+
+
+def test_an_attract_loop_that_runs_out_of_memory_after_one_demo_is_named_with_the_line(tmp_path):
+    """QCport -O2 at b9e7400be drew the benchmark (300 ticks) and failed the empty command line: 329,553 bytes of code against Borland's 296,085, and `miptex.bin: out of memory` loading the third demo's level."""
+    run = _attract_run(tmp_path, "attract demo demo1.qdc map e1m3\n", **{"ERROR.LOG": "miptex.bin: out of memory\n"})
+    problems = qcport_run.attract_problems(run)
+    assert problems == ["never started: demo2.qdc demo3.qdc", "miptex.bin: out of memory"]
+    assert qcport_run.attract_over(run), "an out-of-memory run is over, not left to the stall timer"
+
+
+def test_an_attract_loop_still_on_its_second_demo_is_not_over(tmp_path):
+    run = _attract_run(tmp_path, "attract demo demo1.qdc map e1m3\nattract demo demo2.qdc map e1m4\n")
+    assert qcport_run.attract_problems(run) == ["never started: demo3.qdc"]
+    assert not qcport_run.attract_over(run)
+
+
+def test_demos_the_emulator_logged_count_before_run_sh_has_written_cstep(tmp_path):
+    """run.sh writes cstep.txt when the emulator exits; a run stopped while it plays has only dosbox.log. The first attract run read cstep.txt, found it missing and called Borland's good run 'never started'."""
+    (tmp_path / "dosbox.log").write_text("Bochs port E9h: " + PLAYED.replace("\r\n", "\nBochs port E9h: "))
+    assert qcport_run.attract_problems(tmp_path) == []
