@@ -1660,6 +1660,18 @@ impl<'h> Standing<'h> {
     }
 }
 
+/// The loads and stores of `function`: the capacity of a map of each one's
+/// reference.
+pub(crate) fn loads_and_stores(function: &Function) -> usize {
+    function
+        .walk()
+        .filter(|&(_, inst)| matches!(
+            function.instruction(inst).opcode,
+            Opcode::Load { .. } | Opcode::Store { .. }
+        ))
+        .count()
+}
+
 /// The allocas of `unit`'s function whose address is exposed, in one pass: what
 /// `object_of` reads of `Unit::exposed` instead of asking each alloca's uses.
 pub fn exposed_frames(unit: &Unit) -> BTreeSet<ValueId> {

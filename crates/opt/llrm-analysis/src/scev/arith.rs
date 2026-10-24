@@ -257,7 +257,7 @@ impl ScalarEvolution {
                 .unwrap_or_else(|| self.type_of(ops[0].scev)),
             _ => self.type_of(ops[0].scev),
         };
-        let kind = match tag {
+        let kind = || match tag {
             Type::Add => Kind::Add(ops.to_vec()),
             Type::Mul => Kind::Mul(ops.to_vec()),
             _ => unreachable!("an add or a multiply"),

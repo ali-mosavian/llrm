@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 189 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 190 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -171,6 +171,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | speculate | A block that only a branch reaches and that jumps back to the branch's other target runs before the branch, its phis in the target becoming selects: the `speculativelyExecuteBB` step of SimplifyCFG. |  | [speculate](speculate.md) |
 | spill | The one spill model every pricing of register pressure shares: what values past the target's registers cost. | [`crate::profit`](profit.md) (`spill_forecast`, `weighted`) prices every motion with | [spill](spill.md) |
 | splitcopy | A `memcpy` into a local nothing else can reach becomes the loads and stores of the bytes the local is read as. | Inside [`crate::promote`](promote.md)'s `Sroa`, before it scalarizes the aggregate's | [splitcopy](splitcopy.md) |
+| splitstore | CodeGenPrepare's `splitMergedValStore`: a store of two values merged into one wider integer is two stores ([CodeGenPrepare.cpp#L8608](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L8608)). | In `cgpaddr`'s run, before the address-mode sinking (the stores it makes | [splitstore](splitstore.md) |
 | sroa | `sroa-real`: scalar replacement of aggregates as LLVM's SROA does it: the uses of an alloca are cut into slices, the slices into partitions that no access straddles, each partition becomes an alloca of its own (or the old one), the accesses are rewritten onto it, and what is then only loaded and stored whole is promoted to registers. |  | [sroa](sroa.md) |
 | switcharms | `simplifyDuplicateSwitchArms` ([L8564](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8564)), `simplifySwitchWhenUMin` ([L8027](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8027)) and `simplifySwitchDefaultBranch` ([L8077](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8077)), the last steps of `simplifySwitch`. | `switchopt::simplified`. | [switcharms](switcharms.md) |
 | switchcg | LLVM's switch clusters: which cases are one range, a jump table or a bit test, and where the tree of what is left splits. |  | [switchcg](switchcg.md) |
