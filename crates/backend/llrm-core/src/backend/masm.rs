@@ -711,6 +711,96 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     }
 }
 
+/// The stack-limit comparison once the frame is allocated, if the procedure
+/// has one.
+fn stack_check(
+    procedure: &Procedure,
+    reserve: i64,
+) -> Vec<Semantics> {
+    let mut out = Vec::new();
+    if procedure.stack_check.is_some() {
+        let cold = Some(cold_at(&procedure.body));
+        let overflow = |name: &str| Semantics { target: cold, ..semantics(Operation::Branch, name, vec![], vec![]) };
+        let limit = Addr { index: STACK_LIMIT_ID, ..Addr::new(Space::External, 0) };
+        // `sub` carries where SP wrapped past zero.
+        if reserve != 0 {
+            out.push(overflow("jb"));
+        }
+        out.extend([
+            // The limit is a stack slot's word.
+            semantics(
+                Operation::Compare,
+                "cmp",
+                vec![],
+                vec![sp_reg(), Loc::Mem(ir::Mem::new(Some(limit), procedure.registers.slot as u32))],
+            ),
+            overflow("jb"),
+        ]);
+    }
+    out
+}
+
+/// A `saved_first` frame's entry and return sequences, the pin's
+/// (`framelowering`): `push bp; mov bp, sp`, the registers, `sub sp, N`; and
+/// `add sp, N` (`lea sp, [bp - registers]` after an `alloca`), the pops, `pop
+/// bp`. DEVIATE PE1 (owner w-5, 2026-11-27): a one-slot adjustment stays a
+/// `sub`/`add`, not the pin's `push eax`/`pop`: the register the push may
+/// clobber is not asked of the entry's live-ins here.
+fn lowered(
+    procedure: &Procedure,
+    saved: &[RegId],
+    reserve: i64,
+    framed: bool,
+    omit: bool,
+) -> (Vec<Semantics>, Vec<Semantics>) {
+    use crate::backend::framelowering::{FrameInfo, Op, emit_epilogue, emit_prologue};
+    const FP: u32 = u32::MAX - 1;
+    const EAX: u32 = u32::MAX;
+    let slot = procedure.registers.slot;
+    let info = FrameInfo {
+        has_fp: framed,
+        stack_size: (slot * saved.len() as i64 + reserve + if framed { slot } else { 0 }) as u64,
+        slot_size: slot as u64,
+        saved: (0..saved.len() as u32).collect(),
+        frame_pointer: FP,
+        realign_to: None,
+        has_var_sized_objects: !omit && framed && moves_stack(&procedure.body),
+    };
+    let register = |reg_number: u32| if reg_number == FP { reg(FRAME) } else { reg(saved[reg_number as usize]) };
+    let adjust = |name: &str, bytes: u64| {
+        semantics(
+            Operation::Binary,
+            name,
+            vec![sp_reg()],
+            vec![sp_reg(), Loc::Imm(ir::Imm { value: bytes as i64, width: 2, address: None })],
+        )
+    };
+    let lower = |op: Op| match op {
+        Op::Push(EAX) => adjust("sub", slot as u64),
+        Op::Push(number) => semantics(Operation::Push, "push", vec![], vec![register(number)]),
+        Op::Pop(number) => semantics(Operation::Pop, "pop", vec![register(number)], vec![]),
+        Op::MovFpSp => semantics(Operation::Move, "mov", vec![reg(FRAME)], vec![reg(STACK)]),
+        Op::MovSpFp => semantics(Operation::Move, "mov", vec![reg(STACK)], vec![reg(FRAME)]),
+        Op::LeaSpFp(offset) => {
+            let from = ir::Mem { through: FRAME, offset, disp_width: 2, ..ir::Mem::new(None, 2) };
+            semantics(Operation::Address, "lea", vec![sp_reg()], vec![Loc::Mem(from)])
+        }
+        Op::AndSp(_) => unreachable!("no frame here is realigned"),
+        Op::SubSp(bytes) => adjust("sub", bytes),
+        Op::AddSp(bytes) => adjust("add", bytes),
+    };
+    let mut enter: Vec<Semantics> = Vec::new();
+    for op in emit_prologue(&info, EAX) {
+        let allocates = matches!(op, Op::SubSp(_) | Op::Push(EAX));
+        enter.push(lower(op));
+        if allocates {
+            enter.extend(stack_check(procedure, reserve));
+        }
+    }
+    let leave = emit_epilogue(&info, None).into_iter().map(lower).collect();
+    (enter, leave)
+}
+
 /// The implicit entry and return sequences shared by text and OMF emission.
 pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
     parts(procedure, frame_omitted(procedure, 0, frame_held(procedure)).is_some())
@@ -768,54 +858,35 @@ fn parts(
     let framed = framed_by(reserve);
     let reserve = held(reserve);
     let (bp, sp) = (reg(FRAME), reg(STACK));
+    if procedure.body.saved_first {
+        return lowered(procedure, &saved, reserve, framed, omit);
+    }
     // Inline code that moves SP (`alloca`) leaves the saved registers below an
     // unknown distance: SP is set from the frame register first.
-    let first = procedure.body.saved_first;
     let moved = !omit && framed && moves_stack(&procedure.body);
-    let pushed = slot * saved.len() as i64;
     let mut leave: Vec<Semantics> = Vec::new();
     if moved {
-        // Registers first: they lie just below BP, the locals below them.
-        let below = if first { pushed } else { reserve + pushed };
+        let below = reserve + slot * saved.len() as i64;
         let from = ir::Mem { through: FRAME, offset: -below, disp_width: 2, ..ir::Mem::new(None, 2) };
         leave.push(semantics(Operation::Address, "lea", vec![sp_reg()], vec![Loc::Mem(from)]));
     }
-    let pops = || saved.iter().rev().map(|one| semantics(Operation::Pop, "pop", vec![reg(*one)], vec![]));
-    let release = || {
-        semantics(
+    leave.extend(saved.iter().rev().map(|one| semantics(Operation::Pop, "pop", vec![reg(*one)], vec![])));
+    if omit && reserve != 0 {
+        leave.push(semantics(
             Operation::Binary,
             "add",
             vec![sp_reg()],
             vec![sp_reg(), Loc::Imm(ir::Imm { value: reserve, width: 2, address: None })],
-        )
-    };
-    if first {
-        // The registers lie between SP and BP: the locals go first.
-        if reserve != 0 && !moved {
-            leave.push(release());
-        }
-        leave.extend(pops());
-        if framed {
-            leave.push(semantics(Operation::Pop, "pop", vec![bp.clone()], vec![]));
-        }
-    } else {
-        leave.extend(pops());
-        if omit && reserve != 0 {
-            leave.push(release());
-        } else if reserve != 0 && framed {
-            leave.push(semantics(Operation::Nothing, "leave", vec![], vec![]));
-        } else if framed {
-            leave.push(semantics(Operation::Pop, "pop", vec![bp.clone()], vec![]));
-        }
+        ));
+    } else if reserve != 0 && framed {
+        leave.push(semantics(Operation::Nothing, "leave", vec![], vec![]));
+    } else if framed {
+        leave.push(semantics(Operation::Pop, "pop", vec![bp.clone()], vec![]));
     }
     // `enter` only where the target's description takes it for size
     // (`frame_enter`).
-    let opened = framed
-        && !first
-        && reserve != 0
-        && procedure.size
-        && procedure.registers.enter
-        && procedure.stack_check.is_none();
+    let opened =
+        framed && reserve != 0 && procedure.size && procedure.registers.enter && procedure.stack_check.is_none();
     let mut enter: Vec<Semantics> = Vec::new();
     if opened {
         let count = |value, width| Loc::Imm(ir::Imm { value, width, address: None });
@@ -834,34 +905,8 @@ fn parts(
             vec![sp, Loc::Imm(ir::Imm { value: reserve, width: 2, address: None })],
         ));
     }
-    if procedure.stack_check.is_some() {
-        let cold = Some(cold_at(&procedure.body));
-        let overflow = |name: &str| Semantics { target: cold, ..semantics(Operation::Branch, name, vec![], vec![]) };
-        let limit = Addr { index: STACK_LIMIT_ID, ..Addr::new(Space::External, 0) };
-        // `sub` carries where SP wrapped past zero.
-        if reserve != 0 {
-            enter.push(overflow("jb"));
-        }
-        enter.extend([
-            // The limit is a stack slot's word.
-            semantics(
-                Operation::Compare,
-                "cmp",
-                vec![],
-                vec![sp_reg(), Loc::Mem(ir::Mem::new(Some(limit), procedure.registers.slot as u32))],
-            ),
-            overflow("jb"),
-        ]);
-    }
-    let pushes = saved.iter().map(|one| semantics(Operation::Push, "push", vec![], vec![reg(*one)]));
-    if first {
-        // Before `sub sp`: the frame register's `mov` ends the frame's setup,
-        // then the registers, then the locals.
-        let at = enter.iter().position(|one| one.name.as_deref() == Some("sub")).unwrap_or(enter.len());
-        enter.splice(at..at, pushes);
-    } else {
-        enter.extend(pushes);
-    }
+    enter.extend(stack_check(procedure, reserve));
+    enter.extend(saved.iter().map(|one| semantics(Operation::Push, "push", vec![], vec![reg(*one)])));
     if let Some(group) = procedure.interrupt {
         let (before, after) = _interrupt_parts(group);
         enter.splice(0..0, before);
