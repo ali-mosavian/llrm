@@ -1188,11 +1188,11 @@ entry:
 ";
 
 /// A float call result is the stack's top after the call (an unnamed load of no
-/// cell); one live across another call that returns a float cannot stay on the
-/// x87 stack (the stackifier refuses it: RFP-5) and the function is refused,
-/// not left to fail the compile.
+/// cell); one live across another call that returns a float is selected too:
+/// the float allocator spills it around the call and the stackifier takes the
+/// result under the reload (RFP-5, fpstack #4362).
 #[test]
-fn a_float_result_is_the_stack_top_and_none_lives_across_a_call() {
+fn a_float_result_is_the_stack_top_and_one_may_live_across_a_call() {
     use crate::model::ir::{Loc, Operation};
     let module = llrm_mir::parse::module(FLOAT_CALL).expect("parses");
     let cpu = crate::backend::cpu::profile("486").expect("a cpu");
@@ -1207,8 +1207,7 @@ fn a_float_result_is_the_stack_top_and_none_lives_across_a_call() {
         }),
         "an unnamed load of the stack top"
     );
-    let why = selected(&module, "h", &llrm_x86_m32::M32, cpu, &[]).err().map(|e| e.0);
-    assert!(why.as_deref().is_some_and(|why| why.contains("live across")), "{why:?}");
+    selected(&module, "h", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
 }
 
 const FLOAT_ACROSS_VOID_CALL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -1222,8 +1221,7 @@ entry:
 }
 ";
 
-/// A float live across a call that returns no float is selected: the float
-/// allocator spills it around the call (the net refused every such function).
+/// A float live across a call that returns no float is selected too.
 #[test]
 fn a_float_live_across_a_call_that_returns_no_float_is_selected() {
     let module = llrm_mir::parse::module(FLOAT_ACROSS_VOID_CALL).expect("parses");
@@ -1956,8 +1954,7 @@ entry:
 ";
 
 /// A far cell and a double in one function were refused as a pair ('floating
-/// values with far cells'); only a double live across the far access is
-/// (the stackifier counts the ES load as a boundary).
+/// values with far cells'); neither refusal is left.
 #[test]
 fn a_double_not_live_across_a_far_cell_is_selected() {
     let module = llrm_mir::parse::module(M16_FAR_AND_DOUBLE).expect("parses");
@@ -2073,7 +2070,7 @@ impl crate::backend::assemble::Abi for Stub {
     }
 }
 
-fn verdicts(flags: bool) -> Vec<Result<(), &'static str>> {
+fn verdicts(flags: bool) -> Vec<Result<super::builder::RuntimeAnswer, &'static str>> {
     let module = llrm_mir::parse::module(QB_STRING_COMPARE).expect("parses");
     let function = module.global(module.named("f").expect("f")).function().expect("a body");
     let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
@@ -2083,16 +2080,16 @@ fn verdicts(flags: bool) -> Vec<Result<(), &'static str>> {
 }
 
 /// `B$SCMP` answers in the flags under `--runtime qb45`; the DAG path tested
-/// `ax` instead, so every string comparison of `strcmp_smoke` printed 0. A
-/// call whose contract the convention does not model is refused.
+/// `ax` instead, so every string comparison of `strcmp_smoke` printed 0. The
+/// call is known to answer in the flags.
 #[test]
-fn a_runtime_call_answering_in_the_flags_is_refused() {
-    assert_eq!(verdicts(true), [Err("QB runtime routine answering in the flags")]);
+fn a_runtime_call_answering_in_the_flags_says_so() {
+    assert_eq!(verdicts(true), [Ok(super::builder::RuntimeAnswer::Flags)]);
 }
 
 #[test]
-fn a_runtime_call_the_convention_models_is_accepted() {
-    assert_eq!(verdicts(false), [Ok(())]);
+fn a_runtime_call_answering_in_registers_says_so() {
+    assert_eq!(verdicts(false), [Ok(super::builder::RuntimeAnswer::Registers)]);
 }
 
 const VARSEG: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
@@ -2167,6 +2164,32 @@ fn a_remainder_used_by_a_store_and_an_address_is_selected() {
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
 
+const INLINE_CODE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+declare i32 @llrm.ia16.code.89a60000.2p0(ptr)
+define i32 @f() {
+entry:
+  %slot = alloca i16
+  %r = call i32 @llrm.ia16.code.89a60000.2p0(ptr %slot)
+  ret i32 %r
+}
+";
+
+/// Inline code (`llrm.ia16.code`) is laid down at its site, the frame place it
+/// names patched in as a displacement from BP: the emitter had no arm for the
+/// node and refused "opcode 30013" (QCport's `__emit__`, 3 functions).
+#[test]
+fn inline_code_is_laid_down_at_its_site_with_its_frame_place() {
+    let module = llrm_mir::parse::module(INLINE_CODE).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    assert_eq!(done.inline.len(), 1, "{:?}", done.inline);
+    let (at, bytes) = done.inline.iter().next().unwrap();
+    assert_eq!(done.inline_places.get(at).map(Vec::len), Some(1));
+    assert!(!done.far.contains(at), "inline code is no far call");
+    let (_, disp, addend) = done.inline_places[at][0];
+    assert_eq!(u16::from_le_bytes([bytes[2], bytes[3]]), (disp + addend) as u16);
+}
+
 const BYVAL_ODD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
 declare void @g(ptr byval([41 x i8]) %p)
 define void @f(ptr %q) {
@@ -2185,4 +2208,82 @@ fn an_odd_sized_byval_argument_is_stored_in_place_at_m16() {
     let module = llrm_mir::parse::module(BYVAL_ODD).expect("parses");
     selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
+}
+
+const CARRY_ACROSS_A_TEST: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define cc 1003 range(i32 0, -2147483648) i32 @_bench_x_ll_arith(i32 noundef %0) \"llrm-fp-eval\"=\"x87-extended\" memory(none) nounwind norecurse willreturn {
+b1:
+  %1 = icmp sgt i32 %0, 0
+  br i1 %1, label %22, label %b3
+
+b3:
+  %2 = phi i32 [ %21, %20 ], [ 0, %b1 ]
+  %3 = and i32 %2, 2147483647
+  ret i32 %3
+
+b4:
+  %4 = phi i32 [ %19, %b4 ], [ 0, %22 ]
+  %5 = phi i64 [ %18, %b4 ], [ 0, %22 ]
+  %6 = phi i64 [ %8, %b4 ], [ 81985529216486895, %22 ]
+  %7 = mul i64 %6, 6364136223846793005
+  %8 = add i64 %7, 1442695040888963407
+  %9 = lshr i64 %8, 33
+  %10 = or i64 %9, 1
+  %11 = mul i64 %10, %8
+  %12 = and i32 %4, 31
+  %13 = zext nneg i32 %12 to i64
+  %14 = lshr i64 %8, %13
+  %15 = xor i64 %11, %14
+  %16 = shl i64 %8, %13
+  %17 = add i64 %16, %5
+  %18 = add i64 %17, %15
+  %19 = add nuw nsw i32 %4, 1
+  %exitcond = icmp ne i32 %0, %19
+  br i1 %exitcond, label %b4, label %20
+
+20:
+  %21 = trunc i64 %18 to i32
+  br label %b3
+
+22:
+  br label %b4
+}
+";
+
+/// A 64-bit add's carry read after a select's `test` came between: the pin
+/// glues the `adc` to the `add` and the scheduler here could not keep the
+/// pair together ('flags overwritten between their producer and a consumer',
+/// vsgcc x_ll_arith). The carry is saved in a byte before the `test` and put
+/// back before its reader.
+#[test]
+fn a_carry_survives_a_flag_writer_scheduled_between_the_add_and_its_reader() {
+    let module = llrm_mir::parse::module(CARRY_ACROSS_A_TEST).expect("parses");
+    let done = selected(
+        &module,
+        "_bench_x_ll_arith",
+        &llrm_x86_m32::M32,
+        crate::backend::cpu::profile("486").expect("a cpu"),
+        &[],
+    )
+    .unwrap_or_else(|e| panic!("{}", e.0));
+    let saved = done.body.insns().iter().filter_map(|i| i.what.as_ref()).any(|w| w.name.as_deref() == Some("setb"));
+    assert!(saved, "the carry is saved in a byte");
+}
+
+const LRINT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(double %x) {
+entry:
+  %r = call i32 @llvm.lrint.i32.f64(double %x)
+  ret i32 %r
+}
+declare i32 @llvm.lrint.i32.f64(double)
+";
+
+/// `lrint` of an x87 value is `fist` into a stack slot and a load (the pin's
+/// `IST_Fp32m64`); `CannotSelect(LRint)` refused 7 qb functions, the ones that
+/// round a float to an integer (`CINT`).
+#[test]
+fn an_lrint_of_a_double_is_a_fist_and_a_load() {
+    let made = names(LRINT).unwrap_or_else(|why| panic!("{why}"));
+    assert!(made.iter().any(|name| name.starts_with("fist")), "{made:?}");
 }

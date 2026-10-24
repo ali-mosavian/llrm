@@ -222,6 +222,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD208 | sdag-b | far call through a stack cell: `X86ISD::LLRM_FARCALL`, the pin has no far call | `llrm-x86/src/dag/x86isd.rs` |
 | SD209 | sdag-b | far access: `ES` set by a `CopyToReg` ordered by the chain only (no glue binds it to its access) | `selectiondag/legalize_types.rs` |
 | SD205 | sdag-b | ext-of-load fold: simple non-extending loads before operations are legal; every integer truncate is free (no `isTruncateFree`) | `selectiondag/dag_combiner.rs` |
+| SD210 | sdag-b | `visitADD`: no reassociation of constants into an `add` that feeds a memory access (no `reassociationCanBreakAddressingModePattern`) | `selectiondag/dag_combiner.rs` |
 
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |
 | SD101 | sdag-a | `freeze` folds away only for a constant or a `freeze` (`isGuaranteedNotToBeUndefOrPoison` is partial) | `selectiondag/fold.rs` |
@@ -234,6 +235,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD306 | sdag-c | `expandABS` leaves out the `FREEZE` of its operand (selection deletes it again; same machine code) | `selectiondag/legalize_dag.rs` |
 | SD307 | sdag-c | the m16 action table is the 32-bit one kept to the old selector's coverage, not derived from the pin (the pin has no 16-bit model); `tests/m16_coverage.rs` lists the functions that must stay selectable | `crates/target/llrm-x86/src/dag/actions.rs` |
 | SD308 | sdag-c | the second half of a split access through a far pointer moves the offset word only (no carry into the selector); a huge pointer crossing a segment would wrap | `selectiondag/legalize_types.rs` |
+| SD310 | sdag-c | a QB runtime routine's answer in the flags is `LLRM_CALL_FLAGS(CopyFromReg EFLAGS)`, read only by a compare with zero; the pin's calls answer in registers | `llrm-x86/src/dag/x86isd.rs` |
 | SD305 | sdag-c | `llrm.ia16.*` nodes (`LLRM_ASM`/`_WINDOW`/`_CODE`) pass through selection as the pseudo opcode 30010, `SEGMENT_OF` as 30011 and `LLRM_FARCALL` (24584) as 30012 and `LLRM_CODE` (24582) as 30013; not the pin's `INLINEASM` | `crates/backend/llrm-dagisel/src/x86_llrm.rs` |
 
 Next free: SD44..SD99 closed; blocks: a SD100, b SD200, c SD300, d SD400 (next free per owner in their rows). A PR that takes a number adds its row in the owner's block; `tests/selectiondag_registry.rs` fails on a number declared twice, without a row, in the closed range or outside its owner's block.

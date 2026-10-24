@@ -717,7 +717,7 @@ impl Builder<'_> {
         let values = vec![first_two[0], first_two[1], size];
         self.dag.set_root(chain_in);
         let extends = [ISD::AnyExtend; 3];
-        let _ = self.lower_call(target_symbol, values, &extends, &[], &plan, first, pointer_type)?;
+        let _ = self.lower_call(target_symbol, values, &extends, &[], &plan, first, pointer_type, false)?;
         Ok(self.dag.get_root())
     }
 
