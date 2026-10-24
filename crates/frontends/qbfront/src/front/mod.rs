@@ -43,10 +43,13 @@ pub fn parse_coded(
     let module = ast::parse(source, dialect)?;
     match check::check(&module, dialect).into_iter().next() {
         Some(diagnostic) => {
-            Err(ParseError { subject: diagnostic.subject, detail: diagnostic.detail,
+            Err(ParseError {
+                subject: diagnostic.subject,
+                detail: diagnostic.detail,
                 headline: diagnostic.headline,
                 related: diagnostic.related,
-                ..ParseError::coded(diagnostic.span, diagnostic.message) })
+                ..ParseError::coded(diagnostic.span, diagnostic.message)
+            })
         }
         None => Ok(module),
     }

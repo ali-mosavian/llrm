@@ -17,7 +17,7 @@ fn refused(
 fn a_reserved_word_used_as_a_name_is_named_with_the_remedy() {
     let (at, error) = refused("x% = 1\r\nCOLOR = 4\r\n", Dialect::VbDos);
     assert_eq!(at, "2:1");
-    assert!(error.message.contains("`COLOR` cannot be used as a name"), "{}", error.message);
+    assert!(error.message.contains("`COLOR` is a reserved word and cannot be used as a name"), "{}", error.message);
     assert!(error.message.contains("reserved word"), "{}", error.message);
     assert!(error.help.as_deref().is_some_and(|help| help.contains("rename")), "{error:?}");
     assert_eq!(error.code, "Identifier expected");

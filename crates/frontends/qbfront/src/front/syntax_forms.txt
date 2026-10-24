@@ -43,3 +43,4 @@ WRITE|WRITE [#file,] [expression [, expression] ...]
 LOOP|LOOP [WHILE | UNTIL condition]
 SELECT|SELECT CASE expression
 ERASE|ERASE array [, array] ...
+OPTION|OPTION BASE 0 | 1
