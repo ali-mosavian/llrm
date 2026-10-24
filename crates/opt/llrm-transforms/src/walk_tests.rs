@@ -299,6 +299,66 @@ b0:
     assert_eq!(runs(LINEAR), 0, "a count-down waits for nothing");
 }
 
+/// A caller that took a tree recursion's peeled copies is a body with
+/// self-copies: the equality fold of a multi-use difference is for it too. It
+/// was left out, and recsum -O1 kept the chain `n-1`, `n-2`, ... (m16 +288 B,
+/// m32 +203 B).
+#[test]
+fn test_a_caller_of_a_peeled_recursion_is_a_body_with_self_copies() {
+    use llrm_mir::program::ProgramPass;
+    let flagged = |name: &str| {
+        let mut module = parsed(FIB_TOP);
+        llrm_mir::program::Program::lend(
+            &mut module,
+            std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+            |program: &mut llrm_mir::program::Program| {
+                let mut analyses = Default::default();
+                let mut walk = crate::walk::Walk { inline: Default::default(), simplify: Box::new(|_, _, _, _| {}) };
+                walk.run(program, &mut analyses).expect("the walk runs");
+                program
+                    .modules[0]
+                    .function_mut(name)
+                    .expect("the function")
+                    .1
+                    .attrs
+                    .iter()
+                    .any(
+                        |attr| matches!(
+                            attr,
+                            llrm_mir::opcode::Attribute::Flag(flag) if flag == crate::walk::SELF_COPIED
+                        ),
+                    )
+            },
+        )
+        .expect("lent")
+    };
+    assert!(flagged("top"), "top took fib's peeled copies");
+}
+
+const FIB_TOP: &str = "define internal i32 @fib(i32 %n) {
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %rec
+
+base:
+  ret i32 %n
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @fib(i32 %a)
+  %y = call i32 @fib(i32 %b)
+  %s = add i32 %x, %y
+  ret i32 %s
+}
+
+define i32 @top(i32 %n) {
+b0:
+  %r = call i32 @fib(i32 %n)
+  ret i32 %r
+}
+";
+
 /// A tail-recursive function called once: tail-call elimination makes its
 /// loop, and the caller then inlines it (LLVM's CGSCC order, which the pin
 /// follows). `recursive` and the call counts were taken before the walk, so
