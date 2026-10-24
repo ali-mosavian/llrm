@@ -30,7 +30,7 @@
 //! sequence and frame objects in the emitter (D1e). Exit: D1e. Owner: sdag-d.
 //! Review 2026-12-03.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 
 use indexmap::IndexMap;
@@ -369,7 +369,10 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
 
 /// The addresses each LIR block can go to: the targets of its jumps and
 /// branches, and the next block if it does not end in a jump or a return.
-fn successors(emitted: &[EmitBlock]) -> Vec<Vec<i64>> {
+fn successors(
+    emitted: &[EmitBlock],
+    sinks: &HashSet<i64>,
+) -> Vec<Vec<i64>> {
     use crate::model::ir::Operation;
     emitted
         .iter()
@@ -393,7 +396,7 @@ fn successors(emitted: &[EmitBlock]) -> Vec<Vec<i64>> {
                 .last()
                 .and_then(|insn| insn.what.as_ref())
                 .is_some_and(|w| matches!(w.op, Operation::Jump | Operation::Return));
-            if !ends {
+            if !ends && !sinks.contains(&block.at) {
                 if let Some(next) = emitted.get(i + 1) {
                     if !out.contains(&next.at) {
                         out.push(next.at);
@@ -663,6 +666,7 @@ fn selected_in(
     };
     let mut emitted: Vec<EmitBlock> = Vec::new();
     let mut calls = IndexMap::default();
+    let mut sinks: HashSet<i64> = HashSet::new();
     let mut inline_places = IndexMap::default();
     // the call sites whose callee is far code (address space 1): a far call
     let mut far = std::collections::BTreeSet::new();
@@ -731,11 +735,20 @@ fn selected_in(
         }));
         inline_places.extend(done.inline_places.iter().cloned());
         emitted.extend(done.blocks);
+        // A block that ends in `unreachable` (after a call that does not
+        // return) leads nowhere: it does not fall into the next one.
+        if block == parent
+            && function
+                .terminator(block)
+                .is_some_and(|inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Unreachable)
+        {
+            sinks.extend(emitted.last().map(|last| last.at));
+        }
         let start = made.get(&parent.0).map_or(from, |range| range.start);
         made.insert(parent.0, start..emitted.len());
         exports.push((parent, built.phi_updates));
     }
-    let succ = successors(&emitted);
+    let succ = successors(&emitted, &sinks);
     // Phis: the successor's phi takes, from each LIR block of the predecessor
     // that leaves for it, the register the predecessor copied its value to.
     for (pred, updates) in &exports {

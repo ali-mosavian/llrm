@@ -2245,3 +2245,61 @@ fn an_lrint_of_a_double_is_a_fist_and_a_load() {
     let made = names(LRINT).unwrap_or_else(|why| panic!("{why}"));
     assert!(made.iter().any(|name| name.starts_with("fist")), "{made:?}");
 }
+
+const AFTER_UNREACHABLE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @abort()
+define i32 @f(i32 %x, i1 %c) {
+entry:
+  br i1 %c, label %a, label %dead
+a:
+  %v = add i32 %x, 1
+  br label %live
+dead:
+  call void @abort()
+  unreachable
+live:
+  ret i32 %v
+}
+";
+
+/// A block that ends in `unreachable` leads nowhere. The edge from it into the
+/// next block in layout was made, and a value that block's real predecessor
+/// defines was "read and not defined on every path" (the nib runtime's
+/// `heap.allocate`, `@format.put`: 8 huge programs under `--isel=dag`).
+#[test]
+fn a_block_ending_in_unreachable_does_not_fall_into_the_next() {
+    let module = llrm_mir::parse::module(AFTER_UNREACHABLE).expect("parses");
+    selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+}
+
+fn memmove_ir(metadata: &str) -> String {
+    format!(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @llvm.memmove.p0.p0.i32(ptr, ptr, i32, i1)
+define void @f(ptr %d, ptr %s) {{
+entry:
+  call void @llvm.memmove.p0.p0.i32(ptr %d, ptr %s, i32 78000, i1 false){metadata}
+  ret void
+}}
+!0 = !{{}}
+"
+    )
+}
+
+fn select_m32(ir: &str) -> Result<crate::backend::isel::Selected, String> {
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .map_err(|e| e.0)
+}
+
+/// A `memmove` a pass proved forward is a `memcpy`: with no `memmove` in the
+/// runtime it was refused (`copyw.nib`'s scroll up); one proved backward or
+/// not at all still is.
+#[test]
+fn a_memmove_proved_forward_is_a_copy() {
+    assert!(select_m32(&memmove_ir(", !llrm.forward !0")).is_ok());
+    let refused = select_m32(&memmove_ir(", !llrm.backward !0")).err().expect("backward");
+    assert!(refused.contains("memmove"), "{refused}");
+    assert!(select_m32(&memmove_ir("")).is_err());
+}
