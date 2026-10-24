@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopunrollandjam.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopunrollandjam.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopunrollandjam.rs sha256:2d187ec3d69cd42fc0710f4c063c3718fe8daabe22beb284d07205d16a7d0414 -->
+<!-- src: crates/opt/llrm-transforms/src/loopunrollandjam.rs sha256:02f1cd8783a9a9edd5c59e5ecea87c53ec9ccebe1f4746f0c83ee9c36e601bd3 -->
 
 # loopunrollandjam
 
@@ -57,9 +57,9 @@ load that does not move with the outer one, or the user asked.
 - D4: the epilog remainder is [`crate::loopunrollruntime`](loopunrollruntime.md)'s: epilog only,
   one exit, no weights.
 - D5: no optimization remarks.
-- D6: BasicAA has no `aliasPHI`/`aliasSelect`, so DA keeps a dependence
-  across a loop-carried pointer phi that LLVM disproves: two functions of
-  `pragma-explicit.ll` are not jammed. Exit: BasicAA translated.
+- D6: closed. BasicAA's `aliasPHI`/`aliasSelect` are translated; `function`
+  of `pragma-explicit.ll` is jammed as the pin does (`function2` still
+  differs in the remainder's phis: `tools/loopunrollandjam_expected.toml`).
 - D7: `ScalarEvolution::isKnownViaInduction` is a stub (S5), so the outer
   latch compare `niter.next != N` stays where LLVM folds it to `false`
   (`test6`, `test10`). Exit: S5.

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/precse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/precse.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/precse.rs sha256:3865f4be1f01feebe53429cb22ec3169166be4fe67974c7e847651380d23bf4b -->
+<!-- src: crates/backend/llrm-core/src/backend/precse.rs sha256:0eac269f839c22d8fec44a253c8855b2f116552a21424f82ebf969378ae4410d -->
 
 # precse
 
@@ -27,8 +27,8 @@ table's, when `profitable` agrees:
 
 When the table has no entry, an operand made by a plain copy is moved to the
 copy's source and a copy nothing else reads is erased
-(`PerformTrivialCopyPropagation`); a commutative operation is then asked with
-its sources swapped if the first form is still not there.
+(`PerformTrivialCopyPropagation`); a commutative operation is then asked
+with its sources swapped if the first form is still not there.
 
 An operation that sets flags is shared only where nothing after it in its
 block reads them (the pin's `hasLivePhysRegDefUses`: EFLAGS).
@@ -45,12 +45,9 @@ runs no more often than the two together); the walk above then removes the
 two. A copy no one reads is dropped again (the pin leaves it to
 `DeadMachineInstructionElim`).
 
-DEVIATE CSE1 (owner funcattrs-port, exit 2026-11-13):
-`isProfitableToHoistInto` reads the block frequencies selection estimated
-(`LirBody::frequencies`, kept through rewrites), not
-`MachineBlockFrequencyInfo` of the current CFG; a body with no table gets no
-PRE. No `hasMinSize` shortcut (the selector has no minsize flag, isel.rs I2)
-and no `isLegalToHoistInto` test (no block says it is a landing pad).
+DEVIATE CSE1 (owner w-1, exit 2026-11-10): no `hasMinSize` shortcut (the
+selector has no minsize flag, isel.rs I2) and no `isLegalToHoistInto` test
+(no block says it is a landing pad).
 
 DEVIATE CSE2 (owner funcattrs-port, exit 2026-11-13): an operation with no
 register operand is not a candidate, a load of a constant global with a

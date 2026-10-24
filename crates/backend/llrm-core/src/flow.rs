@@ -181,6 +181,15 @@ pub fn machine_with<'a>(
             segments: segments.clone(),
             classes: Rc::clone(classes),
         }),
+        // On SSA, as the pin's `addPreRegAlloc` has it
+        // (X86CallFrameOptimization).
+        Box::new(crate::backend::callframe::CallFrameOpt {
+            slot: registers.slot,
+            align: registers.align,
+            stack: registers.stack,
+            has_var_sized: false,
+            slow_two_mem_ops: false,
+        }),
         Box::new(phielim::PhiElimination),
         // Before any value is placed: a load made where its reader is.
         Box::new(crate::backend::pressuresink::PressureSink {
@@ -193,15 +202,6 @@ pub fn machine_with<'a>(
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
         Box::new(crate::backend::fixupsetcc::FixupSetCc),
-        // Stores into a reserved call frame become pushes (the pin:
-        // X86CallFrameOptimization, optimizing levels).
-        Box::new(crate::backend::callframe::CallFrameOpt {
-            slot: registers.slot,
-            align: registers.align,
-            stack: registers.stack,
-            has_var_sized: false,
-            slow_two_mem_ops: false,
-        }),
         // Flags kept across an instruction that clobbers them become a byte
         // per condition (the pin: X86FlagsCopyLowering, every level).
         Box::new(crate::backend::flagscopy::FlagsCopy),

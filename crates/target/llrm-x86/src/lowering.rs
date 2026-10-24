@@ -39,6 +39,11 @@ impl Lowering for X86 {
         true
     }
 
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L3805
+    fn prefer_zero_compare_branch(&self) -> bool {
+        true
+    }
+
     // The register classes (X86ISelLowering L179-183), from the DAG's table; a
     // 64-bit target has i64 as well (DEVIATE TL2, as below).
     fn is_type_legal(
