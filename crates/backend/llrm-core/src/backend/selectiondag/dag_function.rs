@@ -43,7 +43,7 @@ use llrm_mir::module::{BlockId, Module, ValueDef, ValueId};
 use llrm_target::Target;
 
 use super::actions::{Features, TargetLowering};
-use super::builder::{BuilderTarget, build_block};
+use super::builder::{BuilderTarget, RuntimeAnswer, build_block};
 use super::dag_select::select_block;
 use super::emit::{Callee, EmitBlock, EmitContext, EmitState, FrameMap, JumpTable};
 use super::function_lowering::FunctionLoweringInfo;
@@ -201,7 +201,7 @@ pub(crate) fn runtime_call_verdicts(
     layout: &DataLayout,
     arch: &dyn Target,
     abi: &dyn crate::backend::assemble::Abi,
-) -> llrm_mir::dense::IdMap<llrm_mir::module::InstId, Result<(), &'static str>> {
+) -> llrm_mir::dense::IdMap<llrm_mir::module::InstId, Result<RuntimeAnswer, &'static str>> {
     use llrm_mir::module::Operand;
     use llrm_mir::opcode::Opcode;
     let mut out = llrm_mir::dense::IdMap::new();
@@ -247,16 +247,13 @@ fn modelled(
     name: &str,
     plan: Option<&crate::backend::isel::Convention>,
     first: i64,
-) -> Result<(), &'static str> {
+) -> Result<RuntimeAnswer, &'static str> {
     let plan = plan.ok_or("QB runtime call the convention does not describe")?;
     let pushed = (plan.stack_arguments - first).max(0);
     if abi.registers(name).is_some() {
         return Err("QB runtime routine with a register interface");
     }
     let contract = abi.contract(name, plan.popped > 0, pushed).map_err(|_| "QB runtime routine with no contract")?;
-    if contract.flags_result {
-        return Err("QB runtime routine answering in the flags");
-    }
     // Raising an error or entering user code changes no selection (the old
     // selector reads neither); a routine that comes back at an inline table or
     // by no known way does.
@@ -269,7 +266,7 @@ fn modelled(
     if contract.cleanup != Some(plan.popped) || plan.popped != pushed {
         return Err("QB runtime routine whose stack cleanup the convention does not model");
     }
-    Ok(())
+    Ok(if contract.flags_result { RuntimeAnswer::Flags } else { RuntimeAnswer::Registers })
 }
 
 impl super::emit::Conventions for CallConventions<'_> {

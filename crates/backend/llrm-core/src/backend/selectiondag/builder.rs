@@ -32,6 +32,16 @@ use crate::backend::isel::{Convention, Parameter, convention_for};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Refused(pub &'static str);
 
+/// Where a runtime routine leaves its answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimeAnswer {
+    /// The registers its convention names.
+    Registers,
+    /// The flags, as a compare of the answer with zero leaves them
+    /// (`Contract::flags_result`).
+    Flags,
+}
+
 /// The target facts the builder asks (`TLI->` in the pin).
 #[derive(Clone, Debug)]
 pub struct BuilderTarget {
@@ -53,7 +63,7 @@ pub struct BuilderTarget {
     /// For a program whose ABI gives its runtime routines contracts: whether
     /// the convention models each call of a `llrm.qb.` routine, by call. A call
     /// not listed, or listed with a reason, is refused.
-    pub runtime_calls: Option<IdMap<InstId, Result<(), &'static str>>>,
+    pub runtime_calls: Option<IdMap<InstId, Result<RuntimeAnswer, &'static str>>>,
 }
 
 impl BuilderTarget {
@@ -78,7 +88,7 @@ impl BuilderTarget {
     /// This target with the verdict on each call of a runtime routine.
     pub fn with_runtime_call_verdicts(
         mut self,
-        verdicts: Option<IdMap<InstId, Result<(), &'static str>>>,
+        verdicts: Option<IdMap<InstId, Result<RuntimeAnswer, &'static str>>>,
     ) -> BuilderTarget {
         self.runtime_calls = verdicts;
         self
@@ -267,6 +277,7 @@ impl<'a> Builder<'a> {
         dag.block_names.resize(next_synthetic as usize, name);
         Builder {
             current: None,
+            prelowered: Default::default(),
             module,
             function,
             layout,
@@ -294,6 +305,8 @@ impl<'a> Builder<'a> {
 struct Builder<'a> {
     /// The instruction being visited.
     current: Option<InstId>,
+    /// Compares made early, at the call whose flags they read.
+    prelowered: llrm_mir::dense::IdSet<InstId>,
     module: &'a Module,
     function: &'a Function,
     layout: &'a DataLayout,
@@ -711,13 +724,14 @@ impl Builder<'_> {
                     },
                 );
         }
+        let mut flags_answer = false;
         if let Some(verdicts) = &self.target.runtime_calls
             && direct
                 .and_then(|global| self.module.global(global).name.owned())
                 .is_some_and(|name| name.starts_with(llrm_hir::mir::RUNTIME))
         {
             match self.current.and_then(|inst| verdicts.get(&inst)) {
-                Some(Ok(())) => {}
+                Some(Ok(answer)) => flags_answer = *answer == RuntimeAnswer::Flags,
                 Some(Err(why)) => return Err(Refused(why)),
                 None => return Err(Refused("call of a QB runtime routine nobody checked")),
             }
@@ -809,9 +823,79 @@ impl Builder<'_> {
                 Some((self.layout.alloc_size(&self.module.context.types, ty), align.unwrap_or(4)))
             })
             .collect();
-        let result = self.lower_call(callee_node, values, &extends, &byvals, &plan, first, result_type)?;
+        if flags_answer {
+            // only a compare with zero reads them
+            let reads = instruction
+                .result
+                .is_none_or(
+                    |value| self.function
+                        .users(value)
+                        .iter()
+                        .all(
+                            |one| {
+                                let user = self.function.instruction(one.user);
+                                matches!(user.opcode, Opcode::ICmp(_))
+                                    && matches!(
+                                        user.operands.get(1),
+                                        Some(Operand::Constant(zero)) if matches!(self.module.context.get(*zero).kind, ConstantKind::Null | ConstantKind::Zero | ConstantKind::Int(0))
+                                    )
+                            },
+                        ),
+                );
+            if !reads {
+                return Err(Refused("a runtime routine's flags read other than by a compare with zero"));
+            }
+        }
+        let result =
+            self.lower_call(callee_node, values, &extends, &byvals, &plan, first, result_type, flags_answer)?;
+        if let (true, Some(answer)) = (flags_answer, result) {
+            self.settle_flags_answer(instruction, answer)?;
+        }
         if let (Some(value), Some(result)) = (instruction.result, result) {
             self.set_value(value, result);
+        }
+        Ok(())
+    }
+
+    /// A runtime routine's answer in the flags: a compare of it that feeds only
+    /// branches reads the flags where they are. Any other compare is made at
+    /// once and tied to the call's chain, so no instruction that rewrites the
+    /// flags comes between the call and it.
+    fn settle_flags_answer(
+        &mut self,
+        call: &llrm_mir::module::Instruction,
+        answer: SDValue,
+    ) -> Result<(), Refused> {
+        let Some(value) = call.result else { return Ok(()) };
+        self.set_value(value, answer);
+        for one in self.function.users(value) {
+            let compare = self.function.instruction(one.user).clone();
+            let Opcode::ICmp(predicate) = compare.opcode else {
+                return Err(Refused("flags read other than by a compare"));
+            };
+            if self.function.parent(one.user) != Some(self.block) {
+                return Err(Refused("a runtime routine's flags read in another block"));
+            }
+            let result = compare.result.expect("a compare has a result");
+            let branches = self
+                .function
+                .users(result)
+                .iter()
+                .all(
+                    |user| self.function.instruction(user.user).opcode == Opcode::Br
+                        && self.function.parent(user.user) == Some(self.block),
+                );
+            if branches {
+                continue;
+            }
+            self.visit_icmp(&compare, predicate)?;
+            let settled = self.get_value(Operand::Value(result))?;
+            let root = self.root();
+            let reg = self.info.new_reg();
+            let byte = self.dag.get_node(ISD::ZeroExtend, EVT::I8, &[settled]);
+            let tied = self.dag.get_copy_to_reg(root, reg, byte);
+            self.dag.set_root(tied);
+            self.prelowered.insert(one.user);
         }
         Ok(())
     }
@@ -827,6 +911,7 @@ impl Builder<'_> {
         plan: &Convention,
         first: i64,
         result_type: TypeId,
+        flags_answer: bool,
     ) -> Result<Option<SDValue>, Refused> {
         let types = &self.module.context.types;
         let bytes = (plan.stack_arguments - first).max(0) as u64;
@@ -954,6 +1039,12 @@ impl Builder<'_> {
             return Ok(None);
         }
         let vt = self.type_of(result_type)?;
+        if flags_answer {
+            let flags = self.dag.get_copy_from_phys_reg(chain, super::dagisel_adapter::EFLAGS_ID, EVT::I32, glue);
+            self.dag.set_root(SDValue { node: flags.node, res: 1 });
+            let flags = SDValue { node: flags.node, res: 0 };
+            return Ok(Some(self.dag.get_node(super::x86isd::LLRM_CALL_FLAGS, vt, &[flags])));
+        }
         if vt.is_floating_point() {
             // X86's `LowerCallResult`: the value is popped from st(0), which
             // the allocator knows as `FP0`
@@ -1234,6 +1325,9 @@ impl Builder<'_> {
         inst: InstId,
     ) -> Result<(), Refused> {
         self.current = Some(inst);
+        if self.prelowered.contains(&inst) {
+            return Ok(());
+        }
         let instruction = self.function.instruction(inst).clone();
         if instruction.opcode.is_terminator() {
             self.handle_phi_nodes_in_successor_blocks()?;

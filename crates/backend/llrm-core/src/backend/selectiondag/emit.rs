@@ -698,6 +698,12 @@ impl Emitter<'_, '_> {
                 self.push(Operation::Move, "mov", vec![dst], vec![src]);
                 Ok(())
             }
+            // A runtime routine's answer in the flags (`LLRM_CALL_FLAGS`): the
+            // call left them, the branch that reads them follows.
+            ISD::CopyFromReg if self.writes_flags(node.ops[1]) => {
+                self.flags_now = Some(n);
+                Ok(())
+            }
             ISD::CopyFromReg => {
                 let result = SDValue { node: n, res: 0 };
                 // The selector `LES16rm` left in ES, read on the chain it made.
