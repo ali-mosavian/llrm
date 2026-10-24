@@ -19,6 +19,9 @@ fn eval(
             ISD::Register => x,
             ISD::Constant => dag.constant(v).unwrap() as u32,
             ISD::And => arg(0) & arg(1),
+            ISD::Add => arg(0).wrapping_add(arg(1)),
+            ISD::Sub => arg(0).wrapping_sub(arg(1)),
+            ISD::Xor => arg(0) ^ arg(1),
             ISD::Truncate | ISD::ZeroExtend => arg(0),
             ISD::SignExtend => sext(arg(0), from(0)),
             ISD::SetCC => {
@@ -41,12 +44,24 @@ fn eval(
 /// `build(x)` combined, with the value of the original and the folded DAG
 /// checked for every sample.
 fn combined(build: impl FnOnce(&mut SelectionDAG, SDValue) -> SDValue) -> (SelectionDAG, SDValue) {
+    combined_with(None, build)
+}
+
+fn combined_with(
+    tli: Option<&TargetLowering>,
+    build: impl FnOnce(&mut SelectionDAG, SDValue) -> SDValue,
+) -> (SelectionDAG, SDValue) {
     let mut dag = dag();
     let x = dag.get_register(EVT::I32, 5);
     let root = build(&mut dag, x);
     dag.set_root(root);
     let original: Vec<u32> = SAMPLES.iter().map(|&p| eval(&dag, root, p)).collect();
-    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    let mut hooks = NoCombines;
+    let mut combiner = DagCombiner::new(&mut dag, &mut hooks, CombineLevel::BeforeLegalizeTypes);
+    match tli {
+        Some(tli) => combiner.with_tli(tli).run(),
+        None => combiner.run(),
+    }
     let root = dag.get_root();
     let folded: Vec<u32> = SAMPLES.iter().map(|&p| eval(&dag, root, p)).collect();
     assert_eq!(original, folded, "the fold changed the value");
@@ -102,6 +117,40 @@ fn a_constant_that_does_not_fit_stays_wide() {
         let ext = dag.get_node(ISD::ZeroExtend, EVT::I32, &[low]);
         let c = dag.get_constant(0x100, EVT::I32);
         dag.get_setcc(EVT::I1, ext, c, CondCode::SetEq)
+    });
+    assert_eq!(dag.value_type(dag.operand(root, 0)), EVT::I32);
+}
+
+/// `(0 - (x & 1)) == 0` stayed a compare of the negation, so the CRC step
+/// `select ((0 - (crc & 1)) == 0), 0, poly` never reached the single-bit
+/// select fold and became a `cmov` (a branch on an i486).
+#[test]
+fn a_compare_of_a_constant_minus_a_value_compares_the_value() {
+    let (dag, root) = combined(|dag, x| {
+        let (zero, one) = (dag.get_constant(0, EVT::I32), dag.get_constant(1, EVT::I32));
+        let low = dag.get_node(ISD::And, EVT::I32, &[x, one]);
+        let neg = dag.get_node(ISD::Sub, EVT::I32, &[zero, low]);
+        dag.get_setcc(EVT::I1, neg, zero, CondCode::SetEq)
+    });
+    assert_eq!(dag.opcode(root), ISD::SetCC);
+    assert_ne!(dag.opcode(dag.operand(root, 0)), ISD::Sub);
+    let (dag, root) = combined(|dag, x| {
+        let (c0, c1) = (dag.get_constant(3, EVT::I32), dag.get_constant(8, EVT::I32));
+        let sum = dag.get_node(ISD::Add, EVT::I32, &[x, c0]);
+        dag.get_setcc(EVT::I1, sum, c1, CondCode::SetNe)
+    });
+    assert_eq!(dag.constant(dag.operand(root, 1)), Some(5));
+}
+
+/// x86 has no `i1` register: `(x & 1) == 0` must not narrow to an `i1`
+/// compare (`isTypeDesirableForOp`), which cost the bench `crc` a `cmov`.
+#[test]
+fn a_one_bit_mask_compare_is_not_narrowed_to_i1_on_x86() {
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    let (dag, root) = combined_with(Some(&tli), |dag, x| {
+        let (zero, one) = (dag.get_constant(0, EVT::I32), dag.get_constant(1, EVT::I32));
+        let low = dag.get_node(ISD::And, EVT::I32, &[x, one]);
+        dag.get_setcc(EVT::I1, low, zero, CondCode::SetEq)
     });
     assert_eq!(dag.value_type(dag.operand(root, 0)), EVT::I32);
 }
