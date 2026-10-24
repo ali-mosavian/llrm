@@ -1103,6 +1103,139 @@ impl InlineSpiller<'_> {
         });
     }
 
+    /// `HoistSpillHelper::hoistAllSpills` (InlineSpiller.cpp#L1812): the stores
+    /// of one value into one home are merged, then moved up the dominator tree
+    /// to the colder blocks `run_hoist_spills` picks, each taking a sibling of
+    /// the value that is live there as its source.
+    fn hoist_all_spills(
+        &mut self,
+        lis: &mut LiveIntervals,
+        matrix: &mut LiveRegMatrix,
+        body: &LirBody,
+    ) {
+        use super::hoistspill::{Spill, Tree, run_hoist_spills};
+        let records = std::mem::take(&mut self.stored);
+        if records.is_empty() {
+            return;
+        }
+        let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
+        // `Virt2SiblingsMap`: the registers each original was split into.
+        let mut siblings: HashMap<u32, Vec<u32>> = HashMap::default();
+        for (&reg, &original) in matrix.vrm.original_map() {
+            if reg != original && lis.has_interval(reg) {
+                siblings.entry(original).or_default().push(reg);
+            }
+        }
+        for list in siblings.values_mut() {
+            list.sort_unstable();
+        }
+        // Equal spills: one home, one value of the original.
+        let mut groups: std::collections::BTreeMap<(i64, u32), (Vn, Vec<usize>)> = Default::default();
+        for (at, record) in records.iter().enumerate() {
+            if !lis.has_instr(record.key) {
+                continue;
+            }
+            let Some(original) = self.originals.get(&record.home) else { continue };
+            let idx = lis.indexes.get_instruction_index(record.key).get_reg_slot(false);
+            let Some(value) = original.get_vn_info_at(&idx) else { continue };
+            groups.entry((record.home, value.id())).or_insert_with(|| (value, Vec::new())).1.push(at);
+        }
+        let terminator = |lis: &LiveIntervals, block: usize| -> Option<Arc<Insn>> {
+            lis.block_insns(block)
+                .iter()
+                .find(|one| {
+                    one.what
+                        .as_ref()
+                        .is_some_and(|w| matches!(w.op, Operation::Jump | Operation::Branch | Operation::Return))
+                })
+                .cloned()
+        };
+        for ((home, _), (value, members)) in groups {
+            let original = &self.originals[&home];
+            let root = lis.indexes.get_mbb_from_index(&value.def());
+            let spills: Vec<Spill> = members
+                .iter()
+                .map(|&at| {
+                    let idx = lis.indexes.get_instruction_index(records[at].key);
+                    Spill { id: at as u64, block: lis.indexes.get_mbb_from_index(&idx), order: idx.get_index() }
+                })
+                .collect();
+            let entry = lis.cfg.entry;
+            let idom = |block: usize| if block == entry { None } else { lis.dom.idom(block) };
+            let freq = |block: usize| u128::from(mbfi.get_block_freq(block).get_frequency());
+            let decided = {
+                let tree = Tree { idom: &idom, blocks: lis.cfg.len(), freq: &freq };
+                let lis_ref: &LiveIntervals = lis;
+                let sibs = siblings.get(&records[members[0]].original);
+                run_hoist_spills(&tree, root, &spills, &mut |block| {
+                    // `isSpillCandBB`: a sibling is live at the last insert point.
+                    let idx = match terminator(lis_ref, block) {
+                        Some(term) => lis_ref.indexes.get_instruction_index(term.id()),
+                        None => lis_ref.indexes.get_mbb_end_idx(block),
+                    };
+                    if idx < value.def() || original.get_vn_info_at(&idx).is_none_or(|one| one.id() != value.id()) {
+                        return None;
+                    }
+                    sibs?.iter().copied().find(|sib| lis_ref.get_interval(*sib).range.get_vn_info_at(&idx).is_some())
+                })
+            };
+            if llrm_support::env_flag!("LLRM_GREEDY_TRACE") {
+                eprintln!(
+                    "hoist-spills {}: home {home} {} equal spills, insert in {:?}, remove {}",
+                    body.name,
+                    spills.len(),
+                    decided.insert.keys().collect::<Vec<_>>(),
+                    decided.remove.len()
+                );
+            }
+            if decided.insert.is_empty() && decided.remove.is_empty() {
+                continue;
+            }
+            // Stack live range update.
+            {
+                let stack = self.stacks.entry(home).or_insert_with(LiveRange::new);
+                let first =
+                    if stack.get_num_val_nums() > 0 { stack.get_val_num_info(0) } else { stack.get_next_value(value.def()) };
+                stack.merge_value_in_as_value(original, &value, &first);
+            }
+            // Insert the hoisted spills before the terminator.
+            let (cell, template) = (records[members[0]].cell.clone(), Arc::clone(&records[members[0]].template));
+            for (block, live) in &decided.insert {
+                let before = terminator(lis, *block).map(|one| one.id());
+                let store = crate::greedy::tii::store_reg_to_stack_slot(&template, *live, &cell);
+                lis.insert_instr_before(*block, before, store);
+                self.stores += 1;
+            }
+            // Remove the redundant ones: the registers they read are cut back.
+            let mut dead: Vec<InstrKey> = decided.remove.iter().map(|&at| records[at as usize].key).collect();
+            self.stores = self.stores.saturating_sub(dead.len());
+            while !dead.is_empty() {
+                let round = std::mem::take(&mut dead);
+                let mut again: Vec<(u32, RegId)> = Vec::new();
+                for key in &round {
+                    for &read in &lis.instr(*key).uses {
+                        if lis.has_interval(read) && matrix.vrm.has_phys(read) {
+                            let phys = matrix.vrm.get_phys(read).expect("assigned");
+                            matrix.unassign(lis.get_interval(read));
+                            again.push((read, phys));
+                        }
+                    }
+                }
+                for def in lis.erase_dead_defs(&round) {
+                    let one = lis.instr(def);
+                    if one.covers.is_none_or(|(from, to)| from == to) && (one.copy_of().is_some() || remat_shape(one)) {
+                        dead.push(def);
+                    }
+                }
+                for (read, phys) in again {
+                    if lis.has_interval(read) {
+                        matrix.assign(lis.get_interval(read), phys);
+                    }
+                }
+            }
+        }
+    }
+
     /// `StackInt->MergeValueInAsValue(range, vni, StackInt->getValNumInfo(0))`.
     fn merge_value(
         &mut self,
@@ -1261,6 +1394,15 @@ impl Spiller for InlineSpiller<'_> {
 
     fn failed(&self) -> bool {
         self.failed
+    }
+
+    fn hoist_spills(
+        &mut self,
+        lis: &mut LiveIntervals,
+        matrix: &mut LiveRegMatrix,
+        body: &LirBody,
+    ) {
+        self.hoist_all_spills(lis, matrix, body);
     }
 
     fn stacked(&mut self) {

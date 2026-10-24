@@ -374,7 +374,7 @@ pub trait Spiller {
         &mut self,
         _lis: &mut LiveIntervals,
         _matrix: &mut LiveRegMatrix,
-        _mbfi: &crate::liveness::blockfrequency::MachineBlockFrequencyInfo,
+        _body: &crate::model::lir::LirBody,
     ) {
     }
 
@@ -472,9 +472,9 @@ impl<'a> RAGreedy<'a> {
     /// `postOptimization`: `hoistAllSpills`.
     pub fn hoist_spills(
         &mut self,
-        mbfi: &crate::liveness::blockfrequency::MachineBlockFrequencyInfo,
+        body: &crate::model::lir::LirBody,
     ) {
-        self.spiller.hoist_spills(&mut self.lis, &mut self.matrix, mbfi);
+        self.spiller.hoist_spills(&mut self.lis, &mut self.matrix, body);
     }
 
     /// `LiveStacks` left for the caller (the spiller's homes' ranges).

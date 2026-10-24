@@ -901,6 +901,7 @@ pub fn decide_with_split(
     }
     greedy.allocate_phys_regs();
     if inline {
+        greedy.hoist_spills(body);
         greedy.stacked_spills();
     }
     let mut signature = 0u64;
