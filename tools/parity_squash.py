@@ -720,15 +720,13 @@ def new_lib_failures(
     changed crate. #3578 landed four of them because the fast path builds the tests (cargo check --all-targets) and runs none. `on_merged(packages)` -> failing `unit <pkg>::<test>`
     names; `on_head(by_package)` -> those of them that also fail on the head (exact names, only the failing ones are run there)."""
     smoke = parity_smoke_module()
-    packages, _ = smoke.workspace_graph()
-    touched = smoke.touched_packages(files, packages)
+    packages, graph = smoke.workspace_graph()
+    # The changed crates and every crate that depends on one: llrm-c's lib tests were red on parity while PRs merged, as each changed only a dependency.
+    touched = smoke.dependants(smoke.touched_packages(files, packages), graph)
     # llrm-mir's scan tests (`no_file_gains_*`) read every crate's sources: a change to any .rs under crates/ can turn one red,
     # in a crate whose own lib tests ran (extload.rs, booleans.rs and selectiondag/ did, with llrm-mir untouched: three reds landed).
     if touched and any(f.startswith("crates/") and f.endswith(".rs") for f in files):
         touched = touched | {SCAN_CRATE}
-    # llrm-c's toolchain-feature tests compile C through llrm-hir's lowering: a change to it runs them too (12 s on a warm target; #2936 broke them unseen).
-    if any(f.startswith(("crates/ir/llrm-hir/", "crates/frontends/llrm-c/")) for f in files):
-        touched = touched | {"llrm-c"}
     smoke.LAST_LIB.clear()
     failed = (on_merged or smoke.dependants_lib_failures)(touched) if touched else set()
     print(lib_tests_line(touched, smoke.LAST_LIB))

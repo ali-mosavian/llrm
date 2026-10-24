@@ -2011,6 +2011,32 @@ declare void @llvm.{name}.p{dst}.p{src}.i32(ptr addrspace({dst}), ptr addrspace(
     }
 }
 
+const QB_STRING_COMPARE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+define i16 @f(ptr %a, ptr %b) {
+entry:
+  %r = call i16 @llrm.qb.B$SCMP(ptr %a, ptr %b)
+  ret i16 %r
+}
+declare i16 @llrm.qb.B$SCMP(ptr, ptr)
+";
+
+/// A call of a QB runtime routine takes its arguments on the stack and answers
+/// in the flags (`B$SCMP`); the DAG path passed `ax`/`dx` and tested `ax`, so
+/// every string comparison of `strcmp_smoke` printed 0. It is refused for a
+/// program whose ABI gives the runtime contracts.
+#[test]
+fn a_call_of_a_qb_runtime_routine_is_refused() {
+    let module = llrm_mir::parse::module(QB_STRING_COMPARE).expect("parses");
+    let cpu = crate::backend::cpu::profile("386").expect("a cpu");
+    let pool = || crate::backend::constpool::Pool::new(module.globals.len() as i64);
+    let call = |contracts| {
+        super::dag_function::selected_in_pool(&module, "f", &llrm_x86_m16::M16, cpu, &[], contracts, &mut pool())
+    };
+    assert!(call(false).is_ok());
+    let refused = call(true).err().expect("refused");
+    assert!(refused.0.contains("QB runtime routine"), "{}", refused.0);
+}
+
 const I1_FREEZE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
 define i16 @f(i1 %a, i16 %x) {
 entry:

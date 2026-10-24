@@ -372,7 +372,7 @@ pub fn selected(
     cpu: &crate::backend::cpu::Profile,
     libcalls: &[(String, u32, String)],
 ) -> Result<Selected, Unselected> {
-    selected_in_pool(module, name, arch, cpu, libcalls, &mut Pool::new(module.globals.len() as i64))
+    selected_in_pool(module, name, arch, cpu, libcalls, false, &mut Pool::new(module.globals.len() as i64))
 }
 
 pub fn selected_in_pool(
@@ -381,18 +381,18 @@ pub fn selected_in_pool(
     arch: &dyn Target,
     cpu: &crate::backend::cpu::Profile,
     libcalls: &[(String, u32, String)],
+    runtime_contracts: bool,
     pool: &mut Pool,
 ) -> Result<Selected, Unselected> {
     let mark = pool.mark();
-    let done =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| selected_in(module, name, arch, cpu, libcalls, pool)))
-            .unwrap_or_else(|why| {
-                let why = why
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| why.downcast_ref::<&str>().map(|one| (*one).to_owned()));
-                refuse(format!("--isel=dag: a stage stopped: {}", why.unwrap_or_default()))
-            });
+    let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        selected_in(module, name, arch, cpu, libcalls, runtime_contracts, pool)
+    }))
+    .unwrap_or_else(|why| {
+        let why =
+            why.downcast_ref::<String>().cloned().or_else(|| why.downcast_ref::<&str>().map(|one| (*one).to_owned()));
+        refuse(format!("--isel=dag: a stage stopped: {}", why.unwrap_or_default()))
+    });
     if done.is_err() {
         pool.rewind(mark);
     }
@@ -417,6 +417,7 @@ fn selected_in(
     arch: &dyn Target,
     cpu: &crate::backend::cpu::Profile,
     libcalls: &[(String, u32, String)],
+    runtime_contracts: bool,
     pool: &mut Pool,
 ) -> Result<Selected, Unselected> {
     let m16 = match arch.object().bitness {
@@ -439,7 +440,10 @@ fn selected_in(
     };
     let (builder_target, address_mode) =
         if m16 { (BuilderTarget::m16(), AddrMode::Real16) } else { (BuilderTarget::m32(), AddrMode::Flat32) };
-    let builder_target = builder_target.with_runtime_calls(libcalls).with_float_store(cpu.float_store);
+    let builder_target = builder_target
+        .with_runtime_calls(libcalls)
+        .with_float_store(cpu.float_store)
+        .with_runtime_contracts(runtime_contracts);
     let tables = tables(arch);
     // The builder numbers the fixed objects the stack parameters make: a byval
     // aggregate one, a cell one for each register-sized part of its value (an

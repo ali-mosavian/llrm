@@ -83,6 +83,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [row43-plan](row43-plan.md) | Row 43: Machine CSE, what is left |
 | [row44-plan](row44-plan.md) | Row 44: MachineSink translation plan |
 | [row45-plan](row45-plan.md) | Row 45: PeepholeOptimizer translation plan |
+| [fp-stackifier-plan](fp-stackifier-plan.md) | X86FPStackifier: compile-cost plan |
 | [row61-deleted-tests](row61-deleted-tests.md) | Row 61: the tests deleted with the non-RFP route |
 | [row63-66-plan](row63-66-plan.md) | Rows 63 (RegisterCoalescer) and 66 (RAGreedy): translation plan |
 | [row82-plan](row82-plan.md) | Row 82, Control Flow Optimizer: translation plan |
