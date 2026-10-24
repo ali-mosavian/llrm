@@ -664,7 +664,6 @@ pub(crate) fn llvm_order(
     let decide = |name| slot(name, Box::new(decide::Decide { constants: false }));
     let simplify_cfg = |name| slot(name, Box::new(simplifycfg::SimplifyCfg::default()));
     let simplify_cfg_with = |name, options| slot(name, Box::new(simplifycfg::SimplifyCfg { options }));
-    let fold = |name| slot(name, Box::new(fold::Fold));
     let combine = |name| slot(name, Box::new(crate::combine_pass::Combine { enabled: applied.options.combine }));
     let dead = |name| slot(name, Box::new(dead::Dead));
     // SROA runs mem2reg on what it splits: one slot, nothing between
@@ -731,7 +730,6 @@ pub(crate) fn llvm_order(
                 },
             }),
             combine("combine@1242"),
-            fold("fold@1242"),
             dead("dead@1242"),
             // `SimplifyCFGOptions().convertSwitchRangeToICmp(true)`
             // (PassBuilderPipelines.cpp#L1245): the option is read by
