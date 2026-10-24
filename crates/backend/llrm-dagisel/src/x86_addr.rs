@@ -890,6 +890,22 @@ impl<D: AddrDag> Matcher<'_, D> {
             let node = self.dag.machine_node(neg, &[vt, mvt::i32], &[index]);
             am.index_reg = Some(SDValue::new(node, 0));
         }
+        // A 16-bit address has no field for a lone index beside a displacement
+        // (`[si + sym]` is a base with a symbol: the object encoder has
+        // no form for the other, strlen_idiom did not assemble), so an
+        // unscaled index with no base is the base. `matchAddressBase` fills the
+        // base first; a negated index (`sub`) is what leaves the base
+        // empty.
+        //
+        // DEVIATE SD309: 32-bit addressing encodes the lone index. Owner
+        // sdag-c. Exit: none (the 16-bit ModRM has no such form).
+        // Review 2026-12-10.
+        let mut base = base;
+        if self.mode == AddrMode::Real16 && am.base_type == BaseType::Reg && am.base_reg.is_none() && am.scale == 1 {
+            if let Some(index) = am.index_reg.take() {
+                base = index;
+            }
+        }
         let index = match am.index_reg {
             Some(index) => index,
             None => self.dag.register(0, vt),

@@ -1650,3 +1650,33 @@ mod pop_from_x87 {
         assert_eq!(copy.vts, vec![mvt::f64, mvt::Other, mvt::Glue]);
     }
 }
+
+mod lone_index_at_m16 {
+    use super::*;
+    use crate::testing::TestDag;
+    use crate::x86_addr::{AddrMode, Matcher};
+
+    /// `@sym + 12 - @sym` as an address: the negated symbol is the only
+    /// register, so it was the index beside a symbolic displacement, which
+    /// the 16-bit object encoder cannot assemble (the emitter refused 3
+    /// tests/run programs, 7 qcport functions). A lone unscaled index is the
+    /// base.
+    #[test]
+    fn a_lone_unscaled_index_is_the_base_in_real_mode_and_stays_the_index_in_flat_mode() {
+        for (mode, vt, lone_is_base) in [(AddrMode::Real16, mvt::i16, true), (AddrMode::Flat32, mvt::i32, false)] {
+            let mut dag = TestDag::new();
+            let sym = dag.wrapped_global(7, 12, vt);
+            let x = dag.wrapped_global(7, 0, vt);
+            let diff = SDValue::new(dag.node(isd::SUB, &[vt], &[sym, x]), 0);
+
+            let ops = Matcher { dag: &mut dag, pointer_type: vt, mode }.select_lea_addr(diff).expect("a lea address");
+
+            let noreg = |v: SDValue| dag.nodes[v.node as usize].register == Some(0);
+            assert_eq!(
+                (!noreg(ops.base), !noreg(ops.index)),
+                if lone_is_base { (true, false) } else { (false, true) },
+                "{mode:?}"
+            );
+        }
+    }
+}
