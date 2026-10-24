@@ -1,2 +1,0 @@
-DEFSTR X
-CONST x% = 1

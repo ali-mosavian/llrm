@@ -1,4 +1,0 @@
-SUB p
-'$FORM
-DIM a(10)
-END SUB

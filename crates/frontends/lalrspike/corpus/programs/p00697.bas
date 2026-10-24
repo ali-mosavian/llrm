@@ -1,7 +1,0 @@
-TYPE Inner
-q AS INTEGER
-END TYPE
-TYPE RecT
-a AS RecT
-END TYPE
-DIM r AS RecT

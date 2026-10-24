@@ -1,2 +1,0 @@
-PRINT x(1)
-COMMON SHARED x%

@@ -217,3 +217,11 @@ A stage that refuses a source knows two things: BC's name for the error ("Array 
   vbdos)". `front::parse_coded` leaves the BC name alone, for the tools that compare with BC.
 * `qbfront::driver` prints `file:line:col: message`, the source line with the place marked, and the help; a compile
   error from the later passes (`line N: ...`) gets the file and line the person wrote, through the `$INCLUDE` map.
+
+## The corpus (`corpus/`)
+
+- `programs.py` (+ `more.py`, `expand.py`, `statements.py`) generates 12,898 small BASIC programs; `python3 programs.py [DIR]` writes them as `pNNNNN.bas` with `programs.jsonl` (group and reason per id). They are not kept in git: byte-identical on every run.
+- `bc_programs.json` is BC.EXE's verdict per program id and family (qb45, pds71, vbdos); `bc_results*.json`, `catalog.*`, `ours_*.tsv` are older runs and the front's side of the comparison (`compare*.py`).
+- `real_bc.json` is BC's verdict on real programs (repo, private tools, mgl), keyed `repo:`, `tools:`, `mgl:` + path (`real.py`).
+- `bcg/` holds the BC probe fixtures; `prologue.bas` and `epilogue.bas` wrap single lines for `bcquick.py`.
+- Needed by tests: `crates/frontends/qb/tests/diagnostics.rs` (`every_error_the_corpus_raises_is_worded`) runs `programs.py` into a temp dir. Nothing else reads the corpus; the rest is for the oracle scripts.

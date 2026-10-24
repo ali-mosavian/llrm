@@ -1,2 +1,0 @@
-CONST x = y
-OPTION BASE 0

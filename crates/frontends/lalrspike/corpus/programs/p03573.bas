@@ -1,4 +1,0 @@
-DIM SHARED x%, x%(5)
-SUB p
-INPUT x%
-END SUB

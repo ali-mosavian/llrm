@@ -1,2 +1,0 @@
-STATIC x%
-DIM x AS STRING

@@ -1,2 +1,0 @@
-DIM x%
-CALL INTERRUPT(&H10, x%, x%)

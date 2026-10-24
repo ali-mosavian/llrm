@@ -1,3 +1,0 @@
-DIM x%
-REM: 
-RUN 10

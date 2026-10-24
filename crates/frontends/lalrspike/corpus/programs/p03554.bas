@@ -1,3 +1,0 @@
-SUB p
-DEFDBL A-Z
-END SUB

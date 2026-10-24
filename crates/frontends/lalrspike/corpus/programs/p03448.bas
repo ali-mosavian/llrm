@@ -1,2 +1,0 @@
-INPUT x%
-CONST x = 1

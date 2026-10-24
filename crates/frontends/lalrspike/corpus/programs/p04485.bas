@@ -1,3 +1,0 @@
-DIM x%
-65536 PRINT
-IF x% THEN a

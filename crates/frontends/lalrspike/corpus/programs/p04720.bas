@@ -1,3 +1,0 @@
-DIM x%
-ON ERROR GOTO 10
-a_: 

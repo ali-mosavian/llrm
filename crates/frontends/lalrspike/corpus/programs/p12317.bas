@@ -1,4 +1,0 @@
-SUB p
-'$INCLUDE
-DIM a(10)
-END SUB

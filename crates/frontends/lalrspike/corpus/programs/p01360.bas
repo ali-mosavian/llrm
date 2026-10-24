@@ -1,2 +1,0 @@
-DIM x AS INTEGER
-DIM x(5, 5)

@@ -1,3 +1,0 @@
-DIM x%
-RESTORE a
-a: PRINT 1

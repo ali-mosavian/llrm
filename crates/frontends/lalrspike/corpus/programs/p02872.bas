@@ -1,2 +1,0 @@
-DEFINT X
-DIM SHARED x%(5)

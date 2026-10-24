@@ -1,8 +1,0 @@
-DIM x%, y%, i%, j%
-SELECT CASE x%
-CASE 1
-IF x% THEN
-ELSEIF y% THEN
-y% = 3
-END SELECT
-END IF

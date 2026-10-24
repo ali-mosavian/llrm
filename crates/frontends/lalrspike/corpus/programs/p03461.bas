@@ -1,2 +1,0 @@
-INPUT x%
-OPTION BASE 1

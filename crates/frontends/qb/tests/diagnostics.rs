@@ -84,11 +84,18 @@ fn every_error_has_words_and_a_place() {
 /// none is left to the fallback wording.
 #[test]
 fn every_error_the_corpus_raises_is_worded() {
-    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../lalrspike/corpus/programs");
-    let Ok(entries) = std::fs::read_dir(&directory) else { return };
+    // The 12,898 programs are generated (corpus/programs.py), not kept.
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../lalrspike/corpus/programs.py");
+    let made = std::process::Command::new("python3").arg(&script).arg(directory.path()).status().expect("runs python3");
+    assert!(made.success(), "programs.py failed");
+    let entries = std::fs::read_dir(directory.path()).expect("the generated programs");
     let mut unworded = std::collections::BTreeMap::<String, String>::new();
     for entry in entries.filter_map(Result::ok) {
         let Ok(text) = std::fs::read_to_string(entry.path()) else { continue };
+        if entry.path().extension().is_none_or(|one| one != "bas") {
+            continue;
+        }
         let text = text.replace('\n', "\r\n");
         for dialect in [Dialect::QuickBasic45, Dialect::Pds71, Dialect::VbDos] {
             if let Err(error) = llrm_qb::front::parse_coded(&text, dialect) {

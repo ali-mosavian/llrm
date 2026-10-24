@@ -1,3 +1,0 @@
-SUB p
-DIM x AS LONG
-END SUB

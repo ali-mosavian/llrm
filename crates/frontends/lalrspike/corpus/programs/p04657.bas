@@ -1,3 +1,0 @@
-DIM x%
-END: 
-IF x% THEN GOTO a

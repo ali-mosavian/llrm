@@ -1,2 +1,0 @@
-STATIC x%
-DIM SHARED x%(5)

@@ -1,3 +1,0 @@
-DIM x%
-GOTO
-a: PRINT 1

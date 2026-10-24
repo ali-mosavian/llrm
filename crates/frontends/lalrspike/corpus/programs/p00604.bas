@@ -1,4 +1,0 @@
-DIM x%
-SUB q
-STATIC y%
-END SUB

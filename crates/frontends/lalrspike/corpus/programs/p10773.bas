@@ -1,6 +1,0 @@
-DIM x%, l&, a%(5)
-DECLARE SUB pp (z AS INTEGER)
-x% = 40000 XOR 0
-END
-SUB pp (z AS INTEGER)
-END SUB

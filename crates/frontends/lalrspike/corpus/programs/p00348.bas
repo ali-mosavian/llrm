@@ -1,9 +1,0 @@
-DIM x%, y%, i%, j%
-DO
-SELECT CASE x%
-CASE 1
-y% = 1
-CASE ELSE
-y% = 3
-END SELECT
-LOOP UNTIL x%

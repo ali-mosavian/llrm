@@ -1,2 +1,0 @@
-DEFDBL A-Z
-DEFSTR X

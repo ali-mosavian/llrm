@@ -1,2 +1,0 @@
-ERASE x%
-REDIM x%(5)

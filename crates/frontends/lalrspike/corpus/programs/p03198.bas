@@ -1,2 +1,0 @@
-ERASE x
-DEFINT X

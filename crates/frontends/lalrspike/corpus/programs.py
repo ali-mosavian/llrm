@@ -294,12 +294,12 @@ import more  # noqa: E402
 more.register(add)
 
 
-def write():
-    out = HERE / "programs"
+def write(out=None):
+    out = Path(out) if out else HERE / "programs"
     out.mkdir(exist_ok=True)
     for old in out.glob("*.bas"):
         old.unlink()
-    with open(HERE / "programs.jsonl", "w") as index:
+    with open(out / "programs.jsonl" if out != HERE / "programs" else HERE / "programs.jsonl", "w") as index:
         for n, program in enumerate(PROGRAMS):
             program["id"] = n
             (out / f"p{n:05d}.bas").write_text(program["text"])
@@ -308,4 +308,5 @@ def write():
 
 
 if __name__ == "__main__":
-    write()
+    import sys
+    write(sys.argv[1] if len(sys.argv) > 1 else None)

@@ -1,3 +1,0 @@
-DIM x%
-a:
-RESUME 0

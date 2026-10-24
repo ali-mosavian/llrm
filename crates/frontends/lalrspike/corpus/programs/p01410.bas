@@ -1,2 +1,0 @@
-DIM x AS LONG
-DIM x$(5)

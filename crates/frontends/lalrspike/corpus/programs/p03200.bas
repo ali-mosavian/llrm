@@ -1,2 +1,0 @@
-ERASE x
-DEFDBL A-Z

@@ -1,4 +1,0 @@
-DIM x%
-SUB q
-EXIT SUB
-END SUB

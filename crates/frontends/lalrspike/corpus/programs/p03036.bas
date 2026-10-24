@@ -1,2 +1,0 @@
-OPTION BASE 1
-CONST y = 2

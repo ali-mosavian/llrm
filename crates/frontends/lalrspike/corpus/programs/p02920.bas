@@ -1,2 +1,0 @@
-DEFSTR X
-DIM x(5, 5)

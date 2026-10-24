@@ -1,4 +1,0 @@
-DIM x%
-SUB q
-SHARED x%
-END SUB

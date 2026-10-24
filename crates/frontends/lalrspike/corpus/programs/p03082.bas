@@ -1,2 +1,0 @@
-OPTION BASE 0
-COMMON x%

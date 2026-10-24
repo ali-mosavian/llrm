@@ -1,4 +1,0 @@
-SUB p
-'$FOO
-DIM a(10)
-END SUB

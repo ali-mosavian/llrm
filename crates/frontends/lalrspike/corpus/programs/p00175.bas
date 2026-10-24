@@ -1,8 +1,0 @@
-DIM x%, y%, i%, j%
-FOR i% = 1 TO 2
-IF x% THEN
-y% = 1
-ELSE
-y% = 3
-NEXT i%
-END IF

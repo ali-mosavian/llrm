@@ -1,2 +1,0 @@
-STATIC x%
-DEFSTR X

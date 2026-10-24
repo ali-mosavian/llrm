@@ -1,2 +1,0 @@
-ERASE x%
-CONST y = 2

@@ -1,8 +1,0 @@
-DIM x%, y%, i%, j%
-SELECT CASE x%
-CASE 1
-SELECT CASE x%
-CASE 1
-y% = 3
-END SELECT
-END SELECT

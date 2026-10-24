@@ -1,2 +1,0 @@
-STATIC x%
-OPTION BASE 2

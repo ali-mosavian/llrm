@@ -1,6 +1,0 @@
-DIM x%
-FUNCTION f%
-SUB q
-END SUB
-f% = 1
-END FUNCTION

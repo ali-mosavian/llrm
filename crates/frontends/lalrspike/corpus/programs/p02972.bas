@@ -1,2 +1,0 @@
-DEFDBL A-Z
-DIM x(5, 5)

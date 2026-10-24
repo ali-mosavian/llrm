@@ -1,6 +1,0 @@
-CALL p
-END
-SUB p
-SHARED zz%
-zz% = 1
-END SUB

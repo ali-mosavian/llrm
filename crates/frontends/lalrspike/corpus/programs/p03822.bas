@@ -1,3 +1,0 @@
-DIM x%
-GOSUB 10
-A:

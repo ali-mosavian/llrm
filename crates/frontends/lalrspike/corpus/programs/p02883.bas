@@ -1,2 +1,0 @@
-DEFINT X
-PRINT x$

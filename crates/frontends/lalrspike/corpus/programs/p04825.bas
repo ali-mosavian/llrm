@@ -1,6 +1,0 @@
-DIM x%
-a:
-SUB p
-a:
-ON ERROR GOTO a
-END SUB

@@ -1,6 +1,0 @@
-DIM x%
-FUNCTION f%
-f% = 1
-END
-f% = 1
-END FUNCTION

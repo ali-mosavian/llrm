@@ -1,7 +1,0 @@
-DIM x%
-a:
-10 PRINT
-END
-SUB p
-ON x% GOTO a
-END SUB

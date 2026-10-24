@@ -1,3 +1,0 @@
-DECLARE SUB p (SEG a AS INTEGER)
-DIM x%
-CALL p(x%)

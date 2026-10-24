@@ -1,2 +1,0 @@
-DIM x%
-DIM x%

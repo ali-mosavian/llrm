@@ -1,3 +1,0 @@
-SUB p
-DEFINT X
-END SUB

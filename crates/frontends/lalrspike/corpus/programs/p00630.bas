@@ -1,5 +1,0 @@
-DIM x%
-SUB q
-DIM x%(5)
-REDIM x%(10)
-END SUB

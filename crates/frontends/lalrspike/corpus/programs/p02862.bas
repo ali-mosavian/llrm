@@ -1,2 +1,0 @@
-DEFINT X
-DIM x%(5)

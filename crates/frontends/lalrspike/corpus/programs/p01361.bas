@@ -1,2 +1,0 @@
-DIM x AS INTEGER
-REDIM x%(5)

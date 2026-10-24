@@ -1,3 +1,0 @@
-DIM x%
-GOTO 10
-10 PRINT 1

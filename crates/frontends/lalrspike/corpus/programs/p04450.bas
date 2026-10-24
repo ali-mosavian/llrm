@@ -1,3 +1,0 @@
-DIM x%
-GOTO 0
-65535 PRINT

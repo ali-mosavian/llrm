@@ -1,6 +1,0 @@
-DIM SHARED x%
-CALL p(1)
-END
-SUB p (x%)
-SHARED x%
-END SUB

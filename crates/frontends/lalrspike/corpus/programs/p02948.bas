@@ -1,2 +1,0 @@
-DEFSTR X
-SWAP x%, x

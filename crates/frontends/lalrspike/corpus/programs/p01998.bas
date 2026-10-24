@@ -1,2 +1,0 @@
-REDIM x%(5)
-PRINT x%

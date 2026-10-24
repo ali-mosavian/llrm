@@ -1,2 +1,0 @@
-OPTION BASE 2
-FOR x% = 1 TO 2: NEXT

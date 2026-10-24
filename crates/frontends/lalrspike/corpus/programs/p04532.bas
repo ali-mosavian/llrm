@@ -1,3 +1,0 @@
-DIM x%
-ON x% GOSUB a
-0 PRINT

@@ -1,2 +1,0 @@
-DEFINT X
-REDIM x%(5)

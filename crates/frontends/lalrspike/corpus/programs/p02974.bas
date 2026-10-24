@@ -1,2 +1,0 @@
-DEFDBL A-Z
-REDIM x(5) AS LONG

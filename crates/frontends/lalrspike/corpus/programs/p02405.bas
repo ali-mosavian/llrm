@@ -1,2 +1,0 @@
-CONST x% = 1
-STATIC x%
