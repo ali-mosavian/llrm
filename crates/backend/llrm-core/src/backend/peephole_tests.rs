@@ -3745,7 +3745,7 @@ fn lea_alu_body_at(
 
 /// The block through `FixupLEAs`.
 fn fixed_leas(body: &LirBody) -> LirBody {
-    crate::backend::fixupleas::FixupLeas.transform(body.clone()).expect("the pass cannot fail")
+    crate::backend::fixupleas::FixupLeas::default().transform(body.clone()).expect("the pass cannot fail")
 }
 
 fn steps(done: &LirBody) -> Vec<(String, Vec<Loc>)> {
