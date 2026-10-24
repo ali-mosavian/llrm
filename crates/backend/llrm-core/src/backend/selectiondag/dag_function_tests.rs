@@ -1660,6 +1660,51 @@ fn a_call_through_a_far_pointer_receives_its_arguments() {
     assert!(call.is_some_and(|call| !call.requires.is_empty()), "{insns:?}");
 }
 
+const FAR_GLOBAL_ELEMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+@cells = addrspace(1) global [4 x i16] zeroinitializer
+define i16 @f() {
+entry:
+  %p = getelementptr [4 x i16], ptr addrspace(1) @cells, i16 0, i16 3
+  %v = load i16, ptr addrspace(1) %p
+  ret i16 %v
+}
+";
+
+/// An element of a far global is a cell through ES whose displacement is the
+/// global's symbol and offset. The emitter wanted a number there ("a
+/// non-constant address part": far_return, es_across_copy, farstruct,
+/// wide_globals at m16).
+#[test]
+fn an_element_of_a_far_global_is_a_cell_through_es() {
+    let module = llrm_mir::parse::module(FAR_GLOBAL_ELEMENT).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}
+
+const M16_STACK: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define void @f(i32 %a, i64 %b, i32 %c) addrspace(1) {
+entry:
+  ret void
+}
+";
+
+/// At m16 an `i32` is a register type, so a stack `i32` is one cell and an
+/// `i64` two (the second half four bytes up). The driver counted two cells for
+/// an `i32` and one for an `i64` (widest legal integer assumed 16 bits): the
+/// high half of an `i64` argument was read from the next
+/// parameter (regparm3_matrix_4/_22/_31 gave wrong values).
+#[test]
+fn an_i32_is_one_stack_cell_and_an_i64_two_at_m16() {
+    let module = llrm_mir::parse::module(M16_STACK).expect("parses");
+    let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+    let (id, _, function) = module.functions().next().expect("a function");
+    let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m16::M16).expect("a convention");
+    let cells = super::dag_function::stack_cells(&module, function, &convention, 32);
+    assert_eq!(cells.len(), 4, "a: one, b: two, c: one: {cells:?}");
+    assert_eq!(cells[2] - cells[1], 4, "the high half of b is four bytes above its low half: {cells:?}");
+    assert!(cells[3] > cells[2], "{cells:?}");
+}
+
 const STRING_OP_ON_ELEMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
 @buf = global [64 x i8] zeroinitializer
 declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
