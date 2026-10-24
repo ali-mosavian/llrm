@@ -448,11 +448,13 @@ pub fn optimized(
     options: &Options,
 ) -> Result<(), String> {
     no_inlined(program, &options.no_inline)?;
-    let applied = llrm_transforms::pipeline::Applied {
-        options: options.pipeline.clone(),
-        dump: options.dump.clone(),
-        ..Default::default()
-    };
+    let mut pipeline = options.pipeline.clone();
+    // The DAG builder lowers the switches that remain, as the pin's
+    // SelectionDAGBuilder does; the shadow run keeps the old selector's
+    // lowering for the functions the DAG path refuses.
+    pipeline.lower_switches &= options.isel != crate::backend::shadow::Selector::Dag;
+    let applied =
+        llrm_transforms::pipeline::Applied { options: pipeline, dump: options.dump.clone(), ..Default::default() };
     timed("mir pipeline", || llrm_transforms::pipeline::applied(program, &applied))?;
     timed("mir markers", || program.modules.iter_mut().for_each(llrm_transforms::dead::markers_dropped));
     timed("mir ehprepare", || {
