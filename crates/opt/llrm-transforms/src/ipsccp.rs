@@ -97,6 +97,7 @@ use llrm_mir::callgraph::Defined;
 use llrm_mir::context::{Constant, ConstantExpr, ConstantKind, Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::domtree::DomTree;
+use llrm_mir::facts::Fact;
 use llrm_mir::module::{Function, GlobalKind, InstId, Linkage, Module, Operand};
 use llrm_mir::opcode::{Attribute, CastOp, Opcode, Tail};
 use llrm_mir::passes::Outer;
@@ -524,11 +525,14 @@ fn is_returned(attr: &Attribute) -> bool {
 
 /// `AttributeFuncs::getUBImplyingAttributes`.
 fn is_ub_implying(attr: &Attribute) -> bool {
-    match attr {
-        Attribute::Flag(name) => name == "noundef",
-        Attribute::Int(name, _) => name == "dereferenceable" || name == "dereferenceable_or_null",
-        _ => false,
-    }
+    matches!(
+        Fact::of_attribute(attr),
+        Some(Fact::NoUndef | Fact::Dereferenceable(_))
+    )
+        || matches!(
+            attr,
+            Attribute::Int(name, _) if name == "dereferenceable_or_null"
+        )
 }
 
 /// `findReturnsToZap`: the returns of `id` that may return `poison`, since
