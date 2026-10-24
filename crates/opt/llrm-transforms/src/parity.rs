@@ -162,7 +162,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "translated SimplifyCfg at the default options (convertSwitchRangeToICmp is read by simplifySwitch, untranslated) runs here and Decide does not; untranslated: SimplifyCondBranchToCondBranch, simplifyUncondBranch's remainder, simplifySwitch, simplifyUnreachable's noreturn and assume folds; criterion: opt -passes=simplifycfg on the same inputs (tools/difftest/difftest.py inputs decide@690) is identical on the rows corpus; exit: those pieces translated (simplifycfg-fold-2148, 2026-10-23)",
     ),
     entry("reassociate@696", Simplify, "reassociate", Translated, ""),
-    entry("algebraic@696", Simplify, "instcombine", Old, "instcombine-port"),
     entry("loopsimplify@764", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@764", Simplify, "lcssa", Old, "lcssa-port"),
     entry("floatloop@724", Simplify, "licm", Old, "licm-port"),
