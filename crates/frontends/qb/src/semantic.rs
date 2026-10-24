@@ -4047,8 +4047,13 @@ impl Compiler {
                         let commands = self.string_descriptor(commands)?;
                         self.emit_runtime_call("B$SPLY", Vec::new(), vec![commands]);
                     }
+                    // PALETTE USING array(i): PDS 7.1 BC passes the array as GET and PUT do.
                     "PALETTE_USING" => {
-                        return self.unsupported("PALETTE USING");
+                        let [array] = arguments.as_slice() else {
+                            return self.fail("PALETTE USING takes one array element, such as `PALETTE USING p(0)`");
+                        };
+                        let operands = self.graphics_array(array)?;
+                        self.emit_runtime_call("B$PALU", Vec::new(), operands);
                     }
                     "PALETTE" => {
                         let [attribute, color] = arguments.as_slice() else {

@@ -20,14 +20,14 @@ fn qb() -> HirAbi {
     }
 }
 
-/// A copy through a huge pointer: the DAG path refuses it (no routine for
-/// segment steps yet) while the old selector compiles it.
+/// A copy from a near pointer to a huge one: the DAG path refuses it (the
+/// stepped routine takes two far pointers) while the old selector compiles it.
 const HUGE_COPY: &str =
     "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
-declare void @llvm.memcpy.p3.p3.i16(ptr addrspace(3), ptr addrspace(3), i16, i1)
-define void @f(ptr addrspace(3) %a, ptr addrspace(3) %b) addrspace(1) {
+declare void @llvm.memcpy.p3.p0.i16(ptr addrspace(3), ptr, i16, i1)
+define void @f(ptr addrspace(3) %a, ptr %b) addrspace(1) {
 entry:
-  call void @llvm.memcpy.p3.p3.i16(ptr addrspace(3) %a, ptr addrspace(3) %b, i16 64, i1 false)
+  call void @llvm.memcpy.p3.p0.i16(ptr addrspace(3) %a, ptr %b, i16 64, i1 false)
   ret void
 }
 ";

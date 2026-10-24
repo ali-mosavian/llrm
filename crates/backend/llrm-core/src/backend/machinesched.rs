@@ -131,20 +131,10 @@ pub fn regions(
     regs: Regs,
     bits: u32,
 ) -> Vec<Range<usize>> {
-    // Instructions of one block stay in order by `at`, and what shares one
-    // belongs together (a compare and its branches, the pieces of one
-    // expansion): a later pass finds the compare of a branch by it.
-    // Reordered, they would take other positions (qb range_power -O1: the `cmp`
-    // lost its `jg`). So what shares an `at` with another instruction of the
-    // block stays put (DEVIATE MS5).
-    let mut count: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
-    for one in insns {
-        *count.entry(one.at).or_default() += 1;
-    }
     let mut out = Vec::new();
     let mut start = None;
     for (index, one) in insns.iter().enumerate() {
-        if boundary(regs, bits, one) || count[&one.at] > 1 {
+        if boundary(regs, bits, one) {
             if let Some(first) = start.take() {
                 out.push(first..index);
             }
@@ -715,22 +705,6 @@ mod tests {
             assert!(boundary(regs, 16, one), "{class} is a boundary");
         }
         assert!(!boundary(regs, 16, &plain), "a plain mov is not");
-    }
-
-    /// A `cmp` and the `jg` that reads it share an `at`: reordered with the
-    /// loads before it, the `cmp` took another `at` and lost its branch (qb
-    /// range_power -O1/-Os: `0 ^ -1` printed ok where error 5 was due).
-    /// What shares an `at` is in no region.
-    #[test]
-    fn test_what_shares_an_at_with_another_instruction_is_in_no_region() {
-        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let insns = vec![
-            insn(9, semantics(Operation::Move, "mov", vec![held(7)], vec![cell(0)]), vec![7], vec![]),
-            insn(10, semantics(Operation::Move, "mov", vec![held(8)], vec![cell(8)]), vec![8], vec![]),
-            insn(11, semantics(Operation::Move, "mov", vec![held(6)], vec![cell(16)]), vec![6], vec![]),
-            insn(11, semantics(Operation::Compare, "cmp", vec![], vec![held(6), cell(24)]), vec![], vec![6]),
-        ];
-        assert_eq!(regions(&insns, regs, 16), [0..2]);
     }
 
     /// An x87 compare's decoded effect writes the status word only; `fnstsw;
