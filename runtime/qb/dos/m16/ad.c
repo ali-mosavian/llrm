@@ -25,6 +25,19 @@ void *ad_near_data(const AD *ad)
     return (void *)ad->data_off;
 }
 
+/* A pointer is the segment in its high word: the paragraph arithmetic a huge array's two segments want. */
+unsigned long ad_remaining(const AD *ad, qb_data_ptr from)
+{
+    unsigned long total = ad->elem, start, at = (unsigned long)from;
+    unsigned dim;
+
+    for (dim = 0; dim < ad->dims; dim++)
+        total *= ad->dm[dim].count;
+    start = ((unsigned long)ad->data_seg << 4) + ad->data_off;
+    at = ((at >> 16) << 4) + (at & 0xFFFF);
+    return at >= start && at - start <= total ? total - (at - start) : 0;
+}
+
 unsigned long ad_free_bytes(void)
 {
     return fh_free_bytes();
