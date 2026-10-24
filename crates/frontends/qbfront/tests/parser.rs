@@ -2135,7 +2135,7 @@ fn the_near_data_budget_is_the_targets_segment() {
         compile_with_options(&module, "m", Dialect::Pds71, "pds71", &Options { segment_bytes, ..Options::default() })
     };
     let error = on(Some(1024)).unwrap_err().message;
-    assert!(error.contains("exceeds the 1 KiB near-data budget"), "{error}");
+    assert!(error.contains("the near data segment (DGROUP, 1 KiB) is full"), "{error}");
     assert!(on(Some(65536)).is_ok());
     assert!(on(None).is_ok());
 }

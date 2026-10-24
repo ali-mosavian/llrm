@@ -7,7 +7,6 @@
 //! strings are not handled here: `lex` hands those dialects to the old lexer.
 
 use std::borrow::Cow;
-use std::sync::OnceLock;
 
 use logos::{FilterResult, Lexer, Logos};
 

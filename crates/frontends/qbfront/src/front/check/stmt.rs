@@ -136,7 +136,12 @@ impl Checker {
                     && self.procedure.is_some()
                     && items.iter().any(|item| item.shared)
                 {
-                    self.err(self.span, "Simple or array variable expected");
+                    self.err_because(
+                        self.span,
+                        "Simple or array variable expected",
+                        Reason::headline("DIM SHARED cannot be used inside a SUB or FUNCTION")
+                            .help("declare it SHARED at module level, or write `SHARED name` inside the procedure to use a module variable"),
+                    );
                 }
                 let keep = self.static_scope;
                 self.static_scope |= matches!(statement, Statement::Static(_));

@@ -122,11 +122,29 @@ impl Checker {
                             && old.rank.is_some_and(|rank| rank != usize::MAX && rank != d.bounds.len())
                             && !d.bounds.is_empty()
                         {
-                            self.err(span, "Wrong number of dimensions");
+                            self.err_because(
+                                span,
+                                "Wrong number of dimensions",
+                                Reason::headline(format!(
+                                    "REDIM cannot change the number of dimensions of `{{name}}`: it has {}, this gives {}",
+                                    old.rank.unwrap_or(0),
+                                    d.bounds.len()
+                                ))
+                                .help("give REDIM as many bounds as the DIM did"),
+                            );
                         }
                         return;
                     }
-                    self.err(span, "Array already dimensioned");
+                    if redim {
+                        self.err_because(
+                            span,
+                            "Array already dimensioned",
+                            Reason::headline("REDIM cannot resize `{name}`: it was dimensioned with constant bounds, so it is a fixed-size array")
+                                .help("make it dynamic: put `'$DYNAMIC` above its DIM, give DIM variable bounds, or start with REDIM"),
+                        );
+                    } else {
+                        self.err(span, "Array already dimensioned");
+                    }
                     return;
                 }
             }
@@ -185,7 +203,14 @@ impl Checker {
                 None => self.option_base,
             };
             if lower > upper {
-                self.err(span, "Lower bound exceeds upper bound");
+                self.err_because(
+                    span,
+                    "Lower bound exceeds upper bound",
+                    Reason::headline(format!(
+                        "the bounds of `{{name}}` are reversed: the lower bound ({lower}) is greater than the upper bound ({upper})"
+                    ))
+                    .help("write the smaller bound first, as in `(1 TO 10)`; without TO the lower bound is 0, or 1 after OPTION BASE 1"),
+                );
                 return false;
             }
             elements = elements.saturating_mul((upper - lower + 1) as usize);
