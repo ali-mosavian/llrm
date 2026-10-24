@@ -1985,6 +1985,32 @@ fn a_memset_through_a_huge_pointer_is_refused_not_a_rep_stos() {
     assert!(refused.0.contains("huge pointer"), "{}", refused.0);
 }
 
+/// `memcpy` and `memmove` through a huge pointer (destination or source) are
+/// refused like `memset`: a `rep movs` or the runtime's near routine would
+/// stop at the first segment end.
+#[test]
+fn a_memcpy_or_memmove_through_a_huge_pointer_is_refused() {
+    for (name, huge_dst) in [("memcpy", true), ("memcpy", false), ("memmove", true), ("memmove", false)] {
+        let (dst, src) = if huge_dst { ("3", "0") } else { ("0", "3") };
+        let ir = format!(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+define cc 1005 void @f(ptr addrspace({dst}) %d, ptr addrspace({src}) %s, i32 %n) addrspace(1) {{
+entry:
+  call void @llvm.{name}.p{dst}.p{src}.i32(ptr addrspace({dst}) %d, ptr addrspace({src}) %s, i32 %n, i1 false)
+  ret void
+}}
+declare void @llvm.{name}.p{dst}.p{src}.i32(ptr addrspace({dst}), ptr addrspace({src}), i32, i1)
+"
+        );
+        let module = llrm_mir::parse::module(&ir).expect("parses");
+        let refused =
+            selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+                .err()
+                .unwrap_or_else(|| panic!("{name} huge_dst={huge_dst}: selected"));
+        assert!(refused.0.contains("huge pointer"), "{name} huge_dst={huge_dst}: {}", refused.0);
+    }
+}
+
 const I1_FREEZE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
 define i16 @f(i1 %a, i16 %x) {
 entry:
