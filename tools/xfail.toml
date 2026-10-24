@@ -67,12 +67,6 @@ owner = "funcattrs-port"
 date = "2026-10-27"
 why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
 [[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_a_call_after_a_loop_that_moved_ds_gets_the_data_group_back"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: other, not yet put in a family; a regression unless triage says stale (qb-reds-parity.md)"
-[[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_a_counted_loop_reads_an_unannotated_byref_once"
 issue = 2848
 owner = "funcattrs-port"
@@ -127,12 +121,6 @@ owner = "funcattrs-port"
 date = "2026-10-27"
 why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
 [[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_a_poke_of_the_bios_data_area_leaves_invariant_globals_hoisted"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
-[[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_a_poke_takes_its_segment_from_the_def_seg_before_it"
 issue = 2848
 owner = "funcattrs-port"
@@ -140,12 +128,6 @@ date = "2026-10-27"
 why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
 [[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_a_poke_through_a_counted_selector_leaves_invariant_globals_hoisted"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
-[[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_a_poke_to_video_memory_leaves_a_local_arrays_descriptor_hoisted"
 issue = 2848
 owner = "funcattrs-port"
 date = "2026-10-27"
@@ -162,12 +144,6 @@ issue = 2848
 owner = "funcattrs-port"
 date = "2026-10-27"
 why = "red on parity, not bisected; family: counted-loop strength reduction; a regression unless triage says stale (qb-reds-parity.md)"
-[[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_text_memory_stores_leave_array_descriptors_invariant"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
 [[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_the_first_dimension_is_not_rank_checked"
 issue = 2848
