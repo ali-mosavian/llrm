@@ -13,10 +13,6 @@
 //!   `isSExtAbsoluteSymbolRef` are `false`: tail calls, 64-bit zero-extension
 //!   and absolute symbols are not translated yet, and `false` only declines a
 //!   pattern. Owner sdag-c. Exit: C3. Review 2026-12-10.
-//! - **SD37** `hasNoCarryFlagUses` answers `false` for a use through `CopyToReg
-//!   EFLAGS`, which needs the instruction table's condition operand number.
-//!   Costs `inc`/`dec` in that shape. Owner sdag-c. Exit: C3. Review
-//!   2026-12-10.
 //! - **SD38** `isUnneededShiftMask` reads the mask only, not
 //!   `computeKnownBits`: the DAG API has no known-bits yet. Owner sdag-c. Exit:
 //!   when it has. Review 2026-12-10.
@@ -25,8 +21,9 @@
 //! The shadow harness: `Selector::select(dag, &mut X86Hooks::new(..), node)`.
 
 use crate::dag::{Hooks, PatternContext, SDValue};
-use crate::generated::ids::{isd, mvt, x86isd};
+use crate::generated::ids::{isd, mvt, x86, x86isd};
 use crate::generated::{x86_i486, x86_m16, x86_p5};
+use crate::instr;
 use crate::matcher::Vt;
 use crate::x86_addr::{AddrDag, AddrMode, Matcher};
 
@@ -257,7 +254,7 @@ impl X86Hooks {
             .select_addr_of(Some(n.node), ptr)
     }
 
-    /// `hasNoCarryFlagUses` ([L3650][carry]); SD37.
+    /// `hasNoCarryFlagUses` ([L3650][carry]).
     ///
     /// [carry]:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3650
@@ -269,6 +266,23 @@ impl X86Hooks {
         // COND_O..COND_G: the codes that read no carry.
         let reads_carry = |cc: u64| !matches!(cc, 0 | 1 | 4 | 5 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15);
         for (user, _) in dag.users(flags) {
+            if dag.opcode(user) == isd::CopyToReg {
+                // Only a copy to EFLAGS; the machine nodes that read it say
+                // their condition in the last use operand.
+                if dag.register_of(dag.operand(user, 1).node) != Some(x86::EFLAGS) {
+                    return false;
+                }
+                for (reader, _) in dag.users(SDValue::new(user, 1)) {
+                    if !dag.is_machine(reader) {
+                        return false;
+                    }
+                    match machine_condition(dag, reader) {
+                        Some(cc) if !reads_carry(cc) => {}
+                        _ => return false,
+                    }
+                }
+                continue;
+            }
             let cc_operand = match dag.opcode(user) {
                 x86isd::SETCC | x86isd::SETCC_CARRY => 0,
                 x86isd::CMOV | x86isd::BRCOND => 2,
@@ -281,6 +295,21 @@ impl X86Hooks {
         }
         true
     }
+}
+
+/// `getCondFromNode`: the condition a machine node reads, from its last use
+/// operand; `None` for an instruction that has none (`COND_INVALID`).
+fn machine_condition<D: AddrDag>(
+    dag: &D,
+    node: u32,
+) -> Option<u64> {
+    let desc = instr::desc(!dag.opcode(node))?;
+    let last = desc.operands.last()?;
+    if desc.is_pseudo() || last.kind != instr::operand_type::X86_COND_CODE {
+        return None;
+    }
+    let at = usize::from(desc.num_operands - desc.num_defs) - 1;
+    dag.constant(dag.operand(node, at)).map(|cc| cc as u64)
 }
 
 /// `findNonImmUse`: `def` is reachable from `root` by a path that avoids

@@ -16,6 +16,9 @@ pub mod operand_type {
     pub const MEMORY: u16 = 3;
     pub const PCREL: u16 = 4;
     pub const FIRST_TARGET: u16 = 15;
+    /// `X86::OPERAND_COND_CODE` (`OPERAND_ROUNDING_CONTROL` is the first target
+    /// type).
+    pub const X86_COND_CODE: u16 = FIRST_TARGET + 1;
 }
 
 /// One operand of an instruction (`MCOperandInfo`).
