@@ -191,11 +191,20 @@ impl Checker {
             Statement::OptionBase(base, span) => {
                 self.option_base = *base;
                 if std::mem::replace(&mut self.option_base_seen, true) {
-                    self.err(*span, "Syntax error");
+                    self.err_because(
+                        *span,
+                        "Syntax error",
+                        Reason::headline("OPTION BASE appears twice").help("a program has one OPTION BASE: remove the second"),
+                    );
                 }
                 let dimensioned = |scope: &Scope| scope.vars.values().flatten().any(|v| v.rank.is_some());
                 if dimensioned(&self.scope) || dimensioned(&self.module_scope) {
-                    self.err(*span, "Array already dimensioned");
+                    self.err_because(
+                        *span,
+                        "Array already dimensioned",
+                        Reason::headline("OPTION BASE comes after an array was dimensioned")
+                            .help("move OPTION BASE above the first DIM of an array"),
+                    );
                 }
             }
             Statement::Goto(label, span) | Statement::CallOrGoto(label, span) => {
