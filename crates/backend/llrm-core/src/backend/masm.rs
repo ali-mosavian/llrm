@@ -689,9 +689,21 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
         && procedure.body.bits == 32
         && procedure.reserve != 0
         && procedure.callees.values().all(|one| one.code.is_empty())
-        && [false, true]
-            .iter()
-            .all(|omit| wrap_of(&procedure, &procedure.body, true, *omit).is_none_or(|wrap| wrap.wrapped.is_empty()));
+        && [false, true].iter().all(|omit| {
+            // Nothing wrapped, or the frame and every register at the one Save
+            // (the pin saves them together); a register saved later than the
+            // frame cannot lie above it.
+            wrap_of(&procedure, &procedure.body, true, *omit).is_none_or(|wrap| {
+                wrap.wrapped.is_empty()
+                    || (wrap.wrapped.contains(&crate::backend::shrinkwrap::Piece::Frame)
+                        && saved_of(&procedure).len()
+                            == wrap
+                                .wrapped
+                                .iter()
+                                .filter(|piece| matches!(piece, crate::backend::shrinkwrap::Piece::Saved(_)))
+                                .count())
+            })
+        });
     let pushed = saved_of(&procedure).len() as i64 * procedure.registers.slot;
     if !eligible || pushed == 0 {
         return procedure;
@@ -1031,7 +1043,7 @@ fn built(
     let first = procedure.body.saved_first;
     let lows = if first { Vec::new() } else { saved_of(procedure) };
     let count = lows.len();
-    let wrap = if first { None } else { wrap_of(procedure, &procedure.body, enter.len() > count, omit) };
+    let wrap = wrap_of(procedure, &procedure.body, enter.len() > count, omit);
     let kept = enter.split_off(enter.len() - count);
     let restores: Vec<Semantics> = leave.drain(..count).collect();
     let saved: Vec<RegId> =
@@ -1040,6 +1052,9 @@ fn built(
     let item = |piece: &crate::backend::shrinkwrap::Piece| -> (Vec<Semantics>, Vec<Semantics>) {
         match piece {
             crate::backend::shrinkwrap::Piece::Frame => (enter.clone(), leave.clone()),
+            // A `saved_first` frame's registers are in the frame's own
+            // sequence.
+            crate::backend::shrinkwrap::Piece::Saved(_) if first => (Vec::new(), Vec::new()),
             crate::backend::shrinkwrap::Piece::Saved(whole) => {
                 let at = saved.iter().position(|one| one == whole).expect("a kept register");
                 // `kept` is in the order of `saved_of`; `restores` is the
