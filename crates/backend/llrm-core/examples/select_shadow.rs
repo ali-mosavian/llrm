@@ -27,6 +27,12 @@ use llrm_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 use llrm_dagisel::x86_select::select_node;
 use llrm_mir::datalayout::DataLayout;
 
+/// The runtime routines both targets' `c.toml` list: a large
+/// `memset`/`memcpy`/`memmove` calls one. Without them the builder refuses the
+/// call ("library call whose symbol and convention are the target fact's"),
+/// which the shadow counted against the DAG path.
+const RUNTIME: &[&str] = &["memcpy", "memmove", "memset"];
+
 fn opcode_name(code: u32) -> String {
     table::MACHINE_OPCODES
         .iter()
@@ -57,7 +63,7 @@ fn main() {
     let features = Features { cmov: false, bmi: false, lzcnt: false, popcnt: false, movbe: false, shld_slow: false };
     let (target, tli, arch, cpu, address_mode): (_, _, &dyn llrm_target::Target, _, _) = if m16 {
         (
-            BuilderTarget::m16(),
+            BuilderTarget::m16().with_libcalls(RUNTIME),
             TargetLowering::x86_16(features, MVT::I16),
             &llrm_x86_m16::M16,
             Cpu::M16,
@@ -65,7 +71,7 @@ fn main() {
         )
     } else {
         (
-            BuilderTarget::m32(),
+            BuilderTarget::m32().with_libcalls(RUNTIME),
             TargetLowering::x86_32(features, MVT::I32),
             &llrm_x86_m32::M32,
             Cpu::I486,
