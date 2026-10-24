@@ -1100,11 +1100,6 @@ impl Outer {
         self.memo.0.borrow_mut().clear();
     }
 
-    /// Whether alias and decisions ask the intervals of counted loops.
-    pub fn loop_intervals(&self) -> bool {
-        self.program.loop_intervals
-    }
-
     pub fn program(&self) -> &ProgramProxy {
         &self.program
     }
@@ -2700,9 +2695,6 @@ pub struct PassManager {
     /// named on stderr, and those past the limit are skipped.
     pub bisect: Option<usize>,
     pub(crate) required: Vec<Kind>,
-    /// The program is run without the intervals of counted loops for alias and
-    /// decisions (`Program::loop_intervals`).
-    pub without_loop_intervals: bool,
     /// Program analyses computed before each module's run.
     pub(crate) program_required: Vec<fn(&Program, &mut ProgramAnalyses)>,
     /// Pass runs so far, for `bisect`.
@@ -2778,7 +2770,6 @@ impl PassManager {
         &mut self,
         program: &mut Program,
     ) -> Result<Vec<Stage>, String> {
-        program.loop_intervals = !self.without_loop_intervals;
         self.managed(program, &mut ProgramAnalyses::default())
     }
 

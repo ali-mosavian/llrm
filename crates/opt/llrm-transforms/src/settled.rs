@@ -262,7 +262,7 @@ pub fn slice(
         numbered(&|hasher| function.attrs.hash(hasher)),
         numbered(&|hasher| parameters.hash(hasher)),
         numbered(&|hasher| (&function.return_attrs, function.calling_convention, function.ty).hash(hasher)),
-        numbered(&|hasher| (unit.metadata.len(), outer.loop_intervals()).hash(hasher)),
+        numbered(&|hasher| unit.metadata.len().hash(hasher)),
     ];
     own_parts.hash(&mut own);
     let named = named(context, function, unit.metadata);

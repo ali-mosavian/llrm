@@ -677,13 +677,11 @@ b:
     assert!(!ranged(pipeline::Options::basic()), "-O1 stated a range from the callers' arguments");
 }
 
-/// gcc's -O1 has value ranges for induction variables only (SCEV with the
-/// loop's iteration bound) and none from -O2's `-ftree-vrp`. Our alias and
-/// branch decisions asked the counted loops' intervals at every level: 24 of
-/// the 25 runs of `Bounded` on x_life at -O1, 42 M of its 510 M. At -O1 they
-/// take none, and with nothing else asking `Bounded` here it is not worked out.
+/// `decide` and `ports` asked the counted loops' intervals (`Bounded`,
+/// llrm-only) at -O2: about 7 M of d_faces' 1176 M. The pin's passes ask
+/// ValueTracking, and no level works the intervals out.
 #[test]
-fn alias_and_decisions_ask_no_loop_intervals_at_o1() {
+fn no_level_works_out_the_counted_loops_intervals() {
     let text = "
 @a = global [16 x i16] zeroinitializer
 
@@ -718,9 +716,9 @@ done:
         llrm_mir::passes::trace_recomputes(false);
         runs.iter().filter(|(name, ..)| *name == "bounded").map(|(.., count)| count).sum::<usize>()
     };
-    assert!(!pipeline::Options::basic().loop_intervals && pipeline::Options::standard().loop_intervals);
-    assert!(asked(pipeline::Options::standard()) > 0, "premise: -O2 asks for the loop's intervals");
-    assert_eq!(asked(pipeline::Options::basic()), 0, "-O1 worked out the counted loops' intervals");
+    for options in [pipeline::Options::basic(), pipeline::Options::standard()] {
+        assert_eq!(asked(options), 0, "the counted loops' intervals were worked out");
+    }
 }
 
 const SUMMARISED: &str = "
@@ -1782,7 +1780,7 @@ impl llrm_mir::passes::FunctionPass for Agree {
         if unit.function.layout().is_empty() {
             return llrm_mir::passes::PreservedAnalyses::all();
         }
-        let held = Ranges::of(unit.context, unit.layout, unit.function, analyses, false);
+        let held = Ranges::of(unit.context, unit.layout, unit.function, analyses);
         let seen = held.unit(unit.context, unit.layout, unit.function, analyses.outer());
         let facts = held.registers();
         let ranger = seen.edges.expect("edges").over(&seen, facts);

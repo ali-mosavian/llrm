@@ -164,8 +164,7 @@ fn _decided(
     // here decided none of 574 branches at d_faces -O2 and was a quarter of
     // the pass.
     let registers = constants.then(|| analyses.get::<llrm_analysis::manager::Registers>(context, layout, function));
-    let held =
-        Held::of_without_memory(context, layout, function, analyses).with_bounded(context, layout, function, analyses);
+    let held = Held::of_without_memory(context, layout, function, analyses);
     let outer = std::rc::Rc::clone(analyses.outer());
     let unit = held.unit(context, layout, function, &outer);
     let decisions = match registers.as_deref() {
