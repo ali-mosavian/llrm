@@ -1817,6 +1817,17 @@ impl Emitter<'_, '_> {
                     }
                     cell.base = cell.index.take();
                 }
+                // A scaled index beside a base is the 386's 32-bit form: its
+                // literal place adds nothing and has no encoding with a scale.
+                if self.ctx.address_mode == AddrMode::Real16
+                    && cell.base.is_some()
+                    && cell.index.is_some()
+                    && cell.scale != 1
+                    && cell.addr.is_some_and(|addr| addr.space == crate::model::ir::Space::Literal)
+                {
+                    cell.offset = cell.addr.map_or(cell.offset, |addr| addr.disp);
+                    cell.addr = None;
+                }
                 let held = self.fresh(width);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
                 self.push(
