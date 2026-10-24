@@ -29,6 +29,21 @@ DEVIATE LV2: a kill is an instruction id (`Insn::id`) with a block lookup, as th
 |---|---|
 | 2026-11-06 | this note |
 | 2026-11-13 | PR1: `livevariables.rs` (analyze, the update API; no consumer), tests against hand-made SSA bodies and the pin's example |
-| 2026-11-20 | PR2: a pre-phielim phase builds it and hands it down; `phielim.rs` maintains it; TwoAddress reads it; `BodyFacts` loses `LiveIntervals` and `finish` stops handing intervals over (the coalescer builds its own until the eager build of intervals-once step 3); ledger Ir and the 568 objects, unchanged |
+| 2026-11-20 | PR2': a phase before TwoAddress fills it by the dataflow (LV3); TwoAddress reads it; `BodyFacts` loses `LiveIntervals` and `finish` stops handing intervals over (the coalescer builds its own until the eager build of intervals-once step 3); ledger Ir and the 568 objects, unchanged |
 
 If PR1 or PR2 cannot make 2026-11-24 by 2026-11-06: the interim is a liveness dataflow after phielim behind the same API, numbered DEVIATE LV3, exit date written then.
+
+## Why the interim (DEVIATE LV3), and the pass order
+The pin has PHIElimination directly before TwoAddress and runs its x86 pre-RA passes (`X86PassConfig::addPreRegAlloc`) before PHIElimination, on SSA. Ours runs eight passes between them, each rewriting the body, so a `LiveVariables` built before phielim is stale at TwoAddress unless all eight maintain it. The order is a pin-faithfulness row of its own:
+
+| Ours (between phielim and twoaddr) | Pin slot | Moves before phielim |
+|---|---|---|
+| `pressuresink` | none (the scheduler orders loads) | gone with the pre-RA machine scheduler (w-2, row 65), 2026-11-20 at the earliest |
+| `fixupsetcc` | `addPreRegAlloc`, before PHIE | now |
+| `callframe` | `addPreRegAlloc`, before PHIE | now |
+| `flagscopy` | `addPreRegAlloc` (`X86FlagsCopyLowering`), before PHIE | now |
+| `floatfold` | none (folded at selection) | now if it reads no phi copy; else with the selector's folding |
+| `pushfold` | inside `X86CallFrameOptimization`, before PHIE | now, after `callframe` |
+| `FloatPrep`, `FloatAlloc` | `X86FPStackifier`, after register allocation | with machine-cleanup row 9 (w-2 step 9, code 2026-11-20) |
+
+DEVIATE LV3 (owner w-1): until those are out of the gap, `LiveVariables` is filled right before TwoAddress by a liveness dataflow on the non-SSA body (`alive_blocks` = live in and live out; a kill = the last use in a block where the value is not live out; a dead definition = its definition), through the same API. Exit: phielim sits directly before twoaddr, builds it before lowering the phis and maintains it (the pin's `PHIElimination` calls); 2026-12-11 at the latest, and the PR that removes the dataflow is dated with it.
