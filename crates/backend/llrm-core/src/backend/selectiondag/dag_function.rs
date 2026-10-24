@@ -30,7 +30,7 @@
 //! sequence and frame objects in the emitter (D1e). Exit: D1e. Owner: sdag-d.
 //! Review 2026-12-03.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 
 use indexmap::IndexMap;
@@ -294,6 +294,29 @@ impl super::emit::Conventions for CallConventions<'_> {
         &self,
         callee: Option<&Callee>,
     ) -> Option<std::collections::BTreeSet<llrm_lir::registers::RegId>> {
+        // inline assembly changes the registers its name states
+        if let Some(Callee::Named(name)) = callee
+            && let Some(block) = llrm_mir::intrinsics::asm(name)
+        {
+            let regs = llrm_lir::registers::Regs(self.arch.registers());
+            return Some(
+                block
+                    .clobbers
+                    .iter()
+                    .filter(|name| !matches!(name.as_str(), "flags" | "memory") && !name.starts_with("st"))
+                    .map(|reg| regs.root(self.arch.register_named(reg)))
+                    .collect(),
+            );
+        }
+        // a huge-pointer routine changes what it states and no more
+        if let Some(Callee::Named(name)) = callee {
+            let regs = llrm_lir::registers::Regs(self.arch.registers());
+            let fills = [1u32, 2, 4].into_iter().filter_map(|cell| self.arch.huge_fill_routine(cell).ok());
+            let copies = [false, true].into_iter().filter_map(|backward| self.arch.huge_copy_routine(backward).ok());
+            if let Some(routine) = fills.chain(copies).find(|routine| routine.name == name.as_str()) {
+                return Some(routine.clobbers.iter().map(|reg| regs.root(*reg)).collect());
+            }
+        }
         let number = match callee {
             Some(Callee::Global(id)) => {
                 self.module.global(llrm_mir::context::GlobalId(*id)).function().map_or(0, |f| f.calling_convention)
@@ -348,6 +371,7 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
                     .chain([
                         (llrm_dagisel::x86_llrm::FARCALL_OPCODE, "CALL_FAR"),
                         (llrm_dagisel::x86_llrm::CODE_OPCODE, "CALL_CODE"),
+                        (llrm_dagisel::x86_llrm::LLRM_ASM_OPCODE, "CALL_ASM"),
                     ])
                     .collect(),
             })
@@ -357,7 +381,10 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
 
 /// The addresses each LIR block can go to: the targets of its jumps and
 /// branches, and the next block if it does not end in a jump or a return.
-fn successors(emitted: &[EmitBlock]) -> Vec<Vec<i64>> {
+fn successors(
+    emitted: &[EmitBlock],
+    sinks: &HashSet<i64>,
+) -> Vec<Vec<i64>> {
     use crate::model::ir::Operation;
     emitted
         .iter()
@@ -381,7 +408,7 @@ fn successors(emitted: &[EmitBlock]) -> Vec<Vec<i64>> {
                 .last()
                 .and_then(|insn| insn.what.as_ref())
                 .is_some_and(|w| matches!(w.op, Operation::Jump | Operation::Return));
-            if !ends {
+            if !ends && !sinks.contains(&block.at) {
                 if let Some(next) = emitted.get(i + 1) {
                     if !out.contains(&next.at) {
                         out.push(next.at);
@@ -651,6 +678,7 @@ fn selected_in(
     };
     let mut emitted: Vec<EmitBlock> = Vec::new();
     let mut calls = IndexMap::default();
+    let mut sinks: HashSet<i64> = HashSet::new();
     let mut inline_places = IndexMap::default();
     // the call sites whose callee is far code (address space 1): a far call
     let mut far = std::collections::BTreeSet::new();
@@ -709,7 +737,10 @@ fn selected_in(
                 // segments
                 Callee::Named(name) => {
                     // inline code is laid down at the site: no call
-                    if arch.object().bitness == 16 && llrm_mir::intrinsics::code(name).is_none() {
+                    if arch.object().bitness == 16
+                        && llrm_mir::intrinsics::code(name).is_none()
+                        && llrm_mir::intrinsics::asm(name).is_none()
+                    {
                         far.insert(*at);
                     }
                     name.clone()
@@ -719,11 +750,20 @@ fn selected_in(
         }));
         inline_places.extend(done.inline_places.iter().cloned());
         emitted.extend(done.blocks);
+        // A block that ends in `unreachable` (after a call that does not
+        // return) leads nowhere: it does not fall into the next one.
+        if block == parent
+            && function
+                .terminator(block)
+                .is_some_and(|inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Unreachable)
+        {
+            sinks.extend(emitted.last().map(|last| last.at));
+        }
         let start = made.get(&parent.0).map_or(from, |range| range.start);
         made.insert(parent.0, start..emitted.len());
         exports.push((parent, built.phi_updates));
     }
-    let succ = successors(&emitted);
+    let succ = successors(&emitted, &sinks);
     // Phis: the successor's phi takes, from each LIR block of the predecessor
     // that leaves for it, the register the predecessor copied its value to.
     for (pred, updates) in &exports {
@@ -835,6 +875,21 @@ fn selected_in(
             }
             let _ = places;
             inline.insert(*at, bytes);
+        }
+    }
+    // The huge-pointer routines the calls name (`huge_memory`): their bytes
+    // are laid down at the call as well.
+    for (at, name) in &calls {
+        let fills = [1u32, 2, 4].into_iter().filter_map(|cell| arch.huge_fill_routine(cell).ok());
+        let copies = [false, true].into_iter().filter_map(|backward| arch.huge_copy_routine(backward).ok());
+        if let Some(routine) = fills.chain(copies).find(|routine| routine.name == name.as_str()) {
+            inline.insert(*at, routine.code);
+        }
+    }
+    // An inline assembly block's bytes are laid down at its site.
+    for (at, name) in &calls {
+        if let Some(block) = llrm_mir::intrinsics::asm(name) {
+            inline.insert(*at, block.code);
         }
     }
     Ok(Selected {
