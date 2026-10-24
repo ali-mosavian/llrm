@@ -27,3 +27,11 @@ def test_a_function_missing_from_the_output_is_still_a_row():
 def test_a_quoted_function_name_is_the_name_the_shadow_prints():
     """m16 names like `_f@3` are quoted in the IR; the quotes made 87 functions "missing from the output"."""
     assert tool.defined('define i16 @"_f@3"(i16 %0) {\n ret i16 0\n}\n') == ["_f@3"]
+
+
+def test_an_extract_subreg_is_the_copy_the_pin_prints():
+    """The emitter turns `EXTRACT_SUBREG` into `COPY`: x_dct's `movzx` of a low byte was `differs: ours only EXTRACT_SUBREG`."""
+    ours = {"a": Counter({"MOVZX32rr8": 1, "EXTRACT_SUBREG": 1, "RET": 1})}
+    pinned = {"a": Counter({"MOVZX32rr8": 1, "COPY": 1, "RET": 1})}
+    rows = tool.rows_of("p", {"a": {**func(), "machine": ours["a"]}}, {}, pinned, "define i32 @a() {\n ret i32 0\n}\n")
+    assert [b for _, _, b in rows] == ["equal"]
