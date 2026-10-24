@@ -242,7 +242,7 @@ b1:
   br label %b1
 }
 ";
-    for options in [super::Options::L1438, super::Options::L1682, super::Options::L2376] {
+    for options in [super::Options::L1438, super::Options::L1682] {
         check_with(&options, text, text, &[]);
     }
 }

@@ -255,21 +255,7 @@ impl<'a> AliasQuery<'a> {
             )
         {
             use crate::aa::AAResults;
-            let mut found = self.stack().get_mod_ref_info(def, Some(memory), &mut self.basic.borrow_mut()).is_mod_set();
-            // DEVIATE AQ1: BasicAA has no `aliasPHI` or `aliasSelect` yet
-            // (basicaa-port S2), where the pin proves a phi of loaded pointers
-            // apart from a local nothing exposed; the capture stand-in does
-            // until they are translated, for a store or load def.
-            if found
-                && matches!(
-                    self.unit.function.instruction(def).opcode,
-                    Opcode::Load { .. } | Opcode::Store { .. }
-                )
-                && let Some(own) = self.accesses.references.get(&def)
-            {
-                found = !(self.unreachable_from(own, &loc.effective, Some(def))
-                    || self.unreachable_from(&loc.effective, own, Some(def)));
-            }
+            let found = self.stack().get_mod_ref_info(def, Some(memory), &mut self.basic.borrow_mut()).is_mod_set();
             self.cache.borrow_mut().insert(key, found);
             return found;
         }
