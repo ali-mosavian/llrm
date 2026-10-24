@@ -2577,3 +2577,231 @@ fn a_scaled_lea_at_m16_has_no_literal_place() {
     }
     assert!(scaled > 0, "the function has a scaled lea");
 }
+
+const FLAGS_OF_A_SUB_AFTER_A_SHIFT: &str = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+declare fastcc void @_far_get(ptr, ptr)
+declare fastcc i16 @_con_gfx_trim(ptr)
+declare fastcc i16 @_con_back_load(ptr, ptr)
+declare fastcc i16 @_con_chars_load(ptr, ptr)
+declare fastcc void @_con_text(ptr, i32, i16, ptr)
+declare fastcc void @_con_back_draw(ptr, i32, i16)
+declare cc 1003 i32 @_strlen(ptr)
+declare cc 1003 ptr @_strcpy(ptr, ptr)
+declare i32 @llvm.smin.i32(i32, i32)
+define cc 1003 void @_con_draw(ptr noundef nocapture %0, ptr noundef %1, i32 noundef %2, i16 noundef %3, float noundef %4) \"llrm-fp-eval\"=\"x87-extended\" {
+b1:
+  %5 = alloca [82 x i8]
+  %6 = alloca [80 x i8]
+  %7 = getelementptr inbounds nuw i8, ptr %0, i32 4
+  %8 = load float, ptr %7
+  %9 = fcmp ole float %8, 0.000000e+00
+  br i1 %9, label %b3, label %b2
+
+b2:
+  %10 = tail call fastcc i16 @_con_back_load(ptr noundef nonnull %0, ptr noundef %1)
+  %11 = icmp eq i16 %10, 0
+  br i1 %11, label %b9, label %b18
+
+b3:
+  %12 = getelementptr inbounds nuw i8, ptr %0, i32 10
+  %13 = load i16, ptr %12
+  %14 = sext i16 %13 to i32
+  %15 = trunc i32 %14 to i16
+  %16 = icmp slt i32 %14, 4
+  %17 = select i1 %16, i16 %15, i16 4
+  %18 = sext i16 %17 to i32
+  %19 = tail call fastcc i16 @_con_gfx_trim(ptr noundef nonnull %0)
+  %20 = icmp eq i16 %19, 0
+  br i1 %20, label %b9, label %b7
+
+b7:
+  %21 = tail call fastcc i16 @_con_chars_load(ptr noundef nonnull %0, ptr noundef %1)
+  %22 = icmp ne i16 %21, 0
+  %23 = icmp sgt i32 %18, 0
+  %or.cond = select i1 %22, i1 %23, i1 false
+  br i1 %or.cond, label %135, label %b9
+
+b9:
+  ret void
+
+b14:
+  %24 = phi i32 [ %139, %135 ], [ %49, %b17 ]
+  %25 = phi i32 [ %138, %135 ], [ %48, %b17 ]
+  %26 = phi i16 [ 0, %135 ], [ %47, %b17 ]
+  %27 = getelementptr i8, ptr %0, i32 8
+  %28 = load i16, ptr %27
+  %29 = sext i16 %28 to i32
+  %30 = add i32 %24, %29
+  %31 = icmp slt i32 %30, 0
+  %32 = select i1 %31, i32 15, i32 0
+  %33 = sext i16 %28 to i32
+  %34 = add i32 %32, %24
+  %35 = add i32 %34, %33
+  %36 = lshr i32 %35, 4
+  %37 = shl nuw i32 %36, 4
+  %38 = sub i32 %33, %37
+  %39 = add i32 %24, %38
+  %40 = mul i32 %39, 4
+  %41 = getelementptr i8, ptr %0, i32 %40
+  %42 = getelementptr i8, ptr %41, i32 1296
+  %43 = load float, ptr %42
+  %44 = fcmp ole float %43, 0.000000e+00
+  br i1 %44, label %b17, label %b15
+
+b15:
+  %45 = getelementptr inbounds [80 x i8], ptr %136, i32 %39
+  call fastcc void @_far_get(ptr noundef %5, ptr noundef nonnull %45)
+  call fastcc void @_con_text(ptr noundef nonnull %0, i32 noundef %2, i16 noundef %26, ptr noundef %5)
+  %46 = add i16 %26, 8
+  br label %b17
+
+b17:
+  %47 = phi i16 [ %26, %b14 ], [ %46, %b15 ]
+  %48 = add i32 %25, -1
+  %49 = add i32 %24, 1
+  %50 = icmp samesign ugt i32 %48, 1
+  br i1 %50, label %b14, label %b9
+
+b18:
+  %51 = getelementptr i8, ptr %0, i32 4
+  %52 = load float, ptr %51
+  %53 = fptosi float %52 to i16
+  %54 = zext nneg i16 %53 to i32
+  %55 = add i16 %53, -200
+  tail call fastcc void @_con_back_draw(ptr noundef nonnull %0, i32 noundef %2, i16 noundef %55)
+  %56 = icmp slt i16 %53, 16
+  br i1 %56, label %b9, label %b20
+
+b20:
+  %57 = tail call fastcc i16 @_con_chars_load(ptr noundef nonnull %0, ptr noundef %1)
+  %58 = icmp eq i16 %57, 0
+  br i1 %58, label %b9, label %b22
+
+b22:
+  %59 = add nsw i32 %54, -16
+  %60 = lshr i32 %59, 3
+  %61 = getelementptr inbounds nuw i8, ptr %0, i32 10
+  %62 = load i16, ptr %61
+  %63 = sext i16 %62 to i32
+  %64 = getelementptr inbounds nuw i8, ptr %0, i32 12
+  %65 = load i16, ptr %64
+  %66 = sext i16 %65 to i32
+  %67 = sext i16 %62 to i32
+  %68 = sext i16 %65 to i32
+  %69 = sub nsw i32 %67, %68
+  %70 = icmp sgt i32 %60, %69
+  %71 = select i1 %70, i32 %69, i32 %60
+  %72 = shl i32 %71, 16
+  %73 = ashr exact i32 %72, 16
+  %74 = icmp sgt i32 %73, 0
+  br i1 %74, label %140, label %b27
+
+b27:
+  %75 = trunc i32 %54 to i16
+  store i8 93, ptr %5
+  %76 = getelementptr inbounds nuw i8, ptr %0, i32 1360
+  call fastcc void @_far_get(ptr noundef %6, ptr noundef nonnull %76)
+  %77 = icmp slt i16 %3, 0
+  %78 = select i1 %77, i16 7, i16 0
+  %79 = add i16 %3, %78
+  %80 = ashr i16 %79, 3
+  %81 = call cc 1003 i32 @_strlen(ptr noundef nonnull %6)
+  %82 = shl i32 %81, 16
+  %83 = ashr exact i32 %82, 16
+  %84 = sext i16 %80 to i32
+  %85 = add nsw i32 %84, -4
+  %86 = icmp sgt i32 %83, %85
+  %87 = sub nsw i32 %83, %85
+  %88 = shl i32 %87, 16
+  %89 = ashr exact i32 %88, 16
+  %90 = select i1 %86, i32 %89, i32 0
+  %91 = getelementptr inbounds i8, ptr %6, i32 %90
+  %92 = getelementptr inbounds nuw i8, ptr %5, i32 1
+  %93 = call cc 1003 ptr @_strcpy(ptr noundef nonnull %92, ptr noundef nonnull %91)
+  %94 = call cc 1003 i32 @_strlen(ptr noundef nonnull %5)
+  %95 = fmul float %4, 4.000000e+00
+  %96 = fptosi float %95 to i32
+  %97 = trunc i32 %96 to i8
+  %98 = and i8 %97, 1
+  %99 = or i8 %98, 10
+  %100 = shl i32 %94, 16
+  %101 = ashr exact i32 %100, 16
+  %102 = getelementptr inbounds i8, ptr %5, i32 %101
+  store i8 %99, ptr %102
+  %103 = add i32 %100, 65536
+  %104 = ashr exact i32 %103, 16
+  %105 = getelementptr inbounds i8, ptr %5, i32 %104
+  store i8 0, ptr %105
+  %106 = add nsw i16 %75, -16
+  call fastcc void @_con_text(ptr noundef nonnull %0, i32 noundef %2, i16 noundef %106, ptr noundef %5)
+  br label %b9
+
+b28:
+  %107 = phi i32 [ %154, %140 ], [ %133, %b28 ]
+  %108 = phi i32 [ %153, %140 ], [ %132, %b28 ]
+  %109 = phi i16 [ %144, %140 ], [ %131, %b28 ]
+  %110 = getelementptr i8, ptr %0, i32 8
+  %111 = load i16, ptr %110
+  %112 = getelementptr i8, ptr %0, i32 12
+  %113 = load i16, ptr %112
+  %114 = sext i16 %111 to i32
+  %115 = sext i16 %113 to i32
+  %116 = sub i32 %114, %115
+  %117 = add i32 %107, %116
+  %118 = icmp slt i32 %117, 0
+  %119 = select i1 %118, i32 15, i32 0
+  %120 = sext i16 %111 to i32
+  %121 = sext i16 %113 to i32
+  %122 = sub i32 %120, %121
+  %123 = add i32 %119, %107
+  %124 = add i32 %123, %120
+  %125 = sub i32 %124, %121
+  %126 = lshr i32 %125, 4
+  %127 = shl nuw i32 %126, 4
+  %128 = sub i32 %122, %127
+  %129 = add i32 %107, %128
+  %130 = getelementptr inbounds [80 x i8], ptr %145, i32 %129
+  call fastcc void @_far_get(ptr noundef %5, ptr noundef nonnull %130)
+  call fastcc void @_con_text(ptr noundef nonnull %0, i32 noundef %2, i16 noundef %109, ptr noundef %5)
+  %131 = add i16 %109, 8
+  %132 = add i32 %108, -1
+  %133 = add i32 %107, 1
+  %134 = icmp samesign ugt i32 %132, 1
+  br i1 %134, label %b28, label %b27
+
+135:
+  %136 = getelementptr inbounds nuw i8, ptr %0, i32 14
+  %137 = call i32 @llvm.smin.i32(i32 %14, i32 4)
+  %138 = add nsw i32 %137, 1
+  %139 = sub i32 16, %137
+  br label %b14
+
+140:
+  %141 = trunc i32 %54 to i16
+  %142 = lshr exact i32 %72, 13
+  %143 = sub nsw i32 %59, %142
+  %144 = trunc i32 %143 to i16
+  %145 = getelementptr inbounds nuw i8, ptr %0, i32 14
+  %146 = zext i16 %141 to i32
+  %147 = add nsw i32 %146, -16
+  %148 = lshr i32 %147, 3
+  %149 = sub i32 %63, %66
+  %150 = call i32 @llvm.smin.i32(i32 %148, i32 %149)
+  %151 = trunc i32 %150 to i16
+  %152 = sext i16 %151 to i32
+  %153 = add nsw i32 %152, 1
+  %154 = sub i32 16, %152
+  br label %b28
+}
+";
+
+/// A `sub`'s flags read by a branch after a shift came between: the flags are
+/// made again as a `cmp` of the same operands, as a `cmp`'s own were
+/// (QCport console `_con_draw` at m32: 'flags overwritten between their
+/// producer and a consumer'). A `MOV32r0` is a `mov` here and writes none.
+#[test]
+fn the_flags_of_a_sub_are_made_again_after_another_unit_wrote_them() {
+    let module = llrm_mir::parse::module(FLAGS_OF_A_SUB_AFTER_A_SHIFT).expect("parses");
+    selected(&module, "_con_draw", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}
