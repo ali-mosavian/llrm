@@ -44,7 +44,7 @@ The pin's file, function by function, with whether any `-march` llrm supports re
 | 1 | `isLEA` (227), `runOnMachineFunction` (232), `getPreviousInstr` (295), `searchBackwards` (308) | all | none: two peephole groups (`lea_fixup`, `lea_alu`) run in the peephole walk, not per block in the pin's order | the pass `fixupleas.rs` with the block loop, the predicate and the two searches; slot registered, rules still in the peephole | 11-02 |
 | 2 | `getADDrrFromLEA` .. `getINCDECFromLEA` (351-400), `checkRegUsage` (466) | all | `other_term`, `step`, the guards in `guards.rs` | the opcode maps and the register-usage check as functions, tested one by one | 11-04 |
 | 3 | `optLEAALU` (500) | all | the pass (`opt_lea_alu`); `lea_alu` keeps case 1's pair until row 4 | moved into the pass, the add-or-sub rule removed from peephole.peep | 11-06 |
-| 4 | `optTwoAddrLEA` (564) | all | peephole `lea_fixup` (cases 1 and 2) | moved into the pass, the group removed | 11-08 |
+| 4 | `optTwoAddrLEA` (564) | all | `opt_two_addr_lea` in the pass (cases 1 and 2; case 3 calls `opt_lea_alu`) | the groups `lea_fixup` and `lea_alu` removed from peephole.peep; 7 of 568 bench objects change by -1 to -3 B (the Mem spelling and inc/dec made in the pass), QCport 0 | 11-08 |
 | 5 | `processInstrForSlow3OpLEA` (752), `isInefficientLEAReg` (331), `hasInefficientLEABaseReg` (340), `mayHaveOffset` (347) | `x86-64` only | none | translated, tested at `-march=x86-64` | 11-10 |
 | 6 | `processInstruction` (664), `seekLEAFixup` (681), `processInstructionForSlowLEA` (701) | none of the nine | none | not translated: no supported CPU sets `slow-lea` or `lea-uses-ag`. Exit: the first PR that adds such a CPU translates them | n/a |
 

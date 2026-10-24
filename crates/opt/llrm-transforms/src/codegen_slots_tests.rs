@@ -793,9 +793,9 @@ const ROWS: &[Row] = &[
     row(
         "X86 LEA Fixup",
         Deviate,
-        "peephole.peep `lea_fixup`, `lea_alu`; peephole.rs (`lea_fixed`, `lea_alus`)",
+        "fixupleas.rs",
         "",
-        "CG6: `optTwoAddrLEA` cases 1 and 2 are translated (peephole.peep `lea_fixup`, permalinks in docs/working/lea-fixup-plan.md); case 3 (`optLEAALU`) is translated in fixupleas.rs as the pin has it, the add or sub within five instructions (PR 3; the one-instruction peephole rule is gone); the objects it changes over the 71 bench programs x 2 targets x 4 levels are 5, -24 B in all (lru m16 O1 -2, nbody_fixed m16 O2 and O3 -10 each, x_list m16 O3 -2, matmul m32 O3 +0); owner w-8; review 2026-11-30. Pin: changed code in 37 (-O2) and 41 (-Os) of 77 IRs",
+        "CG6: `optTwoAddrLEA` is translated in fixupleas.rs (permalinks in docs/working/lea-fixup-plan.md): cases 1 and 2 (add, inc, dec) for every spelling of the address, the pin's LEA32r rule applied to our word LEAs too, which the pin leaves alone; case 3 (`optLEAALU`) is translated in fixupleas.rs as the pin has it, the add or sub within five instructions (PR 3; the one-instruction peephole rule is gone); the objects it changes over the 71 bench programs x 2 targets x 4 levels are 5, -24 B in all (lru m16 O1 -2, nbody_fixed m16 O2 and O3 -10 each, x_list m16 O3 -2, matmul m32 O3 +0); owner w-8; review 2026-11-30. Pin: changed code in 37 (-O2) and 41 (-Os) of 77 IRs",
     ),
     row(
         "X86 Fixup Inst Tuning",
