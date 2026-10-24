@@ -54,6 +54,14 @@ A single walk therefore reaches 13.7 M of the rule groups and, by taking in the 
 | R45-4 | `fused`, `fused_calls`, `addresses` become selection's addressing-mode matching | up to 4 | 2026-12-04 |
 | R45-5 | read `constants`, `extensions`, `popped_arguments`, `overwritten`, `pushes`, `high_extracts`, `sharedstores`, `transferred`, `shuttles`, `zeroed_loads`, `compares_again` against LLVM; each gets a home or a premise | | 2026-11-06 (reading), then one PR each |
 | R45-6 | `tested` into the translated `PeepholeOptimizer` (`optimizeCompareInstr`) | 1.4 | with row 45 #4, 2026-11-13 |
-| R45-7 | `machinecp::propagated`: per-instruction facts cheaper (the pin's pass is 3.4 M) | up to 6 | 2026-11-13 |
+| R45-7 | `machinecp::propagated`: per-instruction facts cheaper (the pin's pass is 3.4 M); owner w-3 (row 84) | up to 6 | 2026-11-13 |
 
 Each PR reports what it got on the dist build, as the F3 and TwoAddress rows did.
+
+## The 45 M outside the walk: owner and date each
+| Part | M | Owner | Date |
+|---|--:|---|---|
+| copy propagation | 10.2 | w-3, row 84 (R45-7) | 2026-11-13 |
+| shared liveness/effects facts | 12.4 | w-1, R45-8: one `LiveRows` per body, read by the sub-passes that ask; profile first | design 2026-11-13 |
+| post-RA sinks, `machinecse`, `machinedce` | 10.4 | w-2 (row 44 #24, `machinecse` step 1); `machinedce` R45-5 w-1 | 2026-11-06 |
+| hand-written non-walk passes | 12.5 | w-1, R45-5 reading, then one PR each | 2026-11-06 |
