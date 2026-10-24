@@ -2166,3 +2166,23 @@ fn a_remainder_used_by_a_store_and_an_address_is_selected() {
     selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
+
+const BYVAL_ODD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+declare void @g(ptr byval([41 x i8]) %p)
+define void @f(ptr %q) {
+entry:
+  call void @g(ptr byval([41 x i8]) %q)
+  ret void
+}
+";
+
+/// A byval struct whose size is not a whole number of words (41 bytes) leaves
+/// its last byte of the outgoing area unwritten: the stores that cannot be
+/// pushes stay in place, based on a copy of SP. It was refused "an outgoing
+/// argument area the stores do not cover at m16" (byval_struct -O0).
+#[test]
+fn an_odd_sized_byval_argument_is_stored_in_place_at_m16() {
+    let module = llrm_mir::parse::module(BYVAL_ODD).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}
