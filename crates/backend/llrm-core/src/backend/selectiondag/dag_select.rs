@@ -124,7 +124,14 @@ pub(crate) fn do_instruction_selection(
 ) -> Result<(), Refusal> {
     let order = users_first(dag);
     let mut adapter = DagisAdapter::new(dag);
-    for node in order {
+    // Nodes a selection makes (a shift amount rewritten, a mask shrunk) are
+    // visited next, latest first: the pin inserts them before the node
+    // being selected (`insertDAGNode`), and its walk runs toward the front
+    // of `allnodes`. They were left as generic nodes, which the emitter
+    // refused ("operand Truncate before its definition").
+    let mut made: Vec<u32> = Vec::new();
+    let mut rest = order.into_iter();
+    while let Some(node) = made.pop().or_else(|| rest.next()) {
         // `Node->use_empty()`: a node selection left unused is dead.
         if adapter.is_dead(node) || !(node == adapter.dag.get_root().node || adapter.has_live_users(node)) {
             continue;
@@ -132,9 +139,11 @@ pub(crate) fn do_instruction_selection(
         if matches!(adapter.dag.nodes()[node as usize].opcode, ISD::Machine(_)) {
             continue;
         }
+        let before = adapter.dag.nodes().len();
         if select_node(selector, &mut adapter, hooks, node) == Outcome::CannotSelect {
             return Err(Refusal::CannotSelect(format!("{:?}", adapter.dag.nodes()[node as usize].opcode)));
         }
+        made.extend(before as u32..adapter.dag.nodes().len() as u32);
     }
     Ok(())
 }

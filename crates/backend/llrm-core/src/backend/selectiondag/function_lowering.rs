@@ -25,7 +25,11 @@ pub struct FunctionLoweringInfo {
     next_reg: u32,
     /// The register of the high half of a two-register value, by the low's.
     second: std::collections::BTreeMap<u32, u32>,
-    next_jump_table: u32,
+    /// The blocks each jump table's entries go to, by the table's index.
+    pub jump_tables: Vec<Vec<u32>>,
+    /// The first block id a switch lowering has not made one of: ids are
+    /// the function's, so two switches never name the same block.
+    pub next_block: u32,
     next_frame_index: i32,
 }
 
@@ -54,7 +58,8 @@ impl FunctionLoweringInfo {
             bpi: None,
             next_reg: FIRST_VIRTUAL,
             second: Default::default(),
-            next_jump_table: 0,
+            jump_tables: Vec::new(),
+            next_block: 0,
             next_frame_index: 0,
         };
         let entry = function.entry();
@@ -95,10 +100,13 @@ impl FunctionLoweringInfo {
         self.next_frame_index - 1
     }
 
-    /// The next jump table index of the function.
-    pub fn new_jump_table(&mut self) -> u32 {
-        self.next_jump_table += 1;
-        self.next_jump_table - 1
+    /// The next jump table index of the function, whose entries go to `blocks`.
+    pub fn new_jump_table(
+        &mut self,
+        blocks: Vec<u32>,
+    ) -> u32 {
+        self.jump_tables.push(blocks);
+        (self.jump_tables.len() - 1) as u32
     }
 
     /// The registers a value of `parts` registers is in, the first being

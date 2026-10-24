@@ -150,7 +150,7 @@ pub fn build_block(
         info,
         block,
         order,
-        function.block_capacity() as u32,
+        info.next_block.max(function.block_capacity() as u32),
         None,
     );
     if Some(block) == function.entry() {
@@ -192,6 +192,7 @@ pub fn build_block(
         extra
             .push((block, BlockDag { dag: one.dag, phi_updates: Vec::new(), live_ins: Vec::new(), extra: Vec::new() }));
     }
+    info.next_block = next;
     Ok(BlockDag { dag, phi_updates, live_ins, extra })
 }
 
