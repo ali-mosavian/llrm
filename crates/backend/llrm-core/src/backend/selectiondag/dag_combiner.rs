@@ -210,6 +210,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> Option<SDValue> {
         match self.dag.opcode(node) {
             ISD::MergeValues => self.visit_merge_values(node),
+            ISD::Select => self.visit_select(node),
             ISD::SetCC => self.visit_setcc(node),
             ISD::Xor => self.visit_xor(node),
             ISD::Mul => self.visit_mul(node),
@@ -304,6 +305,88 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             (self.dag.get_constant(c1, min_vt), cond)
         };
         Some(self.dag.get_setcc(vt, trunc, rhs, cond))
+    }
+
+    /// `visitSELECT` ([L13507][pin]) up to the setcc folds: a flipped
+    /// condition swaps the arms; an `i1` select is logic
+    /// (`foldBoolSelectToLogic`); a select of a select on the same arm
+    /// merges into one with an `and`/`or` condition (X86 does not normalize
+    /// to a select sequence). The split of an `and`/`or` condition into a
+    /// sequence, taken only when the inner select already has users, is not
+    /// translated: the arena cannot tell a live user from a dead one.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L13507
+    fn visit_select(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (n0, n1, n2) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+        let vt = self.dag.value_type(node);
+        let cond_vt = self.dag.value_type(n0);
+        if vt == cond_vt && vt == EVT::I1 {
+            if let Some(logic) = self.bool_select_to_logic(n0, n1, n2, vt) {
+                return Some(logic);
+            }
+        }
+        // `extractBooleanFlip`: `select (not c), a, b` is `select c, b, a`.
+        if self.dag.opcode(n0) == ISD::Xor && self.dag.bool_constant(self.dag.operand(n0, 1)) == Some(true) {
+            let flipped = self.dag.operand(n0, 0);
+            return Some(self.dag.get_select(vt, flipped, n2, n1));
+        }
+        if cond_vt != EVT::I1 {
+            return None;
+        }
+        let arm_vt = self.dag.value_type(n1);
+        // `select c0, (select c1, x, y), y` is `select (and c0, c1), x, y`.
+        if self.dag.opcode(n1) == ISD::Select && self.dag.use_count(n1.node) == 1 {
+            let (c1, x, y) = (self.dag.operand(n1, 0), self.dag.operand(n1, 1), self.dag.operand(n1, 2));
+            if y == n2 && self.dag.value_type(c1) == cond_vt {
+                let and = self.dag.get_node(ISD::And, cond_vt, &[n0, c1]);
+                return Some(self.dag.get_select(arm_vt, and, x, n2));
+            }
+        }
+        // `select c0, x, (select c1, x, y)` is `select (or c0, c1), x, y`.
+        if self.dag.opcode(n2) == ISD::Select && self.dag.use_count(n2.node) == 1 {
+            let (c1, x, y) = (self.dag.operand(n2, 0), self.dag.operand(n2, 1), self.dag.operand(n2, 2));
+            if x == n1 && self.dag.value_type(c1) == cond_vt {
+                let or = self.dag.get_node(ISD::Or, cond_vt, &[n0, c1]);
+                return Some(self.dag.get_select(arm_vt, or, n1, y));
+            }
+        }
+        None
+    }
+
+    /// `foldBoolSelectToLogic`: a select of `i1`s is an `or`/`and` of the
+    /// condition, with the other arm frozen.
+    fn bool_select_to_logic(
+        &mut self,
+        cond: SDValue,
+        then: SDValue,
+        other: SDValue,
+        vt: EVT,
+    ) -> Option<SDValue> {
+        let is = |dag: &SelectionDAG, v: SDValue, bit: u128| dag.constant(v) == Some(bit);
+        if cond == then || is(self.dag, then, 1) {
+            let frozen = self.dag.get_node(ISD::Freeze, vt, &[other]);
+            return Some(self.dag.get_node(ISD::Or, vt, &[cond, frozen]));
+        }
+        if cond == other || is(self.dag, other, 0) {
+            let frozen = self.dag.get_node(ISD::Freeze, vt, &[then]);
+            return Some(self.dag.get_node(ISD::And, vt, &[cond, frozen]));
+        }
+        let ones = self.dag.get_all_ones_constant(vt);
+        if is(self.dag, other, 1) {
+            let not = self.dag.get_node(ISD::Xor, vt, &[cond, ones]);
+            let frozen = self.dag.get_node(ISD::Freeze, vt, &[then]);
+            return Some(self.dag.get_node(ISD::Or, vt, &[not, frozen]));
+        }
+        if is(self.dag, then, 0) {
+            let not = self.dag.get_node(ISD::Xor, vt, &[cond, ones]);
+            let frozen = self.dag.get_node(ISD::Freeze, vt, &[other]);
+            return Some(self.dag.get_node(ISD::And, vt, &[not, frozen]));
+        }
+        None
     }
 
     /// `visitXOR`'s `not (setcc x, y, cc)` fold ([L10560][pin]): `xor (setcc x,

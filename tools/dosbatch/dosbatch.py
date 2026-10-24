@@ -104,9 +104,9 @@ _RUNTIME_LOCK = threading.Lock()
 
 
 def with_isel(command: list[str]) -> list[str]:
-    """`command` with `--isel=$LLRM_ISEL` after `llrm-c` or `llrm-qb`, when the variable is set: the same programs through the other instruction selector."""
+    """`command` with `--isel=$LLRM_ISEL` after `llrm-c`, `llrm-qb` or `llrm-nib`, when the variable is set: the same programs through the other instruction selector."""
     mode = os.environ.get("LLRM_ISEL")
-    if mode and Path(command[0]).name in ("llrm-c", "llrm-qb"):
+    if mode and Path(command[0]).name in ("llrm-c", "llrm-qb", "llrm-nib"):
         return [command[0], f"--isel={mode}", *command[1:]]
     return command
 

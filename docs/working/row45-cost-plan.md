@@ -2,38 +2,66 @@
 
 Owner: w-1 (handed over by w-2, coordinator ruling). Pin d1106deb71cc. [row45-plan](row45-plan.md) is the translation of `PeepholeOptimizer` itself; this file is the cost of ours, which is 44 post-allocation sub-passes (`peephole.rs`, `Peephole::once`), against the pin's `PeepholeOptimizer` 1.0 M. What each sub-pass is in LLVM, and how often it fires, is in [lir-cleanup-plan](../architecture/lir-cleanup-plan.md) ("The peephole: what fires, and where each rewrite lives in LLVM"); nothing is repeated here.
 
-## Profile at the tip (d_faces -O2 m32, ledger command, symbolized release, callgrind inclusive)
-`Peephole::once` 72.5 M Ir over 7 bodies; its callees:
+## Profile at the tip (d_faces -O2 m32, ledger command, symbolized `dist` build, callgrind inclusive)
+The first version of this file read a symbolized `release` build: the dist build (fat LTO, one codegen unit) the ledger measures attributes differently, and a change that saved 2.0 M of `Peephole::once` there saved 0.04 M of the ledger (#4319's note). The numbers below are from a `dist` build with line tables kept (`CARGO_PROFILE_DIST_DEBUG=line-tables-only CARGO_PROFILE_DIST_STRIP=false`), the tip of 2026-10-24, total 922.8 M.
+`Peephole::once` 63.3 M over 7 bodies, self 2.5 M; its callees:
 
-| Sub-pass (callee) | M Ir | Fires (lir-cleanup-plan) | LLVM home | Step |
-|---|--:|---|---|---|
-| `machinecp::propagated` (2 calls) | 11.50 | 23% | `MachineCopyPropagation` (pin 3.4 M) | row 62's neighbour: cheaper per-instruction facts, not the dataflow (dead end recorded there) |
-| `machinecse::eliminated` | 4.15 | 3.7% | MachineCSE runs before allocation only | delete, w-2's step 1 (11-02) |
-| `narrowed_arithmetic` | 4.11 | never | none | delete: R45-1 |
-| `fused` | 3.23 | 34% | addressing-mode matching and `foldMemoryOperandImpl` | isel, R45-4 |
-| `postrasink::sunk` | 3.18 | 14% | `PostRAMachineSinking` | row 44 #24 (after w-2's row 65 piece 2) |
-| `constants` | 2.53 | not read | not read | read first, R45-5 |
-| `machinedce::eliminated` | 2.48 | 2.4% | `DeadMachineInstructionElim` (pin 1.4 M, before allocation) | R45-5 |
-| `zeroes` | 2.43 | 56% | `MOV32r0` expanded after allocation | isel emits the pseudo, R45-3 |
-| `increments` | 2.25 | 38% | `UseIncDec` patterns | isel, R45-3 |
-| `zero_compares` | 1.75 | 40% | `X86InstrCompiler.td` patterns | isel, R45-3 |
-| `secondary_bases` | 1.58 | never | none | delete: R45-1 |
-| `popped_arguments` | 1.72 | rare | none | read first, R45-5 |
-| `tested` | 1.59 | 27% | `optimizeCompareInstr` (the translated `PeepholeOptimizer`) | R45-6 |
-| `copysink::sunk` | 1.43 | 7% | `PostRAMachineSinking` | with row 44 #24 |
-| `extensions` | 1.32 | 13% | not read | R45-5 |
-| `fused_calls` | 1.14 | 6 fires | addressing-mode matching | R45-4 |
-| `restored_copies` | 0.78 | never | none | delete: R45-1 |
-| the shared facts the sub-passes ask: `allocate::live` 3.34, `_flags_live_out` 2.57, `_loaded_addresses` 1.98, `dead_at_exit` 1.70, `_flags_dead_after` 1.26 | 10.85 | | | shrink with the sub-passes that ask them |
+| Sub-pass (callee) | M Ir | LLVM home | Step |
+|---|--:|---|---|
+| `machinecp::propagated` (6 calls) | 10.23 | `MachineCopyPropagation` (pin 3.4 M) | cheaper per-instruction facts (dead end in lir-cleanup-plan: the dataflow is not the cost) |
+| `machinecse::eliminated` | 3.86 | MachineCSE runs before allocation only | delete, w-2's step 1 |
+| `narrowed_arithmetic` | 3.77 | none | 3.6 M of it is `guards::upper_zero`, the zero-upper-half solution made once per body for the first group that asks (`upperzero::hoisted` 0.94 and the widening groups read it): an inherent analysis, not a walk |
+| `postrasink::sunk` | 2.97 | `PostRAMachineSinking` | row 44 #24 |
+| `fused` | 2.49 | addressing-mode matching, `foldMemoryOperandImpl` | isel (R45-4) |
+| `_flags_dead_after` (612 calls) | 2.46 | | once per block: inherent |
+| `LiveRows::sets` (14) | 2.43 | | twice per body |
+| `_flags_live_out` | 2.39 | | once per body |
+| `zeroes` | 2.28 | `MOV32r0` expanded after allocation | R45-3 |
+| `machinedce::eliminated` | 2.27 | `DeadMachineInstructionElim` (pin 1.4 M) | R45-5 |
+| `increments` | 1.87 | `UseIncDec` patterns | R45-3 |
+| `popped_arguments` | 1.69 | none | read first, R45-5 |
+| `tested` | 1.44 | `optimizeCompareInstr` | R45-6 |
+| `zero_compares` | 1.35 | `X86InstrCompiler.td` | R45-3 |
+| `copysink::sunk` | 1.25 | `PostRAMachineSinking` | row 44 #24 |
+| `secondary_bases` | 0.92 | none | gated already (`needs`) |
 
-## Rows (one PR each; ledger Ir before and after; the 568 sweep and the gate as the check that a sub-pass that "never fires" does not)
-| # | Change | Removes (ours) | Date |
+The rule groups together are 17.4 M inclusive of the 63.3 M, 3.6 M of it the shared `upper_zero` solution: about 13.7 M is thirty-eight walks of the whole body, each building a window for every instruction (the walkers' per-window allocations were shown not to be the cost on the dist build).
+
+## Where the 63.3 M goes (by kind of work; the dist profile above)
+| Kind | M Ir | % | What attacks it |
+|---|--:|--:|---|
+| the rule groups' generated walks (`x86_m32::generated::*`) | 14.29 | 22.6 | R45-2, one walk (about 13.7 M of it is walking; the rest is the shared `upper_zero` solution) |
+| `machinecp::propagated` (copy propagation, 6 calls) | 10.23 | 16.2 | R45-7: per-instruction facts |
+| shared liveness and effects facts (`_flags_dead_after`, `LiveRows::sets`, `_flags_live_out`, `dead_at_exit`, `live_rows`, the lane-effects cache) | 12.36 | 19.5 | inherent per body; shrinks with the sub-passes that ask |
+| other hand-written sub-passes: `zeroes` 2.28, `popped_arguments` 1.69, `tested` 1.44, `zero_compares` 1.35, `upperzero::hoisted` 0.94, `secondary_bases` 0.92, `zeroed_loads` 0.59, the rest 3.3 | 12.50 | 19.7 | `zeroes`, `zero_compares`, `zeroed_loads` and part of the rest are `each` walks of the same kind and join R45-2 (up to 4.6 M more); `zeroes`/`zero_compares` leave to isel in R45-3 |
+| post-RA sinks (`postrasink` 2.97, `copysink` 1.25) | 4.24 | 6.7 | row 44 #24 |
+| post-RA `machinecse` | 3.86 | 6.1 | deleted by w-2's step 1 |
+| `machinedce` | 2.27 | 3.6 | R45-5 |
+| `Contents::has` and the once-cells that gate | 1.11 | 1.7 | |
+| `once`'s own code | 2.46 | 3.9 | |
+
+A single walk therefore reaches 13.7 M of the rule groups and, by taking in the other `each`/`window` sub-passes, up to 4.6 M more: about 18 M of 63 M. The other 45 M is analyses (31%), copy propagation (16%), sinks, `machinecse` and DCE (16%), and the hand-written passes that are not walks.
+
+## What does not work (measured)
+- Deleting the sub-passes the spike counted as never firing: `storecombine` and `restored_copies` fail two unit tests (adjacent word stores combine; `mov ax,es; mov es,ax` goes). They fire on rare shapes.
+- One window per block instead of per instruction in the walkers: -2.0 M on a release build, +0.04 M on the dist build (not landed).
+
+## Rows (one PR each; the ledger on the dist build before and after; the 568 sweep and the gate)
+| # | Change | Removes (ours, upper bound) | Date |
 |---|---|--:|---|
-| R45-1 | delete the sub-passes that never fire: `narrowed_arithmetic`, `secondary_bases`, `restored_copies`, `waits`, `storecombine`, `frame` (the spike counted 0 fires in 6,760 runs; the ablation changed no row) | up to 6.5 | 2026-10-31 |
-| R45-2 | the shared facts asked once per body, not once per sub-pass | up to 4 | 2026-11-06 |
-| R45-3 | `zeroes`, `increments`, `zero_compares` become what isel emits (`xor`, `inc`, `test`) | up to 6.4 | 2026-11-13 |
-| R45-4 | `fused`, `fused_calls`, `addresses` become selection's addressing-mode matching | up to 4.4 | 2026-11-20 (sdag-c's matcher, asked first) |
-| R45-5 | read `constants`, `extensions`, `popped_arguments`, `overwritten`, `pushes`, `high_extracts`, `sharedstores`, `transferred`, `shuttles`, `zeroed_loads`, `compares_again` against LLVM; each gets a home or a premise | 11 combined | 2026-11-06 (reading), then one PR each |
-| R45-6 | `tested` into the translated `PeepholeOptimizer` (`optimizeCompareInstr`) | 1.6 | with row 45 #4, 2026-11-13 |
+| R45-2 | one walk for the rule groups: each instruction is dispatched once to the groups whose first-instruction test it passes (the pin's `PeepholeOptimizer` visits each instruction once with all its rewriters) | up to 10 | design 2026-11-06, code 2026-11-20 |
+| R45-3 | `zeroes`, `increments`, `zero_compares` are what isel emits (`xor`, `inc`, `test`) | up to 5.5 | 2026-11-27 (sdag-c's matcher, asked first) |
+| R45-4 | `fused`, `fused_calls`, `addresses` become selection's addressing-mode matching | up to 4 | 2026-12-04 |
+| R45-5 | read `constants`, `extensions`, `popped_arguments`, `overwritten`, `pushes`, `high_extracts`, `sharedstores`, `transferred`, `shuttles`, `zeroed_loads`, `compares_again` against LLVM; each gets a home or a premise | | 2026-11-06 (reading), then one PR each |
+| R45-6 | `tested` into the translated `PeepholeOptimizer` (`optimizeCompareInstr`) | 1.4 | with row 45 #4, 2026-11-13 |
+| R45-7 | `machinecp::propagated`: per-instruction facts cheaper (the pin's pass is 3.4 M); owner w-3 (row 84) | up to 6 | 2026-11-13 |
 
-The sum of the upper bounds is more than the 72.5 M less the pin's counterparts' share; each PR reports what it got, as the F3 rows did.
+Each PR reports what it got on the dist build, as the F3 and TwoAddress rows did.
+
+## The 45 M outside the walk: owner and date each
+| Part | M | Owner | Date |
+|---|--:|---|---|
+| copy propagation | 10.2 | w-3, row 84 (R45-7) | 2026-11-13 |
+| shared liveness/effects facts | 12.4 | w-1, R45-8: one `LiveRows` per body, read by the sub-passes that ask; profile first | design 2026-11-13 |
+| post-RA sinks, `machinecse`, `machinedce` | 10.4 | w-2 (row 44 #24, `machinecse` step 1); `machinedce` R45-5 w-1 | 2026-11-06 |
+| hand-written non-walk passes | 12.5 | w-1, R45-5 reading, then one PR each | 2026-11-06 |
