@@ -98,14 +98,21 @@ impl Comdats {
         for section in object.sections.iter().filter(|section| section.role != Role::Debug) {
             feed(section.name.as_bytes());
             feed(&section.image);
+            let mut text = Vec::with_capacity(48);
             for reloc in &section.relocs {
                 feed(&reloc.at.to_le_bytes());
-                feed(format!("{:?}{}", reloc.target, reloc.addend).as_bytes());
+                text.clear();
+                debug_target(&mut text, reloc.target);
+                push_number(&mut text, i128::from(reloc.addend));
+                feed(&text);
             }
         }
+        let mut text = Vec::with_capacity(64);
         for symbol in &object.symbols {
             feed(symbol.name.as_bytes());
-            feed(format!("{:?}", symbol.definition).as_bytes());
+            text.clear();
+            debug_definition(&mut text, symbol.definition);
+            feed(&text);
         }
         let names = main
             .iter()
@@ -461,6 +468,61 @@ fn ledata(
     Ok(out)
 }
 
+/// `n` in decimal, as `{}` writes it.
+fn push_number(
+    text: &mut Vec<u8>,
+    n: i128,
+) {
+    let mut digits = [0u8; 40];
+    let mut at = digits.len();
+    let mut rest = n.unsigned_abs();
+    loop {
+        at -= 1;
+        digits[at] = b'0' + (rest % 10) as u8;
+        rest /= 10;
+        if rest == 0 {
+            break;
+        }
+    }
+    if n < 0 {
+        text.push(b'-');
+    }
+    text.extend_from_slice(&digits[at..]);
+}
+
+/// `{:?}` of a [`Target`], byte for byte: the module key hashes the text, and
+/// the key is in the names of local functions, so the text may not change.
+fn debug_target(
+    text: &mut Vec<u8>,
+    target: Target,
+) {
+    let (name, index) = match target {
+        Target::Symbol(index) => ("Symbol(", index),
+        Target::OmfGroup(index) => ("OmfGroup(", index),
+        Target::Section(index) => ("Section(", index),
+    };
+    text.extend_from_slice(name.as_bytes());
+    push_number(text, index as i128);
+    text.push(b')');
+}
+
+/// `{:?}` of a [`Definition`], byte for byte.
+fn debug_definition(
+    text: &mut Vec<u8>,
+    definition: Definition,
+) {
+    match definition {
+        Definition::Defined { section, offset } => {
+            text.extend_from_slice(b"Defined { section: ");
+            push_number(text, section as i128);
+            text.extend_from_slice(b", offset: ");
+            push_number(text, offset as i128);
+            text.extend_from_slice(b" }");
+        }
+        Definition::Undefined => text.extend_from_slice(b"Undefined"),
+    }
+}
+
 /// `object` as an OMF object file.
 pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
     let turbo = matches!(
@@ -682,6 +744,36 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
 
 #[cfg(test)]
 mod tests {
+    /// The module key hashes the `Debug` text of each relocation target and
+    /// symbol definition, and the key is in the names of local functions: the
+    /// text written by hand is the text `{:?}` makes, or those names change.
+    #[test]
+    fn the_hand_written_debug_text_is_the_derived_text() {
+        use llrm_object::{Definition, Target};
+
+        for index in [0usize, 7, 10, 99, 12_345, usize::MAX] {
+            for target in [Target::Symbol(index), Target::OmfGroup(index), Target::Section(index)] {
+                let mut text = Vec::new();
+                super::debug_target(&mut text, target);
+                assert_eq!(String::from_utf8(text).unwrap(), format!("{target:?}"));
+            }
+            let mut text = Vec::new();
+            super::debug_definition(&mut text, Definition::Defined { section: index, offset: index / 3 });
+            assert_eq!(
+                String::from_utf8(text).unwrap(),
+                format!("{:?}", Definition::Defined { section: index, offset: index / 3 })
+            );
+        }
+        let mut text = Vec::new();
+        super::debug_definition(&mut text, Definition::Undefined);
+        assert_eq!(text, b"Undefined");
+        for addend in [0i64, 1, -1, 4096, i64::MIN, i64::MAX] {
+            let mut text = Vec::new();
+            super::push_number(&mut text, i128::from(addend));
+            assert_eq!(String::from_utf8(text).unwrap(), addend.to_string());
+        }
+    }
+
     use llrm_object::{Arch, Binding, Reloc, Symbol};
 
     use super::*;
