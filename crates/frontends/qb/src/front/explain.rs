@@ -273,7 +273,10 @@ fn syntax(
         );
     }
     // a label or line number too large to be one
-    if place.text.len() >= 5 && place.text.chars().all(|c| c.is_ascii_digit()) && matches!(place.statement.as_str(), "GOTO" | "GOSUB" | "THEN" | "ELSE" | "RESUME" | "RESTORE" | "ON") {
+    if place.text.len() >= 5
+        && place.text.chars().all(|c| c.is_ascii_digit())
+        && (place.starts || matches!(place.statement.as_str(), "GOTO" | "GOSUB" | "THEN" | "ELSE" | "RESUME" | "RESTORE" | "ON"))
+    {
         return (
             format!("`{}` is too large for a line number", place.text),
             "use a smaller number, or a label with a name".to_owned(),

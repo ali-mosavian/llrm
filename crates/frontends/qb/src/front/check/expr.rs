@@ -42,7 +42,12 @@ impl Checker {
         let typed = self.expr(expr);
         let typed = self.scalar(typed, expr.span())?;
         if !typed.ty.numeric() {
-            self.err(expr.span(), "Type mismatch");
+            let headline = format!("`{{text}}` is {}, but a number is needed here", typed.ty.label());
+            self.err_because(
+                expr.span(),
+                "Type mismatch",
+                Reason::headline(headline).help("convert the string with VAL(...), or use a number"),
+            );
             return None;
         }
         Some(typed)

@@ -139,7 +139,7 @@ pub fn parse(
         if error.code == "Syntax error" && error.headline.is_none() && ast.blocks.last().is_some_and(|open| open.what == "TYPE") {
             error.headline = Some("this line is not a valid field of the TYPE".into());
             error.detail = Some(
-                "write each field as `name AS type`; an array field as `name(bounds) AS type`; a fixed string as `name AS STRING * length`"
+                "one field per line: write each as `name AS type`; an array field as `name(bounds) AS type`; a fixed string as `name AS STRING * length`"
                     .into(),
             );
         }
