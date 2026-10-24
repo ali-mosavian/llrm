@@ -321,7 +321,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Early | sroa<modify-cfg> | function<eager-inv> | MATCH | sroa@1179:Translated |  |  |
 | -O1 | Early | early-cse<> | function<eager-inv> | MATCH | earlycse@1180:Translated |  |  |
 | -O1 | Cleanup | mem2reg | function<eager-inv> | MATCH | promote@1241:Translated |  |  |
-| -O1 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + fold@1242:Old + dead@1242:Old |  |  |
+| -O1 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + dead@1242:Old |  |  |
 | -O1 | Cleanup | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | MATCH | decide@1244:Partial |  |  |
 | -O1 | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | sroa@646:Translated |  |  |
 | -O1 | Simplify | early-cse<memssa> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | earlycse@649:Translated |  |  |
@@ -424,7 +424,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Early | sroa<modify-cfg> | function<eager-inv> | MATCH | sroa@1179:Translated |  |  |
 | -O2 | Early | early-cse<> | function<eager-inv> | MATCH | earlycse@1180:Translated |  |  |
 | -O2 | Cleanup | mem2reg | function<eager-inv> | MATCH | promote@1241:Translated |  |  |
-| -O2 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + fold@1242:Old + dead@1242:Old |  |  |
+| -O2 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + dead@1242:Old |  |  |
 | -O2 | Cleanup | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | MATCH | decide@1244:Partial |  |  |
 | -O2 | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | sroa@646:Translated |  |  |
 | -O2 | Simplify | early-cse<memssa> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | earlycse@649:Translated |  |  |
@@ -541,7 +541,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Early | early-cse<> | function<eager-inv> | MATCH | earlycse@1180:Translated |  |  |
 | -O3 | Early | callsite-splitting | function<eager-inv> | MISSING |  | -O3 only; not measured | funcattrs-port, 11-09 |
 | -O3 | Cleanup | mem2reg | function<eager-inv> | MATCH | promote@1241:Translated |  |  |
-| -O3 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + fold@1242:Old + dead@1242:Old |  |  |
+| -O3 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + dead@1242:Old |  |  |
 | -O3 | Cleanup | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | MATCH | decide@1244:Partial |  |  |
 | -O3 | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | sroa@646:Translated |  |  |
 | -O3 | Simplify | early-cse<memssa> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | earlycse@649:Translated |  |  |
@@ -660,7 +660,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Early | sroa<modify-cfg> | function<eager-inv> | MATCH | sroa@1179:Translated |  |  |
 | -Os | Early | early-cse<> | function<eager-inv> | MATCH | earlycse@1180:Translated |  |  |
 | -Os | Cleanup | mem2reg | function<eager-inv> | MATCH | promote@1241:Translated |  |  |
-| -Os | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + fold@1242:Old + dead@1242:Old |  |  |
+| -Os | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + dead@1242:Old |  |  |
 | -Os | Cleanup | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | MATCH | decide@1244:Partial |  |  |
 | -Os | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | sroa@646:Translated |  |  |
 | -Os | Simplify | early-cse<memssa> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | earlycse@649:Translated |  |  |
