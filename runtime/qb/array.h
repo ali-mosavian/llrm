@@ -21,9 +21,9 @@ typedef struct DimCall {
     } bounds[1];
 } DimCall;
 
-enum DimMode { DIM_ALLOCATE, DIM_REALLOCATE };
+enum DimMode { DIM_ALLOCATE, DIM_REALLOCATE, DIM_PRESERVE };
 
-/* B$DDIM and B$RDIM: the asm entries (varargs.asm) call this. */
+/* B$DDIM, B$RDIM and B$RDMP: the asm entries (varargs.asm) call this. */
 void array_dim(enum DimMode mode, const DimCall *call);
 
 /* B$ERAS */

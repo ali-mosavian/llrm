@@ -225,6 +225,7 @@ struct Emitter<'a, 'd> {
     returns: Vec<(Held, llrm_lir::registers::RegId)>,
     /// (call address, callee symbol) of each direct call.
     calls: Vec<(i64, Callee)>,
+    inline_places: Vec<(i64, Vec<(usize, i64, i64)>)>,
     /// The call whose result registers have not been named yet: (block, insn).
     last_call: Option<(usize, usize)>,
     /// The nodes that read each value of a glue chain, from their operands (the
@@ -248,6 +249,11 @@ struct Emitter<'a, 'd> {
 
     /// The compares that made flags, to make them again.
     flag_insns: HashMap<u32, Arc<Insn>>,
+    /// The carry a flag producer made, saved in a byte before another unit
+    /// wrote the flags, for the `adc`/`sbb` that still reads it.
+    saved_carry: HashMap<u32, Held>,
+    /// The `CopyToReg EFLAGS` nodes emitted.
+    flag_copies_done: std::collections::HashSet<u32>,
 }
 
 /// The last lowered select: the block that branches, the one it skips, the
@@ -307,6 +313,9 @@ pub struct Emitted {
     pub classes: Vec<(u32, &'static str)>,
     /// (address, global) of each direct call.
     pub calls: Vec<(i64, Callee)>,
+    /// The frame places each inline code site patches in, by site: (byte of
+    /// the code, displacement, addend).
+    pub inline_places: Vec<(i64, Vec<(usize, i64, i64)>)>,
 }
 
 /// The LIR blocks for `units` of `dag`, in order: one, plus the three a
@@ -340,6 +349,7 @@ pub fn emit_in(
         arguments: Vec::new(),
         returns: Vec::new(),
         calls: Vec::new(),
+        inline_places: Vec::new(),
         last_call: None,
         flags_now: None,
         origins: HashMap::new(),
@@ -348,6 +358,8 @@ pub fn emit_in(
         lazy: HashMap::new(),
         last_select: None,
         flag_insns: HashMap::new(),
+        saved_carry: HashMap::new(),
+        flag_copies_done: Default::default(),
         glue_users: {
             let mut users: HashMap<SDValue, Vec<u32>> = HashMap::new();
             for (at, one) in dag.nodes().iter().enumerate() {
@@ -374,7 +386,7 @@ pub fn emit_in(
             pushed_arguments(&mut block.insns, ctx.stack_pointer, emitter.state, &mut emitter.classes)?;
         }
     }
-    Ok(Emitted { blocks, classes: emitter.classes, calls: emitter.calls })
+    Ok(Emitted { blocks, classes: emitter.classes, calls: emitter.calls, inline_places: emitter.inline_places })
 }
 
 /// Real-mode addressing has no `[sp+k]`: the arguments a call takes on the
@@ -644,7 +656,11 @@ impl Emitter<'_, '_> {
     ) -> Result<(), EmitError> {
         let node = self.dag.node(SDValue { node: n, res: 0 });
         match node.opcode {
-            ISD::CopyToReg if self.writes_flags(node.ops[1]) => self.ensure_flags(node.ops[2].node),
+            ISD::CopyToReg if self.writes_flags(node.ops[1]) => {
+                let made = self.ensure_flags(n, node.ops[2].node);
+                self.flag_copies_done.insert(n);
+                made
+            }
             ISD::CopyToReg if self.is_flags_result(node.ops[2]) => Ok(()),
             // A selector put in ES for the cells that follow: a value, taken
             // by the next cell through ES.
@@ -691,6 +707,12 @@ impl Emitter<'_, '_> {
                 let dst = self.register(node.ops[1])?;
                 let src = self.operand(node.ops[2])?;
                 self.push(Operation::Move, "mov", vec![dst], vec![src]);
+                Ok(())
+            }
+            // A runtime routine's answer in the flags (`LLRM_CALL_FLAGS`): the
+            // call left them, the branch that reads them follows.
+            ISD::CopyFromReg if self.writes_flags(node.ops[1]) => {
+                self.flags_now = Some(n);
                 Ok(())
             }
             ISD::CopyFromReg => {
@@ -757,7 +779,14 @@ impl Emitter<'_, '_> {
         n: u32,
         opcode: u32,
     ) -> Result<(), EmitError> {
+        let before = (self.blocks.len() - 1, self.blocks.last().map_or(0, |block| block.insns.len()));
+        let writes_flags = instr::desc(opcode as u16)
+            .is_some_and(|desc| desc.implicit_defs.contains(&llrm_dagisel::generated::ids::x86::EFLAGS));
+        let previous = self.flags_now.filter(|&p| p != n);
         self.machine_in(n, opcode)?;
+        if writes_flags && let Some(previous) = previous {
+            self.save_carry(previous, before);
+        }
         // What it left in EFLAGS: a compare with no result is cheap to make
         // again where a consumer needs it (`ensure_flags`).
         if instr::desc(opcode as u16)
@@ -773,6 +802,74 @@ impl Emitter<'_, '_> {
         Ok(())
     }
 
+    /// Whether the units glued after the flags copy `copy` are `adc`s and
+    /// `sbb`s: they read the carry flag and no other.
+    fn reads_only_carry(
+        &self,
+        copy: u32,
+    ) -> bool {
+        let users = self.glue_users.get(&SDValue { node: copy, res: 1 });
+        users.is_some_and(|users| {
+            !users.is_empty()
+                && users.iter().all(|&user| {
+                    let ISD::Machine(op) = self.dag.opcode(SDValue { node: user, res: 0 }) else { return false };
+                    let name = self.ctx.names.get(&(op as u16)).copied().unwrap_or("");
+                    let node = self.dag.node(SDValue { node: user, res: 0 });
+                    // The condition codes B and AE test the carry alone.
+                    let condition = if name.starts_with("CMOV_") {
+                        node.ops.get(2).and_then(|op| self.dag.constant(*op))
+                    } else if name == "SETCCr" || name == "JCC_1" {
+                        node.ops.iter().find_map(|op| self.dag.constant(*op))
+                    } else {
+                        None
+                    };
+                    name.starts_with("ADC") || name.starts_with("SBB") || matches!(condition, Some(2 | 3))
+                })
+        })
+    }
+
+    /// The carry `previous` made, put in a byte before the insns node `before`
+    /// pushed when a flags copy of it is still to come: the unit being emitted
+    /// writes the flags first.
+    fn save_carry(
+        &mut self,
+        previous: u32,
+        before: (usize, usize),
+    ) {
+        let name = if let ISD::Machine(op) = self.dag.opcode(SDValue { node: previous, res: 0 }) {
+            self.ctx.names.get(&(op as u16)).copied().unwrap_or("")
+        } else {
+            ""
+        };
+        let defines_carry = ["ADD", "ADC", "SUB", "SBB"].iter().any(|stem| name.starts_with(stem));
+        let pending = (0..self.dag.node(SDValue { node: previous, res: 0 }).values.len() as u8).any(|res| {
+            self.glue_users
+                .get(&SDValue { node: previous, res })
+                .is_some_and(
+                    |users| users
+                        .iter()
+                        .any(
+                            |&user| self.dag.opcode(SDValue { node: user, res: 0 }) == ISD::CopyToReg
+                                && self.writes_flags(self.dag.node(SDValue { node: user, res: 0 }).ops[1])
+                                && !self.flag_copies_done.contains(&user),
+                        ),
+                )
+        });
+        if !defines_carry || !pending || self.saved_carry.contains_key(&previous) {
+            return;
+        }
+        let held = self.fresh(1);
+        let what =
+            Semantics { name: Some("setb".into()), dests: vec![Loc::Held(held)], ..Semantics::new(Operation::Unary) };
+        let at = self.next_address();
+        let insn = Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![held.value], vec![]));
+        let (block, place) = before;
+        if let Some(target) = self.blocks.get_mut(block) {
+            target.insns.insert(place.min(target.insns.len()), insn);
+            self.saved_carry.insert(previous, held);
+        }
+    }
+
     /// The flags `producer` made are what EFLAGS holds for the consumer glued
     /// after this: made again if something else wrote them since. The pin's
     /// scheduler may place a flag-writing unit between a compare and the second
@@ -781,9 +878,22 @@ impl Emitter<'_, '_> {
     /// at -O2 branched on the flags of an unrelated `sub`.
     fn ensure_flags(
         &mut self,
+        copy: u32,
         producer: u32,
     ) -> Result<(), EmitError> {
         if self.flags_now == Some(producer) {
+            return Ok(());
+        }
+        // The carry of an `add` another unit's flags came between: restored
+        // from its byte (`add byte, 0xFF` carries when the byte is 1)
+        // for the `adc`/`sbb` that reads it, which reads nothing else.
+        if let Some(&saved) = self.saved_carry.get(&producer)
+            && self.reads_only_carry(copy)
+        {
+            let restored = self.fresh(1);
+            let all_ones = Imm { value: 0xFF, width: 1, address: None };
+            self.push(Operation::Binary, "add", vec![Loc::Held(restored)], vec![Loc::Held(saved), Loc::Imm(all_ones)]);
+            self.flags_now = Some(producer);
             return Ok(());
         }
         let Some(compare) = self.flag_insns.get(&producer).cloned() else {
@@ -1369,6 +1479,41 @@ impl Emitter<'_, '_> {
                 self.calls.push((at, callee));
                 return Ok(Some(()));
             }
+            // `llrm.ia16.code`: raw bytes laid down at the site, each frame
+            // place its name patches in a displacement from BP; the site is a
+            // call of the block's name to the passes, whose bytes the function
+            // adds (`dag_function`).
+            "CALL_CODE" => {
+                let NodeData::Symbol(id) = self.dag.node(node.ops[1]).data else {
+                    return Err(EmitError::Unsupported("inline code without its name".to_owned()));
+                };
+                let name = self.dag.symbol_names[id as usize].clone();
+                let (_, places) = llrm_mir::intrinsics::code(&name)
+                    .ok_or_else(|| EmitError::Unsupported("inline code that does not parse".to_owned()))?;
+                let mut patched = Vec::new();
+                for (op, (offset, addend)) in node.ops[2..].iter().zip(places) {
+                    let NodeData::FrameIndex(index) = self.dag.node(*op).data else {
+                        return Err(EmitError::Unsupported("inline code naming other than a frame place".to_owned()));
+                    };
+                    let cell = self
+                        .ctx
+                        .frame
+                        .cell(index, 2)
+                        .ok_or_else(|| EmitError::Unsupported(format!("frame index {index}")))?;
+                    let Some(addr) = cell.addr else {
+                        return Err(EmitError::Unsupported("inline code naming a place of no frame".to_owned()));
+                    };
+                    patched.push((offset, addr.disp, addend));
+                }
+                let callee = Callee::Named(name);
+                let at = self.push_call(
+                    Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) },
+                    Some(&callee),
+                );
+                self.calls.push((at, callee));
+                self.inline_places.push((at, patched));
+                return Ok(Some(()));
+            }
             // A call through a far pointer: the offset and the selector sit in
             // a four-byte cell, which the call reads (`call dword ptr [cell]`).
             "CALL_FAR" => {
@@ -1776,6 +1921,17 @@ impl Emitter<'_, '_> {
                         return Err(EmitError::Unsupported("a lea of a symbol and a scaled index at m16".to_owned()));
                     }
                     cell.base = cell.index.take();
+                }
+                // A scaled index beside a base is the 386's 32-bit form: its
+                // literal place adds nothing and has no encoding with a scale.
+                if self.ctx.address_mode == AddrMode::Real16
+                    && cell.base.is_some()
+                    && cell.index.is_some()
+                    && cell.scale != 1
+                    && cell.addr.is_some_and(|addr| addr.space == crate::model::ir::Space::Literal)
+                {
+                    cell.offset = cell.addr.map_or(cell.offset, |addr| addr.disp);
+                    cell.addr = None;
                 }
                 let held = self.fresh(width);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);

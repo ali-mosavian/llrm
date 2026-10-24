@@ -78,3 +78,19 @@ void ad_clear(AD *ad, unsigned long bytes)
     while (bytes--)
         *at++ = 0;
 }
+
+void ad_copy(AD *to, const AD *from, unsigned long bytes)
+{
+    char *at = to->data;
+    const char *source = from->data;
+
+    while (bytes--)
+        *at++ = *source++;
+}
+
+void ad_adopt(AD *to, AD *from)
+{
+    lh_entry(from->data)->owner = to;
+    to->data = from->data;
+    from->data = 0;
+}

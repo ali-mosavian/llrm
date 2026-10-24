@@ -254,6 +254,81 @@ fn built(
     })
 }
 
+/// The compare a value is, where nothing else reads it and it sits in `block`.
+fn lone_compare(
+    function: &Function,
+    operand: Operand,
+    block: Option<llrm_mir::module::BlockId>,
+) -> Option<InstId> {
+    let Operand::Value(value) = operand else { return None };
+    let llrm_mir::module::ValueDef::Instruction(inst) = function.value(value).def else { return None };
+    (function.users(value).has_one_use() && function.parent(inst) == block).then_some(inst)
+}
+
+/// `add (sext (icmp p a b)), C` made `add (zext (icmp !p a b)), C-1` for a
+/// nonzero `C`, the sign extension and the compare read once and in the add's
+/// block: `visitADDLikeCommutative` makes the sum `sub C, (zext c)` and X86's
+/// `combineSubSetcc` the inverted `setcc` plus `C-1`, an `inc` or a
+/// displacement where `C-1` is 1 (bintree's `select c, 1, 2`: `setge`,
+/// `[edi+ebx*4+4]` where `setl; neg; shl` was). How many it rewrote.
+pub fn inverted_setcc_sums(
+    context: &Context,
+    function: &mut Function,
+) -> Result<usize, String> {
+    let adds: Vec<InstId> = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| function.instruction(inst).opcode == Opcode::Binary(BinaryOp::Add))
+        .collect();
+    let mut made = 0;
+    for add in adds {
+        let op = function.instruction(add).clone();
+        let Some(width) = context.types.int_bits(op.ty) else { continue };
+        let [left, right] = op.operands[..] else { continue };
+        let (extended, sum) = match (constant(context, left), constant(context, right)) {
+            (None, Some(sum)) => (left, sum),
+            (Some(sum), None) => (right, sum),
+            _ => continue,
+        };
+        if signed(sum as u128 & mask(width), width) == 0 {
+            continue;
+        }
+        let block = function.parent(add);
+        let Some(extension) = lone_compare(function, extended, block) else { continue };
+        let ext = function.instruction(extension).clone();
+        if ext.opcode != Opcode::Cast(CastOp::SExt) {
+            continue;
+        }
+        let [condition] = ext.operands[..] else { continue };
+        let Some(compare) = lone_compare(function, condition, block) else { continue };
+        let cmp = function.instruction(compare).clone();
+        let Opcode::ICmp(predicate) = cmp.opcode else { continue };
+        let inverted = function.create_instruction(
+            Opcode::ICmp(predicate.inverse()),
+            cmp.ty,
+            cmp.operands.clone(),
+            Flags::default(),
+            None,
+        );
+        function.insert(inverted, Position::Before(add))?;
+        let flag = Operand::Value(function.instruction(inverted).result.ok_or("a compare's value")?);
+        let zero = before(function, add, Opcode::Cast(CastOp::ZExt), op.ty, vec![flag])?;
+        let less = signed((sum - 1) as u128 & mask(width), width);
+        let result = if less == 0 {
+            zero
+        } else {
+            let less = Operand::Constant(context.int(op.ty, less));
+            before(function, add, Opcode::Binary(BinaryOp::Add), op.ty, vec![zero, less])?
+        };
+        function.replace_all_uses_with(op.result.ok_or("an add's value")?, result);
+        function.erase(add)?;
+        function.erase(extension)?;
+        function.erase(compare)?;
+        made += 1;
+    }
+    Ok(made)
+}
+
 /// How a sign test selects: its value smeared into a mask and combined.
 #[derive(Clone, Copy)]
 enum Smear {
@@ -318,6 +393,8 @@ fn sign_mask(
 
 #[cfg(test)]
 mod tests {
+    use llrm_mir::interpret::{Val, run};
+
     use super::{Recipe, recipe};
 
     /// The forms clang -O2 -march=i486 gives `a < b ? 4 : 0` (`setl; shl`),
@@ -342,6 +419,42 @@ mod tests {
         assert_eq!(recipe(10, 7, 32, true), None);
         // One bit wide: left to the logic fold.
         assert_eq!(recipe(1, 0, 1, true), None);
+    }
+
+    /// bintree's `insert`: `select (a < b), 1, 2` folds to `(sext c) + 2`,
+    /// which was `setl; movzx; neg; shl 2` before the address. The pin's
+    /// `combineSubSetcc` makes it `zext (a >= b) + 1` (`setge`, the 1 a
+    /// displacement): bintree m32 -O1 93475 -> 90983 clocks. A compare read
+    /// twice, or a sum of zero, stays.
+    #[test]
+    fn test_a_sign_extended_compare_plus_a_constant_is_the_inverse_compare_plus_one_less() {
+        let text = "define i32 @f(i32 %a, i32 %b) {
+entry:
+  %c = icmp slt i32 %a, %b
+  %s = sext i1 %c to i32
+  %r = add i32 %s, 2
+  %d = icmp eq i32 %a, %b
+  %t = sext i1 %d to i32
+  %u = add i32 %t, 0
+  %v = add i32 %r, %u
+  ret i32 %v
+}
+";
+        let before = llrm_mir::parse::module(text).unwrap();
+        let mut after = before.clone();
+        let llrm_mir::module::GlobalKind::Function(function) = &mut after.globals[0].kind else { panic!("a function") };
+        assert_eq!(super::inverted_setcc_sums(&after.context, function), Ok(1));
+        let printed = llrm_mir::print::module(&after);
+        assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{printed}");
+        assert!(printed.contains("icmp sge i32 %a, %b") && !printed.contains("icmp slt"), "{printed}");
+        assert_eq!(printed.matches("sext").count(), 1, "{printed}");
+        for (a, b) in [(1, 2), (2, 1), (5, 5), (-3, 4)] {
+            let arguments = vec![
+                Val::Int { bits: a as u128 & 0xFFFF_FFFF, width: 32 },
+                Val::Int { bits: b as u128 & 0xFFFF_FFFF, width: 32 },
+            ];
+            assert_eq!(run(&after, "f", arguments.clone(), 100).unwrap(), run(&before, "f", arguments, 100).unwrap());
+        }
     }
 
     /// The difference wraps at the type's width: `i8` -128 and 127 differ by 1.

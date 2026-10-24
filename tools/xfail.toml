@@ -7,11 +7,6 @@ issue = 2848
 owner = "unassigned"
 date = "2026-10-19"
 [[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_a_constant_divisor_of_a_non_negative_counter_is_a_reciprocal_without_a_spill"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_a_raise_under_an_error_handler_resumes_after_its_statement"
 issue = 2848
 owner = "unassigned"
@@ -38,12 +33,6 @@ owner = "unassigned"
 date = "2026-10-19"
 [[xfail]]
 id = "unit llrm-qb::test_hir_part2::test_dynamic_string_array_formal_uses_adjusted_near_descriptor_base"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: other, not yet put in a family; a regression unless triage says stale (qb-reds-parity.md)"
-[[xfail]]
-id = "unit llrm-qb::test_hir_part2::test_on_error_registrations_follow_source_order"
 issue = 2848
 owner = "funcattrs-port"
 date = "2026-10-27"
