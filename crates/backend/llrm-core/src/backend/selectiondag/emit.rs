@@ -1713,34 +1713,6 @@ impl Emitter<'_, '_> {
         n: u32,
         name: &str,
     ) -> Result<Option<()>, EmitError> {
-        // A cell of 80 bits (a long double in memory) is refused until its
-        // arguments and moves are proved: long_double_arguments and
-        // long_double_constant_store printed wrong values (the front end's
-        // 12-byte slots against a 10-byte store). The 80-bit register class
-        // alone (a 64-bit integer loaded for a conversion) is the stack's own.
-        if let Some((prefix, rest)) = name.split_once("_Fp")
-            && matches!(prefix, "LD" | "ST" | "IST" | "ILD")
-        {
-            let rest = rest.strip_prefix('P').unwrap_or(rest);
-            let digits = |text: &str| text.chars().take_while(char::is_ascii_digit).collect::<String>();
-            let first = digits(rest);
-            let after = rest[first.len()..].strip_prefix('m').map(digits).unwrap_or_default();
-            let memory = match prefix {
-                "LD" => first.as_str(),
-                "ST" => {
-                    if after.is_empty() {
-                        first.as_str()
-                    } else {
-                        after.as_str()
-                    }
-                }
-                // The integer cell of `ILD`/`IST` is the first number.
-                _ => "",
-            };
-            if memory == "80" {
-                return Err(EmitError::Unsupported(format!("{name}: long double")));
-            }
-        }
         // `FP64_TO_INT32_IN_MEM`: the truncating store of a float as an
         // integer. It is `fistt` (the pin's custom inserter writes the
         // control-word dance around a `fist`); `floatalloc` makes `fistt` what

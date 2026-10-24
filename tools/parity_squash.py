@@ -496,6 +496,24 @@ def update_generated_only(head: str, branch: str, base: str = BASE, cwd: Path = 
             subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=cwd, capture_output=True)
 
 
+def merge_parity(head: str, branch: str, base: str = BASE, cwd: Path = ROOT) -> str:
+    """The sha of `head` with fresh `base` merged into it (a merge commit, no rebase), pushed to `branch` as a fast-forward; "" when the merge conflicts or the push fails. The
+    owner's conflict stays the owner's: nothing is resolved here."""
+    git("fetch", "-q", "origin", "feat/parity", cwd=cwd)
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp) / "w"
+        git("worktree", "add", "-q", "--detach", str(work), head, cwd=cwd)
+        try:
+            merged = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "merge", "--no-edit", "-q", base], cwd=work, capture_output=True, text=True)
+            if merged.returncode:
+                return ""
+            sha = git("rev-parse", "HEAD", cwd=work).strip()
+            pushed = subprocess.run(["git", "push", "-q", "origin", f"{sha}:refs/heads/{branch}"], cwd=work, capture_output=True, text=True)
+            return sha if pushed.returncode == 0 else ""
+        finally:
+            subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=cwd, capture_output=True)
+
+
 def format_head(head: str, branch: str, base: str = BASE, cwd: Path = ROOT) -> tuple[str, str]:
     """(sha, ""): `head` with tools/fmt.sh applied to the .rs files its PR changes, the result committed on top and pushed to `branch` as a fast-forward; `head` itself when it is already
     formatted. (sha, why) with sha empty when fmt.sh fails with exit 2 or more (a missing toolchain, a crash: the landing is refused) or the push fails. Every landing is formatted."""
@@ -544,7 +562,7 @@ def own_refusal(reason: str) -> bool:
     """Whether a refusal is the PR's own (its build, a test it fails alone on the head, its docs or format), which the same head will meet again, and not the batch's or the
     head's (a conflict, a stale merge base, GitHub's "head modified", a rescan after another PR was dropped), which a retry may clear."""
     return bool(reason) and not any(
-        one in reason for one in ("conflicts with", "does not contain", "Head branch was modified", "not mergeable", "the batch dropped", "waits.txt")
+        one in reason for one in ("conflicts with", "does not contain", "Head branch was modified", "Head branch is out of date", "does not merge into it cleanly", "not mergeable", "the batch dropped", "waits.txt")
     )
 
 
@@ -580,7 +598,7 @@ def waiting(number: str, path: str | None = None) -> bool:
     return number in re.sub(r"#.*", "", text).split()
 
 
-def squash(number: str, info: dict, body: str, run=subprocess.run, update=update_generated_only, settle: float = 5) -> bool | None:
+def squash(number: str, info: dict, body: str, run=subprocess.run, update=update_generated_only, settle: float = 5, merge=merge_parity) -> bool | None:
     """Squash PR `number` into feat/parity; None, with nothing pushed, when waits.txt holds it now. In fast mode a PR GitHub calls conflicting (only generated pages, regenerated) is first brought up to date on its branch, and says so in a comment."""
     if waiting(number):
         print(f"#{number}: HELD: in waits.txt now; not pushed")
@@ -594,6 +612,15 @@ def squash(number: str, info: dict, body: str, run=subprocess.run, update=update
         time.sleep(settle)  # GitHub recomputes the PR's mergeability after the push
     stage(f"squash #{number}")
     done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", info["title"], "--body", body], capture_output=True, text=True)
+    if done.returncode and "out of date" in f"{done.stderr}{done.stdout}".lower() and info.get("headRefName"):
+        # Another landing moved feat/parity between the batch and this squash: the owner did nothing. Fresh parity is merged into the head once (a merge commit, no
+        # force-push), only when it is conflict-free, and the squash retried once; a second refusal, or a conflict, is the owner's.
+        if fresh := merge(info["headRefOid"], info["headRefName"]):
+            print(f"#{number}: head out of date: merged parity {fresh[:9]}, retried")
+            time.sleep(settle)  # GitHub takes the pushed head as the PR's before a --match-head-commit squash accepts it
+            done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", fresh, "--subject", info["title"], "--body", body], capture_output=True, text=True)
+        else:
+            print(f"#{number}: head out of date and feat/parity does not merge into it cleanly: the owner merges fresh feat/parity")
     if done.returncode:
         # GitHub's own words ("Head branch was modified", "not mergeable"): a refusal that named none read `4108: REFUSED: #4108 `
         print(f"#{number}: REFUSED: the squash was refused by GitHub: {' '.join((done.stderr or done.stdout or 'no message').split())[-200:]}")

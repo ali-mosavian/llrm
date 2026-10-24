@@ -759,27 +759,6 @@ fn float_across_call(
     if floating.is_empty() {
         return None;
     }
-    // Loading a far pointer sets ES, which the stackifier counts among the
-    // instructions the x87 stack does not survive: floating values and far
-    // cells in one function are left to the old selector.
-    let far = blocks
-        .iter()
-        .flat_map(|block| block.insns.iter())
-        .filter_map(|insn| insn.what.as_ref())
-        .any(
-            |what| what.dests
-                .iter()
-                .chain(&what.sources)
-                .any(
-                    |loc| matches!(
-                        loc,
-                        crate::model::ir::Loc::Mem(cell) if cell.selector.is_some()
-                    ),
-                ),
-        );
-    if far {
-        return Some("floating values with far cells");
-    }
     // A phi of floating values is floating.
     loop {
         let before = floating.len();
@@ -842,7 +821,23 @@ fn float_across_call(
             for def in &insn.defines {
                 live.remove(def);
             }
-            if crate::backend::floatregions::clears_stack(regs, insn) && !live.is_empty() {
+            // A cell through a far pointer sets ES, which the stackifier counts
+            // among the instructions the x87 stack does not survive.
+            let far = insn
+                .what
+                .as_ref()
+                .is_some_and(
+                    |what| what.dests
+                        .iter()
+                        .chain(&what.sources)
+                        .any(
+                            |loc| matches!(
+                                loc,
+                                crate::model::ir::Loc::Mem(cell) if cell.selector.is_some()
+                            ),
+                        ),
+                );
+            if (far || crate::backend::floatregions::clears_stack(regs, insn)) && !live.is_empty() {
                 return Some("a floating value is live across an instruction that empties the x87 stack");
             }
             live.extend(insn.uses.iter().copied().filter(|value| floating.contains(value)));
