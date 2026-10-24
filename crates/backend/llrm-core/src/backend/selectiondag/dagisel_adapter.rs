@@ -380,6 +380,15 @@ impl Dag for DagisAdapter<'_> {
     ) -> bool {
         matches!(self.dag.nodes()[node as usize].opcode, ISD::Machine(_))
     }
+    fn register_of(
+        &self,
+        node: u32,
+    ) -> Option<u16> {
+        match self.dag.nodes()[node as usize].data {
+            NodeData::PhysReg(id) => pin_register(id),
+            _ => None,
+        }
+    }
     fn num_operands(
         &self,
         node: u32,

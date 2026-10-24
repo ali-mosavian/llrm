@@ -27,11 +27,43 @@ use llrm_lir::{Held, Imm, Loc, Mem, Space};
 
 use crate::model::lir::{Insn, LirBody};
 
+thread_local! {
+    /// The widest each value is named at, for the body being printed.
+    static WIDEST: std::cell::RefCell<std::collections::BTreeMap<u32, u32>> = Default::default();
+}
+
+/// A value as an operand: whole, or its low 16 or 8 bits where it is read
+/// narrower than it is held.
 fn vreg(held: &Held) -> Result<String, String> {
-    if held.width != 4 {
-        return Err(format!("a {}-byte value", held.width));
+    let widest = WIDEST.with(|w| w.borrow().get(&held.value).copied()).unwrap_or(held.width);
+    Ok(match (widest, held.width) {
+        (wide, narrow) if wide == narrow => format!("%{}", held.value),
+        (4, 2) => format!("%{}.sub_16bit", held.value),
+        (4 | 2, 1) => format!("%{}.sub_8bit", held.value),
+        (wide, narrow) => return Err(format!("value {} read at {narrow} bytes of {wide}", held.value)),
+    })
+}
+
+/// The opcode suffix of an operand of `width` bytes.
+fn bits(width: u32) -> Result<&'static str, String> {
+    match width {
+        1 => Ok("8"),
+        2 => Ok("16"),
+        4 => Ok("32"),
+        other => Err(format!("a {other}-byte operand")),
     }
-    Ok(format!("%{}", held.value))
+}
+
+/// The widest each value is named at.
+fn widths_of(body: &LirBody) -> Result<std::collections::BTreeMap<u32, u32>, String> {
+    let mut out = std::collections::BTreeMap::new();
+    for one in body.insns().iter().filter_map(|one| one.what.as_ref()) {
+        for held in one.dests.iter().chain(&one.sources).flat_map(llrm_lir::values) {
+            let wide = out.entry(held.value).or_insert(held.width);
+            *wide = (*wide).max(held.width);
+        }
+    }
+    Ok(out)
 }
 
 /// The five address operands of an x86 memory reference.
@@ -71,10 +103,22 @@ fn cell(
 }
 
 fn immediate(imm: &Imm) -> Result<i64, String> {
-    if imm.address.is_some() || imm.width != 4 {
-        return Err("a symbolic or narrow immediate".to_owned());
+    if imm.address.is_some() {
+        return Err("a symbolic immediate".to_owned());
     }
     Ok(imm.value)
+}
+
+/// The address a `mov` loads: a data segment symbol and its displacement.
+fn symbolic(
+    imm: &Imm,
+    symbols: &mut BTreeSet<i64>,
+) -> Result<String, String> {
+    let Some(addr) = imm.address.as_ref().filter(|a| a.space == Space::Segment) else {
+        return Err("an immediate address outside the data segment".to_owned());
+    };
+    symbols.insert(addr.index);
+    Ok(format!("@seg{} + {}", addr.index, addr.disp + imm.value))
 }
 
 fn condition(name: &str) -> Option<u8> {
@@ -133,30 +177,42 @@ fn instruction(
             writeln!(out, "    JCC_1 %bb.{taken}, {}, implicit $eflags", condition(jump).unwrap()).unwrap();
         }
         ("mov", Some(Loc::Held(d)), [Loc::Held(s)]) => writeln!(out, "    {} = COPY {}", vreg(d)?, vreg(s)?).unwrap(),
+        ("mov", Some(Loc::Held(d)), [Loc::Imm(i)]) if i.address.is_some() => {
+            writeln!(out, "    {} = MOV32ri {}", vreg(d)?, symbolic(i, symbols)?).unwrap()
+        }
         ("mov", Some(Loc::Held(d)), [Loc::Imm(i)]) => {
-            writeln!(out, "    {} = MOV32ri {}", vreg(d)?, immediate(i)?).unwrap()
+            writeln!(out, "    {} = MOV{}ri {}", vreg(d)?, bits(d.width)?, immediate(i)?).unwrap()
         }
         ("mov", Some(Loc::Held(d)), [Loc::Mem(m)]) => {
-            writeln!(out, "    {} = MOV32rm {}", vreg(d)?, cell(m, symbols)?).unwrap()
+            writeln!(out, "    {} = MOV{}rm {}", vreg(d)?, bits(d.width)?, cell(m, symbols)?).unwrap()
         }
         ("mov", Some(Loc::Mem(m)), [Loc::Held(s)]) => {
-            writeln!(out, "    MOV32mr {}, {}", cell(m, symbols)?, vreg(s)?).unwrap()
+            writeln!(out, "    MOV{}mr {}, {}", bits(s.width)?, cell(m, symbols)?, vreg(s)?).unwrap()
         }
         ("mov", Some(Loc::Mem(m)), [Loc::Imm(i)]) => {
-            writeln!(out, "    MOV32mi {}, {}", cell(m, symbols)?, immediate(i)?).unwrap()
+            writeln!(out, "    MOV{}mi {}, {}", bits(m.width)?, cell(m, symbols)?, immediate(i)?).unwrap()
         }
         ("lea", Some(Loc::Held(d)), [Loc::Mem(m)]) => {
-            writeln!(out, "    {} = LEA32r {}", vreg(d)?, cell(m, symbols)?).unwrap()
+            writeln!(out, "    {} = LEA{}r {}", vreg(d)?, bits(d.width)?, cell(m, symbols)?).unwrap()
         }
         ("neg", Some(Loc::Held(d)), [Loc::Held(s)]) => {
-            writeln!(out, "    {} = NEG32r {}, {eflags}", vreg(d)?, vreg(s)?).unwrap()
+            writeln!(out, "    {} = NEG{}r {}, {eflags}", vreg(d)?, bits(d.width)?, vreg(s)?).unwrap()
+        }
+        (op @ ("movsx" | "movzx"), Some(Loc::Held(d)), [source]) => {
+            let (from, operand) = match source {
+                Loc::Held(s) => (bits(s.width)?, ("rr", vreg(s)?)),
+                Loc::Mem(m) => (bits(m.width)?, ("rm", cell(m, symbols)?)),
+                _ => return Err(format!("{op} of that source")),
+            };
+            writeln!(out, "    {} = {}{}{}{from} {}", vreg(d)?, op.to_uppercase(), bits(d.width)?, operand.0, operand.1)
+                .unwrap()
         }
         ("cmp" | "test", None, [Loc::Held(a), Loc::Held(b)]) => {
-            let op = if name == "cmp" { "CMP32rr" } else { "TEST32rr" };
-            writeln!(out, "    {op} {}, {}, implicit-def $eflags", vreg(a)?, vreg(b)?).unwrap()
+            let op = if name == "cmp" { "CMP" } else { "TEST" };
+            writeln!(out, "    {op}{}rr {}, {}, implicit-def $eflags", bits(a.width)?, vreg(a)?, vreg(b)?).unwrap()
         }
         ("cmp", None, [Loc::Held(a), Loc::Imm(i)]) => {
-            writeln!(out, "    CMP32ri {}, {}, implicit-def $eflags", vreg(a)?, immediate(i)?).unwrap()
+            writeln!(out, "    CMP{}ri {}, {}, implicit-def $eflags", bits(a.width)?, vreg(a)?, immediate(i)?).unwrap()
         }
         (op @ ("add" | "sub" | "and" | "or" | "xor"), Some(Loc::Held(d)), [Loc::Held(a), rhs]) => {
             let upper = op.to_uppercase();
@@ -166,12 +222,18 @@ fn instruction(
                 Loc::Mem(m) => ("rm", cell(m, symbols)?),
                 _ => return Err(format!("{op} with that source")),
             };
-            writeln!(out, "    {} = {upper}32{form} {}, {right}, {eflags}", vreg(d)?, vreg(a)?).unwrap()
+            writeln!(out, "    {} = {upper}{}{form} {}, {right}, {eflags}", vreg(d)?, bits(d.width)?, vreg(a)?).unwrap()
         }
-        (op @ ("sar" | "shl" | "shr"), Some(Loc::Held(d)), [Loc::Held(a), Loc::Imm(i)]) => {
-            writeln!(out, "    {} = {}32ri {}, {}, {eflags}", vreg(d)?, op.to_uppercase(), vreg(a)?, immediate(i)?)
-                .unwrap()
-        }
+        (op @ ("sar" | "shl" | "shr"), Some(Loc::Held(d)), [Loc::Held(a), Loc::Imm(i)]) => writeln!(
+            out,
+            "    {} = {}{}ri {}, {}, {eflags}",
+            vreg(d)?,
+            op.to_uppercase(),
+            bits(d.width)?,
+            vreg(a)?,
+            immediate(i)?
+        )
+        .unwrap(),
         _ => return Err(format!("`{name}` with {} destinations and {} sources", what.dests.len(), what.sources.len())),
     }
     Ok(())
@@ -181,10 +243,13 @@ fn instruction(
 /// does not know.
 pub fn mir(body: &LirBody) -> Result<String, String> {
     let at: Vec<i64> = body.blocks.iter().map(|b| b.at).collect();
+    let odds = crate::liveness::blockfrequency::MachineBranchProbabilityInfo::of(body);
     let mut symbols = BTreeSet::new();
     let mut text = String::new();
     let mut widths = BTreeSet::new();
     let mut indexed = BTreeSet::new();
+    let value_widths = widths_of(body)?;
+    WIDEST.with(|w| *w.borrow_mut() = value_widths.clone());
     for (n, block) in body.blocks.iter().enumerate() {
         let targets: Vec<usize> = block
             .succ
@@ -193,7 +258,19 @@ pub fn mir(body: &LirBody) -> Result<String, String> {
             .collect::<Result<_, _>>()?;
         writeln!(text, "  bb.{n}:").unwrap();
         if !targets.is_empty() {
-            let list: Vec<String> = targets.iter().map(|t| format!("%bb.{t}")).collect();
+            // The odds llrm's own frequencies use, so the pin weighs the same
+            // blocks the same way.
+            let mut distinct: Vec<usize> = Vec::new();
+            for to in &targets {
+                if !distinct.contains(to) {
+                    distinct.push(to.to_owned());
+                }
+            }
+            let list: Vec<String> = distinct
+                .iter()
+                .enumerate()
+                .map(|(k, t)| format!("%bb.{t}(0x{:08x})", odds.get_edge_probability(n, k).get_numerator()))
+                .collect();
             writeln!(text, "    successors: {}", list.join(", ")).unwrap();
         }
         let mut jumps = 0;
@@ -228,7 +305,12 @@ pub fn mir(body: &LirBody) -> Result<String, String> {
     writeln!(out, "  define i32 @{}(i32 %a) {{\n    ret i32 0\n  }}\n...", body.name).unwrap();
     writeln!(out, "---\nname: {}\ntracksRegLiveness: true\nregisters:", body.name).unwrap();
     for v in &widths {
-        let class = if indexed.contains(v) { "gr32_nosp" } else { "gr32" };
+        let class = match (value_widths.get(v), indexed.contains(v)) {
+            (Some(1), _) => "gr8",
+            (Some(2), _) => "gr16",
+            (_, true) => "gr32_nosp",
+            _ => "gr32",
+        };
         writeln!(out, "  - {{ id: {v}, class: {class} }}").unwrap();
     }
     writeln!(out, "fixedStack:\n  - {{ id: 0, offset: 0, size: 4, alignment: 4, isImmutable: true }}\nbody: |")
@@ -291,6 +373,10 @@ mod tests {
         assert!(
             text.contains("JCC_1 %bb.1, 5, implicit $eflags\n    JMP_1 %bb.3"),
             "the taken edge, then the far fallthrough: {text}"
+        );
+        assert!(
+            text.contains("successors: %bb.1(0x"),
+            "the edges carry llrm's odds; without them the pin weighs both 50/50: {text}"
         );
         assert!(mir(&LirBody::new("none", 0, vec![], IndexMap::default(), IndexMap::default())).is_ok());
     }
