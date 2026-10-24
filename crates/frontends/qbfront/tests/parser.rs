@@ -752,9 +752,11 @@ fn resume_and_on_local_error_are_structured_control_transfers() {
     // RESUME NEXT used to parse NEXT as an expression, and ON LOCAL ERROR
     // was mistaken for the unrelated ON-dispatch statement.  Neither may be
     // represented as an ordinary user procedure call.
-    let module =
-        parse("sub t\non local error goto caught\n100 error 53\ncaught:\nresume next\nresume 100\nresume\nend sub\n", Dialect::VbDos)
-            .unwrap();
+    let module = parse(
+        "sub t\non local error goto caught\n100 error 53\ncaught:\nresume next\nresume 100\nresume\nend sub\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
     let statements = &module.procedures[0].body;
     assert!(matches!(
         &statements[0],
@@ -2140,7 +2142,9 @@ fn the_near_data_budget_is_the_targets_segment() {
 
 #[test]
 fn event_traps_keep_their_device_number_verb_and_handler() {
-    let module = parse("on timer(5) gosub tick\r\nplay on\r\nkey(2) stop\r\ntick:\r\nreturn\r\n", Dialect::QuickBasic45).unwrap();
+    let module =
+        parse("on timer(5) gosub tick\r\nplay on\r\nkey(2) stop\r\ntick:\r\nreturn\r\n", Dialect::QuickBasic45)
+            .unwrap();
     let verbs: Vec<(String, usize)> = module
         .statements
         .iter()
@@ -2156,4 +2160,24 @@ fn event_traps_keep_their_device_number_verb_and_handler() {
         })
         .collect();
     assert_eq!(verbs, [("GOSUB".to_string(), 4), ("ON".to_string(), 4), ("STOP".to_string(), 4)]);
+}
+
+#[test]
+fn an_array_field_of_a_record_takes_subscripts() {
+    // PDS 7.1 BC takes `g.q(0)` and `g.q(0) = 1` for `q(0 TO 9) AS INTEGER` in
+    // a TYPE.
+    let source = "TYPE tx\r\nq(0 TO 9) AS INTEGER\r\nEND TYPE\r\nDIM g AS tx\r\ng.q(0) = 1\r\nPRINT g.q(0)\r\n";
+    assert!(parse(source, Dialect::Pds71).is_ok());
+    assert!(parse(source, Dialect::VbDos).is_ok());
+    // two subscripts on a one-dimensional field are refused
+    assert!(parse(&source.replace("g.q(0) = 1", "g.q(0, 1) = 1"), Dialect::VbDos).is_err());
+}
+
+#[test]
+fn put_may_leave_out_its_raster_operation() {
+    let source = "DIM a(100)\r\nPUT (1, 1), a\r\n";
+    let module = parse(source, Dialect::QuickBasic45).unwrap();
+    assert!(
+        matches!(&module.statements[..], [_, Statement::Runtime { name, arguments, .. }] if name == "PUT" && arguments.len() == 3)
+    );
 }

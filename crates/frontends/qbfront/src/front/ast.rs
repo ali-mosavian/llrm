@@ -1,29 +1,31 @@
-//! The QB grammar of `qb.lalrpop` as a recursive-descent parser that builds qbfront's
-//! typed syntax (`syntax::Module`) directly, from the tokens of the logos lexer.
+//! The QB grammar of `qb.lalrpop` as a recursive-descent parser that builds
+//! qbfront's typed syntax (`syntax::Module`) directly, from the tokens of the
+//! logos lexer.
 //!
-//! The grammar's ambiguities stay where the existing parser leaves them for the semantic
-//! pass: `name(args)` is an `Apply` whether it names an array or a function; a statement
-//! `foo (a), b` is a call whose first argument is `(a)`. What this parser decides is what
-//! the syntax decides: blocks, precedence, which statement a line is.
+//! The grammar's ambiguities stay where the existing parser leaves them for the
+//! semantic pass: `name(args)` is an `Apply` whether it names an array or a
+//! function; a statement `foo (a), b` is a call whose first argument is `(a)`.
+//! What this parser decides is what the syntax decides: blocks, precedence,
+//! which statement a line is.
 
 use std::collections::BTreeSet;
-
-use crate::generated_parser::tables;
-use crate::generated_parser::{Token, TokenKind};
-use crate::syntax::{
-    Binary, Bound, CaseItem, Declaration, Expr, ExitTarget, FileAccess, FileLock, FileMode, Literal, Module, Parameter, PrintItem,
-    PrintKind, PrintSeparator, Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
-};
-use crate::Dialect;
 
 use crate::front::classes::*;
 use crate::front::kw::Kw;
 use crate::front::tokens::{terminal, Tok};
+use crate::generated_parser::tables;
+use crate::generated_parser::{Token, TokenKind};
+use crate::syntax::{
+    Binary, Bound, CaseItem, Declaration, ExitTarget, Expr, FileAccess, FileLock, FileMode, Literal, Module, Parameter,
+    PrintItem, PrintKind, PrintSeparator, Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
+};
+use crate::Dialect;
 
 /// The index of the token the parse stopped at.
 type R<T> = Result<T, usize>;
 
-/// STEP-relative coordinate pairs wrap their x in this call, as the table-driven parser does.
+/// STEP-relative coordinate pairs wrap their x in this call, as the
+/// table-driven parser does.
 pub const STEP_MARK: &str = crate::generated_parser::STEP_MARK;
 /// ON n GOTO|GOSUB's selector.
 pub const ON_SELECTOR: &str = crate::generated_parser::ON_SELECTOR;
@@ -32,12 +34,14 @@ pub const ON_SELECTOR: &str = crate::generated_parser::ON_SELECTOR;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum First {
     Full,
-    NoParen,
     Joined,
     NoErr,
 }
 
-pub fn parse(source: &str, dialect: Dialect) -> Result<Module, crate::ParseError> {
+pub fn parse(
+    source: &str,
+    dialect: Dialect,
+) -> Result<Module, crate::ParseError> {
     let fail = |span, message: &str| crate::ParseError { span, message: message.into() };
     if dialect.format_strings() {
         return Err(fail(Span { line: 1, start: 0, end: 0 }, "QuickrBASIC extensions are not in this parser"));
@@ -72,7 +76,12 @@ pub fn parse(source: &str, dialect: Dialect) -> Result<Module, crate::ParseError
 
 /// `NEXT i, j` closes two loops: it is read as `NEXT i : NEXT j`.
 fn next_lists(tokens: Vec<Token>) -> Vec<Token> {
-    let reserved = |token: &Token, name: &str| matches!(&token.kind, TokenKind::Reserved(id) if tables::token_id(name) == Some(*id));
+    let reserved = |token: &Token, name: &str| {
+        matches!(
+            &token.kind,
+            TokenKind::Reserved(id) if tables::token_id(name) == Some(*id)
+        )
+    };
     let mut out = Vec::with_capacity(tokens.len());
     let mut at = 0;
     while at < tokens.len() {
@@ -81,8 +90,11 @@ fn next_lists(tokens: Vec<Token>) -> Vec<Token> {
         at += 1;
         if reserved(token, "tkNEXT") {
             // NEXT ident , ident , …
-            while let (Some(name @ Token { kind: TokenKind::Identifier(_), .. }), Some(comma), Some(Token { kind: TokenKind::Identifier(_), .. })) =
-                (tokens.get(at), tokens.get(at + 1), tokens.get(at + 2))
+            while let (
+                Some(name @ Token { kind: TokenKind::Identifier(_), .. }),
+                Some(comma),
+                Some(Token { kind: TokenKind::Identifier(_), .. }),
+            ) = (tokens.get(at), tokens.get(at + 1), tokens.get(at + 2))
             {
                 if !reserved(comma, "tkComma") {
                     break;
@@ -97,12 +109,18 @@ fn next_lists(tokens: Vec<Token>) -> Vec<Token> {
     out
 }
 
-/// `ID AS VOLATILE TYPE`: the grammar parses the declaration without the word, so VOLATILE
-/// leaves the stream and its declaration's identifier is recorded by line and start. `BYREF`
-/// before a parameter, the default said aloud, goes too.
+/// `ID AS VOLATILE TYPE`: the grammar parses the declaration without the word,
+/// so VOLATILE leaves the stream and its declaration's identifier is recorded
+/// by line and start. `BYREF` before a parameter, the default said aloud, goes
+/// too.
 fn without_volatile(tokens: Vec<Token>) -> (Vec<Token>, BTreeSet<(usize, usize)>) {
     let reserved = |token: Option<&Token>, name: &str| {
-        token.is_some_and(|token| matches!(&token.kind, TokenKind::Reserved(id) if tables::token_id(name) == Some(*id)))
+        token.is_some_and(|token| {
+            matches!(
+                &token.kind,
+                TokenKind::Reserved(id) if tables::token_id(name) == Some(*id)
+            )
+        })
     };
     let mut kept: Vec<Token> = Vec::with_capacity(tokens.len());
     let mut marked = BTreeSet::new();
@@ -110,16 +128,20 @@ fn without_volatile(tokens: Vec<Token>) -> (Vec<Token>, BTreeSet<(usize, usize)>
         let word = |name: &str| matches!(&token.kind, TokenKind::Identifier(word) if word == name);
         if word("BYREF")
             && (reserved(kept.last(), "tkLParen") || reserved(kept.last(), "tkComma"))
-            && matches!(tokens.get(index + 1).map(|next| &next.kind), Some(TokenKind::Identifier(_)))
+            && matches!(
+                tokens.get(index + 1).map(|next| &next.kind),
+                Some(TokenKind::Identifier(_))
+            )
         {
             continue;
         }
         let types = |next: Option<&Token>| {
             next.is_some_and(|next| {
                 matches!(next.kind, TokenKind::Identifier(_))
-                    || matches!(next.kind, TokenKind::Reserved(id) if ["tkNewLine", "tkColon", "tkComma", "tkRParen"]
-                        .iter()
-                        .all(|name| tables::token_id(name) != Some(id)))
+                    || matches!(
+                        next.kind,
+                        TokenKind::Reserved(id) if ["tkNewLine", "tkColon", "tkComma", "tkRParen"] .iter() .all(|name| tables::token_id(name) != Some(id))
+                    )
             })
         };
         if word("VOLATILE") && reserved(kept.last(), "tkAS") && types(tokens.get(index + 1)) {
@@ -138,7 +160,8 @@ fn without_volatile(tokens: Vec<Token>) -> (Vec<Token>, BTreeSet<(usize, usize)>
                     }
                 }
             }
-            if let Some(Token { kind: TokenKind::Identifier(_), span }) = at.checked_sub(1).and_then(|one| kept.get(one))
+            if let Some(Token { kind: TokenKind::Identifier(_), span }) =
+                at.checked_sub(1).and_then(|one| kept.get(one))
             {
                 marked.insert((span.line, span.start));
                 continue;
@@ -159,7 +182,8 @@ struct Ast<'a> {
     dialect: Dialect,
     /// `'$DYNAMIC` is in force.
     dynamic_arrays: bool,
-    /// A line number labelled the statement after it: a `:` stands between them.
+    /// A line number labelled the statement after it: a `:` stands between
+    /// them.
     colon_pending: bool,
     /// The statements read so far, of the module or of the open procedure.
     out: Vec<Statement>,
@@ -167,7 +191,10 @@ struct Ast<'a> {
     open_procedure: Option<usize>,
 }
 
-fn span_of(a: Span, b: Span) -> Span {
+fn span_of(
+    a: Span,
+    b: Span,
+) -> Span {
     Span { line: a.line, start: a.start, end: b.end }
 }
 
@@ -206,9 +233,13 @@ fn name_of_suffix(name: &str) -> Option<TypeName> {
 }
 
 impl Ast<'_> {
-    // ---- tokens ------------------------------------------------------------------------
+    // ---- tokens
+    // ------------------------------------------------------------------------
 
-    fn kw_n(&self, n: usize) -> Option<Kw> {
+    fn kw_n(
+        &self,
+        n: usize,
+    ) -> Option<Kw> {
         match self.kinds.get(self.i + n) {
             Some(Tok::Kw(k)) => Some(*k),
             _ => None,
@@ -219,37 +250,63 @@ impl Ast<'_> {
         self.kw_n(0)
     }
 
-    fn is(&self, k: Kw) -> bool {
+    fn is(
+        &self,
+        k: Kw,
+    ) -> bool {
         self.kw() == Some(k)
     }
 
-    fn is_n(&self, n: usize, k: Kw) -> bool {
+    fn is_n(
+        &self,
+        n: usize,
+        k: Kw,
+    ) -> bool {
         self.kw_n(n) == Some(k)
     }
 
-    fn tok_n(&self, n: usize) -> Option<&Tok> {
+    fn tok_n(
+        &self,
+        n: usize,
+    ) -> Option<&Tok> {
         self.kinds.get(self.i + n)
     }
 
-    fn period_n(&self, n: usize) -> bool {
+    fn period_n(
+        &self,
+        n: usize,
+    ) -> bool {
         matches!(self.tok_n(n), Some(Tok::Period))
     }
 
-    fn eat(&mut self, k: Kw) -> bool {
+    fn eat(
+        &mut self,
+        k: Kw,
+    ) -> bool {
         let found = self.is(k);
         self.i += usize::from(found);
         found
     }
 
-    fn expect(&mut self, k: Kw) -> R<()> {
-        if self.eat(k) { Ok(()) } else { Err(self.i) }
+    fn expect(
+        &mut self,
+        k: Kw,
+    ) -> R<()> {
+        if self.eat(k) {
+            Ok(())
+        } else {
+            Err(self.i)
+        }
     }
 
     fn fail<T>(&self) -> R<T> {
         Err(self.i)
     }
 
-    fn span(&self, at: usize) -> Span {
+    fn span(
+        &self,
+        at: usize,
+    ) -> Span {
         self.tokens[at].span
     }
 
@@ -279,9 +336,12 @@ impl Ast<'_> {
         }
     }
 
-    /// The name a word spells where a name stands: an identifier, or a reserved word that is
-    /// no structural keyword.
-    fn name_at(&self, at: usize) -> Option<String> {
+    /// The name a word spells where a name stands: an identifier, or a reserved
+    /// word that is no structural keyword.
+    fn name_at(
+        &self,
+        at: usize,
+    ) -> Option<String> {
         match &self.tokens.get(at)?.kind {
             TokenKind::Identifier(name) => Some(name.clone()),
             TokenKind::Reserved(id) => contextual_reserved_name(*id),
@@ -290,7 +350,10 @@ impl Ast<'_> {
     }
 
     /// The name of a function word or a contextual one.
-    fn word_name(&self, at: usize) -> Option<String> {
+    fn word_name(
+        &self,
+        at: usize,
+    ) -> Option<String> {
         match &self.tokens.get(at)?.kind {
             TokenKind::Reserved(id) => {
                 if tables::T_FUNC_DISPATCH.iter().any(|(function, _)| function == id) {
@@ -319,18 +382,26 @@ impl Ast<'_> {
         }
     }
 
-    // ---- expressions --------------------------------------------------------------------
+    // ---- expressions
+    // --------------------------------------------------------------------
 
     fn exp(&mut self) -> R<Expr> {
         self.imp(First::Full)
     }
 
-    fn binary(op: Binary, left: Expr, right: Expr) -> Expr {
+    fn binary(
+        op: Binary,
+        left: Expr,
+        right: Expr,
+    ) -> Expr {
         let span = span_of(left.span(), right.span());
         Expr::Binary { op, left: Box::new(left), right: Box::new(right), span }
     }
 
-    fn imp(&mut self, f: First) -> R<Expr> {
+    fn imp(
+        &mut self,
+        f: First,
+    ) -> R<Expr> {
         let mut l = self.eqv(f)?;
         while self.eat(Kw::IMP) {
             let r = self.eqv(First::Full)?;
@@ -339,7 +410,10 @@ impl Ast<'_> {
         Ok(l)
     }
 
-    fn eqv(&mut self, f: First) -> R<Expr> {
+    fn eqv(
+        &mut self,
+        f: First,
+    ) -> R<Expr> {
         let mut l = self.xor(f)?;
         while self.eat(Kw::EQV) {
             let r = self.xor(First::Full)?;
@@ -348,7 +422,10 @@ impl Ast<'_> {
         Ok(l)
     }
 
-    fn xor(&mut self, f: First) -> R<Expr> {
+    fn xor(
+        &mut self,
+        f: First,
+    ) -> R<Expr> {
         let mut l = self.or(f)?;
         while self.eat(Kw::XOR) {
             let r = self.or(First::Full)?;
@@ -357,7 +434,10 @@ impl Ast<'_> {
         Ok(l)
     }
 
-    fn or(&mut self, f: First) -> R<Expr> {
+    fn or(
+        &mut self,
+        f: First,
+    ) -> R<Expr> {
         let mut l = self.and(f)?;
         while self.eat(Kw::OR) {
             let r = self.and(First::Full)?;
@@ -366,7 +446,10 @@ impl Ast<'_> {
         Ok(l)
     }
 
-    fn and(&mut self, f: First) -> R<Expr> {
+    fn and(
+        &mut self,
+        f: First,
+    ) -> R<Expr> {
         let mut l = self.not(f)?;
         while self.eat(Kw::AND) {
             let r = self.not(First::Full)?;
@@ -375,7 +458,10 @@ impl Ast<'_> {
         Ok(l)
     }
 
-    fn not(&mut self, f: First) -> R<Expr> {
+    fn not(
+        &mut self,
+        f: First,
+    ) -> R<Expr> {
         if f != First::Joined && self.injected.is_none() && self.is(Kw::NOT) {
             let at = self.take();
             let operand = self.not(First::Full)?;
@@ -397,7 +483,10 @@ impl Ast<'_> {
         }
     }
 
-    fn rel(&mut self, f: First) -> R<Expr> {
+    fn rel(
+        &mut self,
+        f: First,
+    ) -> R<Expr> {
         let mut l = self.add(f)?;
         while let Some(op) = self.rel_op() {
             self.i += 1;
@@ -407,7 +496,10 @@ impl Ast<'_> {
         Ok(l)
     }
 
-    fn add(&mut self, f: First) -> R<Expr> {
+    fn add(
+        &mut self,
+        f: First,
+    ) -> R<Expr> {
         let mut l = self.modulo(f)?;
         loop {
             let op = match self.kw() {
@@ -421,7 +513,10 @@ impl Ast<'_> {
         }
     }
 
-    fn modulo(&mut self, f: First) -> R<Expr> {
+    fn modulo(
+        &mut self,
+        f: First,
+    ) -> R<Expr> {
         let mut l = self.idiv(f)?;
         while self.eat(Kw::MOD) {
             let r = self.idiv(First::Full)?;
@@ -430,7 +525,10 @@ impl Ast<'_> {
         Ok(l)
     }
 
-    fn idiv(&mut self, f: First) -> R<Expr> {
+    fn idiv(
+        &mut self,
+        f: First,
+    ) -> R<Expr> {
         let mut l = self.mul(f)?;
         while self.eat(Kw::Idiv) {
             let r = self.mul(First::Full)?;
@@ -439,7 +537,10 @@ impl Ast<'_> {
         Ok(l)
     }
 
-    fn mul(&mut self, f: First) -> R<Expr> {
+    fn mul(
+        &mut self,
+        f: First,
+    ) -> R<Expr> {
         let mut l = self.neg(f)?;
         loop {
             let op = match self.kw() {
@@ -461,7 +562,10 @@ impl Ast<'_> {
         }
     }
 
-    fn neg(&mut self, f: First) -> R<Expr> {
+    fn neg(
+        &mut self,
+        f: First,
+    ) -> R<Expr> {
         if f != First::Joined && self.injected.is_none() {
             if let Some(op) = self.sign() {
                 let at = self.take();
@@ -473,7 +577,10 @@ impl Ast<'_> {
         self.pow(f)
     }
 
-    fn pow(&mut self, f: First) -> R<Expr> {
+    fn pow(
+        &mut self,
+        f: First,
+    ) -> R<Expr> {
         let mut l = self.prim(f)?;
         while self.eat(Kw::Pwr) {
             let r = self.pow_operand()?;
@@ -492,7 +599,10 @@ impl Ast<'_> {
         self.prim(First::Full)
     }
 
-    fn prim(&mut self, f: First) -> R<Expr> {
+    fn prim(
+        &mut self,
+        f: First,
+    ) -> R<Expr> {
         if let Some(expr) = self.injected.take() {
             return Ok(expr);
         }
@@ -520,9 +630,10 @@ impl Ast<'_> {
         let token = &self.tokens[self.i];
         let span = token.span;
         let expr = match &token.kind {
-            TokenKind::Integer(value, suffix) => {
-                Expr::Literal(Literal::Integer(*value, if *suffix == Some('&') { TypeName::Long } else { TypeName::Integer }), span)
-            }
+            TokenKind::Integer(value, suffix) => Expr::Literal(
+                Literal::Integer(*value, if *suffix == Some('&') { TypeName::Long } else { TypeName::Integer }),
+                span,
+            ),
             TokenKind::Real(value, suffix) => Expr::Literal(Literal::Real(value.clone(), real_type(*suffix)), span),
             TokenKind::String(value) => Expr::Literal(Literal::String(value.clone()), span),
             _ => return self.fail(),
@@ -531,7 +642,10 @@ impl Ast<'_> {
         Ok(expr)
     }
 
-    fn prim_base(&mut self, f: First) -> R<Expr> {
+    fn prim_base(
+        &mut self,
+        f: First,
+    ) -> R<Expr> {
         let k = match self.tok_n(0) {
             Some(Tok::Int | Tok::Real | Tok::Str) => return self.literal(),
             Some(Tok::Ident | Tok::FnWord) => return self.name_ref(),
@@ -543,7 +657,7 @@ impl Ast<'_> {
             return self.name_ref();
         }
         if k == Kw::MOD && self.period_n(1) {
-            if !matches!(f, First::Full | First::NoParen) {
+            if !matches!(f, First::Full) {
                 return self.fail();
             }
             let at = self.take();
@@ -581,8 +695,13 @@ impl Ast<'_> {
         self.fail()
     }
 
-    /// A function word before a parenthesis: `None` where the word is no function of that shape.
-    fn function(&mut self, k: Kw, c: u16) -> R<Option<Expr>> {
+    /// A function word before a parenthesis: `None` where the word is no
+    /// function of that shape.
+    fn function(
+        &mut self,
+        k: Kw,
+        c: u16,
+    ) -> R<Option<Expr>> {
         let at = self.i;
         let shaped = c & (FN1 | FN2 | FN23 | FN_BOUND | FN_REF) != 0
             || matches!(k, Kw::POINT | Kw::ERROR | Kw::INPUT_ | Kw::IOCTL_);
@@ -617,8 +736,12 @@ impl Ast<'_> {
         Ok(Some(Expr::Apply { name, arguments, span }))
     }
 
-    /// A field's name: any word, reserved or not (the checker refuses the ones the family refuses).
-    fn any_word_at(&self, at: usize) -> Option<String> {
+    /// A field's name: any word, reserved or not (the checker refuses the ones
+    /// the family refuses).
+    fn any_word_at(
+        &self,
+        at: usize,
+    ) -> Option<String> {
         match &self.tokens.get(at)?.kind {
             TokenKind::Identifier(name) => Some(name.clone()),
             TokenKind::Reserved(id) => {
@@ -629,7 +752,10 @@ impl Ast<'_> {
         }
     }
 
-    fn identifier_text(&self, at: usize) -> String {
+    fn identifier_text(
+        &self,
+        at: usize,
+    ) -> String {
         match &self.tokens[at].kind {
             TokenKind::Identifier(name) => name.clone(),
             _ => String::new(),
@@ -648,7 +774,8 @@ impl Ast<'_> {
         }
     }
 
-    /// The head of a NameRef, and whether it is already an applied form (`name(...)`).
+    /// The head of a NameRef, and whether it is already an applied form
+    /// (`name(...)`).
     fn name_base(&mut self) -> R<(Expr, bool)> {
         let at = self.i;
         let fn_word = matches!(self.tok_n(0), Some(Tok::FnWord));
@@ -742,17 +869,59 @@ impl Ast<'_> {
     }
 }
 
-/// The words that stay reserved where a name stands; every other word is a name there.
+/// The words that stay reserved where a name stands; every other word is a name
+/// there.
 fn contextual_reserved_name(id: u16) -> Option<String> {
     let spelling = tables::token_spelling(id)?.to_ascii_uppercase();
     if !spelling.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
         || matches!(
             spelling.as_str(),
-            "ALIAS" | "AND" | "AS" | "BYVAL" | "CALL" | "CASE" | "CDECL" | "CONST" | "DECLARE" | "DIM" | "DO"
-                | "ELSE" | "ELSEIF" | "END" | "EQV" | "EXIT" | "FOR" | "FUNCTION" | "GOTO" | "IF" | "IMP" | "LET"
-                | "LOOP" | "MOD" | "NEXT" | "NOT" | "OFF" | "ON" | "OPTION" | "OR" | "REM" | "SEG" | "SELECT"
-                | "SHARED" | "STATIC" | "STEP" | "STOP" | "SUB" | "THEN" | "TO" | "TYPE" | "UNTIL" | "USING" | "WEND"
-                | "WHILE" | "XOR"
+            "ALIAS"
+                | "AND"
+                | "AS"
+                | "BYVAL"
+                | "CALL"
+                | "CASE"
+                | "CDECL"
+                | "CONST"
+                | "DECLARE"
+                | "DIM"
+                | "DO"
+                | "ELSE"
+                | "ELSEIF"
+                | "END"
+                | "EQV"
+                | "EXIT"
+                | "FOR"
+                | "FUNCTION"
+                | "GOTO"
+                | "IF"
+                | "IMP"
+                | "LET"
+                | "LOOP"
+                | "MOD"
+                | "NEXT"
+                | "NOT"
+                | "OFF"
+                | "ON"
+                | "OPTION"
+                | "OR"
+                | "REM"
+                | "SEG"
+                | "SELECT"
+                | "SHARED"
+                | "STATIC"
+                | "STEP"
+                | "STOP"
+                | "SUB"
+                | "THEN"
+                | "TO"
+                | "TYPE"
+                | "UNTIL"
+                | "USING"
+                | "WEND"
+                | "WHILE"
+                | "XOR"
         )
     {
         None
@@ -761,7 +930,8 @@ fn contextual_reserved_name(id: u16) -> Option<String> {
     }
 }
 
-// ---- the module and its statements --------------------------------------------------------------
+// ---- the module and its statements
+// --------------------------------------------------------------
 
 impl Ast<'_> {
     fn module(&mut self) -> R<Module> {
@@ -783,13 +953,25 @@ impl Ast<'_> {
         if self.open_procedure.is_some() {
             return self.fail();
         }
-        Ok(Module { statements: std::mem::take(&mut self.out), procedures: std::mem::take(&mut self.procedures), prelude: false })
+        Ok(Module {
+            statements: std::mem::take(&mut self.out),
+            procedures: std::mem::take(&mut self.procedures),
+            prelude: false,
+        })
     }
 
     /// A statement read while a procedure is open belongs to its body.
-    fn route(&mut self, before: usize, procedures_before: usize, open_before: Option<usize>) {
+    fn route(
+        &mut self,
+        before: usize,
+        procedures_before: usize,
+        open_before: Option<usize>,
+    ) {
         if let Some(index) = open_before {
-            if self.open_procedure == Some(index) && self.procedures.len() == procedures_before && self.out.len() > before {
+            if self.open_procedure == Some(index)
+                && self.procedures.len() == procedures_before
+                && self.out.len() > before
+            {
                 let body = self.out.split_off(before);
                 self.procedures[index].body.extend(body);
             }
@@ -822,7 +1004,9 @@ impl Ast<'_> {
                     return self.fail();
                 }
                 // `1a:` is a single label, a line number run into a name
-                if let (Some(TokenKind::Identifier(name)), Some(Tok::Kw(Kw::Colon))) = (self.tokens.get(at + 1).map(|t| &t.kind), self.kinds.get(at + 2)) {
+                if let (Some(TokenKind::Identifier(name)), Some(Tok::Kw(Kw::Colon))) =
+                    (self.tokens.get(at + 1).map(|t| &t.kind), self.kinds.get(at + 2))
+                {
                     if self.tokens[at + 1].span.start == self.tokens[at].span.end && without_type_character(name) {
                         self.out.push(Statement::Label(format!("{value}{name}"), self.span(at)));
                         self.i += 2;
@@ -857,7 +1041,8 @@ impl Ast<'_> {
         }
     }
 
-    /// `DEFBYTE` and the `DEFU*` statements: extension words before letter ranges.
+    /// `DEFBYTE` and the `DEFU*` statements: extension words before letter
+    /// ranges.
     fn extension_statement(&mut self) -> R<()> {
         let TokenKind::ExtensionKeyword(word) = self.tokens[self.i].kind else { return self.fail() };
         let (width, signed) = match word {
@@ -872,11 +1057,19 @@ impl Ast<'_> {
 
     fn line_start(&self) -> bool {
         // after a line number, a label may follow (`1a:`)
-        self.i == 0 || self.is_prev_newline() || (self.i > 0 && matches!(self.tokens.get(self.i - 1).map(|t| &t.kind), Some(TokenKind::Integer(_, None))))
+        self.i == 0
+            || self.is_prev_newline()
+            || (self.i > 0 && matches!(
+                self.tokens.get(self.i - 1).map(|t| &t.kind),
+                Some(TokenKind::Integer(_, None))
+            ))
     }
 
     fn is_prev_newline(&self) -> bool {
-        matches!(self.kinds.get(self.i.wrapping_sub(1)), Some(Tok::Kw(Kw::NewLine)))
+        matches!(
+            self.kinds.get(self.i.wrapping_sub(1)),
+            Some(Tok::Kw(Kw::NewLine))
+        )
     }
 
     /// A statement that begins with a name: a label, an assignment, or a call.
@@ -886,10 +1079,15 @@ impl Ast<'_> {
         if let Some(done) = self.isam_statement()? {
             return Ok(done);
         }
-        if matches!(self.kinds[start], Tok::Ident) && self.line_start() && without_type_character(&self.identifier_text(start)) {
+        if matches!(self.kinds[start], Tok::Ident)
+            && self.line_start()
+            && without_type_character(&self.identifier_text(start))
+        {
             // a label: `a:` or the dotted `a.b:`
             let mut end = start + 1;
-            while matches!(self.kinds.get(end), Some(Tok::Period)) && matches!(self.kinds.get(end + 1), Some(Tok::Ident)) {
+            while matches!(self.kinds.get(end), Some(Tok::Period))
+                && matches!(self.kinds.get(end + 1), Some(Tok::Ident))
+            {
                 end += 2;
             }
             if self.kinds.get(end) == Some(&Tok::Kw(Kw::Colon)) {
@@ -914,7 +1112,12 @@ impl Ast<'_> {
             if let Expr::Field { base, name, .. } = &target {
                 if dotted_name(base).is_none() {
                     let arguments = self.call_arguments()?;
-                    self.out.push(Statement::MethodCall { object: (**base).clone(), method: name.clone(), arguments, span: start_span });
+                    self.out.push(Statement::MethodCall {
+                        object: (**base).clone(),
+                        method: name.clone(),
+                        arguments,
+                        span: start_span,
+                    });
                     return Ok(());
                 }
             }
@@ -926,7 +1129,8 @@ impl Ast<'_> {
             }
         }
         self.i = start;
-        // `a.b.Method (x) \ 2, y`: a dotted name, then arguments that may open with a parenthesis
+        // `a.b.Method (x) \ 2, y`: a dotted name, then arguments that may open
+        // with a parenthesis
         if matches!(self.tok_n(1), Some(Tok::Period)) {
             let (mut name, _) = self.identifier()?;
             while matches!(self.tok_n(0), Some(Tok::Period)) {
@@ -952,9 +1156,15 @@ impl Ast<'_> {
         matches!(self.dialect, Dialect::Pds71 | Dialect::VbDos)
     }
 
-    /// An ISAM statement (`MOVEFIRST #1`, `SEEKEQ #t, key`, `CHECKPOINT`...), if the line starts with one.
+    /// An ISAM statement (`MOVEFIRST #1`, `SEEKEQ #t, key`, `CHECKPOINT`...),
+    /// if the line starts with one.
     fn isam_statement(&mut self) -> R<Option<()>> {
-        if !matches!(self.dialect, Dialect::Pds71 | Dialect::VbDos | Dialect::Quickr) || !matches!(self.kinds[self.i], Tok::Ident) {
+        if !matches!(
+            self.dialect,
+            Dialect::Pds71 | Dialect::VbDos | Dialect::Quickr
+        )
+            || !matches!(self.kinds[self.i], Tok::Ident)
+        {
             return Ok(None);
         }
         let TokenKind::Identifier(word) = self.tokens[self.i].kind.clone() else { return Ok(None) };
@@ -994,8 +1204,8 @@ impl Ast<'_> {
         }
         let name = match word.as_str() {
             "BEGINTRANS" | "COMMITTRANS" | "CHECKPOINT" | "ROLLBACK" | "CREATEINDEX" | "DELETE" | "DELETEINDEX"
-            | "DELETETABLE" | "INSERT" | "RETRIEVE" | "UPDATE" | "MOVEFIRST" | "MOVELAST" | "MOVENEXT" | "MOVEPREVIOUS"
-            | "SEEKEQ" | "SEEKGE" | "SEEKGT" | "SETINDEX" => word,
+            | "DELETETABLE" | "INSERT" | "RETRIEVE" | "UPDATE" | "MOVEFIRST" | "MOVELAST" | "MOVENEXT"
+            | "MOVEPREVIOUS" | "SEEKEQ" | "SEEKGE" | "SEEKGT" | "SETINDEX" => word,
             _ => return Ok(None),
         };
         let span = self.span(self.i);
@@ -1005,7 +1215,10 @@ impl Ast<'_> {
             "BEGINTRANS" | "COMMITTRANS" | "CHECKPOINT" => {}
             "ROLLBACK" => {
                 // ROLLBACK ALL undoes every open transaction
-                if matches!(self.tokens.get(self.i).map(|t| &t.kind), Some(TokenKind::Identifier(word)) if word == "ALL") {
+                if matches!(
+                    self.tokens.get(self.i).map(|t| &t.kind),
+                    Some(TokenKind::Identifier(word)) if word == "ALL"
+                ) {
                     self.i += 1;
                     self.runtime("ROLLBACK_ALL", Vec::new(), span);
                     return Ok(Some(()));
@@ -1023,7 +1236,10 @@ impl Ast<'_> {
                 // [#]table, then the statement's own list
                 self.eat(Kw::Lbs);
                 arguments.push(self.exp()?);
-                let list_required = !matches!(name.as_str(), "DELETE" | "MOVEFIRST" | "MOVELAST" | "MOVENEXT" | "MOVEPREVIOUS" | "SETINDEX");
+                let list_required = !matches!(
+                    name.as_str(),
+                    "DELETE" | "MOVEFIRST" | "MOVELAST" | "MOVENEXT" | "MOVEPREVIOUS" | "SETINDEX"
+                );
                 if list_required || self.is(Kw::Comma) {
                     self.expect(Kw::Comma)?;
                     if matches!(name.as_str(), "INSERT" | "RETRIEVE" | "UPDATE") {
@@ -1055,19 +1271,34 @@ impl Ast<'_> {
     }
 }
 
-// ---- keyword statements -------------------------------------------------------------------------
+// ---- keyword statements
+// -------------------------------------------------------------------------
 
 impl Ast<'_> {
-    fn runtime(&mut self, name: &str, arguments: Vec<Expr>, span: Span) {
+    fn runtime(
+        &mut self,
+        name: &str,
+        arguments: Vec<Expr>,
+        span: Span,
+    ) {
         self.out.push(Statement::Runtime { name: name.into(), arguments, span });
     }
 
-    fn implicit_call(&mut self, name: &str, arguments: Vec<Expr>, span: Span) {
+    fn implicit_call(
+        &mut self,
+        name: &str,
+        arguments: Vec<Expr>,
+        span: Span,
+    ) {
         self.out.push(Statement::Call { name: name.into(), arguments, explicit: false, span });
     }
 
-    /// `a, , b,`: an expression where the source gave one, Omitted at the comma that closes an empty slot.
-    fn argument_list(&mut self, trailing_ok: bool) -> R<Vec<Expr>> {
+    /// `a, , b,`: an expression where the source gave one, Omitted at the comma
+    /// that closes an empty slot.
+    fn argument_list(
+        &mut self,
+        trailing_ok: bool,
+    ) -> R<Vec<Expr>> {
         let mut out = Vec::new();
         while !(self.ends_statement() || self.is(Kw::ELSE)) {
             if self.is(Kw::Comma) {
@@ -1091,7 +1322,11 @@ impl Ast<'_> {
     }
 
     fn optional_exp(&mut self) -> R<Vec<Expr>> {
-        if self.starts_exp() { Ok(vec![self.exp()?]) } else { Ok(Vec::new()) }
+        if self.starts_exp() {
+            Ok(vec![self.exp()?])
+        } else {
+            Ok(Vec::new())
+        }
     }
 
     fn starts_exp(&self) -> bool {
@@ -1102,20 +1337,28 @@ impl Ast<'_> {
                 c & (FN0 | FN_WORD | CTX_WORD) != 0
                     || (c & OBJ_WORD != 0 && self.period_n(1))
                     || (c & (FN1 | FN2 | FN23 | FN_BOUND | FN_REF) != 0 && self.is_n(1, Kw::LParen))
-                    || matches!(k, Kw::ERROR | Kw::RND | Kw::LParen | Kw::Add | Kw::Minus | Kw::NOT)
+                    || matches!(
+                        k,
+                        Kw::ERROR | Kw::RND | Kw::LParen | Kw::Add | Kw::Minus | Kw::NOT
+                    )
                     || (*k == Kw::MOD && self.period_n(1))
             }
             _ => false,
         }
     }
 
-    fn keyword_statement(&mut self, k: Kw) -> R<()> {
+    fn keyword_statement(
+        &mut self,
+        k: Kw,
+    ) -> R<()> {
         let at = self.i;
         let span = self.span(at);
         let c = class(k);
         let assigned = c & (CTX_WORD | FN_WORD | FN0_VAR) != 0 || k == Kw::ERROR;
         // (TRON and TROFF swallow the rest of their line, `= 1` and all)
-        if (assigned && self.is_n(1, Kw::EQ) && !matches!(k, Kw::TRON | Kw::TROFF)) || (c & OBJ_WORD != 0 && self.period_n(1)) {
+        if (assigned && self.is_n(1, Kw::EQ) && !matches!(k, Kw::TRON | Kw::TROFF))
+            || (c & OBJ_WORD != 0 && self.period_n(1))
+        {
             return self.name_statement();
         }
         match k {
@@ -1252,7 +1495,8 @@ impl Ast<'_> {
                 self.expect(Kw::RParen)?;
                 self.expect(Kw::EQ)?;
                 let value = self.exp()?;
-                // The table-driven parser ends the target at the last `)` read, the value's included.
+                // The table-driven parser ends the target at the last `)` read,
+                // the value's included.
                 let right_parenthesis = self.kinds[..self.i]
                     .iter()
                     .rposition(|kind| *kind == Tok::Kw(Kw::RParen))
@@ -1272,7 +1516,12 @@ impl Ast<'_> {
                 let right = self.exp()?;
                 let comparison_span = span_of(left.span(), right.span());
                 let name = if k == Kw::LSET { "LSET" } else { "RSET" };
-                let comparison = Expr::Binary { op: Binary::Eq, left: Box::new(left), right: Box::new(right), span: comparison_span };
+                let comparison = Expr::Binary {
+                    op: Binary::Eq,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                    span: comparison_span,
+                };
                 self.implicit_call(name, vec![comparison], span);
             }
             Kw::SWAP => {
@@ -1298,7 +1547,9 @@ impl Ast<'_> {
                 }
                 self.out.push(Statement::Erase(names));
             }
-            Kw::PRINT | Kw::QMark | Kw::LPRINT | Kw::WRITE => return self.print(if k == Kw::QMark { Kw::PRINT } else { k }),
+            Kw::PRINT | Kw::QMark | Kw::LPRINT | Kw::WRITE => {
+                return self.print(if k == Kw::QMark { Kw::PRINT } else { k })
+            }
             Kw::INPUT => return self.input(),
             Kw::LINE => return self.line(),
             Kw::OPEN => return self.open(),
@@ -1335,7 +1586,8 @@ impl Ast<'_> {
     }
 }
 
-// ---- blocks ---------------------------------------------------------------------------------------
+// ---- blocks
+// ---------------------------------------------------------------------------------------
 
 fn statement_end(statement: &Statement) -> usize {
     match statement {
@@ -1349,7 +1601,10 @@ fn statement_end(statement: &Statement) -> usize {
 
 impl Ast<'_> {
     /// Statements up to a line `stop` recognises, which is left unread.
-    fn collect_until(&mut self, stop: fn(&Self) -> bool) -> R<Vec<Statement>> {
+    fn collect_until(
+        &mut self,
+        stop: fn(&Self) -> bool,
+    ) -> R<Vec<Statement>> {
         let mut body = Vec::new();
         loop {
             self.skip_separators();
@@ -1386,7 +1641,12 @@ impl Ast<'_> {
         self.finish_if(condition, self.span(keyword))
     }
 
-    fn finish_if_with(&mut self, condition: Expr, keyword_span: Span, then_branch: Vec<Statement>) -> R<()> {
+    fn finish_if_with(
+        &mut self,
+        condition: Expr,
+        keyword_span: Span,
+        then_branch: Vec<Statement>,
+    ) -> R<()> {
         let mut else_branch = Vec::new();
         if self.eat(Kw::ELSE) {
             else_branch = self.single_line_branch()?;
@@ -1397,11 +1657,16 @@ impl Ast<'_> {
         Ok(())
     }
 
-    fn finish_if(&mut self, condition: Expr, keyword_span: Span) -> R<()> {
+    fn finish_if(
+        &mut self,
+        condition: Expr,
+        keyword_span: Span,
+    ) -> R<()> {
         if self.eat(Kw::NewLine) {
             return self.block_if(condition, keyword_span);
         }
-        // `IF c THEN: stmt` and `IF c THEN ELSE stmt`: the THEN branch may start with colons or be empty
+        // `IF c THEN: stmt` and `IF c THEN ELSE stmt`: the THEN branch may
+        // start with colons or be empty
         while self.eat(Kw::Colon) {}
         let then_branch = if self.is(Kw::ELSE) { Vec::new() } else { self.single_line_branch()? };
         self.finish_if_with(condition, keyword_span, then_branch)
@@ -1445,7 +1710,11 @@ impl Ast<'_> {
         Ok(branch)
     }
 
-    fn block_if(&mut self, condition: Expr, span: Span) -> R<()> {
+    fn block_if(
+        &mut self,
+        condition: Expr,
+        span: Span,
+    ) -> R<()> {
         let mut then_branch = Vec::new();
         let mut else_branch = Vec::new();
         let mut in_else = false;
@@ -1590,11 +1859,7 @@ impl Ast<'_> {
             let mut matches = Vec::new();
             if !is_else {
                 loop {
-                    let relation = if self.eat(Kw::IS) {
-                        Some(self.rel_op().ok_or(self.i)?)
-                    } else {
-                        self.rel_op()
-                    };
+                    let relation = if self.eat(Kw::IS) { Some(self.rel_op().ok_or(self.i)?) } else { self.rel_op() };
                     if let Some(relation) = relation {
                         self.i += 1;
                         matches.push(CaseItem::Relation(relation, self.exp()?));
@@ -1625,8 +1890,13 @@ impl Ast<'_> {
         Ok(())
     }
 
-    /// One DATA item: a number where it is plainly one, else the text (a quoted item without its quotes).
-    fn data_item(&self, item: &str, span: Span) -> Expr {
+    /// One DATA item: a number where it is plainly one, else the text (a quoted
+    /// item without its quotes).
+    fn data_item(
+        &self,
+        item: &str,
+        span: Span,
+    ) -> Expr {
         if let Some(rest) = item.strip_prefix('"') {
             return Expr::Literal(Literal::String(rest.split('"').next().unwrap_or("").to_owned()), span);
         }
@@ -1640,13 +1910,15 @@ impl Ast<'_> {
                 if let [Token { kind, .. }, Token { kind: TokenKind::Reserved(_), .. }] = tokens.as_slice() {
                     let literal = match kind {
                         TokenKind::Integer(value, suffix) => Some(Expr::Literal(
-                            Literal::Integer(*value, if *suffix == Some('&') { TypeName::Long } else { TypeName::Integer }),
+                            Literal::Integer(
+                                *value,
+                                if *suffix == Some('&') { TypeName::Long } else { TypeName::Integer },
+                            ),
                             span,
                         )),
-                        TokenKind::Real(text, suffix) => Some(Expr::Literal(
-                            Literal::Real(text.clone(), real_type(*suffix)),
-                            span,
-                        )),
+                        TokenKind::Real(text, suffix) => {
+                            Some(Expr::Literal(Literal::Real(text.clone(), real_type(*suffix)), span))
+                        }
                         _ => None,
                     };
                     if let Some(literal) = literal {
@@ -1661,7 +1933,8 @@ impl Ast<'_> {
         Expr::Literal(Literal::String(item.to_owned()), span)
     }
 
-    /// DATA's text as written: the items between its commas, a quoted one with its quotes dropped.
+    /// DATA's text as written: the items between its commas, a quoted one with
+    /// its quotes dropped.
     fn data_statement(&mut self) -> R<()> {
         let keyword = self.take();
         let raw_at = self.i;
@@ -1692,9 +1965,11 @@ impl Ast<'_> {
         Ok(())
     }
 
-    // ---- declarations ---------------------------------------------------------------------------------
+    // ---- declarations
+    // ---------------------------------------------------------------------------------
 
-    /// `SIGNED`/`UNSIGNED` before `BYTE`, `INTEGER` or `LONG`; both words stay names elsewhere.
+    /// `SIGNED`/`UNSIGNED` before `BYTE`, `INTEGER` or `LONG`; both words stay
+    /// names elsewhere.
     fn signed_type(&mut self) -> Option<TypeName> {
         let TokenKind::Identifier(modifier) = &self.tokens.get(self.i)?.kind else { return None };
         let signed = match modifier.as_str() {
@@ -1735,7 +2010,11 @@ impl Ast<'_> {
         Ok(type_name)
     }
 
-    fn declaration(&mut self, shared: bool, require_array: bool) -> R<Declaration> {
+    fn declaration(
+        &mut self,
+        shared: bool,
+        require_array: bool,
+    ) -> R<Declaration> {
         let at = self.i;
         let mut name = self.name_at(at).ok_or(at)?;
         if !matches!(self.tok_n(0), Some(Tok::Ident | Tok::Kw(_))) {
@@ -1791,12 +2070,18 @@ impl Ast<'_> {
         })
     }
 
-    fn declaration_statement(&mut self, k: Kw) -> R<()> {
+    fn declaration_statement(
+        &mut self,
+        k: Kw,
+    ) -> R<()> {
         self.i += 1;
         let shared = matches!(k, Kw::DIM | Kw::REDIM) && self.eat(Kw::SHARED);
         let preserve = k == Kw::REDIM
             && self.dialect_has_isam()
-            && matches!(self.tokens.get(self.i).map(|t| &t.kind), Some(TokenKind::Identifier(name)) if name == "PRESERVE")
+            && matches!(
+                self.tokens.get(self.i).map(|t| &t.kind),
+                Some(TokenKind::Identifier(name)) if name == "PRESERVE"
+            )
             && {
                 self.i += 1;
                 true
@@ -1821,8 +2106,9 @@ impl Ast<'_> {
         Ok(())
     }
 
-    /// `COMMON [SHARED] [/block/] a, b AS INTEGER`: variables a CHAINed program would keep. With no
-    /// CHAIN to carry them it declares them, shared where SHARED says so.
+    /// `COMMON [SHARED] [/block/] a, b AS INTEGER`: variables a CHAINed program
+    /// would keep. With no CHAIN to carry them it declares them, shared where
+    /// SHARED says so.
     fn common(&mut self) -> R<()> {
         self.i += 1;
         let keyword = self.i - 1;
@@ -1862,14 +2148,21 @@ impl Ast<'_> {
             self.expect(Kw::EQ)?;
             let value = self.exp()?;
             let first = self.span(at);
-            self.out.push(Statement::Const { name, span: Span { line: first.line, start: first.start, end: value.span().end }, value });
+            self.out.push(Statement::Const {
+                name,
+                span: Span { line: first.line, start: first.start, end: value.span().end },
+                value,
+            });
             if !self.eat(Kw::Comma) {
                 return Ok(());
             }
         }
     }
 
-    fn def_type(&mut self, k: Kw) -> R<()> {
+    fn def_type(
+        &mut self,
+        k: Kw,
+    ) -> R<()> {
         let type_name = match k {
             Kw::DEFINT => TypeName::Integer,
             Kw::DEFLNG => TypeName::Long,
@@ -1880,7 +2173,10 @@ impl Ast<'_> {
         self.def_type_of(type_name)
     }
 
-    fn def_type_of(&mut self, type_name: TypeName) -> R<()> {
+    fn def_type_of(
+        &mut self,
+        type_name: TypeName,
+    ) -> R<()> {
         let span = self.span(self.i);
         self.i += 1;
         let mut ranges = Vec::new();
@@ -1951,7 +2247,11 @@ impl Ast<'_> {
             if array && !self.eat(Kw::RParen) {
                 loop {
                     let first = self.exp()?;
-                    bounds.push(if self.eat(Kw::TO) { Bound { lower: Some(first), upper: self.exp()? } } else { Bound { lower: None, upper: first } });
+                    bounds.push(if self.eat(Kw::TO) {
+                        Bound { lower: Some(first), upper: self.exp()? }
+                    } else {
+                        Bound { lower: None, upper: first }
+                    });
                     if self.eat(Kw::Comma) {
                         continue;
                     }
@@ -1961,7 +2261,8 @@ impl Ast<'_> {
             }
             self.expect(Kw::AS)?;
             let type_name = self.declaration_type()?;
-            let fixed_length = if type_name == TypeName::String && self.eat(Kw::Mult) { Some(self.exp()?) } else { None };
+            let fixed_length =
+                if type_name == TypeName::String && self.eat(Kw::Mult) { Some(self.exp()?) } else { None };
             fields.push(Declaration {
                 name: field,
                 type_name: Some(type_name),
@@ -2003,7 +2304,8 @@ impl Ast<'_> {
         }
     }
 
-    // ---- procedures -----------------------------------------------------------------------------------
+    // ---- procedures
+    // -----------------------------------------------------------------------------------
 
     fn parameter(&mut self) -> R<Parameter> {
         let by_value = self.eat(Kw::BYVAL);
@@ -2045,7 +2347,8 @@ impl Ast<'_> {
         })
     }
 
-    /// Bounds in parentheses after a parameter name, to the `)`: read and dropped.
+    /// Bounds in parentheses after a parameter name, to the `)`: read and
+    /// dropped.
     fn arguments_loose(&mut self) -> R<()> {
         loop {
             self.exp()?;
@@ -2074,8 +2377,14 @@ impl Ast<'_> {
         Ok(parameters)
     }
 
-    /// `SUB name …` or `FUNCTION name …`, a definition or, after DECLARE, a declaration.
-    fn procedure(&mut self, declaration: bool, _marker: Option<()>, is_static_prefix: bool) -> R<()> {
+    /// `SUB name …` or `FUNCTION name …`, a definition or, after DECLARE, a
+    /// declaration.
+    fn procedure(
+        &mut self,
+        declaration: bool,
+        _marker: Option<()>,
+        is_static_prefix: bool,
+    ) -> R<()> {
         let keyword = self.take();
         let kind = if self.kinds[keyword] == Tok::Kw(Kw::SUB) { ProcedureKind::Sub } else { ProcedureKind::Function };
         let span = self.span(keyword);
@@ -2105,7 +2414,8 @@ impl Ast<'_> {
         let empty_list = self.is(Kw::LParen) && self.is_n(1, Kw::RParen);
         let parameters = self.parameters()?;
         if kind == ProcedureKind::Function && self.eat(Kw::AS) {
-            // a type character and an AS clause both name the result: refused; and a record is no result
+            // a type character and an AS clause both name the result: refused;
+            // and a record is no result
             if result.is_some() {
                 return self.fail();
             }
@@ -2206,10 +2516,12 @@ impl Ast<'_> {
     }
 }
 
-// ---- input and output, files, graphics, events -------------------------------------------------------
+// ---- input and output, files, graphics, events
+// -------------------------------------------------------
 
 impl Ast<'_> {
-    /// A word that can begin a PRINT item that follows another without a separator.
+    /// A word that can begin a PRINT item that follows another without a
+    /// separator.
     fn starts_joined(&self) -> bool {
         match self.tok_n(0) {
             Some(Tok::Int | Tok::Real | Tok::Str | Tok::Ident | Tok::FnWord) => true,
@@ -2224,7 +2536,10 @@ impl Ast<'_> {
         }
     }
 
-    fn print(&mut self, k: Kw) -> R<()> {
+    fn print(
+        &mut self,
+        k: Kw,
+    ) -> R<()> {
         let keyword = self.take();
         let span = self.span(keyword);
         let kind = match k {
@@ -2244,7 +2559,8 @@ impl Ast<'_> {
         while !(self.ends_statement() || self.is(Kw::ELSE)) {
             if k != Kw::WRITE && using.is_none() && self.eat(Kw::USING) {
                 using = Some(self.exp()?);
-                // `USING fmt;` must be followed by a value (a comma is "Semicolon missing")
+                // `USING fmt;` must be followed by a value (a comma is
+                // "Semicolon missing")
                 if !self.eat(Kw::SColon) || !self.starts_exp() {
                     return self.fail();
                 }
@@ -2271,7 +2587,11 @@ impl Ast<'_> {
             }
             if self.is(Kw::Comma) || self.is(Kw::SColon) {
                 let at = self.take();
-                let separator = if self.kinds[at] == Tok::Kw(Kw::Comma) { PrintSeparator::Comma } else { PrintSeparator::Semicolon };
+                let separator = if self.kinds[at] == Tok::Kw(Kw::Comma) {
+                    PrintSeparator::Comma
+                } else {
+                    PrintSeparator::Semicolon
+                };
                 items.push(PrintItem { value: Expr::Omitted(self.span(at)), separator });
                 continue;
             }
@@ -2296,8 +2616,8 @@ impl Ast<'_> {
         Ok(())
     }
 
-    /// `[#file,] [prompt ;|,]`: the file, the prompt and whether its separator was a comma,
-    /// and whether the statement began with `;`.
+    /// `[#file,] [prompt ;|,]`: the file, the prompt and whether its separator
+    /// was a comma, and whether the statement began with `;`.
     fn input_prefix(&mut self) -> R<(Option<Expr>, Option<Expr>, bool, bool)> {
         let mut file = None;
         let mut keep_cursor = false;
@@ -2350,8 +2670,12 @@ impl Ast<'_> {
         Ok((x, y, step))
     }
 
-    /// The x of a STEP-relative pair is wrapped, as the table-driven parser does.
-    fn stepped(x: Expr, step: bool) -> Expr {
+    /// The x of a STEP-relative pair is wrapped, as the table-driven parser
+    /// does.
+    fn stepped(
+        x: Expr,
+        step: bool,
+    ) -> Expr {
         if step {
             let span = x.span();
             Expr::Apply { name: STEP_MARK.into(), arguments: vec![x], span }
@@ -2360,8 +2684,12 @@ impl Ast<'_> {
         }
     }
 
-    /// `, [exp]`s after the leading arguments, an empty slot being Omitted at its comma.
-    fn rest(&mut self, trailing_ok: bool) -> R<Vec<Expr>> {
+    /// `, [exp]`s after the leading arguments, an empty slot being Omitted at
+    /// its comma.
+    fn rest(
+        &mut self,
+        trailing_ok: bool,
+    ) -> R<Vec<Expr>> {
         let mut out = Vec::new();
         while self.is(Kw::Comma) {
             let comma = self.take();
@@ -2397,7 +2725,8 @@ impl Ast<'_> {
         let mut color = None;
         let mut mode = None;
         let mut style = None;
-        // BC takes `,color,` and `,,` (nothing after the second comma); VBDOS does not (checker)
+        // BC takes `,color,` and `,,` (nothing after the second comma); VBDOS
+        // does not (checker)
         let mut trailing = false;
         if self.eat(Kw::Comma) {
             if self.starts_exp() && !self.at_box_word() {
@@ -2455,7 +2784,13 @@ impl Ast<'_> {
         let mut mode_written = false;
         let mut mode = FileMode::Random;
         // PDS and VBDOS: OPEN database FOR ISAM RecordType "table" AS [#]file
-        if self.is(Kw::FOR) && self.dialect_has_isam() && matches!(self.tokens.get(self.i + 1).map(|t| &t.kind), Some(TokenKind::Identifier(name)) if name == "ISAM") {
+        if self.is(Kw::FOR)
+            && self.dialect_has_isam()
+            && matches!(
+                self.tokens.get(self.i + 1).map(|t| &t.kind),
+                Some(TokenKind::Identifier(name)) if name == "ISAM"
+            )
+        {
             self.i += 2;
             let (record_type, _) = self.identifier()?;
             let table = self.exp()?;
@@ -2479,7 +2814,11 @@ impl Ast<'_> {
         }
         let access = if self.eat(Kw::ACCESS) {
             Some(if self.eat(Kw::READ) {
-                if self.eat(Kw::WRITE) { FileAccess::ReadWrite } else { FileAccess::Read }
+                if self.eat(Kw::WRITE) {
+                    FileAccess::ReadWrite
+                } else {
+                    FileAccess::Read
+                }
             } else {
                 self.expect(Kw::WRITE)?;
                 FileAccess::Write
@@ -2491,7 +2830,11 @@ impl Ast<'_> {
             Some(FileLock::Shared)
         } else if self.eat(Kw::LOCK) {
             Some(if self.eat(Kw::READ) {
-                if self.eat(Kw::WRITE) { FileLock::ReadWrite } else { FileLock::Read }
+                if self.eat(Kw::WRITE) {
+                    FileLock::ReadWrite
+                } else {
+                    FileLock::Read
+                }
             } else {
                 self.expect(Kw::WRITE)?;
                 FileLock::Write
@@ -2521,15 +2864,19 @@ impl Ast<'_> {
         Ok(target)
     }
 
-    fn get_put(&mut self, k: Kw) -> R<()> {
+    fn get_put(
+        &mut self,
+        k: Kw,
+    ) -> R<()> {
         let keyword = self.take();
         let span = self.span(keyword);
-        let graphic = self.is(Kw::STEP) || self.is(Kw::LParen) && {
-            let save = self.i;
-            let found = self.coordinates().is_ok();
-            self.i = save;
-            found
-        };
+        let graphic = self.is(Kw::STEP)
+            || self.is(Kw::LParen) && {
+                let save = self.i;
+                let found = self.coordinates().is_ok();
+                self.i = save;
+                found
+            };
         if graphic {
             let (x, y, step) = self.coordinates()?;
             let mut arguments = vec![Self::stepped(x, step), y];
@@ -2579,7 +2926,14 @@ impl Ast<'_> {
         Ok(())
     }
 
-    fn event(&mut self, device: &str, number: Option<Expr>, verb: &str, label: Option<(String, Span)>, span: Span) {
+    fn event(
+        &mut self,
+        device: &str,
+        number: Option<Expr>,
+        verb: &str,
+        label: Option<(String, Span)>,
+        span: Span,
+    ) {
         let arguments = vec![
             Expr::Name(device.into(), span),
             number.unwrap_or(Expr::Omitted(span)),
@@ -2598,12 +2952,16 @@ impl Ast<'_> {
         {
             self.i += 1 + usize::from(local);
             if self.eat(Kw::GOTO) {
-                let label = if matches!(self.tokens.get(self.i).map(|token| &token.kind), Some(TokenKind::Integer(0, None))) {
-                    self.i += 1;
-                    "0".to_owned()
-                } else {
-                    self.lab_ln()?.0
-                };
+                let label =
+                    if matches!(
+                        self.tokens.get(self.i).map(|token| &token.kind),
+                        Some(TokenKind::Integer(0, None))
+                    ) {
+                        self.i += 1;
+                        "0".to_owned()
+                    } else {
+                        self.lab_ln()?.0
+                    };
                 self.out.push(Statement::OnError { label, local, span });
                 return Ok(());
             }
@@ -2621,7 +2979,8 @@ impl Ast<'_> {
             Some(Kw::UEVENT) if self.is_n(1, Kw::GOSUB) => Some("UEVENT"),
             _ => None,
         };
-        // ON PEN and ON UEVENT take no argument; elsewhere they are not a selector either
+        // ON PEN and ON UEVENT take no argument; elsewhere they are not a
+        // selector either
         if named.is_none() && matches!(self.kw(), Some(Kw::PEN | Kw::UEVENT)) {
             return self.fail();
         }
@@ -2650,7 +3009,8 @@ impl Ast<'_> {
         while self.eat(Kw::Comma) {
             labels.push(self.lab_ln()?);
         }
-        // ON PLAY(n) GOSUB and ON STRIG(n) GOSUB: a trap, whose "selector" is the device call
+        // ON PLAY(n) GOSUB and ON STRIG(n) GOSUB: a trap, whose "selector" is
+        // the device call
         if gosub {
             if let Expr::Apply { name, arguments, .. } = &selector {
                 if matches!(name.as_str(), "PLAY" | "STRIG") && arguments.len() == 1 && labels.len() == 1 {
@@ -2666,7 +3026,12 @@ impl Ast<'_> {
             .enumerate()
             .map(|(index, (label, label_span))| {
                 let jump = if gosub {
-                    Statement::Call { name: "GOSUB".into(), arguments: vec![Expr::Name(label, label_span)], explicit: false, span }
+                    Statement::Call {
+                        name: "GOSUB".into(),
+                        arguments: vec![Expr::Name(label, label_span)],
+                        explicit: false,
+                        span,
+                    }
                 } else {
                     Statement::Goto(label, span)
                 };
@@ -2693,7 +3058,10 @@ impl Ast<'_> {
         Ok(verb)
     }
 
-    fn simple_statement(&mut self, k: Kw) -> R<()> {
+    fn simple_statement(
+        &mut self,
+        k: Kw,
+    ) -> R<()> {
         let keyword = self.take();
         let span = self.span(keyword);
         match k {
@@ -2913,7 +3281,13 @@ impl Ast<'_> {
             Kw::KEY => {
                 if matches!(self.kw(), Some(Kw::ON | Kw::OFF | Kw::LIST)) {
                     let at = self.take();
-                    let word = if self.kinds[at] == Tok::Kw(Kw::ON) { "ON" } else if self.kinds[at] == Tok::Kw(Kw::OFF) { "OFF" } else { "LIST" };
+                    let word = if self.kinds[at] == Tok::Kw(Kw::ON) {
+                        "ON"
+                    } else if self.kinds[at] == Tok::Kw(Kw::OFF) {
+                        "OFF"
+                    } else {
+                        "LIST"
+                    };
                     self.runtime("KEY", vec![Expr::Name(word.into(), self.span(at))], span);
                 } else {
                     let number = self.exp()?;
@@ -2928,7 +3302,8 @@ impl Ast<'_> {
                 }
             }
             Kw::LOCK | Kw::UNLOCK => {
-                // LOCK [#]file [, record | [start] TO end]: [file], [file, record] or [file, start|omitted, end]
+                // LOCK [#]file [, record | [start] TO end]: [file], [file,
+                // record] or [file, start|omitted, end]
                 self.eat(Kw::Lbs);
                 let mut arguments = vec![self.exp()?];
                 if self.eat(Kw::Comma) {
@@ -2951,7 +3326,8 @@ impl Ast<'_> {
                 self.runtime("IOCTL", vec![file, text], span);
             }
             Kw::FIELD => {
-                // FIELD [#]file, width AS variable [, width AS variable]...: [file, width, variable, ...]
+                // FIELD [#]file, width AS variable [, width AS variable]...:
+                // [file, width, variable, ...]
                 self.eat(Kw::Lbs);
                 let mut arguments = vec![self.exp()?];
                 loop {

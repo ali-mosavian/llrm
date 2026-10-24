@@ -54,8 +54,12 @@ fn dos_file(path: &Path) -> PathBuf {
     found.map_or_else(|| path.to_path_buf(), |entry| directory.join(entry.file_name()))
 }
 
-/// `name` as DOS reads a path under `directory`: `\\` separates, `..` goes up, and every part ignores case.
-fn dos_path(directory: &Path, name: &str) -> PathBuf {
+/// `name` as DOS reads a path under `directory`: `\\` separates, `..` goes up,
+/// and every part ignores case.
+fn dos_path(
+    directory: &Path,
+    name: &str,
+) -> PathBuf {
     let mut path = directory.to_path_buf();
     for part in name.split(['\\', '/']).filter(|part| !part.is_empty() && *part != ".") {
         path = if part == ".." { path.join("..") } else { dos_file(&path.join(part)) };

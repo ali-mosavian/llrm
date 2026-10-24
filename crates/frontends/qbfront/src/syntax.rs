@@ -15,7 +15,8 @@ pub enum TypeName {
     Single,
     Double,
     String,
-    /// PDS and VBDOS's `CURRENCY` (suffix `@`); the compiler lowers no such type.
+    /// PDS and VBDOS's `CURRENCY` (suffix `@`); the compiler lowers no such
+    /// type.
     Currency,
     Named(String),
     /// `SIGNED` or `UNSIGNED` before `BYTE`, `INTEGER` or `LONG`.
@@ -88,7 +89,8 @@ pub enum FileAccess {
     ReadWrite,
 }
 
-/// `OPEN … SHARED` or `LOCK READ|WRITE|READ WRITE`: what other processes may not do.
+/// `OPEN … SHARED` or `LOCK READ|WRITE|READ WRITE`: what other processes may
+/// not do.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FileLock {
     Shared,
@@ -136,7 +138,8 @@ pub struct Procedure {
     /// DEF FN and an outlined module GOSUB run in the module's variable
     /// scope; SUB and FUNCTION see only what is SHARED.
     pub module_scope: bool,
-    /// `DECLARE SUB name` with no parameter list: calls are not checked against it.
+    /// `DECLARE SUB name` with no parameter list: calls are not checked against
+    /// it.
     pub unchecked: bool,
     /// `SUB name ()` with an empty parameter list in parentheses.
     pub empty_list: bool,
@@ -381,7 +384,8 @@ pub enum Statement {
         record_length: Option<Expr>,
         span: Span,
     },
-    /// `OPEN mode$, [#]file, path$[, record length]`, the old form; the mode is a string expression.
+    /// `OPEN mode$, [#]file, path$[, record length]`, the old form; the mode is
+    /// a string expression.
     OpenClassic {
         mode: Expr,
         file: Expr,
@@ -405,7 +409,8 @@ pub enum Statement {
         write: bool,
         file: Expr,
         position: Option<Expr>,
-        /// Absent in `GET #1` and `GET #1, 5`: a RANDOM file's buffer is the record.
+        /// Absent in `GET #1` and `GET #1, 5`: a RANDOM file's buffer is the
+        /// record.
         target: Option<Expr>,
         span: Span,
     },
@@ -455,8 +460,14 @@ pub enum Statement {
         local: bool,
         span: Span,
     },
-    /// `object.Method args` where the object is an element or has a subscript on the way: `frm.list(i).Print "x"`.
-    MethodCall { object: Expr, method: String, arguments: Vec<Expr>, span: Span },
+    /// `object.Method args` where the object is an element or has a subscript
+    /// on the way: `frm.list(i).Print "x"`.
+    MethodCall {
+        object: Expr,
+        method: String,
+        arguments: Vec<Expr>,
+        span: Span,
+    },
     /// VBDOS's `'$FORM name` metacommand: the form's name is a variable.
     FormDeclaration(String, Span),
     /// PDS and VBDOS's `REDIM PRESERVE a(n)`: the array keeps its contents.
@@ -495,9 +506,11 @@ impl Statement {
 
     pub fn span(&self) -> Span {
         match self {
-            Self::Dim(items) | Self::Static(items) | Self::Shared(items) | Self::Redim(items) | Self::RedimPreserve(items) => {
-                items.first().map_or(Span { line: 0, start: 0, end: 0 }, |item| item.span)
-            }
+            Self::Dim(items)
+            | Self::Static(items)
+            | Self::Shared(items)
+            | Self::Redim(items)
+            | Self::RedimPreserve(items) => items.first().map_or(Span { line: 0, start: 0, end: 0 }, |item| item.span),
             Self::Erase(items) => items.first().map_or(Span { line: 0, start: 0, end: 0 }, Expr::span),
             Self::DefType { span, .. }
             | Self::TypeDecl { span, .. }
