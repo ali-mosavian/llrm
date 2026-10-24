@@ -187,6 +187,7 @@ pub fn block(at: i64) -> BlockId {
 
 /// `function`'s graph, in layout order.
 pub fn graph(function: &Function) -> Vec<Block> {
+    GRAPHS.with(|count| count.set(count.get() + 1));
     function
         .layout()
         .iter()
@@ -557,6 +558,13 @@ pub struct Shape {
 
 thread_local! {
     static DERIVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static GRAPHS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many whole-body graphs `graph` has built on this thread, for a test
+/// that a pass asking about a few blocks builds none.
+pub fn graphs_built() -> usize {
+    GRAPHS.with(std::cell::Cell::get)
 }
 
 /// How many shapes (or loop sets, `loops_of`) this thread has derived, for a
