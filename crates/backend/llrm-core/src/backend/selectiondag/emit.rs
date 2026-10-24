@@ -916,7 +916,18 @@ impl Emitter<'_, '_> {
             return Err(EmitError::Unsupported("flags overwritten between their producer and a consumer".to_owned()));
         };
         let at = self.next_address();
-        let again = Insn { at, covers: Some((at, at)), ..(*compare).clone() };
+        let mut again = Insn { at, covers: Some((at, at)), ..(*compare).clone() };
+        // A `sub` whose value nothing reads, made again for its flags, writes a
+        // value of its own: LIR defines each value once.
+        if let Some(what) = again.what.as_mut() {
+            for dest in &mut what.dests {
+                if let Loc::Held(held) = dest {
+                    let fresh = self.fresh(held.width);
+                    *held = fresh;
+                    again.defines = vec![fresh.value];
+                }
+            }
+        }
         self.blocks.last_mut().expect("a block").insns.push(Arc::new(again));
         self.flags_now = Some(producer);
         Ok(())
@@ -1022,7 +1033,7 @@ impl Emitter<'_, '_> {
             // a shift by `cl` has the amount as the value the `CopyToReg` glued
             // to it wrote to `CL`; the form pins that source to `cx`
             let implicit = || {
-                name.ends_with("rCL")
+                (name.ends_with("rCL") || name.ends_with("mCL"))
                     .then(|| self.accumulator.get(&llrm_lir::registers::RegId::CL).map(|held| Loc::Held(*held)))
                     .flatten()
             };
@@ -1278,7 +1289,11 @@ impl Emitter<'_, '_> {
     ) -> bool {
         self.glue_reaches(n, |name| {
             let name = name.split('|').next().unwrap_or(name);
-            matches!(name, "CDQ" | "CWD") || is_div_or_mul(name) || name.starts_with("REP_") || name.ends_with("rCL")
+            matches!(name, "CDQ" | "CWD")
+                || is_div_or_mul(name)
+                || name.starts_with("REP_")
+                || name.ends_with("rCL")
+                || name.ends_with("mCL")
         })
     }
 
