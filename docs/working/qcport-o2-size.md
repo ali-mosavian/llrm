@@ -25,3 +25,15 @@ The four largest-growth modules (bytes; "no unroll/peel", "no inline" are `-O2` 
 
 Cause: sbar +2,888 and cmd +3,910 of their -O2 are loop unrolling; inlining is 4.5 KB (sbar), 4.9 KB (cmd), 3.8 KB (mdl_ai) and 3.0 KB (sc). The comparison with Borland (296,085) is outside `qcport.py`: -O1 and no-unroll -O2 land at 302-303 KB, +2% of it.
 Steps (w-6, 2026-11-06): the unroll threshold at -O2 against the pin's (`LoopFullUnroll` at OptLevel 2) on the m16 cost model; inlining against the pin's -O2 threshold on the same modules.
+
+## New baseline after #4327 (D-I off by default), w-6, 2026-10-24
+`tools/rows/qcport.py`, defaults only, emitted OMF bytes (LEDATA) of the 65 modules, 520 compiles each side, 0 failed; base c3a880d9ec (parent of #4327), main 847141867 (#4327).
+
+| level | before | after | delta | |
+|---|--:|--:|--:|--:|
+| -O1 | 303,236 | 304,415 | +1,179 | +0.389% |
+| -O2 | 321,359 | 322,571 | +1,212 | +0.377% |
+| -O3 | 354,000 | 355,183 | +1,183 | +0.334% |
+| -Os | 262,295 | 263,383 | +1,088 | +0.415% |
+
+The expectation was +0.33..+0.42%: met at every level. The baseline for later QCport rows is the "after" column (-O2 322,571; the shipped -Os 263,383). The figures in the sections above were taken at 69b60cafc (-O2 321,138).

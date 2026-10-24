@@ -610,6 +610,13 @@ impl Dag for DagisAdapter<'_> {
     ) -> bool {
         self.dag.nodes()[node as usize].flags.has(SDNodeFlags::DISJOINT)
     }
+    fn masked_value_is_zero(
+        &self,
+        value: PinValue,
+        mask: u64,
+    ) -> bool {
+        super::known_bits::masked_value_is_zero(self.dag, ours(value), u128::from(mask))
+    }
     fn have_no_common_bits_set(
         &self,
         _: PinValue,

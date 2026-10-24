@@ -426,6 +426,10 @@ impl SelectionDAG {
         if shareable {
             self.cse.insert(key, node);
         }
+        // The morphed node reads its new operands: a later `ReplaceAllUsesWith`
+        // of one of them must reach it (the SDIVREM of a remainder used twice
+        // left the second user, a folded address, reading the unselected node).
+        self.note_uses(node);
         node
     }
 
