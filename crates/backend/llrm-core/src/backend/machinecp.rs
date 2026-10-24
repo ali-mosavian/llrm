@@ -1138,7 +1138,8 @@ pub fn propagated(body: &LirBody) -> LirBody {
         return body.clone();
     }
     let machine = Machine::new(body);
-    let dead = liveness::dead_at_exit(body);
+    // Solved when a block with a copy asks.
+    let dead = std::cell::LazyCell::new(|| liveness::dead_at_exit(body));
     let universe = liveness::_universe(machine.regs);
     let blocks: Vec<Block> = body
         .blocks

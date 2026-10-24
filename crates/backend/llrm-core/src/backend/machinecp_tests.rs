@@ -104,6 +104,17 @@ fn lines(body: &LirBody) -> Vec<String> {
     first(body).iter().map(|one| text(one)).collect()
 }
 
+/// A body with no copy was solved for liveness all the same (13 bodies, 4.5 M
+/// Ir on d_faces -O2) and came back as it was.
+#[test]
+fn test_a_body_with_no_copy_asks_for_no_liveness() {
+    let none = body(vec![add(0, rl(RegId::CX, 2), rl(RegId::DX, 2))], &[RegId::CX]);
+    let before = crate::backend::liveness::asks();
+    let got = propagated(&none);
+    assert_eq!(crate::backend::liveness::asks(), before, "a liveness solve was asked of a body with no copy");
+    assert_eq!(lines(&got), lines(&none));
+}
+
 /// A read of a copy's destination reads its source, and the copy is dead.
 #[test]
 fn test_a_read_of_a_copys_destination_reads_its_source_and_the_copy_dies() {
