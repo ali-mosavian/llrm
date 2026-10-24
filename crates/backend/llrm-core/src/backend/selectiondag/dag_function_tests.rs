@@ -1993,43 +1993,61 @@ entry:
 declare void @llvm.memset.p3.i32(ptr addrspace(3), i8, i32, i1)
 ";
 
-/// A fill of `n` bytes through a huge pointer crosses segment ends and `n`
-/// outgrows `cx`: a `rep stosb` filled only the first 64K (huge_runs gave a
-/// wrong sum). The DAG path refuses it and the old selector's stepped loop
-/// stays.
-#[test]
-fn a_memset_through_a_huge_pointer_is_refused_not_a_rep_stos() {
-    let module = llrm_mir::parse::module(M16_HUGE_MEMSET).expect("parses");
-    let refused = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
-        .err()
-        .expect("refused");
-    assert!(refused.0.contains("huge pointer"), "{}", refused.0);
-}
-
-/// `memcpy` and `memmove` through a huge pointer (destination or source) are
-/// refused like `memset`: a `rep movs` or the runtime's near routine would
-/// stop at the first segment end.
-#[test]
-fn a_memcpy_or_memmove_through_a_huge_pointer_is_refused() {
-    for (name, huge_dst) in [("memcpy", true), ("memcpy", false), ("memmove", true), ("memmove", false)] {
-        let (dst, src) = if huge_dst { ("3", "0") } else { ("0", "3") };
-        let ir = format!(
-            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+fn huge_ir(
+    name: &str,
+    dst: &str,
+    src: &str,
+    metadata: &str,
+) -> String {
+    format!(
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
 define cc 1005 void @f(ptr addrspace({dst}) %d, ptr addrspace({src}) %s, i32 %n) addrspace(1) {{
 entry:
-  call void @llvm.{name}.p{dst}.p{src}.i32(ptr addrspace({dst}) %d, ptr addrspace({src}) %s, i32 %n, i1 false)
+  call void @llvm.{name}.p{dst}.p{src}.i32(ptr addrspace({dst}) %d, ptr addrspace({src}) %s, i32 %n, i1 false){metadata}
   ret void
 }}
 declare void @llvm.{name}.p{dst}.p{src}.i32(ptr addrspace({dst}), ptr addrspace({src}), i32, i1)
 "
-        );
-        let module = llrm_mir::parse::module(&ir).expect("parses");
-        let refused =
-            selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
-                .err()
-                .unwrap_or_else(|| panic!("{name} huge_dst={huge_dst}: selected"));
-        assert!(refused.0.contains("huge pointer"), "{name} huge_dst={huge_dst}: {}", refused.0);
-    }
+    )
+}
+
+fn select_f(ir: &str) -> Result<crate::backend::isel::Selected, String> {
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .map_err(|e| e.0)
+}
+
+fn mnemonics(done: &crate::backend::isel::Selected) -> Vec<String> {
+    done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
+}
+
+/// A fill of `n` bytes through a huge pointer crosses segment ends and `n`
+/// outgrows `cx`: a `rep stosb` filled only the first 64K (huge_runs gave a
+/// wrong sum). The target's stepped routine is called inline instead, with
+/// its operands in the registers it reads (`huge_runs` was the one c program
+/// the DAG path refused).
+#[test]
+fn a_memset_through_a_huge_pointer_calls_the_stepped_routine() {
+    let ir = M16_HUGE_MEMSET.to_owned();
+    let done = select_f(&ir).unwrap_or_else(|why| panic!("{why}"));
+    let routine = llrm_target::Target::huge_fill_routine(&llrm_x86_m16::M16, 1).expect("a fill routine");
+    assert!(done.calls.values().any(|name| name == routine.name), "{:?}", done.calls);
+    assert!(done.inline.values().any(|code| *code == routine.code), "its bytes are laid down at the call");
+    assert!(!mnemonics(&done).iter().any(|m| m.starts_with("rep")), "{:?}", mnemonics(&done));
+}
+
+/// `memcpy` between huge pointers, and a `memmove` a pass proved forward or
+/// backward, call the copy routine; a `memmove` of no proven direction, or
+/// with a near pointer beside the huge one, is refused.
+#[test]
+fn a_copy_through_huge_pointers_calls_the_stepped_routine() {
+    let forward = llrm_target::Target::huge_copy_routine(&llrm_x86_m16::M16, false).expect("a copy routine");
+    let done = select_f(&huge_ir("memcpy", "3", "3", "")).unwrap_or_else(|why| panic!("{why}"));
+    assert!(done.calls.values().any(|name| name == forward.name), "{:?}", done.calls);
+    let refused = select_f(&huge_ir("memmove", "3", "3", "")).err().expect("no direction proved");
+    assert!(refused.contains("direction"), "{refused}");
+    let refused = select_f(&huge_ir("memcpy", "3", "0", "")).err().expect("a near source");
+    assert!(refused.contains("near"), "{refused}");
 }
 
 const QB_STRING_COMPARE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"

@@ -297,6 +297,15 @@ impl super::emit::Conventions for CallConventions<'_> {
         &self,
         callee: Option<&Callee>,
     ) -> Option<std::collections::BTreeSet<llrm_lir::registers::RegId>> {
+        // a huge-pointer routine changes what it states and no more
+        if let Some(Callee::Named(name)) = callee {
+            let regs = llrm_lir::registers::Regs(self.arch.registers());
+            let fills = [1u32, 2, 4].into_iter().filter_map(|cell| self.arch.huge_fill_routine(cell).ok());
+            let copies = [false, true].into_iter().filter_map(|backward| self.arch.huge_copy_routine(backward).ok());
+            if let Some(routine) = fills.chain(copies).find(|routine| routine.name == name.as_str()) {
+                return Some(routine.clobbers.iter().map(|reg| regs.root(*reg)).collect());
+            }
+        }
         let number = match callee {
             Some(Callee::Global(id)) => {
                 self.module.global(llrm_mir::context::GlobalId(*id)).function().map_or(0, |f| f.calling_convention)
@@ -841,6 +850,15 @@ fn selected_in(
             }
             let _ = places;
             inline.insert(*at, bytes);
+        }
+    }
+    // The huge-pointer routines the calls name (`huge_memory`): their bytes
+    // are laid down at the call as well.
+    for (at, name) in &calls {
+        let fills = [1u32, 2, 4].into_iter().filter_map(|cell| arch.huge_fill_routine(cell).ok());
+        let copies = [false, true].into_iter().filter_map(|backward| arch.huge_copy_routine(backward).ok());
+        if let Some(routine) = fills.chain(copies).find(|routine| routine.name == name.as_str()) {
+            inline.insert(*at, routine.code);
         }
     }
     Ok(Selected {

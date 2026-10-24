@@ -508,6 +508,73 @@ impl Builder<'_> {
         Some(())
     }
 
+    /// A fill, copy or move through a huge pointer: the target's stepped
+    /// routine (`huge_fill_routine`, `huge_copy_routine`), laid down inline at
+    /// the call with its operands in the registers it reads, as the old
+    /// selector does. A `memmove` is a copy only where a pass proved its
+    /// direction.
+    ///
+    /// DEVIATE SD311: the pin has no huge pointers; this is `isel/huge.rs`'s
+    /// routine called as a library helper with a register contract. Exit: none
+    /// (m16 only). Owner sdag-c. Review 2026-12-10.
+    fn huge_memory(
+        &mut self,
+        instruction: &Instruction,
+        which: &Intrinsic,
+    ) -> Result<(), Refused> {
+        use super::super::libcall::{CallEnv, Place, lib_call};
+        let operands = &instruction.operands;
+        let far: EVT = super::super::mvt::MVT::Far.into();
+        let word = self.target.dag.pointer;
+        let dword = |this: &mut Self, value: SDValue| {
+            let bits = this.dag.value_type(value).size_in_bits();
+            match bits {
+                32 => Some(value),
+                8 | 16 => Some(this.dag.get_node(ISD::ZeroExtend, EVT::I32, &[value])),
+                _ => None,
+            }
+        };
+        let proved = |kind: &str| instruction.metadata.iter().any(|(one, _)| one == kind);
+        let dst = self.get_value(operands[0])?;
+        let count = self.get_value(operands[2])?;
+        let count = dword(self, count).ok_or(Refused("a huge memory intrinsic of an odd length"))?;
+        if self.dag.value_type(dst) != far {
+            return Err(Refused("a huge memory intrinsic through a near destination"));
+        }
+        let [to_offset, to_selector] = self.split_value(dst, word);
+        let (routine, values) = if matches!(which, Intrinsic::MemSet) {
+            let value = self.get_value(operands[1])?;
+            let pattern = dword(self, value).ok_or(Refused("a huge fill of an odd value"))?;
+            let routine = self.arch.huge_fill_routine(1).map_err(|_| Refused("no huge fill routine"))?;
+            (routine, vec![pattern, count, to_selector, to_offset])
+        } else {
+            let backward = match (which, proved(llrm_mir::intrinsics::FORWARD), proved(llrm_mir::intrinsics::BACKWARD))
+            {
+                (Intrinsic::MemCpy, ..) | (_, true, false) => false,
+                (_, false, true) => true,
+                _ => return Err(Refused("a huge memmove whose direction no pass proved")),
+            };
+            let src = self.get_value(operands[1])?;
+            if self.dag.value_type(src) != far {
+                return Err(Refused("a huge memory intrinsic through a near source"));
+            }
+            let [from_offset, from_selector] = self.split_value(src, word);
+            let routine = self.arch.huge_copy_routine(backward).map_err(|_| Refused("no huge copy routine"))?;
+            (routine, vec![count, from_selector, from_offset, to_selector, to_offset])
+        };
+        if routine.reads.len() != values.len() {
+            return Err(Refused("a huge routine whose registers are not the operands"));
+        }
+        let args: Vec<(SDValue, Place)> =
+            values.into_iter().zip(&routine.reads).map(|(value, reg)| (value, Place::Register(*reg))).collect();
+        let callee = self.dag.get_target_external_symbol(word, routine.name);
+        let root = self.memory_root();
+        let env = CallEnv { arch: self.arch, pointer: word };
+        let (chain, _) = lib_call(&mut self.dag, &env, root, callee, &args, 0, 0, &[]);
+        self.dag.set_root(chain);
+        Ok(())
+    }
+
     fn visit_mem_intrinsic(
         &mut self,
         instruction: &Instruction,
@@ -524,8 +591,7 @@ impl Builder<'_> {
         }
         // `rep stos`/`rep movs` and the inline moves step one segment: a huge
         // pointer's run can cross the end of it (and its count outgrow
-        // `cx`), which the old selector's stepped loop handles and the
-        // DAG path does not yet (huge_runs gave wrong sums, not a refusal).
+        // `cx`), which the target's stepped routine handles.
         let huge = |this: &Self, operand: Operand| {
             matches!(
                 this.function.operand_type(&this.module.context, operand).map(|ty| this.module.context.types.get(ty)),
@@ -533,7 +599,7 @@ impl Builder<'_> {
             )
         };
         if huge(self, operands[0]) || (!matches!(which, Intrinsic::MemSet) && huge(self, operands[1])) {
-            return Err(Refused("memory intrinsic through a huge pointer"));
+            return self.huge_memory(instruction, which);
         }
         let dst = self.get_value(operands[0])?;
         let other = self.get_value(operands[1])?;
