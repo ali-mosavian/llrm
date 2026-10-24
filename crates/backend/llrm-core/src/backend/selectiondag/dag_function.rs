@@ -45,7 +45,7 @@ use llrm_target::Target;
 use super::actions::{Features, TargetLowering};
 use super::builder::{BuilderTarget, build_block};
 use super::dag_select::select_block;
-use super::emit::{Callee, EmitBlock, EmitContext, EmitState, FrameMap};
+use super::emit::{Callee, EmitBlock, EmitContext, EmitState, FrameMap, JumpTable};
 use super::function_lowering::FunctionLoweringInfo;
 use super::mvt::MVT;
 use super::opcodes::OpcodeMap;
@@ -271,6 +271,11 @@ fn successors(emitted: &[EmitBlock]) -> Vec<Vec<i64>> {
                         out.push(target);
                     }
                 }
+                for &target in &what.table {
+                    if !out.contains(&target) {
+                        out.push(target);
+                    }
+                }
             }
             let ends = block
                 .insns
@@ -315,6 +320,40 @@ fn arrived_width(
     vreg: u32,
 ) -> Option<u32> {
     widths.iter().find(|(v, _)| *v == vreg).map(|(_, w)| *w)
+}
+
+/// The fixed objects the stack parameters make, as the builder numbers them (a
+/// byval aggregate one, a cell one for each register-sized part of its value:
+/// an integer of twice the widest legal integer is two). The widest legal
+/// integer is the builder's: 16 bits was assumed at m16 after `i32` became
+/// legal there, so an `i32` got two cells and an `i64` one, and the second half
+/// of an `i64` argument was read from the next parameter's cell.
+pub(super) fn stack_cells(
+    module: &Module,
+    function: &llrm_mir::module::Function,
+    convention: &crate::backend::isel::Convention,
+    widest: u32,
+) -> Vec<i64> {
+    let mut cells = Vec::new();
+    for (at, parameter) in convention.parameters.iter().enumerate() {
+        match parameter {
+            Parameter::Bytes(disp) => cells.push(*disp),
+            Parameter::Cell(disp) => {
+                let two = function
+                    .parameters()
+                    .get(at)
+                    .is_some_and(
+                        |arg| matches!(
+                            module.context.types.get(function.value(*arg).ty),
+                            llrm_mir::types::Type::Int(bits) if *bits == 2 * widest
+                        ),
+                    );
+                cells.extend((0..if two { 2 } else { 1 }).map(|part| disp + part * i64::from(widest / 8)));
+            }
+            Parameter::Registers(_) => {}
+        }
+    }
+    cells
 }
 
 fn refuse<T>(why: impl Into<String>) -> Result<T, Unselected> {
@@ -407,26 +446,8 @@ fn selected_in(
     // integer of twice the widest register is two). Dropping a byval one
     // moved every later parameter by its size (byvalue_struct_address passed
     // the wrong address).
-    let widest = if m16 { 16 } else { 32 };
-    let mut cells = Vec::new();
-    for (at, parameter) in convention.parameters.iter().enumerate() {
-        match parameter {
-            Parameter::Bytes(disp) => cells.push(*disp),
-            Parameter::Cell(disp) => {
-                let two = function
-                    .parameters()
-                    .get(at)
-                    .is_some_and(
-                        |arg| matches!(
-                            module.context.types.get(function.value(*arg).ty),
-                            llrm_mir::types::Type::Int(bits) if *bits == 2 * widest
-                        ),
-                    );
-                cells.extend((0..if two { 2 } else { 1 }).map(|part| disp + part * i64::from(widest / 8)));
-            }
-            Parameter::Registers(_) => {}
-        }
-    }
+    let widest = *builder_target.legal_ints.iter().max().expect("a legal integer type");
+    let mut cells = stack_cells(module, function, &convention, widest);
     // `LowerFormalArguments`: the first variadic argument is the next fixed
     // object, where the convention puts the first stack argument it does not
     // name.
@@ -487,6 +508,13 @@ fn selected_in(
             work.push((id, block, extra));
         }
     }
+    // Each jump table is a data object the pool names; its entries are the
+    // addresses of the blocks.
+    let tables_of_function: Vec<JumpTable> = info
+        .jump_tables
+        .iter()
+        .map(|blocks| JumpTable { id: pool.table(), targets: blocks.iter().map(|block| block_at[block]).collect() })
+        .collect();
     let globals = Globals(module, arch.layout().spaces.roles);
     // What a call destroys: the general registers the convention does not
     // keep for the caller.
@@ -506,6 +534,7 @@ fn selected_in(
         .filter(|r| !kept.contains(r) && !frame_registers.contains(r))
         .collect();
     let ctx = EmitContext {
+        tables: &tables_of_function,
         caller_saved: &caller_saved,
         conventions: &CallConventions { module, arch },
         constants: &PoolCells(std::cell::RefCell::new(pool)),
