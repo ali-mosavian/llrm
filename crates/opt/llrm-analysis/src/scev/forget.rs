@@ -67,6 +67,7 @@ impl ScalarEvolution {
         self.unsigned_ranges.remove(&s);
         self.signed_ranges.remove(&s);
         self.constant_multiple_cache.remove(&s);
+        self.not_cache.remove(&s);
 
         // `UnsignedWrapViaInductionTried.erase(AR)` and the signed one.
         self.unsigned_wrap_via_induction_tried.remove(&s);

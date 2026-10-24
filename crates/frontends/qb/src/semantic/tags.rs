@@ -38,6 +38,8 @@ pub(super) enum Tag {
     SetSegment,
     /// A read of the DEF SEG segment, here or inside the runtime call.
     ReadSegment,
+    /// POKE: a volatile byte store through the DEF SEG segment.
+    Poke,
     /// A call to a declared SUB or FUNCTION, BASIC or not, defined in this
     /// module or not: what each argument hands the callee.
     Invoke { arguments: Vec<Passing> },
