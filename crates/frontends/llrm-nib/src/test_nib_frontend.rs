@@ -916,8 +916,13 @@ fn test_runtime_bounded_array_loop_advances_its_payload_address() {
 
     assert!(!Regex::new(r"\b(?:imul|shl|lea)\b").unwrap().is_match(&hot), "{hot}");
     assert!(function.contains("xor ax, ax"));
-    assert!(!function.contains("dec "));
-    assert!(Regex::new(r"\badd\s+(?:si|di|bx),\s*2\s*\n(?:L\w+:\n)?\s*jne\b").unwrap().is_match(&hot), "{hot}");
+    // LLVM's LSR (the default since 7ee16741c) keeps the trip counter beside
+    // the stepped address, so the loop ends on `dec cx`, not on a compare
+    // with the end address.
+    assert!(
+        Regex::new(r"\badd\s+(?:si|di|bx),\s*2\s*\n(?:\s*dec\s+cx\s*\n)?(?:L\w+:\n)?\s*jne\b").unwrap().is_match(&hot),
+        "{hot}"
+    );
 }
 
 #[test]
@@ -1105,16 +1110,17 @@ fn test_an_array_field_fills_and_copies_as_one_run_each() {
     let source = written(
         &directory,
         "field_runs.nib",
-        "struct File:\n    handle: i16\n    mut buffer: u8[128]\n    mut start: u16\n\nfn opened(h: i16) -> File:\n    return File(handle=h, buffer=[0] * 128, start=0)\n\nfn relay(h: i16) -> File:\n    let f = opened(h)\n    return f\n\nfn main() -> i16:\n    let f = relay(3)\n    let g = relay(4)\n    return f.handle + g.handle + i16(f.buffer[5])\n",
+        "struct File:\n    handle: i16\n    mut buffer: u8[128]\n    mut start: u16\n\nfn opened(h: i16) -> File:\n    return File(handle=h, buffer=[0] * 128, start=0)\n\nfn relay(h: i16) -> File:\n    let f = opened(h)\n    return f\n\n@extern(\"cdecl16\")\nfn seed() -> i16\n\nfn main() -> i16:\n    unsafe:\n        let f = relay(seed())\n        let g = relay(seed())\n        return f.handle + g.handle + i16(f.buffer[seed() & 127]) + i16(g.buffer[seed() & 127])\n",
     );
-    // `opened` is inlined into `relay`; two calls keep `relay` a function.
+    // `opened` is inlined into `relay`; with inlining off `relay` stays a
+    // function (inlined, `main` folds to the constant 7).
     let assembly = listing(&parsed(&source), "main", &O2());
-    let relay = between(&assembly, "_relay proc", "_relay endp");
+    let main = between(&assembly, "_main proc far", "_main endp");
 
-    assert!(relay.contains("rep stos"), "{relay}");
+    assert_eq!(main.matches("rep stos").count(), 2, "{main}");
     // MemCpyOpt builds the fill in the returned struct, so no copy is left.
-    assert!(!relay.contains("movs") && !Regex::new(r"\bj\w+\s").unwrap().is_match(relay), "{relay}");
-    assert!(relay.matches("byte ptr").count() < 8, "{relay}");
+    assert!(!main.contains("movs") && !Regex::new(r"\bj\w+\s").unwrap().is_match(main), "{main}");
+    assert!(main.matches("byte ptr").count() < 8, "{main}");
 }
 
 #[test]
