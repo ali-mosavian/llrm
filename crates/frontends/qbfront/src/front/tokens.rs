@@ -3,11 +3,11 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use qbfront::generated_parser::tables::TOKENS;
-use qbfront::generated_parser::{Token, TokenKind};
-use qbfront::syntax::Binary;
+use crate::generated_parser::tables::TOKENS;
+use crate::generated_parser::{Token, TokenKind};
+use crate::syntax::Binary;
 
-use crate::qb_kw::{Kw, NAMES};
+use crate::front::kw::{Kw, NAMES};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Tok {
@@ -30,7 +30,7 @@ pub enum Tok {
 }
 
 /// What the lexer can fail with, when the parser pulls tokens from it.
-pub type Failure = qbfront::LexError;
+pub type Failure = crate::LexError;
 
 pub type Spanned = Result<(usize, Tok, usize), Failure>;
 

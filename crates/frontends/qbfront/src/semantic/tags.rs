@@ -262,8 +262,7 @@ mod tests {
     /// descriptor; BC refuses it.
     #[test]
     fn test_a_redim_of_a_static_array_is_refused() {
-        let module = parse("DEFINT A-Z\nDIM a(5)\nREDIM a(10)\n", Dialect::VbDos).expect("parses");
-        let refused = built(&module, "T", Dialect::VbDos, "vbdos", &Options::default()).err().expect("refused");
+        let refused = parse("DEFINT A-Z\nDIM a(5)\nREDIM a(10)\n", Dialect::VbDos).err().expect("refused");
         assert!(refused.message.contains("already dimensioned"), "{}", refused.message);
     }
 

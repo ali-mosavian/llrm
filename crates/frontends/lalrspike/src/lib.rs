@@ -31,17 +31,17 @@ pub fn parse_nib_source(source: &str) -> Result<ast::Module, String> {
     parse_nib(&tokens)
 }
 
-pub mod qb_ast;
-pub mod qb_classes;
-pub mod qb_kw;
+pub use qbfront::front::ast as qb_ast;
+pub use qbfront::front::classes as qb_classes;
+pub use qbfront::front::kw as qb_kw;
 pub mod qb_rd;
-pub mod qb_scan;
-pub mod qb_sigs;
-pub mod qb_check;
-pub mod qb_reserved;
-pub mod qb_lexer;
-pub mod qb_words;
-pub mod qb_tokens;
+pub use qbfront::front::scan as qb_scan;
+pub use qbfront::front::sigs as qb_sigs;
+pub use qbfront::front::check as qb_check;
+pub use qbfront::front::reserved as qb_reserved;
+pub use qbfront::front::lexer as qb_lexer;
+pub use qbfront::front::words as qb_words;
+pub use qbfront::front::tokens as qb_tokens;
 pub mod qb_tree;
 
 #[allow(clippy::all, unused)]

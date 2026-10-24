@@ -4147,8 +4147,9 @@ impl Compiler {
                         }
                     }
                     "GET" | "PUT" => {
-                        let expected = if name == "GET" { 5 } else { 4 };
-                        if arguments.len() != expected {
+                        // PUT's raster operation may be left out: XOR
+                        let expected = if name == "GET" { 5..=5 } else { 3..=4 };
+                        if !expected.contains(&arguments.len()) {
                             return self.fail(format!("graphics {name} has the wrong number of operands"));
                         }
                         self.graphics_coordinate(1, &arguments[0], &arguments[1])?;
@@ -4160,10 +4161,11 @@ impl Compiler {
                         };
                         let mut operands = self.graphics_array(&arguments[array_index])?;
                         if name == "PUT" {
-                            let mode = match &arguments[3] {
+                            let mode = match arguments.get(3) {
+                                None => 4,
                                 // getput.asm's PutGetInit table, not its
                                 // header comment.
-                                Expr::Name(mode, _) => match canonical(mode) {
+                                Some(Expr::Name(mode, _)) => match canonical(mode) {
                                     "OR" => 0,
                                     "AND" => 1,
                                     "PRESET" => 2,
@@ -4171,7 +4173,7 @@ impl Compiler {
                                     "XOR" => 4,
                                     _ => return self.fail("graphics PUT mode is not recognized"),
                                 },
-                                _ => return self.fail("graphics PUT requires a raster operation"),
+                                Some(_) => return self.fail("graphics PUT requires a raster operation"),
                             };
                             operands.push(Operand::Constant(INTEGER, Number::Integer(mode)));
                         }
