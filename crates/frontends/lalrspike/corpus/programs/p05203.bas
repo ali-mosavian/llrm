@@ -1,0 +1,6 @@
+TYPE R
+a(3) AS INTEGER
+END TYPE
+DIM r AS R
+DEF FNa% = r.a(1)
+PRINT FNa%

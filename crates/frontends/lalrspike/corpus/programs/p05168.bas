@@ -1,0 +1,10 @@
+CONST CONSTN = 4
+TYPE Inner
+q AS INTEGER
+END TYPE
+TYPE Rec
+a(5) AS Inner
+END TYPE
+DIM r AS Rec
+DIM n AS INTEGER
+r.a(1) = 1

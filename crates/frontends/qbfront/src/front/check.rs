@@ -150,6 +150,8 @@ struct Scope {
 struct Record {
     /// name, type, and the number of dimensions of an array field
     fields: Vec<(String, Ty, Option<usize>)>,
+    /// the record's size in bytes
+    bytes: usize,
     /// VBDOS's FORM and CONTROL: any property name goes.
     opaque: bool,
 }
@@ -725,6 +727,26 @@ fn collect_label_names(
 // ---- expressions
 // ---------------------------------------------------------------------------------------
 
+/// The names an expression reads.
+fn free_names(
+    expr: &Expr,
+    out: &mut Vec<String>,
+) {
+    match expr {
+        Expr::Name(name, _) => out.push(name.clone()),
+        Expr::Apply { name, arguments, .. } => {
+            out.push(name.clone());
+            arguments.iter().for_each(|one| free_names(one, out));
+        }
+        Expr::Unary { operand, .. } => free_names(operand, out),
+        Expr::Binary { left, right, .. } => {
+            free_names(left, out);
+            free_names(right, out);
+        }
+        _ => {}
+    }
+}
+
 fn dotted(expr: &Expr) -> Option<String> {
     match expr {
         Expr::Name(name, _) => Some(name.clone()),
@@ -831,6 +853,10 @@ impl Checker {
                 let base_typed = self.expr(base)?;
                 // an element of an array field of a record
                 if let (Expr::Field { .. }, Some(rank)) = (&**base, self.field_rank.take()) {
+                    // `r.a()` names the whole array
+                    if indices.is_empty() {
+                        return Some(base_typed);
+                    }
                     let mut ok = true;
                     for index in indices {
                         ok &= self.numeric(index).is_some();
@@ -1007,7 +1033,7 @@ impl Checker {
             self.err(span, "Type mismatch");
             return None;
         };
-        let record = self.records.get(record).cloned().unwrap_or(Record { fields: Vec::new(), opaque: true });
+        let record = self.records.get(record).cloned().unwrap_or(Record { fields: Vec::new(), opaque: true, bytes: 0 });
         if record.opaque {
             return Some(Typed { ty: Ty::Variant, variable: true, constant: None, array: None });
         }
@@ -1018,7 +1044,7 @@ impl Checker {
         }) {
             Some((_, ty, rank)) => {
                 self.field_rank = *rank;
-                Some(Typed { ty: ty.clone(), variable: true, constant: None, array: None })
+                Some(Typed { ty: ty.clone(), variable: true, constant: None, array: *rank })
             }
             None => {
                 self.err(span, "Element not defined");
@@ -1268,6 +1294,9 @@ impl Checker {
             }
             Class::Var => {
                 let typed = self.expr(argument)?;
+                if self.whole_array_field(&typed, argument) {
+                    return None;
+                }
                 if !typed.variable {
                     self.err(argument.span(), "Variable required");
                     return None;
@@ -1332,10 +1361,17 @@ impl Checker {
     ) -> Option<Typed> {
         let (name, span) = match argument {
             Expr::Name(name, span) => (name.clone(), *span),
+            // an array field of a record: `r.a`, or `r.a()` as an argument
+            Expr::Field { .. } if self.record_array(argument).is_some() => {
+                return self.record_array(argument);
+            }
             other => {
                 self.err(
                     other.span(),
-                    if matches!(other, Expr::Apply { arguments, .. } if arguments.is_empty()) {
+                    if matches!(
+                        other,
+                        Expr::Apply { arguments, .. } | Expr::Index { indices: arguments, .. } if arguments.is_empty()
+                    ) {
                         "Syntax error"
                     } else {
                         "Array not defined"
@@ -1377,7 +1413,11 @@ impl Checker {
                         }
                     }
                 }
-                self.expr(inner);
+                if let Some(typed) = self.expr(inner) {
+                    if typed.array.is_some() && matches!(inner, Expr::Field { .. }) {
+                        self.err(inner.span(), "Syntax error");
+                    }
+                }
             }
             return;
         }
@@ -1428,12 +1468,44 @@ impl Checker {
         }
     }
 
+    /// `r.a` for an array field `a` is no value: BC takes it only where a whole
+    /// array is asked for.
+    fn whole_array_field(
+        &mut self,
+        typed: &Typed,
+        argument: &Expr,
+    ) -> bool {
+        let whole = typed.array.is_some() && matches!(argument, Expr::Field { .. });
+        if whole {
+            self.err(argument.span(), "Syntax error");
+        }
+        whole
+    }
+
+    /// The whole array that `r.a` or `r.a()` names, when `a` is an array field
+    /// of the record `r`.
+    fn record_array(
+        &mut self,
+        expr: &Expr,
+    ) -> Option<Typed> {
+        let field = match expr {
+            Expr::Field { .. } => expr,
+            Expr::Index { base, indices, .. } if indices.is_empty() && matches!(**base, Expr::Field { .. }) => &**base,
+            _ => return None,
+        };
+        let errors = self.errors.len();
+        let typed = self.expr(field);
+        self.errors.truncate(errors);
+        typed.filter(|typed| typed.array.is_some())
+    }
+
     fn array_argument_for(
         &mut self,
         argument: &Expr,
     ) -> Option<Typed> {
         let (name, span) = match argument {
             Expr::Apply { name, arguments, span } if arguments.is_empty() => (name.clone(), *span),
+            Expr::Index { indices, .. } if indices.is_empty() => return self.record_array(argument),
             _ => return None,
         };
         let var = self.array_var(&name);
@@ -1814,7 +1886,8 @@ impl Checker {
                 }
                 if let Some(target) = target {
                     if let Some(typed) = self.expr(target) {
-                        if !typed.variable {
+                        if self.whole_array_field(&typed, target) {
+                        } else if !typed.variable {
                             self.err(target.span(), "Variable required");
                         }
                     }
@@ -2180,6 +2253,7 @@ impl Checker {
             self.err(span, "Element not defined");
         }
         let mut out: Vec<(String, Ty, Option<usize>)> = Vec::new();
+        let mut bytes = 0usize;
         for field in fields {
             // array fields are PDS's and VBDOS's, and need bounds
             if field.array
@@ -2237,9 +2311,82 @@ impl Checker {
                     ty = Ty::Str(typed.constant.map(|c| c as usize));
                 }
             }
+            let mut size = self.size_of(&ty);
+            if field.array {
+                let Some(elements) = self.field_elements(&field.bounds) else { continue };
+                size = size.saturating_mul(elements);
+                if size > 65535 {
+                    self.err(field.span, "Array too big");
+                    continue;
+                }
+            }
+            bytes += size;
             out.push((field.name.clone(), ty, field.array.then(|| field.bounds.len().max(1))));
         }
-        self.records.insert(name.to_owned(), Record { fields: out, opaque: false });
+        if bytes > 65535 {
+            self.err(span, "TYPE more than 65535 bytes");
+        }
+        self.records.insert(name.to_owned(), Record { fields: out, opaque: false, bytes });
+    }
+
+    /// The bytes one value of `ty` takes in a record.
+    fn size_of(
+        &self,
+        ty: &Ty,
+    ) -> usize {
+        match ty {
+            Ty::Int => 2,
+            Ty::Long | Ty::Single => 4,
+            Ty::Double | Ty::Currency => 8,
+            Ty::Str(length) => length.unwrap_or(0),
+            Ty::Record(name) => self.records.get(name).map_or(0, |record| record.bytes),
+            Ty::Variant => 0,
+        }
+    }
+
+    /// The element count of an array field's bounds, which must be constants BC
+    /// can hold in 16 bits.
+    fn field_elements(
+        &mut self,
+        bounds: &[crate::syntax::Bound],
+    ) -> Option<usize> {
+        let mut elements = 1usize;
+        for bound in bounds {
+            let upper = self.field_bound(&bound.upper)?;
+            let lower = match &bound.lower {
+                Some(lower) => self.field_bound(lower)?,
+                None => 0,
+            };
+            if lower > upper {
+                self.err(bound.upper.span(), "Lower bound exceeds upper bound");
+                return None;
+            }
+            elements = elements.saturating_mul((upper - lower + 1) as usize);
+        }
+        Some(elements)
+    }
+
+    fn field_bound(
+        &mut self,
+        bound: &Expr,
+    ) -> Option<i64> {
+        let mut names = Vec::new();
+        free_names(bound, &mut names);
+        if names.iter().any(|name| !self.consts.contains_key(stem(name))) {
+            self.err(bound.span(), "Dynamic array illegal");
+            return None;
+        }
+        let typed = self.constant_expr(bound)?;
+        if typed.ty.string() {
+            self.err(bound.span(), "Type mismatch");
+            return None;
+        }
+        let value = typed.constant? as i64;
+        if !(-32768..=32767).contains(&value) {
+            self.err(bound.span(), "Math overflow");
+            return None;
+        }
+        Some(value)
     }
 
     fn declare(
@@ -2454,6 +2601,11 @@ impl Checker {
                     self.err(d.span, "Duplicate definition");
                     return;
                 }
+                // a record is shared by `SHARED r AS Type`
+                if wanted.is_none() && matches!(var.ty, Ty::Record(_)) {
+                    self.err(d.span, "AS clause required");
+                    return;
+                }
                 self.scope.vars.entry(key).or_default().push(var);
             }
             None => {
@@ -2581,8 +2733,9 @@ impl Checker {
                     return;
                 }
                 for argument in arguments {
-                    let typed = self.expr(argument);
-                    let _ = typed;
+                    if let Some(typed) = self.expr(argument) {
+                        self.whole_array_field(&typed, argument);
+                    }
                 }
             }
         }

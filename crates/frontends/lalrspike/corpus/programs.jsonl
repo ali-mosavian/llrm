@@ -4836,3 +4836,369 @@
 {"group": "labels", "why": "label in module, jump from sub 'IF x% THEN a'", "id": 4835}
 {"group": "labels", "why": "label twice 'IF x% THEN a'", "id": 4836}
 {"group": "labels", "why": "same label in sub and module 'IF x% THEN a'", "id": 4837}
+{"group": "records", "why": "use 'r.a(1) = 1'", "id": 4838}
+{"group": "records", "why": "use 'x% = r.a(1)'", "id": 4839}
+{"group": "records", "why": "use 'x% = r.a(i%)'", "id": 4840}
+{"group": "records", "why": "use 'x% = r.a(i% + j%)'", "id": 4841}
+{"group": "records", "why": "use 'r.a(1, 2) = 1'", "id": 4842}
+{"group": "records", "why": "use 'r.b(1, 2) = 1'", "id": 4843}
+{"group": "records", "why": "use 'r.b(1) = 1'", "id": 4844}
+{"group": "records", "why": "use 'x% = r.b(1, 2)'", "id": 4845}
+{"group": "records", "why": "use 'x% = r.b(1)'", "id": 4846}
+{"group": "records", "why": "use 'r.s(1) = \"x\"'", "id": 4847}
+{"group": "records", "why": "use 's$ = r.s(1)'", "id": 4848}
+{"group": "records", "why": "use 's$ = r.s(1) + r.t'", "id": 4849}
+{"group": "records", "why": "use 'PRINT r.a(1)'", "id": 4850}
+{"group": "records", "why": "use 'PRINT r.a(1); r.b(1, 1); r.s(1); r.d(1)'", "id": 4851}
+{"group": "records", "why": "use 'r.a = 1'", "id": 4852}
+{"group": "records", "why": "use 'x% = r.a'", "id": 4853}
+{"group": "records", "why": "use 'PRINT r.a'", "id": 4854}
+{"group": "records", "why": "use 'x% = r.n(1)'", "id": 4855}
+{"group": "records", "why": "use 'r.n(1) = 1'", "id": 4856}
+{"group": "records", "why": "use 'rr(1).a(2) = 3'", "id": 4857}
+{"group": "records", "why": "use 'x% = rr(i%).a(j%)'", "id": 4858}
+{"group": "records", "why": "use 'rr(1).s(1) = \"abc\"'", "id": 4859}
+{"group": "records", "why": "use 's$ = rr(2).s(0)'", "id": 4860}
+{"group": "records", "why": "use 'o.i(1).v(2) = 3'", "id": 4861}
+{"group": "records", "why": "use 'x% = o.q.v(1)'", "id": 4862}
+{"group": "records", "why": "use 'x% = oo(1).i(2).v(3)'", "id": 4863}
+{"group": "records", "why": "use 'oo(1).q.w = 1'", "id": 4864}
+{"group": "records", "why": "use 'oo(1).i(2) = o.q'", "id": 4865}
+{"group": "records", "why": "use 'o.i(1) = o.q'", "id": 4866}
+{"group": "records", "why": "use 'o.q = o.i(2)'", "id": 4867}
+{"group": "records", "why": "use 'CALL p(r.a(1))'", "id": 4868}
+{"group": "records", "why": "use 'CALL p(r.a())'", "id": 4869}
+{"group": "records", "why": "use 'CALL q(r.a())'", "id": 4870}
+{"group": "records", "why": "use 'CALL q(r.a)'", "id": 4871}
+{"group": "records", "why": "use 'CALL p(r.n)'", "id": 4872}
+{"group": "records", "why": "use 'CALL p(rr(1).a(1))'", "id": 4873}
+{"group": "records", "why": "use 'CALL m(r)'", "id": 4874}
+{"group": "records", "why": "use 'CALL m(rr(1))'", "id": 4875}
+{"group": "records", "why": "use 'CALL n2(o.q)'", "id": 4876}
+{"group": "records", "why": "use 'CALL n2(o.i(1))'", "id": 4877}
+{"group": "records", "why": "use 'CALL n2(oo(1).i(2))'", "id": 4878}
+{"group": "records", "why": "use 'CALL n2(o.q.v(1))'", "id": 4879}
+{"group": "records", "why": "use 'x% = LBOUND(r.a)'", "id": 4880}
+{"group": "records", "why": "use 'x% = UBOUND(r.a, 1)'", "id": 4881}
+{"group": "records", "why": "use 'x% = UBOUND(r.b, 2)'", "id": 4882}
+{"group": "records", "why": "use 'x% = LBOUND(r.a())'", "id": 4883}
+{"group": "records", "why": "use 'x% = LEN(r.a(1))'", "id": 4884}
+{"group": "records", "why": "use 'x% = LEN(r.s(1))'", "id": 4885}
+{"group": "records", "why": "use 'x% = LEN(o.i(1))'", "id": 4886}
+{"group": "records", "why": "use 'SWAP r.a(1), r.a(2)'", "id": 4887}
+{"group": "records", "why": "use 'SWAP r.a(1), x%'", "id": 4888}
+{"group": "records", "why": "use 'SWAP r.s(1), r.s(2)'", "id": 4889}
+{"group": "records", "why": "use 'SWAP r.a, r.a'", "id": 4890}
+{"group": "records", "why": "use 'INPUT r.a(1)'", "id": 4891}
+{"group": "records", "why": "use 'LINE INPUT r.s(1)'", "id": 4892}
+{"group": "records", "why": "use 'READ r.a(1)'", "id": 4893}
+{"group": "records", "why": "use 'DATA 1'", "id": 4894}
+{"group": "records", "why": "use 'FOR r.a(1) = 1 TO 2: NEXT'", "id": 4895}
+{"group": "records", "why": "use 'FOR r.n = 1 TO 2: NEXT'", "id": 4896}
+{"group": "records", "why": "use 'LSET r.s(1) = \"a\"'", "id": 4897}
+{"group": "records", "why": "use 'RSET r.s(1) = \"a\"'", "id": 4898}
+{"group": "records", "why": "use 'LSET r.t = \"a\"'", "id": 4899}
+{"group": "records", "why": "use 'PUT #1, , r.a(1)'", "id": 4900}
+{"group": "records", "why": "use 'GET #1, , r.a(1)'", "id": 4901}
+{"group": "records", "why": "use 'PUT #1, , r.a'", "id": 4902}
+{"group": "records", "why": "use 'GET #1, , r'", "id": 4903}
+{"group": "records", "why": "use 'ERASE r.a'", "id": 4904}
+{"group": "records", "why": "use 'REDIM r.a(3)'", "id": 4905}
+{"group": "records", "why": "use 'DIM r.a(3)'", "id": 4906}
+{"group": "records", "why": "use 'DIM SHARED r.a(3)'", "id": 4907}
+{"group": "records", "why": "use 'IF r.a(1) THEN x% = 1'", "id": 4908}
+{"group": "records", "why": "use 'IF r.a(1) = r.a(2) THEN x% = 1'", "id": 4909}
+{"group": "records", "why": "use 'SELECT CASE r.a(1)'", "id": 4910}
+{"group": "records", "why": "use 'CASE 1'", "id": 4911}
+{"group": "records", "why": "use 'END SELECT'", "id": 4912}
+{"group": "records", "why": "use 'd# = r.d(1) * r.d(2) + r.a(3)'", "id": 4913}
+{"group": "records", "why": "use 'r.d(1) = r.d(2) ^ 2'", "id": 4914}
+{"group": "records", "why": "use 'r.d(i%) = r.a(j%) / 3'", "id": 4915}
+{"group": "records", "why": "use 'x% = r.a(r.a(1))'", "id": 4916}
+{"group": "records", "why": "use 'r.a(r.a(1)) = r.a(r.a(2))'", "id": 4917}
+{"group": "records", "why": "use 'x% = r.a(rr(1).a(2))'", "id": 4918}
+{"group": "records", "why": "use 'r.a(1) = r.a(2) = r.a(3)'", "id": 4919}
+{"group": "records", "why": "use 'r.b(r.a(1), r.a(2)) = 1'", "id": 4920}
+{"group": "records", "why": "use 'r.a(1.5) = 1'", "id": 4921}
+{"group": "records", "why": "use 'r.a(\"x\") = 1'", "id": 4922}
+{"group": "records", "why": "use 'r.a(1) = \"x\"'", "id": 4923}
+{"group": "records", "why": "use 's$ = r.a(1)'", "id": 4924}
+{"group": "records", "why": "use 'x% = r.s(1)'", "id": 4925}
+{"group": "records", "why": "use 'x% = ABS(r.a(1))'", "id": 4926}
+{"group": "records", "why": "use 's$ = LEFT$(r.s(1), 2)'", "id": 4927}
+{"group": "records", "why": "use 's$ = MID$(r.t, 2, 1)'", "id": 4928}
+{"group": "records", "why": "use 'MID$(r.t, 2, 1) = \"x\"'", "id": 4929}
+{"group": "records", "why": "use 'MID$(r.s(1), 1) = \"x\"'", "id": 4930}
+{"group": "records", "why": "use 's$ = STR$(r.a(1)) + CHR$(r.a(2))'", "id": 4931}
+{"group": "records", "why": "use 'PRINT USING \"##\"; r.a(1)'", "id": 4932}
+{"group": "records", "why": "use 'WRITE r.a(1), r.s(1)'", "id": 4933}
+{"group": "records", "why": "use 'PRINT #1, r.a(1)'", "id": 4934}
+{"group": "records", "why": "use 'x% = VARPTR(r.a(1))'", "id": 4935}
+{"group": "records", "why": "use 'x% = VARSEG(r.a(1))'", "id": 4936}
+{"group": "records", "why": "use 's$ = VARPTR$(r.a(1))'", "id": 4937}
+{"group": "records", "why": "use 'x% = SADD(r.t)'", "id": 4938}
+{"group": "records", "why": "use 'POKE VARPTR(r.a(1)), 1'", "id": 4939}
+{"group": "records", "why": "use 'x% = PEEK(VARPTR(r.a(1)))'", "id": 4940}
+{"group": "records", "why": "use 'DEF SEG = VARSEG(r.a(1))'", "id": 4941}
+{"group": "records", "why": "use 'BLOAD \"f\", VARPTR(r.a(1))'", "id": 4942}
+{"group": "records", "why": "use 'CALL ABSOLUTE(r.a(1), 0)'", "id": 4943}
+{"group": "records", "why": "use 'CALL INTERRUPT(1, r.a(1), r.a(2))'", "id": 4944}
+{"group": "records", "why": "use 'x% = FRE(r.t)'", "id": 4945}
+{"group": "records", "why": "use 'x% = r.a(1)(2)'", "id": 4946}
+{"group": "records", "why": "use 'x% = r.a(1).b'", "id": 4947}
+{"group": "records", "why": "use 'r.a(1).b = 1'", "id": 4948}
+{"group": "records", "why": "use 'x% = r.a.b'", "id": 4949}
+{"group": "records", "why": "use 'x% = r.nope(1)'", "id": 4950}
+{"group": "records", "why": "use 'r.nope(1) = 1'", "id": 4951}
+{"group": "records", "why": "use 'x% = r(1).a'", "id": 4952}
+{"group": "records", "why": "use 'x% = r.n.a'", "id": 4953}
+{"group": "records", "why": "use 'x% = r.A(1)'", "id": 4954}
+{"group": "records", "why": "use 'x% = r.a%(1)'", "id": 4955}
+{"group": "records", "why": "use 'x% = r.a&(1)'", "id": 4956}
+{"group": "records", "why": "use 'r.a%(1) = 1'", "id": 4957}
+{"group": "records", "why": "use 'r.a&(1) = 1'", "id": 4958}
+{"group": "records", "why": "use 'r.s$(1) = \"x\"'", "id": 4959}
+{"group": "records", "why": "use 'r.d#(1) = 1'", "id": 4960}
+{"group": "records", "why": "use 'x# = r.d#(1)'", "id": 4961}
+{"group": "records", "why": "use 'x# = r.d!(1)'", "id": 4962}
+{"group": "records", "why": "use 'x% = r.n%'", "id": 4963}
+{"group": "records", "why": "use 'x& = r.n&'", "id": 4964}
+{"group": "records", "why": "use 'x% = r.t$'", "id": 4965}
+{"group": "records", "why": "use 's$ = r.t$'", "id": 4966}
+{"group": "records", "why": "use 'ON r.a(1) GOTO lab'", "id": 4967}
+{"group": "records", "why": "use 'lab:'", "id": 4968}
+{"group": "records", "why": "use 'ON r.a(1) GOSUB lab2'", "id": 4969}
+{"group": "records", "why": "use 'lab2: RETURN'", "id": 4970}
+{"group": "records", "why": "use 'x% = r.a(1): r.a(2) = x%'", "id": 4971}
+{"group": "records", "why": "use 'WHILE r.a(1): WEND'", "id": 4972}
+{"group": "records", "why": "use 'DO WHILE r.a(1): LOOP'", "id": 4973}
+{"group": "records", "why": "use 'DO: LOOP UNTIL r.a(1)'", "id": 4974}
+{"group": "records", "why": "use 'OPEN \"f\" FOR RANDOM AS #1 LEN = LEN(r)'", "id": 4975}
+{"group": "records", "why": "use 'FIELD #1, 4 AS r.t'", "id": 4976}
+{"group": "records", "why": "use 'x% = LEN(rr(1))'", "id": 4977}
+{"group": "records", "why": "use 'x% = LEN(rr(1).a(2))'", "id": 4978}
+{"group": "records", "why": "use 'x% = LEN(Rec)'", "id": 4979}
+{"group": "records", "why": "use 'x% = LEN(Inner)'", "id": 4980}
+{"group": "records", "why": "in sub 'r.a(1) = 1'", "id": 4981}
+{"group": "records", "why": "in sub, local record 'r.a(1) = 1'", "id": 4982}
+{"group": "records", "why": "in static sub 'r.a(1) = 1'", "id": 4983}
+{"group": "records", "why": "in sub 'x% = r.a(1)'", "id": 4984}
+{"group": "records", "why": "in sub, local record 'x% = r.a(1)'", "id": 4985}
+{"group": "records", "why": "in static sub 'x% = r.a(1)'", "id": 4986}
+{"group": "records", "why": "in sub 'x% = r.a(i%)'", "id": 4987}
+{"group": "records", "why": "in sub, local record 'x% = r.a(i%)'", "id": 4988}
+{"group": "records", "why": "in static sub 'x% = r.a(i%)'", "id": 4989}
+{"group": "records", "why": "in sub 'x% = r.a(i% + j%)'", "id": 4990}
+{"group": "records", "why": "in sub, local record 'x% = r.a(i% + j%)'", "id": 4991}
+{"group": "records", "why": "in static sub 'x% = r.a(i% + j%)'", "id": 4992}
+{"group": "records", "why": "in sub 'r.a(1, 2) = 1'", "id": 4993}
+{"group": "records", "why": "in sub, local record 'r.a(1, 2) = 1'", "id": 4994}
+{"group": "records", "why": "in static sub 'r.a(1, 2) = 1'", "id": 4995}
+{"group": "records", "why": "in sub 'r.b(1, 2) = 1'", "id": 4996}
+{"group": "records", "why": "in sub, local record 'r.b(1, 2) = 1'", "id": 4997}
+{"group": "records", "why": "in static sub 'r.b(1, 2) = 1'", "id": 4998}
+{"group": "records", "why": "in sub 'r.b(1) = 1'", "id": 4999}
+{"group": "records", "why": "in sub, local record 'r.b(1) = 1'", "id": 5000}
+{"group": "records", "why": "in static sub 'r.b(1) = 1'", "id": 5001}
+{"group": "records", "why": "in sub 'x% = r.b(1, 2)'", "id": 5002}
+{"group": "records", "why": "in sub, local record 'x% = r.b(1, 2)'", "id": 5003}
+{"group": "records", "why": "in static sub 'x% = r.b(1, 2)'", "id": 5004}
+{"group": "records", "why": "in sub 'x% = r.b(1)'", "id": 5005}
+{"group": "records", "why": "in sub, local record 'x% = r.b(1)'", "id": 5006}
+{"group": "records", "why": "in static sub 'x% = r.b(1)'", "id": 5007}
+{"group": "records", "why": "in sub 'r.s(1) = \"x\"'", "id": 5008}
+{"group": "records", "why": "in sub, local record 'r.s(1) = \"x\"'", "id": 5009}
+{"group": "records", "why": "in static sub 'r.s(1) = \"x\"'", "id": 5010}
+{"group": "records", "why": "in sub 's$ = r.s(1)'", "id": 5011}
+{"group": "records", "why": "in sub, local record 's$ = r.s(1)'", "id": 5012}
+{"group": "records", "why": "in static sub 's$ = r.s(1)'", "id": 5013}
+{"group": "records", "why": "in sub 's$ = r.s(1) + r.t'", "id": 5014}
+{"group": "records", "why": "in sub, local record 's$ = r.s(1) + r.t'", "id": 5015}
+{"group": "records", "why": "in static sub 's$ = r.s(1) + r.t'", "id": 5016}
+{"group": "records", "why": "in sub 'PRINT r.a(1)'", "id": 5017}
+{"group": "records", "why": "in sub, local record 'PRINT r.a(1)'", "id": 5018}
+{"group": "records", "why": "in static sub 'PRINT r.a(1)'", "id": 5019}
+{"group": "records", "why": "in sub 'PRINT r.a(1); r.b(1, 1); r.s(1); r.d(1)'", "id": 5020}
+{"group": "records", "why": "in sub, local record 'PRINT r.a(1); r.b(1, 1); r.s(1); r.d(1)'", "id": 5021}
+{"group": "records", "why": "in static sub 'PRINT r.a(1); r.b(1, 1); r.s(1); r.d(1)'", "id": 5022}
+{"group": "records", "why": "in sub 'r.a = 1'", "id": 5023}
+{"group": "records", "why": "in sub, local record 'r.a = 1'", "id": 5024}
+{"group": "records", "why": "in static sub 'r.a = 1'", "id": 5025}
+{"group": "records", "why": "in sub 'x% = r.a'", "id": 5026}
+{"group": "records", "why": "in sub, local record 'x% = r.a'", "id": 5027}
+{"group": "records", "why": "in static sub 'x% = r.a'", "id": 5028}
+{"group": "records", "why": "in sub 'PRINT r.a'", "id": 5029}
+{"group": "records", "why": "in sub, local record 'PRINT r.a'", "id": 5030}
+{"group": "records", "why": "in static sub 'PRINT r.a'", "id": 5031}
+{"group": "records", "why": "in sub 'x% = r.n(1)'", "id": 5032}
+{"group": "records", "why": "in sub, local record 'x% = r.n(1)'", "id": 5033}
+{"group": "records", "why": "in static sub 'x% = r.n(1)'", "id": 5034}
+{"group": "records", "why": "in sub 'r.n(1) = 1'", "id": 5035}
+{"group": "records", "why": "in sub, local record 'r.n(1) = 1'", "id": 5036}
+{"group": "records", "why": "in static sub 'r.n(1) = 1'", "id": 5037}
+{"group": "records", "why": "in sub 'rr(1).a(2) = 3'", "id": 5038}
+{"group": "records", "why": "in sub, local record 'rr(1).a(2) = 3'", "id": 5039}
+{"group": "records", "why": "in static sub 'rr(1).a(2) = 3'", "id": 5040}
+{"group": "records", "why": "in sub 'x% = rr(i%).a(j%)'", "id": 5041}
+{"group": "records", "why": "in sub, local record 'x% = rr(i%).a(j%)'", "id": 5042}
+{"group": "records", "why": "in static sub 'x% = rr(i%).a(j%)'", "id": 5043}
+{"group": "records", "why": "in sub 'rr(1).s(1) = \"abc\"'", "id": 5044}
+{"group": "records", "why": "in sub, local record 'rr(1).s(1) = \"abc\"'", "id": 5045}
+{"group": "records", "why": "in static sub 'rr(1).s(1) = \"abc\"'", "id": 5046}
+{"group": "records", "why": "in sub 's$ = rr(2).s(0)'", "id": 5047}
+{"group": "records", "why": "in sub, local record 's$ = rr(2).s(0)'", "id": 5048}
+{"group": "records", "why": "in static sub 's$ = rr(2).s(0)'", "id": 5049}
+{"group": "records", "why": "in sub 'o.i(1).v(2) = 3'", "id": 5050}
+{"group": "records", "why": "in sub, local record 'o.i(1).v(2) = 3'", "id": 5051}
+{"group": "records", "why": "in static sub 'o.i(1).v(2) = 3'", "id": 5052}
+{"group": "records", "why": "in sub 'x% = o.q.v(1)'", "id": 5053}
+{"group": "records", "why": "in sub, local record 'x% = o.q.v(1)'", "id": 5054}
+{"group": "records", "why": "in static sub 'x% = o.q.v(1)'", "id": 5055}
+{"group": "records", "why": "in sub 'x% = oo(1).i(2).v(3)'", "id": 5056}
+{"group": "records", "why": "in sub, local record 'x% = oo(1).i(2).v(3)'", "id": 5057}
+{"group": "records", "why": "in static sub 'x% = oo(1).i(2).v(3)'", "id": 5058}
+{"group": "records", "why": "in sub 'oo(1).q.w = 1'", "id": 5059}
+{"group": "records", "why": "in sub, local record 'oo(1).q.w = 1'", "id": 5060}
+{"group": "records", "why": "in static sub 'oo(1).q.w = 1'", "id": 5061}
+{"group": "records", "why": "in sub 'oo(1).i(2) = o.q'", "id": 5062}
+{"group": "records", "why": "in sub, local record 'oo(1).i(2) = o.q'", "id": 5063}
+{"group": "records", "why": "in static sub 'oo(1).i(2) = o.q'", "id": 5064}
+{"group": "records", "why": "in sub 'o.i(1) = o.q'", "id": 5065}
+{"group": "records", "why": "in sub, local record 'o.i(1) = o.q'", "id": 5066}
+{"group": "records", "why": "in static sub 'o.i(1) = o.q'", "id": 5067}
+{"group": "records", "why": "in sub 'o.q = o.i(2)'", "id": 5068}
+{"group": "records", "why": "in sub, local record 'o.q = o.i(2)'", "id": 5069}
+{"group": "records", "why": "in static sub 'o.q = o.i(2)'", "id": 5070}
+{"group": "records", "why": "in sub 'CALL p(r.a(1))'", "id": 5071}
+{"group": "records", "why": "in sub, local record 'CALL p(r.a(1))'", "id": 5072}
+{"group": "records", "why": "in static sub 'CALL p(r.a(1))'", "id": 5073}
+{"group": "records", "why": "in sub 'CALL p(r.a())'", "id": 5074}
+{"group": "records", "why": "in sub, local record 'CALL p(r.a())'", "id": 5075}
+{"group": "records", "why": "in static sub 'CALL p(r.a())'", "id": 5076}
+{"group": "records", "why": "in sub 'CALL q(r.a())'", "id": 5077}
+{"group": "records", "why": "in sub, local record 'CALL q(r.a())'", "id": 5078}
+{"group": "records", "why": "in static sub 'CALL q(r.a())'", "id": 5079}
+{"group": "records", "why": "in sub 'CALL q(r.a)'", "id": 5080}
+{"group": "records", "why": "in sub, local record 'CALL q(r.a)'", "id": 5081}
+{"group": "records", "why": "in static sub 'CALL q(r.a)'", "id": 5082}
+{"group": "records", "why": "in sub 'CALL p(r.n)'", "id": 5083}
+{"group": "records", "why": "in sub, local record 'CALL p(r.n)'", "id": 5084}
+{"group": "records", "why": "in static sub 'CALL p(r.n)'", "id": 5085}
+{"group": "records", "why": "in sub 'CALL p(rr(1).a(1))'", "id": 5086}
+{"group": "records", "why": "in sub, local record 'CALL p(rr(1).a(1))'", "id": 5087}
+{"group": "records", "why": "in static sub 'CALL p(rr(1).a(1))'", "id": 5088}
+{"group": "records", "why": "in sub 'CALL m(r)'", "id": 5089}
+{"group": "records", "why": "in sub, local record 'CALL m(r)'", "id": 5090}
+{"group": "records", "why": "in static sub 'CALL m(r)'", "id": 5091}
+{"group": "records", "why": "in sub 'CALL m(rr(1))'", "id": 5092}
+{"group": "records", "why": "in sub, local record 'CALL m(rr(1))'", "id": 5093}
+{"group": "records", "why": "in static sub 'CALL m(rr(1))'", "id": 5094}
+{"group": "records", "why": "in sub 'CALL n2(o.q)'", "id": 5095}
+{"group": "records", "why": "in sub, local record 'CALL n2(o.q)'", "id": 5096}
+{"group": "records", "why": "in static sub 'CALL n2(o.q)'", "id": 5097}
+{"group": "records", "why": "in sub 'CALL n2(o.i(1))'", "id": 5098}
+{"group": "records", "why": "in sub, local record 'CALL n2(o.i(1))'", "id": 5099}
+{"group": "records", "why": "in static sub 'CALL n2(o.i(1))'", "id": 5100}
+{"group": "records", "why": "in sub 'CALL n2(oo(1).i(2))'", "id": 5101}
+{"group": "records", "why": "in sub, local record 'CALL n2(oo(1).i(2))'", "id": 5102}
+{"group": "records", "why": "in static sub 'CALL n2(oo(1).i(2))'", "id": 5103}
+{"group": "records", "why": "in sub 'CALL n2(o.q.v(1))'", "id": 5104}
+{"group": "records", "why": "in sub, local record 'CALL n2(o.q.v(1))'", "id": 5105}
+{"group": "records", "why": "in static sub 'CALL n2(o.q.v(1))'", "id": 5106}
+{"group": "records", "why": "in sub 'x% = LBOUND(r.a)'", "id": 5107}
+{"group": "records", "why": "in sub, local record 'x% = LBOUND(r.a)'", "id": 5108}
+{"group": "records", "why": "in static sub 'x% = LBOUND(r.a)'", "id": 5109}
+{"group": "records", "why": "in sub 'x% = UBOUND(r.a, 1)'", "id": 5110}
+{"group": "records", "why": "in sub, local record 'x% = UBOUND(r.a, 1)'", "id": 5111}
+{"group": "records", "why": "in static sub 'x% = UBOUND(r.a, 1)'", "id": 5112}
+{"group": "records", "why": "in sub 'x% = UBOUND(r.b, 2)'", "id": 5113}
+{"group": "records", "why": "in sub, local record 'x% = UBOUND(r.b, 2)'", "id": 5114}
+{"group": "records", "why": "in static sub 'x% = UBOUND(r.b, 2)'", "id": 5115}
+{"group": "records", "why": "in sub 'x% = LBOUND(r.a())'", "id": 5116}
+{"group": "records", "why": "in sub, local record 'x% = LBOUND(r.a())'", "id": 5117}
+{"group": "records", "why": "in static sub 'x% = LBOUND(r.a())'", "id": 5118}
+{"group": "records", "why": "in sub 'x% = LEN(r.a(1))'", "id": 5119}
+{"group": "records", "why": "in sub, local record 'x% = LEN(r.a(1))'", "id": 5120}
+{"group": "records", "why": "in static sub 'x% = LEN(r.a(1))'", "id": 5121}
+{"group": "records", "why": "in sub 'x% = LEN(r.s(1))'", "id": 5122}
+{"group": "records", "why": "in sub, local record 'x% = LEN(r.s(1))'", "id": 5123}
+{"group": "records", "why": "in static sub 'x% = LEN(r.s(1))'", "id": 5124}
+{"group": "records", "why": "in sub 'x% = LEN(o.i(1))'", "id": 5125}
+{"group": "records", "why": "in sub, local record 'x% = LEN(o.i(1))'", "id": 5126}
+{"group": "records", "why": "in static sub 'x% = LEN(o.i(1))'", "id": 5127}
+{"group": "records", "why": "in sub 'SWAP r.a(1), r.a(2)'", "id": 5128}
+{"group": "records", "why": "in sub, local record 'SWAP r.a(1), r.a(2)'", "id": 5129}
+{"group": "records", "why": "in static sub 'SWAP r.a(1), r.a(2)'", "id": 5130}
+{"group": "records", "why": "in sub 'SWAP r.a(1), x%'", "id": 5131}
+{"group": "records", "why": "in sub, local record 'SWAP r.a(1), x%'", "id": 5132}
+{"group": "records", "why": "in static sub 'SWAP r.a(1), x%'", "id": 5133}
+{"group": "records", "why": "in sub 'SWAP r.s(1), r.s(2)'", "id": 5134}
+{"group": "records", "why": "in sub, local record 'SWAP r.s(1), r.s(2)'", "id": 5135}
+{"group": "records", "why": "in static sub 'SWAP r.s(1), r.s(2)'", "id": 5136}
+{"group": "records", "why": "in sub 'SWAP r.a, r.a'", "id": 5137}
+{"group": "records", "why": "in sub, local record 'SWAP r.a, r.a'", "id": 5138}
+{"group": "records", "why": "in static sub 'SWAP r.a, r.a'", "id": 5139}
+{"group": "records", "why": "in sub 'INPUT r.a(1)'", "id": 5140}
+{"group": "records", "why": "in sub, local record 'INPUT r.a(1)'", "id": 5141}
+{"group": "records", "why": "in static sub 'INPUT r.a(1)'", "id": 5142}
+{"group": "records", "why": "in sub 'LINE INPUT r.s(1)'", "id": 5143}
+{"group": "records", "why": "in sub, local record 'LINE INPUT r.s(1)'", "id": 5144}
+{"group": "records", "why": "in static sub 'LINE INPUT r.s(1)'", "id": 5145}
+{"group": "records", "why": "in sub 'READ r.a(1)'", "id": 5146}
+{"group": "records", "why": "in sub, local record 'READ r.a(1)'", "id": 5147}
+{"group": "records", "why": "in static sub 'READ r.a(1)'", "id": 5148}
+{"group": "records", "why": "in sub 'DATA 1'", "id": 5149}
+{"group": "records", "why": "in sub, local record 'DATA 1'", "id": 5150}
+{"group": "records", "why": "in static sub 'DATA 1'", "id": 5151}
+{"group": "records", "why": "in sub 'FOR r.a(1) = 1 TO 2: NEXT'", "id": 5152}
+{"group": "records", "why": "in sub, local record 'FOR r.a(1) = 1 TO 2: NEXT'", "id": 5153}
+{"group": "records", "why": "in static sub 'FOR r.a(1) = 1 TO 2: NEXT'", "id": 5154}
+{"group": "records", "why": "in sub 'FOR r.n = 1 TO 2: NEXT'", "id": 5155}
+{"group": "records", "why": "in sub, local record 'FOR r.n = 1 TO 2: NEXT'", "id": 5156}
+{"group": "records", "why": "in static sub 'FOR r.n = 1 TO 2: NEXT'", "id": 5157}
+{"group": "records", "why": "in sub 'LSET r.s(1) = \"a\"'", "id": 5158}
+{"group": "records", "why": "in sub, local record 'LSET r.s(1) = \"a\"'", "id": 5159}
+{"group": "records", "why": "in static sub 'LSET r.s(1) = \"a\"'", "id": 5160}
+{"group": "records", "why": "array field defs ['a(5) AS INTEGER']", "id": 5161}
+{"group": "records", "why": "array field defs ['a(1 TO 5) AS INTEGER']", "id": 5162}
+{"group": "records", "why": "array field defs ['a(-3 TO 3) AS INTEGER']", "id": 5163}
+{"group": "records", "why": "array field defs ['a(5, 5) AS INTEGER']", "id": 5164}
+{"group": "records", "why": "array field defs ['a(1 TO 5, 2 TO 6) AS LONG']", "id": 5165}
+{"group": "records", "why": "array field defs ['a(5) AS STRING']", "id": 5166}
+{"group": "records", "why": "array field defs ['a(5) AS STRING * 3']", "id": 5167}
+{"group": "records", "why": "array field defs ['a(5) AS Inner']", "id": 5168}
+{"group": "records", "why": "array field defs ['a(5) AS SINGLE', 'b AS INTEGER']", "id": 5169}
+{"group": "records", "why": "array field defs ['a(5%) AS INTEGER']", "id": 5170}
+{"group": "records", "why": "array field defs ['a(n) AS INTEGER']", "id": 5171}
+{"group": "records", "why": "array field defs ['a(CONSTN) AS INTEGER']", "id": 5172}
+{"group": "records", "why": "array field defs ['a(0) AS INTEGER']", "id": 5173}
+{"group": "records", "why": "array field defs ['a(-1) AS INTEGER']", "id": 5174}
+{"group": "records", "why": "array field defs ['a(5 TO 1) AS INTEGER']", "id": 5175}
+{"group": "records", "why": "array field defs ['a(32767) AS INTEGER']", "id": 5176}
+{"group": "records", "why": "array field defs ['a(40000) AS INTEGER']", "id": 5177}
+{"group": "records", "why": "array field defs ['a(1 TO 5, 1 TO 5, 1 TO 5, 1 TO 5, 1 TO 5, 1 TO 5, 1 TO 5, 1 TO 5) AS INTEGER']", "id": 5178}
+{"group": "records", "why": "array field defs ['a(5) AS INTEGER, b(3) AS INTEGER']", "id": 5179}
+{"group": "records", "why": "array field defs ['a (5) AS INTEGER']", "id": 5180}
+{"group": "records", "why": "array field defs ['a(5)AS INTEGER']", "id": 5181}
+{"group": "records", "why": "array field defs ['a(5) INTEGER']", "id": 5182}
+{"group": "records", "why": "array field defs ['a(5)']", "id": 5183}
+{"group": "records", "why": "array field defs ['a(,) AS INTEGER']", "id": 5184}
+{"group": "records", "why": "array field defs ['a(5.5) AS INTEGER']", "id": 5185}
+{"group": "records", "why": "array field defs ['a(\"x\") AS INTEGER']", "id": 5186}
+{"group": "records", "why": "array field defs ['a(1 TO) AS INTEGER']", "id": 5187}
+{"group": "records", "why": "array field defs ['a(TO 5) AS INTEGER']", "id": 5188}
+{"group": "records", "why": "OPTION BASE 1 with array field", "id": 5189}
+{"group": "records", "why": "OPTION BASE 0 with array field", "id": 5190}
+{"group": "records", "why": "redim of record array", "id": 5191}
+{"group": "records", "why": "dynamic array of records, field array", "id": 5192}
+{"group": "records", "why": "array of records passed whole", "id": 5193}
+{"group": "records", "why": "record param array field", "id": 5194}
+{"group": "records", "why": "function record param array field", "id": 5195}
+{"group": "records", "why": "common record", "id": 5196}
+{"group": "records", "why": "static record in sub", "id": 5197}
+{"group": "records", "why": "shared record in sub", "id": 5198}
+{"group": "records", "why": "shared record no as", "id": 5199}
+{"group": "records", "why": "dotted var names beside a record", "id": 5200}
+{"group": "records", "why": "dotted array and record same stem", "id": 5201}
+{"group": "records", "why": "record same name as array", "id": 5202}
+{"group": "records", "why": "def fn with field", "id": 5203}
