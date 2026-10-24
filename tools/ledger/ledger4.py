@@ -50,6 +50,8 @@ _calling = os.environ.get("LEDGER_CALLING")
 _double = None
 if _calling:
     _double = nested.check(nested.parse_calling(_calling), {n: set(total(ours, op)[1]) for n, (op, pp) in B.items()})
+if os.environ.get("LEDGER_LISTED"):
+    open(os.environ["LEDGER_LISTED"], "w").write("\n".join(sorted({s for _n, (_op, _pp) in B.items() for s in total(ours, _op)[1]})))
 _pin_calling = os.environ.get("LEDGER_PIN_CALLING")
 if _pin_calling:
     _double = (_double or "") + "\n" + "pin " + nested.check(

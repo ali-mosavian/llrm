@@ -1404,12 +1404,12 @@ mod tests {
         assert_eq!(fixed[1].uses, [900]);
     }
 
-    /// The pin builds one `LiveIntervals` for the function and edits it
-    /// (TwoAddressInstructionPass.cpp#L394): the pass walked the body for
-    /// liveness rows (DEVIATE TA-6, 3.0 M Ir at m32 to build an interval set
-    /// per phase otherwise); now one `LiveIntervals::new` and no walk.
+    /// The pin's TwoAddress asks `LiveVariables`, not intervals: ours built a
+    /// `LiveIntervals` per function for its kill questions (2.97 M Ir of
+    /// d_faces' 11.73 M in TwoAddress); now it builds none, and walks the body
+    /// for no liveness rows.
     #[test]
-    fn test_two_address_builds_one_live_intervals_and_walks_the_body_for_no_liveness_rows() {
+    fn test_two_address_builds_no_live_intervals_and_walks_the_body_for_no_liveness_rows() {
         let imm = |at: i64, value: u32| imm_def(at, value);
         let add = |at: i64, into: u32, first: u32, second: u32| {
             let what = Semantics {
@@ -1444,7 +1444,7 @@ mod tests {
         assert_eq!(crate::backend::allocate::live_rows_walks(&input) - before, 0);
         let built = crate::liveness::liveintervals::BUILT.with(std::cell::Cell::get);
         let _ = tied(&input, Default::default());
-        assert_eq!(crate::liveness::liveintervals::BUILT.with(std::cell::Cell::get) - built, 1);
+        assert_eq!(crate::liveness::liveintervals::BUILT.with(std::cell::Cell::get) - built, 0);
     }
 
     /// The pin updates the intervals of a tied pair in place: the destination
