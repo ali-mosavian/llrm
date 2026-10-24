@@ -1012,6 +1012,37 @@ pub struct Outer {
     pub globals: Rc<Vec<GlobalValue>>,
     program: Rc<ProgramProxy>,
     modules: HashMap<TypeId, Rc<dyn Any>>,
+    /// What was worked out of these module analyses and nothing else.
+    memo: Memo,
+}
+
+/// Results derived from the module analyses of one [`Outer`] alone, kept for
+/// its life: a clone starts empty, as does one made by `with_declared`, and
+/// `require` empties it, so none outlives the analyses it was made from.
+#[derive(Default)]
+pub struct Memo(std::cell::RefCell<HashMap<(TypeId, u64), Rc<dyn Any>>>);
+
+impl Clone for Memo {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl Outer {
+    /// The `V` kept under `key`, made by `make` the first time it is asked.
+    pub fn memo<V: 'static>(
+        &self,
+        key: u64,
+        make: impl FnOnce() -> V,
+    ) -> Rc<V> {
+        let at = (TypeId::of::<V>(), key);
+        if let Some(found) = self.memo.0.borrow().get(&at) {
+            return Rc::clone(found).downcast::<V>().expect("keyed by its type");
+        }
+        let made = Rc::new(make());
+        self.memo.0.borrow_mut().insert(at, Rc::clone(&made) as Rc<dyn Any>);
+        made
+    }
 }
 
 impl Outer {
@@ -1041,7 +1072,13 @@ impl Outer {
             }
             modules.insert(key, Rc::new(callees));
         }
-        Outer { metadata: self.metadata.clone(), globals, program: Rc::clone(&self.program), modules }
+        Outer {
+            metadata: self.metadata.clone(),
+            globals,
+            program: Rc::clone(&self.program),
+            modules,
+            memo: Memo::default(),
+        }
     }
 
     /// `module`'s, a program of its own for `target`, or a neutral one:
@@ -1060,11 +1097,7 @@ impl Outer {
     ) {
         let result = ModuleAnalyses::new(Rc::clone(&self.program)).get::<M>(module);
         self.modules.insert(TypeId::of::<M>(), result);
-    }
-
-    /// Whether alias and decisions ask the intervals of counted loops.
-    pub fn loop_intervals(&self) -> bool {
-        self.program.loop_intervals
+        self.memo.0.borrow_mut().clear();
     }
 
     pub fn program(&self) -> &ProgramProxy {
@@ -2337,6 +2370,7 @@ impl ModuleAnalyses {
                     globals: Rc::default(),
                     program: Rc::clone(&self.program),
                     modules: HashMap::default(),
+                    memo: Memo::default(),
                 }),
             };
             self.functions.insert(id, Analyses::new(outer));
@@ -2444,7 +2478,13 @@ impl ModuleAnalyses {
         let globals = Rc::clone(&modules[&TypeId::of::<Declarations>()])
             .downcast::<Vec<GlobalValue>>()
             .expect("keyed by its type");
-        let now = Outer { metadata: module.metadata.clone(), globals, program: Rc::clone(&self.program), modules };
+        let now = Outer {
+            metadata: module.metadata.clone(),
+            globals,
+            program: Rc::clone(&self.program),
+            modules,
+            memo: Memo::default(),
+        };
         if !self.outer.as_ref().is_some_and(|old| old.same(&now)) {
             self.outer = Some(Rc::new(now));
         }
@@ -2655,9 +2695,6 @@ pub struct PassManager {
     /// named on stderr, and those past the limit are skipped.
     pub bisect: Option<usize>,
     pub(crate) required: Vec<Kind>,
-    /// The program is run without the intervals of counted loops for alias and
-    /// decisions (`Program::loop_intervals`).
-    pub without_loop_intervals: bool,
     /// Program analyses computed before each module's run.
     pub(crate) program_required: Vec<fn(&Program, &mut ProgramAnalyses)>,
     /// Pass runs so far, for `bisect`.
@@ -2733,7 +2770,6 @@ impl PassManager {
         &mut self,
         program: &mut Program,
     ) -> Result<Vec<Stage>, String> {
-        program.loop_intervals = !self.without_loop_intervals;
         self.managed(program, &mut ProgramAnalyses::default())
     }
 

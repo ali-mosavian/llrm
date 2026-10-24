@@ -257,6 +257,22 @@ def failed_tests(output: str) -> list[str]:
     return list(dict.fromkeys(line.strip() for line in block.splitlines() if re.fullmatch(r"    [\w:]+", line)))
 
 
+def panic_reasons(output: str) -> dict[str, str]:
+    """Each test's first panic message from a `cargo test` output: `thread 'NAME' (id) panicked at FILE:L:C:` and the line after it, with a `left:`/`right:` pair appended. A refusal that
+    names only the test sent its author to rerun the runner's command to see what failed (#4172's `debug_assert_eq!`, which fires in the debug profile the runner uses and not in release)."""
+    found: dict[str, str] = {}
+    lines = output.splitlines()
+    for at, line in enumerate(lines):
+        if not (m := re.match(r"thread '(?P<name>[^']+)'(?: \(\d+\))? panicked at .*:$", line)) or at + 1 >= len(lines):
+            continue
+        reason = lines[at + 1].strip()
+        pair = [one.strip() for one in lines[at + 2 : at + 4] if re.match(r"\s*(left|right):", one)]
+        short = m["name"].rsplit("::", 1)[-1]
+        found.setdefault(short, reason + (f" ({', '.join(pair)})" if pair else ""))
+        found.setdefault(m["name"], found[short])
+    return found
+
+
 def selection() -> dict:
     return tomllib.loads(SELECTION.read_text()) if SELECTION.exists() else {}
 

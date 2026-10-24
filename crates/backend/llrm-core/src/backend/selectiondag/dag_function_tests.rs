@@ -1454,3 +1454,208 @@ fn an_integer_wider_than_the_mantissa_is_rounded_under_float_store() {
     };
     assert!(stores(true) > stores(false), "{} vs {}", stores(true), stores(false));
 }
+
+const M16_FAR_LOAD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define cc 1005 i16 @f(ptr addrspace(1) %p) addrspace(1) {
+entry:
+  %v = load i16, ptr addrspace(1) %p
+  ret i16 %v
+}
+";
+
+/// A far pointer loaded from memory is its offset and, beside it, its selector
+/// (the two word loads `farload` joins into a `les`); the cell through ES
+/// takes that selector. `LES16rm` was 328 of 494 refusals at m16.
+#[test]
+fn a_far_load_reads_the_pointer_and_goes_through_its_selector() {
+    use crate::model::ir::{Loc, Operation, Space};
+    let module = llrm_mir::parse::module(M16_FAR_LOAD).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let whats: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref()).collect();
+    let words = whats
+        .iter()
+        .filter(|w| {
+            w.op == Operation::Move
+                && matches!(
+                    &w.sources[..],
+                    [Loc::Mem(m)] if m.width == 2 && m.selector.is_none()
+                )
+        })
+        .count();
+    assert!(words >= 2, "the offset and the selector are two word loads: {whats:?}");
+    assert!(
+        whats
+            .iter()
+            .flat_map(|w| w.sources.iter())
+            .any(|l| matches!(l, Loc::Mem(m) if m.selector.is_some() && m.addr.is_some_and(|a| a.space == Space::Far))),
+        "the access goes through the selector"
+    );
+}
+
+const M16_FILL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+@buf = global [100 x i8] zeroinitializer
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define cc 1005 void @f() addrspace(1) {
+entry:
+  call void @llvm.memset.p0.i16(ptr @buf, i8 7, i16 100, i1 false)
+  ret void
+}
+";
+
+/// At real mode `rep stosb` names the segment its pointer is in (a value: the
+/// group's selector for a global); `REP_STOSB_16` was a refusal in 9 functions.
+#[test]
+fn an_m16_fill_names_its_segment() {
+    use crate::model::ir::Operation;
+    let module = llrm_mir::parse::module(M16_FILL).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let fill = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.op == Operation::Fill && w.name.as_deref() == Some("stosb"))
+        .expect("a stosb");
+    assert_eq!(fill.sources.len(), 4, "value, count, destination and its segment: {fill:?}");
+}
+
+/// The stack pointer is a word at real mode: the `add sp` after a call named
+/// it a dword and the LIR verifier refused it (far_return -O0).
+#[test]
+fn the_stack_pointer_is_a_word_at_m16() {
+    use crate::model::ir::{Loc, Operation};
+    let module = llrm_mir::parse::module(M16_STACK_ARGS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let adjust = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| {
+            w.op == Operation::Binary
+                && matches!(
+                    &w.dests[..],
+                    [Loc::Reg(r)] if r.register == llrm_lir::registers::RegId::SP
+                )
+        })
+        .expect("an add of the stack pointer");
+    assert!(matches!(&adjust.dests[..], [Loc::Reg(r)] if r.width == 2), "{adjust:?}");
+}
+
+const U64_TO_DOUBLE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define double @f(i64 %x) {
+entry:
+  %r = uitofp i64 %x to double
+  ret double %r
+}
+";
+
+/// An unsigned 64-bit integer converts through the 80-bit register class and a
+/// pool entry of its fudge (0.0f at +0, 2^64 at +4): the entry is read four
+/// bytes inside its eight, and the register class alone is no long double.
+/// 19 functions stopped at the entry's type.
+#[test]
+fn an_unsigned_64_bit_integer_converts_to_a_double() {
+    let module = llrm_mir::parse::module(U64_TO_DOUBLE).expect("parses");
+    selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}
+
+const CALL_RETURNING_I64: &str =
+    "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+define internal cc 1002 i64 @t_(double noundef %0) {
+b1:
+  %1 = fptosi double %0 to i64
+  ret i64 %1
+}
+define i64 @f(double noundef %d) {
+b1:
+  %r = call cc 1002 i64 @t_(double noundef %d)
+  ret i64 %r
+}
+";
+
+/// A call returning an i64 delivers both halves. The EDX read took the call's
+/// glue only when the convention's clobber list or the target's named EDX; a
+/// callee that returns in EDX without clobbering it made `mov v, EDX` read a
+/// register nothing defined (`floatalloc: _main reads edx before every path
+/// writes it`, double_to_int64.c -O0 under `--isel=dag`).
+#[test]
+fn a_call_delivers_both_halves_of_an_i64_result() {
+    let module = llrm_mir::parse::module(CALL_RETURNING_I64).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let call = insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.op == Operation::Call)).expect("a call");
+    let mut registers: Vec<_> = call.delivers.iter().map(|(_, register)| *register).collect();
+    registers.sort_by_key(|r| r.index());
+    assert_eq!(registers, [llrm_lir::registers::RegId::EAX, llrm_lir::registers::RegId::EDX], "{call:?}");
+}
+
+/// A load marked `!invariant.load` selected by the DAG selector carried no
+/// flag to LIR (`MemInfo` had none), so MachineCSE and the sinker took it for a
+/// load that a store may change: the pin's `visitLoad` marks it and
+/// `isCSECandidate` takes it.
+#[test]
+fn a_load_marked_invariant_is_an_invariant_load_in_lir() {
+    let flags = |mark: &str| {
+        let text = format!(
+            "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@tab = global [4 x i32] [i32 1, i32 2, i32 3, i32 4]
+define i32 @f(i32 %n) {{
+entry:
+  %p = getelementptr [4 x i32], ptr @tab, i32 0, i32 %n
+  %a = load i32, ptr %p{mark}
+  ret i32 %a
+}}
+!0 = !{{}}
+"
+        );
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+            .unwrap_or_else(|e| panic!("{}", e.0));
+        done.body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter(|one| {
+                one.what
+                    .as_ref()
+                    .is_some_and(
+                        |what| what.op == Operation::Move
+                            && matches!(
+                                what.sources.as_slice(),
+                                [crate::model::ir::Loc::Mem(cell)] if cell.addr.as_ref().is_some_and(|a| a.space == crate::model::ir::Space::Segment)
+                            ),
+                    )
+            })
+            .map(|one| one.invariant())
+            .collect::<Vec<bool>>()
+    };
+    assert_eq!(flags(""), [false], "the premise: one load of the cell, not invariant");
+    assert_eq!(flags(", !invariant.load !0"), [true]);
+}
+
+const FAR_INDIRECT_ARGUMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+define void @f(ptr addrspace(1) %p) {
+entry:
+  call watcallcc addrspace(1) void %p(i32 7)
+  ret void
+}
+";
+
+/// The argument of a call through a far pointer reaches the call in its
+/// register: `CALL_FAR` was not a call to the emitter, so the copy to `eax`
+/// was dropped and `table[i](7 + i)` ran with garbage (function_table -O2:
+/// want 7, got 478).
+#[test]
+fn a_call_through_a_far_pointer_receives_its_arguments() {
+    let module = llrm_mir::parse::module(FAR_INDIRECT_ARGUMENT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let call = insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.op == crate::model::ir::Operation::Call));
+    assert!(call.is_some_and(|call| !call.requires.is_empty()), "{insns:?}");
+}

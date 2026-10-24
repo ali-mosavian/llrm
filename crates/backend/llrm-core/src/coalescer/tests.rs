@@ -106,6 +106,39 @@ fn test_a_copy_between_values_that_do_not_overlap_is_joined_and_removed() {
     assert_consistent(&lis, &was, 1);
 }
 
+/// `v1 := def; v2 := mov v1` and nothing reads `v2`: the copy is dead, and so
+/// then is the definition it alone read. Only the copy went, leaving a `v1`
+/// that nothing reads (C5: `eliminateDeadDefs` was not run).
+#[test]
+fn test_a_dead_copy_takes_the_definition_only_it_read() {
+    let (a, c) = (def(1), copy(2, 1));
+    let was = body(&[(&[Arc::clone(&a), Arc::clone(&c)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Joined);
+    assert!(names(&lis).is_empty(), "both the copy and the def are gone: {:?}", names(&lis));
+}
+
+/// `v1 := call; v2 := mov v1` and nothing reads `v2`: the copy goes, the call
+/// stays. Run on the sweep's regparm3 matrix callers (#4152) it erased the
+/// calls whose delivered value nothing read: wrong output.
+#[test]
+fn test_a_dead_copy_does_not_take_a_call_that_delivered_its_source() {
+    let what = Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) };
+    let mut call = Insn::new(0, None, Some(what), vec![1], vec![]);
+    call.delivers = vec![(Held { value: 1, width: 4 }, llrm_lir::registers::RegId::EAX)];
+    let (call, c) = (Arc::new(call), copy(2, 1));
+    let was = body(&[(&[Arc::clone(&call), Arc::clone(&c)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Joined);
+    assert_eq!(names(&lis), vec![(vec![1], vec![])], "the call stays, the copy goes");
+}
+
 /// `v1` redefined while `v2` (a copy of its first value) is live: the join
 /// would make `v2` read the new value. The copy stays and nothing changes.
 #[test]

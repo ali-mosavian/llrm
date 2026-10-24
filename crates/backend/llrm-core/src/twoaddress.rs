@@ -192,9 +192,32 @@ impl BodyFacts {
         let mut lis = self.lis.borrow_mut();
         lis.rewrite_instr(block, one.id(), Arc::clone(last));
         let mut changed: BTreeSet<u32> = named(one).symmetric_difference(&named(last)).copied().collect();
+        // The pin's update of a tied pair: the copy `into := source` before
+        // the instruction, which reads `into` where it read `source`.
+        let tied_copy = match rest {
+            [copy] => match (copy.defines.as_slice(), copy.uses.as_slice(), one.defines.as_slice()) {
+                (&[into], &[source], &[defined])
+                    if into == defined
+                        && copy.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Move)
+                        && one.uses.contains(&source)
+                        && last.uses.contains(&into) =>
+                {
+                    Some((into, source))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
         for new in rest {
             lis.insert_instr_before(block, Some(last.id()), Arc::clone(new));
-            changed.extend(named(new));
+            if tied_copy.is_none() {
+                changed.extend(named(new));
+            }
+        }
+        if let Some((into, source)) = tied_copy {
+            lis.tied_copy_inserted(rest[0].id(), last.id(), into, source, last.uses.contains(&source));
+            changed.remove(&into);
+            changed.remove(&source);
         }
         // Only an interval already made is redone; the others are made from the
         // body as it is.
@@ -427,7 +450,7 @@ pub struct Commuter<'a> {
     /// into.
     dst: HashMap<u32, Mapped>,
     /// `Processed`: the instructions whose copies are in the maps.
-    processed: std::collections::HashSet<InstrKey>,
+    processed: crate::support::hash::HashSet<InstrKey>,
     /// The values `convertInstTo3Addr` made a two-register `lea` of in this
     /// block (`isConvertibleLEA`).
     leas: std::collections::HashSet<u32>,
@@ -490,7 +513,8 @@ impl<'a> Commuter<'a> {
         &mut self,
         one: &Insn,
     ) {
-        if !self.processed.insert(one.id()) {
+        // Only an instruction that carries a copy is read, and once.
+        if one.requires.is_empty() && one.delivers.is_empty() || !self.processed.insert(one.id()) {
             return;
         }
         // The copy to a register, before the instruction.
@@ -1207,5 +1231,51 @@ impl<'a> Commuter<'a> {
         let mut made = (**one).clone();
         made.what = Some(Semantics { sources: vec![Loc::Held(*second), Loc::Held(*first)], ..what.clone() });
         Some(Arc::new(made))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::model::ir::{Held, Operation, Semantics};
+    use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::support::hash::IndexMap;
+
+    /// `process_copy` entered every instruction of a block in a std `HashSet`
+    /// (SipHash, 409 Ir an insert, 0.86 M of d_faces' 11.7 M in TwoAddress)
+    /// though only an instruction that carries a copy has anything to read.
+    #[test]
+    fn test_process_copy_remembers_only_an_instruction_that_carries_a_copy() {
+        let held = |value: u32| Held { value, width: 4 };
+        let plain = {
+            let what = Semantics {
+                name: Some("mov".into()),
+                dests: vec![Loc::Held(held(2))],
+                sources: vec![Loc::Imm(crate::model::ir::Imm { value: 1, width: 4, address: None })],
+                ..Semantics::new(Operation::Move)
+            };
+            Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![2], vec![]))
+        };
+        let arriving = {
+            let what = Semantics { name: Some("".into()), ..Semantics::new(Operation::Nothing) };
+            let mut one = Insn::new(1, Some((1, 1)), Some(what), vec![1], vec![]);
+            one.delivers = vec![(held(1), llrm_lir::registers::RegId::EAX)];
+            Arc::new(one)
+        };
+        let body = LirBody::new(
+            "t",
+            0,
+            vec![LirBlock::new(0, vec![Arc::clone(&plain), Arc::clone(&arriving)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let facts = BodyFacts::of(&body);
+        let mut walk = Commuter::new(&facts, 0);
+        walk.process_copy(&plain);
+        assert_eq!(walk.processed.len(), 0, "a plain instruction is not remembered");
+        walk.process_copy(&arriving);
+        assert_eq!(walk.processed.len(), 1, "the premise: one that carries a copy is");
     }
 }

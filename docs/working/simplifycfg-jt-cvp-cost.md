@@ -89,4 +89,6 @@ Steps, one PR each, Ir on both arms and identical objects, the pin pass each mir
 | 5 | JumpThreading `process_threadable_edges` (619 calls, 17 K each): `computeValueKnownInPredecessors` memo per (value, block) | `computeValueKnownInPredecessorsImpl` | -3 M | 2026-11-17 |
 | 6 | re-take on the ledger (dist), the remaining top-5 callees by Ir | - | - | 2026-11-18 |
 
+Step 3's counts (callgrind d_faces -O2, parity 00a8ea652; the pin side from `ledger2/cg-opt.out`, where `matchICmpOperand` is inlined): `get_value_from_icmp_condition` 6,781 calls against the pin's `getValueFromICmpCondition` 4,869; `match_icmp_operand` 19,174 calls (2.8 per condition: the pin makes at most two, inline) with `scalar_size_in_bits` 30,782 calls (4.5 per condition: the pin's `getScalarSizeInBits` is a field read) and `pattern::binary` 44,254 calls (6.5 per condition). So the lever is calls per condition: the width once, the pattern shape once, the two operands matched together.
+
 Each target is a guess from the callee cost until the step is profiled; the PR states the measured number.

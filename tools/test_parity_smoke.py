@@ -597,3 +597,21 @@ def test_a_compile_to_the_null_device_reaches_the_encoder(tmp_path):
     compiler.write_text("#!/usr/bin/env python3\nimport sys\nout = sys.argv[sys.argv.index('-o') + 1]\nif out.endswith('.obj'):\n    sys.exit('llrm-c: Semantics(op=BINARY)')\n")
     compiler.chmod(0o755)
     assert ps.compile_ok([str(compiler), "x.c", "-o", __import__("os").devnull], {}) is not None
+
+
+def test_a_refusal_can_carry_the_first_panic_line_of_a_failed_test():
+    """#4172 was refused three times with the test's name and nothing else; the cause was a `debug_assert_eq!` that fires in the runner's debug profile and not in release."""
+    output = """running 1 test
+test backend::selectiondag::tests::legalize_types::the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector ... FAILED
+
+failures:
+
+---- backend::selectiondag::tests::legalize_types::the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector stdout ----
+
+thread 'backend::selectiondag::tests::legalize_types::the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector' (1924096) panicked at crates/backend/llrm-core/src/backend/selectiondag/legalize_types.rs:173:13:
+assertion `left == right` failed: a node on the worklist is ready
+  left: Processed
+ right: Ready
+"""
+    reasons = ps.panic_reasons(output)
+    assert reasons["the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector"] == "assertion `left == right` failed: a node on the worklist is ready (left: Processed, right: Ready)"

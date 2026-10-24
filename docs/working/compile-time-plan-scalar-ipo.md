@@ -11,7 +11,11 @@ Inclusive per pass, M Ir.
 |---|--:|--:|--:|
 | GVN | 40.6 | 49.2 | -8.6 (off the list) |
 | EarlyCSE | 32.5 | 7.8 | 24.7 |
+<<<<<<< HEAD
 | SCCP + IPSCCP (pin: SCCPPass 11x 4.2 + IPSCCP 1x 4.1) | 11.7 | 8.3 | 3.4 |
+=======
+| SCCP | 11.7 | 4.2 | 7.5 |
+>>>>>>> origin/feat/parity
 | MemCpyOpt | 10.7 | 0.47 | 10.2 |
 | SROA | 9.3 | 9.8 | -0.5 (parity) |
 | functionattrs post-order | 8.2 | 1.4 | 6.8 |
@@ -23,38 +27,49 @@ Inclusive per pass, M Ir.
 
 The MemorySSA rows overlap EarlyCSE and MemCpyOpt: EarlyCse 32.5 = MemorySSA 18.7 + fork/clone 3.4 + walk 8.7 + rest 1.7; MemCpyOpt 10.7 = MemorySSA 6.9 + `Pointers::run` 2.7 + body 0.7.
 
+<<<<<<< HEAD
 ## Bucket ledger
 
-Excess over the pin in M Ir, one tip, callee view for the bucket totals (`compile-time-owners.md`) and inclusive per-pass view for the rows. The two views overlap (MemorySSA is inside EarlyCSE and MemCpyOpt), so the rows are what is attributed and `unexplained` is the bucket's excess less them.
+Excess over the pin in M Ir, one tip. The buckets are `ledger4.py`'s: the inclusive cost of the passes it lists, ours and the pin's, so the rows below add up to the bucket (scalar 137.7 of 137.6). The pin side's MemorySSA (2.9) sits inside its EarlyCSE.
 
-Scalar bucket, ours 137.6 / pin 81.8, excess 55.8:
+Scalar, ours 137.6 / pin 81.8, excess 55.8 (the pin's 81.8 holds IPSCCP 4.1):
 
-| row | excess | status |
+| pass | ours | pin | excess | status |
+|---|--:|--:|--:|---|
+| EarlyCse: MemorySSA 18.7 vs 2.9 | 18.7 | 2.9 | 15.8 | handed to w-3 (S3), 11-10 |
+| EarlyCse: fork + `Context` clone | 3.4 | 0 | 3.4 | handed to w-3, 11-20 |
+| EarlyCse: the walk and the rest | 10.4 | 4.9 | 5.5 | unexplained |
+| MemCpyOpt: MemorySSA | 6.9 | 0 | 6.9 | handed to w-3 (S3), 11-10 |
+| MemCpyOpt: `Pointers::run` | 2.7 | 0 | 2.7 | handed to w-5, 11-27 |
+| MemCpyOpt: body | 1.1 | 0.47 | 0.6 | unexplained |
+| DeadStoreElimination | 13.5 | 2.8 | 10.6 | unexplained (an earlier figure, 3.9, was a callee of it) |
+| SCCP + IPSCCP | 11.7 | 8.3 | 3.4 | flat, no gap to mirror |
+| `Together` (llrm-only combined pass) | 9.3 | 0 | 9.3 | unexplained |
+| `Dead` (llrm-only) | 6.4 | 0 | 6.4 | unexplained |
+| ADCE, BDCE, TRE, Float2Int | 3.7 | 3.1 | 0.6 | unexplained, small |
+| GVN | 40.6 | 49.2 | -8.6 | below the pin |
+| SROA, Mem2Reg | 9.3 | 9.8 | -0.5 | below the pin |
+
+Handed 28.8, flat 3.4, below the pin -9.1, unexplained 32.5.
+
+IPO, ours 47.0 / pin 13.3, excess 33.7:
+
+| pass | ours | status |
 |---|--:|---|
-| MemorySSA built per pass (EarlyCse 18.7 + MemCpyOpt 6.9 vs pin 2.9) | 22.7 | handed to w-3 (S3), 11-10 |
-| EarlyCse fork + `Context` clone | 3.4 | handed to w-3, 11-20 |
-| MemCpyOpt `Pointers::run` | 2.7 | handed to w-5, 11-27 |
-| SCCP + IPSCCP | 3.4 | flat, no gap to mirror |
-| GVN, SROA | -9.1 | below the pin |
-| Reassociate 3.0, DSE 1.1, InstSimplify 1.4 | 5.5 | unexplained: per-pass split not yet made |
-| rest of the bucket | 27.2 | unexplained: to attribute by callee (`ledger5.py`), 11-03 |
+| `Interprocedural::run` (holds `stamped_all` 10.0) | 14.0 | stamp part handed to w-6, 11-17; the other 4.0 unexplained |
+| `Stamp::run` | 3.9 | handed to w-6, 11-17 |
+| `Homes` | 8.4 | llrm-only, no pin pass: w-6's retire list, date to set |
+| `Spares` | 8.0 | llrm-only, no pin pass: w-6's retire list, date to set |
+| `GlobalOpt` 4.8 + `WriteOnly` 2.3 (pin GlobalOpt 0.47) | 7.1 | unexplained, funcattrs-port 11-06 |
+| `GlobalDce`, `CalleePop`, `ModuleIpo` and the rest | 5.7 | unexplained |
 
-IPO bucket, ours 47.0 / pin 13.3, excess 33.7:
-
-| row | excess | status |
-|---|--:|---|
-| Stamp: `stamped_all` 10.0 + `Stamp::run` 3.9 against the pin's 1.4 | 12.5 | handed to w-6, 11-17 |
-| Bounded | 7.0 | funcattrs-port, 11-20 |
-| GlobalOpt 4.8 vs 0.47, WriteOnly 2.3 | 6.6 | unexplained: pin GlobalOpt mirrored? to read, 11-06 |
-| functionattrs post-order in the walk | 1.1 | flat (skipping unchanged components gave -1.6 M) |
-| rest of the bucket | 6.5 | unexplained: to attribute by callee, 11-03 |
-
-`Homes` 8.4 and `Spares` 8.0 are llrm-only module passes counted in bucket 4 (w-6).
+The pin's 13.3 is not split by pass here: its passes (GlobalOpt 0.47, PostOrderFunctionAttrs 1.4, GlobalDCE 0.15, ...) do not add to it, so part of the IPO excess is a bucket-definition difference. To read in `ledger4.py` by 11-06.
 
 ## Steps
 
 One PR per step, ledger pair in each body. Dates are land dates.
 
+<<<<<<< HEAD
 | land | owner | step | pin source | M removed |
 |---|---|---|---|--:|
 | dropped 10-24 | funcattrs-port | functionattrs post-order: 5.7 of the 8.2 M is inside `stamped_all` (the Stamp row, w-6's); the walk's own is 2.5 vs pin 1.4. Skipping unchanged components measured -1.6 M (0.14%), object identical: not landed | FunctionAttrs.cpp `PostOrderFunctionAttrsPass` | 0 |
@@ -64,5 +79,16 @@ One PR per step, ledger pair in each body. Dates are land dates.
 | 11-27 | w-5 | MemCpyOpt without `Pointers::run` (the llrm-only points-to solve AA reads), with AA call pairs | MemCpyOptimizer.cpp `runImpl` | 2.7 |
 | 11-10 | w-3 | MemorySSA once per function (S3) | MemorySSA.cpp | up to 22 |
 | 11-17 | w-6 | Stamp 14.0 (`stamped_all` 10.0 + `Stamp` 3.9), llrm-only | none | up to 14 |
+=======
+| land | step | pin source | M removed |
+|---|---|---|--:|
+| 10-30 | EarlyCse walks the live function, no `fork` + `Context` clone | EarlyCSE.cpp `EarlyCSE::run` | 3.4 |
+| 11-03 | MemCpyOpt without `Pointers::run` | MemCpyOptimizer.cpp `runImpl` | 2.7 |
+| 11-06 | SCCP to the pin's cost | SCCPSolver.cpp, SCCP.cpp `runSCCP` | up to 7.5 |
+| 11-10 | MemorySSA once per function: w-3's S3; this plan only if S3 leaves it | MemorySSA.cpp | up to 22 |
+| 11-13 | functionattrs post-order as one SCC walk | FunctionAttrs.cpp `PostOrderFunctionAttrsPass` | up to 6.8 |
+| 11-17 | Stamp 14.0 (`stamped_all` 10.0 + `Stamp` 3.9), with w-6; llrm-only, no pin pass | none | up to 14 |
+| 11-20 | Bounded callers cleanup, delete `Bounded` | none | ~7 |
+>>>>>>> origin/feat/parity
 
 Row-23 back half follows, 11-23 to 12-10. `Homes` 8.4 and `Spares` 8.0 are llrm-only module passes on w-6's retire list.

@@ -6491,6 +6491,32 @@ e:
     assert_eq!(memory_loads(&shared), 1);
 }
 
+/// A load marked `!invariant.load` at the same index in two blocks was made
+/// twice: selection took only a constant global for invariant
+/// (`SelectionDAGBuilder::visitLoad` also takes the metadata).
+#[test]
+fn test_a_load_marked_invariant_in_two_blocks_is_made_once() {
+    let text = "@tab = global [4 x i16] [i16 1, i16 2, i16 3, i16 4]
+define i16 @f(i16 %n, i1 %c) addrspace(1) {
+entry:
+  %p = getelementptr [4 x i16], ptr @tab, i16 0, i16 %n
+  %a = load i16, ptr %p, !invariant.load !0
+  br i1 %c, label %t, label %e
+t:
+  %q = getelementptr [4 x i16], ptr @tab, i16 0, i16 %n
+  %b = load i16, ptr %q, !invariant.load !0
+  %s = add i16 %a, %b
+  ret i16 %s
+e:
+  ret i16 %a
+}
+!0 = !{}
+";
+    let (body, shared) = precse_of(text);
+    assert_eq!(memory_loads(&body), 2, "the premise: the table is loaded twice");
+    assert_eq!(memory_loads(&shared), 1);
+}
+
 /// The same loads of a table that is not constant stay: a store may change it.
 #[test]
 fn test_a_load_of_a_table_that_is_not_constant_is_kept() {
@@ -6556,6 +6582,35 @@ r:
     assert_eq!(extensions(&body).iter().map(|one| one.1).sum::<usize>(), 2, "the premise");
     assert_eq!(extensions(&shared).iter().map(|one| one.1).sum::<usize>(), 1);
     assert_eq!(extensions(&shared)[0].1, 1, "made in the entry block: {:?}", extensions(&shared));
+}
+
+/// The same expression in a body with no frequency table from selection got no
+/// PRE: `isProfitableToHoistInto` asks `MachineBlockFrequencyInfo` of the
+/// body's own CFG, which every body has.
+#[test]
+fn test_a_partially_redundant_expression_is_hoisted_in_a_body_with_no_frequency_table() {
+    let text = "@g = global i16 0
+@h = global i16 0
+define void @f(i8 %b, i1 %c, i1 %d) addrspace(1) {
+entry:
+  br i1 %c, label %a, label %m
+a:
+  %z1 = zext i8 %b to i16
+  store i16 %z1, ptr @g
+  br i1 %d, label %m, label %r
+m:
+  %z2 = zext i8 %b to i16
+  store i16 %z2, ptr @h
+  ret void
+r:
+  ret void
+}
+";
+    let mut body = selected(text, "f").expect("selects").body;
+    body.frequencies = None;
+    assert_eq!(extensions(&body).iter().map(|one| one.1).sum::<usize>(), 2, "the premise: two, no table");
+    let shared = crate::backend::precse::shared(&body, &crate::backend::classes::RegisterClasses::m16());
+    assert_eq!(extensions(&shared).iter().map(|one| one.1).sum::<usize>(), 1);
 }
 
 /// The same shape where the dominator runs far more often than the two blocks

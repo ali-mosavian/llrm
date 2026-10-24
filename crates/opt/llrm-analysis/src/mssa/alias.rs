@@ -75,6 +75,10 @@ pub struct Location {
     /// What an overlap test is asked of: the reference, its width made large
     /// when unbounded.
     effective: MemRef,
+    /// The location as `AAResults` takes it: the pointer, the size and the
+    /// type tags of the access it is made of; none for a reference no pointer
+    /// names.
+    memory: Option<crate::aa::MemoryLocation>,
     /// This location with its size made unknown, made once.
     wider: std::cell::OnceCell<Rc<Location>>,
 }
@@ -127,6 +131,19 @@ impl<'a> AliasQuery<'a> {
         }
     }
 
+    /// The AA stack the pin's default pipeline asks: TBAA, BasicAA and, where
+    /// the module analysis is held, GlobalsAA.
+    fn stack(&self) -> crate::aggregate::AggregateAA<'a> {
+        let unit = self.unit;
+        let mut stack = crate::aggregate::AggregateAA::new().with_unit(unit);
+        stack.add_aa_result(crate::typebasedaa::TypeBasedAA::new(unit));
+        stack.add_aa_result(crate::basicaa::BasicAA::new(unit));
+        if let Some(info) = unit.globals_mr {
+            stack.add_aa_result(crate::globalsmodref::GlobalsAAResult::new(unit, info));
+        }
+        stack
+    }
+
     /// The walks down a pointer's GEP chain made so far.
     pub fn bases_walked(&self) -> u64 {
         self.bases_walked.get()
@@ -158,7 +175,19 @@ impl<'a> AliasQuery<'a> {
         self.next_id.set(id + 1);
         let effective =
             if unbounded { MemRef { width: UNBOUNDED_WIDTH, ..reference.clone() } } else { reference.clone() };
-        Rc::new(Location { id, reference: reference.clone(), unbounded, effective, wider: Default::default() })
+        let memory = reference
+            .pointer
+            .map(
+                |pointer| crate::aa::MemoryLocation::new(
+                    pointer,
+                    if unbounded {
+                        crate::aa::LocationSize::BeforeOrAfterPointer
+                    } else {
+                        crate::aa::LocationSize::Precise(u64::from(reference.width))
+                    },
+                ),
+            );
+        Rc::new(Location { id, reference: reference.clone(), unbounded, effective, memory, wider: Default::default() })
     }
 
     /// `getWithNewSize(LocationSize::beforeOrAfterPointer())`.
@@ -182,9 +211,19 @@ impl<'a> AliasQuery<'a> {
             return found.clone();
         }
         let made = match self.unit.function.instruction(inst).opcode {
-            Opcode::Load { .. } | Opcode::Store { .. } => {
-                self.accesses.references.get(&inst).map(|reference| self.location_for(reference, false))
-            }
+            Opcode::Load { .. } | Opcode::Store { .. } => self.accesses.references.get(&inst).map(|reference| {
+                let made = self.location_for(reference, false);
+                // The access's own tags (`MemoryLocation::get`).
+                let tagged = crate::aa::MemoryLocation::get(self.unit, inst).filter(|_| made.memory.is_some());
+                match (Rc::try_unwrap(made), tagged) {
+                    (Ok(mut location), Some(tagged)) => {
+                        location.memory = Some(tagged);
+                        Rc::new(location)
+                    }
+                    (Ok(location), None) => Rc::new(location),
+                    (Err(shared), _) => shared,
+                }
+            }),
             _ => None,
         };
         self.by_instruction.borrow_mut().insert(inst, made.clone());
@@ -206,6 +245,20 @@ impl<'a> AliasQuery<'a> {
             return known;
         }
         self.asked.set((asked + 1, worked + 1));
+        // `AAResults::getModRefInfo(DefInst, UseLoc)` over the pin's default
+        // stack (TBAA, BasicAA, GlobalsAA): the lists of the access
+        // footprints answer only where a location has no pointer.
+        if let Some(memory) = &loc.memory
+            && matches!(
+                self.unit.function.instruction(def).opcode,
+                Opcode::Load { .. } | Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_)
+            )
+        {
+            use crate::aa::AAResults;
+            let found = self.stack().get_mod_ref_info(def, Some(memory), &mut self.basic.borrow_mut()).is_mod_set();
+            self.cache.borrow_mut().insert(key, found);
+            return found;
+        }
         let writes = self.accesses.writes(def);
         // A def whose writes the lists do not name is asked of BasicAA.
         let found = if writes.is_none() {

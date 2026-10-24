@@ -21,7 +21,7 @@ Every pin slot is in exactly one state (the test refuses a row without one; `non
 | -O3 | 50 | 26 | 10 | 6 | 29 | 0 | 121 |
 | -Os | 50 | 25 | 10 | 5 | 27 | 0 | 117 |
 
-At -O2 the 66 slots the first table called `none` are 10 EXECUTED + 29 MISSING + 25 N/A + 2 DEVIATE (ipsccp, deadargelim); its 3 `ours-only` are DEVIATE rows; 48 + 5 + 10 + 29 + 25 = 117 slots. -Os is the -O2 list. (-O1: the one ORDER slot is memcpyopt.) MISSING counts slots, not passes: the three late `instcombine` runs are three rows of one pass.
+At -O2 the 66 slots the first table called `none` are 10 EXECUTED + 29 MISSING + 25 N/A + 2 DEVIATE (ipsccp, deadargelim); its 2 `ours-only` are DEVIATE rows; 48 + 5 + 10 + 29 + 25 = 117 slots. -Os is the -O2 list. (-O1: the one ORDER slot is memcpyopt.) MISSING counts slots, not passes: the three late `instcombine` runs are three rows of one pass.
 
 ## MISSING rows ranked by effect
 
@@ -321,7 +321,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Early | sroa<modify-cfg> | function<eager-inv> | MATCH | sroa@1179:Translated |  |  |
 | -O1 | Early | early-cse<> | function<eager-inv> | MATCH | earlycse@1180:Translated |  |  |
 | -O1 | Cleanup | mem2reg | function<eager-inv> | MATCH | promote@1241:Translated |  |  |
-| -O1 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + fold@1242:Old + dead@1242:Old |  |  |
+| -O1 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + dead@1242:Old |  |  |
 | -O1 | Cleanup | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | MATCH | decide@1244:Partial |  |  |
 | -O1 | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | sroa@646:Translated |  |  |
 | -O1 | Simplify | early-cse<memssa> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | earlycse@649:Translated |  |  |
@@ -390,7 +390,6 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Late | tailcallelim | function<eager-inv> | MATCH | tailrec@1677:Translated |  |  |
 | -O1 | Late | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;speculate-unpredictables> | function<eager-inv> | MATCH | simplifycfg@1682:Partial |  |  |
 | -O1 | Late | annotation-remarks | function | N/A |  | remarks off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -O1 | Late |  |  | DEVIATE | 2376: simplifycfg@2376 | registry Partial: its position in the Late list is not the pin's (unverified which pin simplifycfg it is) |  |
 | -O1 | Module | memprof-remove-attributes |  | N/A |  | memprof: no profile Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O1 | Module | annotation2metadata |  | N/A |  | no source annotations Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O1 | Module | forceattrs |  | N/A |  | command-line forced attributes: none given Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
@@ -425,7 +424,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Early | sroa<modify-cfg> | function<eager-inv> | MATCH | sroa@1179:Translated |  |  |
 | -O2 | Early | early-cse<> | function<eager-inv> | MATCH | earlycse@1180:Translated |  |  |
 | -O2 | Cleanup | mem2reg | function<eager-inv> | MATCH | promote@1241:Translated |  |  |
-| -O2 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + fold@1242:Old + dead@1242:Old |  |  |
+| -O2 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + dead@1242:Old |  |  |
 | -O2 | Cleanup | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | MATCH | decide@1244:Partial |  |  |
 | -O2 | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | sroa@646:Translated |  |  |
 | -O2 | Simplify | early-cse<memssa> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | earlycse@649:Translated |  |  |
@@ -506,7 +505,6 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Late | tailcallelim | function<eager-inv> | MATCH | tailrec@1677:Translated |  |  |
 | -O2 | Late | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;speculate-unpredictables> | function<eager-inv> | MATCH | simplifycfg@1682:Partial |  |  |
 | -O2 | Late | annotation-remarks | function | N/A |  | remarks off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -O2 | Late |  |  | DEVIATE | 2376: simplifycfg@2376 | registry Partial: its position in the Late list is not the pin's (unverified which pin simplifycfg it is) |  |
 | -O2 | Module | memprof-remove-attributes |  | N/A |  | memprof: no profile Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O2 | Module | annotation2metadata |  | N/A |  | no source annotations Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O2 | Module | forceattrs |  | N/A |  | command-line forced attributes: none given Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
@@ -543,7 +541,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Early | early-cse<> | function<eager-inv> | MATCH | earlycse@1180:Translated |  |  |
 | -O3 | Early | callsite-splitting | function<eager-inv> | MISSING |  | -O3 only; not measured | funcattrs-port, 11-09 |
 | -O3 | Cleanup | mem2reg | function<eager-inv> | MATCH | promote@1241:Translated |  |  |
-| -O3 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + fold@1242:Old + dead@1242:Old |  |  |
+| -O3 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + dead@1242:Old |  |  |
 | -O3 | Cleanup | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | MATCH | decide@1244:Partial |  |  |
 | -O3 | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | sroa@646:Translated |  |  |
 | -O3 | Simplify | early-cse<memssa> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | earlycse@649:Translated |  |  |
@@ -626,7 +624,6 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Late | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;speculate-unpredictables> | function<eager-inv> | MATCH | simplifycfg@1682:Partial |  |  |
 | -O3 | Late | annotation-remarks | function | N/A |  | remarks off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O3 | Late |  |  | DEVIATE | 1474: loop-unroll-and-jam@1474 | -O3: the pin's printed list has no unroll-and-jam in this fixture; unverified |  |
-| -O3 | Late |  |  | DEVIATE | 2376: simplifycfg@2376 | registry Partial: its position in the Late list is not the pin's (unverified which pin simplifycfg it is) |  |
 | -O3 | Module | memprof-remove-attributes |  | N/A |  | memprof: no profile Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O3 | Module | annotation2metadata |  | N/A |  | no source annotations Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O3 | Module | forceattrs |  | N/A |  | command-line forced attributes: none given Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
@@ -663,7 +660,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Early | sroa<modify-cfg> | function<eager-inv> | MATCH | sroa@1179:Translated |  |  |
 | -Os | Early | early-cse<> | function<eager-inv> | MATCH | earlycse@1180:Translated |  |  |
 | -Os | Cleanup | mem2reg | function<eager-inv> | MATCH | promote@1241:Translated |  |  |
-| -Os | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + fold@1242:Old + dead@1242:Old |  |  |
+| -Os | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + dead@1242:Old |  |  |
 | -Os | Cleanup | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | MATCH | decide@1244:Partial |  |  |
 | -Os | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | sroa@646:Translated |  |  |
 | -Os | Simplify | early-cse<memssa> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | earlycse@649:Translated |  |  |
@@ -744,7 +741,6 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Late | tailcallelim | function<eager-inv> | MATCH | tailrec@1677:Translated |  |  |
 | -Os | Late | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;speculate-unpredictables> | function<eager-inv> | MATCH | simplifycfg@1682:Partial |  |  |
 | -Os | Late | annotation-remarks | function | N/A |  | remarks off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -Os | Late |  |  | DEVIATE | 2376: simplifycfg@2376 | registry Partial: its position in the Late list is not the pin's (unverified which pin simplifycfg it is) |  |
 | -Os | Module | memprof-remove-attributes |  | N/A |  | memprof: no profile Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -Os | Module | annotation2metadata |  | N/A |  | no source annotations Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -Os | Module | forceattrs |  | N/A |  | command-line forced attributes: none given Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |

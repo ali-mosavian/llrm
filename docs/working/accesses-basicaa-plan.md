@@ -25,3 +25,13 @@ d_faces -O2 (board command, release profile; funcattrs-port's dist read on 62d45
 | S3 | Other readers of `Annotated` (`memory.rs` `Unit::annotated`, `references.rs`, `licm/mod.rs`, `loopaccessinfo.rs`, `lazyvalueinfo.rs`) move to `AAResults` or `Unit` queries; `Annotated` deleted | no reader left; parity registry row | 12-11 (estimate; depends on funcattrs-port's range-source swap, date theirs) |
 
 Interface with funcattrs-port: S1 and S2 do not touch `Annotated`'s result type or ranges; S3 starts after their swap lands. Open until S1: whether `OptimizeUses` (the optimized-use names the shadow ignores, `optimized_uses`) is needed at build or only on first walk; the pin does it at build, so S1 keeps it at build over `AAResults`.
+
+## Status 10-23 and the deviations still open
+
+S1a (#3991) and the AliasQuery switch of `mod_set_loc` (#4155) are in. Open, owner w-3:
+
+| # | Deviation | Why it is there | Exit | Date |
+|---|---|---|---|---|
+| AQ1 | `AliasQuery::mod_set_loc` keeps the capture stand-in (`unreachable_from`) after the AA stack answers | BasicAA has no `aliasPHI`/`aliasSelect` ([BasicAliasAnalysis.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/BasicAliasAnalysis.cpp), basicaa.rs L735 "not yet"), where the pin proves a phi of loaded pointers apart from an unexposed local | translate `aliasPHI` and `aliasSelect` in the pin's order, then delete the stand-in | design note and first PR 11-24; exit 11-27 |
+| G10 | `GlobalsAAResult::alias` treats a global the unit states unaddressed (`-oa`, INIT `sw`; `Globals::tracked`) as non-address-taken | the Watcom `-oa` switch is a promise the pin has no analog of; `test_relaxed_alias_checking_keeps_unaddressed_objects_across_a_store` pins it | state the promise through the one target description (memory-space/AA model) instead of the `Globals` side table; tuning phase | row 10-30; code undated |
+| TQ1 | an absolute-segment volatile store (video memory) is apart from program objects | target knowledge the pin cannot say; the pin keeps both loads of `farvolatile` | tuning row via the target description, `farvolatile` as its regression | undated |

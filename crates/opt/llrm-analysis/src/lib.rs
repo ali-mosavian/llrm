@@ -76,7 +76,7 @@
 //! pass the result is kept if the pass named it preserved; or, for an entry
 //! that reads only the function, if the function is unchanged; or, for an entry
 //! with `depends`, if the change log cannot have altered it; or it is updated
-//! from the log (`INCREMENTAL`: `Counted`, `DominatedEdges`, `Bounded`,
+//! from the log (`INCREMENTAL`: `Counted`, `DominatedEdges`,
 //! `Accesses`); else it is dropped and recomputed on the next ask. Module
 //! entries (`GlobalsAA`, `Summaries`) are dropped unless every run
 //! of a pass preserved them. `LLRM_CHECK_REPLAY` asserts that kept and updated

@@ -25,7 +25,8 @@ Parse and sema are cheaper than the pin's (17.7 against 30.8). Everything after 
 
 | row | change | expected | check |
 |---|---|--:|---|
-| F1 | binary record stream: the cgshim writes fixed-width records, `stream` reads them without a parse | -12 | callgrind child + parent, same TU |
+| F1a | cgshim formats its own lines, `stream::parse` borrows (landed #4187) | -7.5 | perf stat with wccq 1059.7 -> 1052.2 M; callgrind `--trace-children` 1079.8 -> 1071.7 M (-8.1) |
+| F1b | binary record stream: fixed-width records, no text scan on either side. Owner w-5, 2026-11-06. Blocked by: the 83 `emit` sites in cgshim.c still name their fields as text, and `hir::unit` reads `Record` args as strings | -4.5 | callgrind `--trace-children`, same TU |
 | F2 | `emit_block`/`declare_outside`: per-block and per-function setup that scales with the module (attribute `declare_outside` 3.2 M for 11 functions first) | -4 | callgrind inclusive |
 | F3 | `Body::eval`: attribute self cost by expression kind before changing anything | -3 | callgrind self by function |
 | F4 | `hir::unit` canonical-type interning (`canonical_type` 0.9 M self) | -1 | callgrind |

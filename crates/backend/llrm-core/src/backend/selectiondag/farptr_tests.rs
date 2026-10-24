@@ -167,3 +167,21 @@ fn an_inline_copy_between_far_pointers_moves_the_offset_word() {
     assert!(spaces.len() >= 8, "four word loads and four stores: {}", dag.dump());
     assert!(spaces.iter().all(|space| *space == 259), "{spaces:?}\n{}", dag.dump());
 }
+
+/// `SEGMENT_OF` names its global as an operand: the matcher morphs the node to
+/// a pseudo with the operands it has and clears its data, so a global kept in
+/// the data was lost and every start of a huge array read as DGROUP's
+/// (tests/run/c/huge_array crashed at run time).
+#[test]
+fn a_segment_names_its_global_as_an_operand() {
+    let dag = built(
+        "@far = addrspace(1) global [8 x i16] zeroinitializer\n@near = global i16 0\n\
+         define i16 @f() {\n  %a = load i16, ptr addrspace(1) @far\n  %p = addrspacecast ptr @near to ptr addrspace(1)\n  %b = load i16, ptr addrspace(1) %p\n  %c = add i16 %a, %b\n  ret i16 %c\n}\n",
+    );
+    let segments: Vec<_> = dag.nodes().iter().filter(|node| node.opcode == own::SEGMENT_OF).collect();
+    assert_eq!(segments.len(), 2, "{}", dag.dump());
+    for segment in segments {
+        assert_eq!(segment.ops.len(), 1, "{}", dag.dump());
+        assert_eq!(dag.opcode(segment.ops[0]), ISD::TargetGlobalAddress);
+    }
+}
