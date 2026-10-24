@@ -982,6 +982,9 @@ impl References {
         host: &Unit,
         inst: InstId,
     ) -> Option<MemRef> {
+        if !alias::annotates(&host.function.instruction(inst).opcode) {
+            return None;
+        }
         if let Some(found) = self.made.borrow().get(&inst) {
             return found.clone();
         }
@@ -998,7 +1001,8 @@ impl References {
     ) {
         self.annotating(host, |unit, pointers| {
             for (_, inst) in host.function.walk() {
-                if self.made.borrow().contains_key(&inst) {
+                if !alias::annotates(&host.function.instruction(inst).opcode) || self.made.borrow().contains_key(&inst)
+                {
                     continue;
                 }
                 let made = self.annotate(unit, pointers, inst);

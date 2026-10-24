@@ -3680,6 +3680,14 @@ impl Annotation {
     }
 }
 
+/// Whether an instruction of this opcode has a reference to annotate.
+pub fn annotates(opcode: &Opcode) -> bool {
+    matches!(
+        opcode,
+        Opcode::Load { .. } | Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_)
+    )
+}
+
 /// The reference of the load, store or call `inst` with the provenance alias
 /// finds for it; none where the instruction makes none.
 pub fn annotate_one(
@@ -3689,10 +3697,7 @@ pub fn annotate_one(
     annotation: &Annotation,
     inst: InstId,
 ) -> Option<MemRef> {
-    if !matches!(
-        unit.function.instruction(inst).opcode,
-        Opcode::Load { .. } | Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_)
-    ) {
+    if !annotates(&unit.function.instruction(inst).opcode) {
         return None;
     }
     let reference = MemRef::of(unit, inst).or_else(|| MemRef::filled(unit, inst))?;
