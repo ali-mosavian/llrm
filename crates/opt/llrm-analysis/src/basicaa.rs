@@ -144,6 +144,21 @@ pub(crate) fn underlying_object(
     BasicAA::new(unit).underlying(operand)
 }
 
+/// `MergeAliasResults`.
+fn merge_alias_results(
+    one: AliasResult,
+    other: AliasResult,
+) -> AliasResult {
+    use AliasResult::{MayAlias, MustAlias, NoAlias, PartialAlias};
+    match (one, other) {
+        (NoAlias, NoAlias) => NoAlias,
+        (MustAlias, MustAlias) => MustAlias,
+        (PartialAlias { .. }, PartialAlias { .. }) => one,
+        (PartialAlias { .. }, MustAlias) | (MustAlias, PartialAlias { .. }) => PartialAlias { offset: None },
+        _ => MayAlias,
+    }
+}
+
 pub struct BasicAA<'a> {
     unit: &'a Unit<'a>,
 }
@@ -664,7 +679,10 @@ impl<'a> BasicAA<'a> {
             return AliasResult::NoAlias;
         }
         let (v1, v2) = (self.strip(a.ptr), self.strip(b.ptr));
-        if v1 == v2 {
+        // Looking through phis, values of two iterations may be compared: the
+        // same value is the same only outside a cycle
+        // (`isValueEqualInPotentialCycles`).
+        if self.equal_in_potential_cycles(v1, v2, aaqi) {
             return AliasResult::MustAlias;
         }
         let (o1, o2) = (self.underlying(v1), self.underlying(v2));
@@ -714,12 +732,12 @@ impl<'a> BasicAA<'a> {
             (a.size, b.size)
         };
         let (l1, l2) = (MemoryLocation { ptr: v1, size: s1, ..*a }, MemoryLocation { ptr: v2, size: s2, ..*b });
-        if let Some(found) = aaqi.cached(&l1, &l2) {
-            return found;
-        }
+        let mark = match aaqi.enter(&l1, &l2) {
+            crate::aa::Entered::Known(found) => return found,
+            crate::aa::Entered::Fresh(mark) => mark,
+        };
         let result = self.alias_recursive(&l1, &l2, o1, o2, aaqi);
-        aaqi.remember(&l1, &l2, result);
-        result
+        aaqi.exit(mark, result)
     }
 
     fn alias_recursive(
@@ -742,7 +760,33 @@ impl<'a> BasicAA<'a> {
                 return result;
             }
         }
-        // (aliasPHI, aliasSelect: not yet.)
+        // `aliasPHI` of V1, else of V2; then `aliasSelect` the same way.
+        let defines =
+            |operand: Operand, wanted: fn(&Opcode) -> bool| self.defining(operand).filter(|one| wanted(&one.opcode));
+        let is_phi: fn(&Opcode) -> bool = |opcode| matches!(opcode, Opcode::Phi);
+        let is_select: fn(&Opcode) -> bool = |opcode| matches!(opcode, Opcode::Select);
+        if let Some(one) = defines(a.ptr, is_phi) {
+            let result = self.alias_phi(one, a.ptr, a.size, b.ptr, b.size, aaqi);
+            if result != AliasResult::MayAlias {
+                return result;
+            }
+        } else if let Some(one) = defines(b.ptr, is_phi) {
+            let result = self.alias_phi(one, b.ptr, b.size, a.ptr, a.size, aaqi).swap();
+            if result != AliasResult::MayAlias {
+                return result;
+            }
+        }
+        if let Some(one) = defines(a.ptr, is_select) {
+            let result = self.alias_select(one, a.size, b.ptr, b.size, aaqi);
+            if result != AliasResult::MayAlias {
+                return result;
+            }
+        } else if let Some(one) = defines(b.ptr, is_select) {
+            let result = self.alias_select(one, b.size, a.ptr, a.size, aaqi).swap();
+            if result != AliasResult::MayAlias {
+                return result;
+            }
+        }
         // Both inside one object, one access covering all of it.
         if o1 == o2
             && a.size.is_precise()
@@ -753,6 +797,157 @@ impl<'a> BasicAA<'a> {
             return AliasResult::PartialAlias { offset: None };
         }
         AliasResult::MayAlias
+    }
+
+    /// `isValueEqualInPotentialCycles`: DEVIATE AP2: across iterations an
+    /// instruction outside the entry block is never taken to be the same
+    /// value in both (the pin asks `isNotInCycle`).
+    fn equal_in_potential_cycles(
+        &self,
+        one: Operand,
+        other: Operand,
+        aaqi: &AAQueryInfo,
+    ) -> bool {
+        if one != other {
+            return false;
+        }
+        if !aaqi.may_be_cross_iteration {
+            return true;
+        }
+        match self.unit.defining(one) {
+            None => true,
+            Some((inst, _)) => self.unit.function.parent(inst) == self.unit.function.entry(),
+        }
+    }
+
+    /// `aliasSelect`: DEVIATE AP1: the arms are asked of BasicAA alone, where
+    /// the pin asks the whole stack (`AAQI.AAR`).
+    fn alias_select(
+        &self,
+        select: &llrm_mir::module::Instruction,
+        size: LocationSize,
+        other: Operand,
+        other_size: LocationSize,
+        aaqi: &mut AAQueryInfo,
+    ) -> AliasResult {
+        let at = |ptr: Operand, size: LocationSize| MemoryLocation::new(ptr, size);
+        let (condition, on_true, on_false) = (select.operands[0], select.operands[1], select.operands[2]);
+        // Selects with the same condition: the values on corresponding arms.
+        if let Some(second) = self.defining(other)
+            && matches!(second.opcode, Opcode::Select)
+            && self.equal_in_potential_cycles(condition, second.operands[0], aaqi)
+        {
+            let alias = self.alias_check(&at(on_true, size), &at(second.operands[1], other_size), aaqi);
+            if alias == AliasResult::MayAlias {
+                return AliasResult::MayAlias;
+            }
+            let this = self.alias_check(&at(on_false, size), &at(second.operands[2], other_size), aaqi);
+            return merge_alias_results(this, alias);
+        }
+        // Both arms NoAlias or MustAlias the other: that.
+        let alias = self.alias_check(&at(on_true, size), &at(other, other_size), aaqi);
+        if alias == AliasResult::MayAlias {
+            return AliasResult::MayAlias;
+        }
+        let this = self.alias_check(&at(on_false, size), &at(other, other_size), aaqi);
+        merge_alias_results(this, alias)
+    }
+
+    /// `aliasPHI`. DEVIATE AP1 as for `alias_select`.
+    fn alias_phi(
+        &self,
+        phi: &llrm_mir::module::Instruction,
+        phi_operand: Operand,
+        mut size: LocationSize,
+        other: Operand,
+        other_size: LocationSize,
+        aaqi: &mut AAQueryInfo,
+    ) -> AliasResult {
+        let at = |ptr: Operand, size: LocationSize| MemoryLocation::new(ptr, size);
+        let incoming: Vec<(Operand, Operand)> = phi.operands.chunks(2).map(|pair| (pair[0], pair[1])).collect();
+        if incoming.is_empty() {
+            return AliasResult::NoAlias;
+        }
+        // Phis of one block: the values on corresponding edges, unless across
+        // iterations (another entry may be taken in another iteration).
+        if let Some((second_inst, second)) = self.unit.defining(other)
+            && matches!(second.opcode, Opcode::Phi)
+            && let Some((first_inst, _)) = self.unit.defining(phi_operand)
+            && self.unit.function.parent(second_inst) == self.unit.function.parent(first_inst)
+            && !aaqi.may_be_cross_iteration
+        {
+            let mut result: Option<AliasResult> = None;
+            for &(value, block) in &incoming {
+                let Some(partner) = second.operands.chunks(2).find(|pair| pair[1] == block).map(|pair| pair[0]) else {
+                    return AliasResult::MayAlias;
+                };
+                let this = self.alias_check(&at(value, size), &at(partner, other_size), aaqi);
+                let merged = result.map_or(this, |so_far| merge_alias_results(so_far, this));
+                result = Some(merged);
+                if merged == AliasResult::MayAlias {
+                    break;
+                }
+            }
+            return result.unwrap_or(AliasResult::MayAlias);
+        }
+        // A phi operand that recurses to the phi leaves the other operands'
+        // underlying objects to decide.
+        let mut sources: Vec<Operand> = Vec::new();
+        let mut is_recursive = false;
+        let mut one_phi: Option<Operand> = None;
+        for &(value, _) in &incoming {
+            // The phi itself as an incoming value is skipped.
+            if value == phi_operand {
+                continue;
+            }
+            if self.defining(value).is_some_and(|one| matches!(one.opcode, Opcode::Phi)) {
+                if one_phi.is_some_and(|seen| seen != value) {
+                    // More than one phi input: conservative.
+                    return AliasResult::MayAlias;
+                }
+                one_phi = Some(value);
+            }
+            if self.underlying(value) == phi_operand {
+                is_recursive = true;
+                continue;
+            }
+            if !sources.contains(&value) {
+                sources.push(value);
+            }
+        }
+        if one_phi.is_some() && sources.len() > 1 {
+            // Only the trivial lcssa and recursive phi cases.
+            return AliasResult::MayAlias;
+        }
+        if sources.is_empty() {
+            return AliasResult::MayAlias;
+        }
+        // A recursive phi moves across iterations.
+        if is_recursive {
+            size = LocationSize::BeforeOrAfterPointer;
+        }
+        // The queries below may compare values of two loop iterations.
+        let was = std::mem::replace(&mut aaqi.may_be_cross_iteration, true);
+        let result = (|| {
+            let mut alias = self.alias_check(&at(sources[0], size), &at(other, other_size), aaqi);
+            if alias == AliasResult::MayAlias {
+                return AliasResult::MayAlias;
+            }
+            // A recursive phi proves nothing but NoAlias.
+            if is_recursive && alias != AliasResult::NoAlias {
+                return AliasResult::MayAlias;
+            }
+            for &source in &sources[1..] {
+                let this = self.alias_check(&at(source, size), &at(other, other_size), aaqi);
+                alias = merge_alias_results(this, alias);
+                if alias == AliasResult::MayAlias {
+                    break;
+                }
+            }
+            alias
+        })();
+        aaqi.may_be_cross_iteration = was;
+        result
     }
 
     /// `aliasGEP`, without the range reasoning over variable indices.
@@ -1338,7 +1533,7 @@ impl AAResults for BasicAA<'_> {
 mod tests {
     use super::*;
     use crate::aa::IRMemLocation;
-    use crate::testing::{layout, parsed, value};
+    use crate::testing::{function, layout, parsed, value};
 
     const M32: &str = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n";
 
@@ -1824,5 +2019,136 @@ b0:
         };
         assert_eq!(answer(false), AliasResult::NoAlias);
         assert_eq!(answer(true), AliasResult::MayAlias);
+    }
+
+    /// `aliasPHI` and `aliasSelect`: a phi of loaded pointers and a select of
+    /// locals against locals and arguments, the pairs the pin answers.
+    const JOINS: &str = "define i16 @f(ptr %p, ptr %r, i1 %c, ptr %a1, ptr %a2) {
+    b0:
+      %s = alloca i16
+      %t = alloca i16
+      store i16 1, ptr %s
+      %q1 = load ptr, ptr %p
+      %q2 = load ptr, ptr %r
+      br i1 %c, label %b1, label %b2
+
+    b1:
+      br label %b3
+
+    b2:
+      br label %b3
+
+    b3:
+      %q = phi ptr [ %q1, %b1 ], [ %q2, %b2 ]
+      %sel = select i1 %c, ptr %s, ptr %t
+      %sel2 = select i1 %c, ptr %a1, ptr %a2
+      %sel3 = select i1 %c, ptr %s, ptr %a1
+      ret i16 1
+    }
+    ";
+
+    #[test]
+    fn a_phi_and_a_select_are_apart_from_locals_as_the_pin_has_them() {
+        let module = parsed(JOINS);
+        let layout = layout(&module);
+        let f = function(&module, "f");
+        let unit = Unit::of(&module, &layout, f);
+        let at = |name: &str| MemoryLocation::new(Operand::Value(value(f, name)), LocationSize::Precise(2));
+        let mut aa = BasicAA::new(&unit);
+        let mut ask = |one: &str, other: &str| aa.alias(&at(one), &at(other), &mut AAQueryInfo::default(), None);
+        use AliasResult::{MayAlias, NoAlias};
+        // The pin's answers.
+        for (one, other, want) in [
+            ("q", "s", NoAlias),
+            ("q", "sel", NoAlias),
+            ("s", "sel2", NoAlias),
+            ("sel", "sel2", NoAlias),
+            ("sel3", "t", NoAlias),
+            ("sel2", "t", NoAlias),
+            ("s", "sel", MayAlias),
+            ("sel", "t", MayAlias),
+            ("q", "sel2", MayAlias),
+            ("q", "sel3", MayAlias),
+            ("sel", "sel3", MayAlias),
+        ] {
+            assert_eq!(ask(one, other), want, "%{one} against %{other}");
+            assert_eq!(ask(other, one), want, "%{other} against %{one}");
+        }
+    }
+
+    /// Two pointers that step through the loop that holds them (each a phi
+    /// with itself as an incoming value, through a `getelementptr`) ask each
+    /// other: the pair is assumed apart while it is asked, and the answer is
+    /// kept or dropped by what the sources prove. It recursed without end
+    /// where the pair was not remembered until its answer was known.
+    #[test]
+    fn two_pointers_stepping_through_a_loop_are_apart_by_their_sources() {
+        let module = parsed(
+            "define void @f(ptr noalias %d, ptr noalias %s, i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %p = phi ptr [ %d, %b0 ], [ %p1, %b1 ]
+  %q = phi ptr [ %s, %b0 ], [ %q1, %b1 ]
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %p1 = getelementptr i8, ptr %p, i16 1
+  %q1 = getelementptr i8, ptr %q, i16 1
+  %i1 = add i16 %i, 1
+  %c = icmp ult i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret void
+}
+",
+        );
+        let layout = layout(&module);
+        let f = function(&module, "f");
+        let unit = Unit::of(&module, &layout, f);
+        let at = |name: &str| MemoryLocation::new(Operand::Value(value(f, name)), LocationSize::Precise(1));
+        let mut aa = BasicAA::new(&unit);
+        let mut crossing = AAQueryInfo::default();
+        crossing.may_be_cross_iteration = true;
+        for (one, other) in [("p", "q"), ("p", "q1"), ("p1", "q")] {
+            assert_eq!(aa.alias(&at(one), &at(other), &mut AAQueryInfo::default(), None), AliasResult::NoAlias);
+            assert_eq!(aa.alias(&at(one), &at(other), &mut crossing, None), AliasResult::NoAlias);
+        }
+    }
+
+    /// A value is the same value as itself only outside a cycle when two
+    /// iterations may be compared (`isValueEqualInPotentialCycles`): a phi of
+    /// a loop against itself is `MustAlias` within an iteration, `MayAlias`
+    /// across them; the argument that has no loop in it stays `MustAlias`.
+    #[test]
+    fn a_value_in_a_loop_is_not_its_own_must_alias_across_iterations() {
+        let module = parsed(
+            "define void @f(ptr %a, i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %p = phi ptr [ %a, %b0 ], [ %p1, %b1 ]
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %p1 = getelementptr i8, ptr %p, i16 %n
+  %i1 = add i16 %i, 1
+  %c = icmp ult i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret void
+}
+",
+        );
+        let layout = layout(&module);
+        let f = function(&module, "f");
+        let unit = Unit::of(&module, &layout, f);
+        let at = |name: &str| MemoryLocation::new(Operand::Value(value(f, name)), LocationSize::Precise(1));
+        let mut aa = BasicAA::new(&unit);
+        let mut crossing = AAQueryInfo::default();
+        crossing.may_be_cross_iteration = true;
+        assert_eq!(aa.alias(&at("p"), &at("p"), &mut AAQueryInfo::default(), None), AliasResult::MustAlias);
+        assert_eq!(aa.alias(&at("p"), &at("p"), &mut crossing, None), AliasResult::MayAlias);
+        assert_eq!(aa.alias(&at("a"), &at("a"), &mut crossing, None), AliasResult::MustAlias);
     }
 }

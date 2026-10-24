@@ -90,11 +90,11 @@ fn an_unhandled_node_is_refused_by_name() {
     let mut dag = dag();
     let a = load(&mut dag, EVT::Int(12), 1);
     let b = load(&mut dag, EVT::Int(12), 2);
-    let shifted = dag.get_node(ISD::Shl, EVT::Int(12), &[a, b]);
+    let shifted = dag.get_node(ISD::UDiv, EVT::Int(12), &[a, b]);
     let byte = dag.get_node(ISD::Truncate, EVT::I8, &[shifted]);
     dag.set_root(byte);
     let error = legalize(&mut dag, &tli).unwrap_err();
-    assert!(matches!(error, LegalizeError::Unsupported { op: ISD::Shl, .. }), "{error:?}");
+    assert!(matches!(error, LegalizeError::Unsupported { op: ISD::UDiv, .. }), "{error:?}");
 }
 
 /// A zero-extending `i64` load from a dword expanded as two dword loads (the
@@ -115,4 +115,23 @@ fn a_zero_extending_i64_load_from_a_dword_has_a_zero_high_half() {
     assert_eq!(legalize(&mut dag, &tli), Ok(true));
     let root = dag.get_root();
     assert_eq!(dag.constant(root), Some(0), "the high dword is zero");
+}
+
+/// An `i64` load through a far pointer split into two dword loads whose second
+/// address was `far + 4` with a constant of type `Far`: the legalizer panicked
+/// (struct_with_i64 at m16, 3 shadow crashes). The second address keeps the
+/// selector and moves the offset.
+#[test]
+fn the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector() {
+    let tli = TargetLowering::x86_16(Features::default(), MVT::I16);
+    let mut dag = dag();
+    let (chain, offset, selector) = (dag.entry_node(), dag.get_register(EVT::I16, 7), dag.get_register(EVT::I16, 8));
+    let far = dag.get_node(ISD::BuildPair, EVT::Simple(MVT::Far), &[offset, selector]);
+    let info = MemInfo { mem_vt: EVT::I64, align: 2, volatile: false, base: MemBase::Unknown, ext: None, space: 259 };
+    let wide = dag.get_load(EVT::I64, chain, far, info);
+    let zero = dag.get_constant(0, EVT::I8);
+    let shifted = dag.get_node(ISD::Srl, EVT::I64, &[wide, zero]);
+    let low = dag.get_node(ISD::Truncate, EVT::I16, &[shifted]);
+    dag.set_root(low);
+    assert_eq!(legalize(&mut dag, &tli), Ok(true));
 }

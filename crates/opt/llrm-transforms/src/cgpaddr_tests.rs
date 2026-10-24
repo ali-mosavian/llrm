@@ -137,3 +137,31 @@ b1:
 ";
     assert_eq!(sunk(text), printed(&parsed(&format!("{HEAD}{text}"))));
 }
+
+/// CodeGenPrepare's `optimizeInst` simplifies every phi (`simplifyInstruction`,
+/// L8947), not only the ones read as addresses: a loop's closing phi read by
+/// an add stayed to isel, which copied it (`LoopOpened`'s AM-LO-1: +10.9 M Ir
+/// and 260 objects moving when that llrm-only pass is off).
+#[test]
+fn test_a_phi_of_one_value_is_that_value_whatever_reads_it() {
+    let after = sunk(
+        "define i16 @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b1 ]
+  %next = add i16 %i, 1
+  %done = icmp eq i16 %next, %n
+  br i1 %done, label %b2, label %b1
+
+b2:
+  %next.lcssa = phi i16 [ %next, %b1 ]
+  %read = add i16 %next.lcssa, 7
+  ret i16 %read
+}
+",
+    );
+    assert!(!after.contains("lcssa"), "{after}");
+    assert!(after.contains("add i16 %next, 7"), "{after}");
+}

@@ -23,6 +23,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [qb-float-rows](qb-float-rows.md) | The 41 QB float rows above main after BC's per-assignment rounding (#3352): the numbers, owner and exit |
 | [qcport-os-rows](qcport-os-rows.md) | The QCport modules bigger at -Os after #3369 and after its re-land: numbers, owner and exit |
 | [phi-pre-ra-translation](phi-pre-ra-translation.md) | PHIElimination, TwoAddressInstruction and the pass order before greedy, against the pin: same, differs, missing |
+| [livevariables-plan](livevariables-plan.md) | The pin's LiveVariables translated for TwoAddress and PHIElimination: functions, callers, dates (2026-10-24) |
 | [twoaddress-translation-plan](twoaddress-translation-plan.md) | Translating TwoAddressInstructionPass: the copy-count premise, the data LIR lacks, seven pieces in the pin's order |
 | [process-implicit-defs-premise](process-implicit-defs-premise.md) | ProcessImplicitDefs: what the pin's pass does (IMPLICIT_DEF to undef on 16 to 32 widening), ours, the extends compared |
 | [vreg-class-field-plan](vreg-class-field-plan.md) | A register class on each virtual register: pin sites, touched types, caller counts, order |
@@ -49,10 +50,13 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [gate-coverage](gate-coverage.md) | What the landing gate runs, and what it does not |
 | [instruction-gap-vs-pin](instruction-gap-vs-pin.md) | Instructions against the pin's llc, on the same IR |
 | [irreducible-counts](irreducible-counts.md) | Irreducible cycles in the corpora (BRIDGE-1) |
+| [homes-spares](homes-spares.md) | Homes and Spares against the pin's InlineSpiller: what each decides, measured effect, plan to 11-17 |
+| [intervals-once](intervals-once.md) | Live intervals built once, as the pin does: three builders today, steps, owners, dates |
 | [ivusers-order](ivusers-order.md) | IVUsers user order (IU1) |
 | [lazy-annotated-plan](lazy-annotated-plan.md) | Lazy Annotated and the MemorySSA cost: plan |
 | [lea-fixup-plan](lea-fixup-plan.md) | X86 LEA Fixup (row 100): plan |
 | [ledger-command](ledger-command.md) | The ledger command |
+| [cost-centers](cost-centers.md) | Self Ir by symbol (hashing, memcpy, Vec growth, malloc), ours against the pin |
 | [compile-time-plan-scalar-ipo](compile-time-plan-scalar-ipo.md) | Scalar and module/IPO compile time: dated plan to the pin |
 | [emit-baselines](emit-baselines.md) | Compile costs measured to an object: old and new |
 | [emit-plan](emit-plan.md) | Emit compile-time bucket: dated plan to the pin's AsmPrinter and MC |
@@ -90,6 +94,8 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [selectiondag-builder-gaps](selectiondag-builder-gaps.md) | What the pin's `visit*` has that the DAG builder lacks (sdag-a) |
 | [selectiondag-far-builder](selectiondag-far-builder.md) | Far and huge pointers in the DAG builder (sdag-a) |
 | [selectiondag-default-readiness](selectiondag-default-readiness.md) | What must be true to make `--isel=dag` the default (sdag-a) |
+| [selectiondag-tail-calls](selectiondag-tail-calls.md) | Tail calls in the DAG path: pin functions, steps, dates (sdag-a) |
+| [selectiondag-huge-memmove](selectiondag-huge-memmove.md) | memmove of huge pointers: the pin's behaviour, options, decision date 10-30 (sdag-a) |
 | [selectiondag-x87-contract](selectiondag-x87-contract.md) | What the DAG legalizer hands the x87 emitter and stackifier (sdag-b) |
 | [setcc-chain-plan](setcc-chain-plan.md) | setcc chain vs branch (x_mergesort, stft bq32, nhstutil leaves) |
 | [shared-liveintervals-plan](shared-liveintervals-plan.md) | TwoAddress on a shared LiveIntervals (row 62, row 62b) — owner w-1, due 2026-11-20 |

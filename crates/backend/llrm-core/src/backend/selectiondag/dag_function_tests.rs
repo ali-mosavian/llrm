@@ -1415,14 +1415,22 @@ entry:
 }
 ";
 
-/// The 80-bit forms are refused until their moves and arguments are proved
-/// (long_double_arguments, long_double_constant_store: wrong values).
+/// A long double is selected (it was refused 'long double' until its
+/// arguments were proved), and each stack argument takes a 12-byte slot at m32,
+/// as the front end and gcc lay them out: slots were the 10-byte store size,
+/// so `sum(3, a, b, a)` read its second and third values 2 and 4 bytes short
+/// (long_double_variadic printed -2147483648 for 13).
 #[test]
-fn a_long_double_is_refused() {
+fn a_long_double_is_selected_and_takes_a_twelve_byte_slot() {
     let module = llrm_mir::parse::module(LONG_DOUBLE_SUM).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[]);
-    let Err(why) = done else { panic!("emitted") };
-    assert!(why.0.contains("long double"), "{why:?}");
+    selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+    let (id, _, function) = module.functions().next().expect("a function");
+    let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
+    let first = llrm_target::Target::first_argument_offset(&llrm_x86_m32::M32, false);
+    assert_eq!(convention.stack_arguments - first, 24, "two long doubles, twelve bytes each: {convention:?}");
+    let _ = function;
 }
 
 const INT_TO_FLOAT_ROUNDED: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -1658,4 +1666,259 @@ fn a_call_through_a_far_pointer_receives_its_arguments() {
     let insns = done.body.insns();
     let call = insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.op == crate::model::ir::Operation::Call));
     assert!(call.is_some_and(|call| !call.requires.is_empty()), "{insns:?}");
+}
+
+const TWO_TABLES: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %x, i32 %y) {
+entry:
+  switch i32 %x, label %ad [
+    i32 0, label %a0
+    i32 1, label %a1
+    i32 2, label %a2
+    i32 3, label %a3
+    i32 4, label %a4
+    i32 5, label %a5
+  ]
+a0:
+  %av0 = add i32 %x, 1
+  br label %ajoin
+a1:
+  %av1 = add i32 %x, 8
+  br label %ajoin
+a2:
+  %av2 = add i32 %x, 15
+  br label %ajoin
+a3:
+  %av3 = add i32 %x, 22
+  br label %ajoin
+a4:
+  %av4 = add i32 %x, 29
+  br label %ajoin
+a5:
+  %av5 = add i32 %x, 36
+  br label %ajoin
+ad:
+  br label %ajoin
+ajoin:
+  %ar = phi i32 [ %x, %ad ], [ %av0, %a0 ], [ %av1, %a1 ], [ %av2, %a2 ], [ %av3, %a3 ], [ %av4, %a4 ], [ %av5, %a5 ]
+  br label %second
+second:
+  switch i32 %y, label %bd [
+    i32 0, label %b0
+    i32 1, label %b1
+    i32 2, label %b2
+    i32 3, label %b3
+    i32 4, label %b4
+    i32 5, label %b5
+  ]
+b0:
+  %bv0 = add i32 %x, 100
+  br label %bjoin
+b1:
+  %bv1 = add i32 %x, 107
+  br label %bjoin
+b2:
+  %bv2 = add i32 %x, 114
+  br label %bjoin
+b3:
+  %bv3 = add i32 %x, 121
+  br label %bjoin
+b4:
+  %bv4 = add i32 %x, 128
+  br label %bjoin
+b5:
+  %bv5 = add i32 %x, 135
+  br label %bjoin
+bd:
+  br label %bjoin
+bjoin:
+  %br = phi i32 [ %x, %bd ], [ %bv0, %b0 ], [ %bv1, %b1 ], [ %bv2, %b2 ], [ %bv3, %b3 ], [ %bv4, %b4 ], [ %bv5, %b5 ]
+  %s = add i32 %ar, %br
+  ret i32 %s
+}
+";
+
+/// A dense `switch` is a jump through a table of the case blocks (the pin's
+/// `JMP32m` on the table), and two of them in one function number their
+/// blocks apart: both started at the function's block count, so the second's
+/// table block was the first's and `switch_jump_table` read a value its
+/// header never set (and, before that, refused on `TargetJumpTable`).
+#[test]
+fn two_dense_switches_are_two_jumps_through_tables() {
+    let module = llrm_mir::parse::module(TWO_TABLES).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let at: Vec<i64> = done.body.blocks.iter().map(|b| b.at).collect();
+    let mut unique = at.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(unique.len(), at.len(), "a block address is used twice: {at:?}");
+    let tables: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.indirect && !w.table.is_empty())
+        .map(|w| w.table.clone())
+        .collect();
+    assert_eq!(tables.len(), 2, "one jump through a table for each switch");
+    assert!(tables.iter().all(|table| table.len() == 6 && table.iter().all(|t| at.contains(t))), "{tables:?}");
+    assert_ne!(tables[0], tables[1]);
+}
+
+const FAR_GLOBAL_ELEMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+@cells = addrspace(1) global [4 x i16] zeroinitializer
+define i16 @f() {
+entry:
+  %p = getelementptr [4 x i16], ptr addrspace(1) @cells, i16 0, i16 3
+  %v = load i16, ptr addrspace(1) %p
+  ret i16 %v
+}
+";
+
+/// An element of a far global is a cell through ES whose displacement is the
+/// global's symbol and offset. The emitter wanted a number there ("a
+/// non-constant address part": far_return, es_across_copy, farstruct,
+/// wide_globals at m16).
+#[test]
+fn an_element_of_a_far_global_is_a_cell_through_es() {
+    let module = llrm_mir::parse::module(FAR_GLOBAL_ELEMENT).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}
+
+const M16_STACK: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define void @f(i32 %a, i64 %b, i32 %c) addrspace(1) {
+entry:
+  ret void
+}
+";
+
+/// At m16 an `i32` is a register type, so a stack `i32` is one cell and an
+/// `i64` two (the second half four bytes up). The driver counted two cells for
+/// an `i32` and one for an `i64` (widest legal integer assumed 16 bits): the
+/// high half of an `i64` argument was read from the next
+/// parameter (regparm3_matrix_4/_22/_31 gave wrong values).
+#[test]
+fn an_i32_is_one_stack_cell_and_an_i64_two_at_m16() {
+    let module = llrm_mir::parse::module(M16_STACK).expect("parses");
+    let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+    let (id, _, function) = module.functions().next().expect("a function");
+    let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m16::M16).expect("a convention");
+    let cells = super::dag_function::stack_cells(&module, function, &convention, 32);
+    assert_eq!(cells.len(), 4, "a: one, b: two, c: one: {cells:?}");
+    assert_eq!(cells[2] - cells[1], 4, "the high half of b is four bytes above its low half: {cells:?}");
+    assert!(cells[3] > cells[2], "{cells:?}");
+}
+
+const STRING_OP_ON_ELEMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+@buf = global [64 x i8] zeroinitializer
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define void @f(i16 %i, i16 %n) {
+entry:
+  %p = getelementptr [64 x i8], ptr @buf, i16 0, i16 %i
+  call void @llvm.memset.p0.i16(ptr %p, i8 0, i16 %n, i1 false)
+  ret void
+}
+";
+
+/// A string operation on `&buf[i]` (an `lea` of the global and an index) takes
+/// the global's segment: it refused "a pointer of no known segment" (idioms,
+/// os_more, rep_count at m16).
+#[test]
+fn a_string_operation_on_an_element_of_a_global_knows_its_segment() {
+    let module = llrm_mir::parse::module(STRING_OP_ON_ELEMENT).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}
+
+/// The load of an incoming stack argument carried no invariant flag to LIR, so
+/// MachineCSE and the sinker took it for memory a store may change: the pin's
+/// `LowerMemArgument` makes the fixed object immutable and
+/// `isDereferenceableInvariantLoad` takes the load.
+#[test]
+fn the_load_of_an_incoming_stack_argument_is_an_invariant_load_in_lir() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a, i32 %b) {
+entry:
+  ret i32 %a
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let flags: Vec<bool> = done
+        .body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| {
+            one.what
+                .as_ref()
+                .is_some_and(
+                    |what| what.op == Operation::Move
+                        && matches!(
+                            what.sources.as_slice(),
+                            [crate::model::ir::Loc::Mem(cell)] if cell.addr.as_ref().is_some_and(|a| a.space == crate::model::ir::Space::Frame)
+                        ),
+                )
+        })
+        .map(|one| one.invariant())
+        .collect();
+    assert!(!flags.is_empty(), "the premise: the argument is loaded from the frame");
+    assert!(flags.iter().all(|&flag| flag), "{flags:?}");
+}
+
+const M16_DOUBLE_ARGUMENT: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+declare void @g(double)
+define void @f(double %x) {
+entry:
+  %y = fadd double %x, 1.000000e+00
+  call void @g(double %y)
+  ret void
+}
+";
+
+/// A double passed on the stack at m16 is stored with `fstp` into the argument
+/// area, which no push can do and `[sp+k]` cannot address: it goes through a
+/// register that holds SP (`byval_struct`, `float_return`, `wide_frame` and 5
+/// more were refused 'a floating argument stored into the area').
+#[test]
+fn a_double_argument_is_stored_through_a_copy_of_sp_at_m16() {
+    use crate::model::ir::{Loc, Operation};
+    let module = llrm_mir::parse::module(M16_DOUBLE_ARGUMENT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let store = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| {
+            w.op == Operation::FloatStore
+                && matches!(&w.dests[..], [Loc::Mem(_)])
+                && w.name.as_deref().is_some_and(|n| n.starts_with("fst"))
+        })
+        .expect("an fstp into the area");
+    let Loc::Mem(cell) = &store.dests[0] else { unreachable!() };
+    assert!(cell.base.is_some() && cell.through == llrm_lir::registers::RegId::None, "{cell:?}");
+}
+
+const M16_FAR_AND_DOUBLE: &str =
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
+define double @f(ptr addrspace(1) %p, double %x) addrspace(1) {
+entry:
+  store i16 1, ptr addrspace(1) %p
+  %y = fadd double %x, 1.000000e+00
+  ret double %y
+}
+";
+
+/// A far cell and a double in one function were refused as a pair ('floating
+/// values with far cells'); only a double live across the far access is
+/// (the stackifier counts the ES load as a boundary).
+#[test]
+fn a_double_not_live_across_a_far_cell_is_selected() {
+    let module = llrm_mir::parse::module(M16_FAR_AND_DOUBLE).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
 }

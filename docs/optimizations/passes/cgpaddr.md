@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/cgpaddr.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/cgpaddr.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/cgpaddr.rs sha256:b6f9c7ab6042bb5431a6322dbbaf37bd827f04a78c7e085f4ef4dc7923b2d5e5 -->
+<!-- src: crates/opt/llrm-transforms/src/cgpaddr.rs sha256:b4226582442df3c7780b36e9229b72ea2fe895096ceda887ace14ac06ea411ce -->
 
 # cgpaddr
 
@@ -34,11 +34,12 @@ depth 3) over operands that reach the join (they dominate it) is that
 computation made once, before the join's first non-phi. What only the phi
 read, the arms' copies, is erased.
 
-A phi of this kind whose arms are all one value (or the phi itself) is that
-value; this is how a closing phi left by `lcssa` goes. Each phi is visited
-once, and the phis that read it are queued again.
+Any phi that `simplifyInstruction` reduces to a value (arms all one value, or
+the phi itself; `optimizeInst`'s phi case, L8947) is that value, whatever
+reads it; this is how a closing phi left by `lcssa` goes. Each phi is
+visited once, and the phis that read it are queued again.
 
-A phi read as a value, or whose arms differ in kind, stays.
+A phi whose arms differ in kind stays.
 
 DEVIATE C1 (m32): the rest of CodeGenPrepare's work is done by isel, which
 rebuilds an address expression in the block that uses it, and by the select

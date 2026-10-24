@@ -515,10 +515,6 @@ const ROWS: &[Disposition] = &[
 
 /// The built slot groups no pin slot is matched to, with why.
 const OURS_ONLY: &[(&str, &str)] = &[
-    (
-        "2376: simplifycfg@2376",
-        "registry Partial: its position in the Late list is not the pin's (unverified which pin simplifycfg it is)",
-    ),
     ("1474: loop-unroll-and-jam@1474", "-O3: the pin's printed list has no unroll-and-jam in this fixture; unverified"),
     (
         "764: loopsimplify@764 + lcssa@764",
@@ -770,6 +766,26 @@ fn every_pin_slot_is_matched_or_accounted_for() {
     errors.sort();
     errors.dedup();
     assert!(errors.is_empty(), "{} problems:\n{}", errors.len(), errors.join("\n"));
+}
+
+/// `simplifycfg@2376` is LateFPM of buildLTODefaultPipeline, not of
+/// `default<O2>`: it ran a ninth SimplifyCFG on every function (+1.4 M Ir on
+/// d_faces -O2, object unchanged).
+#[test]
+fn test_o2_has_the_pins_simplifycfg_slots_and_no_more() {
+    let pin = parse(FIXTURES[1].1).iter().filter(|slot| slot.name == "simplifycfg").count();
+    let ours: usize = [Phase::Early, Phase::Cleanup, Phase::Simplify, Phase::Late]
+        .into_iter()
+        .map(|phase| {
+            built_groups("-O2", phase)
+                .iter()
+                .filter(|(_, entries)| {
+                    entries.iter().any(|entry| llvm_names(entry).iter().any(|name| name == "simplifycfg"))
+                })
+                .count()
+        })
+        .sum();
+    assert_eq!(ours, pin);
 }
 
 /// Every pin slot of every level is in exactly one of six states, and the

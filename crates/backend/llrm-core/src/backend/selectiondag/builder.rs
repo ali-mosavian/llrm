@@ -150,7 +150,7 @@ pub fn build_block(
         info,
         block,
         order,
-        function.block_capacity() as u32,
+        info.next_block.max(function.block_capacity() as u32),
         None,
     );
     if Some(block) == function.entry() {
@@ -192,6 +192,7 @@ pub fn build_block(
         extra
             .push((block, BlockDag { dag: one.dag, phi_updates: Vec::new(), live_ins: Vec::new(), extra: Vec::new() }));
     }
+    info.next_block = next;
     Ok(BlockDag { dag, phi_updates, live_ins, extra })
 }
 
@@ -561,7 +562,13 @@ impl Builder<'_> {
                             ext: None,
                             space: 0,
                         };
-                        pieces.push(self.dag.get_load(part_vt, entry_node, ptr, info));
+                        let load = self.dag.get_load(part_vt, entry_node, ptr, info);
+                        // `LowerMemArgument` makes the object immutable unless
+                        // it is byval
+                        // (`isImmutableObjectIndex`): the load is
+                        // `isDereferenceableInvariantLoad`.
+                        self.dag.invariant_loads.insert(load.node);
+                        pieces.push(load);
                     }
                 }
                 Some(Parameter::Registers(regs)) if regs.len() == parts => {

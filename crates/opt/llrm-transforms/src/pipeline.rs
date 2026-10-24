@@ -108,12 +108,11 @@
 //! | `ipa_ranges` | argument ranges in the interprocedural step |
 //! | `unswitch`, `interchange`, `unroll_and_jam` | the passes of that name (`unswitch` and `unroll_and_jam` on at -O3 and -Omax; `interchange` on at every level but -O0) |
 //! | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
+//! | `loop_opened` | `opened`, the exit phis folded after LSR (off by default; `-fllrm-loop-opened`; AM-LO-1) |
 //!
 //! `pre` makes `gvn` insert on the path that lacks a value; `for_size` prices
 //! `hoist`, `algebraic`, `loopidioms`, `lsr`, `window` and
-//! `calleepop` in bytes; `loop_intervals` lets alias and branch decisions use
-//! the intervals of counted loops. `limits` are the copy budgets of the
-//! unroller.
+//! `calleepop` in bytes. `limits` are the copy budgets of the unroller.
 //!
 //! # Needs
 //! `Summaries`, `GlobalsAA` and `ProgramSummaries` are required
@@ -166,9 +165,6 @@ pub struct Options {
     /// Whether the callers' arguments are stated as ranges on a body's
     /// parameters: gcc's `-fipa-vrp`, -O2 and up.
     pub ipa_ranges: bool,
-    /// Alias and branch decisions use the intervals of counted loops (gcc's
-    /// `-ftree-vrp`, -O2; its -O1 has them for induction variables only).
-    pub loop_intervals: bool,
     pub lcssa: bool,
     pub floatloop: bool,
     pub fold: bool,
@@ -191,6 +187,18 @@ pub struct Options {
     pub drop_stores: bool,
     /// Work read below a branch moves below it: gcc's `-ftree-sink`.
     pub sink: bool,
+    /// `Spares`: a fixed-cell load rematerialized past the writes alias proves
+    /// disjoint. llrm only (the pin rematerializes invariant loads alone); off
+    /// by default, `-fllrm-spares`. DEVIATE (no number), 8.0 M Ir at d_faces.
+    pub spare_loads: bool,
+    /// `Homes`: a phi that also sits in a stored cell is spilled to that cell
+    /// (gcc `REG_EQUIV`). llrm only; off by default, `-fllrm-homes`. DEVIATE
+    /// (no number), 8.4 M Ir at d_faces.
+    pub stored_homes: bool,
+    /// `LoopOpened`: the exit phis LSR's LCSSA made, folded after LSR. llrm
+    /// only (the pin folds them in CodeGenPrepare's phi fold); off by default,
+    /// `-fllrm-loop-opened`. DEVIATE AM-LO-1: on, d_faces costs 10.9 M Ir less.
+    pub loop_opened: bool,
     pub promote: bool,
     pub strength: bool,
     /// The translated `LoopStrengthReduce` slot (LLVM's `-disable-lsr` turns it
@@ -287,12 +295,14 @@ impl Default for Options {
             dead: true,
             hoist: true,
             ipa_ranges: true,
-            loop_intervals: true,
             forward: true,
             drop_loads: true,
             pre: true,
             drop_stores: true,
             sink: true,
+            spare_loads: false,
+            stored_homes: false,
+            loop_opened: false,
             promote: true,
             strength: true,
             lsr: true,
@@ -343,7 +353,6 @@ impl Options {
             // d_faces and the fourth none, 253 of 3,084 Minstr at -O1.
             rounds: 2,
             ipa_ranges: false,
-            loop_intervals: false,
             pre: false,
             peel: false,
             loop_unrolling: false,
@@ -664,7 +673,6 @@ pub(crate) fn llvm_order(
     let decide = |name| slot(name, Box::new(decide::Decide { constants: false }));
     let simplify_cfg = |name| slot(name, Box::new(simplifycfg::SimplifyCfg::default()));
     let simplify_cfg_with = |name, options| slot(name, Box::new(simplifycfg::SimplifyCfg { options }));
-    let fold = |name| slot(name, Box::new(fold::Fold));
     let combine = |name| slot(name, Box::new(crate::combine_pass::Combine { enabled: applied.options.combine }));
     let dead = |name| slot(name, Box::new(dead::Dead));
     // SROA runs mem2reg on what it splits: one slot, nothing between
@@ -689,7 +697,7 @@ pub(crate) fn llvm_order(
         };
         Box::new(Together { name, parts })
     };
-    let earlycse = |name| slot(name, Box::new(crate::earlycse::EarlyCse));
+    let earlycse = |name, memory_ssa| slot(name, Box::new(crate::earlycse::EarlyCse { memory_ssa }));
     // `licm<allowspeculation>` or `licm<no-allowspeculation>`; under
     // `LLRM_NO_LICM` the slot stays and holds nothing.
     let licm = |name, speculate| -> Box<dyn FunctionPass> {
@@ -715,7 +723,7 @@ pub(crate) fn llvm_order(
                 slot("lowerexpect@1177", Box::new(crate::lowerexpect::LowerExpect)),
                 simplify_cfg("decide@1178"),
                 sroa("sroa@1179"),
-                earlycse("earlycse@1180"),
+                earlycse("earlycse@1180", false),
             ]
         }
         Phase::Cleanup => vec![
@@ -731,7 +739,6 @@ pub(crate) fn llvm_order(
                 },
             }),
             combine("combine@1242"),
-            fold("fold@1242"),
             dead("dead@1242"),
             // `SimplifyCFGOptions().convertSwitchRangeToICmp(true)`
             // (PassBuilderPipelines.cpp#L1245): the option is read by
@@ -742,7 +749,7 @@ pub(crate) fn llvm_order(
         // (the pin's printed pipeline): Float2IntPass (L1594) first, then the
         // loop passes, L1438, LICM (L1508), InstSimplifyPass
         // (PassBuilderPipelines.cpp#L1662, the last function pass, after
-        // LoopSink), L1682 and L2376.
+        // LoopSink) and L1682.
         Phase::Late => vec![
             slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
             // LoopInterchangePass (l.1631), in the loop pass manager after
@@ -756,7 +763,7 @@ pub(crate) fn llvm_order(
             // `not` of a condition it makes before a branch.
             combine("combine@1403"),
             // The slots' options, with the pin's lines,
-            // are `simplifycfg::Options::{L1438, L1682, L2376}`.
+            // are `simplifycfg::Options::{L1438, L1682}`.
             simplify_cfg_with("simplifycfg@1438", simplifycfg::Options::L1438),
             combine("combine@1464"),
             // LoopUnrollAndJamPass (l.1474), in its own loop pass manager
@@ -785,10 +792,9 @@ pub(crate) fn llvm_order(
             // the pin, are not slots.
             slot("tailrec@1677", Box::new(tailcallelim::TailCallElim)),
             simplify_cfg_with("simplifycfg@1682", simplifycfg::Options::L1682),
-            simplify_cfg_with("simplifycfg@2376", simplifycfg::Options::L2376),
         ],
         Phase::Simplify => {
-            let mut list = vec![sroa("sroa@646"), earlycse("earlycse@649")];
+            let mut list = vec![sroa("sroa@646"), earlycse("earlycse@649", true)];
             list.extend([
                 slot("jumpthreading@668", Box::new(crate::jumpthreading::JumpThreading::from_env())),
                 slot("cvp@669", Box::new(crate::cvp::Cvp)),
@@ -993,7 +999,6 @@ pub fn recorded(
 ) -> Result<Vec<Stage>, String> {
     timed();
     let mut manager = PassManager::default();
-    manager.without_loop_intervals = !applied.options.loop_intervals;
     manager.verify_each = llrm_support::debug::verifying();
     manager.dump = applied.dump.clone();
     manager.dump_inputs = llrm_support::env_flag!("LLRM_DUMP_INPUTS");
@@ -1188,8 +1193,12 @@ pub fn recorded(
         });
     }
     // Last: what it names are the instructions selection sees.
-    manager.add_module(crate::spares::Spares);
-    manager.add_module(crate::homes::Homes);
+    if applied.options.spare_loads {
+        manager.add_module(crate::spares::Spares);
+    }
+    if applied.options.stored_homes {
+        manager.add_module(crate::homes::Homes);
+    }
     let done = manager.run(program);
     if llrm_support::env_flag!("LLRM_CHECK_CAPTURES_MODULE") {
         for module in &program.modules {
@@ -1216,8 +1225,10 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // SimplifyInstructions.
         passes.push(Box::new(algebraic::Differences));
         // The exit phis `lcssa` made go again: the code generator copies each
-        // (recmany -Os grew 189 bytes).
-        passes.push(Box::new(lcssa::LoopOpened));
+        // (recmany -Os grew 189 bytes). The pin leaves them to CodeGenPrepare.
+        if applied.options.loop_opened {
+            passes.push(Box::new(lcssa::LoopOpened));
+        }
     }
     passes
 }

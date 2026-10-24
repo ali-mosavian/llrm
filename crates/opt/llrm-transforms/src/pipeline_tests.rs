@@ -677,13 +677,11 @@ b:
     assert!(!ranged(pipeline::Options::basic()), "-O1 stated a range from the callers' arguments");
 }
 
-/// gcc's -O1 has value ranges for induction variables only (SCEV with the
-/// loop's iteration bound) and none from -O2's `-ftree-vrp`. Our alias and
-/// branch decisions asked the counted loops' intervals at every level: 24 of
-/// the 25 runs of `Bounded` on x_life at -O1, 42 M of its 510 M. At -O1 they
-/// take none, and with nothing else asking `Bounded` here it is not worked out.
+/// `decide` and `ports` asked the counted loops' intervals (`Bounded`,
+/// llrm-only) at -O2: about 7 M of d_faces' 1176 M. The pin's passes ask
+/// ValueTracking, and no level works the intervals out.
 #[test]
-fn alias_and_decisions_ask_no_loop_intervals_at_o1() {
+fn no_level_works_out_the_counted_loops_intervals() {
     let text = "
 @a = global [16 x i16] zeroinitializer
 
@@ -718,9 +716,9 @@ done:
         llrm_mir::passes::trace_recomputes(false);
         runs.iter().filter(|(name, ..)| *name == "bounded").map(|(.., count)| count).sum::<usize>()
     };
-    assert!(!pipeline::Options::basic().loop_intervals && pipeline::Options::standard().loop_intervals);
-    assert!(asked(pipeline::Options::standard()) > 0, "premise: -O2 asks for the loop's intervals");
-    assert_eq!(asked(pipeline::Options::basic()), 0, "-O1 worked out the counted loops' intervals");
+    for options in [pipeline::Options::basic(), pipeline::Options::standard()] {
+        assert_eq!(asked(options), 0, "the counted loops' intervals were worked out");
+    }
 }
 
 const SUMMARISED: &str = "
@@ -1530,8 +1528,7 @@ fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
             "licm@1508",
             "instsimplify@1662",
             "tailrec@1677",
-            "simplifycfg@1682",
-            "simplifycfg@2376"
+            "simplifycfg@1682"
         ]
     );
     let kind = crate::parity::REGISTRY.iter().find(|one| one.slot == "instsimplify@1662").map(|one| one.kind);
@@ -1783,7 +1780,7 @@ impl llrm_mir::passes::FunctionPass for Agree {
         if unit.function.layout().is_empty() {
             return llrm_mir::passes::PreservedAnalyses::all();
         }
-        let held = Ranges::of(unit.context, unit.layout, unit.function, analyses, false);
+        let held = Ranges::of(unit.context, unit.layout, unit.function, analyses);
         let seen = held.unit(unit.context, unit.layout, unit.function, analyses.outer());
         let facts = held.registers();
         let ranger = seen.edges.expect("edges").over(&seen, facts);
@@ -2296,13 +2293,12 @@ fn test_a_slot_of_the_order_can_be_run_alone_when_the_level_builds_it() {
 }
 
 /// The order had no SimplifyCFG after the Simplify stage: L1438 (hoist and
-/// sink common code, loops need not stay canonical) and L2376 (hoist) were
-/// Missing. Their slots are built, in the pin's order around
-/// `instsimplify@1662`.
+/// sink common code, loops need not stay canonical) and L1682 were Missing.
+/// Their slots are built, in the pin's order around `instsimplify@1662`.
 #[test]
 fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
     let o2 = Applied::default();
-    for slot in ["simplifycfg@1438", "simplifycfg@1682", "simplifycfg@2376"] {
+    for slot in ["simplifycfg@1438", "simplifycfg@1682"] {
         assert!(pipeline::slot_built(&o2, slot), "{slot}");
     }
     let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
@@ -2320,8 +2316,7 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
             "licm@1508",
             "instsimplify@1662",
             "tailrec@1677",
-            "simplifycfg@1682",
-            "simplifycfg@2376"
+            "simplifycfg@1682"
         ]
     );
 }
@@ -2811,6 +2806,31 @@ fn lsr_runs_on_simplified_loops_in_lcssa_form() {
         let names: Vec<&str> = pipeline::strength_slot(&applied).iter().map(|one| one.name()).collect();
         let at = names.iter().position(|one| *one == "lsr").expect("lsr is in the slot");
         assert_eq!(&names[at.saturating_sub(3)..at], ["loopsimplify", "lcssa", "canonfreeze"], "{names:?}");
-        assert_eq!(names.last(), Some(&"opened"), "the exit phis go again: {names:?}");
+        assert_ne!(names.last(), Some(&"opened"), "the pin opens no exit phi after LSR: {names:?}");
+        let on = Applied {
+            options: pipeline::Options { loop_opened: true, ..applied.options.clone() },
+            ..Applied::default()
+        };
+        let names: Vec<&str> = pipeline::strength_slot(&on).iter().map(|one| one.name()).collect();
+        assert_eq!(names.last(), Some(&"opened"), "-fllrm-loop-opened: the exit phis go again: {names:?}");
+    }
+}
+
+/// `Spares` and `Homes` are llrm-only (the pin has no counterpart for either)
+/// and cost 16.4 M Ir at d_faces; the default pipeline ran both. They are off
+/// at every level until `-fllrm-spares` / `-fllrm-homes`
+/// (docs/working/homes-spares.md).
+#[test]
+fn the_llrm_only_module_passes_are_off_by_default_at_every_level() {
+    for level in [
+        pipeline::Options::none(),
+        pipeline::Options::basic(),
+        pipeline::Options::standard(),
+        pipeline::Options::speed(),
+        pipeline::Options::aggressive(),
+        pipeline::Options::size(),
+        pipeline::Options::min_size(),
+    ] {
+        assert!(!level.spare_loads && !level.stored_homes);
     }
 }

@@ -21,11 +21,12 @@
 //!
 //! The stages, in order:
 //!
-//! 1. `stamped_all`: each exactly defined body is stamped with what is proved
-//!    of it, callees first: `memory(...)`, `nocapture`/`readonly`/`readnone`/
-//!    `writeonly`/`initializes` on pointer parameters, `willreturn`,
-//!    `norecurse`, `nounwind`. A stated attribute is only narrowed. The same
-//!    stamp is stated on the declarations of the body in other modules.
+//! 1. `stamped_all` (the `stamp` slot, before the walk): each exactly defined
+//!    body is stamped with what is proved of it, callees first: `memory(...)`,
+//!    `nocapture`/`readonly`/`readnone`/ `writeonly`/`initializes` on pointer
+//!    parameters, `willreturn`, `norecurse`, `nounwind`. A stated attribute is
+//!    only narrowed. The same stamp is stated on the declarations of the body
+//!    in other modules.
 //! 2. The private bodies nothing reaches any more, the ones the walk
 //!    ([`crate::walk::Walk`]) inlined into every caller, lose their bodies
 //!    (`bare_the_unreached`). Inlining is the walk's alone.
@@ -42,9 +43,9 @@
 //! 6. `ipa-range<N>.`, up to four rounds, if `ranges` is set: the range every
 //!    caller passes a parameter is stated on it for the body's own proofs.
 //! 7. `ipa-deadargs.` ([`crate::deadargs`]): parameters nothing reads go.
-//! 8. `stamped_all` again, then `ipa-pure.` removes unused calls to bodies
-//!    proved pure and terminating, and `ipa-noreturn.` cuts the code after a
-//!    call to a private body every path of which stops, keeping the call.
+//! 8. `ipa-pure.` removes unused calls to bodies proved pure and terminating,
+//!    and `ipa-noreturn.` cuts the code after a call to a private body every
+//!    path of which stops, keeping the call.
 //!
 //! ```mermaid
 //! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
@@ -644,11 +645,8 @@ pub fn optimized_with<E: From<String>>(
         analyses.invalidate_bodies(&PreservedAnalyses::none());
     };
 
-    // Inline only after each independent body has reached its local fixed
-    // point; the splice's result goes straight back through the pipeline.
-    // What each body does, stated on it, is what inlining and the dead-call
-    // removal below read.
-    stamped_all(program, modules).map_err(E::from)?;
+    // The walk has run: what each body does, stated on it by the `stamp`
+    // slot before it, is what the dead-call removal below reads.
     // What the walk inlined into every caller has no use left; `globaldce`
     // would drop it, the passes below skip it.
     for at in 0..count {
@@ -826,8 +824,6 @@ pub fn optimized_with<E: From<String>>(
             reoptimised(&mut program.modules[at], &mut modules[at], id, "ipa-deadargs.")?;
         }
     }
-    // Propagation may have left a body doing less than it states.
-    stamped_all(program, modules).map_err(E::from)?;
     for at in 0..count {
         let declarations = modules[at].get::<Declarations>(&program.modules[at]);
         for &id in &procedures[at] {

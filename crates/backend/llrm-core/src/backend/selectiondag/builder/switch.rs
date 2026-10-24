@@ -495,7 +495,7 @@ impl Builder<'_> {
                 ClusterKind::JumpTable(index) => {
                     let table = self.plan.as_ref().expect("a plan").jump_tables[index].clone();
                     let table_block = self.new_block(&mut insert_at);
-                    let jt_index = self.info.new_jump_table();
+                    let jt_index = self.info.new_jump_table(table.table.clone());
                     let reg = self.info.new_reg();
                     let header = JumpTableHeader {
                         block: current,

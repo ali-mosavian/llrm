@@ -5,6 +5,12 @@ use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::module::{Function, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
 
+/// Virtual registers number from here: below it the numbers are the pin's
+/// physical registers, which the matcher names as `Register(n)` too (ES is 31,
+/// `$noreg` 0). A virtual register numbered 31 was taken for ES and its copy
+/// dropped (huge_runs' `copy` read the selector of a far pointer never set).
+pub const FIRST_VIRTUAL: u32 = 4096;
+
 /// What `FunctionLoweringInfo::set` decides before any block is selected.
 pub struct FunctionLoweringInfo {
     /// `ValueMap`: a value used outside its block (or by a phi) and the
@@ -19,7 +25,11 @@ pub struct FunctionLoweringInfo {
     next_reg: u32,
     /// The register of the high half of a two-register value, by the low's.
     second: std::collections::BTreeMap<u32, u32>,
-    next_jump_table: u32,
+    /// The blocks each jump table's entries go to, by the table's index.
+    pub jump_tables: Vec<Vec<u32>>,
+    /// The first block id a switch lowering has not made one of: ids are
+    /// the function's, so two switches never name the same block.
+    pub next_block: u32,
     next_frame_index: i32,
 }
 
@@ -46,9 +56,10 @@ impl FunctionLoweringInfo {
             static_allocas: IdMap::new(),
             sret_reg: None,
             bpi: None,
-            next_reg: 0,
+            next_reg: FIRST_VIRTUAL,
             second: Default::default(),
-            next_jump_table: 0,
+            jump_tables: Vec::new(),
+            next_block: 0,
             next_frame_index: 0,
         };
         let entry = function.entry();
@@ -89,10 +100,13 @@ impl FunctionLoweringInfo {
         self.next_frame_index - 1
     }
 
-    /// The next jump table index of the function.
-    pub fn new_jump_table(&mut self) -> u32 {
-        self.next_jump_table += 1;
-        self.next_jump_table - 1
+    /// The next jump table index of the function, whose entries go to `blocks`.
+    pub fn new_jump_table(
+        &mut self,
+        blocks: Vec<u32>,
+    ) -> u32 {
+        self.jump_tables.push(blocks);
+        (self.jump_tables.len() - 1) as u32
     }
 
     /// The registers a value of `parts` registers is in, the first being

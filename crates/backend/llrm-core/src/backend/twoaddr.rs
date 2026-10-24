@@ -116,7 +116,7 @@ pub fn tied(
     // (`LiveIntervals`, TwoAddressInstructionPass.cpp#L394-L483).
     let facts = crate::twoaddress::BodyFacts::of(body);
     for (at, block) in body.blocks.iter().enumerate() {
-        let mut walk = crate::twoaddress::Commuter::new(&facts, at);
+        let mut walk = crate::twoaddress::Commuter::sized(&facts, at, block.insns.len());
         let mut insns: Vec<Arc<Insn>> = Vec::new();
         let mut work: Vec<Arc<Insn>> = block.insns.to_vec();
         let mut place = 0;
@@ -265,43 +265,42 @@ fn _unfolded(
 /// is `a := a + b`. `c` is defined once and read only by that copy, so the
 /// copy the coalescer may refuse is gone and no interval grows.
 fn _reused(body: &LirBody) -> LirBody {
-    let mut defined: IndexMap<u32, usize> = IndexMap::default();
-    let mut read: IndexMap<u32, usize> = IndexMap::default();
+    // How many times each value is defined and read in the whole body.
+    let mut defined: Vec<u32> = Vec::new();
+    let mut read: Vec<u32> = Vec::new();
+    let count = |counts: &mut Vec<u32>, value: u32| {
+        let value = value as usize;
+        if counts.len() <= value {
+            counts.resize(value + 1, 0);
+        }
+        counts[value] += 1;
+    };
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
-        for value in &one.defines {
-            *defined.entry(*value).or_insert(0) += 1;
-        }
-        for value in &one.uses {
-            *read.entry(*value).or_insert(0) += 1;
-        }
+        one.defines.iter().for_each(|&value| count(&mut defined, value));
+        one.uses.iter().for_each(|&value| count(&mut read, value));
     }
+    let times = |counts: &Vec<u32>, value: u32| counts.get(value as usize).copied().unwrap_or(0);
     let mut changed = false;
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
         // Where each value is read and written in the block, in order: what the
-        // scans below ask, in a log of the block's length.
-        let mut reads: IndexMap<u32, BTreeSet<usize>> = IndexMap::default();
-        let mut writes: IndexMap<u32, BTreeSet<usize>> = IndexMap::default();
-        let index = |reads: &mut IndexMap<u32, BTreeSet<usize>>,
-                     writes: &mut IndexMap<u32, BTreeSet<usize>>,
-                     at: usize,
-                     one: &Insn,
-                     add: bool| {
+        // scans below ask, by bisection. Made at the first instruction that
+        // passes the counts of the whole body: most blocks have none.
+        let mut reads = Places::default();
+        let mut writes = Places::default();
+        let mut indexed = false;
+        let index = |reads: &mut Places, writes: &mut Places, at: usize, one: &Insn, add: bool| {
             for (places, values) in [(&mut *reads, &one.uses), (&mut *writes, &one.defines)] {
-                for value in values {
+                for &value in values {
                     if add {
-                        places.entry(*value).or_default().insert(at);
-                    } else if let Some(found) = places.get_mut(value) {
-                        found.remove(&at);
+                        places.add(value, at);
+                    } else {
+                        places.remove(value, at);
                     }
                 }
             }
         };
-        for (at, one) in insns.iter().enumerate() {
-            index(&mut reads, &mut writes, at, one, true);
-        }
-        let none = BTreeSet::new();
         for at in 0..insns.len() {
             let Some(what) = insns[at].what.as_ref().filter(|what| ties(what)) else { continue };
             let (Some(Loc::Held(into)), Some(Loc::Held(first))) = (what.dests.first(), what.sources.first()) else {
@@ -320,21 +319,27 @@ fn _reused(body: &LirBody) -> LirBody {
             }
             // Defined once and read once in the whole body: not live out, and
             // the one reader is found below.
-            if defined.get(&into.value) != Some(&1)
-                || read.get(&into.value) != Some(&1)
-                || reads.get(&into.value).unwrap_or(&none).range(..at).next().is_some()
-            {
+            if times(&defined, into.value) != 1 || times(&read, into.value) != 1 {
                 continue;
             }
-            // `first` dies here: nothing after reads it, not even a parallel
+            if !indexed {
+                indexed = true;
+                for (place, one) in insns.iter().enumerate() {
+                    index(&mut reads, &mut writes, place, one, true);
+                }
+            }
+            if reads.at(into.value).first().is_some_and(|&place| place < at) {
+                continue;
+            }
+            // `first` dies here: nothing after it reads it, not even a parallel
             // copy beside the one that writes it, which reads the old value.
-            if reads.get(&first.value).unwrap_or(&none).range(at + 1..).next().is_some() {
+            if !reads.in_range(first.value, at + 1, usize::MAX).is_empty() {
                 continue;
             }
             // Only `first := into` reads it: the copy back of an update in
             // place.
-            let readers: Vec<usize> = reads.get(&into.value).unwrap_or(&none).range(at + 1..).copied().collect();
-            let [last] = readers[..] else { continue };
+            let readers = reads.in_range(into.value, at + 1, usize::MAX);
+            let [last] = *readers else { continue };
             let back = insns[last]
                 .what
                 .as_ref()
@@ -347,7 +352,7 @@ fn _reused(body: &LirBody) -> LirBody {
             if !back {
                 continue;
             }
-            if writes.get(&first.value).unwrap_or(&none).range(at + 1..last).next().is_some() {
+            if !writes.in_range(first.value, at + 1, last).is_empty() {
                 continue;
             }
             let swap = |value: u32| if value == into.value { first.value } else { value };
@@ -361,6 +366,63 @@ fn _reused(body: &LirBody) -> LirBody {
         blocks.push(block.with_insns(insns));
     }
     if changed { body.with_blocks(blocks) } else { body.clone() }
+}
+
+// How many places `_reused` entered, for a test that a block with no update in
+// place enters none.
+#[cfg(test)]
+thread_local! {
+    static ADDED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The places in a block each value is named, ascending.
+#[derive(Default)]
+struct Places(IndexMap<u32, Vec<usize>>);
+
+impl Places {
+    fn add(
+        &mut self,
+        value: u32,
+        at: usize,
+    ) {
+        #[cfg(test)]
+        ADDED.with(|count| count.set(count.get() + 1));
+        let places = self.0.entry(value).or_default();
+        if let Err(found) = places.binary_search(&at) {
+            places.insert(found, at);
+        }
+    }
+
+    fn remove(
+        &mut self,
+        value: u32,
+        at: usize,
+    ) {
+        if let Some(places) = self.0.get_mut(&value)
+            && let Ok(found) = places.binary_search(&at)
+        {
+            places.remove(found);
+        }
+    }
+
+    fn at(
+        &self,
+        value: u32,
+    ) -> &[usize] {
+        self.0.get(&value).map_or(&[], Vec::as_slice)
+    }
+
+    /// The places from `from` up to, not including, `to`.
+    fn in_range(
+        &self,
+        value: u32,
+        from: usize,
+        to: usize,
+    ) -> &[usize] {
+        let places = self.at(value);
+        let (low, high) = (places.partition_point(|&place| place < from), places.partition_point(|&place| place < to));
+        &places[low..high]
+    }
 }
 
 /// The values a commutative instruction writes and reads, where
@@ -1427,6 +1489,52 @@ mod tests {
         let twice: Vec<u32> =
             computed.iter().copied().filter(|reg| computed.iter().filter(|r| *r == reg).count() > 1).collect();
         assert!(twice.is_empty(), "computed more than once: {twice:?} of {computed:?}");
+    }
+
+    /// `_reused` entered every name of every instruction of a block into its
+    /// places (2,862 inserts on d_faces, 1.19 M Ir) before asking whether any
+    /// instruction could be an update in place; a block whose values are read
+    /// more than once, or defined twice, has none to ask about.
+    #[test]
+    fn test_a_block_with_no_candidate_update_in_place_enters_no_places() {
+        let sum = |at: i64, into: u32, first: u32, second: u32| {
+            let what = Semantics {
+                name: Some("add".into()),
+                dests: vec![held(into, 4)],
+                sources: vec![held(first, 4), held(second, 4)],
+                ..Semantics::new(Operation::Binary)
+            };
+            Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![into], vec![first, second]))
+        };
+        // Every sum is read twice or not at all: none is `c := a + b; a := c`.
+        let body = LirBody::new(
+            "t",
+            0,
+            vec![LirBlock::new(0, vec![sum(0, 3, 1, 2), sum(1, 4, 3, 3), sum(2, 5, 4, 4)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        super::ADDED.with(|count| count.set(0));
+        let _ = super::_reused(&body);
+        assert_eq!(super::ADDED.with(std::cell::Cell::get), 0);
+    }
+
+    /// `_reused` kept where each value is read in a `BTreeSet` per value (2,862
+    /// inserts and their node allocations on d_faces); the sorted places answer
+    /// the same asks: the first place, a range, and a place moved.
+    #[test]
+    fn test_the_places_a_value_is_named_answer_a_range_and_follow_a_move() {
+        let mut places = super::Places::default();
+        for at in [5, 1, 3, 3, 9] {
+            places.add(7, at);
+        }
+        assert_eq!(places.at(7), [1, 3, 5, 9], "ascending, once each");
+        assert_eq!(places.in_range(7, 2, usize::MAX), [3, 5, 9]);
+        assert_eq!(places.in_range(7, 4, 9), [5], "up to, not including, the end");
+        places.remove(7, 3);
+        places.add(7, 4);
+        assert_eq!(places.at(7), [1, 4, 5, 9]);
+        assert!(places.in_range(8, 0, usize::MAX).is_empty(), "a value never named");
     }
 
     /// The walk of one block of `insns`, every instruction passed and its
