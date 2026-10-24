@@ -780,8 +780,12 @@ impl Emitter<'_, '_> {
         opcode: u32,
     ) -> Result<(), EmitError> {
         let before = (self.blocks.len() - 1, self.blocks.last().map_or(0, |block| block.insns.len()));
-        let writes_flags = instr::desc(opcode as u16)
-            .is_some_and(|desc| desc.implicit_defs.contains(&llrm_dagisel::generated::ids::x86::EFLAGS));
+        // `MOV32r0` is `xor` in the pin and writes the flags there; it is a
+        // `mov` here, which a later pass makes an `xor` only where they are
+        // dead.
+        let writes_flags = self.ctx.names.get(&(opcode as u16)).is_none_or(|name| *name != "MOV32r0")
+            && instr::desc(opcode as u16)
+                .is_some_and(|desc| desc.implicit_defs.contains(&llrm_dagisel::generated::ids::x86::EFLAGS));
         let previous = self.flags_now.filter(|&p| p != n);
         self.machine_in(n, opcode)?;
         if writes_flags && let Some(previous) = previous {
@@ -789,14 +793,26 @@ impl Emitter<'_, '_> {
         }
         // What it left in EFLAGS: a compare with no result is cheap to make
         // again where a consumer needs it (`ensure_flags`).
-        if instr::desc(opcode as u16)
-            .is_some_and(|desc| desc.implicit_defs.contains(&llrm_dagisel::generated::ids::x86::EFLAGS))
-        {
+        if writes_flags {
             self.flags_now = Some(n);
-            if let Some(last) = self.blocks.last().and_then(|block| block.insns.last())
-                && last.what.as_ref().is_some_and(|what| what.op == Operation::Compare && what.dests.is_empty())
-            {
-                self.flag_insns.insert(n, Arc::clone(last));
+            if let Some(last) = self.blocks.last().and_then(|block| block.insns.last()) {
+                let again = last.what.as_ref().and_then(|what| match (what.op, what.name.as_deref()) {
+                    (Operation::Compare, _) if what.dests.is_empty() => Some(Arc::clone(last)),
+                    // A `sub` leaves the flags a `cmp` of its operands does, an
+                    // `and` those of a `test`: made again without its result.
+                    (Operation::Binary, Some(kind @ ("sub" | "and"))) if what.sources.len() == 2 => {
+                        let compare = Semantics {
+                            name: Some(if kind == "sub" { "cmp" } else { "test" }.into()),
+                            sources: what.sources.clone(),
+                            ..Semantics::new(Operation::Compare)
+                        };
+                        Some(Arc::new(Insn::new(last.at, last.covers, Some(compare), vec![], last.uses.clone())))
+                    }
+                    _ => None,
+                });
+                if let Some(again) = again {
+                    self.flag_insns.insert(n, again);
+                }
             }
         }
         Ok(())
@@ -900,7 +916,18 @@ impl Emitter<'_, '_> {
             return Err(EmitError::Unsupported("flags overwritten between their producer and a consumer".to_owned()));
         };
         let at = self.next_address();
-        let again = Insn { at, covers: Some((at, at)), ..(*compare).clone() };
+        let mut again = Insn { at, covers: Some((at, at)), ..(*compare).clone() };
+        // A `sub` whose value nothing reads, made again for its flags, writes a
+        // value of its own: LIR defines each value once.
+        if let Some(what) = again.what.as_mut() {
+            for dest in &mut what.dests {
+                if let Loc::Held(held) = dest {
+                    let fresh = self.fresh(held.width);
+                    *held = fresh;
+                    again.defines = vec![fresh.value];
+                }
+            }
+        }
         self.blocks.last_mut().expect("a block").insns.push(Arc::new(again));
         self.flags_now = Some(producer);
         Ok(())
@@ -1006,7 +1033,7 @@ impl Emitter<'_, '_> {
             // a shift by `cl` has the amount as the value the `CopyToReg` glued
             // to it wrote to `CL`; the form pins that source to `cx`
             let implicit = || {
-                name.ends_with("rCL")
+                (name.ends_with("rCL") || name.ends_with("mCL"))
                     .then(|| self.accumulator.get(&llrm_lir::registers::RegId::CL).map(|held| Loc::Held(*held)))
                     .flatten()
             };
@@ -1262,7 +1289,11 @@ impl Emitter<'_, '_> {
     ) -> bool {
         self.glue_reaches(n, |name| {
             let name = name.split('|').next().unwrap_or(name);
-            matches!(name, "CDQ" | "CWD") || is_div_or_mul(name) || name.starts_with("REP_") || name.ends_with("rCL")
+            matches!(name, "CDQ" | "CWD")
+                || is_div_or_mul(name)
+                || name.starts_with("REP_")
+                || name.ends_with("rCL")
+                || name.ends_with("mCL")
         })
     }
 
@@ -1512,6 +1543,28 @@ impl Emitter<'_, '_> {
                 );
                 self.calls.push((at, callee));
                 self.inline_places.push((at, patched));
+                return Ok(Some(()));
+            }
+            // `llrm.ia16.asm`: a block of bytes laid down at the site, its
+            // inputs in the registers the name states, as a call of its name
+            // that clobbers what the name says. A block that names symbols is
+            // not translated.
+            "CALL_ASM" => {
+                let NodeData::Symbol(id) = self.dag.node(node.ops[1]).data else {
+                    return Err(EmitError::Unsupported("inline assembly without its name".to_owned()));
+                };
+                let name = self.dag.symbol_names[id as usize].clone();
+                let block = llrm_mir::intrinsics::asm(&name)
+                    .ok_or_else(|| EmitError::Unsupported("inline assembly that does not parse".to_owned()))?;
+                if !block.fixups.is_empty() {
+                    return Err(EmitError::Unsupported("inline assembly naming symbols".to_owned()));
+                }
+                let callee = Callee::Named(name);
+                let at = self.push_call(
+                    Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) },
+                    Some(&callee),
+                );
+                self.calls.push((at, callee));
                 return Ok(Some(()));
             }
             // A call through a far pointer: the offset and the selector sit in
@@ -1901,8 +1954,11 @@ impl Emitter<'_, '_> {
                 Ok(Some(()))
             }
             "LEA32r" | "LEA16r" => {
-                let cell = self
-                    .cell(node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short lea".to_owned()))?, width)?;
+                // a `lea` only computes the address: a scaled index is fine
+                let cell = self.cell_unchecked(
+                    node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short lea".to_owned()))?,
+                    width,
+                )?;
                 // 16-bit addressing has no scale and the encoder no field for a
                 // symbol's displacement beside a lone index: the unscaled
                 // index is the address's base.
@@ -2154,6 +2210,23 @@ impl Emitter<'_, '_> {
 
     /// base, scale, index, displacement, segment.
     fn cell(
+        &mut self,
+        group: &[SDValue],
+        cell_width: u32,
+    ) -> Result<Mem, EmitError> {
+        let cell = self.cell_unchecked(group, cell_width)?;
+        // 16-bit addressing has no scale (SD3): a 16-bit index beside one is
+        // a cell no instruction encodes.
+        if self.ctx.address_mode == AddrMode::Real16
+            && cell.scale != 1
+            && cell.index.is_some_and(|index| index.width == 2)
+        {
+            return Err(EmitError::Unsupported("a scaled 16-bit index at m16".to_owned()));
+        }
+        Ok(cell)
+    }
+
+    fn cell_unchecked(
         &mut self,
         group: &[SDValue],
         cell_width: u32,

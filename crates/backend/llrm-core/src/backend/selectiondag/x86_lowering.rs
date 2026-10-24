@@ -35,6 +35,7 @@
 //! `EmitCmp`
 //! ([L24085](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L24085)).
 
+use super::actions::TargetLowering;
 use super::dag::{MemBase, MemInfo, NodeData, SDNodeFlags, SDValue, SelectionDAG};
 use super::dag_combiner::{CombineHooks, CombineLevel};
 use super::isd::{CondCode, ISD};
@@ -141,6 +142,89 @@ impl CombineHooks for X86Lowering {
             _ => None,
         }
     }
+
+    fn promote_type(
+        &self,
+        dag: &SelectionDAG,
+        tli: &TargetLowering,
+        op: SDValue,
+    ) -> Option<EVT> {
+        is_desirable_to_promote_op(dag, tli, op)
+    }
+}
+
+/// `isTypeDesirableForOp` (undesirable) and `IsDesirableToPromoteOp`: an `i16`
+/// operation, or an `i8` multiply by a constant, is done in `i32` unless an
+/// operand is a load the operation could fold. m32 only: the 16-bit target
+/// has no wider register to promote into.
+fn is_desirable_to_promote_op(
+    dag: &SelectionDAG,
+    tli: &TargetLowering,
+    op: SDValue,
+) -> Option<EVT> {
+    let vt = dag.value_type(op);
+    let opcode = dag.opcode(op);
+    if tli.types.has_far_pointer() || !tli.types.is_type_legal(vt) {
+        return None;
+    }
+    let is8_mul_by_constant = vt == EVT::I8 && opcode == ISD::Mul && dag.constant(dag.operand(op, 1)).is_some();
+    let undesirable = match vt {
+        EVT::I8 => matches!(opcode, ISD::Mul | ISD::Shl),
+        EVT::I16 => matches!(
+            opcode,
+            ISD::SignExtend
+                | ISD::ZeroExtend
+                | ISD::AnyExtend
+                | ISD::Mul
+                | ISD::Shl
+                | ISD::Sra
+                | ISD::Srl
+                | ISD::Sub
+                | ISD::Add
+                | ISD::And
+                | ISD::Or
+                | ISD::Xor
+        ),
+        _ => false,
+    };
+    if !undesirable || (vt != EVT::I16 && !is8_mul_by_constant) {
+        return None;
+    }
+    // `X86::mayFoldLoad`: a single-use plain load.
+    let may_fold_load = |v: SDValue| {
+        dag.opcode(v) == ISD::Load
+            && dag.users(v).count() == 1
+            && matches!(dag.node(v).data, NodeData::Mem(info) if info.ext.is_none())
+    };
+    // `IsFoldableRMW`: the only user is a store to the load's address.
+    let foldable_rmw = |load: SDValue| {
+        let mut users = dag.users(op);
+        let (Some(user), None) = (users.next(), users.next()) else { return false };
+        let user = SDValue { node: user, res: 0 };
+        dag.opcode(user) == ISD::Store && dag.operand(user, 2) == dag.operand(load, 1)
+    };
+    let (n0, n1) =
+        (dag.operand(op, 0), if dag.node(op).ops.len() > 1 { dag.operand(op, 1) } else { dag.operand(op, 0) });
+    match opcode {
+        ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend => {}
+        ISD::Shl | ISD::Sra | ISD::Srl => {
+            if may_fold_load(n0) && foldable_rmw(n0) {
+                return None;
+            }
+        }
+        ISD::Add | ISD::And | ISD::Or | ISD::Xor | ISD::Mul | ISD::Sub => {
+            let commute = opcode != ISD::Sub;
+            let is_const = |v: SDValue| dag.constant(v).is_some();
+            if may_fold_load(n1) && (!commute || !is_const(n0) || (opcode != ISD::Mul && foldable_rmw(n1))) {
+                return None;
+            }
+            if may_fold_load(n0) && ((commute && !is_const(n1)) || (opcode != ISD::Mul && foldable_rmw(n0))) {
+                return None;
+            }
+        }
+        _ => return None,
+    }
+    Some(EVT::I32)
 }
 
 impl Hooks for X86Lowering {
@@ -526,6 +610,78 @@ fn may_fold_load(
     dag.opcode(value) == ISD::Load && dag.users(value).count() == 1
 }
 
+/// `LowerSELECTWithCmpZero`, the `(x & 1) == 0` part: a select on the low bit
+/// is arithmetic on the bit's mask `-(x & 1)`. Without `cmov`, a select of two
+/// constants and a select between `y` and `y op z` become a mask, an `and` and
+/// the operation. The `x - 1` / `0 - x` carry forms (`sbb`) are not translated.
+fn select_with_cmp_zero(
+    dag: &mut SelectionDAG,
+    cmp_val: SDValue,
+    lhs: SDValue,
+    rhs: SDValue,
+    code: u128,
+    can_cmov: bool,
+) -> Option<SDValue> {
+    let (cmp_vt, vt) = (dag.value_type(cmp_val), dag.value_type(lhs));
+    if !cmp_vt.is_integer() || !vt.is_integer() {
+        return None;
+    }
+    if code != cond::E || dag.opcode(cmp_val) != ISD::And || dag.constant(dag.operand(cmp_val, 1)) != Some(1) {
+        return None;
+    }
+    // `-(x & 1)` in `splat_vt`.
+    let splat_lsb = |dag: &mut SelectionDAG, splat_vt: EVT| {
+        let neg = if cmp_vt.size_in_bits() > splat_vt.size_in_bits() {
+            dag.get_node(ISD::Truncate, splat_vt, &[cmp_val])
+        } else if cmp_vt.size_in_bits() < splat_vt.size_in_bits() {
+            let wide = dag.get_node(ISD::AnyExtend, splat_vt, &[dag.operand(cmp_val, 0)]);
+            let one = dag.get_constant(1, splat_vt);
+            dag.get_node(ISD::And, splat_vt, &[wide, one])
+        } else {
+            cmp_val
+        };
+        dag.get_negative(neg, splat_vt)
+    };
+    let all_ones = |dag: &SelectionDAG, v: SDValue| dag.constant(v) == Some(super::fold::mask(dag.width(v)));
+    if dag.is_null_constant(lhs) && all_ones(dag, rhs) {
+        return Some(splat_lsb(dag, vt));
+    }
+    if !can_cmov && dag.constant(lhs).is_some() && dag.constant(rhs).is_some() {
+        let mask = splat_lsb(dag, vt);
+        let diff = dag.get_node(ISD::Xor, vt, &[lhs, rhs]);
+        let flip = dag.get_node(ISD::And, vt, &[mask, diff]);
+        return Some(dag.get_node(ISD::Xor, vt, &[lhs, flip]));
+    }
+    if can_cmov {
+        return None;
+    }
+    // `select (x & 1) == 0, y, (y op z)` is `y op (-(x & 1) & z)`.
+    let rop = dag.opcode(rhs);
+    let (r0, r1) = if dag.node(rhs).ops.len() == 2 { (dag.operand(rhs, 0), dag.operand(rhs, 1)) } else { (rhs, rhs) };
+    let identity = match rop {
+        ISD::Or | ISD::Xor | ISD::Add if r0 == lhs || r1 == lhs => Some((if r0 == lhs { r1 } else { r0 }, lhs)),
+        ISD::Shl | ISD::Sra | ISD::Srl | ISD::Sub if r0 == lhs => Some((r1, lhs)),
+        _ => None,
+    };
+    if let Some((src1, src2)) = identity {
+        let src_vt = dag.value_type(src1);
+        let mask = splat_lsb(dag, src_vt);
+        let and = dag.get_node(ISD::And, src_vt, &[mask, src1]);
+        return Some(dag.get_node(rop, vt, &[src2, and]));
+    }
+    // `select (x & 1) == 0, (y & z), y` is `y & (-(x & 1) | z)`.
+    if dag.opcode(lhs) == ISD::And {
+        let (l0, l1) = (dag.operand(lhs, 0), dag.operand(lhs, 1));
+        if l0 == rhs || l1 == rhs {
+            let src1 = if l0 == rhs { l1 } else { l0 };
+            let mask = splat_lsb(dag, vt);
+            let or = dag.get_node(ISD::Or, vt, &[mask, src1]);
+            return Some(dag.get_node(ISD::And, vt, &[rhs, or]));
+        }
+    }
+    None
+}
+
 /// `LowerSELECT`, integers: `cmov` of a compare's flags.
 fn lower_select(
     dag: &mut SelectionDAG,
@@ -540,6 +696,22 @@ fn lower_select(
     if dag.opcode(cond) == ISD::SetCC {
         if let Some(lowered) = lower_setcc(dag, cond) {
             cond = lowered;
+        }
+    }
+    // A raw condition `x & 1` is `(x & 1) == 0` with the arms swapped.
+    if dag.opcode(cond) == ISD::And && dag.constant(dag.operand(cond, 1)) == Some(1) {
+        if let Some(lowered) = select_with_cmp_zero(dag, cond, op2, op1, cond::E, can_cmov) {
+            return Some(lowered);
+        }
+    }
+    if dag.opcode(cond) == x86isd::SETCC && dag.opcode(dag.operand(cond, 1)) == x86isd::CMP {
+        let cmp = dag.operand(cond, 1);
+        if dag.is_null_constant(dag.operand(cmp, 1)) {
+            if let Some(code) = dag.constant(dag.operand(cond, 0)) {
+                if let Some(lowered) = select_with_cmp_zero(dag, dag.operand(cmp, 0), op1, op2, code, can_cmov) {
+                    return Some(lowered);
+                }
+            }
         }
     }
     let (code, flags);
