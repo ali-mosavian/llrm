@@ -54,7 +54,10 @@ fn main() {
         .filter(|l| !l.starts_with("target triple"))
         .map(|l| format!("{l}\n"))
         .collect();
-    let module = llrm_mir::parse::module(&text).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let mut module = llrm_mir::parse::module(&text).unwrap_or_else(|e| panic!("{path}: {e}"));
+    // As the driver under `--isel=dag`: a `memset.pattern` call is a loop
+    // before the builder sees it.
+    llrm_core::backend::memsetpattern::expanded(&mut module).unwrap_or_else(|e| panic!("{path}: {e}"));
     let layout =
         module.datalayout.as_deref().map_or_else(DataLayout::default, |t| DataLayout::parse(t).expect("a datalayout"));
     // `M16=1` selects for real mode: 16-bit pointers, the m16 table, real-mode
