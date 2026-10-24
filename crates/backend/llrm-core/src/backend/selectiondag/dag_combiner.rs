@@ -74,6 +74,18 @@ pub trait CombineHooks {
         None
     }
 
+    /// `targetShrinkDemandedConstant`: `None` is "not handled" (the generic
+    /// shrink runs); `Some(None)` keeps the node as it is; `Some(Some(new))`
+    /// replaces it.
+    fn target_shrink_demanded_constant(
+        &mut self,
+        _dag: &mut SelectionDAG,
+        _op: SDValue,
+        _demanded: u128,
+    ) -> Option<Option<SDValue>> {
+        None
+    }
+
     /// `IsDesirableToPromoteOp`, with `isTypeDesirableForOp` before it: the
     /// type a legal operation is better done in, or `None`.
     fn promote_type(
@@ -93,7 +105,7 @@ impl CombineHooks for NoCombines {}
 
 pub struct DagCombiner<'a, H: CombineHooks> {
     pub(super) dag: &'a mut SelectionDAG,
-    hooks: &'a mut H,
+    pub(super) hooks: &'a mut H,
     pub(super) level: CombineLevel,
     worklist: Vec<u32>,
     queued: HashSet<u32>,

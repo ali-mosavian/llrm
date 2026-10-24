@@ -1046,3 +1046,36 @@ fn test_a_reload_before_the_pseudo_that_takes_a_calls_result_leaves_the_result_b
     let names: Vec<&str> = insns.iter().map(|one| name(one)).filter(|name| !name.is_empty()).collect();
     assert!(names.contains(&"faddp"), "{names:?}");
 }
+
+/// The stackifier worked liveness out a second time over the body it had split:
+/// a block made on an edge holds nothing, so its rows are those of the block it
+/// leads to, and no other row moves (d_faces: two calls of 0.8 M each).
+/// Counted, not timed: one set-building pass for the entry rows, one for the
+/// exit rows.
+#[test]
+fn test_a_split_edge_asks_no_second_liveness() {
+    let (a, b, out_a, out_b) = (frame_cell(-10, 10), frame_cell(-20, 10), frame_cell(-30, 10), frame_cell(-40, 10));
+    let insn_of = |at: i64, what: Semantics| {
+        let (defines, uses) = (held_values(&what.dests), held_values(&what.sources));
+        Arc::new(Insn::new(at, Some((at, at + 8)), Some(what), defines, uses))
+    };
+    let mut body = _body(vec![]);
+    body.blocks = vec![
+        block(0, vec![insn_of(0, _load(1, &a)), insn_of(8, _load(2, &b))], vec![16, 32]).into(),
+        block(
+            16,
+            vec![insn_of(16, _store(&out_a, 1)), insn_of(24, sem(Operation::Move, "mov", vec![], vec![]))],
+            vec![32],
+        )
+        .into(),
+        block(32, vec![insn_of(32, _store(&out_b, 2))], vec![]).into(),
+    ];
+    let before = body.blocks.len();
+    crate::backend::allocate::SETS_BUILT.with(|one| one.set(0));
+    let converted =
+        crate::backend::fpstack::converted(&body, &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16))
+            .expect("a fork whose join reads fewer values than the fork holds");
+    let built = crate::backend::allocate::SETS_BUILT.with(|one| one.get());
+    assert!(converted.blocks.len() > before, "an edge was split");
+    assert_eq!(built, 2, "sets built: one liveness pass");
+}

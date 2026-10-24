@@ -64,3 +64,9 @@ plus the deletion; the 32.8 M is those two passes.
 
 `machinesink::sunk` 12.5 M for 7 bodies, 9 rounds (pin: `MachineSinkingLegacy` 4.3 M): `MachineBlockFrequencyInfo::of` 1.7 (9 calls; it builds its own graph and cycle info), `loops::irreducible` 1.4, `liveness::effect` 1.3 (2,328 first-time decodes), the flag-liveness solve 1.3, `loops::loops` 0.7, `find_succ_to_sink_to` 0.3, `DomTree::of` 0.5; the rest, about 4.5 M, is the walk itself. The lever is sharing: the frequency info, the branch-probability info, the sinker's loops and its dominator tree each rebuild the graph and the cycles of the same body. That needs `MachineBlockFrequencyInfo` and `MachineBranchProbabilityInfo` to take a graph and cycle info already built (w-5's module), then one build per body feeds all four: up to 4 M, not measured.
 
+## Re-measured on the dist build (2026-10-25, dist e482d470ae, d_faces -O2 m32, `ledger4.py` per-pass rows; the ledger's front-end and residual rows read other files and are not quoted)
+
+The release profile above overstates the passes by about 15% (Peephole 74.6 M there, 62.9 M on dist). The clean-up bucket on dist: ours 132.6 M, pin 49.5 M, excess 83.2 M. By pass: Peephole 62.9, jumps::ControlFlow 19.6, FloatAlloc 16.3, MachineSink 9.1, FloatPrep 8.7, precse 5.6, pressuresink 4.4, loopslots 3.3, phiconst 1.7, floatfold 0.8.
+
+Landed on dist (same-tree pairs): #4368 -0.81 M, #4395 -1.56 M, #4412 -1.72 M. Row 9 after them: FloatAlloc 16.3 M, `fpstack::converted` 10.8 M. `fpregs::valued` (1.8 M release) is real work, not a lever: 1.1 M of it rewrites the instructions of the 2 bodies that carry x87 operands. What is left in `converted` is spread over the stack model itself (no single item above 1 M), so the remaining gap to the pin's 1.7 M is the pass's design, not a scan that can be cached; the way down is `FloatPrep` into selection (8.7 M, after sdag-d 11-18) and fewer bodies reaching the pass.
+
