@@ -195,3 +195,14 @@ def test_a_sweep_records_its_pid_for_the_loop_that_waits_for_it(tmp_path, monkey
     monkeypatch.setattr(s, "sweep", lambda argv: seen.append((tmp_path / "running.pid").read_text().strip()) or 0)
     assert s.main([]) == 0
     assert seen == [str(os.getpid())] and not (tmp_path / "running.pid").exists()
+
+
+def test_a_program_that_did_not_link_is_a_build_failure_not_a_wrong_output():
+    """The 23:00 sweep of 2026-10-24 called `FAIL c/bench_io.c [-O2 -march=i486]: link: jwlink: Error! E2028: _llrm_os_close@3 is an undefined reference` a WRONG OUTPUT, and #4370 was blamed for a file race that was never reached."""
+    text = "[c] 430 programs: 429 pass, 0 known, 1 fail\nFAIL  c/bench_io.c [-O2 -march=i486]: link: jwlink: Error! E2028: _llrm_os_close@3 is an undefined reference\n"
+    reds, _ = s.parse_groups(text)
+    assert [(one.name, one.kind) for one in reds] == [("run:c/bench_io.c", s.BUILD)]
+    reds, _ = s.parse_groups("[c] 1 programs: 0 pass, 0 known, 1 fail\nFAIL  c/x.c [-O2]: compile: llrm-c: boom\n")
+    assert reds[0].kind == s.BUILD
+    reds, _ = s.parse_groups("[c] 1 programs: 0 pass, 0 known, 1 fail\nFAIL  c/x.c [-O2]: output differs at line 3\n")
+    assert reds[0].kind == s.WRONG
