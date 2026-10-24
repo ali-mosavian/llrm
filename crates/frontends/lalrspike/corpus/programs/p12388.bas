@@ -1,0 +1,6 @@
+'$DYNAMIC
+DIM a(10)
+'$STATIC
+DIM b(10)
+REDIM a(20)
+ERASE b

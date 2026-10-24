@@ -1,0 +1,4 @@
+SUB p
+REM $STATIC
+DIM a(10)
+END SUB

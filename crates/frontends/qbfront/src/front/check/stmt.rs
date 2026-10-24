@@ -206,9 +206,10 @@ impl Checker {
                     self.err(counter.span(), "FOR index variable illegal");
                 }
                 if let (Expr::Name(counter, _), Some((next, span))) = (counter, next_variable) {
-                    let same = counter.eq_ignore_ascii_case(next)
-                        || (stem(counter).eq_ignore_ascii_case(stem(next))
-                            && (Ty::of_suffix(counter).is_none() || Ty::of_suffix(next).is_none()));
+                    // `i` and `i%` are two variables unless DEFINT makes them
+                    // one
+                    let same = stem(counter).eq_ignore_ascii_case(stem(next))
+                        && self.default_type(counter).plain() == self.default_type(next).plain();
                     if !same {
                         self.err(*span, "NEXT without FOR");
                     }

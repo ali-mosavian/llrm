@@ -150,7 +150,10 @@ impl Ast<'_> {
                 }
                 self.runtime(if k == Kw::TRON { "TRON" } else { "TROFF" }, Vec::new(), span);
             }
-            Kw::SYSTEM => self.runtime("SYSTEM", Vec::new(), span),
+            Kw::SYSTEM => {
+                let arguments = if self.dialect.exit_codes() { self.optional_exp()? } else { Vec::new() };
+                self.runtime("SYSTEM", arguments, span)
+            }
             Kw::STOP => self.implicit_call("STOP", Vec::new(), span),
             Kw::RESET => self.implicit_call("RESET", Vec::new(), span),
             Kw::ENDIF => self.runtime("ENDIF", Vec::new(), span),

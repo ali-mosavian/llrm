@@ -3303,7 +3303,7 @@ impl Compiler {
                 self.begin_resumable_statement(line);
             }
             match statement {
-                Statement::OnErrorResumeNext { .. } => return self.fail("ON ERROR RESUME NEXT is not supported"),
+                Statement::OnErrorResumeNext { .. } => return self.unsupported("ON ERROR RESUME NEXT"),
                 Statement::Dim(items) | Statement::Common { declarations: items, .. } => {
                     for item in items {
                         self.allocate(item)?;
@@ -3553,13 +3553,11 @@ impl Compiler {
                         self.tag_last(Tag::SetSegment);
                     }
                 }
-                Statement::MethodCall { .. } => return self.fail("object methods are not supported"),
-                Statement::FormDeclaration(..) => return self.fail("'$FORM is not supported"),
-                Statement::RedimPreserve(_) => return self.fail("REDIM PRESERVE is not supported"),
-                Statement::OpenIsam { .. } => return self.fail("OPEN FOR ISAM is not supported"),
-                Statement::OpenClassic { .. } => {
-                    return self.fail("the classic OPEN mode$, #file, path$ form is not supported")
-                }
+                Statement::MethodCall { .. } => return self.unsupported("calling a method of a form or control"),
+                Statement::FormDeclaration(..) => return self.unsupported("a '$FORM declaration"),
+                Statement::RedimPreserve(_) => return self.unsupported("REDIM PRESERVE"),
+                Statement::OpenIsam { .. } => return self.unsupported("OPEN FOR ISAM"),
+                Statement::OpenClassic { .. } => return self.unsupported("the classic OPEN mode$, #file, path$ form"),
                 Statement::Open { access, lock, record_length, mode_written, mode, .. }
                     if access.is_some()
                         || lock.is_some()
@@ -3567,7 +3565,7 @@ impl Compiler {
                         || !mode_written
                         || *mode == FileMode::Random =>
                 {
-                    return self.fail("OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported");
+                    return self.unsupported("OPEN with ACCESS, LOCK, LEN or RANDOM mode");
                 }
                 Statement::Open { path, mode, file, .. } => {
                     let path = self.string_descriptor(path)?;
@@ -3632,7 +3630,7 @@ impl Compiler {
                     let (file, file_type) = self.expression(file)?;
                     let file = self.convert(file, file_type, INTEGER)?;
                     let Some(target) = target else {
-                        return self.fail("GET and PUT without a variable are not supported");
+                        return self.unsupported("GET or PUT without a variable");
                     };
                     let (target, target_type) = self.destination(target)?;
                     let address = self.far_address(target, target_type);
@@ -4044,7 +4042,7 @@ impl Compiler {
                         self.emit_runtime_call("B$SPLY", Vec::new(), vec![commands]);
                     }
                     "PALETTE_USING" => {
-                        return self.fail("PALETTE USING is not supported yet");
+                        return self.unsupported("PALETTE USING");
                     }
                     "PALETTE" => {
                         let [attribute, color] = arguments.as_slice() else {
@@ -4366,7 +4364,7 @@ impl Compiler {
                     }
                     "END" | "SYSTEM" => {
                         if !arguments.is_empty() {
-                            return self.fail(format!("{name} takes no arguments"));
+                            return self.unsupported(&format!("{name} with a return code"));
                         }
                         self.emit_runtime_call("B$CEND", Vec::new(), Vec::new());
                         // B$CEND does not return. Keep following labels as
@@ -6298,7 +6296,9 @@ impl Compiler {
                     Unary::Negative => "neg",
                     Unary::Not => "not",
                     Unary::Positive | Unary::Grouped => unreachable!(),
-                    Unary::ByValue | Unary::Segmented => return self.fail("BYVAL and SEG arguments are not supported"),
+                    Unary::ByValue | Unary::Segmented => {
+                        return self.unsupported("BYVAL and SEG on the arguments of this call")
+                    }
                 };
                 if *op == Unary::Not && !integral(type_id) {
                     return self.fail("NOT requires an integral operand");
@@ -8800,10 +8800,10 @@ impl Compiler {
         name: &str,
     ) -> Result<(), SemanticError> {
         if intrinsics::unsupported(name, self.dialect) {
-            return self.fail(format!("{name} is not supported"));
+            return self.unsupported(name);
         }
         if name.ends_with('@') {
-            return self.fail(format!("{name}: CURRENCY is not supported"));
+            return self.unsupported(&format!("{name} with a CURRENCY value"));
         }
         Ok(())
     }
@@ -10053,6 +10053,15 @@ impl Compiler {
     /// The segment's size for a message.
     fn segment_kib(&self) -> usize {
         self.options.segment_bytes.map_or(0, |bytes| bytes / 1024)
+    }
+
+    /// BASIC the dialect has, which this compiler cannot make code for yet:
+    /// said as that, not as an error in the program.
+    fn unsupported<T>(
+        &self,
+        what: &str,
+    ) -> Result<T, SemanticError> {
+        self.fail(format!("{what} is valid in this dialect, but this compiler cannot generate code for it yet"))
     }
 
     fn fail<T>(

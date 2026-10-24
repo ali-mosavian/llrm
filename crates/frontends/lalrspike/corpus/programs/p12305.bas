@@ -1,0 +1,4 @@
+SUB p
+'$DYNAMIC extra
+DIM a(10)
+END SUB

@@ -125,6 +125,8 @@ fn scan_line(
 ) -> Result<(), LexError> {
     let bytes = line.as_bytes();
     let mut at = 0;
+    // where this line's tokens begin in `out`
+    let line_start = out.len();
     while at < bytes.len() {
         let byte = bytes[at];
         if matches!(byte, b' ' | b'\t' | 0x0c) {
@@ -135,7 +137,13 @@ fn scan_line(
         let span = |end| Span { line: line_index, start, end };
         let kind = match byte {
             b'\'' => {
-                let directive = line[at + 1..].trim().to_ascii_uppercase();
+                // a metacommand is the first thing on its line; after a
+                // statement it is a comment
+                let directive =
+                    if out.len() == line_start { line[at + 1..].trim().to_ascii_uppercase() } else { String::new() };
+                if let Some(problem) = metacommand_problem(&directive, dialect) {
+                    return Err(error(line_index, start, bytes.len(), problem));
+                }
                 at = bytes.len();
                 match directive.as_str() {
                     "$DYNAMIC" => TokenKind::ArrayDynamic,
@@ -187,7 +195,7 @@ fn scan_line(
                     }
                     TokenKind::Identifier(line[start..at].to_ascii_uppercase())
                 } else {
-                    number(line, &mut at, line_index, dialect)?
+                    number(line, &mut at, line_index, dialect, out.len() != line_start)?
                 }
             }
             b'.' => {
@@ -200,7 +208,7 @@ fn scan_line(
                     );
                 let after_name = !after_number && at > 0 && (name_char(bytes[at - 1]) || bytes[at - 1] == b')');
                 if bytes.get(at + 1).is_some_and(u8::is_ascii_digit) && !after_name {
-                    number(line, &mut at, line_index, dialect)?
+                    number(line, &mut at, line_index, dialect, out.len() != line_start)?
                 } else if after_name || bytes.get(at + 1).is_some_and(|b| name_char(*b)) {
                     at += 1;
                     TokenKind::Period
@@ -210,7 +218,14 @@ fn scan_line(
                     TokenKind::Real("0".into(), None)
                 }
             }
-            b'&' => based(line, &mut at, line_index, dialect)?,
+            b'&' => {
+                // a based number cannot be a line number: BC does not know it
+                // for a statement
+                if out.len() == line_start && bytes.get(at + 1).is_some_and(|b| b.is_ascii_alphabetic()) {
+                    return Err(error(line_index, at, bytes.len(), "Statement unrecognizable"));
+                }
+                based(line, &mut at, line_index, dialect)?
+            }
             b'A'..=b'Z' | b'a'..=b'z' => {
                 while at < bytes.len() && name_continues(bytes[at], dialect) {
                     at += 1;
@@ -226,10 +241,39 @@ fn scan_line(
                 let name = &line[start..at];
                 let bare = name.trim_end_matches(['%', '&', '!', '#', '$', '@']);
                 let reserved_id = reserved(name);
+                // `GO TO` and `GO SUB` are GOTO and GOSUB; `ENDIF` is END IF
+                if bare.eq_ignore_ascii_case("GO") && name.len() == bare.len() {
+                    let rest = &line[at..];
+                    let after_blanks = rest.trim_start();
+                    let word: String = after_blanks.chars().take_while(char::is_ascii_alphabetic).collect();
+                    let ends = after_blanks[word.len()..].bytes().next().is_none_or(|b| !name_continues(b, dialect));
+                    let joined = if ends { reserved(&format!("GO{}", word.to_ascii_uppercase())) } else { None };
+                    if let (Some(id), true) = (joined, matches!(word.to_ascii_uppercase().as_str(), "TO" | "SUB")) {
+                        at += rest.len() - after_blanks.len() + word.len();
+                        out.push(Token { kind: TokenKind::Reserved(id), span: span(at) });
+                        continue;
+                    }
+                }
+                if bare.eq_ignore_ascii_case("ENDIF") && name.len() == bare.len() {
+                    if let (Some(end), Some(then)) = (reserved("END"), reserved("IF")) {
+                        out.push(Token { kind: TokenKind::Reserved(end), span: span(at) });
+                        out.push(Token { kind: TokenKind::Reserved(then), span: span(at) });
+                        continue;
+                    }
+                }
                 if reserved_id == Some(ids().rem)
                     || (reserved_id.is_none() && bare.eq_ignore_ascii_case("REM") && name.len() == bare.len())
                 {
-                    let directive = line[at..].trim().to_ascii_uppercase();
+                    let first = out.len() == line_start;
+                    let directive = if first { line[at..].trim().to_ascii_uppercase() } else { String::new() };
+                    // after a statement (and a line number) REM ends it, as `:
+                    // REM` would
+                    let after_label =
+                        out.len() == line_start + 1 && matches!(out[line_start].kind, TokenKind::Integer(..));
+                    let after_colon = out.last().is_some_and(|last| last.kind == punct(b':'));
+                    if !first && !after_label && !after_colon {
+                        out.push(Token { kind: punct(b':'), span: span(start) });
+                    }
                     at = bytes.len();
                     match directive.as_str() {
                         "$DYNAMIC" => TokenKind::ArrayDynamic,
@@ -318,7 +362,7 @@ fn scan_line(
                     line_index,
                     at,
                     at + line[at..].chars().next().map_or(1, char::len_utf8),
-                    &format!("unknown character {:?}", line[at..].chars().next().unwrap_or('?')),
+                    "Invalid character",
                 ));
             }
         };
@@ -356,6 +400,7 @@ fn number(
     at: &mut usize,
     line_index: usize,
     dialect: Dialect,
+    joins_blanks: bool,
 ) -> Result<TokenKind, LexError> {
     let bytes = line.as_bytes();
     let start = *at;
@@ -369,7 +414,9 @@ fn number(
             *i += 1;
         }
         let next = skip_blanks(bytes, *i);
-        if next > *i && next < bytes.len() && bytes[next].is_ascii_digit() {
+        // blanks between digits are skipped, except in a line number (`10 20
+        // PRINT` is two numbers)
+        if joins_blanks && next > *i && next < bytes.len() && bytes[next].is_ascii_digit() {
             *i = next;
         } else {
             return;
@@ -541,4 +588,28 @@ fn based(
     let value =
         if unsigned & (1_u64 << (bits - 1)) != 0 { (unsigned as i64) - (1_i64 << bits) } else { unsigned as i64 };
     Ok(TokenKind::Integer(value, if bits == 32 { Some('&') } else { suffix }))
+}
+
+/// BC's complaint about a metacommand that is written wrong, if it is: an
+/// `$INCLUDE` with no quoted file name, a `$LINESIZE` with no size, a `$FORM`
+/// with no name. (An `$INCLUDE` that is well formed has been expanded before
+/// the scanner sees the text.)
+fn metacommand_problem(
+    directive: &str,
+    dialect: Dialect,
+) -> Option<&'static str> {
+    let argument = |keyword: &str| directive.strip_prefix(keyword).map(|rest| rest.trim_start_matches(':').trim());
+    if let Some(file) = argument("$INCLUDE") {
+        let quoted = file.len() > 2 && file.starts_with('\'') && file.ends_with('\'');
+        if !directive["$INCLUDE".len()..].starts_with(':') || !quoted {
+            return Some("$Metacommand Error");
+        }
+    }
+    if argument("$LINESIZE").is_some_and(str::is_empty) {
+        return Some("$Metacommand Error");
+    }
+    if matches!(dialect, Dialect::VbDos | Dialect::Quickr) && directive == "$FORM" {
+        return Some("Form variable already in use or illegal form name");
+    }
+    None
 }

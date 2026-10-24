@@ -1,0 +1,4 @@
+DIM x%, y%, i%
+SELECT CASE x%
+10 CASE 1
+END SELECT

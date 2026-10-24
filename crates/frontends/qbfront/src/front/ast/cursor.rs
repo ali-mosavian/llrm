@@ -71,6 +71,29 @@ impl Ast<'_> {
         Err(self.i)
     }
 
+    /// `fail`, with BC's name for the reason.
+    pub(super) fn fail_because<T>(
+        &mut self,
+        reason: &'static str,
+    ) -> R<T> {
+        self.reason = Some(reason);
+        Err(self.i)
+    }
+
+    /// Whether the token at `at` begins its line, after at most a line number
+    /// or a label.
+    pub(super) fn first_on_line(
+        &self,
+        at: usize,
+    ) -> bool {
+        let start = (0..at).rev().find(|&index| self.kinds[index] == Tok::Kw(Kw::NewLine)).map_or(0, |index| index + 1);
+        match &self.kinds[start..at] {
+            [] | [Tok::Int] => true,
+            [Tok::Ident, Tok::Kw(Kw::Colon)] | [Tok::Int, Tok::Kw(Kw::Colon)] => true,
+            _ => false,
+        }
+    }
+
     pub(super) fn span(
         &self,
         at: usize,
@@ -102,6 +125,12 @@ impl Ast<'_> {
             }
             Some(TokenKind::Integer(value, None)) if (0..=65_529).contains(value) => {
                 let out = (value.to_string(), self.span(self.i));
+                self.i += 1;
+                Ok(out)
+            }
+            // a line number may carry a fraction: `GOTO 1.5`
+            Some(TokenKind::Real(text, None)) if !text.contains('E') => {
+                let out = (text.clone(), self.span(self.i));
                 self.i += 1;
                 Ok(out)
             }
