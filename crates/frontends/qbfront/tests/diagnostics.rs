@@ -78,3 +78,26 @@ fn every_error_has_words_and_a_place() {
         assert!(error.message.contains("[BC: "), "{source}: {}", error.message);
     }
 }
+
+/// The codes of every error the front raises on the BC corpus's programs (5,000
+/// small programs that reach most checks) all have an entry in `messages.txt`:
+/// none is left to the fallback wording.
+#[test]
+fn every_error_the_corpus_raises_is_worded() {
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../lalrspike/corpus/programs");
+    let Ok(entries) = std::fs::read_dir(&directory) else { return };
+    let mut unworded = std::collections::BTreeMap::<String, String>::new();
+    for entry in entries.filter_map(Result::ok) {
+        let Ok(text) = std::fs::read_to_string(entry.path()) else { continue };
+        let text = text.replace('\n', "\r\n");
+        for dialect in [Dialect::QuickBasic45, Dialect::Pds71, Dialect::VbDos] {
+            if let Err(error) = qbfront::front::parse_coded(&text, dialect) {
+                let worded = qbfront::front::explain::explain(error.clone(), &text);
+                if !worded.message.contains(" [BC: ") || worded.message.starts_with(&format!("{} (at", error.code)) {
+                    unworded.entry(error.code.clone()).or_insert_with(|| entry.path().display().to_string());
+                }
+            }
+        }
+    }
+    assert!(unworded.is_empty(), "errors with no words in messages.txt (code: an example): {unworded:#?}");
+}

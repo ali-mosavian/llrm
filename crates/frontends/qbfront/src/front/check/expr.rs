@@ -1,0 +1,486 @@
+//! Typing an expression by BC's rules, and folding the constants it holds.
+
+use super::*;
+
+impl Checker {
+    pub(super) fn scalar(
+        &mut self,
+        typed: Option<Typed>,
+        span: Span,
+    ) -> Option<Typed> {
+        let typed = typed?;
+        if matches!(typed.ty, Ty::Record(_)) {
+            self.err(span, "Typed variable not allowed in expression");
+            return None;
+        }
+        if typed.array.is_some() {
+            self.err(span, "Syntax error");
+            return None;
+        }
+        Some(typed)
+    }
+
+    /// An expression that must be numeric, and a 16-bit integer where it is a
+    /// constant.
+    pub(super) fn integer(
+        &mut self,
+        expr: &Expr,
+    ) -> Option<Typed> {
+        self.argument_of_class(Class::Int, expr)
+    }
+
+    /// An expression that must be numeric.
+    pub(super) fn numeric(
+        &mut self,
+        expr: &Expr,
+    ) -> Option<Typed> {
+        let typed = self.expr(expr);
+        let typed = self.scalar(typed, expr.span())?;
+        if !typed.ty.numeric() {
+            self.err(expr.span(), "Type mismatch");
+            return None;
+        }
+        Some(typed)
+    }
+
+    pub(super) fn string_expr(
+        &mut self,
+        expr: &Expr,
+    ) -> Option<Typed> {
+        let typed = self.expr(expr);
+        let typed = self.scalar(typed, expr.span())?;
+        if !typed.ty.string() {
+            self.err(expr.span(), "String expression required");
+            return None;
+        }
+        Some(typed)
+    }
+
+    pub(super) fn expr(
+        &mut self,
+        expr: &Expr,
+    ) -> Option<Typed> {
+        match expr {
+            Expr::Omitted(span) => {
+                self.err(*span, "Syntax error");
+                None
+            }
+            Expr::Literal(literal, _) => Some(match literal {
+                Literal::Integer(value, TypeName::Long) => {
+                    Typed { constant: Some(*value as f64), ..Typed::value(Ty::Long) }
+                }
+                Literal::Integer(value, _) => Typed { constant: Some(*value as f64), ..Typed::value(Ty::Int) },
+                Literal::Real(text, TypeName::Currency) => {
+                    Typed { constant: parse_real(text), ..Typed::value(Ty::Currency) }
+                }
+                Literal::Real(text, TypeName::Double) => {
+                    Typed { constant: parse_real(text), ..Typed::value(Ty::Double) }
+                }
+                Literal::Real(text, _) => {
+                    let constant = parse_real(text);
+                    if constant.is_some_and(|c| c.abs() > f64::from(f32::MAX)) {
+                        self.err(expr.span(), "Math overflow");
+                    }
+                    Typed { constant, ..Typed::value(Ty::Single) }
+                }
+                Literal::String(_) => Typed::value(Ty::Str(None)),
+            }),
+            Expr::Name(name, span) => self.name_expr(name, *span),
+            Expr::Apply { name, arguments, span } => self.apply(name, arguments, *span),
+            // `Math.Add(1, 2)`: a procedure or array whose name has a dot is
+            // not a field of anything
+            Expr::Index { base, indices, span }
+                if dotted(base).is_some_and(|name| !self.lookup_record_var(name.split('.').next().unwrap_or(""))) =>
+            {
+                let name = dotted(base).unwrap_or_default();
+                self.apply(&name, indices, *span)
+            }
+            Expr::Index { base, indices, span } => {
+                self.field_rank = None;
+                let base_typed = self.expr(base)?;
+                // an element of an array field of a record
+                if let (Expr::Field { .. }, Some(rank)) = (&**base, self.field_rank.take()) {
+                    // `r.a()` names the whole array
+                    if indices.is_empty() {
+                        return Some(base_typed);
+                    }
+                    let mut ok = true;
+                    for index in indices {
+                        ok &= self.numeric(index).is_some();
+                    }
+                    if ok && rank != indices.len() {
+                        self.err(*span, "Wrong number of dimensions");
+                        return None;
+                    }
+                    return ok.then_some(Typed { variable: true, constant: None, array: None, ..base_typed });
+                }
+                // an indexed property of a VBDOS form or control
+                if base_typed.ty == Ty::Variant {
+                    for index in indices {
+                        self.expr(index);
+                    }
+                    return Some(Typed { ty: Ty::Variant, variable: true, constant: None, array: None });
+                }
+                self.err(*span, "Syntax error");
+                None
+            }
+            Expr::Field { base, name, span } => self.field(expr, base, name, *span),
+            Expr::Unary { op, operand, span } => {
+                let typed = self.expr(operand);
+                if *op == Unary::Grouped {
+                    // a parenthesised reference is a value
+                    return typed.map(|t| Typed { variable: false, ..t });
+                }
+                if matches!(op, Unary::ByValue | Unary::Segmented) {
+                    return typed;
+                }
+                let typed = self.scalar(typed, *span)?;
+                if !typed.ty.numeric() {
+                    self.err(*span, "Type mismatch");
+                    return None;
+                }
+                let ty = match op {
+                    Unary::Not => {
+                        if typed.ty == Ty::Long {
+                            Ty::Long
+                        } else if typed.ty.rank() > 2 {
+                            Ty::Long.min_int(&typed.ty)
+                        } else {
+                            Ty::Int
+                        }
+                    }
+                    _ => typed.ty.clone(),
+                };
+                let constant = typed
+                    .constant
+                    .map(
+                        |c| match op {
+                            Unary::Negative => -c,
+                            Unary::Not => !(c as i64) as f64,
+                            _ => c,
+                        },
+                    );
+                Some(Typed { ty, variable: false, constant, array: None })
+            }
+            Expr::Binary { op, left, right, span } => {
+                let l = self.expr(left);
+                let r = self.expr(right);
+                let l = self.scalar(l, left.span());
+                let r = self.scalar(r, right.span());
+                let (l, r) = (l?, r?);
+                self.binary(*op, &l, &r, right, *span)
+            }
+            _ => {
+                self.err(expr.span(), "Syntax error");
+                None
+            }
+        }
+    }
+
+    pub(super) fn binary(
+        &mut self,
+        op: Binary,
+        l: &Typed,
+        r: &Typed,
+        right: &Expr,
+        span: Span,
+    ) -> Option<Typed> {
+        use Binary::*;
+        // a property of a form or control may be either a number or text
+        if l.ty == Ty::Variant || r.ty == Ty::Variant {
+            return Some(Typed::value(if matches!(op, Eq | NotEqual | Less | LessEqual | Greater | GreaterEqual) {
+                Ty::Int
+            } else {
+                Ty::Variant
+            }));
+        }
+        let both_strings = l.ty.string() && r.ty.string();
+        match op {
+            Add if both_strings => return Some(Typed::value(Ty::Str(None))),
+            Eq | NotEqual | Less | LessEqual | Greater | GreaterEqual if both_strings => {
+                return Some(Typed::value(Ty::Int))
+            }
+            _ => {}
+        }
+        if !(l.ty.numeric() && r.ty.numeric()) {
+            self.err(span, "Type mismatch");
+            return None;
+        }
+        let promoted = promote(&l.ty, &r.ty);
+        let fold = |f: &dyn Fn(f64, f64) -> f64| match (l.constant, r.constant) {
+            (Some(a), Some(b)) => Some(f(a, b)),
+            _ => None,
+        };
+        let zero_divisor = matches!(r.constant, Some(c) if c == 0.0)
+            && matches!(
+                right,
+                Expr::Literal(..) | Expr::Unary { .. } | Expr::Binary { .. } | Expr::Name(..)
+            );
+        Some(match op {
+            Add => Typed { constant: fold(&|a, b| a + b), ..Typed::value(promoted) },
+            Subtract => Typed { constant: fold(&|a, b| a - b), ..Typed::value(promoted) },
+            Multiply => Typed { constant: fold(&|a, b| a * b), ..Typed::value(promoted) },
+            Divide => {
+                if zero_divisor {
+                    self.err(span, "Division by zero");
+                    return None;
+                }
+                let ty = if promoted == Ty::Double { Ty::Double } else { Ty::Single };
+                Typed { constant: fold(&|a, b| a / b), ..Typed::value(ty) }
+            }
+            IntegerDivide | Modulo => {
+                // both operands are rounded to integers first: `5 MOD 0.4`
+                // divides by 0
+                let rounds_to_zero = zero_divisor
+                    || (matches!(r.constant, Some(c) if c.round_ties_even() == 0.0)
+                        && matches!(
+                            right,
+                            Expr::Literal(..) | Expr::Unary { .. } | Expr::Binary { .. } | Expr::Name(..)
+                        ));
+                if rounds_to_zero {
+                    self.err(span, "Division by zero");
+                    return None;
+                }
+                let ty = if l.ty == Ty::Long || r.ty == Ty::Long || l.ty.rank() > 2 || r.ty.rank() > 2 {
+                    Ty::Long
+                } else {
+                    Ty::Int
+                };
+                Typed::value(ty)
+            }
+            Power => Typed::value(Ty::Double),
+            Eq | NotEqual | Less | LessEqual | Greater | GreaterEqual => Typed::value(Ty::Int),
+            And | Or | Xor | Eqv | Imp => {
+                let ty = if l.ty == Ty::Long || r.ty == Ty::Long || l.ty.rank() > 2 || r.ty.rank() > 2 {
+                    Ty::Long
+                } else {
+                    Ty::Int
+                };
+                Typed::value(ty)
+            }
+        })
+    }
+
+    pub(super) fn field(
+        &mut self,
+        whole: &Expr,
+        base: &Expr,
+        name: &str,
+        span: Span,
+    ) -> Option<Typed> {
+        // a dotted name that no record variable owns is one variable's name
+        if let Some(chain) = dotted(whole) {
+            let head = dotted(base).unwrap_or_default();
+            let head_is_record = self.lookup_record_var(head.split('.').next().unwrap_or(""));
+            if !head_is_record {
+                let var = self.variable(&chain, false, span)?;
+                return Some(Typed { ty: var.ty, variable: true, constant: None, array: None });
+            }
+        }
+        self.field_rank = None;
+        let base_typed = self.expr(base)?;
+        self.field_rank = None;
+        // a property of a property of a form: nothing here says its type
+        if base_typed.ty == Ty::Variant {
+            return Some(Typed { ty: Ty::Variant, variable: true, constant: None, array: None });
+        }
+        let Ty::Record(record) = &base_typed.ty else {
+            self.err(span, "Type mismatch");
+            return None;
+        };
+        let record = self.records.get(record).cloned().unwrap_or(Record { fields: Vec::new(), opaque: true, bytes: 0 });
+        if record.opaque {
+            return Some(Typed { ty: Ty::Variant, variable: true, constant: None, array: None });
+        }
+        // a field may be named with its type character (`menu.text$`)
+        let wanted = Ty::of_suffix(name);
+        match record.fields.iter().find(|(field, ty, _)| {
+            stem(field).eq_ignore_ascii_case(stem(name)) && wanted.as_ref().is_none_or(|w| ty.plain() == *w)
+        }) {
+            Some((_, ty, rank)) => {
+                self.field_rank = *rank;
+                Some(Typed { ty: ty.clone(), variable: true, constant: None, array: *rank })
+            }
+            None => {
+                self.err(span, "Element not defined");
+                None
+            }
+        }
+    }
+
+    pub(super) fn lookup_record_var(
+        &self,
+        name: &str,
+    ) -> bool {
+        let key = stem(name);
+        let in_scope =
+            |scope: &Scope| scope.vars.get(key).is_some_and(|vars| vars.iter().any(|v| matches!(v.ty, Ty::Record(_))));
+        in_scope(&self.scope) || in_scope(&self.module_scope)
+    }
+
+    pub(super) fn name_expr(
+        &mut self,
+        name: &str,
+        span: Span,
+    ) -> Option<Typed> {
+        let key = stem(name);
+        if let Some(constant) = self.consts.get(key) {
+            // `CONST x = 1` then `x$`: the suffix names a string where the
+            // constant is a number
+            if Ty::of_suffix(name).is_some_and(|suffix| suffix.string() != constant.ty.string()) {
+                self.err(span, "Type mismatch");
+                return None;
+            }
+            return Some(constant.clone());
+        }
+        if let Some(sig) = sigs::function(name, self.dialect) {
+            if sig.parens {
+                self.err(span, "Left parenthesis missing");
+                return None;
+            }
+            if sig.accepts(0) {
+                return Some(Typed::value(self.result_type(sig.ret, &[])));
+            }
+        }
+        if let Some(procedure) = self.procs.get(key).cloned() {
+            if procedure.kind == ProcedureKind::Function {
+                if procedure.params.is_empty() {
+                    return procedure.result.map(Typed::value);
+                }
+                self.err(span, "Argument-count mismatch");
+                return None;
+            }
+        }
+        // a FUNCTION's own name reads its result
+        if self.procedure.as_ref().is_some_and(|(kind, own)| *kind == ProcedureKind::Function && stem(own) == key) {
+            let ty = self.procs.get(key).and_then(|p| p.result.clone()).unwrap_or(Ty::Single);
+            return Some(Typed { ty, variable: true, constant: None, array: None });
+        }
+        let var = self.variable(name, false, span)?;
+        Some(Typed { ty: var.ty, variable: true, constant: None, array: None })
+    }
+
+    pub(super) fn result_type(
+        &self,
+        ret: Ret,
+        args: &[Typed],
+    ) -> Ty {
+        match ret {
+            Ret::Int => Ty::Int,
+            Ret::Long => Ty::Long,
+            Ret::Single => Ty::Single,
+            Ret::Double => Ty::Double,
+            Ret::Currency => Ty::Currency,
+            Ret::Str => Ty::Str(None),
+            Ret::Same => args.first().map_or(Ty::Single, |a| if a.ty.rank() == 0 { Ty::Single } else { a.ty.clone() }),
+            Ret::Float => match args.first() {
+                Some(a) if a.ty == Ty::Double => Ty::Double,
+                _ => Ty::Single,
+            },
+        }
+    }
+
+    pub(super) fn apply(
+        &mut self,
+        name: &str,
+        arguments: &[Expr],
+        span: Span,
+    ) -> Option<Typed> {
+        let key = stem(name);
+        if name == crate::front::ast::ON_SELECTOR {
+            for argument in arguments {
+                self.integer(argument);
+            }
+            return Some(Typed::value(Ty::Int));
+        }
+        // an array element
+        let array = self.array_var(name);
+        if let Some(var) = array {
+            // each subscript that is not a constant holds a temporary: past six
+            // when read, seven when assigned, BC gives up
+            let variable_subscripts = arguments.iter().filter(|index| !matches!(index, Expr::Literal(..))).count();
+            if variable_subscripts > if self.assigning { 7 } else { 6 } {
+                self.err(span, "Expression too complex");
+                return None;
+            }
+            let rank = var.rank.unwrap_or(1);
+            let mut ok = true;
+            for index in arguments {
+                ok &= self.numeric(index).is_some();
+            }
+            if ok && var.rank.is_some() && rank != arguments.len() && rank != usize::MAX {
+                self.err(span, "Wrong number of dimensions");
+                return None;
+            }
+            return ok.then_some(Typed { ty: var.ty, variable: true, constant: None, array: None });
+        }
+        if let Some(sig) = sigs::function(name, self.dialect) {
+            return self.intrinsic(sig, name, arguments, span);
+        }
+        // `SCREEN.ControlPanel(i)`, `frm.List(i)`: an indexed property of a
+        // VBDOS object
+        if let Some((root, _)) = name.split_once('.') {
+            if matches!(self.dialect, Dialect::VbDos | Dialect::Quickr)
+                && (matches!(
+                    root.to_ascii_uppercase().as_str(),
+                    "SCREEN" | "PRINTER" | "CLIPBOARD"
+                )
+                    || self.lookup_record_var(root))
+            {
+                for argument in arguments {
+                    self.expr(argument);
+                }
+                return Some(Typed { ty: Ty::Variant, variable: true, constant: None, array: None });
+            }
+        }
+        if let Some(procedure) = self.procs.get(key).or_else(|| self.procs.get(name)).cloned() {
+            if procedure.kind == ProcedureKind::Function && span.line < procedure.first_line {
+                // above its DECLARE or definition the name is an array that was
+                // never dimensioned
+                self.err(span, if procedure.def_fn { "Function not defined" } else { "Array not dimensioned" });
+                return None;
+            }
+            if procedure.kind == ProcedureKind::Function {
+                self.check_arguments(&procedure, arguments, span, false);
+                return procedure.result.map(Typed::value);
+            }
+            self.err(span, "Type mismatch");
+            return None;
+        }
+        if sigs::function_unknown_but_named(name) {
+            self.err(span, "Syntax error");
+            return None;
+        }
+        if name.starts_with("FN") && self.procs.get(name).is_none() {
+            self.err(span, "Function not defined");
+            return None;
+        }
+        self.err(span, "Array not dimensioned");
+        None
+    }
+
+    pub(super) fn array_var(
+        &self,
+        name: &str,
+    ) -> Option<Var> {
+        let key = stem(name);
+        let suffix = Ty::of_suffix(name);
+        let find = |scope: &Scope| {
+            scope
+                .vars
+                .get(key)
+                .and_then(
+                    |vars| vars.iter()
+                        .find(|v| {
+                            v.rank.is_some()
+                                && match &suffix {
+                                    Some(s) => v.ty.plain() == *s,
+                                    None => v.declared || v.ty.plain() == self.default_type(name),
+                                }
+                        })
+                        .cloned(),
+                )
+        };
+        find(&self.scope).or_else(|| find(&self.module_scope))
+    }
+}

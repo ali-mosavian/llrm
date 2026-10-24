@@ -191,7 +191,14 @@ fn scan_line(
                 }
             }
             b'.' => {
-                let after_name = at > 0 && (name_char(bytes[at - 1]) || bytes[at - 1] == b')');
+                // `1.2.3` is the numbers `1.2` and `.3`: a point after a number
+                // starts another
+                let after_number = out
+                    .last()
+                    .is_some_and(
+                        |last| matches!(last.kind, TokenKind::Integer(..) | TokenKind::Real(..)) && last.span.end == at,
+                    );
+                let after_name = !after_number && at > 0 && (name_char(bytes[at - 1]) || bytes[at - 1] == b')');
                 if bytes.get(at + 1).is_some_and(u8::is_ascii_digit) && !after_name {
                     number(line, &mut at, line_index, dialect)?
                 } else if after_name || bytes.get(at + 1).is_some_and(|b| name_char(*b)) {
@@ -400,7 +407,9 @@ fn number(
             if sign.is_some() {
                 j = skip_blanks(bytes, j + 1);
             }
-            if bytes.get(j).is_some_and(u8::is_ascii_digit) {
+            // `1E+` is `1E+0`: a sign without digits still completes the
+            // exponent
+            if bytes.get(j).is_some_and(u8::is_ascii_digit) || sign.is_some() {
                 exponent_marker = Some(marker.to_ascii_uppercase());
                 real = true;
                 digits.push('E');
@@ -409,6 +418,9 @@ fn number(
                 }
                 i = j;
                 digits_run(&mut i, &mut digits);
+                if !digits.ends_with(|c: char| c.is_ascii_digit()) {
+                    digits.push('0');
+                }
             }
         }
     }
