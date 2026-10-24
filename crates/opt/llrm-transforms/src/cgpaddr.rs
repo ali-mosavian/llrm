@@ -29,11 +29,12 @@
 //! computation made once, before the join's first non-phi. What only the phi
 //! read, the arms' copies, is erased.
 //!
-//! A phi of this kind whose arms are all one value (or the phi itself) is that
-//! value; this is how a closing phi left by `lcssa` goes. Each phi is visited
-//! once, and the phis that read it are queued again.
+//! Any phi that `simplifyInstruction` reduces to a value (arms all one value, or
+//! the phi itself; `optimizeInst`'s phi case, L8947) is that value, whatever
+//! reads it; this is how a closing phi left by `lcssa` goes. Each phi is
+//! visited once, and the phis that read it are queued again.
 //!
-//! A phi read as a value, or whose arms differ in kind, stays.
+//! A phi whose arms differ in kind stays.
 //!
 //! DEVIATE C1 (m32): the rest of CodeGenPrepare's work is done by isel, which
 //! rebuilds an address expression in the block that uses it, and by the select
