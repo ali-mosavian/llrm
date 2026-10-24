@@ -1,20 +1,20 @@
 //! The validity check: what BC refuses after the syntax is right.
 //!
-//! A symbol table over the typed syntax (`syntax::Module`): types and constants, variables by
-//! the name's stem and type, procedures and their signatures, labels. It types every expression by
-//! BC's rules and checks each statement's arguments against its signature. Diagnostics carry
-//! BC's own wording where BC's is known; what matters, and what the sweeps against BC compare,
-//! is whether a program has any.
+//! A symbol table over the typed syntax (`syntax::Module`): types and
+//! constants, variables by the name's stem and type, procedures and their
+//! signatures, labels. It types every expression by BC's rules and checks each
+//! statement's arguments against its signature. Diagnostics carry
+//! BC's own wording where BC's is known; what matters, and what the sweeps
+//! against BC compare, is whether a program has any.
 
 use std::collections::{HashMap, HashSet};
 
+use crate::front::sigs::{self, Class, Ret};
 use crate::syntax::{
     Binary, CaseItem, Declaration, Expr, Literal, Module, Parameter, PrintKind, Procedure, ProcedureKind, ResumeTarget,
     Span, Statement, TypeName, Unary,
 };
 use crate::Dialect;
-
-use crate::front::sigs::{self, Class, Ret};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
@@ -31,7 +31,8 @@ pub enum Ty {
     Double,
     /// PDS and VBDOS's CURRENCY.
     Currency,
-    /// A property of a VBDOS form or control, whose type the form's file would say.
+    /// A property of a VBDOS form or control, whose type the form's file would
+    /// say.
     Variant,
     /// A string; a fixed one has its length.
     Str(Option<usize>),
@@ -40,7 +41,10 @@ pub enum Ty {
 
 impl Ty {
     fn numeric(&self) -> bool {
-        matches!(self, Ty::Int | Ty::Long | Ty::Currency | Ty::Single | Ty::Double | Ty::Variant)
+        matches!(
+            self,
+            Ty::Int | Ty::Long | Ty::Currency | Ty::Single | Ty::Double | Ty::Variant
+        )
     }
 
     fn string(&self) -> bool {
@@ -79,8 +83,15 @@ impl Ty {
     }
 }
 
-fn promote(a: &Ty, b: &Ty) -> Ty {
-    if a.rank() >= b.rank() { a.clone() } else { b.clone() }
+fn promote(
+    a: &Ty,
+    b: &Ty,
+) -> Ty {
+    if a.rank() >= b.rank() {
+        a.clone()
+    } else {
+        b.clone()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -92,13 +103,16 @@ struct Var {
     declared: bool,
     /// DIM SHARED: procedures see it.
     shared: bool,
-    /// Dimensioned as a dynamic array (REDIM, or under $DYNAMIC): REDIM may resize it.
+    /// Dimensioned as a dynamic array (REDIM, or under $DYNAMIC): REDIM may
+    /// resize it.
     dynamic: bool,
-    /// Named by a declaration (DIM, a parameter, SHARED), not made by a first use.
+    /// Named by a declaration (DIM, a parameter, SHARED), not made by a first
+    /// use.
     explicit: bool,
     /// The name carried a type character.
     suffixed: bool,
-    /// The array was made by a REDIM, so a later DIM is not a second dimensioning.
+    /// The array was made by a REDIM, so a later DIM is not a second
+    /// dimensioning.
     redimmed: bool,
 }
 
@@ -121,7 +135,8 @@ struct ProcInfo {
     def_fn: bool,
     /// `DECLARE SUB name` with no parameter list: its calls are not checked.
     unchecked: bool,
-    /// The line where the name first appears (a DECLARE or the definition): calls before it are unchecked.
+    /// The line where the name first appears (a DECLARE or the definition):
+    /// calls before it are unchecked.
     first_line: usize,
 }
 
@@ -139,8 +154,8 @@ struct Record {
     opaque: bool,
 }
 
-/// What an expression is: its type, and whether it names a variable that can be assigned or
-/// passed by reference.
+/// What an expression is: its type, and whether it names a variable that can be
+/// assigned or passed by reference.
 #[derive(Clone, Debug)]
 struct Typed {
     ty: Ty,
@@ -156,7 +171,10 @@ impl Typed {
     }
 }
 
-pub fn check(module: &Module, dialect: Dialect) -> Vec<Diagnostic> {
+pub fn check(
+    module: &Module,
+    dialect: Dialect,
+) -> Vec<Diagnostic> {
     let mut checker = Checker::new(dialect);
     checker.module(module);
     checker.errors
@@ -173,29 +191,29 @@ struct Checker {
     scope: Scope,
     /// Inside a procedure: its kind and name.
     procedure: Option<(ProcedureKind, String)>,
-    /// The procedure is STATIC, or a STATIC statement is being declared: its arrays are fixed.
+    /// The procedure is STATIC, or a STATIC statement is being declared: its
+    /// arrays are fixed.
     static_scope: bool,
     /// An OPTION BASE has been read.
     option_base_seen: bool,
     /// A STATIC statement is being declared.
     static_statement: bool,
-    /// The names being read are made by their statement (FOR, INPUT, READ), as DIM would.
+    /// The names being read are made by their statement (FOR, INPUT, READ), as
+    /// DIM would.
     declaring: bool,
     /// The target of an assignment is being read.
     assigning: bool,
     /// The counters of the FOR loops being read.
     for_counters: Vec<String>,
-    /// CONSTs and TYPEs registered ahead of the statements that declare them (`const N`, `type N`).
-    pre_done: HashSet<String>,
     labels: HashSet<String>,
     /// The module level's labels, kept while a procedure's are the ones in use.
     module_labels: HashSet<String>,
     /// Every label of the file, module and procedures (RESTORE reaches any).
     all_labels: HashSet<String>,
-    option_base: i64,
     span: Span,
     in_loop: Vec<&'static str>,
-    /// The dimensions of the array field the last `field` resolved, if it was one.
+    /// The dimensions of the array field the last `field` resolved, if it was
+    /// one.
     field_rank: Option<usize>,
 }
 
@@ -217,26 +235,33 @@ impl Checker {
             declaring: false,
             assigning: false,
             for_counters: Vec::new(),
-            pre_done: HashSet::new(),
             labels: HashSet::new(),
             module_labels: HashSet::new(),
             all_labels: HashSet::new(),
-            option_base: 0,
             span: Span { line: 1, start: 0, end: 0 },
             in_loop: Vec::new(),
             field_rank: None,
         }
     }
 
-    fn err(&mut self, span: Span, message: &str) {
+    fn err(
+        &mut self,
+        span: Span,
+        message: &str,
+    ) {
         self.errors.push(Diagnostic { span, message: message.into() });
     }
 
-    // ---- the module ----------------------------------------------------------------------------
+    // ---- the module
+    // ----------------------------------------------------------------------------
 
-    fn module(&mut self, module: &Module) {
-        // A procedure's signature depends on what precedes it: DEFtype ranges, CONSTs, record types. They are
-        // read in order here, on a scratch state that the statement pass starts over from.
+    fn module(
+        &mut self,
+        module: &Module,
+    ) {
+        // A procedure's signature depends on what precedes it: DEFtype ranges,
+        // CONSTs, record types. They are read in order here, on a scratch state
+        // that the statement pass starts over from.
         let before = self.errors.len();
         let mut pending: Vec<&Procedure> = module.procedures.iter().collect();
         pending.sort_by_key(|procedure| procedure.span.line);
@@ -267,7 +292,23 @@ impl Checker {
         let first_executable = module
             .statements
             .iter()
-            .find(|statement| !matches!(statement, Statement::Dim(_) | Statement::Const { .. } | Statement::TypeDecl { .. } | Statement::DefType { .. } | Statement::Comment(_) | Statement::OptionBase(..) | Statement::OptionExplicit(_) | Statement::Common { .. } | Statement::Static(_) | Statement::Shared(_) | Statement::Label(..) | Statement::FormDeclaration(..)))
+            .find(|statement| {
+                !matches!(
+                    statement,
+                    Statement::Dim(_)
+                        | Statement::Const { .. }
+                        | Statement::TypeDecl { .. }
+                        | Statement::DefType { .. }
+                        | Statement::Comment(_)
+                        | Statement::OptionBase(..)
+                        | Statement::OptionExplicit(_)
+                        | Statement::Common { .. }
+                        | Statement::Static(_)
+                        | Statement::Shared(_)
+                        | Statement::Label(..)
+                        | Statement::FormDeclaration(..)
+                )
+            })
             .map(|statement| statement.span().line);
         if let Some(line) = first_executable {
             for statement in &module.statements {
@@ -302,7 +343,10 @@ impl Checker {
         }
     }
 
-    fn collect_labels(&mut self, statements: &[Statement]) {
+    fn collect_labels(
+        &mut self,
+        statements: &[Statement],
+    ) {
         for statement in statements {
             if let Statement::Label(name, span) = statement {
                 // a label in a procedure may not repeat one of the module's
@@ -319,7 +363,10 @@ impl Checker {
         }
     }
 
-    fn type_of_name(&self, name: &TypeName) -> Option<Ty> {
+    fn type_of_name(
+        &self,
+        name: &TypeName,
+    ) -> Option<Ty> {
         match name {
             TypeName::Integer => Some(Ty::Int),
             TypeName::Long => Some(Ty::Long),
@@ -336,14 +383,27 @@ impl Checker {
     }
 
     /// VBDOS's own record types: a FORM and a CONTROL.
-    fn builtin_object(&self, name: &str) -> bool {
+    fn builtin_object(
+        &self,
+        name: &str,
+    ) -> bool {
         matches!(self.dialect, Dialect::VbDos | Dialect::Quickr) && matches!(name, "FORM" | "CONTROL")
     }
 
-    /// A word BC reserves cannot name anything; dotted names are checked as the variables they are.
-    fn reserved_name(&mut self, name: &str, span: Span) -> bool {
-        // DATA, REM, TRON and TROFF swallow the rest of their line; a suffixed spelling is no use of the word
-        let word_with_suffix = Ty::of_suffix(name).is_some() && matches!(stem(name).to_ascii_uppercase().as_str(), "DATA" | "REM" | "TRON" | "TROFF");
+    /// A word BC reserves cannot name anything; dotted names are checked as the
+    /// variables they are.
+    fn reserved_name(
+        &mut self,
+        name: &str,
+        span: Span,
+    ) -> bool {
+        // DATA, REM, TRON and TROFF swallow the rest of their line; a suffixed
+        // spelling is no use of the word
+        let word_with_suffix = Ty::of_suffix(name).is_some()
+            && matches!(
+                stem(name).to_ascii_uppercase().as_str(),
+                "DATA" | "REM" | "TRON" | "TROFF"
+            );
         if name.contains('.') || word_with_suffix || !crate::front::reserved::is_reserved_name(self.dialect, name) {
             return false;
         }
@@ -351,18 +411,36 @@ impl Checker {
         true
     }
 
-    fn declare_procedure(&mut self, procedure: &Procedure) {
+    fn declare_procedure(
+        &mut self,
+        procedure: &Procedure,
+    ) {
         if !procedure.module_scope && self.reserved_name(&procedure.name, procedure.span) {
             return;
         }
-        if procedure.kind == ProcedureKind::Function && !procedure.module_scope && procedure.name.to_ascii_uppercase().starts_with("FN") {
-            self.err(procedure.span, if procedure.name.eq_ignore_ascii_case("FN") { "Function name illegal" } else { "Name of subprogram illegal" });
+        if procedure.kind == ProcedureKind::Function
+            && !procedure.module_scope
+            && procedure.name.to_ascii_uppercase().starts_with("FN")
+        {
+            self.err(
+                procedure.span,
+                if procedure.name.eq_ignore_ascii_case("FN") {
+                    "Function name illegal"
+                } else {
+                    "Name of subprogram illegal"
+                },
+            );
         }
         // `SUB p ()` is VBDOS's; QB 4.5 and PDS take `SUB p`
-        if procedure.empty_list && !procedure.declaration && !procedure.module_scope && !matches!(self.dialect, Dialect::VbDos | Dialect::Quickr) {
+        if procedure.empty_list
+            && !procedure.declaration
+            && !procedure.module_scope
+            && !matches!(self.dialect, Dialect::VbDos | Dialect::Quickr)
+        {
             self.err(procedure.span, "Formal parameter specification illegal");
         }
-        // the parameter list: names unique, types known, no fixed-length strings, BYVAL only where the family has it
+        // the parameter list: names unique, types known, no fixed-length
+        // strings, BYVAL only where the family has it
         let mut seen: Vec<String> = Vec::new();
         for parameter in &procedure.parameters {
             let declaration = &parameter.declaration;
@@ -382,12 +460,20 @@ impl Checker {
                 }
                 _ => {}
             }
-            if parameter.by_value && !procedure.declaration && matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45) {
+            if parameter.by_value
+                && !procedure.declaration
+                && matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45)
+            {
                 self.err(procedure.span, "Formal parameter specification illegal");
             }
         }
         // an AS clause after FUNCTION's parameters is VBDOS's
-        if procedure.kind == ProcedureKind::Function && !procedure.module_scope && procedure.result.is_some() && Ty::of_suffix(&procedure.name).is_none() && !matches!(self.dialect, Dialect::VbDos | Dialect::Quickr) {
+        if procedure.kind == ProcedureKind::Function
+            && !procedure.module_scope
+            && procedure.result.is_some()
+            && Ty::of_suffix(&procedure.name).is_none()
+            && !matches!(self.dialect, Dialect::VbDos | Dialect::Quickr)
+        {
             self.err(procedure.span, "Syntax error");
         }
         let params: Vec<ParamInfo> = procedure
@@ -395,7 +481,10 @@ impl Checker {
             .iter()
             .map(|parameter| {
                 let declaration = &parameter.declaration;
-                let any = matches!(&declaration.type_name, Some(TypeName::Named(name)) if name == "ANY");
+                let any = matches!(
+                    &declaration.type_name,
+                    Some(TypeName::Named(name)) if name == "ANY"
+                );
                 let ty = declaration
                     .type_name
                     .as_ref()
@@ -429,12 +518,29 @@ impl Checker {
         let previous = self.procs.get(&key).cloned();
         match previous {
             Some(existing) if existing.defined && info.defined => self.err(procedure.span, "Duplicate definition"),
-            Some(existing) if existing.kind != info.kind || (!existing.unchecked && !info.unchecked && existing.params.len() != info.params.len()) => {
+            Some(existing)
+                if existing.kind != info.kind
+                    || (!existing.unchecked && !info.unchecked && existing.params.len() != info.params.len()) =>
+            {
                 self.err(procedure.span, "Argument-count mismatch")
             }
             Some(existing) => {
-                if !existing.unchecked && !info.unchecked && existing.params.iter().zip(&info.params).any(|(a, b)| !a.any && !b.any && (a.ty.plain() != b.ty.plain() || a.array != b.array)) {
-                    self.err(procedure.span, if info.kind == ProcedureKind::Function { "Duplicate definition" } else { "Parameter type mismatch" });
+                if !existing.unchecked
+                    && !info.unchecked
+                    && existing
+                        .params
+                        .iter()
+                        .zip(&info.params)
+                        .any(|(a, b)| !a.any && !b.any && (a.ty.plain() != b.ty.plain() || a.array != b.array))
+                {
+                    self.err(
+                        procedure.span,
+                        if info.kind == ProcedureKind::Function {
+                            "Duplicate definition"
+                        } else {
+                            "Parameter type mismatch"
+                        },
+                    );
                 }
                 info.declared |= existing.declared;
                 info.defined |= existing.defined;
@@ -450,27 +556,47 @@ impl Checker {
     }
 
     /// The type a name stands for, spelled: its suffix or its DEFtype's.
-    fn type_key(&self, name: &str) -> String {
+    fn type_key(
+        &self,
+        name: &str,
+    ) -> String {
         format!("{:?}", Ty::of_suffix(name).unwrap_or_else(|| self.default_type(name)))
     }
 
-    fn default_type(&self, name: &str) -> Ty {
+    fn default_type(
+        &self,
+        name: &str,
+    ) -> Ty {
         if let Some(ty) = Ty::of_suffix(name) {
             return ty;
         }
         let first = name.bytes().next().map_or(b'A', |b| b.to_ascii_uppercase());
-        if first.is_ascii_uppercase() { self.def_types[usize::from(first - b'A')].clone() } else { Ty::Single }
+        if first.is_ascii_uppercase() {
+            self.def_types[usize::from(first - b'A')].clone()
+        } else {
+            Ty::Single
+        }
     }
 
-    // ---- scopes --------------------------------------------------------------------------------
+    // ---- scopes
+    // --------------------------------------------------------------------------------
 
-    /// The variable `name` names in the current scope: found, or implicitly created.
-    fn variable(&mut self, name: &str, array: bool, span: Span) -> Option<Var> {
+    /// The variable `name` names in the current scope: found, or implicitly
+    /// created.
+    fn variable(
+        &mut self,
+        name: &str,
+        array: bool,
+        span: Span,
+    ) -> Option<Var> {
         if self.reserved_name(name, span) {
             return None;
         }
         // a scalar cannot share a procedure's name
-        if !array && self.procs.get(stem(name)).is_some_and(|p| !p.def_fn) && !self.procedure.as_ref().is_some_and(|(_, own)| stem(own) == stem(name)) {
+        if !array
+            && self.procs.get(stem(name)).is_some_and(|p| !p.def_fn)
+            && !self.procedure.as_ref().is_some_and(|(_, own)| stem(own) == stem(name))
+        {
             self.err(span, "Syntax error");
             return None;
         }
@@ -503,14 +629,27 @@ impl Checker {
             self.err(span, "Array not dimensioned");
             return None;
         }
-        let var = Var { ty, rank: None, declared: false, shared: false, dynamic: false, explicit: self.declaring, suffixed: suffix.is_some(), redimmed: false };
+        let var = Var {
+            ty,
+            rank: None,
+            declared: false,
+            shared: false,
+            dynamic: false,
+            explicit: self.declaring,
+            suffixed: suffix.is_some(),
+            redimmed: false,
+        };
         self.scope.vars.entry(key).or_default().push(var.clone());
         Some(var)
     }
 
-    // ---- procedures ---------------------------------------------------------------------------------
+    // ---- procedures
+    // ---------------------------------------------------------------------------------
 
-    fn procedure_body(&mut self, procedure: &Procedure) {
+    fn procedure_body(
+        &mut self,
+        procedure: &Procedure,
+    ) {
         let saved_scope = std::mem::take(&mut self.scope);
         let saved_labels = std::mem::take(&mut self.labels);
         self.procedure = Some((procedure.kind, procedure.name.clone()));
@@ -531,7 +670,10 @@ impl Checker {
         self.labels = saved_labels;
     }
 
-    fn declare_parameter(&mut self, parameter: &Parameter) {
+    fn declare_parameter(
+        &mut self,
+        parameter: &Parameter,
+    ) {
         let declaration = &parameter.declaration;
         if self.reserved_name(&declaration.name, declaration.span) {
             return;
@@ -541,7 +683,16 @@ impl Checker {
             .as_ref()
             .and_then(|name| self.type_of_name(name))
             .unwrap_or_else(|| self.default_type(&declaration.name));
-        let var = Var { ty, rank: declaration.array.then_some(usize::MAX), declared: declaration.type_name.is_some() && Ty::of_suffix(&declaration.name).is_none(), shared: false, dynamic: true, explicit: true, suffixed: Ty::of_suffix(&declaration.name).is_some(), redimmed: false };
+        let var = Var {
+            ty,
+            rank: declaration.array.then_some(usize::MAX),
+            declared: declaration.type_name.is_some() && Ty::of_suffix(&declaration.name).is_none(),
+            shared: false,
+            dynamic: true,
+            explicit: true,
+            suffixed: Ty::of_suffix(&declaration.name).is_some(),
+            redimmed: false,
+        };
         self.scope.vars.entry(stem(&declaration.name).to_owned()).or_default().push(var);
     }
 }
@@ -557,7 +708,10 @@ fn stem(name: &str) -> &str {
 }
 
 /// The labels a statement list defines, nested bodies included.
-fn collect_label_names(statements: &[Statement], out: &mut HashSet<String>) {
+fn collect_label_names(
+    statements: &[Statement],
+    out: &mut HashSet<String>,
+) {
     for statement in statements {
         if let Statement::Label(name, _) = statement {
             out.insert(name.clone());
@@ -568,7 +722,8 @@ fn collect_label_names(statements: &[Statement], out: &mut HashSet<String>) {
     }
 }
 
-// ---- expressions ---------------------------------------------------------------------------------------
+// ---- expressions
+// ---------------------------------------------------------------------------------------
 
 fn dotted(expr: &Expr) -> Option<String> {
     match expr {
@@ -579,7 +734,11 @@ fn dotted(expr: &Expr) -> Option<String> {
 }
 
 impl Checker {
-    fn scalar(&mut self, typed: Option<Typed>, span: Span) -> Option<Typed> {
+    fn scalar(
+        &mut self,
+        typed: Option<Typed>,
+        span: Span,
+    ) -> Option<Typed> {
         let typed = typed?;
         if matches!(typed.ty, Ty::Record(_)) {
             self.err(span, "Typed variable not allowed in expression");
@@ -592,13 +751,20 @@ impl Checker {
         Some(typed)
     }
 
-    /// An expression that must be numeric, and a 16-bit integer where it is a constant.
-    fn integer(&mut self, expr: &Expr) -> Option<Typed> {
+    /// An expression that must be numeric, and a 16-bit integer where it is a
+    /// constant.
+    fn integer(
+        &mut self,
+        expr: &Expr,
+    ) -> Option<Typed> {
         self.argument_of_class(Class::Int, expr)
     }
 
     /// An expression that must be numeric.
-    fn numeric(&mut self, expr: &Expr) -> Option<Typed> {
+    fn numeric(
+        &mut self,
+        expr: &Expr,
+    ) -> Option<Typed> {
         let typed = self.expr(expr);
         let typed = self.scalar(typed, expr.span())?;
         if !typed.ty.numeric() {
@@ -608,7 +774,10 @@ impl Checker {
         Some(typed)
     }
 
-    fn string_expr(&mut self, expr: &Expr) -> Option<Typed> {
+    fn string_expr(
+        &mut self,
+        expr: &Expr,
+    ) -> Option<Typed> {
         let typed = self.expr(expr);
         let typed = self.scalar(typed, expr.span())?;
         if !typed.ty.string() {
@@ -618,16 +787,23 @@ impl Checker {
         Some(typed)
     }
 
-    fn expr(&mut self, expr: &Expr) -> Option<Typed> {
+    fn expr(
+        &mut self,
+        expr: &Expr,
+    ) -> Option<Typed> {
         match expr {
             Expr::Omitted(span) => {
                 self.err(*span, "Syntax error");
                 None
             }
             Expr::Literal(literal, _) => Some(match literal {
-                Literal::Integer(value, TypeName::Long) => Typed { constant: Some(*value as f64), ..Typed::value(Ty::Long) },
+                Literal::Integer(value, TypeName::Long) => {
+                    Typed { constant: Some(*value as f64), ..Typed::value(Ty::Long) }
+                }
                 Literal::Integer(value, _) => Typed { constant: Some(*value as f64), ..Typed::value(Ty::Int) },
-                Literal::Real(text, TypeName::Currency) => Typed { constant: parse_real(text), ..Typed::value(Ty::Currency) },
+                Literal::Real(text, TypeName::Currency) => {
+                    Typed { constant: parse_real(text), ..Typed::value(Ty::Currency) }
+                }
                 Literal::Real(text, TypeName::Double) => {
                     Typed { constant: parse_real(text), ..Typed::value(Ty::Double) }
                 }
@@ -642,8 +818,11 @@ impl Checker {
             }),
             Expr::Name(name, span) => self.name_expr(name, *span),
             Expr::Apply { name, arguments, span } => self.apply(name, arguments, *span),
-            // `Math.Add(1, 2)`: a procedure or array whose name has a dot is not a field of anything
-            Expr::Index { base, indices, span } if dotted(base).is_some_and(|name| !self.lookup_record_var(name.split('.').next().unwrap_or(""))) => {
+            // `Math.Add(1, 2)`: a procedure or array whose name has a dot is
+            // not a field of anything
+            Expr::Index { base, indices, span }
+                if dotted(base).is_some_and(|name| !self.lookup_record_var(name.split('.').next().unwrap_or(""))) =>
+            {
                 let name = dotted(base).unwrap_or_default();
                 self.apply(&name, indices, *span)
             }
@@ -688,14 +867,26 @@ impl Checker {
                     return None;
                 }
                 let ty = match op {
-                    Unary::Not => if typed.ty == Ty::Long { Ty::Long } else if typed.ty.rank() > 2 { Ty::Long.min_int(&typed.ty) } else { Ty::Int },
+                    Unary::Not => {
+                        if typed.ty == Ty::Long {
+                            Ty::Long
+                        } else if typed.ty.rank() > 2 {
+                            Ty::Long.min_int(&typed.ty)
+                        } else {
+                            Ty::Int
+                        }
+                    }
                     _ => typed.ty.clone(),
                 };
-                let constant = typed.constant.map(|c| match op {
-                    Unary::Negative => -c,
-                    Unary::Not => !(c as i64) as f64,
-                    _ => c,
-                });
+                let constant = typed
+                    .constant
+                    .map(
+                        |c| match op {
+                            Unary::Negative => -c,
+                            Unary::Not => !(c as i64) as f64,
+                            _ => c,
+                        },
+                    );
                 Some(Typed { ty, variable: false, constant, array: None })
             }
             Expr::Binary { op, left, right, span } => {
@@ -713,16 +904,29 @@ impl Checker {
         }
     }
 
-    fn binary(&mut self, op: Binary, l: &Typed, r: &Typed, right: &Expr, span: Span) -> Option<Typed> {
+    fn binary(
+        &mut self,
+        op: Binary,
+        l: &Typed,
+        r: &Typed,
+        right: &Expr,
+        span: Span,
+    ) -> Option<Typed> {
         use Binary::*;
         // a property of a form or control may be either a number or text
         if l.ty == Ty::Variant || r.ty == Ty::Variant {
-            return Some(Typed::value(if matches!(op, Eq | NotEqual | Less | LessEqual | Greater | GreaterEqual) { Ty::Int } else { Ty::Variant }));
+            return Some(Typed::value(if matches!(op, Eq | NotEqual | Less | LessEqual | Greater | GreaterEqual) {
+                Ty::Int
+            } else {
+                Ty::Variant
+            }));
         }
         let both_strings = l.ty.string() && r.ty.string();
         match op {
             Add if both_strings => return Some(Typed::value(Ty::Str(None))),
-            Eq | NotEqual | Less | LessEqual | Greater | GreaterEqual if both_strings => return Some(Typed::value(Ty::Int)),
+            Eq | NotEqual | Less | LessEqual | Greater | GreaterEqual if both_strings => {
+                return Some(Typed::value(Ty::Int))
+            }
             _ => {}
         }
         if !(l.ty.numeric() && r.ty.numeric()) {
@@ -734,7 +938,11 @@ impl Checker {
             (Some(a), Some(b)) => Some(f(a, b)),
             _ => None,
         };
-        let zero_divisor = matches!(r.constant, Some(c) if c == 0.0) && matches!(right, Expr::Literal(..) | Expr::Unary { .. } | Expr::Binary { .. } | Expr::Name(..));
+        let zero_divisor = matches!(r.constant, Some(c) if c == 0.0)
+            && matches!(
+                right,
+                Expr::Literal(..) | Expr::Unary { .. } | Expr::Binary { .. } | Expr::Name(..)
+            );
         Some(match op {
             Add => Typed { constant: fold(&|a, b| a + b), ..Typed::value(promoted) },
             Subtract => Typed { constant: fold(&|a, b| a - b), ..Typed::value(promoted) },
@@ -752,19 +960,33 @@ impl Checker {
                     self.err(span, "Division by zero");
                     return None;
                 }
-                let ty = if l.ty == Ty::Long || r.ty == Ty::Long || l.ty.rank() > 2 || r.ty.rank() > 2 { Ty::Long } else { Ty::Int };
+                let ty = if l.ty == Ty::Long || r.ty == Ty::Long || l.ty.rank() > 2 || r.ty.rank() > 2 {
+                    Ty::Long
+                } else {
+                    Ty::Int
+                };
                 Typed::value(ty)
             }
             Power => Typed::value(Ty::Double),
             Eq | NotEqual | Less | LessEqual | Greater | GreaterEqual => Typed::value(Ty::Int),
             And | Or | Xor | Eqv | Imp => {
-                let ty = if l.ty == Ty::Long || r.ty == Ty::Long || l.ty.rank() > 2 || r.ty.rank() > 2 { Ty::Long } else { Ty::Int };
+                let ty = if l.ty == Ty::Long || r.ty == Ty::Long || l.ty.rank() > 2 || r.ty.rank() > 2 {
+                    Ty::Long
+                } else {
+                    Ty::Int
+                };
                 Typed::value(ty)
             }
         })
     }
 
-    fn field(&mut self, whole: &Expr, base: &Expr, name: &str, span: Span) -> Option<Typed> {
+    fn field(
+        &mut self,
+        whole: &Expr,
+        base: &Expr,
+        name: &str,
+        span: Span,
+    ) -> Option<Typed> {
         // a dotted name that no record variable owns is one variable's name
         if let Some(chain) = dotted(whole) {
             let head = dotted(base).unwrap_or_default();
@@ -791,7 +1013,9 @@ impl Checker {
         }
         // a field may be named with its type character (`menu.text$`)
         let wanted = Ty::of_suffix(name);
-        match record.fields.iter().find(|(field, ty, _)| stem(field).eq_ignore_ascii_case(stem(name)) && wanted.as_ref().is_none_or(|w| ty.plain() == *w)) {
+        match record.fields.iter().find(|(field, ty, _)| {
+            stem(field).eq_ignore_ascii_case(stem(name)) && wanted.as_ref().is_none_or(|w| ty.plain() == *w)
+        }) {
             Some((_, ty, rank)) => {
                 self.field_rank = *rank;
                 Some(Typed { ty: ty.clone(), variable: true, constant: None, array: None })
@@ -803,16 +1027,25 @@ impl Checker {
         }
     }
 
-    fn lookup_record_var(&self, name: &str) -> bool {
+    fn lookup_record_var(
+        &self,
+        name: &str,
+    ) -> bool {
         let key = stem(name);
-        let in_scope = |scope: &Scope| scope.vars.get(key).is_some_and(|vars| vars.iter().any(|v| matches!(v.ty, Ty::Record(_))));
+        let in_scope =
+            |scope: &Scope| scope.vars.get(key).is_some_and(|vars| vars.iter().any(|v| matches!(v.ty, Ty::Record(_))));
         in_scope(&self.scope) || in_scope(&self.module_scope)
     }
 
-    fn name_expr(&mut self, name: &str, span: Span) -> Option<Typed> {
+    fn name_expr(
+        &mut self,
+        name: &str,
+        span: Span,
+    ) -> Option<Typed> {
         let key = stem(name);
         if let Some(constant) = self.consts.get(key) {
-            // `CONST x = 1` then `x$`: the suffix names a string where the constant is a number
+            // `CONST x = 1` then `x$`: the suffix names a string where the
+            // constant is a number
             if Ty::of_suffix(name).is_some_and(|suffix| suffix.string() != constant.ty.string()) {
                 self.err(span, "Type mismatch");
                 return None;
@@ -846,7 +1079,11 @@ impl Checker {
         Some(Typed { ty: var.ty, variable: true, constant: None, array: None })
     }
 
-    fn result_type(&self, ret: Ret, args: &[Typed]) -> Ty {
+    fn result_type(
+        &self,
+        ret: Ret,
+        args: &[Typed],
+    ) -> Ty {
         match ret {
             Ret::Int => Ty::Int,
             Ret::Long => Ty::Long,
@@ -862,7 +1099,12 @@ impl Checker {
         }
     }
 
-    fn apply(&mut self, name: &str, arguments: &[Expr], span: Span) -> Option<Typed> {
+    fn apply(
+        &mut self,
+        name: &str,
+        arguments: &[Expr],
+        span: Span,
+    ) -> Option<Typed> {
         let key = stem(name);
         if name == crate::front::ast::ON_SELECTOR {
             for argument in arguments {
@@ -873,7 +1115,8 @@ impl Checker {
         // an array element
         let array = self.array_var(name);
         if let Some(var) = array {
-            // each subscript that is not a constant holds a temporary: past six when read, seven when assigned, BC gives up
+            // each subscript that is not a constant holds a temporary: past six
+            // when read, seven when assigned, BC gives up
             let variable_subscripts = arguments.iter().filter(|index| !matches!(index, Expr::Literal(..))).count();
             if variable_subscripts > if self.assigning { 7 } else { 6 } {
                 self.err(span, "Expression too complex");
@@ -893,9 +1136,16 @@ impl Checker {
         if let Some(sig) = sigs::function(name, self.dialect) {
             return self.intrinsic(sig, name, arguments, span);
         }
-        // `SCREEN.ControlPanel(i)`, `frm.List(i)`: an indexed property of a VBDOS object
+        // `SCREEN.ControlPanel(i)`, `frm.List(i)`: an indexed property of a
+        // VBDOS object
         if let Some((root, _)) = name.split_once('.') {
-            if matches!(self.dialect, Dialect::VbDos | Dialect::Quickr) && (matches!(root.to_ascii_uppercase().as_str(), "SCREEN" | "PRINTER" | "CLIPBOARD") || self.lookup_record_var(root)) {
+            if matches!(self.dialect, Dialect::VbDos | Dialect::Quickr)
+                && (matches!(
+                    root.to_ascii_uppercase().as_str(),
+                    "SCREEN" | "PRINTER" | "CLIPBOARD"
+                )
+                    || self.lookup_record_var(root))
+            {
                 for argument in arguments {
                     self.expr(argument);
                 }
@@ -904,7 +1154,8 @@ impl Checker {
         }
         if let Some(procedure) = self.procs.get(key).or_else(|| self.procs.get(name)).cloned() {
             if procedure.kind == ProcedureKind::Function && span.line < procedure.first_line {
-                // above its DECLARE or definition the name is an array that was never dimensioned
+                // above its DECLARE or definition the name is an array that was
+                // never dimensioned
                 self.err(span, if procedure.def_fn { "Function not defined" } else { "Array not dimensioned" });
                 return None;
             }
@@ -927,31 +1178,45 @@ impl Checker {
         None
     }
 
-    fn array_var(&self, name: &str) -> Option<Var> {
+    fn array_var(
+        &self,
+        name: &str,
+    ) -> Option<Var> {
         let key = stem(name);
         let suffix = Ty::of_suffix(name);
         let find = |scope: &Scope| {
-            scope.vars.get(key).and_then(|vars| {
-                vars.iter()
-                    .find(|v| {
-                        v.rank.is_some()
-                            && match &suffix {
-                                Some(s) => v.ty.plain() == *s,
-                                None => v.declared || v.ty.plain() == self.default_type(name),
-                            }
-                    })
-                    .cloned()
-            })
+            scope
+                .vars
+                .get(key)
+                .and_then(
+                    |vars| vars.iter()
+                        .find(|v| {
+                            v.rank.is_some()
+                                && match &suffix {
+                                    Some(s) => v.ty.plain() == *s,
+                                    None => v.declared || v.ty.plain() == self.default_type(name),
+                                }
+                        })
+                        .cloned(),
+                )
         };
         find(&self.scope).or_else(|| find(&self.module_scope))
     }
 
-    fn intrinsic(&mut self, sig: &'static sigs::FnSig, name: &str, arguments: &[Expr], span: Span) -> Option<Typed> {
+    fn intrinsic(
+        &mut self,
+        sig: &'static sigs::FnSig,
+        name: &str,
+        arguments: &[Expr],
+        span: Span,
+    ) -> Option<Typed> {
         let _ = name;
         let candidates: Vec<&Vec<(Class, bool)>> = sig
             .alternatives
             .iter()
-            .filter(|alt| alt.len() >= arguments.len() && alt.iter().take_while(|(_, o)| !*o).count() <= arguments.len())
+            .filter(|alt| {
+                alt.len() >= arguments.len() && alt.iter().take_while(|(_, o)| !*o).count() <= arguments.len()
+            })
             .collect();
         if candidates.is_empty() {
             self.err(span, "Argument-count mismatch");
@@ -977,8 +1242,13 @@ impl Checker {
         None
     }
 
-    /// One argument against its class: the typed argument, or an error reported.
-    fn argument_of_class(&mut self, class: Class, argument: &Expr) -> Option<Typed> {
+    /// One argument against its class: the typed argument, or an error
+    /// reported.
+    fn argument_of_class(
+        &mut self,
+        class: Class,
+        argument: &Expr,
+    ) -> Option<Typed> {
         match class {
             Class::Num => self.numeric(argument),
             Class::Int => {
@@ -1019,8 +1289,11 @@ impl Checker {
             Class::Whole => self.expr(argument),
             Class::VarLenString => {
                 let typed = self.argument_of_class(Class::StrVar, argument)?;
-                // (QB 4.5 takes the address of a fixed-length string; PDS and VBDOS refuse it)
-                if matches!(typed.ty, Ty::Str(Some(_))) && !matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45) {
+                // (QB 4.5 takes the address of a fixed-length string; PDS and
+                // VBDOS refuse it)
+                if matches!(typed.ty, Ty::Str(Some(_)))
+                    && !matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45)
+                {
                     self.err(argument.span(), "Fixed-length string illegal");
                     return None;
                 }
@@ -1028,7 +1301,9 @@ impl Checker {
             }
             Class::ArrayStart => match argument {
                 Expr::Apply { name, arguments, span } if !arguments.is_empty() => match self.array_var(name) {
-                    Some(var) => Some(Typed { ty: var.ty, variable: true, constant: None, array: Some(var.rank.unwrap_or(1)) }),
+                    Some(var) => {
+                        Some(Typed { ty: var.ty, variable: true, constant: None, array: Some(var.rank.unwrap_or(1)) })
+                    }
                     None => {
                         self.err(*span, "Array not defined");
                         None
@@ -1051,11 +1326,21 @@ impl Checker {
     }
 
     /// An array named as an argument: `a()` or a bare name of an array.
-    fn array_argument(&mut self, argument: &Expr) -> Option<Typed> {
+    fn array_argument(
+        &mut self,
+        argument: &Expr,
+    ) -> Option<Typed> {
         let (name, span) = match argument {
             Expr::Name(name, span) => (name.clone(), *span),
             other => {
-                self.err(other.span(), if matches!(other, Expr::Apply { arguments, .. } if arguments.is_empty()) { "Syntax error" } else { "Array not defined" });
+                self.err(
+                    other.span(),
+                    if matches!(other, Expr::Apply { arguments, .. } if arguments.is_empty()) {
+                        "Syntax error"
+                    } else {
+                        "Array not defined"
+                    },
+                );
                 return None;
             }
         };
@@ -1068,9 +1353,16 @@ impl Checker {
         }
     }
 
-    fn check_arguments(&mut self, procedure: &ProcInfo, arguments: &[Expr], span: Span, is_call: bool) {
+    fn check_arguments(
+        &mut self,
+        procedure: &ProcInfo,
+        arguments: &[Expr],
+        span: Span,
+        is_call: bool,
+    ) {
         let _ = is_call;
-        // BC reads top down: a call above the first DECLARE or definition has nothing to be checked against
+        // BC reads top down: a call above the first DECLARE or definition has
+        // nothing to be checked against
         if procedure.unchecked || span.line < procedure.first_line {
             for argument in arguments {
                 let inner = match argument {
@@ -1094,7 +1386,8 @@ impl Checker {
             return;
         }
         for (parameter, argument) in procedure.params.iter().zip(arguments) {
-            // BYVAL and SEG at the call mark how the value goes; the value is what is typed
+            // BYVAL and SEG at the call mark how the value goes; the value is
+            // what is typed
             let argument = match argument {
                 Expr::Unary { op: Unary::ByValue | Unary::Segmented, operand, .. } => &**operand,
                 other => other,
@@ -1127,12 +1420,18 @@ impl Checker {
             if !compatible {
                 let by_reference = typed.variable && !matches!(argument, Expr::Unary { op: Unary::Grouped, .. });
                 let numeric_pair = typed.ty.numeric() && parameter.ty.numeric();
-                self.err(argument.span(), if by_reference || numeric_pair { "Parameter type mismatch" } else { "Type mismatch" });
+                self.err(
+                    argument.span(),
+                    if by_reference || numeric_pair { "Parameter type mismatch" } else { "Type mismatch" },
+                );
             }
         }
     }
 
-    fn array_argument_for(&mut self, argument: &Expr) -> Option<Typed> {
+    fn array_argument_for(
+        &mut self,
+        argument: &Expr,
+    ) -> Option<Typed> {
         let (name, span) = match argument {
             Expr::Apply { name, arguments, span } if arguments.is_empty() => (name.clone(), *span),
             _ => return None,
@@ -1144,23 +1443,38 @@ impl Checker {
 }
 
 impl Ty {
-    fn min_int(&self, _other: &Ty) -> Ty {
+    fn min_int(
+        &self,
+        _other: &Ty,
+    ) -> Ty {
         Ty::Long
     }
 }
 
-// ---- statements ----------------------------------------------------------------------------------------------
+// ---- statements
+// ----------------------------------------------------------------------------------------------
 
 impl Checker {
-    fn unwrap_step<'a>(&self, expr: &'a Expr) -> &'a Expr {
+    fn unwrap_step<'a>(
+        &self,
+        expr: &'a Expr,
+    ) -> &'a Expr {
         match expr {
-            Expr::Apply { name, arguments, .. } if name == crate::front::ast::STEP_MARK && arguments.len() == 1 => &arguments[0],
+            Expr::Apply { name, arguments, .. } if name == crate::front::ast::STEP_MARK && arguments.len() == 1 => {
+                &arguments[0]
+            }
             other => other,
         }
     }
 
-    /// Arguments against a spec of space-separated classes: n s x v t a l m, a `?` making one optional.
-    fn spec(&mut self, arguments: &[Expr], spec: &str, span: Span) -> bool {
+    /// Arguments against a spec of space-separated classes: n s x v t a l m, a
+    /// `?` making one optional.
+    fn spec(
+        &mut self,
+        arguments: &[Expr],
+        spec: &str,
+        span: Span,
+    ) -> bool {
         let parts: Vec<&str> = spec.split_whitespace().collect();
         let required = parts.iter().filter(|p| !p.ends_with('?')).count();
         if arguments.len() < required || arguments.len() > parts.len() {
@@ -1182,7 +1496,10 @@ impl Checker {
             if letter == 'r' {
                 // a label anywhere in the module or in this procedure (RESTORE)
                 if let Expr::Name(label, at) = argument {
-                    if !self.labels.contains(label) && !self.module_labels.contains(label) && !self.all_labels.contains(label) {
+                    if !self.labels.contains(label)
+                        && !self.module_labels.contains(label)
+                        && !self.all_labels.contains(label)
+                    {
                         self.err(*at, "Label not defined");
                     }
                 } else {
@@ -1191,7 +1508,8 @@ impl Checker {
                 continue;
             }
             if letter == 'k' {
-                // a keyword the statement spells (ON, KEY, a device name): nothing to evaluate
+                // a keyword the statement spells (ON, KEY, a device name):
+                // nothing to evaluate
                 continue;
             }
             let class = match letter {
@@ -1214,7 +1532,10 @@ impl Checker {
                 }
                 'p' => {
                     // a PUT action verb
-                    if !matches!(argument, Expr::Name(name, _) if matches!(name.as_str(), "AND" | "OR" | "PRESET" | "PSET" | "XOR")) {
+                    if !matches!(
+                        argument,
+                        Expr::Name(name, _) if matches!(name.as_str(), "AND" | "OR" | "PRESET" | "PSET" | "XOR")
+                    ) {
                         self.err(argument.span(), "Syntax error");
                         ok = false;
                     }
@@ -1227,7 +1548,10 @@ impl Checker {
         ok
     }
 
-    fn statement(&mut self, statement: &Statement) {
+    fn statement(
+        &mut self,
+        statement: &Statement,
+    ) {
         self.span = statement.span();
         match statement {
             Statement::DefType { type_name, ranges, .. } => {
@@ -1245,10 +1569,16 @@ impl Checker {
                     self.err(self.span, "Subprogram error");
                 }
                 // `DIM a()` names no bounds: VBDOS's
-                if matches!(statement, Statement::Dim(_)) && !matches!(self.dialect, Dialect::VbDos | Dialect::Quickr) && items.iter().any(|item| item.array && item.bounds.is_empty()) {
+                if matches!(statement, Statement::Dim(_))
+                    && !matches!(self.dialect, Dialect::VbDos | Dialect::Quickr)
+                    && items.iter().any(|item| item.array && item.bounds.is_empty())
+                {
                     self.err(self.span, "Syntax error");
                 }
-                if matches!(statement, Statement::Dim(_)) && self.procedure.is_some() && items.iter().any(|item| item.shared) {
+                if matches!(statement, Statement::Dim(_))
+                    && self.procedure.is_some()
+                    && items.iter().any(|item| item.shared)
+                {
                     self.err(self.span, "Simple or array variable expected");
                 }
                 let keep = self.static_scope;
@@ -1275,7 +1605,8 @@ impl Checker {
             }
             Statement::Common { declarations, .. } => {
                 for item in declarations {
-                    // `COMMON x()` names an array that may already exist, or be dimensioned later
+                    // `COMMON x()` names an array that may already exist, or be
+                    // dimensioned later
                     if item.array && item.bounds.is_empty() && self.array_var(&item.name).is_some() {
                         continue;
                     }
@@ -1323,7 +1654,8 @@ impl Checker {
                 }
                 if let (Expr::Name(counter, _), Some((next, span))) = (counter, next_variable) {
                     let same = counter.eq_ignore_ascii_case(next)
-                        || (stem(counter).eq_ignore_ascii_case(stem(next)) && (Ty::of_suffix(counter).is_none() || Ty::of_suffix(next).is_none()));
+                        || (stem(counter).eq_ignore_ascii_case(stem(next))
+                            && (Ty::of_suffix(counter).is_none() || Ty::of_suffix(next).is_none()));
                     if !same {
                         self.err(*span, "NEXT without FOR");
                     }
@@ -1405,9 +1737,14 @@ impl Checker {
                 if *local {
                     self.on_local_error(*span);
                 }
-                // an error handler is module-level code, even when the statement stands in a procedure
-                // ON ERROR names a module-level handler; ON LOCAL ERROR one of the procedure
-                let known = if self.procedure.is_some() && !*local { self.module_labels.contains(label) } else { self.labels.contains(label) };
+                // an error handler is module-level code, even when the
+                // statement stands in a procedure ON ERROR names a module-level
+                // handler; ON LOCAL ERROR one of the procedure
+                let known = if self.procedure.is_some() && !*local {
+                    self.module_labels.contains(label)
+                } else {
+                    self.labels.contains(label)
+                };
                 if label != "0" && !known {
                     self.err(*span, "Label not defined");
                 }
@@ -1463,7 +1800,10 @@ impl Checker {
                 }
                 if let Some(typed) = self.expr(destination) {
                     if !typed.variable || !typed.ty.string() {
-                        self.err(destination.span(), if typed.variable { "String expression required" } else { "Variable required" });
+                        self.err(
+                            destination.span(),
+                            if typed.variable { "String expression required" } else { "Variable required" },
+                        );
                     }
                 }
             }
@@ -1533,15 +1873,29 @@ impl Checker {
                     self.expr(argument);
                 }
             }
-            // '$FORM name: the form is a variable of the form type, seen everywhere
+            // '$FORM name: the form is a variable of the form type, seen
+            // everywhere
             Statement::FormDeclaration(name, _) => {
-                let var = Var { ty: Ty::Record("FORM".into()), rank: None, declared: true, shared: true, dynamic: false, explicit: true, suffixed: false, redimmed: false };
+                let var = Var {
+                    ty: Ty::Record("FORM".into()),
+                    rank: None,
+                    declared: true,
+                    shared: true,
+                    dynamic: false,
+                    explicit: true,
+                    suffixed: false,
+                    redimmed: false,
+                };
                 self.scope.vars.entry(stem(name).to_ascii_uppercase()).or_default().push(var);
             }
         }
     }
 
-    fn print_item(&mut self, kind: PrintKind, value: &Expr) {
+    fn print_item(
+        &mut self,
+        kind: PrintKind,
+        value: &Expr,
+    ) {
         match value {
             Expr::Omitted(_) => {}
             Expr::Apply { name, arguments, .. } if (name == "TAB" || name == "SPC") && arguments.len() == 1 => {
@@ -1555,7 +1909,12 @@ impl Checker {
         }
     }
 
-    fn select(&mut self, selector: &Expr, arms: &[(Vec<CaseItem>, Vec<Statement>)], otherwise: &[Statement]) {
+    fn select(
+        &mut self,
+        selector: &Expr,
+        arms: &[(Vec<CaseItem>, Vec<Statement>)],
+        otherwise: &[Statement],
+    ) {
         let typed = self.expr(selector);
         let typed = self.scalar(typed, selector.span());
         for (items, body) in arms {
@@ -1567,7 +1926,16 @@ impl Checker {
                 };
                 for value in values {
                     let integer_selector = typed.as_ref().is_some_and(|t| t.ty == Ty::Int);
-                    let case = if integer_selector && matches!(value, Expr::Literal(Literal::Integer(..), _) | Expr::Unary { .. }) { self.integer(value) } else { self.expr(value) };
+                    let case = if integer_selector
+                        && matches!(
+                            value,
+                            Expr::Literal(Literal::Integer(..), _) | Expr::Unary { .. }
+                        )
+                    {
+                        self.integer(value)
+                    } else {
+                        self.expr(value)
+                    };
                     let Some(case) = case else { continue };
                     if let Some(selector) = &typed {
                         if selector.ty.string() != case.ty.string() || matches!(case.ty, Ty::Record(_)) {
@@ -1587,7 +1955,12 @@ impl Checker {
         }
     }
 
-    fn assign(&mut self, target: &Expr, value: &Expr, span: Span) {
+    fn assign(
+        &mut self,
+        target: &Expr,
+        value: &Expr,
+        span: Span,
+    ) {
         let value_typed = self.expr(value);
         // PDS and VBDOS: ERR = n
         if matches!(target, Expr::Name(name, _) if name == "ERR") {
@@ -1621,8 +1994,10 @@ impl Checker {
         // a FUNCTION assigns its result through its own name
         if let (Expr::Name(name, _), Some((ProcedureKind::Function, own))) = (target, &self.procedure) {
             if stem(name) == stem(own) {
-                let ty = self.procs.get(stem(own)).or_else(|| self.procs.get(own.as_str())).and_then(|p| p.result.clone());
-                // `f$ = …` in FUNCTION f% names another variable than the result
+                let ty =
+                    self.procs.get(stem(own)).or_else(|| self.procs.get(own.as_str())).and_then(|p| p.result.clone());
+                // `f$ = …` in FUNCTION f% names another variable than the
+                // result
                 if let (Some(suffix), Some(result)) = (Ty::of_suffix(name), &ty) {
                     if suffix.plain() != result.plain() {
                         self.err(span, "Duplicate definition");
@@ -1659,7 +2034,12 @@ impl Checker {
         self.assignable(&t.ty, &v, value.span());
     }
 
-    fn assignable(&mut self, target: &Ty, value: &Typed, span: Span) {
+    fn assignable(
+        &mut self,
+        target: &Ty,
+        value: &Typed,
+        span: Span,
+    ) {
         if value.array.is_some() {
             self.err(span, "Syntax error");
             return;
@@ -1670,7 +2050,8 @@ impl Checker {
             (Ty::Record(a), Ty::Record(b)) => a == b,
             (Ty::Str(_), Ty::Str(_)) => true,
             (a, b) if a.numeric() && b.numeric() => {
-                // a constant that cannot fit; PDS and VBDOS fold only integer literals into integers
+                // a constant that cannot fit; PDS and VBDOS fold only integer
+                // literals into integers
                 if let (Some(c), true) = (value.constant, !value.variable) {
                     let classic = matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45);
                     let integer_literal = matches!(b, Ty::Int | Ty::Long);
@@ -1695,10 +2076,14 @@ impl Checker {
     }
 }
 
-// ---- declarations, calls, the signature table of statements -----------------------------------------------------
+// ---- declarations, calls, the signature table of statements
+// -----------------------------------------------------
 
 impl Checker {
-    fn constant_expr(&mut self, expr: &Expr) -> Option<Typed> {
+    fn constant_expr(
+        &mut self,
+        expr: &Expr,
+    ) -> Option<Typed> {
         match expr {
             Expr::Literal(..) => self.expr(expr),
             Expr::Name(name, span) => match self.consts.get(stem(name)) {
@@ -1708,7 +2093,8 @@ impl Checker {
                     None
                 }
             },
-            // `UGL.8BIT`: a constant whose name has a dot is read as a field access
+            // `UGL.8BIT`: a constant whose name has a dot is read as a field
+            // access
             Expr::Field { .. } if dotted(expr).is_some_and(|name| self.consts.contains_key(stem(&name))) => {
                 dotted(expr).and_then(|name| self.consts.get(stem(&name)).cloned())
             }
@@ -1728,15 +2114,26 @@ impl Checker {
         }
     }
 
-    fn constant(&mut self, name: &str, value: &Expr, span: Span) {
+    fn constant(
+        &mut self,
+        name: &str,
+        value: &Expr,
+        span: Span,
+    ) {
         if self.reserved_name(name, span) {
             return;
         }
         let Some(typed) = self.constant_expr(value) else { return };
         let key = stem(name).to_owned();
-        // arrays have a namespace of their own: a CONST clashes with scalars (and with another CONST)
+        // arrays have a namespace of their own: a CONST clashes with scalars
+        // (and with another CONST)
         let scalar_in_use = self.scope.vars.get(&key).is_some_and(|vars| vars.iter().any(|v| v.rank.is_none()))
-            || (self.procedure.is_some() && self.module_scope.vars.get(&key).is_some_and(|vars| vars.iter().any(|v| v.rank.is_none() && v.shared)));
+            || (self.procedure.is_some()
+                && self
+                    .module_scope
+                    .vars
+                    .get(&key)
+                    .is_some_and(|vars| vars.iter().any(|v| v.rank.is_none() && v.shared)));
         if self.consts.contains_key(&key) {
             self.err(span, "Duplicate definition");
             return;
@@ -1758,7 +2155,12 @@ impl Checker {
         self.consts.insert(key, Typed { ty, variable: false, constant: typed.constant, array: None });
     }
 
-    fn type_declaration(&mut self, name: &str, fields: &[Declaration], span: Span) {
+    fn type_declaration(
+        &mut self,
+        name: &str,
+        fields: &[Declaration],
+        span: Span,
+    ) {
         if self.procedure.is_some() {
             self.err(span, "Illegal inside SUB or FUNCTION");
         }
@@ -1780,8 +2182,17 @@ impl Checker {
         let mut out: Vec<(String, Ty, Option<usize>)> = Vec::new();
         for field in fields {
             // array fields are PDS's and VBDOS's, and need bounds
-            if field.array && (field.bounds.is_empty() || matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45)) {
-                self.err(field.span, if matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45) { "AS missing" } else { "Syntax error" });
+            if field.array
+                && (field.bounds.is_empty() || matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45))
+            {
+                self.err(
+                    field.span,
+                    if matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45) {
+                        "AS missing"
+                    } else {
+                        "Syntax error"
+                    },
+                );
                 continue;
             }
             if matches!(field.type_name, Some(TypeName::String)) {
@@ -1791,7 +2202,10 @@ impl Checker {
                         continue;
                     }
                     Some(length) => {
-                        let ok = self.constant_expr(length).and_then(|typed| typed.constant).is_some_and(|c| (1.0..=32767.0).contains(&c));
+                        let ok = self
+                            .constant_expr(length)
+                            .and_then(|typed| typed.constant)
+                            .is_some_and(|c| (1.0..=32767.0).contains(&c));
                         if !ok {
                             self.err(field.span, "Integer between 1 and 32767 required");
                             continue;
@@ -1828,19 +2242,29 @@ impl Checker {
         self.records.insert(name.to_owned(), Record { fields: out, opaque: false });
     }
 
-    fn declare(&mut self, d: &Declaration, redim: bool) {
+    fn declare(
+        &mut self,
+        d: &Declaration,
+        redim: bool,
+    ) {
         let span = d.span;
         if self.reserved_name(&d.name, span) {
             return;
         }
         if let Some((prefix, _)) = d.name.split_once('.') {
-            // `r.a` names a field of the record variable `r`; a record variable's dotted names are not free
-            let record = |scope: &Scope| scope.vars.get(stem(prefix)).is_some_and(|vars| vars.iter().any(|v| matches!(v.ty, Ty::Record(_))));
+            // `r.a` names a field of the record variable `r`; a record
+            // variable's dotted names are not free
+            let record = |scope: &Scope| {
+                scope.vars.get(stem(prefix)).is_some_and(|vars| vars.iter().any(|v| matches!(v.ty, Ty::Record(_))))
+            };
             if record(&self.scope) || record(&self.module_scope) {
                 self.err(span, "Duplicate definition");
                 return;
             }
-            if d.type_name.is_none() && matches!(self.dialect, Dialect::Pds71 | Dialect::VbDos | Dialect::Quickr) {
+            if d.type_name.is_none() && matches!(
+                self.dialect,
+                Dialect::Pds71 | Dialect::VbDos | Dialect::Quickr
+            ) {
                 self.err(span, "AS clause required");
                 return;
             }
@@ -1879,8 +2303,12 @@ impl Checker {
         }
         let local_existing: Vec<Var> = self.scope.vars.get(&key).cloned().unwrap_or_default();
         let mut existing = local_existing.clone();
-        // a DIM in a procedure meets what the module shares (a STATIC does not; VBDOS lets a scalar shadow it)
-        if self.procedure.is_some() && !self.static_statement && (d.array || !matches!(self.dialect, Dialect::VbDos | Dialect::Quickr)) {
+        // a DIM in a procedure meets what the module shares (a STATIC does not;
+        // VBDOS lets a scalar shadow it)
+        if self.procedure.is_some()
+            && !self.static_statement
+            && (d.array || !matches!(self.dialect, Dialect::VbDos | Dialect::Quickr))
+        {
             if let Some(shared) = self.module_scope.vars.get(&key) {
                 for var in shared.iter().filter(|v| v.shared) {
                     if !existing.iter().any(|v| v.rank == var.rank && v.ty.plain() == var.ty.plain() && v.shared) {
@@ -1894,23 +2322,28 @@ impl Checker {
             self.err(span, "Name of subprogram illegal");
             return;
         }
-        // PDS and VBDOS: AS binds a name only when nothing of that type was named without it
+        // PDS and VBDOS: AS binds a name only when nothing of that type was
+        // named without it
         if as_declared && !matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45) {
-            let named = local_existing.iter().any(|v| !v.declared && v.ty.plain() == ty.plain()) || self.consts.get(&key).is_some_and(|c| c.ty.plain() == ty.plain());
+            let named = local_existing.iter().any(|v| !v.declared && v.ty.plain() == ty.plain())
+                || self.consts.get(&key).is_some_and(|c| c.ty.plain() == ty.plain());
             if named {
                 self.err(span, "AS clause required on first declaration");
                 return;
             }
         }
         if d.array {
-            // an AS-bound array, a suffixed one and a bare one bind the stem as scalars' names do
+            // an AS-bound array, a suffixed one and a bare one bind the stem as
+            // scalars' names do
             if !existing.iter().any(|v| v.rank.is_some() && v.ty.plain() == ty.plain() && v.declared == as_declared) {
                 if let Some(message) = self.scalar_conflict(&existing, &ty, &d.name, as_declared, true) {
                     self.err(span, message);
                     return;
                 }
             }
-            if let Some(old) = existing.iter().find(|v| v.rank.is_some() && v.ty.plain() == ty.plain() && v.declared == as_declared) {
+            if let Some(old) =
+                existing.iter().find(|v| v.rank.is_some() && v.ty.plain() == ty.plain() && v.declared == as_declared)
+            {
                 // `COMMON a() AS T` named the array; its DIM gives the bounds
                 if old.rank == Some(usize::MAX) && !d.bounds.is_empty() {
                     if let Some(vars) = self.scope.vars.get_mut(&key) {
@@ -1945,7 +2378,8 @@ impl Checker {
             dynamic: redim
                 || d.dynamic
                 || (d.array && d.bounds.is_empty())
-                // variable bounds, or an automatic array in a procedure that is not STATIC
+                // variable bounds, or an automatic array in a procedure that is
+                // not STATIC
                 || (d.array && !constant_bounds)
                 || (d.array && self.procedure.is_some() && !self.static_scope),
             explicit: true,
@@ -1955,9 +2389,18 @@ impl Checker {
         self.scope.vars.entry(key).or_default().push(var);
     }
 
-    /// Why declaring a scalar `name` of type `ty` clashes with the variables already named by its stem (BC's rules:
-    /// `q` and `q%` are two variables, `q AS T` binds the stem, and PDS and VBDOS refuse to mix a suffix with AS).
-    fn scalar_conflict(&self, existing: &[Var], ty: &Ty, name: &str, as_declared: bool, arrays: bool) -> Option<&'static str> {
+    /// Why declaring a scalar `name` of type `ty` clashes with the variables
+    /// already named by its stem (BC's rules: `q` and `q%` are two variables,
+    /// `q AS T` binds the stem, and PDS and VBDOS refuse to mix a suffix with
+    /// AS).
+    fn scalar_conflict(
+        &self,
+        existing: &[Var],
+        ty: &Ty,
+        name: &str,
+        as_declared: bool,
+        arrays: bool,
+    ) -> Option<&'static str> {
         let suffixed = Ty::of_suffix(name).is_some();
         let mixes = !matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45);
         for v in existing.iter().filter(|v| v.rank.is_some() == arrays) {
@@ -1973,7 +2416,11 @@ impl Checker {
                 if mixes && v.declared && v.explicit && v.ty.plain() == ty.plain() {
                     return Some("AS clause required");
                 }
-                if v.explicit && (v.declared || (v.suffixed && v.ty.plain() == ty.plain()) || (bare && v.ty.plain() == ty.plain())) {
+                if v.explicit
+                    && (v.declared
+                        || (v.suffixed && v.ty.plain() == ty.plain())
+                        || (bare && v.ty.plain() == ty.plain()))
+                {
                     return Some("Duplicate definition");
                 }
             } else {
@@ -1988,9 +2435,13 @@ impl Checker {
         None
     }
 
-    fn share(&mut self, d: &Declaration) {
+    fn share(
+        &mut self,
+        d: &Declaration,
+    ) {
         let key = stem(&d.name).to_owned();
-        if self.scope.vars.get(&key).is_some_and(|vars| vars.iter().any(|v| v.explicit && v.rank.is_none() == !d.array)) {
+        if self.scope.vars.get(&key).is_some_and(|vars| vars.iter().any(|v| v.explicit && v.rank.is_none() == !d.array))
+        {
             self.err(d.span, "Variable required");
             return;
         }
@@ -2007,14 +2458,29 @@ impl Checker {
             }
             None => {
                 let ty = wanted.clone().unwrap_or_else(|| self.default_type(&d.name));
-                let var = Var { ty, rank: d.array.then_some(usize::MAX), declared: wanted.is_some() && Ty::of_suffix(&d.name).is_none(), shared: true, dynamic: false, explicit: true, suffixed: Ty::of_suffix(&d.name).is_some(), redimmed: false };
+                let var = Var {
+                    ty,
+                    rank: d.array.then_some(usize::MAX),
+                    declared: wanted.is_some() && Ty::of_suffix(&d.name).is_none(),
+                    shared: true,
+                    dynamic: false,
+                    explicit: true,
+                    suffixed: Ty::of_suffix(&d.name).is_some(),
+                    redimmed: false,
+                };
                 self.scope.vars.entry(key.clone()).or_default().push(var.clone());
                 self.module_scope.vars.entry(key).or_default().push(var);
             }
         }
     }
 
-    fn call(&mut self, name: &str, arguments: &[Expr], explicit: bool, span: Span) {
+    fn call(
+        &mut self,
+        name: &str,
+        arguments: &[Expr],
+        explicit: bool,
+        span: Span,
+    ) {
         if explicit && Ty::of_suffix(name).is_some() {
             self.err(span, "Invalid character");
             return;
@@ -2045,7 +2511,8 @@ impl Checker {
             }
             if matches!(name, "LSET" | "RSET") {
                 if let [Expr::Binary { left, right, .. }] = arguments {
-                    // LSET moves a string into a string variable, or one record into another
+                    // LSET moves a string into a string variable, or one record
+                    // into another
                     if let Some(target) = self.argument_of_class(Class::Var, left) {
                         match &target.ty {
                             Ty::Str(_) => {
@@ -2068,10 +2535,15 @@ impl Checker {
                 return;
             }
         }
-        // `frmMain.cmdOK.Move 1, 2`, `SCREEN.HIDE`: a method of a VBDOS form, control or object
+        // `frmMain.cmdOK.Move 1, 2`, `SCREEN.HIDE`: a method of a VBDOS form,
+        // control or object
         if let Some((root, _)) = name.split_once('.') {
             let object = matches!(self.dialect, Dialect::VbDos | Dialect::Quickr)
-                && (matches!(root.to_ascii_uppercase().as_str(), "SCREEN" | "PRINTER" | "CLIPBOARD") || self.lookup_record_var(root));
+                && (matches!(
+                    root.to_ascii_uppercase().as_str(),
+                    "SCREEN" | "PRINTER" | "CLIPBOARD"
+                )
+                    || self.lookup_record_var(root));
             if object {
                 for argument in arguments {
                     let inner = match argument {
@@ -2085,8 +2557,11 @@ impl Checker {
         }
         let key = stem(name);
         match self.procs.get(key).cloned() {
-            // a SUB named only below its first use is no statement yet: BC takes the name for an assignment
-            Some(procedure) if procedure.kind == ProcedureKind::Sub && !explicit && span.line < procedure.first_line => {
+            // a SUB named only below its first use is no statement yet: BC
+            // takes the name for an assignment
+            Some(procedure)
+                if procedure.kind == ProcedureKind::Sub && !explicit && span.line < procedure.first_line =>
+            {
                 self.err(span, "Equal sign missing");
             }
             Some(procedure) if procedure.kind == ProcedureKind::Sub => {
@@ -2100,7 +2575,8 @@ impl Checker {
             }
             None => {
                 if !explicit {
-                    // a statement that starts with an unknown name is taken for an assignment
+                    // a statement that starts with an unknown name is taken for
+                    // an assignment
                     self.err(span, if arguments.is_empty() { "Equal sign missing" } else { "DECLARE required" });
                     return;
                 }
@@ -2112,8 +2588,13 @@ impl Checker {
         }
     }
 
-    /// PAINT: a background needs a string tile; empty trailing slots only follow a tile, and not in VBDOS.
-    fn paint(&mut self, arguments: &[Expr], span: Span) {
+    /// PAINT: a background needs a string tile; empty trailing slots only
+    /// follow a tile, and not in VBDOS.
+    fn paint(
+        &mut self,
+        arguments: &[Expr],
+        span: Span,
+    ) {
         let mut stripped = arguments;
         while matches!(stripped.last(), Some(Expr::Omitted(_))) {
             stripped = &stripped[..stripped.len() - 1];
@@ -2140,7 +2621,12 @@ impl Checker {
     }
 
     /// The ISAM statements whose argument lists have a shape of their own.
-    fn isam_list(&mut self, name: &str, arguments: &[Expr], span: Span) {
+    fn isam_list(
+        &mut self,
+        name: &str,
+        arguments: &[Expr],
+        span: Span,
+    ) {
         let [table, rest @ ..] = arguments else {
             self.err(span, "Syntax error");
             return;
@@ -2181,8 +2667,13 @@ impl Checker {
         }
     }
 
-    /// FIELD #n, width AS string-variable, ...: the variables are variable-length strings.
-    fn field_statement(&mut self, arguments: &[Expr], span: Span) {
+    /// FIELD #n, width AS string-variable, ...: the variables are
+    /// variable-length strings.
+    fn field_statement(
+        &mut self,
+        arguments: &[Expr],
+        span: Span,
+    ) {
         let [file, pairs @ ..] = arguments else {
             self.err(span, "Syntax error");
             return;
@@ -2203,7 +2694,10 @@ impl Checker {
     }
 
     /// LOCAL ERROR belongs to PDS and VBDOS, and to procedures.
-    fn on_local_error(&mut self, span: Span) {
+    fn on_local_error(
+        &mut self,
+        span: Span,
+    ) {
         if matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45) {
             self.err(span, "Syntax error");
         } else if self.procedure.is_none() {
@@ -2211,7 +2705,12 @@ impl Checker {
         }
     }
 
-    fn runtime(&mut self, name: &str, arguments: &[Expr], span: Span) {
+    fn runtime(
+        &mut self,
+        name: &str,
+        arguments: &[Expr],
+        span: Span,
+    ) {
         let spec = match name {
             "SCREEN" => "i? i? i? i?",
             "COLOR" => "i? i? i?",
@@ -2245,12 +2744,20 @@ impl Checker {
             "SWAP" => "v v",
             "RESTORE" => "r?",
             "DATE$" | "TIME$" => "s",
-            "KEY" if matches!(arguments, [Expr::Name(word, _)] if matches!(word.as_str(), "ON" | "OFF" | "LIST")) => "k",
+            "KEY"
+                if matches!(
+                    arguments,
+                    [Expr::Name(word, _)] if matches!(word.as_str(), "ON" | "OFF" | "LIST")
+                ) =>
+            {
+                "k"
+            }
             "KEY" => "i s",
             "EVENT" => "k i? k l?",
             "LOCK" | "UNLOCK" => "n n? n?",
             "IOCTL" => "i s",
-            "FIELD" | "PALETTE_USING" | "CREATEINDEX" | "INSERT" | "RETRIEVE" | "UPDATE" | "SEEKEQ" | "SEEKGE" | "SEEKGT" => "",
+            "FIELD" | "PALETTE_USING" | "CREATEINDEX" | "INSERT" | "RETRIEVE" | "UPDATE" | "SEEKEQ" | "SEEKGE"
+            | "SEEKGT" => "",
             "BEGINTRANS" | "COMMITTRANS" | "CHECKPOINT" => "",
             "CHDRIVE" => "s",
             "LOAD" | "UNLOAD" => "",
@@ -2268,7 +2775,10 @@ impl Checker {
                 return;
             }
         };
-        if matches!(name, "CREATEINDEX" | "INSERT" | "RETRIEVE" | "UPDATE" | "SEEKEQ" | "SEEKGE" | "SEEKGT") {
+        if matches!(
+            name,
+            "CREATEINDEX" | "INSERT" | "RETRIEVE" | "UPDATE" | "SEEKEQ" | "SEEKGE" | "SEEKGT"
+        ) {
             self.isam_list(name, arguments, span);
             return;
         }
@@ -2320,7 +2830,12 @@ impl Checker {
             }
             return;
         }
-        if name == "EVENT" && matches!(arguments.first(), Some(Expr::Name(device, _)) if device == "SIGNAL") {
+        if name == "EVENT"
+            && matches!(
+                arguments.first(),
+                Some(Expr::Name(device, _)) if device == "SIGNAL"
+            )
+        {
             self.err(span, "Feature unavailable");
             return;
         }
@@ -2332,7 +2847,9 @@ impl Checker {
             // an INTEGER or LONG array, or an element of one to start from
             if let [array] = arguments {
                 let typed = match array {
-                    Expr::Apply { arguments, .. } if !arguments.is_empty() => self.expr(array).filter(|typed| typed.variable),
+                    Expr::Apply { arguments, .. } if !arguments.is_empty() => {
+                        self.expr(array).filter(|typed| typed.variable)
+                    }
                     _ => self.array_argument(array),
                 };
                 if let Some(typed) = typed {
@@ -2351,7 +2868,10 @@ impl Checker {
         }
         if name == "LINE" {
             // `,color,` and `,,` are BC's; VBDOS refuses the dangling comma
-            if matches!(arguments.last(), Some(Expr::Omitted(_))) && arguments.len() == 6 && matches!(self.dialect, Dialect::VbDos | Dialect::Quickr) {
+            if matches!(arguments.last(), Some(Expr::Omitted(_)))
+                && arguments.len() == 6
+                && matches!(self.dialect, Dialect::VbDos | Dialect::Quickr)
+            {
                 self.err(span, "Syntax error");
                 return;
             }
@@ -2370,7 +2890,15 @@ impl Checker {
             return;
         }
         // ON TIMER takes seconds, up to a day's worth
-        let spec = if name == "EVENT" && matches!(arguments.first(), Some(Expr::Name(device, _)) if device == "TIMER") { "k n? k l?" } else { spec };
+        let spec = if name == "EVENT"
+            && matches!(
+                arguments.first(),
+                Some(Expr::Name(device, _)) if device == "TIMER"
+            ) {
+            "k n? k l?"
+        } else {
+            spec
+        };
         self.spec(arguments, spec, span);
     }
 }

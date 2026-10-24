@@ -304,3 +304,17 @@ QuickrBASIC (`+=`, `FOR IN`, tuple assignment, `a IF c ELSE b`, f-strings); a ty
 `syntax::Module`) and from the Nib one (`llrm_nib::syntax`); error messages;
 speed against the old parsers (the generated parser sources are large, and the
 crate takes about 30 s to build in debug).
+
+## Where the front lives now
+
+The scanner, the typed parser (`ast`), the checker (`check`) and their tables (`kw`, `tokens`, `words`, `reserved`,
+`sigs`, `classes`) are `qbfront::front`; this crate re-exports them as `qb_ast`, `qb_check` and so on and keeps the
+LALR and recursive-descent comparators (`qb_rd`, `qb_tree`, `qb.lalrpop`) and the oracle harness (`corpus/`).
+`qbfront::parse` is `front::parse`: parse, then check, the first diagnostic being the error. QuickrBASIC is not in
+the front yet (it has no BC to be held to, and its extensions are not ported), so that dialect still goes to the
+grammar-table parser in `qbfront::generated_parser`; a source only that parser takes is refused with a message that
+says the quickr profile takes it.
+
+What the swap found: BC takes a subscripted array field of a record (`g.q(0)`), which neither parser did, and the repo's
+own fixtures and tests held programs BC refuses (reserved words as names, a call above its DECLARE, `INSTR(60001, ..)`,
+`1E+10!`), which were fixed to be programs BC takes.

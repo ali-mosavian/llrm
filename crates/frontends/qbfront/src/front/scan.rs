@@ -1,20 +1,25 @@
-//! The scanner for the typed parser, written to BC's lexical rules rather than the table-driven
-//! scanner's: spaces inside a number are ignored (`1 2` is 12), a string left open ends at the
-//! line's end, a literal with eight or more digits is a DOUBLE, an integer past the LONG range is
-//! one too, `type$`-style words are names, and a DATA statement's text is kept as written.
+//! The scanner for the typed parser, written to BC's lexical rules rather than
+//! the table-driven scanner's: spaces inside a number are ignored (`1 2` is
+//! 12), a string left open ends at the line's end, a literal with eight or more
+//! digits is a DOUBLE, an integer past the LONG range is one too, `type$`-style
+//! words are names, and a DATA statement's text is kept as written.
 //!
-//! The tokens are the table-driven scanner's `Token`s, so the typed syntax's spans and the
-//! parser's kinds are as before; a DATA keyword is followed by one `String` token holding the
-//! statement's raw text.
+//! The tokens are the table-driven scanner's `Token`s, so the typed syntax's
+//! spans and the parser's kinds are as before; a DATA keyword is followed by
+//! one `String` token holding the statement's raw text.
 
+use crate::front::lexer::logical_lines;
+use crate::front::words::Word;
 use crate::generated_parser::{Token, TokenKind};
 use crate::syntax::{Binary, Span};
 use crate::{Dialect, LexError};
 
-use crate::front::lexer::logical_lines;
-use crate::front::words::Word;
-
-fn error(line: usize, start: usize, end: usize, message: &str) -> LexError {
+fn error(
+    line: usize,
+    start: usize,
+    end: usize,
+    message: &str,
+) -> LexError {
     LexError { span: Span { line, start, end }, message: message.into() }
 }
 
@@ -66,7 +71,10 @@ fn reserved(name: &str) -> Option<u16> {
     }
 }
 
-fn is_suffix(byte: u8, dialect: Dialect) -> bool {
+fn is_suffix(
+    byte: u8,
+    dialect: Dialect,
+) -> bool {
     matches!(byte, b'%' | b'&' | b'!' | b'#' | b'$') || (byte == b'@' && dialect.currency_suffix())
 }
 
@@ -75,19 +83,28 @@ fn name_char(byte: u8) -> bool {
 }
 
 /// A byte that may continue a name: VBDOS BC also takes the underscore.
-fn name_continues(byte: u8, dialect: Dialect) -> bool {
+fn name_continues(
+    byte: u8,
+    dialect: Dialect,
+) -> bool {
     byte.is_ascii_alphanumeric() || (byte == b'_' && dialect == Dialect::VbDos)
 }
 
 /// The index of the next byte that is not a space or tab.
-fn skip_blanks(bytes: &[u8], mut at: usize) -> usize {
+fn skip_blanks(
+    bytes: &[u8],
+    mut at: usize,
+) -> usize {
     while at < bytes.len() && matches!(bytes[at], b' ' | b'\t') {
         at += 1;
     }
     at
 }
 
-pub fn scan(source: &str, dialect: Dialect) -> Result<Vec<Token>, LexError> {
+pub fn scan(
+    source: &str,
+    dialect: Dialect,
+) -> Result<Vec<Token>, LexError> {
     let mut out = Vec::with_capacity(source.len() / 4);
     let newline = punct(b'\n');
     for (line_index, line) in logical_lines(source, dialect) {
@@ -100,7 +117,12 @@ pub fn scan(source: &str, dialect: Dialect) -> Result<Vec<Token>, LexError> {
     Ok(out)
 }
 
-fn scan_line(line: &str, line_index: usize, dialect: Dialect, out: &mut Vec<Token>) -> Result<(), LexError> {
+fn scan_line(
+    line: &str,
+    line_index: usize,
+    dialect: Dialect,
+    out: &mut Vec<Token>,
+) -> Result<(), LexError> {
     let bytes = line.as_bytes();
     let mut at = 0;
     while at < bytes.len() {
@@ -118,7 +140,12 @@ fn scan_line(line: &str, line_index: usize, dialect: Dialect, out: &mut Vec<Toke
                 match directive.as_str() {
                     "$DYNAMIC" => TokenKind::ArrayDynamic,
                     "$STATIC" => TokenKind::ArrayStatic,
-                    other if matches!(dialect, Dialect::VbDos | Dialect::Quickr) && other.starts_with("$FORM") && other.len() > 5 && other.as_bytes()[5].is_ascii_whitespace() => {
+                    other
+                        if matches!(dialect, Dialect::VbDos | Dialect::Quickr)
+                            && other.starts_with("$FORM")
+                            && other.len() > 5
+                            && other.as_bytes()[5].is_ascii_whitespace() =>
+                    {
                         TokenKind::FormDeclaration(other[5..].trim().to_owned())
                     }
                     _ => continue,
@@ -184,14 +211,17 @@ fn scan_line(line: &str, line_index: usize, dialect: Dialect, out: &mut Vec<Toke
                 if at - start > 40 {
                     return Err(error(line_index, start, at, "Identifier too long"));
                 }
-                // letters, digits and the type suffix; a period starts a field or the rest of a dotted name
+                // letters, digits and the type suffix; a period starts a field
+                // or the rest of a dotted name
                 if at < bytes.len() && is_suffix(bytes[at], dialect) {
                     at += 1;
                 }
                 let name = &line[start..at];
                 let bare = name.trim_end_matches(['%', '&', '!', '#', '$', '@']);
                 let reserved_id = reserved(name);
-                if reserved_id == Some(ids().rem) || (reserved_id.is_none() && bare.eq_ignore_ascii_case("REM") && name.len() == bare.len()) {
+                if reserved_id == Some(ids().rem)
+                    || (reserved_id.is_none() && bare.eq_ignore_ascii_case("REM") && name.len() == bare.len())
+                {
                     let directive = line[at..].trim().to_ascii_uppercase();
                     at = bytes.len();
                     match directive.as_str() {
@@ -204,12 +234,18 @@ fn scan_line(line: &str, line_index: usize, dialect: Dialect, out: &mut Vec<Toke
                         out.push(Token { kind: TokenKind::Reserved(id), span: span(at) });
                         let text_start = at;
                         let text_end = statement_end(line, at);
-                        out.push(Token { kind: TokenKind::String(line[text_start..text_end].to_owned()), span: Span { line: line_index, start: text_start, end: text_end } });
+                        out.push(Token {
+                            kind: TokenKind::String(line[text_start..text_end].to_owned()),
+                            span: Span { line: line_index, start: text_start, end: text_end },
+                        });
                         at = text_end;
                         continue;
                     }
                     TokenKind::Reserved(id)
-                } else if let Some(word) = extension_keyword(bare).filter(|word| name.len() == bare.len() && (*word != "EXPLICIT" || matches!(dialect, Dialect::VbDos | Dialect::Quickr))) {
+                } else if let Some(word) = extension_keyword(bare).filter(|word| {
+                    name.len() == bare.len()
+                        && (*word != "EXPLICIT" || matches!(dialect, Dialect::VbDos | Dialect::Quickr))
+                }) {
                     TokenKind::ExtensionKeyword(word)
                 } else {
                     TokenKind::Identifier(name.to_ascii_uppercase())
@@ -271,7 +307,12 @@ fn scan_line(line: &str, line_index: usize, dialect: Dialect, out: &mut Vec<Toke
                 punct(byte)
             }
             _ => {
-                return Err(error(line_index, at, at + line[at..].chars().next().map_or(1, char::len_utf8), &format!("unknown character {:?}", line[at..].chars().next().unwrap_or('?'))));
+                return Err(error(
+                    line_index,
+                    at,
+                    at + line[at..].chars().next().map_or(1, char::len_utf8),
+                    &format!("unknown character {:?}", line[at..].chars().next().unwrap_or('?')),
+                ));
             }
         };
         out.push(Token { kind, span: span(at) });
@@ -283,8 +324,12 @@ fn extension_keyword(bare: &str) -> Option<&'static str> {
     crate::generated_parser::tables::extension_keyword(&bare.to_ascii_uppercase())
 }
 
-/// Where a DATA statement's text ends: a colon outside quotes, or the end of the line.
-fn statement_end(line: &str, from: usize) -> usize {
+/// Where a DATA statement's text ends: a colon outside quotes, or the end of
+/// the line.
+fn statement_end(
+    line: &str,
+    from: usize,
+) -> usize {
     let bytes = line.as_bytes();
     let mut quoted = false;
     for (offset, &byte) in bytes[from..].iter().enumerate() {
@@ -297,25 +342,30 @@ fn statement_end(line: &str, from: usize) -> usize {
     bytes.len()
 }
 
-/// A numeric literal from its first byte. Spaces and tabs between its parts are ignored.
-fn number(line: &str, at: &mut usize, line_index: usize, dialect: Dialect) -> Result<TokenKind, LexError> {
+/// A numeric literal from its first byte. Spaces and tabs between its parts are
+/// ignored.
+fn number(
+    line: &str,
+    at: &mut usize,
+    line_index: usize,
+    dialect: Dialect,
+) -> Result<TokenKind, LexError> {
     let bytes = line.as_bytes();
     let start = *at;
     let mut digits = String::new();
     let mut i = start;
-    // the next byte of the literal after blanks, if blanks are followed by one of `wanted`
-    let digits_run = |i: &mut usize, digits: &mut String| {
-        loop {
-            while *i < bytes.len() && bytes[*i].is_ascii_digit() {
-                digits.push(char::from(bytes[*i]));
-                *i += 1;
-            }
-            let next = skip_blanks(bytes, *i);
-            if next > *i && next < bytes.len() && bytes[next].is_ascii_digit() {
-                *i = next;
-            } else {
-                return;
-            }
+    // the next byte of the literal after blanks, if blanks are followed by one
+    // of `wanted`
+    let digits_run = |i: &mut usize, digits: &mut String| loop {
+        while *i < bytes.len() && bytes[*i].is_ascii_digit() {
+            digits.push(char::from(bytes[*i]));
+            *i += 1;
+        }
+        let next = skip_blanks(bytes, *i);
+        if next > *i && next < bytes.len() && bytes[next].is_ascii_digit() {
+            *i = next;
+        } else {
+            return;
         }
     };
     let mut real = false;
@@ -339,7 +389,8 @@ fn number(line: &str, at: &mut usize, line_index: usize, dialect: Dialect) -> Re
         digits_run(&mut i, &mut digits);
     }
     mantissa_digits += digits.bytes().filter(u8::is_ascii_digit).count();
-    // an exponent: E or D, an optional sign, digits; blanks anywhere between them
+    // an exponent: E or D, an optional sign, digits; blanks anywhere between
+    // them
     let mut exponent_marker = None;
     let marker_at = skip_blanks(bytes, i);
     if let Some(&marker) = bytes.get(marker_at) {
@@ -388,7 +439,13 @@ fn number(line: &str, at: &mut usize, line_index: usize, dialect: Dialect) -> Re
     if real || matches!(suffix, Some(b'!' | b'#')) {
         let double = suffix == Some(b'#') || exponent_marker.is_some_and(|m| m == b'D') || mantissa_digits >= 8;
         let single = suffix == Some(b'!');
-        let kind_suffix = if double && !single { Some('#') } else if single { Some('!') } else { None };
+        let kind_suffix = if double && !single {
+            Some('#')
+        } else if single {
+            Some('!')
+        } else {
+            None
+        };
         let text = text.replace('D', "E");
         let text = if text.starts_with('.') { text } else { text };
         return Ok(TokenKind::Real(text, kind_suffix));
@@ -426,7 +483,12 @@ fn number(line: &str, at: &mut usize, line_index: usize, dialect: Dialect) -> Re
 }
 
 /// `&H…`, `&O…` and `&…` (octal).
-fn based(line: &str, at: &mut usize, line_index: usize, dialect: Dialect) -> Result<TokenKind, LexError> {
+fn based(
+    line: &str,
+    at: &mut usize,
+    line_index: usize,
+    dialect: Dialect,
+) -> Result<TokenKind, LexError> {
     let bytes = line.as_bytes();
     let start = *at;
     let mut i = start + 1;
@@ -464,6 +526,7 @@ fn based(line: &str, at: &mut usize, line_index: usize, dialect: Dialect) -> Res
     if unsigned >= (1_u64 << bits) {
         return Err(error(line_index, start, i, "Overflow in numeric constant"));
     }
-    let value = if unsigned & (1_u64 << (bits - 1)) != 0 { (unsigned as i64) - (1_i64 << bits) } else { unsigned as i64 };
+    let value =
+        if unsigned & (1_u64 << (bits - 1)) != 0 { (unsigned as i64) - (1_i64 << bits) } else { unsigned as i64 };
     Ok(TokenKind::Integer(value, if bits == 32 { Some('&') } else { suffix }))
 }

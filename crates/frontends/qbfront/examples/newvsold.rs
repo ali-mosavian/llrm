@@ -1,4 +1,5 @@
-//! Sources the grammar-table parser takes and the BC-checked front refuses, one line each.
+//! Sources the grammar-table parser takes and the BC-checked front refuses, one
+//! line each.
 //!
 //!     newvsold DIALECT FILE...
 use qbfront::{generated_parser, source, Dialect};

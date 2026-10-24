@@ -1075,7 +1075,8 @@ fn check_zero_based(statements: &[Statement]) -> Result<(), SemanticError> {
                     message: "arrays start at 0: OPTION BASE 1 needs a Microsoft profile".into(),
                 });
             }
-            Statement::Dim(items) | Statement::Common { declarations: items, .. }
+            Statement::Dim(items)
+            | Statement::Common { declarations: items, .. }
             | Statement::Static(items)
             | Statement::Shared(items)
             | Statement::Redim(items)
@@ -3556,9 +3557,15 @@ impl Compiler {
                 Statement::FormDeclaration(..) => return self.fail("'$FORM is not supported"),
                 Statement::RedimPreserve(_) => return self.fail("REDIM PRESERVE is not supported"),
                 Statement::OpenIsam { .. } => return self.fail("OPEN FOR ISAM is not supported"),
-                Statement::OpenClassic { .. } => return self.fail("the classic OPEN mode$, #file, path$ form is not supported"),
+                Statement::OpenClassic { .. } => {
+                    return self.fail("the classic OPEN mode$, #file, path$ form is not supported")
+                }
                 Statement::Open { access, lock, record_length, mode_written, mode, .. }
-                    if access.is_some() || lock.is_some() || record_length.is_some() || !mode_written || *mode == FileMode::Random =>
+                    if access.is_some()
+                        || lock.is_some()
+                        || record_length.is_some()
+                        || !mode_written
+                        || *mode == FileMode::Random =>
                 {
                     return self.fail("OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported");
                 }

@@ -1,4 +1,5 @@
-//! Generated once from the token list of `qbasbnf.prs`; edit by hand to add a token.
+//! Generated once from the token list of `qbasbnf.prs`; edit by hand to add a
+//! token.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[allow(non_camel_case_types, clippy::upper_case_acronyms)]

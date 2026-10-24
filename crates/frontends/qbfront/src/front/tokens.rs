@@ -3,11 +3,10 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+use crate::front::kw::{Kw, NAMES};
 use crate::generated_parser::tables::TOKENS;
 use crate::generated_parser::{Token, TokenKind};
 use crate::syntax::Binary;
-
-use crate::front::kw::{Kw, NAMES};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Tok {
@@ -25,7 +24,8 @@ pub enum Tok {
     Dynamic,
     Static,
     Form,
-    /// `FN` written apart from the name it prefixes: `DEF FN twice`, `FN twice(4)`.
+    /// `FN` written apart from the name it prefixes: `DEF FN twice`, `FN
+    /// twice(4)`.
     FnWord,
 }
 
@@ -43,24 +43,30 @@ fn reserved() -> &'static [Option<Tok>] {
     })
 }
 
-/// Whether a word is a reserved word's spelling, so that a longer span is its suffixed name.
+/// Whether a word is a reserved word's spelling, so that a longer span is its
+/// suffixed name.
 fn alphabetic(id: u16) -> Option<usize> {
     static TABLE: OnceLock<Vec<Option<usize>>> = OnceLock::new();
     TABLE.get_or_init(|| {
-        TOKENS.iter().map(|(_, spelling, ..)| spelling.starts_with(|c: char| c.is_ascii_alphabetic()).then_some(spelling.len())).collect()
+        TOKENS
+            .iter()
+            .map(|(_, spelling, ..)| spelling.starts_with(|c: char| c.is_ascii_alphabetic()).then_some(spelling.len()))
+            .collect()
     })[usize::from(id)]
 }
 
-/// `type$`, `key%`: the lexer takes a suffixed word for its bare keyword; the suffix makes it a name.
-pub fn suffixed(id: u16, width: usize) -> bool {
+/// `type$`, `key%`: the lexer takes a suffixed word for its bare keyword; the
+/// suffix makes it a name.
+pub fn suffixed(
+    id: u16,
+    width: usize,
+) -> bool {
     alphabetic(id).is_some_and(|spelling| width == spelling + 1)
 }
 
 pub fn terminal(kind: &TokenKind) -> Tok {
     match kind {
-        TokenKind::Reserved(id) => {
-            reserved()[usize::from(*id)].clone().expect("every reserved word has a terminal")
-        }
+        TokenKind::Reserved(id) => reserved()[usize::from(*id)].clone().expect("every reserved word has a terminal"),
         TokenKind::ExtensionKeyword(_) => Tok::Ext,
         TokenKind::Identifier(_) => Tok::Ident,
         TokenKind::Integer(..) => Tok::Int,
@@ -79,15 +85,32 @@ pub fn terminal(kind: &TokenKind) -> Tok {
 }
 
 pub fn tokens(source: &[Token]) -> Vec<Spanned> {
-    let name = |at: usize| matches!(source.get(at).map(|token| &token.kind), Some(TokenKind::Identifier(_)));
+    let name = |at: usize| matches!(
+        source.get(at).map(|token| &token.kind),
+        Some(TokenKind::Identifier(_))
+    );
     source
         .iter()
         .enumerate()
         .map(|(at, token)| {
             let apart = matches!(&token.kind, TokenKind::Identifier(word) if word == "FN") && name(at + 1);
-            // `type$`, `key%`: the lexer takes a suffixed word for its bare keyword; the suffix makes it a name
-            let suffixed = matches!(&token.kind, TokenKind::Reserved(id) if suffixed(*id, token.span.end - token.span.start));
-            Ok((at, if apart { Tok::FnWord } else if suffixed { Tok::Ident } else { terminal(&token.kind) }, at + 1))
+            // `type$`, `key%`: the lexer takes a suffixed word for its bare
+            // keyword; the suffix makes it a name
+            let suffixed = matches!(
+                &token.kind,
+                TokenKind::Reserved(id) if suffixed(*id, token.span.end - token.span.start)
+            );
+            Ok((
+                at,
+                if apart {
+                    Tok::FnWord
+                } else if suffixed {
+                    Tok::Ident
+                } else {
+                    terminal(&token.kind)
+                },
+                at + 1,
+            ))
         })
         .collect()
 }

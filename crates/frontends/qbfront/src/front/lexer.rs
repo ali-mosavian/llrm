@@ -1,4 +1,5 @@
-//! A logos-generated QB lexer producing the token stream of `crate::generated_parser::lex`.
+//! A logos-generated QB lexer producing the token stream of
+//! `crate::generated_parser::lex`.
 //!
 //! logos dispatches on the first byte and recognises the reserved words with a
 //! generated DFA (`qb_words.rs`); the callbacks keep the old lexer's rules for
@@ -9,20 +10,21 @@ use std::borrow::Cow;
 use std::sync::OnceLock;
 
 use logos::{FilterResult, Lexer, Logos};
+
+use crate::front::kw::Kw;
+use crate::front::tokens::{terminal, Tok};
+use crate::front::words::Word;
 use crate::generated_parser::tables;
 use crate::generated_parser::{Token, TokenKind};
 use crate::syntax::{Binary, Span};
 use crate::{Dialect, LexError};
 
-use crate::front::kw::Kw;
-use crate::front::tokens::{terminal, Tok};
-use crate::front::words::Word;
-
 pub struct Context {
     dialect: Dialect,
     /// Whether tokens carry their text; the parser needs only their kinds.
     payload: bool,
-    /// `type$`, `key%`: a reserved word with a type suffix is the name it spells, not the word.
+    /// `type$`, `key%`: a reserved word with a type suffix is the name it
+    /// spells, not the word.
     suffixed_names: bool,
     line: usize,
     error: Option<LexError>,
@@ -64,7 +66,9 @@ fn ids() -> &'static Ids {
     static IDS: OnceLock<Ids> = OnceLock::new();
     IDS.get_or_init(|| {
         let id = |spelling: &str| {
-            tables::TOKENS.iter().find_map(|(_, candidate, id, _)| candidate.eq_ignore_ascii_case(spelling).then_some(*id))
+            tables::TOKENS
+                .iter()
+                .find_map(|(_, candidate, id, _)| candidate.eq_ignore_ascii_case(spelling).then_some(*id))
         };
         let mut punct = [0; 128];
         for byte in "<>()?+-*/\\^=,#;:\n".bytes() {
@@ -73,7 +77,8 @@ fn ids() -> &'static Ids {
         let words = crate::front::words::NAMES
             .iter()
             .map(|name| {
-                let spelling = tables::TOKENS.iter().find(|(candidate, ..)| candidate == name).expect("word is a token").1;
+                let spelling =
+                    tables::TOKENS.iter().find(|(candidate, ..)| candidate == name).expect("word is a token").1;
                 id(spelling).expect("word")
             })
             .collect();
@@ -93,7 +98,11 @@ fn reserved(name: &str) -> Option<u16> {
     }
 }
 
-fn fail<T>(lex: &mut Lex, end: usize, message: &str) -> Result<T, ()> {
+fn fail<T>(
+    lex: &mut Lex,
+    end: usize,
+    message: &str,
+) -> Result<T, ()> {
     let line = lex.extras.line;
     lex.extras.error = Some(LexError { span: Span { line, start: lex.span().start, end }, message: message.into() });
     Err(())
@@ -125,7 +134,10 @@ fn punct_word(spelling: &str) -> TokenKind {
     TokenKind::Reserved(reserved(spelling).expect("local spelling exists in qbasbnf.prs"))
 }
 
-fn is_type_suffix(byte: u8, dialect: Dialect) -> bool {
+fn is_type_suffix(
+    byte: u8,
+    dialect: Dialect,
+) -> bool {
     matches!(byte, b'%' | b'&' | b'!' | b'#' | b'$') || (byte == b'@' && dialect.currency_suffix())
 }
 
@@ -140,11 +152,14 @@ fn word(lex: &mut Lex) -> TokenKind {
     }
     let name = lex.slice();
     let bare = name.trim_end_matches(['%', '&', '!', '#', '$']);
-    let found = reserved(name).or_else(|| reserved(bare).filter(|_| name.len() == bare.len() || !lex.extras.suffixed_names));
+    let found =
+        reserved(name).or_else(|| reserved(bare).filter(|_| name.len() == bare.len() || !lex.extras.suffixed_names));
     found
         .map(TokenKind::Reserved)
         .or_else(|| extension_keyword(bare).map(TokenKind::ExtensionKeyword))
-        .unwrap_or_else(|| TokenKind::Identifier(if lex.extras.payload { name.to_ascii_uppercase() } else { String::new() }))
+        .unwrap_or_else(
+            || TokenKind::Identifier(if lex.extras.payload { name.to_ascii_uppercase() } else { String::new() }),
+        )
 }
 
 /// The extension words are short, so an upper-cased copy fits the stack.
@@ -308,7 +323,8 @@ fn based(lex: &mut Lex) -> Result<TokenKind, ()> {
         _ => 8,
     };
     let digits = at;
-    while at < bytes.len() && if radix == 16 { bytes[at].is_ascii_hexdigit() } else { matches!(bytes[at], b'0'..=b'7') } {
+    while at < bytes.len() && if radix == 16 { bytes[at].is_ascii_hexdigit() } else { matches!(bytes[at], b'0'..=b'7') }
+    {
         at += 1;
     }
     if digits == at {
@@ -337,7 +353,10 @@ fn based(lex: &mut Lex) -> Result<TokenKind, ()> {
 }
 
 /// The same logical lines as the old lexer's, borrowed where nothing continues.
-pub(crate) fn logical_lines(source: &str, dialect: Dialect) -> Vec<(usize, Cow<'_, str>)> {
+pub(crate) fn logical_lines(
+    source: &str,
+    dialect: Dialect,
+) -> Vec<(usize, Cow<'_, str>)> {
     let mut out = Vec::new();
     let mut current = String::new();
     let mut begins = 1;
@@ -349,11 +368,19 @@ pub(crate) fn logical_lines(source: &str, dialect: Dialect) -> Vec<(usize, Cow<'
         let before = trimmed.strip_suffix('_').unwrap_or("");
         let word = before.len() - before.trim_end_matches(|c: char| c.is_ascii_alphanumeric()).len();
         let after_number = word > 0 && before[before.len() - word..].starts_with(|c: char| c.is_ascii_digit());
-        // BC takes a `_` ending the line as a continuation after anything that is not part of a name:
-        // a space, a comma, an operator, a parenthesis (`b AS INTEGER,_`)
-        let after_punctuation = before.chars().next_back().is_some_and(|c| !c.is_ascii_alphanumeric() && !matches!(c, '_' | '$' | '%' | '&' | '!' | '#' | '@' | '"' | '\''));
+        // BC takes a `_` ending the line as a continuation after anything that
+        // is not part of a name: a space, a comma, an operator, a parenthesis
+        // (`b AS INTEGER,_`)
+        let after_punctuation = before
+            .chars()
+            .next_back()
+            .is_some_and(
+                |c| !c.is_ascii_alphanumeric() && !matches!(c, '_' | '$' | '%' | '&' | '!' | '#' | '@' | '"' | '\''),
+            );
         let continued = trimmed.ends_with('_')
-            && (before.ends_with(char::is_whitespace) || after_punctuation || (dialect.tight_continuation() && after_number));
+            && (before.ends_with(char::is_whitespace)
+                || after_punctuation
+                || (dialect.tight_continuation() && after_number));
         if continued {
             current.push_str(trimmed[..trimmed.len() - 1].trim_end());
             current.push(' ');
@@ -370,19 +397,30 @@ pub(crate) fn logical_lines(source: &str, dialect: Dialect) -> Vec<(usize, Cow<'
     out
 }
 
-pub fn lex(source: &str, dialect: Dialect) -> Result<Vec<Token>, LexError> {
+pub fn lex(
+    source: &str,
+    dialect: Dialect,
+) -> Result<Vec<Token>, LexError> {
     lex_with(source, dialect, false)
 }
 
-/// `lex`, with `type$`-style words kept as the names they spell when `suffixed_names`.
-pub fn lex_with(source: &str, dialect: Dialect, suffixed_names: bool) -> Result<Vec<Token>, LexError> {
+/// `lex`, with `type$`-style words kept as the names they spell when
+/// `suffixed_names`.
+pub fn lex_with(
+    source: &str,
+    dialect: Dialect,
+    suffixed_names: bool,
+) -> Result<Vec<Token>, LexError> {
     if dialect.format_strings() {
         return crate::generated_parser::lex(source, dialect);
     }
     let newline = TokenKind::Reserved(ids().punct[usize::from(b'\n')]);
     let mut out = Vec::with_capacity(source.len() / 4);
     for (line_index, line) in logical_lines(source, dialect) {
-        let mut lexer = Raw::lexer_with_extras(&line, Context { dialect, payload: true, suffixed_names, line: line_index, error: None });
+        let mut lexer = Raw::lexer_with_extras(
+            &line,
+            Context { dialect, payload: true, suffixed_names, line: line_index, error: None },
+        );
         while let Some(item) = lexer.next() {
             let span = lexer.span();
             match item {
@@ -419,17 +457,28 @@ pub struct Lines<'a> {
 }
 
 impl<'a> Lines<'a> {
-    /// `None` where this lexer does not read the dialect (QuickrBASIC's `f"…"`).
-    pub fn new(source: &'a str, dialect: Dialect) -> Option<Self> {
+    /// `None` where this lexer does not read the dialect (QuickrBASIC's
+    /// `f"…"`).
+    pub fn new(
+        source: &'a str,
+        dialect: Dialect,
+    ) -> Option<Self> {
         (!dialect.format_strings()).then(|| Self { lines: logical_lines(source, dialect), dialect })
     }
 
-    /// The tokens as the parser pulls them, kinds only, with each one's span pushed to `spans`.
-    pub fn stream<'s>(&'s self, spans: &'s mut Vec<Span>) -> Stream<'s> {
+    /// The tokens as the parser pulls them, kinds only, with each one's span
+    /// pushed to `spans`.
+    pub fn stream<'s>(
+        &'s self,
+        spans: &'s mut Vec<Span>,
+    ) -> Stream<'s> {
         self.stream_with(Some(spans))
     }
 
-    fn stream_with<'s>(&'s self, spans: Option<&'s mut Vec<Span>>) -> Stream<'s> {
+    fn stream_with<'s>(
+        &'s self,
+        spans: Option<&'s mut Vec<Span>>,
+    ) -> Stream<'s> {
         Stream {
             lines: &self.lines,
             dialect: self.dialect,
@@ -510,15 +559,24 @@ impl<'s> Stream<'s> {
                 }
                 Some(Err(())) => {
                     let range = lexer.span();
-                    let error = lexer.extras.error.take().unwrap_or_else(|| {
-                        let byte = self.line_text.as_bytes()[range.start];
-                        let message = if byte == b'_' {
-                            "identifier cannot begin with underscore".to_owned()
-                        } else {
-                            format!("unknown character {:?}", char::from(byte))
-                        };
-                        LexError { span: Span { line: self.line_index, start: range.start, end: range.start + 1 }, message }
-                    });
+                    let error = lexer
+                        .extras
+                        .error
+                        .take()
+                        .unwrap_or_else(
+                            || {
+                                let byte = self.line_text.as_bytes()[range.start];
+                                let message = if byte == b'_' {
+                                    "identifier cannot begin with underscore".to_owned()
+                                } else {
+                                    format!("unknown character {:?}", char::from(byte))
+                                };
+                                LexError {
+                                    span: Span { line: self.line_index, start: range.start, end: range.start + 1 },
+                                    message,
+                                }
+                            },
+                        );
                     self.next_line = self.lines.len();
                     self.ended = true;
                     self.lexer = None;
@@ -568,8 +626,12 @@ impl<'s> Iterator for Stream<'s> {
     }
 }
 
-/// Every token of a source, kinds and spans, before any parsing: for a parser that wants the vector.
-pub fn prelex(source: &str, dialect: Dialect) -> Option<Result<(Vec<Tok>, Vec<Span>), LexError>> {
+/// Every token of a source, kinds and spans, before any parsing: for a parser
+/// that wants the vector.
+pub fn prelex(
+    source: &str,
+    dialect: Dialect,
+) -> Option<Result<(Vec<Tok>, Vec<Span>), LexError>> {
     let lines = Lines::new(source, dialect)?;
     let mut spans = Vec::with_capacity(source.len() / 4);
     let mut toks = Vec::with_capacity(source.len() / 4);
