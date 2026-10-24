@@ -1962,3 +1962,25 @@ fn a_far_null_is_two_zero_words() {
     selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
+
+const M16_HUGE_MEMSET: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+define cc 1005 void @f(ptr addrspace(3) %p, i32 %n) addrspace(1) {
+entry:
+  call void @llvm.memset.p3.i32(ptr addrspace(3) %p, i8 1, i32 %n, i1 false)
+  ret void
+}
+declare void @llvm.memset.p3.i32(ptr addrspace(3), i8, i32, i1)
+";
+
+/// A fill of `n` bytes through a huge pointer crosses segment ends and `n`
+/// outgrows `cx`: a `rep stosb` filled only the first 64K (huge_runs gave a
+/// wrong sum). The DAG path refuses it and the old selector's stepped loop
+/// stays.
+#[test]
+fn a_memset_through_a_huge_pointer_is_refused_not_a_rep_stos() {
+    let module = llrm_mir::parse::module(M16_HUGE_MEMSET).expect("parses");
+    let refused = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .err()
+        .expect("refused");
+    assert!(refused.0.contains("huge pointer"), "{}", refused.0);
+}
