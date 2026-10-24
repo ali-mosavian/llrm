@@ -1845,15 +1845,15 @@ fn an_f32_prints_the_shortest_text_that_reads_back_as_it() {
 }
 
 #[test]
-fn the_planets_example_prints_floats_as_the_shortest_text_that_reads_back() {
+fn the_planets_example_prints_floats_to_a_thousandth_and_the_constants_as_the_shortest_text() {
     let source = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/examples/planets.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
-        "Mercury: g 3.7013390935421295 m/s2, orbit 47877.7475278498 m/s, year 87.96015390047978 days\n\
-         Earth: g 9.819532032815959 m/s2, orbit 29788.22982930735 m/s, year 365.21871445326343 days\n\
-         Jupiter: g 25.917397035788568 m/s2, orbit 13058.13590428579 m/s, year 4335.543604886578 days\n\
+        "Mercury: g 3.701 m/s2, orbit 47877.748 m/s, year 87.96 days\n\
+         Earth: g 9.82 m/s2, orbit 29788.23 m/s, year 365.219 days\n\
+         Jupiter: g 25.917 m/s2, orbit 13058.136 m/s, year 4335.544 days\n\
          G 6.674e-11, sun 1.989e+30 kg, one part in 5.0276520864756165e-31\n\
-         thermometer mean 10.037499 C, first 21.5, zero 0.0\n"
+         thermometer mean 10.04 C, first 21.5, zero 0.0\n"
     );
 }
 
