@@ -26,3 +26,6 @@ clang's `CodeGenFunction::GenerateCode` is 11.73 M inclusive on the same file an
 | 4 | `String` clones and growth in `instruction`/`converted` | `CGBuilder` in place | -1.2 | 2026-12-08 |
 
 The sum, -6 M, is more than the 3.6 M gap: the target is the pin's 13.3 M, and a row that does not move its number is dropped.
+
+## Remaining gap (numbered row, 2026-10-24)
+F3-R5: rows 1, 2a, 3 and 4 move `translate::program` by about 2 M Ir of 16.9 M (ledger, rows' PRs: -0.83, -0.24, -0.48, and row 4's), against the pin's 13.3 M: about 2 M of the 3.6 M gap stays. What is left is the long tail of the profile (4.5 M of functions under 0.18 M each), `Types::of`/`c` (1.17 M, the second half of row 2), and the `Vec<String>` the record stream builds (`hir::unit`, F1, not F3). Owner w-1, exit 2026-12-08: re-profile F3 at the tip and either close the gap with named rows or record why it stays.
