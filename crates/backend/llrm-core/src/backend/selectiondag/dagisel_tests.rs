@@ -267,3 +267,23 @@ fn every_own_node_has_a_pin_id() {
         assert_ne!(pin_opcode(node), u16::MAX, "{node:?}");
     }
 }
+
+/// Every `Target(24xxx)` of `x86isd.rs` (ours, not the pin's) is a line of
+/// `own_ids.txt`: `LLRM_CALL_FLAGS` (24585) was added to the node list and not
+/// to the file, so the generated ids did not know it.
+#[test]
+fn every_own_target_id_is_in_own_ids() {
+    let nodes = include_str!("../../../../../../crates/target/llrm-x86/src/dag/x86isd.rs");
+    let ids = include_str!("../../../../../../tools/dagisel/own_ids.txt");
+    let listed: Vec<(&str, &str)> = ids.lines().filter_map(|line| line.split_once(' ')).collect();
+    let mut missing = Vec::new();
+    for line in nodes.lines().filter(|line| line.starts_with("pub const ")) {
+        let Some((name, rest)) = line["pub const ".len()..].split_once(':') else { continue };
+        let Some(number) = rest.split("Target(").nth(1).and_then(|tail| tail.split(')').next()) else { continue };
+        if number.starts_with("24") && !listed.iter().any(|(id, n)| id.ends_with(&format!("::{name}")) && *n == number)
+        {
+            missing.push(format!("{name} {number}"));
+        }
+    }
+    assert!(missing.is_empty(), "not in tools/dagisel/own_ids.txt: {missing:?}");
+}
