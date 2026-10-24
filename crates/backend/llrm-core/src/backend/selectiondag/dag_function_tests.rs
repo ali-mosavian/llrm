@@ -1824,6 +1824,43 @@ fn a_string_operation_on_an_element_of_a_global_knows_its_segment() {
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
 
+/// The load of an incoming stack argument carried no invariant flag to LIR, so
+/// MachineCSE and the sinker took it for memory a store may change: the pin's
+/// `LowerMemArgument` makes the fixed object immutable and
+/// `isDereferenceableInvariantLoad` takes the load.
+#[test]
+fn the_load_of_an_incoming_stack_argument_is_an_invariant_load_in_lir() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a, i32 %b) {
+entry:
+  ret i32 %a
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let flags: Vec<bool> = done
+        .body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| {
+            one.what
+                .as_ref()
+                .is_some_and(
+                    |what| what.op == Operation::Move
+                        && matches!(
+                            what.sources.as_slice(),
+                            [crate::model::ir::Loc::Mem(cell)] if cell.addr.as_ref().is_some_and(|a| a.space == crate::model::ir::Space::Frame)
+                        ),
+                )
+        })
+        .map(|one| one.invariant())
+        .collect();
+    assert!(!flags.is_empty(), "the premise: the argument is loaded from the frame");
+    assert!(flags.iter().all(|&flag| flag), "{flags:?}");
+}
+
 const M16_DOUBLE_ARGUMENT: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
 declare void @g(double)
 define void @f(double %x) {

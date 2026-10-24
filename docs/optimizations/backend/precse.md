@@ -59,11 +59,12 @@ once TwoAddress and the coalescer write over it in place: compare_to_int64.c
 -Os 346 to 361 bytes, grep -O2 -m32 +21.9% instructions). Exit: the
 allocator remakes a value with two defs. (This was E3.)
 
-DEVIATE CSE3 (owner w-1, exit 2026-11-08): the old selector marks a load
-invariant when it reads a constant global or the load says so
-(`!invariant.load`, a `noalias readonly` argument). The pin also takes GOT and
-constant-pool loads and the immutable fixed stack objects (incoming
-arguments), and the DAG selector marks no load: those loads are kept.
+DEVIATE CSE3 (owner w-1, exit 2026-11-08): both selectors mark a load
+invariant when it reads a constant global or says so (`!invariant.load`, a
+`noalias readonly` argument), and the DAG selector the load of an incoming
+stack argument (an immutable fixed object). The pin also takes GOT and
+constant-pool loads, which ours lacks; the old selector reads an incoming
+argument as a memory operand of its reader, not a load of its own.
 
 DEVIATE CSE5 (owner funcattrs-port, exit 2026-11-13): `machinecse.rs`, the
 same elimination after allocation, is ours alone (the pin runs MachineCSE

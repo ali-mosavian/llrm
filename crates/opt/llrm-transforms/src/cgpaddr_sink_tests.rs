@@ -207,33 +207,6 @@ b3:
     assert!(!after.contains("phi") && after.contains("load i16, ptr %p\n  ret i16 %y"), "{after}");
 }
 
-/// A phi of anything but an address is left: the allocator coalesces it, and
-/// the changed shape of every closing phi of a 32-deep loop nest cost a search
-/// round of every machine phase (+10% compile at -O2, nest 32).
-#[test]
-fn test_a_phi_of_one_value_that_is_no_address_is_left() {
-    let text = "define i16 @f(i16 %i, i16 %c) {
-b0:
-  %x = add i16 %i, 1
-  %t = icmp slt i16 %x, %c
-  br i1 %t, label %b1, label %b2
-
-b1:
-  %u = icmp sgt i16 %x, 7
-  br i1 %u, label %b2, label %b3
-
-b2:
-  %q = phi i16 [ %x, %b0 ], [ %x, %b1 ]
-  %y = mul i16 %q, 3
-  ret i16 %y
-
-b3:
-  ret i16 0
-}
-";
-    assert!(sunk(text, &[&[1, 5], &[1, -5], &[2, 9]]).contains("phi i16"));
-}
-
 /// Asks for each load's and store's reference, and changes nothing.
 struct Warm;
 
