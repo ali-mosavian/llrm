@@ -2,11 +2,6 @@
 # ids: "unit <crate>::<test>" (cargo lib test) and "run <program name>" (tests/run).
 
 [[xfail]]
-id = "unit llrm-nib::nibstages::tests::test_the_dump_shows_the_code_the_compiler_emits"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
 id = "unit llrm-nib::test_debug::a_parameter_the_optimiser_removed_is_in_the_model_with_no_location"
 issue = 2848
 owner = "unassigned"
