@@ -20,7 +20,7 @@ clang's `CodeGenFunction::GenerateCode` is 11.73 M inclusive on the same file an
 ## Rows (one PR each; ledger Ir before and after; objects identical)
 | # | Change | Pin | Target M | Date |
 |---|---|---|--:|---|
-| 1 | a node's numeric fields are parsed once, where the node is made | AST fields are typed | -1.4 | 2026-11-24 (touches `hir::Node`: w-5's file, asked first) |
+| 1 | the record stream's numbers are read by a byte loop, not `trim().parse()` (done, ledger -0.83 M; typing `hir::Node`'s fields stays an option) | AST fields are typed | -1.4 | done 2026-10-24 |
 | 2 | `Unit::canonical_type` and `Types::of`/`c` memoized per type id | `CodeGenTypes::TypeCache` | -1.5 | 2026-12-01 |
 | 3 | the sets and maps by node id become dense vectors | `DenseMap`, `LocalDeclMap` | -2.0 | 2026-12-04 |
 | 4 | `String` clones and growth in `instruction`/`converted` | `CGBuilder` in place | -1.2 | 2026-12-08 |
