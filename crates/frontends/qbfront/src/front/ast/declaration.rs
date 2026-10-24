@@ -100,7 +100,29 @@ impl Ast<'_> {
         Some(TypeName::Integral { width, signed })
     }
 
+    /// A type after AS. QuickrBASIC adds tuples, `(INTEGER, LONG)`, and arrays,
+    /// `LONG()`, for a FUNCTION's result.
     pub(super) fn declaration_type(&mut self) -> R<TypeName> {
+        if self.dialect.python_expressions() {
+            if self.eat(Kw::LParen) {
+                let mut types = vec![self.declaration_type()?];
+                while self.eat(Kw::Comma) {
+                    types.push(self.declaration_type()?);
+                }
+                self.expect(Kw::RParen)?;
+                return if types.len() > 1 { Ok(TypeName::Tuple(types)) } else { self.fail() };
+            }
+            let element = self.element_type()?;
+            if self.is(Kw::LParen) && self.is_n(1, Kw::RParen) {
+                self.i += 2;
+                return Ok(TypeName::Array(Box::new(element)));
+            }
+            return Ok(element);
+        }
+        self.element_type()
+    }
+
+    fn element_type(&mut self) -> R<TypeName> {
         if let Some(integral) = self.signed_type() {
             return Ok(integral);
         }
@@ -113,7 +135,15 @@ impl Ast<'_> {
                 Some(Kw::DOUBLE) => TypeName::Double,
                 Some(Kw::STRING) => TypeName::String,
                 Some(Kw::ANY) => TypeName::Named("ANY".into()),
-                _ => TypeName::Named(self.name_at(at).ok_or(at)?),
+                // QuickrBASIC lets a record type take a word BC reserves (`AS
+                // Point`)
+                _ => TypeName::Named(match (self.name_at(at), &self.tokens[at].kind) {
+                    (Some(name), _) => name,
+                    (None, TokenKind::Reserved(id)) if self.dialect.format_strings() => {
+                        tables::token_spelling(*id).map(str::to_ascii_uppercase).ok_or(at)?
+                    }
+                    _ => return Err(at),
+                }),
             },
             TokenKind::Identifier(name) if name == "CURRENCY" && self.dialect.currency_suffix() => TypeName::Currency,
             TokenKind::Identifier(name) => TypeName::Named(name.clone()),
@@ -538,7 +568,7 @@ impl Ast<'_> {
                 return self.fail();
             }
             let given = self.declaration_type()?;
-            if matches!(given, TypeName::Named(_)) {
+            if matches!(given, TypeName::Named(_)) && !self.dialect.record_results() {
                 return self.fail();
             }
             result = Some(given);

@@ -59,7 +59,7 @@ impl Ast<'_> {
 
     pub(super) fn starts_exp(&self) -> bool {
         match self.tok_n(0) {
-            Some(Tok::Int | Tok::Real | Tok::Str | Tok::Ident | Tok::FnWord) => true,
+            Some(Tok::Int | Tok::Real | Tok::Str | Tok::Format | Tok::Ident | Tok::FnWord) => true,
             Some(Tok::Kw(k)) => {
                 let c = class(*k);
                 c & (FN0 | FN_WORD | CTX_WORD) != 0
