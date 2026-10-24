@@ -1264,8 +1264,8 @@ impl MemorySSA<'_> {
         }
         let location = MemoryLocation::new(cell.pointer?, LocationSize::Precise(u64::from(cell.width)));
         let mut aggregate = crate::aggregate::AggregateAA::new();
-        aggregate.add_aa_result(crate::typebasedaa::TypeBasedAA::new(&self.unit));
         aggregate.add_aa_result(crate::basicaa::BasicAA::new(&self.unit));
+        aggregate.add_aa_result(crate::typebasedaa::TypeBasedAA::new(&self.unit));
         if let Some(info) = self.unit.globals_mr {
             aggregate.add_aa_result(crate::globalsmodref::GlobalsAAResult::new(&self.unit, info));
         }
