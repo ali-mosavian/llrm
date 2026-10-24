@@ -591,9 +591,14 @@ impl ScalarEvolution {
             }
         }
 
+        if let Some(&made) = self.not_cache.get(&v) {
+            return made;
+        }
         let ty = self.get_effective_scev_type(cx, self.type_of(v));
         let minus_one = self.get_minus_one(cx, ty);
-        self.get_minus_scev(cx, Use::of(minus_one), Use::of(v), flags::NONE, 0)
+        let made = self.get_minus_scev(cx, Use::of(minus_one), Use::of(v), flags::NONE, 0);
+        self.not_cache.insert(v, made);
+        made
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L4632

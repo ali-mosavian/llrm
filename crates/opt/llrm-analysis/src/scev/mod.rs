@@ -210,6 +210,9 @@ pub struct ScalarEvolution {
     pub(super) signed_ranges: HashMap<Scev, llrm_mir::constantrange::ConstantRange>,
     /// `ConstantMultipleCache`.
     pub(super) constant_multiple_cache: HashMap<Scev, Ap>,
+    /// `getNotSCEV` of a non-constant: built once per expression (it is
+    /// asked 728 times for 426 builds on d_faces, 11 K Ir each).
+    pub(super) not_cache: HashMap<Scev, Scev>,
     /// `LoopDispositions`: by expression, as LLVM's, so that forgetting one
     /// does not scan them all.
     pub(super) loop_dispositions: HashMap<Scev, Vec<(Option<BlockId>, disposition::LoopDisposition)>>,
@@ -263,6 +266,7 @@ impl ScalarEvolution {
             unsigned_ranges: HashMap::default(),
             signed_ranges: HashMap::default(),
             constant_multiple_cache: HashMap::default(),
+            not_cache: HashMap::default(),
             loop_dispositions: HashMap::default(),
             block_dispositions: HashMap::default(),
             value_expr_map: IdMap::new(),
