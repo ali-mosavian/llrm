@@ -522,6 +522,19 @@ impl Builder<'_> {
         if volatile {
             return Err(Refused("volatile memory intrinsic"));
         }
+        // `rep stos`/`rep movs` and the inline moves step one segment: a huge
+        // pointer's run can cross the end of it (and its count outgrow
+        // `cx`), which the old selector's stepped loop handles and the
+        // DAG path does not yet (huge_runs gave wrong sums, not a refusal).
+        let huge = |this: &Self, operand: Operand| {
+            matches!(
+                this.function.operand_type(&this.module.context, operand).map(|ty| this.module.context.types.get(ty)),
+                Some(llrm_mir::types::Type::Pointer(space)) if this.layout.carries(*space)
+            )
+        };
+        if huge(self, operands[0]) || (!matches!(which, Intrinsic::MemSet) && huge(self, operands[1])) {
+            return Err(Refused("memory intrinsic through a huge pointer"));
+        }
         let dst = self.get_value(operands[0])?;
         let other = self.get_value(operands[1])?;
         let size = self.get_value(operands[2])?;
