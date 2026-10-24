@@ -1794,8 +1794,9 @@ mod tests {
     /// in one target's file. The profile adds it where the layout has the x87
     /// type.
     /// A runtime that names no `libcalls` has none (`memcpy` stays `rep movs`
-    /// there), a named one is a call: the m16 runtime names `memmove` and the m32
-    /// one `memcpy`, `memmove` and `memset` (runtime/c/x86-m32/ext.asm).
+    /// there), a named one is a call: the m16 runtime names `memmove` and the
+    /// m32 one `memcpy`, `memmove` and `memset`
+    /// (runtime/c/x86-m32/ext.asm).
     #[test]
     fn test_a_runtime_names_its_libcalls_and_none_by_default() {
         let table: toml::Table = "libcalls = [\"memcpy\"]".parse().unwrap();
