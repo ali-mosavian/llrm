@@ -7782,7 +7782,7 @@ impl Compiler {
         };
         if let Operand::Constant(_, Number::Integer(value)) = value {
             if !(-65536..=65535).contains(&value) {
-                return self.fail("this number is too large for its type; use a LONG (&) or a floating-point type (! or #)");
+                return self.fail("Math overflow: this number is too large for its type; use a LONG (&) or a floating-point type (! or #)");
             }
             return Ok(Operand::Constant(INTEGER, Number::Integer(value as u16 as i16 as i64)));
         }
@@ -8749,7 +8749,7 @@ impl Compiler {
             }
             if let Some(range) = integer_range(to) {
                 if !range.contains(&value) {
-                    return self.fail("this number is too large for its type; use a LONG (&) or a floating-point type (! or #)");
+                    return self.fail("Math overflow: this number is too large for its type; use a LONG (&) or a floating-point type (! or #)");
                 }
                 return Ok(Operand::Constant(to, Number::Integer(value)));
             }
@@ -8845,7 +8845,7 @@ impl Compiler {
             return Ok(variable.clone());
         }
         if self.dialect.explicit_declarations() {
-            return self.fail(format!("`{name}` has not been given a value or declared; check the spelling, or DIM it (OPTION EXPLICIT requires every variable to be declared)"));
+            return self.fail(format!("Variable not defined: `{name}` has not been declared; check the spelling, or DIM it (OPTION EXPLICIT requires every variable to be declared)"));
         }
         let declaration = Declaration {
             name: key.clone(),
