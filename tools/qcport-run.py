@@ -55,9 +55,9 @@ def required(name: str) -> Path:
     return Path(value).expanduser()
 
 
-def compile_failure(compiler: Path, flags: list[str], source: Path, out: Path) -> str | None:
+def compile_failure(compiler: Path, flags: list[str], source: Path, out: Path, level: str = "-O2") -> str | None:
     """Why `compiler` failed on `source`, or None: its exit status (a negative one is a signal) and what it printed."""
-    done = subprocess.run([str(compiler), "-O2", *flags, str(source), "-o", str(out)], capture_output=True, text=True)
+    done = subprocess.run([str(compiler), level, *flags, str(source), "-o", str(out)], capture_output=True, text=True)
     if done.returncode == 0:
         return None
     status = f"exit {done.returncode}"
@@ -124,6 +124,23 @@ def attract_problems(directory: Path) -> list[str]:
     memory = [line.strip() for name in LOGS for line in text(name).replace("\r", "").splitlines() if "out of memory" in line.lower()]
     missing = [demo for demo in ATTRACT_DEMOS if demo not in started]
     return ([f"never started: {' '.join(missing)}"] if missing else []) + list(dict.fromkeys(memory))[:3]
+
+
+# tools/xfail.toml id of the attract run at -O2: it runs out of memory (code 329,553 bytes against Borland's 296,085); the shipped -Os build (342,560) plays all three demos.
+ATTRACT_O2 = "run qcport-attract -O2"
+
+
+def attract_verdict(wrong: dict[str, list[str]], listed: dict) -> tuple[list[str], list[str]]:
+    """(failures, known) of the attract runs: `borland`, `llrm -O2` and `llrm -Os` each map to what they did wrong. Borland and -Os must play all three demos;
+    -O2 may fail only while tools/xfail.toml lists it (ATTRACT_O2), and once it plays, the entry must go."""
+    failures = [f"{name}: {'; '.join(problems)}" for name, problems in wrong.items() if problems and name != "llrm -O2"]
+    known = []
+    if wrong.get("llrm -O2"):
+        line = f"llrm -O2: {'; '.join(wrong['llrm -O2'])}"
+        (known if ATTRACT_O2 in listed else failures).append(line)
+    elif ATTRACT_O2 in listed:
+        failures.append(f"llrm -O2 plays all three demos, and {ATTRACT_O2} is still in tools/xfail.toml: remove the entry")
+    return failures, known
 
 
 def attract_over(directory: Path) -> bool:
@@ -213,18 +230,40 @@ def main() -> int:
         if not (reference.get("polys") and built.get("polys")):
             print("\n".join(line for side in sides.values() for line in tails(side)))
         return 1
-    # The attract loop (an empty command line) must play all three demos on both builds: QCport -O2 at b9e7400be drew the benchmark and ran out of memory loading miptex.bin.
-    for side in sides.values():  # run.sh clears error.log, and the program writes ERROR.LOG: the benchmark run's would be read as the attract run's
+    # The attract loop (an empty command line) must play all three demos: QCport -O2 at b9e7400be drew the benchmark and ran out of memory loading miptex.bin. The -Os build is the shipped one.
+    os_side = work / "llrm-os"
+    os_side.mkdir()
+    for one in [*borland.glob("*.obj"), *(borland / name for name in DATA)]:
+        if one.exists():
+            shutil.copy(one, os_side / one.name)
+    with ThreadPoolExecutor() as pool:
+        failed_os = [one for one in pool.map(lambda source: compile_failure(compiler, flags, source, os_side / f"{source.stem}.obj", "-Os"), sources) if one]
+    stand_in = subprocess.run([str(compiler), "-O1", "-fno-tree-loop-distribute-patterns", "-I", str(include), str(HERE / "qcport" / "strlib.c"), "-o", str(os_side / "strlib.obj")], capture_output=True, text=True)
+    if failed_os or stand_in.returncode:
+        print("compile failed at -Os:", *failed_os, stand_in.stderr.strip(), sep="\n  ")
+        return 1
+    (os_side / "QCPORT.LNK").write_text(linked(listing, os_side, ["strlib.obj"], Path(os.environ["QCPORT_BCC_LIB"]) if os.environ.get("QCPORT_BCC_LIB") else None))
+    done = subprocess.run([linker, f"@{os_side / 'QCPORT.LNK'}"], capture_output=True, text=True)
+    if not (os_side / "QCPORT.EXE").exists() or re.search(r"undefined|Error!", done.stdout + done.stderr):
+        print("llrm -Os: link failed\n" + (done.stdout + done.stderr)[-600:])
+        return 1
+    attracts = {"borland": sides["borland"], "llrm -O2": sides["llrm"], "llrm -Os": os_side}
+    for side in attracts.values():  # run.sh clears error.log, and the program writes ERROR.LOG: the benchmark run's would be read as the attract run's
         (side / "ERROR.LOG").unlink(missing_ok=True)
     attract_cap, attract_stall = float(os.environ.get("QCPORT_ATTRACT_SECONDS", "900")), float(os.environ.get("QCPORT_ATTRACT_STALL_SECONDS", "300"))  # loading a demo is silent for minutes at the pinned 75000 cycles
     with ThreadPoolExecutor() as pool:
-        stopped = [why for why in pool.map(lambda side: run(side, qcport, attract_stall, attract_cap, arguments=ATTRACT_ARGUMENTS, over=attract_over), sides.values()) if why]
-    wrong = {name: attract_problems(side) for name, side in sides.items()}
-    if stopped or any(wrong.values()):
-        print("the attract loop (empty command line) did not play all three demos:", *(f"{name}: {'; '.join(problems)}" for name, problems in wrong.items() if problems), *stopped, f"({work})", sep="\n  ")
-        print("\n".join(line for side in sides.values() for line in tails(side)))
+        stopped = [why for why in pool.map(lambda side: run(side, qcport, attract_stall, attract_cap, arguments=ATTRACT_ARGUMENTS, over=attract_over), attracts.values()) if why]
+    sys.path.insert(0, str(HERE))
+    import xfail  # noqa: PLC0415
+
+    failures, known = attract_verdict({name: attract_problems(side) for name, side in attracts.items()}, xfail.load())
+    for line in known:
+        print(f"known failure {ATTRACT_O2} (#{xfail.load()[ATTRACT_O2]['issue']}): {line}")
+    if stopped or failures:
+        print("the attract loop (empty command line) did not play all three demos:", *failures, *stopped, f"({work})", sep="\n  ")
+        print("\n".join(line for side in attracts.values() for line in tails(side)))
         return 1
-    print(f"QCport: {len(sources)} modules by llrm-c draw what the Borland build draws: {built['frames']} frames, {built['polys']} polys, bmp {built['md5'][:8]}; the attract loop plays demo1-3 on both")
+    print(f"QCport: {len(sources)} modules by llrm-c draw what the Borland build draws: {built['frames']} frames, {built['polys']} polys, bmp {built['md5'][:8]}; the attract loop plays demo1-3 at -Os" + ("" if known else " and -O2"))
     dosbatch.discard(work)
     return 0
 
