@@ -53,7 +53,7 @@ impl Checker {
                     Some(length) => {
                         let ok = self
                             .constant_expr(length)
-                            .and_then(|typed| typed.constant)
+                            .and_then(|typed| typed.known())
                             .is_some_and(|c| (1.0..=32767.0).contains(&c));
                         if !ok {
                             self.err(field.span, "Integer between 1 and 32767 required");
@@ -83,7 +83,7 @@ impl Checker {
             };
             if let (Ty::Str(_), Some(length)) = (&ty, &field.fixed_length) {
                 if let Some(typed) = self.constant_expr(length) {
-                    ty = Ty::Str(typed.constant.map(|c| c as usize));
+                    ty = Ty::Str(typed.known().map(|c| c as usize));
                 }
             }
             let mut size = self.size_of(&ty);
@@ -156,7 +156,7 @@ impl Checker {
             self.err(bound.span(), "Type mismatch");
             return None;
         }
-        let value = typed.constant? as i64;
+        let value = typed.known()? as i64;
         if !(-32768..=32767).contains(&value) {
             self.err(bound.span(), "Math overflow");
             return None;

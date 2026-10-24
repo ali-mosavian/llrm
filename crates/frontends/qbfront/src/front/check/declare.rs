@@ -43,7 +43,7 @@ impl Checker {
         };
         if let (Ty::Str(_), Some(length)) = (&ty, &d.fixed_length) {
             if let Some(typed) = self.constant_expr(length) {
-                ty = Ty::Str(typed.constant.map(|c| c as usize));
+                ty = Ty::Str(typed.known().map(|c| c as usize));
             }
         }
         if d.bounds.len() > 60 {
@@ -53,9 +53,10 @@ impl Checker {
         let mut constant_bounds = true;
         for bound in &d.bounds {
             if let Some(lower) = &bound.lower {
-                constant_bounds &= self.integer(lower).is_some_and(|typed| typed.constant.is_some());
+                constant_bounds &= self.integer(lower).is_some_and(|typed| self.static_bound(lower, &typed).is_some());
             }
-            constant_bounds &= self.integer(&bound.upper).is_some_and(|typed| typed.constant.is_some());
+            constant_bounds &=
+                self.integer(&bound.upper).is_some_and(|typed| self.static_bound(&bound.upper, &typed).is_some());
         }
         let key = stem(&d.name).to_owned();
         let as_declared = d.type_name.is_some() && Ty::of_suffix(&d.name).is_none();
@@ -132,23 +133,113 @@ impl Checker {
             self.err(span, "Duplicate definition");
             return;
         }
+        let dynamic = redim
+            || d.dynamic
+            || (d.array && d.bounds.is_empty())
+            // variable bounds, or an automatic array in a procedure that is
+            // not STATIC
+            || (d.array && !constant_bounds)
+            || (d.array && self.procedure.is_some() && !self.static_scope);
+        if d.array && !d.bounds.is_empty() && constant_bounds {
+            if !self.array_fits(&ty, &d.bounds, dynamic, span) {
+                return;
+            }
+        }
         let var = Var {
             ty,
             rank: d.array.then_some(if d.bounds.is_empty() { usize::MAX } else { d.bounds.len() }),
             declared: as_declared,
             shared: d.shared,
-            dynamic: redim
-                || d.dynamic
-                || (d.array && d.bounds.is_empty())
-                // variable bounds, or an automatic array in a procedure that is
-                // not STATIC
-                || (d.array && !constant_bounds)
-                || (d.array && self.procedure.is_some() && !self.static_scope),
+            dynamic,
             explicit: true,
             suffixed: Ty::of_suffix(&d.name).is_some(),
             redimmed: redim,
         };
         self.scope.vars.entry(key).or_default().push(var);
+    }
+
+    /// Whether an array with these constant bounds can be made: the lower bound
+    /// is not past the upper, a static array is no larger than 64 KB, and the
+    /// static arrays together leave BC its own data.
+    pub(super) fn array_fits(
+        &mut self,
+        element: &Ty,
+        bounds: &[crate::syntax::Bound],
+        dynamic: bool,
+        span: Span,
+    ) -> bool {
+        let mut elements = 1usize;
+        for bound in bounds {
+            let Some(upper) = self.constant_expr_quiet(&bound.upper) else { return true };
+            let lower = match &bound.lower {
+                Some(lower) => match self.constant_expr_quiet(lower) {
+                    Some(lower) => lower,
+                    None => return true,
+                },
+                None => self.option_base,
+            };
+            if lower > upper {
+                self.err(span, "Lower bound exceeds upper bound");
+                return false;
+            }
+            elements = elements.saturating_mul((upper - lower + 1) as usize);
+        }
+        if dynamic {
+            return true;
+        }
+        // a string array holds a descriptor of 4 bytes per element
+        let each = match element {
+            Ty::Str(None) => 4,
+            other => self.size_of(other),
+        };
+        let bytes = elements.saturating_mul(each);
+        if bytes > 65535 {
+            self.err(span, "Array too big");
+            return false;
+        }
+        self.static_bytes += bytes;
+        if self.static_bytes > 65528 {
+            self.err(span, "Data-memory overflow");
+            return false;
+        }
+        true
+    }
+
+    /// The value of an array bound BC takes as a compile-time constant: an
+    /// integer it folds from a literal, a sign on one, or a CONST. NOT,
+    /// arithmetic and `^` leave the bound to run time, and the array dynamic. A
+    /// sign on the literal 32768 is an INTEGER in PDS and VBDOS (`-32768`) and
+    /// a LONG in QB 4.5, which then folds nothing.
+    pub(super) fn static_bound(
+        &self,
+        expr: &Expr,
+        typed: &Typed,
+    ) -> Option<i64> {
+        fn plain(expr: &Expr) -> bool {
+            match expr {
+                Expr::Literal(..) | Expr::Name(..) => true,
+                Expr::Unary { op: Unary::Negative | Unary::Positive, operand, .. } => plain(operand),
+                _ => false,
+            }
+        }
+        let wide = !matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45);
+        match (typed.constant, &typed.ty) {
+            (Some(value), Ty::Int) if plain(expr) => Some(value.round() as i64),
+            (Some(value), Ty::Long) if plain(expr) && wide => Some(value.round() as i64),
+            _ => None,
+        }
+    }
+
+    /// The integer value of a bound that is a constant expression, without
+    /// reporting anything.
+    pub(super) fn constant_expr_quiet(
+        &mut self,
+        expr: &Expr,
+    ) -> Option<i64> {
+        let errors = self.errors.len();
+        let value = self.expr(expr).and_then(|typed| self.static_bound(expr, &typed));
+        self.errors.truncate(errors);
+        value
     }
 
     /// Why declaring a scalar `name` of type `ty` clashes with the variables

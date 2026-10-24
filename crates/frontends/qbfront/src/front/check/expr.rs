@@ -74,7 +74,11 @@ impl Checker {
                     Typed { constant: parse_real(text), ..Typed::value(Ty::Currency) }
                 }
                 Literal::Real(text, TypeName::Double) => {
-                    Typed { constant: parse_real(text), ..Typed::value(Ty::Double) }
+                    let constant = parse_real(text);
+                    if constant.is_some_and(f64::is_infinite) {
+                        self.err(expr.span(), "Overflow in numeric constant");
+                    }
+                    Typed { constant, ..Typed::value(Ty::Double) }
                 }
                 Literal::Real(text, _) => {
                     let constant = parse_real(text);
@@ -112,14 +116,26 @@ impl Checker {
                         self.err(*span, "Wrong number of dimensions");
                         return None;
                     }
-                    return ok.then_some(Typed { variable: true, constant: None, array: None, ..base_typed });
+                    return ok.then_some(Typed {
+                        variable: true,
+                        constant: None,
+                        unfolded: None,
+                        array: None,
+                        ..base_typed
+                    });
                 }
                 // an indexed property of a VBDOS form or control
                 if base_typed.ty == Ty::Variant {
                     for index in indices {
                         self.expr(index);
                     }
-                    return Some(Typed { ty: Ty::Variant, variable: true, constant: None, array: None });
+                    return Some(Typed {
+                        ty: Ty::Variant,
+                        variable: true,
+                        constant: None,
+                        unfolded: None,
+                        array: None,
+                    });
                 }
                 self.err(*span, "Syntax error");
                 None
@@ -151,16 +167,8 @@ impl Checker {
                     }
                     _ => typed.ty.clone(),
                 };
-                let constant = typed
-                    .constant
-                    .map(
-                        |c| match op {
-                            Unary::Negative => -c,
-                            Unary::Not => !(c as i64) as f64,
-                            _ => c,
-                        },
-                    );
-                Some(Typed { ty, variable: false, constant, array: None })
+                let value = fold::unary(*op, &typed);
+                Some(Typed { ty, variable: false, constant: value.folded, unfolded: value.known, array: None })
             }
             Expr::Binary { op, left, right, span } => {
                 let l = self.expr(left);
@@ -207,57 +215,41 @@ impl Checker {
             return None;
         }
         let promoted = promote(&l.ty, &r.ty);
-        let fold = |f: &dyn Fn(f64, f64) -> f64| match (l.constant, r.constant) {
-            (Some(a), Some(b)) => Some(f(a, b)),
-            _ => None,
+        let value = match fold::binary(op, l, r) {
+            Ok(value) => value,
+            Err(()) => {
+                self.err(span, "Math overflow");
+                return None;
+            }
         };
-        let zero_divisor = matches!(r.constant, Some(c) if c == 0.0)
-            && matches!(
+        let typed = |ty: Ty| Typed { constant: value.folded, unfolded: value.known, ..Typed::value(ty) };
+        let divisor_is_constant =
+            matches!(
                 right,
                 Expr::Literal(..) | Expr::Unary { .. } | Expr::Binary { .. } | Expr::Name(..)
             );
+        let wide = l.ty == Ty::Long || r.ty == Ty::Long || l.ty.rank() > 2 || r.ty.rank() > 2;
         Some(match op {
-            Add => Typed { constant: fold(&|a, b| a + b), ..Typed::value(promoted) },
-            Subtract => Typed { constant: fold(&|a, b| a - b), ..Typed::value(promoted) },
-            Multiply => Typed { constant: fold(&|a, b| a * b), ..Typed::value(promoted) },
+            Add | Subtract | Multiply => typed(promoted),
             Divide => {
-                if zero_divisor {
+                if divisor_is_constant && r.known() == Some(0.0) {
                     self.err(span, "Division by zero");
                     return None;
                 }
-                let ty = if promoted == Ty::Double { Ty::Double } else { Ty::Single };
-                Typed { constant: fold(&|a, b| a / b), ..Typed::value(ty) }
+                typed(if promoted == Ty::Double { Ty::Double } else { Ty::Single })
             }
             IntegerDivide | Modulo => {
                 // both operands are rounded to integers first: `5 MOD 0.4`
                 // divides by 0
-                let rounds_to_zero = zero_divisor
-                    || (matches!(r.constant, Some(c) if c.round_ties_even() == 0.0)
-                        && matches!(
-                            right,
-                            Expr::Literal(..) | Expr::Unary { .. } | Expr::Binary { .. } | Expr::Name(..)
-                        ));
-                if rounds_to_zero {
+                if divisor_is_constant && r.known().is_some_and(|c| c.round_ties_even() == 0.0) {
                     self.err(span, "Division by zero");
                     return None;
                 }
-                let ty = if l.ty == Ty::Long || r.ty == Ty::Long || l.ty.rank() > 2 || r.ty.rank() > 2 {
-                    Ty::Long
-                } else {
-                    Ty::Int
-                };
-                Typed::value(ty)
+                typed(if wide { Ty::Long } else { Ty::Int })
             }
-            Power => Typed::value(Ty::Double),
+            Power => typed(Ty::Double),
             Eq | NotEqual | Less | LessEqual | Greater | GreaterEqual => Typed::value(Ty::Int),
-            And | Or | Xor | Eqv | Imp => {
-                let ty = if l.ty == Ty::Long || r.ty == Ty::Long || l.ty.rank() > 2 || r.ty.rank() > 2 {
-                    Ty::Long
-                } else {
-                    Ty::Int
-                };
-                Typed::value(ty)
-            }
+            And | Or | Xor | Eqv | Imp => typed(if wide { Ty::Long } else { Ty::Int }),
         })
     }
 
@@ -274,7 +266,7 @@ impl Checker {
             let head_is_record = self.lookup_record_var(head.split('.').next().unwrap_or(""));
             if !head_is_record {
                 let var = self.variable(&chain, false, span)?;
-                return Some(Typed { ty: var.ty, variable: true, constant: None, array: None });
+                return Some(Typed { ty: var.ty, variable: true, constant: None, unfolded: None, array: None });
             }
         }
         self.field_rank = None;
@@ -282,7 +274,7 @@ impl Checker {
         self.field_rank = None;
         // a property of a property of a form: nothing here says its type
         if base_typed.ty == Ty::Variant {
-            return Some(Typed { ty: Ty::Variant, variable: true, constant: None, array: None });
+            return Some(Typed { ty: Ty::Variant, variable: true, constant: None, unfolded: None, array: None });
         }
         let Ty::Record(record) = &base_typed.ty else {
             self.err(span, "Type mismatch");
@@ -290,7 +282,7 @@ impl Checker {
         };
         let record = self.records.get(record).cloned().unwrap_or(Record { fields: Vec::new(), opaque: true, bytes: 0 });
         if record.opaque {
-            return Some(Typed { ty: Ty::Variant, variable: true, constant: None, array: None });
+            return Some(Typed { ty: Ty::Variant, variable: true, constant: None, unfolded: None, array: None });
         }
         // a field may be named with its type character (`menu.text$`)
         let wanted = Ty::of_suffix(name);
@@ -299,7 +291,7 @@ impl Checker {
         }) {
             Some((_, ty, rank)) => {
                 self.field_rank = *rank;
-                Some(Typed { ty: ty.clone(), variable: true, constant: None, array: *rank })
+                Some(Typed { ty: ty.clone(), variable: true, constant: None, unfolded: None, array: *rank })
             }
             None => {
                 self.err(span, "Element not defined");
@@ -354,10 +346,10 @@ impl Checker {
         // a FUNCTION's own name reads its result
         if self.procedure.as_ref().is_some_and(|(kind, own)| *kind == ProcedureKind::Function && stem(own) == key) {
             let ty = self.procs.get(key).and_then(|p| p.result.clone()).unwrap_or(Ty::Single);
-            return Some(Typed { ty, variable: true, constant: None, array: None });
+            return Some(Typed { ty, variable: true, constant: None, unfolded: None, array: None });
         }
         let var = self.variable(name, false, span)?;
-        Some(Typed { ty: var.ty, variable: true, constant: None, array: None })
+        Some(Typed { ty: var.ty, variable: true, constant: None, unfolded: None, array: None })
     }
 
     pub(super) fn result_type(
@@ -412,7 +404,7 @@ impl Checker {
                 self.err(span, "Wrong number of dimensions");
                 return None;
             }
-            return ok.then_some(Typed { ty: var.ty, variable: true, constant: None, array: None });
+            return ok.then_some(Typed { ty: var.ty, variable: true, constant: None, unfolded: None, array: None });
         }
         if let Some(sig) = sigs::function(name, self.dialect) {
             return self.intrinsic(sig, name, arguments, span);
@@ -430,7 +422,7 @@ impl Checker {
                 for argument in arguments {
                     self.expr(argument);
                 }
-                return Some(Typed { ty: Ty::Variant, variable: true, constant: None, array: None });
+                return Some(Typed { ty: Ty::Variant, variable: true, constant: None, unfolded: None, array: None });
             }
         }
         if let Some(procedure) = self.procs.get(key).or_else(|| self.procs.get(name)).cloned() {
