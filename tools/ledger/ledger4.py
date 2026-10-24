@@ -11,9 +11,20 @@ def parse(path, pin=False):
         sym = nested.clean(m.group(2), pin)
         d[sym] += ir
     return d
-ours = parse(os.environ.get("LEDGER_OURS", "ours.incl")); clang = parse(os.environ.get("LEDGER_CLANG", "../ledger2/clang.incl"), pin=True)
+def settings(environ, argv):
+    """The inputs, all named: no default file is read (a stale ours.incl beside the
+    script was, silently, with positional arguments ignored)."""
+    if argv[1:] not in ([], ["--detail"]):
+        raise SystemExit(f"ledger4: positional arguments are not supported ({argv[1:]}); set LEDGER_OURS, LEDGER_CLANG, LEDGER_OT, LEDGER_PT; --detail lists the functions")
+    missing = [name for name in ("LEDGER_OURS", "LEDGER_CLANG", "LEDGER_OT", "LEDGER_PT") if not environ.get(name)]
+    if missing:
+        raise SystemExit(f"ledger4: {', '.join(missing)} not set (no default file is read)")
+    return environ["LEDGER_OURS"], environ["LEDGER_CLANG"], int(environ["LEDGER_OT"]), int(environ["LEDGER_PT"]), argv[1:] == ["--detail"]
+
+
+OURS, CLANG, OT, PT, DETAIL = settings(os.environ, sys.argv)
+ours = parse(OURS); clang = parse(CLANG, pin=True)
 clang_hts = [v for k, v in clang.items() if k.startswith("clang::BackendConsumer::HandleTranslationUnit(")][0]
-OT, PT = int(os.environ.get("LEDGER_OT", 1291562138)), int(os.environ.get("LEDGER_PT", 508730338))
 # bucket -> (regex on our symbol, regex on pin symbol)
 O = lambda name: r"<llrm_transforms::" + name + r" as llrm_mir::(passes::(Function|Module)Pass|program::ProgramPass)>::run$"
 OB = lambda name: r"<llrm_core::backend::" + name + r" as llrm_core::model::passes::LIRTransform>::transform_raising$"
@@ -70,7 +81,7 @@ print(f"{'sum of the buckets':92} {so/1e6:8.1f} {sp/1e6:8.1f}")
 print(f"{'residual (pass-manager glue, analyses outside passes, walk own, allocation, lowering)':92} {(OT-so)/1e6:8.1f} {(PT-sp)/1e6:8.1f}")
 print(_double or "double-count check: not run (no LEDGER_CALLING)")
 print(f"{'total (callgrind Ir)':92} {OT/1e6:8.1f} {PT/1e6:8.1f} {OT/PT:6.2f}")
-if len(sys.argv) > 1:
+if DETAIL:
     for name, (op, pp) in B.items():
         o, os_ = total(ours, op); p, ps = total(clang, pp)
         print("\n##", name)
