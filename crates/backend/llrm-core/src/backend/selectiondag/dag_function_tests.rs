@@ -1756,4 +1756,26 @@ fn two_dense_switches_are_two_jumps_through_tables() {
     assert_eq!(tables.len(), 2, "one jump through a table for each switch");
     assert!(tables.iter().all(|table| table.len() == 6 && table.iter().all(|t| at.contains(t))), "{tables:?}");
     assert_ne!(tables[0], tables[1]);
+const M16_STACK: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define void @f(i32 %a, i64 %b, i32 %c) addrspace(1) {
+entry:
+  ret void
+}
+";
+
+/// At m16 an `i32` is a register type, so a stack `i32` is one cell and an
+/// `i64` two (the second half four bytes up). The driver counted two cells for
+/// an `i32` and one for an `i64` (widest legal integer assumed 16 bits): the
+/// high half of an `i64` argument was read from the next
+/// parameter (regparm3_matrix_4/_22/_31 gave wrong values).
+#[test]
+fn an_i32_is_one_stack_cell_and_an_i64_two_at_m16() {
+    let module = llrm_mir::parse::module(M16_STACK).expect("parses");
+    let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+    let (id, _, function) = module.functions().next().expect("a function");
+    let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m16::M16).expect("a convention");
+    let cells = super::dag_function::stack_cells(&module, function, &convention, 32);
+    assert_eq!(cells.len(), 4, "a: one, b: two, c: one: {cells:?}");
+    assert_eq!(cells[2] - cells[1], 4, "the high half of b is four bytes above its low half: {cells:?}");
+    assert!(cells[3] > cells[2], "{cells:?}");
 }
