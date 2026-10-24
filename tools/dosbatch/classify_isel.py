@@ -22,6 +22,7 @@ RULES: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r"--isel=dag: Legalize\((.*)\)"), "legalize: {0}", "sdag-b"),
     (re.compile(r"--isel=dag: (library call whose symbol and convention .*)"), "builder: {0}", "sdag-a"),
     (re.compile(r"--isel=dag: (a switch lowering|register arguments or a switch lowering)"), "harness: {0}", "sdag-d"),
+    (re.compile(r"--isel=dag: value \d+ is read and not defined on every path \((\w+\(\"?\w*\"?\)|\w+)\)"), "emit: a value read before it is defined on every path ({0})", "sdag-d"),
     (re.compile(r"--isel=dag: (.+)"), "builder refusal: {0}", "sdag-a"),
     # a panic of the compiler: the file names the owner (see PANIC_OWNERS)
     (re.compile(r"panicked at crates/\S*?/(selectiondag/[\w/]+\.rs):\d+:\d+:\s*(.*)", re.S), "panic in {0}: {1}", "by file"),

@@ -765,10 +765,55 @@ def new_link_failures(
     return failures
 
 
+_BUILT: set[str] = set()
+
+
 def _build_release() -> None:
+    """Release bins of the checkout, once per tree: the link layer and the behavioural gate share the build."""
     from buildslot import slotted  # noqa: PLC0415
 
+    tree = git("rev-parse", "HEAD^{tree}").strip() + git("status", "--porcelain", "--untracked-files=no").strip()
+    if tree in _BUILT:
+        return
     subprocess.run(slotted(["cargo", "build", "--release", "-q", "--bins"]), cwd=ROOT, check=True)
+    _BUILT.add(tree)
+
+
+def pre_merge_behavioural(files: list[str], build=None, run=None) -> list[str]:
+    """The call-shaped programs (tools/behavioural.py) that are wrong on the merged tree, when the batch changes backend source; none, and nothing built or run, otherwise.
+    #4152 and #4146 each landed red from the backend and were found by the next hourly sweep, up to an hour later."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import behavioural  # noqa: PLC0415
+
+    if not behavioural.touches(files):
+        print("behavioural: skipped (no backend source changed)")
+        return []
+    started = time.time()
+    (build or _build_release)()
+    red = behavioural.red_programs((run or _run_behavioural)())
+    print(f"behavioural: {len(behavioural.PROGRAMS)} programs, {len(red)} wrong, {time.time() - started:.0f}s")
+    return red
+
+
+def _run_behavioural() -> str:
+    import behavioural  # noqa: PLC0415
+
+    target = Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target") / "release"
+    for one in target.iterdir():
+        if one.is_file():
+            one.touch()  # the runners refuse a binary older than its sources
+    env = {**os.environ, "LLRM_BIN": str(target), "DOSBOX_BIN": str(target / "dosbox-x")}
+    done = subprocess.run([sys.executable, "tools/dosbatch/run_tests.py", *behavioural.PROGRAMS], cwd=ROOT, env=env, capture_output=True, text=True, timeout=1800)
+    return done.stdout + done.stderr
+
+
+def behavioural_culprits(group: list[str], files_of, alone_red) -> list[str]:
+    """The PRs of `group` that turn the call-shaped programs red: the one backend PR of the batch when there is one (no build), else each backend PR merged alone and asked."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import behavioural  # noqa: PLC0415
+
+    backend = [number for number in group if behavioural.touches(files_of(number))]
+    return backend if len(backend) <= 1 else [number for number in backend if alone_red(number)]
 
 
 def _link_programs() -> list[str]:
@@ -933,6 +978,10 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             print(f"REFUSED: the batch's runtime does not link: {'; '.join(unlinked)[:300]}")
             failed_units.update(f"link {line.split(':')[0]}" for line in unlinked)
             return False
+        if red := pre_merge_behavioural(git("diff", "--name-only", BASE, "HEAD").split()):
+            print(f"BEHAVIOURAL RED pre-merge: the batch, {' '.join(red)}")
+            failed_units.update(f"behavioural {program}" for program in red)
+            return False
         return True
 
     def merge_alone(number: str) -> bool:
@@ -950,6 +999,14 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             culprits = build_offenders(group, merge_alone, lambda: _workspace_check(ROOT))
             named.update({number: f"alone on the head it does not build: {failed_build[-1][:160]}" for number in culprits})
             return culprits
+        wrong = sorted(name[len("behavioural ") :] for name in failed_units if name.startswith("behavioural "))
+        if wrong:
+            files_of = lambda number: git("diff", "--name-only", f"{BASE}...{infos[number]['headRefOid']}").split()  # noqa: E731
+            culprits = behavioural_culprits(group, files_of, lambda number: merge_alone(number) and bool(pre_merge_behavioural(files_of(number))))
+            for number in culprits:
+                named[number] = f"BEHAVIOURAL RED pre-merge: {' '.join(wrong)}"
+                print(f"BEHAVIOURAL RED pre-merge: #{number} {' '.join(wrong)}")
+            return culprits
         integration = {name[len("integration ") :].split("::", 1)[0] for name in failed_units if name.startswith("integration ")}
         if integration:
             return [number for number in group if merge_alone(number) and {f"integration {t}" for t in integration} & {n.split("::", 1)[0] for n in parity_smoke_module().integration_failures(sorted(integration))}]
@@ -960,7 +1017,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if not by_package:
             return []
         culprits = [number for number in group if merge_alone(number) and any(failing_on_checkout(package, tests) for package, tests in by_package.items())]
-        named.update({number: f"alone on the head it fails {', '.join(sorted(failed_units))[:160]}" for number in culprits})
+        why = "; ".join(f"{test}: {LAST_PANICS[test]}" for _, test in sorted(units) if test in LAST_PANICS)
+        named.update({number: f"alone on the head it fails {', '.join(sorted(failed_units))[:160]}" + (f" [{why[:300]}]" if why else "") for number in culprits})
         return culprits
 
     def passes(group: list[str]) -> bool:
@@ -1091,6 +1149,9 @@ def head_expanded(head: set[str], merged: set[str], run_on_head) -> set[str]:
     return head | extra
 
 
+LAST_PANICS: dict[str, str] = {}  # test name -> its first panic line, from the last `failing_on_checkout`
+
+
 def failing_on_checkout(crate: str, tests: set[str], cwd: Path = ROOT) -> set[str]:
     """Which of `tests` of `crate` fail on the checkout in `cwd` (exact names, release not needed: the smoke ran them as `cargo test -q --lib`)."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -1099,6 +1160,7 @@ def failing_on_checkout(crate: str, tests: set[str], cwd: Path = ROOT) -> set[st
 
     command = parity_smoke.lib_command(crate)
     done = subprocess.run(slotted([*command, "--", "--exact", *sorted(tests)]), cwd=cwd, capture_output=True, text=True)
+    LAST_PANICS.update(parity_smoke.panic_reasons(done.stdout + done.stderr))
     return {name for name in tests if name in set(parity_smoke.failed_tests(done.stdout + done.stderr))}
 
 

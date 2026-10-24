@@ -42,9 +42,9 @@
 //! 6. `ipa-range<N>.`, up to four rounds, if `ranges` is set: the range every
 //!    caller passes a parameter is stated on it for the body's own proofs.
 //! 7. `ipa-deadargs.` ([`crate::deadargs`]): parameters nothing reads go.
-//! 8. `stamped_all` again, then `ipa-pure.` removes unused calls to bodies
-//!    proved pure and terminating, and `ipa-noreturn.` cuts the code after a
-//!    call to a private body every path of which stops, keeping the call.
+//! 8. `ipa-pure.` removes unused calls to bodies proved pure and terminating,
+//!    and `ipa-noreturn.` cuts the code after a call to a private body every
+//!    path of which stops, keeping the call.
 //!
 //! ```mermaid
 //! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
@@ -826,8 +826,6 @@ pub fn optimized_with<E: From<String>>(
             reoptimised(&mut program.modules[at], &mut modules[at], id, "ipa-deadargs.")?;
         }
     }
-    // Propagation may have left a body doing less than it states.
-    stamped_all(program, modules).map_err(E::from)?;
     for at in 0..count {
         let declarations = modules[at].get::<Declarations>(&program.modules[at]);
         for &id in &procedures[at] {

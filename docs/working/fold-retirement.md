@@ -77,3 +77,9 @@ in. So the growth is not a rewrite `combine` lacks, and not one `fold` did: remo
 then decides differently on the same text (the `xor i1 %c, true` before a branch is one of its outputs). The three late InstCombines
 (#3929) clean that form and change none of these objects, which fits. Open (w-6, 2026-11-13): which order SimplifyCFG reads (predecessor
 order from the use list, a phi order) and what the pin's reads there; until then the rows stay numbered as order sensitivity of SimplifyCFG@1438.
+
+## fold@1242 (FR-4, w-6)
+
+The last fold slot (Cleanup, after combine@1242) is deleted. Base `a1d9045963`, new `ff0f925aaa`, dists, ledger command: d_faces qbq-llrm 1064.5 -> 1038.4 M Ir (llrm-only bucket 72.0 -> 45.3; InstCombine +0.5), object identical; QCport d_faces 889.1 -> 858.3 M.
+Pair (71 programs, 852 rows): clocks change on 2 rows, both -Os with the same bytes: nbody_single 8081134 -> 8789134 (+8.76%), fpbench 155773 -> 169933 (+9.09%); d_faces -O3 +0.04%. No row crosses min(gcc, clang). Code bytes: objsweep 5 objects, all +0 (fpbench, nbody_single -Os); m16 sizes -Os total +238 B (fpemu.bas +86, hex_oct_negative +33, textfill +8); QCport 65 modules -0.03%..+0.02% (8-9 modules per level: cmd -50, keybind -40, d_alias +9, host +16). No new tests/run failure.
+Causes owed (w-6, 2026-11-06): the two -Os clock rows (same size, other schedule), the QCport module deltas.

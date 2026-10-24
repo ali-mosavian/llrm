@@ -1025,11 +1025,11 @@ fn test_a_function_called_with_two_constants_is_cloned_for_each_at_o3() {
 /// fold in (`n == 3`), and what the shrink-wrapped prologue is for.
 /// A round assumes a parameter's range before it proves it (`place`'s `row` is
 /// 0 at first), and under it a loop `r < row` that runs from 0 is never
-/// entered: the facts of the loop around it and of its own contradict each
-/// other there, and a call in it passes nothing. Passing what the contradiction
-/// left (`r` below 0) made the callee's parameter range wide for good.
+/// entered. The counted loops' intervals (`Bounded`) made that block
+/// unreachable and `r` non-negative; the edges' facts bound `r` only above, so
+/// `sink`'s range starts at -32768 (AM-BD-6). `place`'s stays `[0, 8)`.
 #[test]
-fn test_a_call_in_a_block_the_assumed_range_makes_unreachable_passes_nothing() {
+fn test_a_call_in_a_loop_the_assumed_range_never_enters_leaves_the_caller_its_range() {
     let mut module = parsed(
         "define internal i16 @sink(i16 %x) {
 b:
@@ -1078,8 +1078,10 @@ b:
     stepped(&mut module, &["f"], 40, Threshold::none());
     let text = printed(&module);
     assert!(text.contains("range(i16 0, ") && text.contains("%x)"), "{text}");
-    let sink = text.lines().find(|line| line.contains("@sink(")).unwrap_or_default();
-    assert!(!sink.contains("range(i16 -"), "{sink}\n{text}");
+    let place = text.lines().find(|line| line.contains("define internal i16 @place(")).unwrap_or_default();
+    assert!(place.contains("range(i16 0, 8) %row"), "{place}\n{text}");
+    let sink = text.lines().find(|line| line.contains("define internal i16 @sink(")).unwrap_or_default();
+    assert!(sink.contains("range(i16 -32768, 32767) %x"), "AM-BD-6: {sink}\n{text}");
 }
 
 /// A function only an invoke or a `!callees` list names is still called.

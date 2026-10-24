@@ -117,7 +117,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "instcombine",
         "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); the opcodes of foldICmpBinOpWithConstant not yet translated (xor, or, mul, shl, shr, srem, div, sub, add: InstCombineCompares.cpp:4124; only and is, combine_icmp_const.rs) are owed by llrm-w-4, 2026-10-24 onward; on by default, LLRM_NO_COMBINE turns it off",
     ),
-    entry("fold@1242", Cleanup, "instcombine", Old, "instcombine-port"),
     entry("dead@1242", Cleanup, "instcombine", Old, "instcombine-port"),
     partial(
         "decide@1244",
@@ -316,12 +315,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "simplifycfg",
         "translated SimplifyCfg at the default options runs here; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting; criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those translated (llrm-w-4, 2026-10-30)",
     ),
-    partial(
-        "simplifycfg@2376",
-        Late,
-        "simplifycfg",
-        "translated SimplifyCfg at hoistCommonInsts runs here; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting; criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those translated (llrm-w-4, 2026-10-30)",
-    ),
     entry("loop-instsimplify", Simplify, "loop-instsimplify", Missing, ""),
     entry("loop-simplifycfg", Simplify, "loop-simplifycfg", Missing, ""),
     // LSR runs in llc's IR preparation (`TargetPassConfig::addIRPasses`,
@@ -367,12 +360,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "none (in-block pressure sink; LLVM orders by the scheduler)",
         Old,
         "lir-cleanup-poc",
-    ),
-    partial(
-        "machinesched@5",
-        Backend,
-        "machine-scheduler (MachineScheduler.cpp)",
-        "criterion: a block region longer than half the allocatable registers is ordered bottom-up by pressure (DEVIATE MS3: no pass-through pressure, one limit for all register sets); exit: per-set limits and tracking (row 65 piece 2), then pressuresink.rs is deleted",
     ),
     entry("fixupsetcc@5", Backend, "x86-fixup-setcc (X86FixupSetCC.cpp)", Translated, ""),
     entry("callframe@5", Backend, "x86-cf-opt (X86CallFrameOptimization.cpp)", Translated, ""),
@@ -651,12 +638,6 @@ pub const ANALYSES: &[AnalysisEntry] = &[
         "DominatedEdges",
         "LazyValueInfo / ConstraintElimination",
         "LVI and CVP callers; ranges::dominated_edges goes (vt-constantfolding)",
-    ),
-    old_analysis(
-        "bounded",
-        "Bounded",
-        "LazyValueInfo / ScalarEvolution getRange",
-        "LVI and SCEV getRange; ranges::bounded goes (vt-constantfolding, scev-createscev-2239)",
     ),
     old_analysis(
         "pointer-values",
