@@ -105,7 +105,6 @@
 //! | `strength` | `indvars`, `lsr`, `canonfreeze`, `window`, `gepoffset`, `cgpaddr` |
 //! | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 //! | `sibcalls` | `tailrec` |
-//! | `ipa_ranges` | argument ranges in the interprocedural step |
 //! | `unswitch`, `interchange`, `unroll_and_jam` | the passes of that name (`unswitch` and `unroll_and_jam` on at -O3 and -Omax; `interchange` on at every level but -O0) |
 //! | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 //!
@@ -164,9 +163,6 @@ pub struct Options {
     pub optimize: bool,
     pub limits: Limits,
     pub inline: inline::Threshold,
-    /// Whether the callers' arguments are stated as ranges on a body's
-    /// parameters: gcc's `-fipa-vrp`, -O2 and up.
-    pub ipa_ranges: bool,
     pub lcssa: bool,
     pub floatloop: bool,
     pub fold: bool,
@@ -292,7 +288,6 @@ impl Default for Options {
             decide: true,
             dead: true,
             hoist: true,
-            ipa_ranges: true,
             forward: true,
             drop_loads: true,
             pre: true,
@@ -349,7 +344,6 @@ impl Options {
             // gcc runs each pass once: the third round changed five passes of
             // d_faces and the fourth none, 253 of 3,084 Minstr at -O1.
             rounds: 2,
-            ipa_ranges: false,
             pre: false,
             peel: false,
             loop_unrolling: false,
@@ -468,7 +462,6 @@ impl Options {
             "peel" => self.peel,
             "loopidiom" | "loopidioms" | "merge" | "memcpyopt" => self.loopidioms,
             "tailrec" => self.sibcalls,
-            "ipa-ranges" => self.ipa_ranges,
             "loop-interchange" => self.interchange,
             "loop-unroll-and-jam" => self.unroll_and_jam,
             _ => true,
@@ -981,7 +974,7 @@ pub(crate) fn function_stages(applied: &Applied) -> Vec<Fixed> {
             Fixed::linear(applied, Phase::Cleanup),
             Fixed::linear(applied, Phase::Simplify),
             // DEVIATE: LLVM runs it after the interprocedural passes; here it
-            // closes the function stages, before `ipa-range`.
+            // closes the function stages.
             Fixed::linear(applied, Phase::Late),
         ]
     } else {
@@ -1051,25 +1044,11 @@ pub fn recorded(
         // LLVM's IPSCCP and DeadArgumentElimination run after the early
         // function pipeline, before the Simplify list.
         if at == 0 && applied.options.llvm_order {
-            manager.add_program(crate::walk::ModuleIpo {
-                inline: applied.options.inline,
-                ranges: applied.options.ipa_ranges,
-            });
-            // IPSCCP's own half, over each body: values that hold and flags
-            // from ranges (`trunc nsw`, `zext nneg`, `add nuw nsw`), which the
-            // first InstCombine reads. DEVIATE: what flows between bodies is
-            // `ModuleIpo`'s (`ipa-args`, `ipa-range`), not the solver's.
-            // Exit: `ModuleIpo` runs the solver over the program (owner:
-            // funcattrs-port, the IPO analyses).
-            manager.add(sccp::Sccp);
+            manager.add_program(crate::walk::ModuleIpo { inline: applied.options.inline });
         }
     }
     // Once every body has reached its own fixed point, as the old Nib
     // driver's whole-module step: a body it changes goes back through.
-    // DEVIATE from LLVM: `ipa-range` runs after the function pipeline here,
-    // LLVM's `ipsccp` before it, so a body it changes runs the Simplify list a
-    // second time (d_faces -O2: one body, `gvn` 12 runs over 11 functions
-    // against clang's 11, `parity::RUNS_PER_BODY`).
     let again_applied =
         Applied { dump: applied.dump.as_ref().map(|one| one.join("interprocedural")), ..applied.clone() };
     let mut again = if applied.options.llvm_order {
@@ -1104,7 +1083,6 @@ pub fn recorded(
         }),
         proved: None,
         inline: applied.options.inline,
-        ranges: applied.options.ipa_ranges,
         rate: Some(if applied.options.prefers_size() { 0 } else { applied.options.limits.milliclocks_per_byte }),
     });
     // A global no body loads from any more (the loads were forwarded) needs

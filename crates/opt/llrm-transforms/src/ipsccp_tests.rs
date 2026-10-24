@@ -10,7 +10,6 @@ use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::program::Program;
 
 use super::run_ipsccp;
-use crate::interprocedural::{function_mut, procedures, unexported};
 use crate::testing::{parsed, printed};
 
 /// `text` after `run_ipsccp`.
@@ -228,8 +227,8 @@ b0:
 
 /// AM-BD-6: the counted loop's `%r` reaches `@sink` through the phi and the
 /// edge `%r < %row`, `%row` in [0, 8): the pin states `range(i16 -32768, 6)`,
-/// the stand-in `parameter_ranges` [-32768, 32767).
-const AM_BD_6: &str = "define internal i16 @sink(i16 %x) {
+/// the stand-in `parameter_ranges` stated [-32768, 32767).
+pub(crate) const AM_BD_6: &str = "define internal i16 @sink(i16 %x) {
 b:
   %y = add i16 %x, 1
   ret i16 %y
@@ -297,20 +296,6 @@ enum Stated {
     Dead,
 }
 
-/// How the pin's statement of a parameter compares with the stand-in's.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum Compared {
-    Same,
-    /// The pin states more (a constant, or a range inside the stand-in's).
-    PinTighter,
-    /// The stand-in states more.
-    PinWider,
-    /// Two ranges, neither inside the other.
-    Neither,
-    /// The pin finds the body is never called.
-    PinDead,
-}
-
 fn ranges_of(module: &Module) -> BTreeMap<(String, usize), (bool, Option<ConstantRange>, bool)> {
     let mut out = BTreeMap::new();
     for (_, global, function) in module.functions() {
@@ -363,73 +348,16 @@ fn stated(
     out
 }
 
-/// `ipa-args` then `ipa-range`, as `ModuleIpo` runs them (without its
-/// cloning between).
-fn stand_in(module: &mut Module) {
-    Program::lend(module, Rc::new(llrm_mir::target::Neutral), |program| {
-        let unexported = unexported(program);
-        let constants = llrm_analysis::interprocedural::program_parameters(program, &unexported);
-        for id in procedures(program, 0) {
-            let Some(known) = constants[0].get(&id) else { continue };
-            let (context, function) = function_mut(&mut program.modules[0], id);
-            llrm_analysis::interprocedural::specialize_parameters(context, function, known);
-        }
-        llrm_analysis::parameter_ranges::stamp(program, &unexported);
-    })
-    .expect("a program");
-}
-
-/// The pin's and the stand-in's statements of each used parameter of
-/// `module`, compared.
-fn compared(module: &Module) -> BTreeMap<(String, usize), (Compared, Stated, Stated)> {
-    let before = ranges_of(module);
-    let mut theirs = module.clone();
-    stand_in(&mut theirs);
-    let mut ours = module.clone();
-    Program::lend(&mut ours, Rc::new(llrm_mir::target::Neutral), run_ipsccp).expect("a program");
-    let theirs = stated(&before, &ranges_of(&theirs));
-    let ours = stated(&before, &ranges_of(&ours));
-    let mut out = BTreeMap::new();
-    for (key, pin) in ours {
-        let stand = theirs.get(&key).cloned().unwrap_or(Stated::Nothing);
-        let compared = match (&pin, &stand) {
-            _ if pin == stand => Compared::Same,
-            (Stated::Dead, _) => Compared::PinDead,
-            (Stated::Constant, _) | (Stated::Range(_), Stated::Nothing) => Compared::PinTighter,
-            (_, Stated::Constant) | (Stated::Nothing, Stated::Range(_)) => Compared::PinWider,
-            (Stated::Range(one), Stated::Range(two)) if two.contains_range(one) => Compared::PinTighter,
-            (Stated::Range(one), Stated::Range(two)) if one.contains_range(two) => Compared::PinWider,
-            _ => Compared::Neither,
-        };
-        out.insert(key, (compared, pin, stand));
-    }
-    out
-}
-
-/// The pin against the stand-in on AM-BD-6: `@sink`'s range is tighter at
-/// the top, `@place`'s `%row` range and `%n` constant agree.
+/// This port's statement of each used parameter over every `.ll` in
+/// `$IPSCCP_DUMPS` (the module each corpus file has when `ipo-early` starts,
+/// `LLRM_DUMP_INPUTS=1 llrm-c --dump`) against the pin's `opt -passes=ipsccp`
+/// of the same files in `$IPSCCP_PIN`: each parameter where the two differ,
+/// and the totals.
 #[test]
-fn test_the_pins_argument_ranges_against_the_stand_in_on_am_bd_6() {
-    let rows = compared(&parsed(AM_BD_6));
-    let row = |name: &str, index: usize| rows[&(name.to_owned(), index)].clone();
-    let sink = row("sink", 0);
-    assert_eq!(sink.0, Compared::PinTighter, "{rows:?}");
-    assert_eq!(sink.2, Stated::Range(ConstantRange::new(16, 0x8000, 0x7fff)), "{rows:?}");
-    assert_eq!(row("place", 0).0, Compared::Same, "{rows:?}");
-    assert_eq!(row("place", 1), (Compared::Same, Stated::Constant, Stated::Constant), "{rows:?}");
-}
-
-/// The comparison over every `.ll` in `$IPSCCP_DUMPS` (the module each corpus
-/// file has when `ipo-early` starts, `LLRM_DUMP_INPUTS=1 llrm-c --dump`):
-/// one line per parameter where the two differ, and the totals. With
-/// `$IPSCCP_PIN`, a directory of the pin's `opt -passes=ipsccp` of the same
-/// files, each parameter where this port states other than the pin is listed
-/// too.
-#[test]
-#[ignore = "reads $IPSCCP_DUMPS"]
-fn corpus_against_the_stand_in() {
+#[ignore = "reads $IPSCCP_DUMPS and $IPSCCP_PIN"]
+fn corpus_against_the_pin() {
     let directory = std::env::var("IPSCCP_DUMPS").expect("IPSCCP_DUMPS");
-    let pin = std::env::var("IPSCCP_PIN").ok();
+    let pin = std::env::var("IPSCCP_PIN").expect("IPSCCP_PIN");
     let mut against_pin: BTreeMap<bool, usize> = BTreeMap::new();
     let mut files: Vec<_> = std::fs::read_dir(&directory)
         .expect("a directory")
@@ -437,7 +365,6 @@ fn corpus_against_the_stand_in() {
         .filter(|one| one.extension().is_some_and(|ext| ext == "ll"))
         .collect();
     files.sort();
-    let mut totals: BTreeMap<Compared, usize> = BTreeMap::new();
     for file in files {
         let text = std::fs::read_to_string(&file).expect("a dump");
         let Ok(module) = llrm_mir::parse::module(&text) else {
@@ -445,22 +372,18 @@ fn corpus_against_the_stand_in() {
             continue;
         };
         let stem = file.file_stem().unwrap_or_default().to_string_lossy().into_owned();
-        let rows = compared(&module);
-        for ((name, index), (compared, ours, stand)) in &rows {
-            *totals.entry(*compared).or_default() += 1;
-            if *compared != Compared::Same {
-                println!("{stem} @{name} #{index}: {compared:?} pin {ours:?} stand-in {stand:?}");
-            }
-        }
-        let Some(pin) = &pin else { continue };
-        let path = std::path::Path::new(pin).join(file.file_name().expect("a file"));
+        let path = std::path::Path::new(&pin).join(file.file_name().expect("a file"));
         let Some(theirs) = std::fs::read_to_string(&path).ok().and_then(|text| llrm_mir::parse::module(&text).ok())
         else {
             println!("{stem}: no pin output that parses");
             continue;
         };
-        let real = stated(&ranges_of(&module), &ranges_of(&theirs));
-        for (key, (_, ours, _)) in &rows {
+        let before = ranges_of(&module);
+        let mut ours = module.clone();
+        Program::lend(&mut ours, Rc::new(llrm_mir::target::Neutral), run_ipsccp).expect("a program");
+        let ours = stated(&before, &ranges_of(&ours));
+        let real = stated(&before, &ranges_of(&theirs));
+        for (key, ours) in &ours {
             let real = real.get(key).cloned().unwrap_or(Stated::Nothing);
             *against_pin.entry(*ours == real).or_default() += 1;
             if *ours != real {
@@ -468,6 +391,99 @@ fn corpus_against_the_stand_in() {
             }
         }
     }
-    println!("totals: {totals:?}");
     println!("port equal to the pin's opt: {against_pin:?}");
+}
+
+/// queens' `place(row, n)` recurses with `row + 1` and its own `n`: the one
+/// outside call passes 7, so every call does, and `n` is 7 inside.
+fn recursive(
+    first: &str,
+    second: &str,
+) -> String {
+    format!(
+        "define internal i16 @place(i16 %row, i16 %n) {{
+b:
+  %done = icmp eq i16 %row, %n
+  br i1 %done, label %leaf, label %more
+more:
+  %next = add i16 %row, 1
+  %r = call i16 @place({first})
+  %s = add i16 %r, %row
+  ret i16 %s
+leaf:
+  ret i16 1
+}}
+
+define i16 @f(i16 %a) {{
+b:
+  %x = call i16 @place(i16 0, i16 7)
+{second}  ret i16 %x
+}}
+"
+    )
+}
+
+#[test]
+fn test_a_recursive_call_passing_a_parameter_on_leaves_the_others_actuals_agreed() {
+    let text = ipsccp(&recursive("i16 %next, i16 %n", ""));
+    assert!(body(&text, "place").contains("icmp eq i16 %row, 7"), "{text}");
+}
+
+/// A second outside call with another value, or the recursion passing the
+/// parameters swapped, keeps `n` unknown.
+#[test]
+fn test_another_actual_for_the_parameter_keeps_it_unknown() {
+    for text in
+        [recursive("i16 %next, i16 %n", "  %y = call i16 @place(i16 0, i16 %a)\n"), recursive("i16 %n, i16 %next", "")]
+    {
+        let after = ipsccp(&text);
+        assert!(body(&after, "place").contains("icmp eq i16 %row, %n"), "{after}");
+    }
+}
+
+/// queens' `place`: `row` from 0 and from `row + 1` below `n`, the calls those
+/// of the module: `row` is in [0, 8), which the length's check `row <u 12` then
+/// leaves nothing to decide.
+fn bounded_recursion(extra: &str) -> String {
+    format!(
+        "define internal i16 @place(i16 %row, i16 %n) {{
+b:
+  %done = icmp eq i16 %row, %n
+  br i1 %done, label %leaf, label %more
+more:
+  %fits = icmp ult i16 %row, 12
+  br i1 %fits, label %next, label %crash
+next:
+  %up = add nsw i16 %row, 1
+  %r = call i16 @place(i16 %up, i16 %n)
+  ret i16 %r
+leaf:
+  ret i16 1
+crash:
+  ret i16 99
+}}
+
+define i16 @f(i16 %a) {{
+b:
+  %x = call i16 @place(i16 0, i16 7)
+{extra}  ret i16 %x
+}}
+"
+    )
+}
+
+#[test]
+fn test_what_the_callers_pass_bounds_a_parameter_the_body_checks() {
+    let text = ipsccp(&bounded_recursion(""));
+    assert!(header(&text, "place").contains("range(i16 0, 8) %row"), "{text}");
+    assert!(!body(&text, "place").contains("icmp ult i16 %row, 12"), "{text}");
+}
+
+/// A call from elsewhere with a value of its own leaves the parameter
+/// unbounded.
+#[test]
+fn test_another_caller_leaves_the_parameter_unbounded() {
+    let text = ipsccp(&bounded_recursion("  %y = call i16 @place(i16 %a, i16 7)\n"));
+    assert!(header(&text, "place").contains("@place(i16 %row,"), "{text}");
+    assert!(body(&text, "place").contains("icmp ult i16 %row, 12"), "{text}");
 }

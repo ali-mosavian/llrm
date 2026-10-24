@@ -37,13 +37,11 @@
 //! 4. `ipa<N>.`: a body whose every `ret` returns one integer has its calls'
 //!    results replaced by it (`llrm_analysis::interprocedural`); the call
 //!    stays.
-//! 5. A loop of: `ipa-args<N>.` (a private body whose every call passes the
-//!    same constant uses it) and `ipa-cp.` ([`crate::ipacp`] cloning), with
-//!    return propagation after each, until nothing changes.
-//! 6. `ipa-range<N>.`, up to four rounds, if `ranges` is set: the range every
-//!    caller passes a parameter is stated on it for the body's own proofs.
-//! 7. `ipa-deadargs.` ([`crate::deadargs`]): parameters nothing reads go.
-//! 8. `ipa-pure.` removes unused calls to bodies proved pure and terminating,
+//! 5. A loop of `ipa-cp.` ([`crate::ipacp`] cloning) and return propagation,
+//!    until nothing changes. What every caller passes is IPSCCP's, before the
+//!    walk ([`crate::walk::ModuleIpo`]); the pin does not run it again here.
+//! 6. `ipa-deadargs.` ([`crate::deadargs`]): parameters nothing reads go.
+//! 7. `ipa-pure.` removes unused calls to bodies proved pure and terminating,
 //!    and `ipa-noreturn.` cuts the code after a call to a private body every
 //!    path of which stops, keeping the call.
 //!
@@ -57,8 +55,7 @@
 //!   inl["<b>inline*</b>"]:::mid
 //!   pn["<b>promote/narrow</b>"]:::mid
 //!   rc["<b>ret consts</b>"]:::mid
-//!   lp["<b>[args, cp]*</b>"]:::mid
-//!   rg["<b>ranges</b>"]:::mid
+//!   lp["<b>cp*</b>"]:::mid
 //!   da["<b>deadargs</b>"]:::mid
 //!   st2["<b>stamp</b>"]:::mid
 //!   pu["<b>pure</b>"]:::mid
@@ -68,8 +65,7 @@
 //!   inl --> pn
 //!   pn --> rc
 //!   rc --> lp
-//!   lp --> rg
-//!   rg --> da
+//!   lp --> da
 //!   da --> st2
 //!   st2 --> pu
 //!   pu --> nr
@@ -131,14 +127,13 @@
 //! A `ProgramPass` after the per-body fixed point and before `globaldce`,
 //! and not at -O0. `Stamp` is the same stamping run earlier, before any body's
 //! pipeline, so loops are judged on what their callees do. Which stages run
-//! follows the level: `inline` and `ipa-cp` thresholds, `ipa-range`
-//! (`-fipa-vrp`, -O2 and up), `ipa-cp-clone` (-O3 and up). See
+//! follows the level: `inline` and `ipa-cp` thresholds, `ipa-cp-clone` (-O3
+//! and up). See
 //! `docs/reference/levels.md`.
 //!
 //! # Needs
 //! [`crate::inline`], [`crate::ipacp`], [`crate::profit`], and
-//! `llrm_analysis`' `Summaries`, `GlobalsAA`,
-//! `interprocedural` and `parameter_ranges`.
+//! `llrm_analysis`' `Summaries`, `GlobalsAA` and `interprocedural`.
 //!
 //! # See also
 //! LLVM's FunctionAttrs and IPSCCP; GCC's `ipa-inline.cc`, `ipa-cp.cc` and
@@ -258,9 +253,6 @@ pub struct Interprocedural {
     /// it comes to no more bytes, less what the clocks it saves buy at this
     /// many thousandths of a clock a byte; None weighs the clocks alone.
     pub rate: Option<i64>,
-    /// Whether what a body's callers pass is stated as a range on its
-    /// parameters (gcc's `-fipa-vrp`, -O2 and up).
-    pub ranges: bool,
     /// The copies of a tree recursion in itself and its tail-call
     /// elimination, once the clones are made (D10).
     pub late: Option<crate::walk::SelfInline>,
@@ -296,7 +288,6 @@ impl ProgramPass for Interprocedural {
             loose,
             rate,
             self.inline,
-            self.ranges,
             &mut |module, analyses, id, stage| {
                 pipeline(module, analyses, id, stage);
                 Ok(())
@@ -631,7 +622,6 @@ pub fn optimized_with<E: From<String>>(
     loose: Option<&OperationCosts>,
     rate: i64,
     threshold: inline::Threshold,
-    ranges: bool,
     reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
 ) -> Result<Proved, E> {
     let count = program.modules.len();
@@ -730,34 +720,9 @@ pub fn optimized_with<E: From<String>>(
             }
         };
 
-    // A return fact may make the actual of a different direct call
-    // constant.  Alternate that current-MIR proof with return propagation
-    // until neither side discovers a new fact.
     propagate_constant_returns(&procedures, program, modules, &mut return_round, reoptimised)?;
-    let mut argument_round = 0;
     let mut cloning = crate::ipacp::Cloning::default();
     loop {
-        let constants = facts::program_parameters(program, &unexported);
-        let mut changed = false;
-        for at in 0..count {
-            for &id in &procedures[at] {
-                let Some(constants_for_body) = constants[at].get(&id) else {
-                    continue;
-                };
-                let (context, function) = function_mut(&mut program.modules[at], id);
-                if !facts::specialize_parameters(context, function, constants_for_body) {
-                    continue;
-                }
-                edited(&mut modules[at], &[id]);
-                reoptimised(&mut program.modules[at], &mut modules[at], id, &format!("ipa-args{argument_round}."))?;
-                changed = true;
-            }
-        }
-        if changed {
-            argument_round += 1;
-            propagate_constant_returns(&procedures, program, modules, &mut return_round, reoptimised)?;
-        }
-
         // A function called with a constant is copied for it (gcc's ipa-cp),
         // and the calls go to the copy.
         let mut cloned_now = false;
@@ -788,31 +753,12 @@ pub fn optimized_with<E: From<String>>(
                 cloned_now = true;
             }
         }
-        if cloned_now {
-            propagate_constant_returns(&procedures, program, modules, &mut return_round, reoptimised)?;
-            changed = true;
-        }
-
-        if !changed {
+        if !cloned_now {
             break;
         }
+        propagate_constant_returns(&procedures, program, modules, &mut return_round, reoptimised)?;
     }
-    // What its callers pass bounds each parameter of a body only they call:
-    // stated as a range, which the body's own proofs then read.
-    // A calling body is solved again only where it, its own parameters or the
-    // module's facts moved since: the rounds share the solves.
-    let mut solves = llrm_analysis::parameter_ranges::Cache::default();
-    for round in 0..if ranges { 4 } else { 0 } {
-        let stamped = llrm_analysis::parameter_ranges::stamp_with(program, &unexported, &mut solves);
-        if stamped.is_empty() {
-            break;
-        }
-        for (at, id) in stamped {
-            edited(&mut modules[at], &[id]);
-            reoptimised(&mut program.modules[at], &mut modules[at], id, &format!("ipa-range{round}."))?;
-        }
-    }
-    // What the constants and ranges left unread is not pushed.
+    // What the constants left unread is not pushed.
     for at in 0..count {
         let ((removed, unsound), before) =
             reporting_marked(&mut program.modules[at], &mut modules[at], crate::deadargs::removed_with);
