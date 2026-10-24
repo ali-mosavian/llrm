@@ -2058,7 +2058,7 @@ fn verdicts(flags: bool) -> Vec<Result<super::builder::RuntimeAnswer, &'static s
     let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
     let verdicts =
         super::dag_function::runtime_call_verdicts(&module, function, &layout, &llrm_x86_m16::M16, &Stub { flags });
-    verdicts.into_values().collect()
+    verdicts.values().copied().collect()
 }
 
 /// `B$SCMP` answers in the flags under `--runtime qb45`; the DAG path tested
@@ -2224,6 +2224,28 @@ entry:
 #[test]
 fn an_i1_freeze_is_selected() {
     let module = llrm_mir::parse::module(I1_FREEZE).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}
+
+const M16_REMAINDER_TWICE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+define i8 @f(ptr %p, i16 %a, i16 %b) {
+entry:
+  %r = srem i16 %a, %b
+  store i16 %r, ptr %p
+  %q = getelementptr i8, ptr %p, i16 %r
+  %v = load i8, ptr %q
+  ret i8 %v
+}
+";
+
+/// A remainder read by a store and folded into an address: the selector
+/// morphed the load without recording it as a user of the SDIVREM's result,
+/// so the result's replacement missed it and the emitter met an unselected
+/// 'SDivRem' (QCport `ls_animate`).
+#[test]
+fn a_remainder_used_by_a_store_and_an_address_is_selected() {
+    let module = llrm_mir::parse::module(M16_REMAINDER_TWICE).expect("parses");
     selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
