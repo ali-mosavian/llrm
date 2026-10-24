@@ -28,10 +28,13 @@ Formal parameter specification illegal|the parameter list of `{text}` is not all
 Formal parameters not unique|two parameters of `{text}` have the same name|rename one of them
 Function not defined|`{name}` is not a FUNCTION or DEF FN defined above this line|define or DECLARE it first
 GOTO missing|`{text}` should be followed by GOTO or GOSUB here|write `ON expression GOTO label, label`
+Identifier expected /TAB|`TAB` needs its argument in parentheses|write `TAB(column)`
+Identifier expected /SPC|`SPC` needs its argument in parentheses|write `SPC(count)`
 Identifier expected|`{text}` cannot be used as a name here, usually because it is a reserved word|rename it; reserved words such as COLOR, NAME, SECOND or POINT cannot be variable or procedure names
 Identifier too long|`{text}` is longer than the 40 characters a name may have|shorten it
 Illegal inside SUB or FUNCTION|`{statement}` cannot be used inside a SUB or FUNCTION|move it to the module level
 Illegal outside of SUB or FUNCTION|`{statement}` can only be used inside a SUB or FUNCTION|move it into a procedure
+Illegal type character in numeric constant /decimal|`{text}` has a decimal point or an exponent, and `%` and `&` only go with whole numbers|drop the suffix, or use `!` (single) or `#` (double)
 Illegal type character in numeric constant|`{text}` has a type character a number cannot carry, or its value does not fit the type|use a value in range, or a suffix that matches (`%` integer, `&` long, `!` single, `#` double)
 Integer between 1 and 32767 required|the length given for `{name}` must be a whole number from 1 to 32767|write a length in that range, as in `STRING * 20`
 Invalid character|`{text}` contains a character BC does not accept here|most often a type character (`%`, `&`, `!`, `#`, `$`) on a SUB, FUNCTION or TYPE name, a `?`, or a `$` outside a metacommand; remove it

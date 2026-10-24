@@ -149,7 +149,10 @@ fn locate(
         break;
     }
     // a lone keyword stands for its whole statement
-    let mut shown = text.trim().to_owned();
+    let mut shown: String = text.trim().to_owned();
+    if shown.chars().count() > 60 {
+        shown = format!("{}...", shown.chars().take(57).collect::<String>());
+    }
     if LEADING.contains(&shown.to_ascii_uppercase().as_str()) && !rest.is_empty() {
         let end = rest.find(':').unwrap_or(rest.len());
         shown = rest[..end].trim().chars().take(60).collect();
@@ -184,6 +187,23 @@ fn narrowed(
         }
     }
     span
+}
+
+/// The keys to try before the plain code, most specific first: the text of
+/// the error (`Identifier expected /TAB`), its kind, or the end of the line.
+fn variants(
+    code: &str,
+    place: &Where,
+) -> Vec<String> {
+    let mut keys = vec![format!("{code} /{}", place.text.to_ascii_uppercase())];
+    let text = place.text.as_str();
+    if text.ends_with(['%', '&']) && text.contains(['.', 'E', 'D', 'e', 'd']) && !text.starts_with("&") {
+        keys.push(format!("{code} /decimal"));
+    }
+    if place.at_end {
+        keys.push(format!("{code} /end"));
+    }
+    keys
 }
 
 fn fill(
@@ -243,8 +263,10 @@ pub fn explain(
     let place = locate(source, error.span);
     // a variant of the wording for an error at the end of the line (`NEXT`
     // with no variable)
-    let variant = format!("{} /end", error.code);
-    let entry = place.at_end.then(|| table().get(variant.as_str())).flatten().or_else(|| table().get(error.code.as_str()));
+    let entry = variants(&error.code, &place)
+        .iter()
+        .find_map(|key| table().get(key.as_str()))
+        .or_else(|| table().get(error.code.as_str()));
     let other = error
         .related
         .map(|span| {

@@ -123,7 +123,7 @@ impl Checker {
                         ok &= self.numeric(index).is_some();
                     }
                     if ok && rank != indices.len() {
-                        self.err(*span, "Wrong number of dimensions");
+                        self.dimensions(*span, rank, indices.len());
                         return None;
                     }
                     return ok.then_some(Typed {
@@ -452,7 +452,7 @@ impl Checker {
                 ok &= self.numeric(index).is_some();
             }
             if ok && var.rank.is_some() && rank != arguments.len() && rank != usize::MAX {
-                self.err(span, "Wrong number of dimensions");
+                self.dimensions(span, rank, arguments.len());
                 return None;
             }
             return ok.then_some(Typed { ty: var.ty, variable: true, constant: None, unfolded: None, array: None });

@@ -149,6 +149,26 @@ impl Checker {
         });
     }
 
+    /// "Wrong number of dimensions", with both counts.
+    fn dimensions(
+        &mut self,
+        span: Span,
+        dimensioned: usize,
+        given: usize,
+    ) {
+        let word = |n: usize| if n == 1 { "subscript" } else { "subscripts" };
+        let headline = format!(
+            "`{{name}}` has {dimensioned} dimension{} but is indexed with {given} {}",
+            if dimensioned == 1 { "" } else { "s" },
+            word(given)
+        );
+        self.err_because(
+            span,
+            "Wrong number of dimensions",
+            Reason::headline(headline).help("give as many subscripts as the array was dimensioned with"),
+        );
+    }
+
     /// "Math overflow" for a constant that does not fit `ty`, naming the type
     /// and its range; `place` says where it goes ("an argument", "a bound").
     fn overflow(

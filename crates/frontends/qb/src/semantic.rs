@@ -2871,7 +2871,7 @@ impl Compiler {
             }
             if matches!(storage, "local" | "parameter") && self.beyond_segment(self.data_offset) {
                 return self.fail(format!(
-                    "{} descriptor exceeds the {} KiB near-data budget",
+                    "{} descriptor does not fit: the near data segment (DGROUP, {} KiB) is full",
                     declaration.name,
                     self.segment_kib()
                 ));
@@ -2919,7 +2919,7 @@ impl Compiler {
         if storage == "static" && self.beyond_segment(extent)
             || storage != "static" && self.beyond_segment(self.data_offset + extent)
         {
-            return self.fail(format!("{} exceeds the {} KiB near-data budget", declaration.name, self.segment_kib()));
+            return self.fail(format!("{} does not fit: the near data segment (DGROUP, {} KiB) is full", declaration.name, self.segment_kib()));
         }
         // A word array lies at an even offset, so no element read crosses
         // offset FFFFh: its loads may run where the program would not.
@@ -3006,7 +3006,7 @@ impl Compiler {
             }
             if self.beyond_segment(self.data_offset) {
                 return self.fail(format!(
-                    "{} descriptor exceeds the {} KiB near-data budget",
+                    "{} descriptor does not fit: the near data segment (DGROUP, {} KiB) is full",
                     declaration.name,
                     self.segment_kib()
                 ));
@@ -3493,7 +3493,7 @@ impl Compiler {
                     "BLOAD" | "BSAVE" => self.binary_memory_statement(name, arguments)?,
                     "RANDOMIZE" => {
                         let [seed] = arguments.as_slice() else {
-                            return self.fail("the audited RANDOMIZE form requires one seed expression");
+                            return self.fail("RANDOMIZE needs a seed here, as in `RANDOMIZE TIMER`");
                         };
                         let (seed, seed_type) = self.expression(seed)?;
                         let seed = self.convert(seed, seed_type, DOUBLE)?;
@@ -4323,7 +4323,7 @@ impl Compiler {
                     }
                     "SCREEN" => {
                         if arguments.len() != 1 {
-                            return self.fail("the audited SCREEN form requires one mode");
+                            return self.fail("SCREEN needs one mode here, as in `SCREEN 13`");
                         }
                         let (mode, mode_type) = self.expression(&arguments[0])?;
                         let mode = self.convert(mode, mode_type, INTEGER)?;
@@ -4341,7 +4341,7 @@ impl Compiler {
                     }
                     "WIDTH" => {
                         if arguments.len() != 2 {
-                            return self.fail("the audited WIDTH form requires columns and rows");
+                            return self.fail("WIDTH needs columns and rows here, as in `WIDTH 80, 25`");
                         }
                         let mut operands = Vec::new();
                         for argument in arguments {
@@ -4376,7 +4376,7 @@ impl Compiler {
                     }
                     _ => {
                         return self
-                            .fail(format!("{name} is parsed as a runtime statement but has no audited ABI contract"));
+                            .fail(format!("{name} is valid, but this compiler cannot generate code for it yet"));
                     }
                 },
                 Statement::Exit(ExitTarget::Sub | ExitTarget::Function, _) => {
@@ -4445,7 +4445,7 @@ impl Compiler {
             Expr::Literal(Literal::Real(value, _), _) => Ok(value.clone()),
             Expr::Literal(Literal::String(value), _) => {
                 if !value.is_ascii() || value.contains(['"', '\0']) {
-                    return self.fail("DATA strings require ASCII without embedded quotes in this audited form");
+                    return self.fail("a DATA string can only hold plain ASCII text without quotes for now");
                 }
                 Ok(format!("\"{value}\""))
             }
@@ -4902,7 +4902,7 @@ impl Compiler {
                 volatile: *volatile,
                 inbounds: *inbounds,
             }),
-            Operand::Value(_) | Operand::Constant(_, _) => self.fail("aggregate copy operand is not a place"),
+            Operand::Value(_) | Operand::Constant(_, _) => self.fail("internal error: an aggregate copy operand is not a place"),
         }
     }
 
@@ -5139,7 +5139,7 @@ impl Compiler {
                     )?;
                 Ok((base, offset + field.offset, field.type_id))
             }
-            _ => self.fail("field base is not stored in a place"),
+            _ => self.fail("internal error: a field base is not stored in a place"),
         }
     }
 
@@ -5748,7 +5748,7 @@ impl Compiler {
         descriptor: Operand,
     ) -> Result<Operand, SemanticError> {
         let Operand::Value(descriptor) = descriptor else {
-            return self.fail("string descriptor is not a value");
+            return self.fail("internal error: a string descriptor is not a value");
         };
         let symbol = self.next_data;
         self.next_data += 1;
@@ -6213,7 +6213,7 @@ impl Compiler {
                 Ok((self.floating_literal(value, type_id)?, type_id))
             }
             Expr::Literal(Literal::String(_), _) => {
-                self.fail("string expressions are runtime-only and not attached yet")
+                self.fail("a string expression cannot be used here")
             }
             Expr::Name(name, _) => {
                 if self.intrinsic(name).is_some_and(|intrinsic| intrinsic.accepts(0)) {
@@ -7629,7 +7629,7 @@ impl Compiler {
             );
             return Ok(Some((Operand::Value(result), DOUBLE)));
         }
-        self.fail(format!("intrinsic {name} has no semantic lowering for {:?}", intrinsic.lowering))
+        self.fail(format!("{name} is valid, but this compiler cannot generate code for it yet"))
     }
 
     fn floor_float(
@@ -7851,12 +7851,11 @@ impl Compiler {
             .signatures
             .get(canonical(name))
             .cloned()
-            .ok_or(())
-            .or_else(|()| {
-                self.fail(format!(
-                    "`{name}` is called but no SUB or FUNCTION with that name exists; check the spelling, or define it (SUB {name} ... END SUB) or DECLARE it above"
-                ))
-            })?;
+            .ok_or_else(
+                || SemanticError {
+                    message: format!("`{name}` is not a known procedure or runtime routine; DECLARE it, or check the spelling"),
+                },
+            )?;
         if signature.parameters.len() != arguments.len() {
             return self.fail(format!(
                 "`{name}` takes {} but this call gives {}; compare the call with its SUB or FUNCTION line",
@@ -8733,7 +8732,7 @@ impl Compiler {
         let numeric = |type_id| integral(type_id) || matches!(type_id, SINGLE | DOUBLE);
         let allowed = numeric(from) && numeric(to);
         if !allowed {
-            return self.fail(format!("a {} cannot be turned into a {} automatically; convert it yourself (VAL, STR$, CINT, CLNG...)", self.name(from), self.name(to)));
+            return self.fail(format!("cannot convert {} to {} here", self.name(from), self.name(to)));
         }
         if let Operand::Constant(_, Number::Integer(mut value)) = operand {
             if unsigned(to) && integral(from) && integer_width(from) == integer_width(to) {
@@ -8975,7 +8974,7 @@ impl Compiler {
         let extent = self.width(type_id);
         let storage = self.implicit_storage;
         if storage != "static" && self.beyond_segment(self.data_offset + extent) {
-            return self.fail(format!("temporary exceeds the {} KiB frame budget", self.segment_kib()));
+            return self.fail(format!("a temporary value does not fit: the stack frame ({} KiB) is full", self.segment_kib()));
         }
         let (offset, symbol) = if storage == "static" {
             let symbol = self.next_data;
@@ -9017,7 +9016,7 @@ impl Compiler {
         let extent = self.width(STRING);
         if self.beyond_segment(self.data_offset + extent) {
             return self
-                .fail(format!("STRING argument temporary exceeds the {} KiB storage budget", self.segment_kib()));
+                .fail(format!("a STRING argument does not fit: the temporary storage ({} KiB) is full", self.segment_kib()));
         }
         let storage = self.implicit_storage;
         let id = self.next_place;
@@ -9138,7 +9137,7 @@ impl Compiler {
                 .map(f64::to_le_bytes)
                 .map(Vec::from)
                 .map_err(|_| SemanticError { message: format!("invalid DOUBLE constant {text}") })?,
-            _ => return self.fail("floating literal has a non-floating type"),
+            _ => return self.fail("internal error: a floating literal has a non-floating type"),
         };
         // BC pools identical floating constants across a whole module. Apart
         // from wasting BC_CN, keeping one object per occurrence can consume
@@ -9530,7 +9529,7 @@ impl Compiler {
         targets: Vec<u32>,
     ) -> Result<(), SemanticError> {
         if !self.block_open() {
-            return self.fail("statement follows a terminating control transfer");
+            return self.fail("internal error: code was generated after its block had ended");
         }
         self.blocks[self.current_block].terminator = Some(Terminator { kind, operands, targets });
         Ok(())
