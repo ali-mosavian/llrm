@@ -15,6 +15,7 @@ mod asmcall;
 mod codecall;
 mod mathops;
 mod memops;
+mod mergedcond;
 mod switch;
 mod tailcall;
 
@@ -42,9 +43,26 @@ pub enum RuntimeAnswer {
     Flags,
 }
 
+/// The target's cost model (`TTI` in the pin), held where the builder is
+/// debug-printed.
+#[derive(Clone)]
+pub struct TtiHandle(pub std::rc::Rc<dyn llrm_mir::tti::Tti>);
+
+impl std::fmt::Debug for TtiHandle {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        out.write_str("Tti")
+    }
+}
+
 /// The target facts the builder asks (`TLI->` in the pin).
 #[derive(Clone, Debug)]
 pub struct BuilderTarget {
+    /// The cost model `shouldKeepJumpConditionsTogether` prices with; none:
+    /// conditions stay together.
+    pub tti: Option<TtiHandle>,
     pub dag: DagConfig,
     /// `getShiftAmountTy`: x86 shifts by `i8`.
     pub shift_amount: EVT,
@@ -67,6 +85,15 @@ pub struct BuilderTarget {
 }
 
 impl BuilderTarget {
+    /// This target with the cost model of its CPU.
+    pub fn with_tti(
+        mut self,
+        tti: Option<std::rc::Rc<dyn llrm_mir::tti::Tti>>,
+    ) -> BuilderTarget {
+        self.tti = tti.map(TtiHandle);
+        self
+    }
+
     /// This target rounding conversions to their float type.
     pub fn with_float_store(
         mut self,
@@ -122,6 +149,7 @@ impl BuilderTarget {
             libcalls: None,
             stack_align: None,
             float_store: false,
+            tti: None,
             runtime_calls: None,
         }
     }
@@ -136,6 +164,7 @@ impl BuilderTarget {
             libcalls: None,
             stack_align: None,
             float_store: false,
+            tti: None,
             runtime_calls: None,
         }
     }
@@ -199,6 +228,11 @@ pub fn build_block(
     // is final
     let mut extra = Vec::new();
     let mut next = next_synthetic;
+    // the blocks of merged conditions are emitted in the layout the walk made
+    let mut deferred = deferred;
+    if deferred.iter().any(|item| matches!(item, switch::Deferred::Merged(_))) {
+        deferred.sort_by_key(|item| order.iter().position(|one| *one == item.block()));
+    }
     for item in deferred {
         let block = item.block();
         let mut one = Builder::new(
@@ -1978,8 +2012,8 @@ impl Builder<'_> {
         Ok(self.operand_type(operand)?.size_in_bits())
     }
 
-    /// `visitUncondBr` and `visitCondBr` (through `visitSwitchCase`), without
-    /// `FindMergedConditions` (DEVIATE SD15).
+    /// `visitUncondBr` and `visitCondBr` (through `visitSwitchCase`), with
+    /// `FindMergedConditions` (`mergedcond.rs`).
     fn visit_br(
         &mut self,
         instruction: &llrm_mir::module::Instruction,
@@ -1999,8 +2033,12 @@ impl Builder<'_> {
             }
             return Ok(());
         }
+        let (on_true, on_false) = (block_of(instruction.operands[1]), block_of(instruction.operands[2]));
+        if self.visit_merged_branch(instruction, on_true, on_false)? {
+            return Ok(());
+        }
         let mut cond = self.get_value(instruction.operands[0])?;
-        let (mut on_true, mut on_false) = (block_of(instruction.operands[1]), block_of(instruction.operands[2]));
+        let (mut on_true, mut on_false) = (on_true, on_false);
         if Some(on_true) == next {
             std::mem::swap(&mut on_true, &mut on_false);
             let one = self.dag.get_constant(1, self.dag.value_type(cond));

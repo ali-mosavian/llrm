@@ -539,8 +539,11 @@ fn selected_in(
     };
     let (builder_target, address_mode) =
         if m16 { (BuilderTarget::m16(), AddrMode::Real16) } else { (BuilderTarget::m32(), AddrMode::Flat32) };
-    let builder_target =
-        builder_target.with_runtime_calls(libcalls).with_float_store(cpu.float_store).with_runtime_call_verdicts(
+    let builder_target = builder_target
+        .with_runtime_calls(libcalls)
+        .with_float_store(cpu.float_store)
+        .with_tti(cpu.target().tti())
+        .with_runtime_call_verdicts(
             contracts.map(|contracts| runtime_call_verdicts(module, function, &layout, arch, contracts.abi)),
         );
     let tables = tables(arch);
