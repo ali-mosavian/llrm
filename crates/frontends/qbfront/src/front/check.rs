@@ -20,6 +20,9 @@ use crate::Dialect;
 pub struct Diagnostic {
     pub span: Span,
     pub message: String,
+    /// The name the error is about, when it is one word of a longer span (a
+    /// label in a GOTO).
+    pub subject: Option<String>,
 }
 
 /// A BASIC type.
@@ -251,7 +254,17 @@ impl Checker {
         span: Span,
         message: &str,
     ) {
-        self.errors.push(Diagnostic { span, message: message.into() });
+        self.errors.push(Diagnostic { span, message: message.into(), subject: None });
+    }
+
+    /// `err`, naming the word of the span at fault.
+    fn err_about(
+        &mut self,
+        span: Span,
+        message: &str,
+        subject: &str,
+    ) {
+        self.errors.push(Diagnostic { span, message: message.into(), subject: Some(subject.to_owned()) });
     }
 
     // ---- the module
@@ -1344,7 +1357,7 @@ impl Checker {
             Class::Label => {
                 if let Expr::Name(name, span) = argument {
                     if !self.labels.contains(name) {
-                        self.err(*span, "Label not defined");
+                        self.err_about(*span, "Label not defined", name);
                     }
                     return Some(Typed::value(Ty::Int));
                 }
@@ -1572,7 +1585,7 @@ impl Checker {
                         && !self.module_labels.contains(label)
                         && !self.all_labels.contains(label)
                     {
-                        self.err(*at, "Label not defined");
+                        self.err_about(*at, "Label not defined", label);
                     }
                 } else {
                     self.err(argument.span(), "Syntax error");
@@ -1711,7 +1724,7 @@ impl Checker {
                 // VBDOS takes `GOTO 0`
                 let vbdos_zero = label == "0" && matches!(self.dialect, Dialect::VbDos | Dialect::Quickr);
                 if !vbdos_zero && !self.labels.contains(label) {
-                    self.err(*span, "Label not defined");
+                    self.err_about(*span, "Label not defined", label);
                 }
             }
             Statement::If { condition, then_branch, else_branch, .. } => {
@@ -1818,7 +1831,7 @@ impl Checker {
                     self.labels.contains(label)
                 };
                 if label != "0" && !known {
-                    self.err(*span, "Label not defined");
+                    self.err_about(*span, "Label not defined", label);
                 }
             }
             Statement::OnErrorResumeNext { local, span } => {
@@ -1831,7 +1844,7 @@ impl Checker {
             Statement::Resume { target, span } => {
                 if let ResumeTarget::Label(label) = target {
                     if label != "0" && !self.labels.contains(label) {
-                        self.err(*span, "Label not defined");
+                        self.err_about(*span, "Label not defined", label);
                     }
                 }
             }
@@ -2975,7 +2988,7 @@ impl Checker {
             if let [argument] = arguments {
                 if let Expr::Literal(Literal::Integer(number, _), at) = argument {
                     if !self.labels.contains(&number.to_string()) {
-                        self.err(*at, "Label not defined");
+                        self.err_about(*at, "Label not defined", &number.to_string());
                     }
                 } else {
                     self.string_expr(argument);

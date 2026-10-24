@@ -3027,7 +3027,7 @@ fn error<T>(
     message: &str,
 ) -> Result<T, ParseError> {
     let span = state.token().map_or(Span { line: 1, start: 0, end: 0 }, |token| token.span);
-    Err(ParseError { span, message: message.into() })
+    Err(ParseError::coded(span, message))
 }
 
 #[cfg(test)]

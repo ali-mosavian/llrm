@@ -43,7 +43,7 @@ pub fn compile(args: &Args) -> Result<Compiled, String> {
         let location = source.location(error.span.line);
         let path = location.map(|location| location.path.display().to_string()).unwrap_or_else(|| input.clone());
         let line = location.map_or(error.span.line, |location| location.line);
-        format!("{path}:{}:{}: {}", line, error.span.start + 1, error.message)
+        render(&error, &path, line, &source.text)
     })?;
     if args.syntax {
         let text =
@@ -60,4 +60,32 @@ pub fn compile(args: &Args) -> Result<Compiled, String> {
     let (text, warnings) = compile_debugged(&module, name, args.dialect, &args.runtime, &args.options, debugged)
         .map_err(|error| format!("{input}: {}", error.message))?;
     Ok(Compiled { text, warnings: warnings.into_iter().map(|one| format!("{input}: {one}")).collect() })
+}
+
+/// An error as the program prints it: where, what, the source line with the
+/// place marked, and what to do.
+fn render(
+    error: &crate::ParseError,
+    path: &str,
+    line: usize,
+    text: &str,
+) -> String {
+    let mut out = format!("{path}:{line}:{}: {}", error.span.start + 1, error.message);
+    if let Some(source_line) = error.span.line.checked_sub(1).and_then(|index| text.lines().nth(index)) {
+        let width = error.span.end.saturating_sub(error.span.start).max(1);
+        let gutter = line.to_string();
+        out.push_str(&format!("\n {gutter} | {source_line}"));
+        out.push_str(&format!(
+            "\n {} | {}{}",
+            " ".repeat(gutter.len()),
+            " ".repeat(error.span.start),
+            "^".repeat(width)
+        ));
+    }
+    if let Some(help) = &error.help {
+        for (index, row) in help.lines().enumerate() {
+            out.push_str(&format!("\n {}{row}", if index == 0 { "help: " } else { "      " }));
+        }
+    }
+    out
 }
