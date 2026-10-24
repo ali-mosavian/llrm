@@ -57,8 +57,25 @@ thread_local! {
 // instructions of the body it was made for: the next pass takes it only for
 // that body. One per thread, since the slot indexes of a thread share an arena.
 thread_local! {
-    static HANDED_OVER: std::cell::RefCell<Option<(Vec<Vec<InstrKey>>, u64, LiveIntervals)>> =
-        const { std::cell::RefCell::new(None) };
+    static HANDED_OVER: std::cell::RefCell<Option<HandedOver>> = const { std::cell::RefCell::new(None) };
+}
+
+/// What a pass leaves for the next. A set still held when its thread ends is
+/// leaked, not dropped: dropping a `LiveIntervals` reads the slot-index arena,
+/// a thread local that may be gone by then (a coalescer run with no allocator
+/// after it aborted the process: "thread local panicked on drop").
+struct HandedOver {
+    instructions: Vec<Vec<InstrKey>>,
+    analysed: u64,
+    lis: Option<LiveIntervals>,
+}
+
+impl Drop for HandedOver {
+    fn drop(&mut self) {
+        if let Some(lis) = self.lis.take() {
+            std::mem::forget(lis);
+        }
+    }
 }
 
 fn instructions_of(body: &LirBody) -> Vec<Vec<InstrKey>> {
@@ -70,16 +87,24 @@ pub fn hand_over(
     lis: LiveIntervals,
     body: &LirBody,
 ) {
-    HANDED_OVER.with(|slot| *slot.borrow_mut() = Some((instructions_of(body), super::slotindex::analysed(), lis)));
+    HANDED_OVER.with(|slot| {
+        *slot.borrow_mut() = Some(HandedOver {
+            instructions: instructions_of(body),
+            analysed: super::slotindex::analysed(),
+            lis: Some(lis),
+        });
+    });
 }
 
 /// The `LiveIntervals` handed over for exactly this `body`, if there is one.
 pub fn take_handed_over(body: &LirBody) -> Option<LiveIntervals> {
     HANDED_OVER.with(|slot| {
-        let held = slot.borrow_mut().take()?;
+        let mut held = slot.borrow_mut().take()?;
         // Taken only if no other body was numbered since: its entries are the
         // arena's.
-        (held.0 == instructions_of(body) && held.1 == super::slotindex::analysed()).then_some(held.2)
+        let fits = held.instructions == instructions_of(body) && held.analysed == super::slotindex::analysed();
+        let lis = held.lis.take();
+        if fits { lis } else { None }
     })
 }
 
@@ -89,11 +114,11 @@ pub fn take_handed_over(body: &LirBody) -> Option<LiveIntervals> {
 /// numbered since and the edit applies.
 pub fn take_handed_over_edited_to(body: &LirBody) -> Option<LiveIntervals> {
     HANDED_OVER.with(|slot| {
-        let held = slot.borrow_mut().take()?;
-        if held.1 != super::slotindex::analysed() {
+        let mut held = slot.borrow_mut().take()?;
+        if held.analysed != super::slotindex::analysed() {
             return None;
         }
-        held.2.edited_to(body)
+        held.lis.take()?.edited_to(body)
     })
 }
 
