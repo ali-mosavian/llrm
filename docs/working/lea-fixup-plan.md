@@ -32,3 +32,21 @@ rule fires nowhere there; the unit tests build the shape.
   owner w-8, review 11-30. Measured 2026-10-23: 79 two-register LEAs over the 71 bench programs at -O2 and -Os, none with its add or sub within five instructions; no site, no cost.
 
 The two-address pass makes the LEAs now: `convertInstTo3Addr` for a dying source whose sum ends in another register (`isProfitableToConv3Addr`, TA-5 closed) and `hasCommutePreference` (TA-2 closed) keep the LEA as the add's second source, so `optLEAALU` has its shape; `LiveRangeShrink` counts a delivered value as the pin's `COPY`, so it leaves the order alone.
+
+
+## Translation in the pin's file order (w-8, from 2026-10-24)
+
+The pin's file, function by function, with whether any `-march` llrm supports reaches it. `of_cpu` takes i386, i486, pentium, pentiumpro, k5, k6, athlon, core2 and x86-64. `slow-lea`
+(`TuningSlowLEA`, X86.td L1350, L1375, L1390) and `lea-uses-ag` (L1336) belong to Atom, Silvermont and kin: none of the nine. `slow-3ops-lea` is in `X86_64V1Tuning` (L971), so `x86-64` reaches the
+3-operand path; `TuningSlowIncDec` (L973) makes `OptIncDec` false there unless the block is optimised for size.
+
+| # | Pin function (L) | Reached by | Ours now | PR | Date |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `isLEA` (227), `runOnMachineFunction` (232), `getPreviousInstr` (295), `searchBackwards` (308) | all | none: two peephole groups (`lea_fixup`, `lea_alu`) run in the peephole walk, not per block in the pin's order | the pass `fixupleas.rs` with the block loop, the predicate and the two searches; slot registered, rules still in the peephole | 11-02 |
+| 2 | `getADDrrFromLEA` .. `getINCDECFromLEA` (351-400), `checkRegUsage` (466) | all | `other_term`, `step`, the guards in `guards.rs` | the opcode maps and the register-usage check as functions, tested one by one | 11-04 |
+| 3 | `optLEAALU` (500) | all | peephole `lea_alu` (LF-2: window of five at the pin's, no site on the bench) | moved into the pass, the group removed from peephole.peep | 11-06 |
+| 4 | `optTwoAddrLEA` (564) | all | peephole `lea_fixup` (cases 1 and 2) | moved into the pass, the group removed | 11-08 |
+| 5 | `processInstrForSlow3OpLEA` (752), `isInefficientLEAReg` (331), `hasInefficientLEABaseReg` (340), `mayHaveOffset` (347) | `x86-64` only | none | translated, tested at `-march=x86-64` | 11-10 |
+| 6 | `processInstruction` (664), `seekLEAFixup` (681), `processInstructionForSlowLEA` (701) | none of the nine | none | not translated: no supported CPU sets `slow-lea` or `lea-uses-ag`. Exit: the first PR that adds such a CPU translates them | n/a |
+
+Each row is one PR with its tests and the byte-identity check on the bench programs (objects must not change where the pin's pass has no site). A row that changes bytes states the site.

@@ -1943,3 +1943,41 @@ fn a_double_not_live_across_a_far_cell_is_selected() {
     selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
+
+const M16_FAR_NULL: &str =
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
+define i16 @f(ptr addrspace(1) %p) addrspace(1) {
+entry:
+  %c = icmp eq ptr addrspace(1) %p, null
+  %r = zext i1 %c to i16
+  ret i16 %r
+}
+";
+
+/// A far null pointer is two zero words. `get_constant` of the far type
+/// asserted 'integer constant of Far' and stopped 35 QCport functions.
+#[test]
+fn a_far_null_is_two_zero_words() {
+    let module = llrm_mir::parse::module(M16_FAR_NULL).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}
+
+const I1_FREEZE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+define i16 @f(i1 %a, i16 %x) {
+entry:
+  %f = freeze i1 %a
+  %z = zext i1 %f to i16
+  %r = add i16 %z, %x
+  ret i16 %r
+}
+";
+
+/// Freezing an `i1` promotes the operand and freezes that
+/// (`Freeze` of `Simple(I1)` stopped 2 QCport functions: 'promote result').
+#[test]
+fn an_i1_freeze_is_selected() {
+    let module = llrm_mir::parse::module(I1_FREEZE).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}

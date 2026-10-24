@@ -35,9 +35,10 @@
 //! asks (`Coalescer::llvm_env`). A far pointer's selector read through ES is
 //! the case (render/dl).
 //!
-//! DEVIATE P2 (no number): `IMPLICIT_DEF` and undef incoming values do not
-//! exist in LIR, so `allPhiOperandsUndefined`, `ImpDefs` and `SrcUndef` are not
-//! translated.
+//! DEVIATE P2 (owner w-1, exit 2026-11-06): a phi's incoming value defined by
+//! an `implicit_def` (`processimpdefs::IMPLICIT_DEF`, which isel makes) is not
+//! treated as undef, so `allPhiOperandsUndefined`, `ImpDefs` and `SrcUndef` are
+//! not translated. Retires ProcessImplicitDefs' PI-2 in the same PR.
 //!
 //! DEVIATE P3 (no number): `MachineLoopInfo::getLoopFor` is the innermost loop
 //! of the body's loop forest; `isLiveIn` and `isLiveOutPastPHIs` read the

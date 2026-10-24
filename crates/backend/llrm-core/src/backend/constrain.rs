@@ -1289,6 +1289,64 @@ mod tests {
         assert!(insns[1].defines.len() == 1 && insns[1].uses == [1], "the copy reads the index");
     }
 
+    /// `lea [v1 + v2]` with both read as bytes elsewhere: neither spelling of
+    /// the pair (base BX/BP, index SI/DI) leaves both a register, the roles
+    /// fall back to the source spelling and `v2`, an index, has no register
+    /// that is also a byte register. `distinct_classes` saw only the byte
+    /// reads (sc.c `_sc_alloc@3` under `--isel=shadow`: "could not place
+    /// every range"). The pair's read of `v2` takes a copy of its own.
+    #[test]
+    fn test_a_byte_read_value_in_a_two_register_address_reads_a_copy_there() {
+        let cell = Mem {
+            base: Some(Held { value: 1, width: 2 }),
+            index: Some(Held { value: 2, width: 2 }),
+            ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2)
+        };
+        let byte_read = |into: u32, from: u32, at: i64| {
+            Insn::new(
+                at,
+                Some((at, at + 2)),
+                Some(semantics(Operation::Move, "mov", vec![held(into, 1)], vec![held(from, 1)])),
+                vec![into],
+                vec![from],
+            )
+        };
+        let body = _body(vec![
+            Insn::new(
+                0x10,
+                Some((0x10, 0x12)),
+                Some(semantics(Operation::Move, "mov", vec![held(1, 2)], vec![imm(0, 2)])),
+                vec![1],
+                vec![],
+            ),
+            Insn::new(
+                0x12,
+                Some((0x12, 0x14)),
+                Some(semantics(Operation::Move, "mov", vec![held(2, 2)], vec![imm(0, 2)])),
+                vec![2],
+                vec![],
+            ),
+            byte_read(3, 1, 0x14),
+            byte_read(4, 2, 0x16),
+            byte_read(5, 2, 0x18),
+            Insn::new(
+                0x1a,
+                Some((0x1a, 0x1d)),
+                Some(semantics(Operation::Address, "lea", vec![held(6, 2)], vec![Loc::Mem(cell)])),
+                vec![6],
+                vec![1, 2],
+            ),
+        ]);
+        let m16 = crate::backend::classes::RegisterClasses::m16();
+        let stuck = |body: &LirBody| {
+            let found = crate::backend::regclass::classes(body, &BTreeSet::new(), &target::BUILT_IN, &m16);
+            found.values().filter(|class| target::order(Some(*class), &target::BUILT_IN, &m16).is_empty()).count()
+        };
+        assert_eq!(stuck(&body), 1, "premise: the index has no register");
+        let got = super::distinct_classes(&body, 7, &target::BUILT_IN, &m16);
+        assert_eq!(stuck(&got), 0);
+    }
+
     // ---- hoisted ----
 
     fn block_to(

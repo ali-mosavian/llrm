@@ -18,7 +18,7 @@ def load(name: str):
 
 def fake_llrm(path: Path, body: str) -> str:
     """A stand-in llrm-c: writes `body` to the -o file; a source containing FAIL makes it exit 1."""
-    path.write_text(f'#!/bin/bash\n# {'#' * 5000 * (1 + ord(body[0]) % 2)}\nfor a; do [ "$p" = -o ] && o=$a; p=$a; done\ngrep -q FAIL "$a" && {{ echo "llrm-c: boom" >&2; exit 1; }}\necho {body} > "$o"\n')
+    path.write_text(f'#!/bin/bash\n# {'#' * 5000 * (1 + ord(body[0]) % 2)}\n[ "$1" = --version ] && {{ echo "llrm-c abc123"; exit 0; }}\nfor a; do [ "$p" = -o ] && o=$a; p=$a; done\ngrep -q FAIL "$a" && {{ echo "llrm-c: boom" >&2; exit 1; }}\necho {body} > "$o"\n')
     path.chmod(0o755)
     return str(path)
 
@@ -33,6 +33,19 @@ def test_objsweep_names_a_changed_object_and_a_one_sided_failure(tmp_path):
     assert done.returncode == 1
     assert "1 objects changed" in done.stdout and "changed same m32 -O2" in done.stdout
     assert "failed on both sides" in done.stdout and "1 failed on both sides" in done.stdout
+
+
+def test_objsweep_measures_the_object_not_the_assembly_text(tmp_path):
+    """objsweep wrote to `x.old`: llrm-c wrote assembly text there, so x_fir m16 read +350 B (text) where the object grew 21 B."""
+    src = tmp_path / "b"
+    src.mkdir()
+    (src / "p.c").write_text("int a;")
+    for name, obj in (("old", "A"), ("new", "B")):
+        pad = "#" * (5000 if name == "old" else 9000)  # two builds, not one relinked
+        (tmp_path / name).write_text(f'#!/bin/bash\n# {pad}\n[ "$1" = --version ] && {{ echo "llrm-c abc123"; exit 0; }}\nfor a; do [ "$p" = -o ] && o=$a; p=$a; done\ncase "$o" in *.o|*.obj) echo {obj} > "$o";; *) echo TEXT > "$o";; esac\n')
+        (tmp_path / name).chmod(0o755)
+    done = subprocess.run([sys.executable, str(HERE / "objsweep.py"), str(tmp_path / "old"), str(tmp_path / "new"), "--src", str(src), "--levels", "O2", "--targets", "m32"], capture_output=True, text=True)
+    assert "changed p m32 -O2" in done.stdout, done.stdout + done.stderr
 
 
 def test_rowdiff_counts_rows_above_a_and_names_a_row_on_one_side():
@@ -59,9 +72,12 @@ def test_a_pair_of_one_build_relinked_is_void(tmp_path):
     voidpair = load("voidpair")
     base = bytes(range(256)) * 1024
     a, b, c = tmp_path / "a", tmp_path / "b", tmp_path / "c"
-    a.write_bytes(base)
-    b.write_bytes(base[:100] + b"x" * 83 + base[183:])
-    c.write_bytes(bytes(reversed(base)))
+    stamp = b'#!/bin/sh\necho "llrm-c abc123"\nexit 0\n'  # the binaries must answer --version; the rest is never run
+    a.write_bytes(stamp + base)
+    b.write_bytes(stamp + base[:100] + b"x" * 83 + base[183:])
+    c.write_bytes(stamp + bytes(reversed(base)))
+    for one in (a, b, c):
+        one.chmod(0o755)
     assert voidpair.void(str(a), str(b)).startswith("VOID PAIR")
     assert voidpair.void(str(a), str(c)) == ""
     done = subprocess.run([sys.executable, str(HERE / "objsweep.py"), str(a), str(b), "--src", str(tmp_path)], capture_output=True, text=True)

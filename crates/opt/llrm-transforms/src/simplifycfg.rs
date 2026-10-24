@@ -444,14 +444,72 @@ fn block_simplified(
     if options.speculate_blocks && function.is_placed(block) && twoentryphi::folded(context, spec, function, block) {
         return true;
     }
-    // `simplifyCondBranch`'s value comparisons (SimplifyCFG.cpp:8963), before
-    // the compare chain; a `switch` has them in `switchopt`.
-    if function.is_placed(block)
-        && function.terminator(block).is_some_and(|last| {
-            function.instruction(last).opcode == Opcode::Br && function.instruction(last).operands.len() == 3
-        })
-        && crate::switchvalue::folded(options, context, spec, function, block)
-    {
+    // `simplifyOnce`'s switch on the terminator (SimplifyCFG.cpp#L9368): each
+    // arm runs only its own kind's steps, in the pin's order.
+    let acted = match terminator_kind(function, block) {
+        Terminator::Conditional => cond_branch_simplified(options, context, spec, function, block, folded, headers),
+        // `simplifySwitch`: the shared hoist, then the switch steps.
+        Terminator::Switch => {
+            function.is_placed(block)
+                && (branch_hoisted(options, context, spec, function, block)
+                    || crate::switchopt::simplified(options, context, spec, declared, function, block))
+        }
+        // `simplifyUncondBranch`, then the rest of it where the empty block
+        // did not go.
+        Terminator::Jump => {
+            function.is_placed(block)
+                && ((!form.contains(&llrm_analysis::cfg::id(block))
+                    && jump_simplified(context, function, block, headers))
+                    || (function.is_placed(block) && uncondicmp::folded(context, spec.layout, function, block)))
+        }
+        Terminator::Other => false,
+    };
+    changed | acted
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The blocks `cond_branch_simplified` visited.
+    pub(crate) static CONDITIONAL_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The kind of terminator ending a block, as `simplifyOnce` dispatches on it.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Terminator {
+    Conditional,
+    Switch,
+    Jump,
+    Other,
+}
+
+fn terminator_kind(
+    function: &Function,
+    block: BlockId,
+) -> Terminator {
+    let Some(last) = function.terminator(block) else { return Terminator::Other };
+    let one = function.instruction(last);
+    match (&one.opcode, one.operands.len()) {
+        (Opcode::Br, 3) => Terminator::Conditional,
+        (Opcode::Br, 1) => Terminator::Jump,
+        (Opcode::Switch, _) => Terminator::Switch,
+        _ => Terminator::Other,
+    }
+}
+
+/// `simplifyCondBranch`: the value comparisons (SimplifyCFG.cpp:8963), the
+/// compare chain, and the folds that follow, in the pin's order.
+fn cond_branch_simplified(
+    options: &Options,
+    context: &mut Context,
+    spec: &Speculation,
+    function: &mut Function,
+    block: BlockId,
+    folded: &mut bool,
+    headers: &IdSet<BlockId>,
+) -> bool {
+    #[cfg(test)]
+    CONDITIONAL_VISITS.with(|one| one.set(one.get() + 1));
+    if function.is_placed(block) && crate::switchvalue::folded(options, context, spec, function, block) {
         return true;
     }
     if function.is_placed(block) && icmpchain::folded(context, spec, function, block) {
@@ -474,20 +532,7 @@ fn block_simplified(
         *folded = true;
         return true;
     }
-    if function.is_placed(block) && stores_merged(context, spec, function, block) {
-        return true;
-    }
-    if function.is_placed(block) && crate::switchopt::simplified(options, context, spec, declared, function, block) {
-        return true;
-    }
-    if function.is_placed(block)
-        && !form.contains(&llrm_analysis::cfg::id(block))
-        && jump_simplified(context, function, block, headers)
-    {
-        return true;
-    }
-    // The rest of `simplifyUncondBranch`, where the empty block did not go.
-    changed | (function.is_placed(block) && uncondicmp::folded(context, spec.layout, function, block))
+    function.is_placed(block) && stores_merged(context, spec, function, block)
 }
 
 /// The code the two arms of the branch ending `block` share, run before it:
