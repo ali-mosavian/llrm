@@ -158,3 +158,17 @@ def test_demos_the_emulator_logged_count_before_run_sh_has_written_cstep(tmp_pat
     """run.sh writes cstep.txt when the emulator exits; a run stopped while it plays has only dosbox.log. The first attract run read cstep.txt, found it missing and called Borland's good run 'never started'."""
     (tmp_path / "dosbox.log").write_text("Bochs port E9h: " + PLAYED.replace("\r\n", "\nBochs port E9h: "))
     assert qcport_run.attract_problems(tmp_path) == []
+
+
+def test_the_attract_verdict_lets_o2_fail_only_while_it_is_listed_and_never_os():
+    """QCport -O2 runs out of memory in the attract loop (AM-QC-1); the shipped -Os build must play all three."""
+    bad = ["never started: demo2.qdc demo3.qdc", "miptex.bin: out of memory"]
+    listed = {qcport_run.ATTRACT_O2: {"issue": 1}}
+    assert qcport_run.attract_verdict({"borland": [], "llrm -O2": bad, "llrm -Os": []}, listed) == ([], [f"llrm -O2: {'; '.join(bad)}"])
+    failures, known = qcport_run.attract_verdict({"borland": [], "llrm -O2": bad, "llrm -Os": []}, {})
+    assert failures == [f"llrm -O2: {'; '.join(bad)}"] and known == [], "unlisted, -O2 fails the gate"
+    failures, _ = qcport_run.attract_verdict({"borland": [], "llrm -O2": bad, "llrm -Os": bad}, listed)
+    assert failures == [f"llrm -Os: {'; '.join(bad)}"], "-Os is never excused"
+    failures, _ = qcport_run.attract_verdict({"borland": [], "llrm -O2": [], "llrm -Os": []}, listed)
+    assert "remove the entry" in failures[0], "a listed -O2 that plays says so"
+    assert qcport_run.attract_verdict({"borland": ["never started: demo1.qdc"], "llrm -O2": [], "llrm -Os": []}, {})[0] == ["borland: never started: demo1.qdc"]
