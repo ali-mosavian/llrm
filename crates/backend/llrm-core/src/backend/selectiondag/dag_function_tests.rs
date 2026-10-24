@@ -1894,3 +1894,24 @@ fn a_double_argument_is_stored_through_a_copy_of_sp_at_m16() {
     let Loc::Mem(cell) = &store.dests[0] else { unreachable!() };
     assert!(cell.base.is_some() && cell.through == llrm_lir::registers::RegId::None, "{cell:?}");
 }
+
+const M16_SELECT_IN_ARGUMENT: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+declare void @g(i64)
+define void @f(i64 %x, i64 %n) {
+entry:
+  %r = shl i64 %x, %n
+  call void @g(i64 %r)
+  ret void
+}
+";
+
+/// A select inside an outgoing argument area splits the block between the
+/// area and the call: the stores after the split had no area in their block
+/// and were refused 'a store through the stack pointer at m16'
+/// (shift_int64_variable, shift_int64_masked_amount).
+#[test]
+fn an_argument_area_split_by_a_select_is_stored_through_a_copy_of_sp() {
+    let module = llrm_mir::parse::module(M16_SELECT_IN_ARGUMENT).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}
