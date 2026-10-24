@@ -487,6 +487,12 @@ impl<'a> TypeLegalizer<'a> {
                 let wide = self.dag.value_type(then);
                 self.dag.get_node(ISD::Select, wide, &[cond, then, other])
             }
+            ISD::Freeze => {
+                // `PromoteIntRes_FREEZE`: the promoted operand, frozen.
+                let promoted = self.promoted_integer(self.dag.operand(value, 0));
+                let wide = self.dag.value_type(promoted);
+                self.dag.get_node(ISD::Freeze, wide, &[promoted])
+            }
             ISD::SetCC => {
                 // Compare into the target's own result type, then sign extend
                 // or truncate to the promoted type.
@@ -599,6 +605,33 @@ impl<'a> TypeLegalizer<'a> {
                 let amount = self.dag.get_constant(u128::from(unused), EVT::I8);
                 let high = self.dag.get_node(ISD::Shl, vt, &[wide, amount]);
                 self.dag.get_node(ISD::Sra, vt, &[high, amount])
+            }
+            ISD::SetCC if at < 2 => {
+                // `PromoteIntOp_SETCC`: both operands promoted and extended
+                // in register as the condition compares them, signed ones
+                // sign extended and the rest zero extended.
+                let (lhs, rhs, code) =
+                    (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+                let signed = matches!(
+                    self.dag.node(code).data,
+                    NodeData::CondCode(CondCode::SetLt | CondCode::SetLe | CondCode::SetGt | CondCode::SetGe)
+                );
+                let mut extended = Vec::new();
+                for operand in [lhs, rhs] {
+                    let promoted = self.promoted_integer(operand);
+                    let wide = self.dag.value_type(promoted);
+                    let narrow = self.dag.value_type(operand).size_in_bits();
+                    extended.push(if signed {
+                        let amount = self.dag.get_constant(u128::from(wide.size_in_bits() - narrow), EVT::I8);
+                        let high = self.dag.get_node(ISD::Shl, wide, &[promoted, amount]);
+                        self.dag.get_node(ISD::Sra, wide, &[high, amount])
+                    } else {
+                        let mask = self.dag.get_constant(super::fold::mask(narrow), wide);
+                        self.dag.get_node(ISD::And, wide, &[promoted, mask])
+                    });
+                }
+                let updated = self.dag.update_node_operands(n, &[extended[0], extended[1], code]);
+                SDValue { node: updated, res: 0 }
             }
             ISD::Select if at == 0 => {
                 // The condition becomes the target's boolean type

@@ -1962,3 +1962,23 @@ fn a_far_null_is_two_zero_words() {
     selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
+
+const I1_COMPARES: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+define i16 @f(i1 %a, i1 %b, i16 %x) {
+entry:
+  %lt = icmp slt i1 %a, %b
+  %l = zext i1 %lt to i16
+  %r = add i16 %l, %x
+  ret i16 %r
+}
+";
+
+/// Comparing two `i1` values promotes both operands: signed compares sign
+/// extend them, the others zero extend (`SetCC` of `Simple(I1)` stopped 24
+/// QCport functions: 'promote operand').
+#[test]
+fn a_compare_of_two_i1_values_promotes_its_operands() {
+    let module = llrm_mir::parse::module(I1_COMPARES).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}
