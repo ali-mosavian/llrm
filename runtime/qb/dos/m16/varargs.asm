@@ -1,7 +1,7 @@
-;; name: B$DDIM, B$RDIM, B$CLOS, B$COLR, B$LOCT, B$CSCN
+;; name: B$DDIM, B$RDIM, B$RDMP, B$CLOS, B$COLR, B$LOCT, B$CSCN
 ;; desc: entries whose stack block has the length of the call
 ;;
-;; args: B$DDIM, B$RDIM [in] (last pushed first)
+;; args: B$DDIM, B$RDIM, B$RDMP [in] (last pushed first)
 ;;                      ad:word           | the array descriptor
 ;;                      rankFeat:word     | rank, features << 8
 ;;                      elem:word         | element size
@@ -43,6 +43,7 @@ screen_mode     proto   far fastcall :word
 
 DIM_ALLOCATE    equ     0                       ;; enum DimMode, array.h
 DIM_REALLOCATE  equ     1
+DIM_PRESERVE    equ     2
 
 ;; the DIM entries differ in the mode alone
 DIMPROC         macro   entry:req, mode:req
@@ -76,6 +77,7 @@ entry           endp
 ;; Clobbers: ax bx dx, flags
                 DIMPROC B$DDIM, DIM_ALLOCATE
                 DIMPROC B$RDIM, DIM_REALLOCATE
+                DIMPROC B$RDMP, DIM_PRESERVE
 
 ;; B$CLOS - CLOSE the channels given, or all of them.
 ;;
