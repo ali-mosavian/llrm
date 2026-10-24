@@ -1025,3 +1025,32 @@ b3:
     // b1 is named by b0 and by itself.
     assert!(super::reached_from(function, blocks[1]) == Reach::Other, "reached by b0 and itself");
 }
+
+/// Every block ran every conditional-branch step: a jump or a return paid the
+/// shape checks of the compare chain, branch-to-common, known-predecessor and
+/// the rest (3,661 visits of each in d_faces -O2, 1,925 of them on a
+/// conditional branch). Only a conditional branch reaches them now.
+#[test]
+fn test_only_a_conditional_branch_runs_the_conditional_steps() {
+    let mut module = crate::testing::parsed(
+        "define i32 @f(i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  ret i32 1
+
+b3:
+  ret i32 2
+}
+",
+    );
+    super::CONDITIONAL_VISITS.with(|one| one.set(0));
+    simplify_with(&super::Options { speculate_blocks: false, ..Default::default() }, &mut module);
+    let visits = super::CONDITIONAL_VISITS.with(std::cell::Cell::get);
+    assert!(visits >= 1, "the entry's branch is a conditional branch");
+    assert!(visits <= 2, "b1, b2 and b3 end in a jump or a return: {visits} visits");
+}
