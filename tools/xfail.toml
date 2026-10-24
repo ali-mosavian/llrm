@@ -42,11 +42,6 @@ issue = 2848
 owner = "unassigned"
 date = "2026-10-19"
 [[xfail]]
-id = "unit llrm-nib::test_nib_frontend::test_a_zip_loop_tested_for_equality_ends_on_the_flags_of_its_byte_counter"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
 id = "unit llrm-nib::test_nib_frontend::test_an_array_field_fills_and_copies_as_one_run_each"
 issue = 2848
 owner = "unassigned"
