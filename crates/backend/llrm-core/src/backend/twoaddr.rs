@@ -1113,10 +1113,18 @@ mod tests {
         step: i64,
         name: &str,
     ) -> Vec<Arc<Insn>> {
+        live_source_add_of(step, name, 4)
+    }
+
+    fn live_source_add_of(
+        step: i64,
+        name: &str,
+        width: u32,
+    ) -> Vec<Arc<Insn>> {
         let what = Semantics {
             name: Some(name.into()),
-            dests: vec![held(8, 4)],
-            sources: vec![held(7, 4), Loc::Imm(Imm { value: step, width: 4, address: None })],
+            dests: vec![held(8, width)],
+            sources: vec![held(7, width), Loc::Imm(Imm { value: step, width, address: None })],
             ..Semantics::new(Operation::Binary)
         };
         let add = Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![8], vec![7]));
@@ -1207,6 +1215,18 @@ mod tests {
         let lea = |got: &LirBody| names_of(got).contains(&"lea".to_owned());
         assert!(lea(&tied(&of(live_source_add(-1, "add")), AddSub)));
         assert!(!lea(&tied(&of(live_source_add(1, "shl")), AddSub)));
+    }
+
+    /// textfill at m16 looped `add ax,2; cmp bx,3997; mov bx,ax; jb`: a word
+    /// add was never a `lea`, so its result needed the copy back. A prefixed
+    /// target converts it (`cmp bx,3997; lea bx,[bx+2]; jb`); a word add of
+    /// two registers stays an add (only bx+si and bx+di address).
+    #[test]
+    fn test_a_word_add_of_a_live_source_is_a_lea_on_a_prefixed_target() {
+        use crate::twoaddress::ThreeAddress::{AddSub, AddSubWords};
+        let lea = |got: &LirBody| names_of(got).contains(&"lea".to_owned());
+        assert!(lea(&tied(&of(live_source_add_of(2, "add", 2)), AddSubWords)));
+        assert!(!lea(&tied(&of(live_source_add_of(2, "add", 2)), AddSub)));
     }
 
     /// `v5 := lea [v1+4]`: reads `v1`, writes no flags, is no copy and no tied
