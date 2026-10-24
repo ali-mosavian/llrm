@@ -76,7 +76,16 @@ thread_local! {
     /// The entries of every `SlotIndexes` of this thread: a `SlotIndex` is a
     /// copyable (entry, slot) pair whose number is read here, so renumbering
     /// the list moves every index held anywhere without touching them.
-    static ARENA: RefCell<Arena> = RefCell::new(Arena::default());
+    static ARENA: RefCell<Arena> = const {
+        RefCell::new(Arena {
+            epoch: 0,
+            instr: Vec::new(),
+            index: Vec::new(),
+            prev: Vec::new(),
+            next: Vec::new(),
+            free: Vec::new(),
+        })
+    };
     /// How many bodies this thread has numbered: a `SlotIndexes` kept across
     /// another's numbering has lost its entries.
     static ANALYSED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
