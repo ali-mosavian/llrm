@@ -780,8 +780,12 @@ impl Emitter<'_, '_> {
         opcode: u32,
     ) -> Result<(), EmitError> {
         let before = (self.blocks.len() - 1, self.blocks.last().map_or(0, |block| block.insns.len()));
-        let writes_flags = instr::desc(opcode as u16)
-            .is_some_and(|desc| desc.implicit_defs.contains(&llrm_dagisel::generated::ids::x86::EFLAGS));
+        // `MOV32r0` is `xor` in the pin and writes the flags there; it is a
+        // `mov` here, which a later pass makes an `xor` only where they are
+        // dead.
+        let writes_flags = self.ctx.names.get(&(opcode as u16)).is_none_or(|name| *name != "MOV32r0")
+            && instr::desc(opcode as u16)
+                .is_some_and(|desc| desc.implicit_defs.contains(&llrm_dagisel::generated::ids::x86::EFLAGS));
         let previous = self.flags_now.filter(|&p| p != n);
         self.machine_in(n, opcode)?;
         if writes_flags && let Some(previous) = previous {
@@ -789,14 +793,26 @@ impl Emitter<'_, '_> {
         }
         // What it left in EFLAGS: a compare with no result is cheap to make
         // again where a consumer needs it (`ensure_flags`).
-        if instr::desc(opcode as u16)
-            .is_some_and(|desc| desc.implicit_defs.contains(&llrm_dagisel::generated::ids::x86::EFLAGS))
-        {
+        if writes_flags {
             self.flags_now = Some(n);
-            if let Some(last) = self.blocks.last().and_then(|block| block.insns.last())
-                && last.what.as_ref().is_some_and(|what| what.op == Operation::Compare && what.dests.is_empty())
-            {
-                self.flag_insns.insert(n, Arc::clone(last));
+            if let Some(last) = self.blocks.last().and_then(|block| block.insns.last()) {
+                let again = last.what.as_ref().and_then(|what| match (what.op, what.name.as_deref()) {
+                    (Operation::Compare, _) if what.dests.is_empty() => Some(Arc::clone(last)),
+                    // A `sub` leaves the flags a `cmp` of its operands does, an
+                    // `and` those of a `test`: made again without its result.
+                    (Operation::Binary, Some(kind @ ("sub" | "and"))) if what.sources.len() == 2 => {
+                        let compare = Semantics {
+                            name: Some(if kind == "sub" { "cmp" } else { "test" }.into()),
+                            sources: what.sources.clone(),
+                            ..Semantics::new(Operation::Compare)
+                        };
+                        Some(Arc::new(Insn::new(last.at, last.covers, Some(compare), vec![], last.uses.clone())))
+                    }
+                    _ => None,
+                });
+                if let Some(again) = again {
+                    self.flag_insns.insert(n, again);
+                }
             }
         }
         Ok(())
@@ -1514,6 +1530,28 @@ impl Emitter<'_, '_> {
                 self.inline_places.push((at, patched));
                 return Ok(Some(()));
             }
+            // `llrm.ia16.asm`: a block of bytes laid down at the site, its
+            // inputs in the registers the name states, as a call of its name
+            // that clobbers what the name says. A block that names symbols is
+            // not translated.
+            "CALL_ASM" => {
+                let NodeData::Symbol(id) = self.dag.node(node.ops[1]).data else {
+                    return Err(EmitError::Unsupported("inline assembly without its name".to_owned()));
+                };
+                let name = self.dag.symbol_names[id as usize].clone();
+                let block = llrm_mir::intrinsics::asm(&name)
+                    .ok_or_else(|| EmitError::Unsupported("inline assembly that does not parse".to_owned()))?;
+                if !block.fixups.is_empty() {
+                    return Err(EmitError::Unsupported("inline assembly naming symbols".to_owned()));
+                }
+                let callee = Callee::Named(name);
+                let at = self.push_call(
+                    Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) },
+                    Some(&callee),
+                );
+                self.calls.push((at, callee));
+                return Ok(Some(()));
+            }
             // A call through a far pointer: the offset and the selector sit in
             // a four-byte cell, which the call reads (`call dword ptr [cell]`).
             "CALL_FAR" => {
@@ -1901,8 +1939,11 @@ impl Emitter<'_, '_> {
                 Ok(Some(()))
             }
             "LEA32r" | "LEA16r" => {
-                let cell = self
-                    .cell(node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short lea".to_owned()))?, width)?;
+                // a `lea` only computes the address: a scaled index is fine
+                let cell = self.cell_unchecked(
+                    node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short lea".to_owned()))?,
+                    width,
+                )?;
                 // 16-bit addressing has no scale and the encoder no field for a
                 // symbol's displacement beside a lone index: the unscaled
                 // index is the address's base.
@@ -1921,6 +1962,17 @@ impl Emitter<'_, '_> {
                         return Err(EmitError::Unsupported("a lea of a symbol and a scaled index at m16".to_owned()));
                     }
                     cell.base = cell.index.take();
+                }
+                // A scaled index beside a base is the 386's 32-bit form: its
+                // literal place adds nothing and has no encoding with a scale.
+                if self.ctx.address_mode == AddrMode::Real16
+                    && cell.base.is_some()
+                    && cell.index.is_some()
+                    && cell.scale != 1
+                    && cell.addr.is_some_and(|addr| addr.space == crate::model::ir::Space::Literal)
+                {
+                    cell.offset = cell.addr.map_or(cell.offset, |addr| addr.disp);
+                    cell.addr = None;
                 }
                 let held = self.fresh(width);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
