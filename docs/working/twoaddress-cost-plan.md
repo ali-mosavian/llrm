@@ -21,3 +21,8 @@ Plan, one PR each, numbered rows:
 4. **2026-11-06 — the shared structures**: `LiveIntervals::new` (maps by `HashMap<InstrKey>`, the CFG and the dominator tree built per function) against `SlotIndexes::analyze` and the pin's analyses it reads from the pass manager; and `LiveRangeCalc::extend`/`calculate` 2.4x the pin's, which every pass pays (splitkit's step E waits on it).
 
 Each step: ledger d_faces Ir before and after, objects on the 568 sweep.
+
+## Status at the tip (2026-10-24) and TA-R1
+`tied` is 9.14 M Ir on d_faces -O2 (11.73 M at #4121), against the pin's `TwoAddressInstructionImpl::run` 1.20 M plus its `LiveVariables::analyze` 6.0 M, a separate pass: 1.27x. `BodyFacts::of` is 4.50 M of it (the dataflow 3.4 M, LV3, exit 2026-12-11). Done: `replace` -0.35 M (#4312), `_reused` -0.74, `process_copy` -0.76, the maps -0.22, in-place intervals -2.5 (#4188, since replaced by LV3).
+
+TA-R1 (numbered row, owner w-1, exit 2026-11-14): what is left, each under 0.4 M and mostly inherent: `_untied` 0.53 (the 140 tied instructions build their copies), `finish` 0.35 (`body_like` clones 7 bodies), `_reused` 0.39 (its index for 679 candidate blocks), `three_address`, `try_instruction_commute`, the two reschedules and `scan_uses` 0.12-0.15 each. Re-profile at the tip on the exit date; a callee that still shows over 0.3 M gets a PR, the rest is recorded as inherent.
