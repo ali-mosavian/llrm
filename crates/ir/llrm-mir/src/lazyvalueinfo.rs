@@ -1650,14 +1650,23 @@ impl LazyValueInfoImpl {
 
         let bit_width = env.scalar_size_in_bits(val);
         let q = env.query();
-        if let Some((_, args)) = intrinsic_call(&q, lhs, "llvm.ctpop")
+        // The probes of `lhs` below each match one kind of instruction: its
+        // defining opcode is read once, and a constant or an argument (the
+        // usual left side here) matches none.
+        let lhs_op = q.instruction_of(lhs).map(|(_, instruction)| &instruction.opcode);
+        let lhs_is = |wanted: fn(&Opcode) -> bool| lhs_op.is_some_and(wanted);
+        if lhs_is(|op| matches!(op, Opcode::Call(_)))
+            && Self::pattern_tried()
+            && let Some((_, args)) = intrinsic_call(&q, lhs, "llvm.ctpop")
             && args.len() == 1
             && args[0] == val
         {
             return Some(Self::get_value_from_icmp_ctpop(env, edge_pred, rhs));
         }
 
-        if let Some((_, _, a, b)) = binary(&q, lhs, BinaryOp::And)
+        if lhs_is(|op| matches!(op, Opcode::Binary(BinaryOp::And)))
+            && Self::pattern_tried()
+            && let Some((_, _, a, b)) = binary(&q, lhs, BinaryOp::And)
             && a == val
             && let Some((mask_bits, _)) = q.int_constant(b)
             && let Some((c, _)) = q.int_constant(rhs)
@@ -1680,8 +1689,12 @@ impl LazyValueInfoImpl {
         // If (X urem Modulus) >= C, then X >= C.
         // If trunc X >= C, then X >= C.
         // TODO: An upper bound could be computed as well.
-        let urem_or_trunc = binary(&q, lhs, BinaryOp::URem).is_some_and(|(_, _, a, _)| a == val)
-            || cast(&q, lhs, CastOp::Trunc).is_some_and(|(_, _, x)| x == val);
+        let urem_or_trunc = lhs_is(|op| matches!(op, Opcode::Binary(BinaryOp::URem)))
+            && Self::pattern_tried()
+            && binary(&q, lhs, BinaryOp::URem).is_some_and(|(_, _, a, _)| a == val)
+            || lhs_is(|op| matches!(op, Opcode::Cast(CastOp::Trunc)))
+                && Self::pattern_tried()
+                && cast(&q, lhs, CastOp::Trunc).is_some_and(|(_, _, x)| x == val);
         if urem_or_trunc && let Some((c, c_width)) = q.int_constant(rhs) {
             // Use the icmp region so we don't have to deal with different
             // predicates.
@@ -1698,6 +1711,8 @@ impl LazyValueInfoImpl {
             edge_pred,
             IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle
         )
+            && lhs_is(|op| matches!(op, Opcode::Binary(BinaryOp::AShr)))
+            && Self::pattern_tried()
             && let Some((_, _, a, b)) = binary(&q, lhs, BinaryOp::AShr)
             && a == val
             && let Some((sh_amt, _)) = q.int_constant(b)
@@ -1717,7 +1732,11 @@ impl LazyValueInfoImpl {
         }
 
         // a - b or ptrtoint(a) - ptrtoint(b) ==/!= 0 if a ==/!= b
-        if is_equality && let Some((_, _, mut x, mut y)) = binary(&q, val, BinaryOp::Sub) {
+        if is_equality
+            && q.instruction_of(val).is_some_and(|(_, instruction)| instruction.opcode == Opcode::Binary(BinaryOp::Sub))
+            && Self::pattern_tried()
+            && let Some((_, _, mut x, mut y)) = binary(&q, val, BinaryOp::Sub)
+        {
             // Peek through ptrtoints
             if let Some(a) = ptr_to_int_same_size(env, x) {
                 x = a;
