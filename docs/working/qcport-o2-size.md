@@ -37,3 +37,15 @@ Steps (w-6, 2026-11-06): the unroll threshold at -O2 against the pin's (`LoopFul
 | -Os | 262,295 | 263,383 | +1,088 | +0.415% |
 
 The expectation was +0.33..+0.42%: met at every level. The baseline for later QCport rows is the "after" column (-O2 322,571; the shipped -Os 263,383). The figures in the sections above were taken at 69b60cafc (-O2 321,138).
+
+## Closed: the -O2 growth is the pin's own (w-6, 2026-10-25, ruling by the coordinator)
+Evidence. Our full-unroll constants are the pin's (`UNROLL_THRESHOLD_DEFAULT` 150, `_AGGRESSIVE` 300, boost 400, `loopunrollpass.rs`), and the x86 TTI legalizes types by native width (`tti.rs`, `legalized`), so an i32 on m16 is priced as split. The pin's own -O2 grows the same modules: text bytes of the pinned clang (d1106deb71cc, `-std=gnu89 -m32 -march=i486`, the QCport `-I` set and `-Dfar= -Dhuge= -Dnear= -Dpascal= -Dcdecl= -D__far= -D_far= -D__near= -D_near= -DQCPORT_NATIVE_TEST`, `-c`, then `size`):
+
+| module | -O1 | -O2 | -Os | -O2 over -O1 |
+|---|--:|--:|--:|--:|
+| host/cmd.c | 7,243 | 10,492 | 5,930 | +45% |
+| render/sc.c | 18,227 | 21,188 | 17,212 | +16% |
+
+Ours, `qcport.py` bytes at m16: cmd 5,098 / 8,773 / 3,686 (+72%), sc 14,020 / 14,763 / 10,888 (+5%).
+
+-O2 demo2 and demo3 out of memory (miptex.bin, attract mode) = memory, not a defect: QCport ships at -Os (263,383 B after #4327), where demo1-3 play. No size-aware -O2 deviation (it would depart from the pin for a level nobody ships).

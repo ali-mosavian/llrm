@@ -192,6 +192,16 @@ impl FunctionPass for CgpAddr {
             }
             None => false,
         };
+        // `optimizeInst`'s urem case: the remainder of a loop counter.
+        let remainders = crate::uremloop::remainders_folded(
+            unit.context,
+            unit.layout,
+            |function| {
+                let info = analyses.get::<Loops>(&*unit.context, unit.layout, function);
+                llrm_analysis::cfg::natural(function, &info)
+            },
+            unit.function,
+        );
         // `optimizeInst`'s store case: a merged store is split before its
         // address is sunk.
         let split = match analyses.outer().target().lowering() {
@@ -207,7 +217,16 @@ impl FunctionPass for CgpAddr {
         if merged {
             // A block went: the blocks and edges are not as they were.
             PreservedAnalyses::none()
-        } else if phis || branched || sunk_compares || masks || addresses || extended || sunk_casts || split {
+        } else if phis
+            || branched
+            || sunk_compares
+            || masks
+            || addresses
+            || extended
+            || sunk_casts
+            || split
+            || remainders
+        {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else if closed {
             // A phi's value is replaced by the one it equalled: the blocks and
