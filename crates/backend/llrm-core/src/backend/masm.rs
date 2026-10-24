@@ -1671,6 +1671,23 @@ fn spelled(
             ..at
         }),
     };
+    // Where the target spells the registers as LIR does and no frame place is
+    // addressed bare, nothing changes: the operands are not rebuilt.
+    let changes = |loc: &Loc| {
+        let address = match loc {
+            Loc::Reg(one) => return register(one.register) != one.register,
+            Loc::Mem(cell) => cell.address(),
+            Loc::Address(at) => *at,
+            _ => return false,
+        };
+        framed(address.through, address.addr, address.index_through) != address.through
+            || register(address.index_through) != address.index_through
+    };
+    if let Item::Semantics(what) = &item
+        && !what.dests.iter().chain(&what.sources).any(changes)
+    {
+        return item;
+    }
     match item {
         Item::Semantics(what) => Item::Semantics(Semantics {
             dests: what.dests.iter().map(place).collect(),

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/machinelicm.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/machinelicm.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/machinelicm.rs sha256:650d5e8dd150c64b3364a8219ef763ff56b5ea128ed0aa32e71e7573de2461ce -->
+<!-- src: crates/backend/llrm-core/src/backend/machinelicm.rs sha256:40d6ed5149f0519794883d2ac01b4bf9881fae57eee550d05f8fb596346897c0 -->
 
 # machinelicm
 
@@ -17,7 +17,9 @@ is walked in layout order, and again until nothing moves. An instruction
 moves to the end of the preheader, before its jump, when:
 
 - it is a pure operation on registers and constants with one result, no
-  pinned operand, no memory, no call, no x87 value (`candidate`);
+  pinned operand, no call, no x87 value (`candidate`), or a load in a block
+  that runs on every trip of a loop with no store, call or volatile access
+  (`InitializeLoadsHoistableLoops` L1472, `IsGuaranteedToExecute`);
 - every value it reads is defined outside the loop or was hoisted
   (`IsLoopInvariantInst`);
 - it is not as cheap as a move (`IsProfitableToHoist`: a cheap instruction
@@ -29,9 +31,9 @@ moves to the end of the preheader, before its jump, when:
   the loop standing for the pressure: DEVIATE ML1, the pin tracks the live
   registers of each block of the loop).
 
-DEVIATE ML2: no preheader is made where a loop has none; no load of an
-invariant cell (`ExtractHoistableLoad`); no CSE of the hoisted value
-(`MayCSE`).
+DEVIATE ML2: no preheader is made where a loop has none; no load folded
+into its reader is taken apart (`ExtractHoistableLoad`); no CSE of the
+hoisted value (`MayCSE`).
 
 ## Example
 A loop that adds `a[i] * k3` where `k3 := k + 3` is made inside it (the

@@ -109,8 +109,8 @@ pub trait Abi {
         name: &str,
     ) -> String;
     /// Whether a call of a `llrm.qb.` routine has a contract of its own (stack
-    /// arguments, flags results, the registers it keeps) the DAG path does not
-    /// translate.
+    /// arguments, flags results, the registers it keeps), which the DAG path
+    /// checks against its convention call by call.
     fn runtime_contracts(&self) -> bool {
         false
     }
@@ -837,6 +837,9 @@ fn staged(
     SELECTED.with(|count| count.set(count.get() + 1));
     llrm_mir::counts::bump(llrm_mir::counts::Event::Selections);
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
+    let contracts = abi
+        .runtime_contracts()
+        .then(|| crate::backend::selectiondag::dag_function::RuntimeContracts { abi, segments: target.segments });
     let dag = match target.selector {
         Selector::Old => None,
         // `LLRM_ISEL_ONLY=a,b`: the DAG path for those functions, the old
@@ -849,7 +852,7 @@ fn staged(
                 target.arch,
                 target.cpu,
                 target.libcalls,
-                abi.runtime_contracts(),
+                contracts.as_ref(),
                 &mut pool.borrow_mut(),
             )
         })),
@@ -861,7 +864,7 @@ fn staged(
                     target.arch,
                     target.cpu,
                     target.libcalls,
-                    abi.runtime_contracts(),
+                    contracts.as_ref(),
                     &mut pool.borrow_mut(),
                 )
             }) {

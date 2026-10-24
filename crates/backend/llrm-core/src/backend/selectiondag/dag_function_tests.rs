@@ -1188,10 +1188,11 @@ entry:
 ";
 
 /// A float call result is the stack's top after the call (an unnamed load of no
-/// cell); one live across another call cannot stay on the x87 stack and the
-/// function is refused, not left for the stackifier to fail the compile.
+/// cell); one live across another call that returns a float is selected too:
+/// the float allocator spills it around the call and the stackifier takes the
+/// result under the reload (RFP-5, fpstack #4362).
 #[test]
-fn a_float_result_is_the_stack_top_and_none_lives_across_a_call() {
+fn a_float_result_is_the_stack_top_and_one_may_live_across_a_call() {
     use crate::model::ir::{Loc, Operation};
     let module = llrm_mir::parse::module(FLOAT_CALL).expect("parses");
     let cpu = crate::backend::cpu::profile("486").expect("a cpu");
@@ -1206,8 +1207,26 @@ fn a_float_result_is_the_stack_top_and_none_lives_across_a_call() {
         }),
         "an unnamed load of the stack top"
     );
-    let why = selected(&module, "h", &llrm_x86_m32::M32, cpu, &[]).err().map(|e| e.0);
-    assert!(why.as_deref().is_some_and(|why| why.contains("live across")), "{why:?}");
+    selected(&module, "h", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+}
+
+const FLOAT_ACROSS_VOID_CALL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @note(i32)
+define double @f(double %x, i32 %n) {
+entry:
+  %y = fadd double %x, 1.000000e+00
+  call void @note(i32 %n)
+  %z = fadd double %y, %x
+  ret double %z
+}
+";
+
+/// A float live across a call that returns no float is selected too.
+#[test]
+fn a_float_live_across_a_call_that_returns_no_float_is_selected() {
+    let module = llrm_mir::parse::module(FLOAT_ACROSS_VOID_CALL).expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu");
+    selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
 }
 
 const GLOBAL_INDEXED: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -1935,8 +1954,7 @@ entry:
 ";
 
 /// A far cell and a double in one function were refused as a pair ('floating
-/// values with far cells'); only a double live across the far access is
-/// (the stackifier counts the ES load as a boundary).
+/// values with far cells'); neither refusal is left.
 #[test]
 fn a_double_not_live_across_a_far_cell_is_selected() {
     let module = llrm_mir::parse::module(M16_FAR_AND_DOUBLE).expect("parses");
@@ -1972,69 +1990,155 @@ entry:
 declare void @llvm.memset.p3.i32(ptr addrspace(3), i8, i32, i1)
 ";
 
-/// A fill of `n` bytes through a huge pointer crosses segment ends and `n`
-/// outgrows `cx`: a `rep stosb` filled only the first 64K (huge_runs gave a
-/// wrong sum). The DAG path refuses it and the old selector's stepped loop
-/// stays.
-#[test]
-fn a_memset_through_a_huge_pointer_is_refused_not_a_rep_stos() {
-    let module = llrm_mir::parse::module(M16_HUGE_MEMSET).expect("parses");
-    let refused = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
-        .err()
-        .expect("refused");
-    assert!(refused.0.contains("huge pointer"), "{}", refused.0);
-}
-
-/// `memcpy` and `memmove` through a huge pointer (destination or source) are
-/// refused like `memset`: a `rep movs` or the runtime's near routine would
-/// stop at the first segment end.
-#[test]
-fn a_memcpy_or_memmove_through_a_huge_pointer_is_refused() {
-    for (name, huge_dst) in [("memcpy", true), ("memcpy", false), ("memmove", true), ("memmove", false)] {
-        let (dst, src) = if huge_dst { ("3", "0") } else { ("0", "3") };
-        let ir = format!(
-            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+fn huge_ir(
+    name: &str,
+    dst: &str,
+    src: &str,
+    metadata: &str,
+) -> String {
+    format!(
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
 define cc 1005 void @f(ptr addrspace({dst}) %d, ptr addrspace({src}) %s, i32 %n) addrspace(1) {{
 entry:
-  call void @llvm.{name}.p{dst}.p{src}.i32(ptr addrspace({dst}) %d, ptr addrspace({src}) %s, i32 %n, i1 false)
+  call void @llvm.{name}.p{dst}.p{src}.i32(ptr addrspace({dst}) %d, ptr addrspace({src}) %s, i32 %n, i1 false){metadata}
   ret void
 }}
 declare void @llvm.{name}.p{dst}.p{src}.i32(ptr addrspace({dst}), ptr addrspace({src}), i32, i1)
 "
-        );
-        let module = llrm_mir::parse::module(&ir).expect("parses");
-        let refused =
-            selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
-                .err()
-                .unwrap_or_else(|| panic!("{name} huge_dst={huge_dst}: selected"));
-        assert!(refused.0.contains("huge pointer"), "{name} huge_dst={huge_dst}: {}", refused.0);
+    )
+}
+
+fn select_f(ir: &str) -> Result<crate::backend::isel::Selected, String> {
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .map_err(|e| e.0)
+}
+
+fn mnemonics(done: &crate::backend::isel::Selected) -> Vec<String> {
+    done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
+}
+
+/// A fill of `n` bytes through a huge pointer crosses segment ends and `n`
+/// outgrows `cx`: a `rep stosb` filled only the first 64K (huge_runs gave a
+/// wrong sum). The target's stepped routine is called inline instead, with
+/// its operands in the registers it reads (`huge_runs` was the one c program
+/// the DAG path refused).
+#[test]
+fn a_memset_through_a_huge_pointer_calls_the_stepped_routine() {
+    let ir = M16_HUGE_MEMSET.to_owned();
+    let done = select_f(&ir).unwrap_or_else(|why| panic!("{why}"));
+    let routine = llrm_target::Target::huge_fill_routine(&llrm_x86_m16::M16, 1).expect("a fill routine");
+    assert!(done.calls.values().any(|name| name == routine.name), "{:?}", done.calls);
+    assert!(done.inline.values().any(|code| *code == routine.code), "its bytes are laid down at the call");
+    assert!(!mnemonics(&done).iter().any(|m| m.starts_with("rep")), "{:?}", mnemonics(&done));
+}
+
+/// `memcpy` between huge pointers, and a `memmove` a pass proved forward or
+/// backward, call the copy routine; a `memmove` of no proven direction, or
+/// with a near pointer beside the huge one, is refused.
+#[test]
+fn a_copy_through_huge_pointers_calls_the_stepped_routine() {
+    let forward = llrm_target::Target::huge_copy_routine(&llrm_x86_m16::M16, false).expect("a copy routine");
+    let done = select_f(&huge_ir("memcpy", "3", "3", "")).unwrap_or_else(|why| panic!("{why}"));
+    assert!(done.calls.values().any(|name| name == forward.name), "{:?}", done.calls);
+    let refused = select_f(&huge_ir("memmove", "3", "3", "")).err().expect("no direction proved");
+    assert!(refused.contains("direction"), "{refused}");
+    let refused = select_f(&huge_ir("memcpy", "3", "0", "")).err().expect("a near source");
+    assert!(refused.contains("near"), "{refused}");
+}
+
+const QB_STRING_COMPARE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define cc 1000 i16 @f(ptr %a, ptr %b) addrspace(1) {
+entry:
+  %r = call cc 1000 addrspace(1) i16 @llrm.qb.B$SCMP(ptr %a, ptr %b)
+  ret i16 %r
+}
+declare cc 1000 i16 @llrm.qb.B$SCMP(ptr, ptr) addrspace(1)
+";
+
+/// An ABI whose runtime routines return their answer in the flags or not.
+struct Stub {
+    flags: bool,
+}
+
+impl crate::backend::assemble::Abi for Stub {
+    fn contract(
+        &self,
+        callee: &str,
+        pops: bool,
+        pushed: i64,
+    ) -> Result<crate::abi::runtime::Contract, String> {
+        let cleanup =
+            if pops { crate::hir::model::StackCleanup::Callee } else { crate::hir::model::StackCleanup::Caller };
+        Ok(crate::abi::runtime::Contract {
+            flags_result: self.flags,
+            ..crate::abi::qb::ordinary(callee, cleanup, pushed, &Default::default())
+        })
+    }
+
+    fn linked(
+        &self,
+        name: &str,
+    ) -> String {
+        name.to_owned()
+    }
+
+    fn runtime_contracts(&self) -> bool {
+        true
     }
 }
 
-const QB_STRING_COMPARE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
-define i16 @f(ptr %a, ptr %b) {
-entry:
-  %r = call i16 @llrm.qb.B$SCMP(ptr %a, ptr %b)
-  ret i16 %r
+fn verdicts(flags: bool) -> Vec<Result<super::builder::RuntimeAnswer, &'static str>> {
+    let module = llrm_mir::parse::module(QB_STRING_COMPARE).expect("parses");
+    let function = module.global(module.named("f").expect("f")).function().expect("a body");
+    let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+    let verdicts =
+        super::dag_function::runtime_call_verdicts(&module, function, &layout, &llrm_x86_m16::M16, &Stub { flags });
+    verdicts.values().copied().collect()
 }
-declare i16 @llrm.qb.B$SCMP(ptr, ptr)
+
+/// `B$SCMP` answers in the flags under `--runtime qb45`; the DAG path tested
+/// `ax` instead, so every string comparison of `strcmp_smoke` printed 0. The
+/// call is known to answer in the flags.
+#[test]
+fn a_runtime_call_answering_in_the_flags_says_so() {
+    assert_eq!(verdicts(true), [Ok(super::builder::RuntimeAnswer::Flags)]);
+}
+
+#[test]
+fn a_runtime_call_answering_in_registers_says_so() {
+    assert_eq!(verdicts(false), [Ok(super::builder::RuntimeAnswer::Registers)]);
+}
+
+const VARSEG: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+@x = internal global i16 0
+define i16 @f() {
+entry:
+  ret i16 ptrtoint (ptr addrspace(2) addrspacecast (ptr @x to ptr addrspace(2)) to i16)
+}
 ";
 
-/// A call of a QB runtime routine takes its arguments on the stack and answers
-/// in the flags (`B$SCMP`); the DAG path passed `ax`/`dx` and tested `ax`, so
-/// every string comparison of `strcmp_smoke` printed 0. It is refused for a
-/// program whose ABI gives the runtime contracts.
+/// `VARSEG(x)` is a near pointer cast to the segment space: the selector of
+/// its segment. The DAG path took the offset (`mov b$seg, offset X%`), so
+/// `POKE` after `DEF SEG = VARSEG(x)` wrote 0 bytes from the segment and
+/// `far_poke_*` printed garbage.
 #[test]
-fn a_call_of_a_qb_runtime_routine_is_refused() {
-    let module = llrm_mir::parse::module(QB_STRING_COMPARE).expect("parses");
-    let cpu = crate::backend::cpu::profile("386").expect("a cpu");
-    let pool = || crate::backend::constpool::Pool::new(module.globals.len() as i64);
-    let call = |contracts| {
-        super::dag_function::selected_in_pool(&module, "f", &llrm_x86_m16::M16, cpu, &[], contracts, &mut pool())
-    };
-    assert!(call(false).is_ok());
-    let refused = call(true).err().expect("refused");
-    assert!(refused.0.contains("QB runtime routine"), "{}", refused.0);
+fn a_near_pointer_cast_to_the_segment_space_is_its_segment_selector() {
+    let module = llrm_mir::parse::module(VARSEG).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let spaces: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.clone())
+        .flat_map(|w| w.sources)
+        .filter_map(|loc| match loc {
+            crate::model::ir::Loc::Imm(imm) => imm.address.map(|a| a.space),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(spaces, [crate::model::ir::Space::Group], "{spaces:?}");
 }
 
 const I1_FREEZE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
@@ -2053,5 +2157,651 @@ entry:
 fn an_i1_freeze_is_selected() {
     let module = llrm_mir::parse::module(I1_FREEZE).expect("parses");
     selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}
+
+const M16_REMAINDER_TWICE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+define i8 @f(ptr %p, i16 %a, i16 %b) {
+entry:
+  %r = srem i16 %a, %b
+  store i16 %r, ptr %p
+  %q = getelementptr i8, ptr %p, i16 %r
+  %v = load i8, ptr %q
+  ret i8 %v
+}
+";
+
+/// A remainder read by a store and folded into an address: the selector
+/// morphed the load without recording it as a user of the SDIVREM's result,
+/// so the result's replacement missed it and the emitter met an unselected
+/// 'SDivRem' (QCport `ls_animate`).
+#[test]
+fn a_remainder_used_by_a_store_and_an_address_is_selected() {
+    let module = llrm_mir::parse::module(M16_REMAINDER_TWICE).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}
+
+const INLINE_CODE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+declare i32 @llrm.ia16.code.89a60000.2p0(ptr)
+define i32 @f() {
+entry:
+  %slot = alloca i16
+  %r = call i32 @llrm.ia16.code.89a60000.2p0(ptr %slot)
+  ret i32 %r
+}
+";
+
+/// Inline code (`llrm.ia16.code`) is laid down at its site, the frame place it
+/// names patched in as a displacement from BP: the emitter had no arm for the
+/// node and refused "opcode 30013" (QCport's `__emit__`, 3 functions).
+#[test]
+fn inline_code_is_laid_down_at_its_site_with_its_frame_place() {
+    let module = llrm_mir::parse::module(INLINE_CODE).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    assert_eq!(done.inline.len(), 1, "{:?}", done.inline);
+    let (at, bytes) = done.inline.iter().next().unwrap();
+    assert_eq!(done.inline_places.get(at).map(Vec::len), Some(1));
+    assert!(!done.far.contains(at), "inline code is no far call");
+    let (_, disp, addend) = done.inline_places[at][0];
+    assert_eq!(u16::from_le_bytes([bytes[2], bytes[3]]), (disp + addend) as u16);
+}
+
+const BYVAL_ODD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+declare void @g(ptr byval([41 x i8]) %p)
+define void @f(ptr %q) {
+entry:
+  call void @g(ptr byval([41 x i8]) %q)
+  ret void
+}
+";
+
+/// A byval struct whose size is not a whole number of words (41 bytes) leaves
+/// its last byte of the outgoing area unwritten: the stores that cannot be
+/// pushes stay in place, based on a copy of SP. It was refused "an outgoing
+/// argument area the stores do not cover at m16" (byval_struct -O0).
+#[test]
+fn an_odd_sized_byval_argument_is_stored_in_place_at_m16() {
+    let module = llrm_mir::parse::module(BYVAL_ODD).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}
+
+const CARRY_ACROSS_A_TEST: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define cc 1003 range(i32 0, -2147483648) i32 @_bench_x_ll_arith(i32 noundef %0) \"llrm-fp-eval\"=\"x87-extended\" memory(none) nounwind norecurse willreturn {
+b1:
+  %1 = icmp sgt i32 %0, 0
+  br i1 %1, label %22, label %b3
+
+b3:
+  %2 = phi i32 [ %21, %20 ], [ 0, %b1 ]
+  %3 = and i32 %2, 2147483647
+  ret i32 %3
+
+b4:
+  %4 = phi i32 [ %19, %b4 ], [ 0, %22 ]
+  %5 = phi i64 [ %18, %b4 ], [ 0, %22 ]
+  %6 = phi i64 [ %8, %b4 ], [ 81985529216486895, %22 ]
+  %7 = mul i64 %6, 6364136223846793005
+  %8 = add i64 %7, 1442695040888963407
+  %9 = lshr i64 %8, 33
+  %10 = or i64 %9, 1
+  %11 = mul i64 %10, %8
+  %12 = and i32 %4, 31
+  %13 = zext nneg i32 %12 to i64
+  %14 = lshr i64 %8, %13
+  %15 = xor i64 %11, %14
+  %16 = shl i64 %8, %13
+  %17 = add i64 %16, %5
+  %18 = add i64 %17, %15
+  %19 = add nuw nsw i32 %4, 1
+  %exitcond = icmp ne i32 %0, %19
+  br i1 %exitcond, label %b4, label %20
+
+20:
+  %21 = trunc i64 %18 to i32
+  br label %b3
+
+22:
+  br label %b4
+}
+";
+
+/// A 64-bit add's carry read after a select's `test` came between: the pin
+/// glues the `adc` to the `add` and the scheduler here could not keep the
+/// pair together ('flags overwritten between their producer and a consumer',
+/// vsgcc x_ll_arith). The carry is saved in a byte before the `test` and put
+/// back before its reader.
+#[test]
+fn a_carry_survives_a_flag_writer_scheduled_between_the_add_and_its_reader() {
+    let module = llrm_mir::parse::module(CARRY_ACROSS_A_TEST).expect("parses");
+    let done = selected(
+        &module,
+        "_bench_x_ll_arith",
+        &llrm_x86_m32::M32,
+        crate::backend::cpu::profile("486").expect("a cpu"),
+        &[],
+    )
+    .unwrap_or_else(|e| panic!("{}", e.0));
+    let saved = done.body.insns().iter().filter_map(|i| i.what.as_ref()).any(|w| w.name.as_deref() == Some("setb"));
+    assert!(saved, "the carry is saved in a byte");
+}
+
+const LRINT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(double %x) {
+entry:
+  %r = call i32 @llvm.lrint.i32.f64(double %x)
+  ret i32 %r
+}
+declare i32 @llvm.lrint.i32.f64(double)
+";
+
+/// `lrint` of an x87 value is `fist` into a stack slot and a load (the pin's
+/// `IST_Fp32m64`); `CannotSelect(LRint)` refused 7 qb functions, the ones that
+/// round a float to an integer (`CINT`).
+#[test]
+fn an_lrint_of_a_double_is_a_fist_and_a_load() {
+    let made = names(LRINT).unwrap_or_else(|why| panic!("{why}"));
+    assert!(made.iter().any(|name| name.starts_with("fist")), "{made:?}");
+}
+
+const AFTER_UNREACHABLE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @abort()
+define i32 @f(i32 %x, i1 %c) {
+entry:
+  br i1 %c, label %a, label %dead
+a:
+  %v = add i32 %x, 1
+  br label %live
+dead:
+  call void @abort()
+  unreachable
+live:
+  ret i32 %v
+}
+";
+
+/// A block that ends in `unreachable` leads nowhere. The edge from it into the
+/// next block in layout was made, and a value that block's real predecessor
+/// defines was "read and not defined on every path" (the nib runtime's
+/// `heap.allocate`, `@format.put`: 8 huge programs under `--isel=dag`).
+#[test]
+fn a_block_ending_in_unreachable_does_not_fall_into_the_next() {
+    let module = llrm_mir::parse::module(AFTER_UNREACHABLE).expect("parses");
+    selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+}
+
+fn memmove_ir(metadata: &str) -> String {
+    format!(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @llvm.memmove.p0.p0.i32(ptr, ptr, i32, i1)
+define void @f(ptr %d, ptr %s) {{
+entry:
+  call void @llvm.memmove.p0.p0.i32(ptr %d, ptr %s, i32 78000, i1 false){metadata}
+  ret void
+}}
+!0 = !{{}}
+"
+    )
+}
+
+fn select_m32(ir: &str) -> Result<crate::backend::isel::Selected, String> {
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .map_err(|e| e.0)
+}
+
+/// A `memmove` a pass proved forward is `rep movsb`, one proved backward is
+/// `std; rep movsb; cld` from the last byte, where the runtime has no
+/// `memmove` (`copyw.nib`'s scroll up and down at m32); one proved neither way
+/// is still refused.
+#[test]
+fn a_memmove_with_a_proved_direction_is_a_string_copy() {
+    assert!(select_m32(&memmove_ir(", !llrm.forward !0")).is_ok());
+    let backward = select_m32(&memmove_ir(", !llrm.backward !0")).unwrap_or_else(|why| panic!("{why}"));
+    assert!(backward.inline.values().any(|bytes| bytes[..] == [0xFD, 0xF3, 0xA4, 0xFC]), "{:?}", backward.inline);
+    let refused = select_m32(&memmove_ir("")).err().expect("no direction proved");
+    assert!(refused.contains("memmove"), "{refused}");
+}
+
+const SCALED_INDEX_AT_M16: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+declare cc 1006 void @\"_far_get@3\"(ptr, ptr addrspace(1))
+declare cc 1006 i16 @\"_con_gfx_trim@3\"(ptr addrspace(1))
+declare cc 1006 i16 @\"_con_back_load@3\"(ptr addrspace(1), ptr)
+declare cc 1006 i16 @\"_con_chars_load@3\"(ptr addrspace(1), ptr)
+declare cc 1006 void @\"_con_text@3\"(ptr addrspace(1), i32, i16, ptr)
+declare cc 1006 void @\"_con_back_draw@3\"(ptr addrspace(1), i32, i16)
+declare i16 @_strlen(ptr) addrspace(1)
+declare ptr @_strcpy(ptr, ptr) addrspace(1)
+declare i16 @llvm.smin.i16(i16, i16)
+define cc 1005 void @\"_con_draw@3\"(ptr addrspace(1) noundef nocapture %0, ptr noundef %1, i32 noundef %2, i16 noundef %3, float noundef %4) addrspace(1) \"llrm-fp-eval\"=\"x87-extended\" {
+b1:
+  %5 = alloca [82 x i8]
+  %6 = alloca [80 x i8]
+  %7 = getelementptr inbounds nuw i8, ptr addrspace(1) %0, i16 2
+  %8 = load float, ptr addrspace(1) %7
+  %9 = fcmp ole float %8, 0.000000e+00
+  br i1 %9, label %b3, label %b2
+
+b2:
+  %10 = tail call cc 1006 i16 @\"_con_back_load@3\"(ptr addrspace(1) noundef %0, ptr noundef %1)
+  %11 = icmp eq i16 %10, 0
+  br i1 %11, label %b9, label %b18
+
+b3:
+  %12 = getelementptr inbounds nuw i8, ptr addrspace(1) %0, i16 8
+  %13 = load i16, ptr addrspace(1) %12
+  %14 = icmp slt i16 %13, 4
+  %15 = select i1 %14, i16 %13, i16 4
+  %16 = tail call cc 1006 i16 @\"_con_gfx_trim@3\"(ptr addrspace(1) noundef %0)
+  %17 = icmp eq i16 %16, 0
+  br i1 %17, label %b9, label %b7
+
+b7:
+  %18 = tail call cc 1006 i16 @\"_con_chars_load@3\"(ptr addrspace(1) noundef %0, ptr noundef %1)
+  %19 = icmp ne i16 %18, 0
+  %20 = icmp sgt i16 %15, 0
+  %or.cond = select i1 %19, i1 %20, i1 false
+  br i1 %or.cond, label %110, label %b9
+
+b9:
+  ret void
+
+b14:
+  %21 = phi i16 [ %114, %110 ], [ %45, %b17 ]
+  %22 = phi i16 [ %113, %110 ], [ %44, %b17 ]
+  %23 = phi i16 [ 0, %110 ], [ %43, %b17 ]
+  %24 = getelementptr i8, ptr addrspace(1) %0, i16 6
+  %25 = load i16, ptr addrspace(1) %24
+  %26 = add i16 %21, %25
+  %27 = icmp slt i16 %26, 0
+  %28 = select i1 %27, i16 15, i16 0
+  %29 = add i16 %28, %25
+  %30 = add i16 %29, %21
+  %31 = lshr i16 %30, 4
+  %32 = shl nuw i16 %31, 4
+  %33 = sub i16 %25, %32
+  %34 = add i16 %21, %33
+  %35 = shl nsw i16 %34, 2
+  %36 = getelementptr i8, ptr addrspace(1) %0, i16 %35
+  %37 = getelementptr i8, ptr addrspace(1) %36, i16 1292
+  %38 = load float, ptr addrspace(1) %37
+  %39 = fcmp ole float %38, 0.000000e+00
+  br i1 %39, label %b17, label %b15
+
+b15:
+  %40 = mul nsw i16 %34, 80
+  %41 = getelementptr inbounds i8, ptr addrspace(1) %111, i16 %40
+  call cc 1006 void @\"_far_get@3\"(ptr noundef %5, ptr addrspace(1) noundef %41)
+  call cc 1006 void @\"_con_text@3\"(ptr addrspace(1) noundef %0, i32 noundef %2, i16 noundef %23, ptr noundef %5)
+  %42 = add nsw i16 %23, 8
+  br label %b17
+
+b17:
+  %43 = phi i16 [ %23, %b14 ], [ %42, %b15 ]
+  %44 = add i16 %22, -1
+  %45 = add i16 %21, 1
+  %46 = icmp samesign ugt i16 %44, 1
+  br i1 %46, label %b14, label %b9
+
+b18:
+  %47 = getelementptr i8, ptr addrspace(1) %0, i16 2
+  %48 = load float, ptr addrspace(1) %47
+  %49 = fptosi float %48 to i16
+  %50 = add nsw i16 %49, -200
+  tail call cc 1006 void @\"_con_back_draw@3\"(ptr addrspace(1) noundef %0, i32 noundef %2, i16 noundef %50)
+  %51 = icmp slt i16 %49, 16
+  br i1 %51, label %b9, label %b20
+
+b20:
+  %52 = tail call cc 1006 i16 @\"_con_chars_load@3\"(ptr addrspace(1) noundef %0, ptr noundef %1)
+  %53 = icmp eq i16 %52, 0
+  br i1 %53, label %b9, label %b22
+
+b22:
+  %54 = add nsw i16 %49, -16
+  %55 = lshr i16 %54, 3
+  %56 = getelementptr inbounds nuw i8, ptr addrspace(1) %0, i16 8
+  %57 = load i16, ptr addrspace(1) %56
+  %58 = getelementptr inbounds nuw i8, ptr addrspace(1) %0, i16 10
+  %59 = load i16, ptr addrspace(1) %58
+  %60 = sub nsw i16 %57, %59
+  %61 = icmp sgt i16 %55, %60
+  %62 = select i1 %61, i16 %60, i16 %55
+  %63 = icmp sgt i16 %62, 0
+  br i1 %63, label %115, label %b27
+
+b27:
+  store i8 93, ptr %5
+  %64 = getelementptr inbounds nuw i8, ptr addrspace(1) %0, i16 1356
+  call cc 1006 void @\"_far_get@3\"(ptr noundef %6, ptr addrspace(1) noundef nonnull %64)
+  %65 = icmp slt i16 %3, 0
+  %66 = select i1 %65, i16 7, i16 0
+  %67 = add i16 %3, %66
+  %68 = ashr i16 %67, 3
+  %69 = call addrspace(1) i16 @_strlen(ptr noundef nonnull %6)
+  %70 = add nsw i16 %68, -4
+  %71 = icmp sgt i16 %69, %70
+  %72 = sub nsw i16 %69, %70
+  %73 = select i1 %71, i16 %72, i16 0
+  %74 = getelementptr inbounds nuw i8, ptr %6, i16 %73
+  %75 = getelementptr inbounds nuw i8, ptr %5, i16 1
+  %76 = call addrspace(1) ptr @_strcpy(ptr noundef nonnull %75, ptr noundef nonnull %74)
+  %77 = call addrspace(1) i16 @_strlen(ptr noundef nonnull %5)
+  %78 = fmul float %4, 4.000000e+00
+  %79 = fptosi float %78 to i32
+  %80 = trunc i32 %79 to i8
+  %81 = and i8 %80, 1
+  %82 = or i8 %81, 10
+  %83 = getelementptr i8, ptr %5, i16 %77
+  store i8 %82, ptr %83
+  %84 = getelementptr i8, ptr %83, i16 1
+  store i8 0, ptr %84
+  call cc 1006 void @\"_con_text@3\"(ptr addrspace(1) noundef %0, i32 noundef %2, i16 noundef %54, ptr noundef %5)
+  br label %b9
+
+b28:
+  %85 = phi i16 [ %124, %115 ], [ %108, %b28 ]
+  %86 = phi i16 [ %123, %115 ], [ %107, %b28 ]
+  %87 = phi i16 [ %117, %115 ], [ %106, %b28 ]
+  %88 = getelementptr i8, ptr addrspace(1) %0, i16 6
+  %89 = load i16, ptr addrspace(1) %88
+  %90 = getelementptr i8, ptr addrspace(1) %0, i16 10
+  %91 = load i16, ptr addrspace(1) %90
+  %92 = sub i16 %89, %91
+  %93 = add i16 %85, %92
+  %94 = icmp slt i16 %93, 0
+  %95 = select i1 %94, i16 15, i16 0
+  %96 = sub i16 %89, %91
+  %97 = add i16 %95, %89
+  %98 = add i16 %97, %85
+  %99 = sub i16 %98, %91
+  %100 = lshr i16 %99, 4
+  %101 = shl nuw i16 %100, 4
+  %102 = sub i16 %96, %101
+  %103 = add i16 %85, %102
+  %104 = mul nsw i16 %103, 80
+  %105 = getelementptr inbounds i8, ptr addrspace(1) %118, i16 %104
+  call cc 1006 void @\"_far_get@3\"(ptr noundef %5, ptr addrspace(1) noundef %105)
+  call cc 1006 void @\"_con_text@3\"(ptr addrspace(1) noundef %0, i32 noundef %2, i16 noundef %87, ptr noundef %5)
+  %106 = add nsw i16 %87, 8
+  %107 = add i16 %86, -1
+  %108 = add i16 %85, 1
+  %109 = icmp samesign ugt i16 %107, 1
+  br i1 %109, label %b28, label %b27
+
+110:
+  %111 = getelementptr inbounds nuw i8, ptr addrspace(1) %0, i16 12
+  %112 = call i16 @llvm.smin.i16(i16 %13, i16 4)
+  %113 = add nsw i16 %112, 1
+  %114 = sub i16 16, %112
+  br label %b14
+
+115:
+  %116 = shl nuw nsw i16 %62, 3
+  %117 = sub nsw i16 %54, %116
+  %118 = getelementptr inbounds nuw i8, ptr addrspace(1) %0, i16 12
+  %119 = add i16 %49, -16
+  %120 = lshr i16 %119, 3
+  %121 = sub i16 %57, %59
+  %122 = call i16 @llvm.smin.i16(i16 %120, i16 %121)
+  %123 = add nsw i16 %122, 1
+  %124 = sub i16 16, %122
+  br label %b28
+}
+";
+
+/// A scaled index beside a base is the 386's 32-bit address form. The `lea`
+/// kept a literal place (`abs`) beside the scale, which no encoding takes: the
+/// QCport modules console and screen failed to compile once their float
+/// functions were selected (`[abs+bx+si*8]`, `_con_draw@3`).
+#[test]
+fn a_scaled_lea_at_m16_has_no_literal_place() {
+    use crate::model::ir::{Loc, Operation};
+    let module = llrm_mir::parse::module(SCALED_INDEX_AT_M16).expect("parses");
+    let done =
+        selected(&module, "_con_draw@3", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+            .unwrap_or_else(|e| panic!("{}", e.0));
+    let mut scaled = 0;
+    for insn in done.body.insns().iter() {
+        let Some(what) = insn.what.as_ref().filter(|w| w.op == Operation::Address) else { continue };
+        let (scale, place) = match &what.sources[..] {
+            [Loc::Address(a)] => (a.scale, a.addr),
+            [Loc::Mem(m)] => (m.scale, m.addr),
+            _ => continue,
+        };
+        scaled += usize::from(scale != 1);
+        assert!(scale == 1 || place.is_none(), "{what:?}");
+    }
+    assert!(scaled > 0, "the function has a scaled lea");
+}
+
+const FLAGS_OF_A_SUB_AFTER_A_SHIFT: &str = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+declare fastcc void @_far_get(ptr, ptr)
+declare fastcc i16 @_con_gfx_trim(ptr)
+declare fastcc i16 @_con_back_load(ptr, ptr)
+declare fastcc i16 @_con_chars_load(ptr, ptr)
+declare fastcc void @_con_text(ptr, i32, i16, ptr)
+declare fastcc void @_con_back_draw(ptr, i32, i16)
+declare cc 1003 i32 @_strlen(ptr)
+declare cc 1003 ptr @_strcpy(ptr, ptr)
+declare i32 @llvm.smin.i32(i32, i32)
+define cc 1003 void @_con_draw(ptr noundef nocapture %0, ptr noundef %1, i32 noundef %2, i16 noundef %3, float noundef %4) \"llrm-fp-eval\"=\"x87-extended\" {
+b1:
+  %5 = alloca [82 x i8]
+  %6 = alloca [80 x i8]
+  %7 = getelementptr inbounds nuw i8, ptr %0, i32 4
+  %8 = load float, ptr %7
+  %9 = fcmp ole float %8, 0.000000e+00
+  br i1 %9, label %b3, label %b2
+
+b2:
+  %10 = tail call fastcc i16 @_con_back_load(ptr noundef nonnull %0, ptr noundef %1)
+  %11 = icmp eq i16 %10, 0
+  br i1 %11, label %b9, label %b18
+
+b3:
+  %12 = getelementptr inbounds nuw i8, ptr %0, i32 10
+  %13 = load i16, ptr %12
+  %14 = sext i16 %13 to i32
+  %15 = trunc i32 %14 to i16
+  %16 = icmp slt i32 %14, 4
+  %17 = select i1 %16, i16 %15, i16 4
+  %18 = sext i16 %17 to i32
+  %19 = tail call fastcc i16 @_con_gfx_trim(ptr noundef nonnull %0)
+  %20 = icmp eq i16 %19, 0
+  br i1 %20, label %b9, label %b7
+
+b7:
+  %21 = tail call fastcc i16 @_con_chars_load(ptr noundef nonnull %0, ptr noundef %1)
+  %22 = icmp ne i16 %21, 0
+  %23 = icmp sgt i32 %18, 0
+  %or.cond = select i1 %22, i1 %23, i1 false
+  br i1 %or.cond, label %135, label %b9
+
+b9:
+  ret void
+
+b14:
+  %24 = phi i32 [ %139, %135 ], [ %49, %b17 ]
+  %25 = phi i32 [ %138, %135 ], [ %48, %b17 ]
+  %26 = phi i16 [ 0, %135 ], [ %47, %b17 ]
+  %27 = getelementptr i8, ptr %0, i32 8
+  %28 = load i16, ptr %27
+  %29 = sext i16 %28 to i32
+  %30 = add i32 %24, %29
+  %31 = icmp slt i32 %30, 0
+  %32 = select i1 %31, i32 15, i32 0
+  %33 = sext i16 %28 to i32
+  %34 = add i32 %32, %24
+  %35 = add i32 %34, %33
+  %36 = lshr i32 %35, 4
+  %37 = shl nuw i32 %36, 4
+  %38 = sub i32 %33, %37
+  %39 = add i32 %24, %38
+  %40 = mul i32 %39, 4
+  %41 = getelementptr i8, ptr %0, i32 %40
+  %42 = getelementptr i8, ptr %41, i32 1296
+  %43 = load float, ptr %42
+  %44 = fcmp ole float %43, 0.000000e+00
+  br i1 %44, label %b17, label %b15
+
+b15:
+  %45 = getelementptr inbounds [80 x i8], ptr %136, i32 %39
+  call fastcc void @_far_get(ptr noundef %5, ptr noundef nonnull %45)
+  call fastcc void @_con_text(ptr noundef nonnull %0, i32 noundef %2, i16 noundef %26, ptr noundef %5)
+  %46 = add i16 %26, 8
+  br label %b17
+
+b17:
+  %47 = phi i16 [ %26, %b14 ], [ %46, %b15 ]
+  %48 = add i32 %25, -1
+  %49 = add i32 %24, 1
+  %50 = icmp samesign ugt i32 %48, 1
+  br i1 %50, label %b14, label %b9
+
+b18:
+  %51 = getelementptr i8, ptr %0, i32 4
+  %52 = load float, ptr %51
+  %53 = fptosi float %52 to i16
+  %54 = zext nneg i16 %53 to i32
+  %55 = add i16 %53, -200
+  tail call fastcc void @_con_back_draw(ptr noundef nonnull %0, i32 noundef %2, i16 noundef %55)
+  %56 = icmp slt i16 %53, 16
+  br i1 %56, label %b9, label %b20
+
+b20:
+  %57 = tail call fastcc i16 @_con_chars_load(ptr noundef nonnull %0, ptr noundef %1)
+  %58 = icmp eq i16 %57, 0
+  br i1 %58, label %b9, label %b22
+
+b22:
+  %59 = add nsw i32 %54, -16
+  %60 = lshr i32 %59, 3
+  %61 = getelementptr inbounds nuw i8, ptr %0, i32 10
+  %62 = load i16, ptr %61
+  %63 = sext i16 %62 to i32
+  %64 = getelementptr inbounds nuw i8, ptr %0, i32 12
+  %65 = load i16, ptr %64
+  %66 = sext i16 %65 to i32
+  %67 = sext i16 %62 to i32
+  %68 = sext i16 %65 to i32
+  %69 = sub nsw i32 %67, %68
+  %70 = icmp sgt i32 %60, %69
+  %71 = select i1 %70, i32 %69, i32 %60
+  %72 = shl i32 %71, 16
+  %73 = ashr exact i32 %72, 16
+  %74 = icmp sgt i32 %73, 0
+  br i1 %74, label %140, label %b27
+
+b27:
+  %75 = trunc i32 %54 to i16
+  store i8 93, ptr %5
+  %76 = getelementptr inbounds nuw i8, ptr %0, i32 1360
+  call fastcc void @_far_get(ptr noundef %6, ptr noundef nonnull %76)
+  %77 = icmp slt i16 %3, 0
+  %78 = select i1 %77, i16 7, i16 0
+  %79 = add i16 %3, %78
+  %80 = ashr i16 %79, 3
+  %81 = call cc 1003 i32 @_strlen(ptr noundef nonnull %6)
+  %82 = shl i32 %81, 16
+  %83 = ashr exact i32 %82, 16
+  %84 = sext i16 %80 to i32
+  %85 = add nsw i32 %84, -4
+  %86 = icmp sgt i32 %83, %85
+  %87 = sub nsw i32 %83, %85
+  %88 = shl i32 %87, 16
+  %89 = ashr exact i32 %88, 16
+  %90 = select i1 %86, i32 %89, i32 0
+  %91 = getelementptr inbounds i8, ptr %6, i32 %90
+  %92 = getelementptr inbounds nuw i8, ptr %5, i32 1
+  %93 = call cc 1003 ptr @_strcpy(ptr noundef nonnull %92, ptr noundef nonnull %91)
+  %94 = call cc 1003 i32 @_strlen(ptr noundef nonnull %5)
+  %95 = fmul float %4, 4.000000e+00
+  %96 = fptosi float %95 to i32
+  %97 = trunc i32 %96 to i8
+  %98 = and i8 %97, 1
+  %99 = or i8 %98, 10
+  %100 = shl i32 %94, 16
+  %101 = ashr exact i32 %100, 16
+  %102 = getelementptr inbounds i8, ptr %5, i32 %101
+  store i8 %99, ptr %102
+  %103 = add i32 %100, 65536
+  %104 = ashr exact i32 %103, 16
+  %105 = getelementptr inbounds i8, ptr %5, i32 %104
+  store i8 0, ptr %105
+  %106 = add nsw i16 %75, -16
+  call fastcc void @_con_text(ptr noundef nonnull %0, i32 noundef %2, i16 noundef %106, ptr noundef %5)
+  br label %b9
+
+b28:
+  %107 = phi i32 [ %154, %140 ], [ %133, %b28 ]
+  %108 = phi i32 [ %153, %140 ], [ %132, %b28 ]
+  %109 = phi i16 [ %144, %140 ], [ %131, %b28 ]
+  %110 = getelementptr i8, ptr %0, i32 8
+  %111 = load i16, ptr %110
+  %112 = getelementptr i8, ptr %0, i32 12
+  %113 = load i16, ptr %112
+  %114 = sext i16 %111 to i32
+  %115 = sext i16 %113 to i32
+  %116 = sub i32 %114, %115
+  %117 = add i32 %107, %116
+  %118 = icmp slt i32 %117, 0
+  %119 = select i1 %118, i32 15, i32 0
+  %120 = sext i16 %111 to i32
+  %121 = sext i16 %113 to i32
+  %122 = sub i32 %120, %121
+  %123 = add i32 %119, %107
+  %124 = add i32 %123, %120
+  %125 = sub i32 %124, %121
+  %126 = lshr i32 %125, 4
+  %127 = shl nuw i32 %126, 4
+  %128 = sub i32 %122, %127
+  %129 = add i32 %107, %128
+  %130 = getelementptr inbounds [80 x i8], ptr %145, i32 %129
+  call fastcc void @_far_get(ptr noundef %5, ptr noundef nonnull %130)
+  call fastcc void @_con_text(ptr noundef nonnull %0, i32 noundef %2, i16 noundef %109, ptr noundef %5)
+  %131 = add i16 %109, 8
+  %132 = add i32 %108, -1
+  %133 = add i32 %107, 1
+  %134 = icmp samesign ugt i32 %132, 1
+  br i1 %134, label %b28, label %b27
+
+135:
+  %136 = getelementptr inbounds nuw i8, ptr %0, i32 14
+  %137 = call i32 @llvm.smin.i32(i32 %14, i32 4)
+  %138 = add nsw i32 %137, 1
+  %139 = sub i32 16, %137
+  br label %b14
+
+140:
+  %141 = trunc i32 %54 to i16
+  %142 = lshr exact i32 %72, 13
+  %143 = sub nsw i32 %59, %142
+  %144 = trunc i32 %143 to i16
+  %145 = getelementptr inbounds nuw i8, ptr %0, i32 14
+  %146 = zext i16 %141 to i32
+  %147 = add nsw i32 %146, -16
+  %148 = lshr i32 %147, 3
+  %149 = sub i32 %63, %66
+  %150 = call i32 @llvm.smin.i32(i32 %148, i32 %149)
+  %151 = trunc i32 %150 to i16
+  %152 = sext i16 %151 to i32
+  %153 = add nsw i32 %152, 1
+  %154 = sub i32 16, %152
+  br label %b28
+}
+";
+
+/// A `sub`'s flags read by a branch after a shift came between: the flags are
+/// made again as a `cmp` of the same operands, as a `cmp`'s own were
+/// (QCport console `_con_draw` at m32: 'flags overwritten between their
+/// producer and a consumer'). A `MOV32r0` is a `mov` here and writes none.
+#[test]
+fn the_flags_of_a_sub_are_made_again_after_another_unit_wrote_them() {
+    let module = llrm_mir::parse::module(FLAGS_OF_A_SUB_AFTER_A_SHIFT).expect("parses");
+    selected(&module, "_con_draw", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
 }

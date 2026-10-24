@@ -29,7 +29,7 @@ FLAGS = ["-m32", "-mabi=sysv", "-march=i486", "-O2"]
 M16_FLAGS = ["-m16", "-march=i386", "-O2"]
 # Opcodes the pin's selection makes that are not instructions we compare: copies and bookkeeping.
 FLAG_WORDS = {"nuw", "nsw", "exact", "nnan", "ninf", "nsz", "arcp", "contract", "afn", "reassoc", "nofpexcept", "samesign", "nneg", "disjoint", "inbounds", "fmf"}
-BOOKKEEPING = {"COPY", "PHI", "IMPLICIT_DEF", "ADJCALLSTACKDOWN32", "ADJCALLSTACKUP32", "KILL"}
+BOOKKEEPING = {"COPY", "EXTRACT_SUBREG", "PHI", "IMPLICIT_DEF", "ADJCALLSTACKDOWN32", "ADJCALLSTACKUP32", "KILL"}
 
 
 def defined(ir: str) -> list[str]:

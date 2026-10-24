@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
+mod absolute;
 mod assignment;
 mod bounds;
 mod debug;
@@ -278,6 +279,9 @@ struct Function {
     // Each element pointer into a far array: the place of the descriptor
     // owning the allocation it stays inside.
     allocations: BTreeMap<u32, u32>,
+    // Each POKE's far pointer whose DEF SEG is a literal on every path in:
+    // the place of the segment cell, which names the memory it addresses.
+    absolute: BTreeMap<u32, u32>,
 }
 
 struct Compiler {
@@ -596,6 +600,7 @@ pub fn compile_debugged(
         merging::applied(&mut compiler);
     }
     shapes::applied(&mut compiler);
+    absolute::applied(&mut compiler);
     Ok((compiler.json(), std::mem::take(&mut compiler.warnings)))
 }
 
@@ -1839,6 +1844,7 @@ impl Compiler {
             promises: Vec::new(),
             origins: BTreeMap::new(),
             allocations: BTreeMap::new(),
+            absolute: BTreeMap::new(),
         });
     }
 
@@ -4229,6 +4235,7 @@ impl Compiler {
                                 value,
                             ],
                         );
+                        self.tag_last(Tag::Poke);
                     }
                     "SWAP" => {
                         let [left, right] = arguments.as_slice() else {
@@ -10464,7 +10471,7 @@ fn operand_json(
             write!(out, "],\"offset\":{offset},\"place\":{place},\"tag\":\"projection\",\"type\":{type_id}}}").unwrap();
         }
         Operand::Indirect { base, offset, type_id, volatile, inbounds } => {
-            if let Some(place) = function.allocations.get(base).filter(|_| *inbounds) {
+            if let Some(place) = function.allocations.get(base).filter(|_| *inbounds).or(function.absolute.get(base)) {
                 write!(out, "{{\"allocation\":{place},").unwrap();
             } else {
                 out.push('{');

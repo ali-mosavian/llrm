@@ -98,9 +98,8 @@ use std::sync::Arc;
 
 use llrm_mir::blockfrequency::BranchProbability;
 
-use crate::analysis::loops;
 use crate::backend::liveness;
-use crate::liveness::blockfrequency::{MachineBlockFrequencyInfo, MachineBranchProbabilityInfo};
+use crate::liveness::blockfrequency::{Graph, MachineBlockFrequencyInfo, MachineBranchProbabilityInfo};
 use crate::liveness::cfg::{Cfg, DomTree};
 use crate::model::ir::{Imm, Loc, Operation};
 use crate::model::lir::{Block, Insn, LirBody};
@@ -189,10 +188,12 @@ fn safe_to_move(
 
 /// `MBPI->getEdgeProbability(From, To)` of every edge of `body`, by block
 /// index: the sum over the successor positions that lead to `To`.
-fn edge_probabilities(body: &LirBody) -> HashMap<(usize, usize), BranchProbability> {
+fn edge_probabilities(
+    body: &LirBody,
+    found: &MachineBranchProbabilityInfo<'_>,
+) -> HashMap<(usize, usize), BranchProbability> {
     let position: HashMap<i64, usize> =
         body.blocks.iter().enumerate().map(|(number, block)| (block.at, number)).collect();
-    let found = MachineBranchProbabilityInfo::of(body);
     let mut all = HashMap::default();
     for (from, block) in body.blocks.iter().enumerate() {
         let mut seen: Vec<usize> = Vec::new();
@@ -210,7 +211,7 @@ fn edge_probabilities(body: &LirBody) -> HashMap<(usize, usize), BranchProbabili
 /// `mayStore() || isCall() || hasOrderedMemoryRef()`: what `hasStoreBetween`
 /// counts. No alias analysis reaches here, so any of these may alias a load
 /// (DEVIATE M7).
-fn may_store(one: &Insn) -> bool {
+pub(crate) fn may_store(one: &Insn) -> bool {
     let Some(what) = &one.what else { return true };
     one.volatile()
         || one.call.is_some()
@@ -359,17 +360,20 @@ impl Sinker {
         let post = post_dominators(&cfg);
         let position: IndexMap<i64, usize> =
             body.blocks.iter().enumerate().map(|(number, block)| (block.at, number)).collect();
-        let natural = loops::loops(&body.blocks, Some(body.entry));
-        let hard = loops::irreducible(&body.blocks, Some(body.entry));
-        // The first loop of the list that holds a block is its cycle; made by
-        // walking each loop's body once, not asking every loop of every block.
+        // One graph and one cycle info of the body (`MachineCycleInfo`, as the
+        // pin's sink asks it: `getCycle`, `isReducible`, `getHeader`)
+        // feed the cycles here, the block frequencies and the
+        // edge probabilities.
+        let graph = std::rc::Rc::new(Graph::of(body));
+        let cycles = graph.cycle_info();
         let mut cycle: Vec<Option<usize>> = vec![None; body.blocks.len()];
-        for one in &natural {
-            let header = position.get(&one.header).copied();
-            for at in one.body.iter() {
-                if let Some(&number) = position.get(at) {
-                    cycle[number] = cycle[number].or(header);
-                }
+        let mut hard = vec![false; body.blocks.len()];
+        for number in 0..body.blocks.len() {
+            let found = cycles.get_cycle(llrm_mir::module::BlockId(number as u32));
+            if found.is_valid() {
+                let header = cycles.get_header(found).0 as usize;
+                cycle[number] = Some(header);
+                hard[header] = !cycles.is_reducible(found);
             }
         }
         let depths = crate::analysis::intervals::depths_shared(body);
@@ -377,13 +381,13 @@ impl Sinker {
             size,
             insns,
             at: body.blocks.iter().map(|block| block.at).collect(),
-            irreducible: body.blocks.iter().map(|block| hard.contains(&block.at)).collect(),
+            irreducible: hard,
             depth: body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect(),
             frequency: {
-                let found = MachineBlockFrequencyInfo::of(body);
+                let found = MachineBlockFrequencyInfo::of_with(&graph, &cycles);
                 (0..body.blocks.len()).map(|block| found.get_block_freq(block).get_frequency()).collect()
             },
-            probability: edge_probabilities(body),
+            probability: edge_probabilities(body, &MachineBranchProbabilityInfo::of_with(std::rc::Rc::clone(&graph))),
             position,
             cfg,
             dom,
@@ -1484,8 +1488,36 @@ mod tests {
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         body.odds.taken.insert((1, 2), (0.1 * crate::model::lir::BlockOdds::CERTAIN) as u32);
         body.odds.taken.insert((1, 1), (0.9 * crate::model::lir::BlockOdds::CERTAIN) as u32);
-        let odds = edge_probabilities(&body);
+        let odds = edge_probabilities(&body, &MachineBranchProbabilityInfo::of(&body));
         assert!(odds[&(1, 2)] <= SPLIT_EDGE_PROBABILITY_THRESHOLD, "the exit");
         assert!(odds[&(1, 1)] > SPLIT_EDGE_PROBABILITY_THRESHOLD, "the back edge");
+    }
+
+    /// The sink asked a graph of the body for its frequencies, another for its
+    /// edge probabilities, and found its loops a third and fourth time
+    /// (`loops`, `irreducible`): d_faces, 9 rounds, 4 M instructions. One
+    /// graph and one cycle info feed all of them. Counted, not timed.
+    #[test]
+    fn test_a_round_of_the_sink_builds_one_graph_of_the_body() {
+        let jump = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let ret = |at: i64| insn(at, Operation::Return, "ret", vec![], vec![], vec![], vec![]);
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let mut body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![1], vec![]).into(),
+                block(1, vec![1, 2], vec![jump(1)]).into(),
+                block(2, vec![], vec![ret(2)]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let before = crate::liveness::blockfrequency::GRAPH_BUILDS.with(std::cell::Cell::get);
+        let _ = Sinker::new(&body, false, None);
+        let built = crate::liveness::blockfrequency::GRAPH_BUILDS.with(std::cell::Cell::get) - before;
+        assert_eq!(built, 1, "graphs built for one round");
     }
 }
