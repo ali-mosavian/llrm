@@ -1650,3 +1650,64 @@ mod pop_from_x87 {
         assert_eq!(copy.vts, vec![mvt::f64, mvt::Other, mvt::Glue]);
     }
 }
+
+mod decrement_for_flags {
+    use super::*;
+    use crate::generated::ids::{x86, x86isd};
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_select::select_node;
+
+    const JCC_1: u16 = 2001;
+    const COND_NE: i64 = 5;
+    const COND_B: i64 = 2;
+
+    /// `add x, -1` whose flags reach a `jcc` through `CopyToReg EFLAGS`, as
+    /// selecting the branch first leaves them.
+    fn selected_with_branch_on(cond: i64) -> &'static str {
+        let mut dag = TestDag::new();
+        let x = dag.input(1, mvt::i32);
+        let minus_one = dag.make_constant(-1, mvt::i32);
+        let add = dag.node(x86isd::ADD, &[mvt::i32, mvt::i32], &[x, minus_one]);
+        let eflags = dag.register(x86::EFLAGS, mvt::i32);
+        let copy = dag.add(Node {
+            opcode: isd::CopyToReg,
+            vts: vec![mvt::Other, mvt::Glue],
+            ops: vec![SDValue::new(0, 0), eflags, SDValue::new(add, 1)],
+            ..Node::default()
+        });
+        let target = dag.input(3, mvt::Other);
+        let condition = dag.make_constant(cond, mvt::i8);
+        dag.add(Node {
+            opcode: !JCC_1,
+            machine: Some(JCC_1),
+            vts: vec![mvt::Other],
+            ops: vec![target, condition, SDValue::new(copy, 0), SDValue::new(copy, 1)],
+            ..Node::default()
+        });
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
+        assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, add), Outcome::Selected);
+        selected(&dag, add)
+    }
+
+    /// The loop counter of `x_iir` was `add eax, -1; test eax, eax; jne`:
+    /// `hasNoCarryFlagUses` refused every use through `CopyToReg EFLAGS`
+    /// (SD37), so `DEC32r` was `ADD32ri8` plus a `test` (3 of the m32 shadow's
+    /// pin-only `DEC32r` rows).
+    #[test]
+    fn a_decrement_whose_flags_only_a_jne_reads_is_dec32r() {
+        assert_eq!(selected_with_branch_on(COND_NE), "DEC32r");
+    }
+
+    #[test]
+    fn a_decrement_whose_carry_a_jb_reads_stays_an_add() {
+        assert_ne!(selected_with_branch_on(COND_B), "DEC32r");
+    }
+}

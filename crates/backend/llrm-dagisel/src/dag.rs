@@ -126,6 +126,11 @@ pub trait Dag {
         value: SDValue,
     ) -> Option<u8>;
     /// `VTSDNode::getVT()`.
+    /// `RegisterSDNode::getReg`: the register a `Register` node names.
+    fn register_of(
+        &self,
+        node: u32,
+    ) -> Option<u16>;
     fn value_type_node(
         &self,
         value: SDValue,

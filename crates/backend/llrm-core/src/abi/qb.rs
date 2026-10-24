@@ -930,6 +930,10 @@ impl crate::backend::assemble::Abi for HirAbi {
         _contract_keeping(name, runtime_call, cleanup, pushed, self.runtime, &self.preserved).map_err(|error| error.0)
     }
 
+    fn runtime_contracts(&self) -> bool {
+        true
+    }
+
     fn linked(
         &self,
         name: &str,
