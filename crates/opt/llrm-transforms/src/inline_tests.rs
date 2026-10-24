@@ -127,17 +127,52 @@ b1:
   br label %0
 
 0:
-  br label %1
-
-1:
   br label %b4
 
 b4:
-  %joined = phi i16 [ 37, %1 ]
+  %joined = phi i16 [ 37, %0 ]
   ret i16 %joined
 }
 "
     );
+}
+
+/// x_reverse m16 -O1 grew 3 bytes (AM-IP-7): the callee's return block, laid
+/// out before its loop, stayed as an empty jump, and `merged` later pulled the
+/// code after the call into it, ahead of the loop. `InlineFunction` splices a
+/// single return into the code after the call, which keeps its place.
+#[test]
+fn test_inline_keeps_the_code_after_the_call_after_the_callee_loop() {
+    let mut module = parsed(
+        "define internal void @spin(i16 %n) {
+b1:
+  br label %b3
+
+b2:
+  ret void
+
+b3:
+  %i = phi i16 [ 0, %b1 ], [ %j, %b3 ]
+  %j = add i16 %i, 1
+  %c = icmp ne i16 %j, %n
+  br i1 %c, label %b3, label %b2
+}
+
+define i16 @main(i16 %n) {
+b1:
+  call void @spin(i16 %n)
+  %r = add i16 %n, 7
+  ret i16 %r
+}
+",
+    );
+    assert!(inline_into(&mut module, "main", 1));
+    crate::cfg::merged(module.function_mut("main").unwrap().1);
+    let text = printed(&module);
+    let main = &text[text.find("define i16 @main").expect("main")..];
+    let (looped, after) = (main.find("phi i16").expect("the loop"), main.find("add i16 %n, 7").expect("the add"));
+    assert!(looped < after, "{main}");
+    assert_eq!(run(&module, "main", &[3]), Val::Int { bits: 10, width: 16 });
 }
 
 /// Value ids number each function's arena from zero: the caller's actual
