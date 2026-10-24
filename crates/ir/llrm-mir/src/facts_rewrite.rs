@@ -520,6 +520,12 @@ mod tests {
             // promoted instruction keeps its flags (the pin's `mutateType`
             // does not touch them) and none is granted.
             "extpromotion.rs",
+            // CodeGenPrepare.cpp's `isRemOfLoopIncrementWithLoopInvariant`
+            // asks for `m_c_NUWAdd`: the counter's `add nuw` says it does not
+            // wrap, which the wrapping remainder counter relies on; the
+            // `nsw` of an add feeding the remainder is copied to the sum
+            // simplified for the first remainder. The pass grants none.
+            "uremloop.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =
