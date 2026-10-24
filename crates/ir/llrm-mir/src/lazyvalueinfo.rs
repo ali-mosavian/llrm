@@ -1395,6 +1395,13 @@ impl LazyValueInfoImpl {
         Some(Lattice::get_overdefined())
     }
 
+    /// Counts one pattern of an `icmp` operand tried; true, to sit in a
+    /// condition.
+    fn pattern_tried() -> bool {
+        crate::counts::bump(crate::counts::Event::LviIcmpPatterns);
+        true
+    }
+
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LazyValueInfo.cpp#L1252>
     fn match_icmp_operand(
         env: &Env,
@@ -1402,15 +1409,35 @@ impl LazyValueInfoImpl {
         lhs: Operand,
         val: Operand,
         pred: IntPredicate,
+        val_add: Option<(Operand, Operand)>,
     ) -> bool {
         if lhs == val {
             return true;
         }
         let q = env.query();
 
+        // Every pattern of `lhs` below is an add, an or or an and: the kind of
+        // its defining instruction says which can match, and a load, a phi,
+        // a constant or an argument matches none.
+        let (is_add, is_or, is_and) = q
+            .instruction_of(lhs)
+            .map_or(
+                (false, false, false),
+                |(_, instruction)| {
+                    let or = instruction.opcode == Opcode::Binary(BinaryOp::Or);
+                    (
+                        or || instruction.opcode == Opcode::Binary(BinaryOp::Add),
+                        or,
+                        instruction.opcode == Opcode::Binary(BinaryOp::And),
+                    )
+                },
+            );
+
         // Handle range checking idiom produced by InstCombine. We will subtract
         // the offset from the allowed range for RHS in this case.
-        if let Some((a, b)) = add_like(&q, lhs, Flags::default())
+        if is_add
+            && Self::pattern_tried()
+            && let Some((a, b)) = add_like(&q, lhs, Flags::default())
             && a == val
             && let Some((c, _)) = q.int_constant(b)
         {
@@ -1419,8 +1446,9 @@ impl LazyValueInfoImpl {
         }
 
         // Handle the symmetric case. This appears in saturation patterns like
-        // (x == 16) ? 16 : (x + 1).
-        if let Some((a, b)) = add_like(&q, val, Flags::default())
+        // (x == 16) ? 16 : (x + 1). `val_add` is `val` as an add, found once
+        // for the condition.
+        if let Some((a, b)) = val_add
             && a == lhs
             && let Some((c, width)) = q.int_constant(b)
         {
@@ -1429,14 +1457,18 @@ impl LazyValueInfoImpl {
         }
 
         // If (x | y) < C, then (x < C) && (y < C).
-        if commutative_with(&q, lhs, BinaryOp::Or, |x| x == val).is_some()
+        if is_or
+            && Self::pattern_tried()
+            && commutative_with(&q, lhs, BinaryOp::Or, |x| x == val).is_some()
             && (pred == IntPredicate::Ult || pred == IntPredicate::Ule)
         {
             return true;
         }
 
         // If (x & y) > C, then (x > C) && (y > C).
-        if commutative_with(&q, lhs, BinaryOp::And, |x| x == val).is_some()
+        if is_and
+            && Self::pattern_tried()
+            && commutative_with(&q, lhs, BinaryOp::And, |x| x == val).is_some()
             && (pred == IntPredicate::Ugt || pred == IntPredicate::Uge)
         {
             return true;
@@ -1593,21 +1625,30 @@ impl LazyValueInfoImpl {
             return Some(Lattice::get_overdefined());
         }
 
-        let bit_width = env.scalar_size_in_bits(val);
         if let Some(range) = Self::get_range_for_nuw_mul_square(env, val, edge_pred, lhs, rhs) {
             return Some(Lattice::get_range(range, false));
         }
 
         let mut offset = 0u128;
-        if Self::match_icmp_operand(env, &mut offset, lhs, val, edge_pred) {
+        let val_add = if matches!(
+            env.query().instruction_of(val).map(|(_, instruction)| &instruction.opcode),
+            Some(Opcode::Binary(BinaryOp::Add | BinaryOp::Or))
+        ) {
+            Self::pattern_tried();
+            add_like(&env.query(), val, Flags::default())
+        } else {
+            None
+        };
+        if Self::match_icmp_operand(env, &mut offset, lhs, val, edge_pred, val_add) {
             return self.get_value_from_simple_icmp_condition(env, edge_pred, rhs, offset, ici, use_block_value);
         }
 
         let swapped_pred = edge_pred.swapped();
-        if Self::match_icmp_operand(env, &mut offset, rhs, val, swapped_pred) {
+        if Self::match_icmp_operand(env, &mut offset, rhs, val, swapped_pred, val_add) {
             return self.get_value_from_simple_icmp_condition(env, swapped_pred, lhs, offset, ici, use_block_value);
         }
 
+        let bit_width = env.scalar_size_in_bits(val);
         let q = env.query();
         if let Some((_, args)) = intrinsic_call(&q, lhs, "llvm.ctpop")
             && args.len() == 1

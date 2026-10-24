@@ -227,12 +227,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::MergeValues => self.visit_merge_values(node),
             ISD::Select => self.visit_select(node),
             ISD::SetCC => self.visit_setcc(node),
-            ISD::Xor => self.visit_xor(node),
+            ISD::Xor => self.visit_xor(node).or_else(|| self.simplify_demanded(node)),
             ISD::Mul => self.visit_mul(node),
-            ISD::And => self.visit_and(node),
-            ISD::Or => self.visit_or(node),
+            ISD::And => self.visit_and(node).or_else(|| self.simplify_demanded(node)),
+            ISD::Or => self.visit_or(node).or_else(|| self.simplify_demanded(node)),
             ISD::Add => self.visit_add(node),
-            ISD::Shl | ISD::Srl => self.visit_shift(node),
+            ISD::Shl | ISD::Srl => self.visit_shift(node).or_else(|| self.simplify_demanded(node)),
             ISD::Sra => self.visit_sra(node).or_else(|| self.visit_shift(node)),
             ISD::SDiv => self.visit_sdiv(node),
             ISD::UDiv => self.visit_udiv(node),
@@ -240,6 +240,14 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => self.visit_extend(node),
             _ => None,
         }
+    }
+
+    /// `if (SimplifyDemandedBits(SDValue(N, 0))) return SDValue(N, 0)`.
+    fn simplify_demanded(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        self.simplify_demanded_bits(node).then_some(node)
     }
 
     /// `visitMERGE_VALUES` ([L2446][pin]): each result is its operand, so a
@@ -488,7 +496,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     }
 
     /// The users of `old` read `new`, and are looked at again.
-    fn replace_value(
+    pub(super) fn replace_value(
         &mut self,
         old: SDValue,
         new: SDValue,

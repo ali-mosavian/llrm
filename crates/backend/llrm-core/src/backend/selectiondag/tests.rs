@@ -24,6 +24,7 @@ mod br_jt;
 mod builder;
 mod cmov_constants;
 mod combiner;
+mod demanded_bits;
 mod div_by_constant;
 mod expand_node;
 mod ext_of_load;
