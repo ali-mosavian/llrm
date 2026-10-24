@@ -5,6 +5,7 @@
 #include "ad.h"
 #include "far.h"
 #include "fheap.h"
+#include "nheap.h"
 
 enum { SEGMENT = 0x10000UL };
 
@@ -71,4 +72,38 @@ void ad_near_moved(AD *ad, int delta)
 void ad_clear(AD *ad, unsigned long bytes)
 {
     far_clear_bytes(ad->data_seg, ad->data_off, bytes);
+}
+
+/* `count` bytes between far addresses given as a segment and a long offset. */
+static void copy_far(u16 to_segment, unsigned long to, u16 from_segment, unsigned long from, unsigned long count)
+{
+    while (count) {
+        unsigned long chunk = count < 0x1000 ? count : 0x1000;
+        u8 __far *target = (u8 __far *)far_words(to_segment + (u16)(to >> 4)) + (to & 15);
+        const u8 __far *source = (const u8 __far *)far_words(from_segment + (u16)(from >> 4)) + (from & 15);
+        unsigned at;
+
+        for (at = 0; at < chunk; at++)
+            target[at] = source[at];
+        to += chunk;
+        from += chunk;
+        count -= chunk;
+    }
+}
+
+void ad_copy(AD *to, const AD *from, unsigned long bytes)
+{
+    copy_far(to->data_seg, to->data_off, from->data_seg, from->data_off, bytes);
+}
+
+void ad_adopt(AD *to, AD *from)
+{
+    if (from->features & (FADF_FAR | FADF_HUGE))
+        fh_adopt(to, from);
+    else {
+        lh_entry((void *)from->data_off)->owner = to;
+        to->data_seg = from->data_seg;
+    }
+    to->data_off = from->data_off;
+    from->data_seg = 0;
 }
