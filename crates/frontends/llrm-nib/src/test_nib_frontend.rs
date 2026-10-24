@@ -2399,20 +2399,28 @@ fn test_a_program_compiles_through_the_rich_mir() {
     );
 }
 
-/// The rich route priced every CPU as a 486, so a P5's prices did not change
-/// what `logic`'s calls become. Now a body of products is folded into `main`
-/// on the 486 and 386 (no call left) and kept as four calls on the P5. (The
-/// 486/386 pair this test began with no longer differs: LLVM's inliner takes
-/// the call of the short boolean body on both.)
+/// The inliner's verdict on `logic` is the same on every CPU: LLVM prices
+/// 16-bit code with the i386 X86 model, whatever `-mcpu` (llrm-x86-m16's
+/// `Dos::tti`), so the 486, 386 and P5 inline a short body into its four call
+/// sites (no call left) and keep a long one (four calls). This began as "a
+/// P5 keeps four calls where the 486 folds them" while the rich route priced
+/// the configured CPU; the model was made the pin's, and `reassociate@696`
+/// shrank the body, so that pair is gone.
 #[test]
-fn test_the_rich_route_prices_the_configured_cpu() {
+fn test_the_inliners_verdict_is_the_same_on_every_cpu() {
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(
-        &directory,
-        "logic.nib",
-        "fn logic(a: i16, b: i16) -> bool:\n    return a * b + a * 3 + b * 5 == 17\n\nfn main() -> i16:\n    print(f\"{i16(logic(1, 2))} {i16(logic(0, 2))} {i16(logic(3, 7))} {i16(logic(3, 2))}\")\n    return 0\n",
-    );
-    let calls = |cpu: &'static str| {
+    let calls = |levels: usize, cpu: &'static str| {
+        let mut body = "a".to_owned();
+        for level in 1..=levels {
+            body = format!("(({body}) * (b + {level}) + a * {})", level + 4);
+        }
+        let source = written(
+            &directory,
+            "logic.nib",
+            &format!(
+                "@extern(\"cdecl16\")\nfn get(number: i16) -> i16\n\nfn logic(a: i16, b: i16) -> i16:\n    return {body}\n\nfn main() -> i16:\n    unsafe:\n        print(f\"{{logic(get(1), get(2))}} {{logic(get(3), get(4))}} {{logic(get(5), get(6))}} {{logic(get(7), get(8))}}\")\n    return 0\n"
+            ),
+        );
         let module = nib_compile::assembled(
             &parsed(&source),
             "main",
@@ -2429,7 +2437,9 @@ fn test_the_rich_route_prices_the_configured_cpu() {
             .filter(|line| line.contains("call") && line.contains("_logic"))
             .count()
     };
-    assert_eq!((calls("486"), calls("386"), calls("P5")), (0, 0, 4));
+    // The arguments come from `get`: constants would fold the calls whole.
+    assert_eq!((calls(12, "486"), calls(12, "386"), calls(12, "P5")), (0, 0, 0), "a short body is inlined");
+    assert_eq!((calls(40, "486"), calls(40, "386"), calls(40, "P5")), (4, 4, 4), "a long body stays a call");
 }
 
 /// runtime.nib's floats.assign: affine rewrote `at * 2 + copy(a)`, its own

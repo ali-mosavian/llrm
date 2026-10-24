@@ -324,6 +324,14 @@ impl Profile {
         _listed(&self._costs, operation).ok_or_else(|| format!("{} has no cost for {operation}", self.name))
     }
 
+    /// `TuningSlow3OpsLEA`: a three-operand LEA takes three cycles, so
+    /// X86FixupLEAs splits it. Of the nine `-march`es only `x86-64`, tuned as
+    /// clang and llc tune it by default, `generic` (X86.td L1903): not
+    /// `TuningSlowIncDec`, which only `X86_64V1Tuning` carries.
+    pub fn slow_3ops_lea(&self) -> bool {
+        self.name == "x86-64"
+    }
+
     /// The cheaper way to double a register: `add r,r` or `shl r,1`, which
     /// set the same flags. The 386 and 486 take three clocks for the D1 shift.
     pub fn doubling(&self) -> Result<&'static str, String> {
