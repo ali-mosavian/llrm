@@ -204,7 +204,6 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD34 | sdag-c | address folds not translated: BEXTR, x32 `any_extend`, sign/zero-extend re-association | `llrm-dagisel/src/x86_addr.rs` |
 | SD35 | sdag-c | no 64-bit, x32, RIP, TLS or vector address forms | `llrm-dagisel/src/x86_addr.rs` |
 | SD36 | sdag-c | tail-call, `def32` and absolute-symbol predicates answer false | `llrm-dagisel/src/x86_hooks.rs` |
-| SD37 | sdag-c | `hasNoCarryFlagUses` is false through `CopyToReg EFLAGS` | `llrm-dagisel/src/x86_hooks.rs` |
 | SD38 | sdag-c | `isUnneededShiftMask` without known bits | `llrm-dagisel/src/x86_hooks.rs` |
 | SD39 | sdag-d | emitter: no local frame indices, globals, segment overrides, inline asm or custom inserters yet | `selectiondag/emit.rs` |
 | SD40 | sdag-c | `MaskedValueIsZero` is a structural subset of `computeKnownBits` | `llrm-dagisel/src/x86_addr.rs` |

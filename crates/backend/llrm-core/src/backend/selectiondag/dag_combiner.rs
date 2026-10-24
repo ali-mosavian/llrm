@@ -43,7 +43,7 @@ use std::collections::HashSet;
 
 use super::actions::{Action, LoadExt, TargetLowering};
 use super::dag::{NodeData, Rauw, SDValue, SelectionDAG};
-use super::isd::ISD;
+use super::isd::{CondCode, ISD};
 use super::mvt::EVT;
 
 /// `CombineLevel`.
@@ -210,6 +210,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> Option<SDValue> {
         match self.dag.opcode(node) {
             ISD::MergeValues => self.visit_merge_values(node),
+            ISD::SetCC => self.visit_setcc(node),
             ISD::Xor => self.visit_xor(node),
             ISD::Mul => self.visit_mul(node),
             ISD::And => self.visit_and(node),
@@ -239,6 +240,70 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             self.replace_value(SDValue { node: node.node, res: res as u8 }, operand);
         }
         Some(SDValue { node: node.node, res: 0 })
+    }
+
+    /// `visitSETCC` through `SimplifySetCC` ([TargetLowering.cpp L4831][pin]),
+    /// the integer folds after `FoldSetCC` (which `get_node` already ran): a
+    /// constant on the left moves right, and an equality of an extension (or
+    /// of an `and` with a low mask) with a constant that fits the narrow type
+    /// compares the narrow value.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L4831
+    fn visit_setcc(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let NodeData::CondCode(cond) = self.dag.node(self.dag.operand(node, 2)).data else { return None };
+        let op_type = self.dag.value_type(n0);
+        if !op_type.is_integer() {
+            return None;
+        }
+        let vt = self.dag.value_type(node);
+        let (c0, c1) = (self.dag.constant(n0), self.dag.constant(n1));
+        if c0.is_some() && c1.is_none() {
+            return Some(self.dag.get_setcc(vt, n1, n0, cond.swapped_operands()));
+        }
+        let c1 = c1?;
+        if !matches!(cond, CondCode::SetEq | CondCode::SetNe)
+            || self.level != CombineLevel::BeforeLegalizeTypes
+            || self.dag.use_count(n0.node) != 1
+        {
+            return None;
+        }
+        let width = op_type.size_in_bits();
+        let (min_bits, pre_ext, signed) = match self.dag.opcode(n0) {
+            ISD::ZeroExtend => (self.dag.width(self.dag.operand(n0, 0)), self.dag.operand(n0, 0), false),
+            ISD::SignExtend => (self.dag.width(self.dag.operand(n0, 0)), self.dag.operand(n0, 0), true),
+            ISD::And => {
+                let mask = self.dag.constant(self.dag.operand(n0, 1))?;
+                if (mask.wrapping_add(1) & mask) != 0 {
+                    return None;
+                }
+                (mask.trailing_ones(), self.dag.operand(n0, 0), false)
+            }
+            _ => return None,
+        };
+        // Bits the constant needs: `getSignificantBits` or `getActiveBits`.
+        let reqd = if signed {
+            let s = (c1 << (128 - width)) as i128 >> (128 - width);
+            129 - (s ^ (s >> 127)).leading_zeros()
+        } else {
+            128 - c1.leading_zeros()
+        };
+        if min_bits == 0 || min_bits >= width || min_bits < reqd {
+            return None;
+        }
+        let min_vt = EVT::integer(min_bits);
+        let trunc = self.dag.get_node(ISD::Truncate, min_vt, &[pre_ext]);
+        let (rhs, cond) = if min_bits == 1 && c1 == 1 {
+            let flipped = if cond == CondCode::SetEq { CondCode::SetNe } else { CondCode::SetEq };
+            (self.dag.get_constant(0, min_vt), flipped)
+        } else {
+            (self.dag.get_constant(c1, min_vt), cond)
+        };
+        Some(self.dag.get_setcc(vt, trunc, rhs, cond))
     }
 
     /// `visitXOR`'s `not (setcc x, y, cc)` fold ([L10560][pin]): `xor (setcc x,

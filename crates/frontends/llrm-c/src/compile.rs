@@ -2462,7 +2462,11 @@ mod tests {
         assert!(
             body.contains(&"mov si, ax".to_owned())
                 && body.contains(&"mov es, dx".to_owned())
-                && body.contains(&"add ax, bx".to_owned())
+                // `*p + a + b`: the load is the late operand, so a + b may be
+                // made first (`add cx, bx`, b is dead after) or the load first
+                // (`add ax, bx`): the sum is the same, and tests/run/c/
+                // watcom_far_sum.c runs both orders.
+                && (body.contains(&"add ax, bx".to_owned()) || body.contains(&"add cx, bx".to_owned()))
                 && body.contains(&"add ax, cx".to_owned()),
             "{body:?}"
         );

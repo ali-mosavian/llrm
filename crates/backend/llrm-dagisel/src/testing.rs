@@ -13,7 +13,6 @@ pub struct Node {
     pub vts: Vec<Vt>,
     pub ops: Vec<SDValue>,
     pub constant: Option<i64>,
-    #[allow(dead_code)]
     pub register: Option<u16>,
     pub load: Option<LoadExt>,
     pub memory_vt: Option<Vt>,
@@ -239,6 +238,12 @@ impl Dag for TestDag {
         _: SDValue,
     ) -> Option<u8> {
         None
+    }
+    fn register_of(
+        &self,
+        node: u32,
+    ) -> Option<u16> {
+        self.nodes[node as usize].register
     }
     fn value_type_node(
         &self,
