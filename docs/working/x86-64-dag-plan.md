@@ -14,11 +14,11 @@ three items below, not the whole mode.
 
 | Id | Piece | Pin | Test (fail-first) |
 |---|---|---|---|
-| D64-0 | generator emits an x86-64 table (`Is64BitMode` predicates, `GR64`/`GR32` classes, `ADD64rr`...) and `Cpu::X64` | `X86GenDAGISel.inc` | `(add GR64, GR64)` selects `ADD64rr` on a `TestDag` |
+| D64-0 | generator emits an x86-64 table (`Is64BitMode` predicates, `ADD64rr`...) and `Cpu::X64`; register classes come from `registers.regs` (the dword-rooted file, `Regs::root`), not `X86GenRegisterInfo` `GR64`/`GR32` | `X86GenDAGISel.inc` | `(add GR64, GR64)` selects `ADD64rr` on a `TestDag` |
 | D64-1 | `x86_addr.rs`: 64-bit base/index/scale/disp32, RIP-relative `X86ISD::WrapperRIP`, `selectLEAAddr`, `selectLEA64_32Addr`; closes SD35 for 64-bit | `X86ISelAddressMode` | `base + index*4 + 8` selects `LEA64r`; fails with the 64-bit arm off |
 | D64-2 | `TargetLowering::x86_64` (i64 legal, `is64Bit` arms of the ctor), `BuilderTarget::m64`, adapter ids | `X86TargetLowering` ctor | an i64 add legalizes to `ADD` with no expansion |
-| D64-3 | SysV calling convention in the call and formal-argument lowering; `selected_in` accepts bitness 64 | `X86CallingConv.td` | a 6-argument call passes `rdi..r9` |
-| D64-4 | scalar SSE (`f32`/`f64` in `xmm`), conversions | `X86InstrSSE.td` | `fadd double` selects `ADDSDrr` |
+| D64-3 | SysV calling convention in the call and formal-argument lowering, read from `calling.toml` (`sysv64`; no register named in the code); `selected_in` accepts bitness 64. x86-64-spike owns the data and reviews | `X86CallingConv.td` | a 6-argument call passes the registers `calling.toml` lists |
+| D64-4 | scalar SSE (`f32`/`f64` in `xmm`), conversions; sdag-c owns it, the spike's SSE slices on the old selector are dropped | `X86InstrSSE.td` | `fadd double` selects `ADDSDrr` |
 
 ## Dates
 
@@ -35,6 +35,19 @@ D64-1 is tested on a `TestDag` and needs none of D64-2..4; the leaf's 7 LEAs app
 `llrm-llc -m64` only once D64-2/3 let it select functions through the DAG path (12-08).
 Until then `llrm-llc -m64` runs the old selector; forming LEA there is the old selector's own
 address-form matchers, which are not mine and are being deleted.
+
+## The old selector's m64 facts the DAG path needs
+
+Owner sdag-c unless stated; the spike reviews. Gate for each: `tools/llc_check.sh`,
+`llc_backend_diff.sh`, and m16/m32 identity.
+
+| Fact | Where | Date |
+|---|---|---|
+| `cmov`/`select` | D64-2 (`LowerSELECT` with `CMOV64`) | 12-01 |
+| SysV `va_start` register save area | D64-3 (`VASTART` custom) | 12-08 |
+| GOT and `rip` externals | D64-1/D64-3 (`WrapperRIP`, `GOTPCREL`) | 12-08 |
+| dynamic `alloca` and `stacksave` | D64-3 | 12-08 |
+| `rax:rdx` aggregate returns | D64-3 | 12-08 |
 
 ## D64-1 design (2026-10-24)
 
