@@ -17,6 +17,19 @@ RESULTS = HERE / "real_bc.json"
 EXT = {".bas", ".bi"}
 
 
+def key_of(path):
+    """The results file names a program by its root, not by a machine's path."""
+    for name, base in (("tools", TOOLS), ("mgl", MGL), ("repo", REPO)):
+        if path.is_relative_to(base):
+            return f"{name}:{path.relative_to(base)}"
+    raise ValueError(path)
+
+
+def path_of(key):
+    name, _, rest = key.partition(":")
+    return {"tools": TOOLS, "mgl": MGL, "repo": REPO}[name] / rest
+
+
 def files():
     """[(path, root)]: root is where BC must run for $INCLUDEs to resolve (mgl), else None."""
     out = {}
@@ -39,7 +52,7 @@ def run(limit):
     import bcprobe
     from tqdm import tqdm
     done = json.loads(RESULTS.read_text()) if RESULTS.exists() else {}
-    todo = [(p, r) for p, r in files() if str(p) not in done][:limit]
+    todo = [(p, r) for p, r in files() if key_of(p) not in done][:limit]
     print(f"{len(done)} done, {len(todo)} in this slice", file=sys.stderr)
     for root in (None, MGL):
         batch = [p for p, r in todo if r == root]
@@ -59,14 +72,14 @@ def run(limit):
                 import re
                 if not messages and int(re.search(r"(\d+)\s+Severe", text).group(1)):
                     messages = ["UNPLACED"]
-            results.setdefault(str(path), {})[family] = messages or None
+            results.setdefault(key_of(path), {})[family] = messages or None
         done.update(results)
         RESULTS.write_text(json.dumps(done))
 
 
 def compare(args):
     bc = json.loads(RESULTS.read_text())
-    paths = sorted(bc)
+    paths = [str(path_of(key)) for key in sorted(bc)]
     binary = HERE.parent / "target/release/checkfiles"
     out = subprocess.run([str(binary), args.family, *paths], capture_output=True, text=True).stdout
     ours = {}
@@ -78,7 +91,7 @@ def compare(args):
     for path in paths:
         if path.lower().endswith(".bi") and not args.bi:
             continue  # an include file alone: BC does not check what it declares until a program uses it
-        refused = bc[path].get(args.family)
+        refused = bc[key_of(Path(path))].get(args.family)
         if refused == ["CRASH"]:
             counts["crash"] += 1
             continue

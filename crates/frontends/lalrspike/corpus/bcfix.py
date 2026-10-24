@@ -13,12 +13,12 @@ kind = sys.argv[1]
 target = HERE / ("bc_programs.json" if kind == "programs" else "real_bc.json")
 data = json.loads(target.read_text())
 def path_of(key):
-    return HERE / "programs" / f"p{int(key):05d}.bas" if kind == "programs" else Path(key)
+    return HERE / "programs" / f"p{int(key):05d}.bas" if kind == "programs" else __import__("real").path_of(key)
 pairs = [(key, fam) for key, v in data.items() for fam, m in v.items() if m == ["UNPLACED"]]
 print(len(pairs), "pairs", file=sys.stderr)
 roots = {}
 for key, fam in pairs:
-    root = Path(os.environ['MGL_DIR']) if kind == "real" and str(key).startswith(os.environ['MGL_DIR']) else None
+    root = Path(os.environ['MGL_DIR']) if kind == "real" and str(key).startswith("mgl:") else None
     roots.setdefault(root, []).append((key, fam))
 for root, group in roots.items():
     tasks = [(DIRS[fam], path_of(key)) for key, fam in group]
