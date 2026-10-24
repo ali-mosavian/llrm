@@ -1041,6 +1041,18 @@ impl Builder<'_> {
         let constant = self.module.context.get(id);
         let vt = self.type_of(constant.ty)?;
         match &constant.kind {
+            // A far constant is its offset and its selector (a null pointer is
+            // two zero words): `get_constant` of the pair's type panicked
+            // ('integer constant of Far', 35 QCport functions).
+            ConstantKind::Int(bits) if vt == MVT::Far.into() => {
+                let offset = self.dag.get_constant(*bits & 0xFFFF, EVT::I16);
+                let segment = self.dag.get_constant((*bits >> 16) & 0xFFFF, EVT::I16);
+                Ok(self.dag.get_node(ISD::BuildPair, vt, &[offset, segment]))
+            }
+            ConstantKind::Null | ConstantKind::Zero if vt == MVT::Far.into() => {
+                let zero = self.dag.get_constant(0, EVT::I16);
+                Ok(self.dag.get_node(ISD::BuildPair, vt, &[zero, zero]))
+            }
             ConstantKind::Int(bits) => Ok(self.dag.get_constant(*bits, vt)),
             // MIR holds an `x86_fp80` constant as the double nearest its value;
             // the DAG's is the 80-bit encoding.
