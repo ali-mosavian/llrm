@@ -7994,7 +7994,7 @@ fn frame(
     Mem { through: RegId::BP, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Frame, disp)), width) }
 }
 
-fn semantics(
+pub(crate) fn semantics(
     op: Operation,
     name: &str,
     dests: Vec<Loc>,
@@ -8015,7 +8015,7 @@ fn insn_of(
     Insn::new(at, Some((at, at)), Some(what), defines, uses)
 }
 
-fn insn(
+pub(crate) fn insn(
     at: i64,
     what: Semantics,
 ) -> Arc<Insn> {

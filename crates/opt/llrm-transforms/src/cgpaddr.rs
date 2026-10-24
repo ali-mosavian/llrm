@@ -188,7 +188,7 @@ impl FunctionPass for CgpAddr {
             Some(lowering) => {
                 let mut state = crate::extpromotion::State::default();
                 let promoted = exts_optimized(unit, &*lowering, &mut state);
-                ext_uses(unit, analyses, &*lowering, &mut state) | promoted
+                ext_uses(unit, &*lowering, &mut state) | promoted
             }
             None => false,
         };
@@ -285,12 +285,14 @@ fn exts_optimized(
 /// extension instead, one for each block; only where truncating is free
 /// (`TargetLowering::isTruncateFree`). Whether any was made.
 ///
-/// DEVIATE CGP2: a block that reads the source is rewritten only if the
-/// extension's block dominates it. The pin does not ask, and a source read in a
-/// block the extension does not reach would read an undefined `trunc`.
+/// MIRROR: every reader of the source outside the extension's block is
+/// rewritten, as the pin does. A reader of a value made in the extension's
+/// block is dominated by it, so the extension reaches it, unless the reader is
+/// unreachable; the pin deletes unreachable blocks before it gets here
+/// (`removeUnreachableBlocks`), and `llc -stop-after=codegenprepare` on a
+/// source read in a dead block shows it gone, so no pin input has the case.
 fn ext_uses(
     unit: &mut passes::Unit,
-    analyses: &mut Analyses,
     lowering: &dyn llrm_mir::lowering::Lowering,
     state: &mut crate::extpromotion::State,
 ) -> bool {
@@ -304,7 +306,6 @@ fn ext_uses(
             )
         })
         .collect();
-    let mut tree = None;
     let mut changed = false;
     for (home, ext) in exts {
         let inst = unit.function.instruction(ext).clone();
@@ -342,13 +343,10 @@ fn ext_uses(
         }) {
             continue;
         }
-        let tree = tree
-            .get_or_insert_with(|| analyses.get::<Dominators>(&*unit.context, unit.layout, &*unit.function))
-            .clone();
         let mut truncs: Vec<(BlockId, Operand)> = Vec::new();
         for (reader, index) in readers {
             let Some(block) = unit.function.parent(reader) else { continue };
-            if block == home || !tree.dominates(home, block) {
+            if block == home {
                 continue;
             }
             let trunc = match truncs.iter().find(|(seen, _)| *seen == block) {
@@ -416,11 +414,57 @@ fn integer(
     }
 }
 
+/// `index` as `shl x, C` folded into `scale` (the pin's `matchOperationAddr`
+/// `Shl` case through `matchScaledValue`): the `shl`, `x` and the new scale,
+/// when the scaled mode is legal and folding extends no live range
+/// (`isProfitableToFoldIntoAddressingMode`: `x` is already used in the
+/// access's block). DEVIATE SHL1: the pin also folds where every use of the
+/// `shl` is an access that folds it; that case is left unfolded. DEVIATE SHL2:
+/// not where a scaled index costs instructions of its own
+/// (`scaled_index_insns`, real mode's prefix): each access would pay them,
+/// where the shift is made once (quicksort at m16 grew 21 bytes, a spill for
+/// the longer-lived index).
+fn shifted(
+    unit: &passes::Unit,
+    tti: &dyn Tti,
+    space: u32,
+    block: BlockId,
+    index: Operand,
+    scale: u64,
+    displacement: i128,
+) -> Option<(InstId, Operand, u64)> {
+    let Operand::Value(value) = index else { return None };
+    let ValueDef::Instruction(shl) = unit.function.value(value).def else { return None };
+    let one = unit.function.instruction(shl);
+    if tti.scaled_index_insns() != 0 || one.opcode != Opcode::Binary(BinaryOp::Shl) {
+        return None;
+    }
+    let &[x, amount] = &one.operands[..] else { return None };
+    let amount = u32::try_from(integer(unit.context, amount)?).ok().filter(|&amount| amount < 64)?;
+    let scaled = scale.checked_shl(amount).filter(|&scaled| scaled >> amount == scale)?;
+    if !tti.is_legal_addressing_mode_in(
+        space,
+        false,
+        i64::try_from(displacement).ok()?,
+        true,
+        i64::try_from(scaled).ok()?,
+    ) {
+        return None;
+    }
+    // `valueAlreadyLiveAtInst(x)`: a constant, or read in the access's block.
+    let live = match x {
+        Operand::Value(v) => unit.function.users(v).iter().any(|one| unit.function.parent(one.user) == Some(block)),
+        _ => true,
+    };
+    live.then_some((shl, x, scaled))
+}
+
 /// `matchAddr`: `address` read as a mode, `depth` more `gep`s allowed.
 fn matched(
     unit: &passes::Unit,
     tti: &dyn Tti,
     space: u32,
+    block: BlockId,
     address: Operand,
     depth: u32,
 ) -> Mode {
@@ -449,10 +493,22 @@ fn matched(
     if variable.len() > 1 {
         return plain();
     }
-    let inner = matched(unit, tti, space, instruction.operands[0], depth - 1);
+    let inner = matched(unit, tti, space, block, instruction.operands[0], depth - 1);
+    let mut insts = inner.insts;
     let index = match (variable.first(), inner.index) {
         (Some(_), Some(_)) => return plain(),
-        (Some(&(at, scale)), None) => Some((instruction.operands[1 + at], scale)),
+        (Some(&(at, scale)), None) => {
+            let operand = instruction.operands[1 + at];
+            // `matchScaledValue(index, scale)` of a `shl x, C`: the shift is
+            // the scale of the mode (`matchOperationAddr`, `Instruction::Shl`).
+            match shifted(unit, tti, space, block, operand, scale, offset + inner.offset) {
+                Some((shl, folded, scale)) => {
+                    insts.push(shl);
+                    Some((folded, scale))
+                }
+                None => Some((operand, scale)),
+            }
+        }
         (None, held) => held,
     };
     let total = offset + inner.offset;
@@ -461,7 +517,6 @@ fn matched(
     if !tti.is_legal_addressing_mode_in(space, false, displacement, true, scale) {
         return plain();
     }
-    let mut insts = inner.insts;
     insts.push(gep);
     Mode { base: inner.base, offset: total, index, insts }
 }
@@ -492,7 +547,7 @@ fn sunk(
             changed = true;
             continue;
         }
-        let mode = matched(unit, tti, space, address, DEPTH);
+        let mode = matched(unit, tti, space, block, address, DEPTH);
         let local = |inst: &InstId| unit.function.parent(*inst) == Some(block);
         if mode.insts.is_empty() || mode.insts.iter().all(local) {
             continue;
@@ -549,7 +604,8 @@ fn select_combined(
         return None;
     }
     let (condition, first, second) = (chosen.operands[0], chosen.operands[1], chosen.operands[2]);
-    let (one, other) = (matched(unit, tti, space, first, DEPTH), matched(unit, tti, space, second, DEPTH));
+    let (one, other) =
+        (matched(unit, tti, space, block, first, DEPTH), matched(unit, tti, space, block, second, DEPTH));
     if one.base != other.base || one.index.is_some() || other.index.is_some() || one.offset == other.offset {
         return None;
     }

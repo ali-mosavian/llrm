@@ -148,6 +148,10 @@ impl ProgramPass for ModuleIpo {
     }
 }
 
+/// `DevirtSCCRepeatedPass<4>` (PassBuilderPipelines.cpp): the inliner runs over
+/// a body at most this many times while its simplification makes calls direct.
+const DEVIRT_REPEATS: usize = 4;
+
 /// LLVM's CGSCC walk: callees' components first, each function's calls decided
 /// and spliced (`inlinecost::sites`), then the Simplify list over it, so that a
 /// loop is unrolled (`unroll@753`) with the calls in it already inlined.
@@ -197,174 +201,209 @@ impl ProgramPass for Walk {
             let remarks = llrm_support::env_flag!("LLRM_INLINE_REMARKS");
             for members in components {
                 for &id in &members {
-                    let mut decided = remarks.then(Vec::new);
-                    // `sites` prices every block's frequency before it looks at
-                    // a call.
-                    let calls_a_body = module
-                        .global(id)
-                        .function()
-                        .is_some_and(
-                            |caller| caller.walk().any(|(_, inst)| {
-                                llrm_mir::memory::callee(&module.context, caller, inst).is_some_and(|callee| {
-                                    module.global(callee).function().is_some_and(|one| !one.layout().is_empty())
-                                })
-                            }),
-                        );
-                    // SZ2: the sites the -Os bound alone refused, to try.
-                    let mut trials = llrm_support::hash::SparseIdMap::default();
-                    let tti = program.target.tti();
-                    let constant = if !calls_a_body {
-                        Default::default()
-                    } else {
-                        crate::inlinecost::sites_with_trials(
-                            module,
-                            &program.layout,
-                            id,
-                            live.references(),
-                            &addressed,
-                            &recursive,
-                            params,
-                            size,
-                            self.inline.limit == 0,
-                            tti.as_deref(),
-                            decided.as_mut(),
-                            (tti.is_some() && size == crate::inlinecost::CallerSize::OptSize).then_some(&mut trials),
-                        )
-                    };
-                    let mut declared = declared(&mut modules[at], module);
-                    let (context, function) = function_mut(module, id);
-                    let was = calls_of(context, function);
-                    // DEVIATE (recursion): a recursive callee inlined here has
-                    // its own calls peeled in the copy
-                    // (gcc's peeling, not at -Os).
-                    let peeled: llrm_support::hash::IndexMap<GlobalId, crate::inline::Candidate> = constant
-                        .values()
-                        .filter(|one| one.self_calls.is_some() && !self.inline.single && self.inline.recursive)
-                        .filter_map(|one| Some((one.callee?, one.clone())))
-                        .collect();
-                    let by = crate::inline::Caller {
-                        layout: &program.layout,
-                        recursive: recursive.contains(&id),
-                        self_inlining: None,
-                        peeling: !self.inline.single && self.inline.recursive,
-                    };
-                    let spliced =
-                        crate::inline::expanded_all(context, function, &by, &peeled, Some(&constant), &mut declared)?
-                            > 0;
-                    // DEVIATE (recursion): a tree-recursive function waits for
-                    // its tail-call elimination until its copies are made
-                    // (`SelfInline`, after ipa-cp has seen it whole).
-                    if self.inline.recursive && self_calls(module, &program.layout, id, self.inline.single).is_some() {
-                        function_mut(module, id)
-                            .1
-                            .attrs
-                            .push(llrm_mir::opcode::Attribute::Flag(crate::tailcallelim::DEFERRED.to_owned()));
-                    }
-                    for (call, callee, cost) in decided.iter().flatten() {
-                        let name = |id: GlobalId| module.global(id).name.as_deref().unwrap_or("?");
-                        let gone = module.global(id).function().is_some_and(|one| one.parent(*call).is_none());
-                        eprintln!("{}", crate::inlinecost::remark(name(id), name(*callee), cost, gone));
-                    }
-                    if declared.place(module)? > 0 {
-                        modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
-                    }
-                    if spliced {
-                        modules[at].changed(id);
-                        modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
-                    }
-                    // SZ2: a trial costs the Simplify list over the caller once
-                    // more, so it is made for a caller of
-                    // at most `TRIAL_CALLER` instructions.
-                    let spliced_body = (!trials.is_empty()
-                        && function_mut(module, id).1.walk().count() <= TRIAL_CALLER)
-                        .then(|| function_mut(module, id).1.clone());
-                    (self.simplify)(module, &mut modules[at], id, "walk.");
-                    if let (Some(before), Some(tti)) = (spliced_body, tti.as_deref()) {
-                        // SZ2: each refused site is inlined into the body as it
-                        // stood before the Simplify list, which runs again;
-                        // it stays if the body is smaller. The callee stays
-                        // either way.
-                        let mut best = body_size(module, &program.layout, tti, id);
-                        // The sites of a private callee that goes with its last
-                        // call are tried together, for its body is saved too;
-                        // any other site alone.
-                        let mut by_callee: std::collections::BTreeMap<GlobalId, Vec<llrm_mir::module::InstId>> =
-                            std::collections::BTreeMap::new();
-                        for (call, candidate) in trials.iter() {
-                            by_callee.entry(candidate.callee.expect("a callee")).or_default().push(*call);
+                    // `DevirtSCCRepeatedPass<4>`: a call the simplification
+                    // made direct is inlined by another run
+                    // of the inliner over the body.
+                    let mut repeats = 0;
+                    loop {
+                        let mut decided = remarks.then(Vec::new);
+                        // `sites` prices every block's frequency before it
+                        // looks at a call.
+                        let calls_a_body = module
+                            .global(id)
+                            .function()
+                            .is_some_and(
+                                |caller| caller.walk().any(|(_, inst)| {
+                                    llrm_mir::memory::callee(&module.context, caller, inst).is_some_and(|callee| {
+                                        module.global(callee).function().is_some_and(|one| !one.layout().is_empty())
+                                    })
+                                }),
+                            );
+                        // SZ2: the sites the -Os bound alone refused, to try.
+                        let mut trials = llrm_support::hash::SparseIdMap::default();
+                        let tti = program.target.tti();
+                        let constant = if !calls_a_body {
+                            Default::default()
+                        } else {
+                            crate::inlinecost::sites_with_trials(
+                                module,
+                                &program.layout,
+                                id,
+                                live.references(),
+                                &addressed,
+                                &recursive,
+                                params,
+                                size,
+                                self.inline.limit == 0,
+                                tti.as_deref(),
+                                decided.as_mut(),
+                                (tti.is_some() && size == crate::inlinecost::CallerSize::OptSize)
+                                    .then_some(&mut trials),
+                            )
+                        };
+                        let mut declared = declared(&mut modules[at], module);
+                        let (context, function) = function_mut(module, id);
+                        let was = calls_of(context, function);
+                        // DEVIATE (recursion): a recursive callee inlined here
+                        // has its own calls peeled in
+                        // the copy (gcc's peeling, not
+                        // at -Os).
+                        let peeled: llrm_support::hash::IndexMap<GlobalId, crate::inline::Candidate> = constant
+                            .values()
+                            .filter(|one| one.self_calls.is_some() && !self.inline.single && self.inline.recursive)
+                            .filter_map(|one| Some((one.callee?, one.clone())))
+                            .collect();
+                        let by = crate::inline::Caller {
+                            layout: &program.layout,
+                            recursive: recursive.contains(&id),
+                            self_inlining: None,
+                            peeling: !self.inline.single && self.inline.recursive,
+                        };
+                        let spliced = crate::inline::expanded_all(
+                            context,
+                            function,
+                            &by,
+                            &peeled,
+                            Some(&constant),
+                            &mut declared,
+                        )? > 0;
+                        // DEVIATE (recursion): a tree-recursive function waits
+                        // for its tail-call elimination
+                        // until its copies are made
+                        // (`SelfInline`, after ipa-cp has seen it whole).
+                        if self.inline.recursive
+                            && self_calls(module, &program.layout, id, self.inline.single).is_some()
+                        {
+                            function_mut(module, id)
+                                .1
+                                .attrs
+                                .push(llrm_mir::opcode::Attribute::Flag(crate::tailcallelim::DEFERRED.to_owned()));
                         }
-                        let mut units: Vec<(Vec<llrm_mir::module::InstId>, i64)> = Vec::new();
-                        for (callee, mut calls) in by_callee {
-                            calls.sort();
-                            let global = module.global(callee);
-                            let goes = crate::inlinecost::local_linkage(global.linkage)
-                                && !addressed.contains(&callee)
-                                && live.references().get(&callee).copied() == Some(calls.len() as i64);
-                            if goes {
-                                units.push((calls, body_size(module, &program.layout, tti, callee)));
-                            } else {
-                                units.extend(calls.into_iter().map(|one| (vec![one], 0)));
-                            }
+                        for (call, callee, cost) in decided.iter().flatten() {
+                            let name = |id: GlobalId| module.global(id).name.as_deref().unwrap_or("?");
+                            let gone = module.global(id).function().is_some_and(|one| one.parent(*call).is_none());
+                            eprintln!("{}", crate::inlinecost::remark(name(id), name(*callee), cost, gone));
                         }
-                        let mut accepted: Vec<llrm_mir::module::InstId> = Vec::new();
-                        for (calls, credit) in units {
-                            let kept = function_mut(module, id).1.clone();
-                            let mut chosen = accepted.clone();
-                            chosen.extend(calls.iter().copied());
-                            let available: llrm_support::hash::SparseIdMap<_, _> =
-                                chosen.iter().map(|one| (*one, trials[one].clone())).collect();
-                            *function_mut(module, id).1 = before.clone();
-                            let mut declared = crate::interprocedural::declared(&mut modules[at], module);
-                            let (context, function) = function_mut(module, id);
-                            crate::inline::expanded_all(
-                                context,
-                                function,
-                                &by,
-                                &peeled,
-                                Some(&available),
-                                &mut declared,
-                            )?;
-                            if declared.place(module)? > 0 {
-                                modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
-                            }
+                        if declared.place(module)? > 0 {
+                            modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                        }
+                        if spliced {
                             modules[at].changed(id);
                             modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
-                            (self.simplify)(module, &mut modules[at], id, "walk.trial.");
-                            let tried = body_size(module, &program.layout, tti, id);
-                            if remarks {
-                                eprintln!(
-                                    "{} ({} instructions) SZ2 trial of {} call(s) to '{}': {} against {} (+{} for the callee)",
-                                    module.global(id).name.as_deref().unwrap_or("?"),
-                                    module.global(id).function().map_or(0, |one| one.walk().count()),
-                                    calls.len(),
-                                    trials[&calls[0]].callee.map_or("?", |callee| module
-                                        .global(callee)
-                                        .name
-                                        .as_deref()
-                                        .unwrap_or("?")),
-                                    tried,
-                                    best,
-                                    credit
-                                );
+                        }
+                        // SZ2: a trial costs the Simplify list over the caller
+                        // once more, so it is made for
+                        // a caller of
+                        // at most `TRIAL_CALLER` instructions.
+                        let spliced_body = (!trials.is_empty()
+                            && function_mut(module, id).1.walk().count() <= TRIAL_CALLER)
+                            .then(|| function_mut(module, id).1.clone());
+                        let mid = calls_of(&module.context, module.global(id).function().expect("a procedure"));
+                        (self.simplify)(module, &mut modules[at], id, "walk.");
+                        if let (Some(before), Some(tti)) = (spliced_body, tti.as_deref()) {
+                            // SZ2: each refused site is inlined into the body
+                            // as it stood before
+                            // the Simplify list, which runs again;
+                            // it stays if the body is smaller. The callee stays
+                            // either way.
+                            let mut best = body_size(module, &program.layout, tti, id);
+                            // The sites of a private callee that goes with its
+                            // last call are tried
+                            // together, for its body is saved too;
+                            // any other site alone.
+                            let mut by_callee: std::collections::BTreeMap<GlobalId, Vec<llrm_mir::module::InstId>> =
+                                std::collections::BTreeMap::new();
+                            for (call, candidate) in trials.iter() {
+                                by_callee.entry(candidate.callee.expect("a callee")).or_default().push(*call);
                             }
-                            if tried < best + credit {
-                                best = tried;
-                                accepted.extend(calls);
-                            } else {
-                                *function_mut(module, id).1 = kept;
+                            let mut units: Vec<(Vec<llrm_mir::module::InstId>, i64)> = Vec::new();
+                            for (callee, mut calls) in by_callee {
+                                calls.sort();
+                                let global = module.global(callee);
+                                let goes = crate::inlinecost::local_linkage(global.linkage)
+                                    && !addressed.contains(&callee)
+                                    && live.references().get(&callee).copied() == Some(calls.len() as i64);
+                                if goes {
+                                    units.push((calls, body_size(module, &program.layout, tti, callee)));
+                                } else {
+                                    units.extend(calls.into_iter().map(|one| (vec![one], 0)));
+                                }
+                            }
+                            let mut accepted: Vec<llrm_mir::module::InstId> = Vec::new();
+                            for (calls, credit) in units {
+                                let kept = function_mut(module, id).1.clone();
+                                let mut chosen = accepted.clone();
+                                chosen.extend(calls.iter().copied());
+                                let available: llrm_support::hash::SparseIdMap<_, _> =
+                                    chosen.iter().map(|one| (*one, trials[one].clone())).collect();
+                                *function_mut(module, id).1 = before.clone();
+                                let mut declared = crate::interprocedural::declared(&mut modules[at], module);
+                                let (context, function) = function_mut(module, id);
+                                crate::inline::expanded_all(
+                                    context,
+                                    function,
+                                    &by,
+                                    &peeled,
+                                    Some(&available),
+                                    &mut declared,
+                                )?;
+                                if declared.place(module)? > 0 {
+                                    modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                                }
                                 modules[at].changed(id);
                                 modules[at]
                                     .invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                                (self.simplify)(module, &mut modules[at], id, "walk.trial.");
+                                let tried = body_size(module, &program.layout, tti, id);
+                                if remarks {
+                                    eprintln!(
+                                        "{} ({} instructions) SZ2 trial of {} call(s) to '{}': {} against {} (+{} for the callee)",
+                                        module.global(id).name.as_deref().unwrap_or("?"),
+                                        module.global(id).function().map_or(0, |one| one.walk().count()),
+                                        calls.len(),
+                                        trials[&calls[0]].callee.map_or("?", |callee| module
+                                            .global(callee)
+                                            .name
+                                            .as_deref()
+                                            .unwrap_or("?")),
+                                        tried,
+                                        best,
+                                        credit
+                                    );
+                                }
+                                if tried < best + credit {
+                                    best = tried;
+                                    accepted.extend(calls);
+                                } else {
+                                    *function_mut(module, id).1 = kept;
+                                    modules[at].changed(id);
+                                    modules[at]
+                                        .invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                                }
                             }
                         }
-                    }
-                    // The calls left after the splices and the simplification
-                    // (tail-call elimination makes a recursive body a loop), as
-                    // CGSCC updates its call graph.
-                    let now = calls_of(&module.context, module.global(id).function().expect("a procedure"));
-                    live.spliced(module, &mut modules[at], was, now);
-                    if recursive.contains(&id) {
-                        recursive = crate::inline::recursive(module);
+                        // The calls left after the splices and the
+                        // simplification (tail-call
+                        // elimination makes a recursive body a loop), as
+                        // CGSCC updates its call graph.
+                        let now = calls_of(&module.context, module.global(id).function().expect("a procedure"));
+                        live.spliced(module, &mut modules[at], was, now.clone());
+                        if recursive.contains(&id) {
+                            recursive = crate::inline::recursive(module);
+                        }
+                        // A callee the simplification added, with a body: the
+                        // call was devirtualized (a table of functions made a
+                        // switch of calls by `jumptableswitch`).
+                        repeats += 1;
+                        let devirtualized = now
+                            .iter()
+                            .any(
+                                |(callee, _)| !mid.iter().any(|(seen, _)| seen == callee)
+                                    && module.global(*callee).function().is_some_and(|one| !one.layout().is_empty()),
+                            );
+                        if repeats >= DEVIRT_REPEATS || !devirtualized {
+                            break;
+                        }
                     }
                 }
                 // `PostOrderFunctionAttrsPass`: once per component, after its

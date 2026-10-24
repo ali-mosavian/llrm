@@ -188,7 +188,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD12 | sdag-a | folds needing known bits are the combiner's | `selectiondag.rs` |
 | SD13 | sdag-a | no vector types or nodes | `selectiondag.rs` |
 | SD14 | sdag-b | floating types always legal (no soften/expand) | `llrm-x86/src/dag/lowering.rs` |
-| SD15 | sdag-a | `FindMergedConditions` not ported | builder |
+| SD15 | sdag-a | `FindMergedConditions` ported without edge probabilities | builder |
 | SD16 | sdag-a | no `LiveOutRegInfo` | builder |
 | SD17 | sdag-a | vreg numbers differ from the pin's | builder |
 | SD18 | sdag-a | select patterns (abs, min, max) | builder |
@@ -223,6 +223,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD209 | sdag-b | far access: `ES` set by a `CopyToReg` ordered by the chain only (no glue binds it to its access) | `selectiondag/legalize_types.rs` |
 | SD205 | sdag-b | ext-of-load fold: simple non-extending loads before operations are legal; every integer truncate is free (no `isTruncateFree`) | `selectiondag/dag_combiner.rs` |
 | SD210 | sdag-b | `visitADD`: no reassociation of constants into an `add` that feeds a memory access (no `reassociationCanBreakAddressingModePattern`) | `selectiondag/dag_combiner.rs` |
+| SD211 | sdag-b | `PromoteIntBinOp`/`ShiftOp`: a load operand is any-extended (the extend-of-load fold makes the extending load), no `AssertSext`/`AssertZext` look-through | `selectiondag/dag_combiner.rs` |
 | SD212 | sdag-b | `SimplifyDemandedBits`: and/or/xor, shifts by a constant, zext/anyext/trunc only; no `ShrinkDemandedOp`, no narrowing rewrites, no SRA/ADD/SUB/MUL/SELECT cases | `selectiondag/demanded_bits.rs` |
 
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |

@@ -47,6 +47,8 @@ pub(super) enum Deferred {
     JumpTable { block: BlockId, reg: u32, index: u32 },
     /// `visitBitTestHeader` in a block other than the switch's.
     BitTestHeader(BitTestHeader),
+    /// A block `FindMergedConditions` placed: one compare and branch.
+    Merged(super::mergedcond::MergedCase),
     /// `visitBitTestCase`: one mask test.
     BitTestCase { block: BlockId, header: BitTestHeader, case: usize, next: BlockId },
 }
@@ -58,6 +60,7 @@ impl Deferred {
             Deferred::JumpTableHeader(header) => header.block,
             Deferred::JumpTable { block, .. } | Deferred::BitTestCase { block, .. } => *block,
             Deferred::BitTestHeader(header) => header.block,
+            Deferred::Merged(case) => case.block(),
         }
     }
 }
@@ -102,7 +105,7 @@ struct WorkItem {
 
 impl Builder<'_> {
     /// The block after `block` in the layout so far.
-    fn layout_next(
+    pub(super) fn layout_next(
         &self,
         block: BlockId,
     ) -> Option<BlockId> {
@@ -112,7 +115,7 @@ impl Builder<'_> {
 
     /// A new block, placed at `*at` in the layout (and `*at` moves past it),
     /// named as the switch's block.
-    fn new_block(
+    pub(super) fn new_block(
         &mut self,
         at: &mut usize,
     ) -> BlockId {
@@ -130,7 +133,7 @@ impl Builder<'_> {
     }
 
     /// `ExportFromCurrentBlock(Cond)`.
-    fn export_condition(
+    pub(super) fn export_condition(
         &mut self,
         cond: Operand,
     ) -> Result<(), Refused> {
@@ -242,6 +245,7 @@ impl Builder<'_> {
     ) -> Result<(), Refused> {
         match item {
             Deferred::Case(case, cond) => self.visit_switch_case(case, cond),
+            Deferred::Merged(case) => self.emit_merged_case(&case),
             Deferred::JumpTableHeader(header) => self.emit_jump_table_header(&header),
             Deferred::JumpTable { reg, index, .. } => {
                 // visitJumpTable: `br_jt (CopyFromReg reg):1, JumpTable, index`
@@ -368,7 +372,7 @@ impl Builder<'_> {
         Ok(())
     }
 
-    fn target_optimizes(&self) -> bool {
+    pub(super) fn target_optimizes(&self) -> bool {
         true
     }
 

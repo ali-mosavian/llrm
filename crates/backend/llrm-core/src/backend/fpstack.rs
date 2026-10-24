@@ -1072,7 +1072,17 @@ pub(super) fn converted(
     let split = floatalloc::_split_for_the_stack(body, &floating, (&live_in, &live_out), &bundles);
     let (body, live_in, live_out, bundles) = match split {
         Some(body) => {
-            let (live_in, live_out) = live_among(&body, |value| floating.contains(&value));
+            // A block made on an edge holds no instruction: what is live at its
+            // entry and its exit is what is live into the block it
+            // leads to, and no other block's rows change.
+            let (mut live_in, mut live_out) = (live_in, live_out);
+            for block in &body.blocks {
+                if !live_in.contains_key(&block.at) {
+                    let into = live_in[&block.succ[0]].clone();
+                    live_out.insert(block.at, into.clone());
+                    live_in.insert(block.at, into);
+                }
+            }
             let bundles = spillplacement::bundles(&body);
             (std::borrow::Cow::Owned(body), live_in, live_out, bundles)
         }

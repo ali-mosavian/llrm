@@ -254,14 +254,11 @@ fn modelled(
         return Err("QB runtime routine with a register interface");
     }
     let contract = abi.contract(name, plan.popped > 0, pushed).map_err(|_| "QB runtime routine with no contract")?;
-    // Raising an error or entering user code changes no selection (the old
-    // selector reads neither); a routine that comes back at an inline table or
-    // by no known way does.
-    if !matches!(
-        contract.control,
-        llrm_qbruntime::Control::Returns | llrm_qbruntime::Control::Never
-    ) {
-        return Err("QB runtime routine that returns to an inline table or by no known way");
+    // Raising an error, entering user code or an unstated way back (a handler
+    // registration, `B$OEGA`) changes no selection: the old selector reads none
+    // of them. A routine that comes back at an inline table does.
+    if contract.control == llrm_qbruntime::Control::InlineTable {
+        return Err("QB runtime routine that returns to an inline table");
     }
     if contract.cleanup != Some(plan.popped) || plan.popped != pushed {
         return Err("QB runtime routine whose stack cleanup the convention does not model");
@@ -566,8 +563,11 @@ fn selected_in(
     };
     let (builder_target, address_mode) =
         if m16 { (BuilderTarget::m16(), AddrMode::Real16) } else { (BuilderTarget::m32(), AddrMode::Flat32) };
-    let builder_target =
-        builder_target.with_runtime_calls(libcalls).with_float_store(cpu.float_store).with_runtime_call_verdicts(
+    let builder_target = builder_target
+        .with_runtime_calls(libcalls)
+        .with_float_store(cpu.float_store)
+        .with_tti(cpu.target().tti())
+        .with_runtime_call_verdicts(
             contracts.map(|contracts| runtime_call_verdicts(module, function, &layout, arch, contracts.abi)),
         );
     let tables = tables(arch);
@@ -678,6 +678,8 @@ fn selected_in(
     };
     let mut emitted: Vec<EmitBlock> = Vec::new();
     let mut calls = IndexMap::default();
+    // the landing pad the runtime enters, which no edge reaches
+    let mut landing: Option<i64> = None;
     let mut sinks: HashSet<i64> = HashSet::new();
     let mut inline_places = IndexMap::default();
     // the call sites whose callee is far code (address space 1): a far call
@@ -750,6 +752,18 @@ fn selected_in(
         }));
         inline_places.extend(done.inline_places.iter().cloned());
         emitted.extend(done.blocks);
+        if block == parent && is_pad(function, block) {
+            let Some(contracts) = contracts else {
+                return refuse("a landing pad of a program with no runtime contracts");
+            };
+            if landing.replace(emitted[from].at).is_some() {
+                return refuse("more than one landing pad");
+            }
+            let at = emitted[from].at;
+            let pad = landing_pad_insn(at, contracts.segments, &cpu.general);
+            emitted[from].insns.insert(0, std::sync::Arc::new(pad));
+            calls.insert(at, LANDING.to_owned());
+        }
         // A block that ends in `unreachable` (after a call that does not
         // return) leads nowhere: it does not fall into the next one.
         if block == parent
@@ -795,10 +809,14 @@ fn selected_in(
             }
         }
     }
+    // `UnreachableMachineBlockElim`: a block no edge leads to (the
+    // `unreachable` default of a switch whose cases cover its values) is
+    // dropped, with the phi inputs that came from it.
+    let (emitted, succ) = without_unreachable(emitted, succ, landing);
     // Every value read is defined on every path to the read (a phi, an
     // instruction, an arrival): a LIR that reads one nothing defines on some
     // path stops the allocator's liveness, so it is a refusal here.
-    if let Some((value, name)) = read_before_defined(&emitted, &succ) {
+    if let Some((value, name)) = read_before_defined(&emitted, &succ, landing) {
         return refuse(format!("--isel=dag: value {value} is read and not defined on every path ({name:?})"));
     }
     // A floating value is a 10-byte register value: read at another width it is
@@ -831,19 +849,49 @@ fn selected_in(
     // The x87 stack is empty at a call: a floating value live across one is
     // spilled by the pin's allocator, which no pass here does for this LIR, so
     // the function is refused (the stackifier would fail the compile).
-    let blocks: Vec<Block> = emitted
-        .iter()
-        .zip(succ)
-        .map(|(block, succ)| -> Block {
+    // A function with a pad is entered through a root block that never branches
+    // to it, so the pad is reachable in the machine's graph.
+    let root_at = landing.map(|_| state.next_address());
+    let blocks: Vec<Block> = root_at
+        .zip(landing)
+        .map(|(at, pad)| {
+            let never = [
+                crate::backend::isel::insn(
+                    at,
+                    crate::backend::isel::semantics(
+                        crate::model::ir::Operation::Compare,
+                        "cmp",
+                        vec![],
+                        vec![
+                            crate::model::ir::Loc::Reg(crate::model::ir::Reg {
+                                register: crate::model::ir::STACK,
+                                width: 2,
+                            }),
+                            crate::model::ir::Loc::Imm(crate::model::ir::Imm { value: 0, width: 2, address: None }),
+                        ],
+                    ),
+                ),
+                crate::backend::isel::insn(
+                    at,
+                    crate::model::ir::Semantics {
+                        target: Some(pad),
+                        ..crate::backend::isel::semantics(crate::model::ir::Operation::Branch, "je", vec![], vec![])
+                    },
+                ),
+            ];
+            Block::from(LirBlock { succ: vec![pad, emitted[0].at].into(), ..LirBlock::new(at, never.to_vec().into()) })
+        })
+        .into_iter()
+        .chain(emitted.iter().zip(succ).map(|(block, succ)| -> Block {
             LirBlock {
                 succ: succ.into(),
                 phis: block.phis.clone().into(),
                 ..LirBlock::new(block.at, block.insns.iter().cloned().collect::<Vec<_>>().into())
             }
             .into()
-        })
+        }))
         .collect();
-    let entry = emitted[0].at;
+    let entry = root_at.unwrap_or(emitted[0].at);
     let mut body = LirBody::new(name, entry, blocks, IndexMap::default(), IndexMap::default());
     body.bits = arch.object().bitness;
     body.registers = Some(llrm_lir::registers::Regs(arch.registers()));
@@ -864,6 +912,9 @@ fn selected_in(
                 }
             }
         }
+    }
+    if let Some(at) = landing {
+        inline.insert(at, vec![CLD]);
     }
     // Inline code: its bytes with each frame place patched as a displacement
     // from BP (the old route's `inline_code`).
@@ -903,14 +954,87 @@ fn selected_in(
         pops: IndexMap::default(),
         depth: frame.depth.get(),
         extents: frame.locals.borrow().clone(),
-        landing: None,
+        landing,
     })
+}
+
+/// `emitted` and `succ` without the blocks no path from the entry or the
+/// landing pad reaches.
+fn without_unreachable(
+    mut emitted: Vec<EmitBlock>,
+    succ: Vec<Vec<i64>>,
+    landing: Option<i64>,
+) -> (Vec<EmitBlock>, Vec<Vec<i64>>) {
+    let index: HashMap<i64, usize> = emitted.iter().enumerate().map(|(i, b)| (b.at, i)).collect();
+    let mut reached = vec![false; emitted.len()];
+    let mut work: Vec<usize> = vec![0];
+    work.extend(landing.and_then(|at| index.get(&at).copied()));
+    while let Some(at) = work.pop() {
+        if std::mem::replace(&mut reached[at], true) {
+            continue;
+        }
+        work.extend(succ[at].iter().filter_map(|next| index.get(next).copied()));
+    }
+    if reached.iter().all(|one| *one) {
+        return (emitted, succ);
+    }
+    let gone: std::collections::HashSet<i64> =
+        emitted.iter().zip(&reached).filter(|(_, kept)| !**kept).map(|(block, _)| block.at).collect();
+    let succ: Vec<Vec<i64>> = succ.into_iter().zip(&reached).filter(|(_, kept)| **kept).map(|(s, _)| s).collect();
+    let mut kept = reached.iter();
+    emitted.retain(|_| *kept.next().expect("a flag for each block"));
+    for block in &mut emitted {
+        for phi in &mut block.phis {
+            phi.incoming.retain(|(from, _)| !gone.contains(from));
+        }
+    }
+    (emitted, succ)
+}
+
+/// What starts a landing pad: `cld`, the one state it sets, as a call that
+/// leaves no register as it was (`isel/unwind.rs`).
+const LANDING: &str = "__LANDING";
+const CLD: u8 = 0xFC;
+
+/// Whether `block` starts a landing pad, which the runtime enters.
+fn is_pad(
+    function: &llrm_mir::module::Function,
+    block: BlockId,
+) -> bool {
+    function
+        .iter_block(block)
+        .any(|one| matches!(
+            function.instruction(one).opcode,
+            llrm_mir::opcode::Opcode::LandingPad { .. }
+        ))
+}
+
+fn landing_pad_insn(
+    at: i64,
+    segments: &crate::backend::target::Segments,
+    general: &[llrm_lir::registers::RegId],
+) -> Insn {
+    use crate::backend::callregs::{call_clobbered_high, call_clobbers};
+    let contract =
+        crate::backend::lower_int64::_helper(LANDING, Default::default(), crate::abi::runtime::EVERY.clone());
+    Insn {
+        clobbers: call_clobbers(&contract, segments, general),
+        clobbers_high: call_clobbered_high(&contract, segments, general),
+        ..Insn::new(
+            at,
+            Some((at, at)),
+            Some(crate::backend::isel::semantics(crate::model::ir::Operation::Call, "call", vec![], vec![])),
+            vec![],
+            vec![],
+        )
+    }
 }
 
 /// A value read where some path to it defines nothing: (value, instruction).
 fn read_before_defined(
     blocks: &[EmitBlock],
     succ: &[Vec<i64>],
+    landing: Option<i64>,
 ) -> Option<(u32, Option<String>)> {
     use std::collections::HashSet;
     let index: std::collections::HashMap<i64, usize> = blocks.iter().enumerate().map(|(i, b)| (b.at, i)).collect();
@@ -937,6 +1061,11 @@ fn read_before_defined(
     // path has reached it yet).
     let mut entry: Vec<Option<HashSet<u32>>> = vec![None; blocks.len()];
     entry[0] = Some(HashSet::new());
+    // The runtime enters a landing pad with no value defined: a root of its
+    // own.
+    if let Some(&pad) = landing.and_then(|at| index.get(&at)) {
+        entry[pad] = Some(HashSet::new());
+    }
     let mut changed = true;
     while changed {
         changed = false;

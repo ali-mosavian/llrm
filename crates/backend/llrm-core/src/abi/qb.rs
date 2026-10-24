@@ -82,6 +82,8 @@ static _AUDITED_STRING_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| {
 static _AUDITED_GRAPHICS_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| {
     IndexMap::from_iter([
         ("B$PAL2", 6),
+        // gwpal.asm: parmD fpData, parmW pAd.
+        ("B$PALU", 6),
         ("B$N1I2", 4),
         ("B$N2I2", 4),
         ("B$N1R4", 8),
