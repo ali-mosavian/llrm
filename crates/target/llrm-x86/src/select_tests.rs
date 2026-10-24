@@ -1006,3 +1006,20 @@ fn test_code_of_finds_the_code_its_built_name_finds() {
     assert!(code_of!("NO_SUCH_R", 16u32).is_none());
     assert_eq!(code_of!("MOV_R", -1i64), _code("MOV_R-1"));
 }
+
+/// `bt` and `btc` of two registers encode (the pin's BT32rr and BTC16rr had no
+/// form: QCport functions that test or flip a variable bit were refused).
+#[test]
+fn test_bt_and_btc_of_registers_encode() {
+    let bt = sem(Operation::Compare, Some("bt"), vec![], vec![rg(RegId::EAX, 4), rg(RegId::ECX, 4)], None, false);
+    assert_eq!(hex(&made(emitted(&bt)).code), "660fa3c8");
+    let btc = sem(
+        Operation::Binary,
+        Some("btc"),
+        vec![rg(RegId::EAX, 4)],
+        vec![rg(RegId::EAX, 4), rg(RegId::ECX, 4)],
+        None,
+        false,
+    );
+    assert_eq!(hex(&made(emitted(&btc)).code), "660fbbc8");
+}
