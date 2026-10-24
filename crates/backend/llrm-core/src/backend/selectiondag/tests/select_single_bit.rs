@@ -16,6 +16,11 @@ fn eval(
         ISD::And => arg(0) & arg(1),
         ISD::Shl => arg(0) << arg(1),
         ISD::Sra => ((arg(0) as i32) >> arg(1)) as u32,
+        ISD::SignExtendInReg => {
+            let NodeData::ValueType(inner) = dag.node(dag.operand(v, 1)).data else { panic!("a type") };
+            let up = 32 - inner.size_in_bits();
+            (((arg(0) << up) as i32) >> up) as u32
+        }
         ISD::SetCC => {
             let NodeData::CondCode(cc) = dag.node(dag.operand(v, 2)).data else { panic!("a code") };
             assert_eq!(cc, CondCode::SetEq);
@@ -33,8 +38,9 @@ fn eval(
 }
 
 /// The CRC step `select ((crc & 1) == 0), 0, 0xEDB88320` was a `cmov` (a
-/// branch on an i486): it is the bit smeared across the word, anded with the
-/// polynomial (bench `crc` code size 1.2x, `neg; je` per bit).
+/// branch on an i486): it is the bit smeared across the word (a sign extension
+/// of the bit), anded with the polynomial (bench `crc` code size 1.2x, `neg;
+/// je` per bit).
 #[test]
 fn a_select_on_a_single_bit_test_is_a_sign_mask() {
     for bit in [0u32, 5, 31] {
@@ -53,6 +59,8 @@ fn a_select_on_a_single_bit_test_is_a_sign_mask() {
         let after: Vec<u32> = SAMPLES.iter().map(|&p| eval(&dag, root, p)).collect();
         assert_eq!(before, after, "bit {bit}: the fold changed the value");
         assert_eq!(dag.opcode(root), ISD::And, "bit {bit}");
-        assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::Sra, "bit {bit}");
+        // Bit 0 smears with equal shifts, a sign extension of one bit.
+        let smear = if bit == 0 { ISD::SignExtendInReg } else { ISD::Sra };
+        assert_eq!(dag.opcode(dag.operand(root, 0)), smear, "bit {bit}");
     }
 }

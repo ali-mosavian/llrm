@@ -216,6 +216,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::Mul => self.visit_mul(node),
             ISD::And => self.visit_and(node),
             ISD::Or => self.visit_or(node),
+            ISD::Sra => self.visit_sra(node),
             ISD::SDiv => self.visit_sdiv(node),
             ISD::UDiv => self.visit_udiv(node),
             ISD::SRem | ISD::URem => self.visit_rem(node),
@@ -699,6 +700,33 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         None
+    }
+
+    /// `visitSRA`, by way of `SimplifyDemandedBits`: `(sra (shl x, c), c)` is
+    /// `sign_extend_inreg x` from the low `width - c` bits, before operations
+    /// are legal or when the target has that extension.
+    fn visit_sra(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let vt = self.dag.value_type(node);
+        if self.dag.opcode(n0) != ISD::Shl {
+            return None;
+        }
+        let (c, up) = (self.dag.constant(n1)?, self.dag.constant(self.dag.operand(n0, 1))?);
+        if c != up || c == 0 || c >= u128::from(vt.size_in_bits()) {
+            return None;
+        }
+        let low = EVT::integer(vt.size_in_bits() - c as u32);
+        let legal = self.level == CombineLevel::BeforeLegalizeTypes
+            || self.tli.is_some_and(|tli| tli.operation_action(ISD::SignExtendInReg, low) == Action::Legal);
+        if !legal {
+            return None;
+        }
+        let ty = self.dag.get_value_type_node(low);
+        let x = self.dag.operand(n0, 0);
+        Some(self.dag.get_node(ISD::SignExtendInReg, vt, &[x, ty]))
     }
 
     /// `visitMUL`, up to the multiply-by-power-of-two folds.

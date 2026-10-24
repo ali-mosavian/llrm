@@ -57,6 +57,7 @@ mod select_single_bit;
 mod setcc_i1_operands;
 mod setcc_result;
 mod setcc_simplify;
+mod sext_in_reg;
 mod switch_dags;
 mod switches;
 mod type_actions;
