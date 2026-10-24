@@ -1055,6 +1055,10 @@ fn built(
         .chain(cells)
         .chain(enter.into_iter().map(Item::Semantics))
         .collect();
+    // An item or two per instruction, a label and an alignment per block, and
+    // the pieces of the frame: growing it by doubling copied every item some
+    // six times.
+    out.reserve(blocks.iter().map(|block| 2 * block.insns.len() + 2).sum::<usize>());
     for (index, block) in blocks.iter().enumerate() {
         if block.align > 0 {
             out.push(Item::Align(CodeAlign { log2: block.align, max_skip: block.max_skip }));
