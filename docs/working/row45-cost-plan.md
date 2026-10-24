@@ -27,6 +27,21 @@ The first version of this file read a symbolized `release` build: the dist build
 
 The rule groups together are 17.4 M inclusive of the 63.3 M, 3.6 M of it the shared `upper_zero` solution: about 13.7 M is thirty-eight walks of the whole body, each building a window for every instruction (the walkers' per-window allocations were shown not to be the cost on the dist build).
 
+## Where the 63.3 M goes (by kind of work; the dist profile above)
+| Kind | M Ir | % | What attacks it |
+|---|--:|--:|---|
+| the rule groups' generated walks (`x86_m32::generated::*`) | 14.29 | 22.6 | R45-2, one walk (about 13.7 M of it is walking; the rest is the shared `upper_zero` solution) |
+| `machinecp::propagated` (copy propagation, 6 calls) | 10.23 | 16.2 | R45-7: per-instruction facts |
+| shared liveness and effects facts (`_flags_dead_after`, `LiveRows::sets`, `_flags_live_out`, `dead_at_exit`, `live_rows`, the lane-effects cache) | 12.36 | 19.5 | inherent per body; shrinks with the sub-passes that ask |
+| other hand-written sub-passes: `zeroes` 2.28, `popped_arguments` 1.69, `tested` 1.44, `zero_compares` 1.35, `upperzero::hoisted` 0.94, `secondary_bases` 0.92, `zeroed_loads` 0.59, the rest 3.3 | 12.50 | 19.7 | `zeroes`, `zero_compares`, `zeroed_loads` and part of the rest are `each` walks of the same kind and join R45-2 (up to 4.6 M more); `zeroes`/`zero_compares` leave to isel in R45-3 |
+| post-RA sinks (`postrasink` 2.97, `copysink` 1.25) | 4.24 | 6.7 | row 44 #24 |
+| post-RA `machinecse` | 3.86 | 6.1 | deleted by w-2's step 1 |
+| `machinedce` | 2.27 | 3.6 | R45-5 |
+| `Contents::has` and the once-cells that gate | 1.11 | 1.7 | |
+| `once`'s own code | 2.46 | 3.9 | |
+
+A single walk therefore reaches 13.7 M of the rule groups and, by taking in the other `each`/`window` sub-passes, up to 4.6 M more: about 18 M of 63 M. The other 45 M is analyses (31%), copy propagation (16%), sinks, `machinecse` and DCE (16%), and the hand-written passes that are not walks.
+
 ## What does not work (measured)
 - Deleting the sub-passes the spike counted as never firing: `storecombine` and `restored_copies` fail two unit tests (adjacent word stores combine; `mov ax,es; mov es,ax` goes). They fire on rare shapes.
 - One window per block instead of per instruction in the walkers: -2.0 M on a release build, +0.04 M on the dist build (not landed).
