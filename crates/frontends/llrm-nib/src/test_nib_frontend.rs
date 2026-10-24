@@ -298,6 +298,14 @@ pub(crate) fn O2_calls_kept() -> Options {
     options
 }
 
+/// -O3 where the function under test stays a function (`O2_calls_kept`).
+#[allow(non_snake_case)]
+pub(crate) fn O3_calls_kept() -> Options {
+    let mut options = level("O3");
+    options.pipeline.inline = llrm_transforms::inline::Threshold::none();
+    options
+}
+
 /// `program` compiled to an object.
 fn object_of(
     program: &model::Program,
@@ -1082,7 +1090,7 @@ fn test_a_fill_leaves_the_rest_of_its_function_priceable() {
         "priced_fill.nib",
         "fn value(v: &[i16]) -> i32:\n    let mut a: i32[64] = [0] * 64\n    let mut total: i16 = 0\n    unsafe:\n        for i in 0..4:\n            total += v[i]\n        a[total] = 5\n    return a[1]\nfn main() -> i16:\n    let v: i16[4] = [1, 2, 3, 4]\n    return i16(value(&v))\n",
     );
-    let assembly = listing(&parsed(&source), "main", &O3());
+    let assembly = listing(&parsed(&source), "main", &O3_calls_kept());
     let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
 
     assert!(body.contains("rep stosd"));
@@ -2093,7 +2101,7 @@ fn test_inline_assembly_is_its_bytes_between_its_register_constraints() {
          fn five() -> u16:\n    return 5\n\n\
          fn main() -> i16:\n    return i16(mix(3, 4) + mix(five(), 9))\n",
     );
-    let assembly = listing_on(&parsed(&source), "main", &O2(), "486");
+    let assembly = listing_on(&parsed(&source), "main", &O2_calls_kept(), "486");
     let mix = between(&assembly, "_mix proc near", "_mix endp");
     let pattern = r"(?s)or ax, 1792\n    mov dx, (\w+)\n    mov cx, (\w+)\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n(?:    mov ax, bx\n)?    shr cx, 8\n";
     let found = Regex::new(pattern).unwrap().captures(mix).unwrap_or_else(|| panic!("{mix}"));
@@ -2137,6 +2145,16 @@ fn test_inline_assembly_inputs_reach_the_registers_they_name() {
     }
 }
 
+/// Whether `line`, the instruction after an asm block that leaves its output in
+/// cx, takes it from cx: a `mov`/`add` with cx as the source, or an address
+/// formed on ecx (the walk now simplifies a body before it is unrolled, so the
+/// running sum is a `lea` of the copies, not `add ax, cx`).
+fn reads_cx(line: &str) -> bool {
+    let line = line.trim_start();
+    ((line.starts_with("mov ") || line.starts_with("add ")) && line.ends_with(", cx"))
+        || (line.starts_with("lea ") && line.contains("[ecx"))
+}
+
 /// Outputs were pinned by value, and a loop unrolled after physicalization
 /// gave each copy new values: spin(3) read its `cx` output from ax.
 #[test]
@@ -2153,7 +2171,7 @@ fn test_inline_assembly_outputs_survive_unrolling() {
     let after: Vec<&str> =
         assembly.split("db 089h,0d9h\n").skip(1).map(|rest| rest.lines().next().unwrap_or("")).collect();
     assert_eq!(after.len(), 3, "{assembly}");
-    assert!(after.iter().all(|line| line.ends_with(", cx")), "{assembly}");
+    assert!(after.iter().all(|line| reads_cx(line)), "{assembly}");
 }
 
 /// `source` through the rich MIR, as masm.
@@ -2162,14 +2180,24 @@ fn rich(
     name: &str,
     source: &str,
 ) -> String {
+    rich_with(directory, name, source, false)
+}
+
+/// `rich` with the calls kept when `kept`: the walk simplifies a callee before
+/// the call is priced, so a small one is inlined and has no listing of its own.
+fn rich_with(
+    directory: &tempfile::TempDir,
+    name: &str,
+    source: &str,
+    kept: bool,
+) -> String {
     let program = parsed(&written(directory, name, source));
-    let module = nib_compile::assembled(
-        &program,
-        "main",
-        &llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)),
-        &crate::real_mode().os,
-    )
-    .unwrap_or_else(|error| panic!("{error}"));
+    let mut options = llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os));
+    if kept {
+        options.pipeline.inline = llrm_transforms::inline::Threshold::none();
+    }
+    let module = nib_compile::assembled(&program, "main", &options, &crate::real_mode().os)
+        .unwrap_or_else(|error| panic!("{error}"));
     masm::text(&module).expect("prints")
 }
 
@@ -2186,7 +2214,7 @@ fn test_the_rich_mir_lays_an_inline_block_between_its_register_constraints() {
          fn five() -> u16:\n    return 5\n\n\
          fn main() -> i16:\n    return i16(mix(3, 4) + mix(five(), 9))\n";
     assert!(source.contains("asm("), "the shape that was refused");
-    let assembly = rich(&directory, "blocks.nib", source);
+    let assembly = rich_with(&directory, "blocks.nib", source, true);
     let mix = between(&assembly, "_mix proc near", "_mix endp");
     let pattern = r"(?s)or ax, 1792\n    mov dx, (\w+)\n    mov cx, (\w+)\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n(?:    mov ax, bx\n)?    shr cx, 8\n";
     let found = Regex::new(pattern).unwrap().captures(mix).unwrap_or_else(|| panic!("{mix}"));
@@ -2238,12 +2266,7 @@ fn test_the_rich_mir_reads_a_block_output_from_its_register_when_unrolled() {
     let after: Vec<&str> =
         assembly.split("db 089h,0d9h\n").skip(1).map(|rest| rest.lines().next().unwrap_or("")).collect();
     assert_eq!(after.len(), 3, "{assembly}");
-    assert!(
-        after
-            .iter()
-            .all(|line| line.trim_start().starts_with("mov ax, cx") || line.trim_start().starts_with("add ax, cx")),
-        "{assembly}"
-    );
+    assert!(after.iter().all(|line| reads_cx(line)), "{assembly}");
 }
 
 /// A raw pointer walk (#105): `p != e` of far pointers was refused "a ptr
