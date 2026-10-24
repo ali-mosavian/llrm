@@ -1482,7 +1482,7 @@ mod tests {
     /// the same asks: the first place, a range, and a place moved.
     #[test]
     fn test_the_places_a_value_is_named_answer_a_range_and_follow_a_move() {
-        let mut places = Places::default();
+        let mut places = super::Places::default();
         for at in [5, 1, 3, 3, 9] {
             places.add(7, at);
         }
