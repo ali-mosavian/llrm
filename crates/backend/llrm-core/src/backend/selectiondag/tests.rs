@@ -13,7 +13,9 @@ fn arg(
 }
 
 mod action_table;
+mod add_simplify;
 mod and_fold;
+mod and_simplify;
 mod bit_counts;
 mod bit_test;
 mod bitcast_float;
@@ -47,6 +49,7 @@ mod m16_coverage;
 mod mem_space;
 mod min_max;
 mod odd_shift;
+mod or_simplify;
 mod pair_arith;
 mod pair_mul;
 mod select_fold;
@@ -54,6 +57,7 @@ mod select_i1;
 mod setcc_i1_operands;
 mod setcc_result;
 mod setcc_simplify;
+mod shift_simplify;
 mod switch_dags;
 mod switches;
 mod type_actions;

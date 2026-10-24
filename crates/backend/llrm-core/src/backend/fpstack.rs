@@ -465,10 +465,13 @@ impl Fps<'_> {
             self.handle_two_arg_fp(step, name, *left, *right, results[0])?;
         } else if what.op == Operation::FloatLoad && unnamed(&what) && what.sources.is_empty() && !results.is_empty() {
             // `handleCall`'s STReturns: the callee left the result in st(0).
-            if !self.values.is_empty() {
-                return Err(unlowered("a call's floating result arrives on a stack that is not empty"));
+            // The stack was empty at the call (`flush`), so the result is the
+            // bottom entry: a value the allocator reloaded after
+            // the call (a `fld` ahead of this pseudo) was pushed on top of it.
+            if self.values.len() >= self.depth {
+                return Err(unlowered("floating instruction requires too many stack operands"));
             }
-            self.push(results[0])?;
+            self.values.push(results[0]);
             self.vacate();
         } else if what.op == Operation::FloatStore && unnamed(&what) && what.dests.is_empty() && operands.len() == 1 {
             self.handle_return(operands[0])?;

@@ -210,7 +210,7 @@ fn edge_probabilities(body: &LirBody) -> HashMap<(usize, usize), BranchProbabili
 /// `mayStore() || isCall() || hasOrderedMemoryRef()`: what `hasStoreBetween`
 /// counts. No alias analysis reaches here, so any of these may alias a load
 /// (DEVIATE M7).
-fn may_store(one: &Insn) -> bool {
+pub(crate) fn may_store(one: &Insn) -> bool {
     let Some(what) = &one.what else { return true };
     one.volatile()
         || one.call.is_some()

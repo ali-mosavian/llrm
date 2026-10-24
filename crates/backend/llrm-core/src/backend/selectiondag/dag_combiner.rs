@@ -216,6 +216,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::Mul => self.visit_mul(node),
             ISD::And => self.visit_and(node),
             ISD::Or => self.visit_or(node),
+            ISD::Add => self.visit_add(node),
+            ISD::Shl | ISD::Srl | ISD::Sra => self.visit_shift(node),
             ISD::SDiv => self.visit_sdiv(node),
             ISD::UDiv => self.visit_udiv(node),
             ISD::SRem | ISD::URem => self.visit_rem(node),
@@ -561,6 +563,20 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         self.replace_value(compare_value, replacement);
     }
 
+    /// `areBitwiseNotOfEachother`: one is `(xor other, -1)`.
+    fn are_bitwise_not_of_each_other(
+        &self,
+        a: SDValue,
+        b: SDValue,
+    ) -> bool {
+        let is_not = |dag: &SelectionDAG, v: SDValue, of: SDValue| {
+            dag.opcode(v) == ISD::Xor
+                && dag.operand(v, 0) == of
+                && dag.constant(dag.operand(v, 1)) == Some(super::fold::mask(dag.width(v)))
+        };
+        is_not(self.dag, a, b) || is_not(self.dag, b, a)
+    }
+
     /// `visitAND`, the part `SimplifyDemandedBits` does for it: `(and x, c)` is
     /// `x` when every bit is either set in `c` or known zero in `x`, so
     /// `and (setcc), 1` is the `setcc` (it is 0 or 1 already).
@@ -569,10 +585,43 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         node: SDValue,
     ) -> Option<SDValue> {
         let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let vt = self.dag.value_type(n0);
+        if n0 == n1 {
+            return Some(n0);
+        }
+        if self.dag.constant(n0).is_some() && self.dag.constant(n1).is_none() {
+            return Some(self.dag.get_node(ISD::And, vt, &[n1, n0]));
+        }
+        if self.are_bitwise_not_of_each_other(n0, n1) {
+            return Some(self.dag.get_constant(0, vt));
+        }
+        // `(and x, c)` is zero when `x` is known zero wherever `c` is set.
+        if let Some(c) = self.dag.constant(n1) {
+            if c & !super::known_bits::known_bits(self.dag, n0).zero & super::fold::mask(vt.size_in_bits()) == 0 {
+                return Some(self.dag.get_constant(0, vt));
+            }
+        }
         if let Some(folded) = self.fold_logic_of_setccs(true, n0, n1) {
             return Some(folded);
         }
-        let vt = self.dag.value_type(n0);
+        if let (Some(c1), true) = (self.dag.constant(n1), !self.dag.is_opaque(n1)) {
+            // `reassociateOps`: `(and (and x, c0), c1)` is `(and x, c0 & c1)`.
+            if self.dag.opcode(n0) == ISD::And {
+                let (x, inner) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+                if self.dag.constant(inner).is_some() && !self.dag.is_opaque(inner) {
+                    let both = self.dag.get_node(ISD::And, vt, &[inner, n1]);
+                    return Some(self.dag.get_node(ISD::And, vt, &[x, both]));
+                }
+            }
+            // `(and (or x, C), D)` is `D` when `D` is a subset of `C`.
+            if self.dag.opcode(n0) == ISD::Or {
+                if let Some(c) = self.dag.constant(self.dag.operand(n0, 1)) {
+                    if c1 & !c == 0 {
+                        return Some(n1);
+                    }
+                }
+            }
+        }
         let all = super::fold::mask(vt.size_in_bits());
         for (other, constant) in [(n0, n1), (n1, n0)] {
             if let Some(c) = self.dag.constant(constant) {
@@ -598,6 +647,126 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         None
+    }
+
+    /// `visitADD` through `visitADDLike`, the folds that need no target
+    /// query: a constant moves right, `x + ~x` is -1, constants merge through
+    /// a `sub` or an `add`, and an `add` of a negation or of a `sub` of the
+    /// other operand is a `sub` or the operand itself.
+    ///
+    /// DEVIATE SD210: an `add` of constants is not reassociated when it feeds
+    /// a memory access (`reassociationCanBreakAddressingModePattern` is not
+    /// translated; the matcher folds the displacement there). Exit: that
+    /// query. Owner sdag-b. Review 2026-12-10.
+    fn visit_add(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let vt = self.dag.value_type(node);
+        if self.dag.constant(n0).is_some() && self.dag.constant(n1).is_none() {
+            return Some(self.dag.get_node(ISD::Add, vt, &[n1, n0]));
+        }
+        let ones = super::fold::mask(vt.size_in_bits());
+        let is_not = |dag: &SelectionDAG, v: SDValue, of: SDValue| {
+            dag.opcode(v) == ISD::Xor && dag.operand(v, 0) == of && dag.constant(dag.operand(v, 1)) == Some(ones)
+        };
+        if is_not(self.dag, n0, n1) || is_not(self.dag, n1, n0) {
+            return Some(self.dag.get_constant(ones, vt));
+        }
+        let plain = |dag: &SelectionDAG, v: SDValue| dag.constant(v).filter(|_| !dag.is_opaque(v)).is_some();
+        if plain(self.dag, n1) {
+            if self.dag.opcode(n0) == ISD::Sub {
+                let (n00, n01) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+                // `(add (sub x, c0), c1)` is `(add x, c1 - c0)`.
+                if plain(self.dag, n01) {
+                    let diff = self.dag.get_node(ISD::Sub, vt, &[n1, n01]);
+                    return Some(self.dag.get_node(ISD::Add, vt, &[n00, diff]));
+                }
+                // `(add (sub c0, x), c1)` is `(sub c0 + c1, x)`.
+                if plain(self.dag, n00) {
+                    let sum = self.dag.get_node(ISD::Add, vt, &[n1, n00]);
+                    return Some(self.dag.get_node(ISD::Sub, vt, &[sum, n01]));
+                }
+            }
+            // `(add (add x, c0), c1)` is `(add x, c0 + c1)`.
+            if self.dag.opcode(n0) == ISD::Add && plain(self.dag, self.dag.operand(n0, 1)) {
+                let feeds_memory = self
+                    .dag
+                    .users(node)
+                    .any(|user| matches!(
+                        self.dag.opcode(SDValue { node: user, res: 0 }),
+                        ISD::Load | ISD::Store
+                    ));
+                if !feeds_memory {
+                    let sum = self.dag.get_node(ISD::Add, vt, &[n1, self.dag.operand(n0, 1)]);
+                    return Some(self.dag.get_node(ISD::Add, vt, &[self.dag.operand(n0, 0), sum]));
+                }
+            }
+        }
+        let is_neg =
+            |dag: &SelectionDAG, v: SDValue| dag.opcode(v) == ISD::Sub && dag.constant(dag.operand(v, 0)) == Some(0);
+        // `(add (sub 0, a), b)` is `(sub b, a)`; likewise on the right.
+        if is_neg(self.dag, n0) {
+            return Some(self.dag.get_node(ISD::Sub, vt, &[n1, self.dag.operand(n0, 1)]));
+        }
+        if is_neg(self.dag, n1) {
+            return Some(self.dag.get_node(ISD::Sub, vt, &[n0, self.dag.operand(n1, 1)]));
+        }
+        // `x + (b - x)` and `(b - y) + y` are `b`.
+        if self.dag.opcode(n1) == ISD::Sub && self.dag.operand(n1, 1) == n0 {
+            return Some(self.dag.operand(n1, 0));
+        }
+        if self.dag.opcode(n0) == ISD::Sub && self.dag.operand(n0, 1) == n1 {
+            return Some(self.dag.operand(n0, 0));
+        }
+        if self.dag.opcode(n0) == ISD::Sub && self.dag.opcode(n1) == ISD::Sub {
+            let (a, b) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            let (c, d) = (self.dag.operand(n1, 0), self.dag.operand(n1, 1));
+            // `(a - b) + (c - a)` is `c - b`; `(a - b) + (b - d)` is `a - d`.
+            if d == a {
+                return Some(self.dag.get_node(ISD::Sub, vt, &[c, b]));
+            }
+            if c == b {
+                return Some(self.dag.get_node(ISD::Sub, vt, &[a, d]));
+            }
+        }
+        None
+    }
+
+    /// `visitSHL`, `visitSRL` and `visitSRA`, the constant-amount folds: the
+    /// result is 0 when every bit is known zero; a shift of a shift of the
+    /// same kind is one shift by the sum (0 once the sum reaches the width,
+    /// for `sra` the sign fill).
+    fn visit_shift(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let op = self.dag.opcode(node);
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let vt = self.dag.value_type(node);
+        let width = u128::from(vt.size_in_bits());
+        if op != ISD::Sra {
+            let all = super::fold::mask(vt.size_in_bits());
+            let known = super::known_bits::known_bits(self.dag, node);
+            if all & !known.zero == 0 {
+                return Some(self.dag.get_constant(0, vt));
+            }
+        }
+        if self.dag.opcode(n0) != op {
+            return None;
+        }
+        let (c2, inner) = (self.dag.constant(n1)?, self.dag.constant(self.dag.operand(n0, 1))?);
+        let (x, sum) = (self.dag.operand(n0, 0), c2 + inner);
+        if sum < width {
+            let amount = self.dag.get_constant(sum, self.dag.value_type(n1));
+            return Some(self.dag.get_node(op, vt, &[x, amount]));
+        }
+        if op == ISD::Sra {
+            let amount = self.dag.get_constant(width - 1, self.dag.value_type(n1));
+            return Some(self.dag.get_node(op, vt, &[x, amount]));
+        }
+        Some(self.dag.get_constant(0, vt))
     }
 
     /// `visitMUL`, up to the multiply-by-power-of-two folds.

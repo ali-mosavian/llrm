@@ -43,7 +43,7 @@ use llrm_mir::module::{BlockId, Module, ValueDef, ValueId};
 use llrm_target::Target;
 
 use super::actions::{Features, TargetLowering};
-use super::builder::{BuilderTarget, build_block};
+use super::builder::{BuilderTarget, RuntimeAnswer, build_block};
 use super::dag_select::select_block;
 use super::emit::{Callee, EmitBlock, EmitContext, EmitState, FrameMap, JumpTable};
 use super::function_lowering::FunctionLoweringInfo;
@@ -179,6 +179,94 @@ impl super::emit::GlobalMap for Globals<'_> {
 struct CallConventions<'a> {
     module: &'a Module,
     arch: &'a dyn Target,
+    contracts: Option<&'a RuntimeContracts<'a>>,
+    general: &'a [llrm_lir::registers::RegId],
+}
+
+/// What the program's ABI says about its runtime routines: a QB routine's
+/// contract names the registers it destroys and how it returns, which its
+/// declared convention does not.
+pub struct RuntimeContracts<'a> {
+    pub abi: &'a dyn crate::backend::assemble::Abi,
+    pub segments: &'a crate::backend::target::Segments,
+}
+
+/// For each call in `function` of a `llrm.qb.` routine: `Ok` when the
+/// convention models what its contract says (the callee pops what was pushed,
+/// it returns in a register and to the next instruction), else why not. The old
+/// selector models the rest.
+pub(crate) fn runtime_call_verdicts(
+    module: &Module,
+    function: &llrm_mir::module::Function,
+    layout: &DataLayout,
+    arch: &dyn Target,
+    abi: &dyn crate::backend::assemble::Abi,
+) -> llrm_mir::dense::IdMap<llrm_mir::module::InstId, Result<RuntimeAnswer, &'static str>> {
+    use llrm_mir::module::Operand;
+    use llrm_mir::opcode::Opcode;
+    let mut out = llrm_mir::dense::IdMap::new();
+    for &block in function.layout() {
+        for inst in function.iter_block(block) {
+            let instruction = function.instruction(inst);
+            let (Opcode::Call(info) | Opcode::Invoke(info)) = &instruction.opcode else { continue };
+            let Some(&Operand::Constant(callee)) = instruction.operands.last() else { continue };
+            let llrm_mir::context::ConstantKind::Global(global) = module.context.get(callee).kind else { continue };
+            let name = module.global(global).name.owned().unwrap_or_default();
+            if !name.starts_with(crate::hir::mir::RUNTIME) {
+                continue;
+            }
+            let keep = instruction.operands.len() - if matches!(instruction.opcode, Opcode::Invoke(_)) { 3 } else { 1 };
+            let types: Option<Vec<_>> = instruction.operands[..keep]
+                .iter()
+                .map(|argument| function.operand_type(&module.context, *argument))
+                .collect();
+            let first = arch.first_argument_offset(false);
+            let (result, _, variadic) = module.signature(info.function_type);
+            let plan = types.and_then(|types| {
+                crate::backend::isel::convention_for(
+                    module,
+                    layout,
+                    arch,
+                    first,
+                    info.calling_convention,
+                    result,
+                    variadic,
+                    &types,
+                    &info.argument_attrs,
+                )
+                .ok()
+            });
+            out.insert(inst, modelled(abi, &name, plan.as_ref(), first));
+        }
+    }
+    out
+}
+
+fn modelled(
+    abi: &dyn crate::backend::assemble::Abi,
+    name: &str,
+    plan: Option<&crate::backend::isel::Convention>,
+    first: i64,
+) -> Result<RuntimeAnswer, &'static str> {
+    let plan = plan.ok_or("QB runtime call the convention does not describe")?;
+    let pushed = (plan.stack_arguments - first).max(0);
+    if abi.registers(name).is_some() {
+        return Err("QB runtime routine with a register interface");
+    }
+    let contract = abi.contract(name, plan.popped > 0, pushed).map_err(|_| "QB runtime routine with no contract")?;
+    // Raising an error or entering user code changes no selection (the old
+    // selector reads neither); a routine that comes back at an inline table or
+    // by no known way does.
+    if !matches!(
+        contract.control,
+        llrm_qbruntime::Control::Returns | llrm_qbruntime::Control::Never
+    ) {
+        return Err("QB runtime routine that returns to an inline table or by no known way");
+    }
+    if contract.cleanup != Some(plan.popped) || plan.popped != pushed {
+        return Err("QB runtime routine whose stack cleanup the convention does not model");
+    }
+    Ok(if contract.flags_result { RuntimeAnswer::Flags } else { RuntimeAnswer::Registers })
 }
 
 impl super::emit::Conventions for CallConventions<'_> {
@@ -214,14 +302,22 @@ impl super::emit::Conventions for CallConventions<'_> {
         };
         let found = self.arch.calling().by_number(number)?;
         let regs = llrm_lir::registers::Regs(self.arch.registers());
-        Some(
-            found
-                .clobbered
-                .iter()
-                .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
-                .map(|name| regs.root(self.arch.register_named(name)))
-                .collect(),
-        )
+        let mut out: std::collections::BTreeSet<_> = found
+            .clobbered
+            .iter()
+            .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
+            .map(|name| regs.root(self.arch.register_named(name)))
+            .collect();
+        // a runtime routine also destroys what its contract says
+        if let (Some(contracts), Some(Callee::Global(id))) = (self.contracts, callee) {
+            let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned().unwrap_or_default();
+            if name.starts_with(crate::hir::mir::RUNTIME)
+                && let Ok(contract) = contracts.abi.contract(&name, false, 0)
+            {
+                out.extend(crate::backend::callregs::call_clobbers(&contract, contracts.segments, self.general));
+            }
+        }
+        Some(out)
     }
 }
 
@@ -249,7 +345,10 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
                     .iter()
                     .copied()
                     .chain(llrm_dagisel::generated::ids::x86::NAMES.iter().copied())
-                    .chain([(llrm_dagisel::x86_llrm::FARCALL_OPCODE, "CALL_FAR")])
+                    .chain([
+                        (llrm_dagisel::x86_llrm::FARCALL_OPCODE, "CALL_FAR"),
+                        (llrm_dagisel::x86_llrm::CODE_OPCODE, "CALL_CODE"),
+                    ])
                     .collect(),
             })
         })
@@ -372,7 +471,7 @@ pub fn selected(
     cpu: &crate::backend::cpu::Profile,
     libcalls: &[(String, u32, String)],
 ) -> Result<Selected, Unselected> {
-    selected_in_pool(module, name, arch, cpu, libcalls, false, &mut Pool::new(module.globals.len() as i64))
+    selected_in_pool(module, name, arch, cpu, libcalls, None, &mut Pool::new(module.globals.len() as i64))
 }
 
 pub fn selected_in_pool(
@@ -381,12 +480,12 @@ pub fn selected_in_pool(
     arch: &dyn Target,
     cpu: &crate::backend::cpu::Profile,
     libcalls: &[(String, u32, String)],
-    runtime_contracts: bool,
+    contracts: Option<&RuntimeContracts<'_>>,
     pool: &mut Pool,
 ) -> Result<Selected, Unselected> {
     let mark = pool.mark();
     let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        selected_in(module, name, arch, cpu, libcalls, runtime_contracts, pool)
+        selected_in(module, name, arch, cpu, libcalls, contracts, pool)
     }))
     .unwrap_or_else(|why| {
         let why =
@@ -417,7 +516,7 @@ fn selected_in(
     arch: &dyn Target,
     cpu: &crate::backend::cpu::Profile,
     libcalls: &[(String, u32, String)],
-    runtime_contracts: bool,
+    contracts: Option<&RuntimeContracts<'_>>,
     pool: &mut Pool,
 ) -> Result<Selected, Unselected> {
     let m16 = match arch.object().bitness {
@@ -440,10 +539,10 @@ fn selected_in(
     };
     let (builder_target, address_mode) =
         if m16 { (BuilderTarget::m16(), AddrMode::Real16) } else { (BuilderTarget::m32(), AddrMode::Flat32) };
-    let builder_target = builder_target
-        .with_runtime_calls(libcalls)
-        .with_float_store(cpu.float_store)
-        .with_runtime_contracts(runtime_contracts);
+    let builder_target =
+        builder_target.with_runtime_calls(libcalls).with_float_store(cpu.float_store).with_runtime_call_verdicts(
+            contracts.map(|contracts| runtime_call_verdicts(module, function, &layout, arch, contracts.abi)),
+        );
     let tables = tables(arch);
     // The builder numbers the fixed objects the stack parameters make: a byval
     // aggregate one, a cell one for each register-sized part of its value (an
@@ -540,7 +639,7 @@ fn selected_in(
     let ctx = EmitContext {
         tables: &tables_of_function,
         caller_saved: &caller_saved,
-        conventions: &CallConventions { module, arch },
+        conventions: &CallConventions { module, arch, contracts, general: &cpu.general },
         constants: &PoolCells(std::cell::RefCell::new(pool)),
         stack_pointer,
         globals: &globals,
@@ -552,6 +651,7 @@ fn selected_in(
     };
     let mut emitted: Vec<EmitBlock> = Vec::new();
     let mut calls = IndexMap::default();
+    let mut inline_places = IndexMap::default();
     // the call sites whose callee is far code (address space 1): a far call
     let mut far = std::collections::BTreeSet::new();
     // The LIR blocks each MIR block became, and the phi inputs each exports.
@@ -608,7 +708,8 @@ fn selected_in(
                 // the runtime's routines are far procedures where code is in
                 // segments
                 Callee::Named(name) => {
-                    if arch.object().bitness == 16 {
+                    // inline code is laid down at the site: no call
+                    if arch.object().bitness == 16 && llrm_mir::intrinsics::code(name).is_none() {
                         far.insert(*at);
                     }
                     name.clone()
@@ -616,6 +717,7 @@ fn selected_in(
             };
             (*at, name)
         }));
+        inline_places.extend(done.inline_places.iter().cloned());
         emitted.extend(done.blocks);
         let start = made.get(&parent.0).map_or(from, |range| range.start);
         made.insert(parent.0, start..emitted.len());
@@ -658,9 +760,6 @@ fn selected_in(
     // path stops the allocator's liveness, so it is a refusal here.
     if let Some((value, name)) = read_before_defined(&emitted, &succ) {
         return refuse(format!("--isel=dag: value {value} is read and not defined on every path ({name:?})"));
-    }
-    if let Some(why) = float_across_call(&emitted, &succ) {
-        return refuse(format!("--isel=dag: {why}"));
     }
     // A floating value is a 10-byte register value: read at another width it is
     // an integer's bits taken from an x87 register (`bitcast` of a double to
@@ -726,143 +825,30 @@ fn selected_in(
             }
         }
     }
+    // Inline code: its bytes with each frame place patched as a displacement
+    // from BP (the old route's `inline_code`).
+    for (at, name) in &calls {
+        if let Some((mut bytes, places)) = llrm_mir::intrinsics::code(name) {
+            for (offset, disp, addend) in inline_places.get(at).map_or(&[][..], |one: &Vec<(usize, i64, i64)>| &one[..])
+            {
+                bytes[*offset..*offset + 2].copy_from_slice(&((disp + addend) as u16).to_le_bytes());
+            }
+            let _ = places;
+            inline.insert(*at, bytes);
+        }
+    }
     Ok(Selected {
         body,
         convention,
         calls,
         inline,
-        inline_places: IndexMap::default(),
+        inline_places,
         inline_symbols: IndexMap::default(),
         far,
         pops: IndexMap::default(),
         depth: frame.depth.get(),
         extents: frame.locals.borrow().clone(),
         landing: None,
-    })
-}
-
-/// Whether a floating value (a 10-byte `Held`) is live across a call that
-/// returns a float (its result arrives on a stack the stackifier needs empty,
-/// 'a call's floating result arrives on a stack that is not empty'): its
-/// liveness by the usual backward flow over the blocks, a phi's input read at
-/// the end of the predecessor it comes from.
-fn float_across_call(
-    blocks: &[EmitBlock],
-    succ: &[Vec<i64>],
-) -> Option<&'static str> {
-    use std::collections::{BTreeSet, HashMap};
-    let mut floating: BTreeSet<u32> = blocks
-        .iter()
-        .flat_map(|block| block.insns.iter())
-        .filter_map(|insn| insn.what.as_ref())
-        .flat_map(|what| what.dests.iter())
-        .filter_map(|dest| match dest {
-            crate::model::ir::Loc::Held(held) if held.width == 10 => Some(held.value),
-            _ => None,
-        })
-        .collect();
-    if floating.is_empty() {
-        return None;
-    }
-    // A phi of floating values is floating.
-    loop {
-        let before = floating.len();
-        for phi in blocks.iter().flat_map(|block| block.phis.iter()) {
-            if phi.incoming.iter().any(|(_, value)| floating.contains(value)) {
-                floating.insert(phi.result);
-            }
-        }
-        if floating.len() == before {
-            break;
-        }
-    }
-    let index: HashMap<i64, usize> = blocks.iter().enumerate().map(|(i, b)| (b.at, i)).collect();
-    // The floating values each block reads at its end for its successors' phis.
-    let mut phi_reads: Vec<BTreeSet<u32>> = vec![BTreeSet::new(); blocks.len()];
-    for block in blocks {
-        for phi in &block.phis {
-            for (edge, value) in &phi.incoming {
-                if let Some(&from) = index.get(edge)
-                    && floating.contains(value)
-                {
-                    phi_reads[from].insert(*value);
-                }
-            }
-        }
-    }
-    let phi_results: Vec<BTreeSet<u32>> =
-        blocks.iter().map(|block| block.phis.iter().map(|phi| phi.result).collect()).collect();
-    let mut live_in: Vec<BTreeSet<u32>> = vec![BTreeSet::new(); blocks.len()];
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for (at, block) in blocks.iter().enumerate().rev() {
-            let mut live: BTreeSet<u32> = phi_reads[at].clone();
-            for next in &succ[at] {
-                if let Some(&to) = index.get(next) {
-                    live.extend(live_in[to].difference(&phi_results[to]).copied());
-                }
-            }
-            for insn in block.insns.iter().rev() {
-                for def in &insn.defines {
-                    live.remove(def);
-                }
-                live.extend(insn.uses.iter().copied().filter(|value| floating.contains(value)));
-            }
-            if live != live_in[at] {
-                live_in[at] = live;
-                changed = true;
-            }
-        }
-    }
-    for (at, block) in blocks.iter().enumerate() {
-        let mut live: BTreeSet<u32> = phi_reads[at].clone();
-        for next in &succ[at] {
-            if let Some(&to) = index.get(next) {
-                live.extend(live_in[to].difference(&phi_results[to]).copied());
-            }
-        }
-        for (place, insn) in block.insns.iter().enumerate().rev() {
-            let after = &block.insns[place + 1..];
-            for def in &insn.defines {
-                live.remove(def);
-            }
-            // A cell through a far pointer sets ES, which the stackifier counts
-            // among the instructions the x87 stack does not survive.
-            let far = insn
-                .what
-                .as_ref()
-                .is_some_and(
-                    |what| what.dests
-                        .iter()
-                        .chain(&what.sources)
-                        .any(
-                            |loc| matches!(
-                                loc,
-                                crate::model::ir::Loc::Mem(cell) if cell.selector.is_some()
-                            ),
-                        ),
-                );
-            let returns_float = insn.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Call)
-                && after
-                    .iter()
-                    .take_while(|next| {
-                        next.what.as_ref().is_none_or(|what| what.op != crate::model::ir::Operation::Call)
-                    })
-                    .any(|next| is_stack_top_load(next));
-            if (far || returns_float) && !live.is_empty() {
-                return Some("a floating value is live across an instruction that empties the x87 stack");
-            }
-            live.extend(insn.uses.iter().copied().filter(|value| floating.contains(value)));
-        }
-    }
-    None
-}
-
-/// The unnamed load of the x87 stack top that takes a call's float result.
-fn is_stack_top_load(insn: &Insn) -> bool {
-    insn.what.as_ref().is_some_and(|what| {
-        what.op == crate::model::ir::Operation::FloatLoad && what.name.as_deref() == Some("") && what.sources.is_empty()
     })
 }
 
