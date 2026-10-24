@@ -115,7 +115,9 @@ impl Placed {
             let mut items = Vec::new();
             for global in members {
                 let GlobalKind::Variable(variable) = &module.global(global).kind else { continue };
-                if let Some(to) = global_alignment(module, layout.as_ref(), variable, placed_here, segment_bytes.is_some()) {
+                if let Some(to) =
+                    global_alignment(module, layout.as_ref(), variable, placed_here, segment_bytes.is_some())
+                {
                     items.push(masm::Datum::Align(masm::Align { to }));
                 }
                 for datum in globals::datums(module, global, &built.names)? {

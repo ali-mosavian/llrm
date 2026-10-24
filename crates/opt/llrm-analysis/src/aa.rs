@@ -135,6 +135,19 @@ impl MemoryLocation {
     ) -> Option<Self> {
         let op = unit.function.instruction(call);
         let pointer = *op.operands.get(arg as usize)?;
+        // `memset`, `memcpy` and `memmove` name the bytes they touch through
+        // their destination and source (`getForDest`, `getForSource`).
+        let named = llrm_mir::memory::callee(unit.context, unit.function, call)
+            .and_then(|one| unit.globals.get(one.0 as usize)?.name.as_deref())
+            .and_then(llrm_mir::intrinsics::Intrinsic::named);
+        let touches = match named {
+            Some(llrm_mir::intrinsics::Intrinsic::MemSet) => arg == 0,
+            Some(llrm_mir::intrinsics::Intrinsic::MemCpy | llrm_mir::intrinsics::Intrinsic::MemMove) => arg < 2,
+            _ => false,
+        };
+        if touches && let Some(length) = llrm_mir::intrinsics::length(unit.context, *op.operands.get(2)?) {
+            return Some(Self::new(pointer, LocationSize::Precise(length)));
+        }
         Some(Self::before_or_after(pointer))
     }
 
@@ -420,8 +433,13 @@ pub struct AAQueryInfo {
     pub may_be_cross_iteration: bool,
     /// Whether the dominator tree may be used (`UseDominatorTree`).
     pub use_dominator_tree: bool,
-    locations: HashMap<MemoryLocation, u32>,
-    answers: HashMap<u64, AliasResult>,
+    locations: HashMap<(MemoryLocation, bool), u32>,
+    answers: HashMap<u64, Answer>,
+    /// `NumAssumptionUses`: the uses of an assumption still in force.
+    assumption_uses: i32,
+    /// `AssumptionBasedResults`: the pairs whose answer rests on an assumption
+    /// of a query not yet decided.
+    assumption_based: Vec<u64>,
     /// `AAQI.CA`: how objects may be captured before an instruction. A batch
     /// owns it, so a batch drops what it remembers.
     pub capture: Box<dyn crate::captureanalysis::CaptureAnalysis>,
@@ -438,6 +456,30 @@ impl AAQueryInfo {
     }
 }
 
+/// `AAQueryInfo::CacheEntry`: an answer, and how many uses of it were made as
+/// an assumption while it was still being worked out (`isDefinitive`: -1).
+#[derive(Clone, Copy, Debug)]
+struct Answer {
+    result: AliasResult,
+    uses: i32,
+}
+
+/// What `enter` found.
+pub enum Entered {
+    /// The pair is answered (a definitive answer, or the assumption).
+    Known(AliasResult),
+    /// A new pair, to be worked out, with the state `exit` needs.
+    Fresh(Mark),
+}
+
+/// The state of the assumptions on entering a pair.
+#[derive(Clone, Copy, Debug)]
+pub struct Mark {
+    uses: i32,
+    based: usize,
+    key: u64,
+}
+
 impl Default for AAQueryInfo {
     fn default() -> Self {
         Self {
@@ -445,6 +487,8 @@ impl Default for AAQueryInfo {
             use_dominator_tree: true,
             locations: HashMap::default(),
             answers: HashMap::default(),
+            assumption_uses: 0,
+            assumption_based: Vec::new(),
             capture: Box::<crate::captureanalysis::SimpleCaptureAnalysis>::default(),
             classes: HashMap::default(),
             decomposed: HashMap::default(),
@@ -458,7 +502,9 @@ impl AAQueryInfo {
         location: &MemoryLocation,
     ) -> u32 {
         let next = self.locations.len() as u32;
-        *self.locations.entry(*location).or_insert(next)
+        // MayBeCrossIteration is part of the pair's key: some answers of the
+        // other mode become MayAlias in this one.
+        *self.locations.entry((*location, self.may_be_cross_iteration)).or_insert(next)
     }
 
     /// The remembered answer for the pair, in the order asked.
@@ -469,9 +515,9 @@ impl AAQueryInfo {
     ) -> Option<AliasResult> {
         let (one, other) = (self.number(a), self.number(b));
         if let Some(found) = self.answers.get(&(u64::from(one) << 32 | u64::from(other))) {
-            return Some(*found);
+            return Some(found.result);
         }
-        self.answers.get(&(u64::from(other) << 32 | u64::from(one))).map(|found| found.swap())
+        self.answers.get(&(u64::from(other) << 32 | u64::from(one))).map(|found| found.result.swap())
     }
 
     pub fn remember(
@@ -481,7 +527,59 @@ impl AAQueryInfo {
         answer: AliasResult,
     ) {
         let (one, other) = (self.number(a), self.number(b));
-        self.answers.insert(u64::from(one) << 32 | u64::from(other), answer);
+        self.answers.insert(u64::from(one) << 32 | u64::from(other), Answer { result: answer, uses: -1 });
+    }
+
+    /// The first half of `BasicAAResult::aliasCheck`'s cache use: a pair asked
+    /// again while it is being worked out is assumed `NoAlias`, and the use is
+    /// counted.
+    pub fn enter(
+        &mut self,
+        a: &MemoryLocation,
+        b: &MemoryLocation,
+    ) -> Entered {
+        let (one, other) = (self.number(a), self.number(b));
+        let (forward, backward) = (u64::from(one) << 32 | u64::from(other), u64::from(other) << 32 | u64::from(one));
+        for (key, swapped) in [(forward, false), (backward, true)] {
+            if let Some(entry) = self.answers.get_mut(&key) {
+                if entry.uses >= 0 {
+                    entry.uses += 1;
+                    self.assumption_uses += 1;
+                }
+                return Entered::Known(if swapped { entry.result.swap() } else { entry.result });
+            }
+        }
+        self.answers.insert(forward, Answer { result: AliasResult::NoAlias, uses: 0 });
+        Entered::Fresh(Mark { uses: self.assumption_uses, based: self.assumption_based.len(), key: forward })
+    }
+
+    /// The second half: `result` of the pair `enter` made fresh. An assumption
+    /// of `NoAlias` that was used and is not borne out makes the answer
+    /// `MayAlias` and drops every answer that rested on it.
+    pub fn exit(
+        &mut self,
+        mark: Mark,
+        result: AliasResult,
+    ) -> AliasResult {
+        let entry = self.answers.get_mut(&mark.key).expect("the pair is in the cache after its entry");
+        let disproven = entry.uses > 0 && result != AliasResult::NoAlias;
+        let result = if disproven { AliasResult::MayAlias } else { result };
+        // Definitive now, as a root query.
+        self.assumption_uses -= entry.uses;
+        entry.result = result;
+        entry.uses = -1;
+        if disproven {
+            while self.assumption_based.len() > mark.based {
+                if let Some(key) = self.assumption_based.pop() {
+                    self.answers.remove(&key);
+                }
+            }
+        }
+        // Still resting on an assumption higher up: remembered for purging.
+        if self.assumption_uses > mark.uses {
+            self.assumption_based.push(mark.key);
+        }
+        result
     }
 }
 
@@ -530,6 +628,21 @@ pub trait AAResults {
         loc: Option<&MemoryLocation>,
         aaqi: &mut AAQueryInfo,
     ) -> ModRefInfo;
+
+    /// `get_mod_ref_info` where `others`, the other providers of an aggregate,
+    /// also answer each `alias` a call's argument is asked against `loc`
+    /// (`AAQI.AAR.alias`, BasicAliasAnalysis.cpp L1030): without them a
+    /// provider answers from its own `alias` alone.
+    fn get_mod_ref_info_with(
+        &mut self,
+        inst: InstId,
+        loc: Option<&MemoryLocation>,
+        aaqi: &mut AAQueryInfo,
+        others: &mut dyn FnMut(&MemoryLocation, &MemoryLocation, &mut AAQueryInfo, Option<InstId>) -> AliasResult,
+    ) -> ModRefInfo {
+        let _ = others;
+        self.get_mod_ref_info(inst, loc, aaqi)
+    }
 
     /// `getModRefInfo(Instruction, CallBase)`: what `inst` does to what `call`
     /// touches.

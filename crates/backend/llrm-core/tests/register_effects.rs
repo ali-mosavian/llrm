@@ -256,7 +256,7 @@ fn the_table_gives_the_effects_the_decoder_does() {
                     for (dests, sources) in variants {
                         let what = Semantics {
                             op: llrm_lir::Operation::named(&form.operation).unwrap(),
-                            name: Some(form.name.clone()),
+                            name: Some(form.name.as_str().into()),
                             dests,
                             sources,
                             target: None,
@@ -333,7 +333,7 @@ fn the_table_follows_the_encoder_into_what_it_lowers_to() {
     });
     let step = |op, name: &str, dests, sources| Semantics {
         op,
-        name: Some(name.to_owned()),
+        name: Some(name.into()),
         dests,
         sources,
         target: None,

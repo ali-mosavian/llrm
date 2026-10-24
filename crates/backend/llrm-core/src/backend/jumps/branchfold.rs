@@ -12,7 +12,11 @@
 //!    block that enters it (an empty block, or one that only jumps);
 //! 2. a conditional whose two ways are one block is a jump;
 //! 3. a jump to the block laid out next is dropped, and `jcc L; jmp M` with `L`
-//!    next becomes `j!cc M`.
+//!    next becomes `j!cc M`;
+//! 4. `jcc Out; jmp Loop` in the block `Loop` becomes `j!cc Loop; jmp Out`
+//!    (L1685);
+//! 5. a block of one conditional branch identical to the branch that ends the
+//!    block before it takes that branch away (L1586).
 //!
 //! A block that nothing enters is dead; its source bytes are kept by `_prune`.
 //!
@@ -88,7 +92,7 @@ fn aimed(
     name: Option<&str>,
 ) -> Arc<Insn> {
     let what = one.what.as_ref().expect("a branch has semantics");
-    let name = name.map(str::to_owned).or_else(|| what.name.clone());
+    let name = name.map(std::sync::Arc::<str>::from).or_else(|| what.name.clone());
     Arc::new(Insn { what: Some(Semantics { name, target: Some(target), ..what.clone() }), ..(**one).clone() })
 }
 
@@ -117,6 +121,9 @@ struct Folder<'a> {
     entry: i64,
     /// Loop headers with a measured trip count stay where they are.
     protected: &'a BTreeSet<i64>,
+    /// The register file and width the effects of an instruction are worked
+    /// out in; none in a body that has no allocation (a test's).
+    regs: Option<(llrm_lir::registers::Regs, u32)>,
 }
 
 /// `body` with its branches folded; `protected` blocks are never bypassed.
@@ -154,6 +161,7 @@ impl<'a> Folder<'a> {
             odds: body.odds.clone(),
             entry: body.entry,
             protected,
+            regs: body.registers.map(|regs| (regs, body.bits)),
         }
     }
 
@@ -243,6 +251,9 @@ impl<'a> Folder<'a> {
         {
             return self.bypass(index, onward);
         }
+        if self.merged(index) {
+            return true;
+        }
         let exit = Exit::of(&block);
         // A conditional whose two ways are one block.
         if let (Some(cond), Some(jump)) = (&exit.cond, &exit.jump)
@@ -268,11 +279,7 @@ impl<'a> Folder<'a> {
             && block.succ.len() == 1
         {
             let jump = Arc::new(Insn {
-                what: Some(Semantics {
-                    name: Some("jmp".to_owned()),
-                    target: Some(to),
-                    ..Semantics::new(Operation::Jump)
-                }),
+                what: Some(Semantics { name: Some("jmp".into()), target: Some(to), ..Semantics::new(Operation::Jump) }),
                 uses: Vec::new(),
                 ..(**cond).clone()
             });
@@ -317,7 +324,210 @@ impl<'a> Folder<'a> {
             self.set(index, block.with_insns(insns).into_inner());
             return true;
         }
-        false
+        // `jcc Out; jmp Loop` in a block that is `Loop`: `j!cc Loop; jmp Out`,
+        // so the one-block loop is a conditional branch back (L1685).
+        if let (Some(cond), Some(jump), Some(taken), Some(other)) = (&exit.cond, &exit.jump, exit.taken, exit.other)
+            && other == block.at
+            && taken != block.at
+            && let Some(opposite) =
+                cond.what.as_ref().and_then(|what| what.name.as_deref()).and_then(|name| _OPPOSITE.get(name))
+        {
+            let (back, out) = (aimed(cond, other, Some(opposite)), aimed(jump, taken, None));
+            let insns = block
+                .insns
+                .iter()
+                .map(|one| {
+                    if Arc::ptr_eq(one, cond) {
+                        Arc::clone(&back)
+                    } else if Arc::ptr_eq(one, jump) {
+                        Arc::clone(&out)
+                    } else {
+                        Arc::clone(one)
+                    }
+                })
+                .collect();
+            self.set(index, block.with_insns(insns).into_inner());
+            return true;
+        }
+        // A block of one conditional branch identical to the one that ends the
+        // block it follows: the earlier branch goes (L1586).
+        if let (Some(cond), None, Some(taken)) = (&exit.cond, &exit.jump, exit.taken)
+            && block.insns.iter().filter(|one| !one.is_meta()).count() == 1
+            && let Some(before) = self.prev[index]
+        {
+            let previous = self.blocks[before].clone();
+            let ahead = Exit::of(&previous);
+            let name = |one: &Arc<Insn>| one.what.as_ref().and_then(|what| what.name.clone());
+            if let (Some(earlier), None, Some(there)) = (&ahead.cond, &ahead.jump, ahead.taken)
+                && there == taken
+                && name(earlier) == name(cond)
+                && self.after(before) == Some(block.at)
+                && previous.succ.contains(&block.at)
+            {
+                let insns = previous
+                    .insns
+                    .iter()
+                    .map(|one| if Arc::ptr_eq(one, earlier) { lir::anchor(Arc::clone(one)) } else { Arc::clone(one) })
+                    .collect();
+                self.odds.rerouted(previous.at, &previous.succ, taken, &[(block.at, 1.0)]);
+                if let Some(entering) = self.preds.get_mut(&taken) {
+                    entering.remove(&previous.at);
+                }
+                self.set(
+                    before,
+                    LirBlock { succ: std::iter::once(block.at).collect(), ..previous.with_insns(insns).into_inner() },
+                );
+                return true;
+            }
+        }
+        self.hoist_common(index, &exit)
+    }
+
+    /// The block before runs into this one and nothing else enters it: the
+    /// two are one block, the contents of this one moved to the end of the
+    /// other (L1515).
+    fn merged(
+        &mut self,
+        index: usize,
+    ) -> bool {
+        let block = self.blocks[index].clone();
+        let Some(before) = self.prev[index] else { return false };
+        let previous = self.blocks[before].clone();
+        let exit = Exit::of(&previous);
+        if block.at == self.entry
+            || self.protected.contains(&block.at)
+            || !block.phis.is_empty()
+            || exit.cond.is_some()
+            || exit.jump.is_some()
+            || previous.succ.len() != 1
+            || !previous.succ.contains(&block.at)
+            || !runs_off(&previous)
+            || self.after(before) != Some(block.at)
+            || self.preds.get(&block.at).is_none_or(|entering| entering.len() != 1 || !entering.contains(&previous.at))
+        {
+            return false;
+        }
+        for (to, chance) in self.odds.chances(block.at, &block.succ) {
+            self.odds
+                .taken
+                .insert((previous.at, to), (chance * BlockOdds::CERTAIN).round().min(f64::from(u32::MAX)) as u32);
+        }
+        for to in block.succ.iter() {
+            if let Some(entering) = self.preds.get_mut(to) {
+                entering.remove(&block.at);
+                entering.insert(previous.at);
+            }
+        }
+        let insns = previous.insns.iter().chain(block.insns.iter()).cloned().collect();
+        self.set(before, LirBlock { succ: block.succ.clone(), ..previous.with_insns(insns).into_inner() });
+        // `pass` removes it: nothing enters it and it enters no one.
+        self.set(index, LirBlock { succ: Default::default(), ..block.with_insns(Vec::new()).into_inner() });
+        if let Some(entering) = self.preds.get_mut(&block.at) {
+            entering.clear();
+        }
+        true
+    }
+
+    /// `HoistCommonCodeInSuccs` (L2043): the first instruction both ways of a
+    /// conditional branch begin with, where this block is the only way into
+    /// either, runs ahead of the branch (and of the compare that sets it up)
+    /// instead. Only a move of a register or a constant to a register the
+    /// compare and the branch do not touch, the kind allocation inserts.
+    fn hoist_common(
+        &mut self,
+        index: usize,
+        exit: &Exit,
+    ) -> bool {
+        let Some((regs, bits)) = self.regs else { return false };
+        let block = self.blocks[index].clone();
+        let (Some(cond), Some(taken)) = (&exit.cond, exit.taken) else { return false };
+        let Some(other) = exit.other.or_else(|| self.after(index)) else { return false };
+        if taken == other || taken == block.at || other == block.at {
+            return false;
+        }
+        let alone =
+            |at: i64| self.preds.get(&at).is_some_and(|entering| entering.len() == 1 && entering.contains(&block.at));
+        if !alone(taken) || !alone(other) {
+            return false;
+        }
+        let (Some(&one), Some(&two)) = (self.pos.get(&taken), self.pos.get(&other)) else { return false };
+        let (first, second) = (self.blocks[one].clone(), self.blocks[two].clone());
+        if !first.phis.is_empty() || !second.phis.is_empty() {
+            return false;
+        }
+        let lead = |block: &LirBlock| block.insns.iter().position(|insn| !insn.is_meta());
+        let (Some(at), Some(by)) = (lead(&first), lead(&second)) else { return false };
+        let (head, tail) = (&first.insns[at], &second.insns[by]);
+        if head.what != tail.what || !head.inserted() || !tail.inserted() {
+            return false;
+        }
+        let plain = |insn: &Insn| {
+            insn.what.as_ref().is_some_and(|what| {
+                what.op == Operation::Move
+                    && what.dests.iter().all(|loc| matches!(loc, crate::model::ir::Loc::Reg(_)))
+                    && what
+                        .sources
+                        .iter()
+                        .all(|loc| matches!(
+                            loc,
+                            crate::model::ir::Loc::Reg(_) | crate::model::ir::Loc::Imm(_)
+                        ))
+            }) && insn.defines.is_empty()
+                && insn.uses.is_empty()
+                && insn.call.is_none()
+                && insn.group.is_none()
+                && insn.symbol.is_none()
+                && insn.spread.is_empty()
+                && insn.clobbers.is_empty()
+                && !insn.volatile
+                && !insn.frame_adjust
+                && !insn.spill_reload
+                && !insn.spill_store
+        };
+        if !plain(head) {
+            return false;
+        }
+        let Some((reads, writes)) = crate::backend::peephole::_register_effects(regs, bits, head, true, true) else {
+            return false;
+        };
+        // From the compare that sets up the branch, or the branch, to the end.
+        let last = block.insns.iter().position(|insn| Arc::ptr_eq(insn, cond)).expect("the branch is in its block");
+        let mut from = last;
+        if let Some(before) = block.insns[..last].iter().rposition(|insn| !insn.is_meta()) {
+            if block.insns[before].what.as_ref().is_some_and(|what| what.op == Operation::Compare) {
+                from = before;
+            }
+        }
+        let (mut used, mut defined) = (crate::backend::lanes::Lanes::new(), crate::backend::lanes::Lanes::new());
+        // The branches read the flags and no register; a move writes neither.
+        let branches =
+            |insn: &Insn| insn.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Branch | Operation::Jump));
+        for insn in block.insns[from..].iter().filter(|insn| !insn.is_meta() && !branches(insn)) {
+            let Some((read, write)) = crate::backend::peephole::_register_effects(regs, bits, insn, true, true) else {
+                return false;
+            };
+            used = used.or(&read);
+            defined = defined.or(&write);
+        }
+        if !writes.is_disjoint(&used) || !writes.is_disjoint(&defined) || !reads.is_disjoint(&defined) {
+            return false;
+        }
+        let hoisted = Arc::clone(head);
+        let mut insns: Vec<Arc<Insn>> = block.insns.iter().cloned().collect();
+        insns.insert(from, hoisted);
+        self.set(index, block.with_insns(insns).into_inner());
+        for (place, lead) in [(one, at), (two, by)] {
+            let gone = self.blocks[place].clone();
+            let insns: Vec<Arc<Insn>> = gone
+                .insns
+                .iter()
+                .enumerate()
+                .filter(|(position, _)| *position != lead)
+                .map(|(_, insn)| Arc::clone(insn))
+                .collect();
+            self.set(place, gone.with_insns(insns).into_inner());
+        }
+        true
     }
 
     /// `block` stays; every block that enters `index` goes to `onward` instead.
@@ -353,7 +563,7 @@ impl<'a> Folder<'a> {
         let jump = Insn::new(
             at,
             Some((at, at)),
-            Some(Semantics { name: Some("jmp".to_owned()), target: Some(to), ..Semantics::new(Operation::Jump) }),
+            Some(Semantics { name: Some("jmp".into()), target: Some(to), ..Semantics::new(Operation::Jump) }),
             Vec::new(),
             Vec::new(),
         );

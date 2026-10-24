@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/interprocedural.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/interprocedural.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/interprocedural.rs sha256:757b19693529383112864d5feb676a3b9d4adba4c7e3a22daccd0b63b124c377 -->
+<!-- src: crates/opt/llrm-transforms/src/interprocedural.rs sha256:d6fa9e2b42092f1bc18bb883915b9ba046087de758cdf51fb61a63ac1c8e3739 -->
 
 # interprocedural
 
@@ -34,9 +34,10 @@ The stages, in order:
 2. The private bodies nothing reaches any more, the ones the walk
    ([`crate::walk::Walk`](walk.md)) inlined into every caller, lose their bodies
    (`bare_the_unreached`). Inlining is the walk's alone.
-3. `promote.` ([`crate::argpromotion`](argpromotion.md)), `narrow.` ([`crate::narrowspace`](narrowspace.md)):
-   a pointer a body only reads is passed as the fields it reads; a far
-   pointer every call fills from DGROUP is passed as its offset.
+3. `promote.` ([`crate::argpromotion`](argpromotion.md)), `narrow.` ([`crate::narrowspace`](narrowspace.md)),
+   `globalsra.` ([`crate::globalsra`](globalsra.md)): a pointer a body only reads is
+   passed as the fields it reads; a far pointer every call fills from DGROUP
+   is passed as its offset.
 4. `ipa<N>.`: a body whose every `ret` returns one integer has its calls'
    results replaced by it (`llrm_analysis::interprocedural`); the call
    stays.
@@ -140,7 +141,7 @@ follows the level: `inline` and `ipa-cp` thresholds, `ipa-range`
 
 ## Needs
 [`crate::inline`](inline.md), [`crate::ipacp`](ipacp.md), [`crate::profit`](profit.md), and
-`llrm_analysis`' `Summaries`, `GlobalsAA`, `Callbacks`,
+`llrm_analysis`' `Summaries`, `GlobalsAA`,
 `interprocedural` and `parameter_ranges`.
 
 ## See also

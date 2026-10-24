@@ -764,3 +764,15 @@ pub fn following<R>(
     }
     CURRENT.with(|state| read(&state.borrow().as_ref().expect("made").found))
 }
+
+/// `LirBody::next_value`, from the postings the allocator follows the body
+/// with: the largest value they hold and the phis' results, not a walk of
+/// every instruction.
+pub(crate) fn next_value_following(body: &LirBody) -> u32 {
+    let phis = body.blocks.iter().flat_map(|block| block.phis.iter().map(|phi| phi.result)).max().unwrap_or(0);
+    let found = following(body, |postings| postings.largest()).max(phis) + 1;
+    if llrm_support::env_flag!("LLRM_CHECK_POSTINGS") {
+        assert_eq!(found, body.next_value(), "{}: the next value from the postings differs from the walk", body.name);
+    }
+    found
+}

@@ -112,7 +112,7 @@ fn _source_lanes(
 }
 
 /// `(what.op, what.name, tuple(map(_shape, what.sources)), destination.width)`.
-pub type Expression = (Operation, Option<String>, Vec<Shape>, u32);
+pub type Expression = (Operation, Option<std::sync::Arc<str>>, Vec<Shape>, u32);
 
 /// The pure register result this occurrence can independently reproduce.
 ///
@@ -373,7 +373,7 @@ mod tests {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Option<Semantics> {
-        Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) })
+        Some(Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) })
     }
 
     fn bx() -> Loc {
@@ -532,7 +532,7 @@ mod tests {
         let call = Arc::new(Insn::new(
             3,
             Some((3, 5)),
-            Some(Semantics { name: Some("call".to_owned()), target: Some(10), ..Semantics::new(Operation::Call) }),
+            Some(Semantics { name: Some("call".into()), target: Some(10), ..Semantics::new(Operation::Call) }),
             vec![2],
             vec![],
         ));

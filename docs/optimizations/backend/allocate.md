@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/allocate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/allocate.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:041ba2d0da74b0f52aae6917f2960efb5b26fc4174aa996d7d6cfa949b63cfff -->
+<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:f4c329525ba62cda2979d3eb148739849700620984d54ee0f9c24b9dc72f3871 -->
 
 # allocate
 
@@ -220,8 +220,8 @@ that other phases read.
 ## Needs
 [`crate::backend::liveunion`](liveunion.md), [`crate::backend::live`](live.md),
 [`crate::backend::regclass`](regclass.md), [`crate::backend::constrain`](constrain.md),
-[`crate::backend::splitkit`](splitkit.md), [`crate::backend::spillplacement`](spillplacement.md),
-[`crate::backend::spiller`](spiller.md), [`crate::backend::datagroup`](datagroup.md) and
+`crate::backend::splitkit`, [`crate::backend::spillplacement`](spillplacement.md),
+`crate::backend::spiller`, [`crate::backend::datagroup`](datagroup.md) and
 [`crate::backend::frame`](frame.md).
 
 ## See also

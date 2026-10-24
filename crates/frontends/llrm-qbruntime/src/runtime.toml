@@ -1102,12 +1102,14 @@ evidence = "rt/strfcn.asm B$FASC: a null string is JZ ERRFC -> B$ERR_FC (error 5
 parameters = ["string"]
 result = "byte(data($0))"
 releases = [0]
+inline = "always"
 check = { when = "len($0) == 0", raise = 5 }
 
 [semantics."B$FMID"]
 evidence = "rt/mid.asm: MID$(s, i, n) is the n bytes of s from the i-th, fewer where s ends and none past it; a start below 1 or a negative count is error 5."
 parameters = ["string", "int", "int"]
 releases = [0]
+inline = "always"
 view = { length = "min($2, max(0, len($0) - $1 + 1))", data = "data($0) + ($1 - 1)" }
 check = { when = "$1 < 1 or $2 < 0", raise = 5 }
 

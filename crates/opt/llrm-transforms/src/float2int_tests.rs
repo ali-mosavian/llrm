@@ -158,14 +158,12 @@ fn the_time_grows_with_the_chain_not_with_its_square() {
         (0..3)
             .map(|_| {
                 let mut module = parsed(&format!("{DOS}{text}"));
-                let start = std::time::Instant::now();
-                managed(&mut module, Float2Int);
-                start.elapsed().as_secs_f64()
+                llrm_support::debug::work_of(|| managed(&mut module, Float2Int)).1 as f64
             })
             .fold(f64::MAX, f64::min)
     };
     let (small, large) = (least(500), least(2000));
-    assert!(large < small * 6.0, "500 adds {small:.4} s, 2000 adds {large:.4} s: a ratio of {:.1}", large / small);
+    assert!(large < small * 6.0, "500 adds {small:.0} work, 2000 adds {large:.0}: a ratio of {:.1}", large / small);
 }
 
 /// A chain of 2000 long converts (the pin's recursion would be deep): the

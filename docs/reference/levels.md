@@ -69,7 +69,8 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | `mir rotate` (header copy, `tree-ch`; not at -Os) | x | on | on | on | on | on |
 | `mir jumpthread` (a branch; the switch of a loop's state from -O2: `pass_thread_jumps`, `flag_thread_jumps && flag_expensive_optimizations`, [`tree-ssa-threadbackward.cc:1072`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/tree-ssa-threadbackward.cc#L1072)) | x | on, no state machines | on | on | on | on, no state machines |
 | `mir gepoffset` | x | on | on | on | on | on |
-| `mir addresssink` | x | on | on | on | on | on |
+| `mir cgpaddr` | x | on | on | on | on | on |
+| `mir extload` (the pin's DAGCombiner `ExtendUsesToFormExtLoad`, as a pass before isel) | x | on | on | on | on | on |
 | `mir switchconv` (`-ftree-switch-conversion`: the lookup table) | x | x | on | on | on | x |
 | `mir switchlower` (bit tests, jump tables, the tree) | x | on | on | on | on | on |
 | `mir spares` | x | on | on | on | on | on |
@@ -85,7 +86,6 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | Second selection and machine run without callee facts, cheaper kept | x | x | x | x | on | x |
 | `lir frame` | on | on | on | on | on | on |
 | `lir far-indirect-calls` | on | on | on | on | on | on |
-| `lir ssaspill`: the spiller's route, kept if cheaper (`-fallocation-routes`) | x | x | x | x | on | x |
 | `candidate spiller` | x | x | spill traffic >= 0.5% | spill traffic >= 0.5% | on | x |
 | `candidate cost` | x | x | spill traffic >= 0.5% | spill traffic >= 0.5% | on | x |
 | `candidate allocator alone` | on | on | on | on | on | on |
@@ -131,7 +131,6 @@ Sources read:
 | `inline.last` / `inline-functions-called-once` | `-finline-functions-called-once` | -O1, not -Og ([606](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L606)) | every level above -O0, -Og too |
 | `inline` / `inline-functions` | `-finline-small-functions`, `-finline-functions` | -O2 ([627](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L627), [652](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L652)) | every level above -O0 | every level above -O0: the pin's inliner at -O1 as at -O2 (`getInlineParamsFromOptLevel`, 225; PassBuilderPipelines.cpp L968), so -O1 inlines small functions (d_faces: 11 -> 6 defines in the pin, 11 -> 11 before this change) |
 | `search` / `allocation-search` | none: gcc allocates once | no counterpart: LLVM's greedy allocator runs once | -Omax only. Every other level allocates once (d_faces compile -34% at -O2, -32% at -O3, -30% at -Os; vsgcc clocks +0.18% geomean, no row newly below the better of gcc and clang in clocks) |
-| `routes` / `allocation-routes` | none | no counterpart | -Omax only. Every other level makes the allocator's route alone (d_faces compile -24% at -O2, -23% at -O3, -20% at -Os with the search on; the figures above are with both off). Rows that lost: see the PR that made it the default |
 | `forward`, `drop_loads` / `gcse` | `-fgcse`, `-ftree-fre` | -O2 for `-fgcse` ([624](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L624)); `-ftree-fre` -O1 ([592](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L592)) | every level above -O0: value numbering that removes what is redundant on every path (a load a dominating load or store holds) and inserts nothing |
 | `pre` / `tree-pre` | `-ftree-pre` | -O2 ([646](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L646)) | -O2 and up: `gvn` also makes a partial redundancy full by inserting the computation or load on the path that lacks it. At -O1 the sift of x_heapsort reloaded the two cells its compare had loaded: 47542 clocks, 46162 with FRE (gcc -O1: 40567). User decision 2026-10-11 : -O1 compile +2.5% geomean (`tools/measure.py`) for -11.8% clocks; gcc -O1 has -ftree-fre |
 | (`algebraic`, `_narrowed_binary`) | InstCombine's `visitTrunc` | every level above -O0 | `trunc (add (ext x), c)` is `add x, c` whatever else reads the wide sum, where the narrow op needs no cut of its own (it was for a single-use sum). User decision 2026-10-12 (relayed by the coordinator): ring's compile +3.4% on the combined tip (1.033-1.035 at each level, over the 1.02 per-file limit) for ring -8% clocks and -8 bytes: its counter is read as a counter again, so `counted`, `lsr` and `indvars` work on it |
@@ -150,7 +149,6 @@ Sources read:
 | `inline.cp_clone` / `ipa-cp-clone` | `-fipa-cp-clone` | -O3 ([676](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L676)) | -O3: `ipacp` copies a function for the constants a hot call passes |
 | (`program_parameters`) | `-fipa-cp` | -O2 ([629](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L629)) | every level above -O0: a constant every call passes is the parameter's value |
 | `ipa_ranges` / `ipa-vrp` | `-fipa-vrp` | -O2 ([633](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L633)) | -O2 and up; off at -O1 (compile -1.0% on bench + QCport, code +0.00% geomean) |
-| `loop_intervals` (`bounded`, the range analysis) | `-ftree-vrp` | -O2 ([649](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L649)); `vrp1`/`vrp2`/`evrp` are in `-fdump-passes` at -O2 only. At -O1 gcc reaches an induction variable's range through SCEV and the loop's iteration bound (`ivopts` drops `(x+7)&63` of `tile`'s inner loop that way) | -O2 and up for alias (`Annotated`) and branch decisions (`decide`); off at -O1 (QCport compile -0.9%, the 67 programs -2.0%, x_life -7.6%; clocks and code the same on 66 of 67, `lru` +1 clock). `indvars`, `loopexit`, `hoist` and `algebraic` still ask `Bounded` there: that is gcc's SCEV route |
 | (`deadargs`, `interprocedural`) | `-fipa-sra` | -O2 ([632](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L632)) | every level above -O0, -O1 too. Kept: off at -O1, hanoi is +27% code, console.c +1.2% |
 | (`lir peephole`) | `-fpeephole2` | -O2 ([638](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L638)) | every level above -O0: the same rounds at -O1 (507 M of d_faces' 34 G) |
 | (`lir scheduler`) | `-fschedule-insns2` | -O2 ([642](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L642)) | every level above -O0: `Scheduler` is a phase of every machine ([`flow.rs:126`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/flow.rs#L126)) |

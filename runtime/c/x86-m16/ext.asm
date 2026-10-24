@@ -109,6 +109,44 @@ done:
     ret
 _input_read endp
 
+; void *memmove(void *dst, const void *src, unsigned n), near pointers that may overlap, in regparm3 (the default convention):
+; dst in AX, src in DX, n in CX; dst comes back in AX. A copy with dst above src inside it runs backwards under the
+; direction flag, cleared again before the return. SI and DI are kept.
+public _memmove@3
+_memmove@3 proc far
+    push si
+    push di
+    push ax
+    mov ax, ds
+    mov es, ax
+    pop ax
+    mov di, ax
+    mov si, dx
+    cmp di, si
+    jbe forward
+    mov dx, si
+    add dx, cx
+    cmp di, dx
+    jae forward
+    mov si, dx
+    dec si
+    add di, cx
+    dec di
+    std
+    rep movsb
+    cld
+    jmp finished
+forward:
+    shr cx, 1
+    rep movsw
+    adc cx, cx
+    rep movsb
+finished:
+    pop di
+    pop si
+    ret
+_memmove@3 endp
+
 ; int keep(int x)
 public _keep
 _keep proc far

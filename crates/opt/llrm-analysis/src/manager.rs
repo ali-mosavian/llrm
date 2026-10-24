@@ -13,13 +13,13 @@
 //! - `SKIPS` with `depends`: the entry is kept past an invalidation if the
 //!   change log cannot have altered it. `Depends` names the instructions the
 //!   result models, those it keys entries by, and the users a change flows
-//!   through. `ExposedFrames`, `PointerValues`, `Pointers`, `CallEffects` and
-//!   `Writes` model pointers, aggregates and calls only, so a change to integer
-//!   arithmetic leaves them standing.
+//!   through. `ExposedFrames`, `PointerValues`, `Pointers` and `Writes` model
+//!   pointers, aggregates and calls only, so a change to integer arithmetic
+//!   leaves them standing.
 //! - `INCREMENTAL` with `update`: the entry is brought up to date from the
-//!   change log. `DominatedEdges`, `Bounded` and `Counted` redo only the blocks
-//!   or loops `Touched::reach` the changes (a change to a terminator or to the
-//!   CFG redoes all); `Accesses` in [`crate::memoryssa`] survives pure moves.
+//!   change log. `DominatedEdges` and `Counted` redo only the blocks or loops
+//!   `Touched::reach` the changes (a change to a terminator or to the CFG
+//!   redoes all); `Accesses` in [`crate::memoryssa`] survives pure moves.
 //! - `LLRM_CHECK_REPLAY` asserts that every kept or updated result equals a
 //!   fresh `run`.
 //!
@@ -58,16 +58,14 @@
 //! ```text
 //!  PointerValues    -
 //!  Pointers         PointerValues
-//!  CallEffects      PointerValues
-//!  Writes           CallEffects
+//!  Writes           PointerValues
 //!  TableLoads       -
 //!  Registers        TableLoads (updates)
 //!  Followers        Registers
 //!  Counted          Registers
 //!  DominatedEdges   Registers
-//!  Bounded          Registers, Counted, DominatedEdges
-//!  Annotated        PointerValues, Registers, Counted, DominatedEdges, Bounded
-//!  Accesses         Annotated, CallEffects                  (memoryssa)
+//!  Annotated        PointerValues, Registers, Counted, DominatedEdges
+//!  Accesses         Annotated, CallFootprints, PointerValues (memoryssa)
 //!  PlainAccesses    Writes, Annotated                       (the graph's structure, once)
 //!  ThroughMemory    PlainAccesses, Writes, Annotated, Registers
 //!  FloatFacts       ThroughMemory, PlainAccesses, Writes, Annotated, Registers
@@ -79,16 +77,13 @@
 //! memory effects, by name) can be held past passes that add no memory
 //! operation when `covers` says the stale result states no more than a fresh
 //! one. `Summaries` keeps per-body facts and recomputes only bodies whose
-//! history moved. `Callbacks`, the effects of all the callbacks into the module
-//! added up, is rebuilt only when `GlobalsAA` or `Summaries` is a different
-//! result. `ProgramSummaries` is a program entry: one fixed point over all
-//! modules, each module's `Summaries` given the others'.
+//! history moved. `ProgramSummaries` is a program entry: one fixed point over
+//! all modules, each module's `Summaries` given the others'.
 //!
 //! `Unit::within` builds the `Unit` that analyses read from `Outer` (the
 //! module, target and program), carrying whichever cached results the caller
 //! holds. `Held` and `Ranges` bundle the cached results a pass passes on to a
 //! `Unit`, so the facts are the manager's and not a solve of the pass's own.
-//! `Bounded` is empty where `Outer::loop_intervals` is off (-O1).
 //!
 //! # Example
 //! A pass replaces the uses of `%x` by `%a`, an integer edit:
@@ -105,10 +100,10 @@
 //! }
 //! ```
 //!
-//! | change                       | `Pointers`, `CallEffects`, `Writes`, `ExposedFrames` |
+//! | change                       | `Pointers`, `Writes`, `ExposedFrames`                |
 //! |------------------------------|------------------------------------------------------|
 //! | `%x` replaced by `%a`        | kept (`unaffected` is true)                          |
-//! | `%q`, the address, rewritten | `CallEffects::unaffected` is false: recomputed        |
+//! | `%q`, the address, rewritten | `Writes::unaffected` is false: recomputed             |
 //!
 //! From unit test
 //! `an_integer_edit_leaves_the_pointer_analyses_as_they_were_and_a_pointer_edit_does_not`
@@ -136,11 +131,11 @@
 //!
 //! # Provides
 //! The entries: `ExposedFrames`, `PointerValues`, `Pointers`, `Annotated`,
-//! `CallEffects`, `Writes`, `Registers`, `DemandedBits`, `AssumptionCache`,
-//! `Followers`, `Counted`, `ThroughMemory`, `FloatFacts`, `DominatedEdges`,
-//! `Bounded`; module entries `GlobalsAA`, `Summaries`, `Callbacks`; program
+//! `Writes`, `Registers`, `DemandedBits`, `AssumptionCache`,
+//! `Followers`, `Counted`, `ThroughMemory`, `FloatFacts`, `DominatedEdges`;
+//! module entries `GlobalsAA`, `Summaries`; program
 //! entry `ProgramSummaries`; `Held`, `Ranges`, `Touched::reach`,
-//! `call_effects`, `writes`. [`crate::cfg`]'s `Shape`, [`crate::memoryssa`]'s
+//! `writes`. [`crate::cfg`]'s `Shape`, [`crate::memoryssa`]'s
 //! `Accesses` is an entry defined beside its analysis.
 //!
 //! # Needs
@@ -164,7 +159,7 @@ use llrm_mir::passes::{Analyses, Analysis, ModuleAnalyses, ModuleAnalysis, Outer
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramAnalysis, ProgramProxy};
 use llrm_support::hash::IndexMap;
 
-use crate::alias::{self, Effect, PointsTo, Procedure, Summary};
+use crate::alias::{self, PointsTo, Procedure, Summary};
 use crate::cfg::Shape;
 use crate::consts::{self, Calls, Known};
 use crate::floatfacts;
@@ -172,7 +167,6 @@ use crate::globalsaa::{self, Globals, ProgramGlobals};
 use crate::induction;
 use crate::memory::{Identity, MemRef, MemoryKind, MemoryObject, ObjectInterner, Slice, Unit};
 use crate::memoryssa;
-use crate::ranges;
 
 impl<'a> Unit<'a> {
     /// `function` as the manager's analyses see it: its module and target
@@ -184,6 +178,7 @@ impl<'a> Unit<'a> {
         outer: &'a Outer,
     ) -> Self {
         let globals_aa = outer.cached_ref::<GlobalsAA>().and_then(|one| one.as_ref().ok());
+        let globals_mr = outer.cached_ref::<GlobalsModRefAnalysis>();
         Self {
             program: Some(outer.program()),
             spaces: outer.target().spaces(),
@@ -194,6 +189,8 @@ impl<'a> Unit<'a> {
             globals: &outer.globals,
             function,
             globals_aa,
+            globals_mr,
+            outer: Some(outer),
             references: None,
             shape: None,
             registers: None,
@@ -203,56 +200,12 @@ impl<'a> Unit<'a> {
             counted: None,
             followers: None,
             edges: None,
-            bounds: None,
             exposed: None,
             plain: None,
             point_values: None,
-            callbacks: None,
-            callbacks_from: Some(outer),
-            loop_intervals: outer.loop_intervals(),
             congruent: None,
             proved: None,
         }
-    }
-}
-
-/// What calling back into the module may do: the effects of GlobalsAA's
-/// entries added up. Every body that calls something unknown reads it, and it
-/// depends on the entries and the summaries alone, so it is made once for them
-/// and kept while both are the same results.
-pub struct Callbacks;
-
-/// The `GlobalsAA` and `Summaries` results `Callbacks` was last made from.
-#[derive(Default)]
-struct CallbacksSeen(Option<(Rc<Result<Globals, String>>, Rc<Result<IndexMap<String, Summary>, String>>)>);
-
-impl ModuleAnalysis for Callbacks {
-    type Result = Result<Option<Summary>, String>;
-    const NAME: &'static str = "callbacks";
-    fn run(
-        module: &Module,
-        analyses: &mut ModuleAnalyses,
-    ) -> Self::Result {
-        let globals = analyses.get::<GlobalsAA>(module);
-        let known = analyses.get::<Summaries>(module);
-        analyses.memo::<CallbacksSeen>().0 = Some((Rc::clone(&globals), Rc::clone(&known)));
-        Ok(alias::callbacks_over(
-            Result::as_ref(&*globals).map_err(String::clone)?,
-            Result::as_ref(&*known).map_err(String::clone)?,
-        ))
-    }
-    fn unchanged(
-        module: &Module,
-        analyses: &mut ModuleAnalyses,
-        _: &Self::Result,
-    ) -> bool {
-        let globals = analyses.get::<GlobalsAA>(module);
-        let known = analyses.get::<Summaries>(module);
-        analyses
-            .memo::<CallbacksSeen>()
-            .0
-            .as_ref()
-            .is_some_and(|(then, before)| Rc::ptr_eq(then, &globals) && Rc::ptr_eq(before, &known))
     }
 }
 
@@ -277,6 +230,27 @@ impl ModuleAnalysis for GlobalsAA {
         analyses: &mut ModuleAnalyses,
     ) -> Self::Result {
         globalsaa::analysis(module, analyses)
+    }
+}
+
+/// `GlobalsAAResult` (GlobalsModRef.cpp): what each function does to memory
+/// and to each global nothing outside the module reaches but by name.
+pub struct GlobalsModRefAnalysis;
+
+impl ModuleAnalysis for GlobalsModRefAnalysis {
+    type Result = crate::globalsmodref::GlobalsModRef;
+    const NAME: &'static str = "globals-modref";
+    fn covers(
+        stale: &Self::Result,
+        fresh: &Self::Result,
+    ) -> bool {
+        stale.covers(fresh)
+    }
+    fn run(
+        module: &Module,
+        analyses: &mut ModuleAnalyses,
+    ) -> Self::Result {
+        crate::globalsmodref::compute_with(module, globalsaa::unexported(module, analyses))
     }
 }
 
@@ -613,7 +587,7 @@ fn carried(
     out
 }
 
-/// What the pointer analyses (`ExposedFrames`, `Pointers`, `CallEffects`,
+/// What the pointer analyses (`ExposedFrames`, `Pointers`,
 /// `Writes`) model: an instruction that can make, move or name a pointer or an
 /// aggregate, or is a call. An integer loaded, computed, stored and compared is
 /// nothing to them; one that reaches an address or a call is. Where a result is
@@ -783,7 +757,7 @@ pub struct Pointers;
 
 /// What the pointer solve finds of a body before it asks what escapes:
 /// `alias::point_values`. The call arguments and captures never enter it, so
-/// `Pointers` and `CallEffects` ask this one and each runs only its own escape
+/// `Pointers` and `Writes` ask this one and each runs only its own escape
 /// phase.
 pub struct PointerValues;
 
@@ -881,7 +855,6 @@ impl Analysis for Annotated {
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         let counted = analyses.get::<Counted>(context, layout, function);
         let edges = analyses.get::<DominatedEdges>(context, layout, function);
-        let bounds = loop_bounds(context, layout, function, analyses);
         let mut unit = Unit::within(context, layout, function, analyses.outer())
             .with_shape(&shape)
             .with_assumptions(&assumptions)
@@ -892,155 +865,8 @@ impl Analysis for Annotated {
         if let Ok(edges) = &*edges {
             unit = unit.with_edges(edges);
         }
-        if let Ok(bounds) = &*bounds {
-            unit = unit.with_bounds(bounds);
-        }
         alias::annotated_with(&unit, pointers, &registers)
     }
-}
-
-/// What each call reads and writes, its callee as `Summaries` says:
-/// `alias::calls_annotated`. Where `Summaries` was not required, each
-/// call is to an unknown callee. Either way a call does no more than its
-/// attributes state, as alias reads them.
-pub struct CallEffects;
-
-impl Analysis for CallEffects {
-    type Result = Result<IndexMap<InstId, Effect>, String>;
-    const NAME: &'static str = "call-effects";
-    const SKIPS: bool = true;
-    const SOUND: bool = true;
-    /// Its references name the pointers of the call's arguments: past a
-    /// substitution they would name a value the edit erased.
-    const NAMES_VALUES: bool = true;
-    /// What it says of a call is what the call and its arguments' meanings
-    /// give, which edits that keep every value's meaning leave (no call is
-    /// made or moved). The calls still there are the calls it has an entry
-    /// for; an erased one is not asked.
-    fn covers(
-        old: &Self::Result,
-        fresh: &Self::Result,
-        _context: &Context,
-        function: &Function,
-    ) -> bool {
-        match (old, fresh) {
-            (Ok(old), Ok(fresh)) => old.iter().all(|(inst, effect)| {
-                function.is_erased(*inst) || fresh.get(inst).is_some_and(|found| effect.covers(found))
-            }),
-            (old, fresh) => old == fresh,
-        }
-    }
-    fn depends() -> Option<Depends> {
-        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at), edges: true })
-    }
-    /// Each effect with the values it names followed through the substitution:
-    /// the same bytes by the value that replaced one found equal.
-    fn remapped(
-        old: &Self::Result,
-        substituted: &dyn Fn(ValueId) -> Option<llrm_mir::module::Operand>,
-        _changes: &[llrm_mir::module::Change],
-        _context: &Context,
-        function: &Function,
-    ) -> Option<Self::Result> {
-        let old = old.as_ref().ok()?;
-        // A reference holds its pointer's decomposition (root, base, scale),
-        // read down the chain of instructions below it. Renaming a value to one
-        // that decomposes otherwise (a load forwarded to the GEP it loaded)
-        // gives a reference that knows less than a fresh one: derived again.
-        if renamed_into_a_chain(function, substituted, old) {
-            return None;
-        }
-        Some(Ok(alias::effects_renamed(old, substituted)?))
-    }
-    fn run(
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Self::Result {
-        let shape = analyses.get::<Shape>(context, layout, function);
-        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        let values = analyses.get::<PointerValues>(context, layout, function);
-        let outer = analyses.outer();
-        let mut unit = Unit::within(context, layout, function, outer).with_shape(&shape).with_exposed(&exposed);
-        if let Ok(values) = &*values {
-            unit = unit.with_point_values(values);
-        }
-        call_effects(&unit, outer)
-    }
-}
-
-/// Whether a value replaced by another is read the same by a decomposition:
-/// both stop it (a load, a call, an allocation, a phi, a parameter, a
-/// constant), or both are one instruction (opcode, operands and flags: an
-/// inbounds gep goes on through its index where a plain one does not).
-pub(crate) fn decomposes_alike(
-    function: &Function,
-    was: ValueId,
-    now: ValueId,
-) -> bool {
-    use llrm_mir::module::ValueDef;
-    let ends = |value: ValueId| match function.value(value).def {
-        ValueDef::Instruction(inst) => matches!(
-            function.instruction(inst).opcode,
-            Opcode::Load { .. } | Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Alloca { .. } | Opcode::Phi
-        ),
-        _ => true,
-    };
-    match (function.value(was).def, function.value(now).def) {
-        (ValueDef::Instruction(a), ValueDef::Instruction(b)) => {
-            let (a, b) = (function.instruction(a), function.instruction(b));
-            (ends(was) && ends(now))
-                || (!ends(was) && !ends(now) && a.opcode == b.opcode && a.operands == b.operands && a.flags == b.flags)
-        }
-        _ => ends(was) && ends(now),
-    }
-}
-
-/// Whether a value some reference of `effects` names is replaced by one that a
-/// fresh decomposition reads differently: the reference would name the new
-/// value as its root, where a decomposition goes on through the definition of a
-/// GEP, a cast, an add, and stops at a parameter, a constant, a load, a call,
-/// an allocation, a phi. A load forwarded to the pointer it loaded (a GEP) is
-/// the case; a value replaced by an equal instruction (the same opcode and
-/// operands) decomposes alike.
-fn renamed_into_a_chain(
-    function: &Function,
-    substituted: &dyn Fn(ValueId) -> Option<llrm_mir::module::Operand>,
-    effects: &IndexMap<InstId, alias::Effect>,
-) -> bool {
-    use llrm_mir::module::Operand;
-    let alike = |was: ValueId, now: ValueId| decomposes_alike(function, was, now);
-    let differs = |one: &crate::memory::MemRef| {
-        [one.pointer, one.root, one.base.map(Operand::Value), one.segment].into_iter().any(|named| {
-            matches!(
-                named,
-                Some(Operand::Value(was)) if matches!(substituted(was), Some(Operand::Value(now)) if !alike(was, now))
-            )
-        })
-    };
-    // The lists calls share are looked at once.
-    let mut seen: llrm_support::hash::HashSet<*const [crate::memory::MemRef]> = Default::default();
-    effects.values().any(|effect| {
-        let mut lists = [&effect.loads, &effect.stores].into_iter().filter(|list| seen.insert(Rc::as_ptr(list)));
-        lists.any(|list| list.iter().any(&differs)) || effect.fills.iter().any(&differs)
-    })
-}
-
-/// What each call of `unit` reads and writes, its callee as `Summaries`
-/// says where `outer` holds it, and otherwise an unknown one, as LLVM's
-/// function passes read an outer result only if cached.
-pub fn call_effects(
-    unit: &Unit,
-    outer: &Outer,
-) -> Result<IndexMap<InstId, Effect>, String> {
-    let summaries = outer.cached::<Summaries>();
-    let none = IndexMap::default();
-    let known = match summaries.as_deref() {
-        Some(found) => found.as_ref().map_err(String::clone)?,
-        None => &none,
-    };
-    alias::calls_annotated(&Procedure::of(*unit), known)
 }
 
 /// The constants the body holds as values, which is none: see `Registers::run`.
@@ -1284,8 +1110,43 @@ impl Analysis for Counted {
     }
 }
 
-/// What each call writes, as `CallEffects` says: the `Calls` consts and
-/// floatfacts take.
+/// What each call reads and writes, as its attributes and `GlobalsModRef` say
+/// (`alias::calls_by_attributes`), made once for the body: `Writes` and
+/// `Accesses` take it. Each made it afresh (39 and 11 walks of the body's
+/// calls on d_faces -O2, 32 M Ir) where `CallEffects` was kept past the edits
+/// that reach no call.
+pub struct CallFootprints;
+
+impl Analysis for CallFootprints {
+    type Result = Result<std::rc::Rc<llrm_mir::dense::IdMap<InstId, alias::Effect>>, String>;
+    const NAME: &'static str = "call-footprints";
+    const SKIPS: bool = true;
+    fn depends() -> Option<Depends> {
+        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at), edges: true })
+    }
+    fn run(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self::Result {
+        // The unit `Accesses` made them under: without the shape and the
+        // exposed frames each argument's object was worked out from the
+        // body again (3x the Ir a walk).
+        let values = analyses.get::<PointerValues>(context, layout, function);
+        let shape = analyses.get::<Shape>(context, layout, function);
+        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        let mut unit =
+            Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed);
+        if let Ok(values) = &*values {
+            unit = unit.with_point_values(values);
+        }
+        Ok(std::rc::Rc::new(alias::calls_by_attributes(&unit)))
+    }
+}
+
+/// What each call writes: the stores of `CallFootprints`, the `Calls` consts
+/// and floatfacts take.
 pub struct Writes;
 
 impl Analysis for Writes {
@@ -1301,12 +1162,9 @@ impl Analysis for Writes {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Self::Result {
-        let effects = analyses.get::<CallEffects>(context, layout, function);
-        Ok(Result::as_ref(&*effects)
-            .map_err(String::clone)?
-            .iter()
-            .map(|(&at, effect)| (at, effect.stores.clone()))
-            .collect())
+        let footprints = analyses.get::<CallFootprints>(context, layout, function);
+        let footprints = Result::as_ref(&*footprints).map_err(String::clone)?;
+        Ok(footprints.iter().map(|(at, effect)| (at, effect.stores.clone())).collect())
     }
 }
 
@@ -1496,7 +1354,7 @@ impl Analysis for FloatFacts {
 }
 
 /// Every value known, memory solved alongside and each call writing what
-/// `CallEffects` says.
+/// `Writes` says.
 pub struct ThroughMemory;
 
 impl Analysis for ThroughMemory {
@@ -1623,56 +1481,8 @@ pub fn dominated_by(
     false
 }
 
-/// The facts each counted loop gives its blocks, and where there is none the
-/// edges': `ranges::bounded`.
-pub struct Bounded;
-
-impl Analysis for Bounded {
-    type Result = Result<ranges::Bounds, String>;
-    const NAME: &'static str = "bounded";
-    const INCREMENTAL: bool = true;
-
-    fn run(
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Self::Result {
-        Self::solved(context, layout, function, analyses, None)
-    }
-
-    /// A loop's facts read its own blocks, the facts of the values its
-    /// operations read, the edges' facts above it and the facts of the
-    /// loops it starts from; the loops a change reaches by any of these are
-    /// worked again.
-    fn update(
-        previous: &Self::Result,
-        changes: &[Change],
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Option<Self::Result> {
-        let bounds = previous.as_ref().ok()?;
-        let reach = function.reach_of(changes)?;
-        if reach.cfg_changed() {
-            return None;
-        }
-        let shape = analyses.get::<Shape>(context, layout, function);
-        let edges = analyses.get::<DominatedEdges>(context, layout, function);
-        edges.as_ref().as_ref().ok()?;
-        // A loop starts from the edges' facts of its dominator: those of a
-        // block a change reached or one it dominates may have changed.
-        let reached: llrm_mir::dense::IdSet<i64> = reach.blocks.iter().map(crate::cfg::id).collect();
-        let dirty = ranges::loops_reached(function, &shape, &reach.blocks, &reach.conditions, &|at| {
-            dominated_by(&shape, function, &reached, at)
-        });
-        Some(Self::solved(context, layout, function, analyses, Some((bounds, &dirty))))
-    }
-}
-
 /// What a pass asks of the ranges of a body as it stands: the manager's
-/// registers, bounds and edges, and the unit that carries them.
+/// registers and edges, and the unit that carries them.
 pub struct Ranges {
     shape: Rc<Shape>,
     assumptions: Rc<<AssumptionCache as Analysis>::Result>,
@@ -1680,17 +1490,14 @@ pub struct Ranges {
     exposed: Rc<<ExposedFrames as Analysis>::Result>,
     counted: Rc<<Counted as Analysis>::Result>,
     edges: Rc<<DominatedEdges as Analysis>::Result>,
-    bounds: Option<Rc<<Bounded as Analysis>::Result>>,
 }
 
 impl Ranges {
-    /// With the bounds too, which `Bounded` itself works out from the rest.
     pub fn of(
         context: &Context,
         layout: &DataLayout,
         function: &Function,
         analyses: &mut Analyses,
-        with_bounds: bool,
     ) -> Self {
         Self {
             shape: analyses.get::<Shape>(context, layout, function),
@@ -1699,32 +1506,11 @@ impl Ranges {
             exposed: analyses.get::<ExposedFrames>(context, layout, function),
             counted: analyses.get::<Counted>(context, layout, function),
             edges: analyses.get::<DominatedEdges>(context, layout, function),
-            bounds: None,
         }
-        .bounded(context, layout, function, analyses, with_bounds)
-    }
-
-    fn bounded(
-        mut self,
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-        with_bounds: bool,
-    ) -> Self {
-        if with_bounds {
-            self.bounds = Some(analyses.get::<Bounded>(context, layout, function));
-        }
-        self
     }
 
     pub fn registers(&self) -> &Rc<<Registers as Analysis>::Result> {
         &self.registers
-    }
-
-    /// The bounds, where they were asked for.
-    pub fn bounds(&self) -> Option<&<Bounded as Analysis>::Result> {
-        self.bounds.as_deref()
     }
 
     pub fn unit<'a>(
@@ -1743,42 +1529,7 @@ impl Ranges {
         if let Ok(edges) = &*self.edges {
             unit = unit.with_edges(edges);
         }
-        if let Some(Ok(bounds)) = self.bounds.as_deref() {
-            unit = unit.with_bounds(bounds);
-        }
         unit
-    }
-}
-
-impl Bounded {
-    fn solved(
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-        prior: Option<(&ranges::Bounds, &llrm_mir::dense::IdSet<i64>)>,
-    ) -> <Self as Analysis>::Result {
-        let held = Ranges::of(context, layout, function, analyses, false);
-        ranges::bounded_solved(&held.unit(context, layout, function, analyses.outer()), held.registers(), prior, true)
-    }
-}
-
-/// The counted loops' intervals for alias and decisions: `Bounded`, or none at
-/// a level without them (-O1: gcc's has value ranges only from -O2's
-/// `-ftree-vrp`; its -O1 reaches an induction variable's range through SCEV and
-/// the loop's iteration bound, which `indvars`, `loopexit`, `hoist` and
-/// `algebraic` still ask `Bounded` for). Empty, the unit does not solve them
-/// itself.
-fn loop_bounds(
-    context: &Context,
-    layout: &DataLayout,
-    function: &Function,
-    analyses: &mut Analyses,
-) -> Rc<<Bounded as Analysis>::Result> {
-    if analyses.outer().loop_intervals() {
-        analyses.get::<Bounded>(context, layout, function)
-    } else {
-        Rc::new(Ok(ranges::Bounds::default()))
     }
 }
 
@@ -1794,7 +1545,6 @@ pub struct Held {
     annotated: Option<Rc<<Annotated as Analysis>::Result>>,
     counted: Option<Rc<<Counted as Analysis>::Result>>,
     followers: Option<Rc<<Followers as Analysis>::Result>>,
-    bounded: Option<Rc<<Bounded as Analysis>::Result>>,
 }
 
 impl Held {
@@ -1815,7 +1565,6 @@ impl Held {
             // Annotated has proved them already.
             counted: alias.then(|| analyses.get::<Counted>(context, layout, function)),
             followers: alias.then(|| analyses.get::<Followers>(context, layout, function)),
-            bounded: None,
         }
     }
 
@@ -1835,20 +1584,6 @@ impl Held {
             followers: Some(analyses.get::<Followers>(context, layout, function)),
             ..Self::of(context, layout, function, analyses, false)
         }
-    }
-
-    /// Also what the counted loops bound: for a pass that asks it, so that it
-    /// is the manager's, kept and brought up to date, and not a solve of
-    /// the pass's own.
-    pub fn with_bounded(
-        mut self,
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Self {
-        self.bounded = Some(loop_bounds(context, layout, function, analyses));
-        self
     }
 
     /// A unit over `function`, the body these were found of.
@@ -1875,9 +1610,6 @@ impl Held {
         }
         if let Some(followers) = self.followers.as_deref() {
             unit = unit.with_followers(followers);
-        }
-        if let Some(Ok(bounds)) = self.bounded.as_deref() {
-            unit = unit.with_bounds(bounds);
         }
         unit
     }
@@ -1919,9 +1651,6 @@ pub fn ask_some(
         analyses.get::<Annotated>(context, layout, function);
     }
     if chosen() {
-        analyses.get::<CallEffects>(context, layout, function);
-    }
-    if chosen() {
         analyses.get::<Writes>(context, layout, function);
     }
     if chosen() {
@@ -1950,9 +1679,6 @@ pub fn ask_some(
     }
     if chosen() {
         analyses.get::<DominatedEdges>(context, layout, function);
-    }
-    if chosen() {
-        analyses.get::<Bounded>(context, layout, function);
     }
     if chosen() {
         analyses.get::<TableLoads>(context, layout, function);

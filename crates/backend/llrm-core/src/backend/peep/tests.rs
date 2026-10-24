@@ -16,7 +16,7 @@ fn what(
     dests: Vec<Loc>,
     sources: Vec<Loc>,
 ) -> Semantics {
-    Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+    Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
 }
 
 fn argument() -> Mem {
@@ -176,5 +176,5 @@ fn the_rule_groups_come_from_one_list() {
     all.sort_unstable();
     assert_eq!(present, all);
     assert!(super::Rules::NONE.present().is_empty());
-    assert_eq!(super::Rules::GROUPS.len(), 23);
+    assert_eq!(super::Rules::GROUPS.len(), 25);
 }

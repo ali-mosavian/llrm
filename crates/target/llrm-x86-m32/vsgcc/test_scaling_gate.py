@@ -282,7 +282,7 @@ def test_ssa_flow_is_not_swept_per_step_of_the_longest_way_in_a_loop_nest(tmp_pa
     source = tmp_path / "nest_128.c"
     source.write_text(scaling.AXES["nest"](128))
     # The spiller's route, which -Omax alone makes by default, is the subject.
-    own = gate.own_work([*gate.levels_time.command("llrm", "O2", source), "-fallocation-routes"])
+    own = gate.own_work([*gate.levels_time.command("llrm", "O2", source)])
     assert own["ssa flow"] <= 200, f"{own['ssa flow']:.1f} Minstr"
 
 
@@ -601,7 +601,7 @@ def test_the_immediate_dominators_are_the_trees_not_every_blocks_set_of_dominato
     source = tmp_path / "branches_1024.c"
     source.write_text(scaling.AXES["branches"](1024))
     # The spiller's route, which -Omax alone makes by default, is the subject.
-    rows = gate.own_work([*gate.levels_time.command("llrm", "O2", source), "-fallocation-routes"])
+    rows = gate.own_work([*gate.levels_time.command("llrm", "O2", source)])
     assert rows["masm return overhead"] <= 400 and rows["ssa repaired"] <= 400, rows
 
 
@@ -1244,7 +1244,7 @@ def test_a_last_chance_recolor_precheck_does_not_look_each_value_up_for_each_poi
     include += ["-I", str(Path(headers).expanduser())]
     command = gate.levels_time.command("llrm", "O1", base / "render" / "d_alias.c")
     # QCport is Open Watcom C for the 16-bit target: no -m32 -march.
-    command = [command[0], "-O1", *include, command[-1], "-o", os.devnull]
+    command = [command[0], "-O1", *include, command[-1], "-o", gate.levels_time.llrmbin.OBJECT]
     own = gate.own_work(command)
     assert own["regalloc recolor"] > 0.0, f"premise: recolor ran ({own['regalloc recolor']:.1f} Minstr)"
     assert own["regalloc recolor"] <= 70.0, own["regalloc recolor"]

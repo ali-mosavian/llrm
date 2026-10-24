@@ -380,9 +380,13 @@ fn test_an_immutable_argument_keeps_the_copy_when_the_source_is_written_after_it
 /// local. Call slot forwarding compares the call's argument with the copy's
 /// source after `strip_pointer_casts`, which looks through address space
 /// casts; it must not make the call write the copy's destination through a
-/// selector. It does not, with or without `ni:`: the pass bails on an argument
-/// whose pointer chain crosses a space. The test pins that (a direct argument
-/// is forwarded, the premise).
+/// selector. Where the layout states the space non-integral (`ni:2`, as the
+/// 16-bit targets' does) a cast back from it is not the pointer it came from,
+/// and the argument is not the source (`stripPointerCasts` looks through the
+/// cast only where BasicAA does); without `ni:` the cast is a no-op, as in the
+/// pin, and the copy is forwarded. A direct argument is forwarded, the premise.
+/// The call clobbered the slot in the walker's eyes only since the AA stack
+/// answers for it: the copy went with the cast read through.
 #[test]
 fn test_a_call_through_the_selector_of_a_local_is_not_forwarded_into_its_copy() {
     let after = |datalayout: &str, argument: &str| {
@@ -413,7 +417,41 @@ b0:
         !after(base, "%slot").contains("load i32, ptr %slot"),
         "premise: a direct argument is forwarded into the copy"
     );
-    for layout in [base.to_owned(), format!("{base}-ni:2")] {
-        assert!(after(&layout, "%back").contains("load i32, ptr %slot"), "the copy of the local went ({layout})");
+    assert!(!after(base, "%back").contains("load i32, ptr %slot"), "a no-op cast is read through ({base})");
+    let non_integral = format!("{base}-ni:2");
+    assert!(
+        after(&non_integral, "%back").contains("load i32, ptr %slot"),
+        "the copy of the local went ({non_integral})"
+    );
+}
+
+/// MemCpyOpt asked the manager for `Pointers`, the escape phase of the whole
+/// body's points-to (2.7 M of d_faces -O2's compile), to give its alias
+/// questions a provenance; its questions are `MemoryLocation(Ptr, Size)`, and
+/// the stack answers them. `PointerValues` stays: MemorySSA's accesses read it.
+#[test]
+fn memcpyopt_asks_no_points_to() {
+    struct Watching(std::rc::Rc<std::cell::Cell<bool>>);
+
+    impl llrm_mir::passes::FunctionPass for Watching {
+        fn name(&self) -> &'static str {
+            "memcpyopt"
+        }
+
+        fn run(
+            &mut self,
+            unit: &mut llrm_mir::passes::Unit,
+            analyses: &mut llrm_mir::passes::Analyses,
+        ) -> llrm_mir::passes::PreservedAnalyses {
+            let kept = MemCpyOpt.run(unit, analyses);
+            self.0.set(analyses.cached::<llrm_analysis::manager::Pointers>().is_some());
+            kept
+        }
     }
+
+    let asked = std::rc::Rc::new(std::cell::Cell::new(false));
+    let mut module =
+        parsed(&format!("{DECLARES}\n{GLOBALS}\n{}", body(&[memcpy("@b", "@a", 16), memcpy("@c", "@b", 16)])));
+    managed(&mut module, Watching(std::rc::Rc::clone(&asked)));
+    assert!(!asked.get(), "memcpyopt solved the whole body's points-to");
 }

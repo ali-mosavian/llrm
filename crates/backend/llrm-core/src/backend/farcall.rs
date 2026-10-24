@@ -113,7 +113,7 @@ pub fn materialized(
                         one.at,
                         Some((one.at, one.at)),
                         Some(Semantics {
-                            name: Some("mov".to_owned()),
+                            name: Some("mov".into()),
                             dests: vec![cell.clone()],
                             sources: vec![Loc::Held(target)],
                             ..Semantics::new(Operation::Move)
@@ -163,7 +163,7 @@ mod tests {
                 at,
                 Some((at, at + if width == 4 { 3 } else { 2 })),
                 Some(Semantics {
-                    name: Some("call".to_owned()),
+                    name: Some("call".into()),
                     sources: vec![Loc::Held(Held { value, width })],
                     indirect: true,
                     ..Semantics::new(Operation::Call)
@@ -220,7 +220,7 @@ mod tests {
             4,
             Some((4, 7)),
             Some(Semantics {
-                name: Some("call".to_owned()),
+                name: Some("call".into()),
                 sources: vec![Loc::Held(Held { value: 5, width: 4 })],
                 indirect: true,
                 ..Semantics::new(Operation::Call)
@@ -256,7 +256,7 @@ mod tests {
             4,
             Some((4, 7)),
             Some(Semantics {
-                name: Some("call".to_owned()),
+                name: Some("call".into()),
                 sources: vec![Loc::Held(Held { value: 5, width: 4 })],
                 indirect: true,
                 ..Semantics::new(Operation::Call)

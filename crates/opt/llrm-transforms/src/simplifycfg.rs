@@ -224,7 +224,11 @@ impl FunctionPass for SimplifyCfg {
         let outer = std::rc::Rc::clone(analyses.outer());
         let tti = crate::looprotate::target_tti(outer.target());
         let spec = Speculation { tti: &*tti, layout: unit.layout, outer: &outer };
-        if simplified_with(&self.options, unit.context, &spec, unit.declared, unit.function) {
+        let known = KnownLoops {
+            info: analyses.get::<llrm_mir::passes::Loops>(&*unit.context, unit.layout, &*unit.function),
+            cfg_epoch: unit.function.epochs().cfg,
+        };
+        if simplified_with_known(&self.options, unit.context, &spec, unit.declared, unit.function, Some(&known)) {
             PreservedAnalyses::none()
         } else {
             PreservedAnalyses::all()
@@ -286,19 +290,6 @@ impl Options {
         convert_switch_to_arithmetic: true,
         convert_switch_to_lookup_table: false,
     };
-
-    /// The slot at
-    /// [L2376](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L2376).
-    pub const L2376: Options = Options {
-        need_canonical_loop: true,
-        speculate_blocks: true,
-        hoist_common_insts: true,
-        sink_common_insts: false,
-        forward_switch_cond_to_phi: false,
-        convert_switch_range_to_icmp: true,
-        convert_switch_to_arithmetic: true,
-        convert_switch_to_lookup_table: false,
-    };
 }
 
 impl Default for Options {
@@ -327,6 +318,14 @@ pub fn simplified(
     simplified_with(&Options::default(), context, spec, declared, function)
 }
 
+/// The loops the manager held when the pass began, and the CFG epoch they were
+/// held at: read for the blocks that keep a loop's form while the CFG is as it
+/// was (`NeedCanonicalLoop`).
+pub struct KnownLoops {
+    pub info: std::rc::Rc<llrm_mir::loopinfo::LoopInfo>,
+    pub cfg_epoch: u64,
+}
+
 /// `simplified` under `options`.
 pub fn simplified_with(
     options: &Options,
@@ -335,18 +334,30 @@ pub fn simplified_with(
     declared: &mut Declared,
     function: &mut Function,
 ) -> bool {
+    simplified_with_known(options, context, spec, declared, function, None)
+}
+
+/// `simplified_with`, given the loops the manager held.
+pub fn simplified_with_known(
+    options: &Options,
+    context: &mut Context,
+    spec: &Speculation,
+    declared: &mut Declared,
+    function: &mut Function,
+    known: Option<&KnownLoops>,
+) -> bool {
     let callees = spec.outer.callees();
     let mut folded = false;
     let mut ever = unreachable_removed(context, callees, function, &mut folded);
     ever |= tailmerge::merged(context, function);
-    ever |= iteratively_simplified(options, context, spec, declared, function, &mut folded);
+    ever |= iteratively_simplified(options, context, spec, declared, function, &mut folded, known);
     // `iterativelySimplifyCFG` can make a loop dead; the removal and the
     // visits then alternate until neither does anything.
     if !ever {
         return false;
     }
     if unreachable_removed(context, callees, function, &mut folded) {
-        while iteratively_simplified(options, context, spec, declared, function, &mut folded)
+        while iteratively_simplified(options, context, spec, declared, function, &mut folded, known)
             | unreachable_removed(context, callees, function, &mut folded)
         {}
     }
@@ -366,6 +377,7 @@ fn iteratively_simplified(
     declared: &mut Declared,
     function: &mut Function,
     folded: &mut bool,
+    known: Option<&KnownLoops>,
 ) -> bool {
     let (mut changed, mut local) = (false, true);
     let headers = loop_headers(function);
@@ -373,7 +385,9 @@ fn iteratively_simplified(
     let form = if headers.is_empty() || !options.need_canonical_loop {
         Default::default()
     } else {
-        crate::decide::loop_form_blocks(function)
+        // The manager's loops, where the CFG is as they were found.
+        let held = known.filter(|one| one.cfg_epoch == function.epochs().cfg);
+        crate::decide::loop_form_blocks(function, held.map(|one| llrm_analysis::cfg::natural(function, &one.info)))
     };
     let headers = if options.need_canonical_loop { headers } else { Default::default() };
     while local {
@@ -405,8 +419,8 @@ fn block_simplified(
 ) -> bool {
     let callees = spec.outer.callees();
     // No predecessor but not the entry, or only itself: unreachable.
-    let predecessors = function.predecessors(block);
-    if (predecessors.is_empty() && function.entry() != Some(block)) || predecessors[..] == [block] {
+    let reach = reached_from(function, block);
+    if (reach == Reach::Nothing && function.entry() != Some(block)) || reach == Reach::Itself {
         dead_blocks_deleted(context, function, &[block]);
         return true;
     }
@@ -498,6 +512,41 @@ fn branch_hoisted(
         && hoistcommon::hoisted(context, spec, function, last, !options.hoist_common_insts)
 }
 
+/// What `predecessors(block)` is, to the one question asked of it at the head
+/// of a visit: no block names it, only itself does, or another does.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Reach {
+    Nothing,
+    Itself,
+    Other,
+}
+
+/// `predecessors(block)` as a `Reach`, without the list: the visit of every
+/// block began by building it (9,955 builds, 1.7 M Ir in d_faces -O2).
+fn reached_from(
+    function: &Function,
+    block: BlockId,
+) -> Reach {
+    let mut found = None;
+    for one in function.block_users(block) {
+        let user = one.user;
+        if !function.instruction(user).opcode.is_terminator() {
+            continue;
+        }
+        let Some(parent) = function.parent(user) else { continue };
+        match found {
+            None => found = Some(parent),
+            Some(earlier) if earlier == parent => {}
+            Some(_) => return Reach::Other,
+        }
+    }
+    match found {
+        None => Reach::Nothing,
+        Some(parent) if parent == block => Reach::Itself,
+        Some(_) => Reach::Other,
+    }
+}
+
 /// The block `block`'s predecessors all have as their only predecessor:
 /// `allPredecessorsComeFromSameSource`.
 fn all_predecessors_come_from_same_source(
@@ -506,11 +555,11 @@ fn all_predecessors_come_from_same_source(
 ) -> Option<BlockId> {
     let mut source = None;
     for &pred in function.predecessors(block).iter() {
-        let preds = function.predecessors(pred);
-        if preds.len() != 1 || source.is_some_and(|one| one != preds[0]) {
+        let only = function.sole_predecessor(pred)?;
+        if source.is_some_and(|one| one != only) {
             return None;
         }
-        source = Some(preds[0]);
+        source = Some(only);
     }
     source
 }

@@ -98,6 +98,22 @@ impl Pool {
         Mem { disp_width: 2, ..Mem::new(Some(Addr { index: id, ..Addr::new(Space::Segment, 0) }), width) }
     }
 
+    /// Where the pool is now, for [`Pool::rewind`]: what a selection that is
+    /// not kept asked for goes with it.
+    #[must_use]
+    pub fn mark(&self) -> (usize, i64) {
+        (self.entries.len(), self.count)
+    }
+
+    /// The pool as it was at `mark`, if only data were added since.
+    pub fn rewind(
+        &mut self,
+        mark: (usize, i64),
+    ) {
+        self.entries.truncate(mark.0);
+        self.count = mark.1;
+    }
+
     /// A new jump table's id. Its entries are the final procedure's, written
     /// where the module is assembled: a body that was selected and not kept
     /// leaves an id nothing names.
