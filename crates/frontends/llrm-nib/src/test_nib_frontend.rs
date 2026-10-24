@@ -298,6 +298,14 @@ pub(crate) fn O2_calls_kept() -> Options {
     options
 }
 
+/// -O3 where the function under test stays a function (`O2_calls_kept`).
+#[allow(non_snake_case)]
+pub(crate) fn O3_calls_kept() -> Options {
+    let mut options = level("O3");
+    options.pipeline.inline = llrm_transforms::inline::Threshold::none();
+    options
+}
+
 /// `program` compiled to an object.
 fn object_of(
     program: &model::Program,
@@ -908,8 +916,13 @@ fn test_runtime_bounded_array_loop_advances_its_payload_address() {
 
     assert!(!Regex::new(r"\b(?:imul|shl|lea)\b").unwrap().is_match(&hot), "{hot}");
     assert!(function.contains("xor ax, ax"));
-    assert!(!function.contains("dec "));
-    assert!(Regex::new(r"\badd\s+(?:si|di|bx),\s*2\s*\n(?:L\w+:\n)?\s*jne\b").unwrap().is_match(&hot), "{hot}");
+    // LLVM's LSR (the default since 7ee16741c) keeps the trip counter beside
+    // the stepped address, so the loop ends on `dec cx`, not on a compare
+    // with the end address.
+    assert!(
+        Regex::new(r"\badd\s+(?:si|di|bx),\s*2\s*\n(?:\s*dec\s+cx\s*\n)?(?:L\w+:\n)?\s*jne\b").unwrap().is_match(&hot),
+        "{hot}"
+    );
 }
 
 #[test]
@@ -1082,7 +1095,7 @@ fn test_a_fill_leaves_the_rest_of_its_function_priceable() {
         "priced_fill.nib",
         "fn value(v: &[i16]) -> i32:\n    let mut a: i32[64] = [0] * 64\n    let mut total: i16 = 0\n    unsafe:\n        for i in 0..4:\n            total += v[i]\n        a[total] = 5\n    return a[1]\nfn main() -> i16:\n    let v: i16[4] = [1, 2, 3, 4]\n    return i16(value(&v))\n",
     );
-    let assembly = listing(&parsed(&source), "main", &O3());
+    let assembly = listing(&parsed(&source), "main", &O3_calls_kept());
     let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
 
     assert!(body.contains("rep stosd"));
@@ -1097,16 +1110,17 @@ fn test_an_array_field_fills_and_copies_as_one_run_each() {
     let source = written(
         &directory,
         "field_runs.nib",
-        "struct File:\n    handle: i16\n    mut buffer: u8[128]\n    mut start: u16\n\nfn opened(h: i16) -> File:\n    return File(handle=h, buffer=[0] * 128, start=0)\n\nfn relay(h: i16) -> File:\n    let f = opened(h)\n    return f\n\nfn main() -> i16:\n    let f = relay(3)\n    let g = relay(4)\n    return f.handle + g.handle + i16(f.buffer[5])\n",
+        "struct File:\n    handle: i16\n    mut buffer: u8[128]\n    mut start: u16\n\nfn opened(h: i16) -> File:\n    return File(handle=h, buffer=[0] * 128, start=0)\n\nfn relay(h: i16) -> File:\n    let f = opened(h)\n    return f\n\n@extern(\"cdecl16\")\nfn seed() -> i16\n\nfn main() -> i16:\n    unsafe:\n        let f = relay(seed())\n        let g = relay(seed())\n        return f.handle + g.handle + i16(f.buffer[seed() & 127]) + i16(g.buffer[seed() & 127])\n",
     );
-    // `opened` is inlined into `relay`; two calls keep `relay` a function.
+    // `opened` is inlined into `relay`; with inlining off `relay` stays a
+    // function (inlined, `main` folds to the constant 7).
     let assembly = listing(&parsed(&source), "main", &O2());
-    let relay = between(&assembly, "_relay proc", "_relay endp");
+    let main = between(&assembly, "_main proc far", "_main endp");
 
-    assert!(relay.contains("rep stos"), "{relay}");
+    assert_eq!(main.matches("rep stos").count(), 2, "{main}");
     // MemCpyOpt builds the fill in the returned struct, so no copy is left.
-    assert!(!relay.contains("movs") && !Regex::new(r"\bj\w+\s").unwrap().is_match(relay), "{relay}");
-    assert!(relay.matches("byte ptr").count() < 8, "{relay}");
+    assert!(!main.contains("movs") && !Regex::new(r"\bj\w+\s").unwrap().is_match(main), "{main}");
+    assert!(main.matches("byte ptr").count() < 8, "{main}");
 }
 
 #[test]
@@ -2093,7 +2107,7 @@ fn test_inline_assembly_is_its_bytes_between_its_register_constraints() {
          fn five() -> u16:\n    return 5\n\n\
          fn main() -> i16:\n    return i16(mix(3, 4) + mix(five(), 9))\n",
     );
-    let assembly = listing_on(&parsed(&source), "main", &O2(), "486");
+    let assembly = listing_on(&parsed(&source), "main", &O2_calls_kept(), "486");
     let mix = between(&assembly, "_mix proc near", "_mix endp");
     let pattern = r"(?s)or ax, 1792\n    mov dx, (\w+)\n    mov cx, (\w+)\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n(?:    mov ax, bx\n)?    shr cx, 8\n";
     let found = Regex::new(pattern).unwrap().captures(mix).unwrap_or_else(|| panic!("{mix}"));
@@ -2137,6 +2151,16 @@ fn test_inline_assembly_inputs_reach_the_registers_they_name() {
     }
 }
 
+/// Whether `line`, the instruction after an asm block that leaves its output in
+/// cx, takes it from cx: a `mov`/`add` with cx as the source, or an address
+/// formed on ecx (the walk now simplifies a body before it is unrolled, so the
+/// running sum is a `lea` of the copies, not `add ax, cx`).
+fn reads_cx(line: &str) -> bool {
+    let line = line.trim_start();
+    ((line.starts_with("mov ") || line.starts_with("add ")) && line.ends_with(", cx"))
+        || (line.starts_with("lea ") && line.contains("[ecx"))
+}
+
 /// Outputs were pinned by value, and a loop unrolled after physicalization
 /// gave each copy new values: spin(3) read its `cx` output from ax.
 #[test]
@@ -2153,7 +2177,7 @@ fn test_inline_assembly_outputs_survive_unrolling() {
     let after: Vec<&str> =
         assembly.split("db 089h,0d9h\n").skip(1).map(|rest| rest.lines().next().unwrap_or("")).collect();
     assert_eq!(after.len(), 3, "{assembly}");
-    assert!(after.iter().all(|line| line.ends_with(", cx")), "{assembly}");
+    assert!(after.iter().all(|line| reads_cx(line)), "{assembly}");
 }
 
 /// `source` through the rich MIR, as masm.
@@ -2162,14 +2186,24 @@ fn rich(
     name: &str,
     source: &str,
 ) -> String {
+    rich_with(directory, name, source, false)
+}
+
+/// `rich` with the calls kept when `kept`: the walk simplifies a callee before
+/// the call is priced, so a small one is inlined and has no listing of its own.
+fn rich_with(
+    directory: &tempfile::TempDir,
+    name: &str,
+    source: &str,
+    kept: bool,
+) -> String {
     let program = parsed(&written(directory, name, source));
-    let module = nib_compile::assembled(
-        &program,
-        "main",
-        &llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)),
-        &crate::real_mode().os,
-    )
-    .unwrap_or_else(|error| panic!("{error}"));
+    let mut options = llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os));
+    if kept {
+        options.pipeline.inline = llrm_transforms::inline::Threshold::none();
+    }
+    let module = nib_compile::assembled(&program, "main", &options, &crate::real_mode().os)
+        .unwrap_or_else(|error| panic!("{error}"));
     masm::text(&module).expect("prints")
 }
 
@@ -2186,7 +2220,7 @@ fn test_the_rich_mir_lays_an_inline_block_between_its_register_constraints() {
          fn five() -> u16:\n    return 5\n\n\
          fn main() -> i16:\n    return i16(mix(3, 4) + mix(five(), 9))\n";
     assert!(source.contains("asm("), "the shape that was refused");
-    let assembly = rich(&directory, "blocks.nib", source);
+    let assembly = rich_with(&directory, "blocks.nib", source, true);
     let mix = between(&assembly, "_mix proc near", "_mix endp");
     let pattern = r"(?s)or ax, 1792\n    mov dx, (\w+)\n    mov cx, (\w+)\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n(?:    mov ax, bx\n)?    shr cx, 8\n";
     let found = Regex::new(pattern).unwrap().captures(mix).unwrap_or_else(|| panic!("{mix}"));
@@ -2238,12 +2272,7 @@ fn test_the_rich_mir_reads_a_block_output_from_its_register_when_unrolled() {
     let after: Vec<&str> =
         assembly.split("db 089h,0d9h\n").skip(1).map(|rest| rest.lines().next().unwrap_or("")).collect();
     assert_eq!(after.len(), 3, "{assembly}");
-    assert!(
-        after
-            .iter()
-            .all(|line| line.trim_start().starts_with("mov ax, cx") || line.trim_start().starts_with("add ax, cx")),
-        "{assembly}"
-    );
+    assert!(after.iter().all(|line| reads_cx(line)), "{assembly}");
 }
 
 /// A raw pointer walk (#105): `p != e` of far pointers was refused "a ptr
@@ -2701,14 +2730,16 @@ fn test_mir_infers_what_a_nib_function_touches() {
     assert_eq!(memory("writes"), [(Some("argmem".to_owned()), "write".to_owned())]);
 }
 
-/// A range loop's counter cannot wrap (`nsw`), so its trip count is `n` and
-/// the loop counts down to zero, testing the flags `dec` leaves: no `cmp`
+/// The body is not linear in `s`: with `s += values[0]` the SCEV trip count
+/// (239e6625e) folds the whole loop to `values[0] * n` and no loop is left to
+/// test. A range loop's counter cannot wrap (`nsw`), so its trip count is `n`
+/// and the loop counts down to zero, testing the flags `dec` leaves: no `cmp`
 /// in the loop. Three callers pass 5, 6 and 1000: with one, or with 5 and 6
 /// (a range IPSCCP knows), the bound is known to the body, and the loop (which
 /// leaves by its bounds check as well) is copied out by it.
 #[test]
 fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
-    let source = "fn total(values: &[i16], n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += values[0]\n    return s\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    print(total(a, 5))\n    print(total(a, 6))\n    print(total(a, 1000))\n    return 0\n";
+    let source = "fn total(values: &[i16], n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s = s * 3 + values[0]\n    return s\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    print(total(a, 5))\n    print(total(a, 6))\n    print(total(a, 1000))\n    return 0\n";
     let directory = tempfile::tempdir().unwrap();
     let program = parsed(&written(&directory, "trip.nib", source));
     let pipeline =
@@ -2726,7 +2757,7 @@ fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
         .captures_iter(body)
         .map(|one| (one[1].to_owned(), one.get(0).unwrap().start()))
         .find(|(label, at)| body[..*at].contains(&format!("{label}:\n")))
-        .expect("a loop");
+        .unwrap_or_else(|| panic!("a loop in\n{body}"));
     let looped = between(&body[..end], &format!("{head}:\n"), "\0");
     assert!(!looped.contains("cmp"), "{looped}");
 }
