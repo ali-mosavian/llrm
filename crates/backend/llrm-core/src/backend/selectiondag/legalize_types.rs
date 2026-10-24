@@ -1367,10 +1367,28 @@ impl<'a> TypeLegalizer<'a> {
             ext: None,
             space: 0,
         };
-        // the chain the argument copies hang from, back to `callseq_start`
+        // the `callseq_start` of this call: back along the chain through the
+        // argument copies and the stores of the stack arguments joined before
+        // them
         let mut start = chain;
-        while self.dag.opcode(start) == ISD::CopyToReg {
-            start = self.dag.operand(start, 0);
+        let mut work = vec![chain];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(at) = work.pop() {
+            if !seen.insert(at.node) {
+                continue;
+            }
+            if self.dag.opcode(at) == ISD::CallSeqStart {
+                start = at;
+                break;
+            }
+            if matches!(
+                self.dag.opcode(at),
+                ISD::CopyToReg | ISD::TokenFactor | ISD::Store
+            ) {
+                let ops = self.dag.node(at).ops.clone();
+                let first = usize::from(self.dag.opcode(at) != ISD::TokenFactor);
+                work.extend(ops.iter().take(if first == 1 { 1 } else { ops.len() }).copied());
+            }
         }
         let before = if self.dag.opcode(start) == ISD::CallSeqStart { self.dag.operand(start, 0) } else { chain };
         let low_store = self.dag.get_store(before, offset, slot, info);
