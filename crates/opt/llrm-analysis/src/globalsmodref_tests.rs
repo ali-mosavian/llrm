@@ -42,6 +42,74 @@ fn a_caller_adds_its_callees_global_effects_to_its_own() {
     assert_eq!(result.function_info(w).unwrap().mod_ref_for_global(g), ModRefInfo::ModRef);
 }
 
+/// A result held past the walk does not track `@g`, whose address `@f` passed
+/// on, and answers `ModRef` for it; inlined, `@g` is tracked and `@f` writes
+/// it. `covers` compared the held `NoModRef` it keeps for an untracked global
+/// and failed `LLRM_CHECK_STALE` on pl_trace.c.
+#[test]
+fn a_held_result_covers_a_global_it_did_not_track() {
+    let head = "@g = internal global i16 0
+
+define internal void @h(ptr %p) {
+b0:
+  store i16 1, ptr %p
+  ret void
+}
+";
+    let (_, stale) = found(&format!(
+        "{head}
+define void @f() {{
+b0:
+  call void @h(ptr @g)
+  ret void
+}}
+"
+    ));
+    let (module, fresh) = found(&format!(
+        "{head}
+define void @f() {{
+b0:
+  store i16 1, ptr @g
+  ret void
+}}
+"
+    ));
+    let g = module.named("g").unwrap();
+    assert!(!stale.is_non_address_taken(g) && fresh.is_non_address_taken(g), "premise: tracked once inlined");
+    assert!(stale.covers(&fresh), "a global the held result does not track was compared");
+}
+
+/// LSR's pointer step joins `@g`'s address in a `phi`, which the use scan
+/// calls an escape: the held result, made before, still holds, and `covers`
+/// said it did not (`LLRM_CHECK_STALE` on pl_trace.c -Os).
+#[test]
+fn a_held_result_covers_a_global_lost_only_to_a_join() {
+    let (_, stale) = found(
+        "@g = internal global i16 0
+
+define i16 @f(i1 %c) {
+b0:
+  %v = load i16, ptr @g
+  ret i16 %v
+}
+",
+    );
+    let (module, fresh) = found(
+        "@g = internal global i16 0
+
+define i16 @f(i1 %c) {
+b0:
+  %p = select i1 %c, ptr @g, ptr @g
+  %v = load i16, ptr %p
+  ret i16 %v
+}
+",
+    );
+    let g = module.named("g").unwrap();
+    assert!(!fresh.is_non_address_taken(g), "premise: the scan calls a join an escape");
+    assert!(stale.covers(&fresh), "a global lost only to a join was taken for an escape");
+}
+
 /// A declaration is read from its attributes (`AnalyzeCallGraph`'s
 /// `isDeclaration()` arm): one that touches no memory leaves the caller its
 /// info, one that may call back into the module leaves it none.
