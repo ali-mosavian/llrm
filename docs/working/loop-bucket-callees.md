@@ -7,7 +7,7 @@ By pass, inclusive: Combine 85.8, Licm 50.3, Gvn 48.3, IndVars 39.7 (+6.0 `IndVa
 | # | callee | M Ir | under | owner, date |
 |---|---|--:|---|---|
 | 1 | `MemorySsa::run` (`PlainAccesses` 26.3, `Annotated` 27.1, `PointerValues` 13.3 inside) | 45.7 | Licm, Gvn, MemCpyOpt, DSE | w-3: the Accesses rewrite in flight |
-| 2 | `ScalarEvolution::create_scev_iter` (`get_add_expr` 6.9, `get_operands_to_create` 2.1, the rest the phi and select paths) | 27.5 | IndVars, Licm, LSR | w-5, profile row 11-03 (L2: `getAddExpr` 2.3 K against 970 Ir; interning alone showed no gain) |
+| 2 | `ScalarEvolution::create_scev_iter`: its own cost is nil; below it `get_add_expr` 6.9 M in 295 calls (23 K each: `strengthen_no_wrap_flags` asks the operands' ranges, shared with row 4), `get_operands_to_create` 2.1, and interning 5.6 M self (`Key::hash` 1.9, `intern` 1.3, map entry 0.8+0.6+0.5: a `Key` with a `Vec<Use>` is built and hashed per lookup) | 27.5 | IndVars, Licm, LSR | w-5, 11-03: borrowed-slice lookup in `intern`/`find_existing_scev_in_cache` (no `to_vec` per lookup), measured on a dist pair; the `get_add_expr` part goes with row 4. w-3's interning trial showed no gain: his change is not in the tree, so this is a different one |
 | 3 | `get_backedge_taken_info` (`compute_exit_limit_from_cond_cached` 25.7, `get_backedge_taken_count` 22.0) | 27.2 | IndVars, LoopDeletion, FullUnroll | w-5, 11-17: re-profile at the tip first |
 | 4 | `get_range_ref` (+ `cached_range`) | 21.9 | all SCEV clients | w-5, PR 11-10 (L2b) |
 | 5 | `is_implied_cond` guard chain | 19.9 | `get_exit_limit` and `apply_loop_guards` | w-5, PR 11-10 (L2c) |
