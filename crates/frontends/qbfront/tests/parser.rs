@@ -1164,8 +1164,8 @@ fn power_and_integral_abs_are_visible_inline_hir() {
 fn log_exp_and_fix_expand_to_visible_math_without_runtime_calls() {
     let module = parse("dim x as double\nx = log(x)\nx = exp(x)\nx = fix(x)\n", Dialect::VbDos).unwrap();
     let hir = compile(&module, "more_math", Dialect::VbDos, "vbdos").unwrap();
-    assert!(hir.contains("\"op\":\"flog2\""));
-    assert!(hir.contains("\"op\":\"fexp2\""));
+    assert!(hir.contains("\"op\":\"fln\""));
+    assert!(hir.contains("\"op\":\"fexp\""));
     assert!(hir.contains("\"op\":\"fsub\""));
     assert!(!hir.contains("B$LOG"));
     assert!(!hir.contains("B$EXP"));
