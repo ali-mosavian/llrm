@@ -11,7 +11,7 @@ Pin d1106deb71cc. Read from the sources (what I read is said per row); nothing h
 | reuse of an identical phi's temporary when every edge into the block is critical (`LoweredPHIs`) | `lowered_phis`, keyed by the sorted incoming pairs | same |
 | temporary created in the result's class ([L414-L415](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PHIElimination.cpp#L414)) | a fresh vreg with no class; the coalescer's palette comes from use | differs (structural: LIR values have no class field). Effect shown on render/dl: the segment-class result and the temporary refuse to share, 14 instructions. A local fix is DEVIATE C10 in `coalesce.rs` (branch `mir-undef/phi-temp-class`, not landed) |
 | copy insert point [`findPHICopyInsertPoint`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PHIEliminationUtils.cpp): before the first terminator, or after the last def / before the call for an EH-pad or `INLINEASM_BR` successor | `_before_the_terminator` | same for the plain case; the EH-pad and `INLINEASM_BR` cases: not compared |
-| `IMPLICIT_DEF` / undef operands (`allPhiOperandsUndefined`, `ImpDefs`) | none | missing, by P2 (LIR has no `IMPLICIT_DEF`) |
+| `IMPLICIT_DEF` / undef operands (`allPhiOperandsUndefined`, `ImpDefs`) | none | missing, by P2, 2026-11-06 (LIR has `implicit_def` from isel and `Insn::undefs`; PI-2 of ProcessImplicitDefs retires with it) |
 | `LiveVariables` / `LiveIntervals` updates, kill flags | none | n/a (LIR has no kill flags) |
 | a phi with an edge from outside the function | left alone | differs, P1 |
 | x87 phis | left alone without RFP, lowered like any other under RFP | differs, P4 |
