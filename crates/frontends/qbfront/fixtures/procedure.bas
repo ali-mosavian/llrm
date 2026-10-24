@@ -1,3 +1,4 @@
+declare function twice& (value as long)
 dim result as long
 dim inputValue as long
 inputValue = 21&

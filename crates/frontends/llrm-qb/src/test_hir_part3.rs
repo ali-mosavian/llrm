@@ -962,7 +962,7 @@ fn test_a_constant_on_the_left_of_a_comparison_still_encodes() {
     let source = written(
         &directory,
         "LEFT.BAS",
-        b"DEFINT A-Z\nDECLARE SUB Show (n)\nShow 3\nSUB Show (n)\n  IF 1 <= n THEN PRINT \"YES\"\nEND SUB\n",
+        b"DEFINT A-Z\nDECLARE SUB Disp (n)\nDisp 3\nSUB Disp (n)\n  IF 1 <= n THEN PRINT \"YES\"\nEND SUB\n",
     );
     let program = parsed(&source);
 
@@ -1138,8 +1138,8 @@ fn test_an_unsuffixed_decimal_above_32767_is_a_long_literal() {
     let (program, function) = function_in(
         &directory,
         "scale.bas",
-        "function qlightScale (word as integer) as long\nqlightScale = clng(word) * 1000000\nend function\n",
-        "QLIGHTSCALE",
+        "function qlightScale& (word as integer)\nqlightScale& = clng(word) * 1000000\nend function\n",
+        "QLIGHTSCALE&",
         "qb45",
     );
     let widths: IndexMap<i64, i64> =
@@ -2307,7 +2307,7 @@ fn test_data_statements_compile_through_the_rich_mir() {
 #[test]
 fn test_rich_route_keys_data_rows_by_position() {
     let directory = tempfile::TempDir::new().unwrap();
-    let source = written(&directory, "rstend.bas", b"DEFINT A-Z\nDATA 1, 2\nREAD a, b\nRESTORE second\nREAD c\nRESTORE\nREAD d\nPRINT a; b; c; d\nEND\nsecond:\nDATA 3, 4\n");
+    let source = written(&directory, "rstend.bas", b"DEFINT A-Z\nDATA 1, 2\nREAD a, b\nRESTORE again\nREAD c\nRESTORE\nREAD d\nPRINT a; b; c; d\nEND\nagain:\nDATA 3, 4\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
     let rich = qb_compile::assembled(&program, None, &llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone()))
         .expect("compiles");

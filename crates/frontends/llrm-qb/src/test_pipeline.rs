@@ -127,7 +127,7 @@ fn test_a_reference_parameter_is_dereferenceable() {
         "END SUB",
     ];
     std::fs::write(&basic, format!("{}\r\n", lines.join("\r\n"))).unwrap();
-    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).unwrap();
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("vbdos", "vbdos"), None).unwrap();
     let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout());
     let text = llrm_mir::print::module(&emitted[0].module);
     let define = text.lines().find(|line| line.starts_with("define") && line.contains("@S(")).expect("SUB s");
