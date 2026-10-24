@@ -4594,7 +4594,7 @@ impl Compiler {
     ) -> Result<(), SemanticError> {
         let (destination, counter_type) = self.destination(counter)?;
         if counter_type == BOOLEAN || !(integral(counter_type) || matches!(counter_type, SINGLE | DOUBLE)) {
-            return self.fail("FOR counter is not numeric");
+            return self.fail("a FOR counter must be a number variable such as `i` or `i%`, not a text variable like `i$`");
         }
         // An unsigned counter still counts down: its STEP keeps a sign.
         let step_type =
@@ -4868,7 +4868,7 @@ impl Compiler {
             self.emit("ne", vec![result], vec![operand, zero]);
             return Ok(Operand::Value(result));
         }
-        self.fail("condition is not numeric")
+        self.fail("an IF, WHILE or DO condition must be a comparison or a number; text cannot be tested directly (compare it: `a$ = \"yes\"`)")
     }
 
     fn load_destination(
@@ -4976,7 +4976,7 @@ impl Compiler {
             }
             Expr::Name(name, _) => {
                 if self.constants.contains_key(canonical(name)) {
-                    return self.fail(format!("constant {name} is not assignable"));
+                    return self.fail(format!("`{name}` is a CONST, which never changes; use a variable if the value must change"));
                 }
                 // Inside FUNCTION f&, a bare f names the result, as f& does.
                 if let (Some((place, type_id)), Some(result), None) =
@@ -5019,7 +5019,7 @@ impl Compiler {
                     ));
                 }
                 if arguments.len() != variable.bounds.len() {
-                    return self.fail(format!("{name} has the wrong number of subscripts"));
+                    return self.fail(format!("`{name}` is used with a different number of subscripts than it was dimensioned with; DIM {name}(...) says how many it has"));
                 }
                 let mut indices = Vec::new();
                 for index in arguments {
@@ -5090,7 +5090,7 @@ impl Compiler {
                     return Ok((ProjectionBase::Indirect(pointer, false, true), 0, element));
                 }
                 if arguments.len() != variable.bounds.len() {
-                    return self.fail(format!("{name} has the wrong number of subscripts"));
+                    return self.fail(format!("`{name}` is used with a different number of subscripts than it was dimensioned with; DIM {name}(...) says how many it has"));
                 }
                 let mut indices = Vec::new();
                 for index in arguments {
@@ -7194,7 +7194,7 @@ impl Compiler {
             };
             let (operand, source) = self.numeric_argument(&arguments[0])?;
             if !matches!(source, INTEGER | LONG | SINGLE | DOUBLE | BOOLEAN) {
-                return self.fail(format!("{name} requires a numeric argument"));
+                return self.fail(format!("`{name}` needs a number here, but was given text; use VAL(text$) to turn text into a number"));
             }
             if source == target {
                 return Ok(Some((operand, target)));
@@ -7205,7 +7205,7 @@ impl Compiler {
         if let Lowering::ToIntegral { width, signed } = intrinsic.lowering {
             let (operand, source) = self.expression(&arguments[0])?;
             if !(integral(source) || matches!(source, SINGLE | DOUBLE)) {
-                return self.fail(format!("{name} requires a numeric argument"));
+                return self.fail(format!("`{name}` needs a number here, but was given text; use VAL(text$) to turn text into a number"));
             }
             let target = integer_type(width.into(), signed);
             return Ok(Some((self.convert(operand, source, target)?, target)));
@@ -7270,7 +7270,7 @@ impl Compiler {
                 type_id = SINGLE;
             }
             if !matches!(type_id, SINGLE | DOUBLE) {
-                return self.fail(format!("{name} requires a numeric argument"));
+                return self.fail(format!("`{name}` needs a number here, but was given text; use VAL(text$) to turn text into a number"));
             }
             let result = self.value(type_id);
             self.emit(if intrinsic.lowering == Lowering::Abs { "fabs" } else { "fsqrt" }, vec![result], vec![operand]);
@@ -7279,7 +7279,7 @@ impl Compiler {
         if intrinsic.lowering == Lowering::Sign {
             let (operand, type_id) = self.numeric_argument(&arguments[0])?;
             if !matches!(type_id, INTEGER | LONG | SINGLE | DOUBLE | BOOLEAN | BYTE) {
-                return self.fail("SGN requires a numeric argument");
+                return self.fail("`SGN` needs a number here, but was given text; use VAL(text$) to turn text into a number");
             }
             let zero = if matches!(type_id, SINGLE | DOUBLE) {
                 self.floating_literal("0", type_id)?
@@ -7310,7 +7310,7 @@ impl Compiler {
                 type_id = SINGLE;
             }
             if !matches!(type_id, SINGLE | DOUBLE) {
-                return self.fail(format!("{name} requires a numeric argument"));
+                return self.fail(format!("`{name}` needs a number here, but was given text; use VAL(text$) to turn text into a number"));
             }
             let operand = self.argument_checked("fsin", operand, type_id)?;
             let result = self.value(type_id);
@@ -7336,7 +7336,7 @@ impl Compiler {
                 type_id = SINGLE;
             }
             if !matches!(type_id, SINGLE | DOUBLE) {
-                return self.fail("ATN requires a numeric argument");
+                return self.fail("`ATN` needs a number here, but was given text; use VAL(text$) to turn text into a number");
             }
             let result = self.value(type_id);
             self.emit("fatan", vec![result], vec![operand]);
@@ -7349,7 +7349,7 @@ impl Compiler {
                 type_id = SINGLE;
             }
             if !matches!(type_id, SINGLE | DOUBLE) {
-                return self.fail(format!("{name} requires a numeric argument"));
+                return self.fail(format!("`{name}` needs a number here, but was given text; use VAL(text$) to turn text into a number"));
             }
             let operand = self.argument_checked(
                 if intrinsic.lowering == Lowering::Log { "fln" } else { "fexp" },
@@ -7459,7 +7459,7 @@ impl Compiler {
                 return Ok(Some((operand, type_id)));
             }
             if !matches!(type_id, SINGLE | DOUBLE) {
-                return self.fail("INT requires a numeric argument");
+                return self.fail("`INT` needs a number here, but was given text; use VAL(text$) to turn text into a number");
             }
             return self.floor_float(operand, type_id).map(Some);
         }
@@ -7469,7 +7469,7 @@ impl Compiler {
                 return Ok(Some((operand, type_id)));
             }
             if !matches!(type_id, SINGLE | DOUBLE) {
-                return self.fail("FIX requires a numeric argument");
+                return self.fail("`FIX` needs a number here, but was given text; use VAL(text$) to turn text into a number");
             }
             // trunc(x) is floor(x), plus one where x is negative and not
             // whole: -1 AND -1 is -1 in QB, and subtracting it adds one.
@@ -7775,7 +7775,7 @@ impl Compiler {
         };
         if let Operand::Constant(_, Number::Integer(value)) = value {
             if !(-65536..=65535).contains(&value) {
-                return self.fail("Math overflow");
+                return self.fail("this number is too large for its type; use a LONG (&) or a floating-point type (! or #)");
             }
             return Ok(Operand::Constant(INTEGER, Number::Integer(value as u16 as i16 as i64)));
         }
@@ -7851,15 +7851,16 @@ impl Compiler {
             .signatures
             .get(canonical(name))
             .cloned()
-            .ok_or_else(
-                || SemanticError {
-                    message: format!("call to {name} has no source signature or audited runtime ABI contract"),
-                },
-            )?;
+            .ok_or(())
+            .or_else(|()| {
+                self.fail(format!(
+                    "`{name}` is called but no SUB or FUNCTION with that name exists; check the spelling, or define it (SUB {name} ... END SUB) or DECLARE it above"
+                ))
+            })?;
         if signature.parameters.len() != arguments.len() {
             return self.fail(format!(
-                "{name} expects {} arguments, got {}",
-                signature.parameters.len(),
+                "`{name}` takes {} but this call gives {}; compare the call with its SUB or FUNCTION line",
+                plural(signature.parameters.len(), "argument"),
                 arguments.len()
             ));
         }
@@ -7963,7 +7964,7 @@ impl Compiler {
                     }
                 };
                 if argument_type != *parameter_type {
-                    return self.fail(format!("BYREF argument type does not match {name}"));
+                    return self.fail(format!("an argument of `{name}` has a different type from the parameter that receives it; pass a variable of exactly the parameter's type (for example an INTEGER variable for an INTEGER parameter)"));
                 }
                 match place {
                     Operand::Indirect { base, offset, type_id, volatile, inbounds } => {
@@ -8048,7 +8049,7 @@ impl Compiler {
                 },
             );
         if needs_result && result.is_none() {
-            return self.fail(format!("SUB {name} is used as an expression"));
+            return self.fail(format!("`{name}` is a SUB and gives back no value, so it cannot be used inside an expression; make it a FUNCTION, or call it on its own line"));
         }
         // BASIC's ordinary convention is Pascal: evaluate and push the first
         // formal first. DECLARE ... CDECL alone uses C's right-to-left stack
@@ -8732,7 +8733,7 @@ impl Compiler {
         let numeric = |type_id| integral(type_id) || matches!(type_id, SINGLE | DOUBLE);
         let allowed = numeric(from) && numeric(to);
         if !allowed {
-            return self.fail(format!("unsupported implicit conversion {} to {}", self.name(from), self.name(to)));
+            return self.fail(format!("a {} cannot be turned into a {} automatically; convert it yourself (VAL, STR$, CINT, CLNG...)", self.name(from), self.name(to)));
         }
         if let Operand::Constant(_, Number::Integer(mut value)) = operand {
             if unsigned(to) && integral(from) && integer_width(from) == integer_width(to) {
@@ -8742,7 +8743,7 @@ impl Compiler {
             }
             if let Some(range) = integer_range(to) {
                 if !range.contains(&value) {
-                    return self.fail("Math overflow");
+                    return self.fail("this number is too large for its type; use a LONG (&) or a floating-point type (! or #)");
                 }
                 return Ok(Operand::Constant(to, Number::Integer(value)));
             }
@@ -8838,7 +8839,7 @@ impl Compiler {
             return Ok(variable.clone());
         }
         if self.dialect.explicit_declarations() {
-            return self.fail(format!("Variable not defined: {name}"));
+            return self.fail(format!("`{name}` has not been given a value or declared; check the spelling, or DIM it (OPTION EXPLICIT requires every variable to be declared)"));
         }
         let declaration = Declaration {
             name: key.clone(),
@@ -10550,4 +10551,12 @@ fn type_json(
         None => out.push_str("null"),
     }
     write!(out, ",\"width\":{}}}", type_.width).unwrap();
+}
+
+/// "1 argument", "2 arguments".
+fn plural(
+    count: usize,
+    noun: &str,
+) -> String {
+    if count == 1 { format!("1 {noun}") } else { format!("{count} {noun}s") }
 }

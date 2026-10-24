@@ -3,16 +3,30 @@
 use super::*;
 
 impl Ast<'_> {
+    /// The file ended inside a block: BC names the block, at its opening line.
+    pub(super) fn unclosed<T>(
+        &mut self,
+        opener: Span,
+        reason: &'static str,
+    ) -> R<T> {
+        if let Some(at) = self.tokens.iter().position(|one| one.span.line == opener.line && one.span.start == opener.start) {
+            self.i = at;
+        }
+        self.fail_because(reason)
+    }
+
     /// Statements up to a line `stop` recognises, which is left unread.
     pub(super) fn collect_until(
         &mut self,
+        opener: Span,
+        reason: &'static str,
         stop: fn(&Self) -> bool,
     ) -> R<Vec<Statement>> {
         let mut body = Vec::new();
         loop {
             self.skip_separators();
             if self.i >= self.tokens.len() {
-                return self.fail();
+                return self.unclosed(opener, reason);
             }
             if stop(self) {
                 return Ok(body);
@@ -163,7 +177,7 @@ impl Ast<'_> {
                 break;
             }
             if self.i >= self.tokens.len() {
-                return self.fail();
+                return self.unclosed(span, "Block IF without END IF");
             }
             let before = self.out.len();
             self.statement()?;
@@ -195,7 +209,7 @@ impl Ast<'_> {
         if !(self.eat(Kw::NewLine) || self.separator()) {
             return self.fail();
         }
-        let body = self.collect_until(|ast| ast.is(Kw::NEXT))?;
+        let body = self.collect_until(self.span(keyword), "FOR without NEXT", |ast| ast.is(Kw::NEXT))?;
         self.i += 1;
         let mut next_variable = None;
         if let (Some(Tok::Ident), TokenKind::Identifier(name)) = (self.tok_n(0), &self.tokens[self.i].kind) {
@@ -212,7 +226,7 @@ impl Ast<'_> {
         if !(self.eat(Kw::NewLine) || self.separator()) {
             return self.fail();
         }
-        let body = self.collect_until(|ast| ast.is(Kw::WEND))?;
+        let body = self.collect_until(self.span(keyword), "WHILE without WEND", |ast| ast.is(Kw::WEND))?;
         self.i += 1;
         self.out.push(Statement::While { condition, body, span: self.span(keyword) });
         Ok(())
@@ -230,7 +244,7 @@ impl Ast<'_> {
         if !(self.eat(Kw::NewLine) || self.separator()) {
             return self.fail();
         }
-        let body = self.collect_until(|ast| ast.is(Kw::LOOP))?;
+        let body = self.collect_until(self.span(keyword), "DO without LOOP", |ast| ast.is(Kw::LOOP))?;
         self.i += 1;
         let post = if self.eat(Kw::WHILE) {
             Some((true, self.exp()?))
@@ -258,6 +272,9 @@ impl Ast<'_> {
         let mut otherwise_seen = false;
         loop {
             self.skip_separators();
+            if self.i >= self.tokens.len() {
+                return self.unclosed(self.span(keyword), "SELECT without END SELECT");
+            }
             if self.at_end_select() {
                 self.i += 2;
                 break;
@@ -293,7 +310,7 @@ impl Ast<'_> {
             if !(self.eat(Kw::NewLine) || self.separator()) {
                 return self.fail();
             }
-            let body = self.collect_until(|ast| ast.is(Kw::CASE) || ast.at_end_select())?;
+            let body = self.collect_until(self.span(keyword), "SELECT without END SELECT", |ast| ast.is(Kw::CASE) || ast.at_end_select())?;
             if is_else {
                 otherwise = body;
             } else {
