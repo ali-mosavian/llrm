@@ -4048,7 +4048,14 @@ impl Compiler {
                         self.emit_runtime_call("B$SPLY", Vec::new(), vec![commands]);
                     }
                     "PALETTE_USING" => {
-                        return self.unsupported("PALETTE USING");
+                        // PDS 7.1 BC: B$PALU(far pointer to the first entry, near
+                        // pointer to the array's descriptor), as GET and PUT pass
+                        // their array.
+                        let [array] = arguments.as_slice() else {
+                            return self.fail("PALETTE USING takes one array element, such as `PALETTE USING p(0)`");
+                        };
+                        let operands = self.graphics_array(array)?;
+                        self.emit_runtime_call("B$PALU", Vec::new(), operands);
                     }
                     "PALETTE" => {
                         let [attribute, color] = arguments.as_slice() else {

@@ -2181,3 +2181,12 @@ fn put_may_leave_out_its_raster_operation() {
         matches!(&module.statements[..], [_, Statement::Runtime { name, arguments, .. }] if name == "PUT" && arguments.len() == 3)
     );
 }
+
+#[test]
+fn palette_using_passes_the_array_element_and_its_descriptor_to_b_palu() {
+    // PALETTE USING was refused. PDS 7.1 BC calls B$PALU with a far pointer to
+    // the named entry and the descriptor, as GET and PUT pass their array.
+    let module = parse("DEFINT A-Z\r\nDIM p(15) AS LONG\r\nSCREEN 13\r\nPALETTE USING p(0)\r\n", Dialect::Pds71).unwrap();
+    let hir = compile(&module, "palette_using", Dialect::Pds71, "pds71").unwrap();
+    assert_eq!(hir.matches("\"callee\":\"B$PALU\"").count(), 1, "{hir}");
+}
