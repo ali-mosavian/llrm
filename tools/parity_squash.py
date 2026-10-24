@@ -720,15 +720,13 @@ def new_lib_failures(
     changed crate. #3578 landed four of them because the fast path builds the tests (cargo check --all-targets) and runs none. `on_merged(packages)` -> failing `unit <pkg>::<test>`
     names; `on_head(by_package)` -> those of them that also fail on the head (exact names, only the failing ones are run there)."""
     smoke = parity_smoke_module()
-    packages, _ = smoke.workspace_graph()
-    touched = smoke.touched_packages(files, packages)
+    packages, graph = smoke.workspace_graph()
+    # The changed crates and every crate that depends on one: llrm-c's lib tests were red on parity while PRs merged, as each changed only a dependency.
+    touched = smoke.dependants(smoke.touched_packages(files, packages), graph)
     # llrm-mir's scan tests (`no_file_gains_*`) read every crate's sources: a change to any .rs under crates/ can turn one red,
     # in a crate whose own lib tests ran (extload.rs, booleans.rs and selectiondag/ did, with llrm-mir untouched: three reds landed).
     if touched and any(f.startswith("crates/") and f.endswith(".rs") for f in files):
         touched = touched | {SCAN_CRATE}
-    # llrm-c's toolchain-feature tests compile C through llrm-hir's lowering: a change to it runs them too (12 s on a warm target; #2936 broke them unseen).
-    if any(f.startswith(("crates/ir/llrm-hir/", "crates/frontends/llrm-c/")) for f in files):
-        touched = touched | {"llrm-c"}
     smoke.LAST_LIB.clear()
     failed = (on_merged or smoke.dependants_lib_failures)(touched) if touched else set()
     print(lib_tests_line(touched, smoke.LAST_LIB))
@@ -993,15 +991,15 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if os.environ.get("LAND_FAST_TESTS") == "1":
             changed = git("diff", "--name-only", BASE, "HEAD").split()
             if new := sorted(new_lib_failures(changed)):
-                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes")
+                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
                 failed_units.update(new)
                 return False
             if new := sorted(new_scanner_failures(changed)):
-                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes")
+                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
                 failed_units.update(new)
                 return False
         if os.environ.get("LAND_FAST_TESTS") != "1" and (new := sorted(landing_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), False))):
-            print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes")
+            print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
             failed_units.update(new)
             return False
         if unlinked := new_link_failures(git("diff", "--name-only", BASE, "HEAD").split()):
@@ -1048,6 +1046,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             return []
         culprits = [number for number in group if merge_alone(number) and any(failing_on_checkout(package, tests) for package, tests in by_package.items())]
         why = "; ".join(f"{test}: {LAST_PANICS[test]}" for _, test in sorted(units) if test in LAST_PANICS)
+        why = "; ".join(filter(None, [why, parity_smoke_module().causes_of(failed_units).strip(" []")]))
         named.update({number: f"alone on the head it fails {', '.join(sorted(failed_units))[:160]}" + (f" [{why[:300]}]" if why else "") for number in culprits})
         return culprits
 

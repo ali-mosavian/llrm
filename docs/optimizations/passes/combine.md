@@ -30,12 +30,6 @@ far (`visitors`: add, mul, and, or, xor, div, rem, shifts,
 trunc, zext, sext, icmp, getelementptr, select, store): the other `visit*`
 rewrites are `algebraic`'s, to move in as they are translated.
 
-DEVIATE (flags result): a comparison of a `flagsresult` routine's value
-(QB's B$SCMP: its result is the machine flags) and what reads that comparison
-are not visited: `sext (icmp slt v, 0)` to `ashr v, 15` would give the call
-a user instruction selection cannot read. The rule is
-`llrm_mir::facts::result_read_only_by_comparison`; the verifier states it.
-
 ## Used by
 `combine_pass::Combine`, the `combine@N` slots of LLVM's order.
 

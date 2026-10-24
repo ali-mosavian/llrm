@@ -1,9 +1,13 @@
 # Machine clean-up compile time: plan to 1.0x of the pin
 
 Owner: w-2. Dated 2026-10-23, due 10-26. Bucket "machine clean-up + FP stackifier" of
-[ledger4](ledger-command.md): ours 148.9 M, pin 49.4 M, excess 99.4 M (d_faces -O2 m32, dist
-`own2-c1ee613cda`, `ledger4.py` on `callgrind_annotate --inclusive=yes`; the coordinator's one-tip
-table says 135.1 M, the same bucket at another commit). One PR per step; each states the ledger
+[ledger4](ledger-command.md): ours 157.7 M, pin 49.5 M, excess 108 M (d_faces -O2 m32, dist
+`own2-4700242708`, re-measured 2026-10-24 with `ledger4.py` on this profile and the pinned-clang
+profile). The first version of this plan quoted 148.9 M / 99.4 M: those came from the ledger
+directory's own profile files, which `ledger4.py` reads by fixed name whatever its arguments are,
+not from the dist named there. The per-pass numbers below are from the first read; the order of
+magnitude holds (Peephole 74.6 M now against 73.7 M, FloatAlloc 22.3 M both times).
+One PR per step; each states the ledger
 command and the before/after M. "Remove" is ours minus the pin counterpart, an upper bound until the
 step is measured.
 
@@ -17,7 +21,7 @@ step is measured.
 | 6 | `X86OptimizeLEAs` / `X86FixupLEAs` / `convertToThreeAddress` for `addresses` + `lea_fixup` | 10.0 | 0.3 | 9.7 | 11-13 |
 | 7 | Row 45 PeepholeOptimizer pre-RA ([plan](row45-plan.md)); retire each post-RA rule group it makes dead, and one window walk for the rest | 41.9 (Peephole 73.7 less steps 1, 2, 4, 5, 6) | 1.0 | 40.9 | 11-06 first piece, rest 11-20 |
 | 8 | `BranchFolder` + `MachineBlockPlacement` for `jumps::ControlFlow` (row 82 plan; w-2 owns BranchFolder, cost and completion; tail duplication rows 34/83 and placement row 90 are splitkit's, split agreed in writing) | 17.6 | 5.9 | 11.7 | 11-13 |
-| 9 | `X86FPStackifier` for `FloatAlloc` + `FloatPrep` (inputs agreed with sdag-d: x87 emitter 11-20, sdag-b: SD6 fpstack contract) | 32.8 | 1.7 | 31.1 | plan 11-06, code 11-20 |
+| 9 | `X86FPStackifier` cost, see [fp-stackifier-plan](fp-stackifier-plan.md); not a switch-over (the allocator route is the default); `FloatAlloc` + `FloatPrep` (inputs agreed with sdag-d: x87 emitter 11-20, sdag-b: SD6 fpstack contract) | 32.8 | 1.7 | 31.1 | plan 11-06, code 11-20 |
 | 10 | Retire `LoopSlots`, `SharedConstants` (no pin counterpart) | 5.4 | 0 | 5.4 | 11-13 premise |
 | 11 | Row 65 Machine Scheduler replaces `PressureSink` | 4.8 | 10.4 | -5.6 | 11-06 |
 

@@ -1,3 +1,8 @@
+---
+architecture-index: Recursion rows (D10)
+architecture-order: 9100
+---
+
 # Recursion rows
 
 D10 of [inline cost](../../crates/opt/llrm-transforms/src/inlinecost.rs): a tree-recursive function is copied into itself as gcc's [`recursive_inlining`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/ipa-inline.cc#L1645) does, to depth 3 (gcc: 8), 150 `gcc_insns` (gcc: 450, [params.opt](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/params.opt#L549)) and the call's frequency over the entry's above 10% ([`want_inline_self_recursive_call_p`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/ipa-inline.cc#L991), [L1067](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/gcc/ipa-inline.cc#L1067)), only where its distinct self-calls average one or more per call (a tree), not at -Os. Measured with the installed gcc 13.4.0 binary's `-Q --help=params`; the cited source is 13.3.0 (same defaults).

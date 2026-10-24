@@ -55,6 +55,7 @@ pub fn emit(
             if program.stack_check.is_some() {
                 check_stack(&mut emitted.module);
             }
+            evaluate_extended(&mut emitted.module);
             emitted
         })
         .collect()
@@ -71,6 +72,25 @@ fn check_stack(module: &mut Module) {
         let naked = function.attrs.iter().any(|one| matches!(one, Attribute::Flag(flag) if flag == "naked"));
         if !function.is_declaration() && !naked && function.calling_convention != llrm_mir::opcode::X86_INTR {
             function.attrs.push(Fact::StackCheck.carrier());
+        }
+    }
+}
+
+/// Every function the module defines evaluates its float math on the x87, at
+/// extended precision: `llvm.log` and its kin are not the host libm's doubles
+/// (`llrm_mir::constantfolding::FP_EVAL`), so the constant folder leaves them.
+fn evaluate_extended(module: &mut Module) {
+    for global in &mut module.globals {
+        let llrm_mir::GlobalKind::Function(function) = &mut global.kind else { continue };
+        if !function.is_declaration() {
+            function
+                .attrs
+                .push(
+                    Attribute::Str(
+                        llrm_mir::constantfolding::FP_EVAL.to_owned(),
+                        Some(llrm_mir::constantfolding::FP_EVAL_EXTENDED.to_owned()),
+                    ),
+                );
         }
     }
 }

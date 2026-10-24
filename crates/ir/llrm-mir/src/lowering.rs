@@ -169,6 +169,14 @@ pub trait Lowering {
         false
     }
 
+    /// `preferZeroCompareBranch` (TargetLowering.h L770): whether a branch on a
+    /// compare with a constant is better made a branch on a compare with zero
+    /// of a value the block computes anyway. The base class says no; x86 says
+    /// yes (X86ISelLowering.cpp L3805).
+    fn prefer_zero_compare_branch(&self) -> bool {
+        false
+    }
+
     /// The same question about the mask the `and` applies (`None`: unknown),
     /// which AArch64 answers by: a single-bit mask is a `tbz`, so the pair is
     /// folded; any other is better made again at each compare. By default the

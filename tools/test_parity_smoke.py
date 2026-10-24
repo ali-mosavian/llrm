@@ -508,6 +508,28 @@ def test_dependants_lib_failures_name_each_failing_test_per_package():
     assert ran == [["-p", "llrm-core", "--lib"]]
 
 
+def test_a_crate_that_did_not_run_shows_why_in_its_refusal():
+    """#4269 was refused twice for `unit <crate>::did-not-run` and the log held nothing else: the compile error (or the crash's exit and last lines) of the crate's test run is kept."""
+
+    def failing(stderr, code):
+        class Done:
+            returncode = code
+            stdout = ""
+
+        Done.stderr = stderr
+        return lambda command, **kwargs: Done()
+
+    ps.CAUSES.clear()
+    broken = "   Compiling llrm-core\nerror[E0432]: unresolved import `crate::nothing`\n --> src/lib.rs:1:5\nerror: could not compile `llrm-core` (lib test)\n"
+    assert ps.dependants_lib_failures({"llrm-core"}, run=failing(broken, 101)) == {"unit llrm-core::did-not-run"}
+    assert "unresolved import `crate::nothing`" in ps.causes_of({"unit llrm-core::did-not-run"})
+    ps.CAUSES.clear()
+    crashed = "running 3 tests\nerror: test failed, to rerun pass `-p llrm-core --lib`\n\nCaused by:\n  process didn't exit successfully (signal: 11, SIGSEGV)\n"
+    ps.dependants_lib_failures({"llrm-core"}, run=failing(crashed, 101))
+    assert "SIGSEGV" in ps.causes_of({"unit llrm-core::did-not-run"})
+    assert ps.causes_of({"unit llrm-core::some_test"}) == ""
+
+
 def test_every_integration_target_is_mapped_and_an_unmapped_one_is_refused():
     """A transforms PR that breaks loop_rotation must run it: each root integration target is mapped from what its source imports and the compilers it runs. A new target with
     no crate behind it that is neither a scanner nor nightly-only fails here."""
