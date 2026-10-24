@@ -1514,6 +1514,28 @@ impl Emitter<'_, '_> {
                 self.inline_places.push((at, patched));
                 return Ok(Some(()));
             }
+            // `llrm.ia16.asm`: a block of bytes laid down at the site, its
+            // inputs in the registers the name states, as a call of its name
+            // that clobbers what the name says. A block that names symbols is
+            // not translated.
+            "CALL_ASM" => {
+                let NodeData::Symbol(id) = self.dag.node(node.ops[1]).data else {
+                    return Err(EmitError::Unsupported("inline assembly without its name".to_owned()));
+                };
+                let name = self.dag.symbol_names[id as usize].clone();
+                let block = llrm_mir::intrinsics::asm(&name)
+                    .ok_or_else(|| EmitError::Unsupported("inline assembly that does not parse".to_owned()))?;
+                if !block.fixups.is_empty() {
+                    return Err(EmitError::Unsupported("inline assembly naming symbols".to_owned()));
+                }
+                let callee = Callee::Named(name);
+                let at = self.push_call(
+                    Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) },
+                    Some(&callee),
+                );
+                self.calls.push((at, callee));
+                return Ok(Some(()));
+            }
             // A call through a far pointer: the offset and the selector sit in
             // a four-byte cell, which the call reads (`call dword ptr [cell]`).
             "CALL_FAR" => {

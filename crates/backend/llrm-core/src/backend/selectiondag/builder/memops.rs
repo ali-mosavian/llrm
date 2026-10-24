@@ -584,6 +584,7 @@ impl Builder<'_> {
         let operands = &instruction.operands;
         let proved = |kind: &str| instruction.metadata.iter().any(|(one, _)| one == kind);
         let forward = proved(llrm_mir::intrinsics::FORWARD) && !proved(llrm_mir::intrinsics::BACKWARD);
+        let backward = proved(llrm_mir::intrinsics::BACKWARD) && !proved(llrm_mir::intrinsics::FORWARD);
         let volatile = match operands.get(3) {
             Some(Operand::Constant(id)) => matches!(self.module.context.get(*id).kind, ConstantKind::Int(1)),
             _ => return Err(Refused("memory intrinsic with a variable volatile flag")),
@@ -643,6 +644,10 @@ impl Builder<'_> {
                     // needs
                     _ if forward && matches!(which, Intrinsic::MemMove) && !self.runtime_has("memmove") => {
                         self.rep_movsb(root, dst, other, size)
+                    }
+                    // proved backward, no `memmove`: from the last byte down
+                    _ if backward && matches!(which, Intrinsic::MemMove) && !self.runtime_has("memmove") => {
+                        self.backward_rep_movsb(root, dst, other, size)
                     }
                     _ if !self.runtime_has(if matches!(which, Intrinsic::MemCpy) { "memcpy" } else { "memmove" }) => {
                         // the old selector refuses it too: no instruction moves
@@ -724,6 +729,41 @@ impl Builder<'_> {
         let byte = self.dag.get_value_type_node(EVT::I8);
         let rep = self.dag.get_node_multi(x86isd::REP_MOVS, &[EVT::OTHER, EVT::GLUE], &[chain, byte, glue]);
         SDValue { node: rep.node, res: 0 }
+    }
+
+    /// `std; rep movsb; cld` from the last byte of each side: a move a pass
+    /// proved backward, where the runtime has no `memmove`. The pin calls
+    /// `memmove`; this is the old selector's backward copy as one inline block
+    /// (`LLRM_ASM`, SD305) with `cx`, `si` and `di` as its operands.
+    fn backward_rep_movsb(
+        &mut self,
+        chain: SDValue,
+        dst: SDValue,
+        src: SDValue,
+        size: SDValue,
+    ) -> SDValue {
+        use super::super::inline_asm::lower_asm;
+        let pointer = self.target.dag.pointer;
+        let count = self.dag.get_zext_or_trunc(size, pointer);
+        let last = |this: &mut Self, base: SDValue| {
+            let minus_one = this.dag.get_constant(mask_of(pointer), pointer);
+            let end = this.dag.get_node(ISD::Add, pointer, &[base, count]);
+            this.dag.get_node(ISD::Add, pointer, &[end, minus_one])
+        };
+        let (from, to) = (last(self, src), last(self, dst));
+        let block = llrm_mir::intrinsics::AsmBlock {
+            code: vec![0xFD, 0xF3, 0xA4, 0xFC],
+            inputs: vec!["cx".into(), "si".into(), "di".into()],
+            outputs: Vec::new(),
+            clobbers: vec!["cx".into(), "si".into(), "di".into()],
+            memory: true,
+            fixups: Vec::new(),
+        };
+        let name = llrm_mir::intrinsics::asm_name(&block);
+        let registers = [("cx", count), ("si", from), ("di", to)]
+            .map(|(name, value)| (self.sized_register(self.arch.register_named(name), pointer), value));
+        let (chain, _) = lower_asm(&mut self.dag, chain, &name, &[], &registers, &[]);
+        chain
     }
 
     /// `rep stosb` of a size not known at compile time.
@@ -944,4 +984,9 @@ fn common_alignment(
     offset: u64,
 ) -> u64 {
     if offset == 0 { align } else { align.min(1 << offset.trailing_zeros()) }
+}
+
+/// All ones at a pointer's width.
+fn mask_of(vt: EVT) -> u128 {
+    super::super::fold::mask(vt.size_in_bits())
 }

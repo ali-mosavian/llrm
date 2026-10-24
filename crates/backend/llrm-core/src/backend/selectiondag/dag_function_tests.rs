@@ -2353,15 +2353,17 @@ fn select_m32(ir: &str) -> Result<crate::backend::isel::Selected, String> {
         .map_err(|e| e.0)
 }
 
-/// A `memmove` a pass proved forward is a `memcpy`: with no `memmove` in the
-/// runtime it was refused (`copyw.nib`'s scroll up); one proved backward or
-/// not at all still is.
+/// A `memmove` a pass proved forward is `rep movsb`, one proved backward is
+/// `std; rep movsb; cld` from the last byte, where the runtime has no
+/// `memmove` (`copyw.nib`'s scroll up and down at m32); one proved neither way
+/// is still refused.
 #[test]
-fn a_memmove_proved_forward_is_a_copy() {
+fn a_memmove_with_a_proved_direction_is_a_string_copy() {
     assert!(select_m32(&memmove_ir(", !llrm.forward !0")).is_ok());
-    let refused = select_m32(&memmove_ir(", !llrm.backward !0")).err().expect("backward");
+    let backward = select_m32(&memmove_ir(", !llrm.backward !0")).unwrap_or_else(|why| panic!("{why}"));
+    assert!(backward.inline.values().any(|bytes| bytes[..] == [0xFD, 0xF3, 0xA4, 0xFC]), "{:?}", backward.inline);
+    let refused = select_m32(&memmove_ir("")).err().expect("no direction proved");
     assert!(refused.contains("memmove"), "{refused}");
-    assert!(select_m32(&memmove_ir("")).is_err());
 }
 
 const SCALED_INDEX_AT_M16: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
