@@ -1475,6 +1475,11 @@ pub fn address_operand(
             bits,
         );
     }
+    // A place and an index: the place's displacement is part of the address
+    // (`lea ebx,[esp+edx*4+12]` lost its 12: bintree under --isel=dag).
+    if cell.addr.is_some() && cell.through != RegId::None {
+        return _scaled_operand(cell, bits);
+    }
     if cell.through == RegId::None && cell.index_through == RegId::None {
         return None;
     }
@@ -1497,14 +1502,18 @@ pub fn compare_registers(
     if name == "cmp" {
         return arith("cmp", one, other, at);
     }
-    if name != "test" {
+    if name != "test" && name != "bt" {
         return None;
     }
     let width = width_of(one)?;
     if width_of(other) != Some(width) {
         return None;
     }
-    let code = code_of!("TEST_RM", width * 8, "_R", width * 8)?;
+    let code = if name == "bt" {
+        code_of!("BT_RM", width * 8, "_R", width * 8)?
+    } else {
+        code_of!("TEST_RM", width * 8, "_R", width * 8)?
+    };
     _assemble(&raised(create_reg_reg(code, one, other)), at, true)
 }
 
@@ -2292,6 +2301,14 @@ pub fn emit_in(
         // BINARY's own rule: sources[0] IS dests[0].
         let (dest, source) = (&dests[0], &sources[1]);
         if let (Some(into), Some(outof)) = (reg_of(dest), reg_of(source)) {
+            if name == "btc" {
+                let width = width_of(into)?;
+                if width_of(outof) != Some(width) {
+                    return None;
+                }
+                let code = code_of!("BTC_RM", width * 8, "_R", width * 8)?;
+                return _assemble(&raised(create_reg_reg(code, into, outof)), at, true);
+            }
             return arith(name, into, outof, at);
         }
         if let (Some(into), Some(value)) = (reg_of(dest), imm_of(source)) {

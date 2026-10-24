@@ -143,7 +143,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     ) -> EVT {
         match self.dag.opcode(node) {
             ISD::Br | ISD::BrCond | ISD::BrCC | ISD::BrJT => EVT::OTHER,
-            ISD::SIntToFp | ISD::UIntToFp => self.dag.value_type(self.dag.operand(node, 0)),
+            ISD::SIntToFp | ISD::UIntToFp | ISD::LRint => self.dag.value_type(self.dag.operand(node, 0)),
             ISD::SetCC | ISD::Store => {
                 self.dag.value_type(self.dag.operand(node, if self.dag.opcode(node) == ISD::Store { 1 } else { 0 }))
             }
