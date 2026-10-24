@@ -39,6 +39,10 @@ os.environ.setdefault("LLRM_VERIFY", "1")  # the gate checks each pass and phase
 MODULES = ("host", "render", "model", "game", "sound", "ui")
 DATA = ("stuff.ini", "default.cfg", "start.qmp", "QUAKE.QPK", "run.conf")
 ARGUMENTS = "start.qmp -ticks 300"
+# The attract loop: an empty command line starts `startdemos demo1 demo2 demo3` (src/host/sys.c). run.sh gives an empty argument its default, so one space.
+ATTRACT_ARGUMENTS = " "
+ATTRACT_DEMOS = ("demo1.qdc", "demo2.qdc", "demo3.qdc")
+LOGS = ("cstep.txt", "dosbox.out", "dosbox.log", "cport.txt", "CPORT.TXT", "error.log", "ERROR.LOG")
 # FP87 first: the order the build that runs uses; CM first leaves a program that links and stops after its arguments.
 LIBRARIES = ("FP87", "MATHM", "CM")
 TOOLCHAIN_FILES = {"C0M.OBJ", *(f"{name}.LIB" for name in LIBRARIES)}  # what the listing names by the path it had where the Borland build was made
@@ -109,15 +113,34 @@ def tails(directory: Path, lines: int = 12) -> list[str]:
     return out or [f"  {directory.name}: no output at all ({sorted(p.name for p in directory.iterdir())[:12]})"]
 
 
+def attract_problems(directory: Path) -> list[str]:
+    """What the attract loop run in `directory` did wrong: a demo it never started, and every line that says it ran out of memory. Empty where all three played."""
+    def text(name: str) -> str:
+        one = directory / name
+        return one.read_text(errors="replace") if one.is_file() else ""
+
+    # run.sh writes cstep.txt from the emulator's log only when the emulator exits: a run stopped while it plays has the lines in dosbox.log and dosbox.out.
+    started = re.findall(r"attract demo (\S+) map", "\n".join(text(name) for name in LOGS).replace("\r", ""))
+    memory = [line.strip() for name in LOGS for line in text(name).replace("\r", "").splitlines() if "out of memory" in line.lower()]
+    missing = [demo for demo in ATTRACT_DEMOS if demo not in started]
+    return ([f"never started: {' '.join(missing)}"] if missing else []) + list(dict.fromkeys(memory))[:3]
+
+
+def attract_over(directory: Path) -> bool:
+    """The attract run has said all it will: all three demos started, or it ran out of memory."""
+    problems = attract_problems(directory)
+    return not problems or any("out of memory" in one.lower() for one in problems)
+
+
 def progress(directory: Path) -> int:
     """How much the run has written: the emulator's log grows as the program steps, so a stalled run's does not."""
     return sum(one.stat().st_size for one in directory.iterdir() if one.is_file())
 
 
-def run(directory: Path, qcport: Path, stall: float, cap: float, tick: float = 1.0) -> str | None:
-    """Run QCport in `directory`; None when it finished, else why it was stopped: no progress for `stall` s, or `cap` s in all."""
+def run(directory: Path, qcport: Path, stall: float, cap: float, tick: float = 1.0, arguments: str = ARGUMENTS, over=None) -> str | None:
+    """Run QCport in `directory`; None when it finished (or `over(directory)` said so), else why it was stopped: no progress for `stall` s, or `cap` s in all."""
     environment = {**os.environ, "DOSBOX_BIN": os.environ.get("DOSBOX_BIN", str(dosbatch.DOSBOX)), "TIMEOUT": str(int(cap))}
-    child = subprocess.Popen([str(qcport.parent / "tools" / "run.sh"), str(directory), ARGUMENTS], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    child = subprocess.Popen([str(qcport.parent / "tools" / "run.sh"), str(directory), arguments], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     start = moved = time.monotonic()
     seen = -1
     while child.poll() is None:
@@ -125,6 +148,10 @@ def run(directory: Path, qcport: Path, stall: float, cap: float, tick: float = 1
         now = time.monotonic()
         if (size := progress(directory)) != seen:
             seen, moved = size, now
+        if over and over(directory):
+            os.killpg(child.pid, signal.SIGKILL)
+            child.wait()
+            return None
         why = f"no progress for {stall:g}s" if now - moved > stall else f"still running after {cap:g}s" if now - start > cap else None
         if why:
             os.killpg(child.pid, signal.SIGKILL)
@@ -186,7 +213,18 @@ def main() -> int:
         if not (reference.get("polys") and built.get("polys")):
             print("\n".join(line for side in sides.values() for line in tails(side)))
         return 1
-    print(f"QCport: {len(sources)} modules by llrm-c draw what the Borland build draws: {built['frames']} frames, {built['polys']} polys, bmp {built['md5'][:8]}")
+    # The attract loop (an empty command line) must play all three demos on both builds: QCport -O2 at b9e7400be drew the benchmark and ran out of memory loading miptex.bin.
+    for side in sides.values():  # run.sh clears error.log, and the program writes ERROR.LOG: the benchmark run's would be read as the attract run's
+        (side / "ERROR.LOG").unlink(missing_ok=True)
+    attract_cap, attract_stall = float(os.environ.get("QCPORT_ATTRACT_SECONDS", "900")), float(os.environ.get("QCPORT_ATTRACT_STALL_SECONDS", "300"))  # loading a demo is silent for minutes at the pinned 75000 cycles
+    with ThreadPoolExecutor() as pool:
+        stopped = [why for why in pool.map(lambda side: run(side, qcport, attract_stall, attract_cap, arguments=ATTRACT_ARGUMENTS, over=attract_over), sides.values()) if why]
+    wrong = {name: attract_problems(side) for name, side in sides.items()}
+    if stopped or any(wrong.values()):
+        print("the attract loop (empty command line) did not play all three demos:", *(f"{name}: {'; '.join(problems)}" for name, problems in wrong.items() if problems), *stopped, f"({work})", sep="\n  ")
+        print("\n".join(line for side in sides.values() for line in tails(side)))
+        return 1
+    print(f"QCport: {len(sources)} modules by llrm-c draw what the Borland build draws: {built['frames']} frames, {built['polys']} polys, bmp {built['md5'][:8]}; the attract loop plays demo1-3 on both")
     dosbatch.discard(work)
     return 0
 
