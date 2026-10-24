@@ -10,11 +10,6 @@ TOOLS = Path(__file__).resolve().parent
 # Tools that time or count the compiler's own work, not a verdict on whether it compiled. They leave out the encoder's cost too; moving them
 # to an object moves their baselines, so each is listed with its owner's reason rather than silently.
 MEASURING = {
-    "abmeasure.py": "perf and callgrind of one compile",
-    "leaf_sites.py": "callgrind note",
-    "test_alloc_scaling.py": "allocator time against size",
-    "test_budgets.py": "stage counts against size",
-    "pgo/pgo.py": "profile run of the compiler",
     "test_compile_gap.py": "asserts the gap tool does not print to /dev/null",
     "parity_smoke.py": "compile_ok swaps the null device for an object (test_parity_smoke)",
 }

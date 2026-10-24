@@ -36,7 +36,8 @@ def straight(n: int) -> str:
 
 def steps(compiler: Path, source: Path, level: str = "-O1", *flags: str, target: tuple[str, ...] = ("-m32", "-march=i486")) -> dict[str, float]:
     """Each step's own instructions in millions (`LLRM_DEBUG=time`'s `[instr]` rows); skips where the host has no counter."""
-    done = subprocess.run([str(compiler), *target, level, *flags, "-o", os.devnull, str(source)], capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
+    with llrmbin.with_object([str(compiler), *target, level, *flags, "-o", llrmbin.OBJECT, str(source)]) as command:
+        done = subprocess.run(command, capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
     assert done.returncode == 0, done.stderr[-500:]
     rows = re.findall(r"^\[instr\]\s+([\d.]+) (Minstr|Mcpu-ns) own\s+[\d.]+ \S+ total\s+\d+x (.+)$", done.stderr, re.M)
     if not rows or any(unit != "Minstr" for _, unit, _ in rows):
@@ -46,7 +47,8 @@ def steps(compiler: Path, source: Path, level: str = "-O1", *flags: str, target:
 
 def calls(compiler: Path, source: Path, level: str, step: str) -> int:
     """How many times `LLRM_DEBUG=time` timed `step`."""
-    done = subprocess.run([str(compiler), "-m32", "-march=i486", level, "-o", os.devnull, str(source)], capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
+    with llrmbin.with_object([str(compiler), "-m32", "-march=i486", level, "-o", llrmbin.OBJECT, str(source)]) as command:
+        done = subprocess.run(command, capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
     return int(re.search(rf"^\[instr\].*total\s+(\d+)x {re.escape(step)}$", done.stderr, re.M).group(1))
 
 
