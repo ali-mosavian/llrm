@@ -19,9 +19,10 @@
 //! - With several exit blocks, [`crate::lcssamerges`] makes a phi at each and
 //!   merges them where the exits' paths join.
 //!
-//! First, a phi outside any loop exit whose inputs are all one value is
-//! replaced by that value: no loop closes there any more. The new phi is named
-//! after its value with `.lcssa`. The pass is idempotent.
+//! Phis are only added, as `formLCSSA` does: a phi outside any loop exit whose
+//! inputs are all one value stays for the passes that fold it
+//! ([`LoopOpened`] removes the exit ones after LSR). The new phi is named after
+//! its value with `.lcssa`. The pass is idempotent.
 //!
 //! The helpers `arms`, `from_arms`, `operations`, `definitions`, `exit_phi` and
 //! `place_phi` read and build phis for many other loop passes.
@@ -155,8 +156,7 @@ pub fn closed_in(
 ) -> Result<bool, String> {
     // The edges leaving each loop, found once: closing adds phis, never edges.
     let exits = shape.loops.iter().map(|loop_| loop_.exits(function)).collect::<Vec<_>>();
-    let opened = opened_with(function, shape, false, Some(&exits))?;
-    Ok(formed_with(function, shape, &exits)? | opened)
+    formed_with(function, shape, &exits)
 }
 
 /// `formLCSSA` of every loop: the exit phis a loop lacks are added, and none
@@ -284,26 +284,11 @@ fn opened_in(
     shape: &cfg::Shape,
     exits_too: bool,
 ) -> Result<bool, String> {
-    opened_with(function, shape, exits_too, None)
-}
-
-/// [`opened_in`], the edges leaving each loop given where the caller has them.
-fn opened_with(
-    function: &mut Function,
-    shape: &cfg::Shape,
-    exits_too: bool,
-    leaving: Option<&[Vec<(i64, i64)>]>,
-) -> Result<bool, String> {
     let graph = cfg::graph(function);
     let mut exits = BTreeSet::new();
     if !exits_too {
-        match leaving {
-            Some(leaving) => exits.extend(leaving.iter().flatten().map(|&(_, to)| to)),
-            None => {
-                for loop_ in &shape.loops {
-                    exits.extend(loop_.exits(function).into_iter().map(|(_, to)| to));
-                }
-            }
+        for loop_ in &shape.loops {
+            exits.extend(loop_.exits(function).into_iter().map(|(_, to)| to));
         }
     }
     let one = |function: &Function, phi: InstId| {
