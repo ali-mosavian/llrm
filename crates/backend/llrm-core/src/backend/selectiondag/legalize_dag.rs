@@ -143,7 +143,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     ) -> EVT {
         match self.dag.opcode(node) {
             ISD::Br | ISD::BrCond | ISD::BrCC | ISD::BrJT => EVT::OTHER,
-            ISD::SIntToFp | ISD::UIntToFp => self.dag.value_type(self.dag.operand(node, 0)),
+            ISD::SIntToFp | ISD::UIntToFp | ISD::LRint => self.dag.value_type(self.dag.operand(node, 0)),
+            ISD::SignExtendInReg => match self.dag.node(self.dag.operand(node, 1)).data {
+                NodeData::ValueType(inner) => inner,
+                _ => self.dag.value_type(node),
+            },
             ISD::SetCC | ISD::Store => {
                 self.dag.value_type(self.dag.operand(node, if self.dag.opcode(node) == ISD::Store { 1 } else { 0 }))
             }
@@ -364,6 +368,20 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let vt = self.dag.value_type(node);
         let ready = |legalizer: &Self, op: ISD| legalizer.tli.is_operation_legal_or_custom(op, vt);
         match op {
+            ISD::SignExtendInReg => {
+                // An in-register sign extension of a boolean is a negation of
+                // the masked bit; any other width is a shift pair.
+                let NodeData::ValueType(inner) = self.dag.node(self.dag.operand(node, 1)).data else { return None };
+                let x = self.dag.operand(node, 0);
+                if inner.size_in_bits() == 1 {
+                    let one = self.dag.get_constant(1, vt);
+                    let bit = self.dag.get_node(ISD::And, vt, &[x, one]);
+                    return Some(vec![self.dag.get_negative(bit, vt)]);
+                }
+                let by = self.dag.get_constant(u128::from(vt.size_in_bits() - inner.size_in_bits()), EVT::I8);
+                let up = self.dag.get_node(ISD::Shl, vt, &[x, by]);
+                Some(vec![self.dag.get_node(ISD::Sra, vt, &[up, by])])
+            }
             ISD::UDiv | ISD::SDiv => {
                 let divrem = if op == ISD::SDiv { ISD::SDivRem } else { ISD::UDivRem };
                 if !ready(self, divrem) {

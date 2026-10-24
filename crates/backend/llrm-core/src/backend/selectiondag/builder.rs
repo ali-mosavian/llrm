@@ -16,6 +16,7 @@ mod codecall;
 mod mathops;
 mod memops;
 mod switch;
+mod tailcall;
 
 use llrm_lir::registers::RegId;
 
@@ -30,6 +31,16 @@ use crate::backend::isel::{Convention, Parameter, convention_for};
 /// counts these per reason.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Refused(pub &'static str);
+
+/// Where a runtime routine leaves its answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimeAnswer {
+    /// The registers its convention names.
+    Registers,
+    /// The flags, as a compare of the answer with zero leaves them
+    /// (`Contract::flags_result`).
+    Flags,
+}
 
 /// The target facts the builder asks (`TLI->` in the pin).
 #[derive(Clone, Debug)]
@@ -49,9 +60,10 @@ pub struct BuilderTarget {
     /// `-fexcess-precision=standard`: an integer too wide for its float type's
     /// mantissa is rounded to that type (x87 would keep it exact).
     pub float_store: bool,
-    /// A `llrm.qb.` routine has a contract of its own (stack arguments, flags
-    /// results) that is not translated: a call of one is refused.
-    pub runtime_contracts: bool,
+    /// For a program whose ABI gives its runtime routines contracts: whether
+    /// the convention models each call of a `llrm.qb.` routine, by call. A call
+    /// not listed, or listed with a reason, is refused.
+    pub runtime_calls: Option<IdMap<InstId, Result<RuntimeAnswer, &'static str>>>,
 }
 
 impl BuilderTarget {
@@ -73,12 +85,12 @@ impl BuilderTarget {
         self
     }
 
-    /// This target refusing calls of `llrm.qb.` routines when `on`.
-    pub fn with_runtime_contracts(
+    /// This target with the verdict on each call of a runtime routine.
+    pub fn with_runtime_call_verdicts(
         mut self,
-        on: bool,
+        verdicts: Option<IdMap<InstId, Result<RuntimeAnswer, &'static str>>>,
     ) -> BuilderTarget {
-        self.runtime_contracts = on;
+        self.runtime_calls = verdicts;
         self
     }
 
@@ -110,7 +122,7 @@ impl BuilderTarget {
             libcalls: None,
             stack_align: None,
             float_store: false,
-            runtime_contracts: false,
+            runtime_calls: None,
         }
     }
 
@@ -124,7 +136,7 @@ impl BuilderTarget {
             libcalls: None,
             stack_align: None,
             float_store: false,
-            runtime_contracts: false,
+            runtime_calls: None,
         }
     }
 }
@@ -139,6 +151,9 @@ pub struct BlockDag {
     /// The blocks a `switch` lowering made, built after it: their ids start
     /// at the function's block capacity.
     pub extra: Vec<(BlockId, BlockDag)>,
+    /// The calls in tail position (`isInTailCallPosition`); step 3 makes them
+    /// `TC_RETURN`s.
+    pub tail_calls: Vec<InstId>,
 }
 
 /// `SelectionDAGISel::SelectBasicBlock` for `block`; the entry block also
@@ -179,7 +194,7 @@ pub fn build_block(
     let root = builder.control_root();
     builder.dag.set_root(root);
     let switch_name = dag_name(&builder.dag, block);
-    let Builder { dag, phi_updates, live_ins, deferred, order, info, next_synthetic, .. } = builder;
+    let Builder { dag, phi_updates, live_ins, deferred, order, info, next_synthetic, tail_calls, .. } = builder;
     // `FinishBasicBlock`: the blocks the switch lowering made, in a layout that
     // is final
     let mut extra = Vec::new();
@@ -203,11 +218,19 @@ pub fn build_block(
         let root = one.control_root();
         one.dag.set_root(root);
         next = one.next_synthetic;
-        extra
-            .push((block, BlockDag { dag: one.dag, phi_updates: Vec::new(), live_ins: Vec::new(), extra: Vec::new() }));
+        extra.push((
+            block,
+            BlockDag {
+                dag: one.dag,
+                phi_updates: Vec::new(),
+                live_ins: Vec::new(),
+                extra: Vec::new(),
+                tail_calls: one.tail_calls,
+            },
+        ));
     }
     info.next_block = next;
-    Ok(BlockDag { dag, phi_updates, live_ins, extra })
+    Ok(BlockDag { dag, phi_updates, live_ins, extra, tail_calls })
 }
 
 fn dag_name(
@@ -253,6 +276,8 @@ impl<'a> Builder<'a> {
         let name = synthetic_name.unwrap_or_else(|| dag_name(&dag, block));
         dag.block_names.resize(next_synthetic as usize, name);
         Builder {
+            current: None,
+            prelowered: Default::default(),
             module,
             function,
             layout,
@@ -267,6 +292,7 @@ impl<'a> Builder<'a> {
             pending_exports: Vec::new(),
             constants_out: HashMap::new(),
             phi_updates: Vec::new(),
+            tail_calls: Vec::new(),
             block,
             order,
             deferred: Vec::new(),
@@ -277,6 +303,10 @@ impl<'a> Builder<'a> {
 }
 
 struct Builder<'a> {
+    /// The instruction being visited.
+    current: Option<InstId>,
+    /// Compares made early, at the call whose flags they read.
+    prelowered: llrm_mir::dense::IdSet<InstId>,
     module: &'a Module,
     function: &'a Function,
     layout: &'a DataLayout,
@@ -291,6 +321,7 @@ struct Builder<'a> {
     pending_exports: Vec<SDValue>,
     constants_out: HashMap<ConstantId, u32>,
     phi_updates: Vec<(ValueId, u32)>,
+    tail_calls: Vec<InstId>,
     block: BlockId,
     /// The blocks in layout order, with the ones a switch lowering adds.
     order: Vec<BlockId>,
@@ -693,12 +724,17 @@ impl Builder<'_> {
                     },
                 );
         }
-        if self.target.runtime_contracts
+        let mut flags_answer = false;
+        if let Some(verdicts) = &self.target.runtime_calls
             && direct
                 .and_then(|global| self.module.global(global).name.owned())
                 .is_some_and(|name| name.starts_with(llrm_hir::mir::RUNTIME))
         {
-            return Err(Refused("call of a QB runtime routine: its contract is not translated"));
+            match self.current.and_then(|inst| verdicts.get(&inst)) {
+                Some(Ok(answer)) => flags_answer = *answer == RuntimeAnswer::Flags,
+                Some(Err(why)) => return Err(Refused(why)),
+                None => return Err(Refused("call of a QB runtime routine nobody checked")),
+            }
         }
         let mut arg_types = Vec::new();
         for argument in arguments {
@@ -787,9 +823,79 @@ impl Builder<'_> {
                 Some((self.layout.alloc_size(&self.module.context.types, ty), align.unwrap_or(4)))
             })
             .collect();
-        let result = self.lower_call(callee_node, values, &extends, &byvals, &plan, first, result_type)?;
+        if flags_answer {
+            // only a compare with zero reads them
+            let reads = instruction
+                .result
+                .is_none_or(
+                    |value| self.function
+                        .users(value)
+                        .iter()
+                        .all(
+                            |one| {
+                                let user = self.function.instruction(one.user);
+                                matches!(user.opcode, Opcode::ICmp(_))
+                                    && matches!(
+                                        user.operands.get(1),
+                                        Some(Operand::Constant(zero)) if matches!(self.module.context.get(*zero).kind, ConstantKind::Null | ConstantKind::Zero | ConstantKind::Int(0))
+                                    )
+                            },
+                        ),
+                );
+            if !reads {
+                return Err(Refused("a runtime routine's flags read other than by a compare with zero"));
+            }
+        }
+        let result =
+            self.lower_call(callee_node, values, &extends, &byvals, &plan, first, result_type, flags_answer)?;
+        if let (true, Some(answer)) = (flags_answer, result) {
+            self.settle_flags_answer(instruction, answer)?;
+        }
         if let (Some(value), Some(result)) = (instruction.result, result) {
             self.set_value(value, result);
+        }
+        Ok(())
+    }
+
+    /// A runtime routine's answer in the flags: a compare of it that feeds only
+    /// branches reads the flags where they are. Any other compare is made at
+    /// once and tied to the call's chain, so no instruction that rewrites the
+    /// flags comes between the call and it.
+    fn settle_flags_answer(
+        &mut self,
+        call: &llrm_mir::module::Instruction,
+        answer: SDValue,
+    ) -> Result<(), Refused> {
+        let Some(value) = call.result else { return Ok(()) };
+        self.set_value(value, answer);
+        for one in self.function.users(value) {
+            let compare = self.function.instruction(one.user).clone();
+            let Opcode::ICmp(predicate) = compare.opcode else {
+                return Err(Refused("flags read other than by a compare"));
+            };
+            if self.function.parent(one.user) != Some(self.block) {
+                return Err(Refused("a runtime routine's flags read in another block"));
+            }
+            let result = compare.result.expect("a compare has a result");
+            let branches = self
+                .function
+                .users(result)
+                .iter()
+                .all(
+                    |user| self.function.instruction(user.user).opcode == Opcode::Br
+                        && self.function.parent(user.user) == Some(self.block),
+                );
+            if branches {
+                continue;
+            }
+            self.visit_icmp(&compare, predicate)?;
+            let settled = self.get_value(Operand::Value(result))?;
+            let root = self.root();
+            let reg = self.info.new_reg();
+            let byte = self.dag.get_node(ISD::ZeroExtend, EVT::I8, &[settled]);
+            let tied = self.dag.get_copy_to_reg(root, reg, byte);
+            self.dag.set_root(tied);
+            self.prelowered.insert(one.user);
         }
         Ok(())
     }
@@ -805,6 +911,7 @@ impl Builder<'_> {
         plan: &Convention,
         first: i64,
         result_type: TypeId,
+        flags_answer: bool,
     ) -> Result<Option<SDValue>, Refused> {
         let types = &self.module.context.types;
         let bytes = (plan.stack_arguments - first).max(0) as u64;
@@ -932,6 +1039,12 @@ impl Builder<'_> {
             return Ok(None);
         }
         let vt = self.type_of(result_type)?;
+        if flags_answer {
+            let flags = self.dag.get_copy_from_phys_reg(chain, super::dagisel_adapter::EFLAGS_ID, EVT::I32, glue);
+            self.dag.set_root(SDValue { node: flags.node, res: 1 });
+            let flags = SDValue { node: flags.node, res: 0 };
+            return Ok(Some(self.dag.get_node(super::x86isd::LLRM_CALL_FLAGS, vt, &[flags])));
+        }
         if vt.is_floating_point() {
             // X86's `LowerCallResult`: the value is popped from st(0), which
             // the allocator knows as `FP0`
@@ -1211,6 +1324,10 @@ impl Builder<'_> {
         &mut self,
         inst: InstId,
     ) -> Result<(), Refused> {
+        self.current = Some(inst);
+        if self.prelowered.contains(&inst) {
+            return Ok(());
+        }
         let instruction = self.function.instruction(inst).clone();
         if instruction.opcode.is_terminator() {
             self.handle_phi_nodes_in_successor_blocks()?;
@@ -1234,7 +1351,12 @@ impl Builder<'_> {
             Opcode::Unreachable => {}
             Opcode::Ret => self.visit_ret(&instruction)?,
             Opcode::Switch => self.visit_switch(&instruction)?,
-            Opcode::Call(info) => self.visit_call(&instruction, info)?,
+            Opcode::Call(info) => {
+                if self.in_tail_position(inst) {
+                    self.tail_calls.push(inst);
+                }
+                self.visit_call(&instruction, info)?
+            }
             Opcode::Invoke(info) => self.visit_invoke(&instruction, info)?,
             // QB's pad is entered by the runtime, which `ehprepare` set up
             // and whose selector it took out: nothing to build
@@ -1412,34 +1534,50 @@ impl Builder<'_> {
                     Ok(self.dag.get_node(ISD::BuildPair, far, &[operand, selector]))
                 }
                 (CastOp::AddrSpaceCast, Some(space)) if space == roles.near => {
-                    let (base, _) =
-                        llrm_mir::valuetracking::underlying(&self.module.context, self.layout, self.function, pointer);
-                    let framed = matches!(
-                        base,
-                        Operand::Value(value) if matches!(
-                            self.function.value(value).def,
-                            ValueDef::Instruction(def) if matches!(self.function.instruction(def).opcode, Opcode::Alloca { .. })
-                        )
-                    );
-                    // a frame object is in SS; a global is in its own segment;
-                    // any other near pointer is into DGROUP
-                    let selector = match base {
-                        _ if framed => self.stack_selector(),
-                        Operand::Constant(id) => match self.module.context.get(id).kind {
-                            ConstantKind::Global(global) => self.segment_of(Some(global.0)),
-                            _ => self.segment_of(None),
-                        },
-                        _ => self.segment_of(None),
-                    };
+                    let selector = self.near_selector(pointer);
                     Ok(self.dag.get_node(ISD::BuildPair, far, &[operand, selector]))
                 }
                 _ => Err(Refused("cast to a far pointer")),
             };
         }
+        // a near pointer cast to the segment space (`VARSEG`) is the selector
+        // of its segment, not its offset
+        if op == CastOp::AddrSpaceCast
+            && roles.segment.is_some()
+            && to_space == roles.segment
+            && from_space.is_some_and(|space| space == roles.near || space == roles.stack)
+        {
+            return Ok(self.near_selector(pointer));
+        }
         // one word to one word: the near and stack spaces share their offsets
         match op {
             CastOp::AddrSpaceCast if from == dest => Ok(operand),
             _ => Err(Refused("cast between address spaces")),
+        }
+    }
+
+    /// The selector of the segment the near pointer `pointer` points into: a
+    /// frame object is in SS; a global is in its own segment; any other near
+    /// pointer is into DGROUP.
+    fn near_selector(
+        &mut self,
+        pointer: Operand,
+    ) -> SDValue {
+        let (base, _) = llrm_mir::valuetracking::underlying(&self.module.context, self.layout, self.function, pointer);
+        let framed = matches!(
+            base,
+            Operand::Value(value) if matches!(
+                self.function.value(value).def,
+                ValueDef::Instruction(def) if matches!(self.function.instruction(def).opcode, Opcode::Alloca { .. })
+            )
+        );
+        match base {
+            _ if framed => self.stack_selector(),
+            Operand::Constant(id) => match self.module.context.get(id).kind {
+                ConstantKind::Global(global) => self.segment_of(Some(global.0)),
+                _ => self.segment_of(None),
+            },
+            _ => self.segment_of(None),
         }
     }
 
