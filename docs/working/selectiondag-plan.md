@@ -188,7 +188,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD12 | sdag-a | folds needing known bits are the combiner's | `selectiondag.rs` |
 | SD13 | sdag-a | no vector types or nodes | `selectiondag.rs` |
 | SD14 | sdag-b | floating types always legal (no soften/expand) | `llrm-x86/src/dag/lowering.rs` |
-| SD15 | sdag-a | `FindMergedConditions` not ported | builder |
+| SD15 | sdag-a | `FindMergedConditions` ported without edge probabilities | builder |
 | SD16 | sdag-a | no `LiveOutRegInfo` | builder |
 | SD17 | sdag-a | vreg numbers differ from the pin's | builder |
 | SD18 | sdag-a | select patterns (abs, min, max) | builder |
