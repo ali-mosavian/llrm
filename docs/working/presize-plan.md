@@ -12,7 +12,7 @@ Ir is the caller's inclusive cost into `grow_one`, `do_reserve_and_handle` or th
 | 2 | `llrm-mir/src/module.rs:640` `Function::iter_block`, collected | `Vec<InstId>` | 8,278 | 1.18 | the block's `len`, kept by every edit: the iterator states it as its size hint |
 | 3 | `llrm-mir/src/facts.rs:534` `Facts::of` | `Vec<Fact>` | 20,727 | 1.47 | at most one fact per attribute; mostly a first allocation, so expected small |
 | 4 | `llrm-mir/src/domtree.rs:1973` `calculate_from_scratch` | `Vec<Option<BlockId>>` (`num_to_node`) | 3,104 | 0.53 | a full walk numbers at most every block, and the virtual root (LLVM's `SmallVector<NodePtr, 64>`) |
-| 5 | `llrm-core/src/greedy/matrix.rs:174` `LiveRegMatrix::new` | `Vec<LiveIntervalUnion>`, `Vec<Query>` | 36 | 0.43 | the target's register units (LLVM's `Matrix.init(TRI->getNumRegUnits())`) |
+| 5 | `llrm-core/src/greedy/matrix.rs:174` `LiveRegMatrix::new` | `Vec<LiveIntervalUnion>`, `Vec<Query>` | 36 | 0.43 | dropped: see Results |
 
 ## Not pre-sized
 
@@ -27,4 +27,14 @@ Ir is the caller's inclusive cost into `grow_one`, `do_reserve_and_handle` or th
 
 ## Results
 
-Filled per commit: `I refs` before and after, d_faces object identical, objsweep 0 objects changed on the series head.
+Each commit measured on its parent's dist. The d_faces object is identical at every step; objsweep on the series head: 0 of 568 objects changed (m32, m16; O1-Os).
+
+| # | Commit | `I refs` before | after | Delta |
+|---|---|--:|--:|--:|
+| 1 | 95cc01356 | 922,555,085 | 921,515,106 | -1.04 M |
+| 2 | 59772c6cb | 921,515,106 | 920,861,369 | -0.65 M |
+| 3 | b35a6fa70 | 920,861,369 | 919,862,214 | -1.00 M |
+| 4 | 606757044 | 919,862,214 | 919,735,817 | -0.13 M |
+| | series | 922,555,085 | 919,735,817 | -2.82 M |
+
+Site 2's first form counted in every walk too and lost 0.28 M; `walk` now keeps the uncounted links. Site 5 is dropped unmeasured: its bound, the highest root of the 256-entry table times four, over-allocates two arrays of unions and queries; the final length is the highest unit assigned, not known up front. `finish_grow` after the series: 28.32 M inclusive (from 31.34 M), 15.82 M of it in 65,627 `realloc` calls.
