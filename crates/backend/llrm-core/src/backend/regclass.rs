@@ -612,6 +612,8 @@ fn collected(
     let mut selecting: BTreeSet<u32> = BTreeSet::new();
     let mut numeric: BTreeSet<u32> = BTreeSet::new();
     let mut word_pairs: Vec<(u32, u32)> = Vec::new();
+    // Where each pair is read, for the caller that asks for the reads.
+    let mut pair_sites: Vec<(usize, usize, u32, u32)> = Vec::new();
     let _scan = llrm_support::debug::span("classes scan");
     let mut items = Vec::new();
     for (at, block) in body.blocks.iter().enumerate() {
@@ -635,7 +637,12 @@ fn collected(
                     Item::Selecting(value) => {
                         selecting.insert(value);
                     }
-                    Item::Pair(base, index) => word_pairs.push((base, index)),
+                    Item::Pair(base, index) => {
+                        word_pairs.push((base, index));
+                        if uses.is_some() {
+                            pair_sites.push((at, position, base, index));
+                        }
+                    }
                     Item::Far(_) => {}
                 }
             }
@@ -658,6 +665,26 @@ fn collected(
     llrm_support::debug::timed("classes word roles", || {
         _word_address_roles(&word_pairs, &mut out, body, prefer_indexes, segments, registers, found)
     });
+    // A half of a pair whose roles left it no register: the read as the pair
+    // spells it confines it to the registers of its side, which share none
+    // with its other reads. Kept for `distinct_classes`, which gives such a
+    // read a copy of its own.
+    if let Some(uses) = uses.as_deref_mut() {
+        for (block, insn, base, index) in pair_sites {
+            for (value, role, kind) in [(base, Role::Base, Kind::WordBases), (index, Role::Index, Kind::WordIndexes)] {
+                if out.get(&value).is_some_and(BTreeSet::is_empty) {
+                    uses.push(Use {
+                        block,
+                        insn,
+                        value,
+                        class: kind.registers(registers).clone(),
+                        role,
+                        defining: false,
+                    });
+                }
+            }
+        }
+    }
     llrm_support::debug::timed("classes webs", || {
         _through_webs(
             body,

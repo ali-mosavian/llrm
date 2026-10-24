@@ -487,6 +487,12 @@ impl<'a> TypeLegalizer<'a> {
                 let wide = self.dag.value_type(then);
                 self.dag.get_node(ISD::Select, wide, &[cond, then, other])
             }
+            ISD::Freeze => {
+                // `PromoteIntRes_FREEZE`: the promoted operand, frozen.
+                let promoted = self.promoted_integer(self.dag.operand(value, 0));
+                let wide = self.dag.value_type(promoted);
+                self.dag.get_node(ISD::Freeze, wide, &[promoted])
+            }
             ISD::SetCC => {
                 // Compare into the target's own result type, then sign extend
                 // or truncate to the promoted type.
@@ -613,6 +619,35 @@ impl<'a> TypeLegalizer<'a> {
                 };
                 let cond = self.dag.get_node(extend, bool_vt, &[cond]);
                 let updated = self.dag.update_node_operands(n, &[cond, then, other]);
+                SDValue { node: updated, res: 0 }
+            }
+            ISD::SetCC if at < 2 => {
+                // `PromoteSetCCOperands`: both operands promoted and extended
+                // in the register to the compare's signedness.
+                let Some(code) = self.setcc_code(node) else {
+                    return Err(LegalizeError::Unsupported {
+                        op: ISD::SetCC,
+                        ty: self.dag.value_type(self.dag.operand(node, at)),
+                        what: "promote operand",
+                    });
+                };
+                let (lhs, rhs) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+                let extend = |legalizer: &mut Self, value: SDValue| {
+                    let bits = legalizer.dag.value_type(value).size_in_bits();
+                    let promoted = legalizer.promoted_integer(value);
+                    let wide = legalizer.dag.value_type(promoted);
+                    if code.is_signed_int() {
+                        let by = legalizer.dag.get_constant(u128::from(wide.size_in_bits() - bits), EVT::I8);
+                        let high = legalizer.dag.get_node(ISD::Shl, wide, &[promoted, by]);
+                        legalizer.dag.get_node(ISD::Sra, wide, &[high, by])
+                    } else {
+                        let mask = legalizer.dag.get_constant(super::fold::mask(bits), wide);
+                        legalizer.dag.get_node(ISD::And, wide, &[promoted, mask])
+                    }
+                };
+                let (lhs, rhs) = (extend(self, lhs), extend(self, rhs));
+                let ops = [lhs, rhs, self.dag.operand(node, 2)];
+                let updated = self.dag.update_node_operands(n, &ops);
                 SDValue { node: updated, res: 0 }
             }
             ISD::BrCond if at == 1 => {

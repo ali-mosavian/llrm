@@ -60,3 +60,11 @@ Rc / RefCell / Cell borrow: llrm_core::backend::peep::guards::upper_zero 2.90; <
 Vec / SmallVector growth: <llrm_mir::module::Function>::create_instruction 1.29; llrm_c::compile::selected_checking 1.25; <llrm_mir::facts::Facts>::of 0.99; <indexmap::map::IndexMap<llrm_mir::module::InstId, llrm_anal 0.98; <llrm_mir::module::Function>::log 0.91
 string formatting / printing: <llrm_mir::module::Function>::unique_name 0.55; llrm_transforms::settled::slice 0.51; llrm_omf::write::write 0.47; llrm_core::backend::masm::addressed_pass 0.35; llrm_core::backend::classes::iced 0.35
 
+
+## What the residual is made of (qbq-llrm, parity 26d6c9e9a, `tools/ledger/residual.py`)
+The residual of the ledger is 102.6 M with the front end taken out; under `driver::compiled` 119.7 M lies outside every listed pass (the profile's share of
+`compiled`, which holds the HIR translation too). By module, M: `llrm_core::backend` 24.0 (passes the buckets do not list: saverestore/shrinkwrap,
+machinelicm, relayout, combiner, machinesched, fixupsetcc: an instrument gap, they have pin counterparts), alloc/hash/core/std 13.0, `llrm_mir::module` 11.9,
+`globalsmodref` 9.2 + `globalsaa` 2.9 (GlobalsAA computed outside the pass runs, 7 times; the pin computes it once per RecomputeGlobalsAAPass),
+`llrm_hir::mir` 6.4, libc mem* 5.1, `llrm_mir::opcode` 2.9, `cfg` 2.6, `callgraph` 2.3, the rest below 2 M each.
+Steps (w-6): list the backend passes in their pin buckets (11-06); GlobalsAA once (11-13).
