@@ -43,7 +43,7 @@ The pin has PHIElimination directly before TwoAddress and runs its x86 pre-RA pa
 | `callframe` | `addPreRegAlloc`, before PHIE | done (#4275) |
 | `flagscopy` | `addPreRegAlloc` (`X86FlagsCopyLowering`), before PHIE | done (this PR) |
 | `floatfold` | none (folded at selection) | now if it reads no phi copy; else with the selector's folding |
-| `pushfold` | inside `X86CallFrameOptimization`, before PHIE | now, after `callframe` |
+| `pushfold` | inside `X86CallFrameOptimization`, before PHIE | done (this PR), right after `callframe` |
 | `FloatPrep`, `FloatAlloc` | `X86FPStackifier`, after register allocation | with machine-cleanup row 9 (w-2 step 9, code 2026-11-20) |
 
 DEVIATE LV3 (owner w-1): until those are out of the gap, `LiveVariables` is filled right before TwoAddress by a liveness dataflow on the non-SSA body (`alive_blocks` = live in and live out; a kill = the last use in a block where the value is not live out; a dead definition = its definition), through the same API. Exit: phielim sits directly before twoaddr, builds it before lowering the phis and maintains it (the pin's `PHIElimination` calls); 2026-12-11 at the latest, and the PR that removes the dataflow is dated with it.
