@@ -582,16 +582,8 @@ impl Builder<'_> {
         which: &Intrinsic,
     ) -> Result<(), Refused> {
         let operands = &instruction.operands;
-        // A `memmove` a pass proved to copy forward is a `memcpy`.
         let proved = |kind: &str| instruction.metadata.iter().any(|(one, _)| one == kind);
-        let which = if matches!(which, Intrinsic::MemMove)
-            && proved(llrm_mir::intrinsics::FORWARD)
-            && !proved(llrm_mir::intrinsics::BACKWARD)
-        {
-            &Intrinsic::MemCpy
-        } else {
-            which
-        };
+        let forward = proved(llrm_mir::intrinsics::FORWARD) && !proved(llrm_mir::intrinsics::BACKWARD);
         let volatile = match operands.get(3) {
             Some(Operand::Constant(id)) => matches!(self.module.context.get(*id).kind, ConstantKind::Int(1)),
             _ => return Err(Refused("memory intrinsic with a variable volatile flag")),
@@ -643,6 +635,13 @@ impl Builder<'_> {
                         self.rep_movs(root, dst, other, bytes, alignment.min(4), dst_align, src_align)?
                     }
                     _ if matches!(which, Intrinsic::MemCpy) && !self.runtime_has("memcpy") => {
+                        self.rep_movsb(root, dst, other, size)
+                    }
+                    // a move a pass proved forward, past the inline limit, with
+                    // no
+                    // `memmove` in the runtime: `rep movs` ascends, as the move
+                    // needs
+                    _ if forward && matches!(which, Intrinsic::MemMove) && !self.runtime_has("memmove") => {
                         self.rep_movsb(root, dst, other, size)
                     }
                     _ if !self.runtime_has(if matches!(which, Intrinsic::MemCpy) { "memcpy" } else { "memmove" }) => {
