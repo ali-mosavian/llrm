@@ -53,6 +53,7 @@ mod select_i1;
 mod setcc_i1_operands;
 mod setcc_result;
 mod setcc_simplify;
+mod shift_simplify;
 mod switch_dags;
 mod switches;
 mod type_actions;
