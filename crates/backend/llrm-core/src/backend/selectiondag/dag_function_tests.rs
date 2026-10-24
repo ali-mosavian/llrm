@@ -1415,14 +1415,22 @@ entry:
 }
 ";
 
-/// The 80-bit forms are refused until their moves and arguments are proved
-/// (long_double_arguments, long_double_constant_store: wrong values).
+/// A long double is selected (it was refused 'long double' until its
+/// arguments were proved), and each stack argument takes a 12-byte slot at m32,
+/// as the front end and gcc lay them out: slots were the 10-byte store size,
+/// so `sum(3, a, b, a)` read its second and third values 2 and 4 bytes short
+/// (long_double_variadic printed -2147483648 for 13).
 #[test]
-fn a_long_double_is_refused() {
+fn a_long_double_is_selected_and_takes_a_twelve_byte_slot() {
     let module = llrm_mir::parse::module(LONG_DOUBLE_SUM).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[]);
-    let Err(why) = done else { panic!("emitted") };
-    assert!(why.0.contains("long double"), "{why:?}");
+    selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+    let (id, _, function) = module.functions().next().expect("a function");
+    let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
+    let first = llrm_target::Target::first_argument_offset(&llrm_x86_m32::M32, false);
+    assert_eq!(convention.stack_arguments - first, 24, "two long doubles, twelve bytes each: {convention:?}");
+    let _ = function;
 }
 
 const INT_TO_FLOAT_ROUNDED: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -1912,6 +1920,24 @@ entry:
 #[test]
 fn an_argument_area_split_by_a_select_is_stored_through_a_copy_of_sp() {
     let module = llrm_mir::parse::module(M16_SELECT_IN_ARGUMENT).expect("parses");
+}
+
+const M16_FAR_AND_DOUBLE: &str =
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
+define double @f(ptr addrspace(1) %p, double %x) addrspace(1) {
+entry:
+  store i16 1, ptr addrspace(1) %p
+  %y = fadd double %x, 1.000000e+00
+  ret double %y
+}
+";
+
+/// A far cell and a double in one function were refused as a pair ('floating
+/// values with far cells'); only a double live across the far access is
+/// (the stackifier counts the ES load as a boundary).
+#[test]
+fn a_double_not_live_across_a_far_cell_is_selected() {
+    let module = llrm_mir::parse::module(M16_FAR_AND_DOUBLE).expect("parses");
     selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
