@@ -373,7 +373,9 @@ fn slot(
     arch: &dyn llrm_target::Target,
     width: u32,
 ) -> i64 {
-    i64::from(width).max(arch.stack_slot_bytes())
+    let unit = arch.stack_slot_bytes();
+    // A whole number of stack slots: a long double is 12 bytes at m32.
+    (i64::from(width) + unit - 1) / unit * unit
 }
 
 /// Whether a function's code is far: in addrspace(1), entered by a far call.
