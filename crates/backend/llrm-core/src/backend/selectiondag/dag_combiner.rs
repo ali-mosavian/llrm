@@ -216,6 +216,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             if self.dag.opcode(result) != ISD::EntryToken {
                 self.add_to_worklist_with_users(result.node);
             }
+            self.dag.delete_dead(n);
         }
     }
 
@@ -243,6 +244,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         match self.dag.opcode(node) {
             ISD::MergeValues => self.visit_merge_values(node),
             ISD::Select => self.visit_select(node),
+            ISD::Freeze => self.visit_freeze(node),
             ISD::SetCC => self.visit_setcc(node),
             ISD::Xor => self.visit_xor(node).or_else(|| self.simplify_demanded(node)),
             ISD::Mul => self.visit_mul(node),
@@ -500,6 +502,27 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         node: SDValue,
     ) -> Option<SDValue> {
         let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let vt = self.dag.value_type(node);
+        // `not (or|and a, b)` of `i1`s, when one is a one-use compare, is the
+        // and/or of the nots (De Morgan), each of which flips its compare:
+        // `xor (or (setcc), (setcc)), 1` was `or; xor 1; test 1; je`.
+        if self.dag.constant(n1) == Some(1)
+            && vt == EVT::I1
+            && matches!(self.dag.opcode(n0), ISD::Or | ISD::And)
+            && self.dag.use_count(n0.node) == 1
+        {
+            let (a, b) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            let one_use_setcc =
+                |dag: &SelectionDAG, v: SDValue| dag.opcode(v) == ISD::SetCC && dag.use_count(v.node) == 1;
+            if one_use_setcc(self.dag, a) || one_use_setcc(self.dag, b) {
+                let flipped = if self.dag.opcode(n0) == ISD::And { ISD::Or } else { ISD::And };
+                let (not_a, not_b) =
+                    (self.dag.get_node(ISD::Xor, vt, &[a, n1]), self.dag.get_node(ISD::Xor, vt, &[b, n1]));
+                self.add_to_worklist(not_a.node);
+                self.add_to_worklist(not_b.node);
+                return Some(self.dag.get_node(flipped, vt, &[not_a, not_b]));
+            }
+        }
         if self.dag.constant(n1) != Some(1) || self.dag.opcode(n0) != ISD::SetCC {
             return None;
         }
@@ -508,7 +531,6 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(n0, 2)).data else { return None };
-        let vt = self.dag.value_type(node);
         Some(self.dag.get_setcc(vt, lhs, rhs, cc.inverse_integer()))
     }
 
@@ -889,6 +911,67 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(self.dag.get_node(op, vt, &[x, amount]));
         }
         Some(self.dag.get_constant(0, vt))
+    }
+
+    /// `visitFREEZE`, the first fold: `freeze x` is `x` when `x` cannot be
+    /// undef or poison. (The pin's second fold, hoisting the freeze over a
+    /// multi-use operand, is not translated.)
+    fn visit_freeze(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let x = self.dag.operand(node, 0);
+        if !self.guaranteed_not_undef_or_poison(x, 0) {
+            return None;
+        }
+        // The users now read `x` directly: their users may fold with it too
+        // (`not (or (cmp), freeze (cmp))` was visited with the freeze there).
+        let users: Vec<u32> = self.dag.users(node).collect();
+        for user in users {
+            self.add_to_worklist_with_users(user);
+        }
+        Some(x)
+    }
+
+    /// `isGuaranteedNotToBeUndefOrPoison`, for the nodes the combiner builds:
+    /// constants, registers, frame indexes and `freeze`; a load through such a
+    /// pointer; and an integer operation without a poison-generating flag whose
+    /// operands are.
+    ///
+    /// DEVIATE SD213: no vector, `AssertSext`/`AssertZext`, overflow-flag or
+    /// shift-amount range reasoning beyond a constant amount below the width.
+    /// Exit: those. Owner sdag-b. Review 2026-12-10.
+    fn guaranteed_not_undef_or_poison(
+        &self,
+        value: SDValue,
+        depth: u32,
+    ) -> bool {
+        if self.dag.opcode(value) == ISD::Freeze {
+            return true;
+        }
+        if depth >= 6 {
+            return false;
+        }
+        if self.dag.constant(value).is_some() {
+            return true;
+        }
+        let poison_flags = SDNodeFlags::NO_UNSIGNED_WRAP.0 | SDNodeFlags::NO_SIGNED_WRAP.0 | SDNodeFlags::EXACT.0;
+        let flagged = self.dag.node(value).flags.0 & poison_flags != 0;
+        let all = |ops: &[usize]| {
+            ops.iter().all(|&i| self.guaranteed_not_undef_or_poison(self.dag.operand(value, i), depth + 1))
+        };
+        match self.dag.opcode(value) {
+            ISD::Register | ISD::FrameIndex | ISD::ValueType | ISD::CopyFromReg => true,
+            ISD::Load => all(&[1]),
+            ISD::SetCC => all(&[0, 1]),
+            ISD::And | ISD::Or | ISD::Xor | ISD::Add | ISD::Sub | ISD::Mul if !flagged => all(&[0, 1]),
+            ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend | ISD::Truncate if !flagged => all(&[0]),
+            ISD::Shl | ISD::Srl | ISD::Sra if !flagged => {
+                let width = u128::from(self.dag.value_type(value).size_in_bits());
+                self.dag.constant(self.dag.operand(value, 1)).is_some_and(|by| by < width) && all(&[0])
+            }
+            _ => false,
+        }
     }
 
     /// `PromoteIntBinOp`, `PromoteIntShiftOp` and `PromoteExtend`: an operation
