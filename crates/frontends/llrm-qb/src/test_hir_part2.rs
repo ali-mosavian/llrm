@@ -420,8 +420,8 @@ fn test_source_call_releases_its_materialized_string_argument() {
     let source = parsed_as(&fixture("strtemp.bas"), "vbdos", "qb45");
     let calls = callees(&source.modules[0].functions[0]);
 
-    let show = calls.iter().position(|one| one == "SHOW").expect("SHOW");
-    assert_eq!(calls[show - 1..show + 2], ["B$SASS", "SHOW", "B$STDL"]);
+    let show = calls.iter().position(|one| one == "DISPLAY").expect("DISPLAY");
+    assert_eq!(calls[show - 1..show + 2], ["B$SASS", "DISPLAY", "B$STDL"]);
 }
 
 /// Nibbles pushed four bytes per PrintScore field, then RETF 10 left SP

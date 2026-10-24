@@ -55,7 +55,7 @@ fn own_frames_keep_the_runtime_frame_where_the_runtime_needs_it() {
     // A local STRING's handle, and a module handler the runtime reaches
     // through the procedure's frame.
     let string = "SUB s\nDIM t AS STRING\nt = \"x\"\nPRINT t\nEND SUB\n";
-    let module_handler = "ON ERROR GOTO h\ns\nEND\nh:\nRESUME NEXT\nSUB s\nDIM i AS INTEGER\ni = 1\nPRINT i\nEND SUB\n";
+    let module_handler = "DECLARE SUB s\nON ERROR GOTO h\ns\nEND\nh:\nRESUME NEXT\nSUB s\nDIM i AS INTEGER\ni = 1\nPRINT i\nEND SUB\n";
     for (dialect, runtime) in DIALECTS {
         for source in [string, module_handler] {
             assert!(runtime_framed(&procedure(source, dialect, runtime, true, "S")), "{dialect}: {source}");
@@ -71,7 +71,7 @@ fn own_frames_keep_the_runtime_frame_where_the_runtime_needs_it() {
 fn own_frames_locals_still_start_at_zero() {
     // A frame the procedure makes itself holds garbage in the interpreter:
     // only the HIR's own stores zero these.
-    let source = "TYPE P\nx AS INTEGER\ny AS DOUBLE\nEND TYPE\n\
+    let source = "DECLARE SUB s\nTYPE P\nx AS INTEGER\ny AS DOUBLE\nEND TYPE\n\
         s\ns\nEND\n\
         SUB s\nDIM a AS LONG, d AS DOUBLE, f AS SINGLE, p AS P, e(2) AS INTEGER, i AS INTEGER\n\
         FOR i = 1 TO 2\na = a + i\nNEXT\n\

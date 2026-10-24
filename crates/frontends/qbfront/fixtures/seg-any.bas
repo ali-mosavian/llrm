@@ -1,6 +1,6 @@
 declare sub consume(seg item as any)
-type Point
+type Pt
     x as long
 end type
-dim point as Point
-consume point
+dim p as Pt
+consume p
