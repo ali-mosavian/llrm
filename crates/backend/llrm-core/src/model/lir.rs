@@ -458,7 +458,9 @@ impl Insn {
         }
         llrm_mir::counts::bump(llrm_mir::counts::Event::LirRenameRebuilds);
         let mut made = (**self).clone();
-        if let Some(what) = &self.what {
+        // The copy's own operands are rewritten in place: building a second
+        // `Semantics` from `what.clone()` copied every operand list again.
+        if let Some(what) = made.what.as_mut() {
             let settled = |place: &Loc| -> Result<Loc, E> {
                 let mut failed = None;
                 let out = llrm_lir::mapped(place, |held| match rename(held.value) {
@@ -470,11 +472,9 @@ impl Insn {
                 });
                 failed.map_or(Ok(out), Err)
             };
-            made.what = Some(Semantics {
-                dests: what.dests.iter().map(settled).collect::<Result<_, E>>()?,
-                sources: what.sources.iter().map(settled).collect::<Result<_, E>>()?,
-                ..what.clone()
-            });
+            for place in what.dests.iter_mut().chain(what.sources.iter_mut()) {
+                *place = settled(place)?;
+            }
         }
         let value = |value: &u32| rename(*value);
         made.defines = self.defines.iter().map(value).collect::<Result<_, E>>()?;
