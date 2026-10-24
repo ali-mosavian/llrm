@@ -4,20 +4,27 @@ and residual high in every ledger since e45020064b)."""
 import re
 
 
-def normalized(name):
-    name = re.sub(r"\s*\[[^\]]*\]\s*$", "", name)
-    name = re.sub(r"\s*\([\d,]+x\)\s*$", "", name)
-    return re.sub(r"^\?\?\?:", "", name)
+def clean(sym, pin=False):
+    """A symbol as the ledger tables name it (ours: no `???:`; the pin's: no file prefix)."""
+    sym = re.sub(r"\s*\[[^\]]*\]\s*$", "", sym)
+    if pin:
+        sym = re.sub(r"^\S*?:(?=\S)", "", sym, count=1) if not sym.startswith(("llvm", "(")) else sym
+        return re.sub(r"^/[^ ]*?\.(?:cpp|h):", "", sym)
+    return re.sub(r"^\?\?\?:", "", sym)
 
 
-def parse_calling(path):
+def normalized(name, pin=False):
+    return clean(re.sub(r"\s*\([\d,]+x\)\s*(?=\[|$)", " ", name), pin)
+
+
+def parse_calling(path, pin=False):
     """{caller: {callee}} from `callgrind_annotate --inclusive=yes --tree=calling`."""
     edges, caller = {}, None
     for line in open(path):
         m = re.match(r"\s*[\d,]+ \(\s*[\d.]+%\)\s+(\*|>)\s+(.*)$", line)
         if not m:
             continue
-        name = normalized(m.group(2))
+        name = normalized(m.group(2), pin)
         if m.group(1) == "*":
             caller = name
             edges.setdefault(caller, set())
