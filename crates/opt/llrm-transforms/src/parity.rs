@@ -315,12 +315,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "simplifycfg",
         "translated SimplifyCfg at the default options runs here; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting; criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those translated (llrm-w-4, 2026-10-30)",
     ),
-    partial(
-        "simplifycfg@2376",
-        Late,
-        "simplifycfg",
-        "translated SimplifyCfg at hoistCommonInsts runs here; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting; criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those translated (llrm-w-4, 2026-10-30)",
-    ),
     entry("loop-instsimplify", Simplify, "loop-instsimplify", Missing, ""),
     entry("loop-simplifycfg", Simplify, "loop-simplifycfg", Missing, ""),
     // LSR runs in llc's IR preparation (`TargetPassConfig::addIRPasses`,
