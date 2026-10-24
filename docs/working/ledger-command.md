@@ -29,5 +29,5 @@ QCport's pin side adds `-std=gnu89 -DQCPORT_NATIVE_TEST` and QCport's `-I` set. 
 in the body as `d_faces qbq-llrm: BASE -> NEW M Ir`. Other programs (QCport's `render/d_faces.c`, which needs its struct-size
 asserts removed at m32; see `qcsrc`) may be added, labelled with the program's name.
 
-The per-bucket table: `ledger4.py` on `callgrind_annotate --inclusive=yes --threshold=100 OUT.cg`, and
-`ledger5.py` for the callee-attributed view. `tools/landing/precheck.sh` refuses a perf PR whose body lacks the command and the number.
+The per-bucket table: `tools/ledger/ledger4.py` on `callgrind_annotate --inclusive=yes --threshold=100 OUT.cg` (inputs by `LEDGER_OURS`, `LEDGER_CLANG`, `LEDGER_OT`, `LEDGER_PT`), and
+`tools/ledger/ledger5.py` for the callee-attributed view. With `LEDGER_CALLING` (the same profile through `--tree=calling`) it refuses overlapping buckets (a function in two, or one listed function calling another: the Together/Sroa pair counted 9.3 M twice) and prints `double-count check: 0 overlaps over N buckets`. `tools/landing/precheck.sh` refuses a perf PR whose body lacks the command and the number.
