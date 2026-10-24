@@ -1,0 +1,6 @@
+DIM x%, l&, a%(5)
+DECLARE SUB pp (z AS INTEGER)
+x% = 70000& / 70000&
+END
+SUB pp (z AS INTEGER)
+END SUB

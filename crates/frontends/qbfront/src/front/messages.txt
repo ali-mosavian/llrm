@@ -62,3 +62,10 @@ Variable-length string required|`{text}` must be a variable-length string, not a
 Wrong number of dimensions|`{name}` is indexed with a different number of subscripts than it was dimensioned with|use as many subscripts as dimensions
 COMMON and DECLARE must precede executable statements|`{statement}` comes after a statement that does something; COMMON and DECLARE must come first|move it to the top of the file, before executable statements
 QuickrBASIC extensions are not in this parser|this is QuickrBASIC syntax|compile it with `--dialect quickr`
+Function name illegal|`{text}` cannot be the name of a FUNCTION (it is a reserved word, or an FN name, or a name BC already uses)|rename the function
+identifier cannot begin with underscore|`{text}` starts with an underscore, which BC does not allow in a name; an underscore at the end of a line continues it|start the name with a letter
+missing based-integer digits|`{text}` has `&H`, `&O` or `&B` but no digits after it|write the digits, for example `&HFF`
+unterminated string|the string starting at `{text}` is not closed|add the closing quote
+missing exponent digits|`{text}` has an exponent mark but no exponent|write the exponent, for example `1E5`
+integer literal is out of range|`{text}` is too large for a whole number here|use a smaller number or a LONG or double
+based integer does not fit its type|`{text}` has more digits than a LONG holds|use fewer digits

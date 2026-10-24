@@ -1,0 +1,316 @@
+//! What an argument must be: the intrinsics' classes, a procedure's parameters
+//! and whole arrays.
+
+use super::*;
+
+impl Checker {
+    pub(super) fn intrinsic(
+        &mut self,
+        sig: &'static sigs::FnSig,
+        name: &str,
+        arguments: &[Expr],
+        span: Span,
+    ) -> Option<Typed> {
+        let _ = name;
+        let candidates: Vec<&Vec<(Class, bool)>> = sig
+            .alternatives
+            .iter()
+            .filter(|alt| {
+                alt.len() >= arguments.len() && alt.iter().take_while(|(_, o)| !*o).count() <= arguments.len()
+            })
+            .collect();
+        if candidates.is_empty() {
+            self.err(span, "Argument-count mismatch");
+            return None;
+        }
+        for (n, alternative) in candidates.iter().enumerate() {
+            let mark = self.errors.len();
+            let mut typed_args = Vec::new();
+            let mut ok = true;
+            for (index, argument) in arguments.iter().enumerate() {
+                match self.argument_of_class(alternative[index].0, argument) {
+                    Some(typed) => typed_args.push(typed),
+                    None => ok = false,
+                }
+            }
+            if ok {
+                return Some(Typed::value(self.result_type(sig.ret, &typed_args)));
+            }
+            if n + 1 < candidates.len() {
+                self.errors.truncate(mark);
+            }
+        }
+        None
+    }
+
+    /// One argument against its class: the typed argument, or an error
+    /// reported.
+    pub(super) fn argument_of_class(
+        &mut self,
+        class: Class,
+        argument: &Expr,
+    ) -> Option<Typed> {
+        match class {
+            Class::Num => self.numeric(argument),
+            Class::Int => {
+                let typed = self.numeric(argument)?;
+                if let (Some(c), false) = (typed.constant, typed.variable) {
+                    if !(-32768.0..=32767.0).contains(&c.round()) {
+                        self.err(argument.span(), "Math overflow");
+                        return None;
+                    }
+                }
+                Some(typed)
+            }
+            Class::Long => {
+                let typed = self.numeric(argument)?;
+                if let (Some(c), false) = (typed.constant, typed.variable) {
+                    if !(-2147483648.0..=2147483647.0).contains(&c.round()) {
+                        self.err(argument.span(), "Math overflow");
+                        return None;
+                    }
+                }
+                Some(typed)
+            }
+            Class::Str => self.string_expr(argument),
+            Class::Any => {
+                let typed = self.expr(argument);
+                self.scalar(typed, argument.span())
+            }
+            Class::Var => {
+                let typed = self.expr(argument)?;
+                if self.whole_array_field(&typed, argument) {
+                    return None;
+                }
+                if !typed.variable {
+                    self.err(argument.span(), "Variable required");
+                    return None;
+                }
+                Some(typed)
+            }
+            Class::StrVar => {
+                let typed = self.expr(argument)?;
+                if !typed.variable {
+                    self.err(argument.span(), "Variable required");
+                    return None;
+                }
+                if !typed.ty.string() {
+                    self.err(argument.span(), "String expression required");
+                    return None;
+                }
+                Some(typed)
+            }
+            Class::Whole => self.expr(argument),
+            Class::VarLenString => {
+                let typed = self.argument_of_class(Class::StrVar, argument)?;
+                // (QB 4.5 takes the address of a fixed-length string; PDS and
+                // VBDOS refuse it)
+                if matches!(typed.ty, Ty::Str(Some(_)))
+                    && !matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45)
+                {
+                    self.err(argument.span(), "Fixed-length string illegal");
+                    return None;
+                }
+                Some(typed)
+            }
+            Class::ArrayStart => match argument {
+                Expr::Apply { name, arguments, span } if !arguments.is_empty() => match self.array_var(name) {
+                    Some(var) => {
+                        Some(Typed { ty: var.ty, variable: true, constant: None, array: Some(var.rank.unwrap_or(1)) })
+                    }
+                    None => {
+                        self.err(*span, "Array not defined");
+                        None
+                    }
+                },
+                other => self.array_argument(other),
+            },
+            Class::Array => self.array_argument(argument),
+            Class::Label => {
+                if let Expr::Name(name, span) = argument {
+                    if !self.labels.contains(name) {
+                        self.err_about(*span, "Label not defined", name);
+                    }
+                    return Some(Typed::value(Ty::Int));
+                }
+                self.err(argument.span(), "Syntax error");
+                None
+            }
+        }
+    }
+
+    /// An array named as an argument: `a()` or a bare name of an array.
+    pub(super) fn array_argument(
+        &mut self,
+        argument: &Expr,
+    ) -> Option<Typed> {
+        let (name, span) = match argument {
+            Expr::Name(name, span) => (name.clone(), *span),
+            // an array field of a record: `r.a`, or `r.a()` as an argument
+            Expr::Field { .. } if self.record_array(argument).is_some() => {
+                return self.record_array(argument);
+            }
+            other => {
+                self.err(
+                    other.span(),
+                    if matches!(
+                        other,
+                        Expr::Apply { arguments, .. } | Expr::Index { indices: arguments, .. } if arguments.is_empty()
+                    ) {
+                        "Syntax error"
+                    } else {
+                        "Array not defined"
+                    },
+                );
+                return None;
+            }
+        };
+        match self.array_var(&name) {
+            Some(var) => Some(Typed { ty: var.ty, variable: true, constant: None, array: Some(var.rank.unwrap_or(1)) }),
+            None => {
+                self.err(span, "Array not defined");
+                None
+            }
+        }
+    }
+
+    pub(super) fn check_arguments(
+        &mut self,
+        procedure: &ProcInfo,
+        arguments: &[Expr],
+        span: Span,
+        is_call: bool,
+    ) {
+        let _ = is_call;
+        // BC reads top down: a call above the first DECLARE or definition has
+        // nothing to be checked against
+        if procedure.unchecked || span.line < procedure.first_line {
+            for argument in arguments {
+                let inner = match argument {
+                    Expr::Unary { op: Unary::ByValue | Unary::Segmented, operand, .. } => operand,
+                    other => other,
+                };
+                // `a()` passes a whole array
+                if matches!(inner, Expr::Apply { arguments, .. } if arguments.is_empty()) {
+                    if let Expr::Apply { name, .. } = inner {
+                        if self.array_var(name).is_some() {
+                            continue;
+                        }
+                    }
+                }
+                if let Some(typed) = self.expr(inner) {
+                    if typed.array.is_some() && matches!(inner, Expr::Field { .. }) {
+                        self.err(inner.span(), "Syntax error");
+                    }
+                }
+            }
+            return;
+        }
+        if procedure.params.len() != arguments.len() {
+            self.err(span, "Argument-count mismatch");
+            return;
+        }
+        for (parameter, argument) in procedure.params.iter().zip(arguments) {
+            // BYVAL and SEG at the call mark how the value goes; the value is
+            // what is typed
+            let argument = match argument {
+                Expr::Unary { op: Unary::ByValue | Unary::Segmented, operand, .. } => &**operand,
+                other => other,
+            };
+            if parameter.array {
+                match self.array_argument_for(argument) {
+                    Some(typed) => {
+                        if !parameter.any && typed.ty.plain() != parameter.ty.plain() {
+                            self.err(argument.span(), "Parameter type mismatch");
+                        }
+                    }
+                    None => self.err(argument.span(), "Parameter type mismatch"),
+                }
+                continue;
+            }
+            let Some(typed) = self.expr(argument) else { continue };
+            if typed.array.is_some() {
+                self.err(argument.span(), "Parameter type mismatch");
+                continue;
+            }
+            if parameter.any {
+                continue;
+            }
+            let compatible = match (&typed.ty, &parameter.ty) {
+                (Ty::Record(a), Ty::Record(b)) => a == b,
+                (Ty::Str(_), Ty::Str(_)) => true,
+                (a, b) if a.numeric() && b.numeric() => {
+                    // a value converts to the parameter's type, but a variable
+                    // or the result of a DEF FN is passed as it is
+                    !(typed.variable || self.is_def_fn_call(argument)) || a == b || parameter.by_value
+                }
+                _ => false,
+            };
+            if !compatible {
+                let by_reference = typed.variable && !matches!(argument, Expr::Unary { op: Unary::Grouped, .. });
+                let numeric_pair = typed.ty.numeric() && parameter.ty.numeric();
+                self.err(
+                    argument.span(),
+                    if by_reference || numeric_pair { "Parameter type mismatch" } else { "Type mismatch" },
+                );
+            }
+        }
+    }
+
+    /// `r.a` for an array field `a` is no value: BC takes it only where a whole
+    /// array is asked for.
+    pub(super) fn whole_array_field(
+        &mut self,
+        typed: &Typed,
+        argument: &Expr,
+    ) -> bool {
+        let whole = typed.array.is_some() && matches!(argument, Expr::Field { .. });
+        if whole {
+            self.err(argument.span(), "Syntax error");
+        }
+        whole
+    }
+
+    /// The whole array that `r.a` or `r.a()` names, when `a` is an array field
+    /// of the record `r`.
+    pub(super) fn record_array(
+        &mut self,
+        expr: &Expr,
+    ) -> Option<Typed> {
+        let field = match expr {
+            Expr::Field { .. } => expr,
+            Expr::Index { base, indices, .. } if indices.is_empty() && matches!(**base, Expr::Field { .. }) => &**base,
+            _ => return None,
+        };
+        let errors = self.errors.len();
+        let typed = self.expr(field);
+        self.errors.truncate(errors);
+        typed.filter(|typed| typed.array.is_some())
+    }
+
+    /// Whether `expr` calls a DEF FN function.
+    pub(super) fn is_def_fn_call(
+        &self,
+        expr: &Expr,
+    ) -> bool {
+        let name = match expr {
+            Expr::Name(name, _) | Expr::Apply { name, .. } => name,
+            _ => return false,
+        };
+        self.procs.get(stem(name)).or_else(|| self.procs.get(name.as_str())).is_some_and(|procedure| procedure.def_fn)
+    }
+
+    pub(super) fn array_argument_for(
+        &mut self,
+        argument: &Expr,
+    ) -> Option<Typed> {
+        let (name, span) = match argument {
+            Expr::Apply { name, arguments, span } if arguments.is_empty() => (name.clone(), *span),
+            Expr::Index { indices, .. } if indices.is_empty() => return self.record_array(argument),
+            _ => return None,
+        };
+        let var = self.array_var(&name);
+        let _ = span;
+        var.map(|var| Typed { ty: var.ty, variable: true, constant: None, array: Some(var.rank.unwrap_or(1)) })
+    }
+}

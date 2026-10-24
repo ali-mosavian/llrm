@@ -58,7 +58,7 @@ pub fn compile(args: &Args) -> Result<Compiled, String> {
         debug: args.debug,
     });
     let (text, warnings) = compile_debugged(&module, name, args.dialect, &args.runtime, &args.options, debugged)
-        .map_err(|error| format!("{input}: {}", error.message))?;
+        .map_err(|error| render_semantic(&error.message, &input, &source))?;
     Ok(Compiled { text, warnings: warnings.into_iter().map(|one| format!("{input}: {one}")).collect() })
 }
 
@@ -86,6 +86,29 @@ fn render(
         for (index, row) in help.lines().enumerate() {
             out.push_str(&format!("\n {}{row}", if index == 0 { "help: " } else { "      " }));
         }
+    }
+    out
+}
+
+/// A compile error as the program prints it. The pass names the line it was at
+/// as `line N: ` in the expanded source; that becomes the file and line the
+/// person wrote, with the line itself under it.
+fn render_semantic(
+    message: &str,
+    input: &str,
+    source: &source::LoadedSource,
+) -> String {
+    let Some((number, rest)) = message.strip_prefix("line ").and_then(|tail| tail.split_once(": ")) else {
+        return format!("{input}: {message}");
+    };
+    let Ok(expanded) = number.parse::<usize>() else { return format!("{input}: {message}") };
+    let location = source.location(expanded);
+    let path = location.map(|one| one.path.display().to_string()).unwrap_or_else(|| input.to_owned());
+    let line = location.map_or(expanded, |one| one.line);
+    let mut out = format!("{path}:{line}: {rest}");
+    if let Some(text) = source.text.lines().nth(expanded.saturating_sub(1)) {
+        let gutter = line.to_string();
+        out.push_str(&format!("\n {gutter} | {}", text.trim_end()));
     }
     out
 }

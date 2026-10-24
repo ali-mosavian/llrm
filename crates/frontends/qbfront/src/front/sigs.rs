@@ -15,6 +15,9 @@ pub enum Class {
     /// a numeric expression that must fit a 16-bit integer when it is a
     /// constant
     Int,
+    /// a numeric expression that must fit a 32-bit integer when it is a
+    /// constant
+    Long,
     /// a string expression
     Str,
     /// a number or a string
@@ -101,7 +104,7 @@ CVD s=>Double
 CVSMBF s=>Single
 CVDMBF s=>Double
 MKI$ i=>Str
-MKL$ n=>Str
+MKL$ q=>Str
 MKS$ n=>Str
 MKD$ n=>Str
 MKSMBF$ n=>Str
@@ -113,8 +116,8 @@ STR$ n=>Str
 CHR$ i=>Str
 SPACE$ i=>Str
 STRING$ i,i|i,s=>Str
-HEX$ n=>Str
-OCT$ n=>Str
+HEX$ q=>Str
+OCT$ q=>Str
 LTRIM$ s=>Str
 RTRIM$ s=>Str
 UCASE$ s=>Str
@@ -195,6 +198,7 @@ fn class_of(letter: char) -> Class {
     match letter {
         'n' => Class::Num,
         'i' => Class::Int,
+        'q' => Class::Long,
         's' => Class::Str,
         'x' => Class::Any,
         'v' => Class::Var,

@@ -318,3 +318,21 @@ says the quickr profile takes it.
 What the swap found: BC takes a subscripted array field of a record (`g.q(0)`), which neither parser did, and the repo's
 own fixtures and tests held programs BC refuses (reserved words as names, a call above its DECLARE, `INSTR(60001, ..)`,
 `1E+10!`), which were fixed to be programs BC takes.
+
+## Errors a person can read
+
+A stage that refuses a source knows two things: BC's name for the error ("Array not dimensioned") and where it is.
+`qbfront::front::explain` turns that into words, and nothing else does:
+
+* `messages.txt` has one line per BC error: `name | what is wrong | what to do`, with `{text}` (the source at the
+  error), `{name}` (its leading identifier) and `{statement}` (the statement's first word) filled in. A new error needs a
+  new line there and nothing else; `tests/diagnostics.rs` runs the 5,000-program corpus and fails if any error it raises
+  has no line.
+* A syntax error is worded from the statement it is in, the token found and, where the parser knew it, the token it
+  wanted (`expected ')' in the PRINT statement, but found the end of the line`).
+* The checker may name the word of a long span that is at fault (`err_about`), and the error then points at that word:
+  the label in a GOTO.
+* `front::parse` words the error and adds where the program is valid: "this source is valid for VBDOS (--dialect
+  vbdos)". `front::parse_coded` leaves the BC name alone, for the tools that compare with BC.
+* `qbfront::driver` prints `file:line:col: message`, the source line with the place marked, and the help; a compile
+  error from the later passes (`line N: ...`) gets the file and line the person wrote, through the `$INCLUDE` map.
