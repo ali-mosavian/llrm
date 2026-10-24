@@ -131,6 +131,15 @@ fn dimension(
         return fail("array descriptor outside its object");
     }
     let data = memory(elements * width);
+    // REDIM PRESERVE keeps the old elements that fit the new extent.
+    if name == "B$RDMP" {
+        if let Some(old) = cells.pointers.get(&(at, 4)) {
+            let old = old.memory.borrow();
+            let mut new = data.borrow_mut();
+            let kept = old.bytes.len().min(new.bytes.len());
+            new.bytes[..kept].copy_from_slice(&old.bytes[..kept]);
+        }
+    }
     let bias = lower_linear.unwrap_or(0) * width;
     cells.pointers.insert((at, 4), Address { memory: data.clone(), offset: 0, length: None, capacity: None });
     cells.pointers.insert((at + 10, 2), Address { memory: data, offset: -bias, length: None, capacity: None });
@@ -285,7 +294,7 @@ impl Machine<'_> {
                 }
                 None
             }
-            "B$DDIM" | "B$RDIM" => {
+            "B$DDIM" | "B$RDIM" | "B$RDMP" => {
                 dimension(name, arguments)?;
                 None
             }

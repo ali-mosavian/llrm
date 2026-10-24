@@ -3039,3 +3039,55 @@ fn a_runtime_call_pops_every_argument_it_is_given() {
         .count();
     assert_eq!(adjusts, 0, "the caller removes nothing");
 }
+
+const SMUL_FIX: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a, i32 %b) {
+entry:
+  %r = call i32 @llvm.smul.fix.i32(i32 %a, i32 %b, i32 12)
+  ret i32 %r
+}
+declare i32 @llvm.smul.fix.i32(i32, i32, i32 immarg)
+";
+
+/// `smul.fix` is the product's two halves and a funnel shift by the scale
+/// (the pin's `IMUL32r` and `SHRD32rri8`); `CannotSelect("SMulFix")` stopped
+/// the `mandel` example, which does its arithmetic in 20.12 fixed point.
+#[test]
+fn a_fixed_point_multiply_is_a_widening_multiply_and_a_funnel_shift() {
+    let names = names(SMUL_FIX).unwrap_or_else(|why| panic!("{why}"));
+    assert!(names.iter().any(|n| n == "imul" || n == "mul"), "{names:?}");
+    assert!(names.iter().any(|n| n == "shrd"), "{names:?}");
+}
+
+const MERGED_WITH_PHI: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a, i32 %b, ptr %p, ptr %q) {
+entry:
+  %x = icmp slt i32 %a, %b
+  %l = load i32, ptr %p
+  %m = load i32, ptr %q
+  %s = mul i32 %l, %m
+  %k = add i32 %a, 1
+  %y = icmp sgt i32 %s, 7
+  %o = or i1 %x, %y
+  br i1 %o, label %t, label %e
+t:
+  br label %j
+e:
+  br label %j
+j:
+  %r = phi i32 [ %k, %t ], [ %b, %e ]
+  %u = add i32 %r, %k
+  ret i32 %u
+}
+";
+
+/// A condition split into branches whose right side uses a value the join
+/// block also reads: the value is exported from the first block and read in
+/// the second, the phi takes its inputs from every block that branches to it.
+#[test]
+fn a_split_condition_exports_what_the_later_blocks_read() {
+    let module = llrm_mir::parse::module(MERGED_WITH_PHI).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    assert_eq!(done.body.blocks.len(), 5, "entry, the second compare, then, else, join");
+}

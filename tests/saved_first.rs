@@ -73,3 +73,30 @@ int h(int n, int *p, int (*fp)(double *, int))
     let distance: i64 = array.trim_end_matches(']').parse().unwrap();
     assert_eq!(distance % 8, 0, "{text}");
 }
+
+/// A wrapped frame (set up where it is first used, not at the entry) pushed
+/// its registers after `sub esp`, the old order, because the wrap kept the
+/// frame's own sequence apart from them: the Save block now has the pin's
+/// order and the early return builds none.
+#[test]
+fn test_a_shrink_wrapped_frame_pushes_its_registers_before_it_reserves() {
+    let source = r#"extern int g(int *);
+int h(int n, int *p)
+{
+    int a[20];
+    int i, s = 0;
+    if (n == 0) return 7;
+    for (i = 0; i < n; i++) { a[i % 20] = p[i]; s += g(a); }
+    return s + a[3];
+}
+"#;
+    let text = listing(source, &["-O2", "-m32", "-march=i486"]);
+    let lines = instructions(&text);
+    let first_push = lines.iter().position(|line| line.starts_with("push ")).expect("a push");
+    let sub = lines.iter().position(|line| line.starts_with("sub esp,")).expect("locals");
+    assert!(lines[..first_push].iter().any(|line| line.starts_with('j')), "the early return comes first: {lines:?}");
+    assert!(
+        lines[first_push..sub].iter().all(|line| line.starts_with("push ") || line.ends_with(':')),
+        "registers pushed before sub esp: {lines:?}"
+    );
+}
