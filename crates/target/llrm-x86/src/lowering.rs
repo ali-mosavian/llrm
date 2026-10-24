@@ -39,6 +39,18 @@ impl Lowering for X86 {
         true
     }
 
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.h#L243
+    // A float and an integer: two stores save two bitwise instructions and the
+    // float-to-int domain switch. Two integers are left out, as the pin does.
+    fn is_multi_stores_cheaper_than_bits_merge(
+        &self,
+        low: llrm_mir::lowering::Domain,
+        high: llrm_mir::lowering::Domain,
+    ) -> bool {
+        use llrm_mir::lowering::Domain::{Float, Integer};
+        matches!((low, high), (Float, Integer) | (Integer, Float))
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L3805
     fn prefer_zero_compare_branch(&self) -> bool {
         true

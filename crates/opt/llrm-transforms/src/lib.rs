@@ -300,6 +300,7 @@ pub mod simpleloopunswitch;
 pub mod simplifycfg;
 pub mod simplifyindvar;
 pub mod sinkcast;
+pub mod splitstore;
 pub mod sinkcommon;
 pub mod spares;
 pub mod speculate;
