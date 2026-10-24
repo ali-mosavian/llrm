@@ -582,6 +582,26 @@ fn globals_of(text: &str) -> crate::globalsaa::Globals {
     Result::as_ref(&*found).expect("GlobalsAA").clone()
 }
 
+/// GlobalsAA is held past the bodies ipa-cp adds after it was made. A copy
+/// is no declaration: taken for one, its call wrote no tracked global and a
+/// load of @g across it kept a stale value.
+#[test]
+fn a_function_added_after_globals_aa_was_made_reaches_every_tracked_global() {
+    let found = globals_of(
+        "@g = internal global i16 0
+
+define void @f() {
+b0:
+  store i16 1, ptr @g
+  ret void
+}
+",
+    );
+    let added = llrm_mir::context::GlobalId(2);
+    let (read, written) = found.unsummarized(Some(added));
+    assert_eq!((read.len(), written.len()), (1, 1), "a copy made since was taken for a declaration");
+}
+
 /// A loop summing `@a` that reads it by index, then the same loop after loop
 /// strength reduction: through a pointer phi that steps by 2. `after` adds
 /// `uses` to the second, in the loop (`ret` is its return value, `decl` what
