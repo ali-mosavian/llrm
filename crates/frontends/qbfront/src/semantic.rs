@@ -14,7 +14,7 @@ mod tags;
 use tags::{Passing, Shape, Slot, Tag};
 
 use crate::dialect::Dialect;
-use crate::generated_parser::{EACH, ON_SELECTOR, STEP_MARK, TUPLE};
+use crate::front::quickr::{EACH, ON_SELECTOR, STEP_MARK, TUPLE};
 use crate::intrinsics::{self, Lowering, ResultClass};
 use crate::syntax::{
     Binary, CaseItem, Declaration, ExitTarget, Expr, FileMode, Haystack, Literal, Module, Parameter, PrintKind,
@@ -10383,7 +10383,7 @@ fn common_type(
 /// `$AUG<token>(operand)`.
 fn augmented_op(value: &Expr) -> Option<(Binary, &Expr)> {
     let Expr::Apply { name, arguments, .. } = value else { return None };
-    let token = name.strip_prefix(crate::generated_parser::AUGMENTED)?;
+    let token = name.strip_prefix(crate::front::quickr::AUGMENTED)?;
     let op = match token {
         "tkAdd" => Binary::Add,
         "tkMinus" => Binary::Subtract,

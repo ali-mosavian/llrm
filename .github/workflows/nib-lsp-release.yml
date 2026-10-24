@@ -20,7 +20,6 @@ on:
       - "crates/frontends/llrm-qb/**"
       - "crates/frontends/llrm-qbruntime/**"
       - "crates/frontends/qbfront/**"
-      - "crates/frontends/qbfront/crates/buildprs/**"
       - "crates/ir/llrm-hir/**"
       - "crates/ir/llrm-lir/**"
       - "crates/ir/llrm-mir/**"

@@ -34,7 +34,7 @@ fn same(source: &str, what: &str) {
         if continues(source, dialect) {
             continue;
         }
-        let old = qbfront::generated_parser::lex(source, dialect);
+        let old = qbfront::front::scan::scan(source, dialect);
         let new = lalrspike::qb_lexer::lex(source, dialect);
         assert_eq!(old, new, "{what} under {dialect:?}");
     }
@@ -90,7 +90,7 @@ fn streaming_tokens_to_the_parser_builds_the_same_tree() {
             if continues(&source, dialect) {
                 continue;
             }
-            let old = qbfront::generated_parser::lex(&source, dialect)
+            let old = qbfront::front::scan::scan(&source, dialect)
                 .map_err(|error| error.message)
                 .and_then(|tokens| lalrspike::parse_qb(&tokens).map(|tree| (tree, tokens)));
             let mut spans = Vec::new();

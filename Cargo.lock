@@ -33,10 +33,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "buildprs"
-version = "0.1.0"
-
-[[package]]
 name = "cc"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -856,7 +852,6 @@ dependencies = [
 name = "qbfront"
 version = "0.1.0"
 dependencies = [
- "buildprs",
  "llrm-core",
  "llrm-driver",
  "llrm-hir",

@@ -10,7 +10,8 @@
 
 use crate::front::lexer::logical_lines;
 use crate::front::words::Word;
-use crate::generated_parser::{Token, TokenKind};
+use crate::front::kw::{self, Kw};
+use crate::front::token::{Token, TokenKind};
 use crate::syntax::{Binary, Span};
 use crate::{Dialect, LexError};
 
@@ -23,50 +24,15 @@ fn error(
     LexError { span: Span { line, start, end }, message: message.into() }
 }
 
-fn ids() -> &'static Ids {
-    static IDS: std::sync::OnceLock<Ids> = std::sync::OnceLock::new();
-    IDS.get_or_init(|| {
-        let id = |spelling: &str| {
-            crate::generated_parser::tables::TOKENS
-                .iter()
-                .find_map(|(_, candidate, id, _)| candidate.eq_ignore_ascii_case(spelling).then_some(*id))
-                .unwrap_or_else(|| panic!("{spelling} is a grammar token"))
-        };
-        let mut punct = [0; 128];
-        for byte in "<>()?+-*/\\^=,#;:\n".bytes() {
-            punct[usize::from(byte)] = id(&char::from(byte).to_string());
-        }
-        let words = crate::front::words::NAMES
-            .iter()
-            .map(|name| {
-                let spelling = crate::generated_parser::tables::TOKENS
-                    .iter()
-                    .find(|(candidate, ..)| candidate == name)
-                    .expect("word is a token")
-                    .1;
-                id(spelling)
-            })
-            .collect();
-        Ids { punct, words, rem: id("REM"), data: id("DATA") }
-    })
-}
-
-struct Ids {
-    punct: [u16; 128],
-    words: Vec<u16>,
-    rem: u16,
-    data: u16,
-}
-
 fn punct(byte: u8) -> TokenKind {
-    TokenKind::Reserved(ids().punct[usize::from(byte)])
+    TokenKind::Reserved(kw::punctuation(byte))
 }
 
-fn reserved(name: &str) -> Option<u16> {
+fn reserved(name: &str) -> Option<Kw> {
     use logos::Logos;
     let mut lexer = Word::lexer(name);
     match lexer.next() {
-        Some(Ok(word)) if lexer.span().end == name.len() => Some(ids().words[word as usize]),
+        Some(Ok(word)) if lexer.span().end == name.len() => Some(crate::front::words::kw_of(word)),
         _ => None,
     }
 }
@@ -161,7 +127,7 @@ fn scan_line(
             }
             // QuickrBASIC's `f"..."`
             b'f' | b'F' if dialect.format_strings() && bytes.get(at + 1) == Some(&b'"') => {
-                crate::generated_parser::format_string(line, &mut at, line_index, dialect)?
+                crate::front::quickr::format_string(line, &mut at, line_index, dialect)?
             }
             b'"' => {
                 at += 1;
@@ -265,7 +231,7 @@ fn scan_line(
                         continue;
                     }
                 }
-                if reserved_id == Some(ids().rem)
+                if reserved_id == Some(Kw::REM)
                     || (reserved_id.is_none() && bare.eq_ignore_ascii_case("REM") && name.len() == bare.len())
                 {
                     let first = out.len() == line_start;
@@ -282,10 +248,10 @@ fn scan_line(
                     match directive.as_str() {
                         "$DYNAMIC" => TokenKind::ArrayDynamic,
                         "$STATIC" => TokenKind::ArrayStatic,
-                        _ => TokenKind::Reserved(ids().rem),
+                        _ => TokenKind::Reserved(Kw::REM),
                     }
                 } else if let Some(id) = reserved_id {
-                    if id == ids().data {
+                    if id == Kw::DATA {
                         out.push(Token { kind: TokenKind::Reserved(id), span: span(at) });
                         let text_start = at;
                         let text_end = statement_end(line, at);
@@ -376,7 +342,7 @@ fn scan_line(
 }
 
 fn extension_keyword(bare: &str) -> Option<&'static str> {
-    crate::generated_parser::tables::extension_keyword(&bare.to_ascii_uppercase())
+    kw::extension_keyword(&bare.to_ascii_uppercase())
 }
 
 /// Where a DATA statement's text ends: a colon outside quotes, or the end of

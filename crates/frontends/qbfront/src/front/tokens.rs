@@ -1,11 +1,7 @@
 //! QB tokens for the LALR parser: the lexer's, as a terminal each.
 
-use std::collections::HashMap;
-use std::sync::OnceLock;
-
-use crate::front::kw::{Kw, NAMES};
-use crate::generated_parser::tables::TOKENS;
-use crate::generated_parser::{Token, TokenKind};
+use crate::front::kw::Kw;
+use crate::front::token::{Token, TokenKind};
 use crate::syntax::Binary;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -34,39 +30,19 @@ pub type Failure = crate::LexError;
 
 pub type Spanned = Result<(usize, Tok, usize), Failure>;
 
-/// The terminal of each reserved id.
-fn reserved() -> &'static [Option<Tok>] {
-    static TABLE: OnceLock<Vec<Option<Tok>>> = OnceLock::new();
-    TABLE.get_or_init(|| {
-        let by_name: HashMap<&str, Kw> = NAMES.iter().copied().collect();
-        TOKENS.iter().map(|(name, ..)| by_name.get(name).map(|&kw| Tok::Kw(kw))).collect()
-    })
-}
-
-/// Whether a word is a reserved word's spelling, so that a longer span is its
-/// suffixed name.
-fn alphabetic(id: u16) -> Option<usize> {
-    static TABLE: OnceLock<Vec<Option<usize>>> = OnceLock::new();
-    TABLE.get_or_init(|| {
-        TOKENS
-            .iter()
-            .map(|(_, spelling, ..)| spelling.starts_with(|c: char| c.is_ascii_alphabetic()).then_some(spelling.len()))
-            .collect()
-    })[usize::from(id)]
-}
-
 /// `type$`, `key%`: the lexer takes a suffixed word for its bare keyword; the
 /// suffix makes it a name.
 pub fn suffixed(
-    id: u16,
+    word: Kw,
     width: usize,
 ) -> bool {
-    alphabetic(id).is_some_and(|spelling| width == spelling + 1)
+    let spelling = word.spelling();
+    spelling.starts_with(|c: char| c.is_ascii_alphabetic()) && width == spelling.len() + 1
 }
 
 pub fn terminal(kind: &TokenKind) -> Tok {
     match kind {
-        TokenKind::Reserved(id) => reserved()[usize::from(*id)].clone().expect("every reserved word has a terminal"),
+        TokenKind::Reserved(word) => Tok::Kw(*word),
         TokenKind::ExtensionKeyword(_) => Tok::Ext,
         TokenKind::Identifier(_) => Tok::Ident,
         TokenKind::Integer(..) => Tok::Int,
@@ -98,7 +74,7 @@ pub fn tokens(source: &[Token]) -> Vec<Spanned> {
             // keyword; the suffix makes it a name
             let suffixed = matches!(
                 &token.kind,
-                TokenKind::Reserved(id) if suffixed(*id, token.span.end - token.span.start)
+                TokenKind::Reserved(word) if suffixed(*word, token.span.end - token.span.start)
             );
             Ok((
                 at,

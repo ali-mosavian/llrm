@@ -352,10 +352,10 @@ impl Ast<'_> {
     /// converted fields, a field's spec passed to the conversion as a string.
     fn format_string(
         &mut self,
-        segments: &[crate::generated_parser::FormatSegment],
+        segments: &[crate::front::token::FormatSegment],
         span: Span,
     ) -> R<Expr> {
-        use crate::generated_parser::FormatSegment;
+        use crate::front::token::FormatSegment;
         let mut parts = Vec::new();
         for segment in segments {
             parts.push(match segment {
@@ -369,7 +369,7 @@ impl Ast<'_> {
                     }
                     let mut arguments = vec![value];
                     arguments.extend(spec.iter().map(|spec| Expr::Literal(Literal::String(spec.clone()), *span)));
-                    Expr::Apply { name: crate::generated_parser::FORMAT_FIELD.into(), arguments, span: *span }
+                    Expr::Apply { name: crate::front::quickr::FORMAT_FIELD.into(), arguments, span: *span }
                 }
             });
         }

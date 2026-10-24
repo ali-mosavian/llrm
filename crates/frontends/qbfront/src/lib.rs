@@ -5,11 +5,9 @@
 //! executor, or scanner patch phase in this crate.
 
 pub mod dialect;
-pub mod dialect_extensions;
 pub mod driver;
 pub mod error;
 pub mod front;
-pub mod generated_parser;
 pub mod intrinsics;
 pub mod semantic;
 pub mod source;

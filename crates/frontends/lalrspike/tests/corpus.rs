@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use qbfront::Dialect;
-use qbfront::generated_parser::lex;
+use qbfront::front::scan::scan as lex;
 
 fn tracked(extension: &str) -> Vec<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
