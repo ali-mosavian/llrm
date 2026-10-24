@@ -76,6 +76,7 @@ const UNOPTIMIZED: &[&str] = &[
     "X86OptimizeLEAs",
     "MachineLICM",
     "FixupBW",
+    "FixupLEAs",
     "CmpAsSub",
     "CallFrameOpt",
 ];
@@ -114,6 +115,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("LateCleanup", "latecleanup@13"),
     ("Peephole", "peephole@14"),
     ("FixupBW", "fixupbw@14"),
+    ("FixupLEAs", "fixupleas@14"),
     ("LoopSlots", "loopslots@15"),
     ("Scheduler", "schedule@16"),
     ("ControlFlow", "jumps@17"),
@@ -252,6 +254,7 @@ pub fn machine_with<'a>(
         )?),
         // After the peephole, as the pin runs it late (X86FixupBWInsts).
         Box::new(crate::backend::fixupbw::FixupBw { size: target.size }),
+        Box::new(crate::backend::fixupleas::FixupLeas),
         // Once spill traffic is final: which slots a loop still reaches.
         Box::new(loopslots::LoopSlots::new(frame.clone(), target, registers.slot as u32, classes)?),
         // Scheduling may only move fully allocated machine occurrences.
