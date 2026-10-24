@@ -17,6 +17,12 @@
 //! `getADDrrFromLEA` to `getINCDECFromLEA` (L351-400), which on our
 //! name-keyed instructions are one table; and [`check_reg_usage`] (L466).
 //!
+//! # Example
+//! `a_write_beyond_five_cycles_is_not_found` in this file's tests: two loads
+//! cost 8 cycles, so a write of the register before them is past
+//! `INSTR_DISTANCE_THRESHOLD` and `search_backwards` finds none for the LEA
+//! that reads it.
+//!
 //! # Runs
 //! After `FixupBW`, optimizing levels only.
 
