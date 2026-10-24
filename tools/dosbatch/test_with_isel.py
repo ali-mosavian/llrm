@@ -20,6 +20,12 @@ def test_a_qb_program_is_compiled_by_the_selected_selector(monkeypatch):
     assert dosbatch.with_isel(["/b/llrm-qb", "a.bas", "-o", "a.obj"]) == ["/b/llrm-qb", "--isel=shadow", "a.bas", "-o", "a.obj"]
 
 
+def test_a_nib_program_is_compiled_by_the_selected_selector(monkeypatch):
+    """llrm-nib got no `--isel`: LLRM_ISEL=shadow on the 74 examples reported 'the DAG path selected no function (1235 old)'."""
+    monkeypatch.setenv("LLRM_ISEL", "shadow")
+    assert dosbatch.with_isel(["/b/llrm-nib", "a.nib", "-o", "a.obj"]) == ["/b/llrm-nib", "--isel=shadow", "a.nib", "-o", "a.obj"]
+
+
 def test_without_the_variable_nothing_changes(monkeypatch):
     monkeypatch.delenv("LLRM_ISEL", raising=False)
     assert dosbatch.with_isel(["/b/llrm-c", "a.c"]) == ["/b/llrm-c", "a.c"]
