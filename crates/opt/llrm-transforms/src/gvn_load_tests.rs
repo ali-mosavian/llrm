@@ -168,9 +168,9 @@ fn test_a_load_partly_available_is_loaded_in_the_predecessor_that_lacks_it() {
 
 /// x_heapsort's sift loop: the child's element is loaded on the arm that chose
 /// it by a select of two indexes, not on the other arm. The GEPs off `@g` are
-/// in blocks that dominate both arms, but the translation of the address into an
-/// arm found none (a global has no use list), so the load stayed in the join:
-/// one load more per trip.
+/// in blocks that dominate both arms, but the translation of the address into
+/// an arm found none (a global has no use list), so the load stayed in the
+/// join: one load more per trip.
 const SELECTED: &str = "define i16 @f(i16 %i, i1 %c) {
 b0:
   %p0 = getelementptr i16, ptr @g, i16 %i

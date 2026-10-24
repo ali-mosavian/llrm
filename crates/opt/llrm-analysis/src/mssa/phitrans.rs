@@ -26,13 +26,12 @@
 //!
 //! DEVIATE, stated facts:
 //! 3. A constant has no use list, so the scan of a base's users for an equal
-//!    GEP is a scan of the blocks that dominate the predecessor (the users
-//!    the C++ keeps are those in this function in such a block): the same
-//!    GEPs, found by walking the dominator chain, the newest (the highest
-//!    instruction id, a stand-in for use-list order) returned. The
-//!    scan of a cast's users ends at once for a constant (it folds first).
-//!    Exit: a use-list model for constants.
-//!    `test_a_gep_off_a_global_base_is_found_in_a_dominating_block`.
+//!    GEP is a scan of the blocks that dominate the predecessor (the users the
+//!    C++ keeps are those in this function in such a block): the same GEPs,
+//!    found by walking the dominator chain, the newest (the highest instruction
+//!    id, a stand-in for use-list order) returned. The scan of a cast's users
+//!    ends at once for a constant (it folds first). Exit: a use-list model for
+//!    constants. `test_a_gep_off_a_global_base_is_found_in_a_dominating_block`.
 //! 4. Users come newest first, as LLVM's use list does; any match is an equal
 //!    value and the newest is returned.
 //!    `test_the_newest_of_two_equal_casts_is_returned`.
@@ -425,8 +424,10 @@ impl PhiTransAddr {
                     while let Some(here) = block {
                         for candidate_id in function.iter_block(here) {
                             let candidate = function.instruction(candidate_id);
-                            if matches!(candidate.opcode, Opcode::GetElementPtr { source: other } if other == source)
-                                && candidate.ty == ty
+                            if matches!(
+                                candidate.opcode,
+                                Opcode::GetElementPtr { source: other } if other == source
+                            ) && candidate.ty == ty
                                 && candidate.operands == translated
                                 && newest.is_none_or(|best| candidate_id.0 > best.0)
                             {

@@ -137,7 +137,8 @@ fn test_a_gep_off_a_global_base_is_not_invented_when_no_block_has_it() {
 
 #[test]
 fn test_a_gep_off_a_global_base_in_a_sibling_block_is_not_available() {
-    // %a is in b1, which does not dominate b0: a scan of the whole function would find it.
+    // %a is in b1, which does not dominate b0: a scan of the whole function
+    // would find it.
     let text = diamond(
         "",
         "  %a = getelementptr i32, ptr @g, i16 %n",
