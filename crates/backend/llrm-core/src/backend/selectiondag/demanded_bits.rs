@@ -83,6 +83,14 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             return Ok(());
         }
         let Some(c) = self.dag.constant(rhs) else { return Ok(()) };
+        // `targetShrinkDemandedConstant` first: the target may keep the
+        // constant (X86 keeps an `and` mask a `movzx` matches).
+        if let Some(handled) = self.hooks.target_shrink_demanded_constant(self.dag, op, demanded) {
+            return match handled {
+                Some(new) => Self::combine_to(tlo, op, new).map(|_| ()),
+                None => Ok(()),
+            };
+        }
         if opcode == ISD::Xor && demanded & !c == 0 {
             return Ok(());
         }
