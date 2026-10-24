@@ -561,6 +561,20 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         self.replace_value(compare_value, replacement);
     }
 
+    /// `areBitwiseNotOfEachother`: one is `(xor other, -1)`.
+    fn are_bitwise_not_of_each_other(
+        &self,
+        a: SDValue,
+        b: SDValue,
+    ) -> bool {
+        let is_not = |dag: &SelectionDAG, v: SDValue, of: SDValue| {
+            dag.opcode(v) == ISD::Xor
+                && dag.operand(v, 0) == of
+                && dag.constant(dag.operand(v, 1)) == Some(super::fold::mask(dag.width(v)))
+        };
+        is_not(self.dag, a, b) || is_not(self.dag, b, a)
+    }
+
     /// `visitAND`, the part `SimplifyDemandedBits` does for it: `(and x, c)` is
     /// `x` when every bit is either set in `c` or known zero in `x`, so
     /// `and (setcc), 1` is the `setcc` (it is 0 or 1 already).
@@ -569,10 +583,43 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         node: SDValue,
     ) -> Option<SDValue> {
         let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let vt = self.dag.value_type(n0);
+        if n0 == n1 {
+            return Some(n0);
+        }
+        if self.dag.constant(n0).is_some() && self.dag.constant(n1).is_none() {
+            return Some(self.dag.get_node(ISD::And, vt, &[n1, n0]));
+        }
+        if self.are_bitwise_not_of_each_other(n0, n1) {
+            return Some(self.dag.get_constant(0, vt));
+        }
+        // `(and x, c)` is zero when `x` is known zero wherever `c` is set.
+        if let Some(c) = self.dag.constant(n1) {
+            if c & !super::known_bits::known_bits(self.dag, n0).zero & super::fold::mask(vt.size_in_bits()) == 0 {
+                return Some(self.dag.get_constant(0, vt));
+            }
+        }
         if let Some(folded) = self.fold_logic_of_setccs(true, n0, n1) {
             return Some(folded);
         }
-        let vt = self.dag.value_type(n0);
+        if let (Some(c1), true) = (self.dag.constant(n1), !self.dag.is_opaque(n1)) {
+            // `reassociateOps`: `(and (and x, c0), c1)` is `(and x, c0 & c1)`.
+            if self.dag.opcode(n0) == ISD::And {
+                let (x, inner) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+                if self.dag.constant(inner).is_some() && !self.dag.is_opaque(inner) {
+                    let both = self.dag.get_node(ISD::And, vt, &[inner, n1]);
+                    return Some(self.dag.get_node(ISD::And, vt, &[x, both]));
+                }
+            }
+            // `(and (or x, C), D)` is `D` when `D` is a subset of `C`.
+            if self.dag.opcode(n0) == ISD::Or {
+                if let Some(c) = self.dag.constant(self.dag.operand(n0, 1)) {
+                    if c1 & !c == 0 {
+                        return Some(n1);
+                    }
+                }
+            }
+        }
         let all = super::fold::mask(vt.size_in_bits());
         for (other, constant) in [(n0, n1), (n1, n0)] {
             if let Some(c) = self.dag.constant(constant) {

@@ -27,3 +27,24 @@ def test_a_function_missing_from_the_output_is_still_a_row():
 def test_a_quoted_function_name_is_the_name_the_shadow_prints():
     """m16 names like `_f@3` are quoted in the IR; the quotes made 87 functions "missing from the output"."""
     assert tool.defined('define i16 @"_f@3"(i16 %0) {\n ret i16 0\n}\n') == ["_f@3"]
+
+
+def test_the_example_expands_memset_pattern_as_the_driver_does(tmp_path):
+    """`scroll` in the m16 shadow was refused for `intrinsic call llvm.experimental.memset.pattern`: the driver expands it, the example did not."""
+    import os
+    import subprocess
+
+    import pytest
+
+    binary = os.environ.get("SELECT_SHADOW")
+    if not binary:
+        pytest.skip("SELECT_SHADOW names a built select_shadow example")
+    ir = tmp_path / "p.ll"
+    ir.write_text(
+        'target datalayout = "e-p:16:16-i32:16-i64:16-n8:16:32"\n'
+        "define void @f(ptr %p, i16 %n) {\nentry:\n"
+        "  call void @llvm.experimental.memset.pattern.p0.i16.i16(ptr %p, i16 4660, i16 %n, i1 false)\n  ret void\n}\n"
+        "declare void @llvm.experimental.memset.pattern.p0.i16.i16(ptr, i16, i16, i1)\n"
+    )
+    out = subprocess.run([binary, str(ir)], capture_output=True, text=True, env={**os.environ, "M16": "1"}).stdout
+    assert "REFUSED" not in out, out

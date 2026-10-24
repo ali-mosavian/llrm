@@ -508,8 +508,9 @@ impl Accesses {
         unit: &Unit,
         calls: &Calls,
     ) -> Self {
-        let references =
-            unit.function.walk().filter_map(|(_, inst)| unit.reference(inst).map(|one| (inst, one))).collect();
+        let mut references =
+            IndexMap::with_capacity_and_hasher(crate::memory::loads_and_stores(unit.function), Default::default());
+        references.extend(unit.function.walk().filter_map(|(_, inst)| unit.reference(inst).map(|one| (inst, one))));
         Self::new(unit, references, |inst| calls.get(&inst).map(|stores| (None, Some(Rc::clone(stores)))))
     }
 

@@ -1022,3 +1022,20 @@ fn test_a_lea_of_a_place_and_an_index_keeps_the_places_displacement() {
     let code = hex(&made(emitted(&lea)).code);
     assert!(code.ends_with("8d5c940c"), "{code}");
 }
+
+/// `bt` and `btc` of two registers encode (the pin's BT32rr and BTC16rr had no
+/// form: QCport functions that test or flip a variable bit were refused).
+#[test]
+fn test_bt_and_btc_of_registers_encode() {
+    let bt = sem(Operation::Compare, Some("bt"), vec![], vec![rg(RegId::EAX, 4), rg(RegId::ECX, 4)], None, false);
+    assert_eq!(hex(&made(emitted(&bt)).code), "660fa3c8");
+    let btc = sem(
+        Operation::Binary,
+        Some("btc"),
+        vec![rg(RegId::EAX, 4)],
+        vec![rg(RegId::EAX, 4), rg(RegId::ECX, 4)],
+        None,
+        false,
+    );
+    assert_eq!(hex(&made(emitted(&btc)).code), "660fbbc8");
+}
