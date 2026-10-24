@@ -242,6 +242,11 @@ mod tests {
             "pattern.rs",
             "power2.rs",
             "range.rs",
+            // ValueTracking.cpp's `getRangeForInstruction` bounds an add,
+            // sub, mul or shl by the `nsw` it has (`addWithNoWrap`,
+            // `multiplyWithNoWrap`); the interval is worked out afresh from
+            // the instruction when asked and kept by no pass.
+            "ranges.rs",
             // ConstantFolding.cpp reads a GEP's `inbounds`, `nusw` and `nuw`
             // to flag the constant that replaces it.
             "constantfolding.rs",

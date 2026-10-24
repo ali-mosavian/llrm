@@ -5,10 +5,10 @@
 //! `stamp` takes the bodies that are neither exported nor address-taken. For
 //! each integer parameter that has users and no `range` attribute, it collects
 //! what every direct call (`call` or `invoke`) passes. A call's actual is read
-//! in its caller by [`crate::ranges`] under the interval scope of the call's
-//! block, with the caller's own parameters' stamps, and for an operand with no
-//! interval, computed from its operands two levels down. A call in a block
-//! `ranges` finds unreachable passes nothing. The actuals are joined into
+//! in its caller by [`crate::ranges`] under the branch edges' intervals at the
+//! call's block, with the caller's own parameters' stamps, and for an operand
+//! with no interval, computed from its operands two levels down. The actuals
+//! are joined into
 //! `Seen`: `Nothing`, `Within(interval)` or `Anything`. A caller that has not
 //! itself been seen yet is `waiting` and does not turn an unknown actual into
 //! `Anything`.
@@ -78,7 +78,8 @@
 //! and stops when none.
 //!
 //! # Needs
-//! [`crate::ranges`] (`bounds`, interval of an operand), [`crate::consts`],
+//! [`crate::ranges`] (`dominated_edges`, interval of an operand),
+//! [`crate::consts`],
 //! [`crate::effects`] for `callee`, `llrm_mir::program::Program`.
 //!
 //! # See also
@@ -237,7 +238,7 @@ struct Solved {
     parameters: Vec<Vec<Attribute>>,
     facts: Vec<GlobalFact>,
     registers: IndexMap<ValueId, Known>,
-    scoped: ranges::Bounds,
+    scoped: IndexMap<i64, ranges::Intervals>,
 }
 
 /// The solves of the calling bodies, kept between rounds of `stamp_with` and
@@ -330,10 +331,7 @@ pub fn stamp_with(
                 if !kept {
                     let unit = Unit::of(module, &program.layout, function).with_shape(&shape);
                     let registers = crate::consts::known(&unit);
-                    let scoped = {
-                        let unit = unit.with_registers(&registers);
-                        ranges::bounds(&unit).map(std::borrow::Cow::into_owned).unwrap_or_default()
-                    };
+                    let scoped = ranges::dominated_edges(&unit.with_registers(&registers)).unwrap_or_default();
                     cache.solves += 1;
                     cache
                         .solved
@@ -351,15 +349,9 @@ pub fn stamp_with(
                 let solved = &cache.solved[&key];
                 let (registers, scoped) = (&solved.registers, &solved.scoped);
                 let unit = Unit::of(module, &program.layout, function).with_shape(&shape).with_registers(registers);
+                let empty = ranges::Intervals::default();
                 for (block, inst, target) in calls {
-                    // A round assumes a range before it proves it: where the
-                    // loops' facts contradict each other under
-                    // the assumption the block is not reached, and a call in it
-                    // passes nothing.
-                    if scoped.unreachable(cfg::id(block)) {
-                        continue;
-                    }
-                    let scope = scoped.scope(&unit, cfg::id(block));
+                    let scope = scoped.get(&cfg::id(block)).unwrap_or(&empty);
                     let parameters =
                         program.modules[target.0].global(target.1).function().expect("a procedure").parameters().len();
                     for index in 0..parameters {
@@ -368,7 +360,7 @@ pub fn stamp_with(
                             .instruction(inst)
                             .operands
                             .get(index)
-                            .and_then(|&operand| actual(&unit, &scope, registers, operand, 2));
+                            .and_then(|&operand| actual(&unit, scope, registers, operand, 2));
                         *entry = match found {
                             Some(found) => entry.joined(&found),
                             None if waiting => continue,
