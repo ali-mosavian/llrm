@@ -501,13 +501,13 @@ fn test_a_cell_nothing_writes_in_a_handled_sub_folds() {
     let source = written(
         &tmp,
         "UNWRIT.BAS",
-        b"DEFINT A-Z\r\nDECLARE SUB Show ()\r\nDIM SHARED s(3 TO 4)\r\nON ERROR GOTO h\r\nShow\r\nEND\r\nh:\r\nRESUME NEXT\r\nSUB Show\r\n    PRINT LBOUND(s, 1); UBOUND(s, 1)\r\nEND SUB\r\n",
+        b"DEFINT A-Z\r\nDECLARE SUB Shown ()\r\nDIM SHARED s(3 TO 4)\r\nON ERROR GOTO h\r\nShown\r\nEND\r\nh:\r\nRESUME NEXT\r\nSUB Shown\r\n    PRINT LBOUND(s, 1); UBOUND(s, 1)\r\nEND SUB\r\n",
     );
     let listing = listing(&parsed(&source));
-    let show = between(&listing, "SHOW proc far", "SHOW endp");
-    assert!(show.contains("pushw 3\n    call far ptr B$PSI2"), "{show}");
-    assert!(show.contains("pushw 4\n    call far ptr B$PEI2"), "{show}");
-    assert!(!show.contains("cmp word ptr [bp-"), "{show}");
+    let shown = between(&listing, "SHOWN proc far", "SHOWN endp");
+    assert!(shown.contains("pushw 3\n    call far ptr B$PSI2"), "{shown}");
+    assert!(shown.contains("pushw 4\n    call far ptr B$PEI2"), "{shown}");
+    assert!(!shown.contains("cmp word ptr [bp-"), "{shown}");
 }
 
 /// What the handler can read is not narrowed past what RESUME NEXT reads: `x`
