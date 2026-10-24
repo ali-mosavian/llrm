@@ -285,9 +285,11 @@ fn _reused(body: &LirBody) -> LirBody {
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
         // Where each value is read and written in the block, in order: what the
-        // scans below ask, by bisection.
+        // scans below ask, by bisection. Made at the first instruction that
+        // passes the counts of the whole body: most blocks have none.
         let mut reads = Places::default();
         let mut writes = Places::default();
+        let mut indexed = false;
         let index = |reads: &mut Places, writes: &mut Places, at: usize, one: &Insn, add: bool| {
             for (places, values) in [(&mut *reads, &one.uses), (&mut *writes, &one.defines)] {
                 for &value in values {
@@ -299,9 +301,6 @@ fn _reused(body: &LirBody) -> LirBody {
                 }
             }
         };
-        for (at, one) in insns.iter().enumerate() {
-            index(&mut reads, &mut writes, at, one, true);
-        }
         for at in 0..insns.len() {
             let Some(what) = insns[at].what.as_ref().filter(|what| ties(what)) else { continue };
             let (Some(Loc::Held(into)), Some(Loc::Held(first))) = (what.dests.first(), what.sources.first()) else {
@@ -320,10 +319,16 @@ fn _reused(body: &LirBody) -> LirBody {
             }
             // Defined once and read once in the whole body: not live out, and
             // the one reader is found below.
-            if times(&defined, into.value) != 1
-                || times(&read, into.value) != 1
-                || reads.at(into.value).first().is_some_and(|&place| place < at)
-            {
+            if times(&defined, into.value) != 1 || times(&read, into.value) != 1 {
+                continue;
+            }
+            if !indexed {
+                indexed = true;
+                for (place, one) in insns.iter().enumerate() {
+                    index(&mut reads, &mut writes, place, one, true);
+                }
+            }
+            if reads.at(into.value).first().is_some_and(|&place| place < at) {
                 continue;
             }
             // `first` dies here: nothing after it reads it, not even a parallel
@@ -363,6 +368,13 @@ fn _reused(body: &LirBody) -> LirBody {
     if changed { body.with_blocks(blocks) } else { body.clone() }
 }
 
+// How many places `_reused` entered, for a test that a block with no update in
+// place enters none.
+#[cfg(test)]
+thread_local! {
+    static ADDED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The places in a block each value is named, ascending.
 #[derive(Default)]
 struct Places(IndexMap<u32, Vec<usize>>);
@@ -373,6 +385,8 @@ impl Places {
         value: u32,
         at: usize,
     ) {
+        #[cfg(test)]
+        ADDED.with(|count| count.set(count.get() + 1));
         let places = self.0.entry(value).or_default();
         if let Err(found) = places.binary_search(&at) {
             places.insert(found, at);
@@ -1475,6 +1489,34 @@ mod tests {
         let twice: Vec<u32> =
             computed.iter().copied().filter(|reg| computed.iter().filter(|r| *r == reg).count() > 1).collect();
         assert!(twice.is_empty(), "computed more than once: {twice:?} of {computed:?}");
+    }
+
+    /// `_reused` entered every name of every instruction of a block into its
+    /// places (2,862 inserts on d_faces, 1.19 M Ir) before asking whether any
+    /// instruction could be an update in place; a block whose values are read
+    /// more than once, or defined twice, has none to ask about.
+    #[test]
+    fn test_a_block_with_no_candidate_update_in_place_enters_no_places() {
+        let sum = |at: i64, into: u32, first: u32, second: u32| {
+            let what = Semantics {
+                name: Some("add".into()),
+                dests: vec![held(into, 4)],
+                sources: vec![held(first, 4), held(second, 4)],
+                ..Semantics::new(Operation::Binary)
+            };
+            Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![into], vec![first, second]))
+        };
+        // Every sum is read twice or not at all: none is `c := a + b; a := c`.
+        let body = LirBody::new(
+            "t",
+            0,
+            vec![LirBlock::new(0, vec![sum(0, 3, 1, 2), sum(1, 4, 3, 3), sum(2, 5, 4, 4)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        super::ADDED.with(|count| count.set(0));
+        let _ = super::_reused(&body);
+        assert_eq!(super::ADDED.with(std::cell::Cell::get), 0);
     }
 
     /// `_reused` kept where each value is read in a `BTreeSet` per value (2,862
