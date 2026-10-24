@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 189 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 190 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -193,6 +193,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | typepromotion | CodeGenPrepare's `TypePromotionTransaction`: a run of edits to a function that can be taken back to any point it passed, or kept. | Under `cgpaddr`'s `optimizeExt`, which makes a transaction for each | [typepromotion](typepromotion.md) |
 | uncondicmp | A block that holds an equality compare of a switch's value with a constant (and perhaps a `select` on it), and jumps on, folded into the switch: LLVM's [`tryToSimplifyUncondBranchWithICmpSelectInIt`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5328) and its `ICmpInIt` form (a compare alone), the parts of `simplifyUncondBranch` ([L8800](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8800)) after the empty block's removal. |  | [uncondicmp](uncondicmp.md) |
 | undefpred | A predecessor that gives a block a value that is undefined behavior to use there stops reaching it: SimplifyCFG's `removeUndefIntroducingPredecessor`. |  | [undefpred](undefpred.md) |
+| uremloop | CodeGenPrepare's `foldURemOfLoopIncrement`: the remainder of a loop's counter by a loop-invariant amount is a second counter that wraps ([CodeGenPrepare.cpp#L2227](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L2227)). | In `cgpaddr`'s run, before the store split. | [uremloop](uremloop.md) |
 | vncoercion | A value stored or loaded in one type, made the value a load of another type at a must-aliased address reads: GVN's `VNCoercion`, a translation of [`VNCoercion.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/VNCoercion.cpp) at d1106deb71cc. | Nothing yet; `gvn`'s load elimination (stage 4 of the GVN port) is the | [vncoercion](vncoercion.md) |
 | walk | The module passes that LLVM runs between the early function pipeline and the function simplification (`ipsccp`, `deadargelim`), so that a body they change goes through the Simplify list once and not again afterwards. | Once per compile under `Options::llvm_order`, after the Early stage. | [walk](walk.md) |
 | widen | A loop counter read through `sext` or `zext` becomes a counter of the wider type, and the extensions go. | [`crate::simplifyindvar`](simplifyindvar.md) (`simplifyAndExtend`), from [`crate::indvars`](indvars.md). | [widen](widen.md) |
