@@ -93,6 +93,22 @@ void fh_free(FHD *owner)
     owner->data_seg = 0;
 }
 
+/* `to` takes `from`'s place in the list and its paragraphs; `from` is left without. */
+void fh_adopt(FHD *to, FHD *from)
+{
+    FHD *entry = &top;
+
+    while (next_of(entry) != from && entry != &bottom)
+        entry = next_of(entry);
+    if (entry == &bottom)
+        qb_error(FE_CORRUPT);
+    entry->next = (u16)to;
+    to->next = from->next;
+    to->data_seg = from->data_seg;
+    to->size = from->size;
+    from->data_seg = 0;
+}
+
 /* The bytes of far heap nothing holds. */
 unsigned long fh_free_bytes(void)
 {
