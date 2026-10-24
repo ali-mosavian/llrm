@@ -83,13 +83,20 @@ Read from each function's own comment; a home is the pin's pass that does the sa
 
 | Sub-pass | What it does | Home or premise |
 |---|---|---|
-| `constants` | reuses identical register contents until overwritten | home: `MachineLateInstrsCleanup` (redundant immediate defs after allocation) |
+| `constants` | per block: reuses identical register contents (immediates, register copies) and folds an extension of a held constant | three parts, three homes: immediate reloads are `latecleanup.rs` already (global, slot 81); register-copy reuse is `MachineCopyPropagation` (row 84, w-3); the extension of a constant is a DAG fold in selection (R45-3). Delete `constants` once a test shows none of the three still fires only here |
 | `overwritten` | removes overwritten moves, pure arithmetic, owned spill reloads | home: `machinedce` and `MachineLateInstrsCleanup`; fold into R45-5's `machinedce` row |
 | `extensions`, `zeroed_loads` | load plus extension as one `movzx`; `xor r; mov r8,m8` | home: isel patterns (R45-3, with `zeroes`); `zeroed_loads` is priced by the target |
 | `high_extracts` | `mov r,[slot]; shr r,16` as a word load, or `shld` | home: load narrowing in selection (`DAGCombiner::reduceLoadWidth`) |
 | `pushes` | two immediate word pushes as one dword push | premise: 16-bit stack layout; belongs with the call-frame lowering |
-| `popped_arguments` | `add sp,n` as pops at `-Os` | home: `X86FrameLowering::eliminateCallFramePseudoInstr` (the `callframe` pass) |
+| `popped_arguments` | `add sp,n` as pops at `-Os` | home: `X86FrameLowering::eliminateCallFramePseudoInstr`, which runs in prologue insertion after allocation (row 80, w-6, `framelowering.rs`; not `callframe`, which runs before allocation and cannot see a dead scratch register) |
 | `transferred`, `shuttles` | tied work done in the source register when a copy restores the result | home: coalescer hints and `MachineCopyPropagation`; symptoms of allocation, measure after the allocator rows |
 | `compares_again` | a compare repeated in the next block entered from one block | premise: gcc's `cse_condition_code_reg`; the pin has `optimizeCompareInstr` only inside a block |
 
-First PRs, in order: `popped_arguments` into `callframe` (1.69 M), `constants` into a `MachineLateInstrsCleanup` translation, `high_extracts` and `extensions` with R45-3.
+First PRs, in order: `constants` (count what each of its three parts changes on the 568 sweep and QCport, then delete or hand over), `high_extracts` and `extensions` with R45-3; `popped_arguments` (1.69 M) waits for row 80's frame indices (w-6, 2026-11-20) and is asked of w-6 then.
+
+### Count (2026-10-25, step 1)
+On `d_faces -O2` the groups' first-pattern test (`Matcher::head`) ran 24,604 times and passed 856 (3.5%), counted at the one `run` all walks call. The walks cost 10.7 M outside the shared `upper_zero` solution, about 435 Ir per test, of which the 856 passes' tails are a part: an upper bound of the saving is most of 10.7 M, an estimate until the index exists. Step 2 (2026-11-20) measures it on the dist build; under 3 M it is dropped.
+
+### `constants`, what each part changes (2026-10-25)
+Counted in a throwaway build over the 65 QCport modules at -O2 (m16 and m32): 106 extensions folded to a constant, 36 loads or extensions removed because a register already holds the same known constant, 11 register copies removed, 7 immediate reloads removed (the part `latecleanup.rs` takes). The 41 bench kernels at -O1/-O2/-Os, both modes: 1 copy. Each `Peephole::once` run counts, so the totals include repeats; the proportions are what matter. The extension fold is most of the work, so `constants` is deleted only after the DAG fold (R45-3) covers it; the other parts are 18 of 160.
+

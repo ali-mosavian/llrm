@@ -20,6 +20,16 @@ void *ad_near_data(const AD *ad)
     return ad->data;
 }
 
+unsigned long ad_remaining(const AD *ad, qb_data_ptr from)
+{
+    unsigned long total = ad->elem, start = (unsigned long)ad->data, at = (unsigned long)from;
+    unsigned dim;
+
+    for (dim = 0; dim < ad->dims; dim++)
+        total *= ad->dm[dim].count;
+    return at >= start && at - start <= total ? total - (at - start) : 0;
+}
+
 unsigned long ad_free_bytes(void)
 {
     unsigned long largest = 0, room;
@@ -77,4 +87,20 @@ void ad_clear(AD *ad, unsigned long bytes)
 
     while (bytes--)
         *at++ = 0;
+}
+
+void ad_copy(AD *to, const AD *from, unsigned long bytes)
+{
+    char *at = to->data;
+    const char *source = from->data;
+
+    while (bytes--)
+        *at++ = *source++;
+}
+
+void ad_adopt(AD *to, AD *from)
+{
+    lh_entry(from->data)->owner = to;
+    to->data = from->data;
+    from->data = 0;
 }

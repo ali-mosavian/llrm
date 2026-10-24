@@ -280,8 +280,13 @@ def c_include(target: str, work: Path) -> Path:
     directory = work / f"{target}-include"
     directory.mkdir(exist_ok=True)
     header = os_layer(target, "header", "c") + "\n"
-    if not (directory / "llrm_os.h").exists() or (directory / "llrm_os.h").read_text() != header:
-        (directory / "llrm_os.h").write_text(header)
+    path = directory / "llrm_os.h"
+    if not path.exists() or path.read_text() != header:
+        # Every C program of a run asks, from the thread that compiles it: a header written in place is empty or half there under a compile that
+        # reads it (an implicit `llrm_os_close`, linked as the undefined `_llrm_os_close@3`). It is made beside and renamed, so it is whole or absent.
+        made = path.with_name(f"llrm_os.{os.getpid()}.{threading.get_ident()}.tmp")
+        made.write_text(header)
+        os.replace(made, path)
     return directory
 
 

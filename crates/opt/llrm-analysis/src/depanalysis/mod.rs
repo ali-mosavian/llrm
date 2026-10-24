@@ -80,7 +80,7 @@ impl Default for DvEntry {
 }
 
 /// `CmpInst::Predicate`'s name, which `SCEVComparePredicate::print` writes.
-fn predicate_name(pred: IntPredicate) -> &'static str {
+pub(crate) fn predicate_name(pred: IntPredicate) -> &'static str {
     match pred {
         IntPredicate::Eq => "eq",
         IntPredicate::Ne => "ne",

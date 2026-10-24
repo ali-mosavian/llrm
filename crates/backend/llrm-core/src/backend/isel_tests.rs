@@ -5545,6 +5545,20 @@ b0:
     assert!(body.iter().any(|line| line.contains(", ss")), "{body:?}");
 }
 
+/// textfill's loop at m16 was `add ax,2; cmp bx,3997; mov bx,ax; jb`: the word
+/// add stayed two-address and its result was copied back into the index. It
+/// is `cmp bx,3997; lea bx,[bx+2]; jb`, no `mov` between compare and branch.
+#[test]
+fn test_a_word_step_of_a_loop_index_is_a_lea_after_the_compare_not_an_add_and_a_copy() {
+    let got = listing(
+        "@t = global [4000 x i8] zeroinitializer\ndefine void @f() addrspace(1) {\nentry:\n  br label %l\nl:\n  %i = phi i16 [ 0, %entry ], [ %n, %l ]\n  %p = getelementptr inbounds i8, ptr @t, i16 %i\n  store i8 31, ptr %p\n  %n = add i16 %i, 2\n  %c = icmp ult i16 %i, 3997\n  br i1 %c, label %l, label %x\nx:\n  ret void\n}\n",
+        "f",
+    );
+    let cmp = got.iter().position(|one| one.starts_with("cmp ")).unwrap_or_else(|| panic!("a cmp: {got:?}"));
+    let jump = got[cmp..].iter().position(|one| one.starts_with("jb")).unwrap_or_else(|| panic!("a jb: {got:?}"));
+    assert!(got[cmp + 1..cmp + jump].iter().all(|one| one.starts_with("lea ")), "{got:?}");
+}
+
 /// m16 is 386+ code under 66h/67h prefixes, not 8086 code: i32 is
 /// arithmetic in EAX..EDI, extends are `movsx`/`movzx` into 32-bit
 /// registers, a constant multiply is a 32-bit `lea`, a long copy is

@@ -138,6 +138,17 @@ fn walk(
             let inner = operand(0);
             KnownBits { zero: inner.zero & all, one: inner.one & all, width }
         }
+        ISD::Shl => match dag.constant(dag.operand(value, 1)) {
+            Some(by) if by < u128::from(width) => {
+                let inner = operand(0);
+                KnownBits { zero: ((inner.zero << by) | mask(by as u32)) & all, one: (inner.one << by) & all, width }
+            }
+            _ => KnownBits::unknown(width),
+        },
+        ISD::AnyExtend => {
+            let inner = operand(0);
+            KnownBits { zero: inner.zero, one: inner.one, width }
+        }
         ISD::Srl => match dag.constant(dag.operand(value, 1)) {
             Some(by) if by < u128::from(width) => {
                 let inner = operand(0);

@@ -330,6 +330,7 @@ pub mod twoentryphi;
 pub mod typepromotion;
 pub mod uncondicmp;
 pub mod undefpred;
+pub mod uremloop;
 pub mod vncoercion;
 #[cfg(test)]
 mod vncoercion_tests;

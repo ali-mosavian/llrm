@@ -40,9 +40,11 @@
 //! two. A copy no one reads is dropped again (the pin leaves it to
 //! `DeadMachineInstructionElim`).
 //!
-//! DEVIATE CSE1 (owner w-1, exit 2026-11-10): no `hasMinSize` shortcut (the
-//! selector has no minsize flag, isel.rs I2) and no `isLegalToHoistInto` test
-//! (no block says it is a landing pad).
+//! DEVIATE CSE1 (owner w-2, exit with isel.rs I2): no `hasMinSize` shortcut
+//! (the machine phases have no minsize flag; it is -Oz only, which no sweep
+//! covers). `isLegalToHoistInto` is translated: a return block is no target;
+//! the pin's other two conditions cannot hold on this LIR (see
+//! `legal_to_hoist_into`).
 //!
 //! DEVIATE CSE2 (owner funcattrs-port, exit 2026-11-13): an operation with no
 //! register operand is not a candidate, a load of a constant global with a
@@ -406,6 +408,16 @@ fn is_terminator(one: &Insn) -> bool {
         )
 }
 
+/// `MachineBasicBlock::isLegalToHoistInto`
+/// ([MachineBasicBlock.cpp#L316](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineBasicBlock.cpp#L316)):
+/// no return block. The other two conditions cannot hold here: the QB landing
+/// pad is entered by the runtime and reached by no edge (`ehprepare`), so no
+/// block has it as a successor and no block is a candidate that it dominates;
+/// and no instruction branches out of inline assembly.
+fn legal_to_hoist_into(block: &crate::model::lir::Block) -> bool {
+    !block.insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Return))
+}
+
 /// `isPotentiallyReachable(from, to)` over the blocks' edges: a search that
 /// gives up after 32 blocks and answers yes (CFG.cpp,
 /// `DefaultMaxBBsToExplore`).
@@ -508,6 +520,10 @@ fn hoisted(
                 continue;
             }
             let common = by_at[&up];
+            // `isLegalToHoistInto`.
+            if !legal_to_hoist_into(&body.blocks[common]) {
+                continue;
+            }
             // `isProfitableToHoistInto`: `BlockFrequency` adds saturating.
             let mbfi = frequencies.get_or_init(|| MachineBlockFrequencyInfo::of(body));
             let freq = |block: usize| mbfi.get_block_freq(block).get_frequency();
@@ -800,5 +816,61 @@ mod tests {
         assert_eq!(count(&shared, "add"), 1);
         let copy_of_v1 = shared.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| one.defines == [10]);
         assert!(!copy_of_v1, "the copy nothing reads is erased");
+    }
+
+    /// `PerformSimplePRE` hoisted an expression into a block that ends in `ret`
+    /// (a conditional-return form), where the pin's `isLegalToHoistInto`
+    /// refuses a return block. Two blocks compute `not v1` (no flags: the
+    /// pin does not hoist an operation that defines EFLAGS), one reaching
+    /// the other; their nearest common dominator is block 0.
+    #[test]
+    fn test_nothing_is_hoisted_into_a_return_block() {
+        let add = |at: i64, result: u32| {
+            insn(at, Operation::Unary, "not", vec![held(result)], vec![held(1)], vec![result], vec![1])
+        };
+        let jump = |at: i64| insn(at, Operation::Branch, "jle", vec![], vec![], vec![], vec![]);
+        let ret = |at: i64| insn(at, Operation::Return, "ret", vec![], vec![], vec![], vec![]);
+        let build = |ends: Vec<Arc<Insn>>| {
+            let entry = LirBlock { succ: vec![1, 2].into(), ..LirBlock::new(0, ends) };
+            let read = |at: i64, value: u32| {
+                insn(at, Operation::Compare, "cmp", vec![], vec![held(value), held(value)], vec![], vec![value])
+            };
+            let left = LirBlock { succ: vec![2].into(), ..LirBlock::new(1, vec![add(1, 10), read(3, 10)]) };
+            let right = LirBlock::new(2, vec![add(2, 11), read(4, 11)]);
+            let mut body = LirBody::new(
+                "pre",
+                0,
+                vec![entry.into(), left.into(), right.into()],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            body.inputs = [1, 2].into_iter().collect();
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            body
+        };
+        let adds = |body: &LirBody| {
+            body.blocks
+                .iter()
+                .flat_map(|block| block.insns.iter())
+                .filter(|one| one.what.as_ref().and_then(|what| what.name.as_deref()) == Some("not"))
+                .count()
+        };
+        let plain = shared(&build(vec![jump(0)]), &RegisterClasses::m16());
+        assert!(
+            plain.blocks[0]
+                .insns
+                .iter()
+                .any(|one| one.defines.len() == 1 && one.what.as_ref().and_then(|w| w.name.as_deref()) == Some("not")),
+            "the premise: hoisted into block 0 without the return"
+        );
+        let returning = shared(&build(vec![jump(0), ret(0)]), &RegisterClasses::m16());
+        assert!(
+            !returning.blocks[0]
+                .insns
+                .iter()
+                .any(|one| one.what.as_ref().and_then(|w| w.name.as_deref()) == Some("not")),
+            "{returning:?}"
+        );
+        assert_eq!(adds(&returning), 2);
     }
 }
