@@ -40,3 +40,18 @@ def test_the_calling_tree_is_parsed(tmp_path):
     path = tmp_path / "t.calling"
     path.write_text(text)
     assert nested.parse_calling(path) == {"W": {"S"}, "S": set()}
+
+
+def test_a_nested_pair_on_the_pin_side_is_refused(tmp_path):
+    """The pin's names carry a file prefix; the call graph and the bucket lists
+    must clean them the same way, or a wrapper over a part goes unseen."""
+    text = (
+        "     900 ( 9.0%)  *  /llvm/lib/Passes/A.cpp:llvm::WrapperPass::run(int) [/bin/clang]\n"
+        "     600 ( 6.0%)  >   /llvm/lib/Passes/B.cpp:llvm::PartPass::run(int) (2x) [/bin/clang]\n"
+    )
+    path = tmp_path / "pin.calling"
+    path.write_text(text)
+    edges = nested.parse_calling(path, pin=True)
+    assert edges == {"llvm::WrapperPass::run(int)": {"llvm::PartPass::run(int)"}}
+    with pytest.raises(SystemExit, match="WrapperPass::run.int. calls llvm::PartPass"):
+        nested.check(edges, {"scalar": {"llvm::WrapperPass::run(int)", "llvm::PartPass::run(int)"}})
