@@ -1,5 +1,6 @@
-//! What BC accepts as the arguments of the intrinsic functions: how many, of what class, and the
-//! type each returns. Calibrated against BC itself (corpus/): a function is here with the shape BC took.
+//! What BC accepts as the arguments of the intrinsic functions: how many, of
+//! what class, and the type each returns. Calibrated against BC itself
+//! (corpus/): a function is here with the shape BC took.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -11,7 +12,8 @@ use crate::Dialect;
 pub enum Class {
     /// a numeric expression
     Num,
-    /// a numeric expression that must fit a 16-bit integer when it is a constant
+    /// a numeric expression that must fit a 16-bit integer when it is a
+    /// constant
     Int,
     /// a string expression
     Str,
@@ -61,8 +63,13 @@ pub struct FnSig {
 }
 
 impl FnSig {
-    pub fn accepts(&self, arguments: usize) -> bool {
-        self.alternatives.iter().any(|alt| alt.len() >= arguments && alt.iter().take_while(|(_, optional)| !*optional).count() <= arguments)
+    pub fn accepts(
+        &self,
+        arguments: usize,
+    ) -> bool {
+        self.alternatives
+            .iter()
+            .any(|alt| alt.len() >= arguments && alt.iter().take_while(|(_, optional)| !*optional).count() <= arguments)
     }
 }
 
@@ -206,7 +213,8 @@ fn table() -> &'static HashMap<&'static str, FnSig> {
         let mut map = HashMap::new();
         for line in TABLE.lines() {
             let (head, ret) = line.split_once("=>").expect("a signature");
-            // `Ret:flags`: p PDS, v VBDOS (neither: all families), P parentheses required, S also a statement
+            // `Ret:flags`: p PDS, v VBDOS (neither: all families), P
+            // parentheses required, S also a statement
             let (ret, flags) = ret.split_once(':').unwrap_or((ret, ""));
             let families = if flags.contains(['p', 'v']) {
                 (if flags.contains('p') { 2 } else { 0 }) | (if flags.contains('v') { 4 } else { 0 })
@@ -236,14 +244,28 @@ fn table() -> &'static HashMap<&'static str, FnSig> {
                 other => panic!("return {other}"),
             };
             let name: &'static str = Box::leak(name.to_owned().into_boxed_str());
-            map.insert(name, FnSig { name, alternatives, ret, families, parens: flags.contains('P'), statement: flags.contains('S') });
+            map.insert(
+                name,
+                FnSig {
+                    name,
+                    alternatives,
+                    ret,
+                    families,
+                    parens: flags.contains('P'),
+                    statement: flags.contains('S'),
+                },
+            );
         }
         map
     })
 }
 
-/// The intrinsic function `name` as the source spells it (suffix included), if the family has it.
-pub fn function(name: &str, dialect: Dialect) -> Option<&'static FnSig> {
+/// The intrinsic function `name` as the source spells it (suffix included), if
+/// the family has it.
+pub fn function(
+    name: &str,
+    dialect: Dialect,
+) -> Option<&'static FnSig> {
     let upper = name.to_ascii_uppercase();
     let sig = table().get(upper.as_str())?;
     let family = match dialect {
@@ -254,7 +276,8 @@ pub fn function(name: &str, dialect: Dialect) -> Option<&'static FnSig> {
     (sig.families & family != 0).then_some(sig)
 }
 
-/// Whether the name is a statement word that is no function (so `name(...)` is a syntax error).
+/// Whether the name is a statement word that is no function (so `name(...)` is
+/// a syntax error).
 pub fn function_unknown_but_named(_name: &str) -> bool {
     false
 }
