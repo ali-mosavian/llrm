@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lcssa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lcssa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lcssa.rs sha256:8db5f905be5792308b452daa003450e0316b7781952ecfdd6445726cd8355af6 -->
+<!-- src: crates/opt/llrm-transforms/src/lcssa.rs sha256:0806b3d090edf95c4e589ec86cc4f0b3c209aface3de75f31847a41514deb345 -->
 
 # lcssa
 
@@ -24,9 +24,10 @@ definition of the enclosing loop. For one loop:
 - With several exit blocks, [`crate::lcssamerges`](lcssamerges.md) makes a phi at each and
   merges them where the exits' paths join.
 
-First, a phi outside any loop exit whose inputs are all one value is
-replaced by that value: no loop closes there any more. The new phi is named
-after its value with `.lcssa`. The pass is idempotent.
+Phis are only added, as `formLCSSA` does: a phi outside any loop exit whose
+inputs are all one value stays for the passes that fold it
+(`LoopOpened` removes the exit ones after LSR). The new phi is named after
+its value with `.lcssa`. The pass is idempotent.
 
 The helpers `arms`, `from_arms`, `operations`, `definitions`, `exit_phi` and
 `place_phi` read and build phis for many other loop passes.
