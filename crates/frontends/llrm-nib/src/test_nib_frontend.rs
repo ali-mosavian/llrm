@@ -2621,10 +2621,15 @@ fn test_the_level_reaches_the_rich_route() {
 /// `dst: &mut P` and `src: &P` are stated noalias, so `src.y` is loaded
 /// once, before the loop. Unstated, the loop reloaded it after every store
 /// to `dst.x`.
+///
+/// The step is `x * 3 + y`: since the translated LICM (caf370d12) promotes
+/// `dst.x`, `x += y` left an add recurrence whose exit value indvars computed,
+/// and the loop was deleted, as the pin's clang does (`range(i16 4, 6)` on
+/// `n`).
 #[test]
 fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() {
     use llrm_mir::facts::Fact;
-    let source = "struct P:\n    mut x: i16\n    y: i16\n\nfn bump(dst: &mut P, src: &P, n: i16) -> void:\n    for i in 0..n:\n        dst.x += src.y\n\nfn main() -> i16:\n    let mut a = P(x=0, y=0)\n    let b = P(x=0, y=3)\n    let c = P(x=0, y=4)\n    bump(a, b, 4)\n    bump(a, c, 5)\n    return a.x\n";
+    let source = "struct P:\n    mut x: i16\n    y: i16\n\nfn bump(dst: &mut P, src: &P, n: i16) -> void:\n    for i in 0..n:\n        dst.x = dst.x * 3 + src.y\n\nfn main() -> i16:\n    let mut a = P(x=0, y=0)\n    let b = P(x=0, y=3)\n    let c = P(x=0, y=4)\n    bump(a, b, 4)\n    bump(a, c, 5)\n    return a.x\n";
     let directory = tempfile::tempdir().unwrap();
     let program = parsed(&written(&directory, "bump.nib", source));
     let bump = function(&program, "bump");
@@ -3246,14 +3251,15 @@ fn test_a_library_cut_to_nothing_assembles_without_an_entry() {
     );
 }
 
-/// `zip(a, b)` walks two slices' elements by one counter, bounded by the
-/// `inbounds` accesses of both. Behind the header copy the loop is tested for
-/// equality, and its trips were counted to 65536 (the width's period) where
-/// the accesses allow 32768: the biased byte counter `add bx, 2` was no exit
-/// test, and the loop kept `inc cx; jne` beside it and reloaded a segment
-/// offset from `[bp-2]` each trip (7 instructions, one of them a load).
+/// `zip(a, b)` walks two slices' elements by one counter and stops at the
+/// shorter: the loop tests each length, as the pin's clang -O2 does on the C
+/// with `i < a->len && i < b->len` (two exits, one counter).
+///
+/// This pinned one exit, on the flags of a biased byte counter, and no `[bp-`
+/// operand. The LLVM order on by default (#2369, 7b2e73546) keeps both tests,
+/// as LLVM does; the pin's loop also reads both data pointers each trip.
 #[test]
-fn test_a_zip_loop_tested_for_equality_ends_on_the_flags_of_its_byte_counter() {
+fn test_a_zip_loop_tests_each_slices_length_as_llvm_does() {
     let directory = tempfile::tempdir().unwrap();
     let source = "fn dot(a: &[i16], b: &[i16]) -> i32:\n    let mut total: i32 = 0\n    for (x, y) in zip(a, b):\n        total += i32(x) * i32(y)\n    return total\n\nfn main() -> i16:\n    return 0\n";
     let program = parsed(&written(&directory, "dot.nib", source));
@@ -3265,17 +3271,19 @@ fn test_a_zip_loop_tested_for_equality_ends_on_the_flags_of_its_byte_counter() {
     )
     .expect("assembles");
     let asm = masm::text(&module).expect("prints");
-    let from = asm.find("_dot proc").expect("the function");
-    let body: Vec<&str> = asm[from..]
-        .lines()
-        .skip(1)
-        .map(str::trim)
-        .take_while(|one| !one.ends_with("endp"))
-        .filter(|one| !one.ends_with(':'))
-        .collect();
-    let at = body.iter().position(|one| *one == "add bx, 2").expect("the byte counter steps");
-    assert_eq!(body.get(at + 1).map(|one| &one[..4]), Some("jne "), "{body:?}");
-    assert!(!body.iter().any(|one| one.contains("[bp-")), "{body:?}");
+    let lines: Vec<&str> = between(&asm, "_dot proc", "_dot endp").lines().map(str::trim).collect();
+    // The loop: from the label its backward jump names to that jump.
+    let (head, end) = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, one)| one.starts_with('j'))
+        .find_map(|(at, one)| {
+            let label = format!("{}:", one.split_whitespace().last()?);
+            lines[..at].iter().position(|line| *line == label).map(|head| (head, at))
+        })
+        .expect("a loop");
+    let tests = lines[head..=end].iter().filter(|one| one.starts_with('j') && !one.starts_with("jmp")).count();
+    assert_eq!(tests, 2, "{:#?}", &lines[head..=end]);
 }
 
 /// `@noipa` keeps a bench kernel a procedure its caller calls: at -O3

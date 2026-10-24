@@ -63,6 +63,11 @@ fn test_a_small_program_adds_no_stack() {
 }
 
 /// #356: a frame no stack segment can hold is an error, not a silent crash.
+///
+/// The fixture hands the array to a `@noipa` callee. Read in `main`, its
+/// 63998-byte offset overflowed the signed 16-bit index, the load folded to
+/// poison and the array went, as with the pin's clang for msp430; the frame
+/// was gone (the LLVM order, #2369, and again at 2e8a59eb0).
 #[test]
 fn test_a_frame_no_stack_segment_holds_is_refused() {
     let error = _stack_of("hugeframe").unwrap_err();
@@ -121,7 +126,7 @@ fn _trap_branches(
 
 /// Nib's `a[hi]` check ahead of `for j in lo..hi` bounds every index in it:
 /// quicksort's partition tested `j` and `i` against the length on every
-/// trip (3 compare-and-branch pairs against C's none, #453; `i`'s alone now),
+/// trip (3 compare-and-branch pairs against C's none, #453; two now, as LLVM),
 /// 245,433 executed instructions against C's 163,105 (#453).
 ///
 /// The loop kept one without the header copy: `lo < len`, invariant, is in the
@@ -133,14 +138,14 @@ fn test_a_partition_loop_keeps_only_the_bounds_check_llvm_keeps() {
     let function = _nib("partition", "partition", "_partition");
     let loops = _innermost_loops(&function);
     assert!(!loops.is_empty(), "premise: the loop is found\n{function}");
-    // One check stays: `a[i]` needs `i <= j`, a relation between two
-    // counters no LVI range proves. Clang -O2 on the same program with the
-    // checks written as C (clang 20) keeps two in the loop, `a[j]` as well;
-    // `a[j]` here is the loop's exit test (`jne` back, `N$EBND` falls out).
-    // First red at #2369, which made the LLVM order the default.
-    for body in loops {
-        assert_eq!(_trap_branches(&function, &body), 1, "{body:#?}\n{function}");
-    }
+    // Two checks stay, as with the pin's clang -O2 on the same program with
+    // the checks written as C and the length read once: `a[i]` needs
+    // `i <= j`, which no LVI range proves, and `a[j]`. It was one until
+    // LoopRotate went on by default (97f04c06e): unrotated, `a[j]`'s check
+    // was the loop's exit test. Rotated, each backward jump finds a span of
+    // the one loop: the longest is all of it.
+    let body = loops.iter().max_by_key(|one| one.len()).expect("the loop");
+    assert_eq!(_trap_branches(&function, body), 2, "{body:#?}\n{function}");
 }
 
 /// `-fsanitize=stack` compares with the word and calls the routine

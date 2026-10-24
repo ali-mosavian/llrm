@@ -138,10 +138,12 @@ mod tests {
     #[test]
     fn test_the_dump_shows_the_code_the_compiler_emits() {
         // #136: --dump ran the legacy lowering, which drops noalias, so its
-        // listing reloaded `src.y` in the loop that -S hoists it out of.
+        // listing reloaded `src.y` in the loop that -S hoists it out of. The
+        // step is `x * 3 + y`: `x += y` has had its loop deleted since the
+        // translated LICM (caf370d12), as the pin's clang does.
         let directory = tempfile::tempdir().expect("a directory");
         let source = directory.path().join("bump.nib");
-        std::fs::write(&source, "struct P:\n    mut x: i16\n    y: i16\n\nfn bump(dst: &mut P, src: &P, n: i16) -> void:\n    for i in 0..n:\n        dst.x += src.y\n\nfn main() -> i16:\n    let mut a = P(x=0, y=0)\n    let b = P(x=0, y=3)\n    let c = P(x=0, y=4)\n    bump(a, b, 4)\n    bump(a, c, 5)\n    return a.x\n").expect("writes");
+        std::fs::write(&source, "struct P:\n    mut x: i16\n    y: i16\n\nfn bump(dst: &mut P, src: &P, n: i16) -> void:\n    for i in 0..n:\n        dst.x = dst.x * 3 + src.y\n\nfn main() -> i16:\n    let mut a = P(x=0, y=0)\n    let b = P(x=0, y=3)\n    let c = P(x=0, y=4)\n    bump(a, b, 4)\n    bump(a, c, 5)\n    return a.x\n").expect("writes");
         let output = directory.path().join("dump");
         // Unrolled, the 4-trip loop is gone and there is nothing to count.
         let argv = [

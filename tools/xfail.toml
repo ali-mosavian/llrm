@@ -2,11 +2,6 @@
 # ids: "unit <crate>::<test>" (cargo lib test) and "run <program name>" (tests/run).
 
 [[xfail]]
-id = "unit llrm-nib::nibstages::tests::test_the_dump_shows_the_code_the_compiler_emits"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
 id = "unit llrm-nib::test_debug::a_parameter_the_optimiser_removed_is_in_the_model_with_no_location"
 issue = 2848
 owner = "unassigned"
@@ -32,11 +27,6 @@ issue = 2848
 owner = "unassigned"
 date = "2026-10-19"
 [[xfail]]
-id = "unit llrm-nib::test_nib_frontend::test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
 id = "unit llrm-nib::test_nib_frontend::test_a_pointer_stepped_by_a_runtime_stride_is_one_recurrence"
 issue = 2848
 owner = "unassigned"
@@ -48,11 +38,6 @@ owner = "unassigned"
 date = "2026-10-19"
 [[xfail]]
 id = "unit llrm-nib::test_nib_frontend::test_a_reference_lets_its_field_load_leave_the_loop"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
-id = "unit llrm-nib::test_nib_frontend::test_a_zip_loop_tested_for_equality_ends_on_the_flags_of_its_byte_counter"
 issue = 2848
 owner = "unassigned"
 date = "2026-10-19"
@@ -73,11 +58,6 @@ owner = "unassigned"
 date = "2026-10-19"
 [[xfail]]
 id = "unit llrm-nib::test_nib_frontend::test_the_rich_route_prices_the_configured_cpu"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
-id = "unit llrm-nib::test_pipeline::test_a_frame_no_stack_segment_holds_is_refused"
 issue = 2848
 owner = "unassigned"
 date = "2026-10-19"
