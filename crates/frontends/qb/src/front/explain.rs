@@ -230,6 +230,8 @@ fn variants(
     let text = place.text.as_str();
     if text.ends_with(['%', '&']) && text.contains(['.', 'E', 'D', 'e', 'd']) && !text.starts_with("&") {
         keys.push(format!("{code} /decimal"));
+    } else if text.ends_with(['%', '&']) {
+        keys.push(format!("{code} /range"));
     }
     if place.at_end {
         keys.push(format!("{code} /end"));
@@ -271,6 +273,16 @@ fn syntax(
             format!("`{number}` is not a valid number"),
             "check the digits, the exponent (`1E5`) and the type character".to_owned(),
         );
+    }
+    // `SUB p% ()`: a SUB returns nothing, so its name takes no type character
+    if place.text == "(" && place.statement == "SUB" {
+        let name = place.before.split_whitespace().last().unwrap_or("");
+        if name.ends_with(['%', '&', '!', '#', '$', '@']) {
+            return (
+                format!("a SUB name cannot carry a type character, as `{name}` does"),
+                "write the name without it; only a FUNCTION has a type".to_owned(),
+            );
+        }
     }
     // a label or line number too large to be one
     if place.text.len() >= 5

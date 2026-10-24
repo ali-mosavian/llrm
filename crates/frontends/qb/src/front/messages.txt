@@ -39,6 +39,7 @@ Identifier too long|`{text}` is longer than the 40 characters a name may have|sh
 Illegal inside SUB or FUNCTION|`{statement}` cannot be used inside a SUB or FUNCTION|move it to the module level
 Illegal outside of SUB or FUNCTION|`{statement}` can only be used inside a SUB or FUNCTION|move it into a procedure
 Illegal type character in numeric constant /decimal|`{text}` has a decimal point or an exponent, and `%` and `&` only go with whole numbers|drop the suffix, or use `!` (single) or `#` (double)
+Illegal type character in numeric constant /range|`{text}` does not fit the type its suffix names|`%` is an INTEGER (-32768 to 32767) and `&` a LONG (-2147483648 to 2147483647); drop the suffix to get the smallest type that fits
 Illegal type character in numeric constant|`{text}` has a type character a number cannot carry, or its value does not fit the type|use a value in range, or a suffix that matches (`%` integer, `&` long, `!` single, `#` double)
 Integer between 1 and 32767 required|the length given for `{name}` must be a whole number from 1 to 32767|write a length in that range, as in `STRING * 20`
 Invalid character|`{text}` contains a character BC does not accept here|most often a type character (`%`, `&`, `!`, `#`, `$`) on a SUB, FUNCTION or TYPE name, a `?`, or a `$` outside a metacommand; remove it
@@ -81,3 +82,5 @@ Must be first statement on the line|`{statement}` has to be the first statement 
 $Metacommand Error|the metacommand `{text}` is written wrong|an $INCLUDE needs `'$INCLUDE: 'file'`, a $LINESIZE needs a size
 Form variable already in use or illegal form name|the form name after `$FORM` is missing, already used, or not a name|write `'$FORM name`
 Syntax error /OPTION|`OPTION` is only valid at module level, before any SUB or FUNCTION|put `OPTION BASE 0` or `OPTION BASE 1` at the top of the file, before any array is dimensioned
+Syntax error /COMMON|`COMMON` cannot be used inside a SUB or FUNCTION|put it at module level, above the first procedure
+Syntax error /DECLARE|`DECLARE` cannot be used inside a SUB or FUNCTION|put it at module level, above the first procedure that uses it

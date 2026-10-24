@@ -218,10 +218,16 @@ A stage that refuses a source knows two things: BC's name for the error ("Array 
 * `qbfront::driver` prints `file:line:col: message`, the source line with the place marked, and the help; a compile
   error from the later passes (`line N: ...`) gets the file and line the person wrote, through the `$INCLUDE` map.
 
-## The corpus (`corpus/`)
+How a message gets its specifics, from the plainest to the most particular:
 
-- `programs.py` (+ `more.py`, `expand.py`, `statements.py`) generates 12,898 small BASIC programs; `python3 programs.py [DIR]` writes them as `pNNNNN.bas` with `programs.jsonl` (group and reason per id). They are not kept in git: byte-identical on every run.
-- `bc_programs.json` is BC.EXE's verdict per program id and family (qb45, pds71, vbdos); `bc_results*.json`, `catalog.*`, `ours_*.tsv` are older runs and the front's side of the comparison (`compare*.py`).
-- `real_bc.json` is BC's verdict on real programs (repo, private tools, mgl), keyed `repo:`, `tools:`, `mgl:` + path (`real.py`).
-- `bcg/` holds the BC probe fixtures; `prologue.bas` and `epilogue.bas` wrap single lines for `bcquick.py`.
-- Needed by tests: `crates/frontends/qb/tests/diagnostics.rs` (`every_error_the_corpus_raises_is_worded`) runs `programs.py` into a temp dir. Nothing else reads the corpus; the rest is for the oracle scripts.
+* `messages.txt` row for the error, and `messages.txt` variants: `name /WORD` is tried first when the error's text holds
+  that word (`Identifier expected /TAB`, `Formal parameter specification illegal /BYVAL`), and `name /end` when it is
+  at the end of the line.
+* `syntax_forms.txt`: how a statement is written, shown as help for a syntax error in it.
+* The parser names what it knows at the end of the file (`this FOR loop is never closed`) and for a closer with
+  nothing, or the wrong block, open (`NEXT belongs to a FOR loop, but none is open here`).
+* The checker passes a `Reason` (headline, help, the word at fault, a second place for `{other}`) where it knows more
+  than the code says: both types of a mismatch, the argument of a bad call, the range an overflow missed.
+
+`cargo run --release -p qbfront --example diagsurvey -- DIALECT FILE...` prints the distinct messages per BC error over a
+set of sources; it is how the wording was reviewed over the corpus.
