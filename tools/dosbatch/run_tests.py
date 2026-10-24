@@ -232,7 +232,7 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
     target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
     if program.source.suffix == ".nib" and target != dosbatch.REAL_MODE:
         exe, obj = work / f"{stem}.exe", work / f"{stem}.obj"
-        done = cpulimit.run([str(BIN / "llrm-nib"), str(program.source), *program.flags, "-o", str(obj), "--procedure-segments"], 300, capture_output=True, text=True)
+        done = cpulimit.run(dosbatch.with_isel([str(BIN / "llrm-nib"), str(program.source), *program.flags, "-o", str(obj), "--procedure-segments"]), 300, capture_output=True, text=True)
         if done.returncode != 0 or not obj.exists():
             return "compile: " + (done.stderr or done.stdout).strip()[-600:]
         try:
@@ -282,7 +282,7 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
     extras = []
     for at, one in enumerate(program.link):
         extra = work / f"{stem}L{at}.obj"
-        done = cpulimit.run([str(BIN / "llrm-nib"), str(program.source.parent / one), "-o", str(extra), "-O2"], 300, capture_output=True, text=True)
+        done = cpulimit.run(dosbatch.with_isel([str(BIN / "llrm-nib"), str(program.source.parent / one), "-o", str(extra), "-O2"]), 300, capture_output=True, text=True)
         if done.returncode != 0 or not extra.exists():
             return f"build {one}: " + (done.stderr or done.stdout).strip()[-600:]
         extras.append(extra)

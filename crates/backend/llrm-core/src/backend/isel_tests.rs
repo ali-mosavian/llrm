@@ -105,6 +105,7 @@ fn listing_float_store(
         false,
         false,
         false,
+        true,
     )
     .expect("the 486 profile");
     let module = assemble::assembled(
