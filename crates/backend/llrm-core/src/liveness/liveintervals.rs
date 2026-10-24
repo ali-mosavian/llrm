@@ -83,6 +83,20 @@ pub fn take_handed_over(body: &LirBody) -> Option<LiveIntervals> {
     })
 }
 
+/// The `LiveIntervals` a pass handed over, edited to `body`, where the passes
+/// between only added, removed or rewrote instructions (the pin keeps one
+/// analysis from the coalescer to the allocator): taken if no other body was
+/// numbered since and the edit applies.
+pub fn take_handed_over_edited_to(body: &LirBody) -> Option<LiveIntervals> {
+    HANDED_OVER.with(|slot| {
+        let held = slot.borrow_mut().take()?;
+        if held.1 != super::slotindex::analysed() {
+            return None;
+        }
+        held.2.edited_to(body)
+    })
+}
+
 /// `LiveIntervals` (LiveIntervals.h).
 pub struct LiveIntervals {
     pub indexes: SlotIndexes,
@@ -257,6 +271,58 @@ impl LiveIntervals {
     /// The number the next `create_virtual_register` gives.
     pub fn next_virtual_register(&self) -> u32 {
         self.next_vreg
+    }
+
+    /// This function edited to `body`, the same blocks with instructions added,
+    /// removed or replaced: the instructions go in and out through the maps as
+    /// the spiller's do, and the interval of every register one of them names
+    /// is made again when asked for, where the rest stay as they are. None if
+    /// the blocks, the inputs or the order of the instructions both bodies keep
+    /// differ.
+    pub fn edited_to(
+        mut self,
+        body: &LirBody,
+    ) -> Option<Self> {
+        if body.blocks.len() != self.blocks.len() || body.inputs != self.inputs {
+            return None;
+        }
+        let mut touched: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+        for (n, block) in body.blocks.iter().enumerate() {
+            let wanted: HashSet<InstrKey> = block.insns.iter().map(|one| one.id()).collect();
+            let gone: Vec<InstrKey> =
+                self.blocks[n].iter().map(|one| one.id()).filter(|key| !wanted.contains(key)).collect();
+            for key in gone {
+                let insn = Arc::clone(&self.insns[&key]);
+                touched.extend(insn.defines.iter().chain(&insn.uses).copied());
+                self.remove_instr(n, key);
+            }
+            let mut previous: Option<InstrKey> = None;
+            for one in block.insns.iter() {
+                if self.insns.contains_key(&one.id()) {
+                    previous = Some(one.id());
+                    continue;
+                }
+                touched.extend(one.defines.iter().chain(&one.uses).copied());
+                match previous {
+                    Some(after) => {
+                        self.insert_instr_after(n, after, Arc::clone(one));
+                    }
+                    None => {
+                        let first = self.blocks[n].first().map(|first| first.id());
+                        self.insert_instr_before(n, first, Arc::clone(one));
+                    }
+                }
+                previous = Some(one.id());
+            }
+            if !self.blocks[n].iter().map(|one| one.id()).eq(block.insns.iter().map(|one| one.id())) {
+                return None;
+            }
+        }
+        for reg in touched {
+            self.intervals.remove(&reg);
+            self.next_vreg = self.next_vreg.max(reg + 1);
+        }
+        Some(self)
     }
 
     /// The function as edited: the instructions of every block, in order.
@@ -1137,6 +1203,33 @@ mod tests {
         let mut one = Insn::new(0, None, None, defines.to_vec(), Vec::new());
         one.undefs = undefs.to_vec();
         Arc::new(one)
+    }
+
+    /// The allocator starts from the coalescer's intervals, edited to the body
+    /// the passes between made: an instruction put in, one taken out, and the
+    /// registers they name made again. Every interval then covers what a fresh
+    /// build gives, and the untouched ones are the same objects.
+    #[test]
+    fn test_intervals_edited_to_the_next_body_are_those_a_fresh_build_covers() {
+        let (def_a, def_b, use_both) = (insn(&[1], &[]), insn(&[2], &[]), insn(&[], &[1, 2]));
+        let before = body(&[Arc::clone(&def_a), Arc::clone(&def_b), Arc::clone(&use_both)]);
+        let mut lis = LiveIntervals::new(&before);
+        let kept = lis.interval_rc(1);
+        lis.interval(2);
+        // A copy of v2 into v3 put in, the read of v2 now reads v3, and v1
+        // stays.
+        let copy = insn(&[3], &[2]);
+        let reader = insn(&[], &[1, 3]);
+        let after = body(&[Arc::clone(&def_a), Arc::clone(&def_b), Arc::clone(&copy), Arc::clone(&reader)]);
+        let mut edited = lis.edited_to(&after).expect("the edit applies");
+        for reg in [1, 2, 3] {
+            edited.interval(reg);
+        }
+        assert_eq!(edited.assert_intervals_cover_afresh(&after), 3, "v1, v2 and v3 are compared");
+        assert!(!Rc::ptr_eq(&kept, &edited.get_interval_rc(1)), "v1 is named by the new reader: made again");
+        // A body whose shared instructions run in another order is refused.
+        let swapped = body(&[Arc::clone(&def_b), Arc::clone(&def_a), Arc::clone(&copy), Arc::clone(&reader)]);
+        assert!(LiveIntervals::new(&after).edited_to(&swapped).is_none());
     }
 
     /// An instruction taken out of the maps took its undef operands with it:
