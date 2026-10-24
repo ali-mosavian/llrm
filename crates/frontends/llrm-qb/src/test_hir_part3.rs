@@ -1835,10 +1835,14 @@ fn test_a_def_seg_known_only_to_promotion_is_not_rebuilt_per_poke() {
     // set once a trip of it, which is not per poke.
     let span = |one: &&str| one.as_ptr() as usize..one.as_ptr() as usize + one.len();
     let innermost = |one: &&&str| {
-        !loops.iter().any(|other| {
-            let (outer, inner) = (span(&**one), span(other));
-            inner != outer && inner.start >= outer.start && inner.end <= outer.end
-        })
+        !loops
+            .iter()
+            .any(
+                |other| {
+                    let (outer, inner) = (span(&**one), span(other));
+                    inner != outer && inner.start >= outer.start && inner.end <= outer.end
+                },
+            )
     };
     for one in loops.iter().filter(innermost).filter(|one| !one.contains("call")) {
         assert!(!one.contains("push") && !one.contains("pop"), "{one}");

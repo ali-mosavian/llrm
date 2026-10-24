@@ -23,9 +23,11 @@ pub(super) fn applied(compiler: &mut Compiler) {
         changed = false;
         for function in &compiler.functions {
             if !clobbers.contains(&function.name)
-                && function.blocks.iter().flat_map(|block| &block.instructions).any(|one| {
-                    sets_unknown(one) || escapes(one, &defined, &clobbers)
-                })
+                && function
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.instructions)
+                    .any(|one| sets_unknown(one) || escapes(one, &defined, &clobbers))
             {
                 clobbers.insert(function.name.clone());
                 changed = true;
@@ -38,7 +40,11 @@ pub(super) fn applied(compiler: &mut Compiler) {
 }
 
 fn sets_unknown(one: &super::Instruction) -> bool {
-    matches!(one.tag, Some(Tag::SetSegment)) && !matches!(one.operands.as_slice(), [Operand::Place(_), Operand::Constant(..)])
+    matches!(one.tag, Some(Tag::SetSegment))
+        && !matches!(
+            one.operands.as_slice(),
+            [Operand::Place(_), Operand::Constant(..)]
+        )
 }
 
 /// Whether an instruction calls code that may leave the segment unknown.
@@ -59,10 +65,16 @@ fn mark(
     defined: &BTreeSet<String>,
     clobbers: &BTreeSet<String>,
 ) {
-    let segment = function.blocks.iter().flat_map(|block| &block.instructions).find_map(|one| match (&one.tag, one.operands.first()) {
-        (Some(Tag::SetSegment), Some(Operand::Place(place))) => Some(*place),
-        _ => None,
-    });
+    let segment = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .find_map(
+            |one| match (&one.tag, one.operands.first()) {
+                (Some(Tag::SetSegment), Some(Operand::Place(place))) => Some(*place),
+                _ => None,
+            },
+        );
     let Some(segment) = segment else { return };
     let index: BTreeMap<u32, usize> = function.blocks.iter().enumerate().map(|(at, block)| (block.id, at)).collect();
     let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); function.blocks.len()];
