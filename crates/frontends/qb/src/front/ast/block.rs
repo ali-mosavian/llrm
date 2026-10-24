@@ -3,30 +3,16 @@
 use super::*;
 
 impl Ast<'_> {
-    /// The file ended inside a block: BC names the block, at its opening line.
-    pub(super) fn unclosed<T>(
-        &mut self,
-        opener: Span,
-        reason: &'static str,
-    ) -> R<T> {
-        if let Some(at) = self.tokens.iter().position(|one| one.span.line == opener.line && one.span.start == opener.start) {
-            self.i = at;
-        }
-        self.fail_because(reason)
-    }
-
     /// Statements up to a line `stop` recognises, which is left unread.
     pub(super) fn collect_until(
         &mut self,
-        opener: Span,
-        reason: &'static str,
         stop: fn(&Self) -> bool,
     ) -> R<Vec<Statement>> {
         let mut body = Vec::new();
         loop {
             self.skip_separators();
             if self.i >= self.tokens.len() {
-                return self.unclosed(opener, reason);
+                return self.fail();
             }
             if stop(self) {
                 return Ok(body);
@@ -142,6 +128,7 @@ impl Ast<'_> {
         let mut then_branch = Vec::new();
         let mut else_branch = Vec::new();
         let mut in_else = false;
+        self.blocks.push(Open { what: "block IF", closer: "END IF", span });
         loop {
             self.skip_separators();
             let closer = self.is(Kw::ELSE) || self.is(Kw::ELSEIF) || (self.is(Kw::END) && self.is_n(1, Kw::IF));
@@ -169,15 +156,17 @@ impl Ast<'_> {
                     return self.fail();
                 }
                 else_branch.push(nested.remove(0));
+                self.blocks.pop();
                 self.out.push(Statement::If { condition, then_branch, else_branch, span });
                 return Ok(());
             }
             if self.is(Kw::END) && self.is_n(1, Kw::IF) {
                 self.i += 2;
+                self.blocks.pop();
                 break;
             }
             if self.i >= self.tokens.len() {
-                return self.unclosed(span, "Block IF without END IF");
+                return self.fail();
             }
             let before = self.out.len();
             self.statement()?;
@@ -209,7 +198,9 @@ impl Ast<'_> {
         if !(self.eat(Kw::NewLine) || self.separator()) {
             return self.fail();
         }
-        let body = self.collect_until(self.span(keyword), "FOR without NEXT", |ast| ast.is(Kw::NEXT))?;
+        self.blocks.push(Open { what: "FOR loop", closer: "NEXT", span: self.span(keyword) });
+        let body = self.collect_until(|ast| ast.is(Kw::NEXT))?;
+        self.blocks.pop();
         self.i += 1;
         let mut next_variable = None;
         if let (Some(Tok::Ident), TokenKind::Identifier(name)) = (self.tok_n(0), &self.tokens[self.i].kind) {
@@ -226,7 +217,9 @@ impl Ast<'_> {
         if !(self.eat(Kw::NewLine) || self.separator()) {
             return self.fail();
         }
-        let body = self.collect_until(self.span(keyword), "WHILE without WEND", |ast| ast.is(Kw::WEND))?;
+        self.blocks.push(Open { what: "WHILE loop", closer: "WEND", span: self.span(keyword) });
+        let body = self.collect_until(|ast| ast.is(Kw::WEND))?;
+        self.blocks.pop();
         self.i += 1;
         self.out.push(Statement::While { condition, body, span: self.span(keyword) });
         Ok(())
@@ -244,7 +237,9 @@ impl Ast<'_> {
         if !(self.eat(Kw::NewLine) || self.separator()) {
             return self.fail();
         }
-        let body = self.collect_until(self.span(keyword), "DO without LOOP", |ast| ast.is(Kw::LOOP))?;
+        self.blocks.push(Open { what: "DO loop", closer: "LOOP", span: self.span(keyword) });
+        let body = self.collect_until(|ast| ast.is(Kw::LOOP))?;
+        self.blocks.pop();
         self.i += 1;
         let post = if self.eat(Kw::WHILE) {
             Some((true, self.exp()?))
@@ -267,16 +262,15 @@ impl Ast<'_> {
         if !(self.eat(Kw::NewLine) || self.separator()) {
             return self.fail();
         }
+        self.blocks.push(Open { what: "SELECT CASE", closer: "END SELECT", span: self.span(keyword) });
         let mut arms = Vec::new();
         let mut otherwise = Vec::new();
         let mut otherwise_seen = false;
         loop {
             self.skip_separators();
-            if self.i >= self.tokens.len() {
-                return self.unclosed(self.span(keyword), "SELECT without END SELECT");
-            }
             if self.at_end_select() {
                 self.i += 2;
+                self.blocks.pop();
                 break;
             }
             // nothing but END SELECT follows CASE ELSE
@@ -310,7 +304,7 @@ impl Ast<'_> {
             if !(self.eat(Kw::NewLine) || self.separator()) {
                 return self.fail();
             }
-            let body = self.collect_until(self.span(keyword), "SELECT without END SELECT", |ast| ast.is(Kw::CASE) || ast.at_end_select())?;
+            let body = self.collect_until(|ast| ast.is(Kw::CASE) || ast.at_end_select())?;
             if is_else {
                 otherwise = body;
             } else {

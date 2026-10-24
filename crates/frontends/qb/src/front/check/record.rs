@@ -17,15 +17,27 @@ impl Checker {
             return;
         }
         if Ty::of_suffix(name).is_some() {
-            self.err(span, "Invalid character");
+            self.err_because(
+                span,
+                "Invalid character",
+                Reason::headline("the TYPE name `{name}` carries a type character").help("write the name without `%`, `&`, `!`, `#`, `$` or `@`"),
+            );
             return;
         }
         if self.records.contains_key(name) {
-            self.err(span, "Duplicate definition");
+            self.err_because(
+                span,
+                "Duplicate definition",
+                Reason::headline("the TYPE `{name}` is defined twice").help("give the second one another name, or remove it"),
+            );
             return;
         }
         if fields.is_empty() {
-            self.err(span, "Element not defined");
+            self.err_because(
+                span,
+                "Element not defined",
+                Reason::headline("the TYPE `{name}` has no fields").help("add at least one `field AS type` line before END TYPE"),
+            );
         }
         let mut out: Vec<(String, Ty, Option<usize>)> = Vec::new();
         let mut bytes = 0usize;
@@ -71,7 +83,11 @@ impl Checker {
                 continue;
             }
             if out.iter().any(|(existing, ..)| *existing == field.name) {
-                self.err(field.span, "Duplicate definition");
+                self.err_because(
+                    field.span,
+                    "Duplicate definition",
+                    Reason::headline("the field `{name}` appears twice in this TYPE").help("rename one of the fields"),
+                );
                 continue;
             }
             let mut ty = match field.type_name.as_ref().and_then(|t| self.type_of_name(t)) {
@@ -158,7 +174,7 @@ impl Checker {
         }
         let value = typed.known()? as i64;
         if !(-32768..=32767).contains(&value) {
-            self.err(bound.span(), "Math overflow");
+            self.overflow(bound.span(), &Ty::Int, "bound");
             return None;
         }
         Some(value)

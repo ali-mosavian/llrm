@@ -149,6 +149,31 @@ impl Checker {
         });
     }
 
+    /// "Math overflow" for a constant that does not fit `ty`, naming the type
+    /// and its range; `place` says where it goes ("an argument", "a bound").
+    fn overflow(
+        &mut self,
+        span: Span,
+        ty: &Ty,
+        place: &str,
+    ) {
+        let (name, range) = match ty {
+            Ty::Int => ("an INTEGER", "-32768 to 32767"),
+            Ty::Long => ("a LONG", "-2147483648 to 2147483647"),
+            _ => ("a SINGLE", "about -3.4E38 to 3.4E38"),
+        };
+        let help = match ty {
+            Ty::Int => "use a smaller value, or a LONG (`&`) where the statement accepts one",
+            Ty::Long => "use a smaller value, or a double (`#`) where the statement accepts one",
+            _ => "use a smaller value, or a double (`#`)",
+        };
+        self.err_because(
+            span,
+            "Math overflow",
+            Reason::headline(format!("`{{text}}` does not fit {name} {place} ({range})")).help(help),
+        );
+    }
+
     // ---- the module
     // ----------------------------------------------------------------------------
 
@@ -381,7 +406,12 @@ impl Checker {
             && Ty::of_suffix(&procedure.name).is_none()
             && !matches!(self.dialect, Dialect::VbDos | Dialect::Quickr)
         {
-            self.err(procedure.span, "Syntax error");
+            self.err_because(
+                procedure.span,
+                "Syntax error",
+                Reason::headline("`{name}` gives its result type with AS, which this dialect does not allow")
+                    .help("name the type with a type character, as in `name%` or `name$`; AS results need VBDOS"),
+            );
         }
         let params: Vec<ParamInfo> = procedure
             .parameters
@@ -424,12 +454,34 @@ impl Checker {
         };
         let previous = self.procs.get(&key).cloned();
         match previous {
-            Some(existing) if existing.defined && info.defined => self.err(procedure.span, "Duplicate definition"),
+            Some(existing) if existing.defined && info.defined => self.err_because(
+                procedure.span,
+                "Duplicate definition",
+                Reason::headline("`{name}` is defined twice").help("give the second definition another name, or remove it"),
+            ),
             Some(existing)
                 if existing.kind != info.kind
                     || (!existing.unchecked && !info.unchecked && existing.params.len() != info.params.len()) =>
             {
-                self.err(procedure.span, "Argument-count mismatch")
+                let headline = if existing.kind != info.kind {
+                    "`{name}` is declared as one kind of procedure (SUB or FUNCTION) and defined as the other".to_owned()
+                } else {
+                    let count = |n: usize| match n {
+                        0 => "no parameters".to_owned(),
+                        1 => "1 parameter".to_owned(),
+                        n => format!("{n} parameters"),
+                    };
+                    format!(
+                        "`{{name}}` is declared with {} but defined with {}",
+                        count(existing.params.len()),
+                        count(info.params.len())
+                    )
+                };
+                self.err_because(
+                    procedure.span,
+                    "Argument-count mismatch",
+                    Reason::headline(headline).help("make the DECLARE and the definition agree"),
+                )
             }
             Some(existing) => {
                 if !existing.unchecked
@@ -440,13 +492,11 @@ impl Checker {
                         .zip(&info.params)
                         .any(|(a, b)| !a.any && !b.any && (a.ty.plain() != b.ty.plain() || a.array != b.array))
                 {
-                    self.err(
+                    self.err_because(
                         procedure.span,
-                        if info.kind == ProcedureKind::Function {
-                            "Duplicate definition"
-                        } else {
-                            "Parameter type mismatch"
-                        },
+                        if info.kind == ProcedureKind::Function { "Duplicate definition" } else { "Parameter type mismatch" },
+                        Reason::headline("the parameters of `{name}` differ from its DECLARE: a parameter has another type")
+                            .help("make the DECLARE and the definition list the same types"),
                     );
                 }
                 info.declared |= existing.declared;
@@ -522,7 +572,12 @@ impl Checker {
         // a name bound with AS answers only to its own type
         if let Some(bound) = candidates.iter().find(|v| v.declared && v.rank.is_some() == array) {
             if suffix.as_ref().is_some_and(|s| *s != bound.ty.plain()) {
-                self.err(span, "Duplicate definition");
+                self.err_because(
+                    span,
+                    "Duplicate definition",
+                    Reason::headline("`{text}` is bound to another type by AS, so a different type character names a different variable")
+                        .help("write the name the way it was declared"),
+                );
                 return None;
             }
             return Some(bound.clone());

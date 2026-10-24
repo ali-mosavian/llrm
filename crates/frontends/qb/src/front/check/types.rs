@@ -83,6 +83,21 @@ impl Ty {
         )
     }
 
+    /// The type by name, for a message: "an INTEGER", "a string".
+    pub(super) fn label(&self) -> String {
+        match self {
+            Ty::Int => "an INTEGER".into(),
+            Ty::Long => "a LONG".into(),
+            Ty::Single => "a SINGLE".into(),
+            Ty::Double => "a DOUBLE".into(),
+            Ty::Currency => "a CURRENCY".into(),
+            Ty::Variant => "a form property".into(),
+            Ty::Str(Some(n)) => format!("a string of {n} characters"),
+            Ty::Str(None) => "a string".into(),
+            Ty::Record(name) => format!("a record of type {name}"),
+        }
+    }
+
     /// What a value of this type is, for a message: "a number", "a string".
     pub(super) fn describe(&self) -> &'static str {
         match self {

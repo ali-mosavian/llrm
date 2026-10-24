@@ -118,7 +118,12 @@ impl Checker {
             Statement::TypeDecl { name, fields, span } => self.type_declaration(name, fields, *span),
             Statement::Dim(items) | Statement::Static(items) => {
                 if matches!(statement, Statement::Static(_)) && self.procedure.is_none() {
-                    self.err(self.span, "Subprogram error");
+                    self.err_because(
+                        self.span,
+                        "Subprogram error",
+                        Reason::headline("STATIC can only be used inside a SUB or FUNCTION")
+                            .help("use DIM SHARED, or move the statement into a procedure"),
+                    );
                 }
                 // `DIM a()` names no bounds: VBDOS's
                 if matches!(statement, Statement::Dim(_))
@@ -562,7 +567,14 @@ impl Checker {
                 // result
                 if let (Some(suffix), Some(result)) = (Ty::of_suffix(name), &ty) {
                     if suffix.plain() != result.plain() {
-                        self.err(span, "Duplicate definition");
+                        self.err_because(
+                            span,
+                            "Duplicate definition",
+                            Reason::headline(
+                                "`{name}` has a different type character than the FUNCTION it is in, so it is another variable, not the result",
+                            )
+                            .help("assign the result to the function's own name"),
+                        );
                         return;
                     }
                 }
@@ -574,7 +586,11 @@ impl Checker {
         }
         let target_typed = match target {
             Expr::Name(name, _) if self.consts.contains_key(stem(name)) => {
-                self.err(span, "Duplicate definition");
+                self.err_because(
+                    span,
+                    "Duplicate definition",
+                    Reason::headline("`{name}` is a CONST and cannot be assigned to").help("use a variable, or change the CONST"),
+                );
                 return;
             }
             _ => {
@@ -590,7 +606,12 @@ impl Checker {
             return;
         }
         if t.array.is_some() {
-            self.err(span, "Syntax error");
+            self.err_because(
+                span,
+                "Syntax error",
+                Reason::headline("`{text}` is a whole array and cannot be assigned to")
+                    .help("assign to one element, as in `name(1) = value`"),
+            );
             return;
         }
         self.assignable(&t.ty, &v, value.span());
@@ -624,7 +645,7 @@ impl Checker {
                         _ => true,
                     };
                     if !fits && (classic || integer_literal || matches!(a, Ty::Single)) {
-                        self.err(span, "Math overflow");
+                        self.overflow(span, &a, "variable");
                         return;
                     }
                 }
@@ -633,7 +654,13 @@ impl Checker {
             _ => false,
         };
         if !ok {
-            self.err(span, "Type mismatch");
+            let help = match (target.string(), value.ty.string()) {
+                (true, false) if value.ty.numeric() => "convert the number with STR$(...)",
+                (false, true) if target.numeric() => "convert the string with VAL(...)",
+                _ => "give the value the same type as the place it is stored in",
+            };
+            let headline = format!("`{{text}}` is {}, but this place needs {}", value.ty.label(), target.label());
+            self.err_because(span, "Type mismatch", Reason::headline(headline).help(help));
         }
     }
 }

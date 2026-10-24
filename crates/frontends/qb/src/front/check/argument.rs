@@ -68,7 +68,7 @@ impl Checker {
                 let typed = self.numeric(argument)?;
                 if let (Some(c), false) = (typed.constant, typed.variable) {
                     if !(-32768.0..=32767.0).contains(&c.round()) {
-                        self.err(argument.span(), "Math overflow");
+                        self.overflow(argument.span(), &Ty::Int, "argument");
                         return None;
                     }
                 }
@@ -78,7 +78,7 @@ impl Checker {
                 let typed = self.numeric(argument)?;
                 if let (Some(c), false) = (typed.constant, typed.variable) {
                     if !(-2147483648.0..=2147483647.0).contains(&c.round()) {
-                        self.err(argument.span(), "Math overflow");
+                        self.overflow(argument.span(), &Ty::Long, "argument");
                         return None;
                     }
                 }
@@ -88,7 +88,7 @@ impl Checker {
                 let typed = self.numeric(argument)?;
                 if let (Some(c), false) = (typed.constant, typed.variable) {
                     if c.abs() > f64::from(f32::MAX) {
-                        self.err(argument.span(), "Math overflow");
+                        self.overflow(argument.span(), &Ty::Single, "argument");
                         return None;
                     }
                 }
@@ -257,7 +257,7 @@ impl Checker {
             );
             return;
         }
-        for (parameter, argument) in procedure.params.iter().zip(arguments) {
+        for (index, (parameter, argument)) in procedure.params.iter().zip(arguments).enumerate() {
             // BYVAL and SEG at the call mark how the value goes; the value is
             // what is typed
             let argument = match argument {
@@ -268,16 +268,38 @@ impl Checker {
                 match self.array_argument_for(argument) {
                     Some(typed) => {
                         if !parameter.any && typed.ty.plain() != parameter.ty.plain() {
-                            self.err(argument.span(), "Parameter type mismatch");
+                            let headline = format!(
+                                "argument {} of `{{other}}` is an array of {}, but the parameter is an array of {}",
+                                index + 1,
+                                typed.ty.label(),
+                                parameter.ty.label()
+                            );
+                            self.err_because(
+                                argument.span(),
+                                "Parameter type mismatch",
+                                Reason::headline(headline).related(span).help("pass an array of exactly the declared type"),
+                            );
                         }
                     }
-                    None => self.err(argument.span(), "Parameter type mismatch"),
+                    None => {
+                        let headline = format!("argument {} of `{{other}}` must be an array", index + 1);
+                        self.err_because(
+                            argument.span(),
+                            "Parameter type mismatch",
+                            Reason::headline(headline).related(span).help("pass the array's name followed by `()`"),
+                        );
+                    }
                 }
                 continue;
             }
             let Some(typed) = self.expr(argument) else { continue };
             if typed.array.is_some() {
-                self.err(argument.span(), "Parameter type mismatch");
+                let headline = format!("argument {} of `{{other}}` is an array, but the parameter is {}", index + 1, parameter.ty.label());
+                self.err_because(
+                    argument.span(),
+                    "Parameter type mismatch",
+                    Reason::headline(headline).related(span).help("pass one element, such as `name(1)`"),
+                );
                 continue;
             }
             if parameter.any {
@@ -298,10 +320,19 @@ impl Checker {
             if !compatible {
                 let by_reference = typed.variable && !matches!(argument, Expr::Unary { op: Unary::Grouped, .. });
                 let numeric_pair = typed.ty.numeric() && parameter.ty.numeric();
-                self.err(
-                    argument.span(),
-                    if by_reference || numeric_pair { "Parameter type mismatch" } else { "Type mismatch" },
+                let code = if by_reference || numeric_pair { "Parameter type mismatch" } else { "Type mismatch" };
+                let headline = format!(
+                    "argument {} of `{{other}}` is {}, but the parameter is declared as {}",
+                    index + 1,
+                    typed.ty.label(),
+                    parameter.ty.label()
                 );
+                let help = if by_reference {
+                    "BC does not convert a variable passed by reference: pass a variable of exactly that type, or wrap it in parentheses to pass its value"
+                } else {
+                    "convert the value (VAL, STR$, CINT...) or pass one of the declared type"
+                };
+                self.err_because(argument.span(), code, Reason::headline(headline).related(span).help(help));
             } else if let (Some(c), false) = (typed.constant, typed.variable) {
                 // a constant is converted to the parameter's type where the
                 // call stands
@@ -313,7 +344,7 @@ impl Checker {
                 };
                 let value = if parameter.ty == Ty::Single { c } else { c.round() };
                 if !(low..=high).contains(&value) {
-                    self.err(argument.span(), "Math overflow");
+                    self.overflow(argument.span(), &parameter.ty, "parameter");
                 }
             }
         }
@@ -328,7 +359,12 @@ impl Checker {
     ) -> bool {
         let whole = typed.array.is_some() && matches!(argument, Expr::Field { .. });
         if whole {
-            self.err(argument.span(), "Syntax error");
+            self.err_because(
+                argument.span(),
+                "Syntax error",
+                Reason::headline("`{text}` is a whole array inside a record, which BC does not accept here")
+                    .help("pass one element, `name(1)`; `name()` passes the whole array in a CALL"),
+            );
         }
         whole
     }
