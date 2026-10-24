@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:d83ce4cf9fb2253b241a416cbb866edb223fe554cf738eed8833a582d3f9dfe9 -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:9b897f374883fa1f2709c1caa040edfd0a3efd0529bf162f78b94d94c55173cb -->
 
 # pipeline
 
@@ -116,9 +116,7 @@ LLVM counterpart of each limit, is
 
 `pre` makes `gvn` insert on the path that lacks a value; `for_size` prices
 `hoist`, `algebraic`, `loopidioms`, `lsr`, `window` and
-`calleepop` in bytes; `loop_intervals` lets alias and branch decisions use
-the intervals of counted loops. `limits` are the copy budgets of the
-unroller.
+`calleepop` in bytes. `limits` are the copy budgets of the unroller.
 
 ## Needs
 `Summaries`, `GlobalsAA` and `ProgramSummaries` are required

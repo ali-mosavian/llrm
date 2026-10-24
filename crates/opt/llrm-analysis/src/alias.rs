@@ -3648,8 +3648,8 @@ pub fn annotated(unit: &Unit) -> Result<IndexMap<InstId, MemRef>, String> {
 /// `computeConstantRange` at the access, with the dominator tree and no
 /// assumption cache; BasicAA's `analyzeVariableOffsets` passes both. It asks no
 /// SCEV and no LVI range of an index, so a loop counter's interval is its
-/// ValueTracking range, as at the pin; what `Bounded` knew beyond it (a counted
-/// loop's span, a dominating guard) is not the pin's answer. Exit: the
+/// ValueTracking range, as at the pin; a counted loop's span or a dominating
+/// guard is not the pin's answer. Exit: the
 /// assumption cache is passed (MemorySSA S3, where BasicAA asks per query).
 /// The range `analyzeVariableOffsets` finds of a variable index:
 /// `computeConstantRange` at `at` intersected with `fromKnownBits(Known,
@@ -3663,33 +3663,7 @@ fn signed_range_at(
     at: InstId,
     value: ValueId,
 ) -> Option<Interval> {
-    let q = llrm_mir::valuetracking::Query {
-        context: unit.context,
-        globals: unit.globals,
-        metadata: unit.metadata,
-        function: unit.function,
-        layout: unit.layout,
-        dt: tree,
-        assumptions: None,
-        dom_conditions: None,
-        cond_context: None,
-        cxt: Some(at),
-    };
-    let operand = Operand::Value(value);
-    let known = llrm_mir::valuetracking::known::compute_known_bits(&q, operand, 0);
-    let range = llrm_mir::valuetracking::range::compute_constant_range(&q, operand, false, 0).intersect_with(
-        &llrm_mir::constantrange::ConstantRange::from_known_bits(&known, true),
-        llrm_mir::constantrange::PreferredRangeType::Signed,
-    );
-    let width = range.width;
-    if range.is_full_set() || range.is_empty_set() {
-        return None;
-    }
-    let signed = |bits: u128| {
-        let bits = BigInt::from(bits);
-        if bits >= BigInt::from(1_u8) << (width - 1) { bits - (BigInt::from(1_u8) << width) } else { bits }
-    };
-    Some(Interval { low: signed(range.get_signed_min()), high: signed(range.get_signed_max()), width })
+    ranges::value_tracking_at(unit, tree, None, at, Operand::Value(value))
 }
 
 pub fn annotated_with(

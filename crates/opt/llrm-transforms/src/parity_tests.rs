@@ -80,7 +80,7 @@ fn test_the_registry_records_mssa_with_its_dependency_and_the_open_vocabulary() 
     );
     let report = parity::report();
     assert!(
-        report.contains("fold@1242 (instcombine) -> instcombine-port") && report.contains("shadow_mssa"),
+        report.contains("dead@1242 (instcombine) -> instcombine-port") && report.contains("shadow_mssa"),
         "{report}"
     );
     assert!(parity::TODO.iter().any(|one| one.contains("LICM")), "LICM still drops what it updates");

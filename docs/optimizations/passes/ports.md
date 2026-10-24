@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/ports.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/ports.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/ports.rs sha256:49478b5e669a2de515d44d4ec820eb108b0aeef1b67d03fe3eff2f7eb4d2e85d -->
+<!-- src: crates/opt/llrm-transforms/src/ports.rs sha256:40904390913b2f7a11defe1a37a8d8a8c177c46836a514d764022c06e27aca8b -->
 
 # ports
 
@@ -17,10 +17,11 @@ operations across it, and port calls still keep their order among
 themselves. A call to a port that may reach memory (a DMA controller, say)
 keeps the unknown effect, so a store before it stays.
 
-The port is a constant (masked to 16 bits), or else an interval the
-manager's `Bounded` ranges give at the call's block (a branch guarding the
-VGA's 960..975 bounds it); an interval that wraps through 8000h gives
-nothing.
+The port is a constant (masked to 16 bits), or else the interval
+ValueTracking gives it at the call (`computeConstantRange` and known bits,
+with the dominator tree and the assumptions; a `range` attribute or an
+assume bounds it, a branch guarding it does not); an interval that wraps
+through 8000h gives nothing.
 
 ```text
  out 968, v    ; the DAC's write index
@@ -96,7 +97,7 @@ each round of [`crate::pipeline`](pipeline.md)'s fixed point, before anything as
 port call does to memory. On at every level above -O0.
 
 ## Needs
-The target's port description, `Registers`, `Bounded`.
+The target's port description, `Registers`, `Shape`.
 
 ## Keeps
 `Dominators` and `Loops`: only call attributes change.
