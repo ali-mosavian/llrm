@@ -179,6 +179,97 @@ impl super::emit::GlobalMap for Globals<'_> {
 struct CallConventions<'a> {
     module: &'a Module,
     arch: &'a dyn Target,
+    contracts: Option<&'a RuntimeContracts<'a>>,
+    general: &'a [llrm_lir::registers::RegId],
+}
+
+/// What the program's ABI says about its runtime routines: a QB routine's
+/// contract names the registers it destroys and how it returns, which its
+/// declared convention does not.
+pub struct RuntimeContracts<'a> {
+    pub abi: &'a dyn crate::backend::assemble::Abi,
+    pub segments: &'a crate::backend::target::Segments,
+}
+
+/// For each call in `function` of a `llrm.qb.` routine: `Ok` when the
+/// convention models what its contract says (the callee pops what was pushed,
+/// it returns in a register and to the next instruction), else why not. The old
+/// selector models the rest.
+pub(crate) fn runtime_call_verdicts(
+    module: &Module,
+    function: &llrm_mir::module::Function,
+    layout: &DataLayout,
+    arch: &dyn Target,
+    abi: &dyn crate::backend::assemble::Abi,
+) -> llrm_mir::dense::IdMap<llrm_mir::module::InstId, Result<(), &'static str>> {
+    use llrm_mir::module::Operand;
+    use llrm_mir::opcode::Opcode;
+    let mut out = llrm_mir::dense::IdMap::new();
+    for &block in function.layout() {
+        for inst in function.iter_block(block) {
+            let instruction = function.instruction(inst);
+            let (Opcode::Call(info) | Opcode::Invoke(info)) = &instruction.opcode else { continue };
+            let Some(&Operand::Constant(callee)) = instruction.operands.last() else { continue };
+            let llrm_mir::context::ConstantKind::Global(global) = module.context.get(callee).kind else { continue };
+            let name = module.global(global).name.owned().unwrap_or_default();
+            if !name.starts_with(crate::hir::mir::RUNTIME) {
+                continue;
+            }
+            let keep = instruction.operands.len() - if matches!(instruction.opcode, Opcode::Invoke(_)) { 3 } else { 1 };
+            let types: Option<Vec<_>> = instruction.operands[..keep]
+                .iter()
+                .map(|argument| function.operand_type(&module.context, *argument))
+                .collect();
+            let first = arch.first_argument_offset(false);
+            let (result, _, variadic) = module.signature(info.function_type);
+            let plan = types.and_then(|types| {
+                crate::backend::isel::convention_for(
+                    module,
+                    layout,
+                    arch,
+                    first,
+                    info.calling_convention,
+                    result,
+                    variadic,
+                    &types,
+                    &info.argument_attrs,
+                )
+                .ok()
+            });
+            out.insert(inst, modelled(abi, &name, plan.as_ref(), first));
+        }
+    }
+    out
+}
+
+fn modelled(
+    abi: &dyn crate::backend::assemble::Abi,
+    name: &str,
+    plan: Option<&crate::backend::isel::Convention>,
+    first: i64,
+) -> Result<(), &'static str> {
+    let plan = plan.ok_or("QB runtime call the convention does not describe")?;
+    let pushed = (plan.stack_arguments - first).max(0);
+    if abi.registers(name).is_some() {
+        return Err("QB runtime routine with a register interface");
+    }
+    let contract = abi.contract(name, plan.popped > 0, pushed).map_err(|_| "QB runtime routine with no contract")?;
+    if contract.flags_result {
+        return Err("QB runtime routine answering in the flags");
+    }
+    // Raising an error or entering user code changes no selection (the old
+    // selector reads neither); a routine that comes back at an inline table or
+    // by no known way does.
+    if !matches!(
+        contract.control,
+        llrm_qbruntime::Control::Returns | llrm_qbruntime::Control::Never
+    ) {
+        return Err("QB runtime routine that returns to an inline table or by no known way");
+    }
+    if contract.cleanup != Some(plan.popped) || plan.popped != pushed {
+        return Err("QB runtime routine whose stack cleanup the convention does not model");
+    }
+    Ok(())
 }
 
 impl super::emit::Conventions for CallConventions<'_> {
@@ -214,14 +305,22 @@ impl super::emit::Conventions for CallConventions<'_> {
         };
         let found = self.arch.calling().by_number(number)?;
         let regs = llrm_lir::registers::Regs(self.arch.registers());
-        Some(
-            found
-                .clobbered
-                .iter()
-                .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
-                .map(|name| regs.root(self.arch.register_named(name)))
-                .collect(),
-        )
+        let mut out: std::collections::BTreeSet<_> = found
+            .clobbered
+            .iter()
+            .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
+            .map(|name| regs.root(self.arch.register_named(name)))
+            .collect();
+        // a runtime routine also destroys what its contract says
+        if let (Some(contracts), Some(Callee::Global(id))) = (self.contracts, callee) {
+            let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned().unwrap_or_default();
+            if name.starts_with(crate::hir::mir::RUNTIME)
+                && let Ok(contract) = contracts.abi.contract(&name, false, 0)
+            {
+                out.extend(crate::backend::callregs::call_clobbers(&contract, contracts.segments, self.general));
+            }
+        }
+        Some(out)
     }
 }
 
@@ -372,7 +471,7 @@ pub fn selected(
     cpu: &crate::backend::cpu::Profile,
     libcalls: &[(String, u32, String)],
 ) -> Result<Selected, Unselected> {
-    selected_in_pool(module, name, arch, cpu, libcalls, false, &mut Pool::new(module.globals.len() as i64))
+    selected_in_pool(module, name, arch, cpu, libcalls, None, &mut Pool::new(module.globals.len() as i64))
 }
 
 pub fn selected_in_pool(
@@ -381,12 +480,12 @@ pub fn selected_in_pool(
     arch: &dyn Target,
     cpu: &crate::backend::cpu::Profile,
     libcalls: &[(String, u32, String)],
-    runtime_contracts: bool,
+    contracts: Option<&RuntimeContracts<'_>>,
     pool: &mut Pool,
 ) -> Result<Selected, Unselected> {
     let mark = pool.mark();
     let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        selected_in(module, name, arch, cpu, libcalls, runtime_contracts, pool)
+        selected_in(module, name, arch, cpu, libcalls, contracts, pool)
     }))
     .unwrap_or_else(|why| {
         let why =
@@ -417,7 +516,7 @@ fn selected_in(
     arch: &dyn Target,
     cpu: &crate::backend::cpu::Profile,
     libcalls: &[(String, u32, String)],
-    runtime_contracts: bool,
+    contracts: Option<&RuntimeContracts<'_>>,
     pool: &mut Pool,
 ) -> Result<Selected, Unselected> {
     let m16 = match arch.object().bitness {
@@ -440,10 +539,10 @@ fn selected_in(
     };
     let (builder_target, address_mode) =
         if m16 { (BuilderTarget::m16(), AddrMode::Real16) } else { (BuilderTarget::m32(), AddrMode::Flat32) };
-    let builder_target = builder_target
-        .with_runtime_calls(libcalls)
-        .with_float_store(cpu.float_store)
-        .with_runtime_contracts(runtime_contracts);
+    let builder_target =
+        builder_target.with_runtime_calls(libcalls).with_float_store(cpu.float_store).with_runtime_call_verdicts(
+            contracts.map(|contracts| runtime_call_verdicts(module, function, &layout, arch, contracts.abi)),
+        );
     let tables = tables(arch);
     // The builder numbers the fixed objects the stack parameters make: a byval
     // aggregate one, a cell one for each register-sized part of its value (an
@@ -540,7 +639,7 @@ fn selected_in(
     let ctx = EmitContext {
         tables: &tables_of_function,
         caller_saved: &caller_saved,
-        conventions: &CallConventions { module, arch },
+        conventions: &CallConventions { module, arch, contracts, general: &cpu.general },
         constants: &PoolCells(std::cell::RefCell::new(pool)),
         stack_pointer,
         globals: &globals,
