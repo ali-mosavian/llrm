@@ -32,11 +32,6 @@ issue = 2848
 owner = "unassigned"
 date = "2026-10-19"
 [[xfail]]
-id = "unit llrm-nib::test_nib_frontend::test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
 id = "unit llrm-nib::test_nib_frontend::test_a_pointer_stepped_by_a_runtime_stride_is_one_recurrence"
 issue = 2848
 owner = "unassigned"

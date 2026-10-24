@@ -2582,10 +2582,15 @@ fn test_the_level_reaches_the_rich_route() {
 /// `dst: &mut P` and `src: &P` are stated noalias, so `src.y` is loaded
 /// once, before the loop. Unstated, the loop reloaded it after every store
 /// to `dst.x`.
+///
+/// The step is `x * 3 + y`: since the translated LICM (caf370d12) promotes
+/// `dst.x`, `x += y` left an add recurrence whose exit value indvars computed,
+/// and the loop was deleted, as the pin's clang does (`range(i16 4, 6)` on
+/// `n`).
 #[test]
 fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() {
     use llrm_mir::facts::Fact;
-    let source = "struct P:\n    mut x: i16\n    y: i16\n\nfn bump(dst: &mut P, src: &P, n: i16) -> void:\n    for i in 0..n:\n        dst.x += src.y\n\nfn main() -> i16:\n    let mut a = P(x=0, y=0)\n    let b = P(x=0, y=3)\n    let c = P(x=0, y=4)\n    bump(a, b, 4)\n    bump(a, c, 5)\n    return a.x\n";
+    let source = "struct P:\n    mut x: i16\n    y: i16\n\nfn bump(dst: &mut P, src: &P, n: i16) -> void:\n    for i in 0..n:\n        dst.x = dst.x * 3 + src.y\n\nfn main() -> i16:\n    let mut a = P(x=0, y=0)\n    let b = P(x=0, y=3)\n    let c = P(x=0, y=4)\n    bump(a, b, 4)\n    bump(a, c, 5)\n    return a.x\n";
     let directory = tempfile::tempdir().unwrap();
     let program = parsed(&written(&directory, "bump.nib", source));
     let bump = function(&program, "bump");
