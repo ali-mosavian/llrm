@@ -397,11 +397,53 @@ fn integer(
     }
 }
 
+/// `index` as `shl x, C` folded into `scale` (the pin's `matchOperationAddr`
+/// `Shl` case through `matchScaledValue`): the `shl`, `x` and the new scale,
+/// when the scaled mode is legal and folding extends no live range
+/// (`isProfitableToFoldIntoAddressingMode`: `x` is already used in the
+/// access's block). DEVIATE SHL1: the pin also folds where every use of the
+/// `shl` is an access that folds it; that case is left unfolded.
+fn shifted(
+    unit: &passes::Unit,
+    tti: &dyn Tti,
+    space: u32,
+    block: BlockId,
+    index: Operand,
+    scale: u64,
+    displacement: i128,
+) -> Option<(InstId, Operand, u64)> {
+    let Operand::Value(value) = index else { return None };
+    let ValueDef::Instruction(shl) = unit.function.value(value).def else { return None };
+    let one = unit.function.instruction(shl);
+    if one.opcode != Opcode::Binary(BinaryOp::Shl) {
+        return None;
+    }
+    let &[x, amount] = &one.operands[..] else { return None };
+    let amount = u32::try_from(integer(unit.context, amount)?).ok().filter(|&amount| amount < 64)?;
+    let scaled = scale.checked_shl(amount).filter(|&scaled| scaled >> amount == scale)?;
+    if !tti.is_legal_addressing_mode_in(
+        space,
+        false,
+        i64::try_from(displacement).ok()?,
+        true,
+        i64::try_from(scaled).ok()?,
+    ) {
+        return None;
+    }
+    // `valueAlreadyLiveAtInst(x)`: a constant, or read in the access's block.
+    let live = match x {
+        Operand::Value(v) => unit.function.users(v).iter().any(|one| unit.function.parent(one.user) == Some(block)),
+        _ => true,
+    };
+    live.then_some((shl, x, scaled))
+}
+
 /// `matchAddr`: `address` read as a mode, `depth` more `gep`s allowed.
 fn matched(
     unit: &passes::Unit,
     tti: &dyn Tti,
     space: u32,
+    block: BlockId,
     address: Operand,
     depth: u32,
 ) -> Mode {
@@ -430,10 +472,22 @@ fn matched(
     if variable.len() > 1 {
         return plain();
     }
-    let inner = matched(unit, tti, space, instruction.operands[0], depth - 1);
+    let inner = matched(unit, tti, space, block, instruction.operands[0], depth - 1);
+    let mut insts = inner.insts;
     let index = match (variable.first(), inner.index) {
         (Some(_), Some(_)) => return plain(),
-        (Some(&(at, scale)), None) => Some((instruction.operands[1 + at], scale)),
+        (Some(&(at, scale)), None) => {
+            let operand = instruction.operands[1 + at];
+            // `matchScaledValue(index, scale)` of a `shl x, C`: the shift is
+            // the scale of the mode (`matchOperationAddr`, `Instruction::Shl`).
+            match shifted(unit, tti, space, block, operand, scale, offset + inner.offset) {
+                Some((shl, folded, scale)) => {
+                    insts.push(shl);
+                    Some((folded, scale))
+                }
+                None => Some((operand, scale)),
+            }
+        }
         (None, held) => held,
     };
     let total = offset + inner.offset;
@@ -442,7 +496,6 @@ fn matched(
     if !tti.is_legal_addressing_mode_in(space, false, displacement, true, scale) {
         return plain();
     }
-    let mut insts = inner.insts;
     insts.push(gep);
     Mode { base: inner.base, offset: total, index, insts }
 }
@@ -473,7 +526,7 @@ fn sunk(
             changed = true;
             continue;
         }
-        let mode = matched(unit, tti, space, address, DEPTH);
+        let mode = matched(unit, tti, space, block, address, DEPTH);
         let local = |inst: &InstId| unit.function.parent(*inst) == Some(block);
         if mode.insts.is_empty() || mode.insts.iter().all(local) {
             continue;
@@ -530,7 +583,8 @@ fn select_combined(
         return None;
     }
     let (condition, first, second) = (chosen.operands[0], chosen.operands[1], chosen.operands[2]);
-    let (one, other) = (matched(unit, tti, space, first, DEPTH), matched(unit, tti, space, second, DEPTH));
+    let (one, other) =
+        (matched(unit, tti, space, block, first, DEPTH), matched(unit, tti, space, block, second, DEPTH));
     if one.base != other.base || one.index.is_some() || other.index.is_some() || one.offset == other.offset {
         return None;
     }

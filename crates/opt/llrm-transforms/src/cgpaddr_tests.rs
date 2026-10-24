@@ -165,3 +165,41 @@ b2:
     assert!(!after.contains("lcssa"), "{after}");
     assert!(after.contains("add i16 %next, 7"), "{after}");
 }
+
+/// x_bubble's swap block stored through `@a + 4 + (j << 2)` with the shift made
+/// in the loop header: the shifted index crossed the edge in a register and
+/// spilled in the inner loop (clocks x1.59 under dag). The pin folds the shift
+/// into the mode as the scale of `j`, which the store's block already reads, so
+/// the address is made there from `j` and nothing but `j` crosses.
+#[test]
+fn test_a_shifted_index_is_the_scale_of_an_index_the_block_reads() {
+    let after = sunk(
+        "@a = global [200 x i16] zeroinitializer
+
+define void @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %j = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %s = shl i16 %j, 2
+  %c = icmp sgt i16 %j, 3
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %next = add i16 %j, 1
+  %p = getelementptr i8, ptr @a, i16 %s
+  %q = getelementptr i8, ptr %p, i16 4
+  store i16 %next, ptr %q
+  br label %b1
+
+b3:
+  ret void
+}
+",
+    );
+    let (_, rest) = after.split_once("b2:").expect("a block b2");
+    let b2 = rest.split_once("b3:").expect("a block b3").0;
+    assert!(!b2.contains("%s"), "the shifted index crosses the edge: {after}");
+    assert!(b2.contains("%j"), "the store's block makes its address from j: {after}");
+}
