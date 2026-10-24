@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/ranges.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/ranges.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/ranges.rs sha256:ae7f54ecdaedac3e3f3998438089503b82d369ac67eb2c63a5350416ef15f23f -->
+<!-- src: crates/opt/llrm-analysis/src/ranges.rs sha256:b640d685683497e48fb467713b037bf079b65c3d9b5b4cee25f71b573e46e1f5 -->
 
 # ranges
 
@@ -72,8 +72,8 @@ in `ranges_tests.rs`.
 The interval facts above. In the manager they are `DominatedEdges`
 (incremental) and `Ranges`, which bundles them with registers for a pass.
 Consumers: [`crate::alias`](alias.md), [`crate::regions`](regions.md), [`crate::guards`](guards.md),
-[`crate::memoryssa`](memoryssa.md), [`crate::avail`](avail.md), [`crate::parameter_ranges`](parameter_ranges.md), and in
-llrm-transforms `fixednarrow`, `interprocedural`.
+[`crate::memoryssa`](memoryssa.md), [`crate::avail`](avail.md), and in llrm-transforms
+`fixednarrow`.
 
 ## Needs
 [`crate::consts`](consts.md) (`Known`, the registers), [`crate::assumptions`](assumptions.md),

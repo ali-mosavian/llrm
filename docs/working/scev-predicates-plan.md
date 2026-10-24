@@ -22,7 +22,7 @@ Runtime-checked clients: LoopAccessAnalysis (runtime pointer checks, `PSE`), Loo
 
 ## Order
 
-1. **P1 (11-27 plan, code 12-04):** the predicate classes and uniquing (`SCEVPredicate`, compare, wrap, union), with `implies` / `isAlwaysTrue` unit tests against the header's contract; `ScalarEvolution::get*Predicate`.
+1. **P1 (landed in #4321, `scev/wrap_predicate.rs`; was code 12-04):** the predicate classes and uniquing (`SCEVPredicate`, compare, wrap, union), with `implies` / `isAlwaysTrue` unit tests against the header's contract; `ScalarEvolution::get*Predicate`.
 2. **P2 (12-11):** `SCEVPredicateRewriter`, `convertSCEVToAddRecWithPredicates`, `createAddRecFromPHIWithCasts` (the 3 corpus files: oracle fail-first).
 3. **P3 (12-18):** `AllowPredicates` through `computeExitLimit`/`howFarToZero`/`howManyLessThans`; the predicated backedge-taken counts cache.
 4. **P4 (with LAA runtime checks):** `PredicatedScalarEvolution`.

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/assemble.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/assemble.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/assemble.rs sha256:d215682b2b7710ccc0e7c031f9353b5a166244cf30a16d585409ef5439e25d70 -->
+<!-- src: crates/backend/llrm-core/src/backend/assemble.rs sha256:9a5c0070283c48364a51e9d98e8b40fca0faf6c05985c548a5caf5914ff81121 -->
 
 # assemble
 
@@ -69,7 +69,7 @@ _bump endp
 
 From `--dump` (`mir/21-homes.ll`) and `-S` of a nib program at -O2 with
 `-fno-inline-functions -fno-inline-functions-called-once -fno-ipa-cp-clone
--fno-ipa-vrp -march=i386`.
+-march=i386`.
 
 ## Runs
 Once per module. Per-function candidates are described above; the gating

@@ -67,8 +67,8 @@
 //! The interval facts above. In the manager they are `DominatedEdges`
 //! (incremental) and `Ranges`, which bundles them with registers for a pass.
 //! Consumers: [`crate::alias`], [`crate::regions`], [`crate::guards`],
-//! [`crate::memoryssa`], [`crate::avail`], [`crate::parameter_ranges`], and in
-//! llrm-transforms `fixednarrow`, `interprocedural`.
+//! [`crate::memoryssa`], [`crate::avail`], and in llrm-transforms
+//! `fixednarrow`.
 //!
 //! # Needs
 //! [`crate::consts`] (`Known`, the registers), [`crate::assumptions`],

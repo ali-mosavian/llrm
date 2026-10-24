@@ -49,7 +49,7 @@
 //! `mov bx, word ptr [si-4]` before the first and `cmp bx, 2` after the second.
 //!
 //! From `ISEL_DUMP=1 llrm-nib -O2 -fno-inline-functions
-//! -fno-inline-functions-called-once -fno-ipa-cp-clone -fno-ipa-vrp
+//! -fno-inline-functions-called-once -fno-ipa-cp-clone
 //! -march=i386` of `examples/pass-docs/calleefacts.nib`, stage
 //! `FarIndirectCalls`.
 //!

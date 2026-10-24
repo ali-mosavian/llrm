@@ -45,7 +45,7 @@
 //! `$K4` holds 2.5 and `$K5` 1.25, as f32 bytes.
 //!
 //! From `ISEL_DUMP=1 llrm-nib -O2 -fno-inline-functions
-//! -fno-inline-functions-called-once -fno-ipa-cp-clone -fno-ipa-vrp
+//! -fno-inline-functions-called-once -fno-ipa-cp-clone
 //! -march=i386` of `fn scale(x: f32) -> f32`, stage `FarIndirectCalls` and
 //! `-S`.
 //!

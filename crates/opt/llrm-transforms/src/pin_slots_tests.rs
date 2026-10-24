@@ -169,7 +169,7 @@ enum Why {
     Order,
     /// Run by a stage of ours that is outside the registry (the executed order
     /// of a compile, `--dump` of d_faces -O1/-O2/-Os: globalopt, ports, stamp,
-    /// the early function list, ipo-early, sccp, the cleanup list, walk, the
+    /// the early function list, ipo-early, the cleanup list, walk, the
     /// late list, interprocedural, writeonly, globaldce,
     /// available-externally, calleepop, ...; pipeline.rs `recorded`).
     Executed,
@@ -425,7 +425,7 @@ const ROWS: &[Disposition] = &[
         Module,
         "ipsccp",
         Why::Deviate,
-        "DEVIATE (pipeline.rs): ipo-early (walk::ModuleIpo: ipa-args, ipa-range) + sccp; what flows between bodies is ModuleIpo's, not the solver's; exit: ModuleIpo runs the solver over the program",
+        "DEVIATE (ipsccp.rs): ipo-early (walk::ModuleIpo: run_ipsccp); no FunctionSpecializer, ipa-cp clones stand for it (ipsccp.rs DEVIATE 1)",
         "",
     ),
     row(Module, "called-value-propagation", Why::Missing, "indirect calls only; not measured", "w-6, 11-09"),

@@ -1,11 +1,12 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/interprocedural.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/interprocedural.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/interprocedural.rs sha256:3e99585192c1b60c2eb0704ec8a564c8c549cb8bcf625d6ad694a8a45431ec57 -->
+<!-- src: crates/opt/llrm-analysis/src/interprocedural.rs sha256:9e0801999c10644d40fbc15cbb5311b225814ed7af1decf924ec669416c333e9 -->
 
 # interprocedural
 
-Finds what the two sides of a direct call make certain: constant arguments,
-constant returns, purity and termination. Intra-procedural passes cannot see
-across a call, so these facts are written into the bodies for them to fold.
+Finds what the two sides of a direct call make certain: constant call
+actuals, constant returns, purity and termination. Intra-procedural passes
+cannot see across a call, so these facts are written into the bodies for
+them to fold.
 
 ## How it works
 A direct call is opaque to ordinary SCCP even when every return of the named
@@ -14,12 +15,7 @@ with `program_*`, a whole program) and write it into the body, where the
 ordinary pipeline folds the consumers.
 
 Arguments. `current_call_constants` lists, per call or `invoke` with a known
-callee, the integer-constant actuals. `constant_parameters` (and
-`program_parameters`, which also reads other modules' calls) keeps, for each
-`eligible` (private) body, the parameter positions where every call agrees
-on one constant; a recursive call that passes the parameter on at the same
-position adds no new value. `specialize_parameters` replaces the uses of
-such a parameter by the constant.
+callee, the integer-constant actuals (what `ipacp` clones for).
 
 Returns. `constant_returns` finds, for each exactly defined body, the one
 integer every `ret` returns. `propagate_returns` replaces uses of a direct

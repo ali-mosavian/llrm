@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/interprocedural.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/interprocedural.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/interprocedural.rs sha256:4b01c2e0221b54d8964a62e8399a76e7f8c468d002140a55bf206e5a0425a7c3 -->
+<!-- src: crates/opt/llrm-transforms/src/interprocedural.rs sha256:124beb5314c39804704561cf15048a07ea1a93b536eb23129e8aca8e1eb9ee8c -->
 
 # interprocedural
 
@@ -42,13 +42,11 @@ The stages, in order:
 4. `ipa<N>.`: a body whose every `ret` returns one integer has its calls'
    results replaced by it (`llrm_analysis::interprocedural`); the call
    stays.
-5. A loop of: `ipa-args<N>.` (a private body whose every call passes the
-   same constant uses it) and `ipa-cp.` ([`crate::ipacp`](ipacp.md) cloning), with
-   return propagation after each, until nothing changes.
-6. `ipa-range<N>.`, up to four rounds, if `ranges` is set: the range every
-   caller passes a parameter is stated on it for the body's own proofs.
-7. `ipa-deadargs.` ([`crate::deadargs`](deadargs.md)): parameters nothing reads go.
-8. `ipa-pure.` removes unused calls to bodies proved pure and terminating,
+5. A loop of `ipa-cp.` ([`crate::ipacp`](ipacp.md) cloning) and return propagation,
+   until nothing changes. What every caller passes is IPSCCP's, before the
+   walk ([`crate::walk::ModuleIpo`](walk.md)); the pin does not run it again here.
+6. `ipa-deadargs.` ([`crate::deadargs`](deadargs.md)): parameters nothing reads go.
+7. `ipa-pure.` removes unused calls to bodies proved pure and terminating,
    and `ipa-noreturn.` cuts the code after a call to a private body every
    path of which stops, keeping the call.
 
@@ -62,8 +60,7 @@ flowchart TB
   inl["<b>inline*</b>"]:::mid
   pn["<b>promote/narrow</b>"]:::mid
   rc["<b>ret consts</b>"]:::mid
-  lp["<b>[args, cp]*</b>"]:::mid
-  rg["<b>ranges</b>"]:::mid
+  lp["<b>cp*</b>"]:::mid
   da["<b>deadargs</b>"]:::mid
   st2["<b>stamp</b>"]:::mid
   pu["<b>pure</b>"]:::mid
@@ -73,8 +70,7 @@ flowchart TB
   inl --> pn
   pn --> rc
   rc --> lp
-  lp --> rg
-  rg --> da
+  lp --> da
   da --> st2
   st2 --> pu
   pu --> nr
@@ -136,14 +132,13 @@ From unit test `test_a_private_terminal_body_cuts_its_callers_tail` in
 A `ProgramPass` after the per-body fixed point and before `globaldce`,
 and not at -O0. `Stamp` is the same stamping run earlier, before any body's
 pipeline, so loops are judged on what their callees do. Which stages run
-follows the level: `inline` and `ipa-cp` thresholds, `ipa-range`
-(`-fipa-vrp`, -O2 and up), `ipa-cp-clone` (-O3 and up). See
+follows the level: `inline` and `ipa-cp` thresholds, `ipa-cp-clone` (-O3
+and up). See
 `docs/reference/levels.md`.
 
 ## Needs
 [`crate::inline`](inline.md), [`crate::ipacp`](ipacp.md), [`crate::profit`](profit.md), and
-`llrm_analysis`' `Summaries`, `GlobalsAA`,
-`interprocedural` and `parameter_ranges`.
+`llrm_analysis`' `Summaries`, `GlobalsAA` and `interprocedural`.
 
 ## See also
 LLVM's FunctionAttrs and IPSCCP; GCC's `ipa-inline.cc`, `ipa-cp.cc` and
