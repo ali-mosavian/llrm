@@ -29,8 +29,8 @@
 //! computation made once, before the join's first non-phi. What only the phi
 //! read, the arms' copies, is erased.
 //!
-//! Any phi that `simplifyInstruction` reduces to a value (arms all one value, or
-//! the phi itself; `optimizeInst`'s phi case, L8947) is that value, whatever
+//! Any phi that `simplifyInstruction` reduces to a value (arms all one value,
+//! or the phi itself; `optimizeInst`'s phi case, L8947) is that value, whatever
 //! reads it; this is how a closing phi left by `lcssa` goes. Each phi is
 //! visited once, and the phis that read it are queued again.
 //!
