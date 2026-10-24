@@ -3750,7 +3750,8 @@ pub fn annotated_with(
         Ok(MemRef { provenance: got, ..reference.clone() })
     };
 
-    let mut out = IndexMap::default();
+    let mut out =
+        IndexMap::with_capacity_and_hasher(crate::memory::loads_and_stores(unit.function), Default::default());
     for (_, inst) in unit.function.walk() {
         if !matches!(
             unit.function.instruction(inst).opcode,
