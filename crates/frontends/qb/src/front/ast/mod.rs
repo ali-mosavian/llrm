@@ -1,4 +1,4 @@
-//! The QB grammar of `qb.lalrpop` as a recursive-descent parser that builds
+//! The QB grammar as a recursive-descent parser that builds
 //! qbfront's typed syntax (`syntax::Module`) directly, from the tokens of the
 //! logos lexer.
 //!

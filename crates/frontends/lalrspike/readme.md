@@ -1,5 +1,7 @@
 # lalrspike
 
+The QB front's only parser is the hand-written recursive-descent one in `crates/frontends/qb/src/front/ast`. This directory holds the Nib LALR spike and the QB oracle tools (BC.EXE programs, results, `bcprobe.py`, `verdict`, `checkfiles`); the QB LALR grammar and the first RD spike were deleted.
+
 Spike: LALR(1) grammars for Nib and the QB family. Wherever the grammar cannot
 tell two readings apart, one node keeps the written shape and a later pass
 (symbol table, semantic) chooses. Not in the workspace; `cargo test` here.
@@ -95,85 +97,6 @@ to the `dosrun` branch of the fork and rebuild; a fork without it runs the
 line as a shell command and PDS stays slow). With that, one shared queue of
 (compiler, file) pairs over four machines per core: 28 s.
 
-## A generated lexer
-
-`src/qb_lexer.rs` is a [logos](https://docs.rs/logos) lexer with the old lexer's
-token stream (`qbfront::front::token::Token`, same spans). logos dispatches on
-the first byte and matches the reserved words with a DFA generated from
-`qbasbnf.prs` by `gen_words.py` (`src/qb_words.rs`, 221 words, case-insensitive);
-callbacks keep the old rules for numbers, strings, `REM`/`'` directives and the
-`.`/digit context forms. QuickrBASIC's `f"…"` dialect falls back to the old lexer.
-Logical lines are borrowed unless an `_` continues them.
-
-`tests/qb_lexer.rs` is the check: equal tokens or equal error on every tracked
-`.bas`/`.bi` in all four dialects, on every prefix of the first 60 lines of every
-7th file (error paths), and on a list of odd forms. It passed on the first run.
-
-Release build, 737 files, 766 KB: old lexer 33.5 ms (23 MB/s), logos 12.5 ms
-(63 MB/s), 2.7x. The old one's cost was the linear scan of the token table, up to
-three times per word, plus `String` per logical line.
-
-### Feeding lalrpop from the lexer
-
-`parse_qb_stream(source, dialect, &mut spans)` hands lalrpop an iterator over the
-logos lexer: no `Vec<Token>`, no text for identifiers, strings and reals (the
-parser needs kinds only; each token's span goes to `spans`, indexed as the tree's
-`At` nodes, so a later pass re-reads the text from the span). `terminal()` is now an
-array lookup instead of a hash lookup per token. QuickrBASIC's dialect is not
-streamed. `streaming_tokens_to_the_parser_builds_the_same_tree` asserts the same
-tree and the same spans as the vector path on every tracked program in three
-dialects.
-
-Same 737 files: old lexer + token vector + lalrpop 73.6 ms (10.7 MB/s); streamed
-49.8 ms (15.8 MB/s). The parser itself is 36.9 ms of that, so lexing is now about
-a quarter of the time and lalrpop's tables the rest.
-
-## A recursive-descent parser, for comparison
-
-`src/qb_rd.rs` is the same grammar by hand: about 2,000 lines over a pre-lexed
-`Vec<Tok>` (`qb_lexer::prelex`, the logos DFA lexer, kinds and spans), one function
-per rule, precedence levels as a ladder with the grammar's `P` threaded to the
-leftmost primary (`First::{Full, NoParen, Joined, NoErr}`), and the keyword sets
-generated from `qb.lalrpop` by `gen_classes.py`. It builds the same `Tree`.
-Where the LR automaton decides with a token after a shared prefix, it reads the
-prefix and looks: `foo (a) * b, c` injects the parsed name as the next primary;
-`GET (x,y)-(x,y), a` against `GET (n), x` tries the coordinate pair and backs up.
-
-`tests/qb_rd.rs` and `rdcheck`: the same verdict and an equal tree on every tracked
-program in three dialects (1,920 parses), on the 487 test-source programs and on
-mgl. `rdfuzz` deletes, doubles and swaps one token of each short line (76,542
-variants): one disagreement, a statement that begins with a sign, `+ a - b, c(d)`,
-which lalrpop takes because `Neg<NameRefApplied>` lets `AddOp Neg<Primary>` in. That
-is a leak in the LR grammar, not in the recursive-descent parser.
-
-Release build, 737 files, 766 KB:
-
-| | time | MB/s |
-|---|---|---|
-| old lexer + token vector + lalrpop | 76.6 ms | 10 |
-| logos streamed into lalrpop | 48.1 ms | 16 |
-| pre-lex to `Vec<Tok>` (logos) | 10.1 ms | 77 |
-| lalrpop on `Vec<Tok>` | 30.0 ms | 26 |
-| recursive descent on `Vec<Tok>` | 11.8 ms | 67 |
-| pre-lex + recursive descent | 28.5 ms | 27 |
-
-The recursive-descent parser is 2.5x faster than lalrpop on the same tokens, and the
-whole pipeline 1.7x faster than the streamed one. Both build the same tree, so
-the allocation of `Node` vectors is in both; the difference is the driver, the
-tables and the reduce actions.
-
-### Tokens a line at a time
-
-`parse_qb_rd_by_line` fills one reused buffer from the lexer up to a newline, parses that
-line, and clears the buffer: no token vector and no spans, the leaves numbered by a running
-base. A fixed-size ring would not do: the parser looks three tokens ahead and backs up over a
-`GET (x,y)` coordinate pair, both within a logical line, and a continued line has no bound.
-A line is the window it needs. Same tree as the vector path (`tests/qb_rd.rs`). Speed: 25.9 to
-29.5 ms over three runs against 27.8 to 29.4 ms for pre-lex plus parse, so no gain. The token
-vector was never the cost: a `Tok` is two bytes. What it saves is the span vector (24 bytes a
-token, 4.6 MB for this corpus), which matters only if the later passes can re-lex from the
-source instead of reading spans.
-
 ## The typed tree
 
 `src/qb_ast.rs` is the recursive-descent parser building qbfront's `syntax::Module` directly,
@@ -262,52 +185,6 @@ number is an error where an undefined label name is one too. Pitfalls in the har
 which made a verdict wrong until found: BC wants CRLF in `$INCLUDE` files; a trailing `' #id` comment
 changes VBDOS's verdict on a line ending in a comma; bare messages arrive with a BEL in front
 (`Label not defined: 10`); and a background job dies when the session's turn ends.
-
-## Deferred to later passes
-
-| Written | Node | Decided by |
-|---|---|---|
-| Nib `f(x)`, `i16(x)`, `Point(1, 2)`, `.some(x)` | `Apply` | symbol table: call, cast, construction, variant |
-| Nib `a[i]`, `f[T](x)`, `T[4]`, `T[N]` | `Subscript` | symbol table: index, generic call, array type |
-| Nib `a.b` | `Field` | module member, field, method, qualified variant |
-| Nib `f(x) = 1` | `Assign` of any expression | semantic: is it a place |
-| Nib `for x in &mut v` | `Unary("&mut", v)` | semantic: iteration mode |
-| Nib `let x`, `let Some(x)` | one `Pattern` | name or binding |
-| Nib `*far T` | qualifier is a name | semantic |
-| QB `a(1)` | `Apply` | symbol table: array element or function call |
-| QB `foo (a), b`, `foo(a)` | `CallApplied*` | symbol table: call or parenthesised argument |
-| QB `foo` alone on a line | `Call` | symbol table: call, variable, label use |
-| QB `RUN 100`, `RESUME 0`, `OPTION BASE 1` | an expression | semantic: line number or label |
-| QB `ON PLAY(3) GOSUB x` | `ON` over a function call | semantic: event trap |
-| QB `IF`/`ELSEIF`/`ELSE`/`END IF`, loops, `SUB` bodies | a flat list of lines, with `THEN`, `ELSE`, `:` as separators | block nesting pass |
-
-## What LALR(1) could not do alone
-
-- **Nib `?`**: `a ? b : c` or `x?` needs the `:` further on the same line.
-  One token-stream rule (`nib_tokens.rs`, the old parser's own scan) marks the
-  conditional's `?`. The same for `a is not b`, where `not` is also a name.
-- **QB: PEG into CFG.** Ordered choice and greedy optionals are ambiguous as
-  a context-free grammar. Trailing optional arguments (`PAINT`, `VIEW`,
-  `LINE`, `CIRCLE`) are one list of `, [exp]` whose length a later pass
-  checks, and `B`/`BF` in `LINE` are names. `Lit0`, `Lit1` and `LabLn` are
-  all an integer; `KEY (n) ON` is `KEY` of an expression. The recovered
-  grammar's `|` joins the items on either side, not whole sequences
-  (`PUT ..., PSET`).
-- **QB: reserved words as names**: a function's name (`point`, `pos`) is a
-  variable where no `(` follows, any statement word but the structural ones
-  (`NAME`, `WIDTH`, ...) is one in an expression or a declared name (not at a
-  statement start, nor `ERROR`/`IS`/event words, which clash), a `TYPE` member
-  or field may be any word, and `PRIVATE` is a name before `SUB`/`FUNCTION`.
-- **QB: `IF`**: the dangling else is gone because nothing nests.
-- **QB: the old parser's token prepasses** (`FUNCTION f() AS type`,
-  `VOLATILE`) are productions here.
-
-## Not done
-
-QuickrBASIC (`+=`, `FOR IN`, tuple assignment, `a IF c ELSE b`, f-strings); a typed tree from the QB generic tree (the old builder's
-`syntax::Module`) and from the Nib one (`llrm_nib::syntax`); error messages;
-speed against the old parsers (the generated parser sources are large, and the
-crate takes about 30 s to build in debug).
 
 ## Where the front lives now
 
