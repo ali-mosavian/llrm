@@ -446,6 +446,38 @@ impl<'a> TypeLegalizer<'a> {
                 let wide = self.dag.value_type(lhs);
                 self.dag.get_node(self.dag.opcode(value), wide, &[lhs, rhs])
             }
+            op @ (ISD::Shl | ISD::Srl | ISD::Sra) => {
+                // `PromoteIntRes_SHL/SRL/SRA`: the value promoted, with the
+                // bits above its width cleared (srl) or sign-filled (sra); a
+                // promoted shift amount is zero extended.
+                let (value, amount) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let bits = self.dag.value_type(value).size_in_bits();
+                let promoted = self.promoted_integer(value);
+                let wide = self.dag.value_type(promoted);
+                let lhs = match op {
+                    ISD::Shl => promoted,
+                    ISD::Srl => {
+                        let mask = self.dag.get_constant(super::fold::mask(bits), wide);
+                        self.dag.get_node(ISD::And, wide, &[promoted, mask])
+                    }
+                    _ => {
+                        let by = self.dag.get_constant(u128::from(wide.size_in_bits() - bits), EVT::I8);
+                        let high = self.dag.get_node(ISD::Shl, wide, &[promoted, by]);
+                        self.dag.get_node(ISD::Sra, wide, &[high, by])
+                    }
+                };
+                let amount = match self.action(self.dag.value_type(amount)) {
+                    TypeAction::PromoteInteger => {
+                        let amount_bits = self.dag.value_type(amount).size_in_bits();
+                        let promoted = self.promoted_integer(amount);
+                        let wide = self.dag.value_type(promoted);
+                        let mask = self.dag.get_constant(super::fold::mask(amount_bits), wide);
+                        self.dag.get_node(ISD::And, wide, &[promoted, mask])
+                    }
+                    _ => amount,
+                };
+                self.dag.get_node(op, wide, &[lhs, amount])
+            }
             ISD::Select => {
                 // `PromoteIntRes_SELECT`: the arms promoted, the condition as
                 // is.
