@@ -15,7 +15,7 @@ from tqdm import tqdm  # noqa: E402
 
 import bcprobe  # noqa: E402
 
-TOOLS = Path("/home/user/llrm-private-tools")
+TOOLS = Path(os.environ['LLRM_PRIVATE_TOOLS'])
 FAMILIES = {"qb45": TOOLS / "qb45", "pds71": TOOLS / "pds71", "vbdos": TOOLS / "vbdos"}
 
 

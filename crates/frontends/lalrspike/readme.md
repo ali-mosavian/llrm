@@ -54,6 +54,10 @@ with a negative argument). Not done.
 
 ## Against the real BC.EXE
 
+Environment: `LLRM_PRIVATE_TOOLS` is the directory holding `qb45`, `pds71` and `vbdos` (each with `BC.EXE`);
+`DOSBOX_BIN` the dosrun fork's `dosbox-x` (else a `dosbox-x-fork` checkout beside the repository or in `$HOME`);
+`MGL_DIR` a checkout of `ali-mosavian/mgl` (`corpus/real.py`, `corpus/bcfix.py` only).
+
 `python3 bcdiff.py [--root DIR] QB45,PDS71,VBDOS FILE.bas...` runs Microsoft's
 `BC.EXE` of all three families (QB 4.5, PDS 7.1, VBDOS; the directories are
 `llrm-private-tools/qb45`, `/pds71`, `/vbdos`) and the grammar on each file

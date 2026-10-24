@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
 """Ask the three real BCs about a few lines: bcquick.py 'LINE' ... (or lines on stdin); each line is checked on its own in the prologue's module."""
-import os, re, sys
+import os, tempfile, re, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-os.environ.setdefault('DOSBOX_BIN', '/home/user/dosbox-x-fork/src/dosbox-x')
 import bcprobe
 
 HERE = Path(__file__).parent
-TOOLS = Path('/home/user/llrm-private-tools')
+TOOLS = Path(os.environ['LLRM_PRIVATE_TOOLS'])
 
 
 def run(lines, prologue=True):
     """{family: {line index: [messages]}}, every line compiled alone."""
     pro = (HERE / 'prologue.bas').read_text() if prologue else ''
     epi = (HERE / 'epilogue.bas').read_text() if prologue else ''
-    path = Path('/tmp/claude-0/t1/q.bas')
+    path = Path(tempfile.mkdtemp()) / 'q.bas'
     m = bcprobe.Machine()
     result = {fam: {} for fam in ('qb45', 'pds71', 'vbdos')}
     for i, line in enumerate(lines):
