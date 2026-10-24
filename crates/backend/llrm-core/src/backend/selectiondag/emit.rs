@@ -225,6 +225,7 @@ struct Emitter<'a, 'd> {
     returns: Vec<(Held, llrm_lir::registers::RegId)>,
     /// (call address, callee symbol) of each direct call.
     calls: Vec<(i64, Callee)>,
+    inline_places: Vec<(i64, Vec<(usize, i64, i64)>)>,
     /// The call whose result registers have not been named yet: (block, insn).
     last_call: Option<(usize, usize)>,
     /// The nodes that read each value of a glue chain, from their operands (the
@@ -307,6 +308,9 @@ pub struct Emitted {
     pub classes: Vec<(u32, &'static str)>,
     /// (address, global) of each direct call.
     pub calls: Vec<(i64, Callee)>,
+    /// The frame places each inline code site patches in, by site: (byte of
+    /// the code, displacement, addend).
+    pub inline_places: Vec<(i64, Vec<(usize, i64, i64)>)>,
 }
 
 /// The LIR blocks for `units` of `dag`, in order: one, plus the three a
@@ -340,6 +344,7 @@ pub fn emit_in(
         arguments: Vec::new(),
         returns: Vec::new(),
         calls: Vec::new(),
+        inline_places: Vec::new(),
         last_call: None,
         flags_now: None,
         origins: HashMap::new(),
@@ -374,7 +379,7 @@ pub fn emit_in(
             pushed_arguments(&mut block.insns, ctx.stack_pointer, emitter.state, &mut emitter.classes)?;
         }
     }
-    Ok(Emitted { blocks, classes: emitter.classes, calls: emitter.calls })
+    Ok(Emitted { blocks, classes: emitter.classes, calls: emitter.calls, inline_places: emitter.inline_places })
 }
 
 /// Real-mode addressing has no `[sp+k]`: the arguments a call takes on the
@@ -445,7 +450,20 @@ fn pushed_arguments(
                 (place, cell.offset, cell.width)
             })
             .collect();
-        if refused {
+        // Pushes stand for the stores only when they tile the whole area: a gap
+        // or a tail the stores leave (the padding of a 41-byte byval struct)
+        // keeps the stores in place, each based on a copy of SP.
+        let tiled = {
+            let mut sorted: Vec<(i64, u32)> = stores.iter().map(|&(_, offset, width)| (offset, width)).collect();
+            sorted.sort_unstable();
+            let mut next = 0;
+            sorted.iter().all(|&(offset, width)| {
+                let here = offset == next;
+                next += i64::from(width);
+                here
+            }) && next == size.value
+        };
+        if refused || !tiled {
             // The stores keep their places; each is based on a copy of SP.
             let value = state.next_value;
             state.next_value += 1;
@@ -480,16 +498,6 @@ fn pushed_arguments(
             continue;
         }
         stores.sort_by_key(|&(_, offset, _)| offset);
-        let mut next = 0;
-        for &(_, offset, width) in &stores {
-            if offset != next {
-                return Err(EmitError::Unsupported("an outgoing argument area with a gap at m16".to_owned()));
-            }
-            next += i64::from(width);
-        }
-        if next != size.value {
-            return Err(EmitError::Unsupported("an outgoing argument area the stores do not cover at m16".to_owned()));
-        }
         // The pushes go where the last store was; the area and the stores go.
         let last = stores.iter().map(|&(place, _, _)| place).max().unwrap_or(end - 1);
         let mut pushes = Vec::new();
@@ -1364,6 +1372,41 @@ impl Emitter<'_, '_> {
                     Some(&callee),
                 );
                 self.calls.push((at, callee));
+                return Ok(Some(()));
+            }
+            // `llrm.ia16.code`: raw bytes laid down at the site, each frame
+            // place its name patches in a displacement from BP; the site is a
+            // call of the block's name to the passes, whose bytes the function
+            // adds (`dag_function`).
+            "CALL_CODE" => {
+                let NodeData::Symbol(id) = self.dag.node(node.ops[1]).data else {
+                    return Err(EmitError::Unsupported("inline code without its name".to_owned()));
+                };
+                let name = self.dag.symbol_names[id as usize].clone();
+                let (_, places) = llrm_mir::intrinsics::code(&name)
+                    .ok_or_else(|| EmitError::Unsupported("inline code that does not parse".to_owned()))?;
+                let mut patched = Vec::new();
+                for (op, (offset, addend)) in node.ops[2..].iter().zip(places) {
+                    let NodeData::FrameIndex(index) = self.dag.node(*op).data else {
+                        return Err(EmitError::Unsupported("inline code naming other than a frame place".to_owned()));
+                    };
+                    let cell = self
+                        .ctx
+                        .frame
+                        .cell(index, 2)
+                        .ok_or_else(|| EmitError::Unsupported(format!("frame index {index}")))?;
+                    let Some(addr) = cell.addr else {
+                        return Err(EmitError::Unsupported("inline code naming a place of no frame".to_owned()));
+                    };
+                    patched.push((offset, addr.disp, addend));
+                }
+                let callee = Callee::Named(name);
+                let at = self.push_call(
+                    Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) },
+                    Some(&callee),
+                );
+                self.calls.push((at, callee));
+                self.inline_places.push((at, patched));
                 return Ok(Some(()));
             }
             // A call through a far pointer: the offset and the selector sit in

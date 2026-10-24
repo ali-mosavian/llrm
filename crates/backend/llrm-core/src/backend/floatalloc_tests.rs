@@ -1017,3 +1017,32 @@ fn test_a_block_ahead_is_scanned_once_however_many_blocks_ask_for_it() {
     let scans = crate::backend::fpstack::RENAME_SCANS.with(std::cell::Cell::get) - before;
     assert!(scans <= n as usize + 1, "{scans} scans for {} blocks", n + 1);
 }
+
+/// A double live across a call that returns a double: the allocator reloads it
+/// right after the call, ahead of the pseudo-op that takes the call's result,
+/// so the result arrives under it. The stackifier refused that, "a call's
+/// floating result arrives on a stack that is not empty" (RFP-5 through the DAG
+/// path: double_across_a_call_result.c at m16, QCport modules refused under
+/// --isel=shadow). The stack was empty at the call, so the result is the bottom
+/// entry.
+#[test]
+fn test_a_reload_before_the_pseudo_that_takes_a_calls_result_leaves_the_result_below_it() {
+    let cells = _cells([-4, -8, -12], 8);
+    let (spill, out) = (&cells[0], &cells[1]);
+    let body = _body(vec![
+        _load(1, &cells[2]),
+        sem(Operation::FloatStore, "fstp", vec![m(spill)], vec![fl(1)]),
+        sem(Operation::Call, "call", vec![], vec![]),
+        _load(2, spill),
+        sem(Operation::Binary, "add", vec![], vec![]),
+        sem(Operation::FloatLoad, "", vec![fl(3)], vec![]),
+        _arithmetic("fadd", 4, fl(2), fl(3)),
+        _store(out, 4),
+    ]);
+    let converted =
+        crate::backend::fpstack::converted(&body, &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16))
+            .expect("the result arrives under the reload");
+    let insns = converted.insns();
+    let names: Vec<&str> = insns.iter().map(|one| name(one)).filter(|name| !name.is_empty()).collect();
+    assert!(names.contains(&"faddp"), "{names:?}");
+}

@@ -189,6 +189,13 @@ pub trait Dag {
         &self,
         node: u32,
     ) -> bool;
+    /// `SelectionDAG::MaskedValueIsZero`: every bit of `mask` is known zero in
+    /// `value`.
+    fn masked_value_is_zero(
+        &self,
+        value: SDValue,
+        mask: u64,
+    ) -> bool;
     /// `SelectionDAG::haveNoCommonBitsSet`.
     fn have_no_common_bits_set(
         &self,

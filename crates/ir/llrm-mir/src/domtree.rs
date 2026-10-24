@@ -1971,6 +1971,8 @@ impl<'a, G: DomGraph, const POST: bool> SemiNca<'a, G, POST> {
         // PostViewBUI is used in case the caller needs a DT update with a
         // CFGView.
         let mut snca = SemiNca::<G, POST>::new(graph, post_view_bui);
+        // The full walk numbers at most every block and the virtual root.
+        snca.num_to_node.reserve(graph.max_number() + usize::from(POST));
 
         // Step #0: Number blocks in depth-first order and initialize
         // variables used in later stages of the algorithm.
