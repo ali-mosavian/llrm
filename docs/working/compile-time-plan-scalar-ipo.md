@@ -11,11 +11,7 @@ Inclusive per pass, M Ir.
 |---|--:|--:|--:|
 | GVN | 40.6 | 49.2 | -8.6 (off the list) |
 | EarlyCSE | 32.5 | 7.8 | 24.7 |
-<<<<<<< HEAD
 | SCCP + IPSCCP (pin: SCCPPass 11x 4.2 + IPSCCP 1x 4.1) | 11.7 | 8.3 | 3.4 |
-=======
-| SCCP | 11.7 | 4.2 | 7.5 |
->>>>>>> origin/feat/parity
 | MemCpyOpt | 10.7 | 0.47 | 10.2 |
 | SROA | 9.3 | 9.8 | -0.5 (parity) |
 | functionattrs post-order | 8.2 | 1.4 | 6.8 |
@@ -27,7 +23,6 @@ Inclusive per pass, M Ir.
 
 The MemorySSA rows overlap EarlyCSE and MemCpyOpt: EarlyCse 32.5 = MemorySSA 18.7 + fork/clone 3.4 + walk 8.7 + rest 1.7; MemCpyOpt 10.7 = MemorySSA 6.9 + `Pointers::run` 2.7 + body 0.7.
 
-<<<<<<< HEAD
 ## Bucket ledger
 
 Excess over the pin in M Ir, one tip. The buckets are `ledger4.py`'s: the inclusive cost of the passes it lists, ours and the pin's, so the rows below add up to the bucket (scalar 137.7 of 137.6). The pin side's MemorySSA (2.9) sits inside its EarlyCSE.
@@ -69,7 +64,6 @@ The pin's 13.3 is not split by pass here: its passes (GlobalOpt 0.47, PostOrderF
 
 One PR per step, ledger pair in each body. Dates are land dates.
 
-<<<<<<< HEAD
 | land | owner | step | pin source | M removed |
 |---|---|---|---|--:|
 | dropped 10-24 | funcattrs-port | functionattrs post-order: 5.7 of the 8.2 M is inside `stamped_all` (the Stamp row, w-6's); the walk's own is 2.5 vs pin 1.4. Skipping unchanged components measured -1.6 M (0.14%), object identical: not landed | FunctionAttrs.cpp `PostOrderFunctionAttrsPass` | 0 |
@@ -79,16 +73,5 @@ One PR per step, ledger pair in each body. Dates are land dates.
 | 11-27 | w-5 | MemCpyOpt without `Pointers::run` (the llrm-only points-to solve AA reads), with AA call pairs | MemCpyOptimizer.cpp `runImpl` | 2.7 |
 | 11-10 | w-3 | MemorySSA once per function (S3) | MemorySSA.cpp | up to 22 |
 | 11-17 | w-6 | Stamp 14.0 (`stamped_all` 10.0 + `Stamp` 3.9), llrm-only | none | up to 14 |
-=======
-| land | step | pin source | M removed |
-|---|---|---|--:|
-| 10-30 | EarlyCse walks the live function, no `fork` + `Context` clone | EarlyCSE.cpp `EarlyCSE::run` | 3.4 |
-| 11-03 | MemCpyOpt without `Pointers::run` | MemCpyOptimizer.cpp `runImpl` | 2.7 |
-| 11-06 | SCCP to the pin's cost | SCCPSolver.cpp, SCCP.cpp `runSCCP` | up to 7.5 |
-| 11-10 | MemorySSA once per function: w-3's S3; this plan only if S3 leaves it | MemorySSA.cpp | up to 22 |
-| 11-13 | functionattrs post-order as one SCC walk | FunctionAttrs.cpp `PostOrderFunctionAttrsPass` | up to 6.8 |
-| 11-17 | Stamp 14.0 (`stamped_all` 10.0 + `Stamp` 3.9), with w-6; llrm-only, no pin pass | none | up to 14 |
-| 11-20 | Bounded callers cleanup, delete `Bounded` | none | ~7 |
->>>>>>> origin/feat/parity
 
 Row-23 back half follows, 11-23 to 12-10. `Homes` 8.4 and `Spares` 8.0 are llrm-only module passes on w-6's retire list.
