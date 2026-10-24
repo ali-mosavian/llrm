@@ -2011,30 +2011,98 @@ declare void @llvm.{name}.p{dst}.p{src}.i32(ptr addrspace({dst}), ptr addrspace(
     }
 }
 
-const QB_STRING_COMPARE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
-define i16 @f(ptr %a, ptr %b) {
+const QB_STRING_COMPARE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define cc 1000 i16 @f(ptr %a, ptr %b) addrspace(1) {
 entry:
-  %r = call i16 @llrm.qb.B$SCMP(ptr %a, ptr %b)
+  %r = call cc 1000 addrspace(1) i16 @llrm.qb.B$SCMP(ptr %a, ptr %b)
   ret i16 %r
 }
-declare i16 @llrm.qb.B$SCMP(ptr, ptr)
+declare cc 1000 i16 @llrm.qb.B$SCMP(ptr, ptr) addrspace(1)
 ";
 
-/// A call of a QB runtime routine takes its arguments on the stack and answers
-/// in the flags (`B$SCMP`); the DAG path passed `ax`/`dx` and tested `ax`, so
-/// every string comparison of `strcmp_smoke` printed 0. It is refused for a
-/// program whose ABI gives the runtime contracts.
-#[test]
-fn a_call_of_a_qb_runtime_routine_is_refused() {
+/// An ABI whose runtime routines return their answer in the flags or not.
+struct Stub {
+    flags: bool,
+}
+
+impl crate::backend::assemble::Abi for Stub {
+    fn contract(
+        &self,
+        callee: &str,
+        pops: bool,
+        pushed: i64,
+    ) -> Result<crate::abi::runtime::Contract, String> {
+        let cleanup =
+            if pops { crate::hir::model::StackCleanup::Callee } else { crate::hir::model::StackCleanup::Caller };
+        Ok(crate::abi::runtime::Contract {
+            flags_result: self.flags,
+            ..crate::abi::qb::ordinary(callee, cleanup, pushed, &Default::default())
+        })
+    }
+
+    fn linked(
+        &self,
+        name: &str,
+    ) -> String {
+        name.to_owned()
+    }
+
+    fn runtime_contracts(&self) -> bool {
+        true
+    }
+}
+
+fn verdicts(flags: bool) -> Vec<Result<(), &'static str>> {
     let module = llrm_mir::parse::module(QB_STRING_COMPARE).expect("parses");
-    let cpu = crate::backend::cpu::profile("386").expect("a cpu");
-    let pool = || crate::backend::constpool::Pool::new(module.globals.len() as i64);
-    let call = |contracts| {
-        super::dag_function::selected_in_pool(&module, "f", &llrm_x86_m16::M16, cpu, &[], contracts, &mut pool())
-    };
-    assert!(call(false).is_ok());
-    let refused = call(true).err().expect("refused");
-    assert!(refused.0.contains("QB runtime routine"), "{}", refused.0);
+    let function = module.global(module.named("f").expect("f")).function().expect("a body");
+    let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+    let verdicts =
+        super::dag_function::runtime_call_verdicts(&module, function, &layout, &llrm_x86_m16::M16, &Stub { flags });
+    verdicts.into_values().collect()
+}
+
+/// `B$SCMP` answers in the flags under `--runtime qb45`; the DAG path tested
+/// `ax` instead, so every string comparison of `strcmp_smoke` printed 0. A
+/// call whose contract the convention does not model is refused.
+#[test]
+fn a_runtime_call_answering_in_the_flags_is_refused() {
+    assert_eq!(verdicts(true), [Err("QB runtime routine answering in the flags")]);
+}
+
+#[test]
+fn a_runtime_call_the_convention_models_is_accepted() {
+    assert_eq!(verdicts(false), [Ok(())]);
+}
+
+const VARSEG: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+@x = internal global i16 0
+define i16 @f() {
+entry:
+  ret i16 ptrtoint (ptr addrspace(2) addrspacecast (ptr @x to ptr addrspace(2)) to i16)
+}
+";
+
+/// `VARSEG(x)` is a near pointer cast to the segment space: the selector of
+/// its segment. The DAG path took the offset (`mov b$seg, offset X%`), so
+/// `POKE` after `DEF SEG = VARSEG(x)` wrote 0 bytes from the segment and
+/// `far_poke_*` printed garbage.
+#[test]
+fn a_near_pointer_cast_to_the_segment_space_is_its_segment_selector() {
+    let module = llrm_mir::parse::module(VARSEG).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let spaces: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.clone())
+        .flat_map(|w| w.sources)
+        .filter_map(|loc| match loc {
+            crate::model::ir::Loc::Imm(imm) => imm.address.map(|a| a.space),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(spaces, [crate::model::ir::Space::Group], "{spaces:?}");
 }
 
 const I1_FREEZE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
