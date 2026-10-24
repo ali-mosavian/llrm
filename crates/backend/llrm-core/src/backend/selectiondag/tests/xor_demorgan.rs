@@ -86,3 +86,23 @@ fn a_freeze_of_a_compare_of_registers_is_dropped() {
     assert!(!has(&dag, root, ISD::Freeze), "a compare of registers is not undef");
     assert!(!has(&dag, root, ISD::Xor), "the not folded into the compares");
 }
+
+/// A node the combiner replaced still read its operands, so `hasOneUse` was
+/// false for them: `x + 0` is `x`, yet the dead `add` kept a second use on
+/// `x == y` and the not of that compare was never folded into it.
+#[test]
+fn a_replaced_node_no_longer_counts_as_a_user() {
+    let mut dag = dag();
+    let (x, y) = (dag.get_register(EVT::I32, 5), dag.get_register(EVT::I32, 6));
+    let compare = dag.get_setcc(EVT::I1, x, y, CondCode::SetEq);
+    let zero = dag.get_constant(0, EVT::I1);
+    let dead = dag.get_node(ISD::Or, EVT::I1, &[compare, zero]);
+    let one = dag.get_constant(1, EVT::I1);
+    let root = dag.get_node(ISD::Xor, EVT::I1, &[dead, one]);
+    dag.set_root(root);
+    assert_eq!(dag.use_count(compare.node), 1);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::SetCC, "not (x == y) is x != y");
+    assert_eq!(dag.use_count(compare.node), 0, "the replaced compare is unused, not a second user");
+}

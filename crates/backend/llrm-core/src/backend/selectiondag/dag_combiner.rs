@@ -199,6 +199,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             if self.dag.opcode(result) != ISD::EntryToken {
                 self.add_to_worklist_with_users(result.node);
             }
+            self.dag.delete_dead(n);
         }
     }
 
