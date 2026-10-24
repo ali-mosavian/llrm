@@ -50,3 +50,15 @@ Inclusive M and call edges of each loop pass's entry, ours on the dist tip a2067
 | Unswitch | 0.5 | 11 | 0.2 | 35 | +0.3 | |
 
 The excess adds to the bucket's 73.6 M within a few M. Where it sits: LICM's MemorySSA (S2/S3) is 35 of the 70, IndVars 15, LCSSA, LoopLoadElim, LSR and the second idiom pass 4 to 6 each. The count differences that matter are the function passes: LoopSimplify and LCSSA run 1.3x as often as the pin's (58 against 45) and cost 1.6x and 5.6x more a run; why is not yet known (to measure by 11-06: for each of our 58 runs, the slot it follows and whether it changed anything; the pin's loop pass manager keeps the form by `LoopSimplifyID`/`LCSSAID` being required, not rerun).
+
+## MemorySSA builds (L1: S2, S3), 10-24
+
+Same two profiles. The pin: `MemorySSAAnalysis::run` 25 calls, 3.5 M inclusive (140 K Ir a build). Ours: `MemorySsa::run` 40 calls, 46.5 M inclusive (1.16 M a build), of which `PlainAccesses` 25.7 M (57 runs, of which `Annotated` 44.9 M over 69 runs is shared with other users) and `Mssa::build` 8.0 M (42 builds).
+
+| | builds | M | M a build |
+|---|---|---|---|
+| pin | 25 | 3.5 | 0.14 |
+| ours | 40 | 46.5 | 1.16 |
+| ratio | 1.6x | 13x | 8.3x |
+
+So the count is a smaller lever than the cost of a build: the 15 extra builds are worth about 2 M at the pin's cost and about 17 M at ours; the cost of a build, 1.02 M more each over 40, is worth about 41 M. Order: S3 (what `PlainAccesses` and `Annotated` make for a build: 34 of the 46.5 M) before preserving the graph across more passes. Builds per user in ours (callers of `Analyses::get::<MemorySsa>`, 44 gets for 40 builds): LICM 11, MemCpyOpt 11, EarlyCse 22; per function (11) 3.6 against the pin's 2.3 if its 25 are over the same 11 functions. Why ours builds more is not yet known: to find by 11-06, for each build the slot it is made in and the pass that dropped the graph before (the pin keeps it through EarlyCSE, which updates it, and its other users within a loop pass manager run).
