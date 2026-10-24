@@ -7,8 +7,12 @@
 //! The pass visits every LEA of every block in order. On i486 none of
 //! `slowLEA`, `slow3OpsLEA` or `leaUsesAG` is set, so only `optTwoAddrLEA`
 //! (L564) runs on each; until it moves here (row 100, PR 4) the rules in
-//! `peephole.peep` (`lea_fixed`, `lea_alus`) do its work and this pass changes
-//! nothing.
+//! `peephole.peep` (`lea_fixed`, and `lea_alu`'s case 1) do its work.
+//!
+//! `optLEAALU` (L500, with `searchALUInst` L405) is [`opt_lea_alu`]: `lea
+//! t,[x+y]` whose only reader, within five instructions, is `add d,t` or `sub
+//! d,t` with the flags dead, is `op d,x` and `op d,y`. The adjacent case was
+//! the peephole group `lea_alu`.
 //!
 //! Done here: [`is_lea`] (L227), the block loop, [`previous_instr`] (L295),
 //! [`uses_register`] (L270) and [`search_backwards`] (L308), which finds the
@@ -26,10 +30,18 @@
 //! # Runs
 //! After `FixupBW`, optimizing levels only.
 
+use std::sync::Arc;
+
+use iced_x86::RflagsBits;
 use llrm_lir::registers::{RegId, Regs};
 
+use crate::backend::lanes::Lanes;
+use crate::backend::liveness;
+use crate::backend::peep::guards::{free_fields, lea_cell};
+use crate::backend::peep::{field, make};
 use crate::backend::peephole::{_lanes, DeadAfter, id};
-use crate::model::ir::{Loc, Operation};
+use crate::backend::regthrash::_dead_after;
+use crate::model::ir::{Loc, Operation, Reg};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
 
@@ -51,15 +63,151 @@ impl LIRTransform for FixupLeas {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        // `runOnMachineFunction`: every LEA of every block gets
-        // `optTwoAddrLEA`, which has not moved here yet.
-        for block in &body.blocks {
-            for one in block.insns.iter().filter(|one| is_lea(one)) {
-                let _ = one;
+        let (regs, bits) = (body.regs(), body.bits);
+        let exits = liveness::dead_at_exit(&body);
+        let mut out = body.clone();
+        for block in &mut out.blocks {
+            let dead = _dead_after(regs, bits, block, exits[&block.at].clone());
+            let mut current = block.clone();
+            let mut at = 0;
+            // `runOnMachineFunction`: every LEA of the block, in order.
+            while at < current.insns.len() {
+                if is_lea(&current.insns[at])
+                    && let Some(rewritten) = opt_lea_alu(regs, &current, at, &dead)
+                {
+                    current = current.with_insns(rewritten);
+                }
+                at += 1;
             }
+            *block = current;
         }
-        Ok(body)
+        Ok(out)
     }
+}
+
+const REWRITABLE: u32 = field::CLOBBERS | field::REQUIRES | field::DELIVERS | field::SPREAD | field::GROUP;
+
+fn arithmetic_flags() -> Lanes {
+    Lanes::flags(RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::AF | RflagsBits::CF | RflagsBits::PF)
+}
+
+/// `searchALUInst`: the `add d,t` or `sub d,t` after `lea t,..` that reads `t`
+/// last, within five instructions, with the flags dead after it.
+pub fn search_alu_inst(
+    regs: Regs,
+    block: &LirBlock,
+    lea: usize,
+    dead: &DeadAfter,
+) -> Option<usize> {
+    let Some(what) = block.insns[lea].what.as_ref() else { return None };
+    let [Loc::Reg(t)] = what.dests.as_slice() else { return None };
+    let mine = _lanes(regs, t.register);
+    let names = alu_names();
+    let mut distance = 1;
+    for (cur, one) in block.insns.iter().enumerate().skip(lea + 1) {
+        let what = one.what.as_ref()?;
+        if matches!(what.op, Operation::Call | Operation::Escape) || distance > INSTR_DISTANCE_THRESHOLD {
+            return None;
+        }
+        let overlaps = |loc: &Loc| match loc {
+            Loc::Reg(reg) => !_lanes(regs, reg.register).is_disjoint(&mine),
+            Loc::Mem(mem) => [mem.through, mem.index_through]
+                .into_iter()
+                .any(|r| r != RegId::None && !_lanes(regs, r).is_disjoint(&mine)),
+            Loc::Address(address) => [address.through, address.index_through]
+                .into_iter()
+                .any(|r| r != RegId::None && !_lanes(regs, r).is_disjoint(&mine)),
+            _ => false,
+        };
+        if what.dests.iter().any(|dest| matches!(dest, Loc::Reg(_)) && overlaps(dest)) {
+            return None;
+        }
+        if what.dests.iter().chain(&what.sources).any(overlaps) {
+            let name = what.name.as_deref()?;
+            let ([Loc::Reg(d)], [Loc::Reg(first), Loc::Reg(second)]) = (what.dests.as_slice(), what.sources.as_slice())
+            else {
+                return None;
+            };
+            if (name != names.add && name != names.sub) || first != d || second != t || d.width != t.width {
+                return None;
+            }
+            let after = dead.get(&id(one))?;
+            // `isKill` on the read, and `registerDefIsDead(EFLAGS)`.
+            return (mine.is_subset(after) && arithmetic_flags().is_subset(after)).then_some(cur);
+        }
+        distance += 1;
+    }
+    None
+}
+
+/// `optLEAALU`: the block's instructions with the LEA at `lea` and its add or
+/// sub made two steps on the destination, or `None` where the pin leaves them.
+/// `dead` is the liveness of the block as it was.
+pub fn opt_lea_alu(
+    regs: Regs,
+    block: &LirBlock,
+    lea: usize,
+    dead: &DeadAfter,
+) -> Option<Vec<Arc<Insn>>> {
+    let alu = search_alu_inst(regs, block, lea, dead)?;
+    let (lea_insn, alu_insn) = (&block.insns[lea], &block.insns[alu]);
+    // The pin's LEA32r: two registers as wide as the add, scale 1, no
+    // displacement, symbol or segment.
+    let [Loc::Reg(t)] = lea_insn.what.as_ref()?.dests.as_slice() else { return None };
+    let [source] = lea_insn.what.as_ref()?.sources.as_slice() else { return None };
+    let (symbol, base, index, scale, offset) = lea_cell(source)?;
+    let alu_what = alu_insn.what.as_ref()?;
+    let [Loc::Reg(d)] = alu_what.dests.as_slice() else { return None };
+    let wide = |register: RegId| regs.bytes(register) == Some(i64::from(d.width));
+    if symbol
+        || !wide(base)
+        || !wide(index)
+        || scale != 1
+        || offset != 0
+        || base == RegId::None
+        || index == RegId::None
+        || base == t.register
+        || index == t.register
+        || (base == d.register && index == d.register)
+        || !free_fields(lea_insn, REWRITABLE)
+        || !free_fields(alu_insn, REWRITABLE)
+        || !arithmetic_flags().is_subset(dead.get(&id(lea_insn))?)
+    {
+        return None;
+    }
+    let found = check_reg_usage(regs, block, lea, alu, dead);
+    let at_lea = found.base_index_def;
+    if at_lea && found.alu_dest_ref {
+        return None;
+    }
+    // `swap(BaseReg, IndexReg)` when the destination is the index.
+    let (first, second) = if index == d.register { (index, base) } else { (base, index) };
+    let step = |term: RegId| {
+        let mut what = alu_what.clone();
+        what.sources = vec![Loc::Reg(*d), Loc::Reg(Reg { register: term, width: d.width })];
+        Arc::new(Insn {
+            what: Some(what),
+            uses: make::joined_uses(regs, lea_insn, alu_insn),
+            widths: make::joined_widths(regs, lea_insn, alu_insn),
+            ..(**alu_insn).clone()
+        })
+    };
+    let steps = [step(first), step(second)];
+    let mut out = Vec::with_capacity(block.insns.len() + 1);
+    for (at, one) in block.insns.iter().enumerate() {
+        if at == lea {
+            if at_lea {
+                out.extend(steps.iter().cloned());
+            }
+        } else if at == alu {
+            if !at_lea {
+                out.extend(steps.iter().cloned());
+            }
+        } else {
+            out.push(Arc::clone(one));
+        }
+    }
+    Some(out)
 }
 
 /// `isLEA`: `LEA32r`.

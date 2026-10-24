@@ -1,7 +1,9 @@
-//! Sparse conditional constant propagation: the solver. A translation of the
-//! parts of LLVM's `SCCPSolver.cpp` (d1106deb71cc) a function pass reaches:
+//! Sparse conditional constant propagation: the solver. A translation of
+//! LLVM's `SCCPSolver.cpp` (d1106deb71cc) without function specialisation:
 //! an optimistic data flow over executable blocks and feasible edges, a
-//! [`ValueLatticeElement`] per value, and the rewrites the result allows.
+//! [`ValueLatticeElement`] per value, and the rewrites the result allows. It
+//! solves one function ([`Solver::new`], for `runSCCP`) or a module
+//! ([`Solver::module`], for `runIPSCCP`).
 //!
 //! # How it works
 //! [`Solver::solve`] takes a block off the block work list, visits its
@@ -11,7 +13,15 @@
 //! overdefined, and only moves towards overdefined. When the lists are empty,
 //! [`Solver::resolved_undefs_in`] makes what is still unknown overdefined (an
 //! `undef` operand can be any value) and the solve resumes until nothing is
-//! left to resolve. [`crate::sccp`] then rewrites:
+//! left to resolve.
+//!
+//! Across a module the work lists are shared and each entry names its
+//! function. A call to a function whose arguments are tracked makes its entry
+//! executable and joins the actuals into its arguments; a tracked return value
+//! (`TrackedRetVals`, or one per field of a struct, `MRVFunctionsTracked`) is
+//! joined from each `ret` and flows to each call; a tracked global
+//! (`TrackedGlobals`) is joined from each store and read by each load. The
+//! caller chooses what is tracked. [`crate::sccp`] then rewrites:
 //! [`Solver::simplify_insts_in_block`] replaces values with their constants,
 //! turns signed operations that cannot be negative into unsigned ones, adds
 //! `nuw`/`nsw`/`nneg` the ranges prove, and drops range checks;
@@ -25,11 +35,26 @@
 //! # DEVIATEs
 //! 1. `PredicateInfo` has no operand-bundle assumes ([`crate::predicateinfo`]
 //!    DEVIATE 1); `removeSSACopies` is in [`crate::sccp`].
-//! 2. Nothing interprocedural: `TrackedGlobals`, the argument-tracking set,
-//!    `MustPreserveReturnsInFunctions`, the specialisation entry points and
-//!    `MRVFunctionsTracked` are not translated; `runSCCP` never fills them. The
-//!    one tracked return value is the function's own (`TrackedRetVals`), for a
-//!    call to itself and for `inferReturnAttributes`.
+//! 2. Interprocedural: translated are
+//!    [`addTrackedFunction`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SCCPSolver.cpp#L919),
+//!    [`trackValueOfGlobalVariable`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SCCPSolver.cpp#L911),
+//!    [`addArgumentTrackedFunction`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SCCPSolver.cpp#L937)
+//!    and its queries,
+//!    [`addToMustPreserveReturnsInFunctions`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SCCPSolver.cpp#L929),
+//!    [`markFunctionUnreachable`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SCCPSolver.cpp#L1044),
+//!    [`solveWhileResolvedUndefsIn(Module&)`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SCCPSolver.cpp#L1049),
+//!    and the tracked arms of
+//!    [`visitReturnInst`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SCCPSolver.cpp#L1489),
+//!    [`visitStoreInst`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SCCPSolver.cpp#L1902),
+//!    [`visitLoadInst`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SCCPSolver.cpp#L1945),
+//!    [`handleCallArguments`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SCCPSolver.cpp#L2047),
+//!    [`handleCallResult`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SCCPSolver.cpp#L2152)
+//!    and
+//!    [`resolvedUndef`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SCCPSolver.cpp#L2286).
+//!    Not translated: the specialisation entry points (`invalidate`,
+//!    `resetLatticeValueFor`, `setLatticeValueForSpecializationArguments`,
+//!    `solveWhileResolvedUndefs`, `Invalidated`), which only
+//!    `FunctionSpecializer` calls. Exit: its translation.
 //! 3. No vectors and no scalable vectors: the `vscale` and
 //!    `experimental.get.vector.length` arms of `handleCallResult` are absent.
 //! 4. A floating-point compare is not folded: `ConstantFoldCompareInstOperands`
@@ -41,6 +66,17 @@
 //!    has none.
 //! 7. A phi has one input per edge in MIR, so a block reached twice by one
 //!    predecessor is read twice (`removePredecessor` per edge, as ADCE).
+//! 8. `ValueId` and `InstId` are local to a function, so the state keyed by
+//!    value is per function: the visited function's state is in the solver's
+//!    fields and the others are parked. A work-list entry names its function.
+//! 9.
+//!    [`pushUsersToWorkList`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SCCPSolver.cpp#L1105)
+//!    of a function or a global: MIR has no use lists of constants, so the
+//!    users pushed are the calls and loads that read the tracked value, in the
+//!    order they first did. The pin pushes only visited instructions too, and a
+//!    store revisited changes nothing; the order of the pushes differs.
+//!    `resolvedUndefsIn(M)` runs over the functions given to
+//!    [`Solver::module`], in that order; one not given has nothing executable.
 //!
 //! # Example
 //! `%c = icmp eq i32 %a, %a` with `%a` unknown is overdefined; with `%a = 1` it
@@ -60,8 +96,8 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::facts::Facts;
 use llrm_mir::lazyvalueinfo::constant_range_from_metadata;
-use llrm_mir::module::{BlockId, Function, InstId, MetadataNode, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
+use llrm_mir::module::{BlockId, Function, GlobalKind, GlobalValue, InstId, MetadataNode, Operand, ValueDef, ValueId};
+use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_mir::types::{Type, TypeId};
 use llrm_mir::valuelattice::{LatticeConstant, MergeOptions, ValueLatticeElement};
@@ -117,15 +153,94 @@ pub struct Env<'a> {
     pub predicates: &'a PredicateInfo,
 }
 
+/// What the module solver reads besides the functions.
+pub struct ModuleEnv<'a> {
+    pub context: &'a mut Context,
+    pub layout: &'a DataLayout,
+    /// The module's globals, with the bodies of the functions given.
+    pub globals: &'a [GlobalValue],
+    pub metadata: &'a [MetadataNode],
+}
+
+/// The state of one function keyed by its values and blocks (DEVIATE 8).
+struct Local<'a> {
+    function: &'a Function,
+    predicates: &'a PredicateInfo,
+    bb_executable: IdSet<BlockId>,
+    bb_visited: IdSet<BlockId>,
+    value_state: IdMap<ValueId, Lattice>,
+    struct_state: HashMap<(ValueId, u32), Lattice>,
+    in_work: IdSet<InstId>,
+    current: Option<InstId>,
+    feasible: HashSet<(BlockId, BlockId)>,
+    additional_users: IdMap<ValueId, Vec<InstId>>,
+}
+
+impl<'a> Local<'a> {
+    fn new(
+        function: &'a Function,
+        predicates: &'a PredicateInfo,
+    ) -> Self {
+        Self {
+            function,
+            predicates,
+            bb_executable: IdSet::new(),
+            bb_visited: IdSet::new(),
+            value_state: IdMap::new(),
+            struct_state: HashMap::default(),
+            in_work: IdSet::new(),
+            current: None,
+            feasible: HashSet::default(),
+            additional_users: IdMap::new(),
+        }
+    }
+}
+
+/// What is tracked of one function across calls, kept outside [`Local`] so a
+/// caller reads it.
+struct Tracked<'a> {
+    id: Option<GlobalId>,
+    function: &'a Function,
+    /// `TrackedRetVals[F]`.
+    ret: Option<Lattice>,
+    /// `TrackedMultipleRetVals[{F, i}]`, for `MRVFunctionsTracked`.
+    multiple: Option<Vec<Lattice>>,
+    /// In `TrackingIncomingArguments`.
+    arguments: bool,
+    /// In `MustPreserveReturnsInFunctions`.
+    must_preserve_return: bool,
+    /// The calls that read `ret` or `multiple` (DEVIATE 9).
+    users: Users,
+}
+
+/// Instructions of any function, each once, in the order added.
+#[derive(Default)]
+struct Users {
+    list: Vec<(u32, InstId)>,
+    seen: HashSet<(u32, InstId)>,
+}
+
+impl Users {
+    fn add(
+        &mut self,
+        user: (u32, InstId),
+    ) {
+        if self.seen.insert(user) {
+            self.list.push(user);
+        }
+    }
+}
+
 /// What a visit puts on the lists.
 pub struct Solver<'a> {
     context: &'a mut Context,
     layout: &'a DataLayout,
-    outer: &'a Outer,
+    globals: &'a [GlobalValue],
     metadata: &'a [MetadataNode],
+    // The state of the function `active` (DEVIATE 8); `parked[active]` holds
+    // nothing of use while it is here.
     function: &'a Function,
     predicates: &'a PredicateInfo,
-    id: Option<GlobalId>,
     /// `BBExecutable`: executable, but maybe not visited yet.
     bb_executable: IdSet<BlockId>,
     /// `BBVisited`.
@@ -134,19 +249,28 @@ pub struct Solver<'a> {
     value_state: IdMap<ValueId, Lattice>,
     /// `StructValueState`.
     struct_state: HashMap<(ValueId, u32), Lattice>,
-    /// `TrackedRetVals` of the function being solved.
-    tracked_return: Option<Lattice>,
-    /// `InstWorkList`: a stack that holds each instruction once.
-    inst_work: Vec<InstId>,
     in_work: IdSet<InstId>,
     /// `CurI`.
     current: Option<InstId>,
-    /// `BBWorkList`.
-    bb_work: Vec<BlockId>,
     /// `KnownFeasibleEdges`.
     feasible: HashSet<(BlockId, BlockId)>,
     /// `AdditionalUsers`.
     additional_users: IdMap<ValueId, Vec<InstId>>,
+    active: usize,
+    parked: Vec<Local<'a>>,
+    tracked: Vec<Tracked<'a>>,
+    slot_of: HashMap<GlobalId, usize>,
+    /// `!TrackingIncomingArguments.empty()`.
+    tracks_arguments: bool,
+    /// The order of `TrackedRetVals`.
+    ret_order: Vec<usize>,
+    /// `TrackedGlobals`, and the loads that read each.
+    tracked_globals: HashMap<GlobalId, Lattice>,
+    global_users: HashMap<GlobalId, Users>,
+    /// `InstWorkList`: a stack that holds each instruction once.
+    inst_work: Vec<(u32, InstId)>,
+    /// `BBWorkList`.
+    bb_work: Vec<(u32, BlockId)>,
 }
 
 impl<'a> Solver<'a> {
@@ -158,32 +282,11 @@ impl<'a> Solver<'a> {
         function: &'a Function,
     ) -> Self {
         let Env { context, layout, outer, metadata, id, tracks_returns, predicates } = env;
-        let returns_value = {
-            let Type::Function { returns, .. } = context.types.get(function.ty).clone() else {
-                unreachable!("a function has a function type")
-            };
-            !matches!(context.types.get(returns), Type::Void) && context.types.fields(returns).is_none()
-        };
-        let mut solver = Self {
-            context,
-            layout,
-            outer,
-            metadata,
-            function,
-            predicates,
-            id,
-            bb_executable: IdSet::new(),
-            bb_visited: IdSet::new(),
-            value_state: IdMap::new(),
-            struct_state: HashMap::default(),
-            tracked_return: (returns_value && tracks_returns).then(Lattice::default),
-            inst_work: Vec::new(),
-            in_work: IdSet::new(),
-            current: None,
-            bb_work: Vec::new(),
-            feasible: HashSet::default(),
-            additional_users: IdMap::new(),
-        };
+        let env = ModuleEnv { context, layout, globals: &outer.globals, metadata };
+        let mut solver = Self::with(env, vec![(id, function, predicates)]);
+        if tracks_returns && let Some(id) = id {
+            solver.add_tracked_function(id);
+        }
         if let Some(entry) = function.entry() {
             solver.mark_block_executable(entry);
         }
@@ -191,6 +294,312 @@ impl<'a> Solver<'a> {
             solver.track_value_of_argument(argument, index as u32);
         }
         solver
+    }
+
+    /// `SCCPSolver(DL, GetTLI, Ctx)` with `addPredicateInfo` for each defined
+    /// function, in module order; `None` when there is none. Nothing is
+    /// tracked or executable until the caller says so.
+    pub fn module(
+        env: ModuleEnv<'a>,
+        functions: Vec<(GlobalId, &'a Function, &'a PredicateInfo)>,
+    ) -> Option<Self> {
+        if functions.is_empty() {
+            return None;
+        }
+        Some(Self::with(
+            env,
+            functions.into_iter().map(|(id, function, predicates)| (Some(id), function, predicates)).collect(),
+        ))
+    }
+
+    fn with(
+        env: ModuleEnv<'a>,
+        functions: Vec<(Option<GlobalId>, &'a Function, &'a PredicateInfo)>,
+    ) -> Self {
+        let ModuleEnv { context, layout, globals, metadata } = env;
+        let (_, function, predicates) = functions[0];
+        let mut slot_of = HashMap::default();
+        let mut parked = Vec::with_capacity(functions.len());
+        let mut tracked = Vec::with_capacity(functions.len());
+        for (slot, &(id, function, predicates)) in functions.iter().enumerate() {
+            if let Some(id) = id {
+                slot_of.insert(id, slot);
+            }
+            parked.push(Local::new(function, predicates));
+            tracked.push(Tracked {
+                id,
+                function,
+                ret: None,
+                multiple: None,
+                arguments: false,
+                must_preserve_return: false,
+                users: Users::default(),
+            });
+        }
+        Self {
+            context,
+            layout,
+            globals,
+            metadata,
+            function,
+            predicates,
+            bb_executable: IdSet::new(),
+            bb_visited: IdSet::new(),
+            value_state: IdMap::new(),
+            struct_state: HashMap::default(),
+            in_work: IdSet::new(),
+            current: None,
+            feasible: HashSet::default(),
+            additional_users: IdMap::new(),
+            active: 0,
+            parked,
+            tracked,
+            slot_of,
+            tracks_arguments: false,
+            ret_order: Vec::new(),
+            tracked_globals: HashMap::default(),
+            global_users: HashMap::default(),
+            inst_work: Vec::new(),
+            bb_work: Vec::new(),
+        }
+    }
+
+    // ---- functions -------------------------------------------------------
+
+    /// Swaps the active function's state with `local`.
+    fn exchange(
+        &mut self,
+        local: &mut Local<'a>,
+    ) {
+        use std::mem::swap;
+        swap(&mut self.function, &mut local.function);
+        swap(&mut self.predicates, &mut local.predicates);
+        swap(&mut self.bb_executable, &mut local.bb_executable);
+        swap(&mut self.bb_visited, &mut local.bb_visited);
+        swap(&mut self.value_state, &mut local.value_state);
+        swap(&mut self.struct_state, &mut local.struct_state);
+        swap(&mut self.in_work, &mut local.in_work);
+        swap(&mut self.current, &mut local.current);
+        swap(&mut self.feasible, &mut local.feasible);
+        swap(&mut self.additional_users, &mut local.additional_users);
+    }
+
+    /// Makes the function in `slot` the active one.
+    fn enter(
+        &mut self,
+        slot: usize,
+    ) {
+        if slot == self.active {
+            return;
+        }
+        let mut parked = std::mem::take(&mut self.parked);
+        self.exchange(&mut parked[self.active]);
+        self.exchange(&mut parked[slot]);
+        self.parked = parked;
+        self.active = slot;
+    }
+
+    fn slot(
+        &self,
+        id: GlobalId,
+    ) -> usize {
+        *self.slot_of.get(&id).expect("a function given to the solver")
+    }
+
+    /// The tracked function a call names directly (`getCalledFunction`).
+    fn tracked_callee(
+        &self,
+        call: InstId,
+    ) -> Option<usize> {
+        let global = memory_callee(self.context, self.function, call)?;
+        self.slot_of.get(&global).copied()
+    }
+
+    /// `addTrackedFunction`: an entry, F -> unknown.
+    pub fn add_tracked_function(
+        &mut self,
+        id: GlobalId,
+    ) {
+        let slot = self.slot(id);
+        let Type::Function { returns, .. } = self.context.types.get(self.tracked[slot].function.ty).clone() else {
+            unreachable!("a function has a function type")
+        };
+        let tracked = &mut self.tracked[slot];
+        if let Some(fields) = self.context.types.fields(returns) {
+            tracked.multiple.get_or_insert_with(|| vec![Lattice::default(); fields.len()]);
+        } else if !matches!(self.context.types.get(returns), Type::Void) && tracked.ret.is_none() {
+            tracked.ret = Some(Lattice::default());
+            self.ret_order.push(slot);
+        }
+    }
+
+    /// `addToMustPreserveReturnsInFunctions`.
+    pub fn add_to_must_preserve_returns_in_functions(
+        &mut self,
+        id: GlobalId,
+    ) {
+        let slot = self.slot(id);
+        self.tracked[slot].must_preserve_return = true;
+    }
+
+    /// `mustPreserveReturn`.
+    pub fn must_preserve_return(
+        &self,
+        id: GlobalId,
+    ) -> bool {
+        self.slot_of.get(&id).is_some_and(|&slot| self.tracked[slot].must_preserve_return)
+    }
+
+    /// `addArgumentTrackedFunction`.
+    pub fn add_argument_tracked_function(
+        &mut self,
+        id: GlobalId,
+    ) {
+        let slot = self.slot(id);
+        self.tracked[slot].arguments = true;
+        self.tracks_arguments = true;
+    }
+
+    /// `isArgumentTrackedFunction`.
+    pub fn is_argument_tracked_function(
+        &self,
+        id: GlobalId,
+    ) -> bool {
+        self.slot_of.get(&id).is_some_and(|&slot| self.tracked[slot].arguments)
+    }
+
+    /// `getArgumentTrackedFunctions`.
+    pub fn argument_tracked_functions(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.tracked.iter().filter(|one| one.arguments).filter_map(|one| one.id)
+    }
+
+    /// `trackValueOfGlobalVariable`: only the contents of a scalar global
+    /// with an initializer are tracked.
+    pub fn track_value_of_global_variable(
+        &mut self,
+        id: GlobalId,
+    ) {
+        let globals = self.globals;
+        let Some(GlobalKind::Variable(variable)) = globals.get(id.0 as usize).map(|one| &one.kind) else { return };
+        let Some(initializer) = variable.initializer else { return };
+        if !matches!(
+            self.context.types.get(variable.ty),
+            Type::Int(_) | Type::Float(_) | Type::Pointer(_) | Type::Vector { .. }
+        ) {
+            return;
+        }
+        let constant = LatticeConstant::of(self.context, initializer);
+        self.tracked_globals.entry(id).or_default().mark_constant(&constant, false);
+    }
+
+    /// `markBlockExecutable` of a block of the function `id`.
+    pub fn mark_block_executable_in(
+        &mut self,
+        id: GlobalId,
+        block: BlockId,
+    ) -> bool {
+        let back = self.active;
+        self.enter(self.slot(id));
+        let changed = self.mark_block_executable(block);
+        self.enter(back);
+        changed
+    }
+
+    /// `trackValueOfArgument` of the argument `index` of the function `id`.
+    pub fn track_value_of_argument_in(
+        &mut self,
+        id: GlobalId,
+        index: u32,
+    ) {
+        let back = self.active;
+        self.enter(self.slot(id));
+        let argument = self.function.parameters()[index as usize];
+        self.track_value_of_argument(argument, index);
+        self.enter(back);
+    }
+
+    /// `markOverdefined(V)` of a value of the function `id`.
+    pub fn mark_overdefined_in(
+        &mut self,
+        id: GlobalId,
+        value: ValueId,
+    ) {
+        let back = self.active;
+        self.enter(self.slot(id));
+        self.mark_overdefined(value);
+        self.enter(back);
+    }
+
+    /// `markFunctionUnreachable`.
+    pub fn mark_function_unreachable(
+        &mut self,
+        id: GlobalId,
+    ) {
+        let back = self.active;
+        self.enter(self.slot(id));
+        self.bb_executable = IdSet::new();
+        self.enter(back);
+    }
+
+    /// `isBlockExecutable` of a block of the function `id`.
+    pub fn is_block_executable_in(
+        &mut self,
+        id: GlobalId,
+        block: BlockId,
+    ) -> bool {
+        let back = self.active;
+        self.enter(self.slot(id));
+        let executable = self.is_block_executable(block);
+        self.enter(back);
+        executable
+    }
+
+    /// `getLatticeValueFor` of a value of the function `id`.
+    pub fn lattice_value_in(
+        &mut self,
+        id: GlobalId,
+        value: ValueId,
+    ) -> Lattice {
+        let back = self.active;
+        self.enter(self.slot(id));
+        let lv = self.get_lattice_value_for(value);
+        self.enter(back);
+        lv
+    }
+
+    /// `getTrackedRetVals`.
+    pub fn tracked_ret_vals(&self) -> impl Iterator<Item = (GlobalId, &Lattice)> + '_ {
+        self.ret_order
+            .iter()
+            .filter_map(
+                |&slot| {
+                    let tracked = &self.tracked[slot];
+                    Some((tracked.id?, tracked.ret.as_ref()?))
+                },
+            )
+    }
+
+    /// `getTrackedGlobals`.
+    pub fn tracked_globals(&self) -> &HashMap<GlobalId, Lattice> {
+        &self.tracked_globals
+    }
+
+    /// `getMRVFunctionsTracked`.
+    pub fn mrv_functions_tracked(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.tracked.iter().filter(|one| one.multiple.is_some()).filter_map(|one| one.id)
+    }
+
+    /// `pushUsersToWorkList(F)` or of a global: the instructions in `users`.
+    fn push_users_in(
+        &mut self,
+        users: Vec<(u32, InstId)>,
+    ) {
+        let back = self.active;
+        for (slot, user) in users {
+            self.enter(slot as usize);
+            self.push_to_work_list(user);
+        }
+        self.enter(back);
     }
 
     // ---- types -----------------------------------------------------------
@@ -236,7 +645,7 @@ impl<'a> Solver<'a> {
     fn query(&self) -> Query<'_> {
         Query {
             context: &*self.context,
-            globals: &self.outer.globals,
+            globals: self.globals,
             metadata: self.metadata,
             function: self.function,
             layout: self.layout,
@@ -249,7 +658,7 @@ impl<'a> Solver<'a> {
     }
 
     fn fold_env(&self) -> FoldEnv<'a> {
-        FoldEnv { globals: &self.outer.globals, layout: self.layout }
+        FoldEnv { globals: self.globals, layout: self.layout }
     }
 
     // ---- constants -------------------------------------------------------
@@ -378,7 +787,7 @@ impl<'a> Solver<'a> {
         if !self.bb_executable.insert(block) {
             return false;
         }
-        self.bb_work.push(block);
+        self.bb_work.push((self.active as u32, block));
         true
     }
 
@@ -398,7 +807,7 @@ impl<'a> Solver<'a> {
         }
         // An instruction of a block not visited yet is handled when it is.
         if parent.is_some_and(|block| self.bb_visited.contains(&block)) && self.in_work.insert(inst) {
-            self.inst_work.push(inst);
+            self.inst_work.push((self.active as u32, inst));
         }
     }
 
@@ -744,7 +1153,8 @@ impl<'a> Solver<'a> {
             Opcode::GetElementPtr { .. } => self.visit_get_element_ptr(inst),
             Opcode::Alloca { address_space, .. } => self.visit_alloca(inst, *address_space),
             // `ret`-like and void instructions with nothing to compute.
-            Opcode::Resume | Opcode::Unreachable | Opcode::Store { .. } => {}
+            Opcode::Resume | Opcode::Unreachable => {}
+            Opcode::Store { .. } => self.visit_store(inst),
             Opcode::LandingPad { .. } => self.visit_instruction(inst),
         }
     }
@@ -838,12 +1248,69 @@ impl<'a> Solver<'a> {
     ) {
         let instruction = self.function.instruction(inst);
         let Some(&result) = instruction.operands.first() else { return };
+        let slot = self.active;
         // If we are tracking the return value of this function, merge it in.
-        if self.tracked_return.is_some() && self.struct_fields(self.type_of(result)).is_none() {
-            let state = self.get_value_state(result);
-            if let Some(tracked) = self.tracked_return.as_mut() {
-                tracked.merge_in(&state, MergeOptions::default());
+        if self.tracked[slot].ret.is_some() {
+            if self.struct_fields(self.type_of(result)).is_some() {
+                return;
             }
+            let state = self.get_value_state(result);
+            let tracked = self.tracked[slot].ret.as_mut().expect("a tracked return");
+            if tracked.merge_in(&state, MergeOptions::default()) {
+                self.push_users_in(self.tracked[slot].users.list.clone());
+            }
+            return;
+        }
+        // Handle functions that return multiple values.
+        if let Some(fields) = self.tracked[slot].multiple.as_ref().map(Vec::len) {
+            for index in 0..fields as u32 {
+                let state = self.get_struct_value_state(result, index);
+                let tracked = &mut self.tracked[slot].multiple.as_mut().expect("tracked returns")[index as usize];
+                if tracked.merge_in(&state, MergeOptions::default()) {
+                    self.push_users_in(self.tracked[slot].users.list.clone());
+                }
+            }
+        }
+    }
+
+    /// `visitStoreInst`.
+    fn visit_store(
+        &mut self,
+        inst: InstId,
+    ) {
+        let instruction = self.function.instruction(inst);
+        let (value, pointer) = (instruction.operands[0], instruction.operands[1]);
+        // If this store is of a struct, ignore it (tested second: it is the
+        // dearer test).
+        if self.tracked_globals.is_empty() || self.struct_fields(self.type_of(value)).is_some() {
+            return;
+        }
+        let Some(global) = self.global_operand(pointer) else { return };
+        if !self.tracked_globals.contains_key(&global) {
+            return;
+        }
+        // Get the value we are storing into the global, then merge it.
+        let state = self.get_value_state(value);
+        let tracked = self.tracked_globals.get_mut(&global).expect("a tracked global");
+        if tracked.merge_in(&state, MergeOptions::default().set_check_widen(false)) {
+            let users = self.global_users.get(&global).map(|one| one.list.clone()).unwrap_or_default();
+            self.push_users_in(users);
+        }
+        if self.tracked_globals[&global].is_overdefined() {
+            // No need to keep tracking this!
+            self.tracked_globals.remove(&global);
+        }
+    }
+
+    /// The global `op` is, if it is one.
+    fn global_operand(
+        &self,
+        op: Operand,
+    ) -> Option<GlobalId> {
+        let Operand::Constant(id) = op else { return None };
+        match self.context.get(id).kind {
+            ConstantKind::Global(global) => Some(global),
+            _ => None,
         }
     }
 
@@ -1265,7 +1732,7 @@ impl<'a> Solver<'a> {
         }
         let state1 = self.get_value_state(instruction.operands[0]);
         let state2 = self.get_value_state(instruction.operands[1]);
-        let (context, globals, layout) = (&*self.context, &self.outer.globals, self.layout);
+        let (context, globals, layout) = (&*self.context, self.globals, self.layout);
         let folded = state1.get_compare(pred, &state2, &mut |pred, c1, c2| {
             llrm_mir::valuelattice::fold_compare(context, globals, layout, pred, c1, c2)
         });
@@ -1405,11 +1872,24 @@ impl<'a> Solver<'a> {
                 }
                 return;
             }
+            // Transform load (constant global) into the value loaded: if we
+            // are tracking this global, merge in the known value for it.
+            if !self.tracked_globals.is_empty()
+                && let ConstantKind::Global(global) = self.context.get(ptr).kind
+                && let Some(tracked) = self.tracked_globals.get(&global).cloned()
+            {
+                // Only a load naming the global is one of its users.
+                if self.global_operand(pointer) == Some(global) {
+                    self.global_users.entry(global).or_default().add((self.active as u32, inst));
+                }
+                self.merge_in_value(result, &tracked, max_widen_steps_opts());
+                return;
+            }
             // Transform load from a constant into a constant if possible.
             if let Some(folded) = constantfolding::constant_fold_load_from_const_ptr(
                 self.context,
                 self.layout,
-                &self.outer.globals,
+                self.globals,
                 ptr,
                 instruction.ty,
             ) {
@@ -1429,8 +1909,82 @@ impl<'a> Solver<'a> {
         call: InstId,
     ) {
         self.handle_call_result(call);
-        // `handleCallArguments` only acts on tracked callees, of which a
-        // function pass has none (DEVIATE 2).
+        self.handle_call_arguments(call);
+    }
+
+    /// `handleCallArguments`: a call to a function whose arguments are
+    /// tracked makes its entry executable, and merges the actuals into the
+    /// formals.
+    fn handle_call_arguments(
+        &mut self,
+        call: InstId,
+    ) {
+        if !self.tracks_arguments {
+            return;
+        }
+        let Some(callee) = self.tracked_callee(call).filter(|&slot| self.tracked[slot].arguments) else { return };
+        let caller = self.active;
+        let function = self.tracked[callee].function;
+        let actuals: Vec<Operand> = call_arguments(self.function.instruction(call)).to_vec();
+        // If this argument is byval, and if the function is not readonly,
+        // there will be an implicit copy formed of the input aggregate.
+        let copies = llrm_mir::memory::stated(&function.attrs).writes;
+        let mut incoming = Vec::with_capacity(actuals.len());
+        if callee == caller {
+            if let Some(entry) = function.entry() {
+                self.mark_block_executable(entry);
+            }
+        }
+        for (index, (&formal, &actual)) in function.parameters().iter().zip(&actuals).enumerate() {
+            let value = if is_by_value(function, index) && copies {
+                Incoming::Overdefined
+            } else if let Some(fields) = self.struct_fields(function.value(formal).ty) {
+                Incoming::Fields((0..fields.len() as u32).map(|at| self.get_struct_value_state(actual, at)).collect())
+            } else {
+                Incoming::Value(self.get_value_state(actual))
+            };
+            // A call to itself reads each actual after the formals before it
+            // are merged, as the pin does.
+            if callee == caller {
+                self.merge_into_formal(formal, index as u32, value);
+            } else {
+                incoming.push((formal, index as u32, value));
+            }
+        }
+        if callee == caller {
+            return;
+        }
+        self.enter(callee);
+        if let Some(entry) = function.entry() {
+            self.mark_block_executable(entry);
+        }
+        for (formal, index, value) in incoming {
+            self.merge_into_formal(formal, index, value);
+        }
+        self.enter(caller);
+    }
+
+    /// Propagate information from a call site into the formal `index` of the
+    /// active function.
+    fn merge_into_formal(
+        &mut self,
+        formal: ValueId,
+        index: u32,
+        value: Incoming,
+    ) {
+        match value {
+            Incoming::Overdefined => self.mark_overdefined(formal),
+            Incoming::Fields(fields) => {
+                for (at, call_arg) in fields.iter().enumerate() {
+                    self.merge_in_field(formal, at as u32, call_arg, max_widen_steps_opts());
+                }
+            }
+            Incoming::Value(call_arg) => {
+                let ty = self.function.value(formal).ty;
+                let call_arg = call_arg.intersect(&self.get_arg_attribute_vl(index, ty));
+                self.merge_in_value(formal, &call_arg, max_widen_steps_opts());
+            }
+        }
     }
 
     /// `handlePredicate`: the copy `inst` of `copy_of` is what `copy_of` is
@@ -1538,16 +2092,34 @@ impl<'a> Solver<'a> {
         if callee_is_declaration {
             return self.handle_call_overdefined(call);
         }
-        // The only tracked function is the one being solved.
-        let global = memory_callee(self.context, self.function, call);
-        match (&self.tracked_return, global == self.id && self.id.is_some()) {
-            (Some(tracked), true) => {
-                let tracked = tracked.clone();
-                let result = instruction.result.expect("a call to a function returning a value");
-                self.merge_in_value(result, &tracked, max_widen_steps_opts());
+        let slot = self.tracked_callee(call);
+        let user = (self.active as u32, call);
+        // If this is a single/zero retval case, see if we're tracking the
+        // function.
+        if let Some(fields) = self.struct_fields(instruction.ty) {
+            let Some(slot) = slot.filter(|&slot| self.tracked[slot].multiple.is_some()) else {
+                // Not tracking this callee.
+                return self.handle_call_overdefined(call);
+            };
+            // If we are tracking this callee, propagate the result of the
+            // function into this call site.
+            let result = instruction.result.expect("a call returning a struct");
+            self.tracked[slot].users.add(user);
+            for index in 0..fields.len() as u32 {
+                let tracked = self.tracked[slot].multiple.as_ref().expect("tracked returns")[index as usize].clone();
+                self.merge_in_field(result, index, &tracked, max_widen_steps_opts());
             }
-            _ => self.handle_call_overdefined(call),
+            return;
         }
+        let Some(tracked) = slot.and_then(|slot| self.tracked[slot].ret.clone()) else {
+            // Not tracking this callee.
+            return self.handle_call_overdefined(call);
+        };
+        // If so, propagate the return value of the callee into this call
+        // result.
+        self.tracked[slot.expect("a tracked callee")].users.add(user);
+        let result = instruction.result.expect("a call to a function returning a value");
+        self.merge_in_value(result, &tracked, max_widen_steps_opts());
     }
 
     /// `handleCallOverdefined`.
@@ -1562,9 +2134,8 @@ impl<'a> Solver<'a> {
         if self.struct_fields(instruction.ty).is_some() {
             return self.mark_overdefined(result);
         }
-        let outer: &'a Outer = self.outer;
-        let named =
-            memory_callee(self.context, self.function, call).and_then(|global| outer.globals.get(global.0 as usize));
+        let globals = self.globals;
+        let named = memory_callee(self.context, self.function, call).and_then(|global| globals.get(global.0 as usize));
         let Some((callee, name)) = named
             .and_then(|global| Some((global.function()?, global.name.owned().unwrap_or_default())))
             .filter(|(callee, _)| callee.is_declaration())
@@ -1616,12 +2187,14 @@ impl<'a> Solver<'a> {
     pub fn solve(&mut self) {
         while !self.bb_work.is_empty() || !self.inst_work.is_empty() {
             // Process the instruction work list.
-            while let Some(inst) = self.inst_work.pop() {
+            while let Some((slot, inst)) = self.inst_work.pop() {
+                self.enter(slot as usize);
                 self.in_work.remove(&inst);
                 self.visit(inst);
             }
             // Process the basic block work list.
-            while let Some(block) = self.bb_work.pop() {
+            while let Some((slot, block)) = self.bb_work.pop() {
+                self.enter(slot as usize);
                 self.bb_visited.insert(block);
                 let insts: Vec<InstId> = self.function.iter_block(block).collect();
                 for inst in insts {
@@ -1642,7 +2215,13 @@ impl<'a> Solver<'a> {
         let instruction = self.function.instruction(inst);
         // Look for instructions which produce undef values.
         let Some(result) = instruction.result else { return false };
+        let is_call = matches!(instruction.opcode, Opcode::Call(_) | Opcode::Invoke(_));
         if let Some(fields) = self.struct_fields(instruction.ty) {
+            // Only a few things that can be structs matter for undef. Tracked
+            // calls must never be marked overdefined in resolvedUndefsIn.
+            if is_call && self.tracked_callee(inst).is_some_and(|slot| self.tracked[slot].multiple.is_some()) {
+                return false;
+            }
             // extractvalue and insertvalue don't need to be marked; they are
             // tracked as precisely as their operands.
             if matches!(
@@ -1668,11 +2247,7 @@ impl<'a> Solver<'a> {
         // tracked, or it could be constant-foldable. Because of the way we
         // solve return values, tracked calls must never be marked overdefined
         // in resolvedUndefsIn.
-        if matches!(instruction.opcode, Opcode::Call(_) | Opcode::Invoke(_))
-            && self.tracked_return.is_some()
-            && self.id.is_some()
-            && memory_callee(self.context, self.function, inst) == self.id
-        {
+        if is_call && self.tracked_callee(inst).is_some_and(|slot| self.tracked[slot].ret.is_some()) {
             return false;
         }
         if matches!(instruction.opcode, Opcode::Load { .. }) {
@@ -1689,6 +2264,18 @@ impl<'a> Solver<'a> {
     /// gets no result, so that undef can be lowered to a constant later;
     /// whatever is still unknown now gets one.
     pub fn resolved_undefs_in(&mut self) -> bool {
+        let back = self.active;
+        let mut made_change = false;
+        for slot in 0..self.tracked.len() {
+            self.enter(slot);
+            made_change |= self.resolved_undefs_in_function();
+        }
+        self.enter(back);
+        made_change
+    }
+
+    /// `resolvedUndefsIn(F)` of the active function.
+    fn resolved_undefs_in_function(&mut self) -> bool {
         let mut made_change = false;
         let layout: Vec<BlockId> = self.function.layout().to_vec();
         for block in layout {
@@ -1703,9 +2290,19 @@ impl<'a> Solver<'a> {
         made_change
     }
 
-    /// The tracked return value of the function (`TrackedRetVals[F]`).
+    /// `solveWhileResolvedUndefsIn(M)`.
+    pub fn solve_while_resolved_undefs_in(&mut self) {
+        loop {
+            self.solve();
+            if !self.resolved_undefs_in() {
+                break;
+            }
+        }
+    }
+
+    /// The tracked return value of the active function (`TrackedRetVals[F]`).
     pub fn tracked_return(&self) -> Option<&Lattice> {
-        self.tracked_return.as_ref()
+        self.tracked[self.active].ret.as_ref()
     }
 
     /// `getConstantOrNull(V)`.
@@ -1748,16 +2345,43 @@ impl<'a> Solver<'a> {
         self.context
     }
 
-    /// The results the rewrites read, without the borrow of the function.
+    /// The results the rewrites read, without the borrow of the function: of
+    /// the one function of [`Solver::new`].
     pub fn into_results(self) -> Results {
-        Results {
-            bb_executable: self.bb_executable,
-            value_state: self.value_state,
-            struct_state: self.struct_state,
-            tracked_return: self.tracked_return,
-            feasible: self.feasible,
-        }
+        self.into_module_results().functions.swap_remove(0).1
     }
+
+    /// The results of each function given to [`Solver::module`], in that
+    /// order, and `TrackedGlobals`.
+    pub fn into_module_results(mut self) -> ModuleResults {
+        let mut parked = std::mem::take(&mut self.parked);
+        self.exchange(&mut parked[self.active]);
+        let functions = parked
+            .into_iter()
+            .zip(self.tracked)
+            .map(|(local, tracked)| {
+                let results = Results {
+                    bb_executable: local.bb_executable,
+                    value_state: local.value_state,
+                    struct_state: local.struct_state,
+                    tracked_return: tracked.ret,
+                    tracked_multiple: tracked.multiple,
+                    arguments_tracked: tracked.arguments,
+                    must_preserve_return: tracked.must_preserve_return,
+                    feasible: local.feasible,
+                };
+                (tracked.id, results)
+            })
+            .collect();
+        ModuleResults { functions, tracked_globals: self.tracked_globals }
+    }
+}
+
+/// What a module solve found.
+pub struct ModuleResults {
+    pub functions: Vec<(Option<GlobalId>, Results)>,
+    /// `getTrackedGlobals`.
+    pub tracked_globals: HashMap<GlobalId, Lattice>,
 }
 
 /// What the solve found, for the rewrites.
@@ -1766,6 +2390,9 @@ pub struct Results {
     value_state: IdMap<ValueId, Lattice>,
     struct_state: HashMap<(ValueId, u32), Lattice>,
     tracked_return: Option<Lattice>,
+    tracked_multiple: Option<Vec<Lattice>>,
+    arguments_tracked: bool,
+    must_preserve_return: bool,
     feasible: HashSet<(BlockId, BlockId)>,
 }
 
@@ -1803,6 +2430,28 @@ impl Results {
 
     pub fn tracked_return(&self) -> Option<&Lattice> {
         self.tracked_return.as_ref()
+    }
+
+    /// `TrackedMultipleRetVals` of the function, if in `MRVFunctionsTracked`.
+    pub fn tracked_multiple(&self) -> Option<&[Lattice]> {
+        self.tracked_multiple.as_deref()
+    }
+
+    /// `isStructLatticeConstant`: each tracked field return is a constant.
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SCCPSolver.cpp#L1169>
+    pub fn is_struct_lattice_constant(&self) -> bool {
+        self.tracked_multiple.as_ref().is_some_and(|fields| fields.iter().all(is_replaceable_constant))
+    }
+
+    /// `isArgumentTrackedFunction`.
+    pub fn is_argument_tracked(&self) -> bool {
+        self.arguments_tracked
+    }
+
+    /// `mustPreserveReturn`.
+    pub fn must_preserve_return(&self) -> bool {
+        self.must_preserve_return
     }
 
     /// `getConstantOrNull(V)`.
@@ -1925,6 +2574,24 @@ fn param_has_non_null(
     index: u32,
 ) -> bool {
     function.parameter_attrs.get(index as usize).is_some_and(|attrs| Facts::of(attrs).non_null())
+}
+
+/// `Argument::hasByValAttr()`.
+fn is_by_value(
+    function: &Function,
+    index: usize,
+) -> bool {
+    function
+        .parameter_attrs
+        .get(index)
+        .is_some_and(|attrs| attrs.iter().any(|one| matches!(one, Attribute::Type(name, _) if name == "byval")))
+}
+
+/// What a call passes for one formal of a tracked function.
+enum Incoming {
+    Overdefined,
+    Fields(Vec<Lattice>),
+    Value(Lattice),
 }
 
 /// `CallBase::isReturnNonNull`.

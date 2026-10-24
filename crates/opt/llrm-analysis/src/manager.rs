@@ -300,9 +300,19 @@ impl ModuleAnalysis for Summaries {
         module: &Module,
         analyses: &mut ModuleAnalyses,
     ) -> Self::Result {
-        let globals_held = analyses.get::<GlobalsAA>(module);
-        let globals = Result::as_ref(&*globals_held).map_err(String::clone)?;
-        Ok(crate::attrsummary::summaries(module, &analyses.program().layout, globals.tracked_globals()))
+        // Where GlobalsAA is read cached (`PassManager::require_cached`) and
+        // not yet made, no global is tracked.
+        let globals_held = match analyses.cached::<GlobalsAA>() {
+            Some(held) => Some(held),
+            None if analyses.is_stateless::<GlobalsAA>() => None,
+            None => Some(analyses.get::<GlobalsAA>(module)),
+        };
+        let none = BTreeSet::new();
+        let tracked = match &globals_held {
+            Some(held) => Result::as_ref(&**held).map_err(String::clone)?.tracked_globals(),
+            None => &none,
+        };
+        Ok(crate::attrsummary::summaries(module, &analyses.program().layout, tracked))
     }
 }
 

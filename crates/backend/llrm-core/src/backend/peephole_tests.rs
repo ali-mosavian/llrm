@@ -3723,6 +3723,11 @@ fn lea_alu_body_at(
     body("leaalu", 1, vec![block(1, insns, vec![]).into()])
 }
 
+/// The block through `FixupLEAs`.
+fn fixed_leas(body: &LirBody) -> LirBody {
+    crate::backend::fixupleas::FixupLeas.transform(body.clone()).expect("the pass cannot fail")
+}
+
 fn steps(done: &LirBody) -> Vec<(String, Vec<Loc>)> {
     done.insns()
         .iter()
@@ -3738,13 +3743,13 @@ fn steps(done: &LirBody) -> Vec<(String, Vec<Loc>)> {
 #[test]
 fn test_an_lea_read_once_by_an_add_or_sub_is_two_steps_on_its_destination() {
     for op in ["add", "sub"] {
-        let done = steps(&lea_alus(rules(), &lea_alu_body(op, RegId::EBX, vec![], false)));
+        let done = steps(&fixed_leas(&lea_alu_body(op, RegId::EBX, vec![], false)));
         assert_eq!(done[0], (op.to_owned(), vec![rl(RegId::EBX, 4), rl(RegId::EAX, 4)]), "{done:?}");
         assert_eq!(done[1], (op.to_owned(), vec![rl(RegId::EBX, 4), rl(RegId::EDX, 4)]), "{done:?}");
         assert_eq!(done.len(), 4, "the lea is gone: two steps, the compare and the return: {done:?}");
         // The lea's value (11) is gone with it: a step reading it was "read but
         // never defined" in call_keeps.c.
-        let again = lea_alus(rules(), &lea_alu_body(op, RegId::EBX, vec![], false));
+        let again = fixed_leas(&lea_alu_body(op, RegId::EBX, vec![], false));
         assert!(again.insns().iter().all(|one| !one.uses.contains(&11)), "{op}: a step still reads the lea's value");
         assert!(
             again.insns().iter().any(|one| one.uses.contains(&20) && one.uses.contains(&21)),
@@ -3789,7 +3794,7 @@ fn test_a_word_lea_of_dword_registers_is_not_split_into_word_adds() {
         reads_complete: true,
         ..insn(5, Some((5, 5)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![7])
     });
-    let done = lea_alus(rules(), &body("wordlea", 1, vec![block(1, vec![lea, add, cmp, ret], vec![]).into()]));
+    let done = fixed_leas(&body("wordlea", 1, vec![block(1, vec![lea, add, cmp, ret], vec![]).into()]));
     assert_eq!(names(&done.insns())[0], "lea", "{:?}", steps(&done));
 }
 
@@ -3797,7 +3802,7 @@ fn test_a_word_lea_of_dword_registers_is_not_split_into_word_adds() {
 /// is `(d+d)+x`.
 #[test]
 fn test_the_destination_that_is_an_address_register_is_added_first() {
-    let done = steps(&lea_alus(rules(), &lea_alu_body("add", RegId::EDX, vec![], false)));
+    let done = steps(&fixed_leas(&lea_alu_body("add", RegId::EDX, vec![], false)));
     assert_eq!(done[0].1, vec![rl(RegId::EDX, 4), rl(RegId::EDX, 4)], "{done:?}");
     assert_eq!(done[1].1, vec![rl(RegId::EDX, 4), rl(RegId::EAX, 4)], "{done:?}");
 }
@@ -3829,10 +3834,69 @@ fn test_an_lea_stays_where_the_add_is_not_next_or_its_flags_are_read() {
         vec![],
         vec![],
     ));
-    let read = steps(&lea_alus(rules(), &lea_alu_body("add", RegId::EBX, vec![between], false)));
+    let read = steps(&fixed_leas(&lea_alu_body("add", RegId::EBX, vec![between], false)));
     assert_eq!(read[0].0, "lea", "{read:?}");
-    let flags = steps(&lea_alus(rules(), &lea_alu_body("add", RegId::EBX, vec![], true)));
+    let flags = steps(&fixed_leas(&lea_alu_body("add", RegId::EBX, vec![], true)));
     assert_eq!(flags[0].0, "lea", "{flags:?}");
+}
+
+/// An unrelated `mov r, imm` at `at`.
+fn filler(
+    at: i64,
+    register: RegId,
+) -> Arc<Insn> {
+    Arc::new(insn(
+        at,
+        Some((at, at)),
+        Some(sem(Operation::Move, "mov", vec![rl(register, 4)], vec![im(1, 4)])),
+        vec![],
+        vec![],
+    ))
+}
+
+/// X86FixupLEAs `searchALUInst` looks five instructions ahead: the add three
+/// after the `lea` is found. Only the next instruction was, and the gap kept
+/// the `lea` and its `mov` (`optLEAALU` of the pin is the two adds).
+#[test]
+fn test_an_lea_is_split_where_its_add_is_within_five_instructions() {
+    let between = vec![filler(2, RegId::ESI), filler(2, RegId::EDI), filler(2, RegId::EBP)];
+    let done = steps(&fixed_leas(&lea_alu_body("add", RegId::EBX, between, false)));
+    let names: Vec<&str> = done.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["mov", "mov", "mov", "add", "add", "cmp", "ret"], "{done:?}");
+    assert_eq!(done[3].1, vec![rl(RegId::EBX, 4), rl(RegId::EAX, 4)]);
+}
+
+#[test]
+fn test_an_lea_stays_where_its_add_is_more_than_five_instructions_away() {
+    let between = (0..6)
+        .map(|n| filler(2, [RegId::ESI, RegId::EDI, RegId::EBP, RegId::ESI, RegId::EDI, RegId::EBP][n]))
+        .collect();
+    let done = steps(&fixed_leas(&lea_alu_body("add", RegId::EBX, between, false)));
+    assert_eq!(done[0].0, "lea", "{done:?}");
+}
+
+/// A base register written between the `lea` and the add: the two steps go
+/// where the `lea` was (`InsertPos = I`).
+#[test]
+fn test_the_steps_go_before_a_redefinition_of_the_lea_s_base() {
+    let done = steps(&fixed_leas(&lea_alu_body("add", RegId::EBX, vec![filler(2, RegId::EAX)], false)));
+    let names: Vec<&str> = done.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["add", "add", "mov", "cmp", "ret"], "{done:?}");
+}
+
+/// ... unless the add's destination is named in between: then the pin leaves
+/// the `lea`.
+#[test]
+fn test_an_lea_stays_where_its_base_is_written_and_the_add_s_destination_is_named() {
+    let named = Arc::new(insn(
+        2,
+        Some((2, 2)),
+        Some(sem(Operation::Move, "mov", vec![rl(RegId::ESI, 4)], vec![rl(RegId::EBX, 4)])),
+        vec![],
+        vec![],
+    ));
+    let done = steps(&fixed_leas(&lea_alu_body("add", RegId::EBX, vec![filler(2, RegId::EAX), named], false)));
+    assert_eq!(done[0].0, "lea", "{done:?}");
 }
 
 /// The combiner's canonical `x - 1` is `add x, -1`: INC and DEC were chosen

@@ -617,7 +617,7 @@ pub fn operand(
 /// The registers, scale and displacement of the address an LEA names, whether
 /// LIR spells it as an address or, as the two-address pass makes it, as a
 /// memory operand: (symbol, base, index, scale, offset).
-fn lea_cell(one: &Loc) -> Option<(bool, RegId, RegId, i64, i64)> {
+pub fn lea_cell(one: &Loc) -> Option<(bool, RegId, RegId, i64, i64)> {
     match one {
         Loc::Address(a) => Some((a.addr.is_some(), a.through, a.index_through, a.scale, a.offset)),
         Loc::Mem(m) => Some((m.addr.is_some(), m.through, m.index_through, m.scale, m.offset)),
@@ -656,34 +656,6 @@ pub fn sums_into_cell(
         && base != RegId::None
         && index != RegId::None
         && (base == d.register || index == d.register)
-}
-
-/// `lea t,[x+y]`: scale 1, no displacement, symbol or segment, two registers
-/// that are not `t`, and not both the destination `d` of the add or subtract
-/// that reads `t` (`optLEAALU`, case 3: `d + (x+y)` as two steps on `d`).
-pub fn splits_into(
-    cx: &Cx,
-    one: &Loc,
-    t: Reg,
-    d: Reg,
-) -> bool {
-    let Some((symbol, base, index, scale, offset)) = lea_cell(one) else { return false };
-    // The pin's `optLEAALU` is of the `LEA32r` and `LEA64r`, whose terms are as
-    // wide as the add that reads them; a word `lea` of dword address
-    // registers (real mode) split into word adds on `ecx` and `edi` was no
-    // instruction.
-    let regs = cx.regs();
-    let wide = |register: RegId| regs.bytes(register) == Some(i64::from(d.width));
-    !symbol
-        && wide(base)
-        && wide(index)
-        && scale == 1
-        && offset == 0
-        && base != RegId::None
-        && index != RegId::None
-        && base != t.register
-        && index != t.register
-        && !(base == d.register && index == d.register)
 }
 
 /// `lea d,[d+disp]`: a base and a displacement alone, no symbol or segment
