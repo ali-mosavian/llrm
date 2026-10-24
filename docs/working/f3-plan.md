@@ -21,7 +21,7 @@ clang's `CodeGenFunction::GenerateCode` is 11.73 M inclusive on the same file an
 | # | Change | Pin | Target M | Date |
 |---|---|---|--:|---|
 | 1 | the record stream's numbers are read by a byte loop, not `trim().parse()` (done, ledger -0.83 M; typing `hir::Node`'s fields stays an option) | AST fields are typed | -1.4 | done 2026-10-24 |
-| 2 | `Unit::canonical_type` and `Types::of`/`c` memoized per type id | `CodeGenTypes::TypeCache` | -1.5 | 2026-12-01 |
+| 2 | `Unit::canonical_type` walks the alias chain without a copy (done, ledger -0.24 M); `Types::of`/`c` memoized per type id (open) | `CodeGenTypes::TypeCache` | -1.5 | 2026-12-01 |
 | 3 | the sets and maps by node id become dense vectors | `DenseMap`, `LocalDeclMap` | -2.0 | 2026-12-04 |
 | 4 | `String` clones and growth in `instruction`/`converted` | `CGBuilder` in place | -1.2 | 2026-12-08 |
 

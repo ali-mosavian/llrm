@@ -1886,7 +1886,7 @@ impl<'a, 't> Body<'a, 't> {
                     .bits(value)
                     .ok_or_else(|| Unsupported(format!("{}: a switch on a non-integer", self.name())))?
                     .max(16);
-                let is_signed = signed(&self.unit.canonical_type(&from));
+                let is_signed = signed(self.unit.canonical_type_ref(&from));
                 let wide = self.types.int(bits / 8, is_signed);
                 let value = self.resized(value, is_signed, wide);
                 let default = self.label(&other);
@@ -2021,7 +2021,7 @@ impl<'a, 't> Body<'a, 't> {
         let a = self.value_as(left, type_)?;
         let b = self.value_as(right, type_)?;
         let truth = self.types.of(Shape::Bool, None);
-        if is_float(&self.unit.canonical_type(type_)) {
+        if is_float(self.unit.canonical_type_ref(type_)) {
             let op = match cg_op.as_str() {
                 "O_EQ" => Op::Eq,
                 "O_NE" => Op::Ne,
@@ -2046,7 +2046,7 @@ impl<'a, 't> Body<'a, 't> {
             }
             _ => (a, b),
         };
-        let is_signed = signed(&self.unit.canonical_type(type_));
+        let is_signed = signed(self.unit.canonical_type_ref(type_));
         let op = match (cg_op.as_str(), is_signed) {
             ("O_EQ", _) => Op::Eq,
             ("O_NE", _) => Op::Ne,
@@ -2435,7 +2435,7 @@ impl<'a, 't> Body<'a, 't> {
                     start: number(start)?,
                     width: number(width)?,
                     unit: self.ty(type_)?,
-                    signed: signed(&self.unit.canonical_type(type_)),
+                    signed: signed(self.unit.canonical_type_ref(type_)),
                 }
             }
             _ => return self.refuse(format!("{} {}", tree.call, tree.args.join(" "))),
@@ -2797,7 +2797,7 @@ impl<'a, 't> Body<'a, 't> {
         if self.same(self.type_of(value), ty) {
             return Ok(value);
         }
-        let source_signed = signed(&self.unit.canonical_type(from));
+        let source_signed = signed(self.unit.canonical_type_ref(from));
         Ok(match (self.shape(value), self.types.shape(ty)) {
             (Shape::Int(..) | Shape::Bool, Shape::Int(..)) => self.resized(value, source_signed, ty),
             (Shape::Int(..) | Shape::Bool, Shape::Float(_)) => {
@@ -2867,7 +2867,7 @@ impl<'a, 't> Body<'a, 't> {
         value: i64,
         type_: &str,
     ) -> R<i64> {
-        let floats = is_float(&self.unit.canonical_type(type_));
+        let floats = is_float(self.unit.canonical_type_ref(type_));
         let ty = self.type_of(value);
         Ok(match (cg_op, floats) {
             ("O_UMINUS", true) => self.op(Op::Fneg, ty, vec![value_ref(value)]),
@@ -2899,7 +2899,7 @@ impl<'a, 't> Body<'a, 't> {
         type_: &str,
         bits: i64,
     ) -> bool {
-        !self.unit.wrapv && signed(&self.unit.canonical_type(type_)) && bits >= 16
+        !self.unit.wrapv && signed(self.unit.canonical_type_ref(type_)) && bits >= 16
     }
 
     /// The index of a pointer add scaled to bytes, `index * size`: the
@@ -2915,7 +2915,7 @@ impl<'a, 't> Body<'a, 't> {
     ) -> R<()> {
         let tree = self.unit.nodes[&hir::handle(node)].clone();
         let [op, left, right, type_] = &tree.args[..] else { return Ok(()) };
-        if tree.call != "CGBinary" || op != "O_TIMES" || is_float(&self.unit.canonical_type(type_)) {
+        if tree.call != "CGBinary" || op != "O_TIMES" || is_float(self.unit.canonical_type_ref(type_)) {
             return Ok(());
         }
         let constant = |this: &Self, node: &String| this.unit.nodes[&hir::handle(node)].call == "CGInteger";
@@ -2924,7 +2924,7 @@ impl<'a, 't> Body<'a, 't> {
             (true, false) => (right, left),
             _ => return Ok(()),
         };
-        let unsigned = !signed(&self.unit.canonical_type(&self.type_of_node(index)));
+        let unsigned = !signed(self.unit.canonical_type_ref(&self.type_of_node(index)));
         let (a, b) = (self.value_as(index, type_)?, self.value_as(size, type_)?);
         let ty = self.ty(type_)?;
         let result = self.value(ty);
@@ -3066,7 +3066,7 @@ impl<'a, 't> Body<'a, 't> {
         if self.bits(by).is_none() {
             return self.refuse(format!("a pointer moved by a {from}"));
         }
-        let signed = signed(&self.unit.canonical_type(from));
+        let signed = signed(self.unit.canonical_type_ref(from));
         let operands = match scale {
             Some((index, size)) => {
                 let index = self.resized(index, signed, word);
@@ -3095,7 +3095,7 @@ impl<'a, 't> Body<'a, 't> {
         type_: &str,
     ) -> R<i64> {
         let ty = self.ty(type_)?;
-        if is_float(&self.unit.canonical_type(type_)) {
+        if is_float(self.unit.canonical_type_ref(type_)) {
             let op = match cg_op {
                 "O_PLUS" => Op::Fadd,
                 "O_MINUS" => Op::Fsub,
@@ -3106,7 +3106,7 @@ impl<'a, 't> Body<'a, 't> {
             return Ok(self.op(op, ty, vec![value_ref(a), value_ref(b)]));
         }
         let Some(bits) = self.bits(a) else { return self.refuse(format!("{cg_op} of {type_}")) };
-        let is_signed = signed(&self.unit.canonical_type(type_));
+        let is_signed = signed(self.unit.canonical_type_ref(type_));
         let (op, nowrap) = match cg_op {
             "O_PLUS" => (Op::Add, self.wraps(type_, bits)),
             "O_MINUS" => (Op::Sub, self.wraps(type_, bits)),
@@ -3674,8 +3674,8 @@ impl<'a, 't> Body<'a, 't> {
         if let (Got::Function(_), [(node, type_)]) = (target, call.parms.as_slice())
             && symbol.name == "fabs"
             && symbol.imported()
-            && is_float(&unit.canonical_type(type_))
-            && is_float(&unit.canonical_type(&call.type_))
+            && is_float(unit.canonical_type_ref(type_))
+            && is_float(unit.canonical_type_ref(&call.type_))
         {
             let value = self.value_as(node, type_)?;
             return Ok(Got::Returned(Some(self.unary("O_FABS", value, type_)?)));
