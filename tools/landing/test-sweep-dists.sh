@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Regression: 400 pair_build dists (250 MB each) and their checkouts stood in scratch while the disk filled 36 GB an hour, and sweep-targets.sh pruned only cargo targets.
+# An old dist with pair_build's `ok` marker goes (with its wt-pair checkout); a recent one, one without the marker, and one a live process has as its cwd stay; DRY=1 removes nothing.
+here=$(cd "$(dirname "$0")" && pwd); r=$(mktemp -d); live=
+trap '[ -n "$live" ] && kill "$live" 2>/dev/null; rm -rf "$r"' EXIT
+mkd() { mkdir -p "$r/$1/dist"; echo x > "$r/$1/dist/llrm-c"; head -c 1000 /dev/zero > "$r/$1/dist/big"; [ "$2" = ok ] && echo sums > "$r/$1/ok"; touch -d "${3:-5 hours ago}" "$r/$1/dist/llrm-c"; }
+mkd sbp-old ok; mkdir -p "$r/wt-pair-old"; mkd sbp-new ok "10 minutes ago"; mkd mine-nook no; mkd sbp-live ok
+(cd "$r/sbp-live" && exec sleep 300) & live=$!
+sleep 0.3
+out=$(DRY=1 SWEEP_ROOTS=$r CAP_KB=99999999 "$here/sweep-targets.sh")
+echo "$out" | grep -q "would remove: $r/sbp-old " || { echo "FAIL: a dry run does not list the old dist: $out"; exit 1; }
+[ -e $r/sbp-old/dist/llrm-c ] || { echo "FAIL: a dry run removed the old dist"; exit 1; }
+out=$(SWEEP_ROOTS=$r CAP_KB=99999999 "$here/sweep-targets.sh")
+[ ! -e $r/sbp-old ] && [ ! -e $r/wt-pair-old ] || { echo "FAIL: the old dist or its checkout stayed: $out"; exit 1; }
+[ -e $r/sbp-new/dist/llrm-c ] || { echo "FAIL: a 10-minute-old dist was removed"; exit 1; }
+[ -e $r/mine-nook/dist/llrm-c ] || { echo "FAIL: a dist with no ok marker (its owner's) was removed"; exit 1; }
+[ -e $r/sbp-live/dist/llrm-c ] || { echo "FAIL: a dist a live process works in was removed"; exit 1; }
+echo "$out" | grep -q "kept (in use): $r/sbp-live" || { echo "FAIL: the live dist was not reported: $out"; exit 1; }
+echo PASS

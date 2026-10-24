@@ -8,6 +8,25 @@ for root in $roots; do
   # every cargo target by its marker file, whatever the dir is called (tgt-*, */target, */*/target, *-target): a name glob missed ~/scratch/tgt-backend-two (56 GB)
   for d in $(find "$root" -maxdepth 4 \( -name .rustc_info.json -o -name CACHEDIR.TAG \) -printf '%h\n' 2>/dev/null | sort -u); do
     [ "$(du -sk "$d" 2>/dev/null | cut -f1)" -gt "$cap" ] || continue
+    [ -n "${DRY:-}" ] && { echo "would prune stale hashes of: $d"; continue; }
     out=$("$HERE/prune-target.sh" "$d" --apply) && echo "$d: pruned $out"
+  done
+done
+
+# pair_build dists (`<root>/<name>/{ok,dist/llrm-c}`, 250 MB each, 400 of them by 10-24) and their `wt-pair-*` checkouts: pruned when older than DIST_MIN (default 180) minutes and no
+# process has the directory as its cwd or in its command line. `ok` is pair_build's marker; a dist without it is its owner's and is only listed (`kept: ...`). DRY=1 lists and removes nothing.
+# One snapshot of every process's cwd and command line, taken once: a scan of /proc per candidate took longer than the sweep's cadence.
+procs=$(mktemp); trap 'rm -f "$procs"' EXIT
+{ for p in /proc/[0-9]*; do readlink "$p/cwd"; tr '\0' ' ' < "$p/cmdline"; echo; done; } > "$procs" 2>/dev/null
+in_use() { grep -qF -- "$1" "$procs"; }
+for root in $roots; do
+  for holder in $(find "$root" -maxdepth 3 -path '*/dist/llrm-c' -mmin +"${DIST_MIN:-180}" -printf '%h\n' 2>/dev/null | xargs -r -n1 dirname | sort -u); do
+    [ -e "$holder/ok" ] || { echo "kept (no ok marker): $holder"; continue; }
+    in_use "$holder" && { echo "kept (in use): $holder"; continue; }
+    name=$(basename "$holder"); pair="$(dirname "$holder")/wt-pair-${name#sbp-}"
+    kb=$(du -sk "$holder" 2>/dev/null | cut -f1)
+    if [ -n "${DRY:-}" ]; then echo "would remove: $holder ${kb} KB"; continue; fi
+    rm -rf -- "$holder" && echo "dist: removed $holder ${kb} KB"
+    case "$name" in sbp-*) [ -d "$pair" ] && ! in_use "$pair" && rm -rf -- "$pair" && echo "dist: removed $pair";; esac
   done
 done
