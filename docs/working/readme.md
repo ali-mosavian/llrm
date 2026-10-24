@@ -4,6 +4,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 
 | Doc | Holds |
 |---|---|
+| [f3-plan](f3-plan.md) | F3, `translate::program`: profile by bucket, the pin's counterpart, four rows with dates (2026-10-24) |
 | [frontend-bucket-plan](frontend-bucket-plan.md) | Front end compile-time bucket (qbq-llrm d_faces): attribution and rows F1-F4 (2026-10-23) |
 | [scev-predicates-plan](scev-predicates-plan.md) | SCEV predicates (S3 rank 5, DEVIATE 1): plan (2026-10-23) |
 | [testing](testing.md) | Running the tests |

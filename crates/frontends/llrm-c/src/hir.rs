@@ -7,7 +7,6 @@
 
 use std::fmt;
 
-use llrm_core::support::hash::HashSet;
 use llrm_core::support::hash::IndexMap;
 use llrm_core::support::pyrepr::{self, Repr, Tuple};
 
@@ -424,15 +423,28 @@ impl Unit {
         &self,
         type_: &str,
     ) -> String {
-        let mut type_ = type_.to_owned();
-        let mut seen = HashSet::default();
-        while let Some(next) = self.aliases.get(&type_) {
-            if !seen.insert(type_.clone()) {
+        self.canonical_type_ref(type_).to_owned()
+    }
+
+    /// [`Unit::canonical_type`] without a copy: the alias chain is followed
+    /// over the names the unit and the caller hold, and nothing is allocated
+    /// unless a type has an alias (a `String` and a `HashSet` for every query,
+    /// 0.75 M Ir of `translate::program`). A cycle ends at the first name met
+    /// twice.
+    pub fn canonical_type_ref<'a>(
+        &'a self,
+        type_: &'a str,
+    ) -> &'a str {
+        let mut current = type_;
+        let mut seen: Vec<&str> = Vec::new();
+        while let Some(next) = self.aliases.get(current) {
+            if seen.contains(&current) {
                 break;
             }
-            type_ = next.clone();
+            seen.push(current);
+            current = next.as_str();
         }
-        type_
+        current
     }
 }
 
@@ -443,7 +455,25 @@ pub fn handle(token: &str) -> i64 {
 
 /// `int(text)`.
 pub(crate) fn int(text: &str) -> i64 {
-    text.trim().parse().unwrap_or_else(|_| panic!("ValueError: invalid literal for int() with base 10: {text:?}"))
+    parse_int(text).unwrap_or_else(|| panic!("ValueError: invalid literal for int() with base 10: {text:?}"))
+}
+
+/// `text` as a decimal integer, or none. A plain run of digits, with a leading
+/// `-`, is read by a byte loop: the record stream's numbers are all that, and
+/// `trim().parse()` was 1.48 M Ir of the 16.9 M in `translate::program`
+/// (4.6 K calls).
+pub(crate) fn parse_int(text: &str) -> Option<i64> {
+    let bytes = text.as_bytes();
+    let (negative, digits) = match bytes.split_first() {
+        Some((b'-', rest)) => (true, rest),
+        _ => (false, bytes),
+    };
+    // Eighteen digits cannot overflow an `i64`.
+    if !digits.is_empty() && digits.len() <= 18 && digits.iter().all(u8::is_ascii_digit) {
+        let magnitude = digits.iter().fold(0_i64, |sum, digit| sum * 10 + i64::from(digit - b'0'));
+        return Some(if negative { -magnitude } else { magnitude });
+    }
+    text.trim().parse().ok()
 }
 
 /// `int(text, 16)`.
@@ -733,4 +763,77 @@ fn from_hex(text: &str) -> Vec<u8> {
                 .unwrap_or_else(|_| panic!("ValueError: non-hexadecimal number found in fromhex()"))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod canonical_tests {
+    use super::*;
+
+    /// The reference: what `canonical_type` was.
+    fn was(
+        aliases: &IndexMap<String, String>,
+        type_: &str,
+    ) -> String {
+        let mut type_ = type_.to_owned();
+        let mut seen = std::collections::HashSet::new();
+        while let Some(next) = aliases.get(&type_) {
+            if !seen.insert(type_.clone()) {
+                break;
+            }
+            type_ = next.clone();
+        }
+        type_
+    }
+
+    /// Every query of a type made a `String` and a `HashSet`: the borrowed
+    /// walk answers the same for no alias, a chain, a self-alias and a cycle.
+    #[test]
+    fn test_the_borrowed_alias_walk_agrees_with_the_owning_one() {
+        let pairs = [("A", "B"), ("B", "C"), ("X", "Y"), ("Y", "X"), ("S", "S")];
+        let aliases: IndexMap<String, String> = pairs.iter().map(|(a, b)| ((*a).to_owned(), (*b).to_owned())).collect();
+        let unit = Unit { aliases: aliases.clone(), ..Unit::default() };
+        for name in ["A", "B", "C", "X", "Y", "S", "TY_INT", ""] {
+            assert_eq!(unit.canonical_type_ref(name), was(&aliases, name), "{name}");
+            assert_eq!(unit.canonical_type(name), was(&aliases, name), "{name}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod int_tests {
+    use super::parse_int;
+
+    /// Every handle and number of the record stream went through
+    /// `trim().parse()` (`trim_matches` with `char::is_whitespace`, then the
+    /// generic parser): 1.48 M Ir of `translate::program`. The byte loop gives
+    /// the same answer for what it takes and leaves the rest to that.
+    #[test]
+    fn test_the_byte_loop_agrees_with_trim_and_parse_on_every_spelling() {
+        let spellings = [
+            "0",
+            "7",
+            "42",
+            "-7",
+            "-0",
+            " 12",
+            "12 ",
+            "\t-3\n",
+            "+5",
+            "",
+            "-",
+            "1_000",
+            "12a",
+            "0x10",
+            "123456789012345678",
+            "1234567890123456789",
+            "9223372036854775807",
+            "9223372036854775808",
+            "-9223372036854775808",
+            "-9223372036854775809",
+            "00012",
+        ];
+        for text in spellings {
+            assert_eq!(parse_int(text), text.trim().parse::<i64>().ok(), "{text:?}");
+        }
+    }
 }
