@@ -795,6 +795,11 @@ mod canonical_tests {
         for name in ["A", "B", "C", "X", "Y", "S", "TY_INT", ""] {
             assert_eq!(unit.canonical_type_ref(name), was(&aliases, name), "{name}");
             assert_eq!(unit.canonical_type(name), was(&aliases, name), "{name}");
+        }
+    }
+}
+
+#[cfg(test)]
 mod int_tests {
     use super::parse_int;
 
