@@ -164,6 +164,7 @@ impl Options {
             self.pipeline.aggressive_codegen(),
             self.rounds_float_spills,
             self.spills_extended,
+            self.pipeline.stable_loads,
         )
     }
 }

@@ -60,7 +60,8 @@ fn zext_of(
     operand: Operand,
 ) -> Option<(InstId, Operand)> {
     let def = defined_once(function, operand)?;
-    (function.instruction(def).opcode == Opcode::Cast(CastOp::ZExt)).then(|| (def, function.instruction(def).operands[0]))
+    (function.instruction(def).opcode == Opcode::Cast(CastOp::ZExt))
+        .then(|| (def, function.instruction(def).operands[0]))
 }
 
 /// `m_OneUse(m_Shl(m_OneUse(m_ZExt(m_Value(V))), m_SpecificInt(half)))`: the
@@ -144,11 +145,15 @@ fn split(
     };
     // `m_c_Or`: either operand may be the shifted one.
     let &[first, second] = &function.instruction(or).operands[..] else { return false };
-    let found = [(first, second), (second, first)].into_iter().find_map(|(low, high)| {
-        let (low_zext, low_value) = zext_of(function, low)?;
-        let (shl, high_zext, high_value) = shifted_zext_of(function, context, high, half)?;
-        Some((low_zext, low_value, shl, high_zext, high_value))
-    });
+    let found = [(first, second), (second, first)]
+        .into_iter()
+        .find_map(
+            |(low, high)| {
+                let (low_zext, low_value) = zext_of(function, low)?;
+                let (shl, high_zext, high_value) = shifted_zext_of(function, context, high, half)?;
+                Some((low_zext, low_value, shl, high_zext, high_value))
+            },
+        );
     let Some((low_zext, low_value, shl, high_zext, high_value)) = found else { return false };
     let narrow = |operand: Operand| {
         function
@@ -193,7 +198,8 @@ fn split(
         let widened = if function.operand_type(context, value) == Some(split_ty) {
             value
         } else {
-            let cast = function.create_instruction(Opcode::Cast(CastOp::ZExt), split_ty, vec![value], Flags::default(), None);
+            let cast =
+                function.create_instruction(Opcode::Cast(CastOp::ZExt), split_ty, vec![value], Flags::default(), None);
             function.insert(cast, Position::Before(store)).expect("a position before the store");
             Operand::Value(function.instruction(cast).result.expect("a cast has a value"))
         };

@@ -187,10 +187,10 @@ pub trait Lowering {
         false
     }
 
-    /// `isMultiStoresCheaperThanBitsMerge(EVT, EVT)` (TargetLowering.h): whether
-    /// a store of two values merged into one wider integer is better made two
-    /// stores. The base class says no; x86 says yes for a float and an integer
-    /// (X86ISelLowering.h#L243).
+    /// `isMultiStoresCheaperThanBitsMerge(EVT, EVT)` (TargetLowering.h):
+    /// whether a store of two values merged into one wider integer is
+    /// better made two stores. The base class says no; x86 says yes for a
+    /// float and an integer (X86ISelLowering.h#L243).
     fn is_multi_stores_cheaper_than_bits_merge(
         &self,
         low: Domain,

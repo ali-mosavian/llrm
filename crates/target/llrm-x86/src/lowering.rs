@@ -195,4 +195,17 @@ mod tests {
         assert!(!wide.is_ext_free(Ext::ZExt, 16, 32) && !wide.is_ext_free(Ext::SExt, 32, 64));
         assert!(!wide.is_ext_free(Ext::FpExt, 32, 64));
     }
+
+    /// Two stores beat the merge for a float and an integer, in either order;
+    /// two integers (or a vector) are left merged, as the pin does.
+    #[test]
+    fn test_x86_splits_a_merged_store_of_a_float_and_an_integer_only() {
+        use llrm_mir::lowering::Domain::{Float, Integer, Other};
+        let x86 = X86 { is_64bit: false };
+        assert!(x86.is_multi_stores_cheaper_than_bits_merge(Float, Integer));
+        assert!(x86.is_multi_stores_cheaper_than_bits_merge(Integer, Float));
+        assert!(!x86.is_multi_stores_cheaper_than_bits_merge(Integer, Integer));
+        assert!(!x86.is_multi_stores_cheaper_than_bits_merge(Float, Float));
+        assert!(!x86.is_multi_stores_cheaper_than_bits_merge(Float, Other));
+    }
 }
