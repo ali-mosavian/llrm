@@ -2212,3 +2212,21 @@ fn an_odd_sized_byval_argument_is_stored_in_place_at_m16() {
     selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
+
+const LRINT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(double %x) {
+entry:
+  %r = call i32 @llvm.lrint.i32.f64(double %x)
+  ret i32 %r
+}
+declare i32 @llvm.lrint.i32.f64(double)
+";
+
+/// `lrint` of an x87 value is `fist` into a stack slot and a load (the pin's
+/// `IST_Fp32m64`); `CannotSelect(LRint)` refused 7 qb functions, the ones that
+/// round a float to an integer (`CINT`).
+#[test]
+fn an_lrint_of_a_double_is_a_fist_and_a_load() {
+    let made = names(LRINT).unwrap_or_else(|why| panic!("{why}"));
+    assert!(made.iter().any(|name| name.starts_with("fist")), "{made:?}");
+}
