@@ -27,7 +27,7 @@ old against dag). History of the c corpus (passing / total): 348/464 (run 13), 3
 | `flags overwritten between a producer and a consumer` (a 64-bit add's carry, a select between `add` and `adc`) | 0 / 1 (`x_ll_arith`) | sdag-d: SD30 `BacktrackBottomUp` / `CopyAndMoveSuccessors`, review 2026-12-03 |
 | lea of a symbol and a lone index, `fill_nest` | 1 | sdag-c |
 
-## AM-BT rows, old against dag on one tree (m32 `-O2`, 2026-10-26, parity 183065572)
+## AM-BT rows, old against dag on one tree (m32 `-O2`, 2026-10-25, parity 183065572)
 
 Ratios of the vsgcc harness's clocks/code: old and dag to the pinned clang, and dag to old (above 1.02 = the flip makes it worse). Red = dag more than 2% above clang on the row's metric. 3 closed, 27 red, 14 worse under dag than under old.
 
