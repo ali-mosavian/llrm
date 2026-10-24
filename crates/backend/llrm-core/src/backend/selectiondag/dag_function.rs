@@ -45,7 +45,7 @@ use llrm_target::Target;
 use super::actions::{Features, TargetLowering};
 use super::builder::{BuilderTarget, build_block};
 use super::dag_select::select_block;
-use super::emit::{Callee, EmitBlock, EmitContext, EmitState, FrameMap};
+use super::emit::{Callee, EmitBlock, EmitContext, EmitState, FrameMap, JumpTable};
 use super::function_lowering::FunctionLoweringInfo;
 use super::mvt::MVT;
 use super::opcodes::OpcodeMap;
@@ -267,6 +267,11 @@ fn successors(emitted: &[EmitBlock]) -> Vec<Vec<i64>> {
             let mut out: Vec<i64> = Vec::new();
             for what in block.insns.iter().filter_map(|insn| insn.what.as_ref()) {
                 if let (Operation::Branch | Operation::Jump, Some(target)) = (what.op, what.target) {
+                    if !out.contains(&target) {
+                        out.push(target);
+                    }
+                }
+                for &target in &what.table {
                     if !out.contains(&target) {
                         out.push(target);
                     }
@@ -503,6 +508,13 @@ fn selected_in(
             work.push((id, block, extra));
         }
     }
+    // Each jump table is a data object the pool names; its entries are the
+    // addresses of the blocks.
+    let tables_of_function: Vec<JumpTable> = info
+        .jump_tables
+        .iter()
+        .map(|blocks| JumpTable { id: pool.table(), targets: blocks.iter().map(|block| block_at[block]).collect() })
+        .collect();
     let globals = Globals(module, arch.layout().spaces.roles);
     // What a call destroys: the general registers the convention does not
     // keep for the caller.
@@ -522,6 +534,7 @@ fn selected_in(
         .filter(|r| !kept.contains(r) && !frame_registers.contains(r))
         .collect();
     let ctx = EmitContext {
+        tables: &tables_of_function,
         caller_saved: &caller_saved,
         conventions: &CallConventions { module, arch },
         constants: &PoolCells(std::cell::RefCell::new(pool)),
