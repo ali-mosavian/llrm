@@ -991,3 +991,29 @@ fn test_a_plain_move_of_a_float_to_and_from_a_cell_is_stored_and_loaded() {
     assert!(!names.contains(&"mov"), "{names:?}");
     assert!(names.contains(&"fld") && names.contains(&"fstp"), "{names:?}");
 }
+
+/// `Ahead::order` read every instruction of each block ahead, three deep, for
+/// every block behind it: a chain of n blocks carrying a float was scanned
+/// about 4n times (d_faces: 2 M instructions in 445 calls). Counted, not timed:
+/// a block is scanned once.
+#[test]
+fn test_a_block_ahead_is_scanned_once_however_many_blocks_ask_for_it() {
+    let source = frame_cell(-10, 10);
+    let cell = frame_cell(-20, 10);
+    let original = _body(vec![_load(1, &source), _store(&cell, 1)]);
+    let (load, store) = (original.insns()[0].clone(), original.insns()[1].clone());
+    let moved = |at: i64| Arc::new(Insn { at, covers: Some((at, at + 8)), ..(*store).clone() });
+    let n = 12;
+    let mut body = original.clone();
+    let mut blocks = vec![block(0, vec![load], vec![16]).into()];
+    for k in 1..n {
+        blocks.push(block(16 * k, Vec::new(), vec![16 * (k + 1)]).into());
+    }
+    blocks.push(block(16 * n, vec![moved(16 * n)], vec![]).into());
+    body.blocks = blocks;
+    let before = crate::backend::fpstack::RENAME_SCANS.with(std::cell::Cell::get);
+    crate::backend::fpstack::converted(&body, &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16))
+        .expect("a chain of blocks carrying a float");
+    let scans = crate::backend::fpstack::RENAME_SCANS.with(std::cell::Cell::get) - before;
+    assert!(scans <= n as usize + 1, "{scans} scans for {} blocks", n + 1);
+}
