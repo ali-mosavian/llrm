@@ -152,7 +152,15 @@ impl Checker {
                         array: None,
                     });
                 }
-                self.err(*span, "Syntax error");
+                let (headline, help) = if matches!(**base, Expr::Index { .. }) {
+                    ("`{text}` has two index lists in a row", "an element takes one list of subscripts, as in `name(1, 2)`")
+                } else {
+                    (
+                        "`{text}` indexes something that is not an array",
+                        "only an array, or an array field of a record, can be followed by `(...)`; `name.field` selects a field",
+                    )
+                };
+                self.err_because(*span, "Syntax error", Reason::headline(headline).help(help));
                 None
             }
             Expr::Field { base, name, span } => self.field(expr, base, name, *span),
@@ -367,7 +375,15 @@ impl Checker {
             // `CONST x = 1` then `x$`: the suffix names a string where the
             // constant is a number
             if Ty::of_suffix(name).is_some_and(|suffix| suffix.string() != constant.ty.string()) {
-                self.err(span, "Type mismatch");
+                let headline = format!(
+                    "`{{text}}` has a type character that does not match the CONST of that name, which is {}",
+                    constant.ty.label()
+                );
+                self.err_because(
+                    span,
+                    "Type mismatch",
+                    Reason::headline(headline).help("write the name without the type character"),
+                );
                 return None;
             }
             return Some(constant.clone());

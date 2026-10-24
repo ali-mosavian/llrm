@@ -245,7 +245,16 @@ impl Checker {
                 self.declaring = false;
                 if let Some(typed) = &typed {
                     if !typed.variable || !typed.ty.numeric() {
-                        self.err(counter.span(), "Type mismatch");
+                        let headline = if typed.variable {
+                            format!("a FOR counter must be a number, but `{{text}}` is {}", typed.ty.label())
+                        } else {
+                            "a FOR counter must be a variable, but `{text}` is not".to_owned()
+                        };
+                        self.err_because(
+                            counter.span(),
+                            "Type mismatch",
+                            Reason::headline(headline).help("use a numeric variable such as `i%`"),
+                        );
                     }
                 }
                 // an INTEGER counter takes constants of 16 bits
@@ -520,7 +529,16 @@ impl Checker {
                     let Some(case) = case else { continue };
                     if let Some(selector) = &typed {
                         if selector.ty.string() != case.ty.string() || matches!(case.ty, Ty::Record(_)) {
-                            self.err(value.span(), "Type mismatch");
+                            let headline = format!(
+                                "the CASE value `{{text}}` is {}, but the SELECT CASE expression is {}",
+                                case.ty.label(),
+                                selector.ty.label()
+                            );
+                            self.err_because(
+                                value.span(),
+                                "Type mismatch",
+                                Reason::headline(headline).help("CASE values must be the same kind (number or string) as the expression"),
+                            );
                         } else if relation && selector.ty.string() {
                             // CASE IS < "a" is fine
                         }
@@ -566,7 +584,12 @@ impl Checker {
                 }
                 if let Some(typed) = value_typed {
                     if !typed.ty.string() {
-                        self.err(value.span(), "Type mismatch");
+                        let headline = format!("`{{text}}` is {}, but a string is needed here", typed.ty.label());
+                        self.err_because(
+                            value.span(),
+                            "Type mismatch",
+                            Reason::headline(headline).help("convert the number with STR$(...)"),
+                        );
                     }
                 }
                 return;
@@ -638,7 +661,12 @@ impl Checker {
         span: Span,
     ) {
         if value.array.is_some() {
-            self.err(span, "Syntax error");
+            self.err_because(
+                span,
+                "Syntax error",
+                Reason::headline("`{text}` is a whole array, but a single value is needed here")
+                    .help("write an index, as in `name(1)`"),
+            );
             return;
         }
         let ok = match (target, &value.ty) {
