@@ -3,13 +3,59 @@
 
 use super::*;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Diagnostic {
     pub span: Span,
     pub message: String,
     /// The name the error is about, when it is one word of a longer span (a
     /// label in a GOTO).
     pub subject: Option<String>,
+    /// A sentence in place of the usual one for this error, where the checker
+    /// knows more (what the two sides were, which call).
+    pub headline: Option<String>,
+    /// What to do about it, in words, ahead of the usual advice.
+    pub detail: Option<String>,
+    /// Another place in the source the message talks about (`{other}`).
+    pub related: Option<Span>,
+}
+
+/// What the checker knows about an error beyond its BC name.
+#[derive(Default)]
+pub struct Reason {
+    pub headline: Option<String>,
+    pub help: Option<String>,
+    pub subject: Option<String>,
+    pub related: Option<Span>,
+}
+
+impl Reason {
+    pub fn headline(text: impl Into<String>) -> Self {
+        Self { headline: Some(text.into()), ..Self::default() }
+    }
+
+    pub fn help(
+        mut self,
+        text: impl Into<String>,
+    ) -> Self {
+        self.help = Some(text.into());
+        self
+    }
+
+    pub fn about(
+        mut self,
+        word: &str,
+    ) -> Self {
+        self.subject = Some(word.to_owned());
+        self
+    }
+
+    pub fn related(
+        mut self,
+        span: Span,
+    ) -> Self {
+        self.related = Some(span);
+        self
+    }
 }
 
 /// A BASIC type.
@@ -35,6 +81,16 @@ impl Ty {
             self,
             Ty::Int | Ty::Long | Ty::Currency | Ty::Single | Ty::Double | Ty::Variant
         )
+    }
+
+    /// What a value of this type is, for a message: "a number", "a string".
+    pub(super) fn describe(&self) -> &'static str {
+        match self {
+            Ty::Str(_) => "a string",
+            Ty::Record(_) => "a record",
+            Ty::Variant => "a form property",
+            _ => "a number",
+        }
     }
 
     pub(super) fn string(&self) -> bool {

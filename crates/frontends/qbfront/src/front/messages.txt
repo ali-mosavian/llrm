@@ -41,7 +41,8 @@ Left parenthesis missing|`{name}` needs a `(` after it|write the arguments in pa
 Lower bound exceeds upper bound|`{text}` has a lower bound greater than its upper bound|swap them, or fix the numbers
 Math overflow|`{text}` is a constant outside the range this place allows (an integer argument must be -32768 to 32767)|use a smaller value, or pass a LONG variable where the function allows it
 Name of subprogram illegal|`{text}` cannot be the name of a SUB or FUNCTION (a reserved word, a type character, or a name already used otherwise)|rename it
-NEXT without FOR|this NEXT has no FOR loop open|remove it, or add the FOR
+NEXT without FOR|`NEXT {text}` does not close an open FOR loop: either no FOR is open here, or the open loop counts with a different variable than `{text}`|make the variable match the FOR, or remove the NEXT
+NEXT without FOR /end|this NEXT has no FOR loop open|remove it, or add the FOR above it
 Overflow in numeric constant|`{text}` is too large for its type|use a smaller number, or a LONG or double suffix
 Parameter type mismatch|`{name}` is not the type the procedure's parameter was declared with|pass a variable of exactly that type; BC does not convert variables passed by reference
 Record variable required|`{name}` is not a record variable|use a variable declared AS a TYPE

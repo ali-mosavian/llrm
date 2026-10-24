@@ -41,7 +41,21 @@ impl Checker {
                         | Binary::GreaterEqual
                 );
                 if comparison || (*op == Binary::Add && l.ty.string() && r.ty.string()) {
-                    self.err(*span, "Syntax error");
+                    let (headline, help) = match op {
+                        Binary::Power => (
+                            "`{text}` cannot be a CONST value: BC does not allow `^` there",
+                            "multiply it out, or write the value as a number",
+                        ),
+                        Binary::Add => (
+                            "`{text}` cannot be a CONST value: BC does not allow `+` on strings there",
+                            "write the whole string as one literal",
+                        ),
+                        _ => (
+                            "`{text}` cannot be a CONST value: BC does not allow a comparison there",
+                            "a CONST takes arithmetic and AND, OR, XOR, NOT",
+                        ),
+                    };
+                    self.err_because(*span, "Syntax error", Reason::headline(headline).help(help));
                     return None;
                 }
                 self.expr(expr)
@@ -57,7 +71,16 @@ impl Checker {
                     _ => false,
                 };
                 if !allowed {
-                    self.err(*span, "Syntax error");
+                    self.err_because(
+                        *span,
+                        "Syntax error",
+                        Reason::headline("`{text}` cannot be a CONST value: a function call is not allowed there").help(
+                            format!(
+                                "only CINT, CLNG, CDBL{} and LEN of a number can appear in a CONST",
+                                if self.dialect == Dialect::VbDos { "" } else { ", CSNG" }
+                            ),
+                        ),
+                    );
                     return None;
                 }
                 let argument = self.constant_expr(&arguments[0])?;

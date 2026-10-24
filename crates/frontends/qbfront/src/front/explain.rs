@@ -27,6 +27,18 @@ fn table() -> &'static HashMap<&'static str, (&'static str, &'static str)> {
     })
 }
 
+/// How a statement is written, by its first word.
+fn forms() -> &'static HashMap<&'static str, &'static str> {
+    static CELL: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
+    CELL.get_or_init(|| {
+        include_str!("syntax_forms.txt")
+            .lines()
+            .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
+            .filter_map(|line| line.split_once('|'))
+            .collect()
+    })
+}
+
 /// A token the parser wanted, as a person reads it.
 pub fn describe(wanted: Kw) -> String {
     match wanted {
@@ -72,6 +84,8 @@ struct Where {
     text: String,
     statement: String,
     at_end: bool,
+    /// The source on this line before the error, without trailing blanks.
+    before: String,
 }
 
 fn locate(
@@ -101,7 +115,13 @@ fn locate(
         .take_while(|c| c.is_ascii_alphabetic())
         .collect();
     let statement = if word.is_empty() || word.len() < 2 { String::new() } else { word.to_ascii_uppercase() };
-    Where { text: text.trim().to_owned(), statement, at_end: span.start >= chars.len() || text.trim().is_empty() }
+    let before: String = chars[..span.start.min(chars.len())].iter().collect();
+    Where {
+        text: text.trim().to_owned(),
+        statement,
+        at_end: span.start >= chars.len() || text.trim().is_empty(),
+        before: before.trim_end().to_owned(),
+    }
 }
 
 /// The span of the word `subject` at or after the start of `span`: the span
@@ -128,6 +148,7 @@ fn narrowed(
 fn fill(
     template: &str,
     place: &Where,
+    other: &str,
 ) -> String {
     let statement = if place.statement.is_empty() { "this".to_owned() } else { place.statement.clone() };
     let name: String = place
@@ -135,7 +156,11 @@ fn fill(
         .chars()
         .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '$' | '%' | '&' | '!' | '#' | '@'))
         .collect();
-    template.replace("{text}", &place.text).replace("{name}", &name).replace("{statement}", &statement)
+    template
+        .replace("{text}", &place.text)
+        .replace("{name}", &name)
+        .replace("{statement}", &statement)
+        .replace("{other}", other)
 }
 
 /// A syntax error in words: what was found, in which statement, and what was
@@ -144,17 +169,29 @@ fn syntax(
     error: &ParseError,
     place: &Where,
 ) -> (String, String) {
-    let statement =
-        if place.statement.is_empty() { "statement".to_owned() } else { format!("{} statement", place.statement) };
+    // an error at the statement's own first word names that word
+    let first = place.statement.is_empty() && place.text.chars().all(|c| c.is_ascii_alphabetic()) && !place.text.is_empty();
+    let own = if first { place.text.to_ascii_uppercase() } else { place.statement.clone() };
+    let statement = if own.is_empty() { "statement".to_owned() } else { format!("{own} statement") };
     let found = if place.at_end { "the end of the line".to_owned() } else { format!("`{}`", place.text) };
     let summary = match &error.expected {
         Some(wanted) => format!("expected {wanted} in the {statement}, but found {found}"),
-        None if place.at_end => format!("the {statement} is incomplete: the line ends where more is needed"),
+        None if place.at_end => match place.before.chars().last() {
+            Some(c @ ('+' | '-' | '*' | '/' | '\\' | '^' | '=' | '<' | '>' | ',' | ';')) => {
+                format!("the {statement} ends after `{c}`, which needs a value after it")
+            }
+            Some('(') => format!("the {statement} ends after `(`, which needs an argument and a closing `)`"),
+            _ => format!("the {statement} is incomplete: the line ends where more is needed"),
+        },
+        None if first => format!("{found} cannot be used here: it does not start a valid statement at this point"),
         None => format!("{found} does not fit the {statement} here"),
     };
-    let help =
-        "check the statement against the manual for this dialect; the mark shows where BC stopped understanding it";
-    (summary, help.to_owned())
+    let help = match forms().get(own.as_str()) {
+        Some(form) => format!("{own} is written: {form}"),
+        None => "check the statement against the manual for this dialect; the mark shows where BC stopped understanding it"
+            .to_owned(),
+    };
+    (summary, help)
 }
 
 /// `error` worded for the person who wrote `source`; its BC name stays in
@@ -167,12 +204,29 @@ pub fn explain(
         error.span = narrowed(source, error.span, &subject);
     }
     let place = locate(source, error.span);
-    let (summary, help) = match table().get(error.code.as_str()) {
-        Some((summary, help)) => (fill(summary, &place), fill(help, &place)),
+    // a variant of the wording for an error at the end of the line (`NEXT`
+    // with no variable)
+    let variant = format!("{} /end", error.code);
+    let entry = place.at_end.then(|| table().get(variant.as_str())).flatten().or_else(|| table().get(error.code.as_str()));
+    let other = error.related.map(|span| locate(source, span).text).unwrap_or_default();
+    let (summary, help) = match entry {
+        Some((summary, help)) => (fill(summary, &place, &other), fill(help, &place, &other)),
         None if error.code == "Syntax error" => syntax(&error, &place),
         None => (format!("{} (at `{}`)", error.code, place.text), String::new()),
     };
+    // the checker's own sentence, where it knew more than the code says; a
+    // syntax error then needs no form of the statement as well
+    let (summary, help) = match error.headline.take() {
+        Some(headline) if table().get(error.code.as_str()).is_none() => (fill(&headline, &place, &other), String::new()),
+        Some(headline) => (fill(&headline, &place, &other), if error.detail.is_some() { String::new() } else { help }),
+        None => (summary, help),
+    };
     error.message = format!("{summary} [BC: {}]", error.code);
+    let help = match error.detail.take().map(|detail| fill(&detail, &place, &other)) {
+        Some(detail) if help.is_empty() => detail,
+        Some(detail) => format!("{detail}\n{help}"),
+        None => help,
+    };
     if !help.is_empty() {
         error.help = Some(help);
     }

@@ -205,13 +205,20 @@ impl Checker {
                 if !matches!(counter, Expr::Name(..)) {
                     self.err(counter.span(), "FOR index variable illegal");
                 }
-                if let (Expr::Name(counter, _), Some((next, span))) = (counter, next_variable) {
+                if let (Expr::Name(counter, counter_span), Some((next, span))) = (counter, next_variable) {
+                    let counter_span = *counter_span;
                     // `i` and `i%` are two variables unless DEFINT makes them
                     // one
                     let same = stem(counter).eq_ignore_ascii_case(stem(next))
                         && self.default_type(counter).plain() == self.default_type(next).plain();
                     if !same {
-                        self.err(*span, "NEXT without FOR");
+                        self.err_because(
+                            *span,
+                            "NEXT without FOR",
+                            Reason::headline("this NEXT names `{text}`, but the FOR loop it closes counts with `{other}`")
+                                .help("write the same variable after NEXT as after FOR, or leave it out")
+                                .related(counter_span),
+                        );
                     }
                 }
                 self.declaring = true;
