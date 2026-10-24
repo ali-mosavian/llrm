@@ -2,7 +2,7 @@
 //! parser, and report where they disagree.
 
 use qbfront::Dialect;
-use qbfront::generated_parser::lex;
+use qbfront::front::scan::scan as lex;
 
 const DIALECTS: [Dialect; 3] = [Dialect::QuickBasic45, Dialect::VbDos, Dialect::Quickr];
 

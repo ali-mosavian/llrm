@@ -3,7 +3,7 @@
 use lalrspike::parse_qb;
 use lalrspike::qb_tree::Tree;
 use qbfront::Dialect;
-use qbfront::generated_parser::lex;
+use qbfront::front::scan::scan as lex;
 
 fn parse(source: &str) -> Result<Tree, String> {
     let tokens = lex(&format!("{source}\n"), Dialect::VbDos).map_err(|error| error.message)?;

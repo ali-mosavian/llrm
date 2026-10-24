@@ -169,7 +169,7 @@ macro_rules! sized_conversion {
 
 pub static INTRINSICS: &[Intrinsic] = &[
     Intrinsic {
-        name: crate::generated_parser::FORMAT_FIELD,
+        name: crate::front::quickr::FORMAT_FIELD,
         min_arity: 1,
         max_arity: 2,
         result: ResultClass::String,

@@ -1,5 +1,5 @@
 //! A logos-generated QB lexer producing the token stream of
-//! `crate::generated_parser::lex`.
+//! `crate::front::scan::scan`.
 //!
 //! logos dispatches on the first byte and recognises the reserved words with a
 //! generated DFA (`qb_words.rs`); the callbacks keep the old lexer's rules for
@@ -14,8 +14,7 @@ use logos::{FilterResult, Lexer, Logos};
 use crate::front::kw::Kw;
 use crate::front::tokens::{terminal, Tok};
 use crate::front::words::Word;
-use crate::generated_parser::tables;
-use crate::generated_parser::{Token, TokenKind};
+use crate::front::token::{Token, TokenKind};
 use crate::syntax::{Binary, Span};
 use crate::{Dialect, LexError};
 
@@ -56,44 +55,14 @@ enum Raw {
     Kind(TokenKind),
 }
 
-/// The reserved id of each punctuation spelling, and of each `Word`.
-struct Ids {
-    punct: [u16; 128],
-    words: Vec<u16>,
-}
-
-fn ids() -> &'static Ids {
-    static IDS: OnceLock<Ids> = OnceLock::new();
-    IDS.get_or_init(|| {
-        let id = |spelling: &str| {
-            tables::TOKENS
-                .iter()
-                .find_map(|(_, candidate, id, _)| candidate.eq_ignore_ascii_case(spelling).then_some(*id))
-        };
-        let mut punct = [0; 128];
-        for byte in "<>()?+-*/\\^=,#;:\n".bytes() {
-            punct[usize::from(byte)] = id(&char::from(byte).to_string()).expect("punctuation is in qbasbnf.prs");
-        }
-        let words = crate::front::words::NAMES
-            .iter()
-            .map(|name| {
-                let spelling =
-                    tables::TOKENS.iter().find(|(candidate, ..)| candidate == name).expect("word is a token").1;
-                id(spelling).expect("word")
-            })
-            .collect();
-        Ids { punct, words }
-    })
-}
-
 fn punct(byte: u8) -> TokenKind {
-    TokenKind::Reserved(ids().punct[usize::from(byte)])
+    TokenKind::Reserved(crate::front::kw::punctuation(byte))
 }
 
-fn reserved(name: &str) -> Option<u16> {
+fn reserved(name: &str) -> Option<Kw> {
     let mut lexer = Word::lexer(name);
     match lexer.next() {
-        Some(Ok(word)) if lexer.span().end == name.len() => Some(ids().words[word as usize]),
+        Some(Ok(word)) if lexer.span().end == name.len() => Some(crate::front::words::kw_of(word)),
         _ => None,
     }
 }
@@ -168,7 +137,7 @@ fn extension_keyword(bare: &str) -> Option<&'static str> {
     let upper = buffer.get_mut(..bare.len())?;
     upper.copy_from_slice(bare.as_bytes());
     upper.make_ascii_uppercase();
-    tables::extension_keyword(std::str::from_utf8(upper).ok()?)
+    crate::front::kw::extension_keyword(std::str::from_utf8(upper).ok()?)
 }
 
 fn string(lex: &mut Lex) -> Result<TokenKind, ()> {
@@ -460,9 +429,9 @@ pub fn lex_with(
     suffixed_names: bool,
 ) -> Result<Vec<Token>, LexError> {
     if dialect.format_strings() {
-        return crate::generated_parser::lex(source, dialect);
+        return crate::front::scan::scan(source, dialect);
     }
-    let newline = TokenKind::Reserved(ids().punct[usize::from(b'\n')]);
+    let newline = TokenKind::Reserved(Kw::NewLine);
     let mut out = Vec::with_capacity(source.len() / 4);
     for (line_index, line) in logical_lines(source, dialect) {
         let mut lexer = Raw::lexer_with_extras(
@@ -600,7 +569,7 @@ impl<'s> Stream<'s> {
                     let fn_word = matches!(kind, TokenKind::Identifier(_))
                         && self.line_text[range.clone()].eq_ignore_ascii_case("FN");
                     let tok = match &kind {
-                        TokenKind::Reserved(id) if crate::front::tokens::suffixed(*id, range.len()) => Tok::Ident,
+                        TokenKind::Reserved(word) if crate::front::tokens::suffixed(*word, range.len()) => Tok::Ident,
                         kind => terminal(kind),
                     };
                     return Some(Ok(Piece { tok, fn_word, span }));

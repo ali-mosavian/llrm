@@ -43,15 +43,15 @@ fn qb(paths: &[String]) {
     let sources: Vec<String> = paths.iter().filter(|p| p.to_lowercase().ends_with(".bas")).filter_map(|p| std::fs::read(p).ok()).map(|b| lalrspike::dos_source(&b)).collect();
     let both: Vec<String> = sources
         .into_iter()
-        .filter(|s| qbfront::parse(s, dialect).is_ok() && qbfront::generated_parser::lex(s, dialect).is_ok_and(|t| lalrspike::parse_qb(&t).is_ok()))
+        .filter(|s| qbfront::parse(s, dialect).is_ok() && qbfront::front::scan::scan(s, dialect).is_ok_and(|t| lalrspike::parse_qb(&t).is_ok()))
         .collect();
     let bytes = both.iter().map(String::len).sum();
-    let lex = time(ROUNDS, || both.iter().map(|s| qbfront::generated_parser::lex(s, dialect).unwrap().len()).sum::<usize>());
+    let lex = time(ROUNDS, || both.iter().map(|s| qbfront::front::scan::scan(s, dialect).unwrap().len()).sum::<usize>());
     let logos = time(ROUNDS, || both.iter().map(|s| lalrspike::qb_lexer::lex(s, dialect).unwrap().len()).sum::<usize>());
     let old = time(ROUNDS, || both.iter().filter(|s| qbfront::parse(s, dialect).is_ok()).count());
-    let tokens: Vec<_> = both.iter().map(|s| qbfront::generated_parser::lex(s, dialect).unwrap()).collect();
+    let tokens: Vec<_> = both.iter().map(|s| qbfront::front::scan::scan(s, dialect).unwrap()).collect();
     let lalr = time(ROUNDS, || tokens.iter().filter(|t| lalrspike::parse_qb(t).is_ok()).count());
-    let vector = time(ROUNDS, || both.iter().filter(|s| lalrspike::parse_qb(&qbfront::generated_parser::lex(s, dialect).unwrap()).is_ok()).count());
+    let vector = time(ROUNDS, || both.iter().filter(|s| lalrspike::parse_qb(&qbfront::front::scan::scan(s, dialect).unwrap()).is_ok()).count());
     let mut spans = Vec::new();
     let streamed = time(ROUNDS, || {
         both.iter().filter(|s| {
