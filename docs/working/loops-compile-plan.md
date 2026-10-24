@@ -39,7 +39,7 @@ Inclusive M and call edges of each loop pass's entry, ours on the dist tip a2067
 |---|---|---|---|---|---|---|
 | LICM | 48.0 | 53 | 19.9 | 124 | +28.1 | 35.1 is the MemorySSA build (S2/S3, L1); the pin's MemorySSA is outside its LICM figure (3.0 M for the compile) |
 | IndVars | 45.0 | 19 | 29.6 | 41 | +15.4 | SCEV per-op cost, spread (L2b, L2c) |
-| LCSSA | 7.0 | 58 | 1.0 | 45 | +6.0 | 58 runs against 45 and 121 K Ir a run against 22 K: per run 5.6x (L3) |
+| LCSSA | 7.0 | 58 | 1.0 | 45 | +6.0 | FLAT (funcattrs-port, 10-24): 44 pin-shaped slots + 14 stage runs, the pin also runs it unconditionally, 11 of 58 change anything; per run 103 K = `outside_reads` 37 + exits 21 + `opened_with` 17 + Shape 18; skipping the llrm-only `opened_with` gains 1.1 M (0.1%), object identical: dropped |
 | LSR | 17.1 | 7 | 12.8 | - | +4.3 | formula generation (L7) |
 | LoopLoadElim | 7.5 | 11 | 3.1 | 6 | +4.4 | trip counts and access analysis (L4) |
 | Unroll | 10.5 | 11 | 7.4 | 43 | +3.1 | `get_backedge_taken_info`, cost estimator |
