@@ -356,6 +356,30 @@ fn every_reference_made_when_asked_is_the_one_made_up_front() {
     }
 }
 
+/// Every load and store of the corpus has a reference, so the kind of an access
+/// (a use or a def) follows from its opcode.
+#[test]
+fn every_load_and_store_of_the_corpus_has_a_reference() {
+    for (name, module) in corpus() {
+        let layout = layout(&module);
+        for (_, global, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
+            let unit = crate::testing::with_manager_registers(Unit::of(&module, &layout, function));
+            for (_, inst) in function.walk() {
+                if matches!(
+                    function.instruction(inst).opcode,
+                    Opcode::Load { .. } | Opcode::Store { .. }
+                ) {
+                    assert!(
+                        unit.reference(inst).is_some(),
+                        "{name}/@{} {inst:?}",
+                        global.name.as_deref().unwrap_or("")
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Each access asked of its own alloca's uses whether the address is exposed,
 /// and the answer was never kept: `mir decide` and `gvn` grew with slope
 /// 2.5–2.9 in a function's blocks, `exposes` 21% of the compile of 300 (#557).
