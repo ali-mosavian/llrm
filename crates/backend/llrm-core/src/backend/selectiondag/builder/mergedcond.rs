@@ -585,4 +585,32 @@ mod tests {
         let eq = "  %y = icmp eq i32 %c, %d\n  %z = icmp eq i32 %a, %b\n  %o = or i1 %z, %y";
         assert_eq!(split_blocks(eq, true), 1);
     }
+
+    /// Queens' test, `d == 0 || d == row - r || d == r - row`, reaches the
+    /// builder as a chain of `select c, true, x` (`m_LogicalOr` takes it), and
+    /// a `select c, x, false` is `m_LogicalAnd`: a chain whose right sides cost
+    /// more than the threshold is a chain of branches, two blocks past the
+    /// first, not `setcc`s and `or`s. (Queens' own chain splits by the
+    /// profile: its early exit is hot.)
+    #[test]
+    fn a_chain_of_selects_is_a_chain_of_branches() {
+        let or = "  %l1 = load i32, ptr %p
+  %m1 = mul i32 %l1, %d
+  %e1 = icmp sgt i32 %m1, 7
+  %c0 = select i1 %x, i1 true, i1 %e1
+  %l2 = load i32, ptr %p
+  %m2 = mul i32 %l2, %c
+  %e2 = icmp sgt i32 %m2, 9
+  %o = select i1 %c0, i1 true, i1 %e2";
+        assert_eq!(split_blocks(or, true), 2);
+        let and = "  %l1 = load i32, ptr %p
+  %m1 = mul i32 %l1, %d
+  %e1 = icmp sgt i32 %m1, 7
+  %c0 = select i1 %x, i1 %e1, i1 false
+  %l2 = load i32, ptr %p
+  %m2 = mul i32 %l2, %c
+  %e2 = icmp sgt i32 %m2, 9
+  %o = select i1 %c0, i1 %e2, i1 false";
+        assert_eq!(split_blocks(and, true), 2);
+    }
 }
