@@ -130,7 +130,11 @@ fn main() {
                 let done_root = dag.get_root().node;
                 let mut adapter = DagisAdapter::new(dag);
                 // Users before operands, as the pin walks `allnodes` backwards.
-                for node in reachable_users_first(&adapter) {
+                // Nodes a selection makes are visited next, latest first
+                // (`insertDAGNode`).
+                let mut made: Vec<u32> = Vec::new();
+                let mut rest = reachable_users_first(&adapter).into_iter();
+                while let Some(node) = made.pop().or_else(|| rest.next()) {
                     // As `DoInstructionSelection`: nothing reads a node that
                     // matching made dead (the root has a handle).
                     let root = done_root;
@@ -140,7 +144,9 @@ fn main() {
                     {
                         continue;
                     }
+                    let before = adapter.dag.nodes().len();
                     let outcome = select_node(&selector, &mut adapter, &mut hooks, node);
+                    made.extend(before as u32..adapter.dag.nodes().len() as u32);
                     if std::env::var_os("DUMP").is_some() {
                         println!("  select t{node} {:?}: {outcome:?}", adapter.dag.nodes()[node as usize].opcode);
                     }

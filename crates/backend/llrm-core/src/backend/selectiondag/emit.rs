@@ -1911,10 +1911,23 @@ impl Emitter<'_, '_> {
                 .find_map(|part| self.selectors.get(&part.node).copied())
                 .or(self.es)
                 .ok_or_else(|| EmitError::Unsupported("a cell through ES that nothing loaded".to_owned()))?;
-            let disp = self.constant(group[3])?;
-            let address = Addr {
-                segment: llrm_lir::registers::RegId::ES.iced(),
-                ..Addr::new(crate::model::ir::Space::Far, disp)
+            // The displacement is a number, or a far global's symbol and
+            // offset.
+            let (disp, address) = match self.dag.node(group[3]).data {
+                NodeData::Global { symbol, offset } => (
+                    offset,
+                    Addr { segment: llrm_lir::registers::RegId::ES.iced(), ..self.ctx.globals.address(symbol, offset) },
+                ),
+                _ => {
+                    let disp = self.constant(group[3])?;
+                    (
+                        disp,
+                        Addr {
+                            segment: llrm_lir::registers::RegId::ES.iced(),
+                            ..Addr::new(crate::model::ir::Space::Far, disp)
+                        },
+                    )
+                }
             };
             return Ok(Mem {
                 offset: disp,
