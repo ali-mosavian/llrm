@@ -1188,10 +1188,10 @@ entry:
 ";
 
 /// A float call result is the stack's top after the call (an unnamed load of no
-/// cell); one live across another call cannot stay on the x87 stack and the
-/// function is refused, not left for the stackifier to fail the compile.
+/// cell). One live across another call is selected too: the float allocator
+/// spills it around the call.
 #[test]
-fn a_float_result_is_the_stack_top_and_none_lives_across_a_call() {
+fn a_float_result_is_the_stack_top_and_one_may_live_across_a_call() {
     use crate::model::ir::{Loc, Operation};
     let module = llrm_mir::parse::module(FLOAT_CALL).expect("parses");
     let cpu = crate::backend::cpu::profile("486").expect("a cpu");
@@ -1206,8 +1206,7 @@ fn a_float_result_is_the_stack_top_and_none_lives_across_a_call() {
         }),
         "an unnamed load of the stack top"
     );
-    let why = selected(&module, "h", &llrm_x86_m32::M32, cpu, &[]).err().map(|e| e.0);
-    assert!(why.as_deref().is_some_and(|why| why.contains("live across")), "{why:?}");
+    selected(&module, "h", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
 }
 
 const GLOBAL_INDEXED: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"

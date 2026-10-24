@@ -689,9 +689,6 @@ fn selected_in(
     // The x87 stack is empty at a call: a floating value live across one is
     // spilled by the pin's allocator, which no pass here does for this LIR, so
     // the function is refused (the stackifier would fail the compile).
-    if let Some(why) = float_across_call(&emitted, &succ, llrm_lir::registers::Regs(arch.registers())) {
-        return refuse(format!("--isel=dag: {why}"));
-    }
     let blocks: Vec<Block> = emitted
         .iter()
         .zip(succ)
@@ -739,115 +736,6 @@ fn selected_in(
         extents: frame.locals.borrow().clone(),
         landing: None,
     })
-}
-
-/// Whether a floating value (a 10-byte `Held`) is live across a call: its
-/// liveness by the usual backward flow over the blocks, a phi's input read at
-/// the end of the predecessor it comes from.
-fn float_across_call(
-    blocks: &[EmitBlock],
-    succ: &[Vec<i64>],
-    regs: llrm_lir::registers::Regs,
-) -> Option<&'static str> {
-    use std::collections::{BTreeSet, HashMap};
-    let mut floating: BTreeSet<u32> = blocks
-        .iter()
-        .flat_map(|block| block.insns.iter())
-        .filter_map(|insn| insn.what.as_ref())
-        .flat_map(|what| what.dests.iter())
-        .filter_map(|dest| match dest {
-            crate::model::ir::Loc::Held(held) if held.width == 10 => Some(held.value),
-            _ => None,
-        })
-        .collect();
-    if floating.is_empty() {
-        return None;
-    }
-    // A phi of floating values is floating.
-    loop {
-        let before = floating.len();
-        for phi in blocks.iter().flat_map(|block| block.phis.iter()) {
-            if phi.incoming.iter().any(|(_, value)| floating.contains(value)) {
-                floating.insert(phi.result);
-            }
-        }
-        if floating.len() == before {
-            break;
-        }
-    }
-    let index: HashMap<i64, usize> = blocks.iter().enumerate().map(|(i, b)| (b.at, i)).collect();
-    // The floating values each block reads at its end for its successors' phis.
-    let mut phi_reads: Vec<BTreeSet<u32>> = vec![BTreeSet::new(); blocks.len()];
-    for block in blocks {
-        for phi in &block.phis {
-            for (edge, value) in &phi.incoming {
-                if let Some(&from) = index.get(edge)
-                    && floating.contains(value)
-                {
-                    phi_reads[from].insert(*value);
-                }
-            }
-        }
-    }
-    let phi_results: Vec<BTreeSet<u32>> =
-        blocks.iter().map(|block| block.phis.iter().map(|phi| phi.result).collect()).collect();
-    let mut live_in: Vec<BTreeSet<u32>> = vec![BTreeSet::new(); blocks.len()];
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for (at, block) in blocks.iter().enumerate().rev() {
-            let mut live: BTreeSet<u32> = phi_reads[at].clone();
-            for next in &succ[at] {
-                if let Some(&to) = index.get(next) {
-                    live.extend(live_in[to].difference(&phi_results[to]).copied());
-                }
-            }
-            for insn in block.insns.iter().rev() {
-                for def in &insn.defines {
-                    live.remove(def);
-                }
-                live.extend(insn.uses.iter().copied().filter(|value| floating.contains(value)));
-            }
-            if live != live_in[at] {
-                live_in[at] = live;
-                changed = true;
-            }
-        }
-    }
-    for (at, block) in blocks.iter().enumerate() {
-        let mut live: BTreeSet<u32> = phi_reads[at].clone();
-        for next in &succ[at] {
-            if let Some(&to) = index.get(next) {
-                live.extend(live_in[to].difference(&phi_results[to]).copied());
-            }
-        }
-        for insn in block.insns.iter().rev() {
-            for def in &insn.defines {
-                live.remove(def);
-            }
-            // A cell through a far pointer sets ES, which the stackifier counts
-            // among the instructions the x87 stack does not survive.
-            let far = insn
-                .what
-                .as_ref()
-                .is_some_and(
-                    |what| what.dests
-                        .iter()
-                        .chain(&what.sources)
-                        .any(
-                            |loc| matches!(
-                                loc,
-                                crate::model::ir::Loc::Mem(cell) if cell.selector.is_some()
-                            ),
-                        ),
-                );
-            if (far || crate::backend::floatregions::clears_stack(regs, insn)) && !live.is_empty() {
-                return Some("a floating value is live across an instruction that empties the x87 stack");
-            }
-            live.extend(insn.uses.iter().copied().filter(|value| floating.contains(value)));
-        }
-    }
-    None
 }
 
 /// A value read where some path to it defines nothing: (value, instruction).
