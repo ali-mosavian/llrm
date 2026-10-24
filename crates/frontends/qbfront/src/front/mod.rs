@@ -16,19 +16,17 @@ pub mod words;
 
 use crate::{Dialect, Module, ParseError};
 
-/// A source parsed and held to what the real BC accepts: the first thing BC
-/// refuses is the error. QuickrBASIC's extensions are not in this front yet, so
-/// that dialect still goes to the grammar-table parser, which has no checker.
 /// A source parsed and held to what the real BC (QB 4.5, PDS 7.1, VBDOS)
 /// accepts: the first thing BC refuses is the error, worded for the person who
-/// wrote it. QuickrBASIC's extensions are not in this front yet, so that
-/// dialect still goes to the grammar-table parser, which has no checker.
+/// wrote it.
 pub fn parse(
     source: &str,
     dialect: Dialect,
 ) -> Result<Module, ParseError> {
+    // QuickrBASIC is held to no BC: its programs are parsed, and its own rules
+    // are the semantic pass's
     if dialect.format_strings() {
-        return crate::generated_parser::parse(source, dialect);
+        return ast::parse(source, dialect).map_err(|error| explain::explain(error, source));
     }
     parse_coded(source, dialect).map_err(|error| refused(error, source, dialect))
 }
@@ -69,7 +67,7 @@ fn refused(
     } else if matches!(
         error.code.as_str(),
         "Syntax error" | "User-defined type not defined" | "Formal parameter specification illegal"
-    ) && crate::generated_parser::parse(source, Dialect::Quickr).is_ok()
+    ) && ast::parse(source, Dialect::Quickr).is_ok()
     {
         explain::add_help(&mut error, "the quickr profile (--dialect quickr) takes this source".to_owned());
     }

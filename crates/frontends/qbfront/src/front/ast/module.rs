@@ -25,7 +25,7 @@ impl Ast<'_> {
         Ok(Module {
             statements: std::mem::take(&mut self.out),
             procedures: std::mem::take(&mut self.procedures),
-            prelude: false,
+            prelude: self.prelude || self.tokens.iter().any(|token| matches!(token.kind, TokenKind::FormatString(_))),
         })
     }
 
@@ -66,6 +66,19 @@ impl Ast<'_> {
     }
 
     pub(super) fn statement(&mut self) -> R<()> {
+        let at = self.i;
+        let private = self.private_at.contains(&at);
+        self.statement_inner()?;
+        if private {
+            match self.procedures.last_mut() {
+                Some(procedure) if !procedure.declaration => procedure.private = true,
+                _ => return Err(at),
+            }
+        }
+        Ok(())
+    }
+
+    fn statement_inner(&mut self) -> R<()> {
         let at = self.i;
         match &self.tokens[at].kind {
             TokenKind::Integer(value, None) => {

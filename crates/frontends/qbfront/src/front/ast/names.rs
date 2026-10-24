@@ -2,6 +2,9 @@
 
 use super::*;
 
+/// The parts of QuickrBASIC's `(start:end:step)` slice.
+type SliceParts = (Option<Box<Expr>>, Option<Box<Expr>>, Option<Box<Expr>>);
+
 impl Ast<'_> {
     pub(super) fn identifier(&mut self) -> R<(String, Span)> {
         match &self.tokens.get(self.i).map(|token| &token.kind) {
@@ -154,7 +157,14 @@ impl Ast<'_> {
             // a DEF FN written without a parameter list takes no arguments: in
             // `PRINT FNa (1)` the parenthesis starts the next item
             if !self.takes_no_arguments(&name) && self.eat(Kw::LParen) {
-                let arguments = self.arguments()?;
+                let base = Expr::Name(name.clone(), start);
+                let arguments = match self.slice_or_arguments()? {
+                    Ok(arguments) => arguments,
+                    Err(parts) => {
+                        let span = Span { line: start.line, start: start.start, end: self.previous_end() };
+                        return Ok((self.slice(base, parts, span), true));
+                    }
+                };
                 let span = Span { line: start.line, start: start.start, end: self.previous_end() };
                 return Ok((Expr::Apply { name, arguments, span }, true));
             }
@@ -193,6 +203,51 @@ impl Ast<'_> {
         })
     }
 
+    /// A QuickrBASIC slice `base(start:end:step)`; the program then needs the
+    /// prelude.
+    fn slice(
+        &mut self,
+        base: Expr,
+        (start, end, step): SliceParts,
+        span: Span,
+    ) -> Expr {
+        self.prelude = true;
+        Expr::Slice { base: Box::new(base), start, end, step, span }
+    }
+
+    /// After `(`: the arguments to the `)`, or under QuickrBASIC a slice, which
+    /// has a colon where a list has a comma. Inside parentheses a colon cannot
+    /// end a statement.
+    fn slice_or_arguments(&mut self) -> R<Result<Vec<Expr>, SliceParts>> {
+        if !self.dialect.python_expressions() {
+            return self.arguments().map(Ok);
+        }
+        let part = |ast: &mut Self| -> R<Option<Box<Expr>>> {
+            if ast.is(Kw::Colon) || ast.is(Kw::RParen) {
+                Ok(None)
+            } else {
+                ast.exp().map(|one| Some(Box::new(one)))
+            }
+        };
+        if self.eat(Kw::RParen) {
+            return Ok(Ok(Vec::new()));
+        }
+        let first = part(self)?;
+        if self.eat(Kw::Colon) {
+            let end = part(self)?;
+            let step = if self.eat(Kw::Colon) { part(self)? } else { None };
+            self.expect(Kw::RParen)?;
+            return Ok(Err((first, end, step)));
+        }
+        let Some(first) = first else { return self.fail() };
+        let mut values = vec![*first];
+        while self.eat(Kw::Comma) {
+            values.push(self.exp()?);
+        }
+        self.expect(Kw::RParen)?;
+        Ok(Ok(values))
+    }
+
     /// After `(`: the arguments to the `)`.
     pub(super) fn arguments(&mut self) -> R<Vec<Expr>> {
         let mut values = Vec::new();
@@ -220,7 +275,15 @@ impl Ast<'_> {
                 value = Expr::Field { base: Box::new(value), name, span };
             } else if self.is(Kw::LParen) && !matches!(&value, Expr::Name(name, _) if self.takes_no_arguments(name)) {
                 self.i += 1;
-                let indices = self.arguments()?;
+                let indices = match self.slice_or_arguments()? {
+                    Ok(indices) => indices,
+                    Err(parts) => {
+                        let span =
+                            Span { line: value.span().line, start: value.span().start, end: self.previous_end() };
+                        value = self.slice(value, parts, span);
+                        continue;
+                    }
+                };
                 let span = Span { line: value.span().line, start: value.span().start, end: self.previous_end() };
                 value = match value {
                     Expr::Name(name, _) => Expr::Apply { name, arguments: indices, span },

@@ -180,7 +180,7 @@ pub fn lex(
 /// `f"…"` from its `f`: literal text, `{{` and `}}` for braces, and
 /// `{expression[:spec]}` fields. A field cannot hold a string literal: its
 /// quote would end the f-string, as BASIC has no escape for one.
-fn format_string(
+pub(crate) fn format_string(
     line: &str,
     at: &mut usize,
     line_index: usize,
