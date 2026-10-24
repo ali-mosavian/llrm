@@ -179,6 +179,16 @@ pub struct EmitContext<'a> {
     pub address_mode: AddrMode,
     pub map: &'a OpcodeMap,
     pub names: &'a HashMap<u16, &'a str>,
+    /// The jump tables of the function, by `JumpTable` index.
+    pub tables: &'a [JumpTable],
+}
+
+/// A jump table: the data object that holds it and the block each entry goes
+/// to.
+#[derive(Clone, Debug)]
+pub struct JumpTable {
+    pub id: i64,
+    pub targets: Vec<i64>,
 }
 
 /// One block of the emitted code: `phis` first, then `insns`. A custom
@@ -1135,6 +1145,12 @@ impl Emitter<'_, '_> {
                 ("LEA16r", Some(NodeData::FrameIndex(_))) => {
                     Loc::Reg(Reg { register: llrm_lir::registers::RegId::SS, width: 2 })
                 }
+                // `lea r, [index*scale + global]`: an element of a global
+                ("LEA16r", _) if self.global_displacement(origin).is_some() => Loc::Imm(Imm {
+                    value: 0,
+                    width: 2,
+                    address: Some(self.ctx.globals.segment(self.global_displacement(origin))),
+                }),
                 ("OR32rr", _) => {
                     // A huge pointer built as `offset | (selector << 16)`.
                     let selector = self
@@ -1144,17 +1160,26 @@ impl Emitter<'_, '_> {
                         )?;
                     return self.held_operand(selector);
                 }
-                _ => {
-                    return Err(EmitError::Unsupported(
-                        "a string operation on a pointer of no known segment".to_owned(),
-                    ));
-                }
+                // any other near pointer is into DGROUP, as the builder takes
+                // it
+                _ => Loc::Imm(Imm { value: 0, width: 2, address: Some(self.ctx.globals.segment(None)) }),
             }
         } else {
-            return Err(EmitError::Unsupported("a string operation on a pointer of no known segment".to_owned()));
+            Loc::Imm(Imm { value: 0, width: 2, address: Some(self.ctx.globals.segment(None)) })
         };
         self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![source]);
         Ok(held)
+    }
+
+    /// The global a `lea`'s displacement names.
+    fn global_displacement(
+        &self,
+        lea: SDValue,
+    ) -> Option<u32> {
+        match self.dag.node(*self.dag.node(lea).ops.get(3)?).data {
+            NodeData::Global { symbol, .. } => Some(symbol),
+            _ => None,
+        }
     }
 
     /// The 16-bit selector of a huge pointer `origin` = `or(offset,
@@ -1539,6 +1564,33 @@ impl Emitter<'_, '_> {
             return Ok(Some(()));
         }
         match name {
+            // A jump through a table: the entry at the table plus the index.
+            "JMP32m" | "JMP16m" => {
+                let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short jump".to_owned()))?;
+                // The table is the displacement, or the base is its address.
+                let base = self.dag.node(group[0]).ops.first().map(|op| self.dag.node(*op).data.clone());
+                let table = match (self.dag.node(group[3]).data.clone(), base) {
+                    (NodeData::JumpTable(table), _) | (_, Some(NodeData::JumpTable(table))) => table,
+                    _ => return Err(EmitError::Unsupported("an indirect jump through memory".to_owned())),
+                };
+                let jump = self.jump_table(table)?;
+                // The cell is `$J + index * entry` whichever way the table's
+                // address came: the masm names the table from this address.
+                let index = self.address_register(group[2], Role::Index)?;
+                let scale = self.constant(group[1])?;
+                let mut address = Addr::new(crate::model::ir::Space::Segment, 0);
+                address.index = jump.id;
+                let entry = if name == "JMP16m" { 2 } else { 4 };
+                // At real mode a lone register is the address's base, as the
+                // old selector makes it (16-bit addressing has no scale).
+                let (base, index) =
+                    if self.ctx.address_mode == AddrMode::Real16 { (index, None) } else { (None, index) };
+                let cell = Mem { base, index, scale, disp_width: 2, ..Mem::new(Some(address), entry) };
+                let targets = jump.targets;
+                let what = Semantics { indirect: true, table: targets, ..Semantics::new(Operation::Jump) };
+                self.push_semantics(Semantics { name: Some("jmp".into()), sources: vec![Loc::Mem(cell)], ..what });
+                Ok(Some(()))
+            }
             "MOV32ImmSExti8" => {
                 let held = self.fresh(width);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
@@ -1874,10 +1926,23 @@ impl Emitter<'_, '_> {
                 .find_map(|part| self.selectors.get(&part.node).copied())
                 .or(self.es)
                 .ok_or_else(|| EmitError::Unsupported("a cell through ES that nothing loaded".to_owned()))?;
-            let disp = self.constant(group[3])?;
-            let address = Addr {
-                segment: llrm_lir::registers::RegId::ES.iced(),
-                ..Addr::new(crate::model::ir::Space::Far, disp)
+            // The displacement is a number, or a far global's symbol and
+            // offset.
+            let (disp, address) = match self.dag.node(group[3]).data {
+                NodeData::Global { symbol, offset } => (
+                    offset,
+                    Addr { segment: llrm_lir::registers::RegId::ES.iced(), ..self.ctx.globals.address(symbol, offset) },
+                ),
+                _ => {
+                    let disp = self.constant(group[3])?;
+                    (
+                        disp,
+                        Addr {
+                            segment: llrm_lir::registers::RegId::ES.iced(),
+                            ..Addr::new(crate::model::ir::Space::Far, disp)
+                        },
+                    )
+                }
             };
             return Ok(Mem {
                 offset: disp,
@@ -1897,6 +1962,12 @@ impl Emitter<'_, '_> {
             // A symbol takes a displacement field to carry its relocation, as
             // the old selector's global cells do.
             return Ok(Mem { base, index, scale, disp_width: 2, ..Mem::new(Some(addr), cell_width) });
+        }
+        if let NodeData::JumpTable(table) = self.dag.node(group[3]).data {
+            let table = self.jump_table(table)?;
+            let mut address = Addr::new(crate::model::ir::Space::Segment, 0);
+            address.index = table.id;
+            return Ok(Mem { base, index, scale, disp_width: 2, ..Mem::new(Some(address), cell_width) });
         }
         if let NodeData::PoolIndex(entry) = self.dag.node(group[3]).data {
             if self.address_register(group[4], Role::Segment)?.is_some() {
@@ -2014,6 +2085,13 @@ impl Emitter<'_, '_> {
         Ok(Mem { addr, through, index, scale, ..cell })
     }
 
+    fn jump_table(
+        &self,
+        table: u32,
+    ) -> Result<JumpTable, EmitError> {
+        self.ctx.tables.get(table as usize).cloned().ok_or_else(|| EmitError::Unsupported("a jump table".to_owned()))
+    }
+
     /// An address component: a value, or the `$noreg` register.
     fn address_register(
         &mut self,
@@ -2064,6 +2142,13 @@ impl Emitter<'_, '_> {
         if let NodeData::Global { symbol, offset } = self.dag.node(value).data {
             let addr = self.ctx.globals.address(symbol, offset);
             return Ok(Loc::Imm(Imm { value: 0, width: width_of(self.dag, value), address: Some(addr) }));
+        }
+        // The address of a jump table.
+        if let NodeData::JumpTable(table) = self.dag.node(value).data {
+            let table = self.jump_table(table)?;
+            let mut address = Addr::new(crate::model::ir::Space::Segment, 0);
+            address.index = table.id;
+            return Ok(Loc::Imm(Imm { value: 0, width: width_of(self.dag, value), address: Some(address) }));
         }
         // The address of a pool constant.
         if let NodeData::PoolIndex(entry) = self.dag.node(value).data {
