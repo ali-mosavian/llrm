@@ -37,7 +37,9 @@ Scalar, ours 137.6 / pin 81.8, excess 55.8 (the pin's 81.8 holds IPSCCP 4.1):
 | MemCpyOpt: MemorySSA | 6.9 | 0 | 6.9 | handed to w-3 (S3), 11-10 |
 | MemCpyOpt: `Pointers::run` | 2.7 | 0 | 2.7 | handed to w-5, 11-27 |
 | MemCpyOpt: body | 1.1 | 0.47 | 0.6 | unexplained |
-| DeadStoreElimination | 13.5 | 2.8 | 10.6 | unexplained (an earlier figure, 3.9, was a callee of it) |
+| DeadStoreElimination: MemorySSA (`Accesses::managed` 6.4 + `Mssa::build` 0.8 + dominators 0.3) | 7.5 | 0 | 7.5 | handed to w-3 (S3), 11-10 |
+| DeadStoreElimination: `fork` + `Context` clone, as EarlyCse's | 1.7 | 0 | 1.7 | handed to w-3, 11-20 |
+| DeadStoreElimination: the walk (`eliminate_dead_defs_of` 3.9, 72 calls) and the rest | 4.3 | 2.8 | 1.5 | unexplained |
 | SCCP + IPSCCP | 11.7 | 8.3 | 3.4 | flat, no gap to mirror |
 | `Together` (llrm-only combined pass) | 9.3 | 0 | 9.3 | unexplained |
 | `Dead` (llrm-only) | 6.4 | 0 | 6.4 | unexplained |
@@ -45,7 +47,7 @@ Scalar, ours 137.6 / pin 81.8, excess 55.8 (the pin's 81.8 holds IPSCCP 4.1):
 | GVN | 40.6 | 49.2 | -8.6 | below the pin |
 | SROA, Mem2Reg | 9.3 | 9.8 | -0.5 | below the pin |
 
-Handed 28.8, flat 3.4, below the pin -9.1, unexplained 32.5.
+Handed 37.9, flat 3.4, below the pin -9.1, unexplained 23.4.
 
 IPO, ours 47.0 / pin 13.3, excess 33.7:
 
