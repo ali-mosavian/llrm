@@ -205,10 +205,9 @@ fn predecessors_run_newest_first_as_llvm_walks_a_use_list() {
 /// Every condition `%x ult 10` asked about `%y` tried an add, an add again, an
 /// or and an and of its operands, twice (6,781 conditions in d_faces -O2, 2.8
 /// operand matches and 6.5 patterns each against the pin's two matches): a
-/// constant or an argument operand matches none of them, and `%y` as an add
-/// is looked for once for the condition.
+/// operand that is no add, or or and matches none of them.
 #[test]
-fn an_icmp_of_arguments_and_constants_tries_one_pattern() {
+fn an_icmp_of_arguments_and_constants_tries_no_pattern() {
     use crate::counts::{Event, get};
     let mut module = parse::module(
         "define i1 @f(i32 %x, i32 %y) {
@@ -238,8 +237,8 @@ e:
     let (entry, taken) = (function.layout()[0], function.layout()[1]);
     let before = get(Event::LviIcmpPatterns);
     lvi.get_constant_on_edge(&mut env, y, entry, taken, None);
-    // One look for `%y` as an add for each evaluation of the condition (it is
-    // evaluated with and without the block value), none for the operands.
+    // Neither `%y`, `%x` nor the constant is an add, an or or an and: no
+    // pattern is tried (the load of an operand matches none either).
     let tried = get(Event::LviIcmpPatterns) - before;
-    assert!((1..=2).contains(&tried), "{tried} patterns for %y's edge value through %x < 10");
+    assert_eq!(tried, 0, "{tried} patterns for %y's edge value through %x < 10");
 }

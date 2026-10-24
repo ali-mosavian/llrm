@@ -1416,13 +1416,26 @@ impl LazyValueInfoImpl {
         }
         let q = env.query();
 
-        // Every pattern of `lhs` below needs it to be an instruction; a
-        // constant or an argument (the common right side) matches none.
-        let lhs_is_instruction = q.instruction_of(lhs).is_some();
+        // Every pattern of `lhs` below is an add, an or or an and: the kind of
+        // its defining instruction says which can match, and a load, a phi,
+        // a constant or an argument matches none.
+        let (is_add, is_or, is_and) = q
+            .instruction_of(lhs)
+            .map_or(
+                (false, false, false),
+                |(_, instruction)| {
+                    let or = instruction.opcode == Opcode::Binary(BinaryOp::Or);
+                    (
+                        or || instruction.opcode == Opcode::Binary(BinaryOp::Add),
+                        or,
+                        instruction.opcode == Opcode::Binary(BinaryOp::And),
+                    )
+                },
+            );
 
         // Handle range checking idiom produced by InstCombine. We will subtract
         // the offset from the allowed range for RHS in this case.
-        if lhs_is_instruction
+        if is_add
             && Self::pattern_tried()
             && let Some((a, b)) = add_like(&q, lhs, Flags::default())
             && a == val
@@ -1443,12 +1456,9 @@ impl LazyValueInfoImpl {
             return true;
         }
 
-        if !lhs_is_instruction {
-            return false;
-        }
-
         // If (x | y) < C, then (x < C) && (y < C).
-        if Self::pattern_tried()
+        if is_or
+            && Self::pattern_tried()
             && commutative_with(&q, lhs, BinaryOp::Or, |x| x == val).is_some()
             && (pred == IntPredicate::Ult || pred == IntPredicate::Ule)
         {
@@ -1456,7 +1466,8 @@ impl LazyValueInfoImpl {
         }
 
         // If (x & y) > C, then (x > C) && (y > C).
-        if Self::pattern_tried()
+        if is_and
+            && Self::pattern_tried()
             && commutative_with(&q, lhs, BinaryOp::And, |x| x == val).is_some()
             && (pred == IntPredicate::Ugt || pred == IntPredicate::Uge)
         {
@@ -1619,8 +1630,15 @@ impl LazyValueInfoImpl {
         }
 
         let mut offset = 0u128;
-        Self::pattern_tried();
-        let val_add = add_like(&env.query(), val, Flags::default());
+        let val_add = if matches!(
+            env.query().instruction_of(val).map(|(_, instruction)| &instruction.opcode),
+            Some(Opcode::Binary(BinaryOp::Add | BinaryOp::Or))
+        ) {
+            Self::pattern_tried();
+            add_like(&env.query(), val, Flags::default())
+        } else {
+            None
+        };
         if Self::match_icmp_operand(env, &mut offset, lhs, val, edge_pred, val_add) {
             return self.get_value_from_simple_icmp_condition(env, edge_pred, rhs, offset, ici, use_block_value);
         }
