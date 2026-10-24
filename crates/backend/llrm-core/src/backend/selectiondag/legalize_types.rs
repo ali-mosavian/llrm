@@ -175,7 +175,11 @@ impl<'a> TypeLegalizer<'a> {
                 changed = true;
             } else if self.legalize_operands(n)? {
                 changed = true;
-                if self.id(n) != NodeId::Ready {
+                // A node updated in place was analyzed again and put back on
+                // the worklist (`NeedsReanalyzing` ends the
+                // pin's iteration): marking it processed here as well
+                // left a processed node on the worklist.
+                if self.id(n) != NodeId::Ready || self.worklist.contains(&n) {
                     continue;
                 }
             }
