@@ -507,10 +507,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Process Implicit Definitions",
-        Missing,
+        Deviate,
+        "processimpdefs.rs",
         "",
-        "",
-        "w-1; 2026-11-13: pieces 1-2 landed (#3737 an operand read as undef starts no live range; #3768 the pass, unwired); piece 3, an isel producer of `implicit_def`, open (plan #3722). Pin: changed code in 62 (-O2) and 63 (-Os) of 77 IRs",
+        "CG10: translated and wired (processimpdefs.rs, slot processimpdefs@2; isel emits `implicit_def` for poison and undef in a register, #3737, #3768, 8e6979c6b7); not translated: a phi of undefs becomes an `implicit_def` (PI-2), `INSERT_SUBREG` and `REG_SEQUENCE` users (PI-3, LIR has none); reason: a phi reading the value is left to PHIElimination's undef operands; cost: none measured, a phi of undefs keeps its `mov v, 0`; exit: PI-2 with PHIElimination P2, PI-3 none; owner w-8; review 2026-11-27. Pin: changed code in 62 (-O2) and 63 (-Os) of 77 IRs",
     ),
     row(
         "Remove unreachable machine basic blocks",
