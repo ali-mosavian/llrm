@@ -4,11 +4,12 @@
 here=$(cd "$(dirname "$0")" && pwd); d=$(mktemp -d); tag="psq$RANDOM$$"
 printf '#!/bin/bash\nbash -c "sleep 8; : # cargo build --release" &\nwait\n' > "$d/$tag.py"
 setsid bash "$d/$tag.py" merge-batch 1 2 >/dev/null 2>&1 &
+echo $! > "$d/root.pid"
 
 setsid bash -c "sleep 8; : # cargo build --profile dist" >/dev/null 2>&1 &
 
 sleep 1.5
-export ROOT_PATTERN="[$(echo $tag | cut -c1)]$(echo $tag | cut -c2-).py merge-batch"
+export ROOT_PIDFILE="$d/root.pid"
 source "$here/stage-sampler.sh"
 got=$(sample_stage)
 old=$(ps -eo args | grep -q "[c]argo build --profile dist" && echo build-dist || echo other)

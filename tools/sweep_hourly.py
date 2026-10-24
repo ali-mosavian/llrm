@@ -28,6 +28,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
+import pidfile  # noqa: E402
 import stamp  # noqa: E402
 
 SCRATCH = Path(os.environ.get("SCRATCH", Path.home() / "scratch"))
@@ -304,7 +305,16 @@ def steps(
     return reds, counts
 
 
+RUNNING = Path(os.environ.get("SWEEP_PIDFILE") or LOGS / "running.pid")  # the loop waits on this pid (kill -0), not on a `pgrep -f` pattern
+
+
 def main(argv: list[str]) -> int:
+    """One sweep, with its pid recorded for the loop that waits for it."""
+    with pidfile.recorded(RUNNING):
+        return sweep(argv)
+
+
+def sweep(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tip", help="the commit to sweep (default: origin/feat/parity after a fetch)")
     parser.add_argument("--no-build", action="store_true", help="use the binaries already in the target")
