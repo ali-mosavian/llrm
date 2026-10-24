@@ -81,11 +81,12 @@ fn a_word_operation_is_done_in_a_dword() {
 }
 
 /// A right shift needs the high bits right: `srl` zero-extends the operand
-/// (an `and` that folds to a `zext`), `sra` sign-extends it in register; a left
+/// (an `and` of the old width's mask, which SimplifyDemandedBits trims to the
+/// bits the shift reads: 0xFFF8 for a shift by 3), `sra` sign-extends it in register; a left
 /// shift needs neither.
 #[test]
 fn a_word_shift_extends_its_operand_by_its_kind() {
-    for (op, extend) in [(ISD::Srl, ISD::ZeroExtend), (ISD::Sra, ISD::SignExtendInReg), (ISD::Shl, ISD::AnyExtend)] {
+    for (op, extend) in [(ISD::Srl, ISD::And), (ISD::Sra, ISD::SignExtendInReg), (ISD::Shl, ISD::AnyExtend)] {
         let (dag, root) = promoted(false, |dag, x, _| {
             let by = dag.get_constant(3, EVT::I8);
             dag.get_node(op, EVT::I16, &[x, by])
