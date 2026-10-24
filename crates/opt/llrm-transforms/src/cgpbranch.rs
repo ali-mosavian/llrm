@@ -89,9 +89,11 @@ fn optimize_branch(
     let Some(bits) = context.types.int_bits(ty) else { return false };
     let mask = llrm_mir::context::mask(bits);
     let negated = limit.wrapping_neg() & mask;
-    for one in function.users(x).snapshot() {
+    // The first user the pin would convert, found by walking the use list.
+    let mut found: Option<(InstId, BlockId, IntPredicate)> = None;
+    for one in function.users(x).iter() {
         let user = one.user;
-        if user == compare || function.is_erased(user) {
+        if user == compare {
             continue;
         }
         // A quick dominance check: the block of the branch, or a successor
@@ -125,28 +127,30 @@ fn optimize_branch(
         } else {
             continue;
         };
-        let value_ty = function.instruction(user).ty;
-        let Some(result) = function.instruction(user).result else { continue };
-        if parent != home {
-            function.move_to(user, Position::Before(branch)).expect("a placed instruction");
-        }
-        function.drop_poison_generating_annotations(user);
-        let zero = Operand::Constant(context.int(value_ty, 0));
-        let bool_ty = function.instruction(compare).ty;
-        let new = function.create_instruction(
-            Opcode::ICmp(new_predicate),
-            bool_ty,
-            vec![Operand::Value(result), zero],
-            Flags::default(),
-            None,
-        );
-        function.insert(new, Position::Before(branch)).expect("an unplaced instruction");
-        let made = function.instruction(new).result.expect("a compare's value");
-        function.replace_all_uses_with(condition, Operand::Value(made));
-        function.erase(compare).expect("nothing reads it now");
-        return true;
+        found = Some((user, parent, new_predicate));
+        break;
     }
-    false
+    let Some((user, parent, new_predicate)) = found else { return false };
+    let value_ty = function.instruction(user).ty;
+    let Some(result) = function.instruction(user).result else { return false };
+    if parent != home {
+        function.move_to(user, Position::Before(branch)).expect("a placed instruction");
+    }
+    function.drop_poison_generating_annotations(user);
+    let zero = Operand::Constant(context.int(value_ty, 0));
+    let bool_ty = function.instruction(compare).ty;
+    let new = function.create_instruction(
+        Opcode::ICmp(new_predicate),
+        bool_ty,
+        vec![Operand::Value(result), zero],
+        Flags::default(),
+        None,
+    );
+    function.insert(new, Position::Before(branch)).expect("an unplaced instruction");
+    let made = function.instruction(new).result.expect("a compare's value");
+    function.replace_all_uses_with(condition, Operand::Value(made));
+    function.erase(compare).expect("nothing reads it now");
+    true
 }
 
 #[cfg(test)]
