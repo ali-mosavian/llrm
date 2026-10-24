@@ -14,6 +14,12 @@ def test_the_variable_selects_the_selector_for_llrm_c_only(monkeypatch):
     assert dosbatch.with_isel(["/b/jwasm", "a.asm"]) == ["/b/jwasm", "a.asm"]
 
 
+def test_a_qb_program_is_compiled_by_the_selected_selector(monkeypatch):
+    """llrm-qb got no `--isel`: LLRM_ISEL=shadow on the 198 qb programs reported 'the DAG path selected no function (539 old)'."""
+    monkeypatch.setenv("LLRM_ISEL", "shadow")
+    assert dosbatch.with_isel(["/b/llrm-qb", "a.bas", "-o", "a.obj"]) == ["/b/llrm-qb", "--isel=shadow", "a.bas", "-o", "a.obj"]
+
+
 def test_without_the_variable_nothing_changes(monkeypatch):
     monkeypatch.delenv("LLRM_ISEL", raising=False)
     assert dosbatch.with_isel(["/b/llrm-c", "a.c"]) == ["/b/llrm-c", "a.c"]
