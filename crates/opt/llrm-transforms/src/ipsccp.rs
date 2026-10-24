@@ -81,14 +81,18 @@
 //! `crates/opt/llrm-transforms/src/ipsccp_tests.rs`.
 //!
 //! # Runs
-//! On no pipeline yet: [`run_ipsccp`] is called by its tests. It is to replace
-//! `ipa-args` and `ipa-range` in [`crate::walk::ModuleIpo`] (AM-BD-6).
+//! Once per compile at -O1 and up, first in [`crate::walk::ModuleIpo`]
+//! ([`run_ipsccp_with`]): after the early function pipeline, before the
+//! CGSCC walk, where the pin's `buildModuleSimplificationPipeline` runs
+//! `IPSCCPPass`.
+//!
+//! Under `LLRM_NO_LLVM_ORDER` (the legacy rounds) it does not run:
+//! `ModuleIpo` is `llvm_order` only, and the stand-in the rounds fell back on
+//! (`ipa-args`, `ipa-range`) is deleted.
 //!
 //! # See also
 //! - Uses: [`crate::sccpsolver`], [`crate::sccp`]'s rewrites,
 //!   [`crate::predicateinfo`]
-//! - Stand-in it replaces: `llrm_analysis::parameter_ranges`,
-//!   `llrm_analysis::interprocedural::program_parameters`
 
 use std::collections::BTreeSet;
 use std::rc::Rc;
@@ -100,7 +104,7 @@ use llrm_mir::domtree::DomTree;
 use llrm_mir::facts::Fact;
 use llrm_mir::module::{Function, GlobalKind, InstId, Linkage, Module, Operand};
 use llrm_mir::opcode::{Attribute, CastOp, Opcode, Tail};
-use llrm_mir::passes::Outer;
+use llrm_mir::passes::{ModuleAnalyses, Outer};
 use llrm_mir::program::Program;
 use llrm_mir::types::Type;
 use llrm_mir::valuetracking::AssumptionCache;
@@ -112,10 +116,26 @@ use crate::sccpsolver::{ModuleEnv, Results, Solver, is_replaceable_constant};
 
 /// `runIPSCCP` over each module of `program`; the bodies it changed.
 pub fn run_ipsccp(program: &mut Program) -> BTreeSet<Defined> {
+    solved_each(program, |program, at| Rc::new(Outer::of(&program.modules[at], Some(Rc::clone(&program.target)))))
+}
+
+/// [`run_ipsccp`], each module's outer view the one `modules` holds. The
+/// caller reports the bodies it changed.
+pub fn run_ipsccp_with(
+    program: &mut Program,
+    modules: &mut [ModuleAnalyses],
+) -> BTreeSet<Defined> {
+    solved_each(program, |program, at| modules[at].outer(&program.modules[at]))
+}
+
+fn solved_each(
+    program: &mut Program,
+    mut outer_of: impl FnMut(&Program, usize) -> Rc<Outer>,
+) -> BTreeSet<Defined> {
     let mut changed = BTreeSet::new();
     for at in 0..program.modules.len() {
         let private = crate::interprocedural::private(program, at);
-        let outer = Outer::of(&program.modules[at], Some(Rc::clone(&program.target)));
+        let outer = outer_of(program, at);
         let Program { modules, layout, .. } = &mut *program;
         for id in run_on_module(&mut modules[at], layout, &outer, &private) {
             changed.insert((at, id));
@@ -604,4 +624,4 @@ fn terminating_must_tail_call(
 
 #[cfg(test)]
 #[path = "ipsccp_tests.rs"]
-mod tests;
+pub(crate) mod tests;

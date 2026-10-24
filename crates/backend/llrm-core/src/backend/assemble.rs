@@ -64,7 +64,7 @@
 //!
 //! From `--dump` (`mir/21-homes.ll`) and `-S` of a nib program at -O2 with
 //! `-fno-inline-functions -fno-inline-functions-called-once -fno-ipa-cp-clone
-//! -fno-ipa-vrp -march=i386`.
+//! -march=i386`.
 //!
 //! # Runs
 //! Once per module. Per-function candidates are described above; the gating

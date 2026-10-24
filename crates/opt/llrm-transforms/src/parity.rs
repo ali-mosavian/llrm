@@ -733,10 +733,7 @@ pub const ABSENT_AT_O1: &[&str] = &[
 /// `loopsimplify`/`lcssa` run at three unconditional slots per body at every
 /// level (x_hanoi2: ours 9/9/15/9 at -O1/-O2/-O3/-Os against LLVM's
 /// 4/10/10/10).
-pub const RUN_COUNTS_OPEN: &[&str] = &[
-    "loopsimplify@764,772,823 and lcssa: one pair per loop-pass adaptor",
-    "-O3 d_faces: one `ipa-range` rerun of the list remains (ranges that appear after cloning and inlining; 11 M); `walk::ModuleIpo` runs ipa-args, ipa-cp, ipa-range and deadargs before the list once",
-];
+pub const RUN_COUNTS_OPEN: &[&str] = &["loopsimplify@764,772,823 and lcssa: one pair per loop-pass adaptor"];
 
 /// The phase and kind of the slot named `slot` (`sroa@1179`), if the registry
 /// has it as a function list's slot: what `llrm-pass --order` reports before it
