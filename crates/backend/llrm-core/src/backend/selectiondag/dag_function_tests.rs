@@ -2058,7 +2058,7 @@ fn verdicts(flags: bool) -> Vec<Result<(), &'static str>> {
     let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
     let verdicts =
         super::dag_function::runtime_call_verdicts(&module, function, &layout, &llrm_x86_m16::M16, &Stub { flags });
-    verdicts.into_values().collect()
+    verdicts.values().copied().collect()
 }
 
 /// `B$SCMP` answers in the flags under `--runtime qb45`; the DAG path tested
