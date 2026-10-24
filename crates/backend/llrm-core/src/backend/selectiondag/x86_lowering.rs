@@ -367,6 +367,10 @@ fn emit_cmp(
     code: u128,
 ) -> SDValue {
     if dag.is_null_constant(op1) {
+        // a runtime routine's answer in the flags: they are already set
+        if dag.opcode(op0) == super::x86isd::LLRM_CALL_FLAGS {
+            return dag.operand(op0, 0);
+        }
         return emit_test(dag, op0, code);
     }
     let vt = dag.value_type(op0);

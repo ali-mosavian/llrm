@@ -2052,7 +2052,7 @@ impl crate::backend::assemble::Abi for Stub {
     }
 }
 
-fn verdicts(flags: bool) -> Vec<Result<(), &'static str>> {
+fn verdicts(flags: bool) -> Vec<Result<super::builder::RuntimeAnswer, &'static str>> {
     let module = llrm_mir::parse::module(QB_STRING_COMPARE).expect("parses");
     let function = module.global(module.named("f").expect("f")).function().expect("a body");
     let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
@@ -2062,16 +2062,16 @@ fn verdicts(flags: bool) -> Vec<Result<(), &'static str>> {
 }
 
 /// `B$SCMP` answers in the flags under `--runtime qb45`; the DAG path tested
-/// `ax` instead, so every string comparison of `strcmp_smoke` printed 0. A
-/// call whose contract the convention does not model is refused.
+/// `ax` instead, so every string comparison of `strcmp_smoke` printed 0. The
+/// call is known to answer in the flags.
 #[test]
-fn a_runtime_call_answering_in_the_flags_is_refused() {
-    assert_eq!(verdicts(true), [Err("QB runtime routine answering in the flags")]);
+fn a_runtime_call_answering_in_the_flags_says_so() {
+    assert_eq!(verdicts(true), [Ok(super::builder::RuntimeAnswer::Flags)]);
 }
 
 #[test]
-fn a_runtime_call_the_convention_models_is_accepted() {
-    assert_eq!(verdicts(false), [Ok(())]);
+fn a_runtime_call_answering_in_registers_says_so() {
+    assert_eq!(verdicts(false), [Ok(super::builder::RuntimeAnswer::Registers)]);
 }
 
 const VARSEG: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
