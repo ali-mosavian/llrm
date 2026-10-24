@@ -37,7 +37,7 @@ fn main() {
             }
             Ok(module) => match compile_with_options(&module, "t", dialect, "llrm", &Options::default()) {
                 Ok(_) => ("ok", String::new()),
-                Err(error) if error.message.contains("not supported") || error.message.contains("no source signature") || error.message.contains("audited") => {
+                Err(error) if error.message.contains("cannot generate code") || error.message.contains("no source signature") || error.message.contains("audited") => {
                     ("unsupported", error.message)
                 }
                 Err(error) => ("semantic", error.message),

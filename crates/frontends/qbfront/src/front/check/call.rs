@@ -34,6 +34,12 @@ impl Checker {
             };
             if let Some(spec) = handled {
                 if self.procs.get(name).is_none() {
+                    // a procedure's RETURN takes no label: it cannot leave a
+                    // procedure
+                    if name == "RETURN" && !arguments.is_empty() && self.procedure.is_some() {
+                        self.err(span, "Subprogram error");
+                        return;
+                    }
                     self.spec(arguments, spec, span);
                     return;
                 }
@@ -265,7 +271,8 @@ impl Checker {
             "SOUND" => "i n",
             "POKE" | "OUT" => "n i",
             "WAIT" => "n i i?",
-            "BEEP" | "TRON" | "TROFF" | "SYSTEM" | "END" => "",
+            "BEEP" | "TRON" | "TROFF" => "",
+            "SYSTEM" | "END" => "i?",
             "FILES" => "s?",
             "RUN" => "x?",
             "CHAIN" => "s",

@@ -14,8 +14,26 @@ fn tracked() -> Vec<PathBuf> {
     String::from_utf8(output.stdout).unwrap().lines().map(|line| root.join(line)).collect()
 }
 
+/// Whether the source has an `_` BC takes for a continuation, which drops the rest of the line: the old lexer
+/// predates that, and the checked front's scanner is calibrated on BC.
+fn continues(
+    source: &str,
+    dialect: Dialect,
+) -> bool {
+    source.contains('_')
+        && (!dialect.underscore_in_names()
+            || source.starts_with('_')
+            || source.contains(" _")
+            || source.contains("\n_")
+            || source.contains("_\n")
+            || source.contains("_\r"))
+}
+
 fn same(source: &str, what: &str) {
     for dialect in DIALECTS {
+        if continues(source, dialect) {
+            continue;
+        }
         let old = qbfront::generated_parser::lex(source, dialect);
         let new = lalrspike::qb_lexer::lex(source, dialect);
         assert_eq!(old, new, "{what} under {dialect:?}");
@@ -69,6 +87,9 @@ fn streaming_tokens_to_the_parser_builds_the_same_tree() {
     for path in tracked() {
         let source = lalrspike::dos_source(&std::fs::read(&path).unwrap());
         for dialect in [Dialect::QuickBasic45, Dialect::Pds71, Dialect::VbDos] {
+            if continues(&source, dialect) {
+                continue;
+            }
             let old = qbfront::generated_parser::lex(&source, dialect)
                 .map_err(|error| error.message)
                 .and_then(|tokens| lalrspike::parse_qb(&tokens).map(|tree| (tree, tokens)));

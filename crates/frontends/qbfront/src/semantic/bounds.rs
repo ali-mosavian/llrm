@@ -389,15 +389,14 @@ impl Compiler {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{built, Options};
     use crate::{parse, Dialect};
 
     /// A REDIM of another rank compiled, so LBOUND's record, fixed by the
     /// first rank, read another dimension's. BC refuses it.
     #[test]
     fn test_a_redim_of_another_rank_is_refused() {
-        let module = parse("DEFINT A-Z\nREDIM a(5)\nREDIM a(2, 2)\nPRINT UBOUND(a)\n", Dialect::VbDos).expect("parses");
-        let refused = built(&module, "T", Dialect::VbDos, "vbdos", &Options::default()).err().expect("refused");
-        assert!(refused.message.contains("wrong number of dimensions"), "{}", refused.message);
+        let refused =
+            parse("DEFINT A-Z\nREDIM a(5)\nREDIM a(2, 2)\nPRINT UBOUND(a)\n", Dialect::VbDos).err().expect("refused");
+        assert_eq!(refused.code, "Wrong number of dimensions", "{}", refused.message);
     }
 }

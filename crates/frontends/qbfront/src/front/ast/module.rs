@@ -69,7 +69,9 @@ impl Ast<'_> {
         let at = self.i;
         match &self.tokens[at].kind {
             TokenKind::Integer(value, None) => {
-                if !(0..=65_529).contains(value) {
+                if !(0..=65_529).contains(value)
+                    || (at > 0 && matches!(self.tokens[at - 1].kind, TokenKind::Integer(_, None)))
+                {
                     return self.fail();
                 }
                 // `1a:` is a single label, a line number run into a name
@@ -83,6 +85,15 @@ impl Ast<'_> {
                     }
                 }
                 self.out.push(Statement::Label(value.to_string(), self.span(at)));
+                self.i += 1;
+                if !(self.is(Kw::NewLine) || self.is(Kw::Colon)) {
+                    self.colon_pending = true;
+                }
+                return Ok(());
+            }
+            // BC reads `1.5` at the start of a line as a line number of its own
+            TokenKind::Real(text, None) if !text.contains('E') && self.line_start() && !self.is_prev_integer() => {
+                self.out.push(Statement::Label(text.clone(), self.span(at)));
                 self.i += 1;
                 if !(self.is(Kw::NewLine) || self.is(Kw::Colon)) {
                     self.colon_pending = true;
@@ -132,6 +143,10 @@ impl Ast<'_> {
                 self.tokens.get(self.i - 1).map(|t| &t.kind),
                 Some(TokenKind::Integer(_, None))
             ))
+    }
+
+    fn is_prev_integer(&self) -> bool {
+        self.i > 0 && matches!(self.tokens[self.i - 1].kind, TokenKind::Integer(_, None))
     }
 
     pub(super) fn is_prev_newline(&self) -> bool {

@@ -114,9 +114,15 @@ impl Checker {
                     }
                 } else {
                     if (redim && old.dynamic) || (!redim && old.redimmed) {
-                        // REDIM resizes a dynamic array
+                        // REDIM resizes a dynamic array, and cannot change its
+                        // rank
                         if old.ty.plain() != ty.plain() {
                             self.err(span, "Duplicate definition");
+                        } else if redim
+                            && old.rank.is_some_and(|rank| rank != usize::MAX && rank != d.bounds.len())
+                            && !d.bounds.is_empty()
+                        {
+                            self.err(span, "Wrong number of dimensions");
                         }
                         return;
                     }

@@ -88,9 +88,20 @@ impl Dialect {
         matches!(self, Self::Pds71 | Self::VbDos)
     }
 
+    /// `END code` and `SYSTEM code` hand a return code to DOS.
+    pub fn exit_codes(self) -> bool {
+        matches!(self, Self::Pds71 | Self::VbDos | Self::Quickr)
+    }
+
     /// VBDOS BC reads `""` in a string as one quote.
     pub fn quote_escape(self) -> bool {
         self == Self::VbDos
+    }
+
+    /// An `_` after a letter or a digit that is no number is part of a name
+    /// (VBDOS), not a continuation.
+    pub fn underscore_in_names(self) -> bool {
+        matches!(self, Self::VbDos | Self::Quickr)
     }
 
     /// VBDOS BC continues a line at an `_` straight after a number, `1_`.

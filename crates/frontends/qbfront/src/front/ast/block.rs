@@ -41,6 +41,10 @@ impl Ast<'_> {
             return self.finish_if_with(condition, self.span(keyword), then_branch);
         }
         self.expect(Kw::THEN)?;
+        // a block IF starts its line
+        if self.is(Kw::NewLine) && !self.first_on_line(keyword) {
+            return self.fail_because("Must be first statement on the line");
+        }
         self.finish_if(condition, self.span(keyword))
     }
 
@@ -52,7 +56,10 @@ impl Ast<'_> {
     ) -> R<()> {
         let mut else_branch = Vec::new();
         if self.eat(Kw::ELSE) {
-            else_branch = self.single_line_branch()?;
+            // `ELSE` may end the line
+            if !(self.is(Kw::NewLine) || self.i >= self.tokens.len()) {
+                else_branch = self.single_line_branch()?;
+            }
         }
         let end = else_branch.last().or_else(|| then_branch.last()).map_or(condition.span().end, statement_end);
         let span = Span { line: condition.span().line, start: keyword_span.start, end };
@@ -123,6 +130,10 @@ impl Ast<'_> {
         let mut in_else = false;
         loop {
             self.skip_separators();
+            let closer = self.is(Kw::ELSE) || self.is(Kw::ELSEIF) || (self.is(Kw::END) && self.is_n(1, Kw::IF));
+            if closer && !self.first_on_line(self.i) {
+                return self.fail_because("Must be first statement on the line");
+            }
             if self.eat(Kw::ELSE) {
                 if in_else {
                     return self.fail();

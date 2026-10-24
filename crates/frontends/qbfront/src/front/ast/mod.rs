@@ -79,10 +79,11 @@ pub fn parse(
         procedures: Vec::new(),
         open_procedure: None,
         expected: None,
+        reason: None,
     };
     ast.module().map_err(|at| {
         let span = tokens.get(at).or(tokens.last()).map_or(Span { line: 1, start: 0, end: 0 }, |token| token.span);
-        let mut error = fail(span, "Syntax error");
+        let mut error = fail(span, ast.reason.unwrap_or("Syntax error"));
         // what the parser wanted where it stopped, when it knew
         error.expected =
             ast.expected.filter(|(index, _)| *index == at).map(|(_, wanted)| crate::front::explain::describe(wanted));
@@ -207,6 +208,9 @@ struct Ast<'a> {
     open_procedure: Option<usize>,
     /// The token index and the token `expect` last looked for and did not find.
     expected: Option<(usize, Kw)>,
+    /// BC's name for why the parse stopped, where it is not a plain syntax
+    /// error.
+    reason: Option<&'static str>,
 }
 
 fn span_of(

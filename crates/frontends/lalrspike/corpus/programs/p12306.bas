@@ -1,0 +1,4 @@
+DIM x%
+'$DYNAMIC: PRINT
+DIM a(10)
+a(1) = 1

@@ -1,0 +1,4 @@
+SUB p
+'$CDECL
+DIM a(10)
+END SUB
