@@ -29,7 +29,7 @@
 
 use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, mask, signed};
 use crate::module::{GlobalKind, GlobalValue, Linkage, UnnamedAddr};
-use crate::opcode::{BinaryOp, CastOp, FloatPredicate, Flags, IntPredicate};
+use crate::opcode::{BinaryOp, CastOp, Flags, FloatPredicate, IntPredicate};
 use crate::types::{FloatKind, Type, TypeId};
 
 /// A number and its width: `ConstantInt`, and the zero a `Null` or `Zero` is.
@@ -334,9 +334,10 @@ pub fn cast(
         (CastOp::FPTrunc | CastOp::FPExt | CastOp::FPRound, Type::Float(kind)) => {
             let (from, value) = float_number(context, c)?;
             // An x87 constant is held as a double, and a NaN's payload and
-            // quiet bit are `APFloat::convert`'s: neither is
-            // folded.
-            if from == FloatKind::X86Fp80 || kind == FloatKind::X86Fp80 || value.is_nan() {
+            // quiet bit are `APFloat::convert`'s: neither is folded. Widening a
+            // float or a double to x86_fp80 is exact, and held as the double.
+            let widened = op == CastOp::FPExt && kind == FloatKind::X86Fp80;
+            if from == FloatKind::X86Fp80 || (kind == FloatKind::X86Fp80 && !widened) || value.is_nan() {
                 return None;
             }
             Some(float_constant(context, to, kind, value))
@@ -447,7 +448,10 @@ pub fn float_binary(
     c1: ConstantId,
     c2: ConstantId,
 ) -> Option<ConstantId> {
-    if flags.contains(Flags::NSZ) || flags.contains(Flags::REASSOC) || flags.contains(Flags::CONTRACT) || flags.contains(Flags::ARCP)
+    if flags.contains(Flags::NSZ)
+        || flags.contains(Flags::REASSOC)
+        || flags.contains(Flags::CONTRACT)
+        || flags.contains(Flags::ARCP)
     {
         return None;
     }

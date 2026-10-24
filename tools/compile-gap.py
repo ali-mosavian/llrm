@@ -21,6 +21,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import pin_clang  # noqa: E402
 import corpora  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -92,8 +93,8 @@ def main() -> None:
     parser.add_argument("--programs", default="matmul,quicksort,nbody,sieve,switch")
     parser.add_argument(
         "--clang",
-        default="clang",
-        help="the clang to compare with (a static build of the pinned tag, docs/architecture/compile-gap-series.md); the distro's by default",
+        default=None,
+        help="the clang to compare with (a static build of the pinned tag, docs/architecture/compile-gap-series.md); by default the pin's, via tools/pin_clang.py (LLRM_PIN_CLANG)",
     )
     parser.add_argument(
         "--distro-clang",
@@ -101,6 +102,7 @@ def main() -> None:
     )
     parser.add_argument("--allow-other-corpus", action="store_true", help="measure a source tree whose hash is not the registered one (tools/corpora.py)")
     args = parser.parse_args()
+    args.clang = args.clang or pin_clang.path()
     args.llrm = args.llrm or dist_build()
     qc = corpora.resolve("dfaces", os.environ.get("DFACES_SRC") or os.environ.get("QCPORT"), args.allow_other_corpus)
     print(corpora.header("dfaces", qc))

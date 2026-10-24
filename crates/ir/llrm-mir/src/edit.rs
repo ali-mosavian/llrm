@@ -672,6 +672,21 @@ impl Function {
         self.log(Change::Rewritten(inst));
     }
 
+    /// Gives an instruction's result another type (`Value::mutateType`); the
+    /// operands and users stay, and what reads the old type is the caller's to
+    /// put right.
+    pub fn set_type(
+        &mut self,
+        inst: InstId,
+        ty: TypeId,
+    ) {
+        self.instructions[inst.0 as usize].ty = ty;
+        if let Some(result) = self.instructions[inst.0 as usize].result {
+            self.values[result.0 as usize].ty = ty;
+        }
+        self.log(Change::Rewritten(inst));
+    }
+
     /// Replaces an instruction's flags.
     pub fn set_flags(
         &mut self,

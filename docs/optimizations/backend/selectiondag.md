@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/selectiondag.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/selectiondag.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:f32389043d093bdb0e28602df6df0fb432908f1f233e358fee2ce8b4916290b6 -->
+<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:826250f27428bfb7dec9c07aa5b97a6568ce9d6aec54a2aff90a368e9a0aec36 -->
 
 # selectiondag
 
@@ -19,11 +19,30 @@ node's width (up to 128).
 The builder (`builder::build_block`) visits a block's instructions in order
 and keeps the pin's chain bookkeeping: pending loads, pending exports,
 `getRoot` / `getControlRoot`. A value used outside its block or by a phi
-lives in a virtual register (`lowering::FunctionLoweringInfo`): the block
-that defines it ends in `CopyToReg`, the blocks that read it start from
-`CopyFromReg`; a phi is the `CopyToReg` of its incoming value in each
+lives in a virtual register (`function_lowering::FunctionLoweringInfo`): the
+block that defines it ends in `CopyToReg`, the blocks that read it start
+from `CopyFromReg`; a phi is the `CopyToReg` of its incoming value in each
 predecessor. `dump::normalized` makes a dump comparable with the pin's.
-Calls, returns, arguments and switches are refused (`Refused`) until A2.
+Arguments and returns go through the target's `Convention` (stack
+parameters are loads of fixed objects, register ones live-in copies;
+`ret` is `RET_GLUE`); a direct call is `callseq_start`, stack stores,
+register copies, `X86ISD::CALL`, `callseq_end`, the result read back.
+A `switch` of range clusters is the split-and-chain compare blocks of
+`visitSwitch` (jump tables and bit tests included). Small constant copies
+and fills are loads and stores; indirect calls, intrinsics, floats and
+values wider than a register are refused (`Refused`) until their pieces
+land.
+
+## Example
+`%s = add i32 %a, %b` with `%a` and `%b` exported from an earlier block,
+then `store i32 %s, ptr @g`:
+
+```text
+t2: i32,ch = CopyFromReg t0, Register:i32 %0
+t4: i32,ch = CopyFromReg t0, Register:i32 %1
+t5: i32 = add t2, t4
+t6: ch = store t0, t5, GlobalAddress:i32<ptr @g> 0, poison:i32
+```
 
 ## Runs
 Nothing runs it yet but the tests and the shadow harness (sdag-d). The
@@ -65,6 +84,10 @@ ones; comparisons renumber them. Exit: none. Owner sdag-a.
 DEVIATE SD18: `select` is never matched as `abs`/`smin`/`smax`/`umin`/
 `umax` (`matchSelectPattern`). Exit: with the target action table (B0).
 Owner sdag-a. Review 2026-11-13.
+
+DEVIATE SD100: a call's `TargetGlobalAddress` carries no relocation flag
+(`[TF=7]`, PLT, in the pin): the object writer picks the relocation.
+Exit: none. Owner sdag-a.
 
 ## See also
 LLVM's `SelectionDAG::getNode`

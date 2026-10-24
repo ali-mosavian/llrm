@@ -211,7 +211,7 @@ fn semantics(
     dests: Vec<Loc>,
     sources: Vec<Loc>,
 ) -> Semantics {
-    Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+    Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
 }
 
 fn _width(one: &Loc) -> u32 {
@@ -412,28 +412,6 @@ pub(crate) fn ready<K: Eq + std::hash::Hash>(
             !writes[*one].iter().any(|place| others.contains(place))
         })
         .collect()
-}
-
-/// One copy of a cycle `ready` is stuck on, when none of `left` may go:
-/// following who is waited for until a copy comes round again. Taking that
-/// copy's sources first breaks the cycle.
-pub(crate) fn in_cycle<K: Eq + std::hash::Hash>(
-    reads: &[Vec<K>],
-    writes: &[Vec<K>],
-    left: &[usize],
-) -> Option<usize> {
-    let waiting_for = |one: usize| {
-        left.iter()
-            .copied()
-            .find(|other| *other != one && reads[*other].iter().any(|place| writes[one].contains(place)))
-    };
-    let mut seen = Vec::new();
-    let mut one = *left.first()?;
-    while !seen.contains(&one) {
-        seen.push(one);
-        one = waiting_for(one)?;
-    }
-    Some(one)
 }
 
 type Rotation = (Vec<Arc<Insn>>, Vec<Arc<Insn>>);
@@ -640,7 +618,7 @@ mod tests {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Option<Semantics> {
-        Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) })
+        Some(Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) })
     }
 
     fn _move(
@@ -701,7 +679,7 @@ mod tests {
     }
 
     fn name(one: &Insn) -> String {
-        one.what.as_ref().unwrap().name.clone().unwrap()
+        one.what.as_ref().unwrap().name.as_deref().map(str::to_owned).unwrap()
     }
 
     fn names(insns: &[Arc<Insn>]) -> Vec<String> {

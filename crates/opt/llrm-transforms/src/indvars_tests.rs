@@ -144,8 +144,8 @@ fn a_counter_extended_past_the_index_width_stays() {
     let text = clearing("e-p:16:16-n8:16:32")
         .replace("i32 %w", "i16 %w16")
         .replace("zext i16 %i to i32", "zext i16 %i to i32\n  %w16 = trunc i32 %w to i16");
-    let (changed, after) = widening(&text);
-    assert!(!changed, "{after}");
+    let (_, after) = widening(&text);
+    assert!(after.contains("icmp ult i16") && !after.contains("phi i32"), "{after}");
 }
 
 /// `clearing` for `short i`: signed, tested by `slt`, read through `sext`.
@@ -189,8 +189,10 @@ fn a_signed_counter_from_a_negative_start_is_widened_from_the_negative_number() 
 #[test]
 fn an_unsigned_counter_read_through_sext_is_not_widened() {
     let text = clearing("e-p:32:32-n8:16:32").replace("zext i16 %i to i32", "sext i16 %i to i32");
-    let (changed, after) = widening(&text);
-    assert!(!changed, "{after}");
+    // The pin stamps `nuw` on the step (its context inference) and widens
+    // nothing.
+    let (_, after) = widening(&text);
+    assert!(after.contains("icmp ult i16") && !after.contains("phi i32"), "{after}");
 }
 
 /// bench/nbody: `for (unsigned short j = i + 1; j < 4; ++j) x[j]`: a start the
@@ -206,40 +208,6 @@ fn a_counter_from_a_start_the_loop_does_not_define_is_widened() {
     let (changed, after) = widening(&text);
     assert!(changed, "{after}");
     assert!(after.contains("ult i32") && after.contains("zext i16 %s to i32"), "{after}");
-}
-
-/// indvars at its defaults asked the old ranges engine for every function with
-/// a `sext` (54.8 M instructions, `ranges::bounded_solved`);
-/// `simplifyAndExtend` reads ScalarEvolution's ranges, so nothing asks.
-#[test]
-fn test_indvars_with_scev_widening_does_not_solve_the_old_bounds() {
-    let mut module = parsed(
-        "define i32 @f(i32 %n) {
-b0:
-  br label %h
-
-h:
-  %i = phi i16 [ 0, %b0 ], [ %in, %l ]
-  %s = phi i32 [ 0, %b0 ], [ %sn, %l ]
-  %c = icmp slt i16 %i, 10
-  br i1 %c, label %l, label %end
-
-l:
-  %w = sext i16 %i to i32
-  %sn = add i32 %s, %w
-  %in = add nsw i16 %i, 1
-  br label %h
-
-end:
-  ret i32 %s
-}
-",
-    );
-    let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(super::IndVars { lftr: true });
-    let before = llrm_analysis::ranges::loops_solved();
-    manager.run_module(&mut module, Rc::new(crate::testing::Tuned::default())).unwrap();
-    assert_eq!(llrm_analysis::ranges::loops_solved() - before, 0, "indvars solved the old bounds");
 }
 
 /// The same loop entered behind a copy of its test (`-ftree-ch`): the counter
@@ -746,7 +714,7 @@ fn counted_loops(loops: usize) -> String {
     for at in 0..loops {
         let next = if at + 1 == loops { "done".to_owned() } else { format!("p{}", at + 1) };
         text += &format!(
-            "p{at}:\n  br label %h{at}\n\nh{at}:\n  %i{at} = phi i32 [ 0, %p{at} ], [ %n{at}, %l{at} ]\n  %g{at} = icmp ult i32 %i{at}, %n\n  br i1 %g{at}, label %l{at}, label %x{at}\n\nl{at}:\n  %n{at} = add i32 %i{at}, 1\n  br label %h{at}\n\nx{at}:\n  br label %{next}\n\n"
+            "p{at}:\n  br label %h{at}\n\nh{at}:\n  %i{at} = phi i32 [ 0, %p{at} ], [ %n{at}, %l{at} ]\n  %g{at} = icmp ult i32 %i{at}, %n\n  br i1 %g{at}, label %l{at}, label %x{at}\n\nl{at}:\n  %n{at} = add nuw nsw i32 %i{at}, 1\n  br label %h{at}\n\nx{at}:\n  br label %{next}\n\n"
         );
     }
     text + "done:\n  ret i32 0\n}\n"

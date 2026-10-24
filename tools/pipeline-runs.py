@@ -114,7 +114,8 @@ def main() -> int:
 
         def one(item):
             src, flags = item[1]
-            return subprocess.run([str(compiler), args.level, *flags, str(src), "-o", os.devnull], env=env, capture_output=True, text=True).stderr
+            with llrmbin.with_object([str(compiler), args.level, *flags, str(src), "-o", llrmbin.OBJECT]) as command:
+                return subprocess.run(command, env=env, capture_output=True, text=True).stderr
 
         with ThreadPoolExecutor(args.jobs) as pool:
             texts = list(pool.map(one, files.items()))

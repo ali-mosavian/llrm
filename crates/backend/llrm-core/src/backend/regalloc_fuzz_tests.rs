@@ -15,7 +15,6 @@ use crate::backend::coalesce::Coalescer;
 use crate::backend::cpu::ProfileOrName;
 use crate::backend::parcopy::ParallelCopy;
 use crate::backend::phielim::PhiElimination;
-use crate::backend::ssaspill::SsaSpill;
 use crate::backend::twoaddr::TwoAddress;
 use crate::backend::{target, verify};
 use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
@@ -111,7 +110,7 @@ impl Builder {
         uses: &[u32],
     ) -> Insn {
         self.at += 4;
-        let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
         Insn::new(self.at, Some((self.at, self.at + 2)), Some(what), defines.to_vec(), uses.to_vec())
     }
 
@@ -122,7 +121,7 @@ impl Builder {
         to: i64,
     ) -> Insn {
         self.at += 4;
-        let what = Semantics { name: Some(name.to_owned()), target: Some(to), ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), target: Some(to), ..Semantics::new(op) };
         Insn::new(self.at, Some((self.at, self.at + 2)), Some(what), vec![], vec![])
     }
 
@@ -874,8 +873,8 @@ fn allocated(
     if bad.is_empty() { Ok(()) } else { Err(format!("{}\n{}", bad.join("\n"), notes.join("\n"))) }
 }
 
-/// The generated body in SSA through the production phases from the spiller on,
-/// and the result must store what the generated body stores.
+/// The generated body in SSA through the production phases from phi elimination
+/// on, and the result must store what the generated body stores.
 fn spilled_and_allocated(
     seed: u64,
     shape: &Shape,
@@ -886,13 +885,6 @@ fn spilled_and_allocated(
     let segments = &*target::BUILT_IN;
     let frame = std::rc::Rc::new(std::cell::RefCell::new(crate::backend::frame::Frame::new(0)));
     let mut phases: Vec<Box<dyn LIRTransform>> = vec![
-        Box::new(SsaSpill {
-            frame: frame.clone(),
-            segments: segments.clone(),
-            classes: crate::backend::classes::RegisterClasses::m16(),
-            prices: crate::backend::ssaspill::Prices::clocks(),
-            run: Default::default(),
-        }),
         Box::new(PhiElimination::default()),
         Box::new(TwoAddress::default()),
         Box::new(Coalescer::new(None, segments, &crate::backend::classes::RegisterClasses::m16())),
@@ -909,9 +901,6 @@ fn spilled_and_allocated(
         phases.pop();
     }
     let mut now = in_ssa(&body);
-    if std::env::var_os("FUZZ_NO_SPILL").is_some() {
-        phases.remove(0);
-    }
     for phase in &mut phases {
         if std::env::var_os("FUZZ_SHOW").is_some() {
             eprintln!(
@@ -1467,7 +1456,7 @@ fn test_values_read_and_never_made_in_a_block_come_out_in_the_order_they_were_fi
             at,
             Some((at, 1)),
             Some(Semantics {
-                name: Some("mov".to_owned()),
+                name: Some("mov".into()),
                 dests: vec![held(into)],
                 sources: vec![held(from)],
                 ..Semantics::new(Operation::Move)
@@ -1482,102 +1471,6 @@ fn test_values_read_and_never_made_in_a_block_come_out_in_the_order_they_were_fi
     let walked = _walked(&body, &index, &|_| true);
     assert_eq!(walked.keys().copied().collect::<Vec<_>>(), vec![4, 3, 2, 1]);
     assert!(walked.iter().eq(_ranges_reference(&body, &index, &|_| true).iter()));
-}
-
-/// A spilled read's saving was looked up in the profile by form name, four
-/// times, for every instruction, at every rebuild of the allocator's facts, and
-/// each use asked the instruction's pattern afresh (5.6 s of
-/// compiling `d_faces`, #559). The saving is found once per form and the
-/// pattern once per instruction: the same weights.
-#[test]
-fn test_fold_prices_are_what_the_per_instruction_lookup_gave() {
-    use crate::analysis::frequency::Frequency;
-    use crate::analysis::intervals::intervals;
-    use crate::backend::allocate::{_fold_discount, _fold_priced};
-    use crate::backend::cpu::ProfileOrName;
-    use crate::backend::spiller::folded_source;
-    for cpu in ["386", "486", "Core", "P5"] {
-        let profile = crate::backend::cpu::profile(ProfileOrName::from(cpu)).expect("a profile");
-        for seed in 0..150 {
-            let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
-            let (plain, _) = body(seed, &shape);
-            for body in [in_ssa(&plain), plain] {
-                let busy = Frequency::of(&body);
-                let live = intervals(&body, None);
-                let mut free: crate::support::hash::IndexMap<u32, f64> = Default::default();
-                for block in &body.blocks {
-                    let each = busy.block(block.at);
-                    for one in &block.insns {
-                        let discount = _fold_discount(one, profile);
-                        if discount == 0.0 {
-                            continue;
-                        }
-                        for value in &one.uses {
-                            if folded_source(one, &std::collections::BTreeSet::from([*value])).is_some() {
-                                *free.entry(*value).or_insert(0.0) += each * discount;
-                            }
-                        }
-                    }
-                }
-                let numbered = crate::analysis::intervals::indexed(&body);
-                let mut expected = live.clone();
-                for (value, found) in &free {
-                    if let Some(one) = expected.get_mut(value).filter(|one| one.weight != f64::INFINITY) {
-                        one.weight = (one.weight
-                            - found / (one.size(&numbered) + crate::analysis::intervals::GRACE) as f64)
-                            .max(0.0);
-                    }
-                }
-                let priced = _fold_priced(&body, live, profile, &busy, &numbered);
-                assert!(priced.iter().eq(expected.iter()), "seed {seed} on {cpu}");
-            }
-        }
-    }
-}
-
-/// The last reads of a body were found from the sets of every block's entry and
-/// exit, of which only the exits are read (5.7% of compiling `d_faces`, #559).
-/// The exits as rows give the same reads.
-#[test]
-fn test_the_last_reads_are_what_the_sets_of_every_block_gave() {
-    use std::collections::BTreeSet;
-
-    use crate::analysis::intervals::key;
-    for seed in 0..150 {
-        let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
-        let (plain, _) = body(seed, &shape);
-        for body in [in_ssa(&plain), plain] {
-            let (_, live_out) = crate::backend::allocate::live_reference(&body);
-            let mut expected: BTreeSet<(usize, u32)> = BTreeSet::new();
-            for block in &body.blocks {
-                let mut alive: BTreeSet<u32> = live_out[&block.at].iter().collect();
-                let mut index = block.insns.len() as i64 - 1;
-                while index >= 0 {
-                    let one = &block.insns[index as usize];
-                    let mut first = index as usize;
-                    if one.group.is_some() {
-                        while first > 0 && block.insns[first - 1].group == one.group {
-                            first -= 1;
-                        }
-                    }
-                    let group = &block.insns[first..=index as usize];
-                    for item in group {
-                        for value in &item.defines {
-                            alive.remove(value);
-                        }
-                    }
-                    for item in group {
-                        expected.extend(
-                            item.uses.iter().filter(|value| !alive.contains(value)).map(|value| (key(item), *value)),
-                        );
-                    }
-                    alive.extend(group.iter().flat_map(|item| item.uses.iter().copied()));
-                    index = first as i64 - 1;
-                }
-            }
-            assert_eq!(crate::backend::spiller::_final_uses(&body), expected, "seed {seed}");
-        }
-    }
 }
 
 /// Splitting a value asked of the liveness of every value in every block as
@@ -1685,7 +1578,7 @@ fn test_classes_given_the_intervals_and_masks_are_the_classes_found_without() {
         3,
         Some((3, 1)),
         Some(Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![held(3)],
             sources: vec![Loc::Mem(cell)],
             ..Semantics::new(Operation::Move)
@@ -1698,7 +1591,7 @@ fn test_classes_given_the_intervals_and_masks_are_the_classes_found_without() {
             at,
             Some((at, 1)),
             Some(Semantics {
-                name: Some("mov".to_owned()),
+                name: Some("mov".into()),
                 dests: vec![held(value)],
                 sources: vec![imm(0)],
                 ..Semantics::new(Operation::Move)

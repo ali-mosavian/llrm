@@ -7,7 +7,7 @@ use super::EarlyCse;
 use crate::testing::{managed, parsed};
 
 fn run(body: &str) -> String {
-    managed(&mut parsed(&format!("{DOS}{body}")), EarlyCse)
+    managed(&mut parsed(&format!("{DOS}{body}")), EarlyCse::default())
 }
 
 /// A commuted add was a second add, which `gvn` found much later.
@@ -290,7 +290,7 @@ fn mssa_misses_over(passes: Vec<Box<dyn llrm_mir::passes::FunctionPass>>) -> (u6
 fn test_the_memory_graph_early_cse_updated_is_the_one_the_next_pass_gets() {
     let (hits, misses) = mssa_misses_over(vec![
         Box::new(AsksMssa { forgets: false }),
-        Box::new(EarlyCse),
+        Box::new(EarlyCse::default()),
         Box::new(AsksMssa { forgets: false }),
     ]);
     assert_eq!(misses, 1, "MemorySSA was computed again after EarlyCSE updated it");
@@ -303,4 +303,36 @@ fn test_the_memory_graph_is_computed_again_after_a_pass_that_keeps_nothing() {
     let (_, misses) =
         mssa_misses_over(vec![Box::new(AsksMssa { forgets: true }), Box::new(AsksMssa { forgets: false })]);
     assert_eq!(misses, 2, "a pass that named nothing kept MemorySSA");
+}
+
+/// EarlyFPM's EarlyCSE has no MemorySSA (`EarlyCSEPass()`,
+/// PassBuilderPipelines.cpp#L1180; `UseMemorySSA` false, EarlyCSE.cpp#L1815):
+/// it asks for no graph. Built anyway, d_faces -O2 built MemorySSA 11 times
+/// more than the pin's one per function (22.7 M of 42.3 M in EarlyCSE).
+#[test]
+fn test_early_cse_without_memory_ssa_builds_no_graph() {
+    let (hits, misses) = mssa_misses_over(vec![Box::new(EarlyCse { memory_ssa: false })]);
+    assert_eq!((hits, misses), (0, 0), "MemorySSA was asked for");
+    let (hits, misses) = mssa_misses_over(vec![Box::new(EarlyCse::default())]);
+    assert!(hits + misses > 0, "premise: with MemorySSA it asks for the graph");
+}
+
+/// Without MemorySSA a load past a write is a new load (`isSameMemGeneration`
+/// is false unless the generations are equal, EarlyCSE.cpp#L1074); with it a
+/// store to a cell that cannot alias the loaded one is not in the way.
+#[test]
+fn test_without_memory_ssa_a_load_past_a_store_to_another_cell_is_not_the_first() {
+    let body = "define i32 @f(ptr noalias %p, ptr noalias %q) {
+b0:
+  %a = load i32, ptr %p
+  store i32 7, ptr %q
+  %b = load i32, ptr %p
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+";
+    let with = managed(&mut parsed(&format!("{DOS}{body}")), EarlyCse::default());
+    let without = managed(&mut parsed(&format!("{DOS}{body}")), EarlyCse { memory_ssa: false });
+    assert_eq!(with.matches("load").count(), 1, "premise: with MemorySSA the second load goes:\n{with}");
+    assert_eq!(without.matches("load").count(), 2, "{without}");
 }

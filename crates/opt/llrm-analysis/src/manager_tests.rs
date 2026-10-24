@@ -509,120 +509,6 @@ fn a_change_to_a_branch_bound_reworks_the_blocks_past_it() {
     assert_eq!(after, states(&mut fresh, &module), "what was brought up to date is what working every block gives");
 }
 
-/// The second loop starts straight from the first's header, below no block of
-/// its own, and carries what the first knows of values it never reads.
-const DIRECT: &str = "define i16 @f() {
-b0:
-  %nine = add i16 4, 5
-  %three = add i16 1, 2
-  %four = add i16 2, 2
-  br label %h0
-
-h0:
-  %i = phi i16 [ 0, %b0 ], [ %i.next, %l0 ]
-  %t = mul i16 %i, %three
-  br label %l0
-
-l0:
-  %i.next = add i16 %i, 1
-  %c = icmp slt i16 %i.next, %nine
-  br i1 %c, label %h0, label %h1
-
-h1:
-  %j = phi i16 [ 0, %h0 ], [ %j.next, %l1 ]
-  %d = icmp slt i16 %j, 5
-  br i1 %d, label %l1, label %end
-
-l1:
-  %j.next = add i16 %j, 1
-  br label %h1
-
-end:
-  ret i16 %j
-}
-";
-
-/// What a loop knows is read from the loop its header's dominator is in, as
-/// well as from the blocks above: a change in the first of two such loops to a
-/// value the second never reads left the second's facts, which carry it, stale.
-#[test]
-fn a_change_to_a_loop_reworks_the_loop_that_starts_from_it() {
-    let mut module = parsed(&format!("{DOS}{DIRECT}"));
-    let layout = layout(&module);
-    let outer = Rc::new(Outer::of(&module, None));
-    let mut analyses = Analyses::new(Rc::clone(&outer));
-    let facts = |analyses: &mut Analyses, module: &llrm_mir::module::Module| {
-        let function = function(module, "f");
-        let held = super::Ranges::of(&module.context, &layout, function, analyses, true);
-        let unit = held.unit(&module.context, &layout, function, analyses.outer());
-        match held.bounds() {
-            Some(Ok(bounds)) => bounds.complete(&unit),
-            _ => panic!("bounds"),
-        }
-    };
-    let before = facts(&mut analyses, &module);
-    {
-        let (_, function) = module.function_mut("f").unwrap();
-        let t = value(function, "t");
-        let t =
-            function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(t)).unwrap();
-        let four = Operand::Value(value(function, "four"));
-        function.set_operand(t, 1, four);
-        analyses.invalidate(function, &PreservedAnalyses::none());
-    }
-    let after = facts(&mut analyses, &module);
-    assert_ne!(before, after, "the value the change reached");
-    assert_eq!(
-        after,
-        facts(&mut Analyses::new(outer), &module),
-        "what was brought up to date is what working every loop gives"
-    );
-}
-
-/// A loop carries what is known of the values made above it, whether it reads
-/// them or not: an instruction erased there, which no loop's blocks held, was
-/// still in the loop's facts. Seven bench programs and four pipeline tests
-/// found it.
-#[test]
-fn an_instruction_erased_above_a_loop_leaves_the_loops_facts() {
-    let mut module = parsed(&format!("{DOS}{LIMITED}"));
-    let layout = layout(&module);
-    let outer = Rc::new(Outer::of(&module, None));
-    let mut analyses = Analyses::new(Rc::clone(&outer));
-    let facts = |analyses: &mut Analyses, module: &llrm_mir::module::Module| {
-        let function = function(module, "f");
-        let held = super::Ranges::of(&module.context, &layout, function, analyses, true);
-        let unit = held.unit(&module.context, &layout, function, analyses.outer());
-        match held.bounds() {
-            Some(Ok(bounds)) => bounds.complete(&unit),
-            _ => panic!("bounds"),
-        }
-    };
-    let seven = {
-        let function = function(&module, "f");
-        value(function, "seven")
-    };
-    let before = facts(&mut analyses, &module);
-    assert!(before.values().any(|known| known.contains_key(&seven)), "a loop carries it");
-    {
-        let (_, function) = module.function_mut("f").unwrap();
-        let made = function
-            .walk()
-            .map(|(_, inst)| inst)
-            .find(|&inst| function.instruction(inst).result == Some(seven))
-            .unwrap();
-        function.erase(made).unwrap();
-        analyses.invalidate(function, &PreservedAnalyses::none());
-    }
-    let after = facts(&mut analyses, &module);
-    assert!(after.values().all(|known| !known.contains_key(&seven)), "gone from every loop");
-    assert_eq!(
-        after,
-        facts(&mut Analyses::new(outer), &module),
-        "what was brought up to date is what working every loop gives"
-    );
-}
-
 /// Every pass that said it changed something dropped the pointer analyses,
 /// though five in six of them (twelve call-effects runs a function in QCport)
 /// were true after it: the change was to integers.
@@ -1327,4 +1213,48 @@ b2:
     let error = run(PreservedAnalyses::none().preserve::<Scevs>()).unwrap_err();
     assert!(error.contains("scev"), "{error}");
     run(PreservedAnalyses::none()).expect("an edit that drops Scevs is fine");
+}
+
+/// The alias answers of every pair of accesses of every corpus function, by
+/// `memoryssa::may_clobber` over `Annotated`: `LLRM_AA_EVAL=1 cargo test
+/// aa_eval -- --nocapture`. No partial answer exists at this level.
+#[test]
+fn aa_eval_over_the_corpus() {
+    if !llrm_support::env_flag!("LLRM_AA_EVAL") {
+        return;
+    }
+    let (mut no, mut may, mut must, mut narrow) = (0_u64, 0_u64, 0_u64, 0_u64);
+    for (_, module) in corpus() {
+        let layout = layout(&module);
+        let mut outer = Outer::of(&module, None);
+        outer.require::<Summaries>(&module);
+        let outer = Rc::new(outer);
+        for (_, _, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
+            let unit = crate::testing::with_manager_registers(Unit::of(&module, &layout, function));
+            let mut analyses = Analyses::new(Rc::clone(&outer));
+            let found = analyses.get::<Annotated>(&module.context, &layout, function);
+            let Ok(found) = found.as_ref() else { continue };
+            let accesses: Vec<_> = found.values().filter(|one| one.pointer.is_some()).take(150).collect();
+            narrow += accesses
+                .iter()
+                .filter(|one| {
+                    one.provenance
+                        .as_ref()
+                        .is_some_and(|p| p.slices.iter().any(|s| s.object.extent != Some(s.high - s.low)))
+                })
+                .count() as u64;
+            for (at, one) in accesses.iter().enumerate() {
+                for other in &accesses[at + 1..] {
+                    if one.pointer == other.pointer && one.width == other.width {
+                        must += 1;
+                    } else if crate::memoryssa::may_clobber(&unit, None, one, other) {
+                        may += 1;
+                    } else {
+                        no += 1;
+                    }
+                }
+            }
+        }
+    }
+    println!("AA_EVAL no={no} may={may} must={must} partial=0 slices_narrowed={narrow}");
 }

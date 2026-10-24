@@ -770,14 +770,171 @@ impl<'a> GlobalsAAResult<'a> {
     }
 }
 
+impl GlobalsAAResult<'_> {
+    /// The global an underlying object is.
+    fn global_of(
+        &self,
+        object: Operand,
+    ) -> Option<GlobalId> {
+        match object {
+            Operand::Constant(id) => match self.unit.context.get(id).kind {
+                ConstantKind::Global(global) => Some(global),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// `isNonEscapingGlobalNoAlias` (L715): an object that is an argument, a
+    /// call's result, or loaded from somewhere an escape would have been, is
+    /// not the non-address-taken `global`. DEVIATE G9: another global ends the
+    /// walk with "may" (the pin goes on for two sized variables), and so does a
+    /// null pointer (it asks `NullPointerIsDefined`).
+    fn non_escaping_no_alias(
+        &self,
+        global: GlobalId,
+        object: Operand,
+    ) -> bool {
+        let mut visited = vec![object];
+        let mut inputs = vec![object];
+        let mut depth = 0;
+        while let Some(input) = inputs.pop() {
+            if let Some(other) = self.global_of(input) {
+                let _ = other;
+                return false;
+            }
+            let Some(defined) = self.unit.defining(input).map(|(_, one)| one) else {
+                // An argument escapes already.
+                if matches!(input, Operand::Value(_)) {
+                    continue;
+                }
+                return false;
+            };
+            if matches!(defined.opcode, Opcode::Call(_) | Opcode::Invoke(_)) {
+                continue;
+            }
+            depth += 1;
+            if depth > 4 {
+                return false;
+            }
+            let mut push = |one: Operand, inputs: &mut Vec<Operand>| {
+                let one = crate::basicaa::underlying_object(self.unit, one);
+                if !visited.contains(&one) {
+                    visited.push(one);
+                    inputs.push(one);
+                }
+            };
+            match defined.opcode {
+                Opcode::Load { .. } => {
+                    let pointer = crate::basicaa::underlying_object(self.unit, defined.operands[0]);
+                    if self.loaded_no_alias(pointer, &mut depth) {
+                        continue;
+                    }
+                    return false;
+                }
+                Opcode::Select => {
+                    push(defined.operands[1], &mut inputs);
+                    push(defined.operands[2], &mut inputs);
+                }
+                Opcode::Phi => {
+                    for &incoming in defined.operands.iter().step_by(2) {
+                        push(incoming, &mut inputs);
+                    }
+                }
+                _ => return false,
+            }
+        }
+        let _ = global;
+        true
+    }
+
+    /// `isNonEscapingGlobalNoAliasWithLoad` (L633): a pointer loaded from
+    /// `object` is no tracked global's, if what `object` is loaded from is
+    /// itself an argument, a call's result or a global.
+    fn loaded_no_alias(
+        &self,
+        object: Operand,
+        depth: &mut u32,
+    ) -> bool {
+        let mut visited = vec![object];
+        let mut inputs = vec![object];
+        while let Some(input) = inputs.pop() {
+            if self.global_of(input).is_some() {
+                continue;
+            }
+            let Some(defined) = self.unit.defining(input).map(|(_, one)| one) else {
+                if matches!(input, Operand::Value(_)) {
+                    continue;
+                }
+                return false;
+            };
+            if matches!(defined.opcode, Opcode::Call(_) | Opcode::Invoke(_)) {
+                continue;
+            }
+            *depth += 1;
+            if *depth > 4 {
+                return false;
+            }
+            let mut add = |one: Operand, inputs: &mut Vec<Operand>| {
+                let one = crate::basicaa::underlying_object(self.unit, one);
+                if !visited.contains(&one) {
+                    visited.push(one);
+                    inputs.push(one);
+                }
+            };
+            match defined.opcode {
+                Opcode::Load { .. } => add(defined.operands[0], &mut inputs),
+                Opcode::Select => {
+                    add(defined.operands[1], &mut inputs);
+                    add(defined.operands[2], &mut inputs);
+                }
+                Opcode::Phi => {
+                    for &incoming in defined.operands.iter().step_by(2) {
+                        add(incoming, &mut inputs);
+                    }
+                }
+                _ => return false,
+            }
+        }
+        true
+    }
+}
+
 impl crate::aa::AAResults for GlobalsAAResult<'_> {
+    /// `GlobalsAAResult::alias` (L836), the non-address-taken globals' part
+    /// (L845 to L876); the indirect globals' (L882 on) are not translated.
     fn alias(
         &mut self,
-        _: &crate::aa::MemoryLocation,
-        _: &crate::aa::MemoryLocation,
+        a: &crate::aa::MemoryLocation,
+        b: &crate::aa::MemoryLocation,
         _: &mut crate::aa::AAQueryInfo,
         _: Option<InstId>,
     ) -> crate::aa::AliasResult {
+        let (first, second) =
+            (crate::basicaa::underlying_object(self.unit, a.ptr), crate::basicaa::underlying_object(self.unit, b.ptr));
+        // The global's address taken: pretend it is not known to be a pointer
+        // to it.
+        // DEVIATE G10: a global the unit states unaddressed (`-oa`, INIT `sw`)
+        // is reached by its name alone, as one the use scan finds
+        // non-address-taken is.
+        let tracked = |object| {
+            self.global_of(object).filter(|&global| {
+                self.info.is_non_address_taken(global) || self.unit.globals_aa.is_some_and(|aa| aa.tracked(global))
+            })
+        };
+        let (one, two) = (tracked(first), tracked(second));
+        if one.is_some() && two.is_some() && one != two {
+            return crate::aa::AliasResult::NoAlias;
+        }
+        if (one.is_some() || two.is_some()) && one != two {
+            let (global, other) = match one {
+                Some(global) => (global, second),
+                None => (two.expect("one of the two"), first),
+            };
+            if self.non_escaping_no_alias(global, other) {
+                return crate::aa::AliasResult::NoAlias;
+            }
+        }
         crate::aa::AliasResult::MayAlias
     }
 

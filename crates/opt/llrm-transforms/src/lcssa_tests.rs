@@ -4,7 +4,7 @@
 
 use llrm_mir::passes::PassManager;
 
-use super::{LoopClosedSSA, closed, opened_in};
+use super::{LoopClosedSSA, closed};
 use crate::testing::{f, parsed, printed, results};
 
 /// A counted loop whose carried value is read after it.
@@ -181,14 +181,12 @@ fn test_exit_shared_with_a_bypass_still_requires_canonicalization() {
     );
 }
 
-/// matmul8: peeling left the outer counter's step behind `phi(x, x)`, and
-/// after unrolling an inner loop its exit phi stayed: no trip count through
-/// the one, no unrolling past the other, so both loop nests stayed rolled.
+/// LLVM's formLCSSA only adds phis; the one that names a single value is
+/// InstCombine's to remove. `closed` removed it, as did llrm's LCSSA before
+/// every loop pass: a step the pin's pass does not have.
 #[test]
-fn test_a_phi_naming_one_value_outside_a_loop_exit_is_that_value() {
-    assert_eq!(
-        closed_once(
-            "define i16 @f(i16 %x, i1 %c) {
+fn test_closing_a_loop_leaves_a_phi_naming_one_value_outside_its_exits() {
+    let text = "define i16 @f(i16 %x, i1 %c) {
 b0:
   br i1 %c, label %b1, label %b2
 
@@ -207,27 +205,8 @@ b4:
   %read = add i16 %copied, 1
   ret i16 %read
 }
-"
-        ),
-        "define i16 @f(i16 %x, i1 %c) {
-b0:
-  br i1 %c, label %b1, label %b2
-
-b1:
-  br label %b3
-
-b2:
-  br label %b3
-
-b3:
-  br label %b4
-
-b4:
-  %read = add i16 %x, 1
-  ret i16 %read
-}
-"
-    );
+";
+    assert_eq!(closed_once(text), text);
 }
 
 /// An inner loop closes first, so the outer loop's exit reads the inner
@@ -289,25 +268,6 @@ fn test_the_pass_keeps_what_the_function_returns() {
     manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     assert!(printed(&module).contains("%carried.lcssa = phi"));
     assert_eq!(results(&module, inputs), expected);
-}
-
-/// recmany -Os grew 189 bytes: LSR now runs on loop-closed SSA, and the exit
-/// phis stayed to the code generator, which copies each. Opened after the loop
-/// passes, a phi that names one value is that value, at an exit as elsewhere.
-#[test]
-fn test_the_exit_phis_go_when_the_loop_passes_are_done() {
-    let mut module = parsed(LOOP_WITH_EXIT_USE);
-    closed(f(&mut module)).unwrap();
-    assert!(printed(&module).contains(" = phi i16 [ %carried, %b1 ]"), "{}", printed(&module));
-    let shape = llrm_analysis::cfg::Shape::of(f(&mut module));
-    assert!(
-        !opened_in(f(&mut module), &shape, false).unwrap(),
-        "the phi outside loop exits go; this one is at the exit"
-    );
-    assert!(opened_in(f(&mut module), &shape, true).unwrap());
-    let after = printed(&module);
-    assert!(!after.contains("lcssa"), "{after}");
-    assert!(after.contains("%answer = add i16 %carried, 7"), "{after}");
 }
 
 #[test]

@@ -132,7 +132,8 @@ def run(source: str, axis: str, stage: str) -> str:
         path = Path(work) / "a.c"
         path.write_text(source)
         env = {**{k: v for k, v in os.environ.items() if not k.startswith("LLRM_")}, "LLRM_DEBUG": stage, "LLRM_TIME_TOP": "100000"}
-        done = subprocess.run([str(compiler), *flags, "-O2", "-o", os.devnull, str(path)], capture_output=True, text=True, env=env)
+        with llrmbin.with_object([str(compiler), *flags, "-O2", "-o", llrmbin.OBJECT, str(path)]) as command:
+            done = subprocess.run(command, capture_output=True, text=True, env=env)
     assert done.returncode == 0, done.stderr[-500:]
     return done.stderr
 

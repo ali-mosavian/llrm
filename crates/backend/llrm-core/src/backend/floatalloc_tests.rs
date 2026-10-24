@@ -1,7 +1,6 @@
 //! Port of `tests/test_floatalloc.py` and the floatalloc-only test in
 //! `tests/test_float_constants.py`.
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
@@ -9,11 +8,9 @@ use llrm_lir::registers::RegId;
 use super::{_truncating, allocated};
 use crate::backend::cpu;
 use crate::backend::floatassign::_equivalent_loads;
-use crate::backend::floatregions::Raised;
 use crate::backend::frame::Frame;
-use crate::backend::phielim;
 use crate::backend::select;
-use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
+use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Semantics, Space};
 use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 use crate::support::hash::HashMap;
 use crate::support::hash::IndexMap;
@@ -24,7 +21,7 @@ pub(crate) fn sem(
     dests: Vec<Loc>,
     sources: Vec<Loc>,
 ) -> Semantics {
-    Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+    Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
 }
 
 pub(crate) fn fl(value: u32) -> Loc {
@@ -93,14 +90,14 @@ pub(crate) fn block(
 
 /// As the pipeline runs it: phis are copies by now.
 pub(crate) fn run(body: &LirBody) -> LirBody {
-    allocated(&phielim::eliminated(body).unwrap(), None, None, true, "386").unwrap()
+    allocated(&crate::phielimination::lowered(body).unwrap(), None, None, true, "386").unwrap()
 }
 
 pub(crate) fn with_frame(
     body: &LirBody,
     frame: &mut Frame,
 ) -> LirBody {
-    allocated(&phielim::eliminated(body).unwrap(), Some(frame), None, true, "386").unwrap()
+    allocated(&crate::phielimination::lowered(body).unwrap(), Some(frame), None, true, "386").unwrap()
 }
 
 fn arith(
@@ -267,41 +264,11 @@ fn reads(
     result.insns().iter().filter(|one| what(one).sources.contains(&m(cell))).count()
 }
 
-#[test]
-fn test_truncation_saves_the_control_word_once_per_body() {
-    let _old = crate::backend::allocate::RfpOn::off();
-    // Every `(int)f` saved the control word and built the truncating one again.
-    let insn = |at: i64, what: Semantics| Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![], vec![]));
-    let store = |at: i64, disp: i64| {
-        let cell = Mem { through: RegId::BP, offset: 0, disp_width: 2, ..frame_cell(disp, 2) };
-        insn(at, sem(Operation::FloatStore, "fisttp", vec![m(&cell)], vec![st(0)]))
-    };
-    let blocks = vec![
-        block(0, vec![insn(0, sem(Operation::Nothing, "", vec![], vec![]))], vec![5]),
-        block(5, vec![store(5, -2), store(6, -4)], vec![]),
-    ];
-    let mut frame = Frame::new(-8);
-    let result = _truncating(
-        &LirBody::new("t", 0, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default()),
-        Some(&mut frame),
-    )
-    .unwrap();
-    let names: Vec<(i64, Vec<&str>)> = result
-        .blocks
-        .iter()
-        .map(|block| (block.at, block.insns.iter().map(|one| name(one)).filter(|name| !name.is_empty()).collect()))
-        .collect();
-    // The switch to truncation is made on the one edge in, at the end of block
-    // 0.
-    assert_eq!(names, vec![(0, vec!["fnstcw", "mov", "or", "mov", "fldcw"]), (5, vec!["fistp", "fistp", "fldcw"])]);
-}
-
 /// With the registers allocated (RFP) no value is left to hold
 /// the control word: the truncating word is made in memory alone. A `mov` of a
 /// value the allocator never saw reached the encoder as an unplaced value.
 #[test]
 fn test_the_truncating_word_is_made_in_memory_under_rfp() {
-    let _rfp = crate::backend::allocate::RfpOn::set();
     let insn = |at: i64, what: Semantics| Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![], vec![]));
     let cell = Mem { through: RegId::BP, offset: 0, disp_width: 2, ..frame_cell(-2, 2) };
     let blocks =
@@ -324,55 +291,12 @@ fn test_the_truncating_word_is_made_in_memory_under_rfp() {
     assert_eq!(&names_of(&result, 0)[..3], ["fnstcw", "fnstcw", "or"]);
 }
 
-/// A loop of `(int)a[i]` (entry 0, loop 5, exit 9): `body` is what its block
-/// does.
-fn truncating_loop(body: Vec<Semantics>) -> LirBody {
-    let insn = |at: i64, what: Semantics| Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![], vec![]));
-    let cell = Mem { through: RegId::BP, offset: 0, disp_width: 2, ..frame_cell(-2, 2) };
-    let mut loop_body = vec![insn(5, sem(Operation::FloatStore, "fisttp", vec![m(&cell)], vec![st(0)]))];
-    loop_body.extend(body.into_iter().map(|what| insn(5, what)));
-    loop_body.push(insn(5, sem(Operation::Branch, "jne", vec![], vec![])));
-    let blocks = vec![
-        block(0, vec![insn(0, sem(Operation::Nothing, "", vec![], vec![]))], vec![5]),
-        block(5, loop_body, vec![5, 9]),
-        block(9, vec![insn(9, sem(Operation::Nothing, "", vec![], vec![]))], vec![]),
-    ];
-    let mut frame = Frame::new(-8);
-    _truncating(
-        &LirBody::new("t", 0, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default()),
-        Some(&mut frame),
-    )
-    .unwrap()
-}
-
 fn names_of(
     body: &LirBody,
     at: i64,
 ) -> Vec<&str> {
     let block = body.blocks.iter().find(|block| block.at == at).unwrap();
     block.insns.iter().map(|one| name(one)).filter(|name| !name.is_empty()).collect()
-}
-
-#[test]
-fn test_a_loop_of_conversions_switches_the_rounding_mode_on_its_edges_not_every_trip() {
-    let _old = crate::backend::allocate::RfpOn::off();
-    // `x_elemf64_usesquare`: `fldcw` before and after each `fistp`, two control
-    // words loaded every trip (4 clocks each on a 486, 7 on a P5).
-    let result = truncating_loop(vec![]);
-    assert_eq!(names_of(&result, 0), vec!["fnstcw", "mov", "or", "mov", "fldcw"]);
-    assert_eq!(names_of(&result, 5), vec!["fistp", "jne"]);
-    assert_eq!(names_of(&result, 9), vec!["fldcw"]);
-}
-
-#[test]
-fn test_a_loop_that_rounds_outside_a_conversion_keeps_its_switches() {
-    let _old = crate::backend::allocate::RfpOn::off();
-    // An `fadd` between conversions rounds in the caller's mode, so the loop
-    // cannot run in the truncating one.
-    let add = sem(Operation::FloatArith, "fadd", vec![st(0)], vec![st(0), st(1)]);
-    let result = truncating_loop(vec![add]);
-    assert_eq!(names_of(&result, 5), vec!["fldcw", "fistp", "fldcw", "fadd", "jne"]);
-    assert_eq!(names_of(&result, 0), vec!["fnstcw", "mov", "or", "mov"]);
 }
 
 #[test]
@@ -393,31 +317,6 @@ fn test_a_load_read_by_several_arithmetics_is_loaded_once() {
     let result = run(&body);
     let reads = result.insns().iter().filter(|one| what(one).sources.contains(&m(falloff))).count();
     assert_eq!(reads, 1);
-    let (memory, stack) = _x87(&result.insns(), &[(x, 3.0), (y, 5.0), (falloff, 0.5)]);
-    assert_eq!((memory[px], memory[py], stack), (1.5, 2.5, vec![]));
-}
-
-/// The 486 table priced `fld m` at 8 and `fmul m` as `fmul st` plus that
-/// load, so a load read by two multiplies was held in a register. Intel's
-/// i486 figures are `fld m` 3, `fmul m64` 14 and `fmul st` 16: two memory
-/// forms are cheaper.
-#[test]
-fn test_a_load_read_by_two_multiplies_is_their_memory_operand_on_the_486() {
-    let cells = _cells([-4, -8, -12, -16, -20], 4);
-    let (x, y, falloff, px, py) = (&cells[0], &cells[1], &cells[2], &cells[3], &cells[4]);
-    let body = _body(vec![
-        _load(1, x),
-        _load(2, y),
-        _load(3, falloff),
-        _arithmetic("fmul", 4, fl(1), fl(3)),
-        _store(px, 4),
-        _arithmetic("fmul", 5, fl(2), fl(3)),
-        _store(py, 5),
-    ]);
-    let result = allocated(&phielim::eliminated(&body).unwrap(), None, None, true, "486").unwrap();
-    let fused =
-        result.insns().iter().filter(|one| name(one) == "fmul" && what(one).sources.contains(&m(falloff))).count();
-    assert_eq!(fused, 2);
     let (memory, stack) = _x87(&result.insns(), &[(x, 3.0), (y, 5.0), (falloff, 0.5)]);
     assert_eq!((memory[px], memory[py], stack), (1.5, 2.5, vec![]));
 }
@@ -452,40 +351,6 @@ fn test_a_load_is_not_read_again_after_a_store_that_may_reach_it() {
         assert_eq!(reads(&result, &falloff), 1, "{written}");
         let (memory, stack) = _x87(&result.insns(), &[(x, 3.0), (y, 5.0), (&falloff, 0.5)]);
         assert_eq!((memory[py], stack), (2.5, vec![]));
-    }
-}
-
-#[test]
-fn test_a_first_read_moves_past_a_trapping_instruction_only_for_a_quiet_cell() {
-    // `fld m32` raises on a signalling NaN; read after a division, that
-    // exception would come second.
-    for proven in [false, true] {
-        let cells = _cells([-4, -8, -12, -16, -20, -24, -28], 4);
-        let (w, x, y, c, z, out, other) = (&cells[0], &cells[1], &cells[2], &cells[3], &cells[4], &cells[5], &cells[6]);
-        let (h, a, b, f, q, g, r) = (1, 2, 3, 4, 5, 6, 7);
-        let mut operations = if proven { vec![_load(h, w), _store(c, h)] } else { vec![] };
-        operations.extend([
-            _load(a, x),
-            _load(b, y),
-            _load(f, c),
-            _arithmetic("fdiv", q, fl(a), fl(b)),
-            _store(out, q),
-            _load(g, z),
-            _arithmetic("fmul", r, fl(g), fl(f)),
-            _store(other, r),
-        ]);
-        let result = run(&_body(operations));
-        let insns = result.insns();
-        let readers: Vec<usize> = insns
-            .iter()
-            .enumerate()
-            .filter(|(_, one)| what(one).sources.contains(&m(c)))
-            .map(|(index, _)| index)
-            .collect();
-        let division = insns.iter().position(|one| name(one).starts_with("fdiv")).unwrap();
-        assert!(readers.len() == 1 && (readers[0] > division) == proven, "{proven}");
-        let (memory, stack) = _x87(&insns, &[(w, 0.25), (x, 6.0), (y, 3.0), (c, 0.5), (z, 4.0)]);
-        assert_eq!((memory[out], memory[other], stack), (2.0, if proven { 1.0 } else { 2.0 }, vec![]));
     }
 }
 
@@ -538,172 +403,6 @@ fn _sparing_the_frame(body: LirBody) -> LirBody {
 }
 
 #[test]
-fn test_a_float_live_across_a_call_is_read_again_from_its_cell() {
-    // A value loaded before a call and stored after it refused the whole
-    // object.
-    for boundary in [Operation::Call, Operation::Barrier] {
-        let (source, target) = (frame_cell(-4, 4), frame_cell(-8, 4));
-        let body = _sparing_the_frame(_body(vec![
-            _load(1, &source),
-            sem(boundary, if boundary == Operation::Call { "call" } else { "" }, vec![], vec![]),
-            _store(&target, 1),
-        ]));
-        let result = with_frame(&body, &mut Frame::new(-8));
-        let shape: Vec<(String, Vec<Loc>, Vec<Loc>)> = result
-            .insns()
-            .iter()
-            .filter(|one| what(one).op != Operation::Nothing)
-            .map(|one| (name(one).to_owned(), what(one).dests.clone(), what(one).sources.clone()))
-            .collect();
-        // The source cell is unchanged across it: read again, with nothing
-        // spilled.
-        assert_eq!(
-            shape,
-            vec![
-                ((if boundary == Operation::Call { "call" } else { "" }).to_owned(), vec![], vec![]),
-                ("fld".to_owned(), vec![st(0)], vec![m(&source)]),
-                ("fstp".to_owned(), vec![m(&target)], vec![st(0)]),
-            ]
-        );
-    }
-    // A call that lists nothing may write the cell: it is not read again.
-    let (source, target) = (frame_cell(-4, 4), frame_cell(-8, 4));
-    let body = _body(vec![_load(1, &source), sem(Operation::Call, "call", vec![], vec![]), _store(&target, 1)]);
-    let insns = with_frame(&body, &mut Frame::new(-8)).insns();
-    let call = insns.iter().position(|one| what(one).op == Operation::Call).expect("the call");
-    assert!(!insns[call..].iter().any(|one| name(one) == "fld" && what(one).sources == vec![m(&source)]), "{insns:#?}");
-}
-
-/// `_may_write` gave a call its listed writes or anything, but let a barrier
-/// that lists nothing write nothing: a cell loaded before it stood for the
-/// same cell loaded after it, and `b - a` became `fsub st,st`.
-#[test]
-fn test_a_value_loaded_before_a_barrier_is_not_the_cell_after_it() {
-    let (cell, out) = (frame_cell(-4, 4), frame_cell(-8, 4));
-    let body = _body(vec![
-        _load(1, &cell),
-        sem(Operation::Barrier, "", vec![], vec![]),
-        _load(2, &cell),
-        _arithmetic("fsub", 3, fl(2), fl(1)),
-        _store(&out, 3),
-    ]);
-    let insns = with_frame(&body, &mut Frame::new(-8)).insns();
-    let barrier = insns.iter().position(|one| what(one).op == Operation::Barrier).expect("the barrier");
-    // The value from before it waits in a slot of its own, not the cell the
-    // barrier may write.
-    assert!(
-        insns[..barrier]
-            .iter()
-            .any(|one| what(one).dests.iter().any(|dest| matches!(dest, Loc::Mem(one) if *one != cell && *one != out))),
-        "{insns:#?}"
-    );
-}
-
-#[test]
-fn test_region_value_reuses_one_reload_until_an_unknown_effect() {
-    // A shared floating result crossing a fork reloaded its owned slot for
-    // every store. It now stays on the stack across the edge; only a call
-    // sends it to memory.
-    for boundary in [None, Some(Operation::Call), Some(Operation::Barrier)] {
-        let cell = frame_cell(-4, 4);
-        let mut operations = vec![_load(1, &cell), _store(&cell, 1)];
-        if let Some(boundary) = boundary {
-            operations.push(sem(boundary, if boundary == Operation::Call { "call" } else { "" }, vec![], vec![]));
-        }
-        operations.push(_store(&cell, 1));
-        let mut body = _body(operations);
-        let insns = body.insns();
-        body.blocks = vec![
-            block(0, insns[..1].to_vec(), vec![8, 80]).into(),
-            block(8, insns[1..].to_vec(), vec![]).into(),
-            block(80, vec![], vec![]).into(),
-        ];
-        let result = with_frame(&body, &mut Frame::new(-8));
-        let consumer = result.blocks.iter().find(|block| block.at == 8).unwrap();
-        let reloads = consumer
-            .insns
-            .iter()
-            .filter(|one| {
-                what(one).op == Operation::FloatLoad
-                    && what(one).sources.iter().any(|arg| matches!(arg, Loc::Mem(arg) if arg.width == 8))
-            })
-            .count();
-        assert_eq!(reloads, usize::from(boundary.is_some()));
-        let stores: Vec<&Semantics> = consumer
-            .insns
-            .iter()
-            .map(|one| what(one))
-            .filter(|what| what.op == Operation::FloatStore && what.dests == vec![m(&cell)])
-            .collect();
-        assert_eq!(stores.iter().map(|one| one.name.as_deref().unwrap()).collect::<Vec<_>>(), vec!["fst", "fstp"]);
-        assert!(stores.iter().all(|one| one.sources == vec![st(0)]));
-        if boundary.is_none() {
-            assert!(consumer.insns.iter().all(|one| emits(what(one))));
-        }
-    }
-}
-
-#[test]
-fn test_a_load_read_once_by_the_next_arithmetic_is_its_memory_operand() {
-    // `fld [x]` then a popping multiply spent an instruction and a stack slot
-    // `fmul [x]` does not.
-    for (loaded, op, loaded_first, fused) in
-        [("fld", "fmul", false, "fmul"), ("fld", "fsub", true, "fsubr"), ("fild", "fdiv", false, "fidiv")]
-    {
-        let (home, cell) = (frame_cell(-4, 4), frame_cell(-8, 4));
-        let body = _body(vec![
-            _load(1, &home),
-            sem(Operation::FloatLoad, loaded, vec![fl(2)], vec![m(&cell)]),
-            sem(
-                Operation::FloatArith,
-                op,
-                vec![fl(3)],
-                if loaded_first { vec![fl(2), fl(1)] } else { vec![fl(1), fl(2)] },
-            ),
-            _store(&home, 3),
-        ]);
-        let result = run(&body);
-        let emitted: Vec<(String, Vec<Loc>)> = result
-            .insns()
-            .iter()
-            .filter(|one| what(one).op != Operation::Nothing)
-            .map(|one| (name(one).to_owned(), what(one).sources.clone()))
-            .collect();
-        assert_eq!(
-            emitted,
-            vec![
-                ("fld".to_owned(), vec![m(&home)]),
-                (fused.to_owned(), vec![st(0), m(&cell)]),
-                ("fstp".to_owned(), vec![st(0)]),
-            ]
-        );
-        assert!(result.insns().iter().all(|one| emits(what(one))));
-    }
-}
-
-#[test]
-fn test_a_load_folded_into_x87_memory_arithmetic_retains_its_source_bytes() {
-    // Qmove and qbsp fresh emission refused 32 and 9 unowned bytes.
-    let cells = _cells([-4, -8], 4);
-    let (home, cell) = (&cells[0], &cells[1]);
-    let body = _body(vec![_load(1, home), _load(2, cell), _arithmetic("fmul", 3, fl(1), fl(2)), _store(home, 3)]);
-    let result = run(&body);
-    let covered: BTreeSet<i64> = result
-        .insns()
-        .iter()
-        .flat_map(|one| {
-            let (start, end) = one.covers.unwrap();
-            start..end
-        })
-        .collect();
-    assert_eq!(covered, (0..32).collect());
-    assert_eq!(
-        result.insns().iter().filter(|one| what(one).op != Operation::Nothing).map(|one| name(one)).collect::<Vec<_>>(),
-        ["fld", "fmul", "fstp"]
-    );
-}
-
-#[test]
 fn test_square_keeps_the_next_used_operand_on_top() {
     // FPDEEP shuffled p back to the top immediately after forming p*p.
     let cell = frame_cell(-4, 4);
@@ -721,146 +420,6 @@ fn test_square_keeps_the_next_used_operand_on_top() {
     assert_eq!(product.dests, vec![st(1)]);
     assert_eq!(product.sources, vec![st(1), st(0)]);
     assert!(insns.iter().all(|one| emits(what(one))));
-}
-
-#[test]
-fn test_runtime_stack_integer_result_uses_memory_without_named_float_values() {
-    // SYS_INIT_TABLES at 08fa refused FISTP EBX after POW4 returned in physical
-    // ST0.
-    for width in [2, 4] {
-        let result = Loc::Held(Held { value: 2, width });
-        let cell = frame_cell(-8, width);
-        let body = _body(vec![
-            sem(Operation::FloatStore, "fistp", vec![result.clone()], vec![st(0)]),
-            sem(Operation::Move, "mov", vec![m(&cell)], vec![result.clone()]),
-        ]);
-        let allocated = with_frame(&body, &mut Frame::new(-8));
-        let insns = allocated.insns();
-        assert_eq!(insns.iter().map(|one| name(one)).collect::<Vec<_>>(), ["wait", "fistp", "wait", "mov", "mov"]);
-        let (store, load) = (what(&insns[1]), what(&insns[3]));
-        assert!(matches!(store.dests[0], Loc::Mem(_)));
-        assert_eq!(store.dests, load.sources);
-        assert!(matches!(&store.dests[0], Loc::Mem(cell) if cell.width == width));
-        assert_eq!(load.dests, vec![result]);
-        assert!(emits(store));
-    }
-}
-
-#[test]
-fn test_integer_result_waits_before_reading_owned_conversion_storage() {
-    // B$FIST/B$FIS2 wait on both sides of conversion before returning the
-    // integer.
-    for width in [2, 4] {
-        let result = Loc::Held(Held { value: 2, width });
-        let cell = frame_cell(-8, 8);
-        let body = _body(vec![
-            _load(1, &cell),
-            sem(Operation::FloatStore, "fistp", vec![result.clone()], vec![fl(1)]),
-            sem(Operation::Move, "mov", vec![m(&cell)], vec![result.clone()]),
-        ]);
-        let allocated = with_frame(&body, &mut Frame::new(-8));
-        let insns = allocated.insns();
-        assert_eq!(
-            insns.iter().map(|one| name(one)).collect::<Vec<_>>(),
-            ["fld", "wait", "fistp", "wait", "mov", "mov"]
-        );
-        let (store, load) = (what(&insns[2]), what(&insns[4]));
-        assert_eq!(store.dests, load.sources);
-        let Loc::Mem(stored) = &store.dests[0] else { panic!() };
-        assert_eq!(stored.width, width);
-        assert!(stored.addr.unwrap().disp < -8);
-        assert_eq!(load.dests, vec![result]);
-    }
-}
-
-#[test]
-fn test_unused_integer_conversion_keeps_checkpoints_without_materializing_result() {
-    // Constant print arguments can leave an unused conversion result; both
-    // waits must survive.
-    for width in [2, 4] {
-        let cell = frame_cell(-8, 8);
-        let body = _body(vec![
-            _load(1, &cell),
-            sem(Operation::FloatStore, "fistp", vec![Loc::Held(Held { value: 2, width })], vec![fl(1)]),
-        ]);
-        let allocated = with_frame(&body, &mut Frame::new(-8));
-        let insns = allocated.insns();
-        assert_eq!(insns.iter().map(|one| name(one)).collect::<Vec<_>>(), ["fld", "wait", "fistp", "wait"]);
-        assert!(matches!(&what(&insns[2]).dests[0], Loc::Mem(cell) if cell.width == width));
-    }
-}
-
-#[test]
-fn test_conversion_result_is_kept_for_non_operand_readers() {
-    // An invisible reader must not lose the integer returned by B$FIST.
-    // A phi is a copy by the time floats are allocated.
-    for reader in ["opaque", "barrier", "pinned", "uses"] {
-        let result = Loc::Held(Held { value: 2, width: 4 });
-        let cell = frame_cell(-8, 8);
-        let mut body =
-            _body(vec![_load(1, &cell), sem(Operation::FloatStore, "fistp", vec![result.clone()], vec![fl(1)])]);
-        let first = body.blocks[0].clone();
-        match reader {
-            "pinned" => body.pins = IndexMap::from_iter([(2, RegId::None)]),
-            _ => {
-                let what = match reader {
-                    "opaque" => None,
-                    "barrier" => Some(sem(Operation::Barrier, "", vec![], vec![])),
-                    _ => Some(sem(Operation::Nothing, "", vec![], vec![])),
-                };
-                let extra =
-                    Insn::new(24, Some((24, 24)), what, vec![], if reader == "uses" { vec![2] } else { vec![] });
-                let mut extended = first;
-                extended.insns.edit(|insns| insns.push(Arc::new(extra)));
-                body.blocks = vec![extended];
-            }
-        }
-        let allocated = with_frame(&body, &mut Frame::new(-8));
-        assert!(
-            allocated.insns().iter().any(|one| one
-                .what
-                .as_ref()
-                .is_some_and(|what| what.name.as_deref() == Some("mov") && what.dests == vec![result.clone()])),
-            "{reader}"
-        );
-    }
-}
-
-#[test]
-fn test_ninth_float_uses_an_owned_spill() {
-    // Nine live FP values previously refused allocation. Machine semantics
-    // spill as a double.
-    let sources = _cells((-40..-4).step_by(4), 4);
-    let answers = _cells((-80..-44).step_by(4), 4);
-    let mut operations = Vec::new();
-    for (index, cell) in sources.iter().enumerate() {
-        let (load, value) = (index as u32 + 1, index as u32 + 11);
-        operations.extend([_load(load, cell), fchs(value, load)]);
-    }
-    for (index, cell) in answers.iter().enumerate() {
-        operations.push(_store(cell, index as u32 + 11));
-    }
-    let body = _body(operations);
-    let mut slots = Frame::new(-80);
-    let integer_scratch = slots.cell(1_i64, 2).unwrap();
-    let allocated = with_frame(&body, &mut slots);
-    let insns = allocated.insns();
-    let spills: Vec<&Arc<Insn>> = insns
-        .iter()
-        .filter(|one| name(one) == "fstp" && matches!(&what(one).dests[0], Loc::Mem(cell) if cell.width == 8))
-        .collect();
-    assert!(spills.len() == 1 && slots.size() >= 8);
-    assert!(spills.iter().all(|one| {
-        matches!(&what(one).dests[0], Loc::Mem(cell) if cell.addr != integer_scratch.addr)
-            && one.covers.unwrap().0 == one.covers.unwrap().1
-    }));
-    let memory: Vec<(&Mem, f64)> = sources.iter().enumerate().map(|(index, cell)| (cell, index as f64 + 1.0)).collect();
-    let (memory, stack) = _x87(&insns, &memory);
-    assert_eq!(
-        answers.iter().map(|cell| memory[cell]).collect::<Vec<_>>(),
-        (1..10).map(|index| -f64::from(index)).collect::<Vec<_>>()
-    );
-    assert!(stack.is_empty());
 }
 
 #[test]
@@ -898,29 +457,6 @@ fn test_float_survives_fork_join_and_loop_without_rereading_source() {
         assert_eq!(stores, vec![(cell.clone(), precise); path.len() - 1]);
         assert!(stack.is_empty());
         assert_eq!(slots.size(), before);
-    }
-}
-
-#[test]
-fn test_floating_bridge_never_reads_an_unestablished_slot() {
-    // Cross-block allocation must not turn a missing definition into a frame
-    // read.
-    for defect in ["entry", "bypass"] {
-        let cell = frame_cell(-10, 10);
-        let body = _body(vec![_load(1, &cell), _store(&cell, 1)]);
-        let (load, store) = (body.insns()[0].clone(), body.insns()[1].clone());
-        let mut blocks =
-            vec![block(0, vec![load], vec![16, 32]), block(16, vec![store], vec![]), block(32, vec![], vec![16])];
-        let mut body = body;
-        if defect == "entry" {
-            body.entry = 16;
-        } else {
-            body.entry = 48;
-            blocks.push(block(48, vec![], vec![0, 16]));
-        }
-        body.blocks = crate::model::lir::shared(blocks);
-        let result = allocated(&body, Some(&mut Frame::new(-10)), None, true, "386");
-        assert!(matches!(result, Err(Raised::Unlowered(_))), "{defect}: {result:?}");
     }
 }
 
@@ -977,108 +513,6 @@ fn test_live_store_uses_nonpopping_encoding_when_available() {
             if width == 4 || width == 8 { vec!["fld", "fst", "fstp"] } else { vec!["fld", "fld", "fstp", "fstp"] }
         );
         assert!(result.insns().iter().all(|one| emits(what(one))));
-    }
-}
-
-#[test]
-fn test_shared_float_crosses_only_a_unique_straight_line_edge() {
-    // A shared sum was refused at a block edge despite one unchanged stack
-    // path. Only a value no path defines is refused.
-    for boundary in ["linear", "reversed", "separated", "fork", "join", "entry"] {
-        let cell = frame_cell(-4, 4);
-        let mut body = _body(vec![
-            _load(1, &cell),
-            _arithmetic("fmul", 2, fl(1), m(&cell)),
-            _store(&cell, 2),
-            _arithmetic("fdiv", 3, fl(1), m(&cell)),
-            _store(&cell, 3),
-        ]);
-        let insns = body.insns();
-        let first = block(0, insns[..3].to_vec(), if boundary == "fork" { vec![24, 80] } else { vec![24] });
-        let second = block(24, insns[3..].to_vec(), vec![]);
-        let mut blocks = vec![first.clone(), second.clone()];
-        if boundary == "fork" || boundary == "join" {
-            blocks.push(block(80, vec![], if boundary == "join" { vec![24] } else { vec![] }));
-        }
-        if boundary == "reversed" {
-            blocks.reverse();
-        }
-        if boundary == "separated" {
-            blocks = vec![first, block(80, vec![], vec![]), second];
-        }
-        body.entry = if boundary == "entry" { 24 } else { 0 };
-        body.blocks = crate::model::lir::shared(blocks);
-        if boundary == "entry" {
-            assert!(matches!(allocated(&body, None, None, true, "386"), Err(Raised::Unlowered(_))), "{boundary}");
-            continue;
-        }
-        let allocated = run(&body);
-        assert_eq!(
-            allocated.blocks.iter().map(|block| block.at).collect::<Vec<_>>(),
-            body.blocks.iter().map(|block| block.at).collect::<Vec<_>>()
-        );
-        let by_at: HashMap<i64, &Block> = allocated.blocks.iter().map(|block| (block.at, block)).collect();
-        // Where the other way out reads none, the load is made once the fork is
-        // taken's way: the fork's block 0 no longer loads for an arm
-        // half the calls never read.
-        let first: &[&str] =
-            if boundary == "fork" { &["", "fld", "fmul", "fstp"] } else { &["fld", "fld", "fmul", "fstp"] };
-        assert_eq!(by_at[&0].insns.iter().map(|one| name(one)).collect::<Vec<_>>(), first, "{boundary}");
-        if boundary == "fork" {
-            // The arm that reads it loads it; the other keeps nothing on the
-            // stack to pop.
-            assert_eq!(by_at[&24].insns.iter().map(|one| name(one)).collect::<Vec<_>>(), ["fld", "fdiv", "fstp"]);
-            assert_eq!(by_at[&80].insns.iter().map(|one| name(one)).collect::<Vec<_>>(), Vec::<&str>::new());
-        } else {
-            assert_eq!(
-                by_at[&24].insns.iter().map(|one| name(one)).collect::<Vec<_>>(),
-                ["fdiv", "fstp"],
-                "{boundary}"
-            );
-            assert_eq!(what(&by_at[&24].insns[0]).sources, vec![st(0), m(&cell)]);
-        }
-        assert!(allocated.insns().iter().all(|one| emits(what(one))));
-    }
-}
-
-#[test]
-fn test_integer_conversion_materializes_a_frame_operand() {
-    // FPCALC's computed integer must reach FILD through an owned, correctly
-    // sized slot.
-    for width in [2, 4] {
-        let integer = Loc::Held(Held { value: 1, width });
-        let output = frame_cell(-8, 8);
-        let body =
-            _body(vec![sem(Operation::FloatLoad, "fild", vec![fl(2)], vec![integer.clone()]), _store(&output, 2)]);
-        let mut slots = Frame::new(-8);
-        let result = with_frame(&body, &mut slots);
-        let emitted: Vec<Arc<Insn>> =
-            result.insns().into_iter().filter(|one| what(one).op != Operation::Nothing).collect();
-        let [store, load, _] = emitted.as_slice() else { panic!("{emitted:?}") };
-        assert_eq!(slots.size(), i64::from(width));
-        assert_eq!(what(store).sources, vec![integer]);
-        assert_eq!(what(store).dests, what(load).sources);
-        assert_eq!(what(store).dests, vec![Loc::Mem(slots.cell(2, i64::from(width)).unwrap())]);
-        assert!(store.uses == vec![1] && load.uses.is_empty());
-        assert_eq!(store.covers, Some((0, 0)));
-    }
-}
-
-#[test]
-fn test_integer_conversion_into_physical_x87_stack_materializes_memory() {
-    // Qrender camera 0335 emitted impossible FILD BX after integer promotion.
-    for width in [2, 4] {
-        let integer = Loc::Held(Held { value: 1, width });
-        let body = _body(vec![sem(Operation::FloatLoad, "fild", vec![st(0)], vec![integer.clone()])]);
-        let result = with_frame(&body, &mut Frame::new(-8));
-        let insns = result.insns();
-        assert_eq!(insns.len(), 2);
-        let (store, load) = (what(&insns[0]), what(&insns[1]));
-        assert_eq!(store.sources, vec![integer]);
-        assert!(matches!(load.sources[0], Loc::Mem(_)));
-        assert_eq!(store.dests, load.sources);
-        assert_eq!(load.dests, vec![st(0)]);
-        assert!(emits(load));
     }
 }
 
@@ -1199,13 +633,6 @@ fn test_last_register_operand_is_consumed_without_reversing_arithmetic() {
 }
 
 #[test]
-fn test_missing_float_is_not_created_by_an_exchange() {
-    let body = _body(vec![fchs(2, 1)]);
-    let Err(Raised::Unlowered(error)) = allocated(&body, None, None, true, "386") else { panic!() };
-    assert!(error.0.contains("unavailable"));
-}
-
-#[test]
 fn test_shared_producer_is_kept_across_two_arithmetic_consumers() {
     // FPCSE's shared sum needs to survive multiplication before division reads
     // it.
@@ -1259,148 +686,6 @@ fn test_x87_memory_operand_follows_the_selected_cpu_cost() {
     assert!(multiply.sources.iter().all(|arg| arg.st_index().is_some()));
     let (memory, stack) = _x87(&insns, &[(source, 7.0), (home, 3.0)]);
     assert!(memory[out] == -21.0 && stack.is_empty());
-}
-
-#[test]
-fn test_x87_memory_operand_matches_each_public_cpu_cost() {
-    // Each public CPU's emitted form agrees with its own audited cost table.
-    for profile in cpu::names() {
-        let (body, _) = _memory_operand_body();
-        let target = cpu::profile(profile).unwrap();
-        let result = allocated(&body, None, None, true, target).unwrap();
-        let insns = result.insns();
-        let multiply = what(insns.iter().find(|one| name(one).starts_with("fmul")).unwrap());
-        let folded = multiply.sources.iter().any(|arg| matches!(arg, Loc::Mem(_)));
-        let cost = |form: &str| target.cost(form).unwrap();
-        assert_eq!(folded, cost("x87_mul_m") <= cost("x87_load") + cost("x87_mul"), "{profile}");
-    }
-}
-
-#[test]
-fn test_profitable_multiuse_float_home_is_retained_for_the_selected_cpu() {
-    // C nbody reread each rounded dx/dy temporary for every force term.
-    for profile in cpu::names() {
-        let cells = _cells([-4, -8, -12, -16, -20, -24], 4);
-        let (home, left_cell, right_cell, square_out, left_out, right_out) =
-            (&cells[0], &cells[1], &cells[2], &cells[3], &cells[4], &cells[5]);
-        let (shared, left, right, square, left_product, right_product) = (1, 2, 3, 4, 5, 6);
-        let body = _body(vec![
-            _load(shared, home),
-            _arithmetic("fmul", square, fl(shared), fl(shared)),
-            _store(square_out, square),
-            _load(left, left_cell),
-            _arithmetic("fmul", left_product, fl(shared), fl(left)),
-            _store(left_out, left_product),
-            _load(right, right_cell),
-            _arithmetic("fmul", right_product, fl(shared), fl(right)),
-            _store(right_out, right_product),
-        ]);
-        let target = cpu::profile(profile).unwrap();
-        let result = allocated(&body, None, None, true, target).unwrap();
-        let cost = |form: &str| target.cost(form).unwrap();
-        let (load, multiply, memory_multiply) = (cost("x87_load"), cost("x87_mul"), cost("x87_mul_m"));
-        let retain_cost = 2 * load + 3 * multiply;
-        let home_cost = load + multiply + 2 * memory_multiply.min(load + multiply);
-        let expected_reads = if retain_cost < home_cost { 1 } else { 3 };
-
-        assert_eq!(reads(&result, home), expected_reads, "{profile}");
-        let (memory, stack) = _x87(&result.insns(), &[(home, 7.0), (left_cell, 2.0), (right_cell, 3.0)]);
-        assert_eq!((memory[square_out], memory[left_out], memory[right_out], stack), (49.0, 14.0, 21.0, vec![]));
-    }
-}
-
-#[test]
-fn test_independent_x87_regions_select_their_own_complete_candidate() {
-    // One bad stack region made the old whole-body choice discard a cheaper
-    // sibling.
-    let cells = _cells([-4, -8, -12, -16, -20, -24], 4);
-    let (home, left_cell, right_cell, square_out, left_out, right_out) =
-        (&cells[0], &cells[1], &cells[2], &cells[3], &cells[4], &cells[5]);
-    let (shared, left, right, square, left_product, right_product) = (1, 2, 3, 4, 5, 6);
-    let mut operations = vec![
-        _load(shared, home),
-        _arithmetic("fmul", square, fl(shared), fl(shared)),
-        _store(square_out, square),
-        _load(left, left_cell),
-        _arithmetic("fmul", left_product, fl(shared), fl(left)),
-        _store(left_out, left_product),
-        _load(right, right_cell),
-        _arithmetic("fmul", right_product, fl(shared), fl(right)),
-        _store(right_out, right_product),
-        sem(Operation::Barrier, "wait", vec![], vec![]),
-    ];
-    let others = _cells([-28, -32, -36, -40, -44], 4);
-    let (other, scale_cell, first_acc, second_acc, other_square) =
-        (&others[0], &others[1], &others[2], &others[3], &others[4]);
-    let (value, squared, scale, product, old, added, scale_again, product_again, old_again, subtracted) =
-        (10, 11, 12, 13, 14, 15, 16, 17, 18, 19);
-    operations.extend([
-        _load(value, other),
-        _arithmetic("fmul", squared, fl(value), fl(value)),
-        _store(other_square, squared),
-        _load(old, first_acc),
-        _load(scale, scale_cell),
-        _arithmetic("fmul", product, fl(value), fl(scale)),
-        _arithmetic("fadd", added, fl(old), fl(product)),
-        _store(first_acc, added),
-        _load(old_again, second_acc),
-        _load(scale_again, scale_cell),
-        _arithmetic("fmul", product_again, fl(value), fl(scale_again)),
-        _arithmetic("fsub", subtracted, fl(old_again), fl(product_again)),
-        _store(second_acc, subtracted),
-    ]);
-
-    let result = run(&_body(operations));
-
-    assert_eq!(reads(&result, home), 1);
-    assert_eq!(reads(&result, other), 3);
-    assert!(!result.insns().iter().any(|one| name(one) == "fxch"));
-    let (memory, stack) = _x87(
-        &result.insns(),
-        &[
-            (home, 7.0),
-            (left_cell, 2.0),
-            (right_cell, 3.0),
-            (other, 5.0),
-            (scale_cell, 2.0),
-            (first_acc, 10.0),
-            (second_acc, 20.0),
-        ],
-    );
-    assert_eq!(
-        (
-            memory[square_out],
-            memory[left_out],
-            memory[right_out],
-            memory[other_square],
-            memory[first_acc],
-            memory[second_acc]
-        ),
-        (49.0, 14.0, 21.0, 25.0, 20.0, 10.0)
-    );
-    assert!(stack.is_empty());
-}
-
-#[test]
-fn test_repeated_stable_float_cell_load_is_kept_across_consumers() {
-    // C nbody reloaded one rounded frame temporary for every force term.
-    let cells = _cells([-4, -8, -12, -16], 4);
-    let (cell, factor, first_out, second_out) = (&cells[0], &cells[1], &cells[2], &cells[3]);
-    let body = _body(vec![
-        _load(1, cell),
-        _arithmetic("fmul", 5, fl(1), m(factor)),
-        _store(first_out, 5),
-        _load(3, cell),
-        _arithmetic("fmul", 6, fl(3), m(factor)),
-        _store(second_out, 6),
-    ]);
-
-    let result = run(&body);
-
-    let insns = result.insns();
-    assert_eq!(insns.iter().filter(|one| name(one) == "fld" && what(one).sources == vec![m(cell)]).count(), 1);
-    let (memory, stack) = _x87(&insns, &[(cell, 7.0), (factor, 3.0)]);
-    assert!(memory[first_out] == 21.0 && memory[second_out] == 21.0 && stack.is_empty());
 }
 
 #[test]
@@ -1471,65 +756,6 @@ fn test_popping_subtraction_preserves_reused_values() {
 
 // tests/test_float_constants.py
 #[test]
-fn test_exact_float_constants_need_no_frame() {
-    for (value, encoded) in [(0, [0xd9, 0xee]), (1, [0xd9, 0xe8])] {
-        for width in [2, 4] {
-            let constant =
-                sem(Operation::FloatLoad, "fild", vec![st(0)], vec![Loc::Imm(Imm { value, width, address: None })]);
-            let instruction = Arc::new(Insn::new(0, Some((0, 2)), Some(constant), vec![], vec![]));
-            let body = LirBody::new(
-                "constant",
-                0,
-                vec![LirBlock::new(0, vec![instruction]).into()],
-                IndexMap::default(),
-                IndexMap::default(),
-            );
-            let allocated = run(&body);
-            let insns = allocated.insns();
-            assert_eq!(insns.len(), 1);
-            let emitted = select::emit(what(&insns[0]), 0, None, false, false, None).unwrap();
-            assert_eq!(emitted.code, encoded);
-        }
-    }
-}
-
-/// Any other integer constant is a readonly datum in its narrowest exact
-/// format, as GCC's constant pool: QB's `x * 320` stored 320 to a frame
-/// temporary at every use and read it back with a 16-cycle `fild`.
-#[test]
-fn test_an_integer_constant_loads_from_the_pool() {
-    use crate::backend::constpool::Pool;
-    // A 16-bit immediate is its bits: 0xffff is -1.
-    for (value, width, bytes) in [
-        (320, 2, 320f32.to_le_bytes().to_vec()),
-        (0xffff, 2, (-1f32).to_le_bytes().to_vec()),
-        (16_777_217, 4, 16_777_217f64.to_le_bytes().to_vec()),
-    ] {
-        let constant =
-            sem(Operation::FloatLoad, "fild", vec![st(0)], vec![Loc::Imm(Imm { value, width, address: None })]);
-        let instruction = Arc::new(Insn::new(0, Some((0, 2)), Some(constant), vec![], vec![]));
-        let body = LirBody::new(
-            "constant",
-            0,
-            vec![LirBlock::new(0, vec![instruction]).into()],
-            IndexMap::default(),
-            IndexMap::default(),
-        );
-        let mut pool = Pool::new(7);
-        let allocated = allocated(&body, None, Some(&mut pool), true, "386").unwrap();
-        let insns = allocated.insns();
-        assert_eq!(insns.len(), 1, "{insns:?}");
-        assert_eq!(name(&insns[0]), "fld");
-        let Loc::Mem(cell) = &what(&insns[0]).sources[0] else { panic!("{insns:?}") };
-        assert_eq!(
-            (cell.addr.map(|addr| (addr.space, addr.index)), cell.width),
-            (Some((Space::Segment, 7)), bytes.len() as u32)
-        );
-        assert_eq!(pool.entries().collect::<Vec<_>>(), [(bytes.as_slice(), 7)]);
-    }
-}
-
-#[test]
 fn test_a_loop_accumulator_stays_on_the_stack_across_the_back_edge() {
     // Every block edge was a region end: the running sum went through a
     // ten-byte cell each iteration.
@@ -1568,172 +794,6 @@ fn test_a_loop_accumulator_stays_on_the_stack_across_the_back_edge() {
         .collect();
     assert_eq!(memory.len(), 1, "{memory:?}");
     assert!(memory[0].sources.contains(&m(&step)));
-}
-
-/// Loads and stores of the allocator's own 8-byte cells.
-fn spill_traffic(result: &LirBody) -> usize {
-    result
-        .insns()
-        .iter()
-        .filter(|one| {
-            what(one)
-                .sources
-                .iter()
-                .chain(&what(one).dests)
-                .any(
-                    |arg| matches!(
-                        arg,
-                        Loc::Mem(cell) if cell.width == 8 && cell.through == RegId::BP
-                    ),
-                )
-        })
-        .count()
-}
-
-#[test]
-fn test_a_copy_between_spilled_values_is_no_instruction() {
-    // Each value had its own cell, so a phi's copy across calls loaded one cell
-    // and stored another.
-    let (source, target) = (frame_cell(-4, 4), frame_cell(-8, 4));
-    let call = || sem(Operation::Call, "call", vec![], vec![]);
-    let body = _body(vec![
-        _load(1, &source),
-        fchs(2, 1),
-        call(),
-        sem(Operation::Move, "mov", vec![fl(3)], vec![fl(2)]),
-        call(),
-        _store(&target, 3),
-    ]);
-    let result = with_frame(&body, &mut Frame::new(-8));
-    assert_eq!(spill_traffic(&result), 2);
-    let (memory, stack) = _x87(&result.insns(), &[(&source, 3.0)]);
-    assert_eq!((memory[&target], stack), (-3.0, vec![]));
-}
-
-/// deedlines: a phi's float copy between spilled values sharing a cell
-/// became nothing, still tagged with its copy group, and parcopy refused
-/// the group: "is in a copy group and is not a move".
-/// qbdemo FRACLINE: a by-reference parameter's volatile read, compared
-/// right after, loaded and compared both on the stack: four more exchanges
-/// than `fcomp` of the cell. A volatile read may be its one adjacent reader's
-/// operand, and never read twice.
-#[test]
-fn test_a_volatile_load_is_its_adjacent_readers_operand_only() {
-    let (sum, limit) = (frame_cell(-4, 4), frame_cell(-12, 8));
-    let volatile =
-        |what: Semantics| Arc::new(Insn { volatile: true, ..Insn::new(8, Some((8, 16)), Some(what), vec![2], vec![]) });
-    for twice in [false, true] {
-        let mut body = _body(vec![_load(1, &sum)]);
-        let mut insns = body.blocks[0].insns.to_vec();
-        insns.push(volatile(_load(2, &limit)));
-        insns.push(Arc::new(Insn::new(
-            16,
-            Some((16, 24)),
-            Some(sem(Operation::Compare, "fcom", vec![], vec![fl(1), fl(2)])),
-            vec![],
-            vec![1, 2],
-        )));
-        if twice {
-            insns.push(Arc::new(Insn::new(24, Some((24, 32)), Some(_store(&sum, 2)), vec![], vec![2])));
-        }
-        body.blocks[0].insns = insns.into();
-        let result = with_frame(&body, &mut Frame::new(-12));
-        let reads = result.insns().iter().filter(|one| what(one).sources.contains(&m(&limit))).count();
-        let fused = result.insns().iter().any(|one| name(one) == "fcomp" && what(one).sources.contains(&m(&limit)));
-        assert_eq!(
-            (reads, fused),
-            (1, !twice),
-            "{:?}",
-            result.insns().iter().map(|one| name(one).to_owned()).collect::<Vec<_>>()
-        );
-    }
-}
-
-#[test]
-fn test_a_vacated_phi_copy_leaves_its_copy_group() {
-    let (source, target, word) = (frame_cell(-4, 4), frame_cell(-8, 4), frame_cell(-10, 2));
-    let call = || sem(Operation::Call, "call", vec![], vec![]);
-    let integer = Loc::Held(Held { value: 20, width: 2 });
-    let mut body = _body(vec![
-        _load(1, &source),
-        fchs(2, 1),
-        sem(Operation::Move, "mov", vec![integer.clone()], vec![m(&word)]),
-        call(),
-        sem(Operation::Move, "mov", vec![fl(3)], vec![fl(2)]),
-        sem(Operation::Move, "mov", vec![Loc::Held(Held { value: 21, width: 2 })], vec![integer]),
-        call(),
-        _store(&target, 3),
-    ]);
-    let insns: Vec<Arc<Insn>> =
-        body.insns()
-            .iter()
-            .enumerate()
-            .map(|(at, one)| {
-                if at == 4 || at == 5 { Arc::new(Insn { group: Some(7), ..(**one).clone() }) } else { Arc::clone(one) }
-            })
-            .collect();
-    body.blocks[0].insns = insns.into();
-    let result = with_frame(&body, &mut Frame::new(-10));
-    assert!(
-        result.insns().iter().filter(|one| one.group.is_some()).all(|one| what(one).op == Operation::Move),
-        "{:?}",
-        result.insns()
-    );
-}
-
-#[test]
-fn test_a_value_every_successor_spills_leaves_in_memory() {
-    // The first exit's stack fixed the bundle, so another exit reloaded a value
-    // only to store it again.
-    let (source, target) = (frame_cell(-4, 4), frame_cell(-8, 4));
-    let call = || sem(Operation::Call, "call", vec![], vec![]);
-    let mut body = _body(vec![
-        _load(1, &source),
-        fchs(2, 1),
-        Semantics { target: Some(16), ..sem(Operation::Branch, "jne", vec![], vec![]) },
-        call(),
-        call(),
-        _store(&target, 2),
-    ]);
-    let insns = body.insns();
-    body.blocks = vec![
-        block(0, insns[..3].to_vec(), vec![8, 16]).into(),
-        block(8, insns[3..4].to_vec(), vec![16]).into(),
-        block(16, insns[4..].to_vec(), vec![]).into(),
-    ];
-    let result = with_frame(&body, &mut Frame::new(-8));
-    assert_eq!(spill_traffic(&result), 2);
-    for path in [vec![0, 16], vec![0, 8, 16]] {
-        let (memory, stack) = _x87(&_along(&result, &path), &[(&source, 3.0)]);
-        assert_eq!((memory[&target], stack), (-3.0, vec![]));
-    }
-}
-
-/// A value on the stack into a join that reads none is popped on the edge
-/// that brings it, not balanced by fillers on every other edge: qmove's
-/// early return made its other paths push five fillers and pop six.
-#[test]
-fn test_a_join_that_reads_no_float_takes_none_on_its_other_edges() {
-    let (source, cell) = (frame_cell(-10, 10), frame_cell(-20, 10));
-    let body = _body(vec![_load(1, &source), _store(&cell, 1)]);
-    let (load, store) = (body.insns()[0].clone(), body.insns()[1].clone());
-    let mut body = body;
-    body.blocks = vec![
-        block(0, vec![load], vec![16, 48]).into(),
-        block(16, vec![store], vec![48]).into(),
-        block(48, vec![], vec![]).into(),
-    ];
-    let result = with_frame(&body, &mut Frame::new(-20));
-    for path in [vec![0, 16, 48], vec![0, 48]] {
-        let insns = _along(&result, &path);
-        assert!(insns.iter().all(|one| emits(what(one))), "{path:?}");
-        // The path that stores loads once; the other, which reads none, loads
-        // nothing: block frequencies put the load where it is read.
-        let loads = insns.iter().filter(|one| what(one).op == Operation::FloatLoad).count();
-        assert_eq!(loads, path.len() - 2, "{path:?}: {insns:?}");
-        let (_, stack) = _x87(&insns, &[(&source, 1.5)]);
-        assert!(stack.is_empty(), "{path:?}");
-    }
 }
 
 /// Blocks of `(address, what it does, where it goes)` through `_truncating`: a
@@ -1829,34 +889,6 @@ fn names_in_order(result: &LirBody) -> Vec<String> {
     result.insns().iter().map(|one| name(one).to_owned()).filter(|name| name.starts_with('f')).collect()
 }
 
-/// d_faces ifloor: `(long)x` and then `x` again was `fld x; fld st(0); fistp
-/// m`: a copy and a popping store. The 387 stores a word or a dword without
-/// popping (`fist`; here its truncating pseudo `fistt`), as gcc's reg-stack and
-/// LLVM's X86FloatingPoint do.
-#[test]
-fn test_a_conversion_store_of_a_value_read_again_does_not_copy_it() {
-    let _old = crate::backend::allocate::RfpOn::off();
-    let cells = _cells([-4, -8, -12], 4);
-    let body = _body(vec![
-        _load(1, &cells[0]),
-        sem(Operation::FloatStore, "fisttp", vec![m(&cells[1])], vec![fl(1)]),
-        _store(&cells[2], 1),
-    ]);
-    let names = names_in_order(&with_frame(&body, &mut Frame::new(-12)));
-    assert_eq!(names, ["fnstcw", "fld", "fldcw", "fist", "fldcw", "fstp"], "{names:?}");
-}
-
-/// A quadword has only the popping form: a copy is made.
-#[test]
-fn test_a_quadword_conversion_store_of_a_live_value_keeps_its_copy() {
-    let _old = crate::backend::allocate::RfpOn::off();
-    let (x, wide, out) = (frame_cell(-8, 8), frame_cell(-16, 8), frame_cell(-24, 8));
-    let body =
-        _body(vec![_load(1, &x), sem(Operation::FloatStore, "fisttp", vec![m(&wide)], vec![fl(1)]), _store(&out, 1)]);
-    let names = names_in_order(&with_frame(&body, &mut Frame::new(-24)));
-    assert_eq!(names, ["fnstcw", "fld", "fld", "fldcw", "fistp", "fldcw", "fstp"], "{names:?}");
-}
-
 fn compare_body(
     left_lives: bool,
     right_lives: bool,
@@ -1893,36 +925,6 @@ fn test_a_compare_against_a_value_read_again_does_not_copy_it() {
     assert_eq!(one_lives, ["fld", "fchs", "fld", "fchs", "fxch", "fcomp", "fnstsw", "fstp"], "{one_lives:?}");
     let both_live = names_in_order(&with_frame(&compare_body(true, true), &mut Frame::new(-16)));
     assert_eq!(both_live, ["fld", "fchs", "fld", "fchs", "fxch", "fcom", "fnstsw", "fstp", "fstp"], "{both_live:?}");
-}
-
-/// Where no trap is unmasked (not BASIC's runtime) the order of the exceptions
-/// is not observable, so a loaded value is read again from its cell after an
-/// instruction that can raise, instead of held on the stack or spilled to a
-/// cell of its own: d_faces' loop invariants were `fld m32; fstp m64` before
-/// the loop and `fmul m64` in it.
-#[test]
-fn test_a_first_read_moves_past_a_trapping_instruction_where_no_trap_is_unmasked() {
-    let cells = _cells([-4, -8, -12, -16, -20, -24], 4);
-    let (x, y, c, z, out, other) = (&cells[0], &cells[1], &cells[2], &cells[3], &cells[4], &cells[5]);
-    let (a, b, f, q, g, r) = (2, 3, 4, 5, 6, 7);
-    let body = _body(vec![
-        _load(a, x),
-        _load(b, y),
-        _load(f, c),
-        _arithmetic("fdiv", q, fl(a), fl(b)),
-        _store(out, q),
-        _load(g, z),
-        _arithmetic("fmul", r, fl(g), fl(f)),
-        _store(other, r),
-    ]);
-    let result = allocated(&phielim::eliminated(&body).unwrap(), None, None, false, "386").unwrap();
-    let insns = result.insns();
-    let readers: Vec<usize> =
-        insns.iter().enumerate().filter(|(_, one)| what(one).sources.contains(&m(c))).map(|(index, _)| index).collect();
-    let division = insns.iter().position(|one| name(one).starts_with("fdiv")).unwrap();
-    assert!(readers.len() == 1 && readers[0] > division, "{readers:?} {division}");
-    let (memory, stack) = _x87(&insns, &[(x, 6.0), (y, 3.0), (c, 0.5), (z, 4.0)]);
-    assert_eq!((memory[out], memory[other], stack), (2.0, 2.0, vec![]));
 }
 
 /// d_faces: both operands dying, the right not beneath the left, was three

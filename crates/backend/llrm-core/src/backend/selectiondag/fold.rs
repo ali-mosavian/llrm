@@ -12,23 +12,38 @@ pub fn mask(bits: u32) -> u128 {
 }
 
 /// `bits` as a two's-complement number `width` bits wide.
-fn signed(bits: u128, width: u32) -> i128 {
+fn signed(
+    bits: u128,
+    width: u32,
+) -> i128 {
     let shift = 128 - width;
     ((bits << shift) as i128) >> shift
 }
 
-fn extend_signed(bits: u128, from: u32, to: u32) -> u128 {
+fn extend_signed(
+    bits: u128,
+    from: u32,
+    to: u32,
+) -> u128 {
     (signed(bits, from) as u128) & mask(to)
 }
 
 /// `APInt::getNumSignBits`.
-fn sign_bits(bits: u128, width: u32) -> u32 {
+fn sign_bits(
+    bits: u128,
+    width: u32,
+) -> u32 {
     let x = if signed(bits, width) < 0 { !bits } else { bits } & mask(width);
     x.leading_zeros() - (128 - width)
 }
 
 /// `FoldValue`: a binary opcode over two constants of `width` bits.
-fn fold_value(opcode: ISD, c1: u128, c2: u128, width: u32) -> Option<u128> {
+fn fold_value(
+    opcode: ISD,
+    c1: u128,
+    c2: u128,
+    width: u32,
+) -> Option<u128> {
     let m = mask(width);
     let (s1, s2) = (signed(c1, width), signed(c2, width));
     let amount = if c2 >= width as u128 { width } else { c2 as u32 };
@@ -47,8 +62,20 @@ fn fold_value(opcode: ISD, c1: u128, c2: u128, width: u32) -> Option<u128> {
             let by = if opcode == ISD::Rotl { by } else { (width - by) % width };
             if by == 0 { c1 } else { (c1 << by) | (c1 >> (width - by)) }
         }
-        ISD::SMin => if s1 <= s2 { c1 } else { c2 },
-        ISD::SMax => if s1 >= s2 { c1 } else { c2 },
+        ISD::SMin => {
+            if s1 <= s2 {
+                c1
+            } else {
+                c2
+            }
+        }
+        ISD::SMax => {
+            if s1 >= s2 {
+                c1
+            } else {
+                c2
+            }
+        }
         ISD::UMin => c1.min(c2),
         ISD::UMax => c1.max(c2),
         ISD::SAddSat | ISD::SSubSat => {
@@ -85,7 +112,11 @@ fn fold_value(opcode: ISD, c1: u128, c2: u128, width: u32) -> Option<u128> {
 
 impl SelectionDAG {
     /// `simplifyShift`.
-    fn simplify_shift(&mut self, x: SDValue, y: SDValue) -> Option<SDValue> {
+    fn simplify_shift(
+        &mut self,
+        x: SDValue,
+        y: SDValue,
+    ) -> Option<SDValue> {
         let vt = self.value_type(x);
         if self.is_undef(x) {
             return Some(self.get_constant(0, vt));
@@ -103,7 +134,12 @@ impl SelectionDAG {
     }
 
     /// `simplifySelect`; `freeze` of a maybe-poison arm is SD12.
-    fn simplify_select(&mut self, cond: SDValue, then: SDValue, other: SDValue) -> Option<SDValue> {
+    fn simplify_select(
+        &mut self,
+        cond: SDValue,
+        then: SDValue,
+        other: SDValue,
+    ) -> Option<SDValue> {
         if self.is_undef(cond) {
             return Some(if self.constant(then).is_some() { then } else { other });
         }
@@ -119,7 +155,13 @@ impl SelectionDAG {
         (then == other).then_some(then)
     }
 
-    pub(super) fn fold_unary(&mut self, opcode: ISD, vt: EVT, n1: SDValue, flags: SDNodeFlags) -> Folded {
+    pub(super) fn fold_unary(
+        &mut self,
+        opcode: ISD,
+        vt: EVT,
+        n1: SDValue,
+        flags: SDNodeFlags,
+    ) -> Folded {
         if let Some(value) = self.fold_constant_arithmetic(opcode, vt, &[n1]) {
             return Folded::Done(value);
         }
@@ -132,7 +174,11 @@ impl SelectionDAG {
                     return Folded::Done(n1);
                 }
                 if matches!(op_opcode, ISD::SignExtend | ISD::ZeroExtend) {
-                    let inner_flags = if op_opcode == ISD::ZeroExtend { self.node(n1).flags.intersect(SDNodeFlags::NON_NEG) } else { SDNodeFlags::default() };
+                    let inner_flags = if op_opcode == ISD::ZeroExtend {
+                        self.node(n1).flags.intersect(SDNodeFlags::NON_NEG)
+                    } else {
+                        SDNodeFlags::default()
+                    };
                     let inner = self.operand(n1, 0);
                     return Folded::Done(self.get_node_flags(op_opcode, vt, &[inner], inner_flags));
                 }
@@ -164,7 +210,11 @@ impl SelectionDAG {
                     return Folded::Done(n1);
                 }
                 if matches!(op_opcode, ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend) {
-                    let inner_flags = if op_opcode == ISD::ZeroExtend { self.node(n1).flags.intersect(SDNodeFlags::NON_NEG) } else { SDNodeFlags::default() };
+                    let inner_flags = if op_opcode == ISD::ZeroExtend {
+                        self.node(n1).flags.intersect(SDNodeFlags::NON_NEG)
+                    } else {
+                        SDNodeFlags::default()
+                    };
                     let inner = self.operand(n1, 0);
                     return Folded::Done(self.get_node_flags(op_opcode, vt, &[inner], inner_flags));
                 }
@@ -187,7 +237,11 @@ impl SelectionDAG {
                     let inner = self.operand(n1, 0);
                     let inner_type = self.value_type(inner);
                     if inner_type.bits_lt(vt) {
-                        let inner_flags = if op_opcode == ISD::ZeroExtend { self.node(n1).flags.intersect(SDNodeFlags::NON_NEG) } else { SDNodeFlags::default() };
+                        let inner_flags = if op_opcode == ISD::ZeroExtend {
+                            self.node(n1).flags.intersect(SDNodeFlags::NON_NEG)
+                        } else {
+                            SDNodeFlags::default()
+                        };
                         return Folded::Done(self.get_node_flags(op_opcode, vt, &[inner], inner_flags));
                     }
                     if inner_type.bits_gt(vt) {
@@ -233,6 +287,10 @@ impl SelectionDAG {
                 let inner = self.operand(n1, 0);
                 return Folded::Done(self.get_node(ISD::FAbs, vt, &[inner]));
             }
+            // `isGuaranteedNotToBeUndefOrPoison` (DEVIATE SD101)
+            ISD::Freeze if matches!(op_opcode, ISD::Constant | ISD::ConstantFP | ISD::Freeze) => {
+                return Folded::Done(n1);
+            }
             ISD::FpExtend if n1_type == vt => return Folded::Done(n1),
             ISD::FpToSInt | ISD::FpToUInt if self.is_undef(n1) => return Folded::Done(self.get_undef(vt)),
             _ => {}
@@ -241,7 +299,14 @@ impl SelectionDAG {
         Folded::Keep(vec![n1])
     }
 
-    pub(super) fn fold_binary(&mut self, opcode: ISD, vt: EVT, mut n1: SDValue, mut n2: SDValue, flags: SDNodeFlags) -> Folded {
+    pub(super) fn fold_binary(
+        &mut self,
+        opcode: ISD,
+        vt: EVT,
+        mut n1: SDValue,
+        mut n2: SDValue,
+        flags: SDNodeFlags,
+    ) -> Folded {
         // canonicalizeCommutativeBinop: constant to the right
         if opcode.is_commutative_binop() && self.constant(n1).is_some() && self.constant(n2).is_none() {
             std::mem::swap(&mut n1, &mut n2);
@@ -299,7 +364,9 @@ impl SelectionDAG {
                 }
             }
             ISD::SignExtendInReg => {
-                let NodeData::ValueType(from) = self.node(n2).data else { panic!("SIGN_EXTEND_INREG needs a VALUETYPE operand") };
+                let NodeData::ValueType(from) = self.node(n2).data else {
+                    panic!("SIGN_EXTEND_INREG needs a VALUETYPE operand")
+                };
                 if from == vt {
                     return Folded::Done(n1);
                 }
@@ -320,7 +387,28 @@ impl SelectionDAG {
         let (poison1, poison2) = (self.opcode(n1) == ISD::Poison, self.opcode(n2) == ISD::Poison);
         if poison1 || poison2 {
             use ISD::*;
-            if matches!(opcode, Xor | Add | PtrAdd | Sub | SignExtendInReg | UDiv | SDiv | URem | SRem | Mul | And | SSubSat | USubSat | UMin | Or | SAddSat | UAddSat | UMax | SMax | SMin) {
+            if matches!(
+                opcode,
+                Xor | Add
+                    | PtrAdd
+                    | Sub
+                    | SignExtendInReg
+                    | UDiv
+                    | SDiv
+                    | URem
+                    | SRem
+                    | Mul
+                    | And
+                    | SSubSat
+                    | USubSat
+                    | UMin
+                    | Or
+                    | SAddSat
+                    | UAddSat
+                    | UMax
+                    | SMax
+                    | SMin
+            ) {
                 return Folded::Done(if poison2 { n2 } else { n1 });
             }
         }
@@ -331,7 +419,13 @@ impl SelectionDAG {
             } else {
                 match opcode {
                     ISD::PtrAdd | ISD::Sub => return Folded::Done(n1),
-                    ISD::SignExtendInReg | ISD::UDiv | ISD::SDiv | ISD::URem | ISD::SRem | ISD::SSubSat | ISD::USubSat => return Folded::Done(self.get_constant(0, vt)),
+                    ISD::SignExtendInReg
+                    | ISD::UDiv
+                    | ISD::SDiv
+                    | ISD::URem
+                    | ISD::SRem
+                    | ISD::SSubSat
+                    | ISD::USubSat => return Folded::Done(self.get_constant(0, vt)),
                     _ => {}
                 }
             }
@@ -344,8 +438,12 @@ impl SelectionDAG {
                 ISD::Xor if both => Some(self.get_constant(0, vt)),
                 ISD::Xor | ISD::Add | ISD::PtrAdd | ISD::Sub => Some(n2),
                 ISD::UDiv | ISD::SDiv | ISD::URem | ISD::SRem => Some(self.get_poison(vt)),
-                ISD::Mul | ISD::And | ISD::SSubSat | ISD::USubSat | ISD::UMin => Some(if both { n2 } else { self.get_constant(0, vt) }),
-                ISD::Or | ISD::SAddSat | ISD::UAddSat | ISD::UMax => Some(if both { n2 } else { self.get_all_ones_constant(vt) }),
+                ISD::Mul | ISD::And | ISD::SSubSat | ISD::USubSat | ISD::UMin => {
+                    Some(if both { n2 } else { self.get_constant(0, vt) })
+                }
+                ISD::Or | ISD::SAddSat | ISD::UAddSat | ISD::UMax => {
+                    Some(if both { n2 } else { self.get_all_ones_constant(vt) })
+                }
                 ISD::SMax => Some(if both { n2 } else { self.get_constant(mask(width - 1), vt) }),
                 ISD::SMin => Some(if both { n2 } else { self.get_constant(1u128 << (width - 1), vt) }),
                 _ => None,
@@ -362,7 +460,14 @@ impl SelectionDAG {
         Folded::Keep(vec![n1, n2])
     }
 
-    pub(super) fn fold_ternary(&mut self, opcode: ISD, vt: EVT, n1: SDValue, n2: SDValue, n3: SDValue) -> Folded {
+    pub(super) fn fold_ternary(
+        &mut self,
+        opcode: ISD,
+        vt: EVT,
+        n1: SDValue,
+        n2: SDValue,
+        n3: SDValue,
+    ) -> Folded {
         match opcode {
             ISD::SetCC => {
                 let NodeData::CondCode(cond) = self.node(n3).data else { panic!("SETCC needs a CONDCODE operand") };
@@ -386,7 +491,13 @@ impl SelectionDAG {
     }
 
     /// `FoldSetCC`, integers only (floating-point constants are SD11).
-    fn fold_setcc(&mut self, vt: EVT, n1: SDValue, n2: SDValue, cond: CondCode) -> Option<SDValue> {
+    fn fold_setcc(
+        &mut self,
+        vt: EVT,
+        n1: SDValue,
+        n2: SDValue,
+        cond: CondCode,
+    ) -> Option<SDValue> {
         use CondCode::*;
         let op_type = self.value_type(n1);
         match cond {
@@ -425,11 +536,18 @@ impl SelectionDAG {
 
     /// `FoldConstantArithmetic`: operands that are constants, a symbol plus
     /// an offset, or a division by zero.
-    fn fold_constant_arithmetic(&mut self, opcode: ISD, vt: EVT, ops: &[SDValue]) -> Option<SDValue> {
+    fn fold_constant_arithmetic(
+        &mut self,
+        opcode: ISD,
+        vt: EVT,
+        ops: &[SDValue],
+    ) -> Option<SDValue> {
         if matches!(opcode, ISD::Target(_) | ISD::Machine(_)) {
             return None;
         }
-        if matches!(opcode, ISD::SDiv | ISD::UDiv | ISD::SRem | ISD::URem) && (self.is_undef(ops[1]) || self.is_null_constant(ops[1])) {
+        if matches!(opcode, ISD::SDiv | ISD::UDiv | ISD::SRem | ISD::URem)
+            && (self.is_undef(ops[1]) || self.is_null_constant(ops[1]))
+        {
             return Some(self.get_undef(vt));
         }
         if !vt.is_integer() {
@@ -501,8 +619,19 @@ impl SelectionDAG {
     }
 
     /// `FoldSymbolOffset`: `(add Sym, c)` and `(sub Sym, c)` as `Sym+c`.
-    fn fold_symbol_offset(&mut self, opcode: ISD, vt: EVT, global: ISD, symbol: u32, offset: i64, other: SDValue) -> Option<SDValue> {
-        if global != ISD::GlobalAddress || !self.config.offset_folding {
+    fn fold_symbol_offset(
+        &mut self,
+        opcode: ISD,
+        vt: EVT,
+        global: ISD,
+        symbol: u32,
+        offset: i64,
+        other: SDValue,
+    ) -> Option<SDValue> {
+        if global != ISD::GlobalAddress
+            || !self.config.offset_folding
+            || !self.local_symbols.get(symbol as usize).copied().unwrap_or(true)
+        {
             return None;
         }
         let amount = signed(self.constant(other)?, self.width(other)) as i64;

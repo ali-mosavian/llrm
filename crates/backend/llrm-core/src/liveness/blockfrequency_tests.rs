@@ -68,3 +68,17 @@ fn test_a_deep_nest_keeps_its_blocks_ordered() {
     assert!(freqs[..=depth].windows(2).all(|pair| pair[0] <= pair[1]), "{freqs:?}");
     assert!(freqs[depth] > freqs[1], "{freqs:?}");
 }
+
+/// Row 44 (MachineSink) reads an edge by block and successor index, as
+/// `MachineBranchProbabilityInfo::getEdgeProbability(Src, SuccIdx)`: a 31 in 32
+/// edge is hot, the 1 in 32 left to the other is not, and a split of a block
+/// with no odds is 1/N each.
+#[test]
+fn test_an_edge_is_read_by_block_and_successor_index() {
+    let b = body(&[&[0, 1], &[2, 3], &[], &[]], &[((0, 0), ((31u64 << 31) / 32) as u32)]);
+    let mbpi = MachineBranchProbabilityInfo::of(&b);
+    assert_eq!(mbpi.get_edge_probability(0, 0), BranchProbability::get_raw(((31u64 << 31) / 32) as u32));
+    assert_eq!(mbpi.get_edge_probability(0, 1), BranchProbability::get_raw(1 << 26));
+    assert!(mbpi.is_edge_hot(0, 0) && !mbpi.is_edge_hot(0, 1));
+    assert_eq!(mbpi.get_edge_probability(1, 0), BranchProbability::new(1, 2));
+}

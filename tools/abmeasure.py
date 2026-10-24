@@ -96,7 +96,8 @@ def floored(name: str, count: int) -> None:
 
 def counted(binary: Path, source: Path, arguments: list[str], level: str, events: str = "instructions:u") -> dict[str, int]:
     """perf stat's counts of one compile, by event name (cycles and instructions)."""
-    done = subprocess.run(["perf", "stat", "-x,", "-e", events, str(binary), *arguments, f"-{level}", "-o", "/dev/null", str(source)], capture_output=True, text=True)
+    with llrmbin.with_object(["perf", "stat", "-x,", "-e", events, str(binary), *arguments, f"-{level}", "-o", llrmbin.OBJECT, str(source)]) as command:
+        done = subprocess.run(command, capture_output=True, text=True)
     checked(done, source)
     return {name: int(n) for n, name in re.findall(r"^(\d+),,(\w+)", done.stderr, re.M)}
 
@@ -107,9 +108,10 @@ def change(was: float, now: float) -> str:
 
 def callgrind(binary: Path, source: Path, arguments: list[str], level: str) -> dict[str, int]:
     """Ir, D1 misses (read, write) and last-level misses of one compile under callgrind's cache simulation."""
-    done = subprocess.run(
-        ["valgrind", "--tool=callgrind", "--cache-sim=yes", "--callgrind-out-file=/dev/null", str(binary), *arguments, f"-{level}", "-o", "/dev/null", str(source)], capture_output=True, text=True
-    )
+    with llrmbin.with_object(
+        ["valgrind", "--tool=callgrind", "--cache-sim=yes", "--callgrind-out-file=/dev/null", str(binary), *arguments, f"-{level}", "-o", llrmbin.OBJECT, str(source)]
+    ) as command:
+        done = subprocess.run(command, capture_output=True, text=True)
     checked(done, source)
     text = done.stderr
     num = lambda pattern: int(re.search(pattern, text).group(1).replace(",", ""))  # noqa: E731

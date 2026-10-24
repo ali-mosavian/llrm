@@ -75,6 +75,10 @@ pub struct Location {
     /// What an overlap test is asked of: the reference, its width made large
     /// when unbounded.
     effective: MemRef,
+    /// The location as `AAResults` takes it: the pointer, the size and the
+    /// type tags of the access it is made of; none for a reference no pointer
+    /// names.
+    memory: Option<crate::aa::MemoryLocation>,
     /// This location with its size made unknown, made once.
     wider: std::cell::OnceCell<Rc<Location>>,
 }
@@ -127,6 +131,21 @@ impl<'a> AliasQuery<'a> {
         }
     }
 
+    /// The AA stack the pin's default pipeline asks: TBAA, BasicAA and, where
+    /// the module analysis is held, GlobalsAA.
+    fn stack(&self) -> crate::aggregate::AggregateAA<'a> {
+        let unit = self.unit;
+        let mut stack = crate::aggregate::AggregateAA::new().with_unit(unit);
+        // The pin's order (`buildDefaultAAPipeline`): BasicAA first, so that
+        // type-based answers are asked only of what it leaves MayAlias.
+        stack.add_aa_result(crate::basicaa::BasicAA::new(unit));
+        stack.add_aa_result(crate::typebasedaa::TypeBasedAA::new(unit));
+        if let Some(info) = unit.globals_mr {
+            stack.add_aa_result(crate::globalsmodref::GlobalsAAResult::new(unit, info));
+        }
+        stack
+    }
+
     /// The walks down a pointer's GEP chain made so far.
     pub fn bases_walked(&self) -> u64 {
         self.bases_walked.get()
@@ -158,7 +177,31 @@ impl<'a> AliasQuery<'a> {
         self.next_id.set(id + 1);
         let effective =
             if unbounded { MemRef { width: UNBOUNDED_WIDTH, ..reference.clone() } } else { reference.clone() };
-        Rc::new(Location { id, reference: reference.clone(), unbounded, effective, wider: Default::default() })
+        let memory = reference
+            .pointer
+            .map(
+                |pointer| crate::aa::MemoryLocation::new(
+                    pointer,
+                    if unbounded {
+                        crate::aa::LocationSize::BeforeOrAfterPointer
+                    } else {
+                        crate::aa::LocationSize::Precise(u64::from(reference.width))
+                    },
+                ),
+            );
+        Rc::new(Location { id, reference: reference.clone(), unbounded, effective, memory, wider: Default::default() })
+    }
+
+    /// The location of `size` bytes at `pointer`, as a client that holds the
+    /// pointer and no access names it (`MemoryLocation(Ptr, Size)`): the
+    /// stack answers for it; the access lists, which have no entry, do not.
+    pub fn location_at(
+        &self,
+        pointer: llrm_mir::module::Operand,
+        bytes: u32,
+    ) -> Rc<Location> {
+        let reference = MemRef::at(self.unit, pointer, bytes);
+        self.location_for(&reference, false)
     }
 
     /// `getWithNewSize(LocationSize::beforeOrAfterPointer())`.
@@ -182,9 +225,19 @@ impl<'a> AliasQuery<'a> {
             return found.clone();
         }
         let made = match self.unit.function.instruction(inst).opcode {
-            Opcode::Load { .. } | Opcode::Store { .. } => {
-                self.accesses.references.get(&inst).map(|reference| self.location_for(reference, false))
-            }
+            Opcode::Load { .. } | Opcode::Store { .. } => self.accesses.references.get(&inst).map(|reference| {
+                let made = self.location_for(reference, false);
+                // The access's own tags (`MemoryLocation::get`).
+                let tagged = crate::aa::MemoryLocation::get(self.unit, inst).filter(|_| made.memory.is_some());
+                match (Rc::try_unwrap(made), tagged) {
+                    (Ok(mut location), Some(tagged)) => {
+                        location.memory = Some(tagged);
+                        Rc::new(location)
+                    }
+                    (Ok(location), None) => Rc::new(location),
+                    (Err(shared), _) => shared,
+                }
+            }),
             _ => None,
         };
         self.by_instruction.borrow_mut().insert(inst, made.clone());
@@ -206,6 +259,20 @@ impl<'a> AliasQuery<'a> {
             return known;
         }
         self.asked.set((asked + 1, worked + 1));
+        // `AAResults::getModRefInfo(DefInst, UseLoc)` over the pin's default
+        // stack (TBAA, BasicAA, GlobalsAA): the lists of the access
+        // footprints answer only where a location has no pointer.
+        if let Some(memory) = &loc.memory
+            && matches!(
+                self.unit.function.instruction(def).opcode,
+                Opcode::Load { .. } | Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_)
+            )
+        {
+            use crate::aa::AAResults;
+            let found = self.stack().get_mod_ref_info(def, Some(memory), &mut self.basic.borrow_mut()).is_mod_set();
+            self.cache.borrow_mut().insert(key, found);
+            return found;
+        }
         let writes = self.accesses.writes(def);
         // A def whose writes the lists do not name is asked of BasicAA.
         let found = if writes.is_none() {
@@ -226,6 +293,12 @@ impl<'a> AliasQuery<'a> {
         def: InstId,
         call: InstId,
     ) -> bool {
+        // `isModSet(AA.getModRefInfo(DefInst, CB))`: a call against a call is
+        // the stack's pair; a store against a call asks what the call does to
+        // the store's location.
+        if let Some(found) = self.def_against_call(def, call) {
+            return found;
+        }
         let Some(writes) = self.accesses.writes(def) else { return true };
         if writes.is_empty() {
             return false;
@@ -463,6 +536,20 @@ impl<'a> AliasQuery<'a> {
         one: &Location,
         other: &Location,
     ) -> AliasResult {
+        // `AA.alias(LocA, LocB)`: the stack's.
+        if let (Some(left), Some(right)) = (&one.memory, &other.memory) {
+            use crate::aa::{AAResults, AliasResult as Stack};
+            return match self.stack().alias(left, right, &mut self.basic.borrow_mut(), None) {
+                Stack::NoAlias => AliasResult::No,
+                Stack::MayAlias => AliasResult::May,
+                // `Partial` here means the same start and another size, as the
+                // clients (DSE) read it; a partial overlap at another offset
+                // is `May` until they carry the offset.
+                Stack::PartialAlias { offset: Some(0) } => AliasResult::Partial,
+                Stack::PartialAlias { .. } => AliasResult::May,
+                Stack::MustAlias => AliasResult::Must,
+            };
+        }
         if !self.may_overlap(&one.effective, &other.effective, None) {
             return AliasResult::No;
         }
@@ -492,6 +579,17 @@ impl<'a> AliasQuery<'a> {
         inst: InstId,
         loc: &Location,
     ) -> ModRef {
+        // `AAResults::getModRefInfo(I, Loc)`: the stack's.
+        if let Some(memory) = &loc.memory
+            && matches!(
+                self.unit.function.instruction(inst).opcode,
+                Opcode::Load { .. } | Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_)
+            )
+        {
+            use crate::aa::AAResults;
+            let found = self.stack().get_mod_ref_info(inst, Some(memory), &mut self.basic.borrow_mut());
+            return ModRef { reads: found.is_ref_set(), writes: found.is_mod_set() };
+        }
         let touches = |list: Option<&[MemRef]>| {
             list.map(|list| list.iter().any(|one| self.may_overlap(one, &loc.effective, Some(inst))))
         };
@@ -565,6 +663,28 @@ impl<'a> AliasQuery<'a> {
         llrm_mir::memory::Effects { reads: site.reads && declared.reads, writes: site.writes && declared.writes }
     }
 
+    /// `isModSet(AA.getModRefInfo(def, call))` from the stack, for a call or a
+    /// store `def`; none for another instruction.
+    fn def_against_call(
+        &self,
+        def: InstId,
+        call: InstId,
+    ) -> Option<bool> {
+        use crate::aa::AAResults;
+        match self.unit.function.instruction(def).opcode {
+            Opcode::Call(_) | Opcode::Invoke(_) => {
+                let found = self.stack().get_mod_ref_info_call(def, call, &mut self.basic.borrow_mut());
+                Some(found.is_mod_set())
+            }
+            Opcode::Store { .. } => {
+                let location = crate::aa::MemoryLocation::get(self.unit, def)?;
+                let found = self.stack().get_mod_ref_info(call, Some(&location), &mut self.basic.borrow_mut());
+                Some(!found.is_no_mod_ref())
+            }
+            _ => None,
+        }
+    }
+
     /// `!isNoModRef(AA.getModRefInfo(I1, I2))`
     /// ([`AliasAnalysis.cpp#L390`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/AliasAnalysis.cpp#L390)):
     /// whether `first` may read or write a byte `second` reads or writes.
@@ -573,6 +693,36 @@ impl<'a> AliasQuery<'a> {
         first: InstId,
         second: InstId,
     ) -> bool {
+        // `getModRefInfo(I1, I2)`: a call against a call is the stack's pair,
+        // anything against a load, a store or a call asks `I2`'s location.
+        {
+            use crate::aa::AAResults;
+            let is_call = |inst: InstId| {
+                matches!(
+                    self.unit.function.instruction(inst).opcode,
+                    Opcode::Call(_) | Opcode::Invoke(_)
+                )
+            };
+            if is_call(first) && is_call(second) {
+                return !self
+                    .stack()
+                    .get_mod_ref_info_call(first, second, &mut self.basic.borrow_mut())
+                    .is_no_mod_ref();
+            }
+            if matches!(
+                self.unit.function.instruction(second).opcode,
+                Opcode::Load { .. } | Opcode::Store { .. }
+            )
+                && matches!(
+                    self.unit.function.instruction(first).opcode,
+                    Opcode::Load { .. } | Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_)
+                )
+                && let Some(location) = crate::aa::MemoryLocation::get(self.unit, second)
+            {
+                let found = self.stack().get_mod_ref_info(first, Some(&location), &mut self.basic.borrow_mut());
+                return !found.is_no_mod_ref();
+            }
+        }
         let accesses = self.accesses;
         let touched = |inst: InstId| -> Option<Vec<&MemRef>> {
             let (reads, writes) = (accesses.reads(inst)?, accesses.writes(inst)?);

@@ -26,7 +26,7 @@
 //! # Used by
 //! The code generated from `peephole.peep`, through [`super::walk`].
 
-use llrm_lir::registers::Regs;
+use llrm_lir::registers::{RegId, Regs};
 
 use crate::backend::lanes::Lanes;
 use crate::backend::peephole::{_lanes, _register_operand};
@@ -55,6 +55,23 @@ pub fn root_upper(
     one: Reg,
 ) -> Lanes {
     _lanes(regs, crate::model::ir::root(one.register)).into_iter().filter(|lane| lane.1 >= 2).collect()
+}
+
+/// The lanes of a register's root that the register itself does not cover.
+pub fn rest_of_root(
+    regs: Regs,
+    one: Reg,
+) -> Lanes {
+    let own = _lanes(regs, one.register);
+    _lanes(regs, crate::model::ir::root(one.register)).into_iter().filter(|lane| !own.contains(lane)).collect()
+}
+
+/// The dword register a byte or word view belongs to (`eax` for `al` and `ax`).
+pub fn dword_of(
+    regs: Regs,
+    one: Reg,
+) -> Loc {
+    Loc::Reg(Reg { register: regs.named(regs.root(one.register), 4), width: 4 })
 }
 
 /// The whole register a view belongs to, as a dword operand.
@@ -156,9 +173,44 @@ pub fn other_term(
     one: &Loc,
     d: Reg,
 ) -> Loc {
-    let Loc::Address(a) = one else { unreachable!("sums_into proved an address") };
-    let other = if a.through == d.register { a.index_through } else { a.through };
+    let (base, index, _) = match one {
+        Loc::Address(a) => (a.through, a.index_through, a.offset),
+        Loc::Mem(m) => (m.through, m.index_through, m.offset),
+        _ => unreachable!("the guard proved an address"),
+    };
+    let other = if base == d.register { index } else { base };
     Loc::Reg(Reg { register: other, width: d.width })
+}
+
+/// The terms of `lea t,[x+y]` as the two steps `optLEAALU` makes on `d`: `x`
+/// then `y`, or `y` then `x` where `y` is `d`, so that `d` itself is added
+/// first.
+fn terms(
+    one: &Loc,
+    d: Reg,
+) -> (RegId, RegId) {
+    let (base, index, _) = match one {
+        Loc::Address(a) => (a.through, a.index_through, a.offset),
+        Loc::Mem(m) => (m.through, m.index_through, m.offset),
+        _ => unreachable!("the guard proved an address"),
+    };
+    if index == d.register { (index, base) } else { (base, index) }
+}
+
+pub fn first_term(
+    _regs: Regs,
+    one: &Loc,
+    d: Reg,
+) -> Loc {
+    Loc::Reg(Reg { register: terms(one, d).0, width: d.width })
+}
+
+pub fn second_term(
+    _regs: Regs,
+    one: &Loc,
+    d: Reg,
+) -> Loc {
+    Loc::Reg(Reg { register: terms(one, d).1, width: d.width })
 }
 
 /// The displacement of `lea d,[d+disp]` as an immediate the width of `d`.
@@ -167,8 +219,12 @@ pub fn step(
     one: &Loc,
     d: Reg,
 ) -> Loc {
-    let Loc::Address(a) = one else { unreachable!("steps_in_place proved an address") };
-    Loc::Imm(Imm { value: a.offset, width: d.width, address: None })
+    let (_, _, offset) = match one {
+        Loc::Address(a) => (a.through, a.index_through, a.offset),
+        Loc::Mem(m) => (m.through, m.index_through, m.offset),
+        _ => unreachable!("the guard proved an address"),
+    };
+    Loc::Imm(Imm { value: offset, width: d.width, address: None })
 }
 
 /// The point `one` stands at.

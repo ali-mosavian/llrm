@@ -2,8 +2,9 @@
 //!
 //!     cargo run --release --example price -p llrm-dagisel -- 2000
 //!
-//! Run it under `valgrind --tool=callgrind --toggle-collect='*Selector*select*'` to read the
-//! instructions per selected node; the DAGs are small so the test DAG's scans stay cheap.
+//! Run it under `valgrind --tool=callgrind
+//! --toggle-collect='*Selector*select*'` to read the instructions per selected
+//! node; the DAGs are small so the test DAG's scans stay cheap.
 
 use llrm_dagisel::dag::{LoadExt, SDValue};
 use llrm_dagisel::generated::ids::{isd, mvt};
@@ -20,8 +21,8 @@ fn main() {
         let mut dag = TestDag::new();
         let a = dag.input(1, mvt::i32);
         let b = dag.input(2, mvt::i32);
-        let c = dag.constant(40, mvt::i32);
-        let shl_amount = dag.constant(3, mvt::i8);
+        let c = dag.make_constant(40, mvt::i32);
+        let shl_amount = dag.make_constant(3, mvt::i8);
         let address = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[a, b]), 0);
         let load = dag.add(Node {
             opcode: isd::LOAD,
@@ -50,6 +51,10 @@ fn main() {
     }
     let items = table::TABLE.items.len();
     let item = std::mem::size_of::<llrm_dagisel::matcher::Matcher>();
-    println!("table: {items} items x {item} bytes = {} bytes, {} operand bytes", std::mem::size_of_val(table::TABLE.items), std::mem::size_of_val(table::TABLE.operands));
+    println!(
+        "table: {items} items x {item} bytes = {} bytes, {} operand bytes",
+        std::mem::size_of_val(table::TABLE.items),
+        std::mem::size_of_val(table::TABLE.operands)
+    );
     println!("{selected} of {} nodes selected", rounds * 8);
 }

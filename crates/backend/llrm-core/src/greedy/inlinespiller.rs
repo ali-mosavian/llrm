@@ -841,7 +841,7 @@ impl InlineSpiller<'_> {
         insns: &[Arc<Insn>],
     ) -> bool {
         self.tables.orders.borrow().get(&reg).is_some_and(|order| order.first() == Some(&RegId::MM0))
-            || crate::backend::allocate::rfp_on() && widest_operand(insns, reg) == Some(10)
+            || widest_operand(insns, reg) == Some(10)
     }
 
     /// The cell of the home all siblings share, as wide as `reg`'s accesses.
@@ -1322,7 +1322,7 @@ mod tests {
         defines: Vec<u32>,
         uses: Vec<u32>,
     ) -> Arc<Insn> {
-        let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
         // A copy made by a split claims no bytes.
         let covers = if op == Operation::Move { (at, at) } else { (at, at + 1) };
         Arc::new(Insn::new(at, Some(covers), Some(what), defines, uses))
@@ -1388,21 +1388,5 @@ mod tests {
         let after = lis.block_insns(0);
         assert_eq!(stores(&lis).len(), 1, "one store for the two spills: {after:?}");
         assert_eq!(frame.slots.len(), 1, "one home for the two: {:?}", frame.slots);
-    }
-
-    /// A spill wrote each unit through the old spiller's plan on a body of
-    /// that unit (D-A), then worked out again the interval of every other
-    /// register the unit named (`refresh_named`: 27 M of d_faces -O2 m16's
-    /// 73 M in `spill`). `spillAroundUses` touches only the spilled register:
-    /// no plan, and only the registers it makes get intervals.
-    #[test]
-    fn test_a_spill_writes_no_plan_and_works_out_only_the_registers_it_makes() {
-        let plans = crate::backend::spiller::PLANS.with(std::cell::Cell::get);
-        let units = super::native_units();
-        crate::backend::regalloc_fuzz_tests::allocate_generated_bodies(40);
-        assert!(super::native_units() > units, "premise: some unit was spilled");
-        assert_eq!(crate::backend::spiller::PLANS.with(std::cell::Cell::get) - plans, 0, "plans of the old spiller");
-        let stray = super::STRAY.with(|one| std::mem::take(&mut *one.borrow_mut()));
-        assert!(stray.is_empty(), "intervals worked out of registers the spills did not make: {stray:?}");
     }
 }

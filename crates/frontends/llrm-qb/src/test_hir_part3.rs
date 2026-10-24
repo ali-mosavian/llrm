@@ -844,7 +844,7 @@ fn test_qb_finalizer_attaches_callee_cleanup_to_far_return() {
     let returned = lir::Insn::new(
         1,
         Some((1, 1)),
-        Some(ir::Semantics { name: Some(String::new()), ..ir::Semantics::new(Operation::Return) }),
+        Some(ir::Semantics { name: Some("".into()), ..ir::Semantics::new(Operation::Return) }),
         vec![],
         vec![],
     );

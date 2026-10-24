@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_loadstore.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_loadstore.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_loadstore.rs sha256:3bf1e87113e1326dd771115f0ad861f56548c04519e425472e1c0f248d4344a4 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_loadstore.rs sha256:46d24da775f6485842cf148e35c593ef6599a2fc0d0be9da48862cea8a57793e -->
 
 # combine_loadstore
 
@@ -50,9 +50,9 @@ a resume: MIR has no other instruction that reads memory, writes it or
 throws.
 
 DEVIATE 6: an alloca only copied from constant memory
-(`isOnlyCopiedFromConstantMemory`, `PointerReplacer`) and `visitAllocSite`
-(InstructionCombining.cpp) are not translated here. MIR's scalar alloca has
-no count operand, so a count of 1 is dropping the operand.
+(`isOnlyCopiedFromConstantMemory`, `PointerReplacer`) is not translated
+here; `visitAllocSite` is, with DEVIATE 7 on `alloc_site_removable`. MIR's
+scalar alloca has no count operand, so a count of 1 is dropping the operand.
 
 ## Used by
 `combine` (its `visit`).
