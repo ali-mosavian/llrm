@@ -190,6 +190,10 @@ pub fn machine_with<'a>(
             has_var_sized: false,
             slow_two_mem_ops: false,
         }),
+        // On SSA, right after the pushes are made: a pushed value a load made,
+        // read nowhere else, is pushed from the load's cell (the pin:
+        // X86CallFrameOptimization's push folding).
+        Box::new(crate::backend::pushfold::PushFold),
         // On SSA, as the pin's `addPreRegAlloc` has it: flags kept across an
         // instruction that clobbers them become a byte per condition
         // (X86FlagsCopyLowering, every level).
@@ -209,9 +213,6 @@ pub fn machine_with<'a>(
         // A float load only one arithmetic instruction reads is its memory
         // operand.
         Box::new(crate::backend::floatfold::FloatFold { cpu: target }),
-        // A pushed value a load made, read nowhere else, is pushed from the
-        // load's cell (the pin: X86CallFrameOptimization's push folding).
-        Box::new(crate::backend::pushfold::PushFold),
         // After phi elimination: a phi's copies are where the stack shuffles.
         Box::new(floatassign::FloatPrep {
             frame: frame.clone(),
