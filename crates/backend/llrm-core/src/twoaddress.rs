@@ -88,159 +88,242 @@ pub type InstrKey = u64;
 /// definitions `isRevCopyChain` walks through.
 pub const MAX_DATA_FLOW_EDGE: usize = 10;
 
-/// What the walks ask of a body, as the pin asks it of `LiveIntervals`: who
-/// names each value, which block each instruction is in, and where a value dies
-/// (`isPlainlyKilled`). The one `LiveIntervals` of the function, which the
-/// pass edits as it moves, rewrites and inserts instructions.
+/// What the walks ask of a body, as the pin asks it of
+/// `MachineRegisterInfo` and `LiveVariables`: who names each value, which block
+/// each instruction is in, and where a value dies (`isPlainlyKilled`). The
+/// pass edits the body through it, and the kills follow as the pin's calls
+/// make them follow.
 pub struct BodyFacts {
-    lis: std::cell::RefCell<crate::liveness::liveintervals::LiveIntervals>,
+    state: std::cell::RefCell<State>,
+}
+
+struct State {
+    insns: HashMap<InstrKey, Arc<Insn>>,
+    /// The instructions of each block, in order.
+    blocks: Vec<Vec<Arc<Insn>>>,
+    block_of: HashMap<InstrKey, usize>,
+    /// The instructions that read or define each value, and whether each
+    /// defines it (`use_def_nodbg_operands`).
+    operands: HashMap<u32, Vec<(InstrKey, bool)>>,
+    lv: crate::liveness::livevariables::LiveVariables,
+}
+
+impl State {
+    /// The kills of `value` in `block` made again from the block as it is: the
+    /// block's boundary is what the edits leave as it was, so what the
+    /// instructions in it say is all that moved (DEVIATE LV3: the pin makes
+    /// the same changes by `addVirtualRegisterKilled` and
+    /// `removeVirtualRegisterKilled` where the instructions change).
+    fn refresh_kills(
+        &mut self,
+        value: u32,
+        block: usize,
+    ) {
+        use crate::liveness::livevariables::{Kill, Site};
+        let live_in = self.lv.is_live_in_block(value, block);
+        let live_out = self.lv.is_live_out_block(value, block);
+        let sites = crate::liveness::livevariables::segment_kills(
+            value,
+            self.blocks[block].iter().map(|one| &**one),
+            live_in,
+            live_out,
+        );
+        let info = self.lv.get_var_info(value);
+        info.kills.retain(|kill| kill.block != block);
+        info.kills.extend(sites.into_iter().map(|site: Site| Kill { site, block }));
+    }
+
+    /// [`State::refresh_kills`] of every value `one` names.
+    fn refresh_named(
+        &mut self,
+        one: &Insn,
+        block: usize,
+    ) {
+        let mut values: Vec<u32> = one.uses.iter().chain(&one.defines).copied().collect();
+        values.sort_unstable();
+        values.dedup();
+        for value in values {
+            self.refresh_kills(value, block);
+        }
+    }
+
+    fn add_operands(
+        &mut self,
+        one: &Insn,
+    ) {
+        for &value in &one.uses {
+            self.operands.entry(value).or_default().push((one.id(), false));
+        }
+        for &value in &one.defines {
+            self.operands.entry(value).or_default().push((one.id(), true));
+        }
+    }
+
+    fn remove_operands(
+        &mut self,
+        one: &Insn,
+    ) {
+        for &value in one.uses.iter().chain(&one.defines) {
+            if let Some(list) = self.operands.get_mut(&value) {
+                list.retain(|(key, _)| *key != one.id());
+            }
+        }
+    }
 }
 
 impl BodyFacts {
-    /// `LiveIntervals` of `body`, every value's interval computed
-    /// (`LiveIntervals::runOnMachineFunction`).
+    /// `LiveVariables` of `body`, filled by a dataflow (DEVIATE LV3) and kept
+    /// as the pass edits.
     pub fn of(body: &LirBody) -> Self {
-        // An interval is made when it is first asked, as the coalescer's was:
-        // the pin computes every one, which no value that is never a
-        // source or a copy needs.
-        Self { lis: std::cell::RefCell::new(crate::liveness::liveintervals::LiveIntervals::new(body)) }
+        let mut state = State {
+            insns: HashMap::default(),
+            blocks: Vec::new(),
+            block_of: HashMap::default(),
+            operands: HashMap::default(),
+            lv: crate::liveness::livevariables::LiveVariables::from_dataflow(body),
+        };
+        for (at, block) in body.blocks.iter().enumerate() {
+            let mut kept = Vec::with_capacity(block.insns.len());
+            for one in block.insns.iter() {
+                kept.push(Arc::clone(one));
+                state.insns.insert(one.id(), Arc::clone(one));
+                state.block_of.insert(one.id(), at);
+                state.add_operands(one);
+            }
+            state.blocks.push(kept);
+        }
+        Self { state: std::cell::RefCell::new(state) }
     }
 
     /// The instructions that define or read `value`, and whether each defines
-    /// it (an operand read as undef is no reference).
+    /// it.
     fn refs(
         &self,
         value: u32,
     ) -> Vec<(InstrKey, bool)> {
-        let lis = self.lis.borrow();
-        lis.operands(value).iter().filter(|op| op.is_def || op.reads_reg).map(|op| (op.instr, op.is_def)).collect()
+        self.state.borrow().operands.get(&value).cloned().unwrap_or_default()
     }
 
     fn block_of(
         &self,
         key: InstrKey,
     ) -> Option<usize> {
-        let lis = self.lis.borrow();
-        let at = lis.indexes.get_instruction_index(key);
-        Some(lis.indexes.get_mbb_from_index(&at))
+        self.state.borrow().block_of.get(&key).copied()
     }
 
     fn insn(
         &self,
         key: InstrKey,
     ) -> Arc<Insn> {
-        Arc::clone(self.lis.borrow().instr(key))
+        Arc::clone(&self.state.borrow().insns[&key])
     }
 
-    /// `isPlainlyKilled(MI, Reg)`: the interval of `value` ends at the
-    /// instruction (TwoAddressInstructionPass.cpp#L394-L483).
+    /// `isPlainlyKilled(MI, Reg)`: `MI` is the kill of `value` in its block
+    /// (`LV->getVarInfo(Reg).findKill(MI->getParent()) == MI`).
     pub fn killed(
         &self,
         key: InstrKey,
         value: u32,
     ) -> bool {
-        let mut lis = self.lis.borrow_mut();
-        let li = lis.interval_rc(value);
-        // An undef read has no value to kill.
-        if !li.has_at_least_one_value() {
-            return false;
-        }
-        let at = lis.indexes.get_instruction_index(key);
-        let i = li.find(&at);
-        i != li.segments.len()
-            && !li.segments[i].end.is_block()
-            && crate::liveness::slotindex::SlotIndex::is_same_instr(&li.segments[i].end, &at)
+        use crate::liveness::livevariables::Site;
+        let state = self.state.borrow();
+        state.lv.var_info(value).is_some_and(|info| info.is_killed_by(Site::Insn(key)))
     }
 
-    /// `replaceMachineInstrInMaps`: `new` takes the place of `old` in `block`.
+    /// `replaceMachineInstrInMaps` and `LV->replaceKillInstruction`: `new`
+    /// takes the place of `old` in `block`, and the kills `old` was.
     pub fn rewrite(
         &self,
         block: usize,
         old: InstrKey,
         new: Arc<Insn>,
     ) {
-        self.lis.borrow_mut().rewrite_instr(block, old, new);
+        let mut state = self.state.borrow_mut();
+        let before = Arc::clone(&state.insns[&old]);
+        state.remove_operands(&before);
+        state.insns.remove(&old);
+        state.block_of.remove(&old);
+        let at = state.blocks[block].iter().position(|one| one.id() == old).expect("an instruction of the block");
+        state.blocks[block][at] = Arc::clone(&new);
+        state.block_of.insert(new.id(), block);
+        state.add_operands(&new);
+        state.insns.insert(new.id(), Arc::clone(&new));
+        state.refresh_named(&before, block);
+        state.refresh_named(&new, block);
     }
 
-    /// `LiveIntervals::handleMove`: `key` goes before `before` (the end of the
-    /// block without one).
+    /// The instruction `key` goes before `before` (the end of the block without
+    /// one), and the kills of what it names follow its place
+    /// (`removeVirtualRegisterKilled`/`addVirtualRegisterKilled` of
+    /// `rescheduleMIBelowKill` and `rescheduleKillAboveMI`).
     pub fn move_before(
         &self,
         block: usize,
         key: InstrKey,
         before: Option<InstrKey>,
     ) {
-        self.lis.borrow_mut().handle_move(block, key, before);
+        let mut state = self.state.borrow_mut();
+        let order = &mut state.blocks[block];
+        let from = order.iter().position(|one| one.id() == key).expect("an instruction of the block");
+        let moved = order.remove(from);
+        let to =
+            before.map_or(order.len(), |one| order.iter().position(|other| other.id() == one).expect("a block mate"));
+        order.insert(to, moved);
+        let moved = Arc::clone(&state.insns[&key]);
+        state.refresh_named(&moved, block);
     }
 
     /// `one` replaced by `made`, in order (the copy of a tied pair and the
-    /// instruction that reads it): the last takes the place and the index of
-    /// `one`, the others go before it. Only the intervals of the values the
-    /// others name, and of those `one` and the last name differently, are made
-    /// afresh (`processTiedPairs`: `removeInterval`,
-    /// `createAndComputeVirtRegInterval`).
+    /// instruction that reads it): the last takes the place of `one`, the
+    /// others go before it, and the kills of every value they name are made
+    /// again (`processTiedPairs`: the copy takes the source's kill when `one`
+    /// no longer reads it).
     pub fn replace(
         &self,
         block: usize,
         one: &Insn,
         made: &[Arc<Insn>],
     ) {
-        use std::collections::BTreeSet;
-        let named =
-            |one: &Insn| -> BTreeSet<u32> { one.defines.iter().chain(&one.uses).chain(&one.undefs).copied().collect() };
         let (last, rest) = made.split_last().expect("an instruction replaced by none");
-        let mut lis = self.lis.borrow_mut();
-        lis.rewrite_instr(block, one.id(), Arc::clone(last));
-        let mut changed: BTreeSet<u32> = named(one).symmetric_difference(&named(last)).copied().collect();
-        // The pin's update of a tied pair: the copy `into := source` before
-        // the instruction, which reads `into` where it read `source`.
-        let tied_copy = match rest {
-            [copy] => match (copy.defines.as_slice(), copy.uses.as_slice(), one.defines.as_slice()) {
-                (&[into], &[source], &[defined])
-                    if into == defined
-                        && copy.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Move)
-                        && one.uses.contains(&source)
-                        && last.uses.contains(&into) =>
-                {
-                    Some((into, source))
-                }
-                _ => None,
-            },
-            _ => None,
-        };
-        for new in rest {
-            lis.insert_instr_before(block, Some(last.id()), Arc::clone(new));
-            if tied_copy.is_none() {
-                changed.extend(named(new));
-            }
+        let mut state = self.state.borrow_mut();
+        let before = Arc::clone(&state.insns[&one.id()]);
+        state.remove_operands(&before);
+        state.insns.remove(&one.id());
+        state.block_of.remove(&one.id());
+        let at =
+            state.blocks[block].iter().position(|other| other.id() == one.id()).expect("an instruction of the block");
+        for (place, new) in rest.iter().enumerate() {
+            state.blocks[block].insert(at + place, Arc::clone(new));
+            state.block_of.insert(new.id(), block);
+            state.add_operands(new);
+            state.insns.insert(new.id(), Arc::clone(new));
         }
-        if let Some((into, source)) = tied_copy {
-            lis.tied_copy_inserted(rest[0].id(), last.id(), into, source, last.uses.contains(&source));
-            changed.remove(&into);
-            changed.remove(&source);
-        }
-        // Only an interval already made is redone; the others are made from the
-        // body as it is.
-        let held: Vec<u32> = changed.into_iter().filter(|value| lis.has_interval(*value)).collect();
-        for value in held {
-            lis.remove_interval(value);
-            lis.interval(value);
+        state.blocks[block][at + rest.len()] = Arc::clone(last);
+        state.block_of.insert(last.id(), block);
+        state.add_operands(last);
+        state.insns.insert(last.id(), Arc::clone(last));
+        state.refresh_named(&before, block);
+        for new in made {
+            state.refresh_named(new, block);
         }
     }
 
-    /// The function as edited, and its intervals left for the coalescer.
+    /// The function as edited.
     pub fn finish(
         self,
         body: &LirBody,
     ) -> LirBody {
-        let lis = self.lis.into_inner();
-        let done = lis.body_like(body);
-        if llrm_support::env_flag!("LLRM_CHECK_LIVEINTERVALS") {
-            // The premise: the intervals the edits left are the ones made
-            // afresh.
-            lis.assert_intervals_equal_afresh(&done);
+        let done = self.body_like(body);
+        if llrm_support::env_flag!("LLRM_CHECK_LIVEVARIABLES") {
+            // The premise: the kills the edits left are the ones a fresh
+            // dataflow finds.
+            let fresh = crate::liveness::livevariables::LiveVariables::from_dataflow(&done);
+            assert_eq!(
+                self.state.borrow().lv.shape(),
+                fresh.shape(),
+                "kills after TwoAddress differ from a fresh dataflow"
+            );
         }
-        crate::liveness::liveintervals::hand_over(lis, &done);
         done
     }
 
@@ -249,7 +332,10 @@ impl BodyFacts {
         &self,
         body: &LirBody,
     ) -> LirBody {
-        self.lis.borrow().body_like(body)
+        let state = self.state.borrow();
+        let blocks =
+            body.blocks.iter().enumerate().map(|(at, block)| block.with_insns(state.blocks[at].clone())).collect();
+        body.with_blocks(blocks)
     }
 }
 
