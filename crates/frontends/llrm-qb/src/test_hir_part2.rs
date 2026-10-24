@@ -877,11 +877,25 @@ fn test_on_error_registrations_follow_source_order() {
     let listing = listing(&parsed_as(&basic, "qb45", "qb45"));
     let main = between(&listing, "$QB$MAIN proc far", "$QB$MAIN endp");
     let before = main.split("call far ptr B$SERR").next().expect("ERROR 11");
-    let active: Vec<&str> =
-        before.lines().filter_map(|line| line.trim().strip_prefix("mov word ptr $QB$ACTIVE, ")).collect();
-
-    // first, second, then none: ERROR 11 runs with no handler.
-    assert_eq!(active, ["1", "2", "0"], "{main}");
+    // The module's `$QB$ACTIVE` slot, which these registrations once stored 1,
+    // 2 and 0 into, has no reader now and is gone; the registrations are the
+    // calls of `B$OEGA`, and the frame state each leaves is the number of the
+    // statement that follows it. They follow source order: the first handler's
+    // landing, the second's, then none.
+    let lines: Vec<&str> = before.lines().map(str::trim).collect();
+    let registered: Vec<&str> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| **line == "call far ptr B$OEGA")
+        .map(|(at, _)| lines[at - 1])
+        .collect();
+    assert_eq!(registered, ["push offset $QB$LANDING", "push offset $QB$LANDING", "pushd 0"], "{main}");
+    let states: Vec<u32> = lines
+        .iter()
+        .filter_map(|line| line.strip_prefix("mov word ptr ss:$QB$FRAME, "))
+        .map(|state| state.parse().expect("a statement number"))
+        .collect();
+    assert!(states.len() == 3 && states.windows(2).all(|pair| pair[0] < pair[1]), "{main}");
     let last = before.rsplit_once("\n    call far ptr B$OEGA").expect("a registration").0;
     assert!(last.ends_with("pushd 0"), "{main}");
 }
