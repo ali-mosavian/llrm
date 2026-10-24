@@ -12,6 +12,7 @@ fn visit(
 ) -> Visit {
     match c.function.instruction(inst).opcode {
         Opcode::Binary(BinaryOp::FDiv) => super::visit_fdiv(c, inst),
+        Opcode::Binary(BinaryOp::FAdd | BinaryOp::FMul) => super::visit_fadd_or_fmul(c, inst),
         // `simplifyCastInst`, as every visit starts with.
         Opcode::Cast(_) => crate::combine_muldivrem::simplify_first(c, inst).map_or(Visit::None, Visit::Replace),
         _ => Visit::None,
@@ -82,4 +83,30 @@ fn test_a_widened_constant_is_a_constant_so_its_division_is_a_multiply() {
     let out = combined("x86_fp80", "  %w = fpext double -8.0 to x86_fp80\n  %r = fdiv x86_fp80 %x, %w\n");
     assert!(out.contains("fmul x86_fp80 %x, -1.250000e-01"), "{out}");
     assert!(!out.contains("fpext") && !out.contains("fdiv"), "{out}");
+}
+
+/// Pinned `opt -passes=instcombine`: `(x + 1.0) + 2.0` with `reassoc nsz` on
+/// the outer operation is `x + 3.0` (the flags of the outer one stay), a
+/// product likewise; `reassoc` alone, or `nsz` alone, is no license.
+#[test]
+fn test_a_constant_chain_folds_only_with_reassoc_and_nsz() {
+    let sum = combined("double", "  %a = fadd double %x, 1.0\n  %r = fadd reassoc nsz double %a, 2.0\n");
+    assert!(sum.contains("fadd reassoc nsz double %x, 3.000000e+00") && sum.matches("fadd").count() == 1, "{sum}");
+    let product =
+        combined("double", "  %a = fmul reassoc nsz double %x, 2.0\n  %r = fmul reassoc nsz double %a, 4.0\n");
+    assert!(
+        product.contains("fmul reassoc nsz double %x, 8.000000e+00") && product.matches("fmul").count() == 1,
+        "{product}"
+    );
+    let reassoc_only = combined("double", "  %a = fadd reassoc double %x, 1.0\n  %r = fadd reassoc double %a, 2.0\n");
+    assert_eq!(reassoc_only.matches("fadd").count(), 2, "{reassoc_only}");
+    let inner_only = combined("double", "  %a = fadd reassoc nsz double %x, 1.0\n  %r = fadd double %a, 2.0\n");
+    assert_eq!(inner_only.matches("fadd").count(), 2, "{inner_only}");
+}
+
+/// A constant goes to the right of a sum or a product.
+#[test]
+fn test_a_float_constant_goes_to_the_right_of_a_commutative_operation() {
+    let out = combined("double", "  %r = fmul double 2.0, %x\n");
+    assert!(out.contains("fmul double %x, 2.000000e+00"), "{out}");
 }

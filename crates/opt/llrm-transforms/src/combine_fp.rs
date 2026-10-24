@@ -10,8 +10,9 @@
 //! number; the product takes the division's fast-math flags.
 //!
 //! DEVIATE 1: the `-X / C --> X / -C` arm and `foldFDivConstantDividend`,
-//! `foldFDivPowDivisor` and the sqrt/exp rules of `visitFDiv` are not
-//! translated.
+//! `foldFDivPowDivisor` and the sqrt/exp rules of `visitFDiv`, and everything
+//! in `visitFAdd` and `visitFMul` after `SimplifyAssociativeOrCommutative`, are
+//! not translated.
 //!
 //! DEVIATE 2: an `x86_fp80` constant is held as a double: its reciprocal is
 //! formed only where exact.
@@ -32,6 +33,20 @@ use llrm_mir::types::{FloatKind, Type};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_muldivrem::simplify_first;
+use crate::combine_shared::simplify_associative_or_commutative;
+
+/// `visitFAdd` and `visitFMul`, as far as translated: `simplify*Inst`, then
+/// `SimplifyAssociativeOrCommutative` (constants to the right; `(X op C1) op
+/// C2` is `X op (C1 op C2)` with `reassoc nsz`). DEVIATE 1 covers the rest.
+pub fn visit_fadd_or_fmul(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Visit {
+    if let Some(found) = simplify_first(c, inst) {
+        return Visit::Replace(found);
+    }
+    if simplify_associative_or_commutative(c, inst) { Visit::Changed } else { Visit::None }
+}
 
 /// `visitFDiv` (InstCombineMulDivRem.cpp).
 pub fn visit_fdiv(
