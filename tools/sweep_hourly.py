@@ -68,7 +68,9 @@ def parse_groups(text: str) -> tuple[list[Red], str]:
         elif line.startswith("FAIL"):
             words = line.split()
             program = words[1].rstrip(":") if len(words) > 1 else line
-            reds.append(Red(f"run:{program}", WRONG, ["dosbatch/run_tests.py", Path(program).stem]))
+            # `FAIL  c/x.c [-O2]: link: jwlink: Error! ...`: the program never ran, so its output is not wrong (run_groups prints `link:` or `compile:` for a build that failed).
+            built = not re.search(r"\]: (link|compile): ", line)
+            reds.append(Red(f"run:{program}", WRONG if built else BUILD, ["dosbatch/run_tests.py", Path(program).stem]))
     return reds, f"{passed}/{total}"
 
 

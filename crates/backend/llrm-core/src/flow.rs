@@ -224,7 +224,7 @@ pub fn machine_with<'a>(
         Box::new(twoaddr::TwoAddress {
             lea: match target.dword_address_form() {
                 None => crate::twoaddress::ThreeAddress::Off,
-                Some(form) if form.secondary => crate::twoaddress::ThreeAddress::AddSub,
+                Some(form) if form.secondary => crate::twoaddress::ThreeAddress::AddSubWords,
                 Some(_) => crate::twoaddress::ThreeAddress::All,
             },
         }),
