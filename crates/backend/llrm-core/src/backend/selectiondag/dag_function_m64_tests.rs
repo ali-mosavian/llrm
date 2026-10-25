@@ -333,3 +333,31 @@ define void @f() {
     );
     assert!(names.iter().any(|n| n == "lea"), "{names:?}");
 }
+
+/// `ret {i32, i64}` returned `eax = x`, `edx = x >> 16`: the one-integer path
+/// halved the first field into the two return registers. The fields go to
+/// `rax` and `rdx` each at its own width.
+#[test]
+fn an_m64_aggregate_return_fills_rax_and_rdx_field_by_field() {
+    use llrm_lir::registers::RegId;
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define { i32, i64 } @f(i32 %x, i64 %y) {
+entry:
+  %a = insertvalue { i32, i64 } undef, i32 %x, 0
+  %b = insertvalue { i32, i64 } %a, i64 %y, 1
+  ret { i32, i64 } %b
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let ret = done
+        .body
+        .insns()
+        .iter()
+        .find(|i| i.what.as_ref().is_some_and(|w| w.op == crate::model::ir::Operation::Return))
+        .expect("a ret")
+        .clone();
+    let returned: Vec<_> = ret.requires.iter().map(|(held, reg)| (held.width, *reg)).collect();
+    assert_eq!(returned, [(4, RegId::EAX), (8, RegId::RDX)]);
+}

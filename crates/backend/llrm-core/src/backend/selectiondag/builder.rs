@@ -1267,6 +1267,26 @@ impl Builder<'_> {
                 // x87 returns in st(0), which no register names: the value is
                 // RET_GLUE's operand
                 ops.push(value);
+            } else if self.dag.node(value).values.len() > 1 {
+                // An aggregate (`ret {i32, i64}`): each field in the next
+                // return register at its own width (`ComputeValueVTs`), where
+                // the one-integer path would halve the first field.
+                let fields = self.dag.node(value).values.len();
+                if fields != self.convention.returns.len() {
+                    return Err(Refused("an aggregate result that does not fill the return registers"));
+                }
+                for (field, reg) in (0..fields).zip(self.convention.returns.clone()) {
+                    let piece = SDValue { node: value.node, res: field as u8 };
+                    let piece_vt = self.dag.value_type(piece);
+                    if !piece_vt.is_integer() {
+                        return Err(Refused("a non-integer field of an aggregate result"));
+                    }
+                    let reg = self.sized_register(reg, piece_vt);
+                    let copy = self.dag.get_copy_to_phys_reg(chain, reg, piece, glue);
+                    chain = SDValue { node: copy.node, res: 0 };
+                    glue = Some(SDValue { node: copy.node, res: 1 });
+                    ops.push(self.dag.get_phys_register(piece_vt, reg));
+                }
             } else {
                 let (part_vt, parts) = self.parts_in(vt, self.convention.returns.len())?;
                 // a narrow integer fills its register (`getCopyToParts`, by the
