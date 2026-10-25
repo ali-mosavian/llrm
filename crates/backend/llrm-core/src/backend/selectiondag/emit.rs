@@ -3023,7 +3023,7 @@ impl Emitter<'_, '_> {
         value: SDValue,
     ) -> Result<i64, EmitError> {
         match self.dag.node(value).data {
-            NodeData::Const { bits, .. } => Ok(sign_extend(bits, width_of(self.dag, value) * 8)),
+            NodeData::Const { bits, .. } => Ok(sign_extend(bits, width_of(self.ctx.map.scalar_sse(), self.dag, value) * 8)),
             _ => Err(EmitError::Unsupported("a non-constant address part".to_owned())),
         }
     }
