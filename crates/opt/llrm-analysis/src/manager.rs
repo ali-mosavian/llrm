@@ -1259,11 +1259,11 @@ impl Analysis for BaseAccesses {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Self::Result {
-        let writes_rc = analyses.get::<Writes>(context, layout, function);
-        let calls = Result::as_ref(&*writes_rc).map_err(String::clone)?;
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         let unit = Unit::within(context, layout, function, analyses.outer()).with_exposed(&exposed);
-        Ok(std::rc::Rc::new(memoryssa::Accesses::plain(&unit, calls)))
+        // A call names no bytes: the AA stack answers what it does to a
+        // location.
+        Ok(std::rc::Rc::new(memoryssa::Accesses::plain(&unit, &Default::default())))
     }
 }
 

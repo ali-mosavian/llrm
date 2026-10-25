@@ -381,6 +381,7 @@ fn test_the_accesses_of_a_graph_are_read_without_annotating() {
             let Ok(graph) = &*graph else { continue };
             graph.accesses(&module.context, &layout, function, &mut analyses).expect("accesses");
             assert!(analyses.cached::<Annotated>().is_none(), "{at}: the accesses were annotated");
+            assert!(analyses.cached::<super::Writes>().is_none(), "{at}: the calls' footprints were made");
             assert!(analyses.cached::<super::PlainAccesses>().is_none(), "{at}: the plain accesses were made");
         }
     }
