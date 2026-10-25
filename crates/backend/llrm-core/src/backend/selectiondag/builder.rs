@@ -245,11 +245,13 @@ pub fn build_block(
     // is final
     let mut extra = Vec::new();
     let mut next = next_synthetic;
-    // the blocks of merged conditions are emitted in the layout the walk made
+    // the blocks the lowerings made are emitted in the layout they were placed
+    // in: a branch to the next block falls through, so the order they were
+    // built in (a jump table's block before the header that precedes it) is
+    // wrong. The pin builds them in `SwitchCases`/`JTCases` order and lays the
+    // blocks out as they were inserted.
     let mut deferred = deferred;
-    if deferred.iter().any(|item| matches!(item, switch::Deferred::Merged(_))) {
-        deferred.sort_by_key(|item| order.iter().position(|one| *one == item.block()));
-    }
+    deferred.sort_by_key(|item| order.iter().position(|one| *one == item.block()));
     for item in deferred {
         let block = item.block();
         let mut one = Builder::new(
