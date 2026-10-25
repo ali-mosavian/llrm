@@ -288,22 +288,31 @@ impl Moves<'_> {
         &self,
         one: &Arc<Insn>,
     ) -> Option<Arc<Insn>> {
+        // Most instructions name no cell that moves: they are shared as they
+        // are, without a copy of their semantics.
         let what = match &one.what {
-            Some(what) => Some(Semantics {
-                dests: what.dests.iter().map(|place| self.loc(place)).collect::<Option<_>>()?,
-                sources: what.sources.iter().map(|place| self.loc(place)).collect::<Option<_>>()?,
-                ..what.clone()
-            }),
+            Some(what) => {
+                let dests: Vec<Loc> = what.dests.iter().map(|place| self.loc(place)).collect::<Option<_>>()?;
+                let sources: Vec<Loc> = what.sources.iter().map(|place| self.loc(place)).collect::<Option<_>>()?;
+                (dests != what.dests || sources != what.sources).then(|| Semantics { dests, sources, ..what.clone() })
+            }
             None => None,
         };
         let call = match &one.call {
-            Some(call) => Some(Arc::new(CallMemory { private: self.private(&call.private)?, ..(**call).clone() })),
+            Some(call) => {
+                let private = self.private(&call.private)?;
+                (private != call.private).then(|| Arc::new(CallMemory { private, ..(**call).clone() }))
+            }
             None => None,
         };
-        if what == one.what && call == one.call {
+        if what.is_none() && call.is_none() {
             return Some(Arc::clone(one));
         }
-        Some(Arc::new(Insn { what, call, ..(**one).clone() }))
+        Some(Arc::new(Insn {
+            what: what.or_else(|| one.what.clone()),
+            call: call.or_else(|| one.call.clone()),
+            ..(**one).clone()
+        }))
     }
 
     /// The call-private ranges when the selector's slots are `hole` lower: the
@@ -485,5 +494,34 @@ mod tests {
         assert_eq!((laid.disp, laid.slot_home()), (-98, Some(-108)));
         let (incoming, _) = moves.addr(cell(8, 0), 0).expect("an incoming argument stays");
         assert_eq!((incoming.disp, incoming.slot_home()), (8, Some(0)));
+    }
+
+    #[global_allocator]
+    static COUNTING: llrm_support::alloc_count::Counting = llrm_support::alloc_count::Counting;
+
+    /// An instruction that names no cell that moves was copied whole (its
+    /// semantics twice) before it was found equal and shared: d_faces -O2
+    /// spent 1.6 M Ir on 4 K such copies. Now it costs the two operand lists.
+    #[test]
+    fn test_an_instruction_naming_no_moved_cell_is_shared_without_a_copy() {
+        use std::sync::Arc;
+
+        use super::Moves;
+        use crate::backend::frame::Frame;
+        use crate::model::lir::Insn;
+        let reg = |register| Loc::Reg(Reg { register, width: 4 });
+        let what = Semantics {
+            name: Some("add".into()),
+            dests: vec![reg(RegId::EAX)],
+            sources: vec![reg(RegId::EAX), reg(RegId::EDX)],
+            ..Semantics::new(Operation::Move)
+        };
+        let one = Arc::new(Insn::new(0, None, Some(what), vec![], vec![]));
+        let frame = Frame::new(0);
+        let homes = crate::support::hash::IndexMap::default();
+        let moves = Moves { frame: Some(&frame), homes: &homes, hole: 8 };
+        let (moved, made) = llrm_support::alloc_count::counted(|| moves.insn(&one));
+        assert!(Arc::ptr_eq(&moved.expect("nothing to refuse"), &one));
+        assert!(made <= 2, "{made} allocations for an instruction that does not move");
     }
 }
