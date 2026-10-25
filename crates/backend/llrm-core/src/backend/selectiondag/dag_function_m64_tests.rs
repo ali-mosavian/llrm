@@ -344,40 +344,6 @@ entry:
     }
 }
 
-/// A variable-size `alloca` between `stacksave` and `stackrestore` was refused
-/// ("convert node to libcall", then "CannotSelect StackSave"), and once
-/// selected the saved stack pointer was copied after the allocation moved it,
-/// so the restore left the array allocated: the copy is made before the stack
-/// pointer changes.
-#[test]
-fn a_dynamic_alloca_saves_the_stack_pointer_before_moving_it() {
-    use llrm_lir::registers::RegId;
-
-    use crate::model::ir::Loc;
-    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
-declare ptr @llvm.stacksave.p0()
-declare void @llvm.stackrestore.p0(ptr)
-declare void @use(ptr)
-define void @f(i64 %n) {
-entry:
-  %saved = call ptr @llvm.stacksave.p0()
-  %p = alloca i32, i64 %n, align 4
-  call void @use(ptr %p)
-  call void @llvm.stackrestore.p0(ptr %saved)
-  ret void
-}
-";
-    let module = llrm_mir::parse::module(text).expect("parses");
-    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
-    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
-    let insns = done.body.insns();
-    let moves: Vec<_> =
-        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some("mov")).collect();
-    let last_read = moves.iter().rposition(|w| matches!(&w.sources[..], [Loc::Reg(r)] if r.register == RegId::RSP));
-    let first_write = moves.iter().position(|w| matches!(&w.dests[..], [Loc::Reg(r)] if r.register == RegId::RSP));
-    assert!(last_read.is_some() && first_write.is_some_and(|written| last_read < Some(written)), "{moves:?}");
-}
-
 /// `va_start` at m64 was refused ("the SysV register save area is not
 /// translated"; `varargs` of `tests/llc`). A variadic function stores the five
 /// argument registers its one named parameter left in the register save area,

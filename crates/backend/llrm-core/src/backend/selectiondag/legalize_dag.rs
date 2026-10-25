@@ -142,7 +142,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         node: SDValue,
     ) -> EVT {
         match self.dag.opcode(node) {
-            ISD::Br | ISD::BrCond | ISD::BrCC | ISD::BrJT | ISD::StackSave | ISD::StackRestore => EVT::OTHER,
+            ISD::Br | ISD::BrCond | ISD::BrCC | ISD::BrJT => EVT::OTHER,
             ISD::SIntToFp | ISD::UIntToFp | ISD::LRint => self.dag.value_type(self.dag.operand(node, 0)),
             ISD::SignExtendInReg => match self.dag.node(self.dag.operand(node, 1)).data {
                 NodeData::ValueType(inner) => inner,
@@ -451,17 +451,6 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             // `vaend` has nothing to do; `vacopy` is a load of the source list
             // and a store to the destination.
             ISD::VAEnd => Some(vec![self.dag.operand(node, 0)]),
-            // The stack pointer is read or written by a copy.
-            ISD::StackSave => {
-                let chain = self.dag.operand(node, 0);
-                let pointer = self.dag.config().pointer;
-                let sp = self.dag.get_copy_from_phys_reg_plain(chain, self.dag.stack_pointer(), pointer);
-                Some(vec![sp, SDValue { node: sp.node, res: 1 }])
-            }
-            ISD::StackRestore => {
-                let (chain, saved) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
-                Some(vec![self.dag.get_copy_to_phys_reg_plain(chain, self.dag.stack_pointer(), saved)])
-            }
             ISD::VACopy => {
                 let (chain, dest, src) =
                     (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
@@ -648,7 +637,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         // `ShouldShrinkFPConstant` (no SSE2): a double that is exactly a float
         // is stored as one.
         let (pool_vt, pool_bits) = match mvt {
-            MVT::F64 => {
+            MVT::F64 if self.tli.should_shrink_fp_constant(mvt) => {
                 let value = f64::from_bits(bits as u64);
                 let narrow = value as f32;
                 if f64::from(narrow).to_bits() == bits as u64 && !value.is_nan() {

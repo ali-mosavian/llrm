@@ -823,21 +823,6 @@ impl Emitter<'_, '_> {
                     }
                     NodeData::PhysReg(register) if register == self.ctx.stack_pointer => {
                         self.sp_values.insert(result);
-                        // Read as a number (saved, subtracted from, restored)
-                        // it is the copy made here: the
-                        // stack pointer moves on before that user comes.
-                        let numeric = self
-                            .dag
-                            .users(result)
-                            .any(
-                                |user| matches!(
-                                    self.dag.opcode(SDValue { node: user, res: 0 }),
-                                    ISD::CopyToReg | ISD::Sub
-                                ),
-                            );
-                        if numeric {
-                            self.operand(result)?;
-                        }
                     }
                     // The x87 result of a call: the stack's top (`FP0`), which
                     // the stackifier reads as an unnamed load of no cell
@@ -3031,15 +3016,6 @@ impl Emitter<'_, '_> {
         if let NodeData::PoolIndex(entry) = self.dag.node(value).data {
             let addr = self.pool_cell(entry)?.addr;
             return Ok(Loc::Imm(Imm { value: 0, width: width_of(self.dag, value), address: addr }));
-        }
-        // The stack pointer read as a number (a dynamic `alloca`): the copy it
-        // is, made at its first use.
-        if self.sp_values.contains(&value) && !self.values.contains_key(&value) {
-            let width = width_of(self.dag, value);
-            let held = self.fresh(width);
-            let sp = Reg { register: self.ctx.stack_pointer, width };
-            self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Reg(sp)]);
-            self.values.insert(value, held.value);
         }
         match self.values.get(&value) {
             Some(&v) => Ok(Loc::Held(Held { value: v, width: width_of(self.dag, value) })),

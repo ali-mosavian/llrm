@@ -62,7 +62,8 @@ fn main() {
     // `M16=1` selects for real mode: 16-bit pointers, the m16 table, real-mode
     // addresses.
     let m16 = std::env::var_os("M16").is_some();
-    let features = Features { cmov: false, bmi: false, lzcnt: false, popcnt: false, movbe: false, shld_slow: false };
+    let features =
+        Features { cmov: false, bmi: false, lzcnt: false, popcnt: false, movbe: false, shld_slow: false, sse2: false };
     let (target, tli, arch, cpu, address_mode): (_, _, &dyn llrm_target::Target, _, _) = if m16 {
         (
             BuilderTarget::m16().with_libcalls(RUNTIME),
@@ -120,7 +121,7 @@ fn main() {
                 // The driver's own pipeline (`dag_select::legalized`): the
                 // pin's order, with the target, the hooks and the action table
                 // the real route gives each stage.
-                let mut lowering = X86Lowering { cmov: false };
+                let mut lowering = X86Lowering { cmov: false, sse2: false };
                 if let Err(why) = legalized(dag, &tli, &mut lowering, arch) {
                     println!("REFUSED {name}:{block_name} legalize: {why:?}");
                     continue;
