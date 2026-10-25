@@ -1302,14 +1302,19 @@ impl AAResults for BasicAA<'_> {
         let callee = llrm_mir::memory::callee(self.unit.context, function, call)
             .and_then(|one| self.unit.globals.get(one.0 as usize))
             .and_then(|one| one.function());
-        // The facts of the site's attributes and of the callee's parameter, made
-        // once (each `Facts::of` allocates; most arguments state none).
+        // The facts of the site's attributes and of the callee's parameter,
+        // made once (each `Facts::of` allocates; most arguments state
+        // none).
         let facts_of = |attrs: Option<&Vec<llrm_mir::opcode::Attribute>>| {
-            attrs.filter(|attrs| !attrs.is_empty()).map(|attrs| {
-                #[cfg(test)]
-                ARGUMENT_FACTS.with(|made| made.set(made.get() + 1));
-                llrm_mir::facts::Facts::of(attrs)
-            })
+            attrs
+                .filter(|attrs| !attrs.is_empty())
+                .map(
+                    |attrs| {
+                        #[cfg(test)]
+                        ARGUMENT_FACTS.with(|made| made.set(made.get() + 1));
+                        llrm_mir::facts::Facts::of(attrs)
+                    },
+                )
         };
         let site = facts_of(info.argument_attrs.get(arg as usize));
         let parameter = facts_of(callee.and_then(|one| one.parameter_attrs.get(arg as usize)));
@@ -1755,7 +1760,8 @@ mod tests {
         let body = "declare void @g(ptr)\ndefine void @f(ptr %p) {\nentry:\n  call void @g(ptr %p)\n  ret void\n}\n";
         call_effects(body);
         assert_eq!(made(), before, "facts built for an argument that states none");
-        let body = "declare void @g(ptr readonly)\ndefine void @f(ptr %p) {\nentry:\n  call void @g(ptr %p)\n  ret void\n}\n";
+        let body =
+            "declare void @g(ptr readonly)\ndefine void @f(ptr %p) {\nentry:\n  call void @g(ptr %p)\n  ret void\n}\n";
         call_effects(body);
         assert_eq!(made(), before + 1, "one set for the callee's parameter, none for the site's");
     }
