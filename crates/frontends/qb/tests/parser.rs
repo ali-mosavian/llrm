@@ -2376,3 +2376,13 @@ fn redim_preserve_calls_b_rdmp_with_redims_operands() {
     assert_eq!(kept.matches("\"callee\":\"B$RDMP\"").count(), 1, "{kept}");
     assert_eq!(plain.matches("\"callee\":\"B$RDMP\"").count(), 0, "{plain}");
 }
+
+#[test]
+fn width_with_one_argument_or_a_gap_calls_b_widt() {
+    // WIDTH 80 and WIDTH , 25 were refused ("needs columns and rows"). BC
+    // passes -1 for the argument left out (measured in BC output, QB 4.5
+    // and PDS 7.1).
+    let module = parse("WIDTH 80\r\nWIDTH , 25\r\nWIDTH 80, 25\r\n", Dialect::QuickBasic45).unwrap();
+    let hir = compile(&module, "width", Dialect::QuickBasic45, "qb45").unwrap();
+    assert_eq!(hir.matches("\"callee\":\"B$WIDT\"").count(), 3, "{hir}");
+}
