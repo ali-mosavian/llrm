@@ -220,3 +220,30 @@ fn a_handled_function_may_start_with_a_loop_on_arm64() {
     let source = b"DEFINT A-Z\r\nON ERROR GOTO h\r\nFOR i = 1 TO 3\r\nPRINT i;\r\nNEXT\r\nERROR 9\r\nPRINT \"done\"\r\nEND\r\nh:\r\nRESUME NEXT\r\n";
     assert_eq!(run_basic("onerror_loop", source).split_whitespace().collect::<Vec<_>>(), ["1", "2", "3", "done"]);
 }
+
+/// Darwin's AAPCS64 has the caller extend narrow arguments, and `PRINT -1` passed `i16 -1` bare: the clang-built runtime
+/// read 65535 and NIBBLES died on VIEW PRINT with "Illegal function call" on the Mac. Only a Mac can run it; this reads
+/// the text the backend gets: Darwin marks the runtime's `i16` arguments `signext`, Linux (callee extends) does not.
+#[test]
+fn darwin_callers_extend_narrow_arguments_to_the_runtime() {
+    let dir = std::env::temp_dir().join(format!("signext_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let bas = dir.join("v.bas");
+    std::fs::write(&bas, b"DEFINT A-Z\r\nVIEW PRINT 1 TO 24\r\nPRINT -1\r\nEND\r\n").unwrap();
+    let text = |platform: &str| {
+        let path = dir.join(format!("{platform}.txt"));
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-qb"))
+            .args([&format!("--arm64={platform}"), "-O2"])
+            .arg(&bas)
+            .arg("-o")
+            .arg(dir.join(format!("{platform}.o")))
+            .env("LLRM_ARM64_TEXT", &path)
+            .output()
+            .expect("llrm-qb runs");
+        assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+        std::fs::read_to_string(path).unwrap()
+    };
+    assert!(text("darwin").contains("@B_PEI2(i16 signext -1)"));
+    assert!(text("linux").contains("@B_PEI2(i16 -1)"));
+    std::fs::remove_dir_all(&dir).ok();
+}
