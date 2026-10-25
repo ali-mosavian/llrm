@@ -732,6 +732,8 @@ pub struct Object {
     /// The runtime's stack limit and overflow handler, where the program checks
     /// its stack.
     pub stack_check: Option<model::StackCheck>,
+    /// The runtime is a host's (`RuntimePromises::hosted`).
+    pub hosted: bool,
 }
 
 /// How a function is framed.
@@ -789,6 +791,7 @@ pub fn compiled(
         main: object.main.clone(),
         constants: object.constants.clone(),
         stack_check: program.stack_check.clone(),
+        hosted: program.promises.hosted,
     };
     resolved.symbols.extend(object.data.iter().filter_map(|(id, symbol)| Some((global(id)?, symbol.clone()))));
     for segment in &object.segments {
@@ -865,6 +868,7 @@ fn object_abi(
         objects: object.symbols.clone(),
         preserved: BTreeSet::new(),
         stack_check: object.stack_check.clone(),
+        hosted: object.hosted,
     }
 }
 
@@ -917,7 +921,7 @@ pub fn assembled(
             .frames
             .get(module.global(id).name.as_deref().unwrap_or_default())
             .copied()
-            .unwrap_or(Frame::Runtime { strings: 0 });
+            .unwrap_or(if object.hosted { Frame::Own } else { Frame::Runtime { strings: 0 } });
         // B$ENRA zero-fills a runtime frame's locals.
         let target = Target {
             facts: &facts,

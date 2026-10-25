@@ -7,7 +7,7 @@ enum { REAL_BYTES = 1 << 20, BIOS_KEYBOARD_FLAGS = 0x417 };
 
 static uint8_t real_memory[REAL_BYTES + 16];
 
-void *B_REAL(uint64_t linear)
+void *B_REAL(uintptr_t linear)
 {
     return real_memory + (linear % REAL_BYTES);
 }

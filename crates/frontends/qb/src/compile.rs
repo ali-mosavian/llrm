@@ -448,11 +448,14 @@ fn rich_assembled(
     for object_ in _placed(module) {
         placed[_segment(object_)].push(basic::Item::Object(object_.id));
     }
+    // A host has no B$ENRA: every procedure frames itself (the zero fill above covers what the runtime's frame
+    // would have cleared).
+    let hosted = llrm_target::object::Format::parse(codegen.object_format).is_ok_and(|one| one != llrm_target::object::Format::Omf);
     let frames = module
         .functions
         .iter()
         .map(|function| {
-            let frame = if _inline_frame(program, module, function) {
+            let frame = if hosted || _inline_frame(program, module, function) {
                 basic::Frame::Own
             } else {
                 basic::Frame::Runtime { strings: module.local_strings(function) }
@@ -549,6 +552,7 @@ fn rich_assembled(
         frames,
         line_numbers: module.line_numbers.iter().copied().collect(),
         stack_check: program.stack_check.clone(),
+        hosted: program.promises.hosted,
     };
     let mut compiled = basic::compiled(program, &object, codegen)?;
     compiled.stack = stack_to_add(

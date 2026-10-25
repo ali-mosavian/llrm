@@ -245,3 +245,12 @@ presented once per frame during a throw (80 frames, a rotating 9x4 px crescent).
 The window is resizable. `dev/sdl/scale.c` (`sdl_fit`) places the picture at the largest size that fits the renderer's
 output size at 4:3, centred, so the scale is fractional and the other axis gets bars. `present.c` redraws when the output
 size changes (it replaced `SDL_RenderSetLogicalSize`). Unit test: `the_picture_fills_the_window_at_four_to_three`.
+
+## x86-32 Linux (2026-10-25)
+
+`llrm-qb -m32 -fobject-format=elf` (the C family, `-mabi=sysv`, by default for ELF) linked by `cc -m32` with the host runtime
+runs HELLO, NIBBLES and GORILLA natively on the headless device (`tests/qb_x86_32_host.rs`; screens
+[NIBBLES](qb-host-shots/x86-32-nibbles-second-life.png), [GORILLA](qb-host-shots/x86-32-gorilla-after-shot.png)).
+On a host the object is `hosted`: stack-block routines (COLOR, LOCATE, SCREEN, DIM, CLOSE) are C varargs the caller cleans up,
+every procedure frames itself (no `B$ENRA`), and DEF SEG memory goes through `B$REAL`. DOS m16/m32 objects are byte-identical.
+Open: `ON ERROR` landing on x86 hosts (a handled procedure's frame is not built), and `-m64` floats (D64-4).

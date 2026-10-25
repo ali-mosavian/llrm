@@ -1,15 +1,16 @@
-/* The compiled module's header (QB B$GETMODCODE) on a 64-bit host: eight-byte words where QB's has 16-bit offsets.
-   The object defines the symbol QB_HEADER at its first byte; its code starts HEADER_SIZE bytes after. */
+/* The compiled module's header (QB B$GETMODCODE) on a host: machine-word fields where QB's has 16-bit offsets, 80 bytes
+   with eight-byte words and the flat DOS target's 48 with four. The object defines the symbol QB_HEADER at its first
+   byte; its code starts HEADER_SIZE bytes after. */
 #include "module.h"
 
 extern const u8 QB_HEADER[] __asm__("_QB_HEADER");
 
 /* Offsets in the header. */
 enum ModuleWord {
-    OF_MOD = 2,  /* the name, 8 characters */
-    OF_DS = 24,  /* the READ/DATA lines */
-    OF_DAT = 32, /* the module's data area */
-    HEADER_SIZE = 80
+    OF_MOD = 2,                       /* the name, 8 characters */
+    OF_DS = sizeof(uword) == 8 ? 24 : 16,  /* the READ/DATA lines */
+    OF_DAT = sizeof(uword) == 8 ? 32 : 20, /* the module's data area */
+    HEADER_SIZE = sizeof(uword) == 8 ? 80 : 48
 };
 
 /* The data area the header names: a flag, the READ cursor, the ON ERROR handler. */

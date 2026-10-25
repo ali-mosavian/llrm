@@ -157,8 +157,21 @@ pub fn main(argv: &[String]) -> i32 {
             parsed(&args.source, &args.frontend, args.dump_hir.as_deref())
         })
         .map_err(|error| error.0)?;
+        // A host links the runtime as C: an ELF object calls it by the target's C family where there is one (x86-32's
+        // default is Open Watcom's registers, which no C compiler for Linux speaks).
+        let mut codegen = args.codegen.clone();
+        if codegen.abi.is_none() && codegen.object_format == "elf" && codegen.arch.calling().chosen(Some("sysv")).is_ok() {
+            codegen.abi = Some("sysv".to_owned());
+        }
+        let args = Arguments { codegen, ..args };
+        // a host (an ELF or Mach-O object) has no memory at the PC's low addresses
+        // (arm64's own bridge, arm64.rs, makes C calls of the runtime's)
+        program.promises.hosted =
+            args.arm64.is_none() && args.codegen.object_format != "omf" && !args.codegen.object_format.is_empty();
         if program.runtime.calls_natively() {
-            driver::natively_called(&mut program, args.codegen.arch.calling().native().cc.as_deref());
+            // the `-mabi=` family's convention, else the target's default
+            let native = args.codegen.arch.calling().chosen(args.codegen.abi.as_deref())?;
+            driver::natively_called(&mut program, native.cc.as_deref());
         }
         if args.flags.assembly {
             let module = compile::assembled(&program, None, &args.codegen).map_err(|error| error.to_string())?;
