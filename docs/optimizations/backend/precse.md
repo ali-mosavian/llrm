@@ -67,10 +67,11 @@ argument as a memory operand of its reader, not a load of its own.
 
 Row CSE5 (was DEVIATE CSE5, retired 2026-10-25): `machinecse.rs`, the same
 elimination after allocation, was ours alone (the pin runs MachineCSE once,
-before allocation). Deleted: 3.7 M Ir of d_faces (dist). Removing it, 8 of 568
-objects grow and none shrinks (x_mergesort m16 -Os +34 B, shellsort m16 +22,
-lru m32 -Os +15), QCport +0.03% to +0.11%. Exit: CSE2 and the pin's
-rematerialization of the cases it found.
+before allocation). Deleted: d_faces -3.60 M Ir (dist). 7 of 568 objects grow
+and none shrinks (x_mergesort +34 B at m32 -Os and m16 -O1 to -Os, shellsort
+m16 +22 at -O1/-O2), QCport (tools/rows/qcport.py) +0.030% -O1, +0.080% -O2,
++0.116% -O3, +0.025% -Os, x_mergesort -Os +0.43% clocks. Exit: CSE2 and
+rematerialization of multi-def values in RA (w13/w14).
 
 ## Example
 `v3 := add v1, v2` in a block and `v7 := add v1, v2` in a block it
