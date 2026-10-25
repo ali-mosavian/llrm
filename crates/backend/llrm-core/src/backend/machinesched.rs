@@ -231,6 +231,31 @@ pub struct Graph {
     pub preds: Vec<Vec<usize>>,
     /// For each instruction, the later ones that must stay after it.
     pub succs: Vec<Vec<usize>>,
+    /// The latency of each edge in `preds`, in the same order: what the
+    /// earlier instruction takes to produce what the later one reads
+    /// ([`def_latency`]), one for an output dependence, none for an anti
+    /// dependence or a memory order.
+    pub latencies: Vec<Vec<u32>>,
+}
+
+/// The latency of what `one` defines for the default scheduling model of a
+/// target with none (i486): `TargetInstrInfo::defaultDefLatency` is zero for
+/// a transient instruction (a copy), `getLoadLatency` (4) for a load, one for
+/// the rest.
+fn def_latency(one: &Insn) -> u32 {
+    let Some(what) = &one.what else { return 1 };
+    let copy = what.op == Operation::Move
+        && matches!(
+            (what.dests.as_slice(), what.sources.as_slice()),
+            ([Loc::Held(_)], [Loc::Held(_)])
+        );
+    if copy || (what.op == Operation::Nothing && what.name.as_deref().is_none_or(str::is_empty)) {
+        0
+    } else if memory(one).0 {
+        4
+    } else {
+        1
+    }
 }
 
 /// The graph of `insns`, one region (every instruction schedulable).
@@ -253,32 +278,34 @@ pub fn graph(
     }
     let mut preds = vec![Vec::new(); n];
     let mut succs = vec![Vec::new(); n];
+    let mut latencies = vec![Vec::new(); n];
     for later in 0..n {
         let (later_reads_memory, later_writes_memory) = memory(&insns[later]);
         for earlier in 0..later {
             let (reads_memory, writes_memory) = memory(&insns[earlier]);
-            let by_value = insns[earlier]
-                .defines
-                .iter()
-                .any(|v| insns[later].uses.contains(v) || insns[later].defines.contains(v))
-                || insns[earlier].uses.iter().any(|v| insns[later].defines.contains(v));
-            let by_lane = match (&effects[earlier], &effects[later]) {
-                (Some(first), Some(second)) => {
-                    !first.writes.is_disjoint(&second.all_reads())
-                        || !first.writes.is_disjoint(&second.writes)
-                        || !first.all_reads().is_disjoint(&second.writes)
-                }
-                _ => true,
+            let data_by_value = insns[earlier].defines.iter().any(|v| insns[later].uses.contains(v));
+            let output_by_value = insns[earlier].defines.iter().any(|v| insns[later].defines.contains(v));
+            let anti_by_value = insns[earlier].uses.iter().any(|v| insns[later].defines.contains(v));
+            let (data_by_lane, output_by_lane, anti_by_lane, unknown) = match (&effects[earlier], &effects[later]) {
+                (Some(first), Some(second)) => (
+                    !first.writes.is_disjoint(&second.all_reads()),
+                    !first.writes.is_disjoint(&second.writes),
+                    !first.all_reads().is_disjoint(&second.writes),
+                    false,
+                ),
+                _ => (false, false, false, true),
             };
             let by_memory =
                 (writes_memory && (later_reads_memory || later_writes_memory)) || (reads_memory && later_writes_memory);
-            if by_value || by_lane || by_memory {
+            let (data, output) = (data_by_value || data_by_lane, output_by_value || output_by_lane);
+            if data || output || anti_by_value || anti_by_lane || unknown || by_memory {
                 preds[later].push(earlier);
                 succs[earlier].push(later);
+                latencies[later].push(if data { def_latency(&insns[earlier]) } else { 0 }.max(u32::from(output)));
             }
         }
     }
-    Graph { preds, succs }
+    Graph { preds, succs, latencies }
 }
 
 /// What a candidate does to the pressure of the region at its bottom edge:
@@ -317,14 +344,17 @@ fn peak(
     most
 }
 
-/// The order of a region scheduled bottom-up as `GenericScheduler` does with
-/// its register-pressure heuristics (MachineScheduler.cpp `tryCandidate`,
-/// #L3965): among the instructions whose readers are all placed, the one that
-/// leaves the least excess over `limit`, then the lowest pressure,
-/// then the latest in the original order (`NodeOrder`). `live_out` holds the
-/// values live below the region. Regions of at most `limit / 2` instructions
-/// keep their order (`initPolicy`, #L3688: pressure is tracked only above
-/// that), as a graph with no choice does.
+/// The order of a region scheduled bottom-up as `GenericScheduler` does for a
+/// target with no schedule model (MachineScheduler.cpp, #L3965): an
+/// instruction is available once every reader is placed and its ready cycle
+/// has come (`SchedBoundary::releaseNode`: the reader's cycle plus the edge's
+/// latency, so a load waits four cycles above its reader while anything else
+/// can go first; each placed instruction takes a cycle, and with nothing
+/// available the cycle jumps to the earliest ready one); among those
+/// available, with pressure tracked (a region of more than `limit / 2`
+/// instructions, `initPolicy` #L3688) the one that leaves the least excess
+/// over `limit`, then the lowest pressure, then the latest in the original
+/// order (`NodeOrder`). `live_out` holds the values live below the region.
 pub fn bottom_up(
     insns: &[Arc<Insn>],
     graph: &Graph,
@@ -333,24 +363,36 @@ pub fn bottom_up(
     counted: impl Fn(u32) -> bool,
 ) -> Vec<usize> {
     let n = insns.len();
-    if n <= limit / 2 {
-        return (0..n).collect();
-    }
+    let track = n > limit / 2;
     let mut waiting: Vec<usize> = graph.succs.iter().map(Vec::len).collect();
-    let mut ready: Vec<usize> = (0..n).filter(|&node| waiting[node] == 0).collect();
+    let mut ready_at = vec![0u32; n];
+    let mut available: Vec<usize> = (0..n).filter(|&node| waiting[node] == 0).collect();
+    let mut pending: Vec<usize> = Vec::new();
+    let mut cycle = 0u32;
     let mut live = live_out.clone();
     let mut placed = Vec::with_capacity(n);
-    while !ready.is_empty() {
+    while placed.len() < n {
+        if available.is_empty() {
+            // `pickOnlyChoice`: advance to the earliest ready instruction.
+            cycle = cycle.max(pending.iter().map(|&node| ready_at[node]).min().expect("a pending instruction"));
+            let (now, later): (Vec<usize>, Vec<usize>) = pending.iter().partition(|&&node| ready_at[node] <= cycle);
+            available = now;
+            pending = later;
+        }
         let mut best = 0;
-        for candidate in 1..ready.len() {
-            let (cand, held) = (ready[candidate], ready[best]);
-            let (cand_p, held_p) =
-                (pressure_after(&insns[cand], &live, &counted), pressure_after(&insns[held], &live, &counted));
-            let (cand_excess, held_excess) = (cand_p.saturating_sub(limit), held_p.saturating_sub(limit));
-            let better = if cand_excess != held_excess {
-                cand_excess < held_excess
-            } else if cand_p != held_p {
-                cand_p < held_p
+        for candidate in 1..available.len() {
+            let (cand, held) = (available[candidate], available[best]);
+            let better = if track {
+                let (cand_p, held_p) =
+                    (pressure_after(&insns[cand], &live, &counted), pressure_after(&insns[held], &live, &counted));
+                let (cand_excess, held_excess) = (cand_p.saturating_sub(limit), held_p.saturating_sub(limit));
+                if cand_excess != held_excess {
+                    cand_excess < held_excess
+                } else if cand_p != held_p {
+                    cand_p < held_p
+                } else {
+                    cand > held
+                }
             } else {
                 cand > held
             };
@@ -358,18 +400,26 @@ pub fn bottom_up(
                 best = candidate;
             }
         }
-        let node = ready.swap_remove(best);
-        for value in &insns[node].defines {
-            live.remove(value);
+        let node = available.swap_remove(best);
+        if track {
+            for value in &insns[node].defines {
+                live.remove(value);
+            }
+            live.extend(insns[node].uses.iter().copied().filter(|&value| counted(value)));
         }
-        live.extend(insns[node].uses.iter().copied().filter(|&value| counted(value)));
         placed.push(node);
-        for &before in &graph.preds[node] {
+        for (&before, &latency) in graph.preds[node].iter().zip(&graph.latencies[node]) {
+            ready_at[before] = ready_at[before].max(cycle + latency);
             waiting[before] -= 1;
             if waiting[before] == 0 {
-                ready.push(before);
+                pending.push(before);
             }
         }
+        // The placed instruction took its cycle (issue width one).
+        cycle += 1;
+        let (now, later): (Vec<usize>, Vec<usize>) = pending.iter().partition(|&&node| ready_at[node] <= cycle);
+        available.extend(now);
+        pending = later;
     }
     placed.reverse();
     placed
@@ -444,16 +494,22 @@ pub fn scheduled(
         .map(|block| {
             let insns = block.insns.to_vec();
             let regions = regions(&insns, regs, bits);
-            if regions.iter().all(|region| region.len() <= limit / 2) {
+            // A region of fewer than two instructions has nothing to order.
+            if regions.iter().all(|region| region.len() < 2) {
                 return block.clone();
             }
-            let live = live.get_or_insert_with(|| live_rows(body));
-            let mut values: Vec<u32> =
-                insns.iter().flat_map(|one| one.defines.iter().chain(&one.uses)).copied().collect();
-            values.sort_unstable();
-            values.dedup();
-            let mut now: HashSet<u32> =
-                values.into_iter().filter(|&value| counted(value) && live.live_out(block.at, value)).collect();
+            // Pressure is tracked, and so what is live below a region asked,
+            // for a region of more than half the allocatable
+            // registers only.
+            let mut now: HashSet<u32> = HashSet::new();
+            if regions.iter().any(|region| region.len() > limit / 2) {
+                let live = live.get_or_insert_with(|| live_rows(body));
+                let mut values: Vec<u32> =
+                    insns.iter().flat_map(|one| one.defines.iter().chain(&one.uses)).copied().collect();
+                values.sort_unstable();
+                values.dedup();
+                now = values.into_iter().filter(|&value| counted(value) && live.live_out(block.at, value)).collect();
+            }
             let step = |now: &mut HashSet<u32>, one: &Insn| {
                 for value in &one.defines {
                     now.remove(value);
@@ -467,14 +523,17 @@ pub fn scheduled(
                     step(&mut now, one);
                 }
                 let slice = &insns[region.clone()];
-                if slice.len() > limit / 2 {
+                if slice.len() >= 2 {
                     let order = bottom_up(slice, &graph(slice, regs, bits), &now, limit, &counted);
-                    // DEVIATE MS3: an order that does not lower the peak
-                    // pressure is not taken (the pin
+                    let source: Vec<usize> = (0..slice.len()).collect();
+                    // DEVIATE MS3: where pressure is tracked, an order that
+                    // does not lower the peak pressure is not taken (the pin
                     // keeps source order on ties and tracks per-set limits that
                     // are not modelled here).
-                    let source: Vec<usize> = (0..slice.len()).collect();
-                    if order != source && peak(slice, &order, &now, &counted) < peak(slice, &source, &now, &counted) {
+                    let taken = order != source
+                        && (slice.len() <= limit / 2
+                            || peak(slice, &order, &now, &counted) < peak(slice, &source, &now, &counted));
+                    if taken {
                         let mut ats: Vec<i64> = slice.iter().map(|one| one.at).collect();
                         ats.sort_unstable();
                         for (place, &node) in order.iter().enumerate() {
@@ -572,7 +631,7 @@ mod tests {
         assert_eq!(regions(&insns, regs, 16), vec![0..2, 3..5]);
     }
 
-    /// Three loads feed two adds and a store. In source order all three loads
+    /// Three constants feed two adds and a store. In source order all three
     /// are live together (3 values); bottom-up with a limit of two places
     /// the third load just above the add that reads it, so at most two are
     /// live.
@@ -581,9 +640,9 @@ mod tests {
         use super::bottom_up;
         let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
         let insns = vec![
-            insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![cell(0)]), vec![1], vec![]),
-            insn(1, semantics(Operation::Move, "mov", vec![held(2)], vec![cell(8)]), vec![2], vec![]),
-            insn(2, semantics(Operation::Move, "mov", vec![held(3)], vec![cell(16)]), vec![3], vec![]),
+            insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![imm(11)]), vec![1], vec![]),
+            insn(1, semantics(Operation::Move, "mov", vec![held(2)], vec![imm(12)]), vec![2], vec![]),
+            insn(2, semantics(Operation::Move, "mov", vec![held(3)], vec![imm(13)]), vec![3], vec![]),
             insn(3, semantics(Operation::Binary, "add", vec![held(4)], vec![held(1), held(2)]), vec![4], vec![1, 2]),
             insn(4, semantics(Operation::Binary, "add", vec![held(5)], vec![held(4), held(3)]), vec![5], vec![4, 3]),
             insn(5, semantics(Operation::Binary, "add", vec![held(6)], vec![held(5), imm(1)]), vec![6], vec![5]),
@@ -591,14 +650,13 @@ mod tests {
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
         let found = graph(&insns, regs, 16);
         let live_out: std::collections::HashSet<u32> = [6].into_iter().collect();
-        // The loads read memory and nothing writes it: no edge among them.
         assert_eq!(bottom_up(&insns, &found, &live_out, 2, |_| true), [0, 1, 3, 2, 4, 5]);
         // A limit that is never reached leaves the order alone.
         assert_eq!(bottom_up(&insns, &found, &live_out, 16, |_| true), [0, 1, 2, 3, 4, 5]);
     }
 
     /// The long region of a block was kept in source order whatever the
-    /// pressure: three loads were all live at once (3 values) with a limit
+    /// pressure: three constants were all live at once (3 values) with a limit
     /// of 2. Through the pass the third load sits just above its reader.
     #[test]
     fn test_the_pass_orders_a_long_region_by_pressure() {
@@ -606,9 +664,9 @@ mod tests {
         use crate::model::lir::{LirBlock, LirBody};
         let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
         let mut insns = vec![
-            insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![cell(0)]), vec![1], vec![]),
-            insn(1, semantics(Operation::Move, "mov", vec![held(2)], vec![cell(8)]), vec![2], vec![]),
-            insn(2, semantics(Operation::Move, "mov", vec![held(3)], vec![cell(16)]), vec![3], vec![]),
+            insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![imm(11)]), vec![1], vec![]),
+            insn(1, semantics(Operation::Move, "mov", vec![held(2)], vec![imm(12)]), vec![2], vec![]),
+            insn(2, semantics(Operation::Move, "mov", vec![held(3)], vec![imm(13)]), vec![3], vec![]),
             insn(3, semantics(Operation::Binary, "add", vec![held(4)], vec![held(1), held(2)]), vec![4], vec![1, 2]),
             insn(4, semantics(Operation::Binary, "add", vec![held(5)], vec![held(4), held(3)]), vec![5], vec![4, 3]),
             insn(5, semantics(Operation::Binary, "add", vec![held(6)], vec![held(5), imm(1)]), vec![6], vec![5]),
@@ -627,6 +685,39 @@ mod tests {
         assert_eq!(defined, [1, 2, 4, 3, 5, 6]);
         let kept: Vec<u32> = scheduled(&body, 16).blocks[0].insns.iter().flat_map(|one| one.defines.clone()).collect();
         assert_eq!(kept, [1, 2, 3, 4, 5, 6]);
+    }
+
+    /// A load is ready four cycles above its reader (the default model's
+    /// `getLoadLatency`) and a copy at once: with two independent
+    /// instructions to place meanwhile, bottom-up puts the load at the top of
+    /// the region, away from its reader, as the pin's scheduler does on an
+    /// i486. Source order had it next to the reader (x_list's loops, the
+    /// pointer chase).
+    #[test]
+    fn test_a_load_is_placed_four_cycles_above_its_reader_when_others_can_fill_them() {
+        use super::bottom_up;
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let insns = vec![
+            insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![imm(1)]), vec![1], vec![]),
+            insn(1, semantics(Operation::Move, "mov", vec![held(2)], vec![imm(2)]), vec![2], vec![]),
+            insn(2, semantics(Operation::Move, "mov", vec![held(3)], vec![cell(0)]), vec![3], vec![]),
+            insn(3, semantics(Operation::Binary, "add", vec![held(4)], vec![held(3), imm(1)]), vec![4], vec![3]),
+        ];
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let found = graph(&insns, regs, 16);
+        assert_eq!(found.latencies[3], [4], "the reader waits four cycles for the load");
+        let live_out: std::collections::HashSet<u32> = [1, 2, 4].into_iter().collect();
+        assert_eq!(bottom_up(&insns, &found, &live_out, 16, |_| true), [2, 0, 1, 3]);
+        // A copy is ready at once: the order stays.
+        let copies = vec![
+            insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![imm(1)]), vec![1], vec![]),
+            insn(1, semantics(Operation::Move, "mov", vec![held(2)], vec![imm(2)]), vec![2], vec![]),
+            insn(2, semantics(Operation::Move, "mov", vec![held(3)], vec![held(9)]), vec![3], vec![9]),
+            insn(3, semantics(Operation::Binary, "add", vec![held(4)], vec![held(3), imm(1)]), vec![4], vec![3]),
+        ];
+        let found = graph(&copies, regs, 16);
+        assert_eq!(found.latencies[3], [0]);
+        assert_eq!(bottom_up(&copies, &found, &live_out, 16, |_| true), [0, 1, 2, 3]);
     }
 
     /// A zero made before `add` was scheduled between `add` and `adc` (i64
