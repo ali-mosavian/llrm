@@ -140,6 +140,20 @@ returns = "isize"
 
 [[op]]
 group = "process"
+name = "environment_read"
+doc = "Up to `max` bytes of the environment block from byte `offset` to `data`; the count copied."
+args = [["offset", "usize"], ["data", "bytes_mut"], ["max", "usize"]]
+returns = "usize"
+
+[[op]]
+group = "process"
+name = "environment_write"
+doc = "`count` bytes from `data` into the environment block at byte `offset`; 0, or -1 when they do not fit in the block."
+args = [["offset", "usize"], ["data", "bytes"], ["count", "usize"]]
+returns = "isize"
+
+[[op]]
+group = "process"
 name = "execute"
 doc = "Runs the program `name` to its end with the command tail `tail` (a length byte, the text, a carriage return) and the caller's environment; 0 on success, the error code negated otherwise. The caller leaves the program enough memory to run in."
 args = [["name", "path"], ["tail", "path"]]

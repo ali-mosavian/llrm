@@ -3510,13 +3510,14 @@ impl Compiler {
                         self.select_block(continuation);
                     }
                     "BLOAD" | "BSAVE" => self.binary_memory_statement(name, arguments)?,
-                    "KILL" | "MKDIR" | "CHDIR" | "RMDIR" => {
+                    "KILL" | "MKDIR" | "CHDIR" | "RMDIR" | "ENVIRON" => {
                         let [path] = arguments.as_slice() else {
                             return self.fail(format!("{name} takes one file or directory name"));
                         };
                         let path = self.string_descriptor(path)?;
                         let routine = match name.as_str() {
                             "KILL" => "B$KILL",
+                            "ENVIRON" => "B$SENV",
                             "MKDIR" => "B$MDIR",
                             "CHDIR" => "B$CDIR",
                             _ => "B$RDIR",

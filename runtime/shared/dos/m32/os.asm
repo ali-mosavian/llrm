@@ -62,6 +62,8 @@ if OS_GROUPS and G_PROCESS
 public LL$COMMAND_LINE
 public LL$ENVIRONMENT
 public LL$EXECUTE
+public LL$ENVIRONMENT_READ
+public LL$ENVIRONMENT_WRITE
 endif
 
 ;; HEAP_BYTES comes from os.toml, DOS_* from the OS's facts: the assembler is told both.
@@ -411,6 +413,90 @@ environment_done:
                 pop     ebx
                 ret
 LL$ENVIRONMENT  endp
+
+;;::::::::::::::
+;; LL$ENVIRONMENT_READ(offset: usize, data: *near mut u8, max: usize) -> usize: the bytes from `offset`, at most `max`, and how many.
+LL$ENVIRONMENT_READ proc
+                push    ebx
+                push    esi
+                push    edi
+                push    es
+                mov     ax, LL$PSP
+                mov     es, ax
+                mov     ax, es:[PSP_ENVIRONMENT]
+                mov     es, ax
+                lsl     ebx, eax
+                inc     ebx
+                mov     esi, dword ptr [esp+20]
+                sub     ebx, esi
+                jbe     short read_none
+                mov     ecx, dword ptr [esp+28]
+                cmp     ecx, ebx
+                jbe     short read_fits
+                mov     ecx, ebx
+read_fits:
+                mov     edi, dword ptr [esp+24]
+                mov     eax, ecx
+                jecxz   short read_done
+read_byte:
+                mov     bl, es:[esi]
+                mov     [edi], bl
+                inc     esi
+                inc     edi
+                dec     ecx
+                jnz     short read_byte
+                jmp     short read_done
+read_none:
+                xor     eax, eax
+read_done:
+                pop     es
+                pop     edi
+                pop     esi
+                pop     ebx
+                ret
+LL$ENVIRONMENT_READ endp
+
+;;::::::::::::::
+;; LL$ENVIRONMENT_WRITE(offset: usize, data: *near u8, count: usize) -> isize: `count` bytes into the block at `offset`; -1 when they do not fit.
+LL$ENVIRONMENT_WRITE proc
+                push    ebx
+                push    esi
+                push    edi
+                push    es
+                mov     ax, LL$PSP
+                mov     es, ax
+                mov     ax, es:[PSP_ENVIRONMENT]
+                mov     es, ax
+                lsl     ebx, eax
+                inc     ebx
+                mov     edi, dword ptr [esp+20]
+                mov     ecx, dword ptr [esp+28]
+                mov     eax, edi
+                add     eax, ecx
+                jc      short write_no_room
+                cmp     eax, ebx
+                ja      short write_no_room
+                mov     esi, dword ptr [esp+24]
+                jecxz   short write_ok
+write_byte:
+                mov     bl, [esi]
+                mov     es:[edi], bl
+                inc     esi
+                inc     edi
+                dec     ecx
+                jnz     short write_byte
+write_ok:
+                xor     eax, eax
+                jmp     short write_done
+write_no_room:
+                mov     eax, -1
+write_done:
+                pop     es
+                pop     edi
+                pop     esi
+                pop     ebx
+                ret
+LL$ENVIRONMENT_WRITE endp
 ;;::::::::::::::
 ;; LL$EXECUTE(name: *near char, tail: *near char) -> isize: DOS's load-and-execute (4B00h) as the extender's real-mode call
 ;; (DPMI 0300h) runs it, over a block of DOS memory holding what DOS reads: the name, the tail, the parameter block (the

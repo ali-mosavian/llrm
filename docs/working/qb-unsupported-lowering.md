@@ -68,3 +68,9 @@ exit code is not ERRORLEVEL-visible, and SHELL does not save and restore the scr
 BC calls `B$FATR(channel, field)` returning a LONG (QB 4.5 `rt/dvstmt.asm`): field 1 is the open mode (INPUT 1, OUTPUT 2,
 APPEND 8, BINARY 32), 2 the DOS handle, any other Illegal function call. `tests/qbrt/file_attributes.bas` matches BCOM45 at m16
 and m32. OPEN FOR RANDOM with `LEN =` is still refused by the compiler (separate gap).
+
+## ENVIRON
+BC calls `B$SENV(psd)` (QB 4.5 `rt/osstmt.asm`). The runtime (`runtime/qb/environ.c`) edits the program's environment block in
+place over two OS-layer ops, `environment_read` and `environment_write`. As in QB, the table cannot grow past the end it had at
+start (`b$env_len`): a variable fits only where the table has shrunk, else Out of memory; an empty name or no delimiter is
+Illegal function call. `tests/qbrt/environ_statement.bas` matches BCOM45 at m16 and m32.

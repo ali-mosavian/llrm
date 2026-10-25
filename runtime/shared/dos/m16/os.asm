@@ -1,4 +1,4 @@
-;; name: LL$OPEN, LL$CREATE, LL$READ, LL$SEEK, LL$WRITE_FILE, LL$CLOSE, LL$EXIT, LL$MORE, LL$BLOCK_RESIZE, LL$VECTOR, LL$SET_VECTOR, LL$CHAIN, LL$RESTORE_VECTORS, LL$CONSOLE_READ_KEY, LL$CONSOLE_KEY_READY, LL$COMMAND_LINE, LL$ENVIRONMENT, LL$DELETE, LL$RENAME, LL$MKDIR, LL$CHDIR, LL$RMDIR, LL$FIND_FIRST, LL$FIND_NEXT, LL$EXECUTE, LL$FREE_BYTES, LL$CURRENT_DIRECTORY, LL$CURRENT_DRIVE
+;; name: LL$OPEN, LL$CREATE, LL$READ, LL$SEEK, LL$WRITE_FILE, LL$CLOSE, LL$EXIT, LL$MORE, LL$BLOCK_RESIZE, LL$VECTOR, LL$SET_VECTOR, LL$CHAIN, LL$RESTORE_VECTORS, LL$CONSOLE_READ_KEY, LL$CONSOLE_KEY_READY, LL$COMMAND_LINE, LL$ENVIRONMENT, LL$DELETE, LL$RENAME, LL$MKDIR, LL$CHDIR, LL$RMDIR, LL$FIND_FIRST, LL$FIND_NEXT, LL$EXECUTE, LL$ENVIRONMENT_READ, LL$ENVIRONMENT_WRITE, LL$FREE_BYTES, LL$CURRENT_DIRECTORY, LL$CURRENT_DRIVE
 ;; desc: the OS layer shared by C, Nib and BASIC programs: x86-m16, real-mode DOS
 ;;
 ;; args: the interface of runtime/shared/interface.toml, in cdecl16: arguments in word slots from [bp+6],
@@ -55,6 +55,8 @@ if OS_GROUPS and G_PROCESS
 public LL$COMMAND_LINE
 public LL$ENVIRONMENT
 public LL$EXECUTE
+public LL$ENVIRONMENT_READ
+public LL$ENVIRONMENT_WRITE
 if (OS_GROUPS and G_CORE) eq 0
 extrn LL$PSP:word
 endif
@@ -548,6 +550,85 @@ environment_done:
                 pop     bp
                 retf
 LL$ENVIRONMENT  endp
+
+;;::::::::::::::
+;; LL$ENVIRONMENT_READ(offset: u16, data: *far mut u8, max: u16) -> u16: the bytes from `offset`, at most `max`, and how many.
+LL$ENVIRONMENT_READ proc far
+                push    bp
+                mov     bp, sp
+                push    si
+                push    di
+                push    ds
+                push    es
+                les     di, [bp+8]
+                mov     ax, LL$PSP
+                mov     ds, ax
+                mov     ax, ds:[PSP_ENVIRONMENT]
+                mov     ds, ax
+                dec     ax
+                mov     fs, ax
+                mov     ax, fs:[3]
+                shl     ax, 4
+                mov     si, [bp+6]
+                sub     ax, si
+                jbe     short read_none
+                mov     cx, [bp+12]
+                cmp     cx, ax
+                jbe     short read_fits
+                mov     cx, ax
+read_fits:
+                mov     ax, cx
+                rep     movsb
+                jmp     short read_done
+read_none:
+                xor     ax, ax
+read_done:
+                pop     es
+                pop     ds
+                pop     di
+                pop     si
+                pop     bp
+                ret
+LL$ENVIRONMENT_READ endp
+
+;;::::::::::::::
+;; LL$ENVIRONMENT_WRITE(offset: u16, data: *far u8, count: u16) -> i16: `count` bytes into the block at `offset`; -1 when they do not fit.
+LL$ENVIRONMENT_WRITE proc far
+                push    bp
+                mov     bp, sp
+                push    si
+                push    di
+                push    ds
+                push    es
+                mov     ax, LL$PSP
+                mov     es, ax
+                mov     ax, es:[PSP_ENVIRONMENT]
+                mov     es, ax
+                dec     ax
+                mov     fs, ax
+                mov     ax, fs:[3]
+                shl     ax, 4
+                mov     di, [bp+6]
+                mov     cx, [bp+12]
+                mov     dx, di
+                add     dx, cx
+                jc      short write_no_room
+                cmp     dx, ax
+                ja      short write_no_room
+                lds     si, [bp+8]
+                rep     movsb
+                xor     ax, ax
+                jmp     short write_done
+write_no_room:
+                mov     ax, -1
+write_done:
+                pop     es
+                pop     ds
+                pop     di
+                pop     si
+                pop     bp
+                ret
+LL$ENVIRONMENT_WRITE endp
 ;;::::::::::::::
 ;; LL$EXECUTE(name: *far char, tail: *far char) -> i16: DOS's load-and-execute. The parameter block (the caller's
 ;; environment, the tail, two blank FCBs) is built on the stack; DOS 2 destroys SS:SP and every register, so they are
