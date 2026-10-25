@@ -1986,7 +1986,7 @@ impl Emitter<'_, '_> {
             }
             // A call through a register or a cell of memory.
             "CALL32r" | "CALL32m" | "CALL32r_NT" | "CALL32m_NT" | "CALL16r" | "CALL16m" | "CALL16r_NT"
-            | "CALL16m_NT" => {
+            | "CALL16m_NT" | "CALL64r" | "CALL64m" | "CALL64r_NT" | "CALL64m_NT" => {
                 // At real mode the matcher spells a call of a symbol `CALL16r`
                 // of its address: a direct call, not one through an immediate
                 // (`call offset _report`; 79 programs of the m16 run).
@@ -2000,7 +2000,11 @@ impl Emitter<'_, '_> {
                     self.calls.push((at, callee));
                     return Ok(Some(()));
                 }
-                let bytes = if name.starts_with("CALL16") { 2 } else { 4 };
+                let bytes = match &name[4..6] {
+                    "16" => 2,
+                    "64" => 8,
+                    _ => 4,
+                };
                 let target = if name[6..].starts_with('m') {
                     let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short call".to_owned()))?;
                     Loc::Mem(self.cell(group, bytes)?)
