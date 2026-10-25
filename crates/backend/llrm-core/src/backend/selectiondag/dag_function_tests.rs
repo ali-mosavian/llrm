@@ -3092,6 +3092,35 @@ fn a_split_condition_exports_what_the_later_blocks_read() {
     assert_eq!(done.body.blocks.len(), 5, "entry, the second compare, then, else, join");
 }
 
+const PORTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+declare i8 @llrm.ia16.in.i8(i16)
+declare void @llrm.ia16.out.i8(i16, i8)
+define i8 @f(i16 %p) {
+entry:
+  call void @llrm.ia16.out.i8(i16 968, i8 7)
+  %v = call i8 @llrm.ia16.in.i8(i16 %p)
+  ret i8 %v
+}
+";
+
+/// Port I/O (`OUT`, `INP` of QB): a write to an immediate port, then a read
+/// through `dx`, in that order, as `out` and `in` barriers. The builder
+/// refused them ("intrinsic call llrm.ia16.out.i8": palette_using_pds71).
+#[test]
+fn port_writes_and_reads_stay_in_order() {
+    let module = llrm_mir::parse::module(PORTS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let names: Vec<&str> = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.op == crate::model::ir::Operation::Barrier)
+        .filter_map(|w| w.name.as_deref())
+        .collect();
+    assert_eq!(names, ["out", "in"]);
+}
+
 const ASM_TWO_OUTPUTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
 define i32 @f() addrspace(1) {
 entry:
@@ -3116,4 +3145,87 @@ fn an_inline_block_with_two_outputs_is_selected() {
     let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|why| panic!("{}", why.0));
     assert!(done.inline.values().any(|bytes| bytes[..] == [0xCD, 0x1A]), "{:?}", done.inline);
+}
+
+const SWITCH_TO_PHI: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %x, i32 %a, i32 %b) {
+entry:
+  switch i32 %x, label %d [ i32 0, label %j
+    i32 1, label %k
+    i32 2, label %j
+    i32 3, label %k
+    i32 4, label %j
+    i32 5, label %k ]
+d:
+  ret i32 0
+j:
+  %p = phi i32 [ %a, %entry ]
+  ret i32 %p
+k:
+  %q = phi i32 [ %b, %entry ]
+  ret i32 %q
+}
+";
+
+/// A switch whose targets have phis: the incoming values are copied once in
+/// the switch's block and every block of the lowering that branches there (the
+/// header, the compare blocks, the table) is an edge of the phi. The builder
+/// refused it ("switch to a block with phis": 29 functions of the corpora with
+/// the MIR switch lowering off).
+#[test]
+fn a_switch_to_blocks_with_phis_is_lowered() {
+    use crate::model::ir::Operation;
+    let module = llrm_mir::parse::module(SWITCH_TO_PHI).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let branches = done
+        .body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|i| i.what.as_ref().is_some_and(|w| matches!(w.op, Operation::Branch | Operation::Jump)))
+        .count();
+    assert!(branches >= 2, "the switch became branches");
+    let edges: usize =
+        done.body.blocks.iter().map(|block| block.phis.iter().map(|phi| phi.incoming.len()).sum::<usize>()).sum();
+    assert!(edges >= 2, "each phi has an edge from the lowering's blocks");
+}
+
+const PEELED_SWITCH: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @a()
+declare void @b()
+declare void @c()
+define void @f(i32 %x) {
+entry:
+  switch i32 %x, label %d [ i32 1, label %hot
+    i32 20, label %b
+    i32 40, label %c ], !prof !0
+d:
+  ret void
+hot:
+  call void @a()
+  ret void
+b:
+  call void @b()
+  ret void
+c:
+  call void @c()
+  ret void
+}
+!0 = !{!\"branch_weights\", i32 1, i32 1000, i32 1, i32 1}
+";
+
+/// A case that takes most of the probability (`peelDominantCaseCluster`) is
+/// tested first, in the switch's block, and falls through to a block of the
+/// rest. The builder refused it ("switch with a peeled case": bounds, onerr).
+#[test]
+fn a_dominant_case_is_peeled_and_the_rest_follows() {
+    let module = llrm_mir::parse::module(PEELED_SWITCH).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    assert!(
+        done.body.blocks.len() >= 7,
+        "the peeled test and the rest are blocks of their own: {}",
+        done.body.blocks.len()
+    );
 }
