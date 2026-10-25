@@ -1217,6 +1217,34 @@ fn nothing_that_writes_the_flags_sits_between_an_fcom_and_its_branch() {
     assert_eq!(branch, compare + 1, "{names:?}");
 }
 
+const STORES_THE_SAME_CONSTANT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@a = global i32 0
+@b = global i32 0
+define void @f() {
+entry:
+  store i32 -1, ptr @a
+  store i32 -1, ptr @b
+  ret void
+}
+";
+
+/// The DAG path never knew `-Os`: `opt_for_size` was a constant false, so
+/// `-1` stored twice was two `mov [m], imm32` where the pin
+/// (`shouldAvoidImmediateInstFormsForSize`) loads it once; 41 functions of the
+/// corpus shadow at `-Os` (lru, scroll, `MOV32r1`) differed by this.
+#[test]
+fn at_os_a_constant_stored_twice_is_loaded_once() {
+    let module = llrm_mir::parse::module(STORES_THE_SAME_CONSTANT).expect("parses");
+    let moves = |size: bool| {
+        let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+        cpu.size = size;
+        let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+        done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("mov"))).count()
+    };
+    assert_eq!(moves(false), 2, "speed: both stores take the immediate");
+    assert_eq!(moves(true), 3, "-Os: the constant is loaded once and both stores take the register");
+}
+
 const M16_FAR_LOOP: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
 declare cc 1005 ptr addrspace(1) @g()
 declare cc 1005 void @use(ptr addrspace(1))

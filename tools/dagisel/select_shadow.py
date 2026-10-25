@@ -201,7 +201,7 @@ def one(llrm_c: str, shadow: str, source: Path, m16: bool = False, level: str = 
         clean = Path(tmp) / "clean.ll"
         clean.write_text(re.sub(r"\b(?:watcallcc|sysvcc|regparm3cc|cdeclcc|pascalcc|ia16cc) ", "", ir.read_text()))
         ir = clean
-        env = {**os.environ, "M16": "1"} if m16 else None
+        env = {**os.environ, **({"M16": "1"} if m16 else {}), **({"OPTSIZE": "1"} if level == "-Os" else {})}
         mine = subprocess.run([shadow, str(ir)], capture_output=True, text=True, timeout=600, env=env)
         if mine.returncode != 0:
             return whole_program(source.stem, ir.read_text(), "shadow crashed: " + (mine.stderr.strip().splitlines() or ["?"])[-1][:60])
