@@ -77,6 +77,10 @@ b5:
 b4:
   br label %0
 
+0:
+  %1 = phi i16 [ %s, %b5 ], [ %t, %b4 ]
+  br label %b1
+
 b1:
   %carried = phi i16 [ %stepped, %b2 ], [ %1, %0 ]
   br i1 %c, label %b2, label %b3
@@ -87,10 +91,6 @@ b2:
 
 b3:
   ret i16 %carried
-
-0:
-  %1 = phi i16 [ %s, %b5 ], [ %t, %b4 ]
-  br label %b1
 }
 "
     );
@@ -497,4 +497,35 @@ fn loops_already_in_simplified_form_make_no_copy_of_the_function() {
         simplified(function)
     };
     assert!(!changed, "a loop in the form was changed");
+}
+
+/// The blocks a simplified loop gets stand where the pin lays them out: the
+/// preheader right after an outside predecessor, the dedicated exit right
+/// before the exit block (`placeSplitBlockCarefully`,
+/// `SplitBlockPredecessors`). They stood at the end of the function, which
+/// JumpThreading, visiting blocks in layout order, read as another loop shape
+/// (x_list's list-sum loop kept two pointer phis).
+#[test]
+fn test_a_new_preheader_and_exit_stand_next_to_the_blocks_they_serve() {
+    let mut module = parsed(
+        "define void @f(i1 %c, i1 %d) {
+entry:
+  br i1 %c, label %head, label %side
+
+side:
+  br i1 %d, label %head, label %guard
+
+head:
+  br i1 %d, label %head, label %guard
+
+guard:
+  ret void
+}
+",
+    );
+    let (_, function) = module.function_mut("f").expect("@f");
+    assert!(simplified(function));
+    let order: Vec<&str> =
+        function.layout().iter().map(|&one| function.block(one).name.as_deref().unwrap_or("new")).collect();
+    assert_eq!(order, ["entry", "side", "new", "head", "new", "guard"]);
 }

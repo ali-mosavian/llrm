@@ -4,6 +4,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 
 | Doc | Holds |
 |---|---|
+| [early-taildup-plan](early-taildup-plan.md) | Early Tail Duplication translation: pin functions and lines, what LIR gives it, three steps with dates (2026-11-03..08) |
 | [constraint-elimination-plan](constraint-elimination-plan.md) | ConstraintElimination translation: why, the order CE-1 to CE-4 with dates, the oracle |
 | [knownbits-plan](knownbits-plan.md) | ValueTracking known bits (qbq-llrm d_faces): per caller against the pin, twelve dated rows (2026-10-24) |
 | [f3-plan](f3-plan.md) | F3, `translate::program`: profile by bucket, the pin's counterpart, four rows with dates (2026-10-24) |
@@ -31,6 +32,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [fold-split](fold-split.md) | The plan splitting the fold work between valuetracking-port and fold-poc |
 | [value-tracking-port](value-tracking-port.md) | Evidence for the ValueTracking, KnownBits and ConstantRange port: agreement with LLVM, deviations, owed work |
 | [undef-table](undef-table.md) | MIR `undef`: each pass and pin function that treats it apart from poison, and its state |
+| [layout-fidelity](layout-fidelity.md) | Where the pin lays out the blocks its helpers create, and which of ours match; the cells that grew when ours moved |
 | [qb-float-rows](qb-float-rows.md) | The 41 QB float rows above main after BC's per-assignment rounding (#3352): the numbers, owner and exit |
 | [qcport-os-rows](qcport-os-rows.md) | The QCport modules bigger at -Os after #3369 and after its re-land: numbers, owner and exit |
 | [phi-pre-ra-translation](phi-pre-ra-translation.md) | PHIElimination, TwoAddressInstruction and the pass order before greedy, against the pin: same, differs, missing |
