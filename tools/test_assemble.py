@@ -108,10 +108,6 @@ def test_two_prs_adding_a_test_of_one_name_do_not_share_a_batch(tmp_path):
     assert kept == ["1"] and "a_frame_cell_is_not_encodable" in waits["2"] and "#1" in waits["2"]
 
 
-def test_a_build_refusal_names_the_error_of_the_prs_own_alone_build_not_the_batchs(tmp_path):
-    """The 16:56 batch refused #4743 with `floatassign.rs: unused import live`, the error of #4648 in the same batch; #4743 alone built clean. The first PR breaks the build, the second is clean."""
-
-
 def test_the_scanners_of_an_alone_check_run_in_the_scratch_tree_not_the_runners(tmp_path, monkeypatch):
     """The dry run printed `scanners: 2 targets, 0 red (tree 4d319defc)` for every PR: integration_failures defaulted to ROOT, so a PR red in its own tree passed."""
     repo = tmp_path / "repo"
@@ -119,21 +115,6 @@ def test_the_scanners_of_an_alone_check_run_in_the_scratch_tree_not_the_runners(
     (repo / "a.txt").write_text("a\n")
     sh(repo, "add", "-A")
     sh(repo, "commit", "-qm", "base")
-    sh(repo, "checkout", "-q", "main")
-    current = []
-
-    def merge_alone(number: str) -> bool:
-        current[:] = [number]
-        return True
-
-    def check() -> str:
-        return "floatassign.rs:124:38: unused import: `live`" if current == ["4648"] else ""
-
-    errors: dict[str, str] = {}
-    assert ps.build_offenders(["4648", "4743"], merge_alone, check, errors) == ["4648"]
-    assert errors == {"4648": "floatassign.rs:124:38: unused import: `live`"}
-
-
     head = branch(repo, "pr", "b.txt", "b\n")
     sh(repo, "checkout", "-q", "main")
     seen = []
@@ -156,3 +137,19 @@ def test_alone_counts_the_verdicts_it_read_from_the_cache(tmp_path):
     assert ps.HITS[0] == 0
     ps.alone(["1"], heads, refusals=lambda h, b: [], cache=tmp_path / "cache")
     assert ps.HITS[0] == 1
+
+
+def test_a_build_refusal_names_the_error_of_the_prs_own_alone_build_not_the_batchs(tmp_path):
+    """The 16:56 batch refused #4743 with `floatassign.rs: unused import live`, the error of #4648 in the same batch; #4743 alone built clean. The first PR breaks the build, the second is clean."""
+    current = []
+
+    def merge_alone(number: str) -> bool:
+        current[:] = [number]
+        return True
+
+    def check() -> str:
+        return "floatassign.rs:124:38: unused import: `live`" if current == ["4648"] else ""
+
+    errors: dict[str, str] = {}
+    assert ps.build_offenders(["4648", "4743"], merge_alone, check, errors) == ["4648"]
+    assert errors == {"4648": "floatassign.rs:124:38: unused import: `live`"}
