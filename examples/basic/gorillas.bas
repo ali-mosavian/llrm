@@ -1091,6 +1091,7 @@ SUB SparklePause
           PRINT " ";
         END IF
       NEXT b
+      Frame
     NEXT A
   WEND
 END SUB
