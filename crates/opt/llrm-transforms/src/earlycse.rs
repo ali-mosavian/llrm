@@ -1223,10 +1223,7 @@ impl FunctionPass for EarlyCse {
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
         let accesses =
-            self.memory_ssa.then(|| match Accesses::managed(unit.context, unit.layout, unit.function, analyses) {
-                Ok(accesses) => accesses,
-                Err(error) => panic!("earlycse: {error}"),
-            });
+            self.memory_ssa.then(|| std::rc::Rc::new(Accesses::lazy()));
         let tree = analyses.get::<Dominators>(unit.context, unit.layout, unit.function);
         // MemorySSA describes the function as it is now; the walk changes
         // `unit.function`, which this copy and the context's copy do not
@@ -1247,7 +1244,7 @@ impl FunctionPass for EarlyCse {
                     Ok(held) => {
                         (held.mssa.clone(), held.accesses(unit.context, unit.layout, unit.function, analyses).ok())
                     }
-                    Err(_) => (Mssa::build(&before, &shape.dominance, &shadow::effect_of(accesses, &before)), None),
+                    Err(_) => (Mssa::build(&before, &shape.dominance, &shadow::effect_of_in(accesses, &view)), None),
                 };
                 (Box::new(Translated::new(&view, accesses, mssa)), kept_accesses)
             }
