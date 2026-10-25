@@ -636,6 +636,9 @@ fn moves_stack(body: &crate::model::lir::LirBody) -> bool {
 /// than this one's (cdecl's ECX and EDX under Watcom's) takes the caller's
 /// value.
 fn saved_of(procedure: &Procedure) -> Vec<RegId> {
+    if let Some(saved) = &procedure.body.frame_saved {
+        return saved.clone();
+    }
     let found = procedure.body.facts.0.get::<BodyRoots>(&procedure.body);
     let mut roots = if procedure.registers.free {
         found.of_values(procedure.body.regs(), procedure.registers.pointer)
@@ -676,6 +679,7 @@ fn wrap_of(
         &kept,
         (frame && movable).then_some((registers.pointer, registers.stack)),
         stack_addressed,
+        procedure.size,
     )
 }
 
@@ -723,6 +727,53 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
         },
         None => procedure,
     }
+}
+
+/// `procedure` with what each return takes back as instructions before the
+/// return, as the pin has them when `BranchFolder` runs
+/// (`PrologEpilogInserter` runs first): the saved registers' pops and the
+/// frame's teardown, which tail merging then counts. Unchanged where the
+/// entry or a piece of the frame is set up elsewhere (runtime-built,
+/// interrupt) or placed by `shrinkwrap`: those stay in the printer.
+pub fn exits_inserted(procedure: Procedure) -> Procedure {
+    if procedure.entry != 0 || procedure.interrupt.is_some() || procedure.body.frame_exit.is_some() {
+        return procedure;
+    }
+    let held = frame_held(&procedure);
+    let omit = frame_omitted(&procedure, 0, held).is_some();
+    if !omit && held {
+        return procedure;
+    }
+    let sequences = Sequences::of(&procedure, omit);
+    if sequences.wrap.as_ref().is_some_and(|wrap| !wrap.wrapped.is_empty()) || sequences.exit.is_empty() {
+        return procedure;
+    }
+    let saved = saved_of(&procedure);
+    let blocks: Vec<crate::model::lir::Block> = procedure
+        .body
+        .blocks
+        .iter()
+        .map(|block| {
+            if !block.insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Return)) {
+                return block.clone();
+            }
+            let mut made = lir::LirBlock::clone(block);
+            let mut insns: Vec<Arc<lir::Insn>> = Vec::with_capacity(block.insns.len() + sequences.exit.len());
+            for one in block.insns.iter() {
+                if one.what.as_ref().is_some_and(|what| what.op == Operation::Return) {
+                    let at = one.covers.map_or(one.at, |covers| covers.0);
+                    insns.extend(sequences.exit.iter().map(|what| {
+                        Arc::new(lir::Insn::new(one.at, Some((at, at)), Some(what.clone()), Vec::new(), Vec::new()))
+                    }));
+                }
+                insns.push(Arc::clone(one));
+            }
+            made.insns = insns.into();
+            made.into()
+        })
+        .collect();
+    let body = procedure.body.with_blocks(blocks);
+    Procedure { body: lir::LirBody { frame_exit: Some(omit), frame_saved: Some(saved), ..body }, ..procedure }
 }
 
 /// The stack-limit comparison once the frame is allocated, if the procedure
@@ -1015,6 +1066,10 @@ pub fn listing(
 ) -> Result<Vec<Item>, Unprintable> {
     let registers = &procedure.registers;
     let held = frame_held(procedure);
+    if procedure.body.frame_exit == Some(false) {
+        let registers = llrm_target::FrameRegisters { free: false, ..registers.clone() };
+        return Ok(built(procedure, number, false)?.into_iter().map(|item| spelled(item, &registers)).collect());
+    }
     let (items, registers) = match frame_omitted(procedure, number, held) {
         Some(items) => (items, registers.clone()),
         None if held => {
@@ -1061,7 +1116,13 @@ impl Sequences {
         let first = procedure.body.saved_first;
         let lows = if first { Vec::new() } else { saved_of(procedure) };
         let count = lows.len();
-        let wrap = wrap_of(procedure, &procedure.body, enter.len() > count, omit);
+        // Decided before the exits became instructions, which name the saved
+        // registers in every return.
+        let wrap = if procedure.body.frame_exit.is_some() {
+            None
+        } else {
+            wrap_of(procedure, &procedure.body, enter.len() > count, omit)
+        };
         let kept = enter.split_off(enter.len() - count);
         let restores: Vec<Semantics> = leave.drain(..count).collect();
         let saved: Vec<RegId> =
@@ -1091,7 +1152,7 @@ impl Sequences {
             entry_leave.extend(sequences.leave.iter().cloned());
         }
         sequences.entry = entry_items;
-        sequences.exit = entry_leave;
+        sequences.exit = if procedure.body.frame_exit.is_some() { Vec::new() } else { entry_leave };
         sequences
     }
 
@@ -1170,7 +1231,22 @@ fn built(
         }
         let following = if index + 1 < blocks.len() { Some(blocks[index + 1].at) } else { None };
         let fallthrough = _fallthrough_jump(block, following);
+        // The edge into the restore that `shrinkwrap` split: what the path took
+        // on is taken back at the end of this block, before the jump that
+        // leaves it (printed or not), or where it falls into the restore. The
+        // paths that took nothing reach the restore's label past it.
+        let closing = wrap.as_ref().and_then(|wrap| wrap.closes_after.get(&block.at));
+        let last_printed = block.insns.iter().rev().find(|one| prints(one));
+        let ends_in_jump =
+            last_printed.is_some_and(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Jump));
+        let mut closed = false;
         for one in &block.insns {
+            if let Some(pieces) =
+                closing.filter(|_| ends_in_jump && last_printed.is_some_and(|last| Arc::ptr_eq(last, one)))
+            {
+                out.extend(pieces.iter().flat_map(|piece| item(piece).1).map(Item::Semantics));
+                closed = true;
+            }
             if first.is_some_and(|first| Arc::ptr_eq(first, one)) {
                 out.push(Item::Mark(Mark::BodyStart));
             }
@@ -1291,6 +1367,9 @@ fn built(
             if last.is_some_and(|last| Arc::ptr_eq(last, one)) {
                 out.push(Item::Mark(Mark::BodyEnd));
             }
+        }
+        if let Some(pieces) = closing.filter(|_| !closed) {
+            out.extend(pieces.iter().flat_map(|piece| item(piece).1).map(Item::Semantics));
         }
         let fall = _falls_to(block, &procedure.name)?;
         if let Some(fall) = fall {
@@ -1609,21 +1688,26 @@ fn addressed_pass(
                         depth = None;
                     }
                     Operation::Jump | Operation::Branch => {
-                        if what.indirect {
+                        // A jump table's targets are all the labels it names.
+                        if what.indirect && what.table.is_empty() {
                             return Err(stop(procedure, "an indirect jump"));
                         }
-                        let target = name_of(what.target.ok_or(Stop::Refused)?);
-                        match known.get(&target) {
-                            _ if in_dead => {}
-                            Some(&there) if there != here => {
-                                return Err(stop(
-                                    procedure,
-                                    &format!("a jump to {target} at depth {here} and {there}"),
-                                ));
-                            }
-                            Some(_) => {}
-                            None => {
-                                known.insert(target, here);
+                        let targets: Vec<i64> =
+                            if what.indirect { what.table.clone() } else { vec![what.target.ok_or(Stop::Refused)?] };
+                        for target in targets {
+                            let target = name_of(target);
+                            match known.get(&target) {
+                                _ if in_dead => {}
+                                Some(&there) if there != here => {
+                                    return Err(stop(
+                                        procedure,
+                                        &format!("a jump to {target} at depth {here} and {there}"),
+                                    ));
+                                }
+                                Some(_) => {}
+                                None => {
+                                    known.insert(target, here);
+                                }
                             }
                         }
                         if what.op == Operation::Jump {
@@ -3175,9 +3259,10 @@ mod tests {
     }
 
     /// Reached around the block that names it as well, a return cannot pop what
-    /// was not pushed: the entry saves, as before.
+    /// was not pushed: the late block pops at its end, before it falls into the
+    /// return the early exit jumps to.
     #[test]
-    fn test_a_return_reached_around_the_save_keeps_the_save_at_the_entry() {
+    fn test_a_return_reached_around_the_save_has_the_pop_at_the_end_of_the_late_path() {
         let branch = Semantics { target: Some(3), ..semantics(Operation::Branch, "je", vec![], vec![]) };
         let si = || Loc::Reg(ir::Reg { register: RegId::SI, width: 2 });
         let blocks = vec![
@@ -3208,11 +3293,10 @@ mod tests {
         };
         let lines: Vec<String> =
             _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
-        assert!(
-            lines.iter().position(|one| one == "push si").unwrap()
-                < lines.iter().position(|one| one == "L0_1:").unwrap(),
-            "{lines:?}"
-        );
+        let at = |wanted: &str| lines.iter().position(|one| one == wanted).unwrap();
+        assert!(at("L0_2:") < at("push si"), "{lines:?}");
+        assert!(at("pop si") < at("L0_3:"), "{lines:?}");
+        assert_eq!(lines.iter().filter(|one| *one == "pop si").count(), 1, "{lines:?}");
     }
 
     /// peephole's multiply by three has no address, only base, index and scale.

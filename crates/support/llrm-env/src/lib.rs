@@ -26,21 +26,36 @@ pub fn is_on(value: &OsStr) -> bool {
     !(value.is_empty() || value == "0" || value.eq_ignore_ascii_case("false") || value.eq_ignore_ascii_case("off"))
 }
 
-/// Whether the switch `name` is on, from a snapshot of the environment taken at
-/// the first ask. The variables are those the process started with; none is
-/// set afterwards.
-pub fn set(name: &str) -> bool {
+fn vars() -> &'static [(OsString, OsString)] {
     static VARS: std::sync::OnceLock<Vec<(OsString, OsString)>> = std::sync::OnceLock::new();
     VARS.get_or_init(|| std::env::vars_os().collect())
-        .iter()
-        .any(|(one, value)| one == OsStr::new(name) && is_on(value))
+}
+
+/// The value of `name`, from a snapshot of the environment taken at the first
+/// ask; for a switch that carries a value (a function name, a path).
+pub fn var(name: &str) -> Option<&'static OsStr> {
+    vars().iter().find(|(one, _)| one == OsStr::new(name)).map(|(_, value)| value.as_os_str())
+}
+
+/// Whether the switch `name` is on, from the same snapshot. The variables are
+/// those the process started with; none is set afterwards.
+pub fn set(name: &str) -> bool {
+    var(name).is_some_and(is_on)
 }
 
 #[cfg(test)]
 mod tests {
     use std::ffi::OsStr;
 
-    use super::is_on;
+    use super::{is_on, var};
+
+    /// A value is read from the snapshot, and a name not in the environment
+    /// is `None`, not an empty value.
+    #[test]
+    fn test_var_reads_the_snapshot() {
+        assert!(var("PATH").is_some());
+        assert!(var("LLRM_NO_SUCH_SWITCH").is_none());
+    }
 
     /// `LLRM_CHECK_STALE=0` ran the oracle, as `=1` did: presence was the test
     /// (#2279).

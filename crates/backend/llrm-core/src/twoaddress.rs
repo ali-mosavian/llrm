@@ -611,7 +611,7 @@ pub struct Commuter<'a> {
     processed: crate::support::hash::HashSet<InstrKey>,
     /// The values `convertInstTo3Addr` made a two-register `lea` of in this
     /// block (`isConvertibleLEA`).
-    leas: std::collections::HashSet<u32>,
+    leas: llrm_support::hash::HashSet<u32>,
 }
 
 impl<'a> Commuter<'a> {

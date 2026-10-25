@@ -34,7 +34,8 @@ fn listing(flags: &[&str]) -> String {
 /// instructions a trip in four loops where clang calls memmove and memcpy.
 #[test]
 fn o1_forms_memmoves_and_a_memset_from_scrolls_loops_and_og_does_not() {
-    let moves = |text: &str| text.matches("rep movs").count();
+    // A copy is an inline `rep movs` or a call, as clang's (memmove, memcpy).
+    let moves = |text: &str| text.matches("rep movs").count() + text.matches("call _mem").count();
     let o1 = listing(&["-O1"]);
     assert!(moves(&o1) >= 3 && o1.contains("rep stos"), "-O1 left scroll's loops as loops:\n{o1}");
     let og = listing(&["-Og"]);
