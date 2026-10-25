@@ -23,11 +23,13 @@ import hashlib
 import importlib
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -572,6 +574,41 @@ def build_offenders(group: list[str], merge_alone, check, errors: dict[str, str]
     return found
 
 
+def needs(package: str, graph: dict[str, set[str]]) -> set[str]:
+    """`package` and every workspace package it depends on, through any chain: a PR can turn one of its tests red only by changing one of these."""
+    out, todo = {package}, [package]
+    while todo:
+        for dep in graph.get(todo.pop(), ()):
+            if dep not in out:
+                out.add(dep)
+                todo.append(dep)
+    return out
+
+
+def can_affect(files: list[str], package: str, packages: dict, graph: dict[str, set[str]], root: Path = ROOT) -> bool:
+    """Whether a PR with `files` can change a test of `package`: it changes a package `package` needs, or a file no package owns (Cargo.toml, tools/, the root's tests/) which always probes."""
+    smoke = parity_smoke_module()
+    owned = smoke.touched_packages(files, packages, root)
+    inside = [f for f in files if smoke.touched_packages([f], packages, root)]
+    return len(inside) < len(files) or bool(owned & needs(package, graph))
+
+
+def unit_offenders(group: list[str], by_package: dict[str, set[str]], merge_alone, failing, base_red=None, affects=None) -> list[str]:
+    """The PRs of `group` whose merge alone fails a unit test of `by_package`. A test the base fails too (`base_red(by_package)` -> {(package, test)}) is no PR's: every PR merged
+    on a red base fails it alone, and batch 2 refused or probed all 16. A PR that `affects(number, package)` says cannot change the package is not probed (a merge and a cargo run each)."""
+    red = base_red(by_package) if base_red else set()
+    probe = {package: tests - {test for pkg, test in red if pkg == package} for package, tests in by_package.items()}
+    probe = {package: tests for package, tests in probe.items() if tests}
+    if not probe:
+        return []
+    found = []
+    for number in group:
+        mine = {package: tests for package, tests in probe.items() if affects is None or affects(number, package)}
+        if mine and merge_alone(number) and any(failing(package, tests) for package, tests in mine.items()):
+            found.append(number)
+    return found
+
+
 def refusal_line(number: str, named: dict[str, str], failed_build: list[str], failed_units: set[str]) -> str:
     """`#N: REFUSED: why` for a PR the batch dropped: the reason `named` holds (it failed what the batch failed alone), else the failure of the batch of one. The queue quoted the first REFUSED
     line of the shared log for every PR: at 22:26 eight PRs read as refused for #3841's `mut` while seven of them failed units."""
@@ -931,6 +968,17 @@ def lib_tests_line(
     return f"lib tests: {len(touched)} crates, {stats.get('passed', '?')} tests passed ({stats.get('names', '?')}), {stats.get('seconds', 0):.0f}s"
 
 
+_BASE_RED: dict[tuple, set] = {}  # (base sha, the tests asked) -> those that fail on the base: one cargo run per base, however many rounds ask
+
+
+def _base_red(by_package: dict[str, set[str]]) -> set[tuple[str, str]]:
+    key = (git("rev-parse", BASE).strip(), tuple(sorted((package, tuple(sorted(tests))) for package, tests in by_package.items())))
+    if key not in _BASE_RED:
+        clean_checkout(BASE)
+        _BASE_RED[key] = {(package, test) for package, tests in by_package.items() for test in failing_on_checkout(package, tests)}
+    return _BASE_RED[key]
+
+
 def _failing_on_head(by_package: dict[str, set[str]]) -> set[str]:
     clean_checkout(BASE)
     return {f"unit {package}::{test}" for package, tests in by_package.items() for test in failing_on_checkout(package, tests)}
@@ -957,48 +1005,79 @@ def fast_merge(numbers: list[str], merge_one) -> tuple[list[str], dict[str, str]
     return kept, left_out
 
 
-def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, scanners=None, differs=None) -> list[str]:
+def _in_target(target: Path | None):
+    """`subprocess.run` with CARGO_TARGET_DIR set to `target/test`; the plain one when there is no target."""
+    if target is None:
+        return subprocess.run
+    return lambda command, **kw: subprocess.run(command, env={**os.environ, "CARGO_TARGET_DIR": str(target / "test")}, **kw)
+
+
+def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, scanners=None, differs=None, target: Path | None = None) -> list[str]:
     """Why the PR at `head`, alone on `base` (a scratch checkout at `base` in `cwd`), fails the cheap checks a batch would fail on: the merge, the workspace build, the
     always-on scanners (fmt differences only warn: the squash formats every PR). The 15:34 batch spent 62% of its time on reruns of PRs that failed these."""
+    smoke = parity_smoke_module()
+    check = check or ((lambda root: smoke.workspace_check(root, target / "warn")) if target else None)
     if why := merged_refusals(head, base, check, cwd):
         return why
     files = git("diff", "--name-only", base, "HEAD", cwd=cwd).split()
     if unformatted := sorted((differs or fmt_differs)(cwd, files)):
         print(f"alone: fmt.sh would change {', '.join(unformatted[:5])} (the squash formats it; not a refusal)", file=sys.stderr)
-    smoke = parity_smoke_module()  # the scanners read the scratch tree: `integration_failures` defaults to ROOT, so every PR was judged on the tree the runner stands in
-    red = sorted((scanners or (lambda f: landing_scanner_failures(f, False, on_merged=lambda targets: smoke.integration_failures(targets, root=cwd))))(files))
+    # the scanners read the scratch tree: `integration_failures` defaults to ROOT, so every PR was judged on the tree the runner stands in
+    red = sorted((scanners or (lambda f: landing_scanner_failures(f, False, on_merged=lambda targets: smoke.integration_failures(targets, root=cwd, run=_in_target(target)))))(files))
     return [f"scanner red alone: {', '.join(red[:5])}"] if red else []
 
 
 HITS = [0]  # verdicts read from the cache by this process
 
 
-def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=None, cache: Path | None = None) -> tuple[list[str], dict[str, str]]:
+def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=None, cache: Path | None = None, jobs: int = 1, cap: float | None = None) -> tuple[list[str], dict[str, str]]:
     """(the numbers that pass alone, {number: why} for those that fail). The verdict is kept per head sha in `cache`, so a PR checked while the previous batch squashed is not
-    checked again."""
-    kept, dropped = [], {}
+    checked again. The uncached PRs run `jobs` at a time; the ones not finished `cap` seconds in are kept, unfiltered (a check of 40 PRs one after another took hours)."""
+    verdicts: dict[str, str] = {}
+    waiting: queue.Queue[str] = queue.Queue()
     for number in numbers:
         stored = cache / heads[number] if cache else None
         if stored and stored.exists():
             HITS[0] += 1
-            why = stored.read_text()
+            verdicts[number] = stored.read_text()
         else:
-            why = "; ".join((refusals or _alone_in_scratch)(heads[number], base))
-            if stored:
+            waiting.put(number)
+    slots: queue.Queue[int] = queue.Queue()
+    for slot in range(max(1, jobs)):
+        slots.put(slot)
+
+    def worker() -> None:
+        while True:
+            try:
+                number = waiting.get_nowait()
+            except queue.Empty:
+                return
+            slot = slots.get()
+            try:
+                why = "; ".join(refusals(heads[number], base) if refusals else _alone_in_scratch(heads[number], base, slot))
+            finally:
+                slots.put(slot)
+            if cache:
                 cache.mkdir(parents=True, exist_ok=True)
-                stored.write_text(why)
-        if why:
-            dropped[number] = why
-        else:
-            kept.append(number)
-    return kept, dropped
+                (cache / heads[number]).write_text(why)
+            verdicts[number] = why
+
+    threads = [threading.Thread(target=worker, daemon=True) for _ in range(max(1, jobs))]
+    for thread in threads:
+        thread.start()
+    deadline = None if cap is None else time.monotonic() + cap
+    for thread in threads:
+        thread.join(None if deadline is None else max(0.0, deadline - time.monotonic()))
+    kept = [number for number in numbers if not verdicts.get(number)]  # unchecked at the cap: kept
+    return kept, {number: verdicts[number] for number in numbers if verdicts.get(number)}
 
 
-def _alone_in_scratch(head: str, base: str) -> list[str]:
+def _alone_in_scratch(head: str, base: str, slot: int = 0) -> list[str]:
     scratch = Path(tempfile.mkdtemp(prefix="alone-", dir=os.environ.get("LAND_TMP", "/tmp")))
     git("worktree", "add", "-q", "--detach", str(scratch / "w"), base)
+    targets = Path(os.environ.get("ALONE_TARGETS", Path.home() / ".cache/llrm")) / f"alone-{slot}"  # one cargo target per slot: parallel checks on one target wait for its lock
     try:
-        return alone_refusals(head, base, scratch / "w")
+        return alone_refusals(head, base, scratch / "w", target=targets)
     finally:
         subprocess.run(["git", "worktree", "remove", "--force", str(scratch / "w")], cwd=ROOT, capture_output=True)
         shutil.rmtree(scratch, ignore_errors=True)
@@ -1167,14 +1246,31 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             return culprits
         integration = {name[len("integration ") :].split("::", 1)[0] for name in failed_units if name.startswith("integration ")}
         if integration:
-            return [number for number in group if merge_alone(number) and {f"integration {t}" for t in integration} & {n.split("::", 1)[0] for n in parity_smoke_module().integration_failures(sorted(integration))}]
+            # a test the base fails too is no PR's: every PR merged on a red base fails it alone
+            clean_checkout(BASE)
+            failed_names = {name[len("integration ") :] for name in failed_units if name.startswith("integration ")}
+            probe = failed_names - parity_smoke_module().integration_failures(sorted(integration))
+            if not probe:
+                return []
+            targets = sorted({name.split("::", 1)[0] for name in probe})
+            return [number for number in group if merge_alone(number) and probe & parity_smoke_module().integration_failures(targets)]
         units = {tuple(name[len("unit "):].split("::", 1)) for name in failed_units if name.startswith("unit ")}
         by_package: dict[str, set[str]] = {}
         for package, test in units:
             by_package.setdefault(package, set()).add(test)
         if not by_package:
             return []
-        culprits = [number for number in group if merge_alone(number) and any(failing_on_checkout(package, tests) for package, tests in by_package.items())]
+        smoke = parity_smoke_module()
+        packages, graph = smoke.workspace_graph()
+        changed = {number: git("diff", "--name-only", f"{BASE}...{infos[number]['headRefOid']}").split() for number in group}
+        culprits = unit_offenders(
+            group,
+            by_package,
+            merge_alone,
+            failing_on_checkout,
+            base_red=_base_red,
+            affects=lambda number, package: can_affect(changed[number], package, packages, graph),
+        )
         why = "; ".join(f"{test}: {LAST_PANICS[test]}" for _, test in sorted(units) if test in LAST_PANICS)
         why = "; ".join(filter(None, [why, parity_smoke_module().causes_of(failed_units).strip(" []")]))
         named.update({number: f"alone on the head it fails {', '.join(sorted(failed_units))[:160]}" + (f" [{why[:300]}]" if why else "") for number in culprits})
@@ -1585,7 +1681,7 @@ def dispatch() -> int:
         for number in numbers:
             git("fetch", "-q", "origin", f"refs/pull/{number}/head")
             heads[number] = git("rev-parse", "FETCH_HEAD").strip()
-        kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2")
+        kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", "3")), cap=float(os.environ.get("ALONE_CAP", "600")))
         for number, why in dropped.items():
             print(f"{number}: REFUSED: alone: {why[:300]}", file=sys.stderr)
         print(f"alone: {len(numbers)} PRs, {HITS[0]} cached, {len(numbers) - HITS[0]} checked, {len(dropped)} dropped", file=sys.stderr)
