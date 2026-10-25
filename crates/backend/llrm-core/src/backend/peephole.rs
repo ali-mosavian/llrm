@@ -1520,7 +1520,6 @@ fn _loaded_scaled_add<'a>(
 /// Select physically adjacent load/scale/add tails across inert anchors.
 fn _loaded_addresses(
     regs: Regs,
-    bits: u32,
     block: &LirBlock,
     dead: &dyn Fn(usize) -> bool,
     uses: &Counter,
@@ -1693,7 +1692,6 @@ pub fn addresses<'a>(
         let loaded_dead = std::cell::OnceCell::new();
         let block = _loaded_addresses(
             regs,
-            body.bits,
             block,
             &|at| loaded_dead.get_or_init(|| _flags_dead_after(regs, body.bits, block, flags_dead_out())).contains(&at),
             &virtual_uses,
