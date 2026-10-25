@@ -2191,7 +2191,12 @@ fn a_bare_exponent_marker_is_an_exponent_of_zero() {
             parse(source, dialect).unwrap_or_else(|error| panic!("{source:?}: {}", error.message));
         }
     }
-    assert!(parse("x = 1EA\r\n", Dialect::QuickBasic45).is_err());
+    // ...but only before a blank: BC refuses a `1E` that ends the line or sits in parentheses.
+    for source in ["x = 1EA\r\n", "x = 1E\r\n", "x = (1E)\r\n", "d# = 1D\r\n"] {
+        for dialect in [Dialect::QuickBasic45, Dialect::Pds71, Dialect::VbDos] {
+            assert!(parse(source, dialect).is_err(), "{source:?} {dialect:?}");
+        }
+    }
 }
 
 #[test]
