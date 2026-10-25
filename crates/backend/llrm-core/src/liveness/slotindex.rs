@@ -79,8 +79,8 @@ thread_local! {
     /// the list moves every index held anywhere without touching them.
     ///
     /// Never dropped: a type with a destructor makes every access check and
-    /// register its state through a call. The columns are emptied by `SlotIndexes::clear`; the
-    /// capacity is kept to the thread's end.
+    /// register its state through a call. The columns are emptied
+    /// by `SlotIndexes::clear`; the capacity is kept to the thread's end.
     static ARENA: ArenaCell = const {
         ManuallyDrop::new(RefCell::new(Arena {
             instr: Vec::new(),
@@ -818,7 +818,7 @@ impl SlotIndexes {
         // quickly.
         const SPACE: u32 = SlotIndex::INSTR_DIST / 2;
         let (begin_index, index) = ARENA.with(|arena| {
-            let mut arena = arena.borrow_mut();
+            let arena = arena.borrow_mut();
             let start = arena.prev[cur as usize];
             let mut index = arena.index[start as usize].get();
             let begin_index = index;
@@ -846,7 +846,7 @@ impl SlotIndexes {
     /// `packIndexes`: renumbers all indexes using the default distance.
     pub fn pack_indexes(&mut self) {
         ARENA.with(|arena| {
-            let mut arena = arena.borrow_mut();
+            let arena = arena.borrow_mut();
             let mut at = self.first;
             let mut number = 0u32;
             while at != NONE {
@@ -946,6 +946,22 @@ mod tests {
     use super::*;
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
+
+    /// Comparing and numbering read the entry's cell, not the arena: with the
+    /// arena borrowed for writing they still work. Through the arena each
+    /// `get_index` was a thread-local access and a borrow (10 M Ir on d_faces
+    /// -O2, and a panic here).
+    #[test]
+    fn test_compare_and_number_do_not_read_the_arena() {
+        let body = body(&[3]);
+        let indexes = SlotIndexes::new(&body);
+        let (a, b) = (indexes.get_zero_index(), indexes.get_last_index());
+        ARENA.with(|arena| {
+            let _held = arena.borrow_mut();
+            assert!(a < b && a.distance(&b) > 0 && SlotIndex::is_earlier_instr(&a, &b));
+            assert_eq!(a.get_index() | 3, a.get_boundary_index().get_index());
+        });
+    }
 
     /// A thread-local with a destructor is reached through a registration
     /// check and a call on every access: 48 Ir a stale compare, 131 K of them
