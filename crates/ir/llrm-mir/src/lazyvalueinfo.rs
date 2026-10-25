@@ -423,8 +423,6 @@ pub struct Steps {
     pub solve: u64,
     /// `(block, value)` pairs solved and cached.
     pub solved: u64,
-    /// `getEdgeValue` calls on a value that is not a constant.
-    pub edges: u64,
 }
 
 /// The actual implementation of the lazy analysis and update.
@@ -2099,7 +2097,6 @@ impl LazyValueInfoImpl {
             return Some(Lattice::get(&LatticeConstant::of(env.context, vc)));
         }
 
-        self.steps.edges += 1;
         let local_result = self.get_edge_value_local(env, val, bb_from, bb_to, true)?;
 
         if has_single_value(&local_result) {
