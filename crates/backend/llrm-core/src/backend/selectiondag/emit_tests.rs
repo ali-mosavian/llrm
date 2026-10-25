@@ -1,8 +1,7 @@
-use std::collections::HashMap;
-
 use llrm_dagisel::generated::x86_i486::MACHINE_OPCODES;
 use llrm_dagisel::x86_addr::AddrMode;
 use llrm_lir::registers::RegId;
+use llrm_support::hash::HashMap;
 use llrm_target::Target;
 
 use super::emit::{EmitContext, EmitError, emit};
@@ -88,7 +87,7 @@ fn context_in(
     let target = llrm_x86_m32::M32;
     let map = OpcodeMap::new(llrm_instr::parse(&target.forms_text(), target.dialect()).expect("x86.instr"));
     let names: HashMap<u16, &str> = MACHINE_OPCODES.iter().copied().collect();
-    let no_blocks = HashMap::new();
+    let no_blocks = HashMap::default();
     f(&EmitContext {
         tables: &[],
         caller_saved: &Default::default(),
