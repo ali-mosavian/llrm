@@ -33,7 +33,7 @@
 //!
 //! # Used by
 //! `liveness`, `peephole` and its sub-passes (`copysink`, `postrasink`,
-//! `regthrash`, `exactaddress`, `sharedstores`, `machinecse`), `loopslots`,
+//! `regthrash`, `exactaddress`, `sharedstores`), `loopslots`,
 //! `schedule`, `parcopy`, and `peep/guards`, `peep/walk`, `peep/make`.
 
 use std::fmt;
@@ -104,6 +104,11 @@ pub struct Lanes(u128);
 impl Lanes {
     pub const fn new() -> Self {
         Self(0)
+    }
+
+    /// The lanes as a bit mask, a lane to a bit (`Lanes::flags` for the flags).
+    pub const fn mask(&self) -> u128 {
+        self.0
     }
 
     /// The flag lanes of an rflags mask. `RegId::None` sorts first, so flag

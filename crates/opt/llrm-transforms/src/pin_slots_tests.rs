@@ -229,20 +229,6 @@ const ROWS: &[Disposition] = &[
     ),
     row(
         Simplify,
-        "loop-instsimplify",
-        Why::Missing,
-        "registry Missing entry; ablation 0 of 12 IRs",
-        "w-3 (w-5 if silent at 09:00), 11-09",
-    ),
-    row(
-        Simplify,
-        "loop-simplifycfg",
-        Why::Missing,
-        "registry Missing entry; ablation 0 of 12 IRs",
-        "w-3 (w-5 if silent at 09:00), 11-09",
-    ),
-    row(
-        Simplify,
         "extra-simple-loop-unswitch-passes",
         Why::Missing,
         "ablation 0 of 12 IRs",

@@ -191,7 +191,9 @@ pub fn split_critical_edge(
     let slot = function.instruction(terminator).operands.iter().position(|one| *one == Operand::Block(to))?;
     let void = function.instruction(terminator).ty;
     let bridge = function.create_block(None);
-    function.insert_block(bridge, None).ok()?;
+    // Right after `from`, as `SplitKnownCriticalEdge` lays it out
+    // (BreakCriticalEdges.cpp:186).
+    function.insert_block(bridge, Some(from)).ok()?;
     let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(to)], Flags::default(), None);
     function.insert(jump, Position::End(bridge)).ok()?;
     function.set_operand(terminator, slot, Operand::Block(bridge));
@@ -328,7 +330,8 @@ pub fn split_block_predecessors_of(
     assert!(!preds.is_empty(), "predecessors to split off");
     let void = function.instruction(function.terminator(bb).expect("a terminated block")).ty;
     let new = function.create_block(None);
-    function.insert_block(new, None).expect("a new block");
+    // Right before `bb`, as the pin lays it out (BasicBlockUtils.cpp:1331).
+    function.insert_block_before(new, bb).expect("a new block");
     let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(bb)], Flags::default(), None);
     function.insert(jump, Position::End(new)).expect("a placed block");
     for &pred in preds {
@@ -499,6 +502,60 @@ b3:
         );
     }
 
+    /// The new block of `SplitBlockPredecessors` stands right before the block
+    /// it splits (BasicBlockUtils.cpp:1331). It stood at the end of the
+    /// function, and JumpThreading, which visits blocks in layout order,
+    /// load-PRE'd x_list's list-sum loop into two pointer phis the pin does
+    /// not make.
+    #[test]
+    fn test_a_split_block_predecessors_block_stands_before_the_block() {
+        let text = "define i16 @f(i1 %c) {
+b1:
+  br i1 %c, label %b2, label %b3
+
+b2:
+  br label %b4
+
+b3:
+  br label %b4
+
+b4:
+  ret i16 0
+}
+";
+        let mut module = llrm_mir::parse::module(text).expect("parses");
+        let (_, function) = module.function_mut("f").expect("@f");
+        let (b2, b3, b4) = (function.layout()[1], function.layout()[2], function.layout()[3]);
+        let new = split_block_predecessors(function, b4, &[b2, b3]);
+        let layout = function.layout();
+        assert_eq!(
+            layout.iter().position(|&one| one == new),
+            layout.iter().position(|&one| one == b4).map(|at| at - 1)
+        );
+    }
+
+    /// The block of `SplitCriticalEdge` stands right after the block the edge
+    /// leaves (BreakCriticalEdges.cpp:186), not at the end of the function.
+    #[test]
+    fn test_a_split_critical_edge_block_stands_after_its_source() {
+        let text = "define i16 @f(i1 %c) {
+b1:
+  br i1 %c, label %b2, label %b3
+
+b2:
+  br label %b3
+
+b3:
+  ret i16 0
+}
+";
+        let mut module = llrm_mir::parse::module(text).expect("parses");
+        let (_, function) = module.function_mut("f").expect("@f");
+        let (b1, b3) = (function.layout()[0], function.layout()[2]);
+        let new = split_critical_edge(function, b1, b3).expect("the edge is critical");
+        assert_eq!(function.layout().iter().position(|&one| one == new), Some(1));
+    }
+
     use llrm_mir::interpret::{Val, run};
     use llrm_mir::module::Module;
 
@@ -644,7 +701,7 @@ m:
         let (_, function) = module.function_mut("f").expect("@f");
         let [entry, p1, m] = ["entry", "p1", "m"].map(|name| named(function, name));
         let new = split_block_predecessors(function, m, &[entry, p1]);
-        assert_eq!(function.layout()[4], new);
+        assert_eq!(function.layout()[3], new, "right before m");
         assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new());
         let text = llrm_mir::print::module(&module);
         assert!(text.contains("%r = phi i16 [ 2, %p2 ], [ 1, %0 ]"), "{text}");

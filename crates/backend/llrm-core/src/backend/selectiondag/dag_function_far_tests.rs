@@ -1,7 +1,8 @@
 //! Far and huge pointers at m16: selectors, segments, ES, phis of far pointers.
 
 use super::dag_function::selected;
-use super::dag_function_tests::FAR_CALL;
+use super::dag_function_tests::{FAR_CALL, select_with_contracts};
+use crate::model::ir::Operation;
 
 const LOOP: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f(i32 %n) {
@@ -170,6 +171,34 @@ fn a_far_load_reads_the_pointer_and_goes_through_its_selector() {
             .any(|l| matches!(l, Loc::Mem(m) if m.selector.is_some() && m.addr.is_some_and(|a| a.space == Space::Far))),
         "the access goes through the selector"
     );
+}
+
+const M16_ZERO_16: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+@buf = global [16 x i8] zeroinitializer
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define cc 1005 void @f() addrspace(1) {
+entry:
+  call void @llvm.memset.p0.i16(ptr @buf, i8 0, i16 16, i1 false)
+  ret void
+}
+";
+
+/// `getOptimalMemOpType` is `i32` in every mode: 16 zero bytes at m16 were
+/// eight word stores (48 bytes of code), the pin's are four dword stores
+/// (rep_count: 486 -> 1046 bytes against the old selector).
+#[test]
+fn an_m16_zero_fill_of_sixteen_bytes_is_four_dword_stores() {
+    let module = llrm_mir::parse::module(M16_ZERO_16).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let stores = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.name.as_deref() == Some("mov") && matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
+        .count();
+    assert_eq!(stores, 4);
 }
 
 const M16_FILL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
@@ -431,4 +460,259 @@ fn a_copy_from_a_far_pointer_reads_through_its_selector() {
             }),
         );
     assert!(!from_a_constant, "DS takes a constant (DGROUP), not the pointer's selector");
+}
+
+const SEGMENT_LOADED_IN_TWO_BLOCKS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define cc 1000 void @f() addrspace(1) {
+b1:
+  %0 = load volatile i8, ptr addrspace(1) getelementptr (i8, ptr addrspace(1) addrspacecast (ptr addrspace(2) inttoptr (i16 64 to ptr addrspace(2)) to ptr addrspace(1)), i16 108)
+  br label %b3
+b3:
+  %1 = load volatile i8, ptr addrspace(1) getelementptr (i8, ptr addrspace(1) addrspacecast (ptr addrspace(2) inttoptr (i16 64 to ptr addrspace(2)) to ptr addrspace(1)), i16 108)
+  %2 = icmp ne i8 %0, %1
+  br i1 %2, label %b4, label %b3
+b4:
+  ret void
+}
+";
+
+const M16_FAR_COPY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+@far = addrspace(1) global [100 x i16] zeroinitializer
+@near = global [100 x i16] zeroinitializer
+declare void @llvm.memcpy.p0.p1.i16(ptr, ptr addrspace(1), i16, i1)
+define void @f(i16 %n) {
+entry:
+  %bytes = shl i16 %n, 1
+  call void @llvm.memcpy.p0.p1.i16(ptr @near, ptr addrspace(1) @far, i16 %bytes, i1 false)
+  ret void
+}
+";
+
+/// A segment constant put in ES in two blocks was one value defined twice
+/// ('value N is defined 2 times in a body that should be in SSA': QB's
+/// `t = PEEK(&H6C): DO: LOOP UNTIL PEEK(&H6C) <> t`, 59 tests of llrm-qb and
+/// llrm-nib under the DAG default).
+#[test]
+fn a_selector_put_in_es_in_two_blocks_is_two_values() {
+    let selected = select_with_contracts(SEGMENT_LOADED_IN_TWO_BLOCKS).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(crate::backend::verify::verify(&selected.body, true), Vec::<String>::new());
+}
+
+/// A copy from a far global took DGROUP as the source's segment, because the
+/// far pointer was built with `add` and only `or` was recognised:
+/// `idiom_edges.c` at m16 summed the near array's old contents.
+#[test]
+fn a_copy_from_a_far_global_loads_the_globals_segment() {
+    let module = llrm_mir::parse::module(M16_FAR_COPY).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let copy = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.op == Operation::Copy).expect("a copy");
+    let crate::model::ir::Loc::Held(from) = copy.sources[3] else { panic!("{copy:?}") };
+    let loaded = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.dests.iter().any(|d| matches!(d, crate::model::ir::Loc::Held(h) if h.value == from.value)))
+        .expect("the source segment is loaded");
+    let crate::model::ir::Loc::Imm(imm) = &loaded.sources[0] else { panic!("{loaded:?}") };
+    let group = imm.address.as_ref().map(|address| address.index);
+    assert_ne!(group, Some(0), "DGROUP, not the global's own segment: {loaded:?}");
+}
+
+const FAR_MEMSET: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+define void @f(ptr addrspace(2) %s, i16 %n) addrspace(1) {
+entry:
+  %p = addrspacecast ptr addrspace(2) %s to ptr addrspace(4)
+  call void @llvm.memset.p4.i16(ptr addrspace(4) %p, i8 0, i16 %n, i1 false)
+  ret void
+}
+declare void @llvm.memset.p4.i16(ptr addrspace(4), i8, i16, i1)
+";
+
+/// `rep stosb` stores at ES:DI. A far pointer whose offset folded to zero
+/// (`shl edi, 16` of the selector, no `or`) was taken for a near pointer and
+/// ES was set to `DGROUP`: qb `sieve.bas` cleared its data segment instead of
+/// its array and hung under `--isel=dag`. The selector is the high word.
+#[test]
+fn a_fill_through_a_far_pointer_stores_through_its_selector() {
+    use crate::model::ir::{Loc, Operation};
+    let module = llrm_mir::parse::module(FAR_MEMSET).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+    let insns = done.body.insns();
+    let fill = insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.op == Operation::Fill)).expect("a fill");
+    let Some(Loc::Held(segment)) = fill.what.as_ref().and_then(|w| w.sources.last().cloned()) else {
+        panic!("{fill:?}")
+    };
+    let from_a_constant = insns
+        .iter()
+        .any(
+            |i| i.what.as_ref().is_some_and(|w| {
+                w.dests.contains(&Loc::Held(segment)) && w.sources.iter().all(|source| matches!(source, Loc::Imm(_)))
+            }),
+        );
+    assert!(!from_a_constant, "ES takes a constant (DGROUP), not the pointer's selector");
+}
+
+const TWO_FAR_LOADS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define cc 1000 i32 @f(i16 %0, i16 %1) addrspace(1) {
+b1:
+  %2 = inttoptr i16 %0 to ptr addrspace(2)
+  %3 = addrspacecast ptr addrspace(2) %2 to ptr addrspace(1)
+  %4 = load i16, ptr addrspace(1) %3
+  %5 = sext i16 %4 to i32
+  %6 = inttoptr i16 %1 to ptr addrspace(2)
+  %7 = addrspacecast ptr addrspace(2) %6 to ptr addrspace(1)
+  %8 = load i16, ptr addrspace(1) %7
+  %9 = sext i16 %8 to i32
+  %10 = mul nsw i32 %9, %5
+  ret i32 %10
+}
+";
+
+/// Two loads through ES from two segments read the same one: both
+/// `CopyToReg ES` came before both loads, and a load took the last selector
+/// set (QB's `CLNG(a(i, k)) * b(k, j)` read `b * b`: matmul printed 54349 for
+/// 353712).
+#[test]
+fn two_loads_through_es_read_their_own_selectors() {
+    use crate::model::ir::Loc;
+    let module = llrm_mir::parse::module(TWO_FAR_LOADS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+    let selectors: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .flat_map(|w| w.sources.iter())
+        .filter_map(|source| if let Loc::Mem(cell) = source { cell.selector } else { None })
+        .collect();
+    assert_eq!(selectors.len(), 2, "{selectors:?}");
+    assert_ne!(selectors[0], selectors[1], "both loads take one selector");
+}
+
+/// A far pointer made from a `long` call result (`(unsigned char far *)
+/// qglSfAccessWrEx(..)`), then cleared by a loop: QCport `part.c` stopped at
+/// "a string operation on a pointer of no known segment".
+const FAR_FROM_A_CALL_RESULT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+define i16 @f(i32 %sf) addrspace(1) {
+b1:
+  %r = call addrspace(1) i32 @acc(i32 %sf, i16 0, i16 1)
+  %p = inttoptr i32 %r to ptr addrspace(1)
+  %n = ptrtoint ptr addrspace(1) %p to i32
+  %z = icmp eq i32 %n, 0
+  br i1 %z, label %b4, label %b2
+b2:
+  %q = inttoptr i32 %r to ptr addrspace(1)
+  call void @llvm.memset.p1.i16(ptr addrspace(1) align 1 %q, i8 0, i16 16384, i1 false)
+  br label %b4
+b4:
+  %v = phi i16 [ 0, %b1 ], [ 1, %b2 ]
+  ret i16 %v
+}
+declare i32 @acc(i32, i16, i16) addrspace(1)
+declare void @llvm.memset.p1.i16(ptr addrspace(1) nocapture writeonly, i8, i16, i1 immarg)
+";
+
+#[test]
+fn a_far_pointer_from_a_call_result_has_its_selector_for_a_fill() {
+    let module = llrm_mir::parse::module(FAR_FROM_A_CALL_RESULT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+    // The selector is the high word of the result: `shr r, 16`.
+    let insns = done.body.insns();
+    let shifts_by_16 = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .any(
+            |w| w.name.as_deref() == Some("shr")
+                && matches!(
+                    w.sources.last(),
+                    Some(crate::model::ir::Loc::Imm(imm)) if imm.value == 16
+                ),
+        );
+    assert!(shifts_by_16);
+}
+
+/// A far pointer from a near one (`addrspacecast`) with a constant byte
+/// offset added: the offset was built as a constant of the far type, which
+/// has none (`nbody.bas`: "integer constant of Simple(Far)").
+const FAR_PLUS_A_CONSTANT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+define void @f(ptr %p) addrspace(1) {
+b1:
+  %w = load i16, ptr %p
+  %n = inttoptr i16 %w to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %n to ptr addrspace(1)
+  store double -1.250000e-02, ptr addrspace(1) %far
+  %next = getelementptr i8, ptr addrspace(1) %far, i16 8
+  store double 1.250000e-02, ptr addrspace(1) %next
+  ret void
+}
+";
+
+#[test]
+fn a_constant_offset_from_a_far_pointer_is_an_offset_of_its_halves() {
+    let module = llrm_mir::parse::module(FAR_PLUS_A_CONSTANT).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+}
+
+/// A far pointer to a frame object (`addrspacecast ptr to addrspace(5)`, the
+/// selector SS) read through after another far access had set ES: the cell is
+/// the frame's own. It stopped with "address component Reg(ES)" (bench
+/// `lru.nib`), reduced from its `main`.
+const FAR_FRAME_POINTER: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+
+@$var_bord = internal global [6 x i8] zeroinitializer, align 2
+@$var_bprev = internal global [6 x i8] zeroinitializer, align 2
+@$var_bnext = internal global [6 x i8] zeroinitializer, align 2
+@$var_bstamp = internal global [12 x i8] zeroinitializer, align 4
+
+define cc 1005 i16 @f() addrspace(1) nearcode \"llrm-fp-eval\"=\"x87-extended\" memory(read, inaccessiblemem: readwrite) {
+entry:
+  %v1 = alloca [48 x i8]
+  %v8 = getelementptr inbounds nuw i8, ptr %v1, i16 34
+  %v9 = addrspacecast ptr %v8 to ptr addrspace(1)
+  call void @llvm.memset.p1.i16(ptr addrspace(1) align 2 %v9, i8 -1, i16 6, i1 false)
+  %v10 = addrspacecast ptr %v1 to ptr addrspace(5)
+  %v11 = load i16, ptr addrspace(1) getelementptr (i8, ptr addrspace(1) addrspacecast (ptr @$var_bprev to ptr addrspace(1)), i16 2)
+  %v12 = icmp sgt i16 %v11, -1
+  %v13 = load i16, ptr addrspace(1) getelementptr (i8, ptr addrspace(1) addrspacecast (ptr @$var_bnext to ptr addrspace(1)), i16 2)
+  %v14 = icmp sgt i16 %v13, -1
+  %or.cond = select i1 %v12, i1 true, i1 %v14
+  br i1 %or.cond, label %L32, label %L15
+
+L15:
+  %v16 = load i16, ptr addrspace(1) getelementptr (i8, ptr addrspace(1) addrspacecast (ptr @$var_bord to ptr addrspace(1)), i16 2)
+  %v17 = getelementptr inbounds nuw i8, ptr addrspace(5) %v10, i16 20
+  %v18 = shl i16 %v16, 1
+  %v19 = getelementptr inbounds i8, ptr addrspace(5) %v17, i16 %v18
+  %v20 = load i16, ptr addrspace(5) %v19
+  %v21 = icmp eq i16 %v20, 1
+  br i1 %v21, label %L32, label %L22
+
+L22:
+  %v23 = getelementptr inbounds nuw i8, ptr addrspace(5) %v10, i16 34
+  %v24 = getelementptr inbounds i8, ptr addrspace(5) %v23, i16 %v18
+  %v25 = load i16, ptr addrspace(5) %v24
+  %v26 = icmp sgt i16 %v25, -1
+  br i1 %v26, label %L27, label %L32
+
+L27:
+  br label %L32
+
+L32:
+  ret i16 0
+}
+
+declare void @llvm.memset.p1.i16(ptr addrspace(1) nocapture writeonly, i8, i16, i1 immarg)
+
+";
+
+#[test]
+fn a_cell_through_a_far_pointer_to_the_frame_is_the_frames_own() {
+    let module = llrm_mir::parse::module(FAR_FRAME_POINTER).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
 }

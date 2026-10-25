@@ -545,8 +545,8 @@ fn test_variable_indices_are_scaled_and_added() {
             "sub sp, 8",
             "push si",
             "L0_0:",
-            "mov bx, word ptr [bp+6]",
             "mov si, word ptr [bp+8]",
+            "mov bx, word ptr [bp+6]",
             "add si, si",
             "mov word ptr [bp+si-8], 5",
             "mov ax, word ptr [bx+si+2]",
@@ -3515,7 +3515,9 @@ define i16 @g() addrspace(1) {
 ";
     let f = listing(text, "f");
     let add = f.iter().position(|line| line.starts_with("add e")).expect("the low dwords' sum");
-    assert!(f[add + 1].starts_with("adc e"), "{f:?}");
+    // Only moves (a reload) may sit between: they leave the carry alone.
+    let adc = f[add + 1..].iter().position(|line| line.starts_with("adc e")).expect("the high dwords' sum");
+    assert!(f[add + 1..add + 1 + adc].iter().all(|line| line.starts_with("mov ")), "{f:?}");
     let g = listing(text, "g");
     for line in ["pushd 0", "pushd 1", "call far ptr f", "xor eax, 34", "or edx, eax"] {
         assert!(g.iter().any(|one| one == line), "{line}: {g:?}");
@@ -5771,6 +5773,7 @@ fn a_parameter_is_a_cell_a_register_or_gone() {
         popped: 0,
         saved: Vec::new(),
         stack_arguments: 0,
+        first: 4,
     };
     let found: Vec<(String, DebugPlace)> =
         isel::parameters(&module, module.functions().next().expect("@f").2, "f", &convention, &Default::default())

@@ -163,9 +163,10 @@ impl ScalarEvolution {
         let mut memo = HashMap::default();
         let int_op = self.sink_cast(cx, op, ty, &mut memo, &mut |se, u| {
             let Kind::Unknown(_) = se.node(u).kind else { unreachable!("an unknown") };
+            let one = [Use::of(u)];
             let key = super::Key {
                 tag: Type::PtrToAddr,
-                ops: vec![Use::of(u)],
+                ops: std::borrow::Cow::Borrowed(&one),
                 ty: Some(ty),
                 constant: None,
                 value: None,

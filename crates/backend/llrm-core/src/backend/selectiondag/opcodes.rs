@@ -41,7 +41,7 @@ pub enum Unmapped {
     /// A condition-coded opcode (`CMOV`, `SETCC`, `JCC`): one pin opcode, one
     /// form per condition.
     Condition,
-    /// A 64-bit width: the targets here have no 64-bit registers.
+    /// A 64-bit width on a target whose forms have none.
     Wide64,
     /// The name has no `<MNEMONIC><width><letters>` shape.
     Name,
@@ -101,7 +101,7 @@ impl OpcodeMap {
         if matches!(mnemonic.as_str(), "cmov" | "set" | "j") || name.contains("CC") {
             return Err(Unmapped::Condition);
         }
-        if width == Some(64) {
+        if width == Some(64) && !self.forms.iter().any(|form| form.widths.contains(&64)) {
             return Err(Unmapped::Wide64);
         }
         let found: Vec<usize> = self

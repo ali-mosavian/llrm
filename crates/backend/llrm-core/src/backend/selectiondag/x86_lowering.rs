@@ -83,6 +83,8 @@ pub mod x86isd {
     pub const SBB: ISD = ISD::Target(728);
     pub const SUB: ISD = ISD::Target(762);
     pub const WRAPPER: ISD = ISD::Target(953);
+    /// `X86ISD::WrapperRIP`: a symbol addressed from `%rip`.
+    pub const WRAPPER_RIP: ISD = ISD::Target(954);
     /// `X86ISD::FP_TO_INT_IN_MEM`: `fist` of an x87 value to a stack slot.
     pub const FP_TO_INT_IN_MEM: ISD = ISD::Target(617);
     /// `X86ISD::FILD`: `fild` of an integer in memory to an x87 value.
@@ -128,7 +130,12 @@ impl CombineHooks for X86Lowering {
         &self,
         op: ISD,
     ) -> bool {
-        op == ISD::Mul || op == ISD::Sub || op == x86isd::CMOV || op == x86isd::SETCC || op == x86isd::BRCOND
+        op == ISD::Mul
+            || op == ISD::Add
+            || op == ISD::Sub
+            || op == x86isd::CMOV
+            || op == x86isd::SETCC
+            || op == x86isd::BRCOND
     }
 
     fn perform_dag_combine(
@@ -139,6 +146,7 @@ impl CombineHooks for X86Lowering {
     ) -> Option<SDValue> {
         match dag.opcode(node) {
             ISD::Mul => combine_mul(dag, node, level),
+            ISD::Add => combine_add(dag, node),
             ISD::Sub => combine_sub(dag, node),
             x86isd::CMOV => combine_cmov(dag, node),
             x86isd::SETCC => combine_setcc(dag, node),
@@ -930,6 +938,30 @@ fn combine_brcond(
     Some(dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags]))
 }
 
+/// `combineAdd`, the hidden LEA pattern: `(add (sub (shl x, c), y), z)` with
+/// `c < 4` is `(sub (add (shl x, c), z), y)`, so the `shl` and the `add` are
+/// one `lea` (`y * 7 + z` is `lea z + y*8; sub y`). (The vector, `cmov`,
+/// `psadbw` and `sbb` folds are not translated.)
+fn combine_add(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    if vt != EVT::I32 {
+        return None;
+    }
+    let (difference, z) = (dag.operand(node, 0), dag.operand(node, 1));
+    if dag.opcode(difference) != ISD::Sub || dag.use_count(difference.node) != 1 || dag.constant(z).is_some() {
+        return None;
+    }
+    let (shift, y) = (dag.operand(difference, 0), dag.operand(difference, 1));
+    if dag.opcode(shift) != ISD::Shl || !dag.constant(dag.operand(shift, 1)).is_some_and(|amount| amount < 4) {
+        return None;
+    }
+    let sum = dag.get_node(ISD::Add, vt, &[shift, z]);
+    Some(dag.get_node(ISD::Sub, vt, &[sum, y]))
+}
+
 /// `combineSub` through `combineAddOrSubToADCOrSBB`, the zero case: `0 - (and
 /// (srl x, n), 1)` is `-1` when bit `n` of `x` is set: `bt x, n; sbb r, r`
 /// (`SETCC_CARRY`), where `and; neg` took two instructions and a mask. (The
@@ -1020,6 +1052,12 @@ fn combine_cmov(
     None
 }
 
+/// `getGlobalWrapperKind`: every symbol is addressed from `%rip` in 64-bit
+/// mode (small code model), the absolute `Wrapper` elsewhere.
+fn wrapper_kind(vt: EVT) -> ISD {
+    if vt == EVT::I64 { x86isd::WRAPPER_RIP } else { x86isd::WRAPPER }
+}
+
 /// `LowerGlobalOrExternal` for a static, non-PIC global: `Wrapper
 /// (TargetGlobalAddress sym+offset)`. A non-negative offset folds into the
 /// symbol; a negative one is added after.
@@ -1037,7 +1075,7 @@ fn lower_global_address(
         SDNodeFlags::default(),
         NodeData::Global { symbol, offset: folded },
     );
-    let wrapped = dag.get_node(x86isd::WRAPPER, vt, &[target]);
+    let wrapped = dag.get_node(wrapper_kind(vt), vt, &[target]);
     Some(if rest == 0 {
         wrapped
     } else {
@@ -1054,7 +1092,7 @@ fn lower_constant_pool(
     let NodeData::PoolIndex(index) = dag.node(node).data else { return None };
     let vt = dag.value_type(node);
     let target = dag.intern(ISD::TargetConstantPool, &[vt], &[], SDNodeFlags::default(), NodeData::PoolIndex(index));
-    Some(dag.get_node(x86isd::WRAPPER, vt, &[target]))
+    Some(dag.get_node(wrapper_kind(vt), vt, &[target]))
 }
 
 /// `LowerJumpTable`: `Wrapper (TargetJumpTable)`.
@@ -1065,7 +1103,7 @@ fn lower_jump_table(
     let NodeData::JumpTable(index) = dag.node(node).data else { return None };
     let vt = dag.value_type(node);
     let target = dag.intern(ISD::TargetJumpTable, &[vt], &[], SDNodeFlags::default(), NodeData::JumpTable(index));
-    Some(dag.get_node(x86isd::WRAPPER, vt, &[target]))
+    Some(dag.get_node(wrapper_kind(vt), vt, &[target]))
 }
 
 /// `LowerXALUO` for the unsigned add and subtract with overflow: the flags of

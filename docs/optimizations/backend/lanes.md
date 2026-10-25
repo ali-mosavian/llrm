@@ -38,5 +38,5 @@ No example: a bit set type. `liveness.rs` shows what it holds.
 
 ## Used by
 `liveness`, `peephole` and its sub-passes (`copysink`, `postrasink`,
-`regthrash`, `exactaddress`, `sharedstores`, `machinecse`), `loopslots`,
+`regthrash`, `exactaddress`, `sharedstores`), `loopslots`,
 `schedule`, `parcopy`, and `peep/guards`, `peep/walk`, `peep/make`.

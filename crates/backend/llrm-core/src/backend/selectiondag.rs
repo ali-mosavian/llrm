@@ -155,6 +155,10 @@ mod dag_function_float_tests;
 #[cfg(test)]
 mod dag_function_frame_tests;
 #[cfg(test)]
+mod dag_function_m64_tests;
+#[cfg(test)]
+mod dag_function_odds_tests;
+#[cfg(test)]
 mod dag_function_switch_tests;
 #[cfg(test)]
 mod dag_function_tail_tests;

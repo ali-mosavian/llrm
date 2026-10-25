@@ -394,9 +394,9 @@ const ROWS: &[Row] = &[
     row(
         "Machine Common Subexpression Elimination",
         Executed,
-        "precse.rs (before phi elimination), machinecse.rs (after allocation)",
+        "precse.rs (before phi elimination)",
         "-disable-machine-cse",
-        "precse.rs translates MachineCSE with PerformSimplePRE and invariant-load CSE (DEVIATE CSE1-CSE3, #3734); machinecse.rs (after allocation) is ours alone, DEVIATE CSE5: removed, 10 of 568 objects grow (+15..+187 B), none shrinks. Pin: changed code in 57 (-O2) and 61 (-Os) of 77 IRs; -disable-machine-cse -O2: +342 instr, +1082 B, 53 IRs differ; -disable-machine-cse -Os: +377 instr, +1151 B, 55 IRs differ",
+        "precse.rs translates MachineCSE with PerformSimplePRE and invariant-load CSE (DEVIATE CSE1-CSE3, #3734); the post-allocation machinecse.rs is deleted (row CSE5: 7 of 568 objects grow, +22..+34 B, none shrinks; QCport +0.025..0.116%; d_faces -3.60 M Ir). Pin: changed code in 57 (-O2) and 61 (-Os) of 77 IRs; -disable-machine-cse -O2: +342 instr, +1082 B, 53 IRs differ; -disable-machine-cse -Os: +377 instr, +1151 B, 55 IRs differ",
     ),
     row(
         "Machine code sinking",
