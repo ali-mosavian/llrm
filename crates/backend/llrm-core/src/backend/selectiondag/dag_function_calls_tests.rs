@@ -805,3 +805,23 @@ fn a_word_argument_is_required_in_the_word_register() {
     assert!(registers.iter().all(|r| matches!(*r, RegId::AX | RegId::DX | RegId::CX)), "{registers:?}");
     assert_eq!(registers.len(), 3, "{registers:?}");
 }
+
+const CALL_AT_ADDRESS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define void @f() {
+entry:
+  call void inttoptr (i32 4096 to ptr)()
+  ret void
+}
+";
+
+/// A call whose callee is a constant expression (`inttoptr` of a number) was
+/// refused ("call of a constant expression"); the pin calls the value.
+#[test]
+fn a_call_of_a_constant_expression_calls_its_value() {
+    let module = llrm_mir::parse::module(CALL_AT_ADDRESS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let call = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.op == Operation::Call).expect("a call");
+    assert!(call.indirect, "{call:?}");
+}

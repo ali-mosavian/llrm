@@ -1671,6 +1671,28 @@ impl Emitter<'_, '_> {
                 return Ok(Some(()));
             }
             "CALLpcrel32" | "CALL64pcrel32" => {
+                // A call of a number (`inttoptr (i32 N to ptr)`): the address
+                // in a register, called through it.
+                if self.direct_callee(node.ops[0]).is_none()
+                    && let NodeData::Const { bits, .. } = self.dag.node(node.ops[0]).data
+                {
+                    let width = if name == "CALL64pcrel32" { 8 } else { 4 };
+                    let address = self.fresh(width);
+                    self.push(
+                        Operation::Move,
+                        "mov",
+                        vec![Loc::Held(address)],
+                        vec![Loc::Imm(Imm { value: bits as i64, width, address: None })],
+                    );
+                    let what = Semantics {
+                        indirect: true,
+                        name: Some("call".into()),
+                        sources: vec![Loc::Held(address)],
+                        ..Semantics::new(Operation::Call)
+                    };
+                    self.push_call(what, None);
+                    return Ok(Some(()));
+                }
                 let callee = self
                     .direct_callee(node.ops[0])
                     .ok_or_else(|| EmitError::Unsupported("a call of a non-global".to_owned()))?;
