@@ -112,7 +112,9 @@ impl Selector<'_> {
             }
             Base::Global { name, got } => {
                 let page = self.mf.gpr();
-                self.inst(Inst::Adr { page: true, rd: page, target: Target::Symbol { name: name.clone(), addend: 0 } });
+                // the page and the page offset name the same address: a GOT slot has no offset
+                let addend = if *got { 0 } else { address.offset };
+                self.inst(Inst::Adr { page: true, rd: page, target: Target::Symbol { name: name.clone(), addend } });
                 let dst = self.mf.gpr();
                 if *got {
                     self.inst(Inst::Load {
