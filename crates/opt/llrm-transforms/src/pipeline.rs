@@ -182,6 +182,11 @@ pub struct Options {
     /// A dense switch may be a jump table: gcc's `-fjump-tables`, on at every
     /// level.
     pub jump_tables: bool,
+    /// The MIR `switchlower` pass lowers the switches that remain: the old
+    /// selector reads its table ops. Off under `--isel=dag`, where the DAG
+    /// builder lowers them as `SelectionDAGBuilder::visitSwitch` (it needs the
+    /// switch, with its `unreachable` default, as the pin's passes leave it).
+    pub lower_switches: bool,
     pub drop_stores: bool,
     /// Work read below a branch moves below it: gcc's `-ftree-sink`.
     pub sink: bool,
@@ -321,6 +326,7 @@ impl Default for Options {
             expensive: true,
             switch_conversion: true,
             jump_tables: true,
+            lower_switches: true,
             search: false,
             exhaustive: false,
         }
@@ -1174,7 +1180,7 @@ pub fn recorded(
             size: applied.options.prefers_size(),
         });
     }
-    if applied.options.wanted("switchlower") {
+    if applied.options.lower_switches && applied.options.wanted("switchlower") {
         manager.add(switchlower::SwitchLower {
             convert: false,
             jump_tables: applied.options.jump_tables,
