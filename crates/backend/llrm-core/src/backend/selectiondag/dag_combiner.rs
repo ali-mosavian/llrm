@@ -42,9 +42,9 @@
 use std::collections::HashSet;
 
 use super::actions::{Action, LoadExt, TargetLowering};
-use super::dag::{NodeData, Rauw, SDNodeFlags, SDValue, SelectionDAG};
+use super::dag::{MemInfo, NodeData, Rauw, SDNodeFlags, SDValue, SelectionDAG};
 use super::isd::{CondCode, ISD};
-use super::mvt::EVT;
+use super::mvt::{EVT, MVT};
 
 /// `CombineLevel`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -244,6 +244,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         match self.dag.opcode(node) {
             ISD::MergeValues => self.visit_merge_values(node),
             ISD::Select => self.visit_select(node),
+            ISD::Store => self.visit_store(node),
             ISD::Freeze => self.visit_freeze(node),
             ISD::SetCC => self.visit_setcc(node),
             ISD::Xor => self.visit_xor(node).or_else(|| self.simplify_demanded(node)),
@@ -1090,6 +1091,42 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let c = self.dag.constant(n1).filter(|_| !self.dag.is_opaque(n1))?;
         let negated = self.dag.get_constant(c.wrapping_neg() & super::fold::mask(vt.size_in_bits()), vt);
         Some(self.dag.get_node(ISD::Add, vt, &[n0, negated]))
+    }
+
+    /// `visitSTORE`, `replaceStoreOfFPConstant`: `store float 1.5, p` is
+    /// `store i32 0x3fc00000, p`, and a double constant the FPU cannot load
+    /// directly is two `i32` stores, so the constant is never loaded onto the
+    /// x87 stack to be stored. (The pin's `f16`, `f80` and `f128` stay.)
+    fn visit_store(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (chain, value, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+        let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+        if self.dag.opcode(value) != ISD::ConstantFP || info.volatile || info.mem_vt != self.dag.value_type(value) {
+            return None;
+        }
+        let NodeData::ConstFp { bits } = self.dag.node(value).data else { return None };
+        let tli = self.tli?;
+        let int_info = |mem_vt: EVT, align: u32, base| MemInfo { mem_vt, align, base, ..info };
+        match self.dag.value_type(value) {
+            EVT::Simple(MVT::F32) => {
+                let constant = self.dag.get_constant(bits & 0xFFFF_FFFF, EVT::I32);
+                Some(self.dag.get_store(chain, constant, ptr, int_info(EVT::I32, info.align, info.base)))
+            }
+            EVT::Simple(MVT::F64) if !tli.is_fp_imm_legal(MVT::F64, bits) => {
+                let lo = self.dag.get_constant(bits & 0xFFFF_FFFF, EVT::I32);
+                let hi = self.dag.get_constant((bits >> 32) & 0xFFFF_FFFF, EVT::I32);
+                let first = self.dag.get_store(chain, lo, ptr, int_info(EVT::I32, info.align, info.base));
+                let four = self.dag.get_constant(4, self.dag.value_type(ptr));
+                let next = self.dag.get_mem_base_plus_offset(ptr, four, SDNodeFlags::default());
+                let second = self
+                    .dag
+                    .get_store(chain, hi, next, int_info(EVT::I32, info.align.min(4), super::dag::MemBase::Unknown));
+                Some(self.dag.get_token_factor(&[first, second]))
+            }
+            _ => None,
+        }
     }
 
     /// `visitMUL`, up to the multiply-by-power-of-two folds.

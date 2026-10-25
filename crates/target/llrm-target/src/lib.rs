@@ -444,6 +444,13 @@ pub trait Target {
         down: bool,
     ) -> Result<routines::HugeString, String>;
 
+    /// Whether the target links a C math library (`log`, `exp`, `log2` ...). It
+    /// has none: the natural logarithm and the exponentials are x87
+    /// sequences the finalizer spells (`fln`, `fexp`, `flog2`), not calls.
+    fn has_libm(&self) -> bool {
+        false
+    }
+
     /// The inline 64-bit divide, signed or not, by a divisor of two dwords or
     /// one.
     fn divide_routine(
