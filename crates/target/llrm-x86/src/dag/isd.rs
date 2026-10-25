@@ -466,6 +466,16 @@ impl CondCode {
         CondCode::from_bits(bits)
     }
 
+    /// `ISD::getSetCCInverse` for a floating-point type: every condition bit
+    /// flips, the unordered one too.
+    pub fn inverse_float(self) -> CondCode {
+        let mut bits = self as u8 ^ 15;
+        if bits > CondCode::SetTrue2 as u8 {
+            bits &= !8;
+        }
+        CondCode::from_bits(bits)
+    }
+
     /// The name the dump prints for a `CONDCODE` operand.
     pub fn name(self) -> &'static str {
         use CondCode::*;
