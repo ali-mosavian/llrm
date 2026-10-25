@@ -81,6 +81,9 @@ pub struct BuilderTarget {
     /// `-fexcess-precision=standard`: an integer too wide for its float type's
     /// mantissa is rounded to that type (x87 would keep it exact).
     pub float_store: bool,
+    /// A dense switch may be a jump table: the target prices one (the MIR pass
+    /// reads the same cost).
+    pub jump_tables: bool,
     /// For a program whose ABI gives its runtime routines contracts: whether
     /// the convention models each call of a `llrm.qb.` routine, by call. A call
     /// not listed, or listed with a reason, is refused.
@@ -112,6 +115,15 @@ impl BuilderTarget {
         on: bool,
     ) -> BuilderTarget {
         self.float_store = on;
+        self
+    }
+
+    /// This target with jump tables on or off.
+    pub fn with_jump_tables(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.jump_tables = on;
         self
     }
 
@@ -161,6 +173,7 @@ impl BuilderTarget {
             libcalls: None,
             stack_align: None,
             float_store: false,
+            jump_tables: true,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -186,6 +199,7 @@ impl BuilderTarget {
             libcalls: None,
             stack_align: None,
             float_store: false,
+            jump_tables: true,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -310,7 +324,7 @@ fn dag_name(
     dag: &SelectionDAG,
     block: BlockId,
 ) -> String {
-    dag.block_names.get(block.0 as usize).cloned().unwrap_or_default()
+    dag.block_name(block.0).to_owned()
 }
 
 impl<'a> Builder<'a> {
@@ -363,10 +377,7 @@ impl<'a> Builder<'a> {
         dag.global_names = tables.global_names;
         dag.local_symbols = tables.local_symbols;
         dag.block_names = tables.block_names;
-        let name = synthetic_name.unwrap_or_else(|| dag_name(&dag, block));
-        if dag.block_names.len() < next_synthetic as usize {
-            std::rc::Rc::make_mut(&mut dag.block_names).resize(next_synthetic as usize, name);
-        }
+        dag.synthetic_fill = synthetic_name.unwrap_or_else(|| dag_name(&dag, block));
         Builder {
             current: None,
             prelowered: Default::default(),
@@ -1602,6 +1613,8 @@ impl Builder<'_> {
         inst: InstId,
     ) -> Result<(), Refused> {
         self.current = Some(inst);
+        // `++SDNodeOrder`: what the nodes built for this instruction carry.
+        self.dag.cur_order += 1;
         if self.prelowered.contains(&inst) {
             return Ok(());
         }

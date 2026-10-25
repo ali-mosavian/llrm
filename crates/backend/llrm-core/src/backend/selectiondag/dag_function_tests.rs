@@ -266,6 +266,29 @@ fn a_shifted_difference_plus_a_value_is_a_lea_and_a_sub() {
     assert!(!names.iter().any(|n| n == "shl"), "{names:?}");
 }
 
+const SUM_PLUS_TIMES_SEVEN: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %s, i32 %u, i32 %y) {
+  %b = add i32 %s, %u
+  %m = mul i32 %y, 7
+  %t = add i32 %b, %m
+  ret i32 %t
+}
+";
+
+/// The pin's `m_Add` is commutative: `b + y * 7` is the hidden LEA whichever
+/// operand is the difference. Ours took only `y * 7 + b`, so x_dct (`5a + 3c +
+/// 7(b - d)`) kept `lea; sub; add; add` and ran 23 instructions over the pin.
+#[test]
+fn a_value_plus_a_shifted_difference_is_a_lea_and_a_sub() {
+    let module = llrm_mir::parse::module(SUM_PLUS_TIMES_SEVEN).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(!names.iter().any(|n| n == "shl"), "{names:?}");
+    assert_eq!(names.iter().filter(|n| matches!(n.as_str(), "add" | "sub" | "lea")).count(), 3, "{names:?}");
+}
+
 const WORD_CHAIN: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f(i16 %x) {
   %m = mul i16 %x, 25173
@@ -596,6 +619,47 @@ entry:
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .expect("selects");
     assert!(!done.body.returns_twice);
+}
+
+/// A constant a phi receives was `mov v3, 0; mov v4, v3`: the constant load
+/// made a value of its own and a copy carried it to the phi's register. The
+/// pin's `MOV32r0` defines that register, so `precse` sees one zero on both
+/// edges (x_life kept a second return block, +5 instructions).
+#[test]
+fn a_constant_a_phi_receives_is_defined_in_the_phis_register() {
+    let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(ptr %p, i32 %n, i32 %k) {
+b1:
+  %c = icmp ne i32 %k, 0
+  br i1 %c, label %pre, label %b2
+pre:
+  br label %b6
+b2:
+  %s = phi i32 [ 0, %b1 ], [ %v11, %b6 ]
+  ret i32 %s
+b6:
+  %p7 = phi ptr [ %p, %pre ], [ %p13, %b6 ]
+  %n8 = phi i32 [ %n, %pre ], [ %n12, %b6 ]
+  %a9 = phi i32 [ %v11, %b6 ], [ 0, %pre ]
+  %v10 = load i32, ptr %p7
+  %v11 = add i32 %v10, %a9
+  %n12 = add i32 %n8, -1
+  %p13 = getelementptr i8, ptr %p7, i32 4
+  %e = icmp eq i32 %n12, 0
+  br i1 %e, label %b2, label %b6
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let copies = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.name.as_deref() == Some("mov"))
+        .filter(|w| matches!(w.sources.as_slice(), [crate::model::ir::Loc::Held(_)]))
+        .count();
+    assert_eq!(copies, 0, "{} register copies", copies);
 }
 
 /// `a << (i & 31)` on 64 bits kept the select on bit 5 of the amount as `xor

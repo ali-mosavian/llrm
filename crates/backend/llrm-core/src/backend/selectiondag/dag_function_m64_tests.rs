@@ -400,3 +400,149 @@ define i32 @f(i32 %n, ...) {
         .count();
     assert_eq!(stores, 9);
 }
+
+/// A frame object's address plus a variable index and a displacement past the
+/// object was made in a 4-byte register and used as the base of a quadword
+/// address: the encoder refused the 32-bit base beside a 64-bit index.
+#[test]
+fn a_frame_address_past_its_object_is_a_quadword_base() {
+    use crate::model::ir::Loc;
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare void @use(ptr)
+define void @f(i64 %n) {
+entry:
+  %buf = alloca [20 x i8], align 16
+  %m = sub i64 %n, 1
+  %p = getelementptr inbounds [20 x i8], ptr %buf, i64 0, i64 %m
+  call void @use(ptr %p)
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let insns = done.body.insns();
+    let leas: Vec<_> =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some("lea")).collect();
+    assert!(!leas.is_empty());
+    for lea in &leas {
+        assert!(matches!(&lea.dests[0], Loc::Held(h) if h.width == 8), "{lea:?}");
+        // A displacement of -1 is -1, not 4294967295.
+        assert!(!matches!(&lea.sources[..], [Loc::Mem(cell)] if cell.offset > i64::from(i32::MAX)), "{lea:?}");
+    }
+}
+
+/// A dense switch at m64 was lowered to `BR_JT` over a `WrapperRIP` table
+/// address, which nothing selects ("CannotSelect Target(954)", `-O0` tests/llc
+/// switches): the target prices no jump table, so the DAG makes compares as the
+/// MIR pass does.
+#[test]
+fn a_dense_switch_at_m64_is_compares_not_a_jump_table() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i32 @f(i32 %x) {
+entry:
+  switch i32 %x, label %d [ i32 0, label %a  i32 1, label %b  i32 2, label %c  i32 3, label %e  i32 4, label %g  i32 5, label %h ]
+a: ret i32 10
+b: ret i32 21
+c: ret i32 33
+e: ret i32 47
+g: ret i32 52
+h: ret i32 61
+d: ret i32 0
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    assert!(done.body.insns().iter().all(|i| i.what.as_ref().is_none_or(|w| !w.indirect)));
+}
+
+/// A block fill or copy at m64 reached `REP_STOSB_64` / `REP_MOVSB_64` with the
+/// count and pointers in `ecx`/`edi`/`esi`, as at m32, and stopped with
+/// `Unmapped("REP_STOSB_64")`: 24 of the vsgcc programs (sieve, histo,
+/// bintree...) were refused under `--isel=dag`. The pin copies through `RCX`,
+/// `RDI`, `RSI`.
+#[test]
+fn an_m64_block_fill_and_copy_are_rep_string_operations_on_the_wide_registers() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)
+define void @f(ptr %d, ptr %s, i64 %n) {
+entry:
+  call void @llvm.memset.p0.i64(ptr %d, i8 0, i64 %n, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 %n, i1 false)
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| Some(i.what.as_ref()?.name.as_deref()?.to_owned())).collect();
+    assert!(names.iter().any(|n| n == "stosb") && names.iter().any(|n| n == "movsb"), "{names:?}");
+}
+
+/// A `double` copied through memory at m64 stopped at emit with
+/// `Unmapped("MOVSDrm_alt")` (the pin's name for the scalar load), and once
+/// mapped came out as 10-byte x87 cells. It is a `movsd` load and store of
+/// 8-byte cells, `float` 4.
+#[test]
+fn an_m64_scalar_float_copy_is_movsd_and_movss_of_their_own_width() {
+    for (ty, name, bytes) in [("double", "movsd_x", 8), ("float", "movss", 4)] {
+        let text = format!(
+            "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define void @f(ptr %p, ptr %q) {{
+entry:
+  %v = load {ty}, ptr %p
+  store {ty} %v, ptr %q
+  ret void
+}}
+"
+        );
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+        let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+        let insns = done.body.insns();
+        let moves: Vec<_> = insns
+            .iter()
+            .filter_map(|i| i.what.as_ref())
+            .filter(|w| w.name.as_deref() == Some(name))
+            .map(|w| {
+                let width = |loc: &crate::model::ir::Loc| match loc {
+                    crate::model::ir::Loc::Mem(m) => m.width,
+                    crate::model::ir::Loc::Held(h) => h.width,
+                    _ => 0,
+                };
+                (width(&w.dests[0]), width(&w.sources[0]))
+            })
+            .collect();
+        assert_eq!(moves, [(bytes, bytes), (bytes, bytes)], "{ty}");
+    }
+}
+
+/// A zero `double` at m64 stopped at `Unmapped("FsFLD0SD")`, and a select of
+/// two doubles at `Unmapped("CMOV_FR64")`: the first is `xorps r, r`, the
+/// second the pin's branch and phi like `CMOV_GR32`.
+#[test]
+fn an_m64_zero_double_is_xorps_and_a_double_select_is_a_diamond() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define double @z() {
+entry:
+  ret double 0.0
+}
+define double @s(i32 %c, double %a, double %b) {
+entry:
+  %t = icmp ne i32 %c, 0
+  %r = select i1 %t, double %a, double %b
+  ret double %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let zero = selected(&module, "z", &llrm_x86_m64::M64, cpu, &[]).expect("a zero double is selected");
+    let names: Vec<_> = zero.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+    assert!(names.iter().any(|n| &**n == "xorps"), "{names:?}");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let select = selected(&module, "s", &llrm_x86_m64::M64, cpu, &[]).expect("a double select is selected");
+    assert!(select.body.blocks.len() >= 3, "a branch and a sink: {} blocks", select.body.blocks.len());
+}

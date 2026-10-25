@@ -42,13 +42,14 @@ fn common_integer_opcodes_are_their_forms() {
 
 /// `IMUL32rri` (two untied sources) is the three-operand form, not the tied
 /// two-operand one: the tie is in the form, so the letters count differently.
-/// `ADD32ri_DB` (an add of disjoint bits) is the form of `add`. It was
-/// unmapped, and 5 m32 programs stopped at `Unmapped("ADD32ri_DB")`.
+/// `ADD32ri_DB` (an add of disjoint bits) is the form of `or`, as the pin
+/// prints it. It was unmapped, and 5 m32 programs stopped at
+/// `Unmapped("ADD32ri_DB")`; then it was an `add`, where the pin emits `orl`.
 #[test]
-fn an_add_of_disjoint_bits_is_an_add() {
+fn an_add_of_disjoint_bits_is_an_or() {
     let map = map();
     for opcode in ["ADD32ri_DB", "ADD32rr_DB", "ADD16ri_DB", "ADD8rr_DB"] {
-        assert_eq!(form_name(&map, opcode), "add", "{opcode}");
+        assert_eq!(form_name(&map, opcode), "or", "{opcode}");
     }
 }
 
@@ -117,4 +118,48 @@ fn a_memory_operand_has_the_width_the_name_gives() {
             .map(|(name, _)| memory_bytes(name)),
         [Some(2), Some(1), Some(4), Some(4), Some(1), Some(2)]
     );
+}
+
+fn map64() -> OpcodeMap {
+    let target = llrm_x86_m64::M64;
+    OpcodeMap::new(llrm_instr::parse(&target.forms_text(), target.dialect()).expect("x86.instr parses"))
+}
+
+/// The pin names the scalar SSE instructions `ADDSDrr`, `MOVSDrm_alt`,
+/// `MOVSSmr`: the width is in the mnemonic (`SS` 32, `SD` 64), `_alt` marks the
+/// load that may be rematerialised, and `r` also names an xmm register. Every
+/// one stopped at `Unmapped("MOVSDrm_alt")` (the argument and constant loads),
+/// so no floating-point function got through emit at m64; `MOVSD` is the string
+/// copy in our table, the scalar move is `movsd_x`.
+#[test]
+fn the_pins_scalar_sse_opcodes_are_their_forms() {
+    let map = map64();
+    for (opcode, name) in [
+        ("ADDSDrr", "addsd"),
+        ("ADDSSrm", "addss"),
+        ("SUBSDrr", "subsd"),
+        ("MULSSrr", "mulss"),
+        ("DIVSDrm", "divsd"),
+        ("MINSDrr", "minsd"),
+        ("MAXSSrr", "maxss"),
+        ("SQRTSDr", "sqrtsd"),
+        ("MOVSDrm_alt", "movsd_x"),
+        ("MOVSDrm", "movsd_x"),
+        ("MOVSDrr", "movsd_x"),
+        ("MOVSDmr", "movsd_x"),
+        ("MOVSSrm_alt", "movss"),
+        ("MOVSSmr", "movss"),
+        ("UCOMISDrr", "ucomisd"),
+        ("UCOMISSrm", "ucomiss"),
+        ("CVTSS2SDrr", "cvtss2sd"),
+        ("CVTSD2SSrm", "cvtsd2ss"),
+        ("CVTSI2SDrr", "cvtsi2sd"),
+        ("XORPSrr", "xorps"),
+        ("ANDPSrm", "andps"),
+        ("ANDNPSrr", "andnps"),
+        ("ORPSrr", "orps"),
+        ("MOVAPSrr", "movaps"),
+    ] {
+        assert_eq!(form_name(&map, opcode), name, "{opcode}");
+    }
 }

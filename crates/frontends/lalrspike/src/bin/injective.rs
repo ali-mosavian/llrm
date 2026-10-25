@@ -42,7 +42,7 @@ fn main() {
         _ => Dialect::VbDos,
     };
     let catalog = std::fs::read_to_string(&args[1]).unwrap();
-    let accepted: Option<std::collections::HashSet<String>> = args
+    let accepted: Option<std::collections::BTreeSet<String>> = args
         .get(2)
         .map(
             |path| {
@@ -106,7 +106,7 @@ mod serde_json_lite {
         pub fn accepted(
             &self,
             family: &str,
-        ) -> std::collections::HashSet<String> {
+        ) -> std::collections::BTreeSet<String> {
             self.0
                 .iter()
                 .filter(|(_, f)| f.iter().any(|(name, ok)| name == family && *ok))
