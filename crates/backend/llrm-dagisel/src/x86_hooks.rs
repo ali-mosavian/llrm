@@ -396,6 +396,7 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
         let operands = match complex_function(self.options.cpu, pattern) {
             "selectAddr" => matcher.select_addr_of(parent, value),
             "selectLEAAddr" => matcher.select_lea_addr(value),
+            "selectLEA64_Addr" => matcher.select_lea64_addr(value),
             "selectRelocImm" => {
                 // `Wrapper sym` as an immediate; the truncated form needs
                 // absolute symbols (SD36).

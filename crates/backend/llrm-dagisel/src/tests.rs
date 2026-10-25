@@ -1831,6 +1831,110 @@ mod x64_table {
         assert_eq!(selected_names(mvt::i64), ["ADD64rr"]);
     }
 
+    /// `base + index*4 + 8` at 64 bits: with only the 32-bit address arms it
+    /// matched no scale and came out as adds, not one `LEA64r` (D64-1).
+    #[test]
+    fn base_plus_scaled_index_plus_disp_is_lea64r() {
+        let mut dag = TestDag::new();
+        let (base, index) = (dag.input(1, mvt::i64), dag.input(2, mvt::i64));
+        let two = dag.make_constant(2, mvt::i8);
+        let scaled = SDValue::new(dag.node(isd::SHL, &[mvt::i64], &[index, two]), 0);
+        let sum = SDValue::new(dag.node(isd::ADD, &[mvt::i64], &[base, scaled]), 0);
+        let eight = dag.make_constant(8, mvt::i64);
+        let address = dag.node(isd::ADD, &[mvt::i64], &[sum, eight]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::X64,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat64,
+        });
+        assert_eq!(select_node(&Selector::new(x64::TABLE), &mut dag, &mut hooks, address), Outcome::Selected);
+        let names: Vec<_> = dag.nodes.iter().filter_map(|n| n.machine).map(names).collect();
+        assert_eq!(names, ["LEA64r"]);
+    }
+
+    /// In `Flat64` the shift was left as the index register (scale 1) because
+    /// the scale arms only ran for `Flat32` (D64-1).
+    #[test]
+    fn a_shifted_index_is_scaled_at_64_bits() {
+        use crate::x86_addr::{AddrMode, Matcher};
+        let mut dag = TestDag::new();
+        let (base, index) = (dag.input(1, mvt::i64), dag.input(2, mvt::i64));
+        let two = dag.make_constant(2, mvt::i8);
+        let scaled = SDValue::new(dag.node(isd::SHL, &[mvt::i64], &[index, two]), 0);
+        let address = SDValue::new(dag.node(isd::ADD, &[mvt::i64], &[base, scaled]), 0);
+        let ops =
+            Matcher { dag: &mut dag, pointer_type: mvt::i64, mode: AddrMode::Flat64 }.select_addr(address).unwrap();
+        assert_eq!(dag.nodes[ops.scale.node as usize].constant, Some(4));
+    }
+
+    fn rip_matcher(dag: &mut TestDag) -> crate::x86_addr::Matcher<'_, TestDag> {
+        crate::x86_addr::Matcher { dag, pointer_type: mvt::i64, mode: crate::x86_addr::AddrMode::Flat64 }
+    }
+
+    /// A `WrapperRIP` global had no arm: it stayed a register operand, not
+    /// `[rip + sym + 12]` (D64-1).
+    #[test]
+    fn a_rip_wrapper_plus_a_constant_is_rip_based() {
+        let mut dag = TestDag::new();
+        let global = dag.wrapped_global_rip(7, 0, mvt::i64);
+        let twelve = dag.make_constant(12, mvt::i64);
+        let address = SDValue::new(dag.node(isd::ADD, &[mvt::i64], &[global, twelve]), 0);
+        let mut am = crate::x86_addr::AddressMode::default();
+
+        assert!(!rip_matcher(&mut dag).match_address(address, &mut am));
+
+        assert_eq!(am.disp, 12);
+        assert_eq!(dag.nodes[am.base_reg.unwrap().node as usize].register, Some(crate::generated::ids::x86::RIP));
+        assert!(am.index_reg.is_none());
+    }
+
+    /// `[rip + sym]` takes no register: adding `x` must not fold into it.
+    #[test]
+    fn a_register_is_not_folded_into_a_rip_address() {
+        let mut dag = TestDag::new();
+        let global = dag.wrapped_global_rip(7, 0, mvt::i64);
+        let x = dag.input(1, mvt::i64);
+        let address = SDValue::new(dag.node(isd::ADD, &[mvt::i64], &[global, x]), 0);
+        let mut am = crate::x86_addr::AddressMode::default();
+
+        assert!(!rip_matcher(&mut dag).match_address(address, &mut am));
+
+        assert!(am.symbol.is_none(), "the symbol stays in its register, not in a rip address");
+        let base = am.base_reg.unwrap();
+        assert_ne!(dag.nodes[base.node as usize].register, Some(crate::generated::ids::x86::RIP));
+    }
+
+    /// An `i32` address sum at 64 bits is `LEA64_32r`; there is no `LEA32r` in
+    /// 64-bit mode (D64-1).
+    #[test]
+    fn an_i32_address_sum_is_lea64_32r() {
+        let mut dag = TestDag::new();
+        let (base, index) = (dag.input(1, mvt::i32), dag.input(2, mvt::i32));
+        let two = dag.make_constant(2, mvt::i8);
+        let scaled = SDValue::new(dag.node(isd::SHL, &[mvt::i32], &[index, two]), 0);
+        let sum = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[base, scaled]), 0);
+        let eight = dag.make_constant(8, mvt::i32);
+        let address = dag.node(isd::ADD, &[mvt::i32], &[sum, eight]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::X64,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat64,
+        });
+        assert_eq!(select_node(&Selector::new(x64::TABLE), &mut dag, &mut hooks, address), Outcome::Selected);
+        let names: Vec<_> = dag.nodes.iter().filter_map(|n| n.machine).map(names).collect();
+        assert_eq!(
+            names,
+            ["LEA64_32r", "IMPLICIT_DEF", "INSERT_SUBREG", "IMPLICIT_DEF", "INSERT_SUBREG"],
+            "base and index widened"
+        );
+    }
+
     #[test]
     fn an_i32_add_is_still_add32rr() {
         assert_eq!(selected_names(mvt::i32), ["ADD32rr"]);

@@ -26,6 +26,7 @@ pub mod guarantee;
 mod guarantee_tests;
 pub mod known;
 pub mod nonzero;
+pub mod objectsize;
 pub mod pattern;
 pub mod power2;
 mod query;
@@ -37,6 +38,8 @@ pub mod underlying;
 
 #[cfg(test)]
 mod nonzero_tests;
+#[cfg(test)]
+mod objectsize_tests;
 #[cfg(test)]
 mod power2_tests;
 
