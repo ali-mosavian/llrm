@@ -157,12 +157,12 @@ def compare(shadow: str, ir: Path, program: str) -> list[tuple[str, str, str]]:
     return rows_of(program, funcs, refused, pin_opcodes(theirs.stdout), ir.read_text())
 
 
-def one(llrm_c: str, shadow: str, source: Path, m16: bool = False) -> list[tuple[str, str, str]]:
+def one(llrm_c: str, shadow: str, source: Path, m16: bool = False, level: str = "-O2") -> list[tuple[str, str, str]]:
     """[(program, function, bucket)]."""
     with tempfile.TemporaryDirectory() as tmp:
         dump = Path(tmp) / "d"
         dump.mkdir()
-        flags = M16_FLAGS if m16 else FLAGS
+        flags = [*(M16_FLAGS if m16 else FLAGS)[:-1], level]
         done = subprocess.run([llrm_c, *flags, "--dump", str(dump), "-S", "-o", str(Path(tmp) / "o.s"), str(source)], capture_output=True, text=True, timeout=600)
         ir = last_ir(dump)
         if done.returncode != 0 or ir is None:
@@ -178,7 +178,7 @@ def one(llrm_c: str, shadow: str, source: Path, m16: bool = False) -> list[tuple
         funcs, refused = ours(mine.stdout)
         if m16:
             return rows_of(source.stem, funcs, refused, None, ir.read_text())
-        theirs = pin.llc(["-O2", "-stop-after=finalize-isel", "-o", "-"], ir.read_text(), pin.target("m32"))
+        theirs = pin.llc(["-O2", "-stop-after=finalize-isel", "-o", "-"], ir.read_text(), pin.target("m32", optsize=level == "-Os"))
         if theirs.returncode != 0:
             return whole_program(source.stem, ir.read_text(), "pin llc failed: " + (theirs.stderr.strip().splitlines() or ["?"])[-1][:60])
         pinned = pin_opcodes(theirs.stdout)
@@ -194,6 +194,7 @@ def main() -> int:
     parser.add_argument("--ir", default="", help="compare one IR file the pin and the example both read (no llrm-c)")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "6")))
     parser.add_argument("--out", default="")
+    parser.add_argument("--level", default="-O2", choices=["-O2", "-Os"])
     parser.add_argument("--m16", action="store_true", help="real mode: no pin; a function that builds and selects is `selects`")
     args = parser.parse_args()
     if args.ir:
@@ -206,7 +207,7 @@ def main() -> int:
         want = set(args.programs.split(","))
         sources = [s for s in sources if s.stem in want]
     with ThreadPoolExecutor(args.jobs) as pool:
-        rows = [row for part in pool.map(lambda s: one(args.llrm_c, args.shadow, s, args.m16), sources) for row in part]
+        rows = [row for part in pool.map(lambda s: one(args.llrm_c, args.shadow, s, args.m16, args.level), sources) for row in part]
     buckets = Counter(bucket for _, _, bucket in rows)
     good = "selects" if args.m16 else "equal"
     print(f"{buckets[good]} {good} of {len(rows)} defined functions in {len(sources)} programs")
