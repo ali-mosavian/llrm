@@ -228,7 +228,7 @@ fn plan_loop(
     };
     let safe_to_expand = |se: &mut ScalarEvolution, s: Scev| rewriter.is_safe_to_expand(&cx, se, s);
     let mut lsr = Collection::new(&cx, tti, header, &safe_to_expand, false, iv_inc_insert_pos);
-    let reserved = reserved_registers(context, layout, function, se, &cx, header);
+    let reserved = reserved_registers(context, layout, function, se, &cx, header, &lp.get_blocks().iter().copied().collect::<Vec<_>>());
     lsr.reserved_registers = reserved;
     lsr.chain_uses = chains.inc_set.clone();
     lsr.collect_interesting_types_and_factors(se, &users);
@@ -253,15 +253,16 @@ fn plan_loop(
     planned(Some(plan))
 }
 
-/// DEVIATE P1 (not LLVM's): the general registers the loop's own state holds
-/// across it, in words: what is live into the header but a frame address
-/// (the loop's inputs and the enclosing loops' state live through it), and
-/// the header phis that are no recurrence of this loop. `Cost` rates a
-/// formula's registers against the target's less these (LLVM's counts the
-/// formulae's alone): with 6 registers a nest holding 5 words takes no more
-/// induction variables, where the pin takes them and the allocator spills
-/// the state through the frame (m16 -Os sieve.c: 171 bytes against 122 with
-/// no LSR). Words are the pointer width, so an `i32` at m16 is two.
+/// DEVIATE P1 (not LLVM's): the general registers the loop's own work holds
+/// besides its induction variables, in words: the most values live at once
+/// anywhere in the loop (frame addresses and the loop's recurrences apart),
+/// which is what the allocator has to fit the formulae's registers beside.
+/// `Cost` rates a formula's registers against the target's less these (LLVM's
+/// counts the formulae's alone), so with 6 registers a loop whose state and
+/// temporaries hold 4 takes the induction variables that fit in the other
+/// two, where the pin takes them all and the allocator spills the state
+/// through the frame (m16 -Os sieve.c: 171 bytes against 122 with no LSR).
+/// Words are the pointer width, so an `i32` at m16 is two.
 fn reserved_registers(
     context: &Context,
     layout: &DataLayout,
@@ -269,6 +270,7 @@ fn reserved_registers(
     se: &mut ScalarEvolution,
     cx: &llrm_analysis::scev::Cx,
     header: BlockId,
+    blocks: &[BlockId],
 ) -> u32 {
     let word = layout.pointer(0).index_bits.max(1);
     let words = |bits: u32| bits.div_ceil(word);
@@ -278,23 +280,12 @@ fn reserved_registers(
     };
     let in_frame = |value: llrm_mir::module::ValueId| match function.value(value).def {
         llrm_mir::module::ValueDef::Instruction(def) => {
-            matches!(
-                function.instruction(def).opcode,
-                llrm_mir::opcode::Opcode::Alloca { .. }
-            )
+            matches!(function.instruction(def).opcode, llrm_mir::opcode::Opcode::Alloca { .. })
         }
         _ => false,
     };
-    let found = llrm_analysis::liveness::live(function);
-    let through: u32 = found
-        .live_in
-        .get(&llrm_analysis::cfg::id(header))
-        .into_iter()
-        .flat_map(|set| set.iter())
-        .filter(|&value| !in_frame(value))
-        .map(|value| words(bits_of(value)))
-        .sum();
-    let mut state = 0;
+    // The loop's own recurrences: the formulae count them.
+    let mut recurrences = llrm_mir::dense::IdSet::new();
     for inst in function.iter_block(header).collect::<Vec<_>>() {
         if function.instruction(inst).opcode != llrm_mir::opcode::Opcode::Phi {
             continue;
@@ -305,14 +296,27 @@ fn reserved_registers(
             llrm_mir::types::Type::Int(_) | llrm_mir::types::Type::Pointer(_)
         );
         let recurrence = scevable && {
-            let s = se.get_scev(cx, llrm_mir::module::Operand::Value(value));
-            se.addrec_header(s) == Some(header)
+            let expr = se.get_scev(cx, llrm_mir::module::Operand::Value(value));
+            se.addrec_header(expr) == Some(header)
         };
-        if !recurrence {
-            state += words(bits_of(value));
+        if recurrence {
+            recurrences.insert(value);
         }
     }
-    through + state
+    let found = llrm_analysis::liveness::live(function);
+    let mut peak = 0;
+    for &block in blocks {
+        for point in llrm_analysis::liveness::live_points(function, &found, block) {
+            let held: u32 = point
+                .before
+                .iter()
+                .filter(|&value| !in_frame(value) && !recurrences.contains(&value))
+                .map(|value| words(bits_of(value)))
+                .sum();
+            peak = peak.max(held);
+        }
+    }
+    peak
 }
 
 /// DEVIATE P1 (second part): the plan takes the add recurrences of enclosing
