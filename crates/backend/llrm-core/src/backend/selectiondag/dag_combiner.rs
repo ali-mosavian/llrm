@@ -266,7 +266,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => {
                 self.fold_extend_of_cast(node).or_else(|| self.visit_extend(node))
             }
-            ISD::Truncate => self.visit_truncate(node),
+            ISD::Truncate => self.visit_truncate(node).or_else(|| self.simplify_demanded(node)),
             _ => None,
         }
     }
@@ -585,6 +585,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if self.dag.value_type(n0) == vt {
             return Some(n0);
         }
+        if self.dag.constant(n0).is_some() || self.dag.is_undef(n0) {
+            let folded = self.dag.get_node(ISD::Truncate, vt, &[n0]);
+            return (folded != node).then_some(folded);
+        }
         match self.dag.opcode(n0) {
             ISD::Truncate => Some(self.dag.get_node(ISD::Truncate, vt, &[self.dag.operand(n0, 0)])),
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => {
@@ -612,6 +616,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         node: SDValue,
     ) -> Option<SDValue> {
         let (op, vt, n0) = (self.dag.opcode(node), self.dag.value_type(node), self.dag.operand(node, 0));
+        // An operand a fold made a constant (or undef) since the node was
+        // built: `getNode` folds the cast.
+        if self.dag.constant(n0).is_some() || self.dag.is_undef(n0) {
+            let folded = self.dag.get_node(op, vt, &[n0]);
+            return (folded != node).then_some(folded);
+        }
         let inner = self.dag.opcode(n0);
         if !matches!(
             inner,
@@ -986,6 +996,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
         let vt = self.dag.value_type(node);
         let width = u128::from(vt.size_in_bits());
+        // `getNode`'s `simplifyShift`, for an operand a fold made undef since
+        // the shift was built: `undef << x` is 0.
+        if self.dag.is_undef(n0) {
+            return Some(self.dag.get_constant(0, vt));
+        }
         if op != ISD::Sra {
             let all = super::fold::mask(vt.size_in_bits());
             let known = super::known_bits::known_bits(self.dag, node);
