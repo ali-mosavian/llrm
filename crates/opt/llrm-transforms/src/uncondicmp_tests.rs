@@ -63,10 +63,10 @@ b0:
     i16 2, label %switch.edge
   ]
 
-switch.edge:
+c:
   br label %e
 
-c:
+switch.edge:
   br label %e
 
 d:

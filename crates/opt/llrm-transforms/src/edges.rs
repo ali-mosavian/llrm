@@ -205,6 +205,23 @@ pub fn split_critical_edge(
     Some(bridge)
 }
 
+/// Where `SplitEdge` lays the block it makes (BasicBlockUtils.cpp:672): a
+/// critical edge's after `from`, a successor with one predecessor is split
+/// before itself, else `from` is split at the bottom, after itself. `bridge`
+/// is created and not placed; ask before the edge is retargeted.
+pub fn insert_edge_split(
+    function: &mut Function,
+    bridge: BlockId,
+    from: BlockId,
+    to: BlockId,
+) {
+    if single_predecessor(function, to).is_some() && !is_critical_edge(function, from, to) {
+        function.insert_block_before(bridge, to).expect("a new block");
+    } else {
+        function.insert_block(bridge, Some(from)).expect("a new block");
+    }
+}
+
 /// `SplitEdge(from, to)`
 /// ([BasicBlockUtils.cpp:672](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp#L672)):
 /// a new block on the edges `from` has to `to`, which `to`'s phis read it for.
@@ -216,14 +233,7 @@ pub fn split_edge(
     let term = function.terminator(from).expect("a terminated block");
     let void = function.instruction(term).ty;
     let bridge = function.create_block(None);
-    // `SplitEdge`'s three cases (BasicBlockUtils.cpp:672): a critical edge
-    // after `from`, a successor with one predecessor split before itself, else
-    // `from` split at the bottom, after itself.
-    if single_predecessor(function, to).is_some() && !is_critical_edge(function, from, to) {
-        function.insert_block_before(bridge, to).expect("a new block");
-    } else {
-        function.insert_block(bridge, Some(from)).expect("a new block");
-    }
+    insert_edge_split(function, bridge, from, to);
     let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(to)], Flags::default(), None);
     function.insert(jump, Position::End(bridge)).expect("a placed block");
     retarget(function, term, to, bridge);
