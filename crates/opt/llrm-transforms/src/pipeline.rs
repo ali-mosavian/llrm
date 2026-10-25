@@ -865,7 +865,10 @@ pub(crate) fn llvm_order(
             list.extend([
                 slot(
                     "loopidiom@737",
-                    Box::new(crate::loopidiom::pass::LoopIdiom::with_routines(applied.options.library.clone())),
+                    Box::new(crate::loopidiom::pass::LoopIdiom {
+                        size: applied.options.prefers_size(),
+                        ..crate::loopidiom::pass::LoopIdiom::with_routines(applied.options.library.clone())
+                    }),
                 ),
                 slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
                 slot("indvars@738", Box::new(indvars::IndVars { lftr: indvars::lftr_default() })),
