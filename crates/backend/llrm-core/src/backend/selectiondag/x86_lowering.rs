@@ -128,7 +128,12 @@ impl CombineHooks for X86Lowering {
         &self,
         op: ISD,
     ) -> bool {
-        op == ISD::Mul || op == ISD::Sub || op == x86isd::CMOV || op == x86isd::SETCC || op == x86isd::BRCOND
+        op == ISD::Mul
+            || op == ISD::Add
+            || op == ISD::Sub
+            || op == x86isd::CMOV
+            || op == x86isd::SETCC
+            || op == x86isd::BRCOND
     }
 
     fn perform_dag_combine(
@@ -139,6 +144,7 @@ impl CombineHooks for X86Lowering {
     ) -> Option<SDValue> {
         match dag.opcode(node) {
             ISD::Mul => combine_mul(dag, node, level),
+            ISD::Add => combine_add(dag, node),
             ISD::Sub => combine_sub(dag, node),
             x86isd::CMOV => combine_cmov(dag, node),
             x86isd::SETCC => combine_setcc(dag, node),
@@ -928,6 +934,30 @@ fn combine_brcond(
     let code = cond_code(dag, code);
     let (chain, dest) = (dag.operand(node, 0), dag.operand(node, 1));
     Some(dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags]))
+}
+
+/// `combineAdd`, the hidden LEA pattern: `(add (sub (shl x, c), y), z)` with
+/// `c < 4` is `(sub (add (shl x, c), z), y)`, so the `shl` and the `add` are
+/// one `lea` (`y * 7 + z` is `lea z + y*8; sub y`). (The vector, `cmov`,
+/// `psadbw` and `sbb` folds are not translated.)
+fn combine_add(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    if vt != EVT::I32 {
+        return None;
+    }
+    let (difference, z) = (dag.operand(node, 0), dag.operand(node, 1));
+    if dag.opcode(difference) != ISD::Sub || dag.use_count(difference.node) != 1 || dag.constant(z).is_some() {
+        return None;
+    }
+    let (shift, y) = (dag.operand(difference, 0), dag.operand(difference, 1));
+    if dag.opcode(shift) != ISD::Shl || !dag.constant(dag.operand(shift, 1)).is_some_and(|amount| amount < 4) {
+        return None;
+    }
+    let sum = dag.get_node(ISD::Add, vt, &[shift, z]);
+    Some(dag.get_node(ISD::Sub, vt, &[sum, y]))
 }
 
 /// `combineSub` through `combineAddOrSubToADCOrSBB`, the zero case: `0 - (and
