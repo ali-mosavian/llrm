@@ -213,6 +213,15 @@ pub fn tails_merged_after_exits(
     body: LirBody,
     size: bool,
 ) -> Result<LirBody, masm::Unprintable> {
+    // Only the blocks that return gained something to share.
+    let returns = body
+        .blocks
+        .iter()
+        .filter(|block| block.insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Return)))
+        .count();
+    if returns < 2 {
+        return Ok(body);
+    }
     let (merged, any) = tails_merged(body.clone(), size)?;
     Ok(if any { inverted(&merged, size) } else { body })
 }
