@@ -35,12 +35,9 @@ fn build_and_run(name: &str, sources: &[&str], defines: &[&str], arguments: &[&s
     printed
 }
 
-const DEVICE: [&str; 4] = [
-    "runtime/qb/dev/headless/headless.c",
-    "runtime/qb/dev/host/video.c",
-    "runtime/qb/dev/host/vgadata.c",
-    "runtime/qb/dev/host/tick.c",
-];
+#[path = "qbhost/lists.rs"]
+mod lists;
+use lists::{DEVICE, RUNTIME};
 
 #[test]
 fn the_headless_device_does_what_the_interface_says() {
@@ -65,44 +62,7 @@ fn the_headless_graphics_pass_the_oracle_the_dos_device_passes() {
 fn the_runtimes_statements_run_on_the_headless_device() {
     let mut sources = vec!["tests/qbhost/program_test.c", "tests/qbhost/hostmodule.c"];
     sources.extend(DEVICE);
-    sources.extend([
-        "runtime/qb/console.c",
-        "runtime/qb/cntext.c",
-        "runtime/qb/cngfx.c",
-        "runtime/qb/gfx.c",
-        "runtime/qb/gline.c",
-        "runtime/qb/gcirc.c",
-        "runtime/qb/gpaint.c",
-        "runtime/qb/gputget.c",
-        "runtime/qb/gdraw.c",
-        "runtime/qb/play.c",
-        "runtime/qb/inkey.c",
-        "runtime/qb/sleep.c",
-        "runtime/qb/timer.c",
-        "runtime/qb/datetime.c",
-        "runtime/qb/events.c",
-        "runtime/qb/screen.c",
-        "runtime/qb/varptr.c",
-        "runtime/qb/fout.c",
-        "runtime/qb/i8out.c",
-        "runtime/qb/bigint.c",
-        "runtime/qb/ifout.c",
-        "runtime/qb/fin.c",
-        "runtime/qb/rtinit.c",
-        "runtime/qb/rtterm.c",
-        "runtime/qb/error.c",
-        "runtime/qb/nhstutil.c",
-        "runtime/qb/stcore.c",
-        "runtime/qb/nheap.c",
-        "runtime/qb/strcase.c",
-        "runtime/qb/string.c",
-        "runtime/qb/posix/startup.c",
-        "runtime/qb/posix/block.c",
-        "runtime/qb/posix/ad.c",
-        "runtime/qb/posix/mathops.c",
-        "runtime/qb/posix/paintq.c",
-        "runtime/shared/posix/os.c",
-    ]);
+    sources.extend(RUNTIME);
     let printed = build_and_run("program_test", &sources, &["__cdecl="], &[]);
     assert_eq!(printed.trim(), "ok");
 }
