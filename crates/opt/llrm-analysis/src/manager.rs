@@ -1244,8 +1244,31 @@ impl Analysis for PlainAccesses {
     }
 }
 
+/// The body's accesses with each reference as it stands (`MemRef::of`), no
+/// provenance annotated: what MemorySSA's clients read once the AA stack
+/// answers every pair (`Annotated` and its inputs are not asked).
+pub struct BaseAccesses;
+
+impl Analysis for BaseAccesses {
+    type Result = Result<std::rc::Rc<memoryssa::Accesses>, String>;
+    const NAME: &'static str = "base-accesses";
+
+    fn run(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self::Result {
+        let writes_rc = analyses.get::<Writes>(context, layout, function);
+        let calls = Result::as_ref(&*writes_rc).map_err(String::clone)?;
+        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        let unit = Unit::within(context, layout, function, analyses.outer()).with_exposed(&exposed);
+        Ok(std::rc::Rc::new(memoryssa::Accesses::plain(&unit, calls)))
+    }
+}
+
 /// A body's translated MemorySSA. The accesses it is read with are the
-/// manager's `PlainAccesses`, fetched by the first client that asks
+/// manager's `BaseAccesses`, fetched by the first client that asks
 /// (`accesses`): building the graph needs none of their references.
 pub struct MssaGraph {
     pub mssa: crate::mssa::Mssa,
@@ -1273,8 +1296,8 @@ impl MssaGraph {
         if let Some(held) = self.accesses.get() {
             return Ok(std::rc::Rc::clone(held));
         }
-        let plain = analyses.get::<PlainAccesses>(context, layout, function);
-        let made = Result::as_ref(&*plain).map_err(String::clone)?;
+        let base = analyses.get::<BaseAccesses>(context, layout, function);
+        let made = Result::as_ref(&*base).map_err(String::clone)?;
         Ok(std::rc::Rc::clone(self.accesses.get_or_init(|| std::rc::Rc::clone(made))))
     }
 

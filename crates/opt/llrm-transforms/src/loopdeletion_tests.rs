@@ -185,6 +185,36 @@ out:
     assert!(after.contains("unreachable"), "the latch no longer jumps back: {after}");
 }
 
+/// `breakLoopBackedge` splits a switch latch's backedge with `SplitEdge`,
+/// which stands the block right after the latch (LoopUtils.cpp:800), not at
+/// the end of the function.
+#[test]
+fn the_block_that_replaces_the_backedge_stands_after_the_latch() {
+    let text = "@g = global i16 0
+
+define i16 @f(i16 %x, i16 %n) {
+b0:
+  br label %loop
+
+loop:
+  %i = phi i16 [ 0, %b0 ], [ %next, %latch ]
+  store i16 %x, ptr @g
+  %c = icmp eq i16 %i, 0
+  br i1 %c, label %out, label %latch
+
+latch:
+  %next = add i16 %i, 1
+  switch i16 %x, label %loop []
+
+out:
+  ret i16 %x
+}
+";
+    let after = deleted(text, INPUTS);
+    let (bridge, out) = (after.find("unreachable").expect("the bridge"), after.find("out:").expect("out"));
+    assert!(bridge < out, "the bridge stands before out: {after}");
+}
+
 /// `n` dead loops in a row cost entries in proportion to `n`.
 fn sequence(n: usize) -> String {
     let mut text = String::from("define i16 @f(i16 %x) mustprogress {\nb0:\n  br label %l0\n\n");
