@@ -109,7 +109,9 @@ entry:
     let module = llrm_mir::parse::module(text).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
-    let insns = done.body.insns();
+    // The compare is a `sub` until the pin's PeepholeOptimizer makes the `cmp`.
+    let body = crate::backend::peepholeopt::compared(&done.body);
+    let insns = body.insns();
     let names: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref().and_then(|w| w.name.as_deref())).collect();
     assert_eq!(names, ["", "cmp", "cmovb", ""]);
 }
