@@ -495,6 +495,7 @@ fn push(
 
 pub mod build;
 pub mod driver;
+pub mod hashrecognize;
 pub mod pass;
 pub mod process;
 pub mod strlen;
