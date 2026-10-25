@@ -1674,7 +1674,8 @@ impl<'a> Dse<'a> {
             // call fills before it reads (`initializes`).
             let mut locations: Vec<(Rc<Location>, bool)> =
                 self.killing_loc(killing_inst).into_iter().map(|loc| (loc, false)).collect();
-            let fills: Vec<llrm_analysis::memory::MemRef> = self.accesses.fills_in(self.aa.unit(), killing_inst).into_owned();
+            let fills: Vec<llrm_analysis::memory::MemRef> =
+                self.accesses.fills_in(self.aa.unit(), killing_inst).into_owned();
             locations.extend(fills.iter().map(|fill| (self.aa.location_for(fill, false), true)));
             for (killing_loc, init) in locations {
                 let (did, deleted_killing) = self.eliminate_dead_defs_of(killing_def, Rc::clone(&killing_loc), init);
