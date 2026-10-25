@@ -269,6 +269,27 @@ class SizeTests(unittest.TestCase):
         self.assertEqual((got["code_bytes"], got["data_bytes"], got["bss_bytes"]), (12, 0, 40))
 
 
+    def test_a_kernel_main_never_calls_because_its_value_folded_is_a_folded_row_not_an_error(self):
+        """parity/branch, loop and qlight (bas, bq16) printed the right value with BenchX never called (the call folded to a constant): 6 rows of the m16 -Os
+        table read "the region was never entered", an instrument fault listed beside real failures. The output decides: right is folded, wrong is an error."""
+        import tempfile
+        from unittest import mock
+
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        import test_sizes
+
+        with tempfile.TemporaryDirectory() as where:
+            obj, exe = Path(where) / "p.obj", Path(where) / "p.exe"
+            obj.write_bytes(test_sizes.object_with(12))
+            exe.write_bytes(b"MZ" + bytes(3000))
+            for printed, folded in ((b"1\n", True), (b"2\n", False)):
+                run = mock.Mock(error=bench.icount.NEVER_ENTERED, output=printed, region=None)
+                with mock.patch.object(bench.maps, "locate", return_value=0), mock.patch.object(bench.icount, "run", return_value=run):
+                    got = bench.measure(("p", exe, exe, "f", ["1"], obj))
+                self.assertEqual(bench.folded(got), folded)
+                self.assertEqual("error" in got, not folded)
+
+
 class OwnFramesTests(unittest.TestCase):
     def test_a_basic_source_is_measured_once_on_own_frames(self):
         """own frames are the default (fib 14.9 ms on the runtime's B$ENRA/B$EXSA against 5.0): `bas` is that build, with no second language for it."""
