@@ -718,6 +718,18 @@ impl Accesses {
         self.fills.get(&inst).map_or(&[], Vec::as_slice)
     }
 
+    /// [`fills`](Self::fills), asked of the unit where these accesses are lazy.
+    pub fn fills_in(
+        &self,
+        unit: &Unit,
+        inst: InstId,
+    ) -> Cow<'_, [MemRef]> {
+        if self.lazy {
+            return Cow::Owned(initialized_by(unit, inst));
+        }
+        Cow::Borrowed(self.fills(inst))
+    }
+
     /// What `inst` reads; `None` where it may read anything.
     pub fn reads(
         &self,
@@ -2063,40 +2075,50 @@ impl<'a> Writers<'a> {
 fn initialized_by_calls(unit: &Unit) -> IndexMap<InstId, Vec<MemRef>> {
     let mut out = IndexMap::default();
     for (_, inst) in unit.function.walk() {
-        let op = unit.function.instruction(inst);
-        let (Opcode::Call(info) | Opcode::Invoke(info)) = &op.opcode else { continue };
-        let callee = llrm_mir::memory::callee(unit.context, unit.function, inst)
-            .and_then(|one| unit.globals.get(one.0 as usize))
-            .and_then(GlobalValue::function);
-        let mut fills = Vec::new();
-        for (argument, &operand) in op.operands.iter().enumerate().take(info.argument_attrs.len()) {
-            let declared = callee.and_then(|one| one.parameter_attrs.get(argument)).map_or(&[][..], Vec::as_slice);
-            let byval = |attrs: &[llrm_mir::opcode::Attribute]| {
-                attrs
-                    .iter()
-                    .any(
-                        |one| matches!(
-                            one,
-                            llrm_mir::opcode::Attribute::Flag(name) | llrm_mir::opcode::Attribute::Type(name, _) if name == "byval"
-                        ),
-                    )
-            };
-            if byval(&info.argument_attrs[argument]) || byval(declared) {
-                continue;
-            }
-            for &(low, high) in llrm_mir::memory::initializes(&info.argument_attrs[argument])
-                .iter()
-                .chain(llrm_mir::memory::initializes(declared))
-            {
-                let Ok(width) = u32::try_from(high - low) else { continue };
-                let mut one = MemRef::at(unit, operand, width);
-                one.disp += low;
-                fills.push(one);
-            }
-        }
+        let fills = initialized_by(unit, inst);
         if !fills.is_empty() {
             out.insert(inst, fills);
         }
     }
     out
+}
+
+/// The bytes the call `inst` writes through an argument before it reads any
+/// (`initializes`); nothing for another instruction.
+fn initialized_by(
+    unit: &Unit,
+    inst: InstId,
+) -> Vec<MemRef> {
+    let op = unit.function.instruction(inst);
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &op.opcode else { return Vec::new() };
+    let callee = llrm_mir::memory::callee(unit.context, unit.function, inst)
+        .and_then(|one| unit.globals.get(one.0 as usize))
+        .and_then(GlobalValue::function);
+    let mut fills = Vec::new();
+    for (argument, &operand) in op.operands.iter().enumerate().take(info.argument_attrs.len()) {
+        let declared = callee.and_then(|one| one.parameter_attrs.get(argument)).map_or(&[][..], Vec::as_slice);
+        let byval = |attrs: &[llrm_mir::opcode::Attribute]| {
+            attrs
+                .iter()
+                .any(
+                    |one| matches!(
+                        one,
+                        llrm_mir::opcode::Attribute::Flag(name) | llrm_mir::opcode::Attribute::Type(name, _) if name == "byval"
+                    ),
+                )
+        };
+        if byval(&info.argument_attrs[argument]) || byval(declared) {
+            continue;
+        }
+        for &(low, high) in llrm_mir::memory::initializes(&info.argument_attrs[argument])
+            .iter()
+            .chain(llrm_mir::memory::initializes(declared))
+        {
+            let Ok(width) = u32::try_from(high - low) else { continue };
+            let mut one = MemRef::at(unit, operand, width);
+            one.disp += low;
+            fills.push(one);
+        }
+    }
+    fills
 }

@@ -1393,7 +1393,9 @@ impl Emitter<'_, '_> {
         self.accumulator
             .get(&register)
             .copied()
-            .ok_or_else(|| EmitError::Unsupported("a division operand not set by a glued CopyToReg".to_owned()))
+            .ok_or_else(
+                || EmitError::Unsupported(format!("a division operand ({register:?}) not set by a glued CopyToReg")),
+            )
     }
 
     /// The `SAHF` that copies the status word `fnstsw` took from the compare
@@ -2009,11 +2011,16 @@ impl Emitter<'_, '_> {
                 );
                 return Ok(Some(()));
             }
-            "REP_MOVSB_32" | "REP_MOVSW_32" | "REP_MOVSD_32" => {
+            "REP_MOVSB_32" | "REP_MOVSW_32" | "REP_MOVSD_32" | "REP_MOVSB_64" | "REP_MOVSW_64" | "REP_MOVSD_64"
+            | "REP_MOVSQ_64" => {
                 use llrm_lir::registers::RegId;
+                let wide = name.ends_with("_64");
+                let (counter, from, to) =
+                    if wide { (RegId::RCX, RegId::RSI, RegId::RDI) } else { (RegId::ECX, RegId::ESI, RegId::EDI) };
+                let size = if wide { 8 } else { 4 };
                 let (count, source, destination) =
-                    (self.accumulated(RegId::ECX)?, self.accumulated(RegId::ESI)?, self.accumulated(RegId::EDI)?);
-                let (source_after, destination_after, emptied) = (self.fresh(4), self.fresh(4), self.fresh(4));
+                    (self.accumulated(counter)?, self.accumulated(from)?, self.accumulated(to)?);
+                let (source_after, destination_after, emptied) = (self.fresh(size), self.fresh(size), self.fresh(size));
                 self.push(
                     Operation::Copy,
                     &name[4..9].to_ascii_lowercase(),
@@ -2027,16 +2034,21 @@ impl Emitter<'_, '_> {
                 );
                 return Ok(Some(()));
             }
-            "REP_STOSB_32" | "REP_STOSW_32" | "REP_STOSD_32" => {
+            "REP_STOSB_32" | "REP_STOSW_32" | "REP_STOSD_32" | "REP_STOSB_64" | "REP_STOSW_64" | "REP_STOSD_64"
+            | "REP_STOSQ_64" => {
                 use llrm_lir::registers::RegId;
-                let stored = match name.as_bytes()[8] {
-                    b'B' => RegId::AL,
-                    b'W' => RegId::AX,
-                    _ => RegId::EAX,
+                let wide = name.ends_with("_64");
+                let stored = match (name.as_bytes()[8], wide) {
+                    (b'B', _) => RegId::AL,
+                    (b'W', _) => RegId::AX,
+                    (b'D', _) => RegId::EAX,
+                    _ => RegId::RAX,
                 };
+                let (counter, to) = if wide { (RegId::RCX, RegId::RDI) } else { (RegId::ECX, RegId::EDI) };
+                let size = if wide { 8 } else { 4 };
                 let (value, count, destination) =
-                    (self.accumulated(stored)?, self.accumulated(RegId::ECX)?, self.accumulated(RegId::EDI)?);
-                let (destination_after, emptied) = (self.fresh(4), self.fresh(4));
+                    (self.accumulated(stored)?, self.accumulated(counter)?, self.accumulated(to)?);
+                let (destination_after, emptied) = (self.fresh(size), self.fresh(size));
                 self.push(
                     Operation::Fill,
                     &name[4..9].to_ascii_lowercase(),
@@ -2275,7 +2287,7 @@ impl Emitter<'_, '_> {
             _ => None,
         };
         if let Some(value) = constant {
-            let held = self.fresh(width);
+            let held = self.result_register(SDValue { node: n, res: 0 }, width);
             self.values.insert(SDValue { node: n, res: 0 }, held.value);
             self.push(
                 Operation::Move,
@@ -2314,7 +2326,7 @@ impl Emitter<'_, '_> {
                 Ok(Some(()))
             }
             "MOV32ImmSExti8" => {
-                let held = self.fresh(width);
+                let held = self.result_register(SDValue { node: n, res: 0 }, width);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
                 let source = self.operand(node.ops[0])?;
                 self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![source]);
@@ -2331,7 +2343,7 @@ impl Emitter<'_, '_> {
                 else {
                     return Err(EmitError::Unsupported("a conditional move of a non-register".to_owned()));
                 };
-                let held = self.fresh(width);
+                let held = self.result_register(SDValue { node: n, res: 0 }, width);
                 self.values.insert(result, held.value);
                 let name = format!("cmov{}", &jump[1..]);
                 self.push(
@@ -2352,7 +2364,7 @@ impl Emitter<'_, '_> {
                 };
                 let group = node.ops.get(1..6).ok_or_else(|| EmitError::Unsupported("a short cmov".to_owned()))?;
                 let cell = self.cell(group, u32::from(width))?;
-                let held = self.fresh(width);
+                let held = self.result_register(SDValue { node: n, res: 0 }, width);
                 self.values.insert(result, held.value);
                 let name = format!("cmov{}", &jump[1..]);
                 self.push(Operation::Select, &name, vec![Loc::Held(held)], vec![Loc::Held(when_false), Loc::Mem(cell)]);
@@ -2366,7 +2378,7 @@ impl Emitter<'_, '_> {
                     .ok_or_else(|| EmitError::Unsupported("a setcc without a condition".to_owned()))?
                     as usize;
                 let jump = CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
-                let held = self.fresh(1);
+                let held = self.result_register(SDValue { node: n, res: 0 }, 1);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
                 let name = format!("set{}", &jump[1..]);
                 self.push(Operation::Unary, &name, vec![Loc::Held(held)], Vec::new());
@@ -3071,6 +3083,16 @@ impl Emitter<'_, '_> {
                 },
             )?;
         Some(Held { value: self.vreg(reg), width })
+    }
+
+    /// The register a result is defined in: the one a `CopyToReg` of it names
+    /// (`exported_register`), else a fresh value.
+    fn result_register(
+        &mut self,
+        result: SDValue,
+        width: u32,
+    ) -> Held {
+        self.exported_register(result).unwrap_or_else(|| self.fresh(width))
     }
 
     fn new_value(&mut self) -> u32 {
