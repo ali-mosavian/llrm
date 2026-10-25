@@ -329,6 +329,7 @@ fn a_natural_log_exp_and_log2_are_the_x87_sequences() {
         ];
         assert_eq!(own.iter().find(|(v, _)| u32::from(*v) == code).map(|(_, n)| *n), Some(name), "{op:?}");
     }
+}
 
 /// `(x & 1) | (y << 1)`: no shared bit, so the `or` is an add and the address
 /// `x + y*2` is one `lea` (bench `x_popcount`: the pin has `LEA32r` x2 where we
