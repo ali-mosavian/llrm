@@ -101,12 +101,14 @@ struct Step {
     positions: Vec<usize>,
     uses: Vec<u32>,
     defs: Vec<u32>,
-    live_after: HashSet<u32>,
+    /// At most the stack's worth of values (a handful): a vector, cloned and
+    /// searched cheaper than a set.
+    live_after: Vec<u32>,
     /// A later member of a group of copies taken at its first.
     absorbed: bool,
     /// For each value read after this step before it is written, the step that
     /// reads it first.
-    next_read: IndexMap<u32, usize>,
+    next_read: Vec<(u32, usize)>,
 }
 
 impl Step {
@@ -117,6 +119,14 @@ impl Step {
         value: u32,
     ) -> bool {
         self.defs.contains(&value) || !self.live_after.contains(&value)
+    }
+
+    /// The step that reads `value` first after this one, before a write of it.
+    fn next_read_of(
+        &self,
+        value: u32,
+    ) -> Option<usize> {
+        self.next_read.iter().find(|(read, _)| *read == value).map(|(_, step)| *step)
     }
 
     /// `MO.setIsDead()`: a result nothing reads.
@@ -681,7 +691,7 @@ impl Fps<'_> {
         if op0 != op1 {
             return Ok(false);
         }
-        let (later, product) = (step.next_read.get(&op0), step.next_read.get(&dest));
+        let (later, product) = (step.next_read_of(op0), step.next_read_of(dest));
         if !matches!(
             (later, product),
             (Some(later), Some(product)) if later < product
@@ -871,9 +881,9 @@ fn steps(
                 positions: vec![position],
                 uses: Vec::new(),
                 defs: Vec::new(),
-                live_after: HashSet::default(),
+                live_after: Vec::new(),
                 absorbed: true,
-                next_read: IndexMap::default(),
+                next_read: Vec::new(),
             });
             continue;
         }
@@ -897,27 +907,25 @@ fn steps(
                 defs.extend(float(&what.dests));
             }
         }
-        found.push(Step {
-            positions,
-            uses,
-            defs,
-            live_after: HashSet::default(),
-            absorbed: false,
-            next_read: IndexMap::default(),
-        });
+        found.push(Step { positions, uses, defs, live_after: Vec::new(), absorbed: false, next_read: Vec::new() });
     }
-    let mut live: HashSet<u32> = live_out.iter().copied().collect();
-    let mut next_read: IndexMap<u32, usize> = IndexMap::default();
+    let mut live: Vec<u32> = live_out.iter().copied().collect();
+    let mut next_read: Vec<(u32, usize)> = Vec::new();
     for (index, step) in found.iter_mut().enumerate().rev() {
         step.live_after = live.clone();
         step.next_read = next_read.clone();
         for def in &step.defs {
-            live.remove(def);
-            next_read.shift_remove(def);
+            live.retain(|value| value != def);
+            next_read.retain(|(value, _)| value != def);
         }
-        live.extend(step.uses.iter().copied());
         for used in &step.uses {
-            next_read.insert(*used, index);
+            if !live.contains(used) {
+                live.push(*used);
+            }
+            match next_read.iter_mut().find(|(value, _)| value == used) {
+                Some(entry) => entry.1 = index,
+                None => next_read.push((*used, index)),
+            }
         }
     }
     found
