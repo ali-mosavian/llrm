@@ -173,3 +173,38 @@ name = "rmdir"
 doc = "Removes the empty directory `name`; 0 on success."
 args = [["name", "path"]]
 returns = "isize"
+
+[[op]]
+group = "files"
+name = "find_first"
+doc = "Starts a directory search: the first file named by `pattern` (wildcards allowed) whose attributes are among `attrs` (0 for ordinary files, 0x10 adds directories), its entry written to the 43-byte buffer `entry` (attribute at 21, size at 26 as 32 bits, name at 30, NUL-ended); 0 on success."
+args = [["pattern", "path"], ["attrs", "usize"], ["entry", "bytes_mut"]]
+returns = "isize"
+
+[[op]]
+group = "files"
+name = "find_next"
+doc = "The next file of the search `entry` holds, written to `entry`; 0 on success, an error code negated at the end."
+args = [["entry", "bytes_mut"]]
+returns = "isize"
+
+[[op]]
+group = "files"
+name = "free_bytes"
+doc = "The bytes free on `drive` (0 the current one, 1 for A:); an error code negated."
+args = [["drive", "usize"]]
+returns = "i32"
+
+[[op]]
+group = "files"
+name = "current_directory"
+doc = "The current directory of `drive` (0 the current one), without a drive or a leading separator, NUL-ended in at most 64 bytes of `data`; 0 on success."
+args = [["drive", "usize"], ["data", "bytes_mut"]]
+returns = "isize"
+
+[[op]]
+group = "files"
+name = "current_drive"
+doc = "The current drive, 0 for A:."
+args = []
+returns = "isize"

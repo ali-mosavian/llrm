@@ -1,4 +1,4 @@
-;; name: LL$OPEN, LL$CREATE, LL$READ, LL$SEEK, LL$WRITE_FILE, LL$CLOSE, LL$EXIT, LL$MORE, LL$CONSOLE_READ_KEY, LL$CONSOLE_KEY_READY, LL$DELETE, LL$RENAME, LL$MKDIR, LL$CHDIR, LL$RMDIR
+;; name: LL$OPEN, LL$CREATE, LL$READ, LL$SEEK, LL$WRITE_FILE, LL$CLOSE, LL$EXIT, LL$MORE, LL$CONSOLE_READ_KEY, LL$CONSOLE_KEY_READY, LL$DELETE, LL$RENAME, LL$MKDIR, LL$CHDIR, LL$RMDIR, LL$FIND_FIRST, LL$FIND_NEXT, LL$FREE_BYTES, LL$CURRENT_DIRECTORY, LL$CURRENT_DRIVE
 ;; desc: the OS layer shared by C, Nib and BASIC programs: x86-m32, DOS/32A
 ;;
 ;; args: the interface of runtime/shared/interface.toml, in cdecl32: arguments in dword slots from
@@ -52,6 +52,11 @@ public LL$RENAME
 public LL$MKDIR
 public LL$CHDIR
 public LL$RMDIR
+public LL$FIND_FIRST
+public LL$FIND_NEXT
+public LL$FREE_BYTES
+public LL$CURRENT_DIRECTORY
+public LL$CURRENT_DRIVE
 endif
 if OS_GROUPS and G_PROCESS
 public LL$COMMAND_LINE
@@ -453,6 +458,80 @@ file_name_failed:
                 neg     eax
                 ret
 LL$RMDIR        endp
+
+;;::::::::::::::
+;; LL$FIND_FIRST(pattern: *near char, attrs: usize, entry: *near mut u8) -> isize: the DTA is the caller's `entry`.
+LL$FIND_FIRST   proc
+                mov     edx, dword ptr [esp+12]
+                mov     ah, DOS_SET_DTA
+                int     DOS_INT
+                mov     ecx, dword ptr [esp+8]
+                mov     edx, dword ptr [esp+4]
+                mov     ah, DOS_FIND_FIRST
+                jmp     short file_name_call
+LL$FIND_FIRST   endp
+
+;;::::::::::::::
+;; LL$FIND_NEXT(entry: *near mut u8) -> isize
+LL$FIND_NEXT    proc
+                mov     edx, dword ptr [esp+4]
+                mov     ah, DOS_SET_DTA
+                int     DOS_INT
+                mov     ah, DOS_FIND_NEXT
+                jmp     short file_name_call
+LL$FIND_NEXT    endp
+
+;;::::::::::::::
+;; LL$FREE_BYTES(drive: usize) -> i32: sectors per cluster x free clusters x bytes per sector; AX = FFFFh from
+;; DOS is -15.
+LL$FREE_BYTES   proc
+                push    ebx
+                mov     edx, dword ptr [esp+8]
+                mov     ah, DOS_FREE_SPACE
+                int     DOS_INT
+                cmp     ax, 0FFFFh
+                je      short free_failed
+                movzx   eax, ax
+                movzx   ecx, cx
+                movzx   ebx, bx
+                imul    eax, ecx
+                imul    eax, ebx
+                pop     ebx
+                ret
+free_failed:
+                mov     eax, -15
+                pop     ebx
+                ret
+LL$FREE_BYTES   endp
+
+;;::::::::::::::
+;; LL$CURRENT_DIRECTORY(drive: usize, data: *near mut char) -> isize
+LL$CURRENT_DIRECTORY proc
+                push    esi
+                mov     edx, dword ptr [esp+8]
+                mov     esi, dword ptr [esp+12]
+                mov     ah, DOS_GET_DIRECTORY
+                int     DOS_INT
+                pop     esi
+                jc      short directory_failed
+                xor     eax, eax
+                ret
+directory_failed:
+                movzx   eax, ax
+                neg     eax
+                ret
+LL$CURRENT_DIRECTORY endp
+
+;;::::::::::::::
+;; LL$CURRENT_DRIVE() -> isize
+LL$CURRENT_DRIVE proc
+                mov     ah, DOS_GET_DRIVE
+                int     DOS_INT
+                movzx   eax, al
+                ret
+LL$CURRENT_DRIVE endp
+
+
 endif
 
 end

@@ -3946,6 +3946,16 @@ impl Compiler {
                         let new = self.string_descriptor(new)?;
                         self.emit_runtime_call("B$NAME", Vec::new(), vec![old, new]);
                     }
+                    "FILES" => {
+                        if arguments.len() > 1 {
+                            return self.fail("FILES takes one file pattern, as in `FILES \"*.BAS\"`");
+                        }
+                        // BC passes the pattern's descriptor, an empty string's
+                        // for a bare FILES.
+                        let empty = Expr::Literal(Literal::String(String::new()), Span::default());
+                        let pattern = self.string_descriptor(arguments.first().unwrap_or(&empty))?;
+                        self.emit_runtime_call("B$FILS", Vec::new(), vec![pattern]);
+                    }
                     "BEEP" => {
                         if !arguments.is_empty() {
                             return self.fail("BEEP takes no arguments");

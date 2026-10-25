@@ -1,4 +1,4 @@
-;; name: LL$OPEN, LL$CREATE, LL$READ, LL$SEEK, LL$WRITE_FILE, LL$CLOSE, LL$EXIT, LL$MORE, LL$BLOCK_RESIZE, LL$VECTOR, LL$SET_VECTOR, LL$CHAIN, LL$RESTORE_VECTORS, LL$CONSOLE_READ_KEY, LL$CONSOLE_KEY_READY, LL$COMMAND_LINE, LL$ENVIRONMENT, LL$DELETE, LL$RENAME, LL$MKDIR, LL$CHDIR, LL$RMDIR
+;; name: LL$OPEN, LL$CREATE, LL$READ, LL$SEEK, LL$WRITE_FILE, LL$CLOSE, LL$EXIT, LL$MORE, LL$BLOCK_RESIZE, LL$VECTOR, LL$SET_VECTOR, LL$CHAIN, LL$RESTORE_VECTORS, LL$CONSOLE_READ_KEY, LL$CONSOLE_KEY_READY, LL$COMMAND_LINE, LL$ENVIRONMENT, LL$DELETE, LL$RENAME, LL$MKDIR, LL$CHDIR, LL$RMDIR, LL$FIND_FIRST, LL$FIND_NEXT, LL$FREE_BYTES, LL$CURRENT_DIRECTORY, LL$CURRENT_DRIVE
 ;; desc: the OS layer shared by C, Nib and BASIC programs: x86-m16, real-mode DOS
 ;;
 ;; args: the interface of runtime/shared/interface.toml, in cdecl16: arguments in word slots from [bp+6],
@@ -45,6 +45,11 @@ public LL$RENAME
 public LL$MKDIR
 public LL$CHDIR
 public LL$RMDIR
+public LL$FIND_FIRST
+public LL$FIND_NEXT
+public LL$FREE_BYTES
+public LL$CURRENT_DIRECTORY
+public LL$CURRENT_DRIVE
 endif
 if OS_GROUPS and G_PROCESS
 public LL$COMMAND_LINE
@@ -609,6 +614,99 @@ file_name_done:
                 pop     bp
                 retf
 LL$RMDIR        endp
+
+;;::::::::::::::
+;; LL$FIND_FIRST(pattern: *far char, attrs: u16, entry: *far mut u8) -> isize: the DTA is the caller's `entry`.
+LL$FIND_FIRST   proc    far
+                push    bp
+                mov     bp, sp
+                push    ds
+                lds     dx, [bp+12]
+                mov     ah, DOS_SET_DTA
+                int     DOS_INT
+                mov     cx, [bp+10]
+                lds     dx, [bp+6]
+                mov     ah, DOS_FIND_FIRST
+                jmp     short file_name_call
+LL$FIND_FIRST   endp
+
+;;::::::::::::::
+;; LL$FIND_NEXT(entry: *far mut u8) -> isize
+LL$FIND_NEXT    proc    far
+                push    bp
+                mov     bp, sp
+                push    ds
+                lds     dx, [bp+6]
+                mov     ah, DOS_SET_DTA
+                int     DOS_INT
+                mov     ah, DOS_FIND_NEXT
+                jmp     short file_name_call
+LL$FIND_NEXT    endp
+
+;;::::::::::::::
+;; LL$FREE_BYTES(drive: u16) -> i32: sectors per cluster x free clusters x bytes per sector, in DX:AX; DOS says an
+;; invalid drive by AX = FFFFh, which is -15.
+LL$FREE_BYTES   proc    far
+                push    bp
+                mov     bp, sp
+                push    bx
+                push    cx
+                mov     dx, [bp+6]
+                mov     ah, DOS_FREE_SPACE
+                int     DOS_INT
+                cmp     ax, 0FFFFh
+                je      short free_failed
+                movzx   eax, ax
+                movzx   ecx, cx
+                movzx   ebx, bx
+                imul    eax, ecx
+                imul    eax, ebx
+                mov     edx, eax
+                shr     edx, 16
+                jmp     short free_done
+free_failed:
+                mov     ax, -15
+                mov     dx, -1
+free_done:
+                pop     cx
+                pop     bx
+                pop     bp
+                retf
+LL$FREE_BYTES   endp
+
+;;::::::::::::::
+;; LL$CURRENT_DIRECTORY(drive: u16, data: *far mut char) -> isize
+LL$CURRENT_DIRECTORY proc far
+                push    bp
+                mov     bp, sp
+                push    ds
+                push    si
+                mov     dx, [bp+6]
+                lds     si, [bp+8]
+                mov     ah, DOS_GET_DIRECTORY
+                int     DOS_INT
+                pop     si
+                jc      short directory_failed
+                xor     ax, ax
+                jmp     short directory_done
+directory_failed:
+                neg     ax
+directory_done:
+                pop     ds
+                pop     bp
+                retf
+LL$CURRENT_DIRECTORY endp
+
+;;::::::::::::::
+;; LL$CURRENT_DRIVE() -> isize
+LL$CURRENT_DRIVE proc   far
+                mov     ah, DOS_GET_DRIVE
+                int     DOS_INT
+                xor     ah, ah
+                retf
+LL$CURRENT_DRIVE endp
+
+
 endif
 
 end

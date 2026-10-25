@@ -2389,3 +2389,13 @@ fn kill_name_and_the_directory_statements_call_their_runtime_routines() {
         assert_eq!(hir.matches(&format!("\"callee\":\"{routine}\"")).count(), 1, "{routine}: {hir}");
     }
 }
+
+#[test]
+fn files_calls_b_fils_with_the_pattern_or_an_empty_string() {
+    // FILES was refused as valid but not generated. BC pushes the pattern's
+    // descriptor to B$FILS, an empty string's for a bare FILES (measured in
+    // BC output, QB 4.5).
+    let module = parse("FILES\r\nFILES \"*.BAS\"\r\n", Dialect::QuickBasic45).unwrap();
+    let hir = compile(&module, "files", Dialect::QuickBasic45, "qb45").unwrap();
+    assert_eq!(hir.matches("\"callee\":\"B$FILS\"").count(), 2, "{hir}");
+}

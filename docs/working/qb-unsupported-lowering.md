@@ -49,3 +49,9 @@ pascal far, callee cleanup 2, 4, 2, 2, 2). llrm's runtime runs them over the OS 
 (`runtime/shared/interface.toml`: delete, rename, mkdir, chdir, rmdir; DOS int 21h 41h, 56h, 39h, 3Bh, 3Ah). Error
 numbers match BCOM45 in `tests/qbrt/file_names.bas`. Not done: KILL with a wildcard (BC finds each match; the layer
 has no find-first/next), and KILL of a file open on a channel (BC's `B$CHKFOPEN` answers File already open).
+
+## FILES
+BC pushes the pattern's descriptor to `B$FILS` (an empty one for a bare FILES; QB 4.5 `rt/dkstmt.asm`). The runtime
+(`runtime/qb/filelist.c`) prints the current directory, the entries 18 characters each (four to an 80-column line), a blank
+line and the free space, over the OS layer's `find_first`, `find_next`, `current_directory`, `current_drive` and
+`free_bytes`. `tests/qbrt/files_listing.bas` matches BCOM45 at m16 and m32. KILL with a wildcard can now use the same search.
