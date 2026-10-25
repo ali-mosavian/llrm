@@ -4,6 +4,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 
 | Doc | Holds |
 |---|---|
+| [early-taildup-plan](early-taildup-plan.md) | Early Tail Duplication translation: pin functions and lines, what LIR gives it, three steps with dates (2026-11-03..08) |
 | [constraint-elimination-plan](constraint-elimination-plan.md) | ConstraintElimination translation: why, the order CE-1 to CE-4 with dates, the oracle |
 | [knownbits-plan](knownbits-plan.md) | ValueTracking known bits (qbq-llrm d_faces): per caller against the pin, twelve dated rows (2026-10-24) |
 | [f3-plan](f3-plan.md) | F3, `translate::program`: profile by bucket, the pin's counterpart, four rows with dates (2026-10-24) |
