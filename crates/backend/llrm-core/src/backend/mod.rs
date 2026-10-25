@@ -238,6 +238,7 @@ pub mod overlap;
 pub mod parcopy;
 pub mod peep;
 pub mod peephole;
+pub mod peepholeopt;
 pub mod phiconst;
 pub mod phielim;
 pub mod pointers;

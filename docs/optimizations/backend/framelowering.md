@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/framelowering.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/framelowering.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/framelowering.rs sha256:2f6d499bf7aad39674b2e820f67dde8ed9add02f028f728b0730dde62677e9c0 -->
+<!-- src: crates/backend/llrm-core/src/backend/framelowering.rs sha256:24ffdd23e848a03c688a54b2aa35eb88b885482d40a7ff1f0f4142efa9a61d52 -->
 
 # framelowering
 
@@ -40,11 +40,14 @@ DEVIATE FL-2 (no number, owner w-6): `mergeSPUpdates` and `mergeSPAdd`,
 which fold an adjacent stack update into this one, are not translated: a
 function of the frame alone sees no neighbour.
 
-DEVIATE CG7 (slot table row 80): nothing calls this until frames carry
-frame indices (FI-1, docs/working/pei-plan.md).
+DEVIATE CG7 (slot table row 80): `masm::parts` calls this for the flat
+m32 frames built at entry (`saved_first`); every other frame (16-bit, the
+runtime's, interrupt, inline-code, shrink-wrapped) keeps `parts`' own
+sequence, and cells are not yet frame indices (FI-1,
+docs/working/pei-plan.md).
 
 ## Example
 The unit test `a_frame_with_saved_registers_pushes_and_pops_them`.
 
 ## Used by
-Nothing yet (CG7).
+`masm::lowered`, for `saved_first` frames.

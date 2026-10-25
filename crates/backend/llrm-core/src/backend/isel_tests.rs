@@ -4870,7 +4870,8 @@ fn test_a_variable_index_in_a_huge_pointer_is_scaled_and_carried() {
 }
 
 /// Huge pointers are canonical, so an order is the selector's then the
-/// offset's: one subtraction across both words, where a far pointer's order
+/// offset's: one subtraction across both words (`cmp; sbb`: the low
+/// difference is dead), where a far pointer's order
 /// is its offset alone.
 #[test]
 fn test_huge_pointers_compare_by_selector_then_offset() {
@@ -4887,7 +4888,7 @@ fn test_huge_pointers_compare_by_selector_then_offset() {
             "mov bp, sp",
             "L0_0:",
             "mov ax, word ptr [bp+6]",
-            "sub ax, word ptr [bp+10]",
+            "cmp ax, word ptr [bp+10]",
             "mov ax, word ptr [bp+12]",
             "mov cx, word ptr [bp+8]",
             "sbb cx, ax",
