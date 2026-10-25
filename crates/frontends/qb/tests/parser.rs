@@ -2309,3 +2309,21 @@ fn a_form_declaration_inside_a_procedure_must_precede_executable_statements() {
     assert!(parse(inside, Dialect::VbDos).is_err());
     assert!(parse(outside, Dialect::VbDos).is_ok());
 }
+
+#[test]
+fn a_literal_assigned_to_a_fixed_string_goes_to_basic_assn_as_a_descriptor_under_far_strings() {
+    // VBDOS BC: `s = "QRENDER"` (s AS STRING * 8) calls B$ASSN with the literal's descriptor and a source length
+    // of 0. llrm passed the bytes and 7, and the runtime copied the literal's header: conformance
+    // vbdos/qrender_shape printed garbage in the field. QB 4.5's near strings keep the bytes form.
+    let source = "DIM s AS STRING * 8\r\ns = \"QRENDER\"\r\nPRINT s\r\n";
+    // the length operand: 7 for the bytes form, 0 for the descriptor form
+    let passes_the_bytes = |dialect, runtime| {
+        let module = parse(source, dialect).unwrap();
+        let hir = compile(&module, "fixed", dialect, runtime).unwrap();
+        let at = hir.find("\"callee\":\"B$ASSN\"").expect("B$ASSN");
+        let call = &hir[at..at + hir[at..].find("\"pure\"").unwrap()];
+        call.contains("\"value\":7}")
+    };
+    assert!(!passes_the_bytes(Dialect::VbDos, "vbdos"));
+    assert!(passes_the_bytes(Dialect::QuickBasic45, "qb45"));
+}

@@ -5675,6 +5675,11 @@ impl Compiler {
                     || self.signatures.get(canonical(name)).is_some_and(|signature| signature.result == Some(STRING))
             }
             Expr::Binary { op: Binary::Add, left, right, .. } => self.string_syntax(left) && self.string_syntax(right),
+            // Far-string runtimes (VBDOS): BC hands B$ASSN the literal's descriptor with a source length of 0, as for
+            // any string value; the bytes-and-length form reads the wrong bytes there.
+            Expr::Literal(Literal::String(text), _) => {
+                !text.is_empty() && llrm_qbruntime::semantics::descriptor(&self.runtime, self.options.near()).is_none()
+            }
             _ => false,
         };
         if descriptor_result {

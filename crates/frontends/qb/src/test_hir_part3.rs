@@ -2355,7 +2355,8 @@ fn a_fixed_length_assignment_fills_its_destination() {
     let text = llrm_mir::print::module(&emitted.module);
     assert!(
         text.contains("@llrm.qb.B$ASSN(ptr addrspace(1) %")
-            && text.contains(", i16 1, ptr addrspace(1) nocapture writeonly initializes((0, 8)) %"),
+            // (VBDOS's far strings: the literal goes as its descriptor, source length 0)
+            && text.contains(", i16 0, ptr addrspace(1) nocapture writeonly initializes((0, 8)) %"),
         "{text}"
     );
 }
