@@ -991,8 +991,8 @@ mod tests {
 
     /// A tail that stays kept phi operands from the arms it was copied into,
     /// which no longer branch to it: PHI elimination copied them anyway, and
-    /// x_funcptr kept a home per case for the sum (66 instructions, the pin 49).
-    /// The tail's phis read only the arms that still reach it.
+    /// x_funcptr kept a home per case for the sum (66 instructions, the pin
+    /// 49). The tail's phis read only the arms that still reach it.
     #[test]
     fn test_a_tail_that_stays_reads_no_phi_operand_from_an_arm_it_was_copied_into() {
         use crate::model::lir::Phi;
