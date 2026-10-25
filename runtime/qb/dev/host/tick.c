@@ -8,8 +8,9 @@
 
 enum { TICK_NANOSECONDS = 54925400 }; /* 1 / 18.2065 s */
 
-/* Absent when the program has no music (play.c is not linked). */
-__attribute__((weak)) void music_tick(void);
+/* A weak no-op when the program has no music (play.c is not linked); not an undefined reference, which Mach-O's linker
+   rejects. */
+__attribute__((weak)) void music_tick(void) {}
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static atomic_int started, use_thread, thread_running;
@@ -47,7 +48,7 @@ int host_tick_fire(void)
     int ran = 0;
 
     if (pthread_mutex_trylock(&lock) == 0) {
-        if (started && music_tick) {
+        if (started) {
             music_tick();
             ran = 1;
         }
@@ -64,7 +65,7 @@ static void *ticking(void *unused)
     while (thread_running) {
         nanosleep(&wait, 0);
         pthread_mutex_lock(&lock);
-        if (started && music_tick)
+        if (started)
             music_tick();
         pthread_mutex_unlock(&lock);
     }
