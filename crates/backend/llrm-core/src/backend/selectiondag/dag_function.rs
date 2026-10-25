@@ -1072,7 +1072,9 @@ fn selected_in(
     // The inline routines the calls name (`ExpandDivRemLibCall`'s `divN_s`):
     // their bytes are laid down at the call, as the old route did.
     let mut inline = IndexMap::default();
-    for (at, name) in &calls {
+    // (assembling a routine costs 1.8 M instructions, so only a call that
+    // names one asks for it)
+    for (at, name) in calls.iter().filter(|(_, name)| name.starts_with(llrm_target::routines::DIVIDE_PREFIX)) {
         for signed in [true, false] {
             for wide in [true, false] {
                 if let Ok(routine) = arch.divide_routine(signed, wide) {
@@ -1100,7 +1102,7 @@ fn selected_in(
     }
     // The huge-pointer routines the calls name (`huge_memory`): their bytes
     // are laid down at the call as well.
-    for (at, name) in &calls {
+    for (at, name) in calls.iter().filter(|(_, name)| name.starts_with(llrm_target::routines::HUGE_PREFIX)) {
         let fills = [1u32, 2, 4].into_iter().filter_map(|cell| arch.huge_fill_routine(cell).ok());
         let copies = [false, true].into_iter().filter_map(|backward| arch.huge_copy_routine(backward).ok());
         if let Some(routine) = fills.chain(copies).find(|routine| routine.name == name.as_str()) {
