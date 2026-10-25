@@ -2458,27 +2458,13 @@ impl Emitter<'_, '_> {
                     && cell.base.is_none()
                     && cell.index.is_some()
                 {
-                    // 16-bit addressing has no scale: the index is scaled by a
-                    // shift first.
-                    if cell.scale != 1 {
-                        let shift = match cell.scale {
-                            2 => 1,
-                            4 => 2,
-                            8 => 3,
-                            other => {
-                                return Err(EmitError::Unsupported(format!(
-                                    "a lea of a symbol and an index scaled by {other} at m16"
-                                )));
-                            }
-                        };
-                        let index = cell.index.take().expect("an index");
-                        let scaled = self.fresh(index.width);
-                        let amount = Loc::Imm(Imm { value: shift, width: 1, address: None });
-                        self.push(Operation::Binary, "shl", vec![Loc::Held(scaled)], vec![Loc::Held(index), amount]);
-                        cell.index = Some(scaled);
-                        cell.scale = 1;
-                    }
+                    self.unscale_index(&mut cell)?;
                     cell.base = cell.index.take();
+                }
+                // A 16-bit index beside a scale has no encoding (the scale
+                // was dropped, the address lost its doubling): shifted first.
+                if self.ctx.address_mode == AddrMode::Real16 && cell.index.is_some_and(|index| index.width == 2) {
+                    self.unscale_index(&mut cell)?;
                 }
                 // A scaled index beside a base is the 386's 32-bit form: its
                 // literal place adds nothing and has no encoding with a scale.
@@ -2733,6 +2719,32 @@ impl Emitter<'_, '_> {
             }
         }
         Ok(out)
+    }
+
+    /// `cell` with its index scaled by a shift: 16-bit addressing has no
+    /// scale.
+    fn unscale_index(
+        &mut self,
+        cell: &mut Mem,
+    ) -> Result<(), EmitError> {
+        if cell.scale == 1 {
+            return Ok(());
+        }
+        let shift = match cell.scale {
+            2 => 1,
+            4 => 2,
+            8 => 3,
+            other => {
+                return Err(EmitError::Unsupported(format!("a lea of an index scaled by {other} at m16")));
+            }
+        };
+        let index = cell.index.take().expect("an index");
+        let scaled = self.fresh(index.width);
+        let amount = Loc::Imm(Imm { value: shift, width: 1, address: None });
+        self.push(Operation::Binary, "shl", vec![Loc::Held(scaled)], vec![Loc::Held(index), amount]);
+        cell.index = Some(scaled);
+        cell.scale = 1;
+        Ok(())
     }
 
     /// base, scale, index, displacement, segment.
