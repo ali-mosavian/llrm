@@ -1013,7 +1013,7 @@ fn static_procedure_arrays_use_persistent_storage_without_exit_cleanup() {
     // was allocated in the call frame and erased at every function return,
     // so two calls both returned 1 instead of returning 1 then 2.
     let module = parse(
-        "declare function nextValue%\n\
+        "declare function nextValue% ()\n\
          function nextValue% static\n\
          dim counts(0 to 0) as integer\n\
          counts(0) = counts(0) + 1\n\
@@ -1946,7 +1946,7 @@ fn a_procedure_sees_only_shared_module_variables() {
     // Every procedure also saw every module variable: gorillas' DoSun
     // wrote the module's x, which QB keeps local without SHARED.
     let module = parse(
-        "declare sub named\r\ndeclare sub unnamed\r\nx% = 5\r\nnamed\r\nunnamed\r\n\
+        "declare sub named ()\r\ndeclare sub unnamed ()\r\nx% = 5\r\nnamed\r\nunnamed\r\n\
          sub named\r\nshared x%, onlyhere%\r\nx% = onlyhere%\r\nend sub\r\n\
          sub unnamed\r\nx% = 6\r\nend sub\r\n",
         Dialect::QuickBasic45,
@@ -2264,4 +2264,15 @@ fn qb45_gives_up_on_a_dynamic_array_with_too_many_subscripts() {
     assert!(!refused(program("", 9, "A = 3"), Dialect::QuickBasic45));
     assert!(!refused(program("' $DYNAMIC\r\n", 9, "A = 3"), Dialect::Pds71));
     assert!(!refused(program("' $DYNAMIC\r\n", 9, "A = 3"), Dialect::VbDos));
+}
+
+#[test]
+fn a_declare_without_parentheses_matches_no_definition() {
+    // tests/check/qb/stack_entry_*.bas: `DECLARE SUB S` then `SUB S` is "Argument-count mismatch"
+    // under QB 4.5, PDS 7.1 and VBDOS alike; `DECLARE SUB S ()` is the form BC takes.
+    let source = |declare: &str| format!("{declare}\r\nS\r\nEND\r\nSUB S\r\nPRINT 1\r\nEND SUB\r\n");
+    for dialect in [Dialect::QuickBasic45, Dialect::Pds71, Dialect::VbDos] {
+        assert!(parse(&source("DECLARE SUB S"), dialect).is_err(), "{dialect:?}");
+        assert!(parse(&source("DECLARE SUB S ()"), dialect).is_ok(), "{dialect:?}");
+    }
 }

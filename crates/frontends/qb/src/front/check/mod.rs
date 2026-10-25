@@ -487,10 +487,19 @@ impl Checker {
             ),
             Some(existing)
                 if existing.kind != info.kind
-                    || (!existing.unchecked && !info.unchecked && existing.params.len() != info.params.len()) =>
+                    || (!existing.unchecked && !info.unchecked && existing.params.len() != info.params.len())
+                    || (existing.unchecked
+                        && existing.declared
+                        && !existing.defined
+                        && info.defined
+                        && matches!(self.dialect, Dialect::QuickBasic45 | Dialect::Pds71 | Dialect::VbDos)) =>
             {
                 let headline = if existing.kind != info.kind {
                     "`{name}` is declared as one kind of procedure (SUB or FUNCTION) and defined as the other".to_owned()
+                } else if existing.unchecked {
+                    // all three BCs: a DECLARE with no parentheses matches no definition, not even
+                    // one without parameters
+                    "`{name}` is declared without a parameter list, which BC never matches to its definition".to_owned()
                 } else {
                     let count = |n: usize| match n {
                         0 => "no parameters".to_owned(),
@@ -506,7 +515,7 @@ impl Checker {
                 self.err_because(
                     procedure.span,
                     "Argument-count mismatch",
-                    Reason::headline(headline).help("make the DECLARE and the definition agree"),
+                    Reason::headline(headline).help("write the DECLARE with its parentheses, `DECLARE SUB name ()` when it takes nothing, and make it agree with the definition"),
                 )
             }
             Some(existing) => {
