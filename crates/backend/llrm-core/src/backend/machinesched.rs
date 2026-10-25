@@ -523,7 +523,12 @@ pub fn scheduled(
                     step(&mut now, one);
                 }
                 let slice = &insns[region.clone()];
-                if slice.len() >= 2 {
+                // Without pressure tracked or a load (the only latency over
+                // one), every instruction is ready at once, and
+                // the latest-first choice gives back the source
+                // order: nothing to build.
+                let loads = slice.iter().any(|one| def_latency(one) > 1);
+                if slice.len() >= 2 && (loads || slice.len() > limit / 2) {
                     let order = bottom_up(slice, &graph(slice, regs, bits), &now, limit, &counted);
                     let source: Vec<usize> = (0..slice.len()).collect();
                     // DEVIATE MS3: where pressure is tracked, an order that
