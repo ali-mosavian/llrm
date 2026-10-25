@@ -6,7 +6,7 @@
 For each `DIR/*.c` (default `ROWS_WORK/base/b`): llrm-c compiles it for m32 (`-march=i486 -mabi=sysv --isel=dag`) with `--dump`,
 the pin's `llc` (pin.py, explicit m32 target) compiles the dump's last IR (`30-switchconv.ll`, the one handed to the backend), and
 both outputs are counted: the pin's lines that start with a tab and a lowercase letter, ours the indented lines that are not
-directives (`align`, `db`, `dd`, `dw`, `dq`, `org`) or comments. Prints the totals, then the programs furthest above the pin.
+directives (`align`, `db`, `dd`, `dw`, `dq`, `org`) or comments. llc runs with `-disable-lsr` (`--pin-args`). Prints the totals, then the programs furthest above the pin.
 `--env` sets variables for llrm-c only (`LLRM_SRC_ORDER=1`). The IR is ours, so a gap is the backend's, not the optimizer's.
 """
 from __future__ import annotations
@@ -38,7 +38,7 @@ def count_ours(asm: str) -> int:
     return sum(1 for line in asm.split("\n") if line.startswith("    ") and not line.strip().startswith((";", ".", *DIRECTIVES)))
 
 
-def one(binary: str, source: Path, level: str, env: dict, work: Path, target) -> tuple[str, int | None, int | None]:
+def one(binary: str, source: Path, level: str, env: dict, work: Path, target, pin_args: list[str]) -> tuple[str, int | None, int | None]:
     name = source.stem
     dump = work / name
     out = work / f"{name}.s"
@@ -47,7 +47,7 @@ def one(binary: str, source: Path, level: str, env: dict, work: Path, target) ->
     if done.returncode or not ll.exists() or not out.exists():
         shutil.rmtree(dump, ignore_errors=True)
         return name, None, None
-    theirs = pin.llc([f"-{level}", "-filetype=asm", "-o", "-"], ll.read_text(), target)
+    theirs = pin.llc([f"-{level}", "-filetype=asm", "-o", "-", *pin_args], ll.read_text(), target)
     ours = count_ours(out.read_text())
     shutil.rmtree(dump, ignore_errors=True)
     out.unlink()
@@ -61,6 +61,7 @@ def main() -> int:
     parser.add_argument("--level", default="O2")
     parser.add_argument("--jobs", type=int, default=8)
     parser.add_argument("--env", nargs="*", default=[])
+    parser.add_argument("--pin-args", nargs="*", default=["-disable-lsr"], help="llc's extra arguments; llc runs loop strength reduction on our IR, which ours has already done in the IR walk (x_reverse: 51 with it, 53 without), so the default leaves it out")
     parser.add_argument("--json", type=Path)
     args = parser.parse_args()
     env = dict(os.environ, **dict(kv.split("=", 1) for kv in args.env))
@@ -69,7 +70,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(dir=Path.home() / "scratch") as tmp:
         sources = sorted(Path(args.src).glob("*.c"))
         with ThreadPoolExecutor(args.jobs) as pool:
-            rows = list(pool.map(lambda s: one(args.binary, s, args.level, env, Path(tmp), target), sources))
+            rows = list(pool.map(lambda s: one(args.binary, s, args.level, env, Path(tmp), target, args.pin_args), sources))
     both = [(name, ours, theirs) for name, ours, theirs in rows if ours is not None and theirs is not None]
     failed = [name for name, ours, theirs in rows if ours is None or theirs is None]
     ours, theirs = sum(r[1] for r in both), sum(r[2] for r in both)
