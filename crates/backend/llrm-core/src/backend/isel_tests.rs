@@ -541,8 +541,8 @@ fn test_division_and_variable_shifts() {
 /// so no `ss:` override: it cost a byte and a clock at each access. The
 /// doubled index is made once and both accesses use it (7a574ed3ed: precse
 /// no longer reads a load as touching the flags, so the two `i + i` are one).
-/// The frame cell indexed by `i` has known effects, so it is no scheduling boundary
-/// and the argument loads keep their source order.
+/// The frame cell indexed by `i` has known effects, so it is no scheduling
+/// boundary and the argument loads keep their source order.
 #[test]
 fn test_variable_indices_are_scaled_and_added() {
     let text = "define i16 @f(ptr %p, i16 %i) addrspace(1) {
