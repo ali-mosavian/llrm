@@ -8,6 +8,8 @@ pub mod machine;
 pub mod object;
 pub mod opcosts;
 pub mod os;
+#[cfg(test)]
+mod os_tests;
 pub mod registers;
 pub mod routines;
 pub mod runtime;
