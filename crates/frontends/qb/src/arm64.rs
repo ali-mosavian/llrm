@@ -35,6 +35,23 @@ fn renamed(
     out
 }
 
+/// `line`, a call or declaration of a runtime entry (`@B_X`), with its `i16` arguments marked `signext`. Darwin's
+/// AAPCS64 has the caller extend an argument narrower than 32 bits, and the clang-built runtime relies on it: `-1` passed
+/// as 0xFFFF reached `VIEW PRINT` as 65535, "Illegal function call". Linux's callee extends for itself.
+fn signext_i16_arguments(line: &str) -> String {
+    let Some(name) = line.find("@B_") else { return line.to_owned() };
+    let Some(open) = line[name..].find('(').map(|at| name + at) else { return line.to_owned() };
+    let Some(close) = line[open..].find(')').map(|at| open + at) else { return line.to_owned() };
+    let arguments: Vec<String> = line[open + 1..close]
+        .split(", ")
+        .map(|argument| match argument.strip_prefix("i16") {
+            Some(rest) if rest.is_empty() || rest.starts_with(' ') => format!("i16 signext{rest}"),
+            _ => argument.to_owned(),
+        })
+        .collect();
+    format!("{}{}{}", &line[..=open], arguments.join(", "), &line[close..])
+}
+
 /// The module as the arm64 backend reads it: LLVM IR text for `platform`.
 fn arm64_text(
     mir: &str,
@@ -50,6 +67,9 @@ fn arm64_text(
         let mut line = line.replace(" cc 1000", "").replace(" \"llrm-fp-eval\"=\"x87-extended\"", "");
         line = line.replace("@llrm.qb.B$", "@B_").replace("@B$", "@B_");
         line = block_entry(&line);
+        if platform == Platform::Darwin {
+            line = signext_i16_arguments(&line);
+        }
         line = aligned(&line);
         for (from, to) in EXPORTS {
             line = renamed(&line, from, to);
