@@ -23,9 +23,11 @@
 //! # Runs
 //! `assemble::staged` when `--isel=dag`.
 //!
-//! DEVIATE SD403: no branch probabilities (`odds`) or counted-loop trip
-//! counts, so the executed-work estimate of a loop is lower than the old
-//! selector's until they are carried; and no calls, locals, register arguments,
+//! DEVIATE SD403: no counted-loop trip counts, so the executed-work estimate of
+//! a loop is lower than the old selector's until they are carried; branch
+//! probabilities (`odds`) are the builder's (`addSuccessorWithProb`: a branch's
+//! two edges, a merged condition's cases, `set_odds`); a switch's edges have
+//! none yet; and no calls, locals, register arguments,
 //! switch lowering or multi-register phis yet. Reason: they need the call
 //! sequence and frame objects in the emitter (D1e). Exit: D1e. Owner: sdag-d.
 //! Review 2026-12-03.
@@ -983,6 +985,7 @@ fn selected_in(
     }
     body.sealed_arguments = true;
     body.ordered = true;
+    set_odds(&mut body, &info.edge_probs, &block_at);
     body.frequencies = Some(crate::analysis::frequency::Frequency::over(&body, &body.blocks).table());
     // The inline routines the calls name (`ExpandDivRemLibCall`'s `divN_s`):
     // their bytes are laid down at the call, as the old route did.
@@ -1151,6 +1154,39 @@ impl Values {
         other: &Values,
     ) -> Values {
         Values(self.0.iter().zip(&other.0).map(|(a, b)| a & b).collect())
+    }
+}
+
+/// The branch probabilities of the body: the edges the builder stated
+/// (`addSuccessorWithProb`: a conditional branch's two, a merged condition's
+/// cases), on the blocks whose machine edges they are. An edge nobody stated
+/// has none.
+fn set_odds(
+    body: &mut LirBody,
+    edges: &[(llrm_mir::module::BlockId, llrm_mir::module::BlockId, u32)],
+    block_at: &HashMap<u32, i64>,
+) {
+    let mut stated: IndexMap<(i64, i64), u64> = IndexMap::default();
+    for &(from, to, probability) in edges {
+        let (Some(&at), Some(&to_at)) = (block_at.get(&from.0), block_at.get(&to.0)) else { continue };
+        let Some(lir) = body.blocks.iter().find(|one| one.at == at) else { continue };
+        if lir.succ.len() < 2 || !lir.succ.contains(&to_at) {
+            continue;
+        }
+        *stated.entry((at, to_at)).or_insert(0) += u64::from(probability);
+    }
+    // `normalizeSuccProbs`: the edges of a block share one.
+    let mut total: IndexMap<i64, u64> = IndexMap::default();
+    for (&(at, _), &probability) in &stated {
+        *total.entry(at).or_insert(0) += probability;
+    }
+    for (&(at, to_at), &probability) in &stated {
+        let sum = total[&at];
+        if sum == 0 {
+            continue;
+        }
+        let scaled = u128::from(probability) * (1u128 << 31) / u128::from(sum);
+        body.odds.taken.insert((at, to_at), scaled.min(1 << 31) as u32);
     }
 }
 

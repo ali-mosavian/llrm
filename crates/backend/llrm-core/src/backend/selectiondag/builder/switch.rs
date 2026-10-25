@@ -34,6 +34,9 @@ pub(super) struct CaseBlock {
     true_bb: BlockId,
     false_bb: BlockId,
     this_bb: BlockId,
+    /// `TrueProb` and `FalseProb`: what leaves by each edge.
+    true_prob: BranchProbability,
+    false_prob: BranchProbability,
 }
 
 /// What a block made by the lowering holds, built once the layout is final.
@@ -44,7 +47,7 @@ pub(super) enum Deferred {
     /// `visitJumpTableHeader` in a block other than the switch's.
     JumpTableHeader(JumpTableHeader),
     /// `visitJumpTable`: the indirect branch through the table.
-    JumpTable { block: BlockId, reg: u32, index: u32 },
+    JumpTable { block: BlockId, reg: u32, index: u32, dests: Vec<(u32, BranchProbability)> },
     /// `visitBitTestHeader` in a block other than the switch's.
     BitTestHeader(BitTestHeader),
     /// A block `FindMergedConditions` placed: one compare and branch.
@@ -76,6 +79,9 @@ pub(super) struct JumpTableHeader {
     table_block: BlockId,
     default: BlockId,
     unreachable: bool,
+    /// The edge to the table and the edge to the default.
+    table_prob: BranchProbability,
+    default_prob: BranchProbability,
 }
 
 /// `BitTestBlock` as the header and the case blocks read it.
@@ -241,7 +247,10 @@ impl Builder<'_> {
             Deferred::Case(case, cond) => self.visit_switch_case(case, cond),
             Deferred::Merged(case) => self.emit_merged_case(&case),
             Deferred::JumpTableHeader(header) => self.emit_jump_table_header(&header),
-            Deferred::JumpTable { reg, index, .. } => {
+            Deferred::JumpTable { block, reg, index, dests } => {
+                for (dest, probability) in dests {
+                    self.add_successor_with_prob(block, BlockId(dest), probability);
+                }
                 // visitJumpTable: `br_jt (CopyFromReg reg):1, JumpTable, index`
                 let pointer = self.target.dag.pointer;
                 let root = self.control_root();
@@ -272,7 +281,9 @@ impl Builder<'_> {
         let copy_to = self.dag.get_copy_to_reg(root, header.reg, index);
         let next = self.layout_next(header.block);
         let mut root = copy_to;
+        self.add_successor_with_prob(header.block, header.table_block, header.table_prob);
         if !header.unreachable {
+            self.add_successor_with_prob(header.block, header.default, header.default_prob);
             let span = self.dag.get_constant((header.last - header.first) as u128, vt);
             let cmp = self.dag.get_setcc(EVT::I8, sub, span, CondCode::SetUGt);
             let default = self.dag.get_basic_block(header.default.0);
@@ -418,7 +429,6 @@ impl Builder<'_> {
             self.export_condition(cond)?;
             block
         };
-        let _ = (left_prob, right_prob);
         let case = CaseBlock {
             cc: CondCode::SetLt,
             lhs: CaseValue::Condition,
@@ -427,6 +437,8 @@ impl Builder<'_> {
             true_bb: left,
             false_bb: right,
             this_bb: item.block,
+            true_prob: left_prob,
+            false_prob: right_prob,
         };
         self.emit_or_defer(case, cond)
     }
@@ -461,6 +473,8 @@ impl Builder<'_> {
                     let no = self.dag.get_basic_block(default.0);
                     let node = self.dag.get_node(ISD::Br, EVT::OTHER, &[brcond, no]);
                     self.dag.set_root(node);
+                    self.add_successor_with_prob(item.block, BlockId(small.dest), small.prob.saturating_add(big.prob));
+                    self.add_successor_with_prob(item.block, default, item.default_prob);
                     return Ok(());
                 }
             }
@@ -480,8 +494,14 @@ impl Builder<'_> {
         }
         let mut insert_at = item_pos + 1;
         let mut current = item.block;
+        // `UnhandledProbs`: the default's and every cluster's still to be
+        // tested.
+        let mut unhandled = clusters[item.first..=item.last]
+            .iter()
+            .fold(item.default_prob, |sum, cluster| sum.saturating_add(cluster.prob));
         for at in item.first..=item.last {
             let cluster = clusters[at];
+            unhandled = unhandled.saturating_sub(cluster.prob);
             let (fallthrough, unreachable) = if at == item.last {
                 (default, unreachable_default)
             } else {
@@ -504,8 +524,15 @@ impl Builder<'_> {
                         table_block,
                         default: fallthrough,
                         unreachable,
+                        table_prob: cluster.prob,
+                        default_prob: unhandled,
                     };
-                    self.deferred.push(Deferred::JumpTable { block: table_block, reg, index: jt_index });
+                    self.deferred.push(Deferred::JumpTable {
+                        block: table_block,
+                        reg,
+                        index: jt_index,
+                        dests: table.dests.clone(),
+                    });
                     if current == self.block {
                         self.emit_jump_table_header(&header)?;
                     } else {
@@ -552,6 +579,8 @@ impl Builder<'_> {
                             true_bb: BlockId(cluster.dest),
                             false_bb: fallthrough,
                             this_bb: current,
+                            true_prob: cluster.prob,
+                            false_prob: unhandled,
                         }
                     } else {
                         CaseBlock {
@@ -562,6 +591,8 @@ impl Builder<'_> {
                             true_bb: BlockId(cluster.dest),
                             false_bb: fallthrough,
                             this_bb: current,
+                            true_prob: cluster.prob,
+                            false_prob: unhandled,
                         }
                     };
                     if unreachable {
@@ -643,6 +674,8 @@ impl Builder<'_> {
                 }
             }
         };
+        self.add_successor_with_prob(case.this_bb, case.true_bb, case.true_prob);
+        self.add_successor_with_prob(case.this_bb, case.false_bb, case.false_prob);
         let (mut true_bb, mut false_bb, mut test) = (case.true_bb, case.false_bb, test);
         if Some(true_bb) == self.layout_next(case.this_bb) {
             std::mem::swap(&mut true_bb, &mut false_bb);
