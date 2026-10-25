@@ -1,8 +1,8 @@
 ' RUN: llrm-qb %s --dialect {qb45 | pds71 | vbdos} --runtime {qb45 | pds71 | vbdos} -O2 -march=i486 -fno-inline-functions -S -o /dev/stdout
 ' ownf_free's loops: a FOR with a constant step is counted, its test one compare against the limit.
-' The limit and step live outside the module block whose address calls receive, or every
-' call would be taken to write them: the limit was loaded each trip and the step tested
-' for its sign. The pin keeps one compare too (`--isel=old`, clang -m32 -O2 -march=i486 on
+' By-reference argument temporaries live in their own object, not in the module block
+' that holds the limit and step: a call receiving that block's address is taken to write
+' them, and the limit was loaded each trip and the step tested for its sign. The pin keeps one compare too (`--isel=old`, clang -m32 -O2 -march=i486 on
 ' `for (i = 1; i <= 3000; i++) arrays(i % 50)`: `cmpl $3001`, `jl`); the bound's spelling
 ' (2999 / 3000 / 3001) is the optimiser's.
 ' CHECK-LABEL: $QB$MAIN proc
