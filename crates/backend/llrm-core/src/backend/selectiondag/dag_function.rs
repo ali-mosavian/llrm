@@ -691,6 +691,11 @@ fn selected_in(
         let made = Temporaries(&frame).create_stack_temporary(size as u32, align as u32);
         debug_assert_eq!(made, index as i32, "frame objects are numbered as the builder numbered them");
     }
+    // `LowerFormalArguments`' register save area: 6 * 8 bytes of integer
+    // registers and 8 * 16 of vector ones.
+    if m64 && module.signature(function.ty).2 {
+        info.variadic_save = Some(Temporaries(&frame).create_stack_temporary(176, 16));
+    }
     let mut hooks = X86Hooks::new(Options {
         cpu: if m16 {
             Cpu::M16
