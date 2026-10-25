@@ -1315,8 +1315,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 let lo = self.dag.get_constant(bits & 0xFFFF_FFFF, EVT::I32);
                 let hi = self.dag.get_constant((bits >> 32) & 0xFFFF_FFFF, EVT::I32);
                 let first = self.dag.get_store(chain, lo, ptr, int_info(EVT::I32, info.align, info.base));
-                let four = self.dag.get_constant(4, self.dag.value_type(ptr));
-                let next = self.dag.get_mem_base_plus_offset(ptr, four, SDNodeFlags::default());
+                // A far pointer is no integer: its offset word moves, by 4.
+                let next = if self.dag.value_type(ptr) == MVT::Far.into() {
+                    self.dag.get_object_ptr_offset(ptr, 4)
+                } else {
+                    let four = self.dag.get_constant(4, self.dag.value_type(ptr));
+                    self.dag.get_mem_base_plus_offset(ptr, four, SDNodeFlags::default())
+                };
                 let second = self
                     .dag
                     .get_store(chain, hi, next, int_info(EVT::I32, info.align.min(4), super::dag::MemBase::Unknown));

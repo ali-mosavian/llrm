@@ -779,3 +779,29 @@ fn a_long_result_truncated_to_an_int_does_not_read_dx() {
         assert!(!names.iter().any(|n| n == wide), "{names:?}");
     }
 }
+
+const WORD_ARGUMENTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare cc 1005 void @g(i16, i16, i16)
+define cc 1005 void @f(i16 %p) {
+  %q = add i16 %p, 100
+  call cc 1005 void @g(i16 %q, i16 %p, i16 1)
+  ret void
+}
+";
+
+/// A word argument was required in `EAX`/`EDX`: to the allocator a dword, so
+/// the pointer it came from was a dword too and every one live across a call
+/// was spilled and reloaded as one (QCport `-Os`: +16% against the old
+/// selector, `_host_frame` +1736 bytes).
+#[test]
+fn a_word_argument_is_required_in_the_word_register() {
+    use llrm_lir::registers::RegId;
+    let module = llrm_mir::parse::module(WORD_ARGUMENTS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let call = insns.iter().find(|i| i.call.is_some()).expect("a call");
+    let registers: Vec<RegId> = call.requires.iter().map(|(_, register)| *register).collect();
+    assert!(registers.iter().all(|r| matches!(*r, RegId::AX | RegId::DX | RegId::CX)), "{registers:?}");
+    assert_eq!(registers.len(), 3, "{registers:?}");
+}

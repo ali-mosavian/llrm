@@ -705,8 +705,19 @@ impl Emitter<'_, '_> {
                 let NodeData::PhysReg(register) = self.dag.node(node.ops[1]).data else {
                     return Err(EmitError::Unsupported("a virtual register passed to a call".to_owned()));
                 };
-                let held = self.held_operand(node.ops[2])?;
-                self.arguments.push((held, register));
+                // An any-extended word (selected as an `INSERT_SUBREG` into an
+                // undefined dword) is passed as the word it is.
+                let value = node.ops[2];
+                let source = if self.is_machine_named(value, "INSERT_SUBREG")
+                    && self.is_implicit_def(self.dag.operand(value, 0))
+                    && self.dag.value_type(self.dag.operand(value, 1)) == EVT::I16
+                {
+                    self.dag.operand(value, 1)
+                } else {
+                    value
+                };
+                let held = self.held_operand(source)?;
+                self.arguments.push((held, Self::argument_register(register, held.width)));
                 Ok(())
             }
             // A value returned in a register is required there by the `RET`,
@@ -1177,6 +1188,26 @@ impl Emitter<'_, '_> {
             .is_some_and(|d| usize::from(value.res) >= usize::from(d.num_defs) && d.implicit_defs.contains(&28))
     }
 
+    /// A word argument is required in the word register: the DAG names the
+    /// convention's 32-bit register (`$eax` for an any-extended `i16`), and a
+    /// word value required in `EAX` is a dword to the allocator, which spilled
+    /// every pointer live across a call as a dword (QCport -Os: +16%).
+    fn argument_register(
+        register: llrm_lir::registers::RegId,
+        width: u32,
+    ) -> llrm_lir::registers::RegId {
+        use llrm_lir::registers::RegId;
+        match (width, register) {
+            (2, RegId::EAX) => RegId::AX,
+            (2, RegId::EBX) => RegId::BX,
+            (2, RegId::ECX) => RegId::CX,
+            (2, RegId::EDX) => RegId::DX,
+            (2, RegId::ESI) => RegId::SI,
+            (2, RegId::EDI) => RegId::DI,
+            _ => register,
+        }
+    }
+
     /// The call instruction: it destroys the caller-saved registers and may
     /// touch any memory. Its address.
     fn push_call(
@@ -1484,7 +1515,11 @@ impl Emitter<'_, '_> {
                         .ok_or_else(
                             || EmitError::Unsupported("a string operation on a pointer of no known segment".to_owned()),
                         )?;
-                    return self.held_operand(selector);
+                    // The selector is a word: the low word of a dword whose
+                    // high half it is (`x >> 16`), or the word itself.
+                    let mut held = self.held_operand(selector)?;
+                    held.width = 2;
+                    return Ok(held);
                 }
                 // any other near pointer is into DGROUP, as the builder takes
                 // it
@@ -1521,6 +1556,12 @@ impl Emitter<'_, '_> {
         };
         let [inserted, amount] = self.dag.node(shifted).ops[..] else { return None };
         let NodeData::Const { bits: 16, .. } = self.dag.node(amount).data else { return None };
+        // A pointer made of a dword (`inttoptr` of a call's result): the
+        // combiner leaves `(x >> 16) << 16`, whose low word is the selector.
+        if self.is_machine_named(inserted, "SHR32ri") {
+            let [_, by] = self.dag.node(inserted).ops[..] else { return None };
+            return matches!(self.dag.node(by).data, NodeData::Const { bits: 16, .. }).then_some(inserted);
+        }
         if !self.is_machine_named(inserted, "INSERT_SUBREG") {
             return None;
         }
@@ -2222,6 +2263,20 @@ impl Emitter<'_, '_> {
                 }
                 let held = self.fresh(width);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
+                // The address of a symbol alone is its offset as an immediate
+                // (`mov r, offset sym`, which the encoder makes `lea r,
+                // [rip+sym]`), not an address value: the passes fold a `lea`
+                // into the operands that read it, and `sym[index]` is no
+                // address at 64 bits.
+                if self.ctx.address_mode == AddrMode::Flat64
+                    && cell.base.is_none()
+                    && cell.index.is_none()
+                    && let Some(address) = cell.addr
+                {
+                    let offset = Imm { value: 0, width, address: Some(address) };
+                    self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Imm(offset)]);
+                    return Ok(Some(()));
+                }
                 self.push(
                     Operation::Address,
                     "lea",
@@ -2681,6 +2736,11 @@ impl Emitter<'_, '_> {
     ) -> Result<Option<Held>, EmitError> {
         // `$noreg` is virtual register 0.
         if self.dag.node(value).data == NodeData::Register(0) {
+            return Ok(None);
+        }
+        // `%rip` as a base is how the pin spells a symbol's address; the
+        // operand is the symbol alone, which the encoder makes `%rip`-relative.
+        if self.dag.node(value).data == NodeData::PhysReg(llrm_lir::registers::RegId::RIP) {
             return Ok(None);
         }
         match self.operand(value)? {

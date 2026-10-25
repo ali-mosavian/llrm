@@ -2,7 +2,7 @@
 //! blocks, and which allocas are frame indices.
 
 use llrm_mir::dense::{IdMap, IdSet};
-use llrm_mir::module::{Function, Operand, ValueDef, ValueId};
+use llrm_mir::module::{BlockId, Function, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
 
 /// Virtual registers number from here: below it the numbers are the pin's
@@ -22,6 +22,10 @@ pub struct FunctionLoweringInfo {
     pub sret_reg: Option<u32>,
     /// The branch probabilities of the function, made at its first `switch`.
     pub bpi: Option<llrm_analysis::bpi::BranchProbabilityInfo>,
+    /// The probability of each machine edge a block's lowering made
+    /// (`addSuccessorWithProb`): (from, to, probability in 2^31sts). An edge
+    /// the lowering did not state has none.
+    pub edge_probs: Vec<(BlockId, BlockId, u32)>,
     next_reg: u32,
     /// The register of the high half of a two-register value, by the low's.
     second: std::collections::BTreeMap<u32, u32>,
@@ -34,6 +38,18 @@ pub struct FunctionLoweringInfo {
     /// frame index order after the static allocas.
     pub objects: Vec<(u32, u32)>,
     next_frame_index: i32,
+    /// The names and locality of the module's globals and the function's
+    /// blocks, made at the first block and shared by the DAGs of the rest
+    /// (a table per block was a quadratic share of the compile).
+    pub(super) tables: Option<Tables>,
+}
+
+/// What every block's DAG reads about the module and the function.
+#[derive(Clone)]
+pub(super) struct Tables {
+    pub global_names: std::rc::Rc<Vec<String>>,
+    pub local_symbols: std::rc::Rc<Vec<bool>>,
+    pub block_names: std::rc::Rc<Vec<String>>,
 }
 
 impl FunctionLoweringInfo {
@@ -59,12 +75,14 @@ impl FunctionLoweringInfo {
             static_allocas: IdMap::new(),
             sret_reg: None,
             bpi: None,
+            edge_probs: Vec::new(),
             next_reg: FIRST_VIRTUAL,
             second: Default::default(),
             jump_tables: Vec::new(),
             next_block: 0,
             objects: Vec::new(),
             next_frame_index: 0,
+            tables: None,
         };
         let entry = function.entry();
         for &block in function.layout() {
