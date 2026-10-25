@@ -7475,6 +7475,16 @@ impl Compiler {
                         // evaluating an effectful expression a second time.
                         let common = common_type(numerator_type, right_type, Binary::Divide)?;
                         let numerator = self.convert(numerator, numerator_type, common)?;
+                        // the `+ c` set aside above belongs to the numerator
+                        let numerator = if let Some(additive) = additive {
+                            let step =
+                                self.convert(Operand::Constant(INTEGER, Number::Integer(additive)), INTEGER, common)?;
+                            let sum = self.value(common);
+                            self.emit("fadd", vec![sum], vec![numerator, step]);
+                            Operand::Value(sum)
+                        } else {
+                            numerator
+                        };
                         let denominator =
                             self.convert(Operand::Constant(right_type, Number::Integer(divisor)), right_type, common)?;
                         let divided = self.value(common);

@@ -543,3 +543,57 @@ fn test_a_verdict_of_cost_zero_at_threshold_zero_does_not_pay() {
     assert!(InlineCost::Cost { cost: -1, threshold: 0, static_bonus: 0, blocked: false }.is_ok());
     assert!(!InlineCost::Cost { cost: 75, threshold: 75, static_bonus: 0, blocked: false }.is_ok());
 }
+
+/// `-fno-inline-functions-called-once` set `Threshold::last` and nothing read
+/// it after `decide` replaced the clocks inliner (5bff5e074): the sole call of
+/// a local callee still took the 15000 bonus and nib's `bench_scroll` was
+/// inlined into `main`.
+#[test]
+fn the_last_call_bonus_is_off_where_called_once_inlining_is() {
+    let text = "define internal i32 @callee(i32 %x) {
+b0:
+  %a = add i32 %x, 1
+  ret i32 %a
+}
+
+define i32 @f(i32 %y) {
+b0:
+  %r = call i32 @callee(i32 %y)
+  ret i32 %r
+}
+";
+    let price = |last_call_to_static: bool| {
+        let module: Module = parsed(text);
+        let layout = DataLayout::default();
+        let (caller_id, _, caller) =
+            module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap();
+        let (callee_id, _, callee) =
+            module.functions().find(|(_, global, _)| global.name.as_deref() == Some("callee")).unwrap();
+        let call = caller
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| llrm_mir::memory::callee(&module.context, caller, inst) == Some(callee_id))
+            .unwrap();
+        let site = Site {
+            module: &module,
+            layout: &layout,
+            caller,
+            caller_id,
+            call,
+            callee,
+            callee_id,
+            sole_call_to_local: true,
+            caller_recursive: false,
+            caller_size: CallerSize::Speed,
+            relative_frequency: None,
+            tti: None,
+        };
+        let params =
+            InlineParams { compute_full_inline_cost: true, last_call_to_static, ..InlineParams::from_level(2) };
+        match inline_cost(&site, params) {
+            InlineCost::Cost { cost, .. } => cost,
+            other => panic!("{other:?}"),
+        }
+    };
+    assert_eq!(price(false) - price(true), 15000);
+}

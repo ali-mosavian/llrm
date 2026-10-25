@@ -160,10 +160,8 @@ impl FunctionPass for DeadStoreElimination {
         if !writes {
             return PreservedAnalyses::all();
         }
-        let accesses = match Accesses::managed(unit.context, unit.layout, unit.function, analyses) {
-            Ok(accesses) => accesses,
-            Err(error) => panic!("dse: {error}"),
-        };
+        // Nothing is made up front: each access is asked of the unit.
+        let accesses = Accesses::lazy();
         // MemorySSA describes the function as it is now; the removals go to
         // `unit.function` at the end, and the graph follows them through its
         // updater.
@@ -172,7 +170,7 @@ impl FunctionPass for DeadStoreElimination {
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
         let view = View::within(&frozen, unit.layout, &before, &outer).with_shape(&shape);
         let shape = view.shape();
-        let mssa = Mssa::build(&before, &shape.dominance, &shadow::effect_of(&accesses, &before));
+        let mssa = Mssa::build(&before, &shape.dominance, &shadow::effect_of_in(&accesses, &view));
         let tree = DomTree::of(&before);
         let mut post = PostDomTree::new();
         post.recalculate(&before);
@@ -325,7 +323,7 @@ impl<'a> Dse<'a> {
                 let Some(access) = state.mssa.get_memory_access(inst) else { continue };
                 if state.mssa.access(access).kind == Kind::Def
                     && state.mem_defs.len() < DEFS_PER_BLOCK_LIMIT
-                    && (state.killing_loc(inst).is_some() || !state.accesses.fills(inst).is_empty())
+                    && (state.killing_loc(inst).is_some() || !state.accesses.fills_in(state.aa.unit(), inst).is_empty())
                 {
                     state.mem_defs.push(access);
                 }
@@ -356,7 +354,7 @@ impl<'a> Dse<'a> {
         &self,
         inst: InstId,
     ) -> bool {
-        self.accesses.writes(inst).is_none_or(|writes| !writes.is_empty())
+        self.accesses.writes_in(self.aa.unit(), inst).is_none_or(|writes| !writes.is_empty())
     }
 
     /// `mayReadFromMemory`.
@@ -364,7 +362,7 @@ impl<'a> Dse<'a> {
         &self,
         inst: InstId,
     ) -> bool {
-        self.accesses.reads(inst).is_none_or(|reads| !reads.is_empty())
+        self.accesses.reads_in(self.aa.unit(), inst).is_none_or(|reads| !reads.is_empty())
     }
 
     fn is_store(
@@ -398,7 +396,7 @@ impl<'a> Dse<'a> {
         let filled = llrm_analysis::memory::MemRef::filled(self.aa.unit(), inst)?;
         // The provenance the accesses annotated, with the bytes the memset
         // fills.
-        let provenance = match self.accesses.writes(inst) {
+        let provenance = match self.accesses.writes_in(self.aa.unit(), inst).as_deref() {
             Some([written]) => written.provenance.clone(),
             _ => filled.provenance.clone(),
         };
@@ -441,7 +439,7 @@ impl<'a> Dse<'a> {
         let width = u32::try_from(size).ok().filter(|&one| one > 0)?;
         let at = llrm_analysis::memory::MemRef::at(self.aa.unit(), pointer, width);
         // The provenance the accesses annotated, as for a memset.
-        let provenance = match self.accesses.writes(inst) {
+        let provenance = match self.accesses.writes_in(self.aa.unit(), inst).as_deref() {
             Some([written]) => written.provenance.clone(),
             _ => at.provenance.clone(),
         };
@@ -530,7 +528,7 @@ impl<'a> Dse<'a> {
             .count();
         let filled = self
             .accesses
-            .fills(call)
+            .fills_in(self.aa.unit(), call)
             .iter()
             .filter(|fill| {
                 fill.pointer.is_some_and(|one| {
@@ -1676,7 +1674,8 @@ impl<'a> Dse<'a> {
             // call fills before it reads (`initializes`).
             let mut locations: Vec<(Rc<Location>, bool)> =
                 self.killing_loc(killing_inst).into_iter().map(|loc| (loc, false)).collect();
-            let fills: Vec<llrm_analysis::memory::MemRef> = self.accesses.fills(killing_inst).to_vec();
+            let fills: Vec<llrm_analysis::memory::MemRef> =
+                self.accesses.fills_in(self.aa.unit(), killing_inst).into_owned();
             locations.extend(fills.iter().map(|fill| (self.aa.location_for(fill, false), true)));
             for (killing_loc, init) in locations {
                 let (did, deleted_killing) = self.eliminate_dead_defs_of(killing_def, Rc::clone(&killing_loc), init);

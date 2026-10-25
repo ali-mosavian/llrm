@@ -180,6 +180,25 @@ fn a_frame_cell_with_a_wide_index_is_not_encodable_before_the_frame_is_named() {
 }
 
 #[test]
+fn a_quadword_cell_is_compared_and_added_to_with_an_immediate() {
+    // cmpq $0,-0x8(%rbp); cmpq $0x1000,-0x8(%rbp); addq $1,-0x8(%rbp). At -O0
+    // these had no form and the compile stopped ("greedy"-free: the emitter
+    // returned nothing for the instruction).
+    let op = |name, value| {
+        let cell = frame(-8, 8);
+        if name == "cmp" {
+            sem(Operation::Compare, Some(name), vec![], vec![cell, im(value, 8, None)], None, false)
+        } else {
+            sem(Operation::Binary, Some(name), vec![cell.clone()], vec![cell, im(value, 8, None)], None, false)
+        }
+    };
+    assert_eq!(bytes(&op("cmp", 0)), [0x48, 0x83, 0x7d, 0xf8, 0x00]);
+    assert_eq!(bytes(&op("cmp", 0x1000)), [0x48, 0x81, 0x7d, 0xf8, 0x00, 0x10, 0, 0]);
+    assert_eq!(bytes(&op("add", 1)), [0x48, 0x83, 0x45, 0xf8, 0x01]);
+}
+
+#[test]
+
 fn a_scalar_double_add_is_the_sse2_form() {
     // addsd %xmm1,%xmm0; addss %xmm9,%xmm8. Without an SSE row the emitter has
     // no form to encode.
@@ -213,11 +232,31 @@ fn the_other_scalar_sse_forms_encode() {
     assert_eq!(bytes(&xor), [0x0f, 0x57, 0xc0]);
 }
 
+/// A `double` negated or cleared is `xorps` over a value of 8 bytes: the
+/// encoder looked for `Xorps_xmm_xmmm64` and found no form.
+#[test]
+fn a_bitwise_xmm_operation_on_a_scalar_is_the_whole_register_form() {
+    let x = RegId::from(Register::XMM0);
+    let xor = sem(Operation::Binary, Some("xorps"), vec![rg(x, 8)], vec![rg(x, 8), rg(x, 8)], None, false);
+    assert_eq!(bytes(&xor), [0x0f, 0x57, 0xc0]);
+}
+
+#[test]
+fn a_scalar_held_sixteen_bytes_wide_reads_what_its_mnemonic_says() {
+    // The xmm class holds a double in 16 bytes; addsd still reads 64 bits (F2
+    // 0F 58), not xmmm128 (no such form).
+    let x = |n: u32| RegId::from(Register::XMM0 + n);
+    let add = sem(Operation::Binary, Some("addsd"), vec![rg(x(0), 16)], vec![rg(x(0), 16), rg(x(1), 16)], None, false);
+    assert_eq!(bytes(&add), [0xf2, 0x0f, 0x58, 0xc1]);
+    let widen = sem(Operation::Extend, Some("cvtss2sd"), vec![rg(x(0), 16)], vec![rg(x(1), 16)], None, false);
+    assert_eq!(bytes(&widen), [0xf3, 0x0f, 0x5a, 0xc1]);
+}
+
 #[test]
 fn the_scalar_double_move_is_not_the_string_copy() {
     // movsd %xmm1,%xmm0 is F2 0F 10 C1; the name `movsd` is the string copy's,
     // so the move is `movsd_x`.
     let x = |n: u32| RegId::from(Register::XMM0 + n);
-    let mov = sem(Operation::Move, Some("movsd_x"), vec![rg(x(0), 8)], vec![rg(x(1), 8)], None, false);
+    let mov = sem(Operation::Move, Some("movsd_x"), vec![rg(x(0), 16)], vec![rg(x(1), 16)], None, false);
     assert_eq!(bytes(&mov), [0xf2, 0x0f, 0x10, 0xc1]);
 }
