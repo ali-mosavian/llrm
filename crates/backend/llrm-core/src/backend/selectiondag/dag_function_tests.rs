@@ -3271,3 +3271,35 @@ fn a_fixed_point_divide_is_selected() {
     assert!(made.iter().any(|name| name == "shld"), "{made:?}");
     assert_eq!(made.iter().filter(|name| *name == "call").count(), 2, "{made:?}");
 }
+
+const UINT32_TO_DOUBLE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define double @f(i64 %a) {
+entry:
+  %r = uitofp i64 %a to double
+  ret double %r
+}
+";
+
+/// The fudge of an unsigned conversion is two floats in one pool entry, and the
+/// `fadd` reads one of them by its sign: a dword. The memory operand took the
+/// entry's eight bytes (`fadd qword ptr $K[bx]`), added a huge double, and
+/// `regparm3_matrix_4`'s `f3` returned `-2147483648` under `--isel=dag`.
+#[test]
+fn the_fudge_of_an_unsigned_conversion_is_read_as_a_float() {
+    use crate::model::ir::Loc;
+    let module = llrm_mir::parse::module(UINT32_TO_DOUBLE).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+    let indexed: Vec<u32> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .flat_map(|w| w.sources.iter())
+        .filter_map(|loc| match loc {
+            Loc::Mem(m) if m.index.is_some() => Some(m.width),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(indexed, [4], "the fudge is indexed by the sign and is a float");
+}
