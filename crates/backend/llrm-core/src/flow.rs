@@ -102,7 +102,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("MachineScheduler", "machinesched@5"),
     ("FixupSetCC", "fixupsetcc@5"),
     ("CallFrameOpt", "callframe@5"),
-    ("LowerCallFrame", "callframe@5"),
+    ("ReserveCallFrame", "callframe@5"),
     ("FlagsCopy", "flagscopy@5"),
     ("X86OptimizeLEAs", "leaopt@5"),
     ("FloatFold", "floatfold@6"),
@@ -202,8 +202,6 @@ pub fn machine_with<'a>(
             has_var_sized: false,
             slow_two_mem_ops: false,
         }),
-        // The frame pseudos that are left, as `sub`/`add` (every level).
-        Box::new(crate::backend::callframe::LowerCallFrame { stack: registers.stack, width: registers.slot as u32 }),
         // On SSA, right after the pushes are made: a pushed value a load made,
         // read nowhere else, is pushed from the load's cell (the pin:
         // X86CallFrameOptimization's push folding).
@@ -256,6 +254,12 @@ pub fn machine_with<'a>(
             prices: parcopy::CyclePrices::of(target),
             available: classes.available.clone(),
             saved: registers.saved.iter().map(|(whole, _)| *whole).collect(),
+        }),
+        // The pin's PEI: the call frame is reserved, or each call adjusts.
+        Box::new(crate::backend::callframe::ReserveCallFrame {
+            stack: registers.stack,
+            width: registers.slot as u32,
+            frame: frame.clone(),
         }),
         Box::new(prologue::Prologue::new(or_empty(), calls.cloned())),
         // After frame finalization, as the pin: a constant loaded again where

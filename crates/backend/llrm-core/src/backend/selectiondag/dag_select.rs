@@ -143,6 +143,7 @@ pub(crate) fn do_instruction_selection(
             continue;
         }
         let before = adapter.dag.nodes().len();
+        adapter.dag.cur_order = adapter.dag.nodes()[node as usize].order;
         if select_node(selector, &mut adapter, hooks, node) == Outcome::CannotSelect {
             return Err(Refusal::CannotSelect(format!("{:?}", adapter.dag.nodes()[node as usize].opcode)));
         }
