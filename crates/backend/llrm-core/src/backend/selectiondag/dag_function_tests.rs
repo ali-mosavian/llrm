@@ -360,17 +360,6 @@ fn a_load_read_by_a_compare_is_folded_into_it() {
     assert!(compare.sources.iter().any(|l| matches!(l, Loc::Mem(_))), "{compare:?}");
 }
 
-const TESTS_THE_LOW_BIT_OF_A_LOAD: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
-declare void @g()
-declare void @h()
-define void @f(i32 %c) {
-  %t = trunc i32 %c to i1
-  br i1 %t, label %a, label %b
-a:
-  call void @g()
-  ret void
-b:
-  call void @h()
 const WORD_FROM_COMPARE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
 @slot = global i16 0
 declare cc 1005 i16 @c(i16)
@@ -384,6 +373,67 @@ define cc 1005 void @f(i16 %a, i16 %b) {
   %s = load i16, ptr @slot
   %r = add i16 %s, %z
   store i16 %r, ptr @slot
+  ret void
+}
+";
+
+/// The pin cuts a word from `movzx r32, r8`; held as that dword, a flag that
+/// lives across a call was spilled and reloaded as a dword and could not sit
+/// in SI/DI (QCport `-Os`: `xor ecx, ecx; setne cl; mov dword ptr [bp-N]`).
+/// The `movzx` is made at word width.
+#[test]
+fn a_word_zero_extended_from_a_byte_is_a_word_value() {
+    use crate::model::ir::Loc;
+    let module = llrm_mir::parse::module(WORD_FROM_COMPARE).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let extend =
+        insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("movzx")).expect("a movzx");
+    assert!(matches!(extend.dests.as_slice(), [Loc::Held(h)] if h.width == 2), "{extend:?}");
+}
+
+const DWORD_AND_WORD_FROM_COMPARE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+@word = global i16 0
+@dword = global i32 0
+declare cc 1005 i16 @c(i16)
+define cc 1005 void @f(i16 %a) {
+  %v = call cc 1005 i16 @c(i16 %a)
+  %t = icmp ne i16 %v, 0
+  %z = zext i1 %t to i32
+  %w = trunc i32 %z to i16
+  store i16 %w, ptr @word
+  store i32 %z, ptr @dword
+  ret void
+}
+";
+
+/// The dword a `movzx` made is narrowed only when the word is all that is
+/// read: with a dword reader too, `movzx ax, al` left the high half stale
+/// (regparm3_matrix_31 and _4 printed wrong sums).
+#[test]
+fn a_zero_extended_byte_read_as_a_dword_too_stays_a_dword() {
+    use crate::model::ir::Loc;
+    let module = llrm_mir::parse::module(DWORD_AND_WORD_FROM_COMPARE).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let extend =
+        insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("movzx")).expect("a movzx");
+    assert!(matches!(extend.dests.as_slice(), [Loc::Held(h)] if h.width == 4), "{extend:?}");
+}
+
+const TESTS_THE_LOW_BIT_OF_A_LOAD: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @g()
+declare void @h()
+define void @f(i32 %c) {
+  %t = trunc i32 %c to i1
+  br i1 %t, label %a, label %b
+a:
+  call void @g()
+  ret void
+b:
+  call void @h()
   ret void
 }
 ";
@@ -452,48 +502,4 @@ b:
             );
         }
     }
-/// The pin cuts a word from `movzx r32, r8`; held as that dword, a flag that
-/// lives across a call was spilled and reloaded as a dword and could not sit
-/// in SI/DI (QCport `-Os`: `xor ecx, ecx; setne cl; mov dword ptr [bp-N]`).
-/// The `movzx` is made at word width.
-#[test]
-fn a_word_zero_extended_from_a_byte_is_a_word_value() {
-    use crate::model::ir::Loc;
-    let module = llrm_mir::parse::module(WORD_FROM_COMPARE).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
-        .unwrap_or_else(|e| panic!("{}", e.0));
-    let insns = done.body.insns();
-    let extend =
-        insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("movzx")).expect("a movzx");
-    assert!(matches!(extend.dests.as_slice(), [Loc::Held(h)] if h.width == 2), "{extend:?}");
-}
-
-const DWORD_AND_WORD_FROM_COMPARE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
-@word = global i16 0
-@dword = global i32 0
-declare cc 1005 i16 @c(i16)
-define cc 1005 void @f(i16 %a) {
-  %v = call cc 1005 i16 @c(i16 %a)
-  %t = icmp ne i16 %v, 0
-  %z = zext i1 %t to i32
-  %w = trunc i32 %z to i16
-  store i16 %w, ptr @word
-  store i32 %z, ptr @dword
-  ret void
-}
-";
-
-/// The dword a `movzx` made is narrowed only when the word is all that is
-/// read: with a dword reader too, `movzx ax, al` left the high half stale
-/// (regparm3_matrix_31 and _4 printed wrong sums).
-#[test]
-fn a_zero_extended_byte_read_as_a_dword_too_stays_a_dword() {
-    use crate::model::ir::Loc;
-    let module = llrm_mir::parse::module(DWORD_AND_WORD_FROM_COMPARE).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
-        .unwrap_or_else(|e| panic!("{}", e.0));
-    let insns = done.body.insns();
-    let extend =
-        insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("movzx")).expect("a movzx");
-    assert!(matches!(extend.dests.as_slice(), [Loc::Held(h)] if h.width == 4), "{extend:?}");
 }
