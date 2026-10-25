@@ -3342,6 +3342,41 @@ fn a_dominant_case_is_peeled_and_the_rest_follows() {
     );
 }
 
+const FAR_COPY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+define void @f(ptr %d, ptr addrspace(2) %s, i16 %i, i16 %n) addrspace(1) {
+entry:
+  %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(4)
+  %p = getelementptr i8, ptr addrspace(4) %far, i16 %i
+  call void @llvm.memcpy.p0.p4.i16(ptr %d, ptr addrspace(4) %p, i16 %n, i1 false)
+  ret void
+}
+declare void @llvm.memcpy.p0.p4.i16(ptr, ptr addrspace(4), i16, i1)
+";
+
+/// A far pointer is `offset | (selector << 16)`; the matcher turns an `or` of
+/// disjoint values into an `add` (`ADD32rr_DB`), and a string operation then
+/// took the pointer for a near one: ES/DS = DGROUP. c `idiom_edges` copied
+/// from the wrong segment under `--isel=dag` (8de7ce51a).
+#[test]
+fn a_copy_from_a_far_pointer_reads_through_its_selector() {
+    use crate::model::ir::{Loc, Operation};
+    let module = llrm_mir::parse::module(FAR_COPY).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+    let insns = done.body.insns();
+    let copy = insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.op == Operation::Copy)).expect("a copy");
+    let sources = &copy.what.as_ref().expect("semantics").sources;
+    let Some(Loc::Held(from)) = sources.get(sources.len() - 2).cloned() else { panic!("{copy:?}") };
+    let from_a_constant = insns
+        .iter()
+        .any(
+            |i| i.what.as_ref().is_some_and(|w| {
+                w.dests.contains(&Loc::Held(from)) && w.sources.iter().all(|source| matches!(source, Loc::Imm(_)))
+            }),
+        );
+    assert!(!from_a_constant, "DS takes a constant (DGROUP), not the pointer's selector");
+}
+
 const FLOAT_ACROSS_A_CALL: &str = "target datalayout = \"e-p:32:32-i64:32-f80:32-n8:16:32\"
 declare void @g()
 define double @f(double %a, double %b) {
