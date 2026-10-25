@@ -22,8 +22,7 @@ pub fn require_verification() {
 /// run set it, so a frontend or a phase that breaks an invariant is caught in
 /// every gate run.
 pub fn verifying() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    REQUIRED.load(Ordering::Relaxed) || *ON.get_or_init(|| crate::env_set("LLRM_VERIFY"))
+    REQUIRED.load(Ordering::Relaxed) || crate::env_flag!("LLRM_VERIFY")
 }
 
 /// Whether `channel` is on.
