@@ -195,15 +195,6 @@ impl Builder<'_> {
             .unwrap_or(1)
     }
 
-    /// X86's `getOptimalMemOpType` without SSE: `i64` for eight bytes or more
-    /// in 64-bit mode, else `i32` (at m16 too: the 386 has the register).
-    fn widest_mem_op(
-        &self,
-        size: u64,
-    ) -> u64 {
-        if self.target.dag.pointer.size_in_bits() == 64 && size >= 8 { 8 } else { 4 }
-    }
-
     fn constant_size(
         &self,
         size: SDValue,
@@ -211,9 +202,22 @@ impl Builder<'_> {
         self.dag.constant(size).map(|bits| bits as u64)
     }
 
+    /// `X86TargetLowering::getOptimalMemOpType` without SSE or 64-bit mode:
+    /// `i32` outside 64-bit mode, `-m16` included (a dword store is a prefix
+    /// away).
+    const WIDEST_MEM_OP: u64 = 4;
+
+    /// `i64` for eight bytes or more where the pointer is 64 bits wide.
+    fn widest_mem_op(
+        &self,
+        size: u64,
+    ) -> u64 {
+        if self.target.dag.pointer.size_in_bits() == 64 && size >= 8 { 8 } else { Self::WIDEST_MEM_OP }
+    }
+
     /// `findOptimalMemOpLowering` for x86 without SSE: the width in bytes of
-    /// each memory operation covering `size` bytes, the widest being the
-    /// pointer's; `None` past `limit` operations. A last operation wider
+    /// each memory operation covering `size` bytes, the widest being `i32`;
+    /// `None` past `limit` operations. A last operation wider
     /// than the bytes left overlaps the one before it.
     fn mem_ops(
         size: u64,
