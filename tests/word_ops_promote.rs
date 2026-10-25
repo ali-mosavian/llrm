@@ -31,11 +31,14 @@ fn a_word_and_or_xor_of_a_register_runs_on_the_whole_register() {
     );
     // On the whole register, whichever one the allocator gave it.
     for (op, immediate) in [("xor", "4660"), ("or", "4660"), ("and", "29236")] {
-        let whole = text.lines().map(str::trim).any(|line| {
-            line.strip_prefix(op)
-                .and_then(|rest| rest.strip_prefix(" e"))
-                .is_some_and(|rest| rest.ends_with(&format!(", {immediate}")))
-        });
+        let whole = text
+            .lines()
+            .map(str::trim)
+            .any(
+                |line| line.strip_prefix(op)
+                    .and_then(|rest| rest.strip_prefix(" e"))
+                    .is_some_and(|rest| rest.ends_with(&format!(", {immediate}"))),
+            );
         assert!(whole, "{op} e?x, {immediate} is missing:\n{text}");
     }
     for word in ["xor ax,", "or ax,", "and ax,"] {

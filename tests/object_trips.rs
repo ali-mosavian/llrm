@@ -42,11 +42,11 @@ fn multiplies(level: &str) -> (usize, usize) {
 
 /// x_matmul_f's `k` loop stayed rolled at -O3 with 78,749 clocks where gcc's
 /// copies of it, 12 of them (`infer_loop_bounds_from_array`), took 67,907, and
-/// the pass copied it out by the arrays' extent. LLVM's LoopUnroll takes no trip
-/// bound from an inbounds access to an array, so the translated pass leaves
-/// `dot` rolled at both levels as the pin does (clang -m32 -O3 -march=i486 on
-/// this kernel with the arrays external: one `fmul` in `dot` and one in
-/// `through`).
+/// the pass copied it out by the arrays' extent. LLVM's LoopUnroll takes no
+/// trip bound from an inbounds access to an array, so the translated pass
+/// leaves `dot` rolled at both levels as the pin does (clang -m32 -O3
+/// -march=i486 on this kernel with the arrays external: one `fmul` in `dot` and
+/// one in `through`).
 #[test]
 fn test_o3_leaves_a_loop_over_arrays_rolled_as_the_pin_does() {
     assert_eq!(multiplies("-O3"), (1, 1));

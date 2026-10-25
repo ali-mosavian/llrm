@@ -10,7 +10,8 @@ fn listing(source: &str) -> String {
     std::fs::write(directory.join("a.c"), source).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
         .current_dir(directory)
-        // The loops are the premise: at 40 trips the pin's order copies them out.
+        // The loops are the premise: at 40 trips the pin's order copies them
+        // out.
         .args(["-m32", "-mabi=sysv", "-O2", "-march=i486", "-fno-unroll-loops", "-S", "-o", "a.s", "a.c"])
         .output()
         .unwrap();

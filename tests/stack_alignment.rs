@@ -9,8 +9,8 @@ fn listing(source: &str) -> String {
     std::fs::write(scratch.path().join("a.c"), source).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
         .current_dir(scratch.path())
-        // The call to `h` is the premise: inlined (the pin inlines it), `f` calls
-        // nothing that holds a double and needs no pad.
+        // The call to `h` is the premise: inlined (the pin inlines it), `f`
+        // calls nothing that holds a double and needs no pad.
         .args(["-m32", "-mabi=sysv", "-march=i486", "-O2", "-fno-inline-functions", "-S", "-o", "a.s", "a.c"])
         .output()
         .unwrap();

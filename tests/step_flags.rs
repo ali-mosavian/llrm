@@ -54,11 +54,14 @@ fn test_a_step_made_before_the_compare_of_its_value_is_made_after_it_in_place() 
     // The step is made in place whichever side of the compare it is on (the
     // pin's order has `add di, si` ahead of `cmp di, dx` now): the three
     // instructions before the back edge are steps and the compare, with no
-    // `mov` or `lea` that makes the step in another register and copies it back.
-    let in_place = lines.windows(4).any(|four| {
-        four[3].starts_with("jb ")
-            && four[..3].iter().filter(|line| line.starts_with("cmp ")).count() == 1
-            && four[..3].iter().all(|line| line.starts_with("cmp ") || line.starts_with("add "))
-    });
+    // `mov` or `lea` that makes the step in another register and copies it
+    // back.
+    let in_place = lines
+        .windows(4)
+        .any(
+            |four| four[3].starts_with("jb ")
+                && four[..3].iter().filter(|line| line.starts_with("cmp ")).count() == 1
+                && four[..3].iter().all(|line| line.starts_with("cmp ") || line.starts_with("add ")),
+        );
     assert!(in_place, "{text}");
 }
