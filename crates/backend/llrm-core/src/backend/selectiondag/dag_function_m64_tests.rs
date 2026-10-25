@@ -46,6 +46,14 @@ entry:
     let registers: Vec<_> = call.requires.iter().map(|(held, reg)| (held.width, *reg)).collect();
     let expected = [RegId::RDI, RegId::RSI, RegId::RDX, RegId::RCX, RegId::R8, RegId::R9].map(|r| (8, r));
     assert_eq!(registers, expected);
+    // The argument area is a multiple of 16: a call finds the stack aligned
+    // (printf crashed in `movaps` with the 8-byte area).
+    let sub = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.name.as_deref() == Some("sub"))
+        .expect("the area reserved");
+    assert!(matches!(sub.sources[1], crate::model::ir::Loc::Imm(ref i) if i.value == 16), "{sub:?}");
     let store = insns
         .iter()
         .filter_map(|i| i.what.as_ref())

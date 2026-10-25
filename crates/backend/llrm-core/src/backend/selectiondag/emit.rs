@@ -177,6 +177,9 @@ pub struct EmitContext<'a> {
     /// How addresses are formed: real mode constrains a base and an index to
     /// their register classes (SD4).
     pub address_mode: AddrMode,
+    /// The multiple a call's argument area is rounded to, so a call finds the
+    /// stack aligned (`aligned_calls`); 1 where calls need none.
+    pub call_alignment: i64,
     pub map: &'a OpcodeMap,
     pub names: &'a HashMap<u16, &'a str>,
     /// The jump tables of the function, by `JumpTable` index.
@@ -1548,6 +1551,9 @@ impl Emitter<'_, '_> {
             "ADJCALLSTACKDOWN32" | "ADJCALLSTACKUP32" | "ADJCALLSTACKDOWN64" | "ADJCALLSTACKUP64" => {
                 let bytes = self.constant(node.ops[0])?;
                 let popped = if name.starts_with("ADJCALLSTACKUP") { self.constant(node.ops[1])? } else { 0 };
+                // The area is a multiple of the call alignment; the callee pops
+                // `popped` of it, the caller the rest.
+                let bytes = (bytes + self.ctx.call_alignment - 1) / self.ctx.call_alignment * self.ctx.call_alignment;
                 let (verb, count) =
                     if name.starts_with("ADJCALLSTACKDOWN") { ("sub", bytes) } else { ("add", bytes - popped) };
                 if count != 0 {
