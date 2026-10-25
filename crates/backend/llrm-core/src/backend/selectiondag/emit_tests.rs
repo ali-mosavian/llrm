@@ -222,8 +222,8 @@ fn a_select_without_cmov_becomes_a_branch_and_a_phi() {
         assert_eq!(phi.incoming.len(), 2);
         assert_eq!(phi.incoming[0].0, fallthrough.at, "the false value comes from the false block");
         assert_eq!(phi.incoming[1].0, this.at, "the true value from the block that branched");
-        let mov = sink.insns[0].what.as_ref().expect("the copy lands in the join block");
-        assert_eq!(mov.sources[0], Loc::Held(crate::model::ir::Held { value: phi.result, width: 4 }));
+        // The result is made in %12 itself (`CreateVirtualRegisters`): no export copy follows the select.
+        assert!(sink.insns.is_empty(), "{:?}", sink.insns);
     });
 }
 
