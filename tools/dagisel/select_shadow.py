@@ -34,6 +34,7 @@ FLAG_WORDS = {"nuw", "nsw", "exact", "nnan", "ninf", "nsz", "arcp", "contract", 
 SELECT_PSEUDOS = {"CMOV_GR8", "CMOV_GR16", "CMOV_GR32"}
 # The pin's finalize-isel runs the custom inserter of FP_TO_INT*_IN_MEM: the control-word switch around the store. Ours
 # keeps the pseudo (`floatalloc` writes the switch, shared by a run of them).
+EQUAL_FP = "equal through the FP_TO_INT rule"
 FP_TO_INT = re.compile(r"FP(\d+)_TO_INT(\d+)_IN_MEM")
 BOOKKEEPING = {"COPY", "EXTRACT_SUBREG", "PHI", "IMPLICIT_DEF", "ADJCALLSTACKDOWN32", "ADJCALLSTACKUP32", "KILL"}
 
@@ -147,9 +148,10 @@ def rows_of(program, funcs, refused, pinned, ir=""):
         else:
             want = Counter({k: v for k, v in pinned.get(name, Counter()).items() if k not in BOOKKEEPING})
             have = Counter({k: v for k, v in f["machine"].items() if k not in BOOKKEEPING})
+            plain = expanded_selects(Counter(have), want)
             have = expanded_selects(expanded_fp_to_int(have), want)
             if want == have:
-                bucket = "equal"
+                bucket = "equal" if want == plain else EQUAL_FP
             else:
                 pin_only, ours_only = want - have, have - want
                 top = max((pin_only + ours_only).items(), key=lambda kv: kv[1])[0]
@@ -222,6 +224,7 @@ def main() -> int:
         rows = [row for part in pool.map(lambda s: one(args.llrm_c, args.shadow, s, args.m16), sources) for row in part]
     buckets = Counter(bucket for _, _, bucket in rows)
     good = "selects" if args.m16 else "equal"
+    buckets[good] += buckets[EQUAL_FP]
     print(f"{buckets[good]} {good} of {len(rows)} defined functions in {len(sources)} programs")
     for bucket, n in buckets.most_common():
         print(f"{n:6d}  {bucket}")
