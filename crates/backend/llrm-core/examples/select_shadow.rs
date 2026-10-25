@@ -183,7 +183,7 @@ fn main() {
 fn reachable_users_first(adapter: &DagisAdapter<'_>) -> Vec<u32> {
     let dag = &*adapter.dag;
     let mut order = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = llrm_support::hash::HashSet::default();
     let mut stack = vec![(dag.get_root().node, false)];
     while let Some((n, expanded)) = stack.pop() {
         if expanded {
@@ -211,7 +211,7 @@ impl DagisAdapterView {
         dag: &llrm_core::backend::selectiondag::SelectionDAG,
         node: u32,
     ) -> bool {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = llrm_support::hash::HashSet::default();
         let mut stack = vec![dag.get_root().node];
         while let Some(n) = stack.pop() {
             if n == node {
