@@ -598,27 +598,6 @@ entry:
     assert!(!done.body.returns_twice);
 }
 
-/// `a << (i & 31)` on 64 bits kept the select on bit 5 of the amount as `xor
-/// ecx, ecx; test cl, cl; je` after `shld; shl` (100 vs the pin's 72 insns in
-/// x_ll_arith): bit 5 of `i & 31` is known zero, so the pin has no fixup.
-#[test]
-fn a_wide_shift_by_a_masked_amount_has_no_fixup_branch() {
-    let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
-define i64 @f(i64 %a, i32 %i) {
-  %m = and i32 %i, 31
-  %z = zext i32 %m to i64
-  %r = shl i64 %a, %z
-  ret i64 %r
-}
-";
-    let module = llrm_mir::parse::module(ir).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
-        .unwrap_or_else(|e| panic!("{}", e.0));
-    let insns = done.body.insns();
-    let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
-    assert!(!seen.iter().any(|n| n.starts_with('j') || *n == "test"), "{seen:?}");
-}
-
 /// A constant a phi receives was `mov v3, 0; mov v4, v3`: the constant load
 /// made a value of its own and a copy carried it to the phi's register. The
 /// pin's `MOV32r0` defines that register, so `precse` sees one zero on both
@@ -658,4 +637,25 @@ b6:
         .filter(|w| matches!(w.sources.as_slice(), [crate::model::ir::Loc::Held(_)]))
         .count();
     assert_eq!(copies, 0, "{} register copies", copies);
+}
+
+/// `a << (i & 31)` on 64 bits kept the select on bit 5 of the amount as `xor
+/// ecx, ecx; test cl, cl; je` after `shld; shl` (100 vs the pin's 72 insns in
+/// x_ll_arith): bit 5 of `i & 31` is known zero, so the pin has no fixup.
+#[test]
+fn a_wide_shift_by_a_masked_amount_has_no_fixup_branch() {
+    let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i64 %a, i32 %i) {
+  %m = and i32 %i, 31
+  %z = zext i32 %m to i64
+  %r = shl i64 %a, %z
+  ret i64 %r
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+    assert!(!seen.iter().any(|n| n.starts_with('j') || *n == "test"), "{seen:?}");
 }
