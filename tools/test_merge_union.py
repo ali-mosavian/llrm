@@ -32,7 +32,15 @@ def appended(repo: Path, name: str) -> None:
     git(repo, "commit", "-qam", name)
 
 
-def two_prs(tmp_path: Path, attribute: str) -> Path:
+def appended_module(repo: Path, name: str) -> None:
+    """A constant holding a multi-line module, then the test that parses it: the shape of #4565, where lines the two sides share were kept once and the blocks interleaved."""
+    path = repo / TESTS
+    module = f'const {name.upper()}: &str = "target datalayout = \\"e-p:16:16\\"\n@slot = global i16 0\ndeclare void @u(i16)\ndefine void @f() {{\nentry:\n  ret void\n}}\n";\n\n'
+    path.write_text(path.read_text() + "\n" + module + TEST.format(name=name).replace("parse(" + name + ")", f"parse({name.upper()})"))
+    git(repo, "commit", "-qam", name)
+
+
+def two_prs(tmp_path: Path, attribute: str, append=appended) -> Path:
     repo = tmp_path / "repo"
     (repo / TESTS).parent.mkdir(parents=True)
     git(tmp_path, "init", "-q", "-b", "main", str(repo))
@@ -41,9 +49,9 @@ def two_prs(tmp_path: Path, attribute: str) -> Path:
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "base")
     git(repo, "checkout", "-qb", "second")
-    appended(repo, "volatile_store")
+    append(repo, "volatile_store")
     git(repo, "checkout", "-q", "main")
-    appended(repo, "volatile_copy")
+    append(repo, "volatile_copy")
     return repo
 
 
@@ -96,3 +104,18 @@ def test_without_the_driver_the_appends_conflict_and_never_corrupt(tmp_path):
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_CONFIG_")}
     merged = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "merge", "--no-edit", "-q", "second"], cwd=repo, capture_output=True, text=True, env=env)
     assert merged.returncode != 0 and "<<<<<<<" in (repo / TESTS).read_text()
+
+
+def test_a_constant_and_its_test_appended_by_both_sides_merge_whole(tmp_path):
+    """#4565: the PR's constant interleaved with parity's under union (unclosed delimiter); each side's constant and test come through whole."""
+    repo = two_prs(tmp_path, "tests-append", appended_module)
+    assert git(repo, "merge", "--no-edit", "-q", "second", check=False).returncode == 0
+    text = (repo / TESTS).read_text()
+    assert parses(text, tmp_path)
+    assert text.count("const VOLATILE_COPY") == 1 and text.count("const VOLATILE_STORE") == 1 and text.count("declare void @u(i16)") == 2
+
+
+def test_union_interleaves_a_constant_and_its_test(tmp_path):
+    repo = two_prs(tmp_path, "union", appended_module)
+    git(repo, "merge", "--no-edit", "-q", "second", check=False)
+    assert not parses((repo / TESTS).read_text(), tmp_path)
