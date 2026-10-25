@@ -377,6 +377,10 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
                         (llrm_dagisel::x86_llrm::FSIN_OPCODE, "SIN_Fp80"),
                         (llrm_dagisel::x86_llrm::FCOS_OPCODE, "COS_Fp80"),
                         (llrm_dagisel::x86_llrm::FATAN_OPCODE, "ATAN_Fp80"),
+                        (llrm_dagisel::x86_llrm::FRINT_OPCODE, "RNDINT_Fp80"),
+                        (llrm_dagisel::x86_llrm::IST16_OPCODES[0], "IST_Fp16m32"),
+                        (llrm_dagisel::x86_llrm::IST16_OPCODES[1], "IST_Fp16m64"),
+                        (llrm_dagisel::x86_llrm::IST16_OPCODES[2], "IST_Fp16m80"),
                         (llrm_dagisel::x86_llrm::LLRM_ASM_OPCODE, "CALL_ASM"),
                     ])
                     .collect(),
@@ -587,6 +591,7 @@ fn selected_in(
             super::isd::ISD::FSin,
             super::isd::ISD::FCos,
             super::isd::ISD::FAtan,
+            super::isd::ISD::FRint,
         ] {
             for vt in [MVT::F32, MVT::F64, MVT::F80] {
                 tli.set_operation_action(op, vt, super::actions::Action::LibCall);

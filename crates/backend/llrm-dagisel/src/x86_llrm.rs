@@ -61,7 +61,7 @@ pub const LLRM_TC_RETURN: u16 = 24587;
 pub const TC_RETURN_OPCODE: u16 = 30022;
 
 /// The machine opcodes the transcendental `FLOG`, `FEXP`, `FLOG2`, `FEXP2`,
-/// `FSIN`, `FCOS` and `FATAN` become (SD214): the x87 operations or
+/// `FSIN`, `FCOS`, `FATAN` and `FRINT` become (SD214): the x87 operations or
 /// sequences `fln`, `fexp`, `flog2`, `fexp2`, `fsin`, `fcos` and `fatan`,
 /// which the pin has no pattern for (it calls libm unless unsafe math is on;
 /// llrm's targets have none).
@@ -72,6 +72,12 @@ pub const FEXP2_OPCODE: u16 = 30018;
 pub const FSIN_OPCODE: u16 = 30019;
 pub const FCOS_OPCODE: u16 = 30020;
 pub const FATAN_OPCODE: u16 = 30021;
+pub const FRINT_OPCODE: u16 = 30025;
+
+/// The machine opcodes `X86ISD::FIST` of an `i16` becomes (SD215): the pin has
+/// `IST_Fp16m32/64/80` and no pattern for them, since its `lrint` of a
+/// `short` is promoted; QB's `CINT` stores a word.
+pub const IST16_OPCODES: [u16; 3] = [30022, 30023, 30024];
 
 /// The pseudo opcode an llrm node of this id becomes.
 pub fn llrm_opcode(node: u16) -> Option<u16> {
