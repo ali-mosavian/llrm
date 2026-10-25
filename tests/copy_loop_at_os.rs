@@ -3,7 +3,7 @@
 
 use std::process::Command;
 
-fn listing(flags: &[&str]) -> String {
+fn os_copy_listing(flags: &[&str]) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(
@@ -25,12 +25,12 @@ fn listing(flags: &[&str]) -> String {
 /// with the count split between them: 29 bytes more than the loops.
 #[test]
 fn at_os_a_copy_of_a_run_time_length_is_not_rep_movs() {
-    let text = listing(&["-Os"]);
+    let text = os_copy_listing(&["-Os"]);
     assert!(!text.contains("rep movs"), "{text}");
 }
 
 #[test]
 fn at_o2_the_same_copy_is_rep_movs() {
-    let text = listing(&["-O2"]);
+    let text = os_copy_listing(&["-O2"]);
     assert!(text.contains("rep movs"), "{text}");
 }
