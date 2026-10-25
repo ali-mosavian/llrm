@@ -127,7 +127,12 @@ def main() -> None:
             lines.append(f"    {function}: {was.get(function, 'absent')} -> {now.get(function, 'absent')} ({delta:+})")
     if args.clocks:
         before, after = bench(args.base, args.level, Path(tempfile.mkdtemp(prefix="m16os-base-"))), bench(args.new, args.level, Path(tempfile.mkdtemp(prefix="m16os-new-")))
-        lines += ["", "clocks (bench.py, 486-priced instruction streams): see the two JSONs' rows joined by label", json.dumps({"base_rows": len(before), "new_rows": len(after)})]
+        lines += ["", "bench rows, slowest first (clocks and code bytes, base / new / ratio; rows one side cannot build or count follow):"]
+        timed = lambda row: isinstance(row, dict) and "clocks" in row
+        both = sorted((k for k in before if timed(before[k]) and timed(after.get(k))), key=lambda k: before[k]["clocks"] / after[k]["clocks"])
+        lines += [f"  {k:34} clocks {before[k]['clocks']:>11} {after[k]['clocks']:>11} {after[k]['clocks'] / before[k]['clocks']:5.2f}x   bytes {before[k]['code_bytes']:>5} {after[k]['code_bytes']:>5} {after[k]['code_bytes'] / before[k]['code_bytes']:5.2f}x" for k in both]
+        lines.append(f"  clocks: {sum(after[k]['clocks'] > before[k]['clocks'] for k in both)} slower, {sum(after[k]['clocks'] < before[k]['clocks'] for k in both)} faster of {len(both)}")
+        lines += [f"  {k}: base {str(before[k].get('error', 'no clocks'))[:90] if k in before else 'absent'}; new {str(after[k].get('error', 'no clocks'))[:90] if k in after else 'absent'}" for k in sorted(set(before) | set(after)) if k not in both]
     text = "\n".join(lines) + "\n"
     if args.out:
         args.out.write_text(text)
