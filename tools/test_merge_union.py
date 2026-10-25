@@ -88,3 +88,11 @@ def test_gitattributes_names_the_driver_for_tests_files():
     lines = (ROOT / ".gitattributes").read_text().splitlines()
     assert "*_tests.rs merge=tests-append" in lines and "tests.rs merge=tests-append" in lines
     assert not any("tests.rs" in line and line.endswith("merge=union") for line in lines)
+
+
+def test_without_the_driver_the_appends_conflict_and_never_corrupt(tmp_path):
+    """A clone that never ran merge-driver.sh: git must stop at a conflict, not merge to text that does not parse."""
+    repo = two_prs(tmp_path, "tests-append")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_CONFIG_")}
+    merged = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "merge", "--no-edit", "-q", "second"], cwd=repo, capture_output=True, text=True, env=env)
+    assert merged.returncode != 0 and "<<<<<<<" in (repo / TESTS).read_text()
