@@ -2326,6 +2326,9 @@ fn a_literal_assigned_to_a_fixed_string_goes_to_basic_assn_as_a_descriptor_under
     };
     assert!(!passes_the_bytes(Dialect::VbDos, "vbdos"));
     assert!(passes_the_bytes(Dialect::QuickBasic45, "qb45"));
+}
+
+#[test]
 fn palette_using_passes_the_array_element_and_its_descriptor_to_b_palu() {
     // PALETTE USING was refused. PDS 7.1 BC calls B$PALU with a far pointer to
     // the named entry and the descriptor, as GET and PUT pass their array.
