@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_compares.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_compares.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_compares.rs sha256:0785831225f7201ff3661862c6011c01acaaacedcabb32818d7fb2ea7c1f549f -->
+<!-- src: crates/opt/llrm-transforms/src/combine_compares.rs sha256:1ea06151a64db4139fb84a301857b42778eb34f4edec2a834768d5210b44b093 -->
 
 # combine_compares
 
@@ -19,9 +19,7 @@ This is the first slice of the family. A step not translated yet stays in
 its place as a `// OWED:` comment naming the C++ function, so the order
 stays LLVM's. The owed steps, with their exits:
 `foldICmpTruncWithTruncOrExt`, `canonicalizeICmpBool`,
-`canonicalizeICmpPredicate` (needs `canFreelyInvertAllUsersOf`,
-uselist-port's shared helper), `foldICmpWithConstant`,
-`foldICmpWithDominatingICmp`, `foldICmpUsingBoolRange`,
+`foldICmpWithConstant`, `foldICmpUsingBoolRange`,
 `foldIsMultipleOfAPowerOfTwo`, `foldICmpBinOp`, `foldICmpInstWithConstant`,
 `foldSignBitTest`, `foldOpIntoPhi`, `foldICmpInstWithConstantNotInt`,
 `foldICmpCommutative`, `foldCmpSelectOfConstants` and the select pair fold,

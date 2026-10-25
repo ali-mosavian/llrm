@@ -256,9 +256,9 @@ b0:
 /// `j <u 1920` (the bounds check) dominates it. `foldICmpWithDominatingICmp`
 /// makes that `j != 0` (the compares' ranges leave one value out); the pin
 /// then canonicalizes it to `j == 0` with the arms swapped
-/// (`canonicalizeICmpPredicate`, not translated yet).
+/// (`canonicalizeICmpPredicate`).
 #[test]
-fn a_signed_bound_on_a_value_a_dominating_compare_keeps_below_a_limit_is_an_inequality() {
+fn a_signed_bound_on_a_value_a_dominating_compare_keeps_below_a_limit_is_an_equality() {
     let mut module = parsed(
         "define void @f(ptr %a) {
 entry:
@@ -287,6 +287,34 @@ exit:
     );
     combined(&mut module);
     let after = printed(&module);
-    assert!(after.contains("icmp ne i16 %j, 0"), "{after}");
-    assert!(after.contains("label %body, label %exit"), "{after}");
+    assert!(after.contains("icmp eq i16 %j, 0"), "{after}");
+    assert!(after.contains("label %exit, label %body"), "{after}");
+}
+
+/// A loop that tests `i != n` at its latch leaves the pin as `i == n` with the
+/// arms swapped (`canonicalizeICmpPredicate`: `ne` is not canonical, and a
+/// branch takes the inversion for free). It stayed `ne`, so JumpThreading read
+/// x_list's list-sum loop another way round and kept two pointer phis.
+#[test]
+fn a_branch_on_a_non_canonical_compare_is_the_inverse_compare_with_the_arms_swapped() {
+    let mut module = parsed(
+        "define void @f(i16 %n) {
+entry:
+  br label %body
+
+body:
+  %i = phi i16 [ 0, %entry ], [ %next, %body ]
+  %next = add i16 %i, 1
+  %more = icmp ne i16 %next, %n
+  br i1 %more, label %body, label %exit
+
+exit:
+  ret void
+}
+",
+    );
+    combined(&mut module);
+    let after = printed(&module);
+    assert!(after.contains("icmp eq i16 %next, %n"), "{after}");
+    assert!(after.contains("label %exit, label %body"), "{after}");
 }

@@ -14,9 +14,7 @@
 //! its place as a `// OWED:` comment naming the C++ function, so the order
 //! stays LLVM's. The owed steps, with their exits:
 //! `foldICmpTruncWithTruncOrExt`, `canonicalizeICmpBool`,
-//! `canonicalizeICmpPredicate` (needs `canFreelyInvertAllUsersOf`,
-//! uselist-port's shared helper), `foldICmpWithConstant`,
-//! `foldICmpWithDominatingICmp`, `foldICmpUsingBoolRange`,
+//! `foldICmpWithConstant`, `foldICmpUsingBoolRange`,
 //! `foldIsMultipleOfAPowerOfTwo`, `foldICmpBinOp`, `foldICmpInstWithConstant`,
 //! `foldSignBitTest`, `foldOpIntoPhi`, `foldICmpInstWithConstantNotInt`,
 //! `foldICmpCommutative`, `foldCmpSelectOfConstants` and the select pair fold,
@@ -167,6 +165,9 @@ pub fn visit_icmp(
     if let Some(r) = canonicalize_cmp_with_constant(c, inst, pred, op0, op1) {
         return r;
     }
+    if let Some(r) = canonicalize_icmp_predicate(c, inst, pred) {
+        return r;
+    }
     // OWED: foldICmpWithConstant, foldICmpUsingBoolRange.
     if let Some(r) = fold_icmp_with_dominating_icmp(c, inst, pred, op0, op1) {
         return r;
@@ -290,6 +291,60 @@ fn select_result(
     inst: InstId,
 ) -> llrm_mir::module::ValueId {
     c.function.instruction(inst).result.expect("a select's value")
+}
+
+/// `canonicalizeICmpPredicate`
+/// ([:7448](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L7448)):
+/// a compare with a non-canonical predicate (`ne`, `ule`, `sle`, `uge`, `sge`)
+/// becomes the inverse one, if every user can take the inversion: a branch
+/// swaps its successors, a select its values, a `not` is dropped
+/// (`canFreelyInvertAllUsersOf`, `freelyInvertAllUsersOf`).
+fn canonicalize_icmp_predicate(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+) -> Option<Visit> {
+    if is_canonical_predicate(pred) {
+        return None;
+    }
+    let result = c.function.instruction(inst).result?;
+    let users: Vec<(InstId, u32)> = c.function.users(result).iter().map(|one| (one.user, one.index)).collect();
+    for &(user, index) in &users {
+        let one = c.function.instruction(user);
+        let ok = match &one.opcode {
+            // Only as the condition, and not a logical and/or: absorbing the
+            // not would hide that pattern.
+            Opcode::Select => {
+                index == 0 && {
+                    let q = query(c, None);
+                    let value = Operand::Value(one.result?);
+                    pattern::logical_and(&q, value).is_none() && pattern::logical_or(&q, value).is_none()
+                }
+            }
+            Opcode::Br => one.operands.len() == 3,
+            Opcode::Binary(BinaryOp::Xor) => pattern::not(&query(c, None), Operand::Value(one.result?)).is_some(),
+            _ => false,
+        };
+        if !ok {
+            return None;
+        }
+    }
+    c.function.set_icmp_predicate(inst, pred.inverse());
+    for (user, _) in users {
+        match c.function.instruction(user).opcode {
+            Opcode::Select | Opcode::Br => {
+                let mut operands = c.function.instruction(user).operands.clone();
+                operands.swap(1, 2);
+                c.function.set_operands(user, operands);
+                c.add_to_worklist(user);
+            }
+            _ => {
+                c.replace_inst_with(user, Operand::Value(result));
+                c.add_to_worklist(user);
+            }
+        }
+    }
+    Some(Visit::Changed)
 }
 
 /// `foldICmpWithDominatingICmp`
