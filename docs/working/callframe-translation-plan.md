@@ -55,3 +55,5 @@ Owner: w12. Pin: `hasReservedCallFrame` = no variable-sized objects and no push 
 Risks: allocation and the spiller seeing Barrier pseudos instead of `sub`/`add` (priced by the DOSBox C sweep); sysv 16-byte alignment padding of the area (`sub esp, 4`), which the pin folds into the reserved size.
 
 Dates: PR 1 2026-10-27, PR 2 2026-11-13, PR 3 2026-11-17.
+
+Status 2026-10-26: PRs 1 and 2 are #4634 and #4649; CF3 went in #4620. PR 3 needs no code: `LowerCallFrame` is the pin's own lowering for pushed and variable-sized functions, and `PushFold` is the `push [m]` fold. Open: DEVIATE CF5 (`framefree` keeps the frame register at -Os where a call frame exists), exit PEI-2 `emitPrologue` (`pei-plan.md`).
