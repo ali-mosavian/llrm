@@ -36,7 +36,7 @@
 //! and `X86TargetLowering::X86TargetLowering`
 //! ([L131](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L131)).
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use super::isd::{CondCode, ISD};
 use super::lowering::TargetLoweringInfo;
@@ -92,11 +92,11 @@ impl TargetLowering {
     pub fn empty(types: TargetLoweringInfo) -> TargetLowering {
         TargetLowering {
             types,
-            operations: HashMap::new(),
-            promoted_to: HashMap::new(),
-            load_ext: HashMap::new(),
-            trunc_store: HashMap::new(),
-            cond_code: HashMap::new(),
+            operations: HashMap::default(),
+            promoted_to: HashMap::default(),
+            load_ext: HashMap::default(),
+            trunc_store: HashMap::default(),
+            cond_code: HashMap::default(),
             legal_fp_immediates: Vec::new(),
         }
     }
@@ -445,5 +445,18 @@ impl TargetLowering {
         // L2757..L2776
         t.set_ops(&[SAddO, UAddO, SSubO, USubO, SMulO, UMulO, UAddOCarry, USubOCarry], native, Custom);
         t
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The action tables were std maps: SipHash on every `(op, type)` asked.
+    /// Does not compile for any other hasher.
+    #[test]
+    fn test_action_tables_are_keyed_with_the_fixed_key_hasher() {
+        let table = TargetLowering::empty(TargetLoweringInfo::new(&[MVT::I32], false));
+        let _: &llrm_support::hash::HashMap<(ISD, MVT), Action> = &table.operations;
     }
 }

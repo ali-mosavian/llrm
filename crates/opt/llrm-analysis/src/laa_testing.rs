@@ -7,10 +7,9 @@
 //! here, and an argument `%p` is `ptr %p`, so a test can compare the pin's
 //! `print<access-info>` line with the pass's.
 
-use std::collections::HashMap;
-
 use llrm_mir::module::{Function, InstId, Module, Operand, ValueDef};
 use llrm_mir::types::Type;
+use llrm_support::hash::HashMap;
 
 use crate::runtimecheck::ValueText;
 
@@ -34,7 +33,7 @@ impl PinText {
             .take_while(|line| *line != "}")
             .filter(|line| line.starts_with("  "));
         let mut instructions = llrm_mir::dense::IdMap::new();
-        let mut values = HashMap::new();
+        let mut values = HashMap::default();
         for (_, inst) in function.walk() {
             let line = lines.next().expect("a line for each instruction");
             instructions.insert(inst, line.to_owned());
