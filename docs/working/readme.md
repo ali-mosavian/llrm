@@ -38,6 +38,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [qb-float-rows](qb-float-rows.md) | The 41 QB float rows above main after BC's per-assignment rounding (#3352): the numbers, owner and exit |
 | [qb-lalr-handoff](qb-lalr-handoff.md) | The QB front takeover: what landed and what is left |
 | [qb-unsupported-lowering](qb-unsupported-lowering.md) | BC output for the lowerings the QB front refused: PALETTE USING, ON ERROR RESUME NEXT, REDIM PRESERVE |
+| [qb-currency](qb-currency.md) | The CURRENCY type: what PDS BC calls, the design, three phases |
 | [qcport-os-rows](qcport-os-rows.md) | The QCport modules bigger at -Os after #3369 and after its re-land: numbers, owner and exit |
 | [phi-pre-ra-translation](phi-pre-ra-translation.md) | PHIElimination, TwoAddressInstruction and the pass order before greedy, against the pin: same, differs, missing |
 | [livevariables-plan](livevariables-plan.md) | The pin's LiveVariables translated for TwoAddress and PHIElimination: functions, callers, dates (2026-10-24) |
