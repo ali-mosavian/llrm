@@ -1492,6 +1492,21 @@ pub fn address_operand(
     Some((memory_operand(cell.through, cell.index_through, cell.scale, cell.offset, size, RegId::None), false))
 }
 
+/// `bt reg, imm8`: the carry is the bit.
+pub fn bit_test_immediate(
+    register: RegId,
+    bit: i64,
+    at: At,
+) -> Option<Emitted> {
+    let width = width_of(register)?;
+    if ![2, 4].contains(&width) {
+        return None;
+    }
+    let code = code_of!("BT_RM", width * 8, "_IMM8")?;
+    let bit = u32::try_from(bit).ok().filter(|bit| *bit < 256)?;
+    _assemble(&raised(Instruction::with2(code, register.iced(), bit).map_err(|error| error.to_string())), at, true)
+}
+
 /// `cmp a,b` or `test a,b` -- both flags-only, and not the same question.
 pub fn compare_registers(
     name: &str,
@@ -2532,6 +2547,7 @@ pub fn emit_in(
         let named = what.name.as_deref().unwrap_or("cmp");
         return match (&sources[0], &sources[1]) {
             (_, Loc::Imm(imm)) if what.name.as_deref() == Some("test") => test_immediate(&sources[0], imm.value, at),
+            (Loc::Reg(into), Loc::Imm(bit)) if named == "bt" => bit_test_immediate(into.register, bit.value, at),
             (_, Loc::Imm(imm)) if named == "cmp" => compare(&sources[0], imm.value, at, relocated),
             (Loc::Reg(into), Loc::Mem(cell)) if named == "cmp" => compare_mem(into.register, cell, at),
             (Loc::Reg(into), Loc::Reg(outof)) => compare_registers(named, into.register, outof.register, at),

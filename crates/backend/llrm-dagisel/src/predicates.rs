@@ -237,6 +237,12 @@ pub fn reloc_imm_sext_8<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> boo
     hooks.is_sext_absolute_symbol_ref(dag, 8, v.node)
 }
 
+/// `xor_flag_dead_result`: the value result of the `X86xor_flag` has no use,
+/// only its flags (64-bit mode).
+pub fn xor_flag_dead_result<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> bool {
+    dag.has_n_uses_of_value(SDValue::new(v.node, 0), 0)
+}
+
 /// `X86add_flag_nocf` and its kin: no use of the flags result reads the carry.
 pub fn no_carry_flag_uses_of_flags<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
     hooks.has_no_carry_flag_uses(dag, SDValue::new(v.node, 1))
