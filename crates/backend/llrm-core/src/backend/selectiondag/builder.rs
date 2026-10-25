@@ -671,7 +671,13 @@ impl Builder<'_> {
                     for _ in 0..parts {
                         fixed += 1;
                         let ptr = self.dag.get_frame_index(self.target.dag.pointer, -fixed);
-                        let align = self.layout.align(&self.module.context.types, self.function.value(arg).ty) as u32;
+                        // The fixed object is a whole stack slot
+                        // (`CreateFixedObject`),
+                        // aligned as one: a narrow argument's load is as
+                        // aligned as the slot, which
+                        // lets it widen (`loadi32` of an any-extend).
+                        let align = (self.layout.align(&self.module.context.types, self.function.value(arg).ty) as u32)
+                            .max(self.target.dag.pointer.size_in_bits() / 8);
                         let info = MemInfo {
                             mem_vt: part_vt,
                             align,
