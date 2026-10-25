@@ -88,14 +88,14 @@ impl Fact for LoopDepths {
 pub struct Dominance;
 
 impl Fact for Dominance {
-    type Result = (crate::liveness::cfg::Cfg, crate::liveness::cfg::DomTree);
+    type Result = (Arc<crate::liveness::cfg::Cfg>, Arc<crate::liveness::cfg::DomTree>);
     type Inputs = Shape;
     const NAME: &'static str = "dominance";
 
     fn run(body: &LirBody) -> Self::Result {
         let cfg = crate::liveness::cfg::Cfg::of(body);
         let tree = crate::liveness::cfg::DomTree::of(&cfg);
-        (cfg, tree)
+        (Arc::new(cfg), Arc::new(tree))
     }
 
     fn inputs(body: &LirBody) -> Shape {
@@ -112,7 +112,7 @@ impl Fact for Dominance {
 
 /// `body`'s control-flow graph and dominator tree, as kept while its blocks'
 /// labels and successors are those of the last ask.
-pub fn dominance(body: &LirBody) -> (crate::liveness::cfg::Cfg, crate::liveness::cfg::DomTree) {
+pub fn dominance(body: &LirBody) -> (Arc<crate::liveness::cfg::Cfg>, Arc<crate::liveness::cfg::DomTree>) {
     (*body.facts.0.get::<Dominance>(body)).clone()
 }
 

@@ -125,8 +125,8 @@ pub fn take_handed_over_edited_to(body: &LirBody) -> Option<LiveIntervals> {
 /// `LiveIntervals` (LiveIntervals.h).
 pub struct LiveIntervals {
     pub indexes: SlotIndexes,
-    pub cfg: Cfg,
-    pub dom: DomTree,
+    pub cfg: Arc<Cfg>,
+    pub dom: Arc<DomTree>,
     /// The instructions of each block, in order (`MachineBasicBlock`).
     blocks: Vec<Vec<Arc<Insn>>>,
     operands: HashMap<u32, Vec<Operand>>,

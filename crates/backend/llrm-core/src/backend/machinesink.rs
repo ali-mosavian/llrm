@@ -252,8 +252,8 @@ struct Sinker {
     insns: Vec<Vec<Arc<Insn>>>,
     at: Vec<i64>,
     position: IndexMap<i64, usize>,
-    cfg: Cfg,
-    dom: DomTree,
+    cfg: Arc<Cfg>,
+    dom: Arc<DomTree>,
     post: DomTree,
     /// The block of each instruction, by the identity it had when the walk
     /// began (`canonical`): a moved instruction is a copy with a new identity,
