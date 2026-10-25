@@ -696,6 +696,8 @@ impl Checker {
         let saved_scope = std::mem::take(&mut self.scope);
         let saved_labels = std::mem::take(&mut self.labels);
         let saved_weak = std::mem::take(&mut self.weak_labels);
+        // a CONST in a procedure is local to it
+        let saved_consts = self.consts.clone();
         self.procedure = Some((procedure.kind, procedure.name.clone()));
         self.static_scope = procedure.is_static;
         if procedure.module_scope {
@@ -710,6 +712,7 @@ impl Checker {
             self.statement(statement);
         }
         self.procedure = None;
+        self.consts = saved_consts;
         self.scope = saved_scope;
         self.labels = saved_labels;
         self.weak_labels = saved_weak;
