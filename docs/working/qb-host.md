@@ -187,3 +187,7 @@ Mac follow-up (feat/qb-host 8ffd78684 merged in):
   Pitch and clicks by ear: the user heard the tone; BEEP and PLAY not yet reported.
 - Row 5 rest: Shift+A 41, keypad 0 `0`, keypad Enter 0D, `+` 2B, `/` 2F, `*` 2A. Caps Lock not toggled (it would
   change the user's keyboard state).
+
+Mac re-run on feat/qb-host 7985b5a17: `posix_os`, `qb_dev_interface`, `qb_headless`, `qb_sdl` and
+`llrm-qbruntime --test sound` pass; the smoke under `-fsanitize=thread` is `ok` 3/3 with no reports; `BEEP` after
+`SCREEN 13` through the real device (disk driver) is 232 ms of ±6000 at 800 Hz.
