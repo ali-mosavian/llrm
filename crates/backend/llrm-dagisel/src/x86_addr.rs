@@ -838,7 +838,12 @@ impl<D: AddrDag> Matcher<'_, D> {
         let mut cost = 0i32;
         let mut rhs = self.operand(n, 1);
         let mut neg_scale = None;
-        if self.opcode(rhs) == isd::SHL && self.dag.node_has_one_use(rhs.node) {
+        // 16-bit addressing has no scale (SD3): the shift stays a register,
+        // except in an `lea`, which takes the 386's 32-bit form.
+        if (self.mode != AddrMode::Real16 || am.is_for_lea)
+            && self.opcode(rhs) == isd::SHL
+            && self.dag.node_has_one_use(rhs.node)
+        {
             if let Some(sh) = self.constant(self.operand(rhs, 1)) {
                 if (1..=3).contains(&(sh as u64)) {
                     neg_scale = Some(1u32 << sh);
