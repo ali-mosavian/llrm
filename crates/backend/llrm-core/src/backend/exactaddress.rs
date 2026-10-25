@@ -880,4 +880,55 @@ mod tests {
         };
         assert_ne!(cell.through, RegId::EAX);
     }
+
+    /// `mov si,ax; shl si,1; adc dx,0; mov cx,S[si]`: the `adc` reads the carry
+    /// the shift set, so the shift stays. Folded into the cells it went, and
+    /// the `adc` read the carry of an earlier instruction.
+    #[test]
+    fn test_a_shift_whose_carry_is_read_is_not_folded() {
+        let cell = |index: i64| Mem {
+            addr: Some(Addr { index, ..Addr::new(Space::Segment, 0) }),
+            through: RegId::SI,
+            base: Some(Held { value: 12, width: 2 }),
+            exact: true,
+            ..Mem::new(None, 2)
+        };
+        let shift_stays = |carry_read: bool| {
+            let mut insns = vec![
+                one(0, Operation::Extend, "movzx", vec![reg(RegId::EAX, 4)], vec![reg(RegId::AX, 2)], vec![10], vec![10]),
+                one(1, Operation::Move, "mov", vec![reg(RegId::SI, 2)], vec![reg(RegId::AX, 2)], vec![11], vec![10]),
+                one(
+                    2,
+                    Operation::Binary,
+                    "shl",
+                    vec![reg(RegId::SI, 2)],
+                    vec![reg(RegId::SI, 2), Loc::Imm(Imm { value: 1, width: 1, address: None })],
+                    vec![12],
+                    vec![11],
+                ),
+                one(4, Operation::Move, "mov", vec![reg(RegId::CX, 2)], vec![Loc::Mem(cell(1))], vec![13], vec![12]),
+                one(5, Operation::Move, "mov", vec![reg(RegId::SI, 2)], vec![Loc::Mem(cell(2))], vec![14], vec![12]),
+                one(6, Operation::Compare, "cmp", vec![], vec![reg(RegId::CX, 2), reg(RegId::SI, 2)], vec![], vec![13, 14]),
+            ];
+            if carry_read {
+                let zero = Loc::Imm(Imm { value: 0, width: 2, address: None });
+                let adc = one(3, Operation::Binary, "adc", vec![reg(RegId::DX, 2)], vec![reg(RegId::DX, 2), zero], vec![], vec![]);
+                insns.insert(3, adc);
+            }
+            let body = LirBody::new(
+                "carry",
+                0,
+                vec![LirBlock::new(0, insns).into()],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            let result = exact_addresses(&body, "386").unwrap();
+            result.blocks[0]
+                .insns
+                .iter()
+                .any(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("shl")))
+        };
+        assert!(!shift_stays(false), "the control: with no reader of the carry the shift folds");
+        assert!(shift_stays(true), "the shift went with its carry read");
+    }
 }
