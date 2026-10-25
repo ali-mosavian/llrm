@@ -287,3 +287,46 @@ fn every_own_target_id_is_in_own_ids() {
     }
     assert!(missing.is_empty(), "not in tools/dagisel/own_ids.txt: {missing:?}");
 }
+
+/// `log`, `exp`, `log2`, `exp2`, `sin`, `cos` and `atan` of a double had no
+/// pattern (the pin calls libm): `CannotSelect` in 36 qb/nib programs under
+/// `--isel=dag`. llrm's targets have no libm, so they select as the x87
+/// sequences the old selector spells.
+#[test]
+fn a_natural_log_exp_and_log2_are_the_x87_sequences() {
+    for (op, name) in [
+        (ISD::FLog, "LN_Fp80"),
+        (ISD::FExp, "EXP_Fp80"),
+        (ISD::FLog2, "LOG2_Fp80"),
+        (ISD::FExp2, "EXP2_Fp80"),
+        (ISD::FSin, "SIN_Fp80"),
+        (ISD::FCos, "COS_Fp80"),
+        (ISD::FAtan, "ATAN_Fp80"),
+    ] {
+        let mut dag = SelectionDAG::new(DagConfig::default());
+        let x = {
+            let entry = dag.entry_node();
+            dag.get_copy_from_reg(entry, 40, EVT::Simple(super::mvt::MVT::F64))
+        };
+        let node = dag.get_node(op, EVT::Simple(super::mvt::MVT::F64), &[x]);
+        let mut adapter = DagisAdapter::new(&mut dag);
+
+        assert_eq!(
+            select_node(&Selector::new(table::TABLE), &mut adapter, &mut hooks(), node.node),
+            Outcome::Selected,
+            "{op:?}"
+        );
+
+        let ISD::Machine(code) = dag.nodes()[node.node as usize].opcode else { panic!("{op:?} is no machine node") };
+        let own = [
+            (llrm_dagisel::x86_llrm::FLN_OPCODE, "LN_Fp80"),
+            (llrm_dagisel::x86_llrm::FEXP_OPCODE, "EXP_Fp80"),
+            (llrm_dagisel::x86_llrm::FLOG2_OPCODE, "LOG2_Fp80"),
+            (llrm_dagisel::x86_llrm::FEXP2_OPCODE, "EXP2_Fp80"),
+            (llrm_dagisel::x86_llrm::FSIN_OPCODE, "SIN_Fp80"),
+            (llrm_dagisel::x86_llrm::FCOS_OPCODE, "COS_Fp80"),
+            (llrm_dagisel::x86_llrm::FATAN_OPCODE, "ATAN_Fp80"),
+        ];
+        assert_eq!(own.iter().find(|(v, _)| u32::from(*v) == code).map(|(_, n)| *n), Some(name), "{op:?}");
+    }
+}
