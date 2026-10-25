@@ -3526,3 +3526,26 @@ fn the_fudge_of_an_unsigned_conversion_is_read_as_a_float() {
         .collect();
     assert_eq!(indexed, [4], "the fudge is indexed by the sign and is a float");
 }
+
+/// An m64 sum of two `i64` arguments stopped at emit with
+/// `Unmapped("ADD64rr")`: the m64 target had no 64-bit forms.
+#[test]
+fn an_m64_function_is_selected_through_the_dag() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i64 @f(i64 %a, i64 %b) {
+entry:
+  %s = add i64 %a, %b
+  ret i64 %s
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref().and_then(|w| w.name.as_deref().map(str::to_owned)))
+        .collect();
+    assert!(names.iter().any(|n| n == "add"), "{names:?}");
+}
