@@ -3,7 +3,7 @@
 #include <SDL.h>
 #include <stdatomic.h>
 
-#include "sdl.h"
+#include "qbsdl.h"
 
 enum { RATE = 44100, SAMPLES = 512, AMPLITUDE = 6000, RAMP = 120 };
 

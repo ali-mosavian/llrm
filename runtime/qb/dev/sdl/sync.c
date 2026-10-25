@@ -6,7 +6,7 @@
 #include <stdatomic.h>
 #include <time.h>
 
-#include "sdl.h"
+#include "qbsdl.h"
 
 enum { FRAME_MS = 16, NANOS_PER_MS = 1000000, MS_PER_SECOND = 1000 };
 

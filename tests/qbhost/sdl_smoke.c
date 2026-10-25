@@ -9,9 +9,10 @@
 #include "console.h"
 #include "dev.h"
 #include "gfx.h"
+#include "gfxdev.h"
 #include "nhstutil.h"
 #include "rtinit.h"
-#include "sdl.h"
+#include "qbsdl.h"
 #include "video.h"
 
 extern SD *B_INKY(void);

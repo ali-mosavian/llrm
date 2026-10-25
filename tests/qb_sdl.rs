@@ -85,3 +85,15 @@ fn the_sdl_platform_presents_what_the_program_draws() {
     assert!(done.status.success(), "{printed}{}", String::from_utf8_lossy(&done.stderr));
     assert_eq!(printed.trim(), "ok");
 }
+
+/// On macOS (case-insensitive) `#include "sdl.h"` found SDL2's own `SDL.h` first, so none of this platform's
+/// declarations reached sdl_smoke.c and it failed with implicit declarations. No header here may differ from an
+/// SDL2 header only by case.
+#[test]
+fn no_header_collides_with_sdl2_case_insensitively() {
+    let dir = root().join("runtime/qb/dev/sdl");
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let name = entry.unwrap().file_name().to_string_lossy().to_lowercase();
+        assert_ne!(name, "sdl.h", "runtime/qb/dev/sdl/{name} collides with SDL2's SDL.h on case-insensitive file systems");
+    }
+}

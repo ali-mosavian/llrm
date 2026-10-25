@@ -4,7 +4,7 @@
 #include <stdatomic.h>
 #include <string.h>
 
-#include "sdl.h"
+#include "qbsdl.h"
 
 enum { QUEUE = 256, EXTENDED = 0x100 };
 

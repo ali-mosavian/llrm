@@ -12,7 +12,7 @@
 
 #include "dev.h"
 #include "llrm_os.h"
-#include "sdl.h"
+#include "qbsdl.h"
 #include "tick.h"
 #include "video.h"
 

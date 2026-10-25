@@ -3,7 +3,7 @@
 #include <stdatomic.h>
 #include <string.h>
 
-#include "sdl.h"
+#include "qbsdl.h"
 #include "video.h"
 
 enum {

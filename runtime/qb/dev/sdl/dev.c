@@ -6,7 +6,7 @@
 
 #include "dev.h"
 #include "llrm_os.h"
-#include "sdl.h"
+#include "qbsdl.h"
 
 enum { TIME_WORDS = 7, DAY = 8640000 };
 
