@@ -259,9 +259,10 @@ struct Dse<'a> {
     updater: MemorySsaUpdater,
     dt: &'a DomTree,
     pdt: &'a PostDomTree,
-    loops: &'a [llrm_analysis::graph::loops::Loop],
     /// Post-order numbers of the reachable blocks.
     post_order: IdMap<BlockId, u32>,
+    /// Each loop block's innermost loop header (`LI.getLoopFor`).
+    cycles: IdMap<BlockId, i64>,
     /// All the defs that could kill others.
     mem_defs: Vec<AccessId>,
     /// Defs already deleted.
@@ -309,8 +310,8 @@ impl<'a> Dse<'a> {
             updater: MemorySsaUpdater::new(),
             dt,
             pdt,
-            loops,
             post_order: IdMap::new(),
+            cycles: innermost_headers(loops),
             mem_defs: Vec::new(),
             skip_stores: HashSet::default(),
             any_unreachable_exit: false,
@@ -631,11 +632,7 @@ impl<'a> Dse<'a> {
         &self,
         block: BlockId,
     ) -> Option<i64> {
-        self.loops
-            .iter()
-            .filter(|one| one.body.contains(&llrm_analysis::cfg::id(block)))
-            .min_by_key(|one| one.body.len())
-            .map(|one| one.header)
+        self.cycles.get(&block).copied()
     }
 
     /// `isGuaranteedLoopInvariant`: the pointer is made outside every loop.
@@ -1704,6 +1701,22 @@ impl<'a> Dse<'a> {
 }
 
 /// The reachable blocks in post-order.
+/// Each block's smallest loop's header, the first of equal ones.
+fn innermost_headers(loops: &[llrm_analysis::graph::loops::Loop]) -> IdMap<BlockId, i64> {
+    let mut sizes: IdMap<BlockId, usize> = IdMap::new();
+    let mut headers = IdMap::new();
+    for one in loops {
+        for at in one.body.iter() {
+            let block = llrm_analysis::cfg::block(*at);
+            if sizes.get(&block).is_none_or(|&size| one.body.len() < size) {
+                sizes.insert(block, one.body.len());
+                headers.insert(block, one.header);
+            }
+        }
+    }
+    headers
+}
+
 fn post_order_of(function: &Function) -> Vec<BlockId> {
     let Some(entry) = function.entry() else { return Vec::new() };
     let mut seen: IdSet<BlockId> = IdSet::new();
