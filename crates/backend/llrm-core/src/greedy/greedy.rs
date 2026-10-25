@@ -1111,7 +1111,14 @@ impl<'a> RAGreedy<'a> {
             // When NewVRegs is not empty, we may have made decisions such as
             // evicting a virtual register, go with the earlier decisions and
             // use the physical register.
-            if self.csr_cost.get_frequency() != 0
+            //
+            // DEVIATE CSR2 (no number yet): not while recoloring (`depth > 0`).
+            // A pre-split there makes new vregs, which
+            // `tryRecoloringCandidates` takes for a failed recolor;
+            // recpow -O1 m32 --isel=old went from allocating to an
+            // error. The recolored range takes the CSR.
+            if depth == 0
+                && self.csr_cost.get_frequency() != 0
                 && is_unused_callee_saved_reg(self.env, &self.matrix, phys)
                 && new_vregs.is_empty()
             {
