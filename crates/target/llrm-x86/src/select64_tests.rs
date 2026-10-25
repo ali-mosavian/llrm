@@ -203,3 +203,15 @@ fn the_scalar_double_move_is_not_the_string_copy() {
     let mov = sem(Operation::Move, Some("movsd_x"), vec![rg(x(0), 8)], vec![rg(x(1), 8)], None, false);
     assert_eq!(bytes(&mov), [0xf2, 0x0f, 0x10, 0xc1]);
 }
+
+/// `cmp qword [rbp], 0` had no encoding: the memory-and-immediate form took
+/// widths 1, 2 and 4, so `-O0` of tests/llc ackermann, bits, heap and list
+/// stopped with "Semantics(op=... 'cmp' ...)" under both selectors.
+#[test]
+fn a_quadword_memory_cell_compares_with_an_immediate() {
+    use super::sweep_support::{R, a, m};
+    let cell = m(Some(a(llrm_lir::Space::Frame, 0, 0, R::None, R::None)), 8, R::RBP, 0, 0, None, None, 1, R::None);
+    let cmp = |value| sem(Operation::Compare, Some("cmp"), vec![], vec![cell.clone(), im(value, 8, None)], None, false);
+    assert_eq!(bytes(&cmp(0)), [0x48, 0x83, 0x7d, 0x00, 0x00]);
+    assert_eq!(bytes(&cmp(1000)), [0x48, 0x81, 0x7d, 0x00, 0xe8, 0x03, 0x00, 0x00]);
+}
