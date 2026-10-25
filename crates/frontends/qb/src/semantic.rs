@@ -9007,7 +9007,15 @@ impl Compiler {
         type_id: u32,
     ) -> Result<u32, SemanticError> {
         let extent = self.width(type_id);
-        let storage = self.implicit_storage;
+        // A FOR's limit and step are never passed by address. In the module
+        // block they would share an object with the by-reference argument
+        // temporaries, whose address a call receives, and every call would
+        // then be taken to write them.
+        let storage = if self.implicit_storage == "module" && prefix.starts_with("$for") {
+            "static"
+        } else {
+            self.implicit_storage
+        };
         if storage != "static" && self.beyond_segment(self.data_offset + extent) {
             return self
                 .fail(format!("a temporary value does not fit: the stack frame ({} KiB) is full", self.segment_kib()));
