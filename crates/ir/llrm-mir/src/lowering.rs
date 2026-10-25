@@ -200,6 +200,27 @@ pub trait Lowering {
         false
     }
 
+    /// `isEqualityCmpFoldedWithSignedCmp` (TargetLowering.h#L766): whether an
+    /// `icmp eq` can be lowered as the signed compare beside it. The base class
+    /// says yes; PowerPC says no. CodeGenPrepare's
+    /// `foldICmpWithDominatingICmp` runs only where it is false.
+    fn is_equality_cmp_folded_with_signed_cmp(&self) -> bool {
+        true
+    }
+
+    /// `isCtpopFast(EVT)` (TargetLowering.h): whether `ctpop` of an integer of
+    /// `bits` is one fast operation. The base class asks whether it is a legal
+    /// operation, which none of the tables here lists; x86 asks for POPCNT
+    /// (X86ISelLowering.cpp), and no CPU llrm builds for (i386, i486, pentium,
+    /// the baseline of x86-64) has it.
+    fn is_ctpop_fast(
+        &self,
+        bits: u32,
+    ) -> bool {
+        let _ = bits;
+        false
+    }
+
     /// The same question about the mask the `and` applies (`None`: unknown),
     /// which AArch64 answers by: a single-bit mask is a `tbz`, so the pair is
     /// folded; any other is better made again at each compare. By default the

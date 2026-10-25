@@ -23,9 +23,11 @@
 //! `implicit_def` too, and `v3 := add v4, v2` reads `v2` as undef; both
 //! definitions go.
 //!
-//! A definition a phi still reads stays: PHIElimination takes a phi of such
-//! values for an `implicit_def` and makes no copy of one
-//! (`allPhiOperandsUndefined`, `SrcUndef`).
+//! A phi that reads nothing but `implicit_def`s is one too
+//! (`canTurnIntoImplicitDef`), placed first in its block, and its users read
+//! undef in turn. A definition a phi with a real operand still reads stays:
+//! PHIElimination makes no copy of that operand (`allPhiOperandsUndefined`,
+//! `SrcUndef`).
 //!
 //! # Used by
 //! `flow::machine_with`, after `SharedConstants`; `isel`'s `held` makes the
@@ -34,7 +36,7 @@
 use std::sync::Arc;
 
 use crate::coalescer::pair::full_copy;
-use crate::model::ir::{Operation, Semantics};
+use crate::model::ir::{Held, Loc, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::HashSet;
@@ -66,6 +68,34 @@ fn made_implicit(
     made.defines = vec![value];
     made.uses = Vec::new();
     made.undefs = Vec::new();
+    Arc::new(made)
+}
+
+/// `phi` reads only values that are `implicit_def`s.
+fn all_undefined(
+    phi: &crate::model::lir::Phi,
+    defined: &HashSet<u32>,
+) -> bool {
+    !phi.incoming.is_empty() && phi.incoming.iter().all(|&(_, value)| defined.contains(&value))
+}
+
+/// `source`, an `implicit_def`, as the definition of `value`.
+fn made_defining(
+    source: &Insn,
+    value: u32,
+) -> Arc<Insn> {
+    let mut made = source.clone();
+    if let Some(what) = made.what.as_mut() {
+        what.dests = what
+            .dests
+            .iter()
+            .map(|dest| match dest {
+                Loc::Held(held) => Loc::Held(Held { value, ..*held }),
+                other => other.clone(),
+            })
+            .collect();
+    }
+    made.defines = vec![value];
     Arc::new(made)
 }
 
@@ -101,6 +131,39 @@ pub fn processed(body: &LirBody) -> LirBody {
             current.blocks.iter().flat_map(|block| block.insns.iter()).filter_map(|one| implicit_def_of(one)).collect();
         if defined.is_empty() {
             return current;
+        }
+        // A phi that reads nothing but implicit defs is one itself
+        // (`canTurnIntoImplicitDef`), at the head of the block's code.
+        if current.blocks.iter().any(|block| block.phis.iter().any(|phi| all_undefined(phi, &defined))) {
+            let blocks: Vec<_> = current
+                .blocks
+                .iter()
+                .map(|block| {
+                    let (undef, kept): (Vec<_>, Vec<_>) =
+                        block.phis.iter().cloned().partition(|phi| all_undefined(phi, &defined));
+                    if undef.is_empty() {
+                        return block.clone();
+                    }
+                    let made: Vec<Arc<Insn>> = undef
+                        .iter()
+                        .map(|phi| {
+                            let source = current
+                                .blocks
+                                .iter()
+                                .flat_map(|block| block.insns.iter())
+                                .find(|one| implicit_def_of(one) == Some(phi.incoming[0].1))
+                                .expect("a defined value has its definition");
+                            made_defining(source, phi.result)
+                        })
+                        .chain(block.insns.iter().cloned())
+                        .collect();
+                    let mut block = block.with_insns(made);
+                    block.phis = kept.into();
+                    block
+                })
+                .collect();
+            current = current.with_blocks(blocks);
+            continue;
         }
         let phi_read: HashSet<u32> = current
             .blocks
@@ -262,8 +325,21 @@ mod tests {
     /// it.
     #[test]
     fn test_a_definition_a_phi_reads_stays() {
-        let phi = Phi { result: 5, incoming: vec![(0, 1)] };
+        let phi = Phi { result: 5, incoming: vec![(0, 1), (1, 6)] };
         let got = processed(&body(vec![def(1), add(3, 4, 1)], vec![phi]));
         assert_eq!(names(&got), ["implicit_def", "add"]);
+    }
+
+    /// A phi whose every operand is an `implicit_def` is one itself, worked in
+    /// turn (`canTurnIntoImplicitDef` takes a PHI): its users read undef and
+    /// neither definition nor phi is left. Left a phi, PHIElimination made the
+    /// implicit def after this pass ran, and the add read a live register.
+    #[test]
+    fn test_a_phi_of_implicit_defs_is_an_implicit_def_and_its_users_read_undef() {
+        let phi = Phi { result: 5, incoming: vec![(0, 1), (1, 1)] };
+        let got = processed(&body(vec![def(1), add(3, 4, 5)], vec![phi]));
+        assert_eq!(names(&got), ["add"]);
+        assert_eq!(got.insns()[0].undefs, vec![5]);
+        assert!(got.blocks[0].phis.is_empty());
     }
 }

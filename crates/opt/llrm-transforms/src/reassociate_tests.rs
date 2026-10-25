@@ -745,3 +745,20 @@ dead:
     assert!(!reassociated(&mut module));
     assert_eq!(llrm_mir::print::module(&module), llrm_mir::print::module(&parsed(text)));
 }
+
+/// `digest` (what says whether the pass changed a body) tells two bodies
+/// that differ only in an operand order apart, and the same body the same:
+/// it was SipHash, 2.0 M of one run's 3.5 M Ir on d_faces -O2, and is Fx.
+#[test]
+fn test_the_digest_of_a_body_sees_an_operand_swap() {
+    let body = |first: &str, second: &str| {
+        let module = parsed(&format!(
+            "define i32 @f(i32 %a, i32 %b) {{\nb0:\n  %x = sub i32 {first}, {second}\n  ret i32 %x\n}}\n"
+        ));
+        let (_, _, function) =
+            module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
+        super::digest(function)
+    };
+    assert_eq!(body("%a", "%b"), body("%a", "%b"));
+    assert_ne!(body("%a", "%b"), body("%b", "%a"));
+}

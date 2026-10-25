@@ -369,6 +369,13 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
                         (llrm_dagisel::x86_llrm::FARCALL_OPCODE, "CALL_FAR"),
                         (llrm_dagisel::x86_llrm::CODE_OPCODE, "CALL_CODE"),
                         (llrm_dagisel::x86_llrm::PORT_OPCODE, "PORT_IO"),
+                        (llrm_dagisel::x86_llrm::FLN_OPCODE, "LN_Fp80"),
+                        (llrm_dagisel::x86_llrm::FEXP_OPCODE, "EXP_Fp80"),
+                        (llrm_dagisel::x86_llrm::FLOG2_OPCODE, "LOG2_Fp80"),
+                        (llrm_dagisel::x86_llrm::FEXP2_OPCODE, "EXP2_Fp80"),
+                        (llrm_dagisel::x86_llrm::FSIN_OPCODE, "SIN_Fp80"),
+                        (llrm_dagisel::x86_llrm::FCOS_OPCODE, "COS_Fp80"),
+                        (llrm_dagisel::x86_llrm::FATAN_OPCODE, "ATAN_Fp80"),
                         (llrm_dagisel::x86_llrm::LLRM_ASM_OPCODE, "CALL_ASM"),
                     ])
                     .collect(),
@@ -557,16 +564,34 @@ fn selected_in(
     let layout = DataLayout::parse(text).map_err(Unselected)?;
     let convention = crate::backend::isel::convention(module, &layout, id, arch)?;
     let mut info = FunctionLoweringInfo::new(function);
-    let tli = if m16 {
+    let mut tli = if m16 {
         TargetLowering::x86_16(Features::default(), MVT::I16)
     } else {
         TargetLowering::x86_32(Features::default(), MVT::I32)
     };
+    // SD214: with a math library the pin calls it for these; the call is not
+    // translated yet, so the node is refused rather than selected inline.
+    if arch.has_libm() {
+        for op in [
+            super::isd::ISD::FLog,
+            super::isd::ISD::FLog2,
+            super::isd::ISD::FExp,
+            super::isd::ISD::FExp2,
+            super::isd::ISD::FSin,
+            super::isd::ISD::FCos,
+            super::isd::ISD::FAtan,
+        ] {
+            for vt in [MVT::F32, MVT::F64, MVT::F80] {
+                tli.set_operation_action(op, vt, super::actions::Action::LibCall);
+            }
+        }
+    }
     let (builder_target, address_mode) =
         if m16 { (BuilderTarget::m16(), AddrMode::Real16) } else { (BuilderTarget::m32(), AddrMode::Flat32) };
     let builder_target = builder_target
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)
+        .with_tail_calls(!m16 && std::env::var_os("LLRM_TAIL_CALLS").is_some())
         .with_tti(cpu.target().tti())
         .with_runtime_call_verdicts(
             contracts.map(|contracts| runtime_call_verdicts(module, function, &layout, arch, contracts.abi)),
