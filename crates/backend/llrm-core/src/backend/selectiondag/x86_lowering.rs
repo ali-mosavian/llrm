@@ -294,6 +294,7 @@ impl Hooks for X86Lowering {
             ISD::UAddOCarry | ISD::USubOCarry => Some(lower_addsub_carry(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
             ISD::VAStart => lower_vastart(dag, node),
+            ISD::DynamicStackAlloc => Some(lower_dynamic_stackalloc(dag, node)),
             ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node),
             ISD::LRint => lower_lrint(dag, node),
             ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node),
@@ -1311,6 +1312,36 @@ fn lower_int_to_fp(
         dag.get_node(ISD::FpRound, dst, &[sum, flag])
     };
     Some(rounded)
+}
+
+/// `LowerDYNAMIC_STACKALLOC` without a stack probe or segmented stack: the
+/// stack pointer minus the size, aligned where the request is stricter than the
+/// stack's, written back.
+fn lower_dynamic_stackalloc(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let (chain, size) = (dag.operand(node, 0), dag.operand(node, 1));
+    let align = match dag.node(dag.operand(node, 2)).data {
+        NodeData::Const { bits, .. } => bits as u64,
+        _ => 0,
+    };
+    let vt = dag.value_type(node);
+    let (stack_pointer, stack_align) = (dag.stack_pointer(), if vt.size_in_bits() == 64 { 16 } else { 4 });
+    let zero = dag.get_constant_with(0, EVT::I32, true, false);
+    let start = dag.get_node_multi(ISD::CallSeqStart, &[EVT::OTHER, EVT::GLUE], &[chain, zero, zero]);
+    let chain = SDValue { node: start.node, res: 0 };
+    let sp = dag.get_copy_from_phys_reg_plain(chain, stack_pointer, vt);
+    let chain = SDValue { node: sp.node, res: 1 };
+    let mut result = dag.get_node(ISD::Sub, vt, &[sp, size]);
+    if align > stack_align {
+        let mask = dag.get_constant(!(align as u128 - 1) & ((1u128 << vt.size_in_bits()) - 1), vt);
+        result = dag.get_node(ISD::And, vt, &[result, mask]);
+    }
+    let chain = dag.get_copy_to_phys_reg_plain(chain, stack_pointer, result);
+    let end = dag.get_node_multi(ISD::CallSeqEnd, &[EVT::OTHER, EVT::GLUE], &[chain, zero, zero]);
+    let chain = SDValue { node: end.node, res: 0 };
+    dag.get_node_multi(ISD::MergeValues, &[vt, EVT::OTHER], &[result, chain])
 }
 
 /// `LowerVASTART` for the 32-bit ABI: a `va_list` is a pointer, so the start

@@ -439,6 +439,7 @@ impl TargetLowering {
         }
         t.set_operation_action(Trap, MVT::Other, Legal);
         t.set_operation_action(DynamicStackAlloc, ptr, Custom);
+        t.set_ops(&[StackSave, StackRestore], &[MVT::Other], Expand);
         // L559..L566: 32-bit va_list is a pointer
         t.set_operation_action(VAStart, MVT::Other, Custom);
         t.set_ops(&[VAEnd, VACopy], &[MVT::Other], Expand);

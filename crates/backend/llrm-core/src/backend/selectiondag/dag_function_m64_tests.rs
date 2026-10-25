@@ -333,3 +333,68 @@ define void @f() {
     );
     assert!(names.iter().any(|n| n == "lea"), "{names:?}");
 }
+
+/// A frame object's address plus a variable index and a displacement past the
+/// object was made in a 4-byte register and used as the base of a quadword
+/// address: the encoder refused the 32-bit base beside a 64-bit index.
+#[test]
+fn a_frame_address_past_its_object_is_a_quadword_base() {
+    use crate::model::ir::Loc;
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare void @use(ptr)
+define void @f(i64 %n) {
+entry:
+  %buf = alloca [20 x i8], align 16
+  %m = sub i64 %n, 1
+  %p = getelementptr inbounds [20 x i8], ptr %buf, i64 0, i64 %m
+  call void @use(ptr %p)
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let insns = done.body.insns();
+    let leas: Vec<_> =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some("lea")).collect();
+    assert!(!leas.is_empty());
+    for lea in &leas {
+        assert!(matches!(&lea.dests[0], Loc::Held(h) if h.width == 8), "{lea:?}");
+        // A displacement of -1 is -1, not 4294967295.
+        assert!(!matches!(&lea.sources[..], [Loc::Mem(cell)] if cell.offset > i64::from(i32::MAX)), "{lea:?}");
+    }
+}
+
+/// A variable-size `alloca` between `stacksave` and `stackrestore` was refused
+/// ("convert node to libcall", then "CannotSelect StackSave"), and once
+/// selected the saved stack pointer was copied after the allocation moved it,
+/// so the restore left the array allocated: the copy is made before the stack
+/// pointer changes.
+#[test]
+fn a_dynamic_alloca_saves_the_stack_pointer_before_moving_it() {
+    use llrm_lir::registers::RegId;
+
+    use crate::model::ir::Loc;
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare ptr @llvm.stacksave.p0()
+declare void @llvm.stackrestore.p0(ptr)
+declare void @use(ptr)
+define void @f(i64 %n) {
+entry:
+  %saved = call ptr @llvm.stacksave.p0()
+  %p = alloca i32, i64 %n, align 4
+  call void @use(ptr %p)
+  call void @llvm.stackrestore.p0(ptr %saved)
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let insns = done.body.insns();
+    let moves: Vec<_> =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some("mov")).collect();
+    let last_read = moves.iter().rposition(|w| matches!(&w.sources[..], [Loc::Reg(r)] if r.register == RegId::RSP));
+    let first_write = moves.iter().position(|w| matches!(&w.dests[..], [Loc::Reg(r)] if r.register == RegId::RSP));
+    assert!(last_read.is_some() && first_write.is_some_and(|written| last_read < Some(written)), "{moves:?}");
+}

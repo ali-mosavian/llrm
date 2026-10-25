@@ -1063,6 +1063,29 @@ impl SelectionDAG {
         self.get_node_multi(ISD::CopyFromReg, &[vt, EVT::OTHER, EVT::GLUE], &[chain, reg_node, glue])
     }
 
+    /// The stack pointer at the pointer's width
+    /// (`getStackPointerRegisterToSaveRestore`).
+    pub fn stack_pointer(&self) -> llrm_lir::registers::RegId {
+        use llrm_lir::registers::RegId;
+        match self.config().pointer.size_in_bits() {
+            64 => RegId::RSP,
+            32 => RegId::ESP,
+            _ => RegId::SP,
+        }
+    }
+
+    /// `getCopyToReg` of a physical register without glue: the chain is the
+    /// only result.
+    pub fn get_copy_to_phys_reg_plain(
+        &mut self,
+        chain: SDValue,
+        reg: llrm_lir::registers::RegId,
+        value: SDValue,
+    ) -> SDValue {
+        let reg_node = self.get_phys_register(self.value_type(value), reg);
+        self.get_node(ISD::CopyToReg, EVT::OTHER, &[chain, reg_node, value])
+    }
+
     /// `getCopyFromReg` of a physical register without glue.
     pub fn get_copy_from_phys_reg_plain(
         &mut self,
