@@ -28,9 +28,6 @@ DEVIATE 1: MIR has no vectors and no `vscale`: `foldVecTruncToExtElt`,
 DEVIATE 2 (temporary): `FoldOpIntoSelect`, the select step of
 `commonCastTransforms`, is left out until the select family lands it.
 
-DEVIATE 3 (temporary): `SimplifyDemandedInstructionBits` is not
-translated.
-
 DEVIATE 4 (temporary): the folds that build an intrinsic call (`uadd.sat`,
 `usub.sat`, `smin`, `smax`, `ctlz`, `scmp`, `ucmp`, `fshl`, `fshr`) are
 left out until the Builder can declare an intrinsic (`combine_build`

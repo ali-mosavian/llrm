@@ -632,7 +632,8 @@ b1:
 }
 
 /// `(x - 5) * 8 + 3 + 4` is `x * 8 + -33` (the multiply by 8 is the back end's
-/// to shift). (llrm-mir's instcombine, #237)
+/// to shift). Under the `& 255 & 15` the constant is only demanded mod 16, so
+/// it lands as `15` (`opt` agrees). (llrm-mir's instcombine, #237)
 #[test]
 fn a_difference_with_a_constant_is_a_sum_and_the_constants_meet() {
     const TEXT: &str = r#"define i16 @f(i16 %x) {
@@ -647,7 +648,7 @@ b1:
 }
 "#;
     let out = piped(TEXT);
-    assert!(out.contains("add i16 %0, -33"), "{out}");
+    assert!(out.contains("add i16 %0, 15"), "{out}");
     assert_eq!(out.matches("add").count(), 1, "{out}");
 }
 
