@@ -212,8 +212,8 @@ Result on the Mac (macOS 27.2, M3, real SDL2 2.32.10, `llrm-qb --arm64=darwin -O
   so `VIEW PRINT` got 65535 and NIBBLES died with "Illegal function call" after the colour question. `arm64.rs` now marks
   the `i16` arguments of runtime calls `signext` on Darwin (22d99de96). No headless regression test: it needs a Mac.
 - NIBBLES: questions, then [Level 1](qb-host-shots/mac-nibbles-level1.png); Space starts it, arrows steer, Sammy dies and
-  the lives count down. [Second life](qb-host-shots/mac-nibbles-second-life.png) looks wrong: the arena is brown with blue
-  bars where the snake was. Not yet compared with DOS or the qemu run.
+- NIBBLES after c1ef95fe3 (the adrp-addend fix): the arena is blue on every life ([mid-game](qb-host-shots/mac-nibbles-midgame.png),
+  [Lives: 1](qb-host-shots/mac-nibbles-fourth-life.png)); the earlier brown arena was the backend bug.
 - GORILLAS: [intro](qb-host-shots/mac-gorilla-intro.png), [city](qb-host-shots/mac-gorilla-city.png), a throw typed
   as angle 45 and velocity 60 passes the turn to Player 2 and leaves
   [a crater](qb-host-shots/mac-gorilla-after-throw.png).
@@ -233,3 +233,9 @@ Fixed in 022aeb0a3; rebuild the Mac objects.
 Key and clock polls no longer wait for a frame (`dev/sdl/sync.c`): the SDL thread presents every 16 ms on its own, so a
 polling animation (NIBBLES' SparklePause) is sampled at any phase. A mode change and a wait for a key still block.
 Mac: re-check that the sparkles move and the GORILLA banana shows; report under this heading.
+
+Mac, animation (feat/qb-host after "key and clock polls no longer wait for an SDL frame", measured by logging each
+presented frame's pixels of text row 1 during NIBBLES' SparklePause, 5 s): before, 277 of 278 frames showed the same
+state (the worker waited for a frame at every `INKEY$`, so each frame was the end of a cycle); after, 261 frames show
+the five sparkle phases about equally (102 distinct states, the rest partial rows). The GORILLAS banana was already
+presented once per frame during a throw (80 frames, a rotating 9x4 px crescent).
