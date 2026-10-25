@@ -9,11 +9,10 @@
 //! set of nodes that selection removed and every use query skips them.
 //!
 //! Numbered deviations (reason / owner / exit / review):
-//! - **SD300** `have_no_common_bits_set`, `ConstantFP` to target form, memory
-//!   operands on machine nodes (kept in [`DagisAdapter::mem_refs`]) and
-//!   extending loads are not in our DAG yet; the adapter answers
-//!   conservatively. Owner sdag-c. Exit: the combiner (sdag-b) brings known
-//!   bits. Review 2026-12-10.
+//! - **SD300** `ConstantFP` to target form, memory operands on machine nodes
+//!   (kept in [`DagisAdapter::mem_refs`]) and extending loads are not in our
+//!   DAG yet; the adapter answers conservatively. (`have_no_common_bits_set`
+//!   reads the combiner's known bits.) Owner sdag-c. Review 2026-12-10.
 //!
 //! # Used by
 //! The shadow harness (sdag-d) through `llrm_dagisel::interp::Selector`.
@@ -619,10 +618,10 @@ impl Dag for DagisAdapter<'_> {
     }
     fn have_no_common_bits_set(
         &self,
-        _: PinValue,
-        _: PinValue,
+        a: PinValue,
+        b: PinValue,
     ) -> bool {
-        false
+        no_common_bits(self.dag, ours(a), ours(b))
     }
     fn mem_ref_is_load(
         &self,
@@ -833,7 +832,10 @@ impl AddrDag for DagisAdapter<'_> {
     ) -> bool {
         let node = &self.dag.nodes()[value.node as usize];
         match node.opcode {
-            ISD::Or => node.flags.has(SDNodeFlags::DISJOINT),
+            ISD::Or => {
+                node.flags.has(SDNodeFlags::DISJOINT)
+                    || no_common_bits(self.dag, ours(self.operand(value.node, 0)), ours(self.operand(value.node, 1)))
+            }
             // An XOR with the sign bit adds it.
             ISD::Xor => {
                 let rhs = ours(self.operand(value.node, 1));
@@ -942,4 +944,19 @@ impl AddrDag for DagisAdapter<'_> {
         };
         theirs(self.dag.intern(opcode, &[EVT::I32], &[], SDNodeFlags::default(), data))
     }
+}
+
+/// `SelectionDAG::haveNoCommonBitsSet`, by the known bits: every bit is known
+/// zero in one of the two.
+fn no_common_bits(
+    dag: &SelectionDAG,
+    a: SDValue,
+    b: SDValue,
+) -> bool {
+    let vt = dag.value_type(a);
+    if !vt.is_integer() || vt != dag.value_type(b) {
+        return false;
+    }
+    let all = super::fold::mask(vt.size_in_bits());
+    (super::known_bits::known_bits(dag, a).zero | super::known_bits::known_bits(dag, b).zero) & all == all
 }

@@ -329,4 +329,22 @@ fn a_natural_log_exp_and_log2_are_the_x87_sequences() {
         ];
         assert_eq!(own.iter().find(|(v, _)| u32::from(*v) == code).map(|(_, n)| *n), Some(name), "{op:?}");
     }
+
+/// `(x & 1) | (y << 1)`: no shared bit, so the `or` is an add and the address
+/// `x + y*2` is one `lea` (bench `x_popcount`: the pin has `LEA32r` x2 where we
+/// had `SHL32ri` + `ADD32rr_DB`, and before known bits, `OR32rr`).
+#[test]
+fn an_or_of_values_with_no_common_bits_is_one_lea() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let (x, y) = (input(&mut dag, 40), input(&mut dag, 41));
+    let one = dag.get_constant(1, EVT::I32);
+    let by = dag.get_constant(1, EVT::I8);
+    let low = dag.get_node(ISD::And, EVT::I32, &[x, one]);
+    let high = dag.get_node(ISD::Shl, EVT::I32, &[y, by]);
+    let or = dag.get_node(ISD::Or, EVT::I32, &[low, high]);
+    let mut adapter = DagisAdapter::new(&mut dag);
+
+    assert_eq!(Selector::new(table::TABLE).select(&mut adapter, &mut hooks(), or.node), Outcome::Selected);
+
+    assert_eq!(machine_name(&dag, or.node), "LEA32r");
 }
