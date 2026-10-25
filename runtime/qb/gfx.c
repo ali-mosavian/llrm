@@ -44,6 +44,8 @@ void gfx_clear(void)
     fill.box(&fill, 0, 0, gfx_current->width, gfx_current->height);
 }
 
+static int active_page, visible_page;
+
 void gfx_screen(int mode)
 {
     unsigned at;
@@ -66,6 +68,7 @@ void gfx_screen(int mode)
                 gfx_last_y = (int)modes[at].height / 2;
             }
             gfx_current = &modes[at];
+            active_page = visible_page = 0;
             gfx_foreground = modes[at].colors < 16 ? modes[at].colors - 1 : DEFAULT_FOREGROUND;
             gfx_background = 0;
             cga_background = 0;
@@ -363,11 +366,28 @@ void B_PALU(qb_data_ptr data, const AD *ad)
 
 /* SCREEN is taken here once a program has this linked (screen.c). */
 extern void (*screen_set_mode)(int mode);
+extern int (*screen_set_pages)(int active, int visible);
 extern void (*screen_set_colors)(int foreground, int background);
 
 /* The graphics screen's text driver goes with it. */
 extern void cn_gfx_xinit(void);
 void (*const gfx_needs_text)(void) = cn_gfx_xinit;
+
+/* SCREEN's pages: -1 keeps the one in use. The text screen has page 0 only here. */
+static int gfx_set_pages(int active, int visible)
+{
+    if (active < 0)
+        active = active_page;
+    if (visible < 0)
+        visible = visible_page;
+    if (!gfx_current)
+        return active == 0 && visible == 0;
+    if (!gd_set_pages((unsigned)active, (unsigned)visible))
+        return 0;
+    active_page = active;
+    visible_page = visible;
+    return 1;
+}
 
 /* The program ends in the text mode it began in. */
 static void gfx_term(void)
@@ -384,6 +404,7 @@ void gfx_xinit(void)
 {
     screen_set_mode = gfx_screen;
     screen_set_colors = gfx_set_colors;
+    screen_set_pages = gfx_set_pages;
     qb_comp_add(&gfx_comp);
 }
 

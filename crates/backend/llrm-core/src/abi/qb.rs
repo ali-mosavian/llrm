@@ -623,14 +623,14 @@ fn _contract_keeping(
             ),
         ));
     }
-    if name == "B$CSCN" && pushed == 6 {
+    if name == "B$CSCN" && (2..=18).contains(&pushed) && pushed % 2 == 0 {
         return Ok(returns(
-            6,
+            pushed,
             format!(
-                "{evidence} The audited one-mode SCREEN source form emits \
-                 two count-led parameter words plus the count; SYS.OBJ 0787..0792 \
-                 shows six bytes and the shared cleanup removes exactly that block. \
-                 Display, alias and error effects remain conservative."
+                "{evidence} SCREEN emits a count-led block like COLOR: a presence word (and the value when given) per \
+                 argument, then their count; this site supplies {pushed} bytes. SYS.OBJ 0787..0792 shows the \
+                 one-mode form as six bytes; the shared cleanup removes the whole block. Display, alias and error \
+                 effects remain conservative."
             ),
         ));
     }

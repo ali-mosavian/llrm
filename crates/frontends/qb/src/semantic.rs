@@ -4332,22 +4332,26 @@ impl Compiler {
                         );
                     }
                     "SCREEN" => {
-                        if arguments.len() != 1 {
-                            return self.fail("SCREEN needs one mode here, as in `SCREEN 13`");
+                        if arguments.is_empty() || arguments.len() > 4 {
+                            return self.fail("SCREEN takes a mode, colorswitch, active page and visible page");
                         }
-                        let (mode, mode_type) = self.expression(&arguments[0])?;
-                        let mode = self.convert(mode, mode_type, INTEGER)?;
-                        // SYS.OBJ 0787..0792 shows SCREEN 0 as the VBDOS
-                        // count-led block [present=1, mode=0, count=2].
-                        self.emit_runtime_call(
-                            "B$CSCN",
-                            Vec::new(),
-                            vec![
-                                Operand::Constant(INTEGER, Number::Integer(1)),
-                                mode,
-                                Operand::Constant(INTEGER, Number::Integer(2)),
-                            ],
-                        );
+                        // BC pushes a count-led block (SYS.OBJ 0787..0792 shows
+                        // SCREEN 0 as [present=1, mode=0,
+                        // count=2]): for each argument a flag and, if it is
+                        // given, its value; then the count of words.
+                        let mut words = Vec::new();
+                        for argument in arguments {
+                            if matches!(argument, Expr::Omitted(_)) {
+                                words.push(Operand::Constant(INTEGER, Number::Integer(0)));
+                            } else {
+                                let (value, type_id) = self.expression(argument)?;
+                                let value = self.convert(value, type_id, INTEGER)?;
+                                words.push(Operand::Constant(INTEGER, Number::Integer(1)));
+                                words.push(value);
+                            }
+                        }
+                        words.push(Operand::Constant(INTEGER, Number::Integer(words.len() as i64)));
+                        self.emit_runtime_call("B$CSCN", Vec::new(), words);
                     }
                     "WIDTH" => {
                         if arguments.len() != 2 {
