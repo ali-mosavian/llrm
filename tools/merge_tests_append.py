@@ -3,12 +3,20 @@
 
 `merge=union` kept both sides' lines but aligned the tail of one appended test with the tail of the other and dropped a closing `}` (#4570: llrm-core did not
 compile, no conflict reported). Here the plain three-way merge runs, and a conflict hunk where BASE has nothing (both sides inserted at one place) becomes OURS's
-block and then THEIRS's, each whole. Any other conflict stays one: the result keeps the markers and the exit is 1. Edits elsewhere in the file merge as git merges them.
+block and then THEIRS's, each whole, unless both blocks define the same item (a test two PRs add alike would be defined twice). Any other conflict stays one: the result keeps the markers and the exit is 1. Edits elsewhere in the file merge as git merges them.
 """
 
+import re
 import subprocess
 import sys
 from pathlib import Path
+
+
+ITEM = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const\s+|unsafe\s+|async\s+)?(fn|static|struct|enum|type|mod|trait|const)\s+(\w+)", re.M)
+
+
+def defined(lines: list[str]) -> set[tuple[str, str]]:
+    return set(ITEM.findall("".join(lines)))
 
 
 def resolved(diff3: str) -> str | None:
@@ -23,8 +31,8 @@ def resolved(diff3: str) -> str | None:
         elif state == "base" and line.startswith("======="):
             state = "theirs"
         elif state == "theirs" and line.startswith(">>>>>>> "):
-            if base:
-                return None
+            if base or defined(ours) & defined(theirs):
+                return None  # something in the base, or both sides defined the same item (two PRs adding one test: joined, it would be defined twice)
             out += ours + (["\n"] if ours and not ours[-1].endswith("\n") else []) + theirs
             state = "text"
         elif state == "ours":

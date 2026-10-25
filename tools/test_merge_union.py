@@ -170,3 +170,26 @@ def test_without_the_parser_rs_line_the_same_appends_conflict(tmp_path):
     lines = [line for line in (ROOT / ".gitattributes").read_text().splitlines() if "parser.rs" not in line]
     repo = parser_prs(tmp_path, "\n".join(lines) + "\n")
     assert git(repo, "merge", "--no-edit", "-q", "second", check=False).returncode != 0
+
+
+def test_two_prs_adding_the_same_test_do_not_define_it_twice(tmp_path):
+    """4678 and 4680 both added `a_frame_cell_with_a_wide_index_is_not_encodable_before_the_frame_is_named` to select64_tests.rs; joined, the batch failed 'defined multiple times'."""
+    repo = tmp_path / "repo"
+    (repo / TESTS).parent.mkdir(parents=True)
+    git(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / TESTS).write_text(BASE)
+    (repo / ".gitattributes").write_text("*_tests.rs merge=tests-append\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "base")
+    git(repo, "checkout", "-qb", "second")
+    for name, extra in (("shared", "    // second\n"), ):
+        path = repo / TESTS
+        path.write_text(path.read_text() + "\n" + TEST.format(name=name).replace("{\n", "{\n" + extra, 1))
+        git(repo, "commit", "-qam", "second")
+    git(repo, "checkout", "-q", "main")
+    path = repo / TESTS
+    path.write_text(path.read_text() + "\n" + TEST.format(name="shared").replace("{\n", "{\n    // main\n", 1) + "\n" + TEST.format(name="only_main"))
+    git(repo, "commit", "-qam", "main")
+    merged = git(repo, "merge", "--no-edit", "-q", "second", check=False)
+    text = (repo / TESTS).read_text()
+    assert merged.returncode != 0 or text.count("fn shared(") == 1
