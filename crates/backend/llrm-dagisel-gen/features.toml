@@ -20,7 +20,7 @@ features = ["X87", "CX8"]
 # x86-64 (D64-0): the 64-bit mode of the same pin table. The baseline CMOV and CX8 of any 64-bit CPU,
 # x87 for `long double`; no SSE yet (scalar floating point is D64-4), so a float pattern stays on x87.
 [cpu.x64]
-features = ["X87", "CX8", "CMOV"]
+features = ["X87", "CX8", "CMOV", "SSE1", "SSE2"]
 
 [cpu.x64.atom]
 "Subtarget->is64Bit()" = true
@@ -120,6 +120,18 @@ i64relocImmSExt32 = "reloc_imm_sext_32"
 i16relocImmSExt8 = "reloc_imm_sext_8"
 X86add_flag_nocf = "no_carry_flag_uses_of_flags"
 xor_flag_dead_result = "xor_flag_dead_result"
+# SSE (D64-4). The vector broadcasts, `vzload` and `memopf128` never match a scalar DAG; the
+# builder sets no `!nontemporal`.
+X86VBroadcastld32 = "memory_vt_i32"
+X86vzload32 = "memory_vt_i32"
+X86VBroadcastld64 = "memory_vt_i64"
+X86vzload64 = "memory_vt_i64"
+X86vextractstore64 = "memory_vt_i64"
+extloadvf32 = "memory_vt_f32"
+memopf128 = "memop"
+nontemporalstore = "non_temporal_store"
+alignednontemporalstore = "non_temporal_store"
+CommutableCMPCC = "commutable_cmp_cc"
 X86sub_flag_nocf = "sub_no_carry_flag_uses"
 X86lock_add_nocf = "no_carry_flag_uses_of_result"
 def32 = "def32"
