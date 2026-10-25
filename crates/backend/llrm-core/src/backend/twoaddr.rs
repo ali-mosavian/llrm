@@ -242,8 +242,12 @@ fn _unfolded(
     mint: &mut dyn FnMut() -> u32,
 ) -> Option<(Arc<Insn>, Arc<Insn>)> {
     let what = one.what.as_ref()?;
-    if what.op != Operation::Binary
-        || !matches!(what.name.as_deref(), Some("add" | "and" | "or" | "xor"))
+    let commutative = match what.op {
+        Operation::Binary => matches!(what.name.as_deref(), Some("add" | "and" | "or" | "xor")),
+        Operation::Multiply => what.name.as_deref() == Some("imul"),
+        _ => false,
+    };
+    if !commutative
         || what.dests.len() != 1
         || what.sources.len() != 2
         || one.volatile
@@ -1783,6 +1787,30 @@ mod tests {
             shapes.len() == 4 && shapes[1].0 == "mov" && mem(1) && shapes[2].0 == "mov" && shapes[3].0 == "add",
             "the load comes first, then the copy of what it loaded, then the add of `a`: {shapes:?}"
         );
+    }
+
+    /// `imul r, [m]` beside a live `r` was `mov d, a; imul d, [m]`: the 486
+    /// multiplies faster when the small value is the multiplier, and the pin
+    /// unfolds the load here as it does for `add` (x_list: 59.3 K clocks for
+    /// the pin's `mov t,[m]; imul t,a`, 66.7 K for ours).
+    #[test]
+    fn test_a_folded_load_in_an_imul_beside_a_live_source_is_unfolded() {
+        use crate::model::ir::Mem;
+        let what = Semantics {
+            name: Some("imul".into()),
+            dests: vec![held(8, 4)],
+            sources: vec![held(7, 4), Loc::Mem(Mem::new(None, 4))],
+            ..Semantics::new(Operation::Multiply)
+        };
+        let imul = Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![8], vec![7]));
+        let got = tied(&of(vec![imm_def(0, 7), imul, read(2, 8), read(3, 7)]), Off);
+        let names: Vec<String> = got
+            .insns()
+            .iter()
+            .filter_map(|one| one.what.as_ref())
+            .map(|what| what.name.clone().unwrap_or_default().to_string())
+            .collect();
+        assert!(names.len() == 4 && names[1] == "mov" && names[3] == "imul", "{names:?}");
     }
 
     /// `convertInstTo3Addr`: the `lea` has the place the add had, and the maps
