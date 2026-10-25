@@ -96,6 +96,16 @@ thread_local! {
 }
 
 thread_local! {
+    static COPY_OFS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many instructions this thread has been asked the copy of, for a test
+/// that a walked block's are asked once.
+pub fn copy_ofs() -> usize {
+    COPY_OFS.with(std::cell::Cell::get)
+}
+
+thread_local! {
     static REGISTER_MASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -405,6 +415,8 @@ struct Machine {
     universe: Lanes,
     /// `register_mask` of each register asked, by index.
     register_masks: std::cell::RefCell<Vec<Option<Option<Mask>>>>,
+    /// The unit of each lane bit (`u8::MAX` for one that is no general lane).
+    bit_units: [u8; 128],
 }
 
 impl Machine {
@@ -425,9 +437,18 @@ impl Machine {
                 register_for.insert(held, register);
             }
         }
+        let mut bit_units = [u8::MAX; 128];
+        for (bit, slot) in bit_units.iter_mut().enumerate().take(Lanes::count()) {
+            *slot = Lanes::from_mask(1 << bit)
+                .iter()
+                .next()
+                .and_then(|lane| places.get(lane.0.index())?.get(lane.1 as usize).copied())
+                .unwrap_or(u8::MAX);
+        }
         Self {
             regs,
             bits: body.bits,
+            bit_units,
             places,
             lanes,
             register_for,
@@ -473,7 +494,16 @@ impl Machine {
         &self,
         lanes: &Lanes,
     ) -> Mask {
-        lanes.iter().filter_map(|lane| self.unit(&lane)).fold(0, |mask, unit| mask | 1 << unit)
+        let mut bits = lanes.mask();
+        let mut mask = 0;
+        while bits != 0 {
+            let unit = self.bit_units[bits.trailing_zeros() as usize];
+            bits &= bits - 1;
+            if unit != u8::MAX {
+                mask |= 1 << unit;
+            }
+        }
+        mask
     }
 
     /// The units of one register, None when it is not wholly general.
@@ -510,6 +540,7 @@ impl Machine {
         &self,
         one: &Insn,
     ) -> Option<Copy> {
+        COPY_OFS.with(|asked| asked.set(asked.get() + 1));
         let what = one.what.as_ref()?;
         let (Operation::Move, Some("mov"), [Loc::Reg(dest)], [Loc::Reg(source)]) =
             (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice())
@@ -686,12 +717,12 @@ impl<'a> Walk<'a> {
     fn new(
         machine: &'a Machine,
         block: &Block,
+        copies: Vec<Option<Copy>>,
     ) -> Self {
         let insns: Vec<Arc<Insn>> = block.insns.iter().cloned().collect();
         let effects: Vec<Option<Effect>> =
             insns.iter().map(|one| liveness::effect(machine.regs, machine.bits, one)).collect();
         let masks = insns.iter().zip(&effects).map(|(one, effect)| machine.masks_of(one, effect)).collect();
-        let copies = insns.iter().map(|one| machine.copy_of(one)).collect();
         let dead = vec![false; insns.len()];
         let twin = vec![None; insns.len()];
         Self {
@@ -1208,12 +1239,13 @@ pub fn propagated(body: &LirBody) -> LirBody {
         .iter()
         .map(|block| {
             // Both walks start from a copy: a block with none is as it was.
-            if !block.insns.iter().any(|one| machine.copy_of(one).is_some()) {
+            let copies: Vec<Option<Copy>> = block.insns.iter().map(|one| machine.copy_of(one)).collect();
+            if copies.iter().all(Option::is_none) {
                 return block.clone();
             }
             WALKS.with(|walks| walks.set(walks.get() + 1));
             let live_out = dead.get(&block.at).map_or(universe, |dead| universe.minus(dead));
-            let mut walk = Walk::new(&machine, block);
+            let mut walk = Walk::new(&machine, block, copies);
             walk.backward(live_out);
             walk.forward(&live_out);
             if walk.changed { block.with_insns(walk.insns) } else { block.clone() }
