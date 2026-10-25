@@ -8,3 +8,10 @@ ALONE_CMD="$d/drop x" ; got=$(alone_filter 1 2 3 2>/dev/null)
 ALONE_CMD="$d/broken x"; got=$(alone_filter 1 2 3 2>/dev/null)
 [ "$got" = "1 2 3" ] || { echo "FAIL: broken check stalled or filtered the queue: '$got'"; exit 1; }
 echo PASS
+
+# Regression: the cache warm launched parity_squash.py beside the batch whatever ALONE_CMD said, and competed with the squash for slots (batch 19:45).
+w=$(mktemp -d); printf '#!/bin/sh\necho "$@" >> %s/ran\n' "$w" > $w/rec; chmod +x $w/rec
+ALONE_CMD="$w/rec alone"; alone_warm 7 8; sleep 1
+[ "$(cat $w/ran 2>/dev/null)" = "alone 7 8" ] || { echo "FAIL: warm did not run ALONE_CMD: '$(cat $w/ran 2>/dev/null)'"; exit 1; }
+ALONE_CMD=echo; rm -f $w/ran; alone_warm 7 8; sleep 1; [ ! -e $w/ran ] || { echo "FAIL"; exit 1; }
+echo PASS warm

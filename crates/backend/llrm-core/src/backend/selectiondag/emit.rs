@@ -1127,6 +1127,9 @@ impl Emitter<'_, '_> {
         ) {
             return self.lowered_select(n);
         }
+        if name == "VASTART_SAVE_XMM_REGS" {
+            return self.lowered_vastart_save_xmm(n);
+        }
         // `FsFLD0SD`: a zero double, `xorps` of the register with itself.
         if matches!(name, "FsFLD0SD" | "FsFLD0SS") {
             let node = self.dag.node(SDValue { node: n, res: 0 });
@@ -1228,7 +1231,12 @@ impl Emitter<'_, '_> {
         let when_true = held(self.operand(node.ops[1])?)?;
         let cc = self.constant(node.ops[2])? as usize;
         let jump = *CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
-        let result = self.fresh(width(self.ctx.map.scalar_sse(), node.values[0]));
+        // `CreateVirtualRegisters`: a result only exported by a `CopyToReg` is
+        // made in that register, so the export emits no copy between this
+        // select and the next.
+        let result = self
+            .exported_register(SDValue { node: n, res: 0 })
+            .unwrap_or_else(|| self.fresh(width(self.ctx.map.scalar_sse(), node.values[0])));
         self.values.insert(SDValue { node: n, res: 0 }, result.value);
         // The flags this select reads: the producer of the `CopyToReg EFLAGS`
         // glued to it.
@@ -1261,6 +1269,71 @@ impl Emitter<'_, '_> {
         self.blocks.push(EmitBlock { at: sink_at, phis: vec![phi], ..EmitBlock::default() });
         self.last_select =
             producer.map(|producer| Select { producer, cc, this, false_at, sink: sink_at, result: result.value });
+        Ok(())
+    }
+
+    /// `EmitVAStartSaveXMMRegsWithCustomInserter` (the pin's custom inserter):
+    /// the vector argument registers the named parameters left are stored in
+    /// the register save area unless `al` is zero.
+    ///
+    /// ```text
+    /// this:  test al, al; je sink
+    /// save:  movaps [area + offset + 16 i], xmm(first + i)   (falls into sink)
+    /// sink:
+    /// ```
+    ///
+    /// The operands are `al`, the save area's frame index and the offset of
+    /// the first register's slot; the registers are read where the call left
+    /// them, as nothing runs between the entry and this node.
+    fn lowered_vastart_save_xmm(
+        &mut self,
+        n: u32,
+    ) -> Result<(), EmitError> {
+        use iced_x86::Register;
+        const XMM: [Register; 8] = [
+            Register::XMM0,
+            Register::XMM1,
+            Register::XMM2,
+            Register::XMM3,
+            Register::XMM4,
+            Register::XMM5,
+            Register::XMM6,
+            Register::XMM7,
+        ];
+        let node = self.dag.node(SDValue { node: n, res: 0 });
+        // The matcher's operands: `al`, the address the pattern names (frame
+        // index, scale, index, displacement, segment), then the offset of the
+        // first register's slot, then the chain.
+        let operands: Vec<SDValue> =
+            node.ops.iter().copied().filter(|op| self.dag.value_type(*op) != EVT::OTHER).collect();
+        let [al, frame, _scale, _index, _disp, _segment, offset] = operands[..] else {
+            return Err(EmitError::Unsupported(format!(
+                "VASTART_SAVE_XMM_REGS with {} operands, not al, an address and an offset",
+                operands.len()
+            )));
+        };
+        let Loc::Held(al) = self.operand(al)? else {
+            return Err(EmitError::Unsupported("VASTART_SAVE_XMM_REGS: al is no register".to_owned()));
+        };
+        let index = self.constant(frame)? as i32;
+        let first = self.constant(offset)?;
+        let area =
+            self.ctx.frame.cell(index, 16).ok_or_else(|| EmitError::Unsupported(format!("frame index {index}")))?;
+        let sink_at = self.next_address();
+        self.push(Operation::Compare, "test", vec![], vec![Loc::Held(al), Loc::Held(al)]);
+        let what = Semantics { target: Some(sink_at), name: Some("je".into()), ..Semantics::new(Operation::Branch) };
+        self.push_semantics(what);
+        let save_at = self.next_address();
+        self.blocks.push(EmitBlock { at: save_at, ..EmitBlock::default() });
+        let skipped = ((first - 48) / 16) as usize;
+        for (at, register) in XMM.iter().enumerate().skip(skipped) {
+            let disp = first + 16 * (at - skipped) as i64;
+            let addr = area.addr.map(|addr| Addr { disp: addr.disp + disp, ..addr });
+            let cell = Mem { addr, ..area.clone() };
+            let source = Reg { register: llrm_lir::registers::RegId::new(*register), width: 16 };
+            self.push(Operation::Move, "movaps", vec![Loc::Mem(cell)], vec![Loc::Reg(source)]);
+        }
+        self.blocks.push(EmitBlock { at: sink_at, ..EmitBlock::default() });
         Ok(())
     }
 
