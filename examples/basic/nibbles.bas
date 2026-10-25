@@ -656,6 +656,7 @@ SUB SparklePause
     a$ = "*    *    *    *    *    *    *    *    *    *    *    *    *    *    *    *    *    "
     WHILE INKEY$ <> "": WEND 'Clear keyboard buffer
 
+    nxt# = TIMER
     WHILE INKEY$ = ""
         FOR a = 1 TO 5
             LOCATE 1, 1                             'print horizontal sparkles
@@ -677,6 +678,8 @@ SUB SparklePause
                     PRINT " ";
                 END IF
             NEXT b
+            nxt# = nxt# + 1 / 60                'one step in 1/60 s
+            DO: LOOP WHILE TIMER < nxt# AND nxt# - TIMER < 1
         NEXT a
     WEND
 
