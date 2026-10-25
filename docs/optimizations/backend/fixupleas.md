@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/fixupleas.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/fixupleas.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/fixupleas.rs sha256:0b61a46c77f54c5a9b2772ccebb8a43088c0fca1db6d4d34d7ecf0112d18e85d -->
+<!-- src: crates/backend/llrm-core/src/backend/fixupleas.rs sha256:e7f20451f984331dcdbc3d40b49465ee278d2f6b9639bcdae1c6cfa22aa118dd -->
 
 # fixupleas
 
@@ -11,9 +11,13 @@
 ## How it works
 The pass visits every LEA of every block in order. On i486 none of
 `slowLEA`, `slow3OpsLEA` or `leaUsesAG` is set, so only `optTwoAddrLEA`
-(L564) runs on each; until it moves here (row 100, PR 4) the rules in
-`peephole.peep` (`lea_fixed`, `lea_alus`) do its work and this pass changes
-nothing.
+(L564) runs on each: `opt_two_addr_lea`, its cases 1 and 2 and then
+`optLEAALU` as case 3.
+
+`optLEAALU` (L500, with `searchALUInst` L405) is `opt_lea_alu`: `lea
+t,[x+y]` whose only reader, within five instructions, is `add d,t` or `sub
+d,t` with the flags dead, is `op d,x` and `op d,y`. The adjacent case was
+the peephole group `lea_alu`.
 
 Done here: `is_lea` (L227), the block loop, `previous_instr` (L295),
 `uses_register` (L270) and `search_backwards` (L308), which finds the

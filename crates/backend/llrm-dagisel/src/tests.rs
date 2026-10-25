@@ -1795,3 +1795,57 @@ mod setcc_carry {
         let _ = x86::SBB32rr;
     }
 }
+
+mod x64_table {
+    use super::*;
+    use crate::generated::x86_x64 as x64;
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_select::select_node;
+
+    fn names(opcode: u16) -> &'static str {
+        x64::MACHINE_OPCODES.iter().find(|(v, _)| *v == opcode).map_or("?", |(_, n)| n)
+    }
+
+    fn selected_names(vt: crate::matcher::Vt) -> Vec<&'static str> {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, vt), dag.input(2, vt));
+        let add = dag.node(isd::ADD, &[vt], &[a, b]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::X64,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
+        assert_eq!(select_node(&Selector::new(x64::TABLE), &mut dag, &mut hooks, add), Outcome::Selected);
+        dag.nodes.iter().filter_map(|n| n.machine).map(names).collect()
+    }
+
+    /// The pin's table in 64-bit mode: an `i64` add is `ADD64rr`, and the
+    /// 32-bit add is still `ADD32rr`. There was no 64-bit table at all
+    /// (D64-0).
+    #[test]
+    fn an_i64_add_is_add64rr() {
+        assert_eq!(selected_names(mvt::i64), ["ADD64rr"]);
+    }
+
+    #[test]
+    fn an_i32_add_is_still_add32rr() {
+        assert_eq!(selected_names(mvt::i32), ["ADD32rr"]);
+    }
+
+    #[test]
+    fn a_pointer_is_an_i64_in_64_bit_mode() {
+        let options = Options {
+            cpu: Cpu::X64,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        };
+        assert_eq!(options.pointer_type(), mvt::i64);
+    }
+}
