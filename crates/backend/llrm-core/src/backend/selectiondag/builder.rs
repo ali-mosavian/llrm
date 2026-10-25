@@ -640,6 +640,20 @@ impl Builder<'_> {
         }
     }
 
+    /// The word register of a dword one: `EAX` -> `AX`.
+    fn word_register(reg: llrm_lir::registers::RegId) -> Option<llrm_lir::registers::RegId> {
+        use llrm_lir::registers::RegId;
+        Some(match reg {
+            RegId::EAX => RegId::AX,
+            RegId::EBX => RegId::BX,
+            RegId::ECX => RegId::CX,
+            RegId::EDX => RegId::DX,
+            RegId::ESI => RegId::SI,
+            RegId::EDI => RegId::DI,
+            _ => return None,
+        })
+    }
+
     /// `LowerArguments` with X86's `LowerFormalArguments` over the target's
     /// `Convention`: a stack parameter is a load from a fixed object (indices
     /// -1, -2, ... in parameter order), a register parameter the copy of a
@@ -1098,6 +1112,17 @@ impl Builder<'_> {
                         // (`CCPromoteToType`)
                         let width = self.arch.registers().bytes(reg).map_or(0, |bytes| bytes as u32 * 8);
                         let vt = self.dag.value_type(piece);
+                        // At -m16 a word argument goes in the word register
+                        // (`AX`, not `EAX`): the callee reads AX, and a word
+                        // required in a dword register is a dword to the
+                        // allocator.
+                        let word = (vt == EVT::I16 && self.target.dag.pointer == EVT::I16)
+                            .then(|| Self::word_register(reg))
+                            .flatten();
+                        if let Some(word) = word {
+                            copies.push((word, piece));
+                            continue;
+                        }
                         let piece = if vt.is_integer() && vt.size_in_bits() < width {
                             let code = extends.get(at).copied().unwrap_or(ISD::AnyExtend);
                             self.dag.get_node(code, EVT::integer(width), &[piece])
