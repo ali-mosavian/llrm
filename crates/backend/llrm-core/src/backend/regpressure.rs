@@ -28,6 +28,9 @@
 
 use std::rc::Rc;
 
+use llrm_lir::registers::{RegId, Regs};
+use llrm_target::pressure::PressureSets;
+
 use crate::model::lir::Insn;
 use crate::support::hash::{HashMap, HashSet};
 
@@ -67,6 +70,31 @@ impl Model {
         sets: Rc<[usize]>,
     ) {
         self.classes.insert(value, (weight, sets));
+    }
+
+    /// The model of a body whose values may be placed as `values` say: each
+    /// (value, width in bytes, the registers it may take, as roots). A value
+    /// counts the weight and sets of the smallest class holding its registers
+    /// at that width (DEVIATE RP1); one no class holds, or with no
+    /// registers to take, is not counted. Each set's limit is `limit(set)`.
+    pub fn of_values<'v>(
+        sets: &PressureSets,
+        regs: Regs,
+        limit: impl Fn(usize) -> u32,
+        values: impl IntoIterator<Item = (u32, i64, &'v [RegId])>,
+    ) -> Self {
+        let mut model = Self::new((0..sets.sets.len()).map(limit).collect());
+        let mut shared: HashMap<String, Rc<[usize]>> = HashMap::default();
+        for (value, bytes, allowed) in values {
+            let names: Vec<&str> = allowed.iter().filter_map(|&root| regs.name(regs.named(root, bytes))).collect();
+            if names.is_empty() || names.len() != allowed.len() {
+                continue;
+            }
+            let Some(class) = sets.class_holding(&names) else { continue };
+            let in_sets = shared.entry(class.name.clone()).or_insert_with(|| Rc::from(class.sets.clone())).clone();
+            model.count(value, class.weight, in_sets);
+        }
+        model
     }
 
     fn weight(
@@ -343,6 +371,27 @@ mod tests {
         assert_eq!(delta.current_max, Some(PressureChange { set: 0, inc: 1 }));
         let quiet = tracker.upward_delta(&insn(&[], &[2]), &critical, &[2, 0]);
         assert_eq!(quiet.current_max, None);
+    }
+
+    /// A word confined to ax and bx has the class that holds just them, a
+    /// byte the same two roots a byte class, and a value no class holds is
+    /// left out: pressure was read from one count for all of them.
+    #[test]
+    fn a_value_is_counted_in_the_smallest_class_holding_its_registers() {
+        let sets = llrm_target::pressure::parse(
+            "set 0 WORDS 4 ALL\nset 1 PAIR 2 PAIR\nclass ALL 2 8 0 ax,bx,cx,dx\nclass PAIR 2 2 0,1 ax,bx\nclass BYTES 1 4 0 al,bl,cl,dl\n",
+        )
+        .expect("parses");
+        let regs = Regs(&llrm_x86_m16::REGISTER_INFO);
+        let (ax, bx, cx) = (RegId::AX, RegId::BX, RegId::CX);
+        let both: &[RegId] = &[ax, bx];
+        let three: &[RegId] = &[ax, bx, cx];
+        let model =
+            Model::of_values(&sets, regs, |set| sets.sets[set].limit, [(1, 2, both), (2, 2, three), (3, 1, both)]);
+        let tracker = Tracker::new(&model, [1, 2, 3], []);
+        // value 1: PAIR (weight 2, sets 0 and 1); value 2: ALL (2, set 0);
+        // value 3: BYTES (1, set 0).
+        assert_eq!(tracker.current(), &[5, 2]);
     }
 
     #[test]
