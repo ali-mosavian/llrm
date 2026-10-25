@@ -128,7 +128,12 @@ pub fn is_simple(
 /// `canTailDuplicate`: `pred` has `tail` as its only successor and reaches it
 /// by a jump with no condition.
 pub fn can_tail_duplicate(pred: &Block) -> bool {
-    successors(pred).len() <= 1 && !real(pred).next_back().is_some_and(|one| indirect(one))
+    // A branch with a condition is a condition: analyzeBranch says so, and a
+    // copy that removed the jump would leave the branch to a block that is
+    // gone.
+    successors(pred).len() <= 1
+        && !real(pred).next_back().is_some_and(|one| indirect(one))
+        && !real(pred).any(|one| operation(one) == Some(Operation::Branch))
 }
 
 /// `canCompletelyDuplicateBB`: every predecessor of `tail` can take a copy.
@@ -942,5 +947,45 @@ mod tests {
         assert_eq!(insn_names(at(&done, 1)), ["mov", "mov", "jmp"]);
         let problems = crate::backend::verify::verify(&done, true);
         assert!(problems.is_empty(), "{problems:?}");
+    }
+
+    /// A read in a loop of a value the join defines: the block read in has one
+    /// predecessor, the header two (the copies and the latch). Reading a block
+    /// before its header, the walk met the header's phi as "no definition" and
+    /// the phi took the join's own value, which no longer exists ("value read
+    /// but never defined", nib `floats.print_float`).
+    #[test]
+    fn test_a_value_the_join_defines_and_a_loop_reads_is_a_phi_over_the_copies_and_itself() {
+        let blocks = vec![
+            block(0, vec![of("jne", Operation::Branch, Some(2), false), jump(1)], &[1, 2]),
+            block(1, vec![work(1), jump(3)], &[3]),
+            block(2, vec![work(2), jump(3)], &[3]),
+            block(3, vec![work(3), jump(4)], &[4]),
+            block(4, vec![of("jne", Operation::Branch, Some(5), false), jump(6)], &[5, 6]),
+            block(5, vec![reading(3), jump(4)], &[4]),
+            block(6, vec![of("ret", Operation::Return, None, false)], &[]),
+        ];
+        let done = tail_duplicate(&body(blocks), 3, false).expect("duplicated");
+        let header = at(&done, 4);
+        assert_eq!(header.phis.len(), 1, "{header:#?}");
+        let phi = &header.phis[0];
+        assert!(phi.incoming.iter().all(|(_, value)| *value != 3), "{phi:?}");
+        assert_eq!(at(&done, 5).insns[0].uses, [phi.result], "the loop reads the phi");
+        let problems = crate::backend::verify::verify(&done, true);
+        assert!(problems.is_empty(), "{problems:?}");
+    }
+
+    /// A predecessor that reaches the join by a branch as well as a jump (both
+    /// edges to it) has a condition: it takes no copy, whose removal of the
+    /// jump left the branch jumping to a block that is gone ("a jump to
+    /// L2_93, which is nowhere", c/logical_value at -O0).
+    #[test]
+    fn test_a_predecessor_that_branches_to_the_join_takes_no_copy() {
+        let blocks = vec![
+            block(0, vec![of("jne", Operation::Branch, Some(3), false), jump(3)], &[3]),
+            block(3, vec![work(3), jump(9)], &[9]),
+            block(9, vec![of("ret", Operation::Return, None, false)], &[]),
+        ];
+        assert!(tail_duplicate(&body(blocks), 3, false).is_none());
     }
 }

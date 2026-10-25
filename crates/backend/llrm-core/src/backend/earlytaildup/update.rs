@@ -29,6 +29,7 @@ pub(super) struct Updater<'a> {
     next: &'a mut u32,
     start: HashMap<i64, Option<u32>>,
     referenced: std::collections::HashSet<u32>,
+    walking: HashMap<i64, u8>,
     added: HashMap<i64, Vec<Phi>>,
 }
 
@@ -49,6 +50,7 @@ impl<'a> Updater<'a> {
             next,
             start: HashMap::new(),
             referenced: std::collections::HashSet::new(),
+            walking: HashMap::new(),
             added: HashMap::new(),
         };
         let places: Vec<i64> = this.blocks.iter().map(|block| block.at).collect();
@@ -133,8 +135,18 @@ impl<'a> Updater<'a> {
                 None
             }
             [only] => {
-                self.start.insert(at, None);
+                // A live cycle is entered by a block with two predecessors,
+                // whose phi the second visit finds; a cycle of blocks with one
+                // each is dead code and reads nothing.
+                let depth = self.walking.entry(at).or_insert(0);
+                if *depth >= 2 {
+                    return None;
+                }
+                *depth += 1;
                 let there = self.value_at_end(only);
+                if let Some(depth) = self.walking.get_mut(&at) {
+                    *depth -= 1;
+                }
                 self.start.insert(at, there);
                 there
             }
