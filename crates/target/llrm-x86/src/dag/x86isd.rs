@@ -57,24 +57,30 @@ pub const LLRM_PORT: ISD = ISD::Target(24586);
 /// Owner sdag-c. Review 2026-12-10.
 pub const LLRM_CALL_FLAGS: ISD = ISD::Target(24585);
 
+/// The name of a private `X86ISD` code (`getTargetNodeName`), or none for a
+/// code that is the pin's own number.
+pub fn private_name(code: u16) -> Option<&'static str> {
+    Some(match code {
+        1 => "X86ISD::CALL",
+        2 => "X86ISD::RET_GLUE",
+        3 => "X86ISD::REP_STOS",
+        4 => "X86ISD::REP_MOVS",
+        5 => "X86ISD::POP_FROM_X87_REG",
+        6 => "X86ISD::TC_RETURN",
+        24578 => "X86ISD::LLRM_ASM",
+        24580 => "X86ISD::SEGMENT_OF",
+        24581 => "X86ISD::LLRM_WINDOW",
+        24582 => "X86ISD::LLRM_CODE",
+        24584 => "X86ISD::LLRM_FARCALL",
+        24586 => "X86ISD::LLRM_PORT",
+        24587 => "X86ISD::LLRM_TC_RETURN",
+        24585 => "X86ISD::LLRM_CALL_FLAGS",
+        24583 => "X86ISD::LLRM_PTRDIFF",
+        _ => return None,
+    })
+}
+
 /// `getTargetNodeName`.
 pub fn name(code: u16) -> String {
-    match code {
-        1 => "X86ISD::CALL".into(),
-        2 => "X86ISD::RET_GLUE".into(),
-        3 => "X86ISD::REP_STOS".into(),
-        4 => "X86ISD::REP_MOVS".into(),
-        5 => "X86ISD::POP_FROM_X87_REG".into(),
-        6 => "X86ISD::TC_RETURN".into(),
-        24578 => "X86ISD::LLRM_ASM".into(),
-        24580 => "X86ISD::SEGMENT_OF".into(),
-        24581 => "X86ISD::LLRM_WINDOW".into(),
-        24582 => "X86ISD::LLRM_CODE".into(),
-        24584 => "X86ISD::LLRM_FARCALL".into(),
-        24586 => "X86ISD::LLRM_PORT".into(),
-        24587 => "X86ISD::LLRM_TC_RETURN".into(),
-        24585 => "X86ISD::LLRM_CALL_FLAGS".into(),
-        24583 => "X86ISD::LLRM_PTRDIFF".into(),
-        other => format!("X86ISD#{other}"),
-    }
+    private_name(code).map_or_else(|| format!("X86ISD#{code}"), str::to_owned)
 }

@@ -422,3 +422,22 @@ fn a_float_load_from_the_constant_pool_folds_the_entry_into_the_address() {
         "no register-materialized address"
     );
 }
+
+/// The use queries read the use list, not the arena: the counts and the
+/// "only user" answer are the same as a scan of every live node gives.
+#[test]
+fn use_queries_agree_with_a_scan_of_the_live_nodes() {
+    use llrm_dagisel::dag::Dag;
+
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let a = dag.get_constant_with(5, EVT::I32, true, false);
+    let twice = dag.get_node(ISD::Add, EVT::I32, &[a, a]);
+    let mut adapter = DagisAdapter::new(&mut dag);
+    let pin_a = llrm_dagisel::dag::SDValue::new(a.node, 0);
+    assert!(adapter.has_live_users(a.node));
+    assert!(adapter.has_n_uses_of_value(pin_a, 2));
+    assert!(!adapter.has_one_use(pin_a));
+    assert!(adapter.is_only_user_of(twice.node, a.node));
+    assert!(adapter.use_empty(twice.node));
+    assert!(!adapter.use_empty(a.node));
+}

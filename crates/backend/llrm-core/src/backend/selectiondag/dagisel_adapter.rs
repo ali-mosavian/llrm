@@ -179,7 +179,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         // sdag-a's codes are private and named (`x86isd::name`), the pin's
         // number comes from the name; sdag-b's lowering writes the pin's
         // numbers, which `name` does not know.
-        Target(code) => match super::x86isd::name(code).strip_prefix("X86ISD::") {
+        Target(code) => match super::x86isd::private_name(code).and_then(|name| name.strip_prefix("X86ISD::")) {
             Some(name) => llrm_dagisel::generated::ids::x86isd_id(name).unwrap_or(u16::MAX),
             None => code,
         },
@@ -332,7 +332,9 @@ impl<'a> DagisAdapter<'a> {
         &self,
         node: u32,
     ) -> bool {
-        self.live_node_users(node).next().is_some()
+        self.dag.use_candidates(node).iter().any(|user| {
+            !self.dead.contains(user) && self.dag.nodes()[*user as usize].ops.iter().any(|op| op.node == node)
+        })
     }
 
     /// The live nodes that read a result of `node`, in creation order, once
@@ -382,7 +384,7 @@ impl<'a> DagisAdapter<'a> {
         self.dag.forget_node(node);
         let operands: Vec<u32> = self.dag.nodes()[node as usize].ops.iter().map(|o| o.node).collect();
         for op in operands {
-            if op != self.dag.entry_node().node && self.live_node_users(op).next().is_none() {
+            if op != self.dag.entry_node().node && !self.has_live_users(op) {
                 self.remove(op);
             }
         }
@@ -440,7 +442,7 @@ impl Dag for DagisAdapter<'_> {
         &self,
         value: PinValue,
     ) -> bool {
-        self.live_users(value).len() == 1
+        self.has_n_uses_of_value(value, 1)
     }
     fn count_non_chain_uses(
         &self,
@@ -453,7 +455,7 @@ impl Dag for DagisAdapter<'_> {
         &self,
         node: u32,
     ) -> bool {
-        self.live_node_users(node).next().is_none()
+        !self.has_live_users(node)
     }
     fn node_has_one_use(
         &self,
@@ -482,8 +484,8 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
         def: u32,
     ) -> bool {
-        self.dag.nodes().iter().enumerate().all(|(user, data)| {
-            user as u32 == node || self.dead.contains(&(user as u32)) || data.ops.iter().all(|o| o.node != def)
+        self.dag.use_candidates(def).iter().all(|&user| {
+            user == node || self.dead.contains(&user) || self.dag.nodes()[user as usize].ops.iter().all(|o| o.node != def)
         })
     }
     fn has_n_uses_of_value(
@@ -491,7 +493,18 @@ impl Dag for DagisAdapter<'_> {
         value: PinValue,
         n: usize,
     ) -> bool {
-        self.live_users(value).len() == n
+        // each read of the value by a live node, counted up to `n + 1`
+        let mut users = self.dag.use_candidates(value.node).to_vec();
+        users.sort_unstable();
+        users.dedup();
+        users
+            .into_iter()
+            .filter(|user| !self.dead.contains(user))
+            .map(|user| {
+                self.dag.nodes()[user as usize].ops.iter().filter(|op| op.node == value.node && op.res == value.res).count()
+            })
+            .sum::<usize>()
+            == n
     }
     fn constant(
         &self,
