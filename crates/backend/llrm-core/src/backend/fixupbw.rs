@@ -355,7 +355,12 @@ mod tests {
         dest: Loc,
         source: Loc,
     ) -> Semantics {
-        Semantics { name: Some("mov".into()), dests: vec![dest], sources: vec![source], ..Semantics::new(Operation::Move) }
+        Semantics {
+            name: Some("mov".into()),
+            dests: vec![dest],
+            sources: vec![source],
+            ..Semantics::new(Operation::Move)
+        }
     }
 
     /// `mov ax,[esi]; mov ebx,eax`: the dword copy reads the upper half of EAX,

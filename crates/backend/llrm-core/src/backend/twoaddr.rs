@@ -1438,9 +1438,9 @@ mod tests {
         assert!(!names_of(&tied(&of(flags_live), All)).contains(&"lea".to_owned()));
     }
 
-    /// `add; inc; jb`: `inc` leaves CF alone, so `jb` reads the add's carry. The
-    /// add went to an `lea` (no flags) because `inc` "wrote the flags", and
-    /// `jb` read the carry of whatever came before.
+    /// `add; inc; jb`: `inc` leaves CF alone, so `jb` reads the add's carry.
+    /// The add went to an `lea` (no flags) because `inc` "wrote the flags",
+    /// and `jb` read the carry of whatever came before.
     #[test]
     fn test_an_add_whose_carry_a_later_inc_leaves_for_a_jb_stays_an_add() {
         let step = |at: i64, name: &str, dest: u32, source: u32| {

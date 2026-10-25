@@ -575,7 +575,15 @@ mod tests {
     #[test]
     fn test_a_word_subtract_is_a_word_compare() {
         let body = body_of(vec![
-            insn(0, Operation::Binary, "sub", vec![narrow(3, 2)], vec![narrow(1, 2), narrow(2, 2)], vec![3], vec![1, 2]),
+            insn(
+                0,
+                Operation::Binary,
+                "sub",
+                vec![narrow(3, 2)],
+                vec![narrow(1, 2), narrow(2, 2)],
+                vec![3],
+                vec![1, 2],
+            ),
             insn(1, Operation::Branch, "ja", vec![], vec![], vec![], vec![]),
         ]);
         let done = compared(&body);

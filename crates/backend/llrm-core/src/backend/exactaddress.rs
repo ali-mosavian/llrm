@@ -895,7 +895,15 @@ mod tests {
         };
         let shift_stays = |carry_read: bool| {
             let mut insns = vec![
-                one(0, Operation::Extend, "movzx", vec![reg(RegId::EAX, 4)], vec![reg(RegId::AX, 2)], vec![10], vec![10]),
+                one(
+                    0,
+                    Operation::Extend,
+                    "movzx",
+                    vec![reg(RegId::EAX, 4)],
+                    vec![reg(RegId::AX, 2)],
+                    vec![10],
+                    vec![10],
+                ),
                 one(1, Operation::Move, "mov", vec![reg(RegId::SI, 2)], vec![reg(RegId::AX, 2)], vec![11], vec![10]),
                 one(
                     2,
@@ -908,11 +916,27 @@ mod tests {
                 ),
                 one(4, Operation::Move, "mov", vec![reg(RegId::CX, 2)], vec![Loc::Mem(cell(1))], vec![13], vec![12]),
                 one(5, Operation::Move, "mov", vec![reg(RegId::SI, 2)], vec![Loc::Mem(cell(2))], vec![14], vec![12]),
-                one(6, Operation::Compare, "cmp", vec![], vec![reg(RegId::CX, 2), reg(RegId::SI, 2)], vec![], vec![13, 14]),
+                one(
+                    6,
+                    Operation::Compare,
+                    "cmp",
+                    vec![],
+                    vec![reg(RegId::CX, 2), reg(RegId::SI, 2)],
+                    vec![],
+                    vec![13, 14],
+                ),
             ];
             if carry_read {
                 let zero = Loc::Imm(Imm { value: 0, width: 2, address: None });
-                let adc = one(3, Operation::Binary, "adc", vec![reg(RegId::DX, 2)], vec![reg(RegId::DX, 2), zero], vec![], vec![]);
+                let adc = one(
+                    3,
+                    Operation::Binary,
+                    "adc",
+                    vec![reg(RegId::DX, 2)],
+                    vec![reg(RegId::DX, 2), zero],
+                    vec![],
+                    vec![],
+                );
                 insns.insert(3, adc);
             }
             let body = LirBody::new(

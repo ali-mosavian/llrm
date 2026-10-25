@@ -250,8 +250,7 @@ mod tests {
         insns.extend(between);
         insns.push(insn(2, Operation::Unary, "setb", vec![held(3, 1)], vec![], vec![3], vec![]));
         insns.push(insn(3, Operation::Extend, "movzx", vec![held(6, 4)], vec![held(3, 1)], vec![6], vec![3]));
-        let body =
-            LirBody::new("f", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
+        let body = LirBody::new("f", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
         let done = fixed(&body);
         done.blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
     }

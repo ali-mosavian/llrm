@@ -701,13 +701,8 @@ mod tests {
     fn an_add_whose_carry_a_later_inc_leaves_for_a_jb_is_left() {
         let inc = insn(51, Operation::Unary, "inc", vec![held(13)], vec![held(1)], vec![13], vec![1]);
         let jump = insn(50, Operation::Branch, "jb", vec![], vec![], vec![], vec![]);
-        let before = with_leaves(vec![
-            binary("add", 10, 1, 9),
-            binary("add", 11, 10, 2),
-            inc,
-            jump,
-            binary("add", 12, 11, 3),
-        ]);
+        let before =
+            with_leaves(vec![binary("add", 10, 1, 9), binary("add", 11, 10, 2), inc, jump, binary("add", 12, 11, 3)]);
         assert!(result(&combined(before.clone())) == result(&before), "left alone");
     }
 
