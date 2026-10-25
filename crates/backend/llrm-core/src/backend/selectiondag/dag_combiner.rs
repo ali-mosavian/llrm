@@ -1030,6 +1030,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(folded);
             }
         }
+        if op == ISD::Shl && self.dag.opcode(n0) == ISD::Srl {
+            if let Some(folded) = self.shl_of_srl(node) {
+                return Some(folded);
+            }
+        }
         if self.dag.opcode(n0) != op {
             return None;
         }
@@ -1044,6 +1049,43 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(self.dag.get_node(op, vt, &[x, amount]));
         }
         Some(self.dag.get_constant(0, vt))
+    }
+
+    /// `visitSHL`: `shl (srl x, c1), c2` is `and (srl x, c1 - c2), (-1 << c1
+    /// >> (c1 - c2))` when `c2 <= c1`, else `and (shl x, c2 - c1), (-1 <<
+    /// c2)`; only when the inner shift has no other use or the amounts are
+    /// equal (`shouldFoldConstantShiftPairToMask`: true on these CPUs).
+    fn shl_of_srl(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (inner, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let (c2, c1) = (self.dag.constant(n1)?, self.dag.constant(self.dag.operand(inner, 1))?);
+        let vt = self.dag.value_type(node);
+        let width = u128::from(vt.size_in_bits());
+        if c1 >= width || c2 >= width || (c1 != c2 && self.dag.use_count(inner.node) != 1) {
+            return None;
+        }
+        let x = self.dag.operand(inner, 0);
+        let amount_vt = self.dag.value_type(n1);
+        let all = super::fold::mask(vt.size_in_bits());
+        if c2 <= c1 {
+            let diff = c1 - c2;
+            let mask = ((all << c1) & all) >> diff;
+            let shifted = if diff == 0 {
+                x
+            } else {
+                let by = self.dag.get_constant(diff, amount_vt);
+                self.dag.get_node(ISD::Srl, vt, &[x, by])
+            };
+            let mask = self.dag.get_constant(mask, vt);
+            return Some(self.dag.get_node(ISD::And, vt, &[shifted, mask]));
+        }
+        let diff = c2 - c1;
+        let by = self.dag.get_constant(diff, amount_vt);
+        let shifted = self.dag.get_node(ISD::Shl, vt, &[x, by]);
+        let mask = self.dag.get_constant((all << c2) & all, vt);
+        Some(self.dag.get_node(ISD::And, vt, &[shifted, mask]))
     }
 
     /// `visitSRL`: `srl (trunc (srl x, c1)), c2` is 0 or `trunc (srl x,

@@ -1505,6 +1505,22 @@ impl Emitter<'_, '_> {
         if let Some(&selector) = self.selectors.get(&origin.node) {
             return Ok(selector);
         }
+        // A pointer held whole in a dword (a far pointer a call returned, a
+        // huge one loaded): its selector is the high word, `x >> 16`. Only the
+        // shapes below are known to be a word pointer into DGROUP, a frame or a
+        // global.
+        let whole = width_of(self.dag, origin) == 4;
+        let known_shape = matches!(
+            self.dag.opcode(origin),
+            ISD::Machine(op) if self.ctx.names.get(&(op as u16)).is_some_and(|name| { matches!(name.split('|').next(), Some("OR32rr" | "ADD32rr" | "SHL32ri" | "ADD32rr_DB")) })
+        );
+        if whole && !known_shape {
+            let value = self.held_operand(origin)?;
+            let shifted = self.fresh(4);
+            let sixteen = Imm { value: 16, width: 1, address: None };
+            self.push(Operation::Binary, "shr", vec![Loc::Held(shifted)], vec![Loc::Held(value), Loc::Imm(sixteen)]);
+            return Ok(Held { width: 2, ..shifted });
+        }
         let held = self.fresh(2);
         let source = if let ISD::Machine(op) = self.dag.opcode(origin) {
             let name = self.ctx.names.get(&(op as u16)).map_or("", |name| name.split('|').next().unwrap_or(name));

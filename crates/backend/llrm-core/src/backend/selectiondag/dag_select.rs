@@ -98,6 +98,10 @@ pub fn legalized(
     let legal = DagLegalizer::new(dag, tli, lowering).run();
     legal.map_err(|e| refused_legalize(dag, &format!("{e:?}")))?;
     DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeDag).with_tli(tli).run();
+    // `LLRM_DAGDUMP=all` prints every block's DAG as selection will see it.
+    if std::env::var_os("LLRM_DAGDUMP").is_some_and(|mode| mode == "all") {
+        eprintln!("legalized:\n{}", dag.dump());
+    }
     Ok(())
 }
 
