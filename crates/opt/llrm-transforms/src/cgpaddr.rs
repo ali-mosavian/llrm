@@ -144,7 +144,7 @@ pub struct CgpAddr;
 
 #[cfg(test)]
 #[path = "cgpaddr_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(test)]
 #[path = "cgpaddr_sink_tests.rs"]

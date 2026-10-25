@@ -60,6 +60,8 @@ pub struct Run<'a> {
     pub aa: &'a dyn AaProvider,
     pub declared: &'a mut Declared,
     pub cur_loop: Loop<'a>,
+    /// `TTI`: the target's costs, where it has them.
+    pub tti: Option<&'a dyn llrm_mir::tti::Tti>,
 }
 
 /// The arguments of `processLoopStridedStore`.

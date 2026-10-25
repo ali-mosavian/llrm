@@ -139,6 +139,7 @@ impl FunctionPass for LoopIdiom {
             tree: &tree,
             assumptions: &assumptions,
         };
+        let tti = outer.target().tti();
         let provider = BasicAaProvider { layout: unit.layout, metadata: unit.metadata, globals: &outer.globals };
         let mut se = ScalarEvolution::new();
         let mut changed = false;
@@ -153,6 +154,7 @@ impl FunctionPass for LoopIdiom {
                 aa: &provider,
                 declared: &mut *unit.declared,
                 cur_loop,
+                tti: tti.as_deref(),
             };
             let mut idiom = LoopIdiomRecognize::new(self.options, self.library);
             idiom.routines = self.routines.clone();
