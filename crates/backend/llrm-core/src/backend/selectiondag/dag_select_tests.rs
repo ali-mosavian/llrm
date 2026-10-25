@@ -1,10 +1,9 @@
-use std::collections::HashMap;
-
 use llrm_dagisel::generated::x86_i486::{MACHINE_OPCODES, TABLE};
 use llrm_dagisel::interp::Selector;
 use llrm_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 use llrm_lir::registers::RegId;
 use llrm_mir::datalayout::DataLayout;
+use llrm_support::hash::HashMap;
 use llrm_target::Target;
 
 use super::actions::{Features, TargetLowering};
@@ -127,7 +126,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         constants: &super::emit::NoConstants,
         stack_pointer: RegId::SP,
         globals: &NoGlobals,
-        block_at: &HashMap::new(),
+        block_at: &HashMap::default(),
         frame: &frame,
         address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32,
         call_alignment: 1,

@@ -1244,7 +1244,9 @@ impl FunctionPass for EarlyCse {
             Some(accesses) => {
                 let held = analyses.get::<MemorySsa>(unit.context, unit.layout, unit.function);
                 let (mssa, kept_accesses) = match &*held {
-                    Ok(held) => (held.mssa.clone(), Some(Rc::clone(&held.accesses))),
+                    Ok(held) => {
+                        (held.mssa.clone(), held.accesses(unit.context, unit.layout, unit.function, analyses).ok())
+                    }
                     Err(_) => (Mssa::build(&before, &shape.dominance, &shadow::effect_of(accesses, &before)), None),
                 };
                 (Box::new(Translated::new(&view, accesses, mssa)), kept_accesses)
@@ -1282,7 +1284,7 @@ impl FunctionPass for EarlyCse {
         }
         let mut preserved = PreservedAnalyses::none().preserve::<Dominators>();
         if let (Some(updated), Some(accesses)) = (walk.mssa.into_mssa(), kept_accesses) {
-            analyses.replace::<MemorySsa>(&*function, Ok(Rc::new(MssaGraph { mssa: updated, accesses })));
+            analyses.replace::<MemorySsa>(&*function, Ok(Rc::new(MssaGraph::new(updated, Some(accesses)))));
             preserved = preserved.preserve_updated::<MemorySsa>();
         }
         preserved
