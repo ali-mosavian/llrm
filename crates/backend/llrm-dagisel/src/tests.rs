@@ -1753,3 +1753,45 @@ mod and_with_a_low_mask {
         assert_eq!(selected_names(4095), ["AND32ri"]);
     }
 }
+
+mod setcc_carry {
+    use super::*;
+    use crate::generated::ids::{x86, x86isd};
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_select::select_node;
+
+    fn selected_names(vt: crate::matcher::Vt) -> Vec<&'static str> {
+        let mut dag = TestDag::new();
+        let flags = dag.input(1, mvt::i32);
+        let cc = dag.make_constant(2, mvt::i8);
+        let node = dag.node(x86isd::SETCC_CARRY, &[vt], &[cc, flags]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
+        assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
+        dag.nodes.iter().filter(|n| !n.dead).filter_map(|n| n.machine).map(machine_name).collect()
+    }
+
+    /// The carry as all ones or zero is `sbb r, r` on the zeroed register
+    /// (the pin's `getSBBZero`): `CannotSelect(SETCC_CARRY)` left crc's seven
+    /// as a pin-only `SBB32rr` in the shadow diff.
+    #[test]
+    fn a_setcc_carry_is_sbb_of_a_zero() {
+        let names = selected_names(mvt::i32);
+        assert!(names.contains(&"SBB32rr") && names.contains(&"MOV32r0"), "{names:?}");
+        assert!(!names.contains(&"EXTRACT_SUBREG"), "{names:?}");
+    }
+
+    #[test]
+    fn a_byte_setcc_carry_takes_the_low_byte() {
+        let names = selected_names(mvt::i8);
+        assert!(names.contains(&"SBB32rr") && names.contains(&"EXTRACT_SUBREG"), "{names:?}");
+        let _ = x86::SBB32rr;
+    }
+}
