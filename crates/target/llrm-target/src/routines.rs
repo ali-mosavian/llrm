@@ -4,6 +4,11 @@
 
 use llrm_lir::registers::RegId;
 
+/// What every divide routine's name starts with, and every huge-pointer
+/// routine's.
+pub const DIVIDE_PREFIX: &str = "div64_";
+pub const HUGE_PREFIX: &str = "huge_";
+
 /// A 64-bit divide: its code and where its operands are.
 #[derive(Clone, Debug)]
 pub struct Divide {
