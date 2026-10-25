@@ -785,7 +785,54 @@ impl Builder<'_> {
         // fixed object, which `va_start` stores the address of
         if self.module.signature(self.function.ty).2 {
             self.dag.var_args_frame_index = Some(-(fixed + 1));
+            if self.target.dag.pointer == EVT::I64 {
+                self.save_variadic_registers()?;
+            }
         }
+        Ok(())
+    }
+
+    /// X86's `LowerFormalArguments` for a SysV x86-64 variadic function: the
+    /// argument registers the named parameters did not take are stored in the
+    /// register save area (one 8-byte slot each, in order) that `va_start`
+    /// names. The vector registers' half of the area (48..176) is left
+    /// unwritten until floating point is selected at m64 (DEVIATE SD313: a
+    /// `double` passed to such a function is not read back).
+    fn save_variadic_registers(&mut self) -> Result<(), Refused> {
+        let calling = self.arch.calling();
+        let Some(found) = calling.by_number(self.function.calling_convention) else {
+            return Err(Refused("va_start at m64 in a function with no convention"));
+        };
+        let named: usize = self
+            .convention
+            .parameters
+            .iter()
+            .map(|parameter| match parameter {
+                Parameter::Registers(regs) => regs.len(),
+                _ => 0,
+            })
+            .sum();
+        let registers: Vec<RegId> =
+            found.argument_registers.iter().map(|name| self.arch.register_named(name)).collect();
+        let Some(save) = self.info.variadic_save else {
+            return Err(Refused("va_start at m64 with no register save area"));
+        };
+        let pointer = self.target.dag.pointer;
+        for (at, &register) in registers.iter().enumerate().skip(named) {
+            let vreg = self.info.new_reg();
+            self.live_ins.push((register, vreg));
+            let entry = self.dag.entry_node();
+            let value = self.dag.get_copy_from_reg(entry, vreg, pointer);
+            let base = self.dag.get_frame_index(pointer, save);
+            let slot = self.dag.get_constant(at as u128 * 8, pointer);
+            let address = self.dag.get_node(ISD::Add, pointer, &[base, slot]);
+            let info =
+                MemInfo { mem_vt: pointer, align: 8, volatile: false, base: MemBase::Stack(save), ext: None, space: 0 };
+            let root = self.control_root();
+            let store = self.dag.get_store(root, value, address, info);
+            self.dag.set_root(store);
+        }
+        self.dag.var_args_save = Some((save, named as u32 * 8));
         Ok(())
     }
 
@@ -1205,6 +1252,26 @@ impl Builder<'_> {
             self.dag.set_root(chain);
             return Ok(None);
         }
+        if self.is_aggregate(result_type) {
+            // `LowerCallResult` over the leaves `ComputeValueVTs` gives: one
+            // return register each
+            let leaves = self.leaves(result_type)?;
+            if plan.returns.len() != leaves.len() {
+                return Err(Refused("an aggregate result that is not one register a member"));
+            }
+            let mut glue = glue;
+            let mut pieces = Vec::new();
+            for ((leaf, _), reg) in leaves.into_iter().zip(plan.returns.clone()) {
+                let leaf_vt = self.type_of(leaf)?;
+                let reg = self.sized_register(reg, leaf_vt);
+                let copy = self.dag.get_copy_from_phys_reg(chain, reg, leaf_vt, glue);
+                chain = SDValue { node: copy.node, res: 1 };
+                glue = SDValue { node: copy.node, res: 2 };
+                pieces.push(copy);
+            }
+            self.dag.set_root(chain);
+            return Ok(Some(self.merge(&pieces)));
+        }
         let vt = self.type_of(result_type)?;
         if flags_answer {
             let flags = self.dag.get_copy_from_phys_reg(chain, super::dagisel_adapter::EFLAGS_ID, EVT::I32, glue);
@@ -1260,7 +1327,26 @@ impl Builder<'_> {
         let mut chain = self.control_root();
         let mut ops = Vec::new();
         let mut glue = None;
-        if let Some(&operand) = instruction.operands.first() {
+        let aggregate = instruction
+            .operands
+            .first()
+            .and_then(|&operand| self.function.operand_type(&self.module.context, operand))
+            .is_some_and(|ty| self.is_aggregate(ty));
+        if let (true, Some(&operand)) = (aggregate, instruction.operands.first()) {
+            // `LowerReturn` over the leaves: one return register each
+            let parts = self.value_parts(operand)?;
+            if parts.len() != self.convention.returns.len() {
+                return Err(Refused("an aggregate result that is not one register a member"));
+            }
+            for (piece, reg) in parts.into_iter().zip(self.convention.returns.clone()) {
+                let piece_vt = self.dag.value_type(piece);
+                let reg = self.sized_register(reg, piece_vt);
+                let copy = self.dag.get_copy_to_phys_reg(chain, reg, piece, glue);
+                chain = SDValue { node: copy.node, res: 0 };
+                glue = Some(SDValue { node: copy.node, res: 1 });
+                ops.push(self.dag.get_phys_register(piece_vt, reg));
+            }
+        } else if let Some(&operand) = instruction.operands.first() {
             let value = self.get_value(operand)?;
             let vt = self.dag.value_type(value);
             if vt.is_floating_point() {

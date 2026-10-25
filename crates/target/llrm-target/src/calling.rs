@@ -407,6 +407,8 @@ impl Calling {
         match number {
             0 => self.by_cc("cdecl"),
             llrm_mir::opcode::FAST => self.by_cc("fast").or_else(|| self.by_cc("cdecl")),
+            // BASIC's own (`pascal far`, QB's): the one stating `cc = "basic"`.
+            llrm_mir::opcode::BASIC => self.by_cc("basic"),
             other => self
                 .by_cc(llrm_mir::opcode::CONVENTIONS.iter().find(|(_, one)| *one == other)?.0.trim_end_matches("cc")),
         }
@@ -688,7 +690,20 @@ impl Convention {
         &self,
         arguments: &[Kind],
     ) -> Placement {
+        self.place_reserving(arguments, &[])
+    }
+
+    /// `place` with `reserved` registers already taken: the hidden pointer of a
+    /// struct result.
+    pub fn place_reserving(
+        &self,
+        arguments: &[Kind],
+        reserved: &[&str],
+    ) -> Placement {
         let mut free: Vec<bool> = vec![true; self.argument_registers.len()];
+        for (index, name) in self.argument_registers.iter().enumerate() {
+            free[index] = !reserved.contains(&name.as_str());
+        }
         let at = |name: &String| self.argument_registers.iter().position(|one| one == name);
         let mut places = Vec::new();
         let mut used = Vec::new();

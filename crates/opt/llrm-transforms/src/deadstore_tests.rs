@@ -253,3 +253,16 @@ fn the_stores_of_one_array_cost_in_proportion_to_their_number() {
     let (small, large) = (work(100), work(400));
     assert!(large as f64 <= 5.0 * small as f64, "{small} steps for 100 cells, {large} for 400");
 }
+
+/// `getUnderlyingObject` of two pointers that strip to one value is one object,
+/// whatever the value is (a loaded pointer here): a store inside the bytes a
+/// later store covers is dead. The object was taken from annotated provenance,
+/// which a loaded pointer has none of, so the small store stayed.
+#[test]
+fn a_store_inside_a_later_wider_one_through_a_loaded_pointer_goes() {
+    let mut module = parsed(&format!(
+        "{DOS}define void @f(ptr %pp) {{\nb0:\n  %p = load ptr, ptr %pp\n  %q = getelementptr i8, ptr %p, i16 2\n  store i16 1, ptr %q\n  store i32 2, ptr %p\n  ret void\n}}\n"
+    ));
+    let after = managed(&mut module, DeadStoreElimination);
+    assert!(!after.contains("store i16 1"), "{after}");
+}

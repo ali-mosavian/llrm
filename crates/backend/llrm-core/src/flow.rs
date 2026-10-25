@@ -84,6 +84,7 @@ const UNOPTIMIZED: &[&str] = &[
 
 /// The parity registry's slot of each machine phase, by class name.
 const SLOTS: &[(&str, &str)] = &[
+    ("EarlyTailDuplicate", "earlytaildup@1"),
     ("FarIndirectCalls", "farcall@1"),
     ("LoadFold", "pushfold@6"),
     ("CmpAsSub", "cmpsub@1"),
@@ -101,7 +102,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("MachineScheduler", "machinesched@5"),
     ("FixupSetCC", "fixupsetcc@5"),
     ("CallFrameOpt", "callframe@5"),
-    ("CallFrameOpt", "callframe@5"),
+    ("LowerCallFrame", "callframe@5"),
     ("FlagsCopy", "flagscopy@5"),
     ("X86OptimizeLEAs", "leaopt@5"),
     ("FloatFold", "floatfold@6"),
@@ -148,6 +149,9 @@ pub fn machine_with<'a>(
     }
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
     let mut phases: Vec<Box<dyn LIRTransform + 'a>> = vec![
+        // Directly after selection, as the pin has it: a small join copied into
+        // the blocks that jump to it (EarlyTailDuplicate).
+        Box::new(crate::backend::earlytaildup::EarlyTailDuplicate { size: target.size }),
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
         // As the pin's selection has it: a once-read load is the memory operand
         // of its reader before MachineCombiner sees the chain.
@@ -192,9 +196,13 @@ pub fn machine_with<'a>(
             slot: registers.slot,
             align: registers.align,
             stack: registers.stack,
+            // A function with variable-sized objects reserves no frame and
+            // pushes every area (`CallFrameOpt::allocates_dynamically`).
             has_var_sized: false,
             slow_two_mem_ops: false,
         }),
+        // The frame pseudos that are left, as `sub`/`add` (every level).
+        Box::new(crate::backend::callframe::LowerCallFrame { stack: registers.stack, width: registers.slot as u32 }),
         // On SSA, right after the pushes are made: a pushed value a load made,
         // read nowhere else, is pushed from the load's cell (the pin:
         // X86CallFrameOptimization's push folding).

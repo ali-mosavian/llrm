@@ -258,6 +258,19 @@ pub struct AssumptionCache {
     affected: HashMap<Operand, Vec<InstId>>,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The bodies `AssumptionCache::of` did not walk for assumes.
+    pub(crate) static SKIPPED_WALKS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// `LLRM_CHECK_ASSUME_SKIP` walks the body even where no `llvm.assume` is
+/// declared, and fails on an assume found.
+fn check_assume_skip() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_ASSUME_SKIP"))
+}
+
 impl AssumptionCache {
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/AssumptionCache.cpp#L261>
     pub fn new(
@@ -276,11 +289,24 @@ impl AssumptionCache {
     ) -> Self {
         let layout = DataLayout::default();
         let query = Query { globals, metadata, ..Query::bare(context, function, &layout) };
-        let assumes: Vec<InstId> = function
-            .walk()
-            .filter(|(_, inst)| query.intrinsic(*inst) == Some(Intrinsic::Assume))
-            .map(|(_, inst)| inst)
-            .collect();
+        // A call reaches `llvm.assume` only through a function of that name:
+        // with none declared there is nothing to find in the body.
+        let declared = globals.iter().any(|global| {
+            matches!(global.kind, GlobalKind::Function(_)) && global.intrinsic() == Some(Intrinsic::Assume)
+        });
+        let check = !declared && check_assume_skip();
+        let assumes: Vec<InstId> = if declared || check {
+            function
+                .walk()
+                .filter(|(_, inst)| query.intrinsic(*inst) == Some(Intrinsic::Assume))
+                .map(|(_, inst)| inst)
+                .collect()
+        } else {
+            #[cfg(test)]
+            SKIPPED_WALKS.with(|walks| walks.set(walks.get() + 1));
+            Vec::new()
+        };
+        assert!(!check || assumes.is_empty(), "an assume was found where none is declared");
         let mut cache = Self { assumes, affected: HashMap::default() };
         for assume in cache.assumes.clone() {
             cache.update_affected_values(&query, assume);

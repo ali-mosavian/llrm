@@ -330,11 +330,26 @@ no:
 #[test]
 fn test_what_is_not_selected_yet_is_refused() {
     for (body, why) in [(
-        "%c = icmp eq i16 %a, 0\n  %d = add i1 %c, %c\n  %v = sext i1 %d to i16\n  ret i16 %v",
+        "%c = icmp eq i16 %a, 0\n  %d = shl i1 %c, %c\n  %v = sext i1 %d to i16\n  ret i16 %v",
         "arithmetic on an i1",
     )] {
         let text = format!("define i16 @f(ptr %p, i16 %a) addrspace(1) {{\n  {body}\n}}\n");
         assert_eq!(selected(&text, "f").err(), Some(Unselected(why.to_owned())), "{body}");
+    }
+}
+
+/// LSR's expander turned a `not` into `add i1 x, true`, which no pass after it
+/// folds back to an xor; the selector refused it and nib's runtime did not link
+/// (#4674). An i1's sum and difference are an xor, its product an and.
+#[test]
+fn test_an_i1_sum_difference_and_product_are_selected() {
+    for (op, mnemonic) in [("add", "xor"), ("sub", "xor"), ("mul", "and")] {
+        let text = format!(
+            "define i16 @f(ptr %p, i16 %a) addrspace(1) {{\n  %c = icmp eq i16 %a, 0\n  %d = {op} i1 %c, true\n  %v = zext i1 %d to i16\n  ret i16 %v\n}}\n"
+        );
+        let got = selected(&text, "f");
+        assert!(got.is_ok(), "{op}: {:?}", got.err());
+        assert!(listing(&text, "f").iter().any(|line| line.starts_with(mnemonic)), "{op}");
     }
 }
 
@@ -2560,14 +2575,16 @@ join:
 ";
     // The address arithmetic sinks into the arm that makes the phi's input
     // (a88a614969, MachineSink outside size builds); bx is defined on both
-    // paths before the load.
+    // paths before the load. The empty arm is no block after early tail
+    // duplication bypasses it: the sink splits the edge, whose block is the
+    // synthetic label.
     assert_eq!(
         listing(text, "f")[3..],
         [
             "mov bx, word ptr [bp+6]",
             "cmp byte ptr [bp+8], 0",
             "je L0_3",
-            "L0_2:",
+            "L0_4294967297:",
             "add bx, bx",
             "add bx, offset a",
             "jmp L0_4",
