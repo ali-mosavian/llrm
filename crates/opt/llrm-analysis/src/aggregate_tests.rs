@@ -14,6 +14,8 @@ use crate::aa::{IRMemLocation, LocationSize};
 struct Fixed {
     alias: AliasResult,
     mod_ref: ModRefInfo,
+    /// What `get_mod_ref_info_mask` says of a location.
+    mask: ModRefInfo,
     effects: MemoryEffects,
     asked: Rc<Cell<usize>>,
 }
@@ -25,7 +27,7 @@ impl Fixed {
     ) -> (Self, Rc<Cell<usize>>) {
         let asked = Rc::new(Cell::new(0));
         let effects = MemoryEffects::everywhere(mod_ref);
-        (Self { alias, mod_ref, effects, asked: Rc::clone(&asked) }, asked)
+        (Self { alias, mod_ref, mask: mod_ref, effects, asked: Rc::clone(&asked) }, asked)
     }
 }
 
@@ -48,7 +50,7 @@ impl AAResults for Fixed {
         _: bool,
     ) -> ModRefInfo {
         self.asked.set(self.asked.get() + 1);
-        self.mod_ref
+        self.mask
     }
 
     fn get_arg_mod_ref_info(
@@ -165,4 +167,18 @@ fn memory_effects_meet_by_location() {
     let effects = chain.get_memory_effects(InstId(0), &mut AAQueryInfo::default());
     assert_eq!(effects.mod_ref(IRMemLocation::ArgMem), ModRefInfo::Ref);
     assert_eq!(effects.mod_ref(IRMemLocation::Other), ModRefInfo::Ref);
+}
+
+/// A call to a location the mask says is constant modified it: the meet of the
+/// providers' answers stayed `ModRef`, so EarlyCSE kept the second load of a
+/// constant table after a call (QCport `config.c`, +34 B over three modules).
+#[test]
+fn a_call_cannot_modify_what_the_mask_says_is_constant() {
+    let (mut provider, _) = Fixed::new(AliasResult::MayAlias, ModRefInfo::ModRef);
+    provider.mask = ModRefInfo::Ref;
+    let mut chain = AggregateAA::new();
+    chain.add_aa_result(provider);
+    let loc = MemoryLocation::new(Operand::Value(ValueId(0)), LocationSize::Precise(2));
+    let aaqi = &mut AAQueryInfo::default();
+    assert_eq!(chain.get_mod_ref_info(InstId(0), Some(&loc), aaqi), ModRefInfo::Ref);
 }
