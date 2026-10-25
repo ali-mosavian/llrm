@@ -39,8 +39,6 @@
 //! `visitMUL`
 //! ([L4908](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4908)).
 
-use llrm_support::hash::HashSet;
-
 use super::actions::{Action, LoadExt, TargetLowering};
 use super::dag::{MemInfo, NodeData, Rauw, SDNodeFlags, SDValue, SelectionDAG};
 use super::isd::{CondCode, ISD};
@@ -103,15 +101,49 @@ pub struct NoCombines;
 
 impl CombineHooks for NoCombines {}
 
+/// A set of node ids, one flag each (ids are dense).
+#[derive(Default)]
+struct NodeSet(Vec<bool>);
+
+impl NodeSet {
+    /// Whether `node` was not in the set.
+    fn insert(
+        &mut self,
+        node: u32,
+    ) -> bool {
+        let at = node as usize;
+        if self.0.len() <= at {
+            self.0.resize(at + 1, false);
+        }
+        !std::mem::replace(&mut self.0[at], true)
+    }
+
+    fn remove(
+        &mut self,
+        node: u32,
+    ) {
+        if let Some(flag) = self.0.get_mut(node as usize) {
+            *flag = false;
+        }
+    }
+
+    fn contains(
+        &self,
+        node: u32,
+    ) -> bool {
+        self.0.get(node as usize).copied().unwrap_or(false)
+    }
+}
+
 pub struct DagCombiner<'a, H: CombineHooks> {
     pub(super) dag: &'a mut SelectionDAG,
     pub(super) hooks: &'a mut H,
     pub(super) level: CombineLevel,
     worklist: Vec<u32>,
-    queued: HashSet<u32>,
+    queued: NodeSet,
     /// `CombinedNodes`: the nodes already visited, whose operands are not
     /// queued again by a visit of their user.
-    combined: HashSet<u32>,
+    combined: NodeSet,
     /// The action table, for the folds that ask what the target can do.
     pub(super) tli: Option<&'a TargetLowering>,
 }
@@ -127,8 +159,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             hooks,
             level,
             worklist: Vec::new(),
-            queued: HashSet::default(),
-            combined: HashSet::default(),
+            queued: NodeSet::default(),
+            combined: NodeSet::default(),
             tli: None,
         }
     }
@@ -167,7 +199,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
 
     fn next(&mut self) -> Option<u32> {
         let node = self.worklist.pop()?;
-        self.queued.remove(&node);
+        self.queued.remove(node);
         Some(node)
     }
 
@@ -204,7 +236,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             // test a DAG whose nodes share operands is walked once per path.
             let ops: Vec<u32> = self.dag.node(SDValue { node: n, res: 0 }).ops.iter().map(|op| op.node).collect();
             for op in ops {
-                if !self.combined.contains(&op) {
+                if !self.combined.contains(op) {
                     self.add_to_worklist(op);
                 }
             }
