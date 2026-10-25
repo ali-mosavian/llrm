@@ -179,6 +179,24 @@ impl TargetLowering {
         self.legal_fp_immediates.contains(&(vt, bits))
     }
 
+    /// `isMultiStoresCheaperThanBitsMerge`: the pin says so for a float and
+    /// an integer half only.
+    ///
+    /// DEVIATE SD312: a target with the far pointer (m16) says so for two
+    /// integer halves too. A far pointer or a `long` stored from its two
+    /// words is two word stores, where merging them took `shl; movzx; add`
+    /// (QCport -Os: 131 stack arguments built so). Owner w10. Exit: none
+    /// while the DAG keeps `BUILD_PAIR`. Review 2026-12-10.
+    pub fn is_multi_stores_cheaper_than_bits_merge(
+        &self,
+        lo: EVT,
+        hi: EVT,
+    ) -> bool {
+        (lo.is_floating_point() && hi.is_integer())
+            || (lo.is_integer() && hi.is_floating_point())
+            || (self.types.has_far_pointer() && lo.is_integer() && hi.is_integer())
+    }
+
     /// `getOperationAction`: a type with no simple form is expanded.
     pub fn operation_action(
         &self,
