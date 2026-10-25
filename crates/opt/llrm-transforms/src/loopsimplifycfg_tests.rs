@@ -124,3 +124,27 @@ x:
     );
     assert!(!changed);
 }
+
+/// A dominator tree and loop forest were made for every loop twice over, even
+/// where nothing folded: LoopSimplifyCFG took 10.1 M Ir on a d_faces body
+/// against the pin's 0.6 M. One of each per run is enough where nothing
+/// changes.
+#[test]
+fn the_analyses_are_made_once_where_no_loop_changes() {
+    let mut text = String::from("define void @f(i16 %n) {\nb0:\n  br label %h0\n");
+    for k in 0..3 {
+        let pre = if k == 0 { "b0".to_string() } else { format!("h{}", k - 1) };
+        let next = if k == 2 { "x".to_string() } else { format!("h{}", k + 1) };
+        text.push_str(&format!(
+            "h{k}:\n  %i{k} = phi i16 [ 0, %{pre} ], [ %j{k}, %h{k} ]\n  %j{k} = add i16 %i{k}, 1\n  %c{k} = icmp slt i16 %j{k}, %n\n  br i1 %c{k}, label %h{k}, label %{next}\n"
+        ));
+    }
+    text.push_str("x:\n  ret void\n}\n");
+    let mut module = parsed(&text);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let before = llrm_mir::counts::get(llrm_mir::counts::Event::Dominators);
+    let changed = loop_simplify_cfg(context, function);
+    let built = llrm_mir::counts::get(llrm_mir::counts::Event::Dominators) - before;
+    assert!(!changed);
+    assert_eq!(built, 1, "one tree for three loops that do not change");
+}

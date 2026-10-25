@@ -293,3 +293,24 @@ fn a_shift_by_cl_reads_cl() {
         assert!(lines.iter().all(|line| !line.contains("CL")), "{lines:?}");
     });
 }
+
+/// `lea ax, [index*4 + 160]` at m16 was refused ('a lea of a symbol and a
+/// scaled index at m16': QCport's menu.c and sbar.c under the DAG default):
+/// 16-bit addressing has no scale, so the index is shifted first.
+#[test]
+fn a_lea_of_a_constant_and_a_scaled_index_at_m16_shifts_the_index() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let index = copy_from(&mut dag, entry, 11);
+    let scale = dag.get_constant(4, EVT::I8);
+    let disp = dag.get_constant(160, EVT::I32);
+    let noreg = dag.get_register(EVT::I16, 0);
+    let lea = machine(&mut dag, "LEA32r", &[EVT::I32], &[noreg, scale, index, disp, noreg]);
+    let root = copy_to(&mut dag, entry, 12, lea);
+    context_in(AddrMode::Real16, |ctx| {
+        let units = schedule(&dag, root, &Info);
+        let emitted = emit(&dag, &units, ctx).expect("emits");
+        let names: Vec<_> = emitted.blocks[0].insns.iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+        assert_eq!(names.iter().map(|n| &**n).collect::<Vec<_>>(), ["shl", "lea", "mov"]);
+    });
+}

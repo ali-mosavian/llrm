@@ -304,6 +304,15 @@ impl SelectionDAG {
         }
     }
 
+    /// Whether `delete_dead` removed `node`: nothing reads it, and it reads
+    /// nothing that counts.
+    pub fn is_deleted(
+        &self,
+        node: u32,
+    ) -> bool {
+        self.deleted.contains(&node)
+    }
+
     pub fn nodes(&self) -> &[SDNode] {
         &self.nodes
     }

@@ -2187,8 +2187,25 @@ impl Emitter<'_, '_> {
                     && cell.base.is_none()
                     && cell.index.is_some()
                 {
+                    // 16-bit addressing has no scale: the index is scaled by a
+                    // shift first.
                     if cell.scale != 1 {
-                        return Err(EmitError::Unsupported("a lea of a symbol and a scaled index at m16".to_owned()));
+                        let shift = match cell.scale {
+                            2 => 1,
+                            4 => 2,
+                            8 => 3,
+                            other => {
+                                return Err(EmitError::Unsupported(format!(
+                                    "a lea of a symbol and an index scaled by {other} at m16"
+                                )));
+                            }
+                        };
+                        let index = cell.index.take().expect("an index");
+                        let scaled = self.fresh(index.width);
+                        let amount = Loc::Imm(Imm { value: shift, width: 1, address: None });
+                        self.push(Operation::Binary, "shl", vec![Loc::Held(scaled)], vec![Loc::Held(index), amount]);
+                        cell.index = Some(scaled);
+                        cell.scale = 1;
                     }
                     cell.base = cell.index.take();
                 }
