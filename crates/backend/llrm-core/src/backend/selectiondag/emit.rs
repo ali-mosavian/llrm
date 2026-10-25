@@ -1310,7 +1310,7 @@ impl Emitter<'_, '_> {
         &self,
         n: u32,
     ) -> bool {
-        self.glue_reaches(n, |name| name.starts_with("CALL"))
+        self.glue_reaches(n, |name| name.starts_with("CALL") || name.starts_with("TCRETURN"))
     }
 
     /// Whether `glue` (the third operand of a `CopyFromReg`) comes from a call,
@@ -1497,6 +1497,21 @@ impl Emitter<'_, '_> {
                     let count = Loc::Imm(Imm { value: count, width: word, address: None });
                     self.push(Operation::Binary, verb, vec![sp.clone()], vec![sp, count]);
                 }
+                return Ok(Some(()));
+            }
+            // A sibling call: the frame pass puts the epilogue before this
+            // return, which is a jump to the callee (`masm`).
+            "TCRETURNdi" => {
+                let callee = self
+                    .direct_callee(node.ops[0])
+                    .ok_or_else(|| EmitError::Unsupported("a sibling call of a non-global".to_owned()))?;
+                let at = self.next_address();
+                let requires = std::mem::take(&mut self.arguments);
+                let uses = requires.iter().map(|(held, _)| held.value).collect();
+                let what = Semantics { name: Some("jmp".into()), ..Semantics::new(Operation::Return) };
+                let insn = Insn { requires, ..Insn::new(at, Some((at, at)), Some(what), vec![], uses) };
+                self.blocks.last_mut().expect("a block").insns.push(Arc::new(insn));
+                self.calls.push((at, callee));
                 return Ok(Some(()));
             }
             "CALLpcrel32" => {

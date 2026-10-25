@@ -177,6 +177,13 @@ impl FunctionPass for CgpAddr {
         // Blocks and edges are as they were.
         let one_flag = !analyses.outer().target().multiple_condition_registers();
         let sunk_compares = one_flag && compares_sunk(unit.function);
+        let compares = match analyses.outer().target().lowering() {
+            Some(lowering) => {
+                let outer = std::rc::Rc::clone(analyses.outer());
+                crate::cmpopt::compares_optimized(unit.context, &outer.globals, unit.layout, &*lowering, unit.function)
+            }
+            None => false,
+        };
         let masks =
             one_flag && masks_sunk(unit.context, unit.function, analyses.outer().target().lowering().as_deref());
         let phis = phis_sunk(unit.function);
@@ -226,6 +233,7 @@ impl FunctionPass for CgpAddr {
             || sunk_casts
             || split
             || remainders
+            || compares
         {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else if closed {

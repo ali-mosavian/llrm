@@ -331,4 +331,39 @@ mod tests {
         );
         assert_eq!((count(&same), count(&swapped)), (1, 0));
     }
+
+    /// With sibling calls on, an eligible call is the block's end: a
+    /// `TC_RETURN` of the callee and the registers, no call sequence and no
+    /// return after it. Off, the call is as it was.
+    #[test]
+    fn a_sibling_call_is_a_tc_return_when_asked() {
+        let text = "target datalayout = \"e-p:32:32-n8:16:32\"\ndeclare i32 @g(i32, i32)\n\
+            define i32 @f(i32 %a, i32 %b) {\n  %r = tail call i32 @g(i32 %a, i32 %b)\n  ret i32 %r\n}\n";
+        let dump = |on: bool| {
+            let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+            let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+            let (id, _, function) =
+                module.functions().find(|(_, g, f)| !f.is_declaration() && g.name.as_deref() == Some("f")).unwrap();
+            let convention =
+                crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
+            let mut info = FunctionLoweringInfo::new(function);
+            build_block(
+                &module,
+                function,
+                &layout,
+                &BuilderTarget::m32().with_tail_calls(on),
+                &llrm_x86_m32::M32,
+                &convention,
+                &mut info,
+                function.entry().unwrap(),
+            )
+            .unwrap_or_else(|why| panic!("{}", why.0))
+            .dag
+            .dump()
+        };
+        let on = dump(true);
+        assert!(on.contains("X86ISD::TC_RETURN") && !on.contains("RET_GLUE") && !on.contains("callseq"), "{on}");
+        let off = dump(false);
+        assert!(off.contains("X86ISD::CALL") && off.contains("RET_GLUE"), "{off}");
+    }
 }

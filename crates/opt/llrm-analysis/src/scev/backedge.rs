@@ -223,13 +223,25 @@ impl ScalarEvolution {
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L8419
-    /// `getSmallConstantMaxTripCount(L)` (the predicates are DEVIATE 1).
+    /// `getSmallConstantMaxTripCount(L)` with no predicates.
     pub fn get_small_constant_max_trip_count(
         &mut self,
         cx: &Cx,
         l: BlockId,
     ) -> u32 {
         let max_exit_count = self.get_backedge_taken_count(cx, l, ExitCountKind::ConstantMaximum);
+        self.constant_trip_count(max_exit_count)
+    }
+
+    /// `getSmallConstantMaxTripCount(L, &Predicates)`: the count under the
+    /// predicates appended to `predicates`.
+    pub fn get_small_constant_max_trip_count_with_predicates(
+        &mut self,
+        cx: &Cx,
+        l: BlockId,
+        predicates: &mut Vec<super::wrap_predicate::Predicate>,
+    ) -> u32 {
+        let max_exit_count = self.get_predicated_constant_max_backedge_taken_count(cx, l, predicates);
         self.constant_trip_count(max_exit_count)
     }
 

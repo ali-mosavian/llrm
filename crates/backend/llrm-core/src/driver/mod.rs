@@ -642,7 +642,7 @@ pub fn statement_table(
         reserve: 0,
         callees: crate::support::hash::IndexMap::from_iter([(
             1,
-            masm::Callee { name: "$statement-table".into(), far: false, pops: 0, code },
+            masm::Callee { name: "$statement-table".into(), far: false, pops: 0, code, tail: false },
         )]),
         interrupt: None,
         size: false,

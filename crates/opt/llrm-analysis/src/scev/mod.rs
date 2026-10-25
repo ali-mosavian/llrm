@@ -62,6 +62,7 @@ pub mod pattern;
 pub mod poison;
 pub mod predicate;
 pub mod predicate_rewrite;
+pub mod predicated;
 pub mod print;
 pub mod quadratic;
 pub mod range;

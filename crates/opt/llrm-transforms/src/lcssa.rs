@@ -148,7 +148,7 @@ fn formed_with(
     // value an ordinary definition in an enclosing loop.
     // The dominators and the graph, found once: closing adds phis, no block or
     // edge.
-    let mut flow = lcssamerges::Flow::default();
+    let mut flow = lcssamerges::Flow::with_dominance(shape.dominance.clone());
     for (loop_, exiting) in shape.loops.iter().zip(exits) {
         changed |= _closed_loop(function, loop_, exiting, &mut flow)?;
     }
@@ -254,7 +254,7 @@ pub fn _closed_loop(
 ) -> Result<bool, String> {
     let exits = exiting.iter().map(|&(_, target)| target).collect::<BTreeSet<_>>();
     if exits.len() > 1 {
-        return lcssamerges::closed(function, loop_, flow);
+        return lcssamerges::closed(function, loop_, exiting, flow);
     }
     let dominance = &mut flow.dominance;
     let Some(&exit_at) = exits.first() else {

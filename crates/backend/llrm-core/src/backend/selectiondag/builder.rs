@@ -75,6 +75,9 @@ pub struct BuilderTarget {
     /// The stack alignment `alloca` rounds to, when not the target's own: the
     /// pin's i486-linux goldens say 16.
     pub stack_align: Option<u64>,
+    /// Sibling calls become `TC_RETURN`s (tail-call step 3); off until the
+    /// emitter lays them (step 5).
+    pub tail_calls: bool,
     /// `-fexcess-precision=standard`: an integer too wide for its float type's
     /// mantissa is rounded to that type (x87 would keep it exact).
     pub float_store: bool,
@@ -91,6 +94,15 @@ impl BuilderTarget {
         tti: Option<std::rc::Rc<dyn llrm_mir::tti::Tti>>,
     ) -> BuilderTarget {
         self.tti = tti.map(TtiHandle);
+        self
+    }
+
+    /// This target with sibling calls made.
+    pub fn with_tail_calls(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.tail_calls = on;
         self
     }
 
@@ -149,6 +161,7 @@ impl BuilderTarget {
             libcalls: None,
             stack_align: None,
             float_store: false,
+            tail_calls: false,
             tti: None,
             runtime_calls: None,
         }
@@ -164,6 +177,7 @@ impl BuilderTarget {
             libcalls: None,
             stack_align: None,
             float_store: false,
+            tail_calls: false,
             tti: None,
             runtime_calls: None,
         }
@@ -219,6 +233,9 @@ pub fn build_block(
         function.iter_block(block).filter(|inst| function.instruction(*inst).opcode != Opcode::Phi).collect::<Vec<_>>()
     {
         builder.visit(inst)?;
+        if builder.had_tail_call {
+            break;
+        }
     }
     let root = builder.control_root();
     builder.dag.set_root(root);
@@ -330,6 +347,8 @@ impl<'a> Builder<'a> {
             phi_updates: Vec::new(),
             tail_calls: Vec::new(),
             tail_candidate: None,
+            sibcall: false,
+            had_tail_call: false,
             block,
             order,
             deferred: Vec::new(),
@@ -362,6 +381,11 @@ struct Builder<'a> {
     /// The call being built if it is in tail position (step 1), until
     /// `visit_call` has its convention to ask the target about.
     tail_candidate: Option<InstId>,
+    /// The call `visit_call` is lowering is a sibling call: `lower_call` makes
+    /// a `TC_RETURN`.
+    sibcall: bool,
+    /// A `TC_RETURN` ended the block: nothing after the call is built.
+    had_tail_call: bool,
     block: BlockId,
     /// The blocks in layout order, with the ones a switch lowering adds.
     order: Vec<BlockId>,
@@ -799,6 +823,7 @@ impl Builder<'_> {
             && self.eligible_for_sibling_call(info, &plan, variadic, direct.is_some(), arguments)
         {
             self.tail_calls.push(tail);
+            self.sibcall = self.target.tail_calls;
         }
         // A call of a function with more arguments than it declares (an
         // old-style `()` definition): the callee pops what it declares, the
@@ -963,10 +988,12 @@ impl Builder<'_> {
         flags_answer: bool,
     ) -> Result<Option<SDValue>, Refused> {
         let types = &self.module.context.types;
-        let bytes = (plan.stack_arguments - first).max(0) as u64;
+        // a sibling call reuses the caller's frame: no call sequence, and its
+        // stack arguments are already where the callee reads them
+        let sibling = std::mem::take(&mut self.sibcall);
+        let bytes = if sibling { 0 } else { (plan.stack_arguments - first).max(0) as u64 };
         let root = self.root();
-        let start = self.dag.get_callseq_start(root, bytes);
-        let mut chain = SDValue { node: start.node, res: 0 };
+        let mut chain = if sibling { root } else { self.dag.get_callseq_start(root, bytes) };
         let mut stores = Vec::new();
         let mut copies: Vec<(RegId, SDValue)> = Vec::new();
         let mut stack_pointer = None;
@@ -978,6 +1005,7 @@ impl Builder<'_> {
             };
             let pieces = if parts == 2 { self.split_value(*value, part_vt).to_vec() } else { vec![*value] };
             match parameter {
+                Parameter::Cell(_) | Parameter::Bytes(_) if sibling => {}
                 Parameter::Cell(displacement) => {
                     for (index, piece) in pieces.iter().enumerate() {
                         // a narrow argument fills its stack slot
@@ -1072,6 +1100,16 @@ impl Builder<'_> {
         }
         ops.push(self.dag.get_register_mask());
         ops.extend(glue);
+        if sibling {
+            // `X86ISD::TC_RETURN`: the callee, the stack adjustment (none: the
+            // arguments are in place), the registers
+            let fpdiff = self.dag.get_constant_with(0, EVT::I32, true, false);
+            ops.insert(2, fpdiff);
+            let tc = self.dag.get_node_multi(super::x86isd::TC_RETURN, &[EVT::OTHER], &ops);
+            self.dag.set_root(tc);
+            self.had_tail_call = true;
+            return Ok(None);
+        }
         let call = self.dag.get_node_multi(super::x86isd::CALL, &[EVT::OTHER, EVT::GLUE], &ops);
         let end = self
             .dag

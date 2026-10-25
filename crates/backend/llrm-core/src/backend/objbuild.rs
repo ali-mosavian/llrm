@@ -241,6 +241,8 @@ impl Jump {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Near {
     pub name: String,
+    /// A sibling call's `jmp` (`E9`), not a `call` (`E8`).
+    pub tail: bool,
 }
 
 /// `Encoded`.
@@ -417,7 +419,7 @@ fn live_inner(module: &masm::Module) -> Result<masm::Module, Error> {
                     Encoded::Piece(Piece { fixups, .. }) => {
                         reached.extend(fixups.iter().map(|fixup| _target(&fixup.name).to_owned()));
                     }
-                    Encoded::Near(Near { name }) => {
+                    Encoded::Near(Near { name, .. }) => {
                         reached.insert(name);
                     }
                     Encoded::Label(_)
@@ -735,7 +737,7 @@ pub fn _code_by(
             Encoded::Jump(Jump { name, label, long }) => {
                 segment.put(&_jump(name, labels[label], at, *long, model)?.code, &[])
             }
-            Encoded::Near(Near { name }) if labels.contains_key(name) => {
+            Encoded::Near(Near { name, tail }) if labels.contains_key(name) => {
                 let distance = labels[name] - (at as i64 + 1 + model.displacement_bytes() as i64);
                 let far = || Unencodable(format!("a near call to {name} {distance} bytes away"));
                 let displacement = if model.flat() {
@@ -743,14 +745,14 @@ pub fn _code_by(
                 } else {
                     i16::try_from(distance).map_err(|_| far())?.to_le_bytes().to_vec()
                 };
-                segment.put(&[&[0xE8][..], &displacement].concat(), &[]);
+                segment.put(&[&[if *tail { 0xE9 } else { 0xE8 }][..], &displacement].concat(), &[]);
             }
-            Encoded::Near(Near { name }) => {
+            Encoded::Near(Near { name, tail }) => {
                 segment.put(
                     &vec![0; 1 + model.displacement_bytes()],
                     &[Fixup::new(1, relative(model.displacement_bytes()), name.clone())],
                 );
-                segment.image[at] = 0xE8;
+                segment.image[at] = if *tail { 0xE9 } else { 0xE8 };
             }
         }
         at = segment.image.len();
@@ -786,7 +788,9 @@ pub fn _items(
             code: vec![0x9A, 0, 0, 0, 0],
             fixups: vec![Fixup::new(1, POINTER, name.clone())],
         })],
-        masm::Item::Callee(masm::Callee { name, .. }) => vec![Encoded::Near(Near { name: name.clone() })],
+        masm::Item::Callee(masm::Callee { name, tail, .. }) => {
+            vec![Encoded::Near(Near { name: name.clone(), tail: *tail })]
+        }
         masm::Item::Semantics(Semantics {
             op: Operation::Branch | Operation::Jump,
             name,
