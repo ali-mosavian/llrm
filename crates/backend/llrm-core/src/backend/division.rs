@@ -279,11 +279,16 @@ fn positive_reciprocal<'a>(
 ) -> Result<Option<Vec<ir::Semantics>>, String> {
     let cpu = targets::profile(cpu)?;
     let width = dividend.width;
-    if width != 4 || !(1 < divisor && divisor < 1 << 31) || cpu.size {
+    if !matches!(width, 2 | 4) || !(1 < divisor && divisor < 1 << (8 * width - 1)) {
         return Ok(None);
     }
+    // The pin shifts a power of two at every size (`visitSDIVLike` has no
+    // size test; `isIntDivCheap` guards only the reciprocal below).
     if divisor & (divisor - 1) == 0 {
         return Ok(Some(power_of_two(dividend, divisor, results, fresh, remainder)));
+    }
+    if width != 4 || cpu.size {
+        return Ok(None);
     }
     // The magic is in the accumulator and the dividend where the early-out
     // reads: its bits set the price.
@@ -735,6 +740,24 @@ mod tests {
         );
     }
 
+    /// Tuned for size a power of two is still shifts (the pin's `visitSDIVLike`
+    /// has no size test for it): recchop -Os read `(lo + hi) / 2` as `cwd;
+    /// idiv` and nbody_fixed -Os ran 48% slower without the shifts.
+    #[test]
+    fn test_tuned_for_size_a_division_by_a_power_of_two_is_still_shifts() {
+        let m16 = crate::backend::cpu::tuned_for(&llrm_x86_m16::M16, "486", true).unwrap();
+        let results = [ir::Held { value: 2, width: 2 }, ir::Held { value: 3, width: 2 }];
+        let mut count = 4..;
+        let mut fresh = || count.next().unwrap();
+        let parts = reciprocal(ir::Held { value: 1, width: 2 }, 2, &results, &mut fresh, m16, false, None)
+            .unwrap()
+            .expect("shifts");
+        assert!(parts.iter().all(|one| one.op == ir::Operation::Binary), "{parts:?}");
+        // The reciprocal still waits for the clocks: not at -Os.
+        let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
+        assert_eq!(reciprocal(ir::Held { value: 1, width: 4 }, 7, &results, &mut fresh, m16, false, None), Ok(None));
+    }
+
     /// LNGMXX's q+r needs both answers, including negative truncation and
     /// INT_MIN; here also by negative divisors, whose quotient is the one
     /// by the magnitude, negated, and whose remainder is the same.
@@ -791,15 +814,26 @@ mod tests {
     /// and ran 31% slower.
     #[test]
     fn test_a_signed_division_by_a_power_of_two_is_shifts() {
-        for divisor in [2, 4, 16, 512, 1 << 30, -2, -16, -512] {
-            let source = ir::Held { value: 1, width: 4 };
-            let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
+        // Words too: `(lo + hi) / 2` at m16 was `cwd; idiv` (recchop -Os).
+        for (width, divisor) in [2, 4, 16, 512, 1 << 30, -2, -16, -512]
+            .into_iter()
+            .map(|divisor| (4, divisor))
+            .chain([2, 4, 16, 512, 1 << 14, -2, -16, -512].into_iter().map(|divisor| (2, divisor)))
+        {
+            let source = ir::Held { value: 1, width };
+            let results = [ir::Held { value: 2, width }, ir::Held { value: 3, width }];
+            let bits = 8 * i64::from(width);
+            let wrap = |value: i64| (value << (64 - bits)) >> (64 - bits);
             let mut count = 4..;
             let mut fresh = || count.next().unwrap();
             let parts =
                 reciprocal(source, divisor, &results, &mut fresh, "486", true, None).unwrap().expect("a sequence");
             assert!(!parts.iter().any(|one| one.op == ir::Operation::Multiply), "{divisor}: a multiply in {parts:?}");
-            for number in [-2147483648, -513, -512, -17, -1, 0, 1, 16, 511, 512, 513, 2147483647] {
+            for number in [-2147483648, -513, -512, -17, -1, 0, 1, 16, 511, 512, 513, 2147483647]
+                .into_iter()
+                .map(wrap)
+                .filter(|&number| width == 4 || (-32768..=32767).contains(&number))
+            {
                 let mut values: HashMap<u32, i64> = HashMap::from_iter([(1, number)]);
                 for part in &parts {
                     let args: Vec<i64> = part
@@ -815,12 +849,12 @@ mod tests {
                         "add" => args[0] + args[1],
                         "sub" => args[0] - args[1],
                         "shl" => args[0] << args[1],
-                        "shr" => (args[0] & 0xffffffff) >> args[1],
+                        "shr" => (args[0] & ((1i64 << bits) - 1)) >> args[1],
                         "sar" => args[0] >> args[1],
                         "neg" => -args[0],
                         other => panic!("{other}"),
                     };
-                    values.insert(held(&part.dests[0]), signed(answer));
+                    values.insert(held(&part.dests[0]), wrap(answer));
                 }
                 let quotient = number / divisor;
                 assert_eq!(values[&2], quotient, "{number} / {divisor}");
