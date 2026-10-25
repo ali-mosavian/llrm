@@ -150,3 +150,26 @@ def test_a_pr_whose_only_issue_is_a_fmt_difference_is_kept(tmp_path):
     sh(repo, "checkout", "-q", "main")
     why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: {"emit.rs"}, scanners=lambda _: set())
     assert why == [], why
+
+
+def test_alone_checks_run_in_parallel_and_the_unfinished_at_the_cap_are_kept_unfiltered(tmp_path):
+    """Forty PRs at 3-5 minutes each, one after another, held the batch for hours: 4 checks of 0.4 s take about 0.4 s, and one still running at the cap goes to the batch."""
+    import time
+
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    heads = {str(n): branch(repo, f"b{n}", f"f{n}.txt", f"{n}\n") for n in range(1, 6)}
+
+    def refusals(head: str, base: str) -> list[str]:
+        time.sleep(30 if head == heads["5"] else 0.4)
+        return ["does not build"] if head == heads["2"] else []
+
+    started = time.monotonic()
+    kept, dropped = ps.alone(list(heads), heads, refusals=refusals, jobs=5, cap=2)
+    took = time.monotonic() - started
+    assert took < 4, took
+    assert kept == ["1", "3", "4", "5"], kept  # 5 never finished: unfiltered
+    assert list(dropped) == ["2"], dropped

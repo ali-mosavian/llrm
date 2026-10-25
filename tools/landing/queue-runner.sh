@@ -7,7 +7,7 @@ mkdir -p "${LAND_TMP:-/tmp/landing}"
 # own process group, recorded for stop.sh: the only way to end the runner (never by name or pattern)
 [ "$(ps -o pgid= $$ | tr -d ' ')" = "$$" ] || exec setsid "$0" "$@"
 echo $$ > "${LAND_PIDFILE:-${LAND_TMP:-/tmp/landing}/land-runner.pgid}"
-HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"; source "$HERE/precheck-filter.sh"; source "$HERE/landing-busy.sh"; source "$HERE/head-age.sh"; source "$HERE/alone-filter.sh"
+HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"; source "$HERE/precheck-filter.sh"; source "$HERE/landing-busy.sh"; source "$HERE/head-age.sh"; source "$HERE/alone-filter.sh"; source "$HERE/background.sh"
 R=ali-mosavian/llrm; W=~/scratch/coord-ps; T=~/scratch/coord-ps-target; Q=/tmp/land-queue.txt; touch $Q
 STACKS="2752 2773 2776|2785 2789 2797|2713 2738 2764|2753 2757 2763|2672 2683"
 group() { for g in ${STACKS//|/ |}; do :; done; echo "$STACKS" | tr '|' '\n' | grep -w -- "$1" | head -1; }
@@ -23,7 +23,7 @@ while true; do
   [ "$(du -sk "$T" 2>/dev/null | cut -f1)" -gt "${TARGET_CAP_KB:-41943040}" ] && echo "target over cap: $(PRUNE_LOG=${LAND_TMP:-/tmp/landing}/prune.log "$HERE/prune-target.sh" "$T" --apply)"
   # every cargo target over 15 GB loses its stale hashes, at most every 10 minutes
   if [ -z "$(find "${LAND_TMP:-/tmp/landing}/sweep.stamp" -mmin -10 2>/dev/null)" ]; then
-    touch "${LAND_TMP:-/tmp/landing}/sweep.stamp"; "$HERE/sweep-targets.sh" 2>&1 | sed "s/^/$(date +%H:%M) /" >> "${LAND_TMP:-/tmp/landing}/sweep.log"
+    touch "${LAND_TMP:-/tmp/landing}/sweep.stamp"; background_timeout "${SWEEP_TIMEOUT:-1800}" "${LAND_TMP:-/tmp/landing}/sweep.log" "$HERE/sweep-targets.sh"
   fi
   n=$(head -1 $Q); [ -z "$n" ] && { sleep 20; continue; }
   batch=("$n"); g=$(group "$n")
@@ -57,7 +57,7 @@ while true; do
     [ "$2" = true ] && gh pr ready $m --repo $R >/dev/null
   done
   log=${LAND_TMP:-/tmp/landing}/sqb-${batch[0]}.log
-  [ "${LAND_FAST:-}" = 1 ] && { nohup nice -n 19 buildslot python3 "$HERE/../parity_squash.py" alone $(sed -n '1,16p' $Q) >/dev/null 2>>"${LAND_TMP:-/tmp/landing}/alone.log" & }  # warms the verdict cache while the batch squashes
+  [ "${LAND_FAST:-}" = 1 ] && { ALONE_CAP=3000 nohup nice -n 19 python3 "$HERE/../parity_squash.py" alone $(sed -n '1,16p' $Q) >/dev/null 2>>"${LAND_TMP:-/tmp/landing}/alone.log" & }  # warms the verdict cache while the batch squashes
   ( flock -n 9 || { echo "waiting for the landing lock (another landing holds the checkout)" >&2; flock -x 9; }; cd $W && git fetch -q origin && git reset -q --hard && git clean -fdq && git checkout -q --detach ${LAND_TOOLS_REF:-origin/feat/parity} \
     && { echo "STAGE assemble ${asm_s:-0}s"; WAITS=${WAITS:-$HERE/waits.txt} PARITY_BIN=$T/release CARGO_TARGET_DIR=$T CARGO_INCREMENTAL=0 PYTHONUNBUFFERED=1 uv run --project tools python tools/parity_squash.py merge-batch "${batch[@]}"; } 2>&1 \
       | awk '{print strftime("%H:%M:%S"), $0; fflush()}' > $log ) 9>"$W.checkout.lock"
