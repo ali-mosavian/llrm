@@ -2203,3 +2203,18 @@ fn vbdos_does_not_fold_csng_of_a_constant_argument() {
     assert!(parse(source, Dialect::QuickBasic45).is_err());
     assert!(parse(source, Dialect::Pds71).is_err());
 }
+
+#[test]
+fn a_type_field_may_be_named_explicit_in_every_dialect_and_rem_in_pds() {
+    // BC 4.5, PDS 7.1 and VBDOS all take `EXPLICIT AS INTEGER` and `v.EXPLICIT`; PDS 7.1 alone
+    // reads REM at the start of a TYPE body line as a field (QB 4.5 and VBDOS keep it a comment).
+    let explicit = "TYPE T\r\n  EXPLICIT AS INTEGER\r\nEND TYPE\r\nDIM v AS T\r\nv.EXPLICIT = 4\r\nPRINT v.EXPLICIT\r\n";
+    for dialect in [Dialect::QuickBasic45, Dialect::Pds71, Dialect::VbDos] {
+        parse(explicit, dialect).unwrap_or_else(|error| panic!("{dialect:?}: {}", error.message));
+    }
+    let rem = "TYPE T\r\n  REM AS INTEGER\r\nEND TYPE\r\nDIM v AS T\r\n";
+    assert!(parse(rem, Dialect::Pds71).is_ok());
+    assert!(parse(rem, Dialect::QuickBasic45).is_err());
+    assert!(parse(rem, Dialect::VbDos).is_err());
+    assert!(parse("TYPE T\r\n  X AS INTEGER\r\n  REM a comment\r\nEND TYPE\r\n", Dialect::Pds71).is_err());
+}

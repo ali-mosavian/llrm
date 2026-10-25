@@ -100,6 +100,7 @@ impl Ast<'_> {
                 let spelling = word.spelling().to_ascii_uppercase();
                 spelling.as_bytes().first().is_some_and(u8::is_ascii_alphabetic).then_some(spelling)
             }
+            TokenKind::ExtensionKeyword(word) => Some((*word).to_owned()),
             _ => None,
         }
     }
@@ -117,7 +118,7 @@ impl Ast<'_> {
     pub(super) fn field_name(&mut self) -> R<(String, Span)> {
         let at = self.i;
         match self.tok_n(0) {
-            Some(Tok::Ident) | Some(Tok::Kw(_)) => {
+            Some(Tok::Ident) | Some(Tok::Kw(_)) | Some(Tok::Ext) => {
                 let name = self.any_word_at(at).ok_or(at)?;
                 self.i += 1;
                 Ok((name, self.span(at)))

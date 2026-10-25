@@ -73,8 +73,22 @@ pub fn scan(
 ) -> Result<Vec<Token>, LexError> {
     let mut out = Vec::with_capacity(source.len() / 4);
     let newline = punct(b'\n');
+    // PDS 7.1 reads REM at the start of a TYPE body line as a field name, never a comment.
+    let mut type_body = false;
     for (line_index, line) in logical_lines(source, dialect) {
-        scan_line(&line, line_index, dialect, &mut out)?;
+        scan_line(&line, line_index, dialect, type_body && dialect == Dialect::Pds71, &mut out)?;
+        let mut words = line.split(|c: char| !c.is_ascii_alphanumeric()).filter(|word| !word.is_empty());
+        let first = words.next().map(str::to_ascii_uppercase);
+        let first = if first.as_deref().is_some_and(|w| w.bytes().all(|b| b.is_ascii_digit())) {
+            words.next().map(str::to_ascii_uppercase)
+        } else {
+            first
+        };
+        match (first.as_deref(), words.next().map(str::to_ascii_uppercase).as_deref()) {
+            (Some("TYPE"), Some(_)) => type_body = true,
+            (Some("END"), Some("TYPE")) => type_body = false,
+            _ => {}
+        }
         out.push(Token { kind: newline.clone(), span: Span { line: line_index, start: line.len(), end: line.len() } });
     }
     if source.is_empty() {
@@ -87,6 +101,7 @@ fn scan_line(
     line: &str,
     line_index: usize,
     dialect: Dialect,
+    type_body: bool,
     out: &mut Vec<Token>,
 ) -> Result<(), LexError> {
     let bytes = line.as_bytes();
@@ -231,8 +246,10 @@ fn scan_line(
                         continue;
                     }
                 }
-                if reserved_id == Some(Kw::REM)
-                    || (reserved_id.is_none() && bare.eq_ignore_ascii_case("REM") && name.len() == bare.len())
+                let type_field = type_body && out.len() == line_start;
+                if !type_field
+                    && (reserved_id == Some(Kw::REM)
+                        || (reserved_id.is_none() && bare.eq_ignore_ascii_case("REM") && name.len() == bare.len()))
                 {
                     let first = out.len() == line_start;
                     let directive = if first { line[at..].trim().to_ascii_uppercase() } else { String::new() };
