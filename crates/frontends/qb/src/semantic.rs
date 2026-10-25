@@ -36,6 +36,8 @@ const BYTE: u32 = 8;
 const SIGNED_BYTE: u32 = 9;
 const UNSIGNED_INTEGER: u32 = 10;
 const UNSIGNED_LONG: u32 = 11;
+// PDS and VBDOS's CURRENCY: a 64-bit integer scaled by 10000.
+const CURRENCY: u32 = 12;
 // BASCOM's declarative scanner reserves eight dimension records for an
 // array whose rank is not present in its declaration.  This is an ABI storage
 // rule, distinct from the language's 60-index parser ceiling.
@@ -353,6 +355,8 @@ struct Compiler {
     def_segment_base_symbol: Option<u32>,
     far_string_segment_symbol: Option<u32>,
     floating_literals: BTreeMap<(u32, Vec<u8>), u32>,
+    /// The loaded values that are floating literals, which CURRENCY folds.
+    literal_values: BTreeMap<u32, (u32, Number)>,
     // The table each DEFtype leaves, by source position. BC reads the file
     // once: a DEFtype governs every name from it to the next one, across
     // SUB and FUNCTION boundaries, and `c` either side of `DEFINT C` is two
@@ -1636,6 +1640,7 @@ impl Compiler {
             scalar(SIGNED_BYTE, "signed byte", "integer", 1, Some(true), "none"),
             scalar(UNSIGNED_INTEGER, "unsigned integer", "integer", 2, Some(false), "none"),
             scalar(UNSIGNED_LONG, "unsigned long", "integer", 4, Some(false), "none"),
+            scalar(CURRENCY, "currency", "integer", 8, Some(true), "none"),
         ];
         Self {
             dialect,
@@ -1697,7 +1702,7 @@ impl Compiler {
             error_handler_local: false,
             error_handlers: BTreeSet::new(),
             module_handled: false,
-            next_type: 12,
+            next_type: 13,
             next_value: 1,
             next_place: 1,
             next_instruction: 1,
@@ -1714,6 +1719,7 @@ impl Compiler {
             def_segment_base_symbol: None,
             far_string_segment_symbol: None,
             floating_literals: BTreeMap::new(),
+            literal_values: BTreeMap::new(),
             default_changes: Vec::new(),
             position: (0, 0),
             module_variables: BTreeMap::new(),
@@ -2248,7 +2254,7 @@ impl Compiler {
         // `v&` names the variable `DIM v AS LONG` declared (BC: one variable);
         // a suffix of another type is a Duplicate definition,
         // refused where the name is looked up.
-        if let Some(sign) = name.strip_suffix(['%', '&', '!', '#', '$']).map(|base| &name[base.len()..]) {
+        if let Some(sign) = name.strip_suffix(['%', '&', '!', '#', '$', '@']).map(|base| &name[base.len()..]) {
             let base = format!("{}{marker}", canonical(name));
             if self.variables.get(&base).is_some_and(|one| type_suffix(one.element.unwrap_or(one.type_id)) == sign) {
                 return base;
@@ -3728,10 +3734,15 @@ impl Compiler {
                             match type_id {
                                 INTEGER | BOOLEAN | BYTE => ("I2", self.convert(operand, type_id, INTEGER)?),
                                 LONG => ("I4", operand),
-                                SINGLE | DOUBLE => {
+                                SINGLE | DOUBLE | CURRENCY => {
                                     let place = self.temporary(type_id)?;
                                     self.emit("store", Vec::new(), vec![Operand::Place(place), operand]);
-                                    (if type_id == SINGLE { "R4" } else { "R8" }, Operand::Place(place))
+                                    let suffix = match type_id {
+                                        SINGLE => "R4",
+                                        DOUBLE => "R8",
+                                        _ => "CY",
+                                    };
+                                    (suffix, Operand::Place(place))
                                 }
                                 _ => return self.fail("PRINT item has an unsupported type"),
                             }
@@ -6328,6 +6339,19 @@ impl Compiler {
                     self.raise_if(lowest, 6)?;
                 }
                 let result = self.value(type_id);
+                if *op == Unary::Negative {
+                    let negated = match &operand {
+                        Operand::Value(literal) => match self.literal_values.get(literal) {
+                            Some((_, Number::Real(text))) => Some(Number::Real(format!("-{text}"))),
+                            _ => None,
+                        },
+                        Operand::Constant(_, Number::Integer(value)) => value.checked_neg().map(Number::Integer),
+                        _ => None,
+                    };
+                    if let Some(negated) = negated {
+                        self.literal_values.insert(result, (type_id, negated));
+                    }
+                }
                 self.emit(operation, vec![result], vec![operand]);
                 Ok((Operand::Value(result), type_id))
             }
@@ -8745,6 +8769,38 @@ impl Compiler {
         Ok((load(self, result), common))
     }
 
+    /// A constant becomes CURRENCY's scaled integer, as BC folds it; anything
+    /// else needs the runtime's conversions, which are not attached yet.
+    fn currency_conversion(
+        &mut self,
+        operand: Operand,
+        from: u32,
+        to: u32,
+    ) -> Result<Operand, SemanticError> {
+        const SCALE: i64 = 10_000;
+        let operand = match operand {
+            Operand::Value(value) if self.literal_values.contains_key(&value) => {
+                Operand::Constant(from, self.literal_values[&value].1.clone())
+            }
+            other => other,
+        };
+        let scaled = match (&operand, to) {
+            (Operand::Constant(_, Number::Integer(value)), CURRENCY) if integral(from) => value.checked_mul(SCALE),
+            (Operand::Constant(_, Number::Real(text)), CURRENCY) if matches!(from, SINGLE | DOUBLE) => {
+                // BC converts the float, not its text: 1.00005 is a SINGLE just
+                // under the half.
+                let value = parse_real(text)?;
+                let value = if from == SINGLE { f64::from(value as f32) } else { value } * SCALE as f64;
+                (value.abs() < i64::MAX as f64).then(|| value.round_ties_even() as i64)
+            }
+            _ => return self.unsupported("a CURRENCY conversion"),
+        };
+        match scaled {
+            Some(value) => Ok(Operand::Constant(CURRENCY, Number::Integer(value))),
+            None => self.fail("Overflow"),
+        }
+    }
+
     fn convert(
         &mut self,
         operand: Operand,
@@ -8753,6 +8809,9 @@ impl Compiler {
     ) -> Result<Operand, SemanticError> {
         if from == to {
             return Ok(operand);
+        }
+        if from == CURRENCY || to == CURRENCY {
+            return self.currency_conversion(operand, from, to);
         }
         let numeric = |type_id| integral(type_id) || matches!(type_id, SINGLE | DOUBLE);
         let allowed = numeric(from) && numeric(to);
@@ -8826,9 +8885,6 @@ impl Compiler {
     ) -> Result<(), SemanticError> {
         if intrinsics::unsupported(name, self.dialect) {
             return self.unsupported(name);
-        }
-        if name.ends_with('@') {
-            return self.unsupported(&format!("{name} with a CURRENCY value"));
         }
         Ok(())
     }
@@ -9154,6 +9210,13 @@ impl Compiler {
         text: &str,
         type_id: u32,
     ) -> Result<Operand, SemanticError> {
+        if type_id == CURRENCY {
+            return match scaled_decimal(text) {
+                Some(Some(value)) => Ok(Operand::Constant(CURRENCY, Number::Integer(value))),
+                Some(None) => self.fail("Overflow"),
+                None => self.fail(format!("invalid CURRENCY constant {text}")),
+            };
+        }
         let bytes = match type_id {
             SINGLE => text
                 .parse::<f32>()
@@ -9204,6 +9267,7 @@ impl Compiler {
         });
         let value = self.value(type_id);
         self.emit("load", vec![value], vec![Operand::Place(place)]);
+        self.literal_values.insert(value, (type_id, Number::Real(text.into())));
         Ok(Operand::Value(value))
     }
 
@@ -10154,7 +10218,7 @@ fn type_id(type_name: Option<&TypeName>) -> Result<u32, SemanticError> {
         TypeName::Named(name) => {
             return Err(SemanticError { message: format!("user-defined type {name} is not attached yet") });
         }
-        TypeName::Currency => return Err(SemanticError { message: "CURRENCY is not attached yet".into() }),
+        TypeName::Currency => CURRENCY,
         TypeName::Tuple(_) | TypeName::Array(_) => return Err(tuple_misplaced()),
     })
 }
@@ -10165,6 +10229,7 @@ fn type_name(type_id: u32) -> TypeName {
         LONG => TypeName::Long,
         SINGLE => TypeName::Single,
         DOUBLE => TypeName::Double,
+        CURRENCY => TypeName::Currency,
         STRING => TypeName::String,
         BYTE | SIGNED_BYTE | UNSIGNED_INTEGER | UNSIGNED_LONG => {
             TypeName::Integral { width: integer_width(type_id) as u8, signed: !unsigned(type_id) }
@@ -10180,6 +10245,7 @@ fn suffix(name: &str) -> Option<TypeName> {
         Some(b'!') => Some(TypeName::Single),
         Some(b'#') => Some(TypeName::Double),
         Some(b'$') => Some(TypeName::String),
+        Some(b'@') => Some(TypeName::Currency),
         _ => None,
     }
 }
@@ -10189,7 +10255,7 @@ fn source_position(span: Span) -> (usize, usize) {
 }
 
 fn canonical(name: &str) -> &str {
-    name.trim_end_matches(['%', '&', '!', '#', '$'])
+    name.trim_end_matches(['%', '&', '!', '#', '$', '@'])
 }
 
 fn type_suffix(type_id: u32) -> &'static str {
@@ -10198,6 +10264,7 @@ fn type_suffix(type_id: u32) -> &'static str {
         LONG => "&",
         SINGLE => "!",
         DOUBLE => "#",
+        CURRENCY => "@",
         STRING => "$",
         _ => "",
     }
@@ -10256,6 +10323,42 @@ fn integer_range(type_id: u32) -> Option<std::ops::RangeInclusive<i64>> {
         UNSIGNED_LONG => Some(0..=u32::MAX as i64),
         _ => None,
     }
+}
+
+/// A decimal literal's value times 10000, rounded half away from zero, exact
+/// where a float is not (922337203685477.5807). None where it is no number,
+/// `Some(None)` where it does not fit.
+fn scaled_decimal(text: &str) -> Option<Option<i64>> {
+    let upper = text.trim().to_ascii_uppercase().replace('D', "E");
+    let (negative, body) = match upper.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, upper.strip_prefix('+').unwrap_or(&upper)),
+    };
+    let (mantissa, exponent) = match body.split_once('E') {
+        Some((mantissa, exponent)) => (mantissa, exponent.parse::<i32>().ok()?),
+        None => (body, 0),
+    };
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    if whole.is_empty() && fraction.is_empty()
+        || ![whole, fraction].iter().all(|part| part.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return None;
+    }
+    // digits with the decimal point after `point` of them, scaled by 10^4
+    let digits: Vec<u32> = whole.chars().chain(fraction.chars()).map(|c| c.to_digit(10).unwrap_or(0)).collect();
+    let point = whole.len() as i32 + exponent + 4;
+    let mut value: i128 = 0;
+    for (at, digit) in digits.iter().enumerate() {
+        // the digit's power of ten after scaling
+        let place = point - at as i32 - 1;
+        if place >= 0 {
+            value = value.checked_add(i128::from(*digit) * 10i128.checked_pow(place as u32)?)?;
+        } else if place == -1 && *digit >= 5 {
+            value += 1;
+        }
+    }
+    let value = if negative { -value } else { value };
+    Some(i64::try_from(value).ok())
 }
 
 fn parse_real(value: &str) -> Result<f64, SemanticError> {
