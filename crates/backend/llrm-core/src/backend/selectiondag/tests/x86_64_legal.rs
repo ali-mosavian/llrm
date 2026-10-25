@@ -22,7 +22,7 @@ fn legalized_add(tli: &TargetLowering) -> (SelectionDAG, SDValue) {
     let sum = dag.get_node(ISD::Add, EVT::I64, &[a, b]);
     dag.set_root(sum);
     TypeLegalizer::new(&mut dag, tli).run().expect("types legalize");
-    DagLegalizer::new(&mut dag, tli, &mut X86Lowering { cmov: true }).run().expect("legalizes");
+    DagLegalizer::new(&mut dag, tli, &mut X86Lowering { cmov: true, sse2: false }).run().expect("legalizes");
     let root = dag.get_root();
     (dag, root)
 }
@@ -47,7 +47,7 @@ fn an_i64_select_is_a_cmov() {
     let select = dag.get_node(ISD::Select, EVT::I64, &[c, a, b]);
     dag.set_root(select);
     TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true }).run().expect("legalizes");
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false }).run().expect("legalizes");
     let root = dag.get_root();
     assert_eq!((dag.opcode(root), dag.value_type(root)), (x86isd::CMOV, EVT::I64));
 }
@@ -72,7 +72,7 @@ fn legalized_float_op(
     let node = dag.get_node(op, vt, &[x]);
     dag.set_root(node);
     TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true }).run().expect("legalizes");
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false }).run().expect("legalizes");
     let root = dag.get_root();
     (dag, root)
 }
@@ -135,7 +135,7 @@ fn fcopysign_of_a_float_is_two_masks_and_an_or() {
     let node = dag.get_node(ISD::FCopySign, f32v, &[m, s]);
     dag.set_root(node);
     TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true }).run().expect("legalizes");
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false }).run().expect("legalizes");
     let root = dag.get_root();
     assert_eq!((dag.opcode(root), dag.value_type(root)), (x86isd::FOR, f32v));
     for mask in [(1u128 << 31) - 1, 1 << 31] {
@@ -153,7 +153,32 @@ fn an_f32_to_f64_extend_survives_legalization() {
     let node = dag.get_node(ISD::FpExtend, EVT::Simple(MVT::F64), &[x]);
     dag.set_root(node);
     TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true }).run().expect("legalizes");
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false }).run().expect("legalizes");
     let root = dag.get_root();
     assert_eq!(dag.opcode(root), ISD::FpExtend);
+}
+
+/// Integer to float went through `fild` and a stack slot at SSE2; the pin
+/// keeps `sint_to_fp` of `i32`/`i64` (`cvtsi2sd`) and widens `i16`, and turns
+/// an unsigned `i32` into a signed `i64` convert.
+#[test]
+fn int_to_float_at_sse2_is_a_register_convert() {
+    let tli = TargetLowering::x86_64(Features { sse2: true, cmov: true, ..Features::default() }, MVT::I64);
+    for (op, src, shown) in [
+        (ISD::SIntToFp, EVT::I32, EVT::I32),
+        (ISD::SIntToFp, EVT::I64, EVT::I64),
+        (ISD::SIntToFp, EVT::I16, EVT::I32),
+        (ISD::UIntToFp, EVT::I32, EVT::I64),
+    ] {
+        let mut dag = SelectionDAG::new(DagConfig { pointer: EVT::I64, ..DagConfig::default() });
+        let f64v = EVT::Simple(MVT::F64);
+        let x = dag.get_register(src, 1);
+        let node = dag.get_node(op, f64v, &[x]);
+        dag.set_root(node);
+        TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
+        DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: true }).run().expect("legalizes");
+        let root = dag.get_root();
+        let from = dag.value_type(dag.operand(root, 0));
+        assert_eq!((dag.opcode(root), from), (ISD::SIntToFp, shown), "{op:?} {src:?}");
+    }
 }

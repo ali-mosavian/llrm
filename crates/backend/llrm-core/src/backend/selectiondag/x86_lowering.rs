@@ -128,6 +128,8 @@ pub mod cond {
 /// The custom lowerings, for a CPU with or without CMOV.
 pub struct X86Lowering {
     pub cmov: bool,
+    /// Scalar floats live in xmm registers (`isScalarFPTypeInSSEReg`).
+    pub sse2: bool,
 }
 
 impl CombineHooks for X86Lowering {
@@ -301,7 +303,7 @@ impl Hooks for X86Lowering {
             ISD::VAStart => lower_vastart(dag, node),
             ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node),
             ISD::LRint => lower_lrint(dag, node),
-            ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node),
+            ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node, self.sse2),
             ISD::ConstantPool => lower_constant_pool(dag, node),
             ISD::JumpTable => lower_jump_table(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
@@ -1254,6 +1256,7 @@ fn build_fild(
 fn lower_int_to_fp(
     dag: &mut SelectionDAG,
     node: SDValue,
+    sse2: bool,
 ) -> Option<SDValue> {
     let signed = dag.opcode(node) == ISD::SIntToFp;
     let dst = dag.value_type(node);
@@ -1263,6 +1266,20 @@ fn lower_int_to_fp(
         return None;
     }
     let pointer = dag.config().pointer;
+    if sse2 && matches!(dst, EVT::Simple(MVT::F32 | MVT::F64)) {
+        let in_reg = |bits| src_vt.size_in_bits() == bits;
+        if signed && (in_reg(32) || (in_reg(64) && pointer == EVT::I64)) {
+            return Some(node);
+        }
+        if signed && in_reg(16) {
+            let wide = dag.get_node(ISD::SignExtend, EVT::I32, &[src]);
+            return Some(dag.get_node(ISD::SIntToFp, dst, &[wide]));
+        }
+        if !signed && in_reg(32) && pointer == EVT::I64 {
+            let wide = dag.get_node(ISD::ZeroExtend, EVT::I64, &[src]);
+            return Some(dag.get_node(ISD::SIntToFp, dst, &[wide]));
+        }
+    }
     let chain = dag.entry_node();
     let store_info = |index: i32, vt: EVT, size: u32| MemInfo {
         mem_vt: vt,
