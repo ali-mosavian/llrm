@@ -931,7 +931,6 @@ fn staged(
             },
             false,
             landing.is_some(),
-            target.cpu.size,
         ) {
         registers.free = true;
         // Saved as any kept register is: its root, and the register a prologue
