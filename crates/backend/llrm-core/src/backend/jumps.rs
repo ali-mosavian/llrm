@@ -682,13 +682,13 @@ impl Mentions {
     }
 }
 
-/// Per block, the virtual values live on entry.
 #[cfg(test)]
 thread_local! {
     /// How many times every value's liveness was solved at once.
     pub(crate) static LIVE_SOLVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// Per block, the virtual values live on entry.
 fn _live_values(blocks: &[Block]) -> IndexMap<i64, BTreeSet<u32>> {
     #[cfg(test)]
     LIVE_SOLVES.with(|solves| solves.set(solves.get() + 1));
