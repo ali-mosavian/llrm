@@ -2061,3 +2061,34 @@ fn a_lowered_function_says_its_float_math_is_extended() {
     let text = llrm_mir::print::module(&emitted.module);
     assert!(text.contains("\"llrm-fp-eval\"=\"x87-extended\""), "{text}");
 }
+
+/// `declare_outside` skips the value types of every op `names_intrinsic`
+/// refuses (8,571 type lookups a compile, 1.4 M Ir); no op it refuses may name
+/// a callee on any pair of types, or that callee would go undeclared.
+#[test]
+fn test_names_intrinsic_covers_every_op_that_names_a_callee() {
+    use llrm_mir::types::{FloatKind, Type, Types};
+    let mut types = Types::default();
+    let kinds = [
+        types.intern(Type::Float(FloatKind::Float)),
+        types.intern(Type::Float(FloatKind::Double)),
+        types.int(8),
+        types.int(16),
+        types.int(32),
+        types.ptr(0),
+        types.ptr(1),
+    ];
+    for op in Op::ALL {
+        for from in kinds {
+            for to in kinds {
+                let named = crate::mir::intrinsic(&types, *op, from, to).is_some()
+                    || crate::mir::fixed(&mut types, *op, from).is_some()
+                    || crate::mir::ptrdiff(&types, from, to).is_some() && *op == Op::PtrDiff;
+                assert!(
+                    !named || crate::mir::names_intrinsic(*op),
+                    "{op:?} names a callee but names_intrinsic refuses it"
+                );
+            }
+        }
+    }
+}
