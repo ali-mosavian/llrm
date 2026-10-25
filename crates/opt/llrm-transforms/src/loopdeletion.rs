@@ -720,7 +720,8 @@ fn break_loop_backedge(
         // it unreachable we gracefully handle corner cases such as switch and
         // invoke terminators.
         let bridge = run.function.create_block(None);
-        run.function.insert_block(bridge, None).expect("a new block");
+        // `SplitEdge(Latch, Header)`.
+        crate::edges::insert_edge_split(run.function, bridge, latch, header);
         let unreachable =
             run.function.create_instruction(Opcode::Unreachable, void, Vec::new(), Flags::default(), None);
         run.function.insert(unreachable, Position::End(bridge)).expect("a placed block");
