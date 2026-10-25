@@ -656,7 +656,7 @@ pub fn assembled(
     made
 }
 
-/// The blocks this thread assembled, not looked up.
+// The blocks this thread assembled, not looked up.
 #[cfg(test)]
 thread_local! {
     pub static ASSEMBLED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
