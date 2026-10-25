@@ -2428,7 +2428,7 @@ pub fn eliminate_constraints(
             let mut q = Query::bare(&*context, &*function, layout);
             q.globals = declarations;
             q.metadata = metadata;
-            process(&q, &tree, &mut info, cb, &mut dfs_in_stack, &mut actions);
+            process(&q, &tree, &positions, &mut info, cb, &mut dfs_in_stack, &mut actions);
         }
         for action in actions {
             changed |= apply(context, function, &tree, &positions, action, &mut to_remove);
@@ -2502,13 +2502,16 @@ fn qualifying_uses(
 fn process(
     q: &Query,
     tree: &DomTree,
+    positions: &[u32],
     info: &mut ConstraintInfo,
     cb: &FactOrCheck,
     dfs_in_stack: &mut Vec<StackEntry>,
     actions: &mut Vec<Action>,
 ) {
     match cb.entry {
-        Entry2::InstCheck { .. } | Entry2::UseCheck { .. } => process_check(q, tree, info, cb, dfs_in_stack, actions),
+        Entry2::InstCheck { .. } | Entry2::UseCheck { .. } => {
+            process_check(q, tree, positions, info, cb, dfs_in_stack, actions)
+        }
         Entry2::InstFact { inst } => process_inst_fact(q, info, cb, dfs_in_stack, inst),
         Entry2::ConditionFact { cond, does_hold } => {
             if let Some(pre) = does_hold
@@ -2694,6 +2697,7 @@ fn side_is_known_positive(
 fn process_check(
     q: &Query,
     tree: &DomTree,
+    positions: &[u32],
     info: &mut ConstraintInfo,
     cb: &FactOrCheck,
     dfs_in_stack: &mut Vec<StackEntry>,
@@ -2740,7 +2744,8 @@ fn process_check(
             actions.push(Action::Overflow { inst, op, signed });
         }
     } else if let Some((pred, a, b)) = pattern::icmp_like(q, Operand::Value(result)) {
-        let simplified = check_and_replace_condition(q, tree, info, pred, a, b, inst, context_inst, cb, actions);
+        let simplified =
+            check_and_replace_condition(q, tree, positions, info, pred, a, b, inst, context_inst, cb, actions);
         if !simplified
             && q.function
                 .instruction(context_inst)
@@ -2803,6 +2808,7 @@ fn process_check(
 fn check_and_replace_condition(
     q: &Query,
     tree: &DomTree,
+    positions: &[u32],
     info: &mut ConstraintInfo,
     pred: CmpPredicate,
     a: Side,
@@ -2812,7 +2818,6 @@ fn check_and_replace_condition(
     cb: &FactOrCheck,
     actions: &mut Vec<Action>,
 ) -> bool {
-    let positions = positions_of(q);
     let replace = |is_true: bool, actions: &mut Vec<Action>| {
         let uses = qualifying_uses(q, tree, &positions, check, context_inst, cb.num_in, cb.num_out);
         let changed = !uses.is_empty();
@@ -2831,10 +2836,6 @@ fn check_and_replace_condition(
         return replace(implied, actions);
     }
     false
-}
-
-fn positions_of(q: &Query) -> Vec<u32> {
-    q.function.positions()
 }
 
 /// `checkOrAndOpImpliedByOther`: whether either the first condition of an AND

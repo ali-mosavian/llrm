@@ -638,6 +638,7 @@ impl Function {
     /// Each instruction's index in its block, by id; erased and unplaced ones
     /// are zero.
     pub fn positions(&self) -> Vec<u32> {
+        crate::counts::bump(crate::counts::Event::Positions);
         let mut positions = vec![0; self.instructions.len()];
         for &block in self.layout() {
             for (index, inst) in self.iter_block(block).enumerate() {

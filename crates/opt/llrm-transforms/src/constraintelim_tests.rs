@@ -182,3 +182,24 @@ b0:
     );
     assert!(text.contains("ret i1 %c"), "{text}");
 }
+
+/// Every compare check worked out the position of every instruction of the
+/// function again: 3.2 M of the 6.7 M Ir the pass took on a 1,283-instruction
+/// d_faces body. The cost must not grow with the number of checks.
+#[test]
+fn the_positions_of_the_instructions_are_not_worked_out_per_check() {
+    let positions_for = |checks: u32| {
+        let mut body = String::from(
+            "declare void @use(i1)\ndefine i1 @f(i32 %x) {\nb0:\n  %c0 = icmp ult i32 %x, 5\n  br i1 %c0, label %b1, label %b2\nb1:\n",
+        );
+        for n in 1..=checks {
+            body.push_str(&format!("  %d{n} = icmp ult i32 %x, {}\n  call void @use(i1 %d{n})\n", 10 + n));
+        }
+        body.push_str(&format!("  ret i1 %d{checks}\nb2:\n  ret i1 false\n}}\n"));
+        let before = llrm_mir::counts::get(llrm_mir::counts::Event::Positions);
+        let text = eliminated(&body);
+        assert!(text.contains("ret i1 true"), "{text}");
+        llrm_mir::counts::get(llrm_mir::counts::Event::Positions) - before
+    };
+    assert_eq!(positions_for(1), positions_for(20));
+}
