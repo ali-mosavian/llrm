@@ -1350,9 +1350,8 @@ impl Spiller for InlineSpiller<'_> {
         crate::liveness::liveintervals::COMPUTED.with(|one| one.borrow_mut().clear());
         let first_new = new_vregs.len();
         // Bisection aid: only the first N spills are written inline.
-        if std::env::var("LLRM_GREEDY_SPILLS")
-            .ok()
-            .and_then(|n| n.parse::<usize>().ok())
+        if llrm_support::env_var("LLRM_GREEDY_SPILLS")
+            .and_then(|n| n.to_str()?.parse::<usize>().ok())
             .is_some_and(|n| self.spilled.len() > n)
         {
             self.failed = true;
