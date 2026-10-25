@@ -21,7 +21,7 @@ Directly after instruction selection, before OptimizePHIs (`llc -O2 -debug-pass=
 `LirBlock` has `phis` (`Phi { result, incoming: Vec<(pred, value)> }`), `succ`, `odds` per edge, and unique values numbered by `next_value`. A copy needs new block-local values and, for a duplicated instruction, the new defs; a new edge pred -> succ needs its odds.
 
 ## Steps (one PR each, fail-first from a hand-built LIR body, pinned against `llc -stop-after`)
-1. 2026-10-27: `shouldTailDuplicate` pre-RA + `canCompletelyDuplicateBB` as a function over a body; unit tests on the pin's cases (a diamond's join, an indirect branch, a call, -Os).
-2. 2026-10-29: `tailDuplicate` of a tail with no phis and no value read outside it (the pin's simplest case: copy the instructions into the predecessor in place of its jump), odds updated.
+1. 2026-10-27 (#4561): `shouldTailDuplicate` pre-RA + `canCompletelyDuplicateBB` as a function over a body; unit tests on the pin's cases (a diamond's join, an indirect branch, a call, -Os).
+2. 2026-10-29 (this step, done 10-25): `tailDuplicate` of a tail with no phis and no value read outside it (the pin's simplest case: copy the instructions into the predecessor in place of its jump), odds updated.
 3. 2026-11-01: tails with phis and successors with phis (`processPHI`, `updateSuccessorsPHIs`) and the SSA update; the registry slot (parity row `early-tailduplication`) and slot-table row 34 become MATCH or a numbered DEVIATE.
 4. Ledger after each: objsweep, QCport, the 71 bench programs under both selectors (the pin's effect on its own bench is 0.008% of clocks: row 34), and what it does for `ret` duplication (STRISTMP-1).
