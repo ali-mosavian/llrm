@@ -174,6 +174,11 @@ impl FunctionPass for CgpAddr {
             unit.function,
             analyses.outer().target().lowering().as_deref(),
         );
+        // `optimizeSwitchInst`'s `optimizeSwitchType`.
+        let switches = match analyses.outer().target().lowering() {
+            Some(lowering) => crate::cgpswitch::switch_types_widened(unit.context, &*lowering, unit.function),
+            None => false,
+        };
         // Blocks and edges are as they were.
         let one_flag = !analyses.outer().target().multiple_condition_registers();
         let sunk_compares = one_flag && compares_sunk(unit.function);
@@ -234,6 +239,7 @@ impl FunctionPass for CgpAddr {
             || split
             || remainders
             || compares
+            || switches
         {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else if closed {

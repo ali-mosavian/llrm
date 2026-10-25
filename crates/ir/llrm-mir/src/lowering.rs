@@ -187,6 +187,16 @@ pub trait Lowering {
         false
     }
 
+    /// `getPreferredSwitchConditionType`, in bits: the width a switch on an
+    /// integer of `bits` is widened to (`optimizeSwitchType`). The base class
+    /// keeps the type.
+    fn preferred_switch_condition_bits(
+        &self,
+        bits: u32,
+    ) -> u32 {
+        bits
+    }
+
     /// `isMultiStoresCheaperThanBitsMerge(EVT, EVT)` (TargetLowering.h):
     /// whether a store of two values merged into one wider integer is
     /// better made two stores. The base class says no; x86 says yes for a
