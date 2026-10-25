@@ -46,12 +46,19 @@ pub const LLRM_CODE: u16 = 24582;
 /// The machine opcode `LLRM_CODE` becomes.
 pub const CODE_OPCODE: u16 = 30013;
 
+/// `X86ISD::LLRM_PORT` (sdag-a): an `in` or an `out`.
+pub const LLRM_PORT: u16 = 24586;
+
+/// The machine opcode `LLRM_PORT` becomes.
+pub const PORT_OPCODE: u16 = 30014;
+
 /// The pseudo opcode an llrm node of this id becomes.
 pub fn llrm_opcode(node: u16) -> Option<u16> {
     match node {
         SEGMENT_OF => Some(SEGMENT_OF_OPCODE),
         LLRM_FARCALL => Some(FARCALL_OPCODE),
         LLRM_CODE => Some(CODE_OPCODE),
+        LLRM_PORT => Some(PORT_OPCODE),
         n if LLRM_NODES.contains(&n) => Some(LLRM_ASM_OPCODE),
         _ => None,
     }
