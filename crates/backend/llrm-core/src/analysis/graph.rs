@@ -82,6 +82,40 @@ impl Fact for LoopDepths {
     }
 }
 
+/// The control-flow graph and its dominator tree, a fact of the blocks' labels
+/// and successors like `LoopDepths`: the sink, live intervals and the passes
+/// after each ask them of one body again and again.
+pub struct Dominance;
+
+impl Fact for Dominance {
+    type Result = (crate::liveness::cfg::Cfg, crate::liveness::cfg::DomTree);
+    type Inputs = Shape;
+    const NAME: &'static str = "dominance";
+
+    fn run(body: &LirBody) -> Self::Result {
+        let cfg = crate::liveness::cfg::Cfg::of(body);
+        let tree = crate::liveness::cfg::DomTree::of(&cfg);
+        (cfg, tree)
+    }
+
+    fn inputs(body: &LirBody) -> Shape {
+        Shape::of(body)
+    }
+
+    fn held_by(
+        kept: &Shape,
+        body: &LirBody,
+    ) -> bool {
+        kept.holds(body)
+    }
+}
+
+/// `body`'s control-flow graph and dominator tree, as kept while its blocks'
+/// labels and successors are those of the last ask.
+pub fn dominance(body: &LirBody) -> (crate::liveness::cfg::Cfg, crate::liveness::cfg::DomTree) {
+    (*body.facts.0.get::<Dominance>(body)).clone()
+}
+
 pub struct Edges;
 
 impl Fact for Edges {
@@ -169,5 +203,23 @@ mod tests {
         let moved = body.with_blocks(moved);
         crate::backend::spillplacement::edge_bundles(&moved);
         assert_eq!(body.facts.0.runs::<crate::backend::spillplacement::EdgeBundles>(), 2, "a moved edge, old bundles");
+    }
+
+    /// The sink and the live intervals each built the graph and its dominator
+    /// tree of a body (d_faces dist: 25 trees and 16 graphs, 0.9 M Ir). The
+    /// second asker of a body that kept its edges gets the first's; an edge
+    /// that moved is a tree of its own.
+    #[test]
+    fn test_the_dominator_tree_is_found_once_for_bodies_that_keep_the_edges() {
+        let body = diamond();
+        let first = super::dominance(&body);
+        let rewritten = body.with_blocks(body.blocks.iter().map(|block| block.with_insns(Vec::new())).collect());
+        assert_eq!(super::dominance(&rewritten), first);
+        assert_eq!(body.facts.0.runs::<super::Dominance>(), 1, "a second asker built the tree again");
+        let mut moved = body.blocks.clone();
+        moved[1].succ = vec![].into();
+        let moved = body.with_blocks(moved);
+        assert_ne!(super::dominance(&moved).0, first.0, "an edge that moved");
+        assert_eq!(body.facts.0.runs::<super::Dominance>(), 2, "a moved edge was answered from the old tree");
     }
 }

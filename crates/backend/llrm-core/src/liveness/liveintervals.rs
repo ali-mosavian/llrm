@@ -149,8 +149,7 @@ impl LiveIntervals {
         BUILT.with(|one| one.set(one.get() + 1));
         assert!(body.blocks.iter().all(|block| block.phis.is_empty()), "phis are eliminated before allocation");
         let indexes = SlotIndexes::new(body);
-        let cfg = Cfg::of(body);
-        let dom = DomTree::of(&cfg);
+        let (cfg, dom) = crate::analysis::graph::dominance(body);
         let mut found = Self {
             indexes,
             cfg,

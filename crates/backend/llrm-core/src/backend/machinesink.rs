@@ -368,8 +368,7 @@ impl Sinker {
                 ..before
             };
         }
-        let cfg = Cfg::of(body);
-        let dom = DomTree::of(&cfg);
+        let (cfg, dom) = crate::analysis::graph::dominance(body);
         let post = post_dominators(&cfg);
         let position: IndexMap<i64, usize> =
             body.blocks.iter().enumerate().map(|(number, block)| (block.at, number)).collect();

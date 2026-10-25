@@ -25,7 +25,7 @@ use crate::model::lir::LirBody;
 use crate::support::hash::HashMap;
 
 /// Blocks by number, with their edges.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Cfg {
     pub preds: Vec<Vec<usize>>,
     pub succs: Vec<Vec<usize>>,
@@ -61,7 +61,7 @@ impl Cfg {
 }
 
 /// `MachineDominatorTree`: immediate dominators and the dominance test.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct DomTree {
     idom: Vec<Option<usize>>,
     tin: Vec<u32>,
