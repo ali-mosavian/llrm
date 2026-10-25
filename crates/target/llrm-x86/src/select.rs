@@ -2391,6 +2391,12 @@ pub fn emit_in(
         {
             return _assemble(&raised(create_mem(code, built)), at, relocated);
         }
+        // An indirect sibling call: the callee's address in a register.
+        if let Loc::Reg(one) = &sources[0]
+            && i64::from(one.width) == near
+        {
+            return _assemble(&raised(create_reg(code, one.register)), at, true);
+        }
         return None;
     }
     if op == Operation::Call && what.indirect && sources.len() == 1 {

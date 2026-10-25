@@ -2,7 +2,7 @@
 //! stack, runtime routines, landing pads, ports and inline blocks.
 
 use super::dag_function::selected;
-use super::dag_function_tests::{FAR_CALL, M16_STACK_ARGS, Stub, select_with_contracts, verdicts};
+use super::dag_function_tests::{FAR_CALL, M16_STACK_ARGS, Stub, names, select_with_contracts, verdicts};
 use crate::model::ir::Operation;
 
 const CALL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -671,4 +671,52 @@ fn port_writes_and_reads_stay_in_order() {
         .filter_map(|w| w.name.as_deref())
         .collect();
     assert_eq!(names, ["out", "in"]);
+}
+
+const INVOKE_RESULT_READ_BELOW: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define cc 1000 void @f() addrspace(1) personality ptr addrspace(1) @llrm.qb.personality {
+entry:
+  %0 = invoke cc 1000 addrspace(1) ptr @llrm.qb.B$FCHR(i16 65) to label %next unwind label %landing
+next:
+  invoke cc 1000 addrspace(1) void @llrm.qb.B$PESD(ptr %0) to label %done unwind label %landing
+done:
+  ret void
+landing:
+  %e = landingpad { ptr, i32 } catch ptr null
+  ret void
+}
+declare cc 1000 ptr @llrm.qb.B$FCHR(i16) addrspace(1)
+declare cc 1000 void @llrm.qb.B$PESD(ptr) addrspace(1)
+declare i32 @llrm.qb.personality(...) addrspace(1)
+";
+
+/// An invoke's result read in its normal block: the export copy to a virtual
+/// register was skipped (a terminator), so the value was read where no path
+/// defined it ('value N is read and not defined on every path': the QB
+/// programs with ON ERROR, erlnum, intrinsics_errors_*, ownf_err_*, resdiv,
+/// resnext).
+#[test]
+fn an_invokes_result_read_in_the_normal_block_is_defined() {
+    select_with_contracts(INVOKE_RESULT_READ_BELOW).unwrap_or_else(|why| panic!("{why}"));
+}
+
+const SDIV_FIX: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a, i32 %b) {
+entry:
+  %r = call i32 @llvm.sdiv.fix.i32(i32 %a, i32 %b, i32 9)
+  ret i32 %r
+}
+declare i32 @llvm.sdiv.fix.i32(i32, i32, i32 immarg)
+";
+
+/// `sdiv.fix` is a divide of the numerator shifted up by the scale, rounded
+/// toward negative infinity. The builder widens by one bit and the i33 result
+/// stopped the type legalizer (`promote result`: `nbody_fixed` under
+/// `--isel=dag`).
+#[test]
+fn a_fixed_point_divide_is_selected() {
+    let made = names(SDIV_FIX).unwrap_or_else(|why| panic!("{why}"));
+    // the numerator shifted up, the 64-bit divide and remainder as helper calls
+    assert!(made.iter().any(|name| name == "shld"), "{made:?}");
+    assert_eq!(made.iter().filter(|name| *name == "call").count(), 2, "{made:?}");
 }
