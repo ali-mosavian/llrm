@@ -636,6 +636,9 @@ fn moves_stack(body: &crate::model::lir::LirBody) -> bool {
 /// than this one's (cdecl's ECX and EDX under Watcom's) takes the caller's
 /// value.
 fn saved_of(procedure: &Procedure) -> Vec<RegId> {
+    if let Some(saved) = &procedure.body.frame_saved {
+        return saved.clone();
+    }
     let found = procedure.body.facts.0.get::<BodyRoots>(&procedure.body);
     let mut roots = if procedure.registers.free {
         found.of_values(procedure.body.regs(), procedure.registers.pointer)
@@ -747,6 +750,7 @@ pub fn exits_inserted(procedure: Procedure) -> Procedure {
     if sequences.exit.is_empty() {
         return procedure;
     }
+    let saved = saved_of(&procedure);
     let blocks: Vec<crate::model::lir::Block> = procedure
         .body
         .blocks
@@ -771,7 +775,7 @@ pub fn exits_inserted(procedure: Procedure) -> Procedure {
         })
         .collect();
     let body = procedure.body.with_blocks(blocks);
-    Procedure { body: lir::LirBody { frame_exit: Some(omit), ..body }, ..procedure }
+    Procedure { body: lir::LirBody { frame_exit: Some(omit), frame_saved: Some(saved), ..body }, ..procedure }
 }
 
 /// The stack-limit comparison once the frame is allocated, if the procedure

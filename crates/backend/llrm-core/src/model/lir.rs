@@ -1150,6 +1150,9 @@ pub struct LirBody {
     /// frame register was omitted (`true`) or kept (`false`)
     /// (`masm::exits_inserted`); the printer adds nothing at a return.
     pub frame_exit: Option<bool>,
+    /// The registers the frame saved, found before its exit was made: the
+    /// exit's own pops name them and the frame register.
+    pub frame_saved: Option<Vec<RegId>>,
     /// What `-g` says of its variables at points in the code, by the numbers
     /// `DebugTags::before` holds.
     pub notes: Arc<Vec<DebugNote>>,
@@ -1330,6 +1333,7 @@ impl LirBody {
             cfa_variables: false,
             saved_first: false,
             frame_exit: None,
+            frame_saved: None,
             notes: Arc::default(),
             arguments_in_cells: Arc::default(),
             facts: Default::default(),
@@ -1397,6 +1401,7 @@ impl LirBody {
             cfa_variables: self.cfa_variables,
             saved_first: self.saved_first,
             frame_exit: self.frame_exit,
+            frame_saved: self.frame_saved.clone(),
             notes: Arc::clone(&self.notes),
             arguments_in_cells: Arc::clone(&self.arguments_in_cells),
             facts: self.facts.clone(),
