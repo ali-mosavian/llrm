@@ -183,3 +183,17 @@ fn gorilla_reaches_its_menu_on_arm64() {
     );
     assert!(screen.contains("Your Choice?"), "{screen}");
 }
+
+/// `ON ERROR GOTO` landed nowhere on arm64: `ERROR 5` ended the program (exit 1) before the handler printed anything.
+/// The handler now runs, RESUME NEXT continues after the faulting statement, and the module handler also takes an
+/// error raised in a procedure that has none.
+#[test]
+fn on_error_lands_in_its_handler_on_arm64() {
+    let module = b"ON ERROR GOTO h\r\nERROR 5\r\nPRINT \"after\"\r\nEND\r\nh:\r\nPRINT \"err\"; ERR\r\nRESUME NEXT\r\n";
+    assert_eq!(run_basic("onerror", module).split_whitespace().collect::<Vec<_>>(), ["err", "5", "after"]);
+    let procedure = b"DECLARE SUB s ()\r\nON ERROR GOTO h\r\ns\r\nPRINT \"back\"\r\nEND\r\nh:\r\nPRINT \"mod\"; ERR\r\nRESUME NEXT\r\nSUB s\r\nERROR 7\r\nPRINT \"in s\"\r\nEND SUB\r\n";
+    assert_eq!(
+        run_basic("onerror_sub", procedure).split_whitespace().collect::<Vec<_>>(),
+        ["mod", "7", "in", "s", "back"]
+    );
+}

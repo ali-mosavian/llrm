@@ -1,6 +1,5 @@
-/* ON ERROR GOTO on a host that has no landing yet (docs/working/qb-host.md, open rows): the registration is kept, ERR
-   and ERROR work, and an error that reaches a handler ends the program (qb_land in startup.c). A program that never
-   raises an error behaves as on DOS. */
+/* ON ERROR GOTO on a host: B$OEGA keeps the registration, and an error that reaches a handler lands in it (qb_land
+   in startup.c, through the frame below). */
 #include "error.h"
 
 extern void on_error(unsigned target);
@@ -24,4 +23,22 @@ short B_FERR(void)
 void B_RESN(void)
 {
     qb_end();
+}
+
+/* The landing (qb_land in startup.c): a function with an ON ERROR handler registers a jmp_buf here at entry and takes
+   it back before it returns (crates/frontends/qb/src/arm64.rs, `framed`). */
+void *qb_host_frame_top;
+
+void *qb_host_frame(void *frame)
+{
+    void *before = qb_host_frame_top;
+
+    qb_host_frame_top = frame;
+    return before;
+}
+
+/* Hands a stack slot to code the optimizer cannot see into, so the slot lives in memory across a landing. */
+void qb_host_escape(void *slot)
+{
+    (void)slot;
 }

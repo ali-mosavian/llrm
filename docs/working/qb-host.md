@@ -82,7 +82,7 @@ runtime/qb/                portable runtime; touches the machine only through ru
     there is no macOS x86-64 build.
 16. GORILLA and NIBBLES on x86-64 (`llrm-qb -m64`, ELF64; `PRINT "HELLO"` runs, `tests/qb_x86_64_host.rs`): wait on D64-4
     (SSE forms #4636, xmm class #4638, DAG float nodes #4678/#4643, S4, S5; `x86-64-dag-plan.md`). Also open here: the
-    64-bit runtime frame (`B$ENRA`/`B$EXSA`), the `ON ERROR` landing (`qb_land` ends the program), the stack-block entries
+    64-bit runtime frame (`B$ENRA`/`B$EXSA`), the `ON ERROR` landing (done on arm64: setjmp frames, `qb_land` longjmps), the stack-block entries
     (`B$DDIM`, `B$CLOS`, ...). Retry when #4638 and S4 land.
 17. arm64: what the spike has (`docs/architecture/arm64-spike.md`): MIR (after the shared mid-end) to AArch64 in
     `llrm-arm64` (isel, regalloc, frame, encoder), Darwin and Linux AAPCS64, Mach-O and ELF writers, floats, structs,
