@@ -281,13 +281,17 @@ fn test_a_masked_far_subscript_compiles() {
     );
     let program = parsed_as(&basic, "qb45", "qb45");
     object_bytes(&program, "MASKED.BAS").expect("compiles");
-    // The proven-exact `s(i)` addresses through a doubled 32-bit index, its
-    // shift gone and the upper halves zeroed once before the loop.
+    // The masked `s(i)` is a 16-bit offset doubled by an add and cut to the
+    // array's 1022 (no `shl`, no 32-bit index to widen), and the unmasked
+    // `u(x)` addresses through a doubled 32-bit index whose upper half is
+    // zeroed once before the loop.
     let text = listing(&program);
     let body = &text[text.find("T proc").expect("T proc")..text.find("T endp").expect("T endp")];
-    let index = regex::Regex::new(r"fs:\[(e\w\w)\+(e\w\w)(\*2)?\]").unwrap();
+    let mask = regex::Regex::new(r"and (\w+), 1022\n\s+mov \w+, word ptr fs:\[(\w+)\]").unwrap();
+    let masked = mask.captures(body).is_some_and(|one| one[1] == one[2]);
+    let index = regex::Regex::new(r"es:\[(e\w\w)\+(e\w\w)(\*2)?\]").unwrap();
     let doubled = index.captures_iter(body).any(|one| one.get(3).is_some() || one[1] == one[2]);
-    assert!(doubled && body.contains("movzx") && !body.contains("shl"), "{body}");
+    assert!(masked && doubled && body.contains("movzx") && !body.contains("shl"), "{body}");
 }
 
 /// The main body of `source`'s listing.
@@ -538,17 +542,25 @@ fn test_a_raise_under_an_error_handler_resumes_after_its_statement() {
     // holds the conversions' scratch cells), and RESUME NEXT from that
     // statement continues at the PRINT.
     let raised =
-        regex::Regex::new(r"mov word ptr \$QB\$FRAME\+\d+, (\d+)\n    pushw 5\n    call far ptr B\$SERR").unwrap();
+        regex::Regex::new(r"mov word ptr (?:ss:)?\$QB\$FRAME\+\d+, (\d+)\n    pushw 5\n    call far ptr B\$SERR")
+            .unwrap();
     let statement = &raised.captures(&assembly).unwrap_or_else(|| panic!("{assembly}"))[1];
-    // The dispatch continues at the statement's resume point, laid next
-    // (`jne` past it) or branched to (`je`) as the placement falls.
-    let dispatch = regex::Regex::new(&format!(r"cmp ax, {statement}\n    (?:jne \w+\n(\w+):|je (\w+))\n")).unwrap();
-    let found = dispatch.captures(&assembly).unwrap_or_else(|| panic!("{assembly}"));
-    let label = found.get(1).or_else(|| found.get(2)).unwrap().as_str();
-    let start = assembly.find(&format!("\n{label}:\n")).unwrap_or_else(|| panic!("{assembly}"));
-    let next = &assembly[start..];
-    let next = &next[..next.find("jmp ").unwrap_or(next.len())];
-    assert!(next.contains("call far ptr B$PER4"), "{assembly}");
+    // The dispatch compares the frame's statement cell with the raising
+    // statement and branches (`jmp`, past a `jne` for any other) to its
+    // resume point, which may reload what the statement left unset and jump
+    // on to the PRINT.
+    let dispatch = regex::Regex::new(&format!(
+        r"cmp word ptr (?:ss:)?\$QB\$FRAME\+\d+, {statement}\n    jne \w+\n    jmp (\w+)\n"
+    ))
+    .unwrap();
+    let resume = &dispatch.captures(&assembly).unwrap_or_else(|| panic!("{assembly}"))[1];
+    let start = assembly.find(&format!("\n{resume}:\n")).unwrap_or_else(|| panic!("{assembly}"));
+    let block = &assembly[start..];
+    let block = &block[..block.find("jmp ").map_or(block.len(), |at| at + block[at..].find('\n').unwrap())];
+    let target = block.rsplit("jmp ").next().unwrap().trim();
+    let print = &assembly[assembly.find(&format!("\n{target}:\n")).unwrap_or_else(|| panic!("{assembly}"))..];
+    let print = &print[..print.find("call far ptr B$PER4").map_or(0, |at| at + 1)];
+    assert!(!print.is_empty() && print.lines().count() < 8, "{assembly}");
 }
 
 /// ENT_MOVE_TRIGS passed a four-byte far field address to a two-byte scalar
