@@ -120,12 +120,12 @@ b0:
   %mux = select i1 %c, ptr %p, ptr %q
   br i1 %or.cond, label %0, label %end
 
-end:
-  ret void
-
 0:
   store i16 1, ptr %mux
   br label %end
+
+end:
+  ret void
 }
 ",
         &[],
