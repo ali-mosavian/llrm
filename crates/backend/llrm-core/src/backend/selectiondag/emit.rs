@@ -217,7 +217,7 @@ struct Emitter<'a, 'd> {
     /// (`constrainRegClass`).
     classes: Vec<(u32, &'static str)>,
     /// `CopyFromReg` of the stack pointer: addresses through `SP`.
-    sp_values: std::collections::HashSet<SDValue>,
+    sp_values: llrm_mir::hash::HashSet<SDValue>,
     /// The value each of EAX/EDX (AX/DX) holds for the division or multiply
     /// that reads it, set by the `CopyToReg` the matcher glues to it or by the
     /// instruction before.
@@ -251,7 +251,7 @@ struct Emitter<'a, 'd> {
     /// Whether that selector is SS: the cells through ES are then the frame's.
     es_is_ss: bool,
     /// The `CopyToReg ES` nodes that copy SS.
-    ss_copies: std::collections::HashSet<u32>,
+    ss_copies: llrm_mir::hash::HashSet<u32>,
     /// What each `CopyToReg ES` put there, by node: a cell takes the one of
     /// the copy it is chained after, whatever was set last.
     es_copies: HashMap<u32, Held>,
@@ -266,7 +266,7 @@ struct Emitter<'a, 'd> {
     /// wrote the flags, for the `adc`/`sbb` that still reads it.
     saved_carry: HashMap<u32, Held>,
     /// The `CopyToReg EFLAGS` nodes emitted.
-    flag_copies_done: std::collections::HashSet<u32>,
+    flag_copies_done: llrm_mir::hash::HashSet<u32>,
 }
 
 /// The last lowered select: the block that branches, the one it skips, the
@@ -372,7 +372,7 @@ pub fn emit_in(
         origins: HashMap::new(),
         es: None,
         es_is_ss: false,
-        ss_copies: std::collections::HashSet::new(),
+        ss_copies: llrm_mir::hash::HashSet::default(),
         selectors: HashMap::new(),
         lazy: HashMap::new(),
         last_select: None,

@@ -914,7 +914,7 @@ fn selected_in(
     // an integer's bits taken from an x87 register (`bitcast` of a double to
     // its words, reaching the matcher as a no-op), which no code can do.
     {
-        let floating: std::collections::HashSet<u32> = emitted
+        let floating: llrm_mir::hash::HashSet<u32> = emitted
             .iter()
             .flat_map(|block| block.insns.iter())
             .filter_map(|insn| insn.what.as_ref())
@@ -1079,7 +1079,7 @@ fn without_unreachable(
     if reached.iter().all(|one| *one) {
         return (emitted, succ);
     }
-    let gone: std::collections::HashSet<i64> =
+    let gone: llrm_mir::hash::HashSet<i64> =
         emitted.iter().zip(&reached).filter(|(_, kept)| !**kept).map(|(block, _)| block.at).collect();
     let succ: Vec<Vec<i64>> = succ.into_iter().zip(&reached).filter(|(_, kept)| **kept).map(|(s, _)| s).collect();
     let mut kept = reached.iter();

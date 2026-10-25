@@ -27,11 +27,10 @@
 //! `DoInstructionSelection`
 //! ([L1281](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L1281)).
 
-use std::collections::HashSet;
-
 use llrm_dagisel::interp::{Outcome, Selector};
 use llrm_dagisel::x86_hooks::X86Hooks;
 use llrm_dagisel::x86_select::select_node;
+use llrm_mir::hash::HashSet;
 
 use super::actions::TargetLowering;
 use super::dag_combiner::{CombineLevel, DagCombiner};
@@ -152,7 +151,7 @@ pub(crate) fn do_instruction_selection(
 /// everything it reads.
 pub(crate) fn users_first(dag: &SelectionDAG) -> Vec<u32> {
     let mut order = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut stack = vec![(dag.get_root().node, false)];
     while let Some((n, expanded)) = stack.pop() {
         if expanded {

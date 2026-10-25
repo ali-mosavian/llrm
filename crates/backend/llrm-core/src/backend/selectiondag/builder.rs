@@ -680,7 +680,7 @@ impl Builder<'_> {
     /// also copied to a register of its own.
     fn lower_arguments(&mut self) -> Result<(), Refused> {
         let entry = self.function.entry();
-        let mut outside = std::collections::HashSet::new();
+        let mut outside = llrm_mir::hash::HashSet::default();
         for &block in self.function.layout() {
             for inst in self.function.iter_block(block) {
                 let instruction = self.function.instruction(inst);

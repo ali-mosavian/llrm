@@ -1,6 +1,6 @@
 //! The arena: nodes, values, the CSE map and node construction.
 
-use std::collections::HashSet;
+use llrm_mir::hash::HashSet;
 
 use super::isd::{CondCode, ISD};
 use super::mvt::EVT;
@@ -230,7 +230,7 @@ impl SelectionDAG {
             var_args_frame_index: None,
             temporaries: Vec::new(),
             local_symbols: Default::default(),
-            invariant_loads: HashSet::new(),
+            invariant_loads: HashSet::default(),
         };
         dag.entry = dag.intern(ISD::EntryToken, &[EVT::OTHER, EVT::GLUE], &[], SDNodeFlags::default(), NodeData::None);
         dag.root = dag.entry;
