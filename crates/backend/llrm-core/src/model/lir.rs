@@ -1115,6 +1115,9 @@ pub struct LirBody {
     /// The function is `minsize` (`-Oz`, `Function::hasMinSize`): the passes
     /// that ask it take size over speed.
     pub min_size: bool,
+    /// The function states `flagsresult`: its caller reads the flags it
+    /// returns with. Any other function leaves none live at a return.
+    pub returns_flags: bool,
     /// (load, write) by `at`: the optimizer proved the write leaves the load's
     /// cell as it was (`!llrm.spares`).
     pub spares: Arc<BTreeSet<(i64, i64)>>,
@@ -1316,6 +1319,7 @@ impl LirBody {
             frequencies: None,
             returns_twice: false,
             min_size: false,
+            returns_flags: false,
             spares: Arc::default(),
             float_stack: 0,
             homes: Arc::default(),
@@ -1382,6 +1386,7 @@ impl LirBody {
             frequencies,
             returns_twice: self.returns_twice,
             min_size: self.min_size,
+            returns_flags: self.returns_flags,
             spares: Arc::clone(&self.spares),
             float_stack: self.float_stack,
             homes: Arc::clone(&self.homes),

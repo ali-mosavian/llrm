@@ -1065,6 +1065,7 @@ fn selected_in(
     }
     body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
     body.min_size = cpu.min_size || llrm_mir::memory::has(&function.attrs, "minsize");
+    body.returns_flags = llrm_mir::memory::has(&function.attrs, "flagsresult");
     body.sealed_arguments = true;
     body.ordered = true;
     set_odds(&mut body, &info.edge_probs, &block_at);

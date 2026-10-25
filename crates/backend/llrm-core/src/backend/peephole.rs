@@ -2238,7 +2238,12 @@ pub fn _flag_effect(
         let flags = |lanes: &Lanes| lanes.iter().copied().filter(|lane| lane.0 == RegId::None).collect::<Lanes>();
         return (flags(&effect.reads), flags(&effect.writes));
     }
-    if one.what.as_ref().is_some_and(|what| [Operation::Call, Operation::Return].contains(&what.op)) {
+    // A return reads nothing itself: the flags live after the body are the
+    // exit's (`exit_flags`), which only a `flagsresult` function has.
+    if one.what.as_ref().is_some_and(|what| what.op == Operation::Return) {
+        return (Lanes::new(), Lanes::new());
+    }
+    if one.what.as_ref().is_some_and(|what| what.op == Operation::Call) {
         return (_exit_flags(), Lanes::new());
     }
     // Bytes this cannot encode -- a relocated operand, an x87 form --
@@ -2383,7 +2388,9 @@ fn _sets_from(
 
 /// Which flag lanes something may read after each block's last instruction.
 pub fn _flags_live_out(body: &LirBody) -> std::rc::Rc<crate::backend::incremental::Solution<FlagLive>> {
-    let solved = FLAGS.with(|kept| kept.ask(&FlagLive { regs: body.regs(), bits: body.bits }, body));
+    let solved = FLAGS.with(|kept| {
+        kept.ask(&FlagLive { regs: body.regs(), bits: body.bits, returns_flags: body.returns_flags }, body)
+    });
     if llrm_support::env_flag!("LLRM_CHECK_LIVENESS") {
         assert!(
             flags_from_scratch(body) == solved.entering,
@@ -2399,6 +2406,7 @@ pub fn _flags_live_out(body: &LirBody) -> std::rc::Rc<crate::backend::incrementa
 pub struct FlagLive {
     regs: Regs,
     bits: u32,
+    returns_flags: bool,
 }
 
 impl crate::backend::incremental::Problem for FlagLive {
@@ -2441,7 +2449,7 @@ impl crate::backend::incremental::Problem for FlagLive {
         missing: usize,
     ) -> Lanes {
         if present.is_empty() && missing == 0 {
-            return _exit_flags();
+            return if self.returns_flags { _exit_flags() } else { Lanes::new() };
         }
         let live = present.iter().fold(Lanes::new(), |all, next| all.or(next));
         if missing > 0 { live.or(&_exit_flags()) } else { live }
@@ -2465,6 +2473,7 @@ thread_local! {
 fn flags_from_scratch(body: &LirBody) -> IndexMap<i64, Lanes> {
     let regs = body.regs();
     let exits = _exit_flags();
+    let returned = if body.returns_flags { exits } else { Lanes::new() };
     let effects = |one: &Insn| _flag_effect(regs, body.bits, one);
     let steps: HashMap<i64, Vec<(Lanes, Lanes)>> =
         body.blocks.iter().map(|block| (block.at, block.insns.iter().map(|one| effects(one)).collect())).collect();
@@ -2477,7 +2486,7 @@ fn flags_from_scratch(body: &LirBody) -> IndexMap<i64, Lanes> {
         |at, live_in| {
             let block = blocks[&at];
             if block.succ.is_empty() {
-                exits
+                returned
             } else {
                 block.succ.iter().flat_map(|at| live_in.get(at).unwrap_or(&exits).iter().copied()).collect()
             }

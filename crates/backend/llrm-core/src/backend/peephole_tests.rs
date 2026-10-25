@@ -86,7 +86,11 @@ fn body(
     entry: i64,
     blocks: Vec<Block>,
 ) -> LirBody {
-    LirBody::new(name, entry, blocks, IndexMap::default(), IndexMap::default())
+    // A body that ends leaves the arithmetic flags live: the tests below ask
+    // what happens before an observer, and the exit is one.
+    let mut body = LirBody::new(name, entry, blocks, IndexMap::default(), IndexMap::default());
+    body.returns_flags = true;
+    body
 }
 
 fn mem(
@@ -5023,4 +5027,33 @@ fn test_a_repeated_frame_address_after_allocation_is_made_again() {
     let result = transform(body("cse", 0, vec![block(0, insns, vec![]).into()]));
     let leas = whats(&result.blocks[0].insns).iter().filter(|what| what.name.as_deref() == Some("lea")).count();
     assert_eq!(leas, 2, "{:?}", names(&result.blocks[0].insns));
+}
+
+/// A zero before a return stayed `mov eax, 0` (5 bytes): the flags were taken
+/// to be live after every return, and 115 of the 71 programs' zeros were such
+/// moves where the pin has `xor`. Only a `flagsresult` function returns them.
+#[test]
+fn test_a_zero_before_a_return_is_a_xor_unless_the_function_returns_flags() {
+    let eax = rl(RegId::EAX, 4);
+    let build = |returns_flags: bool| {
+        let insns = vec![
+            Arc::new(insn(
+                0,
+                Some((0, 0)),
+                Some(sem(Operation::Move, "mov", vec![eax.clone()], vec![im(0, 4)])),
+                vec![1],
+                vec![],
+            )),
+            Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![])),
+        ];
+        let mut input = body("zero-before-ret", 0, vec![block(0, insns, vec![]).into()]);
+        input.returns_flags = returns_flags;
+        zeroes(&input)
+    };
+
+    assert_eq!(
+        build(false).insns()[0].what,
+        Some(sem(Operation::Binary, "xor", vec![eax.clone()], vec![eax.clone(), eax.clone()]))
+    );
+    assert_eq!(build(true).insns()[0].what, Some(sem(Operation::Move, "mov", vec![eax], vec![im(0, 4)])));
 }
