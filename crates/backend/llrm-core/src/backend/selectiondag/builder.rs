@@ -1252,6 +1252,26 @@ impl Builder<'_> {
             self.dag.set_root(chain);
             return Ok(None);
         }
+        if self.is_aggregate(result_type) {
+            // `LowerCallResult` over the leaves `ComputeValueVTs` gives: one
+            // return register each
+            let leaves = self.leaves(result_type)?;
+            if plan.returns.len() != leaves.len() {
+                return Err(Refused("an aggregate result that is not one register a member"));
+            }
+            let mut glue = glue;
+            let mut pieces = Vec::new();
+            for ((leaf, _), reg) in leaves.into_iter().zip(plan.returns.clone()) {
+                let leaf_vt = self.type_of(leaf)?;
+                let reg = self.sized_register(reg, leaf_vt);
+                let copy = self.dag.get_copy_from_phys_reg(chain, reg, leaf_vt, glue);
+                chain = SDValue { node: copy.node, res: 1 };
+                glue = SDValue { node: copy.node, res: 2 };
+                pieces.push(copy);
+            }
+            self.dag.set_root(chain);
+            return Ok(Some(self.merge(&pieces)));
+        }
         let vt = self.type_of(result_type)?;
         if flags_answer {
             let flags = self.dag.get_copy_from_phys_reg(chain, super::dagisel_adapter::EFLAGS_ID, EVT::I32, glue);
@@ -1307,7 +1327,26 @@ impl Builder<'_> {
         let mut chain = self.control_root();
         let mut ops = Vec::new();
         let mut glue = None;
-        if let Some(&operand) = instruction.operands.first() {
+        let aggregate = instruction
+            .operands
+            .first()
+            .and_then(|&operand| self.function.operand_type(&self.module.context, operand))
+            .is_some_and(|ty| self.is_aggregate(ty));
+        if let (true, Some(&operand)) = (aggregate, instruction.operands.first()) {
+            // `LowerReturn` over the leaves: one return register each
+            let parts = self.value_parts(operand)?;
+            if parts.len() != self.convention.returns.len() {
+                return Err(Refused("an aggregate result that is not one register a member"));
+            }
+            for (piece, reg) in parts.into_iter().zip(self.convention.returns.clone()) {
+                let piece_vt = self.dag.value_type(piece);
+                let reg = self.sized_register(reg, piece_vt);
+                let copy = self.dag.get_copy_to_phys_reg(chain, reg, piece, glue);
+                chain = SDValue { node: copy.node, res: 0 };
+                glue = Some(SDValue { node: copy.node, res: 1 });
+                ops.push(self.dag.get_phys_register(piece_vt, reg));
+            }
+        } else if let Some(&operand) = instruction.operands.first() {
             let value = self.get_value(operand)?;
             let vt = self.dag.value_type(value);
             if vt.is_floating_point() {
