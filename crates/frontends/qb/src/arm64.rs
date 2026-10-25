@@ -70,6 +70,7 @@ fn arm64_text(
         if platform == Platform::Darwin {
             line = signext_i16_arguments(&line);
         }
+        line = aligned(&line);
         for (from, to) in EXPORTS {
             line = renamed(&line, from, to);
         }
@@ -87,7 +88,7 @@ fn arm64_text(
         out.push_str(&line);
         out.push('\n');
     }
-    let mut out = without_results_on_void(&out);
+    let mut out = framed(&without_results_on_void(&out));
     // an empty table may have been dropped as unused: the runtime still links against it
     // the READ/DATA rows: a position and the row's text for each, then the end
     let bytes: String = read_data.iter().map(|byte| format!("\\{byte:02X}")).collect();
@@ -129,6 +130,75 @@ pub fn object_bytes(
     }
     let name = source.file_stem().map_or_else(String::new, |one| one.to_string_lossy().into_owned());
     llrm_arm64::driver::object_file(&text, platform, &name, false).map_err(fail)
+}
+
+/// ON ERROR's landing on a host: a function with a landing pad registers a `_setjmp` buffer (`qb_host_frame`, which
+/// returns the frame it replaces and gets it back before each `ret`), and the runtime's `qb_land` jumps back into the
+/// function, which takes the branch to its pad. The function's allocas are handed to `qb_host_escape` so that no
+/// pass keeps them in registers, which the jump would restore stale.
+fn framed(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut function: Vec<&str> = Vec::new();
+    let mut inside = false;
+    for line in text.lines() {
+        if line.starts_with("define ") {
+            inside = true;
+        }
+        if inside {
+            function.push(line);
+            if line == "}" {
+                inside = false;
+                out.push_str(&framed_function(&function));
+                function.clear();
+            }
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if !text.contains("declare i16 @B_FERR()") {
+        out.push_str("declare i16 @B_FERR()\n");
+    }
+    out.push_str("declare ptr @qb_host_frame(ptr)\ndeclare void @qb_host_escape(ptr)\ndeclare i32 @_setjmp(ptr) returns_twice\n");
+    out
+}
+
+fn framed_function(lines: &[&str]) -> String {
+    let mut out = String::new();
+    let landing = lines.iter().any(|line| line.trim_start().starts_with("%landed = landingpad"));
+    let entry = lines.iter().position(|line| line.ends_with(':')).filter(|_| landing);
+    let Some(entry) = entry else {
+        return lines.iter().map(|line| format!("{line}\n")).collect();
+    };
+    let mut at = entry + 1;
+    while lines[at].contains(" = alloca ") {
+        at += 1;
+    }
+    let label = lines[entry].trim_end_matches(':');
+    let from_entry = format!(", %{label} ]");
+    let name = |line: &str| line.trim().split(' ').next().unwrap_or("").to_owned();
+    for (number, line) in lines.iter().enumerate() {
+        if number == at {
+            for alloca in &lines[entry + 1..at] {
+                out.push_str(&format!("  call void @qb_host_escape(ptr {})\n", name(alloca)));
+            }
+            out.push_str("  %qb.jb = alloca [64 x i64], align 16\n  call void @qb_host_escape(ptr %qb.jb)\n");
+            out.push_str("  %qb.prev = call ptr @qb_host_frame(ptr %qb.jb)\n  %qb.rc = call i32 @_setjmp(ptr %qb.jb)\n");
+            out.push_str("  %qb.back = icmp ne i32 %qb.rc, 0\n  br i1 %qb.back, label %landing, label %qb.body\n\nqb.body:\n");
+        }
+        if line.contains("= load i16, ptr @Q_QB$LANDED") {
+            // DOS lands in `$QB$LANDING`, which stores ERR there; here the jump comes straight to the pad
+            out.push_str("  %qb.err = call i16 @B_FERR()\n  store i16 %qb.err, ptr @Q_QB$LANDED\n");
+        }
+        if line.trim_start().starts_with("ret ") {
+            out.push_str("  %qb.popped = call ptr @qb_host_frame(ptr %qb.prev)\n");
+        }
+        // the rest of the entry block is the body now: a phi's edge from the entry comes from there
+        let line = if number > at { line.replace(&from_entry, ", %qb.body ]") } else { (*line).to_owned() };
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
 }
 
 /// A mid-end pass leaves a result number on a terminator or a store (`%54 = br label %b36`), which the x86 path never
@@ -271,4 +341,17 @@ fn block_entry(line: &str) -> String {
         return format!("{head} {symbol}{}{}", parts.join(", "), &line[close..]);
     }
     line.to_owned()
+}
+
+/// QB packs its variables, and the x86 loads what it finds; arm64's `ldr x` of a symbol needs it 8 aligned for the
+/// relocation (`R_AARCH64_LDST64_ABS_LO12_NC`). Every module global starts on 8 (16 from 16 bytes).
+fn aligned(line: &str) -> String {
+    if !line.starts_with('@') || !(line.contains(" global ") || line.contains(" constant ")) {
+        return line.to_owned();
+    }
+    let body = match line.rfind(", align ") {
+        Some(at) => &line[..at],
+        None => line,
+    };
+    format!("{body}, align 16")
 }

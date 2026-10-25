@@ -82,7 +82,7 @@ runtime/qb/                portable runtime; touches the machine only through ru
     there is no macOS x86-64 build.
 16. GORILLA and NIBBLES on x86-64 (`llrm-qb -m64`, ELF64; `PRINT "HELLO"` runs, `tests/qb_x86_64_host.rs`): wait on D64-4
     (SSE forms #4636, xmm class #4638, DAG float nodes #4678/#4643, S4, S5; `x86-64-dag-plan.md`). Also open here: the
-    64-bit runtime frame (`B$ENRA`/`B$EXSA`), the `ON ERROR` landing (`qb_land` ends the program), the stack-block entries
+    64-bit runtime frame (`B$ENRA`/`B$EXSA`), the `ON ERROR` landing (done on arm64: setjmp frames, `qb_land` longjmps), the stack-block entries
     (`B$DDIM`, `B$CLOS`, ...). Retry when #4638 and S4 land.
 17. arm64: what the spike has (`docs/architecture/arm64-spike.md`): MIR (after the shared mid-end) to AArch64 in
     `llrm-arm64` (isel, regalloc, frame, encoder), Darwin and Linux AAPCS64, Mach-O and ELF writers, floats, structs,
@@ -191,3 +191,17 @@ Mac follow-up (feat/qb-host 8ffd78684 merged in):
 Mac re-run on feat/qb-host 7985b5a17: `posix_os`, `qb_dev_interface`, `qb_headless`, `qb_sdl` and
 `llrm-qbruntime --test sound` pass; the smoke under `-fsanitize=thread` is `ok` 3/3 with no reports; `BEEP` after
 `SCREEN 13` through the real device (disk driver) is 232 ms of ±6000 at 800 Hz.
+
+## arm64 Linux under qemu (2026-10-25)
+
+GORILLA and NIBBLES run through `llrm-qb --arm64=linux`, headless, under `qemu-aarch64`. Looked at:
+[GORILLA city](qb-host-shots/gorilla-arm64-city.png), [GORILLA after a shot](qb-host-shots/gorilla-arm64-shot.png)
+(crater on a building, turn passed to Player 2), [NIBBLES level 1](qb-host-shots/nibbles-arm64-level1.png).
+
+### Mach-O QB programs for the Mac (2026-10-25)
+
+`llrm-qb --arm64=darwin` objects (not yet linked or run on a Mac; the ELF twins run under qemu) are in
+`~/scratch/mac-handoff/` on tinytim: `HELLO`, `NIBBLES`, `GORILLA` (`.darwin.o`, sources beside or in `~/scratch/gor`).
+On the Mac: `brew install sdl2`, `tools/link-qb-sdl.sh NIBBLES.darwin.o nibbles`, run `./nibbles` (a window, keyboard
+input). Report which links and runs, with a screenshot, under this heading. To rebuild an object on the Mac:
+`cargo build --release --bin llrm-qb && target/release/llrm-qb --arm64=darwin -O2 X.BAS -o X.darwin.o`.

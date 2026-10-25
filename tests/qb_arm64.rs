@@ -123,6 +123,7 @@ fn run_basic_with(name: &str, source: &[u8], environment: &[(&str, &str)]) -> St
             "runtime/qb/posix/paintq.c",
             "runtime/qb/posix/module_exports.c",
             "runtime/qb/posix/blockentries.c",
+            "runtime/qb/posix/onerror_host.c",
             "runtime/qb/posix/program.c",
             "runtime/qb/posix/real.c",
             "runtime/qb/dev/headless/headless.c",
@@ -164,4 +165,44 @@ fn nibbles_reaches_its_first_level_on_arm64() {
         &[("QB_HEADLESS_KEYS", " 1\r50\rY\rC\r"), ("QB_HEADLESS_GAP", "300"), ("QB_HEADLESS_SECONDS", "10")],
     );
     assert!(screen.contains("Level 1,  Push Space"), "{screen}");
+}
+
+/// GORILLA (QB 4.5's demo) typed through its intro and four questions on arm64: SparklePause's INKEY$ loop, INPUT of
+/// SINGLE and DOUBLE values and the menu text. A shot in the city (SCREEN 9, floats) was checked by eye, not here.
+#[test]
+fn gorilla_reaches_its_menu_on_arm64() {
+    let Some(dir) = std::env::var_os("QB45_DEMOS_DIR") else {
+        eprintln!("QB45_DEMOS_DIR is not set: GORILLA is not in the tree");
+        return;
+    };
+    let source = std::fs::read(Path::new(&dir).join("GORILLA.BAS")).expect("GORILLA.BAS");
+    let screen = run_basic_with(
+        "gorilla",
+        &source,
+        &[("QB_HEADLESS_KEYS", "   \r\r\r\r\r\r"), ("QB_HEADLESS_GAP", "1200"), ("QB_HEADLESS_SECONDS", "30")],
+    );
+    assert!(screen.contains("Your Choice?"), "{screen}");
+}
+
+/// `ON ERROR GOTO` landed nowhere on arm64: `ERROR 5` ended the program (exit 1) before the handler printed anything.
+/// The handler now runs, RESUME NEXT continues after the faulting statement, and the module handler also takes an
+/// error raised in a procedure that has none.
+#[test]
+fn on_error_lands_in_its_handler_on_arm64() {
+    let module = b"ON ERROR GOTO h\r\nERROR 5\r\nPRINT \"after\"\r\nEND\r\nh:\r\nPRINT \"err\"; ERR\r\nRESUME NEXT\r\n";
+    assert_eq!(run_basic("onerror", module).split_whitespace().collect::<Vec<_>>(), ["err", "5", "after"]);
+    let procedure = b"DECLARE SUB s ()\r\nON ERROR GOTO h\r\ns\r\nPRINT \"back\"\r\nEND\r\nh:\r\nPRINT \"mod\"; ERR\r\nRESUME NEXT\r\nSUB s\r\nERROR 7\r\nPRINT \"in s\"\r\nEND SUB\r\n";
+    assert_eq!(
+        run_basic("onerror_sub", procedure).split_whitespace().collect::<Vec<_>>(),
+        ["mod", "7", "in", "s", "back"]
+    );
+}
+
+/// A handled function whose first block after the entry is a loop header has a phi with an edge from the entry; the
+/// landing split the entry and the phi named a block that no longer branched there ("a phi with no value for an edge",
+/// GORILLA's PlaceGorillas).
+#[test]
+fn a_handled_function_may_start_with_a_loop_on_arm64() {
+    let source = b"DEFINT A-Z\r\nON ERROR GOTO h\r\nFOR i = 1 TO 3\r\nPRINT i;\r\nNEXT\r\nERROR 9\r\nPRINT \"done\"\r\nEND\r\nh:\r\nRESUME NEXT\r\n";
+    assert_eq!(run_basic("onerror_loop", source).split_whitespace().collect::<Vec<_>>(), ["1", "2", "3", "done"]);
 }

@@ -1,5 +1,6 @@
 /* What the portable startup (runtime/qb/rtinit.c, nheap.c) asks of a host: the initializers (xi.h runs them from
    constructors, so there is nothing to walk), and the room the heaps share. */
+#include <setjmp.h>
 #include "llrm_os.h"
 #include "qb.h"
 #include "rtinit.h"
@@ -31,9 +32,13 @@ void qb_dynamic_region(char **first, char **top)
     *first = *top = 0;
 }
 
-/* ON ERROR's landing needs the frame to be put back; the host has no frames yet (docs/working/qb-host.md, open
-   rows), so an error that reaches a handler ends the program. */
+/* ON ERROR's landing: back into the innermost function that has a handler (onerror_host.c); without one the program
+   ends. */
+void *qb_host_frame_top;
+
 void qb_land(void)
 {
+    if (qb_host_frame_top)
+        longjmp(*(jmp_buf *)qb_host_frame_top, 1);
     llrm_os_exit(1);
 }
