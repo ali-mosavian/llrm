@@ -27,7 +27,7 @@ So three of five steps are selection's, and they need no liveness at all. The li
 
 ## Liveness `converted` needs
 
-`live_in`/`live_out` of the floating values, bundles, and `_split_for_the_stack`'s edge splits. `prepared` solves the same rows one pass earlier. Between them only `_integer_loads/stores` and `_aliased` change the body, and they add only values that are born and die in one block.
+`live_in`/`live_out` of the floating values, bundles, and `_split_for_the_stack`'s edge splits. `prepared` solves the same rows one pass earlier. Between them only `_integer_loads/stores` and `_aliased` change the body, and they should add only values born and dying in one block (to check in PR 4).
 
 ## Order of PRs
 
