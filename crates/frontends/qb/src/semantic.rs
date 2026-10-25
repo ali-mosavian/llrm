@@ -341,6 +341,10 @@ struct Compiler {
     /// procedure raises, on that procedure's frame, and RESUMEs there.
     module_handled: bool,
     next_type: u32,
+    /// The COMMON items that repeat a DIM: declared once.
+    common_repeats: BTreeSet<(usize, usize)>,
+    /// The arrays COMMON declared without bounds, which a later DIM dimensions.
+    common_arrays: BTreeSet<String>,
     next_value: u32,
     next_place: u32,
     next_instruction: u32,
@@ -1698,6 +1702,8 @@ impl Compiler {
             error_handlers: BTreeSet::new(),
             module_handled: false,
             next_type: 12,
+            common_repeats: BTreeSet::new(),
+            common_arrays: BTreeSet::new(),
             next_value: 1,
             next_place: 1,
             next_instruction: 1,
@@ -2386,6 +2392,38 @@ impl Compiler {
             match statement {
                 Statement::Dim(items) | Statement::Common { declarations: items, .. } => {
                     for item in items {
+                        // BC takes a COMMON that names what a DIM declared
+                        // already as that declaration,
+                        // a static array staying static (it calls no B$DDIM).
+                        if matches!(statement, Statement::Common { .. })
+                            && self.variables.contains_key(&self.declaration_key(item)?)
+                        {
+                            self.common_repeats.insert((item.span.line, item.span.start));
+                            continue;
+                        }
+                        // A DIM of an array COMMON declared without bounds
+                        // gives it its bounds (BC calls
+                        // B$DDIM for it), as the first REDIM would.
+                        if matches!(statement, Statement::Dim(_))
+                            && item.array
+                            && !item.bounds.is_empty()
+                            && self.common_arrays.contains(&self.declaration_key(item)?)
+                        {
+                            let key = self.declaration_key(item)?;
+                            if let Some(variable) = self.variables.get_mut(&key) {
+                                variable.rank.get_or_insert(item.bounds.len());
+                                if let (Some(place), Some(element)) = (variable.descriptor_place, variable.element) {
+                                    let descriptor_type = self.places.iter().find(|p| p.id == place).map(|p| p.type_id);
+                                    if let Some(descriptor_type) = descriptor_type {
+                                        self.pending_allocations.insert(
+                                            (self.position, key),
+                                            (item.clone(), place, descriptor_type, element),
+                                        );
+                                    }
+                                }
+                            }
+                            continue;
+                        }
                         let each = item.name.strip_prefix(EACH);
                         let item = &Declaration { name: each.unwrap_or(&item.name).into(), ..item.clone() };
                         if each.is_some() && !self.each_declared.insert(self.declaration_key(item)?) {
@@ -2413,6 +2451,9 @@ impl Compiler {
                             self.declare_as(&dynamic, storage)?;
                         } else {
                             self.declare_as(item, storage)?;
+                        }
+                        if matches!(statement, Statement::Common { .. }) && item.array && item.bounds.is_empty() {
+                            self.common_arrays.insert(self.declaration_key(item)?);
                         }
                     }
                 }
@@ -3320,6 +3361,9 @@ impl Compiler {
                 }
                 Statement::Dim(items) | Statement::Common { declarations: items, .. } => {
                     for item in items {
+                        if self.common_repeats.contains(&(item.span.line, item.span.start)) {
+                            continue;
+                        }
                         self.allocate(item)?;
                         self.rezero(item)?;
                     }
