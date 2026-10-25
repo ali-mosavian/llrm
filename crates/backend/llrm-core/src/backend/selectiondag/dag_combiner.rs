@@ -246,6 +246,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::And => self.visit_and(node).or_else(|| self.simplify_demanded(node)),
             ISD::Or => self.visit_or(node).or_else(|| self.simplify_demanded(node)),
             ISD::Add => self.visit_add(node),
+            ISD::Sub => self.visit_sub(node),
             ISD::Shl | ISD::Srl => self.visit_shift(node).or_else(|| self.simplify_demanded(node)),
             ISD::Sra => self.visit_sra(node).or_else(|| self.visit_shift(node)),
             ISD::SDiv => self.visit_sdiv(node),
@@ -1063,6 +1064,27 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let promoted = self.promote_operand(value, wide)?;
         let mask = self.dag.get_constant(super::fold::mask(old.size_in_bits()), wide);
         Some(self.dag.get_node(ISD::And, wide, &[promoted, mask]))
+    }
+
+    /// `visitSUB`, the first folds: `x - x` is 0, and `x - C` is `x + -C`, so
+    /// the add-shaped folds and the matcher's `dec`/`lea` patterns see one
+    /// form. (The pin's `umin`, select, `ctlz` and negation folds are not
+    /// translated.)
+    fn visit_sub(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let vt = self.dag.value_type(node);
+        if !vt.is_integer() {
+            return None;
+        }
+        if n0 == n1 {
+            return Some(self.dag.get_constant(0, vt));
+        }
+        let c = self.dag.constant(n1).filter(|_| !self.dag.is_opaque(n1))?;
+        let negated = self.dag.get_constant(c.wrapping_neg() & super::fold::mask(vt.size_in_bits()), vt);
+        Some(self.dag.get_node(ISD::Add, vt, &[n0, negated]))
     }
 
     /// `visitMUL`, up to the multiply-by-power-of-two folds.
