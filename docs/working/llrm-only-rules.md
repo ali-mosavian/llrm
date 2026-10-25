@@ -57,6 +57,7 @@ Query side (BasicAA, TBAA, CaptureTracking) stays: BasicAA `alias_check` is 20 M
 | LiveRows 3.1 (`sets`, `live_rows`) | unknown: needs w5's liveness-reuse outcome | w5 or w13 | ? |
 | `postrasink::sunk` 2.24 + `copysink` 1.16 | REPLACE by a translation of PostRAMachineSinking (pin 0.25) | w2, date unknown | -3.1 |
 | `machinecp::propagated` 7-10 | w3 row 84 / w2 | w2, w3 | up to -6 |
+| `x86 tti::intrinsic_prices` (1057-line HashMap built on first use; the pin's TTI is static code) | DELETE, replaced by a bisect over the sorted text | w5, #4792 | -0.91 measured (d_faces -O2 758.17 -> 757.26) |
 | `masm::addressed_pass` 3.8 (`-fomit-frame-pointer` on assembly items, fixed point over string labels) | REPLACE by PEI `replaceFrameIndices` + X86FrameLowering (SPAdj before emission) | w12 (coordinator) | up to -3.8 |
 | FixupLEAs 2.1 | not llrm-only: the translated X86FixupLEAs | none | 0 |
 | `allocate::DenseRows::sets` 7.2 and `live_rows` | REPLACE with LiveIntervals + LiveRegMatrix/LiveIntervalUnion (the pin's liveness for allocation); `live_rows` goes with it | w13 | up to -7.2 less the matrix cost, unmeasured; needs a split of who asks for `sets` |
