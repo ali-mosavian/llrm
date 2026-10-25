@@ -366,11 +366,11 @@ fn test_no_inline_names_each_function_and_is_not_the_inline_functions_pass() {
     assert!(parsed(&["-fno-inline-functions"]).unwrap().no_inline.is_empty());
 }
 
-/// `--isel=` takes `old` (the default) and `dag`, inline or as the next
-/// argument; anything else is an error.
+/// `--isel=` takes `dag` (the default), `old` and `shadow`, inline or as the
+/// next argument; anything else is an error.
 #[test]
 fn test_isel_names_the_selector() {
-    assert_eq!(parsed(&[]).unwrap().isel, Selector::Old);
+    assert_eq!(parsed(&[]).unwrap().isel, Selector::Dag);
     assert_eq!(parsed(&["--isel=dag"]).unwrap().isel, Selector::Dag);
     assert_eq!(parsed(&["--isel=shadow"]).unwrap().isel, Selector::Shadow);
     assert_eq!(parsed(&["--isel", "old"]).unwrap().isel, Selector::Old);

@@ -76,7 +76,9 @@ fn program(markers: bool) -> Program {
 /// The bytes `F%` reserves below BP.
 fn frame(markers: bool) -> i64 {
     let machine = Machine { cpu: "486".to_owned(), ..BUILT_IN.clone() };
-    let built = compiled(&program(markers), &Options::m16(machine)).expect("compiles");
+    // The old selector shares the slots; the DAG path has no StackColoring yet.
+    let options = Options { isel: crate::backend::shadow::Selector::Old, ..Options::m16(machine) };
+    let built = compiled(&program(markers), &options).expect("compiles");
     let text = masm::text(&built[0]).expect("prints");
     text.lines().find_map(|line| line.trim().strip_prefix("sub sp, ")?.parse().ok()).unwrap_or(0)
 }
