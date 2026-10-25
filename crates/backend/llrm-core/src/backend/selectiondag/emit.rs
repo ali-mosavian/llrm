@@ -1545,6 +1545,27 @@ impl Emitter<'_, '_> {
                 self.inline_places.push((at, patched));
                 return Ok(Some(()));
             }
+            // `llrm.ia16.in`/`out`: a barrier the later passes give `in`/`out`
+            // forms; the port is an immediate byte or `dx`. A node with a
+            // value result reads.
+            "PORT_IO" => {
+                let reading = node.values.first().is_some_and(|vt| *vt != EVT::OTHER);
+                let port = match self.dag.node(node.ops[1]).data {
+                    NodeData::Const { bits, .. } if (0..256).contains(&(bits as i64)) => {
+                        Loc::Imm(Imm { value: bits as i64, width: 1, address: None })
+                    }
+                    _ => self.operand(node.ops[1])?,
+                };
+                if reading {
+                    let held = self.fresh(width_of(self.dag, SDValue { node: n, res: 0 }));
+                    self.values.insert(SDValue { node: n, res: 0 }, held.value);
+                    self.push(Operation::Barrier, "in", vec![Loc::Held(held)], vec![port]);
+                } else {
+                    let value = self.operand(node.ops[2])?;
+                    self.push(Operation::Barrier, "out", Vec::new(), vec![port, value]);
+                }
+                return Ok(Some(()));
+            }
             // `llrm.ia16.asm`: a block of bytes laid down at the site, its
             // inputs in the registers the name states, as a call of its name
             // that clobbers what the name says. A block that names symbols is
