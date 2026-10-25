@@ -8,6 +8,10 @@
 //! and the loop passes read are plain compares; a branch to one block on both
 //! edges reads no condition.
 //!
+//! MIRROR: a branch that reaches the end of the visit is registered with the
+//! `DomConditionCache` (`DC.registerBranch`), so a query sees the branches
+//! visited before it and no others.
+//!
 //! DEVIATE 1 (temporary): not made: the logical-and-with-invert form (MIR has
 //! no logical `select` pattern here yet), the `fcmp` predicate canonical form
 //! (`isCanonicalPredicate`), the constant condition at visit time (the driver
@@ -57,6 +61,10 @@ impl Combiner<'_> {
             let false_ = self.int(self.type_of(cond), 0);
             replace_operand(self, inst, 0, false_);
             return Visit::Changed;
+        }
+        // `DC.registerBranch(&BI)`.
+        if let Some(conditions) = self.env.analyses.dom_conditions() {
+            conditions.register_branch(&query(self, Some(inst)), inst);
         }
         Visit::None
     }
