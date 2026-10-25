@@ -14,7 +14,8 @@
 // CHECK: cld
 // CHECK: {{_scroll_down(@3)?}} endp
 // CHECK-LABEL: {{_palette(@3)?}} proc
-// The pin keeps a variable 16-bit fill a loop at -Os (the string setup is not smaller there); -O2 makes it `rep stosw`.
+// DEVIATE from the pin, which loops here at -O2 and -Os: `rep stosw` is the pattern-fill arm (loopidioms.rs Byte::Pattern, #468), smaller on m16.
+// The check takes the loop until the -Os fix lands; then it is `rep stosw` again.
 // CHECK: {{rep stosw|dec ax}}
 // CHECK: {{_palette(@3)?}} endp
 // CHECK-LABEL: {{_block(@3)?}} proc
