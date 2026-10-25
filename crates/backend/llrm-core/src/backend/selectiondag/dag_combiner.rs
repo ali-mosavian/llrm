@@ -109,6 +109,9 @@ pub struct DagCombiner<'a, H: CombineHooks> {
     pub(super) level: CombineLevel,
     worklist: Vec<u32>,
     queued: HashSet<u32>,
+    /// `CombinedNodes`: the nodes already visited, whose operands are not
+    /// queued again by a visit of their user.
+    combined: HashSet<u32>,
     /// The action table, for the folds that ask what the target can do.
     pub(super) tli: Option<&'a TargetLowering>,
 }
@@ -119,7 +122,15 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         hooks: &'a mut H,
         level: CombineLevel,
     ) -> DagCombiner<'a, H> {
-        DagCombiner { dag, hooks, level, worklist: Vec::new(), queued: HashSet::new(), tli: None }
+        DagCombiner {
+            dag,
+            hooks,
+            level,
+            worklist: Vec::new(),
+            queued: HashSet::new(),
+            combined: HashSet::new(),
+            tli: None,
+        }
     }
 
     /// The action table the folds query (`TLI`).
@@ -188,10 +199,16 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             if self.is_dead(n) {
                 continue;
             }
+            // "Add any operands of the new node which have not yet been
+            // combined to the worklist as well" (`CombinedNodes`): without the
+            // test a DAG whose nodes share operands is walked once per path.
             let ops: Vec<u32> = self.dag.node(SDValue { node: n, res: 0 }).ops.iter().map(|op| op.node).collect();
             for op in ops {
-                self.add_to_worklist(op);
+                if !self.combined.contains(&op) {
+                    self.add_to_worklist(op);
+                }
             }
+            self.combined.insert(n);
             let before = self.dag.node_count();
             let result = self.combine(SDValue { node: n, res: 0 });
             for made in before..self.dag.node_count() {
