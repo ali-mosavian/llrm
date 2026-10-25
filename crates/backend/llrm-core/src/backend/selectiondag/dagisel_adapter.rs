@@ -300,7 +300,9 @@ pub struct DagisAdapter<'a> {
 
 impl<'a> DagisAdapter<'a> {
     pub fn new(dag: &'a mut SelectionDAG) -> DagisAdapter<'a> {
-        DagisAdapter { dag, dead: BTreeSet::new(), mem_refs: BTreeMap::new() }
+        // A node the combiner deleted is no user of what it read (`hasOneUse`).
+        let dead = (0..dag.nodes().len() as u32).filter(|&node| dag.is_deleted(node)).collect();
+        DagisAdapter { dag, dead, mem_refs: BTreeMap::new() }
     }
 
     pub fn is_dead(
