@@ -30,7 +30,36 @@ Whole-compile inclusive Ir per pass, `llrm-c -m32 -O2` against the pinned `clang
 | BDCE | 1.25 | 11 | 113.6 | 1.12 | 11 | 101.9 | 1.12 |
 | sum | 360.6 | | | 162.3 | | | 2.22 |
 
-## Where the excess is (ours less pin, M)
+## Same IR, pass by pass (the table to read)
+
+Every pass instance the `--dump` of d_faces -O2 recorded (80 of them: a dump file is written where a pass changed the function), run on the file before it by both: ours `llrm-pass -O2 --order PASS@SLOT FILE` on the dist build, the pin `opt -passes=<pass> -S FILE`, callgrind `--toggle-collect` on the pass's `run` (`GVNPass::*`, `JumpThreadingPass::*` and `ReassociatePass::*`, whose `run` is inlined into the adaptor). Same input, so the ratio is the pass.
+
+| pass | instances | ours M | pin M | ratio | excess M |
+|---|--:|--:|--:|--:|--:|
+| licm | 7 | 19.61 | 4.41 | 4.45 | 15.20 |
+| cvp | 6 | 25.62 | 14.47 | 1.77 | 11.15 |
+| jumpthreading | 6 | 15.04 | 6.39 | 2.35 | 8.65 |
+| dse | 1 | 9.25 | 2.40 | 3.85 | 6.85 |
+| indvars | 5 | 22.08 | 16.54 | 1.34 | 5.54 |
+| gvn | 4 | 39.49 | 34.24 | 1.15 | 5.25 |
+| reassociate | 4 | 3.90 | 0.55 | 7.14 | 3.35 |
+| lcssa | 10 | 3.05 | 0.88 | 3.48 | 2.18 |
+| loopdeletion | 1 | 5.39 | 3.64 | 1.48 | 1.74 |
+| sccp | 4 | 5.54 | 4.03 | 1.37 | 1.51 |
+| loopsimplify | 6 | 1.46 | 0.47 | 3.13 | 1.00 |
+| unroll | 1 | 2.62 | 1.82 | 1.44 | 0.80 |
+| adce | 2 | 1.34 | 0.79 | 1.69 | 0.55 |
+| loopidiom | 2 | 4.27 | 3.87 | 1.11 | 0.41 |
+| tailrec | 2 | 0.30 | 0.21 | 1.43 | 0.09 |
+| bdce | 2 | 1.07 | 1.37 | 0.78 | -0.30 |
+| combine | 17 | 39.24 | 67.51 | 0.58 | -28.26 |
+| sum | 80 | 199.3 | 163.6 | 1.22 | 35.7 |
+
+Read with care: a changed-only sample (passes that found nothing are not in it), `combine` is ours 0.58x the pin's `instcombine` because the slot is one stage of our combine, not the whole of the pin's pass (the whole-compile table has InstCombine at 1.48x), and per-instance inputs are the pipeline's, not each pass's worst case. The whole-compile table above stays for run counts.
+
+Over the same IR the excess is in LICM (4.5x), JumpThreading (2.4x), Reassociate (7x), DSE (3.9x), LCSSA (3.5x), LoopSimplify (3.1x) and CVP (1.8x); IndVars (1.34x), SCCP (1.37x), LoopDeletion (1.48x), GVN (1.15x) and LoopIdiom (1.11x) are near the pin's. The whole-compile ratios of IndVars (2.4x), EarlyCSE, MemCpyOpt and LoopFullUnroll were run counts and IR shape.
+
+## Where the excess is (whole-compile table, different IR) (ours less pin, M)
 
 LICM 33.9, CVP 19.9, InstCombine 18.8, EarlyCSE 16.9, IndVars 15.7, SimplifyCFG 14.4, JumpThreading 11.4, DSE 11.0, MemCpyOpt 8.4, GVN 8.3, LSR 8.0, LoopFullUnroll 7.9, LCSSA 5.2, LoopLoadElim 4.9, SCCP 4.0, LoopSimplify 3.5, Reassociate 3.3, LoopDeletion 2.9. The ratios that stand out are LCSSA 14x, MemCpyOpt 7.5x, LoopSimplify 6.8x, DSE 5.8x, LICM 5.7x, LoopFullUnroll 5.0x, Reassociate 5.0x; the large absolute ones with a small ratio are InstCombine (1.48x) and GVN (1.26x). SROA (0.94x) and LoopRotate (0.37x, fewer runs) are at or under the pin's.
 
