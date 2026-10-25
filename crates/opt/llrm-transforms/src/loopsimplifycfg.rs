@@ -443,29 +443,34 @@ fn merge_blocks_into_predecessors(
     changed
 }
 
-/// `simplifyLoopCFG`: whether the loop changed.
+fn loops_of(function: &Function) -> LoopInfo {
+    let tree = DomTree::of(function);
+    LoopInfo::analyze(function, || &tree)
+}
+
+/// `simplifyLoopCFG`: whether the loop changed. `loops` are the function's as
+/// it stands.
 fn simplify_loop_cfg(
     context: &Context,
     function: &mut Function,
+    loops: &LoopInfo,
     header: BlockId,
 ) -> bool {
-    let tree = DomTree::of(function);
-    let loops = LoopInfo::analyze(function, || &tree);
     let lp = loops.get_loop_for(header).expect("a loop headed by this block");
     // Constant-fold terminators with known constant conditions.
-    let mut changed = constant_fold_terminators(context, function, &loops, lp);
+    let mut changed = constant_fold_terminators(context, function, loops, lp);
     // The folding changed the blocks and edges: the merging reads them again.
-    let (loops_after, _tree_after);
-    if changed {
-        _tree_after = DomTree::of(function);
-        loops_after = LoopInfo::analyze(function, || &_tree_after);
+    let after;
+    let loops_after = if changed {
+        after = loops_of(function);
+        &after
     } else {
-        loops_after = loops;
-    }
+        loops
+    };
     // Eliminate unconditional branches by merging blocks into their
     // predecessors.
     if let Some(lp) = loops_after.get_loop_for(header).filter(|found| found.get_header() == header) {
-        changed |= merge_blocks_into_predecessors(context, function, &loops_after, lp);
+        changed |= merge_blocks_into_predecessors(context, function, loops_after, lp);
     }
     changed
 }
@@ -476,19 +481,23 @@ pub fn loop_simplify_cfg(
     context: &Context,
     function: &mut Function,
 ) -> bool {
-    let tree = DomTree::of(function);
-    let loops = LoopInfo::analyze(function, || &tree);
+    let mut loops = loops_of(function);
     let headers: Vec<BlockId> =
         loops.get_loops_in_reverse_sibling_preorder().iter().rev().map(|one| one.get_header()).collect();
     let mut changed = false;
+    // The loops are made again only after a loop changed the function.
+    let mut stale = false;
     for header in headers {
-        let tree = DomTree::of(function);
-        let loops = LoopInfo::analyze(function, || &tree);
+        if stale {
+            loops = loops_of(function);
+            stale = false;
+        }
         if !function.is_placed(header) || !loops.is_loop_header(header) {
             continue;
         }
-        if simplify_loop_cfg(context, function, header) {
+        if simplify_loop_cfg(context, function, &loops, header) {
             changed = true;
+            stale = true;
         }
     }
     if changed {
