@@ -220,21 +220,24 @@ pub struct Procedure {
     pub registers: llrm_target::FrameRegisters,
 }
 
-/// A near procedure of `code` and a `ret`, called by name: a routine of the
+/// A near procedure of `code` and a return, called by name: a routine of the
 /// target's that the module holds once.
 pub fn routine_procedure(
     name: &str,
-    mut code: Vec<u8>,
+    code: Vec<u8>,
     registers: llrm_target::FrameRegisters,
     regs: Regs,
 ) -> Procedure {
-    code.push(0xC3);
     let what = Semantics { name: Some(name.into()), ..Semantics::new(Operation::Call) };
     let instruction = lir::Insn::new(1, None, Some(what), vec![], vec![]);
+    // The return is an instruction, so the frame the printer opens is closed
+    // before it: a `ret` among the bytes would skip the epilogue.
+    let back = Semantics { name: Some("ret".into()), ..Semantics::new(Operation::Return) };
+    let back = lir::Insn::new(2, None, Some(back), vec![], vec![]);
     let mut body = lir::LirBody::new(
         name,
         1,
-        vec![lir::LirBlock::new(1, vec![std::sync::Arc::new(instruction)]).into()],
+        vec![lir::LirBlock::new(1, vec![std::sync::Arc::new(instruction), std::sync::Arc::new(back)]).into()],
         Default::default(),
         Default::default(),
     );
