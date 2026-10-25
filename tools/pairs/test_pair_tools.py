@@ -175,3 +175,19 @@ def test_isel_shadow_lists_a_function_the_dag_path_refused_and_never_as_equal():
     old = shadow.parse_rows("[isel] f selector=old instructions=4 copies=1 executed=9 memory=2\n")
     new = shadow.parse_rows("[isel] f selector=shadow instructions=4 copies=1 executed=9 memory=2\n[isel] f refused: --isel=dag: a function of several blocks\n")
     assert shadow.differences(old, new) == ["f: REFUSED --isel=dag: a function of several blocks"]
+
+
+def test_the_pin_is_told_our_stack_alignment_and_pushes_a_one_argument_call():
+    """The pin priced m32 at the Linux triple's 16-byte stack: it kept a reserved call frame (`subl $12,%esp; movl $2000,(%esp)`) where at our 4 it
+    pushes, so pair csr counted 197 pushes and 206 `add esp` against the pin's 71 and 146."""
+    sys.path.insert(0, str(HERE))
+    import pin
+
+    of = pin.target("m32")
+    text = 'declare void @report(i32)\ndefine i32 @main(ptr %f) {\n  %r = call i32 %f(i32 2000)\n  call void @report(i32 %r)\n  ret i32 0\n}\n'
+    told = pin.retarget(text, of)
+    assert pin.stack_alignment(of) == 4 and '"override-stack-alignment", i32 4' in told
+    if not (pin.PINNED_BIN / "llc").exists():
+        return
+    done = pin.llc(["-O2", "-filetype=asm", "-o", "-"], text, of)
+    assert "pushl\t$2000" in done.stdout and "subl\t$12, %esp" not in done.stdout, done.stdout
