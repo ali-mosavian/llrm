@@ -1407,8 +1407,10 @@ impl Emitter<'_, '_> {
                     address: Some(self.ctx.globals.segment(self.global_displacement(origin))),
                 }),
                 // a huge pointer whose offset is zero: the `or` folded away
-                ("OR32rr" | "SHL32ri", _) => {
-                    // A huge pointer built as `offset | (selector << 16)`.
+                ("OR32rr" | "SHL32ri" | "ADD32rr_DB", _) => {
+                    // A huge pointer built as `offset | (selector << 16)`, or
+                    // as the same sum once the combiner
+                    // turns a disjoint or into an add.
                     let selector = self
                         .huge_selector(origin)
                         .ok_or_else(
@@ -2134,7 +2136,7 @@ impl Emitter<'_, '_> {
                 let mnemonic = if prefix == "ST" { "fst" } else { "fistp" };
                 self.push(Operation::FloatStore, mnemonic, vec![Loc::Mem(cell)], vec![Loc::Held(source)]);
             }
-            "CHS" | "ABS" | "SQRT" => {
+            "CHS" | "ABS" | "SQRT" | "LN" | "EXP" | "LOG2" | "EXP2" | "SIN" | "COS" | "ATAN" => {
                 let Loc::Held(source) = self.operand(node.ops[0])? else {
                     return Err(EmitError::Unsupported(format!("{name}: an operand that is no register")));
                 };

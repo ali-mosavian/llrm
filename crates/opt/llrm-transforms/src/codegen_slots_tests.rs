@@ -524,7 +524,7 @@ const ROWS: &[Row] = &[
         Match,
         "phielimination.rs, phielim.rs (edge splitting)",
         "",
-        "translated: `LowerPHINode`, `SplitPHIEdges`, `LoweredPHIs`, plain `findPHICopyInsertPoint`; a phi from a non-predecessor is an error (#3850); the old lowering and the non-RFP route (P1, P4) are deleted; DEVIATEs P2, P3, P6 (phielimination.rs header). Not translated: EH-pad and INLINEASM_BR insert points (w-1, 2026-11-14). Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
+        "translated: `LowerPHINode`, `SplitPHIEdges`, `LoweredPHIs`, plain `findPHICopyInsertPoint`; a phi from a non-predecessor is an error (#3850); the old lowering and the non-RFP route (P1, P4) are deleted; `allPhiOperandsUndefined`, `ImpDefs`, `SrcUndef` (P2, done); DEVIATEs P3, P6, P7 (phielimination.rs header). P7: no EH-pad or INLINEASM_BR insert points: the unwind edge is the runtime's (not an LIR edge) and no front end emits callbr; exit: a front end that does. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
     ),
     row(
         "Two-Address instruction pass",

@@ -46,8 +46,8 @@
 //! ```
 //!
 //! A sub-pass whose subject the body lacks is skipped. `needs.rs` keeps one bit
-//! per candidate shape (a register copy, an inserted definition, a cell read
-//! through an unheld 32-bit register, an exact cell, a based cell) per block,
+//! per candidate shape (a register copy, a cell read through an unheld 32-bit
+//! register, an exact cell) per block,
 //! and `gated` runs the pass only if some block has its bit. `LLRM_CHECK_NEEDS`
 //! runs the skipped pass anyway and asserts it changed nothing.
 //!
@@ -319,7 +319,6 @@ impl Peephole {
         // that can remove a copy the coalescer refused on colourability.
         let mut seen = needs::Contents::default();
         let body = phielim::unsplit(&body);
-        let body = frame_copies(&body, &self.cpu, &self.classes)?;
         let body = gated(&mut seen, needs::COPY, body, |body| Ok(crate::backend::machinecp::propagated(&body)))?;
         let body = extensions(self.rules, &body);
         let body = copysink::sunk(&body);
@@ -355,7 +354,6 @@ impl Peephole {
         })?;
         let body = addresses(&body, &self.cpu)?;
         let body = stepped_after_compare(self.rules, &body);
-        let body = gated(&mut seen, needs::INSERTED | needs::BASED, body, |body| secondary_bases(&body, &self.cpu))?;
         let body = borrows(self.rules, &increments(self.rules, &body));
         let body = doubled(self.rules, &body, &self.cpu)?;
         let body = narrowed_arithmetic(self.rules, &body);
@@ -371,10 +369,10 @@ impl Peephole {
         let body = zeroed_loads(self.rules, &body, &self.cpu)?;
         let body = sharedstores::shared(&body, &self.cpu, &self.saved, &self.classes);
         let body = machinecse::eliminated(&body)?;
-        let body = waits(&zero_compares(
+        let body = zero_compares(
             self.rules,
             &compares_again(&tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))),
-        ));
+        );
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
         // Last: EBP zeroed above for each cell reading it 32 bits wide, where a
         // 32-bit address is the prefixed form of a 16-bit one. A native
@@ -452,129 +450,6 @@ pub fn popped_arguments(
         blocks.push(block.with_insns(insns));
     }
     Ok(LirBody { blocks, ..body.clone() })
-}
-
-/// Use a dead GPR for an allocated frame-to-frame parallel copy.
-///
-/// Parallel-copy scheduling has to work even when every GPR is live, so its
-/// unconditional spelling is a balanced PUSH-memory/POP-memory pair.  After
-/// allocation, physical liveness can prove that a same-width register is
-/// dead across a particular pair.  Two MOVs then avoid the temporary stack
-/// traffic without changing flags, stack depth, or either frame address.
-pub fn frame_copies<'a>(
-    body: &LirBody,
-    cpu: impl Into<ProfileOrName<'a>>,
-    classes: &RegisterClasses,
-) -> Result<LirBody, String> {
-    let regs = body.regs();
-    let profile = targets::profile(cpu)?;
-    let forms = ["push_m", "pop_m", "mov_rm", "mov_mr"];
-    if !forms.iter().all(|form| profile.prices(form)) {
-        return Ok(body.clone());
-    }
-    if profile.cost("mov_rm")? + profile.cost("mov_mr")? >= profile.cost("push_m")? + profile.cost("pop_m")? {
-        return Ok(body.clone());
-    }
-    if !body.blocks.iter().any(|block| {
-        block
-            .insns
-            .iter()
-            .zip(block.insns.iter().skip(1))
-            .any(
-                |(first, second)| first.what.as_ref().is_some_and(|what| what.op == Operation::Push)
-                    && second.what.as_ref().is_some_and(|what| what.op == Operation::Pop),
-            )
-    }) {
-        // avoid whole-body liveness when no stack shuttle exists
-        return Ok(body.clone());
-    }
-
-    let exits = liveness::dead_at_exit(body);
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let dead_after = regthrash::_dead_after(regs, body.bits, block, exits[&block.at].clone());
-        let mut insns = block.insns.to_vec();
-        for index in 0..insns.len().saturating_sub(1) {
-            let (pushed, popped) = (Arc::clone(&insns[index]), Arc::clone(&insns[index + 1]));
-            if [&pushed, &popped].into_iter().any(|one| {
-                one.what.is_none()
-                    || !one.clobbers.is_empty()
-                    || !one.clobbers_high.is_empty()
-                    || !one.requires.is_empty()
-                    || !one.delivers.is_empty()
-                    || !one.spread.is_empty()
-                    || one.group.is_some()
-                    || one.symbol == Some(true)
-                    || one.frame_adjust
-                    || one.spill_reload
-                    || one.spill_store
-            }) {
-                continue;
-            }
-            if pushed.at != popped.at
-                || popped.covers != Some((pushed.at, pushed.at))
-                || popped.call.is_some()
-                || !pushed.defines.is_empty()
-                || !pushed.uses.is_empty()
-                || !popped.defines.is_empty()
-                || !popped.uses.is_empty()
-            {
-                continue; // only parcopy's synthetic balanced transfer
-            }
-            let (Some(first), Some(second)) = (&pushed.what, &popped.what) else {
-                continue;
-            };
-            let (source, destination) = match (
-                (first.op, first.name.as_deref(), first.dests.as_slice(), first.sources.as_slice()),
-                (second.op, second.name.as_deref(), second.dests.as_slice(), second.sources.as_slice()),
-            ) {
-                (
-                    (Operation::Push, Some("push"), [], [Loc::Mem(source)]),
-                    (Operation::Pop, Some("pop"), [Loc::Mem(destination)], []),
-                ) => {
-                    if source.width != destination.width
-                        || ![2, 4].contains(&source.width)
-                        || !_frame_cell(source)
-                        || !_frame_cell(destination)
-                    {
-                        continue;
-                    }
-                    (source.clone(), destination.clone())
-                }
-                _ => continue,
-            };
-            let scratch = classes
-                .available
-                .iter()
-                .copied()
-                .filter(|register| {
-                    _lanes(regs, regs.named(*register, i64::from(source.width))).is_subset(&dead_after[&id(&popped)])
-                })
-                .map(|register| regs.named(register, i64::from(source.width)))
-                .next();
-            let Some(scratch) = scratch else {
-                continue;
-            };
-            let temporary = reg(scratch, source.width);
-            let load = with_what(
-                &pushed,
-                semantics(Operation::Move, "mov", vec![Loc::Reg(temporary)], vec![Loc::Mem(source)]),
-            );
-            let store = with_what(
-                &popped,
-                semantics(Operation::Move, "mov", vec![Loc::Mem(destination)], vec![Loc::Reg(temporary)]),
-            );
-            if emit(body.bits, load.what.as_ref().expect("set above")).is_none()
-                || emit(body.bits, store.what.as_ref().expect("set above")).is_none()
-            {
-                continue;
-            }
-            insns[index] = Arc::new(load);
-            insns[index + 1] = Arc::new(store);
-        }
-        blocks.push(block.with_insns(insns));
-    }
-    Ok(body.with_blocks(blocks))
 }
 
 /// Fold a load or transitive extension into one widening instruction
@@ -1839,263 +1714,6 @@ fn _root_get(
     key.then_some(rooted)
 }
 
-#[cfg(test)]
-thread_local! {
-    /// The values `secondary_bases` tried as derived from a candidate.
-    pub static SECONDARY_TRIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-/// Replace repeated allocated address shuttles with one clean 67h base.
-///
-/// Constrained-occurrence splitting keeps a long-lived word value in any GPR
-/// and creates short BX/SI/DI copies at native memory uses.  Once allocation
-/// has chosen physical registers, several such copies may be dearer than
-/// zero-extending the owner once and addressing through its 32-bit root.  The
-/// latter is the medium model's legal address-size-prefixed fallback.
-///
-/// This is deliberately post-allocation: it recognizes only copies created
-/// by allocation, changes no program algebra, checks every virtual consumer,
-/// and compares both the selected CPU cost and exact encoded byte totals.
-pub fn secondary_bases<'a>(
-    body: &LirBody,
-    cpu: impl Into<ProfileOrName<'a>>,
-) -> Result<LirBody, String> {
-    let regs = body.regs();
-    let profile = targets::profile(cpu)?;
-    let Some(secondary) = profile.dword_address_form() else {
-        return Ok(body.clone());
-    };
-
-    let mut definitions: IndexMap<u32, Option<Arc<Insn>>> = IndexMap::default();
-    let mut uses: IndexMap<u32, Vec<Arc<Insn>>> = IndexMap::default();
-    for one in body.insns() {
-        for value in &one.defines {
-            if definitions.contains_key(value) {
-                definitions.insert(*value, None);
-            } else {
-                definitions.insert(*value, Some(Arc::clone(&one)));
-            }
-        }
-        for value in one.uses.iter().copied().collect::<BTreeSet<u32>>() {
-            uses.entry(value).or_default().push(Arc::clone(&one));
-        }
-    }
-
-    let source_register = |one: &Insn, value: u32| -> Option<Reg> {
-        let what = one.what.as_ref()?;
-        for (named, destination) in one.defines.iter().zip(&what.dests) {
-            if let Loc::Reg(destination) = destination {
-                if *named == value && destination.width == 2 {
-                    return Some(*destination);
-                }
-            }
-        }
-        None
-    };
-
-    let derived = |value: u32, original: u32, source: &Reg| -> Option<(Arc<Insn>, Vec<Arc<Insn>>)> {
-        #[cfg(test)]
-        SECONDARY_TRIES.with(|count| count.set(count.get() + 1));
-        let definition = definitions.get(&value)?.as_ref()?;
-        let consumers = uses.get(&value).map_or(&[][..], Vec::as_slice);
-        if !definition.inserted() || definition.uses != [original] || consumers.len() != 1 {
-            return None;
-        }
-        if let Some(what) = &definition.what {
-            if what.op != Operation::Nothing {
-                match (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice()) {
-                    (Operation::Move, Some("mov"), [Loc::Reg(destination)], [Loc::Reg(copied)]) => {
-                        if destination.width != 2 || copied != source {
-                            return None;
-                        }
-                    }
-                    _ => return None,
-                }
-            }
-        }
-        let consumer = &consumers[0];
-        if Arc::ptr_eq(consumer, &definition) {
-            return None;
-        }
-        let consumed = consumer.what.as_ref()?;
-        let mut seen = 0;
-        for operand in consumed.dests.iter().chain(&consumed.sources) {
-            let selector_alias = matches!(
-                operand,
-                Loc::Mem(cell) if cell.selector.is_some_and(|selector| selector.value == value)
-            );
-            for held in ir::values(operand) {
-                if held.value == value {
-                    seen += 1;
-                    if !matches!(operand, Loc::Mem(cell)
-                        if cell.base == Some(held)
-                            && cell.index.is_none()
-                            && !selector_alias
-                            // A frame cell has two independent address
-                            // components: fixed BP and the allocated dynamic
-                            // index.  This rewrite widens one value only, so it
-                            // cannot legally turn the pair into a 32-bit
-                            // address.
-                            && !cell.addr.is_some_and(|addr| addr.space == Space::Frame)
-                            && regs.width_of(cell.through) == Some(2))
-                    {
-                        return None;
-                    }
-                }
-            }
-        }
-        if seen != 0 { Some((Arc::clone(definition), consumers.to_vec())) } else { None }
-    };
-
-    let rewritten = |one: &Insn, substitutions: &IndexMap<u32, (u32, RegId)>| -> Arc<Insn> {
-        let operand = |where_: &Loc| -> Loc {
-            let Loc::Mem(cell) = where_ else {
-                return where_.clone();
-            };
-            let Some(base) = cell.base else {
-                return where_.clone();
-            };
-            let Some((original, register)) = substitutions.get(&base.value) else {
-                return where_.clone();
-            };
-            Loc::Mem(Mem { base: Some(Held { value: *original, width: 4 }), through: *register, ..cell.clone() })
-        };
-        let what = one.what.as_ref().expect("a rewritten consumer has semantics");
-        Arc::new(Insn {
-            what: Some(Semantics {
-                dests: what.dests.iter().map(operand).collect(),
-                sources: what.sources.iter().map(operand).collect(),
-                ..what.clone()
-            }),
-            uses: one
-                .uses
-                .iter()
-                .map(|value| substitutions.get(value).map_or(*value, |substituted| substituted.0))
-                .collect(),
-            ..one.clone()
-        })
-    };
-
-    let mut substitutions: IndexMap<u32, (u32, RegId)> = IndexMap::default();
-    let mut remove: HashSet<usize> = HashSet::default();
-    let mut insert_after: HashMap<usize, Arc<Insn>> = HashMap::default();
-    // `derived` needs a definition that uses its candidate alone, so the values
-    // to try for a candidate are those, found once (every candidate tried every
-    // definition, with a copy of its uses).
-    let mut used_alone: HashMap<u32, Vec<u32>> = HashMap::default();
-    for (value, made) in &definitions {
-        if let Some([only]) = made.as_ref().map(|made| made.uses.as_slice()) {
-            used_alone.entry(*only).or_default().push(*value);
-        }
-    }
-    for (candidate, definition) in definitions.clone() {
-        let Some(definition) = definition else {
-            continue;
-        };
-        let Some(source) = source_register(&definition, candidate) else {
-            continue;
-        };
-        let Some(root) = _root_get(regs, source.register) else {
-            continue;
-        };
-        if regs.width_of(root) != Some(4) {
-            continue;
-        }
-        let mut group = Vec::new();
-        for value in used_alone.get(&candidate).into_iter().flatten() {
-            if *value == candidate {
-                continue;
-            }
-            if let Some((made, found)) = derived(*value, candidate, &source) {
-                group.push((*value, made, found));
-            }
-        }
-        if group.is_empty() {
-            continue;
-        }
-        let trial_substitutions: IndexMap<u32, (u32, RegId)> =
-            group.iter().map(|(value, _made, _consumers)| (*value, (candidate, root))).collect();
-        let mut consumers: IndexMap<usize, Arc<Insn>> = IndexMap::default();
-        for (_v, _d, found) in &group {
-            for one in found {
-                consumers.insert(id(one), rewritten(one, &trial_substitutions));
-            }
-        }
-        let extension = Arc::new(Insn {
-            call: definition.call.clone(),
-            ..Insn::new(
-                definition.at,
-                Some((definition.at, definition.at)),
-                Some(semantics(Operation::Extend, "movzx", vec![Loc::Reg(reg(root, 4))], vec![Loc::Reg(source)])),
-                vec![candidate],
-                vec![candidate],
-            )
-        });
-        let copies: Vec<Semantics> = group
-            .iter()
-            .filter_map(|(_value, made, _found)| made.what.clone())
-            .filter(|what| what.name.as_deref() == Some("mov"))
-            .collect();
-        let before_parts: Vec<Semantics> = copies
-            .iter()
-            .cloned()
-            .chain(
-                group
-                    .iter()
-                    .flat_map(|(_value, _made, found)| found.iter().map(|one| one.what.clone().expect("a consumer"))),
-            )
-            .collect();
-        let after_parts: Vec<Semantics> = std::iter::once(extension.what.clone().expect("set above"))
-            .chain(consumers.values().map(|one| one.what.clone().expect("a consumer")))
-            .collect();
-        let before_encoded: Vec<Option<select::Emitted>> =
-            before_parts.iter().map(|what| emit(body.bits, what)).collect();
-        let after_encoded: Vec<Option<select::Emitted>> =
-            after_parts.iter().map(|what| emit(body.bits, what)).collect();
-        if before_encoded.iter().chain(&after_encoded).any(Option::is_none) {
-            continue;
-        }
-        let before_cost = copies.len() as i64 * profile.cost("mov_rr")?;
-        // The defining word write is immediately read as a full register by
-        // MOVZX.  This is exactly the partial-register transition charged by
-        // the final scorer; omitting it made P6/Core select a locally smaller
-        // sequence that was substantially slower under their own profiles.
-        let after_cost =
-            profile.cost("movzx")? + profile.partial_register_stall + consumers.len() as i64 * secondary.use_cost;
-        let before_bytes: usize = before_encoded.iter().flatten().map(|one| one.code.len()).sum();
-        let after_bytes: usize = after_encoded.iter().flatten().map(|one| one.code.len()).sum();
-        if after_cost >= before_cost || after_bytes > before_bytes {
-            continue;
-        }
-        substitutions.extend(trial_substitutions);
-        remove.extend(group.iter().map(|(_value, made, _found)| id(made)));
-        insert_after.insert(id(&definition), extension);
-    }
-
-    if substitutions.is_empty() {
-        return Ok(body.clone());
-    }
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let mut insns = Vec::new();
-        for one in &block.insns {
-            if remove.contains(&id(one)) {
-                continue;
-            }
-            insns.push(if one.uses.iter().any(|value| substitutions.contains_key(value)) {
-                rewritten(one, &substitutions)
-            } else {
-                Arc::clone(one)
-            });
-            if let Some(extension) = insert_after.get(&id(one)) {
-                insns.push(Arc::clone(extension));
-            }
-        }
-        blocks.push(block.with_insns(insns));
-    }
-    Ok(body.with_blocks(blocks))
-}
-
 /// `mov z,y` and the arithmetic after it that only rewrites z, as one 67h LEA.
 ///
 /// Each step keeps z an affine sum of registers (`affine::step`). The
@@ -2922,43 +2540,6 @@ pub fn zeroes(body: &LirBody) -> LirBody {
             insns.push(one);
         }
         insns.reverse();
-        blocks.push(block.with_insns(insns));
-    }
-    body.with_blocks(blocks)
-}
-
-const _WAITING: [&str; 36] = [
-    "wait", "fwait", "fld", "fild", "fst", "fstp", "fist", "fistp", "fadd", "faddp", "fiadd", "fsub", "fsubp", "fsubr",
-    "fsubrp", "fisub", "fisubr", "fmul", "fmulp", "fimul", "fdiv", "fdivp", "fdivr", "fdivrp", "fidiv", "fidivr",
-    "fchs", "fabs", "fsqrt", "fxch", "fcom", "fcomp", "fcompp", "fucom", "fucomp", "fucompp",
-];
-
-/// An immediately following waiting instruction already checks pending FP
-/// exceptions.
-///
-/// Intel SDM Vol. 1 section 8.3.12. Never cross integer work, an unknown
-/// instruction, a non-waiting control instruction, or a block boundary.
-pub fn waits(body: &LirBody) -> LirBody {
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let mut following: Option<&Semantics> = None;
-        let mut redundant: HashSet<usize> = HashSet::default();
-        for one in block.insns.iter().rev() {
-            let what = one.what.as_ref();
-            if what.is_some_and(|what| what.op == Operation::Nothing && what.name.as_deref().is_none_or(str::is_empty))
-            {
-                continue;
-            }
-            if what.is_some_and(|what| matches!(what.name.as_deref(), Some("wait" | "fwait")))
-                && following
-                    .is_some_and(|following| following.name.as_deref().is_some_and(|name| _WAITING.contains(&name)))
-            {
-                redundant.insert(id(one));
-            } else {
-                following = what;
-            }
-        }
-        let insns = lir::without(&block.insns, |one| redundant.contains(&id(one)), None::<fn(&Arc<Insn>) -> Arc<Insn>>);
         blocks.push(block.with_insns(insns));
     }
     body.with_blocks(blocks)

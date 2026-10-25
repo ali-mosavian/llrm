@@ -116,6 +116,14 @@ fn candidate(
     classes: &RegisterClasses,
 ) -> bool {
     let Some(what) = &one.what else { return false };
+    // An instruction that reads the flags is not a candidate: `sbb v, v` after
+    // two different compares is two values (the pin: an operation that uses a
+    // physical register, EFLAGS, is not a CSE candidate).
+    if what.name.as_deref().is_some_and(|name| {
+        matches!(name, "adc" | "sbb" | "rcl" | "rcr") || name.starts_with("set") || name.starts_with("cmov")
+    }) {
+        return false;
+    }
     // A pinned operand is a physical register the instruction defines or
     // reads (`cdq` writes `edx`): `hasLivePhysRegDefUses` keeps those apart.
     if !classes.requirements(what).is_empty() {
@@ -872,5 +880,34 @@ mod tests {
             "{returning:?}"
         );
         assert_eq!(adds(&returning), 2);
+    }
+
+    /// `bt a, 1; sbb m1 := x, x` and later `bt b, 1; sbb m2 := x, x`: the
+    /// second read another carry, and sharing them gave every step of a CRC
+    /// the first step's mask (bench crc under `--isel=dag` returned
+    /// -46801).
+    #[test]
+    fn test_two_sbbs_of_the_same_values_after_different_compares_are_two_values() {
+        let entry = LirBlock::new(
+            0,
+            vec![
+                insn(0, Operation::Compare, "bt", vec![], vec![held(1), held(2)], vec![], vec![1, 2]),
+                insn(1, Operation::Binary, "sbb", vec![held(10)], vec![held(3), held(3)], vec![10], vec![3]),
+                insn(2, Operation::Compare, "bt", vec![], vec![held(4), held(2)], vec![], vec![4, 2]),
+                insn(3, Operation::Binary, "sbb", vec![held(11)], vec![held(3), held(3)], vec![11], vec![3]),
+                insn(4, Operation::Binary, "xor", vec![held(12)], vec![held(10), held(11)], vec![12], vec![10, 11]),
+            ],
+        );
+        let mut body = LirBody::new("sbbs", 0, vec![entry.into()], IndexMap::default(), IndexMap::default());
+        body.inputs = [1, 2, 3, 4].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let shared = shared(&body, &RegisterClasses::m16());
+        let sbbs = shared
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter(|one| one.what.as_ref().and_then(|what| what.name.as_deref()) == Some("sbb"))
+            .count();
+        assert_eq!(sbbs, 2);
     }
 }
