@@ -160,3 +160,11 @@ Fixed on `qb-host-mac`: `sdl.h` renamed `qbsdl.h` (it collided with SDL2's `SDL.
 Open: Open Watcom `./build.sh boot` on macOS never builds `bld/git/binbuild/cpyright.exe` ("Can not open
 .../bld/git/binbuild/cpyright.exe for reading", then "Build failed"), so plain `cargo test` fails in
 `crates/frontends/llrm-c/build.rs`.
+
+Mac follow-up (feat/qb-host 8ffd78684 merged in):
+- Row 6: `-fsanitize=thread` with Mac clang: 3/3 `ok`, no race reports; `qb_sdl` 3/3 and `qb_headless` 3/3 pass.
+- Row 4: `B_BEEP`, `B_SOND(440,18)` and `B_SPLY("T120 O3 CDEFG")` ran in a real window. `sdl_audio_current` read 440 for
+  about 1.1 s, then 349 and 392 (F, G; the call blocks until the last notes are queued, so C-E were not sampled), then 0.
+  Pitch and clicks by ear: the user heard the tone; BEEP and PLAY not yet reported.
+- Row 5 rest: Shift+A 41, keypad 0 `0`, keypad Enter 0D, `+` 2B, `/` 2F, `*` 2A. Caps Lock not toggled (it would
+  change the user's keyboard state).
