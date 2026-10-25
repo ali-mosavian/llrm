@@ -28,7 +28,10 @@ use crate::x86_addr::AddrDag;
 use crate::x86_divrem::select_divrem;
 use crate::x86_fcmp::{select_fcmp, select_pop_from_x87, select_setcc_carry};
 use crate::x86_hooks::X86Hooks;
-use crate::x86_llrm::{llrm_opcode, select_llrm_node};
+use crate::x86_llrm::{
+    FATAN_OPCODE, FCOS_OPCODE, FEXP_OPCODE, FEXP2_OPCODE, FLN_OPCODE, FLOG2_OPCODE, FSIN_OPCODE, llrm_opcode,
+    select_llrm_node,
+};
 use crate::x86_mul::select_mul_lohi;
 use crate::x86_rmw::fold_load_store_into_mem_operand;
 use crate::x86_shift::try_shift_amount_mod;
@@ -53,6 +56,19 @@ pub fn select_node<D: AddrDag>(
         }
         op if llrm_opcode(op).is_some() => {
             select_llrm_node(dag, node, llrm_opcode(op).expect("an llrm node"));
+            return Outcome::Selected;
+        }
+        isd::FLOG | isd::FLOG2 | isd::FEXP | isd::FEXP2 | isd::FSIN | isd::FCOS | isd::FATAN => {
+            let opcode = match dag.opcode(node) {
+                isd::FLOG => FLN_OPCODE,
+                isd::FLOG2 => FLOG2_OPCODE,
+                isd::FEXP => FEXP_OPCODE,
+                isd::FEXP2 => FEXP2_OPCODE,
+                isd::FSIN => FSIN_OPCODE,
+                isd::FCOS => FCOS_OPCODE,
+                _ => FATAN_OPCODE,
+            };
+            select_llrm_node(dag, node, opcode);
             return Outcome::Selected;
         }
         x86isd::POP_FROM_X87_REG => {

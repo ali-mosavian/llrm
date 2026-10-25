@@ -2130,7 +2130,7 @@ impl Emitter<'_, '_> {
                 let mnemonic = if prefix == "ST" { "fst" } else { "fistp" };
                 self.push(Operation::FloatStore, mnemonic, vec![Loc::Mem(cell)], vec![Loc::Held(source)]);
             }
-            "CHS" | "ABS" | "SQRT" => {
+            "CHS" | "ABS" | "SQRT" | "LN" | "EXP" | "LOG2" | "EXP2" | "SIN" | "COS" | "ATAN" => {
                 let Loc::Held(source) = self.operand(node.ops[0])? else {
                     return Err(EmitError::Unsupported(format!("{name}: an operand that is no register")));
                 };
