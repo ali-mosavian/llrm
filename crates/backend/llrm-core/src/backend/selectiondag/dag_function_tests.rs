@@ -1126,6 +1126,33 @@ fn a_float_compare_is_an_fcom_and_a_set() {
     assert!(whats[compare..].iter().any(|w| w.name.as_deref().is_some_and(|n| n.starts_with("set"))));
 }
 
+const COMPARE_WITH_ONE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+declare i16 @g()
+define i16 @f() {
+entry:
+  %r = call i16 @g()
+  %c = icmp ne i16 %r, 1
+  br i1 %c, label %no, label %yes
+no:
+  ret i16 0
+yes:
+  ret i16 5
+}
+";
+
+/// A compare with 1 was selected as `X86ISD::SUB` and kept as `sub ax, 1; jne`,
+/// a write nothing reads (QCport `weapons.c`); the pin makes it `cmp ax, 1`.
+#[test]
+fn a_sub_whose_difference_is_unread_is_a_cmp() {
+    let module = llrm_mir::parse::module(COMPARE_WITH_ONE).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(names.iter().any(|n| n == "cmp"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "sub"), "{names:?}");
+}
+
 const FLOAT_COMPARE_AND_ADD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
 
 define internal cc 1000 void @f() addrspace(1) \"llrm-fp-eval\"=\"x87-extended\" norecurse {
