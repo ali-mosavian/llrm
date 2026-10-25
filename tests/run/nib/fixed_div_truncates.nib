@@ -1,0 +1,15 @@
+# Fixed-point `/` truncates toward zero (language spec section on fixed point). The pin's
+# llvm.sdiv.fix rounds toward negative infinity; under --isel=dag -17/16 printed -2, not -1
+# (bench nbody_fixed and stft_fixed printed other sums).
+type Q = fixed i32, fraction=9
+
+fn g(v: Q) -> i32:
+    let w: Q = v / 16
+    return i32(w * 512)
+
+fn main() -> i16:
+    print(g(Q(-17) / 512))
+    print(g(Q(-49) / 512))
+    print(g(Q(17) / 512))
+    print(g(Q(-32) / 512))
+    return 0
