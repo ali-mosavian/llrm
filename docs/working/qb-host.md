@@ -193,3 +193,11 @@ Mac follow-up (feat/qb-host 8ffd78684 merged in):
 GORILLA and NIBBLES run through `llrm-qb --arm64=linux`, headless, under `qemu-aarch64`. Looked at:
 [GORILLA city](qb-host-shots/gorilla-arm64-city.png), [GORILLA after a shot](qb-host-shots/gorilla-arm64-shot.png)
 (crater on a building, turn passed to Player 2), [NIBBLES level 1](qb-host-shots/nibbles-arm64-level1.png).
+
+### Mach-O QB programs for the Mac (2026-10-25)
+
+`llrm-qb --arm64=darwin` objects (not yet linked or run on a Mac; the ELF twins run under qemu) are in
+`~/scratch/mac-handoff/` on tinytim: `HELLO`, `NIBBLES`, `GORILLA` (`.darwin.o`, sources beside or in `~/scratch/gor`).
+On the Mac: `brew install sdl2`, `tools/link-qb-sdl.sh NIBBLES.darwin.o nibbles`, run `./nibbles` (a window, keyboard
+input). Report which links and runs, with a screenshot, under this heading. To rebuild an object on the Mac:
+`cargo build --release --bin llrm-qb && target/release/llrm-qb --arm64=darwin -O2 X.BAS -o X.darwin.o`.
