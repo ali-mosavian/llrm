@@ -8189,6 +8189,9 @@ impl Compiler {
         }
         let (mut left_operand, mut left_type) = self.expression(left)?;
         let (mut right_operand, mut right_type) = self.expression(right)?;
+        if left_type == CURRENCY || right_type == CURRENCY {
+            return self.currency_binary(op, (left_operand, left_type), (right_operand, right_type));
+        }
         let sized = sized_integer(left_type) || sized_integer(right_type);
         let narrow_divmod = !sized
             && matches!(op, Binary::Modulo | Binary::IntegerDivide)
@@ -8293,6 +8296,143 @@ impl Compiler {
         } else {
             Ok((Operand::Value(result), result_type))
         }
+    }
+
+    /// An operator with a CURRENCY operand, by BC's rule: a float operand
+    /// makes it a DOUBLE operation; otherwise `+ - * ` and the comparisons are
+    /// CURRENCY's own (an integer operand scaled by 10000) and `/` is DOUBLE.
+    fn currency_binary(
+        &mut self,
+        op: Binary,
+        (left, left_type): (Operand, u32),
+        (right, right_type): (Operand, u32),
+    ) -> Result<(Operand, u32), SemanticError> {
+        let comparison = matches!(
+            op,
+            Binary::Eq | Binary::NotEqual | Binary::Less | Binary::LessEqual | Binary::Greater | Binary::GreaterEqual
+        );
+        if !comparison && !matches!(
+            op,
+            Binary::Add | Binary::Subtract | Binary::Multiply | Binary::Divide
+        ) {
+            return self.unsupported("an operator on a CURRENCY value");
+        }
+        let floating =
+            matches!(left_type, SINGLE | DOUBLE) || matches!(right_type, SINGLE | DOUBLE) || op == Binary::Divide;
+        let common = if floating { DOUBLE } else { CURRENCY };
+        let left = self.convert(left, left_type, common)?;
+        let right = self.convert(right, right_type, common)?;
+        if comparison {
+            return Ok((self.computed(binary_name(op), BOOLEAN, vec![left, right]), BOOLEAN));
+        }
+        if floating {
+            let operation = match op {
+                Binary::Add => "fadd",
+                Binary::Subtract => "fsub",
+                Binary::Multiply => "fmul",
+                _ => "fdiv",
+            };
+            return Ok((self.computed(operation, DOUBLE, vec![left, right]), DOUBLE));
+        }
+        if op == Binary::Multiply {
+            return Ok((self.currency_product(left, right)?, CURRENCY));
+        }
+        // BC raises Overflow whatever /D says.
+        let result = self.value(CURRENCY);
+        self.overflow_checked(binary_name(op), result, left, right, CURRENCY)?;
+        Ok((Operand::Value(result), CURRENCY))
+    }
+
+    /// `left * right / 10000` of two CURRENCY values as BC's `__aFcymul` gives
+    /// it: the exact product rounded to even, and the integer indefinite,
+    /// i64 minimum, where it does not fit, with no error. Neither 128 bits
+    /// nor a call are needed: with a = a1*10000 + a0 and b = b1*10000 + b0
+    /// the quotient is a1*b + a0*b1 + a0*b0/10000, whose sum may wrap and
+    /// whose last term is the only fraction. A double estimate of the
+    /// quotient says how many 2^64 the wrapped sum is off by.
+    fn currency_product(
+        &mut self,
+        left: Operand,
+        right: Operand,
+    ) -> Result<Operand, SemanticError> {
+        let constant = |value: i64| Operand::Constant(CURRENCY, Number::Integer(value));
+        let scale = constant(10_000);
+        let split = |this: &mut Self, value: Operand| {
+            let high = this.computed("div", CURRENCY, vec![value.clone(), scale.clone()]);
+            let multiple = this.computed("mul", CURRENCY, vec![high.clone(), scale.clone()]);
+            (high, this.computed("sub", CURRENCY, vec![value, multiple]))
+        };
+        let (left_high, left_low) = split(self, left.clone());
+        let (right_high, right_low) = split(self, right.clone());
+        let wide = self.computed("mul", CURRENCY, vec![left_high, right.clone()]);
+        let cross = self.computed("mul", CURRENCY, vec![left_low.clone(), right_high]);
+        let sum = self.computed("add", CURRENCY, vec![wide, cross]);
+        // the fraction: floor(low*low / 10000) joins the sum, the remainder in
+        // [0, 10000) rounds it
+        let fraction = self.computed("mul", CURRENCY, vec![left_low, right_low]);
+        let quotient = self.computed("div", CURRENCY, vec![fraction.clone(), scale.clone()]);
+        let multiple = self.computed("mul", CURRENCY, vec![quotient.clone(), scale.clone()]);
+        let remainder = self.computed("sub", CURRENCY, vec![fraction, multiple]);
+        let result = self.temporary(CURRENCY)?;
+        let negative = self.computed("lt", BOOLEAN, vec![remainder.clone(), constant(0)]);
+        let floor = self.computed("sub", CURRENCY, vec![quotient.clone(), constant(1)]);
+        let rounded_down = self.conditional_value(negative.clone(), floor, quotient);
+        let shifted = self.computed("add", CURRENCY, vec![remainder.clone(), scale.clone()]);
+        let remainder = self.conditional_value(negative, shifted, remainder);
+        let whole = self.computed("add", CURRENCY, vec![sum, rounded_down]);
+        let odd = {
+            let low_bit = self.computed("and", CURRENCY, vec![whole.clone(), constant(1)]);
+            self.computed("ne", BOOLEAN, vec![low_bit, constant(0)])
+        };
+        let above = self.computed("gt", BOOLEAN, vec![remainder.clone(), constant(5_000)]);
+        let tie = self.computed("eq", BOOLEAN, vec![remainder, constant(5_000)]);
+        let tie_odd = self.computed("and", BOOLEAN, vec![tie, odd]);
+        let up = self.computed("or", BOOLEAN, vec![above, tie_odd]);
+        let bumped = self.computed("add", CURRENCY, vec![whole.clone(), constant(1)]);
+        let value = self.conditional_value(up, bumped, whole);
+        // overflow: the true quotient is `value` plus k * 2^64, and a double
+        // knows k
+        let left_double = self.computed("convert", DOUBLE, vec![left]);
+        let right_double = self.computed("convert", DOUBLE, vec![right]);
+        let factor = self.floating_literal("10000", DOUBLE)?;
+        let product = self.computed("fmul", DOUBLE, vec![left_double, right_double]);
+        let estimate = self.computed("fdiv", DOUBLE, vec![product, factor]);
+        let wrapped = self.computed("convert", DOUBLE, vec![value.clone()]);
+        let difference = self.computed("fsub", DOUBLE, vec![estimate, wrapped]);
+        let modulus = self.floating_literal("18446744073709551616", DOUBLE)?;
+        let count = self.computed("fdiv", DOUBLE, vec![difference, modulus]);
+        let half = self.floating_literal("0.5", DOUBLE)?;
+        let low = self.floating_literal("-0.5", DOUBLE)?;
+        let above = self.computed("gt", BOOLEAN, vec![count.clone(), half]);
+        let below = self.computed("lt", BOOLEAN, vec![count, low]);
+        let overflowed = self.computed("or", BOOLEAN, vec![above, below]);
+        let value = self.conditional_value(overflowed, constant(i64::MIN), value);
+        self.emit("store", Vec::new(), vec![Operand::Place(result), value]);
+        let loaded = self.value(CURRENCY);
+        self.emit("load", vec![loaded], vec![Operand::Place(result)]);
+        Ok(Operand::Value(loaded))
+    }
+
+    /// `then` where `condition` holds, else `otherwise`, through a cell.
+    fn conditional_value(
+        &mut self,
+        condition: Operand,
+        then: Operand,
+        otherwise: Operand,
+    ) -> Operand {
+        let type_id = CURRENCY;
+        let cell = self.temporary(type_id).expect("a CURRENCY cell");
+        let (yes, no, join) = (self.new_block(), self.new_block(), self.new_block());
+        self.terminate("branch", vec![condition], vec![yes, no]).expect("an open block");
+        for (block, value) in [(yes, then), (no, otherwise)] {
+            self.select_block(block);
+            self.emit("store", Vec::new(), vec![Operand::Place(cell), value]);
+            self.terminate("jump", Vec::new(), vec![join]).expect("an open block");
+        }
+        self.select_block(join);
+        let loaded = self.value(type_id);
+        self.emit("load", vec![loaded], vec![Operand::Place(cell)]);
+        Operand::Value(loaded)
     }
 
     /// `operand` as BC's routine for `routine` takes it: ERROR where it is out
