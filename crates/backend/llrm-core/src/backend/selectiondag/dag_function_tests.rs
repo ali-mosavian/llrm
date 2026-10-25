@@ -260,3 +260,28 @@ fn a_shifted_difference_plus_a_value_is_a_lea_and_a_sub() {
     assert!(names.iter().any(|n| n == "lea"), "{names:?}");
     assert!(!names.iter().any(|n| n == "shl"), "{names:?}");
 }
+
+const WORD_CHAIN: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i16 %x) {
+  %m = mul i16 %x, 25173
+  %a = add i16 %m, 13849
+  %c = and i16 %a, 4095
+  %z = zext i16 %c to i32
+  ret i32 %z
+}
+";
+
+/// A chain of word operations at m32 is done in dwords, and the casts between
+/// them fold (`aext (trunc x)` is `x`): it was `mov; imul; add; and` each
+/// narrowed and widened again, three `INSERT_SUBREG` and a `movzx` more than
+/// the pin (bintree, 13 functions of the corpus shadow).
+#[test]
+fn a_chain_of_word_operations_has_no_casts_between_them() {
+    let module = llrm_mir::parse::module(WORD_CHAIN).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(!names.iter().any(|n| n.starts_with("movzx") || n.starts_with("movsx")), "{names:?}");
+    assert_eq!(names.iter().filter(|n| matches!(n.as_str(), "imul" | "add" | "and")).count(), 3, "{names:?}");
+}
