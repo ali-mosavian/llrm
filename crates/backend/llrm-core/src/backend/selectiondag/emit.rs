@@ -2359,7 +2359,8 @@ impl Emitter<'_, '_> {
                     pooled.width
                 )));
             }
-            return Ok(Mem { base, index, scale, ..pooled });
+            // as wide as the read, which may be inside the entry
+            return Ok(Mem { base, index, scale, width: cell_width, ..pooled });
         }
         let disp = self.constant(group[3])?;
         if self.address_register(group[4], Role::Segment)?.is_some() {
