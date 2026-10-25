@@ -8,7 +8,7 @@
 #   operation  what it computes, as ir::Operation::as_str spells it.
 #   shape      LIR's operands, dests/sources, comma separated. Each operand is
 #              the kinds it may be: r register, m memory, i immediate, a address
-#              (lea's), s an x87 value. `^N` ties a source to dest N's register.
+#              (lea's), s an x87 value, x an xmm register. `^N` ties a source to dest N's register.
 #   widths     the operand widths in bits it has forms for.
 #   cost       the profile key that prices it (cpu.rs, timings.rs).
 #   fixed      operands pinned to a register when they are one: dN or sN=REG.

@@ -10,6 +10,7 @@ pub mod opcosts;
 pub mod os;
 #[cfg(test)]
 mod os_tests;
+pub mod pressure;
 pub mod registers;
 pub mod routines;
 pub mod runtime;

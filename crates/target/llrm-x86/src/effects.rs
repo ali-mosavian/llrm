@@ -148,6 +148,7 @@ fn bytes_of(place: &Loc) -> Option<u32> {
 fn kind_of(place: &Loc) -> char {
     match place {
         Loc::Reg(one) if one.register.is_st() => 's',
+        Loc::Reg(one) if one.register.is_xmm() => 'x',
         Loc::Reg(_) | Loc::Held(_) => 'r',
         Loc::Mem(_) => 'm',
         Loc::Imm(_) => 'i',

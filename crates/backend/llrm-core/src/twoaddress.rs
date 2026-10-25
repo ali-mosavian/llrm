@@ -477,6 +477,30 @@ pub fn three_address(
         return None;
     }
     let what = one.what.as_ref()?;
+    // `INC32r` and `DEC32r`: `lea [a + 1]`, `lea [a - 1]`.
+    if what.op == Operation::Unary
+        && let Some(name @ ("inc" | "dec")) = what.name.as_deref()
+        && what.dests.len() == 1
+        && what.sources.len() == 1
+        && one.group.is_none()
+        && one.requires.is_empty()
+        && one.delivers.is_empty()
+        && let (Loc::Held(into), Loc::Held(base)) = (&what.dests[0], &what.sources[0])
+        && into.width == 4
+        && base.width == 4
+        && into.value != base.value
+    {
+        let offset = if name == "inc" { 1 } else { -1 };
+        let mut made = one.clone();
+        made.what = Some(Semantics {
+            op: Operation::Address,
+            name: Some("lea".into()),
+            dests: vec![Loc::Held(*into)],
+            sources: vec![Loc::Mem(Mem { base: Some(*base), offset, ..Mem::new(None, 4) })],
+            ..Semantics::new(Operation::Address)
+        });
+        return Some(Arc::new(made));
+    }
     if what.op != Operation::Binary
         || !matches!(what.name.as_deref(), Some("add" | "sub" | "shl"))
         || what.dests.len() != 1
@@ -534,13 +558,15 @@ pub fn three_address(
 }
 
 /// Whether the flags `insns[index]` writes are written again, in its block,
-/// before anything reads them; a block that ends first leaves them live (the
-/// pin reads the instruction's `implicit dead $eflags`).
+/// before anything reads them, or are dead past its end (`dead_out`: no block
+/// after reads them first; the pin reads the instruction's
+/// `implicit dead $eflags`).
 pub fn flags_dead_after(
     insns: &[Arc<Insn>],
     index: usize,
     regs: llrm_lir::registers::Regs,
     bits: u32,
+    dead_out: bool,
 ) -> bool {
     use crate::backend::liveness;
     let flags = |lanes: &crate::backend::lanes::Lanes| {
@@ -555,7 +581,7 @@ pub fn flags_dead_after(
             return true;
         }
     }
-    false
+    dead_out
 }
 
 /// What `SrcRegMap` and `DstRegMap` map a value to: another value, or a

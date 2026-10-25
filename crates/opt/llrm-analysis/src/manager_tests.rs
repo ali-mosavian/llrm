@@ -350,10 +350,11 @@ fn test_a_memoryssa_build_asks_no_plain_accesses_and_says_what_they_said() {
             assert!(analyses.cached::<super::PlainAccesses>().is_none(), "{at}: the build made the accesses");
             let accesses = graph.accesses(&module.context, &layout, function, &mut analyses).expect("accesses");
             let shape = analyses.get::<crate::cfg::Shape>(&module.context, &layout, function);
+            let unit = Unit::within(&module.context, &layout, function, &outer);
             let said = crate::mssa::Mssa::build(
                 function,
                 &shape.dominance,
-                &crate::mssa::shadow::effect_of(&accesses, function),
+                &crate::mssa::shadow::effect_of_in(&accesses, &unit),
             );
             assert!(
                 crate::mssa::shadow::said(&graph.mssa) == crate::mssa::shadow::said(&said),
@@ -381,6 +382,36 @@ fn test_the_accesses_of_a_graph_are_read_without_annotating() {
             graph.accesses(&module.context, &layout, function, &mut analyses).expect("accesses");
             assert!(analyses.cached::<Annotated>().is_none(), "{at}: the accesses were annotated");
             assert!(analyses.cached::<super::PlainAccesses>().is_none(), "{at}: the plain accesses were made");
+        }
+    }
+}
+
+/// The graph's accesses make no reference up front (the clients ask 1.6 % of
+/// them: `BaseAccesses` was 8.0 M Ir over 28 builds on d_faces -O2), and what
+/// they say when asked is what the eager accesses of the same body say, for
+/// every instruction of every corpus function.
+#[test]
+fn test_the_graphs_accesses_are_lazy_and_say_what_the_eager_ones_say() {
+    for (name, module) in corpus() {
+        let layout = layout(&module);
+        let mut outer = Outer::of(&module, None);
+        outer.require::<Summaries>(&module);
+        let outer = Rc::new(outer);
+        for (_, global, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
+            let at = format!("{name}/@{}", global.name.as_deref().unwrap_or(""));
+            let mut analyses = Analyses::new(Rc::clone(&outer));
+            let graph = analyses.get::<super::MemorySsa>(&module.context, &layout, function);
+            let Ok(graph) = &*graph else { continue };
+            let lazy = graph.accesses(&module.context, &layout, function, &mut analyses).expect("accesses");
+            assert!(lazy.is_lazy(), "{at}: the graph's accesses were made up front");
+            let exposed = analyses.get::<super::ExposedFrames>(&module.context, &layout, function);
+            let unit = Unit::within(&module.context, &layout, function, &outer).with_exposed(&exposed);
+            let eager = crate::memoryssa::Accesses::plain(&unit, &Default::default());
+            for (_, inst) in function.walk() {
+                assert_eq!(lazy.reference_in(&unit, inst), eager.reference_in(&unit, inst), "{at} {inst:?}");
+                assert_eq!(lazy.reads_in(&unit, inst), eager.reads_in(&unit, inst), "{at} {inst:?} reads");
+                assert_eq!(lazy.writes_in(&unit, inst), eager.writes_in(&unit, inst), "{at} {inst:?} writes");
+            }
         }
     }
 }
@@ -727,6 +758,34 @@ fn test_a_result_derived_from_the_body_as_it_stands_is_dropped_at_an_invalidatio
     let of_effects: Vec<_> =
         counts.iter().filter(|(name, ..)| *name == "writes").map(|&(_, _, how, n)| (how, n)).collect();
     assert_eq!(of_effects, vec![("first", 1), ("replayed", 1)], "{counts:?}");
+}
+
+/// A pass that made a block and removed it (jump threading, rotate, lcssa, the
+/// cleanups: 12 of 24 `ExposedFrames` runs on d_faces -O2) gave the exposed
+/// frames up: `update` returned none for a block change and the whole body was
+/// scanned again, to the same answer. An alloca is exposed by its address's
+/// uses, which a block change does not touch.
+#[test]
+fn test_a_block_made_and_removed_leaves_the_exposed_frames_to_be_updated_not_rerun() {
+    let mut module = parsed(&format!(
+        "{DOS}declare void @use(ptr)\n\ndefine void @f() {{\nb:\n  %a = alloca i16\n  call void @use(ptr %a)\n  ret void\n}}\n"
+    ));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let (context, f) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(outer);
+    llrm_mir::passes::trace_recomputes(true);
+    analyses.get::<super::ExposedFrames>(context, &layout, f);
+    let block = f.create_block(Some("scratch"));
+    f.erase_block(block).expect("an empty block nothing names");
+    analyses.invalidate(f, &PreservedAnalyses::none());
+    let kept = analyses.get::<super::ExposedFrames>(context, &layout, f).len();
+    let counts = llrm_mir::passes::recomputes();
+    llrm_mir::passes::trace_recomputes(false);
+    assert_eq!(kept, 1, "the alloca passed to a call is exposed");
+    let frames: Vec<_> =
+        counts.iter().filter(|(name, ..)| *name == "exposed-frames").map(|&(_, _, how, n)| (how, n)).collect();
+    assert_eq!(frames, vec![("first", 1), ("replayed", 1)], "{counts:?}");
 }
 
 /// A scalar written in each arm of N joins is reached by up to N stores at

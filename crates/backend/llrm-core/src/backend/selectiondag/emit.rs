@@ -217,7 +217,7 @@ struct Emitter<'a, 'd> {
     /// (`constrainRegClass`).
     classes: Vec<(u32, &'static str)>,
     /// `CopyFromReg` of the stack pointer: addresses through `SP`.
-    sp_values: std::collections::HashSet<SDValue>,
+    sp_values: llrm_support::hash::HashSet<SDValue>,
     /// The value each of EAX/EDX (AX/DX) holds for the division or multiply
     /// that reads it, set by the `CopyToReg` the matcher glues to it or by the
     /// instruction before.
@@ -251,7 +251,7 @@ struct Emitter<'a, 'd> {
     /// Whether that selector is SS: the cells through ES are then the frame's.
     es_is_ss: bool,
     /// The `CopyToReg ES` nodes that copy SS.
-    ss_copies: std::collections::HashSet<u32>,
+    ss_copies: llrm_support::hash::HashSet<u32>,
     /// What each `CopyToReg ES` put there, by node: a cell takes the one of
     /// the copy it is chained after, whatever was set last.
     es_copies: HashMap<u32, Held>,
@@ -266,7 +266,7 @@ struct Emitter<'a, 'd> {
     /// wrote the flags, for the `adc`/`sbb` that still reads it.
     saved_carry: HashMap<u32, Held>,
     /// The `CopyToReg EFLAGS` nodes emitted.
-    flag_copies_done: std::collections::HashSet<u32>,
+    flag_copies_done: llrm_support::hash::HashSet<u32>,
 }
 
 /// The last lowered select: the block that branches, the one it skips, the
@@ -372,7 +372,7 @@ pub fn emit_in(
         origins: HashMap::default(),
         es: None,
         es_is_ss: false,
-        ss_copies: std::collections::HashSet::new(),
+        ss_copies: llrm_support::hash::HashSet::default(),
         selectors: HashMap::default(),
         lazy: HashMap::default(),
         last_select: None,
@@ -1109,7 +1109,8 @@ impl Emitter<'_, '_> {
             let uses = requires.iter().map(|(held, _)| held.value).collect();
             let what = Semantics { name: Some("".into()), ..Semantics::new(Operation::Return) };
             let at = self.next_address();
-            let insn = Insn { requires, ..Insn::new(at, Some((at, at)), Some(what), vec![], uses) };
+            let insn =
+                Insn { requires, reads_complete: true, ..Insn::new(at, Some((at, at)), Some(what), vec![], uses) };
             self.blocks.last_mut().expect("a block").insns.push(Arc::new(insn));
             return Ok(());
         }
@@ -2904,7 +2905,11 @@ impl Emitter<'_, '_> {
         if let Some((start, size)) = self.ctx.frame.extent(index_of)
             && !(start..=start + size).contains(&(start + disp))
         {
-            let object = self.fresh(if self.ctx.address_mode == AddrMode::Real16 { 2 } else { 4 });
+            let object = self.fresh(match self.ctx.address_mode {
+                AddrMode::Real16 => 2,
+                AddrMode::Flat64 => 8,
+                _ => 4,
+            });
             let whole = Mem { index: None, ..cell.clone() };
             self.push(Operation::Address, "lea", vec![Loc::Held(object)], vec![Loc::Address(whole.address())]);
             let address = Addr::new(crate::model::ir::Space::Literal, disp);
@@ -2976,7 +2981,7 @@ impl Emitter<'_, '_> {
         value: SDValue,
     ) -> Result<i64, EmitError> {
         match self.dag.node(value).data {
-            NodeData::Const { bits, .. } => Ok(bits as i64),
+            NodeData::Const { bits, .. } => Ok(sign_extend(bits, width_of(self.dag, value) * 8)),
             _ => Err(EmitError::Unsupported("a non-constant address part".to_owned())),
         }
     }

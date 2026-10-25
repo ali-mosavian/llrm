@@ -522,6 +522,11 @@ pub fn _scaled_operand(
         let size = _displacement_size(base, what.index_through, disp, bits);
         return Some((memory_operand(base, what.index_through, 1, disp, size, RegId::from(segment)), false));
     }
+    // The frame token is a word register: with a wide index (`[bp + rdx]`)
+    // there is no encoding until the frame layout names it.
+    if addr.space == Space::Frame && width_of(base) < Some(4) && width_of(what.index_through) >= Some(4) {
+        return None;
+    }
     let size = _displacement_size(base, what.index_through, disp, bits);
     Some((memory_operand(base, what.index_through, what.scale, disp, size, RegId::from(segment)), false))
 }
@@ -2123,6 +2128,72 @@ pub fn emit(
     emit_in(BITNESS, what, at, r#where, short, relocated, held)
 }
 
+/// A scalar SSE instruction: the xmm operand is the one the iced Code names
+/// `xmm`, its memory twin `xmmm<bits>`, the bits those of the source
+/// (`cvtss2sd` reads 32). Operands are (destination, source), or the two
+/// sources of a compare; a binary's first source is its destination.
+fn scalar_sse(
+    what: &Semantics,
+    at: At,
+) -> Option<Emitted> {
+    let (dests, sources) = (&what.dests, &what.sources);
+    let name = what.name.as_deref()?.trim_end_matches("_x");
+    let (first, second) = match (dests.len(), sources.len()) {
+        (1, 2) => (&dests[0], &sources[1]),
+        (1, 1) => (&dests[0], &sources[0]),
+        (0, 2) => (&sources[0], &sources[1]),
+        _ => return None,
+    };
+    let bits = |one: &Loc| match one {
+        Loc::Reg(reg) => reg.width * 8,
+        Loc::Mem(cell) => cell.width * 8,
+        _ => 0,
+    };
+    let xmm = |one: &Loc| reg_of(one).is_some_and(RegId::is_xmm);
+    let upper = Upper(name);
+    match (first, second) {
+        (Loc::Reg(into), Loc::Reg(outof)) if xmm(first) && xmm(second) => {
+            let code = code_of!(upper, "_XMM_XMMM", bits(second))?;
+            _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true)
+        }
+        (Loc::Reg(into), Loc::Mem(cell)) if xmm(first) => {
+            let code = code_of!(upper, "_XMM_XMMM", cell.width * 8)?;
+            let (built, relocated) = operand_of(cell, at.bits)?;
+            _assemble(&raised(create_reg_mem(code, into.register, built)), at, relocated)
+        }
+        (Loc::Mem(cell), Loc::Reg(outof)) if xmm(second) => {
+            let code = code_of!(upper, "_XMMM", cell.width * 8, "_XMM")?;
+            let (built, relocated) = operand_of(cell, at.bits)?;
+            _assemble(&raised(create_mem_reg(code, built, outof.register)), at, relocated)
+        }
+        // cvttsd2si: an integer register from an xmm register or memory.
+        (Loc::Reg(into), source) if !xmm(first) => {
+            let code = code_of!(upper, "_R", into.width * 8, "_XMMM", bits(source))?;
+            match source {
+                Loc::Reg(outof) => _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true),
+                Loc::Mem(cell) => {
+                    let (built, relocated) = operand_of(cell, at.bits)?;
+                    _assemble(&raised(create_reg_mem(code, into.register, built)), at, relocated)
+                }
+                _ => None,
+            }
+        }
+        // cvtsi2sd: an xmm register from an integer register or memory.
+        (Loc::Reg(into), source) => {
+            let code = code_of!(upper, "_XMM_RM", bits(source))?;
+            match source {
+                Loc::Reg(outof) => _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true),
+                Loc::Mem(cell) => {
+                    let (built, relocated) = operand_of(cell, at.bits)?;
+                    _assemble(&raised(create_reg_mem(code, into.register, built)), at, relocated)
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 /// `emit` in `bits`-bit mode: 16 or 32, the target's object format says.
 pub fn emit_in(
     bits: u32,
@@ -2186,6 +2257,10 @@ pub fn emit_in(
     }
     let op = what.op;
     let seg = |register: RegId| SEGMENTS.contains_key(&register);
+
+    if all().any(|operand| reg_of(operand).is_some_and(RegId::is_xmm)) {
+        return scalar_sse(what, at);
+    }
 
     if op == Operation::Extend
         && matches!(what.name.as_deref(), Some("movsx" | "movzx"))

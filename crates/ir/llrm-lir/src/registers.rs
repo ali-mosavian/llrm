@@ -126,6 +126,11 @@ impl RegId {
     pub fn is_st(self) -> bool {
         self.iced().is_st()
     }
+
+    #[inline]
+    pub fn is_xmm(self) -> bool {
+        self.iced().is_xmm()
+    }
 }
 
 impl From<Register> for RegId {
