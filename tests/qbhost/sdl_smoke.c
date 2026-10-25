@@ -87,6 +87,32 @@ static void press(SDL_Keycode key, const char *typed)
     SDL_PushEvent(&event);
 }
 
+/* The tone is a full-amplitude square wave centred on zero, at every pitch (a slow ramp once made it a triangle with an
+   offset of about 3000 that shrank as the pitch rose). */
+static void check_square_wave(void)
+{
+    static const unsigned pitches[] = {440, 880, 2000};
+    int16_t block[4410];
+    unsigned at, n;
+    SdlTone tone = {0, 0};
+
+    for (at = 0; at < sizeof pitches / sizeof pitches[0]; at++) {
+        long sum = 0;
+        int low = 0, high = 0;
+
+        sdl_audio_render(&tone, block, 4410, pitches[at]);
+        sdl_audio_render(&tone, block, 4410, pitches[at]); /* past the fade-in */
+        for (n = 0; n < 4410; n++) {
+            sum += block[n];
+            low = block[n] < low ? block[n] : low;
+            high = block[n] > high ? block[n] : high;
+        }
+        CHECK(high >= 5900 && low <= -5900);
+        CHECK(sum / 4410 > -300 && sum / 4410 < 300);
+    }
+    sdl_audio_render(&tone, block, 4410, 0);
+}
+
 int qb_host_program(int argc, char **argv)
 {
     SDL_Event quit;
@@ -94,6 +120,7 @@ int qb_host_program(int argc, char **argv)
     unsigned turn;
 
     (void)argc, (void)argv;
+    check_square_wave();
     qb_start();
     cn_write("HELLO FROM THE WORKER", 21);
     CHECK(frame_matches());

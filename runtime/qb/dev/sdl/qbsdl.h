@@ -32,6 +32,12 @@ void sdl_audio_close(void);
 void sdl_audio_tone(unsigned hertz);
 /* The tone the callback is making, for a test. */
 unsigned sdl_audio_current(void);
+/* The samples of the tone `hertz` (0 for silence): what the audio callback fills. */
+typedef struct SdlTone {
+    unsigned phase;
+    int gain; /* 0 to the fade length */
+} SdlTone;
+void sdl_audio_render(SdlTone *tone, int16_t *out, int count, unsigned hertz);
 
 /* sync.c: the worker waits for the next frame to reach the screen. */
 void sdl_sync_request(void);                  /* the worker: wake the SDL thread and wait for a frame, up to one interval */

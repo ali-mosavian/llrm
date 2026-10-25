@@ -21,29 +21,38 @@ void sdl_audio_tone(unsigned hertz)
     atomic_store_explicit(&wanted, hertz, memory_order_relaxed);
 }
 
-static void fill(void *unused, Uint8 *stream, int bytes)
+/* The tone as samples: a hard square wave at full amplitude, as the PC speaker's, faded in and out over RAMP samples
+   where the tone starts and stops so that it does not click. the `SdlTone` carries `phase` and `gain` on from call to call. */
+void sdl_audio_render(SdlTone *tone, int16_t *out, int count, unsigned hertz)
 {
-    static unsigned phase;
-    static int level;
-    int16_t *out = (int16_t *)stream;
-    int count = bytes / (int)sizeof *out, at;
-    unsigned hertz = atomic_load_explicit(&wanted, memory_order_relaxed);
+    unsigned phase = tone->phase;
+    int gain = tone->gain, at;
 
-    (void)unused;
-    atomic_store_explicit(&making, hertz, memory_order_relaxed);
     for (at = 0; at < count; at++) {
-        int target = 0;
+        int wave = 0;
 
         if (hertz) {
             phase += hertz;
             if (phase >= RATE)
                 phase -= RATE;
-            target = phase < RATE / 2 ? AMPLITUDE : -AMPLITUDE;
+            wave = phase < RATE / 2 ? AMPLITUDE : -AMPLITUDE;
         }
-        level += target > level ? (target - level > RAMP ? RAMP : target - level)
-                                : -(level - target > RAMP ? RAMP : level - target);
-        out[at] = (int16_t)level;
+        gain += hertz ? (gain < RAMP) : -(gain > 0);
+        out[at] = (int16_t)(wave * gain / RAMP);
     }
+    tone->phase = phase;
+    tone->gain = gain;
+}
+
+static void fill(void *unused, Uint8 *stream, int bytes)
+{
+    unsigned hertz = atomic_load_explicit(&wanted, memory_order_relaxed);
+
+    static SdlTone tone;
+
+    (void)unused;
+    atomic_store_explicit(&making, hertz, memory_order_relaxed);
+    sdl_audio_render(&tone, (int16_t *)stream, bytes / (int)sizeof(int16_t), hertz);
 }
 
 void sdl_audio_open(void)
