@@ -115,7 +115,9 @@ pub fn tied(
     // The pin's liveness: the intervals, whose ends are the kills
     // (`LiveIntervals`, TwoAddressInstructionPass.cpp#L394-L483).
     let facts = crate::twoaddress::BodyFacts::of(body);
+    let flags_out = crate::backend::peephole::_flags_live_out(body);
     for (at, block) in body.blocks.iter().enumerate() {
+        let flags_dead_out = flags_out.entering.get(&block.at).is_some_and(crate::backend::lanes::Lanes::is_empty);
         let mut walk = crate::twoaddress::Commuter::sized(&facts, at, block.insns.len());
         let mut insns: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len() + block.insns.len() / 4);
         let mut work: Vec<Arc<Insn>> = block.insns.to_vec();
@@ -155,7 +157,7 @@ pub fn tied(
                 && (base.width != 2 || walk.src_register(base.value).is_none())
                 && (!walk.killed_at(&work[place], base.value)
                     || profitable_to_convert(&walk, &one, base.value, body.regs()))
-                && crate::twoaddress::flags_dead_after(&work, place, body.regs(), body.bits)
+                && crate::twoaddress::flags_dead_after(&work, place, body.regs(), body.bits, flags_dead_out)
             {
                 if let Some(what) = one.what.as_ref()
                     && what.name.as_deref() == Some("add")
@@ -232,7 +234,8 @@ pub fn tied(
     facts.finish(body)
 }
 
-/// `unfoldMemoryOperand` of a commutative instruction `d := op a, [m]` whose
+/// `unfoldMemoryOperand` of a commutative instruction (`add`, `and`, `or`,
+/// `xor`, the two-operand `imul`) `d := op a, [m]` whose
 /// `a` is another value: the load `t := mov [m]` and `d := op t, a`, commuted
 /// so that `t` is the tied source.
 fn _unfolded(
@@ -240,8 +243,14 @@ fn _unfolded(
     mint: &mut dyn FnMut() -> u32,
 ) -> Option<(Arc<Insn>, Arc<Insn>)> {
     let what = one.what.as_ref()?;
-    if what.op != Operation::Binary
-        || !matches!(what.name.as_deref(), Some("add" | "and" | "or" | "xor"))
+    // The two-operand `imul` commutes like `add`: `IMUL32rm`'s unfold is
+    // `IMUL32rr`.
+    let commutative = match what.op {
+        Operation::Binary => matches!(what.name.as_deref(), Some("add" | "and" | "or" | "xor")),
+        Operation::Multiply => what.name.as_deref() == Some("imul"),
+        _ => false,
+    };
+    if !commutative
         || what.dests.len() != 1
         || what.sources.len() != 2
         || one.volatile
@@ -511,7 +520,12 @@ pub fn ties(what: &Semantics) -> bool {
     !what.dests.is_empty()
         && !what.sources.is_empty()
         && (_TIED.contains(&what.op)
-            || (what.op == Operation::Multiply && what.dests.len() == 1 && what.sources.len() == 2))
+            || (what.op == Operation::Multiply
+                && what.dests.len() == 1
+                && what.sources.len() == 2
+                // `IMUL32rri` has no tied operand: it reads any source and
+                // writes any register.
+                && !matches!(what.sources[1], Loc::Imm(_))))
 }
 
 /// The copy and the fixed instruction, or None where it is already tied.
@@ -1169,6 +1183,60 @@ mod tests {
         assert_eq!((cell.base.map(|held| held.value), cell.offset), (Some(7), -1));
     }
 
+    /// queens (AM-BT-6): `row + 1` was `mov t, row; inc t`, which the allocator
+    /// could not rematerialize and spilled and reloaded; the pin's `INC32r`
+    /// is converted to `LEA32r` like an add of one
+    /// (`convertToThreeAddress`).
+    #[test]
+    fn test_an_inc_or_dec_of_a_live_source_is_a_lea_not_a_copy() {
+        for (name, offset) in [("inc", 1), ("dec", -1)] {
+            let what = Semantics {
+                name: Some(name.into()),
+                dests: vec![held(8, 4)],
+                sources: vec![held(7, 4)],
+                ..Semantics::new(Operation::Unary)
+            };
+            let step = Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![8], vec![7]));
+            let got = tied(&of(vec![imm_def(0, 7), step, sum_into(2, 6, 8, 7), read(3, 6)]), All);
+            let lea = got
+                .insns()
+                .iter()
+                .find(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("lea")))
+                .cloned()
+                .unwrap_or_else(|| {
+                    panic!("{name} of a live source stays a copy and a tied {name}: {:?}", names_of(&got))
+                });
+            let Loc::Mem(cell) = &lea.what.as_ref().unwrap().sources[0] else { panic!("a cell") };
+            assert_eq!((cell.base.map(|held| held.value), cell.offset), (Some(7), offset));
+        }
+    }
+
+    /// queens `_place`: `row + 1` at the end of a block whose successor writes
+    /// the flags first stayed `mov t, row; inc t` (flags past the block's end
+    /// were taken as live), so it was spilled, not made again at the call.
+    #[test]
+    fn test_an_inc_whose_flags_the_next_block_writes_first_is_a_lea() {
+        let what = Semantics {
+            name: Some("inc".into()),
+            dests: vec![held(8, 4)],
+            sources: vec![held(7, 4)],
+            ..Semantics::new(Operation::Unary)
+        };
+        let step = Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![8], vec![7]));
+        let body = LirBody::new(
+            "t",
+            0,
+            vec![
+                LirBlock { succ: vec![1].into(), ..LirBlock::new(0, vec![imm_def(0, 7), step]) }.into(),
+                LirBlock::new(1, vec![sum_into(2, 6, 8, 7), read(3, 6)]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let names = names_of(&tied(&body, All));
+        assert!(names.contains(&"lea".to_owned()), "an inc of a live source stays a copy and an inc: {names:?}");
+    }
+
     #[test]
     fn test_a_sub_of_an_immediate_is_a_lea_of_its_negation() {
         let got = tied(&of(live_source_add(5, "sub")), All);
@@ -1417,6 +1485,22 @@ mod tests {
         assert_eq!(sources(&fixed[0]), [first]);
         assert_eq!(sources(&fixed[1]), [result, second]);
         assert_eq!(fixed[1].uses.iter().copied().collect::<BTreeSet<u32>>(), BTreeSet::from([900, 902]));
+    }
+
+    /// x_iir (AM-BT-22): `imul` by a constant was split into a copy and a tied
+    /// `imul`, one more copy per product than the pin's three-address
+    /// `IMUL32rri` (17 loop instructions against its 15).
+    #[test]
+    fn test_two_address_leaves_an_imul_by_a_constant_three_address() {
+        let (result, source) = (held(900, 4), held(901, 4));
+        let what = Semantics {
+            name: Some("imul".into()),
+            dests: vec![result],
+            sources: vec![source, imm(1600, 4)],
+            ..Semantics::new(Operation::Multiply)
+        };
+        let insn = Insn::new(0, Some((0, 3)), Some(what), vec![900], vec![901]);
+        assert!(fixed(&insn).is_none(), "split into a copy and a tied multiply");
     }
 
     /// hotlop kept its old accumulator live through the add after copying it.
@@ -1705,6 +1789,34 @@ mod tests {
         assert!(
             shapes.len() == 4 && shapes[1].0 == "mov" && mem(1) && shapes[2].0 == "mov" && shapes[3].0 == "add",
             "the load comes first, then the copy of what it loaded, then the add of `a`: {shapes:?}"
+        );
+    }
+
+    /// The unfold is for every commutative two-address instruction with a
+    /// folded load, not only `add`/`and`/`or`/`xor`: `imul esi,[edx+4]` beside
+    /// a live counter was a copy and a memory multiply, where the pin loads
+    /// first and multiplies registers (x_list's inner loop, `mov esi,ecx;
+    /// imul esi,[edx+4]` against `mov edi,[edx+4]; imul edi,ecx`).
+    #[test]
+    fn test_a_folded_multiply_beside_a_live_source_is_unfolded_and_commuted() {
+        use crate::model::ir::Mem;
+        let what = Semantics {
+            name: Some("imul".into()),
+            dests: vec![held(8, 4)],
+            sources: vec![held(7, 4), Loc::Mem(Mem::new(None, 4))],
+            ..Semantics::new(Operation::Multiply)
+        };
+        let mul = Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![8], vec![7]));
+        let got = tied(&of(vec![imm_def(0, 7), mul, read(2, 8), read(3, 7)]), Off);
+        let mut shapes = Vec::new();
+        for one in got.insns().iter() {
+            let Some(what) = one.what.as_ref() else { continue };
+            shapes.push((what.name.clone().unwrap_or_default().to_string(), what.sources.clone()));
+        }
+        let mem = |at: usize| matches!(shapes[at].1.first(), Some(Loc::Mem(_)));
+        assert!(
+            shapes.len() == 4 && shapes[1].0 == "mov" && mem(1) && shapes[2].0 == "mov" && shapes[3].0 == "imul",
+            "the load comes first, then the copy of what it loaded, then the imul by `a`: {shapes:?}"
         );
     }
 

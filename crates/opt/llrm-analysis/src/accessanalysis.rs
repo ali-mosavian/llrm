@@ -27,12 +27,12 @@
 //! they are.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::types::TypeId;
 use llrm_mir::valuetracking::underlying::{MAX_LOOKUP_SEARCH_DEPTH, get_underlying_objects};
+use llrm_support::hash::HashMap;
 
 use crate::aa::{AAResults, AliasResult, BatchAAResults, LocationSize, MemoryLocation};
 use crate::aliassets::{AliasLocation, AliasLocations, AliasSetTracker};
@@ -448,7 +448,7 @@ impl<'a, A: AAResults> AccessAnalysis<'a, A> {
             // We assign consecutive id to access from different dependence
             // sets. Accesses within the same set don't need a runtime check.
             let mut running_dep_id = 1u32;
-            let mut dep_set_id: HashMap<Operand, u32> = HashMap::new();
+            let mut dep_set_id: HashMap<Operand, u32> = HashMap::default();
 
             let mut retries: Vec<(MemAccessInfo, TypeId)> = Vec::new();
 
@@ -612,7 +612,7 @@ impl<'a, A: AAResults> AccessAnalysis<'a, A> {
 
             // Map of (pointer to underlying objects, accessed address space) to
             // last access encountered.
-            let mut obj_to_last_access: HashMap<(Operand, u32), MemAccessInfo> = HashMap::new();
+            let mut obj_to_last_access: HashMap<(Operand, u32), MemAccessInfo> = HashMap::default();
 
             // Set of access to check after all writes have been processed.
             let mut deferred_accesses = PtrAccessMap::default();

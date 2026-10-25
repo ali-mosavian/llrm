@@ -313,6 +313,62 @@ define void @f() {
     assert!(names.iter().any(|n| n == "lea"), "{names:?}");
 }
 
+/// A struct result's address (`sret`) takes RDI; the next argument was placed
+/// in RDI too, so two live-in copies of one register overlapped and the greedy
+/// allocator "could not place every range". It takes RSI.
+#[test]
+fn an_argument_after_an_sret_pointer_is_in_rsi() {
+    use llrm_lir::registers::RegId;
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define void @f(ptr noalias sret({i64, i64, i64}) %p, i64 %x) {
+entry:
+  store i64 %x, ptr %p, align 8
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let read: Vec<RegId> =
+        done.body.insns().iter().flat_map(|i| i.delivers.iter().chain(&i.requires)).map(|(_, reg)| *reg).collect();
+    assert!(read.contains(&RegId::RDI) && read.contains(&RegId::RSI), "{read:?}");
+}
+
+/// A `{i64, i64}` returned and received at m64 was refused ("aggregate or
+/// vector value"): each member travels in its own return register, RAX then
+/// RDX.
+#[test]
+fn a_pair_of_quadwords_is_returned_and_received_in_rax_and_rdx() {
+    use llrm_lir::registers::RegId;
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare {i64, i64} @g(i64)
+define {i64, i64} @mk(i64 %a, i64 %b) {
+entry:
+  %x = insertvalue {i64, i64} undef, i64 %a, 0
+  %y = insertvalue {i64, i64} %x, i64 %b, 1
+  ret {i64, i64} %y
+}
+define i64 @use(i64 %a) {
+entry:
+  %r = call {i64, i64} @g(i64 %a)
+  %lo = extractvalue {i64, i64} %r, 0
+  %hi = extractvalue {i64, i64} %r, 1
+  %s = add i64 %lo, %hi
+  ret i64 %s
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let registers = |name: &str| -> Vec<RegId> {
+        let done = selected(&module, name, &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+        done.body.insns().iter().flat_map(|i| i.delivers.iter().chain(&i.requires)).map(|(_, reg)| *reg).collect()
+    };
+    let returned = registers("mk");
+    assert!(returned.contains(&RegId::RAX) && returned.contains(&RegId::RDX), "{returned:?}");
+    let received = registers("use");
+    assert!(received.contains(&RegId::RAX) && received.contains(&RegId::RDX), "{received:?}");
+}
+
 /// `va_start` at m64 was refused ("the SysV register save area is not
 /// translated"; `varargs` of `tests/llc`). A variadic function stores the five
 /// argument registers its one named parameter left in the register save area,
@@ -340,7 +396,226 @@ define i32 @f(i32 %n, ...) {
         .insns()
         .iter()
         .filter_map(|i| i.what.as_ref())
-        .filter(|w| w.op == Operation::Move && matches!(w.dests.first(), Some(Loc::Mem(_))))
+        .filter(|w| w.op == Operation::Move && matches!(w.dests.first(), Some(Loc::Mem(cell)) if cell.width != 16))
         .count();
     assert_eq!(stores, 9);
+}
+
+/// A variadic function at m64 saves the vector argument registers in the
+/// other half of the register save area when `al` says a caller used any
+/// (`VASTART_SAVE_XMM_REGS`): `test al, al; je`, then eight `movaps` of
+/// xmm0-7 at offsets 48..176. They were left unwritten, so a `double` read
+/// back by `va_arg` was whatever the area held.
+#[test]
+fn a_variadic_function_saves_xmm0_to_xmm7_when_al_is_not_zero() {
+    use crate::model::ir::{Loc, Operation};
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare void @llvm.va_start.p0(ptr)
+define i32 @f(i32 %n, ...) {
+  %ap = alloca [24 x i8], align 8
+  call void @llvm.va_start.p0(ptr %ap)
+  ret i32 %n
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let insns = done.body.insns();
+    let semantics: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref()).collect();
+    let saves: Vec<i64> = semantics
+        .iter()
+        .filter(|w| w.name.as_deref() == Some("movaps"))
+        .filter_map(|w| match (&w.dests[..], &w.sources[..]) {
+            ([Loc::Mem(cell)], [Loc::Reg(register)]) if register.register.is_xmm() => cell.addr.map(|a| a.disp),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(saves.len(), 8, "{semantics:?}");
+    assert!(saves.windows(2).all(|pair| pair[1] - pair[0] == 16), "{saves:?}");
+    let test = semantics.iter().position(|w| w.name.as_deref() == Some("test")).expect("a test of al");
+    let jump = semantics.iter().position(|w| w.op == Operation::Branch).expect("a branch");
+    assert!(test < jump);
+}
+
+/// A frame object's address plus a variable index and a displacement past the
+/// object was made in a 4-byte register and used as the base of a quadword
+/// address: the encoder refused the 32-bit base beside a 64-bit index.
+#[test]
+fn a_frame_address_past_its_object_is_a_quadword_base() {
+    use crate::model::ir::Loc;
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare void @use(ptr)
+define void @f(i64 %n) {
+entry:
+  %buf = alloca [20 x i8], align 16
+  %m = sub i64 %n, 1
+  %p = getelementptr inbounds [20 x i8], ptr %buf, i64 0, i64 %m
+  call void @use(ptr %p)
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let insns = done.body.insns();
+    let leas: Vec<_> =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some("lea")).collect();
+    assert!(!leas.is_empty());
+    for lea in &leas {
+        assert!(matches!(&lea.dests[0], Loc::Held(h) if h.width == 8), "{lea:?}");
+        // A displacement of -1 is -1, not 4294967295.
+        assert!(!matches!(&lea.sources[..], [Loc::Mem(cell)] if cell.offset > i64::from(i32::MAX)), "{lea:?}");
+    }
+}
+
+/// A dense switch at m64 was lowered to `BR_JT` over a `WrapperRIP` table
+/// address, which nothing selects ("CannotSelect Target(954)", `-O0` tests/llc
+/// switches): the target prices no jump table, so the DAG makes compares as the
+/// MIR pass does.
+#[test]
+fn a_dense_switch_at_m64_is_compares_not_a_jump_table() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i32 @f(i32 %x) {
+entry:
+  switch i32 %x, label %d [ i32 0, label %a  i32 1, label %b  i32 2, label %c  i32 3, label %e  i32 4, label %g  i32 5, label %h ]
+a: ret i32 10
+b: ret i32 21
+c: ret i32 33
+e: ret i32 47
+g: ret i32 52
+h: ret i32 61
+d: ret i32 0
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    assert!(done.body.insns().iter().all(|i| i.what.as_ref().is_none_or(|w| !w.indirect)));
+}
+
+/// A block fill or copy at m64 reached `REP_STOSB_64` / `REP_MOVSB_64` with the
+/// count and pointers in `ecx`/`edi`/`esi`, as at m32, and stopped with
+/// `Unmapped("REP_STOSB_64")`: 24 of the vsgcc programs (sieve, histo,
+/// bintree...) were refused under `--isel=dag`. The pin copies through `RCX`,
+/// `RDI`, `RSI`.
+#[test]
+fn an_m64_block_fill_and_copy_are_rep_string_operations_on_the_wide_registers() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)
+define void @f(ptr %d, ptr %s, i64 %n) {
+entry:
+  call void @llvm.memset.p0.i64(ptr %d, i8 0, i64 %n, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 %n, i1 false)
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| Some(i.what.as_ref()?.name.as_deref()?.to_owned())).collect();
+    assert!(names.iter().any(|n| n == "stosb") && names.iter().any(|n| n == "movsb"), "{names:?}");
+}
+
+/// A call of a variadic function under SysV x86-64 passes the number of
+/// vector registers it uses in `al`; the callee's prologue tests it. No call
+/// set it, so a callee that read it saw whatever was there.
+#[test]
+fn a_variadic_call_at_m64_sets_al() {
+    use crate::model::ir::Loc;
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare i32 @printf(ptr, ...)
+define i32 @f(ptr %s, i32 %x) {
+entry:
+  %r = call i32 (ptr, ...) @printf(ptr %s, i32 %x)
+  ret i32 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let insns = done.body.insns();
+    let call = insns.iter().find(|i| i.call.is_some()).expect("a call");
+    let al = call
+        .requires
+        .iter()
+        .find(|(_, register)| *register == llrm_lir::registers::RegId::AL)
+        .unwrap_or_else(|| panic!("the call does not require al: {:?}", call.requires));
+    // no vector argument: zero of them
+    let zero = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .any(
+            |w| matches!(w.dests.first(), Some(Loc::Held(h)) if h.value == al.0.value)
+                && matches!(w.sources.first(), Some(Loc::Imm(imm)) if imm.value == 0),
+        );
+    assert!(zero);
+}
+
+/// A `double` copied through memory at m64 stopped at emit with
+/// `Unmapped("MOVSDrm_alt")` (the pin's name for the scalar load), and once
+/// mapped came out as 10-byte x87 cells. It is a `movsd` load and store of
+/// 8-byte cells, `float` 4.
+#[test]
+fn an_m64_scalar_float_copy_is_movsd_and_movss_of_their_own_width() {
+    for (ty, name, bytes) in [("double", "movsd_x", 8), ("float", "movss", 4)] {
+        let text = format!(
+            "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define void @f(ptr %p, ptr %q) {{
+entry:
+  %v = load {ty}, ptr %p
+  store {ty} %v, ptr %q
+  ret void
+}}
+"
+        );
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+        let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+        let insns = done.body.insns();
+        let moves: Vec<_> = insns
+            .iter()
+            .filter_map(|i| i.what.as_ref())
+            .filter(|w| w.name.as_deref() == Some(name))
+            .map(|w| {
+                let width = |loc: &crate::model::ir::Loc| match loc {
+                    crate::model::ir::Loc::Mem(m) => m.width,
+                    crate::model::ir::Loc::Held(h) => h.width,
+                    _ => 0,
+                };
+                (width(&w.dests[0]), width(&w.sources[0]))
+            })
+            .collect();
+        assert_eq!(moves, [(bytes, bytes), (bytes, bytes)], "{ty}");
+    }
+}
+
+/// A zero `double` at m64 stopped at `Unmapped("FsFLD0SD")`, and a select of
+/// two doubles at `Unmapped("CMOV_FR64")`: the first is `xorps r, r`, the
+/// second the pin's branch and phi like `CMOV_GR32`.
+#[test]
+fn an_m64_zero_double_is_xorps_and_a_double_select_is_a_diamond() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define double @z() {
+entry:
+  ret double 0.0
+}
+define double @s(i32 %c, double %a, double %b) {
+entry:
+  %t = icmp ne i32 %c, 0
+  %r = select i1 %t, double %a, double %b
+  ret double %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let zero = selected(&module, "z", &llrm_x86_m64::M64, cpu, &[]).expect("a zero double is selected");
+    let names: Vec<_> = zero.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+    assert!(names.iter().any(|n| &**n == "xorps"), "{names:?}");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let select = selected(&module, "s", &llrm_x86_m64::M64, cpu, &[]).expect("a double select is selected");
+    assert!(select.body.blocks.len() >= 3, "a branch and a sink: {} blocks", select.body.blocks.len());
 }

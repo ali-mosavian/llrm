@@ -26,12 +26,11 @@
 //! `PredicatedScalarEvolution`, which here adds no predicate (D1: SCEV has
 //! none). Exit: PredicatedScalarEvolution, with `replaceSymbolicStrideSCEV`.
 
-use std::collections::HashMap;
-
 use llrm_mir::context::{Constant, ConstantExpr, ConstantKind};
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate};
 use llrm_mir::types::TypeId;
+use llrm_support::hash::HashMap;
 
 use crate::equivalence::EquivalenceClasses;
 use crate::scev::backedge::ExitCountKind;
@@ -617,7 +616,7 @@ impl RuntimePointerChecking {
             can_use_diff_check: true,
             diff_checks: Vec::new(),
             params,
-            pointer_bounds: PointerBounds::new(),
+            pointer_bounds: PointerBounds::default(),
             loop_guards: None,
         }
     }
@@ -934,7 +933,7 @@ impl RuntimePointerChecking {
         self.checking_groups.clear();
         let mut total_comparisons = 0u32;
 
-        let mut position_map: HashMap<Operand, Vec<usize>> = HashMap::new();
+        let mut position_map: HashMap<Operand, Vec<usize>> = HashMap::default();
         for (index, pointer) in self.pointers.iter().enumerate() {
             position_map.entry(pointer.pointer_value).or_default().push(index);
         }

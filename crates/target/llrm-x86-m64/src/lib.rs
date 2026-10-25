@@ -370,4 +370,21 @@ mod tests {
             "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
         );
     }
+
+    /// A `double` argument went to the stack (floats were not placed in
+    /// registers): it must take XMM0-7 beside the integer registers, and a
+    /// ninth leave on the stack.
+    #[test]
+    fn sysv_places_floats_in_xmm_registers_and_returns_one_in_xmm0() {
+        use llrm_target::calling::{Kind, Place};
+        let convention = M64.calling().named("sysv64").unwrap();
+        let mut arguments = vec![Kind::Word, Kind::Float(8), Kind::Float(8), Kind::Word];
+        arguments.extend([Kind::Float(8); 7]);
+        let placement = convention.place(&arguments);
+        let register = |name: &str| Place::Registers(vec![name.to_owned()]);
+        assert_eq!(placement.places[..4], [register("rdi"), register("xmm0"), register("xmm1"), register("rsi")]);
+        assert_eq!(placement.places[10], Place::Stack(0));
+        assert_eq!(convention.float_result_register(), Some("xmm0"));
+        assert!(convention.clobbered.iter().any(|one| one == "xmm15"));
+    }
 }

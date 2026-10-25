@@ -330,11 +330,26 @@ no:
 #[test]
 fn test_what_is_not_selected_yet_is_refused() {
     for (body, why) in [(
-        "%c = icmp eq i16 %a, 0\n  %d = add i1 %c, %c\n  %v = sext i1 %d to i16\n  ret i16 %v",
+        "%c = icmp eq i16 %a, 0\n  %d = shl i1 %c, %c\n  %v = sext i1 %d to i16\n  ret i16 %v",
         "arithmetic on an i1",
     )] {
         let text = format!("define i16 @f(ptr %p, i16 %a) addrspace(1) {{\n  {body}\n}}\n");
         assert_eq!(selected(&text, "f").err(), Some(Unselected(why.to_owned())), "{body}");
+    }
+}
+
+/// LSR's expander turned a `not` into `add i1 x, true`, which no pass after it
+/// folds back to an xor; the selector refused it and nib's runtime did not link
+/// (#4674). An i1's sum and difference are an xor, its product an and.
+#[test]
+fn test_an_i1_sum_difference_and_product_are_selected() {
+    for (op, mnemonic) in [("add", "xor"), ("sub", "xor"), ("mul", "and")] {
+        let text = format!(
+            "define i16 @f(ptr %p, i16 %a) addrspace(1) {{\n  %c = icmp eq i16 %a, 0\n  %d = {op} i1 %c, true\n  %v = zext i1 %d to i16\n  ret i16 %v\n}}\n"
+        );
+        let got = selected(&text, "f");
+        assert!(got.is_ok(), "{op}: {:?}", got.err());
+        assert!(listing(&text, "f").iter().any(|line| line.starts_with(mnemonic)), "{op}");
     }
 }
 
@@ -526,6 +541,8 @@ fn test_division_and_variable_shifts() {
 /// so no `ss:` override: it cost a byte and a clock at each access. The
 /// doubled index is made once and both accesses use it (7a574ed3ed: precse
 /// no longer reads a load as touching the flags, so the two `i + i` are one).
+/// The frame cell indexed by `i` has known effects, so it is no scheduling
+/// boundary and the argument loads keep their source order.
 #[test]
 fn test_variable_indices_are_scaled_and_added() {
     let text = "define i16 @f(ptr %p, i16 %i) addrspace(1) {
@@ -546,8 +563,8 @@ fn test_variable_indices_are_scaled_and_added() {
             "sub sp, 8",
             "push si",
             "L0_0:",
-            "mov si, word ptr [bp+8]",
             "mov bx, word ptr [bp+6]",
+            "mov si, word ptr [bp+8]",
             "add si, si",
             "mov word ptr [bp+si-8], 5",
             "mov ax, word ptr [bx+si+2]",
@@ -2560,14 +2577,16 @@ join:
 ";
     // The address arithmetic sinks into the arm that makes the phi's input
     // (a88a614969, MachineSink outside size builds); bx is defined on both
-    // paths before the load.
+    // paths before the load. The empty arm is no block after early tail
+    // duplication bypasses it: the sink splits the edge, whose block is the
+    // synthetic label.
     assert_eq!(
         listing(text, "f")[3..],
         [
-            "mov bx, word ptr [bp+6]",
             "cmp byte ptr [bp+8], 0",
             "je L0_3",
-            "L0_2:",
+            "L0_4294967297:",
+            "mov bx, word ptr [bp+6]",
             "add bx, bx",
             "add bx, offset a",
             "jmp L0_4",
@@ -4798,11 +4817,13 @@ b:
             "mov bp, sp",
             "L0_0:",
             "cmp byte ptr [bp+6], 0",
-            "mov ax, word ptr [bp+8]",
-            "je L0_3",
+            "je L0_4294967297",
             "L0_1:",
             "mov ax, -4",
-            "L0_3:",
+            "pop bp",
+            "retf",
+            "L0_4294967297:",
+            "mov ax, word ptr [bp+8]",
             "pop bp",
             "retf"
         ]
@@ -6823,11 +6844,11 @@ b6:
 }
 ";
     let got = listing(text, "f");
-    // The selector goes into es from a register on each path, with no copy
-    // through ax between (which register holds each selector is the
-    // allocator's).
+    // Each path loads its selector into ax and one `mov es, ax` in the join
+    // takes it, with no copy through ax between (which register holds each
+    // selector is the allocator's; the argument loads sink into the arms).
     let into_es: Vec<_> = got.iter().filter(|line| line.starts_with("mov es, ")).collect();
-    assert_eq!(into_es.len(), 2, "{got:?}");
+    assert_eq!(into_es.len(), 1, "{got:?}");
     assert!(!got.iter().any(|line| line == "mov ax, bx"), "{got:?}");
 }
 

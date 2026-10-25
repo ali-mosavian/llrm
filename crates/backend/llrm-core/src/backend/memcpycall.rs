@@ -36,6 +36,40 @@ use super::expansion;
 /// many bytes is a call.
 pub const INLINE_LIMIT: u128 = 128;
 
+/// `findOptimalMemOpLowering` for x86 without SSE: the width in bytes of each
+/// memory operation covering `size` bytes, the widest being `i32`; `None` past
+/// `limit` operations. A last operation wider than the bytes left overlaps the
+/// one before it.
+pub(crate) fn inline_widths(
+    size: u64,
+    widest: u64,
+    limit: usize,
+    volatile: bool,
+) -> Option<Vec<u64>> {
+    let (mut left, mut width) = (size, widest);
+    let mut ops = Vec::new();
+    while left > 0 {
+        let mut taken = width;
+        while taken > left {
+            let narrower = width / 2;
+            if !ops.is_empty() && !volatile && narrower < left {
+                // a misaligned access is fast on x86: overlap the previous
+                // bytes
+                taken = left;
+            } else {
+                width = narrower;
+                taken = narrower;
+            }
+        }
+        if ops.len() + 1 > limit {
+            return None;
+        }
+        ops.push(width);
+        left -= taken;
+    }
+    Some(ops)
+}
+
 /// Every `llvm.memcpy` of `module` the target copies by a call, as a call of
 /// the routine `symbol` in calling convention `convention` (LLVM's number).
 pub fn expanded(
@@ -129,6 +163,26 @@ fn calls(
             })
             .unwrap_or(1)
     };
+    // `SelectionDAG::getMemcpy` copies by loads and stores first, whatever the
+    // alignment (x86 allows misaligned accesses); the target's code and the
+    // call come only after that fails.
+    if let Operand::Constant(id) = instruction.operands[2]
+        && let ConstantKind::Int(bytes) = context.get(id).kind
+    {
+        let volatile = matches!(
+            instruction.operands.get(3),
+            Some(Operand::Constant(flag)) if matches!(context.get(*flag).kind, ConstantKind::Int(1))
+        );
+        let limit =
+            if llrm_mir::memory::has(&function.attrs, "optsize") || llrm_mir::memory::has(&function.attrs, "minsize") {
+                4
+            } else {
+                8
+            };
+        if u64::try_from(bytes).is_ok_and(|bytes| inline_widths(bytes, 4, limit, volatile).is_some()) {
+            return false;
+        }
+    }
     if align(0) < 4 || align(1) < 4 {
         return true;
     }
