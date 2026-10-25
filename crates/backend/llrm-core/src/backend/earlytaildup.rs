@@ -99,12 +99,29 @@ fn successors(block: &Block) -> Vec<i64> {
     crate::model::lir::distinct(&block.succ)
 }
 
-/// The blocks of `body` that go to `at`.
-fn predecessors(
-    body: &LirBody,
-    at: i64,
-) -> Vec<&Block> {
-    body.blocks.iter().filter(|block| block.succ.contains(&at)).collect()
+/// Where each block's edges come from, as places in `body.blocks`: made once
+/// for a round of `duplicated`, where each candidate would otherwise scan the
+/// body.
+struct Preds(HashMap<i64, Vec<usize>>);
+
+impl Preds {
+    fn of(body: &LirBody) -> Self {
+        let mut from: HashMap<i64, Vec<usize>> = HashMap::new();
+        for (place, block) in body.blocks.iter().enumerate() {
+            for to in crate::model::lir::distinct(&block.succ) {
+                from.entry(to).or_default().push(place);
+            }
+        }
+        Self(from)
+    }
+
+    /// The places of the blocks that go to `at`.
+    fn places(
+        &self,
+        at: i64,
+    ) -> &[usize] {
+        self.0.get(&at).map_or(&[], Vec::as_slice)
+    }
 }
 
 /// `isSimpleBB`: one successor, a predecessor, and nothing but a jump.
@@ -112,7 +129,14 @@ pub fn is_simple(
     body: &LirBody,
     tail: &Block,
 ) -> bool {
-    if successors(tail).len() != 1 || predecessors(body, tail.at).is_empty() {
+    is_simple_in(&Preds::of(body), tail)
+}
+
+fn is_simple_in(
+    preds: &Preds,
+    tail: &Block,
+) -> bool {
+    if successors(tail).len() != 1 || preds.places(tail.at).is_empty() {
         return false;
     }
     // The first instruction the pin sees is a phi.
@@ -141,7 +165,15 @@ pub fn can_completely_duplicate(
     body: &LirBody,
     tail: &Block,
 ) -> bool {
-    predecessors(body, tail.at).iter().all(|pred| can_tail_duplicate(pred))
+    can_completely_duplicate_in(&Preds::of(body), body, tail)
+}
+
+fn can_completely_duplicate_in(
+    preds: &Preds,
+    body: &LirBody,
+    tail: &Block,
+) -> bool {
+    preds.places(tail.at).iter().all(|pred| can_tail_duplicate(&body.blocks[*pred]))
 }
 
 /// The cheap half of `shouldTailDuplicate`, which needs no predecessor: the
@@ -187,12 +219,22 @@ pub fn should_tail_duplicate(
     simple: bool,
     size: bool,
 ) -> bool {
+    should_tail_duplicate_in(&Preds::of(body), body, tail, simple, size)
+}
+
+fn should_tail_duplicate_in(
+    preds: &Preds,
+    body: &LirBody,
+    tail: &Block,
+    simple: bool,
+    size: bool,
+) -> bool {
     if !candidate(tail, size) {
         return false;
     }
     let indirect_end = indirect_end(tail);
     let after = successors(tail);
-    if predecessors(body, tail.at).len() > EDGES && after.len() > EDGES {
+    if preds.places(tail.at).len() > EDGES && after.len() > EDGES {
         let phis = !tail.phis.is_empty()
             || after.iter().any(|to| body.blocks.iter().any(|block| block.at == *to && !block.phis.is_empty()));
         if phis {
@@ -202,7 +244,7 @@ pub fn should_tail_duplicate(
     if indirect_end || simple {
         return true;
     }
-    can_completely_duplicate(body, tail)
+    can_completely_duplicate_in(preds, body, tail)
 }
 
 /// `duplicateSimpleBB`: a block of one jump is no code to copy: every
@@ -310,19 +352,28 @@ pub fn tail_duplicate(
     tail: i64,
     size: bool,
 ) -> Option<LirBody> {
+    tail_duplicate_in(&Preds::of(body), body, tail, size)
+}
+
+fn tail_duplicate_in(
+    graph: &Preds,
+    body: &LirBody,
+    tail: i64,
+    size: bool,
+) -> Option<LirBody> {
     let at = body.blocks.iter().position(|block| block.at == tail)?;
     let block = &body.blocks[at];
     if !candidate(block, size) {
         return None;
     }
-    let simple = is_simple(body, block);
-    if !should_tail_duplicate(body, block, simple, size) {
+    let simple = is_simple_in(graph, block);
+    if !should_tail_duplicate_in(graph, body, block, simple, size) {
         return None;
     }
     if simple {
         return duplicate_simple(body, at);
     }
-    let preds: Vec<usize> = (0..body.blocks.len()).filter(|one| body.blocks[*one].succ.contains(&tail)).collect();
+    let preds: Vec<usize> = graph.places(tail).to_vec();
     // The block just before the tail in the layout that jumps to it is the one
     // the pin sees fall through.
     let falls = |pred: usize| {
@@ -530,13 +581,15 @@ pub fn duplicated(
     loop {
         let mut changed = false;
         let mut place = 1;
+        let mut graph = Preds::of(&body);
         while place < body.blocks.len() {
             let at = body.blocks[place].at;
             // Most blocks fail the cheap tests: no scan of the body for them.
             if candidate(&body.blocks[place], size)
-                && let Some(made) = tail_duplicate(&body, at, size)
+                && let Some(made) = tail_duplicate_in(&graph, &body, at, size)
             {
                 body = made;
+                graph = Preds::of(&body);
                 changed = true;
                 // The tail may be gone: what stands at `place` is the next
                 // block.
