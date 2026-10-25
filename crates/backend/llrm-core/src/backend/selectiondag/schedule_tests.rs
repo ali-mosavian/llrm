@@ -164,6 +164,13 @@ impl SchedInfo for FlagsInfo {
     ) -> bool {
         false
     }
+
+    fn has_cross_copy_class(
+        &self,
+        reg: u16,
+    ) -> bool {
+        reg == self.0
+    }
 }
 
 /// An `add`'s carry is read by an `adc` while another unit that also needs the
@@ -194,4 +201,34 @@ fn a_unit_waiting_for_flags_backtracks_to_the_reader_of_the_live_ones() {
     let (at_add, at_adc, at_test) = (position(&order, add), position(&order, adc), position(&order, test));
     assert!(at_add < at_adc, "{order:?}");
     assert!(!(at_add < at_test && at_test < at_adc), "a flag writer between the add and the adc: {order:?}");
+}
+
+/// The `adc` reads the `cmov`, which needs its own flags, so the `cmov` cannot
+/// go below the `adc` and the `add`'s carry is live across the `test`: the
+/// first held unit went anyway, a `test` between the `add` and the `adc`
+/// (x_ll_arith's three remaining carry saves). The pin clones the `add` for
+/// the `adc` (`CopyAndMoveSuccessors`).
+#[test]
+fn a_flag_definition_wanted_across_a_flag_writer_is_cloned() {
+    let eflags_id = super::dagisel_adapter::EFLAGS_ID;
+    let eflags = super::dagisel_adapter::pin_register(eflags_id).expect("EFLAGS has a pin number");
+    let mut dag = dag();
+    let entry = dag.entry_node();
+    let a = load(&mut dag, 1, entry);
+    let b = load(&mut dag, 2, chain_of(a));
+    let c = load(&mut dag, 3, chain_of(b));
+    let d = load(&mut dag, 4, chain_of(c));
+    let add = machine(&mut dag, ADD, &[EVT::I32, EVT::I32], &[a, b]);
+    let first = dag.get_copy_to_phys_reg(entry, eflags_id, SDValue { node: add.node, res: 1 }, None);
+    let test = machine(&mut dag, TEST, &[EVT::I32], &[c, d]);
+    let second = dag.get_copy_to_phys_reg(entry, eflags_id, test, None);
+    let cmov = machine(&mut dag, CMOV, &[EVT::I32], &[add, c, SDValue { node: second.node, res: 1 }]);
+    let adc = machine(&mut dag, ADC, &[EVT::I32], &[cmov, d, SDValue { node: first.node, res: 1 }]);
+    let root = store(&mut dag, adc, 6, chain_of(d));
+    let order = schedule(&dag, root, &FlagsInfo(eflags));
+    let adds: Vec<usize> = (0..order.len()).filter(|&i| order[i].nodes.contains(&add.node)).collect();
+    let (at_test, at_adc) = (position(&order, test), position(&order, adc));
+    let last_add = *adds.last().expect("scheduled");
+    assert!(last_add < at_adc, "{order:?}");
+    assert!(!(last_add < at_test && at_test < at_adc), "a flag writer between the add and the adc: {order:?}");
 }

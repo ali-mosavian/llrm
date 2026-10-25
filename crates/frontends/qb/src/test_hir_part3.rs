@@ -2091,10 +2091,15 @@ END SUB
 }
 
 #[test]
-fn test_a_loop_holds_its_spill_slots_in_the_registers_it_leaves_free() {
-    // Six invariants and a pointer need seven registers: two invariants were
-    // reloaded into `di` from [bp] every trip, though the loop reaches the
-    // frame through nothing else, so `di` and BP could hold them.
+fn test_a_loop_reloads_the_invariants_the_registers_cannot_hold() {
+    // Six invariants and a pointer need seven registers; m16 has six and BP.
+    // LoopSlots' `promoted` step used to park two invariants in `di` and BP
+    // (push before the loop, pop after); it is retired (its header, DEVIATE
+    // LS1), as the pin keeps no such register: the loop reloads them from [bp]
+    // each trip. Measured on this program (LLRM_DEBUG=cost, -O2): 819 ->
+    // 1015 executed instructions, 1 -> 200 reloads; over the 164 QB
+    // programs of bench/ and tests/run/qb (-O1, -O2, -Os) the retirement
+    // changes 1 or 2 functions and executes -0.000%.
     let directory = tempfile::TempDir::new().unwrap();
     let basic = written(
         &directory,
@@ -2127,10 +2132,11 @@ END SUB
     let start = regex::Regex::new(r"(?m)^S proc").unwrap().find(&text).unwrap_or_else(|| panic!("{text}")).start();
     let procedure = &text[start..start + text[start..].find(" endp").expect("S endp")];
     let body = backward_loop(procedure);
-    eprintln!("{procedure}");
-    assert!(!body.contains("[bp"), "{body}");
+    assert!(body.contains("[bp"), "the premise: the invariants no register holds are reloaded: {body}");
     let (before, after) = procedure.split_at(procedure.find(&body).expect("the loop"));
-    assert!(before.contains("push bp") && after.contains("pop bp"), "{procedure}");
+    // The frame register carries a slot into the loop as `mov bp, [bp-d]`
+    // (after the prologue's own push).
+    assert!(!before.contains("mov bp, word ptr") && !after.contains("pop bp"), "BP is not parked: {procedure}");
 }
 
 #[test]
