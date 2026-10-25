@@ -38,7 +38,8 @@
 //!
 //! DEVIATE C1 (m32): the rest of CodeGenPrepare's work is done by isel, which
 //! rebuilds an address expression in the block that uses it, and by the select
-//! and switch lowering; this file is the compare and address-phi part.
+//! lowering; the width of a switch condition is `cgpswitch`'s
+//! (`optimizeSwitchType`); this file is the compare and address-phi part.
 //! Evidence, 2026-10-23, per function on the same IR against the pin's `llc`
 //! with and without the pass (`docs/working/codegenprepare.md`): at m32 the
 //! pass changes 16-17 of about 160 functions in the pin and ours is at its
