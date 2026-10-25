@@ -181,7 +181,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return false;
         }
         let results = self.dag.node(SDValue { node, res: 0 }).values.len() as u8;
-        (0..results).all(|res| self.dag.users(SDValue { node, res }).next().is_none())
+        !(0..results).any(|res| self.dag.has_users(SDValue { node, res }))
     }
 
     /// `Run`.

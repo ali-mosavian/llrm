@@ -333,7 +333,7 @@ impl SelectionDAG {
                 continue;
             }
             let results = self.nodes[n as usize].values.len() as u8;
-            if (0..results).any(|res| self.users(SDValue { node: n, res }).next().is_some()) {
+            if (0..results).any(|res| self.has_users(SDValue { node: n, res })) {
                 continue;
             }
             let dead = &self.nodes[n as usize];
@@ -390,6 +390,19 @@ impl SelectionDAG {
         users.sort_unstable();
         users.dedup();
         users.into_iter()
+    }
+
+    /// Whether anything reads `value`: `users(value).next().is_some()`
+    /// without collecting and sorting them.
+    pub fn has_users(
+        &self,
+        value: SDValue,
+    ) -> bool {
+        self.uses
+            .get(value.node as usize)
+            .into_iter()
+            .flatten()
+            .any(|&user| !self.deleted.contains(&user) && self.nodes[user as usize].ops.contains(&value))
     }
 
     fn note_uses(
