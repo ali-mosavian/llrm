@@ -278,7 +278,7 @@ step or a reader consumes, not in code:
 
 | Description | Read by |
 | --- | --- |
-| `crates/frontends/llrm-qbruntime/src/runtime.toml` | HIR emission, the BC lift and lowering: routine contracts |
+| `runtime/qb/src/runtime.toml` | HIR emission, the BC lift and lowering: routine contracts |
 | `patterns.isel`, `x86.instr` | `llrm-iselgen`: the selector |
 | `peephole.peep` | `llrm-peepgen`: rewrite rules |
 | `registers.regs`, `timings.times`, `opcosts.txt`, `*.toml` per target | the target crates: registers, costs, layout, ABI |

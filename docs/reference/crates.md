@@ -228,7 +228,7 @@ See [the object model](../formats/object-model.md).
 | Crate | Purpose |
 |---|---|
 | `llrm-qb` | The QuickBASIC-family frontend behind `llrm-qb` |
-| `qbfront` | The QuickBASIC-family parser and semantic analysis, to HIR; its parser tables are generated at build time from `grammar/` by `crates/frontends/qbfront/crates/buildprs` |
+| `qbfront` | The QuickBASIC-family parser and semantic analysis, to HIR; its parser tables are generated at build time from `grammar/` by `crates/frontends/qb/crates/buildprs` |
 | `llrm-qbruntime` | The QuickBASIC runtime's `B$` routine contracts, shared by `qbfront` and the BC frontend |
 | `llrm-c` | The C frontend behind `llrm-c`, through Open Watcom's front end |
 | `llrm-nib` | The Nib frontend behind `llrm-nib`, `llrm-run`, `nibfront` and `nib-lsp` |
