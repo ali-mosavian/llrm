@@ -294,6 +294,19 @@ long B_FLOF(short channel)
     return size;
 }
 
+/* B$FATR: FILEATTR(#channel, field): 1 is the open mode, 2 the DOS handle. */
+long B_FATR(short channel, short field)
+{
+    Fdb *fdb = open_fdb(channel);
+
+    if (field == 1)
+        return fdb->mode;
+    if (field == 2)
+        return fdb->handle;
+    qb_error(BE_ILLFUN);
+    return 0;
+}
+
 /* A record variable of `length` bytes, or the data of a string descriptor when
    the length is 0. */
 static void record_of(qb_data_ptr record, int length, os_data_mut *data, unsigned *bytes)
@@ -633,6 +646,7 @@ void file_xinit(void)
 #pragma aux B_GET3 "B$GET3"
 #pragma aux B_PUT3 "B$PUT3"
 #pragma aux B_FLOF "B$FLOF"
+#pragma aux B_FATR "B$FATR"
 #pragma aux file_close "@file_close@4"
 #pragma aux B_GET4 "B$GET4"
 #pragma aux B_PUT4 "B$PUT4"

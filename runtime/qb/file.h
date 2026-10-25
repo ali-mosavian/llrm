@@ -22,6 +22,7 @@ typedef struct Fdb {
 
 /* B$OPEN, B$CLOS, B$GETn, B$PUTn, B$FLOF, B$FLOC, B$FEOF */
 void B_OPEN(SD *name, short channel, short record_length, unsigned short mode);
+long B_FATR(short channel, short field);
 void B_KILL(SD *name);
 void B_NAME(SD *old, SD *new_name);
 void B_MDIR(SD *name);

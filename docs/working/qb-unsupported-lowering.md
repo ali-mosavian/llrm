@@ -63,3 +63,8 @@ DOS 4B00h at m16, a DPMI real-mode call at m32 (DOS/32A's own 4Bh takes an undoc
 arrays slide down and the DOS block shrinks to them for the child, then regrows (`qb_shell_release`/`qb_shell_reclaim`).
 `tests/qbrt/shell_command.bas` matches BCOM45 at m16 and m32; `tests/run/c/os_execute.c` tests the op. Not done: the child's
 exit code is not ERRORLEVEL-visible, and SHELL does not save and restore the screen or COM ports as QB's B$ShellSetup does.
+
+## FILEATTR
+BC calls `B$FATR(channel, field)` returning a LONG (QB 4.5 `rt/dvstmt.asm`): field 1 is the open mode (INPUT 1, OUTPUT 2,
+APPEND 8, BINARY 32), 2 the DOS handle, any other Illegal function call. `tests/qbrt/file_attributes.bas` matches BCOM45 at m16
+and m32. OPEN FOR RANDOM with `LEN =` is still refused by the compiler (separate gap).

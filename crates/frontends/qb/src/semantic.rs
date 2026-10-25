@@ -7198,6 +7198,18 @@ impl Compiler {
             self.emit_runtime_call("B$FLOF", vec![result], vec![file]);
             return Ok(Some((Operand::Value(result), LONG)));
         }
+        if intrinsic.lowering == Lowering::FileAttribute {
+            // B$FATR(channel, field): field 1 is the file's mode, 2 its DOS
+            // handle.
+            let mut operands = Vec::new();
+            for argument in &arguments[..2] {
+                let (value, value_type) = self.expression(argument)?;
+                operands.push(self.convert(value, value_type, INTEGER)?);
+            }
+            let result = self.value(LONG);
+            self.emit_runtime_call("B$FATR", vec![result], operands);
+            return Ok(Some((Operand::Value(result), LONG)));
+        }
         if intrinsic.lowering == Lowering::Timer {
             // All three Microsoft runtimes return AX = near address of a
             // runtime-owned SINGLE, not the value itself. Keep the load
