@@ -120,7 +120,7 @@ impl SelectionDAG {
                 write!(text, "<{index}>").ok();
             }
             NodeData::Block(block) => {
-                write!(text, "<{} 0x0>", self.block_names[block as usize]).ok();
+                write!(text, "<{} 0x0>", self.block_name(block)).ok();
             }
             NodeData::PhysReg(reg) => {
                 // the allocator's x87 registers are iced's MM0..MM6, the pin's
