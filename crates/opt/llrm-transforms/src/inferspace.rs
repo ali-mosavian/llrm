@@ -80,6 +80,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::context::{ConstantExpr, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{CastOp, Opcode};
@@ -229,7 +230,7 @@ fn narrow_constant_casts(
 ) -> bool {
     let walk: Vec<InstId> = function.walk().map(|(_, inst)| inst).collect();
     let data = context.types.ptr(spaces.data);
-    let mut near_steps: BTreeMap<ValueId, Operand> = BTreeMap::new();
+    let mut near_steps: IdMap<ValueId, Operand> = IdMap::default();
     let mut changed = false;
     for inst in walk {
         let instruction = function.instruction(inst).clone();
