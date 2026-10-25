@@ -1109,7 +1109,8 @@ impl Emitter<'_, '_> {
             let uses = requires.iter().map(|(held, _)| held.value).collect();
             let what = Semantics { name: Some("".into()), ..Semantics::new(Operation::Return) };
             let at = self.next_address();
-            let insn = Insn { requires, ..Insn::new(at, Some((at, at)), Some(what), vec![], uses) };
+            let insn =
+                Insn { requires, reads_complete: true, ..Insn::new(at, Some((at, at)), Some(what), vec![], uses) };
             self.blocks.last_mut().expect("a block").insns.push(Arc::new(insn));
             return Ok(());
         }

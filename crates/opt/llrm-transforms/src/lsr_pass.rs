@@ -20,9 +20,10 @@
 //! In the pipeline's strength slot, after `fixednarrow`.
 //!
 //! # Limits
-//! DEVIATE: not yet ported: `replaceCongruentIVs` (waits on the expander's
-//! #2773) and the debug value salvage. `DeleteDeadPHIs` reads the header's
-//! phis only. A loop of more than 200 IV users is left (`MaxIVUsers`).
+//! DEVIATE: not yet ported: the debug value salvage. `DeleteDeadPHIs` reads
+//! the header's phis only. `replaceCongruentIVs` runs on every loop in
+//! simplify form, as `ReduceLoopStrength` does. A loop of more than 200 IV
+//! users is left (`MaxIVUsers`).
 
 use llrm_analysis::scev::ScalarEvolution;
 use llrm_analysis::scev::analysis::{ScevSession, Scevs};
@@ -408,6 +409,28 @@ pub fn reduced_held(
                 stable = false;
                 session = new_session(context, function);
                 mark = function.mark();
+            }
+        }
+        // `Rewriter.replaceCongruentIVs(L, &DT, DeadInsts, &TTI)`: after the
+        // loop's strength reduction, or none, a phi of the loop that an equal
+        // or wider one makes (a narrower counter beside the one it truncates)
+        // is that one, cast.
+        session.forget_since(context, layout, &outer.globals, &outer.metadata, function, mark);
+        mark = function.mark();
+        let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
+        let simple = {
+            let cx = env.cx(&*context, &*function);
+            cx.loops.get_loop_for(header).is_some_and(|found| found.is_loop_simplify_form(cx.function))
+        };
+        if simple {
+            let mut rewriter = Expander::new("lsr");
+            rewriter.set_canonical_mode(false);
+            let mut folded_away = Vec::new();
+            if rewriter.replace_congruent_ivs(&env, context, function, se, header, &mut folded_away, Some(tti)) > 0 {
+                changed = true;
+                let seeds: Vec<_> =
+                    folded_away.into_iter().filter_map(|inst| function.instruction(inst).result).collect();
+                crate::dead::dead_from(context, outer.callees(), function, seeds);
             }
         }
     }
