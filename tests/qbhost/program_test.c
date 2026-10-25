@@ -7,12 +7,14 @@
 #include "ad.h"
 #include "console.h"
 #include "gfx.h"
+#include "gfxdev.h"
 #include "headless.h"
 #include "llrm_os.h"
 #include "nhstutil.h"
 #include "rtinit.h"
 #include "video.h"
 
+extern void qb_start(void);
 extern SD *B_INKY(void);
 extern float *B_TIMR(void);
 extern SD *B_FTIM(void);
