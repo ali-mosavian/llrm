@@ -31,8 +31,8 @@
 //!    get fresh names.
 //! 5. Induction facts are in `constraintelim_induction`; every function of the
 //!    pass is translated but the reproducer and the memory-access facts (6).
-//! 6. Memory-access facts (`getConstraintFromMemoryAccess`) are not translated:
-//!    they need `getBaseObjectSize`, which MIR lacks.
+//! 6. `getBaseObjectSize` (`valuetracking::objectsize`) does not know the size
+//!    of an allocation call, so no fact comes from an access into one.
 //!
 //! # Example
 //! `if (x < 5) { if (x < 10) ... }`: the inner compare is decided true.
@@ -49,6 +49,7 @@ use llrm_mir::hash::HashMap;
 use llrm_mir::module::Operand;
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::valuetracking::known::{is_known_non_negative, is_known_positive};
+use llrm_mir::valuetracking::objectsize::{ObjectSizeOpts, get_base_object_size};
 use llrm_mir::valuetracking::pattern::{self, Side};
 use llrm_mir::valuetracking::{MAX_ANALYSIS_RECURSION_DEPTH, Query};
 
@@ -525,6 +526,46 @@ pub(crate) fn constant_gep_offset(
     };
     let (constant, variable) = collect_offset(q, source, &instruction.operands, q.layout.offset_bits(space))?;
     variable.is_empty().then_some(constant)
+}
+
+/// `getConstraintFromMemoryAccess`: an access of `access_size` bytes through
+/// `gep` with a variable index into an object of known size gives
+/// `index <=u (size - access_size - constant offset) / scale`.
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ConstraintElimination.cpp#L1412>
+fn get_constraint_from_memory_access(
+    q: &Query,
+    gep: Operand,
+    access_size: u64,
+) -> Option<(CmpPredicate, Side, Side)> {
+    let offset = collect_offsets(q, gep)?;
+    if !offset.flags.contains(Flags::NUW) {
+        return None;
+    }
+    if offset.variable_offsets.len() != 1 {
+        return None;
+    }
+    let bit_width = offset.bit_width;
+    let (index, scale) = offset.variable_offsets[0];
+    // Bail out on non-canonical GEPs.
+    if side_bits(q, index) != bit_width {
+        return None;
+    }
+    let Side::Value(base) = offset.base_ptr else { return None };
+    // Workaround for gep inbounds, ptr null, idx; be conservative since it is
+    // not clear whether an out of bounds access to the padding is UB or not.
+    let opts = ObjectSizeOpts { null_is_unknown_size: true, round_to_align: true };
+    let size = get_base_object_size(q, base, opts)?;
+
+    // Index * Scale + ConstOffset + AccessSize <= AllocSize. With nuw, the
+    // index addition does not wrap: if (AllocSize - (ConstOffset +
+    // AccessSize)) wraps around, there is no valid value for Index.
+    let mask = llrm_mir::context::mask(bit_width);
+    let wide = |value: i64| (i128::from(value) as u128) & mask;
+    let max_index =
+        (u128::from(size.wrapping_sub(access_size)) & mask).wrapping_sub(wide(offset.constant_offset)) & mask;
+    let max_index = max_index / wide(scale);
+    Some((CmpPredicate::new(IntPredicate::Ule), index, Side::Int(max_index, bit_width)))
 }
 
 // ---- sides --------------------------------------------------------------
@@ -2033,8 +2074,33 @@ impl<'a> State<'a> {
                 continue;
             }
 
-            // Facts from memory accesses need the size of the base object
-            // (`getConstraintFromMemoryAccess`): DEVIATE 6.
+            // Facts from memory accesses.
+            let access = match &instruction.opcode {
+                Opcode::Load { volatile: false, .. } => Some((instruction.operands[0], instruction.ty)),
+                Opcode::Store { volatile: false, .. } => {
+                    q.type_of(instruction.operands[0]).map(|ty| (instruction.operands[1], ty))
+                }
+                _ => None,
+            };
+            if let Some((ptr, access_ty)) = access
+                && let Some((_, gep)) = q.instruction_of(ptr)
+                && matches!(gep.opcode, Opcode::GetElementPtr { .. })
+            {
+                let access_size = q.layout.store_size(&q.context().types, access_ty);
+                if guaranteed_to_execute {
+                    if let Some((pred, a, b)) = get_constraint_from_memory_access(q, ptr, access_size) {
+                        // The memory access is guaranteed to execute when BB
+                        // is entered, hence the constraint holds on entry to
+                        // BB.
+                        self.push(
+                            bb,
+                            Entry2::ConditionFact { cond: ConditionTy { pred, op0: a, op1: b }, does_hold: None },
+                        );
+                    }
+                } else {
+                    self.push(bb, Entry2::InstFact { inst });
+                }
+            }
 
             let id = pattern::call_intrinsic(q, inst);
             match id {
@@ -2517,6 +2583,19 @@ fn process_inst_fact(
     inst: InstId,
 ) {
     let instruction = q.function.instruction(inst);
+    // `AddFactsAboutIndices`: a load or store not guaranteed to execute.
+    let access = match &instruction.opcode {
+        Opcode::Load { .. } => Some((instruction.operands[0], instruction.ty)),
+        Opcode::Store { .. } => q.type_of(instruction.operands[0]).map(|ty| (instruction.operands[1], ty)),
+        _ => None,
+    };
+    if let Some((ptr, access_ty)) = access {
+        let access_size = q.layout.store_size(&q.context().types, access_ty);
+        if let Some((pred, a, b)) = get_constraint_from_memory_access(q, ptr, access_size) {
+            add_fact(q, info, cb, dfs_in_stack, pred, a, b);
+        }
+        return;
+    }
     let Some(this) = result_side(q, inst) else {
         // An assume whose condition did not hold on entry (not guaranteed to
         // execute): its compare.

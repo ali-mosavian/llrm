@@ -800,7 +800,7 @@ fn phi_has_undef_constant_value(
 }
 
 /// `Type::isSized()`.
-fn is_sized(
+pub(crate) fn is_sized(
     q: &Query,
     ty: TypeId,
 ) -> bool {
