@@ -35,6 +35,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [undef-table](undef-table.md) | MIR `undef`: each pass and pin function that treats it apart from poison, and its state |
 | [llrm-only-inventory](llrm-only-inventory.md) | Passes and analyses with no pin counterpart in the d_faces -O2 profile: Ir, why, delete or translate first (2026-10-25) |
 | [residual-split](residual-split.md) | The 59 M of ledger residual outside the buckets, per item Ir, pin counterpart, verdict (2026-10-25) |
+| [llrm-only-rules](llrm-only-rules.md) | One rule per llrm-only site over 2 M: DELETE, REPLACE or DEVIATE, owner, expected M (2026-10-25) |
 | [icmp-canonical-cells](icmp-canonical-cells.md) | `canonicalizeICmpPredicate`: the cells that grew when compares took the pin's canonical form, with causes |
 | [layout-fidelity](layout-fidelity.md) | Where the pin lays out the blocks its helpers create, and which of ours match; the cells that grew when ours moved |
 | [qb-float-rows](qb-float-rows.md) | The 41 QB float rows above main after BC's per-assignment rounding (#3352): the numbers, owner and exit |
