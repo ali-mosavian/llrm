@@ -361,6 +361,41 @@ fn a_load_read_by_a_compare_is_folded_into_it() {
     assert!(compare.sources.iter().any(|l| matches!(l, Loc::Mem(_))), "{compare:?}");
 }
 
+const TESTS_THE_LOW_BIT_OF_A_LOAD: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @g()
+declare void @h()
+define void @f(i32 %c) {
+  %t = trunc i32 %c to i1
+  br i1 %t, label %a, label %b
+a:
+  call void @g()
+  ret void
+b:
+  call void @h()
+  ret void
+}
+";
+
+/// `(c & 1) ? g() : h()` was `mov eax, [esp+4]; and al, 1; je` (6 bytes
+/// and a register): the pin narrows the load of the low byte and tests it in
+/// memory, `test byte [esp+4], 1` (5). `reduceLoadWidth` of the truncate, and
+/// no dead `brcond` counted as a reader of the `and`. x_crc32 -O3: +160 bytes.
+#[test]
+fn the_low_bit_of_an_argument_is_tested_in_memory() {
+    use crate::model::ir::Loc;
+    let module = llrm_mir::parse::module(TESTS_THE_LOW_BIT_OF_A_LOAD).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let reads: Vec<u32> = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .flat_map(|w| w.sources.iter())
+        .filter_map(|l| if let Loc::Mem(m) = l { Some(m.width) } else { None })
+        .collect();
+    assert_eq!(reads, [1], "one byte read of the argument, no dword: {reads:?}");
+}
+
 const WORD_FROM_COMPARE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
 @slot = global i16 0
 declare cc 1005 i16 @c(i16)

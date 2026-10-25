@@ -162,6 +162,9 @@ pub struct Profile {
     /// Off by default (`-fllrm-stable-loads` turns it on): it cost 6.6 M Ir
     /// and saved QCport 1.4% bytes (docs/working/stable-loads.md).
     pub stable_loads: bool,
+    /// -Oz (`Function::hasMinSize` on every function, as clang marks them): the
+    /// machine passes that ask it take size over speed.
+    pub min_size: bool,
     /// A spill of an x87 value keeps the register's 80 bits (`fstp tbyte`),
     /// as real BC keeps a temporary (BASIC). DEVIATE D-RFP5, exit: none, the
     /// pin rounds; QB follows real BC text.
@@ -315,6 +318,7 @@ impl Profile {
             float_store: false,
             rounds_float_spills: false,
             stable_loads: true,
+            min_size: false,
             spills_extended: false,
             exhaustive: false,
             model: arch.cost_model(),
@@ -460,7 +464,7 @@ fn _profile(
 static _MADE: LazyLock<
     std::sync::Mutex<
         crate::support::hash::HashMap<
-            (&'static str, String, bool, bool, bool, bool, bool, bool, bool, bool, bool),
+            (&'static str, String, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool),
             &'static Profile,
         >,
     >,
@@ -504,7 +508,7 @@ pub fn tuned_with(
     search: bool,
     exhaustive: bool,
 ) -> Result<&'static Profile, String> {
-    tuned_optimizing(arch, name, size, search, exhaustive, true, false, false, false, false, true)
+    tuned_optimizing(arch, name, size, search, exhaustive, true, false, false, false, false, true, false)
 }
 
 /// `tuned_with`, the backend's optional phases left out where not
@@ -521,6 +525,7 @@ pub fn tuned_optimizing(
     rounds_float_spills: bool,
     spills_extended: bool,
     stable_loads: bool,
+    min_size: bool,
 ) -> Result<&'static Profile, String> {
     if !arch.cpus().contains(&name) {
         return Err(format!("unknown CPU target: {name}; {} has {}", arch.name(), arch.cpus().join(", ")));
@@ -538,6 +543,7 @@ pub fn tuned_optimizing(
         rounds_float_spills,
         spills_extended,
         stable_loads,
+        min_size,
     );
     if let Some(&one) = made.get(&key) {
         return Ok(one);
@@ -552,6 +558,7 @@ pub fn tuned_optimizing(
         rounds_float_spills,
         spills_extended,
         stable_loads,
+        min_size,
         ..(_profile(arch, name)).expect("every listed CPU has a profile")
     }));
     made.insert(key, one);

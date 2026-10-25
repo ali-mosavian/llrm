@@ -251,7 +251,9 @@ def run(
     cwd: Path,
 ) -> str:
     """The output of a step, kept in `log`; the step's own failure is its reds, not an exception."""
-    done = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True)
+    # A slot like a cargo build: the steps ran beside four builds at load 68 on 32 cores.
+    slot = Path.home() / ".local/bin/buildslot"
+    done = subprocess.run(["nice", "-n", "10", str(slot), *argv], cwd=cwd, env=env, capture_output=True, text=True)
     text = done.stdout + done.stderr
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text(text)

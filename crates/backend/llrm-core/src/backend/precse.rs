@@ -40,10 +40,9 @@
 //! two. A copy no one reads is dropped again (the pin leaves it to
 //! `DeadMachineInstructionElim`).
 //!
-//! DEVIATE CSE1 (owner w-2, exit with isel.rs I2): no `hasMinSize` shortcut
-//! (the machine phases have no minsize flag; it is -Oz only, which no sweep
-//! covers). `isLegalToHoistInto` is translated: a return block is no target;
-//! the pin's other two conditions cannot hold on this LIR (see
+//! `hasMinSize` is `LirBody::min_size` (the function's `minsize` attribute;
+//! CSE1 retired). `isLegalToHoistInto` is translated: a return block is no
+//! target; the pin's other two conditions cannot hold on this LIR (see
 //! `legal_to_hoist_into`).
 //!
 //! DEVIATE CSE2 (owner funcattrs-port, exit 2026-11-13): an operation with no
@@ -534,11 +533,16 @@ fn hoisted(
             if !legal_to_hoist_into(&body.blocks[common]) {
                 continue;
             }
-            // `isProfitableToHoistInto`: `BlockFrequency` adds saturating.
-            let mbfi = frequencies.get_or_init(|| MachineBlockFrequencyInfo::of(body));
-            let freq = |block: usize| mbfi.get_block_freq(block).get_frequency();
-            if freq(common) > freq(number).saturating_add(freq(other)) {
-                continue;
+            // `isProfitableToHoistInto`
+            // ([#L922](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCSE.cpp#L922)):
+            // always under `hasMinSize`, else by `BlockFrequency`, which adds
+            // saturating.
+            if !body.min_size {
+                let mbfi = frequencies.get_or_init(|| MachineBlockFrequencyInfo::of(body));
+                let freq = |block: usize| mbfi.get_block_freq(block).get_frequency();
+                if freq(common) > freq(number).saturating_add(freq(other)) {
+                    continue;
+                }
             }
             if !(reaches(body, by_at, other, number) || reaches(body, by_at, number, other)) {
                 continue;
@@ -882,6 +886,55 @@ mod tests {
             "{returning:?}"
         );
         assert_eq!(adds(&returning), 2);
+    }
+
+    /// `isProfitableToHoistInto` answers yes at once under `hasMinSize`
+    /// (MachineCSE.cpp#L922): the shortcut was missing (DEVIATE CSE1), so a
+    /// minsize function kept two copies of an expression computed in two cold
+    /// arms because their common dominator, run by every call, was hotter than
+    /// the two together.
+    #[test]
+    fn test_a_minsize_function_hoists_an_expression_into_a_hotter_block() {
+        let make = |at: i64, result: u32| {
+            insn(at, Operation::Unary, "not", vec![held(result)], vec![held(1)], vec![result], vec![1])
+        };
+        let jump = |at: i64| insn(at, Operation::Branch, "jle", vec![], vec![], vec![], vec![]);
+        let read = |at: i64, value: u32| {
+            insn(at, Operation::Compare, "cmp", vec![], vec![held(value), held(value)], vec![], vec![value])
+        };
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let build = |min_size: bool| {
+            // 0 -> left (a tenth) | mid; left -> right; mid -> right (a tenth)
+            // | exit.
+            let mut body = LirBody::new(
+                "cold",
+                0,
+                vec![
+                    block(0, vec![1, 2], vec![jump(0)]).into(),
+                    block(1, vec![3], vec![make(1, 10), read(5, 10)]).into(),
+                    block(2, vec![3, 4], vec![jump(2)]).into(),
+                    block(3, vec![], vec![make(3, 11), read(6, 11)]).into(),
+                    block(4, vec![], vec![read(7, 1)]).into(),
+                ],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            let tenth = (0.1 * crate::model::lir::BlockOdds::CERTAIN) as u32;
+            let rest = crate::model::lir::BlockOdds::CERTAIN as u32 - tenth;
+            for (edge, odds) in [((0, 1), tenth), ((0, 2), rest), ((2, 3), tenth), ((2, 4), rest)] {
+                body.odds.taken.insert(edge, odds);
+            }
+            body.inputs = [1, 2].into_iter().collect();
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            body.min_size = min_size;
+            body
+        };
+        let in_entry = |body: &LirBody| {
+            body.blocks[0].insns.iter().any(|one| one.what.as_ref().and_then(|w| w.name.as_deref()) == Some("not"))
+        };
+        assert!(!in_entry(&shared(&build(false), &RegisterClasses::m16())), "the premise: hotter, so not hoisted");
+        assert!(in_entry(&shared(&build(true), &RegisterClasses::m16())), "minsize hoists it");
     }
 
     /// `bt a, 1; sbb m1 := x, x` and later `bt b, 1; sbb m2 := x, x`: the
