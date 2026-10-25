@@ -348,6 +348,7 @@ fn test_a_memoryssa_build_asks_no_plain_accesses_and_says_what_they_said() {
             let graph = analyses.get::<super::MemorySsa>(&module.context, &layout, function);
             let Ok(graph) = &*graph else { continue };
             assert!(analyses.cached::<super::PlainAccesses>().is_none(), "{at}: the build made the accesses");
+            assert!(analyses.cached::<super::Writes>().is_none(), "{at}: the build asked the calls' footprints");
             let accesses = graph.accesses(&module.context, &layout, function, &mut analyses).expect("accesses");
             let shape = analyses.get::<crate::cfg::Shape>(&module.context, &layout, function);
             let said = crate::mssa::Mssa::build(

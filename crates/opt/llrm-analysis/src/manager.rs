@@ -1362,18 +1362,17 @@ impl Analysis for MemorySsa {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Self::Result {
-        let writes_rc = analyses.get::<Writes>(context, layout, function);
-        let calls = Result::as_ref(&*writes_rc).map_err(String::clone)?;
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         let shape = analyses.get::<Shape>(context, layout, function);
         let unit = Unit::within(context, layout, function, analyses.outer()).with_exposed(&exposed);
-        let mssa = crate::mssa::Mssa::build(
-            function,
-            &shape.dominance,
-            &crate::mssa::shadow::effect_from_opcodes(&unit, |inst| {
-                calls.get(&inst).is_none_or(|stores| !stores.is_empty())
-            }),
-        );
+        // `AAResults::getModRefInfo(Call, nullptr)` over the pin's stack.
+        let mut stack = crate::aggregate::AggregateAA::new().with_unit(&unit);
+        stack.add_aa_result(crate::basicaa::BasicAA::new(&unit));
+        if let Some(info) = unit.globals_mr {
+            stack.add_aa_result(crate::globalsmodref::GlobalsAAResult::new(&unit, info));
+        }
+        let mssa =
+            crate::mssa::Mssa::build(function, &shape.dominance, &crate::mssa::shadow::effect_from_aa(&unit, stack));
         Ok(std::rc::Rc::new(MssaGraph::new(mssa, None)))
     }
 }
