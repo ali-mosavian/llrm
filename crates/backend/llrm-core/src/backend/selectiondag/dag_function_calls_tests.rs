@@ -781,10 +781,10 @@ fn a_long_result_truncated_to_an_int_does_not_read_dx() {
 }
 
 const WORD_ARGUMENTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
-declare cc 1005 void @g(i16, i16)
+declare cc 1005 void @g(i16, i16, i16)
 define cc 1005 void @f(i16 %p) {
   %q = add i16 %p, 100
-  call cc 1005 void @g(i16 %q, i16 %p)
+  call cc 1005 void @g(i16 %q, i16 %p, i16 1)
   ret void
 }
 ";
@@ -803,5 +803,5 @@ fn a_word_argument_is_required_in_the_word_register() {
     let call = insns.iter().find(|i| i.call.is_some()).expect("a call");
     let registers: Vec<RegId> = call.requires.iter().map(|(_, register)| *register).collect();
     assert!(registers.iter().all(|r| matches!(*r, RegId::AX | RegId::DX | RegId::CX)), "{registers:?}");
-    assert!(!registers.is_empty());
+    assert_eq!(registers.len(), 3, "{registers:?}");
 }
