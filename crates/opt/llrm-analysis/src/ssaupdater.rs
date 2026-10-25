@@ -46,7 +46,7 @@ use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
-use llrm_mir::loopinfo::{children, inverse_children};
+use llrm_mir::loopinfo::inverse_children;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, Use};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::types::TypeId;
@@ -72,7 +72,9 @@ struct BbInfo {
     def_bb: Option<usize>,
     blk_num: i32,
     idom: Option<usize>,
-    preds: Vec<usize>,
+    /// `Preds`: the range of [`Impl::pool`] holding the infos of the
+    /// predecessors.
+    preds: std::ops::Range<usize>,
     phi_tag: Option<InstId>,
 }
 
@@ -82,6 +84,9 @@ struct Impl<'a> {
     context: &'a mut Context,
     function: &'a mut Function,
     infos: Vec<BbInfo>,
+    /// The predecessors of every info, end to end: one buffer for the walk,
+    /// not a vector for each block it reaches.
+    pool: Vec<usize>,
     bb_map: IdMap<BlockId, usize>,
 }
 
@@ -122,7 +127,15 @@ impl SsaUpdater {
         if let Some(&value) = self.available.get(&block) {
             return value;
         }
-        Impl { updater: self, context, function, infos: Vec::new(), bb_map: IdMap::new() }.get_value(block)
+        Impl {
+            updater: self,
+            context,
+            function,
+            infos: Vec::with_capacity(16),
+            pool: Vec::with_capacity(32),
+            bb_map: IdMap::new(),
+        }
+        .get_value(block)
     }
 
     /// `GetValueInMiddleOfBlock`.
@@ -289,15 +302,7 @@ impl Impl<'_> {
         bb: Option<BlockId>,
         available_val: Option<Operand>,
     ) -> usize {
-        self.infos.push(BbInfo {
-            bb,
-            available_val,
-            def_bb: None,
-            blk_num: 0,
-            idom: None,
-            preds: Vec::new(),
-            phi_tag: None,
-        });
+        self.infos.push(BbInfo { bb, available_val, def_bb: None, blk_num: 0, idom: None, preds: 0..0, phi_tag: None });
         let at = self.infos.len() - 1;
         if available_val.is_some() {
             self.infos[at].def_bb = Some(at);
@@ -329,27 +334,31 @@ impl Impl<'_> {
         self.infos[def].available_val.expect("an available value")
     }
 
-    /// The blocks `block` is entered from, one for each edge, or the blocks of
-    /// a phi it begins with.
-    fn find_predecessor_blocks(
+    /// The next of the blocks `block` is entered from, one for each edge, or
+    /// of the blocks of a phi it begins with: the `cursor`th, or none.
+    fn next_predecessor(
         &self,
         block: BlockId,
-    ) -> Vec<BlockId> {
+        cursor: &mut usize,
+    ) -> Option<BlockId> {
         let first = self.function.block(block).first();
         match first {
-            Some(some_phi) if self.function.instruction(some_phi).opcode == Opcode::Phi => self
-                .function
-                .instruction(some_phi)
-                .operands
-                .iter()
-                .skip(1)
-                .step_by(2)
-                .map(|one| match one {
-                    Operand::Block(block) => *block,
-                    _ => unreachable!("a phi's block operand"),
-                })
-                .collect(),
-            _ => inverse_children(self.function, block).collect(),
+            Some(some_phi) if self.function.instruction(some_phi).opcode == Opcode::Phi => {
+                let operands = &self.function.instruction(some_phi).operands;
+                match operands.get(1 + 2 * *cursor) {
+                    Some(Operand::Block(block)) => {
+                        *cursor += 1;
+                        Some(*block)
+                    }
+                    Some(_) => unreachable!("a phi's block operand"),
+                    None => None,
+                }
+            }
+            _ => {
+                let at = *cursor;
+                *cursor += 1;
+                inverse_children(self.function, block).nth(at)
+            }
         }
     }
 
@@ -371,26 +380,27 @@ impl Impl<'_> {
         // stopping when reaching blocks that define the value. Record those
         // defining blocks on the root list.
         while let Some(info) = work_list.pop() {
-            let preds = self.find_predecessor_blocks(self.infos[info].bb.expect("a block"));
-            let mut pred_infos = Vec::with_capacity(preds.len());
-            for pred in preds {
+            let start = self.pool.len();
+            let block = self.infos[info].bb.expect("a block");
+            let mut cursor = 0;
+            while let Some(pred) = self.next_predecessor(block, &mut cursor) {
                 // Check if the map already has an info for the predecessor.
                 if let Some(&existing) = self.bb_map.get(&pred) {
-                    pred_infos.push(existing);
+                    self.pool.push(existing);
                     continue;
                 }
                 // Create a new info for the predecessor.
                 let pred_val = self.updater.available.get(&pred).copied();
                 let pred_info = self.new_info(Some(pred), pred_val);
                 self.bb_map.insert(pred, pred_info);
-                pred_infos.push(pred_info);
+                self.pool.push(pred_info);
                 if self.infos[pred_info].available_val.is_some() {
                     root_list.push(pred_info);
                     continue;
                 }
                 work_list.push(pred_info);
             }
-            self.infos[info].preds = pred_infos;
+            self.infos[info].preds = start..self.pool.len();
         }
 
         // Now that we know what blocks are backwards-reachable from the
@@ -427,7 +437,8 @@ impl Impl<'_> {
 
             // Add unvisited successors to the work list.
             let block = self.infos[info].bb.expect("a block");
-            for succ in children(self.function, block).collect::<Vec<_>>() {
+            let mut cursor = 0;
+            while let Some(succ) = llrm_mir::loopinfo::LoopGraph::child(&*self.function, block, &mut cursor) {
                 let Some(&succ_info) = self.bb_map.get(&succ) else { continue };
                 if self.infos[succ_info].blk_num != 0 {
                     continue;
@@ -478,8 +489,8 @@ impl Impl<'_> {
                 let mut new_idom: Option<usize> = None;
 
                 // Iterate through the block's predecessors.
-                for p in 0..self.infos[info].preds.len() {
-                    let pred = self.infos[info].preds[p];
+                for p in self.infos[info].preds.clone() {
+                    let pred = self.pool[p];
 
                     // Treat an unreachable predecessor as a definition with
                     // poison.
@@ -545,8 +556,8 @@ impl Impl<'_> {
                 // Default to use the same def as the immediate dominator.
                 let idom = self.infos[info].idom.expect("an immediate dominator");
                 let mut new_def_bb = self.infos[idom].def_bb;
-                for p in 0..self.infos[info].preds.len() {
-                    if self.is_def_in_dom_frontier(self.infos[info].preds[p], idom) {
+                for p in self.infos[info].preds.clone() {
+                    if self.is_def_in_dom_frontier(self.pool[p], idom) {
                         // Need a phi here.
                         new_def_bb = Some(info);
                         break;
@@ -572,10 +583,10 @@ impl Impl<'_> {
         info: usize,
     ) -> bool {
         let preds = self.infos[info].preds.clone();
-        let Some(&first) = preds.first() else { return false };
+        let Some(&first) = self.pool[preds.clone()].first() else { return false };
         let def_val = |this: &Self, pred: usize| this.infos[pred].def_bb.and_then(|def| this.infos[def].available_val);
         let Some(singular) = def_val(self, first) else { return false };
-        for &pred in &preds[1..] {
+        for &pred in &self.pool[preds][1..] {
             if def_val(self, pred) != Some(singular) {
                 return false;
             }
@@ -647,8 +658,8 @@ impl Impl<'_> {
 
             // Iterate through the block's predecessors.
             let mut operands = Vec::new();
-            for p in 0..self.infos[info].preds.len() {
-                let mut pred_info = self.infos[info].preds[p];
+            for p in self.infos[info].preds.clone() {
+                let mut pred_info = self.pool[p];
                 let pred = self.infos[pred_info].bb.expect("a block");
                 // Skip to the nearest preceding definition.
                 if self.infos[pred_info].def_bb != Some(pred_info) {

@@ -78,6 +78,10 @@ pub trait SchedInfo {
         &self,
         opcode: u32,
     ) -> bool;
+    /// Whether the target runs the pin's source-order queue by default.
+    fn source_order(&self) -> bool {
+        false
+    }
     /// `TRI->getCrossCopyRegClass(RC) != RC` for the register's class: the
     /// value cannot be copied within its class (x86's EFLAGS).
     fn has_cross_copy_class(
@@ -1253,8 +1257,29 @@ impl Topo {
     }
 }
 
-/// `RegReductionPQBase` with `BURegReductionPriorityQueue`: Sethi-Ullman
-/// numbers and `bu_ls_rr_sort`.
+thread_local! {
+    /// Source order on for this thread: what `LLRM_SRC_ORDER` does for the
+    /// process.
+    pub(super) static SRC_ORDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `createDefaultScheduler`: X86 enables the machine scheduler and its default
+/// scheduler role (`enableMachineScheduler() &&
+/// enableMachineSchedDefaultSched()`), so the pin's DAG scheduler is
+/// `createSourceListDAGScheduler`: a `SrcRegReductionPriorityQueue`
+/// (`srcorder`), IR order first. DEVIATE: on for m32 only
+/// (`SchedInfo::source_order`), elsewhere off unless `LLRM_SRC_ORDER`: at m16
+/// our machine scheduler is not the pin's `GenericScheduler` and the source
+/// order costs bytes (QCport -Os +0.30%); at m32 it saves 0.99%. Static
+/// instructions over the 71 vsgcc programs at m32, source order against the
+/// queue without it: -O2 +58 (pin +18 over the queue without it), -Os +17 (pin
+/// 57 fewer).
+fn src_order(info: &dyn SchedInfo) -> bool {
+    info.source_order() || SRC_ORDER.get() || std::env::var_os("LLRM_SRC_ORDER").is_some()
+}
+
+/// `RegReductionPQBase` with `SrcRegReductionPriorityQueue`: Sethi-Ullman
+/// numbers and `src_ls_rr_sort`.
 #[derive(Default)]
 struct Queue {
     queue: Vec<usize>,
@@ -1271,7 +1296,11 @@ impl Queue {
         graph: &mut Graph<'_>,
         topo: &mut Topo,
     ) {
-        self.preschedule_nodes_with_multiple_uses(graph, topo);
+        // `!TracksRegPressure && !SrcOrder`: the source-order queue X86 uses
+        // leaves the edges alone.
+        if !src_order(graph.info) {
+            self.preschedule_nodes_with_multiple_uses(graph, topo);
+        }
         self.sethi_ullman = vec![0; graph.sus.len()];
         for su in 0..graph.sus.len() {
             self.calc_sethi_ullman(&graph.sus, su);
@@ -1429,7 +1458,19 @@ impl Queue {
         Some(su)
     }
 
-    /// `bu_ls_rr_sort`: whether `right` goes before `left`.
+    /// `getNodeOrdering`: the IR order of the unit's node under `SrcOrder`.
+    fn node_ordering(
+        graph: &Graph<'_>,
+        su: usize,
+    ) -> u32 {
+        if !src_order(graph.info) {
+            return 0;
+        }
+        graph.dag.node(SDValue { node: graph.sus[su].node(), res: 0 }).order
+    }
+
+    /// `src_ls_rr_sort`: whether `right` goes before `left`. The lower
+    /// non-zero IR order goes first; `BURRSort` breaks ties.
     fn bu_ls_rr_sort(
         &self,
         graph: &mut Graph<'_>,
@@ -1440,6 +1481,12 @@ impl Queue {
         let (l_low, r_low) = (graph.sus[left].is_schedule_low, graph.sus[right].is_schedule_low);
         if l_low != r_low {
             return l_low < r_low;
+        }
+        if src_order(graph.info) {
+            let (l_order, r_order) = (Self::node_ordering(graph, left), Self::node_ordering(graph, right));
+            if (l_order != 0 || r_order != 0) && l_order != r_order {
+                return l_order != 0 && (l_order < r_order || r_order == 0);
+            }
         }
         // BURRSort
         let (l_phys, r_phys) = (graph.sus[left].has_phys_reg_defs, graph.sus[right].has_phys_reg_defs);
@@ -1459,7 +1506,12 @@ impl Queue {
         if l_priority != r_priority {
             return l_priority > r_priority;
         }
-        // The call-ordering tie break reads the IR order (SD31).
+        if graph.sus[left].is_call || graph.sus[right].is_call {
+            let (l_order, r_order) = (Self::node_ordering(graph, left), Self::node_ordering(graph, right));
+            if (l_order != 0 || r_order != 0) && l_order != r_order {
+                return l_order != 0 && (l_order < r_order || r_order == 0);
+            }
+        }
         let (l_dist, r_dist) = (graph.closest_succ(left), graph.closest_succ(right));
         if l_dist != r_dist {
             return l_dist < r_dist;

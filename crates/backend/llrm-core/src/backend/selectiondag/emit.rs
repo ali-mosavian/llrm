@@ -647,8 +647,15 @@ const CONDITIONS: [&str; 16] =
     ["jo", "jno", "jb", "jae", "je", "jne", "jbe", "ja", "js", "jns", "jp", "jnp", "jl", "jge", "jle", "jg"];
 
 /// A LIR operand's width: bytes, as the old selector writes it.
-fn width(vt: EVT) -> u32 {
+fn width(
+    sse: bool,
+    vt: EVT,
+) -> u32 {
     match vt {
+        // With scalar SSE a floating value is the 4 or 8 bytes of an xmm
+        // register.
+        EVT::Simple(MVT::F32) if sse => 4,
+        EVT::Simple(MVT::F64) if sse => 8,
         EVT::Simple(MVT::I1 | MVT::I8) => 1,
         EVT::Simple(MVT::I16) => 2,
         EVT::Simple(MVT::I32) => 4,
@@ -843,8 +850,8 @@ impl Emitter<'_, '_> {
                             self.values.insert(result, made.value);
                             return Ok(());
                         }
-                        let phys = Reg { register, width: width_of(self.dag, result) };
-                        let held = self.fresh(width_of(self.dag, result));
+                        let phys = Reg { register, width: width_of(self.ctx.map.scalar_sse(), self.dag, result) };
+                        let held = self.fresh(width_of(self.ctx.map.scalar_sse(), self.dag, result));
                         // The result of a call is what the call delivers in
                         // that register.
                         let glued = self.reads_call_result(node.ops.get(2).copied());
@@ -1114,8 +1121,28 @@ impl Emitter<'_, '_> {
             self.blocks.last_mut().expect("a block").insns.push(Arc::new(insn));
             return Ok(());
         }
-        if matches!(name, "CMOV_GR8" | "CMOV_GR16" | "CMOV_GR32") {
+        if matches!(
+            name,
+            "CMOV_GR8" | "CMOV_GR16" | "CMOV_GR32" | "CMOV_FR32" | "CMOV_FR64"
+        ) {
             return self.lowered_select(n);
+        }
+        // `FsFLD0SD`: a zero double, `xorps` of the register with itself.
+        if matches!(name, "FsFLD0SD" | "FsFLD0SS") {
+            let node = self.dag.node(SDValue { node: n, res: 0 });
+            let zero = self.fresh(width(self.ctx.map.scalar_sse(), node.values[0]));
+            self.values.insert(SDValue { node: n, res: 0 }, zero.value);
+            // The idiom reads nothing: the instruction uses no value.
+            let what = Semantics {
+                name: Some("xorps".into()),
+                dests: vec![Loc::Held(zero)],
+                sources: vec![Loc::Held(zero), Loc::Held(zero)],
+                ..Semantics::new(Operation::Binary)
+            };
+            let at = self.next_address();
+            let insn = Insn::new(at, Some((at, at)), Some(what), vec![zero.value], vec![]);
+            self.blocks.last_mut().expect("a block").insns.push(Arc::new(insn));
+            return Ok(());
         }
         // `MOVZX32rr8_NOREX` is `movzx` of a byte register that needs no REX
         // prefix to name (AH): the same form at this target.
@@ -1130,12 +1157,14 @@ impl Emitter<'_, '_> {
         // The results: the first `num_defs` values that are not chain or glue.
         let mut dests = Vec::new();
         for (i, vt) in node.values.iter().enumerate().take(usize::from(desc.num_defs)) {
-            let held =
-                self.exported_register(SDValue { node: n, res: i as u8 }).unwrap_or_else(|| self.fresh(width(*vt)));
+            let held = self
+                .exported_register(SDValue { node: n, res: i as u8 })
+                .unwrap_or_else(|| self.fresh(width(self.ctx.map.scalar_sse(), *vt)));
             self.values.insert(SDValue { node: n, res: i as u8 }, held.value);
             dests.push(Loc::Held(held));
         }
-        let cell_width = super::opcodes::memory_bytes(name).unwrap_or_else(|| width_of_node(self.dag, n));
+        let cell_width =
+            super::opcodes::memory_bytes(name).unwrap_or_else(|| width_of_node(self.ctx.map.scalar_sse(), self.dag, n));
         let mut operands = self.operands(node.ops.as_slice(), desc, cell_width)?;
         // A memory destination (`ADD32mr`, no result): the cell is the
         // destination and its tied source.
@@ -1199,7 +1228,12 @@ impl Emitter<'_, '_> {
         let when_true = held(self.operand(node.ops[1])?)?;
         let cc = self.constant(node.ops[2])? as usize;
         let jump = *CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
-        let result = self.fresh(width(node.values[0]));
+        // `CreateVirtualRegisters`: a result only exported by a `CopyToReg` is
+        // made in that register, so the export emits no copy between this
+        // select and the next.
+        let result = self
+            .exported_register(SDValue { node: n, res: 0 })
+            .unwrap_or_else(|| self.fresh(width(self.ctx.map.scalar_sse(), node.values[0])));
         self.values.insert(SDValue { node: n, res: 0 }, result.value);
         // The flags this select reads: the producer of the `CopyToReg EFLAGS`
         // glued to it.
@@ -1377,7 +1411,7 @@ impl Emitter<'_, '_> {
         match self.operand(value)? {
             Loc::Held(held) => Ok(held),
             source => {
-                let held = self.fresh(width_of(self.dag, value));
+                let held = self.fresh(width_of(self.ctx.map.scalar_sse(), self.dag, value));
                 self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![source]);
                 Ok(held)
             }
@@ -1393,7 +1427,9 @@ impl Emitter<'_, '_> {
         self.accumulator
             .get(&register)
             .copied()
-            .ok_or_else(|| EmitError::Unsupported("a division operand not set by a glued CopyToReg".to_owned()))
+            .ok_or_else(
+                || EmitError::Unsupported(format!("a division operand ({register:?}) not set by a glued CopyToReg")),
+            )
     }
 
     /// The `SAHF` that copies the status word `fnstsw` took from the compare
@@ -1586,7 +1622,7 @@ impl Emitter<'_, '_> {
         // huge one loaded): its selector is the high word, `x >> 16`. Only the
         // shapes below are known to be a word pointer into DGROUP, a frame or a
         // global.
-        let whole = width_of(self.dag, origin) == 4;
+        let whole = width_of(self.ctx.map.scalar_sse(), self.dag, origin) == 4;
         let known_shape = matches!(
             self.dag.opcode(origin),
             ISD::Machine(op) if self.ctx.names.get(&(op as u16)).is_some_and(|name| { matches!(name.split('|').next(), Some("OR32rr" | "ADD32rr" | "SHL32ri" | "ADD32rr_DB")) })
@@ -1677,7 +1713,8 @@ impl Emitter<'_, '_> {
             return None;
         }
         let [undef, selector, _] = self.dag.node(inserted).ops[..] else { return None };
-        (self.is_implicit_def(undef) && width_of(self.dag, selector) == 2).then_some(selector)
+        (self.is_implicit_def(undef) && width_of(self.ctx.map.scalar_sse(), self.dag, selector) == 2)
+            .then_some(selector)
     }
 
     /// Whether `value` is a machine node of the pin's opcode `name`.
@@ -1709,7 +1746,7 @@ impl Emitter<'_, '_> {
         name: &str,
     ) -> Result<Option<()>, EmitError> {
         let node = self.dag.node(SDValue { node: n, res: 0 });
-        let width = width(node.values[0]);
+        let width = width(self.ctx.map.scalar_sse(), node.values[0]);
         let result = SDValue { node: n, res: 0 };
         match name.split('|').next().unwrap_or(name) {
             "ADJCALLSTACKDOWN32" | "ADJCALLSTACKUP32" | "ADJCALLSTACKDOWN64" | "ADJCALLSTACKUP64" => {
@@ -1875,7 +1912,7 @@ impl Emitter<'_, '_> {
                     _ => self.operand(node.ops[1])?,
                 };
                 if reading {
-                    let held = self.fresh(width_of(self.dag, SDValue { node: n, res: 0 }));
+                    let held = self.fresh(width_of(self.ctx.map.scalar_sse(), self.dag, SDValue { node: n, res: 0 }));
                     self.values.insert(SDValue { node: n, res: 0 }, held.value);
                     self.push(Operation::Barrier, "in", vec![Loc::Held(held)], vec![port]);
                 } else {
@@ -2009,11 +2046,16 @@ impl Emitter<'_, '_> {
                 );
                 return Ok(Some(()));
             }
-            "REP_MOVSB_32" | "REP_MOVSW_32" | "REP_MOVSD_32" => {
+            "REP_MOVSB_32" | "REP_MOVSW_32" | "REP_MOVSD_32" | "REP_MOVSB_64" | "REP_MOVSW_64" | "REP_MOVSD_64"
+            | "REP_MOVSQ_64" => {
                 use llrm_lir::registers::RegId;
+                let wide = name.ends_with("_64");
+                let (counter, from, to) =
+                    if wide { (RegId::RCX, RegId::RSI, RegId::RDI) } else { (RegId::ECX, RegId::ESI, RegId::EDI) };
+                let size = if wide { 8 } else { 4 };
                 let (count, source, destination) =
-                    (self.accumulated(RegId::ECX)?, self.accumulated(RegId::ESI)?, self.accumulated(RegId::EDI)?);
-                let (source_after, destination_after, emptied) = (self.fresh(4), self.fresh(4), self.fresh(4));
+                    (self.accumulated(counter)?, self.accumulated(from)?, self.accumulated(to)?);
+                let (source_after, destination_after, emptied) = (self.fresh(size), self.fresh(size), self.fresh(size));
                 self.push(
                     Operation::Copy,
                     &name[4..9].to_ascii_lowercase(),
@@ -2027,16 +2069,21 @@ impl Emitter<'_, '_> {
                 );
                 return Ok(Some(()));
             }
-            "REP_STOSB_32" | "REP_STOSW_32" | "REP_STOSD_32" => {
+            "REP_STOSB_32" | "REP_STOSW_32" | "REP_STOSD_32" | "REP_STOSB_64" | "REP_STOSW_64" | "REP_STOSD_64"
+            | "REP_STOSQ_64" => {
                 use llrm_lir::registers::RegId;
-                let stored = match name.as_bytes()[8] {
-                    b'B' => RegId::AL,
-                    b'W' => RegId::AX,
-                    _ => RegId::EAX,
+                let wide = name.ends_with("_64");
+                let stored = match (name.as_bytes()[8], wide) {
+                    (b'B', _) => RegId::AL,
+                    (b'W', _) => RegId::AX,
+                    (b'D', _) => RegId::EAX,
+                    _ => RegId::RAX,
                 };
+                let (counter, to) = if wide { (RegId::RCX, RegId::RDI) } else { (RegId::ECX, RegId::EDI) };
+                let size = if wide { 8 } else { 4 };
                 let (value, count, destination) =
-                    (self.accumulated(stored)?, self.accumulated(RegId::ECX)?, self.accumulated(RegId::EDI)?);
-                let (destination_after, emptied) = (self.fresh(4), self.fresh(4));
+                    (self.accumulated(stored)?, self.accumulated(counter)?, self.accumulated(to)?);
+                let (destination_after, emptied) = (self.fresh(size), self.fresh(size));
                 self.push(
                     Operation::Fill,
                     &name[4..9].to_ascii_lowercase(),
@@ -2275,7 +2322,7 @@ impl Emitter<'_, '_> {
             _ => None,
         };
         if let Some(value) = constant {
-            let held = self.fresh(width);
+            let held = self.result_register(SDValue { node: n, res: 0 }, width);
             self.values.insert(SDValue { node: n, res: 0 }, held.value);
             self.push(
                 Operation::Move,
@@ -2314,7 +2361,7 @@ impl Emitter<'_, '_> {
                 Ok(Some(()))
             }
             "MOV32ImmSExti8" => {
-                let held = self.fresh(width);
+                let held = self.result_register(SDValue { node: n, res: 0 }, width);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
                 let source = self.operand(node.ops[0])?;
                 self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![source]);
@@ -2331,7 +2378,7 @@ impl Emitter<'_, '_> {
                 else {
                     return Err(EmitError::Unsupported("a conditional move of a non-register".to_owned()));
                 };
-                let held = self.fresh(width);
+                let held = self.result_register(SDValue { node: n, res: 0 }, width);
                 self.values.insert(result, held.value);
                 let name = format!("cmov{}", &jump[1..]);
                 self.push(
@@ -2352,7 +2399,7 @@ impl Emitter<'_, '_> {
                 };
                 let group = node.ops.get(1..6).ok_or_else(|| EmitError::Unsupported("a short cmov".to_owned()))?;
                 let cell = self.cell(group, u32::from(width))?;
-                let held = self.fresh(width);
+                let held = self.result_register(SDValue { node: n, res: 0 }, width);
                 self.values.insert(result, held.value);
                 let name = format!("cmov{}", &jump[1..]);
                 self.push(Operation::Select, &name, vec![Loc::Held(held)], vec![Loc::Held(when_false), Loc::Mem(cell)]);
@@ -2366,7 +2413,7 @@ impl Emitter<'_, '_> {
                     .ok_or_else(|| EmitError::Unsupported("a setcc without a condition".to_owned()))?
                     as usize;
                 let jump = CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
-                let held = self.fresh(1);
+                let held = self.result_register(SDValue { node: n, res: 0 }, 1);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
                 let name = format!("set{}", &jump[1..]);
                 self.push(Operation::Unary, &name, vec![Loc::Held(held)], Vec::new());
@@ -2645,7 +2692,7 @@ impl Emitter<'_, '_> {
     ) -> Result<(), EmitError> {
         let node = self.dag.node(SDValue { node: n, res: 0 });
         let src = self.operand(node.ops[0])?;
-        let held = self.fresh(width(node.values[0]));
+        let held = self.fresh(width(self.ctx.map.scalar_sse(), node.values[0]));
         self.values.insert(SDValue { node: n, res: 0 }, held.value);
         self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![src]);
         Ok(())
@@ -2905,7 +2952,11 @@ impl Emitter<'_, '_> {
         if let Some((start, size)) = self.ctx.frame.extent(index_of)
             && !(start..=start + size).contains(&(start + disp))
         {
-            let object = self.fresh(if self.ctx.address_mode == AddrMode::Real16 { 2 } else { 4 });
+            let object = self.fresh(match self.ctx.address_mode {
+                AddrMode::Real16 => 2,
+                AddrMode::Flat64 => 8,
+                _ => 4,
+            });
             let whole = Mem { index: None, ..cell.clone() };
             self.push(Operation::Address, "lea", vec![Loc::Held(object)], vec![Loc::Address(whole.address())]);
             let address = Addr::new(crate::model::ir::Space::Literal, disp);
@@ -2977,7 +3028,9 @@ impl Emitter<'_, '_> {
         value: SDValue,
     ) -> Result<i64, EmitError> {
         match self.dag.node(value).data {
-            NodeData::Const { bits, .. } => Ok(bits as i64),
+            NodeData::Const { bits, .. } => {
+                Ok(sign_extend(bits, width_of(self.ctx.map.scalar_sse(), self.dag, value) * 8))
+            }
             _ => Err(EmitError::Unsupported("a non-constant address part".to_owned())),
         }
     }
@@ -2987,7 +3040,7 @@ impl Emitter<'_, '_> {
         value: SDValue,
     ) -> Result<Loc, EmitError> {
         if let NodeData::Const { bits, .. } = self.dag.node(value).data {
-            let w = width_of(self.dag, value);
+            let w = width_of(self.ctx.map.scalar_sse(), self.dag, value);
             return Ok(Loc::Imm(Imm { value: sign_extend(bits, w * 8), width: w, address: None }));
         }
         if let Some((mnemonic, cell)) = self.lazy.get(&value).cloned() {
@@ -3000,22 +3053,34 @@ impl Emitter<'_, '_> {
         }
         if let NodeData::Global { symbol, offset } = self.dag.node(value).data {
             let addr = self.ctx.globals.address(symbol, offset);
-            return Ok(Loc::Imm(Imm { value: 0, width: width_of(self.dag, value), address: Some(addr) }));
+            return Ok(Loc::Imm(Imm {
+                value: 0,
+                width: width_of(self.ctx.map.scalar_sse(), self.dag, value),
+                address: Some(addr),
+            }));
         }
         // The address of a jump table.
         if let NodeData::JumpTable(table) = self.dag.node(value).data {
             let table = self.jump_table(table)?;
             let mut address = Addr::new(crate::model::ir::Space::Segment, 0);
             address.index = table.id;
-            return Ok(Loc::Imm(Imm { value: 0, width: width_of(self.dag, value), address: Some(address) }));
+            return Ok(Loc::Imm(Imm {
+                value: 0,
+                width: width_of(self.ctx.map.scalar_sse(), self.dag, value),
+                address: Some(address),
+            }));
         }
         // The address of a pool constant.
         if let NodeData::PoolIndex(entry) = self.dag.node(value).data {
             let addr = self.pool_cell(entry)?.addr;
-            return Ok(Loc::Imm(Imm { value: 0, width: width_of(self.dag, value), address: addr }));
+            return Ok(Loc::Imm(Imm {
+                value: 0,
+                width: width_of(self.ctx.map.scalar_sse(), self.dag, value),
+                address: addr,
+            }));
         }
         match self.values.get(&value) {
-            Some(&v) => Ok(Loc::Held(Held { value: v, width: width_of(self.dag, value) })),
+            Some(&v) => Ok(Loc::Held(Held { value: v, width: width_of(self.ctx.map.scalar_sse(), self.dag, value) })),
             None => Err(EmitError::Unsupported(format!("operand {:?} before its definition", self.dag.opcode(value)))),
         }
     }
@@ -3025,7 +3090,7 @@ impl Emitter<'_, '_> {
         &mut self,
         value: SDValue,
     ) -> Result<Loc, EmitError> {
-        let width = width_of(self.dag, value);
+        let width = width_of(self.ctx.map.scalar_sse(), self.dag, value);
         match self.dag.node(value).data {
             NodeData::PhysReg(register) => Ok(Loc::Reg(Reg { register, width })),
             NodeData::Register(reg) => Ok(Loc::Held(Held { value: self.vreg(reg), width })),
@@ -3047,7 +3112,7 @@ impl Emitter<'_, '_> {
         &mut self,
         result: SDValue,
     ) -> Option<Held> {
-        let width = width_of(self.dag, result);
+        let width = width_of(self.ctx.map.scalar_sse(), self.dag, result);
         let reg = self
             .dag
             .users(result)
@@ -3063,10 +3128,21 @@ impl Emitter<'_, '_> {
                     if self.is_es(node.ops[1]) {
                         return None;
                     }
-                    (node.ops[2] == result && width_of(self.dag, node.ops[1]) == width).then_some(reg)
+                    (node.ops[2] == result && width_of(self.ctx.map.scalar_sse(), self.dag, node.ops[1]) == width)
+                        .then_some(reg)
                 },
             )?;
         Some(Held { value: self.vreg(reg), width })
+    }
+
+    /// The register a result is defined in: the one a `CopyToReg` of it names
+    /// (`exported_register`), else a fresh value.
+    fn result_register(
+        &mut self,
+        result: SDValue,
+        width: u32,
+    ) -> Held {
+        self.exported_register(result).unwrap_or_else(|| self.fresh(width))
     }
 
     fn new_value(&mut self) -> u32 {
@@ -3122,20 +3198,22 @@ fn div_or_mul(name: &str) -> (bool, bool, u32, bool) {
 }
 
 fn width_of(
+    sse: bool,
     dag: &SelectionDAG,
     value: SDValue,
 ) -> u32 {
-    width(dag.value_type(value))
+    width(sse, dag.value_type(value))
 }
 
 /// The width of the node's memory access: its first result, else its first
 /// operand that is a value.
 fn width_of_node(
+    sse: bool,
     dag: &SelectionDAG,
     n: u32,
 ) -> u32 {
     let node = dag.node(SDValue { node: n, res: 0 });
-    node.values.first().filter(|vt| **vt != EVT::OTHER).map_or(4, |vt| width(*vt))
+    node.values.first().filter(|vt| **vt != EVT::OTHER).map_or(4, |vt| width(sse, *vt))
 }
 
 fn sign_extend(
