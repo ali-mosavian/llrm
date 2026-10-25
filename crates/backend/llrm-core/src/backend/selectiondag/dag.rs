@@ -126,6 +126,10 @@ pub enum MemBase {
 
 #[derive(Clone, Debug)]
 pub struct SDNode {
+    /// `SDNode::getIROrder`: the position of the IR instruction the node was
+    /// built for (0 for none); a node a combine or the selector makes takes
+    /// the order of the node it replaces (`SDLoc(N)`).
+    pub order: u32,
     pub opcode: ISD,
     pub values: Vec<EVT>,
     pub ops: Vec<SDValue>,
@@ -206,6 +210,8 @@ pub struct SelectionDAG {
     /// count as users.
     /// By node id; the arena only grows, so ids index it.
     deleted: Vec<bool>,
+    /// The `IROrder` of the `SDLoc` in force: nodes made now carry it.
+    pub cur_order: u32,
     pub(super) config: DagConfig,
     entry: SDValue,
     root: SDValue,
@@ -285,6 +291,7 @@ impl SelectionDAG {
             uses: Vec::new(),
             cse: Cse::default(),
             deleted: Vec::new(),
+            cur_order: 0,
             config,
             entry: zero,
             root: zero,
@@ -751,7 +758,14 @@ impl SelectionDAG {
             }
         }
         let index = self.nodes.len() as u32;
-        self.nodes.push(SDNode { opcode, values: values.to_vec(), ops: ops.to_vec(), flags, data });
+        self.nodes.push(SDNode {
+            order: self.cur_order,
+            opcode,
+            values: values.to_vec(),
+            ops: ops.to_vec(),
+            flags,
+            data,
+        });
         self.uses.push(Vec::new());
         self.note_uses(index);
         if shareable {

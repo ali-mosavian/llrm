@@ -30,6 +30,25 @@ pub fn effect_of<'a>(
     }
 }
 
+/// [`effect_of`] for accesses that may be lazy: asked of `unit`.
+pub fn effect_of_in<'a>(
+    accesses: &'a Accesses,
+    unit: &'a Unit<'a>,
+) -> impl Fn(InstId) -> Effect + 'a {
+    let function = unit.function;
+    move |inst| Effect {
+        reads: accesses.reads_in(unit, inst).is_none_or(|reads| !reads.is_empty()),
+        writes: accesses.writes_in(unit, inst).is_none_or(|writes| !writes.is_empty()),
+        // `isOrdered`: a volatile access is a def, so it is ordered against the
+        // other defs.
+        ordered: matches!(
+            function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Load { volatile: true, .. }
+                | llrm_mir::opcode::Opcode::Store { volatile: true, .. }
+        ),
+    }
+}
+
 /// `effect_of` for `Accesses::plain(unit, calls)`, without making it: what an
 /// instruction reads and writes follows from its opcode (a load reads, a
 /// store writes: every load and store has a reference) and, for a call, from
