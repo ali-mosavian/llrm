@@ -115,7 +115,9 @@ pub fn tied(
     // The pin's liveness: the intervals, whose ends are the kills
     // (`LiveIntervals`, TwoAddressInstructionPass.cpp#L394-L483).
     let facts = crate::twoaddress::BodyFacts::of(body);
+    let flags_out = crate::backend::peephole::_flags_live_out(body);
     for (at, block) in body.blocks.iter().enumerate() {
+        let flags_dead_out = flags_out.entering.get(&block.at).is_some_and(crate::backend::lanes::Lanes::is_empty);
         let mut walk = crate::twoaddress::Commuter::sized(&facts, at, block.insns.len());
         let mut insns: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len() + block.insns.len() / 4);
         let mut work: Vec<Arc<Insn>> = block.insns.to_vec();
@@ -155,7 +157,7 @@ pub fn tied(
                 && (base.width != 2 || walk.src_register(base.value).is_none())
                 && (!walk.killed_at(&work[place], base.value)
                     || profitable_to_convert(&walk, &one, base.value, body.regs()))
-                && crate::twoaddress::flags_dead_after(&work, place, body.regs(), body.bits)
+                && crate::twoaddress::flags_dead_after(&work, place, body.regs(), body.bits, flags_dead_out)
             {
                 if let Some(what) = one.what.as_ref()
                     && what.name.as_deref() == Some("add")
@@ -1172,6 +1174,60 @@ mod tests {
             .unwrap();
         let Loc::Mem(cell) = &lea.what.as_ref().unwrap().sources[0] else { panic!("a cell") };
         assert_eq!((cell.base.map(|held| held.value), cell.offset), (Some(7), -1));
+    }
+
+    /// queens (AM-BT-6): `row + 1` was `mov t, row; inc t`, which the allocator
+    /// could not rematerialize and spilled and reloaded; the pin's `INC32r`
+    /// is converted to `LEA32r` like an add of one
+    /// (`convertToThreeAddress`).
+    #[test]
+    fn test_an_inc_or_dec_of_a_live_source_is_a_lea_not_a_copy() {
+        for (name, offset) in [("inc", 1), ("dec", -1)] {
+            let what = Semantics {
+                name: Some(name.into()),
+                dests: vec![held(8, 4)],
+                sources: vec![held(7, 4)],
+                ..Semantics::new(Operation::Unary)
+            };
+            let step = Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![8], vec![7]));
+            let got = tied(&of(vec![imm_def(0, 7), step, sum_into(2, 6, 8, 7), read(3, 6)]), All);
+            let lea = got
+                .insns()
+                .iter()
+                .find(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("lea")))
+                .cloned()
+                .unwrap_or_else(|| {
+                    panic!("{name} of a live source stays a copy and a tied {name}: {:?}", names_of(&got))
+                });
+            let Loc::Mem(cell) = &lea.what.as_ref().unwrap().sources[0] else { panic!("a cell") };
+            assert_eq!((cell.base.map(|held| held.value), cell.offset), (Some(7), offset));
+        }
+    }
+
+    /// queens `_place`: `row + 1` at the end of a block whose successor writes
+    /// the flags first stayed `mov t, row; inc t` (flags past the block's end
+    /// were taken as live), so it was spilled, not made again at the call.
+    #[test]
+    fn test_an_inc_whose_flags_the_next_block_writes_first_is_a_lea() {
+        let what = Semantics {
+            name: Some("inc".into()),
+            dests: vec![held(8, 4)],
+            sources: vec![held(7, 4)],
+            ..Semantics::new(Operation::Unary)
+        };
+        let step = Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![8], vec![7]));
+        let body = LirBody::new(
+            "t",
+            0,
+            vec![
+                LirBlock { succ: vec![1].into(), ..LirBlock::new(0, vec![imm_def(0, 7), step]) }.into(),
+                LirBlock::new(1, vec![sum_into(2, 6, 8, 7), read(3, 6)]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let names = names_of(&tied(&body, All));
+        assert!(names.contains(&"lea".to_owned()), "an inc of a live source stays a copy and an inc: {names:?}");
     }
 
     #[test]
