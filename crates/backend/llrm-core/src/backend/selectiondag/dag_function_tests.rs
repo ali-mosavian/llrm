@@ -1126,6 +1126,97 @@ fn a_float_compare_is_an_fcom_and_a_set() {
     assert!(whats[compare..].iter().any(|w| w.name.as_deref().is_some_and(|n| n.starts_with("set"))));
 }
 
+const FLOAT_COMPARE_AND_ADD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+
+define internal cc 1000 void @f() addrspace(1) \"llrm-fp-eval\"=\"x87-extended\" norecurse {
+b1:
+  %0 = tail call double @llvm.log2.f64(double 1.000000e+01)
+  br label %b5
+
+b5:
+  %1 = phi i16 [ -4, %b1 ], [ %27, %b8 ]
+  %2 = phi double [ 1.100000e+00, %b1 ], [ %14, %b8 ]
+  %3 = phi double [ 2.200000e+00, %b1 ], [ %19, %b8 ]
+  %4 = phi double [ 9.900000e+00, %b1 ], [ %21, %b8 ]
+  %5 = phi double [ 1.010000e+01, %b1 ], [ %24, %b8 ]
+  %6 = phi double [ 1.111000e+01, %b1 ], [ %26, %b8 ]
+  %7 = add i16 %1, 5
+  %8 = sitofp i16 %1 to double
+  %9 = fmul double %0, %8
+  %10 = fcmp oge double %9, 3.276750e+04
+  br i1 %10, label %b7, label %b8
+
+b6:
+  ret void
+
+b7:
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$SERR(i16 6) cold
+  unreachable
+
+b8:
+  %11 = tail call double @llvm.exp2.f64(double %9)
+  %12 = fmul double %11, %2
+  %13 = fadd double %3, %12
+  %14 = fpround double %13 to double
+  %15 = sitofp i16 %7 to double
+  %16 = fadd double %15, 3.300000e+00
+  %17 = fmul double %16, 4.400000e+00
+  %18 = fadd double %17, %3
+  %19 = fpround double %18 to double
+  %20 = fadd double %4, 0x3EF9602356465DB3
+  %21 = fpround double %20 to double
+  %22 = fmul double %5, 1.000100e+00
+  %23 = fadd double %22, 7.700000e+00
+  %24 = fpround double %23 to double
+  %25 = fadd double %6, 8.800000e-03
+  %26 = fpround double %25 to double
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PCR8(double %14)
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PCR8(double %19)
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PER8(double 3.300000e+00)
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PCR8(double 4.400000e+00)
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PCR8(double 5.500000e+00)
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PER8(double 6.600000e+00)
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PCR8(double 7.700000e+00)
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PCR8(double 8.800000e+00)
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PCR8(double %21)
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PCR8(double %24)
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PER8(double %26)
+  %27 = add nsw i16 %1, 1
+  %exitcond = icmp ne i16 %27, 5
+  br i1 %exitcond, label %b5, label %b6
+}
+
+declare double @llvm.log2.f64(double) nocallback nofree nosync nounwind speculatable willreturn memory(none)
+
+declare cc 1000 void @llrm.qb.B$SERR(i16) addrspace(1) nocallback noreturn
+
+declare double @llvm.exp2.f64(double) nocallback nofree nosync nounwind speculatable willreturn memory(none)
+
+declare cc 1000 void @llrm.qb.B$PCR8(double) addrspace(1) nocallback
+
+declare cc 1000 void @llrm.qb.B$PER8(double) addrspace(1) nocallback
+
+!0 = !{!\"llrm hir\"}
+!1 = !{!\"place\", !0, i64 0}
+!2 = !{!1, !1, i64 0}
+!3 = !{!\"allocation\", !0, i64 0}
+!4 = !{!3, !3, i64 0}
+";
+
+/// `fnstsw; sahf` follow the `fcom`, so an `add` scheduled between the compare
+/// and its `jae` was read by the branch: `pow_stack_depth` raised Overflow on
+/// the fifth pass of a loop (`fcom; add ax, 5; jae`).
+#[test]
+fn nothing_that_writes_the_flags_sits_between_an_fcom_and_its_branch() {
+    let done = select_with_contracts(FLOAT_COMPARE_AND_ADD).unwrap_or_else(|why| panic!("{why}"));
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    let compare = names.iter().position(|n| n == "fcom").expect("an fcom");
+    let branch =
+        names[compare..].iter().position(|n| n.starts_with('j')).unwrap_or_else(|| panic!("{names:?}")) + compare;
+    assert_eq!(branch, compare + 1, "{names:?}");
+}
+
 const M16_FAR_LOOP: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
 declare cc 1005 ptr addrspace(1) @g()
 declare cc 1005 void @use(ptr addrspace(1))
