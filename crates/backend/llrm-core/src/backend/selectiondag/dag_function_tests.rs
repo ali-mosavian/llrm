@@ -618,3 +618,22 @@ define i64 @f(i64 %a, i32 %i) {
     let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
     assert!(!seen.iter().any(|n| n.starts_with('j') || *n == "test"), "{seen:?}");
 }
+
+/// A 64-bit add made the carry a byte and put it back (`add; setb al; add al,
+/// -1; adc`, three instructions more than the pin's `add; adc`): the pin's
+/// `combineCarryThroughADD` reads the flags the `setb` read.
+#[test]
+fn a_wide_add_passes_the_carry_in_the_flags() {
+    let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i64 %a, i64 %b) {
+  %r = add i64 %a, %b
+  ret i64 %r
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+    assert!(seen.contains(&"adc") && !seen.contains(&"setb"), "{seen:?}");
+}
