@@ -80,6 +80,13 @@ impl SchedInfo for Info {
     ) -> bool {
         llrm_dagisel::instr::desc(opcode as u16).is_some_and(|d| d.is_call())
     }
+
+    fn has_cross_copy_class(
+        &self,
+        reg: u16,
+    ) -> bool {
+        Some(reg) == super::dagisel_adapter::pin_register(super::dagisel_adapter::EFLAGS_ID)
+    }
 }
 
 /// The frame's objects: fixed object `-k` is the k-th stack-passed
@@ -940,6 +947,15 @@ fn selected_in(
     body.bits = arch.object().bitness;
     body.registers = Some(llrm_lir::registers::Regs(arch.registers()));
     body.float_stack = arch.float_stack();
+    // The old route's table of each float value's type: a spill rounds to it
+    // (C, `rounds_float_spills`) or, for BASIC, keeps the 10 bytes
+    // (`spills_extended`). Without it every spill of an x87 value was a qword
+    // (`pow_unrolled.bas` lost 11 bits of log2(10) across a call).
+    if cpu.rounds_float_spills || cpu.spills_extended {
+        let table =
+            state.float_bytes.iter().map(|(number, bytes)| (*number, if cpu.spills_extended { 10 } else { *bytes }));
+        body.float_bytes = std::sync::Arc::new(table.collect());
+    }
     body.sealed_arguments = true;
     body.ordered = true;
     body.frequencies = Some(crate::analysis::frequency::Frequency::over(&body, &body.blocks).table());

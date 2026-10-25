@@ -167,9 +167,10 @@ pub fn visit_icmp(
     if let Some(r) = canonicalize_cmp_with_constant(c, inst, pred, op0, op1) {
         return r;
     }
-    // OWED: canonicalizeICmpPredicate (canFreelyInvertAllUsersOf).
-    // OWED: foldICmpWithConstant, foldICmpWithDominatingICmp,
-    // foldICmpUsingBoolRange.
+    // OWED: foldICmpWithConstant, foldICmpUsingBoolRange.
+    if let Some(r) = fold_icmp_with_dominating_icmp(c, inst, pred, op0, op1) {
+        return r;
+    }
     if let Some(r) = fold_icmp_using_known_bits(c, inst, pred, op0, op1) {
         return r;
     }
@@ -229,6 +230,101 @@ fn select_result(
     inst: InstId,
 ) -> llrm_mir::module::ValueId {
     c.function.instruction(inst).result.expect("a select's value")
+}
+
+/// `foldICmpWithDominatingICmp`
+/// ([:1393](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L1393)):
+/// `icmp pred x, C` in a block a branch on `icmp domPred x, DomC` dominates:
+/// the two ranges settle it, or leave one value, and it is an equality with it.
+fn fold_icmp_with_dominating_icmp(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    x: Operand,
+    y: Operand,
+) -> Option<Visit> {
+    use llrm_mir::constantrange::{ConstantRange, PreferredRangeType};
+    // The simple implications were InstSimplify's; only a constant is asked.
+    let (value, width) = constant(c, y)?;
+    let cr = ConstantRange::make_exact_icmp_region(pred, width, value);
+    let cmp_block = c.function.parent(inst)?;
+    let branches: Vec<InstId> = c.env.analyses.dom_conditions()?.conditions_for(x).to_vec();
+    for branch in branches {
+        let &[Operand::Value(cond), Operand::Block(on_true), Operand::Block(on_false)] =
+            &c.function.instruction(branch).operands[..]
+        else {
+            continue;
+        };
+        let llrm_mir::module::ValueDef::Instruction(dominating) = c.function.value(cond).def else { continue };
+        let Opcode::ICmp(dom_pred) = c.function.instruction(dominating).opcode else { continue };
+        let &[dom_x, dom_c] = &c.function.instruction(dominating).operands[..] else { continue };
+        let Some((dom_value, _)) = constant(c, dom_c) else { continue };
+        if dom_x != x {
+            continue;
+        }
+        let Some(branch_block) = c.function.parent(branch) else { continue };
+        let tree = c.env.analyses.dominator_tree();
+        let on_edge = if tree.dominates_edge(c.function, branch_block, on_true, cmp_block) {
+            dom_pred
+        } else if tree.dominates_edge(c.function, branch_block, on_false, cmp_block) {
+            dom_pred.inverse()
+        } else {
+            continue;
+        };
+        let dominating_cr = ConstantRange::make_exact_icmp_region(on_edge, width, dom_value);
+        let intersection = dominating_cr.intersect_with(&cr, PreferredRangeType::Smallest);
+        let difference = dominating_cr.difference(&cr);
+        let i1 = c.context.types.int(1);
+        if intersection.is_empty_set() {
+            return Some(Visit::Replace(c.int(i1, 0)));
+        }
+        if difference.is_empty_set() {
+            return Some(Visit::Replace(c.int(i1, 1)));
+        }
+        // Canonicalizing a sign bit comparison that a branch uses pessimizes
+        // codegen: a branch on zero instead of a test and branch.
+        let sign_bit = llrm_mir::valuetracking::fp::is_sign_bit_check(pred, value, width).is_some();
+        let branch_use = {
+            let result = c.function.instruction(inst).result?;
+            c.function
+                .users(result)
+                .iter()
+                .any(
+                    |one| {
+                        let user = c.function.instruction(one.user);
+                        user.opcode == Opcode::Br && user.operands.len() == 3
+                    },
+                )
+        };
+        if matches!(pred, IntPredicate::Eq | IntPredicate::Ne) || (sign_bit && branch_use) {
+            continue;
+        }
+        // Avoid an infinite loop with min/max canonicalization.
+        if let Some(user) = only_user(c, inst) {
+            let q = query(c, None);
+            if matches!(
+                pattern::call_intrinsic(&q, user),
+                Some(
+                    pattern::IntrinsicId::Smax
+                        | pattern::IntrinsicId::Smin
+                        | pattern::IntrinsicId::Umax
+                        | pattern::IntrinsicId::Umin
+                )
+            ) {
+                continue;
+            }
+        }
+        let ty = c.type_of(x);
+        if let Some(only) = intersection.get_single_element() {
+            let only = c.int(ty, only);
+            return Some(new_icmp(c, inst, IntPredicate::Eq, x, only));
+        }
+        if let Some(missing) = difference.get_single_element() {
+            let missing = c.int(ty, missing);
+            return Some(new_icmp(c, inst, IntPredicate::Ne, x, missing));
+        }
+    }
+    None
 }
 
 /// `canonicalizeCmpWithConstant`
