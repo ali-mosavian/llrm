@@ -4,7 +4,7 @@ Owner w-5, assigned by the coordinator on w4's finding. Pin: [ConstraintEliminat
 
 ## Why
 
-w4's loop (`bench_scroll`, third loop of `bench/scroll/scroll.nib`, `/home/alim/scratch/w4-scroll/c/un.ll`): the pin's `constraint-elimination` alone turns Nib's `j <u 1920` check into `br i1 true` (header phi `{1919,+,-1}<nsw>` gives `j <= 1919`, the header test gives `j >= 0`); instcombine, simplifycfg, jump-threading and CVP do not. Then LoopIdiom sees a clean copy loop and forms one memmove: scroll.nib m16 -O2 executes 602,661 instructions at tip against 170,762 on the old side (w4 re-measures the baseline before a ratio is quoted). The slot table's "ablation 0 of 12 IRs" came from a corpus with no such loop.
+w4's loop (`bench_scroll`, third loop of `bench/scroll/scroll.nib`, w4's reduced `un.ll`): the pin's `constraint-elimination` alone turns Nib's `j <u 1920` check into `br i1 true` (header phi `{1919,+,-1}<nsw>` gives `j <= 1919`, the header test gives `j >= 0`); instcombine, simplifycfg, jump-threading and CVP do not. Then LoopIdiom sees a clean copy loop and forms one memmove: scroll.nib m16 -O2 executes 602,661 instructions at tip against 170,762 on the old side (w4 re-measures the baseline before a ratio is quoted). The slot table's "ablation 0 of 12 IRs" came from a corpus with no such loop.
 
 ## State: translated, not in the pipeline
 
