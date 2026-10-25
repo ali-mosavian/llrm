@@ -138,7 +138,7 @@ struct LiveBundle {
 }
 
 struct Fps<'a> {
-    floating: &'a HashSet<u32>,
+    floating: &'a llrm_mir::dense::IdSet<u32>,
     /// `Stack[]`, top first: `values[i]` is in `st(i)`.
     values: Vec<u32>,
     depth: usize,
@@ -947,7 +947,7 @@ struct Ahead<'a> {
     at_of: &'a IndexMap<i64, &'a Block>,
     bundles: &'a spillplacement::Bundles,
     live_bundles: &'a IndexMap<usize, LiveBundle>,
-    floating: &'a HashSet<u32>,
+    floating: &'a llrm_mir::dense::IdSet<u32>,
 }
 
 impl Ahead<'_> {
@@ -1061,7 +1061,9 @@ pub(super) fn converted(
     if floating.is_empty() {
         return Ok(body.clone());
     }
-    let (live_in, live_out) = live_among(body, |value| floating.contains(&value));
+    // Asked of every operand of every instruction: a bit each, not a hash.
+    let dense: llrm_mir::dense::IdSet<u32> = floating.iter().copied().collect();
+    let (live_in, live_out) = live_among(body, |value| dense.contains(&value));
     let bundles = spillplacement::bundles(body);
     // DEVIATE 7: a block of its own on each critical forward edge into a block
     // that reads fewer floating values than its bundle holds, where the
@@ -1090,7 +1092,7 @@ pub(super) fn converted(
     };
     let body = &*body;
     let floats = |set: &llrm_mir::dense::IdSet<u32>| -> BTreeSet<u32> {
-        set.iter().filter(|value| floating.contains(value)).collect()
+        set.iter().filter(|value| dense.contains(value)).collect()
     };
     let mut live_bundles: IndexMap<usize, LiveBundle> = IndexMap::default();
     for block in &body.blocks {
@@ -1121,7 +1123,7 @@ pub(super) fn converted(
             .max()
             .map_or(0, |most| most + 1);
     let mut fps = Fps {
-        floating: &floating,
+        floating: &dense,
         values: Vec::new(),
         depth: body.float_stack,
         out: Vec::new(),
@@ -1154,7 +1156,7 @@ pub(super) fn converted(
             let floats_here =
                 one.what.as_ref().is_some_and(|what| what.sources.iter().chain(&what.dests).any(_floating));
             if !floats_here {
-                if one.uses.iter().chain(&one.defines).any(|value| floating.contains(value)) {
+                if one.uses.iter().chain(&one.defines).any(|value| dense.contains(value)) {
                     return Err(unlowered("floating value used by an unmodelled instruction"));
                 }
                 if clears_stack(regs, one) {
@@ -1177,7 +1179,7 @@ pub(super) fn converted(
                 at_of: &at_of,
                 bundles: &bundles,
                 live_bundles: &live_bundles,
-                floating: &floating,
+                floating: &dense,
             };
             let hint = successor_order(&ahead, block, &bundle.mask);
             let finished = fps.finish_block_stack(&mut bundle, hint);
