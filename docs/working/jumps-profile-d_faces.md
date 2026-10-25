@@ -19,4 +19,8 @@ Reading:
 - 3 of 5 `merged` calls are the confirming round that finds nothing; the pin pays the same rounds at about a fifth of the cost.
 - `rules` is 0.3 M of its own lines; the rest is inlined `Arc`/`Option<Semantics>` work outside `branchfold.rs`.
 
-Candidate cuts, none made: keep the loop forest and predecessor map across rounds (~1.5 M); `seq_of` from the tail (~0.5 M); extend the carried frequency across `merged` so `inverted` needs no run (~1.5 M). Together about 3.5 M, 0.4% of the compile: not where the 80 M excess is.
+Checked and not waste:
+- `Frequency::of` in `inverted`: cached by CFG shape (`Worked`, `Carried`); the two runs follow a merge that changed the shape. The carried table costs more per run (3.5 M over its 2 runs) than a fresh run (0.5 M).
+- The tail merge's loop forest: `analysis::loops::loops` is memoized by shape (`shaped`); the 2 runs in `merged` are misses after a real CFG change, and it is asked only once two predecessors hash alike.
+
+Candidate cuts, none made: keep the predecessor map across rounds (~0.5 M); `seq_of` from the tail (~0.5 M). About 1 M, 0.1% of the compile.
