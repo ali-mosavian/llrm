@@ -102,7 +102,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("MachineScheduler", "machinesched@5"),
     ("FixupSetCC", "fixupsetcc@5"),
     ("CallFrameOpt", "callframe@5"),
-    ("CallFrameOpt", "callframe@5"),
+    ("LowerCallFrame", "callframe@5"),
     ("FlagsCopy", "flagscopy@5"),
     ("X86OptimizeLEAs", "leaopt@5"),
     ("FloatFold", "floatfold@6"),
@@ -196,9 +196,13 @@ pub fn machine_with<'a>(
             slot: registers.slot,
             align: registers.align,
             stack: registers.stack,
-            has_var_sized: false,
+            // No call frame is reserved yet (CF4): every area that can be
+            // pushed is, as the pin does where it cannot reserve one.
+            has_var_sized: true,
             slow_two_mem_ops: false,
         }),
+        // The frame pseudos that are left, as `sub`/`add` (every level).
+        Box::new(crate::backend::callframe::LowerCallFrame { stack: registers.stack, width: registers.slot as u32 }),
         // On SSA, right after the pushes are made: a pushed value a load made,
         // read nowhere else, is pushed from the load's cell (the pin:
         // X86CallFrameOptimization's push folding).
