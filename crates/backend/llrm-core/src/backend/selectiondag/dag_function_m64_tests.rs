@@ -93,3 +93,23 @@ done:
         "{add:?}"
     );
 }
+
+/// An `i64` select at m64 stopped at emit with `Unmapped("CMOV64rr")`; it is
+/// now a compare and a `cmovb` of the two registers.
+#[test]
+fn an_m64_select_is_a_cmov() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i64 @f(i64 %a, i64 %b) {
+entry:
+  %c = icmp ult i64 %a, %b
+  %r = select i1 %c, i64 %a, i64 %b
+  ret i64 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let insns = done.body.insns();
+    let names: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref().and_then(|w| w.name.as_deref())).collect();
+    assert_eq!(names, ["", "cmp", "cmovb", ""]);
+}

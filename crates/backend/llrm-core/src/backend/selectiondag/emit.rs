@@ -2072,6 +2072,28 @@ impl Emitter<'_, '_> {
                 self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![source]);
                 Ok(Some(()))
             }
+            // The conditional move (P6 and later, every x86-64): the second
+            // source replaces the first, tied to the result, when the
+            // condition holds.
+            "CMOV16rr" | "CMOV32rr" | "CMOV64rr" => {
+                let cc = self.constant(node.ops[2])? as usize;
+                let jump = CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
+                let (Loc::Held(when_false), Loc::Held(when_true)) =
+                    (self.operand(node.ops[0])?, self.operand(node.ops[1])?)
+                else {
+                    return Err(EmitError::Unsupported("a conditional move of a non-register".to_owned()));
+                };
+                let held = self.fresh(width);
+                self.values.insert(result, held.value);
+                let name = format!("cmov{}", &jump[1..]);
+                self.push(
+                    Operation::Select,
+                    &name,
+                    vec![Loc::Held(held)],
+                    vec![Loc::Held(when_false), Loc::Held(when_true)],
+                );
+                Ok(Some(()))
+            }
             "SETCCr" => {
                 let cc = node
                     .ops
