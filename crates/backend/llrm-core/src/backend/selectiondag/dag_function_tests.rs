@@ -110,8 +110,11 @@ pub(super) fn verdicts(flags: bool) -> Vec<Result<super::builder::RuntimeAnswer,
 
 pub(super) fn select_with_contracts(text: &str) -> Result<crate::backend::isel::Selected, String> {
     let module = llrm_mir::parse::module(text).expect("parses");
-    let contracts =
-        super::dag_function::RuntimeContracts { abi: &Stub { flags: false }, segments: &crate::backend::target::BASIC };
+    let contracts = super::dag_function::RuntimeContracts {
+        abi: &Stub { flags: false },
+        segments: &crate::backend::target::BASIC,
+        runtime: true,
+    };
     let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
     super::dag_function::selected_in_pool(
         &module,
