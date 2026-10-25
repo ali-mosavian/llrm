@@ -7631,6 +7631,10 @@ impl Selector<'_, '_, '_> {
             std::mem::swap(&mut a, &mut b);
             predicate = swapped(predicate);
         }
+        // An i1 is a byte of 0 or 1 but true is -1 signed: the order reverses.
+        if self.types().int_bits(ty) == Some(1) {
+            predicate = unsigned_of_i1(predicate);
+        }
         // A call's flags are its result compared with zero.
         if let Operand::Value(value) = a
             && self.flagged.contains(&value)
@@ -8101,6 +8105,19 @@ fn condition_code(predicate: IntPredicate) -> &'static str {
         IntPredicate::Ule => "jbe",
         IntPredicate::Ugt => "ja",
         IntPredicate::Uge => "jae",
+    }
+}
+
+/// `predicate` on an i1's byte (0 or 1): a signed order is the unsigned order
+/// reversed, true being -1.
+fn unsigned_of_i1(predicate: IntPredicate) -> IntPredicate {
+    use IntPredicate::*;
+    match predicate {
+        Slt => Ugt,
+        Sle => Uge,
+        Sgt => Ult,
+        Sge => Ule,
+        other => other,
     }
 }
 
