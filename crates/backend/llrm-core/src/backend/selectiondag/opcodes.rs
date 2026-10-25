@@ -54,11 +54,14 @@ pub enum Unmapped {
 /// `x86.instr`'s forms, by mnemonic.
 pub struct OpcodeMap {
     forms: Vec<Form>,
+    /// The answer for each name asked: every machine node of a function asks,
+    /// and a name has one answer.
+    asked: std::sync::Mutex<llrm_support::hash::HashMap<String, Result<usize, Unmapped>>>,
 }
 
 impl OpcodeMap {
     pub fn new(forms: Vec<Form>) -> OpcodeMap {
-        OpcodeMap { forms }
+        OpcodeMap { forms, asked: Default::default() }
     }
 
     pub fn forms(&self) -> &[Form] {
@@ -67,6 +70,18 @@ impl OpcodeMap {
 
     /// The index of the one form `name` is, or why it is none.
     pub fn form(
+        &self,
+        name: &str,
+    ) -> Result<usize, Unmapped> {
+        if let Some(answer) = self.asked.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(name) {
+            return answer.clone();
+        }
+        let answer = self.searched(name);
+        self.asked.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(name.to_owned(), answer.clone());
+        answer
+    }
+
+    fn searched(
         &self,
         name: &str,
     ) -> Result<usize, Unmapped> {

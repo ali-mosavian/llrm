@@ -106,3 +106,18 @@ fn test_sibling_scopes_share_their_locals_slot_under_the_dag_selector() {
     use crate::backend::shadow::Selector;
     assert_eq!((frame_by(false, Selector::Dag), frame_by(true, Selector::Dag)), (4, 2));
 }
+
+/// `-Oz` is `Function::hasMinSize` on every function (clang marks them): the
+/// machine profile says so, which the selectors hand to `LirBody::min_size`
+/// and MachineCSE's `isProfitableToHoistInto` reads. The profile had no such
+/// flag, so no machine pass could tell -Oz from -Os.
+#[test]
+fn test_the_machine_profile_knows_minsize_at_oz_only() {
+    let machine = Machine { cpu: "486".to_owned(), ..BUILT_IN.clone() };
+    let with = |pipeline: llrm_transforms::pipeline::Options| {
+        Options { pipeline, ..Options::m16(machine.clone()) }.cpu().expect("the 486 profile").min_size
+    };
+    assert!(with(llrm_transforms::pipeline::Options::min_size()));
+    assert!(!with(llrm_transforms::pipeline::Options::size()));
+    assert!(!with(llrm_transforms::pipeline::Options::standard()));
+}

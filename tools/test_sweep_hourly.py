@@ -206,3 +206,17 @@ def test_a_program_that_did_not_link_is_a_build_failure_not_a_wrong_output():
     assert reds[0].kind == s.BUILD
     reds, _ = s.parse_groups("[c] 1 programs: 0 pass, 0 known, 1 fail\nFAIL  c/x.c [-O2]: output differs at line 3\n")
     assert reds[0].kind == s.WRONG
+
+
+def test_a_sweep_step_runs_under_a_build_slot():
+    """The sweep's test steps (run_groups, os_objects, llrmbin) ran beside four cargo builds at load 68 on 32 cores; every step now holds one of the shared slots."""
+    seen = []
+    real = s.subprocess.run
+    s.subprocess.run = lambda argv, **kw: seen.append(argv) or subprocess.CompletedProcess(argv, 0, "", "")
+    try:
+        import tempfile
+
+        s.run(["python3", "step.py"], {}, Path(tempfile.mkdtemp()) / "log", Path("."))
+    finally:
+        s.subprocess.run = real
+    assert Path(seen[0][seen[0].index("python3") - 1]).name == "buildslot" and seen[0][-2:] == ["python3", "step.py"]

@@ -665,19 +665,55 @@ pub enum Opcode {
 /// one discriminant test, where the derived `eq` was a call and the temporary's
 /// drop glue (4% of a diamond-800 compile).
 impl PartialEq for Opcode {
-    #[inline]
+    /// A compare with a unit variant or one that carries a small enum
+    /// (`Binary`, `Cast`, `ICmp`, `FCmp`) is a discriminant test and a byte
+    /// compare in the caller; the variants with vectors and fields compare
+    /// in `eq_fields`. The one `#[inline]` match was a call at most sites:
+    /// 12.3 M Ir (1.4%) of a d_faces compile.
+    #[inline(always)]
     fn eq(
         &self,
         other: &Self,
     ) -> bool {
-        use std::mem::discriminant;
-        if discriminant(self) != discriminant(other) {
-            return false;
-        }
         match (self, other) {
-            (Self::Invoke(a), Self::Invoke(b)) | (Self::Call(a), Self::Call(b)) => a == b,
             (Self::Binary(a), Self::Binary(b)) => a == b,
             (Self::Cast(a), Self::Cast(b)) => a == b,
+            (Self::ICmp(a), Self::ICmp(b)) => a == b,
+            (Self::FCmp(a), Self::FCmp(b)) => a == b,
+            _ => {
+                std::mem::discriminant(self) == std::mem::discriminant(other)
+                    && (!self.carries_fields() || self.eq_fields(other))
+            }
+        }
+    }
+}
+
+impl Opcode {
+    /// The variants whose payload is more than a small enum.
+    #[inline(always)]
+    fn carries_fields(&self) -> bool {
+        matches!(
+            self,
+            Self::Invoke(_)
+                | Self::Call(_)
+                | Self::ExtractValue(_)
+                | Self::InsertValue(_)
+                | Self::Alloca { .. }
+                | Self::Load { .. }
+                | Self::Store { .. }
+                | Self::GetElementPtr { .. }
+                | Self::LandingPad { .. }
+        )
+    }
+
+    /// The payload compare of two opcodes of one variant.
+    #[inline(never)]
+    fn eq_fields(
+        &self,
+        other: &Self,
+    ) -> bool {
+        match (self, other) {
+            (Self::Invoke(a), Self::Invoke(b)) | (Self::Call(a), Self::Call(b)) => a == b,
             (Self::ExtractValue(a), Self::ExtractValue(b)) | (Self::InsertValue(a), Self::InsertValue(b)) => a == b,
             (
                 Self::Alloca { allocated: a, align: b, address_space: c },
@@ -686,17 +722,13 @@ impl PartialEq for Opcode {
             (Self::Load { align: a, volatile: b }, Self::Load { align: c, volatile: d })
             | (Self::Store { align: a, volatile: b }, Self::Store { align: c, volatile: d }) => a == c && b == d,
             (Self::GetElementPtr { source: a }, Self::GetElementPtr { source: b }) => a == b,
-            (Self::ICmp(a), Self::ICmp(b)) => a == b,
-            (Self::FCmp(a), Self::FCmp(b)) => a == b,
             (Self::LandingPad { cleanup: a, clauses: b }, Self::LandingPad { cleanup: c, clauses: d }) => {
                 a == c && b == d
             }
             _ => true,
         }
     }
-}
 
-impl Opcode {
     pub fn is_terminator(&self) -> bool {
         matches!(
             self,
