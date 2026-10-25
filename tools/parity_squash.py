@@ -64,7 +64,7 @@ with_merge_driver(os.environ)
 
 
 def git(*args: str, cwd: Path = ROOT) -> str:
-    done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, errors="replace")
     if done.returncode:
         raise SystemExit(f"git {' '.join(args)}: {done.stderr.strip()}")
     return done.stdout
@@ -107,7 +107,7 @@ DOCS_PAGE = re.compile(r"^> Generated from the `//!` headers? of ")
 
 def is_generated(base: str, path: str, cwd: Path = ROOT) -> bool:
     """Whether `path` at `base` is a docsbuild page: the docs check regenerates it on the merged tree, so a rewrite of its source is not a deletion."""
-    done = subprocess.run(["git", "show", f"{base}:{path}"], cwd=cwd, capture_output=True, text=True)
+    done = subprocess.run(["git", "show", f"{base}:{path}"], cwd=cwd, capture_output=True, text=True, errors="replace")
     return done.returncode == 0 and bool(DOCS_PAGE.match(done.stdout.split("\n", 1)[0]))
 
 
@@ -166,7 +166,7 @@ def dead_links(base: str, head: str, cwd: Path = ROOT) -> list[tuple[str, str]]:
     gone = git("diff", "--name-only", "--diff-filter=D", base, head, cwd=cwd).split()
     found = []
     for path in gone:
-        listed = subprocess.run(["git", "grep", "-l", "-F", "-e", Path(path).name, head, "--", "docs"], cwd=cwd, capture_output=True, text=True).stdout.split()
+        listed = subprocess.run(["git", "grep", "-l", "-F", "-e", Path(path).name, head, "--", "docs"], cwd=cwd, capture_output=True, text=True, errors="replace").stdout.split()
         for entry in listed:
             page = entry.split(":", 1)[1]
             if not page.endswith(".md"):
@@ -225,7 +225,7 @@ def body_checks(head: str, description: str, base: str = BASE, cwd: Path = ROOT,
             what = "deletes the whole file" if whole else f"deletes {gone} line(s)"
             why.append(f"{path}: the squash {what}{f' and {tests} test function(s)' if tests else ''}{' (no commit of this PR touched it)' if path in outside else ''}; "
                        "name the path in a `Deletes:` or `Reverts:` line of the description if that is meant")
-    changed = subprocess.run(["git", "diff", "--name-only", f"{base}...{head}"], cwd=cwd, capture_output=True, text=True).stdout.split()
+    changed = subprocess.run(["git", "diff", "--name-only", f"{base}...{head}"], cwd=cwd, capture_output=True, text=True, errors="replace").stdout.split()
     return why + perf_needs_rows(title, description, changed)
 
 
@@ -255,7 +255,7 @@ def fmt_differs(root: Path, files: list[str], run=subprocess.run) -> set[str]:
 
     def one(path: str) -> str | None:
         text = (root / path).read_text()
-        done = run(["tools/fmt.sh", "--stdin", path], cwd=root, input=text, capture_output=True, text=True)
+        done = run(["tools/fmt.sh", "--stdin", path], cwd=root, input=text, capture_output=True, text=True, errors="replace")
         return path if done.returncode or done.stdout != text else None
 
     rust = [f for f in files if f.endswith(".rs") and (root / f).is_file()]
@@ -273,19 +273,19 @@ def precheck_checks(dev: Path, target: Path):
     env = {**os.environ, "CARGO_TARGET_DIR": str(target)}
 
     def ratchets(root: Path) -> dict[str, set[str]]:
-        failed = parity_smoke.ratchet_failures(root, run=lambda command: subprocess.run(slotted(command), cwd=root, env=env, capture_output=True, text=True))
+        failed = parity_smoke.ratchet_failures(root, run=lambda command: subprocess.run(slotted(command), cwd=root, env=env, capture_output=True, text=True, errors="replace"))
         return {name: {name} for name in failed}
 
     def fmt(root: Path, only: list[str] | None = None) -> dict[str, set[str]]:
         if only is not None:  # the PR side: its own files only (the baseline, computed once per feat/parity sha, checks them all)
             files = fmt_differs(root, only)
             return {"fmt": files} if files else {}
-        done = subprocess.run(["tools/fmt.sh", "--check"], cwd=root, env=env, capture_output=True, text=True)
+        done = subprocess.run(["tools/fmt.sh", "--check"], cwd=root, env=env, capture_output=True, text=True, errors="replace")
         files = {line.strip() for line in done.stdout.splitlines() if re.fullmatch(r"\S+\.(rs|py|toml)", line.strip())}
         return {"fmt": files or {"fmt --check failed"}} if done.returncode else {}
 
     def docs(root: Path) -> dict[str, set[str]]:
-        done = subprocess.run([sys.executable, "tools/docsbuild/build.py", "--check"], cwd=root, env=env, capture_output=True, text=True)
+        done = subprocess.run([sys.executable, "tools/docsbuild/build.py", "--check"], cwd=root, env=env, capture_output=True, text=True, errors="replace")
         if not done.returncode:
             return {}
         out = (done.stdout + done.stderr).splitlines()
@@ -325,7 +325,7 @@ def precheck(number: str, dev: Path = PRECHECK_DIR / "wt", target: Path = PRECHE
     """`N: PASS`, or `N: REFUSED: <names>` after merging PR N's head with feat/parity in the dev checkout and running the cheap static checks (ratchets, fmt, docs, the
     deletion rule) there: seconds, no dist build. #2836 cost a batch 26 minutes of halving for a failure these checks name. Only items NEW against feat/parity's own
     failures refuse (by check AND file/page): a red head file refused every PR, the fixes included. The verdict is cached per (PR head sha, feat/parity sha)."""
-    info = info or json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName"], capture_output=True, text=True, check=True).stdout)
+    info = info or json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName"], capture_output=True, text=True, errors="replace", check=True).stdout)
     if info["baseRefName"] != "feat/parity":
         return f"{number}: REFUSED: targets {info['baseRefName']}, not feat/parity"
     base_sha = base_sha or git("rev-parse", BASE).strip()
@@ -385,7 +385,7 @@ def audit(since: str, cwd: Path = ROOT) -> list[tuple[str, str, str]]:
 
 
 def pr_body(number: str) -> str:
-    done = subprocess.run(["gh", "pr", "view", number, "--json", "body", "--jq", ".body"], capture_output=True, text=True)
+    done = subprocess.run(["gh", "pr", "view", number, "--json", "body", "--jq", ".body"], capture_output=True, text=True, errors="replace")
     return done.stdout if done.returncode == 0 else ""
 
 
@@ -418,7 +418,7 @@ def ensure_bins(env: dict | None = None, build=None, cwd: Path = ROOT) -> str:
     directory = Path(smoke_bins(env))
     if not llrmbin.stale_binaries(directory, cwd):
         return ""
-    built = (build or (lambda: subprocess.run(slotted(["cargo", "build", "--release", "--bins", "-q"]), cwd=cwd, env={**os.environ, **(env or {})}, capture_output=True, text=True)))()
+    built = (build or (lambda: subprocess.run(slotted(["cargo", "build", "--release", "--bins", "-q"]), cwd=cwd, env={**os.environ, **(env or {})}, capture_output=True, text=True, errors="replace")))()
     still = llrmbin.stale_binaries(directory, cwd)
     if not still:
         return ""
@@ -490,11 +490,11 @@ def regenerate(conflicts: list[str], cwd: Path = ROOT) -> str:
         git("checkout", "--ours", "--", path, cwd=cwd)
     build = [sys.executable, "tools/docsbuild/build.py"]
     for flags in (["--sync", "--force"], ["--check"]):
-        done = subprocess.run([*build, *flags], cwd=cwd, capture_output=True, text=True)
+        done = subprocess.run([*build, *flags], cwd=cwd, capture_output=True, text=True, errors="replace")
         if done.returncode:
             return f"docsbuild {' '.join(flags)} failed on the merged tree: {(done.stdout + done.stderr).strip().splitlines()[-1:] or ['no output']}"
     git("add", "-A", "docs", cwd=cwd)
-    done = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "commit", "-q", "--no-edit"], cwd=cwd, capture_output=True, text=True)
+    done = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "commit", "-q", "--no-edit"], cwd=cwd, capture_output=True, text=True, errors="replace")
     return "" if done.returncode == 0 else f"committing the regenerated merge failed: {done.stderr.strip()[:200]}"
 
 
@@ -505,11 +505,11 @@ def update_generated_only(head: str, branch: str, base: str = BASE, cwd: Path = 
         work = Path(tmp) / "w"
         git("worktree", "add", "-q", "--detach", str(work), head, cwd=cwd)
         try:
-            merged = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "merge", "--no-edit", "-q", base], cwd=work, capture_output=True, text=True)
+            merged = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "merge", "--no-edit", "-q", base], cwd=work, capture_output=True, text=True, errors="replace")
             if merged.returncode and regenerate(git("diff", "--name-only", "--diff-filter=U", cwd=work).split(), work):
                 return ""
             sha = git("rev-parse", "HEAD", cwd=work).strip()
-            pushed = subprocess.run(["git", "push", "-q", "origin", f"{sha}:refs/heads/{branch}"], cwd=work, capture_output=True, text=True)
+            pushed = subprocess.run(["git", "push", "-q", "origin", f"{sha}:refs/heads/{branch}"], cwd=work, capture_output=True, text=True, errors="replace")
             return sha if pushed.returncode == 0 else ""
         finally:
             subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=cwd, capture_output=True)
@@ -523,11 +523,11 @@ def merge_parity(head: str, branch: str, base: str = BASE, cwd: Path = ROOT) -> 
         work = Path(tmp) / "w"
         git("worktree", "add", "-q", "--detach", str(work), head, cwd=cwd)
         try:
-            merged = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "merge", "--no-edit", "-q", base], cwd=work, capture_output=True, text=True)
+            merged = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "merge", "--no-edit", "-q", base], cwd=work, capture_output=True, text=True, errors="replace")
             if merged.returncode:
                 return ""
             sha = git("rev-parse", "HEAD", cwd=work).strip()
-            pushed = subprocess.run(["git", "push", "-q", "origin", f"{sha}:refs/heads/{branch}"], cwd=work, capture_output=True, text=True)
+            pushed = subprocess.run(["git", "push", "-q", "origin", f"{sha}:refs/heads/{branch}"], cwd=work, capture_output=True, text=True, errors="replace")
             return sha if pushed.returncode == 0 else ""
         finally:
             subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=cwd, capture_output=True)
@@ -544,7 +544,7 @@ def format_head(head: str, branch: str, base: str = BASE, cwd: Path = ROOT) -> t
             changed = []
             for path in files:
                 text = (work / path).read_text()
-                done = subprocess.run(["tools/fmt.sh", "--stdin", path], cwd=work, input=text, capture_output=True, text=True)
+                done = subprocess.run(["tools/fmt.sh", "--stdin", path], cwd=work, input=text, capture_output=True, text=True, errors="replace")
                 if done.returncode >= 2:
                     return "", f"tools/fmt.sh failed on {path} (exit {done.returncode}): {(done.stderr or done.stdout).strip()[-160:]}"
                 if done.stdout and done.stdout != text:
@@ -555,16 +555,23 @@ def format_head(head: str, branch: str, base: str = BASE, cwd: Path = ROOT) -> t
             identity = ["-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost"]
             subprocess.run(["git", *identity, "commit", "-q", "-am", "style: tools/fmt.sh on the files the PR changes"], cwd=work, check=True, capture_output=True)
             sha = git("rev-parse", "HEAD", cwd=work).strip()
-            pushed = subprocess.run(["git", "push", "-q", "origin", f"{sha}:refs/heads/{branch}"], cwd=work, capture_output=True, text=True)
+            pushed = subprocess.run(["git", "push", "-q", "origin", f"{sha}:refs/heads/{branch}"], cwd=work, capture_output=True, text=True, errors="replace")
             return (sha, "") if pushed.returncode == 0 else ("", f"pushing the formatted head to {branch} failed: {pushed.stderr.strip()[-160:]}")
         finally:
             subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=cwd, capture_output=True)
 
 
-def build_offenders(group: list[str], merge_alone, check) -> list[str]:
+def build_offenders(group: list[str], merge_alone, check, errors: dict[str, str] | None = None) -> list[str]:
     """The PRs of `group` whose own merge on the head does not build: `merge_alone(number)` merges one onto a clean head (False when it cannot), `check()` is the build error or "". A batch that
-    fails to build with no PR at fault alone (two halves that compile apart) names none and is halved. The 21:02 batch (#3763's new ISD variants against #3806's) refused every PR."""
-    return [number for number in group if merge_alone(number) and check()]
+    fails to build with no PR at fault alone (two halves that compile apart) names none and is halved. The 21:02 batch (#3763's new ISD variants against #3806's) refused every PR.
+    `errors` receives each culprit's own build error: the 16:56 batch printed the batch's error for #4743, which built clean when asked alone."""
+    found = []
+    for number in group:
+        if merge_alone(number) and (error := check()):
+            found.append(number)
+            if errors is not None:
+                errors[number] = error
+    return found
 
 
 def refusal_line(number: str, named: dict[str, str], failed_build: list[str], failed_units: set[str]) -> str:
@@ -630,14 +637,14 @@ def squash(number: str, info: dict, body: str, run=subprocess.run, update=update
         info = {**info, "headRefOid": fresh}
         time.sleep(settle)  # GitHub recomputes the PR's mergeability after the push
     stage(f"squash #{number}")
-    done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", info["title"], "--body", body], capture_output=True, text=True)
+    done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", info["title"], "--body", body], capture_output=True, text=True, errors="replace")
     if done.returncode and "out of date" in f"{done.stderr}{done.stdout}".lower() and info.get("headRefName"):
         # Another landing moved feat/parity between the batch and this squash: the owner did nothing. Fresh parity is merged into the head once (a merge commit, no
         # force-push), only when it is conflict-free, and the squash retried once; a second refusal, or a conflict, is the owner's.
         if fresh := merge(info["headRefOid"], info["headRefName"]):
             print(f"#{number}: head out of date: merged parity {fresh[:9]}, retried")
             time.sleep(settle)  # GitHub takes the pushed head as the PR's before a --match-head-commit squash accepts it
-            done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", fresh, "--subject", info["title"], "--body", body], capture_output=True, text=True)
+            done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", fresh, "--subject", info["title"], "--body", body], capture_output=True, text=True, errors="replace")
         else:
             print(f"#{number}: head out of date and feat/parity does not merge into it cleanly: the owner merges fresh feat/parity")
     if done.returncode:
@@ -654,7 +661,7 @@ def merged_result(head: str, base: str = BASE, cwd: Path = ROOT) -> tuple[str | 
     stage("merge")
     git("checkout", "-q", "--detach", head, cwd=cwd)
     if subprocess.run(["git", "merge-base", "--is-ancestor", base, head], cwd=cwd).returncode:
-        merged = subprocess.run(["git", "merge", "--no-edit", "-q", base], cwd=cwd, capture_output=True, text=True)
+        merged = subprocess.run(["git", "merge", "--no-edit", "-q", base], cwd=cwd, capture_output=True, text=True, errors="replace")
         if merged.returncode:
             conflicts = git("diff", "--name-only", "--diff-filter=U", cwd=cwd).split()
             if conflicts and all(path.startswith(GENERATED) for path in conflicts):
@@ -691,7 +698,7 @@ def run_smoke(known: dict[str, str] | None = None) -> tuple[bool, str]:
         ["uv", "run", "-q", "--project", "tools", "python", "tools/parity_smoke.py", "--bin", smoke_bins(), "--base", BASE, *[a for step in known for a in ("--skip", step)]],
         cwd=ROOT,
         capture_output=True,
-        text=True,
+        text=True, errors="replace",
     )
     return smoke.returncode == 0, (smoke.stdout.strip().splitlines() or [""])[-1]
 
@@ -850,7 +857,7 @@ def _run_behavioural() -> str:
         if one.is_file():
             one.touch()  # the runners refuse a binary older than its sources
     env = {**os.environ, "LLRM_BIN": str(target), "DOSBOX_BIN": str(target / "dosbox-x")}
-    done = subprocess.run([sys.executable, "tools/dosbatch/run_tests.py", *behavioural.PROGRAMS], cwd=ROOT, env=env, capture_output=True, text=True, timeout=1800)
+    done = subprocess.run([sys.executable, "tools/dosbatch/run_tests.py", *behavioural.PROGRAMS], cwd=ROOT, env=env, capture_output=True, text=True, errors="replace", timeout=1800)
     return done.stdout + done.stderr
 
 
@@ -1036,7 +1043,7 @@ ADDED_ITEM = re.compile(r"^\+\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:fn|def)
 def added_names(head: str, base: str, cwd: Path) -> set[str]:
     """The function names a PR's head adds against `base` (the merge base): two PRs adding one test name merge without a conflict and fail to compile together
     ('defined multiple times': #4678 and #4680 both added a_frame_cell_with_a_wide_index_is_not_encodable_before_the_frame_is_named)."""
-    diff = subprocess.run(["git", "diff", "-U0", f"{base}...{head}"], cwd=cwd, capture_output=True, text=True).stdout
+    diff = subprocess.run(["git", "diff", "-U0", f"{base}...{head}"], cwd=cwd, capture_output=True, text=True, errors="replace").stdout
     return set(ADDED_ITEM.findall(diff))
 
 
@@ -1058,7 +1065,7 @@ def assemble(numbers: list[str], heads: dict[str, str], base: str = BASE, cwd: P
                 if clash := sorted(name for name in names if name in claimed):
                     waits[number] = f"adds {clash[0]}, which #{claimed[clash[0]]} adds too: one of them drops it"
                     continue
-                merge = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "merge", "--no-edit", "-q", heads[number]], cwd=work, capture_output=True, text=True)
+                merge = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "merge", "--no-edit", "-q", heads[number]], cwd=work, capture_output=True, text=True, errors="replace")
                 if merge.returncode:
                     conflicts = git("diff", "--name-only", "--diff-filter=U", cwd=work).split()
                     if conflicts and not regenerate(conflicts, work):
@@ -1082,7 +1089,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         raise SystemExit(f"merge-batch takes at most {MAX_BATCH} PRs per smoke, got {len(numbers)}: split the queue")
     infos = {}
     for number in numbers:
-        info = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,headRefName,title,body,baseRefName,mergeable"], capture_output=True, text=True, check=True).stdout)
+        info = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,headRefName,title,body,baseRefName,mergeable"], capture_output=True, text=True, errors="replace", check=True).stdout)
         if info["baseRefName"] != "feat/parity":
             raise SystemExit(f"#{number} targets {info['baseRefName']}, not feat/parity")
         infos[number] = info
@@ -1104,7 +1111,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         def merge_one(number: str) -> str:
             before = git("rev-parse", "HEAD").strip()
             git("fetch", "-q", "origin", infos[number]["headRefOid"])
-            merge = subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True, text=True)
+            merge = subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True, text=True, errors="replace")
             if merge.returncode and (conflicts := git("diff", "--name-only", "--diff-filter=U").split()) and not regenerate(conflicts):
                 merge = subprocess.CompletedProcess([], 0)  # only generated docs conflicted: regenerated and committed
             if merge.returncode:
@@ -1179,8 +1186,9 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
     def offending(group: list[str]) -> list[str]:
         """The PRs of `group` that fail what the batch failed, each merged alone on the head: the unit asked exactly (a minute at most per PR), or the build; none when nothing is known."""
         if failed_build:
-            culprits = build_offenders(group, merge_alone, lambda: _workspace_check(ROOT))
-            named.update({number: f"alone on the head it does not build: {failed_build[-1][:160]}" for number in culprits})
+            own = {}
+            culprits = build_offenders(group, merge_alone, lambda: _workspace_check(ROOT), own)
+            named.update({number: f"alone on the head it does not build: {own[number][:160]}" for number in culprits})
             return culprits
         wrong = sorted(name[len("behavioural ") :] for name in failed_units if name.startswith("behavioural "))
         if wrong:
@@ -1213,7 +1221,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         git("checkout", "-q", "--detach", BASE)
         for number in group:
             git("fetch", "-q", "origin", infos[number]["headRefOid"])
-            merge = subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True, text=True)
+            merge = subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True, text=True, errors="replace")
             if merge.returncode and (conflicts := git("diff", "--name-only", "--diff-filter=U").split()) and not regenerate(conflicts):
                 continue  # only generated docs conflicted: regenerated and committed
             if merge.returncode:
@@ -1261,7 +1269,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             print(f"#{number}: formatted with tools/fmt.sh ({sha[:9]})")
             infos[number] = {**infos[number], "headRefOid": sha}
             for _ in range(12):  # GitHub takes the pushed head as the PR's before a --match-head-commit squash accepts it
-                seen = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid"], capture_output=True, text=True).stdout or "{}").get("headRefOid")
+                seen = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid"], capture_output=True, text=True, errors="replace").stdout or "{}").get("headRefOid")
                 if seen == sha:
                     break
                 time.sleep(5)
@@ -1343,7 +1351,7 @@ def failing_on_checkout(crate: str, tests: set[str], cwd: Path = ROOT) -> set[st
     from buildslot import slotted  # noqa: PLC0415
 
     command = parity_smoke.lib_command(crate)
-    done = subprocess.run(slotted([*command, "--", "--exact", *sorted(tests)]), cwd=cwd, capture_output=True, text=True)
+    done = subprocess.run(slotted([*command, "--", "--exact", *sorted(tests)]), cwd=cwd, capture_output=True, text=True, errors="replace")
     LAST_PANICS.update(parity_smoke.panic_reasons(done.stdout + done.stderr))
     return {name for name in tests if name in set(parity_smoke.failed_tests(done.stdout + done.stderr))}
 
@@ -1354,7 +1362,7 @@ def run_streaming(command: list[str], cwd: Path):
     import types
 
     with tempfile.TemporaryFile("w+") as err:
-        process = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=err, text=True)
+        process = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=err, text=True, errors="replace")
         out = []
         for line in process.stdout:
             out.append(line)
@@ -1483,7 +1491,7 @@ def merge(number: str, known: dict[str, str] | None = None) -> int:
 
 def _merge(number: str, known: dict[str, str] | None = None) -> int:
     known = known or {}
-    info = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName"], capture_output=True, text=True, check=True).stdout)
+    info = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName"], capture_output=True, text=True, errors="replace", check=True).stdout)
     if info["baseRefName"] != "feat/parity":
         raise SystemExit(f"#{number} targets {info['baseRefName']}, not feat/parity")
     git("fetch", "-q", "origin", "feat/parity")
@@ -1492,7 +1500,7 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
     git("fetch", "-q", "origin", info["headRefOid"])
     tested_base = git("rev-parse", BASE).strip()
     head_failed = head_failures(tested_base, lambda: compute_head_failures(known))
-    files = {f["path"] for f in json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "files"], capture_output=True, text=True, check=True).stdout)["files"]}
+    files = {f["path"] for f in json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "files"], capture_output=True, text=True, errors="replace", check=True).stdout)["files"]}
     whole = parity_smoke_module().runs_whole_groups(files)
     if whole:
         head_failed = head_failed | head_failures(tested_base, compute_head_group_failures, cache=HEAD_FAILURES / "groups")
@@ -1551,7 +1559,7 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
     if done.returncode:
         return done.returncode
     git("fetch", "-q", "origin", "feat/parity")
-    squash = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "mergeCommit"], capture_output=True, text=True, check=True).stdout)["mergeCommit"]["oid"]
+    squash = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "mergeCommit"], capture_output=True, text=True, errors="replace", check=True).stdout)["mergeCommit"]["oid"]
     git("fetch", "-q", "origin", squash)
     log_landed(squash, number, "gate-ok" + (f" (head red: {','.join(sorted(head_failed))})" if head_failed else ""))
     if strays := squash_strays(squash, files):
