@@ -95,8 +95,8 @@ pub fn fixed(body: &LirBody) -> LirBody {
     let regs = body.regs();
     let bits = body.bits;
     // Every reader of each value, to find a byte read once.
-    let mut readers: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
-    let mut definers: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    let mut readers: llrm_mir::hash::HashMap<u32, usize> = Default::default();
+    let mut definers: llrm_mir::hash::HashMap<u32, usize> = Default::default();
     for block in &body.blocks {
         for phi in block.phis.iter() {
             for &(_, value) in &phi.incoming {
