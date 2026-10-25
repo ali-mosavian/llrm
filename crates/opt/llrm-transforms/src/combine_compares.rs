@@ -167,9 +167,6 @@ pub fn visit_icmp(
     if let Some(r) = canonicalize_cmp_with_constant(c, inst, pred, op0, op1) {
         return r;
     }
-    if let Some(r) = canonicalize_icmp_predicate(c, inst, pred) {
-        return r;
-    }
     // OWED: foldICmpWithConstant, foldICmpUsingBoolRange.
     if let Some(r) = fold_icmp_with_dominating_icmp(c, inst, pred, op0, op1) {
         return r;
