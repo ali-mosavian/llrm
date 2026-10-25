@@ -1040,6 +1040,23 @@ fn test_bt_and_btc_of_registers_encode() {
     assert_eq!(hex(&made(emitted(&btc)).code), "660fbbc8");
 }
 
+/// `bts` and `btr` of two registers encode as `btc` does (the pin's BTS16rr
+/// and BTR16rr had no form: `x |= 1 << n` in QCport's `r_walk` was refused).
+#[test]
+fn test_bts_and_btr_of_registers_encode() {
+    for (name, bytes) in [("bts", "660fabc8"), ("btr", "660fb3c8")] {
+        let what = sem(
+            Operation::Binary,
+            Some(name),
+            vec![rg(RegId::EAX, 4)],
+            vec![rg(RegId::EAX, 4), rg(RegId::ECX, 4)],
+            None,
+            false,
+        );
+        assert_eq!(hex(&made(emitted(&what)).code), bytes, "{name}");
+    }
+}
+
 /// `bsf`, `bsr` and `bswap` encode (the pin's BSF32rr had no form: `cttz` and
 /// `ctlz` of a word, which the pin makes `bsf` and `bsr`, were refused).
 #[test]
@@ -1057,6 +1074,9 @@ fn test_bsf_bsr_and_bswap_encode() {
     }
     let swap = sem(Operation::Unary, Some("bswap"), vec![rg(RegId::EAX, 4)], vec![rg(RegId::EAX, 4)], None, false);
     assert_eq!(hex(&made(emitted(&swap)).code), "660fc8");
+    // BSWAP of a word is undefined and the pin never emits it
+    let word = sem(Operation::Unary, Some("bswap"), vec![rg(RegId::AX, 2)], vec![rg(RegId::AX, 2)], None, false);
+    assert!(emitted(&word).is_none());
 }
 
 /// A jump through a register (an indirect sibling call after its epilogue) had

@@ -63,6 +63,14 @@ def test_the_peephole_optimizer_is_in_a_bucket_and_in_the_pass_table():
     assert "peepholeopt::PeepholeOptimizer" in (here / "passtable.py").read_text()
 
 
+def test_early_tail_duplicate_is_in_a_bucket_and_in_the_pass_table():
+    """`earlytaildup::EarlyTailDuplicate` joined the backend flow with no bucket: the tool refused the d_faces profile at
+    c11bc98dd ('backend passes in no bucket') and the 15:30 re-take did not run."""
+    here = Path(__file__).parent
+    assert "earlytaildup::EarlyTailDuplicate" in (here / "ledger4.py").read_text()
+    assert "earlytaildup::EarlyTailDuplicate" in (here / "passtable.py").read_text()
+
+
 def test_constraint_elimination_is_in_a_bucket_as_the_pins_is():
     """The pin's ConstraintElimination is in the SimplifyCFG/JumpThreading/CVP bucket; ours was in none, so its 9.7 M Ir read as
     residual and the bucket's excess was 9.7 M short."""
