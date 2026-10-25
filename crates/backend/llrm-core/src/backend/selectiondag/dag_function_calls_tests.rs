@@ -971,3 +971,29 @@ fn a_register_convention_call_changes_fs_and_gs() {
     let (fs, gs) = (llrm_lir::registers::RegId::FS, llrm_lir::registers::RegId::GS);
     assert!(call.clobbers.contains(&fs) && call.clobbers.contains(&gs), "{:?}", call.clobbers);
 }
+
+/// A hosted QB routine at x86-64, where the caller pops what it pushed: the
+/// float's stack block was "a stack cleanup the convention does not model" and
+/// the DAG path refused every QB program that prints a number.
+#[test]
+fn a_runtime_call_the_caller_cleans_up_is_modelled() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
+define void @f() {
+entry:
+  tail call void @llrm.qb.B$PER4(float 7.0)
+  ret void
+}
+declare void @llrm.qb.B$PER4(float) nocallback
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let function = module.global(module.named("f").expect("f")).function().expect("a body");
+    let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+    let verdicts = super::dag_function::runtime_call_verdicts(
+        &module,
+        function,
+        &layout,
+        &llrm_x86_m64::M64,
+        &super::dag_function_tests::Stub { flags: false },
+    );
+    assert_eq!(verdicts.values().copied().collect::<Vec<_>>(), [Ok(super::builder::RuntimeAnswer::Registers)]);
+}

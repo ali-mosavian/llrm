@@ -273,7 +273,9 @@ fn modelled(
     if contract.control == llrm_qbruntime::Control::InlineTable {
         return Err("QB runtime routine that returns to an inline table");
     }
-    if contract.cleanup != Some(plan.popped) || plan.popped != pushed {
+    // The callee pops all it was pushed (16/32-bit routines), or the caller
+    // pops it and the routine cleans nothing (SysV, where QB calls are C).
+    if contract.cleanup != Some(plan.popped) || (plan.popped != pushed && plan.popped != 0) {
         return Err("QB runtime routine whose stack cleanup the convention does not model");
     }
     Ok(if contract.flags_result { RuntimeAnswer::Flags } else { RuntimeAnswer::Registers })
