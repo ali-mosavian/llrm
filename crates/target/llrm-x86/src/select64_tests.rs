@@ -195,6 +195,15 @@ fn the_other_scalar_sse_forms_encode() {
     assert_eq!(bytes(&xor), [0x0f, 0x57, 0xc0]);
 }
 
+/// A `double` negated or cleared is `xorps` over a value of 8 bytes: the
+/// encoder looked for `Xorps_xmm_xmmm64` and found no form.
+#[test]
+fn a_bitwise_xmm_operation_on_a_scalar_is_the_whole_register_form() {
+    let x = RegId::from(Register::XMM0);
+    let xor = sem(Operation::Binary, Some("xorps"), vec![rg(x, 8)], vec![rg(x, 8), rg(x, 8)], None, false);
+    assert_eq!(bytes(&xor), [0x0f, 0x57, 0xc0]);
+}
+
 #[test]
 fn the_scalar_double_move_is_not_the_string_copy() {
     // movsd %xmm1,%xmm0 is F2 0F 10 C1; the name `movsd` is the string copy's,

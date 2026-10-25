@@ -217,7 +217,8 @@ pub fn memory_bytes(name: &str) -> Option<u32> {
         } else if upper.ends_with("SS") {
             Some(4)
         } else {
-            None
+            // `ANDPSrm`: the whole register.
+            Some(16)
         };
     }
     let (mnemonic, width, _) = split(name)?;

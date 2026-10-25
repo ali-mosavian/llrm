@@ -438,3 +438,30 @@ entry:
         assert_eq!(moves, [(bytes, bytes), (bytes, bytes)], "{ty}");
     }
 }
+
+/// A zero `double` at m64 stopped at `Unmapped("FsFLD0SD")`, and a select of
+/// two doubles at `Unmapped("CMOV_FR64")`: the first is `xorps r, r`, the
+/// second the pin's branch and phi like `CMOV_GR32`.
+#[test]
+fn an_m64_zero_double_is_xorps_and_a_double_select_is_a_diamond() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define double @z() {
+entry:
+  ret double 0.0
+}
+define double @s(i32 %c, double %a, double %b) {
+entry:
+  %t = icmp ne i32 %c, 0
+  %r = select i1 %t, double %a, double %b
+  ret double %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let zero = selected(&module, "z", &llrm_x86_m64::M64, cpu, &[]).expect("a zero double is selected");
+    let names: Vec<_> = zero.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+    assert!(names.iter().any(|n| &**n == "xorps"), "{names:?}");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let select = selected(&module, "s", &llrm_x86_m64::M64, cpu, &[]).expect("a double select is selected");
+    assert!(select.body.blocks.len() >= 3, "a branch and a sink: {} blocks", select.body.blocks.len());
+}

@@ -1121,8 +1121,28 @@ impl Emitter<'_, '_> {
             self.blocks.last_mut().expect("a block").insns.push(Arc::new(insn));
             return Ok(());
         }
-        if matches!(name, "CMOV_GR8" | "CMOV_GR16" | "CMOV_GR32") {
+        if matches!(
+            name,
+            "CMOV_GR8" | "CMOV_GR16" | "CMOV_GR32" | "CMOV_FR32" | "CMOV_FR64"
+        ) {
             return self.lowered_select(n);
+        }
+        // `FsFLD0SD`: a zero double, `xorps` of the register with itself.
+        if matches!(name, "FsFLD0SD" | "FsFLD0SS") {
+            let node = self.dag.node(SDValue { node: n, res: 0 });
+            let zero = self.fresh(width(self.ctx.map.scalar_sse(), node.values[0]));
+            self.values.insert(SDValue { node: n, res: 0 }, zero.value);
+            // The idiom reads nothing: the instruction uses no value.
+            let what = Semantics {
+                name: Some("xorps".into()),
+                dests: vec![Loc::Held(zero)],
+                sources: vec![Loc::Held(zero), Loc::Held(zero)],
+                ..Semantics::new(Operation::Binary)
+            };
+            let at = self.next_address();
+            let insn = Insn::new(at, Some((at, at)), Some(what), vec![zero.value], vec![]);
+            self.blocks.last_mut().expect("a block").insns.push(Arc::new(insn));
+            return Ok(());
         }
         // `MOVZX32rr8_NOREX` is `movzx` of a byte register that needs no REX
         // prefix to name (AH): the same form at this target.
