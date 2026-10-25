@@ -423,6 +423,8 @@ pub struct Steps {
     pub solve: u64,
     /// `(block, value)` pairs solved and cached.
     pub solved: u64,
+    /// `getEdgeValue` calls on a value that is not a constant.
+    pub edges: u64,
 }
 
 /// The actual implementation of the lazy analysis and update.
@@ -959,7 +961,14 @@ impl LazyValueInfoImpl {
         // quickly find a path to function entry.  TODO: We should
         // consider explicitly canonicalizing to make this true rather
         // than relying on this happy accident.
-        for pred in predecessors(env.function, bb) {
+        // The use list in place, as the pin walks it: a block named twice by
+        // one terminator is visited twice, and merges to the same value.
+        let function = env.function;
+        for one in function.block_users(bb) {
+            if !function.instruction(one.user).opcode.is_terminator() {
+                continue;
+            }
+            let Some(pred) = function.parent(one.user) else { continue };
             // Skip self loops.
             if pred == bb {
                 continue;
@@ -2090,6 +2099,7 @@ impl LazyValueInfoImpl {
             return Some(Lattice::get(&LatticeConstant::of(env.context, vc)));
         }
 
+        self.steps.edges += 1;
         let local_result = self.get_edge_value_local(env, val, bb_from, bb_to, true)?;
 
         if has_single_value(&local_result) {
@@ -2276,6 +2286,7 @@ pub(crate) fn predecessors(
     function: &Function,
     bb: BlockId,
 ) -> crate::blocklist::BlockList {
+    crate::counts::bump(crate::counts::Event::LviPredecessorLists);
     function.predecessors(bb)
 }
 
