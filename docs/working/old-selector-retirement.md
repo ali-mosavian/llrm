@@ -2,7 +2,7 @@
 
 Surveyed 2026-10-25 on feat/parity (parity fae9a64b3), by grep and reading; nothing built or run. "check" = not settled by reading. Gates for the flip itself: [selectiondag-default-readiness](selectiondag-default-readiness.md). Plan of record: `selectiondag-plan.md` Phase 2.
 
-Premise: `isel.rs` is also the home of shared types, and `m64` still selects through it (readiness, "Targets"; yet `dag_function.rs:582` accepts bitness 64 and `dag_function_m64_tests.rs` has 310 lines, so what refuses at m64 is **unverified**). Until m64 flips, nothing that `isel.rs` calls can be deleted.
+Premise: `isel.rs` is also the home of shared types, and `m64` still selects through it. What refuses at m64 under dag (w11, 2026-10-25, tests/llc: 27 C programs, native run against clang -O2): 26 ok, 0 miscompiles, 1 refusal (`vla`: DynamicStackAlloc is a libcall at m64 and at m32). Waiting on #4597 (CALL64r) and w11's va_start save area. Not covered by the 27: float/double (SysV xmm args and returns, SSE ops: refused until D64-4), aggregates by value or return, `al` for variadic calls. So integer and pointer code can flip once vla and varargs land; float code keeps the old selector, and that is what holds the deletions in section 4.
 
 ## 1. What the flip lets us delete
 
@@ -74,7 +74,7 @@ Lines are `wc -l`. "Callers" are non-test callers outside the file's own tests.
 1. Delete `pointers.rs` if still unreferenced (check). Move the section-1 symbols out of `isel.rs`. Pure move; lands before the flip. Blocks nothing.
 2. Re-point test helpers (`assembled`, `regalloc_input`, `peep/tests`, `shadow_tests`) to the DAG path. Needs the readiness gate (413 / 426 today) so no test falls to a refusal.
 3. The flip. Blocked by readiness; m64 keeps `--isel=old`, so everything below step 4 waits on it.
-4. Make m64 select through the DAG by default. This is the real blocker: it holds every deletion in `isel.rs`, `matcher.rs`, `family.isel` and the `-select` crates. Needs the m64 refusal count, which is **unverified**.
+4. Make m64 select through the DAG by default. This is the real blocker: it holds every deletion in `isel.rs`, `matcher.rs`, `family.isel` and the `-select` crates. The m64 refusals are those listed in the premise (xmm class D64-4, aggregates, variadic `al`, vla).
 5. One week after step 4: delete `rmw`, `comparefold`, `farload`, `stepflags`, `addressforms`, `valuefacts`, `division`, `isel/{combined,expand,huge,unwind,wide,matcher}.rs`, then `isel.rs`, `isel_tests.rs`. Drop `Options.selection` and the `-select` crates; trim `llrm-iselgen` to arm64 and `build::forms`.
 6. Reword the "old selector stays the default" comments (`selectiondag.rs:44`, `schedule.rs:29`, `emit.rs:35`). Remove `Selector::Old`, `--isel=old`, the `expands_for` gate (`memsetpattern.rs:44`; the pass stays), `shadow.rs` down to the report, `lower_switches`/`switchlower` (arm64: check), `LLRM_ISEL_ONLY`; delete the old-vs-dag tools. Update CG1 / row 28 and the DEVIATE rows of section 3.
 7. If the DAG table covers them: `legalize.rs`, `bitcounts`, `funnel`, `compares` (plan's 2027-03 group). Unverified.
