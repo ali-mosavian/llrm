@@ -1217,6 +1217,28 @@ fn nothing_that_writes_the_flags_sits_between_an_fcom_and_its_branch() {
     assert_eq!(branch, compare + 1, "{names:?}");
 }
 
+const TIMES_SEVEN_PLUS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a, i32 %y) {
+  %b = xor i32 %a, %y
+  %m = mul i32 %y, 7
+  %t = add i32 %m, %b
+  ret i32 %t
+}
+";
+
+/// `y * 7 + b` was `shl; sub; add` (three); the pin's `combineAdd` makes the
+/// hidden LEA: `lea b + y*8; sub y` (histo, 13 functions at `-Os`).
+#[test]
+fn a_shifted_difference_plus_a_value_is_a_lea_and_a_sub() {
+    let module = llrm_mir::parse::module(TIMES_SEVEN_PLUS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(names.iter().any(|n| n == "lea"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "shl"), "{names:?}");
+}
+
 const M16_FAR_LOOP: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
 declare cc 1005 ptr addrspace(1) @g()
 declare cc 1005 void @use(ptr addrspace(1))
