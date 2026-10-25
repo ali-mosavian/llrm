@@ -73,15 +73,39 @@ _listed_ours = {n for _name, (_op, _pp) in B.items() for n in total(ours, _op)[1
 _unlisted = sorted(n for n in _every - _listed_ours if ours[n] >= 100_000)
 if _unlisted:
     raise SystemExit("ledger4: backend passes in no bucket (their cost would read as residual): " + "; ".join(re.sub(r"<llrm_core::backend::(\w+::\w+) as .*", r"\1", n) for n in _unlisted))
+# An analysis a pass builds inside itself (ours: `Analyses::get`, MemorySSA's `Accesses::managed`) is the pin's `*Analysis::run` frame, which
+# callgrind cannot attribute to the pass that asked (every analysis is reached through the one shared `getResultImpl` frame). So ours moves out of
+# the pass buckets into its own bucket, exactly (the direct callees' costs, needs LEDGER_CALLING); the pin's is listed apart, inclusive and
+# unsummed: its nested analyses (MemorySSA's DomTree) are counted in both.
+ANALYSES = "analyses built inside passes (ours: moved out of the passes above; pin: listed below, not summed)"
+OUR_ANALYSIS = r"^<llrm_mir::passes::Analyses>::get::<|^<llrm_analysis::memoryssa::Accesses>::managed$"
+PIN_ANALYSIS = [r"^llvm::\w+Analysis::run\(", r"^llvm::AAManager::run\("]
+moved = collections.Counter(); analyses_ours = 0; analyses_detail = collections.Counter()
+if _calling:
+    _costs = nested.edge_costs(_calling)
+    for name, (op, pp) in B.items():
+        spent = nested.analyses_under(_costs, total(ours, op)[1], OUR_ANALYSIS, analyses_detail)
+        moved[name] = sum(spent.values())
+    analyses_ours = sum(moved.values())
 rows = []; so = sp = 0
 for name, (op, pp) in B.items():
     o, os_ = total(ours, op); p, ps = total(clang, pp)
+    o -= moved[name]
     rows.append((name, o / 1e6, p / 1e6)); so += o; sp += p
+if _calling:
+    rows.append((ANALYSES, analyses_ours / 1e6, 0.0)); so += analyses_ours
 print(f"{'bucket':92} {'ours M':>8} {'pin M':>8} {'ratio':>6} {'excess':>8}")
 for n, o, p in rows:
     print(f"{n:92} {o:8.1f} {p:8.1f} {(o/p if p else float('nan')):6.2f} {o-p:8.1f}")
 print(f"{'front end (parse, translate, HIR, HIR->MIR / clang parse+sema)':92} {FRONT[0]/1e6:8.1f} {FRONT[1]/1e6:8.1f} {FRONT[0]/FRONT[1]:6.2f} {(FRONT[0]-FRONT[1])/1e6:8.1f}")
 so += FRONT[0]; sp += FRONT[1]
+if _calling:
+    short = lambda sym, pattern: re.sub(pattern, r"\1", sym)
+    print("analyses inside passes, ours (direct callee cost under the pass frames):",
+          "; ".join(f"{short(k, r'.*::get::<(.*)>$')} {v / 1e6:.2f}" for k, v in analyses_detail.most_common(8)))
+    print("analyses, pin (inclusive, nested ones counted in both):",
+          "; ".join(f"{short(k, r'^llvm::(\w+)::run.*')} {v / 1e6:.2f}"
+                    for k, v in sorted(total(clang, PIN_ANALYSIS)[1].items(), key=lambda kv: -kv[1])[:8]))
 print(f"{'sum of the buckets':92} {so/1e6:8.1f} {sp/1e6:8.1f}")
 print(f"{'residual (pass-manager glue, analyses outside passes, walk own, allocation, lowering)':92} {(OT-so)/1e6:8.1f} {(PT-sp)/1e6:8.1f}")
 print(_double or "double-count check: not run (no LEDGER_CALLING)")

@@ -1,0 +1,80 @@
+diff --git a/include/dosrun.h b/include/dosrun.h
+index eef29ac..fe72447 100644
+--- a/include/dosrun.h
++++ b/include/dosrun.h
+@@ -21,6 +21,9 @@ bool DOSRUN_ShellInput(char *line, unsigned int size);
+  * run loop. */
+ bool DOSRUN_Forked(void);
+ 
++/* False for a job that said :nosymbols: protected-mode programs are not watched for their loader. */
++bool DOSRUN_Symbols(void);
++
+ /* One emulated millisecond passed. */
+ void DOSRUN_Tick(void);
+ 
+diff --git a/src/debug/debug_symbols.cpp b/src/debug/debug_symbols.cpp
+index 3a9388e..59788ca 100644
+--- a/src/debug/debug_symbols.cpp
++++ b/src/debug/debug_symbols.cpp
+@@ -14,6 +14,7 @@
+ #include "cpu.h"
+ #include "debug_image.h"
+ #include "debug_socket.h"
++#include "dosrun.h"
+ 
+ #include <algorithm>
+ #include <set>
+@@ -394,6 +395,7 @@ static bool LooksLikeImage(const char *program)
+  * to place it. False when the file is anything else. */
+ static bool WatchForLoader(const char *program,uint16_t psp)
+ {
++	if (!DOSRUN_Symbols()) return false;
+ 	PendingImage pending;
+ 	pending.program = program;
+ 	pending.psp = psp;
+diff --git a/src/misc/dosrun.cpp b/src/misc/dosrun.cpp
+index c7334d5..9584982 100644
+--- a/src/misc/dosrun.cpp
++++ b/src/misc/dosrun.cpp
+@@ -5,6 +5,8 @@
+  *   :ms N      stop after N emulated milliseconds
+  *   :wall N    stop after N host seconds
+  *   :nowatch   do not stop on a crash
++ *   :nosymbols do not watch protected-mode programs (NE, LE, PE) for the loader to place
++ *              them: each newly executed page would otherwise scan all of RAM for them
+  *   :keep      on a clean exit, keep the machine: the child becomes the server
+  *              and later jobs fork from its state -- mounts, current
+  *              directory, environment, anything resident
+@@ -101,6 +103,7 @@ int upto = 0; /* rows above this one are in the transcript */
+ uint16_t out_handle = 0;
+ std::string out_file, out_text;
+ bool watch = true;
++bool symbols = true;
+ /* The :write ranges, [lo, hi] linear. */
+ std::vector<std::pair<uint32_t, uint32_t>> write_breaks;
+ bool keep = false;
+@@ -382,6 +385,7 @@ bool read_job(unsigned &wall, bool &pop) {
+     limit_ms = 0;
+     wall = 0;
+     watch = true;
++    symbols = true;
+     keep = false;
+     profile = false;
+     pop = false;
+@@ -392,6 +396,7 @@ bool read_job(unsigned &wall, bool &pop) {
+         if (!buf.compare(0, 4, ":ms ")) limit_ms = strtoull(buf.c_str() + 4, NULL, 10);
+         else if (!buf.compare(0, 6, ":wall ")) wall = (unsigned)strtoul(buf.c_str() + 6, NULL, 10);
+         else if (buf == ":nowatch") watch = false;
++        else if (buf == ":nosymbols") symbols = false;
+         else if (buf == ":keep") keep = true;
+         else if (buf == ":profile") profile = true;
+         else if (buf == ":pop") pop = true;
+@@ -551,6 +556,8 @@ bool dosrun_watch = false;
+ 
+ bool DOSRUN_Forked(void) { return forked; }
+ 
++bool DOSRUN_Symbols(void) { return !active() || symbols; }
++
+ bool dosrun_counting = false;
+ uint64_t dosrun_instructions = 0, dosrun_memory = 0;
+ 

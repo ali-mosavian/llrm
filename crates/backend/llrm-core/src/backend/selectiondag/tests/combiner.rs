@@ -161,6 +161,28 @@ fn a_not_of_a_compare_is_the_inverse_compare() {
     assert!(matches!(dag.node(dag.operand(cond, 2)).data, NodeData::CondCode(CondCode::SetNe)));
 }
 
+/// A far pointer's null test compared the joined dword with zero: `shl;
+/// movzx; add; je` (a third of the extra instructions of `_part_frame`).
+/// A pair is zero when `lo | hi` is, as `ExpandSetCCOperands` does.
+#[test]
+fn a_far_pointer_null_test_is_the_or_of_its_halves() {
+    for cc in [CondCode::SetEq, CondCode::SetNe] {
+        let mut dag = dag();
+        let (offset, selector) = (load(&mut dag, EVT::I16, 1), load(&mut dag, EVT::I16, 2));
+        let pair = dag.get_node(ISD::BuildPair, EVT::I32, &[offset, selector]);
+        let zero = dag.get_constant(0, EVT::I32);
+        let test = dag.get_setcc(EVT::I1, pair, zero, cc);
+        let (chain, dest) = (dag.entry_node(), dag.get_basic_block(1));
+        let branch = dag.get_node(ISD::BrCond, EVT::OTHER, &[chain, test, dest]);
+        dag.set_root(branch);
+        generic(&mut dag);
+        let cond = dag.operand(dag.get_root(), 1);
+        let joined = dag.operand(cond, 0);
+        assert_eq!((dag.opcode(cond), dag.opcode(joined), dag.value_type(joined)), (ISD::SetCC, ISD::Or, EVT::I16));
+        assert!(matches!(dag.node(dag.operand(cond, 2)).data, NodeData::CondCode(c) if c == cc));
+    }
+}
+
 /// A clamp `x > 1.0 ? 1.0 : x` laid out with the true block next branched on
 /// `xor (setcc ogt), true`: `seta; xor 1; test 1; jne` where the old selector
 /// had one `jbe`. The not of a float compare is the inverse float compare.

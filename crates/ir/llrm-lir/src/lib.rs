@@ -20,6 +20,7 @@ use crate::registers::RegId;
 
 pub mod flag;
 mod root;
+pub mod valuelanes;
 
 pub use root::root;
 
@@ -65,6 +66,15 @@ impl Reg {
 pub struct Held {
     pub value: u32,
     pub width: u32,
+}
+
+impl Held {
+    /// The bytes of the value this operand names: the low `width` (the high
+    /// byte of a register, AH, is not yet a way to spell an operand; C1
+    /// step 1).
+    pub const fn lanes(&self) -> valuelanes::ValueLanes {
+        valuelanes::ValueLanes::low(self.width)
+    }
 }
 
 /// An immediate instruction operand.
