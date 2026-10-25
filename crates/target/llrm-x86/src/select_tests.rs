@@ -1039,3 +1039,11 @@ fn test_bt_and_btc_of_registers_encode() {
     );
     assert_eq!(hex(&made(emitted(&btc)).code), "660fbbc8");
 }
+
+/// `bt reg, imm8` encodes (the pin's BT32ri8 had no form: a `0 - (crc & 1)`
+/// chain was refused).
+#[test]
+fn test_bt_of_a_register_and_an_immediate_encodes() {
+    let bt = sem(Operation::Compare, Some("bt"), vec![], vec![rg(RegId::EDX, 4), imm(1, 1)], None, false);
+    assert_eq!(hex(&made(emitted(&bt)).code), "0fbae201");
+}
