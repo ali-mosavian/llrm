@@ -12,3 +12,6 @@ crates/target/llrm-arm64/tests/darwin/*.out whitespace=-trailing-space
 # PRs that each add a row to a plan table merge as both rows.
 docs/working/selectiondag-plan.md merge=union
 docs/working/codegen-slot-table.md merge=union
+# PRs that each append a test to one area's test file merge as both; the compile gate rejects a bad union.
+*_tests.rs merge=union
+tests.rs merge=union

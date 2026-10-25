@@ -948,8 +948,14 @@ pub fn unary(
         let Some(code) = _code(&shape) else {
             continue;
         };
+        // The one-byte `inc r32` is REX in 64-bit mode: the encoder refuses it
+        // there, and the `FF /0` form after it takes the register.
         match create_reg(code, dest) {
-            Ok(made) => return _assemble(&made, at, true),
+            Ok(made) => {
+                if let Some(emitted) = _assemble(&made, at, true) {
+                    return Some(emitted);
+                }
+            }
             Err(_) => continue,
         }
     }
@@ -1846,7 +1852,8 @@ pub fn multiply_into(
                 let code = code_of!("IMUL_R", bits, "_RM", bits)?;
                 return _assemble(&raised(create_reg_mem(code, dest, r#where)), at, relocated);
             };
-            let immediate = if fits_in_a_byte(value) { 8 } else { bits };
+            // A quadword takes a 32-bit immediate, sign-extended.
+            let immediate = if fits_in_a_byte(value) { 8 } else { bits.min(32) };
             let code = code_of!("IMUL_R", bits, "_RM", bits, "_IMM", immediate)?;
             return _assemble(&raised(create_reg_mem_i32(code, dest, r#where, value)), at, relocated);
         }
@@ -1859,7 +1866,8 @@ pub fn multiply_into(
         let code = code_of!("IMUL_R", bits, "_RM", bits)?;
         return _assemble(&raised(create_reg_reg(code, dest, source)), at, true);
     };
-    let immediate = if fits_in_a_byte(value) { 8 } else { bits };
+    // A quadword takes a 32-bit immediate, sign-extended.
+    let immediate = if fits_in_a_byte(value) { 8 } else { bits.min(32) };
     let code = code_of!("IMUL_R", bits, "_RM", bits, "_IMM", immediate)?;
     _assemble(&raised(create_reg_reg_i32(code, dest, source, value)), at, true)
 }
@@ -2390,6 +2398,12 @@ pub fn emit_in(
             && let Some((built, relocated)) = operand_of(cell, at.bits)
         {
             return _assemble(&raised(create_mem(code, built)), at, relocated);
+        }
+        // An indirect sibling call: the callee's address in a register.
+        if let Loc::Reg(one) = &sources[0]
+            && i64::from(one.width) == near
+        {
+            return _assemble(&raised(create_reg(code, one.register)), at, true);
         }
         return None;
     }

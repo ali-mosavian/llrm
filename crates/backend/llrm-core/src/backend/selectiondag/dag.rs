@@ -186,8 +186,8 @@ pub struct SelectionDAG {
     entry: SDValue,
     root: SDValue,
     /// Names the dump prints for `Global`/`Block` payloads, by id.
-    pub global_names: Vec<String>,
-    pub block_names: Vec<String>,
+    pub global_names: std::rc::Rc<Vec<String>>,
+    pub block_names: std::rc::Rc<Vec<String>>,
     /// Names of external symbols, by id.
     pub symbol_names: Vec<String>,
     /// The constants spilled to the pool: bits and type
@@ -203,7 +203,7 @@ pub struct SelectionDAG {
     pub temporaries: Vec<(u32, u32)>,
     /// Which globals (by symbol) are local to the object: only those fold a
     /// constant offset into their address (`isOffsetFoldingLegal`).
-    pub local_symbols: Vec<bool>,
+    pub local_symbols: std::rc::Rc<Vec<bool>>,
     /// The loads of memory nothing writes (`MachineMemOperand::isInvariant`,
     /// which `visitLoad` sets); a node keeps its number when selection morphs
     /// it, so the set follows it into a machine node. A load a combine or the
@@ -222,14 +222,14 @@ impl SelectionDAG {
             config,
             entry: zero,
             root: zero,
-            global_names: Vec::new(),
-            block_names: Vec::new(),
+            global_names: Default::default(),
+            block_names: Default::default(),
             symbol_names: Vec::new(),
             constant_pool: Vec::new(),
             first_temporary: 0,
             var_args_frame_index: None,
             temporaries: Vec::new(),
-            local_symbols: Vec::new(),
+            local_symbols: Default::default(),
             invariant_loads: HashSet::new(),
         };
         dag.entry = dag.intern(ISD::EntryToken, &[EVT::OTHER, EVT::GLUE], &[], SDNodeFlags::default(), NodeData::None);
@@ -302,6 +302,15 @@ impl SelectionDAG {
             self.deleted.insert(n);
             work.extend(self.nodes[n as usize].ops.iter().map(|op| op.node));
         }
+    }
+
+    /// Whether `delete_dead` removed `node`: nothing reads it, and it reads
+    /// nothing that counts.
+    pub fn is_deleted(
+        &self,
+        node: u32,
+    ) -> bool {
+        self.deleted.contains(&node)
     }
 
     pub fn nodes(&self) -> &[SDNode] {

@@ -37,10 +37,26 @@ impl Builder<'_> {
         info: &llrm_mir::opcode::CallInfo,
         plan: &Convention,
         variadic: bool,
-        direct: bool,
+        callee: Option<llrm_mir::GlobalId>,
+        plan_first: i64,
         arguments: &[Operand],
     ) -> bool {
         let caller = &self.convention;
+        let direct = callee.is_some();
+        // the callee returns to our caller: a far callee to a far caller and a
+        // near one to a near, or the return address is the wrong size
+        let (far, near) = (self.arch.first_argument_offset(true), self.arch.first_argument_offset(false));
+        if far != near {
+            let callee_far = callee.is_some_and(|id| self.module.global(id).address_space == 1);
+            if (caller.first == far) != callee_far {
+                return false;
+            }
+        }
+        // a far pointer callee is stored to a cell and called through it
+        // (`LLRM_FARCALL`); the jump has no such form yet
+        if !direct && self.target.dag.pointer == super::super::mvt::EVT::I16 {
+            return false;
+        }
         // "no_caller_saved_registers": the frame cannot be replaced
         if llrm_mir::memory::has(&self.function.attrs, "no_caller_saved_registers") {
             return false;
@@ -103,7 +119,13 @@ impl Builder<'_> {
                 match parameter {
                     // already laid out as the caller's incoming one
                     Parameter::Cell(_) => {
-                        if arguments.get(at).and_then(incoming) != Some(parameter) {
+                        // offsets are from each function's own first stack
+                        // argument
+                        let moved = Parameter::Cell(match parameter {
+                            Parameter::Cell(cell) => cell - plan_first + caller.first,
+                            _ => unreachable!(),
+                        });
+                        if arguments.get(at).and_then(incoming) != Some(&moved) {
                             return false;
                         }
                     }
@@ -121,14 +143,18 @@ impl Builder<'_> {
             // the callee's address needs a register of the three the arguments
             // may take
             if !direct {
-                let used = plan
+                let used: Vec<RegId> = plan
                     .parameters
                     .iter()
                     .filter_map(|one| if let Parameter::Registers(regs) = one { Some(regs) } else { None })
                     .flatten()
-                    .filter(|reg| eax_edx_ecx.contains(reg))
-                    .count();
-                if used >= 3 {
+                    .copied()
+                    .collect();
+                // and not one the caller's epilogue restores before the jump
+                let free = eax_edx_ecx
+                    .iter()
+                    .any(|reg| !used.contains(reg) && !caller_kept.iter().any(|(whole, _)| whole == reg));
+                if !free {
                     return false;
                 }
             }

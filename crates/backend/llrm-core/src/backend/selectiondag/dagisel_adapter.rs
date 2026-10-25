@@ -248,6 +248,9 @@ pub fn phys_reg(register: u16) -> Option<llrm_lir::registers::RegId> {
         x86::DX => RegId::DX,
         x86::EAX => RegId::EAX,
         x86::EDX => RegId::EDX,
+        x86::RAX => RegId::RAX,
+        x86::RIP => RegId::RIP,
+        x86::RDX => RegId::RDX,
         x86::CS => RegId::CS,
         x86::DS => RegId::DS,
         x86::ES => RegId::ES,
@@ -300,7 +303,9 @@ pub struct DagisAdapter<'a> {
 
 impl<'a> DagisAdapter<'a> {
     pub fn new(dag: &'a mut SelectionDAG) -> DagisAdapter<'a> {
-        DagisAdapter { dag, dead: BTreeSet::new(), mem_refs: BTreeMap::new() }
+        // A node the combiner deleted is no user of what it read (`hasOneUse`).
+        let dead = (0..dag.nodes().len() as u32).filter(|&node| dag.is_deleted(node)).collect();
+        DagisAdapter { dag, dead, mem_refs: BTreeMap::new() }
     }
 
     pub fn is_dead(

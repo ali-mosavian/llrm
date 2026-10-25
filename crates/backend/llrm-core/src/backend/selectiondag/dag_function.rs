@@ -34,7 +34,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 
 use indexmap::IndexMap;
-use llrm_dagisel::generated::{x86_i486, x86_m16};
+use llrm_dagisel::generated::{x86_i486, x86_m16, x86_x64};
 use llrm_dagisel::interp::Selector;
 use llrm_dagisel::x86_addr::AddrMode;
 use llrm_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
@@ -365,7 +365,11 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
         .entry(bits)
         .or_insert_with(|| {
             let forms = llrm_instr::parse(&arch.forms_text(), arch.dialect()).expect("x86.instr parses");
-            let opcodes = if bits == 16 { x86_m16::MACHINE_OPCODES } else { x86_i486::MACHINE_OPCODES };
+            let opcodes = match bits {
+                16 => x86_m16::MACHINE_OPCODES,
+                64 => x86_x64::MACHINE_OPCODES,
+                _ => x86_i486::MACHINE_OPCODES,
+            };
             std::sync::Arc::new(Tables {
                 map: OpcodeMap::new(forms),
                 names: opcodes
@@ -376,6 +380,7 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
                         (llrm_dagisel::x86_llrm::FARCALL_OPCODE, "CALL_FAR"),
                         (llrm_dagisel::x86_llrm::CODE_OPCODE, "CALL_CODE"),
                         (llrm_dagisel::x86_llrm::PORT_OPCODE, "PORT_IO"),
+                        (llrm_dagisel::x86_llrm::TC_RETURN_OPCODE, "TCRETURN_16"),
                         (llrm_dagisel::x86_llrm::FLN_OPCODE, "LN_Fp80"),
                         (llrm_dagisel::x86_llrm::FEXP_OPCODE, "EXP_Fp80"),
                         (llrm_dagisel::x86_llrm::FLOG2_OPCODE, "LOG2_Fp80"),
@@ -502,6 +507,12 @@ fn refuse<T>(why: impl Into<String>) -> Result<T, Unselected> {
     Err(Unselected(format!("--isel=dag: {}", why.into())))
 }
 
+thread_local! {
+    /// Sibling calls on for this thread: what `LLRM_TAIL_CALLS` does for the
+    /// process, for a test that cannot set the environment.
+    pub(super) static TAIL_CALLS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// `name` of `module` selected by the DAG path. A panic in a stage (a builder
 /// meeting a type it does not know) is a refusal of the function, as any other
 /// gap: it stopped 18 QCport modules from compiling in the shadow. Constants it
@@ -562,11 +573,13 @@ fn selected_in(
     contracts: Option<&RuntimeContracts<'_>>,
     pool: &mut Pool,
 ) -> Result<Selected, Unselected> {
-    let m16 = match arch.object().bitness {
+    let bitness = arch.object().bitness;
+    let m16 = match bitness {
         16 => true,
-        32 => false,
-        _ => return refuse("only m16 and m32 are built so far"),
+        32 | 64 => false,
+        _ => return refuse("only m16, m32 and m64 are built so far"),
     };
+    let m64 = bitness == 64;
     let Some(id) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(id).function().filter(|one| !one.is_declaration()) else {
         return refuse(format!("@{name} has no body"));
@@ -577,6 +590,8 @@ fn selected_in(
     let mut info = FunctionLoweringInfo::new(function);
     let mut tli = if m16 {
         TargetLowering::x86_16(Features::default(), MVT::I16)
+    } else if m64 {
+        TargetLowering::x86_64(Features::default(), MVT::I64)
     } else {
         TargetLowering::x86_32(Features::default(), MVT::I32)
     };
@@ -598,12 +613,15 @@ fn selected_in(
             }
         }
     }
-    let (builder_target, address_mode) =
-        if m16 { (BuilderTarget::m16(), AddrMode::Real16) } else { (BuilderTarget::m32(), AddrMode::Flat32) };
+    let (builder_target, address_mode) = match bitness {
+        16 => (BuilderTarget::m16(), AddrMode::Real16),
+        64 => (BuilderTarget::m64(), AddrMode::Flat64),
+        _ => (BuilderTarget::m32(), AddrMode::Flat32),
+    };
     let builder_target = builder_target
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)
-        .with_tail_calls(!m16 && std::env::var_os("LLRM_TAIL_CALLS").is_some())
+        .with_tail_calls(std::env::var_os("LLRM_TAIL_CALLS").is_some() || TAIL_CALLS.get())
         .with_tti(cpu.target().tti())
         .with_runtime_call_verdicts(
             contracts.map(|contracts| runtime_call_verdicts(module, function, &layout, arch, contracts.abi)),
@@ -649,14 +667,26 @@ fn selected_in(
         debug_assert_eq!(made, index, "frame objects are numbered as the builder numbered them");
     }
     let mut hooks = X86Hooks::new(Options {
-        cpu: if m16 { Cpu::M16 } else { Cpu::I486 },
+        cpu: if m16 {
+            Cpu::M16
+        } else if m64 {
+            Cpu::X64
+        } else {
+            Cpu::I486
+        },
         opt_none: false,
         opt_for_size: cpu.size,
         min_size: false,
         has_frame_pointer: true,
         address_mode,
     });
-    let selector = Selector::new(if m16 { x86_m16::TABLE } else { x86_i486::TABLE });
+    let selector = Selector::new(if m16 {
+        x86_m16::TABLE
+    } else if m64 {
+        x86_x64::TABLE
+    } else {
+        x86_i486::TABLE
+    });
     let mut state = EmitState::default();
     // A block's address is fixed before any block is emitted: a branch names
     // the blocks after it.
@@ -718,6 +748,7 @@ fn selected_in(
         block_at: &block_at,
         frame: &frame,
         address_mode,
+        call_alignment: if arch.aligned_calls() { (arch.stack_alignment() as i64).max(1) } else { 1 },
         map: &tables.map,
         names: &tables.names,
     };
@@ -1084,16 +1115,54 @@ fn landing_pad_insn(
     }
 }
 
+/// A set of values, one bit each: values are dense per body (`fresh` counts
+/// up), so a block's set is a few words, not a hash table.
+#[derive(Clone, PartialEq, Eq)]
+struct Values(Vec<u64>);
+
+impl Values {
+    fn new(bits: usize) -> Self {
+        Values(vec![0; bits.div_ceil(64)])
+    }
+
+    fn insert(
+        &mut self,
+        value: u32,
+    ) {
+        self.0[value as usize / 64] |= 1 << (value % 64);
+    }
+
+    fn contains(
+        &self,
+        value: u32,
+    ) -> bool {
+        self.0[value as usize / 64] >> (value % 64) & 1 == 1
+    }
+
+    fn union(
+        &self,
+        other: &Values,
+    ) -> Values {
+        Values(self.0.iter().zip(&other.0).map(|(a, b)| a | b).collect())
+    }
+
+    fn intersection(
+        &self,
+        other: &Values,
+    ) -> Values {
+        Values(self.0.iter().zip(&other.0).map(|(a, b)| a & b).collect())
+    }
+}
+
 /// A value read where some path to it defines nothing: (value, instruction).
-fn read_before_defined(
+pub(super) fn read_before_defined(
     blocks: &[EmitBlock],
     succ: &[Vec<i64>],
     landing: Option<i64>,
 ) -> Option<(u32, Option<String>)> {
-    use std::collections::HashSet;
     let index: std::collections::HashMap<i64, usize> = blocks.iter().enumerate().map(|(i, b)| (b.at, i)).collect();
+    // A copy of a value to itself defines nothing.
     let defines = |insn: &Insn| -> Vec<u32> {
-        // A copy of a value to itself defines nothing.
         let itself = insn
             .what
             .as_ref()
@@ -1105,48 +1174,74 @@ fn read_before_defined(
             );
         if itself { Vec::new() } else { insn.defines.clone() }
     };
-    let own: Vec<HashSet<u32>> = blocks
+    let highest = blocks
+        .iter()
+        .flat_map(|block| {
+            block
+                .phis
+                .iter()
+                .flat_map(|phi| std::iter::once(phi.result).chain(phi.incoming.iter().map(|&(_, v)| v)))
+                .chain(block.insns.iter().flat_map(|insn| insn.defines.iter().chain(&insn.uses).copied()))
+        })
+        .max()
+        .unwrap_or(0) as usize;
+    let bits = highest + 1;
+    let own: Vec<Values> = blocks
         .iter()
         .map(|block| {
-            block.phis.iter().map(|phi| phi.result).chain(block.insns.iter().flat_map(|insn| defines(insn))).collect()
+            let mut set = Values::new(bits);
+            for phi in &block.phis {
+                set.insert(phi.result);
+            }
+            for insn in &block.insns {
+                for value in defines(insn) {
+                    set.insert(value);
+                }
+            }
+            set
         })
         .collect();
     // What is defined on every path to the start of each block (`None`: no
     // path has reached it yet).
-    let mut entry: Vec<Option<HashSet<u32>>> = vec![None; blocks.len()];
-    entry[0] = Some(HashSet::new());
+    let mut entry: Vec<Option<Values>> = vec![None; blocks.len()];
+    entry[0] = Some(Values::new(bits));
     // The runtime enters a landing pad with no value defined: a root of its
     // own.
     if let Some(&pad) = landing.and_then(|at| index.get(&at)) {
-        entry[pad] = Some(HashSet::new());
+        entry[pad] = Some(Values::new(bits));
     }
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for at in 0..blocks.len() {
-            let Some(here) = entry[at].clone() else { continue };
-            let out: HashSet<u32> = here.union(&own[at]).copied().collect();
-            for next in &succ[at] {
-                let Some(&to) = index.get(next) else { continue };
-                let merged = match &entry[to] {
-                    None => out.clone(),
-                    Some(known) => known.intersection(&out).copied().collect(),
-                };
-                if entry[to].as_ref() != Some(&merged) {
-                    entry[to] = Some(merged);
-                    changed = true;
+    let mut work: std::collections::VecDeque<usize> = (0..blocks.len()).filter(|&at| entry[at].is_some()).collect();
+    let mut queued: Vec<bool> = (0..blocks.len()).map(|at| entry[at].is_some()).collect();
+    while let Some(at) = work.pop_front() {
+        queued[at] = false;
+        let out = entry[at].as_ref().expect("a reached block").union(&own[at]);
+        for next in &succ[at] {
+            let Some(&to) = index.get(next) else { continue };
+            let merged = match &entry[to] {
+                None => out.clone(),
+                Some(known) => known.intersection(&out),
+            };
+            if entry[to].as_ref() != Some(&merged) {
+                entry[to] = Some(merged);
+                if !queued[to] {
+                    queued[to] = true;
+                    work.push_back(to);
                 }
             }
         }
     }
     for (at, block) in blocks.iter().enumerate() {
         let Some(mut known) = entry[at].clone() else { continue };
-        known.extend(block.phis.iter().map(|phi| phi.result));
+        for phi in &block.phis {
+            known.insert(phi.result);
+        }
         for insn in &block.insns {
-            if let Some(value) = insn.uses.iter().find(|value| !known.contains(value)) {
+            if let Some(value) = insn.uses.iter().find(|value| !known.contains(**value)) {
                 return Some((*value, insn.what.as_ref().and_then(|what| what.name.as_ref().map(|n| n.to_string()))));
             }
-            known.extend(defines(insn));
+            for value in defines(insn) {
+                known.insert(value);
+            }
         }
         // What a phi takes from an edge is defined at the end of that edge's
         // block.
@@ -1154,7 +1249,7 @@ fn read_before_defined(
             for (edge, value) in &phi.incoming {
                 let Some(&from) = index.get(edge) else { continue };
                 let Some(start) = entry[from].as_ref() else { continue };
-                if !start.contains(value) && !own[from].contains(value) {
+                if !start.contains(*value) && !own[from].contains(*value) {
                     return Some((*value, Some("phi".to_owned())));
                 }
             }
