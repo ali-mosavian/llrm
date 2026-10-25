@@ -893,6 +893,10 @@ impl Builder<'_> {
         wide: &str,
         narrow: &str,
     ) -> llrm_lir::registers::RegId {
+        if self.target.dag.pointer == EVT::I64 {
+            // `Subtarget.is64Bit() ? X86::RCX : X86::ECX`
+            return self.arch.register_named(&format!("r{}", &wide[1..]));
+        }
         self.arch.register_named(if self.target.dag.pointer == EVT::I16 { narrow } else { wide })
     }
 
