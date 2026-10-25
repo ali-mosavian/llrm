@@ -180,6 +180,25 @@ fn a_frame_cell_with_a_wide_index_is_not_encodable_before_the_frame_is_named() {
 }
 
 #[test]
+fn a_quadword_cell_is_compared_and_added_to_with_an_immediate() {
+    // cmpq $0,-0x8(%rbp); cmpq $0x1000,-0x8(%rbp); addq $1,-0x8(%rbp). At -O0
+    // these had no form and the compile stopped ("greedy"-free: the emitter
+    // returned nothing for the instruction).
+    let op = |name, value| {
+        let cell = frame(-8, 8);
+        if name == "cmp" {
+            sem(Operation::Compare, Some(name), vec![], vec![cell, im(value, 8, None)], None, false)
+        } else {
+            sem(Operation::Binary, Some(name), vec![cell.clone()], vec![cell, im(value, 8, None)], None, false)
+        }
+    };
+    assert_eq!(bytes(&op("cmp", 0)), [0x48, 0x83, 0x7d, 0xf8, 0x00]);
+    assert_eq!(bytes(&op("cmp", 0x1000)), [0x48, 0x81, 0x7d, 0xf8, 0x00, 0x10, 0, 0]);
+    assert_eq!(bytes(&op("add", 1)), [0x48, 0x83, 0x45, 0xf8, 0x01]);
+}
+
+#[test]
+
 fn a_scalar_double_add_is_the_sse2_form() {
     // addsd %xmm1,%xmm0; addss %xmm9,%xmm8. Without an SSE row the emitter has
     // no form to encode.
