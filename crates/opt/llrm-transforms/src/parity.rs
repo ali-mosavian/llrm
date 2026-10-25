@@ -163,7 +163,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
     ),
     entry("reassociate@696", Simplify, "reassociate", Translated, ""),
     entry("constraint-elimination@699", Simplify, "constraint-elimination", Translated, ""),
-    entry("algebraic@696", Simplify, "instcombine", Old, "instcombine-port"),
     entry("loopsimplify@764", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@764", Simplify, "lcssa", Old, "lcssa-port"),
     entry("floatloop@724", Simplify, "licm", Old, "licm-port"),

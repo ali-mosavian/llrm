@@ -813,7 +813,6 @@ pub(crate) fn llvm_order(
                 simplify_cfg("decide@690"),
                 slot("reassociate@696", Box::new(crate::reassociate::Reassociate)),
                 slot("constraint-elimination@699", Box::new(crate::constraintelim::ConstraintElimination)),
-                slot("algebraic@696", Box::new(algebraic::Algebraic { size, llvm: true })),
             ]);
             list.extend(canonical("loopsimplify@764", "lcssa@764"));
             // Without the rotate slot the first LICM keeps speculating, as the
