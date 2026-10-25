@@ -220,7 +220,7 @@ impl CallFrameOpt {
                 }
             }
         }
-        if !self.is_profitable(&contexts) {
+        if !self.is_profitable(&contexts, self.has_var_sized || self.allocates_dynamically(body)) {
             return body.clone();
         }
         let mut out = body.clone();
@@ -264,15 +264,35 @@ impl CallFrameOpt {
         true
     }
 
+    /// `MFI.hasVarSizedObjects()`: a `sub sp, reg`, as `framefree` reads it.
+    fn allocates_dynamically(
+        &self,
+        body: &LirBody,
+    ) -> bool {
+        body.blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter_map(|one| one.what.as_ref())
+            .any(
+                |what| matches!(what.name.as_deref(), Some("add" | "sub"))
+                    && matches!(
+                        (&what.dests[..], &what.sources[..]),
+                        ([Loc::Reg(dest)], [Loc::Reg(source), Loc::Reg(_)])
+                            if dest.register == self.stack && source.register == self.stack
+                    ),
+            )
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86CallFrameOptimization.cpp#L205
     /// `isProfitable`: the bytes saved against those of the adjustments the
     /// pushes need, over every call site.
     fn is_profitable(
         &self,
         contexts: &[CallContext],
+        has_var_sized: bool,
     ) -> bool {
         // Always a win when no call frame can be reserved.
-        if self.has_var_sized {
+        if has_var_sized {
             return true;
         }
         let mut advantage: i64 = 0;
@@ -703,6 +723,26 @@ mod tests {
         assert_eq!(names(&pass().run(&one)), ["call_frame_setup", "mov", "call", "call_frame_destroy"]);
         let var_sized = CallFrameOpt { has_var_sized: true, ..pass() };
         assert_eq!(names(&var_sized.run(&one)), ["call_frame_setup", "push", "call", "call_frame_destroy"]);
+    }
+
+    /// A function that allocates dynamically reserves no frame, so the pin
+    /// pushes its area whatever the heuristic says: one push stays a store in
+    /// a function without
+    /// (`one_push_is_not_worth_the_adjustments_but_two_are`).
+    #[test]
+    fn a_function_with_a_dynamic_allocation_pushes_every_area() {
+        let sp = || Loc::Reg(Reg { register: RegId::SP, width: 4 });
+        let alloca = insn(
+            0,
+            Operation::Binary,
+            "sub",
+            vec![sp()],
+            vec![sp(), Loc::Reg(Reg { register: RegId::AX, width: 4 })],
+            vec![],
+            vec![],
+        );
+        let one = body(vec![alloca, setup(4), store(0, imm(1), vec![]), call(), destroy(4)]);
+        assert_eq!(names(&pass().run(&one)), ["sub", "call_frame_setup", "push", "call", "call_frame_destroy"]);
     }
 
     fn lower(insns: Vec<Arc<Insn>>) -> Vec<String> {

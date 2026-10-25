@@ -313,35 +313,60 @@ define void @f() {
     assert!(names.iter().any(|n| n == "lea"), "{names:?}");
 }
 
-/// A frame object's address plus a variable index and a displacement past the
-/// object was made in a 4-byte register and used as the base of a quadword
-/// address: the encoder refused the 32-bit base beside a 64-bit index.
+/// A struct result's address (`sret`) takes RDI; the next argument was placed
+/// in RDI too, so two live-in copies of one register overlapped and the greedy
+/// allocator "could not place every range". It takes RSI.
 #[test]
-fn a_frame_address_past_its_object_is_a_quadword_base() {
-    use crate::model::ir::Loc;
+fn an_argument_after_an_sret_pointer_is_in_rsi() {
+    use llrm_lir::registers::RegId;
     let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
-declare void @use(ptr)
-define void @f(i64 %n) {
+define void @f(ptr noalias sret({i64, i64, i64}) %p, i64 %x) {
 entry:
-  %buf = alloca [20 x i8], align 16
-  %m = sub i64 %n, 1
-  %p = getelementptr inbounds [20 x i8], ptr %buf, i64 0, i64 %m
-  call void @use(ptr %p)
+  store i64 %x, ptr %p, align 8
   ret void
 }
 ";
     let module = llrm_mir::parse::module(text).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
-    let insns = done.body.insns();
-    let leas: Vec<_> =
-        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some("lea")).collect();
-    assert!(!leas.is_empty());
-    for lea in &leas {
-        assert!(matches!(&lea.dests[0], Loc::Held(h) if h.width == 8), "{lea:?}");
-        // A displacement of -1 is -1, not 4294967295.
-        assert!(!matches!(&lea.sources[..], [Loc::Mem(cell)] if cell.offset > i64::from(i32::MAX)), "{lea:?}");
-    }
+    let read: Vec<RegId> =
+        done.body.insns().iter().flat_map(|i| i.delivers.iter().chain(&i.requires)).map(|(_, reg)| *reg).collect();
+    assert!(read.contains(&RegId::RDI) && read.contains(&RegId::RSI), "{read:?}");
+}
+
+/// A `{i64, i64}` returned and received at m64 was refused ("aggregate or
+/// vector value"): each member travels in its own return register, RAX then
+/// RDX.
+#[test]
+fn a_pair_of_quadwords_is_returned_and_received_in_rax_and_rdx() {
+    use llrm_lir::registers::RegId;
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare {i64, i64} @g(i64)
+define {i64, i64} @mk(i64 %a, i64 %b) {
+entry:
+  %x = insertvalue {i64, i64} undef, i64 %a, 0
+  %y = insertvalue {i64, i64} %x, i64 %b, 1
+  ret {i64, i64} %y
+}
+define i64 @use(i64 %a) {
+entry:
+  %r = call {i64, i64} @g(i64 %a)
+  %lo = extractvalue {i64, i64} %r, 0
+  %hi = extractvalue {i64, i64} %r, 1
+  %s = add i64 %lo, %hi
+  ret i64 %s
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let registers = |name: &str| -> Vec<RegId> {
+        let done = selected(&module, name, &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+        done.body.insns().iter().flat_map(|i| i.delivers.iter().chain(&i.requires)).map(|(_, reg)| *reg).collect()
+    };
+    let returned = registers("mk");
+    assert!(returned.contains(&RegId::RAX) && returned.contains(&RegId::RDX), "{returned:?}");
+    let received = registers("use");
+    assert!(received.contains(&RegId::RAX) && received.contains(&RegId::RDX), "{received:?}");
 }
 
 /// `va_start` at m64 was refused ("the SysV register save area is not
@@ -374,4 +399,35 @@ define i32 @f(i32 %n, ...) {
         .filter(|w| w.op == Operation::Move && matches!(w.dests.first(), Some(Loc::Mem(_))))
         .count();
     assert_eq!(stores, 9);
+}
+
+/// A frame object's address plus a variable index and a displacement past the
+/// object was made in a 4-byte register and used as the base of a quadword
+/// address: the encoder refused the 32-bit base beside a 64-bit index.
+#[test]
+fn a_frame_address_past_its_object_is_a_quadword_base() {
+    use crate::model::ir::Loc;
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare void @use(ptr)
+define void @f(i64 %n) {
+entry:
+  %buf = alloca [20 x i8], align 16
+  %m = sub i64 %n, 1
+  %p = getelementptr inbounds [20 x i8], ptr %buf, i64 0, i64 %m
+  call void @use(ptr %p)
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let insns = done.body.insns();
+    let leas: Vec<_> =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some("lea")).collect();
+    assert!(!leas.is_empty());
+    for lea in &leas {
+        assert!(matches!(&lea.dests[0], Loc::Held(h) if h.width == 8), "{lea:?}");
+        // A displacement of -1 is -1, not 4294967295.
+        assert!(!matches!(&lea.sources[..], [Loc::Mem(cell)] if cell.offset > i64::from(i32::MAX)), "{lea:?}");
+    }
 }

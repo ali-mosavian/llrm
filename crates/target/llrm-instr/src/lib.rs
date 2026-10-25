@@ -189,7 +189,7 @@ impl Form {
 
 /// What an operand may be: a register, cell, immediate, address or float
 /// register, then a shift, condition or extension field.
-const KINDS: &str = "rmiashce";
+const KINDS: &str = "rmiashcex";
 
 fn operands(
     d: &Dialect,
@@ -207,7 +207,7 @@ fn operands(
                 return Ok(Operand { kinds: "r".into(), tied: Some(dest) });
             }
             if one.is_empty() || !one.chars().all(|kind| KINDS.contains(kind)) {
-                return Err(format!("{file}:{line}: operand `{one}` is not made of the kinds r m i a s h c e"));
+                return Err(format!("{file}:{line}: operand `{one}` is not made of the kinds r m i a s h c e x"));
             }
             Ok(Operand { kinds: one.into(), tied: None })
         })
@@ -413,7 +413,7 @@ mod tests {
         assert!(
             parse("add3 binary r/r,r,z 32 alu_rr - - - -/- Add_{w}", &dialect())
                 .unwrap_err()
-                .contains("kinds r m i a s h c e")
+                .contains("kinds r m i a s h c e x")
         );
     }
 
