@@ -81,6 +81,9 @@ pub struct BuilderTarget {
     /// `-fexcess-precision=standard`: an integer too wide for its float type's
     /// mantissa is rounded to that type (x87 would keep it exact).
     pub float_store: bool,
+    /// A dense switch may be a jump table: the target prices one (the MIR pass
+    /// reads the same cost).
+    pub jump_tables: bool,
     /// For a program whose ABI gives its runtime routines contracts: whether
     /// the convention models each call of a `llrm.qb.` routine, by call. A call
     /// not listed, or listed with a reason, is refused.
@@ -112,6 +115,15 @@ impl BuilderTarget {
         on: bool,
     ) -> BuilderTarget {
         self.float_store = on;
+        self
+    }
+
+    /// This target with jump tables on or off.
+    pub fn with_jump_tables(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.jump_tables = on;
         self
     }
 
@@ -161,6 +173,7 @@ impl BuilderTarget {
             libcalls: None,
             stack_align: None,
             float_store: false,
+            jump_tables: true,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -186,6 +199,7 @@ impl BuilderTarget {
             libcalls: None,
             stack_align: None,
             float_store: false,
+            jump_tables: true,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -310,7 +324,7 @@ fn dag_name(
     dag: &SelectionDAG,
     block: BlockId,
 ) -> String {
-    dag.block_names.get(block.0 as usize).cloned().unwrap_or_default()
+    dag.block_name(block.0).to_owned()
 }
 
 impl<'a> Builder<'a> {
@@ -363,10 +377,7 @@ impl<'a> Builder<'a> {
         dag.global_names = tables.global_names;
         dag.local_symbols = tables.local_symbols;
         dag.block_names = tables.block_names;
-        let name = synthetic_name.unwrap_or_else(|| dag_name(&dag, block));
-        if dag.block_names.len() < next_synthetic as usize {
-            std::rc::Rc::make_mut(&mut dag.block_names).resize(next_synthetic as usize, name);
-        }
+        dag.synthetic_fill = synthetic_name.unwrap_or_else(|| dag_name(&dag, block));
         Builder {
             current: None,
             prelowered: Default::default(),
@@ -1252,6 +1263,26 @@ impl Builder<'_> {
             self.dag.set_root(chain);
             return Ok(None);
         }
+        if self.is_aggregate(result_type) {
+            // `LowerCallResult` over the leaves `ComputeValueVTs` gives: one
+            // return register each
+            let leaves = self.leaves(result_type)?;
+            if plan.returns.len() != leaves.len() {
+                return Err(Refused("an aggregate result that is not one register a member"));
+            }
+            let mut glue = glue;
+            let mut pieces = Vec::new();
+            for ((leaf, _), reg) in leaves.into_iter().zip(plan.returns.clone()) {
+                let leaf_vt = self.type_of(leaf)?;
+                let reg = self.sized_register(reg, leaf_vt);
+                let copy = self.dag.get_copy_from_phys_reg(chain, reg, leaf_vt, glue);
+                chain = SDValue { node: copy.node, res: 1 };
+                glue = SDValue { node: copy.node, res: 2 };
+                pieces.push(copy);
+            }
+            self.dag.set_root(chain);
+            return Ok(Some(self.merge(&pieces)));
+        }
         let vt = self.type_of(result_type)?;
         if flags_answer {
             let flags = self.dag.get_copy_from_phys_reg(chain, super::dagisel_adapter::EFLAGS_ID, EVT::I32, glue);
@@ -1307,7 +1338,26 @@ impl Builder<'_> {
         let mut chain = self.control_root();
         let mut ops = Vec::new();
         let mut glue = None;
-        if let Some(&operand) = instruction.operands.first() {
+        let aggregate = instruction
+            .operands
+            .first()
+            .and_then(|&operand| self.function.operand_type(&self.module.context, operand))
+            .is_some_and(|ty| self.is_aggregate(ty));
+        if let (true, Some(&operand)) = (aggregate, instruction.operands.first()) {
+            // `LowerReturn` over the leaves: one return register each
+            let parts = self.value_parts(operand)?;
+            if parts.len() != self.convention.returns.len() {
+                return Err(Refused("an aggregate result that is not one register a member"));
+            }
+            for (piece, reg) in parts.into_iter().zip(self.convention.returns.clone()) {
+                let piece_vt = self.dag.value_type(piece);
+                let reg = self.sized_register(reg, piece_vt);
+                let copy = self.dag.get_copy_to_phys_reg(chain, reg, piece, glue);
+                chain = SDValue { node: copy.node, res: 0 };
+                glue = Some(SDValue { node: copy.node, res: 1 });
+                ops.push(self.dag.get_phys_register(piece_vt, reg));
+            }
+        } else if let Some(&operand) = instruction.operands.first() {
             let value = self.get_value(operand)?;
             let vt = self.dag.value_type(value);
             if vt.is_floating_point() {
