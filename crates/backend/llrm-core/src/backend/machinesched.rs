@@ -46,6 +46,7 @@ use crate::backend::liveness;
 use crate::model::ir::{Loc, Operation};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
+use crate::support::hash::HashMap;
 
 /// `MI.modifiesRegister(StackPointerRegisterToSaveRestore)` of
 /// `TargetInstrInfo::isSchedulingBoundary`: anything that writes the stack
@@ -258,6 +259,18 @@ fn def_latency(one: &Insn) -> u32 {
     }
 }
 
+/// The set bits of `mask`, as indexes.
+fn bits_of(mut mask: u128) -> impl Iterator<Item = usize> {
+    std::iter::from_fn(move || {
+        if mask == 0 {
+            return None;
+        }
+        let bit = mask.trailing_zeros() as usize;
+        mask &= mask - 1;
+        Some(bit)
+    })
+}
+
 /// The graph of `insns`, one region (every instruction schedulable).
 pub fn graph(
     insns: &[Arc<Insn>],
@@ -276,33 +289,105 @@ pub fn graph(
             }
         }
     }
-    let mut preds = vec![Vec::new(); n];
-    let mut succs = vec![Vec::new(); n];
-    let mut latencies = vec![Vec::new(); n];
+    // ScheduleDAGInstrs' way: each instruction depends on the last definition
+    // of what it reads (data), of what it writes (output), on what read it
+    // since (anti), and memory and the unknown on their last writer and
+    // readers; the rest follows by chains. One pass, tables by value and lane.
+    let mut preds: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut latencies: Vec<Vec<u32>> = vec![Vec::new(); n];
+    let mut by_value: HashMap<u32, (Option<usize>, Vec<usize>)> = HashMap::default();
+    let mut by_lane: Vec<(Option<usize>, Vec<usize>)> = vec![(None, Vec::new()); 128];
+    // The last store and the loads since it; the last instruction of unknown
+    // effect and everything since it.
+    let (mut store, mut loads): (Option<usize>, Vec<usize>) = (None, Vec::new());
+    let (mut unknown, mut since): (Option<usize>, Vec<usize>) = (None, Vec::new());
     for later in 0..n {
-        let (later_reads_memory, later_writes_memory) = memory(&insns[later]);
-        for earlier in 0..later {
-            let (reads_memory, writes_memory) = memory(&insns[earlier]);
-            let data_by_value = insns[earlier].defines.iter().any(|v| insns[later].uses.contains(v));
-            let output_by_value = insns[earlier].defines.iter().any(|v| insns[later].defines.contains(v));
-            let anti_by_value = insns[earlier].uses.iter().any(|v| insns[later].defines.contains(v));
-            let (data_by_lane, output_by_lane, anti_by_lane, unknown) = match (&effects[earlier], &effects[later]) {
-                (Some(first), Some(second)) => (
-                    !first.writes.is_disjoint(&second.all_reads()),
-                    !first.writes.is_disjoint(&second.writes),
-                    !first.all_reads().is_disjoint(&second.writes),
-                    false,
-                ),
-                _ => (false, false, false, true),
-            };
-            let by_memory =
-                (writes_memory && (later_reads_memory || later_writes_memory)) || (reads_memory && later_writes_memory);
-            let (data, output) = (data_by_value || data_by_lane, output_by_value || output_by_lane);
-            if data || output || anti_by_value || anti_by_lane || unknown || by_memory {
-                preds[later].push(earlier);
-                succs[earlier].push(later);
-                latencies[later].push(if data { def_latency(&insns[earlier]) } else { 0 }.max(u32::from(output)));
+        let mut edges: Vec<(usize, u32)> = Vec::new();
+        let one = &insns[later];
+        let (reads_memory, writes_memory) = memory(one);
+        let masks = effects[later].as_ref().map(|effect| (effect.all_reads().mask(), effect.writes.mask()));
+        // What every instruction after one of unknown effect keeps behind it.
+        edges.extend(unknown.map(|earlier| (earlier, 0)));
+        for value in &one.uses {
+            if let Some((Some(def), _)) = by_value.get(value) {
+                edges.push((*def, def_latency(&insns[*def])));
             }
+        }
+        for value in &one.defines {
+            if let Some((def, readers)) = by_value.get(value) {
+                edges.extend(def.map(|earlier| (earlier, 1)));
+                edges.extend(readers.iter().map(|&earlier| (earlier, 0)));
+            }
+        }
+        match masks {
+            Some((reads, writes)) => {
+                for bit in bits_of(reads) {
+                    if let Some(def) = by_lane[bit].0 {
+                        edges.push((def, def_latency(&insns[def])));
+                    }
+                }
+                for bit in bits_of(writes) {
+                    edges.extend(by_lane[bit].0.map(|earlier| (earlier, 1)));
+                    edges.extend(by_lane[bit].1.iter().map(|&earlier| (earlier, 0)));
+                }
+            }
+            // An unknown effect is ordered with everything before it.
+            None => edges.extend(since.iter().map(|&earlier| (earlier, 0))),
+        }
+        if reads_memory || writes_memory {
+            edges.extend(store.map(|earlier| (earlier, 0)));
+        }
+        if writes_memory {
+            edges.extend(loads.iter().map(|&earlier| (earlier, 0)));
+        }
+        // One edge to each earlier instruction, the longest latency.
+        edges.sort_unstable();
+        edges.dedup_by(|next, kept| {
+            let same = next.0 == kept.0;
+            if same {
+                kept.1 = kept.1.max(next.1);
+            }
+            same
+        });
+        for (earlier, latency) in edges {
+            preds[later].push(earlier);
+            latencies[later].push(latency);
+        }
+        // Record what this one reads and writes.
+        for value in &one.uses {
+            by_value.entry(*value).or_default().1.push(later);
+        }
+        for value in &one.defines {
+            let entry = by_value.entry(*value).or_default();
+            *entry = (Some(later), Vec::new());
+        }
+        if let Some((reads, writes)) = masks {
+            for bit in bits_of(reads) {
+                by_lane[bit].1.push(later);
+            }
+            for bit in bits_of(writes) {
+                by_lane[bit] = (Some(later), Vec::new());
+            }
+        } else {
+            unknown = Some(later);
+            since.clear();
+            // Everything before it is behind it now.
+            by_value.clear();
+            by_lane.iter_mut().for_each(|entry| *entry = (None, Vec::new()));
+            store = None;
+            loads.clear();
+        }
+        if writes_memory {
+            (store, loads) = (Some(later), Vec::new());
+        } else if reads_memory {
+            loads.push(later);
+        }
+        since.push(later);
+    }
+    let mut succs: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (later, before) in preds.iter().enumerate() {
+        for &earlier in before {
+            succs[earlier].push(later);
         }
     }
     Graph { preds, succs, latencies }
