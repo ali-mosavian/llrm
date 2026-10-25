@@ -740,13 +740,13 @@ pub fn decide_with_split(
     if body.blocks.iter().any(|block| !block.phis.is_empty()) || body.blocks.is_empty() {
         return None;
     }
-    if std::env::var("LLRM_MIR_PRINT").is_ok_and(|n| n == body.name) {
+    if llrm_support::env_var("LLRM_MIR_PRINT").is_some_and(|n| n == &*body.name) {
         match crate::backend::mirprint::mir(body, inputs.pins) {
             Ok(text) => eprintln!("{text}"),
             Err(why) => eprintln!("MIR-PRINT-REFUSED {}: {why}", body.name),
         }
     }
-    if std::env::var("LLRM_INPUT_DUMP").is_ok_and(|n| n == body.name) {
+    if llrm_support::env_var("LLRM_INPUT_DUMP").is_some_and(|n| n == &*body.name) {
         for (b, block) in body.blocks.iter().enumerate() {
             for (at, one) in block.insns.iter().enumerate() {
                 eprintln!(
@@ -940,7 +940,7 @@ pub fn decide_with_split(
         }
     }
     let (reloads, stores, folded) = greedy.spill_counts();
-    if std::env::var("LLRM_MIR_PRINT").is_ok_and(|n| n == body.name) {
+    if llrm_support::env_var("LLRM_MIR_PRINT").is_some_and(|n| n == &*body.name) {
         eprintln!("SPILL-COUNTS {} stores={stores} reloads={reloads} folded={folded}", body.name);
     }
     let mut placed: Vec<(u32, RegId)> = Vec::new();
@@ -949,7 +949,7 @@ pub fn decide_with_split(
             placed.push((reg, phys));
         }
     }
-    if std::env::var("LLRM_PLACED_DEBUG").is_ok() {
+    if llrm_support::env_set("LLRM_PLACED_DEBUG") {
         for reg in greedy.lis.values().collect::<Vec<_>>() {
             if greedy.matrix.vrm.get_phys(reg).is_none() {
                 eprintln!(
