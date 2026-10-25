@@ -128,3 +128,57 @@ x:
     );
     assert!(text.contains("%a = add nuw nsw i16 %i, 1"), "{text}");
 }
+
+/// `v = g[i]` with a `nuw` index into a 10-element global: the access is in
+/// bounds, so `i < 10`. The pass knew no object size and decided nothing.
+#[test]
+fn an_access_into_a_global_array_bounds_its_index() {
+    let text = eliminated(
+        "@g = global [10 x i32] zeroinitializer
+define i1 @f(i64 %i) {
+b0:
+  %p = getelementptr inbounds nuw [10 x i32], ptr @g, i64 0, i64 %i
+  %v = load i32, ptr %p
+  %c = icmp ult i64 %i, 10
+  ret i1 %c
+}
+",
+    );
+    assert!(text.contains("ret i1 true"), "{text}");
+}
+
+/// The same access after a call that may not return is not guaranteed to
+/// execute: its fact joins the system after the access, in program order.
+#[test]
+fn an_access_that_may_not_run_bounds_what_follows_it() {
+    let text = eliminated(
+        "@g = global [10 x i32] zeroinitializer
+declare void @maybe_exit()
+define i1 @f(i64 %i) {
+b0:
+  call void @maybe_exit()
+  %p = getelementptr inbounds nuw [10 x i32], ptr @g, i64 0, i64 %i
+  %v = load i32, ptr %p
+  %c = icmp ult i64 %i, 10
+  ret i1 %c
+}
+",
+    );
+    assert!(text.contains("ret i1 true"), "{text}");
+}
+
+/// An index into an object of unknown size (an argument) gives nothing.
+#[test]
+fn an_access_into_an_unknown_object_gives_no_bound() {
+    let text = eliminated(
+        "define i1 @f(ptr %a, i64 %i) {
+b0:
+  %p = getelementptr inbounds nuw i32, ptr %a, i64 %i
+  %v = load i32, ptr %p
+  %c = icmp ult i64 %i, 10
+  ret i1 %c
+}
+",
+    );
+    assert!(text.contains("ret i1 %c"), "{text}");
+}
