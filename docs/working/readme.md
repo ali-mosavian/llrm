@@ -46,6 +46,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [vreg-class-field-plan](vreg-class-field-plan.md) | A register class on each virtual register: pin sites, touched types, caller counts, order |
 | [local-reassign](local-reassign.md) | `canReassign` in the greedy allocator: the QCport -Os modules that change, vs parity and main |
 | [qcport-vs-main](qcport-vs-main.md) | QCport -Os and -O2, parity against main, per module, with the owner of each module above main |
+| [flip-ambt-table](flip-ambt-table.md) | The 22 AM-BT rows by dag/old and dag/pin at m32 -O2: verdict, cause and owner per row (2026-10-25) |
 | [compile-ledger-w1](compile-ledger-w1.md) | Plan for the regalloc-glue and scalar buckets of the compile ledger: ours vs the pin per pass, callees, levers and dates |
 | [unroll-o1-rows](unroll-o1-rows.md) | x_life and x_isqrt against main: the -O1 unroll mechanism and the select diamond, both the pin's |
 | [above-main-rows](above-main-rows.md) | Rows above main |

@@ -2,7 +2,7 @@
 
 Method: tip `b5c3edde3` (feat/parity + #4754 fixes), `llrm-c` md5 `d8d0825aef93`, m32 -O2 -march=i486 -mabi=sysv. One binary: old = `--isel=old`, dag = `--isel=dag`.
 dag/pin = dag clocks / clocks of the pin's `llc -O2 -disable-lsr` on dag's own pre-isel IR (`30-switchconv.ll`, via pin.py's m32 target), linked and run by the same harness (vsgcc 486 price table, all runs `ok`).
-dag as ELF = dag as OMF on all 22 (object format does not move clocks). Script (not committed): `~/scratch/ambt/run.py`, raw `~/scratch/ambt/res2.txt`.
+dag as ELF = dag as OMF on all 22 (object format does not move clocks). The script and raw results are not committed.
 Verdict: PIN-FAITHFUL = dag/pin <= 1.03 (faster than the pin counts); DEFECT otherwise. Static gaps of faithful rows are numbered rows of their own (w13's lists).
 
 | # | prog | dag/old | dag/pin | verdict | cause | owner |
