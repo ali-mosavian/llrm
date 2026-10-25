@@ -1268,7 +1268,7 @@ impl Analysis for BaseAccesses {
 }
 
 /// A body's translated MemorySSA. The accesses it is read with are the
-/// manager's `PlainAccesses`, fetched by the first client that asks
+/// manager's `BaseAccesses`, fetched by the first client that asks
 /// (`accesses`): building the graph needs none of their references.
 pub struct MssaGraph {
     pub mssa: crate::mssa::Mssa,
