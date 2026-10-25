@@ -514,13 +514,16 @@ impl Body<'_, '_, '_> {
         Ok(Some(None))
     }
 
-    /// Whether a RESUME or RESUME NEXT of `callee` is reached by falling
-    /// through into a handler's code, where no error is being handled.
+    /// Whether a RESUME, RESUME NEXT or RESUME label of `callee` is reached
+    /// where no error is being handled: by falling through into a handler's
+    /// code, or in a procedure with no handler at all.
     pub(super) fn fallen_resume(
         &self,
         callee: &str,
     ) -> bool {
-        resumes(callee) && self.outlined.is_none() && self.handling.as_ref().is_some_and(|one| !one.handling)
+        (resumes(callee) || callee.starts_with(LABEL))
+            && self.outlined.is_none()
+            && self.handling.as_ref().is_none_or(|one| !one.handling)
     }
 
     /// A call of `callee` this owns, or `None`.
@@ -536,7 +539,14 @@ impl Body<'_, '_, '_> {
             // The runtime's ERL knows no line of the recompiled code: the
             // module handler keeps the last one it took.
             let Some(module) = &self.tables.module_handler else {
-                return Err("ERL outside the error handler".to_owned());
+                // No handler takes an error here: no line was ever recorded.
+                let word = self.b.context.types.int(16);
+                let line = self.b.int(16, 0);
+                return Ok(Some(Some(if returns == word {
+                    line
+                } else {
+                    self.b.cast(llrm_mir::CastOp::ZExt, line, returns, "")
+                })));
             };
             let word = self.b.context.types.int(16);
             let line = self.b.load(word, module.last_erl, false, "erl");
@@ -552,6 +562,11 @@ impl Body<'_, '_, '_> {
                 return Err("ON ERROR and ON LOCAL ERROR in one procedure".to_owned());
             }
             let handler: i64 = handler.parse().map_err(|_| "an ON ERROR marker without its handler")?;
+            if handler == 0 && self.handling.is_none() && self.tables.module_handler.is_none() {
+                // ON ERROR GOTO 0 where the module sets no handler: nothing to
+                // turn off.
+                return Ok(Some(None));
+            }
             let handling = self
                 .handling
                 .as_ref()

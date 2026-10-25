@@ -955,14 +955,19 @@ fn combine_add(
     if vt != EVT::I32 {
         return None;
     }
-    let (difference, z) = (dag.operand(node, 0), dag.operand(node, 1));
-    if dag.opcode(difference) != ISD::Sub || dag.use_count(difference.node) != 1 || dag.constant(z).is_some() {
-        return None;
-    }
-    let (shift, y) = (dag.operand(difference, 0), dag.operand(difference, 1));
-    if dag.opcode(shift) != ISD::Shl || !dag.constant(dag.operand(shift, 1)).is_some_and(|amount| amount < 4) {
-        return None;
-    }
+    // `m_Add` matches either operand as the difference.
+    let hidden_lea = |difference: SDValue, z: SDValue| {
+        if dag.opcode(difference) != ISD::Sub || dag.use_count(difference.node) != 1 || dag.constant(z).is_some() {
+            return None;
+        }
+        let (shift, y) = (dag.operand(difference, 0), dag.operand(difference, 1));
+        if dag.opcode(shift) != ISD::Shl || !dag.constant(dag.operand(shift, 1)).is_some_and(|amount| amount < 4) {
+            return None;
+        }
+        Some((shift, y, z))
+    };
+    let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
+    let (shift, y, z) = hidden_lea(a, b).or_else(|| hidden_lea(b, a))?;
     let sum = dag.get_node(ISD::Add, vt, &[shift, z]);
     Some(dag.get_node(ISD::Sub, vt, &[sum, y]))
 }
