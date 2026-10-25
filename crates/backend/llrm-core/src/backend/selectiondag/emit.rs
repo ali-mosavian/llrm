@@ -2683,6 +2683,11 @@ impl Emitter<'_, '_> {
                     }
                     let node = self.dag.node(SDValue { node: user, res: 0 });
                     let NodeData::Register(reg) = self.dag.node(node.ops[1]).data else { return None };
+                    // ES is the selector the next cell takes, not a value of
+                    // its own: made in two blocks it would be defined twice.
+                    if self.is_es(node.ops[1]) {
+                        return None;
+                    }
                     (node.ops[2] == result && width_of(self.dag, node.ops[1]) == width).then_some(reg)
                 },
             )?;
