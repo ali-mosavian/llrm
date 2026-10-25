@@ -1980,7 +1980,13 @@ fn a_power_of_a_variable_base_covers_the_whole_domain() {
     let module = parse("b! = -2: e! = 3\r\nr! = b! ^ e!\r\ns# = sqr(2#) ^ 1.5\r\n", Dialect::QuickBasic45).unwrap();
     let hir = compile(&module, "general_power", Dialect::QuickBasic45, "qb45").unwrap();
     assert_eq!(hir.matches("\"op\":\"fexp2\"").count(), 4, "{hir}");
-    assert_eq!(hir.matches("\"callee\":\"B$SERR\"").count(), 2, "{hir}");
+    // Each power raises error 5 (0 ^ negative) once and error 6 (overflow)
+    // twice, as BC does; the overflow checks came with 7a99c56e9 and left
+    // the count at 2 until now.
+    let raised = |code: u32| {
+        hir.split("\"callee\":\"B$SERR\"").skip(1).filter(|call| call.contains(&format!("\"value\":{code}}}"))).count()
+    };
+    assert_eq!((raised(5), raised(6)), (2, 4), "{hir}");
 }
 
 #[test]
@@ -2386,4 +2392,18 @@ fn stop_and_reset_call_b_stop_and_b_rest() {
     let hir = compile(&module, "stop", Dialect::QuickBasic45, "qb45").unwrap();
     assert_eq!(hir.matches("\"callee\":\"B$REST\"").count(), 1, "{hir}");
     assert_eq!(hir.matches("\"callee\":\"B$STOP\"").count(), 1, "{hir}");
+}
+
+#[test]
+fn a_dim_as_in_a_procedure_may_reuse_a_name_the_module_shares_with_a_suffix() {
+    // corpus [scope], BC output: `DIM SHARED x%, x%(5)` then `DIM x AS INTEGER`
+    // (or `DIM x(5) AS INTEGER`) in a SUB compiles under PDS 7.1 and VBDOS;
+    // llrm refused "AS clause required on first declaration". The same two
+    // DIMs side by side at module level stay refused.
+    let sub = |dim: &str| format!("DIM SHARED x%, x%(5)\r\nSUB p\r\n{dim}\r\nEND SUB\r\n");
+    for dialect in [Dialect::Pds71, Dialect::VbDos] {
+        assert!(parse(&sub("DIM x(5) AS INTEGER"), dialect).is_ok(), "{dialect:?}");
+    }
+    assert!(parse(&sub("DIM x AS INTEGER"), Dialect::Pds71).is_ok());
+    assert!(parse("DIM x% : DIM x AS INTEGER\r\n", Dialect::Pds71).is_err());
 }
