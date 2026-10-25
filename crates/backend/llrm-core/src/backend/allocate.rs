@@ -1470,7 +1470,7 @@ pub fn greedy_rewritten(
             eprintln!("greedy-inline {}: failed {} spill_failed {}", body.name, d.report.stats.failed, d.spill_failed);
         }
     }
-    if let (Some(d), true) = (&decided, std::env::var("LLRM_EDITED_DUMP").is_ok_and(|n| n == body.name)) {
+    if let (Some(d), true) = (&decided, llrm_support::env_var("LLRM_EDITED_DUMP").is_some_and(|n| n == &*body.name)) {
         if let Some(edited) = &d.edited {
             for (b, block) in edited.blocks.iter().enumerate() {
                 for (at, one) in block.insns.iter().enumerate() {
@@ -2642,13 +2642,15 @@ impl RegAlloc {
             .map(ranges::key)
             .collect();
         body = removed_unread(&body, &abandoned);
+        // Asked once: the body is the same at the next use.
+        let required = constrain::required(&body, &self.classes);
         self.pinned = prefer.clone();
-        self.pinned.extend(constrain::required(&body, &self.classes));
+        self.pinned.extend(required.iter().map(|(value, register)| (*value, *register)));
         let frame = Rc::clone(self.frame.as_ref().expect("made above"));
         drop(prepare);
         let base = llrm_support::debug::span("regalloc base");
         let mut pins = prefer.clone();
-        pins.extend(constrain::required(&body, &self.classes));
+        pins.extend(required);
         let before = last_resorts();
         // Each spill gets a slot of its own; they are shared once, over the
         // allocation (`crate::backend::slots::slots_colored`).

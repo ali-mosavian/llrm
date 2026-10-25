@@ -51,6 +51,15 @@ impl Lowering for X86 {
         matches!((low, high), (Float, Integer) | (Integer, Float))
     }
 
+    // A switch on an i8 or i16 is widened to i32 (checked on the pin's llc at
+    // m16, m32 and m64: `switch i32` after CodeGenPrepare).
+    fn preferred_switch_condition_bits(
+        &self,
+        bits: u32,
+    ) -> u32 {
+        bits.max(32)
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L3805
     fn prefer_zero_compare_branch(&self) -> bool {
         true

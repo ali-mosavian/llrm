@@ -623,6 +623,16 @@ fn _contract_keeping(
             ),
         ));
     }
+    if matches!(name, "B$PCCY" | "B$PSCY" | "B$PECY") && pushed == 8 {
+        return Ok(returns(
+            8,
+            format!(
+                "{evidence} PDS 7.1 BC pushes a CURRENCY item as four words, [bx+6] first, then calls the entry; \
+                 the entry is B$PER8's shape (type byte, terminator, B$PRINT), which pops the whole value. \
+                 Device dispatch and error effects remain conservative."
+            ),
+        ));
+    }
     if name == "B$CSCN" && pushed == 6 {
         return Ok(returns(
             6,

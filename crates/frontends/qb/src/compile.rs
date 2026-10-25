@@ -90,7 +90,7 @@ const _STATEMENT_TABLE_OBJECT: &str = "$qb$statementTable";
 
 /// The linker spelling BC uses: uppercase and without a type suffix.
 pub fn _object_name(name: &str) -> String {
-    name.trim_end_matches(['%', '&', '!', '#', '$']).to_uppercase()
+    name.trim_end_matches(['%', '&', '!', '#', '$', '@']).to_uppercase()
 }
 
 /// The name a procedure links by: the frontend's, or BC's default.

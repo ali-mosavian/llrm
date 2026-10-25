@@ -4541,7 +4541,7 @@ fn test_an_instruction_with_a_row_is_answered_from_the_table_and_one_without_is_
     let table = sem(Operation::Binary, "add", vec![rl(RegId::CX, 2)], vec![rl(RegId::CX, 2), rl(RegId::DX, 2)]);
     let (reads, writes) = _register_effects_of_what(regs, 16, &table, true, true).expect("the table answers");
     assert!(reads.contains(&(RegId::ECX, 0)) && reads.contains(&(RegId::EDX, 1)) && writes.contains(&(RegId::ECX, 1)));
-    let none = sem(Operation::Unary, "bswap", vec![rl(RegId::EAX, 4)], vec![rl(RegId::EAX, 4)]);
+    let none = sem(Operation::Unary, "nosuchop", vec![rl(RegId::EAX, 4)], vec![rl(RegId::EAX, 4)]);
     assert_eq!(_register_effects_of_what(regs, 32, &none, true, true), None);
 }
 
@@ -4585,8 +4585,10 @@ fn test_an_instruction_equal_to_one_already_answered_is_not_worked_out_again() {
             vec![],
         )
     };
-    let before = effects_computed();
+    let (before, hashed) = (effects_computed(), effects_hashed());
     let first = _register_effects(regs, 16, &add(0), false, true);
+    // A miss hashed the ask again to remember it: 1 M Ir of d_faces -O2.
+    assert_eq!(effects_hashed() - hashed, 1, "an ask hashed more than once");
     for at in 1..6 {
         assert_eq!(_register_effects(regs, 16, &add(at), false, true), first);
     }
@@ -4631,6 +4633,46 @@ fn test_the_dead_lanes_of_a_body_no_pass_changed_are_worked_out_once() {
         body("f", 0, vec![block(0, vec![mov(0, RegId::AX, RegId::BX), mov(2, RegId::DX, RegId::AX)], vec![]).into()]);
     liveness::dead_at_exit(&changed);
     assert_eq!(liveness::exits_computed() - before, 2, "a changed body was given the last answer");
+}
+
+/// `addresses` solved the flags live out of every block and the registers live
+/// out of the function for each body, though no instruction in it starts a
+/// chain to fold into an address (7.5 M Ir of d_faces -O2). A body with nothing
+/// to fold is answered unchanged without either.
+#[test]
+fn test_a_body_with_nothing_to_fold_is_not_solved_for_addresses() {
+    let load = Arc::new(insn(
+        0,
+        Some((0, 2)),
+        Some(sem(Operation::Move, "mov", vec![rl(RegId::AX, 4)], vec![Loc::Mem(mem(frame(8), 4, RegId::BP, 8, 1))])),
+        vec![],
+        vec![],
+    ));
+    let input = body("f", 0, vec![block(0, vec![load], vec![]).into()]);
+    let before = flags_computed();
+    let done = addresses(&input, "386").unwrap();
+    assert_eq!(done, input);
+    assert_eq!(flags_computed() - before, 0, "flag liveness solved for a body with nothing to fold");
+}
+
+/// `popped_arguments` solved the function's liveness and walked every block
+/// for the dead lanes after each instruction, though no instruction in it
+/// cleans a call's arguments (1.69 M Ir of d_faces -O2). A body with no
+/// `add sp, n` is answered unchanged without a solve.
+#[test]
+fn test_a_body_with_no_argument_cleanup_is_not_solved_for_popped_arguments() {
+    let mov = Arc::new(insn(
+        0,
+        Some((0, 2)),
+        Some(sem(Operation::Move, "mov", vec![rl(RegId::AX, 2)], vec![rl(RegId::BX, 2)])),
+        vec![],
+        vec![],
+    ));
+    let input = body("f", 0, vec![block(0, vec![mov], vec![]).into()]);
+    let before = liveness::exits_computed();
+    let done = popped_arguments(&input, &crate::backend::cpu::tuned("486", true).unwrap()).unwrap();
+    assert_eq!(done, input);
+    assert_eq!(liveness::exits_computed() - before, 0, "solved for a body with nothing to pop");
 }
 
 /// The sub-passes of the peephole ask for the lanes live out of each block in

@@ -653,6 +653,7 @@ impl Accesses {
         inst: InstId,
     ) -> Option<Cow<'_, [MemRef]>> {
         if self.lazy {
+            LAZY_LISTS.with(|made| made.set(made.get() + 1));
             return match self.touched_in(unit, inst) {
                 None => Some(Cow::Borrowed(&[])),
                 Some((reads, _)) => reads.map(|list| Cow::Owned(list.to_vec())),
@@ -669,6 +670,7 @@ impl Accesses {
         inst: InstId,
     ) -> Option<Cow<'_, [MemRef]>> {
         if self.lazy {
+            LAZY_LISTS.with(|made| made.set(made.get() + 1));
             return match self.touched_in(unit, inst) {
                 None => Some(Cow::Borrowed(&[])),
                 Some((_, writes)) => writes.map(|list| Cow::Owned(list.to_vec())),
@@ -938,6 +940,14 @@ pub fn same_bytes(
 
 thread_local! {
     static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static LAZY_LISTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many read or write lists this thread's lazy accesses have derived for
+/// an instruction (`reads_in`, `writes_in`), for a test that a client asking
+/// only whether a load or store writes derives none.
+pub fn lazy_lists() -> usize {
+    LAZY_LISTS.with(std::cell::Cell::get)
 }
 
 thread_local! {

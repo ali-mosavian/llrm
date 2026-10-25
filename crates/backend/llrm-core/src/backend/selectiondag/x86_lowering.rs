@@ -143,6 +143,8 @@ impl CombineHooks for X86Lowering {
             || op == x86isd::CMOV
             || op == x86isd::SETCC
             || op == x86isd::BRCOND
+            || op == x86isd::ADC
+            || op == x86isd::SBB
     }
 
     fn perform_dag_combine(
@@ -158,6 +160,7 @@ impl CombineHooks for X86Lowering {
             x86isd::CMOV => combine_cmov(dag, node),
             x86isd::SETCC => combine_setcc(dag, node),
             x86isd::BRCOND => combine_brcond(dag, node),
+            x86isd::ADC | x86isd::SBB => combine_adc_sbb(dag, node),
             _ => None,
         }
     }
@@ -951,6 +954,50 @@ fn combine_setcc(
     let (flags, code) = check_bool_test(dag, dag.operand(node, 1), code)?;
     let code = cond_code(dag, code);
     Some(dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags]))
+}
+
+/// `combineCarryThroughADD`: flags of `(add carry, -1)`, where the carry is a
+/// `setb` (through extends, truncates and `and 1`), are the flags the `setb`
+/// read. DEVIATE SD315: the `COND_A` form (a swapped `sub`) is not
+/// translated. Reason: nothing produces it at 32 bits yet. Exit: with
+/// `combineSBB`'s remaining folds. Owner: sdag-b. Review 2026-12-10.
+fn carry_through_add(
+    dag: &SelectionDAG,
+    flags: SDValue,
+) -> Option<SDValue> {
+    if dag.opcode(flags) != x86isd::ADD {
+        return None;
+    }
+    let minus_one = dag.operand(flags, 1);
+    if dag.constant(minus_one) != Some(super::fold::mask(dag.value_type(minus_one).size_in_bits())) {
+        return None;
+    }
+    let mut carry = dag.operand(flags, 0);
+    while matches!(
+        dag.opcode(carry),
+        ISD::Truncate | ISD::ZeroExtend | ISD::AnyExtend
+    )
+        || (dag.opcode(carry) == ISD::And && dag.constant(dag.operand(carry, 1)) == Some(1))
+    {
+        carry = dag.operand(carry, 0);
+    }
+    if !matches!(dag.opcode(carry), x86isd::SETCC | x86isd::SETCC_CARRY) {
+        return None;
+    }
+    (dag.constant(dag.operand(carry, 0))? == cond::B).then(|| dag.operand(carry, 1))
+}
+
+/// `combineADC` and `combineSBB`, the carry-through-add part: the carry in
+/// comes from the flags the `setb` read, so `setb; add al, -1; adc` is `adc`.
+/// (The `ADC 0, 0` and `SBB` constant folds are not translated.)
+fn combine_adc_sbb(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let flags = carry_through_add(dag, dag.operand(node, 2))?;
+    let (opcode, vt) = (dag.opcode(node), dag.node(node).values.clone());
+    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    Some(dag.get_node_multi(opcode, &vt, &[lhs, rhs, flags]))
 }
 
 /// `combineBrCond`: the same for a branch.
