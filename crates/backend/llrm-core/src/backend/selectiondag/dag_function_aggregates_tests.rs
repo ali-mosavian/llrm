@@ -79,3 +79,28 @@ fn an_aggregate_is_stored_and_loaded_member_by_member() {
     stores.sort_unstable();
     assert_eq!(stores, [(0, 4), (4, 2), (8, 4)]);
 }
+
+fn blocks(body: &str) -> Vec<(usize, usize)> {
+    let text = format!("target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\n{body}");
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    done.body.blocks.iter().map(|block| (block.phis.len(), block.insns.len())).collect()
+}
+
+/// An aggregate built in one block and read in another travels in a register
+/// for each member (it was refused: "aggregate or vector value").
+#[test]
+fn an_aggregate_read_in_another_block_travels_in_a_register_for_each_member() {
+    let body = "define i32 @f(i32 %a, i32 %b, i1 %c) {\nentry:\n  %x = insertvalue {i32, i32} undef, i32 %a, 0\n  %y = insertvalue {i32, i32} %x, i32 %b, 1\n  br i1 %c, label %t, label %e\nt:\n  %r = extractvalue {i32, i32} %y, 1\n  ret i32 %r\ne:\n  %q = extractvalue {i32, i32} %y, 0\n  ret i32 %q\n}\n";
+    assert!(!blocks(body).is_empty());
+}
+
+/// A phi of aggregates is a phi of each member: the second member of the result
+/// is `%b` on one edge and 7 on the other.
+#[test]
+fn a_phi_of_aggregates_is_a_phi_for_each_member() {
+    let body = "define i32 @f(i32 %a, i32 %b, i1 %c) {\nentry:\n  %x = insertvalue {i32, i32} undef, i32 %a, 0\n  %y = insertvalue {i32, i32} %x, i32 %b, 1\n  br i1 %c, label %t, label %m\nt:\n  br label %m\nm:\n  %s = phi {i32, i32} [ %y, %entry ], [ {i32 1, i32 7}, %t ]\n  %r = extractvalue {i32, i32} %s, 1\n  ret i32 %r\n}\n";
+    let phis: usize = blocks(body).iter().map(|(phis, _)| phis).sum();
+    assert_eq!(phis, 2, "one phi for each member");
+}
