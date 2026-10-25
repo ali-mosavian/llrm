@@ -4139,6 +4139,31 @@ impl Compiler {
                         };
                         self.emit_runtime_call("B$PAIN", Vec::new(), vec![fill, border]);
                     }
+                    // VIEW [SCREEN] [(x1, y1)-(x2, y2) [, [fill] [, border]]]:
+                    // BC calls B$VIEW with the corners, the fill and border (-1
+                    // for none) and the SCREEN flag (-1), or B$VEW0 for none.
+                    "VIEW" | "VIEW_SCREEN" => {
+                        if arguments.is_empty() {
+                            self.emit_runtime_call("B$VEW0", Vec::new(), Vec::new());
+                        } else if (4..=6).contains(&arguments.len()) {
+                            let omitted = Operand::Constant(INTEGER, Number::Integer(-1));
+                            let mut operands = Vec::new();
+                            for position in 0..6 {
+                                operands.push(match arguments.get(position) {
+                                    Some(Expr::Omitted(_)) | None => omitted.clone(),
+                                    Some(argument) => {
+                                        let (value, type_id) = self.expression(argument)?;
+                                        self.convert(value, type_id, INTEGER)?
+                                    }
+                                });
+                            }
+                            let screen = if name == "VIEW_SCREEN" { -1 } else { 0 };
+                            operands.push(Operand::Constant(INTEGER, Number::Integer(screen)));
+                            self.emit_runtime_call("B$VIEW", Vec::new(), operands);
+                        } else {
+                            return self.fail("VIEW expects (x1, y1)-(x2, y2) and optional fill and border");
+                        }
+                    }
                     "PSET" | "PRESET" => {
                         if !(2..=3).contains(&arguments.len()) {
                             return self.fail(format!("{name} expects coordinates and optional color"));

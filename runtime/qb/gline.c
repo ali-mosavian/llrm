@@ -17,8 +17,7 @@ typedef struct Point {
    8 below. */
 static int outside(const Point *p)
 {
-    return (p->x < 0) | (p->x >= (long)gfx_current->width) << 1 | (p->y < 0) << 2 |
-           (p->y >= (long)gfx_current->height) << 3;
+    return (p->x < gfx_vx1) | (p->x > gfx_vx2) << 1 | (p->y < gfx_vy1) << 2 | (p->y > gfx_vy2) << 3;
 }
 
 /* The other coordinate of the line from (`along_from`, `other_from`) to
@@ -65,12 +64,12 @@ static int clip(Point *first, Point *last)
             last_out = 0;
         }
         if (first_out & 3) {
-            long edge = first_out & 1 ? 0 : (long)gfx_current->width - 1;
+            long edge = first_out & 1 ? gfx_vx1 : gfx_vx2;
 
             first->y = cut(first->x, first->y, last->x, last->y, edge);
             first->x = edge;
         } else {
-            long edge = first_out & 4 ? 0 : (long)gfx_current->height - 1;
+            long edge = first_out & 4 ? gfx_vy1 : gfx_vy2;
 
             first->x = cut(first->y, first->x, last->y, last->x, edge);
             first->y = edge;

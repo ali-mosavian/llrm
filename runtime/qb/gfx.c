@@ -26,6 +26,17 @@ int gfx_x1, gfx_y1, gfx_x2, gfx_y2;
  * it. */
 int gfx_last_x, gfx_last_y;
 
+int gfx_vx1, gfx_vy1, gfx_vx2, gfx_vy2;
+/* What an absolute point is moved by: the viewport's corner, or 0 for VIEW SCREEN. */
+static int view_dx, view_dy;
+
+void gfx_view_reset(void)
+{
+    gfx_vx1 = gfx_vy1 = view_dx = view_dy = 0;
+    gfx_vx2 = (int)gfx_current->width - 1;
+    gfx_vy2 = (int)gfx_current->height - 1;
+}
+
 /* The adapter's own colour numbers for the attributes 0 to 15 at the start of a
    mode: 0-5 and 7 as they are, 6 brown (20), 8-15 the bright ones (56-63). */
 static const byte default_palette[16] = {0, 1, 2, 3, 4, 5, 20, 7, 56, 57, 58, 59, 60, 61, 62, 63};
@@ -41,7 +52,8 @@ void gfx_clear(void)
     GdFill fill;
 
     gd_fill_select(&fill, 0, OP_SET);
-    fill.box(&fill, 0, 0, gfx_current->width, gfx_current->height);
+    fill.box(&fill, (unsigned)gfx_vx1, (unsigned)gfx_vy1, (unsigned)(gfx_vx2 - gfx_vx1 + 1),
+             (unsigned)(gfx_vy2 - gfx_vy1 + 1));
 }
 
 void gfx_screen(int mode)
@@ -66,6 +78,7 @@ void gfx_screen(int mode)
                 gfx_last_y = (int)modes[at].height / 2;
             }
             gfx_current = &modes[at];
+            gfx_view_reset();
             gfx_foreground = modes[at].colors < 16 ? modes[at].colors - 1 : DEFAULT_FOREGROUND;
             gfx_background = 0;
             cga_background = 0;
@@ -121,13 +134,13 @@ byte gfx_attribute(int color)
 
 void gfx_plot(int x, int y, byte color, byte operation)
 {
-    if (x >= 0 && y >= 0 && (unsigned)x < gfx_current->width && (unsigned)y < gfx_current->height)
+    if (x >= gfx_vx1 && y >= gfx_vy1 && x <= gfx_vx2 && y <= gfx_vy2)
         gd_plot(x, y, color, operation);
 }
 
 int gfx_clip_box(int *x1, int *y1, int *x2, int *y2)
 {
-    int right = (int)gfx_current->width - 1, bottom = (int)gfx_current->height - 1;
+    int right = gfx_vx2, bottom = gfx_vy2;
 
     if (*x1 > *x2) {
         int swap = *x1;
@@ -141,12 +154,12 @@ int gfx_clip_box(int *x1, int *y1, int *x2, int *y2)
         *y1 = *y2;
         *y2 = swap;
     }
-    if (*x2 < 0 || *y2 < 0 || *x1 > right || *y1 > bottom)
+    if (*x2 < gfx_vx1 || *y2 < gfx_vy1 || *x1 > right || *y1 > bottom)
         return 0;
-    if (*x1 < 0)
-        *x1 = 0;
-    if (*y1 < 0)
-        *y1 = 0;
+    if (*x1 < gfx_vx1)
+        *x1 = gfx_vx1;
+    if (*y1 < gfx_vy1)
+        *y1 = gfx_vy1;
     if (*x2 > right)
         *x2 = right;
     if (*y2 > bottom)
@@ -156,17 +169,17 @@ int gfx_clip_box(int *x1, int *y1, int *x2, int *y2)
 
 int gfx_pixel(int x, int y)
 {
-    if (x < 0 || y < 0 || (unsigned)x >= gfx_current->width || (unsigned)y >= gfx_current->height)
+    if (x < gfx_vx1 || y < gfx_vy1 || x > gfx_vx2 || y > gfx_vy2)
         return -1;
     return gd_read(x, y);
 }
 
 int gfx_search(int x, int last, int y, unsigned c1, unsigned c2, int match)
 {
-    int edge = (int)gfx_current->width - 1;
+    int edge = gfx_vx2;
 
-    if (last < 0)
-        last = 0;
+    if (last < gfx_vx1)
+        last = gfx_vx1;
     else if (last > edge)
         last = edge;
     return gd_search(x, last, y, c1, c2, match);
@@ -210,22 +223,22 @@ static void second_point(int x, int y)
 
 void B_N1I2(short x, short y)
 {
-    first_point(x, y);
+    first_point(x + view_dx, y + view_dy);
 }
 
 void B_N1R4(float x, float y)
 {
-    first_point(rounded(x), rounded(y));
+    first_point(rounded(x) + view_dx, rounded(y) + view_dy);
 }
 
 void B_N2I2(short x, short y)
 {
-    second_point(x, y);
+    second_point(x + view_dx, y + view_dy);
 }
 
 void B_N2R4(float x, float y)
 {
-    second_point(rounded(x), rounded(y));
+    second_point(rounded(x) + view_dx, rounded(y) + view_dy);
 }
 
 void B_S1I2(short x, short y)
@@ -271,14 +284,14 @@ void B_PRST(void)
 int B_PNR4(float x, float y)
 {
     need_graphics();
-    return gfx_pixel(rounded(x), rounded(y));
+    return gfx_pixel(rounded(x) + view_dx, rounded(y) + view_dy);
 }
 
 /* B$PNI2: POINT with whole-number coordinates. */
 int B_PNI2(short x, short y)
 {
     need_graphics();
-    return gfx_pixel(x, y);
+    return gfx_pixel(x + view_dx, y + view_dy);
 }
 
 /* Whether `color` is one the palette takes: in a DAC mode red, green and blue,
@@ -356,6 +369,66 @@ void B_PALU(qb_data_ptr data, const AD *ad)
 #pragma aux B_PSTC "B$PSTC"
 #pragma aux B_PSET "B$PSET"
 #pragma aux B_PRST "B$PRST"
+/* B$VIEW: the viewport, its corners in any order, within the screen and not a
+   line; the points then count from its corner unless SCREEN.  A fill colour and
+   a border colour are -1 for none; the border is drawn round the outside of the
+   viewport.  The last point is the viewport's centre. */
+void B_VIEW(short x1, short y1, short x2, short y2, short fill, short border, short screen)
+{
+    int left = x1 < x2 ? x1 : x2, right = x1 < x2 ? x2 : x1;
+    int top = y1 < y2 ? y1 : y2, bottom = y1 < y2 ? y2 : y1;
+
+    need_graphics();
+    if (x1 == x2 || y1 == y2 || left < 0 || top < 0 || right >= (int)gfx_current->width ||
+        bottom >= (int)gfx_current->height)
+        qb_error(BE_ILLFUN);
+    gfx_view_reset();
+    gfx_vx1 = left;
+    gfx_vy1 = top;
+    gfx_vx2 = right;
+    gfx_vy2 = bottom;
+    if (!screen) {
+        view_dx = left;
+        view_dy = top;
+    }
+    if (fill != -1) {
+        GdFill painter;
+
+        gd_fill_select(&painter, gfx_attribute(fill), OP_SET);
+        painter.box(&painter, (unsigned)left, (unsigned)top, (unsigned)(right - left + 1),
+                    (unsigned)(bottom - top + 1));
+    }
+    if (border != -1) {
+        int vx1 = gfx_vx1, vy1 = gfx_vy1, vx2 = gfx_vx2, vy2 = gfx_vy2;
+
+        if ((unsigned)border >= gfx_current->colors)
+            qb_error(BE_ILLFUN);
+        gfx_vx1 = gfx_vy1 = 0;
+        gfx_vx2 = (int)gfx_current->width - 1;
+        gfx_vy2 = (int)gfx_current->height - 1;
+        gfx_x1 = vx1 - 1;
+        gfx_y1 = vy1 - 1;
+        gfx_x2 = vx2 + 1;
+        gfx_y2 = vy2 + 1;
+        gfx_line_between(border, -1, 1);
+        gfx_vx1 = vx1;
+        gfx_vy1 = vy1;
+        gfx_vx2 = vx2;
+        gfx_vy2 = vy2;
+    }
+    gfx_last_x = (left + right) / 2;
+    gfx_last_y = (top + bottom) / 2;
+}
+
+/* B$VEW0: VIEW alone. */
+void B_VEW0(void)
+{
+    need_graphics();
+    gfx_view_reset();
+}
+
+#pragma aux B_VIEW "B$VIEW"
+#pragma aux B_VEW0 "B$VEW0"
 #pragma aux B_PNR4 "B$PNR4"
 #pragma aux B_PNI2 "B$PNI2"
 #pragma aux B_PAL2 "B$PAL2"

@@ -44,10 +44,12 @@ void B_PAIN(short fill, short border)
     spans = (Span *)qb_paint_queue_open(&bytes);
     span_room = (unsigned)(bytes / sizeof(Span));
     gd_fill_select(&painter, paint, OP_SET);
-    last = (int)gfx_current->width - 1;
+    last = gfx_vx2;
     /* the first run is the one through the point, which is neither border nor
      * fill */
     gd_run(gfx_x1, gfx_x1, (unsigned)gfx_y1, edge, paint, last, &left, &right);
+    if (left < gfx_vx1)
+        left = gfx_vx1;
     painter.box(&painter, (unsigned)left, (unsigned)gfx_y1, (unsigned)(right - left + 1), 1);
     push(left, right, gfx_y1, -1);
     push(left, right, gfx_y1, 1);
@@ -55,7 +57,7 @@ void B_PAIN(short fill, short border)
         Span span = spans[--span_count];
         int y = span.y + span.step, x = span.left;
 
-        if (y < 0 || y >= (int)gfx_current->height)
+        if (y < gfx_vy1 || y > gfx_vy2)
             continue;
         /* each pixel here that is neither border nor fill is in a run the fill
            has not reached; the run is painted whole and left to look at the
@@ -63,6 +65,8 @@ void B_PAIN(short fill, short border)
            and over what it reaches past its parent's span, back */
         while (x <= span.right &&
                gd_run(x, span.right, (unsigned)y, edge, paint, last, &left, &right)) {
+            if (left < gfx_vx1)
+                left = gfx_vx1;
             painter.box(&painter, (unsigned)left, (unsigned)y, (unsigned)(right - left + 1), 1);
             push(left, right, y, span.step);
             /* the run can reach past the span it was found under, and there the

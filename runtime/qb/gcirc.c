@@ -143,8 +143,7 @@ static void plot(Circle *c, long x, long y, unsigned long count)
         if (!endpoint && between == c->outside)
             return;
     }
-    if (px >= 0 && py >= 0 && (unsigned)px < gfx_current->width &&
-        (unsigned)py < gfx_current->height)
+    if (px >= gfx_vx1 && py >= gfx_vy1 && px <= gfx_vx2 && py <= gfx_vy2)
         c->fill.dot(&c->fill, (unsigned)px, (unsigned)py);
 }
 
@@ -191,9 +190,8 @@ static void rim_plain(Circle *c)
     unsigned long ax = (unsigned long)x * scale + FIXED / 2, ay = FIXED / 2;
     int reach_x = (int)(c->scale_x ? (ax >> 8) : (unsigned long)x),
         reach_y = (int)(c->scale_x ? (unsigned long)x : (ax >> 8));
-    int inside = c->cx - reach_x >= 0 && c->cy - reach_y >= 0 &&
-                 (unsigned)(c->cx + reach_x) < gfx_current->width &&
-                 (unsigned)(c->cy + reach_y) < gfx_current->height;
+    int inside = c->cx - reach_x >= gfx_vx1 && c->cy - reach_y >= gfx_vy1 &&
+                 c->cx + reach_x <= gfx_vx2 && c->cy + reach_y <= gfx_vy2;
 
     if (!inside) {
         rim(c);

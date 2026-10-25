@@ -47,8 +47,8 @@ void B_GGET(qb_data_ptr data, const AD *ad)
     ((u16 QB_FAR *)out)[0] = width * bits;
     ((u16 QB_FAR *)out)[1] = height;
     out += HEADER;
-    if (left >= 0 && top >= 0 && (unsigned)left + width <= gfx_current->width &&
-        (unsigned)top + height <= gfx_current->height) {
+    if (left >= gfx_vx1 && top >= gfx_vy1 && left + (int)width - 1 <= gfx_vx2 &&
+        top + (int)height - 1 <= gfx_vy2) {
         gd_get((unsigned)left, (unsigned)top, width, height, out);
         return;
     }
@@ -91,9 +91,8 @@ void B_GPUT(qb_data_ptr data, const AD *ad, short how)
         HEADER + (unsigned long)height * planes * per_plane > array_bytes(ad))
         qb_error(BE_ILLFUN);
     in += HEADER;
-    if (width && height && gfx_x1 >= 0 && gfx_y1 >= 0 &&
-        (unsigned)gfx_x1 + width <= gfx_current->width &&
-        (unsigned)gfx_y1 + height <= gfx_current->height) {
+    if (width && height && gfx_x1 >= gfx_vx1 && gfx_y1 >= gfx_vy1 &&
+        gfx_x1 + (int)width - 1 <= gfx_vx2 && gfx_y1 + (int)height - 1 <= gfx_vy2) {
         /* on the screen: whole rows */
         gd_put((unsigned)gfx_x1, (unsigned)gfx_y1, width, height, in,
                how == PUT_OR    ? 2
