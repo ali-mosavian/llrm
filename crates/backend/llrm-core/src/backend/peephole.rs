@@ -1055,12 +1055,14 @@ pub fn _register_effects_of_what(
         return None;
     }
     let key = EffectKey { bits, may_write, flags, what, requires: &[], delivers: &[] };
-    if let Some(found) = EFFECTS.with(|held| held.borrow().find(&key)) {
+    // Hashed once: a miss remembers under the hashes it looked up.
+    let hashes = key.hashes();
+    if let Some(found) = EFFECTS.with(|held| held.borrow().find(hashes)) {
         return found;
     }
     EFFECTS_COMPUTED.with(|count| count.set(count.get() + 1));
     let answer = _register_effects_of(regs, bits, &Insn::new(0, None, None, vec![], vec![]), what, may_write, flags);
-    EFFECTS.with(|held| held.borrow_mut().remember(&key, answer.clone()));
+    EFFECTS.with(|held| held.borrow_mut().remember(hashes, answer.clone()));
     answer
 }
 
@@ -1112,12 +1114,13 @@ fn _register_effects_worked(
     // of an `-O2` module's 16,000, #924): the answer depends on these fields
     // alone, and is remembered by their value.
     let key = EffectKey { bits, may_write, flags, what, requires: &one.requires, delivers: &one.delivers };
-    if let Some(found) = EFFECTS.with(|held| held.borrow().find(&key)) {
+    let hashes = key.hashes();
+    if let Some(found) = EFFECTS.with(|held| held.borrow().find(hashes)) {
         return found;
     }
     EFFECTS_COMPUTED.with(|count| count.set(count.get() + 1));
     let answer = _register_effects_of(regs, bits, one, what, may_write, flags);
-    EFFECTS.with(|held| held.borrow_mut().remember(&key, answer.clone()));
+    EFFECTS.with(|held| held.borrow_mut().remember(hashes, answer.clone()));
     answer
 }
 
@@ -1136,6 +1139,8 @@ impl EffectKey<'_> {
     /// Two hashes of the fields, the second seeded apart from the first.
     fn hashes(&self) -> (u64, u64) {
         use std::hash::{Hash, Hasher};
+        #[cfg(test)]
+        EFFECTS_HASHED.with(|count| count.set(count.get() + 1));
         let fields = (self.bits, self.may_write, self.flags, self.what, self.requires, self.delivers);
         let mut first = rustc_hash::FxHasher::default();
         fields.hash(&mut first);
@@ -1162,14 +1167,14 @@ struct EffectsHeld {
 impl EffectsHeld {
     fn find(
         &self,
-        key: &EffectKey,
+        hashes: (u64, u64),
     ) -> Option<Effects> {
-        self.by_hash.get(&key.hashes()).cloned()
+        self.by_hash.get(&hashes).cloned()
     }
 
     fn remember(
         &mut self,
-        key: &EffectKey,
+        hashes: (u64, u64),
         answer: Effects,
     ) {
         // A function's instructions, not the run's.
@@ -1177,13 +1182,22 @@ impl EffectsHeld {
             *self = Self::default();
         }
         self.count += 1;
-        self.by_hash.insert(key.hashes(), answer);
+        self.by_hash.insert(hashes, answer);
     }
 }
 
 thread_local! {
     static EFFECTS: RefCell<EffectsHeld> = RefCell::new(EffectsHeld::default());
     static EFFECTS_COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    #[cfg(test)]
+    static EFFECTS_HASHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has hashed an ask, for a test that a miss hashes
+/// it once.
+#[cfg(test)]
+pub fn effects_hashed() -> usize {
+    EFFECTS_HASHED.with(std::cell::Cell::get)
 }
 
 /// How many times this thread has worked out an instruction's register effects,

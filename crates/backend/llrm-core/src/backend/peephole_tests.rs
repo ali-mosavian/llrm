@@ -4581,8 +4581,10 @@ fn test_an_instruction_equal_to_one_already_answered_is_not_worked_out_again() {
             vec![],
         )
     };
-    let before = effects_computed();
+    let (before, hashed) = (effects_computed(), effects_hashed());
     let first = _register_effects(regs, 16, &add(0), false, true);
+    // A miss hashed the ask again to remember it: 1 M Ir of d_faces -O2.
+    assert_eq!(effects_hashed() - hashed, 1, "an ask hashed more than once");
     for at in 1..6 {
         assert_eq!(_register_effects(regs, 16, &add(at), false, true), first);
     }
