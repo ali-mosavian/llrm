@@ -394,7 +394,13 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "greedy by default under LLVM's order (#2312) with SplitKit (SplitEditor, trySplit) and InlineSpiller; criterion: LLRM_CHECK_LIVEINTERVALS and LLRM_GREEDY_CHECK pass and rows at or below the old allocator per row; exit: rematerialization at a split (#2513), sub-registers, tryInstructionSplit, hint splitting translated (trySplitAroundHintReg, tryHintsRecoloring: splitkit-port, D-RS3); the fallback gone: greedy_rewritten's rounds and the old `rewritten` (allocate.rs, taken when greedy fails a range); `spiller::_folded_reads` replaced by MachineSink + PeepholeOptimizer::foldLoad (lir-cleanup-port)",
     ),
     entry("parcopy@12", Backend, "phi-node-elimination copies, virtregrewriter", Old, ""),
-    entry("prologue@13", Backend, "prologepilog", Old, ""),
+    entry(
+        "prologue@13",
+        Backend,
+        "prologepilog; shrink-wrap is translated (shrinkwrap.rs) and runs inside it",
+        Old,
+        "",
+    ),
     entry("latecleanup@13", Backend, "machine-latecleanup (MachineLateInstrsCleanup.cpp)", Translated, ""),
     entry("peephole@14", Backend, "peephole-opt, machine-cse, machine-dce", Old, ""),
     entry("fixupbw@14", Backend, "x86-fixup-bw-insts (X86FixupBWInsts.cpp)", Translated, ""),
@@ -413,7 +419,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // (lir-cleanup-port, 2026-11-13).
     entry("emit-lowered-select", Backend, "x86-emit-lowered-select", Missing, ""),
     entry("stack-coloring", Backend, "stack-coloring", Missing, ""),
-    entry("shrink-wrap", Backend, "shrink-wrap", Missing, ""),
 ];
 
 /// One analysis of the parity pipeline.
@@ -837,6 +842,45 @@ pub(crate) fn check_old_slots(
             "slots the registry calls unfinished run translated passes, mark them Partial or Translated: {}",
             lagging.join("; ")
         ))
+    }
+}
+
+/// (file stem, pass) pairs of [`check_missing_has_no_file`], as `letters` makes
+/// them.
+const SOURCE_NAMES: &[(&str, &str)] = &[("constraintelim", "constraintelimination")];
+
+/// A Missing entry whose pass has a source file (`shrinkwrap.rs` for
+/// `shrink-wrap`): the row undercounts. `stems` are the file stems of every
+/// `.rs` under `crates`; names compare by their letters and digits, without a
+/// leading `x86`; `SOURCE_NAMES` lists the stems that spell their pass
+/// differently.
+pub(crate) fn check_missing_has_no_file(
+    registry: &[Entry],
+    stems: &[String],
+) -> Result<(), String> {
+    let letters = |name: &str| -> String {
+        let name: String = name.chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_lowercase();
+        name.strip_prefix("x86").unwrap_or(&name).to_string()
+    };
+    let lying: Vec<String> = registry
+        .iter()
+        .filter(|one| one.kind == Missing)
+        .filter(|one| {
+            stems
+                .iter()
+                .any(
+                    |stem| {
+                        let (stem, name) = (letters(stem), letters(one.llvm));
+                        stem == name || SOURCE_NAMES.contains(&(stem.as_str(), name.as_str()))
+                    },
+                )
+        })
+        .map(|one| format!("{} ({})", one.slot, one.llvm))
+        .collect();
+    if lying.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("registry entries marked Missing whose pass has a source file: {}", lying.join("; ")))
     }
 }
 
