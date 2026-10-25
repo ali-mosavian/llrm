@@ -861,3 +861,28 @@ fn a_call_of_a_constant_expression_calls_its_value() {
     let call = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.op == Operation::Call).expect("a call");
     assert!(call.indirect, "{call:?}");
 }
+
+const M16_FAR_POINTER_AS_LONG_ARGUMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare cc 1005 i16 @g(i16, i16, i16, i32, i32) addrspace(1)
+define cc 1005 i16 @f(i16 %file, ptr addrspace(1) %p) addrspace(1) {
+entry:
+  %l = ptrtoint ptr addrspace(1) %p to i32
+  %r = call cc 1005 addrspace(1) i16 @g(i16 %file, i16 %file, i16 %file, i32 %l, i32 102)
+  ret i16 %r
+}
+";
+
+/// A far pointer passed as a `long` on the stack was merged into one register
+/// (`mov dx, ax; shl edx, 16; add edx, ecx; push edx`, 11 bytes) and pushed;
+/// its two words are pushed as they are (`push es; push bx`). The pin keeps
+/// int halves merged (`isMultiStoresCheaperThanBitsMerge`); m16 deviates
+/// (SD312). QCport -Os: 131 stack arguments.
+#[test]
+fn a_far_pointer_pushed_as_a_long_is_two_word_pushes() {
+    let module = llrm_mir::parse::module(M16_FAR_POINTER_AS_LONG_ARGUMENT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let names: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+    assert!(!names.contains(&"shl"), "no merge of the halves: {names:?}");
+}

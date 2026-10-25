@@ -3670,7 +3670,9 @@ two:
 /// Nib's fixed point as `llvm.smul.fix` and `llvm.sdiv.fix`: the product
 /// one widening `imul` shifted down, as the old route's FixedMul; the
 /// quotient by a whole divisor one `idiv` of the dividend shifted up, as
-/// its FixedDiv. isel refused both calls.
+/// its FixedDiv, then rounded toward negative infinity as the intrinsic
+/// says (the Nib frontend corrects it back to a truncating `/`). isel
+/// refused both calls.
 #[test]
 fn test_fixed_point_intrinsics_take_imul_and_idiv() {
     let text = "declare i32 @llvm.smul.fix.i32(i32, i32, i32)
@@ -3688,19 +3690,34 @@ b1:
         [
             "push bp",
             "mov bp, sp",
+            "push si",
             "L0_0:",
             "mov eax, dword ptr [bp+6]",
             "mov ecx, dword ptr [bp+10]",
             "imul ecx",
             "mov ecx, eax",
             "shrd ecx, edx, 16",
-            "mov ebx, 196608",
+            "mov esi, 196608",
             "mov eax, ecx",
             "cdq",
             "shld edx, ecx, 16",
-            "shl eax, 16",
-            "idiv ebx",
-            "shld edx, eax, 16",
+            "mov bx, cx",
+            "shl ebx, 16",
+            "mov eax, ebx",
+            "idiv esi",
+            "xor ecx, esi",
+            "sar ecx, 31",
+            "imul esi, eax",
+            "sub ebx, esi",
+            "xor esi, esi",
+            "sub esi, ebx",
+            "or esi, ebx",
+            "sar esi, 31",
+            "and esi, ecx",
+            "add esi, eax",
+            "shld edx, esi, 16",
+            "mov ax, si",
+            "pop si",
             "pop bp",
             "retf",
         ]
