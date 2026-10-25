@@ -93,6 +93,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                     continue;
                 }
                 any = true;
+                self.dag.cur_order = self.dag.node(SDValue { node: n, res: 0 }).order;
                 self.legalize_op(n)?;
             }
             if !any {
@@ -637,7 +638,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         // `ShouldShrinkFPConstant` (no SSE2): a double that is exactly a float
         // is stored as one.
         let (pool_vt, pool_bits) = match mvt {
-            MVT::F64 => {
+            MVT::F64 if self.tli.should_shrink_fp_constant(mvt) => {
                 let value = f64::from_bits(bits as u64);
                 let narrow = value as f32;
                 if f64::from(narrow).to_bits() == bits as u64 && !value.is_nan() {
