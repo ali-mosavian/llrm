@@ -90,6 +90,7 @@
 
 use std::rc::Rc;
 
+use llrm_analysis::manager::MemorySsa;
 use llrm_analysis::memory::{MemoryKind, Unit as View};
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::mssa::alias::{AliasQuery, Location};
@@ -169,7 +170,13 @@ impl FunctionPass for DeadStoreElimination {
         let (frozen, before): (&Context, &Function) = (unit.context, unit.function);
         let view = View::within(frozen, unit.layout, before, &outer).with_shape(&shape);
         let shape = view.shape();
-        let mssa = Mssa::build(before, &shape.dominance, &shadow::effect_of_in(&accesses, &view));
+        // The manager's graph of this body, cloned: the removals update the
+        // clone, so the held one stays as the body it describes.
+        let held = analyses.get::<MemorySsa>(unit.context, unit.layout, unit.function);
+        let mssa = match &*held {
+            Ok(held) => held.mssa.clone(),
+            Err(_) => Mssa::build(before, &shape.dominance, &shadow::effect_of_in(&accesses, &view)),
+        };
         let tree = DomTree::of(before);
         let mut post = PostDomTree::new();
         post.recalculate(before);

@@ -298,3 +298,37 @@ fn a_run_forks_no_body() {
     assert!(!after.contains("store i16 1"), "{after}");
     assert_eq!(get(Event::FunctionForks), before, "dse forked the body");
 }
+
+/// A pass that asks for MemorySSA, without editing.
+struct AsksMssa;
+
+impl llrm_mir::passes::FunctionPass for AsksMssa {
+    fn name(&self) -> &'static str {
+        "asks-mssa"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        analyses.get::<llrm_analysis::manager::MemorySsa>(unit.context, unit.layout, unit.function);
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// DSE built its own MemorySSA (0.77 M Ir, 2 builds in d_faces) beside the
+/// one the manager held: it reads the held graph now (a hit, not a build).
+#[test]
+fn the_graph_the_manager_holds_is_the_one_dse_reads() {
+    let mut module = parsed(&format!(
+        "{DOS}@g = global i16 0\n\ndefine i16 @f(i16 %x) {{\nb0:\n  store i16 %x, ptr @g\n  %r = load i16, ptr @g\n  ret i16 %r\n}}\n"
+    ));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add_boxed(Box::new(AsksMssa));
+    manager.add_boxed(Box::new(DeadStoreElimination));
+    let before = llrm_mir::counts::analysed("mssa");
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
+    let after = llrm_mir::counts::analysed("mssa");
+    assert_eq!((after.0 - before.0, after.1 - before.1), (1, 1), "DSE did not read the held graph (hits, misses)");
+}
