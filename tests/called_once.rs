@@ -53,7 +53,8 @@ fn test_a_static_function_called_once_is_inlined_at_any_size() {
     for flags in [&["-O2"][..], &["-O2", "-fno-inline-functions"], &["-Os"]] {
         let text = listing(flags);
         assert!(!text.contains("sum_ proc"), "{flags:?}: sum survived: {text}");
-        assert!(text.contains("twice_ proc"), "{flags:?}: twice, called twice, is no last call: {text}");
+        // gcc -O2 inlines `twice` too (-O2 is gcc's since #887): the call survives where gcc's does.
+        assert_eq!(text.contains("twice_ proc"), flags != ["-O2"], "{flags:?}: twice, called twice, is no last call: {text}");
     }
     // Where inlining is off, it is off.
     assert!(listing(&["-O2", "-fno-inline-functions", "-fno-inline-functions-called-once"]).contains("sum_ proc"));
