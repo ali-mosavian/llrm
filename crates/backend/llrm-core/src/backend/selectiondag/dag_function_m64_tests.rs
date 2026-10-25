@@ -231,3 +231,31 @@ define i32 @f(i32 %n, ...) {
     let refused = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).err().expect("refused");
     assert!(refused.0.contains("va_start at m64"), "{}", refused.0);
 }
+
+/// `a[i]` at m64 came out `movsx r, a[rax*4]`, an absolute symbol beside an
+/// index: no `%rip`-relative form, and in a PIE the program crashed (array,
+/// matrix, sieve of `tests/llc`). The symbol is now loaded by itself and the
+/// index added to that register.
+#[test]
+fn a_global_array_element_is_addressed_through_a_register() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+@a = global [64 x i32] zeroinitializer
+define i64 @f(i64 %i) {
+  %p = getelementptr i32, ptr @a, i64 %i
+  %v = load i32, ptr %p
+  %s = sext i32 %v to i64
+  ret i64 %s
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let insns = done.body.insns();
+    let load =
+        insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("movsx")).expect("the load");
+    let Some(crate::model::ir::Loc::Mem(cell)) = load.sources.first() else { panic!("{load:?}") };
+    assert!(cell.base.is_some() && cell.index.is_some(), "{cell:?}");
+    assert!(cell.addr.is_none_or(|addr| addr.disp == 0 && addr.base == llrm_lir::registers::RegId::None.iced()));
+}
