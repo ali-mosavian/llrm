@@ -1254,16 +1254,14 @@ impl Analysis for BaseAccesses {
     const NAME: &'static str = "base-accesses";
 
     fn run(
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
+        _: &Context,
+        _: &DataLayout,
+        _: &Function,
+        _: &mut Analyses,
     ) -> Self::Result {
-        let writes_rc = analyses.get::<Writes>(context, layout, function);
-        let calls = Result::as_ref(&*writes_rc).map_err(String::clone)?;
-        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        let unit = Unit::within(context, layout, function, analyses.outer()).with_exposed(&exposed);
-        Ok(std::rc::Rc::new(memoryssa::Accesses::plain(&unit, calls)))
+        // Nothing is made up front: a reference, and what an instruction
+        // touches, are asked of the unit that reads them (`Accesses::lazy`).
+        Ok(std::rc::Rc::new(memoryssa::Accesses::lazy()))
     }
 }
 
