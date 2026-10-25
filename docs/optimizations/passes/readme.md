@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 193 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 194 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -123,6 +123,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | looppeel | How many iterations of a loop to peel off its front, from `LoopPeel.cpp`'s `computePeelCount`: the iterations after which its header phis, or the compares in its body, are decided. | Inside [`crate::loopunrollpass`](loopunrollpass.md), in LLVM's order after full and bounded | [looppeel](looppeel.md) |
 | looprotate | `LoopRotate`: a loop with its exit test in the header becomes a loop with its exit test in the latch, behind a copy of the test that guards the entry. | The `loop-rotate` slot of the pipeline. | [looprotate](looprotate.md) |
 | loopsimplify | Loop canonical form: every reducible loop gets one preheader, one latch and dedicated exits, so the loop passes can assume them. | In [`crate::pipeline`](pipeline.md)'s per-body fixed point, after `tailrec` and before | [loopsimplify](loopsimplify.md) |
+| loopsimplifycfg | LoopSimplifyCFG: the branches and switches of a loop with a constant condition become jumps, the blocks that leaves unreachable go, and a block with one predecessor that jumps to it is merged into it. |  | [loopsimplifycfg](loopsimplifycfg.md) |
 | loopunroll | Complete unrolling of a loop over any exiting block: LLVM's `UnrollLoop` (`LoopUnroll.cpp`) for the count that is the loop's maximum trip count. | Not a pass: a library, called by the full-unroll pass when it is wired in. | [loopunroll](loopunroll.md) |
 | loopunrollandjam | Unroll and jam: a loop with a loop inside is unrolled by `count`, and the copies of the inner loop are fused into one, so a load of the inner loop that does not move with the outer one is made once for all the copies (`Utils/LoopUnrollAndJam.cpp` and `Scalar/LoopUnrollAndJamPass.cpp` at `d1106deb71cc`). | -O3 and -Omax, in the `Late` stage (`loop-unroll-and-jam@1474`). | [loopunrollandjam](loopunrollandjam.md) |
 | loopunrollpass | `LoopFullUnrollPass`: a loop whose trip count is known and small enough, or whose unrolled form simplifies enough, is copied out completely. |  | [loopunrollpass](loopunrollpass.md) |

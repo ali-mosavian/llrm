@@ -238,6 +238,7 @@ pub mod looploadelim;
 pub mod looppeel;
 pub mod looprotate;
 pub mod loopsimplify;
+pub mod loopsimplifycfg;
 pub mod loopunroll;
 pub mod loopunrollandjam;
 pub mod loopunrollpass;
