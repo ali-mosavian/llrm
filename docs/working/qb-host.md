@@ -273,3 +273,9 @@ Open: `ON ERROR` landing on x86 hosts (a handled procedure's frame is not built)
 | strcmp_smoke.bas | -m32 | 5f517c8e6eea | 5f517c8e6eea |
 
 Native x86-32: [NIBBLES level 1](qb-host-shots/x86-32-nibbles-level1.png), [GORILLA city](qb-host-shots/x86-32-gorilla-city.png).
+
+### x86-64 refusals (2026-10-25, feat/parity f529f1e7c merged)
+
+`llrm-qb -m64 -fobject-format=elf -O2`: NIBBLES is refused with `Semantics(op=push, sources=Mem(addr=[seg:...+0x4], width=4 ...))`
+(an x87 operand the m64 backend has no form for); GORILLA with `fatan must be allocated as st(0) -> st(0)`. Both are float
+code: they wait for the SSE chain (#4736, #4744). HELLO and PEEK/POKE-free programs run.
