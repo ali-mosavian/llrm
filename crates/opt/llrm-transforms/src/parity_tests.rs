@@ -584,3 +584,45 @@ fn test_the_late_instcombine_slots_run_in_a_compile() {
         assert!(ran >= 1, "{slot} did not run: {lines:?}");
     }
 }
+
+/// The `.rs` file stems under `crates`.
+fn source_stems() -> Vec<String> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../crates");
+    let mut stems = Vec::new();
+    let mut dirs = vec![root];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(dir).expect("a readable directory").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|name| name != "target") {
+                    dirs.push(path);
+                }
+            } else if path.extension().is_some_and(|ext| ext == "rs")
+                && let Some(stem) = path.file_stem()
+            {
+                stems.push(stem.to_string_lossy().into_owned());
+            }
+        }
+    }
+    stems
+}
+
+/// constraint-elimination and shrink-wrap were labelled Missing while
+/// `constraintelim.rs` and `shrinkwrap.rs` existed: the table undercounted the
+/// port and sent work to translate a pass twice (a duplicate PR, #4457).
+#[test]
+fn test_a_missing_entry_whose_pass_has_a_source_file_fails() {
+    let stems = source_stems();
+    parity::check_missing_has_no_file(parity::REGISTRY, &stems).unwrap();
+    let mut registry = parity::REGISTRY.to_vec();
+    registry.push(Entry {
+        slot: "constraint-elimination",
+        phase: Phase::Simplify,
+        llvm: "constraint-elimination",
+        kind: SlotKind::Missing,
+        replaced_by: "",
+        note: "",
+    });
+    let why = parity::check_missing_has_no_file(&registry, &stems).unwrap_err();
+    assert!(why.contains("constraint-elimination"), "{why}");
+}

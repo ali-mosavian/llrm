@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/peephole.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/peephole.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/peephole.rs sha256:522ed0dfb900b321bbde77acaf4910d2f2e3f3377e96710f041e829bb8090931 -->
+<!-- src: crates/backend/llrm-core/src/backend/peephole.rs sha256:dd2b082c5239b83b00440739a64aae2805f801aa2398fdfb77a4cedca5e8d16a -->
 
 # peephole
 
@@ -51,8 +51,8 @@ Typical rewrites, before and after:
 ```
 
 A sub-pass whose subject the body lacks is skipped. `needs.rs` keeps one bit
-per candidate shape (a register copy, an inserted definition, a cell read
-through an unheld 32-bit register, an exact cell, a based cell) per block,
+per candidate shape (a register copy, a cell read through an unheld 32-bit
+register, an exact cell) per block,
 and `gated` runs the pass only if some block has its bit. `LLRM_CHECK_NEEDS`
 runs the skipped pass anyway and asserts it changed nothing.
 

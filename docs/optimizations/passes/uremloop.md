@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/uremloop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/uremloop.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/uremloop.rs sha256:865e03bf48e7cd58c53a61967caa7f1ad7eae55bf5842ec20f0cbf70cb4b944b -->
+<!-- src: crates/opt/llrm-transforms/src/uremloop.rs sha256:3644d1202d16df78280ce1b0acf1608d41d54330d30213af03c968703ee94294 -->
 
 # uremloop
 
@@ -9,8 +9,8 @@ counter by a loop-invariant amount is a second counter that wraps
 
 ## How it works
 `for (i = Start; i < End; ++i) r = (i + K) % M` with `M` and `K` invariant
-and no constant `M` (a constant remainder is a multiply). The counter must be
-a header phi of two inputs that steps by one with a `nuw` add. When the
+and no constant `M` (a constant remainder is a multiply). The counter must
+be a header phi of two inputs that steps by one with a `nuw` add. When the
 first remainder, `(Start + K) % M`, simplifies away (`Start` is 0, say), the
 division in the loop is replaced by a phi that counts up and drops to zero
 on reaching `M`:
