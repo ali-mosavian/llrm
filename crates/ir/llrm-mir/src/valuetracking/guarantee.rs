@@ -566,6 +566,7 @@ impl Seen {
     const FEW: usize = 4;
 
     /// Whether the set outgrew its inline slots.
+    #[cfg(test)]
     pub(crate) fn spilled(&self) -> bool {
         self.len > Self::FEW
     }
