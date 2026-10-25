@@ -187,3 +187,9 @@ Mac follow-up (feat/qb-host 8ffd78684 merged in):
   Pitch and clicks by ear: the user heard the tone; BEEP and PLAY not yet reported.
 - Row 5 rest: Shift+A 41, keypad 0 `0`, keypad Enter 0D, `+` 2B, `/` 2F, `*` 2A. Caps Lock not toggled (it would
   change the user's keyboard state).
+
+## arm64 Linux under qemu (2026-10-25)
+
+GORILLA and NIBBLES run through `llrm-qb --arm64=linux`, headless, under `qemu-aarch64`. Looked at:
+[GORILLA city](qb-host-shots/gorilla-arm64-city.png), [GORILLA after a shot](qb-host-shots/gorilla-arm64-shot.png)
+(crater on a building, turn passed to Player 2), [NIBBLES level 1](qb-host-shots/nibbles-arm64-level1.png).
