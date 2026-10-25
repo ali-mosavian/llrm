@@ -106,3 +106,19 @@ def test_two_prs_adding_a_test_of_one_name_do_not_share_a_batch(tmp_path):
     sh(repo, "checkout", "-q", "main")
     kept, waits = ps.assemble(["1", "2"], heads, base="main", cwd=repo)
     assert kept == ["1"] and "a_frame_cell_is_not_encodable" in waits["2"] and "#1" in waits["2"]
+
+
+def test_the_scanners_of_an_alone_check_run_in_the_scratch_tree_not_the_runners(tmp_path, monkeypatch):
+    """The dry run printed `scanners: 2 targets, 0 red (tree 4d319defc)` for every PR: integration_failures defaulted to ROOT, so a PR red in its own tree passed."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    head = branch(repo, "pr", "b.txt", "b\n")
+    sh(repo, "checkout", "-q", "main")
+    seen = []
+    smoke = ps.parity_smoke_module()
+    monkeypatch.setattr(smoke, "integration_failures", lambda targets, root=None, **_: seen.append(root) or set())
+    assert ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set()) == []
+    assert seen == [repo], seen

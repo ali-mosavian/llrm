@@ -958,7 +958,8 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
     files = git("diff", "--name-only", base, "HEAD", cwd=cwd).split()
     if unformatted := sorted((differs or fmt_differs)(cwd, files)):
         return [f"fmt.sh would change {', '.join(unformatted[:5])}"]
-    red = sorted((scanners or (lambda f: landing_scanner_failures(f, False)))(files))
+    smoke = parity_smoke_module()  # the scanners read the scratch tree: `integration_failures` defaults to ROOT, so every PR was judged on the tree the runner stands in
+    red = sorted((scanners or (lambda f: landing_scanner_failures(f, False, on_merged=lambda targets: smoke.integration_failures(targets, root=cwd))))(files))
     return [f"scanner red alone: {', '.join(red[:5])}"] if red else []
 
 
