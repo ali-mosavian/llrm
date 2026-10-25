@@ -239,7 +239,7 @@ pub struct SplitAnalysis {
     /// Sorted slot indexes of using instructions.
     use_slots: Vec<SlotIndex>,
     /// Additional information about the blocks where the range is live.
-    use_blocks: Vec<BlockInfo>,
+    use_blocks: Rc<Vec<BlockInfo>>,
     num_gap_blocks: u32,
     /// Blocks the range is live through without a use.
     through_blocks: Vec<bool>,
@@ -254,7 +254,7 @@ impl SplitAnalysis {
             cur_li: None,
             ipa: InsertPointAnalysis::new(num_blocks),
             use_slots: Vec::new(),
-            use_blocks: Vec::new(),
+            use_blocks: Rc::default(),
             num_gap_blocks: 0,
             through_blocks: Vec::new(),
             num_through_blocks: 0,
@@ -267,7 +267,7 @@ impl SplitAnalysis {
     /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SplitKit.cpp#L159>).
     pub fn clear(&mut self) {
         self.use_slots.clear();
-        self.use_blocks.clear();
+        Rc::make_mut(&mut self.use_blocks).clear();
         self.through_blocks.clear();
         self.cur_li = None;
     }
@@ -399,7 +399,7 @@ impl SplitAnalysis {
 
                         // Push the live-in part.
                         bi.live_out = false;
-                        self.use_blocks.push(BlockInfo { last_instr: last_stop, ..bi });
+                        Rc::make_mut(&mut self.use_blocks).push(BlockInfo { last_instr: last_stop, ..bi });
 
                         // Set up `bi` for the live-out part.
                         bi.live_in = false;
@@ -416,7 +416,7 @@ impl SplitAnalysis {
                     }
                 }
 
-                self.use_blocks.push(bi);
+                Rc::make_mut(&mut self.use_blocks).push(bi);
 
                 // `lvi` is now at the end or `end >= stop`.
                 if lvi == lve {
@@ -549,6 +549,12 @@ impl SplitAnalysis {
     /// `getUseBlocks`.
     pub fn get_use_blocks(&self) -> &[BlockInfo] {
         &self.use_blocks
+    }
+
+    /// `getUseBlocks`, held across a call that needs `self` again: shared, not
+    /// copied.
+    pub fn use_blocks_shared(&self) -> Rc<Vec<BlockInfo>> {
+        Rc::clone(&self.use_blocks)
     }
 
     /// `getNumThroughBlocks`.

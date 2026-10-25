@@ -144,6 +144,12 @@ pub struct SplitSupport {
     bundle_cand: Vec<usize>,
     /// `SplitConstraints`.
     split_constraints: Vec<BlockConstraint>,
+    /// `growRegion`'s copies of the placer's new bundles and of the blocks it
+    /// adds, kept between calls.
+    scratch_bundles: Vec<u32>,
+    scratch_blocks: Vec<u32>,
+    /// `growRegion`'s through blocks not yet added.
+    scratch_todo: Vec<bool>,
 }
 
 impl SplitSupport {
@@ -167,6 +173,9 @@ impl SplitSupport {
             global_cand: Vec::new(),
             bundle_cand: Vec::new(),
             split_constraints: Vec::new(),
+            scratch_bundles: Vec::new(),
+            scratch_blocks: Vec::new(),
+            scratch_todo: Vec::new(),
         }
     }
 }
@@ -259,12 +268,12 @@ impl Splitter<'_> {
         cand: usize,
         cost: &mut BlockFrequency,
     ) -> bool {
-        let use_blocks = self.ss.sa.get_use_blocks().to_vec();
+        let use_blocks = self.ss.sa.use_blocks_shared();
 
         // Reset interference dependent info.
         self.ss.split_constraints.clear();
         let mut static_cost = BlockFrequency(0);
-        for bi in &use_blocks {
+        for bi in use_blocks.iter() {
             let number = bi.mbb as u32;
             self.intf_move(cand, number);
             let mut bc = BlockConstraint {
@@ -410,16 +419,21 @@ impl Splitter<'_> {
         cand: usize,
     ) -> bool {
         // Keep track of through blocks that have not been added to the placer.
-        let mut todo: Vec<bool> = self.ss.sa.get_through_blocks().to_vec();
+        let mut todo = std::mem::take(&mut self.ss.scratch_todo);
+        todo.clear();
+        todo.extend_from_slice(self.ss.sa.get_through_blocks());
         let mut active_blocks: Vec<u32> = std::mem::take(&mut self.ss.global_cand[cand].active_blocks);
+        let mut new_bundles = std::mem::take(&mut self.ss.scratch_bundles);
+        let mut new_blocks = std::mem::take(&mut self.ss.scratch_blocks);
         let mut added_to = 0usize;
 
         let mut budget = GROW_REGION_COMPLEXITY_BUDGET;
         let ok = loop {
-            let new_bundles: Vec<u32> = self.ss.placer.get_recent_positive().to_vec();
+            new_bundles.clear();
+            new_bundles.extend_from_slice(self.ss.placer.get_recent_positive());
             // Find new through blocks in the periphery of PrefRegBundles.
             let mut over = false;
-            for bundle in new_bundles {
+            for &bundle in &new_bundles {
                 // Look at all blocks connected to Bundle in the full graph.
                 let blocks = self.ss.bundles.get_blocks(bundle);
                 // Limit compilation time by bailing out after we use all our
@@ -449,7 +463,8 @@ impl Splitter<'_> {
             // Compute through constraints from the interference, or assume
             // that all through blocks prefer spilling when forming compact
             // regions.
-            let new_blocks: Vec<u32> = active_blocks[added_to..].to_vec();
+            new_blocks.clear();
+            new_blocks.extend_from_slice(&active_blocks[added_to..]);
             if self.ss.global_cand[cand].phys_reg.is_some() {
                 if !self.add_through_constraints(cand, &new_blocks) {
                     break false;
@@ -486,6 +501,9 @@ impl Splitter<'_> {
             self.ss.placer.iterate();
         };
         self.ss.global_cand[cand].active_blocks = active_blocks;
+        self.ss.scratch_todo = todo;
+        self.ss.scratch_bundles = new_bundles;
+        self.ss.scratch_blocks = new_blocks;
         ok
     }
 
@@ -568,7 +586,7 @@ impl Splitter<'_> {
         cand: usize,
     ) -> BlockFrequency {
         let mut global_cost = BlockFrequency(0);
-        let use_blocks = self.ss.sa.get_use_blocks().to_vec();
+        let use_blocks = self.ss.sa.use_blocks_shared();
         for (i, bi) in use_blocks.iter().enumerate() {
             let bc = self.ss.split_constraints[i];
             let live = &self.ss.global_cand[cand].live_bundles;
@@ -632,8 +650,8 @@ impl Splitter<'_> {
         let single_instrs = false;
 
         // First handle all the blocks with uses.
-        let use_blocks = self.ss.sa.get_use_blocks().to_vec();
-        for bi in &use_blocks {
+        let use_blocks = self.ss.sa.use_blocks_shared();
+        for bi in use_blocks.iter() {
             let number = bi.mbb as u32;
             let (mut intv_in, mut intv_out) = (0usize, 0usize);
             let (mut intf_in, mut intf_out) = (SlotIndex::default(), SlotIndex::default());
@@ -1017,8 +1035,8 @@ impl Splitter<'_> {
         let mut delegate = NoDelegate;
         let mut se = SplitEditor::new();
         se.reset(self.lis, LiveRangeEdit::new(virt.reg(), &mut delegate), SPLIT_SPILL_MODE);
-        let use_blocks = self.ss.sa.get_use_blocks().to_vec();
-        for bi in &use_blocks {
+        let use_blocks = self.ss.sa.use_blocks_shared();
+        for bi in use_blocks.iter() {
             let mut cx = self.cx();
             if cx.sa.should_split_single_block(cx.lis, cx.vrm, cx.env, bi, single_instrs) {
                 se.split_single_block(&mut cx, bi);
