@@ -342,4 +342,58 @@ impl Builder<'_> {
         self.dag.set_root(node);
         Ok(())
     }
+
+    /// The scalar leaves of `ty` and how many registers each takes when it
+    /// crosses a block: the aggregate's registers are one chain, leaf after
+    /// leaf.
+    pub(super) fn aggregate_registers(
+        &self,
+        ty: TypeId,
+    ) -> Result<Vec<(EVT, usize)>, Refused> {
+        self.leaves(ty)?
+            .into_iter()
+            .map(|(leaf, _)| {
+                let vt = self.type_of(leaf)?;
+                Ok((vt, self.register_parts(vt)?.1))
+            })
+            .collect()
+    }
+
+    /// `getCopyFromRegs` of an aggregate: each leaf from its run of the chain
+    /// that starts at `first`.
+    pub(super) fn copy_aggregate_from_regs(
+        &mut self,
+        first: u32,
+        ty: TypeId,
+    ) -> Result<SDValue, Refused> {
+        let layout = self.aggregate_registers(ty)?;
+        let total = layout.iter().map(|(_, parts)| parts).sum();
+        let chain = self.info.part_regs(first, total);
+        let (mut at, mut leaves) = (0, Vec::new());
+        for (vt, parts) in layout {
+            leaves.push(self.copy_from_reg(chain[at], vt)?);
+            at += parts;
+        }
+        Ok(self.merge(&leaves))
+    }
+
+    /// `CopyValueToVirtualRegister` of an aggregate: each leaf into its run of
+    /// the chain that starts at `first`.
+    pub(super) fn copy_aggregate_to_registers(
+        &mut self,
+        operand: Operand,
+        first: u32,
+    ) -> Result<(), Refused> {
+        let ty = self.function.operand_type(&self.module.context, operand).ok_or(Refused("block operand"))?;
+        let layout = self.aggregate_registers(ty)?;
+        let total = layout.iter().map(|(_, parts)| parts).sum();
+        let chain = self.info.part_regs(first, total);
+        let parts = self.value_parts(operand)?;
+        let mut at = 0;
+        for ((_, count), part) in layout.into_iter().zip(parts) {
+            self.copy_leaf_to_register(part, chain[at], ISD::AnyExtend)?;
+            at += count;
+        }
+        Ok(())
+    }
 }
