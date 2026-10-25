@@ -532,6 +532,13 @@ fn duplicate(
             new.insns = insns.into();
             new.succ = block.succ.clone();
         }
+        // A tail that stays no longer follows the blocks it was copied into.
+        if place == at {
+            let gone: Vec<i64> = chosen.iter().map(|pred| body.blocks[*pred].at).collect();
+            for phi in new.phis.iter_mut() {
+                phi.incoming.retain(|(from, _)| !gone.contains(from));
+            }
+        }
         // A successor of the tail reads from each copy what it read from the
         // tail (`updateSuccessorsPHIs`).
         if block.succ.contains(&old.at) {
@@ -980,6 +987,30 @@ mod tests {
             exit.phis[0].incoming.iter().map(|(from, value)| (*from, *value == 3)).collect();
         from.sort();
         assert_eq!(from, [(1, false), (3, true)], "the copy's value from arm 1, the tail's own from the tail");
+    }
+
+    /// A tail that stays kept phi operands from the arms it was copied into,
+    /// which no longer branch to it: PHI elimination copied them anyway, and
+    /// x_funcptr kept a home per case for the sum (66 instructions, the pin
+    /// 49). The tail's phis read only the arms that still reach it.
+    #[test]
+    fn test_a_tail_that_stays_reads_no_phi_operand_from_an_arm_it_was_copied_into() {
+        use crate::model::lir::Phi;
+        let phi = Phi { result: 40, incoming: vec![(1, 11), (2, 12)] };
+        let blocks = vec![
+            block(0, vec![of("jne", Operation::Branch, Some(2), false), jump(1)], &[1, 2]),
+            block(1, vec![work(11), jump(3)], &[3]),
+            block(2, vec![work(12), of("jne", Operation::Branch, Some(3), false), jump(4)], &[3, 4]),
+            LirBlock {
+                phis: vec![phi].into(),
+                ..block(3, vec![reading(40), of("jmp", Operation::Jump, None, true)], &[5])
+            },
+            block(4, vec![of("ret", Operation::Return, None, false)], &[]),
+            block(5, vec![of("ret", Operation::Return, None, false)], &[]),
+        ];
+        let done = tail_duplicate(&body(blocks), 3, false).expect("arm 1 takes a copy");
+        assert!(!at(&done, 1).succ.contains(&3) && at(&done, 2).succ.contains(&3), "premise: arm 2 alone reaches it");
+        assert_eq!(at(&done, 3).phis[0].incoming, [(2, 12)]);
     }
 
     /// The join's edge odds are the copy's.

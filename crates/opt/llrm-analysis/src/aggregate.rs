@@ -178,6 +178,13 @@ impl AAResults for AggregateAA<'_> {
                 break;
             }
         }
+        // Apply the ModRef mask (`AAResults::getModRefInfo(CB, Loc)`): a call
+        // cannot modify a constant location.
+        if !answer.is_no_mod_ref()
+            && let Some(loc) = loc
+        {
+            answer = answer.intersect(self.get_mod_ref_info_mask(loc, aaqi, false));
+        }
         answer
     }
 

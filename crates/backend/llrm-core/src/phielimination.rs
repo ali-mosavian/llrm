@@ -86,7 +86,7 @@ fn edges_to_split(
     let forest = crate::analysis::loops::forest_of(&body.blocks, Some(body.entry));
     // Only the values a critical edge's phi hands over are asked: rows of
     // those.
-    let asked: std::collections::HashSet<u32> = body
+    let asked: llrm_support::hash::HashSet<u32> = body
         .blocks
         .iter()
         .flat_map(|block| block.phis.iter())

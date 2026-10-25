@@ -14,6 +14,7 @@ import nested
 PASSES = [
     ("peephole::Peephole", [r"PeepholeOptimizerLegacy::runOnMachineFunction\(", r"X86FixupBWInstLegacy::runOnMachineFunction\("], "w-1"),
     ("peepholeopt::PeepholeOptimizer", None, "w-1"),
+    ("earlytaildup::EarlyTailDuplicate", [r"EarlyTailDuplicateLegacy::runOnMachineFunction\("], "w-1"),
     ("machinesched::MachineScheduler", [r"MachineSchedulerLegacy::runOnMachineFunction\("], "w-2"),
     ("schedule::Scheduler", None, "w-2"),
     ("machinesink::MachineSink", [r"MachineSinkingLegacy::runOnMachineFunction\(", r"PostRAMachineSinkingLegacy::runOnMachineFunction\("], "w-2"),

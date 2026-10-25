@@ -795,6 +795,8 @@ impl Function {
         &self,
         block: BlockId,
     ) -> Option<InstId> {
+        #[cfg(test)]
+        TERMINATOR_LOOKUPS.with(|count| count.set(count.get() + 1));
         self.blocks[block.0 as usize].last().filter(|&last| self.instruction(last).opcode.is_terminator())
     }
 
@@ -1290,3 +1292,9 @@ impl Module {
 
 /// Operands scanned for a repeat before a set is used.
 const SCAN: usize = 16;
+
+#[cfg(test)]
+thread_local! {
+    /// `Function::terminator` calls, for the tests that count them.
+    pub(crate) static TERMINATOR_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}

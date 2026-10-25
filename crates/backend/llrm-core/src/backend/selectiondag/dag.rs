@@ -126,6 +126,10 @@ pub enum MemBase {
 
 #[derive(Clone, Debug)]
 pub struct SDNode {
+    /// `SDNode::getIROrder`: the position of the IR instruction the node was
+    /// built for (0 for none); a node a combine or the selector makes takes
+    /// the order of the node it replaces (`SDLoc(N)`).
+    pub order: u32,
     pub opcode: ISD,
     pub values: Vec<EVT>,
     pub ops: Vec<SDValue>,
@@ -170,7 +174,30 @@ pub enum Rauw {
     Merged { from: u32, into: u32 },
 }
 
-type CseKey = (ISD, Vec<EVT>, Vec<SDValue>, NodeData);
+/// `FoldingSet`: nodes by the hash of (opcode, types, operands, data), chained
+/// through `next`; a lookup compares in place, so no key is built or cloned.
+#[derive(Default)]
+struct Cse {
+    head: HashMap<u64, u32>,
+    next: Vec<u32>,
+}
+
+const NONE: u32 = u32::MAX;
+
+fn cse_hash(
+    opcode: ISD,
+    values: &[EVT],
+    ops: &[SDValue],
+    data: &NodeData,
+) -> u64 {
+    use std::hash::{BuildHasher, Hash, Hasher};
+    let mut hasher = llrm_support::hash::FxBuild::default().build_hasher();
+    opcode.hash(&mut hasher);
+    values.hash(&mut hasher);
+    ops.hash(&mut hasher);
+    data.hash(&mut hasher);
+    hasher.finish()
+}
 
 /// `SelectionDAG`: nodes in an arena indexed by [`SDValue::node`].
 pub struct SelectionDAG {
@@ -178,17 +205,25 @@ pub struct SelectionDAG {
     /// Per node, the nodes that have read one of its results (may hold
     /// stale or repeated entries; `users` filters them).
     uses: Vec<Vec<u32>>,
-    cse: HashMap<CseKey, u32>,
+    cse: Cse,
     /// Nodes `delete_dead` removed: they stay in the arena but no longer
     /// count as users.
     /// By node id; the arena only grows, so ids index it.
     deleted: Vec<bool>,
+    /// The `IROrder` of the `SDLoc` in force: nodes made now carry it.
+    pub cur_order: u32,
     pub(super) config: DagConfig,
     entry: SDValue,
     root: SDValue,
     /// Names the dump prints for `Global`/`Block` payloads, by id.
     pub global_names: std::rc::Rc<Vec<String>>,
     pub block_names: std::rc::Rc<Vec<String>>,
+    /// The names of the blocks the builder splits off, from `block_names.len()`
+    /// on (the shared table is not copied for them).
+    pub synthetic_names: Vec<String>,
+    /// The name of a split-off block nothing named: the block the builder
+    /// started from.
+    pub synthetic_fill: String,
     /// Names of external symbols, by id.
     pub symbol_names: Vec<String>,
     /// The constants spilled to the pool: bits and type
@@ -219,18 +254,51 @@ pub struct SelectionDAG {
 }
 
 impl SelectionDAG {
+    /// The name of `block`.
+    pub fn block_name(
+        &self,
+        block: u32,
+    ) -> &str {
+        let at = block as usize;
+        let base = self.block_names.len();
+        if at < base {
+            &self.block_names[at]
+        } else {
+            self.synthetic_names.get(at - base).map_or(self.synthetic_fill.as_str(), String::as_str)
+        }
+    }
+
+    pub fn set_block_name(
+        &mut self,
+        block: u32,
+        name: String,
+    ) {
+        let (at, base) = (block as usize, self.block_names.len());
+        if at < base {
+            std::rc::Rc::make_mut(&mut self.block_names)[at] = name;
+            return;
+        }
+        if self.synthetic_names.len() <= at - base {
+            self.synthetic_names.resize(at - base + 1, self.synthetic_fill.clone());
+        }
+        self.synthetic_names[at - base] = name;
+    }
+
     pub fn new(config: DagConfig) -> SelectionDAG {
         let zero = SDValue { node: 0, res: 0 };
         let mut dag = SelectionDAG {
             nodes: Vec::new(),
             uses: Vec::new(),
-            cse: HashMap::default(),
+            cse: Cse::default(),
             deleted: Vec::new(),
+            cur_order: 0,
             config,
             entry: zero,
             root: zero,
             global_names: Default::default(),
             block_names: Default::default(),
+            synthetic_names: Vec::new(),
+            synthetic_fill: String::new(),
             symbol_names: Vec::new(),
             constant_pool: Vec::new(),
             first_temporary: 0,
@@ -315,14 +383,10 @@ impl SelectionDAG {
                 continue;
             }
             let results = self.nodes[n as usize].values.len() as u8;
-            if (0..results).any(|res| self.users(SDValue { node: n, res }).next().is_some()) {
+            if (0..results).any(|res| self.has_users(SDValue { node: n, res })) {
                 continue;
             }
-            let dead = &self.nodes[n as usize];
-            let key = (dead.opcode, dead.values.clone(), dead.ops.clone(), dead.data.clone());
-            if self.cse.get(&key) == Some(&n) {
-                self.cse.remove(&key);
-            }
+            self.cse_forget(n);
             if self.deleted.len() <= n as usize {
                 self.deleted.resize(self.nodes.len(), false);
             }
@@ -367,6 +431,19 @@ impl SelectionDAG {
         self.live_users(value.node).filter(move |&user| self.nodes[user as usize].ops.contains(&value))
     }
 
+    /// Whether anything reads `value`: `users(value).next().is_some()`
+    /// without collecting and sorting them.
+    pub fn has_users(
+        &self,
+        value: SDValue,
+    ) -> bool {
+        self.uses
+            .get(value.node as usize)
+            .into_iter()
+            .flatten()
+            .any(|&user| !self.is_deleted(user) && self.nodes[user as usize].ops.contains(&value))
+    }
+
     fn note_uses(
         &mut self,
         user: u32,
@@ -377,12 +454,94 @@ impl SelectionDAG {
         }
     }
 
+    /// The hash `node` is filed under; none for a node with glue.
     fn key_of(
         &self,
         node: u32,
-    ) -> Option<CseKey> {
+    ) -> Option<u64> {
         let data = &self.nodes[node as usize];
-        (!data.values.contains(&EVT::GLUE)).then(|| (data.opcode, data.values.clone(), data.ops.clone(), data.data))
+        (!data.values.contains(&EVT::GLUE)).then(|| cse_hash(data.opcode, &data.values, &data.ops, &data.data))
+    }
+
+    /// The filed node equal to (opcode, types, operands, data).
+    fn cse_find(
+        &self,
+        opcode: ISD,
+        values: &[EVT],
+        ops: &[SDValue],
+        data: &NodeData,
+    ) -> Option<u32> {
+        let mut at = *self.cse.head.get(&cse_hash(opcode, values, ops, data))?;
+        while at != NONE {
+            let node = &self.nodes[at as usize];
+            if node.opcode == opcode && node.values == values && node.ops == ops && node.data == *data {
+                return Some(at);
+            }
+            at = self.cse.next[at as usize];
+        }
+        None
+    }
+
+    fn cse_link(
+        &mut self,
+        hash: u64,
+        node: u32,
+    ) {
+        if self.cse.next.len() <= node as usize {
+            self.cse.next.resize(self.nodes.len().max(node as usize + 1), NONE);
+        }
+        let mut at = self.cse.head.get(&hash).copied().unwrap_or(NONE);
+        while at != NONE {
+            if at == node {
+                return;
+            }
+            at = self.cse.next[at as usize];
+        }
+        self.cse.next[node as usize] = self.cse.head.insert(hash, node).unwrap_or(NONE);
+    }
+
+    /// Unfiles `node` from the chain of `hash`, if it is filed there.
+    fn cse_unlink(
+        &mut self,
+        hash: u64,
+        node: u32,
+    ) {
+        let Some(&first) = self.cse.head.get(&hash) else { return };
+        if first == node {
+            match self.cse.next[node as usize] {
+                NONE => self.cse.head.remove(&hash),
+                after => self.cse.head.insert(hash, after),
+            };
+            return;
+        }
+        let mut at = first;
+        while at != NONE {
+            let after = self.cse.next[at as usize];
+            if after == node {
+                self.cse.next[at as usize] = self.cse.next[node as usize];
+                return;
+            }
+            at = after;
+        }
+    }
+
+    /// The filed node equal to `node`'s content.
+    fn cse_equal(
+        &self,
+        node: u32,
+    ) -> Option<u32> {
+        let data = &self.nodes[node as usize];
+        self.cse_find(data.opcode, &data.values, &data.ops, &data.data)
+    }
+
+    /// Unfiles `node` under its current content.
+    fn cse_forget(
+        &mut self,
+        node: u32,
+    ) {
+        if let Some(hash) = self.key_of(node) {
+            self.cse_unlink(hash, node);
+        }
     }
 
     /// `ReplaceAllUsesWith(From, To)`: every operand `from` becomes `to`. A
@@ -404,23 +563,19 @@ impl SelectionDAG {
                 self.root = to;
             }
             for user in self.users(from).collect::<Vec<_>>() {
-                if let Some(key) = self.key_of(user) {
-                    if self.cse.get(&key) == Some(&user) {
-                        self.cse.remove(&key);
-                    }
-                }
+                self.cse_forget(user);
                 for op in &mut self.nodes[user as usize].ops {
                     if *op == from {
                         *op = to;
                     }
                 }
                 self.uses[to.node as usize].push(user);
-                let Some(key) = self.key_of(user) else {
+                let Some(hash) = self.key_of(user) else {
                     events.push(Rauw::Updated(user));
                     continue;
                 };
-                match self.cse.get(&key) {
-                    Some(&existing) if existing != user => {
+                match self.cse_equal(user) {
+                    Some(existing) if existing != user => {
                         events.push(Rauw::Merged { from: user, into: existing });
                         let flags = self.nodes[existing as usize].flags.intersect(self.nodes[user as usize].flags);
                         self.nodes[existing as usize].flags = flags;
@@ -431,7 +586,7 @@ impl SelectionDAG {
                     }
                     _ => {
                         events.push(Rauw::Updated(user));
-                        self.cse.insert(key, user);
+                        self.cse_link(hash, user);
                     }
                 }
             }
@@ -447,24 +602,20 @@ impl SelectionDAG {
         node: u32,
         ops: &[SDValue],
     ) -> u32 {
-        if let Some(key) = self.key_of(node) {
-            if self.cse.get(&key) == Some(&node) {
-                self.cse.remove(&key);
-            }
-        }
+        self.cse_forget(node);
         let old = std::mem::replace(&mut self.nodes[node as usize].ops, ops.to_vec());
         self.note_uses(node);
         match self.key_of(node) {
-            Some(key) => match self.cse.get(&key) {
-                Some(&existing) if existing != node => {
+            Some(hash) => match self.cse_equal(node) {
+                Some(existing) if existing != node => {
                     self.nodes[node as usize].ops = old;
-                    if let Some(key) = self.key_of(node) {
-                        self.cse.insert(key, node);
+                    if let Some(hash) = self.key_of(node) {
+                        self.cse_link(hash, node);
                     }
                     existing
                 }
                 _ => {
-                    self.cse.insert(key, node);
+                    self.cse_link(hash, node);
                     node
                 }
             },
@@ -484,26 +635,21 @@ impl SelectionDAG {
         ops: &[SDValue],
     ) -> u32 {
         let shareable = !values.contains(&EVT::GLUE);
-        let key = (opcode, values.to_vec(), ops.to_vec(), NodeData::None);
         if shareable {
-            if let Some(&found) = self.cse.get(&key) {
+            if let Some(found) = self.cse_find(opcode, values, ops, &NodeData::None) {
                 if found != node {
                     return found;
                 }
             }
         }
-        if let Some(old) = self.key_of(node) {
-            if self.cse.get(&old) == Some(&node) {
-                self.cse.remove(&old);
-            }
-        }
+        self.cse_forget(node);
         let data = &mut self.nodes[node as usize];
         data.opcode = opcode;
-        data.values = key.1.clone();
-        data.ops = key.2.clone();
+        data.values = values.to_vec();
+        data.ops = ops.to_vec();
         data.data = NodeData::None;
         if shareable {
-            self.cse.insert(key, node);
+            self.cse_link(cse_hash(opcode, values, ops, &NodeData::None), node);
         }
         // The morphed node reads its new operands: a later `ReplaceAllUsesWith`
         // of one of them must reach it (the SDIVREM of a remainder used twice
@@ -518,11 +664,7 @@ impl SelectionDAG {
         &mut self,
         node: u32,
     ) {
-        if let Some(key) = self.key_of(node) {
-            if self.cse.get(&key) == Some(&node) {
-                self.cse.remove(&key);
-            }
-        }
+        self.cse_forget(node);
     }
 
     pub fn node_count(&self) -> usize {
@@ -608,20 +750,26 @@ impl SelectionDAG {
         data: NodeData,
     ) -> SDValue {
         let shareable = !values.contains(&EVT::GLUE);
-        let key = (opcode, values.to_vec(), ops.to_vec(), data);
         if shareable {
-            if let Some(&found) = self.cse.get(&key) {
+            if let Some(found) = self.cse_find(opcode, values, ops, &data) {
                 let node = &mut self.nodes[found as usize];
                 node.flags = node.flags.intersect(flags);
                 return SDValue { node: found, res: 0 };
             }
         }
         let index = self.nodes.len() as u32;
-        self.nodes.push(SDNode { opcode, values: key.1.clone(), ops: key.2.clone(), flags, data });
+        self.nodes.push(SDNode {
+            order: self.cur_order,
+            opcode,
+            values: values.to_vec(),
+            ops: ops.to_vec(),
+            flags,
+            data,
+        });
         self.uses.push(Vec::new());
         self.note_uses(index);
         if shareable {
-            self.cse.insert(key, index);
+            self.cse_link(cse_hash(opcode, values, ops, &data), index);
         }
         SDValue { node: index, res: 0 }
     }
@@ -1154,7 +1302,7 @@ impl SelectionDAG {
         cc: CondCode,
     ) -> bool {
         let code = self.get_cond_code(cc);
-        self.cse.contains_key(&(ISD::SetCC, vec![vt], vec![lhs, rhs, code], NodeData::None))
+        self.cse_find(ISD::SetCC, &[vt], &[lhs, rhs, code], &NodeData::None).is_some()
     }
 
     pub fn get_select(
