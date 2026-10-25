@@ -556,3 +556,21 @@ fn test_a_loop_value_read_after_the_loop_is_read_through_an_exit_phi() {
     assert!(lines(&text).contains(&"%i2.lcssa = phi i32 [ %i2, %h ]"), "{text}");
     assert!(!text.contains("tmp.lcssa"), "{text}");
 }
+
+/// An expression that exists is found with the operands borrowed: asking for
+/// `a + b` again copies no operand list (it built a `Vec` per ask, the
+/// largest single frame of the key hashing: IndVars on d_faces 22.25 M -> 20.89
+/// M Ir).
+#[test]
+fn test_an_expression_that_exists_is_found_without_copying_its_operands() {
+    let _ = expanded(|se, cx, args| {
+        let a = unknown(se, cx, args[0]);
+        let b = unknown(se, cx, args[1]);
+        let first = se.get_add_expr(cx, vec![a, b], Flags::default(), 0).scev;
+        let owned = llrm_mir::counts::get(llrm_mir::counts::Event::ScevKeysOwned);
+        let again = se.get_add_expr(cx, vec![a, b], Flags::default(), 0).scev;
+        assert_eq!(first, again);
+        assert_eq!(llrm_mir::counts::get(llrm_mir::counts::Event::ScevKeysOwned), owned);
+        first
+    });
+}
