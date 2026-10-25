@@ -33,3 +33,10 @@ fn test_resume_to_a_label_in_the_body_compiles() {
             .is_ok()
     );
 }
+
+/// ON ERROR GOTO 0 in a handler was refused ("not selected yet"), leaving
+/// qb45's FILERR.BAS uncompiled; it ends the program with the error handled.
+#[test]
+fn test_on_error_goto_0_in_the_handler_compiles() {
+    assert!(compiled("ON ERROR GOTO h\nERROR 11\nEND\nh:\nPRINT ERR\nON ERROR GOTO 0\nRESUME NEXT\n").is_ok());
+}
