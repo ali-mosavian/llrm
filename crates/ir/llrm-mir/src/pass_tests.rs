@@ -1596,3 +1596,38 @@ fn a_manager_with_n_passes_writes_n_input_dumps_and_n_manifest_lines() {
     assert_eq!((files, manifest.lines().count()), (5, 5), "{manifest}");
     let _ = std::fs::remove_dir_all(directory);
 }
+
+/// RunsOver the bodies it is run over.
+struct RunsOver(std::rc::Rc<std::cell::Cell<usize>>);
+
+impl FunctionPass for RunsOver {
+    fn name(&self) -> &'static str {
+        "runs-over"
+    }
+
+    fn run(
+        &mut self,
+        _: &mut Unit,
+        _: &mut Analyses,
+    ) -> PreservedAnalyses {
+        self.0.set(self.0.get() + 1);
+        PreservedAnalyses::all()
+    }
+}
+
+/// A private function whose last call was inlined has a body of one
+/// `unreachable` (`bare`): the pin's CGSCC walk deletes it, so no function pass
+/// runs over it. The late slots ran on four such leaves of d_faces, in every
+/// slot.
+#[test]
+fn a_function_the_inliner_deleted_is_not_run_over() {
+    let mut module = parse::module(
+        "define internal i16 @gone() {\nb1:\n  unreachable\n}\n\ndefine i16 @kept(i16 %x) {\nb1:\n  ret i16 %x\n}\n",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let runs = std::rc::Rc::new(std::cell::Cell::new(0));
+    let mut passes = PassManager::default();
+    passes.add(RunsOver(std::rc::Rc::clone(&runs)));
+    passes.run_module(&mut module, std::rc::Rc::new(crate::target::Neutral)).expect("a run");
+    assert_eq!(runs.get(), 1, "only @kept is run over");
+}
