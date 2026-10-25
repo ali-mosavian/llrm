@@ -491,17 +491,17 @@ fn refuse<T>(why: impl Into<String>) -> Result<T, Unselected> {
     Err(Unselected(format!("--isel=dag: {}", why.into())))
 }
 
-/// `name` of `module` selected by the DAG path. A panic in a stage (a builder
-/// meeting a type it does not know) is a refusal of the function, as any other
-/// gap: it stopped 18 QCport modules from compiling in the shadow. Constants it
-/// needs in memory go to a pool of its own; [`selected_in_pool`] shares the
-/// module's.
 thread_local! {
     /// Sibling calls on for this thread: what `LLRM_TAIL_CALLS` does for the
     /// process, for a test that cannot set the environment.
     pub(super) static TAIL_CALLS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+/// `name` of `module` selected by the DAG path. A panic in a stage (a builder
+/// meeting a type it does not know) is a refusal of the function, as any other
+/// gap: it stopped 18 QCport modules from compiling in the shadow. Constants it
+/// needs in memory go to a pool of its own; [`selected_in_pool`] shares the
+/// module's.
 pub fn selected(
     module: &Module,
     name: &str,
