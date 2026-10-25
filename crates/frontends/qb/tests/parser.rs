@@ -2223,3 +2223,23 @@ fn a_type_field_may_be_named_explicit_in_every_dialect_and_rem_in_pds() {
     assert!(parse(rem, Dialect::VbDos).is_err());
     assert!(parse("TYPE T\r\n  X AS INTEGER\r\n  REM a comment\r\nEND TYPE\r\n", Dialect::Pds71).is_err());
 }
+
+#[test]
+fn bc_distributes_a_constant_product_out_of_parentheses_and_overflows_it() {
+    // `(b - 65536) * 65536` with a LONG variable b is "Math overflow" under QB 4.5 (jpeg_single):
+    // BC folds -65536 * 65536 out of the parentheses. PDS 7.1 and VBDOS do it for `+` only; two
+    // INTEGER constants, and a product that fits, are left alone.
+    let source = |expression: &str| format!("DEFINT A-Z\r\nDIM SHARED b AS LONG\r\nr& = {expression}\r\n");
+    let refused = |expression: &str, dialect| parse(&source(expression), dialect).is_err();
+    assert!(refused("(b - 65536) * 65536", Dialect::QuickBasic45));
+    assert!(refused("65536 * (b - 65536)", Dialect::QuickBasic45));
+    assert!(!refused("(b - 65536) * 65536", Dialect::Pds71));
+    assert!(!refused("(b - 65536) * 65536", Dialect::VbDos));
+    for dialect in [Dialect::QuickBasic45, Dialect::Pds71, Dialect::VbDos] {
+        assert!(refused("(b + 65536) * 65536", dialect), "{dialect:?}");
+        assert!(refused("65536 * (b + 65536)", dialect), "{dialect:?}");
+        assert!(!refused("(b - 1) * 65536", dialect), "{dialect:?}");
+        assert!(!refused("(b - 65536) * 2", dialect), "{dialect:?}");
+    }
+    assert!(!refused("(i - 300) * 200", Dialect::QuickBasic45));
+}
