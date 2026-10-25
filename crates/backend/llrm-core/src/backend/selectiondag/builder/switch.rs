@@ -125,10 +125,11 @@ impl Builder<'_> {
         *at += 1;
         let name = self.dag.block_names[self.block.0 as usize].clone();
         let slot = id.0 as usize;
-        if self.dag.block_names.len() <= slot {
-            self.dag.block_names.resize(slot + 1, String::new());
+        let names = std::rc::Rc::make_mut(&mut self.dag.block_names);
+        if names.len() <= slot {
+            names.resize(slot + 1, String::new());
         }
-        self.dag.block_names[slot] = name;
+        names[slot] = name;
         id
     }
 

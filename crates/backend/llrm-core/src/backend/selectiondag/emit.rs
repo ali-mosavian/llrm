@@ -1515,7 +1515,11 @@ impl Emitter<'_, '_> {
                         .ok_or_else(
                             || EmitError::Unsupported("a string operation on a pointer of no known segment".to_owned()),
                         )?;
-                    return self.held_operand(selector);
+                    // The selector is a word: the low word of a dword whose
+                    // high half it is (`x >> 16`), or the word itself.
+                    let mut held = self.held_operand(selector)?;
+                    held.width = 2;
+                    return Ok(held);
                 }
                 // any other near pointer is into DGROUP, as the builder takes
                 // it
@@ -1552,6 +1556,12 @@ impl Emitter<'_, '_> {
         };
         let [inserted, amount] = self.dag.node(shifted).ops[..] else { return None };
         let NodeData::Const { bits: 16, .. } = self.dag.node(amount).data else { return None };
+        // A pointer made of a dword (`inttoptr` of a call's result): the
+        // combiner leaves `(x >> 16) << 16`, whose low word is the selector.
+        if self.is_machine_named(inserted, "SHR32ri") {
+            let [_, by] = self.dag.node(inserted).ops[..] else { return None };
+            return matches!(self.dag.node(by).data, NodeData::Const { bits: 16, .. }).then_some(inserted);
+        }
         if !self.is_machine_named(inserted, "INSERT_SUBREG") {
             return None;
         }
@@ -2253,6 +2263,20 @@ impl Emitter<'_, '_> {
                 }
                 let held = self.fresh(width);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
+                // The address of a symbol alone is its offset as an immediate
+                // (`mov r, offset sym`, which the encoder makes `lea r,
+                // [rip+sym]`), not an address value: the passes fold a `lea`
+                // into the operands that read it, and `sym[index]` is no
+                // address at 64 bits.
+                if self.ctx.address_mode == AddrMode::Flat64
+                    && cell.base.is_none()
+                    && cell.index.is_none()
+                    && let Some(address) = cell.addr
+                {
+                    let offset = Imm { value: 0, width, address: Some(address) };
+                    self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Imm(offset)]);
+                    return Ok(Some(()));
+                }
                 self.push(
                     Operation::Address,
                     "lea",
@@ -2712,6 +2736,11 @@ impl Emitter<'_, '_> {
     ) -> Result<Option<Held>, EmitError> {
         // `$noreg` is virtual register 0.
         if self.dag.node(value).data == NodeData::Register(0) {
+            return Ok(None);
+        }
+        // `%rip` as a base is how the pin spells a symbol's address; the
+        // operand is the symbol alone, which the encoder makes `%rip`-relative.
+        if self.dag.node(value).data == NodeData::PhysReg(llrm_lir::registers::RegId::RIP) {
             return Ok(None);
         }
         match self.operand(value)? {

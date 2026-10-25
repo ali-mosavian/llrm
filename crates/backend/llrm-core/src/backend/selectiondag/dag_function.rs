@@ -1118,7 +1118,45 @@ fn landing_pad_insn(
     }
 }
 
-/// A value read where some path to it defines nothing: (value, instruction).
+/// A set of values, one bit each: values are dense per body (`fresh` counts
+/// up), so a block's set is a few words, not a hash table.
+#[derive(Clone, PartialEq, Eq)]
+struct Values(Vec<u64>);
+
+impl Values {
+    fn new(bits: usize) -> Self {
+        Values(vec![0; bits.div_ceil(64)])
+    }
+
+    fn insert(
+        &mut self,
+        value: u32,
+    ) {
+        self.0[value as usize / 64] |= 1 << (value % 64);
+    }
+
+    fn contains(
+        &self,
+        value: u32,
+    ) -> bool {
+        self.0[value as usize / 64] >> (value % 64) & 1 == 1
+    }
+
+    fn union(
+        &self,
+        other: &Values,
+    ) -> Values {
+        Values(self.0.iter().zip(&other.0).map(|(a, b)| a | b).collect())
+    }
+
+    fn intersection(
+        &self,
+        other: &Values,
+    ) -> Values {
+        Values(self.0.iter().zip(&other.0).map(|(a, b)| a & b).collect())
+    }
+}
+
 /// The branch probabilities of the body: the edges the builder stated
 /// (`addSuccessorWithProb`: a conditional branch's two, a merged condition's
 /// cases), on the blocks whose machine edges they are. An edge nobody stated
@@ -1139,15 +1177,15 @@ fn set_odds(
     }
 }
 
-fn read_before_defined(
+/// A value read where some path to it defines nothing: (value, instruction).
+pub(super) fn read_before_defined(
     blocks: &[EmitBlock],
     succ: &[Vec<i64>],
     landing: Option<i64>,
 ) -> Option<(u32, Option<String>)> {
-    use std::collections::HashSet;
     let index: std::collections::HashMap<i64, usize> = blocks.iter().enumerate().map(|(i, b)| (b.at, i)).collect();
+    // A copy of a value to itself defines nothing.
     let defines = |insn: &Insn| -> Vec<u32> {
-        // A copy of a value to itself defines nothing.
         let itself = insn
             .what
             .as_ref()
@@ -1159,48 +1197,74 @@ fn read_before_defined(
             );
         if itself { Vec::new() } else { insn.defines.clone() }
     };
-    let own: Vec<HashSet<u32>> = blocks
+    let highest = blocks
+        .iter()
+        .flat_map(|block| {
+            block
+                .phis
+                .iter()
+                .flat_map(|phi| std::iter::once(phi.result).chain(phi.incoming.iter().map(|&(_, v)| v)))
+                .chain(block.insns.iter().flat_map(|insn| insn.defines.iter().chain(&insn.uses).copied()))
+        })
+        .max()
+        .unwrap_or(0) as usize;
+    let bits = highest + 1;
+    let own: Vec<Values> = blocks
         .iter()
         .map(|block| {
-            block.phis.iter().map(|phi| phi.result).chain(block.insns.iter().flat_map(|insn| defines(insn))).collect()
+            let mut set = Values::new(bits);
+            for phi in &block.phis {
+                set.insert(phi.result);
+            }
+            for insn in &block.insns {
+                for value in defines(insn) {
+                    set.insert(value);
+                }
+            }
+            set
         })
         .collect();
     // What is defined on every path to the start of each block (`None`: no
     // path has reached it yet).
-    let mut entry: Vec<Option<HashSet<u32>>> = vec![None; blocks.len()];
-    entry[0] = Some(HashSet::new());
+    let mut entry: Vec<Option<Values>> = vec![None; blocks.len()];
+    entry[0] = Some(Values::new(bits));
     // The runtime enters a landing pad with no value defined: a root of its
     // own.
     if let Some(&pad) = landing.and_then(|at| index.get(&at)) {
-        entry[pad] = Some(HashSet::new());
+        entry[pad] = Some(Values::new(bits));
     }
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for at in 0..blocks.len() {
-            let Some(here) = entry[at].clone() else { continue };
-            let out: HashSet<u32> = here.union(&own[at]).copied().collect();
-            for next in &succ[at] {
-                let Some(&to) = index.get(next) else { continue };
-                let merged = match &entry[to] {
-                    None => out.clone(),
-                    Some(known) => known.intersection(&out).copied().collect(),
-                };
-                if entry[to].as_ref() != Some(&merged) {
-                    entry[to] = Some(merged);
-                    changed = true;
+    let mut work: std::collections::VecDeque<usize> = (0..blocks.len()).filter(|&at| entry[at].is_some()).collect();
+    let mut queued: Vec<bool> = (0..blocks.len()).map(|at| entry[at].is_some()).collect();
+    while let Some(at) = work.pop_front() {
+        queued[at] = false;
+        let out = entry[at].as_ref().expect("a reached block").union(&own[at]);
+        for next in &succ[at] {
+            let Some(&to) = index.get(next) else { continue };
+            let merged = match &entry[to] {
+                None => out.clone(),
+                Some(known) => known.intersection(&out),
+            };
+            if entry[to].as_ref() != Some(&merged) {
+                entry[to] = Some(merged);
+                if !queued[to] {
+                    queued[to] = true;
+                    work.push_back(to);
                 }
             }
         }
     }
     for (at, block) in blocks.iter().enumerate() {
         let Some(mut known) = entry[at].clone() else { continue };
-        known.extend(block.phis.iter().map(|phi| phi.result));
+        for phi in &block.phis {
+            known.insert(phi.result);
+        }
         for insn in &block.insns {
-            if let Some(value) = insn.uses.iter().find(|value| !known.contains(value)) {
+            if let Some(value) = insn.uses.iter().find(|value| !known.contains(**value)) {
                 return Some((*value, insn.what.as_ref().and_then(|what| what.name.as_ref().map(|n| n.to_string()))));
             }
-            known.extend(defines(insn));
+            for value in defines(insn) {
+                known.insert(value);
+            }
         }
         // What a phi takes from an edge is defined at the end of that edge's
         // block.
@@ -1208,7 +1272,7 @@ fn read_before_defined(
             for (edge, value) in &phi.incoming {
                 let Some(&from) = index.get(edge) else { continue };
                 let Some(start) = entry[from].as_ref() else { continue };
-                if !start.contains(value) && !own[from].contains(value) {
+                if !start.contains(*value) && !own[from].contains(*value) {
                     return Some((*value, Some("phi".to_owned())));
                 }
             }
