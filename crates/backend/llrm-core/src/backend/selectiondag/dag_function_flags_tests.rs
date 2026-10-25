@@ -723,8 +723,10 @@ fn a_sub_whose_difference_is_unread_is_a_cmp() {
     let module = llrm_mir::parse::module(COMPARE_WITH_ONE).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
+    // The pin's PeepholeOptimizer (`optimizeCompareInstr`) makes the `cmp`.
+    let body = crate::backend::peepholeopt::compared(&done.body);
     let names: Vec<String> =
-        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+        body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
     assert!(names.iter().any(|n| n == "cmp"), "{names:?}");
     assert!(!names.iter().any(|n| n == "sub"), "{names:?}");
 }
