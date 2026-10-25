@@ -283,3 +283,18 @@ fn a_run_derives_no_annotations() {
     assert!(!crate::testing::printed(&module).contains("store i16 1"), "premise: the store goes");
     assert_eq!(after - before, 0, "DSE derived the annotations");
 }
+
+/// DSE forked the whole body (and cloned the context) to read it while the
+/// removals waited: one fork, 1.74 M Ir, for each run over a body with a
+/// store.
+#[test]
+fn a_run_forks_no_body() {
+    use llrm_mir::counts::{Event, get};
+    let before = get(Event::FunctionForks);
+    let after = eliminated(
+        "@g = global i16 0\n\ndefine i16 @f(i16 %x) {\nb0:\n  store i16 1, ptr @g\n  store i16 %x, ptr @g\n  %r = load i16, ptr @g\n  ret i16 %r\n}\n",
+        &[&[7]],
+    );
+    assert!(!after.contains("store i16 1"), "{after}");
+    assert_eq!(get(Event::FunctionForks), before, "dse forked the body");
+}

@@ -162,19 +162,18 @@ impl FunctionPass for DeadStoreElimination {
         }
         // Nothing is made up front: each access is asked of the unit.
         let accesses = Accesses::lazy();
-        // MemorySSA describes the function as it is now; the removals go to
-        // `unit.function` at the end, and the graph follows them through its
-        // updater.
-        let before = unit.function.fork();
-        let frozen = unit.context.clone();
+        // MemorySSA describes the function as it is now; the removals are
+        // collected and applied to `unit.function` once the state is done
+        // with it, and the graph follows them through its updater.
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
-        let view = View::within(&frozen, unit.layout, &before, &outer).with_shape(&shape);
+        let (frozen, before): (&Context, &Function) = (unit.context, unit.function);
+        let view = View::within(frozen, unit.layout, before, &outer).with_shape(&shape);
         let shape = view.shape();
-        let mssa = Mssa::build(&before, &shape.dominance, &shadow::effect_of_in(&accesses, &view));
-        let tree = DomTree::of(&before);
+        let mssa = Mssa::build(before, &shape.dominance, &shadow::effect_of_in(&accesses, &view));
+        let tree = DomTree::of(before);
         let mut post = PostDomTree::new();
-        post.recalculate(&before);
-        let mut state = Dse::new(&frozen, &before, &view, &accesses, outer.callees(), mssa, &tree, &post, &shape.loops);
+        post.recalculate(before);
+        let mut state = Dse::new(frozen, before, &view, &accesses, outer.callees(), mssa, &tree, &post, &shape.loops);
         let changed = state.run();
         let gone = std::mem::take(&mut state.to_remove);
         let shortened = std::mem::take(&mut state.shortened);
