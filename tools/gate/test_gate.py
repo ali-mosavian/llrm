@@ -338,7 +338,7 @@ def test_a_backend_change_runs_the_measure_step_and_a_frontend_only_change_does_
     assert "measure" in gate.plan(["crates/opt/llrm-transforms/src/gvn.rs"]).steps
     assert "measure" in gate.plan(["crates/ir/llrm-mir/src/lib.rs"]).steps  # full
     assert "measure" not in gate.plan(["tests/run.rs"]).steps
-    assert "measure" not in gate.plan(["crates/frontends/llrm-qb/src/lib.rs"]).steps
+    assert "measure" not in gate.plan(["crates/frontends/qb/src/lib.rs"]).steps
 
 
 def test_the_measure_step_has_a_command_and_no_baseline_lives_in_the_repository():

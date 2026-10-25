@@ -1,9 +1,0 @@
-TOKENS:
-   tkBEEP ("BEEP");
-
-Statements:
-   tkBEEP EMIT(opStBeep);
-
-Functions:
-
-NonTerminals:
