@@ -73,3 +73,58 @@ b2:
     );
     assert!(text.contains("ret i1 %d"), "{text}");
 }
+
+/// `for (i = 1919; i > -1; i--) check(i < 1920)`: the phi `{1919,+,-1}<nsw>`
+/// bounds `i <= 1919` and the header test `i >= 0`, so the check is true.
+/// Before the induction facts the check stayed (scroll.nib m16 ran 3.5x the
+/// instructions: no `memmove` for the copy loop).
+#[test]
+fn a_decrementing_induction_decides_its_bounds_check() {
+    let text = eliminated(
+        "define void @f() {
+entry:
+  br label %h
+h:
+  %i = phi i16 [ 1919, %entry ], [ %n, %latch ]
+  %c = icmp sgt i16 %i, -1
+  br i1 %c, label %chk, label %x
+chk:
+  %ok = icmp ult i16 %i, 1920
+  br i1 %ok, label %latch, label %x
+latch:
+  %n = add nsw i16 %i, -1
+  br label %h
+x:
+  ret void
+}
+",
+    );
+    assert!(text.contains("br i1 true"), "{text}");
+}
+
+/// `nuw` follows the `nsw` the same check just added: `i + 1` with `0 <= i`
+/// gets both. It got `nsw` alone while the second test read the flags from
+/// before the first.
+#[test]
+fn nuw_is_judged_with_the_nsw_just_added() {
+    let text = eliminated(
+        "declare void @use(i16)
+define void @f() {
+entry:
+  br label %h
+h:
+  %i = phi i16 [ 7, %entry ], [ %n, %b ]
+  %c = icmp sge i16 %i, 0
+  br i1 %c, label %b, label %x
+b:
+  %a = add i16 %i, 1
+  call void @use(i16 %a)
+  %n = add i16 %i, -1
+  br label %h
+x:
+  ret void
+}
+",
+    );
+    assert!(text.contains("%a = add nuw nsw i16 %i, 1"), "{text}");
+}
