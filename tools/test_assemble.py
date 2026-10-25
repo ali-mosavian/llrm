@@ -150,3 +150,19 @@ def test_a_pr_whose_only_issue_is_a_fmt_difference_is_kept(tmp_path):
     sh(repo, "checkout", "-q", "main")
     why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: {"emit.rs"}, scanners=lambda _: set())
     assert why == [], why
+
+
+def test_a_diff_with_non_utf8_bytes_is_read_not_a_crash(tmp_path):
+    """The 20:07 batch ran unassembled: `added_names` died with UnicodeDecodeError 0xdb on a PR whose diff held CP437 bytes (a .BAS), and the runner fell back to the first 16."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    sh(repo, "checkout", "-q", "-b", "pr")
+    (repo / "prog.bas").write_bytes(b"PRINT \"\xdb\xdb\xb0\"\n")
+    (repo / "t.rs").write_text("fn a_new_test() {}\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "pr")
+    assert ps.added_names("pr", "main", repo) == {"a_new_test"}
+    assert ps.git("diff", "-U0", "main...pr", cwd=repo).count("PRINT") == 1
