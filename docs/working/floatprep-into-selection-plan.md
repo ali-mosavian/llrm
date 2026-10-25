@@ -39,6 +39,12 @@ So three of five steps are selection's, and they need no liveness at all. The li
 
 Each PR: dist pair on d_faces -O2, objsweep 568 objects 0 changed, fail-first test.
 
+## Parked (2026-10-25)
+
+- Steps 2 and 3: while the old isel path exists both would run, so they save 0 Ir. Revisit when it is deleted.
+- Step 4 (one float liveness for `prepared` and `converted`): reuse needs a check that the float defs/uses and CFG are unchanged, which costs the numbering half of the solve; saving <= 0.9 M, and a stale row is a silent miscompile.
+- Lazy block-exit liveness in `prepared`: measured -0.06 M (repeated loads are common); dropped.
+
 ## File split with w12
 
 w12 edits the call-frame arms of `emit.rs`. This work touches the compare arm and the `fild`/`fist` arms (2, 3), and `floatassign.rs`/`fpstack.rs`. Disjoint hunks; whoever lands second merges `feat/parity`.
