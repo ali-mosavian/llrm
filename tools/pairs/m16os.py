@@ -24,6 +24,7 @@ import importlib.util
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
+FOLDED_AT = 2  # a kernel of at most this many instructions is a constant the optimiser returned: a folded row, never a speedup
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 
@@ -127,12 +128,12 @@ def main() -> None:
             lines.append(f"    {function}: {was.get(function, 'absent')} -> {now.get(function, 'absent')} ({delta:+})")
     if args.clocks:
         before, after = bench(args.base, args.level, Path(tempfile.mkdtemp(prefix="m16os-base-"))), bench(args.new, args.level, Path(tempfile.mkdtemp(prefix="m16os-new-")))
-        lines += ["", "bench rows, slowest first (clocks and code bytes, base / new / ratio; rows one side cannot build or count follow):"]
-        timed = lambda row: isinstance(row, dict) and "clocks" in row
+        lines += ["", "bench rows, slowest first (rows with a folded kernel are listed after, never ratioed; clocks and code bytes, base / new / ratio; rows one side cannot build or count follow):"]
+        timed = lambda row: isinstance(row, dict) and "clocks" in row and row.get("instructions", 3) > FOLDED_AT
         both = sorted((k for k in before if timed(before[k]) and timed(after.get(k))), key=lambda k: before[k]["clocks"] / after[k]["clocks"])
         lines += [f"  {k:34} clocks {before[k]['clocks']:>11} {after[k]['clocks']:>11} {after[k]['clocks'] / before[k]['clocks']:5.2f}x   bytes {before[k]['code_bytes']:>5} {after[k]['code_bytes']:>5} {after[k]['code_bytes'] / before[k]['code_bytes']:5.2f}x" for k in both]
         lines.append(f"  clocks: {sum(after[k]['clocks'] > before[k]['clocks'] for k in both)} slower, {sum(after[k]['clocks'] < before[k]['clocks'] for k in both)} faster of {len(both)}")
-        said = lambda rows, k: "absent" if k not in rows else "counted" if timed(rows[k]) else str(rows[k].get("error", "no clocks"))[:90]
+        said = lambda rows, k: "absent" if k not in rows else "counted" if timed(rows[k]) else "folded" if rows[k].get("instructions", 3) <= FOLDED_AT and "error" not in rows[k] else str(rows[k].get("error", "no clocks"))[:90]
         lines += [f"  {k}: base {said(before, k)}; new {said(after, k)}" for k in sorted(set(before) | set(after)) if k not in both]
     text = "\n".join(lines) + "\n"
     if args.out:
