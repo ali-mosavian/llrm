@@ -317,6 +317,12 @@ impl Parser {
                     self.string()?;
                 }
                 Token::Local(Name::Named(name)) => self.named_type(name)?,
+                Token::Word(word) if word.starts_with('$') && matches!(self.peek_at(1), Token::Punct('=')) => {
+                    self.next();
+                    self.next();
+                    self.expect_word("comdat")?;
+                    self.word()?;
+                }
                 Token::Global(name) => self.global_variable(name)?,
                 Token::Word(word) if word == "declare" || word == "define" => self.function(word == "define")?,
                 Token::MetadataName(name) => self.named_metadata(name)?,
@@ -454,6 +460,19 @@ impl Parser {
         }
     }
 
+    /// `comdat` or `comdat($name)`: a duplicate is dropped by the linkage (`linkonce_odr`), which MIR has, so the group is
+    /// read and left out.
+    fn comdat(&mut self) -> Parsed<bool> {
+        if !self.eat_word("comdat") {
+            return Ok(false);
+        }
+        if self.eat_punct('(') {
+            self.word()?;
+            self.expect_punct(')')?;
+        }
+        Ok(true)
+    }
+
     fn address_space(&mut self) -> Parsed<u32> {
         if !self.eat_word("addrspace") {
             return Ok(0);
@@ -490,6 +509,7 @@ impl Parser {
         while self.eat_punct(',') {
             if self.eat_word("align") {
                 align = Some(self.unsigned()?);
+            } else if self.comdat()? {
             } else if self.eat_word("section") {
                 return self.fail("sections are outside MIR's subset of LLVM");
             } else {
@@ -584,6 +604,7 @@ impl Parser {
         let unnamed_addr = self.unnamed_addr();
         let address_space = self.address_space()?;
         local.function.attrs = self.attributes(true)?;
+        self.comdat()?;
         if self.eat_word("personality") {
             let ty = self.ty()?;
             local.function.personality = Some(self.constant(ty)?);

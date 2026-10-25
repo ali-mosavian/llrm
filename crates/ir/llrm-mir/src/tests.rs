@@ -91,6 +91,19 @@ fn constructs_outside_the_subset_are_refused() {
     assert_eq!(refusal("target triple = \"i386\"\n"), "line 1: `triple` is outside MIR's subset of LLVM");
 }
 
+/// clang's C++ output (RTTI, inline functions) put every `linkonce_odr` global in a comdat; `llrm-llc` refused the module at
+/// `$_ZTI1B = comdat any`. The linkage already says how a duplicate is dropped, so the comdat is read and left out.
+#[test]
+fn a_comdat_is_read_and_dropped() {
+    let text = "$_ZTS1B = comdat any\n\n@_ZTS1B = linkonce_odr constant [3 x i8] c\"1B\\00\", comdat, align 1\n\
+                @g = linkonce_odr constant i16 1, comdat($_ZTS1B)\n\n\
+                define linkonce_odr i16 @f() comdat($_ZTS1B) {\n  ret i16 1\n}\n";
+    let printed = round(text);
+    assert!(!printed.contains("comdat"), "{printed}");
+    assert!(printed.contains("@_ZTS1B = linkonce_odr constant [3 x i8]"), "{printed}");
+    assert!(printed.contains("define linkonce_odr i16 @f()"), "{printed}");
+}
+
 #[test]
 fn attribute_groups_may_follow_their_use() {
     let text = "declare void @stop(i16) #0\n\nattributes #0 = { noreturn memory(argmem: read) \"kind\"=\"error\" }\n";
