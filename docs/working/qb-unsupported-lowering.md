@@ -65,3 +65,6 @@ so numbers run about three times the files. Re-run after each PR (2026-10-25, on
 | WIDTH one-arg (#4722) | 9 |
 | SCREEN extra arguments | 9 |
 | NAME (#4667) | 9 |
+
+UDT array and a STRING array. The runtime preserves both: a string array's kept strings follow to the new elements
+(`str_owner_moved`) and only the cut-off ones are released. Tested on the host (`tests/hostarray/preserve_test.c`).
