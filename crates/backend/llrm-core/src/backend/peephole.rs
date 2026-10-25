@@ -1680,7 +1680,7 @@ pub fn addresses<'a>(
             }
         }
     }
-    let (_, live_out) = crate::backend::allocate::live(body);
+    let live_out = crate::backend::allocate::live_out(body);
     let flags_out = _flags_live_out(body);
     let mut blocks = Vec::new();
     for block in &body.blocks {

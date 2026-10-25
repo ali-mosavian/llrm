@@ -248,6 +248,7 @@ pub mod precse;
 pub mod pressuresink;
 pub mod prologue;
 pub mod pushfold;
+pub mod regpressure;
 pub mod regthrash;
 pub mod relayout;
 pub mod rmw;
