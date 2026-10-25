@@ -430,8 +430,9 @@ fn use_queries_agree_with_a_scan_of_the_live_nodes() {
     use llrm_dagisel::dag::Dag;
 
     let mut dag = SelectionDAG::new(DagConfig::default());
-    let a = dag.get_constant_with(5, EVT::I32, true, false);
+    let a = input(&mut dag, 40);
     let twice = dag.get_node(ISD::Add, EVT::I32, &[a, a]);
+    dag.set_root(twice);
     let mut adapter = DagisAdapter::new(&mut dag);
     let pin_a = llrm_dagisel::dag::SDValue::new(a.node, 0);
     assert!(adapter.has_live_users(a.node));
@@ -458,16 +459,20 @@ fn pin_opcode_and_the_use_queries_allocate_nothing() {
     assert_eq!(made, 0, "{made} allocations to number 1,024 target opcodes");
 
     let mut dag = SelectionDAG::new(DagConfig::default());
-    let a = dag.get_constant_with(5, EVT::I32, true, false);
+    let a = input(&mut dag, 40);
     let twice = dag.get_node(ISD::Add, EVT::I32, &[a, a]);
+    dag.set_root(twice);
     let mut adapter = DagisAdapter::new(&mut dag);
     let pin_a = llrm_dagisel::dag::SDValue::new(a.node, 0);
-    let (_, made) = llrm_support::alloc_count::counted(|| {
-        adapter.has_live_users(a.node)
-            && adapter.has_n_uses_of_value(pin_a, 2)
-            && !adapter.has_one_use(pin_a)
-            && adapter.is_only_user_of(twice.node, a.node)
-            && adapter.use_empty(twice.node)
+    let (answers, made) = llrm_support::alloc_count::counted(|| {
+        (
+            adapter.has_live_users(a.node),
+            adapter.has_n_uses_of_value(pin_a, 2),
+            adapter.has_one_use(pin_a),
+            adapter.is_only_user_of(twice.node, a.node),
+            adapter.use_empty(twice.node),
+        )
     });
+    assert_eq!(answers, (true, true, false, true, true), "premise: the answers are the scan's");
     assert_eq!(made, 0, "{made} allocations to ask five use questions");
 }

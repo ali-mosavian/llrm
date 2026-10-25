@@ -498,22 +498,24 @@ impl Dag for DagisAdapter<'_> {
         value: PinValue,
         n: usize,
     ) -> bool {
-        // each read of the value by a live node, counted up to `n + 1`
-        let mut users = self.dag.use_candidates(value.node).to_vec();
-        users.sort_unstable();
-        users.dedup();
-        users
-            .into_iter()
-            .filter(|user| !self.dead.contains(user))
-            .map(|user| {
-                self.dag.nodes()[user as usize]
-                    .ops
-                    .iter()
-                    .filter(|op| op.node == value.node && op.res == value.res)
-                    .count()
-            })
-            .sum::<usize>()
-            == n
+        // each read of the value by a live node, counted up to `n + 1`; a
+        // user the list names twice is read once
+        let candidates = self.dag.use_candidates(value.node);
+        let mut reads = 0;
+        for (at, &user) in candidates.iter().enumerate() {
+            if self.dead.contains(&user) || candidates[..at].contains(&user) {
+                continue;
+            }
+            reads += self.dag.nodes()[user as usize]
+                .ops
+                .iter()
+                .filter(|op| op.node == value.node && op.res == value.res)
+                .count();
+            if reads > n {
+                return false;
+            }
+        }
+        reads == n
     }
     fn constant(
         &self,
