@@ -329,25 +329,44 @@ impl<'a> Builder<'a> {
         synthetic_name: Option<String>,
     ) -> Builder<'a> {
         let mut dag = SelectionDAG::new(target.dag);
-        dag.global_names =
-            module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect();
-        // `isOffsetFoldingLegal`: `shouldAssumeDSOLocal` holds for the globals
-        // the IR marks local, an ELF target's only ones
-        dag.local_symbols = module
-            .globals
-            .iter()
-            .map(|global| {
-                matches!(
-                    global.linkage,
-                    llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
-                )
+        let tables = info
+            .tables
+            .get_or_insert_with(|| {
+                // `isOffsetFoldingLegal`: `shouldAssumeDSOLocal` holds for the
+                // globals the IR marks local, an ELF target's only ones
+                super::function_lowering::Tables {
+                    global_names: std::rc::Rc::new(
+                        module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect(),
+                    ),
+                    local_symbols: std::rc::Rc::new(
+                        module
+                            .globals
+                            .iter()
+                            .map(|global| {
+                                matches!(
+                                    global.linkage,
+                                    llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
+                                )
+                            })
+                            .collect(),
+                    ),
+                    block_names: std::rc::Rc::new(
+                        (0..function.block_capacity())
+                            .map(|at| {
+                                function.block(BlockId(at as u32)).name.clone().unwrap_or_else(|| format!("bb{at}"))
+                            })
+                            .collect(),
+                    ),
+                }
             })
-            .collect();
-        dag.block_names = (0..function.block_capacity())
-            .map(|at| function.block(BlockId(at as u32)).name.clone().unwrap_or_else(|| format!("bb{at}")))
-            .collect();
+            .clone();
+        dag.global_names = tables.global_names;
+        dag.local_symbols = tables.local_symbols;
+        dag.block_names = tables.block_names;
         let name = synthetic_name.unwrap_or_else(|| dag_name(&dag, block));
-        dag.block_names.resize(next_synthetic as usize, name);
+        if dag.block_names.len() < next_synthetic as usize {
+            std::rc::Rc::make_mut(&mut dag.block_names).resize(next_synthetic as usize, name);
+        }
         Builder {
             current: None,
             prelowered: Default::default(),

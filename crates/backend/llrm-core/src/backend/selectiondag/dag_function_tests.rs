@@ -285,3 +285,45 @@ fn a_chain_of_word_operations_has_no_casts_between_them() {
     assert!(!names.iter().any(|n| n.starts_with("movzx") || n.starts_with("movsx")), "{names:?}");
     assert_eq!(names.iter().filter(|n| matches!(n.as_str(), "imul" | "add" | "and")).count(), 3, "{names:?}");
 }
+
+/// `read_before_defined` kept a hash set of every value defined on every path
+/// to each block: a chain of N blocks defining N values was N^2 hashes (28% of
+/// a whole compile at the flip). A chain of 4000 blocks with 16000 values is a
+/// few words per block now; it also still finds a value one path leaves out.
+#[test]
+fn the_check_for_a_value_read_before_it_is_defined_is_linear_in_the_body() {
+    use std::sync::Arc;
+
+    use super::emit::EmitBlock;
+    use crate::model::ir::{Held, Loc, Operation, Semantics};
+    use crate::model::lir::Insn;
+    let defining = |at: i64, defines: Vec<u32>, uses: Vec<u32>| {
+        let what = Semantics {
+            name: Some("mov".into()),
+            dests: vec![Loc::Held(Held { value: defines.first().copied().unwrap_or(0), width: 4 })],
+            sources: Vec::new(),
+            ..Semantics::new(Operation::Move)
+        };
+        Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
+    };
+    let blocks: Vec<EmitBlock> = (0..4000)
+        .map(|at| EmitBlock {
+            at,
+            phis: Vec::new(),
+            insns: (0..4)
+                .map(|k| {
+                    let value = (at * 4 + k + 1) as u32;
+                    defining(at, vec![value], if at > 0 && k == 0 { vec![(at * 4) as u32] } else { vec![] })
+                })
+                .collect(),
+        })
+        .collect();
+    let succ: Vec<Vec<i64>> = (0..4000).map(|at| if at + 1 < 4000 { vec![at + 1] } else { vec![] }).collect();
+    let started = std::time::Instant::now();
+    assert_eq!(super::dag_function::read_before_defined(&blocks, &succ, None), None);
+    assert!(started.elapsed().as_secs_f64() < 2.0, "{:?}", started.elapsed());
+    // a use of a value no block defines is found
+    let mut missing = blocks;
+    missing[3999].insns.push(defining(3999, vec![], vec![999_999]));
+    assert_eq!(super::dag_function::read_before_defined(&missing, &succ, None).map(|(value, _)| value), Some(999_999));
+}
