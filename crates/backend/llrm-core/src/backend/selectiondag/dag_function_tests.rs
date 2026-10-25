@@ -3250,3 +3250,36 @@ fn a_dominant_case_is_peeled_and_the_rest_follows() {
         done.body.blocks.len()
     );
 }
+
+const M16_FAR_COPY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+@far = addrspace(1) global [100 x i16] zeroinitializer
+@near = global [100 x i16] zeroinitializer
+declare void @llvm.memcpy.p0.p1.i16(ptr, ptr addrspace(1), i16, i1)
+define void @f(i16 %n) {
+entry:
+  %bytes = shl i16 %n, 1
+  call void @llvm.memcpy.p0.p1.i16(ptr @near, ptr addrspace(1) @far, i16 %bytes, i1 false)
+  ret void
+}
+";
+
+/// A copy from a far global took DGROUP as the source's segment, because the
+/// far pointer was built with `add` and only `or` was recognised:
+/// `idiom_edges.c` at m16 summed the near array's old contents.
+#[test]
+fn a_copy_from_a_far_global_loads_the_globals_segment() {
+    let module = llrm_mir::parse::module(M16_FAR_COPY).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let copy = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.op == Operation::Copy).expect("a copy");
+    let crate::model::ir::Loc::Held(from) = copy.sources[3] else { panic!("{copy:?}") };
+    let loaded = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.dests.iter().any(|d| matches!(d, crate::model::ir::Loc::Held(h) if h.value == from.value)))
+        .expect("the source segment is loaded");
+    let crate::model::ir::Loc::Imm(imm) = &loaded.sources[0] else { panic!("{loaded:?}") };
+    let group = imm.address.as_ref().map(|address| address.index);
+    assert_ne!(group, Some(0), "DGROUP, not the global's own segment: {loaded:?}");
+}
