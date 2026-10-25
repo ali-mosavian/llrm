@@ -1230,7 +1230,22 @@ fn built(
         }
         let following = if index + 1 < blocks.len() { Some(blocks[index + 1].at) } else { None };
         let fallthrough = _fallthrough_jump(block, following);
+        // The edge into the restore that `shrinkwrap` split: what the path took
+        // on is taken back at the end of this block, before the jump that
+        // leaves it (printed or not), or where it falls into the restore. The
+        // paths that took nothing reach the restore's label past it.
+        let closing = wrap.as_ref().and_then(|wrap| wrap.closes_after.get(&block.at));
+        let last_printed = block.insns.iter().rev().find(|one| prints(one));
+        let ends_in_jump =
+            last_printed.is_some_and(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Jump));
+        let mut closed = false;
         for one in &block.insns {
+            if let Some(pieces) =
+                closing.filter(|_| ends_in_jump && last_printed.is_some_and(|last| Arc::ptr_eq(last, one)))
+            {
+                out.extend(pieces.iter().flat_map(|piece| item(piece).1).map(Item::Semantics));
+                closed = true;
+            }
             if first.is_some_and(|first| Arc::ptr_eq(first, one)) {
                 out.push(Item::Mark(Mark::BodyStart));
             }
@@ -1351,6 +1366,9 @@ fn built(
             if last.is_some_and(|last| Arc::ptr_eq(last, one)) {
                 out.push(Item::Mark(Mark::BodyEnd));
             }
+        }
+        if let Some(pieces) = closing.filter(|_| !closed) {
+            out.extend(pieces.iter().flat_map(|piece| item(piece).1).map(Item::Semantics));
         }
         let fall = _falls_to(block, &procedure.name)?;
         if let Some(fall) = fall {
@@ -3235,9 +3253,10 @@ mod tests {
     }
 
     /// Reached around the block that names it as well, a return cannot pop what
-    /// was not pushed: the entry saves, as before.
+    /// was not pushed: the late block pops at its end, before it falls into the
+    /// return the early exit jumps to.
     #[test]
-    fn test_a_return_reached_around_the_save_keeps_the_save_at_the_entry() {
+    fn test_a_return_reached_around_the_save_has_the_pop_at_the_end_of_the_late_path() {
         let branch = Semantics { target: Some(3), ..semantics(Operation::Branch, "je", vec![], vec![]) };
         let si = || Loc::Reg(ir::Reg { register: RegId::SI, width: 2 });
         let blocks = vec![
@@ -3268,11 +3287,10 @@ mod tests {
         };
         let lines: Vec<String> =
             _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
-        assert!(
-            lines.iter().position(|one| one == "push si").unwrap()
-                < lines.iter().position(|one| one == "L0_1:").unwrap(),
-            "{lines:?}"
-        );
+        let at = |wanted: &str| lines.iter().position(|one| one == wanted).unwrap();
+        assert!(at("L0_2:") < at("push si"), "{lines:?}");
+        assert!(at("pop si") < at("L0_3:"), "{lines:?}");
+        assert_eq!(lines.iter().filter(|one| *one == "pop si").count(), 1, "{lines:?}");
     }
 
     /// peephole's multiply by three has no address, only base, index and scale.
