@@ -108,6 +108,7 @@ pub mod cellmap;
 pub mod cfg;
 pub mod cfgwalk;
 pub mod constant_cycles;
+pub mod constraintsystem;
 pub mod consts;
 #[cfg(test)]
 mod corpus_tests;
