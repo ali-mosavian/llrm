@@ -162,3 +162,34 @@ fn every_libcall_a_c_toml_names_is_in_its_runtime() {
         }
     }
 }
+
+/// Inline memset width at x86-64: the pin's `getOptimalMemOpType` gives `i64`
+/// for eight bytes or more there, so a 16-byte clear is two stores, not four.
+#[test]
+fn a_16_byte_clear_at_m64_is_two_qword_stores() {
+    let ir = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"\n\
+        @g = global [16 x i8] zeroinitializer\n\
+        declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
+        define void @f() {\n  call void @llvm.memset.p0.i64(ptr @g, i8 0, i64 16, i1 false)\n  ret void\n}\n";
+    let module = llrm_mir::parse::module(ir).unwrap_or_else(|error| panic!("{error}"));
+    let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+    let (id, _, function) = module
+        .functions()
+        .find(|(_, global, function)| !function.is_declaration() && global.name.as_deref() == Some("f"))
+        .unwrap();
+    let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m64::M64).expect("a convention");
+    let mut info = FunctionLoweringInfo::new(function);
+    let dump = build_block(
+        &module,
+        function,
+        &layout,
+        &BuilderTarget::m64(),
+        &llrm_x86_m64::M64,
+        &convention,
+        &mut info,
+        function.entry().unwrap(),
+    )
+    .map(|built| built.dag.dump())
+    .unwrap_or_else(|why| panic!("{}", why.0));
+    assert_eq!(dump.matches("store (s64)").count(), 2, "{dump}");
+}

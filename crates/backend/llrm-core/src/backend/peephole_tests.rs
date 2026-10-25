@@ -4982,3 +4982,45 @@ fn a_pass_that_changes_nothing_returns_every_block_as_it_was() {
         assert!(result.blocks[0].insns.same_as(&input.blocks[0].insns));
     }
 }
+
+/// The same frame address made twice into `bx` with `bx` untouched between
+/// the two: the pin has no MachineCSE after allocation, and ours had one (the
+/// second `lea` became an anchor, 3.7 M Ir of d_faces for the finds of 8 of
+/// 568 objects). Both are emitted.
+#[test]
+fn test_a_repeated_frame_address_after_allocation_is_made_again() {
+    let address = AddressRef {
+        through: RegId::BP,
+        offset: -100,
+        disp_width: 1,
+        ..AddressRef::new(Some(Addr::new(Space::Frame, -100)))
+    };
+    let lea = |at: i64, value: u32| {
+        Arc::new(insn(
+            at,
+            Some((at, at + 3)),
+            Some(sem(Operation::Address, "lea", vec![rl(RegId::BX, 2)], vec![Loc::Address(address.clone())])),
+            vec![value],
+            vec![],
+        ))
+    };
+    let store = |at: i64, slot: i64| {
+        Arc::new(insn(
+            at,
+            Some((at, at + 2)),
+            Some(sem(
+                Operation::Move,
+                "mov",
+                vec![Loc::Mem(mem(frame(slot), 2, RegId::BP, slot, 1))],
+                vec![rl(RegId::BX, 2)],
+            )),
+            vec![],
+            vec![],
+        ))
+    };
+    let ret = Arc::new(insn(20, Some((20, 20)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![]));
+    let insns = vec![lea(0, 1), store(4, -2), lea(8, 2), store(12, -4), ret];
+    let result = transform(body("cse", 0, vec![block(0, insns, vec![]).into()]));
+    let leas = whats(&result.blocks[0].insns).iter().filter(|what| what.name.as_deref() == Some("lea")).count();
+    assert_eq!(leas, 2, "{:?}", names(&result.blocks[0].insns));
+}

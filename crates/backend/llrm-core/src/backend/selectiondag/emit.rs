@@ -1557,9 +1557,12 @@ impl Emitter<'_, '_> {
             }
             // A sibling call: the frame pass puts the epilogue before this
             // return, which is a jump to the callee (`masm`).
-            "TCRETURNdi" => {
+            "TCRETURNdi" | "TCRETURN_16" => {
+                // the pseudo keeps the node's operands: the chain, then the
+                // callee
+                let target = if name == "TCRETURN_16" { node.ops[1] } else { node.ops[0] };
                 let callee = self
-                    .direct_callee(node.ops[0])
+                    .direct_callee(target)
                     .ok_or_else(|| EmitError::Unsupported("a sibling call of a non-global".to_owned()))?;
                 let at = self.next_address();
                 let requires = std::mem::take(&mut self.arguments);
@@ -2680,6 +2683,11 @@ impl Emitter<'_, '_> {
                     }
                     let node = self.dag.node(SDValue { node: user, res: 0 });
                     let NodeData::Register(reg) = self.dag.node(node.ops[1]).data else { return None };
+                    // ES is the selector the next cell takes, not a value of
+                    // its own: made in two blocks it would be defined twice.
+                    if self.is_es(node.ops[1]) {
+                        return None;
+                    }
                     (node.ops[2] == result && width_of(self.dag, node.ops[1]) == width).then_some(reg)
                 },
             )?;

@@ -716,3 +716,36 @@ define double @f(double %x) {
     assert_eq!(clobbers("fexp2"), [RegId::MM5, RegId::MM6]);
     assert_eq!(clobbers("flog2"), [RegId::MM6]);
 }
+
+const M16_CLEAR_16: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+@g = global [16 x i8] zeroinitializer
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define void @f() {
+entry:
+  call void @llvm.memset.p0.i16(ptr @g, i8 0, i16 16, i1 false)
+  ret void
+}
+";
+
+/// A 16-byte clear at m16 was eight word stores: the widest store was the
+/// pointer's. The pin's `getOptimalMemOpType` gives `i32` there, and clang
+/// `-m16 -O2` clears 16 bytes with four `movl $0` (rep_count: 1046 bytes
+/// against the old selector's 486).
+#[test]
+fn a_16_byte_clear_at_m16_is_four_dword_stores() {
+    let module = llrm_mir::parse::module(M16_CLEAR_16).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let stores: Vec<u32> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.name.as_deref() == Some("mov"))
+        .filter_map(|w| match w.dests.as_slice() {
+            [crate::model::ir::Loc::Mem(cell)] => Some(cell.width),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(stores, [4, 4, 4, 4], "store widths");
+}
