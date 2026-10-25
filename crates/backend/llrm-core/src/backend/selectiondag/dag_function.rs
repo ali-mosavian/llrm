@@ -656,11 +656,24 @@ fn selected_in(
         let llrm_mir::opcode::Opcode::Alloca { allocated, .. } = instruction.opcode else {
             return refuse("an alloca that is not an alloca");
         };
-        if !instruction.operands.is_empty() {
-            return refuse("an alloca with a count");
-        }
+        // `FunctionLoweringInfo`: a constant count multiplies the type's size
+        let count = match instruction.operands.first() {
+            None => 1,
+            Some(llrm_mir::module::Operand::Constant(id)) => match module.context.get(*id).kind {
+                llrm_mir::context::ConstantKind::Int(count) => count,
+                _ => return refuse("an alloca whose count is not a number"),
+            },
+            Some(_) => return refuse("an alloca with a count that is not a constant"),
+        };
         let types = &module.context.types;
         let size = layout.alloc_size(types, allocated) as i64;
+        let Some(size) = i64::try_from(count)
+            .ok()
+            .and_then(|count| size.checked_mul(count))
+            .filter(|size| *size <= i64::from(i32::MAX))
+        else {
+            return refuse("an alloca too large for the frame");
+        };
         let align =
             crate::backend::isel::natural_align(types, &layout, allocated).max(size & size.wrapping_neg()).clamp(1, 4);
         sizes.push((value, size, align));
