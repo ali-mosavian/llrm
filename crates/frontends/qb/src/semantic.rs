@@ -4071,6 +4071,28 @@ impl Compiler {
                         };
                         self.emit_runtime_call("B$SCLS", Vec::new(), vec![selector]);
                     }
+                    "VIEW" | "VIEW_SCREEN" => {
+                        if arguments.is_empty() {
+                            self.emit_runtime_call("B$VEW0", Vec::new(), Vec::new());
+                        } else {
+                            // BC passes the corners, the fill and border
+                            // colours (-1 for one left out) and
+                            // whether it is VIEW SCREEN.
+                            let mut operands = Vec::new();
+                            for slot in 0..6 {
+                                match arguments.get(slot) {
+                                    Some(argument) if !matches!(argument, Expr::Omitted(_)) => {
+                                        let (value, type_id) = self.expression(argument)?;
+                                        operands.push(self.convert(value, type_id, INTEGER)?);
+                                    }
+                                    _ => operands.push(Operand::Constant(INTEGER, Number::Integer(-1))),
+                                }
+                            }
+                            let screen = i64::from(name == "VIEW_SCREEN");
+                            operands.push(Operand::Constant(INTEGER, Number::Integer(screen)));
+                            self.emit_runtime_call("B$VIEW", Vec::new(), operands);
+                        }
+                    }
                     "VIEW_PRINT" => {
                         // VBDOS prview.asm's B$VWPT takes (top, bottom) as
                         // INTEGERs, cleans four bytes, and uses -1, -1 for
