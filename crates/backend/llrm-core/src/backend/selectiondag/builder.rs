@@ -1419,7 +1419,11 @@ impl Builder<'_> {
             // register
             ValueDef::Instruction(_) => {
                 let reg = *self.info.value_regs.get(&value).ok_or(Refused("value with no register"))?;
-                let vt = self.type_of(self.function.value(value).ty)?;
+                let ty = self.function.value(value).ty;
+                if self.is_aggregate(ty) {
+                    return self.copy_aggregate_from_regs(reg, ty);
+                }
+                let vt = self.type_of(ty)?;
                 Ok(self.copy_from_reg(reg, vt)?)
             }
         }
@@ -1430,7 +1434,11 @@ impl Builder<'_> {
         value: ValueId,
     ) -> Result<Option<SDValue>, Refused> {
         let Some(reg) = self.info.value_regs.get(&value).copied() else { return Ok(None) };
-        let vt = self.type_of(self.function.value(value).ty)?;
+        let ty = self.function.value(value).ty;
+        if self.is_aggregate(ty) {
+            return Ok(Some(self.copy_aggregate_from_regs(reg, ty)?));
+        }
+        let vt = self.type_of(ty)?;
         Ok(Some(self.copy_from_reg(reg, vt)?))
     }
 
@@ -1461,7 +1469,20 @@ impl Builder<'_> {
         reg: u32,
         extend: ISD,
     ) -> Result<(), Refused> {
+        if self.function.operand_type(&self.module.context, operand).is_some_and(|ty| self.is_aggregate(ty)) {
+            return self.copy_aggregate_to_registers(operand, reg);
+        }
         let value = self.non_register_value(operand)?;
+        self.copy_leaf_to_register(value, reg, extend)
+    }
+
+    /// `copy_value_to_register` of one scalar value.
+    fn copy_leaf_to_register(
+        &mut self,
+        value: SDValue,
+        reg: u32,
+        extend: ISD,
+    ) -> Result<(), Refused> {
         let vt = self.dag.value_type(value);
         let (reg_vt, parts) = self.register_parts(vt)?;
         let entry = self.dag.entry_node();
@@ -2279,8 +2300,12 @@ impl Builder<'_> {
                     },
                     Operand::Block(_) => return Err(Refused("block as a phi input")),
                 };
-                let phi_type = self.type_of(instruction.ty)?;
-                let (_, parts) = self.register_parts(phi_type)?;
+                let parts = if self.is_aggregate(instruction.ty) {
+                    self.aggregate_registers(instruction.ty)?.iter().map(|(_, parts)| parts).sum()
+                } else {
+                    let phi_type = self.type_of(instruction.ty)?;
+                    self.register_parts(phi_type)?.1
+                };
                 for reg in self.info.part_regs(reg, parts) {
                     self.phi_updates.push((result, reg));
                 }
