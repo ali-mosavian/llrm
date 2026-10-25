@@ -172,6 +172,34 @@ fn a_far_load_reads_the_pointer_and_goes_through_its_selector() {
     );
 }
 
+const M16_ZERO_16: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+@buf = global [16 x i8] zeroinitializer
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define cc 1005 void @f() addrspace(1) {
+entry:
+  call void @llvm.memset.p0.i16(ptr @buf, i8 0, i16 16, i1 false)
+  ret void
+}
+";
+
+/// `getOptimalMemOpType` is `i32` in every mode: 16 zero bytes at m16 were
+/// eight word stores (48 bytes of code), the pin's are four dword stores
+/// (rep_count: 486 -> 1046 bytes against the old selector).
+#[test]
+fn an_m16_zero_fill_of_sixteen_bytes_is_four_dword_stores() {
+    let module = llrm_mir::parse::module(M16_ZERO_16).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let stores = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.name.as_deref() == Some("mov") && matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
+        .count();
+    assert_eq!(stores, 4);
+}
+
 const M16_FILL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
 @buf = global [100 x i8] zeroinitializer
 declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
