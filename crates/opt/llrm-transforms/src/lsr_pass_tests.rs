@@ -705,7 +705,8 @@ done:
 /// The sieve kernel of bench/sieve at the stage before LSR (m16, -Os): the
 /// inner fill steps from `p + i*i`, a base that is itself a recurrence of the
 /// outer loop.
-const SIEVE: &str = "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)\ndefine i32 @f(i16 noundef %0) nounwind norecurse {
+const SIEVE: &str =
+    "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)\ndefine i32 @f(i16 noundef %0) nounwind norecurse {
 b1:
   %1 = alloca [1024 x i8]
   %2 = icmp eq i16 %0, 0
@@ -773,15 +774,24 @@ b15:
 }
 ";
 
-fn sieve_phis(registers: u32) -> usize {
-    let real = RealMode { scale_costs: vec![(1, 0), (2, 2), (4, 2), (8, 2)], registers, scaled_index_insns: 2, huge_space: None };
+fn sieve_after(registers: u32) -> String {
+    let real = RealMode {
+        scale_costs: vec![(1, 0), (2, 2), (4, 2), (8, 2)],
+        registers,
+        scaled_index_insns: 2,
+        huge_space: None,
+    };
     let tti = X86::of_cpu("i386").unwrap().in_real_mode(real);
     let mut module = parsed(&format!("{DOS}{SIEVE}"));
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let mut declared = llrm_mir::passes::Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
     crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
-    printed(&module).matches(" = phi ").count()
+    printed(&module)
+}
+
+fn sieve_phis(registers: u32) -> usize {
+    sieve_after(registers).matches(" = phi ").count()
 }
 
 /// m16 -Os sieve.c came out 171 bytes against 122 with no LSR: the inner

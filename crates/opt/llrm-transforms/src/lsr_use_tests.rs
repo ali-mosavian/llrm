@@ -63,7 +63,7 @@ fn rated(
     visited: &HashSet<Scev>,
 ) -> Cost {
     let tti = X86::of_cpu("core2").unwrap();
-    let mut rating = Rating { se, cx, tti: &tti, l: header, hardware_loop_profitable: false };
+    let mut rating = Rating { se, cx, tti: &tti, l: header, hardware_loop_profitable: false, reserved_registers: 0 };
     let (mut cost, mut regs) = (Cost::new(), HashSet::default());
     cost.rate_formula(&mut rating, f, &mut regs, visited, lu, None);
     cost
@@ -129,7 +129,8 @@ fn a_visited_register_loses_and_a_chosen_one_is_free() {
         assert!(rated(cx, se, header, &lu, &f, &visited).is_loser());
 
         let tti = X86::of_cpu("core2").unwrap();
-        let mut rating = Rating { se, cx, tti: &tti, l: header, hardware_loop_profitable: false };
+        let mut rating =
+            Rating { se, cx, tti: &tti, l: header, hardware_loop_profitable: false, reserved_registers: 0 };
         let (mut cost, mut regs) = (Cost::new(), [a].into_iter().collect::<HashSet<Scev>>());
         cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &lu, None);
         assert_eq!(cost.c, LsrCost::default(), "a chosen register costs nothing more");
@@ -316,7 +317,7 @@ fn a_scaled_index_costs_its_instructions_once_for_each_scaled_register() {
         };
         let (fa, fb) = (scaled(a), scaled(b));
         for (tti, first, both) in [(&real as &dyn llrm_mir::tti::Tti, 3, 3), (&flat, 1, 1)] {
-            let mut rating = Rating { se, cx, tti, l: header, hardware_loop_profitable: false };
+            let mut rating = Rating { se, cx, tti, l: header, hardware_loop_profitable: false, reserved_registers: 0 };
             let (mut cost, mut regs, visited) = (Cost::new(), HashSet::default(), HashSet::default());
             cost.rate_formula(&mut rating, &fa, &mut regs, &visited, &lu, None);
             assert_eq!(cost.c.insns, first, "the recurrence and the prefixed index");

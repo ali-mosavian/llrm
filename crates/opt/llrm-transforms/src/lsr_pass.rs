@@ -228,6 +228,8 @@ fn plan_loop(
     };
     let safe_to_expand = |se: &mut ScalarEvolution, s: Scev| rewriter.is_safe_to_expand(&cx, se, s);
     let mut lsr = Collection::new(&cx, tti, header, &safe_to_expand, false, iv_inc_insert_pos);
+    let reserved = reserved_registers(context, layout, function, se, &cx, header);
+    lsr.reserved_registers = reserved;
     lsr.chain_uses = chains.inc_set.clone();
     lsr.collect_interesting_types_and_factors(se, &users);
     lsr.collect_fixups_and_initial_formulae(se, &users);
@@ -243,7 +245,7 @@ fn plan_loop(
     if solution.is_empty() {
         return planned(None);
     }
-    if exceeds_registers(context, layout, function, tti, se, header, &lsr.uses, &solution) {
+    if outer_recurrences_overflow(layout, tti, se, &lsr.uses, &solution, header, reserved) {
         return planned(None);
     }
     let mut plan = lsr.into_plan(solution);
@@ -251,77 +253,111 @@ fn plan_loop(
     planned(Some(plan))
 }
 
-/// DEVIATE P1 (not LLVM's): whether the plan needs the add recurrences of
-/// enclosing loops (a base such as `p + i*i` the inner loop steps from) that
-/// would sit in registers across the whole inner loop, on top of what the
-/// nest already keeps live there, past the target's general registers. The
-/// pin rates each loop's formulae by its own registers only and takes them
-/// (`lsr.iv` phis in the outer loop); with 6 registers that spills the
-/// nest's state through the frame (m16 -Os sieve.c: +58 bytes against the
-/// build with no LSR). Words are the pointer width, so an `i32` at m16 is two.
-fn exceeds_registers(
+/// DEVIATE P1 (not LLVM's): the general registers the loop's own state holds
+/// across it, in words: what is live into the header but a frame address
+/// (the loop's inputs and the enclosing loops' state live through it), and
+/// the header phis that are no recurrence of this loop. `Cost` rates a
+/// formula's registers against the target's less these (LLVM's counts the
+/// formulae's alone): with 6 registers a nest holding 5 words takes no more
+/// induction variables, where the pin takes them and the allocator spills
+/// the state through the frame (m16 -Os sieve.c: 171 bytes against 122 with
+/// no LSR). Words are the pointer width, so an `i32` at m16 is two.
+fn reserved_registers(
     context: &Context,
     layout: &DataLayout,
     function: &Function,
-    tti: &dyn Tti,
-    se: &ScalarEvolution,
+    se: &mut ScalarEvolution,
+    cx: &llrm_analysis::scev::Cx,
     header: BlockId,
-    uses: &[crate::lsr_use::Use],
-    solution: &[usize],
-) -> bool {
+) -> u32 {
     let word = layout.pointer(0).index_bits.max(1);
     let words = |bits: u32| bits.div_ceil(word);
-    let outer = std::cell::RefCell::new(Vec::new());
-    for (one, &chosen) in uses.iter().zip(solution) {
-        let Some(formula) = one.formulae.get(chosen) else { continue };
-        for &reg in formula.base_regs.iter().chain(formula.scaled_reg.iter()) {
-            se.expr_contains(reg, &|expr| {
-                if se.addrec_header(expr).is_some_and(|at| at != header) {
-                    let mut seen = outer.borrow_mut();
-                    if !seen.contains(&expr) {
-                        seen.push(expr);
-                    }
-                }
-                false
-            });
-        }
-    }
-    let outer = outer.into_inner();
-    if outer.is_empty() {
-        return false;
-    }
-    let added: u32 = outer
-        .iter()
-        .map(|&expr| match se.type_of(expr) {
-            llrm_analysis::scev::expr::Ty::Int(bits) => words(bits),
-            llrm_analysis::scev::expr::Ty::Ptr(space) => words(layout.pointer(space).index_bits),
-        })
-        .sum();
-    let found = llrm_analysis::liveness::live(function);
     let bits_of = |value: llrm_mir::module::ValueId| match context.types.get(function.value(value).ty) {
         llrm_mir::types::Type::Int(bits) => *bits,
         _ => layout.pointer(0).index_bits,
     };
     let in_frame = |value: llrm_mir::module::ValueId| match function.value(value).def {
         llrm_mir::module::ValueDef::Instruction(def) => {
-            matches!(function.instruction(def).opcode, llrm_mir::opcode::Opcode::Alloca { .. })
+            matches!(
+                function.instruction(def).opcode,
+                llrm_mir::opcode::Opcode::Alloca { .. }
+            )
         }
         _ => false,
     };
-    let live_in = found.live_in.get(&llrm_analysis::cfg::id(header));
-    let through: u32 = live_in
+    let found = llrm_analysis::liveness::live(function);
+    let through: u32 = found
+        .live_in
+        .get(&llrm_analysis::cfg::id(header))
         .into_iter()
         .flat_map(|set| set.iter())
         .filter(|&value| !in_frame(value))
         .map(|value| words(bits_of(value)))
         .sum();
-    let phis: u32 = function
-        .iter_block(header)
-        .filter(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
-        .filter_map(|inst| function.instruction(inst).result)
-        .map(|value| words(bits_of(value)))
-        .sum();
-    through + phis + added > tti.number_of_gpr_registers()
+    let mut state = 0;
+    for inst in function.iter_block(header).collect::<Vec<_>>() {
+        if function.instruction(inst).opcode != llrm_mir::opcode::Opcode::Phi {
+            continue;
+        }
+        let Some(value) = function.instruction(inst).result else { continue };
+        let scevable = matches!(
+            context.types.get(function.value(value).ty),
+            llrm_mir::types::Type::Int(_) | llrm_mir::types::Type::Pointer(_)
+        );
+        let recurrence = scevable && {
+            let s = se.get_scev(cx, llrm_mir::module::Operand::Value(value));
+            se.addrec_header(s) == Some(header)
+        };
+        if !recurrence {
+            state += words(bits_of(value));
+        }
+    }
+    through + state
+}
+
+/// DEVIATE P1 (second part): the plan takes the add recurrences of enclosing
+/// loops (a base such as `p + i*i` the inner loop steps from), which sit in
+/// registers across the whole inner loop in the outer loop's phis, and with
+/// the loop's own state (`reserved`) they pass the target's registers. The
+/// cost sees only the inner loop. A pointer in an address space with no
+/// base-plus-index form (a huge pointer, whose offset carries into its
+/// selector) is not counted: the walk is what saves the carry on every
+/// element.
+fn outer_recurrences_overflow(
+    layout: &DataLayout,
+    tti: &dyn Tti,
+    se: &ScalarEvolution,
+    uses: &[crate::lsr_use::Use],
+    solution: &[usize],
+    header: BlockId,
+    reserved: u32,
+) -> bool {
+    let word = layout.pointer(0).index_bits.max(1);
+    let seen = std::cell::RefCell::new(Vec::<llrm_analysis::scev::expr::Scev>::new());
+    let mut added = 0;
+    for (one, &chosen) in uses.iter().zip(solution) {
+        let Some(formula) = one.formulae.get(chosen) else { continue };
+        for &reg in formula.base_regs.iter().chain(formula.scaled_reg.iter()) {
+            se.expr_contains(reg, &|expr| {
+                if se.addrec_header(expr).is_some_and(|at| at != header) && !seen.borrow().contains(&expr) {
+                    seen.borrow_mut().push(expr);
+                }
+                false
+            });
+        }
+    }
+    for expr in seen.into_inner() {
+        added += match se.type_of(expr) {
+            llrm_analysis::scev::expr::Ty::Int(bits) => bits.div_ceil(word),
+            llrm_analysis::scev::expr::Ty::Ptr(space) => {
+                if !tti.is_legal_addressing_mode_in(space, false, 0, true, 1) {
+                    continue;
+                }
+                layout.pointer(space).index_bits.div_ceil(word)
+            }
+        };
+    }
+    added > 0 && reserved + added > tti.number_of_gpr_registers()
 }
 
 /// `ReduceLoopStrength` over every loop of `function`, innermost first;

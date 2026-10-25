@@ -459,6 +459,8 @@ pub struct Collection<'a, 'b> {
     /// `Rewriter.isSafeToExpand`.
     pub safe_to_expand: &'a dyn Fn(&mut ScalarEvolution, Scev) -> bool,
     pub hardware_loop_profitable: bool,
+    /// General registers the loop's own state holds (DEVIATE P1, `lsr_pass`).
+    pub reserved_registers: u32,
     /// Where the IV increments go: the latch's terminator, or a point that
     /// dominates the post-increment tests.
     pub iv_inc_insert_pos: InstId,
@@ -502,6 +504,7 @@ impl<'a, 'b> Collection<'a, 'b> {
             l,
             safe_to_expand,
             hardware_loop_profitable,
+            reserved_registers: 0,
             iv_inc_block,
             iv_inc_insert_pos,
             uses: Vec::new(),
@@ -888,6 +891,7 @@ impl<'a, 'b> Collection<'a, 'b> {
                     tti: self.tti,
                     l: self.l,
                     hardware_loop_profitable: self.hardware_loop_profitable,
+                    reserved_registers: self.reserved_registers,
                 };
                 self.baseline_cost.rate_formula(&mut rating, &f, &mut regs, &visited_regs, &self.uses[lu_idx], None);
                 visited_uses.insert(lu_idx);

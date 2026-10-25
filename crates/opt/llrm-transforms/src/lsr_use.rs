@@ -497,6 +497,9 @@ pub struct Rating<'a, 'b> {
     /// `TTI.isHardwareLoopProfitable`: a counted-down loop's recurrence is
     /// folded into the loop instruction.
     pub hardware_loop_profitable: bool,
+    /// Registers the loop's own state holds: the formulae's are rated against
+    /// the target's less these (DEVIATE P1, `lsr_pass`).
+    pub reserved_registers: u32,
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1232
@@ -625,7 +628,7 @@ impl Cost {
 
         // Every register past the target's, less one, is another instruction
         // (a fill).
-        let target_regs = r.tti.number_of_gpr_registers() - 1;
+        let target_regs = r.tti.number_of_gpr_registers().saturating_sub(1 + r.reserved_registers);
         if self.c.num_regs > target_regs {
             // Already past: only the newly added registers add instructions.
             if prev_regs > target_regs {
