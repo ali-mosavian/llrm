@@ -139,6 +139,22 @@ def test_alone_counts_the_verdicts_it_read_from_the_cache(tmp_path):
     assert ps.HITS[0] == 1
 
 
+def test_a_build_refusal_names_the_error_of_the_prs_own_alone_build_not_the_batchs(tmp_path):
+    """The 16:56 batch refused #4743 with `floatassign.rs: unused import live`, the error of #4648 in the same batch; #4743 alone built clean. The first PR breaks the build, the second is clean."""
+    current = []
+
+    def merge_alone(number: str) -> bool:
+        current[:] = [number]
+        return True
+
+    def check() -> str:
+        return "floatassign.rs:124:38: unused import: `live`" if current == ["4648"] else ""
+
+    errors: dict[str, str] = {}
+    assert ps.build_offenders(["4648", "4743"], merge_alone, check, errors) == ["4648"]
+    assert errors == {"4648": "floatassign.rs:124:38: unused import: `live`"}
+
+
 def test_a_pr_whose_only_issue_is_a_fmt_difference_is_kept(tmp_path):
     """The first `alone` precheck dropped #4736 and #4744 for `fmt.sh would change selectiondag/emit.rs`; the squash formats every PR, so the s3 pair started its batch without them."""
     repo = tmp_path / "repo"
