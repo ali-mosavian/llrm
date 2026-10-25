@@ -209,6 +209,9 @@ pub struct SelectionDAG {
     /// it, so the set follows it into a machine node. A load a combine or the
     /// legalizer remakes is not in it.
     pub invariant_loads: HashSet<u32>,
+    /// The loads and stores the program marks volatile: the LIR instructions
+    /// they become keep the mark (`MachineMemOperand::isVolatile`).
+    pub volatile_accesses: HashSet<u32>,
 }
 
 impl SelectionDAG {
@@ -231,6 +234,7 @@ impl SelectionDAG {
             temporaries: Vec::new(),
             local_symbols: Default::default(),
             invariant_loads: HashSet::new(),
+            volatile_accesses: HashSet::new(),
         };
         dag.entry = dag.intern(ISD::EntryToken, &[EVT::OTHER, EVT::GLUE], &[], SDNodeFlags::default(), NodeData::None);
         dag.root = dag.entry;
@@ -744,7 +748,17 @@ impl SelectionDAG {
         info: MemInfo,
     ) -> SDValue {
         let offset = self.get_poison(self.value_type(ptr));
-        self.intern(ISD::Load, &[vt, EVT::OTHER], &[chain, ptr, offset], SDNodeFlags::default(), NodeData::Mem(info))
+        let load = self.intern(
+            ISD::Load,
+            &[vt, EVT::OTHER],
+            &[chain, ptr, offset],
+            SDNodeFlags::default(),
+            NodeData::Mem(info),
+        );
+        if info.volatile {
+            self.volatile_accesses.insert(load.node);
+        }
+        load
     }
 
     /// `getExtLoad`: a load of `info.mem_vt` extended to `vt`.
@@ -759,7 +773,17 @@ impl SelectionDAG {
         assert!(info.mem_vt.bits_lt(vt), "an extending load widens");
         let offset = self.get_poison(self.value_type(ptr));
         let info = MemInfo { ext: Some(ext), ..info };
-        self.intern(ISD::Load, &[vt, EVT::OTHER], &[chain, ptr, offset], SDNodeFlags::default(), NodeData::Mem(info))
+        let load = self.intern(
+            ISD::Load,
+            &[vt, EVT::OTHER],
+            &[chain, ptr, offset],
+            SDNodeFlags::default(),
+            NodeData::Mem(info),
+        );
+        if info.volatile {
+            self.volatile_accesses.insert(load.node);
+        }
+        load
     }
 
     /// `getStore` (unindexed, not truncating): `store chain, value, ptr,
@@ -772,13 +796,17 @@ impl SelectionDAG {
         info: MemInfo,
     ) -> SDValue {
         let offset = self.get_poison(self.value_type(ptr));
-        self.intern(
+        let store = self.intern(
             ISD::Store,
             &[EVT::OTHER],
             &[chain, value, ptr, offset],
             SDNodeFlags::default(),
             NodeData::Mem(info),
-        )
+        );
+        if info.volatile {
+            self.volatile_accesses.insert(store.node);
+        }
+        store
     }
 
     /// `getMemBasePlusOffset`: `add ptr, offset` (`PTRADD` only where the
