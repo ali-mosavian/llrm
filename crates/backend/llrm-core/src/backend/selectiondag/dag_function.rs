@@ -506,6 +506,12 @@ fn refuse<T>(why: impl Into<String>) -> Result<T, Unselected> {
     Err(Unselected(format!("--isel=dag: {}", why.into())))
 }
 
+thread_local! {
+    /// Sibling calls on for this thread: what `LLRM_TAIL_CALLS` does for the
+    /// process, for a test that cannot set the environment.
+    pub(super) static TAIL_CALLS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// `name` of `module` selected by the DAG path. A panic in a stage (a builder
 /// meeting a type it does not know) is a refusal of the function, as any other
 /// gap: it stopped 18 QCport modules from compiling in the shadow. Constants it
@@ -614,7 +620,7 @@ fn selected_in(
     let builder_target = builder_target
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)
-        .with_tail_calls(!m16 && std::env::var_os("LLRM_TAIL_CALLS").is_some())
+        .with_tail_calls(!m16 && (std::env::var_os("LLRM_TAIL_CALLS").is_some() || TAIL_CALLS.get()))
         .with_tti(cpu.target().tti())
         .with_runtime_call_verdicts(
             contracts.map(|contracts| runtime_call_verdicts(module, function, &layout, arch, contracts.abi)),
