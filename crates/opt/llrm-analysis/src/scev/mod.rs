@@ -157,6 +157,7 @@ pub(super) struct Key<'a> {
 impl Key<'_> {
     /// The key that owns its operands, for a node that is made.
     fn into_owned(self) -> Key<'static> {
+        llrm_mir::counts::bump(llrm_mir::counts::Event::ScevKeysOwned);
         Key {
             tag: self.tag,
             ops: std::borrow::Cow::Owned(self.ops.into_owned()),
