@@ -91,6 +91,26 @@ thread_local! {
     static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+thread_local! {
+    static MASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+thread_local! {
+    static REGISTER_MASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has worked out an instruction's read and write
+/// masks, for a test that a walk does it once for each instruction.
+pub fn masks_made() -> usize {
+    MASKS.with(std::cell::Cell::get)
+}
+
+/// How many times this thread has worked out a register's units, for a test
+/// that a body does it once for each register.
+pub fn register_masks_made() -> usize {
+    REGISTER_MASKS.with(std::cell::Cell::get)
+}
+
 /// How many times this thread has run copy propagation, for a test that a body
 /// with no copy is not given to it.
 pub fn runs() -> usize {
@@ -383,6 +403,8 @@ struct Machine {
     register_for: IndexMap<Vec<Lane>, RegId>,
     /// Every lane: what an instruction of unknown effect may read.
     universe: Lanes,
+    /// `register_mask` of each register asked, by index.
+    register_masks: std::cell::RefCell<Vec<Option<Option<Mask>>>>,
 }
 
 impl Machine {
@@ -403,7 +425,15 @@ impl Machine {
                 register_for.insert(held, register);
             }
         }
-        Self { regs, bits: body.bits, places, lanes, register_for, universe: liveness::_universe(regs) }
+        Self {
+            regs,
+            bits: body.bits,
+            places,
+            lanes,
+            register_for,
+            universe: liveness::_universe(regs),
+            register_masks: std::cell::RefCell::new(vec![None; 512]),
+        }
     }
 
     fn unit(
@@ -422,9 +452,20 @@ impl Machine {
         one: &Insn,
         effect: &crate::backend::liveness::Effect,
     ) -> Mask {
+        MASKS.with(|made| made.set(made.get() + 1));
         let maybe = crate::backend::peephole::_register_effects(self.regs, self.bits, one, true, false)
             .map_or(0, |(_, writes)| self.mask(&writes));
         self.mask(&effect.writes) | maybe
+    }
+
+    /// The units `one` reads and writes, None where its effect is unknown.
+    fn masks_of(
+        &self,
+        one: &Insn,
+        effect: &Option<crate::backend::liveness::Effect>,
+    ) -> Option<(Mask, Mask)> {
+        let effect = effect.as_ref()?;
+        Some((self.mask(&effect.all_reads()), self.written(one, effect)))
     }
 
     /// The general-register units among `lanes`.
@@ -437,6 +478,22 @@ impl Machine {
 
     /// The units of one register, None when it is not wholly general.
     fn register_mask(
+        &self,
+        register: RegId,
+    ) -> Option<Mask> {
+        let at = register.index();
+        if let Some(Some(known)) = self.register_masks.borrow().get(at) {
+            return *known;
+        }
+        REGISTER_MASKS.with(|made| made.set(made.get() + 1));
+        let found = self.register_units(register);
+        if let Some(slot) = self.register_masks.borrow_mut().get_mut(at) {
+            *slot = Some(found);
+        }
+        found
+    }
+
+    fn register_units(
         &self,
         register: RegId,
     ) -> Option<Mask> {
@@ -608,6 +665,8 @@ struct Walk<'a> {
     machine: &'a Machine,
     insns: Vec<Arc<Insn>>,
     effects: Vec<Option<Effect>>,
+    /// Per instruction with an effect, the units it reads and writes.
+    masks: Vec<Option<(Mask, Mask)>>,
     copies: Vec<Option<Copy>>,
     tracker: Tracker,
     /// Candidates for removal: a copy's place, while nothing has read it.
@@ -629,7 +688,9 @@ impl<'a> Walk<'a> {
         block: &Block,
     ) -> Self {
         let insns: Vec<Arc<Insn>> = block.insns.iter().cloned().collect();
-        let effects = insns.iter().map(|one| liveness::effect(machine.regs, machine.bits, one)).collect();
+        let effects: Vec<Option<Effect>> =
+            insns.iter().map(|one| liveness::effect(machine.regs, machine.bits, one)).collect();
+        let masks = insns.iter().zip(&effects).map(|(one, effect)| machine.masks_of(one, effect)).collect();
         let copies = insns.iter().map(|one| machine.copy_of(one)).collect();
         let dead = vec![false; insns.len()];
         let twin = vec![None; insns.len()];
@@ -637,6 +698,7 @@ impl<'a> Walk<'a> {
             machine,
             insns,
             effects,
+            masks,
             copies,
             tracker: Tracker::new(),
             maybe_dead: Vec::new(),
@@ -655,6 +717,7 @@ impl<'a> Walk<'a> {
         one: Arc<Insn>,
     ) {
         self.effects[at] = liveness::effect(self.machine.regs, self.machine.bits, &one);
+        self.masks[at] = self.machine.masks_of(&one, &self.effects[at]);
         self.copies[at] = self.machine.copy_of(&one);
         self.insns[at] = one;
         self.changed = true;
@@ -667,6 +730,7 @@ impl<'a> Walk<'a> {
     ) {
         self.insns[at] = lir::anchor(Arc::clone(&self.insns[at]));
         self.effects[at] = liveness::effect(self.machine.regs, self.machine.bits, &self.insns[at]);
+        self.masks[at] = self.machine.masks_of(&self.insns[at], &self.effects[at]);
         self.copies[at] = None;
         self.dead[at] = false;
         self.changed = true;
@@ -801,9 +865,8 @@ impl<'a> Walk<'a> {
                     self.writer = [Some(usize::MAX); UNITS];
                     self.reader = [Some(usize::MAX); UNITS];
                 }
-                Some(effect) => {
-                    let (reads, writes) =
-                        (machine.mask(&effect.all_reads()), machine.written(&self.insns[at], &effect));
+                Some(_) => {
+                    let (reads, writes) = self.masks[at].expect("an effect has masks");
 
                     self.note_tied(at, reads);
                     for unit in units_of(reads) {
@@ -1078,8 +1141,8 @@ impl<'a> Walk<'a> {
             }
             let one = Arc::clone(&self.insns[at]);
             match (&one.what, &self.effects[at]) {
-                (Some(what), Some(effect)) => {
-                    let (reads, writes) = (machine.mask(&effect.all_reads()), machine.written(&one, effect));
+                (Some(what), Some(_)) => {
+                    let (reads, writes) = self.masks[at].expect("an effect has masks");
                     let (mut seen_reads, mut seen_writes) = (0 as Mask, 0 as Mask);
                     for (place, register, _) in machine.registers(what) {
                         let Some(mask) = machine.register_mask(register) else {

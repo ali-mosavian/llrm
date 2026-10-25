@@ -321,3 +321,32 @@ fn test_a_copy_is_not_forwarded_across_a_string_move_that_writes_its_source() {
         assert_eq!(lines(&got)[2], format!("add BX,BX,{copy:?}"), "{:?}", lines(&got));
     }
 }
+
+/// Both walks of a block asked `written` and the read mask of each
+/// instruction again (2,440 times for d_faces' 829 walked ones, 1.7 M Ir):
+/// they are worked out once when the block is read.
+#[test]
+fn test_a_walk_works_out_what_an_instruction_writes_once() {
+    let mut head = vec![mov(0, rl(RegId::BX, 2), rl(RegId::AX, 2))];
+    for n in 1..9 {
+        head.push(add(n, rl(RegId::CX, 2), rl(RegId::DX, 2)));
+    }
+    let before = super::masks_made();
+    propagated(&body(head, &[RegId::BX, RegId::CX]));
+    let made = super::masks_made() - before;
+    assert!(made <= 9 + 2, "{made} asks for 9 instructions");
+}
+
+/// `register_mask` listed the lanes of a register each time a walk named it
+/// (939 times for 0.3 M Ir in d_faces): once for each register.
+#[test]
+fn test_a_register_s_units_are_worked_out_once_for_a_body() {
+    let mut head = vec![mov(0, rl(RegId::BX, 2), rl(RegId::AX, 2))];
+    for n in 1..9 {
+        head.push(add(n, rl(RegId::CX, 2), rl(RegId::BX, 2)));
+    }
+    let before = super::register_masks_made();
+    propagated(&body(head, &[RegId::BX, RegId::CX]));
+    let made = super::register_masks_made() - before;
+    assert!(made <= 6, "{made} derivations for a body of 4 registers");
+}
