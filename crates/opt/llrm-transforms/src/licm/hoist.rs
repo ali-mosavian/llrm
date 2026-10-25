@@ -9,6 +9,7 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Attribute, BinaryOp, Flags as Wrap, Opcode};
 use llrm_mir::passes::{self, Outer};
 
+use super::pressure::Pressure;
 use super::{Flags, LoopCtx, LoopSafety, calls};
 
 /// [`LoopBlocksRPO`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/LoopIterator.h#L110):
@@ -56,6 +57,8 @@ pub fn hoist_region(
 ) -> (Vec<Hoist>, Vec<(usize, Reassociation)>) {
     let mut found = Vec::new();
     let mut reassociated = Vec::new();
+    // DEVIATE LP1 (`pressure.rs`): made when the first hoist is decided.
+    let mut pressure: Option<Option<Pressure>> = None;
     for block in loop_blocks_rpo(ctx) {
         // Only the contents of a block outside the subloops: those have been
         // processed.
@@ -74,6 +77,13 @@ pub fn hoist_region(
                 && can_sink_or_hoist_inst(unit, outer, ctx, mssa, aa, flags, safety, inst, true)
                 && is_safe_to_execute_unconditionally(unit, outer, ctx, safety, preheader, inst)
             {
+                let held = pressure.get_or_insert_with(|| Pressure::of(unit, outer, ctx));
+                if held.as_ref().is_some_and(|held| !held.admits(unit, inst)) {
+                    continue;
+                }
+                if let Some(held) = held {
+                    held.took(unit, inst);
+                }
                 ctx.state.moved.borrow_mut().insert(inst, preheader);
                 found.push(Hoist { inst, preheader, guaranteed: safety.is_guaranteed_to_execute(inst) });
             // Try to reassociate instructions so that part of computations can

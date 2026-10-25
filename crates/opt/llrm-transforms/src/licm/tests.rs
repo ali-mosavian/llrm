@@ -1197,3 +1197,107 @@ fn test_the_exposed_allocas_are_not_scanned_for_a_loop_that_cannot_throw() {
     let scans = llrm_mir::counts::get(llrm_mir::counts::Event::ExposedFrames) - before;
     assert!(scans <= 1, "the function was scanned for exposed allocas {scans} times");
 }
+
+/// Nine sums of one base and a constant, each read by a loop that also carries
+/// an index and a total.
+fn nine_sums() -> String {
+    let sums: String = (1..=9).map(|k| format!("  %s{k} = add i16 %b, {k}\n")).collect();
+    let totals: String = (1..=9)
+        .map(|k| {
+            let before = if k == 1 { "%t".to_owned() } else { format!("%u{}", k - 1) };
+            format!("  %u{k} = add i16 {before}, %s{k}\n")
+        })
+        .collect();
+    format!(
+        "define i16 @f(i16 %b, i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %t = phi i16 [ 0, %b0 ], [ %u9, %b1 ]
+{sums}{totals}  %i1 = add i16 %i, 1
+  %c = icmp eq i16 %i1, %n
+  br i1 %c, label %b2, label %b1
+
+b2:
+  ret i16 %u9
+}}
+"
+    )
+}
+
+/// How many of the sums `Licm` hoists on `machine`.
+fn sums_hoisted(machine: impl llrm_mir::target::Machine + 'static) -> usize {
+    DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
+    let mut module = parsed(&nine_sums());
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply: false, speculate: true });
+    passes.run_module(&mut module, std::rc::Rc::new(machine)).expect("runs");
+    let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
+    let hoisted = DECIDED.with(|all| all.borrow().hoisted.clone());
+    hoisted
+        .iter()
+        .filter(|one| {
+            function
+                .instruction(one.inst)
+                .result
+                .and_then(|value| function.value(value).name.clone())
+                .is_some_and(|name| name.starts_with('s'))
+        })
+        .count()
+}
+
+/// A machine that states the i486's register count and nothing else.
+struct I486(llrm_mir::target::Neutral);
+
+impl llrm_mir::target::Machine for I486 {
+    fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        Some(std::rc::Rc::new(llrm_x86::tti::X86::of_cpu("i486").unwrap()))
+    }
+
+    fn foreign_span(
+        &self,
+        selectors: (i64, i64),
+        offsets: (i64, i64),
+        width: i64,
+    ) -> Option<(i64, i64)> {
+        self.0.foreign_span(selectors, offsets, width)
+    }
+
+    fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        self.0.spaces()
+    }
+
+    fn costs(&self) -> llrm_mir::target::OperationCosts {
+        self.0.costs()
+    }
+
+    fn registers(&self) -> i64 {
+        self.0.registers()
+    }
+
+    fn call_registers(&self) -> i64 {
+        self.0.call_registers()
+    }
+
+    fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
+        self.0.address_forms()
+    }
+}
+
+/// `qb/hoist_pressure` at m16 -Os kept 34 stores to the frame: LICM hoisted
+/// every invariant of two nested loops and six word registers held three of
+/// them. A hoist that holds one more value than the target has registers is
+/// refused (DEVIATE LP1); the target's own count decides, so the i486 (eight)
+/// takes more and a target that states none takes all nine.
+#[test]
+fn test_a_hoist_that_holds_more_values_than_the_target_has_registers_is_refused() {
+    assert_eq!(sums_hoisted(llrm_mir::target::Neutral), 9, "premise: with no count stated all nine leave");
+    assert_eq!(
+        sums_hoisted(llrm_x86_m16::Dos::default()),
+        1,
+        "six registers: the base, the bound, the index, the total, one"
+    );
+    assert_eq!(sums_hoisted(I486(llrm_mir::target::Neutral)), 3, "eight registers take two more");
+}
