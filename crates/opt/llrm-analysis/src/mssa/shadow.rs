@@ -30,6 +30,42 @@ pub fn effect_of<'a>(
     }
 }
 
+/// `effect_of` for `Accesses::plain(unit, calls)`, without making it: what an
+/// instruction reads and writes follows from its opcode (a load reads, a
+/// store writes: every load and store has a reference) and, for a call, from
+/// its attributes and `may_write` (the footprint held is not empty, or none
+/// is).
+pub fn effect_from_opcodes<'a>(
+    unit: &'a Unit<'a>,
+    may_write: impl Fn(InstId) -> bool + 'a,
+) -> impl Fn(InstId) -> Effect + 'a {
+    move |inst| {
+        let function = unit.function;
+        let opcode = &function.instruction(inst).opcode;
+        let ordered = matches!(
+            opcode,
+            llrm_mir::opcode::Opcode::Load { volatile: true, .. }
+                | llrm_mir::opcode::Opcode::Store { volatile: true, .. }
+        );
+        if let Some(own) = crate::memory::own_bytes(opcode) {
+            return Effect { reads: own.reads, writes: own.writes, ordered };
+        }
+        let (reads, writes) = match opcode {
+            llrm_mir::opcode::Opcode::Call(info) | llrm_mir::opcode::Opcode::Invoke(info) => {
+                let callee = llrm_mir::memory::callee(unit.context, function, inst)
+                    .and_then(|one| unit.globals.get(one.0 as usize))
+                    .and_then(llrm_mir::module::GlobalValue::function);
+                let reading = llrm_mir::memory::stated(&info.attrs).reads
+                    && callee.is_none_or(|one| llrm_mir::memory::stated(&one.attrs).reads);
+                let writing = crate::memory::unmodeled_write(unit, inst) && may_write(inst);
+                (reading, writing)
+            }
+            _ => (false, false),
+        };
+        Effect { reads, writes, ordered }
+    }
+}
+
 pub fn translated(unit: &Unit) -> (Mssa, Accesses) {
     let accesses = Accesses::plain(unit, &Default::default());
     let shape = unit.shape();

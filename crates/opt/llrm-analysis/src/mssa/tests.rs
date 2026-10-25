@@ -960,7 +960,7 @@ b0:
     let mut held = build();
     let aa = AliasQuery::new(&unit, &accesses);
     shadow::walked(&mut held, &aa, unit.function);
-    let graph = |mssa| crate::manager::MssaGraph { mssa, accesses: std::rc::Rc::clone(&accesses) };
+    let graph = |mssa| crate::manager::MssaGraph::new(mssa, Some(std::rc::Rc::clone(&accesses)));
     assert!(graph(held) == graph(build()));
 }
 

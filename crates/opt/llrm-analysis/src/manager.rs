@@ -1244,10 +1244,44 @@ impl Analysis for PlainAccesses {
     }
 }
 
-/// A body's translated MemorySSA with the accesses it was made from.
+/// A body's translated MemorySSA. The accesses it is read with are the
+/// manager's `PlainAccesses`, fetched by the first client that asks
+/// (`accesses`): building the graph needs none of their references.
 pub struct MssaGraph {
     pub mssa: crate::mssa::Mssa,
-    pub accesses: std::rc::Rc<memoryssa::Accesses>,
+    accesses: std::cell::OnceCell<std::rc::Rc<memoryssa::Accesses>>,
+}
+
+impl MssaGraph {
+    /// A graph with the accesses a pass that updated it kept, if it did.
+    pub fn new(
+        mssa: crate::mssa::Mssa,
+        accesses: Option<std::rc::Rc<memoryssa::Accesses>>,
+    ) -> Self {
+        Self { mssa, accesses: accesses.map(std::cell::OnceCell::from).unwrap_or_default() }
+    }
+
+    /// The accesses of the body this graph is of: the ones kept with it, else
+    /// the manager's.
+    pub fn accesses(
+        &self,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Result<std::rc::Rc<memoryssa::Accesses>, String> {
+        if let Some(held) = self.accesses.get() {
+            return Ok(std::rc::Rc::clone(held));
+        }
+        let plain = analyses.get::<PlainAccesses>(context, layout, function);
+        let made = Result::as_ref(&*plain).map_err(String::clone)?;
+        Ok(std::rc::Rc::clone(self.accesses.get_or_init(|| std::rc::Rc::clone(made))))
+    }
+
+    /// Whether the accesses have been fetched or kept.
+    pub fn has_accesses(&self) -> bool {
+        self.accesses.get().is_some()
+    }
 }
 
 /// Two graphs are equal when every access says the same (`shadow::said`): the
@@ -1305,12 +1339,19 @@ impl Analysis for MemorySsa {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Self::Result {
-        let plain = analyses.get::<PlainAccesses>(context, layout, function);
-        let accesses = Result::as_ref(&*plain).map_err(String::clone)?;
+        let writes_rc = analyses.get::<Writes>(context, layout, function);
+        let calls = Result::as_ref(&*writes_rc).map_err(String::clone)?;
+        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         let shape = analyses.get::<Shape>(context, layout, function);
-        let mssa =
-            crate::mssa::Mssa::build(function, &shape.dominance, &crate::mssa::shadow::effect_of(accesses, function));
-        Ok(std::rc::Rc::new(MssaGraph { mssa, accesses: std::rc::Rc::clone(accesses) }))
+        let unit = Unit::within(context, layout, function, analyses.outer()).with_exposed(&exposed);
+        let mssa = crate::mssa::Mssa::build(
+            function,
+            &shape.dominance,
+            &crate::mssa::shadow::effect_from_opcodes(&unit, |inst| {
+                calls.get(&inst).is_none_or(|stores| !stores.is_empty())
+            }),
+        );
+        Ok(std::rc::Rc::new(MssaGraph::new(mssa, None)))
     }
 }
 
