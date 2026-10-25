@@ -39,7 +39,7 @@
 //! `visitMUL`
 //! ([L4908](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4908)).
 
-use std::collections::HashSet;
+use llrm_mir::hash::HashSet;
 
 use super::actions::{Action, LoadExt, TargetLowering};
 use super::dag::{MemInfo, NodeData, Rauw, SDNodeFlags, SDValue, SelectionDAG};
@@ -122,15 +122,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         hooks: &'a mut H,
         level: CombineLevel,
     ) -> DagCombiner<'a, H> {
-        DagCombiner {
-            dag,
-            hooks,
-            level,
-            worklist: Vec::new(),
-            queued: HashSet::new(),
-            combined: HashSet::new(),
-            tli: None,
-        }
+        // Both sets grow to about the node count: size them once.
+        let nodes = dag.nodes().len();
+        let mut queued = HashSet::default();
+        let mut combined = HashSet::default();
+        queued.reserve(nodes);
+        combined.reserve(nodes);
+        DagCombiner { dag, hooks, level, worklist: Vec::new(), queued, combined, tli: None }
     }
 
     /// The action table the folds query (`TLI`).
@@ -339,6 +337,16 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(self.dag.get_setcc(vt, n1, n0, cond.swapped_operands()));
         }
         let c1 = c1?;
+        // `ExpandSetCCOperands`: a pair is zero when `lo | hi` is, and a far
+        // pointer's null test was `shl; movzx; add; je` of the joined dword
+        // where the old selector had `or ax, dx`.
+        if matches!(cond, CondCode::SetEq | CondCode::SetNe) && c1 == 0 && self.dag.opcode(n0) == ISD::BuildPair {
+            let (low, high) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            let half = self.dag.value_type(low);
+            let either = self.dag.get_node(ISD::Or, half, &[low, high]);
+            let zero = self.dag.get_constant(0, half);
+            return Some(self.dag.get_setcc(vt, either, zero, cond));
+        }
         // `(x + c0) == c1` is `x == c1 - c0`, `(x ^ c0) == c1` is `x == c0 ^
         // c1` and `(c0 - x) == c1` is `x == c0 - c1`, for a single-use
         // operand.

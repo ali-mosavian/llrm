@@ -840,9 +840,11 @@ fn staged(
     SELECTED.with(|count| count.set(count.get() + 1));
     llrm_mir::counts::bump(llrm_mir::counts::Event::Selections);
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
-    let contracts = abi
-        .runtime_contracts()
-        .then(|| crate::backend::selectiondag::dag_function::RuntimeContracts { abi, segments: target.segments });
+    let contracts = Some(crate::backend::selectiondag::dag_function::RuntimeContracts {
+        abi,
+        segments: target.segments,
+        runtime: abi.runtime_contracts(),
+    });
     let dag = match target.selector {
         Selector::Old => None,
         // `LLRM_ISEL_ONLY=a,b`: the DAG path for those functions, the old

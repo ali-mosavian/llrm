@@ -13,10 +13,8 @@
 //! This is the first slice of the family. A step not translated yet stays in
 //! its place as a `// OWED:` comment naming the C++ function, so the order
 //! stays LLVM's. The owed steps, with their exits:
-//! `foldICmpTruncWithTruncOrExt`, `canonicalizeICmpBool`,
-//! `canonicalizeICmpPredicate` (needs `canFreelyInvertAllUsersOf`,
-//! uselist-port's shared helper), `foldICmpWithConstant`,
-//! `foldICmpWithDominatingICmp`, `foldICmpUsingBoolRange`,
+//! `foldICmpTruncWithTruncOrExt`,
+//! `foldICmpWithConstant`, `foldICmpUsingBoolRange`,
 //! `foldIsMultipleOfAPowerOfTwo`, `foldICmpBinOp`, `foldICmpInstWithConstant`,
 //! `foldSignBitTest`, `foldOpIntoPhi`, `foldICmpInstWithConstantNotInt`,
 //! `foldICmpCommutative`, `foldCmpSelectOfConstants` and the select pair fold,
@@ -163,8 +161,13 @@ pub fn visit_icmp(
     }
     // OWED: the `abs(val) != 0` select fold (dyn_castNegVal).
     // OWED: foldICmpTruncWithTruncOrExt.
-    // OWED: canonicalizeICmpBool.
+    if let Some(r) = canonicalize_icmp_bool(c, inst, pred, op0, op1) {
+        return r;
+    }
     if let Some(r) = canonicalize_cmp_with_constant(c, inst, pred, op0, op1) {
+        return r;
+    }
+    if let Some(r) = canonicalize_icmp_predicate(c, inst, pred) {
         return r;
     }
     // OWED: foldICmpWithConstant, foldICmpUsingBoolRange.
@@ -290,6 +293,123 @@ fn select_result(
     inst: InstId,
 ) -> llrm_mir::module::ValueId {
     c.function.instruction(inst).result.expect("a select's value")
+}
+
+/// `canonicalizeICmpBool`
+/// ([:7513](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L7513)):
+/// a compare of two `i1` is bitwise logic. Against a constant, InstSimplify
+/// took 14 of the 20 cases; the rest are the `not` of the other operand.
+fn canonicalize_icmp_bool(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    a: Operand,
+    b: Operand,
+) -> Option<Visit> {
+    let i1 = c.context.types.int(1);
+    if c.type_of(a) != i1 {
+        return None;
+    }
+    let none = Flags::default();
+    let ones = c.all_ones(i1);
+    match constant(c, b).map(|(bits, _)| bits) {
+        Some(0) => {
+            return matches!(pred, IntPredicate::Eq | IntPredicate::Ule | IntPredicate::Sge)
+                .then(|| c.replace_with_binop(inst, BinaryOp::Xor, a, ones, none));
+        }
+        Some(1) => {
+            return matches!(pred, IntPredicate::Ne | IntPredicate::Ult | IntPredicate::Sgt)
+                .then(|| c.replace_with_binop(inst, BinaryOp::Xor, a, ones, none));
+        }
+        _ => {}
+    }
+    Some(match pred {
+        // icmp eq i1 A, B -> ~(A ^ B)
+        IntPredicate::Eq => {
+            let xor = c.create_binop(inst, BinaryOp::Xor, a, b, none);
+            c.replace_with_binop(inst, BinaryOp::Xor, xor, ones, none)
+        }
+        // icmp ne i1 A, B -> A ^ B
+        IntPredicate::Ne => c.replace_with_binop(inst, BinaryOp::Xor, a, b, none),
+        // icmp ult i1 A, B -> ~A & B; ugt is ult swapped
+        IntPredicate::Ult | IntPredicate::Ugt => {
+            let (a, b) = if pred == IntPredicate::Ugt { (b, a) } else { (a, b) };
+            let not = c.create_not(inst, a);
+            c.replace_with_binop(inst, BinaryOp::And, not, b, none)
+        }
+        // icmp slt i1 A, B -> A & ~B; sgt is slt swapped
+        IntPredicate::Slt | IntPredicate::Sgt => {
+            let (a, b) = if pred == IntPredicate::Sgt { (b, a) } else { (a, b) };
+            let not = c.create_not(inst, b);
+            c.replace_with_binop(inst, BinaryOp::And, a, not, none)
+        }
+        // icmp ule i1 A, B -> ~A | B; uge is ule swapped
+        IntPredicate::Ule | IntPredicate::Uge => {
+            let (a, b) = if pred == IntPredicate::Uge { (b, a) } else { (a, b) };
+            let not = c.create_not(inst, a);
+            c.replace_with_binop(inst, BinaryOp::Or, not, b, none)
+        }
+        // icmp sle i1 A, B -> A | ~B; sge is sle swapped
+        IntPredicate::Sle | IntPredicate::Sge => {
+            let (a, b) = if pred == IntPredicate::Sge { (b, a) } else { (a, b) };
+            let not = c.create_not(inst, b);
+            c.replace_with_binop(inst, BinaryOp::Or, a, not, none)
+        }
+    })
+}
+
+/// `canonicalizeICmpPredicate`
+/// ([:7448](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L7448)):
+/// a compare with a non-canonical predicate (`ne`, `ule`, `sle`, `uge`, `sge`)
+/// becomes the inverse one, if every user can take the inversion: a branch
+/// swaps its successors, a select its values, a `not` is dropped
+/// (`canFreelyInvertAllUsersOf`, `freelyInvertAllUsersOf`).
+fn canonicalize_icmp_predicate(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+) -> Option<Visit> {
+    if is_canonical_predicate(pred) {
+        return None;
+    }
+    let result = c.function.instruction(inst).result?;
+    let users: Vec<(InstId, u32)> = c.function.users(result).iter().map(|one| (one.user, one.index)).collect();
+    for &(user, index) in &users {
+        let one = c.function.instruction(user);
+        let ok = match &one.opcode {
+            // Only as the condition, and not a logical and/or: absorbing the
+            // not would hide that pattern.
+            Opcode::Select => {
+                index == 0 && {
+                    let q = query(c, None);
+                    let value = Operand::Value(one.result?);
+                    pattern::logical_and(&q, value).is_none() && pattern::logical_or(&q, value).is_none()
+                }
+            }
+            Opcode::Br => one.operands.len() == 3,
+            Opcode::Binary(BinaryOp::Xor) => pattern::not(&query(c, None), Operand::Value(one.result?)).is_some(),
+            _ => false,
+        };
+        if !ok {
+            return None;
+        }
+    }
+    c.function.set_icmp_predicate(inst, pred.inverse());
+    for (user, _) in users {
+        match c.function.instruction(user).opcode {
+            Opcode::Select | Opcode::Br => {
+                let mut operands = c.function.instruction(user).operands.clone();
+                operands.swap(1, 2);
+                c.function.set_operands(user, operands);
+                c.add_to_worklist(user);
+            }
+            _ => {
+                c.replace_inst_with(user, Operand::Value(result));
+                c.add_to_worklist(user);
+            }
+        }
+    }
+    Some(Visit::Changed)
 }
 
 /// `foldICmpWithDominatingICmp`

@@ -135,14 +135,13 @@ owner = "funcattrs-port"
 date = "2026-10-27"
 why = "red on parity, not bisected; family: other, not yet put in a family; a regression unless triage says stale (qb-reds-parity.md)"
 [[xfail]]
-id = "unit llrm-qb::test_runtime_model::flat_target_varptr_is_a_whole_address"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "stale expectation (-m32 non-constant DEF SEG refusal); fixed on origin/spike/lalr-nib-qb-rebased a3f5e99c6"
-[[xfail]]
 id = "run qcport-attract -O2"
 issue = 4325
 owner = "w-6"
 date = "2026-11-06"
 why = "AM-QC-1: QCport -O2 runs out of memory (miptex.bin) in the attract loop: code 329,553 against Borland's 296,085; the -Os build (342,560) plays all three"
+[[xfail]]
+id = "unit llrm-qb::a_power_of_a_variable_base_covers_the_whole_domain"
+issue = 2848
+owner = "alim"
+date = "2026-10-27"

@@ -35,3 +35,22 @@ for root in $roots; do
     case "$name" in sbp-*) [ -d "$pair" ] && ! in_use "$pair" && rm -rf -- "$pair" && echo "dist: removed $pair";; esac
   done
 done
+
+# Orphan `wt-pair-X` checkouts: the loop above removes one only in the pass that removes its dist, so a checkout whose sbp-X went another way (a pruned `-n` rebuild, a
+# failed build, an older sweep) stood for good: 72 of 90, ~89 GB. One older than DIST_MIN with no sbp-X of its sha, outside the pinned base and the last tip, that no process
+# has as its cwd or in its command line, goes (pair_build makes a fresh checkout under tgt-dist.lock, so a build in flight is minutes old; the lock itself is held nearly always). Only `wt-pair-*` in a root itself.
+for root in $roots; do
+  [ -d "$root" ] || continue
+  for pair in $(find "$root" -maxdepth 1 -name 'wt-pair-*' -type d -mmin +"${DIST_MIN:-180}" 2>/dev/null); do
+    sha=${pair##*/wt-pair-}
+    case "$sha" in "${DIST_PINNED:-854bb7efc}"*) continue;; esac
+    [ -n "$tip" ] && case "$sha" in "$tip"*|"${tip:0:9}"*) continue;; esac
+    ls -d "$root/sbp-$sha" "$root/sbp-${sha:0:9}" "$root/sbp-${sha:0:10}" "$root/sbp-$sha-"* 2>/dev/null | grep -q . && continue
+    in_use "$pair" && { echo "kept (in use): $pair"; continue; }
+    kb=$(du -sk "$pair" 2>/dev/null | cut -f1)
+    if [ -n "${DRY:-}" ]; then echo "would remove orphan: $pair ${kb} KB"; continue; fi
+    git -C "$HERE" worktree remove --force "$pair" 2>/dev/null || rm -rf -- "$pair"
+    [ -e "$pair" ] && rm -rf -- "$pair"
+    echo "orphan: removed $pair ${kb} KB"
+  done
+done

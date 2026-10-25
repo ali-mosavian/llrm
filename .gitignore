@@ -1,7 +1,7 @@
 build/
 /target/
 /tools/rfmt-post/target/
-/crates/frontends/qbfront/target/
+/crates/frontends/qb/target/
 /crates/*/*/target/
 .DS_Store
 ._*

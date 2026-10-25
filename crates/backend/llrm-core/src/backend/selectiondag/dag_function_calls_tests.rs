@@ -590,8 +590,11 @@ declare cc 1000 void @llrm.qb.B$RDIM() addrspace(1)
 #[test]
 fn a_runtime_call_pops_every_argument_it_is_given() {
     let module = llrm_mir::parse::module(RUNTIME_CALL_MORE_ARGS_THAN_DECLARED).expect("parses");
-    let contracts =
-        super::dag_function::RuntimeContracts { abi: &Stub { flags: false }, segments: &crate::backend::target::BASIC };
+    let contracts = super::dag_function::RuntimeContracts {
+        abi: &Stub { flags: false },
+        segments: &crate::backend::target::BASIC,
+        runtime: true,
+    };
     let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
     let done = super::dag_function::selected_in_pool(
         &module,
@@ -837,6 +840,66 @@ fn a_call_of_a_constant_expression_calls_its_value() {
     let insns = done.body.insns();
     let call = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.op == Operation::Call).expect("a call");
     assert!(call.indirect, "{call:?}");
+}
+
+/// A call of a BASIC-convention routine (`pascal far`: cc 1000, no row in
+/// calling.toml) was taken to destroy every register, SI and DI too: the
+/// pointer a function kept in SI was spilled to the frame and reloaded after
+/// each call (`_part_init`: a frame, 6 reloads). The ABI's contract says it
+/// keeps SI and DI but their upper halves.
+#[test]
+fn a_call_of_a_basic_routine_keeps_si_and_di() {
+    use llrm_lir::registers::RegId;
+    const IR: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define cc 1000 void @f() addrspace(1) {
+entry:
+  call cc 1000 addrspace(1) void @user(i16 1)
+  ret void
+}
+declare cc 1000 void @user(i16) addrspace(1)
+";
+    /// The C frontend's ABI: a routine keeps SI and DI.
+    struct Keeps;
+    impl crate::backend::assemble::Abi for Keeps {
+        fn contract(
+            &self,
+            callee: &str,
+            pops: bool,
+            pushed: i64,
+        ) -> Result<crate::abi::runtime::Contract, String> {
+            use crate::abi::runtime::Reg;
+            let cleanup =
+                if pops { crate::hir::model::StackCleanup::Callee } else { crate::hir::model::StackCleanup::Caller };
+            Ok(crate::abi::qb::ordinary(callee, cleanup, pushed, &[Reg::Si, Reg::Di].into_iter().collect()))
+        }
+
+        fn linked(
+            &self,
+            name: &str,
+        ) -> String {
+            name.to_owned()
+        }
+    }
+    let module = llrm_mir::parse::module(IR).expect("parses");
+    let contracts =
+        super::dag_function::RuntimeContracts { abi: &Keeps, segments: &crate::backend::target::BASIC, runtime: false };
+    let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
+    let done = super::dag_function::selected_in_pool(
+        &module,
+        "f",
+        &llrm_x86_m16::M16,
+        crate::backend::cpu::profile("386").expect("a cpu"),
+        &[],
+        Some(&contracts),
+        pool,
+    )
+    .unwrap_or_else(|why| panic!("{}", why.0));
+    let call = done.body.insns().iter().find(|i| i.call.is_some()).cloned().expect("a call");
+    let root = |register: RegId| crate::model::ir::root(register);
+    let lost: Vec<RegId> = call.clobbers.iter().map(|r| root(*r)).collect();
+    assert!(!lost.contains(&RegId::ESI) && !lost.contains(&RegId::EDI), "{lost:?}");
+    let high: Vec<RegId> = call.clobbers_high.iter().map(|r| root(*r)).collect();
+    assert!(high.contains(&RegId::ESI) && high.contains(&RegId::EDI), "{high:?}");
 }
 
 const M16_FAR_POINTER_AS_LONG_ARGUMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"

@@ -211,27 +211,6 @@ define ptr @f(ptr %p, i64 %i) {
     assert_eq!(result.width, 8, "{lea:?}");
 }
 
-/// `va_start` at m64 was selected as the 32-bit one (the address of the first
-/// stack argument): `varargs.c` printed wrong sums. Until the register save
-/// area is translated it is refused.
-#[test]
-fn va_start_at_m64_is_refused() {
-    let module = llrm_mir::parse::module(
-        "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
-declare void @llvm.va_start(ptr)
-define i32 @f(i32 %n, ...) {
-  %ap = alloca [24 x i8]
-  call void @llvm.va_start(ptr %ap)
-  ret i32 %n
-}
-",
-    )
-    .expect("parses");
-    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
-    let refused = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).err().expect("refused");
-    assert!(refused.0.contains("va_start at m64"), "{}", refused.0);
-}
-
 /// `a[i]` at m64 came out `movsx r, a[rax*4]`, an absolute symbol beside an
 /// index: no `%rip`-relative form, and in a PIE the program crashed (array,
 /// matrix, sieve of `tests/llc`). The symbol is now loaded by itself and the
@@ -290,6 +269,31 @@ entry:
     assert!(select.name.as_deref().is_some_and(|name| name.starts_with("cmov")), "{select:?}");
 }
 
+/// A call through a pointer at m64 selected `CALL64r`, which the emitter did
+/// not know: the call was a direct one with no callee and the assembler
+/// stopped (`fnptr` of `tests/llc`). It is an indirect call.
+#[test]
+fn a_call_through_a_pointer_is_an_indirect_call() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i32 @f(ptr %p, i32 %a) {
+  %r = call i32 %p(i32 %a)
+  ret i32 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let calls: Vec<bool> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.op == crate::model::ir::Operation::Call)
+        .map(|w| w.indirect)
+        .collect();
+    assert_eq!(calls, [true]);
+}
+
 /// The address of a local array at m64 was a `mov r, offset <frame slot>` (the
 /// symbol-address form): the object writer stopped with `KeyError: (FRAME,
 /// 0)` (strings, qsortc of `tests/llc`). A frame address is an `lea` off the
@@ -307,4 +311,36 @@ define void @f() {
 ",
     );
     assert!(names.iter().any(|n| n == "lea"), "{names:?}");
+}
+
+/// `va_start` at m64 was refused ("the SysV register save area is not
+/// translated"; `varargs` of `tests/llc`). A variadic function stores the five
+/// argument registers its one named parameter left in the register save area,
+/// then the four fields of the `va_list`: nine stores.
+#[test]
+fn a_variadic_function_saves_the_argument_registers_and_fills_the_list() {
+    use crate::model::ir::{Loc, Operation};
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare void @llvm.va_start.p0(ptr)
+declare void @llvm.va_end.p0(ptr)
+define i32 @f(i32 %n, ...) {
+  %ap = alloca [24 x i8], align 8
+  call void @llvm.va_start.p0(ptr %ap)
+  call void @llvm.va_end.p0(ptr %ap)
+  ret i32 %n
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let stores = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.op == Operation::Move && matches!(w.dests.first(), Some(Loc::Mem(_))))
+        .count();
+    assert_eq!(stores, 9);
 }
