@@ -22,7 +22,7 @@
 //! `a_pair_that_becomes_no_alias_is_gained` in `aliasdiff_tests.rs`.
 //!
 //! # See also
-//! `docs/working/alias-stack-plan.md` (stage S0.5).
+//! the alias-stack plan (stage S0.5).
 
 /// What [`compare`] found.
 #[derive(Debug, Default, Eq, PartialEq)]
