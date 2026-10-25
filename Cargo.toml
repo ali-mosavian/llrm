@@ -149,6 +149,11 @@ path = "src/bin/nib-lsp.rs"
 [profile.release]
 incremental = true
 
+# Debug builds and `cargo test` (the test profile inherits dev) keep line tables only: full DWARF made each target dir several times larger and /home was filling at
+# 78 GB an hour. Backtraces still carry file:line; a debugger loses local variables there.
+[profile.dev]
+debug = "line-tables-only"
+
 # The shipped llrm-c, the vs-gcc compile-time table and the creep run on main: one codegen unit and fat LTO (about 3 minutes from cold, against
 # 7-60 s incremental). Compile instructions -11..-13% (d_faces, combat, cmd, mdl, nbody_single, queens, x_life, 2026-10-09); thin LTO with
 # 16 units gets -6.5..-7.4% in ~40 s. Not for the PR gate, which compares two commits built the same way on `release`:
