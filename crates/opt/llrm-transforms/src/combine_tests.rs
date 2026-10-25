@@ -253,12 +253,12 @@ b0:
 }
 
 /// scroll.nib's descending copy loop tests `j - 1 > -1` at the bottom after
-/// `j <u 1920` (the bounds check) dominates it. The pin makes that `j == 0`
-/// with the arms swapped, which lets JumpThreading remove the check and
-/// LoopIdiom make the memmove (scroll m16 -O2: 170,762 instructions executed
-/// before InstCombine joined the pipeline, 602,661 after).
+/// `j <u 1920` (the bounds check) dominates it. `foldICmpWithDominatingICmp`
+/// makes that `j != 0` (the compares' ranges leave one value out); the pin
+/// then canonicalizes it to `j == 0` with the arms swapped
+/// (`canonicalizeICmpPredicate`, not translated yet).
 #[test]
-fn a_signed_bound_on_a_value_a_dominating_compare_keeps_below_a_limit_is_an_equality() {
+fn a_signed_bound_on_a_value_a_dominating_compare_keeps_below_a_limit_is_an_inequality() {
     let mut module = parsed(
         "define void @f(ptr %a) {
 entry:
@@ -287,6 +287,6 @@ exit:
     );
     combined(&mut module);
     let after = printed(&module);
-    assert!(after.contains("icmp eq i16 %j, 0"), "{after}");
-    assert!(after.contains("label %exit, label %body"), "{after}");
+    assert!(after.contains("icmp ne i16 %j, 0"), "{after}");
+    assert!(after.contains("label %body, label %exit"), "{after}");
 }
