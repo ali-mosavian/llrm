@@ -119,3 +119,18 @@ def test_union_interleaves_a_constant_and_its_test(tmp_path):
     repo = two_prs(tmp_path, "union", appended_module)
     git(repo, "merge", "--no-edit", "-q", "second", check=False)
     assert not parses((repo / TESTS).read_text(), tmp_path)
+
+
+def test_a_branch_whose_tree_still_says_union_merges_whole_with_the_clone_set_up(tmp_path):
+    """#4567 and #4573 merged parity after #4579 landed and still got `union`: the attributes come from the branch merged into, which had not merged #4579 yet."""
+    repo = two_prs(tmp_path, "union")
+    git(repo, "checkout", "-q", "main")
+    git(repo, "reset", "-q", "--hard", "HEAD~1")
+    script = ROOT / "tools/landing/merge-driver.sh"
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_CONFIG_")}
+    subprocess.run(["bash", str(script)], cwd=repo, check=True, env=env)
+    git(repo, "config", "--local", "merge.tests-append.driver", f"python3 {ROOT}/tools/merge_tests_append.py %O %A %B")
+    appended(repo, "volatile_copy")
+    merged = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "merge", "--no-edit", "-q", "second"], cwd=repo, capture_output=True, text=True, env=env)
+    assert merged.returncode == 0, merged.stdout + merged.stderr
+    assert parses((repo / TESTS).read_text(), tmp_path)
