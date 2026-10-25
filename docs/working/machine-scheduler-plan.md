@@ -27,7 +27,7 @@ Rows: x_list, sieve, matmul (the pin's largest scheduler effects), the 71 rows i
 
 ## Remaining deviations from the pin's GenericScheduler (w12, 2026-10-25, after #4735)
 
-Landed by #4735: bottom-up only, `tryCandidate` (`RegExcess`, `RegCritical`, `RegMax`, `NodeOrder`) over the per-set tracker (`regpressure.rs`), `initLiveThru`, `RegionCriticalPSets`, pressure tracked only above half the integer registers. Whole-scheduler effect, 71 programs m32 -O2, static instructions (pincount): dag +0.4% vs the pin's `llc` (before: +5.9%). So the sum of everything below is bounded by that +0.4%; no item has been ablated alone (an ablation needs its own switch).
+Landed by #4735: bottom-up only, `tryCandidate` (`RegExcess`, `RegCritical`, `RegMax`, `NodeOrder`) over the per-set tracker (`regpressure.rs`), `initLiveThru`, `RegionCriticalPSets`, pressure tracked only above half the integer registers. Whole-scheduler effect, 71 programs m32 -O2, static instructions (pincount, on the old pin triple with stack alignment 16: redo after #4780 before quoting): dag +0.4% vs the pin's `llc` (before: +5.9%). No item has been ablated alone (an ablation needs its own switch).
 
 Order to land (cheapest evidence first):
 
@@ -38,6 +38,7 @@ Order to land (cheapest evidence first):
 5. MS6 `Rem.IsAcyclicLatencyLimited`. The pin turns on its height/depth heuristic in a loop whose in-flight micro-ops pass the buffer (32). Effect: loops of 32+ instructions only; unmeasured.
 6. `pressuresink.rs` still runs before the scheduler (plan piece 4). Delete it once rows show nothing worse; its loads are what the scheduler places.
 7. MS5 targets with no pressure sets (m16) count every register as one set; m16 has no `pressure()` data.
-8. Not the scheduler, same family: the DAG's own scheduling preference (`LLRM_SRC_ORDER`, #4717); the default (off) is the right one (dag +0.4% vs pin; source order was +5.9%).
+8. The DAG's source-order flag (`LLRM_SRC_ORDER`, #4717): off is the default, the right one on the same measurement.
+9. The DAG scheduler (`ScheduleDAGRRList` priority functions: source/hybrid/ILP; `schedule.rs`). First differing BURR pick on x_dct (w13): #8 of 74, the pin picks the SUB, ours the ADD, with equal Sethi-Ullman numbers and heights; the pin's depth/FIFO tie-break matches neither sign of our depth rule. Owner: w13 found it; w12 translates the priority functions.
 
 Not applicable on the i486 (no model): clusters, weak edges, stalls, resources, `ReduceLatency` (never set bottom-up). Compile-time effect (d_faces) of the scheduler and of each item: not measured; the pass runs on regions over half the registers only.
