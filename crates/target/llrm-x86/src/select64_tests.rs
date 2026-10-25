@@ -194,3 +194,12 @@ fn the_other_scalar_sse_forms_encode() {
     let xor = sem(Operation::Binary, Some("xorps"), vec![rg(x(0), 16)], vec![rg(x(0), 16), rg(x(0), 16)], None, false);
     assert_eq!(bytes(&xor), [0x0f, 0x57, 0xc0]);
 }
+
+#[test]
+fn the_scalar_double_move_is_not_the_string_copy() {
+    // movsd %xmm1,%xmm0 is F2 0F 10 C1; the name `movsd` is the string copy's,
+    // so the move is `movsd_x`.
+    let x = |n: u32| RegId::from(Register::XMM0 + n);
+    let mov = sem(Operation::Move, Some("movsd_x"), vec![rg(x(0), 8)], vec![rg(x(1), 8)], None, false);
+    assert_eq!(bytes(&mov), [0xf2, 0x0f, 0x10, 0xc1]);
+}

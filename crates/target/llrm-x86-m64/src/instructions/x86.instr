@@ -71,7 +71,7 @@ pop    pop    rm/-    64    pop_r    -    sp,ss    sp    -/-    Pop_r{w}
 # movsxd: the sign extension of a dword into a quadword.
 movsxd    extend     r/rm               64         movzx        -                       -       -       -/-             Movsxd_r64_rm32
 
-# Scalar SSE (X86InstrSSE.td): xmm registers are kind `x`; the width is the scalar's, 128 for the whole register.
+# Scalar SSE (X86InstrSSE.td); the double move is `movsd_x`, `movsd` being the string copy above: xmm registers are kind `x`; the width is the scalar's, 128 for the whole register.
 addss	binary	x/^0,xm	32	sse_arith	-	-	-	-/-	Addss_xmm_xmmm32
 addsd	binary	x/^0,xm	64	sse_arith	-	-	-	-/-	Addsd_xmm_xmmm64
 subss	binary	x/^0,xm	32	sse_arith	-	-	-	-/-	Subss_xmm_xmmm32
@@ -89,8 +89,8 @@ movss	move	x/xm	32	sse_move	-	self,same	-	-/-	Movss_xmm_xmmm32
 movss	move	m/x	32	sse_move	-	-	-	-/-	Movss_xmmm32_xmm
 ucomiss	cmp	-/x,xm	32	sse_compare	-	-	-	-/OF,SF,ZF,AF,CF,PF	Ucomiss_xmm_xmmm32
 sqrtsd	unary	x/xm	64	sse_sqrt	-	-	-	-/-	Sqrtsd_xmm_xmmm64
-movsd	move	x/xm	64	sse_move	-	self,same	-	-/-	Movsd_xmm_xmmm64
-movsd	move	m/x	64	sse_move	-	-	-	-/-	Movsd_xmmm64_xmm
+movsd_x	move	x/xm	64	sse_move	-	self,same	-	-/-	Movsd_xmm_xmmm64
+movsd_x	move	m/x	64	sse_move	-	-	-	-/-	Movsd_xmmm64_xmm
 ucomisd	cmp	-/x,xm	64	sse_compare	-	-	-	-/OF,SF,ZF,AF,CF,PF	Ucomisd_xmm_xmmm64
 xorps	binary	x/^0,xm	128	sse_logic	-	idiom,same	-	-/-	Xorps_xmm_xmmm128
 andps	binary	x/^0,xm	128	sse_logic	-	idiom,same	-	-/-	Andps_xmm_xmmm128

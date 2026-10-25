@@ -2132,7 +2132,7 @@ fn scalar_sse(
     at: At,
 ) -> Option<Emitted> {
     let (dests, sources) = (&what.dests, &what.sources);
-    let name = what.name.as_deref()?;
+    let name = what.name.as_deref()?.trim_end_matches("_x");
     let (first, second) = match (dests.len(), sources.len()) {
         (1, 2) => (&dests[0], &sources[1]),
         (1, 1) => (&dests[0], &sources[0]),
