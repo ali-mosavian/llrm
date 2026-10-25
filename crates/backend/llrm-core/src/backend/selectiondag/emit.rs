@@ -2179,6 +2179,22 @@ impl Emitter<'_, '_> {
                 );
                 Ok(Some(()))
             }
+            // The same from memory: the second source is the cell, read only
+            // when the condition holds (`CMOV64rm src1, [mem], cc`).
+            "CMOV16rm" | "CMOV32rm" | "CMOV64rm" => {
+                let cc = self.constant(node.ops[6])? as usize;
+                let jump = CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
+                let Loc::Held(when_false) = self.operand(node.ops[0])? else {
+                    return Err(EmitError::Unsupported("a conditional move of a non-register".to_owned()));
+                };
+                let group = node.ops.get(1..6).ok_or_else(|| EmitError::Unsupported("a short cmov".to_owned()))?;
+                let cell = self.cell(group, u32::from(width))?;
+                let held = self.fresh(width);
+                self.values.insert(result, held.value);
+                let name = format!("cmov{}", &jump[1..]);
+                self.push(Operation::Select, &name, vec![Loc::Held(held)], vec![Loc::Held(when_false), Loc::Mem(cell)]);
+                Ok(Some(()))
+            }
             "SETCCr" => {
                 let cc = node
                     .ops
