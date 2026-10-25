@@ -34,7 +34,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 
 use indexmap::IndexMap;
-use llrm_dagisel::generated::{x86_i486, x86_m16};
+use llrm_dagisel::generated::{x86_i486, x86_m16, x86_x64};
 use llrm_dagisel::interp::Selector;
 use llrm_dagisel::x86_addr::AddrMode;
 use llrm_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
@@ -365,7 +365,11 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
         .entry(bits)
         .or_insert_with(|| {
             let forms = llrm_instr::parse(&arch.forms_text(), arch.dialect()).expect("x86.instr parses");
-            let opcodes = if bits == 16 { x86_m16::MACHINE_OPCODES } else { x86_i486::MACHINE_OPCODES };
+            let opcodes = match bits {
+                16 => x86_m16::MACHINE_OPCODES,
+                64 => x86_x64::MACHINE_OPCODES,
+                _ => x86_i486::MACHINE_OPCODES,
+            };
             std::sync::Arc::new(Tables {
                 map: OpcodeMap::new(forms),
                 names: opcodes
@@ -562,11 +566,13 @@ fn selected_in(
     contracts: Option<&RuntimeContracts<'_>>,
     pool: &mut Pool,
 ) -> Result<Selected, Unselected> {
-    let m16 = match arch.object().bitness {
+    let bitness = arch.object().bitness;
+    let m16 = match bitness {
         16 => true,
-        32 => false,
-        _ => return refuse("only m16 and m32 are built so far"),
+        32 | 64 => false,
+        _ => return refuse("only m16, m32 and m64 are built so far"),
     };
+    let m64 = bitness == 64;
     let Some(id) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(id).function().filter(|one| !one.is_declaration()) else {
         return refuse(format!("@{name} has no body"));
@@ -577,6 +583,8 @@ fn selected_in(
     let mut info = FunctionLoweringInfo::new(function);
     let mut tli = if m16 {
         TargetLowering::x86_16(Features::default(), MVT::I16)
+    } else if m64 {
+        TargetLowering::x86_64(Features::default(), MVT::I64)
     } else {
         TargetLowering::x86_32(Features::default(), MVT::I32)
     };
@@ -598,8 +606,11 @@ fn selected_in(
             }
         }
     }
-    let (builder_target, address_mode) =
-        if m16 { (BuilderTarget::m16(), AddrMode::Real16) } else { (BuilderTarget::m32(), AddrMode::Flat32) };
+    let (builder_target, address_mode) = match bitness {
+        16 => (BuilderTarget::m16(), AddrMode::Real16),
+        64 => (BuilderTarget::m64(), AddrMode::Flat64),
+        _ => (BuilderTarget::m32(), AddrMode::Flat32),
+    };
     let builder_target = builder_target
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)
@@ -649,14 +660,26 @@ fn selected_in(
         debug_assert_eq!(made, index, "frame objects are numbered as the builder numbered them");
     }
     let mut hooks = X86Hooks::new(Options {
-        cpu: if m16 { Cpu::M16 } else { Cpu::I486 },
+        cpu: if m16 {
+            Cpu::M16
+        } else if m64 {
+            Cpu::X64
+        } else {
+            Cpu::I486
+        },
         opt_none: false,
         opt_for_size: false,
         min_size: false,
         has_frame_pointer: true,
         address_mode,
     });
-    let selector = Selector::new(if m16 { x86_m16::TABLE } else { x86_i486::TABLE });
+    let selector = Selector::new(if m16 {
+        x86_m16::TABLE
+    } else if m64 {
+        x86_x64::TABLE
+    } else {
+        x86_i486::TABLE
+    });
     let mut state = EmitState::default();
     // A block's address is fixed before any block is emitted: a branch names
     // the blocks after it.
