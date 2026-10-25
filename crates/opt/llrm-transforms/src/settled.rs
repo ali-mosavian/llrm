@@ -234,6 +234,12 @@ impl Settled {
     }
 }
 
+/// The hasher of every digest here. SipHash was 1.8 M of a `d_faces` compile:
+/// these are compared within a run, and nothing keyed guards them.
+fn digest() -> llrm_mir::hash::Fx {
+    llrm_mir::hash::Fx::default()
+}
+
 /// A number that is the same where a body reads the same outside itself: see
 /// the module's text.
 pub fn slice(
@@ -245,7 +251,7 @@ pub fn slice(
     let saved = read::swap(0);
     let function = &*unit.function;
     let context = &*unit.context;
-    let mut own = std::collections::hash_map::DefaultHasher::new();
+    let mut own = digest();
     // What a body says of its parameters for its callers (`initializes`) is a
     // result of its code, not a premise of it.
     let parameters: Vec<Vec<&llrm_mir::opcode::Attribute>> = function
@@ -253,8 +259,8 @@ pub fn slice(
         .iter()
         .map(|attrs| attrs.iter().filter(|one| !matches!(one, llrm_mir::opcode::Attribute::Initializes(_))).collect())
         .collect();
-    let numbered = |value: &dyn Fn(&mut std::collections::hash_map::DefaultHasher)| {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let numbered = |value: &dyn Fn(&mut llrm_mir::hash::Fx)| {
+        let mut hasher = digest();
         value(&mut hasher);
         hasher.finish()
     };
@@ -283,7 +289,7 @@ pub fn slice(
             }
             continue;
         }
-        let mut declaration = std::collections::hash_map::DefaultHasher::new();
+        let mut declaration = digest();
         let mut kept = (None, None);
         match &global.kind {
             GlobalKind::Function(callee) => {
@@ -297,7 +303,7 @@ pub fn slice(
                     callee.parameter_attrs.iter().filter(|attrs| !attrs.is_empty()).collect::<Vec<_>>(),
                 )
                     .hash(&mut declaration);
-                let mut effects = std::collections::hash_map::DefaultHasher::new();
+                let mut effects = digest();
                 // The pointer parameters it keeps a copy of are counted, not
                 // placed: a parameter nothing reads is the one taken away.
                 let pointers = |callee: &llrm_mir::module::Function| -> Vec<bool> {
@@ -332,7 +338,7 @@ pub fn slice(
                     .hash(&mut effects);
                 outer.kept_across(Some(id)).hash(&mut effects);
                 callees.push(effects.finish());
-                let mut summary = std::collections::hash_map::DefaultHasher::new();
+                let mut summary = digest();
                 global.name.as_deref().and_then(|name| summaries?.get(name)).hash(&mut summary);
                 known.push(summary.finish());
                 kept = (Some(effects.finish()), Some(summary.finish()));
@@ -347,14 +353,14 @@ pub fn slice(
     let one_of = |mut numbers: Vec<u64>| {
         numbers.sort_unstable();
         numbers.dedup();
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = digest();
         numbers.hash(&mut hasher);
         hasher.finish()
     };
     let globals =
         outer.cached_ref::<GlobalsAA>().and_then(|one| one.as_ref().ok()).map(|globals| globals.read_by(&named));
     let hashed = |value: &dyn std::fmt::Debug| {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = digest();
         format!("{value:?}").hash(&mut hasher);
         hasher.finish()
     };
@@ -405,4 +411,19 @@ fn named(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    /// The digests were `DefaultHasher`, SipHash13 over every attribute of a
+    /// body at each slice. Does not compile for any other hasher type.
+    #[test]
+    fn test_digests_are_fx() {
+        use std::hash::{Hash, Hasher};
+        let mut hasher: llrm_mir::hash::Fx = super::digest();
+        7u32.hash(&mut hasher);
+        let mut by_hand = llrm_mir::hash::Fx::default();
+        7u32.hash(&mut by_hand);
+        assert_eq!(hasher.finish(), by_hand.finish());
+    }
 }

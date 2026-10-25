@@ -2768,9 +2768,64 @@ impl PartialEq for DomTreeBase<false> {
     }
 }
 
+/// The trees [`DomTree::of`] keeps to copy.
+const MEMO_TREES: usize = 8;
+
+thread_local! {
+    static MEMO: std::cell::RefCell<Vec<(Vec<u32>, DomTree)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn check_memo() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_DOMTREE_MEMO"))
+}
+
+/// Everything a dominator tree of `function` is made of.
+fn cfg_key(function: &Function) -> Vec<u32> {
+    const EDGE: u32 = 1 << 31;
+    let mut key = Vec::with_capacity(function.layout().len() * 3 + 1);
+    key.push(function.block_capacity() as u32);
+    for &block in function.layout() {
+        key.push(block.0);
+        if let Some(term) = function.terminator(block) {
+            key.extend(function.instruction(term).operands.iter().filter_map(|operand| match operand {
+                Operand::Block(target) => Some(target.0 | EDGE),
+                _ => None,
+            }));
+        }
+    }
+    key
+}
+
 impl DomTree {
-    /// The tree of `function`.
+    /// The tree of `function`. Where a tree was built for the same CFG (the
+    /// layout and each terminator's block operands), that tree is copied: a
+    /// tree is a function of the CFG alone, and the key is compared whole, so
+    /// no pass has to say what it changed. `LLRM_CHECK_DOMTREE_MEMO` builds
+    /// the tree again at each reuse and fails on a difference.
     pub fn of(function: &Function) -> Self {
+        let key = cfg_key(function);
+        if let Some(tree) =
+            MEMO.with(|memo| memo.borrow().iter().find(|(seen, _)| *seen == key).map(|(_, tree)| tree.clone()))
+        {
+            crate::counts::bump(crate::counts::Event::DominatorsReused);
+            if check_memo() {
+                assert!(tree == Self::built(function), "a reused dominator tree differs from one built now");
+            }
+            return tree;
+        }
+        let tree = Self::built(function);
+        MEMO.with(|memo| {
+            let mut memo = memo.borrow_mut();
+            if memo.len() == MEMO_TREES {
+                memo.remove(0);
+            }
+            memo.push((key, tree.clone()));
+        });
+        tree
+    }
+
+    fn built(function: &Function) -> Self {
         crate::counts::bump(crate::counts::Event::Dominators);
         let mut tree = Self::new();
         tree.recalculate(function);
