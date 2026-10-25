@@ -102,3 +102,33 @@ pub fn select_setcc_carry<D: AddrDag>(
     dag.remove_dead_node(node);
     true
 }
+
+/// `X86ISD::FIST chain, value, ptr` of an `i16` (DEVIATE SD215; owner sdag-b,
+/// exit: promote it as the pin does, review 2026-12-10): `IST_Fp16m<float>`
+/// with the address group, the value and the chain, as the table's `i32` and
+/// `i64` patterns build theirs. False for another memory type.
+pub fn select_fist16<D: AddrDag>(
+    dag: &mut D,
+    hooks: &crate::x86_hooks::X86Hooks,
+    node: u32,
+) -> bool {
+    use crate::x86_addr::Matcher;
+    if dag.memory_vt(node) != mvt::i16 {
+        return false;
+    }
+    let (chain, value, ptr) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let opcode = match dag.value_type(value) {
+        mvt::f32 => crate::x86_llrm::IST16_OPCODES[0],
+        mvt::f64 => crate::x86_llrm::IST16_OPCODES[1],
+        mvt::f80 => crate::x86_llrm::IST16_OPCODES[2],
+        _ => return false,
+    };
+    let Some(a) = (Matcher { dag, pointer_type: hooks.options.pointer_type(), mode: hooks.options.address_mode })
+        .select_addr_of(Some(node), ptr)
+    else {
+        return false;
+    };
+    let ops = [a.base, a.scale, a.index, a.disp, a.segment, value, chain];
+    dag.morph_node_to(node, opcode, &[mvt::Other], &ops);
+    true
+}

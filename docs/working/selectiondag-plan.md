@@ -225,7 +225,8 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD210 | sdag-b | `visitADD`: no reassociation of constants into an `add` that feeds a memory access (no `reassociationCanBreakAddressingModePattern`) | `selectiondag/dag_combiner.rs` |
 | SD211 | sdag-b | `PromoteIntBinOp`/`ShiftOp`: a load operand is any-extended (the extend-of-load fold makes the extending load), no `AssertSext`/`AssertZext` look-through | `selectiondag/dag_combiner.rs` |
 | SD212 | sdag-b | `SimplifyDemandedBits`: and/or/xor, shifts by a constant, zext/anyext/trunc only; no `ShrinkDemandedOp`, no narrowing rewrites, no SRA/ADD/SUB/MUL/SELECT cases | `selectiondag/demanded_bits.rs` |
-| SD214 | sdag-b | `FLOG`/`FEXP`/`FLOG2`/`FEXP2`/`FSIN`/`FCOS`/`FATAN` select as the x87 sequences the finalizer spells (`fln`, `fexp`, ...), not libm calls: no target has a libm (`Target::has_libm`); with one, the node is refused (the pin's libcall is not translated) | `llrm-dagisel/src/x86_llrm.rs` |
+| SD214 | sdag-b | `FLOG`/`FEXP`/`FLOG2`/`FEXP2`/`FSIN`/`FCOS`/`FATAN`/`FRINT` select as the x87 sequences the finalizer spells (`fln`, `fexp`, ...), not libm calls: no target has a libm (`Target::has_libm`); with one, the node is refused (the pin's libcall is not translated) | `llrm-dagisel/src/x86_llrm.rs` |
+| SD215 | sdag-b | `X86ISD::FIST` of an `i16` selects `IST_Fp16m32/64/80`, which the pin has no pattern for (its `lrint` of a short is promoted); QB's `CINT` needs a word `fistp` | `llrm-dagisel/src/x86_fcmp.rs` |
 
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |
 | SD101 | sdag-a | `freeze` folds away only for a constant or a `freeze` (`isGuaranteedNotToBeUndefOrPoison` is partial) | `selectiondag/fold.rs` |
