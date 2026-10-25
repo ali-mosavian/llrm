@@ -272,6 +272,8 @@ fn is_disp_safe_for_frame_index_or_reg_base(value: i64) -> bool {
 pub enum AddrMode {
     /// 32-bit flat: `[base + index*scale + disp32]`.
     Flat32,
+    /// 64-bit flat: `[base + index*scale + disp32]` with 64-bit registers.
+    Flat64,
     /// Real mode (SD3): `[bx|bp] + [si|di] + disp16`, no scale. Which register
     /// is which is the register class's business (SD4); the matcher only
     /// keeps one base and one index.
@@ -649,7 +651,7 @@ impl<D: AddrDag> Matcher<'_, D> {
             }
         }
         // x + x is x * 2.
-        if self.mode == AddrMode::Flat32
+        if self.mode != AddrMode::Real16
             && self.opcode(n) == isd::ADD
             && self.operand(n, 0) == self.operand(n, 1)
             && am.scale <= 4
@@ -694,7 +696,7 @@ impl<D: AddrDag> Matcher<'_, D> {
                 }
             }
             isd::SHL => {
-                if self.mode == AddrMode::Flat32 && am.index_reg.is_none() && am.scale == 1 {
+                if self.mode != AddrMode::Real16 && am.index_reg.is_none() && am.scale == 1 {
                     if let Some(shift) = self.constant(self.operand(n, 1)) {
                         if (1..=3).contains(&(shift as u64)) {
                             let sh_val = self.operand(n, 0);
@@ -706,7 +708,7 @@ impl<D: AddrDag> Matcher<'_, D> {
                 }
             }
             isd::SRL => {
-                if self.mode == AddrMode::Flat32 && am.index_reg.is_none() && am.scale == 1 {
+                if self.mode != AddrMode::Real16 && am.index_reg.is_none() && am.scale == 1 {
                     let and = self.operand(n, 0);
                     if self.opcode(and) == isd::AND {
                         let x = self.operand(and, 0);
@@ -722,7 +724,7 @@ impl<D: AddrDag> Matcher<'_, D> {
                 }
             }
             isd::AND => {
-                if self.mode == AddrMode::Flat32 && am.index_reg.is_none() && am.scale == 1 {
+                if self.mode != AddrMode::Real16 && am.index_reg.is_none() && am.scale == 1 {
                     if let Some(mask) = self.constant(self.operand(n, 1)) {
                         let shift = self.operand(n, 0);
                         if self.opcode(shift) == isd::SRL {
@@ -742,7 +744,7 @@ impl<D: AddrDag> Matcher<'_, D> {
                 }
             }
             isd::MUL | x86isd::MUL_IMM => {
-                if self.mode == AddrMode::Flat32
+                if self.mode != AddrMode::Real16
                     && am.base_type == BaseType::Reg
                     && am.base_reg.is_none()
                     && am.index_reg.is_none()
