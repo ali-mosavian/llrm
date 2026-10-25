@@ -184,3 +184,33 @@ fn a_shifted_power_of_two_masked_is_a_compare_select() {
         "  %0 = icmp eq i32 %x, 2\n  %1 = select i1 %0, i32 16, i32 0\n  ret i32 %1\n",
     );
 }
+
+/// FILL's `(i & 15) + *x` kept the 15 for an `i` that starts at 0 and steps by
+/// 2: `visitAnd` runs `SimplifyDemandedInstructionBits` (DEVIATE 2 left it
+/// out), whose `ShrinkDemandedConstant` leaves out the bit the recurrence
+/// keeps clear, and the pin writes `and %i, 14`.
+#[test]
+fn an_and_with_a_mask_drops_the_bit_an_induction_variable_keeps_clear() {
+    let text = "define i32 @f(i32 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b1 ]
+  %m = and i32 %i, 15
+  %next = add nuw nsw i32 %i, 2
+  %c = icmp ult i32 %next, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i32 %m
+}
+";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    let after = printed(&module);
+    assert!(after.contains("and i32 %i, 14"), "{after}");
+}
