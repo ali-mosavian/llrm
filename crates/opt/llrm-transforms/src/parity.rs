@@ -351,6 +351,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "machine-sink",
         "criterion: hanoi, x_switch_* and mandel keep a phi constant off the path that does not read it; exit: store and load sinking along critical edges (hasStoreBetween), SinkAndFold, the pressure test of isProfitableToSinkTo",
     ),
+    partial(
+        "peepholeopt@4",
+        Backend,
+        "peephole-opt (PeepholeOptimizer.cpp)",
+        "criterion: a SUB nothing reads is a CMP before allocation (optimizeCompareInstr, first switch), x_heapsort cmp/sub as the pin's; exit: the rest of optimizeCompareInstr (flags of an earlier instruction reused, NewCC, InstsToUpdate) and the other PeepholeOptimizer rewrites",
+    ),
     entry("combiner@4", Backend, "machine-combiner (MachineCombiner.cpp)", Translated, ""),
     entry("liverangeshrink@4", Backend, "lrshrink (LiveRangeShrink.cpp)", Translated, ""),
     entry("phielim@4", Backend, "phi-node-elimination", Old, "lir-cleanup-poc"),

@@ -124,6 +124,7 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
             "fixupleas@14",
             "machinecse@4",
             "machinesink@4",
+            "peepholeopt@4",
             "machinesched@5",
             "combiner@4",
             "liverangeshrink@4",
