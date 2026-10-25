@@ -95,8 +95,22 @@ Read from each function's own comment; a home is the pin's pass that does the sa
 First PRs, in order: `constants` (count what each of its three parts changes on the 568 sweep and QCport, then delete or hand over), `high_extracts` and `extensions` with R45-3; `popped_arguments` (1.69 M) waits for row 80's frame indices (w-6, 2026-11-20) and is asked of w-6 then.
 
 ### Count (2026-10-25, step 1)
-On `d_faces -O2` the groups' first-pattern test (`Matcher::head`) ran 24,604 times and passed 856 (3.5%), counted at the one `run` all walks call. The walks cost 10.7 M outside the shared `upper_zero` solution, about 435 Ir per test, of which the 856 passes' tails are a part: an upper bound of the saving is most of 10.7 M, an estimate until the index exists. Step 2 (2026-11-20) measures it on the dist build; under 3 M it is dropped.
+On `d_faces -O2` the groups' first-pattern test (`Matcher::head`) ran 24,604 times and passed 856 (3.5%), counted at the one `run` all walks call. The walks cost 10.7 M outside the shared `upper_zero` solution, about 435 Ir per test, of which the 856 passes' tails are a part: that sentence overstated it: by group (the dist-symbolized profile, inclusive) twelve of the fourteen groups cost 0.38 to 0.80 M each whatever they match (`pushed_constants` 0.54, `borrows` 0.54, `shuttles` 0.56, `commuted` 0.38), while `narrowed_arithmetic` 3.77 M is the shared `upper_zero` solution, `fused` 2.49 M and `increments` 1.87 M do real rewriting. The floor of the twelve is 6 to 7 M, so the index's saving is an estimate of 5 M or so, until it exists. Step 2 (2026-11-20) measures it on the dist build; under 3 M it is dropped.
 
 ### `constants`, what each part changes (2026-10-25)
 Counted in a throwaway build over the 65 QCport modules at -O2 (m16 and m32): 106 extensions folded to a constant, 36 loads or extensions removed because a register already holds the same known constant, 11 register copies removed, 7 immediate reloads removed (the part `latecleanup.rs` takes). The 41 bench kernels at -O1/-O2/-Os, both modes: 1 copy. Each `Peephole::once` run counts, so the totals include repeats; the proportions are what matter. The extension fold is most of the work, so `constants` is deleted only after the DAG fold (R45-3) covers it; the other parts are 18 of 160.
+
+### `constants` under each selector (2026-10-25)
+The 106 extension folds above are the old selector's (the default today). With `--isel=dag` the same count over the modules that compile is 0 folds and 1 removed load (old: 106 and 54): the DAG folds an extension of a constant at node creation (`fold_constant_arithmetic`), so R45-3 has no DAG work for it; `constants` goes when the DAG selector is the default (w12's flip), not before. Compiled: m16 65 of 65 modules (old) and 63 of 65 (dag, two refuse); m32 14 and 15 of 65 (the others fail in the front end on this include set), so the m32 figures say little. xor, inc/dec and test are the matcher's (w11): to be asked which are landed.
+
+### `zeroes`, `increments`, `zero_compares` under each selector (2026-10-25)
+w11 (matcher owner): under `--isel=dag` all three forms are pin table patterns, already selected. Checked, not assumed: a throwaway build counted the instructions each sub-pass changed over the 65 QCport modules at m16 -O2 (positions, so a rewrite that moved later instructions would inflate it; these rewrites keep the length):
+
+| sub-pass | old selector | dag selector |
+|---|--:|--:|
+| `zero_compares` | 1731 | 0 |
+| `increments` | 937 | 130 |
+| `zeroes` | 1337 | 1190 |
+
+So: `zero_compares` is dead under dag and goes with the default flip. `increments` leaves 130 the matcher does not make: all 130 are `sub r,1` (122 word, 5 byte, 3 dword) turned into `dec`, none an `add r,-1`; the pin's DAGCombiner turns `(sub x, C)` into `(add x, -C)` before its DEC32r pattern sees it, so the missing piece is that fold or a `sub x,1` pattern (DAG combiner, w10). `zeroes` still fires 1190 times under dag because it is the pin's own post-RA step, `X86InstrInfo::expandPostRAPseudo` of `MOV32r0` into `xor`; its home is a translation of that expansion, and its cost (2.28 M) is the walk, which R45-2's index reaches. R45-3 is therefore: delete `zero_compares` and `constants` at the flip, trace the 130, rename `zeroes` as the expansion.
 
