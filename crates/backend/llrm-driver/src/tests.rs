@@ -488,7 +488,7 @@ fn a_value_as_wide_as_an_xmm_register_is_confined_to_them() {
     let held = |value, width| Loc::Held(Held { value, width });
     let add = |width| {
         let what = Semantics {
-            name: Some("addsd".to_owned()),
+            name: Some("addsd".into()),
             dests: vec![held(1, width)],
             sources: vec![held(1, width), held(2, width)],
             ..Semantics::new(Operation::Binary)
