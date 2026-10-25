@@ -579,10 +579,8 @@ impl<'a> Dse<'a> {
         &self,
         loc: &Location,
     ) -> Option<llrm_analysis::memory::ObjectRef> {
-        let provenance = loc.reference.provenance.as_ref()?;
-        let mut slices = provenance.slices.iter();
-        let first = slices.next()?;
-        slices.next().is_none().then_some(first.object)
+        let root = loc.reference.root?;
+        llrm_analysis::memory::object_of(self.aa.unit(), root)
     }
 
     /// The same object (`getUnderlyingObject` equal).

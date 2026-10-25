@@ -225,7 +225,7 @@ impl<'a> AliasQuery<'a> {
             return found.clone();
         }
         let made = match self.unit.function.instruction(inst).opcode {
-            Opcode::Load { .. } | Opcode::Store { .. } => self.accesses.references.get(&inst).map(|reference| {
+            Opcode::Load { .. } | Opcode::Store { .. } => MemRef::of(self.unit, inst).as_ref().map(|reference| {
                 let made = self.location_for(reference, false);
                 // The access's own tags (`MemoryLocation::get`).
                 let tagged = crate::aa::MemoryLocation::get(self.unit, inst).filter(|_| made.memory.is_some());
@@ -749,8 +749,19 @@ impl<'a> AliasQuery<'a> {
         if llrm_mir::memory::invariant_load(unit.context, unit.layout, unit.function, inst) {
             return true;
         }
-        matches!(unit.function.instruction(inst).opcode, Opcode::Load { .. })
-            && self.location_of(inst).is_some_and(|loc| loc.reference.unwritable())
+        if !matches!(unit.function.instruction(inst).opcode, Opcode::Load { .. }) {
+            return false;
+        }
+        let Some(loc) = self.location_of(inst) else { return false };
+        // `AA.pointsToConstantMemory(Loc)`: the stack's, where the location has
+        // a pointer.
+        match &loc.memory {
+            Some(memory) => {
+                use crate::aa::AAResults;
+                self.stack().points_to_constant_memory(memory, &mut self.basic.borrow_mut(), false)
+            }
+            None => loc.reference.unwritable(),
+        }
     }
 
     /// [`areLoadsReorderable`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSA.cpp#L249)
