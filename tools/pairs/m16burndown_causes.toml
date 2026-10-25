@@ -1,0 +1,93 @@
+# Cause and owner of each m16 -Os grower, first match wins. A cause is a tag from the owners' ledger lists
+# (ss: override, fixed-point divide, tree-ch, loop-idiom memcpy, LSR, x87 round/spills/compare, remat, closed-form,
+# select setcc, urem magic, correctness-driven); a program with no entry is untriaged. Owners are the coordinator's sets.
+
+[[program]]
+match = "nbody_fixed/*"
+cause = "fixed-point divide"
+owner = "w-9"
+
+[[program]]
+match = "stft_fixed/*"
+cause = "fixed-point divide"
+owner = "w-9"
+
+[[program]]
+match = "qb/nbody.bas"
+cause = "untriaged"
+owner = "w-6"
+
+[[program]]
+match = "*/nbody.*"
+cause = "untriaged"
+owner = "w-2"
+
+[[program]]
+match = "*/stft_single.*"
+cause = "untriaged"
+owner = "w-13"
+
+[[program]]
+match = "*/log_exp*"
+cause = "untriaged"
+owner = "w-2"
+
+[[program]]
+match = "*/mandel*"
+cause = "untriaged"
+owner = "w-2"
+
+[[program]]
+match = "*/range_exp*"
+cause = "untriaged"
+owner = "w-2"
+
+[[program]]
+match = "*/pow_stack_depth*"
+cause = "untriaged"
+owner = "w-2"
+
+[[program]]
+match = "*/fpbench*"
+cause = "untriaged"
+owner = "w-2"
+
+[[program]]
+match = "*/memory.nib"
+cause = "untriaged"
+owner = "w-1"
+
+[[program]]
+match = "*/sieve*"
+cause = "untriaged"
+owner = "w-1"
+
+[[program]]
+match = "*/quicksort*"
+cause = "untriaged"
+owner = "w-1"
+
+[[program]]
+match = "*/udt*"
+cause = "untriaged"
+owner = "w-1"
+
+[[program]]
+match = "*/lcexit*"
+cause = "untriaged"
+owner = "w-1"
+
+[[program]]
+match = "*/lru*"
+cause = "untriaged"
+owner = "w-13"
+
+[[program]]
+match = "*/matmul*"
+cause = "untriaged"
+owner = "w-13"
+
+[[program]]
+match = "*/jpeg*"
+cause = "untriaged"
+owner = "w-13"
