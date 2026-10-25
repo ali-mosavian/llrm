@@ -90,11 +90,9 @@ impl Graph<'_> {
         at: Created,
         rename_uses: bool,
     ) -> Option<AccessId> {
-        {
-            let unit = llrm_analysis::memory::Unit::within(context, self.layout, function, self.outer);
-            self.accesses.add_instruction(&unit, inst);
-        }
-        let effect = llrm_analysis::mssa::shadow::effect_of(self.accesses, function);
+        let unit = llrm_analysis::memory::Unit::within(context, self.layout, function, self.outer);
+        self.accesses.add_instruction(&unit, inst);
+        let effect = llrm_analysis::mssa::shadow::effect_of_in(self.accesses, &unit);
         let access = match at {
             Created::Beginning => {
                 self.updater.create_memory_access_in_bb(self.mssa, inst, None, block, Place::Beginning, &effect)?

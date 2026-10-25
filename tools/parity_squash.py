@@ -1038,12 +1038,14 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
 
         failed_units.clear()
         failed_build.clear()
+        stage("fast-merge")
         kept, out = fast_merge(group, merge_one)
         left_out.update(out)
         for number, why in out.items():
             print(f"#{number}: left out: {why}")
         if not kept:
             return True
+        stage("workspace-check")
         if broken := _workspace_check(ROOT):
             print(f"REFUSED: the batch does not build: {broken[:300]}")
             failed_build.append(broken)
@@ -1051,10 +1053,12 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         # LAND_FAST_TESTS=1: also the lib tests of the crates the batch changes (the user's 10-19 call is no tests; this is the switch for the opposite call)
         if os.environ.get("LAND_FAST_TESTS") == "1":
             changed = git("diff", "--name-only", BASE, "HEAD").split()
+            stage("lib-tests")
             if new := sorted(new_lib_failures(changed)):
                 print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
                 failed_units.update(new)
                 return False
+            stage("scanners")
             if new := sorted(new_scanner_failures(changed)):
                 print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
                 failed_units.update(new)
@@ -1063,10 +1067,12 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
             failed_units.update(new)
             return False
+        stage("link")
         if unlinked := new_link_failures(git("diff", "--name-only", BASE, "HEAD").split()):
             print(f"REFUSED: the batch's runtime does not link: {'; '.join(unlinked)[:300]}")
             failed_units.update(f"link {line.split(':')[0]}" for line in unlinked)
             return False
+        stage("behavioural")
         if red := pre_merge_behavioural(git("diff", "--name-only", BASE, "HEAD").split()):
             print(f"BEHAVIOURAL RED pre-merge: the batch, {' '.join(red)}")
             failed_units.update(f"behavioural {program}" for program in red)

@@ -95,6 +95,11 @@ pub mod x86isd {
     /// `sahf` on a 486).
     pub const FCMP: ISD = ISD::Target(576);
     pub const XOR: ISD = ISD::Target(955);
+    /// `X86ISD::FAND`/`FOR`/`FXOR`: `andps`/`orps`/`xorps` on a scalar float
+    /// and a 16-byte pool mask.
+    pub const FAND: ISD = ISD::Target(574);
+    pub const FOR: ISD = ISD::Target(615);
+    pub const FXOR: ISD = ISD::Target(634);
 }
 
 /// `X86::ES`, the segment `les` loads.
@@ -123,6 +128,8 @@ pub mod cond {
 /// The custom lowerings, for a CPU with or without CMOV.
 pub struct X86Lowering {
     pub cmov: bool,
+    /// Scalar floats live in xmm registers (`isScalarFPTypeInSSEReg`).
+    pub sse2: bool,
 }
 
 impl CombineHooks for X86Lowering {
@@ -294,13 +301,28 @@ impl Hooks for X86Lowering {
             ISD::UAddOCarry | ISD::USubOCarry => Some(lower_addsub_carry(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
             ISD::VAStart => lower_vastart(dag, node),
-            ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node),
+            ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node, self.sse2),
             ISD::LRint => lower_lrint(dag, node),
-            ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node),
+            ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node, self.sse2),
             ISD::ConstantPool => lower_constant_pool(dag, node),
             ISD::JumpTable => lower_jump_table(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
             ISD::Abs => Some(lower_abs(dag, node)),
+            ISD::FNeg | ISD::FAbs => lower_fabs_or_fneg(dag, node),
+            ISD::FCopySign => lower_fcopysign(dag, node),
+            ISD::DynamicStackAlloc => lower_dynamic_stackalloc(dag, node),
+            ISD::StackSave => {
+                let (chain, vt) = (dag.operand(node, 0), dag.value_type(node));
+                Some(dag.get_copy_from_phys_reg_plain(chain, llrm_lir::registers::RegId::SP, vt))
+            }
+            ISD::StackRestore => {
+                let (chain, saved) = (dag.operand(node, 0), dag.operand(node, 1));
+                let sp = dag.get_phys_register(dag.value_type(saved), llrm_lir::registers::RegId::SP);
+                Some(dag.get_node(ISD::CopyToReg, EVT::OTHER, &[chain, sp, saved]))
+            }
+            // `LowerFP_EXTEND`: the Custom arm exists for `f16`; a scalar
+            // `f32` to `f64` is returned as is and selected by pattern.
+            ISD::FpExtend if dag.value_type(dag.operand(node, 0)) == EVT::Simple(MVT::F32) => Some(node),
             ISD::CtLz | ISD::CtLzZeroPoison => Some(lower_ctlz(dag, node)),
             ISD::CtTz => Some(lower_cttz(dag, node)),
             ISD::Parity => Some(lower_parity(dag, node)),
@@ -955,14 +977,19 @@ fn combine_add(
     if vt != EVT::I32 {
         return None;
     }
-    let (difference, z) = (dag.operand(node, 0), dag.operand(node, 1));
-    if dag.opcode(difference) != ISD::Sub || dag.use_count(difference.node) != 1 || dag.constant(z).is_some() {
-        return None;
-    }
-    let (shift, y) = (dag.operand(difference, 0), dag.operand(difference, 1));
-    if dag.opcode(shift) != ISD::Shl || !dag.constant(dag.operand(shift, 1)).is_some_and(|amount| amount < 4) {
-        return None;
-    }
+    // `m_Add` matches either operand as the difference.
+    let hidden_lea = |difference: SDValue, z: SDValue| {
+        if dag.opcode(difference) != ISD::Sub || dag.use_count(difference.node) != 1 || dag.constant(z).is_some() {
+            return None;
+        }
+        let (shift, y) = (dag.operand(difference, 0), dag.operand(difference, 1));
+        if dag.opcode(shift) != ISD::Shl || !dag.constant(dag.operand(shift, 1)).is_some_and(|amount| amount < 4) {
+            return None;
+        }
+        Some((shift, y, z))
+    };
+    let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
+    let (shift, y, z) = hidden_lea(a, b).or_else(|| hidden_lea(b, a))?;
     let sum = dag.get_node(ISD::Add, vt, &[shift, z]);
     Some(dag.get_node(ISD::Sub, vt, &[sum, y]))
 }
@@ -1158,12 +1185,30 @@ fn lower_addsub_carry(
 fn lower_fp_to_int(
     dag: &mut SelectionDAG,
     node: SDValue,
+    sse2: bool,
 ) -> Option<SDValue> {
     let signed = dag.opcode(node) == ISD::FpToSInt;
     let result_vt = dag.value_type(node);
     let mut value = dag.operand(node, 0);
     let value_vt = dag.value_type(value);
     let EVT::Simple(float @ (MVT::F32 | MVT::F64 | MVT::F80)) = value_vt else { return None };
+    if sse2 && matches!(float, MVT::F32 | MVT::F64) {
+        // `cvttss2si`/`cvttsd2si` truncate to i32 (and i64 at m64); the other
+        // widths convert through the next one up.
+        let pointer = dag.config().pointer;
+        let via = match (signed, result_vt) {
+            (true, EVT::I32) => return Some(node),
+            (true, EVT::I64) if pointer == EVT::I64 => return Some(node),
+            (true, _) => Some(EVT::I32),
+            (false, EVT::I64) => None,
+            (false, _) if pointer == EVT::I64 => Some(EVT::I64),
+            (false, _) => None,
+        };
+        if let Some(via) = via {
+            let wide = dag.get_node(ISD::FpToSInt, via, &[value]);
+            return Some(dag.get_node(ISD::Truncate, result_vt, &[wide]));
+        }
+    }
     let unsigned_fixup = !signed && result_vt == EVT::I64;
     let stored_vt = if !signed && result_vt != EVT::I64 { EVT::I64 } else { result_vt };
     let size = stored_vt.size_in_bits() / 8;
@@ -1244,6 +1289,7 @@ fn build_fild(
 fn lower_int_to_fp(
     dag: &mut SelectionDAG,
     node: SDValue,
+    sse2: bool,
 ) -> Option<SDValue> {
     let signed = dag.opcode(node) == ISD::SIntToFp;
     let dst = dag.value_type(node);
@@ -1253,6 +1299,20 @@ fn lower_int_to_fp(
         return None;
     }
     let pointer = dag.config().pointer;
+    if sse2 && matches!(dst, EVT::Simple(MVT::F32 | MVT::F64)) {
+        let in_reg = |bits| src_vt.size_in_bits() == bits;
+        if signed && (in_reg(32) || (in_reg(64) && pointer == EVT::I64)) {
+            return Some(node);
+        }
+        if signed && in_reg(16) {
+            let wide = dag.get_node(ISD::SignExtend, EVT::I32, &[src]);
+            return Some(dag.get_node(ISD::SIntToFp, dst, &[wide]));
+        }
+        if !signed && in_reg(32) && pointer == EVT::I64 {
+            let wide = dag.get_node(ISD::ZeroExtend, EVT::I64, &[src]);
+            return Some(dag.get_node(ISD::SIntToFp, dst, &[wide]));
+        }
+    }
     let chain = dag.entry_node();
     let store_info = |index: i32, vt: EVT, size: u32| MemInfo {
         mem_vt: vt,
@@ -1554,6 +1614,98 @@ fn is_known_never_zero(
 /// `KnownBits::countMinLeadingZeros`.
 fn min_leading_zeros(known: &super::known_bits::KnownBits) -> u32 {
     (!known.zero & super::fold::mask(known.width)).leading_zeros() - (128 - known.width)
+}
+
+/// `LowerFABSorFNEG` for a scalar: no scalar bitwise SSE instruction exists, so
+/// the sign bit is cleared (`FAND`), flipped (`FXOR`) or set (`FOR`, for
+/// `fneg (fabs x)`) by a 16-byte pool mask whose low lane is the sign mask.
+fn lower_fabs_or_fneg(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let sign = match vt {
+        EVT::Simple(MVT::F32) => 1u128 << 31,
+        EVT::Simple(MVT::F64) => 1u128 << 63,
+        _ => return None,
+    };
+    let is_fabs = dag.opcode(node) == ISD::FAbs;
+    // `fabs` under an `fneg` is left to the `fneg`, which sets the sign.
+    if is_fabs && dag.users(node).any(|user| dag.opcode(SDValue { node: user, res: 0 }) == ISD::FNeg) {
+        return Some(node);
+    }
+    let mut x = dag.operand(node, 0);
+    let negated_abs = !is_fabs && dag.opcode(x) == ISD::FAbs;
+    if negated_abs {
+        x = dag.operand(x, 0);
+    }
+    let (op, mask) = match (is_fabs, negated_abs) {
+        (true, _) => (x86isd::FAND, sign - 1),
+        (false, true) => (x86isd::FOR, sign),
+        (false, false) => (x86isd::FXOR, sign),
+    };
+    let pointer = dag.config().pointer;
+    let pool = dag.get_constant_pool(pointer, mask, EVT::Simple(MVT::I128), false);
+    let address = dag.get_node(wrapper_kind(pointer), pointer, &[pool]);
+    Some(dag.get_node(op, vt, &[x, address]))
+}
+
+/// `LowerFCOPYSIGN` for a scalar: `(mag & ~sign) | (sgn & sign)`, the sign
+/// operand first extended or rounded to the magnitude's type.
+fn lower_fcopysign(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let sign = match vt {
+        EVT::Simple(MVT::F32) => 1u128 << 31,
+        EVT::Simple(MVT::F64) => 1u128 << 63,
+        _ => return None,
+    };
+    let (mag, mut sgn) = (dag.operand(node, 0), dag.operand(node, 1));
+    let sgn_vt = dag.value_type(sgn);
+    if sgn_vt != vt {
+        sgn = if sgn_vt.size_in_bits() < vt.size_in_bits() {
+            dag.get_node(ISD::FpExtend, vt, &[sgn])
+        } else {
+            let zero = dag.get_constant_with(0, EVT::I32, true, false);
+            dag.get_node(ISD::FpRound, vt, &[sgn, zero])
+        };
+    }
+    let pointer = dag.config().pointer;
+    let masked = |dag: &mut SelectionDAG, op, value, mask| {
+        let pool = dag.get_constant_pool(pointer, mask, EVT::Simple(MVT::I128), false);
+        let address = dag.get_node(wrapper_kind(pointer), pointer, &[pool]);
+        dag.get_node(op, vt, &[value, address])
+    };
+    let magnitude = masked(dag, x86isd::FAND, mag, sign - 1);
+    let sign_bit = masked(dag, x86isd::FAND, sgn, sign);
+    Some(dag.get_node(x86isd::FOR, vt, &[magnitude, sign_bit]))
+}
+
+/// `LowerDYNAMIC_STACKALLOC` without probes or split stacks: the stack pointer
+/// lowered by the size, rounded down to the alignment when that is more than
+/// the stack's (operand 2, else 0), is the address. Bracketed by a
+/// `CALLSEQ` pair so nothing else moves the stack pointer meanwhile.
+fn lower_dynamic_stackalloc(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let (chain, size) = (dag.operand(node, 0), dag.operand(node, 1));
+    let alignment = dag.constant(dag.operand(node, 2)).unwrap_or(0);
+    let start = dag.get_callseq_start(chain, 0);
+    let sp = dag.get_copy_from_phys_reg_plain(SDValue { node: start.node, res: 0 }, llrm_lir::registers::RegId::SP, vt);
+    let mut result = dag.get_node(ISD::Sub, vt, &[sp, size]);
+    let mut chain = SDValue { node: sp.node, res: 1 };
+    if alignment != 0 {
+        let mask = dag.get_constant(!(alignment - 1) & ((1u128 << vt.size_in_bits()) - 1), vt);
+        result = dag.get_node(ISD::And, vt, &[result, mask]);
+    }
+    chain = dag.get_copy_to_phys_reg(chain, llrm_lir::registers::RegId::SP, result, None);
+    let chain = SDValue { node: chain.node, res: 0 };
+    let end = dag.get_callseq_end(chain, 0, 0, SDValue { node: chain.node, res: 1 });
+    Some(dag.get_node_multi(ISD::MergeValues, &[vt, EVT::OTHER], &[result, SDValue { node: end.node, res: 0 }]))
 }
 
 /// `LowerABS` for `i16`/`i32`: `x < 0 ? -x : x` as `cmov` on the flags of `0 -
