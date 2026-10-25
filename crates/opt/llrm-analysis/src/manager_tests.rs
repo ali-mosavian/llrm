@@ -291,6 +291,20 @@ fn summaries_and_globals_aa_make_no_shape() {
     assert!(analyses.cached_function::<Shape>(module.named("f").unwrap()).is_none(), "a manager's shape was asked");
 }
 
+/// `Summaries` made a `GlobalsModRef` of its own on every run (17 of the 19 on
+/// d_faces -O2, 5.2 M Ir) beside the one `GlobalsModRefAnalysis` holds; the
+/// pin has one `GlobalsAAResult`. It reads the held one.
+#[test]
+fn summaries_read_the_globals_modref_the_manager_holds() {
+    let module =
+        parsed("@g = global i16 0\n\ndefine i16 @f(ptr %p) {\nentry:\n  %x = load i16, ptr @g\n  ret i16 %x\n}\n");
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    analyses.get::<super::GlobalsModRefAnalysis>(&module);
+    let before = crate::globalsmodref::computes_made();
+    analyses.get::<Summaries>(&module);
+    assert_eq!(crate::globalsmodref::computes_made() - before, 0, "Summaries made a GlobalsModRef of its own");
+}
+
 /// A body that calls something unknown may call back into any entry, so its
 /// summary reads each entry's. Solved callees-first, `@p` was visited before
 /// `@entry` had @h's store from its callee, and never again: QCport's `dl` and
@@ -348,12 +362,14 @@ fn test_a_memoryssa_build_asks_no_plain_accesses_and_says_what_they_said() {
             let graph = analyses.get::<super::MemorySsa>(&module.context, &layout, function);
             let Ok(graph) = &*graph else { continue };
             assert!(analyses.cached::<super::PlainAccesses>().is_none(), "{at}: the build made the accesses");
+            assert!(analyses.cached::<super::Writes>().is_none(), "{at}: the build asked the calls' footprints");
             let accesses = graph.accesses(&module.context, &layout, function, &mut analyses).expect("accesses");
             let shape = analyses.get::<crate::cfg::Shape>(&module.context, &layout, function);
+            let unit = Unit::within(&module.context, &layout, function, &outer);
             let said = crate::mssa::Mssa::build(
                 function,
                 &shape.dominance,
-                &crate::mssa::shadow::effect_of(&accesses, function),
+                &crate::mssa::shadow::effect_of_in(&accesses, &unit),
             );
             assert!(
                 crate::mssa::shadow::said(&graph.mssa) == crate::mssa::shadow::said(&said),
@@ -381,6 +397,36 @@ fn test_the_accesses_of_a_graph_are_read_without_annotating() {
             graph.accesses(&module.context, &layout, function, &mut analyses).expect("accesses");
             assert!(analyses.cached::<Annotated>().is_none(), "{at}: the accesses were annotated");
             assert!(analyses.cached::<super::PlainAccesses>().is_none(), "{at}: the plain accesses were made");
+        }
+    }
+}
+
+/// The graph's accesses make no reference up front (the clients ask 1.6 % of
+/// them: `BaseAccesses` was 8.0 M Ir over 28 builds on d_faces -O2), and what
+/// they say when asked is what the eager accesses of the same body say, for
+/// every instruction of every corpus function.
+#[test]
+fn test_the_graphs_accesses_are_lazy_and_say_what_the_eager_ones_say() {
+    for (name, module) in corpus() {
+        let layout = layout(&module);
+        let mut outer = Outer::of(&module, None);
+        outer.require::<Summaries>(&module);
+        let outer = Rc::new(outer);
+        for (_, global, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
+            let at = format!("{name}/@{}", global.name.as_deref().unwrap_or(""));
+            let mut analyses = Analyses::new(Rc::clone(&outer));
+            let graph = analyses.get::<super::MemorySsa>(&module.context, &layout, function);
+            let Ok(graph) = &*graph else { continue };
+            let lazy = graph.accesses(&module.context, &layout, function, &mut analyses).expect("accesses");
+            assert!(lazy.is_lazy(), "{at}: the graph's accesses were made up front");
+            let exposed = analyses.get::<super::ExposedFrames>(&module.context, &layout, function);
+            let unit = Unit::within(&module.context, &layout, function, &outer).with_exposed(&exposed);
+            let eager = crate::memoryssa::Accesses::plain(&unit, &Default::default());
+            for (_, inst) in function.walk() {
+                assert_eq!(lazy.reference_in(&unit, inst), eager.reference_in(&unit, inst), "{at} {inst:?}");
+                assert_eq!(lazy.reads_in(&unit, inst), eager.reads_in(&unit, inst), "{at} {inst:?} reads");
+                assert_eq!(lazy.writes_in(&unit, inst), eager.writes_in(&unit, inst), "{at} {inst:?} writes");
+            }
         }
     }
 }

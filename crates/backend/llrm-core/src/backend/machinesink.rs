@@ -142,6 +142,7 @@ impl LIRTransform for MachineSink {
 /// movable only while none has been seen.
 fn safe_to_move(
     one: &Insn,
+    invariant: bool,
     saw_store: &mut bool,
 ) -> bool {
     let Some(what) = &one.what else { return false };
@@ -171,7 +172,8 @@ fn safe_to_move(
         *saw_store |= may_store(one);
         return false;
     }
-    !(reads_memory && *saw_store)
+    // `isSafeToMove`: a load that is not invariant waits for no store to pass.
+    !(reads_memory && *saw_store && !invariant && !one.invariant())
         && one.group.is_none()
         && one.clobbers.is_empty()
         && one.clobbers_high.is_empty()
@@ -249,6 +251,10 @@ enum Use {
 /// `MachineRegisterInfo`, the dominator trees and the cycle info answer.
 struct Sinker {
     size: bool,
+    /// The values loads of an incoming stack argument define: the pin's
+    /// immutable fixed objects, which `isDereferenceableInvariantLoad` takes
+    /// and which are a frame index, not a register read.
+    arguments: std::collections::BTreeSet<u32>,
     insns: Vec<Vec<Arc<Insn>>>,
     at: Vec<i64>,
     position: IndexMap<i64, usize>,
@@ -392,6 +398,7 @@ impl Sinker {
         let depths = crate::analysis::intervals::depths_shared(body);
         let mut sinker = Self {
             size,
+            arguments: crate::greedy::remat::argument_loads(body),
             insns,
             at: body.blocks.iter().map(|block| block.at).collect(),
             irreducible: hard,
@@ -500,8 +507,20 @@ impl Sinker {
         let physical = |lanes: &crate::backend::lanes::Lanes| {
             lanes.iter().any(|&(register, _)| register != llrm_lir::registers::RegId::None)
         };
-        let Some(effect) = liveness::effect(self.regs, self.bits, &self.insns[block][index]) else { return true };
-        if physical(&effect.all_reads()) || physical(&effect.writes) || flags(&effect.all_reads()) {
+        let one = &self.insns[block][index];
+        let Some(effect) = liveness::effect(self.regs, self.bits, one) else { return true };
+        // An incoming argument's cell is a fixed stack object in the pin, a
+        // frame index with no register: the frame register the address is
+        // spelled through is not a read of one.
+        let fixed_stack = one.defines.first().is_some_and(|value| self.arguments.contains(value));
+        let reads = effect.all_reads();
+        let physical_reads = reads
+            .iter()
+            .any(
+                |&(register, _)| register != llrm_lir::registers::RegId::None
+                    && !(fixed_stack && (self.regs.is_frame(register) || self.regs.is_stack_segment(register))),
+            );
+        if physical_reads || physical(&effect.writes) || flags(&reads) {
             return true;
         }
         if !flags(&effect.writes) {
@@ -921,7 +940,8 @@ impl Sinker {
         saw_store: &mut bool,
     ) -> bool {
         let one = Arc::clone(&self.insns[block][index]);
-        if !safe_to_move(&one, saw_store) {
+        let argument = one.defines.first().is_some_and(|value| self.arguments.contains(value));
+        if !safe_to_move(&one, argument, saw_store) {
             return false;
         }
         if self.touches_machine_state(block, index) {
