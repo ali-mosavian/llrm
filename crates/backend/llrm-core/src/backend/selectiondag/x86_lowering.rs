@@ -775,12 +775,17 @@ fn lower_select(
         code = cond_code(dag, cond::NE);
         flags = emit_test(dag, cond, cond::NE);
     }
-    let (op1, op2, result_vt) =
-        if (vt == EVT::I8 && can_cmov) || (vt == EVT::I16 && !may_fold_load(dag, op1) && !may_fold_load(dag, op2)) {
-            (dag.get_node(ISD::AnyExtend, EVT::I32, &[op1]), dag.get_node(ISD::AnyExtend, EVT::I32, &[op2]), EVT::I32)
-        } else {
-            (op1, op2, vt)
-        };
+    // DEVIATE SD313: where the pointer is a word (m16) an `i16` select stays
+    // a word: widened to `i32` every move takes an operand-size prefix. Owner
+    // w10. Exit: none (machine fact). Review 2026-12-10.
+    let word16 = dag.config.pointer == EVT::I16;
+    let (op1, op2, result_vt) = if (vt == EVT::I8 && can_cmov)
+        || (vt == EVT::I16 && !word16 && !may_fold_load(dag, op1) && !may_fold_load(dag, op2))
+    {
+        (dag.get_node(ISD::AnyExtend, EVT::I32, &[op1]), dag.get_node(ISD::AnyExtend, EVT::I32, &[op2]), EVT::I32)
+    } else {
+        (op1, op2, vt)
+    };
     let cmov = dag.get_node(x86isd::CMOV, result_vt, &[op2, op1, code, flags]);
     Some(if result_vt == vt { cmov } else { dag.get_node(ISD::Truncate, vt, &[cmov]) })
 }
