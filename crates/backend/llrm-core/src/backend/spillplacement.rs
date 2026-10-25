@@ -61,7 +61,6 @@
 //! and
 //! [`SpillPlacement`](https://github.com/llvm/llvm-project/blob/llvmorg-18.1.8/llvm/lib/CodeGen/SpillPlacement.cpp).
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use llrm_mir::dense::IdSet;
@@ -78,7 +77,7 @@ pub struct Bundles {
     /// Block address -> (entry bundle, exit bundle).
     pub of: IndexMap<i64, (usize, usize)>,
     /// Bundle -> the blocks with an entry or exit in it.
-    pub blocks: Vec<BTreeSet<i64>>,
+    pub blocks: Vec<Vec<i64>>,
 }
 
 /// `EdgeBundles`, the manager's: the bundles depend on the blocks' labels and
@@ -133,16 +132,19 @@ pub fn bundles(body: &LirBody) -> Bundles {
     }
     let mut number: IndexMap<usize, usize> = IndexMap::default();
     let mut of = IndexMap::default();
-    let mut blocks: Vec<BTreeSet<i64>> = Vec::new();
+    let mut blocks: Vec<Vec<i64>> = Vec::new();
     for (at, block) in body.blocks.iter().enumerate() {
         let mut named = |node: usize, parent: &mut Vec<usize>| {
             let root = find(parent, node);
             let count = number.len();
             let bundle = *number.entry(root).or_insert(count);
             if bundle == blocks.len() {
-                blocks.push(BTreeSet::new());
+                blocks.push(Vec::new());
             }
-            blocks[bundle].insert(block.at);
+            // A block is named once, and its entry and exit are named in a row.
+            if blocks[bundle].last() != Some(&block.at) {
+                blocks[bundle].push(block.at);
+            }
             bundle
         };
         let entry = named(2 * at, &mut parent);

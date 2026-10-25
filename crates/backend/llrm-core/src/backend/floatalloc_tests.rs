@@ -1079,3 +1079,14 @@ fn test_a_split_edge_asks_no_second_liveness() {
     assert!(converted.blocks.len() > before, "an edge was split");
     assert_eq!(built, 2, "sets built: one liveness pass");
 }
+
+#[test]
+fn test_a_bundle_lists_a_block_once_when_its_entry_and_exit_share_it() {
+    // A loop block's entry and exit are one bundle: it counts once toward the
+    // 100-block cap of `SpillPlacement`.
+    let mut body = _body(vec![_load(1, &frame_cell(-10, 10))]);
+    body.blocks = vec![block(0, body.insns().to_vec(), vec![0]).into()];
+    let bundles = crate::backend::spillplacement::bundles(&body);
+    assert_eq!(bundles.of[&0].0, bundles.of[&0].1);
+    assert_eq!(bundles.blocks[bundles.of[&0].0], vec![0]);
+}
