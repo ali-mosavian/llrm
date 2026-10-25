@@ -114,3 +114,14 @@ w11 (matcher owner): under `--isel=dag` all three forms are pin table patterns, 
 
 So: `zero_compares` is dead under dag and goes with the default flip. `increments` leaves 130 the matcher does not make: all 130 are `sub r,1` (122 word, 5 byte, 3 dword) turned into `dec`, none an `add r,-1`; the pin's DAGCombiner turns `(sub x, C)` into `(add x, -C)` before its DEC32r pattern sees it, so the missing piece is that fold or a `sub x,1` pattern (DAG combiner, w10). `zeroes` still fires 1190 times under dag because it is the pin's own post-RA step, `X86InstrInfo::expandPostRAPseudo` of `MOV32r0` into `xor`; its home is a translation of that expansion, and its cost (2.28 M) is the walk, which R45-2's index reaches. R45-3 is therefore: delete `zero_compares` and `constants` at the flip, trace the 130, rename `zeroes` as the expansion.
 
+## Sub-pass inventory under each selector (2026-10-25)
+A throwaway build counted, per hand-written or generated sub-pass of `Peephole::once`, the instructions it changed (by position, so a pass that rebuilds an unchanged instruction counts it: zero is firm, a number is an upper bound) over the 65 QCport modules on the stubbed tree (`scaling.qcport_tree`), -O2, `-march=i486`. Compiled: m16 old 65 of 65, m16 dag 63 (`menu.c`, `sbar.c` refuse), m32 old 64 (`keybind.c` fails), m32 dag 65.
+
+**Zero in all four runs** (m16 and m32, old and dag): `borrows`, `commuted`, `exact_addresses`, `frame_copies`, `narrowed_arithmetic`, `secondary_bases`, `sharedstores`, `storecombine`, `waits`, and `popped_arguments` (an -Os rule; this run is -O2, so it is unproven). They never fire on this corpus: candidates for deletion, each with its unit tests and a corpus that exercises it first (the earlier spike found two unit tests that pin rare shapes).
+
+**Zero under dag only** (old selector: m16 / m32): `constants` 36 / 1818 (dag: 0 / 1), `doubled` 301 / 64, `zero_compares` 1731 / 1879, `pushed_constants` 0 / 6, `stepped_after_compare` 12 / 4, `upperzero_hoisted` 0 / 8: these go with the default flip.
+
+**Fewer under dag** (m16 old to dag / m32 old to dag): `increments` 936 to 132 / 791 to 132 (the `sub x,C` fold, w10's #4439), `overwritten` 40 to 20 / 1521 to 20, `extensions` 724 to 228 / 2376 to 194, `fused` 1369 to 817 / 1025 to 133, `postrasink` 2494 to 664 / 2677 to 145, `machinecse` 119 to 19 / 88 to 4, `tested` 721 to 338 / 670 to 153.
+
+**Still working under dag**: `zeroes` 1195 / 1210 (the pin's `MOV32r0` expansion), `zeroed_loads` 1604 / 1015, `narrowed_moves` 446 / 0, `high_extracts` 401 / 0, `addresses` 2893 / 2890, `far_loads` 5011 / 0, `pushes` 6587 / 0, `machinecp` 652 / 396; `unsplit` 3088 / 2963 rebuilds every block it sees, so its number says little.
+
