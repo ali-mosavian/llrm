@@ -59,3 +59,37 @@ fn the_m64_builder_target_has_64_bit_pointers_and_registers() {
     let target = crate::backend::selectiondag::builder::BuilderTarget::m64();
     assert_eq!((target.dag.pointer, target.legal_ints.last().copied()), (EVT::I64, Some(64)));
 }
+
+fn legalized_float_op(
+    op: ISD,
+    inner: Option<ISD>,
+    vt: EVT,
+) -> (SelectionDAG, SDValue) {
+    let tli = TargetLowering::x86_64(Features { sse2: true, cmov: true, ..Features::default() }, MVT::I64);
+    let mut dag = SelectionDAG::new(DagConfig { pointer: EVT::I64, ..DagConfig::default() });
+    let x = dag.get_register(vt, 1);
+    let x = inner.map_or(x, |inner| dag.get_node(inner, vt, &[x]));
+    let node = dag.get_node(op, vt, &[x]);
+    dag.set_root(node);
+    TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true }).run().expect("legalizes");
+    let root = dag.get_root();
+    (dag, root)
+}
+
+/// `fneg`/`fabs` of a scalar float stayed generic nodes, which no SSE
+/// instruction selects: the pin xors/ands the sign bit with a 16-byte mask.
+#[test]
+fn fneg_and_fabs_of_a_float_are_sign_mask_logic() {
+    use super::super::x86_lowering::x86isd;
+    let f64v = EVT::Simple(MVT::F64);
+    for (op, inner, want, mask) in [
+        (ISD::FNeg, None, x86isd::FXOR, 1u128 << 63),
+        (ISD::FAbs, None, x86isd::FAND, (1u128 << 63) - 1),
+        (ISD::FNeg, Some(ISD::FAbs), x86isd::FOR, 1u128 << 63),
+    ] {
+        let (dag, root) = legalized_float_op(op, inner, f64v);
+        assert_eq!((dag.opcode(root), dag.value_type(root)), (want, f64v), "{op:?}");
+        assert!(dag.constant_pool.contains(&(mask, EVT::Simple(MVT::I128))), "{op:?}: mask");
+    }
+}

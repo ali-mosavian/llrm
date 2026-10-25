@@ -95,6 +95,11 @@ pub mod x86isd {
     /// `sahf` on a 486).
     pub const FCMP: ISD = ISD::Target(576);
     pub const XOR: ISD = ISD::Target(955);
+    /// `X86ISD::FAND`/`FOR`/`FXOR`: `andps`/`orps`/`xorps` on a scalar float
+    /// and a 16-byte pool mask.
+    pub const FAND: ISD = ISD::Target(574);
+    pub const FOR: ISD = ISD::Target(615);
+    pub const FXOR: ISD = ISD::Target(634);
 }
 
 /// `X86::ES`, the segment `les` loads.
@@ -301,6 +306,7 @@ impl Hooks for X86Lowering {
             ISD::JumpTable => lower_jump_table(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
             ISD::Abs => Some(lower_abs(dag, node)),
+            ISD::FNeg | ISD::FAbs => lower_fabs_or_fneg(dag, node),
             ISD::CtLz | ISD::CtLzZeroPoison => Some(lower_ctlz(dag, node)),
             ISD::CtTz => Some(lower_cttz(dag, node)),
             ISD::Parity => Some(lower_parity(dag, node)),
@@ -1535,6 +1541,40 @@ fn is_known_never_zero(
 /// `KnownBits::countMinLeadingZeros`.
 fn min_leading_zeros(known: &super::known_bits::KnownBits) -> u32 {
     (!known.zero & super::fold::mask(known.width)).leading_zeros() - (128 - known.width)
+}
+
+/// `LowerFABSorFNEG` for a scalar: no scalar bitwise SSE instruction exists, so
+/// the sign bit is cleared (`FAND`), flipped (`FXOR`) or set (`FOR`, for
+/// `fneg (fabs x)`) by a 16-byte pool mask whose low lane is the sign mask.
+fn lower_fabs_or_fneg(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let sign = match vt {
+        EVT::Simple(MVT::F32) => 1u128 << 31,
+        EVT::Simple(MVT::F64) => 1u128 << 63,
+        _ => return None,
+    };
+    let is_fabs = dag.opcode(node) == ISD::FAbs;
+    // `fabs` under an `fneg` is left to the `fneg`, which sets the sign.
+    if is_fabs && dag.users(node).any(|user| dag.opcode(SDValue { node: user, res: 0 }) == ISD::FNeg) {
+        return None;
+    }
+    let mut x = dag.operand(node, 0);
+    let negated_abs = !is_fabs && dag.opcode(x) == ISD::FAbs;
+    if negated_abs {
+        x = dag.operand(x, 0);
+    }
+    let (op, mask) = match (is_fabs, negated_abs) {
+        (true, _) => (x86isd::FAND, sign - 1),
+        (false, true) => (x86isd::FOR, sign),
+        (false, false) => (x86isd::FXOR, sign),
+    };
+    let pointer = dag.config().pointer;
+    let pool = dag.get_constant_pool(pointer, mask, EVT::Simple(MVT::I128), false);
+    let address = dag.get_node(wrapper_kind(pointer), pointer, &[pool]);
+    Some(dag.get_node(op, vt, &[x, address]))
 }
 
 /// `LowerABS` for `i16`/`i32`: `x < 0 ? -x : x` as `cmov` on the flags of `0 -
