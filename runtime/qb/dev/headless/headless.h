@@ -28,6 +28,9 @@ HeadlessTone headless_tone(size_t index);
 /* The clock, in hundredths of a second since midnight. `step` is added to it by each dev_clock call, so a wait
    loop ends; 0 stops it. */
 void headless_clock_set(long hundredths, long step);
+/* With `yes` the clock runs by itself in real time from where it is (a program that times itself ends); by default it is
+   only what a test makes of it. */
+void headless_set_real_time(int yes);
 void headless_clock_advance(long hundredths);
 /* Calls music_tick once for each tick of 1/18.2 second that `hundredths` make, while the tick is on and not held. */
 void headless_run(long hundredths);

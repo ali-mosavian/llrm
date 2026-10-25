@@ -488,6 +488,33 @@ impl Selector<'_> {
                 self.inst(Inst::FpUnary { op, size, rd, rn });
                 self.define(result, Src::Val(Val::Float { reg: rd, size }))
             }
+            // The current rounding mode (to nearest even) and then the conversion: BASIC's CINT.
+            "lrint" | "llrint" => {
+                let (rn, size) = self.float_arg(arguments[0])?;
+                let Some(bits) = self.types().int_bits(instruction.ty) else {
+                    return refuse("an lrint to a non-integer");
+                };
+                let rounded = self.mf.fpr();
+                self.inst(Inst::FpUnary { op: FpUnary::Rint(Rounding::Exact), size, rd: rounded, rn });
+                let rd = self.mf.gpr();
+                self.inst(Inst::FpInt {
+                    op: FpConvert::ToIntZero { signed: true },
+                    width: super::val::width_of(bits),
+                    size,
+                    gpr: rd,
+                    fpr: rounded,
+                });
+                let known = if bits == 32 {
+                    Known::Zero
+                } else if bits < 32 {
+                    Known::Hi32Zero
+                } else {
+                    Known::Nothing
+                };
+                self.define(result, Src::Val(Val::Int(G { reg: rd, bits, known })))
+            }
+            "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "atan2" | "sinh" | "cosh" | "tanh" | "exp" | "exp2"
+            | "log" | "log2" | "log10" | "pow" => self.libm_intrinsic(base, instruction, arguments),
             "bswap" | "bitreverse" | "ctlz" | "cttz" | "abs" => self.bit_intrinsic(base, instruction, arguments),
             "memcpy" | "memmove" | "memset" => {
                 // The last argument is the volatile flag; the call is
@@ -538,6 +565,32 @@ impl Selector<'_> {
             "va_copy" => self.va_copy(arguments[0], arguments[1]),
             _ => refuse(format!("the intrinsic {name}")),
         }
+    }
+
+    /// The intrinsic `base` as the C library's function of that name (`sin`, or `sinf` for a float).
+    fn libm_intrinsic(
+        &mut self,
+        base: &str,
+        instruction: &Instruction,
+        arguments: &[Operand],
+    ) -> Selected<()> {
+        let mut assigner = Assigner::new(self.platform);
+        let mut passed = Vec::new();
+        for &argument in arguments {
+            let ty = self.operand_type(argument)?;
+            let src = self.src(argument)?;
+            let value = self.argument_value(src, &[])?;
+            let places = self.places_of(&mut assigner, ty, true)?;
+            passed.push((value, places));
+        }
+        let single = matches!(self.ty(instruction.ty), llrm_mir::Type::Float(llrm_mir::FloatKind::Float));
+        let name = format!("{base}{}", if single { "f" } else { "" });
+        let callee = Callee::Symbol(if self.platform.underscore() { format!("_{name}") } else { name });
+        let result = self.emit_call(callee, passed, assigner.stack_bytes(), instruction.ty)?;
+        if let (Some(value), Some(result_id)) = (result, instruction.result) {
+            self.vals.insert(result_id, value);
+        }
+        Ok(())
     }
 
     /// `va_start(ap)`: Darwin's list is a pointer to the first unnamed stack

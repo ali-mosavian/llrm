@@ -14,8 +14,7 @@ use super::compile::{CompileError, _inline_frame, _near_procedures, _positional_
 use llrm_core::driver::Options;
 
 /// The names the host runtime links the module by.
-const EXPORTS: [(&str, &str); 3] =
-    [("@__main", "@QB_MAIN"), ("@$data", "@QB_DATA"), ("@$qb$statementTable", "@QB_STATEMENTS")];
+const EXPORTS: [(&str, &str); 2] = [("@__main", "@QB_MAIN"), ("@$qb$statementTable", "@QB_STATEMENTS")];
 
 /// `line` with the symbol `from` (a whole name, not the start of a longer one) written `to`.
 fn renamed(
@@ -40,6 +39,7 @@ fn renamed(
 fn arm64_text(
     mir: &str,
     platform: Platform,
+    read_data: &[u8],
 ) -> String {
     let mut out = String::with_capacity(mir.len());
     for line in mir.lines() {
@@ -48,7 +48,8 @@ fn arm64_text(
             continue;
         }
         let mut line = line.replace(" cc 1000", "").replace(" \"llrm-fp-eval\"=\"x87-extended\"", "");
-        line = line.replace("@llrm.qb.B$", "@B_");
+        line = line.replace("@llrm.qb.B$", "@B_").replace("@B$", "@B_");
+        line = block_entry(&line);
         for (from, to) in EXPORTS {
             line = renamed(&line, from, to);
         }
@@ -57,7 +58,7 @@ fn arm64_text(
         if let Some(rest) = line.strip_prefix("define internal ").filter(|_| line.contains("@QB_MAIN")) {
             line = format!("define {rest}");
         }
-        for name in ["QB_DATA", "QB_STATEMENTS"] {
+        for name in ["QB_STATEMENTS"] {
             let internal = format!("@{name} = internal ");
             if line.starts_with(&internal) {
                 line = line.replacen(" internal ", " ", 1);
@@ -68,7 +69,10 @@ fn arm64_text(
     }
     let mut out = without_results_on_void(&out);
     // an empty table may have been dropped as unused: the runtime still links against it
-    for name in ["QB_DATA", "QB_STATEMENTS"] {
+    // the READ/DATA rows: a position and the row's text for each, then the end
+    let bytes: String = read_data.iter().map(|byte| format!("\\{byte:02X}")).collect();
+    out.push_str(&format!("@QB_DATA = constant [{} x i8] c\"{bytes}\"\n", read_data.len()));
+    for name in ["QB_STATEMENTS"] {
         if !out.contains(&format!("@{name} = ")) {
             out.push_str(&format!("@{name} = constant [0 x i8] zeroinitializer\n"));
         }
@@ -92,7 +96,14 @@ pub fn object_bytes(
     let program = _positional_data(&program)?;
     let (mut mir, _) = llrm_core::driver::emitted(&program, codegen).map_err(fail)?;
     llrm_core::driver::optimized(&mut mir, codegen).map_err(fail)?;
-    let text = arm64_text(&llrm_mir::print::module(&mir.modules[0]), platform);
+    let mut read_data = Vec::new();
+    for (position, line) in super::compile::_read_data_lines(&program.modules[0])?.into_iter().enumerate() {
+        read_data.extend((position as u16).to_le_bytes());
+        read_data.extend(line);
+        read_data.push(0);
+    }
+    read_data.extend([0xff, 0xff, 0x01]);
+    let text = arm64_text(&llrm_mir::print::module(&mir.modules[0]), platform, &read_data);
     if let Some(path) = std::env::var_os("LLRM_ARM64_TEXT") {
         std::fs::write(path, &text).map_err(|error| fail(error.to_string()))?;
     }
@@ -190,4 +201,54 @@ fn shifted(
         at += c.len_utf8();
     }
     out
+}
+
+/// The entries QB calls with a block of words on the stack (`B$DDIM`, `B$COLR`, ...): a host's are variadic C functions
+/// (runtime/qb/posix/blockentries.c) that read the block's words in memory order, which is the reverse of the order they
+/// were pushed in.
+const BLOCK_ENTRIES: [(&str, &str); 7] = [
+    ("B_DDIM", "ptr"),
+    ("B_RDIM", "ptr"),
+    ("B_RDMP", "ptr"),
+    ("B_CLOS", "i16"),
+    ("B_COLR", "i16"),
+    ("B_LOCT", "i16"),
+    ("B_CSCN", "i16"),
+];
+
+fn block_entry(line: &str) -> String {
+    for (name, first) in BLOCK_ENTRIES {
+        let symbol = format!("@{name}(");
+        let Some(at) = line.find(&symbol) else { continue };
+        let args_at = at + symbol.len();
+        if line.trim_start().starts_with("declare ") {
+            let close = line[args_at..].find(')').map_or(line.len(), |one| args_at + one);
+            return format!("{}{first}, ...{}", &line[..args_at], &line[close..]);
+        }
+        let mut depth = 0usize;
+        let mut close = line.len();
+        let mut parts = Vec::new();
+        let mut from = args_at;
+        for (index, c) in line[args_at..].char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' if depth == 0 => {
+                    parts.push(line[from..args_at + index].trim());
+                    close = args_at + index;
+                    break;
+                }
+                ')' => depth -= 1,
+                ',' if depth == 0 => {
+                    parts.push(line[from..args_at + index].trim());
+                    from = args_at + index + 1;
+                }
+                _ => {}
+            }
+        }
+        parts.reverse();
+        let head = line[..at].trim_end();
+        let head = head.strip_suffix("void").map_or(head.to_owned(), |before| format!("{before}void ({first}, ...)"));
+        return format!("{head} {symbol}{}{}", parts.join(", "), &line[close..]);
+    }
+    line.to_owned()
 }
