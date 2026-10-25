@@ -114,3 +114,29 @@ fn a_conditional_move_names_its_condition() {
     assert_eq!(bytes(&cmov("cmovne", RegId::RAX, RegId::RDX, 8)), [0x48, 0x0f, 0x45, 0xc2]);
     assert_eq!(bytes(&cmov("cmovae", RegId::R8, RegId::R9, 8)), [0x4d, 0x0f, 0x43, 0xc1]);
 }
+
+#[test]
+fn a_dword_inc_and_dec_take_the_modrm_form() {
+    // dec %esi; inc %ecx: 0x48+r and 0x40+r are REX prefixes here. `dec %esi`
+    // stopped the assembler ("ack: Semantics(... 'dec' ...)") and with it the
+    // compile of ackermann, fib and heap.
+    let one =
+        |name, register| sem(Operation::Unary, Some(name), vec![rg(register, 4)], vec![rg(register, 4)], None, false);
+    assert_eq!(bytes(&one("dec", RegId::ESI)), [0xff, 0xce]);
+    assert_eq!(bytes(&one("inc", RegId::ECX)), [0xff, 0xc1]);
+}
+
+#[test]
+fn a_quadword_multiply_by_an_immediate_takes_imm32() {
+    // imul $251,%rax,%rax: the immediate is 32 bits sign-extended, not 8 bytes
+    // (unsig stopped the assembler on it).
+    let imul = sem(
+        Operation::Multiply,
+        Some("imul"),
+        vec![rg(RegId::RAX, 8)],
+        vec![rg(RegId::RAX, 8), im(251, 8, None)],
+        None,
+        false,
+    );
+    assert_eq!(bytes(&imul), [0x48, 0x69, 0xc0, 0xfb, 0, 0, 0]);
+}
