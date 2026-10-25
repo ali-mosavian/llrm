@@ -43,14 +43,16 @@ fn a_call_is_a_sequence_around_a_call_instruction() {
     // The area is the pin's pseudo pair around the call; `callframe.rs` makes
     // them pushes or `sub`/`add`.
     let called = names.iter().position(|n| n == "call").unwrap();
-    assert_eq!(names.iter().position(|n| n == "call_frame_setup"), Some(0), "{names:?}");
+    // After the argument load and the increment, as the pin's finalize-isel
+    // has them (`visitTokenFactor` frees the call's chain from the arguments).
+    assert_eq!(names.iter().position(|n| n == "call_frame_setup"), Some(2), "{names:?}");
     assert_eq!(names.get(called + 1).map(String::as_str), Some("call_frame_destroy"), "{names:?}");
     assert!(!names.iter().any(|n| n == "sub"), "{names:?}");
 }
 
 /// Source order (`LLRM_SRC_ORDER`) builds `s = a + 1` before the call, as the
-/// IR has it; the default scheduler opens with the call sequence. Without the
-/// flag reaching the queue both orders were the default one.
+/// IR has it, and so does the default scheduler since `visitTokenFactor`: the
+/// call sequence opens neither.
 #[test]
 fn source_order_keeps_the_ir_order_around_a_call() {
     let module = llrm_mir::parse::module(CALL).expect("parses");
@@ -68,7 +70,7 @@ fn source_order_keeps_the_ir_order_around_a_call() {
             .collect();
         names.iter().position(|n| n == "call_frame_setup").unwrap()
     };
-    assert_eq!(order(false), 0);
+    assert!(order(false) > 0);
     assert!(order(true) > 0);
 }
 
