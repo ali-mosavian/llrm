@@ -57,13 +57,11 @@ pub fn select_cmp_of_and<D: AddrDag>(
 
     let flags = SDValue::new(node, 0);
     let no_sign = |dag: &D| hooks.has_no_sign_flag_uses(dag, flags);
-    let (vt, sub_reg, reg_opcode, mem_opcode) = if mask <= 0xFF && (mask & 0x80 == 0 || cmp_vt == mvt::i8 || no_sign(dag))
+    let (vt, sub_reg, reg_opcode, mem_opcode) = if mask <= 0xFF
+        && (mask & 0x80 == 0 || cmp_vt == mvt::i8 || no_sign(dag))
     {
         (mvt::i8, x86::sub_8bit, x86::TEST8ri, x86::TEST8mi)
-    } else if hooks.options.min_size
-        && mask <= 0xFFFF
-        && (mask & 0x8000 == 0 || cmp_vt == mvt::i16 || no_sign(dag))
-    {
+    } else if hooks.options.min_size && mask <= 0xFFFF && (mask & 0x8000 == 0 || cmp_vt == mvt::i16 || no_sign(dag)) {
         // A word test saves one byte and may stall the decoders; only minsize
         // wants it.
         (mvt::i16, x86::sub_16bit, x86::TEST16ri, x86::TEST16mi)
