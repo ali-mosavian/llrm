@@ -49,13 +49,15 @@
 //! the same block with a call, or with two, is not.
 //!
 //! # Used by
-//! Step 2 of `docs/working/early-taildup-plan.md`.
+//! `flow::machine_with`, first of the machine phases.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::model::ir::Operation;
 use crate::model::lir::{Block, Insn, LirBlock, LirBody};
+
+mod update;
 
 /// `TailDuplicateSize`.
 const SIZE: usize = 2;
@@ -116,6 +118,10 @@ pub fn is_simple(
     tail: &Block,
 ) -> bool {
     if successors(tail).len() != 1 || predecessors(body, tail.at).is_empty() {
+        return false;
+    }
+    // The first instruction the pin sees is a phi.
+    if !tail.phis.is_empty() {
         return false;
     }
     match real(tail).first() {
@@ -180,21 +186,6 @@ pub fn should_tail_duplicate(
         return true;
     }
     can_completely_duplicate(body, tail)
-}
-
-/// The values `tail` defines are read by an instruction or a phi of another
-/// block.
-fn read_outside(
-    body: &LirBody,
-    tail: &Block,
-) -> bool {
-    let defined: std::collections::HashSet<u32> =
-        tail.insns.iter().flat_map(|one| one.defines.iter().copied()).collect();
-    !defined.is_empty()
-        && body.blocks.iter().filter(|block| block.at != tail.at).any(|block| {
-            block.insns.iter().any(|one| one.uses.iter().chain(&one.undefs).any(|value| defined.contains(value)))
-                || block.phis.iter().any(|phi| phi.incoming.iter().any(|(_, value)| defined.contains(value)))
-        })
 }
 
 /// `duplicateSimpleBB`: a block of one jump is no code to copy: every
@@ -296,8 +287,7 @@ fn indirect_end(block: &Block) -> bool {
 }
 
 /// `body` with the block at `tail` copied into its predecessors, or None where
-/// the pin would not, or where this step does not reach (a phi, a value read
-/// outside). `size` is `-Os`.
+/// the pin would not. `size` is `-Os`.
 pub fn tail_duplicate(
     body: &LirBody,
     tail: i64,
@@ -305,9 +295,6 @@ pub fn tail_duplicate(
 ) -> Option<LirBody> {
     let at = body.blocks.iter().position(|block| block.at == tail)?;
     let block = &body.blocks[at];
-    if !block.phis.is_empty() || read_outside(body, block) {
-        return None;
-    }
     let simple = is_simple(body, block);
     if !should_tail_duplicate(body, block, simple, size) {
         return None;
@@ -341,74 +328,156 @@ pub fn tail_duplicate(
         return None;
     }
     let remains = preds.iter().any(|pred| !chosen.contains(pred)) || tail == body.entry;
+    Some(duplicate(body, at, &chosen, remains))
+}
+
+/// `tailDuplicate` and `tailDuplicateAndUpdate`: the tail's instructions into
+/// each block of `chosen`, then the phis of its successors and the SSA form.
+fn duplicate(
+    body: &LirBody,
+    at: usize,
+    chosen: &[usize],
+    remains: bool,
+) -> LirBody {
+    let block = &body.blocks[at];
+    let tail = block.at;
+    let widths = super::phielim::_widths(body);
+    // Everything the tail defines, and what of it another block reads.
+    let defined: HashSet<u32> = block
+        .phis
+        .iter()
+        .map(|phi| phi.result)
+        .chain(block.insns.iter().flat_map(|one| one.defines.iter().copied()))
+        .collect();
+    let mut outside: Vec<u32> = body
+        .blocks
+        .iter()
+        .flat_map(|other| {
+            let insns = other
+                .insns
+                .iter()
+                .filter(move |_| other.at != tail)
+                .flat_map(|one| one.uses.iter().chain(&one.undefs).copied().collect::<Vec<_>>());
+            let phis = other.phis.iter().flat_map(|phi| phi.incoming.iter().map(|(_, value)| *value));
+            insns.chain(phis).collect::<Vec<_>>()
+        })
+        .filter(|value| defined.contains(value))
+        .collect();
+    outside.sort_unstable();
+    outside.dedup();
     let mut next = body.next_value();
-    let mut blocks: Vec<Block> = Vec::new();
+    // What the tail's values are in each copy, and the block that holds it.
+    let mut avail: HashMap<u32, HashMap<i64, u32>> = outside.iter().map(|value| (*value, HashMap::new())).collect();
     let mut made: HashMap<usize, Vec<Arc<Insn>>> = HashMap::new();
-    for &pred in &chosen {
-        let mut fresh: HashMap<u32, u32> = HashMap::new();
-        for one in block.insns.iter() {
-            for value in &one.defines {
-                fresh
-                    .entry(*value)
-                    .or_insert_with(
-                        || {
-                            next += 1;
-                            next - 1
-                        },
-                    );
+    for &pred in chosen {
+        let host = &body.blocks[pred];
+        let mut map: HashMap<u32, u32> = HashMap::new();
+        for phi in block.phis.iter() {
+            if let Some((_, value)) = phi.incoming.iter().find(|(from, _)| *from == host.at) {
+                map.insert(phi.result, *value);
             }
         }
-        let host = &body.blocks[pred];
+        for one in block.insns.iter() {
+            for value in &one.defines {
+                map.entry(*value).or_insert_with(|| {
+                    next += 1;
+                    next - 1
+                });
+            }
+        }
         let mut insns: Vec<Arc<Insn>> = host.insns.to_vec();
         let jump = insns.iter().rposition(|one| operation(one) == Some(Operation::Jump)).expect("a jump to the tail");
         let beside = Arc::clone(&insns[jump]);
         insns.remove(jump);
-        for one in block.insns.iter() {
-            let copy = one.renamed(&|value| fresh.get(&value).copied().unwrap_or(value));
-            insns.push(super::jumps::_unowned(&copy, &beside));
+        let copies: Vec<Arc<Insn>> = block
+            .insns
+            .iter()
+            .map(|one| {
+                let copy = one.renamed(&|value| map.get(&value).copied().unwrap_or(value));
+                super::jumps::_unowned(&copy, &beside)
+            })
+            .collect();
+        // The copies of what a phi gave, for the successors that read it, go
+        // before the terminators the tail ends in (`appendCopies`).
+        let ends = copies
+            .iter()
+            .rposition(|one| !matches!(operation(one), Some(Operation::Jump | Operation::Branch)) && !one.is_meta())
+            .map_or(0, |last| last + 1);
+        let mut kept = copies;
+        let terminators = kept.split_off(ends);
+        insns.extend(kept);
+        for phi in block.phis.iter().filter(|phi| outside.contains(&phi.result)) {
+            let Some(&from) = map.get(&phi.result) else { continue };
+            let width = widths.get(&phi.result).copied().unwrap_or(4);
+            let value = next;
+            next += 1;
+            let what = super::phielim::move_of(
+                crate::model::ir::Held { value, width },
+                crate::model::ir::Held { value: from, width },
+            );
+            let mut copy = Insn::new(beside.at, Some((beside.at, beside.at)), Some(what), vec![value], vec![from]);
+            copy.call = beside.call.clone();
+            insns.push(Arc::new(copy));
+            avail.get_mut(&phi.result).expect("listed").insert(host.at, value);
+        }
+        insns.extend(terminators);
+        for value in &outside {
+            if !avail[value].contains_key(&host.at) {
+                avail.get_mut(value).expect("listed").insert(host.at, map[value]);
+            }
         }
         made.insert(pred, insns);
     }
+    let mut blocks: Vec<LirBlock> = Vec::new();
     for (place, old) in body.blocks.iter().enumerate() {
         if place == at && !remains {
             continue;
         }
+        let mut new = LirBlock::clone(old);
         if let Some(insns) = made.remove(&place) {
-            let mut new = LirBlock::clone(old);
             new.insns = insns.into();
             new.succ = block.succ.clone();
-            blocks.push(new.into());
-        } else if old.succ.iter().any(|to| block.succ.contains(to)) || !old.phis.is_empty() {
-            let mut new = LirBlock::clone(old);
-            if block.succ.contains(&old.at) {
-                let phis: Vec<_> = old
-                    .phis
-                    .iter()
-                    .map(|phi| {
-                        let mut phi = phi.clone();
-                        let from_tail: Vec<u32> =
-                            phi.incoming.iter().filter(|(pred, _)| *pred == tail).map(|(_, value)| *value).collect();
-                        for &pred in &chosen {
-                            let at_pred = body.blocks[pred].at;
-                            for value in &from_tail {
-                                phi.incoming.push((at_pred, *value));
-                            }
-                        }
-                        if !remains {
-                            phi.incoming.retain(|(pred, _)| *pred != tail);
-                        }
-                        phi
-                    })
-                    .collect();
-                new.phis = phis.into();
-            }
-            blocks.push(new.into());
-        } else {
-            blocks.push(old.clone());
         }
+        // A successor of the tail reads from each copy what it read from the
+        // tail (`updateSuccessorsPHIs`).
+        if block.succ.contains(&old.at) {
+            new.phis = old
+                .phis
+                .iter()
+                .map(|phi| {
+                    let mut phi = phi.clone();
+                    let from_tail: Vec<u32> =
+                        phi.incoming.iter().filter(|(from, _)| *from == tail).map(|(_, value)| *value).collect();
+                    for &pred in chosen {
+                        let from = body.blocks[pred].at;
+                        for value in &from_tail {
+                            let there =
+                                avail.get(value).and_then(|places| places.get(&from)).copied().unwrap_or(*value);
+                            phi.incoming.push((from, there));
+                        }
+                    }
+                    if !remains {
+                        phi.incoming.retain(|(from, _)| *from != tail);
+                    }
+                    phi
+                })
+                .collect::<Vec<_>>()
+                .into();
+        }
+        blocks.push(new);
     }
-    let mut made_body = body.with_blocks(blocks);
-    for &pred in &chosen {
+    // The SSA form: a value the tail defined and others read has a definition
+    // in each copy.
+    for value in &outside {
+        let mut places = avail[value].clone();
+        if remains {
+            places.insert(tail, *value);
+        }
+        let keep: Vec<i64> = if remains { vec![tail] } else { Vec::new() };
+        update::Updater::rewrite(&mut blocks, *value, places, &keep, &mut next);
+    }
+    let mut made_body = body.with_blocks(blocks.into_iter().map(Block::from).collect());
+    for &pred in chosen {
         let from = body.blocks[pred].at;
         for to in block.succ.iter() {
             if let Some(odds) = body.odds.taken.get(&(tail, *to)).copied() {
@@ -420,7 +489,51 @@ pub fn tail_duplicate(
     if !remains {
         made_body.odds.taken.retain(|(from, _), _| *from != tail);
     }
-    Some(made_body)
+    made_body
+}
+
+/// `TailDuplicator::tailDuplicateBlocks` until it changes nothing: every block
+/// but the entry, in order, tried as a tail.
+pub fn duplicated(
+    body: &LirBody,
+    size: bool,
+) -> LirBody {
+    let mut body = body.clone();
+    loop {
+        let mut changed = false;
+        let places: Vec<i64> = body.blocks.iter().skip(1).map(|block| block.at).collect();
+        for at in places {
+            if let Some(made) = tail_duplicate(&body, at, size) {
+                body = made;
+                changed = true;
+            }
+        }
+        if !changed {
+            return body;
+        }
+    }
+}
+
+/// The phase: early tail duplication, directly after selection.
+pub struct EarlyTailDuplicate {
+    pub size: bool,
+}
+
+impl crate::model::passes::LIRTransform for EarlyTailDuplicate {
+    fn class_name(&self) -> &'static str {
+        "EarlyTailDuplicate"
+    }
+
+    fn name(&self) -> &str {
+        "earlytaildup"
+    }
+
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
+        Ok(duplicated(&body, self.size))
+    }
 }
 
 #[cfg(test)]
@@ -651,20 +764,92 @@ mod tests {
         assert_eq!(from, [(1, 7), (2, 7)], "the join is no predecessor any more");
     }
 
-    /// A value the join defines and another block reads is the next step's: the
-    /// SSA update.
+    fn reading(value: u32) -> Arc<Insn> {
+        let what = Semantics {
+            name: Some("add".into()),
+            dests: vec![Loc::Held(crate::model::ir::Held { value: 90, width: 4 })],
+            sources: vec![Loc::Held(crate::model::ir::Held { value, width: 4 })],
+            ..Semantics::new(Operation::Binary)
+        };
+        Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![90], vec![value]))
+    }
+
+    /// A value the join defines and a successor reads is defined in each copy
+    /// and the read takes a phi of them: the join's one value had two
+    /// definitions.
     #[test]
-    fn test_a_value_read_outside_the_join_is_left_for_the_ssa_update() {
-        use crate::model::lir::Phi;
-        let phi = Phi { result: 50, incoming: vec![(3, 3)] };
+    fn test_a_value_the_join_defines_gets_a_definition_in_each_copy_and_a_phi_where_they_meet() {
         let blocks = vec![
             block(0, vec![of("jne", Operation::Branch, Some(2), false), jump(1)], &[1, 2]),
             block(1, vec![work(1), jump(3)], &[3]),
             block(2, vec![work(2), jump(3)], &[3]),
             block(3, vec![work(3), jump(9)], &[9]),
-            LirBlock { phis: vec![phi].into(), ..block(9, vec![of("ret", Operation::Return, None, false)], &[]) },
+            block(9, vec![reading(3), of("ret", Operation::Return, None, false)], &[]),
         ];
-        assert!(tail_duplicate(&body(blocks), 3, false).is_none());
+        let done = tail_duplicate(&body(blocks), 3, false).expect("duplicated");
+        let exit = at(&done, 9);
+        assert_eq!(exit.phis.len(), 1, "one phi over the two copies: {exit:#?}");
+        let phi = &exit.phis[0];
+        let from: Vec<i64> = phi.incoming.iter().map(|(from, _)| *from).collect();
+        assert_eq!(from, [1, 2]);
+        assert!(phi.incoming.iter().all(|(_, value)| *value != 3), "neither is the join's own value");
+        assert_eq!(exit.insns[0].uses, [phi.result], "the read takes the phi");
+        let problems: Vec<String> =
+            crate::backend::verify::verify(&done, true).into_iter().filter(|line| line.contains("alue")).collect();
+        assert!(problems.is_empty(), "{problems:?}");
+    }
+
+    /// A phi of the join becomes, in each copy, the value its predecessor gave
+    /// it; a successor that reads it takes a phi of those, by a copy made
+    /// in each.
+    #[test]
+    fn test_a_phi_of_the_join_is_what_each_predecessor_gave_it() {
+        use crate::model::lir::Phi;
+        let phi = Phi { result: 40, incoming: vec![(1, 11), (2, 12)] };
+        let blocks = vec![
+            block(0, vec![of("jne", Operation::Branch, Some(2), false), jump(1)], &[1, 2]),
+            block(1, vec![work(11), jump(3)], &[3]),
+            block(2, vec![work(12), jump(3)], &[3]),
+            LirBlock { phis: vec![phi].into(), ..block(3, vec![reading(40), jump(9)], &[9]) },
+            block(9, vec![reading(40), of("ret", Operation::Return, None, false)], &[]),
+        ];
+        let done = tail_duplicate(&body(blocks), 3, false).expect("duplicated");
+        for (arm, given) in [(1, 11), (2, 12)] {
+            let host = at(&done, arm);
+            let used: Vec<u32> = host.insns.iter().flat_map(|one| one.uses.clone()).collect();
+            assert!(used.contains(&given), "arm {arm}'s copy reads what it gave the phi: {used:?}");
+            assert!(!used.contains(&40), "the phi's own value is not read in a copy");
+        }
+        let exit = at(&done, 9);
+        assert_eq!(exit.phis.len(), 1, "{exit:#?}");
+        assert_eq!(exit.insns[0].uses, [exit.phis[0].result]);
+        let problems: Vec<String> =
+            crate::backend::verify::verify(&done, true).into_iter().filter(|line| line.contains("alue")).collect();
+        assert!(problems.is_empty(), "{problems:?}");
+    }
+
+    /// A tail that stays (a predecessor that cannot take a copy) keeps its own
+    /// definition: a read after both takes a phi of it and the copy.
+    #[test]
+    fn test_a_tail_that_stays_is_one_of_the_definitions_a_phi_joins() {
+        let mut end = vec![work(3)];
+        end.push(of("jmp", Operation::Jump, None, true));
+        let blocks = vec![
+            block(0, vec![of("jne", Operation::Branch, Some(2), false), jump(1)], &[1, 2]),
+            block(1, vec![work(1), jump(3)], &[3]),
+            block(2, vec![work(2), of("jne", Operation::Branch, Some(3), false), jump(4)], &[3, 4]),
+            block(3, end, &[5]),
+            block(4, vec![of("ret", Operation::Return, None, false)], &[]),
+            block(5, vec![reading(3), of("ret", Operation::Return, None, false)], &[]),
+        ];
+        let done = tail_duplicate(&body(blocks), 3, false).expect("arm 1 takes a copy");
+        assert!(done.blocks.iter().any(|block| block.at == 3), "arm 2 still reaches the tail");
+        let exit = at(&done, 5);
+        assert_eq!(exit.phis.len(), 1, "{exit:#?}");
+        let mut from: Vec<(i64, bool)> =
+            exit.phis[0].incoming.iter().map(|(from, value)| (*from, *value == 3)).collect();
+        from.sort();
+        assert_eq!(from, [(1, false), (3, true)], "the copy's value from arm 1, the tail's own from the tail");
     }
 
     /// The join's edge odds are the copy's.
@@ -676,5 +861,32 @@ mod tests {
         assert_eq!(done.odds.taken.get(&(1, 9)), Some(&1234));
         assert_eq!(done.odds.taken.get(&(2, 9)), Some(&1234));
         assert!(!done.odds.taken.keys().any(|(from, _)| *from == 3));
+    }
+
+    /// A block of a phi and a jump is not "one jump" (the pin's first
+    /// instruction is the phi): bypassing it left the successor's phi reading a
+    /// value nothing defined ("value#20 is read but never defined", horner at
+    /// m32). It is copied like any join, and the phi's value stays defined.
+    #[test]
+    fn test_a_block_of_a_phi_and_a_jump_is_not_a_simple_block() {
+        use crate::model::lir::Phi;
+        let blocks = vec![
+            block(0, vec![of("jne", Operation::Branch, Some(2), false), jump(1)], &[1, 2]),
+            block(1, vec![work(1), jump(3)], &[3]),
+            block(2, vec![work(2), jump(3)], &[3]),
+            LirBlock {
+                phis: vec![Phi { result: 40, incoming: vec![(1, 1), (2, 2)] }].into(),
+                ..block(3, vec![jump(9)], &[9])
+            },
+            LirBlock {
+                phis: vec![Phi { result: 50, incoming: vec![(3, 40)] }].into(),
+                ..block(9, vec![of("ret", Operation::Return, None, false)], &[])
+            },
+        ];
+        let shape = body(blocks);
+        assert!(!is_simple(&shape, at(&shape, 3)));
+        let done = tail_duplicate(&shape, 3, false).expect("copied like a join");
+        let problems = crate::backend::verify::verify(&done, true);
+        assert!(problems.is_empty(), "{problems:?}");
     }
 }

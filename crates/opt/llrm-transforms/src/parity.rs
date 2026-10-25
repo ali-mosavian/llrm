@@ -419,7 +419,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "TailMergeBlocks (#2241), block placement chains and loops (#2629); criterion: rows vs min(gcc,pin) per bench pair + oracle sweep (J1, #2307); exit: identity vs llc after placement, branch folding and tail duplication; open: trellises and tail duplication (#2745) and alignBlocks/optimizeBranches (#2760) once landed, irreducible loops after tail dup (D16), BranchFolder merge parts, MBFI/MBPI replaced by BlockOdds (D7)",
     ),
     entry("copyprop@18", Backend, "machine-cp (run 2, after tail duplication)", Translated, ""),
-    entry("early-tailduplication", Backend, "early-tailduplication", Missing, ""),
+    partial(
+        "earlytaildup@1",
+        Backend,
+        "early-tailduplication",
+        "criterion: a join of at most two instructions (its jump counted) goes into every predecessor that jumps to it alone, a one-jump block is bypassed, phis and read-outside values get an SSA update; exit: the pin's merge into the layout predecessor is the same result here (ET3); EH pads and INLINEASM_BR have no counterpart (ET2)",
+    ),
     // X86TargetLowering::EmitLoweredSelect: the diamond at selection
     // (lir-cleanup-port, 2026-11-13).
     entry("emit-lowered-select", Backend, "x86-emit-lowered-select", Missing, ""),

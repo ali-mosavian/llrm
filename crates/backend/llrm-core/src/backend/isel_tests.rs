@@ -2559,14 +2559,16 @@ join:
 ";
     // The address arithmetic sinks into the arm that makes the phi's input
     // (a88a614969, MachineSink outside size builds); bx is defined on both
-    // paths before the load.
+    // paths before the load. The empty arm is no block after early tail
+    // duplication bypasses it: the sink splits the edge, whose block is the
+    // synthetic label.
     assert_eq!(
         listing(text, "f")[3..],
         [
             "mov bx, word ptr [bp+6]",
             "cmp byte ptr [bp+8], 0",
             "je L0_3",
-            "L0_2:",
+            "L0_4294967297:",
             "add bx, bx",
             "add bx, offset a",
             "jmp L0_4",
