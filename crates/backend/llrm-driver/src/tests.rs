@@ -475,3 +475,31 @@ fn xmm_registers_are_a_class_apart_from_the_general_ones() {
     assert_eq!(m64.available.len(), 14);
     assert!(RegisterClasses::of(&llrm_x86_m16::M16).xmm.is_empty());
 }
+
+/// A 16-byte value is one in an SSE register: with no class for it a `double`
+/// would be offered the general registers. A target without xmm registers
+/// confines nothing.
+#[test]
+fn a_value_as_wide_as_an_xmm_register_is_confined_to_them() {
+    use llrm_core::backend::classes::RegisterClasses;
+    use llrm_core::backend::regclass::{Confinement, Sets, confinement_of};
+    use llrm_core::model::ir::{Held, Loc, Operation, Semantics};
+    use llrm_core::model::lir::Insn;
+    let held = |value, width| Loc::Held(Held { value, width });
+    let add = |width| {
+        let what = Semantics {
+            name: Some("addsd".into()),
+            dests: vec![held(1, width)],
+            sources: vec![held(1, width), held(2, width)],
+            ..Semantics::new(Operation::Binary)
+        };
+        std::sync::Arc::new(Insn::new(1, None, Some(what), vec![1], vec![1, 2]))
+    };
+    let m64 = RegisterClasses::of(&*crate::by_triple("x86_64-unknown-linux-gnu").unwrap());
+    let sets = Sets::of(&m64);
+    let regs = m64.registers;
+    let class = confinement_of(regs, std::iter::once(&*add(16)), 2, &sets);
+    assert!(matches!(class, Confinement::Only(only) if only == m64.xmm_set));
+    let narrow = confinement_of(regs, std::iter::once(&*add(8)), 2, &sets);
+    assert!(matches!(narrow, Confinement::Free));
+}
