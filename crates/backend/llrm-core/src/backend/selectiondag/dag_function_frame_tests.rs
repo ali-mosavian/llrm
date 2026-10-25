@@ -808,6 +808,8 @@ fn a_volatile_load_and_store_are_volatile_instructions() {
         .unwrap_or_else(|e| panic!("{}", e.0));
     let volatile = done.body.insns().iter().filter(|i| i.volatile).count();
     assert_eq!(volatile, 2, "the load and the store");
+}
+
 const ALLOCA_COUNT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f() {
 entry:
