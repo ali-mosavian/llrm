@@ -349,3 +349,32 @@ fn an_or_of_values_with_no_common_bits_is_one_lea() {
 
     assert_eq!(machine_name(&dag, or.node), "LEA32r");
 }
+
+/// A float constant read from the pool: `fld [const.0]`, the pool entry in the
+/// instruction's displacement. The address was a `MOV32ri` of the entry
+/// into a register first (bench `x_horner`, `floats`, `recfloat`,
+/// `nbody_single`, `x_nbody_f`: 9 `MOV32ri` the pin does not have).
+#[test]
+fn a_float_load_from_the_constant_pool_folds_the_entry_into_the_address() {
+    use super::dag::{NodeData, SDNodeFlags};
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let f64_vt = EVT::Simple(super::mvt::MVT::F64);
+    dag.constant_pool.push((0x3FF8_0000_0000_0000, f64_vt));
+    let entry = dag.intern(ISD::TargetConstantPool, &[EVT::I32], &[], SDNodeFlags::default(), NodeData::PoolIndex(0));
+    let address = dag.get_node(super::x86_lowering::x86isd::WRAPPER, EVT::I32, &[entry]);
+    let chain = dag.entry_node();
+    let info =
+        MemInfo { mem_vt: f64_vt, align: 8, volatile: false, base: MemBase::ConstantPool(0), ext: None, space: 0 };
+    let load = dag.get_load(f64_vt, chain, address, info);
+    let mut adapter = DagisAdapter::new(&mut dag);
+
+    assert_eq!(select_node(&Selector::new(table::TABLE), &mut adapter, &mut hooks(), load.node), Outcome::Selected);
+
+    assert_eq!(machine_name(&dag, load.node), "LD_Fp64m");
+    let ops = &dag.nodes()[load.node as usize].ops;
+    assert!(ops.iter().any(|op| dag.opcode(*op) == ISD::TargetConstantPool), "the entry is in the address group");
+    assert!(
+        !ops.iter().any(|op| matches!(dag.nodes()[op.node as usize].opcode, ISD::Machine(_))),
+        "no register-materialized address"
+    );
+}

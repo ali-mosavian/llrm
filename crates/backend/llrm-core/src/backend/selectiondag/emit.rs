@@ -1407,8 +1407,9 @@ impl Emitter<'_, '_> {
                     address: Some(self.ctx.globals.segment(self.global_displacement(origin))),
                 }),
                 ("OR32rr" | "ADD32rr" | "ADD32rr_DB", _) => {
-                    // A huge pointer built as `offset | (selector << 16)` (or
-                    // `+`, the halves being disjoint).
+                    // A huge pointer built as `offset | (selector << 16)`, or
+                    // as the same sum (the halves are disjoint, so the combiner
+                    // may turn the or into an add).
                     let selector = self
                         .huge_selector(origin)
                         .ok_or_else(
