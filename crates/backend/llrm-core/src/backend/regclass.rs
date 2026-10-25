@@ -222,6 +222,17 @@ pub fn confining_uses(
     uses
 }
 
+/// `confining_uses` and `classes` of one scan.
+pub fn confining(
+    body: &LirBody,
+    segments: &Segments,
+    registers: &RegisterClasses,
+) -> (Vec<Use>, Classes) {
+    let mut uses = Vec::new();
+    let found = collected(body, &BTreeSet::new(), segments, registers, false, Some(&mut uses), None);
+    (uses, found)
+}
+
 /// Which of the sets of registers an operand confines a value to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum Kind {
@@ -598,6 +609,13 @@ impl Scan {
     }
 }
 
+thread_local! {
+    /// Scans of a body for the classes its reads confine values to, counted
+    /// for the test that fixes how many one allocation makes.
+    #[cfg(test)]
+    pub(crate) static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn collected(
     body: &LirBody,
     prefer_indexes: &BTreeSet<u32>,
@@ -607,6 +625,8 @@ fn collected(
     mut uses: Option<&mut Vec<Use>>,
     found: Option<&Found>,
 ) -> Classes {
+    #[cfg(test)]
+    SCANS.with(|one| one.set(one.get() + 1));
     let regs = body.regs();
     let mut out: Classes = IndexMap::default();
     let mut selecting: BTreeSet<u32> = BTreeSet::new();
