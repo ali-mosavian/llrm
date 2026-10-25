@@ -77,8 +77,7 @@ pub fn reached_checks() -> Vec<(&'static str, u32)> {
 /// `LLRM_CHECK_CACHES` on: every identity-cache hit is recomputed and must
 /// equal what was cached.
 pub fn checking_caches() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| env_set("LLRM_CHECK_CACHES"))
+    env_flag!("LLRM_CHECK_CACHES")
 }
 
 #[cfg(test)]

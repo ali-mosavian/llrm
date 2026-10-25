@@ -59,7 +59,9 @@ use crate::backend::isel::{Parameter, Selected, Unselected};
 use crate::model::ir::{Addr, Held, Mem, Space};
 use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 
-struct Info;
+struct Info {
+    source_order: bool,
+}
 
 impl SchedInfo for Info {
     fn num_defs(
@@ -81,6 +83,10 @@ impl SchedInfo for Info {
         opcode: u32,
     ) -> bool {
         llrm_dagisel::instr::desc(opcode as u16).is_some_and(|d| d.is_call())
+    }
+
+    fn source_order(&self) -> bool {
+        self.source_order
     }
 
     fn has_cross_copy_class(
@@ -865,7 +871,7 @@ fn selected_in(
             &mut X86Lowering { cmov: false, sse2: false },
             &selector,
             &mut hooks,
-            &Info,
+            &Info { source_order: bitness == 32 },
             &ctx,
             &mut state,
             block_at[&block.0],

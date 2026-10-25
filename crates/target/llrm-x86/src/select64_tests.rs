@@ -232,11 +232,31 @@ fn the_other_scalar_sse_forms_encode() {
     assert_eq!(bytes(&xor), [0x0f, 0x57, 0xc0]);
 }
 
+/// A `double` negated or cleared is `xorps` over a value of 8 bytes: the
+/// encoder looked for `Xorps_xmm_xmmm64` and found no form.
+#[test]
+fn a_bitwise_xmm_operation_on_a_scalar_is_the_whole_register_form() {
+    let x = RegId::from(Register::XMM0);
+    let xor = sem(Operation::Binary, Some("xorps"), vec![rg(x, 8)], vec![rg(x, 8), rg(x, 8)], None, false);
+    assert_eq!(bytes(&xor), [0x0f, 0x57, 0xc0]);
+}
+
+#[test]
+fn a_scalar_held_sixteen_bytes_wide_reads_what_its_mnemonic_says() {
+    // The xmm class holds a double in 16 bytes; addsd still reads 64 bits (F2
+    // 0F 58), not xmmm128 (no such form).
+    let x = |n: u32| RegId::from(Register::XMM0 + n);
+    let add = sem(Operation::Binary, Some("addsd"), vec![rg(x(0), 16)], vec![rg(x(0), 16), rg(x(1), 16)], None, false);
+    assert_eq!(bytes(&add), [0xf2, 0x0f, 0x58, 0xc1]);
+    let widen = sem(Operation::Extend, Some("cvtss2sd"), vec![rg(x(0), 16)], vec![rg(x(1), 16)], None, false);
+    assert_eq!(bytes(&widen), [0xf3, 0x0f, 0x5a, 0xc1]);
+}
+
 #[test]
 fn the_scalar_double_move_is_not_the_string_copy() {
     // movsd %xmm1,%xmm0 is F2 0F 10 C1; the name `movsd` is the string copy's,
     // so the move is `movsd_x`.
     let x = |n: u32| RegId::from(Register::XMM0 + n);
-    let mov = sem(Operation::Move, Some("movsd_x"), vec![rg(x(0), 8)], vec![rg(x(1), 8)], None, false);
+    let mov = sem(Operation::Move, Some("movsd_x"), vec![rg(x(0), 16)], vec![rg(x(1), 16)], None, false);
     assert_eq!(bytes(&mov), [0xf2, 0x0f, 0x10, 0xc1]);
 }
