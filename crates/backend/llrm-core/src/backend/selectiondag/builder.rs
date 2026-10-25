@@ -1613,6 +1613,8 @@ impl Builder<'_> {
         inst: InstId,
     ) -> Result<(), Refused> {
         self.current = Some(inst);
+        // `++SDNodeOrder`: what the nodes built for this instruction carry.
+        self.dag.cur_order += 1;
         if self.prelowered.contains(&inst) {
             return Ok(());
         }

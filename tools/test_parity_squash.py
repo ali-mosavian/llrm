@@ -1160,3 +1160,15 @@ def test_out_of_date_with_a_conflict_is_the_owners_and_a_second_out_of_date_is_r
 def test_a_race_with_another_landing_is_not_held_as_the_prs_own():
     assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Head branch is out of date. Review and try the merge again.")
     assert not ps.own_refusal("head out of date and feat/parity does not merge into it cleanly: the owner merges fresh feat/parity")
+
+
+def test_every_stage_of_the_fast_pass_stamps_the_batch_log():
+    """The 11:13 batch (58 min) logged the lib tests' and the behavioural stage's seconds and nothing else: 37 min of builds, checks and waits could not be placed. Each stage of
+    `passes_fast` now prints a STAGE line before its work, in the order they run."""
+    import inspect
+
+    source = inspect.getsource(ps.merge_batch)
+    names = ["fast-merge", "workspace-check", "lib-tests", "scanners", "link", "behavioural"]
+    at = [source.find(f'stage("{name}")') for name in names]
+    assert all(i >= 0 for i in at), dict(zip(names, at))
+    assert at == sorted(at), "stamped out of the order they run"
