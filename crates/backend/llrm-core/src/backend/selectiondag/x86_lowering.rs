@@ -307,6 +307,7 @@ impl Hooks for X86Lowering {
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
             ISD::Abs => Some(lower_abs(dag, node)),
             ISD::FNeg | ISD::FAbs => lower_fabs_or_fneg(dag, node),
+            ISD::FCopySign => lower_fcopysign(dag, node),
             ISD::CtLz | ISD::CtLzZeroPoison => Some(lower_ctlz(dag, node)),
             ISD::CtTz => Some(lower_cttz(dag, node)),
             ISD::Parity => Some(lower_parity(dag, node)),
@@ -1575,6 +1576,39 @@ fn lower_fabs_or_fneg(
     let pool = dag.get_constant_pool(pointer, mask, EVT::Simple(MVT::I128), false);
     let address = dag.get_node(wrapper_kind(pointer), pointer, &[pool]);
     Some(dag.get_node(op, vt, &[x, address]))
+}
+
+/// `LowerFCOPYSIGN` for a scalar: `(mag & ~sign) | (sgn & sign)`, the sign
+/// operand first extended or rounded to the magnitude's type.
+fn lower_fcopysign(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let sign = match vt {
+        EVT::Simple(MVT::F32) => 1u128 << 31,
+        EVT::Simple(MVT::F64) => 1u128 << 63,
+        _ => return None,
+    };
+    let (mag, mut sgn) = (dag.operand(node, 0), dag.operand(node, 1));
+    let sgn_vt = dag.value_type(sgn);
+    if sgn_vt != vt {
+        sgn = if sgn_vt.size_in_bits() < vt.size_in_bits() {
+            dag.get_node(ISD::FpExtend, vt, &[sgn])
+        } else {
+            let zero = dag.get_constant_with(0, EVT::I32, true, false);
+            dag.get_node(ISD::FpRound, vt, &[sgn, zero])
+        };
+    }
+    let pointer = dag.config().pointer;
+    let masked = |dag: &mut SelectionDAG, op, value, mask| {
+        let pool = dag.get_constant_pool(pointer, mask, EVT::Simple(MVT::I128), false);
+        let address = dag.get_node(wrapper_kind(pointer), pointer, &[pool]);
+        dag.get_node(op, vt, &[value, address])
+    };
+    let magnitude = masked(dag, x86isd::FAND, mag, sign - 1);
+    let sign_bit = masked(dag, x86isd::FAND, sgn, sign);
+    Some(dag.get_node(x86isd::FOR, vt, &[magnitude, sign_bit]))
 }
 
 /// `LowerABS` for `i16`/`i32`: `x < 0 ? -x : x` as `cmov` on the flags of `0 -

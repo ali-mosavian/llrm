@@ -122,3 +122,23 @@ fn the_sse2_table_does_the_scalar_float_work_in_xmm() {
     assert_ne!(sse.operation_action(ISD::BitCast, EVT::from(MVT::I64)), Action::Expand);
     assert_eq!(x87.operation_action(ISD::BitCast, EVT::from(MVT::I64)), Action::Expand);
 }
+
+/// `copysign` stayed a generic node no SSE instruction selects: the pin ors
+/// the magnitude's low bits with the sign operand's sign bit.
+#[test]
+fn fcopysign_of_a_float_is_two_masks_and_an_or() {
+    use super::super::x86_lowering::x86isd;
+    let tli = TargetLowering::x86_64(Features { sse2: true, cmov: true, ..Features::default() }, MVT::I64);
+    let mut dag = SelectionDAG::new(DagConfig { pointer: EVT::I64, ..DagConfig::default() });
+    let f32v = EVT::Simple(MVT::F32);
+    let (m, s) = (dag.get_register(f32v, 1), dag.get_register(f32v, 2));
+    let node = dag.get_node(ISD::FCopySign, f32v, &[m, s]);
+    dag.set_root(node);
+    TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true }).run().expect("legalizes");
+    let root = dag.get_root();
+    assert_eq!((dag.opcode(root), dag.value_type(root)), (x86isd::FOR, f32v));
+    for mask in [(1u128 << 31) - 1, 1 << 31] {
+        assert!(dag.constant_pool.contains(&(mask, EVT::Simple(MVT::I128))));
+    }
+}
