@@ -327,6 +327,8 @@ fn the_check_for_a_value_read_before_it_is_defined_is_linear_in_the_body() {
     let mut missing = blocks;
     missing[3999].insns.push(defining(3999, vec![], vec![999_999]));
     assert_eq!(super::dag_function::read_before_defined(&missing, &succ, None).map(|(value, _)| value), Some(999_999));
+}
+
 const COMPARE_WITH_LOADED: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f(ptr %p, i32 %k) {
   %v = load i32, ptr %p
