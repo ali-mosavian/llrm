@@ -37,6 +37,7 @@ mod far_load;
 mod far_register;
 mod flag_reuse;
 mod float_constants;
+mod fp_combine;
 mod fp_to_int;
 mod get_node;
 mod global_address;

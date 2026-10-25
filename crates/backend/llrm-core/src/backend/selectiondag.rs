@@ -115,6 +115,8 @@ pub mod div_const;
 pub mod dump;
 pub mod emit;
 pub mod fold;
+pub mod fp_combine;
+pub mod fp_value;
 pub mod function_lowering;
 pub mod inline_asm;
 pub mod known_bits;
