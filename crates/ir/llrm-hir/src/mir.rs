@@ -3545,9 +3545,28 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     fixed(&mut self.b.context.types, op, ty).ok_or("fixed point of a non-integer")?;
                 let callee =
                     Value::Constant(*self.tables.callees.get(&name).ok_or_else(|| format!("@{name} undeclared"))?);
+                let fraction_value = fraction;
                 let fraction = self.b.int(32, fraction);
                 let function = function_type(&mut self.b.context.types, ty, parameters);
-                let result = self.b.call(function, callee, &[a, b, fraction], "").expect("a fixed-point value");
+                let mut result = self.b.call(function, callee, &[a, b, fraction], "").expect("a fixed-point value");
+                if op == Op::FixedDiv {
+                    // `llvm.sdiv.fix` rounds toward negative infinity; a fixed
+                    // point `/` truncates toward zero (the language spec). A
+                    // negative quotient that is not exact is one too low: it
+                    // is exact when `q * b == a << fraction` (the remainder is
+                    // smaller than `b`, so the difference cannot wrap to zero).
+                    let bits = self.b.context.types.int_bits(ty).ok_or("fixed point of a non-integer")?;
+                    let zero = self.b.int(bits, 0);
+                    let shift = self.b.int(bits, fraction_value);
+                    let signs = self.b.binary(BinaryOp::Xor, a, b, Flags::default(), "");
+                    let negative = self.b.icmp(IntPredicate::Slt, signs, zero, "");
+                    let scaled = self.b.binary(BinaryOp::Shl, a, shift, Flags::default(), "");
+                    let product = self.b.binary(BinaryOp::Mul, result, b, Flags::default(), "");
+                    let inexact = self.b.icmp(IntPredicate::Ne, scaled, product, "");
+                    let low = self.b.binary(BinaryOp::And, negative, inexact, Flags::default(), "");
+                    let one = self.b.cast(CastOp::ZExt, low, ty, "");
+                    result = self.b.binary(BinaryOp::Add, result, one, Flags::default(), "");
+                }
                 self.define(instruction, result);
             }
             Op::Fabs

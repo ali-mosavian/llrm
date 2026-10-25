@@ -928,22 +928,51 @@ impl Selector<'_, '_, '_> {
             .constant(arguments[1], 4)
             .is_some_and(|divisor| i64::from(divisor as i32).unsigned_abs() >= 1 << scale);
         if fits {
-            let remainder = self.half();
+            let (quotient, remainder) = (self.half(), self.half());
             self.put(
                 semantics(
                     Operation::Divide,
                     "idiv",
-                    vec![Loc::Held(result), Loc::Held(remainder)],
+                    vec![Loc::Held(quotient), Loc::Held(remainder)],
                     vec![Loc::Held(high), Loc::Held(low), Loc::Held(b)],
                 ),
                 at,
                 out,
             );
+            let floored = self.floored(quotient, (a, b), low, at, out);
+            self.put(semantics(Operation::Move, "mov", vec![Loc::Held(result)], vec![Loc::Held(floored)]), at, out);
             return Ok(());
         }
         let (quotient, _) = self.divided(true, (low, high), b, at, out);
-        self.put(semantics(Operation::Move, "mov", vec![Loc::Held(result)], vec![Loc::Held(quotient)]), at, out);
+        let floored = self.floored(quotient, (a, b), low, at, out);
+        self.put(semantics(Operation::Move, "mov", vec![Loc::Held(result)], vec![Loc::Held(floored)]), at, out);
         Ok(())
+    }
+
+    /// `llvm.sdiv.fix` rounds toward negative infinity, as the pin's lowering
+    /// does (`expandFixedPointDiv`): a negative quotient that is not exact is
+    /// one lower than the divide's. It is exact when `q * b` is the dividend's
+    /// low dword `low` (the remainder is below `b`, so the difference cannot
+    /// wrap to zero). The frontend, whose `/` truncates, corrects the other
+    /// way.
+    fn floored(
+        &mut self,
+        quotient: Held,
+        (a, b): (Held, Held),
+        low: Held,
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Held {
+        let signs = self.made(Operation::Binary, "xor", vec![Loc::Held(a), Loc::Held(b)], at, out);
+        let negative = self.made(Operation::Binary, "sar", vec![Loc::Held(signs), Self::count(31)], at, out);
+        let product = self.made(Operation::Multiply, "imul", vec![Loc::Held(quotient), Loc::Held(b)], at, out);
+        let difference = self.made(Operation::Binary, "sub", vec![Loc::Held(low), Loc::Held(product)], at, out);
+        let zero = self.made(Operation::Move, "mov", vec![Self::dword(0)], at, out);
+        let opposite = self.made(Operation::Binary, "sub", vec![Loc::Held(zero), Loc::Held(difference)], at, out);
+        let either = self.made(Operation::Binary, "or", vec![Loc::Held(difference), Loc::Held(opposite)], at, out);
+        let inexact = self.made(Operation::Binary, "sar", vec![Loc::Held(either), Self::count(31)], at, out);
+        let lower = self.made(Operation::Binary, "and", vec![Loc::Held(negative), Loc::Held(inexact)], at, out);
+        self.made(Operation::Binary, "add", vec![Loc::Held(quotient), Loc::Held(lower)], at, out)
     }
 
     /// A signed i64 divided by an i32 sign-extended: the magnitudes by two
