@@ -18,6 +18,9 @@ pub struct FunctionLoweringInfo {
     pub value_regs: IdMap<ValueId, u32>,
     /// `StaticAllocaMap`.
     pub static_allocas: IdMap<ValueId, i32>,
+    /// The frame object of the SysV x86-64 register save area a variadic
+    /// function has (`RegSaveFrameIndex`), made with the allocas' objects.
+    pub variadic_save: Option<i32>,
     /// The register the `sret` parameter is copied to, read back to return it.
     pub sret_reg: Option<u32>,
     /// The branch probabilities of the function, made at its first `switch`.
@@ -73,6 +76,7 @@ impl FunctionLoweringInfo {
         let mut info = FunctionLoweringInfo {
             value_regs: IdMap::new(),
             static_allocas: IdMap::new(),
+            variadic_save: None,
             sret_reg: None,
             bpi: None,
             edge_probs: Vec::new(),

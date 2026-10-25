@@ -181,7 +181,8 @@ pub struct SelectionDAG {
     cse: HashMap<CseKey, u32>,
     /// Nodes `delete_dead` removed: they stay in the arena but no longer
     /// count as users.
-    deleted: HashSet<u32>,
+    /// By node id; the arena only grows, so ids index it.
+    deleted: Vec<bool>,
     pub(super) config: DagConfig,
     entry: SDValue,
     root: SDValue,
@@ -199,6 +200,9 @@ pub struct SelectionDAG {
     /// The frame index of the first variadic argument (`VarArgsFrameIndex`),
     /// set by the builder where the function takes `...`.
     pub var_args_frame_index: Option<i32>,
+    /// The SysV x86-64 `va_list`'s other fields: the register save area's
+    /// frame index and `gp_offset`, the bytes of it the named arguments took.
+    pub var_args_save: Option<(i32, u32)>,
     /// The stack temporaries the legalizer asked for: size and alignment.
     pub temporaries: Vec<(u32, u32)>,
     /// Which globals (by symbol) are local to the object: only those fold a
@@ -221,7 +225,7 @@ impl SelectionDAG {
             nodes: Vec::new(),
             uses: Vec::new(),
             cse: HashMap::default(),
-            deleted: HashSet::default(),
+            deleted: Vec::new(),
             config,
             entry: zero,
             root: zero,
@@ -231,6 +235,7 @@ impl SelectionDAG {
             constant_pool: Vec::new(),
             first_temporary: 0,
             var_args_frame_index: None,
+            var_args_save: None,
             temporaries: Vec::new(),
             local_symbols: Default::default(),
             invariant_loads: HashSet::default(),
@@ -265,13 +270,28 @@ impl SelectionDAG {
         &self,
         node: u32,
     ) -> usize {
-        self.nodes
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| self.deleted.is_empty() || !self.deleted.contains(&(*index as u32)))
-            .flat_map(|(_, other)| &other.ops)
-            .filter(|op| op.node == node)
-            .count()
+        self.live_users(node)
+            .map(|user| self.nodes[user as usize].ops.iter().filter(|op| op.node == node).count())
+            .sum()
+    }
+
+    /// The live nodes that read any result of `node`, in creation order, once
+    /// each; the use list is usually sorted already and is then walked in
+    /// place.
+    fn live_users(
+        &self,
+        node: u32,
+    ) -> LiveUsers<'_> {
+        let list = self.uses.get(node as usize).map_or(&[][..], Vec::as_slice);
+        let inner = if list.windows(2).all(|pair| pair[0] <= pair[1]) {
+            UserList::Sorted(list.iter())
+        } else {
+            let mut sorted = list.to_vec();
+            sorted.sort_unstable();
+            sorted.dedup();
+            UserList::Owned(sorted.into_iter())
+        };
+        LiveUsers { dag: self, node, inner, last: None }
     }
 
     /// `recursivelyDeleteUnusedNodes`: a node nothing reads (and that is
@@ -288,7 +308,7 @@ impl SelectionDAG {
             // (the pin protects them with `HandleSDNode`).
             if n == self.root.node
                 || n == self.entry.node
-                || self.deleted.contains(&n)
+                || self.is_deleted(n)
                 || self.nodes[n as usize].ops.is_empty()
                 || self.nodes[n as usize].values.iter().any(|&vt| vt == EVT::OTHER || vt == EVT::GLUE)
             {
@@ -303,7 +323,10 @@ impl SelectionDAG {
             if self.cse.get(&key) == Some(&n) {
                 self.cse.remove(&key);
             }
-            self.deleted.insert(n);
+            if self.deleted.len() <= n as usize {
+                self.deleted.resize(self.nodes.len(), false);
+            }
+            self.deleted[n as usize] = true;
             work.extend(self.nodes[n as usize].ops.iter().map(|op| op.node));
         }
     }
@@ -314,7 +337,7 @@ impl SelectionDAG {
         &self,
         node: u32,
     ) -> bool {
-        self.deleted.contains(&node)
+        self.deleted.get(node as usize).copied().unwrap_or(false)
     }
 
     pub fn nodes(&self) -> &[SDNode] {
@@ -341,22 +364,7 @@ impl SelectionDAG {
         &self,
         value: SDValue,
     ) -> impl Iterator<Item = u32> + '_ {
-        let mut users: Vec<u32> = self
-            .uses
-            .get(value.node as usize)
-            .into_iter()
-            .flatten()
-            .copied()
-            .filter(|&user| {
-                (self.deleted.is_empty() || !self.deleted.contains(&user))
-                    && self.nodes[user as usize].ops.contains(&value)
-            })
-            .collect();
-        if !users.is_sorted() {
-            users.sort_unstable();
-        }
-        users.dedup();
-        users.into_iter()
+        self.live_users(value.node).filter(move |&user| self.nodes[user as usize].ops.contains(&value))
     }
 
     fn note_uses(
@@ -1230,4 +1238,37 @@ impl SelectionDAG {
 pub(super) enum Folded {
     Done(SDValue),
     Keep(Vec<SDValue>),
+}
+
+enum UserList<'a> {
+    Sorted(std::slice::Iter<'a, u32>),
+    Owned(std::vec::IntoIter<u32>),
+}
+
+/// `SelectionDAG::live_users`: no allocation while the use list is sorted.
+struct LiveUsers<'a> {
+    dag: &'a SelectionDAG,
+    node: u32,
+    inner: UserList<'a>,
+    last: Option<u32>,
+}
+
+impl Iterator for LiveUsers<'_> {
+    type Item = u32;
+
+    fn next(&mut self) -> Option<u32> {
+        loop {
+            let user = match &mut self.inner {
+                UserList::Sorted(list) => *list.next()?,
+                UserList::Owned(list) => list.next()?,
+            };
+            if self.last == Some(user) {
+                continue;
+            }
+            self.last = Some(user);
+            if !self.dag.is_deleted(user) && self.dag.nodes[user as usize].ops.iter().any(|op| op.node == self.node) {
+                return Some(user);
+            }
+        }
+    }
 }
