@@ -313,7 +313,6 @@ define void @f() {
     assert!(names.iter().any(|n| n == "lea"), "{names:?}");
 }
 
-<<<<<<< HEAD
 /// A frame object's address plus a variable index and a displacement past the
 /// object was made in a 4-byte register and used as the base of a quadword
 /// address: the encoder refused the 32-bit base beside a 64-bit index.
@@ -377,7 +376,8 @@ entry:
     let last_read = moves.iter().rposition(|w| matches!(&w.sources[..], [Loc::Reg(r)] if r.register == RegId::RSP));
     let first_write = moves.iter().position(|w| matches!(&w.dests[..], [Loc::Reg(r)] if r.register == RegId::RSP));
     assert!(last_read.is_some() && first_write.is_some_and(|written| last_read < Some(written)), "{moves:?}");
-=======
+}
+
 /// `va_start` at m64 was refused ("the SysV register save area is not
 /// translated"; `varargs` of `tests/llc`). A variadic function stores the five
 /// argument registers its one named parameter left in the register save area,
@@ -408,5 +408,4 @@ define i32 @f(i32 %n, ...) {
         .filter(|w| w.op == Operation::Move && matches!(w.dests.first(), Some(Loc::Mem(_))))
         .count();
     assert_eq!(stores, 9);
->>>>>>> origin/feat/parity
 }
