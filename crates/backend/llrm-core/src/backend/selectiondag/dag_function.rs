@@ -996,6 +996,7 @@ fn selected_in(
             state.float_bytes.iter().map(|(number, bytes)| (*number, if cpu.spills_extended { 10 } else { *bytes }));
         body.float_bytes = std::sync::Arc::new(table.collect());
     }
+    body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
     body.sealed_arguments = true;
     body.ordered = true;
     set_odds(&mut body, &info.edge_probs, &block_at);

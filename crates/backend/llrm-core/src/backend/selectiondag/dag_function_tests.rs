@@ -422,3 +422,35 @@ fn a_zero_extended_byte_read_as_a_dword_too_stays_a_dword() {
         insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("movzx")).expect("a movzx");
     assert!(matches!(extend.dests.as_slice(), [Loc::Held(h)] if h.width == 4), "{extend:?}");
 }
+
+/// A function that calls `setjmp` is marked on its body, as the old selector
+/// marks it: after a second return from `setjmp` a frame slot another value
+/// shared holds that value, so no slot may be shared (`slots_colored`, the
+/// spill colouring, stands down for `LirBody::returns_twice`). The DAG path
+/// never set the mark.
+#[test]
+fn a_function_calling_setjmp_is_marked_returns_twice() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare i32 @setjmp(ptr) returns_twice
+define i32 @f() {
+entry:
+  %buf = alloca [16 x i8]
+  %r = call i32 @setjmp(ptr %buf)
+  ret i32 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .expect("selects");
+    assert!(done.body.returns_twice);
+    let plain = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f() {
+entry:
+  ret i32 1
+}
+";
+    let module = llrm_mir::parse::module(plain).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .expect("selects");
+    assert!(!done.body.returns_twice);
+}
