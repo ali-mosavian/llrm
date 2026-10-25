@@ -2,8 +2,8 @@
 //! tests/qbhost/sdl_smoke.c prints, draws, types and sounds on a worker thread and checks the frame the SDL thread
 //! presents, the keys made of SDL events, the tone in the audio callback, and that closing the window ends the program.
 //!
-//! SDL2 comes from `SDL2_CONFIG`, `sdl2-config` on the path, or tools/build-sdl2.sh's private build; a machine with
-//! none says so and does not run it.
+//! SDL2 comes from `SDL2_CONFIG`, `sdl2-config` on the path, or tools/build-sdl2.sh's private build, which the test
+//! makes (once, about two minutes) when there is none: a machine without SDL2 fails here by name, it does not skip.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -29,10 +29,11 @@ fn flags(config: &Path, which: &str) -> Vec<String> {
 
 #[test]
 fn the_sdl_platform_presents_what_the_program_draws() {
-    let Some(config) = sdl2_config() else {
-        eprintln!("SKIPPED qb_sdl: no SDL2 (set SDL2_CONFIG, install libsdl2-dev, or run tools/build-sdl2.sh)");
-        return;
-    };
+    let config = sdl2_config().unwrap_or_else(|| {
+        let built = Command::new(root().join("tools/build-sdl2.sh")).output().expect("tools/build-sdl2.sh runs");
+        assert!(built.status.success(), "no SDL2, and tools/build-sdl2.sh failed: {}", String::from_utf8_lossy(&built.stderr));
+        PathBuf::from(String::from_utf8_lossy(&built.stdout).trim())
+    });
     let qb = root().join("runtime/qb");
     let out = std::env::temp_dir().join(format!("sdl_smoke_{}", std::process::id()));
     let mut build = Command::new("cc");
