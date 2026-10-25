@@ -150,6 +150,7 @@ pub mod condstores;
 pub mod condtocond;
 pub mod congruentiv;
 pub mod constraintelim;
+pub mod constraintelim_induction;
 #[cfg(test)]
 mod constraintelim_tests;
 #[cfg(test)]

@@ -400,20 +400,10 @@ impl LIRTransform for MachineScheduler {
     }
 }
 
-/// `body` with each long region reordered; `limit` is the pressure it may
-/// reach.
-pub fn scheduled(
-    body: &LirBody,
-    limit: usize,
-) -> LirBody {
-    let (regs, bits) = (body.regs(), body.bits);
-    // The x87 stack is its own register set with its own limit (DEVIATE MS3):
-    // its values (those of the float operations) are not counted against
-    // the general registers.
-    let stack: HashSet<u32> = body
-        .blocks
-        .iter()
-        .flat_map(|block| block.insns.iter())
+/// The values of the float operations: the x87 stack is its own register set,
+/// and they are not counted against the general registers.
+pub(crate) fn x87_values<'a>(insns: impl Iterator<Item = &'a Arc<Insn>>) -> HashSet<u32> {
+    insns
         .filter(|one| {
             one.what
                 .as_ref()
@@ -431,7 +421,20 @@ pub fn scheduled(
         })
         .flat_map(|one| one.defines.iter().chain(&one.uses))
         .copied()
-        .collect();
+        .collect()
+}
+
+/// `body` with each long region reordered; `limit` is the pressure it may
+/// reach.
+pub fn scheduled(
+    body: &LirBody,
+    limit: usize,
+) -> LirBody {
+    let (regs, bits) = (body.regs(), body.bits);
+    // The x87 stack is its own register set with its own limit (DEVIATE MS3):
+    // its values (those of the float operations) are not counted against
+    // the general registers.
+    let stack = x87_values(body.blocks.iter().flat_map(|block| block.insns.iter()));
     let counted = |value: u32| !stack.contains(&value);
     let mut live = None;
     let mut changed = false;

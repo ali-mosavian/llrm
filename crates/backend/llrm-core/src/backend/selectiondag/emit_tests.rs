@@ -134,11 +134,11 @@ fn copy_to(
     dag.get_node_multi(ISD::CopyToReg, &[EVT::OTHER], &[chain, register, value])
 }
 
-/// `r3 = r1 + r2` through `ADD32rr` and a copy: the add reads both source
-/// registers and the copy reads the add's result. A `CopyToReg` the emitter
-/// dropped would leave the register unwritten.
+/// `r3 = r1 + r2` through `ADD32rr` and a copy: the add defines r3 itself
+/// (`InstrEmitter::CreateVirtualRegisters`); a `mov` after it was a phi copy
+/// per loop edge in x_isqrt that the pin does not have.
 #[test]
-fn an_add_and_a_copy_become_two_instructions() {
+fn an_add_copied_to_a_virtual_register_defines_it() {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let entry = dag.entry_node();
     let a = copy_from(&mut dag, entry, 10);
@@ -150,13 +150,9 @@ fn an_add_and_a_copy_become_two_instructions() {
         let blocks = emit(&dag, &units, ctx).expect("emits").blocks;
         let insns = &blocks[0].insns;
         let lines = text(insns);
-        assert_eq!(insns.len(), 2, "{lines:?}");
+        assert_eq!(insns.len(), 1, "{lines:?}");
         assert!(lines[0].contains("add"), "{lines:?}");
-        assert!(lines[1].contains("mov"), "{lines:?}");
-        let add = insns[0].what.as_ref().unwrap();
-        let mov = insns[1].what.as_ref().unwrap();
-        assert_eq!(add.sources.len(), 2);
-        assert_eq!(mov.sources[0], add.dests[0]);
+        assert_eq!(insns[0].what.as_ref().unwrap().sources.len(), 2);
     });
 }
 
