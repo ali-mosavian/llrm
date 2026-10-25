@@ -123,6 +123,10 @@ static _AUDITED_STATEMENT_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|
         // dkopen.asm B$OPEN at 0224 returns with RETF 8 at 0252.
         ("B$OPEN", 8),
         ("B$SLEP", 4),
+        // Measured in BC output (QB 4.5, PDS 7.1, VBDOS): `call far B$STOP`
+        // and `call far B$REST`, nothing pushed.
+        ("B$STOP", 0),
+        ("B$REST", 0),
         ("B$SOND", 6),
         ("B$DRAW", 2),
         ("B$VARP", 4),

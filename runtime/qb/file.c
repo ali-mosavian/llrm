@@ -514,6 +514,12 @@ static void close_all(void)
     file_close(NULL, 0);
 }
 
+/* B$REST: RESET closes every open file. */
+void B_REST(void)
+{
+    close_all();
+}
+
 static Comp comp = {0, C_DK, {0, 0, 0, 0, close_all}};
 
 #define XI_FN file_xinit
@@ -526,6 +532,7 @@ void file_xinit(void)
 }
 
 #pragma aux B_OPEN "B$OPEN"
+#pragma aux B_REST "B$REST"
 #pragma aux B_GET3 "B$GET3"
 #pragma aux B_PUT3 "B$PUT3"
 #pragma aux B_FLOF "B$FLOF"

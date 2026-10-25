@@ -2376,3 +2376,14 @@ fn redim_preserve_calls_b_rdmp_with_redims_operands() {
     assert_eq!(kept.matches("\"callee\":\"B$RDMP\"").count(), 1, "{kept}");
     assert_eq!(plain.matches("\"callee\":\"B$RDMP\"").count(), 0, "{plain}");
 }
+
+#[test]
+fn stop_and_reset_call_b_stop_and_b_rest() {
+    // STOP and RESET were refused as unknown procedures. BC calls B$STOP and
+    // B$REST, nothing pushed (measured in BC output of all three dialects);
+    // STOP does not return.
+    let module = parse("RESET\r\nPRINT 1\r\nSTOP\r\nPRINT 2\r\n", Dialect::QuickBasic45).unwrap();
+    let hir = compile(&module, "stop", Dialect::QuickBasic45, "qb45").unwrap();
+    assert_eq!(hir.matches("\"callee\":\"B$REST\"").count(), 1, "{hir}");
+    assert_eq!(hir.matches("\"callee\":\"B$STOP\"").count(), 1, "{hir}");
+}
