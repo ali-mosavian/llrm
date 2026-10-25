@@ -701,3 +701,97 @@ done:
   ret i32 0
 }
 ";
+
+/// The sieve kernel of bench/sieve at the stage before LSR (m16, -Os): the
+/// inner fill steps from `p + i*i`, a base that is itself a recurrence of the
+/// outer loop.
+const SIEVE: &str = "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)\ndefine i32 @f(i16 noundef %0) nounwind norecurse {
+b1:
+  %1 = alloca [1024 x i8]
+  %2 = icmp eq i16 %0, 0
+  br i1 %2, label %b6, label %b3
+
+b3:
+  call void @llvm.memset.p0.i16(ptr nonnull align 1 %1, i8 0, i16 %0, i1 false)
+  %3 = icmp ugt i16 %0, 2
+  br i1 %3, label %4, label %b6
+
+4:
+  br label %b7
+
+5:
+  %6 = phi i32 [ %27, %b10 ]
+  %7 = phi i16 [ %26, %b10 ]
+  %8 = zext i16 %7 to i32
+  %9 = shl nuw i32 %8, 16
+  %10 = xor i32 %9, %6
+  br label %b6
+
+b6:
+  %11 = phi i32 [ %10, %5 ], [ 0, %b3 ], [ 0, %b1 ]
+  ret i32 %11
+
+b7:
+  %12 = phi i32 [ %27, %b10 ], [ 0, %4 ]
+  %13 = phi i16 [ %26, %b10 ], [ 0, %4 ]
+  %14 = phi i16 [ %28, %b10 ], [ 2, %4 ]
+  %15 = getelementptr inbounds i8, ptr %1, i16 %14
+  %16 = load i8, ptr %15
+  %17 = icmp eq i8 %16, 0
+  br i1 %17, label %b8, label %b10
+
+b8:
+  %18 = add i16 %13, 1
+  %19 = zext i16 %14 to i32
+  %20 = add i32 %12, %19
+  %21 = icmp ult i16 %14, 32
+  %22 = mul nuw nsw i16 %14, %14
+  %23 = icmp ult i16 %22, %0
+  %or.cond = select i1 %21, i1 %23, i1 false
+  br i1 %or.cond, label %24, label %b10
+
+24:
+  br label %b15
+
+25:
+  br label %b10
+
+b10:
+  %26 = phi i16 [ %13, %b7 ], [ %18, %b8 ], [ %18, %25 ]
+  %27 = phi i32 [ %12, %b7 ], [ %20, %b8 ], [ %20, %25 ]
+  %28 = add nuw i16 %14, 1
+  %exitcond = icmp eq i16 %28, %0
+  br i1 %exitcond, label %5, label %b7
+
+b15:
+  %29 = phi i16 [ %31, %b15 ], [ %22, %24 ]
+  %30 = getelementptr inbounds i8, ptr %1, i16 %29
+  store i8 1, ptr %30
+  %31 = add i16 %29, %14
+  %32 = icmp ult i16 %31, %0
+  br i1 %32, label %b15, label %25
+}
+";
+
+fn sieve_phis(registers: u32) -> usize {
+    let real = RealMode { scale_costs: vec![(1, 0), (2, 2), (4, 2), (8, 2)], registers, scaled_index_insns: 2, huge_space: None };
+    let tti = X86::of_cpu("i386").unwrap().in_real_mode(real);
+    let mut module = parsed(&format!("{DOS}{SIEVE}"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
+    printed(&module).matches(" = phi ").count()
+}
+
+/// m16 -Os sieve.c came out 171 bytes against 122 with no LSR: the inner
+/// loop's pointer base `p + i*i` became two more phis of the outer loop, held
+/// across the inner loop in a nest that already fills the six registers, and
+/// the nest spilled through [bp-2], [bp-4], [bp-8]. A nest at the registers
+/// takes no recurrence of an enclosing loop; with registers to spare it does.
+#[test]
+fn a_recurrence_of_the_outer_loop_is_not_taken_when_the_nest_fills_the_registers() {
+    let few = sieve_phis(6);
+    let many = sieve_phis(31);
+    assert!(many > few, "6 registers: {few} phis, 31: {many}");
+}

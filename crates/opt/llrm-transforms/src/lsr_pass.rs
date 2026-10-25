@@ -243,9 +243,85 @@ fn plan_loop(
     if solution.is_empty() {
         return planned(None);
     }
+    if exceeds_registers(context, layout, function, tti, se, header, &lsr.uses, &solution) {
+        return planned(None);
+    }
     let mut plan = lsr.into_plan(solution);
     plan.chains = chains.chains;
     planned(Some(plan))
+}
+
+/// DEVIATE P1 (not LLVM's): whether the plan needs the add recurrences of
+/// enclosing loops (a base such as `p + i*i` the inner loop steps from) that
+/// would sit in registers across the whole inner loop, on top of what the
+/// nest already keeps live there, past the target's general registers. The
+/// pin rates each loop's formulae by its own registers only and takes them
+/// (`lsr.iv` phis in the outer loop); with 6 registers that spills the
+/// nest's state through the frame (m16 -Os sieve.c: +58 bytes against the
+/// build with no LSR). Words are the pointer width, so an `i32` at m16 is two.
+fn exceeds_registers(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    tti: &dyn Tti,
+    se: &ScalarEvolution,
+    header: BlockId,
+    uses: &[crate::lsr_use::Use],
+    solution: &[usize],
+) -> bool {
+    let word = layout.pointer(0).index_bits.max(1);
+    let words = |bits: u32| bits.div_ceil(word);
+    let outer = std::cell::RefCell::new(Vec::new());
+    for (one, &chosen) in uses.iter().zip(solution) {
+        let Some(formula) = one.formulae.get(chosen) else { continue };
+        for &reg in formula.base_regs.iter().chain(formula.scaled_reg.iter()) {
+            se.expr_contains(reg, &|expr| {
+                if se.addrec_header(expr).is_some_and(|at| at != header) {
+                    let mut seen = outer.borrow_mut();
+                    if !seen.contains(&expr) {
+                        seen.push(expr);
+                    }
+                }
+                false
+            });
+        }
+    }
+    let outer = outer.into_inner();
+    if outer.is_empty() {
+        return false;
+    }
+    let added: u32 = outer
+        .iter()
+        .map(|&expr| match se.type_of(expr) {
+            llrm_analysis::scev::expr::Ty::Int(bits) => words(bits),
+            llrm_analysis::scev::expr::Ty::Ptr(space) => words(layout.pointer(space).index_bits),
+        })
+        .sum();
+    let found = llrm_analysis::liveness::live(function);
+    let bits_of = |value: llrm_mir::module::ValueId| match context.types.get(function.value(value).ty) {
+        llrm_mir::types::Type::Int(bits) => *bits,
+        _ => layout.pointer(0).index_bits,
+    };
+    let in_frame = |value: llrm_mir::module::ValueId| match function.value(value).def {
+        llrm_mir::module::ValueDef::Instruction(def) => {
+            matches!(function.instruction(def).opcode, llrm_mir::opcode::Opcode::Alloca { .. })
+        }
+        _ => false,
+    };
+    let live_in = found.live_in.get(&llrm_analysis::cfg::id(header));
+    let through: u32 = live_in
+        .into_iter()
+        .flat_map(|set| set.iter())
+        .filter(|&value| !in_frame(value))
+        .map(|value| words(bits_of(value)))
+        .sum();
+    let phis: u32 = function
+        .iter_block(header)
+        .filter(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
+        .filter_map(|inst| function.instruction(inst).result)
+        .map(|value| words(bits_of(value)))
+        .sum();
+    through + phis + added > tti.number_of_gpr_registers()
 }
 
 /// `ReduceLoopStrength` over every loop of `function`, innermost first;
