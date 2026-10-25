@@ -340,7 +340,14 @@ impl Checker {
         }
         let found = self.module_scope.vars.get(&key).cloned().unwrap_or_default();
         let wanted = d.type_name.as_ref().and_then(|name| self.type_of_name(name));
-        let pick = found.into_iter().find(|v| v.rank.is_some() == d.array);
+        // `k$` and `k%` share a stem: take the one of the type asked for
+        let wanted_plain = wanted.as_ref().map(Ty::plain).or_else(|| Ty::of_suffix(&d.name).map(|t| t.plain()));
+        let mut matching = found.iter().filter(|v| v.rank.is_some() == d.array);
+        let pick = matching
+            .clone()
+            .find(|v| wanted_plain.as_ref().is_some_and(|w| *w == v.ty.plain()))
+            .or_else(|| matching.next())
+            .cloned();
         match pick {
             Some(var) => {
                 if wanted.as_ref().is_some_and(|w| w.plain() != var.ty.plain()) {
