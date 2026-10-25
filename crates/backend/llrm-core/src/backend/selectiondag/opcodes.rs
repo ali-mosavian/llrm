@@ -111,8 +111,10 @@ impl OpcodeMap {
         let name = name.strip_suffix("_alt").unwrap_or(name);
         // A target with no SSE forms (the 32-bit one) keeps these as vector
         // opcodes below.
-        if let Some((mnemonic, width, letters)) = sse(name).filter(|(m, ..)| self.forms.iter().any(|f| &f.name == m)) {
-            return self.single(&mnemonic, width, &letters);
+        if let Some((mnemonic, width, result, letters)) =
+            sse(name).filter(|(m, ..)| self.forms.iter().any(|f| &f.name == m))
+        {
+            return self.single(&mnemonic, width, result, &letters);
         }
         if name.contains("_Fp") || name.starts_with('F') && name[1..].starts_with(|c: char| c.is_ascii_uppercase()) {
             return Err(Unmapped::X87);
@@ -132,14 +134,17 @@ impl OpcodeMap {
         if width == Some(64) && !self.forms.iter().any(|form| form.widths.contains(&64)) {
             return Err(Unmapped::Wide64);
         }
-        self.single(&mnemonic, width, &letters)
+        self.single(&mnemonic, width, None, &letters)
     }
 
-    /// The one form of `mnemonic` at `width` that admits `letters`.
+    /// The one form of `mnemonic` at `width` that admits `letters`, and whose
+    /// result is `result` bits where the name says (`CVTTSD2SI64rr`: both
+    /// widths of a conversion state the source's).
     fn single(
         &self,
         mnemonic: &str,
         width: Option<u32>,
+        result: Option<u32>,
         letters: &[char],
     ) -> Result<usize, Unmapped> {
         let found: Vec<usize> = self
@@ -147,7 +152,12 @@ impl OpcodeMap {
             .iter()
             .enumerate()
             .filter(|(_, form)| {
-                form.name == mnemonic && width.is_none_or(|w| form.widths.contains(&w)) && admits(form, letters)
+                form.name == mnemonic
+                    && width.is_none_or(|w| form.widths.contains(&w))
+                    && result.is_none_or(|bits| {
+                        form.iced.as_deref().is_some_and(|iced| iced.contains(&format!("_r{bits}_")))
+                    })
+                    && admits(form, letters)
             })
             .map(|(at, _)| at)
             .collect();
@@ -164,7 +174,7 @@ impl OpcodeMap {
 /// operand letters). `MOVSD` is the string copy in our table; the scalar move
 /// is `movsd_x`. `SQRTSDr` names its tied source too. A pin name that is none
 /// of these is `None`.
-fn sse(name: &str) -> Option<(String, Option<u32>, Vec<char>)> {
+fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
     const ARITHMETIC: [&str; 22] = [
         "ADDSS", "ADDSD", "SUBSS", "SUBSD", "MULSS", "MULSD", "DIVSS", "DIVSD", "MINSS", "MINSD", "MAXSS", "MAXSD",
         "SQRTSS", "SQRTSD", "MOVSS", "MOVSD", "UCOMISS", "UCOMISD", "XORPS", "ANDPS", "ANDNPS", "ORPS",
@@ -180,6 +190,14 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Vec<char>)> {
         ("CVTSD2SS", "cvtsd2ss", None),
         ("CVTSS2SD", "cvtss2sd", None),
     ];
+    // The result's width is in the name: `CVTTSD2SIrr` 32 bits, `CVTTSD2SI64rr`
+    // 64.
+    const TRUNCATES: [(&str, &str, u32); 4] = [
+        ("CVTTSD2SI64", "cvttsd2si", 64),
+        ("CVTTSD2SI", "cvttsd2si", 32),
+        ("CVTTSS2SI64", "cvttss2si", 64),
+        ("CVTTSS2SI", "cvttss2si", 32),
+    ];
     let letters_of = |tail: &str| -> Option<Vec<char>> {
         (!tail.is_empty() && tail.chars().all(|c| c == 'r' || c == 'm')).then(|| tail.chars().collect())
     };
@@ -188,19 +206,27 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Vec<char>)> {
         if let Some(letters) = name.strip_prefix(prefix).and_then(letters_of) {
             let mnemonic = if *prefix == "MOVSD" { "movsd_x".to_owned() } else { prefix.to_ascii_lowercase() };
             // The longest prefix wins (`ANDNPS` is not `ANDPS`).
-            if found.as_ref().is_none_or(|(old, ..): &(String, Option<u32>, Vec<char>)| mnemonic.len() > old.len()) {
-                found = Some((mnemonic, None, letters));
+            if found
+                .as_ref()
+                .is_none_or(|(old, ..): &(String, Option<u32>, Option<u32>, Vec<char>)| mnemonic.len() > old.len())
+            {
+                found = Some((mnemonic, None, None, letters));
             }
         }
     }
     for (prefix, mnemonic, width) in CONVERTS {
         if let Some(letters) = name.strip_prefix(prefix).and_then(letters_of) {
-            found = Some((mnemonic.to_owned(), width, letters));
+            found = Some((mnemonic.to_owned(), width, None, letters));
         }
     }
-    found.map(|(mnemonic, width, letters)| {
+    for (prefix, mnemonic, result) in TRUNCATES {
+        if let Some(letters) = name.strip_prefix(prefix).and_then(letters_of) {
+            found = Some((mnemonic.to_owned(), None, Some(result), letters));
+        }
+    }
+    found.map(|(mnemonic, width, result, letters)| {
         let letters = if mnemonic.starts_with("sqrt") && letters.len() == 1 { vec!['r', 'r'] } else { letters };
-        (mnemonic, width, letters)
+        (mnemonic, width, result, letters)
     })
 }
 
@@ -210,7 +236,16 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Vec<char>)> {
 /// name has no width.
 pub fn memory_bytes(name: &str) -> Option<u32> {
     // A scalar SSE access is the scalar's size: `MOVSDrm` 8, `MOVSSmr` 4.
-    if let Some((_, _, _)) = sse(name.strip_suffix("_alt").unwrap_or(name)) {
+    if sse(name.strip_suffix("_alt").unwrap_or(name)).is_some() {
+        // A conversion reads its source's size: the float named first, or the
+        // integer.
+        for (prefix, bytes) in
+            [("CVTTSD2SI", 8), ("CVTTSS2SI", 4), ("CVTSD2SS", 8), ("CVTSS2SD", 4), ("CVTSI642", 8), ("CVTSI2", 4)]
+        {
+            if name.starts_with(prefix) {
+                return Some(bytes);
+            }
+        }
         let upper: String = name.chars().take_while(char::is_ascii_uppercase).collect();
         return if upper.ends_with("SD") {
             Some(8)
