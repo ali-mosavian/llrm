@@ -14,6 +14,7 @@ fn qb() -> HirAbi {
         objects: Default::default(),
         preserved: Default::default(),
         stack_check: None,
+        hosted: false,
     }
 }
 
@@ -55,6 +56,7 @@ fn borland() -> HirAbi {
         objects: Default::default(),
         preserved: EVERY.iter().copied().filter(|one| !clobbered.contains(one)).collect(),
         stack_check: None,
+        hosted: false,
     }
 }
 
