@@ -3541,11 +3541,26 @@ entry:
     let module = llrm_mir::parse::module(text).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
-    let names: Vec<_> = done
-        .body
-        .insns()
-        .iter()
-        .filter_map(|i| i.what.as_ref().and_then(|w| w.name.as_deref().map(str::to_owned)))
-        .collect();
-    assert!(names.iter().any(|n| n == "add"), "{names:?}");
+    let insns = done.body.insns();
+    let add = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("add")).expect("an add");
+    // The sum is a quadword: a 4-byte `add` would drop the high half.
+    assert!(add.dests.iter().all(|d| matches!(d, crate::model::ir::Loc::Held(h) if h.width == 8)), "{add:?}");
+}
+
+/// A call at m64 reached emit and came out with 4-byte values and the 32-bit
+/// stack pointer; until the SysV sequence is translated it is refused.
+#[test]
+fn a_call_at_m64_is_refused() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare i64 @g(i64)
+define i64 @f(i64 %a) {
+entry:
+  %s = call i64 @g(i64 %a)
+  ret i64 %s
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let refused = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).err().expect("refused");
+    assert!(refused.0.contains("SysV"), "{}", refused.0);
 }

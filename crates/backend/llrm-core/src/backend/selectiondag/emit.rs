@@ -631,6 +631,7 @@ fn width(vt: EVT) -> u32 {
         EVT::Simple(MVT::I1 | MVT::I8) => 1,
         EVT::Simple(MVT::I16) => 2,
         EVT::Simple(MVT::I32) => 4,
+        EVT::Simple(MVT::I64) => 8,
         EVT::Int(bits) => bits.div_ceil(8),
         // A floating value is one 10-byte register value of the x87 stack.
         EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80) => 10,
@@ -1559,14 +1560,19 @@ impl Emitter<'_, '_> {
         let width = width(node.values[0]);
         let result = SDValue { node: n, res: 0 };
         match name.split('|').next().unwrap_or(name) {
-            "ADJCALLSTACKDOWN32" | "ADJCALLSTACKUP32" => {
+            "ADJCALLSTACKDOWN32" | "ADJCALLSTACKUP32" | "ADJCALLSTACKDOWN64" | "ADJCALLSTACKUP64" => {
                 let bytes = self.constant(node.ops[0])?;
                 let popped = if name.starts_with("ADJCALLSTACKUP") { self.constant(node.ops[1])? } else { 0 };
                 let (verb, count) =
                     if name.starts_with("ADJCALLSTACKDOWN") { ("sub", bytes) } else { ("add", bytes - popped) };
                 if count != 0 {
-                    // The stack pointer is a word at real mode.
-                    let word = if self.ctx.address_mode == AddrMode::Real16 { 2 } else { 4 };
+                    // The stack pointer is a word at real mode, a quadword at
+                    // 64 bits.
+                    let word = match self.ctx.address_mode {
+                        AddrMode::Real16 => 2,
+                        AddrMode::Flat64 => 8,
+                        AddrMode::Flat32 => 4,
+                    };
                     let sp = Loc::Reg(Reg { register: self.ctx.stack_pointer, width: word });
                     let count = Loc::Imm(Imm { value: count, width: word, address: None });
                     self.push(Operation::Binary, verb, vec![sp.clone()], vec![sp, count]);
@@ -1588,7 +1594,7 @@ impl Emitter<'_, '_> {
                 self.calls.push((at, callee));
                 return Ok(Some(()));
             }
-            "CALLpcrel32" => {
+            "CALLpcrel32" | "CALL64pcrel32" => {
                 let callee = self
                     .direct_callee(node.ops[0])
                     .ok_or_else(|| EmitError::Unsupported("a call of a non-global".to_owned()))?;
