@@ -370,6 +370,53 @@ impl Walk<'_> {
     }
 }
 
+/// The flag lanes of `lanes`.
+pub(crate) fn flag_lanes(lanes: &crate::backend::lanes::Lanes) -> crate::backend::lanes::Lanes {
+    crate::backend::lanes::Lanes::flags(lanes.mask() as u32)
+}
+
+/// What becomes of the flags `insns[index]` sets, walking `insns` after it.
+pub(crate) enum Flags {
+    /// One of them is read before every one is written again.
+    Read,
+    /// Every one is written again before any is read.
+    Dead,
+    /// Some are neither read nor written by the end of `insns`.
+    Out,
+}
+
+/// `Flags` of the instruction at `index`, per lane: `inc` writes every flag but
+/// CF, so a carry read after it is still the one `index` set. An instruction
+/// with no effect table reads them, unless it is a move and `moves_pass`.
+pub(crate) fn flags_after(
+    regs: llrm_lir::registers::Regs,
+    bits: u32,
+    insns: &[Arc<Insn>],
+    index: usize,
+    moves_pass: bool,
+) -> Flags {
+    let mut pending = match liveness::effect(regs, bits, &insns[index]) {
+        Some(effect) => flag_lanes(&effect.writes),
+        None => crate::backend::lanes::Lanes::flags(u32::MAX),
+    };
+    for later in &insns[index + 1..] {
+        let Some(effect) = liveness::effect(regs, bits, later) else {
+            if moves_pass && later.what.as_ref().is_some_and(|what| what.op == Operation::Move) {
+                continue;
+            }
+            return Flags::Read;
+        };
+        if !flag_lanes(&effect.all_reads()).is_disjoint(&pending) {
+            return Flags::Read;
+        }
+        pending = pending.minus(&flag_lanes(&effect.writes));
+        if pending.is_empty() {
+            return Flags::Dead;
+        }
+    }
+    Flags::Out
+}
+
 /// Whether the flags the instruction at `index` sets are read before anything
 /// sets them again, in `insns`.
 pub(crate) fn flags_read_after(
@@ -378,26 +425,7 @@ pub(crate) fn flags_read_after(
     insns: &[Arc<Insn>],
     index: usize,
 ) -> bool {
-    for later in &insns[index + 1..] {
-        let Some(effect) = liveness::effect(regs, bits, later) else {
-            // A load through virtual address registers has no effect
-            // table yet; a move leaves the flags alone.
-            if later.what.as_ref().is_some_and(|what| what.op == Operation::Move) {
-                continue;
-            }
-            return true;
-        };
-        let flags = |lanes: &crate::backend::lanes::Lanes| {
-            lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
-        };
-        if flags(&effect.all_reads()) {
-            return true;
-        }
-        if flags(&effect.writes) {
-            return false;
-        }
-    }
-    false
+    matches!(flags_after(regs, bits, insns, index, true), Flags::Read)
 }
 
 /// Whether `one` writes the flags (an operation with no effect table is

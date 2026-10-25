@@ -694,6 +694,23 @@ mod tests {
         assert!(result(&combined(before.clone())) == result(&before), "left alone");
     }
 
+    /// `inc` leaves CF alone, so a `jb` after it reads the carry of the add
+    /// before it: the add counted as dead flags and was rebuilt, and `jb` read
+    /// the carry of the new instruction.
+    #[test]
+    fn an_add_whose_carry_a_later_inc_leaves_for_a_jb_is_left() {
+        let inc = insn(51, Operation::Unary, "inc", vec![held(13)], vec![held(1)], vec![13], vec![1]);
+        let jump = insn(50, Operation::Branch, "jb", vec![], vec![], vec![], vec![]);
+        let before = with_leaves(vec![
+            binary("add", 10, 1, 9),
+            binary("add", 11, 10, 2),
+            inc,
+            jump,
+            binary("add", 12, 11, 3),
+        ]);
+        assert!(result(&combined(before.clone())) == result(&before), "left alone");
+    }
+
     /// The read counts of every instruction were tabled for every body before
     /// a chain was looked for (1.7 M of d_faces -O2, the pin's pass 0.47 M): a
     /// body whose associative operations read none of each other's results
