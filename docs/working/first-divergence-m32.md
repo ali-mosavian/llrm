@@ -1,6 +1,6 @@
 # First divergence from the pin, 71 programs, m32 -O2 (2026-10-25, w13)
 
-Method: our final IR (`--dump`, last stage) through the pin's `llc -O2 -march=i486` (`difftest.normalise`), both asm streams cut to mnemonics (frame push/pop/esp adjusts dropped), first differing window read by hand. `~/scratch/coordwork/fd/first2.py`, raw windows `out32.txt`. Tree: feat/parity 3c36dac99.
+Method: our final IR (`--dump`, last stage) through the pin's `llc -O2 -march=i486` (`difftest.normalise`), both asm streams cut to mnemonics (frame push/pop/esp adjusts dropped), first differing window read by hand. `first2.py`, raw windows `out32.txt`. Tree: feat/parity 3c36dac99.
 
 Read this first: the oracle re-runs LSR on our final IR (rows E and F are that instrument, not a defect), and a window of at most seven instructions names a *first* cause only. Rows B and I are the least certain (read, not traced).
 
