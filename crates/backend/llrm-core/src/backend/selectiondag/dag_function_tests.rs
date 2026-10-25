@@ -110,8 +110,11 @@ pub(super) fn verdicts(flags: bool) -> Vec<Result<super::builder::RuntimeAnswer,
 
 pub(super) fn select_with_contracts(text: &str) -> Result<crate::backend::isel::Selected, String> {
     let module = llrm_mir::parse::module(text).expect("parses");
-    let contracts =
-        super::dag_function::RuntimeContracts { abi: &Stub { flags: false }, segments: &crate::backend::target::BASIC };
+    let contracts = super::dag_function::RuntimeContracts {
+        abi: &Stub { flags: false },
+        segments: &crate::backend::target::BASIC,
+        runtime: true,
+    };
     let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
     super::dag_function::selected_in_pool(
         &module,
@@ -361,6 +364,35 @@ fn a_load_read_by_a_compare_is_folded_into_it() {
     assert!(compare.sources.iter().any(|l| matches!(l, Loc::Mem(_))), "{compare:?}");
 }
 
+const WORD_MINUS_ONE_TWICE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+@a = global i16 0
+@b = global i16 0
+define void @f() {
+  store i16 -1, ptr @a
+  store i16 -1, ptr @b
+  ret void
+}
+";
+
+/// At -Os the pin's `OptForSize, Not64BitMode` patterns make a word -1 by
+/// `MOV32r_1`, a dword `mov eax, -1` (6 bytes at -m16 with the 0x66 prefix;
+/// QCport weapons.c); the word constant is `mov ax, -1` (3).
+#[test]
+fn at_os_m16_a_word_constant_is_made_in_a_word_register() {
+    use crate::model::ir::Loc;
+    let module = llrm_mir::parse::module(WORD_MINUS_ONE_TWICE).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("386").expect("a cpu").clone();
+    cpu.size = true;
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let wide: Vec<_> = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| matches!(w.dests.as_slice(), [Loc::Held(h)] if h.width == 4))
+        .collect();
+    assert!(wide.is_empty(), "{wide:?}");
+}
+
 const TESTS_THE_LOW_BIT_OF_A_LOAD: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 declare void @g()
 declare void @h()
@@ -486,4 +518,82 @@ fn a_select_on_the_sign_is_the_sign_mask_not_a_branch() {
         let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
         assert!(seen.contains(&"sar") && !seen.iter().any(|n| n.starts_with('j')), "{name}: {seen:?}");
     }
+}
+
+/// `if (c & 1) g(); else h();` written as a compare of the masked value, in
+/// both polarities and both arm orders, was `mov eax, [esp+4]; and al, 1; je`:
+/// only the truncate form narrowed. The pin's `X86ISD::CMP` case makes every
+/// one `test byte [esp+4], 1`.
+#[test]
+fn a_masked_compare_with_zero_tests_one_byte_in_memory_whatever_its_polarity() {
+    use crate::model::ir::Loc;
+    for cc in ["eq", "ne"] {
+        for (yes, no) in [("a", "b"), ("b", "a")] {
+            let ir = format!(
+                "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @g()
+declare void @h()
+define void @f(i32 %c) {{
+  %m = and i32 %c, 1
+  %t = icmp {cc} i32 %m, 0
+  br i1 %t, label %{yes}, label %{no}
+a:
+  call void @g()
+  ret void
+b:
+  call void @h()
+  ret void
+}}
+"
+            );
+            let module = llrm_mir::parse::module(&ir).expect("parses");
+            let done =
+                selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+                    .unwrap_or_else(|e| panic!("{}", e.0));
+            let insns = done.body.insns();
+            let whats: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref()).collect();
+            let reads: Vec<u32> = whats
+                .iter()
+                .flat_map(|w| w.sources.iter())
+                .filter_map(|l| if let Loc::Mem(m) = l { Some(m.width) } else { None })
+                .collect();
+            assert_eq!(reads, [1], "{cc} {yes}/{no}: one byte read, no dword: {reads:?}");
+            assert!(
+                !whats.iter().any(|w| w.name.as_deref() == Some("and")),
+                "{cc} {yes}/{no}: no and left before the test"
+            );
+        }
+    }
+}
+
+/// A function that calls `setjmp` is marked on its body, as the old selector
+/// marks it: after a second return from `setjmp` a frame slot another value
+/// shared holds that value, so no slot may be shared (`slots_colored`, the
+/// spill colouring, stands down for `LirBody::returns_twice`). The DAG path
+/// never set the mark.
+#[test]
+fn a_function_calling_setjmp_is_marked_returns_twice() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare i32 @setjmp(ptr) returns_twice
+define i32 @f() {
+entry:
+  %buf = alloca [16 x i8]
+  %r = call i32 @setjmp(ptr %buf)
+  ret i32 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .expect("selects");
+    assert!(done.body.returns_twice);
+    let plain = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f() {
+entry:
+  ret i32 1
+}
+";
+    let module = llrm_mir::parse::module(plain).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .expect("selects");
+    assert!(!done.body.returns_twice);
 }

@@ -192,8 +192,11 @@ impl llrm_target::Target for M64 {
 
     /// Flat: no segments, one model.
     fn object(&self) -> llrm_target::object::ObjectFormat {
-        llrm_target::object::ObjectFormat::parse(include_str!("machines/object.toml"))
-            .expect("x86-64 object.toml parses")
+        static OBJECT: std::sync::LazyLock<llrm_target::object::ObjectFormat> = std::sync::LazyLock::new(|| {
+            llrm_target::object::ObjectFormat::parse(include_str!("machines/object.toml"))
+                .expect("x86-64 object.toml parses")
+        });
+        OBJECT.clone()
     }
 
     fn return_address_bytes(
@@ -321,6 +324,23 @@ impl llrm_target::Target for M64 {
 
 #[cfg(test)]
 mod tests {
+    /// `object()` and the runtime tables are parsed once and kept; each must
+    /// equal a fresh parse of its toml (35 parses of object.toml and 4 of the
+    /// runtime table cost 3.3 M Ir of every compile).
+    #[test]
+    fn test_cached_tomls_equal_a_fresh_parse() {
+        use llrm_target::Target;
+        let fresh = llrm_target::object::ObjectFormat::parse(include_str!("machines/object.toml")).unwrap();
+        assert_eq!(M64.object(), fresh);
+        assert_eq!(M64.object(), fresh, "a second ask");
+        for language in ["c", "nib"] {
+            let Some(description) = M64.runtime(language) else { continue };
+            let fresh: toml::Table = description.text.parse().unwrap();
+            assert_eq!(*description.table().unwrap(), fresh, "{language}");
+            assert!(std::sync::Arc::ptr_eq(&description.table().unwrap(), &description.table().unwrap()));
+        }
+    }
+
     use llrm_target::Target;
 
     use super::*;

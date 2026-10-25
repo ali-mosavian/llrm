@@ -363,6 +363,28 @@ fn test_a_memoryssa_build_asks_no_plain_accesses_and_says_what_they_said() {
     }
 }
 
+/// The accesses a MemorySSA client reads with the graph annotate nothing:
+/// EarlyCSE, MemCpyOpt and LICM answered from the AA stack and made
+/// `Annotated` and its inputs for it all the same (33 M Ir on d_faces -O2).
+#[test]
+fn test_the_accesses_of_a_graph_are_read_without_annotating() {
+    for (name, module) in corpus() {
+        let layout = layout(&module);
+        let mut outer = Outer::of(&module, None);
+        outer.require::<Summaries>(&module);
+        let outer = Rc::new(outer);
+        for (_, global, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
+            let at = format!("{name}/@{}", global.name.as_deref().unwrap_or(""));
+            let mut analyses = Analyses::new(Rc::clone(&outer));
+            let graph = analyses.get::<super::MemorySsa>(&module.context, &layout, function);
+            let Ok(graph) = &*graph else { continue };
+            graph.accesses(&module.context, &layout, function, &mut analyses).expect("accesses");
+            assert!(analyses.cached::<Annotated>().is_none(), "{at}: the accesses were annotated");
+            assert!(analyses.cached::<super::PlainAccesses>().is_none(), "{at}: the plain accesses were made");
+        }
+    }
+}
+
 /// Each access asked of its own alloca's uses whether the address is exposed,
 /// and the answer was never kept: `mir decide` and `gvn` grew with slope
 /// 2.5–2.9 in a function's blocks, `exposes` 21% of the compile of 300 (#557).

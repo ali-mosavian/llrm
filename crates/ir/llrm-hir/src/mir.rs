@@ -1851,7 +1851,9 @@ fn declare_outside(
         tables.callees.insert(VA_START.to_owned(), reference);
     }
     for instruction in function.blocks.iter().flat_map(|one| &one.instructions) {
-        if let (Some(operand), Some(result)) = (instruction.operands.first(), instruction.results.first()) {
+        if let (Some(operand), Some(result)) = (instruction.operands.first(), instruction.results.first())
+            && names_intrinsic(instruction.op)
+        {
             let types = &mut module.context.types;
             let from = value_type(types, &tables.spaces, tables.types[&operand_type(operand, &values, &places)]);
             let to = value_type(types, &tables.spaces, tables.types[&values[result]]);
@@ -2045,7 +2047,7 @@ fn passed(
 /// The intrinsic a HIR instruction from a `from` to a `to` calls, if any:
 /// a float function, or a float converted to an integer, which rounds as
 /// the machine's default mode does, to nearest, ties to even.
-fn intrinsic(
+pub(crate) fn intrinsic(
     types: &Types,
     op: Op,
     from: TypeId,
@@ -2073,9 +2075,31 @@ fn intrinsic(
     Some(format!("llvm.{function}.{float}"))
 }
 
+/// The ops `intrinsic`, `fixed` and `ptrdiff` can name a callee for: the rest
+/// need no value type worked out to find that out.
+pub(crate) fn names_intrinsic(op: Op) -> bool {
+    matches!(
+        op,
+        Op::Convert
+            | Op::Fabs
+            | Op::Fsqrt
+            | Op::Fsin
+            | Op::Fcos
+            | Op::Fatan
+            | Op::Flog2
+            | Op::Fexp2
+            | Op::Fln
+            | Op::Fexp
+            | Op::Fround
+            | Op::FixedMul
+            | Op::FixedDiv
+            | Op::PtrDiff
+    )
+}
+
 /// The intrinsic that answers the bytes between two pointers of one type
 /// into an object, as an integer of `to`'s width.
-fn ptrdiff(
+pub(crate) fn ptrdiff(
     types: &Types,
     from: TypeId,
     to: TypeId,
@@ -2086,7 +2110,7 @@ fn ptrdiff(
 
 /// The fixed-point intrinsic a HIR instruction on `ty` calls, and its
 /// parameters: the two operands and the fraction's bits.
-fn fixed(
+pub(crate) fn fixed(
     types: &mut Types,
     op: Op,
     ty: TypeId,
@@ -3545,9 +3569,28 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     fixed(&mut self.b.context.types, op, ty).ok_or("fixed point of a non-integer")?;
                 let callee =
                     Value::Constant(*self.tables.callees.get(&name).ok_or_else(|| format!("@{name} undeclared"))?);
+                let fraction_value = fraction;
                 let fraction = self.b.int(32, fraction);
                 let function = function_type(&mut self.b.context.types, ty, parameters);
-                let result = self.b.call(function, callee, &[a, b, fraction], "").expect("a fixed-point value");
+                let mut result = self.b.call(function, callee, &[a, b, fraction], "").expect("a fixed-point value");
+                if op == Op::FixedDiv {
+                    // `llvm.sdiv.fix` rounds toward negative infinity; a fixed
+                    // point `/` truncates toward zero (the language spec). A
+                    // negative quotient that is not exact is one too low: it
+                    // is exact when `q * b == a << fraction` (the remainder is
+                    // smaller than `b`, so the difference cannot wrap to zero).
+                    let bits = self.b.context.types.int_bits(ty).ok_or("fixed point of a non-integer")?;
+                    let zero = self.b.int(bits, 0);
+                    let shift = self.b.int(bits, fraction_value);
+                    let signs = self.b.binary(BinaryOp::Xor, a, b, Flags::default(), "");
+                    let negative = self.b.icmp(IntPredicate::Slt, signs, zero, "");
+                    let scaled = self.b.binary(BinaryOp::Shl, a, shift, Flags::default(), "");
+                    let product = self.b.binary(BinaryOp::Mul, result, b, Flags::default(), "");
+                    let inexact = self.b.icmp(IntPredicate::Ne, scaled, product, "");
+                    let low = self.b.binary(BinaryOp::And, negative, inexact, Flags::default(), "");
+                    let one = self.b.cast(CastOp::ZExt, low, ty, "");
+                    result = self.b.binary(BinaryOp::Add, result, one, Flags::default(), "");
+                }
                 self.define(instruction, result);
             }
             Op::Fabs

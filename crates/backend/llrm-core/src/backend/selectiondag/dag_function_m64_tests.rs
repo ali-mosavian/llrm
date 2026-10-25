@@ -289,3 +289,47 @@ entry:
     assert_eq!(cell.width, 8, "a quadword is read: {select:?}");
     assert!(select.name.as_deref().is_some_and(|name| name.starts_with("cmov")), "{select:?}");
 }
+
+/// A call through a pointer at m64 selected `CALL64r`, which the emitter did
+/// not know: the call was a direct one with no callee and the assembler
+/// stopped (`fnptr` of `tests/llc`). It is an indirect call.
+#[test]
+fn a_call_through_a_pointer_is_an_indirect_call() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i32 @f(ptr %p, i32 %a) {
+  %r = call i32 %p(i32 %a)
+  ret i32 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let calls: Vec<bool> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.op == crate::model::ir::Operation::Call)
+        .map(|w| w.indirect)
+        .collect();
+    assert_eq!(calls, [true]);
+}
+
+/// The address of a local array at m64 was a `mov r, offset <frame slot>` (the
+/// symbol-address form): the object writer stopped with `KeyError: (FRAME,
+/// 0)` (strings, qsortc of `tests/llc`). A frame address is an `lea` off the
+/// frame register.
+#[test]
+fn the_address_of_a_local_is_an_lea() {
+    let names = m64_names(
+        "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare void @sink(ptr)
+define void @f() {
+  %a = alloca [16 x i8]
+  call void @sink(ptr %a)
+  ret void
+}
+",
+    );
+    assert!(names.iter().any(|n| n == "lea"), "{names:?}");
+}

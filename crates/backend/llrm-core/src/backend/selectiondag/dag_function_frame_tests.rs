@@ -678,10 +678,47 @@ fn a_scaled_lea_at_m16_has_no_literal_place() {
             [Loc::Mem(m)] => (m.scale, m.addr),
             _ => continue,
         };
-        scaled += usize::from(scale != 1);
+        scaled += 1;
         assert!(scale == 1 || place.is_none(), "{what:?}");
     }
-    assert!(scaled > 0, "the function has a scaled lea");
+    // (its word indexes are shifted first, so none stays scaled)
+    assert!(scaled > 0, "the function has a lea");
+}
+
+/// 16-bit addressing has no scale. A `lea` of a base and a word index scaled by
+/// two kept the scale on the word registers; the encoder dropped it, so the
+/// address lost its doubling (Nib `floats.shift` moved the wrong limbs, and
+/// `print(1.989e30)` printed `1.988999999999999901909255192576e+30`).
+#[test]
+fn a_lea_at_m16_does_not_scale_a_word_index() {
+    use crate::model::ir::{Loc, Operation};
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+define ptr @f(ptr %p, i16 %i, i1 %c) {
+  %w = lshr i16 %i, 4
+  br i1 %c, label %a, label %b
+a:
+  %m = mul nsw i16 %w, -2
+  %q = getelementptr i8, ptr %p, i16 %m
+  %r = getelementptr i8, ptr %q, i16 574
+  ret ptr %r
+b:
+  ret ptr %p
+}
+",
+    )
+    .expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let mut leas = 0;
+    for insn in done.body.insns().iter() {
+        let Some(what) = insn.what.as_ref().filter(|w| w.op == Operation::Address) else { continue };
+        let [Loc::Mem(cell)] = &what.sources[..] else { continue };
+        leas += 1;
+        let word_index = cell.index.is_some_and(|index| index.width == 2);
+        assert!(cell.scale == 1 || !word_index, "a word index scaled by {}: {what:?}", cell.scale);
+    }
+    assert!(leas > 0, "the function has a lea");
 }
 
 /// `fexp2` pushes two slots above its operand and `flog2` one: with six doubles
@@ -750,6 +787,66 @@ fn a_16_byte_clear_at_m16_is_four_dword_stores() {
     assert_eq!(stores, [4, 4, 4, 4], "store widths");
 }
 
+const VOLATILE_COPY: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@a = global [7 x i8] zeroinitializer
+@b = global [7 x i8] zeroinitializer
+declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)
+define void @f() {
+entry:
+  call void @llvm.memcpy.p0.p0.i32(ptr @a, ptr @b, i32 7, i1 true)
+  ret void
+}
+";
+
+/// A volatile `memcpy` was refused ("volatile memory intrinsic"). Its accesses
+/// stay as written: seven bytes are a dword, a word and a byte, not two
+/// overlapping dwords as a plain copy makes them.
+#[test]
+fn a_volatile_copy_is_the_accesses_it_names_and_no_more() {
+    let module = llrm_mir::parse::module(VOLATILE_COPY).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let mut widths: Vec<u32> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.name.as_deref() == Some("mov"))
+        .filter_map(|w| match w.dests.as_slice() {
+            [crate::model::ir::Loc::Mem(cell)] => Some(cell.width),
+            _ => None,
+        })
+        .collect();
+    widths.sort_unstable();
+    assert_eq!(widths, [1, 2, 4], "the stores: {widths:?}");
+    assert!(done.body.insns().iter().filter(|i| i.volatile).count() >= 3, "volatile accesses");
+}
+
+const VOLATILE_LOAD: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@v = global i32 0
+@w = global i32 0
+define void @f() {
+entry:
+  %a = load volatile i32, ptr @v
+  store volatile i32 %a, ptr @w
+  ret void
+}
+";
+
+/// The DAG path dropped the volatile mark on the LIR instruction of a volatile
+/// load or store: the machine passes that skip volatile accesses
+/// (`MachineLICM`, `MachineCSE`, load folding, the store combiner) saw plain
+/// ones. (A volatile load the matcher folds into an ALU instruction still
+/// loses it: the folded node is gone.)
+#[test]
+fn a_volatile_load_and_store_are_volatile_instructions() {
+    let module = llrm_mir::parse::module(VOLATILE_LOAD).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let volatile = done.body.insns().iter().filter(|i| i.volatile).count();
+    assert_eq!(volatile, 2, "the load and the store");
+}
+
 const ALLOCA_COUNT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f() {
 entry:
@@ -770,4 +867,36 @@ fn an_alloca_with_a_constant_count_is_that_many_elements() {
         .unwrap_or_else(|e| panic!("{}", e.0));
     assert_eq!(done.depth, 16);
     assert_eq!(done.extents, [(-16, 16)]);
+}
+
+const VOLATILE_FOLD: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@v = global i32 0
+define i32 @f(i32 %a) {
+entry:
+  %b = load volatile i32, ptr @v
+  %s = add i32 %a, %b
+  ret i32 %s
+}
+";
+
+/// A volatile load the matcher folds into an `add` (`add eax, [v]`) lost its
+/// mark: the folded node was gone, and `MachineLICM`, `MachineCSE` and the
+/// coalescer saw a plain instruction. The machine node carries the flag of the
+/// memory operands it folded (`MachineMemOperand::isVolatile`).
+#[test]
+fn a_volatile_load_folded_into_an_add_is_a_volatile_instruction() {
+    let module = llrm_mir::parse::module(VOLATILE_FOLD).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let folded: Vec<_> = insns
+        .iter()
+        .filter(|i| {
+            i.what.as_ref().is_some_and(|w| {
+                w.name.as_deref() == Some("add") && w.sources.iter().any(|s| matches!(s, crate::model::ir::Loc::Mem(_)))
+            })
+        })
+        .collect();
+    assert_eq!(folded.len(), 1, "premise: the load is folded into the add");
+    assert!(folded[0].volatile, "the folded add is volatile");
 }

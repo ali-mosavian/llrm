@@ -123,7 +123,7 @@
 //! `X86FloatingPoint.cpp`.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -403,21 +403,21 @@ enum Mode {
 /// takes its source's mode for its target instead, and where the modes cannot
 /// all agree every block restores the caller's before it ends.
 struct Modes {
-    entering: BTreeMap<i64, Mode>,
+    entering: HashMap<i64, Mode>,
     restore: bool,
 }
 
 fn _modes(body: &LirBody) -> Modes {
     let graph = &body.blocks;
     let predecessors = loops::predecessors(graph);
-    let index = graph.iter().enumerate().map(|(position, block)| (block.at, position)).collect::<BTreeMap<_, _>>();
-    let mut weight = BTreeMap::<i64, i64>::new();
+    let index = graph.iter().enumerate().map(|(position, block)| (block.at, position)).collect::<HashMap<_, _>>();
+    let mut weight = HashMap::<i64, i64>::default();
     for one in loops::loops(graph, Some(body.entry)) {
         for at in &one.body {
             *weight.entry(*at).or_insert(1) *= 8;
         }
     }
-    let (first, last): (BTreeMap<_, _>, BTreeMap<_, _>) = graph
+    let (first, last): (HashMap<_, _>, HashMap<_, _>) = graph
         .iter()
         .map(|block| {
             let needs = block.insns.iter().filter_map(|one| _needs(one)).collect::<Vec<_>>();
@@ -452,9 +452,9 @@ fn _modes(body: &LirBody) -> Modes {
         .map(|block| {
             (block.at, if block.at == body.entry { Mode::Caller } else { want[&block.at].unwrap_or(Mode::Caller) })
         })
-        .collect::<BTreeMap<_, _>>();
-    let leaving = |entering: &BTreeMap<i64, Mode>, at: i64| last[&at].unwrap_or(entering[&at]);
-    let placeable = |entering: &BTreeMap<i64, Mode>, from: i64, to: i64| {
+        .collect::<HashMap<_, _>>();
+    let leaving = |entering: &HashMap<i64, Mode>, at: i64| last[&at].unwrap_or(entering[&at]);
+    let placeable = |entering: &HashMap<i64, Mode>, from: i64, to: i64| {
         leaving(entering, from) == entering[&to]
             || graph[index[&from]].succ.len() == 1
             || (predecessors[&to].len() == 1 && to != body.entry)
@@ -475,7 +475,7 @@ fn _modes(body: &LirBody) -> Modes {
     }
     // The switches an assignment costs, each weighted by its block's depth:
     // none if an edge cannot take its switch.
-    let cost = |entering: &BTreeMap<i64, Mode>, restore: bool| -> Option<i64> {
+    let cost = |entering: &HashMap<i64, Mode>, restore: bool| -> Option<i64> {
         let mut total = 0;
         for block in graph {
             let at = weight.get(&block.at).copied().unwrap_or(1);
@@ -502,7 +502,7 @@ fn _modes(body: &LirBody) -> Modes {
         }
         Some(total)
     };
-    let restoring = graph.iter().map(|block| (block.at, Mode::Caller)).collect::<BTreeMap<_, _>>();
+    let restoring = graph.iter().map(|block| (block.at, Mode::Caller)).collect::<HashMap<_, _>>();
     // Following demand can cost more than restoring at the end of each block: a
     // loop that converts and rounds alike in a trip gains nothing from entering
     // in one mode and pays the switch on its entry and exit.
@@ -605,8 +605,8 @@ pub(super) fn _truncating(
         walked.push((insns, current));
     }
     // The switch on each edge whose ends disagree.
-    let mut ends = BTreeMap::<i64, Vec<Mode>>::new();
-    let mut starts = BTreeMap::<i64, Mode>::new();
+    let mut ends = HashMap::<i64, Vec<Mode>>::default();
+    let mut starts = HashMap::<i64, Mode>::default();
     for (block, (_, current)) in body.blocks.iter().zip(&walked) {
         if modes.restore {
             continue;
