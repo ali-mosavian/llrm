@@ -211,7 +211,11 @@ long B_FLOC(short channel)
 
     if (fdb->mode == MD_RANDOM)
         return at / fdb->record_length;
-    return fdb->mode == MD_BINARY ? at : at / 128;
+    if (fdb->mode == MD_BINARY)
+        return at;
+    /* A sequential file moves in 128-byte blocks: an input file counts the blocks it has read, a part of the last one
+       included; an output file the blocks it has written. */
+    return fdb->mode == MD_INPUT ? (at + 127) / 128 : at / 128;
 }
 
 /* B$FSEK: SEEK(#channel): the next record of a RANDOM file, else the next byte. */

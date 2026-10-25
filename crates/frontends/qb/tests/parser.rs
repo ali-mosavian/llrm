@@ -2395,3 +2395,16 @@ fn open_with_access_lock_len_or_random_passes_rtps_inc_mode_word() {
     assert_eq!(call("FOR RANDOM ACCESS READ WRITE LOCK WRITE AS #1 LEN = 20"), "8964");
     assert_eq!(call("FOR BINARY SHARED AS #1"), "16416");
 }
+
+#[test]
+fn loc_and_seek_functions_call_b_floc_and_b_fsek() {
+    // LOC and SEEK as functions were refused as valid but not generated. BC
+    // calls B$FLOC and B$FSEK with the channel, as it calls B$FLOF for LOF,
+    // and takes the long result.
+    let module =
+        parse("OPEN \"A\" FOR BINARY AS #1\r\nx& = LOC(1) + SEEK(1) + LOF(1)\r\n", Dialect::QuickBasic45).unwrap();
+    let hir = compile(&module, "position", Dialect::QuickBasic45, "qb45").unwrap();
+    for routine in ["B$FLOC", "B$FSEK", "B$FLOF"] {
+        assert_eq!(hir.matches(&format!("\"callee\":\"{routine}\"")).count(), 1, "{routine}: {hir}");
+    }
+}
