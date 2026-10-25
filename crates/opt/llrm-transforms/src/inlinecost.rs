@@ -63,22 +63,8 @@
 //! - D8: -Os and -Oz share one pipeline here, so every caller at -Os is
 //!   `optsize` (clang's `OptimizeForSize`, InlineCost.cpp:2125) and none
 //!   `minsize` (:2117).
-//! - D11: at -Os a callee that stays is inlined only if it does not grow the
-//!   code (`Tti::opt_size_inline_by_code_size`, X86: yes): the target's
-//!   `CodeSize` of the callee's instructions that the walk did not fold must
-//!   not exceed the `CodeSize` of the call and the pushes of its arguments.
-//!   LLVM's `OptSizeThreshold` 50 allows growth; a fixed bound (25) copied a
-//!   14-instruction loop into ten sites (`idioms.bas`, +690 B). The last call
-//!   of a local callee, which goes with it, is the pin's. No shape of callee
-//!   but the loop and the one smaller than its call is tested.
-//! - D12 (SZ2): a call the -Os bound (D11) alone refuses, that passes the
-//!   address of a stack slot the caller stored a constant to and whose callee
-//!   loads through that parameter, is inlined if the caller, simplified again
-//!   with the call inlined, is smaller by the target's size cost (`walk.rs`,
-//!   callers of at most 300 instructions; the sites of a private callee that
-//!   dies with its last call are tried together, its body credited). The pin's
-//!   cost does not follow a load through a pointer argument, so it never sees
-//!   the loop or the arithmetic fold.
+//! - D11 and D12 (the -Os code-size bound and its stack-slot trials) are
+//!   deleted: the pin has neither, and `idioms.bas` -Os grows with it gone.
 //! - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
 //!   attribute decision.
 //! - D7: the minsize loop penalty counts retreating-edge headers, not
@@ -269,9 +255,6 @@ pub enum InlineCost {
         cost: i64,
         threshold: i64,
         static_bonus: i64,
-        /// Refused by the target's -Os bound alone (D11): the pin's threshold
-        /// would have allowed it.
-        blocked: bool,
     },
 }
 
@@ -459,9 +442,6 @@ struct Analyzer<'a> {
     allocated_size: u64,
     instructions: u64,
     vector_instructions: u64,
-    /// D11: the target's code size of the callee's instructions that cost
-    /// (the ones the walk did not fold), in `CostKind::CodeSize` units.
-    size_units: i64,
     // InlineCostCallAnalyzer state.
     load_elimination_cost: i64,
     vector_bonus: i64,
@@ -471,7 +451,6 @@ struct Analyzer<'a> {
     cost: i64,
     single_bb: bool,
     decided_by_threshold: bool,
-    blocked_by_bound: bool,
     sroa_arg_costs: IdMap<ValueId, i64>,
 }
 
@@ -504,7 +483,6 @@ impl<'a> Analyzer<'a> {
             allocated_size: 0,
             instructions: 0,
             vector_instructions: 0,
-            size_units: 0,
             load_elimination_cost: 0,
             vector_bonus: 0,
             single_bb_bonus: 0,
@@ -513,7 +491,6 @@ impl<'a> Analyzer<'a> {
             cost: 0,
             single_bb: true,
             decided_by_threshold: false,
-            blocked_by_bound: false,
             sroa_arg_costs: IdMap::new(),
         }
     }
@@ -1673,7 +1650,6 @@ impl<'a> Analyzer<'a> {
             if !self.visit(inst) {
                 // onMissedSimplification (:835)
                 self.add_cost(INSTR_COST);
-                self.size_units += self.code_size_of(inst);
             }
             if llrm_support::env_flag!("LLRM_EXP_INLINETRACE") {
                 eprintln!(
@@ -1928,42 +1904,6 @@ impl<'a> Analyzer<'a> {
         self.finalize()
     }
 
-    /// The target's `CostKind::CodeSize` of `inst` of the callee.
-    fn code_size_of(
-        &self,
-        inst: InstId,
-    ) -> i64 {
-        let Some(tti) = self.site.tti else { return 0 };
-        llrm_mir::instructioncost::instruction_cost(
-            tti,
-            self.context,
-            self.site.layout,
-            &self.site.module.globals,
-            self.callee,
-            inst,
-            llrm_mir::tti::CostKind::CodeSize,
-        )
-        .value
-    }
-
-    /// The target's code size of the call and the pushes of its arguments,
-    /// where the target says a call is bigger than the instruction it is
-    /// counted as.
-    fn call_size(&self) -> i64 {
-        let Some(tti) = self.site.tti else { return 0 };
-        let size = llrm_mir::instructioncost::instruction_cost(
-            tti,
-            self.context,
-            self.site.layout,
-            &self.site.module.globals,
-            self.site.caller,
-            self.site.call,
-            llrm_mir::tti::CostKind::CodeSize,
-        )
-        .value;
-        (size * tti.call_code_size_percent() + 50) / 100
-    }
-
     fn finalize(&mut self) -> Result<(), String> {
         if self.site.caller_size == CallerSize::MinSize {
             let loops = loop_headers(self.callee).iter().filter(|header| !self.dead_blocks.contains(&header.0)).count();
@@ -1974,20 +1914,8 @@ impl<'a> Analyzer<'a> {
         } else if self.vector_instructions <= self.instructions / 2 {
             self.threshold -= self.vector_bonus / 2;
         }
-        // D11: the analysis above stops at LLVM's threshold; at -Os the verdict
-        // is also held to the callee's code size against the call's.
-        let pin = self.threshold.max(1);
-        let grows = self.site.caller_size == CallerSize::OptSize
-            && !self.site.sole_call_to_local
-            && self.site.tti.is_some_and(|tti| tti.opt_size_inline_by_code_size())
-            && self.size_units > self.call_size();
-        self.blocked_by_bound = grows && self.cost < pin;
-        if grows {
-            // The verdict is `cost < threshold`: the call stays.
-            self.threshold = self.threshold.min(self.cost);
-        }
         self.decided_by_threshold = true;
-        if self.cost < self.threshold.max(1) && !grows { Ok(()) } else { Err("Cost over threshold.".into()) }
+        if self.cost < self.threshold.max(1) { Ok(()) } else { Err("Cost over threshold.".into()) }
     }
 }
 
@@ -2010,7 +1938,6 @@ pub fn inline_cost(
             cost: analyzer.cost,
             threshold: analyzer.threshold,
             static_bonus: analyzer.static_bonus_applied,
-            blocked: analyzer.blocked_by_bound,
         };
     }
     match verdict {
@@ -2519,6 +2446,7 @@ fn converted_float(
 /// budget. A site `inline::cloneable` refuses stays out whatever its cost.
 ///
 /// D4: no `shouldBeDeferred` yet (D7).
+#[allow(clippy::too_many_arguments)]
 pub fn sites(
     module: &Module,
     layout: &DataLayout,
@@ -2530,41 +2458,7 @@ pub fn sites(
     size: CallerSize,
     always_only: bool,
     tti: Option<&dyn llrm_mir::tti::Tti>,
-    decided: Option<&mut Vec<(InstId, GlobalId, InlineCost)>>,
-) -> llrm_support::hash::SparseIdMap<InstId, crate::inline::Candidate> {
-    sites_with_trials(
-        module,
-        layout,
-        caller_id,
-        counts,
-        addressed,
-        recursive,
-        params,
-        size,
-        always_only,
-        tti,
-        decided,
-        None,
-    )
-}
-
-/// `sites`, and the sites the target's -Os bound alone refused whose call
-/// passes a constant or a stack slot (SZ2): `trials`
-/// takes their copies, for the walk to try inlined against not.
-#[allow(clippy::too_many_arguments)]
-pub fn sites_with_trials(
-    module: &Module,
-    layout: &DataLayout,
-    caller_id: GlobalId,
-    counts: &crate::inline::Counter,
-    addressed: &BTreeSet<GlobalId>,
-    recursive: &BTreeSet<GlobalId>,
-    params: InlineParams,
-    size: CallerSize,
-    always_only: bool,
-    tti: Option<&dyn llrm_mir::tti::Tti>,
     mut decided: Option<&mut Vec<(InstId, GlobalId, InlineCost)>>,
-    mut trials: Option<&mut llrm_support::hash::SparseIdMap<InstId, crate::inline::Candidate>>,
 ) -> llrm_support::hash::SparseIdMap<InstId, crate::inline::Candidate> {
     let mut out = llrm_support::hash::SparseIdMap::default();
     let GlobalKind::Function(caller) = &module.global(caller_id).kind else { return out };
@@ -2575,8 +2469,7 @@ pub fn sites_with_trials(
         if let Some(decided) = decided.as_deref_mut() {
             decided.push((inst, decision.callee, decision.cost.clone()));
         }
-        let blocked = matches!(decision.cost, InlineCost::Cost { blocked: true, .. });
-        if !decision.inline && !(blocked && trials.is_some() && worth_a_trial(module, caller, inst, decision.callee)) {
+        if !decision.inline {
             continue;
         }
         let GlobalKind::Function(callee) = &module.global(decision.callee).kind else { continue };
@@ -2598,93 +2491,9 @@ pub fn sites_with_trials(
                 own.iter().map(|one| frequencies.get(one).copied().unwrap_or(0.0)).sum()
             }),
         };
-        if decision.inline {
-            out.insert(inst, candidate);
-        } else if let Some(trials) = trials.as_deref_mut() {
-            trials.insert(inst, candidate);
-        }
+        out.insert(inst, candidate);
     }
     out
-}
-
-/// The stack slot or the parameter a pointer is made from, through casts and
-/// offsets.
-enum Root {
-    Slot(InstId),
-    Parameter(llrm_mir::module::ValueId),
-}
-
-fn root_of(
-    function: &llrm_mir::module::Function,
-    operand: llrm_mir::module::Operand,
-) -> Option<Root> {
-    let llrm_mir::module::Operand::Value(mut at) = operand else { return None };
-    loop {
-        match function.value(at).def {
-            llrm_mir::module::ValueDef::Argument(_) => return Some(Root::Parameter(at)),
-            llrm_mir::module::ValueDef::Instruction(def) => {
-                let instruction = function.instruction(def);
-                match instruction.opcode {
-                    Opcode::Alloca { .. } => return Some(Root::Slot(def)),
-                    Opcode::GetElementPtr { .. } | Opcode::Cast(_) => match instruction.operands[0] {
-                        llrm_mir::module::Operand::Value(next) => at = next,
-                        _ => return None,
-                    },
-                    _ => return None,
-                }
-            }
-        }
-    }
-}
-
-/// SZ2: whether a site refused by the -Os bound is worth inlining to see: the
-/// call passes the address of a stack slot the caller wrote a constant to, and
-/// the callee reads through that parameter, which the cost model does not
-/// follow (a constant argument it folds itself).
-fn worth_a_trial(
-    module: &Module,
-    caller: &llrm_mir::module::Function,
-    call: InstId,
-    callee_id: GlobalId,
-) -> bool {
-    let GlobalKind::Function(callee) = &module.global(callee_id).kind else { return false };
-    let operands = &caller.instruction(call).operands;
-    let arguments = &operands[..operands.len().saturating_sub(1)];
-    let written = |slot: InstId| {
-        caller
-            .walk()
-            .any(
-                |(_, inst)| {
-                    let store = caller.instruction(inst);
-                    matches!(store.opcode, Opcode::Store { .. })
-                        && matches!(store.operands[0], llrm_mir::module::Operand::Constant(_))
-                        && matches!(
-                            root_of(caller, store.operands[1]),
-                            Some(Root::Slot(one)) if one == slot
-                        )
-                },
-            )
-    };
-    let read_through: Vec<llrm_mir::module::ValueId> = callee
-        .walk()
-        .filter_map(|(_, inst)| {
-            let load = callee.instruction(inst);
-            match (&load.opcode, root_of(callee, *load.operands.first()?)) {
-                (Opcode::Load { .. }, Some(Root::Parameter(parameter))) => Some(parameter),
-                _ => None,
-            }
-        })
-        .collect();
-    arguments
-        .iter()
-        .zip(callee.parameters())
-        .any(
-            |(argument, parameter)| read_through.contains(parameter)
-                && matches!(
-                    root_of(caller, *argument),
-                    Some(Root::Slot(slot)) if written(slot)
-                ),
-        )
 }
 
 /// What `decide` reads of the module besides the site.
