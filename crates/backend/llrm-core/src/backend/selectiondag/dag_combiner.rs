@@ -263,6 +263,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> Option<SDValue> {
         match self.dag.opcode(node) {
             ISD::TokenFactor => self.visit_token_factor(node),
+            ISD::Load => self.visit_load(node),
             ISD::MergeValues => self.visit_merge_values(node),
             ISD::Select => self.visit_select(node),
             ISD::Store => self.visit_store(node),
@@ -1409,6 +1410,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> Option<SDValue> {
         let (chain, value, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
         let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+        // Walk up the chain skipping the memory nodes this store does not
+        // alias, on it and on the stores chained below it.
+        if let Some(better) = self.find_better_neighbor_chains(node) {
+            return Some(better);
+        }
         if let Some(split) = self.split_pair_store(node) {
             return Some(split);
         }
