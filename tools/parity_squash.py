@@ -558,10 +558,17 @@ def format_head(head: str, branch: str, base: str = BASE, cwd: Path = ROOT) -> t
             subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=cwd, capture_output=True)
 
 
-def build_offenders(group: list[str], merge_alone, check) -> list[str]:
+def build_offenders(group: list[str], merge_alone, check, errors: dict[str, str] | None = None) -> list[str]:
     """The PRs of `group` whose own merge on the head does not build: `merge_alone(number)` merges one onto a clean head (False when it cannot), `check()` is the build error or "". A batch that
-    fails to build with no PR at fault alone (two halves that compile apart) names none and is halved. The 21:02 batch (#3763's new ISD variants against #3806's) refused every PR."""
-    return [number for number in group if merge_alone(number) and check()]
+    fails to build with no PR at fault alone (two halves that compile apart) names none and is halved. The 21:02 batch (#3763's new ISD variants against #3806's) refused every PR.
+    `errors` receives each culprit's own build error: the 16:56 batch printed the batch's error for #4743, which built clean when asked alone."""
+    found = []
+    for number in group:
+        if merge_alone(number) and (error := check()):
+            found.append(number)
+            if errors is not None:
+                errors[number] = error
+    return found
 
 
 def refusal_line(number: str, named: dict[str, str], failed_build: list[str], failed_units: set[str]) -> str:
@@ -1098,8 +1105,9 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
     def offending(group: list[str]) -> list[str]:
         """The PRs of `group` that fail what the batch failed, each merged alone on the head: the unit asked exactly (a minute at most per PR), or the build; none when nothing is known."""
         if failed_build:
-            culprits = build_offenders(group, merge_alone, lambda: _workspace_check(ROOT))
-            named.update({number: f"alone on the head it does not build: {failed_build[-1][:160]}" for number in culprits})
+            own = {}
+            culprits = build_offenders(group, merge_alone, lambda: _workspace_check(ROOT), own)
+            named.update({number: f"alone on the head it does not build: {own[number][:160]}" for number in culprits})
             return culprits
         wrong = sorted(name[len("behavioural ") :] for name in failed_units if name.startswith("behavioural "))
         if wrong:
