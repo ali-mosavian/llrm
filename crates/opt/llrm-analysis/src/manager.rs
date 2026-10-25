@@ -312,7 +312,10 @@ impl ModuleAnalysis for Summaries {
             Some(held) => Result::as_ref(&**held).map_err(String::clone)?.tracked_globals(),
             None => &none,
         };
-        Ok(crate::attrsummary::summaries(module, &analyses.program().layout, tracked))
+        // The one `GlobalsAAResult` of the module, as the pin has: the held
+        // `GlobalsModRef`, not another made for each run.
+        let found = analyses.get::<GlobalsModRefAnalysis>(module);
+        Ok(crate::attrsummary::summaries(module, &analyses.program().layout, tracked, &found))
     }
 }
 
