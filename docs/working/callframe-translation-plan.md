@@ -38,3 +38,20 @@ Pieces, one PR each, rows priced after each (AM-BT 30, `qcport.py` m32 -O2/-Os, 
 3. Delete `pushed_dwords` (CF3) and `canFoldIntoRegPush`/`PUSH32rmm` fold (pieces 3-4 above) so `push [m]` returns where the pin has it.
 
 Risks: sp-relative addressing of locals and incoming arguments inside a call sequence (the area moves from per-call to the prologue: offsets change); `-Os`/`-Oz` profitability (the pin pushes always at minsize); the 16-byte alignment padding of sysv (`sub esp, 4` before the pushes).
+
+## Design 2026-10-26: the reserved frame (piece 2), no frame indices needed
+
+Owner: w12. Pin: `hasReservedCallFrame` = no variable-sized objects; `calculateCallFrameInfo` = largest `ADJCALLSTACKDOWN` size; `eliminateCallFramePseudoInstr` drops the pair (a callee-popped `M` becomes `sub sp, M`); `isProfitable` is consulted only when a frame is reserved.
+
+**Choice: add the largest area to the prologue's `sub`, not frame indices (FI-1) and not locals recomputed.** The area is the lowest bytes of the frame. Locals and spills are addressed from BP, or by masm as `[sp + depth - slot]` with `depth` counting the prologue's `sub`; a larger `sub` moves `sp` and `depth` together, so no cell's address changes. The `mov [sp+k]` stores are raw sp cells, unshifted. FI-1 stays its own item (row 80); this does not wait for it.
+
+**Numbers** (QCport m32 -O2, 65 modules): 575 functions, 4206 calls; 702 call sequences (17%) keep a mid-body `sub esp`/`add esp` pair that a reserved frame removes (each ~6 B, `isProfitable`'s own figure). Turning `has_var_sized` to the pin's `false` alone (profitability on, pairs still per call) already gives -O1 -0.7%, -O2 -0.88%, -O3 -0.7%, -Os -0.28% against always-push (341,031 to 338,040 B at -O2); measured with the pairs still in, so the reservation adds to it.
+
+**PRs**, each priced on QCport m32 and `run_tests.py c`:
+1. `has_var_sized` false where the function has no variable-sized object (CF4 stays as the lowering of what is left). Test: a function the heuristic declines keeps `sub`/`mov`/`add`.
+2. `ReserveCallFrame` replaces `LowerCallFrame` and runs in `Prologue` (the pseudos live through allocation, as the pin's): max of `N - A` over setups added to the frame size, pairs removed, callee-popped `M` becomes `sub sp, M`. `framefree::pinned_by` then needs no pseudo arm. Variable-sized objects keep the per-call `sub`/`add` and always push (`CannotReserveFrame`).
+3. Delete CF3 leftovers (`LowerCallFrame`, DEVIATE CF4/CF5) and fold `push [m]` as the pin does (pieces 3-4 above).
+
+Risks: allocation and the spiller seeing Barrier pseudos instead of `sub`/`add` (priced by the DOSBox C sweep); sysv 16-byte alignment padding of the area (`sub esp, 4`), which the pin folds into the reserved size.
+
+Dates: PR 1 2026-10-27, PR 2 2026-11-13, PR 3 2026-11-17.
