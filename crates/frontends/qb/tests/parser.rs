@@ -2376,3 +2376,16 @@ fn redim_preserve_calls_b_rdmp_with_redims_operands() {
     assert_eq!(kept.matches("\"callee\":\"B$RDMP\"").count(), 1, "{kept}");
     assert_eq!(plain.matches("\"callee\":\"B$RDMP\"").count(), 0, "{plain}");
 }
+
+#[test]
+fn a_dim_as_in_a_procedure_may_reuse_a_name_the_module_shares_with_a_suffix() {
+    // corpus [scope], BC output: `DIM SHARED x%, x%(5)` then `DIM x AS INTEGER` (or `DIM x(5) AS
+    // INTEGER`) in a SUB compiles under PDS 7.1 and VBDOS; llrm refused "AS clause required on
+    // first declaration". The same two DIMs side by side at module level stay refused.
+    let sub = |dim: &str| format!("DIM SHARED x%, x%(5)\r\nSUB p\r\n{dim}\r\nEND SUB\r\n");
+    for dialect in [Dialect::Pds71, Dialect::VbDos] {
+        assert!(parse(&sub("DIM x(5) AS INTEGER"), dialect).is_ok(), "{dialect:?}");
+    }
+    assert!(parse(&sub("DIM x AS INTEGER"), Dialect::Pds71).is_ok());
+    assert!(parse("DIM x% : DIM x AS INTEGER\r\n", Dialect::Pds71).is_err());
+}
