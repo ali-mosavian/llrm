@@ -487,3 +487,49 @@ fn a_zero_extended_byte_read_as_a_dword_too_stays_a_dword() {
         insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("movzx")).expect("a movzx");
     assert!(matches!(extend.dests.as_slice(), [Loc::Held(h)] if h.width == 4), "{extend:?}");
 }
+
+/// `if (c & 1) g(); else h();` written as a compare of the masked value, in
+/// both polarities and both arm orders, was `mov eax, [esp+4]; and al, 1; je`:
+/// only the truncate form narrowed. The pin's `X86ISD::CMP` case makes every
+/// one `test byte [esp+4], 1`.
+#[test]
+fn a_masked_compare_with_zero_tests_one_byte_in_memory_whatever_its_polarity() {
+    use crate::model::ir::Loc;
+    for cc in ["eq", "ne"] {
+        for (yes, no) in [("a", "b"), ("b", "a")] {
+            let ir = format!(
+                "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @g()
+declare void @h()
+define void @f(i32 %c) {{
+  %m = and i32 %c, 1
+  %t = icmp {cc} i32 %m, 0
+  br i1 %t, label %{yes}, label %{no}
+a:
+  call void @g()
+  ret void
+b:
+  call void @h()
+  ret void
+}}
+"
+            );
+            let module = llrm_mir::parse::module(&ir).expect("parses");
+            let done =
+                selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+                    .unwrap_or_else(|e| panic!("{}", e.0));
+            let insns = done.body.insns();
+            let whats: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref()).collect();
+            let reads: Vec<u32> = whats
+                .iter()
+                .flat_map(|w| w.sources.iter())
+                .filter_map(|l| if let Loc::Mem(m) = l { Some(m.width) } else { None })
+                .collect();
+            assert_eq!(reads, [1], "{cc} {yes}/{no}: one byte read, no dword: {reads:?}");
+            assert!(
+                !whats.iter().any(|w| w.name.as_deref() == Some("and")),
+                "{cc} {yes}/{no}: no and left before the test"
+            );
+        }
+    }
+}
