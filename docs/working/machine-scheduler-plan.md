@@ -37,7 +37,7 @@ Order to land (cheapest evidence first):
 4. `tryBiasPhysRegs`. Needs a physical-register copy graph; with item 1 the copies at a call or a return sit outside the region. Effect: argument and return copies; unmeasured.
 5. MS6 `Rem.IsAcyclicLatencyLimited`. The pin turns on its height/depth heuristic in a loop whose in-flight micro-ops pass the buffer (32). Effect: loops of 32+ instructions only; unmeasured.
 6. `pressuresink.rs` still runs before the scheduler (plan piece 4). Delete it once rows show nothing worse; its loads are what the scheduler places.
-7. MS5 targets with no pressure sets (m16) count every register as one set; m16 has no per-set limits in `M32.pressure()`-style data.
+7. MS5 targets with no pressure sets (m16) count every register as one set; m16 has no `pressure()` data.
 8. Not the scheduler, same family: the DAG's own scheduling preference (`LLRM_SRC_ORDER`, #4717); the default (off) is the right one (dag +0.4% vs pin; source order was +5.9%).
 
 Not applicable on the i486 (no model): clusters, weak edges, stalls, resources, `ReduceLatency` (never set bottom-up). Compile-time effect (d_faces) of the scheduler and of each item: not measured; the pass runs on regions over half the registers only.
