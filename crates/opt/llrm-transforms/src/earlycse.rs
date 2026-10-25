@@ -1222,11 +1222,23 @@ impl FunctionPass for EarlyCse {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
-        let accesses =
-            self.memory_ssa.then(|| match Accesses::managed(unit.context, unit.layout, unit.function, analyses) {
-                Ok(accesses) => accesses,
-                Err(error) => panic!("earlycse: {error}"),
-            });
+        // The accesses the manager's graph is read with (no provenance is
+        // annotated: the AA stack answers every pair).
+        let graph = self.memory_ssa.then(|| analyses.get::<MemorySsa>(unit.context, unit.layout, unit.function));
+        let accesses = graph
+            .as_ref()
+            .map(
+                |graph| match &**graph {
+                    Ok(graph) => match graph.accesses(unit.context, unit.layout, unit.function, analyses) {
+                        Ok(accesses) => accesses,
+                        Err(error) => panic!("earlycse: {error}"),
+                    },
+                    Err(_) => match Accesses::managed(unit.context, unit.layout, unit.function, analyses) {
+                        Ok(accesses) => accesses,
+                        Err(error) => panic!("earlycse: {error}"),
+                    },
+                },
+            );
         let tree = analyses.get::<Dominators>(unit.context, unit.layout, unit.function);
         // MemorySSA describes the function as it is now; the walk changes
         // `unit.function`, which this copy and the context's copy do not
@@ -1242,8 +1254,8 @@ impl FunctionPass for EarlyCse {
         // keeps MemorySSA through `PA.preserve<MemorySSAAnalysis>()`).
         let (view_of_memory, kept_accesses): (Box<dyn MemorySsaView + '_>, _) = match &accesses {
             Some(accesses) => {
-                let held = analyses.get::<MemorySsa>(unit.context, unit.layout, unit.function);
-                let (mssa, kept_accesses) = match &*held {
+                let held = graph.as_ref().expect("a graph with the accesses");
+                let (mssa, kept_accesses) = match &**held {
                     Ok(held) => {
                         (held.mssa.clone(), held.accesses(unit.context, unit.layout, unit.function, analyses).ok())
                     }

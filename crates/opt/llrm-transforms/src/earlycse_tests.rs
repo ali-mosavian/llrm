@@ -297,6 +297,20 @@ fn test_the_memory_graph_early_cse_updated_is_the_one_the_next_pass_gets() {
     assert!(hits >= 2, "EarlyCSE and the pass after it read the one graph: {hits} hits");
 }
 
+/// EarlyCSE read the manager's annotated accesses beside its graph's
+/// unannotated ones: the AA stack answers every pair, so it asks `Annotated`
+/// nothing (5.8 M Ir over 11 bodies on d_faces -O2).
+#[test]
+fn test_early_cse_with_memory_ssa_annotates_nothing() {
+    let mut module = parsed(&format!("{DOS}{ONE_LOAD_TWICE}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(EarlyCse::default());
+    let before = llrm_mir::counts::analysed("annotated");
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
+    let after = llrm_mir::counts::analysed("annotated");
+    assert_eq!(after.1 - before.1, 0, "EarlyCSE made the annotated accesses");
+}
+
 /// A pass that edits and keeps nothing still drops it: the graph after is new.
 #[test]
 fn test_the_memory_graph_is_computed_again_after_a_pass_that_keeps_nothing() {
