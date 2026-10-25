@@ -467,3 +467,41 @@ fn a_fill_through_a_far_pointer_stores_through_its_selector() {
         );
     assert!(!from_a_constant, "ES takes a constant (DGROUP), not the pointer's selector");
 }
+
+const TWO_FAR_LOADS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define cc 1000 i32 @f(i16 %0, i16 %1) addrspace(1) {
+b1:
+  %2 = inttoptr i16 %0 to ptr addrspace(2)
+  %3 = addrspacecast ptr addrspace(2) %2 to ptr addrspace(1)
+  %4 = load i16, ptr addrspace(1) %3
+  %5 = sext i16 %4 to i32
+  %6 = inttoptr i16 %1 to ptr addrspace(2)
+  %7 = addrspacecast ptr addrspace(2) %6 to ptr addrspace(1)
+  %8 = load i16, ptr addrspace(1) %7
+  %9 = sext i16 %8 to i32
+  %10 = mul nsw i32 %9, %5
+  ret i32 %10
+}
+";
+
+/// Two loads through ES from two segments read the same one: both
+/// `CopyToReg ES` came before both loads, and a load took the last selector
+/// set (QB's `CLNG(a(i, k)) * b(k, j)` read `b * b`: matmul printed 54349 for
+/// 353712).
+#[test]
+fn two_loads_through_es_read_their_own_selectors() {
+    use crate::model::ir::Loc;
+    let module = llrm_mir::parse::module(TWO_FAR_LOADS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+    let selectors: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .flat_map(|w| w.sources.iter())
+        .filter_map(|source| if let Loc::Mem(cell) = source { cell.selector } else { None })
+        .collect();
+    assert_eq!(selectors.len(), 2, "{selectors:?}");
+    assert_ne!(selectors[0], selectors[1], "both loads take one selector");
+}
