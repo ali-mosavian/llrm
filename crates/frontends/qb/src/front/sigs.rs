@@ -2,8 +2,9 @@
 //! what class, and the type each returns. Calibrated against BC itself
 //! (corpus/): a function is here with the shape BC took.
 
-use std::collections::HashMap;
 use std::sync::OnceLock;
+
+use llrm_support::hash::HashMap;
 
 use crate::Dialect;
 
@@ -217,7 +218,7 @@ fn class_of(letter: char) -> Class {
 fn table() -> &'static HashMap<&'static str, FnSig> {
     static CELL: OnceLock<HashMap<&'static str, FnSig>> = OnceLock::new();
     CELL.get_or_init(|| {
-        let mut map = HashMap::new();
+        let mut map = HashMap::default();
         for line in TABLE.lines() {
             let (head, ret) = line.split_once("=>").expect("a signature");
             // `Ret:flags`: p PDS, v VBDOS (neither: all families), P

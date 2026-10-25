@@ -179,6 +179,9 @@ pub struct InlineParams {
     /// `AllowRecursiveCall`: a callee that calls itself is priced, not
     /// refused. The pin's is false; D10 (`-finline-recursive`) sets it.
     pub allow_recursive_call: bool,
+    /// The `LastCallToStatic` bonus applies. The pin's always does;
+    /// `-fno-inline-functions-called-once` turns it off.
+    pub last_call_to_static: bool,
     /// Which target's answers `getInstructionCost` and its kin give (D2).
     pub tti: Tti,
 }
@@ -208,6 +211,7 @@ impl InlineParams {
             opt_size_threshold: OPT_SIZE_THRESHOLD,
             compute_full_inline_cost: false,
             allow_recursive_call: false,
+            last_call_to_static: true,
             tti: Tti::Generic,
         }
     }
@@ -1717,7 +1721,7 @@ impl<'a> Analyzer<'a> {
         } else {
             let mut single_bb_percent = 50;
             let mut vector_percent = VECTOR_BONUS_PERCENT;
-            let mut last_call_bonus = LAST_CALL_TO_STATIC_BONUS;
+            let mut last_call_bonus = if self.params.last_call_to_static { LAST_CALL_TO_STATIC_BONUS } else { 0 };
             let caller_size = self.site.caller_size;
             match caller_size {
                 CallerSize::MinSize => {
