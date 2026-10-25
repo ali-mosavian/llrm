@@ -42,9 +42,8 @@
 //! `ReplaceValueWith`
 //! ([L636](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeTypes.cpp#L636)).
 
-use std::collections::HashMap;
-
 use llrm_mir::hash::HashSet;
+use llrm_support::hash::HashMap;
 
 use super::actions::TargetLowering;
 use super::dag::{BooleanContents, NodeData, Rauw, SDNodeFlags, SDValue, SelectionDAG};
@@ -96,9 +95,9 @@ impl<'a> TypeLegalizer<'a> {
             tli,
             ids: Vec::new(),
             worklist: Vec::new(),
-            replaced: HashMap::new(),
-            promoted: HashMap::new(),
-            expanded: HashMap::new(),
+            replaced: HashMap::default(),
+            promoted: HashMap::default(),
+            expanded: HashMap::default(),
             target: None,
             hooks: None,
         }
@@ -173,6 +172,7 @@ impl<'a> TypeLegalizer<'a> {
         }
         while let Some(n) = self.worklist.pop() {
             debug_assert_eq!(self.id(n), NodeId::Ready, "a node on the worklist is ready");
+            self.dag.cur_order = self.dag.node(SDValue { node: n, res: 0 }).order;
             if !self.ignores_results(n) && self.legalize_results(n)? {
                 changed = true;
             } else if self.legalize_operands(n)? {
@@ -861,8 +861,7 @@ impl<'a> TypeLegalizer<'a> {
     }
 
     /// `ExpandIntRes_Shift`: by a constant, or as the target's double-width
-    /// shift (`SHL_PARTS`, ...). `ExpandShiftWithKnownAmountBit` needs known
-    /// bits (SD202) and the library calls are not translated.
+    /// shift (`SHL_PARTS`, ...). The library calls are not translated.
     fn expand_shift(
         &mut self,
         value: SDValue,
@@ -890,8 +889,55 @@ impl<'a> TypeLegalizer<'a> {
             std::cmp::Ordering::Less => self.dag.get_node(ISD::ZeroExtend, shift_vt, &[amount]),
             std::cmp::Ordering::Equal => amount,
         };
+        if let Some(pair) = self.expand_shift_with_known_amount_bit(op, (lo, hi), amount, half) {
+            return Ok(pair);
+        }
         let both = self.dag.get_node_multi(parts, &[half, half], &[lo, hi, amount]);
         Ok((both, SDValue { node: both.node, res: 1 }))
+    }
+
+    /// `ExpandShiftWithKnownAmountBit`: bit `log2(half)` of the amount is
+    /// known, so the shift is one half-width shift (set) or a shift and a
+    /// funnel shift (clear). DEVIATE SD314: a clear bit without a legal or
+    /// custom funnel shift stays a parts node (the pin shifts, subtracts and
+    /// selects). Exit: with the generic `Amt == 0` expansion. Owner sdag-b.
+    /// Review 2026-12-10.
+    fn expand_shift_with_known_amount_bit(
+        &mut self,
+        op: ISD,
+        (lo, hi): (SDValue, SDValue),
+        amount: SDValue,
+        half: EVT,
+    ) -> Option<(SDValue, SDValue)> {
+        let high = 1u128 << half.size_in_bits().ilog2();
+        let known = super::known_bits::known_bits(self.dag, amount);
+        let (set, clear) = (known.one & high != 0, known.zero & high != 0);
+        let funnel = if op == ISD::Shl { ISD::FShl } else { ISD::FShr };
+        if !set && !(clear && self.tli.is_operation_legal_or_custom(funnel, half)) {
+            return None;
+        }
+        if set {
+            let keep = self.dag.get_constant(!high & 0xFF, EVT::I8);
+            let rest = self.dag.get_node(ISD::And, EVT::I8, &[amount, keep]);
+            return Some(match op {
+                ISD::Shl => (self.dag.get_constant(0, half), self.dag.get_node(ISD::Shl, half, &[lo, rest])),
+                ISD::Srl => (self.dag.get_node(ISD::Srl, half, &[hi, rest]), self.dag.get_constant(0, half)),
+                _ => {
+                    let sign = self.dag.get_constant(u128::from(half.size_in_bits() - 1), EVT::I8);
+                    (self.dag.get_node(ISD::Sra, half, &[hi, rest]), self.dag.get_node(ISD::Sra, half, &[hi, sign]))
+                }
+            });
+        }
+        Some(match op {
+            ISD::Shl => (
+                self.dag.get_node(ISD::Shl, half, &[lo, amount]),
+                self.dag.get_node(ISD::FShl, half, &[hi, lo, amount]),
+            ),
+            _ => (
+                self.dag.get_node(ISD::FShr, half, &[hi, lo, amount]),
+                self.dag.get_node(if op == ISD::Srl { ISD::Srl } else { ISD::Sra }, half, &[hi, amount]),
+            ),
+        })
     }
 
     /// `ExpandShiftByConstant`.

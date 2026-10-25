@@ -51,8 +51,6 @@
 //! Called by the loop vectorizer and loop distribution once they are
 //! translated; not a pass here (`LoopVersioningPass` is a unit-test shim).
 
-use std::collections::HashMap;
-
 use llrm_analysis::runtimecheck::{RuntimePointerCheck, RuntimePointerChecking};
 use llrm_analysis::scev::expander::Expander;
 use llrm_mir::domtree::DomTree;
@@ -60,6 +58,7 @@ use llrm_mir::edit::{Position, ValueMap};
 use llrm_mir::loopinfo::{Loop, LoopInfo};
 use llrm_mir::module::{BlockId, Function, InstId, MetadataId, MetadataNode, MetadataOperand, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, Opcode};
+use llrm_support::hash::HashMap;
 
 use crate::edges;
 use crate::lcssa::{arms, from_arms};
@@ -113,10 +112,10 @@ impl<'a> LoopVersioning<'a> {
             alias_checks: checks.to_vec(),
             rtc,
             memory_instructions,
-            ptr_to_group: HashMap::new(),
-            group_to_scope: HashMap::new(),
-            group_to_non_aliasing_scope_list: HashMap::new(),
-            tuples: HashMap::new(),
+            ptr_to_group: HashMap::default(),
+            group_to_scope: HashMap::default(),
+            group_to_non_aliasing_scope_list: HashMap::default(),
+            tuples: HashMap::default(),
         }
     }
 
@@ -380,7 +379,7 @@ impl<'a> LoopVersioning<'a> {
         // Go through the checks and for each pointer group, collect the
         // scopes for each non-aliasing pointer group.
         let mut order: Vec<usize> = Vec::new();
-        let mut group_to_non_aliasing_scopes: HashMap<usize, Vec<MetadataOperand>> = HashMap::new();
+        let mut group_to_non_aliasing_scopes: HashMap<usize, Vec<MetadataOperand>> = HashMap::default();
         for &(first, second) in &self.alias_checks {
             if !group_to_non_aliasing_scopes.contains_key(&first) {
                 order.push(first);

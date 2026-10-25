@@ -21,8 +21,6 @@
 //! # Runs
 //! Called by [`crate::loopversioning`]; the vectorizer will call it too.
 
-use std::collections::HashMap;
-
 use llrm_analysis::runtimecheck::{
     PointerDiffInfo, RuntimeCheckingPtrGroup, RuntimePointerCheck, RuntimePointerChecking,
 };
@@ -37,6 +35,7 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::Declared;
 use llrm_mir::simplify::{simplify_binop_operands, simplify_icmp_operands};
+use llrm_support::hash::HashMap;
 
 /// What expanding and building check code needs.
 pub struct Rewriter<'a> {
@@ -302,7 +301,7 @@ impl Rewriter<'_> {
     ) -> Option<Operand> {
         // Our instructions might fold to a constant.
         let mut memory_runtime_check: Option<Operand> = None;
-        let mut seen_compares: HashMap<(Operand, Operand), Operand> = HashMap::new();
+        let mut seen_compares: HashMap<(Operand, Operand), Operand> = HashMap::default();
         exp.set_insert_point(loc);
         for check in checks {
             assert!(ic * check.access_size > 0, "Threshold must be non-zero to use diff-check");
