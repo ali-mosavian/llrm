@@ -917,8 +917,10 @@ pub fn process_loop(
 pub fn rotate_loops(run: &mut Run) -> bool {
     let analyze = |run: &Run| LoopInfo::analyze(run.function, || llrm_mir::domtree::DomTree::of(run.function));
     let mut info = analyze(run);
+    // The loop pass manager's worklist is popped from the back: a loop's
+    // children before it, siblings in program order.
     let headers: Vec<BlockId> =
-        info.get_loops_in_reverse_sibling_preorder().iter().map(|one| one.get_header()).collect();
+        info.get_loops_in_reverse_sibling_preorder().iter().rev().map(|one| one.get_header()).collect();
     let mut stale = IdSet::<BlockId>::new();
     let mut changed = false;
     for header in headers {
