@@ -43,8 +43,9 @@ fn a_call_is_a_sequence_around_a_call_instruction() {
     // The area is the pin's pseudo pair around the call; `callframe.rs` makes
     // them pushes or `sub`/`add`.
     let called = names.iter().position(|n| n == "call").unwrap();
-    let setup = names.iter().position(|n| n == "call_frame_setup").expect("a setup");
-    assert!(setup < called, "{names:?}");
+    // After the argument load and the increment, as the pin's finalize-isel
+    // has them (`visitTokenFactor` frees the call's chain from the arguments).
+    assert_eq!(names.iter().position(|n| n == "call_frame_setup"), Some(2), "{names:?}");
     assert_eq!(names.get(called + 1).map(String::as_str), Some("call_frame_destroy"), "{names:?}");
     assert!(!names.iter().any(|n| n == "sub"), "{names:?}");
 }
