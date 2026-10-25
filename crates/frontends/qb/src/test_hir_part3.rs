@@ -1461,9 +1461,13 @@ SUB b\r\nPOKE 5, PEEK(4)\r\nEND SUB\r\n";
     assert_eq!(loads, 0, "{optimized}");
     let kept =
         optimized.lines().filter(|line| line.trim().starts_with("store i16 ") && line.contains("ptr @b$seg")).count();
-    // VARSEG's selector is now a constant address, so a's first b$seg store is
-    // dead too (-1 store, -3 instructions).
-    assert!(optimized.contains("addrspacecast (ptr @\"ARR%\"") && kept == 1, "{optimized}");
+    // VARSEG's selector is a constant address, but the PEEK/POKE offsets are
+    // relative to that segment's base, not to ARR%: they can reach any byte of
+    // the data segment, b$seg included. A forged-selector pointer is therefore
+    // no proven-disjoint access (188fd3905, DEVIATE C1, forging.rs), and a's
+    // first b$seg store is kept, as the second is (+1 store, +3 instructions
+    // against the earlier expectation that it was dead).
+    assert!(optimized.contains("addrspacecast (ptr @\"ARR%\"") && kept == 2, "{optimized}");
 }
 
 #[test]
