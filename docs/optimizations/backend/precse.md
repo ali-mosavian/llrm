@@ -65,11 +65,12 @@ stack argument (an immutable fixed object). The pin also takes GOT and
 constant-pool loads, which ours lacks; the old selector reads an incoming
 argument as a memory operand of its reader, not a load of its own.
 
-DEVIATE CSE5 (owner funcattrs-port, exit 2026-11-13): `machinecse.rs`, the
-same elimination after allocation, is ours alone (the pin runs MachineCSE
-once, before allocation). Removed, 10 of 568 objects grow and none shrinks
-(shellsort m16 +15 B, x_mergesort m32 +34, m16 +187, same tree both sides):
-it stays until what it finds there is found before allocation.
+Row CSE5 (was DEVIATE CSE5, retired 2026-10-25): `machinecse.rs`, the same
+elimination after allocation, was ours alone (the pin runs MachineCSE once,
+before allocation). Deleted: 3.7 M Ir of d_faces (dist). Removing it, 8 of 568
+objects grow and none shrinks (x_mergesort m16 -Os +34 B, shellsort m16 +22,
+lru m32 -Os +15), QCport +0.03% to +0.11%. Exit: CSE2 and the pin's
+rematerialization of the cases it found.
 
 ## Example
 `v3 := add v1, v2` in a block and `v7 := add v1, v2` in a block it
