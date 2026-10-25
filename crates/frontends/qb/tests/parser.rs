@@ -1980,7 +1980,12 @@ fn a_power_of_a_variable_base_covers_the_whole_domain() {
     let module = parse("b! = -2: e! = 3\r\nr! = b! ^ e!\r\ns# = sqr(2#) ^ 1.5\r\n", Dialect::QuickBasic45).unwrap();
     let hir = compile(&module, "general_power", Dialect::QuickBasic45, "qb45").unwrap();
     assert_eq!(hir.matches("\"op\":\"fexp2\"").count(), 4, "{hir}");
-    assert_eq!(hir.matches("\"callee\":\"B$SERR\"").count(), 2, "{hir}");
+    // Each power raises error 5 (0 ^ negative) once and error 6 (overflow) twice, as BC does; the
+    // overflow checks came with 7a99c56e9 and left the count at 2 until now.
+    let raised = |code: u32| {
+        hir.split("\"callee\":\"B$SERR\"").skip(1).filter(|call| call.contains(&format!("\"value\":{code}}}"))).count()
+    };
+    assert_eq!((raised(5), raised(6)), (2, 4), "{hir}");
 }
 
 #[test]
