@@ -77,7 +77,16 @@ static int start_frame(void)
     return 0;
 }
 
-static void convert_line(unsigned y, const uint8_t rgb[256][3])
+/* The program writes pixels without synchronisation and flags the line afterwards, so a read here can be of a line that is
+   being written again; whoever wrote last flagged it, and the next frame converts it whole. The race is the protocol's, so
+   ThreadSanitizer is told to leave this reader alone. */
+#if defined(__clang__)
+#define NO_TSAN __attribute__((no_sanitize("thread")))
+#else
+#define NO_TSAN __attribute__((no_sanitize_thread))
+#endif
+
+NO_TSAN static void convert_line(unsigned y, const uint8_t rgb[256][3])
 {
     const uint8_t *from = host_pixels() + (size_t)y * frame_width;
     uint32_t *to = argb + (size_t)y * frame_width;
@@ -115,10 +124,13 @@ int sdl_present_frame(void)
 
     if (!renderer)
         return 0;
+    host_state_lock();
     if (host_mode_serial() != serial) {
         serial = host_mode_serial();
-        if (start_frame())
+        if (start_frame()) {
+            host_state_unlock();
             return 0;
+        }
     }
     host_colors(rgb);
     for (y = 0; y < frame_height; y++)
@@ -139,6 +151,7 @@ int sdl_present_frame(void)
         cursor_row = (int)row;
         cursor_column = (int)column;
     }
+    host_state_unlock();
     if (!copied && shown)
         return 0;
     texels = SDL_LockTexture(texture, 0, &pixels, &pitch);

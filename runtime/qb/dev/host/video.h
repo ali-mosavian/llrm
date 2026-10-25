@@ -25,6 +25,11 @@ enum {
 enum { HOST_MODE_TEXT = 3, HOST_MODE_CGA4 = 4, HOST_MODE_CGA2 = 6, HOST_MODE_EGA320 = 0x0D };
 
 /* The flag of each line of the frame; see above. */
+/* The SDL thread holds this while it reads the mode, palette, cursor and pixels (host_colors, host_cursor and the
+   conversion of dirty lines); the program holds it while it changes them. */
+void host_state_lock(void);
+void host_state_unlock(void);
+
 extern _Atomic uint8_t host_dirty[HOST_MAX_HEIGHT];
 
 /* Text mode, cleared, as at the start of a program. */

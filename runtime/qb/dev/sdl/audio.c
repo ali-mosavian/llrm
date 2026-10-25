@@ -9,11 +9,11 @@ enum { RATE = 44100, SAMPLES = 512, AMPLITUDE = 6000, RAMP = 120 };
 
 static SDL_AudioDeviceID device;
 static atomic_uint wanted;
-static unsigned making;
+static atomic_uint making;
 
 unsigned sdl_audio_current(void)
 {
-    return making;
+    return atomic_load_explicit(&making, memory_order_relaxed);
 }
 
 void sdl_audio_tone(unsigned hertz)
@@ -30,7 +30,7 @@ static void fill(void *unused, Uint8 *stream, int bytes)
     unsigned hertz = atomic_load_explicit(&wanted, memory_order_relaxed);
 
     (void)unused;
-    making = hertz;
+    atomic_store_explicit(&making, hertz, memory_order_relaxed);
     for (at = 0; at < count; at++) {
         int target = 0;
 

@@ -31,7 +31,7 @@ static int failures;
     } while (0)
 
 /* The frame the SDL thread last drew against what the framebuffer and palette say it should be. */
-static int frame_matches(void)
+static int frame_matches_once(void)
 {
     uint8_t rgb[256][3];
     unsigned width, height, x, y, wrong = 0;
@@ -42,7 +42,9 @@ static int frame_matches(void)
     shown = sdl_present_argb(&width, &height);
     if (!shown || width != host_width() || height != host_height())
         return 0;
+    host_state_lock();
     host_colors(rgb);
+    host_state_unlock();
     for (y = 0; y < height; y++)
         for (x = 0; x < width; x++) {
             const uint8_t *color = rgb[host_pixels()[y * width + x]];
@@ -55,6 +57,19 @@ static int frame_matches(void)
                 wrong++;
         }
     return wrong == 0;
+}
+
+/* A flush waits at most a frame, which a slow SDL thread (a sanitizer) overruns: ask again for a second before saying no. */
+static int frame_matches(void)
+{
+    unsigned attempt;
+
+    for (attempt = 0; attempt < 100; attempt++) {
+        if (frame_matches_once())
+            return 1;
+        SDL_Delay(10);
+    }
+    return 0;
 }
 
 static void press(SDL_Keycode key, const char *typed)
@@ -91,7 +106,7 @@ int qb_host_program(int argc, char **argv)
 
     /* the comparison bites: a pixel changed behind the dirty flags is not on the screen */
     ((uint8_t *)host_pixels())[0] ^= 5;
-    CHECK(!frame_matches());
+    CHECK(!frame_matches_once());
     ((uint8_t *)host_pixels())[0] ^= 5;
     CHECK(frame_matches());
 

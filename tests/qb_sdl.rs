@@ -29,15 +29,29 @@ fn flags(config: &Path, which: &str) -> Vec<String> {
 
 #[test]
 fn the_sdl_platform_presents_what_the_program_draws() {
+    smoke(None);
+}
+
+/// ThreadSanitizer reported data races between the program and the SDL thread (mode, palette and cursor state, the
+/// audio tone) and failed the first frame check: the smoke now passes clean.
+#[test]
+fn the_sdl_platform_is_race_free_under_thread_sanitizer() {
+    smoke(Some("thread"));
+}
+
+fn smoke(sanitize: Option<&str>) {
     let config = sdl2_config().unwrap_or_else(|| {
         let built = Command::new(root().join("tools/build-sdl2.sh")).output().expect("tools/build-sdl2.sh runs");
         assert!(built.status.success(), "no SDL2, and tools/build-sdl2.sh failed: {}", String::from_utf8_lossy(&built.stderr));
         PathBuf::from(String::from_utf8_lossy(&built.stdout).trim())
     });
     let qb = root().join("runtime/qb");
-    let out = std::env::temp_dir().join(format!("sdl_smoke_{}", std::process::id()));
+    let out = std::env::temp_dir().join(format!("sdl_smoke_{}_{}", sanitize.unwrap_or("plain"), std::process::id()));
     let mut build = Command::new("cc");
     build.args(["-std=gnu11", "-w", "-g", "-pthread", "-D__cdecl="]);
+    if let Some(kind) = sanitize {
+        build.arg(format!("-fsanitize={kind}"));
+    }
     build.args(flags(&config, "--cflags"));
     for include in ["posix", ".", "dev", "dev/sdl", "dev/host", "../shared/posix"] {
         build.arg("-I").arg(qb.join(include));
@@ -76,6 +90,7 @@ fn the_sdl_platform_presents_what_the_program_draws() {
     let built = build.output().expect("cc runs");
     assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
     let done = Command::new(&out)
+        .env("TSAN_OPTIONS", "halt_on_error=1")
         .env("SDL_VIDEODRIVER", "dummy")
         .env("SDL_AUDIODRIVER", "dummy")
         .output()

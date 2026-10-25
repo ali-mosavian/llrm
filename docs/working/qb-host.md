@@ -111,7 +111,7 @@ Each: verify, then write the result under the row number in the open rows.
 1. Real window (row 2): opens on the main thread, shows the 80x25 text screen and SCREEN 13 graphics; 4:3 shape, no
    tearing while the worker draws. Report a screenshot path and the SDL driver name (`SDL_GetCurrentVideoDriver`).
 2. Main-thread SDL: `main` runs SDL, the program is on a worker; no "must be on the main thread" abort; closing the
-   window ends the program (exit code 1) and Cmd-Q likewise.
+   window ends the program (exit code 0 once the program polls a device; 1 only if it never looks) and Cmd-Q likewise.
 3. Retina: the window on a 2x display is not blurry or a quarter size; if it is, set the logical size / hint in
    `dev/sdl/present.c` and say which.
 4. Audio device (row 3): `BEEP`, `SOUND 440,18` and `PLAY "CDEFG"` are audible, the pitch right, with no clicks

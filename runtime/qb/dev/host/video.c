@@ -3,6 +3,7 @@
    of bits per row for the 16-colour modes, packed pixels for CGA, a byte a pixel for mode 13), so a program
    that saves and loads them sees no difference. */
 #include <stdio.h>
+#include <pthread.h>
 #include <string.h>
 
 #include "dev.h"
@@ -38,6 +39,19 @@ static uint8_t pixels[HOST_MAX_WIDTH * HOST_MAX_HEIGHT];
 static unsigned width = HOST_TEXT_COLUMNS * HOST_CELL_WIDTH, height = HOST_TEXT_ROWS * HOST_CELL_HEIGHT;
 static unsigned mode = HOST_MODE_TEXT, kind = KIND_TEXT, serial;
 static unsigned pixel_mask = 0x0F;
+
+/* Guards the mode, palette and cursor state the SDL thread reads while the program changes it. */
+static pthread_mutex_t state_lock = PTHREAD_MUTEX_INITIALIZER;
+
+void host_state_lock(void)
+{
+    pthread_mutex_lock(&state_lock);
+}
+
+void host_state_unlock(void)
+{
+    pthread_mutex_unlock(&state_lock);
+}
 
 static uint16_t cells[HOST_TEXT_ROWS][HOST_TEXT_COLUMNS];
 static unsigned cursor_row, cursor_column;
@@ -206,6 +220,7 @@ int gd_set_mode(unsigned requested)
     default:
         return 0;
     }
+    host_state_lock();
     mode = number;
     kind = new_kind;
     width = new_width;
@@ -222,33 +237,40 @@ int gd_set_mode(unsigned requested)
     }
     serial++;
     touch_all();
+    host_state_unlock();
     host_video_mode_changed();
     return 1;
 }
 
 void gd_palette(unsigned index, unsigned color)
 {
+    host_state_lock();
     if (kind == KIND_PLANAR || kind == KIND_TEXT) {
         attributes[index % PALETTE_REGISTERS] = (uint8_t)(color & 0x3F);
         touch_all();
     }
+    host_state_unlock();
 }
 
 void gd_cga_color(unsigned background, unsigned palette)
 {
+    host_state_lock();
     cga_background = background & 15;
     cga_palette = palette & 1;
     touch_all();
+    host_state_unlock();
 }
 
 void gd_palette_mix(unsigned index, unsigned red, unsigned green, unsigned blue)
 {
     uint8_t *entry = dac[index & 0xFF];
 
+    host_state_lock();
     entry[0] = (uint8_t)(red & 0x3F);
     entry[1] = (uint8_t)(green & 0x3F);
     entry[2] = (uint8_t)(blue & 0x3F);
     touch_all();
+    host_state_unlock();
 }
 
 static unsigned combined(unsigned old, unsigned color, unsigned operation)
@@ -508,13 +530,17 @@ unsigned dev_text_cursor(void)
 
 void dev_text_move(unsigned row, unsigned column)
 {
+    host_state_lock();
     cursor_row = row < HOST_TEXT_ROWS ? row : HOST_TEXT_ROWS - 1;
     cursor_column = column < HOST_TEXT_COLUMNS ? column : HOST_TEXT_COLUMNS - 1;
+    host_state_unlock();
 }
 
 void dev_text_cursor_show(int visible)
 {
+    host_state_lock();
     cursor_visible = visible != 0;
+    host_state_unlock();
 }
 
 void dev_text_put(unsigned row, unsigned column, unsigned character, unsigned attribute)
