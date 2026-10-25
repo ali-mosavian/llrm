@@ -302,6 +302,7 @@ fn a_natural_log_exp_and_log2_are_the_x87_sequences() {
         (ISD::FSin, "SIN_Fp80"),
         (ISD::FCos, "COS_Fp80"),
         (ISD::FAtan, "ATAN_Fp80"),
+        (ISD::FRint, "RNDINT_Fp80"),
     ] {
         let mut dag = SelectionDAG::new(DagConfig::default());
         let x = {
@@ -326,6 +327,7 @@ fn a_natural_log_exp_and_log2_are_the_x87_sequences() {
             (llrm_dagisel::x86_llrm::FSIN_OPCODE, "SIN_Fp80"),
             (llrm_dagisel::x86_llrm::FCOS_OPCODE, "COS_Fp80"),
             (llrm_dagisel::x86_llrm::FATAN_OPCODE, "ATAN_Fp80"),
+            (llrm_dagisel::x86_llrm::FRINT_OPCODE, "RNDINT_Fp80"),
         ];
         assert_eq!(own.iter().find(|(v, _)| u32::from(*v) == code).map(|(_, n)| *n), Some(name), "{op:?}");
     }
@@ -348,4 +350,44 @@ fn an_or_of_values_with_no_common_bits_is_one_lea() {
     assert_eq!(Selector::new(table::TABLE).select(&mut adapter, &mut hooks(), or.node), Outcome::Selected);
 
     assert_eq!(machine_name(&dag, or.node), "LEA32r");
+}
+
+/// `lrint` and `rint` of an x87 value store with `fist` in the current rounding
+/// mode (`X86ISD::FIST`): `CannotSelect(Target(587))` in `jpeg_single.bas`
+/// under `--isel=dag`. It is `IST_Fp<float>m<int>` into the slot.
+#[test]
+fn an_x87_fist_to_a_stack_slot_is_an_ist_pseudo() {
+    use super::dag::{MemBase, SDNodeFlags};
+    for (float, int, name) in [
+        (super::mvt::MVT::F64, EVT::I32, "IST_Fp32m64"),
+        (super::mvt::MVT::F32, EVT::I32, "IST_Fp32m32"),
+        (super::mvt::MVT::F64, EVT::I16, "IST16_64"),
+    ] {
+        let mut dag = SelectionDAG::new(DagConfig::default());
+        let value = {
+            let entry = dag.entry_node();
+            dag.get_copy_from_reg(entry, 40, EVT::Simple(float))
+        };
+        let slot = dag.get_frame_index(EVT::I32, 3);
+        let chain = dag.entry_node();
+        let info = MemInfo { mem_vt: int, align: 4, volatile: false, base: MemBase::Stack(3), ext: None, space: 0 };
+        let fist = dag.intern(
+            super::x86_lowering::x86isd::FIST,
+            &[EVT::OTHER],
+            &[chain, value, slot],
+            SDNodeFlags::default(),
+            super::dag::NodeData::Mem(info),
+        );
+        let mut adapter = DagisAdapter::new(&mut dag);
+
+        let outcome = select_node(&Selector::new(table::TABLE), &mut adapter, &mut hooks(), fist.node);
+        assert_eq!(outcome, Outcome::Selected, "{float:?} to {int:?}");
+        match name.strip_prefix("IST16_") {
+            Some(_) => {
+                let ISD::Machine(code) = dag.nodes()[fist.node as usize].opcode else { panic!("no machine node") };
+                assert_eq!(code, u32::from(llrm_dagisel::x86_llrm::IST16_OPCODES[1]), "a word fist of a double");
+            }
+            None => assert_eq!(machine_name(&dag, fist.node), name),
+        }
+    }
 }
