@@ -210,3 +210,24 @@ define ptr @f(ptr %p, i64 %i) {
     let Some(crate::model::ir::Loc::Held(result)) = lea.dests.first() else { panic!("{lea:?}") };
     assert_eq!(result.width, 8, "{lea:?}");
 }
+
+/// `va_start` at m64 was selected as the 32-bit one (the address of the first
+/// stack argument): `varargs.c` printed wrong sums. Until the register save
+/// area is translated it is refused.
+#[test]
+fn va_start_at_m64_is_refused() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare void @llvm.va_start(ptr)
+define i32 @f(i32 %n, ...) {
+  %ap = alloca [24 x i8]
+  call void @llvm.va_start(ptr %ap)
+  ret i32 %n
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let refused = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).err().expect("refused");
+    assert!(refused.0.contains("va_start at m64"), "{}", refused.0);
+}
