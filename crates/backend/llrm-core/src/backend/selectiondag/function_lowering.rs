@@ -106,6 +106,20 @@ impl FunctionLoweringInfo {
         info
     }
 
+    /// StackColoring's result for the static allocas: each is the frame index
+    /// of its group (locals never live together share one), `count` indices
+    /// in all.
+    pub fn share_allocas(
+        &mut self,
+        groups: impl IntoIterator<Item = (ValueId, i32)>,
+        count: i32,
+    ) {
+        for (value, index) in groups {
+            self.static_allocas.insert(value, index);
+        }
+        self.next_frame_index = count;
+    }
+
     /// `CreateRegs`: the next virtual register, recorded for `value`.
     pub fn create_reg(
         &mut self,
