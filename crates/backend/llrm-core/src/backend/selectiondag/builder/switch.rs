@@ -129,13 +129,8 @@ impl Builder<'_> {
         self.next_synthetic += 1;
         self.order.insert(*at, id);
         *at += 1;
-        let name = self.dag.block_names[self.block.0 as usize].clone();
-        let slot = id.0 as usize;
-        let names = std::rc::Rc::make_mut(&mut self.dag.block_names);
-        if names.len() <= slot {
-            names.resize(slot + 1, String::new());
-        }
-        names[slot] = name;
+        let name = self.dag.block_name(self.block.0).to_owned();
+        self.dag.set_block_name(id.0, name);
         id
     }
 

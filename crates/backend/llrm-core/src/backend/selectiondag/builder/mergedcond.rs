@@ -145,7 +145,7 @@ impl Builder<'_> {
         if self.keep_conditions_together(cond_inst, logic, lhs, rhs, on_true, on_false) {
             return Ok(false);
         }
-        let (order, next, names) = (self.order.clone(), self.next_synthetic, self.dag.block_names.clone());
+        let (order, next, names) = (self.order.clone(), self.next_synthetic, self.dag.synthetic_names.clone());
         let mut cases = Vec::new();
         let (t_prob, f_prob) =
             (self.edge_probability(self.block, on_true), self.edge_probability(self.block, on_false));
@@ -164,7 +164,7 @@ impl Builder<'_> {
             // remove the blocks the walk made
             self.order = order;
             self.next_synthetic = next;
-            self.dag.block_names = names;
+            self.dag.synthetic_names = names;
             return Ok(false);
         }
         for case in &cases[1..] {
