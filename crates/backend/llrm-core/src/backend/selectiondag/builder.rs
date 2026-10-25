@@ -847,6 +847,37 @@ impl Builder<'_> {
             let store = self.dag.get_store(root, value, address, info);
             self.dag.set_root(store);
         }
+        // The vector argument registers named parameters did not take go to
+        // the other half of the area, if `al` says any were used
+        // (`VASTART_SAVE_XMM_REGS`).
+        let vector_registers = found.float_argument_registers.len();
+        let named_vectors = self
+            .convention
+            .parameters
+            .iter()
+            .map(|parameter| match parameter {
+                Parameter::Registers(regs) => regs.iter().filter(|reg| reg.is_xmm()).count(),
+                _ => 0,
+            })
+            .sum::<usize>();
+        if vector_registers > named_vectors {
+            let vreg = self.info.new_reg();
+            self.live_ins.push((RegId::AL, vreg));
+            let entry = self.dag.entry_node();
+            let al = self.dag.get_copy_from_reg(entry, vreg, EVT::I8);
+            let frame = self.dag.get_constant_with(save as u128, EVT::I32, true, false);
+            let first = self
+                .dag
+                .get_constant_with(
+                    (found.argument_registers.len() * 8 + named_vectors * 16) as u128,
+                    EVT::I32,
+                    true,
+                    false,
+                );
+            let root = self.control_root();
+            let saved = self.dag.get_node(super::x86isd::VASTART_SAVE_XMM_REGS, EVT::OTHER, &[root, al, frame, first]);
+            self.dag.set_root(saved);
+        }
         self.dag.var_args_save = Some((save, named as u32 * 8));
         Ok(())
     }
