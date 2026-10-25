@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 194 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 196 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -54,6 +54,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_select_ext_const | `foldSelectExtConst`: `select c, (ext x), C` as `ext (select c, x, C')`. |  | [combine_select_ext_const](combine_select_ext_const.md) |
 | combine_select_into_op | `foldSelectIntoOp`: `select c, (op x, y), x` as `op x, (select c, y, identity)`. |  | [combine_select_into_op](combine_select_into_op.md) |
 | combine_select_op_op | `foldSelectOpOp`: `select c, (op x, a), (op x, b)` as `op x, (select c, a, b)`. |  | [combine_select_op_op](combine_select_op_op.md) |
+| combine_select_spf | `foldSelectInstWithICmp`'s first step: a select that is a min, a max or an absolute value of a compare becomes the intrinsic. | `visitSelectInst`. | [combine_select_spf](combine_select_spf.md) |
 | combine_shared | What InstCombine's integer `visit*` functions share from `InstructionCombining.cpp`: the complexity order that puts constants on the right, and the reassociation of an associative or commutative operation. | `combine_addsub` (`visitAdd`, `visitSub`) and the families after it. | [combine_shared](combine_shared.md) |
 | combine_shift_binop | `InstCombinerImpl::foldBinOpShiftWithShift`: a shift of each arm of a bitwise operator or `add` is one shift of the operator. | `visit_and`, `visit_or`, `visit_xor`, `visit_add`. | [combine_shift_binop](combine_shift_binop.md) |
 | combine_shifts | InstCombine's `visitShl`, `visitLShr` and `visitAShr` and the helpers they call, from [`InstCombineShifts.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineShifts.cpp) at d1106deb71cc. | Not a pass: called by the combine driver once its slot is flipped. | [combine_shifts](combine_shifts.md) |
