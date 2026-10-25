@@ -15,8 +15,7 @@ MIRROR: the C++ order, including branches a later fold shadows.
 
 DEVIATE 1: no vectors (`foldVectorBinop`).
 
-DEVIATE 2: `SimplifyDemandedInstructionBits` (`combine_demanded`),
-`foldComplexAndOrPatterns` are the next strip or another family's.
+DEVIATE 2: `foldComplexAndOrPatterns` is the next strip or another family's.
 
 DEVIATE 3: of the shifted-power-of-two folds (:2688-:2740) only the
 single-shift one is translated; the two double-shift ones follow.

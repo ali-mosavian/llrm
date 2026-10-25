@@ -1420,7 +1420,13 @@ impl Combiner<'_> {
             (instruction.opcode.clone(), instruction.flags, instruction.ty)
         };
         let self_value = self.result_of(inst);
-        let (op0, op1) = (self.operand_of(inst, 0), self.operand_of(inst, 1));
+        // Only the binary arms read the operands; a load or a call has fewer
+        // than two.
+        let (op0, op1) = if matches!(opcode, Opcode::Binary(_)) {
+            (self.operand_of(inst, 0), self.operand_of(inst, 1))
+        } else {
+            (self_value, self_value)
+        };
         let d1 = depth + 1;
         let mut lhs = KnownBits::unknown(w);
         let mut rhs = KnownBits::unknown(w);

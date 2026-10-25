@@ -23,9 +23,6 @@
 //! DEVIATE 2 (temporary): `FoldOpIntoSelect`, the select step of
 //! `commonCastTransforms`, is left out until the select family lands it.
 //!
-//! DEVIATE 3 (temporary): `SimplifyDemandedInstructionBits` is not
-//! translated.
-//!
 //! DEVIATE 4 (temporary): the folds that build an intrinsic call (`uadd.sat`,
 //! `usub.sat`, `smin`, `smax`, `ctlz`, `scmp`, `ucmp`, `fshl`, `fshr`) are
 //! left out until the Builder can declare an intrinsic (`combine_build`
@@ -997,7 +994,12 @@ pub fn visit_trunc(
         }
     }
 
-    // DEVIATE 3: SimplifyDemandedInstructionBits(Trunc).
+    // See if we can simplify any instructions used by the input whose sole
+    // purpose is to compute bits we don't care about.
+    let found = c.simplify_demanded_instruction_bits(inst);
+    if !matches!(found, Visit::None) {
+        return found;
+    }
 
     if dest_w == 1
         && let Some(r) = trunc_to_bool(c, inst, src, flags)
