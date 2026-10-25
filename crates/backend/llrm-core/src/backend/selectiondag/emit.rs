@@ -46,12 +46,12 @@
 //! ([L1003](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp#L1003)),
 //! `EmitCopyToRegClassNode`, `EmitCopyFromReg`.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use llrm_dagisel::instr::{self, InstrDesc, operand_type};
 use llrm_dagisel::x86_addr::AddrMode;
 use llrm_dagisel::x86_classes::{Role, class_tag};
+use llrm_support::hash::HashMap;
 
 use super::dag::{NodeData, SDValue, SelectionDAG};
 use super::isd::ISD;
@@ -291,7 +291,7 @@ pub struct EmitState {
 
 impl Default for EmitState {
     fn default() -> EmitState {
-        EmitState { vregs: HashMap::new(), next_value: 1, at: 1, float_bytes: Default::default() }
+        EmitState { vregs: HashMap::default(), next_value: 1, at: 1, float_bytes: Default::default() }
     }
 }
 
@@ -352,30 +352,30 @@ pub fn emit_in(
     let mut emitter = Emitter {
         dag,
         ctx,
-        values: HashMap::new(),
-        es_copies: HashMap::new(),
+        values: HashMap::default(),
+        es_copies: HashMap::default(),
         state,
         blocks: vec![EmitBlock { at: first_at, ..EmitBlock::default() }],
         classes: Vec::new(),
         sp_values: Default::default(),
-        accumulator: HashMap::new(),
+        accumulator: HashMap::default(),
         arguments: Vec::new(),
         returns: Vec::new(),
         calls: Vec::new(),
         inline_places: Vec::new(),
         last_call: None,
         flags_now: None,
-        origins: HashMap::new(),
+        origins: HashMap::default(),
         es: None,
-        selectors: HashMap::new(),
-        lazy: HashMap::new(),
+        selectors: HashMap::default(),
+        lazy: HashMap::default(),
         last_select: None,
-        flag_insns: HashMap::new(),
-        saved_carry: HashMap::new(),
+        flag_insns: HashMap::default(),
+        saved_carry: HashMap::default(),
         flag_copies_done: Default::default(),
-        pending_fcom: HashMap::new(),
+        pending_fcom: HashMap::default(),
         glue_users: {
-            let mut users: HashMap<SDValue, Vec<u32>> = HashMap::new();
+            let mut users: HashMap<SDValue, Vec<u32>> = HashMap::default();
             for (at, one) in dag.nodes().iter().enumerate() {
                 for op in &one.ops {
                     users.entry(*op).or_default().push(at as u32);
