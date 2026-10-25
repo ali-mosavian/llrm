@@ -486,6 +486,7 @@ pub fn compute_with(
     module: &Module,
     unexported: BTreeSet<GlobalId>,
 ) -> GlobalsModRef {
+    COMPUTES.with(|made| made.set(made.get() + 1));
     let analysis = Analysis {
         module,
         sites: Sites::of(module),
@@ -1018,3 +1019,13 @@ impl crate::aa::AAResults for GlobalsAAResult<'_> {
 #[cfg(test)]
 #[path = "globalsmodref_tests.rs"]
 mod tests;
+
+thread_local! {
+    static COMPUTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has worked out `GlobalsModRef` of a module
+/// (`compute_with`), for a test that one analysis result serves its readers.
+pub fn computes_made() -> usize {
+    COMPUTES.with(std::cell::Cell::get)
+}
