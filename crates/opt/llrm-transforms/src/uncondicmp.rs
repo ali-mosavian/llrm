@@ -176,7 +176,8 @@ fn on_switch(
 
     // The switch goes to the join on the compared value, through a new block.
     let edge = function.create_block(Some("switch.edge"));
-    function.insert_block(edge, Some(pred)).expect("a new block");
+    // Right before the block of the compare (SimplifyCFG.cpp:5463).
+    function.insert_block_before(edge, block).expect("a new block");
     let mut with_case = operands.clone();
     with_case.extend([case, Operand::Block(edge)]);
     function.set_operands(switch, with_case);
