@@ -23,7 +23,8 @@ def fake_llrm(path: Path, body: str) -> str:
     return str(path)
 
 
-def test_objsweep_names_a_changed_object_and_a_one_sided_failure(tmp_path):
+def test_objsweep_names_a_changed_object_and_a_one_sided_failure(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLRM_PAIR_CROSS_BRANCH", "1")  # the fake builds stamp a sha no repository has; their ancestry is test_ancestry's
     src = tmp_path / "b"
     src.mkdir()
     (src / "same.c").write_text("int a;")
@@ -35,7 +36,8 @@ def test_objsweep_names_a_changed_object_and_a_one_sided_failure(tmp_path):
     assert "failed on both sides" in done.stdout and "1 failed on both sides" in done.stdout
 
 
-def test_objsweep_measures_the_object_not_the_assembly_text(tmp_path):
+def test_objsweep_measures_the_object_not_the_assembly_text(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLRM_PAIR_CROSS_BRANCH", "1")  # the fake builds stamp a sha no repository has; their ancestry is test_ancestry's
     """objsweep wrote to `x.old`: llrm-c wrote assembly text there, so x_fir m16 read +350 B (text) where the object grew 21 B."""
     src = tmp_path / "b"
     src.mkdir()
@@ -67,7 +69,8 @@ def test_the_stub_defines_strlen(tmp_path):
     assert " T strlen" in symbols
 
 
-def test_a_pair_of_one_build_relinked_is_void(tmp_path):
+def test_a_pair_of_one_build_relinked_is_void(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLRM_PAIR_CROSS_BRANCH", "1")  # the fake builds stamp a sha no repository has; their ancestry is test_ancestry's
     """Two llrm-c built into one shared target dir differed by 83 path bytes; objsweep read 0 objects changed of two copies of one compiler."""
     voidpair = load("voidpair")
     base = bytes(range(256)) * 1024

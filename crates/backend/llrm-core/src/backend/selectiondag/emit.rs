@@ -1406,8 +1406,10 @@ impl Emitter<'_, '_> {
                     width: 2,
                     address: Some(self.ctx.globals.segment(self.global_displacement(origin))),
                 }),
-                ("OR32rr", _) => {
-                    // A huge pointer built as `offset | (selector << 16)`.
+                ("OR32rr" | "ADD32rr_DB", _) => {
+                    // A huge pointer built as `offset | (selector << 16)`, or
+                    // as the same sum once the combiner
+                    // turns a disjoint or into an add.
                     let selector = self
                         .huge_selector(origin)
                         .ok_or_else(
@@ -2129,7 +2131,7 @@ impl Emitter<'_, '_> {
                 let mnemonic = if prefix == "ST" { "fst" } else { "fistp" };
                 self.push(Operation::FloatStore, mnemonic, vec![Loc::Mem(cell)], vec![Loc::Held(source)]);
             }
-            "CHS" | "ABS" | "SQRT" | "LN" | "EXP" | "LOG2" | "EXP2" | "SIN" | "COS" | "ATAN" => {
+            "CHS" | "ABS" | "SQRT" | "LN" | "EXP" | "LOG2" | "EXP2" | "SIN" | "COS" | "ATAN" | "RNDINT" => {
                 let Loc::Held(source) = self.operand(node.ops[0])? else {
                     return Err(EmitError::Unsupported(format!("{name}: an operand that is no register")));
                 };
@@ -2359,7 +2361,8 @@ impl Emitter<'_, '_> {
                     pooled.width
                 )));
             }
-            return Ok(Mem { base, index, scale, ..pooled });
+            // as wide as the read, which may be inside the entry
+            return Ok(Mem { base, index, scale, width: cell_width, ..pooled });
         }
         let disp = self.constant(group[3])?;
         if self.address_register(group[4], Role::Segment)?.is_some() {
