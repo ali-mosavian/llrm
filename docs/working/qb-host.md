@@ -78,3 +78,9 @@ runtime/qb/                portable runtime; touches the machine only through ru
     `native_contract`'s `i386: true`, ELF/Mach-O symbol names, 64-bit descriptors, none started).
 15. Build: the host runtime is compiled by `cc` in the tests; it is not a static library with one object per module, and
     there is no macOS x86-64 build.
+16. GORILLA and NIBBLES on x86-64 (`llrm-qb -m64`, ELF64; `PRINT "HELLO"` runs, `tests/qb_x86_64_host.rs`): wait on D64-4
+    (SSE forms #4636, xmm class #4638, DAG float nodes #4678/#4643, S4, S5; `x86-64-dag-plan.md`). Also open here: the
+    64-bit runtime frame (`B$ENRA`/`B$EXSA`), the `ON ERROR` landing (`qb_land` ends the program), the stack-block entries
+    (`B$DDIM`, `B$CLOS`, ...). Retry when #4638 and S4 land.
+17. arm64: `llrm-qb` has no route to the arm64 backend (code from MIR, QB data sections, Mach-O/ELF). A private aarch64
+    sysroot (clang, lld, qemu-aarch64) can build and run ELF; Mach-O runs on a Mac only.

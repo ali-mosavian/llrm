@@ -11,3 +11,6 @@ void *B_REAL(uint64_t linear)
 {
     return real_memory + (linear % REAL_BYTES);
 }
+
+/* DEF SEG's segment (QB's b$seg): the compiled code stores it, PEEK and POKE add it. */
+unsigned short b_seg;

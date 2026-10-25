@@ -25,6 +25,9 @@ typedef unsigned char *os_data_mut;
 #define QB_FAR_OF(p) ((void *)(p))
 #define QB_NEAR_OF(p) ((void *)(p))
 
+void *B_REAL(uint64_t linear);
+#define QB_REAL_POINTER(segment, offset) B_REAL(((uint64_t)(segment) << 4) + (offset))
+
 #define QB_STRING_LIMIT 0x7FFFFFFFL
 
 typedef void (*qb_init_fn)(void);

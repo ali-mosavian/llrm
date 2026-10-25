@@ -4,8 +4,14 @@
 #include "qb.h"
 #include "rtinit.h"
 
+/* The lowest stack address a checked function may reach: FRE(-2) counts down to it. */
+uword llrm_os_stack_low;
+
 void qb_run_initializers(void)
 {
+    char here;
+
+    llrm_os_stack_low = (uword)&here - (6UL << 20);
 }
 
 void qb_dynamic_region(char **first, char **top)
@@ -23,4 +29,11 @@ void qb_dynamic_region(char **first, char **top)
         }
     }
     *first = *top = 0;
+}
+
+/* ON ERROR's landing needs the frame to be put back; the host has no frames yet (docs/working/qb-host.md, open
+   rows), so an error that reaches a handler ends the program. */
+void qb_land(void)
+{
+    llrm_os_exit(1);
 }
