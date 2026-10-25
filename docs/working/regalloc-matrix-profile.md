@@ -17,3 +17,5 @@ The matrix side is about 10.8 M of 77.6 M. Against the pin it is ~4.5 M over (ch
 The pin profile (`~/scratch/sk-dfpin/pin.cg`) is a different, smaller input: only the per-call ratios are comparable.
 
 `reg_mask_clobbered` is already cached per vreg like the pin's `RegMaskVirtReg`; its cost is the per-segment merge with the call slots.
+
+Tried and dropped: the pin's `checkRegMaskInterference` walk shape in `reg_mask_clobbered` (early return past `endIndex`, linear segment skip instead of a search per segment). Same object code, `reg_mask_clobbered` 3.50 M -> 4.27 M and the run 746.9 M -> 747.6 M: the linear skip costs more than the searches it replaces at these segment counts.
