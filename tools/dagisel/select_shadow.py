@@ -32,6 +32,10 @@ FLAG_WORDS = {"nuw", "nsw", "exact", "nnan", "ninf", "nsz", "arcp", "contract", 
 # The pin's finalize-isel runs `EmitLoweredSelect`: its output has a JCC_1 diamond where our DAG selection still has the
 # CMOV_GR* pseudo (the emitter expands it to the same diamond, so there is no cmov: illegal on a 486).
 SELECT_PSEUDOS = {"CMOV_GR8", "CMOV_GR16", "CMOV_GR32"}
+# The pin's finalize-isel runs the custom inserter of FP_TO_INT*_IN_MEM: the control-word switch around the store. Ours
+# keeps the pseudo (`floatalloc` writes the switch, shared by a run of them).
+EQUAL_FP = "equal through the FP_TO_INT rule"
+FP_TO_INT = re.compile(r"FP(\d+)_TO_INT(\d+)_IN_MEM")
 BOOKKEEPING = {"COPY", "EXTRACT_SUBREG", "PHI", "IMPLICIT_DEF", "ADJCALLSTACKDOWN32", "ADJCALLSTACKUP32", "KILL", "COPY_TO_REGCLASS", "LIFETIME_START", "LIFETIME_END"}
 
 
@@ -144,6 +148,16 @@ def expanded_selects(have: Counter, want: Counter) -> Counter:
     return have
 
 
+def expanded_fp_to_int(have: Counter) -> Counter:
+    """`have` with each FP_TO_INT*_IN_MEM pseudo as the instructions the pin's inserter makes."""
+    for name in [name for name in have if FP_TO_INT.fullmatch(name)]:
+        count = have.pop(name)
+        source, target = FP_TO_INT.fullmatch(name).groups()
+        for made, times in {"FNSTCW16m": 1, "MOVZX32rm16": 1, "OR32ri": 1, "MOV16mr": 1, "FLDCW16m": 2, f"IST_Fp{target}m{source}": 1}.items():
+            have[made] += count * times
+    return have
+
+
 def rows_of(program, funcs, refused, pinned, ir=""):
     rows = []
     for name in defined(ir):
@@ -164,9 +178,10 @@ def rows_of(program, funcs, refused, pinned, ir=""):
         else:
             want = Counter({k: v for k, v in pinned.get(name, Counter()).items() if k not in BOOKKEEPING})
             have = Counter({k: v for k, v in f["machine"].items() if k not in BOOKKEEPING})
-            have = expanded_selects(have, want)
+            plain = expanded_selects(Counter(have), want)
+            have = expanded_selects(expanded_fp_to_int(have), want)
             if want == have:
-                bucket = "equal"
+                bucket = "equal" if want == plain else EQUAL_FP
             else:
                 pin_only, ours_only = want - have, have - want
                 top = max((pin_only + ours_only).items(), key=lambda kv: kv[1])[0]
@@ -240,6 +255,7 @@ def main() -> int:
         rows = [row for part in pool.map(lambda s: one(args.llrm_c, args.shadow, s, args.m16, args.level), sources) for row in part]
     buckets = Counter(bucket for _, _, bucket in rows)
     good = "selects" if args.m16 else "equal"
+    buckets[good] += buckets[EQUAL_FP]
     print(f"{buckets[good]} {good} of {len(rows)} defined functions in {len(sources)} programs")
     for bucket, n in buckets.most_common():
         print(f"{n:6d}  {bucket}")

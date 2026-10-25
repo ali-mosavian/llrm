@@ -1454,10 +1454,12 @@ impl Emitter<'_, '_> {
                     width: 2,
                     address: Some(self.ctx.globals.segment(self.global_displacement(origin))),
                 }),
-                ("OR32rr" | "ADD32rr_DB", _) => {
+                // `SHL32ri`: a huge pointer whose offset is zero, the `or`
+                // folded away
+                ("OR32rr" | "ADD32rr" | "SHL32ri" | "ADD32rr_DB", _) => {
                     // A huge pointer built as `offset | (selector << 16)`, or
-                    // as the same sum once the combiner
-                    // turns a disjoint or into an add.
+                    // as the same sum (the halves are disjoint, so the combiner
+                    // may turn the or into an add).
                     let selector = self
                         .huge_selector(origin)
                         .ok_or_else(
@@ -1493,7 +1495,11 @@ impl Emitter<'_, '_> {
         &self,
         origin: SDValue,
     ) -> Option<SDValue> {
-        let shifted = *self.dag.node(origin).ops.iter().find(|op| self.is_machine_named(**op, "SHL32ri"))?;
+        let shifted = if self.is_machine_named(origin, "SHL32ri") {
+            origin
+        } else {
+            *self.dag.node(origin).ops.iter().find(|op| self.is_machine_named(**op, "SHL32ri"))?
+        };
         let [inserted, amount] = self.dag.node(shifted).ops[..] else { return None };
         let NodeData::Const { bits: 16, .. } = self.dag.node(amount).data else { return None };
         if !self.is_machine_named(inserted, "INSERT_SUBREG") {
@@ -1551,9 +1557,12 @@ impl Emitter<'_, '_> {
             }
             // A sibling call: the frame pass puts the epilogue before this
             // return, which is a jump to the callee (`masm`).
-            "TCRETURNdi" => {
+            "TCRETURNdi" | "TCRETURN_16" => {
+                // the pseudo keeps the node's operands: the chain, then the
+                // callee
+                let target = if name == "TCRETURN_16" { node.ops[1] } else { node.ops[0] };
                 let callee = self
-                    .direct_callee(node.ops[0])
+                    .direct_callee(target)
                     .ok_or_else(|| EmitError::Unsupported("a sibling call of a non-global".to_owned()))?;
                 let at = self.next_address();
                 let requires = std::mem::take(&mut self.arguments);
@@ -1562,6 +1571,35 @@ impl Emitter<'_, '_> {
                 let insn = Insn { requires, ..Insn::new(at, Some((at, at)), Some(what), vec![], uses) };
                 self.blocks.last_mut().expect("a block").insns.push(Arc::new(insn));
                 self.calls.push((at, callee));
+                return Ok(Some(()));
+            }
+            // An indirect sibling call: the callee's address is pinned to one
+            // of EAX, ECX, EDX (`GR32_TC`) the arguments do not take, as the
+            // epilogue restores every other register before the jump.
+            "TCRETURNri" => {
+                let Loc::Held(callee) = self.operand(node.ops[0])? else {
+                    return Err(EmitError::Unsupported("a sibling call through a non-register".to_owned()));
+                };
+                use llrm_lir::registers::RegId;
+                let mut requires = std::mem::take(&mut self.arguments);
+                let free = [RegId::EAX, RegId::ECX, RegId::EDX]
+                    .into_iter()
+                    .find(|one| {
+                        self.ctx.caller_saved.contains(one) && requires.iter().all(|(_, taken)| taken.root() != *one)
+                    })
+                    .ok_or_else(|| EmitError::Unsupported("a sibling call with no free register".to_owned()))?;
+                requires.push((callee, free));
+                let at = self.next_address();
+                let mut uses: Vec<u32> = requires.iter().map(|(held, _)| held.value).collect();
+                uses.dedup();
+                let what = Semantics {
+                    indirect: true,
+                    name: Some("jmp".into()),
+                    sources: vec![Loc::Held(callee)],
+                    ..Semantics::new(Operation::Return)
+                };
+                let insn = Insn { requires, ..Insn::new(at, Some((at, at)), Some(what), vec![], uses) };
+                self.blocks.last_mut().expect("a block").insns.push(Arc::new(insn));
                 return Ok(Some(()));
             }
             "CALLpcrel32" => {

@@ -2,12 +2,14 @@
 //! `getAnyExtendExpr` and the `getTruncateOr...` family, with the extension of
 //! an add recurrence's start and the overflow limits they use.
 
+use std::borrow::Cow;
+
 use llrm_mir::constantrange::ConstantRange;
 
 use super::ap::Ap;
 use super::backedge::ExitCountKind;
 use super::expr::{Kind, Scev, Ty, Type, Use, flags};
-use super::{Cx, Flags, Key, ScalarEvolution};
+use super::{Cx, Flags, Key, KeyLike, ScalarEvolution};
 
 /// `scalar-evolution-max-cast-depth`.
 const MAX_CAST_DEPTH: u32 = 8;
@@ -38,7 +40,8 @@ impl ScalarEvolution {
         op: Use,
         ty: Ty,
     ) -> Scev {
-        let key = Key { tag, ops: vec![op], ty: Some(ty), constant: None, value: None, header: None };
+        let one = [op];
+        let key = Key { tag, ops: Cow::Borrowed(&one), ty: Some(ty), constant: None, value: None, header: None };
         let kind = || match tag {
             Type::Truncate => Kind::Truncate(op),
             Type::ZeroExtend => Kind::ZeroExtend(op),
@@ -57,8 +60,9 @@ impl ScalarEvolution {
         op: Use,
         ty: Ty,
     ) -> Option<Scev> {
-        let key = Key { tag, ops: vec![op], ty: Some(ty), constant: None, value: None, header: None };
-        self.unique.get(&key).copied()
+        let one = [op];
+        let key = Key { tag, ops: Cow::Borrowed(&one), ty: Some(ty), constant: None, value: None, header: None };
+        self.unique.get(&key as &dyn KeyLike).copied()
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L1114
@@ -353,15 +357,16 @@ impl ScalarEvolution {
         for delta in [-2_i128, -1, 1, 2] {
             let pre_start = self.get_constant(start_ai.sub(Ap::from_signed(start_ai.width, delta)));
 
+            let pair = [Use::of(pre_start), Use::of(step)];
             let key = Key {
                 tag: Type::AddRec,
-                ops: vec![Use::of(pre_start), Use::of(step)],
+                ops: Cow::Borrowed(&pair),
                 ty: None,
                 constant: None,
                 value: None,
                 header: Some(l),
             };
-            let pre_ar = self.unique.get(&key).copied();
+            let pre_ar = self.unique.get(&key as &dyn KeyLike).copied();
 
             // Give up if we don't already have the add recurrence we need
             // because actually constructing an add recurrence is relatively

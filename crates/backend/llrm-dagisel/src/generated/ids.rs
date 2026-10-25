@@ -412,6 +412,7 @@ pub mod x86isd {
     pub const LLRM_FARCALL: u16 = 24584;
     pub const LLRM_PORT: u16 = 24586;
     pub const LLRM_PTRDIFF: u16 = 24583;
+    pub const LLRM_TC_RETURN: u16 = 24587;
     pub const LLRM_WINDOW: u16 = 24581;
     pub const LOR: u16 = 662;
     pub const LSUB: u16 = 663;
@@ -1137,6 +1138,7 @@ pub fn x86isd_id(name: &str) -> Option<u16> {
         "LLRM_FARCALL" => 24584,
         "LLRM_PORT" => 24586,
         "LLRM_PTRDIFF" => 24583,
+        "LLRM_TC_RETURN" => 24587,
         "LLRM_WINDOW" => 24581,
         "LOR" => 662,
         "LSUB" => 663,

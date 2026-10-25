@@ -78,11 +78,13 @@ pub enum Event {
     /// The position of every instruction in its block worked out
     /// (`Function::positions`).
     Positions,
+    /// A `UniqueSCEVs` key made to own its operands (a node was made).
+    ScevKeysOwned,
 }
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 25] = [
+const NAMES: [&str; 26] = [
     "function_clones",
     "function_forks",
     "machinings",
@@ -108,6 +110,7 @@ const NAMES: [&str; 25] = [
     "loop_exit_scans",
     "lvi_icmp_patterns",
     "positions",
+    "scev_keys_owned",
 ];
 
 /// A pass's runs and the instructions of the functions it ran over.
@@ -124,7 +127,7 @@ thread_local! {
     static PASSES: RefCell<Vec<PassRow>> = const { RefCell::new(Vec::new()) };
     /// (pass, analysis, misses): the analyses a pass made the manager compute.
     static ASKS: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    static EVENTS: [Cell<u64>; 25] = const { [const { Cell::new(0) }; 25] };
+    static EVENTS: [Cell<u64>; 26] = const { [const { Cell::new(0) }; 26] };
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };

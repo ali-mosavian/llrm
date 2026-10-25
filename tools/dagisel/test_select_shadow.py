@@ -73,6 +73,20 @@ def test_a_cascade_of_selects_is_one_diamond():
     assert tool.expanded_selects(machine, Counter({"JCC_1": 1, "RET": 1})) == Counter({"JCC_1": 1, "RET": 1})
 
 
+def test_a_float_to_int_store_is_the_control_word_switch_the_pin_makes():
+    machine = Counter({"FP64_TO_INT32_IN_MEM": 1, "RET": 1})
+    pin = Counter({"FNSTCW16m": 1, "MOVZX32rm16": 1, "OR32ri": 1, "MOV16mr": 1, "FLDCW16m": 2, "IST_Fp32m64": 1, "RET": 1})
+    assert tool.expanded_fp_to_int(machine) == pin
+
+
+def test_a_function_equal_only_through_the_fp_to_int_rule_says_so():
+    machine = Counter({"FP64_TO_INT32_IN_MEM": 1, "RET": 1})
+    pin = {"f": Counter({"FNSTCW16m": 1, "MOVZX32rm16": 1, "OR32ri": 1, "MOV16mr": 1, "FLDCW16m": 2, "IST_Fp32m64": 1, "RET": 1})}
+    shadow = {"f": {"blocks": 1, "built": 1, "machine": machine, "unselected": Counter()}}
+    rows = tool.rows_of("p", shadow, {}, pin, "define i32 @f() {\n ret i32 0\n}\n")
+    assert [b for _, _, b in rows] == [tool.EQUAL_FP]
+
+
 def test_the_pin_reads_llrms_switch_and_fp80_spellings():
     """`switch table` and `x86_fp80 0x<double bits>` made llc fail on 15 of 576 functions (jpeg, switch_peeled, double_to_uint64), which the
     equal count silently left out."""

@@ -41,6 +41,11 @@ impl Builder<'_> {
         arguments: &[Operand],
     ) -> bool {
         let caller = &self.convention;
+        // a far pointer callee is stored to a cell and called through it
+        // (`LLRM_FARCALL`); the jump has no such form yet
+        if !direct && self.target.dag.pointer == super::super::mvt::EVT::I16 {
+            return false;
+        }
         // "no_caller_saved_registers": the frame cannot be replaced
         if llrm_mir::memory::has(&self.function.attrs, "no_caller_saved_registers") {
             return false;
@@ -121,14 +126,18 @@ impl Builder<'_> {
             // the callee's address needs a register of the three the arguments
             // may take
             if !direct {
-                let used = plan
+                let used: Vec<RegId> = plan
                     .parameters
                     .iter()
                     .filter_map(|one| if let Parameter::Registers(regs) = one { Some(regs) } else { None })
                     .flatten()
-                    .filter(|reg| eax_edx_ecx.contains(reg))
-                    .count();
-                if used >= 3 {
+                    .copied()
+                    .collect();
+                // and not one the caller's epilogue restores before the jump
+                let free = eax_edx_ecx
+                    .iter()
+                    .any(|reg| !used.contains(reg) && !caller_kept.iter().any(|(whole, _)| whole == reg));
+                if !free {
                     return false;
                 }
             }

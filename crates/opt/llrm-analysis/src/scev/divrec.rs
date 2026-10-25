@@ -2,11 +2,13 @@
 //! `getAddRecExpr`, and the negation, complement and difference built on the
 //! folds, with `getPointerBase`.
 
+use std::borrow::Cow;
+
 use llrm_mir::module::BlockId;
 
 use super::ap::Ap;
 use super::expr::{Kind, Scev, Ty, Type, Use, flags};
-use super::{Cx, Flags, Key, ScalarEvolution};
+use super::{Cx, Flags, Key, KeyLike, ScalarEvolution};
 
 impl ScalarEvolution {
     /// `SCEVAddRecExpr::getStart`.
@@ -39,7 +41,9 @@ impl ScalarEvolution {
         lhs: Use,
         rhs: Use,
     ) -> Scev {
-        let key = Key { tag: Type::UDiv, ops: vec![lhs, rhs], ty: None, constant: None, value: None, header: None };
+        let pair = [lhs, rhs];
+        let key =
+            Key { tag: Type::UDiv, ops: Cow::Borrowed(&pair), ty: None, constant: None, value: None, header: None };
         let ty = self.type_of(lhs.scev);
         let size = self.compute_expression_size(&[lhs, rhs]);
         self.intern(key, || Kind::UDiv(lhs, rhs), Some(ty), size)
@@ -54,7 +58,8 @@ impl ScalarEvolution {
         l: BlockId,
         f: u8,
     ) -> Scev {
-        let key = Key { tag: Type::AddRec, ops: ops.to_vec(), ty: None, constant: None, value: None, header: Some(l) };
+        let key =
+            Key { tag: Type::AddRec, ops: Cow::Borrowed(ops), ty: None, constant: None, value: None, header: Some(l) };
         let ty = self.type_of(ops[0].scev);
         let size = self.compute_expression_size(ops);
         let s = self.intern(key, || Kind::AddRec(ops.to_vec(), l), Some(ty), size);
@@ -113,8 +118,10 @@ impl ScalarEvolution {
         debug_assert!(!self.type_of(lhs.scev).is_pointer(), "SCEVUDivExpr operand can't be pointer!");
         debug_assert!(self.type_of(lhs.scev) == self.type_of(rhs.scev), "SCEVUDivExpr operand types don't match!");
 
-        let key = Key { tag: Type::UDiv, ops: vec![lhs, rhs], ty: None, constant: None, value: None, header: None };
-        if let Some(&found) = self.unique.get(&key) {
+        let pair = [lhs, rhs];
+        let key =
+            Key { tag: Type::UDiv, ops: Cow::Borrowed(&pair), ty: None, constant: None, value: None, header: None };
+        if let Some(&found) = self.unique.get(&key as &dyn KeyLike) {
             return found;
         }
 

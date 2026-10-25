@@ -557,6 +557,28 @@ impl<'a> TypeLegalizer<'a> {
                 self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: loaded.node, res: 1 });
                 loaded
             }
+            ISD::SDivFix => {
+                // `PromoteIntRes_DIVFIX`: the operands sign-extended in the
+                // promoted type, then `expandFixedPointDiv` there when the
+                // headroom allows.
+                let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let (lhs, rhs) = (self.promoted_integer(lhs), self.promoted_integer(rhs));
+                let from = self.dag.value_type(self.dag.operand(value, 0));
+                let ty = self.dag.get_value_type_node(from);
+                let lhs = self.dag.get_node(ISD::SignExtendInReg, to, &[lhs, ty]);
+                let rhs = self.dag.get_node(ISD::SignExtendInReg, to, &[rhs, ty]);
+                let scale = self.dag.constant(self.dag.operand(value, 2)).unwrap_or(0) as u32;
+                match self.expand_fixed_point_div(lhs, rhs, scale) {
+                    Some(result) => result,
+                    None => {
+                        return Err(LegalizeError::Unsupported {
+                            op: ISD::SDivFix,
+                            ty: vt,
+                            what: "promote result: no headroom for the scale (early expand not translated)",
+                        });
+                    }
+                }
+            }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "promote result" }),
         };
         self.set_promoted_integer(value, result);
@@ -719,6 +741,25 @@ impl<'a> TypeLegalizer<'a> {
                 (lo, hi)
             }
             op @ (ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend) => self.expand_extend(value, op, half),
+            ISD::SignExtendInReg => {
+                // `ExpandIntRes_SIGN_EXTEND_INREG`: within the low half, extend
+                // there and fill the high half with its sign; above it, extend
+                // the high half in its register.
+                let NodeData::ValueType(inner) = self.dag.node(self.dag.operand(value, 1)).data else {
+                    return Err(LegalizeError::Unsupported { op: ISD::SignExtendInReg, ty: vt, what: "expand result" });
+                };
+                let (lo, hi) = self.expanded_integer(self.dag.operand(value, 0));
+                if inner.size_in_bits() <= half.size_in_bits() {
+                    let ty = self.dag.get_value_type_node(inner);
+                    let lo = self.dag.get_node(ISD::SignExtendInReg, half, &[lo, ty]);
+                    let by = self.dag.get_constant(u128::from(half.size_in_bits() - 1), EVT::I8);
+                    (lo, self.dag.get_node(ISD::Sra, half, &[lo, by]))
+                } else {
+                    let rest = EVT::integer(inner.size_in_bits() - half.size_in_bits());
+                    let ty = self.dag.get_value_type_node(rest);
+                    (lo, self.dag.get_node(ISD::SignExtendInReg, half, &[hi, ty]))
+                }
+            }
             ISD::Load if vt == EVT::Simple(MVT::Far) => {
                 // A far pointer is `les`: the offset, with the selector left in
                 // `ES` and read back on the chain (SD2).
@@ -1087,6 +1128,49 @@ impl<'a> TypeLegalizer<'a> {
         let hi = self.dag.get_node(ISD::Add, half, &[hi, cross_right]);
         let hi = self.dag.get_node(ISD::Add, half, &[hi, cross_left]);
         Ok((lo, hi))
+    }
+
+    /// `expandFixedPointDiv` for the signed, non-saturating divide: the
+    /// numerator shifted up by the headroom it has (its redundant sign bits),
+    /// the denominator down by the rest of the scale, then a divide that rounds
+    /// toward negative infinity. `None` when the type has not the room.
+    fn expand_fixed_point_div(
+        &mut self,
+        lhs: SDValue,
+        rhs: SDValue,
+        scale: u32,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(lhs);
+        let lead = super::known_bits::num_sign_bits(self.dag, lhs) - 1;
+        let known = super::known_bits::known_bits(self.dag, rhs);
+        // the trailing zero bits the denominator is known to have
+        let trail = (known.zero.trailing_ones()).min(vt.size_in_bits());
+        if lead + trail < scale {
+            return None;
+        }
+        let lhs_shift = lead.min(scale);
+        let rhs_shift = scale - lhs_shift;
+        let (mut lhs, mut rhs) = (lhs, rhs);
+        if lhs_shift != 0 {
+            let by = self.dag.get_constant(u128::from(lhs_shift), EVT::I8);
+            lhs = self.dag.get_node(ISD::Shl, vt, &[lhs, by]);
+        }
+        if rhs_shift != 0 {
+            let by = self.dag.get_constant(u128::from(rhs_shift), EVT::I8);
+            rhs = self.dag.get_node(ISD::Sra, vt, &[rhs, by]);
+        }
+        let bool_vt = self.tli.types.set_cc_result_type(vt);
+        let quotient = self.dag.get_node(ISD::SDiv, vt, &[lhs, rhs]);
+        let remainder = self.dag.get_node(ISD::SRem, vt, &[lhs, rhs]);
+        let zero = self.dag.get_constant(0, vt);
+        let rem_nonzero = self.dag.get_setcc(bool_vt, remainder, zero, CondCode::SetNe);
+        let lhs_negative = self.dag.get_setcc(bool_vt, lhs, zero, CondCode::SetLt);
+        let rhs_negative = self.dag.get_setcc(bool_vt, rhs, zero, CondCode::SetLt);
+        let quotient_negative = self.dag.get_node(ISD::Xor, bool_vt, &[lhs_negative, rhs_negative]);
+        let one = self.dag.get_constant(1, vt);
+        let below = self.dag.get_node(ISD::Sub, vt, &[quotient, one]);
+        let adjust = self.dag.get_node(ISD::And, bool_vt, &[rem_nonzero, quotient_negative]);
+        Some(self.dag.get_select(vt, adjust, below, quotient))
     }
 
     /// `ExpandIntRes_CTPOP`: the population count of both halves, added.
