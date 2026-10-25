@@ -29,8 +29,7 @@
 //! `MachineScheduler`, a machine phase after `pressuresink` and before
 //! `floatfold` (`machinesched@5`): each region longer than half the allocatable
 //! registers is ordered by `bottom_up` (pieces 2 and 3 of
-//! docs/working/machine-scheduler-plan.md). DEVIATE MS3: values that pass
-//! through a block are not counted in its pressure, and one limit stands for
+//! docs/working/machine-scheduler-plan.md). DEVIATE MS3: one limit stands for
 //! every register set.
 
 use std::ops::Range;
@@ -39,7 +38,7 @@ use std::sync::Arc;
 
 use llrm_lir::registers::Regs;
 
-use crate::backend::allocate::{LiveAt, live_rows};
+use crate::backend::allocate::live_rows;
 use crate::backend::classes::RegisterClasses;
 use crate::backend::liveness;
 use crate::model::ir::{Loc, Operation};
@@ -408,26 +407,6 @@ fn pressure_after(
     live.len() - defined + opened.len()
 }
 
-/// The most values live at once while `order` (program order, as indexes into
-/// `insns`) runs above `live_out`.
-fn peak(
-    insns: &[Arc<Insn>],
-    order: &[usize],
-    live_out: &HashSet<u32>,
-    counted: &impl Fn(u32) -> bool,
-) -> usize {
-    let mut live = live_out.clone();
-    let mut most = live.len();
-    for &node in order.iter().rev() {
-        for value in &insns[node].defines {
-            live.remove(value);
-        }
-        live.extend(insns[node].uses.iter().copied().filter(|&value| counted(value)));
-        most = most.max(live.len());
-    }
-    most
-}
-
 /// The order of a region scheduled bottom-up as `GenericScheduler` does for a
 /// target with no schedule model (MachineScheduler.cpp, #L3965): an
 /// instruction is available once every reader is placed and its ready cycle
@@ -511,8 +490,8 @@ pub fn bottom_up(
 
 /// The pre-RA machine scheduler: each region of a block that is longer than
 /// half the allocatable registers is ordered by [`bottom_up`] (DEVIATE MS3:
-/// values that pass through the block are not counted in its pressure; the
-/// limit is the number of allocatable registers, not the pin's per-set limits).
+/// the limit is the number of allocatable registers, not the pin's per-set
+/// limits).
 pub struct MachineScheduler {
     pub classes: Rc<RegisterClasses>,
 }
@@ -588,11 +567,9 @@ pub fn scheduled(
             let mut now: HashSet<u32> = HashSet::default();
             if regions.iter().any(|region| region.len() > limit / 2) {
                 let live = live.get_or_insert_with(|| live_rows(body));
-                let mut values: Vec<u32> =
-                    insns.iter().flat_map(|one| one.defines.iter().chain(&one.uses)).copied().collect();
-                values.sort_unstable();
-                values.dedup();
-                now = values.into_iter().filter(|&value| counted(value) && live.live_out(block.at, value)).collect();
+                // Everything live below the block, what passes through it too
+                // (`RegPressureTracker::init` takes the live-out set).
+                now = live.leaving(block.at).filter(|&value| counted(value)).collect();
             }
             let step = |now: &mut HashSet<u32>, one: &Insn| {
                 for value in &one.defines {
@@ -615,13 +592,7 @@ pub fn scheduled(
                 if slice.len() >= 2 && (loads || slice.len() > limit / 2) {
                     let order = bottom_up(slice, &graph(slice, regs, bits), &now, limit, &counted);
                     let source: Vec<usize> = (0..slice.len()).collect();
-                    // DEVIATE MS3: where pressure is tracked, an order that
-                    // does not lower the peak pressure is not taken (the pin
-                    // keeps source order on ties and tracks per-set limits that
-                    // are not modelled here).
-                    let taken = order != source
-                        && (slice.len() <= limit / 2
-                            || peak(slice, &order, &now, &counted) < peak(slice, &source, &now, &counted));
+                    let taken = order != source;
                     if taken {
                         let mut ats: Vec<i64> = slice.iter().map(|one| one.at).collect();
                         ats.sort_unstable();
