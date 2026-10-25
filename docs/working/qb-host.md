@@ -50,5 +50,31 @@ runtime/qb/                portable runtime; touches the machine only through ru
   real EGA/VGA one, not DOSBox's: pixel values match DOS, RGB may not.
 - SDL2 only (SDL3 later), dynamic. Not run: macOS arm64 (no such machine here), a real window (tinytim has no X11 or
   Wayland; the test uses the dummy drivers), the dirty-line protocol on arm64.
-- Missing: DOS-vs-host screen goldens and scripted GORILLA (need a 64-bit QB compile), the video-memory policy,
-  `BLOAD`/`DEF SEG` on a host, PLAY through a real audio device.
+
+## Open rows (the issue's checklist against what landed)
+
+1. macOS arm64: not built or run. Milestone 6, and the atomics/dirty-line stress on arm64 (test 4), are open.
+2. Real window and real audio device: only the dummy drivers ran; no X11/Wayland/sound server on tinytim.
+3. Audio: the callback is tested only for receiving the tone (`sdl_audio_current`), not for its samples; PLAY timing through
+   SDL is untested (PLAY parse and timing are tested headless). No tone queue (see Deviations).
+4. Keyboard: the queue and CP437 text/F/cursor keys work; Alt combos, Ctrl-Break and key-up (`STRIG`, `ON KEY` modifiers)
+   are not mapped. Layouts are SDL text input's.
+5. Interrupt hook: only the exit hook (`llrm_os_set_exit_hook`) exists. The DOS-only vectors/PSP/`chain` are not behind an
+   interrupt hook, and the portable runtime has no host use for them yet.
+6. Text-only device over the shared streams (console programs with no window): not written.
+7. `display.wait_retrace`: not in the interface; `sleep` has no SDL flush hook (SLEEP and TIMER loops flush through
+   `dev_clock` and `dev_key_ready`).
+8. Rasterizer fast path (framebuffer pointer and pitch, measured against the per-op path): not done.
+9. Present: lines are converted one by one and the whole frame copied; adjacent-line merging and the "most lines flagged"
+   shortcut are not done, and no seqlock (tearing accepted, not observed).
+10. POSIX-shaped op names: the DOS names are kept and mapped (`posix/os.toml`); no `wall` op (`local_time` instead).
+11. Floating point: the host print/parse path against the DOS goldens (`SINGLE`/`DOUBLE`) is not compared.
+12. Heap and addresses: a host `malloc` behind `$DYNAMIC` arrays and the 32-bit-addressable arena for `VARPTR`/`PEEK`/`POKE`
+    are not done (milestone 7 and decision 1 of the issue).
+13. Video-memory policy (milestone 7): chosen (warn and ignore, as m32), not implemented on the host.
+14. Tests: headless runs PRINT, INKEY$, BEEP, SOUND, PLAY, TIMER, TIME$, DATE$ and the graphics statements, but not the
+    existing string, error, `PRINT USING` and array suites; no NIBBLES/GORILLA goldens, no scripted GORILLA, no NIBBLES intro
+    in the SDL smoke test. All need a QB program compiled for a 64-bit target (compiler side: `bitness`/`flat`,
+    `native_contract`'s `i386: true`, ELF/Mach-O symbol names, 64-bit descriptors, none started).
+15. Build: the host runtime is compiled by `cc` in the tests; it is not a static library with one object per module, and
+    there is no macOS x86-64 build.
