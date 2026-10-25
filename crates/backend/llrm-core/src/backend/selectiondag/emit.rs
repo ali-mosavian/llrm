@@ -46,12 +46,12 @@
 //! ([L1003](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp#L1003)),
 //! `EmitCopyToRegClassNode`, `EmitCopyFromReg`.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use llrm_dagisel::instr::{self, InstrDesc, operand_type};
 use llrm_dagisel::x86_addr::AddrMode;
 use llrm_dagisel::x86_classes::{Role, class_tag};
+use llrm_support::hash::HashMap;
 
 use super::dag::{NodeData, SDValue, SelectionDAG};
 use super::isd::ISD;
@@ -248,6 +248,10 @@ struct Emitter<'a, 'd> {
     /// The value the last `CopyToReg ES` put there: the selector of the next
     /// cell through ES that is not based on a loaded far pointer.
     es: Option<Held>,
+    /// Whether that selector is SS: the cells through ES are then the frame's.
+    es_is_ss: bool,
+    /// The `CopyToReg ES` nodes that copy SS.
+    ss_copies: std::collections::HashSet<u32>,
     /// What each `CopyToReg ES` put there, by node: a cell takes the one of
     /// the copy it is chained after, whatever was set last.
     es_copies: HashMap<u32, Held>,
@@ -291,7 +295,7 @@ pub struct EmitState {
 
 impl Default for EmitState {
     fn default() -> EmitState {
-        EmitState { vregs: HashMap::new(), next_value: 1, at: 1, float_bytes: Default::default() }
+        EmitState { vregs: HashMap::default(), next_value: 1, at: 1, float_bytes: Default::default() }
     }
 }
 
@@ -352,30 +356,32 @@ pub fn emit_in(
     let mut emitter = Emitter {
         dag,
         ctx,
-        values: HashMap::new(),
-        es_copies: HashMap::new(),
+        values: HashMap::default(),
+        es_copies: HashMap::default(),
         state,
         blocks: vec![EmitBlock { at: first_at, ..EmitBlock::default() }],
         classes: Vec::new(),
         sp_values: Default::default(),
-        accumulator: HashMap::new(),
+        accumulator: HashMap::default(),
         arguments: Vec::new(),
         returns: Vec::new(),
         calls: Vec::new(),
         inline_places: Vec::new(),
         last_call: None,
         flags_now: None,
-        origins: HashMap::new(),
+        origins: HashMap::default(),
         es: None,
-        selectors: HashMap::new(),
-        lazy: HashMap::new(),
+        es_is_ss: false,
+        ss_copies: std::collections::HashSet::new(),
+        selectors: HashMap::default(),
+        lazy: HashMap::default(),
         last_select: None,
-        flag_insns: HashMap::new(),
-        saved_carry: HashMap::new(),
+        flag_insns: HashMap::default(),
+        saved_carry: HashMap::default(),
         flag_copies_done: Default::default(),
-        pending_fcom: HashMap::new(),
+        pending_fcom: HashMap::default(),
         glue_users: {
-            let mut users: HashMap<SDValue, Vec<u32>> = HashMap::new();
+            let mut users: HashMap<SDValue, Vec<u32>> = HashMap::default();
             for (at, one) in dag.nodes().iter().enumerate() {
                 for op in &one.ops {
                     users.entry(*op).or_default().push(at as u32);
@@ -408,6 +414,10 @@ pub fn emit_in(
         based_areas(&mut blocks, ctx.stack_pointer, emitter.state, &mut emitter.classes);
         for block in &mut blocks {
             pushed_arguments(&mut block.insns, ctx.stack_pointer, emitter.state, &mut emitter.classes)?;
+        }
+    } else if ctx.address_mode == AddrMode::Flat32 {
+        for block in &mut blocks {
+            pushed_dwords(&mut block.insns, ctx.stack_pointer);
         }
     }
     Ok(Emitted { blocks, classes: emitter.classes, calls: emitter.calls, inline_places: emitter.inline_places })
@@ -564,6 +574,145 @@ fn pushed_arguments(
     Ok(())
 }
 
+/// The flat 32-bit counterpart of [`pushed_arguments`]: the dword stores that
+/// tile the bottom of an argument area become pushes, last first, ahead of the
+/// call, and what the stores leave of the area (its alignment padding) stays a
+/// `sub esp`. An area with any other store (a float, a byte, a gap) keeps its
+/// stores in place, which `esp` addresses as they are.
+///
+/// DEVIATE CF3: the pin's `X86CallFrameOptimization` turns stores into a
+/// reserved call frame into pushes by its size heuristic (`isProfitable`); ours
+/// has no reserved frame (each call has its own `sub esp`/`add esp`), so every
+/// area that tiles becomes pushes, as the old selector's calls are. Exit: row
+/// 80, the call-frame pseudos and the reserved frame, which makes
+/// `callframe.rs` decide. Owner: sdag-d.
+fn pushed_dwords(
+    insns: &mut Vec<Arc<Insn>>,
+    sp: llrm_lir::registers::RegId,
+) {
+    let through_sp =
+        |cell: &Mem| cell.through == sp && cell.base.is_none() && cell.index.is_none() && cell.addr.is_none();
+    let is_store = |insn: &Insn| match insn.what.as_ref() {
+        Some(what) => matches!(&what.dests[..], [Loc::Mem(cell)] if through_sp(cell)),
+        None => false,
+    };
+    let is_area = |insn: &Insn| {
+        insn.what
+            .as_ref()
+            .is_some_and(
+                |what| what.name.as_deref() == Some("sub")
+                    && matches!(&what.dests[..], [Loc::Reg(reg)] if reg.register == sp)
+                    && matches!(&what.sources[..], [_, Loc::Imm(_)]),
+            )
+    };
+    let mut at = 0;
+    while at < insns.len() {
+        if !is_area(&insns[at]) {
+            at += 1;
+            continue;
+        }
+        let Some(Loc::Imm(size)) = insns[at].what.as_ref().and_then(|what| what.sources.get(1)).cloned() else {
+            at += 1;
+            continue;
+        };
+        let Some(end) = insns[at..]
+            .iter()
+            .position(|insn| insn.what.as_ref().is_some_and(|what| what.op == Operation::Call))
+            .map(|found| at + found)
+        else {
+            at += 1;
+            continue;
+        };
+        // A second area or a use of `esp` between the area and the call keeps
+        // it.
+        let others = (at + 1..end).any(|place| {
+            is_area(&insns[place])
+                || (!is_store(&insns[place])
+                    && insns[place].what.as_ref().is_some_and(|what| {
+                        what.dests
+                            .iter()
+                            .chain(&what.sources)
+                            .any(
+                                |loc| match loc {
+                                    Loc::Reg(reg) => reg.register == sp,
+                                    Loc::Mem(cell) => cell.through == sp,
+                                    _ => false,
+                                },
+                            )
+                    }))
+        });
+        let mut stores: Vec<(usize, i64, u32)> = Vec::new();
+        let mut plain = !others;
+        for place in at + 1..end {
+            if !is_store(&insns[place]) {
+                continue;
+            }
+            let what = insns[place].what.as_ref().expect("a store");
+            let Some(Loc::Mem(cell)) = what.dests.first() else { unreachable!("a store has its cell") };
+            plain &= what.op == Operation::Move && cell.width == 4;
+            stores.push((place, cell.offset, cell.width));
+        }
+        let mut sorted: Vec<(i64, u32)> = stores.iter().map(|&(_, offset, width)| (offset, width)).collect();
+        sorted.sort_unstable();
+        let mut next = 0;
+        let tiled = sorted
+            .iter()
+            .all(
+                |&(offset, width)| {
+                    let here = offset == next;
+                    next += i64::from(width);
+                    here
+                },
+            );
+        if !plain || !tiled || stores.is_empty() || next > size.value {
+            at = end + 1;
+            continue;
+        }
+        stores.sort_by_key(|&(_, offset, _)| offset);
+        let last = stores.iter().map(|&(place, _, _)| place).max().unwrap_or(end - 1);
+        let padding = size.value - next;
+        let mut pushes = Vec::new();
+        for &(place, _, _) in stores.iter().rev() {
+            let old = &insns[place];
+            let what = old.what.as_ref().expect("a store");
+            let push = Semantics {
+                name: Some("push".into()),
+                sources: vec![what.sources[0].clone()],
+                ..Semantics::new(Operation::Push)
+            };
+            pushes.push(Arc::new(Insn::new(old.at, old.covers, Some(push), vec![], old.uses.clone())));
+        }
+        let gone: std::collections::BTreeSet<usize> = stores.iter().map(|&(place, _, _)| place).collect();
+        let mut rebuilt = Vec::with_capacity(insns.len());
+        for (place, insn) in insns.drain(..).enumerate() {
+            if place == at {
+                if padding != 0 {
+                    // The area shrinks to the padding, ahead of the pushes.
+                    let mut what = insn.what.clone().expect("the area");
+                    what.sources[1] = Loc::Imm(Imm { value: padding, ..size.clone() });
+                    rebuilt.push(Arc::new(Insn::new(
+                        insn.at,
+                        insn.covers,
+                        Some(what),
+                        insn.defines.clone(),
+                        insn.uses.clone(),
+                    )));
+                }
+            } else if place == last {
+                rebuilt.append(&mut pushes);
+            } else if !gone.contains(&place) {
+                rebuilt.push(insn);
+            }
+        }
+        *insns = rebuilt;
+        at = 0;
+        while at < insns.len() && !insns[at].what.as_ref().is_some_and(|w| w.op == Operation::Call) {
+            at += 1;
+        }
+        at += 1;
+    }
+}
+
 /// An outgoing argument area whose call is in a later block (a select split the
 /// block between the area and the call): its stores go through a register that
 /// holds SP, from the area to the call, whichever block they are in.
@@ -693,6 +842,15 @@ impl Emitter<'_, '_> {
                 let selector = self.held_operand(node.ops[2])?;
                 self.es = Some(selector);
                 self.es_copies.insert(n, selector);
+                // SS itself, or a `CopyFromReg` of it.
+                let value = self.dag.node(node.ops[2]);
+                let is_ss = |v: SDValue| self.dag.node(v).data == NodeData::PhysReg(llrm_lir::registers::RegId::SS);
+                if is_ss(node.ops[2])
+                    || (value.opcode == ISD::CopyFromReg && value.ops.get(1).is_some_and(|r| is_ss(*r)))
+                {
+                    self.ss_copies.insert(n);
+                }
+                self.es_is_ss = self.ss_copies.contains(&n);
                 Ok(())
             }
             ISD::CopyToReg
@@ -834,8 +992,11 @@ impl Emitter<'_, '_> {
         // The scheduler may put two `CopyToReg ES` ahead of the cells that read
         // them: each cell reads its own.
         let node = self.dag.node(SDValue { node: n, res: 0 });
-        if let Some(selector) = node.ops.iter().find_map(|op| self.es_copies.get(&op.node).copied()) {
+        if let Some((copy, selector)) =
+            node.ops.iter().find_map(|op| self.es_copies.get(&op.node).map(|s| (op.node, *s)))
+        {
             self.es = Some(selector);
+            self.es_is_ss = self.ss_copies.contains(&copy);
         }
         self.machine_in(n, opcode)?;
         if writes_flags && let Some(previous) = previous {
@@ -866,6 +1027,28 @@ impl Emitter<'_, '_> {
             }
         }
         Ok(())
+    }
+
+    /// The last instruction that defines `value` defines it `width` bytes wide.
+    fn narrow_definition(
+        &mut self,
+        value: u32,
+        width: u32,
+    ) {
+        let Some(block) = self.blocks.last_mut() else { return };
+        for insn in block.insns.iter_mut().rev().take(8) {
+            let Some(what) = insn.what.as_ref() else { continue };
+            if !matches!(
+                what.dests.as_slice(),
+                [Loc::Held(held)] if held.value == value
+            ) {
+                continue;
+            }
+            let dests = vec![Loc::Held(Held { value, width })];
+            let narrowed = Semantics { dests, ..what.clone() };
+            *insn = Arc::new(Insn::new(insn.at, insn.covers, Some(narrowed), insn.defines.clone(), insn.uses.clone()));
+            return;
+        }
     }
 
     /// Whether the units glued after the flags copy `copy` are `adc`s and
@@ -1487,6 +1670,22 @@ impl Emitter<'_, '_> {
         if let Some(&selector) = self.selectors.get(&origin.node) {
             return Ok(selector);
         }
+        // A pointer held whole in a dword (a far pointer a call returned, a
+        // huge one loaded): its selector is the high word, `x >> 16`. Only the
+        // shapes below are known to be a word pointer into DGROUP, a frame or a
+        // global.
+        let whole = width_of(self.dag, origin) == 4;
+        let known_shape = matches!(
+            self.dag.opcode(origin),
+            ISD::Machine(op) if self.ctx.names.get(&(op as u16)).is_some_and(|name| { matches!(name.split('|').next(), Some("OR32rr" | "ADD32rr" | "SHL32ri" | "ADD32rr_DB")) })
+        );
+        if whole && !known_shape {
+            let value = self.held_operand(origin)?;
+            let shifted = self.fresh(4);
+            let sixteen = Imm { value: 16, width: 1, address: None };
+            self.push(Operation::Binary, "shr", vec![Loc::Held(shifted)], vec![Loc::Held(value), Loc::Imm(sixteen)]);
+            return Ok(Held { width: 2, ..shifted });
+        }
         let held = self.fresh(2);
         let source = if let ISD::Machine(op) = self.dag.opcode(origin) {
             let name = self.ctx.names.get(&(op as u16)).map_or("", |name| name.split('|').next().unwrap_or(name));
@@ -1671,6 +1870,28 @@ impl Emitter<'_, '_> {
                 return Ok(Some(()));
             }
             "CALLpcrel32" | "CALL64pcrel32" => {
+                // A call of a number (`inttoptr (i32 N to ptr)`): the address
+                // in a register, called through it.
+                if self.direct_callee(node.ops[0]).is_none()
+                    && let NodeData::Const { bits, .. } = self.dag.node(node.ops[0]).data
+                {
+                    let width = if name == "CALL64pcrel32" { 8 } else { 4 };
+                    let address = self.fresh(width);
+                    self.push(
+                        Operation::Move,
+                        "mov",
+                        vec![Loc::Held(address)],
+                        vec![Loc::Imm(Imm { value: bits as i64, width, address: None })],
+                    );
+                    let what = Semantics {
+                        indirect: true,
+                        name: Some("call".into()),
+                        sources: vec![Loc::Held(address)],
+                        ..Semantics::new(Operation::Call)
+                    };
+                    self.push_call(what, None);
+                    return Ok(Some(()));
+                }
                 let callee = self
                     .direct_callee(node.ops[0])
                     .ok_or_else(|| EmitError::Unsupported("a call of a non-global".to_owned()))?;
@@ -2044,6 +2265,15 @@ impl Emitter<'_, '_> {
                     self.values.insert(result, shifted.value);
                     return Ok(Some(()));
                 }
+                // The word cut from a `movzx` of a byte, when the dword has no
+                // other reader, is that `movzx` made at word
+                // width (`movzx ax, al`): held as the dword it was
+                // zero-extended to, a word that lives across a call is spilled
+                // and reloaded as a dword.
+                let only_user = self.glue_users.get(&node.ops[0]).is_some_and(|users| users.len() == 1);
+                if index == 4 && !status && only_user && self.is_machine_named(node.ops[0], "MOVZX32rr8") {
+                    self.narrow_definition(source.value, 2);
+                }
                 self.values.insert(result, source.value);
                 return Ok(Some(()));
             }
@@ -2177,6 +2407,22 @@ impl Emitter<'_, '_> {
                     vec![Loc::Held(held)],
                     vec![Loc::Held(when_false), Loc::Held(when_true)],
                 );
+                Ok(Some(()))
+            }
+            // The same from memory: the second source is the cell, read only
+            // when the condition holds (`CMOV64rm src1, [mem], cc`).
+            "CMOV16rm" | "CMOV32rm" | "CMOV64rm" => {
+                let cc = self.constant(node.ops[6])? as usize;
+                let jump = CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
+                let Loc::Held(when_false) = self.operand(node.ops[0])? else {
+                    return Err(EmitError::Unsupported("a conditional move of a non-register".to_owned()));
+                };
+                let group = node.ops.get(1..6).ok_or_else(|| EmitError::Unsupported("a short cmov".to_owned()))?;
+                let cell = self.cell(group, u32::from(width))?;
+                let held = self.fresh(width);
+                self.values.insert(result, held.value);
+                let name = format!("cmov{}", &jump[1..]);
+                self.push(Operation::Select, &name, vec![Loc::Held(held)], vec![Loc::Held(when_false), Loc::Mem(cell)]);
                 Ok(Some(()))
             }
             "SETCCr" => {
@@ -2652,6 +2898,19 @@ impl Emitter<'_, '_> {
     }
 
     /// A cell addressed through the register `through` (the stack pointer):
+    /// Whether the segment operand of a cell moves it off its own segment: an
+    /// override, except ES holding SS (a pointer to the frame made far), which
+    /// reads what the frame register's default does.
+    fn segment_overrides(
+        &mut self,
+        segment: SDValue,
+    ) -> Result<bool, EmitError> {
+        if self.is_es(segment) && self.es_is_ss {
+            return Ok(false);
+        }
+        Ok(self.address_register(segment, Role::Segment)?.is_some())
+    }
+
     /// `[through + index*scale + disp]`.
     fn cell_through(
         &mut self,
@@ -2662,7 +2921,7 @@ impl Emitter<'_, '_> {
         let scale = self.constant(group[1])?;
         let index = self.address_register(group[2], Role::Index)?;
         let offset = self.constant(group[3])?;
-        if self.address_register(group[4], Role::Segment)?.is_some() {
+        if self.segment_overrides(group[4])? {
             return Err(EmitError::Unsupported("a segment override".to_owned()));
         }
         Ok(Mem { through, index, scale, offset, disp_width: 0, ..Mem::new(None, cell_width) })
@@ -2678,7 +2937,7 @@ impl Emitter<'_, '_> {
             return Err(EmitError::Unsupported("a frame index without an index".to_owned()));
         };
         let index = self.address_register(group[2], Role::Index)?;
-        if self.address_register(group[4], Role::Segment)?.is_some() {
+        if self.segment_overrides(group[4])? {
             return Err(EmitError::Unsupported("a segment-overridden frame cell".to_owned()));
         }
         let scale = self.constant(group[1])?;

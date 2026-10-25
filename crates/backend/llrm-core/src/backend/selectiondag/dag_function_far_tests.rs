@@ -657,3 +657,77 @@ fn a_constant_offset_from_a_far_pointer_is_an_offset_of_its_halves() {
     selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|why| panic!("{}", why.0));
 }
+
+/// A far pointer to a frame object (`addrspacecast ptr to addrspace(5)`, the
+/// selector SS) read through after another far access had set ES: the cell is
+/// the frame's own. It stopped with "address component Reg(ES)" (bench
+/// `lru.nib`), reduced from its `main`.
+const FAR_FRAME_POINTER: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+
+@$var_bord = internal global [6 x i8] zeroinitializer, align 2
+@$var_bprev = internal global [6 x i8] zeroinitializer, align 2
+@$var_bnext = internal global [6 x i8] zeroinitializer, align 2
+@$var_bstamp = internal global [12 x i8] zeroinitializer, align 4
+
+define cc 1005 i16 @f() addrspace(1) nearcode \"llrm-fp-eval\"=\"x87-extended\" memory(read, inaccessiblemem: readwrite) {
+entry:
+  %v1 = alloca [48 x i8]
+  %v8 = getelementptr inbounds nuw i8, ptr %v1, i16 34
+  %v9 = addrspacecast ptr %v8 to ptr addrspace(1)
+  call void @llvm.memset.p1.i16(ptr addrspace(1) align 2 %v9, i8 -1, i16 6, i1 false)
+  %v10 = addrspacecast ptr %v1 to ptr addrspace(5)
+  %v11 = load i16, ptr addrspace(1) getelementptr (i8, ptr addrspace(1) addrspacecast (ptr @$var_bprev to ptr addrspace(1)), i16 2)
+  %v12 = icmp sgt i16 %v11, -1
+  %v13 = load i16, ptr addrspace(1) getelementptr (i8, ptr addrspace(1) addrspacecast (ptr @$var_bnext to ptr addrspace(1)), i16 2)
+  %v14 = icmp sgt i16 %v13, -1
+  %or.cond = select i1 %v12, i1 true, i1 %v14
+  br i1 %or.cond, label %L32, label %L15
+
+L15:
+  %v16 = load i16, ptr addrspace(1) getelementptr (i8, ptr addrspace(1) addrspacecast (ptr @$var_bord to ptr addrspace(1)), i16 2)
+  %v17 = getelementptr inbounds nuw i8, ptr addrspace(5) %v10, i16 20
+  %v18 = shl i16 %v16, 1
+  %v19 = getelementptr inbounds i8, ptr addrspace(5) %v17, i16 %v18
+  %v20 = load i16, ptr addrspace(5) %v19
+  %v21 = icmp eq i16 %v20, 1
+  br i1 %v21, label %L32, label %L22
+
+L22:
+  %v23 = getelementptr inbounds nuw i8, ptr addrspace(5) %v10, i16 34
+  %v24 = getelementptr inbounds i8, ptr addrspace(5) %v23, i16 %v18
+  %v25 = load i16, ptr addrspace(5) %v24
+  %v26 = icmp sgt i16 %v25, -1
+  br i1 %v26, label %L27, label %L32
+
+L27:
+  br label %L32
+
+L32:
+  ret i16 0
+}
+
+declare void @llvm.memset.p1.i16(ptr addrspace(1) nocapture writeonly, i8, i16, i1 immarg)
+
+";
+
+#[test]
+fn a_cell_through_a_far_pointer_to_the_frame_is_the_frames_own() {
+    let module = llrm_mir::parse::module(FAR_FRAME_POINTER).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+}
+
+/// The far pointer a call's dword result is: the fill took the dword apart and
+/// put it together again (`shr; shl; movzx; add`) to name `di`, where `di` is
+/// the low word and `es` the high one.
+#[test]
+fn a_far_fill_through_a_call_result_does_not_rebuild_the_dword() {
+    let module = llrm_mir::parse::module(FAR_FROM_A_CALL_RESULT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+    let insns = done.body.insns();
+    let names: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref().and_then(|w| w.name.as_deref())).collect();
+    // One `shl` joins the call's two words for the null test; the fill needs
+    // none.
+    assert_eq!(names.iter().filter(|name| **name == "shl").count(), 1, "{names:?}");
+}
