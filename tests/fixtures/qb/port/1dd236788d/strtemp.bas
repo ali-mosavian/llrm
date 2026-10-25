@@ -1,6 +1,6 @@
-declare sub Show (text as string)
-Show "Level" + str$(1)
+declare sub Display (text as string)
+Display "Level" + str$(1)
 end
-sub Show (text as string)
+sub Display (text as string)
     print text
 end sub
