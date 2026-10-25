@@ -831,3 +831,35 @@ fn an_alloca_with_a_constant_count_is_that_many_elements() {
     assert_eq!(done.depth, 16);
     assert_eq!(done.extents, [(-16, 16)]);
 }
+
+const VOLATILE_FOLD: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@v = global i32 0
+define i32 @f(i32 %a) {
+entry:
+  %b = load volatile i32, ptr @v
+  %s = add i32 %a, %b
+  ret i32 %s
+}
+";
+
+/// A volatile load the matcher folds into an `add` (`add eax, [v]`) lost its
+/// mark: the folded node was gone, and `MachineLICM`, `MachineCSE` and the
+/// coalescer saw a plain instruction. The machine node carries the flag of the
+/// memory operands it folded (`MachineMemOperand::isVolatile`).
+#[test]
+fn a_volatile_load_folded_into_an_add_is_a_volatile_instruction() {
+    let module = llrm_mir::parse::module(VOLATILE_FOLD).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let folded: Vec<_> = insns
+        .iter()
+        .filter(|i| {
+            i.what.as_ref().is_some_and(|w| {
+                w.name.as_deref() == Some("add") && w.sources.iter().any(|s| matches!(s, crate::model::ir::Loc::Mem(_)))
+            })
+        })
+        .collect();
+    assert_eq!(folded.len(), 1, "premise: the load is folded into the add");
+    assert!(folded[0].volatile, "the folded add is volatile");
+}
