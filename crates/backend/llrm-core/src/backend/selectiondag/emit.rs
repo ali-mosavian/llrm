@@ -1484,7 +1484,11 @@ impl Emitter<'_, '_> {
                         .ok_or_else(
                             || EmitError::Unsupported("a string operation on a pointer of no known segment".to_owned()),
                         )?;
-                    return self.held_operand(selector);
+                    // The selector is a word: the low word of a dword whose
+                    // high half it is (`x >> 16`), or the word itself.
+                    let mut held = self.held_operand(selector)?;
+                    held.width = 2;
+                    return Ok(held);
                 }
                 // any other near pointer is into DGROUP, as the builder takes
                 // it
@@ -1521,6 +1525,12 @@ impl Emitter<'_, '_> {
         };
         let [inserted, amount] = self.dag.node(shifted).ops[..] else { return None };
         let NodeData::Const { bits: 16, .. } = self.dag.node(amount).data else { return None };
+        // A pointer made of a dword (`inttoptr` of a call's result): the
+        // combiner leaves `(x >> 16) << 16`, whose low word is the selector.
+        if self.is_machine_named(inserted, "SHR32ri") {
+            let [_, by] = self.dag.node(inserted).ops[..] else { return None };
+            return matches!(self.dag.node(by).data, NodeData::Const { bits: 16, .. }).then_some(inserted);
+        }
         if !self.is_machine_named(inserted, "INSERT_SUBREG") {
             return None;
         }
