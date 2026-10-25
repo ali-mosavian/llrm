@@ -590,6 +590,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return (folded != node).then_some(folded);
         }
         match self.dag.opcode(n0) {
+            // `reduceLoadWidth`: the low bytes of a loaded value are a narrower
+            // load of the same address (little-endian), which then folds into
+            // its user (`test byte [m], 1` where `mov eax, [m]; test al, 1`).
+            ISD::Load if n0.res == 0 => self.reduce_load_width(node),
             ISD::Truncate => Some(self.dag.get_node(ISD::Truncate, vt, &[self.dag.operand(n0, 0)])),
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => {
                 let (op, x) = (self.dag.opcode(n0), self.dag.operand(n0, 0));
@@ -604,6 +608,37 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             _ => None,
         }
+    }
+
+    /// `reduceLoadWidth` for `trunc (load p)` of a load nothing else reads.
+    fn reduce_load_width(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (vt, load) = (self.dag.value_type(node), self.dag.operand(node, 0));
+        let NodeData::Mem(info) = self.dag.node(load).data.clone() else { return None };
+        let wide = self.dag.value_type(load);
+        if info.volatile
+            || info.ext.is_some()
+            || self.dag.use_count(load.node) != 1
+            || !vt.is_integer()
+            || vt.size_in_bits() % 8 != 0
+            || vt.size_in_bits() >= wide.size_in_bits()
+        {
+            return None;
+        }
+        // The load must be legal at the narrower type once types are legal.
+        if self.level >= CombineLevel::AfterLegalizeTypes && self.tli.is_some_and(|tli| !tli.types.is_type_legal(vt)) {
+            return None;
+        }
+        let (chain, ptr) = (self.dag.operand(load, 0), self.dag.operand(load, 1));
+        let narrow = super::dag::MemInfo { mem_vt: vt, ..info };
+        let new = self.dag.get_load(vt, chain, ptr, narrow);
+        if self.dag.invariant_loads.contains(&load.node) {
+            self.dag.invariant_loads.insert(new.node);
+        }
+        self.replace_value(SDValue { node: load.node, res: 1 }, SDValue { node: new.node, res: 1 });
+        Some(new)
     }
 
     /// `visitANY_EXTEND`, `visitZERO_EXTEND` and `visitSIGN_EXTEND`, the folds
