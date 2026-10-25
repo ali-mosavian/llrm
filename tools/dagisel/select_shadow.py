@@ -29,6 +29,9 @@ FLAGS = ["-m32", "-mabi=sysv", "-march=i486", "-O2"]
 M16_FLAGS = ["-m16", "-march=i386", "-O2"]
 # Opcodes the pin's selection makes that are not instructions we compare: copies and bookkeeping.
 FLAG_WORDS = {"nuw", "nsw", "exact", "nnan", "ninf", "nsz", "arcp", "contract", "afn", "reassoc", "nofpexcept", "samesign", "nneg", "disjoint", "inbounds", "fmf"}
+# The pin's finalize-isel runs `EmitLoweredSelect`: its output has a JCC_1 diamond where our DAG selection still has the
+# CMOV_GR* pseudo (the emitter expands it to the same diamond, so there is no cmov: illegal on a 486).
+SELECT_PSEUDOS = {"CMOV_GR8", "CMOV_GR16", "CMOV_GR32"}
 BOOKKEEPING = {"COPY", "EXTRACT_SUBREG", "PHI", "IMPLICIT_DEF", "ADJCALLSTACKDOWN32", "ADJCALLSTACKUP32", "KILL"}
 
 
@@ -99,6 +102,18 @@ def short(reason: str) -> str:
     return reason[:70]
 
 
+def expanded_selects(have: Counter, want: Counter) -> Counter:
+    """`have` with each select pseudo as the JCC_1 the pin's `EmitLoweredSelect` makes. A cascade of selects on one
+    compare is one diamond: the pin's count may be lower than the pseudo count, by at most one JCC_1 per extra pseudo."""
+    selects = sum(have.pop(name, 0) for name in list(have) if name in SELECT_PSEUDOS)
+    if not selects:
+        return have
+    ours = have["JCC_1"] + selects
+    cascaded = max(0, min(ours - want["JCC_1"], selects - 1))
+    have["JCC_1"] = ours - cascaded
+    return have
+
+
 def rows_of(program, funcs, refused, pinned, ir=""):
     rows = []
     for name in defined(ir):
@@ -119,6 +134,7 @@ def rows_of(program, funcs, refused, pinned, ir=""):
         else:
             want = Counter({k: v for k, v in pinned.get(name, Counter()).items() if k not in BOOKKEEPING})
             have = Counter({k: v for k, v in f["machine"].items() if k not in BOOKKEEPING})
+            have = expanded_selects(have, want)
             if want == have:
                 bucket = "equal"
             else:
