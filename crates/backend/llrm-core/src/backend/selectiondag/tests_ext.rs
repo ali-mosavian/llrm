@@ -89,3 +89,22 @@ fn extending_a_byte_to_i64_extends_to_a_dword_for_the_low_half() {
     let root = dag.get_root();
     assert_eq!((dag.opcode(root), dag.value_type(root), dag.operand(root, 0)), (ISD::ZeroExtend, EVT::I32, x));
 }
+
+/// `all_legal` grew its visited set from empty, rehashing about nine times on
+/// a 600-node DAG (2,234 `reserve_rehash` calls on d_faces). Sized from the
+/// node count it allocates the set once.
+#[test]
+fn all_legal_sizes_its_visited_set_once() {
+    let tli = p5();
+    let mut dag = dag();
+    let mut level: Vec<SDValue> = (0..256).map(|slot| load(&mut dag, EVT::I32, slot)).collect();
+    while level.len() > 1 {
+        level = level.chunks(2).map(|pair| dag.get_node(ISD::Add, EVT::I32, &[pair[0], pair[1]])).collect();
+    }
+    dag.set_root(level[0]);
+    assert!(dag.node_count() > 500, "premise: a DAG of several hundred nodes");
+    let mut legalizer = TypeLegalizer::new(&mut dag, &tli);
+    let (legal, made) = llrm_support::alloc_count::counted(|| legalizer.all_legal());
+    assert!(legal, "premise: nothing illegal is reachable");
+    assert!(made <= 6, "{made} allocations to visit 500 nodes");
+}
