@@ -93,6 +93,7 @@ pub mod canonical;
 pub mod cfg;
 pub mod cgpaddr;
 pub mod cgpbranch;
+pub mod cmpopt;
 #[cfg(test)]
 mod codegen_slots_tests;
 pub mod combine;
