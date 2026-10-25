@@ -678,6 +678,12 @@ pub const ANALYSES: &[AnalysisEntry] = &[
     ),
     old_analysis("plain-accesses", "PlainAccesses", "MemorySSA", "mssa (memoryssa-port)"),
     old_analysis("accesses", "Accesses", "MemorySSA", "mssa (memoryssa-port)"),
+    old_analysis(
+        "base-accesses",
+        "BaseAccesses",
+        "MemorySSA",
+        "mssa (memoryssa-port): MemorySSA's clients read the AA stack, not provenance",
+    ),
     old_analysis("through-memory", "ThroughMemory", "MemorySSA + GVN value numbering", "mssa and the GVN translation"),
     old_analysis(
         "float-facts",

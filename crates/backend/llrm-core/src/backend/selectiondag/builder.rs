@@ -388,6 +388,7 @@ impl<'a> Builder<'a> {
             tail_candidate: None,
             sibcall: false,
             had_tail_call: false,
+            volatile_memory: false,
             block,
             order,
             deferred: Vec::new(),
@@ -425,6 +426,8 @@ struct Builder<'a> {
     sibcall: bool,
     /// A `TC_RETURN` ended the block: nothing after the call is built.
     had_tail_call: bool,
+    /// The memory intrinsic being lowered is volatile.
+    volatile_memory: bool,
     block: BlockId,
     /// The blocks in layout order, with the ones a switch lowering adds.
     order: Vec<BlockId>,
