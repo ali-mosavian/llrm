@@ -15,6 +15,7 @@ use super::super::mvt::EVT;
 use super::super::x86isd;
 use super::{Builder, Refused, convention_for};
 use crate::backend::isel::Convention;
+use crate::backend::memcpycall::inline_widths;
 
 /// `X86Subtarget::getMaxInlineSizeThreshold`.
 const MAX_INLINE_SIZE: u64 = 128;
@@ -224,38 +225,14 @@ impl Builder<'_> {
         if self.target.dag.pointer.size_in_bits() == 64 && size >= 8 { 8 } else { Self::WIDEST_MEM_OP }
     }
 
-    /// `findOptimalMemOpLowering` for x86 without SSE: the width in bytes of
-    /// each memory operation covering `size` bytes, the widest being `i32`;
-    /// `None` past `limit` operations. A last operation wider
-    /// than the bytes left overlaps the one before it.
+    /// `findOptimalMemOpLowering` for x86 without SSE ([`inline_widths`]).
     fn mem_ops(
         size: u64,
         widest: u64,
         limit: usize,
         volatile: bool,
     ) -> Option<Vec<u64>> {
-        let (mut left, mut width) = (size, widest);
-        let mut ops = Vec::new();
-        while left > 0 {
-            let mut taken = width;
-            while taken > left {
-                let narrower = width / 2;
-                if !ops.is_empty() && !volatile && narrower < left {
-                    // a misaligned access is fast on x86: overlap the previous
-                    // bytes
-                    taken = left;
-                } else {
-                    width = narrower;
-                    taken = narrower;
-                }
-            }
-            if ops.len() + 1 > limit {
-                return None;
-            }
-            ops.push(width);
-            left -= taken;
-        }
-        Some(ops)
+        inline_widths(size, widest, limit, volatile)
     }
 
     /// The address space an access through `ptr` is in: a far pointer's

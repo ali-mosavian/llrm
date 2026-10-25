@@ -226,7 +226,7 @@ b:
 #[test]
 fn a_branch_on_a_constant_leaves_no_branch_to_a_dropped_block() {
     let done = select_with_contracts(CONSTANT_BRANCH).unwrap_or_else(|why| panic!("{why}"));
-    let present: std::collections::HashSet<i64> = done.body.blocks.iter().map(|b| b.at).collect();
+    let present: llrm_support::hash::HashSet<i64> = done.body.blocks.iter().map(|b| b.at).collect();
     for block in &done.body.blocks {
         assert!(block.succ.iter().all(|next| present.contains(next)), "{:?} leaves for a missing block", block.at);
     }
@@ -238,9 +238,9 @@ fn a_branch_on_a_constant_leaves_no_branch_to_a_dropped_block() {
 #[test]
 fn a_block_no_edge_reaches_is_dropped() {
     let done = select_with_contracts(DEAD_DEFAULT).unwrap_or_else(|why| panic!("{why}"));
-    let by_at: std::collections::HashMap<i64, &crate::model::lir::Block> =
+    let by_at: llrm_support::hash::HashMap<i64, &crate::model::lir::Block> =
         done.body.blocks.iter().map(|b| (b.at, b)).collect();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = llrm_support::hash::HashSet::default();
     let mut work = vec![done.body.entry];
     while let Some(at) = work.pop() {
         if seen.insert(at) {

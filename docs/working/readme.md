@@ -91,6 +91,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [machine-cleanup-compile-plan](machine-cleanup-compile-plan.md) | Machine clean-up compile time: plan to 1.0x of the pin |
 | [machinecombiner-translation-plan](machinecombiner-translation-plan.md) | Translating MachineCombiner (slot 40) |
 | [old-allocator-modules](old-allocator-modules.md) | Old allocator modules: last callers and the PR that deletes each |
+| [peephole-vs-pin](peephole-vs-pin.md) | Peephole cost by sub-pass against the pin on d_faces -O2 (2026-10-25) |
 | [pei-plan](pei-plan.md) | Prologue/Epilogue Insertion and Frame Finalization (row 80): plan |
 | [phielimination-completion-plan](phielimination-completion-plan.md) | PHIElimination: completing the translation (row 61) |
 | [pin-slot-table](pin-slot-table.md) | Pin pipeline slots against llrm's pipeline |
@@ -101,6 +102,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [twoaddress-rest-plan](twoaddress-rest-plan.md) | Row 62: what of TwoAddressInstructionPass is left |
 | [row23-plan](row23-plan.md) | Row 23: CodeGenPrepare translation plan |
 | [row43-plan](row43-plan.md) | Row 43: Machine CSE, what is left |
+| [first-divergence-m32](first-divergence-m32.md) | First divergence from the pin for 71 programs, m32 -O2, counted by cause (2026-10-25) |
 | [row44-plan](row44-plan.md) | Row 44: MachineSink translation plan |
 | [row45-cost-plan](row45-cost-plan.md) | The Peephole's compile cost by sub-pass at the tip, the LLVM home of each, rows R45-1 to R45-6 with dates (2026-10-24) |
 | [row45-plan](row45-plan.md) | Row 45: PeepholeOptimizer translation plan |
@@ -134,3 +136,4 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 A change to a pass, analysis, flag, level, tool, target or runtime updates its doc in the same PR. A pass's `//!` header is its doc; after editing one, run `tools/fmt.sh` (it rewraps header comments), then `python3 tools/docsbuild/build.py --sync` and commit what it writes. A page of `docs/architecture/` joins its readme's Contents list by front matter (`architecture-index:` and `architecture-order:`, tools/docsbuild/archindex.py); `build.py --sync` rewrites the list, and `--check` fails on a stale one. The tests (`pytest tools/docsbuild`, `tests/header_mir.rs`) fail on a stale page, a missing section or a malformed MIR example.
 | [selectiondag-plan](selectiondag-plan.md) | Translating SelectionDAG selection (slot row 28): the pin's structure, what replaces each part, the generated matcher, shadow mode then switch then delete, with owners and dates |
 | [regpressure-plan](regpressure-plan.md) | Per-set register pressure for the pre-RA scheduler: tracker, limits, deltas; the half w2 calls |
+| [cgp-switch-type](cgp-switch-type.md) | `optimizeSwitchType`: a switch on i8/i16 is widened to i32 as the pin does; m16 keeps it narrow; byte evidence |
