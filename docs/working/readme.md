@@ -63,6 +63,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [count-to-zero-xbubble-trial](count-to-zero-xbubble-trial.md) | x_bubble zero-end counter generator: trial (2026-10-22) |
 | [early-machinelicm](early-machinelicm.md) | Early MachineLICM, pressure-gated (codegen row 42) — w-3, plan note 2026-11-06 |
 | [fold-retirement](fold-retirement.md) | Retiring `fold` slot by slot |
+| [post-parity-tuning](post-parity-tuning.md) | Where llrm may differ from the pin after parity, and how: -Os inlining |
 | [forged-sel-2](forged-sel-2.md) | FORGED-SEL-2: what a forged selector reaches |
 | [fp-constant-fold-plan](fp-constant-fold-plan.md) | FP binary constant fold: plan (2026-10-22) |
 | [fpround-pricing](fpround-pricing.md) | FPRound is priced as one instruction |

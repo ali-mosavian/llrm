@@ -148,6 +148,7 @@ impl Machine for Dos {
             registers: self.registers as u32,
             scaled_index_insns: scaled_index_insns as u32,
             huge_space: crate::spaces().huge,
+            inline_size_guard: true,
         };
         let layout = crate::layout();
         llrm_x86::tti::X86::described(layout.tti.as_deref()?, layout.llvm_cpu.as_deref()?)
