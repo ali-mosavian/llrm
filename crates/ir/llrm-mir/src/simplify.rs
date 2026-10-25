@@ -3294,8 +3294,8 @@ fn min_max_call(
     Some((a, b))
 }
 
-/// The intrinsic-name lookups `min_max_call` made, for the test that an
-/// icmp of two non-calls makes none.
+// The intrinsic-name lookups `min_max_call` made, for the test that an
+// icmp of two non-calls makes none.
 #[cfg(test)]
 thread_local! {
     pub(crate) static MIN_MAX_ASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
