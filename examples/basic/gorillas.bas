@@ -37,6 +37,7 @@ DECLARE SUB UpdateScores (Record(), PlayerNum, Results)
 DECLARE SUB DrawGorilla (x, y, arms)
 DECLARE SUB GorillaIntro (Player1$, Player2$)
 DECLARE SUB Rest (t#)
+DECLARE SUB Frame ()
 DECLARE SUB VictoryDance (Player)
 DECLARE SUB ClearGorillas ()
 DECLARE SUB DrawBan (xc#, yc#, r, bc)
@@ -230,6 +231,15 @@ SUB Center (Row, Text$)
   PRINT Text$;
 END SUB
 
+'Frame:
+'  waits for the next 1/60 s step; steps lost to a long pause or midnight are not made up
+SUB Frame
+  STATIC nxt#
+  IF TIMER - nxt# > .1 OR nxt# - TIMER > 1 THEN nxt# = TIMER
+  nxt# = nxt# + 1 / 60
+  DO: LOOP WHILE TIMER < nxt#
+END SUB
+
 ' DoExplosion:
 '   Produces explosion when a shot is fired
 ' Parameters:
@@ -242,13 +252,13 @@ SUB DoExplosion (x#, y#)
   IF Mode = 9 THEN Inc# = .5 ELSE Inc# = .41
   FOR c# = 0 TO Radius STEP Inc#
     CIRCLE (x#, y#), c#, ExplosionColor
-    Rest .01
+    Frame
   NEXT c#
   FOR c# = Radius TO 0 STEP (-1 * Inc#)
     CIRCLE (x#, y#), c#, BACKATTR
     FOR i = 1 TO 100
     NEXT i
-    Rest .005
+    Frame
   NEXT c#
 END SUB
 
@@ -451,18 +461,18 @@ FUNCTION ExplodeGorilla (x#, y#)
   FOR i = 1 TO 8 * SclX#
     CIRCLE (GorillaX(PlayerHit) + 3.5 * SclX# + XAdj, GorillaY(PlayerHit) + 7 * SclY# + YAdj), i, ExplosionColor, , , -1.57
     LINE (GorillaX(PlayerHit) + 7 * SclX#, GorillaY(PlayerHit) + 9 * SclY# - i)-(GorillaX(PlayerHit), GorillaY(PlayerHit) + 9 * SclY# - i), ExplosionColor
-    Rest .01
+    Frame
   NEXT i
 
   FOR i = 1 TO 16 * SclX#
     IF i < (8 * SclX#) THEN CIRCLE (GorillaX(PlayerHit) + 3.5 * SclX# + XAdj, GorillaY(PlayerHit) + 7 * SclY# + YAdj), (8 * SclX# + 1) - i, BACKATTR, , , -1.57
     CIRCLE (GorillaX(PlayerHit) + 3.5 * SclX# + XAdj, GorillaY(PlayerHit) + YAdj), i, i MOD 2 + 1, , , -1.57
-    Rest .01
+    Frame
   NEXT i
 
   FOR i = 24 * SclX# TO 1 STEP -1
     CIRCLE (GorillaX(PlayerHit) + 3.5 * SclX# + XAdj, GorillaY(PlayerHit) + YAdj), i, BACKATTR, , , -1.57
-    Rest .01
+    Frame
   NEXT i
 
   ExplodeGorilla = PlayerHit
@@ -937,7 +947,7 @@ FUNCTION PlotShot (StartX, StartY, Angle#, Velocity, PlayerNum)
    
   DO WHILE (NOT Impact) AND OnScreen
  
-  Rest .02
+  Frame
 
   'Erase old banana, if necessary
   IF NeedErase THEN
