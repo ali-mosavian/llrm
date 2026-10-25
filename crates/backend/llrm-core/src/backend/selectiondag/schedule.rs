@@ -31,8 +31,8 @@
 //! DEVIATE SD30: part translated. Physical-register live interference
 //! (`DelayForLiveRegsBottomUp`, `CheckForLiveRegDef`, `LiveRegDefs`,
 //! `Interferences`, `releaseInterferences`) is in; not translated:
-//! `BacktrackBottomUp`, `CopyAndMoveSuccessors` (when every candidate waits
-//! the first goes anyway), the call-frame resource, `ClusterNodes`, and the
+//! `InsertCopiesAndMoveSuccs` (when no clone is possible the first held
+//! unit goes anyway), the call-frame resource, `ClusterNodes`, and the
 //! virtual-register cycle check (`initVRegCycle`, only for blocks that branch
 //! to themselves). Reason: they need register classes of the matcher's output
 //! for copies. Exit: before the switch gate. Owner: sdag-d. Review
@@ -78,6 +78,14 @@ pub trait SchedInfo {
         &self,
         opcode: u32,
     ) -> bool;
+    /// `TRI->getCrossCopyRegClass(RC) != RC` for the register's class: the
+    /// value cannot be copied within its class (x86's EFLAGS).
+    fn has_cross_copy_class(
+        &self,
+        _reg: u16,
+    ) -> bool {
+        false
+    }
     /// `TRI->regsOverlap`.
     fn regs_overlap(
         &self,
@@ -100,6 +108,8 @@ enum Kind {
     Data,
     /// `SDep::Barrier`, a chain edge.
     Barrier,
+    /// `SDep::Artificial`, an edge the scheduler added itself.
+    Artificial,
 }
 
 /// `SDep`.
@@ -758,10 +768,75 @@ impl<'a> Graph<'a> {
                 Some(try_su)
             };
         }
-        // DEVIATE SD30 (part): `CopyAndMoveSuccessors` and the cross-class
-        // copies are not translated; the first held unit goes anyway.
+        // Nothing to backtrack to: the live register's definition is cloned
+        // where the target cannot copy the register (`CopyAndMoveSuccessors`).
+        let (try_su, lregs) = self.interferences[0].clone();
+        if let [reg] = lregs[..]
+            && self.info.has_cross_copy_class(reg)
+            && let Some(&lr_def) = self.live_reg_defs.get(&reg)
+            && let Some(new_def) = self.copy_and_move_successors(lr_def, queue)
+        {
+            self.live_reg_defs.insert(reg, new_def);
+            self.add_pred(new_def, Dep { su: try_su, kind: Kind::Artificial, latency: 0, reg: None });
+            self.sus[try_su].is_available = false;
+            return Some(new_def);
+        }
+        // DEVIATE SD30 (part): the cross-class copies
+        // (`InsertCopiesAndMoveSuccs`) are not translated; the first
+        // held unit goes anyway.
         let (su, _) = self.interferences.remove(0);
         Some(su)
+    }
+
+    /// `CopyAndMoveSuccessors`: a clone of `su` with the same predecessors
+    /// that takes over the successors already scheduled. None for a unit of
+    /// several nodes or one with a chain or glue result (the pin unfolds a
+    /// load there, which is not translated).
+    fn copy_and_move_successors(
+        &mut self,
+        su: usize,
+        queue: &mut Queue,
+    ) -> Option<usize> {
+        if self.sus[su].nodes.len() != 1
+            || self.values(self.sus[su].node()).iter().any(|vt| *vt == EVT::GLUE || *vt == EVT::OTHER)
+        {
+            return None;
+        }
+        let new = self.sus.len();
+        let mut clone = self.sus[su].clone();
+        clone.preds.clear();
+        clone.succs.clear();
+        clone.num_preds = 0;
+        clone.num_succs = 0;
+        clone.num_preds_left = 0;
+        clone.num_succs_left = 0;
+        clone.depth_current = false;
+        clone.height_current = false;
+        clone.is_available = false;
+        clone.is_scheduled = false;
+        clone.queue_id = 0;
+        self.sus.push(clone);
+        for pred in self.sus[su].preds.clone() {
+            if pred.kind != Kind::Artificial {
+                self.add_pred(new, pred);
+            }
+        }
+        let mut moved = Vec::new();
+        for succ in self.sus[su].succs.clone() {
+            if succ.kind != Kind::Artificial && self.sus[succ.su].is_scheduled {
+                self.add_pred(succ.su, Dep { su: new, ..succ });
+                moved.push((succ.su, Dep { su, ..succ }));
+            }
+        }
+        for (from, dep) in moved {
+            self.remove_pred(from, dep);
+        }
+        // `updateNode(SU)` and `addNode(NewSU)`.
+        queue.sethi_ullman.resize(self.sus.len(), 0);
+        queue.sethi_ullman[su] = 0;
+        queue.calc_sethi_ullman(&self.sus, su);
+        queue.calc_sethi_ullman(&self.sus, new);
+        Some(new)
     }
 
     /// Whether `to` is reached from `from` through successors.
@@ -951,7 +1026,7 @@ impl<'a> Graph<'a> {
         for (su, live) in held {
             if reg.is_some_and(|reg| !live.contains(&reg)) {
                 self.interferences.push((su, live));
-            } else if queue_free(&self.sus, su) {
+            } else if self.sus[su].is_available && queue_free(&self.sus, su) {
                 queue.push(&mut self.sus, su);
             }
         }
