@@ -82,6 +82,11 @@ impl TargetLoweringInfo {
         TargetLoweringInfo::new(&[MVT::I8, MVT::I16, MVT::I32], false)
     }
 
+    /// m64: `addRegisterClass` of `i8`..`i64`.
+    pub fn x86_64() -> TargetLoweringInfo {
+        TargetLoweringInfo::new(&[MVT::I8, MVT::I16, MVT::I32, MVT::I64], false)
+    }
+
     /// m16: the same registers, and the far pointer (SD2).
     pub fn x86_16() -> TargetLoweringInfo {
         TargetLoweringInfo::new(&[MVT::I8, MVT::I16, MVT::I32], true)

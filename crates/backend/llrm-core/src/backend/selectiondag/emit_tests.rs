@@ -99,6 +99,7 @@ fn context_in(
         block_at: &no_blocks,
         frame: &NoFrame,
         address_mode: mode,
+        call_alignment: 1,
         map: &map,
         names: &names,
     });
@@ -134,11 +135,11 @@ fn copy_to(
     dag.get_node_multi(ISD::CopyToReg, &[EVT::OTHER], &[chain, register, value])
 }
 
-/// `r3 = r1 + r2` through `ADD32rr` and a copy: the add reads both source
-/// registers and the copy reads the add's result. A `CopyToReg` the emitter
-/// dropped would leave the register unwritten.
+/// `r3 = r1 + r2` through `ADD32rr` and a copy: the add defines r3 itself
+/// (`InstrEmitter::CreateVirtualRegisters`); a `mov` after it was a phi copy
+/// per loop edge in x_isqrt that the pin does not have.
 #[test]
-fn an_add_and_a_copy_become_two_instructions() {
+fn an_add_copied_to_a_virtual_register_defines_it() {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let entry = dag.entry_node();
     let a = copy_from(&mut dag, entry, 10);
@@ -150,13 +151,9 @@ fn an_add_and_a_copy_become_two_instructions() {
         let blocks = emit(&dag, &units, ctx).expect("emits").blocks;
         let insns = &blocks[0].insns;
         let lines = text(insns);
-        assert_eq!(insns.len(), 2, "{lines:?}");
+        assert_eq!(insns.len(), 1, "{lines:?}");
         assert!(lines[0].contains("add"), "{lines:?}");
-        assert!(lines[1].contains("mov"), "{lines:?}");
-        let add = insns[0].what.as_ref().unwrap();
-        let mov = insns[1].what.as_ref().unwrap();
-        assert_eq!(add.sources.len(), 2);
-        assert_eq!(mov.sources[0], add.dests[0]);
+        assert_eq!(insns[0].what.as_ref().unwrap().sources.len(), 2);
     });
 }
 
@@ -294,5 +291,26 @@ fn a_shift_by_cl_reads_cl() {
         // nobody defines (the LIR verifier: "value defined N times")
         assert!(matches!(shl.sources.last(), Some(Loc::Held(_))), "{lines:?}");
         assert!(lines.iter().all(|line| !line.contains("CL")), "{lines:?}");
+    });
+}
+
+/// `lea ax, [index*4 + 160]` at m16 was refused ('a lea of a symbol and a
+/// scaled index at m16': QCport's menu.c and sbar.c under the DAG default):
+/// 16-bit addressing has no scale, so the index is shifted first.
+#[test]
+fn a_lea_of_a_constant_and_a_scaled_index_at_m16_shifts_the_index() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let index = copy_from(&mut dag, entry, 11);
+    let scale = dag.get_constant(4, EVT::I8);
+    let disp = dag.get_constant(160, EVT::I32);
+    let noreg = dag.get_register(EVT::I16, 0);
+    let lea = machine(&mut dag, "LEA32r", &[EVT::I32], &[noreg, scale, index, disp, noreg]);
+    let root = copy_to(&mut dag, entry, 12, lea);
+    context_in(AddrMode::Real16, |ctx| {
+        let units = schedule(&dag, root, &Info);
+        let emitted = emit(&dag, &units, ctx).expect("emits");
+        let names: Vec<_> = emitted.blocks[0].insns.iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+        assert_eq!(names.iter().map(|n| &**n).collect::<Vec<_>>(), ["shl", "lea", "mov"]);
     });
 }

@@ -812,13 +812,17 @@ pub(crate) fn llvm_order(
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@690"),
                 slot("reassociate@696", Box::new(crate::reassociate::Reassociate)),
-                slot("algebraic@696", Box::new(algebraic::Algebraic { size, llvm: true })),
+                slot("constraint-elimination@699", Box::new(crate::constraintelim::ConstraintElimination)),
             ]);
             list.extend(canonical("loopsimplify@764", "lcssa@764"));
             // Without the rotate slot the first LICM keeps speculating, as the
             // single hoist did.
             let rotating = applied.options.rotate_slot;
             list.extend([
+                // LPM1's first pass, PassBuilderPipelines.cpp#L715.
+                slot("loop-instsimplify@715", Box::new(crate::loopinstsimplify::LoopInstSimplify)),
+                // LPM1's second pass, PassBuilderPipelines.cpp#L716.
+                slot("loop-simplifycfg@716", Box::new(crate::loopsimplifycfg::LoopSimplifyCfg)),
                 slot("floatloop@724", Box::new(floatloop::FloatLoop)),
                 // LPM1
                 // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L724:

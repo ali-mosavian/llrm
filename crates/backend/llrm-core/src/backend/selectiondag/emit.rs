@@ -177,6 +177,9 @@ pub struct EmitContext<'a> {
     /// How addresses are formed: real mode constrains a base and an index to
     /// their register classes (SD4).
     pub address_mode: AddrMode,
+    /// The multiple a call's argument area is rounded to, so a call finds the
+    /// stack aligned (`aligned_calls`); 1 where calls need none.
+    pub call_alignment: i64,
     pub map: &'a OpcodeMap,
     pub names: &'a HashMap<u16, &'a str>,
     /// The jump tables of the function, by `JumpTable` index.
@@ -245,6 +248,9 @@ struct Emitter<'a, 'd> {
     /// The value the last `CopyToReg ES` put there: the selector of the next
     /// cell through ES that is not based on a loaded far pointer.
     es: Option<Held>,
+    /// What each `CopyToReg ES` put there, by node: a cell takes the one of
+    /// the copy it is chained after, whatever was set last.
+    es_copies: HashMap<u32, Held>,
     /// The node whose flags EFLAGS holds now.
     flags_now: Option<u32>,
     /// The select a following one may join.
@@ -347,6 +353,7 @@ pub fn emit_in(
         dag,
         ctx,
         values: HashMap::new(),
+        es_copies: HashMap::new(),
         state,
         blocks: vec![EmitBlock { at: first_at, ..EmitBlock::default() }],
         classes: Vec::new(),
@@ -631,6 +638,7 @@ fn width(vt: EVT) -> u32 {
         EVT::Simple(MVT::I1 | MVT::I8) => 1,
         EVT::Simple(MVT::I16) => 2,
         EVT::Simple(MVT::I32) => 4,
+        EVT::Simple(MVT::I64) => 8,
         EVT::Int(bits) => bits.div_ceil(8),
         // A floating value is one 10-byte register value of the x87 stack.
         EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80) => 10,
@@ -684,6 +692,7 @@ impl Emitter<'_, '_> {
             ISD::CopyToReg if self.is_es(node.ops[1]) => {
                 let selector = self.held_operand(node.ops[2])?;
                 self.es = Some(selector);
+                self.es_copies.insert(n, selector);
                 Ok(())
             }
             ISD::CopyToReg
@@ -696,8 +705,19 @@ impl Emitter<'_, '_> {
                 let NodeData::PhysReg(register) = self.dag.node(node.ops[1]).data else {
                     return Err(EmitError::Unsupported("a virtual register passed to a call".to_owned()));
                 };
-                let held = self.held_operand(node.ops[2])?;
-                self.arguments.push((held, register));
+                // An any-extended word (selected as an `INSERT_SUBREG` into an
+                // undefined dword) is passed as the word it is.
+                let value = node.ops[2];
+                let source = if self.is_machine_named(value, "INSERT_SUBREG")
+                    && self.is_implicit_def(self.dag.operand(value, 0))
+                    && self.dag.value_type(self.dag.operand(value, 1)) == EVT::I16
+                {
+                    self.dag.operand(value, 1)
+                } else {
+                    value
+                };
+                let held = self.held_operand(source)?;
+                self.arguments.push((held, Self::argument_register(register, held.width)));
                 Ok(())
             }
             // A value returned in a register is required there by the `RET`,
@@ -723,6 +743,13 @@ impl Emitter<'_, '_> {
             ISD::CopyToReg => {
                 let dst = self.register(node.ops[1])?;
                 let src = self.operand(node.ops[2])?;
+                // The definition already wrote the register
+                // (`exported_register`).
+                if let (Loc::Held(to), Loc::Held(from)) = (&dst, &src)
+                    && to.value == from.value
+                {
+                    return Ok(());
+                }
                 self.push(Operation::Move, "mov", vec![dst], vec![src]);
                 Ok(())
             }
@@ -804,6 +831,12 @@ impl Emitter<'_, '_> {
             && instr::desc(opcode as u16)
                 .is_some_and(|desc| desc.implicit_defs.contains(&llrm_dagisel::generated::ids::x86::EFLAGS));
         let previous = self.flags_now.filter(|&p| p != n);
+        // The scheduler may put two `CopyToReg ES` ahead of the cells that read
+        // them: each cell reads its own.
+        let node = self.dag.node(SDValue { node: n, res: 0 });
+        if let Some(selector) = node.ops.iter().find_map(|op| self.es_copies.get(&op.node).copied()) {
+            self.es = Some(selector);
+        }
         self.machine_in(n, opcode)?;
         if writes_flags && let Some(previous) = previous {
             self.save_carry(previous, before);
@@ -1024,7 +1057,8 @@ impl Emitter<'_, '_> {
         // The results: the first `num_defs` values that are not chain or glue.
         let mut dests = Vec::new();
         for (i, vt) in node.values.iter().enumerate().take(usize::from(desc.num_defs)) {
-            let held = self.fresh(width(*vt));
+            let held =
+                self.exported_register(SDValue { node: n, res: i as u8 }).unwrap_or_else(|| self.fresh(width(*vt)));
             self.values.insert(SDValue { node: n, res: i as u8 }, held.value);
             dests.push(Loc::Held(held));
         }
@@ -1152,6 +1186,26 @@ impl Emitter<'_, '_> {
         let ISD::Machine(op) = self.dag.opcode(value) else { return false };
         instr::desc(op as u16)
             .is_some_and(|d| usize::from(value.res) >= usize::from(d.num_defs) && d.implicit_defs.contains(&28))
+    }
+
+    /// A word argument is required in the word register: the DAG names the
+    /// convention's 32-bit register (`$eax` for an any-extended `i16`), and a
+    /// word value required in `EAX` is a dword to the allocator, which spilled
+    /// every pointer live across a call as a dword (QCport -Os: +16%).
+    fn argument_register(
+        register: llrm_lir::registers::RegId,
+        width: u32,
+    ) -> llrm_lir::registers::RegId {
+        use llrm_lir::registers::RegId;
+        match (width, register) {
+            (2, RegId::EAX) => RegId::AX,
+            (2, RegId::EBX) => RegId::BX,
+            (2, RegId::ECX) => RegId::CX,
+            (2, RegId::EDX) => RegId::DX,
+            (2, RegId::ESI) => RegId::SI,
+            (2, RegId::EDI) => RegId::DI,
+            _ => register,
+        }
     }
 
     /// The call instruction: it destroys the caller-saved registers and may
@@ -1329,7 +1383,7 @@ impl Emitter<'_, '_> {
     ) -> bool {
         self.glue_reaches(n, |name| {
             let name = name.split('|').next().unwrap_or(name);
-            matches!(name, "CDQ" | "CWD")
+            matches!(name, "CDQ" | "CWD" | "CQO")
                 || is_div_or_mul(name)
                 || name.starts_with("REP_")
                 || name.ends_with("rCL")
@@ -1391,16 +1445,20 @@ impl Emitter<'_, '_> {
         }
         let ISD::Machine(op) = self.dag.opcode(glue) else { return false };
         let name = self.ctx.names.get(&(op as u16)).map_or("", |name| name.split('|').next().unwrap_or(name));
-        matches!(name, "CDQ" | "CWD") || is_div_or_mul(name)
+        matches!(name, "CDQ" | "CWD" | "CQO") || is_div_or_mul(name)
     }
 
-    /// (low, high, bytes): AX and DX, or EAX and EDX.
+    /// (low, high, bytes): AX and DX, EAX and EDX, or RAX and RDX.
     fn accumulator_pair(
         &self,
-        dword: bool,
+        bytes: u32,
     ) -> Result<(llrm_lir::registers::RegId, llrm_lir::registers::RegId, u32), EmitError> {
         use llrm_lir::registers::RegId;
-        Ok(if dword { (RegId::EAX, RegId::EDX, 4) } else { (RegId::AX, RegId::DX, 2) })
+        Ok(match bytes {
+            8 => (RegId::RAX, RegId::RDX, 8),
+            4 => (RegId::EAX, RegId::EDX, 4),
+            _ => (RegId::AX, RegId::DX, 2),
+        })
     }
 
     /// Whether `register` is ES, named as the builder's physical register or as
@@ -1446,16 +1504,22 @@ impl Emitter<'_, '_> {
                     width: 2,
                     address: Some(self.ctx.globals.segment(self.global_displacement(origin))),
                 }),
-                ("OR32rr" | "ADD32rr_DB", _) => {
+                // `SHL32ri`: a huge pointer whose offset is zero, the `or`
+                // folded away
+                ("OR32rr" | "ADD32rr" | "SHL32ri" | "ADD32rr_DB", _) => {
                     // A huge pointer built as `offset | (selector << 16)`, or
-                    // as the same sum once the combiner
-                    // turns a disjoint or into an add.
+                    // as the same sum (the halves are disjoint, so the combiner
+                    // may turn the or into an add).
                     let selector = self
                         .huge_selector(origin)
                         .ok_or_else(
                             || EmitError::Unsupported("a string operation on a pointer of no known segment".to_owned()),
                         )?;
-                    return self.held_operand(selector);
+                    // The selector is a word: the low word of a dword whose
+                    // high half it is (`x >> 16`), or the word itself.
+                    let mut held = self.held_operand(selector)?;
+                    held.width = 2;
+                    return Ok(held);
                 }
                 // any other near pointer is into DGROUP, as the builder takes
                 // it
@@ -1485,9 +1549,19 @@ impl Emitter<'_, '_> {
         &self,
         origin: SDValue,
     ) -> Option<SDValue> {
-        let shifted = *self.dag.node(origin).ops.iter().find(|op| self.is_machine_named(**op, "SHL32ri"))?;
+        let shifted = if self.is_machine_named(origin, "SHL32ri") {
+            origin
+        } else {
+            *self.dag.node(origin).ops.iter().find(|op| self.is_machine_named(**op, "SHL32ri"))?
+        };
         let [inserted, amount] = self.dag.node(shifted).ops[..] else { return None };
         let NodeData::Const { bits: 16, .. } = self.dag.node(amount).data else { return None };
+        // A pointer made of a dword (`inttoptr` of a call's result): the
+        // combiner leaves `(x >> 16) << 16`, whose low word is the selector.
+        if self.is_machine_named(inserted, "SHR32ri") {
+            let [_, by] = self.dag.node(inserted).ops[..] else { return None };
+            return matches!(self.dag.node(by).data, NodeData::Const { bits: 16, .. }).then_some(inserted);
+        }
         if !self.is_machine_named(inserted, "INSERT_SUBREG") {
             return None;
         }
@@ -1527,14 +1601,22 @@ impl Emitter<'_, '_> {
         let width = width(node.values[0]);
         let result = SDValue { node: n, res: 0 };
         match name.split('|').next().unwrap_or(name) {
-            "ADJCALLSTACKDOWN32" | "ADJCALLSTACKUP32" => {
+            "ADJCALLSTACKDOWN32" | "ADJCALLSTACKUP32" | "ADJCALLSTACKDOWN64" | "ADJCALLSTACKUP64" => {
                 let bytes = self.constant(node.ops[0])?;
                 let popped = if name.starts_with("ADJCALLSTACKUP") { self.constant(node.ops[1])? } else { 0 };
+                // The area is a multiple of the call alignment; the callee pops
+                // `popped` of it, the caller the rest.
+                let bytes = (bytes + self.ctx.call_alignment - 1) / self.ctx.call_alignment * self.ctx.call_alignment;
                 let (verb, count) =
                     if name.starts_with("ADJCALLSTACKDOWN") { ("sub", bytes) } else { ("add", bytes - popped) };
                 if count != 0 {
-                    // The stack pointer is a word at real mode.
-                    let word = if self.ctx.address_mode == AddrMode::Real16 { 2 } else { 4 };
+                    // The stack pointer is a word at real mode, a quadword at
+                    // 64 bits.
+                    let word = match self.ctx.address_mode {
+                        AddrMode::Real16 => 2,
+                        AddrMode::Flat64 => 8,
+                        AddrMode::Flat32 => 4,
+                    };
                     let sp = Loc::Reg(Reg { register: self.ctx.stack_pointer, width: word });
                     let count = Loc::Imm(Imm { value: count, width: word, address: None });
                     self.push(Operation::Binary, verb, vec![sp.clone()], vec![sp, count]);
@@ -1543,9 +1625,12 @@ impl Emitter<'_, '_> {
             }
             // A sibling call: the frame pass puts the epilogue before this
             // return, which is a jump to the callee (`masm`).
-            "TCRETURNdi" => {
+            "TCRETURNdi" | "TCRETURN_16" => {
+                // the pseudo keeps the node's operands: the chain, then the
+                // callee
+                let target = if name == "TCRETURN_16" { node.ops[1] } else { node.ops[0] };
                 let callee = self
-                    .direct_callee(node.ops[0])
+                    .direct_callee(target)
                     .ok_or_else(|| EmitError::Unsupported("a sibling call of a non-global".to_owned()))?;
                 let at = self.next_address();
                 let requires = std::mem::take(&mut self.arguments);
@@ -1556,7 +1641,36 @@ impl Emitter<'_, '_> {
                 self.calls.push((at, callee));
                 return Ok(Some(()));
             }
-            "CALLpcrel32" => {
+            // An indirect sibling call: the callee's address is pinned to one
+            // of EAX, ECX, EDX (`GR32_TC`) the arguments do not take, as the
+            // epilogue restores every other register before the jump.
+            "TCRETURNri" => {
+                let Loc::Held(callee) = self.operand(node.ops[0])? else {
+                    return Err(EmitError::Unsupported("a sibling call through a non-register".to_owned()));
+                };
+                use llrm_lir::registers::RegId;
+                let mut requires = std::mem::take(&mut self.arguments);
+                let free = [RegId::EAX, RegId::ECX, RegId::EDX]
+                    .into_iter()
+                    .find(|one| {
+                        self.ctx.caller_saved.contains(one) && requires.iter().all(|(_, taken)| taken.root() != *one)
+                    })
+                    .ok_or_else(|| EmitError::Unsupported("a sibling call with no free register".to_owned()))?;
+                requires.push((callee, free));
+                let at = self.next_address();
+                let mut uses: Vec<u32> = requires.iter().map(|(held, _)| held.value).collect();
+                uses.dedup();
+                let what = Semantics {
+                    indirect: true,
+                    name: Some("jmp".into()),
+                    sources: vec![Loc::Held(callee)],
+                    ..Semantics::new(Operation::Return)
+                };
+                let insn = Insn { requires, ..Insn::new(at, Some((at, at)), Some(what), vec![], uses) };
+                self.blocks.last_mut().expect("a block").insns.push(Arc::new(insn));
+                return Ok(Some(()));
+            }
+            "CALLpcrel32" | "CALL64pcrel32" => {
                 let callee = self
                     .direct_callee(node.ops[0])
                     .ok_or_else(|| EmitError::Unsupported("a call of a non-global".to_owned()))?;
@@ -1828,14 +1942,22 @@ impl Emitter<'_, '_> {
             // Division and the one-operand multiply work in AX:DX or EAX:EDX,
             // which the matcher names with `CopyToReg`/`CopyFromReg` around
             // them: the LIR form says the pair in its operands.
-            "CDQ" | "CWD" => {
-                let (low, high, bytes) = self.accumulator_pair(name == "CDQ")?;
+            "CDQ" | "CWD" | "CQO" => {
+                let (low, high, bytes) = self.accumulator_pair(match name {
+                    "CQO" => 8,
+                    "CDQ" => 4,
+                    _ => 2,
+                })?;
                 let source = self.accumulated(low)?;
                 let sign = self.fresh(bytes);
                 self.accumulator.insert(high, sign);
                 self.push(
                     Operation::Extend,
-                    if name == "CDQ" { "cdq" } else { "cwd" },
+                    match name {
+                        "CQO" => "cqo",
+                        "CDQ" => "cdq",
+                        _ => "cwd",
+                    },
                     vec![Loc::Held(sign)],
                     vec![Loc::Held(source)],
                 );
@@ -1851,7 +1973,7 @@ impl Emitter<'_, '_> {
                 let (low, high, wide) = if bytes == 1 {
                     (llrm_lir::registers::RegId::AL, llrm_lir::registers::RegId::DX, 2)
                 } else {
-                    self.accumulator_pair(bytes == 4)?
+                    self.accumulator_pair(bytes)?
                 };
                 let divisor = if memory {
                     let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short div".to_owned()))?;
@@ -1923,6 +2045,29 @@ impl Emitter<'_, '_> {
                     return Ok(Some(()));
                 }
                 self.values.insert(result, source.value);
+                return Ok(Some(()));
+            }
+            // `SUBREG_TO_REG 0, x, sub_32bit`: x in the low dword of a
+            // quadword whose high half is zero. A dword write zeroes it, so
+            // the copy is that write.
+            "SUBREG_TO_REG" => {
+                // The pin's operands are (0, x, index); the node keeps (x,
+                // index), and a folded load's chain after them.
+                let is_constant = |op: SDValue| matches!(self.dag.node(op).data, NodeData::Const { .. });
+                let (source, index) = match node.ops[..] {
+                    [source, index, ..] if is_constant(index) => (source, self.constant(index)?),
+                    [_, source, index, ..] => (source, self.constant(index)?),
+                    _ => return Err(EmitError::Unsupported("SUBREG_TO_REG operands".to_owned())),
+                };
+                if index != 6 {
+                    return Err(EmitError::Unsupported(format!("SUBREG_TO_REG index {index}")));
+                }
+                let Loc::Held(source) = self.operand(source)? else {
+                    return Err(EmitError::Unsupported("SUBREG_TO_REG of a non-value".to_owned()));
+                };
+                let held = self.fresh(source.width);
+                self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Held(source)]);
+                self.values.insert(result, held.value);
                 return Ok(Some(()));
             }
             // A register-class constraint is the allocator's business.
@@ -2012,6 +2157,28 @@ impl Emitter<'_, '_> {
                 self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![source]);
                 Ok(Some(()))
             }
+            // The conditional move (P6 and later, every x86-64): the second
+            // source replaces the first, tied to the result, when the
+            // condition holds.
+            "CMOV16rr" | "CMOV32rr" | "CMOV64rr" => {
+                let cc = self.constant(node.ops[2])? as usize;
+                let jump = CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
+                let (Loc::Held(when_false), Loc::Held(when_true)) =
+                    (self.operand(node.ops[0])?, self.operand(node.ops[1])?)
+                else {
+                    return Err(EmitError::Unsupported("a conditional move of a non-register".to_owned()));
+                };
+                let held = self.fresh(width);
+                self.values.insert(result, held.value);
+                let name = format!("cmov{}", &jump[1..]);
+                self.push(
+                    Operation::Select,
+                    &name,
+                    vec![Loc::Held(held)],
+                    vec![Loc::Held(when_false), Loc::Held(when_true)],
+                );
+                Ok(Some(()))
+            }
             "SETCCr" => {
                 let cc = node
                     .ops
@@ -2041,7 +2208,7 @@ impl Emitter<'_, '_> {
                 self.push(Operation::Unary, &name, vec![Loc::Mem(cell)], Vec::new());
                 Ok(Some(()))
             }
-            "LEA32r" | "LEA16r" => {
+            "LEA32r" | "LEA16r" | "LEA64r" => {
                 // a `lea` only computes the address: a scaled index is fine
                 let cell = self.cell_unchecked(
                     node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short lea".to_owned()))?,
@@ -2061,8 +2228,25 @@ impl Emitter<'_, '_> {
                     && cell.base.is_none()
                     && cell.index.is_some()
                 {
+                    // 16-bit addressing has no scale: the index is scaled by a
+                    // shift first.
                     if cell.scale != 1 {
-                        return Err(EmitError::Unsupported("a lea of a symbol and a scaled index at m16".to_owned()));
+                        let shift = match cell.scale {
+                            2 => 1,
+                            4 => 2,
+                            8 => 3,
+                            other => {
+                                return Err(EmitError::Unsupported(format!(
+                                    "a lea of a symbol and an index scaled by {other} at m16"
+                                )));
+                            }
+                        };
+                        let index = cell.index.take().expect("an index");
+                        let scaled = self.fresh(index.width);
+                        let amount = Loc::Imm(Imm { value: shift, width: 1, address: None });
+                        self.push(Operation::Binary, "shl", vec![Loc::Held(scaled)], vec![Loc::Held(index), amount]);
+                        cell.index = Some(scaled);
+                        cell.scale = 1;
                     }
                     cell.base = cell.index.take();
                 }
@@ -2079,6 +2263,20 @@ impl Emitter<'_, '_> {
                 }
                 let held = self.fresh(width);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
+                // The address of a symbol alone is its offset as an immediate
+                // (`mov r, offset sym`, which the encoder makes `lea r,
+                // [rip+sym]`), not an address value: the passes fold a `lea`
+                // into the operands that read it, and `sym[index]` is no
+                // address at 64 bits.
+                if self.ctx.address_mode == AddrMode::Flat64
+                    && cell.base.is_none()
+                    && cell.index.is_none()
+                    && let Some(address) = cell.addr
+                {
+                    let offset = Imm { value: 0, width, address: Some(address) };
+                    self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Imm(offset)]);
+                    return Ok(Some(()));
+                }
                 self.push(
                     Operation::Address,
                     "lea",
@@ -2540,6 +2738,11 @@ impl Emitter<'_, '_> {
         if self.dag.node(value).data == NodeData::Register(0) {
             return Ok(None);
         }
+        // `%rip` as a base is how the pin spells a symbol's address; the
+        // operand is the symbol alone, which the encoder makes `%rip`-relative.
+        if self.dag.node(value).data == NodeData::PhysReg(llrm_lir::registers::RegId::RIP) {
+            return Ok(None);
+        }
         match self.operand(value)? {
             Loc::Held(held) => {
                 if let Some(tag) = class_tag(self.ctx.address_mode, role) {
@@ -2617,6 +2820,35 @@ impl Emitter<'_, '_> {
         reg: u32,
     ) -> u32 {
         self.state.vreg(reg)
+    }
+
+    /// `InstrEmitter::CreateVirtualRegisters`: a result copied by a
+    /// `CopyToReg` to a virtual register of its width is defined in that
+    /// register, and the copy emits nothing.
+    fn exported_register(
+        &mut self,
+        result: SDValue,
+    ) -> Option<Held> {
+        let width = width_of(self.dag, result);
+        let reg = self
+            .dag
+            .users(result)
+            .find_map(
+                |user| {
+                    if self.dag.opcode(SDValue { node: user, res: 0 }) != ISD::CopyToReg {
+                        return None;
+                    }
+                    let node = self.dag.node(SDValue { node: user, res: 0 });
+                    let NodeData::Register(reg) = self.dag.node(node.ops[1]).data else { return None };
+                    // ES is the selector the next cell takes, not a value of
+                    // its own: made in two blocks it would be defined twice.
+                    if self.is_es(node.ops[1]) {
+                        return None;
+                    }
+                    (node.ops[2] == result && width_of(self.dag, node.ops[1]) == width).then_some(reg)
+                },
+            )?;
+        Some(Held { value: self.vreg(reg), width })
     }
 
     fn new_value(&mut self) -> u32 {

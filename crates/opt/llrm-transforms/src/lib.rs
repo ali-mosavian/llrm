@@ -150,6 +150,7 @@ pub mod condstores;
 pub mod condtocond;
 pub mod congruentiv;
 pub mod constraintelim;
+pub mod constraintelim_induction;
 #[cfg(test)]
 mod constraintelim_tests;
 #[cfg(test)]
@@ -231,12 +232,14 @@ pub mod loopdeletion;
 pub mod loopfilter;
 pub mod loopidiom;
 pub mod loopidioms;
+pub mod loopinstsimplify;
 pub mod loopinterchange;
 pub mod loopinterchange_transform;
 pub mod looploadelim;
 pub mod looppeel;
 pub mod looprotate;
 pub mod loopsimplify;
+pub mod loopsimplifycfg;
 pub mod loopunroll;
 pub mod loopunrollandjam;
 pub mod loopunrollpass;

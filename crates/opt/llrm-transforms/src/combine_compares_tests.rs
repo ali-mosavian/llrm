@@ -112,3 +112,35 @@ fn compares_that_are_sign_tests() {
     check("i16 %x", "  %r = icmp ugt i16 %x, 32767\n  ret i1 %r\n", "  %0 = icmp slt i16 %x, 0\n  ret i1 %0\n");
     check("i16 %x", "  %r = icmp ult i16 %x, 32768\n  ret i1 %r\n", "  %0 = icmp sgt i16 %x, -1\n  ret i1 %0\n");
 }
+
+/// `foldICmpWithCastOp`'s constant arm; each shape pinned by
+/// `opt -passes=instcombine`: a compare of an extension against a constant the
+/// narrow type holds is the compare in the narrow type (the strlen loop's
+/// `icmp ne (sext i8 c), 0` was not, and the idiom pass never saw a byte test).
+#[test]
+fn test_a_compare_of_an_extension_against_a_constant_is_the_narrow_compare() {
+    let narrowed = |extension: &str, pred: &str, constant: i32, wanted: &str| {
+        let text = format!(
+            "define i1 @f(i8 %x) {{\nb0:\n  %e = {extension} i8 %x to i32\n  %r = icmp {pred} i32 %e, {constant}\n  ret i1 %r\n}}\n"
+        );
+        let out = combined(&text);
+        assert!(out.contains(wanted) && !out.contains("i32"), "{wanted}\n{out}");
+    };
+    narrowed("zext", "ne", 0, "icmp ne i8 %x, 0");
+    narrowed("sext", "eq", 0, "icmp eq i8 %x, 0");
+    narrowed("sext", "slt", 5, "icmp slt i8 %x, 5");
+    narrowed("zext", "ult", 5, "icmp ult i8 %x, 5");
+    // The zext is non-negative: a signed compare is the unsigned one.
+    narrowed("zext", "slt", 5, "icmp ult i8 %x, 5");
+    // A negative sext is huge when read unsigned.
+    narrowed("sext", "ult", 5, "icmp ult i8 %x, 5");
+}
+
+/// A constant the narrow type does not hold stays a wide compare here (the pin
+/// decides it by range).
+#[test]
+fn test_a_constant_outside_the_narrow_type_is_not_narrowed() {
+    let out =
+        combined("define i1 @f(i8 %x) {\nb0:\n  %e = zext i8 %x to i32\n  %r = icmp ult i32 %e, 300\n  ret i1 %r\n}\n");
+    assert!(!out.contains("icmp ult i8"), "{out}");
+}

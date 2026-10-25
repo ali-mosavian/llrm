@@ -1197,6 +1197,13 @@ fn built(
                         out.extend(pieces.iter().flat_map(|piece| item(piece).1).map(Item::Semantics));
                     }
                     out.extend(unwrapped_leave.iter().cloned().map(Item::Semantics));
+                    // an indirect sibling call: the epilogue, then a jump
+                    // through the register the callee's
+                    // address is in
+                    if what.name.as_deref() == Some("jmp") && what.indirect {
+                        out.push(Item::Semantics(Semantics { op: Operation::Jump, ..what.clone() }));
+                        continue;
+                    }
                     // a sibling call: the epilogue, then a jump to the callee
                     if what.name.as_deref() == Some("jmp")
                         && let Some(callee) = procedure.callees.get(&one.at)

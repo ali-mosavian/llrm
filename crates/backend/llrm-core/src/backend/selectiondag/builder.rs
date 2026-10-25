@@ -167,6 +167,15 @@ impl BuilderTarget {
         }
     }
 
+    /// x86-64: 64-bit pointers, `i8`..`i64` in registers.
+    pub fn m64() -> BuilderTarget {
+        BuilderTarget {
+            dag: DagConfig { pointer: EVT::I64, offset_folding: true, ..DagConfig::default() },
+            legal_ints: vec![8, 16, 32, 64],
+            ..BuilderTarget::m32()
+        }
+    }
+
     /// Real mode: 16-bit near pointers, `i8`/`i16`/`i32` in registers (the
     /// pin's `In16BitMode` has `GR32` legal).
     pub fn m16() -> BuilderTarget {
@@ -181,6 +190,17 @@ impl BuilderTarget {
             tti: None,
             runtime_calls: None,
         }
+    }
+}
+
+/// The stack pointer the pointer type names: `sp`, `esp` or `rsp`.
+pub(super) fn stack_pointer_name(pointer: EVT) -> &'static str {
+    if pointer == EVT::I16 {
+        "sp"
+    } else if pointer == EVT::I64 {
+        "rsp"
+    } else {
+        "esp"
     }
 }
 
@@ -309,25 +329,44 @@ impl<'a> Builder<'a> {
         synthetic_name: Option<String>,
     ) -> Builder<'a> {
         let mut dag = SelectionDAG::new(target.dag);
-        dag.global_names =
-            module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect();
-        // `isOffsetFoldingLegal`: `shouldAssumeDSOLocal` holds for the globals
-        // the IR marks local, an ELF target's only ones
-        dag.local_symbols = module
-            .globals
-            .iter()
-            .map(|global| {
-                matches!(
-                    global.linkage,
-                    llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
-                )
+        let tables = info
+            .tables
+            .get_or_insert_with(|| {
+                // `isOffsetFoldingLegal`: `shouldAssumeDSOLocal` holds for the
+                // globals the IR marks local, an ELF target's only ones
+                super::function_lowering::Tables {
+                    global_names: std::rc::Rc::new(
+                        module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect(),
+                    ),
+                    local_symbols: std::rc::Rc::new(
+                        module
+                            .globals
+                            .iter()
+                            .map(|global| {
+                                matches!(
+                                    global.linkage,
+                                    llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
+                                )
+                            })
+                            .collect(),
+                    ),
+                    block_names: std::rc::Rc::new(
+                        (0..function.block_capacity())
+                            .map(|at| {
+                                function.block(BlockId(at as u32)).name.clone().unwrap_or_else(|| format!("bb{at}"))
+                            })
+                            .collect(),
+                    ),
+                }
             })
-            .collect();
-        dag.block_names = (0..function.block_capacity())
-            .map(|at| function.block(BlockId(at as u32)).name.clone().unwrap_or_else(|| format!("bb{at}")))
-            .collect();
+            .clone();
+        dag.global_names = tables.global_names;
+        dag.local_symbols = tables.local_symbols;
+        dag.block_names = tables.block_names;
         let name = synthetic_name.unwrap_or_else(|| dag_name(&dag, block));
-        dag.block_names.resize(next_synthetic as usize, name);
+        if dag.block_names.len() < next_synthetic as usize {
+            std::rc::Rc::make_mut(&mut dag.block_names).resize(next_synthetic as usize, name);
+        }
         Builder {
             current: None,
             prelowered: Default::default(),
@@ -620,6 +659,20 @@ impl Builder<'_> {
         }
     }
 
+    /// The word register of a dword one: `EAX` -> `AX`.
+    fn word_register(reg: llrm_lir::registers::RegId) -> Option<llrm_lir::registers::RegId> {
+        use llrm_lir::registers::RegId;
+        Some(match reg {
+            RegId::EAX => RegId::AX,
+            RegId::EBX => RegId::BX,
+            RegId::ECX => RegId::CX,
+            RegId::EDX => RegId::DX,
+            RegId::ESI => RegId::SI,
+            RegId::EDI => RegId::DI,
+            _ => return None,
+        })
+    }
+
     /// `LowerArguments` with X86's `LowerFormalArguments` over the target's
     /// `Convention`: a stack parameter is a load from a fixed object (indices
     /// -1, -2, ... in parameter order), a register parameter the copy of a
@@ -662,7 +715,13 @@ impl Builder<'_> {
                     for _ in 0..parts {
                         fixed += 1;
                         let ptr = self.dag.get_frame_index(self.target.dag.pointer, -fixed);
-                        let align = self.layout.align(&self.module.context.types, self.function.value(arg).ty) as u32;
+                        // The fixed object is a whole stack slot
+                        // (`CreateFixedObject`),
+                        // aligned as one: a narrow argument's load is as
+                        // aligned as the slot, which
+                        // lets it widen (`loadi32` of an any-extend).
+                        let align = (self.layout.align(&self.module.context.types, self.function.value(arg).ty) as u32)
+                            .max(self.target.dag.pointer.size_in_bits() / 8);
                         let info = MemInfo {
                             mem_vt: part_vt,
                             align,
@@ -743,6 +802,14 @@ impl Builder<'_> {
         call.operands.truncate(instruction.operands.len() - 3);
         call.operands.push(callee);
         self.visit_call(&call, info)?;
+        // `visitInvoke`: the result, if read outside this block, is made a
+        // virtual register here (a terminator is skipped by the export in
+        // `visit`).
+        if let Some(result) = instruction.result {
+            if let Some(reg) = self.info.value_regs.get(&result).copied() {
+                self.copy_value_to_register(Operand::Value(result), reg, ISD::AnyExtend)?;
+            }
+        }
         let root = self.control_root();
         let dest = self.dag.get_basic_block(normal.0);
         let node = self.dag.get_node(ISD::Br, EVT::OTHER, &[root, dest]);
@@ -820,7 +887,7 @@ impl Builder<'_> {
         )
         .map_err(|_| Refused("call the convention does not describe"))?;
         if let Some(tail) = self.tail_candidate.take()
-            && self.eligible_for_sibling_call(info, &plan, variadic, direct.is_some(), arguments)
+            && self.eligible_for_sibling_call(info, &plan, variadic, direct, first, arguments)
         {
             self.tail_calls.push(tail);
             self.sibcall = self.target.tail_calls;
@@ -1018,15 +1085,7 @@ impl Builder<'_> {
                             *piece
                         };
                         let sp = *stack_pointer.get_or_insert_with(|| {
-                            let sp = self
-                                .arch
-                                .register_named(
-                                    if self.target.dag.pointer == EVT::I16 {
-                                        "sp"
-                                    } else {
-                                        "esp"
-                                    },
-                                );
+                            let sp = self.arch.register_named(stack_pointer_name(self.target.dag.pointer));
                             self.dag.get_copy_from_phys_reg_plain(chain, sp, self.target.dag.pointer)
                         });
                         let part_bytes = i64::from(part_vt.size_in_bits() / 8);
@@ -1055,8 +1114,7 @@ impl Builder<'_> {
                     let (size, align) =
                         byvals.get(at).copied().flatten().ok_or(Refused("byval argument of an unknown size"))?;
                     let sp = *stack_pointer.get_or_insert_with(|| {
-                        let sp =
-                            self.arch.register_named(if self.target.dag.pointer == EVT::I16 { "sp" } else { "esp" });
+                        let sp = self.arch.register_named(stack_pointer_name(self.target.dag.pointer));
                         self.dag.get_copy_from_phys_reg_plain(chain, sp, self.target.dag.pointer)
                     });
                     let offset = self.dag.get_constant((displacement - first) as u128, self.target.dag.pointer);
@@ -1073,6 +1131,17 @@ impl Builder<'_> {
                         // (`CCPromoteToType`)
                         let width = self.arch.registers().bytes(reg).map_or(0, |bytes| bytes as u32 * 8);
                         let vt = self.dag.value_type(piece);
+                        // At -m16 a word argument goes in the word register
+                        // (`AX`, not `EAX`): the callee reads AX, and a word
+                        // required in a dword register is a dword to the
+                        // allocator.
+                        let word = (vt == EVT::I16 && self.target.dag.pointer == EVT::I16)
+                            .then(|| Self::word_register(reg))
+                            .flatten();
+                        if let Some(word) = word {
+                            copies.push((word, piece));
+                            continue;
+                        }
                         let piece = if vt.is_integer() && vt.size_in_bits() < width {
                             let code = extends.get(at).copied().unwrap_or(ISD::AnyExtend);
                             self.dag.get_node(code, EVT::integer(width), &[piece])
@@ -1105,7 +1174,13 @@ impl Builder<'_> {
             // arguments are in place), the registers
             let fpdiff = self.dag.get_constant_with(0, EVT::I32, true, false);
             ops.insert(2, fpdiff);
-            let tc = self.dag.get_node_multi(super::x86isd::TC_RETURN, &[EVT::OTHER], &ops);
+            // the pin has no 16-bit pattern: m16 has a node of its own
+            let node = if self.target.dag.pointer == EVT::I16 {
+                super::x86isd::LLRM_TC_RETURN
+            } else {
+                super::x86isd::TC_RETURN
+            };
+            let tc = self.dag.get_node_multi(node, &[EVT::OTHER], &ops);
             self.dag.set_root(tc);
             self.had_tail_call = true;
             return Ok(None);

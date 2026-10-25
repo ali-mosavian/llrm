@@ -314,7 +314,7 @@ def link_nib(target: str, source: Path, obj: Path, exe: Path, work: Path, level:
     """A Nib program for `target`: its object, `runtime.nib` cut to what the program and the OS layer (`os_objects`) name, linked as the target says."""
     runtime = work / (obj.stem + "R.obj")
     used = [word for one in (obj, *foreign, *os_objects(target, "nib", work).values()) for word in ("--used-by", str(one))]
-    _host([str(BIN / "llrm-nib"), str(ROOT / "crates/frontends/llrm-nib/src/runtime/runtime.nib"), m_flag(target), *abi, "-o", str(runtime), level, "--procedure-segments", "-Wno-target-width", *used])
+    _host(with_isel([str(BIN / "llrm-nib"), str(ROOT / "crates/frontends/llrm-nib/src/runtime/runtime.nib"), m_flag(target), *abi, "-o", str(runtime), level, "--procedure-segments", "-Wno-target-width", *used]))
     return link_target(target, obj, exe, work, runtime=(os_start(target, "nib"), []), objects_after=(runtime, *foreign), defines=os_defines(target, "nib"))
 
 

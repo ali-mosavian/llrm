@@ -53,6 +53,13 @@ pub const LLRM_PORT: u16 = 24586;
 /// The machine opcode `LLRM_PORT` becomes.
 pub const PORT_OPCODE: u16 = 30014;
 
+/// `X86ISD::LLRM_TC_RETURN` (sdag-a): `TC_RETURN` at m16, where the pin has no
+/// pattern for it (a far callee is jumped to, `jmp far`).
+pub const LLRM_TC_RETURN: u16 = 24587;
+
+/// The machine opcode `LLRM_TC_RETURN` becomes.
+pub const TC_RETURN_OPCODE: u16 = 30026;
+
 /// The machine opcodes the transcendental `FLOG`, `FEXP`, `FLOG2`, `FEXP2`,
 /// `FSIN`, `FCOS`, `FATAN` and `FRINT` become (SD214): the x87 operations or
 /// sequences `fln`, `fexp`, `flog2`, `fexp2`, `fsin`, `fcos` and `fatan`,
@@ -79,6 +86,7 @@ pub fn llrm_opcode(node: u16) -> Option<u16> {
         LLRM_FARCALL => Some(FARCALL_OPCODE),
         LLRM_CODE => Some(CODE_OPCODE),
         LLRM_PORT => Some(PORT_OPCODE),
+        LLRM_TC_RETURN => Some(TC_RETURN_OPCODE),
         n if LLRM_NODES.contains(&n) => Some(LLRM_ASM_OPCODE),
         _ => None,
     }
