@@ -28,3 +28,13 @@ After selection, before allocation, on the LIR: the call's `Push` run and the lo
 
 ## Tests
 Fail first: `g` above has no register load for the three pushed members; a load with a store between it and the call keeps its register; a vreg with two uses keeps its load; volatile and `lock` loads are not folded; the 16-bit target folds `push word ptr`.
+
+## Update 2026-10-25: the DAG path is the producer (owner sdag-d, plan 11-06, first PR 11-13)
+The DAG emitter lowers `ADJCALLSTACKDOWN/UP` to a per-call `sub esp, N` / `add esp, N` with `mov [esp+k], x` stores between (the pin's input form, minus the pseudos and the reserved frame). `emit.rs::pushed_dwords` (DEVIATE CF3) turns every tiling area into pushes at m32, which took QCport m32 from +10.7..+18.9% to -0.7..+1.9% over the old selector (#4566). The pin instead keeps the frame reserved (one `sub esp, MaxCallFrameSize` in the prologue, no per-call adjust) and lets this pass push only where `isProfitable`.
+
+Pieces, one PR each, rows priced after each (AM-BT 30, `qcport.py` m32 -O2/-Os, `run_tests.py c`):
+1. Emitter: `call_frame_setup N, 0, 0` / `call_frame_destroy N, M` instead of the `sub`/`add`; the stores stay. `callframe.rs` runs on them (it already has `isLegal`, `isProfitable`, `adjustCallSequence`). Until 2, every setup it leaves is lowered to the old `sub`/`add` right after it, so output equals today's minus the pushes the heuristic declines.
+2. `eliminateCallFramePseudoInstr` + prologue: `hasReservedCallFrame` (no variable-sized objects) puts the largest call area in the prologue's `sub`; the setup/destroy pairs vanish; sp-relative frame cells keep their offsets (the area is at the bottom). `framelowering.rs` takes `max_call_frame`. Needs frame indices for cells (FI-1, `pei-plan.md`) or the sp-relative offsets of locals recomputed there.
+3. Delete `pushed_dwords` (CF3) and `canFoldIntoRegPush`/`PUSH32rmm` fold (pieces 3-4 above) so `push [m]` returns where the pin has it.
+
+Risks: sp-relative addressing of locals and incoming arguments inside a call sequence (the area moves from per-call to the prologue: offsets change); `-Os`/`-Oz` profitability (the pin pushes always at minsize); the 16-byte alignment padding of sysv (`sub esp, 4` before the pushes).

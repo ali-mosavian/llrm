@@ -33,6 +33,7 @@ pub mod x86_mul;
 pub mod x86_rmw;
 pub mod x86_select;
 pub mod x86_shift;
+pub mod x86_test;
 
 /// A small DAG and hooks for the tests and for `examples/price.rs`.
 pub mod testing;

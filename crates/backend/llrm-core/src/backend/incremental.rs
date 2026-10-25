@@ -191,75 +191,91 @@ impl<P: Problem> Kept<P> {
         }
         self.counted(usize::from(dirty.len() < now.len()));
         let start = problem.start();
+        // The solve works by position in `now`: a vector slot for each block
+        // where a map keyed by block address was written on every visit.
+        let ats: Vec<i64> = now.keys().copied().collect();
         let was = |at: &i64, of: fn(&Solution<P>) -> &IndexMap<i64, P::Value>| {
             held.as_ref().and_then(|held| of(&held.solution).get(at)).copied().unwrap_or(start)
         };
-        let mut leaving: IndexMap<i64, P::Value> = now.keys().map(|at| (*at, was(at, |s| &s.leaving))).collect();
-        let mut entering: IndexMap<i64, P::Value> = now.keys().map(|at| (*at, was(at, |s| &s.entering))).collect();
+        let mut leaving: Vec<P::Value> = ats.iter().map(|at| was(at, |s| &s.leaving)).collect();
+        let mut entering: Vec<P::Value> = ats.iter().map(|at| was(at, |s| &s.entering)).collect();
+        let dirty: Vec<bool> = ats.iter().map(|at| dirty.contains(at)).collect();
         // Who feeds each block, and whom it feeds.
-        let mut successors: IndexMap<i64, Vec<i64>> = IndexMap::default();
-        let mut predecessors: IndexMap<i64, Vec<i64>> = now.keys().map(|at| (*at, Vec::new())).collect();
-        for (at, seen) in &now {
-            successors.insert(*at, seen.raw.iter().copied().filter(|next| now.contains_key(next)).collect());
-            for next in seen.raw.iter().filter(|next| now.contains_key(*next)) {
-                predecessors[next].push(*at);
+        let mut successors: Vec<Vec<usize>> = Vec::with_capacity(ats.len());
+        let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); ats.len()];
+        for (from, seen) in now.values().enumerate() {
+            successors.push(seen.raw.iter().filter_map(|next| now.get_index_of(next)).collect());
+            for next in &successors[from] {
+                predecessors[*next].push(from);
             }
         }
-        let (fed_by, feeds): (&IndexMap<i64, Vec<i64>>, &IndexMap<i64, Vec<i64>>) =
-            if P::FORWARD { (&predecessors, &successors) } else { (&successors, &predecessors) };
+        let (fed_by, feeds) = if P::FORWARD { (&predecessors, &successors) } else { (&successors, &predecessors) };
         let mut components = llrm_support::graph::components(&body.blocks);
         if P::FORWARD {
             components.reverse();
         }
         let mut gathered: Vec<P::Value> = Vec::new();
-        let mut moved: HashSet<i64> = HashSet::default();
+        let mut moved = vec![false; ats.len()];
+        let mut inside = vec![false; ats.len()];
+        let mut queued = vec![false; ats.len()];
         for component in components {
-            let inside: HashSet<i64> = component.iter().copied().collect();
-            let reached = |at: &i64| fed_by[at].iter().any(|from| moved.contains(from) && !inside.contains(from));
-            if !component.iter().any(|at| dirty.contains(at) || reached(at)) {
-                continue;
-            }
-            let before: Vec<P::Value> = component.iter().map(|at| leaving[at]).collect();
+            let component: Vec<usize> = component.iter().filter_map(|at| now.get_index_of(at)).collect();
             for at in &component {
-                leaving.insert(*at, start);
+                inside[*at] = true;
             }
-            // The deepest block first for a fact that flows back, the first
-            // reached for one that flows on.
-            let mut pending: Vec<i64> =
-                if P::FORWARD { component.clone() } else { component.iter().rev().copied().collect() };
-            let mut queued: HashSet<i64> = inside.clone();
-            while let Some(at) = pending.pop() {
-                self.visits.set(self.visits.get() + 1);
-                queued.remove(&at);
-                gathered.clear();
-                gathered.extend(fed_by[&at].iter().map(|from| leaving[from]));
-                let missing = if P::FORWARD { 0 } else { now[&at].raw.len() - fed_by[&at].len() };
-                let value = problem.entering(at, body.entry, &gathered, missing);
-                entering.insert(at, value);
-                let after = problem.leaving(&now[&at].summary, value);
-                if after != leaving[&at] {
-                    leaving.insert(at, after);
-                    for next in feeds[&at].iter().filter(|next| inside.contains(*next)) {
-                        if queued.insert(*next) {
-                            pending.push(*next);
+            let reached = |at: &usize| fed_by[*at].iter().any(|from| moved[*from] && !inside[*from]);
+            if component.iter().any(|at| dirty[*at] || reached(at)) {
+                let before: Vec<P::Value> = component.iter().map(|at| leaving[*at]).collect();
+                for at in &component {
+                    leaving[*at] = start;
+                }
+                // The deepest block first for a fact that flows back, the first
+                // reached for one that flows on.
+                let mut pending: Vec<usize> =
+                    if P::FORWARD { component.clone() } else { component.iter().rev().copied().collect() };
+                for at in &component {
+                    queued[*at] = true;
+                }
+                while let Some(at) = pending.pop() {
+                    self.visits.set(self.visits.get() + 1);
+                    queued[at] = false;
+                    gathered.clear();
+                    gathered.extend(fed_by[at].iter().map(|from| leaving[*from]));
+                    let missing = if P::FORWARD { 0 } else { now[at].raw.len() - fed_by[at].len() };
+                    let value = problem.entering(ats[at], body.entry, &gathered, missing);
+                    entering[at] = value;
+                    let after = problem.leaving(&now[at].summary, value);
+                    if after != leaving[at] {
+                        leaving[at] = after;
+                        for next in feeds[at].iter().filter(|next| inside[**next]) {
+                            if !queued[*next] {
+                                queued[*next] = true;
+                                pending.push(*next);
+                            }
                         }
                     }
                 }
-            }
-            for (at, before) in component.iter().zip(before) {
-                if leaving[at] != before {
-                    moved.insert(*at);
+                for (at, before) in component.iter().zip(before) {
+                    if leaving[*at] != before {
+                        moved[*at] = true;
+                    }
                 }
             }
+            for at in &component {
+                inside[*at] = false;
+            }
         }
-        let refreshed: HashSet<i64> = now
-            .keys()
-            .copied()
-            .filter(|at| {
-                dirty.contains(at)
-                    || held.as_ref().and_then(|held| held.solution.entering.get(at)) != Some(&entering[at])
+        let refreshed: HashSet<i64> = ats
+            .iter()
+            .enumerate()
+            .filter(|(at, address)| {
+                dirty[*at]
+                    || held.as_ref().and_then(|held| held.solution.entering.get(*address)) != Some(&entering[*at])
             })
+            .map(|(_, address)| *address)
             .collect();
+        let entering: IndexMap<i64, P::Value> = ats.iter().copied().zip(entering).collect();
+        let leaving: IndexMap<i64, P::Value> = ats.iter().copied().zip(leaving).collect();
         let summaries = now.iter().map(|(at, seen)| (*at, Rc::clone(&seen.summary))).collect();
         let solution = Rc::new(Solution { entering, leaving, summaries, refreshed });
         *self.held.borrow_mut() = Some(Held { key, blocks: now, solution: Rc::clone(&solution) });
