@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_branch.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_branch.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_branch.rs sha256:b001cdf99f08bf1c655385914b66a368dfadf5b1de9d9723bce11a62ff05df9b -->
+<!-- src: crates/opt/llrm-transforms/src/combine_branch.rs sha256:cf908512c23743451780d614e758380e85e0606592db308fa07124a2f0c0eb91 -->
 
 # combine_branch
 
@@ -12,6 +12,10 @@ at d1106deb71cc. `visit` has already asked `simplifyInstruction`.
 MIRROR: `br (not X), T, F` becomes `br X, F, T`, so that the guards SCEV
 and the loop passes read are plain compares; a branch to one block on both
 edges reads no condition.
+
+MIRROR: a branch that reaches the end of the visit is registered with the
+`DomConditionCache` (`DC.registerBranch`), so a query sees the branches
+visited before it and no others.
 
 DEVIATE 1 (temporary): not made: the logical-and-with-invert form (MIR has
 no logical `select` pattern here yet), the `fcmp` predicate canonical form

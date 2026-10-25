@@ -7477,7 +7477,8 @@ impl Compiler {
                         let numerator = self.convert(numerator, numerator_type, common)?;
                         // the `+ c` set aside above belongs to the numerator
                         let numerator = if let Some(additive) = additive {
-                            let step = self.convert(Operand::Constant(INTEGER, Number::Integer(additive)), INTEGER, common)?;
+                            let step =
+                                self.convert(Operand::Constant(INTEGER, Number::Integer(additive)), INTEGER, common)?;
                             let sum = self.value(common);
                             self.emit("fadd", vec![sum], vec![numerator, step]);
                             Operand::Value(sum)
