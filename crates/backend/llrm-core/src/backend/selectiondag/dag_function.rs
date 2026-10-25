@@ -198,6 +198,10 @@ struct CallConventions<'a> {
 pub struct RuntimeContracts<'a> {
     pub abi: &'a dyn crate::backend::assemble::Abi,
     pub segments: &'a crate::backend::target::Segments,
+    /// Whether the program's runtime routines have contracts of their own
+    /// (QB's); a call of any other routine reads the ABI's for what it
+    /// destroys.
+    pub runtime: bool,
 }
 
 /// For each call in `function` of a `llrm.qb.` routine: `Ok` when the
@@ -275,6 +279,50 @@ fn modelled(
     Ok(if contract.flags_result { RuntimeAnswer::Flags } else { RuntimeAnswer::Registers })
 }
 
+impl CallConventions<'_> {
+    /// The contract of a call of `callee` where its convention has no
+    /// description: the ABI's, named by the routine (`call_clobbers`).
+    fn contract(
+        &self,
+        callee: Option<&Callee>,
+    ) -> Option<crate::abi::runtime::Contract> {
+        let (contracts, Some(Callee::Global(id))) = (self.contracts?, callee) else { return None };
+        let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned().unwrap_or_default();
+        contracts.abi.contract(&name, false, 0).ok()
+    }
+
+    fn contract_clobbers(
+        &self,
+        callee: Option<&Callee>,
+    ) -> Option<std::collections::BTreeSet<llrm_lir::registers::RegId>> {
+        let contract = self.contract(callee)?;
+        Some(crate::backend::callregs::call_clobbers(&contract, self.contracts?.segments, self.general))
+    }
+
+    /// `call_clobbered_high_keeping`: what the callee keeps only the 16-bit
+    /// half of, less the registers it keeps whole.
+    fn contract_high(
+        &self,
+        callee: Option<&Callee>,
+    ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
+        let Some(contract) = self.contract(callee) else { return Default::default() };
+        let regs = llrm_lir::registers::Regs(self.arch.registers());
+        let whole: std::collections::BTreeSet<_> = self
+            .arch
+            .callee_saved()
+            .into_iter()
+            .filter(|(full, pushed)| full == pushed)
+            .map(|(full, _)| regs.root(full))
+            .collect();
+        crate::backend::callregs::call_clobbered_high_keeping(
+            &contract,
+            self.contracts.expect("a contract implies contracts").segments,
+            self.general,
+            &whole,
+        )
+    }
+}
+
 impl super::emit::Conventions for CallConventions<'_> {
     fn clobbers_high(
         &self,
@@ -286,7 +334,7 @@ impl super::emit::Conventions for CallConventions<'_> {
             }
             _ => 0,
         };
-        let Some(found) = self.arch.calling().by_number(number) else { return Default::default() };
+        let Some(found) = self.arch.calling().by_number(number) else { return self.contract_high(callee) };
         let regs = llrm_lir::registers::Regs(self.arch.registers());
         self.arch
             .convention_callee_saved(found)
@@ -329,7 +377,9 @@ impl super::emit::Conventions for CallConventions<'_> {
             }
             _ => 0,
         };
-        let found = self.arch.calling().by_number(number)?;
+        // BASIC's convention (and any other with no row in calling.toml) is
+        // the ABI's contract of the routine, as the old selector reads it.
+        let Some(found) = self.arch.calling().by_number(number) else { return self.contract_clobbers(callee) };
         let regs = llrm_lir::registers::Regs(self.arch.registers());
         let mut out: std::collections::BTreeSet<_> = found
             .clobbered
@@ -626,7 +676,9 @@ fn selected_in(
         .with_tail_calls(std::env::var_os("LLRM_TAIL_CALLS").is_some() || TAIL_CALLS.get())
         .with_tti(cpu.target().tti())
         .with_runtime_call_verdicts(
-            contracts.map(|contracts| runtime_call_verdicts(module, function, &layout, arch, contracts.abi)),
+            contracts
+                .filter(|contracts| contracts.runtime)
+                .map(|contracts| runtime_call_verdicts(module, function, &layout, arch, contracts.abi)),
         );
     let tables = tables(arch);
     // The builder numbers the fixed objects the stack parameters make: a byval
@@ -690,6 +742,11 @@ fn selected_in(
     for (index, (size, align)) in objects.into_iter().enumerate() {
         let made = Temporaries(&frame).create_stack_temporary(size as u32, align as u32);
         debug_assert_eq!(made, index as i32, "frame objects are numbered as the builder numbered them");
+    }
+    // `LowerFormalArguments`' register save area: 6 * 8 bytes of integer
+    // registers and 8 * 16 of vector ones.
+    if m64 && module.signature(function.ty).2 {
+        info.variadic_save = Some(Temporaries(&frame).create_stack_temporary(176, 16));
     }
     let mut hooks = X86Hooks::new(Options {
         cpu: if m16 {
@@ -854,7 +911,7 @@ fn selected_in(
         inline_places.extend(done.inline_places.iter().cloned());
         emitted.extend(done.blocks);
         if block == parent && is_pad(function, block) {
-            let Some(contracts) = contracts else {
+            let Some(contracts) = contracts.filter(|contracts| contracts.runtime) else {
                 return refuse("a landing pad of a program with no runtime contracts");
             };
             if landing.replace(emitted[from].at).is_some() {
@@ -1006,6 +1063,7 @@ fn selected_in(
             state.float_bytes.iter().map(|(number, bytes)| (*number, if cpu.spills_extended { 10 } else { *bytes }));
         body.float_bytes = std::sync::Arc::new(table.collect());
     }
+    body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
     body.min_size = cpu.min_size || llrm_mir::memory::has(&function.attrs, "minsize");
     body.sealed_arguments = true;
     body.ordered = true;

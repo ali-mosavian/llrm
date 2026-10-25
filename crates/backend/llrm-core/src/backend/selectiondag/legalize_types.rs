@@ -42,7 +42,9 @@
 //! `ReplaceValueWith`
 //! ([L636](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeTypes.cpp#L636)).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+
+use llrm_mir::hash::HashSet;
 
 use super::actions::TargetLowering;
 use super::dag::{BooleanContents, NodeData, Rauw, SDNodeFlags, SDValue, SelectionDAG};
@@ -361,7 +363,7 @@ impl<'a> TypeLegalizer<'a> {
         let to = self.analyze_new_value(to);
         let mut pending: Vec<(SDValue, SDValue)> = vec![(from, to)];
         let mut to_analyze: Vec<u32> = Vec::new();
-        let mut queued: HashSet<u32> = HashSet::new();
+        let mut queued: HashSet<u32> = HashSet::default();
         loop {
             while let Some((from, to)) = pending.pop() {
                 let (from, to) = (self.remap(from), self.remap(to));
@@ -1554,7 +1556,7 @@ impl<'a> TypeLegalizer<'a> {
         // them
         let mut start = chain;
         let mut work = vec![chain];
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = llrm_mir::hash::HashSet::default();
         while let Some(at) = work.pop() {
             if !seen.insert(at.node) {
                 continue;
@@ -1752,7 +1754,7 @@ impl<'a> TypeLegalizer<'a> {
     /// True if no reachable node has an illegal result or operand type
     /// (the pin's final check in `run`).
     pub fn all_legal(&self) -> bool {
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         let mut stack = vec![self.dag.get_root().node];
         while let Some(n) = stack.pop() {
             if !seen.insert(n) {

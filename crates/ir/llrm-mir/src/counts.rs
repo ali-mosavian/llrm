@@ -37,6 +37,8 @@ pub enum Event {
     Allocations,
     /// A dominator tree built.
     Dominators,
+    /// A dominator tree copied from one built for the same CFG.
+    DominatorsReused,
     /// A loop forest built (MIR).
     Forests,
     /// The natural loops of a LIR body found.
@@ -84,13 +86,14 @@ pub enum Event {
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 26] = [
+const NAMES: [&str; 27] = [
     "function_clones",
     "function_forks",
     "machinings",
     "selections",
     "allocations",
     "dominators_built",
+    "dominators_reused",
     "forests_built",
     "lir_loops_found",
     "shapes_derived",
@@ -127,7 +130,7 @@ thread_local! {
     static PASSES: RefCell<Vec<PassRow>> = const { RefCell::new(Vec::new()) };
     /// (pass, analysis, misses): the analyses a pass made the manager compute.
     static ASKS: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    static EVENTS: [Cell<u64>; 26] = const { [const { Cell::new(0) }; 26] };
+    static EVENTS: [Cell<u64>; 27] = const { [const { Cell::new(0) }; 27] };
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };
