@@ -51,3 +51,11 @@ fn an_i64_select_is_a_cmov() {
     let root = dag.get_root();
     assert_eq!((dag.opcode(root), dag.value_type(root)), (x86isd::CMOV, EVT::I64));
 }
+
+/// The builder had no m64 target: it would size pointers at 32 bits and treat
+/// `i64` as too wide for a register.
+#[test]
+fn the_m64_builder_target_has_64_bit_pointers_and_registers() {
+    let target = crate::backend::selectiondag::builder::BuilderTarget::m64();
+    assert_eq!((target.dag.pointer, target.legal_ints.last().copied()), (EVT::I64, Some(64)));
+}
