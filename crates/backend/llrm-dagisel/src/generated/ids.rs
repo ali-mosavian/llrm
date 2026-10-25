@@ -410,6 +410,7 @@ pub mod x86isd {
     pub const LLRM_CALL_FLAGS: u16 = 24585;
     pub const LLRM_CODE: u16 = 24582;
     pub const LLRM_FARCALL: u16 = 24584;
+    pub const LLRM_PORT: u16 = 24586;
     pub const LLRM_PTRDIFF: u16 = 24583;
     pub const LLRM_WINDOW: u16 = 24581;
     pub const LOR: u16 = 662;
@@ -782,6 +783,7 @@ pub mod x86 {
     pub const SBB16mr: u16 = 4171;
     pub const SBB32mi: u16 = 4190;
     pub const SBB32mr: u16 = 4196;
+    pub const SBB32rr: u16 = 4208;
     pub const SBB8mi: u16 = 4240;
     pub const SBB8mr: u16 = 4244;
     pub const SS: u16 = 68;
@@ -801,6 +803,7 @@ pub mod x86 {
     pub const XOR8mi: u16 = 22709;
     pub const XOR8mr: u16 = 22715;
     pub const sub_16bit: u16 = 4;
+    pub const sub_8bit: u16 = 1;
     pub const sub_8bit_hi: u16 = 2;
     /// The extras that are instructions, by number.
     pub const NAMES: &[(u16, &str)] = &[
@@ -861,6 +864,7 @@ pub mod x86 {
         (4171, "SBB16mr"),
         (4190, "SBB32mi"),
         (4196, "SBB32mr"),
+        (4208, "SBB32rr"),
         (4240, "SBB8mi"),
         (4244, "SBB8mr"),
         (4744, "SUB16mi"),
@@ -1129,6 +1133,7 @@ pub fn x86isd_id(name: &str) -> Option<u16> {
         "LLRM_CALL_FLAGS" => 24585,
         "LLRM_CODE" => 24582,
         "LLRM_FARCALL" => 24584,
+        "LLRM_PORT" => 24586,
         "LLRM_PTRDIFF" => 24583,
         "LLRM_WINDOW" => 24581,
         "LOR" => 662,

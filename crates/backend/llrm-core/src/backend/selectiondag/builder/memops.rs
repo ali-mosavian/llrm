@@ -50,6 +50,25 @@ impl Builder<'_> {
                 self.set_value(instruction.result.ok_or(Refused("a window without a result"))?, node);
                 Ok(())
             }
+            // an I/O port is a barrier on the chain: it reorders with nothing
+            Intrinsic::PortIn | Intrinsic::PortOut => {
+                let reading = matches!(intrinsic, Intrinsic::PortIn);
+                let port = self.get_value(instruction.operands[0])?;
+                let root = self.root();
+                if reading {
+                    let vt = self.type_of(instruction.ty)?;
+                    let node =
+                        self.dag.get_node_multi(super::super::x86isd::LLRM_PORT, &[vt, EVT::OTHER], &[root, port]);
+                    self.dag.set_root(SDValue { node: node.node, res: 1 });
+                    self.set_value(instruction.result.ok_or(Refused("a port read without a result"))?, node);
+                } else {
+                    let value = self.get_value(instruction.operands[1])?;
+                    let node =
+                        self.dag.get_node_multi(super::super::x86isd::LLRM_PORT, &[EVT::OTHER], &[root, port, value]);
+                    self.dag.set_root(node);
+                }
+                Ok(())
+            }
             Intrinsic::Assume => Ok(()),
             // a hint the passes read: its value is its argument
             Intrinsic::Expect | Intrinsic::Restrict => {

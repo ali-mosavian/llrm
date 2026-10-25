@@ -368,6 +368,7 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
                     .chain([
                         (llrm_dagisel::x86_llrm::FARCALL_OPCODE, "CALL_FAR"),
                         (llrm_dagisel::x86_llrm::CODE_OPCODE, "CALL_CODE"),
+                        (llrm_dagisel::x86_llrm::PORT_OPCODE, "PORT_IO"),
                         (llrm_dagisel::x86_llrm::LLRM_ASM_OPCODE, "CALL_ASM"),
                     ])
                     .collect(),
@@ -592,6 +593,7 @@ fn selected_in(
     let mut allocas: Vec<(i32, llrm_mir::module::ValueId)> =
         info.static_allocas.iter().map(|(value, index)| (*index, value.clone())).collect();
     allocas.sort();
+    let alloca_count = allocas.len() as i32;
     for (index, value) in allocas {
         let ValueDef::Instruction(def) = function.value(value).def else {
             return refuse("an alloca that is not an instruction");
@@ -638,6 +640,12 @@ fn selected_in(
             block_at.insert(id.0, state.next_address());
             work.push((id, block, extra));
         }
+    }
+    // The stack objects the builder made (a rounded float's slot) follow the
+    // static allocas in the frame.
+    for (at, (size, align)) in info.objects.iter().enumerate() {
+        let made = Temporaries(&frame).create_stack_temporary(*size, *align);
+        debug_assert_eq!(made, alloca_count + at as i32, "frame objects are numbered as the builder numbered them");
     }
     // Each jump table is a data object the pool names; its entries are the
     // addresses of the blocks.
