@@ -423,10 +423,6 @@ pub fn emit_in(
         for block in &mut blocks {
             pushed_arguments(&mut block.insns, ctx.stack_pointer, emitter.state, &mut emitter.classes)?;
         }
-    } else if ctx.address_mode == AddrMode::Flat32 {
-        for block in &mut blocks {
-            pushed_dwords(&mut block.insns, ctx.stack_pointer);
-        }
     }
     Ok(Emitted { blocks, classes: emitter.classes, calls: emitter.calls, inline_places: emitter.inline_places })
 }
@@ -580,145 +576,6 @@ fn pushed_arguments(
         return Err(EmitError::Unsupported("a store through the stack pointer at m16".to_owned()));
     }
     Ok(())
-}
-
-/// The flat 32-bit counterpart of [`pushed_arguments`]: the dword stores that
-/// tile the bottom of an argument area become pushes, last first, ahead of the
-/// call, and what the stores leave of the area (its alignment padding) stays a
-/// `sub esp`. An area with any other store (a float, a byte, a gap) keeps its
-/// stores in place, which `esp` addresses as they are.
-///
-/// DEVIATE CF3: the pin's `X86CallFrameOptimization` turns stores into a
-/// reserved call frame into pushes by its size heuristic (`isProfitable`); ours
-/// has no reserved frame (each call has its own `sub esp`/`add esp`), so every
-/// area that tiles becomes pushes, as the old selector's calls are. Exit: row
-/// 80, the call-frame pseudos and the reserved frame, which makes
-/// `callframe.rs` decide. Owner: sdag-d.
-fn pushed_dwords(
-    insns: &mut Vec<Arc<Insn>>,
-    sp: llrm_lir::registers::RegId,
-) {
-    let through_sp =
-        |cell: &Mem| cell.through == sp && cell.base.is_none() && cell.index.is_none() && cell.addr.is_none();
-    let is_store = |insn: &Insn| match insn.what.as_ref() {
-        Some(what) => matches!(&what.dests[..], [Loc::Mem(cell)] if through_sp(cell)),
-        None => false,
-    };
-    let is_area = |insn: &Insn| {
-        insn.what
-            .as_ref()
-            .is_some_and(
-                |what| what.name.as_deref() == Some("sub")
-                    && matches!(&what.dests[..], [Loc::Reg(reg)] if reg.register == sp)
-                    && matches!(&what.sources[..], [_, Loc::Imm(_)]),
-            )
-    };
-    let mut at = 0;
-    while at < insns.len() {
-        if !is_area(&insns[at]) {
-            at += 1;
-            continue;
-        }
-        let Some(Loc::Imm(size)) = insns[at].what.as_ref().and_then(|what| what.sources.get(1)).cloned() else {
-            at += 1;
-            continue;
-        };
-        let Some(end) = insns[at..]
-            .iter()
-            .position(|insn| insn.what.as_ref().is_some_and(|what| what.op == Operation::Call))
-            .map(|found| at + found)
-        else {
-            at += 1;
-            continue;
-        };
-        // A second area or a use of `esp` between the area and the call keeps
-        // it.
-        let others = (at + 1..end).any(|place| {
-            is_area(&insns[place])
-                || (!is_store(&insns[place])
-                    && insns[place].what.as_ref().is_some_and(|what| {
-                        what.dests
-                            .iter()
-                            .chain(&what.sources)
-                            .any(
-                                |loc| match loc {
-                                    Loc::Reg(reg) => reg.register == sp,
-                                    Loc::Mem(cell) => cell.through == sp,
-                                    _ => false,
-                                },
-                            )
-                    }))
-        });
-        let mut stores: Vec<(usize, i64, u32)> = Vec::new();
-        let mut plain = !others;
-        for place in at + 1..end {
-            if !is_store(&insns[place]) {
-                continue;
-            }
-            let what = insns[place].what.as_ref().expect("a store");
-            let Some(Loc::Mem(cell)) = what.dests.first() else { unreachable!("a store has its cell") };
-            plain &= what.op == Operation::Move && cell.width == 4;
-            stores.push((place, cell.offset, cell.width));
-        }
-        let mut sorted: Vec<(i64, u32)> = stores.iter().map(|&(_, offset, width)| (offset, width)).collect();
-        sorted.sort_unstable();
-        let mut next = 0;
-        let tiled = sorted
-            .iter()
-            .all(
-                |&(offset, width)| {
-                    let here = offset == next;
-                    next += i64::from(width);
-                    here
-                },
-            );
-        if !plain || !tiled || stores.is_empty() || next > size.value {
-            at = end + 1;
-            continue;
-        }
-        stores.sort_by_key(|&(_, offset, _)| offset);
-        let last = stores.iter().map(|&(place, _, _)| place).max().unwrap_or(end - 1);
-        let padding = size.value - next;
-        let mut pushes = Vec::new();
-        for &(place, _, _) in stores.iter().rev() {
-            let old = &insns[place];
-            let what = old.what.as_ref().expect("a store");
-            let push = Semantics {
-                name: Some("push".into()),
-                sources: vec![what.sources[0].clone()],
-                ..Semantics::new(Operation::Push)
-            };
-            pushes.push(Arc::new(Insn::new(old.at, old.covers, Some(push), vec![], old.uses.clone())));
-        }
-        let gone: std::collections::BTreeSet<usize> = stores.iter().map(|&(place, _, _)| place).collect();
-        let mut rebuilt = Vec::with_capacity(insns.len());
-        for (place, insn) in insns.drain(..).enumerate() {
-            if place == at {
-                if padding != 0 {
-                    // The area shrinks to the padding, ahead of the pushes.
-                    let mut what = insn.what.clone().expect("the area");
-                    what.sources[1] = Loc::Imm(Imm { value: padding, ..size.clone() });
-                    rebuilt.push(Arc::new(Insn::new(
-                        insn.at,
-                        insn.covers,
-                        Some(what),
-                        insn.defines.clone(),
-                        insn.uses.clone(),
-                    )));
-                }
-            } else if place == last {
-                rebuilt.append(&mut pushes);
-            } else if !gone.contains(&place) {
-                rebuilt.push(insn);
-            }
-        }
-        *insns = rebuilt;
-        at = 0;
-        while at < insns.len() && !insns[at].what.as_ref().is_some_and(|w| w.op == Operation::Call) {
-            at += 1;
-        }
-        at += 1;
-    }
 }
 
 /// An outgoing argument area whose call is in a later block (a select split the
@@ -1838,6 +1695,20 @@ impl Emitter<'_, '_> {
                 // The area is a multiple of the call alignment; the callee pops
                 // `popped` of it, the caller the rest.
                 let bytes = (bytes + self.ctx.call_alignment - 1) / self.ctx.call_alignment * self.ctx.call_alignment;
+                // Flat 32-bit: the pin's pseudos, which `callframe.rs` turns
+                // into pushes or `sub`/`add` (DEVIATE CF4).
+                if self.ctx.address_mode == AddrMode::Flat32 {
+                    if bytes != 0 {
+                        let imm = |value: i64| Loc::Imm(Imm { value, width: 4, address: None });
+                        let (pseudo, sources) = if name.starts_with("ADJCALLSTACKDOWN") {
+                            ("call_frame_setup", vec![imm(bytes), imm(0), imm(0)])
+                        } else {
+                            ("call_frame_destroy", vec![imm(bytes), imm(popped)])
+                        };
+                        self.push(Operation::Barrier, pseudo, Vec::new(), sources);
+                    }
+                    return Ok(Some(()));
+                }
                 let (verb, count) =
                     if name.starts_with("ADJCALLSTACKDOWN") { ("sub", bytes) } else { ("add", bytes - popped) };
                 if count != 0 {

@@ -3,7 +3,7 @@
 
 use super::dag_function::selected;
 use super::dag_function_tests::{FAR_CALL, M16_STACK_ARGS, Stub, names, select_with_contracts, verdicts};
-use crate::model::ir::Operation;
+use crate::model::ir::{Loc, Operation};
 
 const CALL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 declare i32 @bar(i32, i32)
@@ -40,45 +40,12 @@ fn a_call_is_a_sequence_around_a_call_instruction() {
     );
     let names: Vec<String> =
         insns.iter().filter_map(|i| i.what.as_ref()).map(|w| w.name.as_deref().unwrap_or("").to_owned()).collect();
-    // The arguments are pushed (the area's dword stores, `pushed_dwords`), the
-    // caller releases them after the call.
+    // The area is the pin's pseudo pair around the call; `callframe.rs` makes
+    // them pushes or `sub`/`add`.
     let called = names.iter().position(|n| n == "call").unwrap();
-    let up = names.iter().rposition(|n| n == "add").unwrap();
-    assert_eq!(names[..called].iter().filter(|n| *n == "push").count(), 2, "{names:?}");
+    assert_eq!(names.iter().position(|n| n == "call_frame_setup"), Some(0), "{names:?}");
+    assert_eq!(names.get(called + 1).map(String::as_str), Some("call_frame_destroy"), "{names:?}");
     assert!(!names.iter().any(|n| n == "sub"), "{names:?}");
-    assert!(called < up, "{names:?}");
-}
-
-const TWO_CALLS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
-declare i32 @f(i32, i32, i32)
-define i32 @g(ptr %p) {
-entry:
-  %a = load i32, ptr %p
-  %b = load i32, ptr getelementptr (i32, ptr null, i32 1)
-  %r = call i32 @f(i32 %a, i32 %b, i32 7)
-  ret i32 %r
-}
-";
-
-/// Three dword arguments were `sub esp, 12`, three `mov [esp+k]`, the call,
-/// `add esp, 12` at m32 (the old selector's `push` x3): QCport -Os grew 18.9%
-/// on its calls alone (push 349 -> 42, sub 12 -> 171 in savegame.c).
-#[test]
-fn dword_arguments_on_the_stack_are_pushed_last_first() {
-    let module = llrm_mir::parse::module(TWO_CALLS).expect("parses");
-    let done = selected(&module, "g", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
-        .unwrap_or_else(|e| panic!("{}", e.0));
-    let pushes: Vec<_> = done
-        .body
-        .insns()
-        .iter()
-        .filter_map(|i| i.what.as_ref())
-        .filter(|w| w.op == Operation::Push)
-        .map(|w| w.sources[0].clone())
-        .collect();
-    assert_eq!(pushes.len(), 3, "{pushes:?}");
-    // The last argument (7) goes first.
-    assert!(matches!(pushes[0], crate::model::ir::Loc::Imm(ref imm) if imm.value == 7), "{pushes:?}");
 }
 
 const INDIRECT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -381,7 +348,17 @@ fn the_caller_removes_the_arguments_the_callee_does_not_declare() {
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let text = format!("{:?}", done.body.insns().iter().filter_map(|i| i.what.as_ref()).collect::<Vec<_>>());
-    assert!(text.contains("\"add\"") && text.contains("Imm(Imm { value: 8,"), "{text}");
+    // Two stack arguments (8 bytes) of six, and the callee pops none of them:
+    // the destroy pseudo has the caller remove all 8.
+    let insns = done.body.insns();
+    let destroy = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.name.as_deref() == Some("call_frame_destroy"))
+        .unwrap_or_else(|| panic!("{text}"));
+    let values: Vec<i64> =
+        destroy.sources.iter().filter_map(|s| if let Loc::Imm(imm) = s { Some(imm.value) } else { None }).collect();
+    assert_eq!(values, [8, 0], "{text}");
 }
 
 const REMAINDER_EXTENDED: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
