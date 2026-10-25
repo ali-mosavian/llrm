@@ -221,7 +221,7 @@ pub struct Flags {
     /// `-fno-inline=NAME`, each: the function NAME is `noinline`.
     pub no_inline: Vec<String>,
     /// `--isel=`: the instruction selector.
-    pub isel: Selector,
+    pub isel: Option<Selector>,
 }
 
 impl Default for Flags {
@@ -251,7 +251,7 @@ impl Default for Flags {
             stack_usage: false,
             stack_limit: None,
             no_inline: Vec::new(),
-            isel: Selector::default(),
+            isel: None,
         }
     }
 }
@@ -324,7 +324,7 @@ impl Flags {
                         .round() as i64,
                 );
             }
-            "--isel" => self.isel = Selector::parse(&value("--isel")?)?,
+            "--isel" => self.isel = Some(Selector::parse(&value("--isel")?)?),
             "--machine" => self.machine = Some(PathBuf::from(value("--machine")?)),
             _ if flag.starts_with("-O") => self.level = Level::parse(&flag[2..])?,
             _ if Self::mode_flag(flag).is_some() => self.mode = Self::mode_flag(flag),
@@ -494,7 +494,7 @@ impl Flags {
             stack_usage: self.stack_usage,
             stack_limit: self.stack_limit,
             no_inline: self.no_inline.clone(),
-            isel: self.isel,
+            isel: self.isel.unwrap_or_else(|| Selector::for_target(arch.name())),
             abi: self.abi.clone(),
             float_store: self.float_store,
             code_segment: self.code_segment.clone(),

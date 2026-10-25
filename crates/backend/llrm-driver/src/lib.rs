@@ -92,6 +92,12 @@ pub fn m16_options(machine: Machine) -> Options {
     Options::new(machine, target, selection)
 }
 
+/// `m16_options` with the old selector: for the tests that pin its output
+/// (the DAG selector is the default).
+pub fn m16_options_old(machine: Machine) -> Options {
+    Options { isel: llrm_core::backend::shadow::Selector::Old, ..m16_options(machine) }
+}
+
 /// BASIC's machine: real mode's, with its stack in the data group, which its
 /// programs run on.
 pub fn m16_machine() -> Machine {

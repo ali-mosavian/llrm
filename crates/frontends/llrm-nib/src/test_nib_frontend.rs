@@ -246,7 +246,12 @@ pub(crate) fn level(name: &str) -> Options {
     flags.take(&[format!("-{name}")], &mut 0).expect("a level");
     {
         let bound = llrm_driver::target(&flags, Some(&["x86-m16"])).unwrap();
-        bound.options(&flags, nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+        // The tests pin the old selector's listings; the DAG selector is the
+        // default.
+        Options {
+            isel: llrm_core::backend::shadow::Selector::Old,
+            ..bound.options(&flags, nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+        }
     }
 }
 
@@ -1618,7 +1623,7 @@ fn test_any_integer_operand_converts_to_a_float() {
         "floats.nib",
         "@export(\"pascal16\")\nfn mixed(small: i8, byte: u8, word: u16, long: u32, high: i16) -> f64:\n    return f64(high) + f64(small) + f64(byte) + f64(word) + f64(long) + f64(high + 1) + f64(u16(7))\n",
     );
-    let options = llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os));
+    let options = llrm_driver::m16_options_old(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os));
     let module = nib_compile::assembled(&parsed(&source), "main", &options, &crate::real_mode().os)
         .unwrap_or_else(|error| panic!("{error}"));
     let text = masm::text(&module).expect("prints");
@@ -1654,7 +1659,7 @@ fn test_an_unsigned_integer_converts_to_its_value() {
          @export(\"cdecl16\")\nfn long(x: u32) -> f64:\n    return f64(x)\n",
     );
     let program = parsed(&source);
-    let options = llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os));
+    let options = llrm_driver::m16_options_old(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os));
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     for (name, width, bits, value) in
@@ -2198,7 +2203,7 @@ fn rich_with(
     kept: bool,
 ) -> String {
     let program = parsed(&written(directory, name, source));
-    let mut options = llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os));
+    let mut options = llrm_driver::m16_options_old(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os));
     if kept {
         options.pipeline.inline = llrm_transforms::inline::Threshold::none();
     }
@@ -2375,7 +2380,7 @@ fn test_a_program_compiles_through_the_rich_mir() {
     let module = nib_compile::assembled(
         &parsed(&source),
         "main",
-        &llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)),
+        &llrm_driver::m16_options_old(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)),
         &crate::real_mode().os,
     )
     .expect("assembles");
@@ -2424,7 +2429,7 @@ fn test_the_inliners_verdict_is_the_same_on_every_cpu() {
         let module = nib_compile::assembled(
             &parsed(&source),
             "main",
-            &llrm_driver::m16_options(llrm_core::abi::machine::Machine {
+            &llrm_driver::m16_options_old(llrm_core::abi::machine::Machine {
                 cpu: cpu.to_owned(),
                 ..nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)
             }),
@@ -2574,7 +2579,7 @@ fn test_a_reference_lets_its_field_load_leave_the_loop() {
     let module = nib_compile::assembled(
         &program,
         "sum",
-        &llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)),
+        &llrm_driver::m16_options_old(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)),
         &crate::real_mode().os,
     )
     .expect("assembles");
@@ -2662,7 +2667,7 @@ fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() 
     };
     let options = llrm_core::driver::Options {
         pipeline,
-        ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+        ..llrm_driver::m16_options_old(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
     let module = nib_compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("assembles");
     // The store to `dst.x` is promoted too: the loop touches no memory.
@@ -2713,7 +2718,7 @@ fn test_mir_infers_what_a_nib_function_touches() {
         llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
     let options = llrm_core::driver::Options {
         pipeline,
-        ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+        ..llrm_driver::m16_options_old(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
@@ -2761,7 +2766,7 @@ fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
         llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
     let options = llrm_core::driver::Options {
         pipeline,
-        ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+        ..llrm_driver::m16_options_old(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
     let module = nib_compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("assembles");
     let assembly = masm::text(&module).expect("prints");
@@ -2790,7 +2795,7 @@ fn test_a_range_loop_whose_bound_every_caller_passes_is_copied_out() {
         llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
     let options = llrm_core::driver::Options {
         pipeline,
-        ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+        ..llrm_driver::m16_options_old(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
     let module = nib_compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("assembles");
     let assembly = masm::text(&module).expect("prints");
@@ -2814,7 +2819,7 @@ fn test_a_nib_program_does_not_claim_zeroed_frames() {
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
     let options = llrm_core::driver::Options {
         pipeline,
-        ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+        ..llrm_driver::m16_options_old(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
     let module = nib_compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("assembles");
     let assembly = masm::text(&module).expect("prints");
@@ -2874,7 +2879,7 @@ fn main() -> i16:
         let pipeline = llrm_transforms::pipeline::Options { optimize, ..Default::default() };
         let options = llrm_core::driver::Options {
             pipeline,
-            ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+            ..llrm_driver::m16_options_old(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
         };
         let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
         llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
@@ -2912,7 +2917,7 @@ fn main() -> i16:
         llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
     let options = llrm_core::driver::Options {
         pipeline,
-        ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+        ..llrm_driver::m16_options_old(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
@@ -2953,7 +2958,7 @@ fn main() -> i16:
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
     let options = llrm_core::driver::Options {
         pipeline,
-        ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+        ..llrm_driver::m16_options_old(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
@@ -2994,7 +2999,7 @@ fn main() -> i16:
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
     let options = llrm_core::driver::Options {
         pipeline,
-        ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+        ..llrm_driver::m16_options_old(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
@@ -3035,7 +3040,7 @@ fn main() -> i16:
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
     let options = llrm_core::driver::Options {
         pipeline,
-        ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+        ..llrm_driver::m16_options_old(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
@@ -3079,7 +3084,7 @@ fn main() -> i16:
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
     let options = llrm_core::driver::Options {
         pipeline,
-        ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+        ..llrm_driver::m16_options_old(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
@@ -3120,7 +3125,7 @@ fn main() -> i16:
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
     let options = llrm_core::driver::Options {
         pipeline,
-        ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+        ..llrm_driver::m16_options_old(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
@@ -3142,7 +3147,7 @@ fn test_a_far_pointer_literal_stores_at_its_segment_and_offset() {
     let mut program = parsed(&written(&directory, "poke.nib", source));
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
     program.modules[0].functions[0].linkage = llrm_core::hir::model::FunctionLinkage::External;
-    let options = llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os));
+    let options = llrm_driver::m16_options_old(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os));
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "poke", vec![], 1_000);
@@ -3266,7 +3271,7 @@ fn test_a_zip_loop_tests_each_slices_length_as_llvm_does() {
     let module = nib_compile::assembled(
         &program,
         "dot",
-        &llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)),
+        &llrm_driver::m16_options_old(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)),
         &crate::real_mode().os,
     )
     .expect("assembles");

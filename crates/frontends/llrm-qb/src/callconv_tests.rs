@@ -204,7 +204,7 @@ fn llrm(
         None,
     )
     .map_err(|error| error.0)?;
-    let codegen = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
+    let codegen = llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone());
     let assembled = qb_compile::assembled(&program, None, &codegen).map_err(|error| error.to_string())?;
     let text = llrm_core::driver::basic::text(&assembled)?;
     Ok(boundary::procedures(&text).into_iter().map(|(name, one)| (name.to_uppercase(), one)).collect())

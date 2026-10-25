@@ -1227,7 +1227,7 @@ fn capture_program() -> hir::Program {
 #[test]
 fn test_stage_observer_sees_the_hir_once_and_preserves_object_bytes() {
     let program = capture_program();
-    let codegen = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
+    let codegen = llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone());
     let uncaptured = qb_compile::object_bytes(&program, Path::new("capture.bas"), None, &codegen).expect("emits");
     let mut seen: Vec<hir::Program> = Vec::new();
     let mut observer = |program: &hir::Program| {
@@ -2280,8 +2280,9 @@ fn test_a_module_compiles_through_the_rich_mir() {
     let source = tmp.path().join("RICH.BAS");
     std::fs::write(&source, "DECLARE SUB Fade (level%)\r\nSUB Fade (level%)\r\nOUT &H3C8, 0\r\nv% = INP(&H3C9)\r\nIF COMMAND$ > \"A\" THEN OUT &H3C9, level% + v%\r\nEND SUB\r\n").unwrap();
     let program = parsed_as(&source, "qb45", "qb45");
-    let module = qb_compile::assembled(&program, None, &llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone()))
-        .expect("assembles");
+    let module =
+        qb_compile::assembled(&program, None, &llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone()))
+            .expect("assembles");
     let text = masm::text(&module).expect("prints");
     let fade = between(&text, "FADE proc", "endp");
     let call = fade.find("call far ptr B$SCMP").expect("the comparison's call");
@@ -2302,8 +2303,9 @@ fn test_the_runtime_frame_zeroes_the_locals() {
         None,
     )
     .expect("parses");
-    let module = qb_compile::assembled(&program, None, &llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone()))
-        .expect("assembles");
+    let module =
+        qb_compile::assembled(&program, None, &llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone()))
+            .expect("assembles");
     let text = masm::text(&module).expect("prints");
     let report = between(&text, "REPORT proc", "endp");
     assert!(report.contains("call far ptr B$ENRA"), "{report}");
@@ -2320,7 +2322,7 @@ fn test_data_statements_compile_through_the_rich_mir() {
     for name in ["fpcalc", "fpcsex", "fpi2cs", "fpicse", "hotlpx", "lngmxx", "pressx"] {
         let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../../tests/run/qb/{name}.bas"));
         let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
-        qb_compile::assembled(&program, None, &llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone()))
+        qb_compile::assembled(&program, None, &llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone()))
             .unwrap_or_else(|error| panic!("{name}: {error}"));
     }
 }
@@ -2333,8 +2335,9 @@ fn test_rich_route_keys_data_rows_by_position() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "rstend.bas", b"DEFINT A-Z\nDATA 1, 2\nREAD a, b\nRESTORE second\nREAD c\nRESTORE\nREAD d\nPRINT a; b; c; d\nEND\nsecond:\nDATA 3, 4\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
-    let rich = qb_compile::assembled(&program, None, &llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone()))
-        .expect("compiles");
+    let rich =
+        qb_compile::assembled(&program, None, &llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone()))
+            .expect("compiles");
     let text = masm::text(&rich).expect("prints");
     let rows = between(&text, "$QB$DS label byte\n", "BC_DS ends");
     assert_eq!(
@@ -2581,8 +2584,9 @@ fn test_def_seg_stores_the_runtime_segment_cell() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "defseg.bas", b"DEF SEG = &HA000\nBSAVE \"V.BIN\", 0, 64000\n");
     let program = parsed_as(&source, "qb45", "qb45");
-    let module = qb_compile::assembled(&program, None, &llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone()))
-        .expect("assembles");
+    let module =
+        qb_compile::assembled(&program, None, &llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone()))
+            .expect("assembles");
     assert!(module.externs.iter().any(|(name, _)| name == "b$seg"), "{}", masm::text(&module).expect("prints"));
 }
 
@@ -2594,7 +2598,7 @@ fn test_a_word_array_after_an_odd_object_lies_at_an_even_offset() {
     let text =
         "DEFINT A-Z\r\nDIM SHARED s AS STRING * 3, f3(10)\r\ns = \"abc\"\r\nf3(1) = LEN(s)\r\nPRINT f3(1), s\r\n";
     let program = parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45");
-    let codegen = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
+    let codegen = llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone());
     let module = qb_compile::assembled(&program, None, &codegen).expect("assembles");
     let (_, items) = module.data.iter().find(|(name, _)| name == "BC_DATA").expect("BC_DATA");
     let mut offset = 0;
@@ -2663,7 +2667,7 @@ fn test_the_listing_is_the_code_the_object_holds() {
         None,
     )
     .expect("parses");
-    let codegen = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
+    let codegen = llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone());
     let module = qb_compile::assembled(&program, None, &codegen).expect("assembles");
     let text = llrm_core::driver::basic::text(&module).unwrap();
     let keep = between(&text, "KEEP proc far", "KEEP endp");
@@ -3103,7 +3107,8 @@ fn listing_of(
     let directory = tempfile::tempdir().expect("creates a directory");
     let out = directory.path().join(format!("{name}.asm"));
     let input = written(&directory, &format!("{name}.bas"), source.as_bytes());
-    let argv = [input.to_str().unwrap(), "-O2", "-march=i486", "-S", "-o", out.to_str().unwrap()].map(str::to_owned);
+    let argv = [input.to_str().unwrap(), "-O2", "--isel=old", "-march=i486", "-S", "-o", out.to_str().unwrap()]
+        .map(str::to_owned);
     assert_eq!(crate::cli::main(&argv), 0);
     std::fs::read_to_string(&out).expect("the listing")
 }

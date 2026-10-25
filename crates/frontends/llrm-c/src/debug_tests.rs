@@ -20,7 +20,7 @@ fn object_of(name: &str) -> Vec<Rc<omf::Record>> {
     // Not inlined: `twice` is a symbol to read.
     let pipeline =
         llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(machine) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options_old(machine) };
     let built = super::compile::selected(&text, name, None, &options).expect("compiles");
     omf::parse(&objbuild::written(&built, &format!("{name}.c")).expect("writes")).expect("parses")
 }
@@ -148,7 +148,7 @@ fn the_model_tells_parameters_from_locals_and_places_the_code() {
     let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
     let pipeline =
         llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(machine) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options_old(machine) };
     let built = super::compile::selected(&text, "debug", None, &options).expect("compiles");
     let object = objbuild::built(&built, "debug.c", objbuild::CodeLayout::OneSegment).expect("builds");
     let info = object.debug.expect("-g's information rides on the object");
