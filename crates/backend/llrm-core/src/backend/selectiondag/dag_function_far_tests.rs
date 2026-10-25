@@ -634,3 +634,26 @@ fn a_far_pointer_from_a_call_result_has_its_selector_for_a_fill() {
         );
     assert!(shifts_by_16);
 }
+
+/// A far pointer from a near one (`addrspacecast`) with a constant byte
+/// offset added: the offset was built as a constant of the far type, which
+/// has none (`nbody.bas`: "integer constant of Simple(Far)").
+const FAR_PLUS_A_CONSTANT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+define void @f(ptr %p) addrspace(1) {
+b1:
+  %w = load i16, ptr %p
+  %n = inttoptr i16 %w to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %n to ptr addrspace(1)
+  store double -1.250000e-02, ptr addrspace(1) %far
+  %next = getelementptr i8, ptr addrspace(1) %far, i16 8
+  store double 1.250000e-02, ptr addrspace(1) %next
+  ret void
+}
+";
+
+#[test]
+fn a_constant_offset_from_a_far_pointer_is_an_offset_of_its_halves() {
+    let module = llrm_mir::parse::module(FAR_PLUS_A_CONSTANT).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+}
