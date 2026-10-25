@@ -321,7 +321,7 @@ fn inverted(
 }
 
 /// `one` copied where `beside` was, claiming no bytes.
-fn _unowned(
+pub(crate) fn _unowned(
     one: &Insn,
     beside: &Insn,
 ) -> Arc<Insn> {

@@ -303,8 +303,19 @@ pub struct DagisAdapter<'a> {
 
 impl<'a> DagisAdapter<'a> {
     pub fn new(dag: &'a mut SelectionDAG) -> DagisAdapter<'a> {
-        // A node the combiner deleted is no user of what it read (`hasOneUse`).
-        let dead = (0..dag.nodes().len() as u32).filter(|&node| dag.is_deleted(node)).collect();
+        // A node nothing reaches from the root is no user of what it read
+        // (`hasOneUse`): the combiner deleted it, or it is a chain node it
+        // replaced (a `brcond` the lowering turned into `X86ISD::BRCOND`).
+        let mut reached = vec![false; dag.nodes().len()];
+        let mut work = vec![dag.get_root().node];
+        while let Some(node) = work.pop() {
+            if std::mem::replace(&mut reached[node as usize], true) {
+                continue;
+            }
+            work.extend(dag.nodes()[node as usize].ops.iter().map(|op| op.node));
+        }
+        let dead =
+            (0..dag.nodes().len() as u32).filter(|&node| dag.is_deleted(node) || !reached[node as usize]).collect();
         DagisAdapter { dag, dead, mem_refs: BTreeMap::new() }
     }
 
@@ -652,6 +663,11 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
         mems: &[MemRef],
     ) {
+        // A node that folded a volatile access is one (`MachineMemOperand`s
+        // carry the flag): the LIR instruction keeps it.
+        if mems.iter().any(|mem| self.dag.volatile_accesses.contains(mem)) {
+            self.dag.volatile_accesses.insert(node);
+        }
         self.mem_refs.insert(node, mems.to_vec());
     }
 

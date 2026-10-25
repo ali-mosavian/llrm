@@ -47,6 +47,19 @@ from stages import PREFIX, stage  # noqa: E402
 import pidfile  # noqa: E402
 
 
+MERGE_DRIVER = "python3 tools/merge_tests_append.py %O %A %B"  # .gitattributes names it for the tests files; a git config is per clone, so every git below gets it here
+
+
+def with_merge_driver(env: dict[str, str]) -> None:
+    count = int(env.get("GIT_CONFIG_COUNT", "0"))
+    env[f"GIT_CONFIG_KEY_{count}"] = "merge.tests-append.driver"
+    env[f"GIT_CONFIG_VALUE_{count}"] = MERGE_DRIVER
+    env["GIT_CONFIG_COUNT"] = str(count + 1)
+
+
+with_merge_driver(os.environ)
+
+
 def git(*args: str, cwd: Path = ROOT) -> str:
     done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
     if done.returncode:

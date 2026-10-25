@@ -749,3 +749,117 @@ fn a_16_byte_clear_at_m16_is_four_dword_stores() {
         .collect();
     assert_eq!(stores, [4, 4, 4, 4], "store widths");
 }
+
+const VOLATILE_COPY: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@a = global [7 x i8] zeroinitializer
+@b = global [7 x i8] zeroinitializer
+declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)
+define void @f() {
+entry:
+  call void @llvm.memcpy.p0.p0.i32(ptr @a, ptr @b, i32 7, i1 true)
+  ret void
+}
+";
+
+/// A volatile `memcpy` was refused ("volatile memory intrinsic"). Its accesses
+/// stay as written: seven bytes are a dword, a word and a byte, not two
+/// overlapping dwords as a plain copy makes them.
+#[test]
+fn a_volatile_copy_is_the_accesses_it_names_and_no_more() {
+    let module = llrm_mir::parse::module(VOLATILE_COPY).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let mut widths: Vec<u32> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.name.as_deref() == Some("mov"))
+        .filter_map(|w| match w.dests.as_slice() {
+            [crate::model::ir::Loc::Mem(cell)] => Some(cell.width),
+            _ => None,
+        })
+        .collect();
+    widths.sort_unstable();
+    assert_eq!(widths, [1, 2, 4], "the stores: {widths:?}");
+    assert!(done.body.insns().iter().filter(|i| i.volatile).count() >= 3, "volatile accesses");
+}
+
+const VOLATILE_LOAD: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@v = global i32 0
+@w = global i32 0
+define void @f() {
+entry:
+  %a = load volatile i32, ptr @v
+  store volatile i32 %a, ptr @w
+  ret void
+}
+";
+
+/// The DAG path dropped the volatile mark on the LIR instruction of a volatile
+/// load or store: the machine passes that skip volatile accesses
+/// (`MachineLICM`, `MachineCSE`, load folding, the store combiner) saw plain
+/// ones. (A volatile load the matcher folds into an ALU instruction still
+/// loses it: the folded node is gone.)
+#[test]
+fn a_volatile_load_and_store_are_volatile_instructions() {
+    let module = llrm_mir::parse::module(VOLATILE_LOAD).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let volatile = done.body.insns().iter().filter(|i| i.volatile).count();
+    assert_eq!(volatile, 2, "the load and the store");
+}
+
+const ALLOCA_COUNT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f() {
+entry:
+  %p = alloca i32, i32 4
+  store i32 7, ptr %p
+  %v = load i32, ptr %p
+  ret i32 %v
+}
+";
+
+/// An `alloca i32, i32 4` was refused ("an alloca with a count"); the frame
+/// object is the type's size times the constant count, as
+/// `FunctionLoweringInfo` has it.
+#[test]
+fn an_alloca_with_a_constant_count_is_that_many_elements() {
+    let module = llrm_mir::parse::module(ALLOCA_COUNT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    assert_eq!(done.depth, 16);
+    assert_eq!(done.extents, [(-16, 16)]);
+}
+
+const VOLATILE_FOLD: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@v = global i32 0
+define i32 @f(i32 %a) {
+entry:
+  %b = load volatile i32, ptr @v
+  %s = add i32 %a, %b
+  ret i32 %s
+}
+";
+
+/// A volatile load the matcher folds into an `add` (`add eax, [v]`) lost its
+/// mark: the folded node was gone, and `MachineLICM`, `MachineCSE` and the
+/// coalescer saw a plain instruction. The machine node carries the flag of the
+/// memory operands it folded (`MachineMemOperand::isVolatile`).
+#[test]
+fn a_volatile_load_folded_into_an_add_is_a_volatile_instruction() {
+    let module = llrm_mir::parse::module(VOLATILE_FOLD).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let folded: Vec<_> = insns
+        .iter()
+        .filter(|i| {
+            i.what.as_ref().is_some_and(|w| {
+                w.name.as_deref() == Some("add") && w.sources.iter().any(|s| matches!(s, crate::model::ir::Loc::Mem(_)))
+            })
+        })
+        .collect();
+    assert_eq!(folded.len(), 1, "premise: the load is folded into the add");
+    assert!(folded[0].volatile, "the folded add is volatile");
+}

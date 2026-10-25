@@ -212,6 +212,9 @@ impl LiveRegMatrix {
     ) {
         let need = unit as usize + 1;
         if self.matrix.len() < need {
+            // A target has a few dozen register units: made in one step.
+            self.matrix.reserve(need.max(32) - self.matrix.len());
+            self.queries.reserve(need.max(32) - self.queries.len());
             self.matrix.resize_with(need, LiveIntervalUnion::new);
             self.queries.resize_with(need, Query::new);
         }
