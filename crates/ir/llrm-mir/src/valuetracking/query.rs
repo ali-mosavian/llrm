@@ -348,7 +348,9 @@ impl AssumptionCache {
 /// condition tells of it.
 #[derive(Clone, Debug, Default)]
 pub struct DomConditionCache {
-    affected: HashMap<Operand, Vec<InstId>>,
+    /// Behind a cell because InstCombine registers a branch as it visits it,
+    /// while its queries hold the cache.
+    affected: std::cell::RefCell<HashMap<Operand, Vec<InstId>>>,
 }
 
 impl DomConditionCache {
@@ -377,7 +379,7 @@ impl DomConditionCache {
         query: &Query,
         function: &Function,
     ) -> Self {
-        let mut cache = Self::default();
+        let cache = Self::default();
         for &block in function.layout() {
             if let Some(branch) = function.terminator(block)
                 && function.instruction(branch).opcode == Opcode::Br
@@ -391,15 +393,16 @@ impl DomConditionCache {
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/DomConditionCache.cpp#L19>
     pub fn register_branch(
-        &mut self,
+        &self,
         q: &Query,
         branch: InstId,
     ) {
         let mut affected = Vec::new();
         let condition = q.function.instruction(branch).operands[0];
         super::context::find_values_affected_by_condition(q, condition, false, &mut |v| affected.push(v));
+        let mut map = self.affected.borrow_mut();
         for value in affected {
-            let list = self.affected.entry(value).or_default();
+            let list = map.entry(value).or_default();
             if !list.contains(&branch) {
                 list.push(branch);
             }
@@ -410,8 +413,8 @@ impl DomConditionCache {
     pub fn conditions_for(
         &self,
         value: Operand,
-    ) -> &[InstId] {
-        self.affected.get(&value).map_or(&[], Vec::as_slice)
+    ) -> std::cell::Ref<'_, [InstId]> {
+        std::cell::Ref::map(self.affected.borrow(), |map| map.get(&value).map_or(&[][..], Vec::as_slice))
     }
 }
 
@@ -464,6 +467,14 @@ impl FunctionAnalyses {
         function: &Function,
     ) -> Self {
         self.dom_conditions = Some(DomConditionCache::new(module, function));
+        self
+    }
+
+    /// The same with an empty cache that the pass fills as it visits each
+    /// conditional branch (`DC.registerBranch` in `visitBranchInst`): a query
+    /// sees the branches visited before it, as LLVM's does.
+    pub fn with_lazy_dom_conditions(mut self) -> Self {
+        self.dom_conditions = Some(DomConditionCache::default());
         self
     }
 

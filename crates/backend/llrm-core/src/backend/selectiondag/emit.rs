@@ -2287,7 +2287,7 @@ impl Emitter<'_, '_> {
             _ => None,
         };
         if let Some(value) = constant {
-            let held = self.fresh(width);
+            let held = self.result_register(SDValue { node: n, res: 0 }, width);
             self.values.insert(SDValue { node: n, res: 0 }, held.value);
             self.push(
                 Operation::Move,
@@ -2326,7 +2326,7 @@ impl Emitter<'_, '_> {
                 Ok(Some(()))
             }
             "MOV32ImmSExti8" => {
-                let held = self.fresh(width);
+                let held = self.result_register(SDValue { node: n, res: 0 }, width);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
                 let source = self.operand(node.ops[0])?;
                 self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![source]);
@@ -2343,7 +2343,7 @@ impl Emitter<'_, '_> {
                 else {
                     return Err(EmitError::Unsupported("a conditional move of a non-register".to_owned()));
                 };
-                let held = self.fresh(width);
+                let held = self.result_register(SDValue { node: n, res: 0 }, width);
                 self.values.insert(result, held.value);
                 let name = format!("cmov{}", &jump[1..]);
                 self.push(
@@ -2364,7 +2364,7 @@ impl Emitter<'_, '_> {
                 };
                 let group = node.ops.get(1..6).ok_or_else(|| EmitError::Unsupported("a short cmov".to_owned()))?;
                 let cell = self.cell(group, u32::from(width))?;
-                let held = self.fresh(width);
+                let held = self.result_register(SDValue { node: n, res: 0 }, width);
                 self.values.insert(result, held.value);
                 let name = format!("cmov{}", &jump[1..]);
                 self.push(Operation::Select, &name, vec![Loc::Held(held)], vec![Loc::Held(when_false), Loc::Mem(cell)]);
@@ -2378,7 +2378,7 @@ impl Emitter<'_, '_> {
                     .ok_or_else(|| EmitError::Unsupported("a setcc without a condition".to_owned()))?
                     as usize;
                 let jump = CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
-                let held = self.fresh(1);
+                let held = self.result_register(SDValue { node: n, res: 0 }, 1);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
                 let name = format!("set{}", &jump[1..]);
                 self.push(Operation::Unary, &name, vec![Loc::Held(held)], Vec::new());
@@ -3083,6 +3083,16 @@ impl Emitter<'_, '_> {
                 },
             )?;
         Some(Held { value: self.vreg(reg), width })
+    }
+
+    /// The register a result is defined in: the one a `CopyToReg` of it names
+    /// (`exported_register`), else a fresh value.
+    fn result_register(
+        &mut self,
+        result: SDValue,
+        width: u32,
+    ) -> Held {
+        self.exported_register(result).unwrap_or_else(|| self.fresh(width))
     }
 
     fn new_value(&mut self) -> u32 {
