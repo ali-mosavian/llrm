@@ -2,14 +2,13 @@
 //! subset (arithmetic, casts, `icmp`, `select`, `br`, `load`, `store`,
 //! `getelementptr`, and the register copies a `phi` needs).
 
-use std::collections::HashMap;
-
 use llrm_mir::context::{ConstantId, ConstantKind};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::types::{Type, TypeId};
+use llrm_support::hash::HashMap;
 
 mod asmcall;
 mod codecall;
@@ -382,7 +381,7 @@ impl<'a> Builder<'a> {
             node_map: IdMap::new(),
             pending_loads: Vec::new(),
             pending_exports: Vec::new(),
-            constants_out: HashMap::new(),
+            constants_out: HashMap::default(),
             phi_updates: Vec::new(),
             tail_calls: Vec::new(),
             tail_candidate: None,
@@ -683,7 +682,7 @@ impl Builder<'_> {
     /// also copied to a register of its own.
     fn lower_arguments(&mut self) -> Result<(), Refused> {
         let entry = self.function.entry();
-        let mut outside = std::collections::HashSet::new();
+        let mut outside = llrm_support::hash::HashSet::default();
         for &block in self.function.layout() {
             for inst in self.function.iter_block(block) {
                 let instruction = self.function.instruction(inst);
