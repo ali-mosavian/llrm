@@ -474,7 +474,7 @@ b3:
     .unwrap();
     let text = llrm_mir::print::module(&module);
     let body = &text[text.find("b2:").expect("the loop")..];
-    let body = &body[..body.find("br label").expect("its latch")];
+    let body = &body[..body.find("\n\n").unwrap_or(body.len())];
     assert_eq!(body.matches("call void @llrm.ia16.asm.fa").count(), 2, "{text}");
     assert_eq!(body.matches(&format!("@{block}(")).count(), 2, "{text}");
 }
