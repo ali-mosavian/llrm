@@ -474,7 +474,12 @@ impl Checker {
             // each subscript that is not a constant holds a temporary: past six
             // when read, seven when assigned, BC gives up
             let variable_subscripts = arguments.iter().filter(|index| !matches!(index, Expr::Literal(..))).count();
-            if variable_subscripts > if self.assigning { 7 } else { 6 } {
+            // QB 4.5 addresses a dynamic array's element with every subscript, a constant too,
+            // in a temporary: past seven when read, eight when assigned
+            let dynamic_limit = var.dynamic
+                && self.dialect == Dialect::QuickBasic45
+                && arguments.len() > if self.assigning { 8 } else { 7 };
+            if dynamic_limit || variable_subscripts > if self.assigning { 7 } else { 6 } {
                 self.err(span, "Expression too complex");
                 return None;
             }

@@ -2243,3 +2243,25 @@ fn bc_distributes_a_constant_product_out_of_parentheses_and_overflows_it() {
     }
     assert!(!refused("(i - 300) * 200", Dialect::QuickBasic45));
 }
+
+#[test]
+fn qb45_gives_up_on_a_dynamic_array_with_too_many_subscripts() {
+    // tests/inputs/omf/regressions/ndarr.bas: under $DYNAMIC, QB 4.5 raises "Expression too
+    // complex" for a ninth subscript assigned or an eighth read, constants included; the same
+    // array is fine static, and PDS 7.1 and VBDOS take the constant forms.
+    let program = |dynamic: &str, subscripts: usize, statement: &str| {
+        let bounds = vec!["1 TO 2"; subscripts].join(",");
+        let indexes = vec!["1"; subscripts].join(",");
+        let element = format!("a({indexes})");
+        let line = statement.replace("A", &element);
+        format!("{dynamic}DEFINT A-Z\r\nDIM a({bounds}) AS INTEGER\r\n{line}\r\n")
+    };
+    let refused = |source: String, dialect| parse(&source, dialect).is_err();
+    assert!(refused(program("' $DYNAMIC\r\n", 9, "A = 3"), Dialect::QuickBasic45));
+    assert!(refused(program("' $DYNAMIC\r\n", 8, "x = A"), Dialect::QuickBasic45));
+    assert!(!refused(program("' $DYNAMIC\r\n", 8, "A = 3"), Dialect::QuickBasic45));
+    assert!(!refused(program("' $DYNAMIC\r\n", 7, "x = A"), Dialect::QuickBasic45));
+    assert!(!refused(program("", 9, "A = 3"), Dialect::QuickBasic45));
+    assert!(!refused(program("' $DYNAMIC\r\n", 9, "A = 3"), Dialect::Pds71));
+    assert!(!refused(program("' $DYNAMIC\r\n", 9, "A = 3"), Dialect::VbDos));
+}
