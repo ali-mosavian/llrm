@@ -1470,7 +1470,7 @@ pub fn greedy_rewritten(
             eprintln!("greedy-inline {}: failed {} spill_failed {}", body.name, d.report.stats.failed, d.spill_failed);
         }
     }
-    if let (Some(d), true) = (&decided, std::env::var("LLRM_EDITED_DUMP").is_ok_and(|n| n == body.name)) {
+    if let (Some(d), true) = (&decided, llrm_support::env_var("LLRM_EDITED_DUMP").is_some_and(|n| n == &*body.name)) {
         if let Some(edited) = &d.edited {
             for (b, block) in edited.blocks.iter().enumerate() {
                 for (at, one) in block.insns.iter().enumerate() {

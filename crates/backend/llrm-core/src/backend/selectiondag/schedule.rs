@@ -1267,7 +1267,7 @@ thread_local! {
 /// as our machine scheduler is not the pin's `GenericScheduler` and the
 /// source order costs +47 instructions over 71 programs.
 fn src_order() -> bool {
-    SRC_ORDER.get() || std::env::var_os("LLRM_SRC_ORDER").is_some()
+    SRC_ORDER.get() || llrm_support::env_set("LLRM_SRC_ORDER")
 }
 
 /// `RegReductionPQBase` with `SrcRegReductionPriorityQueue`: Sethi-Ullman

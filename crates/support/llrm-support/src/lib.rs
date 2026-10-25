@@ -28,6 +28,11 @@ pub fn env_set(name: &str) -> bool {
     llrm_env::set(name)
 }
 
+/// The value of the variable `name`, from the same snapshot as `env_set`.
+pub fn env_var(name: &str) -> Option<&'static std::ffi::OsStr> {
+    llrm_env::var(name)
+}
+
 /// `env_set` of a literal name, asked once at the call site that names it:
 /// `env_set` hashes the name at every call, and a check on a step's path is
 /// asked thousands of times.
