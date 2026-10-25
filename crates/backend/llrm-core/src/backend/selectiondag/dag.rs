@@ -1,6 +1,6 @@
 //! The arena: nodes, values, the CSE map and node construction.
 
-use std::collections::{HashMap, HashSet};
+use llrm_support::hash::{HashMap, HashSet};
 
 use super::isd::{CondCode, ISD};
 use super::mvt::EVT;
@@ -181,7 +181,7 @@ pub struct SelectionDAG {
     cse: HashMap<CseKey, u32>,
     /// Nodes `delete_dead` removed: they stay in the arena but no longer
     /// count as users.
-    deleted: std::collections::HashSet<u32>,
+    deleted: HashSet<u32>,
     pub(super) config: DagConfig,
     entry: SDValue,
     root: SDValue,
@@ -217,8 +217,8 @@ impl SelectionDAG {
         let mut dag = SelectionDAG {
             nodes: Vec::new(),
             uses: Vec::new(),
-            cse: HashMap::new(),
-            deleted: std::collections::HashSet::new(),
+            cse: HashMap::default(),
+            deleted: HashSet::default(),
             config,
             entry: zero,
             root: zero,
@@ -230,7 +230,7 @@ impl SelectionDAG {
             var_args_frame_index: None,
             temporaries: Vec::new(),
             local_symbols: Default::default(),
-            invariant_loads: HashSet::new(),
+            invariant_loads: HashSet::default(),
         };
         dag.entry = dag.intern(ISD::EntryToken, &[EVT::OTHER, EVT::GLUE], &[], SDNodeFlags::default(), NodeData::None);
         dag.root = dag.entry;
@@ -320,6 +320,15 @@ impl SelectionDAG {
     /// Every node id in creation order (`allnodes()`).
     pub fn node_ids(&self) -> std::ops::Range<u32> {
         0..self.nodes.len() as u32
+    }
+
+    /// The nodes that may read a result of `node` (its use list: stale and
+    /// repeated entries included), for a caller that checks the operands.
+    pub fn use_candidates(
+        &self,
+        node: u32,
+    ) -> &[u32] {
+        self.uses.get(node as usize).map_or(&[], Vec::as_slice)
     }
 
     /// The nodes that read `value` as an operand, in creation order, once

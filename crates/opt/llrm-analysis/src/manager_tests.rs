@@ -332,6 +332,37 @@ entry:
     assert!(reaches_g("p"), "@p's unknown call may call back into @entry");
 }
 
+/// The MemorySSA the manager builds asks no `PlainAccesses`: no reference is
+/// made to build a graph (1.36 M Ir a build against the pin's 119 K), and
+/// what the graph says is what a build from the accesses said.
+#[test]
+fn test_a_memoryssa_build_asks_no_plain_accesses_and_says_what_they_said() {
+    for (name, module) in corpus() {
+        let layout = layout(&module);
+        let mut outer = Outer::of(&module, None);
+        outer.require::<Summaries>(&module);
+        let outer = Rc::new(outer);
+        for (_, global, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
+            let at = format!("{name}/@{}", global.name.as_deref().unwrap_or(""));
+            let mut analyses = Analyses::new(Rc::clone(&outer));
+            let graph = analyses.get::<super::MemorySsa>(&module.context, &layout, function);
+            let Ok(graph) = &*graph else { continue };
+            assert!(analyses.cached::<super::PlainAccesses>().is_none(), "{at}: the build made the accesses");
+            let accesses = graph.accesses(&module.context, &layout, function, &mut analyses).expect("accesses");
+            let shape = analyses.get::<crate::cfg::Shape>(&module.context, &layout, function);
+            let said = crate::mssa::Mssa::build(
+                function,
+                &shape.dominance,
+                &crate::mssa::shadow::effect_of(&accesses, function),
+            );
+            assert!(
+                crate::mssa::shadow::said(&graph.mssa) == crate::mssa::shadow::said(&said),
+                "{at}: the graph built from opcodes differs from the one built from the accesses"
+            );
+        }
+    }
+}
+
 /// Each access asked of its own alloca's uses whether the address is exposed,
 /// and the answer was never kept: `mir decide` and `gvn` grew with slope
 /// 2.5–2.9 in a function's blocks, `exposes` 21% of the compile of 300 (#557).
