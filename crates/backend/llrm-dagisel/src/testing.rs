@@ -96,6 +96,19 @@ impl TestDag {
         SDValue::new(self.node(crate::generated::ids::x86isd::Wrapper, &[vt], &[SDValue::new(global, 0)]), 0)
     }
 
+    /// `WrapperRIP (TargetGlobalAddress id + offset)`.
+    pub fn wrapped_global_rip(
+        &mut self,
+        id: u32,
+        offset: i64,
+        vt: Vt,
+    ) -> SDValue {
+        let symbol = Wrapped { symbol: Symbol { kind: crate::x86_addr::SymbolKind::Global, id }, offset, flags: 0 };
+        let global =
+            self.add(Node { opcode: isd::TargetGlobalAddress, vts: vec![vt], symbol: Some(symbol), ..Node::default() });
+        SDValue::new(self.node(crate::generated::ids::x86isd::WrapperRIP, &[vt], &[SDValue::new(global, 0)]), 0)
+    }
+
     /// A value held in a register: `CopyFromReg` of the entry chain.
     pub fn input(
         &mut self,
