@@ -12,6 +12,7 @@ m16burndown_causes.toml: an `[[program]]` is a glob on the program name, the fir
 from __future__ import annotations
 
 import os
+import math
 import sys
 import fnmatch
 import argparse
@@ -173,11 +174,15 @@ def main() -> None:
             out.append(f"| {flag} | {len(gains)} | {sum(gains)} | {sum(x for x in v.values() if x) - sum(new[n] for n, x in v.items() if x):+} |")
         out.append("")
     for title, column in (("cause", 5), ("owner", 6)):
-        totals: dict[str, list[int]] = {}
+        totals: dict[str, list[tuple[int, str]]] = {}
         for row in rows:
-            totals.setdefault(row[column], []).append(row[3])
-        out += [f"## per {title}", "", f"| {title} | programs left | bytes left |", "|---|--:|--:|"]
-        out += [f"| {key} | {len(v)} | {sum(v)} |" for key, v in sorted(totals.items(), key=lambda kv: -sum(kv[1]))] + [""]
+            totals.setdefault(row[column], []).append((row[3], row[4]))
+        out += [f"## per {title}", "", f"| {title} | programs left | bytes left | clocks tip/main (geomean, rows) |", "|---|--:|--:|--:|"]
+        for key, v in sorted(totals.items(), key=lambda kv: -sum(d for d, _ in kv[1])):
+            ratios = [float(c) for _, c in v if c not in ("-", "folded")]
+            geo = f"{math.exp(sum(map(math.log, ratios)) / len(ratios)):.2f} ({len(ratios)})" if ratios else "-"
+            out.append(f"| {key} | {len(v)} | {sum(d for d, _ in v)} | {geo} |")
+        out.append("")
     out += ["## growers", "", "| program | main | tip | delta | clocks tip/main | cause | owner |", "|---|--:|--:|--:|--:|---|---|"]
     out += [f"| {n} | {a} | {b} | {d:+} | {c} | {cause} | {owner} |" for n, a, b, d, c, cause, owner in rows]
     args.out.write_text("\n".join(out) + "\n")
