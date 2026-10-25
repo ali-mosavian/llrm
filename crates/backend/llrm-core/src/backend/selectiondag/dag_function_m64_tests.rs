@@ -401,6 +401,37 @@ define i32 @f(i32 %n, ...) {
     assert_eq!(stores, 9);
 }
 
+/// A frame object's address plus a variable index and a displacement past the
+/// object was made in a 4-byte register and used as the base of a quadword
+/// address: the encoder refused the 32-bit base beside a 64-bit index.
+#[test]
+fn a_frame_address_past_its_object_is_a_quadword_base() {
+    use crate::model::ir::Loc;
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare void @use(ptr)
+define void @f(i64 %n) {
+entry:
+  %buf = alloca [20 x i8], align 16
+  %m = sub i64 %n, 1
+  %p = getelementptr inbounds [20 x i8], ptr %buf, i64 0, i64 %m
+  call void @use(ptr %p)
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let insns = done.body.insns();
+    let leas: Vec<_> =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some("lea")).collect();
+    assert!(!leas.is_empty());
+    for lea in &leas {
+        assert!(matches!(&lea.dests[0], Loc::Held(h) if h.width == 8), "{lea:?}");
+        // A displacement of -1 is -1, not 4294967295.
+        assert!(!matches!(&lea.sources[..], [Loc::Mem(cell)] if cell.offset > i64::from(i32::MAX)), "{lea:?}");
+    }
+}
+
 /// A dense switch at m64 was lowered to `BR_JT` over a `WrapperRIP` table
 /// address, which nothing selects ("CannotSelect Target(954)", `-O0` tests/llc
 /// switches): the target prices no jump table, so the DAG makes compares as the

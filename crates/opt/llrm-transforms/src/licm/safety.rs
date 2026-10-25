@@ -19,6 +19,7 @@ use super::calls;
 /// memory (`MemoryWriteTracking`), found when asked.
 pub struct LoopSafety<'a> {
     context: &'a llrm_mir::context::Context,
+    layout: &'a llrm_mir::datalayout::DataLayout,
     function: &'a Function,
     accesses: &'a Accesses,
     outer: &'a Outer,
@@ -35,6 +36,7 @@ impl<'a> LoopSafety<'a> {
     /// [`computeLoopSafetyInfo`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MustExecute.cpp#L80).
     pub fn new(
         context: &'a llrm_mir::context::Context,
+        layout: &'a llrm_mir::datalayout::DataLayout,
         function: &'a Function,
         accesses: &'a Accesses,
         outer: &'a Outer,
@@ -43,6 +45,7 @@ impl<'a> LoopSafety<'a> {
     ) -> Self {
         let mut safety = Self {
             context,
+            layout,
             function,
             accesses,
             outer,
@@ -144,7 +147,14 @@ impl<'a> LoopSafety<'a> {
         &self,
         inst: InstId,
     ) -> bool {
-        self.accesses.writes(inst).is_none_or(|writes| !writes.is_empty())
+        let unit = llrm_analysis::memory::Unit::over(
+            self.context,
+            self.layout,
+            &self.outer.metadata,
+            &self.outer.globals,
+            self.function,
+        );
+        self.accesses.writes_in(&unit, inst).is_none_or(|writes| !writes.is_empty())
     }
 
     /// [`ICFLoopSafetyInfo::isGuaranteedToExecute`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MustExecute.cpp#L304).
