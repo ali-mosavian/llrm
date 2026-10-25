@@ -144,7 +144,9 @@ impl Entry {
         }
     }
 
-    /// `get`: the interference of block `num`, computed if stale.
+    /// `get`: the interference of block `num`, computed if stale. Asked
+    /// 30 K times a compile for 9 K blocks computed: the hit is the short path.
+    #[inline]
     fn get(
         &mut self,
         env: &Env,
@@ -153,11 +155,13 @@ impl Entry {
         if self.blocks[num].tag != self.tag {
             self.update(env, num);
         }
-        (self.blocks[num].first, self.blocks[num].last)
+        let block = &self.blocks[num];
+        (block.first, block.last)
     }
 
     /// `update`
     /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/InterferenceCache.cpp#L131>).
+    #[inline(never)]
     fn update(
         &mut self,
         env: &Env,
@@ -423,6 +427,7 @@ impl Cursor {
     }
 
     /// `moveToBlock`.
+    #[inline]
     pub fn move_to_block(
         &mut self,
         cache: &mut InterferenceCache,
