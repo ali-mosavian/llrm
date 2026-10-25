@@ -93,3 +93,32 @@ fn fneg_and_fabs_of_a_float_are_sign_mask_logic() {
         assert!(dag.constant_pool.contains(&(mask, EVT::Simple(MVT::I128))), "{op:?}: mask");
     }
 }
+
+/// With SSE2 (`hasSSE2()`, L618..L706) `f32` and `f64` are done in xmm
+/// registers: `fabs`, `fneg` and `fcopysign` are `andps`/`xorps` with a mask
+/// (Custom), `fadd`/`fsub` are Custom, `fsin`/`fcos` are libcalls (Expand), a
+/// `f32` to `f64` extension is Custom, there is no `f64` extending load, only
+/// `+0.0` is a free immediate, and a bitcast between a float and an integer is
+/// no longer expanded through memory. Without it the x87 arms stand.
+#[test]
+fn the_sse2_table_does_the_scalar_float_work_in_xmm() {
+    use super::super::actions::{Action, LoadExt};
+    let sse = TargetLowering::x86_64(Features { sse2: true, ..Features::default() }, MVT::I64);
+    let x87 = TargetLowering::x86_64(Features::default(), MVT::I64);
+    for vt in [MVT::F32, MVT::F64] {
+        for op in [ISD::FAbs, ISD::FNeg, ISD::FCopySign, ISD::FAdd, ISD::FSub] {
+            assert_eq!(sse.operation_action(op, EVT::from(vt)), Action::Custom, "{op:?} {vt:?}");
+        }
+        for op in [ISD::FSin, ISD::FCos] {
+            assert_eq!(sse.operation_action(op, EVT::from(vt)), Action::Expand, "{op:?} {vt:?}");
+        }
+        assert_eq!(x87.operation_action(ISD::FCopySign, EVT::from(vt)), Action::Expand);
+        assert_ne!(x87.operation_action(ISD::FAbs, EVT::from(vt)), Action::Custom);
+        assert!(sse.is_fp_imm_legal(vt, 0) && !sse.is_fp_imm_legal(vt, 1u128 << if vt == MVT::F32 { 31 } else { 63 }));
+        assert!(x87.is_fp_imm_legal(vt, 1u128 << if vt == MVT::F32 { 31 } else { 63 }));
+    }
+    assert_eq!(sse.operation_action(ISD::FpExtend, EVT::from(MVT::F64)), Action::Custom);
+    assert_eq!(sse.load_ext_action(LoadExt::ExtLoad, MVT::F64, MVT::F32), Action::Expand);
+    assert_ne!(sse.operation_action(ISD::BitCast, EVT::from(MVT::I64)), Action::Expand);
+    assert_eq!(x87.operation_action(ISD::BitCast, EVT::from(MVT::I64)), Action::Expand);
+}

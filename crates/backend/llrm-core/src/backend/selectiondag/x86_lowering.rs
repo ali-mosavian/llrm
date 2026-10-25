@@ -1559,7 +1559,7 @@ fn lower_fabs_or_fneg(
     let is_fabs = dag.opcode(node) == ISD::FAbs;
     // `fabs` under an `fneg` is left to the `fneg`, which sets the sign.
     if is_fabs && dag.users(node).any(|user| dag.opcode(SDValue { node: user, res: 0 }) == ISD::FNeg) {
-        return None;
+        return Some(node);
     }
     let mut x = dag.operand(node, 0);
     let negated_abs = !is_fabs && dag.opcode(x) == ISD::FAbs;
