@@ -52,3 +52,24 @@ def test_the_limit_counts_kept_prs_only(tmp_path):
     sh(repo, "checkout", "-q", "main")
     kept, waits = ps.assemble(list(heads), heads, base="main", cwd=repo, limit=2)
     assert kept == ["1", "2"] and not waits
+
+
+def test_two_prs_adding_a_test_of_one_name_do_not_share_a_batch(tmp_path):
+    """#4678 and #4680 added the same test in different places: no conflict, so both joined, and the batch failed 'defined multiple times'."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "t.rs").write_text("fn first() {}\n\n\n\n\n\n\n\n\nfn last() {}\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    sh(repo, "checkout", "-qb", "a")
+    (repo / "t.rs").write_text("fn first() {}\nfn a_frame_cell_is_not_encodable() {}\n\n\n\n\n\n\n\n\nfn last() {}\n")
+    sh(repo, "commit", "-qam", "a")
+    heads = {"1": sh(repo, "rev-parse", "HEAD")}
+    sh(repo, "checkout", "-q", "main")
+    sh(repo, "checkout", "-qb", "b")
+    (repo / "t.rs").write_text("fn first() {}\n\n\n\n\n\n\n\n\nfn last() {}\nfn a_frame_cell_is_not_encodable() {}\n")
+    sh(repo, "commit", "-qam", "b")
+    heads["2"] = sh(repo, "rev-parse", "HEAD")
+    sh(repo, "checkout", "-q", "main")
+    kept, waits = ps.assemble(["1", "2"], heads, base="main", cwd=repo)
+    assert kept == ["1"] and "a_frame_cell_is_not_encodable" in waits["2"] and "#1" in waits["2"]
