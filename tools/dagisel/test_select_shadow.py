@@ -56,3 +56,18 @@ def test_the_example_expands_memset_pattern_as_the_driver_does(tmp_path):
     )
     out = subprocess.run([binary, str(ir)], capture_output=True, text=True, env={**os.environ, "M16": "1"}).stdout
     assert "REFUSED" not in out, out
+
+
+def test_a_select_pseudo_is_the_jcc_the_pins_inserter_makes():
+    """The pin's finalize-isel has run EmitLoweredSelect (a JCC_1 diamond); our selection still has CMOV_GR32, which the
+    emitter expands the same way: a function of one select was `differs: ours only CMOV_GR32` (x_heapsort, x_isqrt)."""
+    machine = Counter({"CMOV_GR32": 1, "ADD32rr": 2, "RET": 1})
+    ours = {"blocks": 1, "built": 1, "machine": machine, "unselected": Counter()}
+    pinned = {"a": Counter({"JCC_1": 1, "ADD32rr": 2, "RET": 1})}
+    rows = tool.rows_of("p", {"a": ours}, {}, pinned, "define i32 @a() {\n ret i32 0\n}\n")
+    assert [b for _, _, b in rows] == ["equal"]
+
+
+def test_a_cascade_of_selects_is_one_diamond():
+    machine = Counter({"CMOV_GR32": 3, "RET": 1})
+    assert tool.expanded_selects(machine, Counter({"JCC_1": 1, "RET": 1})) == Counter({"JCC_1": 1, "RET": 1})

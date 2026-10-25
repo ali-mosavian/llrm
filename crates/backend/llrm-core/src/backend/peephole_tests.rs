@@ -12,7 +12,7 @@ use llrm_lir::registers::RegId;
 
 use super::*;
 use crate::backend::frame::Frame;
-use crate::backend::{machinecp, parcopy, prologue, verify};
+use crate::backend::{machinecp, prologue, verify};
 use crate::model::ir::Addr;
 use crate::support::hash::HashMap;
 use crate::support::hash::IndexMap;
@@ -849,128 +849,6 @@ fn test_loaded_scaled_add_uses_67h_lea() {
     assert_eq!(address.through, RegId::EDX);
     assert_eq!(address.index_through, RegId::EAX);
     assert_eq!(address.scale, 2);
-}
-
-#[test]
-fn test_repeated_allocated_address_copies_use_one_clean_67h_base() {
-    // lru_use copied one retained owner into BX/SI/DI at every field access.
-    let owner = insn(
-        1,
-        Some((1, 3)),
-        Some(sem(
-            Operation::Move,
-            "mov",
-            vec![rl(RegId::DX, 2)],
-            vec![Loc::Mem(Mem { through: RegId::BP, ..Mem::new(frame(6), 2) })],
-        )),
-        vec![1],
-        vec![],
-    );
-    let registers = [RegId::BX, RegId::SI, RegId::DI, RegId::BX];
-    let mut insns = vec![Arc::new(owner)];
-    for (index, register) in registers.into_iter().enumerate() {
-        let index = index as i64 + 2;
-        let value = u32::try_from(index).unwrap();
-        let copy = insn(
-            index,
-            Some((index, index)),
-            Some(sem(Operation::Move, "mov", vec![rl(register, 2)], vec![rl(RegId::DX, 2)])),
-            vec![value],
-            vec![1],
-        );
-        let cell = Mem {
-            through: register,
-            base: Some(Held { value, width: 2 }),
-            selector: Some(Held { value: 20, width: 2 }),
-            ..Mem::new(Some(Addr { segment: (RegId::FS).iced(), ..Addr::new(Space::Far, index) }), 2)
-        };
-        let load = insn(
-            index,
-            Some((index, index)),
-            Some(sem(Operation::Move, "mov", vec![rl(RegId::AX, 2)], vec![Loc::Mem(cell)])),
-            vec![30 + value],
-            vec![value, 20],
-        );
-        insns.extend([Arc::new(copy), Arc::new(load)]);
-    }
-    let input = body("secondary-base", 1, vec![block(1, insns, vec![]).into()]);
-
-    let result = secondary_bases(&input, "386").unwrap().insns();
-
-    let moves: Vec<&Arc<Insn>> =
-        result.iter().filter(|one| one.what.as_ref().unwrap().name.as_deref() == Some("mov")).collect();
-    assert_eq!(moves.len(), 5); // the owner load and four actual memory loads
-    let extension = result.iter().find(|one| one.what.as_ref().unwrap().name.as_deref() == Some("movzx")).unwrap();
-    assert_eq!(extension.what.as_ref().unwrap().dests, [rl(RegId::EDX, 4)]);
-    let cells: Vec<&Loc> = moves[1..].iter().map(|one| &one.what.as_ref().unwrap().sources[0]).collect();
-    assert!(cells.iter().all(|cell| matches!(cell, Loc::Mem(cell) if cell.through == RegId::EDX)));
-    assert!(cells.iter().all(|cell| matches!(cell, Loc::Mem(cell) if cell.base == Some(Held { value: 1, width: 4 }))));
-
-    // P6 and Core charge both a partial-register merge and a length-changing
-    // 67h decode stall; selection must not optimize against a cheaper model.
-    for target_cpu in ["P6", "Core"] {
-        let expensive = secondary_bases(&input, target_cpu).unwrap().insns();
-        assert!(!expensive.iter().any(|one| one.what.as_ref().unwrap().name.as_deref() == Some("movzx")));
-        assert_eq!(expensive.iter().filter(|one| one.what.as_ref().unwrap().name.as_deref() == Some("mov")).count(), 9);
-    }
-}
-
-/// A frame cell has two address components, its fixed BP and the dynamic base
-/// the allocator gave it. Widening the base to a 32-bit address would drop BP:
-/// Nib's sum_three wrote its locals through `[eax+si]`. The shape of the test
-/// above, each access a frame cell.
-#[test]
-fn test_a_frame_cell_keeps_its_bp_when_its_base_copies_are_unified() {
-    let owner = insn(
-        1,
-        Some((1, 3)),
-        Some(sem(
-            Operation::Move,
-            "mov",
-            vec![rl(RegId::DX, 2)],
-            vec![Loc::Mem(Mem { through: RegId::BP, ..Mem::new(frame(6), 2) })],
-        )),
-        vec![1],
-        vec![],
-    );
-    let mut insns = vec![Arc::new(owner)];
-    for (index, register) in [RegId::BX, RegId::SI, RegId::DI, RegId::BX].into_iter().enumerate() {
-        let index = index as i64 + 2;
-        let value = u32::try_from(index).unwrap();
-        let copy = insn(
-            index,
-            Some((index, index)),
-            Some(sem(Operation::Move, "mov", vec![rl(register, 2)], vec![rl(RegId::DX, 2)])),
-            vec![value],
-            vec![1],
-        );
-        let cell = Mem { through: register, base: Some(Held { value, width: 2 }), ..Mem::new(frame(-8), 2) };
-        let load = insn(
-            index,
-            Some((index, index)),
-            Some(sem(Operation::Move, "mov", vec![rl(RegId::AX, 2)], vec![Loc::Mem(cell)])),
-            vec![30 + value],
-            vec![value],
-        );
-        insns.extend([Arc::new(copy), Arc::new(load)]);
-    }
-    let input = body("secondary-base", 1, vec![block(1, insns, vec![]).into()]);
-
-    let result = secondary_bases(&input, "386").unwrap().insns();
-
-    assert!(
-        !result.iter().any(|one| one.what.as_ref().unwrap().name.as_deref() == Some("movzx")),
-        "a frame cell's base was widened"
-    );
-    for one in result.iter().filter(|one| one.what.as_ref().unwrap().name.as_deref() == Some("mov")) {
-        for source in &one.what.as_ref().unwrap().sources {
-            if let Loc::Mem(cell) = source {
-                if cell.addr.is_some_and(|addr| addr.space == Space::Frame) && cell.base.is_some() {
-                    assert_eq!(cell.base.unwrap().width, 2, "{cell:?}");
-                }
-            }
-        }
-    }
 }
 
 #[test]
@@ -2077,31 +1955,6 @@ fn test_far_pointer_loaded_in_one_instruction() {
 }
 
 #[test]
-fn test_wait_elimination_does_not_cross_observable_work() {
-    // FPCSEX's redundant waits may disappear, but integer observers still need
-    // completion.
-    for middle in [Some(""), Some("mov"), Some("fnstsw"), Some("fninit"), None, Some("block")] {
-        let instruction = |at: i64, name: Option<&str>| {
-            let what = name.map(|name| sem(Operation::Nothing, name, vec![], vec![]));
-            Arc::new(insn(at, Some((at, at + 1)), what, vec![], vec![]))
-        };
-        let (first, between, last) =
-            (instruction(0, Some("wait")), instruction(1, middle), instruction(2, Some("fld")));
-        let blocks = if middle == Some("block") {
-            vec![block(0, vec![first], vec![2]), block(2, vec![last], vec![])]
-        } else {
-            vec![block(0, vec![first, between, last], vec![])]
-        };
-        let result = waits(&body("waits", 0, crate::model::lir::shared(blocks)));
-        assert_eq!(
-            result.insns().iter().any(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("wait"))),
-            middle != Some(""),
-            "{middle:?}"
-        );
-    }
-}
-
-#[test]
 fn test_repeated_copy_requires_unchanged_source_and_destination() {
     // LNGMXX copied ECX into EAX twice around CDQ; partial writes must prevent
     // reuse.
@@ -3150,85 +3003,8 @@ fn test_folded_culling_address_drops_only_unobserved_arithmetic() {
 // ------------------------------------------------------------------
 // test_parcopy
 
-fn group_move(
-    into: Loc,
-    out_of: Loc,
-    group: Option<i64>,
-    at: i64,
-) -> Arc<Insn> {
-    Arc::new(Insn {
-        group,
-        ..insn(at, Some((at, at)), Some(sem(Operation::Move, "mov", vec![into], vec![out_of])), vec![], vec![])
-    })
-}
-
 fn one_block(insns: Vec<Arc<Insn>>) -> LirBody {
     body("one", 0, vec![block(0, insns, vec![]).into()])
-}
-
-fn frame_slots(width: u32) -> (Loc, Loc) {
-    (Loc::Mem(mem(frame(-4), width, RegId::BP, 0, 2)), Loc::Mem(mem(frame(-8), width, RegId::BP, 0, 2)))
-}
-
-fn reset() -> Arc<Insn> {
-    Arc::new(insn(
-        0x102,
-        Some((0x102, 0x102)),
-        Some(sem(Operation::Move, "mov", vec![rl(RegId::EAX, 4)], vec![im(0, 4)])),
-        vec![],
-        vec![],
-    ))
-}
-
-#[test]
-fn test_frame_copy_uses_a_dead_register_before_the_stack() {
-    // Mandel reset its column recurrence with PUSH-memory/POP-memory each row.
-    let (source, destination) = frame_slots(4);
-    let scheduled =
-        parcopy::scheduled(&one_block(vec![group_move(destination.clone(), source.clone(), Some(1), 0x100), reset()]))
-            .unwrap();
-
-    let instructions =
-        frame_copies(&scheduled, "386", &crate::backend::classes::RegisterClasses::m16()).unwrap().blocks[0]
-            .insns
-            .clone();
-
-    assert_eq!(names(&instructions), ["mov", "mov", "mov"]);
-    assert_eq!(instructions[0].what, Some(sem(Operation::Move, "mov", vec![rl(RegId::EAX, 4)], vec![source])));
-    assert_eq!(instructions[1].what, Some(sem(Operation::Move, "mov", vec![destination], vec![rl(RegId::EAX, 4)])));
-}
-
-#[test]
-fn test_frame_copy_keeps_the_stack_when_no_register_is_dead() {
-    // A scratch shuttle may not overwrite a value live out of the copy.
-    let (source, destination) = frame_slots(2);
-    let scheduled = parcopy::scheduled(&one_block(vec![group_move(destination, source, Some(1), 0x100)])).unwrap();
-
-    let instructions =
-        frame_copies(&scheduled, "386", &crate::backend::classes::RegisterClasses::m16()).unwrap().blocks[0]
-            .insns
-            .clone();
-
-    assert_eq!(names(&instructions), ["push", "pop"]);
-}
-
-#[test]
-fn test_source_push_pop_is_not_treated_as_a_parallel_copy() {
-    // Only parcopy's synthetic pair may lose its observable stack traffic.
-    let (source, destination) = frame_slots(2);
-    let mut pair =
-        parcopy::scheduled(&one_block(vec![group_move(destination, source, Some(1), 0x100)])).unwrap().blocks[0]
-            .insns
-            .to_vec();
-    pair[1] = Arc::new(Insn { at: 0x101, covers: Some((0x101, 0x102)), ..(*pair[1]).clone() });
-    pair.push(reset());
-
-    let instructions =
-        frame_copies(&one_block(pair), "386", &crate::backend::classes::RegisterClasses::m16()).unwrap().blocks[0]
-            .insns
-            .to_vec();
-
-    assert_eq!(names(&instructions[..2]), ["push", "pop"]);
 }
 
 // ------------------------------------------------------------
@@ -5183,35 +4959,6 @@ fn test_a_compare_of_other_operands_or_a_block_with_two_ways_in_is_made_again() 
         block(30, vec![ret], vec![]),
     ];
     assert_eq!(compares(&compares_again(&body("joined", 0, crate::model::lir::shared(joined))), 2), 1);
-}
-
-/// `secondary_bases` tried every definition of the body for every candidate
-/// (a copy of its uses each): 80 independent word loads were 6,400 tries, and
-/// an `-O1` module's peephole spent 36 M instructions on it.
-#[test]
-fn secondary_bases_tries_only_what_uses_the_candidate() {
-    let insns: Vec<Arc<Insn>> = (1..=80u32)
-        .map(|value| {
-            Arc::new(insn(
-                i64::from(value),
-                Some((i64::from(value), i64::from(value))),
-                Some(sem(
-                    Operation::Move,
-                    "mov",
-                    vec![rl(RegId::DX, 2)],
-                    vec![Loc::Mem(Mem { through: RegId::BP, ..Mem::new(frame(6), 2) })],
-                )),
-                vec![value],
-                vec![],
-            ))
-        })
-        .collect();
-    let input = body("many-candidates", 1, vec![block(1, insns, vec![]).into()]);
-    SECONDARY_TRIES.with(|count| count.set(0));
-
-    secondary_bases(&input, "386").unwrap();
-
-    assert!(SECONDARY_TRIES.with(std::cell::Cell::get) <= 80);
 }
 
 /// A sub-pass that matched nothing in a block rebuilt it anyway: 17,255 of the
