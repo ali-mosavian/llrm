@@ -847,6 +847,7 @@ pub(crate) fn check_old_slots(
 
 /// (file stem, pass) pairs of [`check_missing_has_no_file`], as `letters` makes
 /// them.
+#[cfg(test)]
 const SOURCE_NAMES: &[(&str, &str)] = &[("constraintelim", "constraintelimination")];
 
 /// A Missing entry whose pass has a source file (`shrinkwrap.rs` for
@@ -854,6 +855,7 @@ const SOURCE_NAMES: &[(&str, &str)] = &[("constraintelim", "constrainteliminatio
 /// `.rs` under `crates`; names compare by their letters and digits, without a
 /// leading `x86`; `SOURCE_NAMES` lists the stems that spell their pass
 /// differently.
+#[cfg(test)]
 pub(crate) fn check_missing_has_no_file(
     registry: &[Entry],
     stems: &[String],
