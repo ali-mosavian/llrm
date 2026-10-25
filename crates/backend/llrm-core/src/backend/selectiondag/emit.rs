@@ -1980,10 +1980,11 @@ impl Emitter<'_, '_> {
             // the copy is that write.
             "SUBREG_TO_REG" => {
                 // The pin's operands are (0, x, index); the node keeps (x,
-                // index).
+                // index), and a folded load's chain after them.
+                let is_constant = |op: SDValue| matches!(self.dag.node(op).data, NodeData::Const { .. });
                 let (source, index) = match node.ops[..] {
-                    [source, index] => (source, self.constant(index)?),
-                    [_, source, index] => (source, self.constant(index)?),
+                    [source, index, ..] if is_constant(index) => (source, self.constant(index)?),
+                    [_, source, index, ..] => (source, self.constant(index)?),
                     _ => return Err(EmitError::Unsupported("SUBREG_TO_REG operands".to_owned())),
                 };
                 if index != 6 {
@@ -2135,7 +2136,7 @@ impl Emitter<'_, '_> {
                 self.push(Operation::Unary, &name, vec![Loc::Mem(cell)], Vec::new());
                 Ok(Some(()))
             }
-            "LEA32r" | "LEA16r" => {
+            "LEA32r" | "LEA16r" | "LEA64r" => {
                 // a `lea` only computes the address: a scaled index is fine
                 let cell = self.cell_unchecked(
                     node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short lea".to_owned()))?,

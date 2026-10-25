@@ -162,3 +162,41 @@ entry:
     assert!(names.iter().any(|n| n == "imul"), "{names:?}");
     assert!(!names.iter().any(|n| n == "idiv"), "{names:?}");
 }
+
+/// A zero-extending load at m64 stopped with "a non-constant address part":
+/// `SUBREG_TO_REG` keeps the folded load's chain after its index operand.
+#[test]
+fn an_m64_zero_extending_load_is_selected() {
+    let names = m64_names(
+        "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i64 @f(ptr %p) {
+  %w = load i32, ptr %p
+  %s = zext i32 %w to i64
+  ret i64 %s
+}
+",
+    );
+    assert_eq!(names, ["", "mov", "mov", ""]);
+}
+
+/// `p + i + 12` at m64 stopped at `Unmapped("LEA64r")`; it is one `lea` over
+/// quadword registers.
+#[test]
+fn an_m64_address_sum_is_one_lea() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define ptr @f(ptr %p, i64 %i) {
+  %q = getelementptr i8, ptr %p, i64 %i
+  %r = getelementptr i32, ptr %q, i64 3
+  ret ptr %r
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let insns = done.body.insns();
+    let lea = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("lea")).expect("a lea");
+    let Some(crate::model::ir::Loc::Held(result)) = lea.dests.first() else { panic!("{lea:?}") };
+    assert_eq!(result.width, 8, "{lea:?}");
+}
