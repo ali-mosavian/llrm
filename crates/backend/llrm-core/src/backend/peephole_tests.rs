@@ -4541,7 +4541,7 @@ fn test_an_instruction_with_a_row_is_answered_from_the_table_and_one_without_is_
     let table = sem(Operation::Binary, "add", vec![rl(RegId::CX, 2)], vec![rl(RegId::CX, 2), rl(RegId::DX, 2)]);
     let (reads, writes) = _register_effects_of_what(regs, 16, &table, true, true).expect("the table answers");
     assert!(reads.contains(&(RegId::ECX, 0)) && reads.contains(&(RegId::EDX, 1)) && writes.contains(&(RegId::ECX, 1)));
-    let none = sem(Operation::Unary, "bswap", vec![rl(RegId::EAX, 4)], vec![rl(RegId::EAX, 4)]);
+    let none = sem(Operation::Unary, "nosuchop", vec![rl(RegId::EAX, 4)], vec![rl(RegId::EAX, 4)]);
     assert_eq!(_register_effects_of_what(regs, 32, &none, true, true), None);
 }
 
