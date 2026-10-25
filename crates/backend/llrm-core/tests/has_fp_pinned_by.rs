@@ -95,3 +95,15 @@ fn test_a_pushed_value_does_not_keep_the_frame_register() {
     let push = Semantics { name: Some("push".into()), sources: vec![held], ..Semantics::new(Operation::Push) };
     assert_eq!(pinned(push, &registers), None);
 }
+
+/// An indirect jump through a jump table was read as an opaque stack
+/// adjustment: a switch-ending function kept `ebp` (QCport -Os weapons.c
+/// `_pl_select_weapon`, +52 instructions over the pin).
+#[test]
+fn test_a_jump_table_is_not_an_opaque_sp_adjustment() {
+    let registers = llrm_x86_m32::M32.frame_registers();
+    let jump = |table| Semantics { indirect: true, table, ..Semantics::new(Operation::Jump) };
+
+    assert_eq!(pinned(jump(vec![]), &registers), Some(Pinned::OpaqueSpAdjustment), "premise: a bare indirect jump");
+    assert_eq!(pinned(jump(vec![1, 2]), &registers), None);
+}

@@ -201,7 +201,7 @@ fn the_combiner_runs_between_the_legalizers() {
     super::dag_select::legalized(&mut built.dag, &tli, &mut X86Lowering { cmov: false, sse2: false }, &machine)
         .expect("legalizes");
     let root = built.dag.get_root();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = llrm_support::hash::HashSet::default();
     let mut work = vec![root.node];
     while let Some(n) = work.pop() {
         if seen.insert(n) {

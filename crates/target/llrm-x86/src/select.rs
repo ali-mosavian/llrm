@@ -2160,6 +2160,9 @@ fn scalar_sse(
         (0, 2) => (&sources[0], &sources[1]),
         _ => return None,
     };
+    // The bitwise operations and `movaps` take the whole register whatever the
+    // scalar they carry (a `double` negated by `xorps` is an 8-byte value).
+    let whole = matches!(name, "xorps" | "andps" | "andnps" | "orps" | "movaps");
     // An xmm register is held 16 bytes wide whatever scalar it carries: the
     // mnemonic says how much is read.
     let scalar = |source: &str| match source {
@@ -2173,6 +2176,7 @@ fn scalar_sse(
             None => scalar(&name[name.len().saturating_sub(2)..]),
         };
     let bits = |one: &Loc| match one {
+        _ if whole => 128,
         Loc::Reg(reg) if reg.register.is_xmm() && reg.width == 16 => read,
         Loc::Reg(reg) => reg.width * 8,
         Loc::Mem(cell) => cell.width * 8,
@@ -2186,12 +2190,12 @@ fn scalar_sse(
             _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true)
         }
         (Loc::Reg(into), Loc::Mem(cell)) if xmm(first) => {
-            let code = code_of!(upper, "_XMM_XMMM", cell.width * 8)?;
+            let code = code_of!(upper, "_XMM_XMMM", bits(second))?;
             let (built, relocated) = operand_of(cell, at.bits)?;
             _assemble(&raised(create_reg_mem(code, into.register, built)), at, relocated)
         }
         (Loc::Mem(cell), Loc::Reg(outof)) if xmm(second) => {
-            let code = code_of!(upper, "_XMMM", cell.width * 8, "_XMM")?;
+            let code = code_of!(upper, "_XMMM", bits(first), "_XMM")?;
             let (built, relocated) = operand_of(cell, at.bits)?;
             _assemble(&raised(create_mem_reg(code, built, outof.register)), at, relocated)
         }

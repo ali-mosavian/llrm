@@ -43,14 +43,16 @@ fn a_call_is_a_sequence_around_a_call_instruction() {
     // The area is the pin's pseudo pair around the call; `callframe.rs` makes
     // them pushes or `sub`/`add`.
     let called = names.iter().position(|n| n == "call").unwrap();
-    assert_eq!(names.iter().position(|n| n == "call_frame_setup"), Some(0), "{names:?}");
+    let setup = names.iter().position(|n| n == "call_frame_setup").expect("a setup");
+    assert!(setup < called, "{names:?}");
     assert_eq!(names.get(called + 1).map(String::as_str), Some("call_frame_destroy"), "{names:?}");
     assert!(!names.iter().any(|n| n == "sub"), "{names:?}");
 }
 
-/// Source order (`LLRM_SRC_ORDER`) builds `s = a + 1` before the call, as the
-/// IR has it; the default scheduler opens with the call sequence. Without the
-/// flag reaching the queue both orders were the default one.
+/// Source order is the m32 default (`SchedInfo::source_order`): it builds
+/// `s = a + 1` before the call, as the IR has it, with or without
+/// `LLRM_SRC_ORDER`. Before it was the default the call sequence opened the
+/// block.
 #[test]
 fn source_order_keeps_the_ir_order_around_a_call() {
     let module = llrm_mir::parse::module(CALL).expect("parses");
@@ -68,7 +70,7 @@ fn source_order_keeps_the_ir_order_around_a_call() {
             .collect();
         names.iter().position(|n| n == "call_frame_setup").unwrap()
     };
-    assert_eq!(order(false), 0);
+    assert!(order(false) > 0, "the m32 default is source order");
     assert!(order(true) > 0);
 }
 
@@ -511,8 +513,8 @@ fn a_landing_pad_is_marked_and_reachable_from_the_entry() {
     let done = select_with_contracts(QB_PAD).unwrap_or_else(|why| panic!("{why}"));
     let landing = done.landing.expect("the pad's address");
     let blocks = &done.body.blocks;
-    let by_at: std::collections::HashMap<i64, &crate::model::lir::Block> = blocks.iter().map(|b| (b.at, b)).collect();
-    let mut seen = std::collections::HashSet::new();
+    let by_at: llrm_support::hash::HashMap<i64, &crate::model::lir::Block> = blocks.iter().map(|b| (b.at, b)).collect();
+    let mut seen = llrm_support::hash::HashSet::default();
     let mut work = vec![done.body.entry];
     while let Some(at) = work.pop() {
         if seen.insert(at) {
