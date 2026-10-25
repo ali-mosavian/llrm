@@ -398,6 +398,7 @@ impl<'a> Builder<'a> {
             tail_calls: Vec::new(),
             tail_candidate: None,
             sibcall: false,
+            variadic_call: false,
             had_tail_call: false,
             volatile_memory: false,
             block,
@@ -435,6 +436,9 @@ struct Builder<'a> {
     /// The call `visit_call` is lowering is a sibling call: `lower_call` makes
     /// a `TC_RETURN`.
     sibcall: bool,
+    /// The call `visit_call` is lowering is to a variadic function: at m64
+    /// `lower_call` sets `al` to the vector registers it uses.
+    variadic_call: bool,
     /// A `TC_RETURN` ended the block: nothing after the call is built.
     had_tail_call: bool,
     /// The memory intrinsic being lowered is volatile.
@@ -1050,6 +1054,7 @@ impl Builder<'_> {
                 return Err(Refused("a runtime routine's flags read other than by a compare with zero"));
             }
         }
+        self.variadic_call = variadic;
         let result =
             self.lower_call(callee_node, values, &extends, &byvals, &plan, first, result_type, flags_answer)?;
         if let (true, Some(answer)) = (flags_answer, result) {
@@ -1216,6 +1221,20 @@ impl Builder<'_> {
                 }
                 _ => return Err(Refused("argument passed in several places or by value")),
             }
+        }
+        // X86's `LowerCall`: a variadic call under SysV x86-64 passes the
+        // number of vector registers it uses in `al`
+        if std::mem::take(&mut self.variadic_call) && self.target.dag.pointer == EVT::I64 {
+            let vectors = plan
+                .parameters
+                .iter()
+                .map(|parameter| match parameter {
+                    Parameter::Registers(regs) => regs.iter().filter(|reg| reg.is_xmm()).count(),
+                    _ => 0,
+                })
+                .sum::<usize>();
+            let count = self.dag.get_constant(vectors as u128, EVT::I8);
+            copies.push((RegId::AL, count));
         }
         if !stores.is_empty() {
             chain = self.dag.get_token_factor(&stores);

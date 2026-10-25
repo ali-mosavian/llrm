@@ -15,12 +15,13 @@
 //! left out, each named where it stood: `foldSelectOfBools`,
 //! `foldSelectNegNot`, `foldSelectAndOrPowerOfTwo`, the floating-point folds
 //! (`fabs`, `minnum`, `canonicalize`...: need #2209),
-//! `foldSelectValueEquivalence`, `foldSelectInstWithICmp`,
+//! `foldSelectValueEquivalence`, the rest of `foldSelectInstWithICmp`
+//! (its `canonicalizeSPF` step is `combine_select_spf`),
 //! `foldSelectICmpAndAnd`, `foldSelectBitTest`, `foldAddSubSelect`,
 //! `foldOverflowingAddSubSelect`, `foldSetClearBits`,
 //! `foldSelectZeroOrFixedOp`, `foldSelectIntrinsic`,
 //! `foldSelectWithSRem`, the
-//! min/max (`matchSelectPattern`) folds, and everything after the not-condition
+//! `foldSPFofSPF`, and everything after the not-condition
 //! (`foldSelectCmpBitcasts` ... `FoldSelectWithAndOrCond`).
 //!
 //! DEVIATE 3: `replaceInInstruction` (the arms' instructions that read the
@@ -48,6 +49,7 @@ use crate::combine_select_bools::select_of_bools;
 use crate::combine_select_ext_const::select_ext_const;
 use crate::combine_select_into_op::select_into_op;
 use crate::combine_select_op_op::select_op_op;
+use crate::combine_select_spf::select_with_icmp;
 use crate::combine_shared::{has_one_use, query, replace_operand};
 
 /// The parts of a `select`.
@@ -66,6 +68,7 @@ const FOLDS: &[Fold] = &[
     cond_known_in_arms,
     select_of_bools,
     bool_to_extension,
+    select_with_icmp,
     select_op_op,
     select_ext_const,
     select_of_gep,
