@@ -177,6 +177,9 @@ fn a_quadword_cell_is_compared_and_added_to_with_an_immediate() {
     assert_eq!(bytes(&op("cmp", 0)), [0x48, 0x83, 0x7d, 0xf8, 0x00]);
     assert_eq!(bytes(&op("cmp", 0x1000)), [0x48, 0x81, 0x7d, 0xf8, 0x00, 0x10, 0, 0]);
     assert_eq!(bytes(&op("add", 1)), [0x48, 0x83, 0x45, 0xf8, 0x01]);
+}
+
+#[test]
 
 fn a_scalar_double_add_is_the_sse2_form() {
     // addsd %xmm1,%xmm0; addss %xmm9,%xmm8. Without an SSE row the emitter has
