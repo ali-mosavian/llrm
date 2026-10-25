@@ -741,6 +741,14 @@ impl Builder<'_> {
         call.operands.truncate(instruction.operands.len() - 3);
         call.operands.push(callee);
         self.visit_call(&call, info)?;
+        // `visitInvoke`: the result, if read outside this block, is made a
+        // virtual register here (a terminator is skipped by the export in
+        // `visit`).
+        if let Some(result) = instruction.result {
+            if let Some(reg) = self.info.value_regs.get(&result).copied() {
+                self.copy_value_to_register(Operand::Value(result), reg, ISD::AnyExtend)?;
+            }
+        }
         let root = self.control_root();
         let dest = self.dag.get_basic_block(normal.0);
         let node = self.dag.get_node(ISD::Br, EVT::OTHER, &[root, dest]);
