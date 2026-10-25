@@ -172,13 +172,11 @@ b0:
     assert_eq!(priced(&text, 0, false, CallerSize::OptSize).1, 75);
 }
 
-/// An external callee that stays after the inline is copied into an `optsize`
-/// caller on x86 as the pin does (cost 45, 30 and 40 against its threshold of
-/// 50): D11, which held crc, tile and recchop back at -Os (52, 42 and 15
-/// bytes), is deleted. The `called_once` kernel's `twice` (cost 45) stayed a
-/// call at -Os and the pin inlined it.
+/// An external callee that stays after the inline is not copied into an
+/// `optsize` caller on x86 (D11): crc, tile and recchop grew 52, 42 and 15
+/// bytes at -Os (cost 45, 30 and 40 against the pin's threshold of 50).
 #[test]
-fn an_optsize_caller_copies_a_callee_that_stays_on_x86_as_the_pin_does() {
+fn an_optsize_caller_does_not_copy_a_callee_that_stays_on_x86() {
     let text = format!(
         "{GLOBAL}define i32 @callee(i32 %x) {{
 b0:
@@ -210,14 +208,17 @@ b0:
     let (generic, bound) = priced_with(&text, 0, false, CallerSize::OptSize, None);
     let (target, held) = priced_with(&text, 0, false, CallerSize::OptSize, Some(&x86));
     assert!(generic < bound, "premise: the pin inlines it, cost {generic} threshold {bound}");
-    assert!(target < held, "x86 kept it, cost {target} threshold {held}");
+    assert!(target >= held, "x86 inlined it, cost {target} threshold {held}");
 }
 
-/// A callee at `-Os` on x86 is held to the pin's cost and threshold alone: the
-/// 14-instruction loop of `idioms.bas` (cost 15, ten sites, +1062 bytes) is
-/// inlined, as are a local callee with other calls and a small one.
+/// A callee at `-Os` on x86 (D11): the inline must not make the code bigger.
+/// `idioms.bas` copied a 14-instruction loop (cost 15 against the target's old
+/// bound of 25) into ten call sites, +690 bytes. The callee that stays is
+/// refused when its instructions that do not fold cost more code than the call
+/// and its argument pushes; the last call of a local callee, which goes with
+/// it, and a callee smaller than its call are inlined.
 #[test]
-fn an_optsize_caller_inlines_what_the_pin_inlines_on_x86() {
+fn an_optsize_caller_inlines_only_what_does_not_grow_the_code_on_x86() {
     let text = |linkage: &str, body: &str| {
         format!(
             "@arr = global [64 x i32] zeroinitializer
@@ -257,16 +258,19 @@ e:
     };
     let (generic, bound) = priced_with(&text("", looped), 0, false, CallerSize::OptSize, None);
     assert!(generic < bound, "premise: the pin inlines the loop, cost {generic} threshold {bound}");
-    assert!(held(&text("", looped), false), "an external loop callee under the threshold stayed a call");
-    assert!(held(&text("internal ", looped), false), "a local callee with other calls stayed a call");
-    assert!(held(&text("internal ", looped), true), "the last call of a local callee stayed a call");
-    assert!(held(&text("", small), false), "a small callee stayed a call");
+    assert!(!held(&text("", looped), false), "an external loop callee was copied into the caller");
+    assert!(!held(&text("internal ", looped), false), "a local callee with other calls was copied");
+    assert!(held(&text("internal ", looped), true), "the last call of a local callee, which goes, stays");
+    assert!(held(&text("", small), false), "a callee smaller than its call stays");
+    // A call and the push of its argument are bigger than the instructions
+    // they count as: `_savegame_read_block` (28 calls) grew its module by 408
+    // bytes while the call counted as three plain instructions.
     let three = "b0:
   %a = add i32 %x, 1
   %b = xor i32 %a, 85
   %c = mul i32 %b, 3
   ret i32 %c";
-    assert!(held(&text("", three), false), "a callee of three instructions stayed a call");
+    assert!(held(&text("", three), false), "a callee of the size of a far call and its push was kept out");
 }
 
 /// A `noipa` callee is never inlined, whatever its cost (`alwaysinline`
@@ -356,12 +360,12 @@ fn test_m16_prices_a_narrow_trunc_with_the_x86_model_and_a_scaled_address_dear()
 
 #[test]
 fn test_a_decided_site_is_remarked_as_opt_remarks_it() {
-    let priced = InlineCost::Cost { cost: 40, threshold: 225, static_bonus: 0 };
+    let priced = InlineCost::Cost { cost: 40, threshold: 225, static_bonus: 0, blocked: false };
     assert_eq!(
         crate::inlinecost::remark("_main@0", "_f@3", &priced, true),
         "'_f@3' inlined into '_main@0' with (cost=40, threshold=225)"
     );
-    let dear = InlineCost::Cost { cost: 300, threshold: 225, static_bonus: 0 };
+    let dear = InlineCost::Cost { cost: 300, threshold: 225, static_bonus: 0, blocked: false };
     assert_eq!(
         crate::inlinecost::remark("g", "f", &dear, false),
         "'f' not inlined into 'g' because too costly to inline (cost=300, threshold=225)"
@@ -535,9 +539,9 @@ b0:
 /// so the 350-instruction benchmark body was copied into `__main` and kept.
 #[test]
 fn test_a_verdict_of_cost_zero_at_threshold_zero_does_not_pay() {
-    assert!(!InlineCost::Cost { cost: 0, threshold: 0, static_bonus: 0 }.is_ok());
-    assert!(InlineCost::Cost { cost: -1, threshold: 0, static_bonus: 0 }.is_ok());
-    assert!(!InlineCost::Cost { cost: 75, threshold: 75, static_bonus: 0 }.is_ok());
+    assert!(!InlineCost::Cost { cost: 0, threshold: 0, static_bonus: 0, blocked: false }.is_ok());
+    assert!(InlineCost::Cost { cost: -1, threshold: 0, static_bonus: 0, blocked: false }.is_ok());
+    assert!(!InlineCost::Cost { cost: 75, threshold: 75, static_bonus: 0, blocked: false }.is_ok());
 }
 
 /// `-fno-inline-functions-called-once` set `Threshold::last` and nothing read

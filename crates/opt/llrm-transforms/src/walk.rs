@@ -220,11 +220,13 @@ impl ProgramPass for Walk {
                                     })
                                 }),
                             );
+                        // SZ2: the sites the -Os bound alone refused, to try.
+                        let mut trials = llrm_support::hash::SparseIdMap::default();
                         let tti = program.target.tti();
                         let constant = if !calls_a_body {
                             Default::default()
                         } else {
-                            crate::inlinecost::sites(
+                            crate::inlinecost::sites_with_trials(
                                 module,
                                 &program.layout,
                                 id,
@@ -236,6 +238,8 @@ impl ProgramPass for Walk {
                                 self.inline.limit == 0,
                                 tti.as_deref(),
                                 decided.as_mut(),
+                                (tti.is_some() && size == crate::inlinecost::CallerSize::OptSize)
+                                    .then_some(&mut trials),
                             )
                         };
                         let mut declared = declared(&mut modules[at], module);
@@ -288,8 +292,97 @@ impl ProgramPass for Walk {
                             modules[at].changed(id);
                             modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                         }
+                        // SZ2: a trial costs the Simplify list over the caller
+                        // once more, so it is made for
+                        // a caller of
+                        // at most `TRIAL_CALLER` instructions.
+                        let spliced_body = (!trials.is_empty()
+                            && function_mut(module, id).1.walk().count() <= TRIAL_CALLER)
+                            .then(|| function_mut(module, id).1.clone());
                         let mid = calls_of(&module.context, module.global(id).function().expect("a procedure"));
                         (self.simplify)(module, &mut modules[at], id, "walk.");
+                        if let (Some(before), Some(tti)) = (spliced_body, tti.as_deref()) {
+                            // SZ2: each refused site is inlined into the body
+                            // as it stood before
+                            // the Simplify list, which runs again;
+                            // it stays if the body is smaller. The callee stays
+                            // either way.
+                            let mut best = body_size(module, &program.layout, tti, id);
+                            // The sites of a private callee that goes with its
+                            // last call are tried
+                            // together, for its body is saved too;
+                            // any other site alone.
+                            let mut by_callee: std::collections::BTreeMap<GlobalId, Vec<llrm_mir::module::InstId>> =
+                                std::collections::BTreeMap::new();
+                            for (call, candidate) in trials.iter() {
+                                by_callee.entry(candidate.callee.expect("a callee")).or_default().push(*call);
+                            }
+                            let mut units: Vec<(Vec<llrm_mir::module::InstId>, i64)> = Vec::new();
+                            for (callee, mut calls) in by_callee {
+                                calls.sort();
+                                let global = module.global(callee);
+                                let goes = crate::inlinecost::local_linkage(global.linkage)
+                                    && !addressed.contains(&callee)
+                                    && live.references().get(&callee).copied() == Some(calls.len() as i64);
+                                if goes {
+                                    units.push((calls, body_size(module, &program.layout, tti, callee)));
+                                } else {
+                                    units.extend(calls.into_iter().map(|one| (vec![one], 0)));
+                                }
+                            }
+                            let mut accepted: Vec<llrm_mir::module::InstId> = Vec::new();
+                            for (calls, credit) in units {
+                                let kept = function_mut(module, id).1.clone();
+                                let mut chosen = accepted.clone();
+                                chosen.extend(calls.iter().copied());
+                                let available: llrm_support::hash::SparseIdMap<_, _> =
+                                    chosen.iter().map(|one| (*one, trials[one].clone())).collect();
+                                *function_mut(module, id).1 = before.clone();
+                                let mut declared = crate::interprocedural::declared(&mut modules[at], module);
+                                let (context, function) = function_mut(module, id);
+                                crate::inline::expanded_all(
+                                    context,
+                                    function,
+                                    &by,
+                                    &peeled,
+                                    Some(&available),
+                                    &mut declared,
+                                )?;
+                                if declared.place(module)? > 0 {
+                                    modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                                }
+                                modules[at].changed(id);
+                                modules[at]
+                                    .invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                                (self.simplify)(module, &mut modules[at], id, "walk.trial.");
+                                let tried = body_size(module, &program.layout, tti, id);
+                                if remarks {
+                                    eprintln!(
+                                        "{} ({} instructions) SZ2 trial of {} call(s) to '{}': {} against {} (+{} for the callee)",
+                                        module.global(id).name.as_deref().unwrap_or("?"),
+                                        module.global(id).function().map_or(0, |one| one.walk().count()),
+                                        calls.len(),
+                                        trials[&calls[0]].callee.map_or("?", |callee| module
+                                            .global(callee)
+                                            .name
+                                            .as_deref()
+                                            .unwrap_or("?")),
+                                        tried,
+                                        best,
+                                        credit
+                                    );
+                                }
+                                if tried < best + credit {
+                                    best = tried;
+                                    accepted.extend(calls);
+                                } else {
+                                    *function_mut(module, id).1 = kept;
+                                    modules[at].changed(id);
+                                    modules[at]
+                                        .invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                                }
+                            }
+                        }
                         // The calls left after the splices and the
                         // simplification (tail-call
                         // elimination makes a recursive body a loop), as
@@ -495,3 +588,31 @@ impl SelfInline {
 #[cfg(test)]
 #[path = "walk_tests.rs"]
 mod tests;
+
+/// SZ2: the largest caller, in instructions, whose refused sites are tried.
+const TRIAL_CALLER: usize = 300;
+
+/// SZ2: the code size of body `id`, by the target's cost model for bytes.
+fn body_size(
+    module: &Module,
+    layout: &llrm_mir::datalayout::DataLayout,
+    tti: &dyn llrm_mir::tti::Tti,
+    id: GlobalId,
+) -> i64 {
+    let function = module.global(id).function().expect("a body");
+    function
+        .walk()
+        .map(|(_, inst)| {
+            llrm_mir::instructioncost::instruction_cost(
+                tti,
+                &module.context,
+                layout,
+                &module.globals,
+                function,
+                inst,
+                llrm_mir::tti::CostKind::CodeSize,
+            )
+            .value
+        })
+        .sum()
+}
