@@ -808,7 +808,18 @@ pub fn _split_edges(
     }
 
     let mut blocks: Vec<Block> = Vec::new();
+    let entered: BTreeSet<i64> = landing.keys().map(|&(_, into)| into).collect();
+    let left: BTreeSet<i64> = landing.keys().map(|&(where_, _)| where_).collect();
     for block in &body.blocks {
+        // A block no split edge touches is the block it was.
+        if rename.is_empty()
+            && !left.contains(&block.at)
+            && !entered.contains(&block.at)
+            && !copies.contains_key(&block.at)
+        {
+            blocks.push(block.clone());
+            continue;
+        }
         let succ: Vec<i64> =
             block.succ.iter().map(|&one| landing.get(&(block.at, one)).copied().unwrap_or(one)).collect();
         let mut insns: Vec<Arc<Insn>> =
@@ -1100,5 +1111,34 @@ mod tests {
         assert_eq!(last_what.op, Operation::Jump);
         assert_eq!(last_what.target, Some(edge.at));
         assert_eq!(last.at, jz.at);
+    }
+
+    #[test]
+    fn test_a_block_no_split_edge_touches_is_not_rebuilt() {
+        // Every block was rebuilt, retargeting each of its instructions:
+        // 1.5 M Ir on d_faces.
+        let jz = branch(0, Some((0, 2)), "jz", 20);
+        let far = body(
+            "far",
+            vec![
+                block(0, vec![Arc::clone(&jz)], vec![10, 20], vec![]).into(),
+                block(10, vec![branch(10, Some((10, 12)), "jz", 40)], vec![40], vec![]).into(),
+                block(20, vec![], vec![], vec![]).into(),
+                block(40, vec![], vec![], vec![]).into(),
+            ],
+        );
+        let done = _split_edges(
+            &far,
+            &IndexMap::from_iter([((0, 10), Split::Pairs(vec![(2, 1)]))]),
+            &IndexMap::default(),
+            &IndexMap::default(),
+            &IndexMap::from_iter([(0, vec![]), (10, vec![]), (20, vec![]), (40, vec![])]),
+            &IndexMap::from_iter([(2, 2)]),
+            false,
+            &|_, _| false,
+        )
+        .unwrap();
+        assert!(done.blocks[2].same_as(&far.blocks[2]));
+        assert!(done.blocks[3].same_as(&far.blocks[3]));
     }
 }

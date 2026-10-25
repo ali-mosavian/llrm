@@ -726,7 +726,7 @@ b:
 /// byte would do: `-4` cost a byte in every limb loop of Nib `floats`.
 #[test]
 fn a_negative_displacement_at_m16_is_negative() {
-    use crate::model::ir::{Loc, Operation};
+    use crate::model::ir::Loc;
     let module = llrm_mir::parse::module(
         "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32-ni:2\"
 define i16 @f(ptr %p, i16 %i) {
