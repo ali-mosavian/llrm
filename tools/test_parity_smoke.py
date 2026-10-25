@@ -396,12 +396,12 @@ def test_every_failing_qcport_module_is_listed_not_the_first(tmp_path, monkeypat
 
 
 def test_a_pr_touching_the_qb_frontend_x86_isel_or_the_runtime_spec_runs_every_tests_run_group():
-    for path in ("crates/frontends/llrm-qb/src/compile.rs", "crates/frontends/qbfront/src/semantic.rs", "crates/frontends/llrm-qbruntime/src/runtime.toml", "runtime/qb/strconv.c",
+    for path in ("crates/frontends/qb/src/compile.rs", "crates/frontends/qb/src/semantic.rs", "runtime/qb/src/runtime.toml", "runtime/qb/strconv.c",
                  "crates/target/llrm-x86/src/select.rs", "crates/backend/llrm-core/src/backend/isel.rs"):
         assert ps.runs_whole_groups([path]), path
     for path in ("crates/opt/llrm-transforms/src/gvn.rs", "docs/arch.md", "tools/gate/gate.py", "crates/frontends/llrm-c/src/lib.rs"):
         assert not ps.runs_whole_groups([path]), path
-    assert ps.runs_whole_groups(["docs/arch.md", "crates/frontends/qbfront/src/lexer.rs"])
+    assert ps.runs_whole_groups(["docs/arch.md", "crates/frontends/qb/src/lexer.rs"])
 
 
 def test_a_planted_qb_output_diff_in_a_group_goes_red_and_refuses_the_merge():

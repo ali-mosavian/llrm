@@ -113,9 +113,13 @@ impl Builder<'_> {
         intrinsic: &Intrinsic,
     ) -> Result<(), Refused> {
         // The SysV `va_list` is a four-field record over a register save area
-        // (`LowerVASTART`), not the stack pointer the 32-bit one is.
-        if self.target.dag.pointer == EVT::I64 {
-            return Err(Refused("va_start at m64: the SysV register save area is not translated"));
+        // (`LowerVASTART`), not the stack pointer the 32-bit one is; the entry
+        // block's lowering of the arguments made the area.
+        if self.target.dag.pointer == EVT::I64
+            && matches!(intrinsic, Intrinsic::VaStart)
+            && self.dag.var_args_save.is_none()
+        {
+            return Err(Refused("va_start at m64 outside the entry block"));
         }
         let root = self.root();
         let mut ops = vec![root];

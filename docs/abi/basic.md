@@ -114,4 +114,4 @@ Some entries keep a register interface beside the stack block: `B$HARY` takes th
 
 ## Tests
 
-`crates/frontends/llrm-qb/src/callconv_tests.rs` compares llrm's lowering of each call boundary with BC's `/A` listings of the same program; [conformance](conformance.md) lists the rest.
+`crates/frontends/qb/src/callconv_tests.rs` compares llrm's lowering of each call boundary with BC's `/A` listings of the same program; [conformance](conformance.md) lists the rest.
