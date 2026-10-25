@@ -511,7 +511,12 @@ pub fn ties(what: &Semantics) -> bool {
     !what.dests.is_empty()
         && !what.sources.is_empty()
         && (_TIED.contains(&what.op)
-            || (what.op == Operation::Multiply && what.dests.len() == 1 && what.sources.len() == 2))
+            || (what.op == Operation::Multiply
+                && what.dests.len() == 1
+                && what.sources.len() == 2
+                // `IMUL32rri` has no tied operand: it reads any source and
+                // writes any register.
+                && !matches!(what.sources[1], Loc::Imm(_))))
 }
 
 /// The copy and the fixed instruction, or None where it is already tied.
@@ -1417,6 +1422,22 @@ mod tests {
         assert_eq!(sources(&fixed[0]), [first]);
         assert_eq!(sources(&fixed[1]), [result, second]);
         assert_eq!(fixed[1].uses.iter().copied().collect::<BTreeSet<u32>>(), BTreeSet::from([900, 902]));
+    }
+
+    /// x_iir (AM-BT-22): `imul` by a constant was split into a copy and a tied
+    /// `imul`, one more copy per product than the pin's three-address
+    /// `IMUL32rri` (17 loop instructions against its 15).
+    #[test]
+    fn test_two_address_leaves_an_imul_by_a_constant_three_address() {
+        let (result, source) = (held(900, 4), held(901, 4));
+        let what = Semantics {
+            name: Some("imul".into()),
+            dests: vec![result],
+            sources: vec![source, imm(1600, 4)],
+            ..Semantics::new(Operation::Multiply)
+        };
+        let insn = Insn::new(0, Some((0, 3)), Some(what), vec![900], vec![901]);
+        assert!(fixed(&insn).is_none(), "split into a copy and a tied multiply");
     }
 
     /// hotlop kept its old accumulator live through the add after copying it.
