@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/precse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/precse.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/precse.rs sha256:0eac269f839c22d8fec44a253c8855b2f116552a21424f82ebf969378ae4410d -->
+<!-- src: crates/backend/llrm-core/src/backend/precse.rs sha256:711d45c651e91bce47130f772aaca691e762a703ced818004179fe73caefa220 -->
 
 # precse
 
@@ -45,9 +45,11 @@ runs no more often than the two together); the walk above then removes the
 two. A copy no one reads is dropped again (the pin leaves it to
 `DeadMachineInstructionElim`).
 
-DEVIATE CSE1 (owner w-1, exit 2026-11-10): no `hasMinSize` shortcut (the
-selector has no minsize flag, isel.rs I2) and no `isLegalToHoistInto` test
-(no block says it is a landing pad).
+DEVIATE CSE1 (owner w-2, exit with isel.rs I2): no `hasMinSize` shortcut
+(the machine phases have no minsize flag; it is -Oz only, which no sweep
+covers). `isLegalToHoistInto` is translated: a return block is no target;
+the pin's other two conditions cannot hold on this LIR (see
+`legal_to_hoist_into`).
 
 DEVIATE CSE2 (owner funcattrs-port, exit 2026-11-13): an operation with no
 register operand is not a candidate, a load of a constant global with a
