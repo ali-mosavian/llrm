@@ -246,7 +246,8 @@ impl Peephole {
             return body;
         };
         let frame = frame.borrow();
-        if frame.size() == 0 {
+        // The reserved call area is stack storage no cell names a spill of.
+        if frame.size() == 0 || frame.call_area != 0 {
             return body;
         }
         for one in body.insns() {

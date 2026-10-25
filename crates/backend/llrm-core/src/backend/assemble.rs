@@ -1049,7 +1049,8 @@ fn phased(
         }
     }
     let frame = frame.borrow().clone();
-    let reserve = -std::cmp::min(frame.slots.values().copied().min().unwrap_or(0), frame.floor);
+    // The reserved call area is the lowest bytes below the locals and spills.
+    let reserve = -std::cmp::min(frame.slots.values().copied().min().unwrap_or(0), frame.floor) + frame.call_area;
     if llrm_support::env_flag!("LLRM_FRAME_ORACLE") {
         eprintln!("{}", crate::backend::frameobjects::oracle_line(name, &frame, reserve));
     }
