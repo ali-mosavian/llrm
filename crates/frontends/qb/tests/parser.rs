@@ -2299,3 +2299,13 @@ fn a_line_number_zero_after_on_error_goto_0_is_a_duplicate_label() {
         assert!(parse("0 PRINT\r\nON ERROR GOTO 0\r\nEND\r\n", dialect).is_ok(), "{dialect:?}");
     }
 }
+
+#[test]
+fn a_form_declaration_inside_a_procedure_must_precede_executable_statements() {
+    // corpus [meta], BC output: `'$FORM frm` inside a SUB under VBDOS is "Must precede executable
+    // statements"; at module level it is fine.
+    let inside = "SUB p\r\n'$FORM frm\r\nDIM a(10)\r\nEND SUB\r\n";
+    let outside = "'$FORM frm\r\nDIM a(10)\r\n";
+    assert!(parse(inside, Dialect::VbDos).is_err());
+    assert!(parse(outside, Dialect::VbDos).is_ok());
+}

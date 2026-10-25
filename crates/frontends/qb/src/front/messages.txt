@@ -84,3 +84,4 @@ Form variable already in use or illegal form name|the form name after `$FORM` is
 Syntax error /OPTION|`OPTION` is only valid at module level, before any SUB or FUNCTION|put `OPTION BASE 0` or `OPTION BASE 1` at the top of the file, before any array is dimensioned
 Syntax error /COMMON|`COMMON` cannot be used inside a SUB or FUNCTION|put it at module level, above the first procedure
 Syntax error /DECLARE|`DECLARE` cannot be used inside a SUB or FUNCTION|put it at module level, above the first procedure that uses it
+Must precede executable statements|`{text}` comes after the procedure's first statement, and this statement has to come before any executable one|move it above the first statement of the procedure, or to the top of the module

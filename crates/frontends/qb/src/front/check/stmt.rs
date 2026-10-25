@@ -465,7 +465,11 @@ impl Checker {
             }
             // '$FORM name: the form is a variable of the form type, seen
             // everywhere
-            Statement::FormDeclaration(name, _) => {
+            Statement::FormDeclaration(name, span) => {
+                // VBDOS's BC refuses one inside a SUB or FUNCTION (corpus group `meta`)
+                if self.procedure.is_some() {
+                    self.err(*span, "Must precede executable statements");
+                }
                 let var = Var {
                     ty: Ty::Record("FORM".into()),
                     rank: None,
