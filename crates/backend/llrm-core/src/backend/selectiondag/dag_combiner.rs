@@ -564,11 +564,17 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let (lhs, rhs) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
-        if !self.dag.value_type(lhs).is_integer() {
+        let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(n0, 2)).data else { return None };
+        let not_cc = if self.dag.value_type(lhs).is_integer() { cc.inverse_integer() } else { cc.inverse_float() };
+        // `isCondCodeLegal`: x86 expands `oeq` and `une` (two flags), so once
+        // operations are legal the fold must not make one.
+        if self.level >= CombineLevel::AfterLegalizeVectorOps
+            && !self.dag.value_type(lhs).is_integer()
+            && matches!(not_cc, CondCode::SetOEq | CondCode::SetUNe)
+        {
             return None;
         }
-        let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(n0, 2)).data else { return None };
-        Some(self.dag.get_setcc(vt, lhs, rhs, cc.inverse_integer()))
+        Some(self.dag.get_setcc(vt, lhs, rhs, not_cc))
     }
 
     /// The users of `old` read `new`, and are looked at again.

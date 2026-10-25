@@ -529,14 +529,14 @@ pub fn _lanes(
 ) -> Lanes {
     if regs.is_segment(register) {
         let width = regs.width_of(register).expect("a segment register has a width");
-        return (0..width).map(|byte| (register, byte as u32)).collect();
+        return Lanes::span(register, 0, width as u32);
     }
     let full = full32(regs, register);
     if !regs.in_class(full, llrm_lir::registers::class::INT) || regs.is_stack(full) {
         return Lanes::new();
     }
     let start = regs.get(register).map_or(0, |one| one.lane / 8);
-    (start..start + register.size() as u32).map(|byte| (full, byte)).collect()
+    Lanes::span(full, start, register.size() as u32)
 }
 
 /// Write only the live low word of a register-only dword move

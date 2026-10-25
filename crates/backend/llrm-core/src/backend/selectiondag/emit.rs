@@ -397,6 +397,14 @@ pub fn emit_in(
             if dag.invariant_loads.contains(&node) {
                 emitter.mark_invariant_loads(before);
             }
+            if dag.volatile_accesses.contains(&node)
+                || matches!(
+                    dag.node(SDValue { node, res: 0 }).data,
+                    NodeData::Mem(info) if info.volatile
+                )
+            {
+                emitter.mark_volatile(before);
+            }
         }
     }
     for (value, number) in &emitter.values {
@@ -805,6 +813,30 @@ pub enum Callee {
 impl Emitter<'_, '_> {
     /// The loads of memory the node's operand says never changes, among the
     /// instructions made since `before` in the last block.
+    /// The instructions emitted since `before` for a volatile access: the ones
+    /// that touch memory keep the mark (`MachineMemOperand::isVolatile`).
+    fn mark_volatile(
+        &mut self,
+        before: usize,
+    ) {
+        let Some(block) = self.blocks.last_mut() else { return };
+        for one in block.insns.iter_mut().skip(before) {
+            let touches = one
+                .what
+                .as_ref()
+                .is_some_and(
+                    |what| what.dests.iter().chain(&what.sources).any(|loc| matches!(loc, Loc::Mem(_)))
+                        && matches!(
+                            what.op,
+                            Operation::Move | Operation::FloatLoad | Operation::FloatStore | Operation::Binary
+                        ),
+                );
+            if touches {
+                *one = Arc::new(Insn { volatile: true, ..(**one).clone() });
+            }
+        }
+    }
+
     fn mark_invariant_loads(
         &mut self,
         before: usize,
@@ -2479,7 +2511,7 @@ impl Emitter<'_, '_> {
                 self.push(Operation::Unary, &name, vec![Loc::Mem(cell)], Vec::new());
                 Ok(Some(()))
             }
-            "LEA32r" | "LEA16r" | "LEA64r" => {
+            "LEA32r" | "LEA16r" | "LEA64r" | "LEA64_32r" => {
                 // a `lea` only computes the address: a scaled index is fine
                 let cell = self.cell_unchecked(
                     node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short lea".to_owned()))?,
@@ -2543,6 +2575,12 @@ impl Emitter<'_, '_> {
                     && cell.base.is_none()
                     && cell.index.is_none()
                     && let Some(address) = cell.addr
+                    && matches!(
+                        address.space,
+                        crate::model::ir::Space::Segment
+                            | crate::model::ir::Space::External
+                            | crate::model::ir::Space::Group
+                    )
                 {
                     let offset = Imm { value: 0, width, address: Some(address) };
                     self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Imm(offset)]);

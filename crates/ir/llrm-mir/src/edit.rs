@@ -1341,6 +1341,31 @@ impl Function {
         Ok(())
     }
 
+    /// `BasicBlock::moveBefore`: the placed `block` moved to stand right
+    /// before the placed `before`.
+    pub fn move_block_before(
+        &mut self,
+        block: BlockId,
+        before: BlockId,
+    ) -> Result<(), String> {
+        if block == before {
+            return Ok(());
+        }
+        let from = self
+            .layout
+            .iter()
+            .position(|one| *one == block)
+            .ok_or_else(|| format!("block {} is not placed", block.0))?;
+        self.layout.remove(from);
+        let at = self
+            .layout
+            .iter()
+            .position(|one| *one == before)
+            .ok_or_else(|| format!("block {} is not placed", before.0))?;
+        self.layout.insert(at, block);
+        Ok(())
+    }
+
     /// `BasicBlock::moveAfter`: the placed `block` moved to stand right after
     /// the placed `after`.
     pub fn move_block_after(
