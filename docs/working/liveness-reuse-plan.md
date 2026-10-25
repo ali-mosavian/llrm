@@ -1,6 +1,6 @@
 # Liveness reuse: one lane solve serves flags (2026-10-25)
 
-TL;DR: `FlagLive` (about 6.8 M inclusive on the board) re-solves what `LaneLive` already holds: the flag lanes are lanes of it. On `d_faces` the flags read off the lane answer equal `FlagLive`'s in 1148 of 1156 blocks at -O2 and 1170 of 1170 at -Os, never narrower. The 8 others come from one rule that differs. Reuse is feasible; it needs that rule aligned and an objsweep.
+TL;DR: built and dropped (2026-10-25): 0.50 M on `d_faces`, and 27 float objects change through other lane consumers. See Result. Spike: `FlagLive` (about 6.8 M inclusive on the board) re-solves what `LaneLive` already holds: the flag lanes are lanes of it. On `d_faces` the flags read off the lane answer equal `FlagLive`'s in 1148 of 1156 blocks at -O2 and 1170 of 1170 at -Os, never narrower. The 8 others come from one rule that differs. Reuse is feasible; it needs that rule aligned and an objsweep.
 
 ## Two solves of one problem
 `liveness::lanewise` (`LaneLive`) and `peephole::_flags_live_out` (`FlagLive`) are both backward `incremental::Kept` solves over the same blocks. `LaneLive`'s universe already holds the flag lanes (`_flag_lanes(0xFFFF_FFFF)`). `FlagLive` is the same fixed point with three differences:
@@ -40,3 +40,9 @@ Saved: the `FlagLive` solve (3.94 M self, `_flag_effect` 1.57 M from it, the res
 - w-1 (R45-8 withdrawn: facts already held once per body) and w-13 (intervals) on whether anything else wants the lane answer.
 
 Exit: if the pair shows an object change that is not a gain, keep `FlagLive` and record why.
+
+## Result: built, measured, dropped
+Built as designed (`72ff0b8df`, not merged): 260-module run asserting flags-from-lanes narrower = 0 over the arithmetic lanes held; tests passed.
+- `d_faces` m32 -O2: 813.805 M to 813.309 M, -0.50 M. The 6.8 M above was `FlagLive` inclusive on an older whole-compile profile; the lane solve now pays `_flag_effect` per instruction.
+- objsweep: 27 of 568 objects change, all float programs, net -20 B, none grow. `LaneLive` reading x87 and `fldcw` flags by mnemonic changes what the other lane consumers (`machinedce` and the rest) see; the change cannot be separated from the flags'.
+- Not worth 0.5 M. Reopen only if a lane consumer wants the mnemonic rule for its own sake.
