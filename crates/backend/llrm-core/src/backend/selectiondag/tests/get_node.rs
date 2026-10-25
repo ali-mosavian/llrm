@@ -193,3 +193,23 @@ fn replacing_a_value_rewrites_users_and_merges_equal_ones() {
     assert_eq!(dag.node(outer_x).ops[0], yz);
     assert_eq!(dag.node_ids().count(), dag.node_count());
 }
+
+/// `users` and `use_count` walk the use list in place while it is sorted and
+/// sort a copy when it is not (a node re-entered after an operand update, a
+/// node reading one value twice): in creation order, once each, none deleted.
+#[test]
+fn users_are_distinct_and_in_creation_order_whatever_the_use_list() {
+    let mut dag = dag();
+    let a = dag.get_register(EVT::I32, 1);
+    let b = dag.get_register(EVT::I32, 2);
+    let first = dag.get_node(ISD::Add, EVT::I32, &[a, b]);
+    let second = dag.get_node(ISD::Mul, EVT::I32, &[a, a]);
+    // `first` is entered in `a`'s use list again, after `second`.
+    dag.update_node_operands(first.node, &[a, b]);
+    let users: Vec<u32> = dag.users(a).collect();
+    assert_eq!(users, [first.node, second.node]);
+    assert_eq!(dag.use_count(a.node), 3, "first once, second twice");
+    let third = dag.get_node(ISD::Sub, EVT::I32, &[a, b]);
+    dag.delete_dead(third.node);
+    assert_eq!(dag.users(a).collect::<Vec<u32>>(), [first.node, second.node]);
+}
