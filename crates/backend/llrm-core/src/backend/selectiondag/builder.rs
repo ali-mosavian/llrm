@@ -398,6 +398,7 @@ impl<'a> Builder<'a> {
             tail_calls: Vec::new(),
             tail_candidate: None,
             sibcall: false,
+            variadic_call: false,
             had_tail_call: false,
             volatile_memory: false,
             block,
@@ -435,6 +436,9 @@ struct Builder<'a> {
     /// The call `visit_call` is lowering is a sibling call: `lower_call` makes
     /// a `TC_RETURN`.
     sibcall: bool,
+    /// The call `visit_call` is lowering is to a variadic function: at m64
+    /// `lower_call` sets `al` to the vector registers it uses.
+    variadic_call: bool,
     /// A `TC_RETURN` ended the block: nothing after the call is built.
     had_tail_call: bool,
     /// The memory intrinsic being lowered is volatile.
@@ -843,6 +847,37 @@ impl Builder<'_> {
             let store = self.dag.get_store(root, value, address, info);
             self.dag.set_root(store);
         }
+        // The vector argument registers named parameters did not take go to
+        // the other half of the area, if `al` says any were used
+        // (`VASTART_SAVE_XMM_REGS`).
+        let vector_registers = found.float_argument_registers.len();
+        let named_vectors = self
+            .convention
+            .parameters
+            .iter()
+            .map(|parameter| match parameter {
+                Parameter::Registers(regs) => regs.iter().filter(|reg| reg.is_xmm()).count(),
+                _ => 0,
+            })
+            .sum::<usize>();
+        if vector_registers > named_vectors {
+            let vreg = self.info.new_reg();
+            self.live_ins.push((RegId::AL, vreg));
+            let entry = self.dag.entry_node();
+            let al = self.dag.get_copy_from_reg(entry, vreg, EVT::I8);
+            let frame = self.dag.get_constant_with(save as u128, EVT::I32, true, false);
+            let first = self
+                .dag
+                .get_constant_with(
+                    (found.argument_registers.len() * 8 + named_vectors * 16) as u128,
+                    EVT::I32,
+                    true,
+                    false,
+                );
+            let root = self.control_root();
+            let saved = self.dag.get_node(super::x86isd::VASTART_SAVE_XMM_REGS, EVT::OTHER, &[root, al, frame, first]);
+            self.dag.set_root(saved);
+        }
         self.dag.var_args_save = Some((save, named as u32 * 8));
         Ok(())
     }
@@ -1050,6 +1085,7 @@ impl Builder<'_> {
                 return Err(Refused("a runtime routine's flags read other than by a compare with zero"));
             }
         }
+        self.variadic_call = variadic;
         let result =
             self.lower_call(callee_node, values, &extends, &byvals, &plan, first, result_type, flags_answer)?;
         if let (true, Some(answer)) = (flags_answer, result) {
@@ -1216,6 +1252,20 @@ impl Builder<'_> {
                 }
                 _ => return Err(Refused("argument passed in several places or by value")),
             }
+        }
+        // X86's `LowerCall`: a variadic call under SysV x86-64 passes the
+        // number of vector registers it uses in `al`
+        if std::mem::take(&mut self.variadic_call) && self.target.dag.pointer == EVT::I64 {
+            let vectors = plan
+                .parameters
+                .iter()
+                .map(|parameter| match parameter {
+                    Parameter::Registers(regs) => regs.iter().filter(|reg| reg.is_xmm()).count(),
+                    _ => 0,
+                })
+                .sum::<usize>();
+            let count = self.dag.get_constant(vectors as u128, EVT::I8);
+            copies.push((RegId::AL, count));
         }
         if !stores.is_empty() {
             chain = self.dag.get_token_factor(&stores);
@@ -1613,6 +1663,8 @@ impl Builder<'_> {
         inst: InstId,
     ) -> Result<(), Refused> {
         self.current = Some(inst);
+        // `++SDNodeOrder`: what the nodes built for this instruction carry.
+        self.dag.cur_order += 1;
         if self.prelowered.contains(&inst) {
             return Ok(());
         }

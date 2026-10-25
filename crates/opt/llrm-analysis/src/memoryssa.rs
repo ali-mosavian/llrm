@@ -121,6 +121,7 @@
 //! LLVM `MemorySSA` and its `ClobberWalker`
 //! (`llvm/lib/Analysis/MemorySSA.cpp`).
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
@@ -202,6 +203,12 @@ pub struct Accesses {
     plain_source: Option<PlainSource>,
     /// The graph's structure, made when first asked.
     graph: GraphCell,
+    /// Nothing above is made up front: a reference and the lists an
+    /// instruction touches are worked out of the unit when first asked
+    /// (`reference_in`, `reads_in`, `writes_in`), as the pin computes a
+    /// `MemoryLocation` when a walk wants one. The graph's clients ask 1.6 %
+    /// of them.
+    lazy: bool,
 }
 
 /// What `PlainAccesses` reads.
@@ -566,6 +573,9 @@ impl Accesses {
         unit: &Unit,
         inst: InstId,
     ) {
+        if self.lazy {
+            return;
+        }
         if let Some(reference) = unit.reference(inst) {
             self.references.insert(inst, reference);
         }
@@ -599,7 +609,74 @@ impl Accesses {
             source: None,
             plain_source: None,
             graph: GraphCell::default(),
+            lazy: false,
         }
+    }
+
+    /// Accesses that make nothing up front (`lazy`): the references as the unit
+    /// has them, each call writing anything its attributes allow.
+    pub fn lazy() -> Self {
+        Self { lazy: true, ..Self::default() }
+    }
+
+    /// Whether these accesses make nothing up front (`lazy`).
+    pub fn is_lazy(&self) -> bool {
+        self.lazy
+    }
+
+    /// The access `inst` makes, as the unit has it (`Unit::reference`), made
+    /// when asked where these accesses are lazy.
+    pub fn reference_in(
+        &self,
+        unit: &Unit,
+        inst: InstId,
+    ) -> Option<Cow<'_, MemRef>> {
+        if self.lazy {
+            return unit.reference(inst).map(Cow::Owned);
+        }
+        self.references.get(&inst).map(Cow::Borrowed)
+    }
+
+    /// What `inst` touches, made when asked where these accesses are lazy.
+    fn touched_in(
+        &self,
+        unit: &Unit,
+        inst: InstId,
+    ) -> Option<Footprint> {
+        Self::touched_by(unit, inst, &|| unit.reference(inst).into_iter().collect::<Rc<[_]>>(), &|_| None)
+    }
+
+    /// [`reads`](Self::reads), asked of the unit where these accesses are lazy.
+    pub fn reads_in(
+        &self,
+        unit: &Unit,
+        inst: InstId,
+    ) -> Option<Cow<'_, [MemRef]>> {
+        if self.lazy {
+            LAZY_LISTS.with(|made| made.set(made.get() + 1));
+            return match self.touched_in(unit, inst) {
+                None => Some(Cow::Borrowed(&[])),
+                Some((reads, _)) => reads.map(|list| Cow::Owned(list.to_vec())),
+            };
+        }
+        self.reads(inst).map(Cow::Borrowed)
+    }
+
+    /// [`writes`](Self::writes), asked of the unit where these accesses are
+    /// lazy.
+    pub fn writes_in(
+        &self,
+        unit: &Unit,
+        inst: InstId,
+    ) -> Option<Cow<'_, [MemRef]>> {
+        if self.lazy {
+            LAZY_LISTS.with(|made| made.set(made.get() + 1));
+            return match self.touched_in(unit, inst) {
+                None => Some(Cow::Borrowed(&[])),
+                Some((_, writes)) => writes.map(|list| Cow::Owned(list.to_vec())),
+            };
+        }
+        self.writes(inst).map(Cow::Borrowed)
     }
 
     /// These accesses with the stores `absolute` names writing nothing a
@@ -641,6 +718,18 @@ impl Accesses {
         inst: InstId,
     ) -> &[MemRef] {
         self.fills.get(&inst).map_or(&[], Vec::as_slice)
+    }
+
+    /// [`fills`](Self::fills), asked of the unit where these accesses are lazy.
+    pub fn fills_in(
+        &self,
+        unit: &Unit,
+        inst: InstId,
+    ) -> Cow<'_, [MemRef]> {
+        if self.lazy {
+            return Cow::Owned(initialized_by(unit, inst));
+        }
+        Cow::Borrowed(self.fills(inst))
     }
 
     /// What `inst` reads; `None` where it may read anything.
@@ -851,6 +940,14 @@ pub fn same_bytes(
 
 thread_local! {
     static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static LAZY_LISTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many read or write lists this thread's lazy accesses have derived for
+/// an instruction (`reads_in`, `writes_in`), for a test that a client asking
+/// only whether a load or store writes derives none.
+pub fn lazy_lists() -> usize {
+    LAZY_LISTS.with(std::cell::Cell::get)
 }
 
 thread_local! {
@@ -1988,40 +2085,50 @@ impl<'a> Writers<'a> {
 fn initialized_by_calls(unit: &Unit) -> IndexMap<InstId, Vec<MemRef>> {
     let mut out = IndexMap::default();
     for (_, inst) in unit.function.walk() {
-        let op = unit.function.instruction(inst);
-        let (Opcode::Call(info) | Opcode::Invoke(info)) = &op.opcode else { continue };
-        let callee = llrm_mir::memory::callee(unit.context, unit.function, inst)
-            .and_then(|one| unit.globals.get(one.0 as usize))
-            .and_then(GlobalValue::function);
-        let mut fills = Vec::new();
-        for (argument, &operand) in op.operands.iter().enumerate().take(info.argument_attrs.len()) {
-            let declared = callee.and_then(|one| one.parameter_attrs.get(argument)).map_or(&[][..], Vec::as_slice);
-            let byval = |attrs: &[llrm_mir::opcode::Attribute]| {
-                attrs
-                    .iter()
-                    .any(
-                        |one| matches!(
-                            one,
-                            llrm_mir::opcode::Attribute::Flag(name) | llrm_mir::opcode::Attribute::Type(name, _) if name == "byval"
-                        ),
-                    )
-            };
-            if byval(&info.argument_attrs[argument]) || byval(declared) {
-                continue;
-            }
-            for &(low, high) in llrm_mir::memory::initializes(&info.argument_attrs[argument])
-                .iter()
-                .chain(llrm_mir::memory::initializes(declared))
-            {
-                let Ok(width) = u32::try_from(high - low) else { continue };
-                let mut one = MemRef::at(unit, operand, width);
-                one.disp += low;
-                fills.push(one);
-            }
-        }
+        let fills = initialized_by(unit, inst);
         if !fills.is_empty() {
             out.insert(inst, fills);
         }
     }
     out
+}
+
+/// The bytes the call `inst` writes through an argument before it reads any
+/// (`initializes`); nothing for another instruction.
+fn initialized_by(
+    unit: &Unit,
+    inst: InstId,
+) -> Vec<MemRef> {
+    let op = unit.function.instruction(inst);
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &op.opcode else { return Vec::new() };
+    let callee = llrm_mir::memory::callee(unit.context, unit.function, inst)
+        .and_then(|one| unit.globals.get(one.0 as usize))
+        .and_then(GlobalValue::function);
+    let mut fills = Vec::new();
+    for (argument, &operand) in op.operands.iter().enumerate().take(info.argument_attrs.len()) {
+        let declared = callee.and_then(|one| one.parameter_attrs.get(argument)).map_or(&[][..], Vec::as_slice);
+        let byval = |attrs: &[llrm_mir::opcode::Attribute]| {
+            attrs
+                .iter()
+                .any(
+                    |one| matches!(
+                        one,
+                        llrm_mir::opcode::Attribute::Flag(name) | llrm_mir::opcode::Attribute::Type(name, _) if name == "byval"
+                    ),
+                )
+        };
+        if byval(&info.argument_attrs[argument]) || byval(declared) {
+            continue;
+        }
+        for &(low, high) in llrm_mir::memory::initializes(&info.argument_attrs[argument])
+            .iter()
+            .chain(llrm_mir::memory::initializes(declared))
+        {
+            let Ok(width) = u32::try_from(high - low) else { continue };
+            let mut one = MemRef::at(unit, operand, width);
+            one.disp += low;
+            fills.push(one);
+        }
+    }
+    fills
 }

@@ -890,3 +890,15 @@ b5:
     assert!(!printed(&module).contains("icmp slt i16 %i, -5"), "{}", printed(&module));
     assert_eq!(results(&module, &[&[]]), before);
 }
+
+/// After its edits `indvars` swept the whole function for dead code: 0.8 M Ir
+/// on d_faces' largest body, where the pin deletes what an edit stopped
+/// reading. The edits' own seeds are enough.
+#[test]
+fn a_run_that_edits_a_loop_does_not_sweep_the_function_for_dead_code() {
+    let mut module = parsed(&two_counters(0, 1));
+    crate::dead::SCANNED.with(|scanned| scanned.set(0));
+    managed(&mut module, IndVars { lftr: true });
+    assert_eq!(header_phis(&mut module), 1, "{}", printed(&module));
+    assert_eq!(crate::dead::SCANNED.with(std::cell::Cell::get), 0);
+}

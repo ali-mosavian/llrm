@@ -102,7 +102,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("MachineScheduler", "machinesched@5"),
     ("FixupSetCC", "fixupsetcc@5"),
     ("CallFrameOpt", "callframe@5"),
-    ("LowerCallFrame", "callframe@5"),
+    ("ReserveCallFrame", "callframe@5"),
     ("FlagsCopy", "flagscopy@5"),
     ("X86OptimizeLEAs", "leaopt@5"),
     ("FloatFold", "floatfold@6"),
@@ -167,6 +167,10 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::phiconst::SharedConstants),
         // Before the phis go: a value nothing defines is read as undef.
         Box::new(crate::processimpdefs::ProcessImplicitDefs),
+        // On SSA, ahead of the cmov conversion and EarlyMachineLICM (the pin's
+        // addILPOpts): a chain of one integer operation rebuilt so its late
+        // operand joins last.
+        Box::new(crate::backend::combiner::MachineCombiner),
         // On SSA, a loop-invariant computation in the preheader (the pin:
         // EarlyMachineLICM, ahead of MachineCSE).
         Box::new(crate::backend::machinelicm::MachineLicm { classes: Rc::clone(classes) }),
@@ -178,9 +182,6 @@ pub fn machine_with<'a>(
         // On SSA, after sinking (the pin's PeepholeOptimizer): a subtract
         // nothing reads is a compare (optimizeCompareInstr).
         Box::new(crate::backend::peepholeopt::PeepholeOptimizer),
-        // On SSA, after sinking (the pin's addILPOpts): a chain of one integer
-        // operation rebuilt so its late operand joins last.
-        Box::new(crate::backend::combiner::MachineCombiner),
         // On SSA, before the pin allocates: two addresses that differ in a
         // displacement are one (X86OptimizeLEAs, pre-RA).
         Box::new(crate::backend::leaopt::OptimizeLeas { size: target.size }),
@@ -201,8 +202,6 @@ pub fn machine_with<'a>(
             has_var_sized: false,
             slow_two_mem_ops: false,
         }),
-        // The frame pseudos that are left, as `sub`/`add` (every level).
-        Box::new(crate::backend::callframe::LowerCallFrame { stack: registers.stack, width: registers.slot as u32 }),
         // On SSA, right after the pushes are made: a pushed value a load made,
         // read nowhere else, is pushed from the load's cell (the pin:
         // X86CallFrameOptimization's push folding).
@@ -242,19 +241,22 @@ pub fn machine_with<'a>(
             },
         }),
         Box::new(coalesce::Coalescer { size: target.size, ..coalesce::Coalescer::new(None, segments, classes) }),
-        Box::new(allocate::RegAlloc::new(
-            Some(&pinned),
-            frame.clone(),
-            ProfileOrName::Profile(target),
-            segments,
-            classes,
-        )?),
+        Box::new(
+            allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments, classes)?
+                .with_saved(registers.saved.iter().map(|(whole, _)| *whole).collect()),
+        ),
         // After allocation: which moves in a phi's copy conflict is a question
         // about locations.
         Box::new(parcopy::ParallelCopy {
             prices: parcopy::CyclePrices::of(target),
             available: classes.available.clone(),
             saved: registers.saved.iter().map(|(whole, _)| *whole).collect(),
+        }),
+        // The pin's PEI: the call frame is reserved, or each call adjusts.
+        Box::new(crate::backend::callframe::ReserveCallFrame {
+            stack: registers.stack,
+            width: registers.slot as u32,
+            frame: frame.clone(),
         }),
         Box::new(prologue::Prologue::new(or_empty(), calls.cloned())),
         // After frame finalization, as the pin: a constant loaded again where
@@ -538,6 +540,23 @@ mod tests {
                 .collect();
         let at = |one: &str| names.iter().position(|name| *name == one);
         assert!(at("LoadFold").is_some() && at("LoadFold") < at("MachineCombiner"), "{names:?}");
+    }
+
+    /// The pin runs the MachineCombiner before EarlyMachineLICM, MachineCSE,
+    /// the sink and the peephole (`llc -O2 -debug-pass`); ours ran after the
+    /// peephole, so the chains it rebuilds were already rewritten.
+    #[test]
+    fn test_the_combiner_runs_before_licm_cse_sink_and_peephole() {
+        let names: Vec<&'static str> =
+            machine(&IndexMap::default(), None, None, None, false, "486", &crate::backend::target::BUILT_IN)
+                .expect("phases")
+                .iter()
+                .map(|phase| phase.class_name())
+                .collect();
+        let at = |one: &str| names.iter().position(|name| *name == one).expect(one);
+        for later in ["MachineLICM", "MachineCSE", "MachineSink", "PeepholeOptimizer"] {
+            assert!(at("MachineCombiner") < at(later), "{later}: {names:?}");
+        }
     }
 
     #[test]
