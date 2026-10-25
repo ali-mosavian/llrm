@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 71 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 72 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
@@ -10,6 +10,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 71 documented, 0 undoc
 | accessanalysis | `AccessAnalysis`: the memory accesses of a loop, grouped by what they may alias, for the dependence checker and the runtime checks. |  | [accessanalysis](accessanalysis.md) |
 | aggregate | `AAResults::addAAResult` of `AliasAnalysis.cpp` at d1106deb71cc: several alias analyses asked as one. | `AggregateAA`. | [aggregate](aggregate.md) |
 | alias | Strong alias analysis: what each pointer may point to, what escapes and when, and what each call reads and writes. | `pointers`, `point_values`, `points_to` and `PointsTo` (`values`, `escaped`, | [alias](alias.md) |
+| aliasdiff | The alias stack's answers, recorded and compared: the gate for any change to what the stack is built from. |  | [aliasdiff](aliasdiff.md) |
 | aliassets | `AliasSetTracker` (LLVM `AliasSetTracker.cpp`, `d1106deb71cc`): the locations an analysis asks of, grouped into sets that may alias, with whether each set's locations all must alias. |  | [aliassets](aliassets.md) |
 | argumentattrs | `nocapture`, `readonly`, `writeonly` and `readnone` of the pointer parameters of one call-graph SCC, as `addArgumentAttrs` infers them (FunctionAttrs.cpp:1238). | `functionattrs::post_order` once per SCC, callees first. | [argumentattrs](argumentattrs.md) |
 | assumptions | What each block assumes, as LLVM's AssumptionCache: the conditions of the `llvm.assume` calls in it. | The assumed conditions per block. Consumers: [`crate::guards`](guards.md) turns them | [assumptions](assumptions.md) |

@@ -58,6 +58,28 @@ def header(of: Target) -> str:
     return f"target: triple={of.triple} cpu={of.cpu} features={of.features} datalayout={of.datalayout} optsize={str(of.optsize).lower()}"
 
 
+def stack_alignment(of: Target) -> int | None:
+    """The stack alignment in bytes the target's datalayout states (`S32` is 4)."""
+    found = re.search(r"-S(\d+)\b", "-" + of.datalayout)
+    return int(found.group(1)) // 8 if found else None
+
+
+def _with_stack_alignment(text: str, of: Target) -> str:
+    """The module told our target's stack alignment (`override-stack-alignment`, as clang's -mstack-alignment): the pin takes 16 from a
+    Linux triple whatever the datalayout says, and with 16 it keeps a reserved call frame where, at 4, it pushes (pair csr, 2026-10-25:
+    push + add esp counted 197 + 206 against the pin's 71 + 146, none of it ours to fix)."""
+    align = stack_alignment(of)
+    if align is None:
+        return text
+    node = f'!9999 = !{{i32 1, !"override-stack-alignment", i32 {align}}}'
+    flags = re.search(r"^!llvm\.module\.flags = !\{([^}]*)\}$", text, re.M)
+    if flags:
+        joined = flags.group(1).strip()
+        text = text.replace(flags.group(0), "!llvm.module.flags = !{" + (joined + ", " if joined else "") + "!9999}", 1)
+        return text + "\n" + node + "\n"
+    return text + "\n!llvm.module.flags = !{!9999}\n" + node + "\n"
+
+
 def retarget(text: str, of: Target) -> str:
     """`text` with the target written into the module: the triple, the datalayout when it has none, and one attribute group on every
     function; a module that already names a triple or a layout keeps its own (it is the claim the dump made)."""
@@ -66,6 +88,7 @@ def retarget(text: str, of: Target) -> str:
     if not re.search(r"^target triple", text, re.M):
         text = re.sub(r"^(target datalayout = .*)$", rf'\1\ntarget triple = "{of.triple}"', text, count=1, flags=re.M)
     text = re.sub(r"^(define [^\n]*?) \{$", r"\1 #9999 {", text, flags=re.M)
+    text = _with_stack_alignment(text, of)
     group = f'"target-cpu"="{of.cpu}" "target-features"="{of.features}"' + (" optsize" if of.optsize else "")
     return text + f"\nattributes #9999 = {{ {group} }}\n"
 

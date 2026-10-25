@@ -671,7 +671,6 @@ pub(crate) fn llvm_order(
     let size = applied.options.prefers_size();
     let slot =
         |name: &'static str, inner: Box<dyn FunctionPass>| -> Box<dyn FunctionPass> { Box::new(Slot { name, inner }) };
-    let decide = |name| slot(name, Box::new(decide::Decide { constants: false }));
     let simplify_cfg = |name| slot(name, Box::new(simplifycfg::SimplifyCfg::default()));
     let simplify_cfg_with = |name, options| slot(name, Box::new(simplifycfg::SimplifyCfg { options }));
     let combine = |name| slot(name, Box::new(crate::combine_pass::Combine { enabled: applied.options.combine }));
@@ -805,7 +804,6 @@ pub(crate) fn llvm_order(
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@675"),
                 combine("combine@677"),
-                dead("dead@677"),
                 slot("aggressive-instcombine@678", Box::new(crate::trunc_inst_combine::TruncInstCombine)),
                 slot("tailrec@688", Box::new(tailcallelim::TailCallElim)),
                 // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L691:
@@ -855,7 +853,6 @@ pub(crate) fn llvm_order(
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@766"),
                 combine("combine@768"),
-                dead("dead@768"),
             ]);
             list.extend(canonical("loopsimplify@772", "lcssa@772"));
             // What the unroll makes, for the slot after it.
@@ -889,7 +886,6 @@ pub(crate) fn llvm_order(
                 slot("sccp@792", Box::new(sccp::Sccp)),
                 slot("bdce@797", Box::new(bdce::Bdce)),
                 combine("combine@801"),
-                dead("dead@801"),
                 // DFAJumpThreadingPass, PassBuilderPipelines.cpp#L806.
                 slot(
                     "dfajumpthreading@806",
@@ -898,7 +894,6 @@ pub(crate) fn llvm_order(
                     ),
                 ),
                 slot("jumpthreading@809", Box::new(crate::jumpthreading::JumpThreading::from_env())),
-                decide("decide@809"),
                 slot("cvp@810", Box::new(crate::cvp::Cvp)),
                 slot("adce@815", Box::new(adce::Adce)),
                 slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt)),
@@ -920,7 +915,6 @@ pub(crate) fn llvm_order(
                     },
                 ),
                 combine("combine@837"),
-                dead("dead@837"),
             ]);
             list
         }

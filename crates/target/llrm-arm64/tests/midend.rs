@@ -48,3 +48,16 @@ fn a_global_array_is_indexed_in_the_access() {
     assert!(loads.iter().all(|l| l.contains(", x") && l.contains(']') && l.matches(',').count() >= 2), "{asm}");
     assert!(!asm.lines().any(|l| l.trim().starts_with("add") && l.contains("lsl #2")), "{asm}");
 }
+
+/// The page of a global's address (`adrp`) carried no addend while the page
+/// offset (`add`) carried it: with the global at 0x1b6e from the start of .bss
+/// the two named different pages when the sum crossed one, and QB's NIBBLES
+/// passed a pointer 4096 bytes off into its arena (a colour of -1, "Illegal
+/// function call").
+#[test]
+fn the_page_and_the_offset_of_a_global_plus_offset_agree() {
+    let text = "target triple = \"aarch64-unknown-linux-gnu\"\ntarget datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n\n@g = internal global [24000 x i8] zeroinitializer, align 16\n\ndefine ptr @f() {\nb1:\n  ret ptr getelementptr (i8, ptr @g, i64 6896)\n}\n";
+    let asm = driver::assembly(text, Platform::Linux, false).expect("the function lowers");
+    let adrp = asm.lines().find(|l| l.trim().starts_with("adrp")).expect("an adrp");
+    assert!(adrp.contains("6896"), "{asm}");
+}
