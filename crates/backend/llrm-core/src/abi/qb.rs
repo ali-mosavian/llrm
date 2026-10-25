@@ -700,6 +700,15 @@ fn _contract_keeping(
             ),
         ));
     }
+    if name == "B$PMAP" && pushed == 6 {
+        return Ok(returns(
+            6,
+            format!(
+                "{evidence} QB45 grpmap.asm B$PMAP(parmD expr, parmW funct) returns the \
+                 address of its R4 result in AX with RETF 6; BC pushes the dword, then the word."
+            ),
+        ));
+    }
     if name == "B$RND0" && pushed == 0 {
         return Ok(returns(
             0,
