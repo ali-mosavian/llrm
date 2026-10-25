@@ -163,6 +163,10 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::phiconst::SharedConstants),
         // Before the phis go: a value nothing defines is read as undef.
         Box::new(crate::processimpdefs::ProcessImplicitDefs),
+        // On SSA, ahead of the cmov conversion and EarlyMachineLICM (the pin's
+        // addILPOpts): a chain of one integer operation rebuilt so its late
+        // operand joins last.
+        Box::new(crate::backend::combiner::MachineCombiner),
         // On SSA, a loop-invariant computation in the preheader (the pin:
         // EarlyMachineLICM, ahead of MachineCSE).
         Box::new(crate::backend::machinelicm::MachineLicm { classes: Rc::clone(classes) }),
@@ -174,9 +178,6 @@ pub fn machine_with<'a>(
         // On SSA, after sinking (the pin's PeepholeOptimizer): a subtract
         // nothing reads is a compare (optimizeCompareInstr).
         Box::new(crate::backend::peepholeopt::PeepholeOptimizer),
-        // On SSA, after sinking (the pin's addILPOpts): a chain of one integer
-        // operation rebuilt so its late operand joins last.
-        Box::new(crate::backend::combiner::MachineCombiner),
         // On SSA, before the pin allocates: two addresses that differ in a
         // displacement are one (X86OptimizeLEAs, pre-RA).
         Box::new(crate::backend::leaopt::OptimizeLeas { size: target.size }),
