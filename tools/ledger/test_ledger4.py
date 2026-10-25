@@ -67,3 +67,10 @@ def test_constraint_elimination_is_in_a_bucket_as_the_pins_is():
     """The pin's ConstraintElimination is in the SimplifyCFG/JumpThreading/CVP bucket; ours was in none, so its 9.7 M Ir read as
     residual and the bucket's excess was 9.7 M short."""
     assert "constraintelim::ConstraintElimination" in (Path(__file__).parent / "ledger4.py").read_text()
+
+
+def test_the_two_loop_passes_of_the_lpm_are_in_the_loop_bucket():
+    """LoopInstSimplify and LoopSimplifyCFG were in no bucket of ours (15.6 M Ir read as residual) while the pin's are in the loop
+    bucket; the residual was 15.6 M too high and the loop bucket's excess too low."""
+    text = (Path(__file__).parent / "ledger4.py").read_text()
+    assert "loopinstsimplify::LoopInstSimplify" in text and "loopsimplifycfg::LoopSimplifyCfg" in text
