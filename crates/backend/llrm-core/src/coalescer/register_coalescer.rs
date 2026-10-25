@@ -574,8 +574,10 @@ fn remove_copy_by_commuting_def(
         if !inside.is_some_and(|seg| seg.valno.as_ref().is_some_and(|v| Rc::ptr_eq(v, &a_val))) {
             continue;
         }
-        // Partial defs and tied uses can't be rewritten independently.
-        if operand.is_def || lis.instr(operand.instr).group.is_some() {
+        // Partial defs and tied uses can't be rewritten independently: a
+        // reader that also defines `a_reg` is a tied use.
+        let reader = lis.instr(operand.instr);
+        if operand.is_def || reader.group.is_some() || reader.defines.contains(&a_reg) {
             return false;
         }
         readers.push(operand.instr);
