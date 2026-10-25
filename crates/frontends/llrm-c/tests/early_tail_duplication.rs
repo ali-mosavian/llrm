@@ -1,4 +1,5 @@
-//! Early Tail Duplication in a compile: `llrm-c -O2` of a loop whose join has a phi.
+//! Early Tail Duplication in a compile: `llrm-c -O2` of a loop whose join has a
+//! phi.
 
 /// The listing of `source` at -O2 for 32-bit x86.
 fn listing(source: &str) -> String {
