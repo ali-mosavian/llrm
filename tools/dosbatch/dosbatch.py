@@ -562,6 +562,30 @@ def run(jobs: list[Job], work: Path, timeout: int | None = None, stall: int = 18
     return collect(jobs, work, events)
 
 
+def workers_for(count: int) -> int:
+    """How many DOSBox launches share `count` jobs: `LLRM_DOS_WORKERS`, at most 6 and four or more jobs each, 4 by default."""
+    wanted = int(os.environ.get("LLRM_DOS_WORKERS", "4"))
+    return max(1, min(wanted, 6, count // 4))
+
+
+def run_parallel(jobs: list[Job], work: Path, **options) -> dict[str, Result]:
+    """`run`, the jobs spread over several dosrun launches that run at once. Each launch builds and runs its own share in a
+    directory of its own under `work` (so files kept by `run` are in `work/launchN`); a job's result does not depend on the
+    others (virtual time)."""
+    launches = workers_for(len(jobs))
+    if launches == 1:
+        return run(jobs, work, **options)
+    if work.exists():
+        shutil.rmtree(work)
+    work.mkdir(parents=True)
+    shares = [jobs[at::launches] for at in range(launches)]
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(launches) as pool:
+        parts = list(pool.map(lambda at: run(shares[at], work / f"launch{at}", **options), range(launches)))
+    return {stem: result for part in parts for stem, result in part.items()}
+
+
 def stopped_for_output(jobs: list[Job], work: Path, over: str, cap: int) -> dict[str, Result]:
     """Every job's result when the launch was stopped for the size of `over`: the program whose output it is failed, the
     rest did not run to the end. What the files hold is not read: it is as big as the disk allows."""

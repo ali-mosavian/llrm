@@ -722,6 +722,7 @@ dependencies = [
  "llrm-mir",
  "llrm-target",
  "llrm-x86",
+ "toml",
 ]
 
 [[package]]
@@ -745,6 +746,7 @@ dependencies = [
  "llrm-mir",
  "llrm-target",
  "llrm-x86",
+ "toml",
 ]
 
 [[package]]
