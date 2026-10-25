@@ -318,3 +318,30 @@ exit:
     assert!(after.contains("icmp eq i16 %next, %n"), "{after}");
     assert!(after.contains("label %exit, label %body"), "{after}");
 }
+
+/// `canonicalizeICmpBool`: `icmp eq i1 %x, false` is `not %x`, and a branch on
+/// a `not` takes the arms swapped. With `canonicalizeICmpPredicate` the nib
+/// zip loop's `icmp ne i1 %c, false` became `icmp eq` with swapped arms and
+/// stayed so: ConstraintElimination then found no `%c` to read and three
+/// bounds checks of the loop stayed.
+#[test]
+fn a_branch_on_an_i1_equal_to_false_is_a_branch_on_it_with_the_arms_swapped() {
+    let mut module = parsed(
+        "define void @f(i1 %x) {
+entry:
+  %c = icmp eq i1 %x, false
+  br i1 %c, label %a, label %b
+
+a:
+  ret void
+
+b:
+  ret void
+}
+",
+    );
+    combined(&mut module);
+    let after = printed(&module);
+    assert!(after.contains("br i1 %x, label %b, label %a"), "{after}");
+    assert!(!after.contains("icmp"), "{after}");
+}

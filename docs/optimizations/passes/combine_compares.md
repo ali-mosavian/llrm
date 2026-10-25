@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_compares.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_compares.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_compares.rs sha256:1ea06151a64db4139fb84a301857b42778eb34f4edec2a834768d5210b44b093 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_compares.rs sha256:b81e883884d21ef78b427cb7534c5e29cbaa69fad1cd4762c8e5afb4081e7011 -->
 
 # combine_compares
 
@@ -18,7 +18,7 @@ MIRROR: the order of the steps and each condition of the steps below.
 This is the first slice of the family. A step not translated yet stays in
 its place as a `// OWED:` comment naming the C++ function, so the order
 stays LLVM's. The owed steps, with their exits:
-`foldICmpTruncWithTruncOrExt`, `canonicalizeICmpBool`,
+`foldICmpTruncWithTruncOrExt`,
 `foldICmpWithConstant`, `foldICmpUsingBoolRange`,
 `foldIsMultipleOfAPowerOfTwo`, `foldICmpBinOp`, `foldICmpInstWithConstant`,
 `foldSignBitTest`, `foldOpIntoPhi`, `foldICmpInstWithConstantNotInt`,

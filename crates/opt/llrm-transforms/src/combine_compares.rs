@@ -13,7 +13,7 @@
 //! This is the first slice of the family. A step not translated yet stays in
 //! its place as a `// OWED:` comment naming the C++ function, so the order
 //! stays LLVM's. The owed steps, with their exits:
-//! `foldICmpTruncWithTruncOrExt`, `canonicalizeICmpBool`,
+//! `foldICmpTruncWithTruncOrExt`,
 //! `foldICmpWithConstant`, `foldICmpUsingBoolRange`,
 //! `foldIsMultipleOfAPowerOfTwo`, `foldICmpBinOp`, `foldICmpInstWithConstant`,
 //! `foldSignBitTest`, `foldOpIntoPhi`, `foldICmpInstWithConstantNotInt`,
@@ -161,7 +161,9 @@ pub fn visit_icmp(
     }
     // OWED: the `abs(val) != 0` select fold (dyn_castNegVal).
     // OWED: foldICmpTruncWithTruncOrExt.
-    // OWED: canonicalizeICmpBool.
+    if let Some(r) = canonicalize_icmp_bool(c, inst, pred, op0, op1) {
+        return r;
+    }
     if let Some(r) = canonicalize_cmp_with_constant(c, inst, pred, op0, op1) {
         return r;
     }
@@ -291,6 +293,69 @@ fn select_result(
     inst: InstId,
 ) -> llrm_mir::module::ValueId {
     c.function.instruction(inst).result.expect("a select's value")
+}
+
+/// `canonicalizeICmpBool`
+/// ([:7513](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L7513)):
+/// a compare of two `i1` is bitwise logic. Against a constant, InstSimplify
+/// took 14 of the 20 cases; the rest are the `not` of the other operand.
+fn canonicalize_icmp_bool(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    a: Operand,
+    b: Operand,
+) -> Option<Visit> {
+    let i1 = c.context.types.int(1);
+    if c.type_of(a) != i1 {
+        return None;
+    }
+    let none = Flags::default();
+    let ones = c.all_ones(i1);
+    match constant(c, b).map(|(bits, _)| bits) {
+        Some(0) => {
+            return matches!(pred, IntPredicate::Eq | IntPredicate::Ule | IntPredicate::Sge)
+                .then(|| c.replace_with_binop(inst, BinaryOp::Xor, a, ones, none));
+        }
+        Some(1) => {
+            return matches!(pred, IntPredicate::Ne | IntPredicate::Ult | IntPredicate::Sgt)
+                .then(|| c.replace_with_binop(inst, BinaryOp::Xor, a, ones, none));
+        }
+        _ => {}
+    }
+    Some(match pred {
+        // icmp eq i1 A, B -> ~(A ^ B)
+        IntPredicate::Eq => {
+            let xor = c.create_binop(inst, BinaryOp::Xor, a, b, none);
+            c.replace_with_binop(inst, BinaryOp::Xor, xor, ones, none)
+        }
+        // icmp ne i1 A, B -> A ^ B
+        IntPredicate::Ne => c.replace_with_binop(inst, BinaryOp::Xor, a, b, none),
+        // icmp ult i1 A, B -> ~A & B; ugt is ult swapped
+        IntPredicate::Ult | IntPredicate::Ugt => {
+            let (a, b) = if pred == IntPredicate::Ugt { (b, a) } else { (a, b) };
+            let not = c.create_not(inst, a);
+            c.replace_with_binop(inst, BinaryOp::And, not, b, none)
+        }
+        // icmp slt i1 A, B -> A & ~B; sgt is slt swapped
+        IntPredicate::Slt | IntPredicate::Sgt => {
+            let (a, b) = if pred == IntPredicate::Sgt { (b, a) } else { (a, b) };
+            let not = c.create_not(inst, b);
+            c.replace_with_binop(inst, BinaryOp::And, a, not, none)
+        }
+        // icmp ule i1 A, B -> ~A | B; uge is ule swapped
+        IntPredicate::Ule | IntPredicate::Uge => {
+            let (a, b) = if pred == IntPredicate::Uge { (b, a) } else { (a, b) };
+            let not = c.create_not(inst, a);
+            c.replace_with_binop(inst, BinaryOp::Or, not, b, none)
+        }
+        // icmp sle i1 A, B -> A | ~B; sge is sle swapped
+        IntPredicate::Sle | IntPredicate::Sge => {
+            let (a, b) = if pred == IntPredicate::Sge { (b, a) } else { (a, b) };
+            let not = c.create_not(inst, b);
+            c.replace_with_binop(inst, BinaryOp::Or, a, not, none)
+        }
+    })
 }
 
 /// `canonicalizeICmpPredicate`
