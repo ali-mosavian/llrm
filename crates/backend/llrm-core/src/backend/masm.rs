@@ -743,11 +743,8 @@ pub fn exits_inserted(procedure: Procedure) -> Procedure {
     if !omit && held {
         return procedure;
     }
-    if wrap_of(&procedure, &procedure.body, true, omit).is_some_and(|wrap| !wrap.wrapped.is_empty()) {
-        return procedure;
-    }
     let sequences = Sequences::of(&procedure, omit);
-    if sequences.exit.is_empty() {
+    if sequences.wrap.as_ref().is_some_and(|wrap| !wrap.wrapped.is_empty()) || sequences.exit.is_empty() {
         return procedure;
     }
     let saved = saved_of(&procedure);
