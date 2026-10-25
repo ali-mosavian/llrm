@@ -1295,6 +1295,16 @@ impl std::fmt::Debug for MssaGraph {
 /// that; the manager drops the cached graph with the pass's edit.
 pub struct MemorySsa;
 
+thread_local! {
+    static MSSA_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has built a function's MemorySSA through the
+/// manager: a cost counter, for tests that a pass hands its updated graph on.
+pub fn mssa_builds() -> usize {
+    MSSA_BUILDS.with(std::cell::Cell::get)
+}
+
 impl Analysis for MemorySsa {
     type Result = Result<std::rc::Rc<MssaGraph>, String>;
     const NAME: &'static str = "mssa";
@@ -1305,6 +1315,7 @@ impl Analysis for MemorySsa {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Self::Result {
+        MSSA_BUILDS.with(|builds| builds.set(builds.get() + 1));
         let plain = analyses.get::<PlainAccesses>(context, layout, function);
         let accesses = Result::as_ref(&*plain).map_err(String::clone)?;
         let shape = analyses.get::<Shape>(context, layout, function);

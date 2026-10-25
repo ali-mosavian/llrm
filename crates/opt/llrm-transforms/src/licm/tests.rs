@@ -418,6 +418,42 @@ b5:
     );
 }
 
+/// A pass that asks the manager for the body's MemorySSA, as MemCpyOpt and
+/// EarlyCSE do after LICM.
+struct AsksMemorySsa;
+
+impl llrm_mir::passes::FunctionPass for AsksMemorySsa {
+    fn name(&self) -> &'static str {
+        "asks-memoryssa"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        analyses.get::<llrm_analysis::manager::MemorySsa>(unit.context, unit.layout, unit.function);
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// LICM kept its graph right with the updater and then dropped it: the next
+/// pass to ask for MemorySSA built it again (10 LICM runs, 28 M Ir on d_faces
+/// -O2). A hoisting run and the pass after it build it once.
+#[test]
+fn test_the_graph_licm_updated_is_the_next_pass_s() {
+    let text = global_loop("  %v = load i16, ptr @g\n  store i16 %v, ptr @h\n");
+    let mut module = parsed(&text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply: true, speculate: true });
+    passes.add(AsksMemorySsa);
+    let before = llrm_analysis::manager::mssa_builds();
+    passes
+        .run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral))
+        .unwrap_or_else(|error| panic!("{error}\n{text}"));
+    assert_eq!(llrm_analysis::manager::mssa_builds() - before, 1, "the graph was built again after LICM");
+}
+
 /// A loop over a slot (a global) with the accesses `body` makes; the exit
 /// returns the slot.
 fn global_loop(body: &str) -> String {

@@ -213,6 +213,8 @@ pub struct Decisions {
     pub rebuilds: usize,
     pub max_rebuilds: usize,
     pub rebuilt_instructions: usize,
+    /// The updater's graph was handed back to the manager as the body's.
+    pub kept_graph: bool,
 }
 
 fn found_changed(found: &Decisions) -> bool {
@@ -554,6 +556,22 @@ pub fn run(
             }
         }
     }
+    // The graph the updater kept right is the body's
+    // (`PA.preserve<MemorySSAAnalysis>()` after `MemorySSAUpdater`, as
+    // EarlyCSE hands it back): the passes after this one ask it of the
+    // manager, which rebuilt it for each.
+    if let Some(built) = graph.take()
+        && found_changed(&decisions)
+    {
+        analyses.replace::<llrm_analysis::manager::MemorySsa>(
+            &*unit.function,
+            Ok(std::rc::Rc::new(llrm_analysis::manager::MssaGraph {
+                mssa: built.mssa,
+                accesses: std::rc::Rc::new(built.accesses),
+            })),
+        );
+        decisions.kept_graph = true;
+    }
     decisions
 }
 
@@ -744,6 +762,7 @@ impl FunctionPass for Licm {
     ) -> PreservedAnalyses {
         let found = if self.apply { run(unit, analyses, self.speculate) } else { decide(unit, analyses) };
         let changed = found_changed(&found);
+        let kept_graph = found.kept_graph;
         let only_moved = found.reassociated.is_empty()
             && found.sunk.is_empty()
             && found.erased.is_empty()
@@ -776,6 +795,7 @@ impl FunctionPass for Licm {
         if self.apply && changed {
             // Instructions move between blocks; blocks and edges stand.
             let kept = PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>();
+            let kept = if kept_graph { kept.preserve_updated::<llrm_analysis::manager::MemorySsa>() } else { kept };
             if only_moved {
                 // Instructions moved between blocks and none made or erased:
                 // what the memory accesses are annotated with and what each
