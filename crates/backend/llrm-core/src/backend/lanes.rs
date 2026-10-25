@@ -117,6 +117,28 @@ impl Lanes {
         Self(u128::from(mask))
     }
 
+    /// Bytes `start..start + len` of a register: the lanes `(register, byte)`
+    /// for each, without a table lookup per byte.
+    pub fn span(
+        register: RegId,
+        start: u32,
+        len: u32,
+    ) -> Self {
+        if len == 0 {
+            return Self(0);
+        }
+        let table = &*TABLE;
+        let slot = register.index();
+        let last = start + len - 1;
+        assert!(
+            slot < REGISTERS && last < u32::from(table.bytes[slot]),
+            "{register:?} bytes {start}..={last} are no lanes"
+        );
+        let (first, top) = (u32::from(table.first[slot]), u32::from(table.count[slot]) - 1);
+        let (low, high) = (first + start.min(top), first + last.min(top));
+        Self((u128::MAX >> (127 - (high - low))) << low)
+    }
+
     pub fn insert(
         &mut self,
         lane: Lane,
@@ -390,6 +412,22 @@ mod tests {
                     set.difference(&theirs).copied().collect::<Vec<_>>(),
                     tree.difference(&their_tree).copied().collect::<Vec<_>>()
                 );
+            }
+        }
+    }
+
+    /// `span` must name the lanes a byte-by-byte `collect` names, including a
+    /// root's upper bytes folded into one lane.
+    #[test]
+    fn span_matches_the_lanes_of_each_byte() {
+        let registers: BTreeSet<RegId> = TABLE.lanes.iter().map(|lane| lane.0).collect();
+        for register in registers.into_iter().filter(|register| *register != RegId::None) {
+            let bytes = u32::from(TABLE.bytes[register.index()]);
+            for start in 0..bytes {
+                for len in 0..=bytes - start {
+                    let each: Lanes = (start..start + len).map(|byte| (register, byte)).collect();
+                    assert_eq!(Lanes::span(register, start, len), each, "{register:?} {start}+{len}");
+                }
             }
         }
     }

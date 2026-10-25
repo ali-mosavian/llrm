@@ -1,5 +1,6 @@
 //! Tests of `dag_function::selected`, split by area. Where a new test goes:
 //!
+//! - `dag_function_aggregates_tests.rs`: first-class struct and array values.
 //! - `dag_function_calls_tests.rs`: Calls: the call sequence, arguments and
 //!   results in registers and on the stack, runtime routines, landing pads,
 //!   ports and inline blocks.
@@ -360,6 +361,70 @@ fn a_load_read_by_a_compare_is_folded_into_it() {
     assert!(compare.sources.iter().any(|l| matches!(l, Loc::Mem(_))), "{compare:?}");
 }
 
+const WORD_MINUS_ONE_TWICE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+@a = global i16 0
+@b = global i16 0
+define void @f() {
+  store i16 -1, ptr @a
+  store i16 -1, ptr @b
+  ret void
+}
+";
+
+/// At -Os the pin's `OptForSize, Not64BitMode` patterns make a word -1 by
+/// `MOV32r_1`, a dword `mov eax, -1` (6 bytes at -m16 with the 0x66 prefix;
+/// QCport weapons.c); the word constant is `mov ax, -1` (3).
+#[test]
+fn at_os_m16_a_word_constant_is_made_in_a_word_register() {
+    use crate::model::ir::Loc;
+    let module = llrm_mir::parse::module(WORD_MINUS_ONE_TWICE).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("386").expect("a cpu").clone();
+    cpu.size = true;
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let wide: Vec<_> = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| matches!(w.dests.as_slice(), [Loc::Held(h)] if h.width == 4))
+        .collect();
+    assert!(wide.is_empty(), "{wide:?}");
+}
+
+const TESTS_THE_LOW_BIT_OF_A_LOAD: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @g()
+declare void @h()
+define void @f(i32 %c) {
+  %t = trunc i32 %c to i1
+  br i1 %t, label %a, label %b
+a:
+  call void @g()
+  ret void
+b:
+  call void @h()
+  ret void
+}
+";
+
+/// `(c & 1) ? g() : h()` was `mov eax, [esp+4]; and al, 1; je` (6 bytes
+/// and a register): the pin narrows the load of the low byte and tests it in
+/// memory, `test byte [esp+4], 1` (5). `reduceLoadWidth` of the truncate, and
+/// no dead `brcond` counted as a reader of the `and`. x_crc32 -O3: +160 bytes.
+#[test]
+fn the_low_bit_of_an_argument_is_tested_in_memory() {
+    use crate::model::ir::Loc;
+    let module = llrm_mir::parse::module(TESTS_THE_LOW_BIT_OF_A_LOAD).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let reads: Vec<u32> = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .flat_map(|w| w.sources.iter())
+        .filter_map(|l| if let Loc::Mem(m) = l { Some(m.width) } else { None })
+        .collect();
+    assert_eq!(reads, [1], "one byte read of the argument, no dword: {reads:?}");
+}
+
 const WORD_FROM_COMPARE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
 @slot = global i16 0
 declare cc 1005 i16 @c(i16)
@@ -421,4 +486,50 @@ fn a_zero_extended_byte_read_as_a_dword_too_stays_a_dword() {
     let extend =
         insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("movzx")).expect("a movzx");
     assert!(matches!(extend.dests.as_slice(), [Loc::Held(h)] if h.width == 4), "{extend:?}");
+}
+
+/// `if (c & 1) g(); else h();` written as a compare of the masked value, in
+/// both polarities and both arm orders, was `mov eax, [esp+4]; and al, 1; je`:
+/// only the truncate form narrowed. The pin's `X86ISD::CMP` case makes every
+/// one `test byte [esp+4], 1`.
+#[test]
+fn a_masked_compare_with_zero_tests_one_byte_in_memory_whatever_its_polarity() {
+    use crate::model::ir::Loc;
+    for cc in ["eq", "ne"] {
+        for (yes, no) in [("a", "b"), ("b", "a")] {
+            let ir = format!(
+                "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @g()
+declare void @h()
+define void @f(i32 %c) {{
+  %m = and i32 %c, 1
+  %t = icmp {cc} i32 %m, 0
+  br i1 %t, label %{yes}, label %{no}
+a:
+  call void @g()
+  ret void
+b:
+  call void @h()
+  ret void
+}}
+"
+            );
+            let module = llrm_mir::parse::module(&ir).expect("parses");
+            let done =
+                selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+                    .unwrap_or_else(|e| panic!("{}", e.0));
+            let insns = done.body.insns();
+            let whats: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref()).collect();
+            let reads: Vec<u32> = whats
+                .iter()
+                .flat_map(|w| w.sources.iter())
+                .filter_map(|l| if let Loc::Mem(m) = l { Some(m.width) } else { None })
+                .collect();
+            assert_eq!(reads, [1], "{cc} {yes}/{no}: one byte read, no dword: {reads:?}");
+            assert!(
+                !whats.iter().any(|w| w.name.as_deref() == Some("and")),
+                "{cc} {yes}/{no}: no and left before the test"
+            );
+        }
+    }
 }

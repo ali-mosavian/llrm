@@ -2,15 +2,15 @@
 //! subset (arithmetic, casts, `icmp`, `select`, `br`, `load`, `store`,
 //! `getelementptr`, and the register copies a `phi` needs).
 
-use std::collections::HashMap;
-
 use llrm_mir::context::{ConstantId, ConstantKind};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::types::{Type, TypeId};
+use llrm_support::hash::HashMap;
 
+mod aggregates;
 mod asmcall;
 mod codecall;
 mod mathops;
@@ -382,12 +382,13 @@ impl<'a> Builder<'a> {
             node_map: IdMap::new(),
             pending_loads: Vec::new(),
             pending_exports: Vec::new(),
-            constants_out: HashMap::new(),
+            constants_out: HashMap::default(),
             phi_updates: Vec::new(),
             tail_calls: Vec::new(),
             tail_candidate: None,
             sibcall: false,
             had_tail_call: false,
+            volatile_memory: false,
             block,
             order,
             deferred: Vec::new(),
@@ -425,6 +426,8 @@ struct Builder<'a> {
     sibcall: bool,
     /// A `TC_RETURN` ended the block: nothing after the call is built.
     had_tail_call: bool,
+    /// The memory intrinsic being lowered is volatile.
+    volatile_memory: bool,
     block: BlockId,
     /// The blocks in layout order, with the ones a switch lowering adds.
     order: Vec<BlockId>,
@@ -680,7 +683,7 @@ impl Builder<'_> {
     /// also copied to a register of its own.
     fn lower_arguments(&mut self) -> Result<(), Refused> {
         let entry = self.function.entry();
-        let mut outside = std::collections::HashSet::new();
+        let mut outside = llrm_support::hash::HashSet::default();
         for &block in self.function.layout() {
             for inst in self.function.iter_block(block) {
                 let instruction = self.function.instruction(inst);
@@ -1337,6 +1340,9 @@ impl Builder<'_> {
         id: ConstantId,
     ) -> Result<SDValue, Refused> {
         let constant = self.module.context.get(id);
+        if self.is_aggregate(constant.ty) {
+            return self.aggregate_constant(constant.ty, id);
+        }
         let vt = self.type_of(constant.ty)?;
         match &constant.kind {
             // A far constant is its offset and its selector (a null pointer is
@@ -1505,6 +1511,7 @@ impl Builder<'_> {
             Opcode::Select => self.visit_select(&instruction)?,
             Opcode::Freeze => self.visit_freeze(&instruction)?,
             Opcode::ExtractValue(indices) => self.visit_extract_value(&instruction, indices)?,
+            Opcode::InsertValue(indices) => self.visit_insert_value(&instruction, indices)?,
             Opcode::Load { align, volatile } => self.visit_load(inst, &instruction, *align, *volatile)?,
             Opcode::Store { align, volatile } => self.visit_store(&instruction, *align, *volatile)?,
             Opcode::GetElementPtr { source } => self.visit_gep(&instruction, *source)?,
@@ -1893,21 +1900,6 @@ impl Builder<'_> {
         Ok(())
     }
 
-    fn visit_extract_value(
-        &mut self,
-        instruction: &llrm_mir::module::Instruction,
-        indices: &[u32],
-    ) -> Result<(), Refused> {
-        let &[index] = indices else { return Err(Refused("extractvalue of a nested aggregate")) };
-        let aggregate = self.get_value(instruction.operands[0])?;
-        if aggregate.res as usize + index as usize >= self.dag.node(aggregate).values.len() {
-            return Err(Refused("extractvalue of an aggregate that is not a node's results"));
-        }
-        let picked = SDValue { node: aggregate.node, res: aggregate.res + index as u8 };
-        self.set_value(instruction.result.expect("an extractvalue has a result"), picked);
-        Ok(())
-    }
-
     fn visit_freeze(
         &mut self,
         instruction: &llrm_mir::module::Instruction,
@@ -1923,6 +1915,9 @@ impl Builder<'_> {
         &mut self,
         instruction: &llrm_mir::module::Instruction,
     ) -> Result<(), Refused> {
+        if self.is_aggregate(instruction.ty) {
+            return self.visit_aggregate_select(instruction);
+        }
         let cond = self.get_value(instruction.operands[0])?;
         let then = self.get_value(instruction.operands[1])?;
         let other = self.get_value(instruction.operands[2])?;
@@ -1970,6 +1965,9 @@ impl Builder<'_> {
         align: Option<u64>,
         volatile: bool,
     ) -> Result<(), Refused> {
+        if self.is_aggregate(instruction.ty) {
+            return self.visit_aggregate_load(instruction, align, volatile);
+        }
         let ptr = self.get_value(instruction.operands[0])?;
         let info = self.mem_info(instruction.ty, align, volatile, instruction.operands[0])?;
         // `DAG.getRoot()`, not the builder's: a non-volatile load leaves the
@@ -1997,6 +1995,13 @@ impl Builder<'_> {
         align: Option<u64>,
         volatile: bool,
     ) -> Result<(), Refused> {
+        if self
+            .function
+            .operand_type(&self.module.context, instruction.operands[0])
+            .is_some_and(|ty| self.is_aggregate(ty))
+        {
+            return self.visit_aggregate_store(instruction, align, volatile);
+        }
         let value_type = self
             .function
             .operand_type(&self.module.context, instruction.operands[0])

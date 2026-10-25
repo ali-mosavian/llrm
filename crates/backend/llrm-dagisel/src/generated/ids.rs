@@ -806,6 +806,12 @@ pub mod x86 {
     pub const SUB32mr: u16 = 4795;
     pub const SUB8mi: u16 = 4867;
     pub const SUB8mr: u16 = 4873;
+    pub const TEST16mi: u16 = 5007;
+    pub const TEST16ri: u16 = 5009;
+    pub const TEST32mi: u16 = 5012;
+    pub const TEST32ri: u16 = 5014;
+    pub const TEST8mi: u16 = 5022;
+    pub const TEST8ri: u16 = 5024;
     pub const UCOM_Fpr32: u16 = 5096;
     pub const UCOM_Fpr64: u16 = 5097;
     pub const UCOM_Fpr80: u16 = 5098;
@@ -896,6 +902,12 @@ pub mod x86 {
         (4795, "SUB32mr"),
         (4867, "SUB8mi"),
         (4873, "SUB8mr"),
+        (5007, "TEST16mi"),
+        (5009, "TEST16ri"),
+        (5012, "TEST32mi"),
+        (5014, "TEST32ri"),
+        (5022, "TEST8mi"),
+        (5024, "TEST8ri"),
         (5096, "UCOM_Fpr32"),
         (5097, "UCOM_Fpr64"),
         (5098, "UCOM_Fpr80"),

@@ -206,3 +206,48 @@ declare i16 @late(i16)
     let known = module.functions().position(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f") + 1;
     assert!(rotate_function_knowing(&mut module, "f", &tti, options, known).expect("rotates"), "{}", printed(&module));
 }
+
+/// The block that splits a loop's exit edge stands right before the exit
+/// (`ExitSplit->moveBefore(Exit)`, LoopRotationUtils.cpp:788), not after the
+/// loop block the edge leaves.
+#[test]
+fn test_the_block_that_splits_a_loop_exit_stands_before_the_exit() {
+    let mut module = parsed(
+        "define i16 @f(i16 %n, i1 %c) {
+entry:
+  br label %oh
+
+oh:
+  %i = phi i16 [ 0, %entry ], [ %in, %ol ]
+  %og = icmp slt i16 %i, %n
+  br i1 %og, label %ih, label %exit
+
+ih:
+  %j = phi i16 [ 0, %oh ], [ %jn, %ib ]
+  %jg = icmp slt i16 %j, %n
+  br i1 %jg, label %ib, label %exit
+
+ib:
+  %jn = add i16 %j, 1
+  br i1 %c, label %ih, label %ol
+
+ol:
+  %in = add i16 %i, 1
+  br label %oh
+
+exit:
+  ret i16 %n
+}
+",
+    );
+    assert!(rotated(&mut module));
+    let function = module.function_mut("f").expect("@f").1;
+    let order: Vec<String> =
+        function.layout().iter().map(|&one| function.block(one).name.clone().unwrap_or("new".into())).collect();
+    assert_eq!(
+        order,
+        ["entry", "new", "new", "ih", "ib", "ol", "new", "new", "new", "exit"],
+        "{}",
+        llrm_mir::print::module(&module)
+    );
+}

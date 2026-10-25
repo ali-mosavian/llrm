@@ -35,6 +35,7 @@ use crate::x86_llrm::{
 use crate::x86_mul::select_mul_lohi;
 use crate::x86_rmw::fold_load_store_into_mem_operand;
 use crate::x86_shift::try_shift_amount_mod;
+use crate::x86_test::select_cmp_of_and;
 
 /// Selects `node`: the hand matchers first, then the table.
 pub fn select_node<D: AddrDag>(
@@ -88,6 +89,11 @@ pub fn select_node<D: AddrDag>(
         }
         x86isd::FCMP => {
             if select_fcmp(dag, node) {
+                return Outcome::Selected;
+            }
+        }
+        x86isd::CMP => {
+            if select_cmp_of_and(dag, hooks, node) {
                 return Outcome::Selected;
             }
         }

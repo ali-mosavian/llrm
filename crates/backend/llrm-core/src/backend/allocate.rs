@@ -1231,8 +1231,19 @@ pub fn explicit_selectors(
     segments: &Segments,
     registers: &RegisterClasses,
 ) -> LirBody {
-    let regs = body.regs();
     let confined = classes(body, &BTreeSet::new(), segments, registers);
+    explicit_selectors_given(body, pinned, segments, &confined).unwrap_or_else(|| body.clone())
+}
+
+/// `explicit_selectors`, given the body's classes: None where no cell is
+/// rewritten.
+pub fn explicit_selectors_given(
+    body: &LirBody,
+    pinned: Option<&IndexMap<u32, RegId>>,
+    segments: &Segments,
+    confined: &crate::backend::regclass::Classes,
+) -> Option<LirBody> {
+    let regs = body.regs();
     let selectors: BTreeSet<RegId> = segments.selectors.iter().copied().collect();
     let empty = IndexMap::default();
     let pinned = pinned.unwrap_or(&empty);
@@ -1256,7 +1267,7 @@ pub fn explicit_selectors(
         }
     }
     if conflicted.is_empty() {
-        return body.clone();
+        return None;
     }
 
     let through_es = |place: &Loc| -> Loc {
@@ -1310,7 +1321,7 @@ pub fn explicit_selectors(
         }
         blocks.push(block.with_insns(insns));
     }
-    body.with_blocks(blocks)
+    Some(body.with_blocks(blocks))
 }
 
 /// The values an instruction is a plain same-width copy between, if it is.
@@ -2546,9 +2557,20 @@ impl RegAlloc {
             );
         }
         let floor = self.pinned.keys().copied().max().map_or(0, |one| one + 1);
-        let mut body = constrain::distinct_classes(&body, floor, &segments, &self.classes);
-        body = explicit_selectors(&body, Some(&self.pinned), &segments, &self.classes);
-        let confined = classes(&body, &BTreeSet::new(), &segments, &self.classes);
+        // One scan of the body's classes serves the three steps when none of
+        // them changes it.
+        let (uses, mut confined) = crate::backend::regclass::confining(&body, &segments, &self.classes);
+        let mut body = match constrain::distinct_classes_given(&body, floor, &uses) {
+            Some(peeled) => {
+                confined = classes(&peeled, &BTreeSet::new(), &segments, &self.classes);
+                peeled
+            }
+            None => body,
+        };
+        if let Some(rewritten) = explicit_selectors_given(&body, Some(&self.pinned), &segments, &confined) {
+            confined = classes(&rewritten, &BTreeSet::new(), &segments, &self.classes);
+            body = rewritten;
+        }
         let incompatible: BTreeSet<u32> = self
             .pinned
             .iter()
@@ -3127,6 +3149,27 @@ mod tests {
         .expect("a cpu");
         RegAlloc::transform(&mut phase, body).expect("allocates");
         assert!(!frame.borrow().slots.is_empty());
+    }
+
+    /// RegAlloc scanned a body for its classes three times before it changed
+    /// anything (`distinct_classes`, `explicit_selectors`, the classes it
+    /// keeps): 5 scans of d_faces's functions' worth of reads a function, 7
+    /// M Ir. A body they leave alone is scanned once for the three.
+    #[test]
+    fn a_body_the_class_steps_leave_alone_is_scanned_once_for_them() {
+        let mut insns = Vec::new();
+        for value in 1..=3u32 {
+            insns.push(_mov(value, i64::from(value), 0x100 + 2 * i64::from(value)));
+        }
+        for value in 1..=3u32 {
+            let at = 0x200 + 2 * i64::from(value);
+            let what = semantics(Operation::Push, "push", vec![], vec![held(value, 2)]);
+            insns.push(Insn::new(at, Some((at, at + 2)), Some(what), vec![], vec![value]));
+        }
+        let before = crate::backend::regclass::SCANS.with(std::cell::Cell::get);
+        let _ = _through_regalloc(_one_block(insns), &[]);
+        let scans = crate::backend::regclass::SCANS.with(std::cell::Cell::get) - before;
+        assert!(scans <= 2, "{scans} scans of the classes in one allocation");
     }
 
     fn _through_regalloc(
