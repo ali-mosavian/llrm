@@ -85,8 +85,9 @@ static void place_elements(AD *ad, unsigned long bytes)
    zeroed. The new elements are placed first, in a descriptor of the stack, so
    that old and new exist together; the old are then freed and the new descriptor
    adopted by the array's own, which the heap moves from then on. Anything else
-   changed is a Subscript out of range, as in QB; a string array's strings belong
-   to the array, and are not preserved. */
+   changed is a Subscript out of range, as in QB. A string array's strings belong
+   to their descriptors: the kept ones follow to the new element, and the old are
+   cleared so that erasing the old array frees only the strings cut off. */
 static void preserve(AD *ad, const DimCall *call)
 {
     union {
@@ -98,8 +99,6 @@ static void preserve(AD *ad, const DimCall *call)
 
     if (ad->features & FADF_STATIC)
         qb_error(BE_REDIM);
-    if (is_string_array(ad))
-        qb_error(BE_SUBSCRIP);
     for (i = 0; i < sizeof fresh; i++)
         fresh.room[i] = 0;
     describe(&fresh.ad, call);
@@ -117,6 +116,16 @@ static void preserve(AD *ad, const DimCall *call)
     fresh.ad.size = new_bytes;
     place_elements(&fresh.ad, new_bytes);
     ad_copy(&fresh.ad, ad, old_bytes < new_bytes ? old_bytes : new_bytes);
+    if (is_string_array(ad)) {
+        SD *from = ad_near_data(ad), *to = ad_near_data(&fresh.ad);
+        unsigned kept = (unsigned)((old_bytes < new_bytes ? old_bytes : new_bytes) / sizeof(SD));
+
+        for (i = 0; i < kept; i++) {
+            str_owner_moved(&to[i], (int)((char *)&to[i] - (char *)&from[i]));
+            from[i].len = 0;
+            from[i].ptr = 0;
+        }
+    }
     B_ERAS(ad);
     ad_adopt(ad, &fresh.ad);
     ad->adjusted = fresh.ad.adjusted;
