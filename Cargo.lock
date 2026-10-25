@@ -558,6 +558,7 @@ version = "0.1.0"
 dependencies = [
  "indexmap",
  "llrm-analysis",
+ "llrm-arm64",
  "llrm-core",
  "llrm-driver",
  "llrm-hir",

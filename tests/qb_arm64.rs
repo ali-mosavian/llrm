@@ -21,10 +21,15 @@ fn sysroot() -> PathBuf {
 
 /// Builds `sources` for aarch64 Linux, runs the program under qemu; its standard output.
 fn build_and_run(name: &str, sources: &[&str], arguments: &[&str]) -> String {
+    let out = std::env::temp_dir().join(format!("{name}_arm64_{}", std::process::id()));
+    build_and_run_with(name, sources, arguments, None, &out)
+}
+
+/// `build_and_run`, with an object to link and the program's path.
+fn build_and_run_with(name: &str, sources: &[&str], arguments: &[&str], object: Option<&Path>, out: &Path) -> String {
     let sysroot = sysroot();
     let libc = sysroot.join("usr/aarch64-linux-gnu");
     let gcc = sysroot.join("usr/lib/gcc-cross/aarch64-linux-gnu/15");
-    let out = std::env::temp_dir().join(format!("{name}_arm64_{}", std::process::id()));
     let qb = root().join("runtime/qb");
     let mut build = Command::new("clang");
     build.args(["--target=aarch64-linux-gnu", "-fuse-ld=lld", "-static", "-std=gnu11", "-w", "-g", "-pthread"]);
@@ -37,11 +42,12 @@ fn build_and_run(name: &str, sources: &[&str], arguments: &[&str]) -> String {
     for source in sources {
         build.arg(root().join(source));
     }
-    build.arg("-lm").arg("-o").arg(&out);
+    build.args(object);
+    build.arg("-lm").arg("-o").arg(out);
     let built = build.output().expect("clang runs");
     assert!(built.status.success(), "{name}: {}", String::from_utf8_lossy(&built.stderr));
-    let done = Command::new("qemu-aarch64").arg(&out).args(arguments).output().expect("qemu-aarch64 runs");
-    std::fs::remove_file(&out).ok();
+    let done = Command::new("qemu-aarch64").arg(out).args(arguments).output().expect("qemu-aarch64 runs");
+    std::fs::remove_file(out).ok();
     let printed = String::from_utf8_lossy(&done.stdout).into_owned();
     assert!(done.status.success(), "{name} failed:\n{printed}{}", String::from_utf8_lossy(&done.stderr));
     printed
@@ -69,4 +75,61 @@ fn the_runtimes_statements_run_on_arm64() {
     sources.extend(DEVICE);
     sources.extend(RUNTIME);
     assert_eq!(build_and_run("program_test_arm64", &sources, &[]).trim(), "ok");
+}
+
+/// Compiles `source` for arm64 Linux (`llrm-qb --arm64=linux`), links it with the whole host runtime on the headless
+/// device and runs it under qemu; the text its screen shows.
+fn run_basic(name: &str, source: &str) -> String {
+    let dir = std::env::temp_dir().join(format!("{name}_arm64_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let bas = dir.join(format!("{name}.bas"));
+    std::fs::write(&bas, source).unwrap();
+    let object = dir.join(format!("{name}.o"));
+    let compiled = Command::new(env!("CARGO_BIN_EXE_llrm-qb"))
+        .args(["--arm64=linux", "-O2"])
+        .arg(&bas)
+        .arg("-o")
+        .arg(&object)
+        .output()
+        .expect("llrm-qb runs");
+    assert!(compiled.status.success(), "llrm-qb: {}", String::from_utf8_lossy(&compiled.stderr));
+
+    let qb = root().join("runtime/qb");
+    let mut sources: Vec<String> = std::fs::read_dir(&qb)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "c"))
+        .map(|path| path.strip_prefix(root()).unwrap().to_string_lossy().into_owned())
+        .collect();
+    sources.extend(
+        [
+            "runtime/qb/posix/startup.c",
+            "runtime/qb/posix/block.c",
+            "runtime/qb/posix/ad.c",
+            "runtime/qb/posix/mathops.c",
+            "runtime/qb/posix/paintq.c",
+            "runtime/qb/posix/module_exports.c",
+            "runtime/qb/posix/program.c",
+            "runtime/qb/posix/real.c",
+            "runtime/qb/dev/headless/headless.c",
+            "runtime/qb/dev/headless/main.c",
+            "runtime/qb/dev/host/video.c",
+            "runtime/qb/dev/host/vgadata.c",
+            "runtime/qb/dev/host/tick.c",
+            "runtime/shared/posix/os.c",
+        ]
+        .map(str::to_owned),
+    );
+    let program = dir.join(name);
+    let sources: Vec<&str> = sources.iter().map(String::as_str).collect();
+    let printed = build_and_run_with(name, &sources, &[], Some(&object), &program);
+    std::fs::remove_dir_all(&dir).ok();
+    printed
+}
+
+/// `PRINT "HELLO"` through llrm-qb's own arm64 code: the first QB program to run on arm64. Before `--arm64` the compiler
+/// had no route to the arm64 backend at all.
+#[test]
+fn print_hello_runs_on_arm64() {
+    assert_eq!(run_basic("hello", "PRINT \"HELLO\"\nEND\n").trim_end(), "HELLO");
 }

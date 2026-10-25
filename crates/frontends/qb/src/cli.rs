@@ -41,6 +41,8 @@ pub(super) struct Arguments {
     /// The target, the built-in DOS unless `--machine` names another, and
     /// the pipeline.
     pub(super) codegen: codegen::Options,
+    /// `--arm64=linux|darwin`: the object is arm64's, from the 64-bit lowering.
+    pub(super) arm64: Option<llrm_arm64::machine::Platform>,
 }
 
 pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
@@ -53,6 +55,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let mut flags = Flags::default();
     flags.float_store = true;
     let (mut dump_hir, mut dump) = (None, None);
+    let mut arm64 = None;
     let mut at = 0;
     while at < argv.len() {
         // The runtime the program calls: the Microsoft ones by their stack ABI,
@@ -102,6 +105,14 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--bc-codeview" => frontend.bc_codeview = true,
             "--include" => frontend.includes.push(PathBuf::from(value("--include")?)),
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
+            "--arm64" => {
+                arm64 = Some(match value("--arm64")?.as_str() {
+                    "linux" => llrm_arm64::machine::Platform::Linux,
+                    "darwin" => llrm_arm64::machine::Platform::Darwin,
+                    other => return Err(format!("argument --arm64: invalid choice: '{other}' (choose from 'linux', 'darwin')")),
+                });
+                flags.take(&["-m64".to_owned()], &mut 0)?;
+            }
             _ if flag.starts_with('-') && flag.len() > 1 => return Err(format!("unrecognized arguments: {argument}")),
             _ if source.is_none() => source = Some(PathBuf::from(argument)),
             _ => return Err(format!("unrecognized arguments: {argument}")),
@@ -127,7 +138,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
         spills_extended: true,
         ..bound.options(&flags, flags.machine(&*bound.target, bound.target.machine().with_stack_in_data())?)
     };
-    Ok(Arguments { source, frontend, dump_hir, flags, dump, codegen })
+    Ok(Arguments { source, frontend, dump_hir, flags, dump, codegen, arm64 })
 }
 
 pub fn main(argv: &[String]) -> i32 {
@@ -154,6 +165,10 @@ pub fn main(argv: &[String]) -> i32 {
             let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
             llrm_core::driver::flags::write_output(&output, llrm_core::driver::basic::text(&module)?)
                 .map_err(|error| error.to_string())?;
+        } else if let (Some(platform), Some(output)) = (args.arm64, &args.flags.output) {
+            let bytes = super::arm64::object_bytes(&program, &args.source, &args.codegen, platform)
+                .map_err(|error| error.to_string())?;
+            llrm_core::driver::flags::write_output(output, bytes).map_err(|error| error.to_string())?;
         } else if let Some(output) = &args.flags.output {
             let bytes = compile::object_bytes(&program, &args.source, None, &args.codegen)
                 .map_err(|error| error.to_string())?;

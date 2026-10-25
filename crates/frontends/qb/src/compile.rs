@@ -334,7 +334,7 @@ pub(super) fn _inline_frame(
 /// frontend does for a near function: no other module can call it, and every
 /// caller shares its code segment. One on the runtime's frame stays far,
 /// whose chain is only known to hold far returns.
-fn _near_procedures(
+pub(super) fn _near_procedures(
     program: &model::Program,
     flat: bool,
 ) -> model::Program {

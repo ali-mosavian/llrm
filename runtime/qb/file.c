@@ -5,6 +5,7 @@
 #include "nhstutil.h"
 #include "rtinit.h"
 #include "dev.h"
+#include "error.h"
 #include "llrm_os.h"
 
 enum { MAX_CHANNEL = 15, DEFAULT_RECORD = 128, PATH_MAX = 128, ORIGIN_START = 0, ORIGIN_END = 2, LINE_MAX = 1023 };
