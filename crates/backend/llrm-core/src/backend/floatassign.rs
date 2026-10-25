@@ -121,7 +121,7 @@ use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
 
-use crate::backend::allocate::{Live, live, live_among};
+use crate::backend::allocate::{Live, live_among};
 use crate::backend::constpool::{self, Pool};
 use crate::backend::cpu::Profile;
 use crate::backend::floatalloc::{
