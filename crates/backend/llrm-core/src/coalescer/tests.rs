@@ -139,6 +139,35 @@ fn test_a_dead_copy_does_not_take_a_call_that_delivered_its_source() {
     assert_eq!(names(&lis), vec![(vec![1], vec![])], "the call stays, the copy goes");
 }
 
+/// `v25 := mov v24; v25 += v3` (`v3` dies), `v3 := mov v25`, then `v25 += v25`
+/// reads that value and writes a new one. Commuting the first add to write `v3`
+/// rewrote the second add whole, its definition too, so the value it made was
+/// named `v3` and its reader named `v25` (m16 `decode` of a canonical Huffman
+/// table: the code of the next bit was read from the wrong register).
+#[test]
+fn test_commuting_a_def_leaves_a_reader_that_redefines_the_value_alone() {
+    let op = |dest: u32, source: u32| {
+        let what = Semantics {
+            name: Some("add".into()),
+            dests: vec![held(dest)],
+            sources: vec![held(dest), held(source)],
+            ..Semantics::new(Operation::Binary)
+        };
+        Arc::new(Insn::new(0, None, Some(what), vec![dest], vec![dest, source]))
+    };
+    let copy_back = copy(3, 25);
+    let insns = [load(3), load(24), copy(25, 24), op(25, 3), Arc::clone(&copy_back), op(25, 25), read(25), read(3)];
+    let was = body(&[(&insns, &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(3);
+    lis.interval(25);
+    super::join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), copy_back.id());
+    let after = lis.body_like(&was);
+    let all: Vec<_> = after.blocks.iter().flat_map(|one| one.insns.iter()).collect();
+    let (add, read) = (all[all.len() - 3], all[all.len() - 2]);
+    assert_eq!(read.uses, add.defines, "the read of the second add's value names what the add defines");
+}
+
 /// `v1` redefined while `v2` (a copy of its first value) is live: the join
 /// would make `v2` read the new value. The copy stays and nothing changes.
 #[test]
