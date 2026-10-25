@@ -557,6 +557,15 @@ def test_every_integration_target_is_mapped_and_an_unmapped_one_is_refused():
     assert "header_copy" in ps.integration_targets_for(["tests/header_copy.rs"], set(), mapping)
 
 
+def test_the_check_target_is_mapped_to_every_compiler_its_run_lines_drive():
+    """tests/check.rs names only llrm-qb (CARGO_BIN_EXE) but runs the tool of each file's RUN line: copy_idioms.c drives llrm-c, and a change to llrm-c ran no check."""
+    mapping = ps.integration_map()
+    packages, _ = ps.workspace_graph()
+    for tool, changed in (("llrm-c", "crates/frontends/llrm-c/src/lib.rs"), ("llrm-nib", "crates/frontends/llrm-nib/src/lib.rs"), ("llrm-qb", "crates/frontends/llrm-qb/src/lib.rs")):
+        chosen = ps.integration_targets_for([changed], ps.touched_packages([changed], packages), mapping)
+        assert "check" in chosen, f"a change to {tool} does not run tests/check"
+
+
 def test_integration_failures_name_the_red_tests_less_the_listed_ones():
     """The positive control of #3542 printed `integration ?::test`: cargo's `Running tests/X.rs` lines are on stderr and the test lines on stdout, read as two blocks."""
     import subprocess as sp
