@@ -1,6 +1,6 @@
 //! The arena: nodes, values, the CSE map and node construction.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use super::isd::{CondCode, ISD};
 use super::mvt::EVT;
@@ -178,10 +178,10 @@ pub struct SelectionDAG {
     /// Per node, the nodes that have read one of its results (may hold
     /// stale or repeated entries; `users` filters them).
     uses: Vec<Vec<u32>>,
-    cse: HashMap<CseKey, u32>,
+    cse: llrm_mir::hash::HashMap<CseKey, u32>,
     /// Nodes `delete_dead` removed: they stay in the arena but no longer
     /// count as users.
-    deleted: std::collections::HashSet<u32>,
+    deleted: llrm_mir::hash::HashSet<u32>,
     pub(super) config: DagConfig,
     entry: SDValue,
     root: SDValue,
@@ -217,8 +217,8 @@ impl SelectionDAG {
         let mut dag = SelectionDAG {
             nodes: Vec::new(),
             uses: Vec::new(),
-            cse: HashMap::new(),
-            deleted: std::collections::HashSet::new(),
+            cse: Default::default(),
+            deleted: Default::default(),
             config,
             entry: zero,
             root: zero,
@@ -324,6 +324,15 @@ impl SelectionDAG {
 
     /// The nodes that read `value` as an operand, in creation order, once
     /// each (`SDValue::users()`).
+    /// Every node that has read `node` since it was made or morphed, once
+    /// per read and in creation order of the reads: a superset of its users.
+    pub(super) fn use_candidates(
+        &self,
+        node: u32,
+    ) -> &[u32] {
+        self.uses.get(node as usize).map_or(&[], Vec::as_slice)
+    }
+
     pub fn users(
         &self,
         value: SDValue,

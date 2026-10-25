@@ -329,29 +329,36 @@ impl<'a> DagisAdapter<'a> {
         value: PinValue,
     ) -> Vec<(u32, usize)> {
         let mut out = Vec::new();
-        for (user, data) in self.dag.nodes().iter().enumerate() {
-            if self.dead.contains(&(user as u32)) {
-                continue;
-            }
-            for (at, op) in data.ops.iter().enumerate() {
+        for user in self.live_candidates(value.node) {
+            for (at, op) in self.dag.nodes()[user as usize].ops.iter().enumerate() {
                 if op.node == value.node && op.res == value.res {
-                    out.push((user as u32, at));
+                    out.push((user, at));
                 }
             }
         }
         out
     }
 
+    /// The live nodes that may read `node`, each once, in node order: the
+    /// DAG's use lists, not a scan of every node.
+    fn live_candidates(
+        &self,
+        node: u32,
+    ) -> Vec<u32> {
+        let mut users: Vec<u32> =
+            self.dag.use_candidates(node).iter().copied().filter(|user| !self.dead.contains(user)).collect();
+        users.sort_unstable();
+        users.dedup();
+        users
+    }
+
     fn live_node_users(
         &self,
         node: u32,
     ) -> impl Iterator<Item = SDValue> + '_ {
-        self.dag
-            .nodes()
-            .iter()
-            .enumerate()
-            .filter(move |(user, _)| !self.dead.contains(&(*user as u32)))
-            .flat_map(move |(_, data)| data.ops.iter().copied().filter(move |op| op.node == node))
+        self.live_candidates(node)
+            .into_iter()
+            .flat_map(move |user| self.dag.nodes()[user as usize].ops.iter().copied().filter(move |op| op.node == node))
     }
 
     fn remove(

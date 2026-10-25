@@ -13,6 +13,7 @@ fn arg(
 }
 
 mod action_table;
+mod adapter_users;
 mod add_simplify;
 mod and_fold;
 mod and_simplify;
