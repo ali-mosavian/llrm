@@ -35,7 +35,7 @@ Query side (BasicAA, TBAA, CaptureTracking) stays: BasicAA `alias_check` is 20 M
 
 | site | rule | owner | M |
 |---|---|---|---|
-| Decide@809 (19.1 in the d_faces -O2 ablation, 10.6 same-IR) | DELETE; needs #4731 and #4749 (both open), then the deletion PR. Cost: 14 of 568 vsgcc cells, quicksort 6 (+4..+48 B) and x_primes 8 (+0..+2 B) | w5 | -19.1 |
+| Decide@809 (9.3 on the dist pair, 779.71 -> 770.40, object identical on d_faces; 19.1 was a dev build; 10.6 same-IR) | DELETE; needs #4731 and #4749 (both open), then the deletion PR. Cost: 14 of 568 vsgcc cells, quicksort 6 (+4..+48 B) and x_primes 8 (+0..+2 B) | w5 | -9.3 |
 | Decide at the SimplifyCFG slots (15.8 same-IR vs the pin's 6.1; these are SimplifyCfg instances) | DEVIATE: no single lever (top step 10% of a slot); a loop-exits change is ~1.5 | w4 | -1.5 |
 | ConstraintElimination (6.4 vs the pin's 3.9 same-IR) | DEVIATE: it is the pin pass, cost is diffuse; the sort comparator asks `fact_before` twice | w5 | -0.3, rest unknown |
 | Dead (5.7): `dead@677/768/801/837` | DELETE: 0 changes in 1561 runs each over the 568 vsgcc cells (`LLRM_DEBUG=runs`); `dead@1242` finds work (48 of 1480) and stays | w4, #4767 | -5.06 measured (objects identical) |
@@ -50,7 +50,7 @@ Query side (BasicAA, TBAA, CaptureTracking) stays: BasicAA `alias_check` is 20 M
 | FloatPrep 7.8 -> ~3.5 after #4648 | DEVIATE, then DELETE when it moves into selection (floatprep-into-selection-plan) | w2, date unset | -3.5 |
 | Register-effects table fill 12.1 | no rule yet: needs a same-IR profile | w2 | ? |
 | Peephole `narrowed_arithmetic` 3.47 + `fused` 1.92 + `increments` 1.24 | REPLACE by the pin's isel patterns (narrowing, addressing-mode matching, UseIncDec); done as DELETE at the dag default flip, after a per-sub-pass zero count under `--isel=dag`; gated on w12's flip | w1, R45-3/4, 11-27 and 12-04 | -6.6 (upper bound) |
-| Peephole `zeroes` 1.95 + `zero_compares` ~1.4 | same rule (MOV32r0, X86InstrCompiler.td); #4655 already makes dag use xor | w1, 11-27 | -3.3 |
+| Peephole `zero_compares` ~1.4 and `zeroes` 1.95 | `zero_compares`: DELETE at the flip (0 under dag). `zeroes` is the pin's post-RA MOV32r0 expansion (~1200 instructions per 65 modules under dag): DEVIATE, keep; the pin-shaped form moves the cost, saving ~0 until priced | w1, 11-27 | -1.4 to -2.6 (with `increments`) |
 | Peephole windows, the rest (14.3 of Peephole's 63.3) | REPLACE with the pin's single visit per instruction (R45-2, one walk) | w1, count 11-13, code 11-20 | up to -10 |
 | Effects table 12.1 incl (`EffectKey::hashes` 4.5, `_effects_by_table` 6.2) | DEVIATE: no pin counterpart; cut the fill cost | w2 | unknown, up to -4.5; w2 to price |
 | Flags liveness 4.3 (`_flags_dead_after`, `_flags_live_out`) | REPLACE FlagLive by `liveness::lanewise`, one liveness (spike: 1148 of 1156 blocks equal) | w5 | unknown until the PR |
