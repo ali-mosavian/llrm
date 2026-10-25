@@ -70,7 +70,10 @@ fn test_basic_enters_a_module_internal_procedure_near() {
         &["--own-frames", "--whole-program", "--dialect", "pds71", "--runtime", "pds71"],
     );
     let body = procedure(&asm, "DOWN");
-    assert!(body.starts_with("DOWN proc near") && body.contains("call DOWN\n") && !body.contains("retf"), "{asm}");
+    // The recursion is a closed form now (the pin's tail-recursion
+    // elimination and IndVars), so the call that enters it near is main's.
+    assert!(body.starts_with("DOWN proc near") && !body.contains("retf"), "{asm}");
+    assert!(asm.contains("call DOWN\n"), "{asm}");
 }
 
 /// A function only direct calls reach takes the fields it reads in place of the
