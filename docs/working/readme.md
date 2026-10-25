@@ -91,6 +91,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [machine-cleanup-compile-plan](machine-cleanup-compile-plan.md) | Machine clean-up compile time: plan to 1.0x of the pin |
 | [machinecombiner-translation-plan](machinecombiner-translation-plan.md) | Translating MachineCombiner (slot 40) |
 | [old-allocator-modules](old-allocator-modules.md) | Old allocator modules: last callers and the PR that deletes each |
+| [peephole-vs-pin](peephole-vs-pin.md) | Peephole cost by sub-pass against the pin on d_faces -O2 (2026-10-25) |
 | [pei-plan](pei-plan.md) | Prologue/Epilogue Insertion and Frame Finalization (row 80): plan |
 | [phielimination-completion-plan](phielimination-completion-plan.md) | PHIElimination: completing the translation (row 61) |
 | [pin-slot-table](pin-slot-table.md) | Pin pipeline slots against llrm's pipeline |
