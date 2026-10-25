@@ -9,6 +9,9 @@
 //! every such node, `fp_round x, 0` between x87 types, into that store and
 //! load. An `fp_extend` between x87 types and an `fp_round` with the
 //! "value is unchanged" flag set stay: the register holds either exactly.
+//! With SSE2 `f32` and `f64` are in xmm registers, and a conversion between
+//! one and an x87 type (`fpext float to x86_fp80`) goes through the slot
+//! too: the store in the narrower type, then an extending load.
 //!
 //! # Runs
 //! Before selection, from the `--isel=dag` driver, which owns the frame
@@ -40,33 +43,59 @@ fn is_x87(vt: EVT) -> bool {
     matches!(vt, EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80))
 }
 
-/// Rewrite the x87 `fp_round`s of `dag` through memory; returns how many.
+/// `isScalarFPTypeInSSEReg`: with SSE2, `f32` and `f64` live in an xmm
+/// register.
+fn in_sse(
+    vt: EVT,
+    sse2: bool,
+) -> bool {
+    sse2 && matches!(vt, EVT::Simple(MVT::F32 | MVT::F64))
+}
+
+/// Rewrite the `fp_round`s and `fp_extend`s that cross between the x87 stack
+/// and the SSE registers, or round on the stack, through memory; returns how
+/// many. The x87 has an extending load and a truncating store; SSE folds a
+/// direct load into other operations.
 pub fn preprocess(
     dag: &mut SelectionDAG,
     frame: &mut dyn FrameObjects,
+    sse2: bool,
 ) -> usize {
     let mut rewritten = 0;
     // The pin walks the nodes from the last made; a node made on the way
-    // (the store and load below) is not an `fp_round`.
+    // (the store and load below) is neither.
     for node in dag.node_ids().rev() {
         let value = SDValue { node, res: 0 };
-        if dag.opcode(value) != ISD::FpRound || dag.node(value).ops.len() != 2 {
-            continue;
-        }
+        let round = match dag.opcode(value) {
+            ISD::FpRound if dag.node(value).ops.len() == 2 => true,
+            ISD::FpExtend => false,
+            _ => continue,
+        };
         let source = dag.operand(value, 0);
         let (from, to) = (dag.value_type(source), dag.value_type(value));
-        // `fp_round x, 1` says the value is exact in the narrower type.
-        if !is_x87(from) || !is_x87(to) || dag.constant(dag.operand(value, 1)) != Some(0) {
+        if !is_x87(from) && !in_sse(from, sse2) || !is_x87(to) && !in_sse(to, sse2) {
             continue;
         }
-        let size = to.size_in_bits().div_ceil(8);
+        let (from_sse, to_sse) = (in_sse(from, sse2), in_sse(to, sse2));
+        // Both in xmm registers: a legal conversion. Neither: an extension is a
+        // no-op, and so is `fp_round x, 1` (the value is exact in the narrower
+        // type).
+        if from_sse && to_sse || !from_sse && !to_sse && (!round || dag.constant(dag.operand(value, 1)) != Some(0)) {
+            continue;
+        }
+        let mem = if round { to } else { from };
+        let size = mem.size_in_bits().div_ceil(8);
         let index = frame.create_stack_temporary(size, size);
         let slot = dag.get_frame_index(dag.config().pointer, index);
         let info =
-            MemInfo { mem_vt: to, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
+            MemInfo { mem_vt: mem, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
         let chain = dag.entry_node();
         let store = dag.get_store(chain, source, slot, info);
-        let reloaded = dag.get_load(to, store, slot, info);
+        let reloaded = if mem == to {
+            dag.get_load(to, store, slot, info)
+        } else {
+            dag.get_ext_load(super::actions::LoadExt::ExtLoad, to, store, slot, info)
+        };
         dag.replace_all_uses_with(value, reloaded);
         rewritten += 1;
     }
