@@ -84,3 +84,45 @@ runtime/qb/                portable runtime; touches the machine only through ru
     (`B$DDIM`, `B$CLOS`, ...). Retry when #4638 and S4 land.
 17. arm64: `llrm-qb` has no route to the arm64 backend (code from MIR, QB data sections, Mach-O/ELF). A private aarch64
     sysroot (clang, lld, qemu-aarch64) can build and run ELF; Mach-O runs on a Mac only.
+
+## Mac session
+
+For a session running natively on a Mac (arm64, macOS). Branch `feat/qb-host`, PR #4727. Report on branch
+`qb-host-mac` (cut from `feat/qb-host`; merge `feat/qb-host` into it, never rebase), by appending to the rows below and
+pushing it; then message the coordinator, `local_46783727-436b-4bf2-b2b7-0585042f0a48`.
+
+### Build and run
+
+```sh
+git fetch && git checkout -b qb-host-mac origin/feat/qb-host
+brew install sdl2                      # or tools/build-sdl2.sh (dummy drivers only: no window)
+cargo test --release --test posix_os --test qb_headless --test qb_dev_interface   # no SDL, must pass
+cargo test --release --test qb_sdl     # dummy drivers; the first Mac data point (rows 1, 3)
+```
+
+A real window: build the smoke program as `tests/qb_sdl.rs` does (its `cc` line: `sdl2-config --cflags --libs`, the
+runtime files it lists, `-I runtime/qb/{posix,.,dev,dev/sdl,dev/host}`, `-I runtime/shared/posix`, `-D__cdecl=`,
+`-pthread`), without `SDL_VIDEODRIVER=dummy`, and run it with `QB_SDL_HOLD=1`.
+
+### Mac-only rows
+
+Each: verify, then write the result under the row number in the open rows.
+
+1. Real window (row 2): opens on the main thread, shows the 80x25 text screen and SCREEN 13 graphics; 4:3 shape, no
+   tearing while the worker draws. Report a screenshot path and the SDL driver name (`SDL_GetCurrentVideoDriver`).
+2. Main-thread SDL: `main` runs SDL, the program is on a worker; no "must be on the main thread" abort; closing the
+   window ends the program (exit code 1) and Cmd-Q likewise.
+3. Retina: the window on a 2x display is not blurry or a quarter size; if it is, set the logical size / hint in
+   `dev/sdl/present.c` and say which.
+4. Audio device (row 3): `BEEP`, `SOUND 440,18` and `PLAY "CDEFG"` are audible, the pitch right, with no clicks
+   between notes; `sdl_audio_current` matches the note.
+5. Keyboard (row 4): letters, digits, arrows, F1-F10, Enter, Esc, Backspace, Tab, Shift/Caps, numeric pad; compare the
+   (ASCII, scan code) pairs with `INKEY$` on DOS. Report missing keys and Cmd/Option combinations.
+6. arm64 atomics (row 1): the dirty-line stress (test 4 of the milestone) under `-fsanitize=thread` and without; the
+   present thread sees a whole line once its flag is set.
+7. Object path: `llrm-qb -m64` writes ELF only (`x86-m64 cannot write macho`) and the arm64 backend has no QB route
+   (row 17), so no compiled QB program runs on the Mac yet. Check whether `llrm-qb -m64 -fobject-format=macho` still
+   refuses and report the message.
+
+Fix only portability faults, in `runtime/qb/dev/sdl` and `runtime/shared/posix`, each with a fail-first test where one
+can be written on a headless machine. Report commits and the rows' results; no PR.
