@@ -563,6 +563,15 @@ impl Function {
         self.layout.is_empty()
     }
 
+    /// The body is one `unreachable`: what the inliner leaves of a private
+    /// function at its last inlined call, in place of the deletion the pin's
+    /// CGSCC walk makes (`removeDeadFunctions`). No pass has a use for it.
+    pub fn is_deleted(&self) -> bool {
+        let mut body = self.walk();
+        body.next().is_some_and(|(_, inst)| self.instruction(inst).opcode == Opcode::Unreachable)
+            && body.next().is_none()
+    }
+
     /// Its declaration: type, attributes and unnamed parameters, no body.
     pub fn declaration(&self) -> Function {
         let mut out = Function::new(self.ty, self.void);
@@ -638,6 +647,7 @@ impl Function {
     /// Each instruction's index in its block, by id; erased and unplaced ones
     /// are zero.
     pub fn positions(&self) -> Vec<u32> {
+        crate::counts::bump(crate::counts::Event::Positions);
         let mut positions = vec![0; self.instructions.len()];
         for &block in self.layout() {
             for (index, inst) in self.iter_block(block).enumerate() {

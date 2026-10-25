@@ -64,9 +64,10 @@
 //! `VSCALE`, ...). Reason: no vectors until 32-bit parity. Exit: with
 //! vector MIR. Owner sdag-a. Review 2026-11-13.
 //!
-//! DEVIATE SD15: `FindMergedConditions` (`a && b` branches split into two
-//! branches) is not ported; the condition stays one `setcc`/`and`. Exit: the
-//! switch-lowering piece (A2). Owner sdag-a. Review 2026-11-13.
+//! DEVIATE SD15: `FindMergedConditions` is ported (`builder/mergedcond.rs`)
+//! without the edge probabilities (`TProb`/`FProb`) the pin keeps on the blocks
+//! it makes. Exit: probabilities kept by the DAG builder. Owner sdag-a.
+//! Review 2026-11-13.
 //!
 //! DEVIATE SD16: no `LiveOutRegInfo`: a value copied out of a block reads
 //! back without `AssertZext`/`AssertSext`. Exit: with `computeKnownBits`
@@ -143,6 +144,20 @@ mod asmcall_tests;
 mod bundle_tests;
 #[cfg(test)]
 mod codecall_tests;
+#[cfg(test)]
+mod dag_function_calls_tests;
+#[cfg(test)]
+mod dag_function_far_tests;
+#[cfg(test)]
+mod dag_function_flags_tests;
+#[cfg(test)]
+mod dag_function_float_tests;
+#[cfg(test)]
+mod dag_function_frame_tests;
+#[cfg(test)]
+mod dag_function_switch_tests;
+#[cfg(test)]
+mod dag_function_tail_tests;
 #[cfg(test)]
 mod dag_function_tests;
 #[cfg(test)]

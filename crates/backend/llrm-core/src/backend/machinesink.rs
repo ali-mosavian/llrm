@@ -33,30 +33,22 @@
 //! LIR (`mayAlias(AA, MI)` is always true). Retires M1, which sank no load
 //! along a critical edge. Exit: memory operands with an alias query on LIR.
 //!
-//! DEVIATE M2 (#2903): `isProfitableToSinkTo` ends by asking the register
-//! pressure of the target (`registerPressureSetExceedsLimit`) for an
-//! instruction inside a cycle; no instruction here sinks on that ground.
-//! Exit: the target description's pressure limits.
+//! Row M2 (was DEVIATE M2 #2903, retired 2026-10-25): inside a cycle an
+//! instruction goes to a post-dominating block when no in-cycle operand it
+//! reads would be held there past the block's pressure (the limit is the number
+//! of allocatable registers, one for every set). x_bubble -O2 m32: the inner
+//! loop's `inc` goes to the latch as the pin has it.
 //!
-//! DEVIATE M4 (#2903): in a build for size an instruction with operands moves
-//! only if each operand is live out of its block already (nothing is
-//! lengthened over the edge: an `fsub` whose operands died there made the x87
-//! stackifier hold them in memory, qcport `pl_trace` +125 bytes) and is read
-//! by nothing below in the arm (the two-address form needs no copy: `x > C ?
-//! x - C : x`, the `add` in the arm is in place). The pin's MachineSink has no
-//! optsize rule; it moves any and its allocator splits the ranges around the
-//! stretch. The gain and the loss come from one shape: a `lea` sunk into an
-//! arm whose result a phi takes becomes `add; mov` plus a copy block on the
-//! join edge. Rows (head 9e3c893585, base 47978c1a46; tools/rows/qcport.py, no
-//! flags): QCport -Os 265956 -> 265871 (-85 bytes, 13 modules; larger: `sc` +2
-//! of 11041, 0.018%, `d_alias` +1 of 12363, 0.008%); objects -Os m16 5 changed
-//! -327 bytes, larger `bench/jpeg_fixed` +3 of 2958 (0.10%) and `jpeg_single`
-//! +3 of 2826 (0.11%), m32 8 changed -244, none larger; x_adler -10.8%,
-//! x_crc32 -6.7%, x_fixmul -6.1% clocks. Otherwise (-O1 to -O3) every safe
-//! instruction moves; `bench/quicksort` -O2 m16 costs +985 clocks (+0.3%, a
-//! reload more per trip). Exit: a test of the sink that prices the phi copy
-//! from the target description (general, not a shape rule), 2026-11-04;
-//! review 2026-11-05 with the greedy allocator and SplitKit as the default.
+//! Row M4 (was DEVIATE M4, retired 2026-10-25 on the greedy allocator): a build
+//! for size moves what the pin moves; the rule that kept an instruction in
+//! place when its operand lives on, is read below the arm or dies in the block
+//! is gone. Measured (matched pair, own dists, rows, qcport.py, objsweep):
+//! x_collatz -Os clocks -7.2%, instructions -11.7%, code -4.4% (the pin's
+//! shape: `lea` into the odd arm, `shr` into the even one), sieve -10.3%
+//! clocks, matmul -2.9% clocks and -5.3% code; objects -Os: x_mergesort m16
+//! -219 B, x_collatz m16 -105, matmul m32 -113, sieve m16 +82; QCport -Os
+//! 263235 -> 263448 (+213 B, +0.081%, 40 modules changed; -O1 to -O3
+//! identical). The rule had bought -85 B of QCport -Os on the old allocator.
 //!
 //! DEVIATE M5 (#2903): in a build for size no edge is broken. The block
 //! costs a jump (`bench/recpow` -Os +5 bytes with the edge split; over the
@@ -123,6 +115,9 @@ pub struct MachineSink {
     /// A build for size: successors are tried by loop depth alone
     /// (`shouldOptimizeForSize` in `GetAllSortedSuccessors`).
     pub size: bool,
+    /// The registers a block may hold at once (`getRegPressureSetLimit`; the
+    /// number of allocatable registers, not the pin's per-set limits).
+    pub limit: usize,
 }
 
 impl LIRTransform for MachineSink {
@@ -138,7 +133,7 @@ impl LIRTransform for MachineSink {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(sunk(&body, self.size))
+        Ok(sunk_within(&body, self.size, self.limit))
     }
 }
 
@@ -291,9 +286,18 @@ struct Sinker {
     /// Whether the flags are read before they are written from each block's
     /// entry on (live in, as `isLiveIn` says of EFLAGS).
     flags_live_in: Vec<bool>,
-    /// Where each value is live at a block's end; in a build for size only
-    /// (`read_below`).
-    live: Option<crate::backend::allocate::LiveRows>,
+    /// `RegClassInfo->getRegPressureSetLimit`.
+    limit: usize,
+    /// The values of the float operations, which the general registers do not
+    /// hold; made when the pressure tail first asks.
+    stack: Option<HashSet<u32>>,
+    /// The block of each value a phi defines.
+    phi_blocks: HashMap<u32, usize>,
+    /// The block of each other value; made with `stack`, kept up as
+    /// instructions move.
+    defined: Option<HashMap<u32, usize>>,
+    /// `CachedRegisterPressure`.
+    pressure: HashMap<usize, usize>,
 }
 
 /// The post-dominator tree: the dominator tree of the reversed graph with a
@@ -340,10 +344,20 @@ impl Sinker {
             }
         }
         let insns = body.blocks.iter().map(|block| block.insns.to_vec()).collect();
+        let phi_blocks: HashMap<u32, usize> = body
+            .blocks
+            .iter()
+            .enumerate()
+            .flat_map(|(number, block)| block.phis.iter().map(move |phi| (phi.result, number)))
+            .collect();
         if let Some(before) = before {
             return Self {
                 insns,
                 owner,
+                defined: None,
+                stack: None,
+                phi_blocks,
+                pressure: HashMap::default(),
                 canon: HashMap::default(),
                 uses,
                 considered: HashSet::default(),
@@ -351,7 +365,6 @@ impl Sinker {
                 to_split: Vec::new(),
                 has_store_cache: HashMap::default(),
                 changed: false,
-                live: size.then(|| crate::backend::allocate::live_rows(body)),
                 ..before
             };
         }
@@ -405,7 +418,11 @@ impl Sinker {
             regs: body.regs(),
             bits: body.bits,
             flags_live_in: Vec::new(),
-            live: size.then(|| crate::backend::allocate::live_rows(body)),
+            limit: usize::MAX,
+            stack: None,
+            phi_blocks,
+            defined: None,
+            pressure: HashMap::default(),
         };
         sinker.flags_live_in = sinker.solve_flags();
         sinker.sort_successors();
@@ -597,7 +614,7 @@ impl Sinker {
 
     /// `FindSuccToSinkTo`.
     fn find_succ_to_sink_to(
-        &self,
+        &mut self,
         one: &Insn,
         block: usize,
         break_phi_edge: &mut bool,
@@ -633,7 +650,7 @@ impl Sinker {
 
     /// `isProfitableToSinkTo`.
     fn profitable_to_sink_to(
-        &self,
+        &mut self,
         value: u32,
         one: &Insn,
         block: usize,
@@ -665,9 +682,87 @@ impl Sinker {
         if let Some(further) = self.find_succ_to_sink_to(one, sink_to, &mut break_phi_edge) {
             return self.profitable_to_sink_to(value, one, sink_to, further);
         }
-        // Outside a cycle, sinking to a post-dominator shortens nothing; inside
-        // one it could, if the register pressure allowed it (DEVIATE M2).
-        false
+        // Outside a cycle, sinking to a post-dominator shortens nothing.
+        let Some(cycle) = self.cycle[block] else { return false };
+        // Inside one it can, if no operand it brings in lives beyond the
+        // block's pressure limit.
+        for &defined in &one.defines {
+            let (mut phi_edge, mut local) = (false, false);
+            if !self.all_uses_dominated_by(defined, sink_to, block, &mut phi_edge, &mut local) {
+                return false;
+            }
+        }
+        self.ready_pressure();
+        for &used in &one.uses {
+            let by_phi = self.phi_blocks.contains_key(&used);
+            let Some(home) = self
+                .phi_blocks
+                .get(&used)
+                .or_else(|| self.defined.as_ref().and_then(|found| found.get(&used)))
+                .copied()
+            else {
+                continue;
+            };
+            // Defined outside the cycle, or by a phi of its header: no live
+            // range of the cycle is longer for it.
+            if self.cycle[home] != Some(cycle) || (by_phi && home == cycle && !self.irreducible[cycle]) {
+                continue;
+            }
+            if !self.stack_has(used) && 1 + self.block_pressure(sink_to) >= self.limit {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The float values and the home of each value, once.
+    fn ready_pressure(&mut self) {
+        if self.stack.is_some() {
+            return;
+        }
+        self.stack = Some(crate::backend::machinesched::x87_values(self.insns.iter().flatten()).into_iter().collect());
+        self.defined = Some(
+            self.insns
+                .iter()
+                .enumerate()
+                .flat_map(|(number, block)| {
+                    block.iter().flat_map(move |one| one.defines.iter().map(move |&value| (value, number)))
+                })
+                .collect(),
+        );
+    }
+
+    fn stack_has(
+        &self,
+        value: u32,
+    ) -> bool {
+        self.stack.as_ref().is_some_and(|stack| stack.contains(&value))
+    }
+
+    /// `getBBRegisterPressure`: the most values read in `block` that are live
+    /// at once there, counted bottom-up from nothing live at its end, as the
+    /// pin's tracker is started without live-outs.
+    fn block_pressure(
+        &mut self,
+        block: usize,
+    ) -> usize {
+        if let Some(&known) = self.pressure.get(&block) {
+            return known;
+        }
+        let mut live: HashSet<u32> = HashSet::default();
+        let mut most = 0;
+        for one in self.insns[block].iter().rev() {
+            // A value defined and never read still takes a register there.
+            let dead = one.defines.iter().filter(|value| !self.stack_has(**value) && !live.contains(value)).count();
+            most = most.max(live.len() + dead);
+            for value in &one.defines {
+                live.remove(value);
+            }
+            live.extend(one.uses.iter().copied().filter(|value| !self.stack_has(*value)));
+            most = most.max(live.len());
+        }
+        self.pressure.insert(block, most);
+        most
     }
 
     /// `isLegalToBreakCriticalEdge`.
@@ -769,33 +864,6 @@ impl Sinker {
         false
     }
 
-    /// Whether `value` stays live below `one` once it is the first instruction
-    /// of `sink_to`: another instruction of the block reads it, or it is
-    /// live out of the block (a phi below, a loop's back edge). The
-    /// two-address form then needs a copy (DEVIATE M4: in a build for size
-    /// an instruction moves only where it is the last reader on its path).
-    fn read_below(
-        &self,
-        value: u32,
-        one: &Insn,
-        sink_to: usize,
-    ) -> bool {
-        use crate::backend::allocate::LiveAt;
-        self.insns[sink_to].iter().any(|other| other.id() != one.id() && other.uses.contains(&value))
-            || self.live.as_ref().is_none_or(|live| live.live_out(self.at[sink_to], value))
-    }
-
-    /// Whether `value` is live out of `block` whatever `one` does: moving a
-    /// reader of it then lengthens nothing. None known is no.
-    fn crosses_already(
-        &self,
-        value: u32,
-        block: usize,
-    ) -> bool {
-        use crate::backend::allocate::LiveAt;
-        self.live.as_ref().is_some_and(|live| live.live_out(self.at[block], value))
-    }
-
     /// `hasStoreBetween`
     /// ([#L1660](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineSink.cpp#L1660)):
     /// whether a store, call or ordered access may run between `from` and
@@ -866,14 +934,6 @@ impl Sinker {
         if self.flags_live_in[sink_to] && self.writes_flags(&one) {
             return false;
         }
-        if self.size && one.uses.iter().any(|&value| self.read_below(value, &one, sink_to)) {
-            return false;
-        }
-        // An operand that dies in this block would live over the edge it now
-        // crosses (pl_trace -Os +125 bytes: x87 operands held in memory).
-        if self.size && one.uses.iter().any(|&value| !self.crosses_already(value, block)) {
-            return false;
-        }
         // A successor with other predecessors: sink along the edge, or break
         // it.
         if self.cfg.preds[sink_to].len() > 1 {
@@ -904,6 +964,9 @@ impl Sinker {
         self.canon.insert(moved.id(), first);
         IDENTITY_STEPS.with(|steps| steps.set(steps.get() + 1));
         self.owner.insert(first, sink_to);
+        if let Some(defined) = &mut self.defined {
+            defined.extend(one.defines.iter().map(|&value| (value, sink_to)));
+        }
         self.insns[sink_to].insert(0, moved);
         self.changed = true;
         true
@@ -924,10 +987,21 @@ impl Sinker {
     }
 }
 
-/// `body` with what `MachineSinking::run` moves moved.
+/// `body` with what `MachineSinking::run` moves moved, the registers held at
+/// once unbounded.
 pub fn sunk(
     body: &LirBody,
     size: bool,
+) -> LirBody {
+    sunk_within(body, size, usize::MAX)
+}
+
+/// `body` with what `MachineSinking::run` moves moved, no block to hold more
+/// than `limit` values.
+pub fn sunk_within(
+    body: &LirBody,
+    size: bool,
+    limit: usize,
 ) -> LirBody {
     let mut body = body.clone();
     // Each round walks the blocks, then breaks the edges it marked; it ends
@@ -935,6 +1009,7 @@ pub fn sunk(
     let mut before: Option<Sinker> = None;
     loop {
         let mut sinker = Sinker::new(&body, size, before.take());
+        sinker.limit = limit;
         for block in 0..sinker.cfg.len() {
             sinker.process_block(block);
         }
@@ -1217,8 +1292,9 @@ mod tests {
     /// qcport pl_trace -Os +125 bytes: an `fsub` moved into an arm took its two
     /// operands, loaded in the entry, across the edge, and the stackifier
     /// held them in memory (`fld; fstp` pairs for what were `fsub m` folds).
+    /// It moves now (numbered row M4, below).
     #[test]
-    fn test_in_a_size_build_an_instruction_whose_operand_dies_in_the_block_stays() {
+    fn test_in_a_size_build_an_instruction_whose_operand_dies_in_the_block_moves() {
         let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
         let wide = |value: u32| Loc::Held(Held { value, width: 10 });
         let entry = LirBlock {
@@ -1258,7 +1334,7 @@ mod tests {
         };
         assert_eq!(Sinker::new(&body, true, None).flags_live_in, [false, false, false]);
         let moved = sunk(&body, true);
-        assert_eq!(names(&moved, 0), ["fsub", "cmp", "jbe"], "the fsub stayed");
+        assert_eq!(names(&moved, 0), ["cmp", "jbe"], "the fsub moved, as the pin has it");
     }
 
     /// x_collatz ran `lea edi,[ecx+ecx*2]` on every trip of its inner loop,
@@ -1309,9 +1385,10 @@ mod tests {
 
     /// The same, with the operand read again in the arm: the `add` then needs
     /// a copy there (`mov; add` for the `lea` it was: bench/control -Os +2
-    /// bytes), so it stays.
+    /// bytes). The pin sinks it, and so does a build for size (the rule that
+    /// kept it was DEVIATE M4: x_collatz -Os +17% clocks).
     #[test]
-    fn test_in_a_size_build_an_instruction_whose_operand_is_read_below_stays() {
+    fn test_in_a_size_build_an_instruction_whose_operand_is_read_below_moves() {
         let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
         let entry = LirBlock {
             succ: vec![1, 2].into(),
@@ -1350,16 +1427,17 @@ mod tests {
         };
         assert_eq!(Sinker::new(&body, true, None).flags_live_in, [false, false, false]);
         let moved = sunk(&body, true);
-        assert_eq!(names(&moved, 0), ["add", "cmp", "je"], "the add stays");
+        assert_eq!(names(&moved, 0), ["cmp", "je"], "the add moved, as the pin has it");
         // Outside a build for size it moves, so the premise is the rule's.
         assert_eq!(names(&sunk(&body, false), 0), ["cmp", "je"], "the premise: it can move");
     }
 
     /// The operand is read below the arm, in the join (a loop's next trip reads
-    /// it as well): the `add` would need a copy in the arm, so it stays
-    /// (bench/parity/control -Os, `lea esi, [ebx+7]` made `mov; add`).
+    /// it as well): the `add` needs a copy in the arm (bench/parity/control
+    /// -Os, `lea esi, [ebx+7]` made `mov; add`); it moves all the same, as the
+    /// pin has it.
     #[test]
-    fn test_in_a_size_build_an_instruction_whose_operand_is_live_out_of_the_arm_stays() {
+    fn test_in_a_size_build_an_instruction_whose_operand_is_live_out_of_the_arm_moves() {
         let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
         let entry = LirBlock {
             succ: vec![1, 2].into(),
@@ -1396,7 +1474,7 @@ mod tests {
                 .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
                 .collect()
         };
-        assert_eq!(names(&sunk(&body, true), 0), ["add", "cmp", "je"], "the add stays");
+        assert_eq!(names(&sunk(&body, true), 0), ["cmp", "je"], "the add moved, as the pin has it");
         assert_eq!(names(&sunk(&body, false), 0), ["cmp", "je"], "the premise: it can move");
     }
 
@@ -1519,5 +1597,89 @@ mod tests {
         let _ = Sinker::new(&body, false, None);
         let built = crate::liveness::blockfrequency::GRAPH_BUILDS.with(std::cell::Cell::get) - before;
         assert_eq!(built, 1, "graphs built for one round");
+    }
+
+    /// x_bubble's inner loop: `j + 1` is computed in the header, read by the
+    /// phi and by the compare in the latch, and the latch post-dominates the
+    /// header. It stayed in the header (row M2: an instruction inside a
+    /// loop never went to a post-dominating block), so the loop carried both
+    /// `j` and `j + 1` (`mov ebp, eax` in the latch, a spill in the outer
+    /// loop). The pin sinks it unless the target block is full.
+    #[test]
+    fn test_a_loop_increment_read_in_the_latch_sinks_into_it() {
+        use crate::model::ir::{Addr, Mem, Space};
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64, name: &str| insn(at, Operation::Branch, name, vec![], vec![], vec![], vec![]);
+        // The add reads the loop's phi (v10) or the value its header loads
+        // (v12).
+        let bubble = |reads: u32| {
+            let cell = Mem {
+                index: Some(Held { value: 10, width: 4 }),
+                scale: 4,
+                ..Mem::new(Some(Addr::new(Space::Segment, 4)), 4)
+            };
+            let header = LirBlock {
+                phis: vec![crate::model::lir::Phi { result: 10, incoming: vec![(0, 1), (3, 11)] }].into(),
+                ..block(
+                    1,
+                    vec![2, 3],
+                    vec![
+                        insn(10, Operation::Move, "mov", vec![held(12)], vec![Loc::Mem(cell)], vec![12], vec![10]),
+                        insn(
+                            11,
+                            Operation::Binary,
+                            "add",
+                            vec![held(11)],
+                            vec![held(reads), imm(1)],
+                            vec![11],
+                            vec![reads],
+                        ),
+                        insn(12, Operation::Compare, "cmp", vec![], vec![held(12), held(2)], vec![], vec![12, 2]),
+                        jump(13, "jle"),
+                    ],
+                )
+            };
+            let arm = block(
+                2,
+                vec![3],
+                vec![insn(20, Operation::Move, "mov", vec![held(13)], vec![held(12)], vec![13], vec![12])],
+            );
+            let latch = block(
+                3,
+                vec![1, 4],
+                vec![
+                    insn(30, Operation::Compare, "cmp", vec![], vec![held(11), held(3)], vec![], vec![11, 3]),
+                    jump(31, "jne"),
+                ],
+            );
+            let exit = block(4, vec![], vec![insn(40, Operation::Return, "ret", vec![], vec![], vec![], vec![])]);
+            let mut body = LirBody::new(
+                "bubble",
+                0,
+                vec![block(0, vec![1], vec![]).into(), header.into(), arm.into(), latch.into(), exit.into()],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            body.inputs = [1, 2, 3].into_iter().collect();
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m32::REGISTER_INFO));
+            body.bits = 32;
+            body
+        };
+        let names = |body: &LirBody, block: usize| -> Vec<String> {
+            body.blocks[block]
+                .insns
+                .iter()
+                .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                .collect()
+        };
+        let moved = sunk_within(&bubble(10), false, 7);
+        assert_eq!(names(&moved, 1), ["mov", "cmp", "jle"], "the add left the header");
+        assert_eq!(names(&moved, 3), ["add", "cmp", "jne"], "and went into the latch");
+        // A value of the loop that the add would keep live to the latch counts
+        // against the latch's pressure: room for it, and none.
+        assert_eq!(names(&sunk_within(&bubble(12), false, 7), 3), ["add", "cmp", "jne"], "room");
+        assert_eq!(names(&sunk_within(&bubble(12), false, 3), 1), ["mov", "add", "cmp", "jle"], "full");
     }
 }

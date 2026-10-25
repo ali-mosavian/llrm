@@ -177,6 +177,8 @@ pub struct Callee {
     pub pops: i64,
     /// Inline assembly laid down in place of a call.
     pub code: Vec<InlinePart>,
+    /// A sibling call: a `jmp` after the epilogue, not a `call`.
+    pub tail: bool,
 }
 
 impl Callee {
@@ -185,7 +187,7 @@ impl Callee {
         name: impl Into<String>,
         far: bool,
     ) -> Self {
-        Self { name: name.into(), far, pops: 0, code: Vec::new() }
+        Self { name: name.into(), far, pops: 0, code: Vec::new(), tail: false }
     }
 }
 
@@ -559,7 +561,7 @@ pub fn cleaned_returns(
                 .insns
                 .iter()
                 .map(|one| match one.what.as_ref() {
-                    Some(what) if what.op == Operation::Return => {
+                    Some(what) if what.op == Operation::Return && what.name.as_deref() != Some("jmp") => {
                         let mut replaced = (**one).clone();
                         replaced.what = Some(Semantics {
                             sources: vec![Loc::Imm(ir::Imm {
@@ -689,9 +691,21 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
         && procedure.body.bits == 32
         && procedure.reserve != 0
         && procedure.callees.values().all(|one| one.code.is_empty())
-        && [false, true]
-            .iter()
-            .all(|omit| wrap_of(&procedure, &procedure.body, true, *omit).is_none_or(|wrap| wrap.wrapped.is_empty()));
+        && [false, true].iter().all(|omit| {
+            // Nothing wrapped, or the frame and every register at the one Save
+            // (the pin saves them together); a register saved later than the
+            // frame cannot lie above it.
+            wrap_of(&procedure, &procedure.body, true, *omit).is_none_or(|wrap| {
+                wrap.wrapped.is_empty()
+                    || (wrap.wrapped.contains(&crate::backend::shrinkwrap::Piece::Frame)
+                        && saved_of(&procedure).len()
+                            == wrap
+                                .wrapped
+                                .iter()
+                                .filter(|piece| matches!(piece, crate::backend::shrinkwrap::Piece::Saved(_)))
+                                .count())
+            })
+        });
     let pushed = saved_of(&procedure).len() as i64 * procedure.registers.slot;
     if !eligible || pushed == 0 {
         return procedure;
@@ -1031,7 +1045,7 @@ fn built(
     let first = procedure.body.saved_first;
     let lows = if first { Vec::new() } else { saved_of(procedure) };
     let count = lows.len();
-    let wrap = if first { None } else { wrap_of(procedure, &procedure.body, enter.len() > count, omit) };
+    let wrap = wrap_of(procedure, &procedure.body, enter.len() > count, omit);
     let kept = enter.split_off(enter.len() - count);
     let restores: Vec<Semantics> = leave.drain(..count).collect();
     let saved: Vec<RegId> =
@@ -1040,6 +1054,9 @@ fn built(
     let item = |piece: &crate::backend::shrinkwrap::Piece| -> (Vec<Semantics>, Vec<Semantics>) {
         match piece {
             crate::backend::shrinkwrap::Piece::Frame => (enter.clone(), leave.clone()),
+            // A `saved_first` frame's registers are in the frame's own
+            // sequence.
+            crate::backend::shrinkwrap::Piece::Saved(_) if first => (Vec::new(), Vec::new()),
             crate::backend::shrinkwrap::Piece::Saved(whole) => {
                 let at = saved.iter().position(|one| one == whole).expect("a kept register");
                 // `kept` is in the order of `saved_of`; `restores` is the
@@ -1180,6 +1197,13 @@ fn built(
                         out.extend(pieces.iter().flat_map(|piece| item(piece).1).map(Item::Semantics));
                     }
                     out.extend(unwrapped_leave.iter().cloned().map(Item::Semantics));
+                    // a sibling call: the epilogue, then a jump to the callee
+                    if what.name.as_deref() == Some("jmp")
+                        && let Some(callee) = procedure.callees.get(&one.at)
+                    {
+                        out.push(Item::Callee(Callee { tail: true, ..callee.clone() }));
+                        continue;
+                    }
                     if let Some(Loc::Imm(popped)) =
                         what.sources.first().filter(|_| procedure.interrupt.is_none() && !procedure.far)
                     {
@@ -1784,8 +1808,12 @@ pub fn _procedure_of(
             Item::Callee(Callee { code, .. }) if !code.is_empty() => {
                 out.extend(_code(&code).into_iter().map(|line| format!("    {line}")));
             }
-            Item::Callee(Callee { name, far, .. }) => {
-                out.push(format!("    call {}{name}", if far { "far ptr " } else { "" }));
+            Item::Callee(Callee { name, far, tail, .. }) => {
+                out.push(format!(
+                    "    {} {}{name}",
+                    if tail { "jmp" } else { "call" },
+                    if far { "far ptr " } else { "" }
+                ));
             }
             Item::Semantics(item) => match _instruction(regs, &item, names, number) {
                 Ok(lines) => out.extend(lines.into_iter().map(|line| format!("    {line}"))),
@@ -2432,6 +2460,36 @@ mod tests {
         _procedure(&procedure, &no_names(), 0).unwrap();
         let _ = saved_of(&procedure);
         assert_eq!(procedure.body.facts.0.runs::<BodyRoots>(), 1);
+    }
+
+    /// A sibling call is a return that jumps: the frame is taken down, then
+    /// `jmp callee` stands where `ret` would. As a `ret` it was a `ret` and the
+    /// callee never ran.
+    #[test]
+    fn a_sibling_call_is_a_jump_after_the_epilogue() {
+        let bx = Loc::Reg(ir::Reg { register: RegId::BX, width: 2 });
+        let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], vec![bx]));
+        let leave = insn(1, semantics(Operation::Return, "jmp", vec![], vec![]));
+        let blocks = vec![lir::LirBlock::new(1, vec![r#move, leave])];
+        let body =
+            lir::LirBody::new("get", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
+        let procedure = Procedure {
+            name: "_get".into(),
+            public: true,
+            far: false,
+            body,
+            reserve: 0,
+            callees: IndexMap::from_iter([(1, Callee::new("_other", false))]),
+            interrupt: None,
+            size: false,
+            entry: 0,
+            stack_check: None,
+            registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
+        };
+        let lines: Vec<String> =
+            _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
+        assert!(lines.iter().any(|one| one == "jmp _other"), "{lines:?}");
+        assert!(!lines.iter().any(|one| one == "ret"), "{lines:?}");
     }
 
     fn through_bp() -> Loc {

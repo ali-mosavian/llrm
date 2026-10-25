@@ -42,9 +42,9 @@
 use std::collections::HashSet;
 
 use super::actions::{Action, LoadExt, TargetLowering};
-use super::dag::{NodeData, Rauw, SDValue, SelectionDAG};
+use super::dag::{MemInfo, NodeData, Rauw, SDNodeFlags, SDValue, SelectionDAG};
 use super::isd::{CondCode, ISD};
-use super::mvt::EVT;
+use super::mvt::{EVT, MVT};
 
 /// `CombineLevel`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -73,6 +73,29 @@ pub trait CombineHooks {
     ) -> Option<SDValue> {
         None
     }
+
+    /// `targetShrinkDemandedConstant`: `None` is "not handled" (the generic
+    /// shrink runs); `Some(None)` keeps the node as it is; `Some(Some(new))`
+    /// replaces it.
+    fn target_shrink_demanded_constant(
+        &mut self,
+        _dag: &mut SelectionDAG,
+        _op: SDValue,
+        _demanded: u128,
+    ) -> Option<Option<SDValue>> {
+        None
+    }
+
+    /// `IsDesirableToPromoteOp`, with `isTypeDesirableForOp` before it: the
+    /// type a legal operation is better done in, or `None`.
+    fn promote_type(
+        &self,
+        _dag: &SelectionDAG,
+        _tli: &TargetLowering,
+        _op: SDValue,
+    ) -> Option<EVT> {
+        None
+    }
 }
 
 /// A target with no combines.
@@ -82,7 +105,7 @@ impl CombineHooks for NoCombines {}
 
 pub struct DagCombiner<'a, H: CombineHooks> {
     pub(super) dag: &'a mut SelectionDAG,
-    hooks: &'a mut H,
+    pub(super) hooks: &'a mut H,
     pub(super) level: CombineLevel,
     worklist: Vec<u32>,
     queued: HashSet<u32>,
@@ -152,6 +175,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
 
     /// `Run`.
     pub fn run(&mut self) {
+        // `RemoveDeadNodes`: what an earlier phase replaced no longer counts as
+        // a user. Newest first, so a user goes before the nodes it reads.
+        for node in self.dag.node_ids().rev() {
+            self.dag.delete_dead(node);
+        }
         // Oldest first, so the newest is taken first.
         for node in self.dag.node_ids() {
             self.add_to_worklist(node);
@@ -188,6 +216,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             if self.dag.opcode(result) != ISD::EntryToken {
                 self.add_to_worklist_with_users(result.node);
             }
+            self.dag.delete_dead(n);
         }
     }
 
@@ -201,6 +230,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if result.is_none() && (matches!(op, ISD::Target(_)) || self.hooks.has_target_combine(op)) {
             result = self.hooks.perform_dag_combine(self.dag, node, self.level);
         }
+        // "If nothing happened still, try promoting the operation."
+        if result.is_none() && self.level >= CombineLevel::AfterLegalizeVectorOps {
+            result = self.promote_int_op(node);
+        }
         result
     }
 
@@ -211,12 +244,15 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         match self.dag.opcode(node) {
             ISD::MergeValues => self.visit_merge_values(node),
             ISD::Select => self.visit_select(node),
+            ISD::Store => self.visit_store(node),
+            ISD::Freeze => self.visit_freeze(node),
             ISD::SetCC => self.visit_setcc(node),
             ISD::Xor => self.visit_xor(node).or_else(|| self.simplify_demanded(node)),
             ISD::Mul => self.visit_mul(node),
             ISD::And => self.visit_and(node).or_else(|| self.simplify_demanded(node)),
             ISD::Or => self.visit_or(node).or_else(|| self.simplify_demanded(node)),
             ISD::Add => self.visit_add(node),
+            ISD::Sub => self.visit_sub(node),
             ISD::Shl | ISD::Srl => self.visit_shift(node).or_else(|| self.simplify_demanded(node)),
             ISD::Sra => self.visit_sra(node).or_else(|| self.visit_shift(node)),
             ISD::SDiv => self.visit_sdiv(node),
@@ -468,6 +504,27 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         node: SDValue,
     ) -> Option<SDValue> {
         let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let vt = self.dag.value_type(node);
+        // `not (or|and a, b)` of `i1`s, when one is a one-use compare, is the
+        // and/or of the nots (De Morgan), each of which flips its compare:
+        // `xor (or (setcc), (setcc)), 1` was `or; xor 1; test 1; je`.
+        if self.dag.constant(n1) == Some(1)
+            && vt == EVT::I1
+            && matches!(self.dag.opcode(n0), ISD::Or | ISD::And)
+            && self.dag.use_count(n0.node) == 1
+        {
+            let (a, b) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            let one_use_setcc =
+                |dag: &SelectionDAG, v: SDValue| dag.opcode(v) == ISD::SetCC && dag.use_count(v.node) == 1;
+            if one_use_setcc(self.dag, a) || one_use_setcc(self.dag, b) {
+                let flipped = if self.dag.opcode(n0) == ISD::And { ISD::Or } else { ISD::And };
+                let (not_a, not_b) =
+                    (self.dag.get_node(ISD::Xor, vt, &[a, n1]), self.dag.get_node(ISD::Xor, vt, &[b, n1]));
+                self.add_to_worklist(not_a.node);
+                self.add_to_worklist(not_b.node);
+                return Some(self.dag.get_node(flipped, vt, &[not_a, not_b]));
+            }
+        }
         if self.dag.constant(n1) != Some(1) || self.dag.opcode(n0) != ISD::SetCC {
             return None;
         }
@@ -476,7 +533,6 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(n0, 2)).data else { return None };
-        let vt = self.dag.value_type(node);
         Some(self.dag.get_setcc(vt, lhs, rhs, cc.inverse_integer()))
     }
 
@@ -843,6 +899,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_constant(0, vt));
             }
         }
+        if op == ISD::Srl && self.dag.opcode(n0) == ISD::Truncate {
+            if let Some(folded) = self.srl_of_trunc_of_srl(node) {
+                return Some(folded);
+            }
+        }
         if self.dag.opcode(n0) != op {
             return None;
         }
@@ -857,6 +918,258 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(self.dag.get_node(op, vt, &[x, amount]));
         }
         Some(self.dag.get_constant(0, vt))
+    }
+
+    /// `visitSRL`: `srl (trunc (srl x, c1)), c2` is 0 or `trunc (srl x,
+    /// c1+c2)` when the truncated width plus `c1` is the inner width, else
+    /// `trunc (and (srl x, c1+c2), mask)` when both nodes have one use.
+    fn srl_of_trunc_of_srl(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (trunc, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let inner = self.dag.operand(trunc, 0);
+        if self.dag.opcode(inner) != ISD::Srl {
+            return None;
+        }
+        let (c1, c2) = (self.dag.constant(self.dag.operand(inner, 1))?, self.dag.constant(n1)?);
+        let (vt, inner_vt) = (self.dag.value_type(node), self.dag.value_type(inner));
+        let (op_size, inner_size) = (u128::from(vt.size_in_bits()), u128::from(inner_vt.size_in_bits()));
+        let amount_vt = self.dag.value_type(self.dag.operand(inner, 1));
+        if c1 + op_size == inner_size {
+            if c1 + c2 >= inner_size {
+                return Some(self.dag.get_constant(0, vt));
+            }
+            let amount = self.dag.get_constant(c1 + c2, amount_vt);
+            let shifted = self.dag.get_node(ISD::Srl, inner_vt, &[self.dag.operand(inner, 0), amount]);
+            return Some(self.dag.get_node(ISD::Truncate, vt, &[shifted]));
+        }
+        if self.dag.use_count(trunc.node) == 1
+            && self.dag.use_count(inner.node) == 1
+            && c1 + c2 < inner_size
+            && c2 < op_size
+        {
+            let amount = self.dag.get_constant(c1 + c2, amount_vt);
+            let shifted = self.dag.get_node(ISD::Srl, inner_vt, &[self.dag.operand(inner, 0), amount]);
+            let mask = self.dag.get_constant(super::fold::mask((op_size - c2) as u32), inner_vt);
+            let masked = self.dag.get_node(ISD::And, inner_vt, &[shifted, mask]);
+            return Some(self.dag.get_node(ISD::Truncate, vt, &[masked]));
+        }
+        None
+    }
+
+    /// `visitFREEZE`, the first fold: `freeze x` is `x` when `x` cannot be
+    /// undef or poison. (The pin's second fold, hoisting the freeze over a
+    /// multi-use operand, is not translated.)
+    fn visit_freeze(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let x = self.dag.operand(node, 0);
+        if !self.guaranteed_not_undef_or_poison(x, 0) {
+            return None;
+        }
+        // The users now read `x` directly: their users may fold with it too
+        // (`not (or (cmp), freeze (cmp))` was visited with the freeze there).
+        let users: Vec<u32> = self.dag.users(node).collect();
+        for user in users {
+            self.add_to_worklist_with_users(user);
+        }
+        Some(x)
+    }
+
+    /// `isGuaranteedNotToBeUndefOrPoison`, for the nodes the combiner builds:
+    /// constants, registers, frame indexes and `freeze`; a load through such a
+    /// pointer; and an integer operation without a poison-generating flag whose
+    /// operands are.
+    ///
+    /// DEVIATE SD213: no vector, `AssertSext`/`AssertZext`, overflow-flag or
+    /// shift-amount range reasoning beyond a constant amount below the width.
+    /// Exit: those. Owner sdag-b. Review 2026-12-10.
+    fn guaranteed_not_undef_or_poison(
+        &self,
+        value: SDValue,
+        depth: u32,
+    ) -> bool {
+        if self.dag.opcode(value) == ISD::Freeze {
+            return true;
+        }
+        if depth >= 6 {
+            return false;
+        }
+        if self.dag.constant(value).is_some() {
+            return true;
+        }
+        let poison_flags = SDNodeFlags::NO_UNSIGNED_WRAP.0 | SDNodeFlags::NO_SIGNED_WRAP.0 | SDNodeFlags::EXACT.0;
+        let flagged = self.dag.node(value).flags.0 & poison_flags != 0;
+        let all = |ops: &[usize]| {
+            ops.iter().all(|&i| self.guaranteed_not_undef_or_poison(self.dag.operand(value, i), depth + 1))
+        };
+        match self.dag.opcode(value) {
+            ISD::Register | ISD::FrameIndex | ISD::ValueType | ISD::CopyFromReg => true,
+            ISD::Load => all(&[1]),
+            ISD::SetCC => all(&[0, 1]),
+            ISD::And | ISD::Or | ISD::Xor | ISD::Add | ISD::Sub | ISD::Mul if !flagged => all(&[0, 1]),
+            ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend | ISD::Truncate if !flagged => all(&[0]),
+            ISD::Shl | ISD::Srl | ISD::Sra if !flagged => {
+                let width = u128::from(self.dag.value_type(value).size_in_bits());
+                self.dag.constant(self.dag.operand(value, 1)).is_some_and(|by| by < width) && all(&[0])
+            }
+            _ => false,
+        }
+    }
+
+    /// `PromoteIntBinOp`, `PromoteIntShiftOp` and `PromoteExtend`: an operation
+    /// the target wants in a wider type is done there, and truncated.
+    ///
+    /// DEVIATE SD211: a load operand is any-extended, not replaced by an
+    /// extending load (`PromoteOperand`/`ReplaceLoadWithPromotedLoad`); the
+    /// extend-of-load fold makes the same load. `AssertSext`/`AssertZext` are
+    /// not looked through. Exit: those. Owner sdag-b. Review 2026-12-10.
+    fn promote_int_op(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let op = self.dag.opcode(node);
+        let class = match op {
+            ISD::Add | ISD::Sub | ISD::Mul | ISD::And | ISD::Or | ISD::Xor => 0,
+            ISD::Shl | ISD::Sra | ISD::Srl => 1,
+            ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend => 2,
+            _ => return None,
+        };
+        let vt = self.dag.value_type(node);
+        if !vt.is_integer() {
+            return None;
+        }
+        let tli = self.tli?;
+        let wide = self.hooks.promote_type(self.dag, tli, node)?;
+        match class {
+            2 => {
+                let x = self.dag.operand(node, 0);
+                Some(self.dag.get_node(op, vt, &[x]))
+            }
+            0 => {
+                let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+                let (w0, w1) = (self.promote_operand(n0, wide)?, self.promote_operand(n1, wide)?);
+                let wide_op = self.dag.get_node(op, wide, &[w0, w1]);
+                Some(self.dag.get_node(ISD::Truncate, vt, &[wide_op]))
+            }
+            _ => {
+                let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+                let flags = self.dag.node(node).flags;
+                let w0 = match op {
+                    ISD::Sra => self.sext_promote_operand(n0, wide, tli)?,
+                    ISD::Srl => self.zext_promote_operand(n0, wide)?,
+                    _ if flags.0 & SDNodeFlags::NO_UNSIGNED_WRAP.0 != 0 => self.zext_promote_operand(n0, wide)?,
+                    _ if flags.0 & SDNodeFlags::NO_SIGNED_WRAP.0 != 0 => self.sext_promote_operand(n0, wide, tli)?,
+                    _ => self.promote_operand(n0, wide)?,
+                };
+                let wide_op = self.dag.get_node(op, wide, &[w0, n1]);
+                Some(self.dag.get_node(ISD::Truncate, vt, &[wide_op]))
+            }
+        }
+    }
+
+    /// `PromoteOperand`: a constant is extended, anything else any-extended.
+    fn promote_operand(
+        &mut self,
+        value: SDValue,
+        wide: EVT,
+    ) -> Option<SDValue> {
+        if self.dag.constant(value).is_some() {
+            let byte_sized = self.dag.value_type(value).size_in_bits() % 8 == 0;
+            let ext = if byte_sized { ISD::SignExtend } else { ISD::ZeroExtend };
+            return Some(self.dag.get_node(ext, wide, &[value]));
+        }
+        if !self.tli?.is_operation_legal(ISD::AnyExtend, wide) {
+            return None;
+        }
+        Some(self.dag.get_node(ISD::AnyExtend, wide, &[value]))
+    }
+
+    fn sext_promote_operand(
+        &mut self,
+        value: SDValue,
+        wide: EVT,
+        tli: &TargetLowering,
+    ) -> Option<SDValue> {
+        if !tli.is_operation_legal(ISD::SignExtendInReg, wide) {
+            return None;
+        }
+        let old = self.dag.value_type(value);
+        let promoted = self.promote_operand(value, wide)?;
+        let ty = self.dag.get_value_type_node(old);
+        Some(self.dag.get_node(ISD::SignExtendInReg, wide, &[promoted, ty]))
+    }
+
+    /// `ZExtPromoteOperand`: `getZeroExtendInReg` is an `and` with the old
+    /// type's mask.
+    fn zext_promote_operand(
+        &mut self,
+        value: SDValue,
+        wide: EVT,
+    ) -> Option<SDValue> {
+        let old = self.dag.value_type(value);
+        let promoted = self.promote_operand(value, wide)?;
+        let mask = self.dag.get_constant(super::fold::mask(old.size_in_bits()), wide);
+        Some(self.dag.get_node(ISD::And, wide, &[promoted, mask]))
+    }
+
+    /// `visitSUB`, the first folds: `x - x` is 0, and `x - C` is `x + -C`, so
+    /// the add-shaped folds and the matcher's `dec`/`lea` patterns see one
+    /// form. (The pin's `umin`, select, `ctlz` and negation folds are not
+    /// translated.)
+    fn visit_sub(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let vt = self.dag.value_type(node);
+        if !vt.is_integer() {
+            return None;
+        }
+        if n0 == n1 {
+            return Some(self.dag.get_constant(0, vt));
+        }
+        let c = self.dag.constant(n1).filter(|_| !self.dag.is_opaque(n1))?;
+        let negated = self.dag.get_constant(c.wrapping_neg() & super::fold::mask(vt.size_in_bits()), vt);
+        Some(self.dag.get_node(ISD::Add, vt, &[n0, negated]))
+    }
+
+    /// `visitSTORE`, `replaceStoreOfFPConstant`: `store float 1.5, p` is
+    /// `store i32 0x3fc00000, p`, and a double constant the FPU cannot load
+    /// directly is two `i32` stores, so the constant is never loaded onto the
+    /// x87 stack to be stored. (The pin's `f16`, `f80` and `f128` stay.)
+    fn visit_store(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (chain, value, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+        let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+        if self.dag.opcode(value) != ISD::ConstantFP || info.volatile || info.mem_vt != self.dag.value_type(value) {
+            return None;
+        }
+        let NodeData::ConstFp { bits } = self.dag.node(value).data else { return None };
+        let tli = self.tli?;
+        let int_info = |mem_vt: EVT, align: u32, base| MemInfo { mem_vt, align, base, ..info };
+        match self.dag.value_type(value) {
+            EVT::Simple(MVT::F32) => {
+                let constant = self.dag.get_constant(bits & 0xFFFF_FFFF, EVT::I32);
+                Some(self.dag.get_store(chain, constant, ptr, int_info(EVT::I32, info.align, info.base)))
+            }
+            EVT::Simple(MVT::F64) if !tli.is_fp_imm_legal(MVT::F64, bits) => {
+                let lo = self.dag.get_constant(bits & 0xFFFF_FFFF, EVT::I32);
+                let hi = self.dag.get_constant((bits >> 32) & 0xFFFF_FFFF, EVT::I32);
+                let first = self.dag.get_store(chain, lo, ptr, int_info(EVT::I32, info.align, info.base));
+                let four = self.dag.get_constant(4, self.dag.value_type(ptr));
+                let next = self.dag.get_mem_base_plus_offset(ptr, four, SDNodeFlags::default());
+                let second = self
+                    .dag
+                    .get_store(chain, hi, next, int_info(EVT::I32, info.align.min(4), super::dag::MemBase::Unknown));
+                Some(self.dag.get_token_factor(&[first, second]))
+            }
+            _ => None,
+        }
     }
 
     /// `visitMUL`, up to the multiply-by-power-of-two folds.

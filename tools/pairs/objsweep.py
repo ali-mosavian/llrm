@@ -44,13 +44,18 @@ def main() -> int:
     parser.add_argument("--levels", default="O1,O2,O3,Os")
     parser.add_argument("--targets", default="m32,m16")
     parser.add_argument("--programs", default="", help="comma-separated names; default every .c in --src")
+    parser.add_argument("--cross-branch", action="store_true", help="compare a base that is not an ancestor of the new build (the report header says so)")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "6")))
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     import stamp
 
     args, named, allow = parser.parse_args(stamp.options(sys.argv[1:])[0]), *stamp.options(sys.argv[1:])[1:]
-    stamp.check(args.old, named["base_sha"], allow, "old")
-    stamp.check(args.new, named["sha"], allow, "new")
+    old_sha = stamp.check(args.old, named["base_sha"], allow, "old")
+    new_sha = stamp.check(args.new, named["sha"], allow, "new")
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import ancestry  # noqa: PLC0415
+
+    print(ancestry.header(old_sha, new_sha, args.cross_branch))
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import voidpair
 

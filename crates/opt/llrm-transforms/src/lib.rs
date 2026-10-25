@@ -93,6 +93,7 @@ pub mod canonical;
 pub mod cfg;
 pub mod cgpaddr;
 pub mod cgpbranch;
+pub mod cmpopt;
 #[cfg(test)]
 mod codegen_slots_tests;
 pub mod combine;
@@ -149,6 +150,7 @@ pub mod condstores;
 pub mod condtocond;
 pub mod congruentiv;
 pub mod constraintelim;
+pub mod constraintelim_induction;
 #[cfg(test)]
 mod constraintelim_tests;
 #[cfg(test)]

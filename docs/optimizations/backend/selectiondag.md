@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/selectiondag.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/selectiondag.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:9930cd57c6292c0db2d155227835f1c9990f1d3f29922f2403093ec3a5fdc181 -->
+<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:a9499ce54be37d12080e38edf01efdd9ab0fcee7e340738e4d21b019461e99f3 -->
 
 # selectiondag
 
@@ -69,9 +69,10 @@ DEVIATE SD13: no vector types or nodes (`BUILD_VECTOR`, `SPLAT_VECTOR`,
 `VSCALE`, ...). Reason: no vectors until 32-bit parity. Exit: with
 vector MIR. Owner sdag-a. Review 2026-11-13.
 
-DEVIATE SD15: `FindMergedConditions` (`a && b` branches split into two
-branches) is not ported; the condition stays one `setcc`/`and`. Exit: the
-switch-lowering piece (A2). Owner sdag-a. Review 2026-11-13.
+DEVIATE SD15: `FindMergedConditions` is ported (`builder/mergedcond.rs`)
+without the edge probabilities (`TProb`/`FProb`) the pin keeps on the blocks
+it makes. Exit: probabilities kept by the DAG builder. Owner sdag-a.
+Review 2026-11-13.
 
 DEVIATE SD16: no `LiveOutRegInfo`: a value copied out of a block reads
 back without `AssertZext`/`AssertSext`. Exit: with `computeKnownBits`

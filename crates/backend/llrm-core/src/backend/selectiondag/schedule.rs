@@ -31,8 +31,8 @@
 //! DEVIATE SD30: part translated. Physical-register live interference
 //! (`DelayForLiveRegsBottomUp`, `CheckForLiveRegDef`, `LiveRegDefs`,
 //! `Interferences`, `releaseInterferences`) is in; not translated:
-//! `BacktrackBottomUp`, `CopyAndMoveSuccessors` (when every candidate waits
-//! the first goes anyway), the call-frame resource, `ClusterNodes`, and the
+//! `InsertCopiesAndMoveSuccs` (when no clone is possible the first held
+//! unit goes anyway), the call-frame resource, `ClusterNodes`, and the
 //! virtual-register cycle check (`initVRegCycle`, only for blocks that branch
 //! to themselves). Reason: they need register classes of the matcher's output
 //! for copies. Exit: before the switch gate. Owner: sdag-d. Review
@@ -78,6 +78,14 @@ pub trait SchedInfo {
         &self,
         opcode: u32,
     ) -> bool;
+    /// `TRI->getCrossCopyRegClass(RC) != RC` for the register's class: the
+    /// value cannot be copied within its class (x86's EFLAGS).
+    fn has_cross_copy_class(
+        &self,
+        _reg: u16,
+    ) -> bool {
+        false
+    }
     /// `TRI->regsOverlap`.
     fn regs_overlap(
         &self,
@@ -100,6 +108,8 @@ enum Kind {
     Data,
     /// `SDep::Barrier`, a chain edge.
     Barrier,
+    /// `SDep::Artificial`, an edge the scheduler added itself.
+    Artificial,
 }
 
 /// `SDep`.
@@ -240,6 +250,8 @@ struct Graph<'a> {
     /// `Interferences`: available units held back for a live register, with
     /// the registers (`LRegsMap`).
     interferences: Vec<(usize, Vec<u16>)>,
+    /// `Sequence`: the units scheduled so far, bottom first.
+    sequence: Vec<usize>,
 }
 
 impl<'a> Graph<'a> {
@@ -323,6 +335,7 @@ impl<'a> Graph<'a> {
             live_reg_defs: HashMap::new(),
             live_reg_gens: HashMap::new(),
             interferences: Vec::new(),
+            sequence: Vec::new(),
         };
         graph.build_sched_units(root);
         graph.add_sched_edges();
@@ -680,7 +693,7 @@ impl<'a> Graph<'a> {
         root: SDValue,
         queue: &mut Queue,
     ) -> Vec<usize> {
-        let mut sequence = Vec::with_capacity(self.sus.len());
+        self.sequence = Vec::with_capacity(self.sus.len());
         if !self.sus.is_empty() {
             let root_su = self.node_id[root.node as usize] as usize;
             debug_assert!(self.sus[root_su].succs.is_empty(), "the graph's root has no successors");
@@ -691,8 +704,9 @@ impl<'a> Graph<'a> {
             // `AdvancePastStalls` is a no-op without a hazard recognizer and
             // with unit latencies: the height is at most the cycle.
             self.schedule_node_bottom_up(su, queue);
-            sequence.push(su);
+            self.sequence.push(su);
         }
+        let mut sequence = std::mem::take(&mut self.sequence);
         sequence.reverse();
         sequence
     }
@@ -723,8 +737,208 @@ impl<'a> Graph<'a> {
         if self.interferences.is_empty() {
             return None;
         }
+        // Every candidate waits for a live register: unschedule back to the
+        // unit that wants it and force the waiting unit below it
+        // (`BacktrackBottomUp`).
+        for i in 0..self.interferences.len() {
+            let (try_su, lregs) = self.interferences[i].clone();
+            let mut bt: Option<usize> = None;
+            for reg in &lregs {
+                let Some(&gen_su) = self.live_reg_gens.get(reg) else { continue };
+                if bt.is_none_or(|b| self.height(gen_su) < self.height(b)) {
+                    bt = Some(gen_su);
+                }
+            }
+            let Some(bt) = bt else { continue };
+            if self.reaches(try_su, bt) {
+                continue;
+            }
+            self.backtrack_bottom_up(try_su, bt, queue);
+            // Force the waiting unit to be scheduled before the unit that
+            // wants the register: `bt` precedes it in the program.
+            if self.sus[bt].is_available {
+                self.sus[bt].is_available = false;
+                Self::dequeue(&mut self.sus, queue, bt);
+            }
+            self.add_pred(try_su, Dep { su: bt, kind: Kind::Barrier, latency: 0, reg: None });
+            return if !self.sus[try_su].is_available || queue_free(&self.sus, try_su) {
+                queue.pop(self)
+            } else {
+                Self::dequeue(&mut self.sus, queue, try_su);
+                Some(try_su)
+            };
+        }
+        // Nothing to backtrack to: the live register's definition is cloned
+        // where the target cannot copy the register (`CopyAndMoveSuccessors`).
+        let (try_su, lregs) = self.interferences[0].clone();
+        if let [reg] = lregs[..]
+            && self.info.has_cross_copy_class(reg)
+            && let Some(&lr_def) = self.live_reg_defs.get(&reg)
+            && let Some(new_def) = self.copy_and_move_successors(lr_def, queue)
+        {
+            self.live_reg_defs.insert(reg, new_def);
+            self.add_pred(new_def, Dep { su: try_su, kind: Kind::Artificial, latency: 0, reg: None });
+            self.sus[try_su].is_available = false;
+            return Some(new_def);
+        }
+        // DEVIATE SD30 (part): the cross-class copies
+        // (`InsertCopiesAndMoveSuccs`) are not translated; the first
+        // held unit goes anyway.
         let (su, _) = self.interferences.remove(0);
         Some(su)
+    }
+
+    /// `CopyAndMoveSuccessors`: a clone of `su` with the same predecessors
+    /// that takes over the successors already scheduled. None for a unit of
+    /// several nodes or one with a chain or glue result (the pin unfolds a
+    /// load there, which is not translated).
+    fn copy_and_move_successors(
+        &mut self,
+        su: usize,
+        queue: &mut Queue,
+    ) -> Option<usize> {
+        if self.sus[su].nodes.len() != 1
+            || self.values(self.sus[su].node()).iter().any(|vt| *vt == EVT::GLUE || *vt == EVT::OTHER)
+        {
+            return None;
+        }
+        let new = self.sus.len();
+        let mut clone = self.sus[su].clone();
+        clone.preds.clear();
+        clone.succs.clear();
+        clone.num_preds = 0;
+        clone.num_succs = 0;
+        clone.num_preds_left = 0;
+        clone.num_succs_left = 0;
+        clone.depth_current = false;
+        clone.height_current = false;
+        clone.is_available = false;
+        clone.is_scheduled = false;
+        clone.queue_id = 0;
+        self.sus.push(clone);
+        for pred in self.sus[su].preds.clone() {
+            if pred.kind != Kind::Artificial {
+                self.add_pred(new, pred);
+            }
+        }
+        let mut moved = Vec::new();
+        for succ in self.sus[su].succs.clone() {
+            if succ.kind != Kind::Artificial && self.sus[succ.su].is_scheduled {
+                self.add_pred(succ.su, Dep { su: new, ..succ });
+                moved.push((succ.su, Dep { su, ..succ }));
+            }
+        }
+        for (from, dep) in moved {
+            self.remove_pred(from, dep);
+        }
+        // `updateNode(SU)` and `addNode(NewSU)`.
+        queue.sethi_ullman.resize(self.sus.len(), 0);
+        queue.sethi_ullman[su] = 0;
+        queue.calc_sethi_ullman(&self.sus, su);
+        queue.calc_sethi_ullman(&self.sus, new);
+        Some(new)
+    }
+
+    /// Whether `to` is reached from `from` through successors.
+    fn reaches(
+        &self,
+        from: usize,
+        to: usize,
+    ) -> bool {
+        let mut seen = vec![false; self.sus.len()];
+        let mut work = vec![from];
+        while let Some(su) = work.pop() {
+            for succ in &self.sus[su].succs {
+                if succ.su == to {
+                    return true;
+                }
+                if !seen[succ.su] {
+                    seen[succ.su] = true;
+                    work.push(succ.su);
+                }
+            }
+        }
+        false
+    }
+
+    /// `AvailableQueue->remove(su)`.
+    fn dequeue(
+        sus: &mut [SUnit],
+        queue: &mut Queue,
+        su: usize,
+    ) {
+        if let Some(at) = queue.queue.iter().position(|&one| one == su) {
+            queue.queue.swap_remove(at);
+            sus[su].queue_id = 0;
+        }
+    }
+
+    /// `BacktrackBottomUp`: the scheduled units back to and including `bt`
+    /// are unscheduled.
+    fn backtrack_bottom_up(
+        &mut self,
+        _su: usize,
+        bt: usize,
+        queue: &mut Queue,
+    ) {
+        while let Some(old) = self.sequence.pop() {
+            self.cur_cycle = self.height(old);
+            self.unschedule_node_bottom_up(old, queue);
+            if old == bt {
+                break;
+            }
+        }
+    }
+
+    /// `UnscheduleNodeBottomUp`.
+    fn unschedule_node_bottom_up(
+        &mut self,
+        su: usize,
+        queue: &mut Queue,
+    ) {
+        for pred in self.sus[su].preds.clone() {
+            if let Some(reg) = pred.reg.filter(|_| pred.is_assigned_reg())
+                && self.live_reg_gens.get(&reg) == Some(&su)
+            {
+                self.live_reg_defs.remove(&reg);
+                self.live_reg_gens.remove(&reg);
+                self.release_interferences(Some(reg), queue);
+            }
+        }
+        for succ in self.sus[su].succs.clone() {
+            if let Some(reg) = succ.reg.filter(|_| succ.is_assigned_reg()) {
+                self.live_reg_defs.entry(reg).or_insert(su);
+                // The earliest scheduled unit that wants it.
+                let mut gen_su = succ.su;
+                for other in self.sus[su].succs.clone() {
+                    if other.is_assigned_reg()
+                        && other.reg == Some(reg)
+                        && self.sus[other.su].is_scheduled
+                        && self.height(other.su) < self.height(gen_su)
+                    {
+                        gen_su = other.su;
+                    }
+                }
+                self.live_reg_gens.insert(reg, gen_su);
+            }
+        }
+        // Its predecessors have a successor to wait for again.
+        for pred in self.sus[su].preds.clone() {
+            let p = pred.su;
+            self.sus[p].num_succs_left += 1;
+            if self.sus[p].is_available {
+                self.sus[p].is_available = false;
+                Self::dequeue(&mut self.sus, queue, p);
+                self.interferences.retain(|(held, _)| *held != p);
+            }
+        }
+        self.sus[su].is_scheduled = false;
+        if self.sus[su].num_succs_left == 0 {
+            self.sus[su].is_available = true;
+            if queue_free(&self.sus, su) {
+                queue.push(&mut self.sus, su);
+            }
+        }
     }
 
     /// `DelayForLiveRegsBottomUp`: the live physical registers `su` would
@@ -812,7 +1026,7 @@ impl<'a> Graph<'a> {
         for (su, live) in held {
             if reg.is_some_and(|reg| !live.contains(&reg)) {
                 self.interferences.push((su, live));
-            } else if queue_free(&self.sus, su) {
+            } else if self.sus[su].is_available && queue_free(&self.sus, su) {
                 queue.push(&mut self.sus, su);
             }
         }

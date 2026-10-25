@@ -231,6 +231,9 @@ struct Emitter<'a, 'd> {
     /// The nodes that read each value of a glue chain, from their operands (the
     /// matcher's nodes are not in the DAG's use lists).
     glue_users: HashMap<SDValue, Vec<u32>>,
+    /// The `fcom` operands of each float compare, by the `SAHF` that reads its
+    /// status word: the `fcom` is pushed there, next to the flag reader.
+    pending_fcom: HashMap<u32, (Held, Held)>,
     /// The floating constants loaded where they are read: (mnemonic, cell).
     lazy: HashMap<SDValue, (&'static str, Option<Mem>)>,
     /// The selector each `LES16rm` loaded beside its offset, by node: a cell
@@ -275,11 +278,14 @@ pub struct EmitState {
     pub vregs: HashMap<u32, u32>,
     pub next_value: u32,
     pub at: i64,
+    /// The bytes of the float type (4, 8 or 10) of each LIR value that is a DAG
+    /// value of a float type: `LirBody::float_bytes`, which a spill rounds to.
+    pub float_bytes: std::collections::BTreeMap<u32, u32>,
 }
 
 impl Default for EmitState {
     fn default() -> EmitState {
-        EmitState { vregs: HashMap::new(), next_value: 1, at: 1 }
+        EmitState { vregs: HashMap::new(), next_value: 1, at: 1, float_bytes: Default::default() }
     }
 }
 
@@ -360,6 +366,7 @@ pub fn emit_in(
         flag_insns: HashMap::new(),
         saved_carry: HashMap::new(),
         flag_copies_done: Default::default(),
+        pending_fcom: HashMap::new(),
         glue_users: {
             let mut users: HashMap<SDValue, Vec<u32>> = HashMap::new();
             for (at, one) in dag.nodes().iter().enumerate() {
@@ -378,6 +385,16 @@ pub fn emit_in(
                 emitter.mark_invariant_loads(before);
             }
         }
+    }
+    for (value, number) in &emitter.values {
+        let bytes = match dag.value_type(*value) {
+            EVT::Simple(MVT::F32) => 4,
+            EVT::Simple(MVT::F64) => 8,
+            EVT::Simple(MVT::F80) => 10,
+            _ => continue,
+        };
+        let widest = emitter.state.float_bytes.entry(*number).or_insert(0);
+        *widest = bytes.max(*widest);
     }
     let mut blocks = emitter.blocks;
     if ctx.address_mode == AddrMode::Real16 {
@@ -706,6 +723,13 @@ impl Emitter<'_, '_> {
             ISD::CopyToReg => {
                 let dst = self.register(node.ops[1])?;
                 let src = self.operand(node.ops[2])?;
+                // The definition already wrote the register
+                // (`exported_register`).
+                if let (Loc::Held(to), Loc::Held(from)) = (&dst, &src)
+                    && to.value == from.value
+                {
+                    return Ok(());
+                }
                 self.push(Operation::Move, "mov", vec![dst], vec![src]);
                 Ok(())
             }
@@ -788,6 +812,7 @@ impl Emitter<'_, '_> {
                 .is_some_and(|desc| desc.implicit_defs.contains(&llrm_dagisel::generated::ids::x86::EFLAGS));
         let previous = self.flags_now.filter(|&p| p != n);
         self.machine_in(n, opcode)?;
+        self.unused_sub_to_cmp(n);
         if writes_flags && let Some(previous) = previous {
             self.save_carry(previous, before);
         }
@@ -816,6 +841,29 @@ impl Emitter<'_, '_> {
             }
         }
         Ok(())
+    }
+
+    /// `X86InstrInfo::optimizeCompareInstr`: a `sub` whose difference nothing
+    /// reads is the `cmp` of its operands.
+    fn unused_sub_to_cmp(
+        &mut self,
+        n: u32,
+    ) {
+        let unused = !self.glue_users.contains_key(&SDValue { node: n, res: 0 });
+        let Some(block) = self.blocks.last_mut() else { return };
+        let Some(last) = block.insns.last_mut() else { return };
+        let Some(what) = last.what.as_ref() else { return };
+        if !unused
+            || what.op != Operation::Binary
+            || what.name.as_deref() != Some("sub")
+            || what.sources.len() != 2
+            || !matches!(what.dests.as_slice(), [Loc::Held(_)])
+        {
+            return;
+        }
+        let compare =
+            Semantics { name: Some("cmp".into()), sources: what.sources.clone(), ..Semantics::new(Operation::Compare) };
+        *last = Arc::new(Insn::new(last.at, last.covers, Some(compare), vec![], last.uses.clone()));
     }
 
     /// Whether the units glued after the flags copy `copy` are `adc`s and
@@ -916,7 +964,18 @@ impl Emitter<'_, '_> {
             return Err(EmitError::Unsupported("flags overwritten between their producer and a consumer".to_owned()));
         };
         let at = self.next_address();
-        let again = Insn { at, covers: Some((at, at)), ..(*compare).clone() };
+        let mut again = Insn { at, covers: Some((at, at)), ..(*compare).clone() };
+        // A `sub` whose value nothing reads, made again for its flags, writes a
+        // value of its own: LIR defines each value once.
+        if let Some(what) = again.what.as_mut() {
+            for dest in &mut what.dests {
+                if let Loc::Held(held) = dest {
+                    let fresh = self.fresh(held.width);
+                    *held = fresh;
+                    again.defines = vec![fresh.value];
+                }
+            }
+        }
         self.blocks.last_mut().expect("a block").insns.push(Arc::new(again));
         self.flags_now = Some(producer);
         Ok(())
@@ -996,7 +1055,8 @@ impl Emitter<'_, '_> {
         // The results: the first `num_defs` values that are not chain or glue.
         let mut dests = Vec::new();
         for (i, vt) in node.values.iter().enumerate().take(usize::from(desc.num_defs)) {
-            let held = self.fresh(width(*vt));
+            let held =
+                self.exported_register(SDValue { node: n, res: i as u8 }).unwrap_or_else(|| self.fresh(width(*vt)));
             self.values.insert(SDValue { node: n, res: i as u8 }, held.value);
             dests.push(Loc::Held(held));
         }
@@ -1022,7 +1082,7 @@ impl Emitter<'_, '_> {
             // a shift by `cl` has the amount as the value the `CopyToReg` glued
             // to it wrote to `CL`; the form pins that source to `cx`
             let implicit = || {
-                name.ends_with("rCL")
+                (name.ends_with("rCL") || name.ends_with("mCL"))
                     .then(|| self.accumulator.get(&llrm_lir::registers::RegId::CL).map(|held| Loc::Held(*held)))
                     .flatten()
             };
@@ -1241,6 +1301,20 @@ impl Emitter<'_, '_> {
             .ok_or_else(|| EmitError::Unsupported("a division operand not set by a glued CopyToReg".to_owned()))
     }
 
+    /// The `SAHF` that copies the status word `fnstsw` took from the compare
+    /// `n` into the flags.
+    fn status_reader(
+        &self,
+        n: u32,
+    ) -> Option<u32> {
+        let users = |value: SDValue| self.glue_users.get(&value).into_iter().flatten().copied();
+        let status = users(SDValue { node: n, res: 0 })
+            .find(|&user| self.is_machine_named(SDValue { node: user, res: 0 }, "FNSTSW16r"))?;
+        users(SDValue { node: status, res: 0 })
+            .flat_map(|byte| users(SDValue { node: byte, res: 0 }))
+            .find_map(|copy| self.glue_reaching(copy, |name| name == "SAHF"))
+    }
+
     /// What the instruction at the end of the glue chain from the `CopyToReg`
     /// node `n` is, if `wanted` accepts its name.
     fn glue_reaches(
@@ -1248,6 +1322,15 @@ impl Emitter<'_, '_> {
         n: u32,
         wanted: impl Fn(&str) -> bool,
     ) -> bool {
+        self.glue_reaching(n, wanted).is_some()
+    }
+
+    /// The node `glue_reaches` found.
+    fn glue_reaching(
+        &self,
+        n: u32,
+        wanted: impl Fn(&str) -> bool,
+    ) -> Option<u32> {
         let mut work = vec![SDValue { node: n, res: 1 }];
         while let Some(glue) = work.pop() {
             if usize::from(glue.res) >= self.dag.node(glue).values.len() {
@@ -1260,14 +1343,14 @@ impl Emitter<'_, '_> {
                         let name =
                             self.ctx.names.get(&(op as u16)).map_or("", |name| name.split('|').next().unwrap_or(name));
                         if wanted(name) {
-                            return true;
+                            return Some(user);
                         }
                     }
                     _ => {}
                 }
             }
         }
-        false
+        None
     }
 
     /// Whether the `CopyToReg` node `n` sets an implicit operand of the
@@ -1278,7 +1361,11 @@ impl Emitter<'_, '_> {
     ) -> bool {
         self.glue_reaches(n, |name| {
             let name = name.split('|').next().unwrap_or(name);
-            matches!(name, "CDQ" | "CWD") || is_div_or_mul(name) || name.starts_with("REP_") || name.ends_with("rCL")
+            matches!(name, "CDQ" | "CWD")
+                || is_div_or_mul(name)
+                || name.starts_with("REP_")
+                || name.ends_with("rCL")
+                || name.ends_with("mCL")
         })
     }
 
@@ -1295,7 +1382,7 @@ impl Emitter<'_, '_> {
         &self,
         n: u32,
     ) -> bool {
-        self.glue_reaches(n, |name| name.starts_with("CALL"))
+        self.glue_reaches(n, |name| name.starts_with("CALL") || name.starts_with("TCRETURN"))
     }
 
     /// Whether `glue` (the third operand of a `CopyFromReg`) comes from a call,
@@ -1391,8 +1478,10 @@ impl Emitter<'_, '_> {
                     width: 2,
                     address: Some(self.ctx.globals.segment(self.global_displacement(origin))),
                 }),
-                ("OR32rr", _) => {
-                    // A huge pointer built as `offset | (selector << 16)`.
+                ("OR32rr" | "ADD32rr_DB", _) => {
+                    // A huge pointer built as `offset | (selector << 16)`, or
+                    // as the same sum once the combiner
+                    // turns a disjoint or into an add.
                     let selector = self
                         .huge_selector(origin)
                         .ok_or_else(
@@ -1484,6 +1573,21 @@ impl Emitter<'_, '_> {
                 }
                 return Ok(Some(()));
             }
+            // A sibling call: the frame pass puts the epilogue before this
+            // return, which is a jump to the callee (`masm`).
+            "TCRETURNdi" => {
+                let callee = self
+                    .direct_callee(node.ops[0])
+                    .ok_or_else(|| EmitError::Unsupported("a sibling call of a non-global".to_owned()))?;
+                let at = self.next_address();
+                let requires = std::mem::take(&mut self.arguments);
+                let uses = requires.iter().map(|(held, _)| held.value).collect();
+                let what = Semantics { name: Some("jmp".into()), ..Semantics::new(Operation::Return) };
+                let insn = Insn { requires, ..Insn::new(at, Some((at, at)), Some(what), vec![], uses) };
+                self.blocks.last_mut().expect("a block").insns.push(Arc::new(insn));
+                self.calls.push((at, callee));
+                return Ok(Some(()));
+            }
             "CALLpcrel32" => {
                 let callee = self
                     .direct_callee(node.ops[0])
@@ -1528,6 +1632,27 @@ impl Emitter<'_, '_> {
                 );
                 self.calls.push((at, callee));
                 self.inline_places.push((at, patched));
+                return Ok(Some(()));
+            }
+            // `llrm.ia16.in`/`out`: a barrier the later passes give `in`/`out`
+            // forms; the port is an immediate byte or `dx`. A node with a
+            // value result reads.
+            "PORT_IO" => {
+                let reading = node.values.first().is_some_and(|vt| *vt != EVT::OTHER);
+                let port = match self.dag.node(node.ops[1]).data {
+                    NodeData::Const { bits, .. } if (0..256).contains(&(bits as i64)) => {
+                        Loc::Imm(Imm { value: bits as i64, width: 1, address: None })
+                    }
+                    _ => self.operand(node.ops[1])?,
+                };
+                if reading {
+                    let held = self.fresh(width_of(self.dag, SDValue { node: n, res: 0 }));
+                    self.values.insert(SDValue { node: n, res: 0 }, held.value);
+                    self.push(Operation::Barrier, "in", vec![Loc::Held(held)], vec![port]);
+                } else {
+                    let value = self.operand(node.ops[2])?;
+                    self.push(Operation::Barrier, "out", Vec::new(), vec![port, value]);
+                }
                 return Ok(Some(()));
             }
             // `llrm.ia16.asm`: a block of bytes laid down at the site, its
@@ -1713,7 +1838,12 @@ impl Emitter<'_, '_> {
                 else {
                     return Err(EmitError::Unsupported(format!("{name}: an operand that is no register")));
                 };
-                self.push(Operation::Compare, "fcom", Vec::new(), vec![Loc::Held(left), Loc::Held(right)]);
+                match self.status_reader(n) {
+                    Some(sahf) => {
+                        self.pending_fcom.insert(sahf, (left, right));
+                    }
+                    None => self.push(Operation::Compare, "fcom", Vec::new(), vec![Loc::Held(left), Loc::Held(right)]),
+                }
                 return Ok(Some(()));
             }
             "FNSTSW16r" => {
@@ -1721,7 +1851,12 @@ impl Emitter<'_, '_> {
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
                 return Ok(Some(()));
             }
-            "SAHF" => return Ok(Some(())),
+            "SAHF" => {
+                if let Some((left, right)) = self.pending_fcom.remove(&n) {
+                    self.push(Operation::Compare, "fcom", Vec::new(), vec![Loc::Held(left), Loc::Held(right)]);
+                }
+                return Ok(Some(()));
+            }
             // Division and the one-operand multiply work in AX:DX or EAX:EDX,
             // which the matcher names with `CopyToReg`/`CopyFromReg` around
             // them: the LIR form says the pair in its operands.
@@ -1939,8 +2074,11 @@ impl Emitter<'_, '_> {
                 Ok(Some(()))
             }
             "LEA32r" | "LEA16r" => {
-                let cell = self
-                    .cell(node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short lea".to_owned()))?, width)?;
+                // a `lea` only computes the address: a scaled index is fine
+                let cell = self.cell_unchecked(
+                    node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short lea".to_owned()))?,
+                    width,
+                )?;
                 // 16-bit addressing has no scale and the encoder no field for a
                 // symbol's displacement beside a lone index: the unscaled
                 // index is the address's base.
@@ -2075,7 +2213,7 @@ impl Emitter<'_, '_> {
                 let mnemonic = if prefix == "ST" { "fst" } else { "fistp" };
                 self.push(Operation::FloatStore, mnemonic, vec![Loc::Mem(cell)], vec![Loc::Held(source)]);
             }
-            "CHS" | "ABS" | "SQRT" => {
+            "CHS" | "ABS" | "SQRT" | "LN" | "EXP" | "LOG2" | "EXP2" | "SIN" | "COS" | "ATAN" | "RNDINT" => {
                 let Loc::Held(source) = self.operand(node.ops[0])? else {
                     return Err(EmitError::Unsupported(format!("{name}: an operand that is no register")));
                 };
@@ -2083,6 +2221,17 @@ impl Emitter<'_, '_> {
                 self.values.insert(result, held.value);
                 let mnemonic = format!("f{}", prefix.to_ascii_lowercase());
                 self.push(Operation::FloatUnary, &mnemonic, vec![Loc::Held(held)], vec![Loc::Held(source)]);
+                // The sequence pushes above its operand: the stack's top slots
+                // are not free for a value live across it (`fexp2` overflowed
+                // the stack with six doubles live: pow_stack_depth).
+                let scratch = llrm_x86::select::x87_scratch(&mnemonic);
+                if scratch > 0 {
+                    let last = self.blocks.last_mut().and_then(|block| block.insns.last_mut()).expect("the insn");
+                    Arc::get_mut(last)
+                        .expect("a fresh instruction")
+                        .clobbers
+                        .extend(crate::backend::allocate::RFP.iter().rev().take(scratch).copied());
+                }
             }
             "ADD" | "SUB" | "SUBR" | "MUL" | "DIV" | "DIVR" => {
                 let Loc::Held(left) = self.operand(node.ops[0])? else {
@@ -2196,6 +2345,23 @@ impl Emitter<'_, '_> {
         group: &[SDValue],
         cell_width: u32,
     ) -> Result<Mem, EmitError> {
+        let cell = self.cell_unchecked(group, cell_width)?;
+        // 16-bit addressing has no scale (SD3): a 16-bit index beside one is
+        // a cell no instruction encodes.
+        if self.ctx.address_mode == AddrMode::Real16
+            && cell.scale != 1
+            && cell.index.is_some_and(|index| index.width == 2)
+        {
+            return Err(EmitError::Unsupported("a scaled 16-bit index at m16".to_owned()));
+        }
+        Ok(cell)
+    }
+
+    fn cell_unchecked(
+        &mut self,
+        group: &[SDValue],
+        cell_width: u32,
+    ) -> Result<Mem, EmitError> {
         if matches!(
             self.dag.opcode(group[0]),
             ISD::FrameIndex | ISD::TargetFrameIndex
@@ -2288,7 +2454,8 @@ impl Emitter<'_, '_> {
                     pooled.width
                 )));
             }
-            return Ok(Mem { base, index, scale, ..pooled });
+            // as wide as the read, which may be inside the entry
+            return Ok(Mem { base, index, scale, width: cell_width, ..pooled });
         }
         let disp = self.constant(group[3])?;
         if self.address_register(group[4], Role::Segment)?.is_some() {
@@ -2482,6 +2649,30 @@ impl Emitter<'_, '_> {
         reg: u32,
     ) -> u32 {
         self.state.vreg(reg)
+    }
+
+    /// `InstrEmitter::CreateVirtualRegisters`: a result copied by a
+    /// `CopyToReg` to a virtual register of its width is defined in that
+    /// register, and the copy emits nothing.
+    fn exported_register(
+        &mut self,
+        result: SDValue,
+    ) -> Option<Held> {
+        let width = width_of(self.dag, result);
+        let reg = self
+            .dag
+            .users(result)
+            .find_map(
+                |user| {
+                    if self.dag.opcode(SDValue { node: user, res: 0 }) != ISD::CopyToReg {
+                        return None;
+                    }
+                    let node = self.dag.node(SDValue { node: user, res: 0 });
+                    let NodeData::Register(reg) = self.dag.node(node.ops[1]).data else { return None };
+                    (node.ops[2] == result && width_of(self.dag, node.ops[1]) == width).then_some(reg)
+                },
+            )?;
+        Some(Held { value: self.vreg(reg), width })
     }
 
     fn new_value(&mut self) -> u32 {

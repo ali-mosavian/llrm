@@ -455,6 +455,38 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The instructions `visit` asked the generic `simplify_instruction_in`
+    /// about.
+    pub(crate) static GENERIC_SIMPLIFIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Whether the visitor of `opcode` opens with its own `simplify*Inst`
+/// (`simplify_visited`, `simplify_first`, the shifts' `simplified` and the
+/// compare's), unconditionally and before it changes anything.
+fn simplifies_itself(opcode: &Opcode) -> bool {
+    matches!(
+        opcode,
+        Opcode::ICmp(_)
+            | Opcode::Binary(
+                BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::And
+                    | BinaryOp::Or
+                    | BinaryOp::Xor
+                    | BinaryOp::Mul
+                    | BinaryOp::UDiv
+                    | BinaryOp::SDiv
+                    | BinaryOp::URem
+                    | BinaryOp::SRem
+                    | BinaryOp::Shl
+                    | BinaryOp::LShr
+                    | BinaryOp::AShr
+            )
+    )
+}
+
 /// `InstCombinerImpl::run`'s per-instruction step: what the instruction
 /// simplifies to, else the first `visit*` of its opcode that acts.
 pub fn visit(
@@ -462,9 +494,16 @@ pub fn visit(
     inst: InstId,
 ) -> Visit {
     let env = c.env;
-    if let Some(result) = c.function.instruction(inst).result
-        && let Some(found) =
+    // The visitors below open with their own `simplify*Inst`, as the pin's do;
+    // a pass of the generic one before them asked the same question twice
+    // (d_faces -O2: 9,931 asks, 18.6 M Ir, 9.6 M of it on compares).
+    if !simplifies_itself(&c.function.instruction(inst).opcode)
+        && let Some(result) = c.function.instruction(inst).result
+        && let Some(found) = {
+            #[cfg(test)]
+            GENERIC_SIMPLIFIES.with(|one| one.set(one.get() + 1));
             simplify_instruction_in(c.context, env.globals, env.layout, Some(&env.analyses), c.function, inst)
+        }
         && found != Operand::Value(result)
     {
         return Visit::Replace(found);

@@ -30,6 +30,9 @@ pub struct FunctionLoweringInfo {
     /// The first block id a switch lowering has not made one of: ids are
     /// the function's, so two switches never name the same block.
     pub next_block: u32,
+    /// The (size, alignment) of each stack object the builder made, in
+    /// frame index order after the static allocas.
+    pub objects: Vec<(u32, u32)>,
     next_frame_index: i32,
 }
 
@@ -60,6 +63,7 @@ impl FunctionLoweringInfo {
             second: Default::default(),
             jump_tables: Vec::new(),
             next_block: 0,
+            objects: Vec::new(),
             next_frame_index: 0,
         };
         let entry = function.entry();
@@ -95,7 +99,12 @@ impl FunctionLoweringInfo {
     }
 
     /// A new stack object (`CreateStackTemporary`): its frame index.
-    pub fn new_stack_object(&mut self) -> i32 {
+    pub fn new_stack_object(
+        &mut self,
+        size: u32,
+        align: u32,
+    ) -> i32 {
+        self.objects.push((size, align));
         self.next_frame_index += 1;
         self.next_frame_index - 1
     }

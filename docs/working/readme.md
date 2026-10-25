@@ -4,8 +4,10 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 
 | Doc | Holds |
 |---|---|
+| [constraint-elimination-plan](constraint-elimination-plan.md) | ConstraintElimination translation: why, the order CE-1 to CE-4 with dates, the oracle |
 | [knownbits-plan](knownbits-plan.md) | ValueTracking known bits (qbq-llrm d_faces): per caller against the pin, twelve dated rows (2026-10-24) |
 | [f3-plan](f3-plan.md) | F3, `translate::program`: profile by bucket, the pin's counterpart, four rows with dates (2026-10-24) |
+| [pass-table-dist](pass-table-dist.md) | Optimizer passes on dist, ours against the pin: Ir, runs, excess and owners |
 | [presize-plan](presize-plan.md) | Vectors that grow by doubling to a size known up front: sites, growth Ir, capacities (2026-10-24) |
 | [f2-plan](f2-plan.md) | F2 `emit_module`: profile, pin counterpart, four rows |
 | [frontend-bucket-plan](frontend-bucket-plan.md) | Front end compile-time bucket (qbq-llrm d_faces): attribution and rows F1-F4 (2026-10-23) |
@@ -66,6 +68,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [lea-fixup-plan](lea-fixup-plan.md) | X86 LEA Fixup (row 100): plan |
 | [ledger-command](ledger-command.md) | The ledger command |
 | [cost-centers](cost-centers.md) | Self Ir by symbol (hashing, memcpy, Vec growth, malloc), ours against the pin |
+| [algebraic-696-note](algebraic-696-note.md) | algebraic@696 deleted: the pair by bucket, the costs and what is owed |
 | [qcport-o2-size](qcport-o2-size.md) | AM-QC-1: QCport -O2 size by cause (unrolling, inlining) and module |
 | [cleanup-bucket-by-pass](cleanup-bucket-by-pass.md) | The machine clean-up bucket (172.3 M vs the pin's 49.4) one row per pass, with a proposed owner |
 | [compile-time-plan-scalar-ipo](compile-time-plan-scalar-ipo.md) | Scalar and module/IPO compile time: dated plan to the pin |

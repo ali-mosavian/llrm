@@ -279,7 +279,16 @@ impl TargetLowering {
         features: Features,
         ptr: MVT,
     ) -> TargetLowering {
-        Self::x86(TargetLoweringInfo::x86_32(), features, ptr)
+        Self::x86(TargetLoweringInfo::x86_32(), features, ptr, false)
+    }
+
+    /// m64: the constructor's `is64Bit()` arms (L183..L533, the scalar integer
+    /// ones); the x87 and SSE conversions stay as m32 until D64-4.
+    pub fn x86_64(
+        features: Features,
+        ptr: MVT,
+    ) -> TargetLowering {
+        Self::x86(TargetLoweringInfo::x86_64(), features, ptr, true)
     }
 
     /// m16: the same constructor calls over the 386 register file, with `i16`
@@ -296,19 +305,23 @@ impl TargetLowering {
         features: Features,
         ptr: MVT,
     ) -> TargetLowering {
-        Self::x86(TargetLoweringInfo::x86_16(), features, ptr)
+        Self::x86(TargetLoweringInfo::x86_16(), features, ptr, false)
     }
 
     fn x86(
         types: TargetLoweringInfo,
         features: Features,
         ptr: MVT,
+        is64: bool,
     ) -> TargetLowering {
         use Action::*;
         use ISD::*;
         let mut t = TargetLowering::empty(types);
         t.init_actions();
         let ints = [MVT::I8, MVT::I16, MVT::I32];
+        // `if (VT == MVT::i64 && !Subtarget.is64Bit()) continue;`
+        let native: &[MVT] = if is64 { &[MVT::I8, MVT::I16, MVT::I32, MVT::I64] } else { &ints };
+        let words: &[MVT] = if is64 { &[MVT::I32, MVT::I64] } else { &[MVT::I32] };
         let ints64 = [MVT::I8, MVT::I16, MVT::I32, MVT::I64];
 
         // L186..L203
@@ -332,14 +345,14 @@ impl TargetLowering {
         }
         // L205..L240
         if features.cmov {
-            t.set_ops(&[Abs], &[MVT::I16, MVT::I32], Custom);
+            t.set_ops(&[Abs], &native[1..], Custom);
         }
-        t.set_ops(&[SSubSat], &ints, Custom);
+        t.set_ops(&[SSubSat], native, Custom);
         let shld = if features.shld_slow { Custom } else { Legal };
         t.set_ops(&[FShl, FShr], &[MVT::I8, MVT::I16], Custom);
-        t.set_ops(&[FShl, FShr], &[MVT::I32], shld);
+        t.set_ops(&[FShl, FShr], words, shld);
         // L508: the double-width shifts (i64 at 32 bits)
-        t.set_ops(&[ShlParts, SraParts, SrlParts], &[MVT::I32], Custom);
+        t.set_ops(&[ShlParts, SraParts, SrlParts], words, Custom);
         // L241..L300: the x87 conversions
         t.set_ops(&[UIntToFp], &[MVT::I8, MVT::I16], Promote);
         t.set_ops(&[UIntToFp], &[MVT::I32, MVT::I64], Custom);
@@ -353,15 +366,24 @@ impl TargetLowering {
         t.set_ops(&[LRint], &[MVT::F32, MVT::F64, MVT::F80], Custom);
         // L316: no SSE2
         t.set_ops(&[BitCast], &[MVT::F32, MVT::I32], Expand);
+        if is64 {
+            t.set_ops(&[BitCast], &[MVT::F64, MVT::I64], Expand);
+        }
         // L337..L370
         t.set_ops(&[MulHS, MulHU, SDiv, UDiv, SRem, URem], &ints64, Expand);
         // The pin divides an i8 or i16 by a constant with a widened multiply
         // (BuildSDIV finds neither MULHS nor SMUL_LOHI there); only i32
         // has the two-result multiply (`MUL32r`).
         t.set_ops(&[SMulLoHi, UMulLoHi], &[MVT::I8, MVT::I16], Expand);
+        // fixed-point multiply is expanded by `expandFixedPointMul` (the base
+        // default)
+        t.set_ops(&[SMulFix], &[MVT::I8, MVT::I16, MVT::I32], Expand);
         t.set_operation_action(BrJT, MVT::Other, Expand);
         t.set_operation_action(BrCond, MVT::Other, Custom);
         t.set_ops(&[BrCC, SelectCC], &[MVT::F32, MVT::F64, MVT::F80, MVT::I8, MVT::I16, MVT::I32, MVT::I64], Expand);
+        if is64 {
+            t.set_operation_action(SignExtendInReg, MVT::I32, Legal);
+        }
         t.set_ops(&[SignExtendInReg], &[MVT::I16, MVT::I8], Legal);
         t.set_operation_action(SignExtendInReg, MVT::I1, Expand);
         t.set_ops(&[FRem], &FLOATS, LibCall);
@@ -371,16 +393,16 @@ impl TargetLowering {
             t.set_operation_promoted_to_type(op, MVT::I16, MVT::I32);
         }
         if !features.bmi {
-            t.set_operation_action(CtTz, MVT::I32, Custom);
-            t.set_operation_action(CtTzZeroPoison, MVT::I32, Legal);
+            t.set_ops(&[CtTz], words, Custom);
+            t.set_ops(&[CtTzZeroPoison], words, Legal);
         }
         if features.lzcnt {
             t.set_operation_promoted_to_type(CtLz, MVT::I8, MVT::I32);
             t.set_operation_promoted_to_type(CtLzZeroPoison, MVT::I8, MVT::I32);
         } else {
-            t.set_ops(&[CtLz, CtLzZeroPoison], &ints, Custom);
+            t.set_ops(&[CtLz, CtLzZeroPoison], native, Custom);
         }
-        t.set_ops(&[Parity], &ints, Custom);
+        t.set_ops(&[Parity], native, Custom);
         if features.popcnt {
             t.set_operation_promoted_to_type(CtPop, MVT::I8, MVT::I32);
             t.set_operation_promoted_to_type(CtPop, MVT::I16, MVT::I32);
@@ -392,8 +414,11 @@ impl TargetLowering {
             t.set_operation_action(BSwap, MVT::I16, Expand);
         }
         t.set_ops(&[Select, SetCC], &FLOATS, Custom);
-        t.set_ops(&[Select, SetCC], &ints, Custom);
+        t.set_ops(&[Select, SetCC], native, Custom);
         t.set_ops(&[ConstantPool, GlobalAddress, ExternalSymbol, JumpTable], &[ptr], Custom);
+        if is64 {
+            t.set_ops(&[ConstantPool, GlobalAddress, ExternalSymbol, JumpTable], words, Custom);
+        }
         t.set_operation_action(Trap, MVT::Other, Legal);
         t.set_operation_action(DynamicStackAlloc, ptr, Custom);
         // L559..L566: 32-bit va_list is a pointer
@@ -418,7 +443,7 @@ impl TargetLowering {
             }
         }
         // L2757..L2776
-        t.set_ops(&[SAddO, UAddO, SSubO, USubO, SMulO, UMulO, UAddOCarry, USubOCarry], &ints, Custom);
+        t.set_ops(&[SAddO, UAddO, SSubO, USubO, SMulO, UMulO, UAddOCarry, USubOCarry], native, Custom);
         t
     }
 }
