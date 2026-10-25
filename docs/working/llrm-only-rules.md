@@ -16,7 +16,7 @@ d_faces -O2, parity 0aea1e46a, 936.9 M Ir. M is own Ir unless marked incl. Rules
 | PlainAccesses carry | DELETE with Annotated | w14 | -0.8 |
 | ExposedFrames (3.3) | REPLACE by `PointerMayBeCaptured` per alloca, cached in BasicAA; 2.1 leaves with lazy accesses, ~1.2 at S4 | w14 S4, w3 | -3.3 |
 | Counted (provenance side, 3.8) | REPLACE by SCEV trip counts as clients move | w5 | -3.8 |
-| Shape (6.0) | REPLACE by Dominators and Loops; w3 owns the MemorySSA ask (`shape.dominance` for `Mssa::build`), other askers uncounted | w3 for its ask; rest unowned | unknown |
+| Shape (6.0 incl: 109 computes, 425 asks, 25 passes) | Split: `Dominators` 2.8 and `Loops` 1.3 are the pin's analyses at the pin's run count; Shape's own part is `natural` 1.9 (a `Forest::of_graph` walk per compute, 17.8 K Ir each) and the `Dominance` wrapper. REPLACE the readers by `Dominators`/`Loops` directly; w3 owns the MemorySSA ask (`shape.dominance` for `Mssa::build`) | w3 for its ask; the other readers (LoopSimplify 1.3, Fixed 1.1, LCSSA 1.1, GVN 0.46, Ports 0.43, Counted 0.4, LICM 0.38) unowned | up to -1.9 (`natural`), -4.1 stays |
 | `Accesses::managed` (EarlyCSE 5.8, DSE 6.3) | DEVIATE until the provenance readers move (w14 S3); EarlyCSE on unannotated accesses was -2.63 but QCport +29 B, rejected | w14, w5 | 0 |
 
 Query side (BasicAA, TBAA, CaptureTracking) stays: BasicAA `alias_check` is 20 M against the pin's 33. Gate for the DELETE rows: w14's never-a-NoAlias-gained differential (S0.5).
@@ -39,7 +39,8 @@ Query side (BasicAA, TBAA, CaptureTracking) stays: BasicAA `alias_check` is 20 M
 | Decide at the SimplifyCFG slots (15.8 same-IR vs the pin's 6.1; these are SimplifyCfg instances) | DEVIATE: no single lever (top step 10% of a slot); a loop-exits change is ~1.5 | w4 | -1.5 |
 | ConstraintElimination (6.4 vs the pin's 3.9 same-IR) | DEVIATE: it is the pin pass, cost is diffuse; the sort comparator asks `fact_before` twice | w5 | -0.3, rest unknown |
 | Dead (5.7): `dead@677/768/801/837` | DELETE: 0 changes in 1561 runs each over the 568 vsgcc cells (`LLRM_DEBUG=runs`); `dead@1242` finds work (48 of 1480) and stays | w4, #4767 | -5.06 measured (objects identical) |
-| Interprocedural + Stamp (5.2 + 4.1), Counted/Followers (5.2) | unknown, needs a same-IR profile each; deleting Decide@809 takes ~27% of Counted and ~10% of Followers | none yet | ? |
+| Stamp 4.1 and Interprocedural 5.2 (`stamped_all` 6.8 incl, so the stamp is derived about twice: once in the slot, once inside the stages) | REPLACE `stamped` by FunctionAttrs (pin: PostOrder/ReversePostOrderFunctionAttrs, w14 S6); the stages by IPSCCP (`ipa<N>.`), ArgumentPromotion (`promote.`), and IPSCCP + FuncSpec (`ipa-cp.`). Module steps are not in the per-step `idle` table, so no never-fires count yet | w14 for the stamp; stages unowned | unknown until FunctionAttrs lands; one stamp instead of two is the first check |
+| Counted/Followers (5.2) | REPLACE by SCEV trip counts as clients move; deleting Decide@809 takes ~27% of Counted and ~10% of Followers | w5 (offered a same-IR profile) | up to -5.2, unknown |
 | MachineScheduler 10.7 (incl `graph` 2.4) | REPLACE by the pin's GenericScheduler pre-RA bottom-up (machine-scheduler-plan, 4 pieces) | w12 (handed over by w2) | unknown until piece 2 |
 | PressureSink 4.6 | DELETE with scheduler piece 4 (11-06): the pin has no sink pass, the scheduler places loads. Gate: rows nothing worse | w12 | -4.6 |
 | LiveRangeShrink 3.1 | KEEP, not llrm-only: the pin's pass (addPreRegAlloc, row 47), cost is the translation | w2 | 0 |
