@@ -39,7 +39,7 @@
 //! `visitMUL`
 //! ([L4908](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4908)).
 
-use std::collections::HashSet;
+use llrm_mir::hash::HashSet;
 
 use super::actions::{Action, LoadExt, TargetLowering};
 use super::dag::{MemInfo, NodeData, Rauw, SDNodeFlags, SDValue, SelectionDAG};
@@ -122,15 +122,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         hooks: &'a mut H,
         level: CombineLevel,
     ) -> DagCombiner<'a, H> {
-        DagCombiner {
-            dag,
-            hooks,
-            level,
-            worklist: Vec::new(),
-            queued: HashSet::new(),
-            combined: HashSet::new(),
-            tli: None,
-        }
+        // Both sets grow to about the node count: size them once.
+        let nodes = dag.nodes().len();
+        let mut queued = HashSet::default();
+        let mut combined = HashSet::default();
+        queued.reserve(nodes);
+        combined.reserve(nodes);
+        DagCombiner { dag, hooks, level, worklist: Vec::new(), queued, combined, tli: None }
     }
 
     /// The action table the folds query (`TLI`).
@@ -339,6 +337,16 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(self.dag.get_setcc(vt, n1, n0, cond.swapped_operands()));
         }
         let c1 = c1?;
+        // `ExpandSetCCOperands`: a pair is zero when `lo | hi` is, and a far
+        // pointer's null test was `shl; movzx; add; je` of the joined dword
+        // where the old selector had `or ax, dx`.
+        if matches!(cond, CondCode::SetEq | CondCode::SetNe) && c1 == 0 && self.dag.opcode(n0) == ISD::BuildPair {
+            let (low, high) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            let half = self.dag.value_type(low);
+            let either = self.dag.get_node(ISD::Or, half, &[low, high]);
+            let zero = self.dag.get_constant(0, half);
+            return Some(self.dag.get_setcc(vt, either, zero, cond));
+        }
         // `(x + c0) == c1` is `x == c1 - c0`, `(x ^ c0) == c1` is `x == c0 ^
         // c1` and `(c0 - x) == c1` is `x == c0 - c1`, for a single-use
         // operand.
@@ -554,11 +562,17 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let (lhs, rhs) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
-        if !self.dag.value_type(lhs).is_integer() {
+        let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(n0, 2)).data else { return None };
+        let not_cc = if self.dag.value_type(lhs).is_integer() { cc.inverse_integer() } else { cc.inverse_float() };
+        // `isCondCodeLegal`: x86 expands `oeq` and `une` (two flags), so once
+        // operations are legal the fold must not make one.
+        if self.level >= CombineLevel::AfterLegalizeVectorOps
+            && !self.dag.value_type(lhs).is_integer()
+            && matches!(not_cc, CondCode::SetOEq | CondCode::SetUNe)
+        {
             return None;
         }
-        let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(n0, 2)).data else { return None };
-        Some(self.dag.get_setcc(vt, lhs, rhs, cc.inverse_integer()))
+        Some(self.dag.get_setcc(vt, lhs, rhs, not_cc))
     }
 
     /// The users of `old` read `new`, and are looked at again.
@@ -1394,6 +1408,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> Option<SDValue> {
         let (chain, value, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
         let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+        if let Some(split) = self.split_pair_store(node) {
+            return Some(split);
+        }
         if self.dag.opcode(value) != ISD::ConstantFP || info.volatile || info.mem_vt != self.dag.value_type(value) {
             return None;
         }
@@ -1423,6 +1440,40 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             _ => None,
         }
+    }
+
+    /// `splitMergedValStore`, for the `BUILD_PAIR` the builder makes before
+    /// legalization expands it into the `or`/`shl` the pin matches: a store of
+    /// a pair is a store of each half, when the target says that is cheaper
+    /// than merging the halves into one register.
+    fn split_pair_store(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (chain, value, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+        let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+        if self.dag.opcode(value) != ISD::BuildPair
+            || info.volatile
+            || info.mem_vt != self.dag.value_type(value)
+            || self.dag.use_count(value.node) != 1
+        {
+            return None;
+        }
+        let (lo, hi) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+        let (lo_vt, hi_vt) = (self.dag.value_type(lo), self.dag.value_type(hi));
+        if !self.tli?.is_multi_stores_cheaper_than_bits_merge(lo_vt, hi_vt) || lo_vt != hi_vt || !lo_vt.is_integer() {
+            return None;
+        }
+        let half = lo_vt.size_in_bits() / 8;
+        let part = |mem_vt, align, base| MemInfo { mem_vt, align, base, ..info };
+        let first = self.dag.get_store(chain, lo, ptr, part(lo_vt, info.align, info.base));
+        let next = if self.dag.value_type(ptr) == MVT::Far.into() {
+            self.dag.get_object_ptr_offset(ptr, i64::from(half))
+        } else {
+            let offset = self.dag.get_constant(u128::from(half), self.dag.value_type(ptr));
+            self.dag.get_mem_base_plus_offset(ptr, offset, SDNodeFlags::default())
+        };
+        Some(self.dag.get_store(first, hi, next, part(hi_vt, info.align.min(half), super::dag::MemBase::Unknown)))
     }
 
     /// `visitMUL`, up to the multiply-by-power-of-two folds.

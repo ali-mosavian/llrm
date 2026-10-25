@@ -271,8 +271,11 @@ impl llrm_target::Target for M16 {
     }
 
     fn object(&self) -> llrm_target::object::ObjectFormat {
-        llrm_target::object::ObjectFormat::parse(include_str!("machines/object.toml"))
-            .expect("real mode's object.toml parses")
+        static OBJECT: std::sync::LazyLock<llrm_target::object::ObjectFormat> = std::sync::LazyLock::new(|| {
+            llrm_target::object::ObjectFormat::parse(include_str!("machines/object.toml"))
+                .expect("real mode's object.toml parses")
+        });
+        OBJECT.clone()
     }
 
     fn return_address_bytes(
@@ -326,6 +329,23 @@ impl llrm_target::Target for M16 {
 
 #[cfg(test)]
 mod tests {
+    /// `object()` and the runtime tables are parsed once and kept; each must
+    /// equal a fresh parse of its toml (35 parses of object.toml and 4 of the
+    /// runtime table cost 3.3 M Ir of every compile).
+    #[test]
+    fn test_cached_tomls_equal_a_fresh_parse() {
+        use llrm_target::Target;
+        let fresh = llrm_target::object::ObjectFormat::parse(include_str!("machines/object.toml")).unwrap();
+        assert_eq!(M16.object(), fresh);
+        assert_eq!(M16.object(), fresh, "a second ask");
+        for language in ["c", "nib"] {
+            let Some(description) = M16.runtime(language) else { continue };
+            let fresh: toml::Table = description.text.parse().unwrap();
+            assert_eq!(*description.table().unwrap(), fresh, "{language}");
+            assert!(std::sync::Arc::ptr_eq(&description.table().unwrap(), &description.table().unwrap()));
+        }
+    }
+
     /// E2 put 16-byte padding between every two functions of a 16-bit object,
     /// +2% of QCport's code; m16 asks for none (DEVIATE E2-1).
     /// Greedy allocates the x87 values into the RFP registers FP0..FP6, LLVM's

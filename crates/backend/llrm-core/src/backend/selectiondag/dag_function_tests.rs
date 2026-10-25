@@ -110,8 +110,11 @@ pub(super) fn verdicts(flags: bool) -> Vec<Result<super::builder::RuntimeAnswer,
 
 pub(super) fn select_with_contracts(text: &str) -> Result<crate::backend::isel::Selected, String> {
     let module = llrm_mir::parse::module(text).expect("parses");
-    let contracts =
-        super::dag_function::RuntimeContracts { abi: &Stub { flags: false }, segments: &crate::backend::target::BASIC };
+    let contracts = super::dag_function::RuntimeContracts {
+        abi: &Stub { flags: false },
+        segments: &crate::backend::target::BASIC,
+        runtime: true,
+    };
     let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
     super::dag_function::selected_in_pool(
         &module,
@@ -532,4 +535,36 @@ b:
             );
         }
     }
+}
+
+/// A function that calls `setjmp` is marked on its body, as the old selector
+/// marks it: after a second return from `setjmp` a frame slot another value
+/// shared holds that value, so no slot may be shared (`slots_colored`, the
+/// spill colouring, stands down for `LirBody::returns_twice`). The DAG path
+/// never set the mark.
+#[test]
+fn a_function_calling_setjmp_is_marked_returns_twice() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare i32 @setjmp(ptr) returns_twice
+define i32 @f() {
+entry:
+  %buf = alloca [16 x i8]
+  %r = call i32 @setjmp(ptr %buf)
+  ret i32 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .expect("selects");
+    assert!(done.body.returns_twice);
+    let plain = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f() {
+entry:
+  ret i32 1
+}
+";
+    let module = llrm_mir::parse::module(plain).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .expect("selects");
+    assert!(!done.body.returns_twice);
 }

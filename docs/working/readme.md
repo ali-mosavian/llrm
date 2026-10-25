@@ -15,6 +15,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [loop-bucket-callees](loop-bucket-callees.md) | Loop and scalar buckets: top 10 callees on d_faces -O2 with owner and date |
 | [scev-predicates-plan](scev-predicates-plan.md) | SCEV predicates (S3 rank 5, DEVIATE 1): plan (2026-10-23) |
 | [stable-loads](stable-loads.md) | D-I: stable-load rematerialization off by default; AM-DI rows, the argument rule, the exit |
+| [regclass-on-body](regclass-on-body.md) | register classes carried on the body, as the pin's MRI: the rescans, the creators, the steps |
 | [x86-64-dag-plan](x86-64-dag-plan.md) | The DAG path at m64, LEA first: D64-0..4 and the D64-1 design (2026-10-24) |
 | [qb-runtime-contract-plan](qb-runtime-contract-plan.md) | The QB runtime's contract in the DAG path: five dated PRs (2026-10-24) |
 | [testing](testing.md) | Running the tests |
@@ -32,8 +33,11 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [fold-split](fold-split.md) | The plan splitting the fold work between valuetracking-port and fold-poc |
 | [value-tracking-port](value-tracking-port.md) | Evidence for the ValueTracking, KnownBits and ConstantRange port: agreement with LLVM, deviations, owed work |
 | [undef-table](undef-table.md) | MIR `undef`: each pass and pin function that treats it apart from poison, and its state |
+| [icmp-canonical-cells](icmp-canonical-cells.md) | `canonicalizeICmpPredicate`: the cells that grew when compares took the pin's canonical form, with causes |
 | [layout-fidelity](layout-fidelity.md) | Where the pin lays out the blocks its helpers create, and which of ours match; the cells that grew when ours moved |
 | [qb-float-rows](qb-float-rows.md) | The 41 QB float rows above main after BC's per-assignment rounding (#3352): the numbers, owner and exit |
+| [qb-lalr-handoff](qb-lalr-handoff.md) | The QB front takeover: what landed and what is left |
+| [qb-unsupported-lowering](qb-unsupported-lowering.md) | BC output for the lowerings the QB front refused: PALETTE USING, ON ERROR RESUME NEXT, REDIM PRESERVE |
 | [qcport-os-rows](qcport-os-rows.md) | The QCport modules bigger at -Os after #3369 and after its re-land: numbers, owner and exit |
 | [phi-pre-ra-translation](phi-pre-ra-translation.md) | PHIElimination, TwoAddressInstruction and the pass order before greedy, against the pin: same, differs, missing |
 | [livevariables-plan](livevariables-plan.md) | The pin's LiveVariables translated for TwoAddress and PHIElimination: functions, callers, dates (2026-10-24) |
