@@ -357,3 +357,27 @@ fn a_helper_asked_for_twice_is_assembled_once() {
     assert_eq!(first, again);
     assert_eq!(crate::asm::ASSEMBLED.with(|count| count.get()) - before, 1);
 }
+
+/// The selector assembles a routine only for a call whose name starts with
+/// the routine kind's prefix: a routine named otherwise would be called and
+/// never laid down.
+#[test]
+fn every_routine_name_starts_with_its_kinds_prefix() {
+    use llrm_target::routines::{DIVIDE_PREFIX, HUGE_PREFIX};
+    for signed in [true, false] {
+        for wide in [true, false] {
+            for bits in [16, 32] {
+                let name = divide(signed, wide, bits).expect("a divide").name;
+                assert!(name.starts_with(DIVIDE_PREFIX), "{name}");
+            }
+        }
+    }
+    for cell in [1, 2, 4] {
+        let name = huge_fill(cell).expect("a fill").name;
+        assert!(name.starts_with(HUGE_PREFIX), "{name}");
+    }
+    for down in [false, true] {
+        let name = huge_copy(down).expect("a copy").name;
+        assert!(name.starts_with(HUGE_PREFIX), "{name}");
+    }
+}

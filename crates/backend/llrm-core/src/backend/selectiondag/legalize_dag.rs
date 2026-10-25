@@ -132,7 +132,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             return false;
         }
         let results = self.dag.node(SDValue { node: n, res: 0 }).values.len() as u8;
-        (0..results).all(|res| self.dag.users(SDValue { node: n, res }).next().is_none())
+        !(0..results).any(|res| self.dag.has_users(SDValue { node: n, res }))
     }
 
     /// The type the action table is asked about for `value`'s node (the
