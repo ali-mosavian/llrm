@@ -52,3 +52,36 @@ def test_the_limit_counts_kept_prs_only(tmp_path):
     sh(repo, "checkout", "-q", "main")
     kept, waits = ps.assemble(list(heads), heads, base="main", cwd=repo, limit=2)
     assert kept == ["1", "2"] and not waits
+
+
+def test_a_pr_whose_build_fails_alone_is_dropped_before_assembly_and_checked_once(tmp_path):
+    """The 15:34 batch spent 29.6 of 48 minutes rerunning PRs that failed alone: `alone` drops them with the reason, and a head already judged is not built again."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    good, bad = branch(repo, "good", "good.txt", "ok\n"), branch(repo, "bad", "bad.txt", "broken\n")
+    built = []
+
+    def refusals(head: str, base: str) -> list[str]:
+        built.append(head)
+        return ["does not build as a whole: error[E0425]"] if head == bad else []
+
+    heads = {"1": good, "2": bad}
+    kept, dropped = ps.alone(["1", "2"], heads, refusals=refusals, cache=tmp_path / "cache")
+    assert kept == ["1"] and "E0425" in dropped["2"] and "2" not in kept
+    ps.alone(["1", "2"], heads, refusals=refusals, cache=tmp_path / "cache")
+    assert built == [good, bad], built
+
+
+def test_a_pr_that_merges_but_does_not_build_alone_is_refused_with_the_compiler_text(tmp_path):
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    head = branch(repo, "bad", "b.rs", "fn(\n")
+    sh(repo, "checkout", "-q", "main")
+    why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "error: expected identifier", differs=lambda *_: set(), scanners=lambda _: set())
+    assert why and "does not build as a whole" in why[0] and "expected identifier" in why[0], why
