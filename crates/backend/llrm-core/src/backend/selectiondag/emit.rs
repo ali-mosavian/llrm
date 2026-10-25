@@ -2881,7 +2881,7 @@ impl Emitter<'_, '_> {
             // as wide as the read, which may be inside the entry
             return Ok(Mem { base, index, scale, width: cell_width, ..pooled });
         }
-        let disp = self.constant(group[3])?;
+        let disp = self.displacement(group[3])?;
         if self.address_register(group[4], Role::Segment)?.is_some() {
             return Err(EmitError::Unsupported("a segment override".to_owned()));
         }
@@ -3023,6 +3023,14 @@ impl Emitter<'_, '_> {
             }
             other => Err(EmitError::Unsupported(format!("address component {other:?}"))),
         }
+    }
+
+    /// An address's displacement: the constant's low 32 bits, signed.
+    fn displacement(
+        &self,
+        value: SDValue,
+    ) -> Result<i64, EmitError> {
+        self.constant(value).map(|bits| i64::from(bits as i32))
     }
 
     fn constant(
