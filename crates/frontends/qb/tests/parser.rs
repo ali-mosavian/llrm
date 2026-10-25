@@ -2326,4 +2326,38 @@ fn a_literal_assigned_to_a_fixed_string_goes_to_basic_assn_as_a_descriptor_under
     };
     assert!(!passes_the_bytes(Dialect::VbDos, "vbdos"));
     assert!(passes_the_bytes(Dialect::QuickBasic45, "qb45"));
+fn palette_using_passes_the_array_element_and_its_descriptor_to_b_palu() {
+    // PALETTE USING was refused. PDS 7.1 BC calls B$PALU with a far pointer to
+    // the named entry and the descriptor, as GET and PUT pass their array.
+    let module = parse("DEFINT A-Z\r\nDIM p(15) AS LONG\r\nSCREEN 13\r\nPALETTE USING p(0)\r\n", Dialect::Pds71).unwrap();
+    let hir = compile(&module, "palette_using", Dialect::Pds71, "pds71").unwrap();
+    assert_eq!(hir.matches("\"callee\":\"B$PALU\"").count(), 1, "{hir}");
+}
+
+#[test]
+fn on_error_resume_next_registers_a_handler_that_resumes_at_the_next_statement() {
+    // ON ERROR RESUME NEXT was refused. PDS 7.1 BC registers 0FFFEh for the handler; here the
+    // handler is a block of its own that only does RESUME NEXT.
+    let module = parse(
+        "DEFINT A-Z\r\nON ERROR RESUME NEXT\r\nOPEN \"NOFILE.TXT\" FOR INPUT AS #1\r\nPRINT ERR\r\n",
+        Dialect::Pds71,
+    )
+    .unwrap();
+    let hir = compile(&module, "resume_next", Dialect::Pds71, "pds71").unwrap();
+    assert_eq!(hir.matches("\"callee\":\"B$RESN\"").count(), 1, "{hir}");
+    assert!(hir.contains("$QB$OERG:"), "{hir}");
+}
+
+#[test]
+fn redim_preserve_calls_b_rdmp_with_redims_operands() {
+    // REDIM PRESERVE was refused. PDS 7.1 BC calls B$RDMP with the operands B$RDIM takes.
+    let source = |statement: &str| format!("DEFINT A-Z\r\nREDIM a(5)\r\na(1) = 7\r\n{statement} a(10)\r\nPRINT a(1)\r\n");
+    let compiled = |statement: &str| {
+        let module = parse(&source(statement), Dialect::Pds71).unwrap();
+        compile(&module, "redim", Dialect::Pds71, "pds71").unwrap()
+    };
+    let plain = compiled("REDIM");
+    let kept = compiled("REDIM PRESERVE");
+    assert_eq!(kept.matches("\"callee\":\"B$RDMP\"").count(), 1, "{kept}");
+    assert_eq!(plain.matches("\"callee\":\"B$RDMP\"").count(), 0, "{plain}");
 }
