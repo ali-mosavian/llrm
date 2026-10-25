@@ -538,7 +538,21 @@ fn fixed_point_arithmetic_is_the_fixed_point_intrinsics() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    let body = "  %2 = call i32 @llvm.smul.fix.i32(i32 %0, i32 %1, i32 16)\n  %3 = call i32 @llvm.sdiv.fix.i32(i32 %2, i32 %1, i32 16)\n  ret i32 %3\n";
+    // `llvm.sdiv.fix` rounds toward negative infinity and a fixed-point `/`
+    // truncates toward zero: a negative inexact quotient (`q * b != a << 16`)
+    // gets one added back.
+    let body = "  %2 = call i32 @llvm.smul.fix.i32(i32 %0, i32 %1, i32 16)
+  %3 = call i32 @llvm.sdiv.fix.i32(i32 %2, i32 %1, i32 16)
+  %4 = xor i32 %2, %1
+  %5 = icmp slt i32 %4, 0
+  %6 = shl i32 %2, 16
+  %7 = mul i32 %3, %1
+  %8 = icmp ne i32 %6, %7
+  %9 = and i1 %5, %8
+  %10 = zext i1 %9 to i32
+  %11 = add i32 %3, %10
+  ret i32 %11
+";
     assert!(text.contains(body), "{text}");
 }
 
