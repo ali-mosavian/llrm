@@ -643,3 +643,13 @@ fn test_a_missing_entry_whose_pass_has_a_source_file_fails() {
     let why = parity::check_missing_has_no_file(&registry, &stems).unwrap_err();
     assert!(why.contains("constraint-elimination"), "{why}");
 }
+
+/// `decide@809` ran after JumpThreading and CVP: 19.1 M Ir on d_faces -O2 for
+/// 3 or 4 of 65 objects, +5 to +24 B. The slot is gone.
+#[test]
+fn test_the_simplify_list_has_no_decide_after_jump_threading() {
+    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let built = names(&on, Phase::Simplify);
+    assert!(!built.contains(&"decide@809"), "decide@809 runs again: {built:?}");
+    assert!(built.contains(&"jumpthreading@809") && built.contains(&"cvp@810"));
+}

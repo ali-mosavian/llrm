@@ -671,7 +671,6 @@ pub(crate) fn llvm_order(
     let size = applied.options.prefers_size();
     let slot =
         |name: &'static str, inner: Box<dyn FunctionPass>| -> Box<dyn FunctionPass> { Box::new(Slot { name, inner }) };
-    let decide = |name| slot(name, Box::new(decide::Decide { constants: false }));
     let simplify_cfg = |name| slot(name, Box::new(simplifycfg::SimplifyCfg::default()));
     let simplify_cfg_with = |name, options| slot(name, Box::new(simplifycfg::SimplifyCfg { options }));
     let combine = |name| slot(name, Box::new(crate::combine_pass::Combine { enabled: applied.options.combine }));
@@ -895,7 +894,6 @@ pub(crate) fn llvm_order(
                     ),
                 ),
                 slot("jumpthreading@809", Box::new(crate::jumpthreading::JumpThreading::from_env())),
-                decide("decide@809"),
                 slot("cvp@810", Box::new(crate::cvp::Cvp)),
                 slot("adce@815", Box::new(adce::Adce)),
                 slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt)),

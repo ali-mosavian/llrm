@@ -220,7 +220,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         Translated,
         "jumpthreading.rs + jumpthreading/loadpre.rs; deviations J2 (guards: no deopt bundles in MIR), J3 (!prof/BFI/BPI), J15 (isSafeToSpeculativelyExecute reuse); see docs/architecture/jumpthreading-translation.md",
     ),
-    entry("decide@809", Simplify, "jump-threading, correlated-propagation", Old, "simplifycfg-port"),
     entry("cvp@810", Simplify, "correlated-propagation", Translated, ""),
     entry("adce@815", Simplify, "adce", Translated, ""),
     entry("memcpyopt@818", Simplify, "memcpyopt", Translated, ""),
