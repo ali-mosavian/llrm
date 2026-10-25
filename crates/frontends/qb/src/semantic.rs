@@ -9007,20 +9007,38 @@ impl Compiler {
         type_id: u32,
     ) -> Result<u32, SemanticError> {
         let extent = self.width(type_id);
-        // A FOR's limit and step are never passed by address. In the module
-        // block they would share an object with the by-reference argument
-        // temporaries, whose address a call receives, and every call would
-        // then be taken to write them.
-        let storage = if self.implicit_storage == "module" && prefix.starts_with("$for") {
-            "static"
-        } else {
-            self.implicit_storage
-        };
+        // A by-reference argument temporary is passed by address. In the
+        // module block it would make the whole block escape, and every call
+        // would then be taken to write the loop limits and the rest of it.
+        let storage =
+            if self.implicit_storage == "module" && prefix == "$arg" { "static" } else { self.implicit_storage };
         if storage != "static" && self.beyond_segment(self.data_offset + extent) {
             return self
                 .fail(format!("a temporary value does not fit: the stack frame ({} KiB) is full", self.segment_kib()));
         }
-        let (offset, symbol) = if storage == "static" {
+        let (offset, symbol) = if storage == "static" && self.implicit_storage == "module" {
+            // One object for them all, so neighbouring constants still store
+            // as one wider move.
+            if let Some(block) = self.data.iter_mut().find(|object| object.name.starts_with("$arguments")) {
+                let offset = block.bytes.len();
+                block.bytes.resize(offset + extent, 0);
+                (offset as isize, block.id)
+            } else {
+                let symbol = self.next_data;
+                self.next_data += 1;
+                self.data.push(DataObject {
+                    align: 1,
+                    id: symbol,
+                    name: format!("$arguments${}", self.next_place),
+                    bytes: vec![0; extent],
+                    readonly: false,
+                    relocations: Vec::new(),
+                    linkage: "internal",
+                    address: "near",
+                });
+                (0, symbol)
+            }
+        } else if storage == "static" {
             let symbol = self.next_data;
             self.next_data += 1;
             self.data.push(DataObject {
