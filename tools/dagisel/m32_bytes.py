@@ -5,11 +5,8 @@
 
 As m16_bytes.py, for `-m32 -march=i486 -mabi=sysv`: each module is compiled with `--isel=old` and `--isel=dag` (bytes of LEDATA, as
 tools/rows/qcport.py counts them); the last IR the dag dump writes goes to the pin's `llc -O2 -filetype=obj` for the i486 target
-(`optsize` on every function at -Os), and `size -A` gives its .text. No frame-pointer flag: the pin frees ebp at m32.
+(`optsize` on every function at -Os), and `size -A` gives its .text + .data + .rodata, the same quantity as the OMF count (code and initialised data). No frame-pointer flag: the pin frees ebp at m32.
 Sources and headers are $QCPORT_SRC and $QCPORT_INC (the stubbed tree, ~/scratch/qcstub/{src,inc}).
-
-The OMF count includes initialised data, the pin's figure is .text only: read the total as a trend, and the per-module rows for
-modules without data.
 """
 from __future__ import annotations
 
@@ -34,6 +31,16 @@ MODS = ("host", "render", "model", "game", "sound", "ui")
 FLAGS = ["-m32", "-march=i486", "-mabi=sysv"]
 
 
+def pin_loaded(size_output: str) -> int:
+    """Code and initialised data, as the OMF count has them: .text, .data and .rodata sections (not bss, unwind or notes)."""
+    total = 0
+    for line in size_output.splitlines():
+        name = line.split()[0] if line.split() else ""
+        if name.startswith((".text", ".data", ".rodata")):
+            total += int(line.split()[1])
+    return total
+
+
 def one(llrm_c: str, source: Path, level: str, includes: list[str]) -> tuple[str, int | None, int | None, int | None, str]:
     """(module, pin, old, dag, why-not)."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -56,7 +63,7 @@ def one(llrm_c: str, source: Path, level: str, includes: list[str]) -> tuple[str
         done = pin.llc(["-O2", "-filetype=obj", "-o", str(pinned)], text, pin.target("m32", optsize=level == "-Os"))
         if done.returncode != 0:
             return source.stem, None, sizes["old"], sizes["dag"], "pin llc failed: " + (done.stderr.strip().splitlines() or ["?"])[0][:60]
-        text_size = pin_text(subprocess.run(["size", "-A", str(pinned)], capture_output=True, text=True).stdout)
+        text_size = pin_loaded(subprocess.run(["size", "-A", str(pinned)], capture_output=True, text=True).stdout)
         return source.stem, text_size, sizes["old"], sizes["dag"], ""
 
 
