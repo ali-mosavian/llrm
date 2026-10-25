@@ -114,9 +114,9 @@ fn no_header_collides_with_sdl2_case_insensitively() {
 }
 
 /// The window used to stretch to any size with SDL's logical size, so a resized window showed uneven pixels. `sdl_fit`
-/// gives the largest whole-number scale at 4:3, centred.
+/// gives the largest 4:3 picture that fits, centred.
 #[test]
-fn the_picture_scales_by_whole_numbers_at_four_to_three() {
+fn the_picture_fills_the_window_at_four_to_three() {
     let qb = root().join("runtime/qb");
     let out = std::env::temp_dir().join(format!("scale_unit_{}", std::process::id()));
     let built = Command::new("cc")

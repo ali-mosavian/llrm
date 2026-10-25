@@ -242,6 +242,6 @@ presented once per frame during a throw (80 frames, a rotating 9x4 px crescent).
 
 ## Window scaling
 
-The window is resizable. `dev/sdl/scale.c` (`sdl_fit`) places the 4:3 picture at the largest whole-number scale that fits
-the renderer's output size, centred; a window below 1x shows the corner. `present.c` redraws when the output size changes
-(it replaced `SDL_RenderSetLogicalSize`, which stretched to any size). Unit test: `the_picture_scales_by_whole_numbers_at_four_to_three`.
+The window is resizable. `dev/sdl/scale.c` (`sdl_fit`) places the picture at the largest size that fits the renderer's
+output size at 4:3, centred, so the scale is fractional and the other axis gets bars. `present.c` redraws when the output
+size changes (it replaced `SDL_RenderSetLogicalSize`). Unit test: `the_picture_fills_the_window_at_four_to_three`.
