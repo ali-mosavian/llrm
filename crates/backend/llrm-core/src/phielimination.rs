@@ -69,7 +69,7 @@ use crate::support::hash::{HashMap, IndexMap};
 thread_local! {
     /// The liveness rows `edges_to_split` solved, for the test that fixes it at
     /// none where no critical edge asks.
-    static ROWS_SOLVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static ROWS_SOLVED: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 
 /// `SplitPHIEdges`: the critical edges worth a block of their own, as
@@ -84,11 +84,21 @@ fn edges_to_split(
     // already has): most bodies have none.
     let rows = std::cell::OnceCell::new();
     let forest = crate::analysis::loops::forest_of(&body.blocks, Some(body.entry));
+    // Only the values a critical edge's phi hands over are asked: rows of
+    // those.
+    let asked: std::collections::HashSet<u32> = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.phis.iter())
+        .flat_map(|phi| phi.incoming.iter())
+        .filter(|(pre, _)| at_of.get(pre).is_some_and(|block| block.succ.len() > 1))
+        .map(|&(_, reg)| reg)
+        .collect();
     let live_in = |value: u32, at: i64| {
         let rows = rows.get_or_init(|| {
             #[cfg(test)]
-            ROWS_SOLVED.with(|one| one.set(one.get() + 1));
-            crate::backend::allocate::live_rows(body)
+            ROWS_SOLVED.with(|one| one.set((one.get().0 + 1, one.get().1 + asked.len())));
+            crate::backend::allocate::live_rows_by(body, |one| asked.contains(&one))
         });
         crate::backend::allocate::LiveAt::live_in(rows, at, value)
     };
@@ -608,9 +618,10 @@ mod tests {
         assert_eq!(copies(made).len(), 1, "the copy is in the edge block");
     }
 
-    /// The rows of liveness were solved for every body with a phi, though only
-    /// a critical edge into a phi's block asks (d_faces dist: 1.5 M Ir in
-    /// three solves). Asked of a body with none, they are not solved.
+    /// The rows of liveness were solved for every value of every body with a
+    /// phi, though only the values a critical edge's phi hands over are asked
+    /// (d_faces dist: 1.5 M Ir in three solves). Asked of a body with none they
+    /// are not solved, and otherwise only for those values.
     #[test]
     fn test_the_liveness_rows_are_solved_only_where_a_critical_edge_asks() {
         let phis = vec![
@@ -624,7 +635,7 @@ mod tests {
         ]);
         let before = ROWS_SOLVED.with(std::cell::Cell::get);
         lowered(&plain).expect("lowers");
-        assert_eq!(ROWS_SOLVED.with(std::cell::Cell::get) - before, 0, "no critical edge, no rows");
+        assert_eq!(ROWS_SOLVED.with(std::cell::Cell::get), before, "no critical edge, no rows");
         let phis = vec![Phi { result: 10, incoming: vec![(0, 1), (3, 2)] }];
         let mut critical = body(vec![
             block(0, vec![def(1), branch(2)], &[2, 1], vec![]),
@@ -635,6 +646,7 @@ mod tests {
         critical.blocks[2] = Block::from(block(2, vec![read(10)], &[], phis));
         let before = ROWS_SOLVED.with(std::cell::Cell::get);
         lowered(&critical).expect("lowers");
-        assert_eq!(ROWS_SOLVED.with(std::cell::Cell::get) - before, 1, "one solve for the critical edge");
+        let after = ROWS_SOLVED.with(std::cell::Cell::get);
+        assert_eq!((after.0 - before.0, after.1 - before.1), (1, 1), "one solve, of the one value the edge hands over");
     }
 }
