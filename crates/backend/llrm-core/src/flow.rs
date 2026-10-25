@@ -168,7 +168,7 @@ pub fn machine_with<'a>(
         // MachineSink).
         Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
         // On SSA, where a def with phi users alone can go to its edge.
-        Box::new(crate::backend::machinesink::MachineSink { size: target.size }),
+        Box::new(crate::backend::machinesink::MachineSink { size: target.size, limit: classes.available.len() }),
         // On SSA, after sinking (the pin's addILPOpts): a chain of one integer
         // operation rebuilt so its late operand joins last.
         Box::new(crate::backend::combiner::MachineCombiner),
