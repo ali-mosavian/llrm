@@ -2193,3 +2193,13 @@ fn a_bare_exponent_marker_is_an_exponent_of_zero() {
     }
     assert!(parse("x = 1EA\r\n", Dialect::QuickBasic45).is_err());
 }
+
+#[test]
+fn vbdos_does_not_fold_csng_of_a_constant_argument() {
+    // `CALL pp(CSNG(32768))` to an INTEGER parameter compiles under VBDOS BC (and wraps); QB 4.5
+    // and PDS 7.1 raise Math overflow, as for any folded constant that does not fit.
+    let source = "DECLARE SUB pp (x AS INTEGER)\r\nCALL pp(CSNG(32768))\r\nEND\r\nSUB pp (x AS INTEGER)\r\nEND SUB\r\n";
+    assert!(parse(source, Dialect::VbDos).is_ok());
+    assert!(parse(source, Dialect::QuickBasic45).is_err());
+    assert!(parse(source, Dialect::Pds71).is_err());
+}

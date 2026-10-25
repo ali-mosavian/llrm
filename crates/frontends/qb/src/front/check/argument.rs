@@ -44,8 +44,11 @@ impl Checker {
             if ok {
                 let result = Typed::value(self.result_type(sig.ret, &typed_args));
                 // CINT, CLNG, CSNG and CDBL of a folded constant are folded
-                let value =
-                    typed_args.first().and_then(|argument| fold::conversion(&name.to_ascii_uppercase(), argument));
+                // (VBDOS's BC does not fold CSNG: `CALL pp(CSNG(32768))` to an INTEGER parameter
+                // compiles and wraps)
+                let function = name.to_ascii_uppercase();
+                let folds = !(function == "CSNG" && self.dialect == Dialect::VbDos);
+                let value = typed_args.first().filter(|_| folds).and_then(|argument| fold::conversion(&function, argument));
                 return Some(Typed { constant: value, ..result });
             }
             if n + 1 < candidates.len() {
