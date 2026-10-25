@@ -2,6 +2,7 @@
 
 use super::dag_function::selected;
 use super::dag_function_tests::FAR_CALL;
+use crate::model::ir::Operation;
 
 const LOOP: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f(i32 %n) {
@@ -170,6 +171,34 @@ fn a_far_load_reads_the_pointer_and_goes_through_its_selector() {
             .any(|l| matches!(l, Loc::Mem(m) if m.selector.is_some() && m.addr.is_some_and(|a| a.space == Space::Far))),
         "the access goes through the selector"
     );
+}
+
+const M16_ZERO_16: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+@buf = global [16 x i8] zeroinitializer
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define cc 1005 void @f() addrspace(1) {
+entry:
+  call void @llvm.memset.p0.i16(ptr @buf, i8 0, i16 16, i1 false)
+  ret void
+}
+";
+
+/// `getOptimalMemOpType` is `i32` in every mode: 16 zero bytes at m16 were
+/// eight word stores (48 bytes of code), the pin's are four dword stores
+/// (rep_count: 486 -> 1046 bytes against the old selector).
+#[test]
+fn an_m16_zero_fill_of_sixteen_bytes_is_four_dword_stores() {
+    let module = llrm_mir::parse::module(M16_ZERO_16).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let stores = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.name.as_deref() == Some("mov") && matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
+        .count();
+    assert_eq!(stores, 4);
 }
 
 const M16_FILL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
@@ -431,6 +460,39 @@ fn a_copy_from_a_far_pointer_reads_through_its_selector() {
             }),
         );
     assert!(!from_a_constant, "DS takes a constant (DGROUP), not the pointer's selector");
+}
+
+const M16_FAR_COPY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+@far = addrspace(1) global [100 x i16] zeroinitializer
+@near = global [100 x i16] zeroinitializer
+declare void @llvm.memcpy.p0.p1.i16(ptr, ptr addrspace(1), i16, i1)
+define void @f(i16 %n) {
+entry:
+  %bytes = shl i16 %n, 1
+  call void @llvm.memcpy.p0.p1.i16(ptr @near, ptr addrspace(1) @far, i16 %bytes, i1 false)
+  ret void
+}
+";
+
+/// A copy from a far global took DGROUP as the source's segment, because the
+/// far pointer was built with `add` and only `or` was recognised:
+/// `idiom_edges.c` at m16 summed the near array's old contents.
+#[test]
+fn a_copy_from_a_far_global_loads_the_globals_segment() {
+    let module = llrm_mir::parse::module(M16_FAR_COPY).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let copy = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.op == Operation::Copy).expect("a copy");
+    let crate::model::ir::Loc::Held(from) = copy.sources[3] else { panic!("{copy:?}") };
+    let loaded = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.dests.iter().any(|d| matches!(d, crate::model::ir::Loc::Held(h) if h.value == from.value)))
+        .expect("the source segment is loaded");
+    let crate::model::ir::Loc::Imm(imm) = &loaded.sources[0] else { panic!("{loaded:?}") };
+    let group = imm.address.as_ref().map(|address| address.index);
+    assert_ne!(group, Some(0), "DGROUP, not the global's own segment: {loaded:?}");
 }
 
 const FAR_MEMSET: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
