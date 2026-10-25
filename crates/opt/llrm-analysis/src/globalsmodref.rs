@@ -178,6 +178,17 @@ enum Root {
     Value(GlobalId, ValueId),
 }
 
+thread_local! {
+    static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has scanned a module for the sites of its
+/// globals.
+#[cfg(test)]
+fn built() -> usize {
+    BUILT.with(std::cell::Cell::get)
+}
+
 /// Every instruction operand that names a global, and the globals some
 /// initializer names (a constant user: the global's address escapes).
 struct Sites {
@@ -228,12 +239,20 @@ fn named_inside(
 
 impl Sites {
     fn of(module: &Module) -> Self {
+        BUILT.with(|count| count.set(count.get() + 1));
         let mut named: BTreeMap<GlobalId, Vec<(GlobalId, InstId, u32)>> = BTreeMap::new();
         let (mut in_initializer, mut in_operand) = (BTreeSet::new(), BTreeSet::new());
         for (id, _, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
             for (_, inst) in function.walk() {
                 for (at, operand) in function.instruction(inst).operands.iter().enumerate() {
                     let Operand::Constant(c) = operand else { continue };
+                    // A number or a string names no global; most operands are.
+                    if !matches!(
+                        module.context.get(*c).kind,
+                        ConstantKind::Global(_) | ConstantKind::Aggregate(_) | ConstantKind::Expr(_)
+                    ) {
+                        continue;
+                    }
                     match derived_from(&module.context, *c) {
                         Some(global) => named.entry(global).or_default().push((id, inst, at as u32)),
                         None => named_inside(&module.context, *c, &mut in_operand),
@@ -254,7 +273,7 @@ impl Sites {
 
 struct Analysis<'a> {
     module: &'a Module,
-    sites: Sites,
+    sites: std::rc::Rc<Sites>,
     /// A global in an initializer escapes (the pin's `isConstantUsed` rule).
     /// GlobalsAA turns it off and reads initializers through their holders.
     initializers_escape: bool,
@@ -409,7 +428,7 @@ pub fn escaping_among(
 ) -> BTreeSet<GlobalId> {
     let analysis = Analysis {
         module,
-        sites: Sites::of(module),
+        sites: std::rc::Rc::new(Sites::of(module)),
         initializers_escape: false,
         through_joins: false,
         seen: Default::default(),
@@ -426,7 +445,7 @@ pub fn escaping_among_joins(
 ) -> BTreeSet<GlobalId> {
     let analysis = Analysis {
         module,
-        sites: Sites::of(module),
+        sites: std::rc::Rc::new(Sites::of(module)),
         initializers_escape: false,
         through_joins: true,
         seen: Default::default(),
@@ -486,9 +505,10 @@ pub fn compute_with(
     module: &Module,
     unexported: BTreeSet<GlobalId>,
 ) -> GlobalsModRef {
+    let sites = std::rc::Rc::new(Sites::of(module));
     let analysis = Analysis {
         module,
-        sites: Sites::of(module),
+        sites: std::rc::Rc::clone(&sites),
         initializers_escape: true,
         through_joins: false,
         seen: Default::default(),
@@ -523,7 +543,7 @@ pub fn compute_with(
         if escaped {
             let joins = joins.get_or_insert_with(|| Analysis {
                 module,
-                sites: Sites::of(module),
+                sites: std::rc::Rc::clone(&sites),
                 initializers_escape: true,
                 through_joins: true,
                 seen: Default::default(),
