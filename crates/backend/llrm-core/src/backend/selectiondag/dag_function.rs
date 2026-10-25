@@ -668,7 +668,7 @@ fn selected_in(
             Cpu::I486
         },
         opt_none: false,
-        opt_for_size: false,
+        opt_for_size: cpu.size,
         min_size: false,
         has_frame_pointer: true,
         address_mode,
