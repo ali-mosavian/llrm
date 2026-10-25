@@ -554,11 +554,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let (lhs, rhs) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
-        if !self.dag.value_type(lhs).is_integer() {
-            return None;
-        }
         let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(n0, 2)).data else { return None };
-        Some(self.dag.get_setcc(vt, lhs, rhs, cc.inverse_integer()))
+        let not_cc = if self.dag.value_type(lhs).is_integer() { cc.inverse_integer() } else { cc.inverse_float() };
+        Some(self.dag.get_setcc(vt, lhs, rhs, not_cc))
     }
 
     /// The users of `old` read `new`, and are looked at again.
