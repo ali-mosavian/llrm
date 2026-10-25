@@ -48,6 +48,30 @@ fn a_call_is_a_sequence_around_a_call_instruction() {
     assert!(!names.iter().any(|n| n == "sub"), "{names:?}");
 }
 
+/// Source order (`LLRM_SRC_ORDER`) builds `s = a + 1` before the call, as the
+/// IR has it; the default scheduler opens with the call sequence. Without the
+/// flag reaching the queue both orders were the default one.
+#[test]
+fn source_order_keeps_the_ir_order_around_a_call() {
+    let module = llrm_mir::parse::module(CALL).expect("parses");
+    let order = |on: bool| {
+        super::schedule::SRC_ORDER.set(on);
+        let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+            .unwrap_or_else(|e| panic!("{}", e.0));
+        super::schedule::SRC_ORDER.set(false);
+        let names: Vec<String> = done
+            .body
+            .insns()
+            .iter()
+            .filter_map(|i| i.what.as_ref())
+            .map(|w| w.name.as_deref().unwrap_or("").to_owned())
+            .collect();
+        names.iter().position(|n| n == "call_frame_setup").unwrap()
+    };
+    assert_eq!(order(false), 0);
+    assert!(order(true) > 0);
+}
+
 const INDIRECT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 @fp = global ptr null
 define i32 @f(i32 %a) {
