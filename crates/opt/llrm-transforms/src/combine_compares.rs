@@ -209,10 +209,70 @@ pub fn visit_icmp(
     if let Some(r) = fold_icmp_inst_with_constant(c, inst, pred, op0, op1) {
         return r;
     }
+    if let Some(r) = fold_icmp_with_cast_op_of_constant(c, inst, pred, op0, op1) {
+        return r;
+    }
     // OWED: foldSignBitTest, foldOpIntoPhi, foldICmpInstWithConstantNotInt,
     // foldICmpCommutative, matchSymmetricPair, foldCmpSelectOfConstants and
     // the two-select fold.
     if changed { Visit::Changed } else { Visit::None }
+}
+
+/// `foldICmpWithCastOp`'s constant arm
+/// ([:6777](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp)):
+/// `icmp pred (zext|sext X), C`, where `C` is an extension of a narrow
+/// constant, is the compare on `X`: always for `eq` and `ne`; for a relational
+/// predicate when it has the extension's signedness (`sext` with a signed one,
+/// `zext` with an unsigned one), for `zext` with a signed one as the unsigned
+/// predicate (the extended value and `C` are both non-negative), and for
+/// `sext` with an unsigned one when `C` is non-negative in the narrow type.
+///
+/// DEVIATE: no vectors; the `trunc` arm and the extension-against-extension
+/// arm (`foldICmpWithZextOrSext`) are owed.
+fn fold_icmp_with_cast_op_of_constant(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    use llrm_mir::opcode::CastOp;
+    let (bits, width) = constant(c, op1)?;
+    for kind in [CastOp::ZExt, CastOp::SExt] {
+        let x = pattern::cast(&query(c, Some(inst)), op0, kind).map(|(_, _, x)| x);
+        let Some(x) = x else { continue };
+        let narrow = c.type_of(x);
+        let Some(narrow_width) = c.context.types.int_bits(narrow) else { continue };
+        let low = bits & mask(narrow_width);
+        let back = if kind == CastOp::ZExt { low } else { (signed(low, narrow_width) as u128) & mask(width) };
+        if back != bits {
+            return None;
+        }
+        let signed_pred = matches!(
+            pred,
+            IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle
+        );
+        let narrowed = if matches!(pred, IntPredicate::Eq | IntPredicate::Ne) || (kind == CastOp::SExt) == signed_pred {
+            pred
+        } else if kind == CastOp::ZExt {
+            match pred {
+                IntPredicate::Sgt => IntPredicate::Ugt,
+                IntPredicate::Sge => IntPredicate::Uge,
+                IntPredicate::Slt => IntPredicate::Ult,
+                _ => IntPredicate::Ule,
+            }
+        } else if kind == CastOp::SExt && low >> (narrow_width - 1) == 0 {
+            // A negative `X` extends to a huge value, as it reads unsigned
+            // in the narrow type: the compare against a non-negative constant
+            // is the same.
+            pred
+        } else {
+            return None;
+        };
+        let constant = c.int(narrow, low);
+        return Some(new_icmp(c, inst, narrowed, x, constant));
+    }
+    None
 }
 
 /// The one user of `inst`'s result.

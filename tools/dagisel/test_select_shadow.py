@@ -71,3 +71,16 @@ def test_a_select_pseudo_is_the_jcc_the_pins_inserter_makes():
 def test_a_cascade_of_selects_is_one_diamond():
     machine = Counter({"CMOV_GR32": 3, "RET": 1})
     assert tool.expanded_selects(machine, Counter({"JCC_1": 1, "RET": 1})) == Counter({"JCC_1": 1, "RET": 1})
+
+
+def test_the_pin_reads_llrms_switch_and_fp80_spellings():
+    """`switch table` and `x86_fp80 0x<double bits>` made llc fail on 15 of 576 functions (jpeg, switch_peeled, double_to_uint64), which the
+    equal count silently left out."""
+    out = tool.pin_ir("switch table i32 %5, label %8 [\n]\n%a = fptoui x86_fp80 0x43EFFFFFFFFFFFFF to i64\n%b = fadd x86_fp80 0x3FF0000000000000, %c")
+    assert out.startswith("switch i32 %5")
+    assert "x86_fp80 0xK403EFFFFFFFFFFFFF800" in out
+    assert "x86_fp80 0xK3FFF8000000000000000," in out
+
+
+def test_the_failure_bucket_names_the_error_not_the_caret():
+    assert tool.first_error("llc: <stdin>:18:10: error: expected type\n  switch table\n         ^\n") == "llc: <stdin>:18:10: error: expected type"
