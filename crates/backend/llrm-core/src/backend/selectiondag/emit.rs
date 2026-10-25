@@ -1406,7 +1406,8 @@ impl Emitter<'_, '_> {
                     width: 2,
                     address: Some(self.ctx.globals.segment(self.global_displacement(origin))),
                 }),
-                ("OR32rr", _) => {
+                // a huge pointer whose offset is zero: the `or` folded away
+                ("OR32rr" | "SHL32ri", _) => {
                     // A huge pointer built as `offset | (selector << 16)`.
                     let selector = self
                         .huge_selector(origin)
@@ -1443,7 +1444,11 @@ impl Emitter<'_, '_> {
         &self,
         origin: SDValue,
     ) -> Option<SDValue> {
-        let shifted = *self.dag.node(origin).ops.iter().find(|op| self.is_machine_named(**op, "SHL32ri"))?;
+        let shifted = if self.is_machine_named(origin, "SHL32ri") {
+            origin
+        } else {
+            *self.dag.node(origin).ops.iter().find(|op| self.is_machine_named(**op, "SHL32ri"))?
+        };
         let [inserted, amount] = self.dag.node(shifted).ops[..] else { return None };
         let NodeData::Const { bits: 16, .. } = self.dag.node(amount).data else { return None };
         if !self.is_machine_named(inserted, "INSERT_SUBREG") {
