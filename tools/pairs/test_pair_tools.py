@@ -175,3 +175,10 @@ def test_isel_shadow_lists_a_function_the_dag_path_refused_and_never_as_equal():
     old = shadow.parse_rows("[isel] f selector=old instructions=4 copies=1 executed=9 memory=2\n")
     new = shadow.parse_rows("[isel] f selector=shadow instructions=4 copies=1 executed=9 memory=2\n[isel] f refused: --isel=dag: a function of several blocks\n")
     assert shadow.differences(old, new) == ["f: REFUSED --isel=dag: a function of several blocks"]
+
+
+def test_pair_builds_the_binaries_its_rows_and_sizes_steps_run():
+    """pair csr: rows-report.txt was a traceback and sizes.txt one line, "stale binaries ... run cargo build --release --bins", because the tree's llrm-run and llrm-qb were older than the source."""
+    text = (HERE / "pair.sh").read_text()
+    build = text.index("cargo build --release --bins")
+    assert build < text.index("nice -n 10 tools/rows/run.sh") and build < text.index("python3 tools/sizes.py")
