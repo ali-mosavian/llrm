@@ -2905,7 +2905,11 @@ impl Emitter<'_, '_> {
         if let Some((start, size)) = self.ctx.frame.extent(index_of)
             && !(start..=start + size).contains(&(start + disp))
         {
-            let object = self.fresh(if self.ctx.address_mode == AddrMode::Real16 { 2 } else { 4 });
+            let object = self.fresh(match self.ctx.address_mode {
+                AddrMode::Real16 => 2,
+                AddrMode::Flat64 => 8,
+                _ => 4,
+            });
             let whole = Mem { index: None, ..cell.clone() };
             self.push(Operation::Address, "lea", vec![Loc::Held(object)], vec![Loc::Address(whole.address())]);
             let address = Addr::new(crate::model::ir::Space::Literal, disp);
@@ -2977,7 +2981,7 @@ impl Emitter<'_, '_> {
         value: SDValue,
     ) -> Result<i64, EmitError> {
         match self.dag.node(value).data {
-            NodeData::Const { bits, .. } => Ok(bits as i64),
+            NodeData::Const { bits, .. } => Ok(sign_extend(bits, width_of(self.dag, value) * 8)),
             _ => Err(EmitError::Unsupported("a non-constant address part".to_owned())),
         }
     }

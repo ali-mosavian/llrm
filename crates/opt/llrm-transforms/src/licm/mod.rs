@@ -633,7 +633,7 @@ fn sink_and_hoist(
         ctx.loop_.body.iter().map(|&at| cfg::block(at)),
         mssa,
     );
-    let safety = LoopSafety::new(unit.context, unit.function, accesses, outer, ctx.loop_, ctx.shape)
+    let safety = LoopSafety::new(unit.context, unit.layout, unit.function, accesses, outer, ctx.loop_, ctx.shape)
         .allowing_speculation(ctx.allow_speculation);
     let sunk = if has_dedicated_exits(ctx) {
         sink::sink_region(unit, outer, ctx, mssa, aa, accesses, &mut flags, &safety)
@@ -674,7 +674,7 @@ fn promotion_round(
     if !has_dedicated_exits(ctx) || flags.too_many_memory_accesses() {
         return (0, Vec::new());
     }
-    let safety = LoopSafety::new(unit.context, unit.function, accesses, outer, ctx.loop_, ctx.shape)
+    let safety = LoopSafety::new(unit.context, unit.layout, unit.function, accesses, outer, ctx.loop_, ctx.shape)
         .allowing_speculation(ctx.allow_speculation);
     let exits = promote::unique_exit_blocks(ctx);
     let mut candidates = 0;
