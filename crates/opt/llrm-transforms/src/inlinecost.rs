@@ -2682,6 +2682,8 @@ fn worth_a_trial(
                 },
             )
     };
+    // A gate, not dataflow: the store may be to another field, or after the
+    // call; the trial decides on bytes.
     let written_global = |global: GlobalId| {
         caller
             .walk()
