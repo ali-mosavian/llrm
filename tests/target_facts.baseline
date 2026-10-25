@@ -15,7 +15,6 @@
 11 crates/backend/llrm-core/src/backend/isel.rs
 2 crates/backend/llrm-core/src/backend/isel/matcher.rs
 2 crates/backend/llrm-core/src/backend/isel/wide.rs
-3 crates/backend/llrm-core/src/backend/loopslots.rs
 6 crates/backend/llrm-core/src/backend/machinecp.rs
 15 crates/backend/llrm-core/src/backend/masm.rs
 2 crates/backend/llrm-core/src/backend/objbuild.rs
