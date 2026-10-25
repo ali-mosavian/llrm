@@ -1870,6 +1870,43 @@ mod x64_table {
         assert_eq!(dag.nodes[ops.scale.node as usize].constant, Some(4));
     }
 
+    fn rip_matcher(dag: &mut TestDag) -> crate::x86_addr::Matcher<'_, TestDag> {
+        crate::x86_addr::Matcher { dag, pointer_type: mvt::i64, mode: crate::x86_addr::AddrMode::Flat64 }
+    }
+
+    /// A `WrapperRIP` global had no arm: it stayed a register operand, not
+    /// `[rip + sym + 12]` (D64-1).
+    #[test]
+    fn a_rip_wrapper_plus_a_constant_is_rip_based() {
+        let mut dag = TestDag::new();
+        let global = dag.wrapped_global_rip(7, 0, mvt::i64);
+        let twelve = dag.make_constant(12, mvt::i64);
+        let address = SDValue::new(dag.node(isd::ADD, &[mvt::i64], &[global, twelve]), 0);
+        let mut am = crate::x86_addr::AddressMode::default();
+
+        assert!(!rip_matcher(&mut dag).match_address(address, &mut am));
+
+        assert_eq!(am.disp, 12);
+        assert_eq!(dag.nodes[am.base_reg.unwrap().node as usize].register, Some(crate::generated::ids::x86::RIP));
+        assert!(am.index_reg.is_none());
+    }
+
+    /// `[rip + sym]` takes no register: adding `x` must not fold into it.
+    #[test]
+    fn a_register_is_not_folded_into_a_rip_address() {
+        let mut dag = TestDag::new();
+        let global = dag.wrapped_global_rip(7, 0, mvt::i64);
+        let x = dag.input(1, mvt::i64);
+        let address = SDValue::new(dag.node(isd::ADD, &[mvt::i64], &[global, x]), 0);
+        let mut am = crate::x86_addr::AddressMode::default();
+
+        assert!(!rip_matcher(&mut dag).match_address(address, &mut am));
+
+        assert!(am.symbol.is_none(), "the symbol stays in its register, not in a rip address");
+        let base = am.base_reg.unwrap();
+        assert_ne!(dag.nodes[base.node as usize].register, Some(crate::generated::ids::x86::RIP));
+    }
+
     #[test]
     fn an_i32_add_is_still_add32rr() {
         assert_eq!(selected_names(mvt::i32), ["ADD32rr"]);

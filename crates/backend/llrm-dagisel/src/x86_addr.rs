@@ -495,11 +495,29 @@ impl<D: AddrDag> Matcher<'_, D> {
             if !(-i64::from(u16::MAX)..=i64::from(u16::MAX)).contains(&val) {
                 return true;
             }
+        } else if self.mode == AddrMode::Flat64 {
+            // `isOffsetSuitableForCodeModel`, small code model.
+            let suitable = i32::try_from(val).is_ok() && (!am.has_symbolic_displacement() || val < 16 << 20);
+            if val != 0 && !suitable {
+                return true;
+            }
+            if am.base_type == BaseType::FrameIndex && !is_disp_safe_for_frame_index_or_reg_base(val) {
+                return true;
+            }
         } else if am.has_base_or_index_reg() && !is_disp_safe_for_frame_index_or_reg_base(val) {
             return true;
         }
         am.disp = val as i32;
         false
+    }
+
+    /// `X86ISelAddressMode::isRIPRelative`.
+    fn is_rip_relative(
+        &self,
+        am: &AddressMode,
+    ) -> bool {
+        am.base_type == BaseType::Reg
+            && am.base_reg.is_some_and(|base| self.dag.register_of(base.node) == Some(x86::RIP))
     }
 
     /// `matchWrapper` ([L1976][wrap]).
@@ -512,6 +530,11 @@ impl<D: AddrDag> Matcher<'_, D> {
         am: &mut AddressMode,
     ) -> bool {
         if am.has_symbolic_displacement() {
+            return true;
+        }
+        let rip_relative = self.opcode(n) == x86isd::WrapperRIP;
+        // %rip is the base: it takes no other register.
+        if rip_relative && am.has_base_or_index_reg() {
             return true;
         }
         let backup = *am;
@@ -529,6 +552,9 @@ impl<D: AddrDag> Matcher<'_, D> {
         if self.fold_offset_into_address(offset as u64, am) {
             *am = backup;
             return true;
+        }
+        if rip_relative {
+            am.base_reg = Some(self.dag.register(x86::RIP, mvt::i64));
         }
         false
     }
@@ -675,6 +701,18 @@ impl<D: AddrDag> Matcher<'_, D> {
         if depth >= MAX_RECURSION_DEPTH {
             return self.match_address_base(n, am);
         }
+        // `%rip + disp32`: only an immediate merges into it.
+        if self.is_rip_relative(am) {
+            if matches!(am.symbol, Some(Symbol { kind: SymbolKind::JumpTable, .. })) {
+                return true;
+            }
+            if let Some(value) = self.constant(n) {
+                if !self.fold_offset_into_address(value as u64, am) {
+                    return false;
+                }
+            }
+            return true;
+        }
         let opcode = self.opcode(n);
         match opcode {
             isd::Constant => {
@@ -683,7 +721,7 @@ impl<D: AddrDag> Matcher<'_, D> {
                     return false;
                 }
             }
-            x86isd::Wrapper => {
+            x86isd::Wrapper | x86isd::WrapperRIP => {
                 if !self.match_wrapper(n, am) {
                     return false;
                 }

@@ -778,6 +778,7 @@ pub mod x86 {
     pub const OR32mr: u16 = 2973;
     pub const OR8mi: u16 = 3045;
     pub const OR8mr: u16 = 3051;
+    pub const RIP: u16 = 58;
     pub const SAHF: u16 = 4033;
     pub const SBB16mi: u16 = 4165;
     pub const SBB16mr: u16 = 4171;
