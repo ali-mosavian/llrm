@@ -38,8 +38,6 @@
 //! In the parity pipeline at `loop-load-elim` (l.1400 of
 //! `PassBuilderPipelines.cpp`, after `infer-alignment`).
 
-use std::collections::HashSet;
-
 use llrm_analysis::aggregate::AggregateAA;
 use llrm_analysis::basicaa::BasicAA;
 use llrm_analysis::loopaccess::{SymbolicStrideMap, get_ptr_stride};
@@ -57,6 +55,7 @@ use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{CastOp, Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
+use llrm_support::hash::HashSet;
 
 use crate::loopversioning::{LoopVersioning, is_recursively_lcssa_form};
 use crate::runtimechecks::Rewriter;
@@ -112,7 +111,7 @@ impl Candidate {
         let load_ptr = pointer_operand(cx.function, self.load);
         let store_ptr = pointer_operand(cx.function, self.store);
         let load_type = llrm_analysis::loopaccess::load_store_type(cx, self.load).expect("a load");
-        let strides = SymbolicStrideMap::new();
+        let strides = SymbolicStrideMap::default();
 
         let stride_load = get_ptr_stride(se, cx, load_type, load_ptr, lp, &strides, true).unwrap_or(0);
         let stride_store = get_ptr_stride(se, cx, load_type, store_ptr, lp, &strides, true).unwrap_or(0);
@@ -391,7 +390,7 @@ impl LoadEliminationForLoop<'_> {
         // We're looking for stores after the first forwarding store until the
         // end of the loop, then from the beginning of the loop until the last
         // forwarded-to load. Collect the pointer for the stores.
-        let mut ptrs_written_on_fwding_path: HashSet<Operand> = HashSet::new();
+        let mut ptrs_written_on_fwding_path: HashSet<Operand> = HashSet::default();
 
         let mut insert_store_ptr = |inst: InstId| {
             if matches!(cx.function.instruction(inst).opcode, Opcode::Store { .. }) {

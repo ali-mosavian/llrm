@@ -161,6 +161,49 @@ fn a_quadword_divide_and_negate_take_a_memory_operand() {
     assert_eq!(bytes(&neg), [0x48, 0xf7, 0x5d, 0x00]);
 }
 
+#[test]
+fn a_scalar_double_add_is_the_sse2_form() {
+    // addsd %xmm1,%xmm0; addss %xmm9,%xmm8. Without an SSE row the emitter has
+    // no form to encode.
+    let add = |name, into, from, width| {
+        sem(Operation::Binary, Some(name), vec![rg(into, width)], vec![rg(into, width), rg(from, width)], None, false)
+    };
+    assert_eq!(
+        bytes(&add("addsd", RegId::from(Register::XMM0), RegId::from(Register::XMM1), 8)),
+        [0xf2, 0x0f, 0x58, 0xc1]
+    );
+    assert_eq!(
+        bytes(&add("addss", RegId::from(Register::XMM8), RegId::from(Register::XMM9), 4)),
+        [0xf3, 0x45, 0x0f, 0x58, 0xc1]
+    );
+}
+
+#[test]
+fn the_other_scalar_sse_forms_encode() {
+    let x = |n: u8| RegId::from(Register::XMM0 + u32::from(n));
+    let conv = |name, dest, d: u32, source, s: u32| {
+        sem(Operation::Extend, Some(name), vec![rg(dest, d)], vec![rg(source, s)], None, false)
+    };
+    // cvttsd2si %xmm0,%rax; cvtsi2sd %rax,%xmm0; cvtss2sd %xmm1,%xmm0
+    assert_eq!(bytes(&conv("cvttsd2si", RegId::RAX, 8, x(0), 8)), [0xf2, 0x48, 0x0f, 0x2c, 0xc0]);
+    assert_eq!(bytes(&conv("cvtsi2sd", x(0), 8, RegId::RAX, 8)), [0xf2, 0x48, 0x0f, 0x2a, 0xc0]);
+    assert_eq!(bytes(&conv("cvtss2sd", x(0), 8, x(1), 4)), [0xf3, 0x0f, 0x5a, 0xc1]);
+    // ucomisd %xmm1,%xmm0 (two sources, no destination); xorps %xmm0,%xmm0
+    let compare = sem(Operation::Compare, Some("ucomisd"), vec![], vec![rg(x(0), 8), rg(x(1), 8)], None, false);
+    assert_eq!(bytes(&compare), [0x66, 0x0f, 0x2e, 0xc1]);
+    let xor = sem(Operation::Binary, Some("xorps"), vec![rg(x(0), 16)], vec![rg(x(0), 16), rg(x(0), 16)], None, false);
+    assert_eq!(bytes(&xor), [0x0f, 0x57, 0xc0]);
+}
+
+#[test]
+fn the_scalar_double_move_is_not_the_string_copy() {
+    // movsd %xmm1,%xmm0 is F2 0F 10 C1; the name `movsd` is the string copy's,
+    // so the move is `movsd_x`.
+    let x = |n: u32| RegId::from(Register::XMM0 + n);
+    let mov = sem(Operation::Move, Some("movsd_x"), vec![rg(x(0), 8)], vec![rg(x(1), 8)], None, false);
+    assert_eq!(bytes(&mov), [0xf2, 0x0f, 0x10, 0xc1]);
+}
+
 /// `movzx esi, byte [bp + rdx - 20]` (a frame array's element, the frame
 /// token a word register) panicked in iced's encoder (mixed address sizes)
 /// when a pass priced it before the frame layout named the token; it is
