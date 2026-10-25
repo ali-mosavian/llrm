@@ -579,22 +579,20 @@ impl<'a> Dse<'a> {
         &self,
         loc: &Location,
     ) -> Option<llrm_analysis::memory::ObjectRef> {
-        let provenance = loc.reference.provenance.as_ref()?;
-        let mut slices = provenance.slices.iter();
-        let first = slices.next()?;
-        slices.next().is_none().then_some(first.object)
+        llrm_analysis::memory::object_of(self.aa.unit(), loc.reference.root?)
     }
 
-    /// The same object (`getUnderlyingObject` equal).
+    /// The same object (`getUnderlyingObject` equal): the pointers strip to
+    /// one value, an argument or a loaded pointer as much as an alloca.
     fn same_object(
         &self,
         one: &Location,
         other: &Location,
     ) -> bool {
-        match (self.object_of(one), self.object_of(other)) {
-            (Some(a), Some(b)) => a.key == b.key && a.kind == b.kind,
-            _ => false,
-        }
+        matches!(
+            (one.reference.root, other.reference.root),
+            (Some(a), Some(b)) if a == b
+        )
     }
 
     /// `isIdentifiedObject`: a local or a global object.
