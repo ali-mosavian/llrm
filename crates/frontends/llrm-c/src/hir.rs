@@ -775,7 +775,7 @@ mod canonical_tests {
         type_: &str,
     ) -> String {
         let mut type_ = type_.to_owned();
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = llrm_support::hash::HashSet::default();
         while let Some(next) = aliases.get(&type_) {
             if !seen.insert(type_.clone()) {
                 break;
