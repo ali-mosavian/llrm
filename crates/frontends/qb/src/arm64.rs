@@ -154,6 +154,8 @@ fn framed_function(lines: &[&str]) -> String {
     while lines[at].contains(" = alloca ") {
         at += 1;
     }
+    let label = lines[entry].trim_end_matches(':');
+    let from_entry = format!(", %{label}X ]");
     let name = |line: &str| line.trim().split(' ').next().unwrap_or("").to_owned();
     for (number, line) in lines.iter().enumerate() {
         if number == at {
@@ -171,7 +173,9 @@ fn framed_function(lines: &[&str]) -> String {
         if line.trim_start().starts_with("ret ") {
             out.push_str("  %qb.popped = call ptr @qb_host_frame(ptr %qb.prev)\n");
         }
-        out.push_str(line);
+        // the rest of the entry block is the body now: a phi's edge from the entry comes from there
+        let line = if number > at { line.replace(&from_entry, ", %qb.body ]") } else { (*line).to_owned() };
+        out.push_str(&line);
         out.push('\n');
     }
     out

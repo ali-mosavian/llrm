@@ -34,7 +34,7 @@ void qb_dynamic_region(char **first, char **top)
 
 /* ON ERROR's landing: back into the innermost function that has a handler (onerror_host.c); without one the program
    ends. */
-extern void *qb_host_frame_top;
+void *qb_host_frame_top;
 
 void qb_land(void)
 {

@@ -197,3 +197,12 @@ fn on_error_lands_in_its_handler_on_arm64() {
         ["mod", "7", "in", "s", "back"]
     );
 }
+
+/// A handled function whose first block after the entry is a loop header has a phi with an edge from the entry; the
+/// landing split the entry and the phi named a block that no longer branched there ("a phi with no value for an edge",
+/// GORILLA's PlaceGorillas).
+#[test]
+fn a_handled_function_may_start_with_a_loop_on_arm64() {
+    let source = b"DEFINT A-Z\r\nON ERROR GOTO h\r\nFOR i = 1 TO 3\r\nPRINT i;\r\nNEXT\r\nERROR 9\r\nPRINT \"done\"\r\nEND\r\nh:\r\nRESUME NEXT\r\n";
+    assert_eq!(run_basic("onerror_loop", source).split_whitespace().collect::<Vec<_>>(), ["1", "2", "3", "done"]);
+}

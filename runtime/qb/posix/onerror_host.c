@@ -27,7 +27,7 @@ void B_RESN(void)
 
 /* The landing (qb_land in startup.c): a function with an ON ERROR handler registers a jmp_buf here at entry and takes
    it back before it returns (crates/frontends/qb/src/arm64.rs, `framed`). */
-void *qb_host_frame_top;
+extern void *qb_host_frame_top;
 
 void *qb_host_frame(void *frame)
 {
