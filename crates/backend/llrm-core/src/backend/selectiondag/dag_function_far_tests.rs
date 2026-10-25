@@ -716,3 +716,18 @@ fn a_cell_through_a_far_pointer_to_the_frame_is_the_frames_own() {
     selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|why| panic!("{}", why.0));
 }
+
+/// The far pointer a call's dword result is: the fill took the dword apart and
+/// put it together again (`shr; shl; movzx; add`) to name `di`, where `di` is
+/// the low word and `es` the high one.
+#[test]
+fn a_far_fill_through_a_call_result_does_not_rebuild_the_dword() {
+    let module = llrm_mir::parse::module(FAR_FROM_A_CALL_RESULT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+    let insns = done.body.insns();
+    let names: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref().and_then(|w| w.name.as_deref())).collect();
+    // One `shl` joins the call's two words for the null test; the fill needs
+    // none.
+    assert_eq!(names.iter().filter(|name| **name == "shl").count(), 1, "{names:?}");
+}
