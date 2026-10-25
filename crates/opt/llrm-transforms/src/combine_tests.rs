@@ -251,3 +251,42 @@ b0:
     assert_eq!(asks(own), 0, "an add, a shift and a compare ask for themselves");
     assert_eq!(asks(cast), 1, "a cast is asked by `visit`");
 }
+
+/// scroll.nib's descending copy loop tests `j - 1 > -1` at the bottom after
+/// `j <u 1920` (the bounds check) dominates it. The pin makes that `j == 0`
+/// with the arms swapped, which lets JumpThreading remove the check and
+/// LoopIdiom make the memmove (scroll m16 -O2: 170,762 instructions executed
+/// before InstCombine joined the pipeline, 602,661 after).
+#[test]
+fn a_signed_bound_on_a_value_a_dominating_compare_keeps_below_a_limit_is_an_equality() {
+    let mut module = parsed(
+        "define void @f(ptr %a) {
+entry:
+  br label %body
+
+body:
+  %j = phi i16 [ 1919, %entry ], [ %jm, %do ]
+  %ok = icmp samesign ult i16 %j, 1920
+  br i1 %ok, label %do, label %trap
+
+do:
+  %p = getelementptr inbounds nuw [2 x i8], ptr %a, i16 %j
+  %v = load i16, ptr %p, align 2
+  store i16 %v, ptr %a, align 2
+  %jm = add nsw i16 %j, -1
+  %c = icmp sgt i16 %jm, -1
+  br i1 %c, label %body, label %exit
+
+trap:
+  unreachable
+
+exit:
+  ret void
+}
+",
+    );
+    combined(&mut module);
+    let after = printed(&module);
+    assert!(after.contains("icmp eq i16 %j, 0"), "{after}");
+    assert!(after.contains("label %exit, label %body"), "{after}");
+}
