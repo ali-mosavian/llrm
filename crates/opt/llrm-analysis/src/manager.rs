@@ -1347,7 +1347,9 @@ impl Analysis for MemorySsa {
         let mssa = crate::mssa::Mssa::build(
             function,
             &shape.dominance,
-            &crate::mssa::shadow::effect_from_opcodes(&unit, calls),
+            &crate::mssa::shadow::effect_from_opcodes(&unit, |inst| {
+                calls.get(&inst).is_none_or(|stores| !stores.is_empty())
+            }),
         );
         Ok(std::rc::Rc::new(MssaGraph::new(mssa, None)))
     }
