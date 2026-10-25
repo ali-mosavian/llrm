@@ -98,13 +98,43 @@ void B_OPEN(SD *name, short channel, short record_length, unsigned short mode)
 /* B$KILL: KILL "name". One file: no wildcards. As the QB 4.5 runtime's KILL does, it first looks for the file (a
    missing one is File not found whatever DOS would answer to the delete); a refusal is then Path/File access error,
    any other failure File not found. */
+/* KILL's wildcard: every file that matches, found and deleted in turn; none is File not found. */
+static void kill_matches(const char *path)
+{
+    unsigned char entry[43];
+    char target[PATH_MAX + 14];
+    unsigned prefix = 0, at;
+    long result;
+
+    for (at = 0; path[at]; at++)
+        if (path[at] == '\\' || path[at] == ':')
+            prefix = at + 1;
+    result = llrm_os_find_first((os_path)path, 0, entry);
+    if (result < 0)
+        qb_error(BE_NOFILE);
+    do {
+        copy_bytes(target, path, prefix);
+        for (at = 0; (target[prefix + at] = entry[30 + at]) != 0; at++)
+            ;
+        result = llrm_os_delete((os_path)target);
+        if (result < 0)
+            qb_error(-result == LLRM_OS_DENIED ? BE_ACCESS : BE_NOFILE);
+    } while (llrm_os_find_next(entry) >= 0);
+}
+
 void B_KILL(SD *name)
 {
     char path[PATH_MAX];
+    unsigned at;
     long result;
 
     path_of(name, path);
     str_tmp_free(name);
+    for (at = 0; path[at]; at++)
+        if (path[at] == '*' || path[at] == '?') {
+            kill_matches(path);
+            return;
+        }
     result = llrm_os_open((os_path)path, 0);
     if (result < 0)
         qb_error(BE_NOFILE);
