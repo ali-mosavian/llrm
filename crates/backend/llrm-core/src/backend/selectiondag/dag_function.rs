@@ -681,6 +681,7 @@ fn selected_in(
     let builder_target = builder_target
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)
+        .with_jump_tables(cpu.target().costs().jump_table != 0)
         .with_tail_calls(std::env::var_os("LLRM_TAIL_CALLS").is_some() || TAIL_CALLS.get())
         .with_tti(cpu.target().tti())
         .with_runtime_call_verdicts(
