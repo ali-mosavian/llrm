@@ -201,6 +201,16 @@ fn raised<T>(made: Result<T, String>) -> T {
     made.unwrap_or_else(|error| panic!("{error}"))
 }
 
+/// The pin prints every `bsf` with a `rep` prefix (the TZCNT encoding, which
+/// older processors run as the same `bsf`); `bsr` has none.
+fn scan_prefixed(
+    name: &str,
+    mut instruction: Instruction,
+) -> Instruction {
+    instruction.set_has_repe_prefix(name == "bsf");
+    instruction
+}
+
 fn width_of(register: RegId) -> Option<i64> {
     crate::registers::WIDTHS.get(&register).copied()
 }
@@ -2420,7 +2430,7 @@ pub fn emit_in(
                 } else {
                     code_of!("BSR_R", width * 8, "_RM", width * 8)
                 };
-                return _assemble(&raised(create_reg_reg(scan?, into, outof)), at, true);
+                return _assemble(&scan_prefixed(name, raised(create_reg_reg(scan?, into, outof))), at, true);
             }
             if let Some(code) = ["btc", "bts", "btr"].iter().position(|bit| name == *bit) {
                 let width = width_of(into)?;
@@ -2451,7 +2461,7 @@ pub fn emit_in(
                 } else {
                     code_of!("BSR_R", width * 8, "_RM", width * 8)
                 };
-                return _assemble(&raised(create_reg_mem(scan?, into, built)), at, relocated);
+                return _assemble(&scan_prefixed(name, raised(create_reg_mem(scan?, into, built))), at, relocated);
             }
             return arith_mem(name, into, cell, at);
         }

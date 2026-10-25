@@ -1061,7 +1061,7 @@ fn test_bts_and_btr_of_registers_encode() {
 /// `ctlz` of a word, which the pin makes `bsf` and `bsr`, were refused).
 #[test]
 fn test_bsf_bsr_and_bswap_encode() {
-    for (name, bytes) in [("bsf", "660fbcc1"), ("bsr", "660fbdc1")] {
+    for (name, bytes) in [("bsf", "66f30fbcc1"), ("bsr", "660fbdc1")] {
         let what = sem(
             Operation::Binary,
             Some(name),
