@@ -64,6 +64,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [forged-sel-2](forged-sel-2.md) | FORGED-SEL-2: what a forged selector reaches |
 | [fp-constant-fold-plan](fp-constant-fold-plan.md) | FP binary constant fold: plan (2026-10-22) |
 | [fpround-pricing](fpround-pricing.md) | FPRound is priced as one instruction |
+| [floatprep-into-selection-plan](floatprep-into-selection-plan.md) | FloatPrep into selection: the plan |
 | [gate-coverage](gate-coverage.md) | What the landing gate runs, and what it does not |
 | [instruction-gap-vs-pin](instruction-gap-vs-pin.md) | Instructions against the pin's llc, on the same IR |
 | [irreducible-counts](irreducible-counts.md) | Irreducible cycles in the corpora (BRIDGE-1) |
