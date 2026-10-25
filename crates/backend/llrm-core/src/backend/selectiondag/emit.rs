@@ -886,6 +886,28 @@ impl Emitter<'_, '_> {
         Ok(())
     }
 
+    /// The last instruction that defines `value` defines it `width` bytes wide.
+    fn narrow_definition(
+        &mut self,
+        value: u32,
+        width: u32,
+    ) {
+        let Some(block) = self.blocks.last_mut() else { return };
+        for insn in block.insns.iter_mut().rev().take(8) {
+            let Some(what) = insn.what.as_ref() else { continue };
+            if !matches!(
+                what.dests.as_slice(),
+                [Loc::Held(held)] if held.value == value
+            ) {
+                continue;
+            }
+            let dests = vec![Loc::Held(Held { value, width })];
+            let narrowed = Semantics { dests, ..what.clone() };
+            *insn = Arc::new(Insn::new(insn.at, insn.covers, Some(narrowed), insn.defines.clone(), insn.uses.clone()));
+            return;
+        }
+    }
+
     /// Whether the units glued after the flags copy `copy` are `adc`s and
     /// `sbb`s: they read the carry flag and no other.
     fn reads_only_carry(
@@ -2062,6 +2084,15 @@ impl Emitter<'_, '_> {
                     self.values.insert(result, shifted.value);
                     return Ok(Some(()));
                 }
+                // The word cut from a `movzx` of a byte, when the dword has no
+                // other reader, is that `movzx` made at word
+                // width (`movzx ax, al`): held as the dword it was
+                // zero-extended to, a word that lives across a call is spilled
+                // and reloaded as a dword.
+                let only_user = self.glue_users.get(&node.ops[0]).is_some_and(|users| users.len() == 1);
+                if index == 4 && !status && only_user && self.is_machine_named(node.ops[0], "MOVZX32rr8") {
+                    self.narrow_definition(source.value, 2);
+                }
                 self.values.insert(result, source.value);
                 return Ok(Some(()));
             }
@@ -2195,6 +2226,22 @@ impl Emitter<'_, '_> {
                     vec![Loc::Held(held)],
                     vec![Loc::Held(when_false), Loc::Held(when_true)],
                 );
+                Ok(Some(()))
+            }
+            // The same from memory: the second source is the cell, read only
+            // when the condition holds (`CMOV64rm src1, [mem], cc`).
+            "CMOV16rm" | "CMOV32rm" | "CMOV64rm" => {
+                let cc = self.constant(node.ops[6])? as usize;
+                let jump = CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
+                let Loc::Held(when_false) = self.operand(node.ops[0])? else {
+                    return Err(EmitError::Unsupported("a conditional move of a non-register".to_owned()));
+                };
+                let group = node.ops.get(1..6).ok_or_else(|| EmitError::Unsupported("a short cmov".to_owned()))?;
+                let cell = self.cell(group, u32::from(width))?;
+                let held = self.fresh(width);
+                self.values.insert(result, held.value);
+                let name = format!("cmov{}", &jump[1..]);
+                self.push(Operation::Select, &name, vec![Loc::Held(held)], vec![Loc::Held(when_false), Loc::Mem(cell)]);
                 Ok(Some(()))
             }
             "SETCCr" => {
