@@ -734,7 +734,11 @@ impl Analysis for ExposedFrames {
         };
         for change in changes {
             match change {
-                Change::BlockCreated(_) | Change::BlockErased(_) | Change::Parameters => return None,
+                Change::Parameters => return None,
+                // An exposed alloca is one of its address's uses, and a block
+                // has none: an erased one was emptied by `Erased` changes, a
+                // created one is filled by `Inserted` ones.
+                Change::BlockCreated(_) | Change::BlockErased(_) => {}
                 Change::Operand { was, .. } => read(was),
                 Change::Operands { was, .. } => was.iter().for_each(&mut read),
                 Change::Erased { inst, .. } => function.instruction(*inst).operands.iter().for_each(&mut read),

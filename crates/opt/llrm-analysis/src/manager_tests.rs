@@ -743,6 +743,34 @@ fn test_a_result_derived_from_the_body_as_it_stands_is_dropped_at_an_invalidatio
     assert_eq!(of_effects, vec![("first", 1), ("replayed", 1)], "{counts:?}");
 }
 
+/// A pass that made a block and removed it (jump threading, rotate, lcssa, the
+/// cleanups: 12 of 24 `ExposedFrames` runs on d_faces -O2) gave the exposed
+/// frames up: `update` returned none for a block change and the whole body was
+/// scanned again, to the same answer. An alloca is exposed by its address's
+/// uses, which a block change does not touch.
+#[test]
+fn test_a_block_made_and_removed_leaves_the_exposed_frames_to_be_updated_not_rerun() {
+    let mut module = parsed(&format!(
+        "{DOS}declare void @use(ptr)\n\ndefine void @f() {{\nb:\n  %a = alloca i16\n  call void @use(ptr %a)\n  ret void\n}}\n"
+    ));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let (context, f) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(outer);
+    llrm_mir::passes::trace_recomputes(true);
+    analyses.get::<super::ExposedFrames>(context, &layout, f);
+    let block = f.create_block(Some("scratch"));
+    f.erase_block(block).expect("an empty block nothing names");
+    analyses.invalidate(f, &PreservedAnalyses::none());
+    let kept = analyses.get::<super::ExposedFrames>(context, &layout, f).len();
+    let counts = llrm_mir::passes::recomputes();
+    llrm_mir::passes::trace_recomputes(false);
+    assert_eq!(kept, 1, "the alloca passed to a call is exposed");
+    let frames: Vec<_> =
+        counts.iter().filter(|(name, ..)| *name == "exposed-frames").map(|&(_, _, how, n)| (how, n)).collect();
+    assert_eq!(frames, vec![("first", 1), ("replayed", 1)], "{counts:?}");
+}
+
 /// A scalar written in each arm of N joins is reached by up to N stores at
 /// every load after, and the cell of each was decoded again for each load that
 /// store reaches (N^2 decodes over the body; 85 K instructions a load at
