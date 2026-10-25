@@ -239,3 +239,9 @@ presented frame's pixels of text row 1 during NIBBLES' SparklePause, 5 s): befor
 state (the worker waited for a frame at every `INKEY$`, so each frame was the end of a cycle); after, 261 frames show
 the five sparkle phases about equally (102 distinct states, the rest partial rows). The GORILLAS banana was already
 presented once per frame during a throw (80 frames, a rotating 9x4 px crescent).
+
+## Window scaling
+
+The window is resizable. `dev/sdl/scale.c` (`sdl_fit`) places the 4:3 picture at the largest whole-number scale that fits
+the renderer's output size, centred; a window below 1x shows the corner. `present.c` redraws when the output size changes
+(it replaced `SDL_RenderSetLogicalSize`, which stretched to any size). Unit test: `the_picture_scales_by_whole_numbers_at_four_to_three`.

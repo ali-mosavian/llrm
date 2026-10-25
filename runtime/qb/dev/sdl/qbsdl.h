@@ -40,6 +40,12 @@ typedef struct SdlTone {
 } SdlTone;
 void sdl_audio_render(SdlTone *tone, int16_t *out, int count, unsigned hertz);
 
+typedef struct {
+    int x, y, w, h;
+} SdlRect;
+
+SdlRect sdl_fit(int window_width, int window_height, int frame_width);
+
 /* sync.c: the worker waits for the next frame to reach the screen. */
 void sdl_sync_request(void);                  /* the worker: wake the SDL thread and wait for a frame, up to one interval */
 void sdl_sync_wait_request(int timeout_ms);   /* the SDL thread: sleep until a request or the interval */

@@ -20,6 +20,7 @@ static SDL_Texture *texture;
 static uint32_t argb[HOST_MAX_WIDTH * HOST_MAX_HEIGHT];
 static unsigned frame_width, frame_height, serial = ~0u, shown;
 static unsigned blink;
+static int output_width, output_height;
 static int cursor_drawn, cursor_row, cursor_column;
 
 int sdl_present_open(void)
@@ -70,7 +71,6 @@ static int start_frame(void)
                                 (int)frame_height);
     if (!texture)
         return -1;
-    SDL_RenderSetLogicalSize(renderer, (int)frame_width, (int)(frame_width * ASPECT_NUMERATOR / ASPECT_DENOMINATOR));
     for (y = 0; y < frame_height; y++)
         atomic_store_explicit(&host_dirty[y], 1, memory_order_release);
     cursor_drawn = 0;
@@ -118,7 +118,8 @@ int sdl_present_frame(void)
 {
     uint8_t rgb[256][3];
     unsigned y, copied = 0, row, column;
-    int visible, on, texels;
+    int visible, on, texels, width, height, resized;
+    SdlRect to;
     void *pixels;
     int pitch;
 
@@ -152,7 +153,11 @@ int sdl_present_frame(void)
         cursor_column = (int)column;
     }
     host_state_unlock();
-    if (!copied && shown)
+    SDL_GetRendererOutputSize(renderer, &width, &height);
+    resized = width != output_width || height != output_height;
+    output_width = width;
+    output_height = height;
+    if (!copied && shown && !resized)
         return 0;
     texels = SDL_LockTexture(texture, 0, &pixels, &pitch);
     if (texels == 0) {
@@ -161,7 +166,8 @@ int sdl_present_frame(void)
         SDL_UnlockTexture(texture);
     }
     SDL_RenderClear(renderer);
-    SDL_RenderCopy(renderer, texture, 0, 0);
+    to = sdl_fit(width, height, (int)frame_width);
+    SDL_RenderCopy(renderer, texture, 0, &(SDL_Rect){to.x, to.y, to.w, to.h});
     SDL_RenderPresent(renderer);
     shown = 1;
     return 1;

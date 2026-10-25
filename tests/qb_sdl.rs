@@ -64,7 +64,7 @@ fn smoke(sanitize: Option<&str>) {
     for module in runtime {
         build.arg(qb.join(format!("{module}.c")));
     }
-    for module in ["dev", "host", "input", "audio", "tone", "present", "sync"] {
+    for module in ["dev", "host", "input", "audio", "tone", "scale", "present", "sync"] {
         build.arg(qb.join(format!("dev/sdl/{module}.c")));
     }
     for module in ["video", "vgadata", "tick"] {
@@ -111,4 +111,25 @@ fn no_header_collides_with_sdl2_case_insensitively() {
         let name = entry.unwrap().file_name().to_string_lossy().to_lowercase();
         assert_ne!(name, "sdl.h", "runtime/qb/dev/sdl/{name} collides with SDL2's SDL.h on case-insensitive file systems");
     }
+}
+
+/// The window used to stretch to any size with SDL's logical size, so a resized window showed uneven pixels. `sdl_fit`
+/// gives the largest whole-number scale at 4:3, centred.
+#[test]
+fn the_picture_scales_by_whole_numbers_at_four_to_three() {
+    let qb = root().join("runtime/qb");
+    let out = std::env::temp_dir().join(format!("scale_unit_{}", std::process::id()));
+    let built = Command::new("cc")
+        .args(["-std=gnu11", "-Wall", "-I"])
+        .arg(qb.join("dev/sdl"))
+        .arg(root().join("tests/qbhost/scale_unit.c"))
+        .arg(qb.join("dev/sdl/scale.c"))
+        .arg("-o")
+        .arg(&out)
+        .output()
+        .expect("cc runs");
+    assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
+    let done = Command::new(&out).output().expect("the test runs");
+    std::fs::remove_file(&out).ok();
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stdout));
 }
