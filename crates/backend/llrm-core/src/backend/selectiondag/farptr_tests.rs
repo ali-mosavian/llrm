@@ -160,11 +160,11 @@ fn an_inline_copy_between_far_pointers_moves_the_offset_word() {
         .iter()
         .filter(|node| matches!(node.opcode, ISD::Load | ISD::Store))
         .filter_map(|node| match node.data {
-            super::dag::NodeData::Mem(info) if info.mem_vt == super::mvt::EVT::I16 => Some(info.space),
+            super::dag::NodeData::Mem(info) if info.mem_vt == super::mvt::EVT::I32 => Some(info.space),
             _ => None,
         })
         .collect();
-    assert!(spaces.len() >= 8, "four word loads and four stores: {}", dag.dump());
+    assert!(spaces.len() >= 4, "two dword loads and two stores: {}", dag.dump());
     assert!(spaces.iter().all(|space| *space == 259), "{spaces:?}\n{}", dag.dump());
 }
 

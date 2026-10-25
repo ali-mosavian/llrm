@@ -172,6 +172,34 @@ fn a_far_load_reads_the_pointer_and_goes_through_its_selector() {
     );
 }
 
+const M16_ZERO_16: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+@buf = global [16 x i8] zeroinitializer
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define cc 1005 void @f() addrspace(1) {
+entry:
+  call void @llvm.memset.p0.i16(ptr @buf, i8 0, i16 16, i1 false)
+  ret void
+}
+";
+
+/// `getOptimalMemOpType` is `i32` in every mode: 16 zero bytes at m16 were
+/// eight word stores (48 bytes of code), the pin's are four dword stores
+/// (rep_count: 486 -> 1046 bytes against the old selector).
+#[test]
+fn an_m16_zero_fill_of_sixteen_bytes_is_four_dword_stores() {
+    let module = llrm_mir::parse::module(M16_ZERO_16).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let stores = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.name.as_deref() == Some("mov") && matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
+        .count();
+    assert_eq!(stores, 4);
+}
+
 const M16_FILL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
 @buf = global [100 x i8] zeroinitializer
 declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
@@ -431,4 +459,39 @@ fn a_copy_from_a_far_pointer_reads_through_its_selector() {
             }),
         );
     assert!(!from_a_constant, "DS takes a constant (DGROUP), not the pointer's selector");
+}
+
+const FAR_MEMSET: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+define void @f(ptr addrspace(2) %s, i16 %n) addrspace(1) {
+entry:
+  %p = addrspacecast ptr addrspace(2) %s to ptr addrspace(4)
+  call void @llvm.memset.p4.i16(ptr addrspace(4) %p, i8 0, i16 %n, i1 false)
+  ret void
+}
+declare void @llvm.memset.p4.i16(ptr addrspace(4), i8, i16, i1)
+";
+
+/// `rep stosb` stores at ES:DI. A far pointer whose offset folded to zero
+/// (`shl edi, 16` of the selector, no `or`) was taken for a near pointer and
+/// ES was set to `DGROUP`: qb `sieve.bas` cleared its data segment instead of
+/// its array and hung under `--isel=dag`. The selector is the high word.
+#[test]
+fn a_fill_through_a_far_pointer_stores_through_its_selector() {
+    use crate::model::ir::{Loc, Operation};
+    let module = llrm_mir::parse::module(FAR_MEMSET).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+    let insns = done.body.insns();
+    let fill = insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.op == Operation::Fill)).expect("a fill");
+    let Some(Loc::Held(segment)) = fill.what.as_ref().and_then(|w| w.sources.last().cloned()) else {
+        panic!("{fill:?}")
+    };
+    let from_a_constant = insns
+        .iter()
+        .any(
+            |i| i.what.as_ref().is_some_and(|w| {
+                w.dests.contains(&Loc::Held(segment)) && w.sources.iter().all(|source| matches!(source, Loc::Imm(_)))
+            }),
+        );
+    assert!(!from_a_constant, "ES takes a constant (DGROUP), not the pointer's selector");
 }
