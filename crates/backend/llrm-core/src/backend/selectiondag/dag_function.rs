@@ -1304,6 +1304,12 @@ pub(super) fn read_before_defined(
     None
 }
 
+/// DEVIATE SC1 (owner w-2): the pin's StackColoring runs on MIR after selection
+/// and merges the frame objects its LIFETIME_START/END pseudos bound; this
+/// groups the allocas on the IR, with the old selector's rule, before the
+/// objects are made. Same frames on the shapes measured ((4,4) -> (4,2)); exit:
+/// the MIR-level pass over the markers the DAG builder keeps.
+///
 /// StackColoring over the IR's lifetime markers (`llvm.lifetime.start` and
 /// `.end`, which the builder keeps as chain nodes): the frame object of each
 /// static alloca in `sizes` (value, bytes, alignment), locals never live
