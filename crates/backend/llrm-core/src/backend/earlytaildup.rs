@@ -51,11 +51,11 @@
 //! # Used by
 //! `flow::machine_with`, first of the machine phases.
 
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::model::ir::Operation;
 use crate::model::lir::{Block, Insn, LirBlock, LirBody};
+use crate::support::hash::{HashMap, HashSet};
 
 mod update;
 
@@ -106,7 +106,7 @@ struct Preds(HashMap<i64, Vec<usize>>);
 
 impl Preds {
     fn of(body: &LirBody) -> Self {
-        let mut from: HashMap<i64, Vec<usize>> = HashMap::new();
+        let mut from: HashMap<i64, Vec<usize>> = HashMap::default();
         for (place, block) in body.blocks.iter().enumerate() {
             for to in crate::model::lir::distinct(&block.succ) {
                 from.entry(to).or_default().push(place);
@@ -442,11 +442,11 @@ fn duplicate(
     outside.dedup();
     let mut next = body.next_value();
     // What the tail's values are in each copy, and the block that holds it.
-    let mut avail: HashMap<u32, HashMap<i64, u32>> = outside.iter().map(|value| (*value, HashMap::new())).collect();
-    let mut made: HashMap<usize, Vec<Arc<Insn>>> = HashMap::new();
+    let mut avail: HashMap<u32, HashMap<i64, u32>> = outside.iter().map(|value| (*value, HashMap::default())).collect();
+    let mut made: HashMap<usize, Vec<Arc<Insn>>> = HashMap::default();
     for &pred in chosen {
         let host = &body.blocks[pred];
-        let mut map: HashMap<u32, u32> = HashMap::new();
+        let mut map: HashMap<u32, u32> = HashMap::default();
         for phi in block.phis.iter() {
             if let Some((_, value)) = phi.incoming.iter().find(|(from, _)| *from == host.at) {
                 map.insert(phi.result, *value);
@@ -574,10 +574,9 @@ fn duplicate(
 /// `TailDuplicator::tailDuplicateBlocks` until it changes nothing: every block
 /// but the entry, in order, tried as a tail.
 pub fn duplicated(
-    body: &LirBody,
+    mut body: LirBody,
     size: bool,
 ) -> LirBody {
-    let mut body = body.clone();
     loop {
         let mut changed = false;
         let mut place = 1;
@@ -623,7 +622,7 @@ impl crate::model::passes::LIRTransform for EarlyTailDuplicate {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(duplicated(&body, self.size))
+        Ok(duplicated(body, self.size))
     }
 }
 

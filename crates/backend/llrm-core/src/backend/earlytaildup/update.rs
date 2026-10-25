@@ -18,9 +18,8 @@
 //! # Used by
 //! `earlytaildup::duplicate`.
 
-use std::collections::HashMap;
-
 use crate::model::lir::{LirBlock, Phi};
+use crate::support::hash::{HashMap, HashSet};
 
 pub(super) struct Updater<'a> {
     blocks: &'a mut Vec<LirBlock>,
@@ -28,7 +27,7 @@ pub(super) struct Updater<'a> {
     avail: HashMap<i64, u32>,
     next: &'a mut u32,
     start: HashMap<i64, Option<u32>>,
-    referenced: std::collections::HashSet<u32>,
+    referenced: HashSet<u32>,
     walking: HashMap<i64, u8>,
     added: HashMap<i64, Vec<Phi>>,
 }
@@ -48,10 +47,10 @@ impl<'a> Updater<'a> {
             value,
             avail,
             next,
-            start: HashMap::new(),
-            referenced: std::collections::HashSet::new(),
-            walking: HashMap::new(),
-            added: HashMap::new(),
+            start: HashMap::default(),
+            referenced: HashSet::default(),
+            walking: HashMap::default(),
+            added: HashMap::default(),
         };
         let places: Vec<i64> = this.blocks.iter().map(|block| block.at).collect();
         for at in places {
