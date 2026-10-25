@@ -26,7 +26,7 @@ The ledger's per-bucket sums count some Ir in two buckets (~39 M); the union of 
 
 `__rust_alloc` 28.2 M exclusive (1.15 M calls), `__rust_dealloc` 17.7, `memcpy` 23.2 (621 K calls). By caller, from the callgrind call tree:
 
-- Vec growth is the mass: `finish_grow` 29.8 M inclusive (182 K allocs 4.8 M, 63 K reallocs 15.1 M). Of the reallocs, mimalloc's `realloc` copies 9.5 M in 2,442 calls (~3.9 Ir a call is the copy of a grown Vec).
+- Vec growth is the mass: `finish_grow` 29.8 M inclusive (182 K allocs 4.8 M, 63 K reallocs 15.1 M). Of the reallocs, mimalloc's `realloc` copies 9.5 M in 2,442 calls (~3.9 K Ir a call, the copy of a grown Vec).
 - No caller of `grow_one` or `do_reserve_and_handle` is above 0.3 M. The top for `Vec<u32>` is `frameescape::exposed_allocas` 0.29 M (3.2 K growths); for `Vec<usize>` `machinesched::graph` 0.32 M. 43.6 K `u32` and 27.4 K `usize` growths are spread over ~100 sites.
 - Other allocators: `String::clone` 1.0 M (39 K), hashbrown `with_capacity` 0.9 M (20 K), `Vec<Loc>::clone` 0.8 M (34 K), `Vec<String>` collect 0.6 M.
 
@@ -35,7 +35,7 @@ Verdict: a long tail, no cut of 0.5 M at one site. Presizing the top sites is no
 ## Order
 
 1. `cmp_stale`: ~5 M left, a structure change.
-2. `Sites::of`: 8.6 M if it is rebuilt per query.
+2. `Sites::of`: w14.
 3. `Vec<Loc>::clone` and the `successors`/`predecessors` Vecs: find the sites first.
 
 `cmp_stale` priced at 7.4 M is 131 K compares at ~48 Ir; its ceiling is ~6 M (pointer entries, `!Send`), and a destructor-free arena took 0.8 M (#4748).
