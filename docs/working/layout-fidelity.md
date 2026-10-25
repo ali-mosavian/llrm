@@ -8,7 +8,13 @@ A pass that visits blocks in layout order (JumpThreading, SimplifyCFG, GVN) and 
 | `SplitKnownCriticalEdge` | right after the source (BreakCriticalEdges.cpp:186) | after the source (this change) |
 | LoopSimplify preheader | `placeSplitBlockCarefully` (LoopSimplify.cpp:80) | the same |
 | LoopSimplify exit, backedge | before the exit; after the last latch | the same |
-| `splitBasicBlock`, `SplitEdge` | after the old block; three cases (BasicBlockUtils.cpp:672) | end: next PR |
+| `splitBasicBlock`, `SplitEdge` | after the old block; three cases (BasicBlockUtils.cpp:672) | the same (#4560) |
+| LoopUnroll copies | in order right after the latch (LoopUnroll.cpp:1214) | the same (#4572) |
+| LoopRotate `ExitSplit` | before the exit (LoopRotationUtils.cpp:788) | the same (#4572) |
+| uncondicmp `switch.edge` | before the compare's block (SimplifyCFG.cpp:5463) | the same (#4572) |
+| `breakLoopBackedge` | `SplitEdge(Latch, Header)` (LoopUtils.cpp:800) | the same (#4572) |
+| LSR split of a loop exit | after the source, moved before the phi's block when the source is in the loop and the phi is not (LoopStrengthReduce.cpp:5998) | the same |
+| `peelLoop` | `peel.begin`, `peel.next`, `peel.newph` around the clones (LoopPeel.cpp:1296) | open: `loopclone::peeled_any_latch` makes no such blocks, so its CFG differs from the pin's; no measured effect (d_faces -O2 unrolls 1 of 11 functions), not rewritten blind |
 
 Measured against b967bfa0e (release, d_faces -O2): 1,015,182,862 -> 1,012,850,850 Ir. Objects move in 6 to 11 sources per level; CODE bytes m16 -O2 +408, m32 -O2 +0.
 
