@@ -101,3 +101,48 @@ fn a_weighted_switch_leaves_by_each_case_with_the_irs_probability() {
     let a = reach(body, body.entry, returns(10));
     assert!((a - 0.9).abs() < 0.03, "leaves by the 90-weight case with {a}");
 }
+
+const SWITCH: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %x) {
+entry:
+  switch i32 %x, label %d [ i32 1, label %a
+                            i32 100, label %b
+                            i32 5000, label %c ]
+a:
+  ret i32 10
+b:
+  ret i32 20
+c:
+  ret i32 30
+d:
+  ret i32 0
+}
+";
+
+/// With every edge even, a switch's compare took its case as likely as the next
+/// compare, so placement kept the case on the fall-through and each miss paid a
+/// taken jump (bench `switch` under dag: 8 `jne` and no `je` where the pin has
+/// 5 `je` and 3 `jne`). A case is one among the rest, and the next compare is
+/// the rest.
+#[test]
+fn a_switch_compare_leaves_for_its_case_with_the_odds_of_one_case_among_the_rest() {
+    let module = llrm_mir::parse::module(SWITCH).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let body = &done.body;
+    let returns: Vec<i64> = body.blocks.iter().filter(|b| b.succ.is_empty()).map(|b| b.at).collect();
+    let mut compares = 0;
+    for block in body.blocks.iter().filter(|b| b.succ.len() == 2) {
+        let succ: Vec<i64> = block.succ.iter().copied().collect();
+        let (Some(case), Some(next)) = (
+            succ.iter().copied().find(|to| returns.contains(to)),
+            succ.iter().copied().find(|to| !returns.contains(to)),
+        ) else {
+            continue;
+        };
+        compares += 1;
+        let (case, next) = (body.odds.chance(block.at, &succ, case), body.odds.chance(block.at, &succ, next));
+        assert!(case < next, "{:#x}: case {case}, next compare {next}: {:?}", block.at, body.odds);
+    }
+    assert!(compares > 0, "a compare that leaves for a case");
+}
