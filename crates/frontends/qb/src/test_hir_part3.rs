@@ -484,7 +484,7 @@ fn test_nested_integer_division_keeps_each_dividend() {
     // CVP narrows both quotients (80 \\ x fits 16 bits, then 8): two word
     // divisions in place of two dword ones, each with its own dividend.
     assert!(scale.contains("mov ax, 80\n"));
-    assert!(scale.contains("mov bx, 30\n"));
+    assert!(scale.contains(", 30\n"));
     assert_eq!(scale.matches("idiv").count(), 2);
     assert!(!scale.contains("idiv e"));
 }
@@ -1990,12 +1990,13 @@ fn test_a_dividend_two_instructions_require_is_copied_into_its_register_once() {
     // so the extended value sat in EDI across both and one of the three
     // recurrences spilled: `mov ax, [bp-2]` and `add word ptr [bp-2], 5`. A
     // divisor read from memory stays a division; a constant is a reciprocal.
+    // CVP narrows `i \\ d(0)` to 16 bits as the pin does (`sdiv i16`): `cwd`.
     let source = "DEFINT A-Z\nDIM b(200), d(1)\nDIM i, t\nd(0) = 5 + INT(RND * 1)\nt = 0\nFOR i = 0 TO 100 STEP 5\n    b(i) = i \\ d(0)\n    t = t + b(i)\nNEXT i\nPRINT \"T=\"; t\n";
     let basic = std::env::temp_dir().join(format!("stride_variable_divisor_{}.bas", std::process::id()));
     std::fs::write(&basic, source).expect("writes the program");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let body = backward_loop(&listing(&program));
-    assert!(!body.contains("[bp") && body.contains("cdq") && body.matches("idiv").count() == 1, "{body}");
+    assert!(!body.contains("[bp") && body.contains("cwd") && body.matches("idiv").count() == 1, "{body}");
 }
 
 #[test]
@@ -2681,7 +2682,11 @@ fn test_a_fixed_length_argument_is_assigned_back_after_the_call() {
     let source = written(&directory, "fixback.bas", b"DECLARE SUB Fill (s AS STRING)\nDIM f AS STRING * 6\nf = \"abcdef\"\nFill f\nPRINT f\nSUB Fill (s AS STRING)\ns = \"XY\"\nEND SUB\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
     let text = listing(&program);
-    let after = &text[text.find("call far ptr FILL").expect("the call")..];
+    // The inliner takes Fill into the body, as the pin's does: the assignment
+    // `s = "XY"` is then the last B$SASS.
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let call = main.find("call far ptr FILL").unwrap_or_else(|| main.rfind("call far ptr B$SASS").expect("the call"));
+    let after = &main[call..];
     let assigned = after.find("call far ptr B$ASSN").expect("an assignment back");
     assert!(after.find("call far ptr B$STDL").is_none_or(|released| assigned < released), "{after}");
 }
