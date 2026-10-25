@@ -57,7 +57,10 @@ fn test_a_static_function_called_once_is_inlined_at_any_size() {
     let text = listing(&["-O2"]);
     assert!(!text.contains("twice_ proc"), "-O2: the pin inlines twice, called twice: {text}");
     let text = listing(&["-O2", "-fno-inline-functions"]);
-    assert!(text.contains("sum_ proc") && text.contains("twice_ proc"), "-fno-inline-functions: the pin's always-inliner leaves both calls: {text}");
+    assert!(
+        text.contains("sum_ proc") && text.contains("twice_ proc"),
+        "-fno-inline-functions: the pin's always-inliner leaves both calls: {text}"
+    );
     // Where inlining is off, it is off.
     assert!(listing(&["-O2", "-fno-inline-functions", "-fno-inline-functions-called-once"]).contains("sum_ proc"));
 }
