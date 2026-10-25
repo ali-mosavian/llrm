@@ -2438,7 +2438,7 @@ impl Emitter<'_, '_> {
                 self.push(Operation::Unary, &name, vec![Loc::Mem(cell)], Vec::new());
                 Ok(Some(()))
             }
-            "LEA32r" | "LEA16r" | "LEA64r" => {
+            "LEA32r" | "LEA16r" | "LEA64r" | "LEA64_32r" => {
                 // a `lea` only computes the address: a scaled index is fine
                 let cell = self.cell_unchecked(
                     node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short lea".to_owned()))?,
@@ -2502,6 +2502,12 @@ impl Emitter<'_, '_> {
                     && cell.base.is_none()
                     && cell.index.is_none()
                     && let Some(address) = cell.addr
+                    && matches!(
+                        address.space,
+                        crate::model::ir::Space::Segment
+                            | crate::model::ir::Space::External
+                            | crate::model::ir::Space::Group
+                    )
                 {
                     let offset = Imm { value: 0, width, address: Some(address) };
                     self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Imm(offset)]);
