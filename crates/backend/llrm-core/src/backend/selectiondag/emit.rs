@@ -705,8 +705,19 @@ impl Emitter<'_, '_> {
                 let NodeData::PhysReg(register) = self.dag.node(node.ops[1]).data else {
                     return Err(EmitError::Unsupported("a virtual register passed to a call".to_owned()));
                 };
-                let held = self.held_operand(node.ops[2])?;
-                self.arguments.push((held, register));
+                // An any-extended word (selected as an `INSERT_SUBREG` into an
+                // undefined dword) is passed as the word it is.
+                let value = node.ops[2];
+                let source = if self.is_machine_named(value, "INSERT_SUBREG")
+                    && self.is_implicit_def(self.dag.operand(value, 0))
+                    && self.dag.value_type(self.dag.operand(value, 1)) == EVT::I16
+                {
+                    self.dag.operand(value, 1)
+                } else {
+                    value
+                };
+                let held = self.held_operand(source)?;
+                self.arguments.push((held, Self::argument_register(register, held.width)));
                 Ok(())
             }
             // A value returned in a register is required there by the `RET`,
@@ -1175,6 +1186,26 @@ impl Emitter<'_, '_> {
         let ISD::Machine(op) = self.dag.opcode(value) else { return false };
         instr::desc(op as u16)
             .is_some_and(|d| usize::from(value.res) >= usize::from(d.num_defs) && d.implicit_defs.contains(&28))
+    }
+
+    /// A word argument is required in the word register: the DAG names the
+    /// convention's 32-bit register (`$eax` for an any-extended `i16`), and a
+    /// word value required in `EAX` is a dword to the allocator, which spilled
+    /// every pointer live across a call as a dword (QCport -Os: +16%).
+    fn argument_register(
+        register: llrm_lir::registers::RegId,
+        width: u32,
+    ) -> llrm_lir::registers::RegId {
+        use llrm_lir::registers::RegId;
+        match (width, register) {
+            (2, RegId::EAX) => RegId::AX,
+            (2, RegId::EBX) => RegId::BX,
+            (2, RegId::ECX) => RegId::CX,
+            (2, RegId::EDX) => RegId::DX,
+            (2, RegId::ESI) => RegId::SI,
+            (2, RegId::EDI) => RegId::DI,
+            _ => register,
+        }
     }
 
     /// The call instruction: it destroys the caller-saved registers and may
@@ -2187,8 +2218,25 @@ impl Emitter<'_, '_> {
                     && cell.base.is_none()
                     && cell.index.is_some()
                 {
+                    // 16-bit addressing has no scale: the index is scaled by a
+                    // shift first.
                     if cell.scale != 1 {
-                        return Err(EmitError::Unsupported("a lea of a symbol and a scaled index at m16".to_owned()));
+                        let shift = match cell.scale {
+                            2 => 1,
+                            4 => 2,
+                            8 => 3,
+                            other => {
+                                return Err(EmitError::Unsupported(format!(
+                                    "a lea of a symbol and an index scaled by {other} at m16"
+                                )));
+                            }
+                        };
+                        let index = cell.index.take().expect("an index");
+                        let scaled = self.fresh(index.width);
+                        let amount = Loc::Imm(Imm { value: shift, width: 1, address: None });
+                        self.push(Operation::Binary, "shl", vec![Loc::Held(scaled)], vec![Loc::Held(index), amount]);
+                        cell.index = Some(scaled);
+                        cell.scale = 1;
                     }
                     cell.base = cell.index.take();
                 }
