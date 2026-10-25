@@ -1040,6 +1040,15 @@ fn test_bt_and_btc_of_registers_encode() {
     assert_eq!(hex(&made(emitted(&btc)).code), "660fbbc8");
 }
 
+/// A jump through a register (an indirect sibling call after its epilogue) had
+/// no encoding: `--isel=dag` with sibling calls on stopped the object build.
+#[test]
+fn test_a_jump_through_a_register_is_jmp_rm() {
+    let what =
+        Semantics { indirect: true, ..sem(Operation::Jump, Some("jmp"), vec![], vec![rg(RegId::AX, 2)], None, false) };
+    assert_eq!(hex(&made(emitted(&what)).code), "ffe0");
+}
+
 /// `bt reg, imm8` encodes (the pin's BT32ri8 had no form: a `0 - (crc & 1)`
 /// chain was refused).
 #[test]
