@@ -165,6 +165,7 @@ impl Options {
             self.rounds_float_spills,
             self.spills_extended,
             self.pipeline.stable_loads,
+            self.pipeline.has_min_size,
         )
     }
 }

@@ -6,6 +6,7 @@
 #include "far.h"
 #include "fheap.h"
 #include "nheap.h"
+#include "device.h"
 
 enum { SEGMENT = 0x10000UL };
 
@@ -94,10 +95,13 @@ static void copy_far(u16 to_segment, unsigned long to, u16 from_segment, unsigne
         unsigned long chunk = count < 0x1000 ? count : 0x1000;
         u8 __far *target = (u8 __far *)far_words(to_segment + (u16)(to >> 4)) + (to & 15);
         const u8 __far *source = (const u8 __far *)far_words(from_segment + (u16)(from >> 4)) + (from & 15);
-        unsigned at;
+        BlockOp op;
 
-        for (at = 0; at < chunk; at++)
-            target[at] = source[at];
+        op.dst = target;
+        op.src = source;
+        op.count = (unsigned)chunk;
+        op.value = 0;
+        dev_move(&op);
         to += chunk;
         from += chunk;
         count -= chunk;

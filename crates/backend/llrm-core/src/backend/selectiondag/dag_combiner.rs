@@ -607,6 +607,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return (folded != node).then_some(folded);
         }
         match self.dag.opcode(n0) {
+            // `reduceLoadWidth`: the low bytes of a loaded value are a narrower
+            // load of the same address (little-endian), which then folds into
+            // its user (`test byte [m], 1` where `mov eax, [m]; test al, 1`).
+            ISD::Load if n0.res == 0 => self.reduce_load_width(node),
             ISD::Truncate => Some(self.dag.get_node(ISD::Truncate, vt, &[self.dag.operand(n0, 0)])),
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => {
                 let (op, x) = (self.dag.opcode(n0), self.dag.operand(n0, 0));
@@ -621,6 +625,37 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             _ => None,
         }
+    }
+
+    /// `reduceLoadWidth` for `trunc (load p)` of a load nothing else reads.
+    fn reduce_load_width(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (vt, load) = (self.dag.value_type(node), self.dag.operand(node, 0));
+        let NodeData::Mem(info) = self.dag.node(load).data.clone() else { return None };
+        let wide = self.dag.value_type(load);
+        if info.volatile
+            || info.ext.is_some()
+            || self.dag.use_count(load.node) != 1
+            || !vt.is_integer()
+            || vt.size_in_bits() % 8 != 0
+            || vt.size_in_bits() >= wide.size_in_bits()
+        {
+            return None;
+        }
+        // The load must be legal at the narrower type once types are legal.
+        if self.level >= CombineLevel::AfterLegalizeTypes && self.tli.is_some_and(|tli| !tli.types.is_type_legal(vt)) {
+            return None;
+        }
+        let (chain, ptr) = (self.dag.operand(load, 0), self.dag.operand(load, 1));
+        let narrow = super::dag::MemInfo { mem_vt: vt, ..info };
+        let new = self.dag.get_load(vt, chain, ptr, narrow);
+        if self.dag.invariant_loads.contains(&load.node) {
+            self.dag.invariant_loads.insert(new.node);
+        }
+        self.replace_value(SDValue { node: load.node, res: 1 }, SDValue { node: new.node, res: 1 });
+        Some(new)
     }
 
     /// `visitANY_EXTEND`, `visitZERO_EXTEND` and `visitSIGN_EXTEND`, the folds
@@ -1030,6 +1065,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(folded);
             }
         }
+        if op == ISD::Shl && self.dag.opcode(n0) == ISD::Srl {
+            if let Some(folded) = self.shl_of_srl(node) {
+                return Some(folded);
+            }
+        }
         if self.dag.opcode(n0) != op {
             return None;
         }
@@ -1044,6 +1084,43 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(self.dag.get_node(op, vt, &[x, amount]));
         }
         Some(self.dag.get_constant(0, vt))
+    }
+
+    /// `visitSHL`: `shl (srl x, c1), c2` is `and (srl x, c1 - c2), (-1 << c1
+    /// >> (c1 - c2))` when `c2 <= c1`, else `and (shl x, c2 - c1), (-1 <<
+    /// c2)`; only when the inner shift has no other use or the amounts are
+    /// equal (`shouldFoldConstantShiftPairToMask`: true on these CPUs).
+    fn shl_of_srl(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (inner, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let (c2, c1) = (self.dag.constant(n1)?, self.dag.constant(self.dag.operand(inner, 1))?);
+        let vt = self.dag.value_type(node);
+        let width = u128::from(vt.size_in_bits());
+        if c1 >= width || c2 >= width || (c1 != c2 && self.dag.use_count(inner.node) != 1) {
+            return None;
+        }
+        let x = self.dag.operand(inner, 0);
+        let amount_vt = self.dag.value_type(n1);
+        let all = super::fold::mask(vt.size_in_bits());
+        if c2 <= c1 {
+            let diff = c1 - c2;
+            let mask = ((all << c1) & all) >> diff;
+            let shifted = if diff == 0 {
+                x
+            } else {
+                let by = self.dag.get_constant(diff, amount_vt);
+                self.dag.get_node(ISD::Srl, vt, &[x, by])
+            };
+            let mask = self.dag.get_constant(mask, vt);
+            return Some(self.dag.get_node(ISD::And, vt, &[shifted, mask]));
+        }
+        let diff = c2 - c1;
+        let by = self.dag.get_constant(diff, amount_vt);
+        let shifted = self.dag.get_node(ISD::Shl, vt, &[x, by]);
+        let mask = self.dag.get_constant((all << c2) & all, vt);
+        Some(self.dag.get_node(ISD::And, vt, &[shifted, mask]))
     }
 
     /// `visitSRL`: `srl (trunc (srl x, c1)), c2` is 0 or `trunc (srl x,

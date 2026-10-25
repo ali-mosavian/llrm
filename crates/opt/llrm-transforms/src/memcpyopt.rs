@@ -122,9 +122,16 @@ impl FunctionPass for MemCpyOpt {
         let registers = analyses.get::<llrm_analysis::manager::Registers>(&*unit.context, unit.layout, &*unit.function);
         let dt = analyses.get::<Dominators>(&*unit.context, unit.layout, &*unit.function);
         let held = analyses.get::<llrm_analysis::manager::MemorySsa>(&*unit.context, unit.layout, &*unit.function);
-        let (mssa, accesses) = match &*held {
-            Ok(held) => (held.mssa.clone(), (*held.accesses).clone()),
-            Err(_) => {
+        let made = match &*held {
+            Ok(held) => held
+                .accesses(&*unit.context, unit.layout, &*unit.function, analyses)
+                .ok()
+                .map(|accesses| (held.mssa.clone(), (*accesses).clone())),
+            Err(_) => None,
+        };
+        let (mssa, accesses) = match made {
+            Some(made) => made,
+            None => {
                 let memory = View::within(&*unit.context, unit.layout, &*unit.function, &outer)
                     .with_registers(&registers)
                     .with_shape(&shape);

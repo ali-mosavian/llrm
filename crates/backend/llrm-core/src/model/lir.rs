@@ -1112,6 +1112,9 @@ pub struct LirBody {
     /// It calls a routine that returns twice (`setjmp`): no frame slot is
     /// shared.
     pub returns_twice: bool,
+    /// The function is `minsize` (`-Oz`, `Function::hasMinSize`): the passes
+    /// that ask it take size over speed.
+    pub min_size: bool,
     /// (load, write) by `at`: the optimizer proved the write leaves the load's
     /// cell as it was (`!llrm.spares`).
     pub spares: Arc<BTreeSet<(i64, i64)>>,
@@ -1312,6 +1315,7 @@ impl LirBody {
             odds: BlockOdds::default(),
             frequencies: None,
             returns_twice: false,
+            min_size: false,
             spares: Arc::default(),
             float_stack: 0,
             homes: Arc::default(),
@@ -1377,6 +1381,7 @@ impl LirBody {
             odds: self.odds.clone(),
             frequencies,
             returns_twice: self.returns_twice,
+            min_size: self.min_size,
             spares: Arc::clone(&self.spares),
             float_stack: self.float_stack,
             homes: Arc::clone(&self.homes),

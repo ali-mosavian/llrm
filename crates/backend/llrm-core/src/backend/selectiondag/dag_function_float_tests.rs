@@ -563,3 +563,38 @@ fn the_fudge_of_an_unsigned_conversion_is_read_as_a_float() {
         .collect();
     assert_eq!(indexed, [4], "the fudge is indexed by the sign and is a float");
 }
+
+const BITCAST_DOUBLE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @bits(double %d) {
+entry:
+  %i = bitcast double %d to i64
+  ret i64 %i
+}
+define double @from(i64 %i) {
+entry:
+  %d = bitcast i64 %i to double
+  ret double %d
+}
+define i32 @fbits(float %f) {
+entry:
+  %i = bitcast float %f to i32
+  %n = xor i32 %i, 2147483648
+  ret i32 %n
+}
+define float @ffrom(i32 %i) {
+entry:
+  %f = bitcast i32 %i to float
+  ret float %f
+}
+";
+
+/// A float read as an integer's bits (and back) goes through a stack slot, as
+/// `ExpandBitCast` has it: a store of one type and a load of the other.
+#[test]
+fn a_bitcast_between_a_float_and_an_integer_goes_through_the_stack() {
+    let module = llrm_mir::parse::module(BITCAST_DOUBLE).expect("parses");
+    for name in ["bits", "from", "fbits", "ffrom"] {
+        selected(&module, name, &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+            .unwrap_or_else(|e| panic!("{name}: {}", e.0));
+    }
+}
