@@ -741,6 +741,7 @@ fn selected_in(
         block_at: &block_at,
         frame: &frame,
         address_mode,
+        call_alignment: if arch.aligned_calls() { (arch.stack_alignment() as i64).max(1) } else { 1 },
         map: &tables.map,
         names: &tables.names,
     };
