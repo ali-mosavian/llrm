@@ -2009,7 +2009,7 @@ pub fn arith_into_imm(
     relocated: bool,
 ) -> Option<Emitted> {
     let built = operand_of(cell, at.bits);
-    if !TWO_OPERAND.contains(&name) || built.is_none() || ![1, 2, 4].contains(&cell.width) {
+    if !TWO_OPERAND.contains(&name) || built.is_none() || ![1, 2, 4, 8].contains(&cell.width) {
         return None;
     }
     let (r#where, symbolic) = built?;
@@ -2018,7 +2018,12 @@ pub fn arith_into_imm(
     if width == 1 {
         value = ((value & 0xFF) ^ 0x80) - 0x80;
     }
-    let all: Vec<i64> = if fits_in_a_byte(value) && !relocated { vec![8, width * 8] } else { vec![width * 8] };
+    // A quadword takes a sign-extended dword at most.
+    let widest = if width == 8 { 32 } else { width * 8 };
+    if width == 8 && i32::try_from(value).is_err() {
+        return None;
+    }
+    let all: Vec<i64> = if fits_in_a_byte(value) && !relocated { vec![8, widest] } else { vec![widest] };
     for bits in all {
         let Some(code) = code_of!(Upper(name), "_RM", width * 8, "_IMM", bits) else {
             continue;
