@@ -162,6 +162,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "translated SimplifyCfg at the default options (convertSwitchRangeToICmp is read by simplifySwitch, untranslated) runs here and Decide does not; untranslated: SimplifyCondBranchToCondBranch, simplifyUncondBranch's remainder, simplifySwitch, simplifyUnreachable's noreturn and assume folds; criterion: opt -passes=simplifycfg on the same inputs (tools/difftest/difftest.py inputs decide@690) is identical on the rows corpus; exit: those pieces translated (simplifycfg-fold-2148, 2026-10-23)",
     ),
     entry("reassociate@696", Simplify, "reassociate", Translated, ""),
+    entry("constraint-elimination@699", Simplify, "constraint-elimination", Translated, ""),
     entry("algebraic@696", Simplify, "instcombine", Old, "instcombine-port"),
     entry("loopsimplify@764", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@764", Simplify, "lcssa", Old, "lcssa-port"),
@@ -272,7 +273,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); the opcodes of foldICmpBinOpWithConstant not yet translated (xor, or, mul, shl, shr, srem, div, sub, add: InstCombineCompares.cpp:4124; only and is, combine_icmp_const.rs) are owed by llrm-w-4, 2026-10-24 onward; on by default, LLRM_NO_COMBINE turns it off",
     ),
     entry("dead@837", Simplify, "instcombine", Old, "instcombine-port"),
-    entry("constraint-elimination", Simplify, "constraint-elimination", Missing, ""),
     // Not slots: SimplifyCFG at PassBuilderPipelines.cpp#L873
     // (`addPreInlinerPasses`, PGO instrumentation or use only) and #L1424
     // (`ExtraVectorizerPasses`, after the vectorizer) are not in the default
@@ -716,9 +716,10 @@ impl Level {
     }
 }
 
-/// Registry slots the pin's `default<O1>` does not have (no GVN, JumpThreading
-/// or TailCallElim at -O1: `buildO1FunctionSimplificationPipeline`), so a
-/// Translated one is not required in a -O1 list.
+/// Registry slots the pin's `default<O1>` does not have (no GVN, JumpThreading,
+/// ConstraintElimination or TailCallElim at -O1:
+/// `buildO1FunctionSimplificationPipeline`), so a Translated one is not
+/// required in a -O1 list.
 pub const ABSENT_AT_O1: &[&str] = &[
     "gvn@787",
     "jumpthreading@668",
@@ -727,6 +728,7 @@ pub const ABSENT_AT_O1: &[&str] = &[
     "tailrec@688",
     "aggressive-instcombine@678",
     "jumptableswitch@672",
+    "constraint-elimination@699",
 ];
 
 /// Run counts LLVM does not match yet, stated and not checked:

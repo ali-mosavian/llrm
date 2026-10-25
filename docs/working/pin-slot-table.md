@@ -101,7 +101,6 @@ and the user's ruling of 10-20 (no vector MIR until 32-bit parity) is what keeps
 | Module | rpo-function-attrs | -O1,-O2,-O3,-Os | no stage of ours is known to do it; unverified |
 | Module | constmerge | -O1,-O2,-O3,-Os | merging identical constants: -Os m16 on 65 QCport modules through the pin (llc obj sizes, constmerge removed): +58 B of 399336 (0.015%), 2 modules (game/mdl_ai +44, ui/sbar +14); a row of low weight |
 | Simplify | jump-table-to-switch | -O2,-O3,-Os | x_funcptr: pin -O2 i486 makes 3 switches, none with -enable-jump-table-to-switch=false; the 12-IR ablation (0 differ) has no function-pointer table |
-| Simplify | constraint-elimination | -O2,-O3,-Os | registry Missing entry; ablation 0 of 12 IRs |
 | Simplify | extra-simple-loop-unswitch-passes | -O2,-O3,-Os | ablation 0 of 12 IRs |
 | Simplify | mldst-motion | -O2,-O3,-Os | ablation 0 of 12 IRs |
 | Early | callsite-splitting | -O3 | -O3 only; not measured |
@@ -118,7 +117,7 @@ The metric is the pin's output instruction count, not object bytes. The instance
 
 | pass (instance) | -O2: IRs changed, delta instructions | -Os | what it is |
 |---|---|---|---|
-| constraint-elimination | 5 of 65, +11 | 4 of 65, +13 | Simplify list (MISSING, w-4) |
+| constraint-elimination | 5 of 65, +11 | 4 of 65, +13 | Simplify list (translated, slot 699: w-5) |
 | mldst-motion | 4, +11 | 4, +9 | Simplify list (MISSING, w-4) |
 | late instcombine (the last of the Late list) | 3, +17 | none | Late list (MISSING, w-4) |
 | late loop-unroll<O2> | 3, -95 (the unroll adds 95) | none | Late list (MISSING, w-3) |
@@ -438,7 +437,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Simplify | tailcallelim | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | tailrec@688:Translated |  |  |
 | -O2 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@690:Partial |  |  |
 | -O2 | Simplify | reassociate | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | reassociate@696:Translated + algebraic@696:Old |  |  |
-| -O2 | Simplify | constraint-elimination | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-4, 11-09 |
+| -O2 | Simplify | constraint-elimination | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | constraint-elimination@699:Translated |  |  |
 | -O2 | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O2 | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O2 | Simplify | licm<no-allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | floatloop@724:Old + licm@724:Translated |  |  |
@@ -555,7 +554,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Simplify | tailcallelim | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | tailrec@688:Translated |  |  |
 | -O3 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@690:Partial |  |  |
 | -O3 | Simplify | reassociate | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | reassociate@696:Translated + algebraic@696:Old |  |  |
-| -O3 | Simplify | constraint-elimination | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-4, 11-09 |
+| -O3 | Simplify | constraint-elimination | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | constraint-elimination@699:Translated |  |  |
 | -O3 | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O3 | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O3 | Simplify | licm<no-allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | floatloop@724:Old + licm@724:Translated |  |  |
@@ -674,7 +673,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Simplify | tailcallelim | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | tailrec@688:Translated |  |  |
 | -Os | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@690:Partial |  |  |
 | -Os | Simplify | reassociate | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | reassociate@696:Translated + algebraic@696:Old |  |  |
-| -Os | Simplify | constraint-elimination | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-4, 11-09 |
+| -Os | Simplify | constraint-elimination | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | constraint-elimination@699:Translated |  |  |
 | -Os | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -Os | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -Os | Simplify | licm<no-allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | floatloop@724:Old + licm@724:Translated |  |  |
