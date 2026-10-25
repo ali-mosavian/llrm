@@ -327,6 +327,7 @@ impl<'a> Builder<'a> {
             constants_out: HashMap::new(),
             phi_updates: Vec::new(),
             tail_calls: Vec::new(),
+            tail_candidate: None,
             block,
             order,
             deferred: Vec::new(),
@@ -356,6 +357,9 @@ struct Builder<'a> {
     constants_out: HashMap<ConstantId, u32>,
     phi_updates: Vec<(ValueId, u32)>,
     tail_calls: Vec<InstId>,
+    /// The call being built if it is in tail position (step 1), until
+    /// `visit_call` has its convention to ask the target about.
+    tail_candidate: Option<InstId>,
     block: BlockId,
     /// The blocks in layout order, with the ones a switch lowering adds.
     order: Vec<BlockId>,
@@ -789,6 +793,11 @@ impl Builder<'_> {
             &info.argument_attrs,
         )
         .map_err(|_| Refused("call the convention does not describe"))?;
+        if let Some(tail) = self.tail_candidate.take()
+            && self.eligible_for_sibling_call(info, &plan, variadic, direct.is_some(), arguments)
+        {
+            self.tail_calls.push(tail);
+        }
         // A call of a function with more arguments than it declares (an
         // old-style `()` definition): the callee pops what it declares, the
         // rest is the caller's to remove.
@@ -1390,10 +1399,9 @@ impl Builder<'_> {
             Opcode::Ret => self.visit_ret(&instruction)?,
             Opcode::Switch => self.visit_switch(&instruction)?,
             Opcode::Call(info) => {
-                if self.in_tail_position(inst) {
-                    self.tail_calls.push(inst);
-                }
-                self.visit_call(&instruction, info)?
+                self.tail_candidate = self.in_tail_position(inst).then_some(inst);
+                self.visit_call(&instruction, info)?;
+                self.tail_candidate = None;
             }
             Opcode::Invoke(info) => self.visit_invoke(&instruction, info)?,
             // QB's pad is entered by the runtime, which `ehprepare` set up

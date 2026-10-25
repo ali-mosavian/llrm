@@ -407,6 +407,7 @@ pub mod x86isd {
     pub const LDS: u16 = 24577;
     pub const LES: u16 = 24576;
     pub const LLRM_ASM: u16 = 24578;
+    pub const LLRM_CALL_FLAGS: u16 = 24585;
     pub const LLRM_CODE: u16 = 24582;
     pub const LLRM_FARCALL: u16 = 24584;
     pub const LLRM_PTRDIFF: u16 = 24583;
@@ -1125,6 +1126,7 @@ pub fn x86isd_id(name: &str) -> Option<u16> {
         "LDS" => 24577,
         "LES" => 24576,
         "LLRM_ASM" => 24578,
+        "LLRM_CALL_FLAGS" => 24585,
         "LLRM_CODE" => 24582,
         "LLRM_FARCALL" => 24584,
         "LLRM_PTRDIFF" => 24583,
