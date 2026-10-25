@@ -246,6 +246,29 @@ pub fn pinned_by(
                     what.name.as_deref(),
                     Some("fnstcw" | "fldcw" | "fnstsw" | "in" | "out")
                 ) => {}
+                // `X86CallFrameOptimization` and the call-frame lowering turn
+                // these into pushes, `sub sp` and `add sp`: the bytes they
+                // move are `N - A` and `N - M`, as `ADJCALLSTACKDOWN/UP`.
+                Operation::Barrier if matches!(
+                    what.name.as_deref(),
+                    Some("call_frame_setup" | "call_frame_destroy")
+                ) => {
+                    let imm = |at: usize| match what.sources.get(at) {
+                        Some(Loc::Imm(imm)) => imm.value,
+                        _ => 0,
+                    };
+                    if what.name.as_deref() == Some("call_frame_setup") {
+                        // Tuned for size the arguments' pushes of values keep
+                        // the frame (above); they are not made yet, so any
+                        // frame area does (DEVIATE CF5).
+                        if size && imm(0) != 0 {
+                            return Some(Pinned::OpaqueSpAdjustment);
+                        }
+                        depth += imm(0) - imm(2);
+                    } else {
+                        depth -= imm(0) - imm(1);
+                    }
+                }
                 Operation::Leave => return Some(Pinned::FrameAddressTaken),
                 Operation::Exchange | Operation::Escape | Operation::Barrier => return Some(Pinned::OpaqueSpAdjustment),
                 Operation::Nothing if what.name.as_deref().is_some_and(|name| name.starts_with("push") || name.starts_with("pop")) => return Some(Pinned::OpaqueSpAdjustment),
