@@ -14,7 +14,8 @@
 // CHECK: cld
 // CHECK: {{_scroll_down(@3)?}} endp
 // CHECK-LABEL: {{_palette(@3)?}} proc
-// CHECK: rep stosw
+// The pin keeps a variable 16-bit fill a loop at -Os (the string setup is not smaller there); -O2 makes it `rep stosw`.
+// CHECK: {{rep stosw|dec ax}}
 // CHECK: {{_palette(@3)?}} endp
 // CHECK-LABEL: {{_block(@3)?}} proc
 // CHECK: rep movsd
