@@ -33,7 +33,10 @@ Query side (BasicAA, TBAA, CaptureTracking) stays: BasicAA `alias_check` is 20 M
 
 | site | rule | owner | M |
 |---|---|---|---|
-| Decide (11.5), Dead (5.7), Interprocedural + Stamp (5.2 + 4.1), ConstraintElimination (6.3) | pending | w5 | |
+| Decide@809 (19.1 in the d_faces -O2 ablation, 10.6 same-IR) | DELETE; needs #4731 and #4749 (both open), then the deletion PR. Cost: 14 of 568 vsgcc cells, quicksort 6 (+4..+48 B) and x_primes 8 (+0..+2 B) | w5 | -19.1 |
+| Decide at the SimplifyCFG slots (15.8 same-IR vs the pin's 6.1; these are SimplifyCfg instances) | DEVIATE: no single lever (top step 10% of a slot); a loop-exits change is ~1.5 | w4 | -1.5 |
+| ConstraintElimination (6.4 vs the pin's 3.9 same-IR) | DEVIATE: it is the pin pass, cost is diffuse; the sort comparator asks `fact_before` twice | w5 | -0.3, rest unknown |
+| Dead (5.7), Interprocedural + Stamp (5.2 + 4.1), Counted/Followers (5.2) | unknown, needs a same-IR profile each; deleting Decide@809 takes ~27% of Counted and ~10% of Followers | none yet | ? |
 | FloatAlloc + FloatPrep (14.8 + 7.8), MachineScheduler (10.7), PressureSink (4.6), MachineLICM (3.6), MachineCP (3.4), LiveRangeShrink (3.1) | pending | w2 | |
 | `masm::addressed_pass` (3.8), `backend::peep` windows, FixupLEAs (2.1) | pending | w1 | |
 | InterferenceCache `move_to_block` (11.3), `DenseRows` (7.2), `live_rows` | pending | w13 | |
