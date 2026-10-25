@@ -2,11 +2,6 @@
 # ids: "unit <crate>::<test>" (cargo lib test) and "run <program name>" (tests/run).
 
 [[xfail]]
-id = "unit llrm-qb::test_hir_part3::peek_and_poke_touch_memory_every_time"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_a_raise_under_an_error_handler_resumes_after_its_statement"
 issue = 2848
 owner = "unassigned"
