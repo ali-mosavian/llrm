@@ -1,4 +1,6 @@
+#define _POSIX_C_SOURCE 200809L
 #include <string.h>
+#include <time.h>
 
 #include "dev.h"
 #include "headless.h"
@@ -25,6 +27,41 @@ static HeadlessTone tones[TONE_LOG];
 static size_t tone_count;
 
 static long clock_now, clock_step;
+/* In real time the clock is what it was set to plus the time since: a program that times itself (NIBBLES' speed loop)
+   ends. */
+static int real_time;
+static long real_epoch;
+
+static long monotonic_hundredths(void)
+{
+    struct timespec now;
+
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (long)now.tv_sec * 100 + now.tv_nsec / 10000000;
+}
+
+/* The clock is set to `hundredths` now. */
+static void rebase(long hundredths)
+{
+    clock_now = hundredths % DAY;
+    real_epoch = monotonic_hundredths();
+}
+
+static void refresh(void)
+{
+    long now = monotonic_hundredths();
+
+    if (real_time) {
+        clock_now = (clock_now + now - real_epoch) % DAY;
+        real_epoch = now;
+    }
+}
+
+void headless_set_real_time(int yes)
+{
+    real_time = yes;
+    real_epoch = monotonic_hundredths();
+}
 static unsigned date_year, date_month, date_day;
 static long tick_remainder;
 static int on_screen = 1, printer = 0;
@@ -133,7 +170,10 @@ void headless_clock_advance(long hundredths)
 
 long dev_clock(void)
 {
-    long now = clock_now;
+    long now;
+
+    refresh();
+    now = clock_now;
 
     clock_now = (clock_now + clock_step) % DAY;
     return now;
@@ -148,6 +188,7 @@ void dev_date(unsigned *year, unsigned *month, unsigned *day)
 
 void dev_time(unsigned *hour, unsigned *minute, unsigned *second)
 {
+    refresh();
     *hour = (unsigned)(clock_now / HUNDREDTHS_PER_HOUR);
     *minute = (unsigned)(clock_now / HUNDREDTHS_PER_MINUTE % 60);
     *second = (unsigned)(clock_now / 100 % 60);
@@ -167,7 +208,7 @@ int dev_time_set(unsigned hour, unsigned minute, unsigned second)
 {
     if (hour > 23 || minute > 59 || second > 59)
         return 1;
-    clock_now = (long)hour * HUNDREDTHS_PER_HOUR + (long)minute * HUNDREDTHS_PER_MINUTE + (long)second * 100;
+    rebase((long)hour * HUNDREDTHS_PER_HOUR + (long)minute * HUNDREDTHS_PER_MINUTE + (long)second * 100);
     return 0;
 }
 

@@ -175,7 +175,7 @@ fn _segment(object_: &model::DataObject) -> &'static str {
 /// only the text lines in this reserved object.  The OMF adapter supplies a
 /// relocated, valid code address before every line and the measured
 /// `FFFF 01` out-of-DATA sentinel after the last one.
-fn _read_data_lines(module: &model::Module) -> Result<Vec<Vec<u8>>, CompileError> {
+pub(super) fn _read_data_lines(module: &model::Module) -> Result<Vec<Vec<u8>>, CompileError> {
     let objects: Vec<&model::DataObject> = module.data.iter().filter(|one| one.name == _READ_DATA_OBJECT).collect();
     if objects.is_empty() {
         return Ok(Vec::new());

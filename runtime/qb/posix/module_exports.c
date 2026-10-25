@@ -37,7 +37,8 @@ unsigned module_code_segment(void)
 
 const char *module_first_data(void)
 {
-    return QB_DATA;
+    /* the text of the first row, past its key (MODULE_CODE.OF_DS is BC_DS + 2) */
+    return QB_DATA + 2;
 }
 
 int md_restored(const ModuleData *data)

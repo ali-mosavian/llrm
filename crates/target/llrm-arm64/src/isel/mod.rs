@@ -438,6 +438,37 @@ impl<'a> Selector<'a> {
             Opcode::Store { .. } => self.store(&instruction),
             Opcode::GetElementPtr { source } => self.gep(&instruction, *source),
             Opcode::Call(info) => self.call(inst, &instruction, info),
+            // A call, then a branch to the normal block. The unwind edge is left unselected: nothing unwinds, and QB's
+            // landing pad is entered by the runtime, not by an unwinder.
+            Opcode::Invoke(info) => {
+                let [.., Operand::Block(normal), Operand::Block(_), callee] = instruction.operands[..] else {
+                    return refuse("an invoke without its blocks");
+                };
+                let mut call = instruction.clone();
+                call.operands.truncate(instruction.operands.len() - 3);
+                call.operands.push(callee);
+                self.call(inst, &call, info)?;
+                let mut jump = instruction.clone();
+                jump.opcode = Opcode::Br;
+                jump.operands = vec![Operand::Block(normal)];
+                jump.result = None;
+                self.br(self.current, &jump)
+            }
+            // The runtime enters QB's landing pad with the frame put back, not an unwinder with an exception: the
+            // pad's value is zero, and what it reads of the error is the global ehprepare made.
+            Opcode::LandingPad { .. } => {
+                let mut value = self.fresh(instruction.ty)?;
+                for leaf in value.leaves_mut() {
+                    let zero = match leaf {
+                        Val::Int(g) => Src::Int { bits: g.bits, value: 0 },
+                        Val::Ptr(_) => Src::Int { bits: 64, value: 0 },
+                        Val::Float { size, .. } => Src::Float { size: *size, bits: 0 },
+                        Val::Agg(_) => unreachable!("leaves are scalars"),
+                    };
+                    *leaf = self.materialize(zero)?;
+                }
+                self.define(result, Src::Val(value))
+            }
             Opcode::Ret => self.ret(&instruction),
             Opcode::Br => self.br(self.current, &instruction),
             Opcode::Switch => self.switch(self.current, &instruction),
