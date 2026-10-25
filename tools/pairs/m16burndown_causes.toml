@@ -14,7 +14,7 @@ owner = "w-9"
 
 [[program]]
 match = "qb/nbody.bas"
-cause = "untriaged"
+cause = "move-loop-invariants"
 owner = "w-6"
 
 [[program]]
@@ -29,7 +29,7 @@ owner = "w-13"
 
 [[program]]
 match = "*/log_exp*"
-cause = "untriaged"
+cause = "tree-pre"
 owner = "w-2"
 
 [[program]]
@@ -74,7 +74,7 @@ owner = "w-1"
 
 [[program]]
 match = "*/lcexit*"
-cause = "untriaged"
+cause = "tree-pre"
 owner = "w-1"
 
 [[program]]
