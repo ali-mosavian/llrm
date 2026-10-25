@@ -38,24 +38,37 @@ use llrm_lir::registers::RegId;
 use super::liveintervals::LiveIntervals;
 use super::liverange::LiveInterval;
 use super::slotindex::{InstrKey, SlotIndex};
-use crate::support::hash::{HashMap, HashSet};
+use crate::support::hash::HashMap;
 
 /// What each instruction does to the register whose operands these are
 /// (`readsWritesVirtualRegister`): reads, writes, in order of first appearance.
 /// The operands of one instruction need not be next to each other: a join that
 /// renames another register into this one appends the renamed operands.
 pub(crate) fn by_instruction(operands: &[crate::liveness::liverangecalc::Operand]) -> Vec<(InstrKey, bool, bool)> {
-    let mut out: Vec<(InstrKey, bool, bool)> = Vec::new();
+    let mut out: Vec<(InstrKey, bool, bool)> = Vec::with_capacity(operands.len());
+    // Kept only for a long list: a short one is searched, and the operands of
+    // one instruction are mostly next to each other.
     let mut at: HashMap<InstrKey, usize> = HashMap::default();
     for op in operands {
-        let slot = *at
-            .entry(op.instr)
-            .or_insert_with(
-                || {
+        let slot = match out.last() {
+            Some(last) if last.0 == op.instr => out.len() - 1,
+            _ if out.len() <= 16 => match out.iter().position(|one| one.0 == op.instr) {
+                Some(slot) => slot,
+                None => {
                     out.push((op.instr, false, false));
                     out.len() - 1
-                },
-            );
+                }
+            },
+            _ => {
+                if at.is_empty() {
+                    at.extend(out.iter().enumerate().map(|(slot, one)| (one.0, slot)));
+                }
+                *at.entry(op.instr).or_insert_with(|| {
+                    out.push((op.instr, false, false));
+                    out.len() - 1
+                })
+            }
+        };
         out[slot].1 |= op.reads_reg;
         out[slot].2 |= op.is_def;
     }
@@ -316,7 +329,6 @@ impl<'a> VirtRegAuxInfo<'a> {
     ) -> f32 {
         let mut total_weight = 0.0f32;
         let mut num_instr = 0u32; // Number of instructions using LI
-        let mut visited: HashSet<InstrKey> = HashSet::default();
         // Don't recompute spill weight for an unspillable register.
         if li.is_spillable() {
             // li comes from a split of OrigInt. If OrigInt was marked
@@ -339,9 +351,6 @@ impl<'a> VirtRegAuxInfo<'a> {
             let copy = self.env.copy_of(&insn);
             let identity_copy = copy.is_some_and(|(dest, source)| dest == source);
             if identity_copy {
-                continue;
-            }
-            if !visited.insert(instr) {
                 continue;
             }
             let mut weight = 1.0f32;
