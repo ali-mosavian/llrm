@@ -2276,3 +2276,26 @@ fn a_declare_without_parentheses_matches_no_definition() {
         assert!(parse(&source("DECLARE SUB S ()"), dialect).is_ok(), "{dialect:?}");
     }
 }
+
+#[test]
+fn a_function_declared_with_one_result_type_and_defined_with_another_is_a_duplicate() {
+    // corpus program 483: `DECLARE FUNCTION f& (...)` then `FUNCTION f% (...)` is "Duplicate
+    // definition" under QB 4.5, PDS 7.1 and VBDOS.
+    let source = |declared: &str| {
+        format!("DEFINT A-Z\r\nDECLARE FUNCTION f{declared} (a%)\r\nx% = f%(1)\r\nEND\r\nFUNCTION f% (a%)\r\nf% = a%\r\nEND FUNCTION\r\n")
+    };
+    for dialect in [Dialect::QuickBasic45, Dialect::Pds71, Dialect::VbDos] {
+        assert!(parse(&source("&"), dialect).is_err(), "{dialect:?}");
+        assert!(parse(&source("%"), dialect).is_ok(), "{dialect:?}");
+    }
+}
+
+#[test]
+fn a_line_number_zero_after_on_error_goto_0_is_a_duplicate_label() {
+    // corpus [labels]: `ON ERROR GOTO 0` or `RESUME 0` above a line `0` -- BC reads the 0 as a label
+    // reference -- is "Duplicate label" under all three BCs; the other order is fine.
+    for dialect in [Dialect::QuickBasic45, Dialect::Pds71, Dialect::VbDos] {
+        assert!(parse("ON ERROR GOTO 0\r\n0 PRINT\r\nEND\r\n", dialect).is_err(), "{dialect:?}");
+        assert!(parse("0 PRINT\r\nON ERROR GOTO 0\r\nEND\r\n", dialect).is_ok(), "{dialect:?}");
+    }
+}

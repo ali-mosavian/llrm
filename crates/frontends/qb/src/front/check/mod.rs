@@ -72,6 +72,9 @@ struct Checker {
     /// The numeric labels that stand on a line with no statement: defined, but
     /// never a duplicate of another.
     weak_labels: HashSet<String>,
+    /// `ON ERROR GOTO 0` or `RESUME 0` came before a line number 0: BC reads the 0 as a label
+    /// reference, and the later definition is a Duplicate label.
+    zero_referenced: bool,
     /// The module level's labels, kept while a procedure's are the ones in use.
     module_labels: HashSet<String>,
     /// Every label of the file, module and procedures (RESTORE reaches any).
@@ -105,6 +108,7 @@ impl Checker {
             for_counters: Vec::new(),
             labels: HashSet::new(),
             weak_labels: HashSet::new(),
+            zero_referenced: false,
             module_labels: HashSet::new(),
             all_labels: HashSet::new(),
             span: Span { line: 1, start: 0, end: 0 },
@@ -290,7 +294,15 @@ impl Checker {
         statements: &[Statement],
     ) {
         for (index, statement) in statements.iter().enumerate() {
+            if matches!(statement, Statement::OnError { label, .. } if label == "0")
+                || matches!(statement, Statement::Resume { target: ResumeTarget::Label(label), .. } if label == "0")
+            {
+                self.zero_referenced = true;
+            }
             if let Statement::Label(name, span) = statement {
+                if name == "0" && self.zero_referenced {
+                    self.err(*span, "Duplicate label");
+                }
                 // a line number alone on its line (or before a comment) is a
                 // target, and no duplicate
                 let numeric = name.chars().all(|c| c.is_ascii_digit() || c == '.');
@@ -517,6 +529,17 @@ impl Checker {
                     "Argument-count mismatch",
                     Reason::headline(headline).help("write the DECLARE with its parentheses, `DECLARE SUB name ()` when it takes nothing, and make it agree with the definition"),
                 )
+            }
+            Some(existing)
+                if existing.kind == ProcedureKind::Function
+                    && matches!((&existing.result, &info.result), (Some(a), Some(b)) if a.plain() != b.plain()) =>
+            {
+                self.err_because(
+                    procedure.span,
+                    "Duplicate definition",
+                    Reason::headline("`{name}` is declared with one result type and defined with another")
+                        .help("give the DECLARE and the FUNCTION the same type character (`f%` both times, or `AS INTEGER`)"),
+                );
             }
             Some(existing) => {
                 if !existing.unchecked
