@@ -122,15 +122,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         hooks: &'a mut H,
         level: CombineLevel,
     ) -> DagCombiner<'a, H> {
-        DagCombiner {
-            dag,
-            hooks,
-            level,
-            worklist: Vec::new(),
-            queued: HashSet::default(),
-            combined: HashSet::default(),
-            tli: None,
-        }
+        // Both sets grow to about the node count: size them once.
+        let nodes = dag.nodes().len();
+        let mut queued = HashSet::default();
+        let mut combined = HashSet::default();
+        queued.reserve(nodes);
+        combined.reserve(nodes);
+        DagCombiner { dag, hooks, level, worklist: Vec::new(), queued, combined, tli: None }
     }
 
     /// The action table the folds query (`TLI`).
