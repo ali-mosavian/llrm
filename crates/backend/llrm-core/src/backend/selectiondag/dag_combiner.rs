@@ -262,6 +262,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         node: SDValue,
     ) -> Option<SDValue> {
         match self.dag.opcode(node) {
+            ISD::TokenFactor => self.visit_token_factor(node),
             ISD::MergeValues => self.visit_merge_values(node),
             ISD::Select => self.visit_select(node),
             ISD::Store => self.visit_store(node),
