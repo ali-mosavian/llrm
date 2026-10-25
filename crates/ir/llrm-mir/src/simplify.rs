@@ -3286,10 +3286,19 @@ fn min_max_call(
         (false, true) => "llvm.umax",
         (false, false) => "llvm.umin",
     };
+    #[cfg(test)]
+    MIN_MAX_ASKS.with(|asks| asks.set(asks.get() + 1));
     let tracking = q.tracking();
     let (_, args) = pattern::intrinsic_call(&tracking, v, base)?;
     let [a, b] = *args else { return None };
     Some((a, b))
+}
+
+// The intrinsic-name lookups `min_max_call` made, for the test that an
+// icmp of two non-calls makes none.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static MIN_MAX_ASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// `extractEquivalentCondition`
@@ -3330,6 +3339,14 @@ fn simplify_icmp_with_min_max(
     mut rhs: Operand,
     max_recurse: u32,
 ) -> Option<Operand> {
+    // Every matcher below is a call of an intrinsic: with neither side a call
+    // none matches, nothing swaps, and the answer is none.
+    let is_call = |v: Operand| {
+        q.definition(v).is_some_and(|inst| matches!(q.function.instruction(inst).opcode, Opcode::Call { .. }))
+    };
+    if !is_call(lhs) && !is_call(rhs) {
+        return None;
+    }
     let i1 = q.context.types.int(1);
     for signed_kind in [true, false] {
         // "A == max/min(A,B)" iff "A eq_p B"; `max_pred` is the predicate of

@@ -1,0 +1,7 @@
+DIM time AS SINGLE
+DIM date AS STRING
+DIM data AS INTEGER
+time = 3.14
+PRINT time
+PRINT TIME$
+data = 1

@@ -333,7 +333,7 @@ fn _contract_keeping(
             )
         });
     }
-    if name == "B$RDIM" || name == "B$DDIM" {
+    if name == "B$RDIM" || name == "B$RDMP" || name == "B$DDIM" {
         // B$ExitDim removes three header words and two words per dimension;
         // this is exactly the byte count represented by the typed operands.
         return Ok(returns(

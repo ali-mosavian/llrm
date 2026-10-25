@@ -1545,6 +1545,28 @@ impl Emitter<'_, '_> {
         )
     }
 
+    /// The offset word of the pointer in `register` for a real-mode string
+    /// operation: the word a far pointer was joined from (`offset | selector <<
+    /// 16`), so the join itself is not made (`shl; movzx; add; mov edi`);
+    /// otherwise what the register was copied from.
+    fn offset_of_pointer(
+        &mut self,
+        register: llrm_lir::registers::RegId,
+    ) -> Result<Held, EmitError> {
+        let held = self.accumulated(register)?;
+        let Some(&origin) = self.origins.get(&register) else { return Ok(held) };
+        let joined = ["OR32rr", "ADD32rr", "ADD32rr_DB"].iter().any(|name| self.is_machine_named(origin, name));
+        if !joined || self.huge_selector(origin).is_none() {
+            return Ok(held);
+        }
+        let low = self.dag.node(origin).ops.iter().copied().find(|&op| self.is_machine_named(op, "MOVZX32rr16"));
+        let Some(low) = low else { return Ok(held) };
+        let offset = self.dag.node(low).ops[0];
+        let mut offset = self.held_operand(offset)?;
+        offset.width = 2;
+        Ok(offset)
+    }
+
     /// The selector of the segment the pointer in `register` is in, as a value:
     /// DGROUP for the address of a global, SS for one of the frame, the
     /// selector loaded with a far pointer.
@@ -1905,7 +1927,7 @@ impl Emitter<'_, '_> {
             }
             // A call through a register or a cell of memory.
             "CALL32r" | "CALL32m" | "CALL32r_NT" | "CALL32m_NT" | "CALL16r" | "CALL16m" | "CALL16r_NT"
-            | "CALL16m_NT" => {
+            | "CALL16m_NT" | "CALL64r" | "CALL64m" | "CALL64r_NT" | "CALL64m_NT" => {
                 // At real mode the matcher spells a call of a symbol `CALL16r`
                 // of its address: a direct call, not one through an immediate
                 // (`call offset _report`; 79 programs of the m16 run).
@@ -1919,7 +1941,11 @@ impl Emitter<'_, '_> {
                     self.calls.push((at, callee));
                     return Ok(Some(()));
                 }
-                let bytes = if name.starts_with("CALL16") { 2 } else { 4 };
+                let bytes = match &name[4..6] {
+                    "16" => 2,
+                    "64" => 8,
+                    _ => 4,
+                };
                 let target = if name[6..].starts_with('m') {
                     let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short call".to_owned()))?;
                     Loc::Mem(self.cell(group, bytes)?)
@@ -1948,7 +1974,7 @@ impl Emitter<'_, '_> {
                     _ => RegId::EAX,
                 };
                 let (value, count, destination) =
-                    (self.accumulated(stored)?, self.accumulated(RegId::CX)?, self.accumulated(RegId::DI)?);
+                    (self.accumulated(stored)?, self.accumulated(RegId::CX)?, self.offset_of_pointer(RegId::DI)?);
                 let segment = self.segment_of_pointer(RegId::DI)?;
                 let (destination_after, emptied) = (self.fresh(2), self.fresh(2));
                 self.push(
@@ -1962,8 +1988,11 @@ impl Emitter<'_, '_> {
             }
             "REP_MOVSB_16" | "REP_MOVSW_16" | "REP_MOVSD_16" => {
                 use llrm_lir::registers::RegId;
-                let (count, source, destination) =
-                    (self.accumulated(RegId::CX)?, self.accumulated(RegId::SI)?, self.accumulated(RegId::DI)?);
+                let (count, source, destination) = (
+                    self.accumulated(RegId::CX)?,
+                    self.offset_of_pointer(RegId::SI)?,
+                    self.offset_of_pointer(RegId::DI)?,
+                );
                 let (from, to) = (self.segment_of_pointer(RegId::SI)?, self.segment_of_pointer(RegId::DI)?);
                 let (source_after, destination_after, emptied) = (self.fresh(2), self.fresh(2), self.fresh(2));
                 self.push(
@@ -2377,27 +2406,13 @@ impl Emitter<'_, '_> {
                     && cell.base.is_none()
                     && cell.index.is_some()
                 {
-                    // 16-bit addressing has no scale: the index is scaled by a
-                    // shift first.
-                    if cell.scale != 1 {
-                        let shift = match cell.scale {
-                            2 => 1,
-                            4 => 2,
-                            8 => 3,
-                            other => {
-                                return Err(EmitError::Unsupported(format!(
-                                    "a lea of a symbol and an index scaled by {other} at m16"
-                                )));
-                            }
-                        };
-                        let index = cell.index.take().expect("an index");
-                        let scaled = self.fresh(index.width);
-                        let amount = Loc::Imm(Imm { value: shift, width: 1, address: None });
-                        self.push(Operation::Binary, "shl", vec![Loc::Held(scaled)], vec![Loc::Held(index), amount]);
-                        cell.index = Some(scaled);
-                        cell.scale = 1;
-                    }
+                    self.unscale_index(&mut cell)?;
                     cell.base = cell.index.take();
+                }
+                // A 16-bit index beside a scale has no encoding (the scale
+                // was dropped, the address lost its doubling): shifted first.
+                if self.ctx.address_mode == AddrMode::Real16 && cell.index.is_some_and(|index| index.width == 2) {
+                    self.unscale_index(&mut cell)?;
                 }
                 // A scaled index beside a base is the 386's 32-bit form: its
                 // literal place adds nothing and has no encoding with a scale.
@@ -2660,6 +2675,32 @@ impl Emitter<'_, '_> {
         Ok(out)
     }
 
+    /// `cell` with its index scaled by a shift: 16-bit addressing has no
+    /// scale.
+    fn unscale_index(
+        &mut self,
+        cell: &mut Mem,
+    ) -> Result<(), EmitError> {
+        if cell.scale == 1 {
+            return Ok(());
+        }
+        let shift = match cell.scale {
+            2 => 1,
+            4 => 2,
+            8 => 3,
+            other => {
+                return Err(EmitError::Unsupported(format!("a lea of an index scaled by {other} at m16")));
+            }
+        };
+        let index = cell.index.take().expect("an index");
+        let scaled = self.fresh(index.width);
+        let amount = Loc::Imm(Imm { value: shift, width: 1, address: None });
+        self.push(Operation::Binary, "shl", vec![Loc::Held(scaled)], vec![Loc::Held(index), amount]);
+        cell.index = Some(scaled);
+        cell.scale = 1;
+        Ok(())
+    }
+
     /// base, scale, index, displacement, segment.
     fn cell(
         &mut self,
@@ -2778,7 +2819,7 @@ impl Emitter<'_, '_> {
             // as wide as the read, which may be inside the entry
             return Ok(Mem { base, index, scale, width: cell_width, ..pooled });
         }
-        let disp = self.constant(group[3])?;
+        let disp = self.displacement(group[3])?;
         if self.address_register(group[4], Role::Segment)?.is_some() {
             return Err(EmitError::Unsupported("a segment override".to_owned()));
         }
@@ -2920,6 +2961,14 @@ impl Emitter<'_, '_> {
             }
             other => Err(EmitError::Unsupported(format!("address component {other:?}"))),
         }
+    }
+
+    /// An address's displacement: the constant's low 32 bits, signed.
+    fn displacement(
+        &self,
+        value: SDValue,
+    ) -> Result<i64, EmitError> {
+        self.constant(value).map(|bits| i64::from(bits as i32))
     }
 
     fn constant(

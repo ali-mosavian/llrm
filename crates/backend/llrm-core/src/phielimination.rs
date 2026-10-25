@@ -65,6 +65,13 @@ use crate::model::ir::Held;
 use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 use crate::support::hash::{HashMap, IndexMap};
 
+#[cfg(test)]
+thread_local! {
+    /// The liveness rows `edges_to_split` solved, for the test that fixes it at
+    /// none where no critical edge asks.
+    static ROWS_SOLVED: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
 /// `SplitPHIEdges`: the critical edges worth a block of their own, as
 /// `(predecessor, block)`.
 fn edges_to_split(
@@ -72,10 +79,29 @@ fn edges_to_split(
     at_of: &IndexMap<i64, &Block>,
 ) -> Vec<(i64, i64)> {
     // Asked one value and block at a time: the rows answer it, without a set
-    // for every block's entry and exit (`LiveIntervals::liveAt`).
-    let rows = crate::backend::allocate::live_rows(body);
+    // for every block's entry and exit (`LiveIntervals::liveAt`). Solved when
+    // the first critical edge asks (the pin reads the `LiveVariables` it
+    // already has): most bodies have none.
+    let rows = std::cell::OnceCell::new();
     let forest = crate::analysis::loops::forest_of(&body.blocks, Some(body.entry));
-    let live_in = |value: u32, at: i64| crate::backend::allocate::LiveAt::live_in(&rows, at, value);
+    // Only the values a critical edge's phi hands over are asked: rows of
+    // those.
+    let asked: std::collections::HashSet<u32> = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.phis.iter())
+        .flat_map(|phi| phi.incoming.iter())
+        .filter(|(pre, _)| at_of.get(pre).is_some_and(|block| block.succ.len() > 1))
+        .map(|&(_, reg)| reg)
+        .collect();
+    let live_in = |value: u32, at: i64| {
+        let rows = rows.get_or_init(|| {
+            #[cfg(test)]
+            ROWS_SOLVED.with(|one| one.set((one.get().0 + 1, one.get().1 + asked.len())));
+            crate::backend::allocate::live_rows_by(body, |one| asked.contains(&one))
+        });
+        crate::backend::allocate::LiveAt::live_in(rows, at, value)
+    };
     let mut split: Vec<(i64, i64)> = Vec::new();
     for block in &body.blocks {
         if block.phis.is_empty() {
@@ -590,5 +616,37 @@ mod tests {
         assert_eq!(made.succ.to_vec(), vec![2]);
         assert!(!now.blocks[0].succ.contains(&2), "the branch no longer goes to the phi's block");
         assert_eq!(copies(made).len(), 1, "the copy is in the edge block");
+    }
+
+    /// The rows of liveness were solved for every value of every body with a
+    /// phi, though only the values a critical edge's phi hands over are asked
+    /// (d_faces dist: 1.5 M Ir in three solves). Asked of a body with none they
+    /// are not solved, and otherwise only for those values.
+    #[test]
+    fn test_the_liveness_rows_are_solved_only_where_a_critical_edge_asks() {
+        let phis = vec![
+            Phi { result: 10, incoming: vec![(0, 1), (1, 11)] },
+            Phi { result: 11, incoming: vec![(0, 2), (1, 12)] },
+        ];
+        let plain = body(vec![
+            block(0, vec![def(1), def(2), jump(1)], &[1], vec![]),
+            block(1, vec![def(12), read(10), read(11), branch(1)], &[1, 2], phis),
+            block(2, vec![read(10)], &[], vec![]),
+        ]);
+        let before = ROWS_SOLVED.with(std::cell::Cell::get);
+        lowered(&plain).expect("lowers");
+        assert_eq!(ROWS_SOLVED.with(std::cell::Cell::get), before, "no critical edge, no rows");
+        let phis = vec![Phi { result: 10, incoming: vec![(0, 1), (3, 2)] }];
+        let mut critical = body(vec![
+            block(0, vec![def(1), branch(2)], &[2, 1], vec![]),
+            block(1, vec![read(1), jump(3)], &[3], vec![]),
+            block(2, vec![read(10), read(1)], &[], vec![]),
+            block(3, vec![def(2), jump(2)], &[2], vec![]),
+        ]);
+        critical.blocks[2] = Block::from(block(2, vec![read(10)], &[], phis));
+        let before = ROWS_SOLVED.with(std::cell::Cell::get);
+        lowered(&critical).expect("lowers");
+        let after = ROWS_SOLVED.with(std::cell::Cell::get);
+        assert_eq!((after.0 - before.0, after.1 - before.1), (1, 1), "one solve, of the one value the edge hands over");
     }
 }

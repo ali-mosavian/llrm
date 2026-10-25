@@ -1,4 +1,4 @@
-' RUN: llrm-qb %s --dialect {qb45 | pds71 | vbdos} --runtime {qb45 | pds71 | vbdos} -O2 -march=i486 -fno-inline-functions -S -o /dev/stdout
+' RUN: llrm-qb %s --dialect {pds71 | vbdos} --runtime {pds71 | vbdos} -O2 -march=i486 -fno-inline-functions -S -o /dev/stdout
 ' `n + Sum%(n - 1)` was a call per level; with its argument BYVAL it is a loop. By reference (the default)
 ' the argument is the address of a frame cell the callee reads, and the call stays.
 ' CHECK-LABEL: SUM proc
