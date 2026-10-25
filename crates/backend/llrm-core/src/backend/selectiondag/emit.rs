@@ -46,12 +46,12 @@
 //! ([L1003](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp#L1003)),
 //! `EmitCopyToRegClassNode`, `EmitCopyFromReg`.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use llrm_dagisel::instr::{self, InstrDesc, operand_type};
 use llrm_dagisel::x86_addr::AddrMode;
 use llrm_dagisel::x86_classes::{Role, class_tag};
+use llrm_support::hash::HashMap;
 
 use super::dag::{NodeData, SDValue, SelectionDAG};
 use super::isd::ISD;
@@ -295,7 +295,7 @@ pub struct EmitState {
 
 impl Default for EmitState {
     fn default() -> EmitState {
-        EmitState { vregs: HashMap::new(), next_value: 1, at: 1, float_bytes: Default::default() }
+        EmitState { vregs: HashMap::default(), next_value: 1, at: 1, float_bytes: Default::default() }
     }
 }
 
@@ -356,32 +356,32 @@ pub fn emit_in(
     let mut emitter = Emitter {
         dag,
         ctx,
-        values: HashMap::new(),
-        es_copies: HashMap::new(),
+        values: HashMap::default(),
+        es_copies: HashMap::default(),
         state,
         blocks: vec![EmitBlock { at: first_at, ..EmitBlock::default() }],
         classes: Vec::new(),
         sp_values: Default::default(),
-        accumulator: HashMap::new(),
+        accumulator: HashMap::default(),
         arguments: Vec::new(),
         returns: Vec::new(),
         calls: Vec::new(),
         inline_places: Vec::new(),
         last_call: None,
         flags_now: None,
-        origins: HashMap::new(),
+        origins: HashMap::default(),
         es: None,
         es_is_ss: false,
         ss_copies: std::collections::HashSet::new(),
-        selectors: HashMap::new(),
-        lazy: HashMap::new(),
+        selectors: HashMap::default(),
+        lazy: HashMap::default(),
         last_select: None,
-        flag_insns: HashMap::new(),
-        saved_carry: HashMap::new(),
+        flag_insns: HashMap::default(),
+        saved_carry: HashMap::default(),
         flag_copies_done: Default::default(),
-        pending_fcom: HashMap::new(),
+        pending_fcom: HashMap::default(),
         glue_users: {
-            let mut users: HashMap<SDValue, Vec<u32>> = HashMap::new();
+            let mut users: HashMap<SDValue, Vec<u32>> = HashMap::default();
             for (at, one) in dag.nodes().iter().enumerate() {
                 for op in &one.ops {
                     users.entry(*op).or_default().push(at as u32);
@@ -1669,6 +1669,22 @@ impl Emitter<'_, '_> {
             .ok_or_else(|| EmitError::Unsupported("a string operation on a pointer of no known origin".to_owned()))?;
         if let Some(&selector) = self.selectors.get(&origin.node) {
             return Ok(selector);
+        }
+        // A pointer held whole in a dword (a far pointer a call returned, a
+        // huge one loaded): its selector is the high word, `x >> 16`. Only the
+        // shapes below are known to be a word pointer into DGROUP, a frame or a
+        // global.
+        let whole = width_of(self.dag, origin) == 4;
+        let known_shape = matches!(
+            self.dag.opcode(origin),
+            ISD::Machine(op) if self.ctx.names.get(&(op as u16)).is_some_and(|name| { matches!(name.split('|').next(), Some("OR32rr" | "ADD32rr" | "SHL32ri" | "ADD32rr_DB")) })
+        );
+        if whole && !known_shape {
+            let value = self.held_operand(origin)?;
+            let shifted = self.fresh(4);
+            let sixteen = Imm { value: 16, width: 1, address: None };
+            self.push(Operation::Binary, "shr", vec![Loc::Held(shifted)], vec![Loc::Held(value), Loc::Imm(sixteen)]);
+            return Ok(Held { width: 2, ..shifted });
         }
         let held = self.fresh(2);
         let source = if let ISD::Machine(op) = self.dag.opcode(origin) {
