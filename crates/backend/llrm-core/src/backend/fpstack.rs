@@ -1062,6 +1062,9 @@ pub(super) fn converted(
         return Ok(body.clone());
     }
     let (live_in, live_out) = live_among(body, |value| floating.contains(&value));
+    if live_in[&body.entry].iter().any(|value| floating.contains(&value)) {
+        return Err(unlowered("floating stack input is unavailable"));
+    }
     let bundles = spillplacement::bundles(body);
     // DEVIATE 7: a block of its own on each critical forward edge into a block
     // that reads fewer floating values than its bundle holds, where the

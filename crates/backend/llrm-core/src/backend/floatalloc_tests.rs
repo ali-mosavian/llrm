@@ -1081,9 +1081,9 @@ fn test_a_split_edge_asks_no_second_liveness() {
 }
 
 #[test]
-fn test_float_prep_asks_liveness_of_the_floating_values_only() {
-    // `prepared` solved liveness of every value for two lookups of floats:
-    // 7 M Ir of d_faces -O2.
+fn test_float_prep_solves_liveness_only_for_a_repeated_load() {
+    // `prepared` solved liveness of every value for a lookup of floats that
+    // only a repeated load makes: 7 M Ir of d_faces -O2.
     use crate::backend::floatassign::{ROWS_ASKED, prepared};
     let (source, cell) = (frame_cell(-10, 10), frame_cell(-20, 10));
     let integer = |value: u32, from: u32| sem(Operation::Move, "mov", vec![int(value)], vec![int(from)]);
@@ -1099,8 +1099,9 @@ fn test_float_prep_asks_liveness_of_the_floating_values_only() {
         block(0, vec![load, make], vec![16]).into(),
         block(16, vec![at(&store, 16), at(&copy, 24)], vec![]).into(),
     ];
+    ROWS_ASKED.with(|one| one.set(0));
     prepared(&body, None, None, false).unwrap();
-    assert_eq!(ROWS_ASKED.with(std::cell::Cell::get), 1);
+    assert_eq!(ROWS_ASKED.with(std::cell::Cell::get), 0);
 }
 
 fn int(value: u32) -> Loc {

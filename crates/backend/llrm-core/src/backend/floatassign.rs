@@ -488,6 +488,15 @@ pub(crate) fn _equivalent_loads(
     sequence: &[Arc<Insn>],
     live_out: &llrm_mir::dense::IdSet<u32>,
 ) -> IndexMap<u32, u32> {
+    _equivalent_loads_by(sequence, &mut |value| live_out.contains(&value))
+}
+
+/// `_equivalent_loads` asking whether a value is live out of the block only
+/// when a repeated load makes it matter.
+fn _equivalent_loads_by(
+    sequence: &[Arc<Insn>],
+    live_out: &mut dyn FnMut(u32) -> bool,
+) -> IndexMap<u32, u32> {
     let mut available: IndexMap<(Option<std::sync::Arc<str>>, Mem), u32> = IndexMap::default();
     let mut aliases: IndexMap<u32, u32> = IndexMap::default();
     for one in sequence {
@@ -515,7 +524,7 @@ pub(crate) fn _equivalent_loads(
             continue;
         }
         let key = (what.name.clone(), cell.clone());
-        if let Some(first) = available.get(&key).filter(|_| !live_out.contains(&result.value)) {
+        if let Some(first) = available.get(&key).filter(|_| !live_out(result.value)) {
             aliases.insert(result.value, *first);
         } else {
             available.insert(key, result.value);
@@ -873,19 +882,20 @@ fn _live_after(
 
 /// Later loads of a cell nothing wrote since are its first load's value.
 fn _aliased(body: &LirBody) -> LirBody {
-    _aliased_by(body, &live(body).1).0
+    let live_out = live(body).1;
+    _aliased_by(body, &mut |at, value| live_out[&at].contains(&value)).0
 }
 
 /// `_aliased` with the body's liveness at block exits given; whether any load
 /// was aliased, else the body is returned as it was.
 fn _aliased_by(
     body: &LirBody,
-    live_out: &Live,
+    live_out: &mut dyn FnMut(i64, u32) -> bool,
 ) -> (LirBody, bool) {
     let mut out = body.clone();
     let mut changed = false;
     for block in &mut out.blocks {
-        let aliases = _equivalent_loads(&block.insns, &live_out[&block.at]);
+        let aliases = _equivalent_loads_by(&block.insns, &mut |value| live_out(block.at, value));
         if aliases.is_empty() {
             continue;
         }
@@ -1217,14 +1227,19 @@ pub fn prepared(
     if floating.is_empty() {
         return Ok(body);
     }
-    // Only the floating values are asked of: no other value is followed.
-    #[cfg(test)]
-    ROWS_ASKED.with(|one| one.set(floating.len()));
-    let (live_in, live_out) = live_among(&body, |value| floating.contains(&value));
-    if live_in[&body.entry].iter().any(|value| floating.contains(&value)) {
-        return Err(unlowered("floating stack input is unavailable"));
-    }
-    Ok(_sequenced(&_aliased_by(&body, &live_out).0))
+    // Liveness out of a block is asked only when a load repeats an earlier
+    // one, and then of the floating values only. A floating value live into
+    // the entry is refused by `converted`, which has the rows already.
+    let mut rows = None;
+    let mut live_out = |at: i64, value: u32| {
+        rows.get_or_insert_with(|| {
+            #[cfg(test)]
+            ROWS_ASKED.with(|one| one.set(one.get() + floating.len()));
+            live_among(&body, |value| floating.contains(&value)).1
+        })[&at]
+            .contains(&value)
+    };
+    Ok(_sequenced(&_aliased_by(&body, &mut live_out).0))
 }
 
 /// A float compare clobbers the status-word register, as LLVM selects FCOM with
