@@ -1454,11 +1454,12 @@ impl Emitter<'_, '_> {
                     width: 2,
                     address: Some(self.ctx.globals.segment(self.global_displacement(origin))),
                 }),
-                // a huge pointer whose offset is zero: the `or` folded away
-                ("OR32rr" | "SHL32ri" | "ADD32rr_DB", _) => {
+                // `SHL32ri`: a huge pointer whose offset is zero, the `or`
+                // folded away
+                ("OR32rr" | "ADD32rr" | "SHL32ri" | "ADD32rr_DB", _) => {
                     // A huge pointer built as `offset | (selector << 16)`, or
-                    // as the same sum once the combiner
-                    // turns a disjoint or into an add.
+                    // as the same sum (the halves are disjoint, so the combiner
+                    // may turn the or into an add).
                     let selector = self
                         .huge_selector(origin)
                         .ok_or_else(
