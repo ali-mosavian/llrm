@@ -233,3 +233,9 @@ Fixed in 022aeb0a3; rebuild the Mac objects.
 Key and clock polls no longer wait for a frame (`dev/sdl/sync.c`): the SDL thread presents every 16 ms on its own, so a
 polling animation (NIBBLES' SparklePause) is sampled at any phase. A mode change and a wait for a key still block.
 Mac: re-check that the sparkles move and the GORILLA banana shows; report under this heading.
+
+Mac, animation (feat/qb-host after "key and clock polls no longer wait for an SDL frame", measured by logging each
+presented frame's pixels of text row 1 during NIBBLES' SparklePause, 5 s): before, 277 of 278 frames showed the same
+state (the worker waited for a frame at every `INKEY$`, so each frame was the end of a cycle); after, 261 frames show
+the five sparkle phases about equally (102 distinct states, the rest partial rows). The GORILLAS banana was already
+presented once per frame during a throw (80 frames, a rotating 9x4 px crescent).
