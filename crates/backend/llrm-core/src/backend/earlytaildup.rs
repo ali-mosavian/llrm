@@ -336,8 +336,23 @@ fn duplicate_simple(
     }
     if !remains {
         made.odds.taken.retain(|(from, _), _| *from != tail.at);
+    } else {
+        made.frequencies = forgotten(&made, tail.at);
     }
     Some(made)
+}
+
+/// `body`'s table without the tail's entry. A tail that stays now has fewer
+/// predecessors and runs as often as they send: a block the table does not hold
+/// is worked out from them (as `tailmerge` does for a tail it keeps).
+fn forgotten(
+    body: &LirBody,
+    tail: i64,
+) -> Option<Arc<crate::model::lir::BlockFrequencies>> {
+    let kept = body.frequencies.as_ref()?;
+    let mut table = kept.0.clone();
+    table.shift_remove(&tail);
+    Some(Arc::new(crate::model::lir::BlockFrequencies(table)))
 }
 
 /// The block ends in an indirect jump.
@@ -567,6 +582,8 @@ fn duplicate(
     }
     if !remains {
         made_body.odds.taken.retain(|(from, _), _| *from != tail);
+    } else {
+        made_body.frequencies = forgotten(&made_body, tail);
     }
     made_body
 }
@@ -834,6 +851,29 @@ mod tests {
             block(9, vec![of("ret", Operation::Return, None, false)], &[]),
         ];
         assert!(tail_duplicate(&body(blocks), 3, false).is_none());
+    }
+
+    /// The join stayed for the one predecessor (an indirect jump) that could
+    /// not take a copy but kept its table entry, the runs of every
+    /// predecessor: the verifier refused it ("block runs 0.75 times, its
+    /// predecessors 0.25"), and Nib's `@N$BRES` did not compile. The table
+    /// forgets it, as `tailmerge` does.
+    #[test]
+    fn test_a_join_that_stays_is_forgotten_by_the_frequency_table() {
+        let blocks = vec![
+            block(0, vec![of("jne", Operation::Branch, Some(2), false), jump(7)], &[7, 2]),
+            block(7, vec![of("jne", Operation::Branch, Some(1), false), jump(8)], &[8, 1]),
+            block(1, vec![work(1), of("jmp", Operation::Jump, None, true)], &[3, 9]),
+            block(8, vec![work(8), jump(3)], &[3]),
+            block(2, vec![work(2), jump(3)], &[3]),
+            block(3, vec![jump(9)], &[9]),
+            block(9, vec![of("ret", Operation::Return, None, false)], &[]),
+        ];
+        let mut before = body(blocks);
+        before.frequencies = Some(crate::analysis::frequency::Frequency::over(&before, &before.blocks).table());
+        let after = tail_duplicate(&before, 3, false).expect("the arm that can take it bypasses the join");
+        assert!(at(&after, 3).succ.contains(&9) && at(&after, 1).succ.contains(&3), "premise: the join stays");
+        assert_eq!(crate::analysis::frequency::Frequency::violations(&after), Vec::<String>::new());
     }
 
     /// The successor's phi reads from each arm what it read from the join.
