@@ -123,6 +123,7 @@ fn run_basic_with(name: &str, source: &[u8], environment: &[(&str, &str)]) -> St
             "runtime/qb/posix/paintq.c",
             "runtime/qb/posix/module_exports.c",
             "runtime/qb/posix/blockentries.c",
+            "runtime/qb/posix/onerror_host.c",
             "runtime/qb/posix/program.c",
             "runtime/qb/posix/real.c",
             "runtime/qb/dev/headless/headless.c",
@@ -164,4 +165,21 @@ fn nibbles_reaches_its_first_level_on_arm64() {
         &[("QB_HEADLESS_KEYS", " 1\r50\rY\rC\r"), ("QB_HEADLESS_GAP", "300"), ("QB_HEADLESS_SECONDS", "10")],
     );
     assert!(screen.contains("Level 1,  Push Space"), "{screen}");
+}
+
+/// GORILLA (QB 4.5's demo) typed through its intro and four questions on arm64: SparklePause's INKEY$ loop, INPUT of
+/// SINGLE and DOUBLE values and the menu text. A shot in the city (SCREEN 9, floats) was checked by eye, not here.
+#[test]
+fn gorilla_reaches_its_menu_on_arm64() {
+    let Some(dir) = std::env::var_os("QB45_DEMOS_DIR") else {
+        eprintln!("QB45_DEMOS_DIR is not set: GORILLA is not in the tree");
+        return;
+    };
+    let source = std::fs::read(Path::new(&dir).join("GORILLA.BAS")).expect("GORILLA.BAS");
+    let screen = run_basic_with(
+        "gorilla",
+        &source,
+        &[("QB_HEADLESS_KEYS", "   \r\r\r\r\r\r"), ("QB_HEADLESS_GAP", "1200"), ("QB_HEADLESS_SECONDS", "30")],
+    );
+    assert!(screen.contains("Your Choice?"), "{screen}");
 }

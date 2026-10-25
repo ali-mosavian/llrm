@@ -50,6 +50,7 @@ fn arm64_text(
         let mut line = line.replace(" cc 1000", "").replace(" \"llrm-fp-eval\"=\"x87-extended\"", "");
         line = line.replace("@llrm.qb.B$", "@B_").replace("@B$", "@B_");
         line = block_entry(&line);
+        line = aligned(&line);
         for (from, to) in EXPORTS {
             line = renamed(&line, from, to);
         }
@@ -251,4 +252,17 @@ fn block_entry(line: &str) -> String {
         return format!("{head} {symbol}{}{}", parts.join(", "), &line[close..]);
     }
     line.to_owned()
+}
+
+/// QB packs its variables, and the x86 loads what it finds; arm64's `ldr x` of a symbol needs it 8 aligned for the
+/// relocation (`R_AARCH64_LDST64_ABS_LO12_NC`). Every module global starts on 8 (16 from 16 bytes).
+fn aligned(line: &str) -> String {
+    if !line.starts_with('@') || !(line.contains(" global ") || line.contains(" constant ")) {
+        return line.to_owned();
+    }
+    let body = match line.rfind(", align ") {
+        Some(at) => &line[..at],
+        None => line,
+    };
+    format!("{body}, align 16")
 }
