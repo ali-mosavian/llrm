@@ -137,6 +137,30 @@ fn plain_load(one: &Insn) -> Option<(u32, &Mem)> {
     .then_some((into.value, cell))
 }
 
+/// The liveness rows of `body`, worked out when first asked.
+struct Lazy<'a> {
+    body: &'a LirBody,
+    rows: std::cell::OnceCell<crate::backend::allocate::LiveRows>,
+}
+
+impl LiveAt for Lazy<'_> {
+    fn live_in(
+        &self,
+        block: i64,
+        value: u32,
+    ) -> bool {
+        self.rows.get_or_init(|| live_rows(self.body)).live_in(block, value)
+    }
+
+    fn live_out(
+        &self,
+        block: i64,
+        value: u32,
+    ) -> bool {
+        self.rows.get_or_init(|| live_rows(self.body)).live_out(block, value)
+    }
+}
+
 /// `body` with each plain load that can go and should made just before its one
 /// reader.
 pub fn sunk(
@@ -144,13 +168,17 @@ pub fn sunk(
     segments: &Segments,
     registers: &RegisterClasses,
 ) -> LirBody {
-    let confined = regclass::classes(body, &BTreeSet::new(), segments, registers);
+    // Asked of the first load that passes the cheap tests, not of every body:
+    // most bodies have none, and the classes and the liveness cost 3.2 M of
+    // d_faces's 4.4 M here.
+    let confined = std::cell::OnceCell::new();
     let class_of = |value: u32, wide: bool| {
+        let confined = confined.get_or_init(|| regclass::classes(body, &BTreeSet::new(), segments, registers));
         if wide { Class::Stack } else { confined.get(&value).map_or(Class::Any, |set| Class::Within(set.clone())) }
     };
     // Rows of bits, asked by membership: a set of values for every block is
     // blocks times values, and the walk asks for a few.
-    let live_out = live_rows(body);
+    let live_out = Lazy { body, rows: std::cell::OnceCell::new() };
     let mut widths: IndexMap<u32, u32> = IndexMap::default();
     let mut defined: IndexMap<u32, usize> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
@@ -262,4 +290,43 @@ fn _reader(
         }
     }
     (falls && !rises).then_some(reader)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::model::ir::{Held, Semantics};
+    use crate::model::lir::LirBlock;
+
+    /// The sink built the liveness rows and the register classes of every body
+    /// before looking for a load (d_faces -O2: 3.2 M of its 4.4 M, 7
+    /// bodies, most with no load that has one later reader). A body with no
+    /// such load asks for neither. Counted, not timed.
+    #[test]
+    fn test_a_body_with_no_load_to_move_builds_no_liveness() {
+        let held = |value: u32| Loc::Held(Held { value, width: 2 });
+        let add = |at: i64, result: u32| {
+            let what = Semantics {
+                name: Some("add".into()),
+                dests: vec![held(result)],
+                sources: vec![held(1), held(2)],
+                ..Semantics::new(Operation::Binary)
+            };
+            Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![result], vec![1, 2]))
+        };
+        let body = LirBody::new(
+            "no loads",
+            0,
+            vec![LirBlock::new(0, vec![add(0, 10), add(1, 11), add(2, 12)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let before = llrm_mir::counts::get(llrm_mir::counts::Event::LiveRows);
+        let out = sunk(&body, &crate::backend::target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
+        let built = llrm_mir::counts::get(llrm_mir::counts::Event::LiveRows) - before;
+        assert_eq!(built, 0, "liveness rows built for a body with no load");
+        assert_eq!(out.insns().len(), 3);
+    }
 }
