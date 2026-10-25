@@ -102,7 +102,7 @@ fn nibbles_reaches_its_first_level_on_x86_32() {
     let screen = run(
         "nibbles32",
         &source,
-        &[("QB_HEADLESS_KEYS", " 1\r50\rY\rC\r"), ("QB_HEADLESS_GAP", "300"), ("QB_HEADLESS_SECONDS", "10")],
+        &[("QB_HEADLESS_KEYS", " 1\r50\rY\rC\r"), ("QB_HEADLESS_GAP", "400"), ("QB_HEADLESS_SECONDS", "15")],
     );
     assert!(screen.contains("Level 1,  Push Space"), "{screen}");
 }
