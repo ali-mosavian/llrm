@@ -87,6 +87,9 @@ pub struct TargetLowering {
     cond_code: HashMap<(CondCode, MVT), Action>,
     /// `addLegalFPImmediate`: the float constants an instruction makes.
     legal_fp_immediates: Vec<(MVT, u128)>,
+    /// `ShouldShrinkFPConstant` is false for `f64`: with SSE2 `cvtss2sd` costs
+    /// more than a straight `movsd`.
+    keeps_f64_constants: bool,
 }
 
 impl TargetLowering {
@@ -100,6 +103,7 @@ impl TargetLowering {
             trunc_store: HashMap::default(),
             cond_code: HashMap::default(),
             legal_fp_immediates: Vec::new(),
+            keeps_f64_constants: false,
         }
     }
 
@@ -170,6 +174,14 @@ impl TargetLowering {
         bits: u128,
     ) {
         self.legal_fp_immediates.push((vt, bits));
+    }
+
+    /// `ShouldShrinkFPConstant`.
+    pub fn should_shrink_fp_constant(
+        &self,
+        vt: MVT,
+    ) -> bool {
+        vt == MVT::F80 || !self.keeps_f64_constants
     }
 
     /// `isFPImmLegal`.
@@ -445,6 +457,9 @@ impl TargetLowering {
         }
         t.set_operation_action(Trap, MVT::Other, Legal);
         t.set_operation_action(DynamicStackAlloc, ptr, Custom);
+        // The pin expands these to a stack pointer copy; the same, as Custom.
+        t.set_operation_action(StackSave, ptr, Custom);
+        t.set_operation_action(StackRestore, MVT::Other, Custom);
         // L559..L566: 32-bit va_list is a pointer
         t.set_operation_action(VAStart, MVT::Other, Custom);
         t.set_ops(&[VAEnd, VACopy], &[MVT::Other], Expand);
@@ -469,6 +484,7 @@ impl TargetLowering {
         // L806..L870: f80
         t.set_ops(&[Undef, Poison], &[MVT::F80], Expand);
         t.set_operation_action(FCopySign, MVT::F80, Expand);
+        t.keeps_f64_constants = features.sse2;
         // L764..L860: the x87 loads of 0.0 and 1.0 (`fldz`, `fld1`, and `fchs`)
         // L690..L706: SSE has only +0.0 (`xorps`, `xorpd`)
         for (vt, one, sign) in [

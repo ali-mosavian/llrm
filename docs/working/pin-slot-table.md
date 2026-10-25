@@ -351,7 +351,6 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Simplify |  |  | DEVIATE | 764: loopsimplify@764 + lcssa@764 | llrm's loop-simplify/lcssa stand-ins that LLVM's loop pass adaptor makes implicit (parity.rs RUN_COUNTS_OPEN) |  |
 | -O1 | Simplify |  |  | DEVIATE | 772: loopsimplify@772 + lcssa@772 | as 764 |  |
 | -O1 | Simplify |  |  | DEVIATE | 787: inferspace@787 | -O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot) |  |
-| -O1 | Simplify |  |  | DEVIATE | 809: decide@809 | -O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot) |  |
 | -O1 | Simplify |  |  | DEVIATE | 810: cvp@810 | -O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot) |  |
 | -O1 | Simplify |  |  | DEVIATE | 820: dse@820 | -O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot) |  |
 | -O1 | Simplify |  |  | DEVIATE | 823: loopsimplify@823 + lcssa@823 + licm@823 | -O1 only, as 669 (unverified slot by slot) |  |
@@ -457,7 +456,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Simplify | bdce | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | bdce@797:Translated |  |  |
 | -O2 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@801:Partial + fold@801:Old + dead@801:Old |  |  |
 | -O2 | Simplify | dfa-jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | dfajumpthreading@806:Translated |  |  |
-| -O2 | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@809:Translated + decide@809:Old |  |  |
+| -O2 | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@809:Translated |  |  |
 | -O2 | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | cvp@810:Translated |  |  |
 | -O2 | Simplify | adce | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | adce@815:Translated |  |  |
 | -O2 | Simplify | memcpyopt | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | memcpyopt@818:Translated + merge@818:Partial |  |  |
@@ -574,7 +573,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Simplify | bdce | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | bdce@797:Translated |  |  |
 | -O3 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@801:Partial + fold@801:Old + dead@801:Old |  |  |
 | -O3 | Simplify | dfa-jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | dfajumpthreading@806:Translated |  |  |
-| -O3 | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@809:Translated + decide@809:Old |  |  |
+| -O3 | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@809:Translated |  |  |
 | -O3 | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | cvp@810:Translated |  |  |
 | -O3 | Simplify | adce | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | adce@815:Translated |  |  |
 | -O3 | Simplify | memcpyopt | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | memcpyopt@818:Translated + merge@818:Partial |  |  |
@@ -693,7 +692,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Simplify | bdce | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | bdce@797:Translated |  |  |
 | -Os | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@801:Partial + fold@801:Old + dead@801:Old |  |  |
 | -Os | Simplify | dfa-jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | dfajumpthreading@806:Translated |  |  |
-| -Os | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@809:Translated + decide@809:Old |  |  |
+| -Os | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@809:Translated |  |  |
 | -Os | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | cvp@810:Translated |  |  |
 | -Os | Simplify | adce | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | adce@815:Translated |  |  |
 | -Os | Simplify | memcpyopt | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | memcpyopt@818:Translated + merge@818:Partial |  |  |

@@ -105,7 +105,25 @@ fn floating_constants_print_as_llvm_does() {
         round(text),
         "@a = global double 1.500000e+00\n@b = global double 1.000000e-01\n@c = global double 0x3FD5555555555555\n@d = global float 0x3FB99999A0000000\n"
     );
-    assert_eq!(refusal("@d = global float 0.1\n"), "line 1: 0.1 is not exactly a float");
+}
+
+/// LLVM 24 (the pin) prints a float as its shortest decimal (`float
+/// 1.000000e-01`) and a hex float as `f0x` and the type's own digits; MIR
+/// refused both, so 14 vsgcc programs (floats, x_nbody_f, ...) were refused
+/// before selection.
+#[test]
+fn a_float_decimal_is_read_as_a_float_and_f0x_takes_the_types_width() {
+    // 0.1 as a float, not as a double that happens to be near one.
+    assert_eq!(round("@a = global float 0.1\n"), "@a = global float 0x3FB99999A0000000\n");
+    // Just above the midpoint of 1.0 and the next float: through a double it
+    // is the midpoint, and ties to even give 1.0; read as a float it rounds up.
+    assert_eq!(round("@a = global float 1.00000005960464477539062501\n"), "@a = global float 0x3FF0000020000000\n");
+    assert_eq!(round("@a = global double f0x3FF0040000000000\n"), round("@a = global double 0x3FF0040000000000\n"));
+    assert_eq!(round("@a = global float f0x3F800000\n"), round("@a = global float 1.0\n"));
+    assert_eq!(
+        refusal("@a = global float f0x3FF0040000000000\n"),
+        "line 1: f0x3FF0040000000000 is not a float's 8 hex digits"
+    );
 }
 
 #[test]

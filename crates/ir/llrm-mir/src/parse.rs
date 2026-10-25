@@ -510,9 +510,12 @@ impl Parser {
     /// Whether a constant starts here, rather than the next statement.
     fn starts_constant(&self) -> bool {
         match self.peek() {
-            Token::Int { .. } | Token::Float(_) | Token::HexFloat(_) | Token::Bytes(_) | Token::Global(_) => {
-                !matches!(self.peek_at(1), Token::Punct('='))
-            }
+            Token::Int { .. }
+            | Token::Float(..)
+            | Token::FloatBits { .. }
+            | Token::HexFloat(_)
+            | Token::Bytes(_)
+            | Token::Global(_) => !matches!(self.peek_at(1), Token::Punct('=')),
             Token::Punct('[' | '{' | '<') => true,
             Token::Word(word) => {
                 ["true", "false", "null", "poison", "undef", "zeroinitializer", "getelementptr"]
@@ -896,7 +899,19 @@ impl Parser {
                 }
                 ConstantKind::Int(u128::from(word == "true"))
             }
-            Token::Float(value) => self.float(&shape, value, line)?,
+            Token::Float(value, narrow) => match shape {
+                Type::Float(FloatKind::Float) => ConstantKind::Float(u64::from(narrow.to_bits())),
+                _ => self.float(&shape, value, line)?,
+            },
+            Token::FloatBits { bits, digits } => match shape {
+                Type::Float(FloatKind::Float) if digits == 8 => ConstantKind::Float(bits),
+                Type::Float(FloatKind::Double) if digits == 16 => ConstantKind::Float(bits),
+                Type::Float(kind) => {
+                    let (name, width) = if kind == FloatKind::Float { ("float", 8) } else { ("double", 16) };
+                    return self.fail_on(line, format!("f0x{bits:0digits$X} is not a {name}'s {width} hex digits"));
+                }
+                _ => return self.fail_on(line, "a floating constant given a non-floating type"),
+            },
             Token::HexFloat(bits) => self.float(&shape, f64::from_bits(bits), line)?,
             Token::Word(word) if word == "null" => {
                 if !matches!(shape, Type::Pointer(_)) {
