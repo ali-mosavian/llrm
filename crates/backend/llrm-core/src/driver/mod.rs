@@ -102,7 +102,7 @@ impl Options {
         Self {
             machine,
             pipeline: Default::default(),
-            dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
+            dump: llrm_support::env_var("LLRM_MIR_STAGES").map(Into::into),
             stack_usage: false,
             stack_limit: None,
             selection,
