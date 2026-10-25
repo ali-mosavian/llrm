@@ -177,6 +177,9 @@ pub struct EmitContext<'a> {
     /// How addresses are formed: real mode constrains a base and an index to
     /// their register classes (SD4).
     pub address_mode: AddrMode,
+    /// The multiple a call's argument area is rounded to, so a call finds the
+    /// stack aligned (`aligned_calls`); 1 where calls need none.
+    pub call_alignment: i64,
     pub map: &'a OpcodeMap,
     pub names: &'a HashMap<u16, &'a str>,
     /// The jump tables of the function, by `JumpTable` index.
@@ -635,6 +638,7 @@ fn width(vt: EVT) -> u32 {
         EVT::Simple(MVT::I1 | MVT::I8) => 1,
         EVT::Simple(MVT::I16) => 2,
         EVT::Simple(MVT::I32) => 4,
+        EVT::Simple(MVT::I64) => 8,
         EVT::Int(bits) => bits.div_ceil(8),
         // A floating value is one 10-byte register value of the x87 stack.
         EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80) => 10,
@@ -1348,7 +1352,7 @@ impl Emitter<'_, '_> {
     ) -> bool {
         self.glue_reaches(n, |name| {
             let name = name.split('|').next().unwrap_or(name);
-            matches!(name, "CDQ" | "CWD")
+            matches!(name, "CDQ" | "CWD" | "CQO")
                 || is_div_or_mul(name)
                 || name.starts_with("REP_")
                 || name.ends_with("rCL")
@@ -1410,16 +1414,20 @@ impl Emitter<'_, '_> {
         }
         let ISD::Machine(op) = self.dag.opcode(glue) else { return false };
         let name = self.ctx.names.get(&(op as u16)).map_or("", |name| name.split('|').next().unwrap_or(name));
-        matches!(name, "CDQ" | "CWD") || is_div_or_mul(name)
+        matches!(name, "CDQ" | "CWD" | "CQO") || is_div_or_mul(name)
     }
 
-    /// (low, high, bytes): AX and DX, or EAX and EDX.
+    /// (low, high, bytes): AX and DX, EAX and EDX, or RAX and RDX.
     fn accumulator_pair(
         &self,
-        dword: bool,
+        bytes: u32,
     ) -> Result<(llrm_lir::registers::RegId, llrm_lir::registers::RegId, u32), EmitError> {
         use llrm_lir::registers::RegId;
-        Ok(if dword { (RegId::EAX, RegId::EDX, 4) } else { (RegId::AX, RegId::DX, 2) })
+        Ok(match bytes {
+            8 => (RegId::RAX, RegId::RDX, 8),
+            4 => (RegId::EAX, RegId::EDX, 4),
+            _ => (RegId::AX, RegId::DX, 2),
+        })
     }
 
     /// Whether `register` is ES, named as the builder's physical register or as
@@ -1552,14 +1560,22 @@ impl Emitter<'_, '_> {
         let width = width(node.values[0]);
         let result = SDValue { node: n, res: 0 };
         match name.split('|').next().unwrap_or(name) {
-            "ADJCALLSTACKDOWN32" | "ADJCALLSTACKUP32" => {
+            "ADJCALLSTACKDOWN32" | "ADJCALLSTACKUP32" | "ADJCALLSTACKDOWN64" | "ADJCALLSTACKUP64" => {
                 let bytes = self.constant(node.ops[0])?;
                 let popped = if name.starts_with("ADJCALLSTACKUP") { self.constant(node.ops[1])? } else { 0 };
+                // The area is a multiple of the call alignment; the callee pops
+                // `popped` of it, the caller the rest.
+                let bytes = (bytes + self.ctx.call_alignment - 1) / self.ctx.call_alignment * self.ctx.call_alignment;
                 let (verb, count) =
                     if name.starts_with("ADJCALLSTACKDOWN") { ("sub", bytes) } else { ("add", bytes - popped) };
                 if count != 0 {
-                    // The stack pointer is a word at real mode.
-                    let word = if self.ctx.address_mode == AddrMode::Real16 { 2 } else { 4 };
+                    // The stack pointer is a word at real mode, a quadword at
+                    // 64 bits.
+                    let word = match self.ctx.address_mode {
+                        AddrMode::Real16 => 2,
+                        AddrMode::Flat64 => 8,
+                        AddrMode::Flat32 => 4,
+                    };
                     let sp = Loc::Reg(Reg { register: self.ctx.stack_pointer, width: word });
                     let count = Loc::Imm(Imm { value: count, width: word, address: None });
                     self.push(Operation::Binary, verb, vec![sp.clone()], vec![sp, count]);
@@ -1613,7 +1629,7 @@ impl Emitter<'_, '_> {
                 self.blocks.last_mut().expect("a block").insns.push(Arc::new(insn));
                 return Ok(Some(()));
             }
-            "CALLpcrel32" => {
+            "CALLpcrel32" | "CALL64pcrel32" => {
                 let callee = self
                     .direct_callee(node.ops[0])
                     .ok_or_else(|| EmitError::Unsupported("a call of a non-global".to_owned()))?;
@@ -1885,14 +1901,22 @@ impl Emitter<'_, '_> {
             // Division and the one-operand multiply work in AX:DX or EAX:EDX,
             // which the matcher names with `CopyToReg`/`CopyFromReg` around
             // them: the LIR form says the pair in its operands.
-            "CDQ" | "CWD" => {
-                let (low, high, bytes) = self.accumulator_pair(name == "CDQ")?;
+            "CDQ" | "CWD" | "CQO" => {
+                let (low, high, bytes) = self.accumulator_pair(match name {
+                    "CQO" => 8,
+                    "CDQ" => 4,
+                    _ => 2,
+                })?;
                 let source = self.accumulated(low)?;
                 let sign = self.fresh(bytes);
                 self.accumulator.insert(high, sign);
                 self.push(
                     Operation::Extend,
-                    if name == "CDQ" { "cdq" } else { "cwd" },
+                    match name {
+                        "CQO" => "cqo",
+                        "CDQ" => "cdq",
+                        _ => "cwd",
+                    },
                     vec![Loc::Held(sign)],
                     vec![Loc::Held(source)],
                 );
@@ -1908,7 +1932,7 @@ impl Emitter<'_, '_> {
                 let (low, high, wide) = if bytes == 1 {
                     (llrm_lir::registers::RegId::AL, llrm_lir::registers::RegId::DX, 2)
                 } else {
-                    self.accumulator_pair(bytes == 4)?
+                    self.accumulator_pair(bytes)?
                 };
                 let divisor = if memory {
                     let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short div".to_owned()))?;
@@ -1980,6 +2004,29 @@ impl Emitter<'_, '_> {
                     return Ok(Some(()));
                 }
                 self.values.insert(result, source.value);
+                return Ok(Some(()));
+            }
+            // `SUBREG_TO_REG 0, x, sub_32bit`: x in the low dword of a
+            // quadword whose high half is zero. A dword write zeroes it, so
+            // the copy is that write.
+            "SUBREG_TO_REG" => {
+                // The pin's operands are (0, x, index); the node keeps (x,
+                // index), and a folded load's chain after them.
+                let is_constant = |op: SDValue| matches!(self.dag.node(op).data, NodeData::Const { .. });
+                let (source, index) = match node.ops[..] {
+                    [source, index, ..] if is_constant(index) => (source, self.constant(index)?),
+                    [_, source, index, ..] => (source, self.constant(index)?),
+                    _ => return Err(EmitError::Unsupported("SUBREG_TO_REG operands".to_owned())),
+                };
+                if index != 6 {
+                    return Err(EmitError::Unsupported(format!("SUBREG_TO_REG index {index}")));
+                }
+                let Loc::Held(source) = self.operand(source)? else {
+                    return Err(EmitError::Unsupported("SUBREG_TO_REG of a non-value".to_owned()));
+                };
+                let held = self.fresh(source.width);
+                self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Held(source)]);
+                self.values.insert(result, held.value);
                 return Ok(Some(()));
             }
             // A register-class constraint is the allocator's business.
@@ -2069,6 +2116,28 @@ impl Emitter<'_, '_> {
                 self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![source]);
                 Ok(Some(()))
             }
+            // The conditional move (P6 and later, every x86-64): the second
+            // source replaces the first, tied to the result, when the
+            // condition holds.
+            "CMOV16rr" | "CMOV32rr" | "CMOV64rr" => {
+                let cc = self.constant(node.ops[2])? as usize;
+                let jump = CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
+                let (Loc::Held(when_false), Loc::Held(when_true)) =
+                    (self.operand(node.ops[0])?, self.operand(node.ops[1])?)
+                else {
+                    return Err(EmitError::Unsupported("a conditional move of a non-register".to_owned()));
+                };
+                let held = self.fresh(width);
+                self.values.insert(result, held.value);
+                let name = format!("cmov{}", &jump[1..]);
+                self.push(
+                    Operation::Select,
+                    &name,
+                    vec![Loc::Held(held)],
+                    vec![Loc::Held(when_false), Loc::Held(when_true)],
+                );
+                Ok(Some(()))
+            }
             "SETCCr" => {
                 let cc = node
                     .ops
@@ -2098,7 +2167,7 @@ impl Emitter<'_, '_> {
                 self.push(Operation::Unary, &name, vec![Loc::Mem(cell)], Vec::new());
                 Ok(Some(()))
             }
-            "LEA32r" | "LEA16r" => {
+            "LEA32r" | "LEA16r" | "LEA64r" => {
                 // a `lea` only computes the address: a scaled index is fine
                 let cell = self.cell_unchecked(
                     node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short lea".to_owned()))?,
