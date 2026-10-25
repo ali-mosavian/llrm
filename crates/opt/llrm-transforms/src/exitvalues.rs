@@ -118,11 +118,18 @@ pub fn rewritten_in(
         if !simple {
             continue;
         }
-        changed |=
-            rewrite_loop_exit_values(
-                context, layout, function, declared, outer, session, &mut rewriter, &tti, size, header,
-            )
-                > 0;
+        changed |= rewrite_loop_exit_values(
+            context,
+            layout,
+            function,
+            declared,
+            outer,
+            session,
+            &mut rewriter,
+            &tti,
+            size,
+            header,
+        ) > 0;
     }
     changed
 }
@@ -251,7 +258,14 @@ fn rewrite_loop_exit_values(
                     } else {
                         inst
                     };
-                    rewrite_phi_set.push(RewritePhi { phi, index, expansion: exit_value, point, high_cost, larger_than_loop });
+                    rewrite_phi_set.push(RewritePhi {
+                        phi,
+                        index,
+                        expansion: exit_value,
+                        point,
+                        high_cost,
+                        larger_than_loop,
+                    });
                 }
             }
         }
