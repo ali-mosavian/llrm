@@ -565,6 +565,7 @@ dependencies = [
  "llrm-object",
  "llrm-qbruntime",
  "llrm-support",
+ "llrm-target",
  "llrm-transforms",
  "llrm-x86-m16",
  "logos",

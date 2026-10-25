@@ -464,13 +464,25 @@ pub fn written_basic(
     header: Vec<u8>,
     name: &str,
 ) -> Result<Vec<u8>, String> {
-    timed("omf write", || written_basic_inner(module, header, name))
+    written_basic_in(module, header, name, llrm_target::object::Format::Omf)
+}
+
+/// `written_basic` in the object format of a host: the header and data
+/// segments are the same, the records are `format`'s.
+pub fn written_basic_in(
+    module: &masm::Module,
+    header: Vec<u8>,
+    name: &str,
+    format: llrm_target::object::Format,
+) -> Result<Vec<u8>, String> {
+    timed("object write", || written_basic_inner(module, header, name, format))
 }
 
 fn written_basic_inner(
     module: &masm::Module,
     header: Vec<u8>,
     name: &str,
+    format: llrm_target::object::Format,
 ) -> Result<Vec<u8>, String> {
     // Build the same semantic segments as backend.objbuild.written, then add
     // the BASIC-owned MODULE_CODE envelope before asking its canonical record
@@ -506,16 +518,19 @@ fn written_basic_inner(
         &every,
         &mut symbols,
         &mut Default::default(),
-        llrm_target::object::Format::Omf,
+        format,
         |procedure, number| _basic_listing(procedure, number),
     )
     .map_err(|error| error.to_string())?;
 
     let code = &mut segments[0];
+    let header_size = header.len();
     code.image = [header, std::mem::take(&mut code.image)].concat();
-    code.lines = code.lines.iter().map(|&(line, at)| (line, at + 48)).collect();
-    code.bodies = code.bodies.iter().map(|&(mark, at)| (mark, at + 48)).collect();
-    code.spans = std::iter::once([0, 48]).chain(code.spans.iter().map(|[start, end]| [start + 48, end + 48])).collect();
+    let size = header_size;
+    code.lines = code.lines.iter().map(|&(line, at)| (line, at + size)).collect();
+    code.bodies = code.bodies.iter().map(|&(mark, at)| (mark, at + size)).collect();
+    code.spans =
+        std::iter::once([0, size]).chain(code.spans.iter().map(|[start, end]| [start + size, end + size])).collect();
     if module.procedures.last().is_none_or(|last| last.name != "$QB$STAT") {
         return Err("the BASIC statement table must be the final code procedure".into());
     }
@@ -525,9 +540,13 @@ fn written_basic_inner(
     // an item, so OF_STA must name its first block label after that
     // prologue, not the procedure symbol.
     let shifted: Vec<objbuild::Fixup> =
-        code.fixups.iter().map(|one| objbuild::Fixup { at: one.at + 48, ..one.clone() }).collect();
+        code.fixups.iter().map(|one| objbuild::Fixup { at: one.at + size, ..one.clone() }).collect();
     let words = HeaderWords::of(module.object.bitness);
-    let offset_kind = if words.width == 4 { objbuild::OFFSET32 } else { objbuild::OFFSET };
+    let offset_kind = match words.width {
+        8 => objbuild::OFFSET64,
+        4 => objbuild::OFFSET32,
+        _ => objbuild::OFFSET,
+    };
     code.fixups = [objbuild::Fixup::new(words.statements, offset_kind, statement_data)]
         .into_iter()
         .chain(
@@ -540,7 +559,7 @@ fn written_basic_inner(
         .collect();
     let mut symbols: IndexMap<String, (usize, usize)> = symbols
         .into_iter()
-        .map(|(name, (segment, offset))| (name, (segment, if segment == 0 { offset + 48 } else { offset })))
+        .map(|(name, (segment, offset))| (name, (segment, if segment == 0 { offset + size } else { offset })))
         .collect();
     symbols.insert(HEADER.into(), (0, 0));
     // BC_DS stores DATA keys as literal final code offsets, not relocations.
@@ -561,6 +580,24 @@ fn written_basic_inner(
     let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
     let object = objbuild::object_of(module, name, segments, &symbols, &Default::default(), &externs)
         .map_err(|error| error.to_string())?;
+    if format != llrm_target::object::Format::Omf {
+        // A host's linker and C spell the runtime's `B$PESD` as `B_PESD`.
+        let mut object = object;
+        for symbol in &mut object.symbols {
+            symbol.name = symbol.name.replace('$', "_");
+        }
+        // The module's header, where the host's start-up finds it (the
+        // flat DOS target reads it from BC_SA).
+        let code = object.sections.iter().position(|one| one.name == module.code).ok_or("the code section")?;
+        object.symbols.push(llrm_object::Symbol {
+            name: HEADER.replace('$', "_"),
+            binding: llrm_object::Binding::Public,
+            definition: llrm_object::Definition::Defined { section: code, offset: 0 },
+            size: header_size,
+            group: None,
+        });
+        return objbuild::serialized(&object, format).map_err(|error| error.to_string());
+    }
     let emitted = llrm_omf::write::write(&object).map_err(|error| error.to_string())?;
     // QB's classes and combine modes shape a real-mode link; a flat object
     // keeps the ones its writer gave.
@@ -646,6 +683,8 @@ pub const NAMED: [(usize, &str, &str); 5] = [
 pub struct HeaderWords {
     /// Bytes of an address.
     pub width: usize,
+    /// The header's bytes: the code starts after them.
+    pub size: usize,
     /// The statement table's, OF_STA.
     pub statements: usize,
     /// BC_DS, BC_DATA, BC_FT, COMMON and BC_CN, in `NAMED`'s order.
@@ -654,10 +693,12 @@ pub struct HeaderWords {
 
 impl HeaderWords {
     pub fn of(bitness: u32) -> Self {
-        if bitness == 32 {
-            Self { width: 4, statements: 12, segments: [16, 20, 24, 28, 32] }
+        if bitness == 64 {
+            Self { width: 8, size: 80, statements: 16, segments: [24, 32, 40, 48, 56] }
+        } else if bitness == 32 {
+            Self { width: 4, size: 48, statements: 12, segments: [16, 20, 24, 28, 32] }
         } else {
-            Self { width: 2, statements: 10, segments: [NAMED[0].0, NAMED[1].0, NAMED[2].0, NAMED[3].0, NAMED[4].0] }
+            Self { width: 2, size: 48, statements: 10, segments: [NAMED[0].0, NAMED[1].0, NAMED[2].0, NAMED[3].0, NAMED[4].0] }
         }
     }
 }

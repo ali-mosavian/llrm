@@ -1873,6 +1873,19 @@ fn declare_outside(
                 slot.insert(module.reference(global));
             }
         }
+        if instruction.op == Op::Concat
+            && tables.spaces.segment_space().is_err()
+            && !tables.callees.contains_key(REAL_ADDRESS)
+            && let Ok(to) = value_type(&mut module.context.types, &tables.spaces, tables.types[&values[&instruction.results[0]]])
+            && let Type::Pointer(space) = *module.context.types.get(to)
+            && tables.layout.pointer(space).bits == 64
+        {
+            let wide = module.context.types.int(64);
+            let ty = function_type(&mut module.context.types, to, vec![wide]);
+            let global = module.add_function(REAL_ADDRESS, ty, Linkage::External)?;
+            let reference = module.reference(global);
+            tables.callees.insert(REAL_ADDRESS.to_owned(), reference);
+        }
         if instruction.op == Op::Assume {
             let types = &mut module.context.types;
             let (void, i1) = (types.void(), types.int(1));
@@ -2157,6 +2170,8 @@ pub const RETURNS_TWICE: &str = "returns_twice";
 
 /// What the language promises holds, LLVM's intrinsic.
 const ASSUME: &str = "llvm.assume";
+/// The runtime routine that places a byte of the PC's low memory on a 64-bit host.
+const REAL_ADDRESS: &str = "B$REAL";
 
 /// Where a variadic function's variadic arguments start, stored in a list.
 const VA_START: &str = "llvm.va_start.p0";
@@ -3540,7 +3555,18 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let paragraph = self.b.binary(BinaryOp::Shl, selector, four, Flags::default(), "");
                 let offset = self.convert(offset, false, wide)?;
                 let address = self.b.binary(BinaryOp::Add, paragraph, offset, Flags::default(), "");
-                let result = self.b.cast(CastOp::IntToPtr, address, ty, "");
+                // A 64-bit host has no memory at the PC's low addresses: the
+                // runtime gives the place of the byte `address` in its image
+                // of them.
+                let result = if bits == 64 {
+                    let callee = Value::Constant(
+                        *self.tables.callees.get(REAL_ADDRESS).ok_or_else(|| format!("@{REAL_ADDRESS} undeclared"))?,
+                    );
+                    let function = function_type(&mut self.b.context.types, ty, vec![wide]);
+                    self.b.call(function, callee, &[address], "").expect("an address")
+                } else {
+                    self.b.cast(CastOp::IntToPtr, address, ty, "")
+                };
                 self.define(instruction, result);
             }
             Op::Concat => {

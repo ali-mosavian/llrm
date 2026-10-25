@@ -17,6 +17,7 @@ path = "src/bin/qbfront.rs"
 llrm-support = { workspace = true }
 llrm-core = { workspace = true }
 llrm-driver = { workspace = true }
+llrm-target = { workspace = true }
 llrm-hir = { workspace = true }
 llrm-qbruntime = { workspace = true }
 llrm-mir = { workspace = true }

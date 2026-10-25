@@ -12,7 +12,7 @@ use llrm_core::backend::stackusage::stack_to_add;
 use llrm_core::backend::{masm, objbuild};
 use llrm_core::driver::{
     self,
-    basic::{self, written_basic},
+    basic::{self, written_basic_in},
 };
 use llrm_core::hir::{self, model};
 use llrm_core::objectfile::module::Space;
@@ -304,14 +304,18 @@ fn _header(
     // pointer is a dword the words are dwords (`HeaderWords`), and the 48
     // bytes keep the marker and the switches where they were.
     let words = driver::basic::HeaderWords::of(bitness);
-    let mut out: Vec<u8> = [b"bl".to_vec(), name, vec![0; 34], vec![0xff, 0xff]].concat();
+    // The marker and the switches are the header's last four bytes.
+    let mut out: Vec<u8> = [b"bl".to_vec(), name].concat();
+    out.resize(words.size - 4, 0);
+    out.extend([0xff, 0xff]);
     out.extend((_compiler_switches(program)? as u16).to_le_bytes());
-    if out.len() != 48 {
+    if out.len() != words.size {
         return Err(CompileError::Value("MODULE_CODE is exactly O_ENT bytes".into()));
     }
     // The addends live in the image. The remaining words are zero.
     // OF_DS is BC_DS + 2.
-    out[words.segments[0]..words.segments[0] + words.width].copy_from_slice(&2u32.to_le_bytes()[..words.width]);
+    out[words.segments[0]..words.segments[0] + words.width]
+        .copy_from_slice(&2u64.to_le_bytes()[..words.width]);
     Ok(out)
 }
 
@@ -609,5 +613,6 @@ pub fn object_bytes(
     let module = objbuild::live(&assembled(program, observer, codegen)?)
         .map_err(|error| CompileError::Value(error.to_string()))?;
     let name = source.file_name().map_or_else(String::new, |one| one.to_string_lossy().into_owned());
-    Ok(written_basic(&module, _header(program, codegen.arch.layout().mode)?, &name)?)
+    let format = llrm_target::object::Format::parse(codegen.object_format).map_err(CompileError::Value)?;
+    Ok(written_basic_in(&module, _header(program, codegen.arch.layout().mode)?, &name, format)?)
 }
