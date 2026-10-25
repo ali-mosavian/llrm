@@ -55,3 +55,11 @@ BC pushes the pattern's descriptor to `B$FILS` (an empty one for a bare FILES; Q
 (`runtime/qb/filelist.c`) prints the current directory, the entries 18 characters each (four to an 80-column line), a blank
 line and the free space, over the OS layer's `find_first`, `find_next`, `current_directory`, `current_drive` and
 `free_bytes`. `tests/qbrt/files_listing.bas` matches BCOM45 at m16 and m32.
+
+## SHELL
+BC calls `B$SSHL(psd)` with the command's descriptor, an empty one for a bare SHELL (QB 4.5 and PDS 7.1 BC output;
+`rt/osstmt.asm`). The runtime (`runtime/qb/shell.c`) runs COMSPEC with `/C command` over a new OS-layer op, `execute`:
+DOS 4B00h at m16, a DPMI real-mode call at m32 (DOS/32A's own 4Bh takes an undocumented block layout). At m16 the far heap's
+arrays slide down and the DOS block shrinks to them for the child, then regrows (`qb_shell_release`/`qb_shell_reclaim`).
+`tests/qbrt/shell_command.bas` matches BCOM45 at m16 and m32; `tests/run/c/os_execute.c` tests the op. Not done: the child's
+exit code is not ERRORLEVEL-visible, and SHELL does not save and restore the screen or COM ports as QB's B$ShellSetup does.

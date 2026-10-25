@@ -61,6 +61,7 @@ endif
 if OS_GROUPS and G_PROCESS
 public LL$COMMAND_LINE
 public LL$ENVIRONMENT
+public LL$EXECUTE
 endif
 
 ;; HEAP_BYTES comes from os.toml, DOS_* from the OS's facts: the assembler is told both.
@@ -410,6 +411,142 @@ environment_done:
                 pop     ebx
                 ret
 LL$ENVIRONMENT  endp
+;;::::::::::::::
+;; LL$EXECUTE(name: *near char, tail: *near char) -> isize: DOS's load-and-execute (4B00h) as the extender's real-mode call
+;; (DPMI 0300h) runs it, over a block of DOS memory holding what DOS reads: the name, the tail, the parameter block (the
+;; caller's environment, the tail, two blank FCBs). DOS/32A's own 4Bh takes a block layout it does not document.
+EXEC_NAME       equ     0                       ;; at most 128 bytes, NUL-ended
+EXEC_TAIL       equ     128                     ;; length byte, text, CR: at most 128 bytes
+EXEC_BLOCK      equ     256                     ;; 14 bytes
+EXEC_FCB        equ     272                     ;; two of 16 bytes
+EXEC_PARAS      equ     19                      ;; 304 bytes
+EXEC_CALL       equ     -16-52                  ;; from EBP
+EXEC_VECTORS    equ     EXEC_CALL-12            ;; from EBP: INT 22h, 23h, 24h as offset and segment words
+LL$EXECUTE      proc
+                push    ebp
+                mov     ebp, esp
+                push    ebx
+                push    esi
+                push    edi
+                push    es
+                sub     esp, 52 + 12            ;; the real-mode call structure (EXEC_CALL), below it the real-mode terminate, break and critical-error vectors (EXEC_VECTORS)
+                mov     ax, DOS_DPMI_DOS_ALLOC
+                mov     bx, EXEC_PARAS
+                int     DOS_DPMI_INT
+                jc      exec_no_memory
+                push    eax                     ;; the real-mode segment
+                push    edx                     ;; the selector
+                mov     es, dx
+                xor     edi, edi
+                mov     ecx, EXEC_PARAS * 4
+                xor     eax, eax
+                rep     stosd
+                mov     esi, dword ptr [ebp+8]
+                mov     edi, EXEC_NAME
+                mov     ecx, 127
+exec_copy_name:
+                mov     al, [esi]
+                test    al, al
+                jz      short exec_name_done
+                mov     es:[edi], al
+                inc     esi
+                inc     edi
+                dec     ecx
+                jnz     short exec_copy_name
+exec_name_done:
+                mov     esi, dword ptr [ebp+12]
+                movzx   ecx, byte ptr [esi]
+                add     ecx, 2
+                cmp     ecx, 128
+                jbe     short exec_tail_fits
+                mov     ecx, 128
+exec_tail_fits:
+                mov     edi, EXEC_TAIL
+                rep     movsb
+                mov     eax, dword ptr [esp+4]  ;; the segment
+                mov     word ptr es:[EXEC_BLOCK+4], ax
+                mov     word ptr es:[EXEC_BLOCK+2], EXEC_TAIL
+                mov     word ptr es:[EXEC_BLOCK+8], ax
+                mov     word ptr es:[EXEC_BLOCK+6], EXEC_FCB
+                mov     word ptr es:[EXEC_BLOCK+12], ax
+                mov     word ptr es:[EXEC_BLOCK+10], EXEC_FCB + 16
+                ;; the call structure, on the stack, with the registers 4Bh reads
+                lea     edi, [ebp+EXEC_CALL]
+                push    es
+                push    ss
+                pop     es
+                mov     ecx, 13
+                xor     eax, eax
+                rep     stosd
+                pop     es
+                mov     eax, dword ptr [esp+4]
+                mov     word ptr [ebp+EXEC_CALL+34], ax      ;; ES
+                mov     word ptr [ebp+EXEC_CALL+36], ax      ;; DS
+                mov     word ptr [ebp+EXEC_CALL+20], EXEC_NAME   ;; DX
+                mov     word ptr [ebp+EXEC_CALL+16], EXEC_BLOCK  ;; BX
+                mov     word ptr [ebp+EXEC_CALL+28], DOS_EXEC * 256 ;; AX
+                mov     bl, 22h
+exec_save_vector:
+                mov     ax, DOS_DPMI_GET_VECTOR
+                int     DOS_DPMI_INT
+                movzx   eax, bl
+                mov     word ptr [ebp+EXEC_VECTORS+eax*4-22h*4], dx
+                mov     word ptr [ebp+EXEC_VECTORS+eax*4-22h*4+2], cx
+                inc     bl
+                cmp     bl, 25h
+                jb      short exec_save_vector
+                push    es
+                push    ss
+                pop     es
+                lea     edi, [ebp+EXEC_CALL]
+                mov     ax, DOS_DPMI_SIMULATE
+                mov     bl, DOS_INT
+                xor     bh, bh
+                xor     ecx, ecx
+                int     DOS_DPMI_INT
+                pop     es
+                pushfd
+                mov     bl, 22h
+exec_restore_vector:
+                movzx   eax, bl
+                mov     dx, word ptr [ebp+EXEC_VECTORS+eax*4-22h*4]
+                mov     cx, word ptr [ebp+EXEC_VECTORS+eax*4-22h*4+2]
+                mov     ax, DOS_DPMI_SET_VECTOR
+                int     DOS_DPMI_INT
+                inc     bl
+                cmp     bl, 25h
+                jb      short exec_restore_vector
+                popfd
+                jc      short exec_call_failed
+                movzx   eax, word ptr [ebp+EXEC_CALL+28]
+                test    byte ptr [ebp+EXEC_CALL+32], 1       ;; the flags' carry: DOS's error code is in AX
+                jnz     short exec_failed
+                xor     eax, eax
+                jmp     short exec_free
+exec_failed:
+                neg     eax
+                jmp     short exec_free
+exec_call_failed:
+                mov     eax, -1
+exec_free:
+                mov     ebx, eax
+                pop     edx                     ;; the selector
+                add     esp, 4
+                mov     ax, DOS_DPMI_DOS_FREE
+                int     DOS_DPMI_INT
+                mov     eax, ebx
+                jmp     exec_done
+exec_no_memory:
+                mov     eax, -8
+exec_done:
+                add     esp, 52 + 12
+                pop     es
+                pop     edi
+                pop     esi
+                pop     ebx
+                pop     ebp
+                ret
+LL$EXECUTE      endp
 endif
 
 if OS_GROUPS and G_FILES

@@ -3956,6 +3956,16 @@ impl Compiler {
                         let pattern = self.string_descriptor(arguments.first().unwrap_or(&empty))?;
                         self.emit_runtime_call("B$FILS", Vec::new(), vec![pattern]);
                     }
+                    "SHELL" => {
+                        if arguments.len() > 1 {
+                            return self.fail("SHELL takes one command, as in `SHELL \"DIR\"`");
+                        }
+                        // BC passes the command's descriptor, an empty string's
+                        // for a bare SHELL.
+                        let empty = Expr::Literal(Literal::String(String::new()), Span::default());
+                        let command = self.string_descriptor(arguments.first().unwrap_or(&empty))?;
+                        self.emit_runtime_call("B$SSHL", Vec::new(), vec![command]);
+                    }
                     "BEEP" => {
                         if !arguments.is_empty() {
                             return self.fail("BEEP takes no arguments");

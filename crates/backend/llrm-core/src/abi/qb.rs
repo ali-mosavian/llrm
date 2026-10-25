@@ -125,6 +125,8 @@ static _AUDITED_STATEMENT_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|
         ("B$SLEP", 4),
         // QB45 rt/dkstmt.asm B$FILS(parmW fname): the pattern's descriptor.
         ("B$FILS", 2),
+        // QB45 rt/osstmt.asm B$SSHL(parmSD sdExec): the command's descriptor.
+        ("B$SSHL", 2),
         // QB45 rt/dkstmt.asm B$KILL(parmSD fname), B$NAME(parmSD oldname,
         // parmSD newname); rt/directry.asm `pascal far B$MDIR(psdDirectory)`,
         // B$CDIR and B$RDIR alike.

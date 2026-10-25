@@ -138,6 +138,13 @@ doc = "The `index`th (from 0) string of the environment, NAME=VALUE, copied to `
 args = [["index", "usize"], ["data", "bytes_mut"], ["max", "usize"]]
 returns = "isize"
 
+[[op]]
+group = "process"
+name = "execute"
+doc = "Runs the program `name` to its end with the command tail `tail` (a length byte, the text, a carriage return) and the caller's environment; 0 on success, the error code negated otherwise. The caller leaves the program enough memory to run in."
+args = [["name", "path"], ["tail", "path"]]
+returns = "isize"
+
 # Files and directories by name, where the operating system has them.
 [[op]]
 group = "files"

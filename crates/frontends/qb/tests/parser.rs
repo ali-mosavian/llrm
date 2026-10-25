@@ -2399,3 +2399,13 @@ fn files_calls_b_fils_with_the_pattern_or_an_empty_string() {
     let hir = compile(&module, "files", Dialect::QuickBasic45, "qb45").unwrap();
     assert_eq!(hir.matches("\"callee\":\"B$FILS\"").count(), 2, "{hir}");
 }
+
+#[test]
+fn shell_calls_b_sshl_with_the_command_or_an_empty_string() {
+    // SHELL was refused as valid but not generated. BC pushes the command's
+    // descriptor to B$SSHL, an empty string's for a bare SHELL (measured in
+    // BC output, QB 4.5 and PDS 7.1).
+    let module = parse("SHELL\r\nSHELL \"DIR\"\r\n", Dialect::QuickBasic45).unwrap();
+    let hir = compile(&module, "shell", Dialect::QuickBasic45, "qb45").unwrap();
+    assert_eq!(hir.matches("\"callee\":\"B$SSHL\"").count(), 2, "{hir}");
+}

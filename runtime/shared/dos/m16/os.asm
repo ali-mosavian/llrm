@@ -1,4 +1,4 @@
-;; name: LL$OPEN, LL$CREATE, LL$READ, LL$SEEK, LL$WRITE_FILE, LL$CLOSE, LL$EXIT, LL$MORE, LL$BLOCK_RESIZE, LL$VECTOR, LL$SET_VECTOR, LL$CHAIN, LL$RESTORE_VECTORS, LL$CONSOLE_READ_KEY, LL$CONSOLE_KEY_READY, LL$COMMAND_LINE, LL$ENVIRONMENT, LL$DELETE, LL$RENAME, LL$MKDIR, LL$CHDIR, LL$RMDIR, LL$FIND_FIRST, LL$FIND_NEXT, LL$FREE_BYTES, LL$CURRENT_DIRECTORY, LL$CURRENT_DRIVE
+;; name: LL$OPEN, LL$CREATE, LL$READ, LL$SEEK, LL$WRITE_FILE, LL$CLOSE, LL$EXIT, LL$MORE, LL$BLOCK_RESIZE, LL$VECTOR, LL$SET_VECTOR, LL$CHAIN, LL$RESTORE_VECTORS, LL$CONSOLE_READ_KEY, LL$CONSOLE_KEY_READY, LL$COMMAND_LINE, LL$ENVIRONMENT, LL$DELETE, LL$RENAME, LL$MKDIR, LL$CHDIR, LL$RMDIR, LL$FIND_FIRST, LL$FIND_NEXT, LL$EXECUTE, LL$FREE_BYTES, LL$CURRENT_DIRECTORY, LL$CURRENT_DRIVE
 ;; desc: the OS layer shared by C, Nib and BASIC programs: x86-m16, real-mode DOS
 ;;
 ;; args: the interface of runtime/shared/interface.toml, in cdecl16: arguments in word slots from [bp+6],
@@ -54,6 +54,7 @@ endif
 if OS_GROUPS and G_PROCESS
 public LL$COMMAND_LINE
 public LL$ENVIRONMENT
+public LL$EXECUTE
 if (OS_GROUPS and G_CORE) eq 0
 extrn LL$PSP:word
 endif
@@ -547,6 +548,64 @@ environment_done:
                 pop     bp
                 retf
 LL$ENVIRONMENT  endp
+;;::::::::::::::
+;; LL$EXECUTE(name: *far char, tail: *far char) -> i16: DOS's load-and-execute. The parameter block (the caller's
+;; environment, the tail, two blank FCBs) is built on the stack; DOS 2 destroys SS:SP and every register, so they are
+;; kept in the code segment and restored.
+EXEC_BLOCK      equ     54                      ;; below BP: the saved DS, ES, SI, DI and the 46-byte block
+LL$EXECUTE      proc    far
+                push    bp
+                mov     bp, sp
+                push    ds
+                push    es
+                push    si
+                push    di
+                sub     sp, 46
+                push    ss
+                pop     es
+                mov     di, sp
+                mov     cx, 23
+                xor     ax, ax
+                rep     stosw
+                lea     bx, [bp-EXEC_BLOCK]
+                mov     ax, [bp+10]
+                mov     [bx+2], ax
+                mov     ax, [bp+12]
+                mov     [bx+4], ax
+                lea     ax, [bx+14]
+                mov     [bx+6], ax
+                mov     [bx+8], ss
+                lea     ax, [bx+30]
+                mov     [bx+10], ax
+                mov     [bx+12], ss
+                mov     cs:exec_ss, ss
+                mov     cs:exec_sp, sp
+                lds     dx, [bp+6]
+                mov     ax, DOS_EXEC * 256
+                int     DOS_INT
+                cli
+                mov     ss, cs:exec_ss
+                mov     sp, cs:exec_sp
+                sti
+                jc      short exec_failed
+                xor     ax, ax
+                jmp     short exec_done
+exec_failed:
+                neg     ax
+exec_done:
+                mov     bp, sp
+                add     bp, EXEC_BLOCK
+                mov     ds, [bp-2]
+                add     sp, 46
+                pop     di
+                pop     si
+                pop     es
+                pop     ds
+                pop     bp
+                ret
+exec_ss         dw      0
+exec_sp         dw      0
+LL$EXECUTE      endp
 endif
 
 if OS_GROUPS and G_FILES
