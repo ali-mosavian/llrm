@@ -2,7 +2,7 @@
 
 TL;DR: translate the pin's pre-RA `GenericScheduler` bottom-up pass in four landing pieces, 11-06; `pressuresink.rs` goes when it does. The pin's pass is worth +0.13% / +0.19% clocks (geomean, -O2 / -O3) on i486 and up to +7% on x_list (`docs/working/premise-peephole-sink-scheduler.md`).
 
-target: i486-unknown-linux-gnu, cpu i486 (no schedule model, no itinerary): latency 1 per instruction, no resource limits.
+target: i486-unknown-linux-gnu, cpu i486 (no schedule model, no itinerary): the default `MCSchedModel` (in order, issue width 1, no buffer). Latencies (`TargetInstrInfo::defaultDefLatency`, `TargetSchedModel::computeOutputLatency`): a copy or other transient instruction 0, a load 4 (`DefaultLoadLatency`), any other def 1; output dependence 1, anti 0, memory chain 0. Not "1 per instruction" (corrected 2026-10-25): heights and depths, and so `ReduceLatency` (the scheduled cycles plus the remaining chain over the critical path), follow these. No resource limits.
 
 ## The pin, at d1106deb71cc
 

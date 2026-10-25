@@ -106,6 +106,11 @@ impl Lanes {
         Self(0)
     }
 
+    /// The lanes as a bit mask, a lane to a bit (`Lanes::flags` for the flags).
+    pub const fn mask(&self) -> u128 {
+        self.0
+    }
+
     /// The flag lanes of an rflags mask. `RegId::None` sorts first, so flag
     /// bit `i` is lane bit `i`.
     pub fn flags(mask: u32) -> Self {
