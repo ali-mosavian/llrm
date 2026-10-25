@@ -11,6 +11,7 @@ m16burndown_causes.toml: an `[[program]]` is a glob on the program name, the fir
 
 from __future__ import annotations
 
+import os
 import sys
 import fnmatch
 import argparse
@@ -64,14 +65,28 @@ def disable_flags(dist: Path) -> list[str]:
     return ["-fno-" + word[2:].strip(", ") for word in named[1].split() if word.startswith("-f")] if named else []
 
 
+# The off switches the pipeline reads from the environment (`env_flag!`): the second family, for what no -fno- pass flag reaches.
+ENV_SWITCHES = ["LLRM_NO_SPLIT", "LLRM_NO_STACKS", "LLRM_NO_JUMPTHREADING", "LLRM_NO_COMBINE", "LLRM_NO_SROA", "LLRM_NO_MEM2REG"]
+
+
+def switch_name(flag: str) -> str:
+    return flag.removeprefix("-fno-").removeprefix("-disable-").removeprefix("LLRM_NO_").lower().replace("_", "-")
+
+
 def ablate(dist: Path, level: str, names: list[str], flags: list[str]) -> dict[str, dict[str, int | None]]:
     """flag -> program -> bytes with that pass off, on `dist` alone. A compiler that does not know the flag gives None for its programs."""
     sizes = m16os.sizes_module()
     listed = [(n, c) for n, c in sizes.programs(dist, demos=False) if n in set(names)]
     found: dict[str, dict[str, int | None]] = {}
     for flag in flags:
-        with ThreadPoolExecutor(8) as pool:
-            found[flag] = dict(zip((n for n, _ in listed), pool.map(lambda one: sizes.measure(one[1] + [flag], level), listed)))
+        env = flag.startswith("LLRM_")
+        if env:
+            os.environ[flag] = "1"
+        try:
+            with ThreadPoolExecutor(8) as pool:
+                found[flag] = dict(zip((n for n, _ in listed), pool.map(lambda one: sizes.measure(one[1] + ([] if env else [flag]), level), listed)))
+        finally:
+            os.environ.pop(flag, None)
         print(f"ablated {flag}", file=sys.stderr)
     return found
 
@@ -84,11 +99,11 @@ def attribute(tip: dict[str, int], ablated: dict[str, dict[str, int | None]], fl
         shrinks = sorted(((size - v[name], flag) for flag, v in ablated.items() if v.get(name)), reverse=True)
         best = [(gain, flag) for gain, flag in shrinks if gain >= floor]
         if not best:
-            tagged[name] = "untagged"
+            tagged[name] = "RA/peephole"
         elif len(best) > 1 and best[1][0] * 2 >= best[0][0]:
-            tagged[name] = "multi: " + "+".join(sorted(flag.removeprefix("-fno-").removeprefix("-disable-") for _, flag in best[:2]))
+            tagged[name] = "multi: " + "+".join(sorted(switch_name(flag) for _, flag in best[:2]))
         else:
-            tagged[name] = best[0][1].removeprefix("-fno-")
+            tagged[name] = switch_name(best[0][1])
     return tagged
 
 
@@ -126,9 +141,14 @@ def main() -> None:
         cache = args.ablation_cache
         if cache and cache.exists():
             ablated = json.loads(cache.read_text())
-            ablated.pop("-disable-lsr", None)  # the same switch as -fno-lsr
+            missing = [k for k in ENV_SWITCHES if k not in ablated] if args.ablate == "all" else []
+            if missing:
+                ablated |= ablate(args.new, args.level, [n for n in both if new[n] > base[n]], missing)
+                cache.write_text(json.dumps(ablated))
+            for same in ("-disable-lsr", "LLRM_NO_LICM"):  # the same switches as -fno-lsr and -fno-move-loop-invariants
+                ablated.pop(same, None)
         else:
-            ablated = ablate(args.new, args.level, [n for n in both if new[n] > base[n]], disable_flags(args.new) if args.ablate == "all" else args.ablate.split(","))
+            ablated = ablate(args.new, args.level, [n for n in both if new[n] > base[n]], disable_flags(args.new) + ENV_SWITCHES if args.ablate == "all" else args.ablate.split(","))
             if cache:
                 cache.write_text(json.dumps(ablated))
         tagged = attribute({n: new[n] for n in both if new[n] > base[n]}, ablated)
@@ -138,7 +158,7 @@ def main() -> None:
         cause, owner = tag_of(name, rules)
         if tagged and cause == "untriaged":
             cause = tagged[name]
-            owner = flag_owner.get(cause.removeprefix("multi: ").split("+")[0], owner)
+            owner = "w-13/w-1" if cause == "RA/peephole" else flag_owner.get(cause.removeprefix("multi: ").split("+")[0], owner)
         return cause, owner
 
     rows = [(n, base[n], new[n], new[n] - base[n], clock_ratio(n, level, before, after), *classified(n)) for n in grew]

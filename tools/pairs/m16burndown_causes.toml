@@ -5,17 +5,17 @@
 [[program]]
 match = "nbody_fixed/*"
 cause = "fixed-point divide"
-owner = "w-9"
+owner = "w-10"
 
 [[program]]
 match = "stft_fixed/*"
 cause = "fixed-point divide"
-owner = "w-9"
+owner = "w-10"
 
 [[program]]
 match = "qb/nbody.bas"
 cause = "move-loop-invariants"
-owner = "w-6"
+owner = "w-2"
 
 [[program]]
 match = "*/nbody.*"
@@ -93,6 +93,59 @@ cause = "untriaged"
 owner = "w-13"
 
 # A pass whose removal shrinks a grower is its cause under --ablate (the flag name without -fno-); the owner of that pass.
+
+[[flag]]
+flag = "tree-ch"
+owner = "w-5"
+
+[[flag]]
+flag = "tree-loop-distribute-patterns"
+owner = "w-5"
+
+[[flag]]
+flag = "tree-pre"
+owner = "w-14"
+
+[[flag]]
+flag = "gcse"
+owner = "w-14"
+
+[[flag]]
+flag = "lsr"
+owner = "w-3"
+
+[[flag]]
+flag = "strength-reduce"
+owner = "w-3"
+
 [[flag]]
 flag = "move-loop-invariants"
+owner = "w-2"
+
+[[flag]]
+flag = "inline-functions"
+owner = "w-6"
+
+[[flag]]
+flag = "inline-functions-called-once"
+owner = "w-6"
+
+[[flag]]
+flag = "tree-sra"
 owner = "w-3"
+
+[[flag]]
+flag = "optimize-sibling-calls"
+owner = "w-9"
+
+[[flag]]
+flag = "split"
+owner = "w-13"
+
+[[flag]]
+flag = "stacks"
+owner = "w-13"
+
+[[flag]]
+flag = "licm"
+owner = "w-2"
