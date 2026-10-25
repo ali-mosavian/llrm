@@ -2,7 +2,7 @@
 //! blocks, and which allocas are frame indices.
 
 use llrm_mir::dense::{IdMap, IdSet};
-use llrm_mir::module::{Function, Operand, ValueDef, ValueId};
+use llrm_mir::module::{BlockId, Function, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
 
 /// Virtual registers number from here: below it the numbers are the pin's
@@ -22,6 +22,10 @@ pub struct FunctionLoweringInfo {
     pub sret_reg: Option<u32>,
     /// The branch probabilities of the function, made at its first `switch`.
     pub bpi: Option<llrm_analysis::bpi::BranchProbabilityInfo>,
+    /// The probability of each machine edge a block's lowering made
+    /// (`addSuccessorWithProb`): (from, to, probability in 2^31sts). An edge
+    /// the lowering did not state has none.
+    pub edge_probs: Vec<(BlockId, BlockId, u32)>,
     next_reg: u32,
     /// The register of the high half of a two-register value, by the low's.
     second: std::collections::BTreeMap<u32, u32>,
@@ -71,6 +75,7 @@ impl FunctionLoweringInfo {
             static_allocas: IdMap::new(),
             sret_reg: None,
             bpi: None,
+            edge_probs: Vec::new(),
             next_reg: FIRST_VIRTUAL,
             second: Default::default(),
             jump_tables: Vec::new(),
