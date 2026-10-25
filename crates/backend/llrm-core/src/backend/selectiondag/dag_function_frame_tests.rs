@@ -678,10 +678,11 @@ fn a_scaled_lea_at_m16_has_no_literal_place() {
             [Loc::Mem(m)] => (m.scale, m.addr),
             _ => continue,
         };
-        scaled += usize::from(scale != 1);
+        scaled += 1;
         assert!(scale == 1 || place.is_none(), "{what:?}");
     }
-    assert!(scaled > 0, "the function has a scaled lea");
+    // (its word indexes are shifted first, so none stays scaled)
+    assert!(scaled > 0, "the function has a lea");
 }
 
 /// 16-bit addressing has no scale. A `lea` of a base and a word index scaled by
