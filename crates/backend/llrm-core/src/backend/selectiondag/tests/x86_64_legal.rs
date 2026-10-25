@@ -241,3 +241,46 @@ fn a_float_constant_at_sse2_is_a_pool_load() {
     assert_eq!((dag.opcode(root), dag.value_type(root)), (ISD::Load, f64v));
     assert_eq!(dag.constant_pool, vec![(0x3FF8_0000_0000_0000, f64v)], "an f64 entry, not an f32 one");
 }
+
+/// `alloca` of a runtime size reached the legalizer as a `DynamicStackAlloc`
+/// the table calls Custom and nothing lowered: a libcall refusal for every
+/// function with a variable-length array (`vla.c`, m32 and m64). The pin
+/// lowers it to `sp - size` written back to `sp`, inside a call sequence.
+#[test]
+fn a_dynamic_alloca_moves_the_stack_pointer() {
+    let tli = TargetLowering::x86_64(Features { cmov: true, ..Features::default() }, MVT::I64);
+    let mut dag = SelectionDAG::new(DagConfig { pointer: EVT::I64, ..DagConfig::default() });
+    let size = dag.get_register(EVT::I64, 1);
+    let align = dag.get_constant(0, EVT::I64);
+    let chain = dag.entry_node();
+    let alloca = dag.get_node_multi(ISD::DynamicStackAlloc, &[EVT::I64, EVT::OTHER], &[chain, size, align]);
+    dag.set_root(SDValue { node: alloca.node, res: 1 });
+    TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false }).run().expect("legalizes");
+    let merged = dag.get_root();
+    assert_eq!(dag.opcode(merged), ISD::MergeValues);
+    let end = dag.operand(merged, 1);
+    assert_eq!(dag.opcode(end), ISD::CallSeqEnd);
+    let write = dag.operand(end, 0);
+    assert_eq!(dag.opcode(write), ISD::CopyToReg);
+    let new_sp = dag.operand(write, 2);
+    assert_eq!(dag.opcode(new_sp), ISD::Sub);
+    assert_eq!(dag.operand(new_sp, 1), size);
+}
+
+/// `stacksave`/`stackrestore` read and write the stack pointer; the node
+/// stayed `Legal` and the selector refused it (`CannotSelect(StackSave)`).
+#[test]
+fn stacksave_and_stackrestore_copy_the_stack_pointer() {
+    let tli = TargetLowering::x86_64(Features { cmov: true, ..Features::default() }, MVT::I64);
+    let mut dag = SelectionDAG::new(DagConfig { pointer: EVT::I64, ..DagConfig::default() });
+    let chain = dag.entry_node();
+    let saved = dag.get_node_multi(ISD::StackSave, &[EVT::I64, EVT::OTHER], &[chain]);
+    let restore = dag.get_node(ISD::StackRestore, EVT::OTHER, &[SDValue { node: saved.node, res: 1 }, saved]);
+    dag.set_root(restore);
+    TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false }).run().expect("legalizes");
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::CopyToReg);
+    assert_eq!(dag.opcode(dag.operand(root, 2)), ISD::CopyFromReg);
+}

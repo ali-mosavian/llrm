@@ -310,6 +310,16 @@ impl Hooks for X86Lowering {
             ISD::Abs => Some(lower_abs(dag, node)),
             ISD::FNeg | ISD::FAbs => lower_fabs_or_fneg(dag, node),
             ISD::FCopySign => lower_fcopysign(dag, node),
+            ISD::DynamicStackAlloc => lower_dynamic_stackalloc(dag, node),
+            ISD::StackSave => {
+                let (chain, vt) = (dag.operand(node, 0), dag.value_type(node));
+                Some(dag.get_copy_from_phys_reg_plain(chain, llrm_lir::registers::RegId::SP, vt))
+            }
+            ISD::StackRestore => {
+                let (chain, saved) = (dag.operand(node, 0), dag.operand(node, 1));
+                let sp = dag.get_phys_register(dag.value_type(saved), llrm_lir::registers::RegId::SP);
+                Some(dag.get_node(ISD::CopyToReg, EVT::OTHER, &[chain, sp, saved]))
+            }
             // `LowerFP_EXTEND`: the Custom arm exists for `f16`; a scalar
             // `f32` to `f64` is returned as is and selected by pattern.
             ISD::FpExtend if dag.value_type(dag.operand(node, 0)) == EVT::Simple(MVT::F32) => Some(node),
@@ -1647,6 +1657,31 @@ fn lower_fcopysign(
     let magnitude = masked(dag, x86isd::FAND, mag, sign - 1);
     let sign_bit = masked(dag, x86isd::FAND, sgn, sign);
     Some(dag.get_node(x86isd::FOR, vt, &[magnitude, sign_bit]))
+}
+
+/// `LowerDYNAMIC_STACKALLOC` without probes or split stacks: the stack pointer
+/// lowered by the size, rounded down to the alignment when that is more than
+/// the stack's (operand 2, else 0), is the address. Bracketed by a
+/// `CALLSEQ` pair so nothing else moves the stack pointer meanwhile.
+fn lower_dynamic_stackalloc(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let (chain, size) = (dag.operand(node, 0), dag.operand(node, 1));
+    let alignment = dag.constant(dag.operand(node, 2)).unwrap_or(0);
+    let start = dag.get_callseq_start(chain, 0);
+    let sp = dag.get_copy_from_phys_reg_plain(SDValue { node: start.node, res: 0 }, llrm_lir::registers::RegId::SP, vt);
+    let mut result = dag.get_node(ISD::Sub, vt, &[sp, size]);
+    let mut chain = SDValue { node: sp.node, res: 1 };
+    if alignment != 0 {
+        let mask = dag.get_constant(!(alignment - 1) & ((1u128 << vt.size_in_bits()) - 1), vt);
+        result = dag.get_node(ISD::And, vt, &[result, mask]);
+    }
+    chain = dag.get_copy_to_phys_reg(chain, llrm_lir::registers::RegId::SP, result, None);
+    let chain = SDValue { node: chain.node, res: 0 };
+    let end = dag.get_callseq_end(chain, 0, 0, SDValue { node: chain.node, res: 1 });
+    Some(dag.get_node_multi(ISD::MergeValues, &[vt, EVT::OTHER], &[result, SDValue { node: end.node, res: 0 }]))
 }
 
 /// `LowerABS` for `i16`/`i32`: `x < 0 ? -x : x` as `cmov` on the flags of `0 -
