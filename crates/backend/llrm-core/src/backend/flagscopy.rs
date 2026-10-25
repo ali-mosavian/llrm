@@ -77,8 +77,9 @@
 //! After `FixupSetCC`, before the float phases. Every level (the pin's pass is
 //! not gated), so it is not in `UNOPTIMIZED`.
 
-use std::collections::HashMap;
 use std::sync::Arc;
+
+use llrm_support::hash::HashMap;
 
 use crate::backend::liveness;
 use crate::liveness::cfg::{Cfg, DomTree};
@@ -363,7 +364,7 @@ fn first_terminator(insns: &[Arc<Insn>]) -> usize {
 /// test position and after the last instruction that defines the flags.
 fn collect_conds_in_regs(w: &Work) -> CondRegs {
     let (block, test_pos) = w.marks[TEST];
-    let mut conds = CondRegs::new();
+    let mut conds = CondRegs::default();
     for one in w.insns[block][..test_pos].iter().rev() {
         if let Some(Reads::Set(code, false)) = reads(one)
             && let [Loc::Held(into)] = one.what.as_ref().expect("semantics").dests.as_slice()
@@ -672,7 +673,7 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
         regs: body.regs(),
         bits: body.bits,
         next,
-        renames: HashMap::new(),
+        renames: HashMap::default(),
         shell: body.blocks.clone(),
         insns: body.blocks.iter().map(|b| b.insns.iter().cloned().collect()).collect(),
         marks: Vec::new(),
@@ -711,7 +712,7 @@ fn assemble(
         value
     };
     let renames = std::mem::take(&mut w.renames);
-    let mut used: HashMap<u32, usize> = HashMap::new();
+    let mut used: HashMap<u32, usize> = HashMap::default();
     let mut count = |value: u32| *used.entry(value).or_default() += 1;
     for (block, insns) in w.insns.iter().enumerate() {
         for one in insns {

@@ -165,3 +165,23 @@ fn test_undef_is_not_guaranteed_undef_free_as_llvm_says() {
     let text = include_str!("../../tests/vt/guarantee/undef.ll");
     assert_eq!(dump(text), include_str!("../../tests/vt/guarantee/undef.expected"));
 }
+
+/// Old: every `stripPointerCastsSameRepresentation` call put its first value
+/// in a hash set it allocated (the pin's `SmallPtrSet<_, 4>` stays in place):
+/// LVI made 513 such calls on one d_faces function, 0.5 M Ir. Up to four
+/// values take no table; the fifth spills, and a repeat is found on either
+/// side.
+#[test]
+fn test_a_cast_walk_of_up_to_four_values_allocates_no_table() {
+    use crate::valuetracking::guarantee::Seen;
+    let value = |at: u32| Operand::Value(crate::module::ValueId(at));
+    let mut seen = Seen::default();
+    for at in 0..4 {
+        assert!(seen.insert(value(at)));
+        assert!(!seen.spilled(), "{at}");
+    }
+    assert!(!seen.insert(value(2)));
+    assert!(seen.insert(value(4)));
+    assert!(seen.spilled());
+    assert!(!seen.insert(value(1)) && !seen.insert(value(4)) && seen.insert(value(5)));
+}

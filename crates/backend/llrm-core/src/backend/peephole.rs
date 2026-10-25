@@ -396,30 +396,37 @@ pub fn popped_arguments(
     let unit = i64::from(body.bits / 8);
     let arithmetic =
         RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::AF | RflagsBits::CF | RflagsBits::PF;
-    let exits = liveness::dead_at_exit(body);
+    let sp = Loc::Reg(reg(RegId::SP, 2));
+    // The words an `add sp, n` takes back, or 0.
+    let words_of = |one: &Insn| match &one.what {
+        Some(what)
+            if what.op == Operation::Binary && what.name.as_deref() == Some("add") && what.dests == [sp.clone()] =>
+        {
+            match what.sources.as_slice() {
+                [first, Loc::Imm(Imm { value, address: None, .. })]
+                    if *first == sp && value % unit == 0 && *value > 0 =>
+                {
+                    value / unit
+                }
+                _ => 0,
+            }
+        }
+        _ => 0,
+    };
+    // Solved for the first block that has a cleanup, and not at all for a
+    // body that has none.
+    let mut exits = None;
     let mut blocks = Vec::new();
     for block in &body.blocks {
+        if block.insns.iter().all(|one| words_of(one) == 0) {
+            blocks.push(block.clone());
+            continue;
+        }
+        let exits = exits.get_or_insert_with(|| liveness::dead_at_exit(body));
         let dead_after = regthrash::_dead_after(regs, body.bits, block, exits[&block.at].clone());
         let mut insns = Vec::with_capacity(block.insns.len());
         for one in &block.insns {
-            let sp = Loc::Reg(reg(RegId::SP, 2));
-            let words = match &one.what {
-                Some(what)
-                    if what.op == Operation::Binary
-                        && what.name.as_deref() == Some("add")
-                        && what.dests == [sp.clone()] =>
-                {
-                    match what.sources.as_slice() {
-                        [first, Loc::Imm(Imm { value, address: None, .. })]
-                            if *first == sp && value % unit == 0 && *value > 0 =>
-                        {
-                            value / unit
-                        }
-                        _ => 0,
-                    }
-                }
-                _ => 0,
-            };
+            let words = words_of(one);
             let dead = &dead_after[&id(one)];
             let scratch = regs.scratch.iter().copied().find(|register| _lanes(regs, *register).is_subset(dead));
             match scratch {
@@ -1056,12 +1063,14 @@ pub fn _register_effects_of_what(
         return None;
     }
     let key = EffectKey { bits, may_write, flags, what, requires: &[], delivers: &[] };
-    if let Some(found) = EFFECTS.with(|held| held.borrow().find(&key)) {
+    // Hashed once: a miss remembers under the hashes it looked up.
+    let hashes = key.hashes();
+    if let Some(found) = EFFECTS.with(|held| held.borrow().find(hashes)) {
         return found;
     }
     EFFECTS_COMPUTED.with(|count| count.set(count.get() + 1));
     let answer = _register_effects_of(regs, bits, &Insn::new(0, None, None, vec![], vec![]), what, may_write, flags);
-    EFFECTS.with(|held| held.borrow_mut().remember(&key, answer.clone()));
+    EFFECTS.with(|held| held.borrow_mut().remember(hashes, answer.clone()));
     answer
 }
 
@@ -1113,12 +1122,13 @@ fn _register_effects_worked(
     // of an `-O2` module's 16,000, #924): the answer depends on these fields
     // alone, and is remembered by their value.
     let key = EffectKey { bits, may_write, flags, what, requires: &one.requires, delivers: &one.delivers };
-    if let Some(found) = EFFECTS.with(|held| held.borrow().find(&key)) {
+    let hashes = key.hashes();
+    if let Some(found) = EFFECTS.with(|held| held.borrow().find(hashes)) {
         return found;
     }
     EFFECTS_COMPUTED.with(|count| count.set(count.get() + 1));
     let answer = _register_effects_of(regs, bits, one, what, may_write, flags);
-    EFFECTS.with(|held| held.borrow_mut().remember(&key, answer.clone()));
+    EFFECTS.with(|held| held.borrow_mut().remember(hashes, answer.clone()));
     answer
 }
 
@@ -1137,6 +1147,8 @@ impl EffectKey<'_> {
     /// Two hashes of the fields, the second seeded apart from the first.
     fn hashes(&self) -> (u64, u64) {
         use std::hash::{Hash, Hasher};
+        #[cfg(test)]
+        EFFECTS_HASHED.with(|count| count.set(count.get() + 1));
         let fields = (self.bits, self.may_write, self.flags, self.what, self.requires, self.delivers);
         let mut first = rustc_hash::FxHasher::default();
         fields.hash(&mut first);
@@ -1163,14 +1175,14 @@ struct EffectsHeld {
 impl EffectsHeld {
     fn find(
         &self,
-        key: &EffectKey,
+        hashes: (u64, u64),
     ) -> Option<Effects> {
-        self.by_hash.get(&key.hashes()).cloned()
+        self.by_hash.get(&hashes).cloned()
     }
 
     fn remember(
         &mut self,
-        key: &EffectKey,
+        hashes: (u64, u64),
         answer: Effects,
     ) {
         // A function's instructions, not the run's.
@@ -1178,13 +1190,22 @@ impl EffectsHeld {
             *self = Self::default();
         }
         self.count += 1;
-        self.by_hash.insert(key.hashes(), answer);
+        self.by_hash.insert(hashes, answer);
     }
 }
 
 thread_local! {
     static EFFECTS: RefCell<EffectsHeld> = RefCell::new(EffectsHeld::default());
     static EFFECTS_COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    #[cfg(test)]
+    static EFFECTS_HASHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has hashed an ask, for a test that a miss hashes
+/// it once.
+#[cfg(test)]
+pub fn effects_hashed() -> usize {
+    EFFECTS_HASHED.with(std::cell::Cell::get)
 }
 
 /// How many times this thread has worked out an instruction's register effects,
@@ -1520,13 +1541,11 @@ fn _loaded_scaled_add<'a>(
 /// Select physically adjacent load/scale/add tails across inert anchors.
 fn _loaded_addresses(
     regs: Regs,
-    bits: u32,
     block: &LirBlock,
-    flags_dead_out: bool,
+    dead: &dyn Fn(usize) -> bool,
     uses: &Counter,
     cpu: &Profile,
 ) -> Result<LirBlock, String> {
-    let dead = _flags_dead_after(regs, bits, block, flags_dead_out);
     let mut insns = block.insns.to_vec();
     let work: Vec<usize> =
         insns.iter().enumerate().filter(|(_, one)| !_skippable_nothing(one)).map(|(index, _)| index).collect();
@@ -1535,7 +1554,10 @@ fn _loaded_addresses(
     while at + 2 < work.len() {
         let indexes = &work[at..at + 3];
         let parts: Vec<Arc<Insn>> = indexes.iter().map(|index| Arc::clone(&insns[*index])).collect();
-        let combined = if dead.contains(&id(&parts[2])) { _loaded_scaled_add(regs, &parts, uses, cpu)? } else { None };
+        let combined = match _loaded_scaled_add(regs, &parts, uses, cpu)? {
+            Some(combined) if dead(id(&parts[2])) => Some(combined),
+            _ => None,
+        };
         let Some(combined) = combined else {
             at += 1;
             continue;
@@ -1680,20 +1702,35 @@ pub fn addresses<'a>(
             }
         }
     }
-    let (_, live_out) = crate::backend::allocate::live(body);
-    let flags_out = _flags_live_out(body);
+    // Each fact is worked out for the first window that gets as far as asking
+    // for it: most bodies have none that does.
+    let live_out = std::cell::OnceCell::new();
+    let flags_out = std::cell::OnceCell::new();
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let flags_dead_out = flags_out.entering.get(&block.at).is_some_and(Lanes::is_empty);
-        let block = _loaded_addresses(regs, body.bits, block, flags_dead_out, &virtual_uses, target_cpu)?;
-        let dead = _flags_dead_after(regs, body.bits, &block, flags_dead_out);
-        let live_out = live_out.get(&block.at).cloned().unwrap_or_default();
+        let flags_dead_out =
+            || flags_out.get_or_init(|| _flags_live_out(body)).entering.get(&block.at).is_some_and(Lanes::is_empty);
+        let loaded_dead = std::cell::OnceCell::new();
+        let block = _loaded_addresses(
+            regs,
+            block,
+            &|at| loaded_dead.get_or_init(|| _flags_dead_after(regs, body.bits, block, flags_dead_out())).contains(&at),
+            &virtual_uses,
+            target_cpu,
+        )?;
+        let dead = std::cell::OnceCell::new();
         let insns = _code_windows(&block.insns, block.insns.len(), |rest| -> Result<_, String> {
-            Ok(match _affine_address(regs, body.bits, rest, &dead, target_cpu)? {
-                Some((taken, made)) if !_loses_live_definition(&rest[..taken], &made[0], &rest[taken..], &live_out) => {
-                    Some((taken, made))
+            let dead_after = |at: usize| {
+                dead.get_or_init(|| _flags_dead_after(regs, body.bits, &block, flags_dead_out())).contains(&at)
+            };
+            Ok(match _affine_address(regs, body.bits, rest, &dead_after, target_cpu)? {
+                Some((taken, made)) => {
+                    let live_out = live_out.get_or_init(|| crate::backend::allocate::live_out(body));
+                    let live_out = live_out.get(&block.at).cloned().unwrap_or_default();
+                    (!_loses_live_definition(&rest[..taken], &made[0], &rest[taken..], &live_out))
+                        .then_some((taken, made))
                 }
-                _ => None,
+                None => None,
             })
         })?;
         blocks.push(block.with_insns(insns));
@@ -1724,7 +1761,7 @@ fn _affine_address(
     regs: Regs,
     mode: u32,
     parts: &[Arc<Insn>],
-    dead: &HashSet<usize>,
+    dead: &dyn Fn(usize) -> bool,
     cpu: &Profile,
 ) -> Result<Option<(usize, Vec<Arc<Insn>>)>, String> {
     let Some(copy) = parts.first() else {
@@ -1778,7 +1815,7 @@ fn _affine_address(
         if terms.len() > 2 || terms.iter().any(|term| term.1 > 9) {
             break;
         }
-        if !dead.contains(&id(one)) {
+        if !dead(id(one)) {
             continue;
         }
         if written.width == 2
@@ -1826,9 +1863,7 @@ fn _affine_address(
             return Ok(None);
         };
         let unit = match (part.name.as_deref(), part.dests.as_slice(), part.sources.as_slice()) {
-            (Some(name @ ("add" | "sub")), [Loc::Reg(register)], [_, Loc::Imm(Imm { value, .. })])
-                if dead.contains(&id(one)) =>
-            {
+            (Some(name @ ("add" | "sub")), [Loc::Reg(register)], [_, Loc::Imm(Imm { value, .. })]) if dead(id(one)) => {
                 // By the register's width: 1 and -1 (0xFFFF in a word) are the
                 // unit.
                 let bits = i64::from(register.width) * 8;
@@ -2459,6 +2494,13 @@ impl crate::backend::incremental::Problem for FlagLive {
 
 thread_local! {
     static FLAGS: crate::backend::incremental::Kept<FlagLive> = const { crate::backend::incremental::Kept::new() };
+}
+
+/// How many flag-liveness answers this thread has worked out, whole or in
+/// part, for a test that a pass with nothing to fold does not ask.
+pub fn flags_computed() -> usize {
+    let [whole, partly, _] = FLAGS.with(crate::backend::incremental::Kept::asks);
+    whole + partly
 }
 
 /// The flags live after each block of `body`, solved from nothing held: what

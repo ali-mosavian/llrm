@@ -2014,7 +2014,7 @@ pub fn arith_into_imm(
     relocated: bool,
 ) -> Option<Emitted> {
     let built = operand_of(cell, at.bits);
-    if !TWO_OPERAND.contains(&name) || built.is_none() || ![1, 2, 4].contains(&cell.width) {
+    if !TWO_OPERAND.contains(&name) || built.is_none() || ![1, 2, 4, 8].contains(&cell.width) {
         return None;
     }
     let (r#where, symbolic) = built?;
@@ -2023,7 +2023,12 @@ pub fn arith_into_imm(
     if width == 1 {
         value = ((value & 0xFF) ^ 0x80) - 0x80;
     }
-    let all: Vec<i64> = if fits_in_a_byte(value) && !relocated { vec![8, width * 8] } else { vec![width * 8] };
+    // A quadword takes a sign-extended dword at most.
+    let widest = if width == 8 { 32 } else { width * 8 };
+    if width == 8 && i32::try_from(value).is_err() {
+        return None;
+    }
+    let all: Vec<i64> = if fits_in_a_byte(value) && !relocated { vec![8, widest] } else { vec![widest] };
     for bits in all {
         let Some(code) = code_of!(Upper(name), "_RM", width * 8, "_IMM", bits) else {
             continue;
@@ -2144,7 +2149,24 @@ fn scalar_sse(
         (0, 2) => (&sources[0], &sources[1]),
         _ => return None,
     };
+    // The bitwise operations and `movaps` take the whole register whatever the
+    // scalar they carry (a `double` negated by `xorps` is an 8-byte value).
+    let whole = matches!(name, "xorps" | "andps" | "andnps" | "orps" | "movaps");
+    // An xmm register is held 16 bytes wide whatever scalar it carries: the
+    // mnemonic says how much is read.
+    let scalar = |source: &str| match source {
+        "ss" => 32,
+        "sd" => 64,
+        _ => 128,
+    };
+    let read =
+        match name.strip_prefix("cvtt").or_else(|| name.strip_prefix("cvt")).and_then(|rest| rest.split_once('2')) {
+            Some((source, _)) => scalar(source),
+            None => scalar(&name[name.len().saturating_sub(2)..]),
+        };
     let bits = |one: &Loc| match one {
+        _ if whole => 128,
+        Loc::Reg(reg) if reg.register.is_xmm() && reg.width == 16 => read,
         Loc::Reg(reg) => reg.width * 8,
         Loc::Mem(cell) => cell.width * 8,
         _ => 0,
@@ -2157,12 +2179,12 @@ fn scalar_sse(
             _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true)
         }
         (Loc::Reg(into), Loc::Mem(cell)) if xmm(first) => {
-            let code = code_of!(upper, "_XMM_XMMM", cell.width * 8)?;
+            let code = code_of!(upper, "_XMM_XMMM", bits(second))?;
             let (built, relocated) = operand_of(cell, at.bits)?;
             _assemble(&raised(create_reg_mem(code, into.register, built)), at, relocated)
         }
         (Loc::Mem(cell), Loc::Reg(outof)) if xmm(second) => {
-            let code = code_of!(upper, "_XMMM", cell.width * 8, "_XMM")?;
+            let code = code_of!(upper, "_XMMM", bits(first), "_XMM")?;
             let (built, relocated) = operand_of(cell, at.bits)?;
             _assemble(&raised(create_mem_reg(code, built, outof.register)), at, relocated)
         }
@@ -2405,12 +2427,28 @@ pub fn emit_in(
         // BINARY's own rule: sources[0] IS dests[0].
         let (dest, source) = (&dests[0], &sources[1]);
         if let (Some(into), Some(outof)) = (reg_of(dest), reg_of(source)) {
-            if name == "btc" {
+            if matches!(name, "bsf" | "bsr") {
                 let width = width_of(into)?;
                 if width_of(outof) != Some(width) {
                     return None;
                 }
-                let code = code_of!("BTC_RM", width * 8, "_R", width * 8)?;
+                let scan = if name == "bsf" {
+                    code_of!("BSF_R", width * 8, "_RM", width * 8)
+                } else {
+                    code_of!("BSR_R", width * 8, "_RM", width * 8)
+                };
+                return _assemble(&raised(create_reg_reg(scan?, into, outof)), at, true);
+            }
+            if let Some(code) = ["btc", "bts", "btr"].iter().position(|bit| name == *bit) {
+                let width = width_of(into)?;
+                if width_of(outof) != Some(width) {
+                    return None;
+                }
+                let code = match code {
+                    0 => code_of!("BTC_RM", width * 8, "_R", width * 8)?,
+                    1 => code_of!("BTS_RM", width * 8, "_R", width * 8)?,
+                    _ => code_of!("BTR_RM", width * 8, "_R", width * 8)?,
+                };
                 return _assemble(&raised(create_reg_reg(code, into, outof)), at, true);
             }
             return arith(name, into, outof, at);
@@ -2419,6 +2457,19 @@ pub fn emit_in(
             return arith_imm(name, into, value, at, relocated);
         }
         if let (Some(into), Some(cell)) = (reg_of(dest), mem_of(source)) {
+            if matches!(name, "bsf" | "bsr") {
+                let width = width_of(into)?;
+                if i64::from(cell.width) != width {
+                    return None;
+                }
+                let (built, relocated) = operand_of(cell, at.bits)?;
+                let scan = if name == "bsf" {
+                    code_of!("BSF_R", width * 8, "_RM", width * 8)
+                } else {
+                    code_of!("BSR_R", width * 8, "_RM", width * 8)
+                };
+                return _assemble(&raised(create_reg_mem(scan?, into, built)), at, relocated);
+            }
             return arith_mem(name, into, cell, at);
         }
         if let (Some(cell), Some(outof)) = (mem_of(dest), reg_of(source)) {
@@ -2440,6 +2491,14 @@ pub fn emit_in(
             }
             _ => None,
         };
+    }
+    // BSWAP reverses the bytes of the register it names.
+    if op == Operation::Unary && dests.len() == 1 && sources.len() == 1 && name == "bswap" {
+        let Loc::Reg(into) = &dests[0] else { return None };
+        // BSWAP of a word is undefined and the pin never emits it
+        let width = width_of(into.register).filter(|width| matches!(width, 4 | 8))?;
+        let code = code_of!("BSWAP_R", width * 8)?;
+        return _assemble(&raised(create_reg(code, into.register)), at, true);
     }
     if op == Operation::Unary && dests.len() == 1 && sources.len() == 1 {
         return match &dests[0] {
