@@ -359,3 +359,32 @@ fn a_load_read_by_a_compare_is_folded_into_it() {
         .expect("a compare");
     assert!(compare.sources.iter().any(|l| matches!(l, Loc::Mem(_))), "{compare:?}");
 }
+
+const WORD_MINUS_ONE_TWICE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+@a = global i16 0
+@b = global i16 0
+define void @f() {
+  store i16 -1, ptr @a
+  store i16 -1, ptr @b
+  ret void
+}
+";
+
+/// At -Os the pin's `OptForSize, Not64BitMode` patterns make a word -1 by
+/// `MOV32r_1`, a dword `mov eax, -1` (6 bytes at -m16 with the 0x66 prefix;
+/// QCport weapons.c); the word constant is `mov ax, -1` (3).
+#[test]
+fn at_os_m16_a_word_constant_is_made_in_a_word_register() {
+    use crate::model::ir::Loc;
+    let module = llrm_mir::parse::module(WORD_MINUS_ONE_TWICE).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("386").expect("a cpu").clone();
+    cpu.size = true;
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let wide: Vec<_> = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| matches!(w.dests.as_slice(), [Loc::Held(h)] if h.width == 4))
+        .collect();
+    assert!(wide.is_empty(), "{wide:?}");
+}

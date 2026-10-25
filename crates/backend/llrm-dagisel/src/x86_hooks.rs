@@ -78,8 +78,12 @@ impl X86Hooks {
 }
 
 impl PatternContext for X86Hooks {
+    // DEVIATE (m16): the pin's `OptForSize, Not64BitMode` patterns make 1, -1
+    // and word constants by `xor; inc`/`dec` or a dword `mov`, which are
+    // shorter than `mov r32, imm32` only in 32-bit code: with the 0x66 prefix
+    // at -m16 they are longer than `mov ax, imm16`.
     fn should_opt_for_size(&self) -> bool {
-        self.options.opt_for_size
+        self.options.opt_for_size && self.options.cpu != Cpu::M16
     }
     fn has_min_size(&self) -> bool {
         self.options.min_size
