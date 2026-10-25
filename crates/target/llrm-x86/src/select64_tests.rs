@@ -161,7 +161,44 @@ fn a_quadword_divide_and_negate_take_a_memory_operand() {
     assert_eq!(bytes(&neg), [0x48, 0xf7, 0x5d, 0x00]);
 }
 
+/// `movzx esi, byte [bp + rdx - 20]` (a frame array's element, the frame
+/// token a word register) panicked in iced's encoder (mixed address sizes)
+/// when a pass priced it before the frame layout named the token; it is
+/// unencodable there, not a panic.
 #[test]
+fn a_frame_cell_with_a_wide_index_is_not_encodable_before_the_frame_is_named() {
+    let cell = ir::Mem {
+        through: RegId::BP,
+        index: Some(llrm_lir::Held { value: 1, width: 8 }),
+        index_through: RegId::RDX,
+        scale: 1,
+        disp_width: 2,
+        ..ir::Mem::new(Some(llrm_lir::Addr::new(Space::Frame, -20)), 1)
+    };
+    let load = sem(Operation::Extend, Some("movzx"), vec![rg(RegId::ESI, 4)], vec![Loc::Mem(cell)], None, false);
+    assert!(emit_in(64, &load, 0, None, false, false, None).is_none());
+}
+
+#[test]
+fn a_quadword_cell_is_compared_and_added_to_with_an_immediate() {
+    // cmpq $0,-0x8(%rbp); cmpq $0x1000,-0x8(%rbp); addq $1,-0x8(%rbp). At -O0
+    // these had no form and the compile stopped ("greedy"-free: the emitter
+    // returned nothing for the instruction).
+    let op = |name, value| {
+        let cell = frame(-8, 8);
+        if name == "cmp" {
+            sem(Operation::Compare, Some(name), vec![], vec![cell, im(value, 8, None)], None, false)
+        } else {
+            sem(Operation::Binary, Some(name), vec![cell.clone()], vec![cell, im(value, 8, None)], None, false)
+        }
+    };
+    assert_eq!(bytes(&op("cmp", 0)), [0x48, 0x83, 0x7d, 0xf8, 0x00]);
+    assert_eq!(bytes(&op("cmp", 0x1000)), [0x48, 0x81, 0x7d, 0xf8, 0x00, 0x10, 0, 0]);
+    assert_eq!(bytes(&op("add", 1)), [0x48, 0x83, 0x45, 0xf8, 0x01]);
+}
+
+#[test]
+
 fn a_scalar_double_add_is_the_sse2_form() {
     // addsd %xmm1,%xmm0; addss %xmm9,%xmm8. Without an SSE row the emitter has
     // no form to encode.
