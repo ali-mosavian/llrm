@@ -4038,6 +4038,25 @@ impl Compiler {
                             self.emit_runtime_call("B$VIEW", Vec::new(), operands);
                         }
                     }
+                    "WINDOW" | "WINDOW_SCREEN" => {
+                        if arguments.is_empty() {
+                            self.emit_runtime_call("B$WIN0", Vec::new(), Vec::new());
+                        } else {
+                            if arguments.len() != 4 {
+                                return self.fail("WINDOW takes two corners, as in `WINDOW (0, 0)-(1, 1)`");
+                            }
+                            // BC passes the four corner values as SINGLEs and
+                            // whether it is WINDOW SCREEN.
+                            let mut operands = Vec::new();
+                            for argument in arguments {
+                                let (value, type_id) = self.expression(argument)?;
+                                operands.push(self.stored_float_argument(value, type_id, SINGLE)?);
+                            }
+                            let screen = i64::from(name == "WINDOW_SCREEN");
+                            operands.push(Operand::Constant(INTEGER, Number::Integer(screen)));
+                            self.emit_runtime_call("B$WIND", Vec::new(), operands);
+                        }
+                    }
                     "VIEW_PRINT" => {
                         // VBDOS prview.asm's B$VWPT takes (top, bottom) as
                         // INTEGERs, cleans four bytes, and uses -1, -1 for
