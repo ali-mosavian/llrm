@@ -157,7 +157,7 @@ pub fn get_underlying_objects(
     loops: Option<&crate::loopinfo::LoopInfo>,
     max_lookup: u32,
 ) -> Vec<Operand> {
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = crate::hash::HashSet::default();
     let mut objects = Vec::new();
     let mut worklist = vec![v];
     while let Some(p) = worklist.pop() {

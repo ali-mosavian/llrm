@@ -2397,6 +2397,9 @@ struct Body<'b, 'm, 'h> {
     tables: &'b Tables<'h>,
     function: &'h model::Function,
     value_types: &'b HashMap<i64, i64>,
+    /// The MIR type of each HIR type this function asked for, by id: `ty` is
+    /// asked once per operand and result (`CodeGenTypes::TypeCache`).
+    type_ids: HashMap<i64, TypeId>,
     places: &'b HashMap<i64, &'h model::Place>,
     /// Each call's ABI by its instruction.
     sites: &'b HashMap<i64, &'h model::CallAbi>,
@@ -2457,6 +2460,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             tables,
             function,
             value_types: &index.values,
+            type_ids: HashMap::default(),
             places: &index.places,
             sites: &index.sites,
             blocks: HashMap::default(),
@@ -2732,7 +2736,12 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         &mut self,
         id: i64,
     ) -> Emit<TypeId> {
-        value_type(&mut self.b.context.types, &self.tables.spaces, self.tables.types[&id])
+        if let Some(&known) = self.type_ids.get(&id) {
+            return Ok(known);
+        }
+        let made = value_type(&mut self.b.context.types, &self.tables.spaces, self.tables.types[&id])?;
+        self.type_ids.insert(id, made);
+        Ok(made)
     }
 
     fn result_type(
