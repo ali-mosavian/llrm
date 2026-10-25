@@ -39,6 +39,10 @@ pub const LLRM_PTRDIFF: ISD = ISD::Target(24583);
 /// Exit: none (m16 only). Owner sdag-b. Review 2026-12-10.
 pub const LLRM_FARCALL: ISD = ISD::Target(24584);
 
+/// `TC_RETURN` at m16: the pin has no pattern for it there. Same operands.
+/// DEVIATE: a far callee is jumped to after the epilogue. Owner sdag-a (w9).
+pub const LLRM_TC_RETURN: ISD = ISD::Target(24587);
+
 /// A read from or a write to an I/O port (`llrm.ia16.in`/`out`): `chain, port`
 /// giving the value and the chain, or `chain, port, value` giving the chain.
 /// DEVIATE: the pin has no port intrinsics; the old selector made `in`/`out`
@@ -68,6 +72,7 @@ pub fn name(code: u16) -> String {
         24582 => "X86ISD::LLRM_CODE".into(),
         24584 => "X86ISD::LLRM_FARCALL".into(),
         24586 => "X86ISD::LLRM_PORT".into(),
+        24587 => "X86ISD::LLRM_TC_RETURN".into(),
         24585 => "X86ISD::LLRM_CALL_FLAGS".into(),
         24583 => "X86ISD::LLRM_PTRDIFF".into(),
         other => format!("X86ISD#{other}"),
