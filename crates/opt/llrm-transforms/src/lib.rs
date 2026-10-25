@@ -232,6 +232,7 @@ pub mod loopdeletion;
 pub mod loopfilter;
 pub mod loopidiom;
 pub mod loopidioms;
+pub mod loopinstsimplify;
 pub mod loopinterchange;
 pub mod loopinterchange_transform;
 pub mod looploadelim;

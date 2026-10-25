@@ -20,9 +20,9 @@ Order is the pin's. Status: done, partial, todo, blocked (blocker, date).
 | 10 | `isWorthBreakingCriticalEdge` | #L1040 | `worth_breaking_critical_edge` | done: `SplitEdgeProbabilityThreshold` from `edge_probabilities`; DEVIATE M5 in size builds |
 | 11 | `isLegalToBreakCriticalEdge` | #L1111 | `legal_to_break_critical_edge` | done |
 | 12 | `PostponeSplitCriticalEdge` | #L1175 | `postpone_split_critical_edge` | done |
-| 13 | `registerPressureSetExceedsLimit` | #L1242 | none | blocked: region register pressure sets = row 65 piece 2 (w-2, 11-06); M2 stands until then |
+| 13 | `registerPressureSetExceedsLimit` | #L1242 | `block_pressure` | done 10-25: one limit (allocatable registers), not per set |
 | 14 | `registerPressureExceedsLimit` | #L1256 | none | blocked: same |
-| 15 | `isProfitableToSinkTo` | #L1270 | `profitable_to_sink_to` | partial: M2 ends it with a pressure check; lifted by 13/14 |
+| 15 | `isProfitableToSinkTo` | #L1270 | `profitable_to_sink_to` | done 10-25: M2 retired, the tail asks the block pressure |
 | 16 | `FindSuccToSinkTo` | #L1413 | `find_succ_to_sink_to` | done |
 | 17 | `SinkingPreventsImplicitNullCheck` | #L1521 | none | todo: needs implicit-null-check marking; absent on LIR, note only if no ImplicitNullChecks pass lands |
 | 18 | `attemptDebugCopyProp` | #L1566 | none | n/a: debug info |
