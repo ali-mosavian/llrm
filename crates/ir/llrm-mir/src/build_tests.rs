@@ -271,3 +271,27 @@ fn the_builder_folds_float_casts_of_numbers() {
     let zero = b.int(32, 0);
     b.ret(Some(zero));
 }
+
+/// The attributes stamp was SipHash13 over the whole declaration at every
+/// invalidation: 1.0 M of a `d_faces` compile in `Attribute::hash_slice` alone.
+/// It is the crate's Fx now, and moves with an attribute.
+#[test]
+fn test_attributes_stamp_is_fx_and_moves_with_an_attribute() {
+    use std::hash::{Hash, Hasher};
+
+    let mut module = parse::module(TEXT).unwrap();
+    let by_hand = |f: &crate::module::Function| {
+        let mut hasher = crate::hash::Fx::default();
+        f.ty.hash(&mut hasher);
+        f.parameter_attrs.hash(&mut hasher);
+        f.return_attrs.hash(&mut hasher);
+        f.attrs.hash(&mut hasher);
+        f.personality.hash(&mut hasher);
+        f.calling_convention.hash(&mut hasher);
+        hasher.finish()
+    };
+    let before = module.function_mut("f").unwrap().1.attributes_stamp();
+    assert_eq!(before, by_hand(module.function_mut("f").unwrap().1));
+    module.function_mut("f").unwrap().1.attrs.push(crate::opcode::Attribute::Flag("nounwind".into()));
+    assert_ne!(module.function_mut("f").unwrap().1.attributes_stamp(), before);
+}
