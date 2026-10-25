@@ -26,6 +26,10 @@ long even(long n, long acc) { return n == 0 ? acc + 1 : odd(n - 1, acc * 2 + 1);
 
 long countdown(long n, long acc) { if (n == 0) return acc; return countdown(n - 1, acc * 3 + n); }
 
+long forty_two(void) { return 42; }
+long (*volatile chosen)(void) = forty_two;
+long through_pointer(void) { return chosen(); }
+
 long volatile in[10] = { 1, 2, 3, 4, 5, 6, 7, 41, 40, 20 };
 
 int main(void)
@@ -38,5 +42,6 @@ int main(void)
     report(even(in[7], 0));
     report(odd(in[8], 1));
     report(countdown(in[9], 1) & 0xFFFFFF);
+    report(through_pointer());
     return 0;
 }
