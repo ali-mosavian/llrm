@@ -2191,6 +2191,20 @@ impl Emitter<'_, '_> {
                 }
                 let held = self.fresh(width);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
+                // The address of a symbol alone is its offset as an immediate
+                // (`mov r, offset sym`, which the encoder makes `lea r,
+                // [rip+sym]`), not an address value: the passes fold a `lea`
+                // into the operands that read it, and `sym[index]` is no
+                // address at 64 bits.
+                if self.ctx.address_mode == AddrMode::Flat64
+                    && cell.base.is_none()
+                    && cell.index.is_none()
+                    && let Some(address) = cell.addr
+                {
+                    let offset = Imm { value: 0, width, address: Some(address) };
+                    self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Imm(offset)]);
+                    return Ok(Some(()));
+                }
                 self.push(
                     Operation::Address,
                     "lea",
@@ -2650,6 +2664,11 @@ impl Emitter<'_, '_> {
     ) -> Result<Option<Held>, EmitError> {
         // `$noreg` is virtual register 0.
         if self.dag.node(value).data == NodeData::Register(0) {
+            return Ok(None);
+        }
+        // `%rip` as a base is how the pin spells a symbol's address; the
+        // operand is the symbol alone, which the encoder makes `%rip`-relative.
+        if self.dag.node(value).data == NodeData::PhysReg(llrm_lir::registers::RegId::RIP) {
             return Ok(None);
         }
         match self.operand(value)? {
