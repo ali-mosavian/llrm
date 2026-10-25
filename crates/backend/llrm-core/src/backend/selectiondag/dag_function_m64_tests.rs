@@ -113,3 +113,52 @@ entry:
     let names: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref().and_then(|w| w.name.as_deref())).collect();
     assert_eq!(names, ["", "cmp", "cmovb", ""]);
 }
+
+fn m64_names(text: &str) -> Vec<String> {
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    done.body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref().and_then(|w| w.name.as_deref().map(str::to_owned)))
+        .collect()
+}
+
+/// A quadword divide and remainder at m64 stopped at `CannotSelect("UDivRem")`:
+/// only `i16` and `i32` had a divide sequence. It is now `div`, and `cqo` then
+/// `idiv`.
+#[test]
+fn an_m64_divide_uses_rax_rdx() {
+    let names = m64_names(
+        "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i64 @f(i64 %x, i64 %y) {
+entry:
+  %d = udiv i64 %x, %y
+  %e = srem i64 %x, %y
+  %f = add i64 %d, %e
+  ret i64 %f
+}
+",
+    );
+    for want in ["div", "cqo", "idiv"] {
+        assert!(names.iter().any(|n| n == want), "{want} in {names:?}");
+    }
+}
+
+/// A signed divide by a constant at m64 stopped at `CannotSelect("SMulLoHi")`
+/// (the multiply by the magic number): `MUL64r`/`IMUL64r` had no case.
+#[test]
+fn an_m64_divide_by_a_constant_multiplies_by_the_magic_number() {
+    let names = m64_names(
+        "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i64 @f(i64 %x) {
+entry:
+  %d = sdiv i64 %x, 7
+  ret i64 %d
+}
+",
+    );
+    assert!(names.iter().any(|n| n == "imul"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "idiv"), "{names:?}");
+}

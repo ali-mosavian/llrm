@@ -248,6 +248,8 @@ pub fn phys_reg(register: u16) -> Option<llrm_lir::registers::RegId> {
         x86::DX => RegId::DX,
         x86::EAX => RegId::EAX,
         x86::EDX => RegId::EDX,
+        x86::RAX => RegId::RAX,
+        x86::RDX => RegId::RDX,
         x86::CS => RegId::CS,
         x86::DS => RegId::DS,
         x86::ES => RegId::ES,

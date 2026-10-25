@@ -735,6 +735,7 @@ pub mod x86 {
     pub const AX: u16 = 3;
     pub const CDQ: u16 = 1202;
     pub const CL: u16 = 11;
+    pub const CQO: u16 = 1396;
     pub const CS: u16 = 12;
     pub const CWD: u16 = 1506;
     pub const CX: u16 = 13;
@@ -745,6 +746,8 @@ pub mod x86 {
     pub const DIV16r: u16 = 1556;
     pub const DIV32m: u16 = 1559;
     pub const DIV32r: u16 = 1562;
+    pub const DIV64m: u16 = 1565;
+    pub const DIV64r: u16 = 1568;
     pub const DS: u16 = 20;
     pub const DX: u16 = 21;
     pub const EAX: u16 = 22;
@@ -758,14 +761,20 @@ pub mod x86 {
     pub const IDIV16r: u16 = 1760;
     pub const IDIV32m: u16 = 1763;
     pub const IDIV32r: u16 = 1766;
+    pub const IDIV64m: u16 = 1769;
+    pub const IDIV64r: u16 = 1772;
     pub const IMUL32m: u16 = 1821;
     pub const IMUL32r: u16 = 1824;
+    pub const IMUL64m: u16 = 1849;
+    pub const IMUL64r: u16 = 1852;
     pub const INC16m: u16 = 1901;
     pub const INC32m: u16 = 1912;
     pub const INC8m: u16 = 1933;
     pub const MOV32r0: u16 = 386;
     pub const MUL32m: u16 = 2784;
     pub const MUL32r: u16 = 2787;
+    pub const MUL64m: u16 = 2790;
+    pub const MUL64r: u16 = 2793;
     pub const NEG16m: u16 = 2849;
     pub const NEG16r: u16 = 2854;
     pub const NEG32m: u16 = 2859;
@@ -778,6 +787,8 @@ pub mod x86 {
     pub const OR32mr: u16 = 2973;
     pub const OR8mi: u16 = 3045;
     pub const OR8mr: u16 = 3051;
+    pub const RAX: u16 = 51;
+    pub const RDX: u16 = 56;
     pub const RIP: u16 = 58;
     pub const SAHF: u16 = 4033;
     pub const SBB16mi: u16 = 4165;
@@ -829,6 +840,7 @@ pub mod x86 {
         (927, "AND8mi"),
         (933, "AND8mr"),
         (1202, "CDQ"),
+        (1396, "CQO"),
         (1506, "CWD"),
         (1511, "DEC16m"),
         (1522, "DEC32m"),
@@ -837,18 +849,26 @@ pub mod x86 {
         (1556, "DIV16r"),
         (1559, "DIV32m"),
         (1562, "DIV32r"),
+        (1565, "DIV64m"),
+        (1568, "DIV64r"),
         (1706, "FNSTSW16r"),
         (1757, "IDIV16m"),
         (1760, "IDIV16r"),
         (1763, "IDIV32m"),
         (1766, "IDIV32r"),
+        (1769, "IDIV64m"),
+        (1772, "IDIV64r"),
         (1821, "IMUL32m"),
         (1824, "IMUL32r"),
+        (1849, "IMUL64m"),
+        (1852, "IMUL64r"),
         (1901, "INC16m"),
         (1912, "INC32m"),
         (1933, "INC8m"),
         (2784, "MUL32m"),
         (2787, "MUL32r"),
+        (2790, "MUL64m"),
+        (2793, "MUL64r"),
         (2849, "NEG16m"),
         (2854, "NEG16r"),
         (2859, "NEG32m"),

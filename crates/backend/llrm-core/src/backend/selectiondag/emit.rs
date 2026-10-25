@@ -1362,7 +1362,7 @@ impl Emitter<'_, '_> {
     ) -> bool {
         self.glue_reaches(n, |name| {
             let name = name.split('|').next().unwrap_or(name);
-            matches!(name, "CDQ" | "CWD")
+            matches!(name, "CDQ" | "CWD" | "CQO")
                 || is_div_or_mul(name)
                 || name.starts_with("REP_")
                 || name.ends_with("rCL")
@@ -1424,16 +1424,20 @@ impl Emitter<'_, '_> {
         }
         let ISD::Machine(op) = self.dag.opcode(glue) else { return false };
         let name = self.ctx.names.get(&(op as u16)).map_or("", |name| name.split('|').next().unwrap_or(name));
-        matches!(name, "CDQ" | "CWD") || is_div_or_mul(name)
+        matches!(name, "CDQ" | "CWD" | "CQO") || is_div_or_mul(name)
     }
 
-    /// (low, high, bytes): AX and DX, or EAX and EDX.
+    /// (low, high, bytes): AX and DX, EAX and EDX, or RAX and RDX.
     fn accumulator_pair(
         &self,
-        dword: bool,
+        bytes: u32,
     ) -> Result<(llrm_lir::registers::RegId, llrm_lir::registers::RegId, u32), EmitError> {
         use llrm_lir::registers::RegId;
-        Ok(if dword { (RegId::EAX, RegId::EDX, 4) } else { (RegId::AX, RegId::DX, 2) })
+        Ok(match bytes {
+            8 => (RegId::RAX, RegId::RDX, 8),
+            4 => (RegId::EAX, RegId::EDX, 4),
+            _ => (RegId::AX, RegId::DX, 2),
+        })
     }
 
     /// Whether `register` is ES, named as the builder's physical register or as
@@ -1866,14 +1870,22 @@ impl Emitter<'_, '_> {
             // Division and the one-operand multiply work in AX:DX or EAX:EDX,
             // which the matcher names with `CopyToReg`/`CopyFromReg` around
             // them: the LIR form says the pair in its operands.
-            "CDQ" | "CWD" => {
-                let (low, high, bytes) = self.accumulator_pair(name == "CDQ")?;
+            "CDQ" | "CWD" | "CQO" => {
+                let (low, high, bytes) = self.accumulator_pair(match name {
+                    "CQO" => 8,
+                    "CDQ" => 4,
+                    _ => 2,
+                })?;
                 let source = self.accumulated(low)?;
                 let sign = self.fresh(bytes);
                 self.accumulator.insert(high, sign);
                 self.push(
                     Operation::Extend,
-                    if name == "CDQ" { "cdq" } else { "cwd" },
+                    match name {
+                        "CQO" => "cqo",
+                        "CDQ" => "cdq",
+                        _ => "cwd",
+                    },
                     vec![Loc::Held(sign)],
                     vec![Loc::Held(source)],
                 );
@@ -1889,7 +1901,7 @@ impl Emitter<'_, '_> {
                 let (low, high, wide) = if bytes == 1 {
                     (llrm_lir::registers::RegId::AL, llrm_lir::registers::RegId::DX, 2)
                 } else {
-                    self.accumulator_pair(bytes == 4)?
+                    self.accumulator_pair(bytes)?
                 };
                 let divisor = if memory {
                     let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short div".to_owned()))?;

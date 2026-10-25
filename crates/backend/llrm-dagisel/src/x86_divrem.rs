@@ -3,13 +3,13 @@
 //! `DIV`/`IDIV`, then the quotient and remainder copied out of their registers.
 //!
 //! # How it works
-//! A translation of the pin's case for `i16` and `i32`. The divisor folds from
-//! memory when `tryFoldLoad` allows. A signed divide whose dividend has a zero
-//! sign bit clears the high half like an unsigned one.
+//! A translation of the pin's case for `i16`, `i32` and, at 64 bits, `i64`. The
+//! divisor folds from memory when `tryFoldLoad` allows. A signed divide whose
+//! dividend has a zero sign bit clears the high half like an unsigned one.
 //!
-//! Numbered deviation: **SD302** `i8` (`AL`/`AH` through `MOVZX16rr8`) and
-//! `i64` (`RAX`/`CQO`) are not translated: m16 and m32 produce neither, so the
-//! node stays unselected rather than guessed. Owner sdag-c. Exit: x86-64 spike.
+//! Numbered deviation: **SD302** `i8` (`AL`/`AH` through `MOVZX16rr8`) is not
+//! translated: no target produces it, so the node stays unselected rather
+//! than guessed. Owner sdag-c. Exit: x86-64 spike.
 //! Review 2026-12-10.
 //!
 //! # Used by
@@ -22,7 +22,7 @@ use crate::dag::SDValue;
 use crate::generated::ids::{isd, mvt, target_opcode, x86};
 use crate::matcher::Vt;
 use crate::x86_addr::{AddrDag, known_zero};
-use crate::x86_hooks::X86Hooks;
+use crate::x86_hooks::{Cpu, X86Hooks};
 
 /// Selects `node`; false when its type is one SD302 leaves out.
 pub fn select_divrem<D: AddrDag>(
@@ -37,13 +37,22 @@ pub fn select_divrem<D: AddrDag>(
         (mvt::i16, true) => (x86::IDIV16r, x86::IDIV16m, x86::AX, x86::DX, x86::CWD),
         (mvt::i32, false) => (x86::DIV32r, x86::DIV32m, x86::EAX, x86::EDX, x86::CDQ),
         (mvt::i32, true) => (x86::IDIV32r, x86::IDIV32m, x86::EAX, x86::EDX, x86::CDQ),
+        (mvt::i64, false) if hooks.options.cpu == Cpu::X64 => (x86::DIV64r, x86::DIV64m, x86::RAX, x86::RDX, x86::CQO),
+        (mvt::i64, true) if hooks.options.cpu == Cpu::X64 => (x86::IDIV64r, x86::IDIV64m, x86::RAX, x86::RDX, x86::CQO),
         _ => return false,
     };
     let n0 = dag.operand(node, 0);
     let n1 = dag.operand(node, 1);
 
     let folded = hooks.try_fold_load(dag, node, node, n1);
-    let sign_bit = 1u64 << (if nvt == mvt::i16 { 15 } else { 31 });
+    let sign_bit = 1u64
+        << (if nvt == mvt::i16 {
+            15
+        } else if nvt == mvt::i64 {
+            63
+        } else {
+            31
+        });
     let sign_bit_is_zero = known_zero(dag, n0, 0) & sign_bit != 0;
 
     let entry = dag.entry_node();
@@ -56,6 +65,10 @@ pub fn select_divrem<D: AddrDag>(
         if nvt == mvt::i16 {
             let sub = dag.target_constant(i64::from(x86::sub_16bit), mvt::i32);
             clr = SDValue::new(dag.machine_node(target_opcode::EXTRACT_SUBREG, &[mvt::i16], &[clr, sub]), 0);
+        } else if nvt == mvt::i64 {
+            let zero = dag.target_constant(0, mvt::i64);
+            let sub = dag.target_constant(i64::from(x86::sub_32bit), mvt::i32);
+            clr = SDValue::new(dag.machine_node(target_opcode::SUBREG_TO_REG, &[mvt::i64], &[zero, clr, sub]), 0);
         }
         let entry = dag.entry_node();
         let copy = dag.copy_to_reg(entry, hi, clr, Some(in_glue));

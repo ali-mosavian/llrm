@@ -23,21 +23,28 @@ use crate::dag::SDValue;
 use crate::generated::ids::{isd, mvt, x86};
 use crate::x86_addr::AddrDag;
 use crate::x86_divrem::copy_results;
-use crate::x86_hooks::X86Hooks;
+use crate::x86_hooks::{Cpu, X86Hooks};
 
-/// Selects `node`; false when its type is one the pin's case has no row for at
-/// 32 bits.
+/// Selects `node`; false when its type is one the pin's case has no row for:
+/// `i32`, and `i64` at 64 bits.
 pub fn select_mul_lohi<D: AddrDag>(
     dag: &mut D,
     hooks: &X86Hooks,
     node: u32,
 ) -> bool {
     let nvt = dag.value_type(SDValue::new(node, 0));
-    if nvt != mvt::i32 {
+    let wide = nvt == mvt::i64 && hooks.options.cpu == Cpu::X64;
+    if nvt != mvt::i32 && !wide {
         return false;
     }
     let is_signed = dag.opcode(node) == isd::SMUL_LOHI;
-    let (reg_op, mem_op) = if is_signed { (x86::IMUL32r, x86::IMUL32m) } else { (x86::MUL32r, x86::MUL32m) };
+    let (reg_op, mem_op) = match (is_signed, wide) {
+        (true, false) => (x86::IMUL32r, x86::IMUL32m),
+        (false, false) => (x86::MUL32r, x86::MUL32m),
+        (true, true) => (x86::IMUL64r, x86::IMUL64m),
+        (false, true) => (x86::MUL64r, x86::MUL64m),
+    };
+    let (lo, hi) = if wide { (x86::RAX, x86::RDX) } else { (x86::EAX, x86::EDX) };
     let (mut n0, mut n1) = (dag.operand(node, 0), dag.operand(node, 1));
 
     let mut folded = hooks.try_fold_load(dag, node, node, n1);
@@ -49,7 +56,7 @@ pub fn select_mul_lohi<D: AddrDag>(
     }
 
     let entry = dag.entry_node();
-    let copy = dag.copy_to_reg(entry, x86::EAX, n0, None);
+    let copy = dag.copy_to_reg(entry, lo, n0, None);
     let mut in_glue = SDValue::new(copy, 1);
 
     if let Some(a) = folded {
@@ -64,6 +71,6 @@ pub fn select_mul_lohi<D: AddrDag>(
     } else {
         in_glue = SDValue::new(dag.machine_node(reg_op, &[mvt::Glue], &[n1, in_glue]), 0);
     }
-    copy_results(dag, node, nvt, x86::EAX, x86::EDX, in_glue);
+    copy_results(dag, node, nvt, lo, hi, in_glue);
     true
 }
