@@ -1146,6 +1146,10 @@ pub struct LirBody {
     /// allocated (the pin's order), so every local lies that much lower
     /// (`masm::saved_first`).
     pub saved_first: bool,
+    /// What each return takes back is instructions of the body, made while the
+    /// frame register was omitted (`true`) or kept (`false`)
+    /// (`masm::exits_inserted`); the printer adds nothing at a return.
+    pub frame_exit: Option<bool>,
     /// What `-g` says of its variables at points in the code, by the numbers
     /// `DebugTags::before` holds.
     pub notes: Arc<Vec<DebugNote>>,
@@ -1325,6 +1329,7 @@ impl LirBody {
             slotted: false,
             cfa_variables: false,
             saved_first: false,
+            frame_exit: None,
             notes: Arc::default(),
             arguments_in_cells: Arc::default(),
             facts: Default::default(),
@@ -1391,6 +1396,7 @@ impl LirBody {
             slotted: self.slotted,
             cfa_variables: self.cfa_variables,
             saved_first: self.saved_first,
+            frame_exit: self.frame_exit,
             notes: Arc::clone(&self.notes),
             arguments_in_cells: Arc::clone(&self.arguments_in_cells),
             facts: self.facts.clone(),

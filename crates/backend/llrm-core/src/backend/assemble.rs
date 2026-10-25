@@ -335,7 +335,7 @@ pub fn assembled_by(
                     if let Some(error) = unprintable.take() {
                         return Err(error);
                     }
-                    masm::saved_first(masm::Procedure { body, ..procedure })
+                    masm::exits_inserted(masm::saved_first(masm::Procedure { body, ..procedure }))
                 };
                 procedures.push(procedure);
             }
