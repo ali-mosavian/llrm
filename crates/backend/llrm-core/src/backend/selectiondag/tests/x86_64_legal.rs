@@ -35,3 +35,19 @@ fn an_i64_add_stays_one_add() {
     let (dag, root) = legalized_add(&tli);
     assert_eq!((dag.opcode(root), dag.value_type(root)), (ISD::Add, EVT::I64));
 }
+
+/// `select c, a, b` over `i64` is a `CMOV` on `i64` at 64 bits (`LowerSELECT`).
+#[test]
+fn an_i64_select_is_a_cmov() {
+    use super::super::x86_lowering::x86isd;
+    let tli = TargetLowering::x86_64(Features { cmov: true, ..Features::default() }, MVT::I64);
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let reg = |dag: &mut SelectionDAG, vt, n| dag.get_register(vt, n);
+    let (c, a, b) = (reg(&mut dag, EVT::I8, 1), reg(&mut dag, EVT::I64, 2), reg(&mut dag, EVT::I64, 3));
+    let select = dag.get_node(ISD::Select, EVT::I64, &[c, a, b]);
+    dag.set_root(select);
+    TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true }).run().expect("legalizes");
+    let root = dag.get_root();
+    assert_eq!((dag.opcode(root), dag.value_type(root)), (x86isd::CMOV, EVT::I64));
+}
