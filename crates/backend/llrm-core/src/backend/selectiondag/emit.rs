@@ -248,6 +248,10 @@ struct Emitter<'a, 'd> {
     /// The value the last `CopyToReg ES` put there: the selector of the next
     /// cell through ES that is not based on a loaded far pointer.
     es: Option<Held>,
+    /// Whether that selector is SS: the cells through ES are then the frame's.
+    es_is_ss: bool,
+    /// The `CopyToReg ES` nodes that copy SS.
+    ss_copies: std::collections::HashSet<u32>,
     /// What each `CopyToReg ES` put there, by node: a cell takes the one of
     /// the copy it is chained after, whatever was set last.
     es_copies: HashMap<u32, Held>,
@@ -367,6 +371,8 @@ pub fn emit_in(
         flags_now: None,
         origins: HashMap::new(),
         es: None,
+        es_is_ss: false,
+        ss_copies: std::collections::HashSet::new(),
         selectors: HashMap::new(),
         lazy: HashMap::new(),
         last_select: None,
@@ -693,6 +699,15 @@ impl Emitter<'_, '_> {
                 let selector = self.held_operand(node.ops[2])?;
                 self.es = Some(selector);
                 self.es_copies.insert(n, selector);
+                // SS itself, or a `CopyFromReg` of it.
+                let value = self.dag.node(node.ops[2]);
+                let is_ss = |v: SDValue| self.dag.node(v).data == NodeData::PhysReg(llrm_lir::registers::RegId::SS);
+                if is_ss(node.ops[2])
+                    || (value.opcode == ISD::CopyFromReg && value.ops.get(1).is_some_and(|r| is_ss(*r)))
+                {
+                    self.ss_copies.insert(n);
+                }
+                self.es_is_ss = self.ss_copies.contains(&n);
                 Ok(())
             }
             ISD::CopyToReg
@@ -834,8 +849,11 @@ impl Emitter<'_, '_> {
         // The scheduler may put two `CopyToReg ES` ahead of the cells that read
         // them: each cell reads its own.
         let node = self.dag.node(SDValue { node: n, res: 0 });
-        if let Some(selector) = node.ops.iter().find_map(|op| self.es_copies.get(&op.node).copied()) {
+        if let Some((copy, selector)) =
+            node.ops.iter().find_map(|op| self.es_copies.get(&op.node).map(|s| (op.node, *s)))
+        {
             self.es = Some(selector);
+            self.es_is_ss = self.ss_copies.contains(&copy);
         }
         self.machine_in(n, opcode)?;
         if writes_flags && let Some(previous) = previous {
@@ -2652,6 +2670,19 @@ impl Emitter<'_, '_> {
     }
 
     /// A cell addressed through the register `through` (the stack pointer):
+    /// Whether the segment operand of a cell moves it off its own segment: an
+    /// override, except ES holding SS (a pointer to the frame made far), which
+    /// reads what the frame register's default does.
+    fn segment_overrides(
+        &mut self,
+        segment: SDValue,
+    ) -> Result<bool, EmitError> {
+        if self.is_es(segment) && self.es_is_ss {
+            return Ok(false);
+        }
+        Ok(self.address_register(segment, Role::Segment)?.is_some())
+    }
+
     /// `[through + index*scale + disp]`.
     fn cell_through(
         &mut self,
@@ -2662,7 +2693,7 @@ impl Emitter<'_, '_> {
         let scale = self.constant(group[1])?;
         let index = self.address_register(group[2], Role::Index)?;
         let offset = self.constant(group[3])?;
-        if self.address_register(group[4], Role::Segment)?.is_some() {
+        if self.segment_overrides(group[4])? {
             return Err(EmitError::Unsupported("a segment override".to_owned()));
         }
         Ok(Mem { through, index, scale, offset, disp_width: 0, ..Mem::new(None, cell_width) })
@@ -2678,7 +2709,7 @@ impl Emitter<'_, '_> {
             return Err(EmitError::Unsupported("a frame index without an index".to_owned()));
         };
         let index = self.address_register(group[2], Role::Index)?;
-        if self.address_register(group[4], Role::Segment)?.is_some() {
+        if self.segment_overrides(group[4])? {
             return Err(EmitError::Unsupported("a segment-overridden frame cell".to_owned()));
         }
         let scale = self.constant(group[1])?;
