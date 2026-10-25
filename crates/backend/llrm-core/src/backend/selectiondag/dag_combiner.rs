@@ -175,6 +175,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
 
     /// `Run`.
     pub fn run(&mut self) {
+        // `RemoveDeadNodes`: what an earlier phase replaced no longer counts as
+        // a user. Newest first, so a user goes before the nodes it reads.
+        for node in self.dag.node_ids().rev() {
+            self.dag.delete_dead(node);
+        }
         // Oldest first, so the newest is taken first.
         for node in self.dag.node_ids() {
             self.add_to_worklist(node);
