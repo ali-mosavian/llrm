@@ -379,6 +379,11 @@ pub fn live(body: &LirBody) -> (Live, Live) {
     (rows.sets(true), rows.sets(false))
 }
 
+/// `live`'s exit sets alone: one pass over the rows, not two.
+pub fn live_out(body: &LirBody) -> Live {
+    live_rows(body).sets(false)
+}
+
 /// `live` for the values `keep` names only: no other value is numbered,
 /// followed or put in a set.
 pub fn live_among(
@@ -487,8 +492,9 @@ impl DenseRows {
         rows: &'a [u64],
         block: usize,
     ) -> impl Iterator<Item = u32> + 'a {
-        rows[block * self.words..(block + 1) * self.words].iter().enumerate().flat_map(move |(word, bits)| {
-            (0..64).filter(move |bit| bits >> bit & 1 == 1).map(move |bit| self.numbered[word * 64 + bit])
+        rows[block * self.words..(block + 1) * self.words].iter().enumerate().flat_map(move |(word, &bits)| {
+            std::iter::successors((bits != 0).then_some(bits), |left| Some(left & (left - 1)).filter(|rest| *rest != 0))
+                .map(move |left| self.numbered[word * 64 + left.trailing_zeros() as usize])
         })
     }
 

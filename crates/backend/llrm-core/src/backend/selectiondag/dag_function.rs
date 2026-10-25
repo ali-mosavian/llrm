@@ -387,6 +387,14 @@ impl super::emit::Conventions for CallConventions<'_> {
             .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
             .map(|name| regs.root(self.arch.register_named(name)))
             .collect();
+        // the contract names no FS or GS, yet the callee may use them
+        if let (Some(contract), Some(contracts)) = (self.contract(callee), self.contracts) {
+            out.extend(crate::backend::callregs::unnamed_selectors_clobbered(
+                &contract,
+                contracts.segments,
+                self.general,
+            ));
+        }
         // a runtime routine also destroys what its contract says
         if let (Some(contracts), Some(Callee::Global(id))) = (self.contracts, callee) {
             let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned().unwrap_or_default();
@@ -854,7 +862,7 @@ fn selected_in(
         let done = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: false },
+            &mut X86Lowering { cmov: false, sse2: false },
             &selector,
             &mut hooks,
             &Info,

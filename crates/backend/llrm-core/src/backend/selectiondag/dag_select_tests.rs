@@ -142,7 +142,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         let emitted = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: false },
+            &mut X86Lowering { cmov: false, sse2: false },
             &selector,
             &mut hooks(),
             &Info,
@@ -198,7 +198,8 @@ fn the_combiner_runs_between_the_legalizers() {
         build_block(&module, function, &layout, &BuilderTarget::m32(), &machine, &convention, &mut info, block)
             .expect("builds");
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
-    super::dag_select::legalized(&mut built.dag, &tli, &mut X86Lowering { cmov: false }, &machine).expect("legalizes");
+    super::dag_select::legalized(&mut built.dag, &tli, &mut X86Lowering { cmov: false, sse2: false }, &machine)
+        .expect("legalizes");
     let root = built.dag.get_root();
     let mut seen = std::collections::HashSet::new();
     let mut work = vec![root.node];
