@@ -32,6 +32,9 @@ FLAG_WORDS = {"nuw", "nsw", "exact", "nnan", "ninf", "nsz", "arcp", "contract", 
 # The pin's finalize-isel runs `EmitLoweredSelect`: its output has a JCC_1 diamond where our DAG selection still has the
 # CMOV_GR* pseudo (the emitter expands it to the same diamond, so there is no cmov: illegal on a 486).
 SELECT_PSEUDOS = {"CMOV_GR8", "CMOV_GR16", "CMOV_GR32"}
+# The pin's finalize-isel runs the custom inserter of FP_TO_INT*_IN_MEM: the control-word switch around the store. Ours
+# keeps the pseudo (`floatalloc` writes the switch, shared by a run of them).
+FP_TO_INT = re.compile(r"FP(\d+)_TO_INT(\d+)_IN_MEM")
 BOOKKEEPING = {"COPY", "EXTRACT_SUBREG", "PHI", "IMPLICIT_DEF", "ADJCALLSTACKDOWN32", "ADJCALLSTACKUP32", "KILL"}
 
 
@@ -114,6 +117,16 @@ def expanded_selects(have: Counter, want: Counter) -> Counter:
     return have
 
 
+def expanded_fp_to_int(have: Counter) -> Counter:
+    """`have` with each FP_TO_INT*_IN_MEM pseudo as the instructions the pin's inserter makes."""
+    for name in [name for name in have if FP_TO_INT.fullmatch(name)]:
+        count = have.pop(name)
+        source, target = FP_TO_INT.fullmatch(name).groups()
+        for made, times in {"FNSTCW16m": 1, "MOVZX32rm16": 1, "OR32ri": 1, "MOV16mr": 1, "FLDCW16m": 2, f"IST_Fp{target}m{source}": 1}.items():
+            have[made] += count * times
+    return have
+
+
 def rows_of(program, funcs, refused, pinned, ir=""):
     rows = []
     for name in defined(ir):
@@ -134,7 +147,7 @@ def rows_of(program, funcs, refused, pinned, ir=""):
         else:
             want = Counter({k: v for k, v in pinned.get(name, Counter()).items() if k not in BOOKKEEPING})
             have = Counter({k: v for k, v in f["machine"].items() if k not in BOOKKEEPING})
-            have = expanded_selects(have, want)
+            have = expanded_selects(expanded_fp_to_int(have), want)
             if want == have:
                 bucket = "equal"
             else:

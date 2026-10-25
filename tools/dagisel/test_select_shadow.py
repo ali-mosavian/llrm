@@ -71,3 +71,9 @@ def test_a_select_pseudo_is_the_jcc_the_pins_inserter_makes():
 def test_a_cascade_of_selects_is_one_diamond():
     machine = Counter({"CMOV_GR32": 3, "RET": 1})
     assert tool.expanded_selects(machine, Counter({"JCC_1": 1, "RET": 1})) == Counter({"JCC_1": 1, "RET": 1})
+
+
+def test_a_float_to_int_store_is_the_control_word_switch_the_pin_makes():
+    machine = Counter({"FP64_TO_INT32_IN_MEM": 1, "RET": 1})
+    pin = Counter({"FNSTCW16m": 1, "MOVZX32rm16": 1, "OR32ri": 1, "MOV16mr": 1, "FLDCW16m": 2, "IST_Fp32m64": 1, "RET": 1})
+    assert tool.expanded_fp_to_int(machine) == pin
