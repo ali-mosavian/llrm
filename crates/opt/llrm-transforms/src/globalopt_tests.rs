@@ -157,3 +157,35 @@ b0:
     );
     assert!(after.contains("ret i16 12") && !after.contains("call void @llvm.memcpy"), "{after}");
 }
+
+/// Each global asked about scanned every body again: `never_stored` made
+/// globals x functions scans, 5.4 M of a `d_faces` compile in `reach` over 253
+/// runs. One scan of a body serves every global.
+#[test]
+fn the_uses_of_every_global_are_found_in_one_scan_of_each_body() {
+    let module = parsed(&format!(
+        "{}@a = internal global i16 1
+@b = internal global i16 2
+@c = internal global i16 3
+
+define i16 @f() {{
+b0:
+  %x = load i16, ptr @a
+  %y = load i16, ptr @b
+  %s = add i16 %x, %y
+  ret i16 %s
+}}
+
+define i16 @g() {{
+b0:
+  %z = load i16, ptr @c
+  ret i16 %z
+}}
+",
+        llrm_analysis::testing::DOS
+    ));
+    let before = crate::globalopt::scans();
+    let found = crate::globalopt::never_stored(&module);
+    assert_eq!(found.len(), 3, "the three globals are only loaded");
+    assert_eq!(crate::globalopt::scans() - before, 2, "one scan for each of the two bodies");
+}

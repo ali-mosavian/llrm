@@ -74,3 +74,6 @@ BC calls `B$SENV(psd)` (QB 4.5 `rt/osstmt.asm`). The runtime (`runtime/qb/enviro
 place over two OS-layer ops, `environment_read` and `environment_write`. As in QB, the table cannot grow past the end it had at
 start (`b$env_len`): a variable fits only where the table has shrunk, else Out of memory; an empty name or no delimiter is
 Illegal function call. `tests/qbrt/environ_statement.bas` matches BCOM45 at m16 and m32.
+
+UDT array and a STRING array. The runtime preserves both: a string array's kept strings follow to the new elements
+(`str_owner_moved`) and only the cut-off ones are released. Tested on the host (`tests/hostarray/preserve_test.c`).
