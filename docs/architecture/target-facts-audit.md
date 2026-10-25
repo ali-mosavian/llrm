@@ -73,7 +73,6 @@ The `m16()`/`M16` defaults (`assemble.rs`, `cpu.rs`, `driver/mod.rs`, `flow.rs`,
 | `isel/matcher.rs:896`, `schedule.rs:220`, `rmw.rs:328`, `farload.rs:128`, `storecombine.rs:79`, `regclass.rs:339`, `framefree.rs:233`, `addressforms.rs:94`, `constrain.rs:402`, `floatassign.rs:174`, `peep/guards.rs:250`, `isel/combined.rs:197`, `arithmetic.rs:224`, `cpu.rs:258` | `width == 2` / `== 4` meaning "native word" or "address register" | `Layout::pointer`/`word`, `AddressForm` |
 | `constpool.rs:158`, `timing.rs:71` | 8-byte constant test; `smul_full_w2` | `Layout`; `timings` |
 | `division.rs:108` | magic-number word size | `Layout::word_bits` |
-| `machinecse.rs:308` | `len * 4` iteration cap | not a machine fact: name the constant |
 
 ## E. Costs and latencies (6 hits, but the cost model is the clean one)
 
