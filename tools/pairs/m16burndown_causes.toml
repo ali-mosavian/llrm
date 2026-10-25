@@ -91,3 +91,8 @@ owner = "w-13"
 match = "*/jpeg*"
 cause = "untriaged"
 owner = "w-13"
+
+# A pass whose removal shrinks a grower is its cause under --ablate (the flag name without -fno-); the owner of that pass.
+[[flag]]
+flag = "move-loop-invariants"
+owner = "w-3"

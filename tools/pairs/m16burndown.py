@@ -18,6 +18,8 @@ import tempfile
 import tomllib
 import subprocess
 import json
+import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -55,6 +57,41 @@ def clock_ratio(name: str, level: str, before: dict, after: dict) -> str:
     return f"{now['clocks'] / was['clocks']:.2f}"
 
 
+def disable_flags(dist: Path) -> list[str]:
+    """Every `-fno-X` the compiler offers, from the list its own error message prints for an unknown pass."""
+    done = subprocess.run([str(dist / "llrm-nib"), "-fno-m16burndown-probe", "/dev/null"], capture_output=True, text=True)
+    named = re.search(r"the passes are (.*)", done.stderr)
+    return ["-fno-" + word[2:].strip(", ") for word in named[1].split() if word.startswith("-f")] if named else []
+
+
+def ablate(dist: Path, level: str, names: list[str], flags: list[str]) -> dict[str, dict[str, int | None]]:
+    """flag -> program -> bytes with that pass off, on `dist` alone. A compiler that does not know the flag gives None for its programs."""
+    sizes = m16os.sizes_module()
+    listed = [(n, c) for n, c in sizes.programs(dist, demos=False) if n in set(names)]
+    found: dict[str, dict[str, int | None]] = {}
+    for flag in flags:
+        with ThreadPoolExecutor(8) as pool:
+            found[flag] = dict(zip((n for n, _ in listed), pool.map(lambda one: sizes.measure(one[1] + [flag], level), listed)))
+        print(f"ablated {flag}", file=sys.stderr)
+    return found
+
+
+def attribute(tip: dict[str, int], ablated: dict[str, dict[str, int | None]], floor: int = 10) -> dict[str, str]:
+    """program -> the flag whose removal shrinks it most (at least `floor` bytes), 'multi: a+b' where a second flag gets at least half as much, else 'untagged'.
+    An upper bound: a pass switched off changes what the others see."""
+    tagged = {}
+    for name, size in tip.items():
+        shrinks = sorted(((size - v[name], flag) for flag, v in ablated.items() if v.get(name)), reverse=True)
+        best = [(gain, flag) for gain, flag in shrinks if gain >= floor]
+        if not best:
+            tagged[name] = "untagged"
+        elif len(best) > 1 and best[1][0] * 2 >= best[0][0]:
+            tagged[name] = "multi: " + "+".join(sorted(flag.removeprefix("-fno-").removeprefix("-disable-") for _, flag in best[:2]))
+        else:
+            tagged[name] = best[0][1].removeprefix("-fno-")
+    return tagged
+
+
 def source_state() -> str:
     head = subprocess.run(["git", "rev-parse", "--short=10", "HEAD"], cwd=m16os.ROOT, capture_output=True, text=True).stdout.strip()
     dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=m16os.ROOT, capture_output=True, text=True).stdout.strip()
@@ -68,6 +105,8 @@ def main() -> None:
     parser.add_argument("--level", default="-Os")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--causes", type=Path, default=HERE / "m16burndown_causes.toml")
+    parser.add_argument("--ablate", nargs="?", const="all", metavar="FLAGS", help="tag the growers by switching each pass off on the new dist (all of them, or the comma-separated -fno- flags); an upper bound, not a clean attribution")
+    parser.add_argument("--ablation-cache", type=Path, help="read the ablation from this json when it exists, write it there when it does not")
     parser.add_argument("--clocks", action="store_true")
     parser.add_argument("--bench", nargs=2, type=Path, metavar=("BASE_JSON", "NEW_JSON"))
     args = parser.parse_args()
@@ -81,13 +120,38 @@ def main() -> None:
         before = m16os.bench(args.base, args.level, Path(tempfile.mkdtemp(prefix="burndown-base-")))
         after = m16os.bench(args.new, args.level, Path(tempfile.mkdtemp(prefix="burndown-new-")))
     rules = tags(args.causes)
+    flag_owner = {entry["flag"]: entry["owner"] for entry in tomllib.loads(args.causes.read_text()).get("flag", [])}
+    ablated = tagged = None
+    if args.ablate:
+        cache = args.ablation_cache
+        if cache and cache.exists():
+            ablated = json.loads(cache.read_text())
+            ablated.pop("-disable-lsr", None)  # the same switch as -fno-lsr
+        else:
+            ablated = ablate(args.new, args.level, [n for n in both if new[n] > base[n]], disable_flags(args.new) if args.ablate == "all" else args.ablate.split(","))
+            if cache:
+                cache.write_text(json.dumps(ablated))
+        tagged = attribute({n: new[n] for n in both if new[n] > base[n]}, ablated)
     grew = sorted((n for n in both if new[n] > base[n]), key=lambda n: base[n] - new[n])
     level = args.level.lstrip("-")
-    rows = [(n, base[n], new[n], new[n] - base[n], clock_ratio(n, level, before, after), *tag_of(n, rules)) for n in grew]
+    def classified(name: str) -> tuple[str, str]:
+        cause, owner = tag_of(name, rules)
+        if tagged and cause == "untriaged":
+            cause = tagged[name]
+            owner = flag_owner.get(cause.removeprefix("multi: ").split("+")[0], owner)
+        return cause, owner
+
+    rows = [(n, base[n], new[n], new[n] - base[n], clock_ratio(n, level, before, after), *classified(n)) for n in grew]
     out = [f"# m16 {args.level} burn-down", "", f"base {m16os.identify(args.base)}", f"new  {m16os.identify(args.new)}", f"sources: this checkout at {source_state()}; the set is tools/sizes.py's programs, demos left out, {len(base)} programs",
            f"compared {len(both)}; base cannot compile {len(base) - sum(map(bool, base.values()))}, new cannot compile {len(new) - sum(map(bool, new.values()))}",
            f"TOTAL {sum(base[n] for n in both)} -> {sum(new[n] for n in both)} B ({sum(new[n] - base[n] for n in both):+}); {len(grew)} programs grew, {sum(new[n] < base[n] for n in both)} shrank, {sum(new[n] == base[n] for n in both)} same",
            f"LEFT {sum(r[3] for r in rows)} B in {len(rows)} growers (the bar: none)", ""]
+    if ablated:
+        out += ["## per flag (a pass switched off on the new dist; an upper bound, not a clean attribution)", "", "| flag | growers shrunk >= 10 B | bytes gained | all growers' total |", "|---|--:|--:|--:|"]
+        for flag, v in sorted(ablated.items(), key=lambda kv: -sum(new[n] - x for n, x in kv[1].items() if x and new[n] - x >= 10)):
+            gains = [new[n] - x for n, x in v.items() if x and new[n] - x >= 10]
+            out.append(f"| {flag} | {len(gains)} | {sum(gains)} | {sum(x for x in v.values() if x) - sum(new[n] for n, x in v.items() if x):+} |")
+        out.append("")
     for title, column in (("cause", 5), ("owner", 6)):
         totals: dict[str, list[int]] = {}
         for row in rows:
