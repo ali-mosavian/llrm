@@ -330,11 +330,26 @@ no:
 #[test]
 fn test_what_is_not_selected_yet_is_refused() {
     for (body, why) in [(
-        "%c = icmp eq i16 %a, 0\n  %d = add i1 %c, %c\n  %v = sext i1 %d to i16\n  ret i16 %v",
+        "%c = icmp eq i16 %a, 0\n  %d = shl i1 %c, %c\n  %v = sext i1 %d to i16\n  ret i16 %v",
         "arithmetic on an i1",
     )] {
         let text = format!("define i16 @f(ptr %p, i16 %a) addrspace(1) {{\n  {body}\n}}\n");
         assert_eq!(selected(&text, "f").err(), Some(Unselected(why.to_owned())), "{body}");
+    }
+}
+
+/// LSR's expander turned a `not` into `add i1 x, true`, which no pass after it
+/// folds back to an xor; the selector refused it and nib's runtime did not link
+/// (#4674). An i1's sum and difference are an xor, its product an and.
+#[test]
+fn test_an_i1_sum_difference_and_product_are_selected() {
+    for (op, mnemonic) in [("add", "xor"), ("sub", "xor"), ("mul", "and")] {
+        let text = format!(
+            "define i16 @f(ptr %p, i16 %a) addrspace(1) {{\n  %c = icmp eq i16 %a, 0\n  %d = {op} i1 %c, true\n  %v = zext i1 %d to i16\n  ret i16 %v\n}}\n"
+        );
+        let got = selected(&text, "f");
+        assert!(got.is_ok(), "{op}: {:?}", got.err());
+        assert!(listing(&text, "f").iter().any(|line| line.starts_with(mnemonic)), "{op}");
     }
 }
 
