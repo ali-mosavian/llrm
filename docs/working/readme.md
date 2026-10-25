@@ -16,6 +16,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [scev-predicates-plan](scev-predicates-plan.md) | SCEV predicates (S3 rank 5, DEVIATE 1): plan (2026-10-23) |
 | [stable-loads](stable-loads.md) | D-I: stable-load rematerialization off by default; AM-DI rows, the argument rule, the exit |
 | [regclass-on-body](regclass-on-body.md) | register classes carried on the body, as the pin's MRI: the rescans, the creators, the steps |
+| [dag-refusals-2026-10-25](dag-refusals-2026-10-25.md) | Every corpus under `--isel=dag`: refusals and failed compiles by cause (0 at m16/m32; m64 `vla`) |
 | [x86-64-dag-plan](x86-64-dag-plan.md) | The DAG path at m64, LEA first: D64-0..4 and the D64-1 design (2026-10-24) |
 | [qb-runtime-contract-plan](qb-runtime-contract-plan.md) | The QB runtime's contract in the DAG path: five dated PRs (2026-10-24) |
 | [testing](testing.md) | Running the tests |
