@@ -57,7 +57,7 @@ while true; do
     [ "$2" = true ] && gh pr ready $m --repo $R >/dev/null
   done
   log=${LAND_TMP:-/tmp/landing}/sqb-${batch[0]}.log
-  [ "${LAND_FAST:-}" = 1 ] && { nohup nice -n 10 buildslot python3 "$HERE/../parity_squash.py" alone $(sed -n '1,16p' $Q) >/dev/null 2>>"${LAND_TMP:-/tmp/landing}/alone.log" & }  # warms the verdict cache while the batch squashes
+  [ "${LAND_FAST:-}" = 1 ] && { nohup nice -n 19 buildslot python3 "$HERE/../parity_squash.py" alone $(sed -n '1,16p' $Q) >/dev/null 2>>"${LAND_TMP:-/tmp/landing}/alone.log" & }  # warms the verdict cache while the batch squashes
   ( flock -n 9 || { echo "waiting for the landing lock (another landing holds the checkout)" >&2; flock -x 9; }; cd $W && git fetch -q origin && git reset -q --hard && git clean -fdq && git checkout -q --detach ${LAND_TOOLS_REF:-origin/feat/parity} \
     && { echo "STAGE assemble ${asm_s:-0}s"; WAITS=${WAITS:-$HERE/waits.txt} PARITY_BIN=$T/release CARGO_TARGET_DIR=$T CARGO_INCREMENTAL=0 PYTHONUNBUFFERED=1 uv run --project tools python tools/parity_squash.py merge-batch "${batch[@]}"; } 2>&1 \
       | awk '{print strftime("%H:%M:%S"), $0; fflush()}' > $log ) 9>"$W.checkout.lock"

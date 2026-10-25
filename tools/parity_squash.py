@@ -963,6 +963,9 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
     return [f"scanner red alone: {', '.join(red[:5])}"] if red else []
 
 
+HITS = [0]  # verdicts read from the cache by this process
+
+
 def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=None, cache: Path | None = None) -> tuple[list[str], dict[str, str]]:
     """(the numbers that pass alone, {number: why} for those that fail). The verdict is kept per head sha in `cache`, so a PR checked while the previous batch squashed is not
     checked again."""
@@ -970,6 +973,7 @@ def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=
     for number in numbers:
         stored = cache / heads[number] if cache else None
         if stored and stored.exists():
+            HITS[0] += 1
             why = stored.read_text()
         else:
             why = "; ".join((refusals or _alone_in_scratch)(heads[number], base))
@@ -1570,6 +1574,7 @@ def dispatch() -> int:
         kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache")
         for number, why in dropped.items():
             print(f"{number}: REFUSED: alone: {why[:300]}", file=sys.stderr)
+        print(f"alone: {len(numbers)} PRs, {HITS[0]} cached, {len(numbers) - HITS[0]} checked, {len(dropped)} dropped", file=sys.stderr)
         print("\n".join(kept))
         return 0
     if len(sys.argv) >= 4 and sys.argv[1] == "assemble":

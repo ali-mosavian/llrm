@@ -122,3 +122,18 @@ def test_the_scanners_of_an_alone_check_run_in_the_scratch_tree_not_the_runners(
     monkeypatch.setattr(smoke, "integration_failures", lambda targets, root=None, **_: seen.append(root) or set())
     assert ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set()) == []
     assert seen == [repo], seen
+
+
+def test_alone_counts_the_verdicts_it_read_from_the_cache(tmp_path):
+    """The hit rate of the cache decides whether the filter pays: the second round reads every verdict of the first."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    heads = {"1": branch(repo, "x", "x.txt", "x\n")}
+    ps.HITS[0] = 0
+    ps.alone(["1"], heads, refusals=lambda h, b: [], cache=tmp_path / "cache")
+    assert ps.HITS[0] == 0
+    ps.alone(["1"], heads, refusals=lambda h, b: [], cache=tmp_path / "cache")
+    assert ps.HITS[0] == 1
