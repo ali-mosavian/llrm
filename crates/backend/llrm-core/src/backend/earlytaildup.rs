@@ -66,20 +66,15 @@ const INDIRECT_SIZE: usize = 20;
 /// `TailDupPredSize` and `TailDupSuccSize`.
 const EDGES: usize = 16;
 
+/// An instruction that is neither meta nor a no-op.
+fn is_real(one: &crate::model::lir::Insn) -> bool {
+    !one.is_meta()
+        && !one.what.as_ref().is_some_and(|what| what.op == Operation::Nothing && what.name.as_deref() == Some("nop"))
+}
+
 /// The block's instructions that are neither meta nor a no-op.
-fn real(block: &Block) -> Vec<&crate::model::lir::Insn> {
-    block
-        .insns
-        .iter()
-        .filter(|one| {
-            !one.is_meta()
-                && !one
-                    .what
-                    .as_ref()
-                    .is_some_and(|what| what.op == Operation::Nothing && what.name.as_deref() == Some("nop"))
-        })
-        .map(|one| &**one)
-        .collect()
+fn real(block: &Block) -> impl DoubleEndedIterator<Item = &crate::model::lir::Insn> {
+    block.insns.iter().map(|one| &**one).filter(|one| is_real(one))
 }
 
 fn operation(one: &crate::model::lir::Insn) -> Option<Operation> {
@@ -93,7 +88,7 @@ fn indirect(one: &crate::model::lir::Insn) -> bool {
 /// `canFallThrough`: the block's last instruction is not a jump with no
 /// condition or a return.
 fn can_fall_through(block: &Block) -> bool {
-    match real(block).last() {
+    match real(block).next_back() {
         Some(last) => !matches!(operation(last), Some(Operation::Return | Operation::Jump)),
         None => true,
     }
@@ -124,7 +119,7 @@ pub fn is_simple(
     if !tail.phis.is_empty() {
         return false;
     }
-    match real(tail).first() {
+    match real(tail).next() {
         None => true,
         Some(first) => operation(first) == Some(Operation::Jump),
     }
@@ -133,7 +128,7 @@ pub fn is_simple(
 /// `canTailDuplicate`: `pred` has `tail` as its only successor and reaches it
 /// by a jump with no condition.
 pub fn can_tail_duplicate(pred: &Block) -> bool {
-    successors(pred).len() <= 1 && !real(pred).last().is_some_and(|one| indirect(one))
+    successors(pred).len() <= 1 && !real(pred).next_back().is_some_and(|one| indirect(one))
 }
 
 /// `canCompletelyDuplicateBB`: every predecessor of `tail` can take a copy.
@@ -144,29 +139,32 @@ pub fn can_completely_duplicate(
     predecessors(body, tail.at).iter().all(|pred| can_tail_duplicate(pred))
 }
 
-/// `shouldTailDuplicate`, before register allocation; `size` is `-Os`.
-pub fn should_tail_duplicate(
-    body: &LirBody,
+/// The cheap half of `shouldTailDuplicate`, which needs no predecessor: the
+/// block cannot fall through, is no loop of its own, holds few enough
+/// instructions and none that is not copied before allocation.
+fn candidate(
     tail: &Block,
-    simple: bool,
     size: bool,
 ) -> bool {
     if can_fall_through(tail) || tail.succ.contains(&tail.at) {
         return false;
     }
-    let mut most = if size { 1 } else { SIZE };
-    let code = real(tail);
-    let indirect_end = code.last().is_some_and(|last| indirect(last));
-    if indirect_end {
-        most = INDIRECT_SIZE;
-    }
+    let most = if indirect_end(tail) {
+        INDIRECT_SIZE
+    } else if size {
+        1
+    } else {
+        SIZE
+    };
     let mut count = 0;
-    for one in &code {
+    for one in real(tail) {
         let op = operation(one);
-        if one.group.is_some() || matches!(op, Some(Operation::Barrier | Operation::Data)) {
-            return false;
-        }
-        if matches!(op, Some(Operation::Return | Operation::Call)) {
+        if one.group.is_some()
+            || matches!(
+                op,
+                Some(Operation::Barrier | Operation::Data | Operation::Return | Operation::Call)
+            )
+        {
             return false;
         }
         count += 1;
@@ -174,6 +172,20 @@ pub fn should_tail_duplicate(
             return false;
         }
     }
+    true
+}
+
+/// `shouldTailDuplicate`, before register allocation; `size` is `-Os`.
+pub fn should_tail_duplicate(
+    body: &LirBody,
+    tail: &Block,
+    simple: bool,
+    size: bool,
+) -> bool {
+    if !candidate(tail, size) {
+        return false;
+    }
+    let indirect_end = indirect_end(tail);
     let after = successors(tail);
     if predecessors(body, tail.at).len() > EDGES && after.len() > EDGES {
         let phis = !tail.phis.is_empty()
@@ -283,7 +295,7 @@ fn duplicate_simple(
 
 /// The block ends in an indirect jump.
 fn indirect_end(block: &Block) -> bool {
-    real(block).last().is_some_and(|last| indirect(last))
+    real(block).next_back().is_some_and(|last| indirect(last))
 }
 
 /// `body` with the block at `tail` copied into its predecessors, or None where
@@ -295,6 +307,9 @@ pub fn tail_duplicate(
 ) -> Option<LirBody> {
     let at = body.blocks.iter().position(|block| block.at == tail)?;
     let block = &body.blocks[at];
+    if !candidate(block, size) {
+        return None;
+    }
     let simple = is_simple(body, block);
     if !should_tail_duplicate(body, block, simple, size) {
         return None;
@@ -307,9 +322,13 @@ pub fn tail_duplicate(
     // the pin sees fall through.
     let falls = |pred: usize| {
         pred + 1 == at
-            && real(&body.blocks[pred]).last().is_some_and(|last| {
+            && real(&body.blocks[pred]).next_back().is_none_or(|last| {
                 operation(last) == Some(Operation::Jump)
                     && last.what.as_ref().is_some_and(|what| what.target == Some(tail))
+                    || !matches!(
+                        operation(last),
+                        Some(Operation::Jump | Operation::Branch | Operation::Return)
+                    )
             })
     };
     let mut chosen: Vec<usize> = preds
@@ -386,9 +405,13 @@ fn duplicate(
             }
         }
         let mut insns: Vec<Arc<Insn>> = host.insns.to_vec();
-        let jump = insns.iter().rposition(|one| operation(one) == Some(Operation::Jump)).expect("a jump to the tail");
-        let beside = Arc::clone(&insns[jump]);
-        insns.remove(jump);
+        // The jump to the tail goes; a block that falls into it has none.
+        let beside = match insns.iter().rposition(|one| {
+            operation(one) == Some(Operation::Jump) && one.what.as_ref().is_some_and(|what| what.target == Some(tail))
+        }) {
+            Some(jump) => insns.remove(jump),
+            None => Arc::clone(insns.last().or(block.insns.first()).expect("a block with an instruction")),
+        };
         let copies: Vec<Arc<Insn>> = block
             .insns
             .iter()
@@ -501,12 +524,22 @@ pub fn duplicated(
     let mut body = body.clone();
     loop {
         let mut changed = false;
-        let places: Vec<i64> = body.blocks.iter().skip(1).map(|block| block.at).collect();
-        for at in places {
-            if let Some(made) = tail_duplicate(&body, at, size) {
+        let mut place = 1;
+        while place < body.blocks.len() {
+            let at = body.blocks[place].at;
+            // Most blocks fail the cheap tests: no scan of the body for them.
+            if candidate(&body.blocks[place], size)
+                && let Some(made) = tail_duplicate(&body, at, size)
+            {
                 body = made;
                 changed = true;
+                // The tail may be gone: what stands at `place` is the next
+                // block.
+                if body.blocks.get(place).is_none_or(|block| block.at != at) {
+                    continue;
+                }
             }
+            place += 1;
         }
         if !changed {
             return body;
@@ -886,6 +919,27 @@ mod tests {
         let shape = body(blocks);
         assert!(!is_simple(&shape, at(&shape, 3)));
         let done = tail_duplicate(&shape, 3, false).expect("copied like a join");
+        let problems = crate::backend::verify::verify(&done, true);
+        assert!(problems.is_empty(), "{problems:?}");
+    }
+
+    /// A predecessor that reaches the join by falling into it has no jump to
+    /// remove: the pass panicked on it ("a jump to the tail", c/logical_value
+    /// at -O0) and, taking some other jump of the block for it, left reads
+    /// of values nothing defined (nib print_float).
+    #[test]
+    fn test_a_predecessor_that_falls_into_the_join_takes_it_with_no_jump_to_remove() {
+        let blocks = vec![
+            block(0, vec![of("jne", Operation::Branch, Some(2), false), jump(1)], &[1, 2]),
+            block(1, vec![work(1), jump(3)], &[3]),
+            block(2, vec![work(2)], &[3]),
+            block(3, vec![work(3), jump(9)], &[9]),
+            block(9, vec![of("ret", Operation::Return, None, false)], &[]),
+        ];
+        let done = tail_duplicate(&body(blocks), 3, false).expect("duplicated");
+        assert!(done.blocks.iter().all(|block| block.at != 3), "the join is gone");
+        assert_eq!(insn_names(at(&done, 2)), ["mov", "mov", "jmp"], "the fall-through took the copy");
+        assert_eq!(insn_names(at(&done, 1)), ["mov", "mov", "jmp"]);
         let problems = crate::backend::verify::verify(&done, true);
         assert!(problems.is_empty(), "{problems:?}");
     }
