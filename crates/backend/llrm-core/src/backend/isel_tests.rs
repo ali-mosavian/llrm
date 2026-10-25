@@ -106,6 +106,7 @@ fn listing_float_store(
         false,
         false,
         true,
+        false,
     )
     .expect("the 486 profile");
     let module = assemble::assembled(
@@ -545,8 +546,8 @@ fn test_variable_indices_are_scaled_and_added() {
             "sub sp, 8",
             "push si",
             "L0_0:",
-            "mov bx, word ptr [bp+6]",
             "mov si, word ptr [bp+8]",
+            "mov bx, word ptr [bp+6]",
             "add si, si",
             "mov word ptr [bp+si-8], 5",
             "mov ax, word ptr [bx+si+2]",

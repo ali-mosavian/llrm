@@ -145,6 +145,8 @@ mod bundle_tests;
 #[cfg(test)]
 mod codecall_tests;
 #[cfg(test)]
+mod dag_function_aggregates_tests;
+#[cfg(test)]
 mod dag_function_calls_tests;
 #[cfg(test)]
 mod dag_function_far_tests;
@@ -156,6 +158,8 @@ mod dag_function_float_tests;
 mod dag_function_frame_tests;
 #[cfg(test)]
 mod dag_function_m64_tests;
+#[cfg(test)]
+mod dag_function_odds_tests;
 #[cfg(test)]
 mod dag_function_switch_tests;
 #[cfg(test)]
