@@ -407,6 +407,8 @@ impl Calling {
         match number {
             0 => self.by_cc("cdecl"),
             llrm_mir::opcode::FAST => self.by_cc("fast").or_else(|| self.by_cc("cdecl")),
+            // BASIC's own (`pascal far`, QB's): the one stating `cc = "basic"`.
+            llrm_mir::opcode::BASIC => self.by_cc("basic"),
             other => self
                 .by_cc(llrm_mir::opcode::CONVENTIONS.iter().find(|(_, one)| *one == other)?.0.trim_end_matches("cc")),
         }

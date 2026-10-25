@@ -211,27 +211,6 @@ define ptr @f(ptr %p, i64 %i) {
     assert_eq!(result.width, 8, "{lea:?}");
 }
 
-/// `va_start` at m64 was selected as the 32-bit one (the address of the first
-/// stack argument): `varargs.c` printed wrong sums. Until the register save
-/// area is translated it is refused.
-#[test]
-fn va_start_at_m64_is_refused() {
-    let module = llrm_mir::parse::module(
-        "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
-declare void @llvm.va_start(ptr)
-define i32 @f(i32 %n, ...) {
-  %ap = alloca [24 x i8]
-  call void @llvm.va_start(ptr %ap)
-  ret i32 %n
-}
-",
-    )
-    .expect("parses");
-    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
-    let refused = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).err().expect("refused");
-    assert!(refused.0.contains("va_start at m64"), "{}", refused.0);
-}
-
 /// `a[i]` at m64 came out `movsx r, a[rax*4]`, an absolute symbol beside an
 /// index: no `%rip`-relative form, and in a PIE the program crashed (array,
 /// matrix, sieve of `tests/llc`). The symbol is now loaded by itself and the
@@ -388,4 +367,36 @@ entry:
     assert!(returned.contains(&RegId::RAX) && returned.contains(&RegId::RDX), "{returned:?}");
     let received = registers("use");
     assert!(received.contains(&RegId::RAX) && received.contains(&RegId::RDX), "{received:?}");
+}
+
+/// `va_start` at m64 was refused ("the SysV register save area is not
+/// translated"; `varargs` of `tests/llc`). A variadic function stores the five
+/// argument registers its one named parameter left in the register save area,
+/// then the four fields of the `va_list`: nine stores.
+#[test]
+fn a_variadic_function_saves_the_argument_registers_and_fills_the_list() {
+    use crate::model::ir::{Loc, Operation};
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare void @llvm.va_start.p0(ptr)
+declare void @llvm.va_end.p0(ptr)
+define i32 @f(i32 %n, ...) {
+  %ap = alloca [24 x i8], align 8
+  call void @llvm.va_start.p0(ptr %ap)
+  call void @llvm.va_end.p0(ptr %ap)
+  ret i32 %n
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let stores = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.op == Operation::Move && matches!(w.dests.first(), Some(Loc::Mem(_))))
+        .count();
+    assert_eq!(stores, 9);
 }

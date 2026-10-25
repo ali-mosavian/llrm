@@ -73,7 +73,7 @@ use llrm_lir::registers::RegId;
 
 use crate::backend::liveness;
 use crate::backend::storedhomes::may_write;
-use crate::model::ir::{Loc, Operation, Semantics};
+use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 
@@ -104,6 +104,68 @@ impl LIRTransform for CallFrameOpt {
         body: LirBody,
     ) -> Result<LirBody, String> {
         Ok(self.run(&body))
+    }
+}
+
+/// What the pin's `eliminateCallFramePseudoInstr` makes of the frame pseudos
+/// while no call frame is reserved: `call_frame_setup N, 0, A` is `sub sp, N -
+/// A` (the pushes made A of it) and `call_frame_destroy N, M` is `add sp, N -
+/// M` (the callee popped M). Runs at every level, after [`CallFrameOpt`].
+///
+/// DEVIATE CF4 (row 80): the pin reserves the largest call frame in the
+/// prologue and drops the pseudos; here each call adjusts for itself. Exit:
+/// the reserved frame (docs/working/callframe-translation-plan.md, piece 2).
+/// Owner: sdag-d.
+pub struct LowerCallFrame {
+    /// `RegInfo.getStackRegister()`.
+    pub stack: RegId,
+    /// The width of the stack pointer.
+    pub width: u32,
+}
+
+impl LIRTransform for LowerCallFrame {
+    fn class_name(&self) -> &'static str {
+        "LowerCallFrame"
+    }
+
+    fn name(&self) -> &str {
+        "lowercallframe"
+    }
+
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
+        let mut out = body.clone();
+        for (at, block) in body.blocks.iter().enumerate() {
+            if !block.insns.iter().any(|one| matches!(name_of(one), Some("call_frame_setup" | "call_frame_destroy"))) {
+                continue;
+            }
+            let mut insns: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len());
+            for one in block.insns.iter() {
+                let (verb, count) = match name_of(one) {
+                    Some("call_frame_setup") => ("sub", imm_of(one, 0).unwrap_or(0) - imm_of(one, 2).unwrap_or(0)),
+                    Some("call_frame_destroy") => ("add", imm_of(one, 0).unwrap_or(0) - imm_of(one, 1).unwrap_or(0)),
+                    _ => {
+                        insns.push(Arc::clone(one));
+                        continue;
+                    }
+                };
+                if count != 0 {
+                    let sp = Loc::Reg(Reg { register: self.stack, width: self.width });
+                    let amount = Loc::Imm(Imm { value: count, width: self.width, address: None });
+                    let what = Semantics {
+                        name: Some(verb.into()),
+                        dests: vec![sp.clone()],
+                        sources: vec![sp, amount],
+                        ..Semantics::new(Operation::Binary)
+                    };
+                    insns.push(Arc::new(Insn::new(one.at, one.covers, Some(what), vec![], vec![])));
+                }
+            }
+            out.blocks[at] = block.with_insns(insns);
+        }
+        Ok(out)
     }
 }
 
@@ -641,5 +703,29 @@ mod tests {
         assert_eq!(names(&pass().run(&one)), ["call_frame_setup", "mov", "call", "call_frame_destroy"]);
         let var_sized = CallFrameOpt { has_var_sized: true, ..pass() };
         assert_eq!(names(&var_sized.run(&one)), ["call_frame_setup", "push", "call", "call_frame_destroy"]);
+    }
+
+    fn lower(insns: Vec<Arc<Insn>>) -> Vec<String> {
+        let mut lowering = LowerCallFrame { stack: RegId::SP, width: 4 };
+        let after = lowering.transform(body(insns)).expect("lowers");
+        names(&after)
+    }
+
+    /// The frame pseudos that no push replaced were `sub`/`add` in the DAG
+    /// emitter; at -O0 nothing converts them, and every level lowers them.
+    #[test]
+    fn a_frame_nothing_pushed_is_a_sub_and_an_add() {
+        let before = vec![setup(8), store(0, held(1), vec![1]), store(4, held(2), vec![2]), call(), destroy(8)];
+        assert_eq!(lower(before), ["sub", "mov", "mov", "call", "add"]);
+    }
+
+    /// Pushed bytes are not subtracted again, and what the callee pops is not
+    /// added back.
+    #[test]
+    fn what_the_pushes_made_and_the_callee_pops_is_not_adjusted_again() {
+        let pushed =
+            insn(0, Operation::Barrier, "call_frame_setup", vec![], vec![imm(8), imm(0), imm(8)], vec![], vec![]);
+        let popped = insn(9, Operation::Barrier, "call_frame_destroy", vec![], vec![imm(8), imm(8)], vec![], vec![]);
+        assert_eq!(lower(vec![pushed, call(), popped]), ["call"]);
     }
 }

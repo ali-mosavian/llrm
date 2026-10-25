@@ -1313,8 +1313,9 @@ fn lower_int_to_fp(
     Some(rounded)
 }
 
-/// `LowerVASTART` for the 32-bit ABI: a `va_list` is a pointer, so the start
-/// is a store of the first variadic argument's address through it.
+/// `LowerVASTART`: at 32 bits a `va_list` is a pointer, so the start is a
+/// store of the first variadic argument's address through it; the SysV
+/// x86-64 one is `{gp_offset, fp_offset, overflow_arg_area, reg_save_area}`.
 fn lower_vastart(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -1322,14 +1323,32 @@ fn lower_vastart(
     let index = dag.var_args_frame_index?;
     let (chain, list) = (dag.operand(node, 0), dag.operand(node, 1));
     let pointer = dag.config().pointer;
-    let first = dag.get_frame_index(pointer, index);
     let base = match dag.node(list).data {
         NodeData::FrameIndex(slot) => MemBase::Stack(slot),
         _ => MemBase::Unknown,
     };
-    let info =
-        MemInfo { mem_vt: pointer, align: pointer.size_in_bits() / 8, volatile: false, base, ext: None, space: 0 };
-    Some(dag.get_store(chain, first, list, info))
+    if pointer != EVT::I64 {
+        let first = dag.get_frame_index(pointer, index);
+        let info =
+            MemInfo { mem_vt: pointer, align: pointer.size_in_bits() / 8, volatile: false, base, ext: None, space: 0 };
+        return Some(dag.get_store(chain, first, list, info));
+    }
+    let (save, gp_offset) = dag.var_args_save?;
+    let mut stores = Vec::new();
+    let fields: [(u128, EVT, SDValue); 4] = [
+        (0, EVT::I32, dag.get_constant(u128::from(gp_offset), EVT::I32)),
+        // 6 * 8: the vector registers' part of the area starts there
+        (4, EVT::I32, dag.get_constant(48, EVT::I32)),
+        (8, pointer, dag.get_frame_index(pointer, index)),
+        (16, pointer, dag.get_frame_index(pointer, save)),
+    ];
+    for (offset, vt, value) in fields {
+        let at = dag.get_constant(offset, pointer);
+        let address = dag.get_node(ISD::Add, pointer, &[list, at]);
+        let info = MemInfo { mem_vt: vt, align: 4, volatile: false, base, ext: None, space: 0 };
+        stores.push(dag.get_store(chain, value, address, info));
+    }
+    Some(dag.get_node(ISD::TokenFactor, EVT::OTHER, &stores))
 }
 
 fn is_pow2(value: u128) -> bool {
