@@ -2152,8 +2152,21 @@ fn scalar_sse(
     // The bitwise operations and `movaps` take the whole register whatever the
     // scalar they carry (a `double` negated by `xorps` is an 8-byte value).
     let whole = matches!(name, "xorps" | "andps" | "andnps" | "orps" | "movaps");
+    // An xmm register is held 16 bytes wide whatever scalar it carries: the
+    // mnemonic says how much is read.
+    let scalar = |source: &str| match source {
+        "ss" => 32,
+        "sd" => 64,
+        _ => 128,
+    };
+    let read =
+        match name.strip_prefix("cvtt").or_else(|| name.strip_prefix("cvt")).and_then(|rest| rest.split_once('2')) {
+            Some((source, _)) => scalar(source),
+            None => scalar(&name[name.len().saturating_sub(2)..]),
+        };
     let bits = |one: &Loc| match one {
         _ if whole => 128,
+        Loc::Reg(reg) if reg.register.is_xmm() && reg.width == 16 => read,
         Loc::Reg(reg) => reg.width * 8,
         Loc::Mem(cell) => cell.width * 8,
         _ => 0,

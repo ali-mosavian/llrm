@@ -266,3 +266,20 @@ fn a_store_inside_a_later_wider_one_through_a_loaded_pointer_goes() {
     let after = managed(&mut module, DeadStoreElimination);
     assert!(!after.contains("store i16 1"), "{after}");
 }
+
+/// DSE took the manager's annotated accesses, deriving every reference's
+/// provenance for a body (3.7 M Ir in d_faces) to learn what a store writes.
+/// It asks the unit lazily now: a run derives no annotations.
+#[test]
+fn a_run_derives_no_annotations() {
+    let mut module = parsed(&format!(
+        "{DOS}@g = global i16 0\n\ndefine i16 @f(i16 %x) {{\nb0:\n  store i16 1, ptr @g\n  store i16 %x, ptr @g\n  %r = load i16, ptr @g\n  ret i16 %r\n}}\n"
+    ));
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(DeadStoreElimination);
+    let (_, before) = llrm_mir::counts::analysed("annotated");
+    passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let (_, after) = llrm_mir::counts::analysed("annotated");
+    assert!(!crate::testing::printed(&module).contains("store i16 1"), "premise: the store goes");
+    assert_eq!(after - before, 0, "DSE derived the annotations");
+}
