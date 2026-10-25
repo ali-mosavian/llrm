@@ -15,6 +15,8 @@ fn eval(
         ISD::Constant => dag.constant(v).unwrap() as u32,
         ISD::And => arg(0) & arg(1),
         ISD::Or => arg(0) | arg(1),
+        ISD::Srl => arg(0) >> arg(1),
+        ISD::Shl => arg(0) << arg(1),
         other => panic!("unexpected {other:?}"),
     }
 }
@@ -90,4 +92,19 @@ fn an_or_of_an_overlapping_mask_is_an_and_of_an_or() {
     });
     assert_eq!(dag.opcode(root), ISD::And);
     assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::Or);
+}
+
+/// `(or (and x, 0xFFFF), (shl (srl x, 16), 16))` is `x` split and put back
+/// together; it stayed four nodes (a far pointer made from a call's dword:
+/// `mov; shr; shl; movzx; add` where `x` itself was meant).
+#[test]
+fn a_dword_split_into_halves_and_joined_is_the_dword() {
+    let (dag, root) = combined(|dag, x| {
+        let (low, sixteen) = (k(dag, 0xFFFF), dag.get_constant(16, EVT::I8));
+        let lo = dag.get_node(ISD::And, EVT::I32, &[x, low]);
+        let hi = dag.get_node(ISD::Srl, EVT::I32, &[x, sixteen]);
+        let back = dag.get_node(ISD::Shl, EVT::I32, &[hi, sixteen]);
+        dag.get_node(ISD::Or, EVT::I32, &[lo, back])
+    });
+    assert_eq!(dag.opcode(root), ISD::Register, "the or of the halves is x");
 }

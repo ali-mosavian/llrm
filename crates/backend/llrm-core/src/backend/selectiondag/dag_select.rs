@@ -27,11 +27,10 @@
 //! `DoInstructionSelection`
 //! ([L1281](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L1281)).
 
-use std::collections::HashSet;
-
 use llrm_dagisel::interp::{Outcome, Selector};
 use llrm_dagisel::x86_hooks::X86Hooks;
 use llrm_dagisel::x86_select::select_node;
+use llrm_support::hash::HashSet;
 
 use super::actions::TargetLowering;
 use super::dag_combiner::{CombineLevel, DagCombiner};
@@ -98,6 +97,10 @@ pub fn legalized(
     let legal = DagLegalizer::new(dag, tli, lowering).run();
     legal.map_err(|e| refused_legalize(dag, &format!("{e:?}")))?;
     DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeDag).with_tli(tli).run();
+    // `LLRM_DAGDUMP=all` prints every block's DAG as selection will see it.
+    if std::env::var_os("LLRM_DAGDUMP").is_some_and(|mode| mode == "all") {
+        eprintln!("legalized:\n{}", dag.dump());
+    }
     Ok(())
 }
 
@@ -152,7 +155,7 @@ pub(crate) fn do_instruction_selection(
 /// everything it reads.
 pub(crate) fn users_first(dag: &SelectionDAG) -> Vec<u32> {
     let mut order = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut stack = vec![(dag.get_root().node, false)];
     while let Some((n, expanded)) = stack.pop() {
         if expanded {
