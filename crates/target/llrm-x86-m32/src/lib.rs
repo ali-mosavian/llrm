@@ -56,9 +56,33 @@ static TIMINGS: LazyLock<llrm_target::timings::Timings> = LazyLock::new(|| {
     llrm_target::timings::Timings::parse(include_str!("timings.times")).expect("timings.times parses")
 });
 
+/// The pin's register pressure sets for the registers described above:
+/// `pressure.sets`.
+static PRESSURE: LazyLock<llrm_target::pressure::PressureSets> =
+    LazyLock::new(|| llrm_target::pressure::parse(include_str!("pressure.sets")).expect("pressure.sets parses"));
+
 static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
     llrm_target::addressing::forms(include_str!("machines/datalayout.toml")).expect("datalayout.toml parses")
 });
+
+impl M32 {
+    /// The pressure sets and classes of the pin's x86.
+    pub fn pressure_sets() -> &'static llrm_target::pressure::PressureSets {
+        &PRESSURE
+    }
+
+    /// The limit of pressure set `set` here (`computePSetLimit`): a register
+    /// may be allocated if its root is a `gpr`.
+    pub fn pressure_limit(set: usize) -> u32 {
+        PRESSURE.limit(set, |name| {
+            REGISTERS
+                .iter()
+                .find(|one| one.name == name)
+                .and_then(|one| REGISTERS.iter().find(|root| root.name == one.root))
+                .is_some_and(|root| root.is("gpr"))
+        })
+    }
+}
 
 impl llrm_target::Target for M32 {
     fn registers(&self) -> &'static llrm_lir::registers::Info {
@@ -360,6 +384,20 @@ impl llrm_target::Target for M32 {
 
 #[cfg(test)]
 mod tests {
+    /// The limits the pin's `computePSetLimit` gives the x86-32 sets with the
+    /// six general registers allocatable, worked by hand from the table:
+    /// set 35 (GR16) is 66 - 2 * (34 - 6) of its largest class,
+    /// LOW32_ADDR_ACCESS_RBP; GR32_BPSP (ebp, esp) has none free, so its
+    /// raw 6; GR32_BSI has both; GR8_NOREX has its eight; GR8 is 38 - (36 -
+    /// 8). Without the reserved-register step every set read its raw limit
+    /// and the scheduler saw 66 words of room.
+    #[test]
+    fn pressure_set_limits_come_off_the_reserved_registers() {
+        let limits: Vec<(usize, u32)> =
+            [35, 1, 3, 13, 26].iter().map(|&set| (set, super::M32::pressure_limit(set))).collect();
+        assert_eq!(limits, [(35, 10), (1, 6), (3, 6), (13, 10), (26, 10)]);
+    }
+
     /// `object()` and the runtime tables are parsed once and kept; each must
     /// equal a fresh parse of its toml (35 parses of object.toml and 4 of the
     /// runtime table cost 3.3 M Ir of every compile).

@@ -121,6 +121,7 @@
 //! LLVM `MemorySSA` and its `ClobberWalker`
 //! (`llvm/lib/Analysis/MemorySSA.cpp`).
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
@@ -202,6 +203,12 @@ pub struct Accesses {
     plain_source: Option<PlainSource>,
     /// The graph's structure, made when first asked.
     graph: GraphCell,
+    /// Nothing above is made up front: a reference and the lists an
+    /// instruction touches are worked out of the unit when first asked
+    /// (`reference_in`, `reads_in`, `writes_in`), as the pin computes a
+    /// `MemoryLocation` when a walk wants one. The graph's clients ask 1.6 %
+    /// of them.
+    lazy: bool,
 }
 
 /// What `PlainAccesses` reads.
@@ -566,6 +573,9 @@ impl Accesses {
         unit: &Unit,
         inst: InstId,
     ) {
+        if self.lazy {
+            return;
+        }
         if let Some(reference) = unit.reference(inst) {
             self.references.insert(inst, reference);
         }
@@ -599,7 +609,72 @@ impl Accesses {
             source: None,
             plain_source: None,
             graph: GraphCell::default(),
+            lazy: false,
         }
+    }
+
+    /// Accesses that make nothing up front (`lazy`): the references as the unit
+    /// has them, each call writing anything its attributes allow.
+    pub fn lazy() -> Self {
+        Self { lazy: true, ..Self::default() }
+    }
+
+    /// Whether these accesses make nothing up front (`lazy`).
+    pub fn is_lazy(&self) -> bool {
+        self.lazy
+    }
+
+    /// The access `inst` makes, as the unit has it (`Unit::reference`), made
+    /// when asked where these accesses are lazy.
+    pub fn reference_in(
+        &self,
+        unit: &Unit,
+        inst: InstId,
+    ) -> Option<Cow<'_, MemRef>> {
+        if self.lazy {
+            return unit.reference(inst).map(Cow::Owned);
+        }
+        self.references.get(&inst).map(Cow::Borrowed)
+    }
+
+    /// What `inst` touches, made when asked where these accesses are lazy.
+    fn touched_in(
+        &self,
+        unit: &Unit,
+        inst: InstId,
+    ) -> Option<Footprint> {
+        Self::touched_by(unit, inst, &|| unit.reference(inst).into_iter().collect::<Rc<[_]>>(), &|_| None)
+    }
+
+    /// [`reads`](Self::reads), asked of the unit where these accesses are lazy.
+    pub fn reads_in(
+        &self,
+        unit: &Unit,
+        inst: InstId,
+    ) -> Option<Cow<'_, [MemRef]>> {
+        if self.lazy {
+            return match self.touched_in(unit, inst) {
+                None => Some(Cow::Borrowed(&[])),
+                Some((reads, _)) => reads.map(|list| Cow::Owned(list.to_vec())),
+            };
+        }
+        self.reads(inst).map(Cow::Borrowed)
+    }
+
+    /// [`writes`](Self::writes), asked of the unit where these accesses are
+    /// lazy.
+    pub fn writes_in(
+        &self,
+        unit: &Unit,
+        inst: InstId,
+    ) -> Option<Cow<'_, [MemRef]>> {
+        if self.lazy {
+            return match self.touched_in(unit, inst) {
+                None => Some(Cow::Borrowed(&[])),
+                Some((_, writes)) => writes.map(|list| Cow::Owned(list.to_vec())),
+            };
+        }
+        self.writes(inst).map(Cow::Borrowed)
     }
 
     /// These accesses with the stores `absolute` names writing nothing a
