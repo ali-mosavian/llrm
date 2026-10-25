@@ -33,6 +33,7 @@ void sdl_audio_tone(unsigned hertz);
 /* The tone the callback is making, for a test. */
 unsigned sdl_audio_current(void);
 /* The samples of the tone `hertz` (0 for silence): what the audio callback fills. */
+enum { SDL_AUDIO_RATE = 44100 }; /* samples a second, mono, 16 bits */
 typedef struct SdlTone {
     unsigned phase;
     int gain; /* 0 to the fade length */

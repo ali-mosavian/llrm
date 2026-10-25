@@ -5,7 +5,7 @@
 
 #include "qbsdl.h"
 
-enum { RATE = 44100, SAMPLES = 512, AMPLITUDE = 6000, RAMP = 120 };
+enum { SAMPLES = 512 };
 
 static SDL_AudioDeviceID device;
 static atomic_uint wanted;
@@ -19,29 +19,6 @@ unsigned sdl_audio_current(void)
 void sdl_audio_tone(unsigned hertz)
 {
     atomic_store_explicit(&wanted, hertz, memory_order_relaxed);
-}
-
-/* The tone as samples: a hard square wave at full amplitude, as the PC speaker's, faded in and out over RAMP samples
-   where the tone starts and stops so that it does not click. the `SdlTone` carries `phase` and `gain` on from call to call. */
-void sdl_audio_render(SdlTone *tone, int16_t *out, int count, unsigned hertz)
-{
-    unsigned phase = tone->phase;
-    int gain = tone->gain, at;
-
-    for (at = 0; at < count; at++) {
-        int wave = 0;
-
-        if (hertz) {
-            phase += hertz;
-            if (phase >= RATE)
-                phase -= RATE;
-            wave = phase < RATE / 2 ? AMPLITUDE : -AMPLITUDE;
-        }
-        gain += hertz ? (gain < RAMP) : -(gain > 0);
-        out[at] = (int16_t)(wave * gain / RAMP);
-    }
-    tone->phase = phase;
-    tone->gain = gain;
 }
 
 static void fill(void *unused, Uint8 *stream, int bytes)
@@ -60,7 +37,7 @@ void sdl_audio_open(void)
     SDL_AudioSpec want, have;
 
     SDL_zero(want);
-    want.freq = RATE;
+    want.freq = SDL_AUDIO_RATE;
     want.format = AUDIO_S16SYS;
     want.channels = 1;
     want.samples = SAMPLES;
