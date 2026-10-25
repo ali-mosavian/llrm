@@ -819,7 +819,10 @@ fn rotate_loop(
             if pred_loop.contains(exit) {
                 continue;
             }
-            split_critical_edge(run, info, exit_pred, exit);
+            if let Some(exit_split) = split_critical_edge(run, info, exit_pred, exit) {
+                // `ExitSplit->moveBefore(Exit)` (LoopRotationUtils.cpp:788).
+                run.function.move_block_before(exit_split, exit).expect("placed blocks");
+            }
         }
     } else {
         // The conditional branch can be folded, which makes things simpler.

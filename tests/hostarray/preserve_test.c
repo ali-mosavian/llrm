@@ -10,6 +10,8 @@ static jmp_buf failed;
 static unsigned raised;
 void qb_error(unsigned n) { raised = n; longjmp(failed, 1); }
 void str_release(SD *sd) { (void)sd; }
+/* block.asm's B$COPY on the host: a forward byte copy. */
+void copy_bytes(char *to, const char *from, unsigned n) { while (n--) *to++ = *from++; }
 void lh_on_move(enum LhType type, LhMoved moved) { (void)type; (void)moved; }
 char *heap_low, *heap_top;
 void *lh_alloc(uword bytes, enum LhType type, void *owner, byte file)

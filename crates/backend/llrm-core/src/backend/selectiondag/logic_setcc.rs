@@ -179,6 +179,45 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         None
     }
 
+    /// `visitORLike`: `(or (and X, C1), (and Y, C2))` is `(and (or X, Y), C1 |
+    /// C2)` when the bits of `X` set in `C2` alone, and of `Y` in `C1` alone,
+    /// are zero; `(or (and X, M), (and X, N))` is `(and X, M | N)`; each only
+    /// when one of the two `and`s has no other use.
+    fn or_of_ands(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        if self.dag.opcode(n0) != ISD::And || self.dag.opcode(n1) != ISD::And {
+            return None;
+        }
+        if self.dag.use_count(n0.node) != 1 && self.dag.use_count(n1.node) != 1 {
+            return None;
+        }
+        let vt = self.dag.value_type(node);
+        let all = super::fold::mask(vt.size_in_bits());
+        let (x, y) = (self.dag.operand(n0, 0), self.dag.operand(n1, 0));
+        let (m0, m1) = (self.dag.operand(n0, 1), self.dag.operand(n1, 1));
+        if let (Some(c0), Some(c1)) = (
+            self.dag.constant(m0).filter(|_| !self.dag.is_opaque(m0)),
+            self.dag.constant(m1).filter(|_| !self.dag.is_opaque(m1)),
+        ) {
+            let zero = |dag: &super::dag::SelectionDAG, v: SDValue, mask: u128| {
+                mask & all & !super::known_bits::known_bits(dag, v).zero == 0
+            };
+            if zero(self.dag, x, c1 & !c0) && zero(self.dag, y, c0 & !c1) {
+                let joined = self.dag.get_node(ISD::Or, vt, &[x, y]);
+                let mask = self.dag.get_constant(c0 | c1, vt);
+                return Some(self.dag.get_node(ISD::And, vt, &[joined, mask]));
+            }
+        }
+        if x == y {
+            let joined = self.dag.get_node(ISD::Or, vt, &[m0, m1]);
+            return Some(self.dag.get_node(ISD::And, vt, &[x, joined]));
+        }
+        None
+    }
+
     /// `visitOR`, the compare folds.
     pub(super) fn visit_or(
         &mut self,
@@ -204,6 +243,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             }
         }
         if let Some(folded) = self.fold_logic_of_setccs(false, n0, n1) {
+            return Some(folded);
+        }
+        if let Some(folded) = self.or_of_ands(node) {
             return Some(folded);
         }
         let c1 = c1?;

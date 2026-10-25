@@ -55,7 +55,7 @@
 //! ([L536](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGSDNodes.cpp#L536)),
 //! `ScheduleDAG.cpp` (`SUnit::addPred`, `ScheduleDAGTopologicalSort`).
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use super::dag::{NodeData, SDValue, SelectionDAG};
 use super::isd::ISD;
@@ -332,8 +332,8 @@ impl<'a> Graph<'a> {
             node_id: vec![-1; dag.node_count()],
             users: Self::live_users(dag, root),
             cur_cycle: 0,
-            live_reg_defs: HashMap::new(),
-            live_reg_gens: HashMap::new(),
+            live_reg_defs: HashMap::default(),
+            live_reg_gens: HashMap::default(),
             interferences: Vec::new(),
             sequence: Vec::new(),
         };
@@ -1090,7 +1090,7 @@ impl Topo {
             index2node: vec![0; sus.len()],
             dirty: false,
             updates: Vec::new(),
-            reachable: HashMap::new(),
+            reachable: HashMap::default(),
         };
         topo.init(sus);
         topo
