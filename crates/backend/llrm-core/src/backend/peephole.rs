@@ -396,30 +396,37 @@ pub fn popped_arguments(
     let unit = i64::from(body.bits / 8);
     let arithmetic =
         RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::AF | RflagsBits::CF | RflagsBits::PF;
-    let exits = liveness::dead_at_exit(body);
+    let sp = Loc::Reg(reg(RegId::SP, 2));
+    // The words an `add sp, n` takes back, or 0.
+    let words_of = |one: &Insn| match &one.what {
+        Some(what)
+            if what.op == Operation::Binary && what.name.as_deref() == Some("add") && what.dests == [sp.clone()] =>
+        {
+            match what.sources.as_slice() {
+                [first, Loc::Imm(Imm { value, address: None, .. })]
+                    if *first == sp && value % unit == 0 && *value > 0 =>
+                {
+                    value / unit
+                }
+                _ => 0,
+            }
+        }
+        _ => 0,
+    };
+    // Solved for the first block that has a cleanup, and not at all for a
+    // body that has none.
+    let mut exits = None;
     let mut blocks = Vec::new();
     for block in &body.blocks {
+        if block.insns.iter().all(|one| words_of(one) == 0) {
+            blocks.push(block.clone());
+            continue;
+        }
+        let exits = exits.get_or_insert_with(|| liveness::dead_at_exit(body));
         let dead_after = regthrash::_dead_after(regs, body.bits, block, exits[&block.at].clone());
         let mut insns = Vec::with_capacity(block.insns.len());
         for one in &block.insns {
-            let sp = Loc::Reg(reg(RegId::SP, 2));
-            let words = match &one.what {
-                Some(what)
-                    if what.op == Operation::Binary
-                        && what.name.as_deref() == Some("add")
-                        && what.dests == [sp.clone()] =>
-                {
-                    match what.sources.as_slice() {
-                        [first, Loc::Imm(Imm { value, address: None, .. })]
-                            if *first == sp && value % unit == 0 && *value > 0 =>
-                        {
-                            value / unit
-                        }
-                        _ => 0,
-                    }
-                }
-                _ => 0,
-            };
+            let words = words_of(one);
             let dead = &dead_after[&id(one)];
             let scratch = regs.scratch.iter().copied().find(|register| _lanes(regs, *register).is_subset(dead));
             match scratch {
