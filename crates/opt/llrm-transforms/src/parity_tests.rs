@@ -293,6 +293,99 @@ fn test_the_tally_lines_of_the_real_registry_add_up() {
     assert!(lines.iter().any(|line| line.starts_with("[parity] analyses ")), "{lines:?}");
 }
 
+/// What names each pass the registry calls Missing in the sources of the tree.
+/// A Missing entry that is not here has not been checked against the tree; one
+/// whose name is found has a translation the registry does not know of
+/// (ConstraintElimination was Missing for weeks with constraintelim.rs written,
+/// and the loss it would have prevented, scroll/nib's, stood in a table as
+/// someone else's). `lagging` are entries known to lag; delete one when its PR
+/// lands.
+const MISSING_NEEDLES: &[(&str, &str)] = &[
+    ("early-tailduplication", "EarlyTailDup"),
+    ("loop-instsimplify", "LoopInstSimplify"),
+    ("loop-simplifycfg", "LoopSimplifyCFG"),
+    ("vector-combine", "VectorCombine"),
+];
+const LAGGING: &[&str] = &["constraint-elimination"]; // #4463 relabels it
+
+#[test]
+fn test_a_missing_entry_has_no_translation_in_the_tree() {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn sources(
+        directory: &Path,
+        out: &mut Vec<PathBuf>,
+    ) {
+        let Ok(entries) = fs::read_dir(directory) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|name| name != "target") {
+                    sources(&path, out);
+                }
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                out.push(path);
+            }
+        }
+    }
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut files = Vec::new();
+    sources(&root, &mut files);
+    // the registry, its tests and the slot tables name every pass: they are the
+    // claims, not the evidence
+    files.retain(|path| {
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+        !matches!(
+            name,
+            "parity.rs" | "parity_tests.rs" | "codegen_slots_tests.rs" | "pin_slots_tests.rs"
+        )
+    });
+    let texts: Vec<(PathBuf, String)> =
+        files.into_iter().filter_map(|path| fs::read_to_string(&path).ok().map(|text| (path, text))).collect();
+    for entry in parity::REGISTRY.iter().filter(|one| one.kind == SlotKind::Missing && !LAGGING.contains(&one.slot)) {
+        if !entry.note.is_empty() {
+            // `elsewhere`: the files its note names are in the tree
+            let named: Vec<&str> = entry
+                .note
+                .split(|c: char| c.is_whitespace() || c == ',' || c == ';' || c == '(' || c == ')')
+                .filter(|word| word.starts_with("backend/") && word.ends_with(".rs"))
+                .collect();
+            assert!(
+                !named.is_empty(),
+                "{}: a note on a Missing entry names the backend/NAME.rs files that do its work",
+                entry.slot
+            );
+            for file in named {
+                assert!(
+                    texts.iter().any(|(path, _)| path.ends_with(file)),
+                    "{}: {file} is not in the tree",
+                    entry.slot
+                );
+            }
+            continue;
+        }
+        let Some((_, needle)) = MISSING_NEEDLES.iter().find(|(slot, _)| *slot == entry.slot) else {
+            panic!(
+                "{} is Missing and has no needle in MISSING_NEEDLES: say what a translation of it would be called",
+                entry.slot
+            );
+        };
+        let found: Vec<_> = texts
+            .iter()
+            .filter(|(_, text)| text.contains(needle))
+            .map(|(path, _)| path.display().to_string())
+            .collect();
+        assert!(found.is_empty(), "{} is Missing but {needle} is in {found:?}: relabel it", entry.slot);
+    }
+    // the guard sees a translation that was never registered
+    assert!(
+        texts.iter().any(|(_, text)| text.contains("ShrinkWrapImpl")),
+        "premise: the scan reaches backend/saverestore.rs"
+    );
+}
+
 /// LLVM runs BDCE after GVN and before the second InstCombine; the joined
 /// slot was missing from the -O2 list, so its output never reached later slots.
 #[test]

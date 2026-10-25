@@ -95,6 +95,19 @@ const fn partial(
     Entry { slot, phase, llvm, kind: Partial, replaced_by: "", note }
 }
 
+/// No slot of the pipeline runs this pass, but llrm does its work elsewhere:
+/// `note` says where, as `backend/NAME.rs` files the registry test checks
+/// exist. The row stays Missing because nothing runs in the slot (a Partial row
+/// is required to run).
+const fn elsewhere(
+    slot: &'static str,
+    phase: Phase,
+    llvm: &'static str,
+    note: &'static str,
+) -> Entry {
+    Entry { slot, phase, llvm, kind: Missing, replaced_by: "", note }
+}
+
 use Phase::{Backend, Cleanup, Early, Late, Module, Simplify};
 use SlotKind::{Missing, Old, Partial, Translated};
 
@@ -410,10 +423,25 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("copyprop@18", Backend, "machine-cp (run 2, after tail duplication)", Translated, ""),
     entry("early-tailduplication", Backend, "early-tailduplication", Missing, ""),
     // X86TargetLowering::EmitLoweredSelect: the diamond at selection
-    // (lir-cleanup-port, 2026-11-13).
-    entry("emit-lowered-select", Backend, "x86-emit-lowered-select", Missing, ""),
-    entry("stack-coloring", Backend, "stack-coloring", Missing, ""),
-    entry("shrink-wrap", Backend, "shrink-wrap", Missing, ""),
+    // (lir-cleanup-port, 2026-11-13). selects.rs makes it in MIR (DEVIATE S2).
+    elsewhere(
+        "emit-lowered-select",
+        Backend,
+        "x86-emit-lowered-select",
+        "backend/selects.rs expands a select to a diamond in MIR, not at selection (DEVIATE S2, exit: the expansion at selection, #3052)",
+    ),
+    elsewhere(
+        "stack-coloring",
+        Backend,
+        "stack-coloring",
+        "backend/lifetimes.rs and backend/slots.rs share the frame slots of locals whose lifetime markers do not overlap (slot-table row 36); not StackColoring's slot-index pass",
+    ),
+    elsewhere(
+        "shrink-wrap",
+        Backend,
+        "shrink-wrap",
+        "backend/saverestore.rs and backend/shrinkwrap.rs follow ShrinkWrapImpl and run inside masm, not as a pipeline slot (slot-table row 79)",
+    ),
 ];
 
 /// One analysis of the parity pipeline.
