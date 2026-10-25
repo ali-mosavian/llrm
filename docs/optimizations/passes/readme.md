@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 193 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 194 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -117,6 +117,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | loopdeletion | `LoopDeletion`: a loop that computes nothing the rest of the function reads is removed, and a loop whose backedge is never taken is made straight code. |  | [loopdeletion](loopdeletion.md) |
 | loopfilter | Which loops a loop pass visits: the loop pass manager's worklist, for the passes that walk every loop of a function. | `indvars` (its steps), `loopunrollpass` (the loops it makes), `pipeline`. | [loopfilter](loopfilter.md) |
 | loopidioms | Loop idiom recognition and store merging: a counted loop that fills or copies memory becomes one `llvm.memset`, `llvm.memcpy` or `llvm.memmove` (LLVM's LoopIdiomRecognize; gcc's loop distribution patterns), and straight-line adjacent stores become one memset or wider stores (LLVM's MemCpyOpt `tryMergingIntoMemset`, MergeConsecutiveStores; gcc's store merging). | Last in the function fixed point: `LoopIdioms`, then `Merge`, after the | [loopidioms](loopidioms.md) |
+| loopinstsimplify | LoopInstSimplify: the instructions of a loop that equal an operand or a constant are replaced by it, and what that leaves dead goes. |  | [loopinstsimplify](loopinstsimplify.md) |
 | loopinterchange | Loop interchange: a loop of a perfect nest swaps places with the loop around it when the dependences allow and the access order says the inner loop should walk the other index (`LoopInterchange.cpp` at `d1106deb71cc`). | -O3 and -Omax, once per body, before the vectorizer's rounds. | [loopinterchange](loopinterchange.md) |
 | loopinterchange_transform | `LoopInterchangeTransform` of `LoopInterchange.cpp` at `d1106deb71cc`: the rewrite that swaps the roles of two adjacent loops of a perfect nest. |  | [loopinterchange_transform](loopinterchange_transform.md) |
 | looploadelim | `LoopLoadElimination`: a load of what the previous iteration stored is replaced by the stored value, carried round the loop in a phi. | In the parity pipeline at `loop-load-elim` (l.1400 of | [looploadelim](looploadelim.md) |

@@ -99,6 +99,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [row45-cost-plan](row45-cost-plan.md) | The Peephole's compile cost by sub-pass at the tip, the LLVM home of each, rows R45-1 to R45-6 with dates (2026-10-24) |
 | [row45-plan](row45-plan.md) | Row 45: PeepholeOptimizer translation plan |
 | [fp-stackifier-plan](fp-stackifier-plan.md) | X86FPStackifier: compile-cost plan |
+| [mssa-build-plan](mssa-build-plan.md) | MemorySSA build cost: the pin builds as often, 11x cheaper per build |
 | [row61-deleted-tests](row61-deleted-tests.md) | Row 61: the tests deleted with the non-RFP route |
 | [row63-66-plan](row63-66-plan.md) | Rows 63 (RegisterCoalescer) and 66 (RAGreedy): translation plan |
 | [row82-plan](row82-plan.md) | Row 82, Control Flow Optimizer: translation plan |
