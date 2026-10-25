@@ -1253,8 +1253,15 @@ impl Topo {
     }
 }
 
-/// `RegReductionPQBase` with `BURegReductionPriorityQueue`: Sethi-Ullman
-/// numbers and `bu_ls_rr_sort`.
+/// `createDefaultScheduler`: X86 enables the machine scheduler and its default
+/// scheduler role (`enableMachineScheduler() &&
+/// enableMachineSchedDefaultSched()`), so the DAG scheduler is
+/// `createSourceListDAGScheduler`: a `SrcRegReductionPriorityQueue`
+/// (`srcorder`), IR order first.
+const SRC_ORDER: bool = true;
+
+/// `RegReductionPQBase` with `SrcRegReductionPriorityQueue`: Sethi-Ullman
+/// numbers and `src_ls_rr_sort`.
 #[derive(Default)]
 struct Queue {
     queue: Vec<usize>,
@@ -1271,7 +1278,11 @@ impl Queue {
         graph: &mut Graph<'_>,
         topo: &mut Topo,
     ) {
-        self.preschedule_nodes_with_multiple_uses(graph, topo);
+        // `!TracksRegPressure && !SrcOrder`: the source-order queue X86 uses
+        // leaves the edges alone.
+        if !SRC_ORDER {
+            self.preschedule_nodes_with_multiple_uses(graph, topo);
+        }
         self.sethi_ullman = vec![0; graph.sus.len()];
         for su in 0..graph.sus.len() {
             self.calc_sethi_ullman(&graph.sus, su);
@@ -1429,7 +1440,19 @@ impl Queue {
         Some(su)
     }
 
-    /// `bu_ls_rr_sort`: whether `right` goes before `left`.
+    /// `getNodeOrdering`: the IR order of the unit's node under `SrcOrder`.
+    fn node_ordering(
+        graph: &Graph<'_>,
+        su: usize,
+    ) -> u32 {
+        if !SRC_ORDER {
+            return 0;
+        }
+        graph.dag.node(SDValue { node: graph.sus[su].node(), res: 0 }).order
+    }
+
+    /// `src_ls_rr_sort`: whether `right` goes before `left`. The lower
+    /// non-zero IR order goes first; `BURRSort` breaks ties.
     fn bu_ls_rr_sort(
         &self,
         graph: &mut Graph<'_>,
@@ -1440,6 +1463,12 @@ impl Queue {
         let (l_low, r_low) = (graph.sus[left].is_schedule_low, graph.sus[right].is_schedule_low);
         if l_low != r_low {
             return l_low < r_low;
+        }
+        if SRC_ORDER {
+            let (l_order, r_order) = (Self::node_ordering(graph, left), Self::node_ordering(graph, right));
+            if (l_order != 0 || r_order != 0) && l_order != r_order {
+                return l_order != 0 && (l_order < r_order || r_order == 0);
+            }
         }
         // BURRSort
         let (l_phys, r_phys) = (graph.sus[left].has_phys_reg_defs, graph.sus[right].has_phys_reg_defs);
@@ -1459,7 +1488,12 @@ impl Queue {
         if l_priority != r_priority {
             return l_priority > r_priority;
         }
-        // The call-ordering tie break reads the IR order (SD31).
+        if graph.sus[left].is_call || graph.sus[right].is_call {
+            let (l_order, r_order) = (Self::node_ordering(graph, left), Self::node_ordering(graph, right));
+            if (l_order != 0 || r_order != 0) && l_order != r_order {
+                return l_order != 0 && (l_order < r_order || r_order == 0);
+            }
+        }
         let (l_dist, r_dist) = (graph.closest_succ(left), graph.closest_succ(right));
         if l_dist != r_dist {
             return l_dist < r_dist;

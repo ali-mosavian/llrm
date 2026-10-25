@@ -43,7 +43,8 @@ fn a_call_is_a_sequence_around_a_call_instruction() {
     // The area is the pin's pseudo pair around the call; `callframe.rs` makes
     // them pushes or `sub`/`add`.
     let called = names.iter().position(|n| n == "call").unwrap();
-    assert_eq!(names.iter().position(|n| n == "call_frame_setup"), Some(0), "{names:?}");
+    // IR order (the source scheduler): `s = a + 1` is built before the call.
+    assert!(names.iter().position(|n| n == "call_frame_setup").is_some_and(|at| at < called), "{names:?}");
     assert_eq!(names.get(called + 1).map(String::as_str), Some("call_frame_destroy"), "{names:?}");
     assert!(!names.iter().any(|n| n == "sub"), "{names:?}");
 }

@@ -173,6 +173,7 @@ impl<'a> TypeLegalizer<'a> {
         }
         while let Some(n) = self.worklist.pop() {
             debug_assert_eq!(self.id(n), NodeId::Ready, "a node on the worklist is ready");
+            self.dag.cur_order = self.dag.node(SDValue { node: n, res: 0 }).order;
             if !self.ignores_results(n) && self.legalize_results(n)? {
                 changed = true;
             } else if self.legalize_operands(n)? {

@@ -207,6 +207,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 }
             }
             self.combined.insert(n);
+            // `SDLoc(N)`: what the combine makes takes the node's order.
+            self.dag.cur_order = self.dag.node(SDValue { node: n, res: 0 }).order;
             let before = self.dag.node_count();
             let result = self.combine(SDValue { node: n, res: 0 });
             for made in before..self.dag.node_count() {
