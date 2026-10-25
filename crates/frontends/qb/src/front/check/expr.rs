@@ -205,6 +205,17 @@ impl Checker {
                 let l = self.scalar(l, left.span());
                 let r = self.scalar(r, right.span());
                 let (l, r) = (l?, r?);
+                if *op == Binary::Multiply && reassociated_overflow(left, right, self.dialect) {
+                    self.err_because(
+                        *span,
+                        "Math overflow",
+                        Reason::headline(
+                            "`{text}` overflows: BC multiplies the constants out of the parentheses while compiling, and their product does not fit a LONG",
+                        )
+                        .help("make the constants smaller, or use a double (`#`) for one of them"),
+                    );
+                    return None;
+                }
                 self.binary(*op, &l, &r, right, *span)
             }
             _ => {
@@ -463,7 +474,12 @@ impl Checker {
             // each subscript that is not a constant holds a temporary: past six
             // when read, seven when assigned, BC gives up
             let variable_subscripts = arguments.iter().filter(|index| !matches!(index, Expr::Literal(..))).count();
-            if variable_subscripts > if self.assigning { 7 } else { 6 } {
+            // QB 4.5 addresses a dynamic array's element with every subscript, a constant too,
+            // in a temporary: past seven when read, eight when assigned
+            let dynamic_limit = var.dynamic
+                && self.dialect == Dialect::QuickBasic45
+                && arguments.len() > if self.assigning { 8 } else { 7 };
+            if dynamic_limit || variable_subscripts > if self.assigning { 7 } else { 6 } {
                 self.err(span, "Expression too complex");
                 return None;
             }
@@ -552,4 +568,47 @@ impl Checker {
         };
         find(&self.scope).or_else(|| find(&self.module_scope))
     }
+}
+
+/// The value of a number literal, a sign of one, or those in parentheses.
+fn literal_number(expr: &Expr) -> Option<f64> {
+    match expr {
+        Expr::Literal(Literal::Integer(value, _), _) => Some(*value as f64),
+        Expr::Literal(Literal::Real(text, _), _) => text.replace('D', "E").parse().ok(),
+        Expr::Unary { op: Unary::Negative, operand, .. } => literal_number(operand).map(|value| -value),
+        Expr::Unary { op: Unary::Positive | Unary::Grouped, operand, .. } => literal_number(operand),
+        _ => None,
+    }
+}
+
+/// `(x +- c1) * c2` and `c2 * (c1 +- x)` with `x` no constant: BC distributes the multiplication and
+/// folds `c1 * c2`, so a product that does not fit a LONG is "Math overflow" although `x` is a
+/// variable. Two INTEGER constants are combined at run time (`(i - 300) * 200`), so one must be
+/// wider than an INTEGER. PDS 7.1 and VBDOS do it for `+` only (either order); QB 4.5 also for
+/// `x - c1`.
+fn reassociated_overflow(
+    left: &Expr,
+    right: &Expr,
+    dialect: Dialect,
+) -> bool {
+    fn inner(expr: &Expr) -> Option<&Expr> {
+        match expr {
+            Expr::Unary { op: Unary::Grouped, operand, .. } => inner(operand),
+            other => Some(other),
+        }
+    }
+    let sum_times = |sum: &Expr, factor: &Expr| -> bool {
+        let Some(Expr::Binary { op: op @ (Binary::Add | Binary::Subtract), left, right, .. }) = inner(sum) else {
+            return false;
+        };
+        let Some(c2) = literal_number(factor) else { return false };
+        let c1 = match (literal_number(left), literal_number(right), *op) {
+            (None, Some(c), Binary::Add) | (Some(c), None, Binary::Add) => c,
+            (None, Some(c), Binary::Subtract) if dialect == Dialect::QuickBasic45 => -c,
+            _ => return false,
+        };
+        let wide = |c: f64| c.abs() > 32767.0 || c.fract() != 0.0;
+        (wide(c1) || wide(c2)) && !(-2147483648.0..=2147483647.0).contains(&(c1 * c2))
+    };
+    sum_times(left, right) || sum_times(right, left)
 }

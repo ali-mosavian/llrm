@@ -2225,6 +2225,48 @@ fn a_type_field_may_be_named_explicit_in_every_dialect_and_rem_in_pds() {
 }
 
 #[test]
+fn bc_distributes_a_constant_product_out_of_parentheses_and_overflows_it() {
+    // `(b - 65536) * 65536` with a LONG variable b is "Math overflow" under QB 4.5 (jpeg_single):
+    // BC folds -65536 * 65536 out of the parentheses. PDS 7.1 and VBDOS do it for `+` only; two
+    // INTEGER constants, and a product that fits, are left alone.
+    let source = |expression: &str| format!("DEFINT A-Z\r\nDIM SHARED b AS LONG\r\nr& = {expression}\r\n");
+    let refused = |expression: &str, dialect| parse(&source(expression), dialect).is_err();
+    assert!(refused("(b - 65536) * 65536", Dialect::QuickBasic45));
+    assert!(refused("65536 * (b - 65536)", Dialect::QuickBasic45));
+    assert!(!refused("(b - 65536) * 65536", Dialect::Pds71));
+    assert!(!refused("(b - 65536) * 65536", Dialect::VbDos));
+    for dialect in [Dialect::QuickBasic45, Dialect::Pds71, Dialect::VbDos] {
+        assert!(refused("(b + 65536) * 65536", dialect), "{dialect:?}");
+        assert!(refused("65536 * (b + 65536)", dialect), "{dialect:?}");
+        assert!(!refused("(b - 1) * 65536", dialect), "{dialect:?}");
+        assert!(!refused("(b - 65536) * 2", dialect), "{dialect:?}");
+    }
+    assert!(!refused("(i - 300) * 200", Dialect::QuickBasic45));
+}
+
+#[test]
+fn qb45_gives_up_on_a_dynamic_array_with_too_many_subscripts() {
+    // tests/inputs/omf/regressions/ndarr.bas: under $DYNAMIC, QB 4.5 raises "Expression too
+    // complex" for a ninth subscript assigned or an eighth read, constants included; the same
+    // array is fine static, and PDS 7.1 and VBDOS take the constant forms.
+    let program = |dynamic: &str, subscripts: usize, statement: &str| {
+        let bounds = vec!["1 TO 2"; subscripts].join(",");
+        let indexes = vec!["1"; subscripts].join(",");
+        let element = format!("a({indexes})");
+        let line = statement.replace("A", &element);
+        format!("{dynamic}DEFINT A-Z\r\nDIM a({bounds}) AS INTEGER\r\n{line}\r\n")
+    };
+    let refused = |source: String, dialect| parse(&source, dialect).is_err();
+    assert!(refused(program("' $DYNAMIC\r\n", 9, "A = 3"), Dialect::QuickBasic45));
+    assert!(refused(program("' $DYNAMIC\r\n", 8, "x = A"), Dialect::QuickBasic45));
+    assert!(!refused(program("' $DYNAMIC\r\n", 8, "A = 3"), Dialect::QuickBasic45));
+    assert!(!refused(program("' $DYNAMIC\r\n", 7, "x = A"), Dialect::QuickBasic45));
+    assert!(!refused(program("", 9, "A = 3"), Dialect::QuickBasic45));
+    assert!(!refused(program("' $DYNAMIC\r\n", 9, "A = 3"), Dialect::Pds71));
+    assert!(!refused(program("' $DYNAMIC\r\n", 9, "A = 3"), Dialect::VbDos));
+}
+
+#[test]
 fn a_declare_without_parentheses_matches_no_definition() {
     // tests/check/qb/stack_entry_*.bas: `DECLARE SUB S` then `SUB S` is "Argument-count mismatch"
     // under QB 4.5, PDS 7.1 and VBDOS alike; `DECLARE SUB S ()` is the form BC takes.
