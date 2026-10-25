@@ -160,3 +160,21 @@ fn a_quadword_divide_and_negate_take_a_memory_operand() {
     let neg = sem(Operation::Unary, Some("neg"), vec![cell()], vec![cell()], None, false);
     assert_eq!(bytes(&neg), [0x48, 0xf7, 0x5d, 0x00]);
 }
+
+/// `movzx esi, byte [bp + rdx - 20]` (a frame array's element, the frame
+/// token a word register) panicked in iced's encoder (mixed address sizes)
+/// when a pass priced it before the frame layout named the token; it is
+/// unencodable there, not a panic.
+#[test]
+fn a_frame_cell_with_a_wide_index_is_not_encodable_before_the_frame_is_named() {
+    let cell = ir::Mem {
+        through: RegId::BP,
+        index: Some(llrm_lir::Held { value: 1, width: 8 }),
+        index_through: RegId::RDX,
+        scale: 1,
+        disp_width: 2,
+        ..ir::Mem::new(Some(llrm_lir::Addr::new(Space::Frame, -20)), 1)
+    };
+    let load = sem(Operation::Extend, Some("movzx"), vec![rg(RegId::ESI, 4)], vec![Loc::Mem(cell)], None, false);
+    assert!(emit_in(64, &load, 0, None, false, false, None).is_none());
+}
