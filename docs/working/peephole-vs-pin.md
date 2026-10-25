@@ -1,6 +1,6 @@
 # Peephole against the pin: where the Ir goes
 
-2026-10-25, d_faces -O2 m32, callgrind. Ours: dist build 898f99e494 (Peephole unchanged since). Pin: `llc -O2 -mtriple=i486 -mcpu=i486` on the clang IR of d_faces (`/tmp/w2df.ll`), so the inputs differ in IR, not in program.
+2026-10-25, d_faces -O2 m32, callgrind. Ours: dist build 898f99e494 (Peephole unchanged since). Pin: `llc -O2 -mtriple=i486 -mcpu=i486` on the clang IR of d_faces (`w2df.ll`), so the inputs differ in IR, not in program.
 
 Ours: Peephole 46.8 M, ControlFlow 18.0, LateCleanup 4.9. The pin's post-RA passes together are about 12 M (MachineCopyPropagation 2.8, ReachingDef 3.2 for BreakFalseDeps/ExecutionDomainFix, BranchFolder 2.0, X86FixupBW 1.1, MachineLateInstrsCleanup 1.0, ExecutionDomainFix 0.8, PostRAMachineSink 0.25).
 
