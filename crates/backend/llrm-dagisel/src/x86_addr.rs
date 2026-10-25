@@ -36,7 +36,7 @@
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L270
 
 use crate::dag::{Dag, SDValue};
-use crate::generated::ids::{isd, mvt, x86, x86isd};
+use crate::generated::ids::{isd, mvt, target_opcode, x86, x86isd};
 use crate::matcher::Vt;
 
 /// `SelectionDAG::MaxRecursionDepth`.
@@ -972,6 +972,53 @@ impl<D: AddrDag> Matcher<'_, D> {
         }
         let vt = self.dag.value_type(n);
         Some(self.get_address_operands(am, vt))
+    }
+
+    /// `selectLEA64_Addr` ([L3282][lea64]): `selectLEAAddr`, then a register
+    /// narrower than 64 bits is widened with `INSERT_SUBREG` into an
+    /// `IMPLICIT_DEF`, as `LEA64_32r` and its 8/16-bit kin read 64-bit
+    /// registers.
+    ///
+    /// [lea64]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3282
+    pub fn select_lea64_addr(
+        &mut self,
+        n: SDValue,
+    ) -> Option<AddressOperands> {
+        let mut ops = self.select_lea_addr(n)?;
+        let base_type = self.dag.value_type(ops.base);
+        let sub_reg = if base_type == mvt::i8 {
+            x86::sub_8bit
+        } else if base_type == mvt::i16 {
+            x86::sub_16bit
+        } else {
+            x86::sub_32bit
+        };
+        if self.dag.register_of(ops.base.node) == Some(0) {
+            ops.base = self.dag.register(0, mvt::i64);
+        } else if matches!(base_type, t if t == mvt::i8 || t == mvt::i16 || t == mvt::i32)
+            && self.dag.opcode(ops.base.node) != isd::FrameIndex
+            && self.dag.opcode(ops.base.node) != isd::TargetFrameIndex
+        {
+            ops.base = self.insert_subreg(sub_reg, ops.base);
+        }
+        if self.dag.register_of(ops.index.node) == Some(0) {
+            ops.index = self.dag.register(0, mvt::i64);
+        } else {
+            ops.index = self.insert_subreg(sub_reg, ops.index);
+        }
+        Some(ops)
+    }
+
+    /// `getTargetInsertSubreg` into an `IMPLICIT_DEF` of 64 bits.
+    fn insert_subreg(
+        &mut self,
+        sub_reg: u16,
+        value: SDValue,
+    ) -> SDValue {
+        let undef = SDValue::new(self.dag.machine_node(target_opcode::IMPLICIT_DEF, &[mvt::i64], &[]), 0);
+        let index = self.dag.target_constant(i64::from(sub_reg), mvt::i32);
+        SDValue::new(self.dag.machine_node(target_opcode::INSERT_SUBREG, &[mvt::i64], &[undef, value, index]), 0)
     }
 
     /// `selectLEAAddr` ([L3329][lea]): an address worth an `lea` instruction.

@@ -804,6 +804,7 @@ pub mod x86 {
     pub const XOR8mi: u16 = 22709;
     pub const XOR8mr: u16 = 22715;
     pub const sub_16bit: u16 = 4;
+    pub const sub_32bit: u16 = 6;
     pub const sub_8bit: u16 = 1;
     pub const sub_8bit_hi: u16 = 2;
     /// The extras that are instructions, by number.

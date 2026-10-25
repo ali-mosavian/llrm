@@ -1907,6 +1907,34 @@ mod x64_table {
         assert_ne!(dag.nodes[base.node as usize].register, Some(crate::generated::ids::x86::RIP));
     }
 
+    /// An `i32` address sum at 64 bits is `LEA64_32r`; there is no `LEA32r` in
+    /// 64-bit mode (D64-1).
+    #[test]
+    fn an_i32_address_sum_is_lea64_32r() {
+        let mut dag = TestDag::new();
+        let (base, index) = (dag.input(1, mvt::i32), dag.input(2, mvt::i32));
+        let two = dag.make_constant(2, mvt::i8);
+        let scaled = SDValue::new(dag.node(isd::SHL, &[mvt::i32], &[index, two]), 0);
+        let sum = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[base, scaled]), 0);
+        let eight = dag.make_constant(8, mvt::i32);
+        let address = dag.node(isd::ADD, &[mvt::i32], &[sum, eight]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::X64,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat64,
+        });
+        assert_eq!(select_node(&Selector::new(x64::TABLE), &mut dag, &mut hooks, address), Outcome::Selected);
+        let names: Vec<_> = dag.nodes.iter().filter_map(|n| n.machine).map(names).collect();
+        assert_eq!(
+            names,
+            ["LEA64_32r", "IMPLICIT_DEF", "INSERT_SUBREG", "IMPLICIT_DEF", "INSERT_SUBREG"],
+            "base and index widened"
+        );
+    }
+
     #[test]
     fn an_i32_add_is_still_add32rr() {
         assert_eq!(selected_names(mvt::i32), ["ADD32rr"]);

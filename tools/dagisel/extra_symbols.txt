@@ -283,4 +283,5 @@ X86ISD::Wrapper
 X86ISD::WrapperRIP
 X86ISD::XOR
 X86::SBB32rr
+X86::sub_32bit
 X86::sub_8bit
