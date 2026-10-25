@@ -2376,3 +2376,22 @@ fn redim_preserve_calls_b_rdmp_with_redims_operands() {
     assert_eq!(kept.matches("\"callee\":\"B$RDMP\"").count(), 1, "{kept}");
     assert_eq!(plain.matches("\"callee\":\"B$RDMP\"").count(), 0, "{plain}");
 }
+
+#[test]
+fn open_with_access_lock_len_or_random_passes_rtps_inc_mode_word() {
+    // OPEN with ACCESS, LOCK, LEN or no FOR was refused. The mode word is
+    // rtps.inc's: the mode in the low byte (RANDOM when none is written),
+    // ACCESS and LOCK/SHARED in the high one.
+    let call = |open: &str| {
+        let source = format!("OPEN \"F\" {open}\r\n");
+        let module = parse(&source, Dialect::Pds71).unwrap();
+        let hir = compile(&module, "open", Dialect::Pds71, "pds71").unwrap();
+        let at = hir.find("\"callee\":\"B$OPEN\"").expect("B$OPEN");
+        let call = &hir[at..at + hir[at..].find("\"pure\"").unwrap()];
+        call.rsplit("\"value\":").next().unwrap().trim_end_matches(|c: char| !c.is_ascii_digit()).to_owned()
+    };
+    assert_eq!(call("AS #1"), "4");
+    assert_eq!(call("FOR INPUT ACCESS READ AS #1"), "257");
+    assert_eq!(call("FOR RANDOM ACCESS READ WRITE LOCK WRITE AS #1 LEN = 20"), "8964");
+    assert_eq!(call("FOR BINARY SHARED AS #1"), "16416");
+}
