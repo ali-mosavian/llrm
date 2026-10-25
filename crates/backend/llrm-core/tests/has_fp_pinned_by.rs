@@ -23,7 +23,7 @@ fn pinned(
     what: Semantics,
     registers: &FrameRegisters,
 ) -> Option<Pinned> {
-    pinned_by(&body_of(what), registers, &Default::default(), false)
+    pinned_by(&body_of(what), registers, &Default::default())
 }
 
 #[test]
@@ -54,8 +54,8 @@ fn test_each_fact_that_keeps_the_frame_register_is_named() {
 fn test_inline_code_keeps_the_frame_register() {
     let registers = llrm_x86_m32::M32.frame_registers();
     let body = body_of(Semantics::new(Operation::Nothing));
-    assert!(!has_fp(&body, &registers, &Default::default(), false, false, false, false));
-    assert!(has_fp(&body, &registers, &Default::default(), true, false, false, false));
+    assert!(!has_fp(&body, &registers, &Default::default(), false, false, false));
+    assert!(has_fp(&body, &registers, &Default::default(), true, false, false));
 }
 
 /// A call frame the machine passes have not lowered yet (`call_frame_setup`
@@ -81,10 +81,17 @@ fn test_call_frame_pseudos_are_a_depth_the_walk_follows() {
         registers: Some(llrm_core::backend::registerinfo::Regs(llrm_x86_m32::M32.registers())),
         ..LirBody::new("f", 0, vec![Block::from(LirBlock::new(0, insns))], IndexMap::default(), IndexMap::default())
     };
-    assert_eq!(pinned_by(&body, &registers, &Default::default(), false), None);
-    assert_eq!(
-        pinned_by(&body, &registers, &Default::default(), true),
-        Some(Pinned::OpaqueSpAdjustment),
-        "tuned for size, as a push of a value"
-    );
+    assert_eq!(pinned_by(&body, &registers, &Default::default()), None);
+}
+
+/// Tuned for size, a pushed value kept the frame register (`pinned_by` took a
+/// `size` flag); the pin's `hasFP` has no such rule, so m32 -Os kept `ebp`
+/// from the allocator in every function that pushed an argument (QCport -Os
+/// 262,607 B against 267,607 B without the rule, a size row).
+#[test]
+fn test_a_pushed_value_does_not_keep_the_frame_register() {
+    let registers = llrm_x86_m32::M32.frame_registers();
+    let held = Loc::Held(llrm_core::model::ir::Held { value: 1, width: 4 });
+    let push = Semantics { name: Some("push".into()), sources: vec![held], ..Semantics::new(Operation::Push) };
+    assert_eq!(pinned(push, &registers), None);
 }
