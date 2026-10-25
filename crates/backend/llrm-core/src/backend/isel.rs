@@ -1161,6 +1161,7 @@ pub fn selected_with<'c>(
         .collect();
     body.arguments_in_cells = Arc::new(cells);
     body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
+    body.min_size = llrm_mir::memory::has(&function.attrs, "minsize");
     // An inlined callee's variables are not this procedure's.
     body.variables.extend(selector.variables.into_iter().filter(|(scope, _)| scope == name).map(|(_, one)| one));
     // A parameter's home is written after the entry: until then its argument is
