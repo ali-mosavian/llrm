@@ -39,7 +39,7 @@
 //! `visitMUL`
 //! ([L4908](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4908)).
 
-use std::collections::HashSet;
+use llrm_support::hash::HashSet;
 
 use super::actions::{Action, LoadExt, TargetLowering};
 use super::dag::{MemInfo, NodeData, Rauw, SDNodeFlags, SDValue, SelectionDAG};
@@ -127,8 +127,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             hooks,
             level,
             worklist: Vec::new(),
-            queued: HashSet::new(),
-            combined: HashSet::new(),
+            queued: HashSet::default(),
+            combined: HashSet::default(),
             tli: None,
         }
     }
