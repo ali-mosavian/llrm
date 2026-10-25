@@ -1,4 +1,4 @@
-// flags: -O2 -march=i486 -m32 -fno-inline-functions -fno-inline-functions-called-once
+// flags: -O2 -march=i486 -fno-inline-functions -fno-inline-functions-called-once | -O2 -march=i486 -m32 -fno-inline-functions -fno-inline-functions-called-once
 /* Calls in tail position that reuse the caller's frame: the callee gets the caller's own arguments, a frame with saved
    registers and locals is taken down first, the callee's result is the caller's, and calls that cannot be sibling calls
    (swapped arguments, an extra argument, an escaping local) still return the right values. */

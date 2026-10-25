@@ -53,3 +53,24 @@ def test_a_backend_pass_in_no_bucket_is_refused_not_left_to_the_residual(tmp_pat
     )
     assert done.returncode != 0
     assert "backend passes in no bucket" in done.stderr and "newpass::NewPass" in done.stderr, done.stderr
+
+
+def test_the_peephole_optimizer_is_in_a_bucket_and_in_the_pass_table():
+    """`peepholeopt::PeepholeOptimizer` ran in the machine clean-up phase with no bucket: the tool refused every d_faces profile
+    ('backend passes in no bucket') and no bucket table could be made on current parity."""
+    here = Path(__file__).parent
+    assert "peepholeopt::PeepholeOptimizer" in (here / "ledger4.py").read_text()
+    assert "peepholeopt::PeepholeOptimizer" in (here / "passtable.py").read_text()
+
+
+def test_constraint_elimination_is_in_a_bucket_as_the_pins_is():
+    """The pin's ConstraintElimination is in the SimplifyCFG/JumpThreading/CVP bucket; ours was in none, so its 9.7 M Ir read as
+    residual and the bucket's excess was 9.7 M short."""
+    assert "constraintelim::ConstraintElimination" in (Path(__file__).parent / "ledger4.py").read_text()
+
+
+def test_the_two_loop_passes_of_the_lpm_are_in_the_loop_bucket():
+    """LoopInstSimplify and LoopSimplifyCFG were in no bucket of ours (15.6 M Ir read as residual) while the pin's are in the loop
+    bucket; the residual was 15.6 M too high and the loop bucket's excess too low."""
+    text = (Path(__file__).parent / "ledger4.py").read_text()
+    assert "loopinstsimplify::LoopInstSimplify" in text and "loopsimplifycfg::LoopSimplifyCfg" in text

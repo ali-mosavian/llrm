@@ -208,8 +208,17 @@ impl Builder<'_> {
     }
 
     /// `X86TargetLowering::getOptimalMemOpType` without SSE or 64-bit mode:
-    /// `i32` in every mode, `-m16` included (a dword store is a prefix away).
+    /// `i32` outside 64-bit mode, `-m16` included (a dword store is a prefix
+    /// away).
     const WIDEST_MEM_OP: u64 = 4;
+
+    /// `i64` for eight bytes or more where the pointer is 64 bits wide.
+    fn widest_mem_op(
+        &self,
+        size: u64,
+    ) -> u64 {
+        if self.target.dag.pointer.size_in_bits() == 64 && size >= 8 { 8 } else { Self::WIDEST_MEM_OP }
+    }
 
     /// `findOptimalMemOpLowering` for x86 without SSE: the width in bytes of
     /// each memory operation covering `size` bytes, the widest being `i32`;
@@ -277,7 +286,7 @@ impl Builder<'_> {
         src_align: u64,
     ) -> Result<Option<SDValue>, Refused> {
         let slice = self.constant_slice(src);
-        let widest = Self::WIDEST_MEM_OP;
+        let widest = self.widest_mem_op(size);
         let Some(ops) = Self::mem_ops(size, widest, limit, false) else { return Ok(None) };
         let (mut src_off, mut dst_off, mut left) = (0u64, 0u64, size);
         let mut chains = Vec::new();
@@ -352,7 +361,7 @@ impl Builder<'_> {
         dst_align: u64,
         src_align: u64,
     ) -> Result<Option<SDValue>, Refused> {
-        let widest = Self::WIDEST_MEM_OP;
+        let widest = self.widest_mem_op(size);
         let Some(ops) = Self::mem_ops(size, widest, limit, false) else { return Ok(None) };
         let (mut off, mut left) = (0u64, size);
         let mut loads = Vec::new();
@@ -405,7 +414,7 @@ impl Builder<'_> {
         limit: usize,
         align: u64,
     ) -> Result<Option<SDValue>, Refused> {
-        let widest = Self::WIDEST_MEM_OP;
+        let widest = self.widest_mem_op(size);
         let Some(ops) = Self::mem_ops(size, widest, limit, false) else { return Ok(None) };
         let largest = ops.iter().copied().max().expect("a store");
         let largest_vt = EVT::integer(largest as u32 * 8);

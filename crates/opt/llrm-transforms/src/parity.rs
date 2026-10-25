@@ -166,6 +166,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("loopsimplify@764", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@764", Simplify, "lcssa", Old, "lcssa-port"),
     entry("loop-instsimplify@715", Simplify, "loop-instsimplify", Translated, ""),
+    entry("loop-simplifycfg@716", Simplify, "loop-simplifycfg", Translated, ""),
     entry("floatloop@724", Simplify, "licm", Old, "licm-port"),
     entry("licm@724", Simplify, "licm<no-allowspeculation>", Translated, ""),
     entry("licm@730", Simplify, "licm<allowspeculation>", Translated, ""),
@@ -315,7 +316,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "simplifycfg",
         "translated SimplifyCfg at the default options runs here; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting; criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those translated (llrm-w-4, 2026-10-30)",
     ),
-    entry("loop-simplifycfg", Simplify, "loop-simplifycfg", Missing, ""),
     // LSR runs in llc's IR preparation (`TargetPassConfig::addIRPasses`,
     // l.874), after this pipeline, so a Module slot (it follows the
     // interprocedural step):
@@ -342,7 +342,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "machinecse@4",
         Backend,
         "machine-cse",
-        "criterion: a repeated pure computation before phi elimination is made once, rows identical or better and the post-RA machinecse step deletable; exit: PerformSimplePRE and the invariant-load candidate",
+        "criterion: a repeated pure computation before phi elimination is made once, rows identical or better, the post-RA machinecse step deleted (row CSE5); exit: PerformSimplePRE and the invariant-load candidate",
     ),
     partial(
         "machinesink@4",

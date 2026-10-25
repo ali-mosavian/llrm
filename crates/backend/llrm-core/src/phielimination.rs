@@ -224,7 +224,9 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
             if reused.is_none() {
                 born.insert(incoming, phi.result);
             }
-            // The copy at the top of the block, after any remaining phis.
+            // The copy at the top of the block, after any remaining phis
+            // (`head` is in lowering order; the block gets it
+            // reversed).
             head.entry(block.at).or_default().push(phielim::_copy(block, phi.result, incoming, None, width));
             if reused.is_some() {
                 continue;
@@ -257,7 +259,10 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
         let first = block.insns.iter().position(|one| !one.arrival()).unwrap_or(block.insns.len());
         let tail = phielim::_before_the_terminator(block, tails.get(&block.at).map_or(&[][..], Vec::as_slice));
         insns.extend(tail[..first].iter().cloned());
-        insns.extend(head.get(&block.at).into_iter().flatten().cloned());
+        // Each copy is made before the ones made earlier: the pin inserts at
+        // `std::next(LastPHIIt)`, the node after the last phi, which is the
+        // previous copy once there is one.
+        insns.extend(head.get(&block.at).into_iter().flatten().rev().cloned());
         insns.extend(tail[first..].iter().cloned());
         *block = LirBlock { insns: insns.into(), phis: Vec::new().into(), ..(**block).clone() }.into();
     }
@@ -501,7 +506,12 @@ mod tests {
 
     /// Two counters carried round a loop: each phi gets a register of its own,
     /// the copies at the end of the loop write those, and the top of the loop
-    /// copies them into the phis' results.
+    /// copies them into the phis' results, the last phi's first (the pin's
+    /// `LowerPHINode` inserts each copy before the earlier ones).
+    ///
+    /// x_list's sum loop kept the copy of the new pointer ahead of the copy of
+    /// the old one, so the old pointer was live across the new one's definition
+    /// and took a register of its own: +1 instruction a trip.
     #[test]
     fn test_independent_phis_are_lowered_through_registers_of_their_own() {
         let phis = vec![
@@ -518,11 +528,11 @@ mod tests {
         let (pre, lop) = (copies(&now.blocks[0]), copies(&now.blocks[1]));
         assert_eq!(pre.len(), 2, "one copy for each phi at the end of the entry: {pre:?}");
         assert_eq!(lop.len(), 4, "{lop:?}");
-        assert_eq!((lop[0].0, lop[1].0), (10, 11), "the results are copied at the top");
+        assert_eq!((lop[0].0, lop[1].0), (11, 10), "the results are copied at the top, last phi first");
         let (first, second) = (lop[2], lop[3]);
         assert_eq!((first.1, second.1), (12, 13));
         assert!(first.0 != 10 && first.0 != 11 && second.0 != 10 && second.0 != 11, "into registers made for the phis");
-        assert_eq!((lop[0].1, lop[1].1), (first.0, second.0), "the top reads what the end wrote");
+        assert_eq!((lop[0].1, lop[1].1), (second.0, first.0), "the top reads what the end wrote");
     }
 
     /// `a = phi [.., b]`, `b = phi [.., c]`: a hands over `b`, which another

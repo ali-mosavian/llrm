@@ -380,6 +380,7 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
                         (llrm_dagisel::x86_llrm::FARCALL_OPCODE, "CALL_FAR"),
                         (llrm_dagisel::x86_llrm::CODE_OPCODE, "CALL_CODE"),
                         (llrm_dagisel::x86_llrm::PORT_OPCODE, "PORT_IO"),
+                        (llrm_dagisel::x86_llrm::TC_RETURN_OPCODE, "TCRETURN_16"),
                         (llrm_dagisel::x86_llrm::FLN_OPCODE, "LN_Fp80"),
                         (llrm_dagisel::x86_llrm::FEXP_OPCODE, "EXP_Fp80"),
                         (llrm_dagisel::x86_llrm::FLOG2_OPCODE, "LOG2_Fp80"),
@@ -620,7 +621,7 @@ fn selected_in(
     let builder_target = builder_target
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)
-        .with_tail_calls(!m16 && (std::env::var_os("LLRM_TAIL_CALLS").is_some() || TAIL_CALLS.get()))
+        .with_tail_calls(std::env::var_os("LLRM_TAIL_CALLS").is_some() || TAIL_CALLS.get())
         .with_tti(cpu.target().tti())
         .with_runtime_call_verdicts(
             contracts.map(|contracts| runtime_call_verdicts(module, function, &layout, arch, contracts.abi)),

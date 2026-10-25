@@ -854,7 +854,7 @@ impl Builder<'_> {
         )
         .map_err(|_| Refused("call the convention does not describe"))?;
         if let Some(tail) = self.tail_candidate.take()
-            && self.eligible_for_sibling_call(info, &plan, variadic, direct.is_some(), arguments)
+            && self.eligible_for_sibling_call(info, &plan, variadic, direct, first, arguments)
         {
             self.tail_calls.push(tail);
             self.sibcall = self.target.tail_calls;
@@ -1130,7 +1130,13 @@ impl Builder<'_> {
             // arguments are in place), the registers
             let fpdiff = self.dag.get_constant_with(0, EVT::I32, true, false);
             ops.insert(2, fpdiff);
-            let tc = self.dag.get_node_multi(super::x86isd::TC_RETURN, &[EVT::OTHER], &ops);
+            // the pin has no 16-bit pattern: m16 has a node of its own
+            let node = if self.target.dag.pointer == EVT::I16 {
+                super::x86isd::LLRM_TC_RETURN
+            } else {
+                super::x86isd::TC_RETURN
+            };
+            let tc = self.dag.get_node_multi(node, &[EVT::OTHER], &ops);
             self.dag.set_root(tc);
             self.had_tail_call = true;
             return Ok(None);

@@ -784,8 +784,8 @@ pub fn _items(
         masm::Item::Callee(masm::Callee { name, far: true, .. }) if model == CodeModel::Flat32 => {
             return Err(Unencodable(format!("a far call to {name} in flat code")));
         }
-        masm::Item::Callee(masm::Callee { name, far: true, .. }) => vec![Encoded::Piece(Piece {
-            code: vec![0x9A, 0, 0, 0, 0],
+        masm::Item::Callee(masm::Callee { name, far: true, tail, .. }) => vec![Encoded::Piece(Piece {
+            code: vec![if *tail { 0xEA } else { 0x9A }, 0, 0, 0, 0],
             fixups: vec![Fixup::new(1, POINTER, name.clone())],
         })],
         masm::Item::Callee(masm::Callee { name, tail, .. }) => {
