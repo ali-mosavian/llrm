@@ -591,3 +591,46 @@ fn two_loads_through_es_read_their_own_selectors() {
     assert_eq!(selectors.len(), 2, "{selectors:?}");
     assert_ne!(selectors[0], selectors[1], "both loads take one selector");
 }
+
+/// A far pointer made from a `long` call result (`(unsigned char far *)
+/// qglSfAccessWrEx(..)`), then cleared by a loop: QCport `part.c` stopped at
+/// "a string operation on a pointer of no known segment".
+const FAR_FROM_A_CALL_RESULT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+define i16 @f(i32 %sf) addrspace(1) {
+b1:
+  %r = call addrspace(1) i32 @acc(i32 %sf, i16 0, i16 1)
+  %p = inttoptr i32 %r to ptr addrspace(1)
+  %n = ptrtoint ptr addrspace(1) %p to i32
+  %z = icmp eq i32 %n, 0
+  br i1 %z, label %b4, label %b2
+b2:
+  %q = inttoptr i32 %r to ptr addrspace(1)
+  call void @llvm.memset.p1.i16(ptr addrspace(1) align 1 %q, i8 0, i16 16384, i1 false)
+  br label %b4
+b4:
+  %v = phi i16 [ 0, %b1 ], [ 1, %b2 ]
+  ret i16 %v
+}
+declare i32 @acc(i32, i16, i16) addrspace(1)
+declare void @llvm.memset.p1.i16(ptr addrspace(1) nocapture writeonly, i8, i16, i1 immarg)
+";
+
+#[test]
+fn a_far_pointer_from_a_call_result_has_its_selector_for_a_fill() {
+    let module = llrm_mir::parse::module(FAR_FROM_A_CALL_RESULT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+    // The selector is the high word of the result: `shr r, 16`.
+    let insns = done.body.insns();
+    let shifts_by_16 = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .any(
+            |w| w.name.as_deref() == Some("shr")
+                && matches!(
+                    w.sources.last(),
+                    Some(crate::model::ir::Loc::Imm(imm)) if imm.value == 16
+                ),
+        );
+    assert!(shifts_by_16);
+}

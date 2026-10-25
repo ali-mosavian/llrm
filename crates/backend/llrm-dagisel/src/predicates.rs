@@ -150,6 +150,17 @@ pub fn memory_vt_f80<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
     memory_vt_is(args, mvt::f80)
 }
 
+/// `nontemporalstore`: the builder sets no `!nontemporal`, so none is.
+pub fn non_temporal_store<D: Dag, H: Hooks<D>>(_: Args<D, H>) -> bool {
+    false
+}
+
+/// `CommutableCMPCC`: a `cmpss`/`cmpsd` predicate whose operands may swap
+/// (EQ, UNORD, NEQ, ORD).
+pub fn commutable_cmp_cc<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
+    imm(args, |i| matches!(i & 0x7, 0 | 3 | 4 | 7))
+}
+
 /// `fp32imm0`: `N->isPosZero()`.
 pub fn is_pos_zero<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
     fp_imm_pos_zero(args)
