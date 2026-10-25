@@ -76,7 +76,8 @@ fn tools() -> Vec<Tool> {
 }
 
 /// Binaries that name no target, and why.
-const EXEMPT: [(&str, &str); 3] = [
+const EXEMPT: [(&str, &str); 4] = [
+    ("qbfront", "prints HIR text; takes -m through the shared flag parser"),
     ("llrm-mir", "reads MIR, which states its own datalayout"),
     ("llrm-pass", "runs one pass on MIR text, which states its own datalayout"),
     ("nib-lsp", "takes the target in `initialize` (`mode`), tested with the server"),
@@ -101,7 +102,7 @@ fn every_binary_is_classified() {
     let known: Vec<&str> = tools().iter().map(|one| one.name).chain(EXEMPT.iter().map(|(name, _)| *name)).collect();
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut binaries: Vec<String> = Vec::new();
-    for directory in ["src/bin", "crates/frontends/qbfront/src/bin"] {
+    for directory in ["src/bin", "crates/frontends/qb/src/bin"] {
         for entry in std::fs::read_dir(root.join(directory)).unwrap().flatten() {
             binaries.push(entry.path().file_stem().unwrap().to_string_lossy().into_owned());
         }

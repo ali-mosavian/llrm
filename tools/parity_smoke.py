@@ -458,9 +458,9 @@ def failing_programs(output: str) -> list[str]:
 # A PR touching one of these changes what a BASIC (or any) program prints without a unit test saying so: log_exp_digits, pow_stack_depth and pow_unrolled went red on
 # parity for 12 results and the gate, which ran a dozen programs, did not see it. Such a PR runs every tests/run group (75 s of wall in all, the qb group 6 s).
 WHOLE_GROUP_TRIGGERS = (
-    "crates/frontends/llrm-qb/",
-    "crates/frontends/qbfront/",
-    "crates/frontends/llrm-qbruntime/",
+    "crates/frontends/qb/",
+    "crates/frontends/qb/",
+    "runtime/qb/",
     "runtime/qb/",
     "crates/target/llrm-x86/",
     "crates/backend/llrm-core/",
