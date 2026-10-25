@@ -84,7 +84,7 @@ fn main() {
     let mut hooks = X86Hooks::new(Options {
         cpu,
         opt_none: false,
-        opt_for_size: false,
+        opt_for_size: std::env::var_os("OPTSIZE").is_some(),
         min_size: false,
         has_frame_pointer: true,
         address_mode,

@@ -227,7 +227,6 @@ const ROWS: &[Disposition] = &[
         "errno-setting libm calls; ablation 0 of 12 IRs",
         "funcattrs-port, 11-09",
     ),
-    row(Simplify, "constraint-elimination", Why::Missing, "registry Missing entry; ablation 0 of 12 IRs", "w-4, 11-09"),
     row(
         Simplify,
         "loop-instsimplify",
