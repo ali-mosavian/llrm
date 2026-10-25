@@ -153,3 +153,16 @@ def test_a_build_refusal_names_the_error_of_the_prs_own_alone_build_not_the_batc
     errors: dict[str, str] = {}
     assert ps.build_offenders(["4648", "4743"], merge_alone, check, errors) == ["4648"]
     assert errors == {"4648": "floatassign.rs:124:38: unused import: `live`"}
+
+
+def test_a_pr_whose_only_issue_is_a_fmt_difference_is_kept(tmp_path):
+    """The first `alone` precheck dropped #4736 and #4744 for `fmt.sh would change selectiondag/emit.rs`; the squash formats every PR, so the s3 pair started its batch without them."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    head = branch(repo, "pr", "emit.rs", "fn  f( ){}\n")
+    sh(repo, "checkout", "-q", "main")
+    why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: {"emit.rs"}, scanners=lambda _: set())
+    assert why == [], why

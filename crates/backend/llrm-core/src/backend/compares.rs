@@ -25,12 +25,12 @@
 //!
 //! ```mir
 //! define i8 @f(i16 %a, i16 %b) {
-//!   %0 = icmp ugt i16 %a, %b
-//!   %1 = zext i1 %0 to i8
-//!   %2 = icmp ult i16 %a, %b
-//!   %3 = zext i1 %2 to i8
-//!   %4 = sub i8 %1, %3
-//!   ret i8 %4
+//!   %1 = icmp ugt i16 %a, %b
+//!   %2 = zext i1 %1 to i8
+//!   %3 = icmp ult i16 %a, %b
+//!   %4 = zext i1 %3 to i8
+//!   %5 = sub i8 %2, %4
+//!   ret i8 %5
 //! }
 //! ```
 //!

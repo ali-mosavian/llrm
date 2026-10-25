@@ -2021,3 +2021,18 @@ pub(crate) fn allocate_generated_bodies(count: u64) {
         phase.transform(body).expect("allocated");
     }
 }
+
+/// The allocator asked `constrain::required` of the same body twice (2.16 M
+/// Ir on d_faces -O2): one allocation asks it once.
+#[test]
+fn test_one_allocation_asks_what_the_body_requires_once() {
+    let shape = Shape { pool: 7, ops: 6 };
+    let asked = |seed| {
+        let before = crate::backend::constrain::REQUIRED_ASKED.with(|asked| asked.get());
+        allocated(seed, &shape, "486").expect("allocates");
+        crate::backend::constrain::REQUIRED_ASKED.with(|asked| asked.get()) - before
+    };
+    for seed in [0, 1, 2] {
+        assert_eq!(asked(seed), 1, "seed {seed}");
+    }
+}
