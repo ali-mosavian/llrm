@@ -218,3 +218,12 @@ Result on the Mac (macOS 27.2, M3, real SDL2 2.32.10, `llrm-qb --arm64=darwin -O
   as angle 45 and velocity 60 passes the turn to Player 2 and leaves
   [a crater](qb-host-shots/mac-gorilla-after-throw.png).
 - Not checked: the banana in flight, sound in the games, GORILLA's second round and score screen.
+
+### NIBBLES reference screens (2026-10-25)
+
+DOS (BCOM45, DOSBox): [level 1](qb-host-shots/dos-nibbles-level1.png), [after a death](qb-host-shots/dos-nibbles-dies.png).
+arm64 under qemu, same keys: [mid-game](qb-host-shots/arm64-nibbles-midgame.png) (snake and a number),
+[second life](qb-host-shots/arm64-nibbles-second-life.png), [fourth life](qb-host-shots/arm64-nibbles-fourth-life.png).
+The arena is blue on every life. The Mac's brown arena was a backend bug: `adrp` of a global plus an offset carried no
+offset, so `arena(i, j).acolor` was read 4096 bytes off (a colour of -1, then "Illegal function call" under qemu).
+Fixed in 022aeb0a3; rebuild the Mac objects.
