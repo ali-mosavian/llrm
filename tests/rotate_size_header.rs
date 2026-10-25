@@ -3,7 +3,7 @@
 
 use std::process::Command;
 
-fn listing(
+fn rotate_size_listing(
     source: &str,
     flags: &[&str],
 ) -> String {
@@ -28,18 +28,18 @@ const COUNT: &str = "extern void use(int);\nvoid count(int n) { int i; for (i = 
 /// a long header (load, arithmetic, compare, branch) was copied above the loop.
 #[test]
 fn at_os_a_header_with_a_load_is_not_copied() {
-    let text = listing(WALK, &["-m16", "-march=i386", "-Os"]);
+    let text = rotate_size_listing(WALK, &["-m16", "-march=i386", "-Os"]);
     assert_eq!(text.matches("[si]").count(), 1, "{text}");
 }
 
 #[test]
 fn at_o2_the_same_header_is_copied() {
-    let text = listing(WALK, &["-m16", "-march=i386", "-O2"]);
+    let text = rotate_size_listing(WALK, &["-m16", "-march=i386", "-O2"]);
     assert_eq!(text.matches("[si]").count(), 2, "{text}");
 }
 
 #[test]
 fn at_os_a_compare_and_branch_header_is_still_rotated() {
-    let text = listing(COUNT, &["-m16", "-march=i386", "-Os"]);
+    let text = rotate_size_listing(COUNT, &["-m16", "-march=i386", "-Os"]);
     assert!(!text.contains("jmp"), "{text}");
 }
