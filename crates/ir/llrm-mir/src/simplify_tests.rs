@@ -1212,3 +1212,19 @@ fn a_load_of_a_constant_table_at_a_constant_offset_is_the_element() {
     assert_eq!(simplified(&table("constant", &at.replace("load i16", "load volatile i16")), "v"), None);
     assert_eq!(simplified(&table("global", at), "v"), None);
 }
+
+/// `simplifyICmpWithMinMax` matches intrinsic calls: an icmp of two values that
+/// are not calls asks no name. It made eight lookups an icmp, 1.4 K Ir each
+/// (2,264 asks of 3.1 M Ir in d_faces -O2; the pin's matchers cost 75).
+#[test]
+fn an_icmp_of_two_non_calls_asks_no_min_max_name() {
+    simplify::MIN_MAX_ASKS.with(|asks| asks.set(0));
+    let text = "define i1 @f(i16 %a, i16 %b) {
+b0:
+  %c = icmp slt i16 %a, %b
+  ret i1 %c
+}
+";
+    assert_eq!(simplified(text, "c"), None);
+    assert_eq!(simplify::MIN_MAX_ASKS.with(|asks| asks.get()), 0);
+}

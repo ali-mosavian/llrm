@@ -33,6 +33,39 @@ def parse_calling(path, pin=False):
     return edges
 
 
+def edge_costs(path, pin=False):
+    """{caller: {callee: Ir}} from the same listing: what each direct call cost (summed over its lines)."""
+    costs, caller = {}, None
+    for line in open(path):
+        m = re.match(r"\s*([\d,]+) \(\s*[\d.]+%\)\s+(\*|>)\s+(.*)$", line)
+        if not m:
+            continue
+        name = normalized(m.group(3), pin)
+        if m.group(2) == "*":
+            caller = name
+            costs.setdefault(caller, {})
+        elif caller is not None:
+            costs[caller][name] = costs[caller].get(name, 0) + int(m.group(1).replace(",", ""))
+    return costs
+
+
+def analyses_under(costs, passes, analysis, by_callee=None):
+    """{pass: Ir} each listed pass spent in direct callees `analysis` (a regex) names: analyses built inside the pass, which the
+    pin builds in a frame of its own. `by_callee`, a Counter, gets each callee's share."""
+    wanted = re.compile(analysis)
+    moved = {}
+    for name in passes:
+        spent = 0
+        for callee, ir in costs.get(name, {}).items():
+            if wanted.search(callee):
+                spent += ir
+                if by_callee is not None:
+                    by_callee[callee] += ir
+        if spent:
+            moved[name] = spent
+    return moved
+
+
 def nested_pairs(edges, listed):
     """(outer, inner) for each listed function that reaches another listed one."""
     listed = set(listed)
