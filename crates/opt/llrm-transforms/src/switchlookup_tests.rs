@@ -600,3 +600,32 @@ end:
         &[&[0], &[1], &[13], &[14], &[-1], &[25]],
     );
 }
+
+/// `-fno-jump-tables` reached the switch-to-lookup conversion only as the
+/// "no-jump-tables" attribute clang writes, which llrm-c never did:
+/// x_switch_dense at -O2 with `-fno-tree-switch-conversion -fno-jump-tables`
+/// had 2 compares where the pin's has 28.
+#[test]
+fn test_no_jump_tables_keeps_the_switch_a_tree_of_compares() {
+    let cases: Vec<(i128, i128)> =
+        (0..12).map(|at| (at, [3, 14, 15, 92, 65, 35, 89, 79, 32, 38, 46, 26][at as usize])).collect();
+    let text = diamond("i32", &cases, 1);
+    let mut module = parsed(&text);
+    let outer = Outer::of(&module, None);
+    let layout = DataLayout::parse("e-p:32:32-i64:32-n8:16:32").expect("a layout");
+    let tti = X86::of_cpu("i486").expect("a cpu");
+    let spec = Speculation { tti: &tti, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let options = Options { no_jump_tables: true, ..Options::L1438 };
+    simplified_with(&options, context, &spec, &mut declared, function);
+    declared.place(&mut module).expect("the declarations are placed");
+    assert!(!printed(&module).contains("switch.table"), "{}", printed(&module));
+    // With the option off the same switch is a table.
+    let mut module = parsed(&text);
+    let mut declared = Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    simplified_with(&Options::L1438, context, &spec, &mut declared, function);
+    declared.place(&mut module).expect("the declarations are placed");
+    assert!(printed(&module).contains("switch.table"), "premise: {}", printed(&module));
+}

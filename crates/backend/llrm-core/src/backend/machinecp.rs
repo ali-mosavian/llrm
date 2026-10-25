@@ -381,7 +381,7 @@ impl Tracker {
 }
 
 /// Where a register sits in an instruction.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Place {
     Source(usize),
     Dest(usize),
@@ -796,8 +796,10 @@ impl<'a> Walk<'a> {
         let machine = self.machine;
         let mut current = what.clone();
         let mut touched = false;
-        for (place, register, width) in machine.registers(what) {
-            if matches!(place, Place::Dest(_)) {
+        let places = machine.registers(what);
+        let mut done: Vec<RegId> = Vec::new();
+        for &(place, register, width) in &places {
+            if matches!(place, Place::Dest(_)) || done.contains(&register) {
                 continue;
             }
             let Some(mask) = machine.register_mask(register) else {
@@ -822,12 +824,20 @@ impl<'a> Walk<'a> {
             if candidate == register || width != 0 && machine.regs.width_of(candidate) != Some(width) {
                 continue;
             }
-            let proposed = machine.renamed(&current, place, candidate);
+            // Every read of the register moves together: `test bx, bx` renamed
+            // in one operand is another instruction.
+            let mut proposed = machine.renamed(&current, place, candidate);
+            for &(other, same, _) in &places {
+                if other != place && same == register && !matches!(other, Place::Dest(_)) {
+                    proposed = machine.renamed(&proposed, other, candidate);
+                }
+            }
             let from: Lanes = _lanes(machine.regs, register);
             let to: Lanes = sources.iter().copied().collect();
             if machine.same_but(&current, &proposed, (&from, &to), false) {
                 current = proposed;
                 touched = true;
+                done.push(register);
             }
         }
         if touched {

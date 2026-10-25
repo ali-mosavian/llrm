@@ -58,7 +58,7 @@ fn a_window_moves_whole_paragraphs_of_the_offset_into_the_selector() {
 /// by the rest, as a dword. Checked against the linear address difference.
 #[test]
 fn a_pointer_difference_is_the_byte_distance() {
-    use std::collections::HashMap;
+    use llrm_support::hash::HashMap;
     let tli = TargetLowering::empty(TargetLoweringInfo::x86_16());
     let mut dag = dag();
     let regs: Vec<SDValue> = (7..11).map(|r| dag.get_register(EVT::I16, r)).collect();
@@ -95,7 +95,7 @@ fn a_pointer_difference_is_the_byte_distance() {
     for distance in [0u128, 1, 15, 16, 0xFFF8, 0xFFFF, 0x1_0000, 0x2_0010, 0x10_0000] {
         let sum = base_off + distance;
         let (off, sel) = (sum & 0xFFFF, base_sel + (sum >> 16) * 0x1000);
-        let regs = HashMap::from([(7, off), (8, sel), (9, base_off), (10, base_sel)]);
+        let regs = HashMap::from_iter([(7, off), (8, sel), (9, base_off), (10, base_sel)]);
         assert_eq!(value(&dag, root, &regs), distance, "distance {distance:#x}");
     }
 }
