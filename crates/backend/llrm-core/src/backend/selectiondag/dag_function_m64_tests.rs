@@ -289,3 +289,22 @@ entry:
     assert_eq!(cell.width, 8, "a quadword is read: {select:?}");
     assert!(select.name.as_deref().is_some_and(|name| name.starts_with("cmov")), "{select:?}");
 }
+
+/// The address of a local array at m64 was a `mov r, offset <frame slot>` (the
+/// symbol-address form): the object writer stopped with `KeyError: (FRAME,
+/// 0)` (strings, qsortc of `tests/llc`). A frame address is an `lea` off the
+/// frame register.
+#[test]
+fn the_address_of_a_local_is_an_lea() {
+    let names = m64_names(
+        "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare void @sink(ptr)
+define void @f() {
+  %a = alloca [16 x i8]
+  call void @sink(ptr %a)
+  ret void
+}
+",
+    );
+    assert!(names.iter().any(|n| n == "lea"), "{names:?}");
+}

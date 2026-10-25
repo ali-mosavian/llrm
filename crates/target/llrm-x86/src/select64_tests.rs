@@ -140,3 +140,23 @@ fn a_quadword_multiply_by_an_immediate_takes_imm32() {
     );
     assert_eq!(bytes(&imul), [0x48, 0x69, 0xc0, 0xfb, 0, 0, 0]);
 }
+
+#[test]
+fn a_quadword_divide_and_negate_take_a_memory_operand() {
+    // idiv qword ptr [rbp]; neg qword ptr [rbp]: the one-operand memory forms
+    // took words and dwords only, and the assembler stopped on `main` of
+    // tests/llc divs.
+    use super::sweep_support::{R, a, m};
+    let cell = || m(Some(a(llrm_lir::Space::Frame, 0, 0, R::None, R::None)), 8, R::RBP, 0, 0, None, None, 1, R::None);
+    let idiv = sem(
+        Operation::Divide,
+        Some("idiv"),
+        vec![rg(RegId::RAX, 8), rg(RegId::RDX, 8)],
+        vec![rg(RegId::RDX, 8), rg(RegId::RAX, 8), cell()],
+        None,
+        false,
+    );
+    assert_eq!(bytes(&idiv), [0x48, 0xf7, 0x7d, 0x00]);
+    let neg = sem(Operation::Unary, Some("neg"), vec![cell()], vec![cell()], None, false);
+    assert_eq!(bytes(&neg), [0x48, 0xf7, 0x5d, 0x00]);
+}

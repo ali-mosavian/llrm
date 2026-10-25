@@ -231,6 +231,12 @@ impl std::ops::Add<u64> for At {
     }
 }
 
+/// The widths a one-operand memory form takes in `at`'s mode: words and
+/// dwords, and quadwords in 64-bit code.
+fn memory_widths(at: At) -> &'static [u32] {
+    if at.bits == 64 { &[2, 4, 8] } else { &[2, 4] }
+}
+
 /// The bytes, with both constant fields located.
 pub fn _assemble(
     made: &Instruction,
@@ -1796,7 +1802,7 @@ pub fn divide_mem(
         return None;
     }
     let built = operand_of(cell, at.bits);
-    if built.is_none() || ![2, 4].contains(&cell.width) {
+    if built.is_none() || !memory_widths(at).contains(&cell.width) {
         return None;
     }
     let (r#where, relocated) = built?;
@@ -1817,7 +1823,7 @@ pub fn multiply(
     match source {
         RegisterOrCell::Mem(cell) => {
             let built = operand_of(cell, at.bits);
-            if built.is_none() || ![2, 4].contains(&cell.width) {
+            if built.is_none() || !memory_widths(at).contains(&cell.width) {
                 return None;
             }
             let (r#where, relocated) = built?;
@@ -2075,7 +2081,7 @@ pub fn unary_mem(
         return None;
     }
     let built = operand_of(cell, at.bits);
-    if built.is_none() || ![2, 4].contains(&cell.width) {
+    if built.is_none() || !memory_widths(at).contains(&cell.width) {
         return None;
     }
     let (r#where, relocated) = built?;
