@@ -496,14 +496,13 @@ fn test_fixed_point_types_scale_literals_and_keep_storage_width_in_mir() {
 
     let text = emitted_text(&program);
     let (product, quotient) = (defined(&text, "product"), defined(&text, "quotient"));
-    // fixed8 uses a 32-bit intermediate; fixed16 is already based on i32 and
-    // stays one fixed-point operation, never widened to i64.
+    // fixed8 uses a 32-bit intermediate; fixed16's product is one fixed-point
+    // operation. Its quotient is the spec's `(a << s) / b` in 64 bits, which
+    // truncates toward zero where `llvm.sdiv.fix` rounds down and needed a
+    // correction (115 bytes a divide at m16 -Os).
     assert!(["sext i16", "mul i32", "ashr i32"].iter().all(|one| product.contains(one)), "{product}");
-    assert!(quotient.contains("@llvm.sdiv.fix.i32("), "{quotient}");
-    // (`sdiv.fix` floors; the one `shl` is the truncation correction `q * b !=
-    // a << s`)
-    assert!(!["sext", " sdiv ", "i64"].iter().any(|one| quotient.contains(one)), "{quotient}");
-    assert_eq!(quotient.matches("shl ").count(), 1, "{quotient}");
+    assert!(["sext i32", "shl i64", " sdiv i64 ", "trunc i64"].iter().all(|one| quotient.contains(one)), "{quotient}");
+    assert!(!quotient.contains("sdiv.fix"), "{quotient}");
 }
 
 /// nbody's `nbody` as its HIR emits it.
@@ -3309,4 +3308,23 @@ fn test_a_noipa_kernel_survives_o3_as_a_procedure_main_calls() {
     assert!(kept.contains("bench_crc proc"), "{kept}");
     let main = &kept[kept.find("_main proc").expect("main")..kept.find("_main endp").expect("main ends")];
     assert!(main.contains("call") && main.contains("_bench_crc"), "{kept}");
+}
+
+/// A fixed-point `/` was `llvm.sdiv.fix`, which the selector floored, then a
+/// correction back to the truncation the language states: `kdiv` at m16 -Os
+/// was 75 lines with a frame, `imul` and `setl`/`setne` after the divides
+/// (461 bytes, main's 346). The divide is the 64-bit quotient the spec writes.
+#[test]
+fn a_fixed_point_divide_is_one_truncating_divide() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "kdiv.nib",
+        "type Q = fixed i32, fraction=9\n\nfn kdiv(x: i32) -> i32:\n    let d: Q = Q(x + 1)\n    let w: Q = Q(1) / d\n    return i32(w * 512)\n\nfn main() -> i16:\n    print(kdiv(3))\n    print(kdiv(-4))\n    return 0\n",
+    );
+    let assembly = listing(&parsed(&source), "main", &os_calls_kept());
+    let kdiv = between(&assembly, "_kdiv proc near", "_kdiv endp");
+    assert!(!kdiv.contains("setl") && !kdiv.contains("setne"), "no floor correction after the divide: {kdiv}");
+    let lines = kdiv.lines().filter(|line| !line.trim().is_empty()).count();
+    assert!(lines <= 25, "{lines} lines: {kdiv}");
 }
