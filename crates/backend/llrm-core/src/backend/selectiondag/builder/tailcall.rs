@@ -6,9 +6,11 @@
 //! call and the `ret`, and the `ret` returns the call's value (or nothing, of
 //! a call that returns nothing) under the same return attributes.
 
-use llrm_mir::module::{Function, InstId, Operand};
+use llrm_lir::registers::RegId;
+use llrm_mir::module::{Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Attribute, BinaryOp, Opcode, Tail};
 
+use super::super::super::isel::{Convention, Parameter};
 use super::Builder;
 
 impl Builder<'_> {
@@ -19,6 +21,122 @@ impl Builder<'_> {
         inst: InstId,
     ) -> bool {
         tail_position(self.function, inst)
+    }
+}
+
+impl Builder<'_> {
+    /// `X86TargetLowering::isEligibleForSiblingCallOpt` for the 32-bit flat
+    /// target: whether the call, in tail position, can reuse the caller's
+    /// frame. `plan` is the callee's convention, `variadic` its type's.
+    ///
+    /// DEVIATE: a caller that returns through a hidden pointer (`sret`) is
+    /// refused where the pin asks `mayBeSRetTailCallCompatible`; Win64, PIC
+    /// and LFI do not exist here. Owner sdag-a (w9).
+    pub(super) fn eligible_for_sibling_call(
+        &self,
+        info: &llrm_mir::opcode::CallInfo,
+        plan: &Convention,
+        variadic: bool,
+        direct: bool,
+        arguments: &[Operand],
+    ) -> bool {
+        let caller = &self.convention;
+        // "no_caller_saved_registers": the frame cannot be replaced
+        if llrm_mir::memory::has(&self.function.attrs, "no_caller_saved_registers") {
+            return false;
+        }
+        // a stack that is dynamically re-aligned needs a special epilogue
+        let stack = self.arch.stack_alignment().max(1) as u64;
+        let types = &self.module.context.types;
+        for value in self.info.static_allocas.keys() {
+            let ValueDef::Instruction(def) = self.function.value(value).def else { continue };
+            if let Opcode::Alloca { allocated, align, .. } = self.function.instruction(def).opcode {
+                let wanted =
+                    align.unwrap_or_else(|| crate::backend::isel::natural_align(types, self.layout, allocated) as u64);
+                if wanted > stack {
+                    return false;
+                }
+            }
+        }
+        // a struct result through a hidden pointer: the caller's own needs the
+        // callee to return it; the callee's is popped by the callee
+        let sret = |attrs: &[Vec<Attribute>]| {
+            attrs.iter().any(|one| llrm_mir::opcode::argument_class(one) == Some(llrm_mir::opcode::RESULT_POINTER))
+        };
+        if sret(&self.function.parameter_attrs) || sret(&info.argument_attrs) {
+            return false;
+        }
+        // varargs only through registers
+        let stack_parameter = |one: &Parameter| !matches!(one, Parameter::Registers(_));
+        if variadic && plan.parameters.iter().any(stack_parameter) {
+            return false;
+        }
+        // results leave the same way
+        if plan.returns != caller.returns {
+            return false;
+        }
+        // the callee keeps every register the caller must
+        let calling = self.arch.calling();
+        let preserved = |number: u32| {
+            calling.by_number(number).map(|one| self.arch.convention_callee_saved(one)).unwrap_or_default()
+        };
+        let caller_cc = self.function.calling_convention;
+        let caller_kept = preserved(caller_cc);
+        if caller_cc != info.calling_convention {
+            let callee_kept = preserved(info.calling_convention);
+            if !caller_kept.iter().all(|one| callee_kept.contains(one)) {
+                return false;
+            }
+        }
+        // the incoming parameter an argument is, if it is one
+        let incoming = |operand: &Operand| match operand {
+            Operand::Value(value) => match self.function.value(*value).def {
+                ValueDef::Argument(at) => caller.parameters.get(at as usize),
+                ValueDef::Instruction(_) => None,
+            },
+            _ => None,
+        };
+        let has_stack = plan.parameters.iter().any(stack_parameter);
+        let eax_edx_ecx = [RegId::EAX, RegId::EDX, RegId::ECX];
+        if has_stack || !plan.parameters.is_empty() {
+            for (at, parameter) in plan.parameters.iter().enumerate() {
+                match parameter {
+                    // already laid out as the caller's incoming one
+                    Parameter::Cell(_) => {
+                        if arguments.get(at).and_then(incoming) != Some(parameter) {
+                            return false;
+                        }
+                    }
+                    Parameter::Bytes(_) => return false,
+                    // `parametersInCSRMatch`: a register the caller must keep
+                    // holds the caller's own incoming value
+                    Parameter::Registers(regs) => {
+                        let kept = regs.iter().any(|reg| caller_kept.iter().any(|(whole, _)| whole == reg));
+                        if kept && arguments.get(at).and_then(incoming) != Some(parameter) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            // the callee's address needs a register of the three the arguments
+            // may take
+            if !direct {
+                let used = plan
+                    .parameters
+                    .iter()
+                    .filter_map(|one| if let Parameter::Registers(regs) = one { Some(regs) } else { None })
+                    .flatten()
+                    .filter(|reg| eax_edx_ecx.contains(reg))
+                    .count();
+                if used >= 3 {
+                    return false;
+                }
+            }
+        } else if !direct {
+            // no arguments: the address has all three registers
+        }
+        // bytes to pop: the callee pops what the caller does
+        if caller.popped > 0 { plan.popped == caller.popped } else { plan.popped == 0 }
     }
 }
 
@@ -162,5 +280,90 @@ mod tests {
             "{HEAD}define i32 @f(i32 %a) #0 {{\n  %r = tail call i32 @g(i32 %a)\n  ret i32 %r\n}}\nattributes #0 = {{ \"disable-tail-calls\"=\"true\" }}\n"
         );
         assert_eq!(count(&text), 0);
+    }
+
+    /// A call whose arguments are the caller's own, in the slots it received
+    /// them in, reuses the caller's frame (the pin's `jmp g`).
+    #[test]
+    fn arguments_already_in_their_slots_are_a_sibling_call() {
+        let text = "target datalayout = \"e-p:32:32-n8:16:32\"\ndeclare i32 @g(i32, i32)\n\
+            define i32 @f(i32 %a, i32 %b) {\n  %r = tail call i32 @g(i32 %a, i32 %b)\n  ret i32 %r\n}\n";
+        assert_eq!(count(text), 1);
+    }
+
+    /// Swapped, the arguments are in the wrong slots: the pin calls (llc -O2
+    /// i486 `f(a,b) { return g(b,a); }`: `call g`), and so do we.
+    #[test]
+    fn arguments_in_other_slots_are_not() {
+        let text = "target datalayout = \"e-p:32:32-n8:16:32\"\ndeclare i32 @g(i32, i32)\n\
+            define i32 @f(i32 %a, i32 %b) {\n  %r = tail call i32 @g(i32 %b, i32 %a)\n  ret i32 %r\n}\n";
+        assert_eq!(count(text), 0);
+    }
+
+    /// A callee that takes more stack than the caller received has no slot
+    /// for it.
+    #[test]
+    fn a_callee_with_more_stack_arguments_is_not() {
+        let text = "target datalayout = \"e-p:32:32-n8:16:32\"\ndeclare i32 @g(i32, i32, i32)\n\
+            define i32 @f(i32 %a, i32 %b) {\n  %r = tail call i32 @g(i32 %a, i32 %b, i32 1)\n  ret i32 %r\n}\n";
+        assert_eq!(count(text), 0);
+    }
+
+    /// A callee that pops a stack argument (watcall's fifth) where the
+    /// caller, in cdecl, does not: the stack would be wrong on return.
+    #[test]
+    fn a_callee_that_pops_what_the_caller_does_not_is_not() {
+        let text = "target datalayout = \"e-p:32:32-n8:16:32\"\ndeclare watcallcc i32 @g(i32, i32, i32, i32, i32)\n\
+            define i32 @f(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e) {\n  %r = tail call watcallcc i32 @g(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e)\n  ret i32 %r\n}\n";
+        assert_eq!(count(text), 0);
+    }
+
+    /// Register arguments (watcall: eax, edx, ebx, ecx, the last three kept by
+    /// the callee): the kept ones must be the caller's own incoming values.
+    #[test]
+    fn a_kept_register_must_hold_the_incoming_value() {
+        let head = "target datalayout = \"e-p:32:32-n8:16:32\"\ndeclare watcallcc i32 @g(i32, i32)\n";
+        let same = format!(
+            "{head}define watcallcc i32 @f(i32 %a, i32 %b) {{\n  %r = tail call watcallcc i32 @g(i32 %a, i32 %b)\n  ret i32 %r\n}}\n"
+        );
+        let swapped = format!(
+            "{head}define watcallcc i32 @f(i32 %a, i32 %b) {{\n  %r = tail call watcallcc i32 @g(i32 %b, i32 %a)\n  ret i32 %r\n}}\n"
+        );
+        assert_eq!((count(&same), count(&swapped)), (1, 0));
+    }
+
+    /// With sibling calls on, an eligible call is the block's end: a
+    /// `TC_RETURN` of the callee and the registers, no call sequence and no
+    /// return after it. Off, the call is as it was.
+    #[test]
+    fn a_sibling_call_is_a_tc_return_when_asked() {
+        let text = "target datalayout = \"e-p:32:32-n8:16:32\"\ndeclare i32 @g(i32, i32)\n\
+            define i32 @f(i32 %a, i32 %b) {\n  %r = tail call i32 @g(i32 %a, i32 %b)\n  ret i32 %r\n}\n";
+        let dump = |on: bool| {
+            let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+            let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+            let (id, _, function) =
+                module.functions().find(|(_, g, f)| !f.is_declaration() && g.name.as_deref() == Some("f")).unwrap();
+            let convention =
+                crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
+            let mut info = FunctionLoweringInfo::new(function);
+            build_block(
+                &module,
+                function,
+                &layout,
+                &BuilderTarget::m32().with_tail_calls(on),
+                &llrm_x86_m32::M32,
+                &convention,
+                &mut info,
+                function.entry().unwrap(),
+            )
+            .unwrap_or_else(|why| panic!("{}", why.0))
+            .dag
+            .dump()
+        };
+        let on = dump(true);
+        assert!(on.contains("X86ISD::TC_RETURN") && !on.contains("RET_GLUE") && !on.contains("callseq"), "{on}");
+        let off = dump(false);
+        assert!(off.contains("X86ISD::CALL") && off.contains("RET_GLUE"), "{off}");
     }
 }

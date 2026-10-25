@@ -38,25 +38,16 @@
 //! instruction inside a cycle; no instruction here sinks on that ground.
 //! Exit: the target description's pressure limits.
 //!
-//! DEVIATE M4 (#2903): in a build for size an instruction with operands moves
-//! only if each operand is live out of its block already (nothing is
-//! lengthened over the edge: an `fsub` whose operands died there made the x87
-//! stackifier hold them in memory, qcport `pl_trace` +125 bytes) and is read
-//! by nothing below in the arm (the two-address form needs no copy: `x > C ?
-//! x - C : x`, the `add` in the arm is in place). The pin's MachineSink has no
-//! optsize rule; it moves any and its allocator splits the ranges around the
-//! stretch. The gain and the loss come from one shape: a `lea` sunk into an
-//! arm whose result a phi takes becomes `add; mov` plus a copy block on the
-//! join edge. Rows (head 9e3c893585, base 47978c1a46; tools/rows/qcport.py, no
-//! flags): QCport -Os 265956 -> 265871 (-85 bytes, 13 modules; larger: `sc` +2
-//! of 11041, 0.018%, `d_alias` +1 of 12363, 0.008%); objects -Os m16 5 changed
-//! -327 bytes, larger `bench/jpeg_fixed` +3 of 2958 (0.10%) and `jpeg_single`
-//! +3 of 2826 (0.11%), m32 8 changed -244, none larger; x_adler -10.8%,
-//! x_crc32 -6.7%, x_fixmul -6.1% clocks. Otherwise (-O1 to -O3) every safe
-//! instruction moves; `bench/quicksort` -O2 m16 costs +985 clocks (+0.3%, a
-//! reload more per trip). Exit: a test of the sink that prices the phi copy
-//! from the target description (general, not a shape rule), 2026-11-04;
-//! review 2026-11-05 with the greedy allocator and SplitKit as the default.
+//! Row M4 (was DEVIATE M4, retired 2026-10-25 on the greedy allocator): a build
+//! for size moves what the pin moves; the rule that kept an instruction in
+//! place when its operand lives on, is read below the arm or dies in the block
+//! is gone. Measured (matched pair, own dists, rows, qcport.py, objsweep):
+//! x_collatz -Os clocks -7.2%, instructions -11.7%, code -4.4% (the pin's
+//! shape: `lea` into the odd arm, `shr` into the even one), sieve -10.3%
+//! clocks, matmul -2.9% clocks and -5.3% code; objects -Os: x_mergesort m16
+//! -219 B, x_collatz m16 -105, matmul m32 -113, sieve m16 +82; QCport -Os
+//! 263235 -> 263448 (+213 B, +0.081%, 40 modules changed; -O1 to -O3
+//! identical). The rule had bought -85 B of QCport -Os on the old allocator.
 //!
 //! DEVIATE M5 (#2903): in a build for size no edge is broken. The block
 //! costs a jump (`bench/recpow` -Os +5 bytes with the edge split; over the
@@ -291,9 +282,6 @@ struct Sinker {
     /// Whether the flags are read before they are written from each block's
     /// entry on (live in, as `isLiveIn` says of EFLAGS).
     flags_live_in: Vec<bool>,
-    /// Where each value is live at a block's end; in a build for size only
-    /// (`read_below`).
-    live: Option<crate::backend::allocate::LiveRows>,
 }
 
 /// The post-dominator tree: the dominator tree of the reversed graph with a
@@ -351,7 +339,6 @@ impl Sinker {
                 to_split: Vec::new(),
                 has_store_cache: HashMap::default(),
                 changed: false,
-                live: size.then(|| crate::backend::allocate::live_rows(body)),
                 ..before
             };
         }
@@ -405,7 +392,6 @@ impl Sinker {
             regs: body.regs(),
             bits: body.bits,
             flags_live_in: Vec::new(),
-            live: size.then(|| crate::backend::allocate::live_rows(body)),
         };
         sinker.flags_live_in = sinker.solve_flags();
         sinker.sort_successors();
@@ -769,33 +755,6 @@ impl Sinker {
         false
     }
 
-    /// Whether `value` stays live below `one` once it is the first instruction
-    /// of `sink_to`: another instruction of the block reads it, or it is
-    /// live out of the block (a phi below, a loop's back edge). The
-    /// two-address form then needs a copy (DEVIATE M4: in a build for size
-    /// an instruction moves only where it is the last reader on its path).
-    fn read_below(
-        &self,
-        value: u32,
-        one: &Insn,
-        sink_to: usize,
-    ) -> bool {
-        use crate::backend::allocate::LiveAt;
-        self.insns[sink_to].iter().any(|other| other.id() != one.id() && other.uses.contains(&value))
-            || self.live.as_ref().is_none_or(|live| live.live_out(self.at[sink_to], value))
-    }
-
-    /// Whether `value` is live out of `block` whatever `one` does: moving a
-    /// reader of it then lengthens nothing. None known is no.
-    fn crosses_already(
-        &self,
-        value: u32,
-        block: usize,
-    ) -> bool {
-        use crate::backend::allocate::LiveAt;
-        self.live.as_ref().is_some_and(|live| live.live_out(self.at[block], value))
-    }
-
     /// `hasStoreBetween`
     /// ([#L1660](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineSink.cpp#L1660)):
     /// whether a store, call or ordered access may run between `from` and
@@ -864,14 +823,6 @@ impl Sinker {
         // A dead flags def that is live into the block it moves to would turn
         // into a zombie def there (`SinkInstruction`).
         if self.flags_live_in[sink_to] && self.writes_flags(&one) {
-            return false;
-        }
-        if self.size && one.uses.iter().any(|&value| self.read_below(value, &one, sink_to)) {
-            return false;
-        }
-        // An operand that dies in this block would live over the edge it now
-        // crosses (pl_trace -Os +125 bytes: x87 operands held in memory).
-        if self.size && one.uses.iter().any(|&value| !self.crosses_already(value, block)) {
             return false;
         }
         // A successor with other predecessors: sink along the edge, or break
@@ -1217,8 +1168,9 @@ mod tests {
     /// qcport pl_trace -Os +125 bytes: an `fsub` moved into an arm took its two
     /// operands, loaded in the entry, across the edge, and the stackifier
     /// held them in memory (`fld; fstp` pairs for what were `fsub m` folds).
+    /// It moves now (numbered row M4, below).
     #[test]
-    fn test_in_a_size_build_an_instruction_whose_operand_dies_in_the_block_stays() {
+    fn test_in_a_size_build_an_instruction_whose_operand_dies_in_the_block_moves() {
         let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
         let wide = |value: u32| Loc::Held(Held { value, width: 10 });
         let entry = LirBlock {
@@ -1258,7 +1210,7 @@ mod tests {
         };
         assert_eq!(Sinker::new(&body, true, None).flags_live_in, [false, false, false]);
         let moved = sunk(&body, true);
-        assert_eq!(names(&moved, 0), ["fsub", "cmp", "jbe"], "the fsub stayed");
+        assert_eq!(names(&moved, 0), ["cmp", "jbe"], "the fsub moved, as the pin has it");
     }
 
     /// x_collatz ran `lea edi,[ecx+ecx*2]` on every trip of its inner loop,
@@ -1309,9 +1261,10 @@ mod tests {
 
     /// The same, with the operand read again in the arm: the `add` then needs
     /// a copy there (`mov; add` for the `lea` it was: bench/control -Os +2
-    /// bytes), so it stays.
+    /// bytes). The pin sinks it, and so does a build for size (the rule that
+    /// kept it was DEVIATE M4: x_collatz -Os +17% clocks).
     #[test]
-    fn test_in_a_size_build_an_instruction_whose_operand_is_read_below_stays() {
+    fn test_in_a_size_build_an_instruction_whose_operand_is_read_below_moves() {
         let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
         let entry = LirBlock {
             succ: vec![1, 2].into(),
@@ -1350,16 +1303,17 @@ mod tests {
         };
         assert_eq!(Sinker::new(&body, true, None).flags_live_in, [false, false, false]);
         let moved = sunk(&body, true);
-        assert_eq!(names(&moved, 0), ["add", "cmp", "je"], "the add stays");
+        assert_eq!(names(&moved, 0), ["cmp", "je"], "the add moved, as the pin has it");
         // Outside a build for size it moves, so the premise is the rule's.
         assert_eq!(names(&sunk(&body, false), 0), ["cmp", "je"], "the premise: it can move");
     }
 
     /// The operand is read below the arm, in the join (a loop's next trip reads
-    /// it as well): the `add` would need a copy in the arm, so it stays
-    /// (bench/parity/control -Os, `lea esi, [ebx+7]` made `mov; add`).
+    /// it as well): the `add` needs a copy in the arm (bench/parity/control
+    /// -Os, `lea esi, [ebx+7]` made `mov; add`); it moves all the same, as the
+    /// pin has it.
     #[test]
-    fn test_in_a_size_build_an_instruction_whose_operand_is_live_out_of_the_arm_stays() {
+    fn test_in_a_size_build_an_instruction_whose_operand_is_live_out_of_the_arm_moves() {
         let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
         let entry = LirBlock {
             succ: vec![1, 2].into(),
@@ -1396,7 +1350,7 @@ mod tests {
                 .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
                 .collect()
         };
-        assert_eq!(names(&sunk(&body, true), 0), ["add", "cmp", "je"], "the add stays");
+        assert_eq!(names(&sunk(&body, true), 0), ["cmp", "je"], "the add moved, as the pin has it");
         assert_eq!(names(&sunk(&body, false), 0), ["cmp", "je"], "the premise: it can move");
     }
 

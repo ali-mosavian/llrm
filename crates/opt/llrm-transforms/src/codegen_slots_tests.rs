@@ -510,7 +510,7 @@ const ROWS: &[Row] = &[
         Deviate,
         "processimpdefs.rs",
         "",
-        "CG10: translated and wired (processimpdefs.rs, slot processimpdefs@2; isel emits `implicit_def` for poison and undef in a register, #3737, #3768, 8e6979c6b7); a phi of undefs becomes an `implicit_def` in PHIElimination (P2, `allPhiOperandsUndefined`, `SrcUndef`, `ImpDefs`); not translated: `INSERT_SUBREG` and `REG_SEQUENCE` users (PI-3, LIR has none); exit: PI-3 by 2026-11-13; owner w-8; review 2026-11-27. Pin: changed code in 62 (-O2) and 63 (-Os) of 77 IRs",
+        "CG10: translated and wired (processimpdefs.rs, slot processimpdefs@2; isel emits `implicit_def` for poison and undef in a register, #3737, #3768, 8e6979c6b7); a phi of `implicit_def`s is one here and its users read undef (`canTurnIntoImplicitDef`); a phi with an undef operand that is no `implicit_def` is PHIElimination's (P2, `allPhiOperandsUndefined`, `SrcUndef`, `ImpDefs`); not translated: `INSERT_SUBREG` and `REG_SEQUENCE` users (PI-3, LIR has none); exit: PI-3 by 2026-11-13; owner w-8; review 2026-11-27. Pin: changed code in 62 (-O2) and 63 (-Os) of 77 IRs",
     ),
     row(
         "Remove unreachable machine basic blocks",

@@ -612,6 +612,7 @@ pub fn finalized(
                     far: false,
                     pops: 0,
                     code: vec![masm::InlinePart::Bytes(code)],
+                    tail: false,
                 },
             );
             let mut replaced = (**instruction).clone();
@@ -1097,6 +1098,7 @@ fn procedure(
                     far: false,
                     pops: 0,
                     code: vec![masm::InlinePart::Bytes(code.clone())],
+                    tail: false,
                 },
             );
             continue;
