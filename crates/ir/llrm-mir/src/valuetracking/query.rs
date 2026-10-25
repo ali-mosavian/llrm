@@ -379,7 +379,7 @@ impl DomConditionCache {
         query: &Query,
         function: &Function,
     ) -> Self {
-        let mut cache = Self::default();
+        let cache = Self::default();
         for &block in function.layout() {
             if let Some(branch) = function.terminator(block)
                 && function.instruction(branch).opcode == Opcode::Br
