@@ -43,19 +43,21 @@ fn listing(flags: &[&str]) -> String {
     std::fs::read_to_string(directory.join("a.s")).unwrap()
 }
 
-/// Only a body under 24 operations was inlined into its one call, and
-/// `-fno-inline-functions` inlined nothing: queens' `safe` stayed a call (and
-/// `place` held its values in the frame) where gcc, whose
-/// `-fno-inline-functions` leaves called-once inlining on, ran 30% fewer
-/// clocks.
+/// Only a body under 24 operations was inlined into its one call: queens'
+/// `safe` stayed a call (and `place` held its values in the frame) where the
+/// pin ran 30% fewer clocks. The pin's `-O2` inlines `twice`, called twice, as
+/// well; its `-fno-inline-functions` is the always-inliner alone and leaves
+/// `sum` a call (clang-24 `-O2 -fno-inline-functions -emit-llvm`).
 #[test]
 fn test_a_static_function_called_once_is_inlined_at_any_size() {
-    for flags in [&["-O2"][..], &["-O2", "-fno-inline-functions"], &["-Os"]] {
+    for flags in [&["-O2"][..], &["-Os"]] {
         let text = listing(flags);
         assert!(!text.contains("sum_ proc"), "{flags:?}: sum survived: {text}");
-        // gcc -O2 inlines `twice` too (-O2 is gcc's since #887): the call survives where gcc's does.
-        assert_eq!(text.contains("twice_ proc"), flags != ["-O2"], "{flags:?}: twice, called twice, is no last call: {text}");
     }
+    let text = listing(&["-O2"]);
+    assert!(!text.contains("twice_ proc"), "-O2: the pin inlines twice, called twice: {text}");
+    let text = listing(&["-O2", "-fno-inline-functions"]);
+    assert!(text.contains("sum_ proc") && text.contains("twice_ proc"), "-fno-inline-functions: the pin's always-inliner leaves both calls: {text}");
     // Where inlining is off, it is off.
     assert!(listing(&["-O2", "-fno-inline-functions", "-fno-inline-functions-called-once"]).contains("sum_ proc"));
 }
