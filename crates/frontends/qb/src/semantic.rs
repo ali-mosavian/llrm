@@ -1457,10 +1457,71 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
         }
     }
 
+    /// A GOSUB to a label no RETURN follows (`500 END`) never comes back: it is
+    /// a GOTO.
+    fn never_returns(
+        statements: &mut [Statement],
+        endless: &BTreeSet<String>,
+    ) {
+        for statement in statements {
+            match statement {
+                Statement::Call { name, arguments, span, .. } if name == "GOSUB" => {
+                    if let [Expr::Name(target, _)] = arguments.as_slice() {
+                        if endless.contains(canonical(target)) {
+                            *statement = Statement::Goto(target.clone(), *span);
+                        }
+                    }
+                }
+                Statement::If { then_branch, else_branch, .. } => {
+                    never_returns(then_branch, endless);
+                    never_returns(else_branch, endless);
+                }
+                Statement::For { body, .. } | Statement::While { body, .. } | Statement::Do { body, .. } => {
+                    never_returns(body, endless)
+                }
+                Statement::Select { arms, otherwise, .. } => {
+                    for (_, body) in arms {
+                        never_returns(body, endless);
+                    }
+                    never_returns(otherwise, endless);
+                }
+                _ => {}
+            }
+        }
+    }
+
     let mut targets = BTreeSet::new();
     visit(&module.statements, &mut targets);
     if targets.is_empty() {
         return Ok(module.clone());
+    }
+    let endless = targets
+        .iter()
+        .filter(|target| {
+            let Some(start) = module.statements.iter().position(|statement| {
+                matches!(
+                    statement,
+                    Statement::Label(name, _) if canonical(name) == target.as_str()
+                )
+            }) else {
+                return false;
+            };
+            !module
+                .statements[start + 1..]
+                .iter()
+                .any(
+                    |statement| matches!(
+                        statement,
+                        Statement::Call { name, arguments, .. } if name == "RETURN" && arguments.is_empty()
+                    ),
+                )
+        })
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !endless.is_empty() {
+        let mut jumped = module.clone();
+        never_returns(&mut jumped.statements, &endless);
+        return outline_module_gosubs(&jumped);
     }
 
     // A module GOSUB shares the module frame, variables, and error handler.
