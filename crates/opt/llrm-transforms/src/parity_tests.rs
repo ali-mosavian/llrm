@@ -69,6 +69,21 @@ fn test_the_built_lists_satisfy_the_registry_at_every_level() {
     }
 }
 
+/// `dead@677`, `@768`, `@801` and `@837` followed InstCombine in the Simplify
+/// slots and changed nothing in 1561 runs each over the 568 vsgcc cells (the
+/// `idle` of `LLRM_DEBUG=runs`), 5.7 M Ir of d_faces -O2 with the one at the
+/// cleanup slot; only `dead@1242` finds work (48 of 1480 runs).
+#[test]
+fn test_no_dead_pass_follows_instcombine_in_the_simplify_slots() {
+    let on = Applied {
+        options: pipeline::Options { llvm_order: true, ..pipeline::Options::standard() },
+        ..Applied::default()
+    };
+    let built = names(&on, Phase::Simplify);
+    let dead: Vec<_> = built.iter().filter(|name| name.starts_with("dead@")).collect();
+    assert!(dead.is_empty(), "{dead:?}");
+}
+
 /// The MemorySSA entry carries its dependency on alias analysis, is asked by
 /// default (EarlyCSE, LICM), and what is open of keeping it updated is named.
 #[test]

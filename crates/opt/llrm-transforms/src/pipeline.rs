@@ -805,7 +805,6 @@ pub(crate) fn llvm_order(
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@675"),
                 combine("combine@677"),
-                dead("dead@677"),
                 slot("aggressive-instcombine@678", Box::new(crate::trunc_inst_combine::TruncInstCombine)),
                 slot("tailrec@688", Box::new(tailcallelim::TailCallElim)),
                 // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L691:
@@ -855,7 +854,6 @@ pub(crate) fn llvm_order(
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@766"),
                 combine("combine@768"),
-                dead("dead@768"),
             ]);
             list.extend(canonical("loopsimplify@772", "lcssa@772"));
             // What the unroll makes, for the slot after it.
@@ -889,7 +887,6 @@ pub(crate) fn llvm_order(
                 slot("sccp@792", Box::new(sccp::Sccp)),
                 slot("bdce@797", Box::new(bdce::Bdce)),
                 combine("combine@801"),
-                dead("dead@801"),
                 // DFAJumpThreadingPass, PassBuilderPipelines.cpp#L806.
                 slot(
                     "dfajumpthreading@806",
@@ -920,7 +917,6 @@ pub(crate) fn llvm_order(
                     },
                 ),
                 combine("combine@837"),
-                dead("dead@837"),
             ]);
             list
         }
