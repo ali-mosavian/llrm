@@ -362,6 +362,10 @@ mod tests {
             // ConstraintElimination.cpp reads nuw/inbounds/nsw where LLVM
             // does (`decompose`, `getFlagsFor...`).
             "constraintelim.rs",
+            // ConstraintElimination.cpp's `getMonotonicityInfo` reads an
+            // add's `nuw`/`nsw` and a GEP's `nuw`/`nusw` to say how an
+            // induction steps; it never drops one.
+            "constraintelim_induction.rs",
             // BasicAliasAnalysis.cpp's `DecomposeGEPExpression` reads a GEP's
             // `inbounds` and `nuw` where LLVM does; `aliasGEP` takes NoAlias
             // from them only as LLVM's rules do.

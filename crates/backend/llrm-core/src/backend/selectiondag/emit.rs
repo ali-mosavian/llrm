@@ -723,6 +723,13 @@ impl Emitter<'_, '_> {
             ISD::CopyToReg => {
                 let dst = self.register(node.ops[1])?;
                 let src = self.operand(node.ops[2])?;
+                // The definition already wrote the register
+                // (`exported_register`).
+                if let (Loc::Held(to), Loc::Held(from)) = (&dst, &src)
+                    && to.value == from.value
+                {
+                    return Ok(());
+                }
                 self.push(Operation::Move, "mov", vec![dst], vec![src]);
                 Ok(())
             }
@@ -1024,7 +1031,8 @@ impl Emitter<'_, '_> {
         // The results: the first `num_defs` values that are not chain or glue.
         let mut dests = Vec::new();
         for (i, vt) in node.values.iter().enumerate().take(usize::from(desc.num_defs)) {
-            let held = self.fresh(width(*vt));
+            let held =
+                self.exported_register(SDValue { node: n, res: i as u8 }).unwrap_or_else(|| self.fresh(width(*vt)));
             self.values.insert(SDValue { node: n, res: i as u8 }, held.value);
             dests.push(Loc::Held(held));
         }
@@ -2617,6 +2625,30 @@ impl Emitter<'_, '_> {
         reg: u32,
     ) -> u32 {
         self.state.vreg(reg)
+    }
+
+    /// `InstrEmitter::CreateVirtualRegisters`: a result copied by a
+    /// `CopyToReg` to a virtual register of its width is defined in that
+    /// register, and the copy emits nothing.
+    fn exported_register(
+        &mut self,
+        result: SDValue,
+    ) -> Option<Held> {
+        let width = width_of(self.dag, result);
+        let reg = self
+            .dag
+            .users(result)
+            .find_map(
+                |user| {
+                    if self.dag.opcode(SDValue { node: user, res: 0 }) != ISD::CopyToReg {
+                        return None;
+                    }
+                    let node = self.dag.node(SDValue { node: user, res: 0 });
+                    let NodeData::Register(reg) = self.dag.node(node.ops[1]).data else { return None };
+                    (node.ops[2] == result && width_of(self.dag, node.ops[1]) == width).then_some(reg)
+                },
+            )?;
+        Some(Held { value: self.vreg(reg), width })
     }
 
     fn new_value(&mut self) -> u32 {

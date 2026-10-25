@@ -9,7 +9,7 @@ use crate::backend::selectiondag::{MemBase, MemInfo};
 fn legalized_add(tli: &TargetLowering) -> (SelectionDAG, SDValue) {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let chain = dag.entry_node();
-    let mut load = |dag: &mut SelectionDAG, reg| {
+    let load = |dag: &mut SelectionDAG, reg| {
         let ptr = dag.get_register(EVT::I64, reg);
         dag.get_load(
             EVT::I64,
