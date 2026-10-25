@@ -95,6 +95,17 @@ fn used(
                 let named =
                     one.through != RegId::None || one.index_through != RegId::None || (one.addr.is_some() && !unplaced);
                 match select::operand_of(one, bits) {
+                    // A frame cell indexed by a value the allocator has not
+                    // placed cannot be encoded yet, and reads the registers
+                    // it does name (the frame register, its segment).
+                    None if named && unplaced => {
+                        add(reads, one.through);
+                        add(reads, one.index_through);
+                        if [RegId::BP, RegId::EBP, RegId::SP, RegId::ESP].contains(&one.through) {
+                            add(reads, RegId::SS);
+                        }
+                        continue;
+                    }
                     // An address that cannot be encoded (`[sp]` in real mode)
                     // is an instruction that cannot be.
                     None if named => return false,
@@ -148,6 +159,7 @@ fn bytes_of(place: &Loc) -> Option<u32> {
 fn kind_of(place: &Loc) -> char {
     match place {
         Loc::Reg(one) if one.register.is_st() => 's',
+        Loc::Reg(one) if one.register.is_xmm() => 'x',
         Loc::Reg(_) | Loc::Held(_) => 'r',
         Loc::Mem(_) => 'm',
         Loc::Imm(_) => 'i',

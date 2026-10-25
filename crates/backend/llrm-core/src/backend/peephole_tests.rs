@@ -718,7 +718,11 @@ fn test_source_owned_scale_converges_with_a_synthetic_frontend() {
         ],
     );
 
+    crate::backend::allocate::SETS_BUILT.with(|one| one.set(0));
+    crate::backend::allocate::SETS_BUILT.with(|one| one.set(0));
     let result = addresses(&input, "386").unwrap().insns();
+    let built = crate::backend::allocate::SETS_BUILT.with(|one| one.get());
+    assert_eq!(built, 1, "sets built: addresses reads block exits only");
 
     assert_eq!(names(&result), ["lea", "cmp"]);
     assert_eq!(result[0].covers, Some((0x90, 0x95)));
