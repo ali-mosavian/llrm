@@ -111,6 +111,8 @@ fn every_platform_defines_every_op() {
         let mut sources = files(&directory, &["c"]);
         if platform.starts_with("dos/") {
             sources.extend(files("runtime/qb/dev/dos", &["c"]));
+        } else {
+            sources.extend(files("runtime/qb/dev/host", &["c"]));
         }
         // An op the platform's assembly provides is named in its devsym.h:
         // `#pragma aux op "SYMBOL"`.
