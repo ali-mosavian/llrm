@@ -79,7 +79,7 @@ static int start_frame(void)
 
 /* The program writes pixels without synchronisation and flags the line afterwards, so a read here can be of a line that is
    being written again; whoever wrote last flagged it, and the next frame converts it whole. The race is the protocol's, so
-   ThreadSanitizer is told to leave this reader alone. */
+   ThreadSanitizer is told to leave this reader alone (#4669, docs/working/qb-host.md). */
 #if defined(__clang__)
 #define NO_TSAN __attribute__((no_sanitize("thread")))
 #else

@@ -84,8 +84,22 @@ runtime/qb/                portable runtime; touches the machine only through ru
     (SSE forms #4636, xmm class #4638, DAG float nodes #4678/#4643, S4, S5; `x86-64-dag-plan.md`). Also open here: the
     64-bit runtime frame (`B$ENRA`/`B$EXSA`), the `ON ERROR` landing (`qb_land` ends the program), the stack-block entries
     (`B$DDIM`, `B$CLOS`, ...). Retry when #4638 and S4 land.
-17. arm64: `llrm-qb` has no route to the arm64 backend (code from MIR, QB data sections, Mach-O/ELF). A private aarch64
-    sysroot (clang, lld, qemu-aarch64) can build and run ELF; Mach-O runs on a Mac only.
+17. arm64: what the spike has (`docs/architecture/arm64-spike.md`): MIR (after the shared mid-end) to AArch64 in
+    `llrm-arm64` (isel, regalloc, frame, encoder), Darwin and Linux AAPCS64, Mach-O and ELF writers, floats, structs,
+    varargs, global initializers with relocations; it takes clang IR through `llrm-arm64-llc`. Missing for QB:
+    a. `llrm-qb` target selection: arm64 is no `llrm_target::Target` (`llrm_driver::all()` is x86), so HIR to MIR needs an
+       arm64 layout (datalayout, 8-byte pointers, 16-byte string descriptors) and a route from QB's MIR to
+       `llrm_arm64::driver::{functions, object}` instead of `basic::compiled`.
+    b. QB data: strings, constants, DATA/READ, COMMON and the module's data area are laid out by the x86 path as `masm`
+       segments; arm64 needs them as MIR globals with initializers (or a second data object), and a module descriptor
+       in place of the 48/80-byte header in the code segment (`QB_HEADER`, `statements`, `main`).
+    c. 64-bit runtime ABI, for x86-64 too: runtime frame (`B$ENRA`/`B$EXSA`), `ON ERROR` landing, stack-block entries
+       (`B$DDIM`, `B$CLOS`, ...), varargs, divide trap, as host C or asm per architecture; QB's x87 intrinsics (SIN, COS,
+       ATN, SQR, ...) as libm calls.
+    d. The runtime C itself: clang today (`tests/qb_arm64.rs`); `llrm-arm64-llc` over clang IR later.
+    e. Mach-O: `llrm-qb -fobject-format=macho` for arm64 once a. to c. exist; Mac session verifies.
+    Split proposed to the arm64 spike: it owns backend gaps QB's MIR hits (reported with a minimal `.ll`), this
+    session owns a. to c.
 
 ## Mac session
 
