@@ -196,9 +196,9 @@ pub fn machine_with<'a>(
             slot: registers.slot,
             align: registers.align,
             stack: registers.stack,
-            // No call frame is reserved yet (CF4): every area that can be
-            // pushed is, as the pin does where it cannot reserve one.
-            has_var_sized: true,
+            // A function with variable-sized objects reserves no frame and
+            // pushes every area (`CallFrameOpt::allocates_dynamically`).
+            has_var_sized: false,
             slow_two_mem_ops: false,
         }),
         // The frame pseudos that are left, as `sub`/`add` (every level).
