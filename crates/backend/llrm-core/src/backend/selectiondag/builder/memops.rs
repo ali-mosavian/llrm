@@ -285,9 +285,9 @@ impl Builder<'_> {
         dst_align: u64,
         src_align: u64,
     ) -> Result<Option<SDValue>, Refused> {
-        let slice = self.constant_slice(src);
+        let slice = if self.volatile_memory { None } else { self.constant_slice(src) };
         let widest = self.widest_mem_op(size);
-        let Some(ops) = Self::mem_ops(size, widest, limit, false) else { return Ok(None) };
+        let Some(ops) = Self::mem_ops(size, widest, limit, self.volatile_memory) else { return Ok(None) };
         let (mut src_off, mut dst_off, mut left) = (0u64, 0u64, size);
         let mut chains = Vec::new();
         for width in ops {
@@ -309,7 +309,7 @@ impl Builder<'_> {
                 let info = MemInfo {
                     mem_vt: vt,
                     align: common_alignment(dst_align, dst_off) as u32,
-                    volatile: false,
+                    volatile: self.volatile_memory,
                     base: MemBase::Unknown,
                     ext: None,
                     space: self.space_of(dst),
@@ -324,7 +324,7 @@ impl Builder<'_> {
             let info = MemInfo {
                 mem_vt: vt,
                 align: common_alignment(src_align, src_off) as u32,
-                volatile: false,
+                volatile: self.volatile_memory,
                 base: MemBase::Unknown,
                 ext: None,
                 space: self.space_of(src),
@@ -334,7 +334,7 @@ impl Builder<'_> {
             let info = MemInfo {
                 mem_vt: vt,
                 align: common_alignment(dst_align, dst_off) as u32,
-                volatile: false,
+                volatile: self.volatile_memory,
                 base: MemBase::Unknown,
                 ext: None,
                 space: self.space_of(dst),
@@ -362,7 +362,7 @@ impl Builder<'_> {
         src_align: u64,
     ) -> Result<Option<SDValue>, Refused> {
         let widest = self.widest_mem_op(size);
-        let Some(ops) = Self::mem_ops(size, widest, limit, false) else { return Ok(None) };
+        let Some(ops) = Self::mem_ops(size, widest, limit, self.volatile_memory) else { return Ok(None) };
         let (mut off, mut left) = (0u64, size);
         let mut loads = Vec::new();
         let mut placed = Vec::new();
@@ -375,7 +375,7 @@ impl Builder<'_> {
             let info = MemInfo {
                 mem_vt: vt,
                 align: common_alignment(src_align, off) as u32,
-                volatile: false,
+                volatile: self.volatile_memory,
                 base: MemBase::Unknown,
                 ext: None,
                 space: self.space_of(src),
@@ -393,7 +393,7 @@ impl Builder<'_> {
             let info = MemInfo {
                 mem_vt: vt,
                 align: common_alignment(dst_align, at) as u32,
-                volatile: false,
+                volatile: self.volatile_memory,
                 base: MemBase::Unknown,
                 ext: None,
                 space: self.space_of(dst),
@@ -415,7 +415,7 @@ impl Builder<'_> {
         align: u64,
     ) -> Result<Option<SDValue>, Refused> {
         let widest = self.widest_mem_op(size);
-        let Some(ops) = Self::mem_ops(size, widest, limit, false) else { return Ok(None) };
+        let Some(ops) = Self::mem_ops(size, widest, limit, self.volatile_memory) else { return Ok(None) };
         let largest = ops.iter().copied().max().expect("a store");
         let largest_vt = EVT::integer(largest as u32 * 8);
         let splat = self.memset_value(value, largest_vt);
@@ -431,7 +431,7 @@ impl Builder<'_> {
             let info = MemInfo {
                 mem_vt: vt,
                 align: common_alignment(align, off) as u32,
-                volatile: false,
+                volatile: self.volatile_memory,
                 base: MemBase::Unknown,
                 ext: None,
                 space: self.space_of(dst),
@@ -618,17 +618,28 @@ impl Builder<'_> {
         info: &CallInfo,
         which: &Intrinsic,
     ) -> Result<(), Refused> {
+        let volatile = match instruction.operands.get(3) {
+            Some(Operand::Constant(id)) => matches!(self.module.context.get(*id).kind, ConstantKind::Int(1)),
+            _ => return Err(Refused("memory intrinsic with a variable volatile flag")),
+        };
+        // volatile accesses stay as many, as wide, and in the order written: no
+        // overlapping tail, no constant source (`getMemcpyLoadsAndStores`)
+        self.volatile_memory = volatile;
+        let done = self.lower_mem_intrinsic(instruction, info, which);
+        self.volatile_memory = false;
+        done
+    }
+
+    fn lower_mem_intrinsic(
+        &mut self,
+        instruction: &Instruction,
+        info: &CallInfo,
+        which: &Intrinsic,
+    ) -> Result<(), Refused> {
         let operands = &instruction.operands;
         let proved = |kind: &str| instruction.metadata.iter().any(|(one, _)| one == kind);
         let forward = proved(llrm_mir::intrinsics::FORWARD) && !proved(llrm_mir::intrinsics::BACKWARD);
         let backward = proved(llrm_mir::intrinsics::BACKWARD) && !proved(llrm_mir::intrinsics::FORWARD);
-        let volatile = match operands.get(3) {
-            Some(Operand::Constant(id)) => matches!(self.module.context.get(*id).kind, ConstantKind::Int(1)),
-            _ => return Err(Refused("memory intrinsic with a variable volatile flag")),
-        };
-        if volatile {
-            return Err(Refused("volatile memory intrinsic"));
-        }
         // `rep stos`/`rep movs` and the inline moves step one segment: a huge
         // pointer's run can cross the end of it (and its count outgrow
         // `cx`), which the target's stepped routine handles.
