@@ -227,3 +227,9 @@ arm64 under qemu, same keys: [mid-game](qb-host-shots/arm64-nibbles-midgame.png)
 The arena is blue on every life. The Mac's brown arena was a backend bug: `adrp` of a global plus an offset carried no
 offset, so `arena(i, j).acolor` was read 4096 bytes off (a colour of -1, then "Illegal function call" under qemu).
 Fixed in 022aeb0a3; rebuild the Mac objects.
+
+### Presenter timing (2026-10-25)
+
+Key and clock polls no longer wait for a frame (`dev/sdl/sync.c`): the SDL thread presents every 16 ms on its own, so a
+polling animation (NIBBLES' SparklePause) is sampled at any phase. A mode change and a wait for a key still block.
+Mac: re-check that the sparkles move and the GORILLA banana shows; report under this heading.

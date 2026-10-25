@@ -26,8 +26,6 @@ void host_video_mode_changed(void)
 int dev_key_ready(void)
 {
     leave_if_closed();
-    if (!sdl_key_waiting())
-        sdl_sync_yield_if_due();
     return sdl_key_waiting();
 }
 
@@ -75,7 +73,6 @@ long dev_clock(void)
     unsigned t[TIME_WORDS];
 
     leave_if_closed();
-    sdl_sync_yield_if_due();
     now(t);
     return (((long)t[3] * 60 + t[4]) * 60 + t[5]) * 100 + t[6];
 }

@@ -89,6 +89,8 @@ static void press(SDL_Keycode key, const char *typed)
 
 /* The tone is a full-amplitude square wave centred on zero, at every pitch (a slow ramp once made it a triangle with an
    offset of about 3000 that shrank as the pitch rose). */
+static unsigned asked;
+
 static void check_square_wave(void)
 {
     static const unsigned pitches[] = {440, 880, 2000};
@@ -142,6 +144,16 @@ int qb_host_program(int argc, char **argv)
         gd_plot((turn * 37) % 320, (turn * 11) % 200, (turn * 7) & 255, 0);
     gd_palette_mix(5, 63, 0, 0);
     CHECK(frame_matches());
+
+    /* polling for a key or the clock asks for no frame: a loop that polled and drew in step with the presenter showed
+       the same phase in every frame (NIBBLES' sparkles stood still on the Mac) */
+    asked = sdl_sync_requests();
+    for (turn = 0; turn < 200; turn++) {
+        dev_key_ready();
+        dev_clock();
+        SDL_Delay(1);
+    }
+    CHECK(sdl_sync_requests() == asked);
 
     press(0, "a");
     press(SDLK_F1, 0);
