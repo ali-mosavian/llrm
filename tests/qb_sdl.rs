@@ -64,7 +64,7 @@ fn smoke(sanitize: Option<&str>) {
     for module in runtime {
         build.arg(qb.join(format!("{module}.c")));
     }
-    for module in ["dev", "host", "input", "audio", "present", "sync"] {
+    for module in ["dev", "host", "input", "audio", "tone", "present", "sync"] {
         build.arg(qb.join(format!("dev/sdl/{module}.c")));
     }
     for module in ["video", "vgadata", "tick"] {
