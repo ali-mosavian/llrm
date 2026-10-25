@@ -645,6 +645,11 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
         mems: &[MemRef],
     ) {
+        // A node that folded a volatile access is one (`MachineMemOperand`s
+        // carry the flag): the LIR instruction keeps it.
+        if mems.iter().any(|mem| self.dag.volatile_accesses.contains(mem)) {
+            self.dag.volatile_accesses.insert(node);
+        }
         self.mem_refs.insert(node, mems.to_vec());
     }
 
