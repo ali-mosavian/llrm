@@ -117,7 +117,7 @@ pub fn tied(
     let facts = crate::twoaddress::BodyFacts::of(body);
     for (at, block) in body.blocks.iter().enumerate() {
         let mut walk = crate::twoaddress::Commuter::sized(&facts, at, block.insns.len());
-        let mut insns: Vec<Arc<Insn>> = Vec::new();
+        let mut insns: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len() + block.insns.len() / 4);
         let mut work: Vec<Arc<Insn>> = block.insns.to_vec();
         let mut place = 0;
         while place < work.len() {
