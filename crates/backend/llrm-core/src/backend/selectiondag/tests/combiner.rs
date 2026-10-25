@@ -186,3 +186,23 @@ fn a_not_of_a_float_compare_is_the_inverse_float_compare() {
         assert!(matches!(dag.node(dag.operand(cond, 2)).data, NodeData::CondCode(c) if c == not_cc), "{cc:?}");
     }
 }
+
+/// After legalization `oeq` and `une` are not legal condition codes (two flags
+/// on x86): `not (setcc une)` stays a `xor`, or an illegal code reaches the
+/// matcher. Before it the fold is made.
+#[test]
+fn a_not_of_a_float_compare_does_not_make_an_illegal_code_after_legalization() {
+    for (level, folds) in [(CombineLevel::BeforeLegalizeTypes, true), (CombineLevel::AfterLegalizeDag, false)] {
+        let mut dag = dag();
+        let (a, b) = (load(&mut dag, EVT::Simple(MVT::F64), 1), load(&mut dag, EVT::Simple(MVT::F64), 2));
+        let cmp = dag.get_setcc(EVT::I1, a, b, CondCode::SetUNe);
+        let one = dag.get_constant(1, EVT::I1);
+        let not = dag.get_node(ISD::Xor, EVT::I1, &[cmp, one]);
+        let (chain, dest) = (dag.entry_node(), dag.get_basic_block(1));
+        let branch = dag.get_node(ISD::BrCond, EVT::OTHER, &[chain, not, dest]);
+        dag.set_root(branch);
+        x86(&mut dag, level);
+        let cond = dag.operand(dag.get_root(), 1);
+        assert_eq!(dag.opcode(cond) == ISD::SetCC, folds, "{level:?}");
+    }
+}
