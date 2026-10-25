@@ -571,6 +571,26 @@ mod real_mode_addresses {
         (address, a, i, scaled)
     }
 
+    /// `frame - (i << 2) + 24` took the shift as a negated index with scale 4
+    /// at real mode, an address nothing encodes: `qb/bounds.bas` stopped in
+    /// `LOCALS` with "a scaled 16-bit index at m16".
+    #[test]
+    fn a_subtracted_shift_is_not_a_scaled_index_in_real_mode() {
+        let mut dag = TestDag::new();
+        let base = dag.input(1, mvt::i16);
+        let i = dag.input(2, mvt::i16);
+        let two = dag.make_constant(2, mvt::i8);
+        let scaled = SDValue::new(dag.node(isd::SHL, &[mvt::i16], &[i, two]), 0);
+        let difference = SDValue::new(dag.node(isd::SUB, &[mvt::i16], &[base, scaled]), 0);
+        let k = dag.make_constant(24, mvt::i16);
+        let address = SDValue::new(dag.node(isd::ADD, &[mvt::i16], &[difference, k]), 0);
+        let mut am = AddressMode::default();
+
+        assert!(!matcher(&mut dag, AddrMode::Real16).match_address(address, &mut am));
+
+        assert_eq!(am.scale, 1, "no scale in 16-bit addressing");
+    }
+
     #[test]
     fn a_word_array_element_has_no_scaled_index_in_real_mode() {
         let mut dag = TestDag::new();
