@@ -426,7 +426,12 @@ fn number(
             }
             // `1E+` is `1E+0`: a sign without digits still completes the
             // exponent
-            if bytes.get(j).is_some_and(u8::is_ascii_digit) || sign.is_some() {
+            // A bare `1E` or `1D` is `1E0` (BC, all three compilers) unless a letter or digit
+            // follows the marker at once: `1EA` is a syntax error.
+            let bare = sign.is_none()
+                && !bytes.get(j).is_some_and(u8::is_ascii_digit)
+                && !bytes.get(marker_at + 1).is_some_and(|b| name_char(*b));
+            if bytes.get(j).is_some_and(u8::is_ascii_digit) || sign.is_some() || bare {
                 exponent_marker = Some(marker.to_ascii_uppercase());
                 real = true;
                 digits.push('E');

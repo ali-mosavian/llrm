@@ -2181,3 +2181,15 @@ fn put_may_leave_out_its_raster_operation() {
         matches!(&module.statements[..], [_, Statement::Runtime { name, arguments, .. }] if name == "PUT" && arguments.len() == 3)
     );
 }
+
+#[test]
+fn a_bare_exponent_marker_is_an_exponent_of_zero() {
+    // `IF 1E THEN` and `x = 1D` were refused as "not a valid number"; BC 4.5, PDS 7.1 and
+    // VBDOS accept them (1E0), and still refuse `1EA`.
+    for source in ["IF 1E THEN PRINT 1\r\n", "IF 1D THEN PRINT 1\r\n", "x = 1E : y = 2D-1\r\n"] {
+        for dialect in [Dialect::QuickBasic45, Dialect::Pds71, Dialect::VbDos] {
+            parse(source, dialect).unwrap_or_else(|error| panic!("{source:?}: {}", error.message));
+        }
+    }
+    assert!(parse("x = 1EA\r\n", Dialect::QuickBasic45).is_err());
+}
