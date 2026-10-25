@@ -2150,6 +2150,17 @@ impl Emitter<'_, '_> {
                 self.values.insert(result, held.value);
                 let mnemonic = format!("f{}", prefix.to_ascii_lowercase());
                 self.push(Operation::FloatUnary, &mnemonic, vec![Loc::Held(held)], vec![Loc::Held(source)]);
+                // The sequence pushes above its operand: the stack's top slots
+                // are not free for a value live across it (`fexp2` overflowed
+                // the stack with six doubles live: pow_stack_depth).
+                let scratch = llrm_x86::select::x87_scratch(&mnemonic);
+                if scratch > 0 {
+                    let last = self.blocks.last_mut().and_then(|block| block.insns.last_mut()).expect("the insn");
+                    Arc::get_mut(last)
+                        .expect("a fresh instruction")
+                        .clobbers
+                        .extend(crate::backend::allocate::RFP.iter().rev().take(scratch).copied());
+                }
             }
             "ADD" | "SUB" | "SUBR" | "MUL" | "DIV" | "DIVR" => {
                 let Loc::Held(left) = self.operand(node.ops[0])? else {

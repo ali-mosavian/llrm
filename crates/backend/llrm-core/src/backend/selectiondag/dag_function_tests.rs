@@ -3280,3 +3280,36 @@ fn a_float_spill_keeps_the_width_the_language_asks_for() {
     let done = selected(&module, "f", &llrm_x86_m32::M32, &c, &[]).unwrap_or_else(|e| panic!("{}", e.0));
     assert!(done.body.float_bytes.values().any(|bytes| *bytes == 8), "{:?}", done.body.float_bytes);
 }
+
+/// `fexp2` pushes two slots above its operand and `flog2` one: with six doubles
+/// live the `fld1` overflowed the x87 stack (`pow_stack_depth.bas` died with
+/// "Overflow" at run time under `--isel=dag`). The sequence says it clobbers
+/// the stack's top slots, as the old selector marks it.
+#[test]
+fn a_sequence_that_pushes_above_its_operand_clobbers_the_top_stack_registers() {
+    use llrm_lir::registers::RegId;
+    let text = "target datalayout = \"e-p:32:32-i64:32-f80:32-n8:16:32\"
+declare double @llvm.exp2.f64(double)
+declare double @llvm.log2.f64(double)
+define double @f(double %x) {
+  %a = call double @llvm.exp2.f64(double %x)
+  %b = call double @llvm.log2.f64(double %a)
+  ret double %b
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let clobbers = |name: &str| -> Vec<RegId> {
+        let one = done
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .find(|one| one.what.as_ref().and_then(|what| what.name.as_deref()) == Some(name))
+            .unwrap_or_else(|| panic!("no {name}"));
+        one.clobbers.iter().copied().collect()
+    };
+    assert_eq!(clobbers("fexp2"), [RegId::MM5, RegId::MM6]);
+    assert_eq!(clobbers("flog2"), [RegId::MM6]);
+}
