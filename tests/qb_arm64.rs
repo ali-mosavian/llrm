@@ -70,6 +70,20 @@ fn the_headless_device_does_what_the_interface_says_on_arm64() {
     assert_eq!(printed.trim(), "ok");
 }
 
+/// The dirty-line protocol under a writer and a presenter thread (tests/qb_dirty.rs); qemu orders memory strongly on an
+/// x86 host, so a tear shows only on arm64 hardware.
+#[test]
+fn the_presenter_never_sees_a_torn_line_on_arm64() {
+    let sources = [
+        "tests/qbhost/dirty_stress.c",
+        "runtime/qb/dev/host/video.c",
+        "runtime/qb/dev/host/vgadata.c",
+        "runtime/qb/dev/host/tick.c",
+        "runtime/shared/posix/os.c",
+    ];
+    assert_eq!(build_and_run("dirty_stress", &sources, &[]).trim(), "ok");
+}
+
 #[test]
 fn the_headless_graphics_pass_the_oracle_on_arm64() {
     let mut sources = vec!["tests/qbgfx/fill_ops.c", "tests/qbhost/report.c"];

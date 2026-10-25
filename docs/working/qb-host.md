@@ -55,7 +55,7 @@ runtime/qb/                portable runtime; touches the machine only through ru
 
 ## Open rows (the issue's checklist against what landed)
 
-1. macOS arm64: not built or run natively (arm64 Linux under qemu passes the headless tests: `tests/qb_arm64.rs`, sysroot from `tools/build-arm64-sysroot.sh`). Milestone 6, and the atomics/dirty-line stress on arm64 (test 4), are open.
+1. macOS arm64: not built or run natively (arm64 Linux under qemu passes the headless tests: `tests/qb_arm64.rs`, sysroot from `tools/build-arm64-sysroot.sh`). Milestone 6 is open. The dirty-line stress (`tests/qb_dirty.rs`, `tests/qbhost/dirty_stress.c`) passes on x86 (plain, TSan) and arm64 under qemu, which orders memory strongly: only arm64 hardware can show a tear.
 2. Real window and real audio device: only the dummy drivers ran; no X11/Wayland/sound server on tinytim.
 3. Audio: the callback is tested only for receiving the tone (`sdl_audio_current`), not for its samples; PLAY timing through
    SDL is untested (PLAY parse and timing are tested headless). No tone queue (see Deviations).
@@ -134,8 +134,8 @@ Each: verify, then write the result under the row number in the open rows.
    between notes; `sdl_audio_current` matches the note.
 5. Keyboard (row 4): letters, digits, arrows, F1-F10, Enter, Esc, Backspace, Tab, Shift/Caps, numeric pad; compare the
    (ASCII, scan code) pairs with `INKEY$` on DOS. Report missing keys and Cmd/Option combinations.
-6. arm64 atomics (row 1): the dirty-line stress (test 4 of the milestone) under `-fsanitize=thread` and without; the
-   present thread sees a whole line once its flag is set.
+6. arm64 atomics (row 1): `cargo test --release --test qb_dirty` (the dirty-line stress, plain and under
+   `-fsanitize=thread`); the present thread sees a whole line once its flag is set.
 7. Object path: `llrm-qb -m64` writes ELF only (`x86-m64 cannot write macho`) and the arm64 backend has no QB route
    (row 17), so no compiled QB program runs on the Mac yet. Check whether `llrm-qb -m64 -fobject-format=macho` still
    refuses and report the message.
