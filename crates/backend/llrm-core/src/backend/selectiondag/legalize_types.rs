@@ -42,7 +42,9 @@
 //! `ReplaceValueWith`
 //! ([L636](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeTypes.cpp#L636)).
 
-use llrm_support::hash::{HashMap, HashSet};
+use llrm_support::hash::HashMap;
+
+use llrm_mir::hash::HashSet;
 
 use super::actions::TargetLowering;
 use super::dag::{BooleanContents, NodeData, Rauw, SDNodeFlags, SDValue, SelectionDAG};
@@ -1554,7 +1556,7 @@ impl<'a> TypeLegalizer<'a> {
         // them
         let mut start = chain;
         let mut work = vec![chain];
-        let mut seen = HashSet::default();
+        let mut seen = llrm_mir::hash::HashSet::default();
         while let Some(at) = work.pop() {
             if !seen.insert(at.node) {
                 continue;

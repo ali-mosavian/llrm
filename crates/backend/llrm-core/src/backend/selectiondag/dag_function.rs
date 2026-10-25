@@ -198,6 +198,10 @@ struct CallConventions<'a> {
 pub struct RuntimeContracts<'a> {
     pub abi: &'a dyn crate::backend::assemble::Abi,
     pub segments: &'a crate::backend::target::Segments,
+    /// Whether the program's runtime routines have contracts of their own
+    /// (QB's); a call of any other routine reads the ABI's for what it
+    /// destroys.
+    pub runtime: bool,
 }
 
 /// For each call in `function` of a `llrm.qb.` routine: `Ok` when the
@@ -275,6 +279,50 @@ fn modelled(
     Ok(if contract.flags_result { RuntimeAnswer::Flags } else { RuntimeAnswer::Registers })
 }
 
+impl CallConventions<'_> {
+    /// The contract of a call of `callee` where its convention has no
+    /// description: the ABI's, named by the routine (`call_clobbers`).
+    fn contract(
+        &self,
+        callee: Option<&Callee>,
+    ) -> Option<crate::abi::runtime::Contract> {
+        let (contracts, Some(Callee::Global(id))) = (self.contracts?, callee) else { return None };
+        let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned().unwrap_or_default();
+        contracts.abi.contract(&name, false, 0).ok()
+    }
+
+    fn contract_clobbers(
+        &self,
+        callee: Option<&Callee>,
+    ) -> Option<std::collections::BTreeSet<llrm_lir::registers::RegId>> {
+        let contract = self.contract(callee)?;
+        Some(crate::backend::callregs::call_clobbers(&contract, self.contracts?.segments, self.general))
+    }
+
+    /// `call_clobbered_high_keeping`: what the callee keeps only the 16-bit
+    /// half of, less the registers it keeps whole.
+    fn contract_high(
+        &self,
+        callee: Option<&Callee>,
+    ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
+        let Some(contract) = self.contract(callee) else { return Default::default() };
+        let regs = llrm_lir::registers::Regs(self.arch.registers());
+        let whole: std::collections::BTreeSet<_> = self
+            .arch
+            .callee_saved()
+            .into_iter()
+            .filter(|(full, pushed)| full == pushed)
+            .map(|(full, _)| regs.root(full))
+            .collect();
+        crate::backend::callregs::call_clobbered_high_keeping(
+            &contract,
+            self.contracts.expect("a contract implies contracts").segments,
+            self.general,
+            &whole,
+        )
+    }
+}
+
 impl super::emit::Conventions for CallConventions<'_> {
     fn clobbers_high(
         &self,
@@ -286,7 +334,7 @@ impl super::emit::Conventions for CallConventions<'_> {
             }
             _ => 0,
         };
-        let Some(found) = self.arch.calling().by_number(number) else { return Default::default() };
+        let Some(found) = self.arch.calling().by_number(number) else { return self.contract_high(callee) };
         let regs = llrm_lir::registers::Regs(self.arch.registers());
         self.arch
             .convention_callee_saved(found)
@@ -329,7 +377,9 @@ impl super::emit::Conventions for CallConventions<'_> {
             }
             _ => 0,
         };
-        let found = self.arch.calling().by_number(number)?;
+        // BASIC's convention (and any other with no row in calling.toml) is
+        // the ABI's contract of the routine, as the old selector reads it.
+        let Some(found) = self.arch.calling().by_number(number) else { return self.contract_clobbers(callee) };
         let regs = llrm_lir::registers::Regs(self.arch.registers());
         let mut out: std::collections::BTreeSet<_> = found
             .clobbered
@@ -626,7 +676,9 @@ fn selected_in(
         .with_tail_calls(std::env::var_os("LLRM_TAIL_CALLS").is_some() || TAIL_CALLS.get())
         .with_tti(cpu.target().tti())
         .with_runtime_call_verdicts(
-            contracts.map(|contracts| runtime_call_verdicts(module, function, &layout, arch, contracts.abi)),
+            contracts
+                .filter(|contracts| contracts.runtime)
+                .map(|contracts| runtime_call_verdicts(module, function, &layout, arch, contracts.abi)),
         );
     let tables = tables(arch);
     // The builder numbers the fixed objects the stack parameters make: a byval
@@ -645,12 +697,10 @@ fn selected_in(
     let frame = Frame::new(cells);
     // The function's static allocas are frame objects 0, 1, ... in the order
     // `FunctionLoweringInfo` numbered them: laid out below BP, each on its
-    // type's alignment.
-    let mut allocas: Vec<(i32, llrm_mir::module::ValueId)> =
-        info.static_allocas.iter().map(|(value, index)| (*index, value.clone())).collect();
-    allocas.sort();
-    let alloca_count = allocas.len() as i32;
-    for (index, value) in allocas {
+    // type's alignment. Locals whose lifetime markers say they are never live
+    // together are one object (StackColoring).
+    let mut sizes: Vec<(llrm_mir::module::ValueId, i64, i64)> = Vec::new();
+    for (value, _) in info.static_allocas.iter() {
         let ValueDef::Instruction(def) = function.value(value).def else {
             return refuse("an alloca that is not an instruction");
         };
@@ -678,8 +728,20 @@ fn selected_in(
         };
         let align =
             crate::backend::isel::natural_align(types, &layout, allocated).max(size & size.wrapping_neg()).clamp(1, 4);
+        sizes.push((value, size, align));
+    }
+    sizes.sort_by_key(|(value, _, _)| info.static_allocas[value]);
+    let groups = shared_allocas(module, function, &sizes);
+    let alloca_count = groups.iter().map(|(_, group)| *group + 1).max().unwrap_or(0);
+    info.share_allocas(groups.iter().cloned(), alloca_count);
+    let mut objects: Vec<(i64, i64)> = vec![(0, 1); alloca_count as usize];
+    for ((_, size, align), (_, group)) in sizes.iter().zip(&groups) {
+        let object = &mut objects[*group as usize];
+        *object = (object.0.max(*size), object.1.max(*align));
+    }
+    for (index, (size, align)) in objects.into_iter().enumerate() {
         let made = Temporaries(&frame).create_stack_temporary(size as u32, align as u32);
-        debug_assert_eq!(made, index, "frame objects are numbered as the builder numbered them");
+        debug_assert_eq!(made, index as i32, "frame objects are numbered as the builder numbered them");
     }
     let mut hooks = X86Hooks::new(Options {
         cpu: if m16 {
@@ -844,7 +906,7 @@ fn selected_in(
         inline_places.extend(done.inline_places.iter().cloned());
         emitted.extend(done.blocks);
         if block == parent && is_pad(function, block) {
-            let Some(contracts) = contracts else {
+            let Some(contracts) = contracts.filter(|contracts| contracts.runtime) else {
                 return refuse("a landing pad of a program with no runtime contracts");
             };
             if landing.replace(emitted[from].at).is_some() {
@@ -996,6 +1058,7 @@ fn selected_in(
             state.float_bytes.iter().map(|(number, bytes)| (*number, if cpu.spills_extended { 10 } else { *bytes }));
         body.float_bytes = std::sync::Arc::new(table.collect());
     }
+    body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
     body.min_size = cpu.min_size || llrm_mir::memory::has(&function.attrs, "minsize");
     body.sealed_arguments = true;
     body.ordered = true;
@@ -1308,4 +1371,74 @@ pub(super) fn read_before_defined(
         }
     }
     None
+}
+
+/// DEVIATE SC1 (owner w-2): the pin's StackColoring runs on MIR after selection
+/// and merges the frame objects its LIFETIME_START/END pseudos bound; this
+/// groups the allocas on the IR, with the old selector's rule, before the
+/// objects are made. Same frames on the shapes measured ((4,4) -> (4,2)); exit:
+/// the MIR-level pass over the markers the DAG builder keeps.
+///
+/// StackColoring over the IR's lifetime markers (`llvm.lifetime.start` and
+/// `.end`, which the builder keeps as chain nodes): the frame object of each
+/// static alloca in `sizes` (value, bytes, alignment), locals never live
+/// together sharing one, the largest first. Without markers, or after a
+/// second return from `setjmp`, each has its own.
+fn shared_allocas(
+    module: &llrm_mir::module::Module,
+    function: &llrm_mir::module::Function,
+    sizes: &[(llrm_mir::module::ValueId, i64, i64)],
+) -> Vec<(llrm_mir::module::ValueId, i32)> {
+    use llrm_mir::intrinsics::Intrinsic;
+    let own = || sizes.iter().enumerate().map(|(at, (value, _, _))| (*value, at as i32)).collect::<Vec<_>>();
+    if llrm_mir::memory::calls_returns_twice(module, function) {
+        return own();
+    }
+    let layout: Vec<llrm_mir::module::BlockId> = function.layout().to_vec();
+    let positions: crate::support::hash::IndexMap<_, i64> = layout
+        .iter()
+        .flat_map(|&block| function.iter_block(block))
+        .enumerate()
+        .map(|(at, inst)| (inst, at as i64))
+        .collect();
+    let live = crate::backend::lifetimes::intervals(function, &layout, &positions, |inst| {
+        let global = llrm_mir::memory::callee(&module.context, function, inst)?;
+        let starts = match module.global(global).intrinsic()? {
+            Intrinsic::LifetimeStart => true,
+            Intrinsic::LifetimeEnd => false,
+            _ => return None,
+        };
+        let llrm_mir::module::Operand::Value(object) = *function.instruction(inst).operands.get(1)? else {
+            return None;
+        };
+        Some(crate::backend::lifetimes::Marker { object, starts })
+    });
+    let mut order: Vec<usize> = (0..sizes.len()).collect();
+    order.sort_by_key(|&at| (-sizes[at].1, at));
+    let mut colors: Vec<crate::backend::slots::Color> = Vec::new();
+    let mut group_of = vec![0i32; sizes.len()];
+    for at in order {
+        let (value, size, _) = &sizes[at];
+        let interval = live.get(value);
+        let size = (*size + *size % 2) as u32;
+        let color = interval.and_then(|interval| crate::backend::slots::choose(&colors, interval, size, &[]));
+        let color = color.unwrap_or_else(|| {
+            colors.push((colors.len() as i64, size, Vec::new()));
+            colors.len() - 1
+        });
+        colors[color]
+            .2
+            .push(
+                match interval {
+                    Some(interval) => interval.clone(),
+                    // Live throughout: it fits no other.
+                    None => crate::analysis::intervals::Interval::new(
+                        0,
+                        vec![crate::analysis::intervals::Segment { start: i64::MIN, end: i64::MAX }],
+                    ),
+                },
+            );
+        group_of[at] = color as i32;
+    }
+    sizes.iter().zip(group_of).map(|((value, _, _), group)| (*value, group)).collect()
 }

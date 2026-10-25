@@ -36,7 +36,7 @@
 //! `PromoteNode`
 //! ([L5432](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L5432)).
 
-use llrm_support::hash::HashSet;
+use llrm_mir::hash::HashSet;
 
 use super::actions::{Action, TargetLowering};
 use super::dag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};

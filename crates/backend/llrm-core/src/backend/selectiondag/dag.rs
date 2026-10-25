@@ -385,9 +385,14 @@ impl SelectionDAG {
             .into_iter()
             .flatten()
             .copied()
-            .filter(|&user| !self.deleted.contains(&user) && self.nodes[user as usize].ops.contains(&value))
+            .filter(|&user| {
+                (self.deleted.is_empty() || !self.deleted.contains(&user))
+                    && self.nodes[user as usize].ops.contains(&value)
+            })
             .collect();
-        users.sort_unstable();
+        if !users.is_sorted() {
+            users.sort_unstable();
+        }
         users.dedup();
         users.into_iter()
     }

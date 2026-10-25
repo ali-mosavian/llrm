@@ -731,3 +731,20 @@ fn a_far_fill_through_a_call_result_does_not_rebuild_the_dword() {
     // none.
     assert_eq!(names.iter().filter(|name| **name == "shl").count(), 1, "{names:?}");
 }
+
+/// `rep stosb` at real mode reads DI only, but the destination was the whole
+/// joined pointer (`shl; movzx; add; mov edi, ..`: 3 extra instructions and 3
+/// live values per far fill in `_part_init`). The offset word goes to DI as it
+/// is.
+#[test]
+fn a_far_fill_takes_the_offset_word_not_the_joined_pointer() {
+    let ir = FAR_MEMSET
+        .replace("  %p = addrspacecast ptr addrspace(2) %s to ptr addrspace(4)\n", "")
+        .replace("ptr addrspace(2) %s", "ptr addrspace(4) %p");
+    let done = select_f(&ir).unwrap_or_else(|why| panic!("{why}"));
+    let insns = done.body.insns();
+    let fill = insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.op == Operation::Fill)).expect("a fill");
+    let sources = &fill.what.as_ref().expect("semantics").sources;
+    let crate::model::ir::Loc::Held(destination) = &sources[2] else { panic!("{fill:?}") };
+    assert_eq!(destination.width, 2, "the joined dword, not the offset word: {fill:?}");
+}
