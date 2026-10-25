@@ -77,6 +77,18 @@ long dev_clock(void)
     return (((long)t[3] * 60 + t[4]) * 60 + t[5]) * 100 + t[6];
 }
 
+long dev_clock_fine(void)
+{
+    struct timespec at;
+    struct tm local;
+
+    leave_if_closed();
+    clock_gettime(CLOCK_REALTIME, &at);
+    localtime_r(&at.tv_sec, &local);
+    return ((long)(local.tm_hour * 60 + local.tm_min) * 60 + local.tm_sec) * 10000 +
+           at.tv_nsec / 100000;
+}
+
 void dev_date(unsigned *year, unsigned *month, unsigned *day)
 {
     unsigned t[TIME_WORDS];

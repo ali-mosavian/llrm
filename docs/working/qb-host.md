@@ -279,3 +279,16 @@ Native x86-32: [NIBBLES level 1](qb-host-shots/x86-32-nibbles-level1.png), [GORI
 `llrm-qb -m64 -fobject-format=elf -O2`: NIBBLES is refused with `Semantics(op=push, sources=Mem(addr=[seg:...+0x4], width=4 ...))`
 (an x87 operand the m64 backend has no form for); GORILLA with `fatan must be allocated as st(0) -> st(0)`. Both are float
 code: they wait for the SSE chain (#4736, #4744). HELLO and PEEK/POKE-free programs run.
+
+## DOS TIMER
+
+`TIMER` on DOS read INT 21h function 2Ch, which moves with the BIOS tick: 55 ms steps. `dev_clock_fine` (tenths of a
+millisecond, a new device op) reads the tick count and the timer chip together (`dev/dos/*/devclock.c`); `TIMER` is then limited by its
+SINGLE (3.9 ms before 18:12, 7.8 ms after). The chip runs in square-wave mode and counts 65536 to 0 in each half of a tick, so the
+read-back status's output pin says which half. A tick the interrupt has not counted yet is added, never stepped back over.
+Headless defines it as `dev_clock() * 100`; SDL reads `CLOCK_MONOTONIC`. Test: `tests/qbrt/llrm_timer.bas` (m16 and m32, with `QB45_DIR`).
+
+## Open Watcom on macOS
+
+`setvars.sh` names GCC for every host and Open Watcom's GCC configuration has no macOS, so its bootstrap built nothing. `native_tools`
+(`toolchain/cache.sh`) names clang on Darwin; `cargo build --release` with the `toolchain` feature now builds on a Mac.

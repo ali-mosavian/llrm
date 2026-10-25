@@ -37,6 +37,7 @@ void dev_tone(unsigned hertz);
 
 /* The clock. */
 long dev_clock(void); /* the time of day in hundredths of a second since midnight */
+long dev_clock_fine(void); /* the same in tenths of a millisecond */
 void dev_date(unsigned *year, unsigned *month, unsigned *day);
 void dev_time(unsigned *hour, unsigned *minute, unsigned *second);
 /* Set the clock; 0 if it took the date or time, else the clock refused it (an impossible one). */

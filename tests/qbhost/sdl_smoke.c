@@ -155,6 +155,21 @@ int qb_host_program(int argc, char **argv)
     }
     CHECK(sdl_sync_requests() == asked);
 
+    /* the fine clock was dev_clock() * 100: always a multiple of 100, so TIMER stepped by hundredths */
+    {
+        long fine, last = dev_clock_fine();
+        int odd = 0;
+
+        for (turn = 0; turn < 200; turn++) {
+            fine = dev_clock_fine();
+            odd |= fine % 100 != 0;
+            CHECK(fine >= last || last - fine > 800000);
+            last = fine;
+            SDL_Delay(1);
+        }
+        CHECK(odd);
+    }
+
     press(0, "a");
     press(SDLK_F1, 0);
     for (turn = 0; turn < 100 && !sdl_key_waiting(); turn++)
