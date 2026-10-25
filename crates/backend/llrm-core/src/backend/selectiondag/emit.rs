@@ -245,6 +245,9 @@ struct Emitter<'a, 'd> {
     /// The value the last `CopyToReg ES` put there: the selector of the next
     /// cell through ES that is not based on a loaded far pointer.
     es: Option<Held>,
+    /// What each `CopyToReg ES` put there, by node: a cell takes the one of
+    /// the copy it is chained after, whatever was set last.
+    es_copies: HashMap<u32, Held>,
     /// The node whose flags EFLAGS holds now.
     flags_now: Option<u32>,
     /// The select a following one may join.
@@ -347,6 +350,7 @@ pub fn emit_in(
         dag,
         ctx,
         values: HashMap::new(),
+        es_copies: HashMap::new(),
         state,
         blocks: vec![EmitBlock { at: first_at, ..EmitBlock::default() }],
         classes: Vec::new(),
@@ -684,6 +688,7 @@ impl Emitter<'_, '_> {
             ISD::CopyToReg if self.is_es(node.ops[1]) => {
                 let selector = self.held_operand(node.ops[2])?;
                 self.es = Some(selector);
+                self.es_copies.insert(n, selector);
                 Ok(())
             }
             ISD::CopyToReg
@@ -811,6 +816,12 @@ impl Emitter<'_, '_> {
             && instr::desc(opcode as u16)
                 .is_some_and(|desc| desc.implicit_defs.contains(&llrm_dagisel::generated::ids::x86::EFLAGS));
         let previous = self.flags_now.filter(|&p| p != n);
+        // The scheduler may put two `CopyToReg ES` ahead of the cells that read
+        // them: each cell reads its own.
+        let node = self.dag.node(SDValue { node: n, res: 0 });
+        if let Some(selector) = node.ops.iter().find_map(|op| self.es_copies.get(&op.node).copied()) {
+            self.es = Some(selector);
+        }
         self.machine_in(n, opcode)?;
         if writes_flags && let Some(previous) = previous {
             self.save_carry(previous, before);
