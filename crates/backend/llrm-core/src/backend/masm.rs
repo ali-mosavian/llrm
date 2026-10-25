@@ -1319,7 +1319,9 @@ fn frame_omitted(
     held: bool,
 ) -> Option<Vec<Item>> {
     let omitted = stack_addressed(procedure, number)?;
-    if !procedure.size || held {
+    // Where allocation freed the frame register the pin's `hasFP` said no, and
+    // the pin omits it whatever the bytes (BASIC, which never asks, compares).
+    if !procedure.size || held || procedure.registers.free {
         return Some(omitted);
     }
     let bytes = |items: &[Item]| -> usize {
