@@ -1,8 +1,8 @@
-# Bench table, tip a33fdfff7
+# Bench table vs min(gcc, clang), tip a33fdfff7 (not the pin-llc table)
 
 TL;DR: at -O2 the dag selector is 1.143x old on clocks (1.063 vs 0.930 of min(gcc, clang)) and 0.957x on code bytes (1.128 vs 1.179). -Os code: dag 1.007, old 0.956.
 
-Method: tip a33fdfff7ab1088d71225b2e502a9f9abcd3652e (includes #4780); llrm-c md5 7a42e6825e865ea80e03894e5d042de8, dist via pair_build; `--isel=old` / `--isel=dag` per column; 71 programs, m32; gcc 13.4 and pinned clang d1106deb71cc rebuilt by vsgcc build.sh at stack alignment 4; clocks from the vsgcc harness price table (486); no LLRM_* env. All 71 programs ok in both columns; no failed or missing rows.
+Method: tip a33fdfff7ab1088d71225b2e502a9f9abcd3652e (includes #4780); llrm-c md5 7a42e6825e865ea80e03894e5d042de8, dist `~/scratch/sbp-a33fdfff7ab1088d71225b2e502a9f9abcd3652e/dist/llrm-c` (pair_build); its llrm-c.d names only `wt-pair-a33fdfff7ab1088d71225b2e502a9f9abcd3652e` sources (1190 refs, no other sha); `--isel=old` / `--isel=dag` per column; 71 programs, m32; gcc 13.4 and pinned clang d1106deb71cc rebuilt by vsgcc build.sh at stack alignment 4; clocks from the vsgcc harness price table (486); no LLRM_* env. All 71 programs ok in both columns; no failed or missing rows.
 
 Geomean of llrm / max(1, min(gcc, clang)) per program; below 1.0 beats the best reference.
 
@@ -16,3 +16,13 @@ Geomean of llrm / max(1, min(gcc, clang)) per program; below 1.0 beats the best 
 | -O3 | code bytes | 1.233 | 1.182 | 0.959 | recchop 22.32, shellsort 4.64, queens 3.00 |
 | -Os | clocks | 0.926 | 0.918 | 0.991 | x_ll_div 1.50, x_insertion 1.26, recpow 1.24 |
 | -Os | code bytes | 0.956 | 1.007 | 1.054 | recpow 1.31, switch 1.26, x_strlen 1.26 |
+
+Reference-bound rows (clocks, -O2; ratio is against the faster of gcc/clang):
+
+| prog | old | dag | gcc | clang |
+|---|---|---|---|---|
+| rectwo | 1798940 | 1847560 | 555823 | 1823245 |
+| x_iir | 55530 | 132025 | 60034 | 130533 |
+| fib | 340921 | 340921 | 210636 | 362808 |
+
+rectwo and fib: old equals dag; gcc's recursion rewrite is the gap, not selection. x_iir: dag equals clang (130533), old equals gcc (60034); the 2.20 is gcc beating clang 2.2x. Against the pin llc (w12) x_iir is faithful, so the dag-vs-old gap here is the pin's own gap to gcc, not a flip defect.
