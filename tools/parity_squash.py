@@ -1055,12 +1055,6 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             # LAND_FAST_TESTS=1: also the lib tests of the crates the batch changes (the user's 10-19 call is no tests; this is the switch for the opposite call)
             if os.environ.get("LAND_FAST_TESTS") == "1":
                 changed = git("diff", "--name-only", BASE, "HEAD").split()
-                # The always-on scanners read sources and docs (milliseconds): a red one refuses the batch before the minutes of lib tests it would otherwise wait for.
-                stage("scanners-early")
-                if new := sorted(landing_scanner_failures(changed, False)):
-                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
-                    failed_units.update(new)
-                    return False
                 stage("lib-tests")
                 if new := sorted(new_lib_failures(changed)):
                     print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")

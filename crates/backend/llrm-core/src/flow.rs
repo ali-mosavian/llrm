@@ -84,6 +84,7 @@ const UNOPTIMIZED: &[&str] = &[
 
 /// The parity registry's slot of each machine phase, by class name.
 const SLOTS: &[(&str, &str)] = &[
+    ("EarlyTailDuplicate", "earlytaildup@1"),
     ("FarIndirectCalls", "farcall@1"),
     ("LoadFold", "pushfold@6"),
     ("CmpAsSub", "cmpsub@1"),
@@ -148,6 +149,9 @@ pub fn machine_with<'a>(
     }
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
     let mut phases: Vec<Box<dyn LIRTransform + 'a>> = vec![
+        // Directly after selection, as the pin has it: a small join copied into
+        // the blocks that jump to it (EarlyTailDuplicate).
+        Box::new(crate::backend::earlytaildup::EarlyTailDuplicate { size: target.size }),
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
         // As the pin's selection has it: a once-read load is the memory operand
         // of its reader before MachineCombiner sees the chain.
@@ -163,6 +167,10 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::phiconst::SharedConstants),
         // Before the phis go: a value nothing defines is read as undef.
         Box::new(crate::processimpdefs::ProcessImplicitDefs),
+        // On SSA, ahead of the cmov conversion and EarlyMachineLICM (the pin's
+        // addILPOpts): a chain of one integer operation rebuilt so its late
+        // operand joins last.
+        Box::new(crate::backend::combiner::MachineCombiner),
         // On SSA, a loop-invariant computation in the preheader (the pin:
         // EarlyMachineLICM, ahead of MachineCSE).
         Box::new(crate::backend::machinelicm::MachineLicm { classes: Rc::clone(classes) }),
@@ -174,9 +182,6 @@ pub fn machine_with<'a>(
         // On SSA, after sinking (the pin's PeepholeOptimizer): a subtract
         // nothing reads is a compare (optimizeCompareInstr).
         Box::new(crate::backend::peepholeopt::PeepholeOptimizer),
-        // On SSA, after sinking (the pin's addILPOpts): a chain of one integer
-        // operation rebuilt so its late operand joins last.
-        Box::new(crate::backend::combiner::MachineCombiner),
         // On SSA, before the pin allocates: two addresses that differ in a
         // displacement are one (X86OptimizeLEAs, pre-RA).
         Box::new(crate::backend::leaopt::OptimizeLeas { size: target.size }),
@@ -192,9 +197,9 @@ pub fn machine_with<'a>(
             slot: registers.slot,
             align: registers.align,
             stack: registers.stack,
-            // No call frame is reserved yet (CF4): every area that can be
-            // pushed is, as the pin does where it cannot reserve one.
-            has_var_sized: true,
+            // A function with variable-sized objects reserves no frame and
+            // pushes every area (`CallFrameOpt::allocates_dynamically`).
+            has_var_sized: false,
             slow_two_mem_ops: false,
         }),
         // The frame pseudos that are left, as `sub`/`add` (every level).
@@ -534,6 +539,23 @@ mod tests {
                 .collect();
         let at = |one: &str| names.iter().position(|name| *name == one);
         assert!(at("LoadFold").is_some() && at("LoadFold") < at("MachineCombiner"), "{names:?}");
+    }
+
+    /// The pin runs the MachineCombiner before EarlyMachineLICM, MachineCSE,
+    /// the sink and the peephole (`llc -O2 -debug-pass`); ours ran after the
+    /// peephole, so the chains it rebuilds were already rewritten.
+    #[test]
+    fn test_the_combiner_runs_before_licm_cse_sink_and_peephole() {
+        let names: Vec<&'static str> =
+            machine(&IndexMap::default(), None, None, None, false, "486", &crate::backend::target::BUILT_IN)
+                .expect("phases")
+                .iter()
+                .map(|phase| phase.class_name())
+                .collect();
+        let at = |one: &str| names.iter().position(|name| *name == one).expect(one);
+        for later in ["MachineLICM", "MachineCSE", "MachineSink", "PeepholeOptimizer"] {
+            assert!(at("MachineCombiner") < at(later), "{later}: {names:?}");
+        }
     }
 
     #[test]

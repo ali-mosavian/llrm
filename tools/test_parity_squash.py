@@ -1174,19 +1174,6 @@ def test_every_stage_of_the_fast_pass_stamps_the_batch_log():
     assert at == sorted(at), "stamped out of the order they run"
 
 
-def test_the_always_on_scanners_run_before_the_lib_tests_of_a_batch():
-    """The 11:13 batch ran `lib tests ... 363s` and only then found docs_links red for three PRs: a pass of minutes bought nothing, and each refusal repeats the pass. The scanners
-    that take milliseconds (docs_links, no_local_paths) now refuse first; the full set still runs after the lib tests."""
-    import inspect
-
-    source = inspect.getsource(ps.merge_batch)
-    early = source.find('stage("scanners-early")')
-    lib = source.find('stage("lib-tests")')
-    assert 0 <= early < lib, (early, lib)
-    assert "landing_scanner_failures(changed, False)" in source[early:lib]
-    assert source.find('stage("scanners")') > lib, "the full scanner set still runs after the lib tests"
-
-
 def test_beside_runs_both_and_joins_the_background_even_when_the_foreground_raises():
     """The overlap lets the release stages run while the lib tests do; a raising foreground must not leave the background touching the checkout the next pass reuses."""
     import threading

@@ -266,6 +266,29 @@ fn a_shifted_difference_plus_a_value_is_a_lea_and_a_sub() {
     assert!(!names.iter().any(|n| n == "shl"), "{names:?}");
 }
 
+const SUM_PLUS_TIMES_SEVEN: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %s, i32 %u, i32 %y) {
+  %b = add i32 %s, %u
+  %m = mul i32 %y, 7
+  %t = add i32 %b, %m
+  ret i32 %t
+}
+";
+
+/// The pin's `m_Add` is commutative: `b + y * 7` is the hidden LEA whichever
+/// operand is the difference. Ours took only `y * 7 + b`, so x_dct (`5a + 3c +
+/// 7(b - d)`) kept `lea; sub; add; add` and ran 23 instructions over the pin.
+#[test]
+fn a_value_plus_a_shifted_difference_is_a_lea_and_a_sub() {
+    let module = llrm_mir::parse::module(SUM_PLUS_TIMES_SEVEN).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(!names.iter().any(|n| n == "shl"), "{names:?}");
+    assert_eq!(names.iter().filter(|n| matches!(n.as_str(), "add" | "sub" | "lea")).count(), 3, "{names:?}");
+}
+
 const WORD_CHAIN: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f(i16 %x) {
   %m = mul i16 %x, 25173
@@ -596,4 +619,25 @@ entry:
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .expect("selects");
     assert!(!done.body.returns_twice);
+}
+
+/// `a << (i & 31)` on 64 bits kept the select on bit 5 of the amount as `xor
+/// ecx, ecx; test cl, cl; je` after `shld; shl` (100 vs the pin's 72 insns in
+/// x_ll_arith): bit 5 of `i & 31` is known zero, so the pin has no fixup.
+#[test]
+fn a_wide_shift_by_a_masked_amount_has_no_fixup_branch() {
+    let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i64 %a, i32 %i) {
+  %m = and i32 %i, 31
+  %z = zext i32 %m to i64
+  %r = shl i64 %a, %z
+  ret i64 %r
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+    assert!(!seen.iter().any(|n| n.starts_with('j') || *n == "test"), "{seen:?}");
 }

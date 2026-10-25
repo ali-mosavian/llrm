@@ -297,7 +297,9 @@ impl Checker {
         for v in existing.iter().filter(|v| v.rank.is_some() == arrays) {
             let bare = !v.declared && !v.suffixed;
             if as_declared {
-                if mixes && v.suffixed && v.ty.plain() == ty.plain() {
+                // a procedure's DIM AS may reuse the suffixed name the module
+                // shares
+                if mixes && v.suffixed && v.ty.plain() == ty.plain() && !(v.shared && self.procedure.is_some()) {
                     return Some("AS clause required on first declaration");
                 }
                 if v.explicit && (v.declared || bare) {
