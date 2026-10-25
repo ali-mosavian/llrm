@@ -533,6 +533,23 @@ mod tests {
         assert!(at("LoadFold").is_some() && at("LoadFold") < at("MachineCombiner"), "{names:?}");
     }
 
+    /// The pin runs the MachineCombiner before EarlyMachineLICM, MachineCSE,
+    /// the sink and the peephole (`llc -O2 -debug-pass`); ours ran after the
+    /// peephole, so the chains it rebuilds were already rewritten.
+    #[test]
+    fn test_the_combiner_runs_before_licm_cse_sink_and_peephole() {
+        let names: Vec<&'static str> =
+            machine(&IndexMap::default(), None, None, None, false, "486", &crate::backend::target::BUILT_IN)
+                .expect("phases")
+                .iter()
+                .map(|phase| phase.class_name())
+                .collect();
+        let at = |one: &str| names.iter().position(|name| *name == one).expect(one);
+        for later in ["MachineLICM", "MachineCSE", "MachineSink", "PeepholeOptimizer"] {
+            assert!(at("MachineCombiner") < at(later), "{later}: {names:?}");
+        }
+    }
+
     #[test]
     fn test_a_phase_that_loses_source_bytes_is_malformed() {
         let jump = ir::Semantics { name: Some("jmp".into()), target: Some(1), ..ir::Semantics::new(Operation::Jump) };
