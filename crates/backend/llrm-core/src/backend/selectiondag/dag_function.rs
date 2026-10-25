@@ -496,6 +496,12 @@ fn refuse<T>(why: impl Into<String>) -> Result<T, Unselected> {
 /// gap: it stopped 18 QCport modules from compiling in the shadow. Constants it
 /// needs in memory go to a pool of its own; [`selected_in_pool`] shares the
 /// module's.
+thread_local! {
+    /// Sibling calls on for this thread: what `LLRM_TAIL_CALLS` does for the
+    /// process, for a test that cannot set the environment.
+    pub(super) static TAIL_CALLS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 pub fn selected(
     module: &Module,
     name: &str,
@@ -591,7 +597,7 @@ fn selected_in(
     let builder_target = builder_target
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)
-        .with_tail_calls(!m16 && std::env::var_os("LLRM_TAIL_CALLS").is_some())
+        .with_tail_calls(!m16 && (std::env::var_os("LLRM_TAIL_CALLS").is_some() || TAIL_CALLS.get()))
         .with_tti(cpu.target().tti())
         .with_runtime_call_verdicts(
             contracts.map(|contracts| runtime_call_verdicts(module, function, &layout, arch, contracts.abi)),
