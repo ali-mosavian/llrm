@@ -721,6 +721,40 @@ b:
     assert!(leas > 0, "the function has a lea");
 }
 
+/// A negative displacement of a cell is negative. It was the constant's 32 bits
+/// unsigned (`[bx+si+4294967292]`), which the encoder wrote as a word where a
+/// byte would do: `-4` cost a byte in every limb loop of Nib `floats`.
+#[test]
+fn a_negative_displacement_at_m16_is_negative() {
+    use crate::model::ir::Loc;
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+define i16 @f(ptr %p, i16 %i) {
+  %q = getelementptr i8, ptr %p, i16 %i
+  %r = getelementptr i8, ptr %q, i16 -4
+  %v = load i16, ptr %r
+  ret i16 %v
+}
+",
+    )
+    .expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let mut cells = 0;
+    for insn in done.body.insns().iter() {
+        let Some(what) = insn.what.as_ref() else { continue };
+        for source in &what.sources {
+            let Loc::Mem(cell) = source else { continue };
+            if cell.index.is_none() {
+                continue;
+            }
+            cells += 1;
+            assert_eq!(cell.offset, -4, "{what:?}");
+        }
+    }
+    assert!(cells > 0, "the function reads an indexed cell");
+}
+
 /// `fexp2` pushes two slots above its operand and `flog2` one: with six doubles
 /// live the `fld1` overflowed the x87 stack (`pow_stack_depth.bas` died with
 /// "Overflow" at run time under `--isel=dag`). The sequence says it clobbers
