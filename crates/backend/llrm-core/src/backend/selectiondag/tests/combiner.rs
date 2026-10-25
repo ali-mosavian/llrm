@@ -160,3 +160,27 @@ fn a_not_of_a_compare_is_the_inverse_compare() {
     assert_eq!(dag.opcode(cond), ISD::SetCC);
     assert!(matches!(dag.node(dag.operand(cond, 2)).data, NodeData::CondCode(CondCode::SetNe)));
 }
+
+/// A node made after its users (a fold's result replacing an operand) was
+/// visited again by every user: visiting a node added its operands whatever
+/// their state, so a node was taken once per path to it and QCport's
+/// `_scr_draw_hud` (m32 -O2) never finished compiling. A node already visited
+/// is not added again as an operand (`SkipIfCombinedBefore`).
+#[test]
+fn a_node_made_after_its_users_is_visited_once() {
+    let mut dag = dag();
+    let (placeholder, r5, r6) =
+        (dag.get_register(EVT::I32, 7), dag.get_register(EVT::I32, 5), dag.get_register(EVT::I32, 6));
+    let (c1, c2) = (dag.get_constant(1, EVT::I32), dag.get_constant(2, EVT::I32));
+    let x = dag.get_node(ISD::Add, EVT::I32, &[placeholder, c1]);
+    let y = dag.get_node(ISD::Xor, EVT::I32, &[placeholder, c2]);
+    let root = dag.get_node(ISD::Sub, EVT::I32, &[x, y]);
+    dag.set_root(root);
+    let made = dag.get_node(ISD::Mul, EVT::I32, &[r5, r6]);
+    dag.replace_all_uses_with(placeholder, made);
+    let mut hooks = NoCombines;
+    let mut combiner = DagCombiner::new(&mut dag, &mut hooks, CombineLevel::BeforeLegalizeTypes);
+    combiner.run();
+    // root, x, y, made, r5, r6, c1, c2
+    assert_eq!(combiner.visits, 8);
+}

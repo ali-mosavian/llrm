@@ -109,6 +109,11 @@ pub struct DagCombiner<'a, H: CombineHooks> {
     pub(super) level: CombineLevel,
     worklist: Vec<u32>,
     queued: HashSet<u32>,
+    /// The nodes visited so far (`getCombinerWorklistIndex() == -2`): their
+    /// operands are not added again when a user is visited.
+    combined: HashSet<u32>,
+    /// How many nodes `run` has taken from the worklist.
+    pub(super) visits: u64,
     /// The action table, for the folds that ask what the target can do.
     pub(super) tli: Option<&'a TargetLowering>,
 }
@@ -119,7 +124,16 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         hooks: &'a mut H,
         level: CombineLevel,
     ) -> DagCombiner<'a, H> {
-        DagCombiner { dag, hooks, level, worklist: Vec::new(), queued: HashSet::new(), tli: None }
+        DagCombiner {
+            dag,
+            hooks,
+            level,
+            worklist: Vec::new(),
+            queued: HashSet::new(),
+            combined: HashSet::new(),
+            visits: 0,
+            tli: None,
+        }
     }
 
     /// The action table the folds query (`TLI`).
@@ -188,10 +202,17 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             if self.is_dead(n) {
                 continue;
             }
+            self.visits += 1;
             let ops: Vec<u32> = self.dag.node(SDValue { node: n, res: 0 }).ops.iter().map(|op| op.node).collect();
+            // "Add any operands of the new node which have not yet been
+            // combined to the worklist as well" (`SkipIfCombinedBefore`):
+            // without it a node is visited once per path to it.
             for op in ops {
-                self.add_to_worklist(op);
+                if !self.combined.contains(&op) {
+                    self.add_to_worklist(op);
+                }
             }
+            self.combined.insert(n);
             let before = self.dag.node_count();
             let result = self.combine(SDValue { node: n, res: 0 });
             for made in before..self.dag.node_count() {
