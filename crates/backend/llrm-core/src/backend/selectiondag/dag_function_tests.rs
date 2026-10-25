@@ -1,5 +1,6 @@
 //! Tests of `dag_function::selected`, split by area. Where a new test goes:
 //!
+//! - `dag_function_aggregates_tests.rs`: first-class struct and array values.
 //! - `dag_function_calls_tests.rs`: Calls: the call sequence, arguments and
 //!   results in registers and on the stack, runtime routines, landing pads,
 //!   ports and inline blocks.
