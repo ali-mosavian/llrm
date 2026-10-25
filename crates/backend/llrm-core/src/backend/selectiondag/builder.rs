@@ -2169,6 +2169,10 @@ impl Builder<'_> {
             return Ok(());
         }
         let mut cond = self.get_value(instruction.operands[0])?;
+        let (true_prob, false_prob) =
+            (self.edge_probability(self.block, on_true), self.edge_probability(self.block, on_false));
+        self.add_successor_with_prob(self.block, on_true, true_prob);
+        self.add_successor_with_prob(self.block, on_false, false_prob);
         let (mut on_true, mut on_false) = (on_true, on_false);
         if Some(on_true) == next {
             std::mem::swap(&mut on_true, &mut on_false);
@@ -2182,6 +2186,39 @@ impl Builder<'_> {
         let node = self.dag.get_node(ISD::Br, EVT::OTHER, &[brcond, fall]);
         self.dag.set_root(node);
         Ok(())
+    }
+
+    /// `getEdgeProbability(Src, Dst)` of the IR's `BranchProbabilityInfo`.
+    fn edge_probability(
+        &mut self,
+        from: BlockId,
+        to: BlockId,
+    ) -> super::switchcg::BranchProbability {
+        let bpi = self
+            .info
+            .bpi
+            .get_or_insert_with(
+                || llrm_analysis::bpi::BranchProbabilityInfo::of(
+                    llrm_analysis::bpi::Module {
+                        context: &self.module.context,
+                        declarations: &self.module.globals,
+                        metadata: &self.module.metadata,
+                        layout: self.layout,
+                    },
+                    self.function,
+                ),
+            );
+        super::switchcg::BranchProbability(bpi.get_edge_probability_to(self.function, from, to).get_numerator())
+    }
+
+    /// `addSuccessorWithProb`: the edge `from` to `to` of the machine CFG.
+    fn add_successor_with_prob(
+        &mut self,
+        from: BlockId,
+        to: BlockId,
+        probability: super::switchcg::BranchProbability,
+    ) {
+        self.info.edge_probs.push((from, to, probability.0));
     }
 
     fn next_block(&self) -> Option<BlockId> {
