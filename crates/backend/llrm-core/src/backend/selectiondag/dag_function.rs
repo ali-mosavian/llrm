@@ -580,22 +580,6 @@ fn selected_in(
     let Some(text) = module.datalayout.as_deref() else { return refuse("a module with no datalayout") };
     let layout = DataLayout::parse(text).map_err(Unselected)?;
     let convention = crate::backend::isel::convention(module, &layout, id, arch)?;
-    // The SysV call sequence is not wired yet (D64-3): a call would be laid out
-    // with 32-bit widths and the 32-bit stack pointer.
-    if m64
-        && function.layout().iter().any(|&block| {
-            function
-                .iter_block(block)
-                .any(
-                    |inst| matches!(
-                        function.instruction(inst).opcode,
-                        llrm_mir::opcode::Opcode::Call(_) | llrm_mir::opcode::Opcode::Invoke(_)
-                    ),
-                )
-        })
-    {
-        return refuse("a call at m64: the SysV sequence is not translated yet");
-    }
     let mut info = FunctionLoweringInfo::new(function);
     let mut tli = if m16 {
         TargetLowering::x86_16(Features::default(), MVT::I16)

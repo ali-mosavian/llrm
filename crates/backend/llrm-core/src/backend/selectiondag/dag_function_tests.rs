@@ -3547,20 +3547,38 @@ entry:
     assert!(add.dests.iter().all(|d| matches!(d, crate::model::ir::Loc::Held(h) if h.width == 8)), "{add:?}");
 }
 
-/// A call at m64 reached emit and came out with 4-byte values and the 32-bit
-/// stack pointer; until the SysV sequence is translated it is refused.
+/// A seven-argument call at m64 came out with 4-byte values and the 32-bit
+/// `ESP` (`mov r, ESP`), and was refused. It now passes six arguments in the
+/// registers `calling.toml` lists and the seventh on the stack at `RSP`.
 #[test]
-fn a_call_at_m64_is_refused() {
+fn an_m64_call_passes_the_sysv_registers_and_one_stack_slot() {
+    use llrm_lir::registers::RegId;
     let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
-declare i64 @g(i64)
-define i64 @f(i64 %a) {
+declare i64 @g(i64, i64, i64, i64, i64, i64, i64)
+define i64 @f(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f, i64 %h) {
 entry:
-  %s = call i64 @g(i64 %a)
+  %s = call i64 @g(i64 %b, i64 %a, i64 %c, i64 %d, i64 %e, i64 %f, i64 %h)
   ret i64 %s
 }
 ";
     let module = llrm_mir::parse::module(text).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
-    let refused = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).err().expect("refused");
-    assert!(refused.0.contains("SysV"), "{}", refused.0);
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let insns = done.body.insns();
+    let call =
+        insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("call"))).expect("a call");
+    let registers: Vec<_> = call.requires.iter().map(|(held, reg)| (held.width, *reg)).collect();
+    let expected = [RegId::RDI, RegId::RSI, RegId::RDX, RegId::RCX, RegId::R8, RegId::R9].map(|r| (8, r));
+    assert_eq!(registers, expected);
+    let store = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| {
+            matches!(
+                w.dests.first(),
+                Some(crate::model::ir::Loc::Mem(m)) if m.through == RegId::RSP
+            )
+        })
+        .expect("the seventh argument stored at RSP");
+    assert!(matches!(store.sources[0], crate::model::ir::Loc::Held(h) if h.width == 8), "{store:?}");
 }
