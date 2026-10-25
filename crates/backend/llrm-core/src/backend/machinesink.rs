@@ -289,10 +289,13 @@ struct Sinker {
     /// `RegClassInfo->getRegPressureSetLimit`.
     limit: usize,
     /// The values of the float operations, which the general registers do not
-    /// hold.
-    stack: HashSet<u32>,
-    /// The block and whether a phi defines it, of each value.
-    defined: HashMap<u32, (usize, bool)>,
+    /// hold; made when the pressure tail first asks.
+    stack: Option<HashSet<u32>>,
+    /// The block of each value a phi defines.
+    phi_blocks: HashMap<u32, usize>,
+    /// The block of each other value; made with `stack`, kept up as
+    /// instructions move.
+    defined: Option<HashMap<u32, usize>>,
     /// `CachedRegisterPressure`.
     pressure: HashMap<usize, usize>,
 }
@@ -341,18 +344,19 @@ impl Sinker {
             }
         }
         let insns = body.blocks.iter().map(|block| block.insns.to_vec()).collect();
-        let mut defined = HashMap::default();
-        for (number, block) in body.blocks.iter().enumerate() {
-            defined.extend(block.phis.iter().map(|phi| (phi.result, (number, true))));
-            defined.extend(
-                block.insns.iter().flat_map(|one| one.defines.iter().map(move |&value| (value, (number, false)))),
-            );
-        }
+        let phi_blocks: HashMap<u32, usize> = body
+            .blocks
+            .iter()
+            .enumerate()
+            .flat_map(|(number, block)| block.phis.iter().map(move |phi| (phi.result, number)))
+            .collect();
         if let Some(before) = before {
             return Self {
                 insns,
                 owner,
-                defined,
+                defined: None,
+                stack: None,
+                phi_blocks,
                 pressure: HashMap::default(),
                 canon: HashMap::default(),
                 uses,
@@ -415,8 +419,9 @@ impl Sinker {
             bits: body.bits,
             flags_live_in: Vec::new(),
             limit: usize::MAX,
-            stack: crate::backend::machinesched::x87_values(body).into_iter().collect(),
-            defined,
+            stack: None,
+            phi_blocks,
+            defined: None,
             pressure: HashMap::default(),
         };
         sinker.flags_live_in = sinker.solve_flags();
@@ -687,18 +692,51 @@ impl Sinker {
                 return false;
             }
         }
+        self.ready_pressure();
         for &used in &one.uses {
-            let Some(&(home, by_phi)) = self.defined.get(&used) else { continue };
+            let by_phi = self.phi_blocks.contains_key(&used);
+            let Some(home) = self
+                .phi_blocks
+                .get(&used)
+                .or_else(|| self.defined.as_ref().and_then(|found| found.get(&used)))
+                .copied()
+            else {
+                continue;
+            };
             // Defined outside the cycle, or by a phi of its header: no live
             // range of the cycle is longer for it.
             if self.cycle[home] != Some(cycle) || (by_phi && home == cycle && !self.irreducible[cycle]) {
                 continue;
             }
-            if !self.stack.contains(&used) && 1 + self.block_pressure(sink_to) >= self.limit {
+            if !self.stack_has(used) && 1 + self.block_pressure(sink_to) >= self.limit {
                 return false;
             }
         }
         true
+    }
+
+    /// The float values and the home of each value, once.
+    fn ready_pressure(&mut self) {
+        if self.stack.is_some() {
+            return;
+        }
+        self.stack = Some(crate::backend::machinesched::x87_values(self.insns.iter().flatten()).into_iter().collect());
+        self.defined = Some(
+            self.insns
+                .iter()
+                .enumerate()
+                .flat_map(|(number, block)| {
+                    block.iter().flat_map(move |one| one.defines.iter().map(move |&value| (value, number)))
+                })
+                .collect(),
+        );
+    }
+
+    fn stack_has(
+        &self,
+        value: u32,
+    ) -> bool {
+        self.stack.as_ref().is_some_and(|stack| stack.contains(&value))
     }
 
     /// `getBBRegisterPressure`: the most values read in `block` that are live
@@ -715,12 +753,12 @@ impl Sinker {
         let mut most = 0;
         for one in self.insns[block].iter().rev() {
             // A value defined and never read still takes a register there.
-            let dead = one.defines.iter().filter(|value| !self.stack.contains(value) && !live.contains(value)).count();
+            let dead = one.defines.iter().filter(|value| !self.stack_has(**value) && !live.contains(value)).count();
             most = most.max(live.len() + dead);
             for value in &one.defines {
                 live.remove(value);
             }
-            live.extend(one.uses.iter().copied().filter(|value| !self.stack.contains(value)));
+            live.extend(one.uses.iter().copied().filter(|value| !self.stack_has(*value)));
             most = most.max(live.len());
         }
         self.pressure.insert(block, most);
@@ -926,8 +964,8 @@ impl Sinker {
         self.canon.insert(moved.id(), first);
         IDENTITY_STEPS.with(|steps| steps.set(steps.get() + 1));
         self.owner.insert(first, sink_to);
-        for &value in &one.defines {
-            self.defined.insert(value, (sink_to, false));
+        if let Some(defined) = &mut self.defined {
+            defined.extend(one.defines.iter().map(|&value| (value, sink_to)));
         }
         self.insns[sink_to].insert(0, moved);
         self.changed = true;

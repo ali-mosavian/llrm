@@ -402,10 +402,8 @@ impl LIRTransform for MachineScheduler {
 
 /// The values of the float operations: the x87 stack is its own register set,
 /// and they are not counted against the general registers.
-pub(crate) fn x87_values(body: &LirBody) -> HashSet<u32> {
-    body.blocks
-        .iter()
-        .flat_map(|block| block.insns.iter())
+pub(crate) fn x87_values<'a>(insns: impl Iterator<Item = &'a Arc<Insn>>) -> HashSet<u32> {
+    insns
         .filter(|one| {
             one.what
                 .as_ref()
@@ -436,7 +434,7 @@ pub fn scheduled(
     // The x87 stack is its own register set with its own limit (DEVIATE MS3):
     // its values (those of the float operations) are not counted against
     // the general registers.
-    let stack = x87_values(body);
+    let stack = x87_values(body.blocks.iter().flat_map(|block| block.insns.iter()));
     let counted = |value: u32| !stack.contains(&value);
     let mut live = None;
     let mut changed = false;
