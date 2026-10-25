@@ -35,10 +35,13 @@
 //! asks (`Coalescer::llvm_env`). A far pointer's selector read through ES is
 //! the case (render/dl).
 //!
-//! DEVIATE P2 (owner w-1, exit 2026-11-06): a phi's incoming value defined by
-//! an `implicit_def` (`processimpdefs::IMPLICIT_DEF`, which isel makes) is not
-//! treated as undef, so `allPhiOperandsUndefined`, `ImpDefs` and `SrcUndef` are
-//! not translated. Retires ProcessImplicitDefs' PI-2 in the same PR.
+//! DEVIATE P7 (no number): `findPHICopyInsertPoint` and `LowerPHINode` do not
+//! treat an EH-pad successor or an `INLINEASM_BR` indirect target. The unwind
+//! edge of an `invoke` is the runtime's, not an edge of the LIR body (the
+//! selector's successor list keeps the normal one, `isel.rs`), so no phi copy
+//! is asked of it and a landing pad has no machine predecessor to copy in; and
+//! no front end emits `callbr`. A front end that does has to restore both where
+//! each edge's copies are placed.
 //!
 //! DEVIATE P3 (no number): `MachineLoopInfo::getLoopFor` is the innermost loop
 //! of the body's loop forest; `isLiveIn` and `isLiveOutPastPHIs` read the
