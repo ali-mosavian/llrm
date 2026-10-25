@@ -123,6 +123,14 @@ static _AUDITED_STATEMENT_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|
         // dkopen.asm B$OPEN at 0224 returns with RETF 8 at 0252.
         ("B$OPEN", 8),
         ("B$SLEP", 4),
+        // QB45 rt/dkstmt.asm B$KILL(parmSD fname), B$NAME(parmSD oldname,
+        // parmSD newname); rt/directry.asm `pascal far B$MDIR(psdDirectory)`,
+        // B$CDIR and B$RDIR alike.
+        ("B$KILL", 2),
+        ("B$NAME", 4),
+        ("B$MDIR", 2),
+        ("B$CDIR", 2),
+        ("B$RDIR", 2),
         ("B$SOND", 6),
         ("B$DRAW", 2),
         ("B$VARP", 4),

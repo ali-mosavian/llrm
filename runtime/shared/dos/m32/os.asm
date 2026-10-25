@@ -1,4 +1,4 @@
-;; name: LL$OPEN, LL$CREATE, LL$READ, LL$SEEK, LL$WRITE_FILE, LL$CLOSE, LL$EXIT, LL$MORE, LL$CONSOLE_READ_KEY, LL$CONSOLE_KEY_READY
+;; name: LL$OPEN, LL$CREATE, LL$READ, LL$SEEK, LL$WRITE_FILE, LL$CLOSE, LL$EXIT, LL$MORE, LL$CONSOLE_READ_KEY, LL$CONSOLE_KEY_READY, LL$DELETE, LL$RENAME, LL$MKDIR, LL$CHDIR, LL$RMDIR
 ;; desc: the OS layer shared by C, Nib and BASIC programs: x86-m32, DOS/32A
 ;;
 ;; args: the interface of runtime/shared/interface.toml, in cdecl32: arguments in dword slots from
@@ -21,8 +21,9 @@
 G_CORE          equ     1
 G_CONSOLE       equ     2
 G_PROCESS       equ     4
+G_FILES         equ     8
 ifndef OS_GROUPS
-OS_GROUPS       equ     7
+OS_GROUPS       equ     15
 endif
 
 ;; What DOS's device information (IOCTL 44h) says of a handle: bit 7 is a character device.
@@ -44,6 +45,13 @@ endif
 if OS_GROUPS and G_CONSOLE
 public LL$CONSOLE_READ_KEY
 public LL$CONSOLE_KEY_READY
+endif
+if OS_GROUPS and G_FILES
+public LL$DELETE
+public LL$RENAME
+public LL$MKDIR
+public LL$CHDIR
+public LL$RMDIR
 endif
 if OS_GROUPS and G_PROCESS
 public LL$COMMAND_LINE
@@ -397,6 +405,54 @@ environment_done:
                 pop     ebx
                 ret
 LL$ENVIRONMENT  endp
+endif
+
+if OS_GROUPS and G_FILES
+;;::::::::::::::
+;; The file-name calls: DOS function in AH, the name at DS:EDX (the new name at ES:EDI for a rename, EDI kept); a
+;; carry is the error code in AX, negated; 0 on success (DOS leaves AX undefined).
+LL$DELETE       proc
+                mov     edx, dword ptr [esp+4]
+                mov     ah, DOS_DELETE
+                jmp     short file_name_call
+LL$DELETE       endp
+
+LL$RENAME       proc
+                push    edi
+                mov     edx, dword ptr [esp+8]
+                mov     edi, dword ptr [esp+12]
+                mov     ah, DOS_RENAME
+                int     DOS_INT
+                pop     edi
+                jmp     short file_name_checked
+LL$RENAME       endp
+
+LL$MKDIR        proc
+                mov     edx, dword ptr [esp+4]
+                mov     ah, DOS_MKDIR
+                jmp     short file_name_call
+LL$MKDIR        endp
+
+LL$CHDIR        proc
+                mov     edx, dword ptr [esp+4]
+                mov     ah, DOS_CHDIR
+                jmp     short file_name_call
+LL$CHDIR        endp
+
+LL$RMDIR        proc
+                mov     edx, dword ptr [esp+4]
+                mov     ah, DOS_RMDIR
+file_name_call::
+                int     DOS_INT
+file_name_checked::
+                jc      short file_name_failed
+                xor     eax, eax
+                ret
+file_name_failed:
+                movzx   eax, ax
+                neg     eax
+                ret
+LL$RMDIR        endp
 endif
 
 end

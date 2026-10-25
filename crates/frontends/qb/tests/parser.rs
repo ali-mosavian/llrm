@@ -2395,3 +2395,16 @@ fn open_with_access_lock_len_or_random_passes_rtps_inc_mode_word() {
     assert_eq!(call("FOR RANDOM ACCESS READ WRITE LOCK WRITE AS #1 LEN = 20"), "8964");
     assert_eq!(call("FOR BINARY SHARED AS #1"), "16416");
 }
+
+#[test]
+fn kill_name_and_the_directory_statements_call_their_runtime_routines() {
+    // KILL, NAME, MKDIR, CHDIR and RMDIR were refused as unknown procedures. BC
+    // calls B$KILL, B$NAME, B$MDIR, B$CDIR and B$RDIR with the names'
+    // descriptors (QB 4.5 rt/dkstmt.asm, directry.asm).
+    let source = "KILL \"A\"\r\nNAME \"A\" AS \"B\"\r\nMKDIR \"D\"\r\nCHDIR \"D\"\r\nRMDIR \"D\"\r\n";
+    let module = parse(source, Dialect::QuickBasic45).unwrap();
+    let hir = compile(&module, "names", Dialect::QuickBasic45, "qb45").unwrap();
+    for routine in ["B$KILL", "B$NAME", "B$MDIR", "B$CDIR", "B$RDIR"] {
+        assert_eq!(hir.matches(&format!("\"callee\":\"{routine}\"")).count(), 1, "{routine}: {hir}");
+    }
+}
