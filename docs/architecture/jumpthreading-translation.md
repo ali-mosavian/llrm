@@ -50,7 +50,7 @@ T = missing translation, a TODO row (section 3). Present and used as they are: L
 
 `jumpthread.rs` (1,378 lines) is LLVM's `DFAJumpThreading`: a `switch` on a loop's state phi, copied per constant path. It is not `JumpThreading`; registry slot `dfa-jump-threading` is `Missing` in `parity.rs` and stays so until that file is renamed or translated. The translation gets its own `jumpthreading.rs`, and the old file is left alone.
 
-`jump-threading` has no slot of its own: it is named in the `llvm` column of `decide@809` ("jump-threading, correlated-propagation", `Old`, `simplifycfg-port`). `decide.rs` threads a block over a condition a predecessor decides, and so overlaps S1/S2; [decide-vs-llvm.md](decide-vs-llvm.md) measures it (124.7 M on `d_faces` -O2 against 4.5 M for LLVM's JumpThreading). The translation adds two slots and splits `decide@809` into `jumpthreading@809` and the rest, so `check` keeps matching the pinned list.
+`jump-threading` has no slot of its own: it is named in the `llvm` column of `decide@809` ("jump-threading, correlated-propagation", `Old`, `simplifycfg-port`). `decide.rs` threads a block over a condition a predecessor decides, and so overlaps S1/S2; [decide-vs-llvm.md](decide-vs-llvm.md) measures it (124.7 M on `d_faces` -O2 against 4.5 M for LLVM's JumpThreading). The translation split `decide@809` into `jumpthreading@809` and the rest; the rest is deleted.
 
 ## 3. Missing pieces (TODO rows for `parity.rs`)
 
@@ -83,7 +83,7 @@ Fail-first tests for S1, one per shape, each seen failing with the shape's code 
 
 ## 6. State of S1 to S3
 
-`jumpthreading.rs` ports S1 to S4; `decide@675`/`decide@809` no longer thread. Switch: `LLRM_NO_JUMPTHREADING` (set: off; on by default, see Status). Fifteen fixtures in `tests/jumpthreading` read identical to `opt` through `difftest.py pair`; each function of S2 and S3 was seen failing a fixture with the function stubbed. Deviations J1 to J15 are in the module header.
+`jumpthreading.rs` ports S1 to S4; `decide@675` no longer threads, and `decide@809` is deleted (it cost 19.1 M on `d_faces` -O2 for 3 or 4 of 65 objects, +5 to +24 B). Switch: `LLRM_NO_JUMPTHREADING` (set: off; on by default, see Status). Fifteen fixtures in `tests/jumpthreading` read identical to `opt` through `difftest.py pair`; each function of S2 and S3 was seen failing a fixture with the function stubbed. Deviations J1 to J15 are in the module header.
 
 The instrument is the slot oracle, not the `decide` inputs the first S1 count used: `difftest.py inputs jumpthreading@668|@809` over `llrm-c -O2 --dump` of `d_faces` (`LLRM_DUMP_INPUTS=1`), 3 functions per slot. After S1 three differed (`668/03`, `809/02`, `809/03`); after S3 all changed functions are identical (2 of 2 at each slot).
 

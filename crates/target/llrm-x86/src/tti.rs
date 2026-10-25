@@ -434,23 +434,32 @@ fn int_imm_chunk(value: i64) -> i64 {
     }
 }
 
-/// Intrinsic prices by (profile, kind, callee name), as the pinned `opt` gives
-/// them (T7).
-fn intrinsic_prices() -> &'static llrm_support::hash::HashMap<(&'static str, &'static str, &'static str), Option<i64>> {
-    static PRICES: std::sync::OnceLock<
-        llrm_support::hash::HashMap<(&'static str, &'static str, &'static str), Option<i64>>,
-    > = std::sync::OnceLock::new();
-    PRICES.get_or_init(|| {
-        include_str!("tti_intrinsics.txt")
-            .lines()
-            .filter(|line| !line.starts_with('#'))
-            .filter_map(|line| {
-                let mut words = line.split(' ');
-                let (profile, kind, name, cost) = (words.next()?, words.next()?, words.next()?, words.next()?);
-                Some(((profile, kind, name), cost.parse().ok()))
-            })
-            .collect()
-    })
+const INTRINSIC_PRICES: &str = include_str!("tti_intrinsics.txt");
+
+/// The price of `name` under (profile, kind) in the pinned `opt`'s table (T7):
+/// `None` when the table has no row, `Some(None)` for an invalid price. The
+/// text is sorted by byte, so a lookup bisects it where it lies; building a
+/// map on first use cost 1.06 M Ir on d_faces -O2.
+fn intrinsic_price(
+    profile: &str,
+    kind: &str,
+    name: &str,
+) -> Option<Option<i64>> {
+    let key = || profile.bytes().chain([b' ']).chain(kind.bytes()).chain([b' ']).chain(name.bytes()).chain([b' ']);
+    let key_len = profile.len() + kind.len() + name.len() + 3;
+    let (mut low, mut high) = (0, INTRINSIC_PRICES.len());
+    while low < high {
+        let middle = low + (high - low) / 2;
+        let start = INTRINSIC_PRICES[low..middle].rfind('\n').map_or(low, |at| low + at + 1);
+        let end = INTRINSIC_PRICES[start..].find('\n').map_or(INTRINSIC_PRICES.len(), |at| start + at);
+        let line = &INTRINSIC_PRICES[start..end];
+        match line.bytes().take(key_len).cmp(key()) {
+            std::cmp::Ordering::Less => low = end + 1,
+            std::cmp::Ordering::Greater => high = start,
+            std::cmp::Ordering::Equal => return Some(line[key_len..].trim_end().parse().ok()),
+        }
+    }
+    None
 }
 
 impl Tti for X86 {
@@ -536,8 +545,8 @@ impl Tti for X86 {
             CostKind::CodeSize => "code-size",
             CostKind::SizeAndLatency => "size-latency",
         };
-        match intrinsic_prices().get(&(profile, kind, name)) {
-            Some(Some(cost)) => Cost::of(*cost),
+        match intrinsic_price(profile, kind, name) {
+            Some(Some(cost)) => Cost::of(cost),
             Some(None) => Cost::INVALID,
             None if is_free_intrinsic(name) => Cost::FREE,
             None => Cost::INVALID,

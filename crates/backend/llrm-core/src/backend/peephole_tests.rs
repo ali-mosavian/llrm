@@ -718,7 +718,11 @@ fn test_source_owned_scale_converges_with_a_synthetic_frontend() {
         ],
     );
 
+    crate::backend::allocate::SETS_BUILT.with(|one| one.set(0));
+    crate::backend::allocate::SETS_BUILT.with(|one| one.set(0));
     let result = addresses(&input, "386").unwrap().insns();
+    let built = crate::backend::allocate::SETS_BUILT.with(|one| one.get());
+    assert_eq!(built, 1, "sets built: addresses reads block exits only");
 
     assert_eq!(names(&result), ["lea", "cmp"]);
     assert_eq!(result[0].covers, Some((0x90, 0x95)));
@@ -4581,8 +4585,10 @@ fn test_an_instruction_equal_to_one_already_answered_is_not_worked_out_again() {
             vec![],
         )
     };
-    let before = effects_computed();
+    let (before, hashed) = (effects_computed(), effects_hashed());
     let first = _register_effects(regs, 16, &add(0), false, true);
+    // A miss hashed the ask again to remember it: 1 M Ir of d_faces -O2.
+    assert_eq!(effects_hashed() - hashed, 1, "an ask hashed more than once");
     for at in 1..6 {
         assert_eq!(_register_effects(regs, 16, &add(at), false, true), first);
     }
@@ -4627,6 +4633,26 @@ fn test_the_dead_lanes_of_a_body_no_pass_changed_are_worked_out_once() {
         body("f", 0, vec![block(0, vec![mov(0, RegId::AX, RegId::BX), mov(2, RegId::DX, RegId::AX)], vec![]).into()]);
     liveness::dead_at_exit(&changed);
     assert_eq!(liveness::exits_computed() - before, 2, "a changed body was given the last answer");
+}
+
+/// `popped_arguments` solved the function's liveness and walked every block
+/// for the dead lanes after each instruction, though no instruction in it
+/// cleans a call's arguments (1.69 M Ir of d_faces -O2). A body with no
+/// `add sp, n` is answered unchanged without a solve.
+#[test]
+fn test_a_body_with_no_argument_cleanup_is_not_solved_for_popped_arguments() {
+    let mov = Arc::new(insn(
+        0,
+        Some((0, 2)),
+        Some(sem(Operation::Move, "mov", vec![rl(RegId::AX, 2)], vec![rl(RegId::BX, 2)])),
+        vec![],
+        vec![],
+    ));
+    let input = body("f", 0, vec![block(0, vec![mov], vec![]).into()]);
+    let before = liveness::exits_computed();
+    let done = popped_arguments(&input, &crate::backend::cpu::tuned("486", true).unwrap()).unwrap();
+    assert_eq!(done, input);
+    assert_eq!(liveness::exits_computed() - before, 0, "solved for a body with nothing to pop");
 }
 
 /// The sub-passes of the peephole ask for the lanes live out of each block in

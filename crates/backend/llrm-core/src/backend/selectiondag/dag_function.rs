@@ -59,7 +59,9 @@ use crate::backend::isel::{Parameter, Selected, Unselected};
 use crate::model::ir::{Addr, Held, Mem, Space};
 use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 
-struct Info;
+struct Info {
+    source_order: bool,
+}
 
 impl SchedInfo for Info {
     fn num_defs(
@@ -81,6 +83,10 @@ impl SchedInfo for Info {
         opcode: u32,
     ) -> bool {
         llrm_dagisel::instr::desc(opcode as u16).is_some_and(|d| d.is_call())
+    }
+
+    fn source_order(&self) -> bool {
+        self.source_order
     }
 
     fn has_cross_copy_class(
@@ -387,6 +393,14 @@ impl super::emit::Conventions for CallConventions<'_> {
             .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
             .map(|name| regs.root(self.arch.register_named(name)))
             .collect();
+        // the contract names no FS or GS, yet the callee may use them
+        if let (Some(contract), Some(contracts)) = (self.contract(callee), self.contracts) {
+            out.extend(crate::backend::callregs::unnamed_selectors_clobbered(
+                &contract,
+                contracts.segments,
+                self.general,
+            ));
+        }
         // a runtime routine also destroys what its contract says
         if let (Some(contracts), Some(Callee::Global(id))) = (self.contracts, callee) {
             let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned().unwrap_or_default();
@@ -673,6 +687,7 @@ fn selected_in(
     let builder_target = builder_target
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)
+        .with_jump_tables(cpu.target().costs().jump_table != 0)
         .with_tail_calls(std::env::var_os("LLRM_TAIL_CALLS").is_some() || TAIL_CALLS.get())
         .with_tti(cpu.target().tti())
         .with_runtime_call_verdicts(
@@ -853,10 +868,10 @@ fn selected_in(
         let done = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: false },
+            &mut X86Lowering { cmov: false, sse2: false },
             &selector,
             &mut hooks,
-            &Info,
+            &Info { source_order: bitness == 32 },
             &ctx,
             &mut state,
             block_at[&block.0],
@@ -1072,7 +1087,9 @@ fn selected_in(
     // The inline routines the calls name (`ExpandDivRemLibCall`'s `divN_s`):
     // their bytes are laid down at the call, as the old route did.
     let mut inline = IndexMap::default();
-    for (at, name) in &calls {
+    // (assembling a routine costs 1.8 M instructions, so only a call that
+    // names one asks for it)
+    for (at, name) in calls.iter().filter(|(_, name)| name.starts_with(llrm_target::routines::DIVIDE_PREFIX)) {
         for signed in [true, false] {
             for wide in [true, false] {
                 if let Ok(routine) = arch.divide_routine(signed, wide) {
@@ -1100,7 +1117,7 @@ fn selected_in(
     }
     // The huge-pointer routines the calls name (`huge_memory`): their bytes
     // are laid down at the call as well.
-    for (at, name) in &calls {
+    for (at, name) in calls.iter().filter(|(_, name)| name.starts_with(llrm_target::routines::HUGE_PREFIX)) {
         let fills = [1u32, 2, 4].into_iter().filter_map(|cell| arch.huge_fill_routine(cell).ok());
         let copies = [false, true].into_iter().filter_map(|backward| arch.huge_copy_routine(backward).ok());
         if let Some(routine) = fills.chain(copies).find(|routine| routine.name == name.as_str()) {

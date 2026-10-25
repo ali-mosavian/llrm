@@ -253,3 +253,33 @@ fn the_stores_of_one_array_cost_in_proportion_to_their_number() {
     let (small, large) = (work(100), work(400));
     assert!(large as f64 <= 5.0 * small as f64, "{small} steps for 100 cells, {large} for 400");
 }
+
+/// `getUnderlyingObject` of two pointers that strip to one value is one object,
+/// whatever the value is (a loaded pointer here): a store inside the bytes a
+/// later store covers is dead. The object was taken from annotated provenance,
+/// which a loaded pointer has none of, so the small store stayed.
+#[test]
+fn a_store_inside_a_later_wider_one_through_a_loaded_pointer_goes() {
+    let mut module = parsed(&format!(
+        "{DOS}define void @f(ptr %pp) {{\nb0:\n  %p = load ptr, ptr %pp\n  %q = getelementptr i8, ptr %p, i16 2\n  store i16 1, ptr %q\n  store i32 2, ptr %p\n  ret void\n}}\n"
+    ));
+    let after = managed(&mut module, DeadStoreElimination);
+    assert!(!after.contains("store i16 1"), "{after}");
+}
+
+/// DSE took the manager's annotated accesses, deriving every reference's
+/// provenance for a body (3.7 M Ir in d_faces) to learn what a store writes.
+/// It asks the unit lazily now: a run derives no annotations.
+#[test]
+fn a_run_derives_no_annotations() {
+    let mut module = parsed(&format!(
+        "{DOS}@g = global i16 0\n\ndefine i16 @f(i16 %x) {{\nb0:\n  store i16 1, ptr @g\n  store i16 %x, ptr @g\n  %r = load i16, ptr @g\n  ret i16 %r\n}}\n"
+    ));
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(DeadStoreElimination);
+    let (_, before) = llrm_mir::counts::analysed("annotated");
+    passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let (_, after) = llrm_mir::counts::analysed("annotated");
+    assert!(!crate::testing::printed(&module).contains("store i16 1"), "premise: the store goes");
+    assert_eq!(after - before, 0, "DSE derived the annotations");
+}
