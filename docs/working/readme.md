@@ -86,6 +86,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [loops-compile-plan](loops-compile-plan.md) | Loops compile-time bucket: dated plan to 1.0x of the pin |
 | [licm-compile-cost](licm-compile-cost.md) | LICM and loop-pass compile cost (w-3, plan note 2026-10-22) |
 | [live-range-shrink](live-range-shrink.md) | Live Range Shrink (codegen slot 47) |
+| [liveness-reuse-plan](liveness-reuse-plan.md) | One lane solve serving flags: built and dropped, 0.50 M on `d_faces` |
 | [llrm-c-reds](llrm-c-reds.md) | The llrm-c lib reds (`cargo test --release -p llrm-c --lib --features toolchain`) |
 | [llrm-only-passes](llrm-only-passes.md) | llrm-only MIR passes bucket (d_faces -O2 m32, tip 3b5ac93b68) |
 | [lsr-address-registers](lsr-address-registers.md) | LSR address-register term (LU2): tried, not landed |
