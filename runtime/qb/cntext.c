@@ -2,7 +2,7 @@
    memory, the BIOS asked only to scroll and clear; the screen statements for
    it.  Linked by a program that uses them. */
 #include "cndriver.h"
-#include "device.h"
+#include "dev.h"
 #include "rtinit.h"
 
 enum {

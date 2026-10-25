@@ -5,7 +5,7 @@
    or a pipe, and cntext.c the text screen, linked only by a program that uses
    the screen statements. */
 #include "cndriver.h"
-#include "device.h"
+#include "dev.h"
 #include "llrm_os.h"
 
 enum { STREAM_WIDTH = 80, CHUNK = 64 };

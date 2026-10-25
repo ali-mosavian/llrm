@@ -11,7 +11,7 @@
                 .387
                 option  proc:private
 
-                include qb.inc
+                include ../../../dos/m16/qb.inc
 
 .code
 ;; B$OUTB - write a byte to a port.

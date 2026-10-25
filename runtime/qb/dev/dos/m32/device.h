@@ -5,7 +5,7 @@
 #ifndef QB_DEVICE_H
 #define QB_DEVICE_H
 
-#include "platform.h"
+#include "dev.h"
 
 /* The registers of a software interrupt, in and out (intrin.asm). */
 typedef struct Regs {
@@ -118,8 +118,6 @@ extern void dev_octet_packed(FillOct *oct);
 extern void dev_put_select(unsigned how);
 extern void dev_put_rows(FillXfer *xfer);
 extern void dev_put_planar(FillXfer *xfer);
-extern void dev_atan2(const double *y, const double *x, double *out);
-extern void dev_sincos(const double *angle, double *sine, double *cosine);
 
 #pragma aux dev_int10 "B$INT10"
 #pragma aux dev_int10r "B$INT10R"
@@ -149,35 +147,5 @@ extern void dev_sincos(const double *angle, double *sine, double *cosine);
 #pragma aux dev_put_select "B$FPSEL"
 #pragma aux dev_put_rows "B$FPUC"
 #pragma aux dev_put_planar "B$FPUP"
-#pragma aux dev_atan2 "B$ATAN2"
-#pragma aux dev_sincos "B$SINCOS"
-
-/* Whether standard output is the screen and not a file or a pipe. */
-int dev_stdout_is_screen(void);
-/* Whether the printer is there and ready. */
-int dev_printer_ready(void);
-/* The time of day in hundredths of a second since midnight. */
-long dev_clock(void);
-/* From now on the clock's tick (18.2 a second) calls music_tick (play.c); the
-   handler is put back when the program ends.  Called once. */
-void dev_ticker_start(void);
-#pragma aux dev_ticker_start "B$TICKON"
-void dev_ticker_stop(void);
-#pragma aux dev_ticker_stop "B$TICKOFF"
-/* A tone of `hertz` until the next call; 0 is silence. */
-void dev_tone(unsigned hertz);
-
-/* The text screen: cells of a character and an attribute from 0, 0 at the top
-   left. */
-unsigned dev_text_size(void);   /* rows in the high byte, columns in the low */
-unsigned dev_text_cursor(void); /* row in the high byte */
-void dev_text_move(unsigned row, unsigned column);
-void dev_text_cursor_show(int visible);
-void dev_text_put(unsigned row, unsigned column, unsigned character, unsigned attribute);
-void dev_text_write(unsigned row, unsigned column, const char *text, unsigned count,
-                    unsigned attribute);
-/* The rows `top` to `bottom` move up `lines`, the rows freed are blanks of
-   `attribute`; no lines, or as many as the rows, clears them. */
-void dev_text_scroll(unsigned top, unsigned bottom, unsigned lines, unsigned attribute);
 
 #endif

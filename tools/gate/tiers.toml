@@ -162,6 +162,10 @@ step = "integration"
 file = "tests/no_partial_ecx_counts.rs"
 step = "integration"
 
+[[scan]]
+file = "tests/qb_dev_interface.rs"
+step = "integration"
+
 # Whole binaries that are heavy: every test in them is slow.
 [whole]
 cv4 = "cv4"

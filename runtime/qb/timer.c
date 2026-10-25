@@ -1,5 +1,5 @@
 /* TIMER (QB rt/ostimer.asm B$TIMR). */
-#include "device.h"
+#include "dev.h"
 #include "qb.h"
 
 enum { HUNDREDTHS = 100 };

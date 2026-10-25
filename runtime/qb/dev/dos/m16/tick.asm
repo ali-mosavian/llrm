@@ -12,7 +12,7 @@
                 .386
                 option  proc:private
 
-                include qb.inc
+                include ../../../dos/m16/qb.inc
 
                 extrn   LL$VECTOR:far
                 extrn   LL$SET_VECTOR:far

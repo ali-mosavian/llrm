@@ -11,7 +11,7 @@
                 .387
                 option  proc:private
 
-                include qb.inc
+                include ../../../dos/m16/qb.inc
 
 Regs            struc
                 rax             word    ?
