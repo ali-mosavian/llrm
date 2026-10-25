@@ -27,10 +27,11 @@ $LLRM -m32 -mabi=$ABI -Os -march=i486 -o $O/o/$P.llrmOs.obj $S 2>$O/o/$P.llrmOs.
 for o in O1 O3; do $LLRM -m32 -mabi=$ABI -$o -march=i486 -o $O/o/$P.llrm$o.obj $S 2>$O/o/$P.llrm$o.err || echo "FAIL llrm$o $P"; done
 [ -z "${VSGCC_ONLY:-}" ] || exit 0
 cd $O/b
+# Our m32 target states a stack alignment of 4 (S32); the pin's and gcc's Linux default is 16, which keeps a reserved call frame where 4 pushes.
 F="-Dfar= -m32 -march=i486 -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables"
 for o in O1 O2 O3 Os; do
-  gcc $F -$o -c -o $P.gcc$o.o $S 2>$P.gcc$o.err || echo "FAIL gcc$o $P"
-  $CLANG $F -$o -c -o $P.clang$o.o $S 2>$P.clang$o.err || echo "FAIL clang$o $P"
+  gcc $F -mpreferred-stack-boundary=2 -$o -c -o $P.gcc$o.o $S 2>$P.gcc$o.err || echo "FAIL gcc$o $P"
+  $CLANG $F -mstack-alignment=4 -$o -c -o $P.clang$o.o $S 2>$P.clang$o.err || echo "FAIL clang$o $P"
   CS="gcc clang"
   if [ $o = O2 ] || [ $o = Os ]; then  # the ELF build of llrm is for loops.py
     $LLRM -m32 -mabi=$ABI -$o -march=i486 -fobject-format=elf -o $P.llrmElf$o.o $S 2>$P.llrmElf$o.err || echo "FAIL llrmElf$o $P"

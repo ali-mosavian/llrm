@@ -191,3 +191,11 @@ def test_the_pin_is_told_our_stack_alignment_and_pushes_a_one_argument_call():
         return
     done = pin.llc(["-O2", "-filetype=asm", "-o", "-"], text, of)
     assert "pushl\t$2000" in done.stdout and "subl\t$12, %esp" not in done.stdout, done.stdout
+
+
+def test_the_pins_clang_and_gcc_are_built_at_our_stack_alignment():
+    """The reference objects of the rows (build.sh) and pinclocks.sh took the Linux 16-byte stack: a reserved call frame where our m32 target (S32) pushes."""
+    build = (HERE.parents[1] / "crates/target/llrm-x86-m32/vsgcc/build.sh").read_text()
+    assert "$CLANG $F -mstack-alignment=4" in build and "gcc $F -mpreferred-stack-boundary=2" in build
+    assert build.count("-mstack-alignment=4") == 1
+    assert "$CLANG $F -mstack-alignment=4" in (HERE / "pinclocks.sh").read_text()

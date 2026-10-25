@@ -57,3 +57,6 @@ Risks: allocation and the spiller seeing Barrier pseudos instead of `sub`/`add` 
 Dates: PR 1 2026-10-27, PR 2 2026-11-13, PR 3 2026-11-17.
 
 Status 2026-10-26: PRs 1 and 2 are #4634 and #4649; CF3 went in #4620. PR 3 needs no code: `LowerCallFrame` is the pin's own lowering for pushed and variable-sized functions, and `PushFold` is the `push [m]` fold. Open: DEVIATE CF5 (`framefree` keeps the frame register at -Os where a call frame exists), exit PEI-2 `emitPrologue` (`pei-plan.md`).
+
+## DEVIATE CF6: stack alignment 4, the pin's Linux 16 (2026-10-25)
+Our m32 target states a 4-byte stack (`S32`, `CALLING.native().stack_alignment` = the slot). The pin takes 16 from `i486-unknown-linux-gnu`. `isProfitable` charges a push call 3 bytes more per unaligned area, so at 16 a one-argument call keeps a reserved frame (`subl $12,%esp; movl $2000,(%esp)`) and at 4 it pushes (`llc -mtriple=i486-unknown-none-elf` gives ours exactly). A target choice (DOS/sysv32), not a defect; no exit. Comparisons now tell the pin 4: `pin.py` (module flag `override-stack-alignment` from the datalayout's `S`), clang `-mstack-alignment=4` and gcc `-mpreferred-stack-boundary=2` in the rows' reference builds (`vsgcc/build.sh`, `pinclocks.sh`).
