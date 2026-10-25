@@ -1963,6 +1963,28 @@ impl Emitter<'_, '_> {
                 self.values.insert(result, source.value);
                 return Ok(Some(()));
             }
+            // `SUBREG_TO_REG 0, x, sub_32bit`: x in the low dword of a
+            // quadword whose high half is zero. A dword write zeroes it, so
+            // the copy is that write.
+            "SUBREG_TO_REG" => {
+                // The pin's operands are (0, x, index); the node keeps (x,
+                // index).
+                let (source, index) = match node.ops[..] {
+                    [source, index] => (source, self.constant(index)?),
+                    [_, source, index] => (source, self.constant(index)?),
+                    _ => return Err(EmitError::Unsupported("SUBREG_TO_REG operands".to_owned())),
+                };
+                if index != 6 {
+                    return Err(EmitError::Unsupported(format!("SUBREG_TO_REG index {index}")));
+                }
+                let Loc::Held(source) = self.operand(source)? else {
+                    return Err(EmitError::Unsupported("SUBREG_TO_REG of a non-value".to_owned()));
+                };
+                let held = self.fresh(source.width);
+                self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Held(source)]);
+                self.values.insert(result, held.value);
+                return Ok(Some(()));
+            }
             // A register-class constraint is the allocator's business.
             "COPY_TO_REGCLASS" => {
                 let Loc::Held(source) = self.operand(node.ops[0])? else {

@@ -3582,3 +3582,38 @@ entry:
         .expect("the seventh argument stored at RSP");
     assert!(matches!(store.sources[0], crate::model::ir::Loc::Held(h) if h.width == 8), "{store:?}");
 }
+
+/// A quadword sum over an array at m64 stopped at emit with
+/// `Unmapped("SUBREG_TO_REG")` (the zero constant `SUBREG_TO_REG 0, MOV32r0`);
+/// it now selects a loop whose body adds a scaled quadword from memory.
+#[test]
+fn an_m64_loop_over_an_array_is_selected() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i64 @f(ptr %p, i64 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %entry ], [ %j, %loop ]
+  %s = phi i64 [ 0, %entry ], [ %t, %loop ]
+  %q = getelementptr i64, ptr %p, i64 %i
+  %v = load i64, ptr %q
+  %t = add i64 %s, %v
+  %j = add i64 %i, 1
+  %c = icmp slt i64 %j, %n
+  br i1 %c, label %loop, label %done
+done:
+  ret i64 %t
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let insns = done.body.insns();
+    let names: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref().and_then(|w| w.name.as_deref())).collect();
+    assert!(names.contains(&"jl"), "{names:?}");
+    let add = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("add")).expect("an add");
+    assert!(
+        add.sources.iter().any(|s| matches!(s, crate::model::ir::Loc::Mem(m) if m.width == 8 && m.scale == 8)),
+        "{add:?}"
+    );
+}
