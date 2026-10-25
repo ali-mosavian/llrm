@@ -163,3 +163,42 @@ fn the_pins_scalar_sse_opcodes_are_their_forms() {
         assert_eq!(form_name(&map, opcode), name, "{opcode}");
     }
 }
+
+/// `CVTTSD2SIrr` and `CVTTSD2SI64rr` are the 32- and 64-bit result of one
+/// mnemonic; both rows state the source's width (64), so the name was
+/// `Ambiguous` and every float-to-integer conversion at m64 was refused.
+#[test]
+fn a_truncating_conversion_picks_its_result_width_by_the_name() {
+    let map = map64();
+    for (opcode, iced) in [
+        ("CVTTSD2SIrr", "Cvttsd2si_r32_xmmm64"),
+        ("CVTTSD2SI64rr", "Cvttsd2si_r64_xmmm64"),
+        ("CVTTSD2SIrm", "Cvttsd2si_r32_xmmm64"),
+        ("CVTTSS2SIrr", "Cvttss2si_r32_xmmm32"),
+        ("CVTTSS2SI64rm", "Cvttss2si_r64_xmmm32"),
+    ] {
+        let form = &map.forms()[map.form(opcode).unwrap_or_else(|e| panic!("{opcode}: {e:?}"))];
+        assert_eq!(form.iced.as_deref(), Some(iced), "{opcode}");
+    }
+}
+
+/// The memory operand of a conversion is its source's size: `CVTTSD2SIrm` reads
+/// 8 bytes, `CVTSI2SDrm` 4, `CVTSI642SDrm` 8, `ANDPSrm` the 16 of a register.
+#[test]
+fn a_conversions_memory_operand_is_its_sources_size() {
+    use super::opcodes::memory_bytes;
+    assert_eq!(
+        [
+            "CVTTSD2SIrm",
+            "CVTTSS2SI64rm",
+            "CVTSS2SDrm",
+            "CVTSD2SSrm",
+            "CVTSI2SDrm",
+            "CVTSI642SDrm",
+            "ANDPSrm",
+            "MOVSDrm"
+        ]
+        .map(memory_bytes),
+        [Some(8), Some(4), Some(4), Some(8), Some(4), Some(8), Some(16), Some(8)]
+    );
+}

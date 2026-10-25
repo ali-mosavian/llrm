@@ -160,7 +160,11 @@ fn kernels(
         .concat(),
     );
     let c = compiled("llrm-c", &source("c"), &[&cpu[..], &["-fno-inline-functions"]].concat());
-    let nib = compiled("llrm-nib", &source("nib"), &[&cpu[..], &["-fno-inline-functions-called-once"]].concat());
+    let nib = compiled(
+        "llrm-nib",
+        &source("nib"),
+        &[&cpu[..], &["-fno-inline-functions", "-fno-inline-functions-called-once"]].concat(),
+    );
     let of = |asm: &str, name: &str| {
         loops(&procedure(asm, name)).iter().map(|(one, inner)| (normalized(one), *inner)).collect()
     };

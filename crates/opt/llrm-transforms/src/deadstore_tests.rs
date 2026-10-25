@@ -283,3 +283,89 @@ fn a_run_derives_no_annotations() {
     assert!(!crate::testing::printed(&module).contains("store i16 1"), "premise: the store goes");
     assert_eq!(after - before, 0, "DSE derived the annotations");
 }
+
+/// DSE forked the whole body (and cloned the context) to read it while the
+/// removals waited: one fork, 1.74 M Ir, for each run over a body with a
+/// store.
+#[test]
+fn a_run_forks_no_body() {
+    use llrm_mir::counts::{Event, get};
+    let before = get(Event::FunctionForks);
+    let after = eliminated(
+        "@g = global i16 0\n\ndefine i16 @f(i16 %x) {\nb0:\n  store i16 1, ptr @g\n  store i16 %x, ptr @g\n  %r = load i16, ptr @g\n  ret i16 %r\n}\n",
+        &[&[7]],
+    );
+    assert!(!after.contains("store i16 1"), "{after}");
+    assert_eq!(get(Event::FunctionForks), before, "dse forked the body");
+}
+
+/// A pass that asks for MemorySSA, without editing.
+struct AsksMssa;
+
+impl llrm_mir::passes::FunctionPass for AsksMssa {
+    fn name(&self) -> &'static str {
+        "asks-mssa"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        analyses.get::<llrm_analysis::manager::MemorySsa>(unit.context, unit.layout, unit.function);
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// DSE built its own MemorySSA (0.77 M Ir, 2 builds in d_faces) beside the
+/// one the manager held: it reads the held graph now (a hit, not a build).
+#[test]
+fn the_graph_the_manager_holds_is_the_one_dse_reads() {
+    let mut module = parsed(&format!(
+        "{DOS}@g = global i16 0\n\ndefine i16 @f(i16 %x) {{\nb0:\n  store i16 %x, ptr @g\n  %r = load i16, ptr @g\n  ret i16 %r\n}}\n"
+    ));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add_boxed(Box::new(AsksMssa));
+    manager.add_boxed(Box::new(DeadStoreElimination));
+    let before = llrm_mir::counts::analysed("mssa");
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
+    let after = llrm_mir::counts::analysed("mssa");
+    assert_eq!((after.0 - before.0, after.1 - before.1), (1, 1), "DSE did not read the held graph (hits, misses)");
+}
+
+/// `cycle_of` scanned every loop's body for each pair of stores it was asked
+/// about (0.84 M Ir in d_faces' `loop_independent`); the map made once must
+/// name the smallest loop of each block, as the scan did.
+#[test]
+fn the_innermost_loop_of_a_block_is_the_smallest_that_holds_it() {
+    let module = parsed(&format!(
+        "{DOS}define i32 @f(i32 %n) {{\nb0:\n  br label %o\no:\n  %i = phi i32 [0, %b0], [%j, %olatch]\n  br label %n1\nn1:\n  %k = phi i32 [0, %o], [%k2, %n1]\n  %k2 = add i32 %k, 1\n  %c = icmp slt i32 %k2, %n\n  br i1 %c, label %n1, label %olatch\nolatch:\n  %j = add i32 %i, 1\n  %d = icmp slt i32 %j, %n\n  br i1 %d, label %o, label %x\nx:\n  ret i32 %j\n}}\n"
+    ));
+    let (_, _, function) = module.functions().next().expect("a function");
+    let shape = llrm_analysis::cfg::Shape::of(function);
+    let found = super::innermost_headers(&shape.loops);
+    for &block in function.layout() {
+        let scan = shape
+            .loops
+            .iter()
+            .filter(|one| one.body.contains(&llrm_analysis::cfg::id(block)))
+            .min_by_key(|one| one.body.len())
+            .map(|one| one.header);
+        assert_eq!(found.get(&block).copied(), scan, "{block:?}");
+    }
+    assert_eq!(shape.loops.len(), 2);
+}
+
+/// `may_write` and `may_read` derived a load's or store's whole list to learn
+/// it is not empty (`loc_for_write` 0.78 M Ir in d_faces, 609 lists): a body of
+/// loads and stores derives none.
+#[test]
+fn asking_whether_a_load_or_store_writes_derives_no_list() {
+    let before = llrm_analysis::memoryssa::lazy_lists();
+    let after = eliminated(
+        "@g = global i16 0\n\ndefine i16 @f(i16 %x) {\nb0:\n  store i16 1, ptr @g\n  store i16 %x, ptr @g\n  %r = load i16, ptr @g\n  ret i16 %r\n}\n",
+        &[&[7]],
+    );
+    assert!(!after.contains("store i16 1"), "{after}");
+    assert_eq!(llrm_analysis::memoryssa::lazy_lists(), before, "lists derived for loads and stores");
+}

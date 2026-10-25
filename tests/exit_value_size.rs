@@ -14,7 +14,7 @@ const SUM: &str = r#"long b(unsigned short n)
 }
 "#;
 
-fn listing(level: &str) -> String {
+fn exit_value_listing(level: &str) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), SUM).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
@@ -30,12 +30,12 @@ fn listing(level: &str) -> String {
 /// loop is under half of that.
 #[test]
 fn at_os_the_sum_stays_a_loop() {
-    let text = listing("-Os");
+    let text = exit_value_listing("-Os");
     assert!(!text.contains("shrd"), "closed form at -Os:\n{text}");
 }
 
 #[test]
 fn at_o2_the_sum_is_still_the_closed_form() {
-    let text = listing("-O2");
+    let text = exit_value_listing("-O2");
     assert!(text.contains("shrd"), "no closed form at -O2:\n{text}");
 }

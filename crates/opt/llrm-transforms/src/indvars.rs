@@ -210,6 +210,7 @@ impl FunctionPass for IndVars {
         let held = analyses.get::<Scevs>(unit.context, unit.layout, unit.function);
         session.adopt(held.take());
         let mut mark = unit.function.mark();
+        let start = mark;
         let compared = crate::simplifyindvar::simplified_and_extended_in(
             &mut session,
             unit.context,
@@ -269,8 +270,17 @@ impl FunctionPass for IndVars {
         let found = analyses.get::<passes::Loops>(unit.context, unit.layout, unit.function);
         let loops = cfg::natural(unit.function, &found);
         let sunk = crate::exitsink::sunk(unit.function, &loops);
-        let dead = (compared || rewrote || canonical || optimized || predicated || tested || sunk || merged)
-            && dead::dead(unit.context, outer.callees(), unit.function);
+        // The pin deletes what an edit stopped reading as it goes; a sweep of
+        // the function (0.8 M Ir on d_faces' largest body) found the same.
+        let dead = (compared || rewrote || canonical || optimized || predicated || tested || sunk || merged) && {
+            match unit.function.touched_since(start) {
+                Some(touched) => {
+                    let seeds: Vec<_> = touched.named.iter().collect();
+                    dead::dead_from(unit.context, outer.callees(), unit.function, seeds)
+                }
+                None => dead::dead(unit.context, outer.callees(), unit.function),
+            }
+        };
         // The edits after the last step (lftr, the sinking, the dead code).
         session.forget_since(unit.context, unit.layout, &outer.globals, &outer.metadata, unit.function, mark);
         held.put(session.into_scev());
