@@ -64,6 +64,7 @@ const UNOPTIMIZED: &[&str] = &[
     "PressureSink",
     "MachineScheduler",
     "MachineSink",
+    "PeepholeOptimizer",
     "MachineCSE",
     "OptimizePHIs",
     "LateCleanup",
@@ -93,6 +94,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("MachineLICM", "machinelicm@4"),
     ("MachineCSE", "machinecse@4"),
     ("MachineSink", "machinesink@4"),
+    ("PeepholeOptimizer", "peepholeopt@4"),
     ("MachineCombiner", "combiner@4"),
     ("LiveRangeShrink", "liverangeshrink@4"),
     ("PressureSink", "pressuresink@5"),
@@ -169,6 +171,9 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
         // On SSA, where a def with phi users alone can go to its edge.
         Box::new(crate::backend::machinesink::MachineSink { size: target.size, limit: classes.available.len() }),
+        // On SSA, after sinking (the pin's PeepholeOptimizer): a subtract
+        // nothing reads is a compare (optimizeCompareInstr).
+        Box::new(crate::backend::peepholeopt::PeepholeOptimizer),
         // On SSA, after sinking (the pin's addILPOpts): a chain of one integer
         // operation rebuilt so its late operand joins last.
         Box::new(crate::backend::combiner::MachineCombiner),

@@ -812,6 +812,7 @@ impl Emitter<'_, '_> {
                 .is_some_and(|desc| desc.implicit_defs.contains(&llrm_dagisel::generated::ids::x86::EFLAGS));
         let previous = self.flags_now.filter(|&p| p != n);
         self.machine_in(n, opcode)?;
+        self.unused_sub_to_cmp(n);
         if writes_flags && let Some(previous) = previous {
             self.save_carry(previous, before);
         }
@@ -840,6 +841,29 @@ impl Emitter<'_, '_> {
             }
         }
         Ok(())
+    }
+
+    /// `X86InstrInfo::optimizeCompareInstr`: a `sub` whose difference nothing
+    /// reads is the `cmp` of its operands.
+    fn unused_sub_to_cmp(
+        &mut self,
+        n: u32,
+    ) {
+        let unused = !self.glue_users.contains_key(&SDValue { node: n, res: 0 });
+        let Some(block) = self.blocks.last_mut() else { return };
+        let Some(last) = block.insns.last_mut() else { return };
+        let Some(what) = last.what.as_ref() else { return };
+        if !unused
+            || what.op != Operation::Binary
+            || what.name.as_deref() != Some("sub")
+            || what.sources.len() != 2
+            || !matches!(what.dests.as_slice(), [Loc::Held(_)])
+        {
+            return;
+        }
+        let compare =
+            Semantics { name: Some("cmp".into()), sources: what.sources.clone(), ..Semantics::new(Operation::Compare) };
+        *last = Arc::new(Insn::new(last.at, last.covers, Some(compare), vec![], last.uses.clone()));
     }
 
     /// Whether the units glued after the flags copy `copy` are `adc`s and
