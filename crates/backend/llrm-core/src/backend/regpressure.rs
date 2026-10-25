@@ -105,6 +105,52 @@ impl Model {
     }
 }
 
+/// Which candidate a comparison picked (`TryCand.Reason` set, `Cand.Reason`
+/// lowered, or neither: the next criterion decides).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Pick {
+    Try,
+    Cand,
+    Neither,
+}
+
+/// `tryPressure` (MachineScheduler.cpp#L3805), bottom-up: compares what two
+/// candidates do to one kind of pressure (`RPDelta.Excess`, `.CriticalMax` or
+/// `.CurrentMax`, for `RegExcess`, `RegCritical` and `RegMax`). A change that
+/// lowers pressure beats one that does not; for the same set the smaller
+/// increase wins; for different sets the one in the set with the higher score
+/// (the set's number, `getRegPressureSetScore`) is preferred to increase, the
+/// lower to decrease; a candidate that changes nothing counts as the highest.
+pub fn try_pressure(
+    try_p: Option<PressureChange>,
+    cand_p: Option<PressureChange>,
+) -> Pick {
+    let inc = |change: Option<PressureChange>| change.map_or(0, |change| change.inc);
+    let (try_inc, cand_inc) = (inc(try_p), inc(cand_p));
+    let greater = |try_val: i64, cand_val: i64| match try_val.cmp(&cand_val) {
+        std::cmp::Ordering::Greater => Pick::Try,
+        std::cmp::Ordering::Less => Pick::Cand,
+        std::cmp::Ordering::Equal => Pick::Neither,
+    };
+    // If one candidate decreases and the other increases, go with it.
+    let decides = greater((try_inc < 0).into(), (cand_inc < 0).into());
+    if decides != Pick::Neither {
+        return decides;
+    }
+    // Both affect the same set (or neither any): the smallest increase.
+    let set = |change: Option<PressureChange>| change.map_or(usize::from(u16::MAX), |change| change.set);
+    if set(try_p) == set(cand_p) {
+        return greater(-i64::from(try_inc), -i64::from(cand_inc));
+    }
+    let rank = |change: Option<PressureChange>| change.map_or(i64::from(i32::MAX), |change| change.set as i64);
+    let (mut try_rank, mut cand_rank) = (rank(try_p), rank(cand_p));
+    // If the candidates are decreasing pressure, reverse priority.
+    if try_inc < 0 {
+        std::mem::swap(&mut try_rank, &mut cand_rank);
+    }
+    greater(try_rank, cand_rank)
+}
+
 pub struct Tracker<'a> {
     model: &'a Model,
     live: HashSet<u32>,
@@ -392,6 +438,35 @@ mod tests {
         // value 1: PAIR (weight 2, sets 0 and 1); value 2: ALL (2, set 0);
         // value 3: BYTES (1, set 0).
         assert_eq!(tracker.current(), &[5, 2]);
+    }
+
+    fn change(
+        set: usize,
+        inc: i32,
+    ) -> Option<PressureChange> {
+        Some(PressureChange { set, inc })
+    }
+
+    /// `tryPressure`: a candidate that lowers pressure beats one that raises or
+    /// leaves it; in one set the smaller increase wins; across sets the
+    /// candidate raising the lower-numbered set loses to the higher, and one
+    /// that changes nothing beats any raise. The order is what picks
+    /// between equal pressures in the pin, so a flipped comparison reorders
+    /// every tie.
+    #[test]
+    fn try_pressure_compares_as_the_pin_does() {
+        assert_eq!(try_pressure(change(3, -1), change(3, 1)), Pick::Try);
+        assert_eq!(try_pressure(change(3, 1), change(0, -2)), Pick::Cand);
+        assert_eq!(try_pressure(change(2, 1), change(2, 3)), Pick::Try);
+        assert_eq!(try_pressure(change(2, 3), change(2, 1)), Pick::Cand);
+        assert_eq!(try_pressure(change(5, 1), change(2, 1)), Pick::Try);
+        assert_eq!(try_pressure(change(2, 1), change(5, 1)), Pick::Cand);
+        // Both lower, different sets: the priority reverses.
+        assert_eq!(try_pressure(change(5, -1), change(2, -1)), Pick::Cand);
+        assert_eq!(try_pressure(None, change(4, 1)), Pick::Try);
+        assert_eq!(try_pressure(change(4, 1), None), Pick::Cand);
+        assert_eq!(try_pressure(None, None), Pick::Neither);
+        assert_eq!(try_pressure(change(1, 2), change(1, 2)), Pick::Neither);
     }
 
     #[test]
