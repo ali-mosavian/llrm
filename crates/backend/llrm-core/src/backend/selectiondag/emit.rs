@@ -2066,11 +2066,13 @@ impl Emitter<'_, '_> {
                     self.values.insert(result, shifted.value);
                     return Ok(Some(()));
                 }
-                // The word cut from a `movzx` of a byte is that `movzx` made
-                // at word width (`movzx ax, al`): held as the dword it was
+                // The word cut from a `movzx` of a byte, when the dword has no
+                // other reader, is that `movzx` made at word
+                // width (`movzx ax, al`): held as the dword it was
                 // zero-extended to, a word that lives across a call is spilled
                 // and reloaded as a dword.
-                if index == 4 && !status && self.is_machine_named(node.ops[0], "MOVZX32rr8") {
+                let only_user = self.glue_users.get(&node.ops[0]).is_some_and(|users| users.len() == 1);
+                if index == 4 && !status && only_user && self.is_machine_named(node.ops[0], "MOVZX32rr8") {
                     self.narrow_definition(source.value, 2);
                 }
                 self.values.insert(result, source.value);
