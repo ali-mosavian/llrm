@@ -671,7 +671,13 @@ impl Builder<'_> {
                     for _ in 0..parts {
                         fixed += 1;
                         let ptr = self.dag.get_frame_index(self.target.dag.pointer, -fixed);
-                        let align = self.layout.align(&self.module.context.types, self.function.value(arg).ty) as u32;
+                        // The fixed object is a whole stack slot
+                        // (`CreateFixedObject`),
+                        // aligned as one: a narrow argument's load is as
+                        // aligned as the slot, which
+                        // lets it widen (`loadi32` of an any-extend).
+                        let align = (self.layout.align(&self.module.context.types, self.function.value(arg).ty) as u32)
+                            .max(self.target.dag.pointer.size_in_bits() / 8);
                         let info = MemInfo {
                             mem_vt: part_vt,
                             align,
@@ -752,6 +758,14 @@ impl Builder<'_> {
         call.operands.truncate(instruction.operands.len() - 3);
         call.operands.push(callee);
         self.visit_call(&call, info)?;
+        // `visitInvoke`: the result, if read outside this block, is made a
+        // virtual register here (a terminator is skipped by the export in
+        // `visit`).
+        if let Some(result) = instruction.result {
+            if let Some(reg) = self.info.value_regs.get(&result).copied() {
+                self.copy_value_to_register(Operand::Value(result), reg, ISD::AnyExtend)?;
+            }
+        }
         let root = self.control_root();
         let dest = self.dag.get_basic_block(normal.0);
         let node = self.dag.get_node(ISD::Br, EVT::OTHER, &[root, dest]);
