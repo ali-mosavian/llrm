@@ -522,6 +522,11 @@ pub fn _scaled_operand(
         let size = _displacement_size(base, what.index_through, disp, bits);
         return Some((memory_operand(base, what.index_through, 1, disp, size, RegId::from(segment)), false));
     }
+    // The frame token is a word register: with a wide index (`[bp + rdx]`)
+    // there is no encoding until the frame layout names it.
+    if addr.space == Space::Frame && width_of(base) < Some(4) && width_of(what.index_through) >= Some(4) {
+        return None;
+    }
     let size = _displacement_size(base, what.index_through, disp, bits);
     Some((memory_operand(base, what.index_through, what.scale, disp, size, RegId::from(segment)), false))
 }
@@ -2009,7 +2014,7 @@ pub fn arith_into_imm(
     relocated: bool,
 ) -> Option<Emitted> {
     let built = operand_of(cell, at.bits);
-    if !TWO_OPERAND.contains(&name) || built.is_none() || ![1, 2, 4].contains(&cell.width) {
+    if !TWO_OPERAND.contains(&name) || built.is_none() || ![1, 2, 4, 8].contains(&cell.width) {
         return None;
     }
     let (r#where, symbolic) = built?;
@@ -2018,7 +2023,12 @@ pub fn arith_into_imm(
     if width == 1 {
         value = ((value & 0xFF) ^ 0x80) - 0x80;
     }
-    let all: Vec<i64> = if fits_in_a_byte(value) && !relocated { vec![8, width * 8] } else { vec![width * 8] };
+    // A quadword takes a sign-extended dword at most.
+    let widest = if width == 8 { 32 } else { width * 8 };
+    if width == 8 && i32::try_from(value).is_err() {
+        return None;
+    }
+    let all: Vec<i64> = if fits_in_a_byte(value) && !relocated { vec![8, widest] } else { vec![widest] };
     for bits in all {
         let Some(code) = code_of!(Upper(name), "_RM", width * 8, "_IMM", bits) else {
             continue;
@@ -2123,6 +2133,85 @@ pub fn emit(
     emit_in(BITNESS, what, at, r#where, short, relocated, held)
 }
 
+/// A scalar SSE instruction: the xmm operand is the one the iced Code names
+/// `xmm`, its memory twin `xmmm<bits>`, the bits those of the source
+/// (`cvtss2sd` reads 32). Operands are (destination, source), or the two
+/// sources of a compare; a binary's first source is its destination.
+fn scalar_sse(
+    what: &Semantics,
+    at: At,
+) -> Option<Emitted> {
+    let (dests, sources) = (&what.dests, &what.sources);
+    let name = what.name.as_deref()?.trim_end_matches("_x");
+    let (first, second) = match (dests.len(), sources.len()) {
+        (1, 2) => (&dests[0], &sources[1]),
+        (1, 1) => (&dests[0], &sources[0]),
+        (0, 2) => (&sources[0], &sources[1]),
+        _ => return None,
+    };
+    // An xmm register is held 16 bytes wide whatever scalar it carries: the
+    // mnemonic says how much is read.
+    let scalar = |source: &str| match source {
+        "ss" => 32,
+        "sd" => 64,
+        _ => 128,
+    };
+    let read =
+        match name.strip_prefix("cvtt").or_else(|| name.strip_prefix("cvt")).and_then(|rest| rest.split_once('2')) {
+            Some((source, _)) => scalar(source),
+            None => scalar(&name[name.len().saturating_sub(2)..]),
+        };
+    let bits = |one: &Loc| match one {
+        Loc::Reg(reg) if reg.register.is_xmm() && reg.width == 16 => read,
+        Loc::Reg(reg) => reg.width * 8,
+        Loc::Mem(cell) => cell.width * 8,
+        _ => 0,
+    };
+    let xmm = |one: &Loc| reg_of(one).is_some_and(RegId::is_xmm);
+    let upper = Upper(name);
+    match (first, second) {
+        (Loc::Reg(into), Loc::Reg(outof)) if xmm(first) && xmm(second) => {
+            let code = code_of!(upper, "_XMM_XMMM", bits(second))?;
+            _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true)
+        }
+        (Loc::Reg(into), Loc::Mem(cell)) if xmm(first) => {
+            let code = code_of!(upper, "_XMM_XMMM", cell.width * 8)?;
+            let (built, relocated) = operand_of(cell, at.bits)?;
+            _assemble(&raised(create_reg_mem(code, into.register, built)), at, relocated)
+        }
+        (Loc::Mem(cell), Loc::Reg(outof)) if xmm(second) => {
+            let code = code_of!(upper, "_XMMM", cell.width * 8, "_XMM")?;
+            let (built, relocated) = operand_of(cell, at.bits)?;
+            _assemble(&raised(create_mem_reg(code, built, outof.register)), at, relocated)
+        }
+        // cvttsd2si: an integer register from an xmm register or memory.
+        (Loc::Reg(into), source) if !xmm(first) => {
+            let code = code_of!(upper, "_R", into.width * 8, "_XMMM", bits(source))?;
+            match source {
+                Loc::Reg(outof) => _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true),
+                Loc::Mem(cell) => {
+                    let (built, relocated) = operand_of(cell, at.bits)?;
+                    _assemble(&raised(create_reg_mem(code, into.register, built)), at, relocated)
+                }
+                _ => None,
+            }
+        }
+        // cvtsi2sd: an xmm register from an integer register or memory.
+        (Loc::Reg(into), source) => {
+            let code = code_of!(upper, "_XMM_RM", bits(source))?;
+            match source {
+                Loc::Reg(outof) => _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true),
+                Loc::Mem(cell) => {
+                    let (built, relocated) = operand_of(cell, at.bits)?;
+                    _assemble(&raised(create_reg_mem(code, into.register, built)), at, relocated)
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 /// `emit` in `bits`-bit mode: 16 or 32, the target's object format says.
 pub fn emit_in(
     bits: u32,
@@ -2186,6 +2275,10 @@ pub fn emit_in(
     }
     let op = what.op;
     let seg = |register: RegId| SEGMENTS.contains_key(&register);
+
+    if all().any(|operand| reg_of(operand).is_some_and(RegId::is_xmm)) {
+        return scalar_sse(what, at);
+    }
 
     if op == Operation::Extend
         && matches!(what.name.as_deref(), Some("movsx" | "movzx"))
@@ -2330,12 +2423,16 @@ pub fn emit_in(
         // BINARY's own rule: sources[0] IS dests[0].
         let (dest, source) = (&dests[0], &sources[1]);
         if let (Some(into), Some(outof)) = (reg_of(dest), reg_of(source)) {
-            if name == "btc" {
+            if let Some(code) = ["btc", "bts", "btr"].iter().position(|bit| name == *bit) {
                 let width = width_of(into)?;
                 if width_of(outof) != Some(width) {
                     return None;
                 }
-                let code = code_of!("BTC_RM", width * 8, "_R", width * 8)?;
+                let code = match code {
+                    0 => code_of!("BTC_RM", width * 8, "_R", width * 8)?,
+                    1 => code_of!("BTS_RM", width * 8, "_R", width * 8)?,
+                    _ => code_of!("BTR_RM", width * 8, "_R", width * 8)?,
+                };
                 return _assemble(&raised(create_reg_reg(code, into, outof)), at, true);
             }
             return arith(name, into, outof, at);

@@ -379,6 +379,11 @@ pub fn live(body: &LirBody) -> (Live, Live) {
     (rows.sets(true), rows.sets(false))
 }
 
+/// `live`'s exit sets alone: one pass over the rows, not two.
+pub fn live_out(body: &LirBody) -> Live {
+    live_rows(body).sets(false)
+}
+
 /// `live` for the values `keep` names only: no other value is numbered,
 /// followed or put in a set.
 pub fn live_among(
@@ -487,8 +492,9 @@ impl DenseRows {
         rows: &'a [u64],
         block: usize,
     ) -> impl Iterator<Item = u32> + 'a {
-        rows[block * self.words..(block + 1) * self.words].iter().enumerate().flat_map(move |(word, bits)| {
-            (0..64).filter(move |bit| bits >> bit & 1 == 1).map(move |bit| self.numbered[word * 64 + bit])
+        rows[block * self.words..(block + 1) * self.words].iter().enumerate().flat_map(move |(word, &bits)| {
+            std::iter::successors((bits != 0).then_some(bits), |left| Some(left & (left - 1)).filter(|rest| *rest != 0))
+                .map(move |left| self.numbered[word * 64 + left.trailing_zeros() as usize])
         })
     }
 
@@ -1404,7 +1410,7 @@ pub fn allocate(
     classes: &RegisterClasses,
 ) -> Result<Assignment, Error> {
     let mut frame = Frame::new(0);
-    Ok(greedy_rewritten(body, pinned, unspillable, protected, cpu, segments, classes, &mut frame)?.0)
+    Ok(greedy_rewritten(body, pinned, unspillable, protected, cpu, segments, classes, &[], &mut frame)?.0)
 }
 
 thread_local! {
@@ -1426,6 +1432,7 @@ pub fn greedy_rewritten(
     cpu: ProfileOrName<'_>,
     segments: &Segments,
     classes: &RegisterClasses,
+    saved: &[RegId],
     frame: &mut Frame,
 ) -> Result<(Assignment, LirBody, BTreeSet<u32>), Error> {
     targets::profile(cpu).map_err(Error::Value)?;
@@ -1454,6 +1461,7 @@ pub fn greedy_rewritten(
         data: Some(segments.data),
         sets: Some(&sets),
         stable_loads: targets::profile(cpu).map_or(true, |profile| profile.stable_loads),
+        saved,
     };
     let mode = crate::greedy::shadow::Mode::Inline { frame: &mut *frame, classes };
     let decided = crate::greedy::shadow::decide_with(&inputs, mode);
@@ -2505,6 +2513,10 @@ pub struct RegAlloc {
     pub cpu: Profile,
     pub segments: Segments,
     pub classes: Rc<RegisterClasses>,
+    /// The registers the function's convention keeps, whole: the first use of
+    /// one costs a `push` and a `pop` (`tryAssignCSRFirstTime`). None: it
+    /// costs nothing.
+    pub saved: Vec<RegId>,
 }
 
 impl RegAlloc {
@@ -2523,7 +2535,17 @@ impl RegAlloc {
             cpu: targets::profile(cpu)?.clone(),
             segments: segments.clone(),
             classes: Rc::clone(classes),
+            saved: Vec::new(),
         })
+    }
+
+    /// With the registers the function's convention keeps.
+    pub fn with_saved(
+        mut self,
+        saved: Vec<RegId>,
+    ) -> Self {
+        self.saved = saved;
+        self
     }
 
     /// Assign; where that spills, make the spill real and assign again.
@@ -2639,6 +2661,7 @@ impl RegAlloc {
             (&cpu).into(),
             &segments,
             &self.classes,
+            &self.saved,
             &mut frame.borrow_mut(),
         );
         frame.borrow_mut().defer_colours = false;
@@ -2972,6 +2995,7 @@ mod tests {
             ProfileOrName::Name("386"),
             &target::BUILT_IN,
             &crate::backend::classes::RegisterClasses::m16(),
+            &[],
             &mut Frame::new(0),
         );
         let message = got.err().map(|error| error.to_string()).expect("an error, not a fallback allocation");

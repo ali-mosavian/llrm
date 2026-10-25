@@ -949,6 +949,16 @@ def fast_merge(numbers: list[str], merge_one) -> tuple[list[str], dict[str, str]
     return kept, left_out
 
 
+ADDED_ITEM = re.compile(r"^\+\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:fn|def)\s+(\w+)", re.M)
+
+
+def added_names(head: str, base: str, cwd: Path) -> set[str]:
+    """The function names a PR's head adds against `base` (the merge base): two PRs adding one test name merge without a conflict and fail to compile together
+    ('defined multiple times': #4678 and #4680 both added a_frame_cell_with_a_wide_index_is_not_encodable_before_the_frame_is_named)."""
+    diff = subprocess.run(["git", "diff", "-U0", f"{base}...{head}"], cwd=cwd, capture_output=True, text=True).stdout
+    return set(ADDED_ITEM.findall(diff))
+
+
 def assemble(numbers: list[str], heads: dict[str, str], base: str = BASE, cwd: Path = ROOT, limit: int = 16) -> tuple[list[str], dict[str, str]]:
     """The first `limit` of `numbers`, in order, that merge into `base` one after another without a conflict (`fast_merge`'s own merge, in a scratch worktree), and why
     each other waits. A batch of these loses no PR to a conflict with an earlier member: 63 of 93 conflict refusals in a week were with a member that landed, and the run
@@ -959,19 +969,26 @@ def assemble(numbers: list[str], heads: dict[str, str], base: str = BASE, cwd: P
         work = Path(tmp) / "w"
         git("worktree", "add", "-q", "--detach", str(work), base, cwd=cwd)
         try:
+            claimed: dict[str, str] = {}  # a name a kept PR adds -> that PR
             for number in numbers:
                 if len(kept) >= limit:
                     break
+                names = added_names(heads[number], base, cwd)
+                if clash := sorted(name for name in names if name in claimed):
+                    waits[number] = f"adds {clash[0]}, which #{claimed[clash[0]]} adds too: one of them drops it"
+                    continue
                 merge = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "merge", "--no-edit", "-q", heads[number]], cwd=work, capture_output=True, text=True)
                 if merge.returncode:
                     conflicts = git("diff", "--name-only", "--diff-filter=U", cwd=work).split()
                     if conflicts and not regenerate(conflicts, work):
                         kept.append(number)
+                        claimed.update(dict.fromkeys(names, number))
                         continue
                     subprocess.run(["git", "merge", "--abort"], cwd=work, capture_output=True)
                     waits[number] = "conflicts with an earlier PR of the batch: " + ", ".join(conflicts or ["the tree"])
                 else:
                     kept.append(number)
+                    claimed.update(dict.fromkeys(names, number))
         finally:
             subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=cwd, capture_output=True)
     return kept, waits
@@ -1021,12 +1038,14 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
 
         failed_units.clear()
         failed_build.clear()
+        stage("fast-merge")
         kept, out = fast_merge(group, merge_one)
         left_out.update(out)
         for number, why in out.items():
             print(f"#{number}: left out: {why}")
         if not kept:
             return True
+        stage("workspace-check")
         if broken := _workspace_check(ROOT):
             print(f"REFUSED: the batch does not build: {broken[:300]}")
             failed_build.append(broken)
@@ -1034,10 +1053,18 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         # LAND_FAST_TESTS=1: also the lib tests of the crates the batch changes (the user's 10-19 call is no tests; this is the switch for the opposite call)
         if os.environ.get("LAND_FAST_TESTS") == "1":
             changed = git("diff", "--name-only", BASE, "HEAD").split()
+            # The always-on scanners read sources and docs (milliseconds): a red one refuses the batch before the minutes of lib tests it would otherwise wait for.
+            stage("scanners-early")
+            if new := sorted(landing_scanner_failures(changed, False)):
+                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
+                failed_units.update(new)
+                return False
+            stage("lib-tests")
             if new := sorted(new_lib_failures(changed)):
                 print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
                 failed_units.update(new)
                 return False
+            stage("scanners")
             if new := sorted(new_scanner_failures(changed)):
                 print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
                 failed_units.update(new)
@@ -1046,10 +1073,12 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
             failed_units.update(new)
             return False
+        stage("link")
         if unlinked := new_link_failures(git("diff", "--name-only", BASE, "HEAD").split()):
             print(f"REFUSED: the batch's runtime does not link: {'; '.join(unlinked)[:300]}")
             failed_units.update(f"link {line.split(':')[0]}" for line in unlinked)
             return False
+        stage("behavioural")
         if red := pre_merge_behavioural(git("diff", "--name-only", BASE, "HEAD").split()):
             print(f"BEHAVIOURAL RED pre-merge: the batch, {' '.join(red)}")
             failed_units.update(f"behavioural {program}" for program in red)
@@ -1058,6 +1087,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
 
     def merge_alone(number: str) -> bool:
         """PR `number` merged alone onto a clean head in the batch's checkout."""
+        stage(f"alone #{number}")
         clean_checkout(BASE)
         git("fetch", "-q", "origin", infos[number]["headRefOid"])
         if subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True).returncode:
@@ -1499,7 +1529,9 @@ def dispatch() -> int:
         for number in numbers:
             git("fetch", "-q", "origin", f"refs/pull/{number}/head")
             heads[number] = git("rev-parse", "FETCH_HEAD").strip()
+        started = time.monotonic()
         kept, waits = assemble(numbers, heads, limit=int(sys.argv[2]))
+        print(f"{time.strftime('%H:%M:%S')} {PREFIX} assemble {time.monotonic() - started:.0f}s: {len(kept)} kept, {len(waits)} wait", file=sys.stderr)
         for number, why in waits.items():
             print(f"#{number}: waits a round: {why}", file=sys.stderr)
         print("\n".join(kept))

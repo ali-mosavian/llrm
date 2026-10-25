@@ -1029,6 +1029,92 @@ pub fn listing(
     Ok(items.into_iter().map(|item| spelled(item, &registers)).collect())
 }
 
+/// What a procedure sets up and takes back, and where: the frame and each
+/// callee-saved register are set up at the entry, or where `shrinkwrap` put
+/// them, and taken back on the returns that path reaches. A function of the
+/// procedure and whether its frame register is omitted, so `built` prints it
+/// and a phase that makes it instructions asks the same question.
+struct Sequences {
+    /// Where the pieces go when not at the entry.
+    wrap: Option<crate::backend::shrinkwrap::Wrap>,
+    /// What the entry sets up: every piece no block sets up later.
+    entry: Vec<Semantics>,
+    /// What each return takes back of what the entry set up, the registers
+    /// last set up first, then the frame.
+    exit: Vec<Semantics>,
+    enter: Vec<Semantics>,
+    leave: Vec<Semantics>,
+    kept: Vec<Semantics>,
+    restores: Vec<Semantics>,
+    saved: Vec<RegId>,
+    count: usize,
+    first: bool,
+}
+
+impl Sequences {
+    fn of(
+        procedure: &Procedure,
+        omit: bool,
+    ) -> Self {
+        let (mut enter, mut leave) = parts(procedure, omit);
+        // The registers a `saved_first` frame pushes are part of `enter`.
+        let first = procedure.body.saved_first;
+        let lows = if first { Vec::new() } else { saved_of(procedure) };
+        let count = lows.len();
+        let wrap = wrap_of(procedure, &procedure.body, enter.len() > count, omit);
+        let kept = enter.split_off(enter.len() - count);
+        let restores: Vec<Semantics> = leave.drain(..count).collect();
+        let saved: Vec<RegId> =
+            procedure.registers.saved.iter().filter(|(_, low)| lows.contains(low)).map(|(whole, _)| *whole).collect();
+        let mut sequences =
+            Self { wrap, entry: Vec::new(), exit: Vec::new(), enter, leave, kept, restores, saved, count, first };
+        let wrapped = |sequences: &Self, piece: crate::backend::shrinkwrap::Piece| {
+            sequences.wrap.as_ref().is_some_and(|wrap| wrap.wrapped.contains(&piece))
+        };
+        let mut entry_items: Vec<Semantics> = Vec::new();
+        let mut entry_leave: Vec<Semantics> = Vec::new();
+        if !wrapped(&sequences, crate::backend::shrinkwrap::Piece::Frame) {
+            entry_items.extend(sequences.enter.iter().cloned());
+        }
+        for (at, whole) in sequences.saved.iter().enumerate() {
+            if !wrapped(&sequences, crate::backend::shrinkwrap::Piece::Saved(*whole)) {
+                entry_items.push(sequences.kept[at].clone());
+            }
+        }
+        // Taken back in the reverse of that order.
+        for (at, whole) in sequences.saved.iter().enumerate().rev() {
+            if !wrapped(&sequences, crate::backend::shrinkwrap::Piece::Saved(*whole)) {
+                entry_leave.push(sequences.restores[sequences.count - 1 - at].clone());
+            }
+        }
+        if !wrapped(&sequences, crate::backend::shrinkwrap::Piece::Frame) {
+            entry_leave.extend(sequences.leave.iter().cloned());
+        }
+        sequences.entry = entry_items;
+        sequences.exit = entry_leave;
+        sequences
+    }
+
+    /// The items that set a piece up and take it back.
+    fn piece(
+        &self,
+        piece: &crate::backend::shrinkwrap::Piece,
+    ) -> (Vec<Semantics>, Vec<Semantics>) {
+        match piece {
+            crate::backend::shrinkwrap::Piece::Frame => (self.enter.clone(), self.leave.clone()),
+            // A `saved_first` frame's registers are in the frame's own
+            // sequence.
+            crate::backend::shrinkwrap::Piece::Saved(_) if self.first => (Vec::new(), Vec::new()),
+            crate::backend::shrinkwrap::Piece::Saved(whole) => {
+                let at = self.saved.iter().position(|one| one == whole).expect("a kept register");
+                // `kept` is in the order of `saved_of`; `restores` is the
+                // reverse.
+                (vec![self.kept[at].clone()], vec![self.restores[self.count - 1 - at].clone()])
+            }
+        }
+    }
+}
+
 /// The procedure's items with the frame register LIR names BP, or not where
 /// `omit`.
 fn built(
@@ -1037,59 +1123,9 @@ fn built(
     omit: bool,
 ) -> Result<Vec<Item>, Unprintable> {
     let regs = procedure.body.regs();
-    let (mut enter, mut leave) = parts(procedure, omit);
-    // Each piece (the frame, a register kept) is set up where it is first
-    // needed and taken back on the returns that path reaches, not at the entry
-    // and every return (`shrinkwrap`).
-    // The registers a `saved_first` frame pushes are part of `enter`.
-    let first = procedure.body.saved_first;
-    let lows = if first { Vec::new() } else { saved_of(procedure) };
-    let count = lows.len();
-    let wrap = wrap_of(procedure, &procedure.body, enter.len() > count, omit);
-    let kept = enter.split_off(enter.len() - count);
-    let restores: Vec<Semantics> = leave.drain(..count).collect();
-    let saved: Vec<RegId> =
-        procedure.registers.saved.iter().filter(|(_, low)| lows.contains(low)).map(|(whole, _)| *whole).collect();
-    // The items that set a piece up and take it back.
-    let item = |piece: &crate::backend::shrinkwrap::Piece| -> (Vec<Semantics>, Vec<Semantics>) {
-        match piece {
-            crate::backend::shrinkwrap::Piece::Frame => (enter.clone(), leave.clone()),
-            // A `saved_first` frame's registers are in the frame's own
-            // sequence.
-            crate::backend::shrinkwrap::Piece::Saved(_) if first => (Vec::new(), Vec::new()),
-            crate::backend::shrinkwrap::Piece::Saved(whole) => {
-                let at = saved.iter().position(|one| one == whole).expect("a kept register");
-                // `kept` is in the order of `saved_of`; `restores` is the
-                // reverse.
-                (vec![kept[at].clone()], vec![restores[count - 1 - at].clone()])
-            }
-        }
-    };
-    let wrapped =
-        |piece: crate::backend::shrinkwrap::Piece| wrap.as_ref().is_some_and(|wrap| wrap.wrapped.contains(&piece));
-    // What the entry sets up: every piece no block sets up later.
-    let mut entry_items: Vec<Semantics> = Vec::new();
-    let mut entry_leave: Vec<Semantics> = Vec::new();
-    if !wrapped(crate::backend::shrinkwrap::Piece::Frame) {
-        entry_items.extend(enter.iter().cloned());
-    }
-    for (at, whole) in saved.iter().enumerate() {
-        if !wrapped(crate::backend::shrinkwrap::Piece::Saved(*whole)) {
-            entry_items.push(kept[at].clone());
-        }
-    }
-    // Taken back in the reverse of that order: the registers last set up
-    // first, then the frame.
-    for (at, whole) in saved.iter().enumerate().rev() {
-        if !wrapped(crate::backend::shrinkwrap::Piece::Saved(*whole)) {
-            entry_leave.push(restores[count - 1 - at].clone());
-        }
-    }
-    if !wrapped(crate::backend::shrinkwrap::Piece::Frame) {
-        entry_leave.extend(leave.iter().cloned());
-    }
-    let enter = entry_items;
-    let unwrapped_leave = entry_leave;
+    let sequences = Sequences::of(procedure, omit);
+    let (wrap, enter, unwrapped_leave) = (&sequences.wrap, sequences.entry.clone(), sequences.exit.clone());
+    let item = |piece: &crate::backend::shrinkwrap::Piece| sequences.piece(piece);
     let blocks = &procedure.body.blocks;
     let lined = || blocks.iter().flat_map(|block| &block.insns).filter(|one| one.line.is_some());
     let first = lined().next();
