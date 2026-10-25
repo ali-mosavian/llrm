@@ -176,7 +176,9 @@ impl FunctionPass for CgpAddr {
         );
         // `optimizeSwitchInst`'s `optimizeSwitchType`.
         let switches = match analyses.outer().target().lowering() {
-            Some(lowering) => crate::cgpswitch::switch_types_widened(unit.context, &*lowering, unit.function),
+            Some(lowering) => {
+                crate::cgpswitch::switch_types_widened(unit.context, unit.layout, &*lowering, unit.function)
+            }
             None => false,
         };
         // Blocks and edges are as they were.

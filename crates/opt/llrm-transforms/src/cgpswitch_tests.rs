@@ -4,9 +4,11 @@
 use crate::cgpaddr::CgpAddr;
 use crate::testing::{parsed, printed};
 
-const HEAD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-n8:16:32\"\n\n";
+const HEAD: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\n\n";
+const HEAD16: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-n8:16:32\"\n\n";
 
-/// `text` through `cgpaddr` on the real-mode target: the text after.
+/// `text` through `cgpaddr` with a 32-bit pointer layout and x86's lowering:
+/// the text after.
 fn widened(text: &str) -> String {
     let mut module = parsed(&format!("{HEAD}{text}"));
     let mut manager = llrm_mir::passes::PassManager::default();
@@ -82,4 +84,28 @@ d:
 }
 ";
     assert_eq!(widened(text), printed(&parsed(&format!("{HEAD}{text}"))));
+}
+
+/// The 16-bit target keeps the narrow switch: a 32-bit compare per case costs
+/// an operand-size prefix there (queens, x_life grew 3 to 15 bytes at m16).
+#[test]
+fn test_a_switch_on_an_i16_stays_at_the_16_bit_target() {
+    let text = "define void @f(i16 %x) {
+b0:
+  switch i16 %x, label %d [
+    i16 1, label %a
+  ]
+
+a:
+  ret void
+
+d:
+  ret void
+}
+";
+    let mut module = parsed(&format!("{HEAD16}{text}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(CgpAddr);
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
+    assert_eq!(printed(&module), printed(&parsed(&format!("{HEAD16}{text}"))));
 }

@@ -22,6 +22,7 @@
 //! In `cgpaddr`'s run.
 
 use llrm_mir::context::{Constant, ConstantKind, Context};
+use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::lowering::Lowering;
 use llrm_mir::module::{Function, InstId, Operand, ValueDef};
@@ -34,10 +35,17 @@ mod tests;
 /// `optimizeSwitchType(SI)`: whether the condition was widened.
 fn widened(
     context: &Context,
+    layout: &DataLayout,
     lowering: &dyn Lowering,
     function: &mut Function,
     switch: InstId,
 ) -> bool {
+    // DEVIATE SW2: the 16-bit target keeps its switch narrow (a 32-bit compare
+    // there costs an operand-size prefix per case); m16 has no 32-bit
+    // pointer, as `is_desirable_to_promote_op` reads it. Exit: none.
+    if layout.pointer(0).bits < 32 {
+        return false;
+    }
     let condition = function.instruction(switch).operands[0];
     if matches!(condition, Operand::Constant(_)) {
         return false;
@@ -81,6 +89,7 @@ fn widened(
 /// `optimizeSwitchType` for each switch of `function`; whether any was widened.
 pub fn switch_types_widened(
     context: &Context,
+    layout: &DataLayout,
     lowering: &dyn Lowering,
     function: &mut Function,
 ) -> bool {
@@ -91,7 +100,7 @@ pub fn switch_types_widened(
         .collect();
     let mut changed = false;
     for switch in switches {
-        changed |= widened(context, lowering, function, switch);
+        changed |= widened(context, layout, lowering, function, switch);
     }
     changed
 }
