@@ -971,6 +971,6 @@ mod tests {
     fn test_the_scheduler_sets_are_not_siphashed() {
         // std's `HashSet<u32>` hashed every pressure query with SipHash.
         let none: [Arc<Insn>; 0] = [];
-        let _: crate::support::hash::HashSet<u32> = x87_values(none.iter());
+        let _: crate::support::hash::HashSet<u32> = super::x87_values(none.iter());
     }
 }
