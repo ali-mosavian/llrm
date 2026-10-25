@@ -2400,12 +2400,16 @@ pub fn emit_in(
         // BINARY's own rule: sources[0] IS dests[0].
         let (dest, source) = (&dests[0], &sources[1]);
         if let (Some(into), Some(outof)) = (reg_of(dest), reg_of(source)) {
-            if name == "btc" {
+            if let Some(code) = ["btc", "bts", "btr"].iter().position(|bit| name == *bit) {
                 let width = width_of(into)?;
                 if width_of(outof) != Some(width) {
                     return None;
                 }
-                let code = code_of!("BTC_RM", width * 8, "_R", width * 8)?;
+                let code = match code {
+                    0 => code_of!("BTC_RM", width * 8, "_R", width * 8)?,
+                    1 => code_of!("BTS_RM", width * 8, "_R", width * 8)?,
+                    _ => code_of!("BTR_RM", width * 8, "_R", width * 8)?,
+                };
                 return _assemble(&raised(create_reg_reg(code, into, outof)), at, true);
             }
             return arith(name, into, outof, at);
