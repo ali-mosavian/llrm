@@ -1506,9 +1506,9 @@ impl Builder<'_> {
         operand: SDValue,
         vt: EVT,
     ) -> SDValue {
-        let index = self.info.new_stack_object();
-        let slot = self.dag.get_frame_index(self.target.dag.pointer, index);
         let align = vt.size_in_bits().div_ceil(8);
+        let index = self.info.new_stack_object(align, align);
+        let slot = self.dag.get_frame_index(self.target.dag.pointer, index);
         let info = MemInfo { mem_vt: vt, align, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
         let root = self.root();
         let store = self.dag.get_store(root, operand, slot, info);
