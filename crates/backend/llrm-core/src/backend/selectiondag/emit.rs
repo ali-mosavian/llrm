@@ -231,6 +231,9 @@ struct Emitter<'a, 'd> {
     /// The nodes that read each value of a glue chain, from their operands (the
     /// matcher's nodes are not in the DAG's use lists).
     glue_users: HashMap<SDValue, Vec<u32>>,
+    /// The `fcom` operands of each float compare, by the `SAHF` that reads its
+    /// status word: the `fcom` is pushed there, next to the flag reader.
+    pending_fcom: HashMap<u32, (Held, Held)>,
     /// The floating constants loaded where they are read: (mnemonic, cell).
     lazy: HashMap<SDValue, (&'static str, Option<Mem>)>,
     /// The selector each `LES16rm` loaded beside its offset, by node: a cell
@@ -275,11 +278,14 @@ pub struct EmitState {
     pub vregs: HashMap<u32, u32>,
     pub next_value: u32,
     pub at: i64,
+    /// The bytes of the float type (4, 8 or 10) of each LIR value that is a DAG
+    /// value of a float type: `LirBody::float_bytes`, which a spill rounds to.
+    pub float_bytes: std::collections::BTreeMap<u32, u32>,
 }
 
 impl Default for EmitState {
     fn default() -> EmitState {
-        EmitState { vregs: HashMap::new(), next_value: 1, at: 1 }
+        EmitState { vregs: HashMap::new(), next_value: 1, at: 1, float_bytes: Default::default() }
     }
 }
 
@@ -360,6 +366,7 @@ pub fn emit_in(
         flag_insns: HashMap::new(),
         saved_carry: HashMap::new(),
         flag_copies_done: Default::default(),
+        pending_fcom: HashMap::new(),
         glue_users: {
             let mut users: HashMap<SDValue, Vec<u32>> = HashMap::new();
             for (at, one) in dag.nodes().iter().enumerate() {
@@ -378,6 +385,16 @@ pub fn emit_in(
                 emitter.mark_invariant_loads(before);
             }
         }
+    }
+    for (value, number) in &emitter.values {
+        let bytes = match dag.value_type(*value) {
+            EVT::Simple(MVT::F32) => 4,
+            EVT::Simple(MVT::F64) => 8,
+            EVT::Simple(MVT::F80) => 10,
+            _ => continue,
+        };
+        let widest = emitter.state.float_bytes.entry(*number).or_insert(0);
+        *widest = bytes.max(*widest);
     }
     let mut blocks = emitter.blocks;
     if ctx.address_mode == AddrMode::Real16 {
@@ -1252,6 +1269,20 @@ impl Emitter<'_, '_> {
             .ok_or_else(|| EmitError::Unsupported("a division operand not set by a glued CopyToReg".to_owned()))
     }
 
+    /// The `SAHF` that copies the status word `fnstsw` took from the compare
+    /// `n` into the flags.
+    fn status_reader(
+        &self,
+        n: u32,
+    ) -> Option<u32> {
+        let users = |value: SDValue| self.glue_users.get(&value).into_iter().flatten().copied();
+        let status = users(SDValue { node: n, res: 0 })
+            .find(|&user| self.is_machine_named(SDValue { node: user, res: 0 }, "FNSTSW16r"))?;
+        users(SDValue { node: status, res: 0 })
+            .flat_map(|byte| users(SDValue { node: byte, res: 0 }))
+            .find_map(|copy| self.glue_reaching(copy, |name| name == "SAHF"))
+    }
+
     /// What the instruction at the end of the glue chain from the `CopyToReg`
     /// node `n` is, if `wanted` accepts its name.
     fn glue_reaches(
@@ -1259,6 +1290,15 @@ impl Emitter<'_, '_> {
         n: u32,
         wanted: impl Fn(&str) -> bool,
     ) -> bool {
+        self.glue_reaching(n, wanted).is_some()
+    }
+
+    /// The node `glue_reaches` found.
+    fn glue_reaching(
+        &self,
+        n: u32,
+        wanted: impl Fn(&str) -> bool,
+    ) -> Option<u32> {
         let mut work = vec![SDValue { node: n, res: 1 }];
         while let Some(glue) = work.pop() {
             if usize::from(glue.res) >= self.dag.node(glue).values.len() {
@@ -1271,14 +1311,14 @@ impl Emitter<'_, '_> {
                         let name =
                             self.ctx.names.get(&(op as u16)).map_or("", |name| name.split('|').next().unwrap_or(name));
                         if wanted(name) {
-                            return true;
+                            return Some(user);
                         }
                     }
                     _ => {}
                 }
             }
         }
-        false
+        None
     }
 
     /// Whether the `CopyToReg` node `n` sets an implicit operand of the
@@ -1771,7 +1811,12 @@ impl Emitter<'_, '_> {
                 else {
                     return Err(EmitError::Unsupported(format!("{name}: an operand that is no register")));
                 };
-                self.push(Operation::Compare, "fcom", Vec::new(), vec![Loc::Held(left), Loc::Held(right)]);
+                match self.status_reader(n) {
+                    Some(sahf) => {
+                        self.pending_fcom.insert(sahf, (left, right));
+                    }
+                    None => self.push(Operation::Compare, "fcom", Vec::new(), vec![Loc::Held(left), Loc::Held(right)]),
+                }
                 return Ok(Some(()));
             }
             "FNSTSW16r" => {
@@ -1779,7 +1824,12 @@ impl Emitter<'_, '_> {
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
                 return Ok(Some(()));
             }
-            "SAHF" => return Ok(Some(())),
+            "SAHF" => {
+                if let Some((left, right)) = self.pending_fcom.remove(&n) {
+                    self.push(Operation::Compare, "fcom", Vec::new(), vec![Loc::Held(left), Loc::Held(right)]);
+                }
+                return Ok(Some(()));
+            }
             // Division and the one-operand multiply work in AX:DX or EAX:EDX,
             // which the matcher names with `CopyToReg`/`CopyFromReg` around
             // them: the LIR form says the pair in its operands.
@@ -2144,6 +2194,17 @@ impl Emitter<'_, '_> {
                 self.values.insert(result, held.value);
                 let mnemonic = format!("f{}", prefix.to_ascii_lowercase());
                 self.push(Operation::FloatUnary, &mnemonic, vec![Loc::Held(held)], vec![Loc::Held(source)]);
+                // The sequence pushes above its operand: the stack's top slots
+                // are not free for a value live across it (`fexp2` overflowed
+                // the stack with six doubles live: pow_stack_depth).
+                let scratch = llrm_x86::select::x87_scratch(&mnemonic);
+                if scratch > 0 {
+                    let last = self.blocks.last_mut().and_then(|block| block.insns.last_mut()).expect("the insn");
+                    Arc::get_mut(last)
+                        .expect("a fresh instruction")
+                        .clobbers
+                        .extend(crate::backend::allocate::RFP.iter().rev().take(scratch).copied());
+                }
             }
             "ADD" | "SUB" | "SUBR" | "MUL" | "DIV" | "DIVR" => {
                 let Loc::Held(left) = self.operand(node.ops[0])? else {

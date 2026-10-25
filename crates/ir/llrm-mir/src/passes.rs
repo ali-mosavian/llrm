@@ -3066,7 +3066,10 @@ impl PassManager {
                 let Module { context, globals, metadata, .. } = &mut *module;
                 let global = &mut globals[at];
                 let GlobalKind::Function(function) = &mut global.kind else { continue };
-                if function.is_declaration() || !bisected(name, global.name.as_deref().unwrap_or_default()) {
+                if function.is_declaration()
+                    || function.is_deleted()
+                    || !bisected(name, global.name.as_deref().unwrap_or_default())
+                {
                     continue;
                 }
                 set_running_function(global.name.as_deref().unwrap_or_default());

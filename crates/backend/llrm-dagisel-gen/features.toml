@@ -17,6 +17,15 @@ features = ["X87"]
 [cpu.p5]
 features = ["X87", "CX8"]
 
+# x86-64 (D64-0): the 64-bit mode of the same pin table. The baseline CMOV and CX8 of any 64-bit CPU,
+# x87 for `long double`; no SSE yet (scalar floating point is D64-4), so a float pattern stays on x87.
+[cpu.x64]
+features = ["X87", "CX8", "CMOV"]
+
+[cpu.x64.atom]
+"Subtarget->is64Bit()" = true
+"Subtarget->isTarget64BitLP64()" = true
+
 # Atoms that are not `Subtarget->hasX()`: a constant for every CPU here, or a feature list.
 [atom]
 "Subtarget->is64Bit()" = false
@@ -110,6 +119,7 @@ shiftMask64 = "shift_mask_64"
 i64relocImmSExt32 = "reloc_imm_sext_32"
 i16relocImmSExt8 = "reloc_imm_sext_8"
 X86add_flag_nocf = "no_carry_flag_uses_of_flags"
+xor_flag_dead_result = "xor_flag_dead_result"
 X86sub_flag_nocf = "sub_no_carry_flag_uses"
 X86lock_add_nocf = "no_carry_flag_uses_of_result"
 def32 = "def32"
