@@ -1656,6 +1656,28 @@ impl Emitter<'_, '_> {
         )
     }
 
+    /// The offset word of the pointer in `register` for a real-mode string
+    /// operation: the word a far pointer was joined from (`offset | selector <<
+    /// 16`), so the join itself is not made (`shl; movzx; add; mov edi`);
+    /// otherwise what the register was copied from.
+    fn offset_of_pointer(
+        &mut self,
+        register: llrm_lir::registers::RegId,
+    ) -> Result<Held, EmitError> {
+        let held = self.accumulated(register)?;
+        let Some(&origin) = self.origins.get(&register) else { return Ok(held) };
+        let joined = ["OR32rr", "ADD32rr", "ADD32rr_DB"].iter().any(|name| self.is_machine_named(origin, name));
+        if !joined || self.huge_selector(origin).is_none() {
+            return Ok(held);
+        }
+        let low = self.dag.node(origin).ops.iter().copied().find(|&op| self.is_machine_named(op, "MOVZX32rr16"));
+        let Some(low) = low else { return Ok(held) };
+        let offset = self.dag.node(low).ops[0];
+        let mut offset = self.held_operand(offset)?;
+        offset.width = 2;
+        Ok(offset)
+    }
+
     /// The selector of the segment the pointer in `register` is in, as a value:
     /// DGROUP for the address of a global, SS for one of the frame, the
     /// selector loaded with a far pointer.
@@ -2045,7 +2067,7 @@ impl Emitter<'_, '_> {
                     _ => RegId::EAX,
                 };
                 let (value, count, destination) =
-                    (self.accumulated(stored)?, self.accumulated(RegId::CX)?, self.accumulated(RegId::DI)?);
+                    (self.accumulated(stored)?, self.accumulated(RegId::CX)?, self.offset_of_pointer(RegId::DI)?);
                 let segment = self.segment_of_pointer(RegId::DI)?;
                 let (destination_after, emptied) = (self.fresh(2), self.fresh(2));
                 self.push(
@@ -2059,8 +2081,11 @@ impl Emitter<'_, '_> {
             }
             "REP_MOVSB_16" | "REP_MOVSW_16" | "REP_MOVSD_16" => {
                 use llrm_lir::registers::RegId;
-                let (count, source, destination) =
-                    (self.accumulated(RegId::CX)?, self.accumulated(RegId::SI)?, self.accumulated(RegId::DI)?);
+                let (count, source, destination) = (
+                    self.accumulated(RegId::CX)?,
+                    self.offset_of_pointer(RegId::SI)?,
+                    self.offset_of_pointer(RegId::DI)?,
+                );
                 let (from, to) = (self.segment_of_pointer(RegId::SI)?, self.segment_of_pointer(RegId::DI)?);
                 let (source_after, destination_after, emptied) = (self.fresh(2), self.fresh(2), self.fresh(2));
                 self.push(
