@@ -182,3 +182,27 @@ fn int_to_float_at_sse2_is_a_register_convert() {
         assert_eq!((dag.opcode(root), from), (ISD::SIntToFp, shown), "{op:?} {src:?}");
     }
 }
+
+/// Float to integer went through `fistp` and a stack slot at SSE2; the pin
+/// keeps a signed `i32`/`i64` convert (`cvttsd2si`) and reaches the other
+/// widths through one of them.
+#[test]
+fn float_to_int_at_sse2_is_a_register_convert() {
+    let tli = TargetLowering::x86_64(Features { sse2: true, cmov: true, ..Features::default() }, MVT::I64);
+    for (op, dst, shown) in [
+        (ISD::FpToSInt, EVT::I32, EVT::I32),
+        (ISD::FpToSInt, EVT::I64, EVT::I64),
+        (ISD::FpToSInt, EVT::I16, EVT::I32),
+        (ISD::FpToUInt, EVT::I32, EVT::I64),
+    ] {
+        let mut dag = SelectionDAG::new(DagConfig { pointer: EVT::I64, ..DagConfig::default() });
+        let x = dag.get_register(EVT::Simple(MVT::F64), 1);
+        let node = dag.get_node(op, dst, &[x]);
+        dag.set_root(node);
+        TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
+        DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: true }).run().expect("legalizes");
+        let root = dag.get_root();
+        let convert = if dag.opcode(root) == ISD::Truncate { dag.operand(root, 0) } else { root };
+        assert_eq!((dag.opcode(convert), dag.value_type(convert)), (ISD::FpToSInt, shown), "{op:?} {dst:?}");
+    }
+}

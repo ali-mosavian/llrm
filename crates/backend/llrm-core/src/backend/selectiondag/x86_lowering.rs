@@ -301,7 +301,7 @@ impl Hooks for X86Lowering {
             ISD::UAddOCarry | ISD::USubOCarry => Some(lower_addsub_carry(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
             ISD::VAStart => lower_vastart(dag, node),
-            ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node),
+            ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node, self.sse2),
             ISD::LRint => lower_lrint(dag, node),
             ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node, self.sse2),
             ISD::ConstantPool => lower_constant_pool(dag, node),
@@ -1170,12 +1170,30 @@ fn lower_addsub_carry(
 fn lower_fp_to_int(
     dag: &mut SelectionDAG,
     node: SDValue,
+    sse2: bool,
 ) -> Option<SDValue> {
     let signed = dag.opcode(node) == ISD::FpToSInt;
     let result_vt = dag.value_type(node);
     let mut value = dag.operand(node, 0);
     let value_vt = dag.value_type(value);
     let EVT::Simple(float @ (MVT::F32 | MVT::F64 | MVT::F80)) = value_vt else { return None };
+    if sse2 && matches!(float, MVT::F32 | MVT::F64) {
+        // `cvttss2si`/`cvttsd2si` truncate to i32 (and i64 at m64); the other
+        // widths convert through the next one up.
+        let pointer = dag.config().pointer;
+        let via = match (signed, result_vt) {
+            (true, EVT::I32) => return Some(node),
+            (true, EVT::I64) if pointer == EVT::I64 => return Some(node),
+            (true, _) => Some(EVT::I32),
+            (false, EVT::I64) => None,
+            (false, _) if pointer == EVT::I64 => Some(EVT::I64),
+            (false, _) => None,
+        };
+        if let Some(via) = via {
+            let wide = dag.get_node(ISD::FpToSInt, via, &[value]);
+            return Some(dag.get_node(ISD::Truncate, result_vt, &[wide]));
+        }
+    }
     let unsigned_fixup = !signed && result_vt == EVT::I64;
     let stored_vt = if !signed && result_vt != EVT::I64 { EVT::I64 } else { result_vt };
     let size = stored_vt.size_in_bits() / 8;
