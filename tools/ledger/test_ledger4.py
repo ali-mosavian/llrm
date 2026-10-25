@@ -76,12 +76,14 @@ def test_the_two_loop_passes_of_the_lpm_are_in_the_loop_bucket():
     assert "loopinstsimplify::LoopInstSimplify" in text and "loopsimplifycfg::LoopSimplifyCfg" in text
 
 
-def profile(tmp_path, lines_ours):
+def profile(tmp_path, lines_ours, **env):
     ours = tmp_path / "ours.incl"
     clang = tmp_path / "clang.incl"
     ours.write_text("\n".join(f"{ir:>14,} (  0.0%)  {name}" for ir, name in lines_ours) + "\n")
     clang.write_text("     1,000,000 (  0.0%)  /x/CodeGenAction.cpp:clang::BackendConsumer::HandleTranslationUnit(clang::ASTContext&)\n")
-    return run(tmp_path, LEDGER_OURS=str(ours), LEDGER_CLANG=str(clang), LEDGER_OT="1000000000", LEDGER_PT="2000000")
+    return run(
+        tmp_path, LEDGER_OURS=str(ours), LEDGER_CLANG=str(clang), LEDGER_OT="1000000000", LEDGER_PT="2000000", **env
+    )
 
 
 COMPILED = (900_000_000, "???:llrm_core::driver::compiled")
@@ -102,3 +104,31 @@ def test_the_dag_selection_frame_is_in_the_isel_bucket(tmp_path):
     assert done.returncode == 0, done.stderr
     isel = next(line for line in done.stdout.splitlines() if line.startswith("isel"))
     assert "850.0" in isel
+
+
+def test_an_analysis_a_pass_builds_is_its_own_bucket_not_the_passes(tmp_path):
+    """EarlyCse's inclusive cost held its MemorySSA build, DomTree and Shape (8.7 of the 14.9 M it read over the pin): the pin builds
+    them in frames of their own, so the scalar bucket's excess was accounting. The buckets must still sum to the whole."""
+    early = "<llrm_transforms::earlycse::EarlyCse as llrm_mir::passes::FunctionPass>::run"
+    get = "<llrm_mir::passes::Analyses>::get::<llrm_mir::passes::Dominators>"
+    calling = tmp_path / "ours.calling"
+    calling.write_text(
+        f"   400,000,000 (40.0%)  *  ???:{early} [/x/llrm-c]\n"
+        f"   100,000,000 (10.0%)  >  ???:{get} (22x) [/x/llrm-c]\n"
+        "    50,000,000 ( 5.0%)  >  ???:<alloc::vec::Vec<u8>>::grow_one (1x) [/x/llrm-c]\n"
+    )
+    done = profile(
+        tmp_path,
+        [COMPILED, WRITTEN, EMITTED, (400_000_000, f"???:{early}"), (100_000_000, f"???:{get}")],
+        LEDGER_CALLING=str(calling),
+        LEDGER_RESIDUAL_MAX_PERCENT="100",
+    )
+    assert done.returncode == 0, done.stderr
+    scalar = next(line for line in done.stdout.splitlines() if line.startswith("scalar"))
+    analyses = next(line for line in done.stdout.splitlines() if line.startswith("analyses built inside passes"))
+    assert "300.0" in scalar and "100.0" in analyses, done.stdout
+    assert "Dominators 100.00" in done.stdout
+    # The analysis is in the sum once: the passes' 300 + the analysis 100 + emit 10 + the front end 110, residual the rest of the 1000.
+    summed = next(line for line in done.stdout.splitlines() if line.startswith("sum of the buckets"))
+    residual = next(line for line in done.stdout.splitlines() if line.startswith("residual"))
+    assert float(summed.split()[-2]) == 520.0 and float(residual.split()[-2]) == 480.0, done.stdout
