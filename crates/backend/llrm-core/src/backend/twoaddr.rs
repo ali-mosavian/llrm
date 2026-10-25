@@ -234,7 +234,8 @@ pub fn tied(
     facts.finish(body)
 }
 
-/// `unfoldMemoryOperand` of a commutative instruction `d := op a, [m]` whose
+/// `unfoldMemoryOperand` of a commutative instruction (`add`, `and`, `or`,
+/// `xor`, the two-operand `imul`) `d := op a, [m]` whose
 /// `a` is another value: the load `t := mov [m]` and `d := op t, a`, commuted
 /// so that `t` is the tied source.
 fn _unfolded(
@@ -242,8 +243,14 @@ fn _unfolded(
     mint: &mut dyn FnMut() -> u32,
 ) -> Option<(Arc<Insn>, Arc<Insn>)> {
     let what = one.what.as_ref()?;
-    if what.op != Operation::Binary
-        || !matches!(what.name.as_deref(), Some("add" | "and" | "or" | "xor"))
+    // The two-operand `imul` commutes like `add`: `IMUL32rm`'s unfold is
+    // `IMUL32rr`.
+    let commutative = match what.op {
+        Operation::Binary => matches!(what.name.as_deref(), Some("add" | "and" | "or" | "xor")),
+        Operation::Multiply => what.name.as_deref() == Some("imul"),
+        _ => false,
+    };
+    if !commutative
         || what.dests.len() != 1
         || what.sources.len() != 2
         || one.volatile
@@ -1782,6 +1789,34 @@ mod tests {
         assert!(
             shapes.len() == 4 && shapes[1].0 == "mov" && mem(1) && shapes[2].0 == "mov" && shapes[3].0 == "add",
             "the load comes first, then the copy of what it loaded, then the add of `a`: {shapes:?}"
+        );
+    }
+
+    /// The unfold is for every commutative two-address instruction with a
+    /// folded load, not only `add`/`and`/`or`/`xor`: `imul esi,[edx+4]` beside
+    /// a live counter was a copy and a memory multiply, where the pin loads
+    /// first and multiplies registers (x_list's inner loop, `mov esi,ecx;
+    /// imul esi,[edx+4]` against `mov edi,[edx+4]; imul edi,ecx`).
+    #[test]
+    fn test_a_folded_multiply_beside_a_live_source_is_unfolded_and_commuted() {
+        use crate::model::ir::Mem;
+        let what = Semantics {
+            name: Some("imul".into()),
+            dests: vec![held(8, 4)],
+            sources: vec![held(7, 4), Loc::Mem(Mem::new(None, 4))],
+            ..Semantics::new(Operation::Multiply)
+        };
+        let mul = Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![8], vec![7]));
+        let got = tied(&of(vec![imm_def(0, 7), mul, read(2, 8), read(3, 7)]), Off);
+        let mut shapes = Vec::new();
+        for one in got.insns().iter() {
+            let Some(what) = one.what.as_ref() else { continue };
+            shapes.push((what.name.clone().unwrap_or_default().to_string(), what.sources.clone()));
+        }
+        let mem = |at: usize| matches!(shapes[at].1.first(), Some(Loc::Mem(_)));
+        assert!(
+            shapes.len() == 4 && shapes[1].0 == "mov" && mem(1) && shapes[2].0 == "mov" && shapes[3].0 == "imul",
+            "the load comes first, then the copy of what it loaded, then the imul by `a`: {shapes:?}"
         );
     }
 
