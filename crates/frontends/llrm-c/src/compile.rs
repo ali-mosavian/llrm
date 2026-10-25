@@ -3165,6 +3165,41 @@ mod tests {
         assert!(asm.lines().any(|line| line.trim().starts_with("movzx e")), "{asm}");
     }
 
+    /// A function that pushes an argument kept `ebp` from the allocator at -Os
+    /// (framefree's "tuned for size" rule; the pin's `hasFP` has none): the
+    /// frame register stayed a frame register, `mov ebp, esp` in the prologue.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_m32_os_frees_the_frame_register_of_a_function_that_pushes() {
+        let directory = tempfile::tempdir().unwrap();
+        let (source, out) = (directory.path().join("p.c"), directory.path().join("p.asm"));
+        std::fs::write(
+            &source,
+            "extern int g(int, int); \n\
+             int f(int *a) \n\
+             { int p0 = a[0], p1 = a[1], p2 = a[2], p3 = a[3], p4 = a[4], p5 = a[5], p6 = a[6]; \n\
+               int x = g(p0, p1); \n\
+               return x + p0 * p1 + p2 * p3 + p4 * p5 + p6 * x + (p0 ^ p4) + (p1 ^ p5) + (p2 ^ p6) + (p3 ^ p0); }\n",
+        )
+        .unwrap();
+        let argv = [
+            "-m32",
+            "-march=i486",
+            "-mabi=sysv",
+            "--isel=dag",
+            "-Os",
+            "-S",
+            source.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ]
+        .map(str::to_owned);
+        assert_eq!(super::main(&argv), 0);
+        let asm = std::fs::read_to_string(out).unwrap();
+        assert!(!asm.lines().any(|line| line.trim() == "mov ebp, esp"), "{asm}");
+    }
+
     /// A byte stored to the absolute address 0xB8000 (text video memory) was
     /// `mov byte ptr [32768], 65`: the direct address was masked to 16 bits on
     /// every target (GORILLA/bload_bsave.bas printed the wrong cell at -O2).
