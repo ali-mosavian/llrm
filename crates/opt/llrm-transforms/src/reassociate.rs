@@ -286,10 +286,11 @@ fn reverse_post_order(
 }
 
 /// A hash of the body: what each instruction is and reads, in order. (Not
-/// `print::fingerprint`, which the pipeline counts as a hashed body.)
+/// `print::fingerprint`, which the pipeline counts as a hashed body.) Fx, not
+/// SipHash: 2.0 M of the 3.5 M Ir of one run on d_faces -O2 was SipHash.
 fn digest(function: &Function) -> u64 {
     use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = llrm_mir::hash::Fx::default();
     for (block, inst) in function.walk() {
         block.hash(&mut hasher);
         let instruction = function.instruction(inst);

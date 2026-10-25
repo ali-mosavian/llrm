@@ -262,8 +262,47 @@ fn an_f80_zero_and_one_are_selected_as_the_x87_constants() {
 #[test]
 fn every_own_node_has_a_pin_id() {
     use super::dagisel_adapter::pin_opcode;
-    use super::x86isd::{LLRM_ASM, LLRM_CODE, LLRM_FARCALL, LLRM_PTRDIFF, LLRM_WINDOW, SEGMENT_OF};
-    for node in [LLRM_ASM, LLRM_CODE, LLRM_FARCALL, LLRM_PTRDIFF, LLRM_WINDOW, SEGMENT_OF] {
+    use super::x86isd::{LLRM_ASM, LLRM_CODE, LLRM_FARCALL, LLRM_PORT, LLRM_PTRDIFF, LLRM_WINDOW, SEGMENT_OF};
+    for node in [LLRM_ASM, LLRM_CODE, LLRM_FARCALL, LLRM_PORT, LLRM_PTRDIFF, LLRM_WINDOW, SEGMENT_OF] {
         assert_ne!(pin_opcode(node), u16::MAX, "{node:?}");
     }
+}
+
+/// Every `Target(24xxx)` of `x86isd.rs` (ours, not the pin's) is a line of
+/// `own_ids.txt`: `LLRM_CALL_FLAGS` (24585) was added to the node list and not
+/// to the file, so the generated ids did not know it.
+#[test]
+fn every_own_target_id_is_in_own_ids() {
+    let nodes = include_str!("../../../../../../crates/target/llrm-x86/src/dag/x86isd.rs");
+    let ids = include_str!("../../../../../../tools/dagisel/own_ids.txt");
+    let listed: Vec<(&str, &str)> = ids.lines().filter_map(|line| line.split_once(' ')).collect();
+    let mut missing = Vec::new();
+    for line in nodes.lines().filter(|line| line.starts_with("pub const ")) {
+        let Some((name, rest)) = line["pub const ".len()..].split_once(':') else { continue };
+        let Some(number) = rest.split("Target(").nth(1).and_then(|tail| tail.split(')').next()) else { continue };
+        if number.starts_with("24") && !listed.iter().any(|(id, n)| id.ends_with(&format!("::{name}")) && *n == number)
+        {
+            missing.push(format!("{name} {number}"));
+        }
+    }
+    assert!(missing.is_empty(), "not in tools/dagisel/own_ids.txt: {missing:?}");
+}
+
+/// `(x & 1) | (y << 1)`: no shared bit, so the `or` is an add and the address
+/// `x + y*2` is one `lea` (bench `x_popcount`: the pin has `LEA32r` x2 where we
+/// had `SHL32ri` + `ADD32rr_DB`, and before known bits, `OR32rr`).
+#[test]
+fn an_or_of_values_with_no_common_bits_is_one_lea() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let (x, y) = (input(&mut dag, 40), input(&mut dag, 41));
+    let one = dag.get_constant(1, EVT::I32);
+    let by = dag.get_constant(1, EVT::I8);
+    let low = dag.get_node(ISD::And, EVT::I32, &[x, one]);
+    let high = dag.get_node(ISD::Shl, EVT::I32, &[y, by]);
+    let or = dag.get_node(ISD::Or, EVT::I32, &[low, high]);
+    let mut adapter = DagisAdapter::new(&mut dag);
+
+    assert_eq!(Selector::new(table::TABLE).select(&mut adapter, &mut hooks(), or.node), Outcome::Selected);
+
+    assert_eq!(machine_name(&dag, or.node), "LEA32r");
 }
