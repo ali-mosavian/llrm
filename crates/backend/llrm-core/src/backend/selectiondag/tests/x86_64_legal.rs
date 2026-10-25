@@ -142,3 +142,18 @@ fn fcopysign_of_a_float_is_two_masks_and_an_or() {
         assert!(dag.constant_pool.contains(&(mask, EVT::Simple(MVT::I128))));
     }
 }
+
+/// `f32` to `f64` is Custom at SSE2 (the arm is the pin's `f16` one); the
+/// hook declined it, so it fell to a libcall refusal instead of `cvtss2sd`.
+#[test]
+fn an_f32_to_f64_extend_survives_legalization() {
+    let tli = TargetLowering::x86_64(Features { sse2: true, cmov: true, ..Features::default() }, MVT::I64);
+    let mut dag = SelectionDAG::new(DagConfig { pointer: EVT::I64, ..DagConfig::default() });
+    let x = dag.get_register(EVT::Simple(MVT::F32), 1);
+    let node = dag.get_node(ISD::FpExtend, EVT::Simple(MVT::F64), &[x]);
+    dag.set_root(node);
+    TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true }).run().expect("legalizes");
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::FpExtend);
+}

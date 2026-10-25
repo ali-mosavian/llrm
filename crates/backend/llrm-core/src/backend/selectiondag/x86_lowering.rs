@@ -308,6 +308,9 @@ impl Hooks for X86Lowering {
             ISD::Abs => Some(lower_abs(dag, node)),
             ISD::FNeg | ISD::FAbs => lower_fabs_or_fneg(dag, node),
             ISD::FCopySign => lower_fcopysign(dag, node),
+            // `LowerFP_EXTEND`: the Custom arm exists for `f16`; a scalar
+            // `f32` to `f64` is returned as is and selected by pattern.
+            ISD::FpExtend if dag.value_type(dag.operand(node, 0)) == EVT::Simple(MVT::F32) => Some(node),
             ISD::CtLz | ISD::CtLzZeroPoison => Some(lower_ctlz(dag, node)),
             ISD::CtTz => Some(lower_cttz(dag, node)),
             ISD::Parity => Some(lower_parity(dag, node)),
