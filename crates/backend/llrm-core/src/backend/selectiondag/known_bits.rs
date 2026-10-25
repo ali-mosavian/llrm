@@ -183,6 +183,14 @@ pub fn num_sign_bits(
         let inner = dag.operand(value, 0);
         return num_sign_bits(dag, inner) + width - dag.value_type(inner).size_in_bits();
     }
+    if dag.opcode(value) == ISD::SignExtendInReg
+        && let super::dag::NodeData::ValueType(inner) = dag.node(dag.operand(value, 1)).data
+    {
+        // `ComputeNumSignBits` of `SIGN_EXTEND_INREG`: the larger of what the
+        // extension makes and what the operand has.
+        let made = width - inner.size_in_bits() + 1;
+        return made.max(num_sign_bits(dag, dag.operand(value, 0)));
+    }
     let known = known_bits(dag, value);
     let sign = 1u128 << (width - 1);
     let run = |bits: u128| (0..width).take_while(|i| bits & (sign >> i) != 0).count() as u32;
