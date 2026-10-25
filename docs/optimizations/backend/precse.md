@@ -51,12 +51,10 @@ covers). `isLegalToHoistInto` is translated: a return block is no target;
 the pin's other two conditions cannot hold on this LIR (see
 `legal_to_hoist_into`).
 
-DEVIATE CSE2 (owner funcattrs-port, exit 2026-11-13): an operation with no
-register operand is not a candidate, a load of a constant global with a
-fixed address among them (the pin shares and rematerializes it; ours cannot
-once TwoAddress and the coalescer write over it in place: compare_to_int64.c
--Os 346 to 361 bytes, grep -O2 -m32 +21.9% instructions). Exit: the
-allocator remakes a value with two defs. (This was E3.)
+Row CSE2 (was DEVIATE CSE2, retired 2026-10-25): a constant with no register operand is a
+candidate again. The address of a symbol stays out: the pin shares it and ours cannot make
+it again. 71 programs -O2 net 0 (lru -1, x_ll_div +1), -Os and m16 unchanged; the skip-edge
+zero of x_life waits on phi operands without a copy (DAG isel).
 
 DEVIATE CSE3 (owner w-1, exit 2026-11-08): both selectors mark a load
 invariant when it reads a constant global or says so (`!invariant.load`, a

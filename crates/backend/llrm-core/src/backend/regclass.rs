@@ -344,6 +344,26 @@ pub fn confinement_of<'a>(
     only.map_or(Confinement::Free, Confinement::Only)
 }
 
+/// Whether the form of `what` fills operand `at` with an xmm register (its row
+/// has `x` there and no `r`), as LLVM's operand class `FR64`/`VR128` says. A
+/// width of the xmm register does not: a 16-byte integer pair is not one. An
+/// instruction with no row (a copy) is read by the width.
+fn xmm_filled(
+    regs: Regs,
+    what: &crate::model::ir::Semantics,
+    width: u32,
+    at: usize,
+    xmm: &mut std::cell::OnceCell<Option<u32>>,
+) -> bool {
+    if regs.xmm_bytes() == 0 {
+        return false;
+    }
+    match xmm.get_or_init(|| llrm_x86::effects::xmm_operands(&regs.effects, what)) {
+        Some(mask) => mask >> at & 1 != 0,
+        None => width == regs.xmm_bytes(),
+    }
+}
+
 /// The items of `one`, appended.
 pub fn contribution(
     regs: Regs,
@@ -364,7 +384,10 @@ pub fn contribution(
             items.push(Item::Selecting(held.value));
         }
     }
-    for place in what.dests.iter().chain(&what.sources) {
+    // Which operands the form fills with an xmm register, found once and only
+    // if a register operand asks.
+    let mut xmm = std::cell::OnceCell::new();
+    for (at, place) in what.dests.iter().chain(&what.sources).enumerate() {
         if let Loc::Mem(cell) = place {
             if let Some(selector) = cell.selector {
                 items.push(Item::Selecting(selector.value));
@@ -424,7 +447,7 @@ pub fn contribution(
                     defining: what.dests.contains(place),
                 });
             }
-            if regs.xmm_bytes() != 0 && held.width == regs.xmm_bytes() {
+            if xmm_filled(regs, what, held.width, at, &mut xmm) {
                 items.push(Item::Restrict {
                     value: held.value,
                     kind: Kind::Xmm,
@@ -1291,6 +1314,30 @@ mod tests {
         let of = |value| recompute_class(&body, value, &target::BUILT_IN, &registers);
         assert_eq!(of(word), None);
         assert!(of(base).is_some_and(|class| class.contains(&RegId::BX) && !class.contains(&RegId::AX)));
+    }
+
+    /// What the form says fills an operand, not the register's width: an
+    /// `addsd` operand held 8 bytes got no xmm restriction (the value was
+    /// free to take a general register), and a 16-byte operand of an
+    /// integer `add` was confined to xmm.
+    #[test]
+    fn test_an_operand_is_xmm_by_its_form_not_its_width() {
+        let regs = Regs(&llrm_x86_m64::REGISTER_INFO);
+        let restricted = |name: &str, width: u32| {
+            let held = |value| Loc::Held(Held { value, width });
+            let what = Semantics {
+                name: Some(name.into()),
+                dests: vec![held(1)],
+                sources: vec![held(1), held(2)],
+                ..Semantics::new(Operation::Binary)
+            };
+            let mut items = Vec::new();
+            contribution(regs, &Insn::new(1, None, Some(what), vec![1], vec![1, 2]), &mut items);
+            items.iter().any(|item| matches!(item, Item::Restrict { kind: Kind::Xmm, .. }))
+        };
+        assert!(restricted("addsd", 8), "an xmm operand held 8 bytes");
+        assert!(restricted("addsd", 16));
+        assert!(!restricted("add", 16), "a 16-byte integer operand");
     }
 }
 
