@@ -778,6 +778,8 @@ fn a_long_result_truncated_to_an_int_does_not_read_dx() {
     for wide in ["shl", "or"] {
         assert!(!names.iter().any(|n| n == wide), "{names:?}");
     }
+}
+
 const WORD_ARGUMENTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
 declare cc 1005 void @g(i16, i16)
 define cc 1005 void @f(i16 %p) {
