@@ -194,3 +194,14 @@ fn the_other_scalar_sse_forms_encode() {
     let xor = sem(Operation::Binary, Some("xorps"), vec![rg(x(0), 16)], vec![rg(x(0), 16), rg(x(0), 16)], None, false);
     assert_eq!(bytes(&xor), [0x0f, 0x57, 0xc0]);
 }
+
+#[test]
+fn a_scalar_held_sixteen_bytes_wide_reads_what_its_mnemonic_says() {
+    // The xmm class holds a double in 16 bytes; addsd still reads 64 bits (F2
+    // 0F 58), not xmmm128 (no such form).
+    let x = |n: u32| RegId::from(Register::XMM0 + n);
+    let add = sem(Operation::Binary, Some("addsd"), vec![rg(x(0), 16)], vec![rg(x(0), 16), rg(x(1), 16)], None, false);
+    assert_eq!(bytes(&add), [0xf2, 0x0f, 0x58, 0xc1]);
+    let widen = sem(Operation::Extend, Some("cvtss2sd"), vec![rg(x(0), 16)], vec![rg(x(1), 16)], None, false);
+    assert_eq!(bytes(&widen), [0xf3, 0x0f, 0x5a, 0xc1]);
+}

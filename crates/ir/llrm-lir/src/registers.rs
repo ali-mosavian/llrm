@@ -575,9 +575,12 @@ impl Info {
     /// The bytes of the target's SSE registers, 0 where it has none: a value
     /// that wide is held in one.
     pub fn xmm_bytes(&self) -> u32 {
-        *self.cache.xmm_bytes.get_or_init(|| {
-            self.entries().find(|(_, one)| one.classes & class::XMM != 0).map_or(0, |(_, one)| one.bits / 8)
-        })
+        *self
+            .cache
+            .xmm_bytes
+            .get_or_init(
+                || self.entries().find(|(_, one)| one.classes & class::XMM != 0).map_or(0, |(_, one)| one.bits / 8),
+            )
     }
 
     /// How wide this register is, or None where the target does not say: a

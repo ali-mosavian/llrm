@@ -2139,7 +2139,20 @@ fn scalar_sse(
         (0, 2) => (&sources[0], &sources[1]),
         _ => return None,
     };
+    // An xmm register is held 16 bytes wide whatever scalar it carries: the
+    // mnemonic says how much is read.
+    let scalar = |source: &str| match source {
+        "ss" => 32,
+        "sd" => 64,
+        _ => 128,
+    };
+    let read =
+        match name.strip_prefix("cvtt").or_else(|| name.strip_prefix("cvt")).and_then(|rest| rest.split_once('2')) {
+            Some((source, _)) => scalar(source),
+            None => scalar(&name[name.len().saturating_sub(2)..]),
+        };
     let bits = |one: &Loc| match one {
+        Loc::Reg(reg) if reg.register.is_xmm() && reg.width == 16 => read,
         Loc::Reg(reg) => reg.width * 8,
         Loc::Mem(cell) => cell.width * 8,
         _ => 0,
