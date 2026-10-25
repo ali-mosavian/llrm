@@ -23,9 +23,9 @@
 //! # Runs
 //! `assemble::staged` when `--isel=dag`.
 //!
-//! DEVIATE SD403: no branch probabilities (`odds`) or counted-loop trip
-//! counts, so the executed-work estimate of a loop is lower than the old
-//! selector's until they are carried; and no calls, locals, register arguments,
+//! DEVIATE SD403: no counted-loop trip counts (branch odds are carried,
+//! `dag_odds`), so the executed-work estimate of a loop is lower than the old
+//! selector's until they are; and no calls, locals, register arguments,
 //! switch lowering or multi-register phis yet. Reason: they need the call
 //! sequence and frame objects in the emitter (D1e). Exit: D1e. Owner: sdag-d.
 //! Review 2026-12-03.
@@ -857,6 +857,23 @@ fn selected_in(
     // `UnreachableMachineBlockElim`: a block no edge leads to (the
     // `unreachable` default of a switch whose cases cover its values) is
     // dropped, with the phi inputs that came from it.
+    let places: Vec<i64> = emitted.iter().map(|block| block.at).collect();
+    let odds = super::dag_odds::of(
+        &llrm_analysis::bpi::BranchProbabilityInfo::of(
+            llrm_analysis::bpi::Module {
+                context: &module.context,
+                declarations: &module.globals,
+                metadata: &module.metadata,
+                layout: &layout,
+            },
+            function,
+        ),
+        function,
+        &made,
+        &block_at,
+        &places,
+        &succ,
+    );
     let (emitted, succ) = without_unreachable(emitted, succ, landing);
     // Every value read is defined on every path to the read (a phi, an
     // instruction, an arrival): a LIR that reads one nothing defines on some
@@ -952,6 +969,7 @@ fn selected_in(
     }
     body.sealed_arguments = true;
     body.ordered = true;
+    body.odds = odds;
     body.frequencies = Some(crate::analysis::frequency::Frequency::over(&body, &body.blocks).table());
     // The inline routines the calls name (`ExpandDivRemLibCall`'s `divN_s`):
     // their bytes are laid down at the call, as the old route did.

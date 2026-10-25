@@ -107,6 +107,7 @@ pub mod builder;
 mod dag;
 pub mod dag_combiner;
 pub mod dag_function;
+mod dag_odds;
 pub mod dag_select;
 pub mod dagisel_adapter;
 mod demanded_bits;

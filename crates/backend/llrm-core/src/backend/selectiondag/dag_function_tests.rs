@@ -3436,3 +3436,46 @@ fn the_fudge_of_an_unsigned_conversion_is_read_as_a_float() {
         .collect();
     assert_eq!(indexed, [4], "the fudge is indexed by the sign and is a float");
 }
+
+/// Every edge of a `--isel=dag` body was even, which the old selector's was
+/// not: a loop's back edge lost its 31-in-32 and a switch's compare took its
+/// case as likely as the next compare, so placement kept the case on the
+/// fall-through and each miss paid a taken jump (bench `switch` 8 `jne` and no
+/// `je` where the pin has 5 `je` and 3 `jne`, 1.39x the old selector's clocks).
+#[test]
+fn a_switch_compare_leaves_for_its_case_with_the_odds_of_one_case_among_the_rest() {
+    let module = llrm_mir::parse::module(SWITCH).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let body = &done.body;
+    let returns: Vec<i64> = body.blocks.iter().filter(|b| b.succ.is_empty()).map(|b| b.at).collect();
+    let mut compares = 0;
+    // A compare that leaves for a case and for the next compare: the case is
+    // one of several, the next compare the rest.
+    for block in body.blocks.iter().filter(|b| b.succ.len() == 2) {
+        let succ: Vec<i64> = block.succ.iter().copied().collect();
+        let (Some(case), Some(next)) = (
+            succ.iter().copied().find(|to| returns.contains(to)),
+            succ.iter().copied().find(|to| !returns.contains(to)),
+        ) else {
+            continue;
+        };
+        compares += 1;
+        let (case, next) = (body.odds.chance(block.at, &succ, case), body.odds.chance(block.at, &succ, next));
+        assert!(case < next, "{:#x}: case {case}, next compare {next}: {:?}", block.at, body.odds);
+    }
+    assert!(compares > 0, "a compare that leaves for a case: {body:#?}");
+}
+
+/// The back edge of a loop is the likely one (`BranchProbabilityInfo`'s loop
+/// heuristic, 31 in 32).
+#[test]
+fn a_loops_back_edge_is_the_likely_one() {
+    let module = llrm_mir::parse::module(LOOP).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let blocks = &done.body.blocks;
+    let (header, body) = (&blocks[1], &blocks[2]);
+    let succ: Vec<i64> = header.succ.iter().copied().collect();
+    assert!(done.body.odds.chance(header.at, &succ, body.at) > 0.9, "{:?}", done.body.odds);
+}
