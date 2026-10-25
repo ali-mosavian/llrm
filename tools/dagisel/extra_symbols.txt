@@ -243,6 +243,7 @@ X86::SBB16mr
 X86::SBB32mi
 X86::SBB32mr
 X86::SBB8mi
+X86::RIP
 X86::SBB8mr
 X86::SS
 X86::SUB16mi
@@ -282,4 +283,5 @@ X86ISD::Wrapper
 X86ISD::WrapperRIP
 X86ISD::XOR
 X86::SBB32rr
+X86::sub_32bit
 X86::sub_8bit
