@@ -57,3 +57,34 @@ fn test_inline_code_keeps_the_frame_register() {
     assert!(!has_fp(&body, &registers, &Default::default(), false, false, false, false));
     assert!(has_fp(&body, &registers, &Default::default(), true, false, false, false));
 }
+
+/// A call frame the machine passes have not lowered yet (`call_frame_setup`
+/// and `call_frame_destroy`) was read as an opaque stack adjustment: every
+/// m32 function with a call kept `ebp` from the allocator (QCport m32 -O2
+/// +0.70%).
+#[test]
+fn test_call_frame_pseudos_are_a_depth_the_walk_follows() {
+    let registers = llrm_x86_m32::M32.frame_registers();
+    let imm = |value| Loc::Imm(llrm_core::model::ir::Imm { value, width: 4, address: None });
+    let pseudo =
+        |name: &str, sources| Semantics { name: Some(name.into()), sources, ..Semantics::new(Operation::Barrier) };
+    let insns =
+        [pseudo("call_frame_setup", vec![imm(8), imm(0), imm(0)]), pseudo("call_frame_destroy", vec![imm(8), imm(0)])]
+            .into_iter()
+            .enumerate()
+            .map(|(at, what)| {
+                Arc::new(Insn::new(at as i64, Some((at as i64, at as i64 + 1)), Some(what), vec![], vec![]))
+            })
+            .collect();
+    let body = LirBody {
+        bits: 32,
+        registers: Some(llrm_core::backend::registerinfo::Regs(llrm_x86_m32::M32.registers())),
+        ..LirBody::new("f", 0, vec![Block::from(LirBlock::new(0, insns))], IndexMap::default(), IndexMap::default())
+    };
+    assert_eq!(pinned_by(&body, &registers, &Default::default(), false), None);
+    assert_eq!(
+        pinned_by(&body, &registers, &Default::default(), true),
+        Some(Pinned::OpaqueSpAdjustment),
+        "tuned for size, as a push of a value"
+    );
+}
