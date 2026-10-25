@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::shapes::{self, Identity};
 use super::tags::{Shape, Slot, Tag};
-use super::{Compiler, Function, Instruction, Number, Operand, INTEGER, STRING};
+use super::{Compiler, Function, INTEGER, Instruction, Number, Operand, STRING};
 
 /// The most one far array holds (rt/dynamic.asm B$DDIM).
 const SEGMENT: i64 = 1 << 16;
@@ -634,9 +634,9 @@ pub(super) fn applied(compiler: &mut Compiler) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{built, Options};
+    use super::super::{Options, built};
     use super::*;
-    use crate::{parse, Dialect};
+    use crate::{Dialect, parse};
 
     fn applied_to(source: &str) -> Compiler {
         let module = parse(source, Dialect::VbDos).expect("parses");
@@ -782,7 +782,9 @@ mod tests {
 
     #[test]
     fn arrays_never_read_together_stay_apart() {
-        let compiler = applied_to("'$DYNAMIC\nDIM a(10) AS INTEGER, b(10) AS INTEGER\nFOR i = 1 TO 5\na(i) = 1\nNEXT\nFOR i = 1 TO 5\nb(i) = 2\nNEXT\n");
+        let compiler = applied_to(
+            "'$DYNAMIC\nDIM a(10) AS INTEGER, b(10) AS INTEGER\nFOR i = 1 TO 5\na(i) = 1\nNEXT\nFOR i = 1 TO 5\nb(i) = 2\nNEXT\n",
+        );
         assert_eq!(allocations(&compiler).len(), 2);
     }
 

@@ -126,9 +126,9 @@ pub(super) enum Passing {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{built, Instruction, Number, Options};
+    use super::super::{Instruction, Number, Options, built};
     use super::*;
-    use crate::{parse, Dialect};
+    use crate::{Dialect, parse};
 
     /// Each procedure's name and its tagged instructions.
     fn tagged(source: &str) -> Vec<(String, Vec<Instruction>)> {

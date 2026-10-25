@@ -1,7 +1,9 @@
-//! QuickrBASIC's statements as the parser has them: each is rewritten, before parsing, into statements and calls the
-//! parser reads without knowing the dialect. `x += 1` becomes `x = $AUG+(1)`, `a, b = b, a` becomes
-//! `$TUPLE(a, b) = $TUPLE(b, a)`, `RETURN v` in a FUNCTION becomes `name = v: EXIT FUNCTION`. No source name can spell
-//! the `$` names, and the semantic pass reads them back.
+//! QuickrBASIC's statements as the parser has them: each is rewritten, before
+//! parsing, into statements and calls the parser reads without knowing the
+//! dialect. `x += 1` becomes `x = $AUG+(1)`, `a, b = b, a` becomes `$TUPLE(a,
+//! b) = $TUPLE(b, a)`, `RETURN v` in a FUNCTION becomes `name = v: EXIT
+//! FUNCTION`. No source name can spell the `$` names, and the semantic pass
+//! reads them back.
 
 use std::collections::BTreeSet;
 
@@ -125,7 +127,6 @@ pub(crate) fn returned(
 /// becomes `$TUPLE(a, b) = $TUPLE(b, a)`. No source name can spell it.
 pub const TUPLE: &str = "$TUPLE";
 
-
 /// ON n GOTO|GOSUB's selector: `n` rounded to INTEGER, ERROR 5 raised by the
 /// ON statement itself where it is outside 0..255, so RESUME retries the ON.
 pub const ON_SELECTOR: &str = "$ON";
@@ -134,7 +135,6 @@ pub const ON_SELECTOR: &str = "$ON";
 /// The name a coordinate pair's x carries when the pair is STEP-relative to the
 /// last point.
 pub const STEP_MARK: &str = "$STEP";
-
 
 /// Where the first comma outside parentheses stands in `tokens`.
 fn depth_zero_comma(tokens: &[Token]) -> Option<usize> {
@@ -318,19 +318,9 @@ pub(crate) fn for_in(tokens: Vec<Token>) -> Vec<Token> {
 /// header, so PRIVATE leaves the stream and where its SUB or FUNCTION now
 /// stands marks the procedure that statement creates.
 pub(crate) fn without_private(tokens: Vec<Token>) -> (Vec<Token>, BTreeSet<usize>) {
-    let separator = |token: &Token| {
-        matches!(
-            token.kind,
-            TokenKind::Reserved(Kw::NewLine | Kw::Colon)
-        )
-    };
+    let separator = |token: &Token| matches!(token.kind, TokenKind::Reserved(Kw::NewLine | Kw::Colon));
     let header = |token: Option<&Token>| {
-        token.is_some_and(|token| {
-            matches!(
-                token.kind,
-                TokenKind::Reserved(Kw::SUB | Kw::FUNCTION)
-            )
-        })
+        token.is_some_and(|token| matches!(token.kind, TokenKind::Reserved(Kw::SUB | Kw::FUNCTION)))
     };
     let mut kept = Vec::with_capacity(tokens.len());
     let mut marked = BTreeSet::new();
@@ -348,12 +338,12 @@ pub(crate) fn without_private(tokens: Vec<Token>) -> (Vec<Token>, BTreeSet<usize
     (kept, marked)
 }
 
-
-/// The name of the conversion an f-string field makes. No source name can spell it, so no program can call or shadow
-/// it.
+/// The name of the conversion an f-string field makes. No source name can spell
+/// it, so no program can call or shadow it.
 pub const FORMAT_FIELD: &str = "$FSTRING";
 
-/// `f"..."` from its `f`: the text and the fields, each field's expression already scanned.
+/// `f"..."` from its `f`: the text and the fields, each field's expression
+/// already scanned.
 pub(crate) fn format_string(
     line: &str,
     at: &mut usize,
@@ -409,9 +399,8 @@ pub(crate) fn format_string(
                 if spec.as_deref().is_some_and(|spec| spec.contains('{')) {
                     return Err(error(span(*at, close + 1), "nested f-string fields are not supported"));
                 }
-                let mut tokens = crate::front::scan::scan(expression, dialect).map_err(|inner| {
-                    error(span(open + inner.span.start, open + inner.span.end), &inner.message)
-                })?;
+                let mut tokens = crate::front::scan::scan(expression, dialect)
+                    .map_err(|inner| error(span(open + inner.span.start, open + inner.span.end), &inner.message))?;
                 tokens.pop(); // the end-of-line token
                 for token in &mut tokens {
                     token.span = span(open + token.span.start, open + token.span.end);

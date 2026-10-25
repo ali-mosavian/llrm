@@ -527,17 +527,22 @@ pub fn punctuation(byte: u8) -> Kw {
 
 /// The word BC's grammar calls `name` (`tkABS`).
 pub fn named(name: &str) -> Kw {
-    NAMES.iter().find_map(|(candidate, kw)| (*candidate == name).then_some(*kw)).unwrap_or_else(|| panic!("{name} is a token"))
+    NAMES
+        .iter()
+        .find_map(|(candidate, kw)| (*candidate == name).then_some(*kw))
+        .unwrap_or_else(|| panic!("{name} is a token"))
 }
 
 impl Kw {
-    /// Whether the word is a function: a name before a parenthesis, not a statement.
+    /// Whether the word is a function: a name before a parenthesis, not a
+    /// statement.
     pub fn is_function_word(self) -> bool {
         super::kw_data::FUNCTION_WORDS.contains(&self)
     }
 }
 
-/// The extension words (`DEFBYTE`, QuickrBASIC's, and VBDOS's `EXPLICIT`), by their upper case spelling.
+/// The extension words (`DEFBYTE`, QuickrBASIC's, and VBDOS's `EXPLICIT`), by
+/// their upper case spelling.
 pub fn extension_keyword(spelling: &str) -> Option<&'static str> {
     ["DEFBYTE", "DEFUBYTE", "DEFUINT", "DEFULNG", "EXPLICIT"].into_iter().find(|word| *word == spelling)
 }

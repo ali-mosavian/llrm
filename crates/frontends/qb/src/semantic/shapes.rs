@@ -569,9 +569,9 @@ pub(super) fn applied(compiler: &mut Compiler) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{built, Compiler, Instruction, Options};
+    use super::super::{Compiler, Instruction, Options, built};
     use super::*;
-    use crate::{parse, Dialect};
+    use crate::{Dialect, parse};
 
     fn applied_to(source: &str) -> Compiler {
         applied_in(source, false)

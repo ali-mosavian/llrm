@@ -1,6 +1,6 @@
-use llrm_qb::semantic::{compile_with_array_order, compile_with_options, Options};
+use llrm_qb::semantic::{Options, compile_with_array_order, compile_with_options};
 use llrm_qb::syntax::{Binary, ExitTarget, Expr, Literal, Procedure, Statement, TypeName};
-use llrm_qb::{compile, parse, Dialect};
+use llrm_qb::{Dialect, compile, parse};
 
 fn json_object_with<'a>(
     document: &'a str,
@@ -1832,7 +1832,7 @@ fn eqv_negates_one_xor_without_pre_negating_the_left_operand() {
 
 #[test]
 fn qb_intrinsics_resolve_through_one_declarative_catalogue() {
-    use llrm_qb::intrinsics::{find, Effect, Lowering, ResultClass};
+    use llrm_qb::intrinsics::{Effect, Lowering, ResultClass, find};
 
     let sine = find("SIN", Dialect::QuickBasic45).expect("SIN is a QB intrinsic");
     assert_eq!(sine.lowering, Lowering::Sin);
@@ -2087,11 +2087,7 @@ fn volatile_goes_after_as_and_byref_is_accepted() {
             .statements
             .iter()
             .filter_map(|statement| {
-                if let Statement::Dim(declarations) = statement {
-                    Some(declarations[0].volatile)
-                } else {
-                    None
-                }
+                if let Statement::Dim(declarations) = statement { Some(declarations[0].volatile) } else { None }
             })
             .collect();
     assert_eq!(declared, [true, false, true, false]);
@@ -2184,14 +2180,15 @@ fn put_may_leave_out_its_raster_operation() {
 
 #[test]
 fn a_bare_exponent_marker_is_an_exponent_of_zero() {
-    // `IF 1E THEN` and `x = 1D` were refused as "not a valid number"; BC 4.5, PDS 7.1 and
-    // VBDOS accept them (1E0), and still refuse `1EA`.
+    // `IF 1E THEN` and `x = 1D` were refused as "not a valid number"; BC 4.5,
+    // PDS 7.1 and VBDOS accept them (1E0), and still refuse `1EA`.
     for source in ["IF 1E THEN PRINT 1\r\n", "IF 1D THEN PRINT 1\r\n", "x = 1E : y = 2D-1\r\n"] {
         for dialect in [Dialect::QuickBasic45, Dialect::Pds71, Dialect::VbDos] {
             parse(source, dialect).unwrap_or_else(|error| panic!("{source:?}: {}", error.message));
         }
     }
-    // ...but only before a blank: BC refuses a `1E` that ends the line or sits in parentheses.
+    // ...but only before a blank: BC refuses a `1E` that ends the line or sits
+    // in parentheses.
     for source in ["x = 1EA\r\n", "x = 1E\r\n", "x = (1E)\r\n", "d# = 1D\r\n"] {
         for dialect in [Dialect::QuickBasic45, Dialect::Pds71, Dialect::VbDos] {
             assert!(parse(source, dialect).is_err(), "{source:?} {dialect:?}");
@@ -2201,8 +2198,9 @@ fn a_bare_exponent_marker_is_an_exponent_of_zero() {
 
 #[test]
 fn vbdos_does_not_fold_csng_of_a_constant_argument() {
-    // `CALL pp(CSNG(32768))` to an INTEGER parameter compiles under VBDOS BC (and wraps); QB 4.5
-    // and PDS 7.1 raise Math overflow, as for any folded constant that does not fit.
+    // `CALL pp(CSNG(32768))` to an INTEGER parameter compiles under VBDOS BC
+    // (and wraps); QB 4.5 and PDS 7.1 raise Math overflow, as for any
+    // folded constant that does not fit.
     let source = "DECLARE SUB pp (x AS INTEGER)\r\nCALL pp(CSNG(32768))\r\nEND\r\nSUB pp (x AS INTEGER)\r\nEND SUB\r\n";
     assert!(parse(source, Dialect::VbDos).is_ok());
     assert!(parse(source, Dialect::QuickBasic45).is_err());
@@ -2211,9 +2209,11 @@ fn vbdos_does_not_fold_csng_of_a_constant_argument() {
 
 #[test]
 fn a_type_field_may_be_named_explicit_in_every_dialect_and_rem_in_pds() {
-    // BC 4.5, PDS 7.1 and VBDOS all take `EXPLICIT AS INTEGER` and `v.EXPLICIT`; PDS 7.1 alone
-    // reads REM at the start of a TYPE body line as a field (QB 4.5 and VBDOS keep it a comment).
-    let explicit = "TYPE T\r\n  EXPLICIT AS INTEGER\r\nEND TYPE\r\nDIM v AS T\r\nv.EXPLICIT = 4\r\nPRINT v.EXPLICIT\r\n";
+    // BC 4.5, PDS 7.1 and VBDOS all take `EXPLICIT AS INTEGER` and
+    // `v.EXPLICIT`; PDS 7.1 alone reads REM at the start of a TYPE body
+    // line as a field (QB 4.5 and VBDOS keep it a comment).
+    let explicit =
+        "TYPE T\r\n  EXPLICIT AS INTEGER\r\nEND TYPE\r\nDIM v AS T\r\nv.EXPLICIT = 4\r\nPRINT v.EXPLICIT\r\n";
     for dialect in [Dialect::QuickBasic45, Dialect::Pds71, Dialect::VbDos] {
         parse(explicit, dialect).unwrap_or_else(|error| panic!("{dialect:?}: {}", error.message));
     }
@@ -2226,9 +2226,10 @@ fn a_type_field_may_be_named_explicit_in_every_dialect_and_rem_in_pds() {
 
 #[test]
 fn bc_distributes_a_constant_product_out_of_parentheses_and_overflows_it() {
-    // `(b - 65536) * 65536` with a LONG variable b is "Math overflow" under QB 4.5 (jpeg_single):
-    // BC folds -65536 * 65536 out of the parentheses. PDS 7.1 and VBDOS do it for `+` only; two
-    // INTEGER constants, and a product that fits, are left alone.
+    // `(b - 65536) * 65536` with a LONG variable b is "Math overflow" under QB
+    // 4.5 (jpeg_single): BC folds -65536 * 65536 out of the parentheses.
+    // PDS 7.1 and VBDOS do it for `+` only; two INTEGER constants, and a
+    // product that fits, are left alone.
     let source = |expression: &str| format!("DEFINT A-Z\r\nDIM SHARED b AS LONG\r\nr& = {expression}\r\n");
     let refused = |expression: &str, dialect| parse(&source(expression), dialect).is_err();
     assert!(refused("(b - 65536) * 65536", Dialect::QuickBasic45));
@@ -2246,9 +2247,10 @@ fn bc_distributes_a_constant_product_out_of_parentheses_and_overflows_it() {
 
 #[test]
 fn qb45_gives_up_on_a_dynamic_array_with_too_many_subscripts() {
-    // tests/inputs/omf/regressions/ndarr.bas: under $DYNAMIC, QB 4.5 raises "Expression too
-    // complex" for a ninth subscript assigned or an eighth read, constants included; the same
-    // array is fine static, and PDS 7.1 and VBDOS take the constant forms.
+    // tests/inputs/omf/regressions/ndarr.bas: under $DYNAMIC, QB 4.5 raises
+    // "Expression too complex" for a ninth subscript assigned or an eighth
+    // read, constants included; the same array is fine static, and PDS 7.1
+    // and VBDOS take the constant forms.
     let program = |dynamic: &str, subscripts: usize, statement: &str| {
         let bounds = vec!["1 TO 2"; subscripts].join(",");
         let indexes = vec!["1"; subscripts].join(",");
@@ -2268,8 +2270,9 @@ fn qb45_gives_up_on_a_dynamic_array_with_too_many_subscripts() {
 
 #[test]
 fn a_declare_without_parentheses_matches_no_definition() {
-    // tests/check/qb/stack_entry_*.bas: `DECLARE SUB S` then `SUB S` is "Argument-count mismatch"
-    // under QB 4.5, PDS 7.1 and VBDOS alike; `DECLARE SUB S ()` is the form BC takes.
+    // tests/check/qb/stack_entry_*.bas: `DECLARE SUB S` then `SUB S` is
+    // "Argument-count mismatch" under QB 4.5, PDS 7.1 and VBDOS alike;
+    // `DECLARE SUB S ()` is the form BC takes.
     let source = |declare: &str| format!("{declare}\r\nS\r\nEND\r\nSUB S\r\nPRINT 1\r\nEND SUB\r\n");
     for dialect in [Dialect::QuickBasic45, Dialect::Pds71, Dialect::VbDos] {
         assert!(parse(&source("DECLARE SUB S"), dialect).is_err(), "{dialect:?}");
@@ -2279,10 +2282,12 @@ fn a_declare_without_parentheses_matches_no_definition() {
 
 #[test]
 fn a_function_declared_with_one_result_type_and_defined_with_another_is_a_duplicate() {
-    // corpus program 483: `DECLARE FUNCTION f& (...)` then `FUNCTION f% (...)` is "Duplicate
-    // definition" under QB 4.5, PDS 7.1 and VBDOS.
+    // corpus program 483: `DECLARE FUNCTION f& (...)` then `FUNCTION f% (...)`
+    // is "Duplicate definition" under QB 4.5, PDS 7.1 and VBDOS.
     let source = |declared: &str| {
-        format!("DEFINT A-Z\r\nDECLARE FUNCTION f{declared} (a%)\r\nx% = f%(1)\r\nEND\r\nFUNCTION f% (a%)\r\nf% = a%\r\nEND FUNCTION\r\n")
+        format!(
+            "DEFINT A-Z\r\nDECLARE FUNCTION f{declared} (a%)\r\nx% = f%(1)\r\nEND\r\nFUNCTION f% (a%)\r\nf% = a%\r\nEND FUNCTION\r\n"
+        )
     };
     for dialect in [Dialect::QuickBasic45, Dialect::Pds71, Dialect::VbDos] {
         assert!(parse(&source("&"), dialect).is_err(), "{dialect:?}");
@@ -2292,8 +2297,9 @@ fn a_function_declared_with_one_result_type_and_defined_with_another_is_a_duplic
 
 #[test]
 fn a_line_number_zero_after_on_error_goto_0_is_a_duplicate_label() {
-    // corpus [labels]: `ON ERROR GOTO 0` or `RESUME 0` above a line `0` -- BC reads the 0 as a label
-    // reference -- is "Duplicate label" under all three BCs; the other order is fine.
+    // corpus [labels]: `ON ERROR GOTO 0` or `RESUME 0` above a line `0` -- BC
+    // reads the 0 as a label reference -- is "Duplicate label" under all
+    // three BCs; the other order is fine.
     for dialect in [Dialect::QuickBasic45, Dialect::Pds71, Dialect::VbDos] {
         assert!(parse("ON ERROR GOTO 0\r\n0 PRINT\r\nEND\r\n", dialect).is_err(), "{dialect:?}");
         assert!(parse("0 PRINT\r\nON ERROR GOTO 0\r\nEND\r\n", dialect).is_ok(), "{dialect:?}");
@@ -2302,8 +2308,8 @@ fn a_line_number_zero_after_on_error_goto_0_is_a_duplicate_label() {
 
 #[test]
 fn a_form_declaration_inside_a_procedure_must_precede_executable_statements() {
-    // corpus [meta], BC output: `'$FORM frm` inside a SUB under VBDOS is "Must precede executable
-    // statements"; at module level it is fine.
+    // corpus [meta], BC output: `'$FORM frm` inside a SUB under VBDOS is "Must
+    // precede executable statements"; at module level it is fine.
     let inside = "SUB p\r\n'$FORM frm\r\nDIM a(10)\r\nEND SUB\r\n";
     let outside = "'$FORM frm\r\nDIM a(10)\r\n";
     assert!(parse(inside, Dialect::VbDos).is_err());
@@ -2312,9 +2318,11 @@ fn a_form_declaration_inside_a_procedure_must_precede_executable_statements() {
 
 #[test]
 fn a_literal_assigned_to_a_fixed_string_goes_to_basic_assn_as_a_descriptor_under_far_strings() {
-    // VBDOS BC: `s = "QRENDER"` (s AS STRING * 8) calls B$ASSN with the literal's descriptor and a source length
-    // of 0. llrm passed the bytes and 7, and the runtime copied the literal's header: conformance
-    // vbdos/qrender_shape printed garbage in the field. QB 4.5's near strings keep the bytes form.
+    // VBDOS BC: `s = "QRENDER"` (s AS STRING * 8) calls B$ASSN with the
+    // literal's descriptor and a source length of 0. llrm passed the bytes
+    // and 7, and the runtime copied the literal's header: conformance
+    // vbdos/qrender_shape printed garbage in the field. QB 4.5's near strings
+    // keep the bytes form.
     let source = "DIM s AS STRING * 8\r\ns = \"QRENDER\"\r\nPRINT s\r\n";
     // the length operand: 7 for the bytes form, 0 for the descriptor form
     let passes_the_bytes = |dialect, runtime| {
@@ -2332,15 +2340,17 @@ fn a_literal_assigned_to_a_fixed_string_goes_to_basic_assn_as_a_descriptor_under
 fn palette_using_passes_the_array_element_and_its_descriptor_to_b_palu() {
     // PALETTE USING was refused. PDS 7.1 BC calls B$PALU with a far pointer to
     // the named entry and the descriptor, as GET and PUT pass their array.
-    let module = parse("DEFINT A-Z\r\nDIM p(15) AS LONG\r\nSCREEN 13\r\nPALETTE USING p(0)\r\n", Dialect::Pds71).unwrap();
+    let module =
+        parse("DEFINT A-Z\r\nDIM p(15) AS LONG\r\nSCREEN 13\r\nPALETTE USING p(0)\r\n", Dialect::Pds71).unwrap();
     let hir = compile(&module, "palette_using", Dialect::Pds71, "pds71").unwrap();
     assert_eq!(hir.matches("\"callee\":\"B$PALU\"").count(), 1, "{hir}");
 }
 
 #[test]
 fn on_error_resume_next_registers_a_handler_that_resumes_at_the_next_statement() {
-    // ON ERROR RESUME NEXT was refused. PDS 7.1 BC registers 0FFFEh for the handler; here the
-    // handler is a block of its own that only does RESUME NEXT.
+    // ON ERROR RESUME NEXT was refused. PDS 7.1 BC registers 0FFFEh for the
+    // handler; here the handler is a block of its own that only does RESUME
+    // NEXT.
     let module = parse(
         "DEFINT A-Z\r\nON ERROR RESUME NEXT\r\nOPEN \"NOFILE.TXT\" FOR INPUT AS #1\r\nPRINT ERR\r\n",
         Dialect::Pds71,
@@ -2353,8 +2363,10 @@ fn on_error_resume_next_registers_a_handler_that_resumes_at_the_next_statement()
 
 #[test]
 fn redim_preserve_calls_b_rdmp_with_redims_operands() {
-    // REDIM PRESERVE was refused. PDS 7.1 BC calls B$RDMP with the operands B$RDIM takes.
-    let source = |statement: &str| format!("DEFINT A-Z\r\nREDIM a(5)\r\na(1) = 7\r\n{statement} a(10)\r\nPRINT a(1)\r\n");
+    // REDIM PRESERVE was refused. PDS 7.1 BC calls B$RDMP with the operands
+    // B$RDIM takes.
+    let source =
+        |statement: &str| format!("DEFINT A-Z\r\nREDIM a(5)\r\na(1) = 7\r\n{statement} a(10)\r\nPRINT a(1)\r\n");
     let compiled = |statement: &str| {
         let module = parse(&source(statement), Dialect::Pds71).unwrap();
         compile(&module, "redim", Dialect::Pds71, "pds71").unwrap()

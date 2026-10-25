@@ -1,12 +1,15 @@
-//! The whole front end's verdict on each file under a dialect: parse, then the semantic pass.
+//! The whole front end's verdict on each file under a dialect: parse, then the
+//! semantic pass.
 //!
-//!     verdict DIALECT FILE...        (qb45 | pds71 | vbdos; PARSER=old for the table-driven parser)
+//!     verdict DIALECT FILE...        (qb45 | pds71 | vbdos; PARSER=old for the
+//! table-driven parser)
 //!
-//! One line per file: `path<TAB>class<TAB>message`, the class one of ok, syntax, semantic, unsupported.
+//! One line per file: `path<TAB>class<TAB>message`, the class one of ok,
+//! syntax, semantic, unsupported.
 use std::path::{Path, PathBuf};
 
-use qbfront::semantic::{compile_with_options, Options};
 use qbfront::Dialect;
+use qbfront::semantic::{Options, compile_with_options};
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -25,15 +28,20 @@ fn main() {
             Ok(text) => {
                 let text = lalrspike::dos_source(text.as_bytes());
                 let parsed = if old {
-                    qbfront::front::parse_coded(&text, dialect).map_err(|e| format!("{}:{} {}", e.span.line, e.span.start, e.message))
+                    qbfront::front::parse_coded(&text, dialect)
+                        .map_err(|e| format!("{}:{} {}", e.span.line, e.span.start, e.message))
                 } else {
-                    lalrspike::qb_ast::parse(&text, dialect).map_err(|e| format!("{}:{} {}", e.span.line, e.span.start, e.message))
+                    lalrspike::qb_ast::parse(&text, dialect)
+                        .map_err(|e| format!("{}:{} {}", e.span.line, e.span.start, e.message))
                 };
                 match parsed {
                     Err(message) => ("syntax", message),
                     Ok(module) => match compile_with_options(&module, "t", dialect, "llrm", &Options::default()) {
                         Ok(_) => ("ok", String::new()),
-                        Err(error) if error.message.contains("cannot generate code") || error.message.contains("unsupported") => {
+                        Err(error)
+                            if error.message.contains("cannot generate code")
+                                || error.message.contains("unsupported") =>
+                        {
                             ("unsupported", error.message)
                         }
                         Err(error) => ("semantic", error.message),

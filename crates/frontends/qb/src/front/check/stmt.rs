@@ -194,7 +194,8 @@ impl Checker {
                     self.err_because(
                         *span,
                         "Syntax error",
-                        Reason::headline("OPTION BASE appears twice").help("a program has one OPTION BASE: remove the second"),
+                        Reason::headline("OPTION BASE appears twice")
+                            .help("a program has one OPTION BASE: remove the second"),
                     );
                 }
                 let dimensioned = |scope: &Scope| scope.vars.values().flatten().any(|v| v.rank.is_some());
@@ -234,9 +235,11 @@ impl Checker {
                         self.err_because(
                             *span,
                             "NEXT without FOR",
-                            Reason::headline("this NEXT names `{text}`, but the FOR loop it closes counts with `{other}`")
-                                .help("write the same variable after NEXT as after FOR, or leave it out")
-                                .related(counter_span),
+                            Reason::headline(
+                                "this NEXT names `{text}`, but the FOR loop it closes counts with `{other}`",
+                            )
+                            .help("write the same variable after NEXT as after FOR, or leave it out")
+                            .related(counter_span),
                         );
                     }
                 }
@@ -466,7 +469,8 @@ impl Checker {
             // '$FORM name: the form is a variable of the form type, seen
             // everywhere
             Statement::FormDeclaration(name, span) => {
-                // VBDOS's BC refuses one inside a SUB or FUNCTION (corpus group `meta`)
+                // VBDOS's BC refuses one inside a SUB or FUNCTION (corpus group
+                // `meta`)
                 if self.procedure.is_some() {
                     self.err(*span, "Must precede executable statements");
                 }
@@ -541,7 +545,8 @@ impl Checker {
                             self.err_because(
                                 value.span(),
                                 "Type mismatch",
-                                Reason::headline(headline).help("CASE values must be the same kind (number or string) as the expression"),
+                                Reason::headline(headline)
+                                    .help("CASE values must be the same kind (number or string) as the expression"),
                             );
                         } else if relation && selector.ty.string() {
                             // CASE IS < "a" is fine
@@ -630,7 +635,8 @@ impl Checker {
                 self.err_because(
                     span,
                     "Duplicate definition",
-                    Reason::headline("`{name}` is a CONST and cannot be assigned to").help("use a variable, or change the CONST"),
+                    Reason::headline("`{name}` is a CONST and cannot be assigned to")
+                        .help("use a variable, or change the CONST"),
                 );
                 return;
             }

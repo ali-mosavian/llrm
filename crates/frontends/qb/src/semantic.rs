@@ -529,20 +529,12 @@ pub struct Options {
 impl Options {
     /// The bytes of a near pointer.
     pub fn near(&self) -> usize {
-        if self.near_bytes == 0 {
-            2
-        } else {
-            self.near_bytes
-        }
+        if self.near_bytes == 0 { 2 } else { self.near_bytes }
     }
 
     /// The bytes of a far pointer.
     pub fn far(&self) -> usize {
-        if self.far_bytes == 0 {
-            4
-        } else {
-            self.far_bytes
-        }
+        if self.far_bytes == 0 { 4 } else { self.far_bytes }
     }
 
     /// Whether far pointers are near ones: the target has one address space.
@@ -2679,11 +2671,7 @@ impl Compiler {
         &self,
         rank: usize,
     ) -> Vec<usize> {
-        if self.options.row_major {
-            (0..rank).collect()
-        } else {
-            (0..rank).rev().collect()
-        }
+        if self.options.row_major { (0..rank).collect() } else { (0..rank).rev().collect() }
     }
 
     /// Per-dimension `bounds` in descriptor record order.
@@ -2929,7 +2917,11 @@ impl Compiler {
         if storage == "static" && self.beyond_segment(extent)
             || storage != "static" && self.beyond_segment(self.data_offset + extent)
         {
-            return self.fail(format!("{} does not fit: the near data segment (DGROUP, {} KiB) is full", declaration.name, self.segment_kib()));
+            return self.fail(format!(
+                "{} does not fit: the near data segment (DGROUP, {} KiB) is full",
+                declaration.name,
+                self.segment_kib()
+            ));
         }
         // A word array lies at an even offset, so no element read crosses
         // offset FFFFh: its loads may run where the program would not.
@@ -3314,8 +3306,9 @@ impl Compiler {
             }
             match statement {
                 Statement::OnErrorResumeNext { local, .. } => {
-                    // PDS 7.1 BC registers 0FFFEh for the handler. Here it is an ON ERROR whose
-                    // handler is just RESUME NEXT, so the resume switch an explicit handler has
+                    // PDS 7.1 BC registers 0FFFEh for the handler. Here it is
+                    // an ON ERROR whose handler is just
+                    // RESUME NEXT, so the resume switch an explicit handler has
                     // serves it.
                     let here = self.blocks[self.current_block].id;
                     let handler = self.new_block();
@@ -4051,7 +4044,8 @@ impl Compiler {
                         let commands = self.string_descriptor(commands)?;
                         self.emit_runtime_call("B$SPLY", Vec::new(), vec![commands]);
                     }
-                    // PALETTE USING array(i): PDS 7.1 BC passes the array as GET and PUT do.
+                    // PALETTE USING array(i): PDS 7.1 BC passes the array as
+                    // GET and PUT do.
                     "PALETTE_USING" => {
                         let [array] = arguments.as_slice() else {
                             return self.fail("PALETTE USING takes one array element, such as `PALETTE USING p(0)`");
@@ -4610,7 +4604,8 @@ impl Compiler {
     ) -> Result<(), SemanticError> {
         let (destination, counter_type) = self.destination(counter)?;
         if counter_type == BOOLEAN || !(integral(counter_type) || matches!(counter_type, SINGLE | DOUBLE)) {
-            return self.fail("a FOR counter must be a number variable such as `i` or `i%`, not a text variable like `i$`");
+            return self
+                .fail("a FOR counter must be a number variable such as `i` or `i%`, not a text variable like `i$`");
         }
         // An unsigned counter still counts down: its STEP keeps a sign.
         let step_type =
@@ -4918,7 +4913,9 @@ impl Compiler {
                 volatile: *volatile,
                 inbounds: *inbounds,
             }),
-            Operand::Value(_) | Operand::Constant(_, _) => self.fail("internal error: an aggregate copy operand is not a place"),
+            Operand::Value(_) | Operand::Constant(_, _) => {
+                self.fail("internal error: an aggregate copy operand is not a place")
+            }
         }
     }
 
@@ -4992,7 +4989,9 @@ impl Compiler {
             }
             Expr::Name(name, _) => {
                 if self.constants.contains_key(canonical(name)) {
-                    return self.fail(format!("`{name}` is a CONST, which never changes; use a variable if the value must change"));
+                    return self.fail(format!(
+                        "`{name}` is a CONST, which never changes; use a variable if the value must change"
+                    ));
                 }
                 // Inside FUNCTION f&, a bare f names the result, as f& does.
                 if let (Some((place, type_id)), Some(result), None) =
@@ -5488,21 +5487,13 @@ impl Compiler {
     /// value.
     fn largest_count(&self) -> i64 {
         let bits = 8 * self.options.near() as u32;
-        if bits >= 64 {
-            i64::MAX
-        } else {
-            (1i64 << (bits - 1)) - 1
-        }
+        if bits >= 64 { i64::MAX } else { (1i64 << (bits - 1)) - 1 }
     }
 
     /// The type of a descriptor's count, lower bound and element size: a signed
     /// word of the target.
     fn word_type(&self) -> u32 {
-        if self.options.one_space() {
-            integer_type(self.options.near(), true)
-        } else {
-            INTEGER
-        }
+        if self.options.one_space() { integer_type(self.options.near(), true) } else { INTEGER }
     }
 
     /// Where an array descriptor keeps what.
@@ -5679,8 +5670,9 @@ impl Compiler {
                     || self.signatures.get(canonical(name)).is_some_and(|signature| signature.result == Some(STRING))
             }
             Expr::Binary { op: Binary::Add, left, right, .. } => self.string_syntax(left) && self.string_syntax(right),
-            // Far-string runtimes (VBDOS): BC hands B$ASSN the literal's descriptor with a source length of 0, as for
-            // any string value; the bytes-and-length form reads the wrong bytes there.
+            // Far-string runtimes (VBDOS): BC hands B$ASSN the literal's
+            // descriptor with a source length of 0, as for any string value;
+            // the bytes-and-length form reads the wrong bytes there.
             Expr::Literal(Literal::String(text), _) => {
                 !text.is_empty() && llrm_qbruntime::semantics::descriptor(&self.runtime, self.options.near()).is_none()
             }
@@ -6176,7 +6168,8 @@ impl Compiler {
         self.convert(value, type_id, INTEGER)
     }
 
-    /// REDIM, or REDIM PRESERVE: PDS 7.1 BC passes B$RDMP the operands B$RDIM takes.
+    /// REDIM, or REDIM PRESERVE: PDS 7.1 BC passes B$RDMP the operands B$RDIM
+    /// takes.
     fn redim(
         &mut self,
         declaration: &Declaration,
@@ -6235,9 +6228,7 @@ impl Compiler {
                 let type_id = type_id(Some(type_name))?;
                 Ok((self.floating_literal(value, type_id)?, type_id))
             }
-            Expr::Literal(Literal::String(_), _) => {
-                self.fail("a string expression cannot be used here")
-            }
+            Expr::Literal(Literal::String(_), _) => self.fail("a string expression cannot be used here"),
             Expr::Name(name, _) => {
                 if self.intrinsic(name).is_some_and(|intrinsic| intrinsic.accepts(0)) {
                     return self
@@ -6320,7 +6311,7 @@ impl Compiler {
                     Unary::Not => "not",
                     Unary::Positive | Unary::Grouped => unreachable!(),
                     Unary::ByValue | Unary::Segmented => {
-                        return self.unsupported("BYVAL and SEG on the arguments of this call")
+                        return self.unsupported("BYVAL and SEG on the arguments of this call");
                     }
                 };
                 if *op == Unary::Not && !integral(type_id) {
@@ -6655,17 +6646,20 @@ impl Compiler {
         let (type_name, fixed_length) = self.element_type_name(element);
         let apply = |name: &str, arguments: Vec<Expr>| Expr::Apply { name: name.into(), arguments, span };
         let upper = apply("UBOUND", vec![Expr::Name(source.into(), span)]);
-        self.redim(&Declaration {
-            name: target.into(),
-            type_name: Some(type_name),
-            array: true,
-            bounds: vec![crate::syntax::Bound { lower: None, upper: upper.clone() }],
-            fixed_length,
-            shared: false,
-            dynamic: true,
-            volatile: false,
-            span,
-        }, false)?;
+        self.redim(
+            &Declaration {
+                name: target.into(),
+                type_name: Some(type_name),
+                array: true,
+                bounds: vec![crate::syntax::Bound { lower: None, upper: upper.clone() }],
+                fixed_length,
+                shared: false,
+                dynamic: true,
+                volatile: false,
+                span,
+            },
+            false,
+        )?;
         let (_, index) = self.hidden(INTEGER)?;
         let zero = Expr::Literal(Literal::Integer(0, TypeName::Integer), span);
         let copy = Statement::Assign {
@@ -7217,7 +7211,9 @@ impl Compiler {
             };
             let (operand, source) = self.numeric_argument(&arguments[0])?;
             if !matches!(source, INTEGER | LONG | SINGLE | DOUBLE | BOOLEAN) {
-                return self.fail(format!("`{name}` needs a number here, but was given text; use VAL(text$) to turn text into a number"));
+                return self.fail(format!(
+                    "`{name}` needs a number here, but was given text; use VAL(text$) to turn text into a number"
+                ));
             }
             if source == target {
                 return Ok(Some((operand, target)));
@@ -7228,7 +7224,9 @@ impl Compiler {
         if let Lowering::ToIntegral { width, signed } = intrinsic.lowering {
             let (operand, source) = self.expression(&arguments[0])?;
             if !(integral(source) || matches!(source, SINGLE | DOUBLE)) {
-                return self.fail(format!("`{name}` needs a number here, but was given text; use VAL(text$) to turn text into a number"));
+                return self.fail(format!(
+                    "`{name}` needs a number here, but was given text; use VAL(text$) to turn text into a number"
+                ));
             }
             let target = integer_type(width.into(), signed);
             return Ok(Some((self.convert(operand, source, target)?, target)));
@@ -7293,7 +7291,9 @@ impl Compiler {
                 type_id = SINGLE;
             }
             if !matches!(type_id, SINGLE | DOUBLE) {
-                return self.fail(format!("`{name}` needs a number here, but was given text; use VAL(text$) to turn text into a number"));
+                return self.fail(format!(
+                    "`{name}` needs a number here, but was given text; use VAL(text$) to turn text into a number"
+                ));
             }
             let result = self.value(type_id);
             self.emit(if intrinsic.lowering == Lowering::Abs { "fabs" } else { "fsqrt" }, vec![result], vec![operand]);
@@ -7302,7 +7302,8 @@ impl Compiler {
         if intrinsic.lowering == Lowering::Sign {
             let (operand, type_id) = self.numeric_argument(&arguments[0])?;
             if !matches!(type_id, INTEGER | LONG | SINGLE | DOUBLE | BOOLEAN | BYTE) {
-                return self.fail("`SGN` needs a number here, but was given text; use VAL(text$) to turn text into a number");
+                return self
+                    .fail("`SGN` needs a number here, but was given text; use VAL(text$) to turn text into a number");
             }
             let zero = if matches!(type_id, SINGLE | DOUBLE) {
                 self.floating_literal("0", type_id)?
@@ -7333,7 +7334,9 @@ impl Compiler {
                 type_id = SINGLE;
             }
             if !matches!(type_id, SINGLE | DOUBLE) {
-                return self.fail(format!("`{name}` needs a number here, but was given text; use VAL(text$) to turn text into a number"));
+                return self.fail(format!(
+                    "`{name}` needs a number here, but was given text; use VAL(text$) to turn text into a number"
+                ));
             }
             let operand = self.argument_checked("fsin", operand, type_id)?;
             let result = self.value(type_id);
@@ -7359,7 +7362,8 @@ impl Compiler {
                 type_id = SINGLE;
             }
             if !matches!(type_id, SINGLE | DOUBLE) {
-                return self.fail("`ATN` needs a number here, but was given text; use VAL(text$) to turn text into a number");
+                return self
+                    .fail("`ATN` needs a number here, but was given text; use VAL(text$) to turn text into a number");
             }
             let result = self.value(type_id);
             self.emit("fatan", vec![result], vec![operand]);
@@ -7372,7 +7376,9 @@ impl Compiler {
                 type_id = SINGLE;
             }
             if !matches!(type_id, SINGLE | DOUBLE) {
-                return self.fail(format!("`{name}` needs a number here, but was given text; use VAL(text$) to turn text into a number"));
+                return self.fail(format!(
+                    "`{name}` needs a number here, but was given text; use VAL(text$) to turn text into a number"
+                ));
             }
             let operand = self.argument_checked(
                 if intrinsic.lowering == Lowering::Log { "fln" } else { "fexp" },
@@ -7482,7 +7488,8 @@ impl Compiler {
                 return Ok(Some((operand, type_id)));
             }
             if !matches!(type_id, SINGLE | DOUBLE) {
-                return self.fail("`INT` needs a number here, but was given text; use VAL(text$) to turn text into a number");
+                return self
+                    .fail("`INT` needs a number here, but was given text; use VAL(text$) to turn text into a number");
             }
             return self.floor_float(operand, type_id).map(Some);
         }
@@ -7492,7 +7499,8 @@ impl Compiler {
                 return Ok(Some((operand, type_id)));
             }
             if !matches!(type_id, SINGLE | DOUBLE) {
-                return self.fail("`FIX` needs a number here, but was given text; use VAL(text$) to turn text into a number");
+                return self
+                    .fail("`FIX` needs a number here, but was given text; use VAL(text$) to turn text into a number");
             }
             // trunc(x) is floor(x), plus one where x is negative and not
             // whole: -1 AND -1 is -1 in QB, and subtracting it adds one.
@@ -7870,15 +7878,9 @@ impl Compiler {
         arguments: &[Expr],
         needs_result: bool,
     ) -> Result<Option<(Operand, u32)>, SemanticError> {
-        let signature = self
-            .signatures
-            .get(canonical(name))
-            .cloned()
-            .ok_or_else(
-                || SemanticError {
-                    message: format!("`{name}` is not a known procedure or runtime routine; DECLARE it, or check the spelling"),
-                },
-            )?;
+        let signature = self.signatures.get(canonical(name)).cloned().ok_or_else(|| SemanticError {
+            message: format!("`{name}` is not a known procedure or runtime routine; DECLARE it, or check the spelling"),
+        })?;
         if signature.parameters.len() != arguments.len() {
             return self.fail(format!(
                 "`{name}` takes {} but this call gives {}; compare the call with its SUB or FUNCTION line",
@@ -8997,7 +8999,8 @@ impl Compiler {
         let extent = self.width(type_id);
         let storage = self.implicit_storage;
         if storage != "static" && self.beyond_segment(self.data_offset + extent) {
-            return self.fail(format!("a temporary value does not fit: the stack frame ({} KiB) is full", self.segment_kib()));
+            return self
+                .fail(format!("a temporary value does not fit: the stack frame ({} KiB) is full", self.segment_kib()));
         }
         let (offset, symbol) = if storage == "static" {
             let symbol = self.next_data;
@@ -9038,8 +9041,10 @@ impl Compiler {
     fn owned_string_temporary(&mut self) -> Result<u32, SemanticError> {
         let extent = self.width(STRING);
         if self.beyond_segment(self.data_offset + extent) {
-            return self
-                .fail(format!("a STRING argument does not fit: the temporary storage ({} KiB) is full", self.segment_kib()));
+            return self.fail(format!(
+                "a STRING argument does not fit: the temporary storage ({} KiB) is full",
+                self.segment_kib()
+            ));
         }
         let storage = self.implicit_storage;
         let id = self.next_place;
@@ -9518,7 +9523,8 @@ impl Compiler {
         self.invalidate_descriptor_cache();
     }
 
-    /// ON ERROR: the runtime takes `handler` (0 for none) from this exact source position.
+    /// ON ERROR: the runtime takes `handler` (0 for none) from this exact
+    /// source position.
     fn register_error_handler(
         &mut self,
         handler: u32,
@@ -10146,7 +10152,7 @@ fn type_id(type_name: Option<&TypeName>) -> Result<u32, SemanticError> {
         TypeName::String => STRING,
         TypeName::Integral { width, signed } => integer_type(*width as usize, *signed),
         TypeName::Named(name) => {
-            return Err(SemanticError { message: format!("user-defined type {name} is not attached yet") })
+            return Err(SemanticError { message: format!("user-defined type {name} is not attached yet") });
         }
         TypeName::Currency => return Err(SemanticError { message: "CURRENCY is not attached yet".into() }),
         TypeName::Tuple(_) | TypeName::Array(_) => return Err(tuple_misplaced()),

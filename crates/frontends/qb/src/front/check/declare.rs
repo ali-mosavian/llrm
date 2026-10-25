@@ -64,8 +64,10 @@ impl Checker {
             self.err_because(
                 span,
                 "Duplicate definition",
-                Reason::headline("`{name}` is already a CONST: a CONST owns its name whatever type character is written")
-                    .help("give the variable another name"),
+                Reason::headline(
+                    "`{name}` is already a CONST: a CONST owns its name whatever type character is written",
+                )
+                .help("give the variable another name"),
             );
             return;
         }

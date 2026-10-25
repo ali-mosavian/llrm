@@ -9,12 +9,12 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::Dialect;
 use crate::front::sigs::{self, Class, Ret};
 use crate::syntax::{
     Binary, CaseItem, Declaration, Expr, Literal, Module, Parameter, PrintKind, Procedure, ProcedureKind, ResumeTarget,
     Span, Statement, TypeName, Unary,
 };
-use crate::Dialect;
 
 mod argument;
 mod call;
@@ -26,8 +26,8 @@ mod record;
 mod stmt;
 mod types;
 
-pub use types::{Diagnostic, Reason};
 use types::*;
+pub use types::{Diagnostic, Reason};
 
 pub fn check(
     module: &Module,
@@ -72,8 +72,9 @@ struct Checker {
     /// The numeric labels that stand on a line with no statement: defined, but
     /// never a duplicate of another.
     weak_labels: HashSet<String>,
-    /// `ON ERROR GOTO 0` or `RESUME 0` came before a line number 0: BC reads the 0 as a label
-    /// reference, and the later definition is a Duplicate label.
+    /// `ON ERROR GOTO 0` or `RESUME 0` came before a line number 0: BC reads
+    /// the 0 as a label reference, and the later definition is a Duplicate
+    /// label.
     zero_referenced: bool,
     /// The module level's labels, kept while a procedure's are the ones in use.
     module_labels: HashSet<String>,
@@ -132,7 +133,12 @@ impl Checker {
         message: &str,
         subject: &str,
     ) {
-        self.errors.push(Diagnostic { span, message: message.into(), subject: Some(subject.to_owned()), ..Diagnostic::default() });
+        self.errors.push(Diagnostic {
+            span,
+            message: message.into(),
+            subject: Some(subject.to_owned()),
+            ..Diagnostic::default()
+        });
     }
 
     /// `err` with the reason in words, and the word of the span at fault when
@@ -295,7 +301,10 @@ impl Checker {
     ) {
         for (index, statement) in statements.iter().enumerate() {
             if matches!(statement, Statement::OnError { label, .. } if label == "0")
-                || matches!(statement, Statement::Resume { target: ResumeTarget::Label(label), .. } if label == "0")
+                || matches!(
+                    statement,
+                    Statement::Resume { target: ResumeTarget::Label(label), .. } if label == "0"
+                )
             {
                 self.zero_referenced = true;
             }
@@ -376,7 +385,9 @@ impl Checker {
             "Identifier expected",
             Reason::headline("`{text}` is a reserved word and cannot be used as a name")
                 .about(name)
-                .help("rename it; the manual lists the words each dialect reserves, such as COLOR, NAME, SECOND or POINT"),
+                .help(
+                    "rename it; the manual lists the words each dialect reserves, such as COLOR, NAME, SECOND or POINT",
+                ),
         );
         true
     }
@@ -495,7 +506,8 @@ impl Checker {
             Some(existing) if existing.defined && info.defined => self.err_because(
                 procedure.span,
                 "Duplicate definition",
-                Reason::headline("`{name}` is defined twice").help("give the second definition another name, or remove it"),
+                Reason::headline("`{name}` is defined twice")
+                    .help("give the second definition another name, or remove it"),
             ),
             Some(existing)
                 if existing.kind != info.kind
@@ -504,13 +516,18 @@ impl Checker {
                         && existing.declared
                         && !existing.defined
                         && info.defined
-                        && matches!(self.dialect, Dialect::QuickBasic45 | Dialect::Pds71 | Dialect::VbDos)) =>
+                        && matches!(
+                            self.dialect,
+                            Dialect::QuickBasic45 | Dialect::Pds71 | Dialect::VbDos
+                        )) =>
             {
                 let headline = if existing.kind != info.kind {
-                    "`{name}` is declared as one kind of procedure (SUB or FUNCTION) and defined as the other".to_owned()
+                    "`{name}` is declared as one kind of procedure (SUB or FUNCTION) and defined as the other"
+                        .to_owned()
                 } else if existing.unchecked {
-                    // all three BCs: a DECLARE with no parentheses matches no definition, not even
-                    // one without parameters
+                    // all three BCs: a DECLARE with no parentheses matches no
+                    // definition, not even one without
+                    // parameters
                     "`{name}` is declared without a parameter list, which BC never matches to its definition".to_owned()
                 } else {
                     let count = |n: usize| match n {
@@ -532,13 +549,17 @@ impl Checker {
             }
             Some(existing)
                 if existing.kind == ProcedureKind::Function
-                    && matches!((&existing.result, &info.result), (Some(a), Some(b)) if a.plain() != b.plain()) =>
+                    && matches!(
+                        (&existing.result, &info.result),
+                        (Some(a), Some(b)) if a.plain() != b.plain()
+                    ) =>
             {
                 self.err_because(
                     procedure.span,
                     "Duplicate definition",
-                    Reason::headline("`{name}` is declared with one result type and defined with another")
-                        .help("give the DECLARE and the FUNCTION the same type character (`f%` both times, or `AS INTEGER`)"),
+                    Reason::headline("`{name}` is declared with one result type and defined with another").help(
+                        "give the DECLARE and the FUNCTION the same type character (`f%` both times, or `AS INTEGER`)",
+                    ),
                 );
             }
             Some(existing) => {
@@ -552,9 +573,15 @@ impl Checker {
                 {
                     self.err_because(
                         procedure.span,
-                        if info.kind == ProcedureKind::Function { "Duplicate definition" } else { "Parameter type mismatch" },
-                        Reason::headline("the parameters of `{name}` differ from its DECLARE: a parameter has another type")
-                            .help("make the DECLARE and the definition list the same types"),
+                        if info.kind == ProcedureKind::Function {
+                            "Duplicate definition"
+                        } else {
+                            "Parameter type mismatch"
+                        },
+                        Reason::headline(
+                            "the parameters of `{name}` differ from its DECLARE: a parameter has another type",
+                        )
+                        .help("make the DECLARE and the definition list the same types"),
                     );
                 }
                 info.declared |= existing.declared;
@@ -586,11 +613,7 @@ impl Checker {
             return ty;
         }
         let first = name.bytes().next().map_or(b'A', |b| b.to_ascii_uppercase());
-        if first.is_ascii_uppercase() {
-            self.def_types[usize::from(first - b'A')].clone()
-        } else {
-            Ty::Single
-        }
+        if first.is_ascii_uppercase() { self.def_types[usize::from(first - b'A')].clone() } else { Ty::Single }
     }
 
     // ---- scopes

@@ -1,10 +1,12 @@
 //! The front end's verdict on each catalog statement, in the prologue's module.
 //!
-//!     checkstmts DIALECT PROLOGUE EPILOGUE CATALOG.tsv     (id<TAB>statement per line)
+//!     checkstmts DIALECT PROLOGUE EPILOGUE CATALOG.tsv     (id<TAB>statement
+//! per line)
 //!
-//! Prints `id<TAB>class<TAB>message`; class is ok, syntax, semantic or unsupported.
-use qbfront::semantic::{compile_with_options, Options};
+//! Prints `id<TAB>class<TAB>message`; class is ok, syntax, semantic or
+//! unsupported.
 use qbfront::Dialect;
+use qbfront::semantic::{Options, compile_with_options};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -22,9 +24,11 @@ fn main() {
         let (id, text) = line.split_once('\t').unwrap();
         let source = format!("{prologue}{text}\n{epilogue}").replace('\n', "\r\n");
         let parsed = if old {
-            qbfront::front::parse_coded(&source, dialect).map_err(|e| format!("{}:{} {}", e.span.line, e.span.start, e.message))
+            qbfront::front::parse_coded(&source, dialect)
+                .map_err(|e| format!("{}:{} {}", e.span.line, e.span.start, e.message))
         } else {
-            lalrspike::qb_ast::parse(&source, dialect).map_err(|e| format!("{}:{} {}", e.span.line, e.span.start, e.message))
+            lalrspike::qb_ast::parse(&source, dialect)
+                .map_err(|e| format!("{}:{} {}", e.span.line, e.span.start, e.message))
         };
         let (class, message) = match parsed {
             Err(message) => ("syntax", message),
@@ -37,7 +41,11 @@ fn main() {
             }
             Ok(module) => match compile_with_options(&module, "t", dialect, "llrm", &Options::default()) {
                 Ok(_) => ("ok", String::new()),
-                Err(error) if error.message.contains("cannot generate code") || error.message.contains("no source signature") || error.message.contains("audited") => {
+                Err(error)
+                    if error.message.contains("cannot generate code")
+                        || error.message.contains("no source signature")
+                        || error.message.contains("audited") =>
+                {
                     ("unsupported", error.message)
                 }
                 Err(error) => ("semantic", error.message),

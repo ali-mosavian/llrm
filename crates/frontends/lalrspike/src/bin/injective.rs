@@ -1,5 +1,5 @@
-//! Statements BC takes whose different spellings give the same tree: a tree that cannot tell them apart
-//! has lost something the later passes would need.
+//! Statements BC takes whose different spellings give the same tree: a tree
+//! that cannot tell them apart has lost something the later passes would need.
 //!
 //!     injective DIALECT CATALOG.tsv [bc_results.json family]
 use std::collections::BTreeMap;
@@ -42,12 +42,16 @@ fn main() {
         _ => Dialect::VbDos,
     };
     let catalog = std::fs::read_to_string(&args[1]).unwrap();
-    let accepted: Option<std::collections::HashSet<String>> = args.get(2).map(|path| {
-        let family = args.get(3).map_or("qb45", String::as_str);
-        let text = std::fs::read_to_string(path).unwrap();
-        let json: serde_json_lite::Map = serde_json_lite::parse(&text);
-        json.accepted(family)
-    });
+    let accepted: Option<std::collections::HashSet<String>> = args
+        .get(2)
+        .map(
+            |path| {
+                let family = args.get(3).map_or("qb45", String::as_str);
+                let text = std::fs::read_to_string(path).unwrap();
+                let json: serde_json_lite::Map = serde_json_lite::parse(&text);
+                json.accepted(family)
+            },
+        );
     let mut groups: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
     for line in catalog.lines() {
         let (id, text) = line.split_once('\t').unwrap();
@@ -84,7 +88,8 @@ mod serde_json_lite {
         let value: Vec<(String, Vec<(String, bool)>)> = text
             .split("}, \"")
             .map(|chunk| {
-                let id: String = chunk.trim_start_matches(['{', '"']).chars().take_while(|c| c.is_ascii_digit()).collect();
+                let id: String =
+                    chunk.trim_start_matches(['{', '"']).chars().take_while(|c| c.is_ascii_digit()).collect();
                 let mut families = Vec::new();
                 for family in ["qb45", "pds71", "vbdos"] {
                     if let Some(at) = chunk.find(&format!("\"{family}\": ")) {
@@ -98,8 +103,15 @@ mod serde_json_lite {
         Map(value)
     }
     impl Map {
-        pub fn accepted(&self, family: &str) -> std::collections::HashSet<String> {
-            self.0.iter().filter(|(_, f)| f.iter().any(|(name, ok)| name == family && *ok)).map(|(id, _)| id.clone()).collect()
+        pub fn accepted(
+            &self,
+            family: &str,
+        ) -> std::collections::HashSet<String> {
+            self.0
+                .iter()
+                .filter(|(_, f)| f.iter().any(|(name, ok)| name == family && *ok))
+                .map(|(id, _)| id.clone())
+                .collect()
         }
     }
 }

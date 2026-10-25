@@ -50,11 +50,7 @@ impl Ast<'_> {
     }
 
     pub(super) fn optional_exp(&mut self) -> R<Vec<Expr>> {
-        if self.starts_exp() {
-            Ok(vec![self.exp()?])
-        } else {
-            Ok(Vec::new())
-        }
+        if self.starts_exp() { Ok(vec![self.exp()?]) } else { Ok(Vec::new()) }
     }
 
     pub(super) fn starts_exp(&self) -> bool {
@@ -276,7 +272,7 @@ impl Ast<'_> {
                 self.out.push(Statement::Erase(names));
             }
             Kw::PRINT | Kw::QMark | Kw::LPRINT | Kw::WRITE => {
-                return self.print(if k == Kw::QMark { Kw::PRINT } else { k })
+                return self.print(if k == Kw::QMark { Kw::PRINT } else { k });
             }
             Kw::INPUT => return self.input(),
             Kw::LINE => return self.line(),

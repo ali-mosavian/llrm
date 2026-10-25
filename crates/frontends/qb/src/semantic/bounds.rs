@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::tags::{Passing, Slot, Tag};
-use super::{Compiler, Instruction, Number, Operand, Place, SemanticError, Variable, BYTE, INTEGER, LONG};
+use super::{BYTE, Compiler, INTEGER, Instruction, LONG, Number, Operand, Place, SemanticError, Variable};
 
 /// An array, by its descriptor: a place, or an array parameter's pointer.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -389,7 +389,7 @@ impl Compiler {
 
 #[cfg(test)]
 mod tests {
-    use crate::{parse, Dialect};
+    use crate::{Dialect, parse};
 
     /// A REDIM of another rank compiled, so LBOUND's record, fixed by the
     /// first rank, read another dimension's. BC refuses it.

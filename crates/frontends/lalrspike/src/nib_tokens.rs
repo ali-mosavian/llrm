@@ -26,7 +26,9 @@ pub fn tokens(source: &[Token]) -> Vec<Spanned> {
             let tok = match &token.kind {
                 TokenKind::Question if opens_conditional(&source[at + 1..]) => Tok::Ternary,
                 TokenKind::Identifier(word)
-                    if after_is && word == "not" && source.get(at + 1).is_some_and(|next| starts_operand(&next.kind)) =>
+                    if after_is
+                        && word == "not"
+                        && source.get(at + 1).is_some_and(|next| starts_operand(&next.kind)) =>
                 {
                     Tok::Not
                 }
@@ -51,7 +53,10 @@ fn opens_conditional(rest: &[Token]) -> bool {
                 depth -= 1;
             }
             TokenKind::Colon if depth == 0 => {
-                return !matches!(rest.get(index + 1).map(|next| &next.kind), Some(TokenKind::Newline | TokenKind::Eof));
+                return !matches!(
+                    rest.get(index + 1).map(|next| &next.kind),
+                    Some(TokenKind::Newline | TokenKind::Eof)
+                );
             }
             TokenKind::Comma if depth == 0 => return false,
             TokenKind::Newline | TokenKind::Eof => return false,

@@ -8,10 +8,10 @@
 //! spans and the parser's kinds are as before; a DATA keyword is followed by
 //! one `String` token holding the statement's raw text.
 
-use crate::front::lexer::logical_lines;
-use crate::front::words::Word;
 use crate::front::kw::{self, Kw};
+use crate::front::lexer::logical_lines;
 use crate::front::token::{Token, TokenKind};
+use crate::front::words::Word;
 use crate::syntax::{Binary, Span};
 use crate::{Dialect, LexError};
 
@@ -73,7 +73,8 @@ pub fn scan(
 ) -> Result<Vec<Token>, LexError> {
     let mut out = Vec::with_capacity(source.len() / 4);
     let newline = punct(b'\n');
-    // PDS 7.1 reads REM at the start of a TYPE body line as a field name, never a comment.
+    // PDS 7.1 reads REM at the start of a TYPE body line as a field name, never
+    // a comment.
     let mut type_body = false;
     for (line_index, line) in logical_lines(source, dialect) {
         scan_line(&line, line_index, dialect, type_body && dialect == Dialect::Pds71, &mut out)?;
@@ -443,8 +444,9 @@ fn number(
             }
             // `1E+` is `1E+0`: a sign without digits still completes the
             // exponent
-            // A bare `1E` or `1D` is `1E0` (BC, all three compilers) when a blank follows the
-            // marker: `IF 1E THEN`, `x = 1E : y = 1`. At the end of the line, before `)` or
+            // A bare `1E` or `1D` is `1E0` (BC, all three compilers) when a
+            // blank follows the marker: `IF 1E THEN`, `x = 1E : y =
+            // 1`. At the end of the line, before `)` or
             // before a letter (`1EA`) it is a syntax error.
             let bare = sign.is_none()
                 && !bytes.get(j).is_some_and(u8::is_ascii_digit)

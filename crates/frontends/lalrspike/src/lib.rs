@@ -14,16 +14,18 @@ use llrm_nib::lexer::{Token, lex};
 pub fn parse_nib(tokens: &[Token]) -> Result<ast::Module, String> {
     nib::grammar::ModuleParser::new()
         .parse(nib_tokens::tokens(tokens))
-        .map_err(|error| {
-            let at = |location: usize| tokens.get(location).map(|t| (t.span.line, t.span.column, &t.kind));
-            match error {
-                lalrpop_util::ParseError::UnrecognizedToken { token: (start, ..), expected } => {
-                    format!("unexpected {:?}, expected one of {}", at(start), expected.len())
+        .map_err(
+            |error| {
+                let at = |location: usize| tokens.get(location).map(|t| (t.span.line, t.span.column, &t.kind));
+                match error {
+                    lalrpop_util::ParseError::UnrecognizedToken { token: (start, ..), expected } => {
+                        format!("unexpected {:?}, expected one of {}", at(start), expected.len())
+                    }
+                    lalrpop_util::ParseError::UnrecognizedEof { location, .. } => format!("eof at {:?}", at(location)),
+                    other => format!("{other:?}"),
                 }
-                lalrpop_util::ParseError::UnrecognizedEof { location, .. } => format!("eof at {:?}", at(location)),
-                other => format!("{other:?}"),
-            }
-        })
+            },
+        )
 }
 
 pub fn parse_nib_source(source: &str) -> Result<ast::Module, String> {

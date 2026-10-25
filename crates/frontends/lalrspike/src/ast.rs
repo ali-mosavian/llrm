@@ -67,7 +67,8 @@ pub enum Type {
     Borrow(bool, Box<Type>),
     /// `&[T]` or `&[T, n]`.
     Slice(Box<Type>, Option<i64>),
-    /// `*[near|far|huge] [mut] T`; the qualifier is a name until a pass checks it.
+    /// `*[near|far|huge] [mut] T`; the qualifier is a name until a pass checks
+    /// it.
     Pointer(Option<String>, bool, Box<Type>),
     /// Deferred: `Name[T, U]` generic arguments or `T[4]`, `T[N]` dimensions.
     Applied(Box<Type>, Vec<TypeArg>),
@@ -102,7 +103,13 @@ pub struct Block(pub Vec<Stmt>);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
-    Let { mutable: bool, pattern: Pattern, ty: Option<Type>, value: Expr, otherwise: Option<Block> },
+    Let {
+        mutable: bool,
+        pattern: Pattern,
+        ty: Option<Type>,
+        value: Expr,
+        otherwise: Option<Block>,
+    },
     Const(Const),
     Function(Function),
     Unsafe(Block),
@@ -111,14 +118,27 @@ pub enum Stmt {
     Return(Option<Expr>),
     Yield(Expr),
     Match(Expr, Vec<(Pattern, Block)>),
-    With { mutable: bool, name: String, value: Expr, body: Block },
+    With {
+        mutable: bool,
+        name: String,
+        value: Expr,
+        body: Block,
+    },
     If(Expr, Block, Option<Block>),
     While(Expr, Block),
-    /// A leading `&` or `&mut` of `source` is the iteration mode, read by a later pass.
-    For { refutable: bool, pattern: Pattern, source: Expr, end: Option<Expr>, body: Block },
+    /// A leading `&` or `&mut` of `source` is the iteration mode, read by a
+    /// later pass.
+    For {
+        refutable: bool,
+        pattern: Pattern,
+        source: Expr,
+        end: Option<Expr>,
+        body: Block,
+    },
     Break,
     Continue,
-    /// Deferred: the left side is any expression until a pass checks it is a place.
+    /// Deferred: the left side is any expression until a pass checks it is a
+    /// place.
     Assign(Expr, &'static str, Expr),
     Expr(Expr),
 }

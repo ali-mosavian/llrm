@@ -11,9 +11,9 @@ use std::borrow::Cow;
 use logos::{FilterResult, Lexer, Logos};
 
 use crate::front::kw::Kw;
-use crate::front::tokens::{terminal, Tok};
-use crate::front::words::Word;
 use crate::front::token::{Token, TokenKind};
+use crate::front::tokens::{Tok, terminal};
+use crate::front::words::Word;
 use crate::syntax::{Binary, Span};
 use crate::{Dialect, LexError};
 

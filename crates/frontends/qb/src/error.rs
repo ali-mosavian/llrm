@@ -39,7 +39,17 @@ impl ParseError {
         code: impl Into<String>,
     ) -> Self {
         let code = code.into();
-        Self { span, message: code.clone(), code, help: None, expected: None, subject: None, detail: None, headline: None, related: None }
+        Self {
+            span,
+            message: code.clone(),
+            code,
+            help: None,
+            expected: None,
+            subject: None,
+            detail: None,
+            headline: None,
+            related: None,
+        }
     }
 }
 

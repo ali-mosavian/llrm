@@ -20,7 +20,8 @@ impl Checker {
             self.err_because(
                 span,
                 "Invalid character",
-                Reason::headline("the TYPE name `{name}` carries a type character").help("write the name without `%`, `&`, `!`, `#`, `$` or `@`"),
+                Reason::headline("the TYPE name `{name}` carries a type character")
+                    .help("write the name without `%`, `&`, `!`, `#`, `$` or `@`"),
             );
             return;
         }
@@ -28,7 +29,8 @@ impl Checker {
             self.err_because(
                 span,
                 "Duplicate definition",
-                Reason::headline("the TYPE `{name}` is defined twice").help("give the second one another name, or remove it"),
+                Reason::headline("the TYPE `{name}` is defined twice")
+                    .help("give the second one another name, or remove it"),
             );
             return;
         }
@@ -36,7 +38,8 @@ impl Checker {
             self.err_because(
                 span,
                 "Element not defined",
-                Reason::headline("the TYPE `{name}` has no fields").help("add at least one `field AS type` line before END TYPE"),
+                Reason::headline("the TYPE `{name}` has no fields")
+                    .help("add at least one `field AS type` line before END TYPE"),
             );
         }
         let mut out: Vec<(String, Ty, Option<usize>)> = Vec::new();

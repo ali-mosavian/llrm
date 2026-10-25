@@ -74,12 +74,11 @@ impl Checker {
                     self.err_because(
                         *span,
                         "Syntax error",
-                        Reason::headline("`{text}` cannot be a CONST value: a function call is not allowed there").help(
-                            format!(
+                        Reason::headline("`{text}` cannot be a CONST value: a function call is not allowed there")
+                            .help(format!(
                                 "only CINT, CLNG, CDBL{} and LEN of a number can appear in a CONST",
                                 if self.dialect == Dialect::VbDos { "" } else { ", CSNG" }
-                            ),
-                        ),
+                            )),
                     );
                     return None;
                 }

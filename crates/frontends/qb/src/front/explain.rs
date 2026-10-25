@@ -220,9 +220,11 @@ fn variants(
     let mut keys = vec![format!("{code} /{}", place.text.to_ascii_uppercase())];
     // a word of the text the table has a wording for (`/BYVAL`, `/CURRENCY`)
     keys.extend(
-        place.text.split(|c: char| !c.is_ascii_alphanumeric()).filter(|word| !word.is_empty()).map(|word| {
-            format!("{code} /{}", word.to_ascii_uppercase())
-        }),
+        place
+            .text
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .map(|word| format!("{code} /{}", word.to_ascii_uppercase())),
     );
     if place.text.replace(' ', "").contains("()") {
         keys.push(format!("{code} /()"));
@@ -287,20 +289,27 @@ fn syntax(
     // a label or line number too large to be one
     if place.text.len() >= 5
         && place.text.chars().all(|c| c.is_ascii_digit())
-        && (place.starts || matches!(place.statement.as_str(), "GOTO" | "GOSUB" | "THEN" | "ELSE" | "RESUME" | "RESTORE" | "ON"))
+        && (place.starts
+            || matches!(
+                place.statement.as_str(),
+                "GOTO" | "GOSUB" | "THEN" | "ELSE" | "RESUME" | "RESTORE" | "ON"
+            ))
     {
         return (
             format!("`{}` is too large for a line number", place.text),
             "use a smaller number, or a label with a name".to_owned(),
         );
     }
-    // `FNa (1)`, `FN a(1)`, `FNa(1)` where `DEF FNa` was written without parameters
+    // `FNa (1)`, `FN a(1)`, `FNa(1)` where `DEF FNa` was written without
+    // parameters
     if place.text == "(" {
         let words: Vec<&str> = place.before.split_whitespace().collect();
         let name = match words.as_slice() {
             [.., fn_word, name] if fn_word.eq_ignore_ascii_case("FN") => Some(format!("FN{name}")),
             [.., last] if last.len() > 2 && last[..2].eq_ignore_ascii_case("FN") => {
-                let end = last.rfind(|c: char| !c.is_ascii_alphanumeric() && !matches!(c, '$' | '%' | '&' | '!' | '#')).map_or(0, |at| at + 1);
+                let end = last
+                    .rfind(|c: char| !c.is_ascii_alphanumeric() && !matches!(c, '$' | '%' | '&' | '!' | '#'))
+                    .map_or(0, |at| at + 1);
                 Some(last[end..].to_owned())
             }
             _ => None,
@@ -333,7 +342,10 @@ fn syntax(
             "a line number is a plain whole number, and a line has at most one".to_owned(),
         );
     }
-    if place.text.starts_with(|c: char| c.is_ascii_digit()) && place.before.chars().all(|c| c.is_ascii_digit() || c == ' ') && !place.before.is_empty() {
+    if place.text.starts_with(|c: char| c.is_ascii_digit())
+        && place.before.chars().all(|c| c.is_ascii_digit() || c == ' ')
+        && !place.before.is_empty()
+    {
         return (
             "a line can have only one line number".to_owned(),
             "remove the second number, or put the statement on its own line".to_owned(),
@@ -353,8 +365,10 @@ fn syntax(
     };
     let help = match forms().get(own.as_str()) {
         Some(form) => format!("{own} is written: {form}"),
-        None => "check the statement against the manual for this dialect; the mark shows where BC stopped understanding it"
-            .to_owned(),
+        None => {
+            "check the statement against the manual for this dialect; the mark shows where BC stopped understanding it"
+                .to_owned()
+        }
     };
     (summary, help)
 }
@@ -390,7 +404,9 @@ pub fn explain(
     // the checker's own sentence, where it knew more than the code says; a
     // syntax error then needs no form of the statement as well
     let (summary, help) = match error.headline.take() {
-        Some(headline) if table().get(error.code.as_str()).is_none() => (fill(&headline, &place, &other), String::new()),
+        Some(headline) if table().get(error.code.as_str()).is_none() => {
+            (fill(&headline, &place, &other), String::new())
+        }
         Some(headline) => (fill(&headline, &place, &other), if error.detail.is_some() { String::new() } else { help }),
         None => (summary, help),
     };

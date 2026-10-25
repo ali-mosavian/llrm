@@ -55,8 +55,7 @@ fn own_frames_keep_the_runtime_frame_where_the_runtime_needs_it() {
     // A local STRING's handle, and a module handler the runtime reaches
     // through the procedure's frame.
     let string = "SUB s\nDIM t AS STRING\nt = \"x\"\nPRINT t\nEND SUB\n";
-    let module_handler =
-        "DECLARE SUB s ()\nON ERROR GOTO h\ns\nEND\nh:\nRESUME NEXT\nSUB s\nDIM i AS INTEGER\ni = 1\nPRINT i\nEND SUB\n";
+    let module_handler = "DECLARE SUB s ()\nON ERROR GOTO h\ns\nEND\nh:\nRESUME NEXT\nSUB s\nDIM i AS INTEGER\ni = 1\nPRINT i\nEND SUB\n";
     for (dialect, runtime) in DIALECTS {
         for source in [string, module_handler] {
             assert!(runtime_framed(&procedure(source, dialect, runtime, true, "S")), "{dialect}: {source}");

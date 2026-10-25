@@ -1,7 +1,7 @@
 //! INPUT$(n [, [#]channel]).
 
-use llrm_qb::semantic::{compile_with_options, Options};
-use llrm_qb::{parse, Dialect};
+use llrm_qb::semantic::{Options, compile_with_options};
+use llrm_qb::{Dialect, parse};
 
 fn hir(source: &str) -> String {
     let module = parse(source, Dialect::QuickBasic45).expect("parses");

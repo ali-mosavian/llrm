@@ -40,8 +40,10 @@ impl Checker {
                         self.err_because(
                             span,
                             "Subprogram error",
-                            Reason::headline("`RETURN label` cannot be used inside a SUB or FUNCTION: it would leave the procedure")
-                                .help("use a plain `RETURN`, or move the GOSUB and its label into the procedure"),
+                            Reason::headline(
+                                "`RETURN label` cannot be used inside a SUB or FUNCTION: it would leave the procedure",
+                            )
+                            .help("use a plain `RETURN`, or move the GOSUB and its label into the procedure"),
                         );
                         return;
                     }
@@ -61,8 +63,10 @@ impl Checker {
                             Ty::Record(_) if name == "LSET" => {
                                 if let Some(value) = self.expr(right) {
                                     if !matches!(value.ty, Ty::Record(_)) {
-                                        let headline =
-                                            format!("LSET of a record needs a record on the right, but `{{text}}` is {}", value.ty.label());
+                                        let headline = format!(
+                                            "LSET of a record needs a record on the right, but `{{text}}` is {}",
+                                            value.ty.label()
+                                        );
                                         self.err_because(
                                             right.span(),
                                             "Type mismatch",

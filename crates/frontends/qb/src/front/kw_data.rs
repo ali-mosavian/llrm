@@ -1,5 +1,5 @@
-//! The spelling of each reserved word and which words are functions, generated once from the token table of
-//! `qbasbnf.prs`.
+//! The spelling of each reserved word and which words are functions, generated
+//! once from the token table of `qbasbnf.prs`.
 
 use super::kw::Kw;
 
@@ -257,7 +257,8 @@ impl Kw {
     }
 }
 
-/// The words that are functions: a name before a parenthesis, and not a statement.
+/// The words that are functions: a name before a parenthesis, and not a
+/// statement.
 pub(super) const FUNCTION_WORDS: &[Kw] = &[
     Kw::ABS,
     Kw::ASC,

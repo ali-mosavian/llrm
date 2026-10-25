@@ -2355,7 +2355,8 @@ fn a_fixed_length_assignment_fills_its_destination() {
     let text = llrm_mir::print::module(&emitted.module);
     assert!(
         text.contains("@llrm.qb.B$ASSN(ptr addrspace(1) %")
-            // (VBDOS's far strings: the literal goes as its descriptor, source length 0)
+            // (VBDOS's far strings: the literal goes as its descriptor, source
+            // length 0)
             && text.contains(", i16 0, ptr addrspace(1) nocapture writeonly initializes((0, 8)) %"),
         "{text}"
     );
@@ -3302,8 +3303,9 @@ fn test_a_local_read_at_a_resume_label_is_handed_to_the_handler() {
     assert_eq!(reads, unread + 1, "handed with the read {reads}, without it {unread}");
 }
 
-/// `(a$ < b$) <> -1` made an `i1` add of a compare of a flags-returning call, which combine left alone
-/// and the selector refused: conformance case qb45/relational-operators did not compile at -O1 and above.
+/// `(a$ < b$) <> -1` made an `i1` add of a compare of a flags-returning call,
+/// which combine left alone and the selector refused: conformance case
+/// qb45/relational-operators did not compile at -O1 and above.
 #[test]
 fn a_string_compare_tested_against_minus_one_compiles_optimized() {
     let directory = tempfile::tempdir().expect("creates a directory");

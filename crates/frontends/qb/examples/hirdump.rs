@@ -1,7 +1,8 @@
-//! The HIR of each source, debug lines included, written to a directory: `hirdump DIALECT OUTDIR FILE...`.
-//! Two runs from different builds, diffed, show what a refactor changed.
-use llrm_qb::semantic::{compile_debugged, DebugSource, Options};
-use llrm_qb::{source, Dialect};
+//! The HIR of each source, debug lines included, written to a directory:
+//! `hirdump DIALECT OUTDIR FILE...`. Two runs from different builds, diffed,
+//! show what a refactor changed.
+use llrm_qb::semantic::{DebugSource, Options, compile_debugged};
+use llrm_qb::{Dialect, source};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();

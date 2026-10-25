@@ -419,11 +419,7 @@ pub fn unsupported(
     let keyword = KEYWORDS.iter().any(|&(one, dialects)| one == name && dialects & dialect_bit(dialect) != 0);
     // A string intrinsic is spelled with its `$`.
     let spelled = |intrinsic: &Intrinsic| {
-        if intrinsic.result == ResultClass::String {
-            format!("{}$", intrinsic.name)
-        } else {
-            intrinsic.name.to_owned()
-        }
+        if intrinsic.result == ResultClass::String { format!("{}$", intrinsic.name) } else { intrinsic.name.to_owned() }
     };
     keyword && !INTRINSICS.iter().any(|one| one.available_in(dialect) && spelled(one) == name)
 }

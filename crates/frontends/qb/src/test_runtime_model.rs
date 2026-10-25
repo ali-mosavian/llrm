@@ -274,7 +274,8 @@ fn flat_target_bare_print_passes_a_real_descriptor() {
 /// VARPTR is the whole address, as wide as a pointer, and VARSEG is 0.
 #[test]
 fn flat_target_varptr_is_a_whole_address() {
-    // DEF SEG takes a constant segment here: VARSEG is 0 where there is one space
+    // DEF SEG takes a constant segment here: VARSEG is 0 where there is one
+    // space
     let source = "x% = 1\nDEF SEG = 0\nPRINT PEEK(VARPTR(x%))\n";
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "flat.bas", source.as_bytes());

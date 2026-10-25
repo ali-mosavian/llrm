@@ -44,11 +44,12 @@ impl Checker {
             if ok {
                 let result = Typed::value(self.result_type(sig.ret, &typed_args));
                 // CINT, CLNG, CSNG and CDBL of a folded constant are folded
-                // (VBDOS's BC does not fold CSNG: `CALL pp(CSNG(32768))` to an INTEGER parameter
-                // compiles and wraps)
+                // (VBDOS's BC does not fold CSNG: `CALL pp(CSNG(32768))` to an
+                // INTEGER parameter compiles and wraps)
                 let function = name.to_ascii_uppercase();
                 let folds = !(function == "CSNG" && self.dialect == Dialect::VbDos);
-                let value = typed_args.first().filter(|_| folds).and_then(|argument| fold::conversion(&function, argument));
+                let value =
+                    typed_args.first().filter(|_| folds).and_then(|argument| fold::conversion(&function, argument));
                 return Some(Typed { constant: value, ..result });
             }
             if n + 1 < candidates.len() {
@@ -258,7 +259,9 @@ impl Checker {
             self.err_because(
                 span,
                 "Argument-count mismatch",
-                Reason::headline(headline).about(name).help("give the call exactly the arguments the SUB or FUNCTION declares"),
+                Reason::headline(headline)
+                    .about(name)
+                    .help("give the call exactly the arguments the SUB or FUNCTION declares"),
             );
             return;
         }
@@ -282,7 +285,9 @@ impl Checker {
                             self.err_because(
                                 argument.span(),
                                 "Parameter type mismatch",
-                                Reason::headline(headline).related(span).help("pass an array of exactly the declared type"),
+                                Reason::headline(headline)
+                                    .related(span)
+                                    .help("pass an array of exactly the declared type"),
                             );
                         }
                     }
@@ -299,7 +304,11 @@ impl Checker {
             }
             let Some(typed) = self.expr(argument) else { continue };
             if typed.array.is_some() {
-                let headline = format!("argument {} of `{{other}}` is an array, but the parameter is {}", index + 1, parameter.ty.label());
+                let headline = format!(
+                    "argument {} of `{{other}}` is an array, but the parameter is {}",
+                    index + 1,
+                    parameter.ty.label()
+                );
                 self.err_because(
                     argument.span(),
                     "Parameter type mismatch",

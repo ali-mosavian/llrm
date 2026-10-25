@@ -1811,11 +1811,7 @@ fn family(dialect: crate::Dialect) -> usize {
 /// word's spelling (`LEFT$`).
 fn spelled(name: &str) -> String {
     let upper = name.to_ascii_uppercase();
-    if upper.ends_with('$') {
-        upper
-    } else {
-        upper.trim_end_matches(['%', '&', '!', '#', '@']).to_owned()
-    }
+    if upper.ends_with('$') { upper } else { upper.trim_end_matches(['%', '&', '!', '#', '@']).to_owned() }
 }
 
 /// Whether BC refuses `name` as a variable, constant, parameter or procedure

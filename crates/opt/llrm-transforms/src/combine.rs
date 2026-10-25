@@ -512,12 +512,15 @@ pub fn visit(
     // comparison nor what reads it (`sext (icmp slt v, 0)`) is rewritten into
     // a user of `v` that is not a comparison.
     let compares_flags = |inst| llrm_mir::facts::compares_flags_result(c.context, env.globals, c.function, inst);
-    // An `i1` add, subtract or multiply is a xor or an and of the compare (never a user of the flags): the
-    // selector refuses the arithmetic, so it is always rewritten.
-    let boolean_arithmetic = matches!(
-        c.function.instruction(inst).opcode,
-        Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
-    ) && c.context.types.int_bits(c.function.instruction(inst).ty) == Some(1);
+    // An `i1` add, subtract or multiply is a xor or an and of the compare
+    // (never a user of the flags): the selector refuses the arithmetic, so
+    // it is always rewritten.
+    let boolean_arithmetic =
+        matches!(
+            c.function.instruction(inst).opcode,
+            Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
+        )
+            && c.context.types.int_bits(c.function.instruction(inst).ty) == Some(1);
     if !boolean_arithmetic
         && (compares_flags(inst)
             || c.function.instruction(inst).operands.iter().any(|operand| {

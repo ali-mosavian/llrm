@@ -1,6 +1,8 @@
-//! Parse and check speed: `speed DIALECT FILE...` reports lex, parse and full-front time over the files.
-use llrm_qb::{front, source, Dialect};
+//! Parse and check speed: `speed DIALECT FILE...` reports lex, parse and
+//! full-front time over the files.
 use std::time::Instant;
+
+use llrm_qb::{Dialect, front, source};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -26,6 +28,11 @@ fn main() {
     let all = time(&|t| drop(front::parse(t, dialect)));
     println!("{} programs, {lines} lines, {bytes} bytes", texts.len());
     for (name, s) in [("lex", lex), ("lex+parse", ast), ("lex+parse+check", all)] {
-        println!("{name:16} {:7.2} ms  {:6.2} MB/s  {:7.0} klines/s", s * 1e3, bytes as f64 / s / 1e6, lines as f64 / s / 1e3);
+        println!(
+            "{name:16} {:7.2} ms  {:6.2} MB/s  {:7.0} klines/s",
+            s * 1e3,
+            bytes as f64 / s / 1e6,
+            lines as f64 / s / 1e3
+        );
     }
 }

@@ -1857,8 +1857,7 @@ mod tests {
         got.sort();
         let want: Vec<&str> = include_str!("../../../tests/inputs/abi/runtime-contracts.txt").lines().collect();
         assert_eq!(got, want);
-        let order: Vec<&str> =
-            include_str!("../../../tests/inputs/abi/runtime-contract-order.txt").lines().collect();
+        let order: Vec<&str> = include_str!("../../../tests/inputs/abi/runtime-contract-order.txt").lines().collect();
         assert_eq!(CONTRACTS.keys().collect::<Vec<_>>(), order);
     }
 

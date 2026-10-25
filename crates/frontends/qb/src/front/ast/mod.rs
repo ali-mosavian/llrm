@@ -10,15 +10,15 @@
 
 use std::collections::BTreeSet;
 
+use crate::Dialect;
 use crate::front::classes::*;
 use crate::front::kw::Kw;
-use crate::front::tokens::{terminal, Tok};
 use crate::front::token::{Token, TokenKind};
+use crate::front::tokens::{Tok, terminal};
 use crate::syntax::{
     Binary, Bound, CaseItem, Declaration, ExitTarget, Expr, FileAccess, FileLock, FileMode, Literal, Module, Parameter,
     PrintItem, PrintKind, PrintSeparator, Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
 };
-use crate::Dialect;
 
 mod block;
 mod cursor;
@@ -82,7 +82,8 @@ pub fn parse(
         // what the parser wanted where it stopped, when it knew
         error.expected =
             ast.expected.filter(|(index, _)| *index == at).map(|(_, wanted)| crate::front::explain::describe(wanted));
-        // the end of the file inside a block or a procedure: it was never closed
+        // the end of the file inside a block or a procedure: it was never
+        // closed
         if at >= tokens.len() && error.code == "Syntax error" {
             if let Some(open) = ast.blocks.last() {
                 error.span = open.span;
@@ -118,7 +119,8 @@ pub fn parse(
                 }
             }
         }
-        // a reserved word where a declaration wants a name: `DIM data AS INTEGER`
+        // a reserved word where a declaration wants a name: `DIM data AS
+        // INTEGER`
         if error.code == "Syntax error" && error.headline.is_none() && at >= 2 {
             let declares = matches!(
                 tokens[at - 2].kind,
@@ -164,7 +166,9 @@ fn closer_at(
         _ => at,
     };
     let (start, first) = match word(at)? {
-        Kw::IF | Kw::SELECT | Kw::SUB | Kw::FUNCTION | Kw::DEF | Kw::TYPE if at > 0 && word(at - 1) == Some(Kw::END) => {
+        Kw::IF | Kw::SELECT | Kw::SUB | Kw::FUNCTION | Kw::DEF | Kw::TYPE
+            if at > 0 && word(at - 1) == Some(Kw::END) =>
+        {
             (at - 1, Kw::END)
         }
         other => (at, other),

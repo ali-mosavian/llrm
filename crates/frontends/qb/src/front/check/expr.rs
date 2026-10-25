@@ -153,7 +153,10 @@ impl Checker {
                     });
                 }
                 let (headline, help) = if matches!(**base, Expr::Index { .. }) {
-                    ("`{text}` has two index lists in a row", "an element takes one list of subscripts, as in `name(1, 2)`")
+                    (
+                        "`{text}` has two index lists in a row",
+                        "an element takes one list of subscripts, as in `name(1, 2)`",
+                    )
                 } else {
                     (
                         "`{text}` indexes something that is not an array",
@@ -175,8 +178,10 @@ impl Checker {
                 }
                 let typed = self.scalar(typed, *span)?;
                 if !typed.ty.numeric() {
-                    let headline =
-                        format!("`{{text}}` needs a number after the operator, but the operand is {}", typed.ty.describe());
+                    let headline = format!(
+                        "`{{text}}` needs a number after the operator, but the operand is {}",
+                        typed.ty.describe()
+                    );
                     self.err_because(
                         *span,
                         "Type mismatch",
@@ -246,7 +251,7 @@ impl Checker {
         match op {
             Add if both_strings => return Some(Typed::value(Ty::Str(None))),
             Eq | NotEqual | Less | LessEqual | Greater | GreaterEqual if both_strings => {
-                return Some(Typed::value(Ty::Int))
+                return Some(Typed::value(Ty::Int));
             }
             _ => {}
         }
@@ -260,7 +265,8 @@ impl Checker {
             self.err_because(
                 span,
                 "Type mismatch",
-                Reason::headline(headline).help("convert one side (VAL turns a string into a number, STR$ a number into a string)"),
+                Reason::headline(headline)
+                    .help("convert one side (VAL turns a string into a number, STR$ a number into a string)"),
             );
             return None;
         }
@@ -271,8 +277,10 @@ impl Checker {
                 self.err_because(
                     span,
                     "Math overflow",
-                    Reason::headline("`{text}` overflows: BC works out the constant while compiling and the result does not fit")
-                        .help("widen an operand: `&` makes a number a LONG, `#` a double"),
+                    Reason::headline(
+                        "`{text}` overflows: BC works out the constant while compiling and the result does not fit",
+                    )
+                    .help("widen an operand: `&` makes a number a LONG, `#` a double"),
                 );
                 return None;
             }
@@ -336,7 +344,8 @@ impl Checker {
             self.err_because(
                 span,
                 "Type mismatch",
-                Reason::headline(headline).help("a dot selects a field, and only a variable declared AS a TYPE has fields"),
+                Reason::headline(headline)
+                    .help("a dot selects a field, and only a variable declared AS a TYPE has fields"),
             );
             return None;
         };
@@ -474,8 +483,9 @@ impl Checker {
             // each subscript that is not a constant holds a temporary: past six
             // when read, seven when assigned, BC gives up
             let variable_subscripts = arguments.iter().filter(|index| !matches!(index, Expr::Literal(..))).count();
-            // QB 4.5 addresses a dynamic array's element with every subscript, a constant too,
-            // in a temporary: past seven when read, eight when assigned
+            // QB 4.5 addresses a dynamic array's element with every subscript,
+            // a constant too, in a temporary: past seven when read,
+            // eight when assigned
             let dynamic_limit = var.dynamic
                 && self.dialect == Dialect::QuickBasic45
                 && arguments.len() > if self.assigning { 8 } else { 7 };
@@ -581,11 +591,12 @@ fn literal_number(expr: &Expr) -> Option<f64> {
     }
 }
 
-/// `(x +- c1) * c2` and `c2 * (c1 +- x)` with `x` no constant: BC distributes the multiplication and
-/// folds `c1 * c2`, so a product that does not fit a LONG is "Math overflow" although `x` is a
-/// variable. Two INTEGER constants are combined at run time (`(i - 300) * 200`), so one must be
-/// wider than an INTEGER. PDS 7.1 and VBDOS do it for `+` only (either order); QB 4.5 also for
-/// `x - c1`.
+/// `(x +- c1) * c2` and `c2 * (c1 +- x)` with `x` no constant: BC distributes
+/// the multiplication and folds `c1 * c2`, so a product that does not fit a
+/// LONG is "Math overflow" although `x` is a variable. Two INTEGER constants
+/// are combined at run time (`(i - 300) * 200`), so one must be wider than an
+/// INTEGER. PDS 7.1 and VBDOS do it for `+` only (either order); QB 4.5 also
+/// for `x - c1`.
 fn reassociated_overflow(
     left: &Expr,
     right: &Expr,

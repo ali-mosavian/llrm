@@ -194,11 +194,7 @@ impl Ast<'_> {
         }
         let access = if self.eat(Kw::ACCESS) {
             Some(if self.eat(Kw::READ) {
-                if self.eat(Kw::WRITE) {
-                    FileAccess::ReadWrite
-                } else {
-                    FileAccess::Read
-                }
+                if self.eat(Kw::WRITE) { FileAccess::ReadWrite } else { FileAccess::Read }
             } else {
                 self.expect(Kw::WRITE)?;
                 FileAccess::Write
@@ -210,11 +206,7 @@ impl Ast<'_> {
             Some(FileLock::Shared)
         } else if self.eat(Kw::LOCK) {
             Some(if self.eat(Kw::READ) {
-                if self.eat(Kw::WRITE) {
-                    FileLock::ReadWrite
-                } else {
-                    FileLock::Read
-                }
+                if self.eat(Kw::WRITE) { FileLock::ReadWrite } else { FileLock::Read }
             } else {
                 self.expect(Kw::WRITE)?;
                 FileLock::Write

@@ -1,4 +1,5 @@
-//! The typed parser against the existing one: the same `Module`, spans and all, on every program the old one takes.
+//! The typed parser against the existing one: the same `Module`, spans and all,
+//! on every program the old one takes.
 //!
 //!     astcheck [-v] FILE...
 use qbfront::Dialect;
@@ -14,7 +15,8 @@ fn strip_spans(text: &str) -> String {
     }
     out.push_str(rest);
     let out = out.replace("unchecked: true", "unchecked: false").replace("empty_list: true", "empty_list: false");
-    // deliberate differences: CURRENCY is a type of its own here; a NEXT's variable is recorded
+    // deliberate differences: CURRENCY is a type of its own here; a NEXT's
+    // variable is recorded
     let mut out = out.replace("Some(Currency)", "Some(Named(\"CURRENCY\"))");
     while let Some(at) = out.find("next_variable: Some((") {
         let close = out[at..].find("))").map_or(out.len(), |end| at + end + 2);
@@ -23,7 +25,10 @@ fn strip_spans(text: &str) -> String {
     out
 }
 
-fn first_difference(a: &str, b: &str) -> String {
+fn first_difference(
+    a: &str,
+    b: &str,
+) -> String {
     let at = a.bytes().zip(b.bytes()).position(|(x, y)| x != y).unwrap_or(a.len().min(b.len()));
     let from = at.saturating_sub(90);
     let window = |s: &str| s.get(from..(at + 110).min(s.len())).unwrap_or("").replace('\n', " ");
@@ -34,7 +39,8 @@ fn main() {
     let mut verbose = false;
     let mut compile = false;
     let (mut compiled_same, mut compiled_differ, mut compile_new_fails, mut compile_old_fails) = (0, 0, 0, 0);
-    let (mut same, mut spans_differ, mut differ, mut new_refuses, mut old_refuses, mut both_refuse) = (0, 0, 0, 0, 0, 0);
+    let (mut same, mut spans_differ, mut differ, mut new_refuses, mut old_refuses, mut both_refuse) =
+        (0, 0, 0, 0, 0, 0);
     let mut shown = 0;
     let limit: usize = std::env::var("SHOW").ok().and_then(|v| v.parse().ok()).unwrap_or(12);
     for path in std::env::args().skip(1) {
@@ -82,13 +88,19 @@ fn main() {
                         spans_differ += 1;
                         if verbose && shown < limit {
                             shown += 1;
-                            println!("{path} {dialect:?}: spans differ\n  {}", first_difference(&format!("{a:?}"), &format!("{b:?}")));
+                            println!(
+                                "{path} {dialect:?}: spans differ\n  {}",
+                                first_difference(&format!("{a:?}"), &format!("{b:?}"))
+                            );
                         }
                     } else {
                         differ += 1;
                         if shown < limit {
                             shown += 1;
-                            println!("{path} {dialect:?}: differs\n  {}", first_difference(&strip_spans(&format!("{a:?}")), &strip_spans(&format!("{b:?}"))));
+                            println!(
+                                "{path} {dialect:?}: differs\n  {}",
+                                first_difference(&strip_spans(&format!("{a:?}")), &strip_spans(&format!("{b:?}")))
+                            );
                         }
                     }
                 }
@@ -105,7 +117,11 @@ fn main() {
         }
     }
     if compile {
-        println!("compiled: same output {compiled_same}, different output {compiled_differ}, only the old module compiles {compile_new_fails}, only the new module compiles {compile_old_fails}");
+        println!(
+            "compiled: same output {compiled_same}, different output {compiled_differ}, only the old module compiles {compile_new_fails}, only the new module compiles {compile_old_fails}"
+        );
     }
-    println!("same {same}, same but for spans {spans_differ}, differ {differ}, only the old takes {new_refuses}, only the new takes {old_refuses}, neither {both_refuse}");
+    println!(
+        "same {same}, same but for spans {spans_differ}, differ {differ}, only the old takes {new_refuses}, only the new takes {old_refuses}, neither {both_refuse}"
+    );
 }

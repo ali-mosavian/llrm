@@ -224,11 +224,7 @@ impl Ast<'_> {
             return self.arguments().map(Ok);
         }
         let part = |ast: &mut Self| -> R<Option<Box<Expr>>> {
-            if ast.is(Kw::Colon) || ast.is(Kw::RParen) {
-                Ok(None)
-            } else {
-                ast.exp().map(|one| Some(Box::new(one)))
-            }
+            if ast.is(Kw::Colon) || ast.is(Kw::RParen) { Ok(None) } else { ast.exp().map(|one| Some(Box::new(one))) }
         };
         if self.eat(Kw::RParen) {
             return Ok(Ok(Vec::new()));

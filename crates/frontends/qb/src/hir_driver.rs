@@ -4,8 +4,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::semantic::{compile_debugged, DebugSource, Options};
-use crate::{parse, source, Dialect};
+use crate::semantic::{DebugSource, Options, compile_debugged};
+use crate::{Dialect, parse, source};
 
 /// What to compile and how.
 #[derive(Clone, Debug)]

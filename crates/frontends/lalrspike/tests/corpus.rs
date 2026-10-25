@@ -4,11 +4,12 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-
 fn tracked(extension: &str) -> Vec<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let output = Command::new("git").arg("-C").arg(&root).args(["ls-files", &format!("*.{extension}")]).output().unwrap();
-    // corpus/ holds generated oracle programs, many of them deliberately malformed
+    let output =
+        Command::new("git").arg("-C").arg(&root).args(["ls-files", &format!("*.{extension}")]).output().unwrap();
+    // corpus/ holds generated oracle programs, many of them deliberately
+    // malformed
     String::from_utf8(output.stdout)
         .unwrap()
         .lines()

@@ -148,11 +148,7 @@ pub(super) fn promote(
     a: &Ty,
     b: &Ty,
 ) -> Ty {
-    if a.rank() >= b.rank() {
-        a.clone()
-    } else {
-        b.clone()
-    }
+    if a.rank() >= b.rank() { a.clone() } else { b.clone() }
 }
 
 #[derive(Clone, Debug)]

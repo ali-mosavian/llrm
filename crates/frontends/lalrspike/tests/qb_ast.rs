@@ -1,22 +1,31 @@
-//! The typed parser against the table-driven one: the same `Module`, and through the same semantic
-//! pass the same output, on every program the repository has.
+//! The typed parser against the table-driven one: the same `Module`, and
+//! through the same semantic pass the same output, on every program the
+//! repository has.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use qbfront::semantic::{compile_with_options, Options};
 use qbfront::Dialect;
+use qbfront::semantic::{Options, compile_with_options};
 
 fn tracked() -> Vec<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let output = Command::new("git").arg("-C").arg(&root).args(["ls-files", "*.bas", "*.BAS", "*.bi", "*.BI"]).output().unwrap();
-    // corpus/ holds generated oracle programs, many of them deliberately malformed
-    String::from_utf8(output.stdout).unwrap().lines().filter(|line| !line.contains("lalrspike/corpus/")).map(|line| root.join(line)).collect()
+    let output =
+        Command::new("git").arg("-C").arg(&root).args(["ls-files", "*.bas", "*.BAS", "*.bi", "*.BI"]).output().unwrap();
+    // corpus/ holds generated oracle programs, many of them deliberately
+    // malformed
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .filter(|line| !line.contains("lalrspike/corpus/"))
+        .map(|line| root.join(line))
+        .collect()
 }
 
-/// Programs whose trees differ on purpose: the table-driven parser reads `-(a + 3) * .5` as
-/// `-((a + 3) * .5)`, a unary minus over the product, where BASIC's minus binds tighter than `*`.
-/// Programs the table-driven parser takes and BC refuses (`1E+10!`: a type character after an exponent).
+/// Programs whose trees differ on purpose: the table-driven parser reads `-(a +
+/// 3) * .5` as `-((a + 3) * .5)`, a unary minus over the product, where BASIC's
+/// minus binds tighter than `*`. Programs the table-driven parser takes and BC
+/// refuses (`1E+10!`: a type character after an exponent).
 const BC_REFUSES: [&str; 2] = ["tests/qbrt/real_print.bas", "tests/qbrt/real_print_edges.bas"];
 
 const GROUPS_THE_MINUS_OVER_A_PRODUCT: [&str; 1] = ["tests/qbrt/gfx_circle_sweep.bas"];
@@ -39,19 +48,28 @@ fn the_typed_parser_builds_the_module_the_table_driven_parser_builds() {
             let Ok(old) = qbfront::parse(&source, dialect) else { continue };
             let new = match lalrspike::qb_ast::parse(&source, dialect) {
                 Ok(new) => new,
-                // programs written to be refused (BC refuses q45n41's 41-character name too)
-                Err(_) if family.contains("/negative/") || BC_REFUSES.iter().any(|name| path.ends_with(name)) => continue,
-                // OPTION EXPLICIT is VBDOS BC's alone ("BASE missing" in the others)
-                Err(_) if dialect != Dialect::VbDos && source.to_ascii_lowercase().contains("option explicit") => continue,
-                // an underscore in a name is VBDOS BC's alone; a dialect-neutral program may use it
+                // programs written to be refused (BC refuses q45n41's
+                // 41-character name too)
+                Err(_) if family.contains("/negative/") || BC_REFUSES.iter().any(|name| path.ends_with(name)) => {
+                    continue;
+                }
+                // OPTION EXPLICIT is VBDOS BC's alone ("BASE missing" in the
+                // others)
+                Err(_) if dialect != Dialect::VbDos && source.to_ascii_lowercase().contains("option explicit") => {
+                    continue;
+                }
+                // an underscore in a name is VBDOS BC's alone; a
+                // dialect-neutral program may use it
                 Err(error) if error.message.contains("underscore") && dialect != Dialect::VbDos => continue,
                 Err(error) => panic!("{} under {dialect:?}: {error:?}", path.display()),
             };
             if excused {
                 continue;
             }
-            // Spans of an omitted CIRCLE argument and the type of a real literal aside, the modules are equal:
-            // BC types a literal of eight digits or more DOUBLE, the table-driven scanner past fifteen.
+            // Spans of an omitted CIRCLE argument and the type of a real
+            // literal aside, the modules are equal: BC types a
+            // literal of eight digits or more DOUBLE, the table-driven scanner
+            // past fifteen.
             let strip = |module: &qbfront::syntax::Module| {
                 let text = format!("{module:?}");
                 let mut out = String::new();
@@ -61,16 +79,23 @@ fn the_typed_parser_builds_the_module_the_table_driven_parser_builds() {
                     rest = &rest[rest[at..].find('}').map_or(rest.len(), |end| at + end + 1)..];
                 }
                 let mut out = out + rest;
-                // the typed parser records the variable a NEXT names; the old one never did
+                // the typed parser records the variable a NEXT names; the old
+                // one never did
                 while let Some(at) = out.find("next_variable: Some((") {
                     let close = out[at..].find("))").map_or(out.len(), |end| at + end + 2);
                     out.replace_range(at..close, "next_variable: None");
                 }
-                // the old parser records neither a DECLARE without a parameter list nor `SUB p ()`
-                let out = out.replace("unchecked: true", "unchecked: false").replace("empty_list: true", "empty_list: false");
-                // CURRENCY is a type of its own here; the old parser read it as a user type's name
-                // (and a FUNCTION named with `@` has a CURRENCY result, where the old parser left it untyped)
-                let out = out.replace("result: Some(Currency)", "result: None").replace("Some(Currency)", "Some(Named(\"CURRENCY\"))");
+                // the old parser records neither a DECLARE without a parameter
+                // list nor `SUB p ()`
+                let out =
+                    out.replace("unchecked: true", "unchecked: false").replace("empty_list: true", "empty_list: false");
+                // CURRENCY is a type of its own here; the old parser read it as
+                // a user type's name (and a FUNCTION named with
+                // `@` has a CURRENCY result, where the old parser left it
+                // untyped)
+                let out = out
+                    .replace("result: Some(Currency)", "result: None")
+                    .replace("Some(Currency)", "Some(Named(\"CURRENCY\"))");
                 out.replace("\", Single)", "\", _)").replace("\", Double)", "\", _)")
             };
             assert!(strip(&old) == strip(&new), "{} under {dialect:?}: the modules differ", path.display());

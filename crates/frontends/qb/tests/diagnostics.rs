@@ -2,7 +2,7 @@
 //! name or token at fault, and what to do. BC's name for the error stays in the
 //! message for anyone who knows it.
 
-use llrm_qb::{parse, Dialect};
+use llrm_qb::{Dialect, parse};
 
 /// The error for `source`, with its place as `line:column`.
 fn refused(
@@ -51,7 +51,11 @@ fn a_wrong_argument_count_says_how_many_were_given_and_taken() {
 #[test]
 fn a_mismatched_next_names_both_variables() {
     let (_, error) = refused("FOR i = 1 TO 3\r\nNEXT j\r\n", Dialect::QuickBasic45);
-    assert!(error.message.contains("this NEXT names `j`, but the FOR loop it closes counts with `i`"), "{}", error.message);
+    assert!(
+        error.message.contains("this NEXT names `j`, but the FOR loop it closes counts with `i`"),
+        "{}",
+        error.message
+    );
 }
 
 #[test]

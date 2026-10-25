@@ -27,11 +27,7 @@ impl Value {
         value: f64,
         folded: bool,
     ) -> Self {
-        if folded {
-            Self { folded: Some(value), known: None }
-        } else {
-            Self { folded: None, known: Some(value) }
-        }
+        if folded { Self { folded: Some(value), known: None } } else { Self { folded: None, known: Some(value) } }
     }
 }
 
