@@ -82,7 +82,12 @@ def _with_stack_alignment(text: str, of: Target) -> str:
 
 def retarget(text: str, of: Target) -> str:
     """`text` with the target written into the module: the triple, the datalayout when it has none, and one attribute group on every
-    function; a module that already names a triple or a layout keeps its own (it is the claim the dump made)."""
+    function; a module that already names a triple or a layout keeps its own (it is the claim the dump made). llrm's own words
+    (`threeway`, `sysvcc`, `declare internal`) are written in the dialect LLVM reads first."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "difftest"))
+    from difftest import normalise  # noqa: PLC0415 (difftest guards its environment on import)
+
+    text = normalise(text)
     if not re.search(r"^target datalayout", text, re.M):
         text = f'target datalayout = "{of.datalayout}"\n{text}'
     if not re.search(r"^target triple", text, re.M):

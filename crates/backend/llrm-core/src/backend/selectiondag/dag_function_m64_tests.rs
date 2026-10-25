@@ -396,9 +396,47 @@ define i32 @f(i32 %n, ...) {
         .insns()
         .iter()
         .filter_map(|i| i.what.as_ref())
-        .filter(|w| w.op == Operation::Move && matches!(w.dests.first(), Some(Loc::Mem(_))))
+        .filter(|w| w.op == Operation::Move && matches!(w.dests.first(), Some(Loc::Mem(cell)) if cell.width != 16))
         .count();
     assert_eq!(stores, 9);
+}
+
+/// A variadic function at m64 saves the vector argument registers in the
+/// other half of the register save area when `al` says a caller used any
+/// (`VASTART_SAVE_XMM_REGS`): `test al, al; je`, then eight `movaps` of
+/// xmm0-7 at offsets 48..176. They were left unwritten, so a `double` read
+/// back by `va_arg` was whatever the area held.
+#[test]
+fn a_variadic_function_saves_xmm0_to_xmm7_when_al_is_not_zero() {
+    use crate::model::ir::{Loc, Operation};
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare void @llvm.va_start.p0(ptr)
+define i32 @f(i32 %n, ...) {
+  %ap = alloca [24 x i8], align 8
+  call void @llvm.va_start.p0(ptr %ap)
+  ret i32 %n
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let insns = done.body.insns();
+    let semantics: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref()).collect();
+    let saves: Vec<i64> = semantics
+        .iter()
+        .filter(|w| w.name.as_deref() == Some("movaps"))
+        .filter_map(|w| match (&w.dests[..], &w.sources[..]) {
+            ([Loc::Mem(cell)], [Loc::Reg(register)]) if register.register.is_xmm() => cell.addr.map(|a| a.disp),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(saves.len(), 8, "{semantics:?}");
+    assert!(saves.windows(2).all(|pair| pair[1] - pair[0] == 16), "{saves:?}");
+    let test = semantics.iter().position(|w| w.name.as_deref() == Some("test")).expect("a test of al");
+    let jump = semantics.iter().position(|w| w.op == Operation::Branch).expect("a branch");
+    assert!(test < jump);
 }
 
 /// A frame object's address plus a variable index and a displacement past the
@@ -480,6 +518,41 @@ entry:
     let names: Vec<String> =
         done.body.insns().iter().filter_map(|i| Some(i.what.as_ref()?.name.as_deref()?.to_owned())).collect();
     assert!(names.iter().any(|n| n == "stosb") && names.iter().any(|n| n == "movsb"), "{names:?}");
+}
+
+/// A call of a variadic function under SysV x86-64 passes the number of
+/// vector registers it uses in `al`; the callee's prologue tests it. No call
+/// set it, so a callee that read it saw whatever was there.
+#[test]
+fn a_variadic_call_at_m64_sets_al() {
+    use crate::model::ir::Loc;
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare i32 @printf(ptr, ...)
+define i32 @f(ptr %s, i32 %x) {
+entry:
+  %r = call i32 (ptr, ...) @printf(ptr %s, i32 %x)
+  ret i32 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let insns = done.body.insns();
+    let call = insns.iter().find(|i| i.call.is_some()).expect("a call");
+    let al = call
+        .requires
+        .iter()
+        .find(|(_, register)| *register == llrm_lir::registers::RegId::AL)
+        .unwrap_or_else(|| panic!("the call does not require al: {:?}", call.requires));
+    // no vector argument: zero of them
+    let zero = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .any(
+            |w| matches!(w.dests.first(), Some(Loc::Held(h)) if h.value == al.0.value)
+                && matches!(w.sources.first(), Some(Loc::Imm(imm)) if imm.value == 0),
+        );
+    assert!(zero);
 }
 
 /// A `double` copied through memory at m64 stopped at emit with

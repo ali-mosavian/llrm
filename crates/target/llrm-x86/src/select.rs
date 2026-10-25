@@ -2427,6 +2427,18 @@ pub fn emit_in(
         // BINARY's own rule: sources[0] IS dests[0].
         let (dest, source) = (&dests[0], &sources[1]);
         if let (Some(into), Some(outof)) = (reg_of(dest), reg_of(source)) {
+            if matches!(name, "bsf" | "bsr") {
+                let width = width_of(into)?;
+                if width_of(outof) != Some(width) {
+                    return None;
+                }
+                let scan = if name == "bsf" {
+                    code_of!("BSF_R", width * 8, "_RM", width * 8)
+                } else {
+                    code_of!("BSR_R", width * 8, "_RM", width * 8)
+                };
+                return _assemble(&raised(create_reg_reg(scan?, into, outof)), at, true);
+            }
             if let Some(code) = ["btc", "bts", "btr"].iter().position(|bit| name == *bit) {
                 let width = width_of(into)?;
                 if width_of(outof) != Some(width) {
@@ -2445,6 +2457,19 @@ pub fn emit_in(
             return arith_imm(name, into, value, at, relocated);
         }
         if let (Some(into), Some(cell)) = (reg_of(dest), mem_of(source)) {
+            if matches!(name, "bsf" | "bsr") {
+                let width = width_of(into)?;
+                if i64::from(cell.width) != width {
+                    return None;
+                }
+                let (built, relocated) = operand_of(cell, at.bits)?;
+                let scan = if name == "bsf" {
+                    code_of!("BSF_R", width * 8, "_RM", width * 8)
+                } else {
+                    code_of!("BSR_R", width * 8, "_RM", width * 8)
+                };
+                return _assemble(&raised(create_reg_mem(scan?, into, built)), at, relocated);
+            }
             return arith_mem(name, into, cell, at);
         }
         if let (Some(cell), Some(outof)) = (mem_of(dest), reg_of(source)) {
@@ -2466,6 +2491,14 @@ pub fn emit_in(
             }
             _ => None,
         };
+    }
+    // BSWAP reverses the bytes of the register it names.
+    if op == Operation::Unary && dests.len() == 1 && sources.len() == 1 && name == "bswap" {
+        let Loc::Reg(into) = &dests[0] else { return None };
+        // BSWAP of a word is undefined and the pin never emits it
+        let width = width_of(into.register).filter(|width| matches!(width, 4 | 8))?;
+        let code = code_of!("BSWAP_R", width * 8)?;
+        return _assemble(&raised(create_reg(code, into.register)), at, true);
     }
     if op == Operation::Unary && dests.len() == 1 && sources.len() == 1 {
         return match &dests[0] {
