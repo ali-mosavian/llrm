@@ -205,3 +205,16 @@ GORILLA and NIBBLES run through `llrm-qb --arm64=linux`, headless, under `qemu-a
 On the Mac: `brew install sdl2`, `tools/link-qb-sdl.sh NIBBLES.darwin.o nibbles`, run `./nibbles` (a window, keyboard
 input). Report which links and runs, with a screenshot, under this heading. To rebuild an object on the Mac:
 `cargo build --release --bin llrm-qb && target/release/llrm-qb --arm64=darwin -O2 X.BAS -o X.darwin.o`.
+
+Result on the Mac (macOS 27.2, M3, real SDL2 2.32.10, `llrm-qb --arm64=darwin -O2`, `tools/link-qb-sdl.sh`; built here from
+`NIBBLES.BAS` and `GORILLA.BAS`, not the handoff objects): both link and run in a real window.
+- Fixed: Darwin's AAPCS64 has the caller extend arguments narrower than 32 bits; the objects passed `i16 -1` zero-extended,
+  so `VIEW PRINT` got 65535 and NIBBLES died with "Illegal function call" after the colour question. `arm64.rs` now marks
+  the `i16` arguments of runtime calls `signext` on Darwin (22d99de96). No headless regression test: it needs a Mac.
+- NIBBLES: questions, then [Level 1](qb-host-shots/mac-nibbles-level1.png); Space starts it, arrows steer, Sammy dies and
+  the lives count down. [Second life](qb-host-shots/mac-nibbles-second-life.png) looks wrong: the arena is brown with blue
+  bars where the snake was. Not yet compared with DOS or the qemu run.
+- GORILLAS: [intro](qb-host-shots/mac-gorilla-intro.png), [city](qb-host-shots/mac-gorilla-city.png), a throw typed
+  as angle 45 and velocity 60 passes the turn to Player 2 and leaves
+  [a crater](qb-host-shots/mac-gorilla-after-throw.png).
+- Not checked: the banana in flight, sound in the games, GORILLA's second round and score screen.
