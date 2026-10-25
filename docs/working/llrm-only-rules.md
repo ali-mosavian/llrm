@@ -38,7 +38,8 @@ Query side (BasicAA, TBAA, CaptureTracking) stays: BasicAA `alias_check` is 20 M
 | Decide@809 (19.1 in the d_faces -O2 ablation, 10.6 same-IR) | DELETE; needs #4731 and #4749 (both open), then the deletion PR. Cost: 14 of 568 vsgcc cells, quicksort 6 (+4..+48 B) and x_primes 8 (+0..+2 B) | w5 | -19.1 |
 | Decide at the SimplifyCFG slots (15.8 same-IR vs the pin's 6.1; these are SimplifyCfg instances) | DEVIATE: no single lever (top step 10% of a slot); a loop-exits change is ~1.5 | w4 | -1.5 |
 | ConstraintElimination (6.4 vs the pin's 3.9 same-IR) | DEVIATE: it is the pin pass, cost is diffuse; the sort comparator asks `fact_before` twice | w5 | -0.3, rest unknown |
-| Dead (5.7), Interprocedural + Stamp (5.2 + 4.1), Counted/Followers (5.2) | unknown, needs a same-IR profile each; deleting Decide@809 takes ~27% of Counted and ~10% of Followers | none yet | ? |
+| Dead (5.7): `dead@677/768/801/837` | DELETE: 0 changes in 1561 runs each over the 568 vsgcc cells (`LLRM_DEBUG=runs`); `dead@1242` finds work (48 of 1480) and stays | w4, #4767 | -5.06 measured (objects identical) |
+| Interprocedural + Stamp (5.2 + 4.1), Counted/Followers (5.2) | unknown, needs a same-IR profile each; deleting Decide@809 takes ~27% of Counted and ~10% of Followers | none yet | ? |
 | MachineScheduler 10.7 (incl `graph` 2.4) | REPLACE by the pin's GenericScheduler pre-RA bottom-up (machine-scheduler-plan, 4 pieces) | w12 (handed over by w2) | unknown until piece 2 |
 | PressureSink 4.6 | DELETE with scheduler piece 4 (11-06): the pin has no sink pass, the scheduler places loads. Gate: rows nothing worse | w12 | -4.6 |
 | LiveRangeShrink 3.1 | KEEP, not llrm-only: the pin's pass (addPreRegAlloc, row 47), cost is the translation | w2 | 0 |
