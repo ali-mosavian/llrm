@@ -396,30 +396,37 @@ pub fn popped_arguments(
     let unit = i64::from(body.bits / 8);
     let arithmetic =
         RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::AF | RflagsBits::CF | RflagsBits::PF;
-    let exits = liveness::dead_at_exit(body);
+    let sp = Loc::Reg(reg(RegId::SP, 2));
+    // The words an `add sp, n` takes back, or 0.
+    let words_of = |one: &Insn| match &one.what {
+        Some(what)
+            if what.op == Operation::Binary && what.name.as_deref() == Some("add") && what.dests == [sp.clone()] =>
+        {
+            match what.sources.as_slice() {
+                [first, Loc::Imm(Imm { value, address: None, .. })]
+                    if *first == sp && value % unit == 0 && *value > 0 =>
+                {
+                    value / unit
+                }
+                _ => 0,
+            }
+        }
+        _ => 0,
+    };
+    // Solved for the first block that has a cleanup, and not at all for a
+    // body that has none.
+    let mut exits = None;
     let mut blocks = Vec::new();
     for block in &body.blocks {
+        if block.insns.iter().all(|one| words_of(one) == 0) {
+            blocks.push(block.clone());
+            continue;
+        }
+        let exits = exits.get_or_insert_with(|| liveness::dead_at_exit(body));
         let dead_after = regthrash::_dead_after(regs, body.bits, block, exits[&block.at].clone());
         let mut insns = Vec::with_capacity(block.insns.len());
         for one in &block.insns {
-            let sp = Loc::Reg(reg(RegId::SP, 2));
-            let words = match &one.what {
-                Some(what)
-                    if what.op == Operation::Binary
-                        && what.name.as_deref() == Some("add")
-                        && what.dests == [sp.clone()] =>
-                {
-                    match what.sources.as_slice() {
-                        [first, Loc::Imm(Imm { value, address: None, .. })]
-                            if *first == sp && value % unit == 0 && *value > 0 =>
-                        {
-                            value / unit
-                        }
-                        _ => 0,
-                    }
-                }
-                _ => 0,
-            };
+            let words = words_of(one);
             let dead = &dead_after[&id(one)];
             let scratch = regs.scratch.iter().copied().find(|register| _lanes(regs, *register).is_subset(dead));
             match scratch {
@@ -1056,12 +1063,14 @@ pub fn _register_effects_of_what(
         return None;
     }
     let key = EffectKey { bits, may_write, flags, what, requires: &[], delivers: &[] };
-    if let Some(found) = EFFECTS.with(|held| held.borrow().find(&key)) {
+    // Hashed once: a miss remembers under the hashes it looked up.
+    let hashes = key.hashes();
+    if let Some(found) = EFFECTS.with(|held| held.borrow().find(hashes)) {
         return found;
     }
     EFFECTS_COMPUTED.with(|count| count.set(count.get() + 1));
     let answer = _register_effects_of(regs, bits, &Insn::new(0, None, None, vec![], vec![]), what, may_write, flags);
-    EFFECTS.with(|held| held.borrow_mut().remember(&key, answer.clone()));
+    EFFECTS.with(|held| held.borrow_mut().remember(hashes, answer.clone()));
     answer
 }
 
@@ -1113,12 +1122,13 @@ fn _register_effects_worked(
     // of an `-O2` module's 16,000, #924): the answer depends on these fields
     // alone, and is remembered by their value.
     let key = EffectKey { bits, may_write, flags, what, requires: &one.requires, delivers: &one.delivers };
-    if let Some(found) = EFFECTS.with(|held| held.borrow().find(&key)) {
+    let hashes = key.hashes();
+    if let Some(found) = EFFECTS.with(|held| held.borrow().find(hashes)) {
         return found;
     }
     EFFECTS_COMPUTED.with(|count| count.set(count.get() + 1));
     let answer = _register_effects_of(regs, bits, one, what, may_write, flags);
-    EFFECTS.with(|held| held.borrow_mut().remember(&key, answer.clone()));
+    EFFECTS.with(|held| held.borrow_mut().remember(hashes, answer.clone()));
     answer
 }
 
@@ -1137,6 +1147,8 @@ impl EffectKey<'_> {
     /// Two hashes of the fields, the second seeded apart from the first.
     fn hashes(&self) -> (u64, u64) {
         use std::hash::{Hash, Hasher};
+        #[cfg(test)]
+        EFFECTS_HASHED.with(|count| count.set(count.get() + 1));
         let fields = (self.bits, self.may_write, self.flags, self.what, self.requires, self.delivers);
         let mut first = rustc_hash::FxHasher::default();
         fields.hash(&mut first);
@@ -1163,14 +1175,14 @@ struct EffectsHeld {
 impl EffectsHeld {
     fn find(
         &self,
-        key: &EffectKey,
+        hashes: (u64, u64),
     ) -> Option<Effects> {
-        self.by_hash.get(&key.hashes()).cloned()
+        self.by_hash.get(&hashes).cloned()
     }
 
     fn remember(
         &mut self,
-        key: &EffectKey,
+        hashes: (u64, u64),
         answer: Effects,
     ) {
         // A function's instructions, not the run's.
@@ -1178,13 +1190,22 @@ impl EffectsHeld {
             *self = Self::default();
         }
         self.count += 1;
-        self.by_hash.insert(key.hashes(), answer);
+        self.by_hash.insert(hashes, answer);
     }
 }
 
 thread_local! {
     static EFFECTS: RefCell<EffectsHeld> = RefCell::new(EffectsHeld::default());
     static EFFECTS_COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    #[cfg(test)]
+    static EFFECTS_HASHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has hashed an ask, for a test that a miss hashes
+/// it once.
+#[cfg(test)]
+pub fn effects_hashed() -> usize {
+    EFFECTS_HASHED.with(std::cell::Cell::get)
 }
 
 /// How many times this thread has worked out an instruction's register effects,
