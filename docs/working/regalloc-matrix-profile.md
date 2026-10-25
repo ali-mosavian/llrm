@@ -14,7 +14,7 @@ Parity `121f6f17e`, release `llrm-c` with line tables, callgrind Ir, `-m32 -marc
 
 The matrix side is about 10.8 M of 77.6 M. Against the pin it is ~4.5 M over (check_interference ~4 M, assign ~0.5 M), well under a tenth of the 61 M allocator gap. The gap is in `try_split` (42.9 M inclusive, 101 calls), which is SplitKit's.
 
-The pin profile (`~/scratch/sk-dfpin/pin.cg`) is a different, smaller input: only the per-call ratios are comparable.
+The pin profile (`pin.cg`) is a different, smaller input: only the per-call ratios are comparable.
 
 `reg_mask_clobbered` is already cached per vreg like the pin's `RegMaskVirtReg`; its cost is the per-segment merge with the call slots.
 
