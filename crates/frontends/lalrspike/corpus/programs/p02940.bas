@@ -1,0 +1,2 @@
+DEFSTR X
+DEFDBL A-Z

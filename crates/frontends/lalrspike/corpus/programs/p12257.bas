@@ -1,0 +1,6 @@
+DIM x%, y%, i%
+a:
+SELECT CASE x%
+CASE 1
+GOTO a
+END SELECT

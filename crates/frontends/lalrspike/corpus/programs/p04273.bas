@@ -1,0 +1,3 @@
+DIM x%
+a:a:
+ON ERROR GOTO 10

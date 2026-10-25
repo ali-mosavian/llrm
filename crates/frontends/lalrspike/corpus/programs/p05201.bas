@@ -1,0 +1,5 @@
+TYPE R
+a AS INTEGER
+END TYPE
+DIM r(3) AS R
+r.a = 1

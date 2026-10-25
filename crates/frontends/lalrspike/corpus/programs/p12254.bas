@@ -1,0 +1,7 @@
+DIM x%, y%, i%
+DO
+SELECT CASE x%
+CASE 1
+EXIT DO
+END SELECT
+LOOP

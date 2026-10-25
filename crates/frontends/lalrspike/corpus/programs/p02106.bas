@@ -1,0 +1,2 @@
+DIM SHARED x%
+DEFINT X

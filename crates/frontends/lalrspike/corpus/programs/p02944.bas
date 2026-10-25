@@ -1,0 +1,2 @@
+DEFSTR X
+ERASE x

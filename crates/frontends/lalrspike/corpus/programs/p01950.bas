@@ -1,0 +1,2 @@
+DIM x(5, 5)
+DEFINT X

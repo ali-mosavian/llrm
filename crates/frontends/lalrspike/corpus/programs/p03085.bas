@@ -1,0 +1,2 @@
+OPTION BASE 0
+CONST x% = 1

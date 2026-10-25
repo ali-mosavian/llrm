@@ -1,0 +1,2 @@
+DEFSTR X
+STATIC x%

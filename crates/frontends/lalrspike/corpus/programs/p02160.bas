@@ -1,0 +1,2 @@
+DIM SHARED x%(5)
+DEFDBL A-Z

@@ -1,0 +1,2 @@
+DIM x AS STRING * 4
+REDIM x%(5)

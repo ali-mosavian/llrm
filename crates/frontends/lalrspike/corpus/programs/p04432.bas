@@ -1,0 +1,3 @@
+DIM x%
+IF x% THEN GOTO a
+65535 PRINT

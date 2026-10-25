@@ -1,0 +1,5 @@
+DIM x%
+FUNCTION f%
+DEF FNa% = 1
+f% = 1
+END FUNCTION

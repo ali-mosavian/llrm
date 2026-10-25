@@ -1,0 +1,6 @@
+DIM x%, l&, a%(5)
+DECLARE SUB pp (z AS INTEGER)
+x% = 32767 OR -32768
+END
+SUB pp (z AS INTEGER)
+END SUB

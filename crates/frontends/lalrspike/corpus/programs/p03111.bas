@@ -1,0 +1,2 @@
+OPTION BASE 2
+x! = 1

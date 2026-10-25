@@ -1,0 +1,2 @@
+DIM x AS STRING
+CONST x% = 1

@@ -1,0 +1,5 @@
+'$DYNAMIC
+DIM a(100)
+REDIM a(200)
+ERASE a
+REDIM a(5, 5)

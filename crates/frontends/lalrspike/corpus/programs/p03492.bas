@@ -1,0 +1,3 @@
+SUB p
+DIM x AS INTEGER
+END SUB

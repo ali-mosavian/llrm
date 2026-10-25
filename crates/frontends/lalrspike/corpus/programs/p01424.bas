@@ -1,0 +1,2 @@
+DIM x AS LONG
+CONST y = 2

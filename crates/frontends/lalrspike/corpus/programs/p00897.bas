@@ -1,0 +1,2 @@
+x$ = "a"
+STATIC x%

@@ -1,0 +1,3 @@
+SUB p
+ERASE x%
+END SUB

@@ -1,0 +1,7 @@
+TYPE Inner
+q AS INTEGER
+END TYPE
+TYPE RecT
+a AS Nope
+END TYPE
+DIM r AS RecT

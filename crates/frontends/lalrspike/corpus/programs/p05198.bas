@@ -1,0 +1,8 @@
+TYPE R
+a(3) AS INTEGER
+END TYPE
+DIM r AS R
+SUB s
+SHARED r AS R
+r.a(1) = 1
+END SUB

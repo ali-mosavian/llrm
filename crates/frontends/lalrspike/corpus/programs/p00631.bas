@@ -1,0 +1,6 @@
+DIM x%
+FUNCTION f%
+DATA 1
+READ x%
+f% = 1
+END FUNCTION

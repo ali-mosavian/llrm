@@ -1,0 +1,4 @@
+SUB p
+'$NODEBUG
+DIM a(10)
+END SUB

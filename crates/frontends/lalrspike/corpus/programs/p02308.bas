@@ -1,0 +1,2 @@
+COMMON SHARED x%
+CONST y = 2

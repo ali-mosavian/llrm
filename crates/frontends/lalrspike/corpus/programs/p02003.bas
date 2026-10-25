@@ -1,0 +1,2 @@
+REDIM x%(5)
+DEFSTR X

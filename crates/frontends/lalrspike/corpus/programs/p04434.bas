@@ -1,0 +1,3 @@
+DIM x%
+IF x% THEN 10
+65535 PRINT

@@ -2376,3 +2376,15 @@ fn redim_preserve_calls_b_rdmp_with_redims_operands() {
     assert_eq!(kept.matches("\"callee\":\"B$RDMP\"").count(), 1, "{kept}");
     assert_eq!(plain.matches("\"callee\":\"B$RDMP\"").count(), 0, "{plain}");
 }
+
+#[test]
+fn lset_and_rset_call_their_runtime_routines_with_the_field_length() {
+    // LSET and RSET were refused as unknown procedures. BC calls B$LSET and
+    // B$RSET with the source descriptor, the destination's far address and
+    // its length (0 for a variable-length string).
+    let source = "a$ = \"abcd\"\r\nDIM c AS STRING * 5\r\nLSET a$ = \"x\"\r\nRSET c = a$\r\n";
+    let module = parse(source, Dialect::QuickBasic45).unwrap();
+    let hir = compile(&module, "justify", Dialect::QuickBasic45, "qb45").unwrap();
+    assert_eq!(hir.matches("\"callee\":\"B$LSET\"").count(), 1, "{hir}");
+    assert_eq!(hir.matches("\"callee\":\"B$RSET\"").count(), 1, "{hir}");
+}

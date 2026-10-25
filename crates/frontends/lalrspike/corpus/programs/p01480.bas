@@ -1,0 +1,2 @@
+DIM x AS STRING
+PRINT x(1)

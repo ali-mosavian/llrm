@@ -1,0 +1,6 @@
+DIM x%, l&, a%(5)
+DECLARE SUB pp (z AS INTEGER)
+x% = 1.5 XOR 0
+END
+SUB pp (z AS INTEGER)
+END SUB

@@ -1,0 +1,3 @@
+DIM x%
+IF x% THEN a
+0 PRINT

@@ -1,0 +1,3 @@
+DIM x%
+0 PRINT
+IF x% THEN GOTO a

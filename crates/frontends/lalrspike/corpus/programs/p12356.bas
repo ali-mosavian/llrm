@@ -1,0 +1,4 @@
+SUB p
+'$PAGE
+DIM a(10)
+END SUB

@@ -1,0 +1,6 @@
+DIM x%
+ON x% GOTO a
+END
+SUB p
+a:
+END SUB

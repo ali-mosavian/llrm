@@ -1,0 +1,2 @@
+INPUT x%
+CONST y = 2

@@ -1,0 +1,2 @@
+DIM x AS LONG
+REDIM x(5) AS LONG

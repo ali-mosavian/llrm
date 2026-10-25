@@ -1,0 +1,4 @@
+DIM x%
+SUB q
+CONST k = 1
+END SUB

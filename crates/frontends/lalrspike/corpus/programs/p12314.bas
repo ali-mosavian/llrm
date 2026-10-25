@@ -1,0 +1,4 @@
+SUB p
+'$
+DIM a(10)
+END SUB

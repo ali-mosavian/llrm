@@ -1,0 +1,6 @@
+DIM SHARED zz%
+CALL p
+END
+SUB p
+zz% = 1
+END SUB

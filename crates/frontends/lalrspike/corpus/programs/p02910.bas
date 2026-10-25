@@ -1,0 +1,2 @@
+DEFSTR X
+DIM x AS LONG
