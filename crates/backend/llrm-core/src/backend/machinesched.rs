@@ -33,7 +33,6 @@
 //! through a block are not counted in its pressure, and one limit stands for
 //! every register set.
 
-use std::collections::HashSet;
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -46,7 +45,7 @@ use crate::backend::liveness;
 use crate::model::ir::{Loc, Operation};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
-use crate::support::hash::HashMap;
+use crate::support::hash::{HashMap, HashSet};
 
 /// `MI.modifiesRegister(StackPointerRegisterToSaveRestore)` of
 /// `TargetInstrInfo::isSchedulingBoundary`: anything that writes the stack
@@ -586,7 +585,7 @@ pub fn scheduled(
             // Pressure is tracked, and so what is live below a region asked,
             // for a region of more than half the allocatable
             // registers only.
-            let mut now: HashSet<u32> = HashSet::new();
+            let mut now: HashSet<u32> = HashSet::default();
             if regions.iter().any(|region| region.len() > limit / 2) {
                 let live = live.get_or_insert_with(|| live_rows(body));
                 let mut values: Vec<u32> =
@@ -739,7 +738,7 @@ mod tests {
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
         let found = graph(&insns, regs, 16);
-        let live_out: std::collections::HashSet<u32> = [6].into_iter().collect();
+        let live_out: crate::support::hash::HashSet<u32> = [6].into_iter().collect();
         assert_eq!(bottom_up(&insns, &found, &live_out, 2, |_| true), [0, 1, 3, 2, 4, 5]);
         // A limit that is never reached leaves the order alone.
         assert_eq!(bottom_up(&insns, &found, &live_out, 16, |_| true), [0, 1, 2, 3, 4, 5]);
@@ -796,7 +795,7 @@ mod tests {
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
         let found = graph(&insns, regs, 16);
         assert_eq!(found.latencies[3], [4], "the reader waits four cycles for the load");
-        let live_out: std::collections::HashSet<u32> = [1, 2, 4].into_iter().collect();
+        let live_out: crate::support::hash::HashSet<u32> = [1, 2, 4].into_iter().collect();
         assert_eq!(bottom_up(&insns, &found, &live_out, 16, |_| true), [2, 0, 1, 3]);
         // A copy is ready at once: the order stays.
         let copies = vec![
@@ -966,5 +965,12 @@ mod tests {
         assert!(known.is_none_or(|reads| reads), "an fcmov with a known effect reads the flags");
         let g = graph(&[compare, fcmov], regs, 32);
         assert_eq!(g.preds[1], [0], "the fcmov stays after the cmp: {g:?}");
+    }
+
+    #[test]
+    fn test_the_scheduler_sets_are_not_siphashed() {
+        // std's `HashSet<u32>` hashed every pressure query with SipHash.
+        let none: [Arc<Insn>; 0] = [];
+        let _: crate::support::hash::HashSet<u32> = super::x87_values(none.iter());
     }
 }
