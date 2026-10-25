@@ -819,6 +819,8 @@ pub(crate) fn llvm_order(
             // single hoist did.
             let rotating = applied.options.rotate_slot;
             list.extend([
+                // LPM1's first pass, PassBuilderPipelines.cpp#L715.
+                slot("loop-instsimplify@715", Box::new(crate::loopinstsimplify::LoopInstSimplify)),
                 slot("floatloop@724", Box::new(floatloop::FloatLoop)),
                 // LPM1
                 // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L724:
