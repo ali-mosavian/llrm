@@ -188,6 +188,30 @@ fn form_of(
         .copied()
 }
 
+/// The operands (dests, then sources: bit `n` is operand `n`) that only an xmm
+/// register can fill, from the kinds of every row of the mnemonic: some row
+/// takes `x` there and none takes `r`. None where the table has no row.
+pub fn xmm_operands(
+    rows: &dyn Fn(&str, usize, usize) -> &'static [Row],
+    what: &Semantics,
+) -> Option<u32> {
+    let candidates = rows(what.name.as_deref().filter(|name| !name.is_empty())?, what.dests.len(), what.sources.len());
+    if candidates.is_empty() {
+        return None;
+    }
+    let count = what.dests.len() + what.sources.len();
+    Some(
+        (0..count.min(32))
+            .filter(|at| {
+                let takes = |letter: char| {
+                    candidates.iter().any(|row| row.kinds.get(*at).is_some_and(|kinds| kinds.contains(letter)))
+                };
+                takes('x') && !takes('r')
+            })
+            .fold(0, |mask, at| mask | 1 << at),
+    )
+}
+
 /// The register `root` names at `bytes`, as a pinned operand is.
 fn pinned(
     root_name: &str,

@@ -636,6 +636,9 @@ fn moves_stack(body: &crate::model::lir::LirBody) -> bool {
 /// than this one's (cdecl's ECX and EDX under Watcom's) takes the caller's
 /// value.
 fn saved_of(procedure: &Procedure) -> Vec<RegId> {
+    if let Some(saved) = &procedure.body.frame_saved {
+        return saved.clone();
+    }
     let found = procedure.body.facts.0.get::<BodyRoots>(&procedure.body);
     let mut roots = if procedure.registers.free {
         found.of_values(procedure.body.regs(), procedure.registers.pointer)
@@ -723,6 +726,53 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
         },
         None => procedure,
     }
+}
+
+/// `procedure` with what each return takes back as instructions before the
+/// return, as the pin has them when `BranchFolder` runs
+/// (`PrologEpilogInserter` runs first): the saved registers' pops and the
+/// frame's teardown, which tail merging then counts. Unchanged where the
+/// entry or a piece of the frame is set up elsewhere (runtime-built,
+/// interrupt) or placed by `shrinkwrap`: those stay in the printer.
+pub fn exits_inserted(procedure: Procedure) -> Procedure {
+    if procedure.entry != 0 || procedure.interrupt.is_some() || procedure.body.frame_exit.is_some() {
+        return procedure;
+    }
+    let held = frame_held(&procedure);
+    let omit = frame_omitted(&procedure, 0, held).is_some();
+    if !omit && held {
+        return procedure;
+    }
+    let sequences = Sequences::of(&procedure, omit);
+    if sequences.wrap.as_ref().is_some_and(|wrap| !wrap.wrapped.is_empty()) || sequences.exit.is_empty() {
+        return procedure;
+    }
+    let saved = saved_of(&procedure);
+    let blocks: Vec<crate::model::lir::Block> = procedure
+        .body
+        .blocks
+        .iter()
+        .map(|block| {
+            if !block.insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Return)) {
+                return block.clone();
+            }
+            let mut made = lir::LirBlock::clone(block);
+            let mut insns: Vec<Arc<lir::Insn>> = Vec::with_capacity(block.insns.len() + sequences.exit.len());
+            for one in block.insns.iter() {
+                if one.what.as_ref().is_some_and(|what| what.op == Operation::Return) {
+                    let at = one.covers.map_or(one.at, |covers| covers.0);
+                    insns.extend(sequences.exit.iter().map(|what| {
+                        Arc::new(lir::Insn::new(one.at, Some((at, at)), Some(what.clone()), Vec::new(), Vec::new()))
+                    }));
+                }
+                insns.push(Arc::clone(one));
+            }
+            made.insns = insns.into();
+            made.into()
+        })
+        .collect();
+    let body = procedure.body.with_blocks(blocks);
+    Procedure { body: lir::LirBody { frame_exit: Some(omit), frame_saved: Some(saved), ..body }, ..procedure }
 }
 
 /// The stack-limit comparison once the frame is allocated, if the procedure
@@ -1015,6 +1065,10 @@ pub fn listing(
 ) -> Result<Vec<Item>, Unprintable> {
     let registers = &procedure.registers;
     let held = frame_held(procedure);
+    if procedure.body.frame_exit == Some(false) {
+        let registers = llrm_target::FrameRegisters { free: false, ..registers.clone() };
+        return Ok(built(procedure, number, false)?.into_iter().map(|item| spelled(item, &registers)).collect());
+    }
     let (items, registers) = match frame_omitted(procedure, number, held) {
         Some(items) => (items, registers.clone()),
         None if held => {
@@ -1061,7 +1115,13 @@ impl Sequences {
         let first = procedure.body.saved_first;
         let lows = if first { Vec::new() } else { saved_of(procedure) };
         let count = lows.len();
-        let wrap = wrap_of(procedure, &procedure.body, enter.len() > count, omit);
+        // Decided before the exits became instructions, which name the saved
+        // registers in every return.
+        let wrap = if procedure.body.frame_exit.is_some() {
+            None
+        } else {
+            wrap_of(procedure, &procedure.body, enter.len() > count, omit)
+        };
         let kept = enter.split_off(enter.len() - count);
         let restores: Vec<Semantics> = leave.drain(..count).collect();
         let saved: Vec<RegId> =
@@ -1091,7 +1151,7 @@ impl Sequences {
             entry_leave.extend(sequences.leave.iter().cloned());
         }
         sequences.entry = entry_items;
-        sequences.exit = entry_leave;
+        sequences.exit = if procedure.body.frame_exit.is_some() { Vec::new() } else { entry_leave };
         sequences
     }
 

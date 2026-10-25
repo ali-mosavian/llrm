@@ -647,8 +647,15 @@ const CONDITIONS: [&str; 16] =
     ["jo", "jno", "jb", "jae", "je", "jne", "jbe", "ja", "js", "jns", "jp", "jnp", "jl", "jge", "jle", "jg"];
 
 /// A LIR operand's width: bytes, as the old selector writes it.
-fn width(vt: EVT) -> u32 {
+fn width(
+    sse: bool,
+    vt: EVT,
+) -> u32 {
     match vt {
+        // With scalar SSE a floating value is the 4 or 8 bytes of an xmm
+        // register.
+        EVT::Simple(MVT::F32) if sse => 4,
+        EVT::Simple(MVT::F64) if sse => 8,
         EVT::Simple(MVT::I1 | MVT::I8) => 1,
         EVT::Simple(MVT::I16) => 2,
         EVT::Simple(MVT::I32) => 4,
@@ -843,8 +850,8 @@ impl Emitter<'_, '_> {
                             self.values.insert(result, made.value);
                             return Ok(());
                         }
-                        let phys = Reg { register, width: width_of(self.dag, result) };
-                        let held = self.fresh(width_of(self.dag, result));
+                        let phys = Reg { register, width: width_of(self.ctx.map.scalar_sse(), self.dag, result) };
+                        let held = self.fresh(width_of(self.ctx.map.scalar_sse(), self.dag, result));
                         // The result of a call is what the call delivers in
                         // that register.
                         let glued = self.reads_call_result(node.ops.get(2).copied());
@@ -1114,11 +1121,31 @@ impl Emitter<'_, '_> {
             self.blocks.last_mut().expect("a block").insns.push(Arc::new(insn));
             return Ok(());
         }
-        if matches!(name, "CMOV_GR8" | "CMOV_GR16" | "CMOV_GR32") {
+        if matches!(
+            name,
+            "CMOV_GR8" | "CMOV_GR16" | "CMOV_GR32" | "CMOV_FR32" | "CMOV_FR64"
+        ) {
             return self.lowered_select(n);
         }
         if name == "VASTART_SAVE_XMM_REGS" {
             return self.lowered_vastart_save_xmm(n);
+        }
+        // `FsFLD0SD`: a zero double, `xorps` of the register with itself.
+        if matches!(name, "FsFLD0SD" | "FsFLD0SS") {
+            let node = self.dag.node(SDValue { node: n, res: 0 });
+            let zero = self.fresh(width(self.ctx.map.scalar_sse(), node.values[0]));
+            self.values.insert(SDValue { node: n, res: 0 }, zero.value);
+            // The idiom reads nothing: the instruction uses no value.
+            let what = Semantics {
+                name: Some("xorps".into()),
+                dests: vec![Loc::Held(zero)],
+                sources: vec![Loc::Held(zero), Loc::Held(zero)],
+                ..Semantics::new(Operation::Binary)
+            };
+            let at = self.next_address();
+            let insn = Insn::new(at, Some((at, at)), Some(what), vec![zero.value], vec![]);
+            self.blocks.last_mut().expect("a block").insns.push(Arc::new(insn));
+            return Ok(());
         }
         // `MOVZX32rr8_NOREX` is `movzx` of a byte register that needs no REX
         // prefix to name (AH): the same form at this target.
@@ -1133,12 +1160,14 @@ impl Emitter<'_, '_> {
         // The results: the first `num_defs` values that are not chain or glue.
         let mut dests = Vec::new();
         for (i, vt) in node.values.iter().enumerate().take(usize::from(desc.num_defs)) {
-            let held =
-                self.exported_register(SDValue { node: n, res: i as u8 }).unwrap_or_else(|| self.fresh(width(*vt)));
+            let held = self
+                .exported_register(SDValue { node: n, res: i as u8 })
+                .unwrap_or_else(|| self.fresh(width(self.ctx.map.scalar_sse(), *vt)));
             self.values.insert(SDValue { node: n, res: i as u8 }, held.value);
             dests.push(Loc::Held(held));
         }
-        let cell_width = super::opcodes::memory_bytes(name).unwrap_or_else(|| width_of_node(self.dag, n));
+        let cell_width =
+            super::opcodes::memory_bytes(name).unwrap_or_else(|| width_of_node(self.ctx.map.scalar_sse(), self.dag, n));
         let mut operands = self.operands(node.ops.as_slice(), desc, cell_width)?;
         // A memory destination (`ADD32mr`, no result): the cell is the
         // destination and its tied source.
@@ -1202,7 +1231,7 @@ impl Emitter<'_, '_> {
         let when_true = held(self.operand(node.ops[1])?)?;
         let cc = self.constant(node.ops[2])? as usize;
         let jump = *CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
-        let result = self.fresh(width(node.values[0]));
+        let result = self.fresh(width(self.ctx.map.scalar_sse(), node.values[0]));
         self.values.insert(SDValue { node: n, res: 0 }, result.value);
         // The flags this select reads: the producer of the `CopyToReg EFLAGS`
         // glued to it.
@@ -1445,7 +1474,7 @@ impl Emitter<'_, '_> {
         match self.operand(value)? {
             Loc::Held(held) => Ok(held),
             source => {
-                let held = self.fresh(width_of(self.dag, value));
+                let held = self.fresh(width_of(self.ctx.map.scalar_sse(), self.dag, value));
                 self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![source]);
                 Ok(held)
             }
@@ -1656,7 +1685,7 @@ impl Emitter<'_, '_> {
         // huge one loaded): its selector is the high word, `x >> 16`. Only the
         // shapes below are known to be a word pointer into DGROUP, a frame or a
         // global.
-        let whole = width_of(self.dag, origin) == 4;
+        let whole = width_of(self.ctx.map.scalar_sse(), self.dag, origin) == 4;
         let known_shape = matches!(
             self.dag.opcode(origin),
             ISD::Machine(op) if self.ctx.names.get(&(op as u16)).is_some_and(|name| { matches!(name.split('|').next(), Some("OR32rr" | "ADD32rr" | "SHL32ri" | "ADD32rr_DB")) })
@@ -1747,7 +1776,8 @@ impl Emitter<'_, '_> {
             return None;
         }
         let [undef, selector, _] = self.dag.node(inserted).ops[..] else { return None };
-        (self.is_implicit_def(undef) && width_of(self.dag, selector) == 2).then_some(selector)
+        (self.is_implicit_def(undef) && width_of(self.ctx.map.scalar_sse(), self.dag, selector) == 2)
+            .then_some(selector)
     }
 
     /// Whether `value` is a machine node of the pin's opcode `name`.
@@ -1779,7 +1809,7 @@ impl Emitter<'_, '_> {
         name: &str,
     ) -> Result<Option<()>, EmitError> {
         let node = self.dag.node(SDValue { node: n, res: 0 });
-        let width = width(node.values[0]);
+        let width = width(self.ctx.map.scalar_sse(), node.values[0]);
         let result = SDValue { node: n, res: 0 };
         match name.split('|').next().unwrap_or(name) {
             "ADJCALLSTACKDOWN32" | "ADJCALLSTACKUP32" | "ADJCALLSTACKDOWN64" | "ADJCALLSTACKUP64" => {
@@ -1945,7 +1975,7 @@ impl Emitter<'_, '_> {
                     _ => self.operand(node.ops[1])?,
                 };
                 if reading {
-                    let held = self.fresh(width_of(self.dag, SDValue { node: n, res: 0 }));
+                    let held = self.fresh(width_of(self.ctx.map.scalar_sse(), self.dag, SDValue { node: n, res: 0 }));
                     self.values.insert(SDValue { node: n, res: 0 }, held.value);
                     self.push(Operation::Barrier, "in", vec![Loc::Held(held)], vec![port]);
                 } else {
@@ -2725,7 +2755,7 @@ impl Emitter<'_, '_> {
     ) -> Result<(), EmitError> {
         let node = self.dag.node(SDValue { node: n, res: 0 });
         let src = self.operand(node.ops[0])?;
-        let held = self.fresh(width(node.values[0]));
+        let held = self.fresh(width(self.ctx.map.scalar_sse(), node.values[0]));
         self.values.insert(SDValue { node: n, res: 0 }, held.value);
         self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![src]);
         Ok(())
@@ -3061,7 +3091,9 @@ impl Emitter<'_, '_> {
         value: SDValue,
     ) -> Result<i64, EmitError> {
         match self.dag.node(value).data {
-            NodeData::Const { bits, .. } => Ok(sign_extend(bits, width_of(self.dag, value) * 8)),
+            NodeData::Const { bits, .. } => {
+                Ok(sign_extend(bits, width_of(self.ctx.map.scalar_sse(), self.dag, value) * 8))
+            }
             _ => Err(EmitError::Unsupported("a non-constant address part".to_owned())),
         }
     }
@@ -3071,7 +3103,7 @@ impl Emitter<'_, '_> {
         value: SDValue,
     ) -> Result<Loc, EmitError> {
         if let NodeData::Const { bits, .. } = self.dag.node(value).data {
-            let w = width_of(self.dag, value);
+            let w = width_of(self.ctx.map.scalar_sse(), self.dag, value);
             return Ok(Loc::Imm(Imm { value: sign_extend(bits, w * 8), width: w, address: None }));
         }
         if let Some((mnemonic, cell)) = self.lazy.get(&value).cloned() {
@@ -3084,22 +3116,34 @@ impl Emitter<'_, '_> {
         }
         if let NodeData::Global { symbol, offset } = self.dag.node(value).data {
             let addr = self.ctx.globals.address(symbol, offset);
-            return Ok(Loc::Imm(Imm { value: 0, width: width_of(self.dag, value), address: Some(addr) }));
+            return Ok(Loc::Imm(Imm {
+                value: 0,
+                width: width_of(self.ctx.map.scalar_sse(), self.dag, value),
+                address: Some(addr),
+            }));
         }
         // The address of a jump table.
         if let NodeData::JumpTable(table) = self.dag.node(value).data {
             let table = self.jump_table(table)?;
             let mut address = Addr::new(crate::model::ir::Space::Segment, 0);
             address.index = table.id;
-            return Ok(Loc::Imm(Imm { value: 0, width: width_of(self.dag, value), address: Some(address) }));
+            return Ok(Loc::Imm(Imm {
+                value: 0,
+                width: width_of(self.ctx.map.scalar_sse(), self.dag, value),
+                address: Some(address),
+            }));
         }
         // The address of a pool constant.
         if let NodeData::PoolIndex(entry) = self.dag.node(value).data {
             let addr = self.pool_cell(entry)?.addr;
-            return Ok(Loc::Imm(Imm { value: 0, width: width_of(self.dag, value), address: addr }));
+            return Ok(Loc::Imm(Imm {
+                value: 0,
+                width: width_of(self.ctx.map.scalar_sse(), self.dag, value),
+                address: addr,
+            }));
         }
         match self.values.get(&value) {
-            Some(&v) => Ok(Loc::Held(Held { value: v, width: width_of(self.dag, value) })),
+            Some(&v) => Ok(Loc::Held(Held { value: v, width: width_of(self.ctx.map.scalar_sse(), self.dag, value) })),
             None => Err(EmitError::Unsupported(format!("operand {:?} before its definition", self.dag.opcode(value)))),
         }
     }
@@ -3109,7 +3153,7 @@ impl Emitter<'_, '_> {
         &mut self,
         value: SDValue,
     ) -> Result<Loc, EmitError> {
-        let width = width_of(self.dag, value);
+        let width = width_of(self.ctx.map.scalar_sse(), self.dag, value);
         match self.dag.node(value).data {
             NodeData::PhysReg(register) => Ok(Loc::Reg(Reg { register, width })),
             NodeData::Register(reg) => Ok(Loc::Held(Held { value: self.vreg(reg), width })),
@@ -3131,7 +3175,7 @@ impl Emitter<'_, '_> {
         &mut self,
         result: SDValue,
     ) -> Option<Held> {
-        let width = width_of(self.dag, result);
+        let width = width_of(self.ctx.map.scalar_sse(), self.dag, result);
         let reg = self
             .dag
             .users(result)
@@ -3147,7 +3191,8 @@ impl Emitter<'_, '_> {
                     if self.is_es(node.ops[1]) {
                         return None;
                     }
-                    (node.ops[2] == result && width_of(self.dag, node.ops[1]) == width).then_some(reg)
+                    (node.ops[2] == result && width_of(self.ctx.map.scalar_sse(), self.dag, node.ops[1]) == width)
+                        .then_some(reg)
                 },
             )?;
         Some(Held { value: self.vreg(reg), width })
@@ -3216,20 +3261,22 @@ fn div_or_mul(name: &str) -> (bool, bool, u32, bool) {
 }
 
 fn width_of(
+    sse: bool,
     dag: &SelectionDAG,
     value: SDValue,
 ) -> u32 {
-    width(dag.value_type(value))
+    width(sse, dag.value_type(value))
 }
 
 /// The width of the node's memory access: its first result, else its first
 /// operand that is a value.
 fn width_of_node(
+    sse: bool,
     dag: &SelectionDAG,
     n: u32,
 ) -> u32 {
     let node = dag.node(SDValue { node: n, res: 0 });
-    node.values.first().filter(|vt| **vt != EVT::OTHER).map_or(4, |vt| width(*vt))
+    node.values.first().filter(|vt| **vt != EVT::OTHER).map_or(4, |vt| width(sse, *vt))
 }
 
 fn sign_extend(

@@ -321,3 +321,20 @@ fn test_a_copy_is_not_forwarded_across_a_string_move_that_writes_its_source() {
         assert_eq!(lines(&got)[2], format!("add BX,BX,{copy:?}"), "{:?}", lines(&got));
     }
 }
+
+/// x_hanoi2 `mv`: `mov bx, ax; test bx, bx` kept reading bx, one operand
+/// renamed alone is another instruction, so the copy stayed in the entry and
+/// shrink wrapping found a callee-saved definition there (13 instructions a
+/// leaf call against the pin's 3).
+#[test]
+fn test_an_instruction_that_reads_the_copys_destination_twice_reads_the_source_twice() {
+    let test = Arc::new(Insn::new(
+        1,
+        Some((1, 1)),
+        Some(semantics(Operation::Compare, "test", vec![], vec![rl(RegId::BX, 2), rl(RegId::BX, 2)])),
+        vec![],
+        vec![],
+    ));
+    let got = propagated(&body(vec![mov(0, rl(RegId::BX, 2), rl(RegId::AX, 2)), test], &[RegId::BX]));
+    assert_eq!(lines(&got), ["-", "test AX,AX"]);
+}
