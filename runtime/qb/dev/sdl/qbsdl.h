@@ -43,9 +43,9 @@ void sdl_audio_render(SdlTone *tone, int16_t *out, int count, unsigned hertz);
 /* sync.c: the worker waits for the next frame to reach the screen. */
 void sdl_sync_request(void);                  /* the worker: wake the SDL thread and wait for a frame, up to one interval */
 void sdl_sync_wait_request(int timeout_ms);   /* the SDL thread: sleep until a request or the interval */
+unsigned sdl_sync_requests(void);             /* the requests made so far (a test) */
 unsigned sdl_sync_begin(void);                /* the SDL thread: the requests this frame will answer */
 void sdl_sync_done(unsigned upto);            /* the SDL thread: the frame has been presented */
-void sdl_sync_yield_if_due(void);             /* the worker: sdl_sync_request at most once a frame */
 
 /* host.c: the program's entry, which the program (or a test) supplies. */
 extern int qb_host_program(int argc, char **argv);
