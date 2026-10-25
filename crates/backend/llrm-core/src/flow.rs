@@ -209,9 +209,6 @@ pub fn machine_with<'a>(
             segments: segments.clone(),
             classes: Rc::clone(classes),
         }),
-        // Before any value is placed: the pin's pre-RA scheduler, bottom-up by
-        // pressure.
-        Box::new(crate::backend::machinesched::MachineScheduler { classes: Rc::clone(classes) }),
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
         Box::new(crate::backend::fixupsetcc::FixupSetCc),
@@ -234,6 +231,10 @@ pub fn machine_with<'a>(
             },
         }),
         Box::new(coalesce::Coalescer { size: target.size, ..coalesce::Coalescer::new(None, segments, classes) }),
+        // As the pin has it, after TwoAddress and the coalescer: the scheduler
+        // sees the copies they left and the values they joined, bottom-up by
+        // pressure.
+        Box::new(crate::backend::machinesched::MachineScheduler { classes: Rc::clone(classes) }),
         Box::new(allocate::RegAlloc::new(
             Some(&pinned),
             frame.clone(),
