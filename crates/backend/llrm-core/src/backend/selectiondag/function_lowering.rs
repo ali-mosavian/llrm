@@ -18,6 +18,9 @@ pub struct FunctionLoweringInfo {
     pub value_regs: IdMap<ValueId, u32>,
     /// `StaticAllocaMap`.
     pub static_allocas: IdMap<ValueId, i32>,
+    /// The frame object of the SysV x86-64 register save area a variadic
+    /// function has (`RegSaveFrameIndex`), made with the allocas' objects.
+    pub variadic_save: Option<i32>,
     /// The register the `sret` parameter is copied to, read back to return it.
     pub sret_reg: Option<u32>,
     /// The branch probabilities of the function, made at its first `switch`.
@@ -73,6 +76,7 @@ impl FunctionLoweringInfo {
         let mut info = FunctionLoweringInfo {
             value_regs: IdMap::new(),
             static_allocas: IdMap::new(),
+            variadic_save: None,
             sret_reg: None,
             bpi: None,
             edge_probs: Vec::new(),
@@ -104,6 +108,20 @@ impl FunctionLoweringInfo {
             }
         }
         info
+    }
+
+    /// StackColoring's result for the static allocas: each is the frame index
+    /// of its group (locals never live together share one), `count` indices
+    /// in all.
+    pub fn share_allocas(
+        &mut self,
+        groups: impl IntoIterator<Item = (ValueId, i32)>,
+        count: i32,
+    ) {
+        for (value, index) in groups {
+            self.static_allocas.insert(value, index);
+        }
+        self.next_frame_index = count;
     }
 
     /// `CreateRegs`: the next virtual register, recorded for `value`.

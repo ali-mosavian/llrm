@@ -3,7 +3,7 @@
 
 use super::dag_function::selected;
 use super::dag_function_tests::{FAR_CALL, M16_STACK_ARGS, Stub, names, select_with_contracts, verdicts};
-use crate::model::ir::Operation;
+use crate::model::ir::{Loc, Operation};
 
 const CALL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 declare i32 @bar(i32, i32)
@@ -40,45 +40,12 @@ fn a_call_is_a_sequence_around_a_call_instruction() {
     );
     let names: Vec<String> =
         insns.iter().filter_map(|i| i.what.as_ref()).map(|w| w.name.as_deref().unwrap_or("").to_owned()).collect();
-    // The arguments are pushed (the area's dword stores, `pushed_dwords`), the
-    // caller releases them after the call.
+    // The area is the pin's pseudo pair around the call; `callframe.rs` makes
+    // them pushes or `sub`/`add`.
     let called = names.iter().position(|n| n == "call").unwrap();
-    let up = names.iter().rposition(|n| n == "add").unwrap();
-    assert_eq!(names[..called].iter().filter(|n| *n == "push").count(), 2, "{names:?}");
+    assert_eq!(names.iter().position(|n| n == "call_frame_setup"), Some(0), "{names:?}");
+    assert_eq!(names.get(called + 1).map(String::as_str), Some("call_frame_destroy"), "{names:?}");
     assert!(!names.iter().any(|n| n == "sub"), "{names:?}");
-    assert!(called < up, "{names:?}");
-}
-
-const TWO_CALLS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
-declare i32 @f(i32, i32, i32)
-define i32 @g(ptr %p) {
-entry:
-  %a = load i32, ptr %p
-  %b = load i32, ptr getelementptr (i32, ptr null, i32 1)
-  %r = call i32 @f(i32 %a, i32 %b, i32 7)
-  ret i32 %r
-}
-";
-
-/// Three dword arguments were `sub esp, 12`, three `mov [esp+k]`, the call,
-/// `add esp, 12` at m32 (the old selector's `push` x3): QCport -Os grew 18.9%
-/// on its calls alone (push 349 -> 42, sub 12 -> 171 in savegame.c).
-#[test]
-fn dword_arguments_on_the_stack_are_pushed_last_first() {
-    let module = llrm_mir::parse::module(TWO_CALLS).expect("parses");
-    let done = selected(&module, "g", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
-        .unwrap_or_else(|e| panic!("{}", e.0));
-    let pushes: Vec<_> = done
-        .body
-        .insns()
-        .iter()
-        .filter_map(|i| i.what.as_ref())
-        .filter(|w| w.op == Operation::Push)
-        .map(|w| w.sources[0].clone())
-        .collect();
-    assert_eq!(pushes.len(), 3, "{pushes:?}");
-    // The last argument (7) goes first.
-    assert!(matches!(pushes[0], crate::model::ir::Loc::Imm(ref imm) if imm.value == 7), "{pushes:?}");
 }
 
 const INDIRECT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -381,7 +348,17 @@ fn the_caller_removes_the_arguments_the_callee_does_not_declare() {
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let text = format!("{:?}", done.body.insns().iter().filter_map(|i| i.what.as_ref()).collect::<Vec<_>>());
-    assert!(text.contains("\"add\"") && text.contains("Imm(Imm { value: 8,"), "{text}");
+    // Two stack arguments (8 bytes) of six, and the callee pops none of them:
+    // the destroy pseudo has the caller remove all 8.
+    let insns = done.body.insns();
+    let destroy = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.name.as_deref() == Some("call_frame_destroy"))
+        .unwrap_or_else(|| panic!("{text}"));
+    let values: Vec<i64> =
+        destroy.sources.iter().filter_map(|s| if let Loc::Imm(imm) = s { Some(imm.value) } else { None }).collect();
+    assert_eq!(values, [8, 0], "{text}");
 }
 
 const REMAINDER_EXTENDED: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -613,8 +590,11 @@ declare cc 1000 void @llrm.qb.B$RDIM() addrspace(1)
 #[test]
 fn a_runtime_call_pops_every_argument_it_is_given() {
     let module = llrm_mir::parse::module(RUNTIME_CALL_MORE_ARGS_THAN_DECLARED).expect("parses");
-    let contracts =
-        super::dag_function::RuntimeContracts { abi: &Stub { flags: false }, segments: &crate::backend::target::BASIC };
+    let contracts = super::dag_function::RuntimeContracts {
+        abi: &Stub { flags: false },
+        segments: &crate::backend::target::BASIC,
+        runtime: true,
+    };
     let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
     let done = super::dag_function::selected_in_pool(
         &module,
@@ -860,4 +840,89 @@ fn a_call_of_a_constant_expression_calls_its_value() {
     let insns = done.body.insns();
     let call = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.op == Operation::Call).expect("a call");
     assert!(call.indirect, "{call:?}");
+}
+
+/// A call of a BASIC-convention routine (`pascal far`: cc 1000, no row in
+/// calling.toml) was taken to destroy every register, SI and DI too: the
+/// pointer a function kept in SI was spilled to the frame and reloaded after
+/// each call (`_part_init`: a frame, 6 reloads). The ABI's contract says it
+/// keeps SI and DI but their upper halves.
+#[test]
+fn a_call_of_a_basic_routine_keeps_si_and_di() {
+    use llrm_lir::registers::RegId;
+    const IR: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define cc 1000 void @f() addrspace(1) {
+entry:
+  call cc 1000 addrspace(1) void @user(i16 1)
+  ret void
+}
+declare cc 1000 void @user(i16) addrspace(1)
+";
+    /// The C frontend's ABI: a routine keeps SI and DI.
+    struct Keeps;
+    impl crate::backend::assemble::Abi for Keeps {
+        fn contract(
+            &self,
+            callee: &str,
+            pops: bool,
+            pushed: i64,
+        ) -> Result<crate::abi::runtime::Contract, String> {
+            use crate::abi::runtime::Reg;
+            let cleanup =
+                if pops { crate::hir::model::StackCleanup::Callee } else { crate::hir::model::StackCleanup::Caller };
+            Ok(crate::abi::qb::ordinary(callee, cleanup, pushed, &[Reg::Si, Reg::Di].into_iter().collect()))
+        }
+
+        fn linked(
+            &self,
+            name: &str,
+        ) -> String {
+            name.to_owned()
+        }
+    }
+    let module = llrm_mir::parse::module(IR).expect("parses");
+    let contracts =
+        super::dag_function::RuntimeContracts { abi: &Keeps, segments: &crate::backend::target::BASIC, runtime: false };
+    let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
+    let done = super::dag_function::selected_in_pool(
+        &module,
+        "f",
+        &llrm_x86_m16::M16,
+        crate::backend::cpu::profile("386").expect("a cpu"),
+        &[],
+        Some(&contracts),
+        pool,
+    )
+    .unwrap_or_else(|why| panic!("{}", why.0));
+    let call = done.body.insns().iter().find(|i| i.call.is_some()).cloned().expect("a call");
+    let root = |register: RegId| crate::model::ir::root(register);
+    let lost: Vec<RegId> = call.clobbers.iter().map(|r| root(*r)).collect();
+    assert!(!lost.contains(&RegId::ESI) && !lost.contains(&RegId::EDI), "{lost:?}");
+    let high: Vec<RegId> = call.clobbers_high.iter().map(|r| root(*r)).collect();
+    assert!(high.contains(&RegId::ESI) && high.contains(&RegId::EDI), "{high:?}");
+}
+
+const M16_FAR_POINTER_AS_LONG_ARGUMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare cc 1005 i16 @g(i16, i16, i16, i32, i32) addrspace(1)
+define cc 1005 i16 @f(i16 %file, ptr addrspace(1) %p) addrspace(1) {
+entry:
+  %l = ptrtoint ptr addrspace(1) %p to i32
+  %r = call cc 1005 addrspace(1) i16 @g(i16 %file, i16 %file, i16 %file, i32 %l, i32 102)
+  ret i16 %r
+}
+";
+
+/// A far pointer passed as a `long` on the stack was merged into one register
+/// (`mov dx, ax; shl edx, 16; add edx, ecx; push edx`, 11 bytes) and pushed;
+/// its two words are pushed as they are (`push es; push bx`). The pin keeps
+/// int halves merged (`isMultiStoresCheaperThanBitsMerge`); m16 deviates
+/// (SD312). QCport -Os: 131 stack arguments.
+#[test]
+fn a_far_pointer_pushed_as_a_long_is_two_word_pushes() {
+    let module = llrm_mir::parse::module(M16_FAR_POINTER_AS_LONG_ARGUMENT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let names: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+    assert!(!names.contains(&"shl"), "no merge of the halves: {names:?}");
 }

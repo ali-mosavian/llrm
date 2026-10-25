@@ -527,9 +527,10 @@ pub fn optimized(
         let profile = options.cpu()?;
         timed("mir selects", || {
             program.modules.iter_mut().try_for_each(|module| {
-                crate::backend::selects::priced(module, &*tti, &|ty| layout.expands_for("select", ty), &|name| {
-                    profile.cost(name).ok()
-                })
+                let wanted = |ty: &str| {
+                    layout.expands_for("select", ty) && !crate::backend::selects::kept_for_isel(options.isel, ty)
+                };
+                crate::backend::selects::priced(module, &*tti, &wanted, &|name| profile.cost(name).ok())
             })
         })?;
     }

@@ -63,6 +63,28 @@ pub fn fits(
     color.1 >= capacity && color.2.iter().all(|other| !interval.overlaps(other))
 }
 
+/// `IntervalSorter`: the homes heaviest first, the order they were made in
+/// between equals (`stable_sort`).
+pub(crate) fn heaviest_first(
+    order: &[i64],
+    weight: &IndexMap<i64, f64>,
+) -> Vec<i64> {
+    let of = |home: &i64| weight.get(home).copied().unwrap_or(0.0);
+    let mut sorted = order.to_vec();
+    sorted.sort_by(|a, b| of(b).partial_cmp(&of(a)).unwrap_or(std::cmp::Ordering::Equal));
+    sorted
+}
+
+/// Whether nothing in `color` is live over `interval`
+/// (`LiveIntervalUnion::overlaps` of `ColorSlot`): the slot grows to hold the
+/// bigger.
+pub fn overlaps_none(
+    color: &Color,
+    interval: &Interval,
+) -> bool {
+    color.2.iter().all(|other| !interval.overlaps(other))
+}
+
 /// The slot to put something in: one of the homes `partners` names that fits,
 /// else the first that does; none where a new slot is needed.
 pub fn choose(
@@ -268,12 +290,17 @@ pub(crate) fn slots_colored(
             }
         }
     }
-    let mut partners_of: IndexMap<i64, Vec<i64>> = IndexMap::default();
-    for (from, to) in _slot_copies(body) {
-        if let (Some(a), Some(b)) = (home_of(from.0), home_of(to.0)) {
-            if a != b {
-                partners_of.entry(a).or_default().push(b);
-                partners_of.entry(b).or_default().push(a);
+    // `ScanForSpillSlotRefs`: a slot weighs the frequency of every instruction
+    // that names it (`getSpillWeight(false, true, MBFI, MI)`).
+    let frequencies = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
+    let mut home_weight: IndexMap<i64, f64> = IndexMap::default();
+    for (at, block) in body.blocks.iter().enumerate() {
+        let frequency = frequencies.get_block_freq_relative_to_entry_block(at);
+        for one in block.insns.iter() {
+            for (disp, _, _) in frame_cells(one) {
+                if let Some(home) = home_of(disp) {
+                    *home_weight.entry(home).or_insert(0.0) += frequency;
+                }
             }
         }
     }
@@ -286,32 +313,18 @@ pub(crate) fn slots_colored(
             let mut interval = Interval::new(0, Vec::new());
             interval.segments = occupants.iter().flat_map(|one| one.segments.iter().copied()).collect();
             interval.segments.sort_unstable_by_key(|segment| (segment.start, segment.end));
-            let partners: Vec<i64> = partners_of
-                .get(home)
-                .into_iter()
-                .flatten()
-                .filter_map(|other| into.get(other).map(|at| shared[*at].0))
-                .collect();
             // A loop's slot is shared only by what is as wide: a word shares no
             // slot a double word is read from, which no register stands in for
             // (`loopslots`).
             let same = |at: &usize| shared[*at].1 == *capacity || (!looped[*at] && !in_loop.contains(home));
-            let chosen = partners
-                .iter()
-                .find_map(|home| {
-                    shared
-                        .iter()
-                        .position(|one| one.0 == *home && crate::backend::slots::fits(one, &interval, *capacity))
-                })
-                .filter(same)
-                .or_else(|| {
-                    (0..shared.len())
-                        .filter(same)
-                        .find(|at| crate::backend::slots::fits(&shared[*at], &interval, *capacity))
-                });
+            // `ColorSlot`: the first slot in use that nothing overlaps.
+            let chosen =
+                (0..shared.len()).filter(same).find(|at| crate::backend::slots::overlaps_none(&shared[*at], &interval));
             match chosen {
                 Some(at) => {
                     shared[at].2.push(interval);
+                    // The slot is as big as the biggest it holds.
+                    shared[at].1 = shared[at].1.max(*capacity);
                     looped[at] |= in_loop.contains(home);
                     into.insert(*home, at);
                 }
@@ -324,50 +337,8 @@ pub(crate) fn slots_colored(
         }
         (shared, into)
     };
-    // The colouring with fewest bytes of the orders tried: by where each home
-    // begins (first-fit in that order is optimal for intervals of one
-    // segment), most named, and made.
-    let begins = |home: &i64| -> i64 {
-        by_home
-            .get(home)
-            .and_then(|(_, _, occupants)| {
-                occupants.iter().flat_map(|one| one.segments.first()).map(|one| one.start).min()
-            })
-            .unwrap_or(i64::MAX)
-    };
-    let mut by_start = order.clone();
-    by_start.sort_by_key(begins);
-    let mut by_weight = order.clone();
-    by_weight.sort_by_key(|home| std::cmp::Reverse(home_uses.get(home).copied().unwrap_or(0)));
-    let mut by_size = order.clone();
-    by_size.sort_by_key(|home| (std::cmp::Reverse(by_home.get(home).map_or(0, |one| one.1)), begins(home)));
-    // What a colouring costs: the cells (by how many name each slot) beyond the
-    // reach of a one-byte displacement once the most named slots are nearest,
-    // then the bytes of the slots.
-    let score = |found: &(Vec<(i64, u32, Vec<Interval>)>, IndexMap<i64, usize>)| -> (usize, u64) {
-        let mut uses: Vec<(usize, u32)> = found.0.iter().map(|one| (0, one.1)).collect();
-        for (home, count) in &home_uses {
-            if let Some(color) = found.1.get(home) {
-                uses[*color].0 += count;
-            }
-        }
-        uses.sort_by_key(|one| std::cmp::Reverse(one.0));
-        let (mut at, mut far) = (0u32, 0usize);
-        for (count, capacity) in uses {
-            at += capacity;
-            if at > REACH {
-                far += count;
-            }
-        }
-        (far, found.0.iter().map(|one| u64::from(one.1)).sum())
-    };
-    let mut best = colour(&by_start);
-    for tried in [&by_size, &by_weight, &order] {
-        let found = colour(tried);
-        if score(&found) < score(&best) {
-            best = found;
-        }
-    }
+    let by_weight = heaviest_first(&order, &home_weight);
+    let best = colour(&by_weight);
     let (shared, into) = best;
     if shared.len() == order.len() {
         return _identities_dropped(body);
@@ -769,10 +740,6 @@ pub(crate) struct HomesState {
 /// than finding the homes again (cells N=448: 895 Minstr kept, 316 never kept;
 /// d_faces the other way).
 pub(crate) const FACTOR: usize = 1;
-
-/// The bytes a one-byte displacement reaches below a frame register
-/// (`-128..128`).
-pub(crate) const REACH: u32 = 128;
 
 pub(crate) fn worth_keeping(
     blocks: usize,
@@ -1363,7 +1330,7 @@ mod tests {
 
     use llrm_lir::Held;
 
-    use super::slots_colored;
+    use super::{heaviest_first, slots_colored};
     use crate::backend::frame::Frame;
     use crate::model::ir::{Loc, Mem, Operation, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
@@ -1425,6 +1392,16 @@ mod tests {
         );
         let out = slots_colored(&body, &mut frame);
         assert_eq!(out.insns().len(), 2, "fistp converts, it is no store back");
+    }
+
+    /// The colouring tried four orders of the homes and kept the fewest bytes;
+    /// the pin colours once, the heaviest slot first (`IntervalSorter`), the
+    /// homes' own order between equals.
+    #[test]
+    fn test_slots_are_coloured_heaviest_first_and_in_their_own_order_between_equals() {
+        let weight: crate::support::hash::IndexMap<i64, f64> =
+            [(-4, 1.0), (-8, 32.0), (-12, 1.0), (-16, 32.0)].into_iter().collect();
+        assert_eq!(heaviest_first(&[-4, -8, -12, -16], &weight), vec![-8, -16, -4, -12]);
     }
 
     /// x_ll_arith kept `ecx := [slot]; [slot] := ecx` when the colouring had

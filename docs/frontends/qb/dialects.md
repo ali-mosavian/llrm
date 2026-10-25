@@ -36,7 +36,7 @@ inferred from another. The Microsoft dialects are normally tested against
 their own runtime.
 
 The dialect is recorded once in the program profile. Feature checks query the
-`Dialect` predicates (`crates/frontends/qbfront/src/dialect.rs`) rather than being spread through action code as version comparisons.
+`Dialect` predicates (`crates/frontends/qb/src/dialect.rs`) rather than being spread through action code as version comparisons.
 
 ## Profile-controlled behavior
 
@@ -51,7 +51,11 @@ A profile may affect:
 
 Original QuickBASIC 4.5 and PDS 7.1 reject underscores while VBDOS accepts
 them, but that is compatibility evidence about the historical compilers, not a
-restriction in this frontend. Compiler switches still differ, and VBDOS alone
+restriction in this frontend. The lexer takes three forms only where the measured
+compiler does: a `@` name suffix (CURRENCY) under `pds71` and `vbdos`, which
+semantic analysis then refuses as unsupported; a doubled quote in a string as
+one quote, and an `_` straight after a number as a line continuation, under
+`vbdos`. Compiler switches still differ, and VBDOS alone
 provides the measured `/G3` mode. `/G3` informs ABI compatibility; the new
 compiler always targets 386+ real mode.
 
@@ -204,7 +208,7 @@ Microsoft profiles, `f"x"` is still the name `f` followed by a string.
 A value prints as Python's `str()` would print it: a float as the shortest
 text that reads back as the same SINGLE or DOUBLE. The compiler checks each
 spec against its value's type and reports Python's errors. The formatting
-itself is BASIC, in `crates/frontends/qbfront/src/semantic/prelude.bas`, which the
+itself is BASIC, in `crates/frontends/qb/src/semantic/prelude.bas`, which the
 compiler adds to programs that use f-strings. Its procedures reserve names
 beginning `QUICKR_`. Numbers are formatted from their exact decimal
 expansion, so `f`, `e`, `g` and `%` match Python digit for digit.

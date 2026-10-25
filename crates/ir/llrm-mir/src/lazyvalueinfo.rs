@@ -2275,8 +2275,8 @@ impl LazyValueInfoImpl {
 pub(crate) fn predecessors(
     function: &Function,
     bb: BlockId,
-) -> Vec<BlockId> {
-    function.predecessors(bb).iter().copied().collect()
+) -> crate::blocklist::BlockList {
+    function.predecessors(bb)
 }
 
 /// `Constant::toConstantRange` of an integer constant.

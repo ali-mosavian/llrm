@@ -110,7 +110,7 @@ fn libcalls(
     format: &str,
 ) -> Result<Vec<(String, u32, String)>, String> {
     let description = target.runtime("c").ok_or("this target has no C runtime")?;
-    libcalls_named(target, abi, format, libcall_names(&description.table()?))
+    libcalls_named(target, abi, format, libcall_names(&*description.table()?))
 }
 
 /// `libcalls` for `names`: what a runtime that named them would get.
@@ -367,7 +367,7 @@ impl Profile {
         let description = target.runtime("c").ok_or_else(|| format!("target {} has no C runtime", target.name()))?;
         let calling = target.calling();
         calling.chosen(family)?;
-        let mut profile = Self::parse(&description.table()?, family.unwrap_or(&calling.default))?;
+        let mut profile = Self::parse(&*description.table()?, family.unwrap_or(&calling.default))?;
         profile.long_double_bytes = target.layout().long_double_bytes();
         // A long double is x87's 80-bit type at every target whose layout has
         // one, whatever the ABI's other switches are: without `-fld`

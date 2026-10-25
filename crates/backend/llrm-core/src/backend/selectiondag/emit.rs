@@ -423,10 +423,6 @@ pub fn emit_in(
         for block in &mut blocks {
             pushed_arguments(&mut block.insns, ctx.stack_pointer, emitter.state, &mut emitter.classes)?;
         }
-    } else if ctx.address_mode == AddrMode::Flat32 {
-        for block in &mut blocks {
-            pushed_dwords(&mut block.insns, ctx.stack_pointer);
-        }
     }
     Ok(Emitted { blocks, classes: emitter.classes, calls: emitter.calls, inline_places: emitter.inline_places })
 }
@@ -580,145 +576,6 @@ fn pushed_arguments(
         return Err(EmitError::Unsupported("a store through the stack pointer at m16".to_owned()));
     }
     Ok(())
-}
-
-/// The flat 32-bit counterpart of [`pushed_arguments`]: the dword stores that
-/// tile the bottom of an argument area become pushes, last first, ahead of the
-/// call, and what the stores leave of the area (its alignment padding) stays a
-/// `sub esp`. An area with any other store (a float, a byte, a gap) keeps its
-/// stores in place, which `esp` addresses as they are.
-///
-/// DEVIATE CF3: the pin's `X86CallFrameOptimization` turns stores into a
-/// reserved call frame into pushes by its size heuristic (`isProfitable`); ours
-/// has no reserved frame (each call has its own `sub esp`/`add esp`), so every
-/// area that tiles becomes pushes, as the old selector's calls are. Exit: row
-/// 80, the call-frame pseudos and the reserved frame, which makes
-/// `callframe.rs` decide. Owner: sdag-d.
-fn pushed_dwords(
-    insns: &mut Vec<Arc<Insn>>,
-    sp: llrm_lir::registers::RegId,
-) {
-    let through_sp =
-        |cell: &Mem| cell.through == sp && cell.base.is_none() && cell.index.is_none() && cell.addr.is_none();
-    let is_store = |insn: &Insn| match insn.what.as_ref() {
-        Some(what) => matches!(&what.dests[..], [Loc::Mem(cell)] if through_sp(cell)),
-        None => false,
-    };
-    let is_area = |insn: &Insn| {
-        insn.what
-            .as_ref()
-            .is_some_and(
-                |what| what.name.as_deref() == Some("sub")
-                    && matches!(&what.dests[..], [Loc::Reg(reg)] if reg.register == sp)
-                    && matches!(&what.sources[..], [_, Loc::Imm(_)]),
-            )
-    };
-    let mut at = 0;
-    while at < insns.len() {
-        if !is_area(&insns[at]) {
-            at += 1;
-            continue;
-        }
-        let Some(Loc::Imm(size)) = insns[at].what.as_ref().and_then(|what| what.sources.get(1)).cloned() else {
-            at += 1;
-            continue;
-        };
-        let Some(end) = insns[at..]
-            .iter()
-            .position(|insn| insn.what.as_ref().is_some_and(|what| what.op == Operation::Call))
-            .map(|found| at + found)
-        else {
-            at += 1;
-            continue;
-        };
-        // A second area or a use of `esp` between the area and the call keeps
-        // it.
-        let others = (at + 1..end).any(|place| {
-            is_area(&insns[place])
-                || (!is_store(&insns[place])
-                    && insns[place].what.as_ref().is_some_and(|what| {
-                        what.dests
-                            .iter()
-                            .chain(&what.sources)
-                            .any(
-                                |loc| match loc {
-                                    Loc::Reg(reg) => reg.register == sp,
-                                    Loc::Mem(cell) => cell.through == sp,
-                                    _ => false,
-                                },
-                            )
-                    }))
-        });
-        let mut stores: Vec<(usize, i64, u32)> = Vec::new();
-        let mut plain = !others;
-        for place in at + 1..end {
-            if !is_store(&insns[place]) {
-                continue;
-            }
-            let what = insns[place].what.as_ref().expect("a store");
-            let Some(Loc::Mem(cell)) = what.dests.first() else { unreachable!("a store has its cell") };
-            plain &= what.op == Operation::Move && cell.width == 4;
-            stores.push((place, cell.offset, cell.width));
-        }
-        let mut sorted: Vec<(i64, u32)> = stores.iter().map(|&(_, offset, width)| (offset, width)).collect();
-        sorted.sort_unstable();
-        let mut next = 0;
-        let tiled = sorted
-            .iter()
-            .all(
-                |&(offset, width)| {
-                    let here = offset == next;
-                    next += i64::from(width);
-                    here
-                },
-            );
-        if !plain || !tiled || stores.is_empty() || next > size.value {
-            at = end + 1;
-            continue;
-        }
-        stores.sort_by_key(|&(_, offset, _)| offset);
-        let last = stores.iter().map(|&(place, _, _)| place).max().unwrap_or(end - 1);
-        let padding = size.value - next;
-        let mut pushes = Vec::new();
-        for &(place, _, _) in stores.iter().rev() {
-            let old = &insns[place];
-            let what = old.what.as_ref().expect("a store");
-            let push = Semantics {
-                name: Some("push".into()),
-                sources: vec![what.sources[0].clone()],
-                ..Semantics::new(Operation::Push)
-            };
-            pushes.push(Arc::new(Insn::new(old.at, old.covers, Some(push), vec![], old.uses.clone())));
-        }
-        let gone: std::collections::BTreeSet<usize> = stores.iter().map(|&(place, _, _)| place).collect();
-        let mut rebuilt = Vec::with_capacity(insns.len());
-        for (place, insn) in insns.drain(..).enumerate() {
-            if place == at {
-                if padding != 0 {
-                    // The area shrinks to the padding, ahead of the pushes.
-                    let mut what = insn.what.clone().expect("the area");
-                    what.sources[1] = Loc::Imm(Imm { value: padding, ..size.clone() });
-                    rebuilt.push(Arc::new(Insn::new(
-                        insn.at,
-                        insn.covers,
-                        Some(what),
-                        insn.defines.clone(),
-                        insn.uses.clone(),
-                    )));
-                }
-            } else if place == last {
-                rebuilt.append(&mut pushes);
-            } else if !gone.contains(&place) {
-                rebuilt.push(insn);
-            }
-        }
-        *insns = rebuilt;
-        at = 0;
-        while at < insns.len() && !insns[at].what.as_ref().is_some_and(|w| w.op == Operation::Call) {
-            at += 1;
-        }
-        at += 1;
-    }
 }
 
 /// An outgoing argument area whose call is in a later block (a select split the
@@ -1688,6 +1545,28 @@ impl Emitter<'_, '_> {
         )
     }
 
+    /// The offset word of the pointer in `register` for a real-mode string
+    /// operation: the word a far pointer was joined from (`offset | selector <<
+    /// 16`), so the join itself is not made (`shl; movzx; add; mov edi`);
+    /// otherwise what the register was copied from.
+    fn offset_of_pointer(
+        &mut self,
+        register: llrm_lir::registers::RegId,
+    ) -> Result<Held, EmitError> {
+        let held = self.accumulated(register)?;
+        let Some(&origin) = self.origins.get(&register) else { return Ok(held) };
+        let joined = ["OR32rr", "ADD32rr", "ADD32rr_DB"].iter().any(|name| self.is_machine_named(origin, name));
+        if !joined || self.huge_selector(origin).is_none() {
+            return Ok(held);
+        }
+        let low = self.dag.node(origin).ops.iter().copied().find(|&op| self.is_machine_named(op, "MOVZX32rr16"));
+        let Some(low) = low else { return Ok(held) };
+        let offset = self.dag.node(low).ops[0];
+        let mut offset = self.held_operand(offset)?;
+        offset.width = 2;
+        Ok(offset)
+    }
+
     /// The selector of the segment the pointer in `register` is in, as a value:
     /// DGROUP for the address of a global, SS for one of the frame, the
     /// selector loaded with a far pointer.
@@ -1838,6 +1717,20 @@ impl Emitter<'_, '_> {
                 // The area is a multiple of the call alignment; the callee pops
                 // `popped` of it, the caller the rest.
                 let bytes = (bytes + self.ctx.call_alignment - 1) / self.ctx.call_alignment * self.ctx.call_alignment;
+                // Flat 32-bit: the pin's pseudos, which `callframe.rs` turns
+                // into pushes or `sub`/`add` (DEVIATE CF4).
+                if self.ctx.address_mode == AddrMode::Flat32 {
+                    if bytes != 0 {
+                        let imm = |value: i64| Loc::Imm(Imm { value, width: 4, address: None });
+                        let (pseudo, sources) = if name.starts_with("ADJCALLSTACKDOWN") {
+                            ("call_frame_setup", vec![imm(bytes), imm(0), imm(0)])
+                        } else {
+                            ("call_frame_destroy", vec![imm(bytes), imm(popped)])
+                        };
+                        self.push(Operation::Barrier, pseudo, Vec::new(), sources);
+                    }
+                    return Ok(Some(()));
+                }
                 let (verb, count) =
                     if name.starts_with("ADJCALLSTACKDOWN") { ("sub", bytes) } else { ("add", bytes - popped) };
                 if count != 0 {
@@ -2034,7 +1927,7 @@ impl Emitter<'_, '_> {
             }
             // A call through a register or a cell of memory.
             "CALL32r" | "CALL32m" | "CALL32r_NT" | "CALL32m_NT" | "CALL16r" | "CALL16m" | "CALL16r_NT"
-            | "CALL16m_NT" => {
+            | "CALL16m_NT" | "CALL64r" | "CALL64m" | "CALL64r_NT" | "CALL64m_NT" => {
                 // At real mode the matcher spells a call of a symbol `CALL16r`
                 // of its address: a direct call, not one through an immediate
                 // (`call offset _report`; 79 programs of the m16 run).
@@ -2048,7 +1941,11 @@ impl Emitter<'_, '_> {
                     self.calls.push((at, callee));
                     return Ok(Some(()));
                 }
-                let bytes = if name.starts_with("CALL16") { 2 } else { 4 };
+                let bytes = match &name[4..6] {
+                    "16" => 2,
+                    "64" => 8,
+                    _ => 4,
+                };
                 let target = if name[6..].starts_with('m') {
                     let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short call".to_owned()))?;
                     Loc::Mem(self.cell(group, bytes)?)
@@ -2077,7 +1974,7 @@ impl Emitter<'_, '_> {
                     _ => RegId::EAX,
                 };
                 let (value, count, destination) =
-                    (self.accumulated(stored)?, self.accumulated(RegId::CX)?, self.accumulated(RegId::DI)?);
+                    (self.accumulated(stored)?, self.accumulated(RegId::CX)?, self.offset_of_pointer(RegId::DI)?);
                 let segment = self.segment_of_pointer(RegId::DI)?;
                 let (destination_after, emptied) = (self.fresh(2), self.fresh(2));
                 self.push(
@@ -2091,8 +1988,11 @@ impl Emitter<'_, '_> {
             }
             "REP_MOVSB_16" | "REP_MOVSW_16" | "REP_MOVSD_16" => {
                 use llrm_lir::registers::RegId;
-                let (count, source, destination) =
-                    (self.accumulated(RegId::CX)?, self.accumulated(RegId::SI)?, self.accumulated(RegId::DI)?);
+                let (count, source, destination) = (
+                    self.accumulated(RegId::CX)?,
+                    self.offset_of_pointer(RegId::SI)?,
+                    self.offset_of_pointer(RegId::DI)?,
+                );
                 let (from, to) = (self.segment_of_pointer(RegId::SI)?, self.segment_of_pointer(RegId::DI)?);
                 let (source_after, destination_after, emptied) = (self.fresh(2), self.fresh(2), self.fresh(2));
                 self.push(
@@ -2506,27 +2406,13 @@ impl Emitter<'_, '_> {
                     && cell.base.is_none()
                     && cell.index.is_some()
                 {
-                    // 16-bit addressing has no scale: the index is scaled by a
-                    // shift first.
-                    if cell.scale != 1 {
-                        let shift = match cell.scale {
-                            2 => 1,
-                            4 => 2,
-                            8 => 3,
-                            other => {
-                                return Err(EmitError::Unsupported(format!(
-                                    "a lea of a symbol and an index scaled by {other} at m16"
-                                )));
-                            }
-                        };
-                        let index = cell.index.take().expect("an index");
-                        let scaled = self.fresh(index.width);
-                        let amount = Loc::Imm(Imm { value: shift, width: 1, address: None });
-                        self.push(Operation::Binary, "shl", vec![Loc::Held(scaled)], vec![Loc::Held(index), amount]);
-                        cell.index = Some(scaled);
-                        cell.scale = 1;
-                    }
+                    self.unscale_index(&mut cell)?;
                     cell.base = cell.index.take();
+                }
+                // A 16-bit index beside a scale has no encoding (the scale
+                // was dropped, the address lost its doubling): shifted first.
+                if self.ctx.address_mode == AddrMode::Real16 && cell.index.is_some_and(|index| index.width == 2) {
+                    self.unscale_index(&mut cell)?;
                 }
                 // A scaled index beside a base is the 386's 32-bit form: its
                 // literal place adds nothing and has no encoding with a scale.
@@ -2789,6 +2675,32 @@ impl Emitter<'_, '_> {
         Ok(out)
     }
 
+    /// `cell` with its index scaled by a shift: 16-bit addressing has no
+    /// scale.
+    fn unscale_index(
+        &mut self,
+        cell: &mut Mem,
+    ) -> Result<(), EmitError> {
+        if cell.scale == 1 {
+            return Ok(());
+        }
+        let shift = match cell.scale {
+            2 => 1,
+            4 => 2,
+            8 => 3,
+            other => {
+                return Err(EmitError::Unsupported(format!("a lea of an index scaled by {other} at m16")));
+            }
+        };
+        let index = cell.index.take().expect("an index");
+        let scaled = self.fresh(index.width);
+        let amount = Loc::Imm(Imm { value: shift, width: 1, address: None });
+        self.push(Operation::Binary, "shl", vec![Loc::Held(scaled)], vec![Loc::Held(index), amount]);
+        cell.index = Some(scaled);
+        cell.scale = 1;
+        Ok(())
+    }
+
     /// base, scale, index, displacement, segment.
     fn cell(
         &mut self,
@@ -2907,7 +2819,7 @@ impl Emitter<'_, '_> {
             // as wide as the read, which may be inside the entry
             return Ok(Mem { base, index, scale, width: cell_width, ..pooled });
         }
-        let disp = self.constant(group[3])?;
+        let disp = self.displacement(group[3])?;
         if self.address_register(group[4], Role::Segment)?.is_some() {
             return Err(EmitError::Unsupported("a segment override".to_owned()));
         }
@@ -3049,6 +2961,14 @@ impl Emitter<'_, '_> {
             }
             other => Err(EmitError::Unsupported(format!("address component {other:?}"))),
         }
+    }
+
+    /// An address's displacement: the constant's low 32 bits, signed.
+    fn displacement(
+        &self,
+        value: SDValue,
+    ) -> Result<i64, EmitError> {
+        self.constant(value).map(|bits| i64::from(bits as i32))
     }
 
     fn constant(
