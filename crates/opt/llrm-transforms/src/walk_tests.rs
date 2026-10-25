@@ -994,6 +994,98 @@ fn test_an_os_call_whose_stack_arguments_are_unknown_stays_a_call() {
     assert!(top.contains("call i32 @parity"), "parity was inlined for nothing:\n{top}");
 }
 
+/// `@top` after the pipeline sized for bytes over `text`.
+fn sized(
+    text: &str,
+    name: &str,
+) -> String {
+    let mut module = parsed(text);
+    let applied = crate::pipeline::Applied { options: crate::pipeline::Options::size(), ..Default::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let printed = llrm_mir::print::module(&module);
+    printed.split("define").find(|one| one.contains(name)).expect("the function").to_owned()
+}
+
+/// `step(&value, &delta)` on two private globals the caller has just stored
+/// constants to folds to a constant once inlined, and the call (two pushed
+/// addresses) costs more bytes than the constant; the pin inlines it at -Os
+/// (`cost=-15, threshold=75`). The -Os bound alone refused it, and the trial
+/// (D12) looked at stack slots only: a2_small_function_twice.c 14 -> 73 bytes,
+/// memory.nib 19 -> 89.
+#[test]
+fn test_an_os_call_whose_global_arguments_hold_stored_constants_is_inlined() {
+    let top = sized(
+        "@value = internal global i16 0
+@delta = internal global i16 0
+
+define internal void @step(ptr %v, ptr %d) {
+b0:
+  %a = load i16, ptr %v
+  %m = mul i16 %a, 3
+  %b = load i16, ptr %d
+  %s = add i16 %m, %b
+  store i16 %s, ptr %v
+  ret void
+}
+
+define i16 @a2b() {
+b0:
+  store i16 7, ptr @value
+  store i16 -2, ptr @delta
+  call void @step(ptr @value, ptr @delta)
+  store i16 -4, ptr @value
+  store i16 11, ptr @delta
+  call void @step(ptr @value, ptr @delta)
+  %r = load i16, ptr @value
+  ret i16 %r
+}
+",
+        "@a2b(",
+    );
+    assert!(!top.contains("call"), "the call to step stayed:\n{top}");
+}
+
+/// The same two calls with values the caller does not know fold nothing: the
+/// call stays.
+#[test]
+fn test_an_os_call_whose_global_arguments_hold_unknown_values_stays_a_call() {
+    let top = sized(
+        "@value = internal global i16 0
+@delta = internal global i16 0
+
+define internal void @step(ptr %v, ptr %d) {
+b0:
+  %a = load i16, ptr %v
+  %m = mul i16 %a, 3
+  %b = load i16, ptr %d
+  %s = add i16 %m, %b
+  store i16 %s, ptr %v
+  ret void
+}
+
+define i16 @a2c(i16 %x, i16 %y) {
+b0:
+  store i16 %x, ptr @value
+  store i16 %y, ptr @delta
+  call void @step(ptr @value, ptr @delta)
+  store i16 %y, ptr @value
+  store i16 %x, ptr @delta
+  call void @step(ptr @value, ptr @delta)
+  %r = load i16, ptr @value
+  ret i16 %r
+}
+",
+        "@a2c(",
+    );
+    assert!(top.contains("call"), "step was inlined for nothing:\n{top}");
+}
+
 /// LLRM_CHECK_CALLEES said `the declarations held by the module's analyses
 /// differ from a fresh listing` of 26 programs: what `post_order` stated of a
 /// callee (`memory(argmem: write)`, `writeonly`) was reported edited, but the
