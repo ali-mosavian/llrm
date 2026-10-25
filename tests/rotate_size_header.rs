@@ -1,5 +1,5 @@
-//! At -Os loop rotation copies a header only when it is a compare and its
-//! branch (`looprotate::SIZE_MAX_HEADER`).
+//! At -Os loop rotation copies a header only when it is four instructions at
+//! most (`looprotate::SIZE_MAX_HEADER`).
 
 use std::process::Command;
 
@@ -20,11 +20,12 @@ fn listing(
     std::fs::read_to_string(directory.join("a.s")).unwrap()
 }
 
-const WALK: &str = "extern void use(int);\nvoid walk(const char *p) { while (*p != 0) { use(*p); p++; } }\n";
+const WALK: &str =
+    "extern void use(int);\nvoid walk(const char *p) { while (((*p ^ 5) + 3) * 7 != 0) { use(*p); p++; } }\n";
 const COUNT: &str = "extern void use(int);\nvoid count(int n) { int i; for (i = 0; i < n; i++) use(i); }\n";
 
 /// x_hash, lru, x_rle and sieve at m16 -Os grew 10 to 60 bytes each because
-/// the header (load, compare, branch) was copied above the loop.
+/// a long header (load, arithmetic, compare, branch) was copied above the loop.
 #[test]
 fn at_os_a_header_with_a_load_is_not_copied() {
     let text = listing(WALK, &["-m16", "-march=i386", "-Os"]);

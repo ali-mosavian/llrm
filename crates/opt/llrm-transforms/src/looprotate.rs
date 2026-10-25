@@ -946,12 +946,14 @@ pub fn rotate_loops(run: &mut Run) -> bool {
     changed
 }
 
-/// DEVIATE: under `-Os` the header is copied only when it is a compare and its
-/// branch. Copying more costs the bytes of the copy for the jump it saves; the
-/// pin copies up to 16 instructions at every level but `-Oz`. Measured as
-/// code bytes, m16 -Os: QCport 65 modules 262435 -> 260491, the vsgcc
-/// programs 14831 -> 14744, and 1, 3, 4, 8 and 0 all larger.
-const SIZE_MAX_HEADER: u32 = 2;
+/// DEVIATE: under `-Os` a header is copied only when it has four instructions
+/// or fewer (`RotationMaxHeaderSize` is 16 in the pin, `hasMinSize` alone
+/// lowers it). Code bytes m16 -Os, QCport 65 modules + 71 vsgcc programs, by
+/// limit: 16 = 262435 + 14831, 4 = 262098 + 14745 with no object larger than
+/// at 16; 3 and 2 save more (261979, 260491) but x_mergesort +21 and, at 2,
+/// x_base64 +23 and d_alias +20: an unrotated counted loop loses its trip
+/// count to SCEV (a `div` appears), which no header size predicts.
+const SIZE_MAX_HEADER: u32 = 4;
 
 /// `LoopRotatePass`: every loop of the function rotated with header
 /// duplication on (`EnableHeaderDuplication`), whose limit is the pass's
