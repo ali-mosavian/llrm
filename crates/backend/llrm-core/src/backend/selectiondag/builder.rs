@@ -167,6 +167,15 @@ impl BuilderTarget {
         }
     }
 
+    /// x86-64: 64-bit pointers, `i8`..`i64` in registers.
+    pub fn m64() -> BuilderTarget {
+        BuilderTarget {
+            dag: DagConfig { pointer: EVT::I64, offset_folding: true, ..DagConfig::default() },
+            legal_ints: vec![8, 16, 32, 64],
+            ..BuilderTarget::m32()
+        }
+    }
+
     /// Real mode: 16-bit near pointers, `i8`/`i16`/`i32` in registers (the
     /// pin's `In16BitMode` has `GR32` legal).
     pub fn m16() -> BuilderTarget {

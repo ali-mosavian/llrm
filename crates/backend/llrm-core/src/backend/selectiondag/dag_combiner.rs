@@ -899,6 +899,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_constant(0, vt));
             }
         }
+        if op == ISD::Srl && self.dag.opcode(n0) == ISD::Truncate {
+            if let Some(folded) = self.srl_of_trunc_of_srl(node) {
+                return Some(folded);
+            }
+        }
         if self.dag.opcode(n0) != op {
             return None;
         }
@@ -913,6 +918,44 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(self.dag.get_node(op, vt, &[x, amount]));
         }
         Some(self.dag.get_constant(0, vt))
+    }
+
+    /// `visitSRL`: `srl (trunc (srl x, c1)), c2` is 0 or `trunc (srl x,
+    /// c1+c2)` when the truncated width plus `c1` is the inner width, else
+    /// `trunc (and (srl x, c1+c2), mask)` when both nodes have one use.
+    fn srl_of_trunc_of_srl(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (trunc, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let inner = self.dag.operand(trunc, 0);
+        if self.dag.opcode(inner) != ISD::Srl {
+            return None;
+        }
+        let (c1, c2) = (self.dag.constant(self.dag.operand(inner, 1))?, self.dag.constant(n1)?);
+        let (vt, inner_vt) = (self.dag.value_type(node), self.dag.value_type(inner));
+        let (op_size, inner_size) = (u128::from(vt.size_in_bits()), u128::from(inner_vt.size_in_bits()));
+        let amount_vt = self.dag.value_type(self.dag.operand(inner, 1));
+        if c1 + op_size == inner_size {
+            if c1 + c2 >= inner_size {
+                return Some(self.dag.get_constant(0, vt));
+            }
+            let amount = self.dag.get_constant(c1 + c2, amount_vt);
+            let shifted = self.dag.get_node(ISD::Srl, inner_vt, &[self.dag.operand(inner, 0), amount]);
+            return Some(self.dag.get_node(ISD::Truncate, vt, &[shifted]));
+        }
+        if self.dag.use_count(trunc.node) == 1
+            && self.dag.use_count(inner.node) == 1
+            && c1 + c2 < inner_size
+            && c2 < op_size
+        {
+            let amount = self.dag.get_constant(c1 + c2, amount_vt);
+            let shifted = self.dag.get_node(ISD::Srl, inner_vt, &[self.dag.operand(inner, 0), amount]);
+            let mask = self.dag.get_constant(super::fold::mask((op_size - c2) as u32), inner_vt);
+            let masked = self.dag.get_node(ISD::And, inner_vt, &[shifted, mask]);
+            return Some(self.dag.get_node(ISD::Truncate, vt, &[masked]));
+        }
+        None
     }
 
     /// `visitFREEZE`, the first fold: `freeze x` is `x` when `x` cannot be
