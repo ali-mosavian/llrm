@@ -2564,10 +2564,10 @@ join:
     assert_eq!(
         listing(text, "f")[3..],
         [
-            "mov bx, word ptr [bp+6]",
             "cmp byte ptr [bp+8], 0",
             "je L0_3",
             "L0_2:",
+            "mov bx, word ptr [bp+6]",
             "add bx, bx",
             "add bx, offset a",
             "jmp L0_4",
@@ -4798,11 +4798,13 @@ b:
             "mov bp, sp",
             "L0_0:",
             "cmp byte ptr [bp+6], 0",
-            "mov ax, word ptr [bp+8]",
-            "je L0_3",
+            "je L0_4294967297",
             "L0_1:",
             "mov ax, -4",
-            "L0_3:",
+            "pop bp",
+            "retf",
+            "L0_4294967297:",
+            "mov ax, word ptr [bp+8]",
             "pop bp",
             "retf"
         ]
@@ -6823,11 +6825,11 @@ b6:
 }
 ";
     let got = listing(text, "f");
-    // The selector goes into es from a register on each path, with no copy
-    // through ax between (which register holds each selector is the
-    // allocator's).
+    // Each path loads its selector into ax and one `mov es, ax` in the join
+    // takes it, with no copy through ax between (which register holds each
+    // selector is the allocator's; the argument loads sink into the arms).
     let into_es: Vec<_> = got.iter().filter(|line| line.starts_with("mov es, ")).collect();
-    assert_eq!(into_es.len(), 2, "{got:?}");
+    assert_eq!(into_es.len(), 1, "{got:?}");
     assert!(!got.iter().any(|line| line == "mov ax, bx"), "{got:?}");
 }
 
