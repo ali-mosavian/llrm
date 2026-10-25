@@ -1935,6 +1935,26 @@ mod x64_table {
         );
     }
 
+    /// With SSE2 the x64 table selects scalar `double` arithmetic in `xmm`:
+    /// `fadd` was the x87 `ADD_Fp64` (D64-4).
+    #[test]
+    fn a_double_add_is_addsd() {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, mvt::f64), dag.input(2, mvt::f64));
+        let add = dag.node(isd::FADD, &[mvt::f64], &[a, b]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::X64,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat64,
+        });
+        assert_eq!(select_node(&Selector::new(x64::TABLE), &mut dag, &mut hooks, add), Outcome::Selected);
+        let names: Vec<_> = dag.nodes.iter().filter_map(|n| n.machine).map(names).collect();
+        assert_eq!(names, ["ADDSDrr"]);
+    }
+
     #[test]
     fn an_i32_add_is_still_add32rr() {
         assert_eq!(selected_names(mvt::i32), ["ADD32rr"]);
