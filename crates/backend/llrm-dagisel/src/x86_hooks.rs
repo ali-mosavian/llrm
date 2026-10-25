@@ -22,7 +22,7 @@
 
 use crate::dag::{Hooks, PatternContext, SDValue};
 use crate::generated::ids::{isd, mvt, x86, x86isd};
-use crate::generated::{x86_i486, x86_m16, x86_p5};
+use crate::generated::{x86_i486, x86_m16, x86_p5, x86_x64};
 use crate::instr;
 use crate::matcher::Vt;
 use crate::x86_addr::{AddrDag, AddrMode, Matcher, vt_bits};
@@ -34,6 +34,8 @@ pub enum Cpu {
     P5,
     /// Real mode: the pin's table with `m16.td` on top (C2).
     M16,
+    /// x86-64: the pin's table in 64-bit mode (D64-0). Pointers are `i64`.
+    X64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -54,7 +56,13 @@ pub struct Options {
 impl Options {
     /// `TLI->getPointerTy`: a word near pointer in real mode.
     pub fn pointer_type(&self) -> Vt {
-        if self.address_mode == AddrMode::Real16 { mvt::i16 } else { mvt::i32 }
+        if self.address_mode == AddrMode::Real16 {
+            mvt::i16
+        } else if self.cpu == Cpu::X64 {
+            mvt::i64
+        } else {
+            mvt::i32
+        }
     }
 }
 
@@ -94,6 +102,7 @@ fn complex_function(
         Cpu::I486 => x86_i486::COMPLEX_PATTERNS,
         Cpu::P5 => x86_p5::COMPLEX_PATTERNS,
         Cpu::M16 => x86_m16::COMPLEX_PATTERNS,
+        Cpu::X64 => x86_x64::COMPLEX_PATTERNS,
     };
     patterns.iter().find(|(n, _, _)| *n == id).map_or("", |(_, name, _)| name)
 }
@@ -356,6 +365,7 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
             Cpu::I486 => x86_i486::pattern_predicate(self, predicate),
             Cpu::P5 => x86_p5::pattern_predicate(self, predicate),
             Cpu::M16 => x86_m16::pattern_predicate(self, predicate),
+            Cpu::X64 => x86_x64::pattern_predicate(self, predicate),
         }
     }
 
@@ -369,6 +379,7 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
             Cpu::I486 => x86_i486::node_predicate(dag, self, value, predicate),
             Cpu::P5 => x86_p5::node_predicate(dag, self, value, predicate),
             Cpu::M16 => x86_m16::node_predicate(dag, self, value, predicate),
+            Cpu::X64 => x86_x64::node_predicate(dag, self, value, predicate),
         }
     }
 
@@ -417,6 +428,7 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
             Cpu::I486 => x86_i486::XFORMS,
             Cpu::P5 => x86_p5::XFORMS,
             Cpu::M16 => x86_m16::XFORMS,
+            Cpu::X64 => x86_x64::XFORMS,
         };
         let call = table
             .iter()
