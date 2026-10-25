@@ -130,6 +130,13 @@ static void keys_and_sound(void)
     B_BEEP();
     CHECK(headless_tone_count() == 2 && headless_tone(0).hertz == 800 && headless_tone(1).hertz == 0);
     CHECK(headless_tone(1).clock - headless_tone(0).clock >= 25);
+
+    /* in a graphics mode BEEP was silent (the graphics console passed the bell over) */
+    gfx_screen(13);
+    headless_reset();
+    headless_clock_set(0, 1);
+    B_BEEP();
+    CHECK(headless_tone_count() == 2 && headless_tone(0).hertz == 800);
 }
 
 static void music(void)
