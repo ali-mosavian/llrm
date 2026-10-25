@@ -176,13 +176,8 @@ pub fn optimized(
     // `BranchFolder::OptimizeFunction` after placement: the tails merged, then
     // the branches optimised (`threaded`), until neither changes anything. A
     // merge can leave a compare nothing selects on; LLVM leaves it (T6).
-    for _round in 0..std::cmp::max(1, placed.blocks.len() + placed.insns().len()) {
-        let explicit = placed.with_blocks(_explicit(&placed)?);
-        let Some(merged) = tailmerge::merged(&explicit, size)? else {
-            break;
-        };
-        placed = machinedce::eliminated(threaded(&merged));
-    }
+    let (merged, _) = tails_merged(placed, size)?;
+    placed = merged;
     let done = aligned(&inverted(&placed, size), cpu);
     // Every block leaves by a way the printer can read.
     #[cfg(test)]
@@ -190,6 +185,36 @@ pub fn optimized(
         masm::_falls_to(block, &done.name).expect("a block with no instruction choosing its way out");
     }
     Ok(done)
+}
+
+/// `TailMergeBlocks` and the branch optimisation to a fixed point; whether
+/// anything merged.
+fn tails_merged(
+    mut placed: LirBody,
+    size: bool,
+) -> Result<(LirBody, bool), masm::Unprintable> {
+    let mut any = false;
+    for _round in 0..std::cmp::max(1, placed.blocks.len() + placed.insns().len()) {
+        let explicit = placed.with_blocks(_explicit(&placed)?);
+        let Some(merged) = tailmerge::merged(&explicit, size)? else {
+            break;
+        };
+        any = true;
+        placed = machinedce::eliminated(threaded(&merged));
+    }
+    Ok((placed, any))
+}
+
+/// The tails merged once more after the frame's exit became instructions
+/// (`masm::exits_inserted`): the pin's `BranchFolder` sees the pops of the
+/// epilogue as instructions, so returns that share them share a tail. A body
+/// nothing merged in is returned as it was.
+pub fn tails_merged_after_exits(
+    body: LirBody,
+    size: bool,
+) -> Result<LirBody, masm::Unprintable> {
+    let (merged, any) = tails_merged(body.clone(), size)?;
+    Ok(if any { inverted(&merged, size) } else { body })
 }
 
 /// `alignBlocks`: a block of a loop that is entered other than by falling

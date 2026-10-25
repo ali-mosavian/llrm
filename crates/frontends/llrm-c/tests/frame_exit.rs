@@ -1,11 +1,11 @@
 //! The frame's exit sequence as instructions of the body (`masm::exits_inserted`).
 
-/// The listing of `source` at -Os for 32-bit x86.
-fn listing(source: &str) -> String {
+/// The listing of `source` at `level` for 32-bit x86.
+fn listing(source: &str, level: &str) -> String {
     let dir = tempfile::tempdir().expect("a directory");
     let (input, output) = (dir.path().join("in.c"), dir.path().join("out.s"));
     std::fs::write(&input, source).expect("the source");
-    let argv: Vec<String> = ["-m32", "-mabi=sysv", "-march=i486", "-Os", "-S", "-o"]
+    let argv: Vec<String> = ["-m32", "-mabi=sysv", "-march=i486", level, "-S", "-o"]
         .iter()
         .map(|one| one.to_string())
         .chain([output.display().to_string(), input.display().to_string()])
@@ -30,6 +30,23 @@ fn a_frame_pointer_is_pushed_once() {
          for (i = 1; i < 1024; ++i) if (values[i - 1] > values[i]) return -1;\n\
          for (i = 0; i < 1024; ++i) sum += (long)values[i] * ((i & 15) + 1);\n\
          return sum; }\n",
+        "-Os",
     );
     assert_eq!(text.matches("push ebp").count(), 2, "one for sort, one for f: {text}");
+}
+
+/// The pops of the epilogue were no instructions when the tails were merged,
+/// so three returns that share them kept three copies (`pop`, `pop`, `ret`
+/// each). The pin's `BranchFolder` runs after the epilogue and shares them.
+#[test]
+fn returns_that_share_an_epilogue_share_its_tail() {
+    let text = listing(
+        "int g(int);\n\
+         int f(int a, int b, int c) { int x = g(a);\n\
+         if (x == 1) return g(b) + x;\n\
+         if (x == 2) return g(c) + x * 3;\n\
+         return g(a + b) + x * c; }\n",
+        "-O2",
+    );
+    assert_eq!(text.matches("ret\n").count(), 1, "{text}");
 }
