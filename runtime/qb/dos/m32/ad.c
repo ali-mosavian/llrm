@@ -89,13 +89,10 @@ void ad_clear(AD *ad, unsigned long bytes)
         *at++ = 0;
 }
 
+/* Into a fresh array (REDIM PRESERVE): the arrays are distinct, a block copy. */
 void ad_copy(AD *to, const AD *from, unsigned long bytes)
 {
-    char *at = to->data;
-    const char *source = from->data;
-
-    while (bytes--)
-        *at++ = *source++;
+    copy_bytes((char *)to->data, (const char *)from->data, (unsigned)bytes);
 }
 
 void ad_adopt(AD *to, AD *from)
