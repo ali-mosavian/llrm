@@ -9,6 +9,9 @@ pub const REP_STOS: ISD = ISD::Target(3);
 pub const REP_MOVS: ISD = ISD::Target(4);
 /// A float call's result, popped from `st(0)`: `chain, Register $fp0, glue`.
 pub const POP_FROM_X87_REG: ISD = ISD::Target(5);
+/// A sibling call: `chain, callee, TargetConstant fpdiff, registers, regmask`;
+/// the block's end (it returns by the callee's `ret`).
+pub const TC_RETURN: ISD = ISD::Target(6);
 /// A `llrm.ia16.asm.*` block (`tools/dagisel/own_ids.txt`); see
 /// `selectiondag::inline_asm` in llrm-core.
 pub const LLRM_ASM: ISD = ISD::Target(24578);
@@ -52,6 +55,7 @@ pub fn name(code: u16) -> String {
         3 => "X86ISD::REP_STOS".into(),
         4 => "X86ISD::REP_MOVS".into(),
         5 => "X86ISD::POP_FROM_X87_REG".into(),
+        6 => "X86ISD::TC_RETURN".into(),
         24578 => "X86ISD::LLRM_ASM".into(),
         24580 => "X86ISD::SEGMENT_OF".into(),
         24581 => "X86ISD::LLRM_WINDOW".into(),
