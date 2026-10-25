@@ -31,6 +31,14 @@ INLINED = re.compile(r"'(?P<callee>[^']+)' inlined into '(?P<caller>[^']+)' with
 MISSED = re.compile(r"'(?P<callee>[^']+)' not inlined into '(?P<caller>[^']+)' because (?P<reason>[^(\n]*?)(?: \(cost=(?P<cost>-?\d+|never)(?:, threshold=(?P<threshold>-?\d+))?(?:[,:][^)]*?)?\))?\s*$", re.M)
 
 
+def premise(inlined: int, sites: int, differing: int) -> str:
+    """`difftest.premise` for sites, and failed when LLVM inlined none: a reference that never acts says nothing even where llrm disagrees with it
+    (an `internal` caller nothing calls is dead to `opt` and never visited: `idioms.bas` read "ok" with LLVM at 0 of 123 sites and llrm at 6)."""
+    if sites and inlined == 0:
+        return f"PREMISE FAILED: LLVM inlined none of {sites} sites: the reference never acted (is a caller dead and internal? make the roots external)"
+    return difftest.premise(inlined, sites, differing).replace("functions", "sites").replace("changed", "inlined")
+
+
 def sites(text: str) -> collections.Counter:
     """(caller, callee) -> how many call sites the module has."""
     found: collections.Counter = collections.Counter()
@@ -105,7 +113,7 @@ def compare(before: str, remarks: str, pipeline: str = "inline", threshold: int 
         for kind, count in (("agree", agree), ("llrm-only", llrm_only), ("llvm-only", llvm_only)):
             totals[(kind, band)] += count
     llvm_inlined = sum(row["llvm_inlined"] for row in rows)
-    return {"pipeline": pipeline, "threshold": threshold, "sites": sum(row["sites"] for row in rows), "llvm_inlined": llvm_inlined, "premise": difftest.premise(llvm_inlined, sum(row["sites"] for row in rows), sum(row["llrm_only"] + row["llvm_only"] for row in rows)).replace("functions", "sites").replace("changed", "inlined"), "rows": rows, "by_class_and_size": {f"{k}|{b}": n for (k, b), n in sorted(totals.items())}}
+    return {"pipeline": pipeline, "threshold": threshold, "sites": sum(row["sites"] for row in rows), "llvm_inlined": llvm_inlined, "premise": premise(llvm_inlined, sum(row["sites"] for row in rows), sum(row["llrm_only"] + row["llvm_only"] for row in rows)), "rows": rows, "by_class_and_size": {f"{k}|{b}": n for (k, b), n in sorted(totals.items())}}
 
 
 def opt_header() -> str:
