@@ -1185,3 +1185,33 @@ def test_the_always_on_scanners_run_before_the_lib_tests_of_a_batch():
     assert 0 <= early < lib, (early, lib)
     assert "landing_scanner_failures(changed, False)" in source[early:lib]
     assert source.find('stage("scanners")') > lib, "the full scanner set still runs after the lib tests"
+
+
+def test_beside_runs_both_and_joins_the_background_even_when_the_foreground_raises():
+    """The overlap lets the release stages run while the lib tests do; a raising foreground must not leave the background touching the checkout the next pass reuses."""
+    import threading
+
+    started, finished = threading.Event(), []
+
+    def background():
+        started.set()
+        finished.append(True)
+        return "back"
+
+    def foreground():
+        assert started.wait(5), "the background never ran beside the foreground"
+        return "front"
+
+    assert ps.beside(background, foreground) == ("front", "back")
+
+    finished.clear()
+
+    def boom():
+        raise RuntimeError("lib tests died")
+
+    try:
+        ps.beside(lambda: finished.append(True) or "back", boom)
+        raise AssertionError("the foreground error was swallowed")
+    except RuntimeError:
+        pass
+    assert finished == [True], "the background was not finished when beside returned"
