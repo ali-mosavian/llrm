@@ -30,6 +30,9 @@ enum {
 
 _Atomic uint8_t host_dirty[HOST_MAX_HEIGHT];
 
+/* A platform that shows the frame (sdl) lets the first one of a new mode reach the screen here. */
+__attribute__((weak)) void host_video_mode_changed(void);
+
 static uint8_t pixels[HOST_MAX_WIDTH * HOST_MAX_HEIGHT];
 static unsigned width = HOST_TEXT_COLUMNS * HOST_CELL_WIDTH, height = HOST_TEXT_ROWS * HOST_CELL_HEIGHT;
 static unsigned mode = HOST_MODE_TEXT, kind = KIND_TEXT, serial;
@@ -218,6 +221,8 @@ int gd_set_mode(unsigned requested)
     }
     serial++;
     touch_all();
+    if (host_video_mode_changed)
+        host_video_mode_changed();
     return 1;
 }
 

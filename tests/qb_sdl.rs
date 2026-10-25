@@ -1,0 +1,86 @@
+//! The sdl device platform (runtime/qb/dev/sdl) builds against SDL2 and runs under SDL's dummy video and audio drivers:
+//! tests/qbhost/sdl_smoke.c prints, draws, types and sounds on a worker thread and checks the frame the SDL thread
+//! presents, the keys made of SDL events, the tone in the audio callback, and that closing the window ends the program.
+//!
+//! SDL2 comes from `SDL2_CONFIG`, `sdl2-config` on the path, or tools/build-sdl2.sh's private build; a machine with
+//! none says so and does not run it.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+fn root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn sdl2_config() -> Option<PathBuf> {
+    let from_env = std::env::var_os("SDL2_CONFIG").map(PathBuf::from);
+    let private = std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache/llrm/sdl2/bin/sdl2-config"));
+    from_env
+        .into_iter()
+        .chain(private)
+        .chain([PathBuf::from("sdl2-config")])
+        .find(|path| Command::new(path).arg("--version").output().is_ok_and(|done| done.status.success()))
+}
+
+fn flags(config: &Path, which: &str) -> Vec<String> {
+    let done = Command::new(config).arg(which).output().expect("sdl2-config runs");
+    String::from_utf8_lossy(&done.stdout).split_whitespace().map(str::to_owned).collect()
+}
+
+#[test]
+fn the_sdl_platform_presents_what_the_program_draws() {
+    let Some(config) = sdl2_config() else {
+        eprintln!("SKIPPED qb_sdl: no SDL2 (set SDL2_CONFIG, install libsdl2-dev, or run tools/build-sdl2.sh)");
+        return;
+    };
+    let qb = root().join("runtime/qb");
+    let out = std::env::temp_dir().join(format!("sdl_smoke_{}", std::process::id()));
+    let mut build = Command::new("cc");
+    build.args(["-std=gnu11", "-w", "-g", "-pthread", "-D__cdecl="]);
+    build.args(flags(&config, "--cflags"));
+    for include in ["posix", ".", "dev", "dev/sdl", "dev/host", "../shared/posix"] {
+        build.arg("-I").arg(qb.join(include));
+    }
+    let runtime = [
+        "console", "cntext", "cngfx", "gfx", "gline", "gcirc", "gpaint", "gputget", "gdraw", "play", "inkey", "sleep",
+        "timer", "datetime", "events", "screen", "varptr", "fout", "i8out", "bigint", "ifout", "fin", "rtinit", "rtterm",
+        "error", "nhstutil", "stcore", "nheap", "strcase", "string",
+    ];
+    for module in runtime {
+        build.arg(qb.join(format!("{module}.c")));
+    }
+    for module in ["dev", "host", "input", "audio", "present", "sync"] {
+        build.arg(qb.join(format!("dev/sdl/{module}.c")));
+    }
+    for module in ["video", "vgadata", "tick"] {
+        build.arg(qb.join(format!("dev/host/{module}.c")));
+    }
+    for source in [
+        "runtime/shared/posix/os.c",
+        "runtime/qb/posix/startup.c",
+        "runtime/qb/posix/block.c",
+        "runtime/qb/posix/ad.c",
+        "runtime/qb/posix/mathops.c",
+        "runtime/qb/posix/paintq.c",
+        "tests/qbhost/hostmodule.c",
+        "tests/qbhost/sdl_smoke.c",
+    ] {
+        build.arg(root().join(source));
+    }
+    build.args(flags(&config, "--libs"));
+    if let Some(prefix) = config.parent().and_then(Path::parent).filter(|prefix| prefix.join("lib").is_dir()) {
+        build.arg(format!("-Wl,-rpath,{}", prefix.join("lib").display()));
+    }
+    build.arg("-lm").arg("-o").arg(&out);
+    let built = build.output().expect("cc runs");
+    assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
+    let done = Command::new(&out)
+        .env("SDL_VIDEODRIVER", "dummy")
+        .env("SDL_AUDIODRIVER", "dummy")
+        .output()
+        .expect("the program runs");
+    std::fs::remove_file(&out).ok();
+    let printed = String::from_utf8_lossy(&done.stdout).into_owned();
+    assert!(done.status.success(), "{printed}{}", String::from_utf8_lossy(&done.stderr));
+    assert_eq!(printed.trim(), "ok");
+}
