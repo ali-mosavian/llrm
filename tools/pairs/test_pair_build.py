@@ -131,3 +131,19 @@ def test_the_dist_still_compiles_after_the_pair_and_an_old_worktree_is_pruned(tm
     head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     build(scratch, repo, head, {**env, "PAIR_KEEP_MIN": "60"})
     assert not old.exists()
+
+
+def test_a_failed_cargo_build_publishes_no_dist(tmp_path):
+    """w5 found by md5 a head dist with the base's binaries: cargo failed to compile the head, the script went on and copied what the shared target held (the base's build) under the head's sha, so a pair measured the base twice."""
+    repo = tmp_path / "wt-head10"
+    base, head = repo_with_commits(repo, 2)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    env = stub(scratch, tmp_path / "targets.log")
+    build(scratch, repo, base, env)
+    failing = scratch / "cargo-fails"
+    failing.write_text("#!/bin/bash\necho 'error[E0425]: cannot find value' >&2\nexit 101\n")
+    failing.chmod(0o755)
+    done = subprocess.run(["bash", str(SCRIPT), str(scratch), head], cwd=repo, env={**env, "PAIR_CARGO": f"{failing} cargo"}, capture_output=True, text=True)
+    assert done.returncode != 0
+    assert not (scratch / f"sbp-{head}" / "ok").exists() and not (scratch / f"sbp-{head}" / "dist" / "llrm-c").exists()

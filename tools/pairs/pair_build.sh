@@ -16,6 +16,7 @@ fi
 FULL=$(git rev-parse --verify -q "$SHA^{commit}") || { echo "pair_build: $SHA is not a commit of $PWD" >&2; exit 1; }
 REPO=$(git rev-parse --show-toplevel)
 flock "$S/tgt-dist.lock" bash -c '
+  set -e  # the outer set -e does not reach this shell: a failed build went on to copy the previous build under this sha
   S=$0; T=$1; FULL=$2; REPO=$3; B=$S/tgt-dist; W=$S/wt-pair-$FULL
   # An old tree goes only when no dist of its sha is left (llrm-qb and llrm-nib may still read it).
   for old in $(find "$S" -maxdepth 1 -name "wt-pair-*" -mmin +${PAIR_KEEP_MIN:-4320}); do
