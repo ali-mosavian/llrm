@@ -482,6 +482,10 @@ impl Body<'_, '_, '_> {
                     + 1
             };
             crate::onerror::goto(self.b, &outlined.handled, outlined.handler.active, number as u16, true)?;
+            if handler == 0 {
+                let err = outlined.err;
+                self.refire(err)?;
+            }
             return Ok(Some(None));
         }
         let word = self.b.context.types.int(16);
@@ -578,6 +582,12 @@ impl Body<'_, '_, '_> {
                 handling.handlers.iter().position(|&one| one == handler).expect("each handler") + 1
             };
             crate::onerror::goto(self.b, &handling.handled, handling.active, number as u16, handling.handling)?;
+            if handler == 0 && handling.handling {
+                let selector = self.b.extract_value(handling.selector, 1, "");
+                let word = self.b.context.types.int(16);
+                let err = self.b.cast(llrm_mir::CastOp::Trunc, selector, word, "");
+                self.refire(err)?;
+            }
             return Ok(Some(None));
         }
         let Some(handling) = self.handling.as_mut() else {
@@ -648,6 +658,21 @@ impl Body<'_, '_, '_> {
         self.attributed(attributes);
         self.b.position(next);
         Ok(answered)
+    }
+
+    /// ON ERROR GOTO 0 in a handler: the error handled is raised again with
+    /// trapping off, so the runtime reports it and ends the program.
+    fn refire(
+        &mut self,
+        err: Value,
+    ) -> Emit<()> {
+        let (void, word) = (self.b.context.types.void(), self.b.context.types.int(16));
+        let ty = super::function_type(&mut self.b.context.types, void, vec![word]);
+        let (convention, _) =
+            super::convention(&self.tables.spaces, model::StackCleanup::Callee, model::CallDistance::Far, None)?;
+        let callee = Value::Constant(self.tables.callees[RAISE]);
+        self.b.call_as(convention, ty, callee, &[err], "");
+        Ok(())
     }
 
     /// A division the processor traps on, a zero divisor: where errors land,

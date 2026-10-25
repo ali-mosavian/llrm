@@ -671,8 +671,13 @@ pub(crate) fn llvm_order(
     let size = applied.options.prefers_size();
     let slot =
         |name: &'static str, inner: Box<dyn FunctionPass>| -> Box<dyn FunctionPass> { Box::new(Slot { name, inner }) };
+    // `-fno-jump-tables`: clang's "no-jump-tables" on every function, which
+    // stops SimplifyCFG's lookup tables as well as the jump tables.
+    let no_jump_tables = !applied.options.jump_tables;
     let simplify_cfg = |name| slot(name, Box::new(simplifycfg::SimplifyCfg::default()));
-    let simplify_cfg_with = |name, options| slot(name, Box::new(simplifycfg::SimplifyCfg { options }));
+    let simplify_cfg_with = |name, options: simplifycfg::Options| {
+        slot(name, Box::new(simplifycfg::SimplifyCfg { options: simplifycfg::Options { no_jump_tables, ..options } }))
+    };
     let combine = |name| slot(name, Box::new(crate::combine_pass::Combine { enabled: applied.options.combine }));
     let dead = |name| slot(name, Box::new(dead::Dead));
     // SROA runs mem2reg on what it splits: one slot, nothing between
@@ -1975,7 +1980,7 @@ mod pipeline_tests;
 fn order_seed() -> Option<u64> {
     static SEED: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
     *SEED.get_or_init(|| {
-        llrm_support::env_set("LLRM_CHECK_ORDER")
+        llrm_support::env_flag!("LLRM_CHECK_ORDER")
             .then(|| std::env::var("LLRM_CHECK_ORDER").ok().and_then(|value| value.parse().ok()))
             .flatten()
     })

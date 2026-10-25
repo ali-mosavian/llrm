@@ -48,6 +48,11 @@ pub const LLRM_TC_RETURN: ISD = ISD::Target(24587);
 /// DEVIATE: the pin has no port intrinsics; the old selector made `in`/`out`
 /// barriers. Owner sdag-a (w9).
 pub const LLRM_PORT: ISD = ISD::Target(24586);
+/// `X86ISD::VASTART_SAVE_XMM_REGS` (the pin's number): `chain, al, frame index
+/// of the register save area, offset of the first vector register's slot`,
+/// the vector argument registers not taken by named parameters stored there
+/// when `al` is not zero.
+pub const VASTART_SAVE_XMM_REGS: ISD = ISD::Target(783);
 /// A QB runtime routine's answer, which is the flags as `cmp answer, 0` leaves
 /// them: `flags` (the `EFLAGS` copy after the call) -> the answer. Only a
 /// compare with zero reads it, and `EmitCmp` returns the flags operand; no

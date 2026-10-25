@@ -139,6 +139,13 @@ pub fn moved(
             other => other.clone(),
         }
     };
+    let touched = |place: &Loc| -> bool {
+        let (Loc::Mem(Mem { addr: Some(found), .. }) | Loc::Address(AddressRef { addr: Some(found), .. })) = place
+        else {
+            return false;
+        };
+        found.space == Space::Frame && found.slot_home().is_some_and(|home| moved.contains_key(&home))
+    };
     let mut blocks = Vec::with_capacity(body.blocks.len());
     for block in &body.blocks {
         let insns: Vec<Arc<Insn>> = block
@@ -146,6 +153,11 @@ pub fn moved(
             .iter()
             .map(|one| {
                 let Some(what) = &one.what else { return Arc::clone(one) };
+                // Most instructions name no cell of a moved home: they are kept
+                // as they are, without a copy of their operands to compare.
+                if !what.dests.iter().chain(&what.sources).any(&touched) {
+                    return Arc::clone(one);
+                }
                 let (dests, sources): (Vec<Loc>, Vec<Loc>) =
                     (what.dests.iter().map(&loc).collect(), what.sources.iter().map(&loc).collect());
                 if dests == what.dests && sources == what.sources {
@@ -456,20 +468,27 @@ pub(crate) fn _slot_copies(body: &LirBody) -> Vec<((i64, u32), (i64, u32))> {
 /// this after the rewriter, which has dropped the copies whose two ends got one
 /// register; the body here still has them. Exit: run after the rewrite.
 pub(crate) fn _identities_dropped(body: &LirBody) -> LirBody {
-    let (mut defined, mut used): (IndexMap<u32, usize>, IndexMap<u32, usize>) = Default::default();
-    let mut candidates = 0usize;
-    for one in body.insns() {
-        for value in &one.defines {
-            *defined.entry(*value).or_default() += 1;
-        }
-        for value in &one.uses {
-            *used.entry(*value).or_default() += 1;
-        }
-        candidates += usize::from(frame_cells(&one).next().is_some());
-    }
-    if candidates == 0 {
+    let candidates = body.blocks.iter().any(|block| block.insns.iter().any(|one| frame_cells(one).next().is_some()));
+    if !candidates {
         return body.clone();
     }
+    // How often each value is defined and read: asked only of a store that
+    // follows its load at once, so counted when first asked.
+    let counts = std::cell::OnceCell::new();
+    let counted = || {
+        counts.get_or_init(|| {
+            let (mut defined, mut used): (IndexMap<u32, usize>, IndexMap<u32, usize>) = Default::default();
+            for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+                for value in &one.defines {
+                    *defined.entry(*value).or_default() += 1;
+                }
+                for value in &one.uses {
+                    *used.entry(*value).or_default() += 1;
+                }
+            }
+            (defined, used)
+        })
+    };
     let cell_move = |one: &Insn, load: bool| _cell_move(one, load, true);
     let mut changed = false;
     let mut blocks = Vec::with_capacity(body.blocks.len());
@@ -493,7 +512,7 @@ pub(crate) fn _identities_dropped(body: &LirBody) -> LirBody {
             }
             changed = true;
             gone[next] = true;
-            if next == at + 1 && defined.get(&value) == Some(&1) && used.get(&value) == Some(&1) {
+            if next == at + 1 && counted().0.get(&value) == Some(&1) && counted().1.get(&value) == Some(&1) {
                 gone[at] = true;
             }
         }
