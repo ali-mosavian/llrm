@@ -2060,7 +2060,9 @@ pub fn _instruction(
         }
         Operation::Move | Operation::Address => vec![format!("{name} {}, {}", dests[0], sources[0])],
         // JWasm refuses `rep bsf`; the pin prints it, so the prefix is a byte.
-        Operation::Binary if name == "bsf" => vec!["db 0F3h".to_owned(), format!("bsf {}, {}", dests[0], sources[1])],
+        Operation::Binary if name == "bsf" && what.repeat => {
+            vec!["db 0F3h".to_owned(), format!("bsf {}, {}", dests[0], sources[1])]
+        }
         Operation::Binary | Operation::Select => vec![format!("{name} {}, {}", dests[0], sources[1])],
         Operation::Unary => vec![format!("{name} {}", dests[0])],
         Operation::Compare if name.starts_with('f') => {
@@ -2313,21 +2315,24 @@ mod tests {
         Loc::Reg(ir::Reg { register: RegId::AX, width: 2 })
     }
 
-    /// `bsf` carries the pin's `rep` prefix, which JWasm refuses before
-    /// anything but a string instruction: it is the byte, then the `bsf`.
+    /// A `bsf` marked `repeat` carries the pin's `rep` prefix, which JWasm
+    /// refuses before anything but a string instruction: it is the byte,
+    /// then the `bsf`.
     #[test]
     fn test_bsf_prints_its_rep_prefix_as_a_byte() {
         let regs = crate::backend::registerinfo::test_regs();
         let eax = Loc::Reg(ir::Reg { register: RegId::EAX, width: 4 });
         let ecx = Loc::Reg(ir::Reg { register: RegId::ECX, width: 4 });
-        let scan = |name: &str| Semantics {
+        let scan = |name: &str, repeat| Semantics {
             name: Some(name.into()),
             dests: vec![eax.clone()],
             sources: vec![eax.clone(), ecx.clone()],
+            repeat,
             ..Semantics::new(Operation::Binary)
         };
-        assert_eq!(_instruction(regs, &scan("bsf"), &no_names(), 0).unwrap(), ["db 0F3h", "bsf eax, ecx"]);
-        assert_eq!(_instruction(regs, &scan("bsr"), &no_names(), 0).unwrap(), ["bsr eax, ecx"]);
+        assert_eq!(_instruction(regs, &scan("bsf", true), &no_names(), 0).unwrap(), ["db 0F3h", "bsf eax, ecx"]);
+        assert_eq!(_instruction(regs, &scan("bsf", false), &no_names(), 0).unwrap(), ["bsf eax, ecx"]);
+        assert_eq!(_instruction(regs, &scan("bsr", false), &no_names(), 0).unwrap(), ["bsr eax, ecx"]);
     }
 
     /// A string move prints as the instruction it is: `rep` where it has a

@@ -372,6 +372,7 @@ impl Peephole {
             &compares_again(&tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))),
         );
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
+        let body = crate::backend::repbsf::marked(&body, &self.cpu);
         // Last: EBP zeroed above for each cell reading it 32 bits wide, where a
         // 32-bit address is the prefixed form of a 16-bit one. A native
         // one reads whole registers.

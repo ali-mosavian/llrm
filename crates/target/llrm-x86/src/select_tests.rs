@@ -1061,16 +1061,19 @@ fn test_bts_and_btr_of_registers_encode() {
 /// `ctlz` of a word, which the pin makes `bsf` and `bsr`, were refused).
 #[test]
 fn test_bsf_bsr_and_bswap_encode() {
-    for (name, bytes) in [("bsf", "66f30fbcc1"), ("bsr", "660fbdc1")] {
-        let what = sem(
-            Operation::Binary,
-            Some(name),
-            vec![rg(RegId::EAX, 4)],
-            vec![rg(RegId::EAX, 4), rg(RegId::ECX, 4)],
-            None,
-            false,
-        );
-        assert_eq!(hex(&made(emitted(&what)).code), bytes, "{name}");
+    for (name, repeat, bytes) in [("bsf", false, "660fbcc1"), ("bsf", true, "66f30fbcc1"), ("bsr", false, "660fbdc1")] {
+        let what = Semantics {
+            repeat,
+            ..sem(
+                Operation::Binary,
+                Some(name),
+                vec![rg(RegId::EAX, 4)],
+                vec![rg(RegId::EAX, 4), rg(RegId::ECX, 4)],
+                None,
+                false,
+            )
+        };
+        assert_eq!(hex(&made(emitted(&what)).code), bytes, "{name} repeat={repeat}");
     }
     let swap = sem(Operation::Unary, Some("bswap"), vec![rg(RegId::EAX, 4)], vec![rg(RegId::EAX, 4)], None, false);
     assert_eq!(hex(&made(emitted(&swap)).code), "660fc8");
