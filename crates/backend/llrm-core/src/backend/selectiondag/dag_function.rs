@@ -25,9 +25,9 @@
 //!
 //! DEVIATE SD403: no counted-loop trip counts, so the executed-work estimate of
 //! a loop is lower than the old selector's until they are carried; branch
-//! probabilities (`odds`) are the IR's (`BranchProbabilityInfo`) for the blocks
-//! whose edges are the IR's two (`set_odds`); a merged condition's and a
-//! switch's edges have none yet; and no calls, locals, register arguments,
+//! probabilities (`odds`) are the builder's (`addSuccessorWithProb`: a branch's
+//! two edges, a merged condition's cases, `set_odds`); a switch's edges have
+//! none yet; and no calls, locals, register arguments,
 //! switch lowering or multi-register phis yet. Reason: they need the call
 //! sequence and frame objects in the emitter (D1e). Exit: D1e. Owner: sdag-d.
 //! Review 2026-12-03.
@@ -985,7 +985,7 @@ fn selected_in(
     }
     body.sealed_arguments = true;
     body.ordered = true;
-    set_odds(&mut body, module, function, &layout, &block_at);
+    set_odds(&mut body, &info.edge_probs, &block_at);
     body.frequencies = Some(crate::analysis::frequency::Frequency::over(&body, &body.blocks).table());
     // The inline routines the calls name (`ExpandDivRemLibCall`'s `divN_s`):
     // their bytes are laid down at the call, as the old route did.
@@ -1119,43 +1119,23 @@ fn landing_pad_insn(
 }
 
 /// A value read where some path to it defines nothing: (value, instruction).
-/// The branch probabilities of the body: the IR's, for each block whose two
-/// machine edges are its two IR edges (`SelectionDAGBuilder::visitCondBr`'s
-/// `addSuccessorWithProb`). A block the lowering split into a chain (a merged
-/// condition, a switch) keeps no odds, as before.
+/// The branch probabilities of the body: the edges the builder stated
+/// (`addSuccessorWithProb`: a conditional branch's two, a merged condition's
+/// cases), on the blocks whose machine edges they are. An edge nobody stated
+/// has none.
 fn set_odds(
     body: &mut LirBody,
-    module: &Module,
-    function: &llrm_mir::module::Function,
-    layout: &llrm_mir::datalayout::DataLayout,
+    edges: &[(llrm_mir::module::BlockId, llrm_mir::module::BlockId, u32)],
     block_at: &HashMap<u32, i64>,
 ) {
-    let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
-        llrm_analysis::bpi::Module {
-            context: &module.context,
-            declarations: &module.globals,
-            metadata: &module.metadata,
-            layout,
-        },
-        function,
-    );
-    for &block in function.layout() {
-        let successors = function.successors(block);
-        if successors.len() != 2 {
-            continue;
-        }
-        let at = block_at[&block.0];
+    for &(from, to, probability) in edges {
+        let (Some(&at), Some(&to_at)) = (block_at.get(&from.0), block_at.get(&to.0)) else { continue };
         let Some(lir) = body.blocks.iter().find(|one| one.at == at) else { continue };
-        let mapped: Vec<i64> = successors.iter().map(|to| block_at[&to.0]).collect();
-        if lir.succ.len() != 2 || !mapped.iter().all(|to| lir.succ.contains(to)) {
+        if lir.succ.len() < 2 || !lir.succ.contains(&to_at) {
             continue;
         }
-        for (to, ir_to) in mapped.iter().zip(successors.iter()) {
-            let probability = bpi.get_edge_probability_to(function, block, *ir_to).to_f64();
-            body.odds
-                .taken
-                .insert((at, *to), (probability * crate::model::lir::BlockOdds::CERTAIN as f64).round() as u32);
-        }
+        let entry = body.odds.taken.entry((at, to_at)).or_insert(0);
+        *entry = entry.saturating_add(probability).min(1 << 31);
     }
 }
 
