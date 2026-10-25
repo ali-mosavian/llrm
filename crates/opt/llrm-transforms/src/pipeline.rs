@@ -1980,7 +1980,7 @@ mod pipeline_tests;
 fn order_seed() -> Option<u64> {
     static SEED: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
     *SEED.get_or_init(|| {
-        llrm_support::env_set("LLRM_CHECK_ORDER")
+        llrm_support::env_flag!("LLRM_CHECK_ORDER")
             .then(|| std::env::var("LLRM_CHECK_ORDER").ok().and_then(|value| value.parse().ok()))
             .flatten()
     })
