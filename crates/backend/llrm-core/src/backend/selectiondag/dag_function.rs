@@ -1339,7 +1339,7 @@ fn shared_allocas(
         return own();
     }
     let layout: Vec<llrm_mir::module::BlockId> = function.layout().to_vec();
-    let positions: crate::support::hash::IndexMap<llrm_mir::module::InstId, i64> = layout
+    let positions: crate::support::hash::IndexMap<_, i64> = layout
         .iter()
         .flat_map(|&block| function.iter_block(block))
         .enumerate()
