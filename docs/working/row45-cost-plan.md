@@ -125,3 +125,21 @@ A throwaway build counted, per hand-written or generated sub-pass of `Peephole::
 
 **Still working under dag**: `zeroes` 1195 / 1210 (the pin's `MOV32r0` expansion), `zeroed_loads` 1604 / 1015, `narrowed_moves` 446 / 0, `high_extracts` 401 / 0, `addresses` 2893 / 2890, `far_loads` 5011 / 0, `pushes` 6587 / 0, `machinecp` 652 / 396; `unsplit` 3088 / 2963 rebuilds every block it sees, so its number says little.
 
+## The groups' floor, by ablation (2026-10-25)
+The dist build folds the groups into `Peephole::once`, so a profile cannot split one (the symbolized dist profile lists four of the m16 groups). Instead a throwaway dist build skipped parts of the work, `d_faces qbq-llrm`, board ledger command, on the head with the first-operation filter (#4493):
+
+| variant | Ir | what is left out |
+|---|--:|---|
+| as built | 878,059,875 | nothing |
+| `LLRM_FLOOR=1` | 869,037,620 | no window is ever started: -9.02 M |
+| `LLRM_FLOOR=2` | 867,105,281 | the rule groups do not run at all: -10.95 M |
+
+So the groups cost 10.95 M after the filter; the walk skeleton (`blocks`, one `Cx` per block, the loop) is 1.93 M of it, and the windows, first tests, tails, facts and rewrites 9.02 M. Skipping rewrites also changes what the later passes see, so the numbers are the groups' cost plus a small, unknown knock-on; they are not exact parts of a sum.
+
+Reading: the walk skeleton is not the lever (1.9 M, shared by every group). The 9.0 M is the work done where a rule can start, and the facts those rules ask for (`upper_zero` alone is 3.6 M), so the next row is R45-8 (facts proved once per body, not once per group), not more walk changes. R45-8 design 2026-11-13: which facts each group builds (`Facts::new` per group call: read counts, dead lanes at exits, flags live out, zero upper halves), and which survive a group that changed nothing.
+
+## R45-8 withdrawn: the facts are already held once per body (2026-10-25)
+The previous section named the facts as the next lever, on the reading that each group builds its own `Facts`. They are not recomputed per group: `incremental::Kept` holds each answer (lanes live out, flags live out, zero roots) across the sub-passes and brings it up to date from the blocks a pass changed (`Insns::same_insns`), and `liveness::asks` has a test pinning that a clean-up does not solve a function again for each sub-pass. Counted on `d_faces` at m16 -O2 over both bodies, a throwaway counter print of the three `Kept`s (answers made from scratch / brought up to date / body unchanged, blocks visited): lanes 2 / 9 / 12, flags 2 / 5 / 1 with 836 block visits, zero roots 0 / 0 / 0 (never asked at m16). That is two full solves per function, not one per group.
+
+So the 9.0 M left in the groups is the work where a rule can start and its guards (per-instruction lanes and flags after an instruction, `Cx` per block), plus the rewrites: no cache removes it. The remaining Peephole rows are the ones already dated: R45-3 (the default flip takes `zero_compares`, `constants`, `doubled` and others with it), R45-4 (addressing modes into selection), R45-7 (copy propagation, w-3). R45-2 is landed (#4493, -1.82 M on the board ledger) and the three zero sub-passes are deleted (#4471, -1.57 M on the QCport ledger).
+

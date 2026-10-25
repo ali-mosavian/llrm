@@ -651,7 +651,7 @@ fn selected_in(
     let mut hooks = X86Hooks::new(Options {
         cpu: if m16 { Cpu::M16 } else { Cpu::I486 },
         opt_none: false,
-        opt_for_size: false,
+        opt_for_size: cpu.size,
         min_size: false,
         has_frame_pointer: true,
         address_mode,
