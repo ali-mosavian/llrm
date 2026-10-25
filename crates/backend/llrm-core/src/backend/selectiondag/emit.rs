@@ -1199,7 +1199,8 @@ impl Emitter<'_, '_> {
         let when_true = held(self.operand(node.ops[1])?)?;
         let cc = self.constant(node.ops[2])? as usize;
         let jump = *CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
-        let result = self.fresh(width(node.values[0]));
+        // `CreateVirtualRegisters`: a result only exported by a `CopyToReg` is made in that register, so the export emits no copy between this select and the next.
+        let result = self.exported_register(SDValue { node: n, res: 0 }).unwrap_or_else(|| self.fresh(width(node.values[0])));
         self.values.insert(SDValue { node: n, res: 0 }, result.value);
         // The flags this select reads: the producer of the `CopyToReg EFLAGS`
         // glued to it.
