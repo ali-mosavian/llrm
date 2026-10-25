@@ -33,19 +33,24 @@
 //! through a block are not counted in its pressure, and one limit stands for
 //! every register set.
 
+use std::collections::BTreeSet;
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use llrm_lir::registers::Regs;
+use llrm_lir::registers::{RegId, Regs};
 
 use crate::backend::allocate::{LiveAt, live_rows};
 use crate::backend::classes::RegisterClasses;
 use crate::backend::liveness;
+use crate::backend::regclass;
+use crate::backend::regpressure::{Delta, Model, Pick, PressureChange, Tracker, try_pressure};
+use crate::backend::target::Segments;
+use crate::backend::twoaddr;
 use crate::model::ir::{Loc, Operation};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
-use crate::support::hash::{HashMap, HashSet};
+use crate::support::hash::{HashMap, HashSet, IndexMap};
 
 /// `MI.modifiesRegister(StackPointerRegisterToSaveRestore)` of
 /// `TargetInstrInfo::isSchedulingBoundary`: anything that writes the stack
@@ -392,129 +397,143 @@ pub fn graph(
     Graph { preds, succs, latencies }
 }
 
-/// What a candidate does to the pressure of the region at its bottom edge:
-/// `delta` values more are live once it is placed above everything already
-/// placed.
-fn pressure_after(
-    one: &Insn,
-    live: &HashSet<u32>,
-    counted: &impl Fn(u32) -> bool,
-) -> usize {
-    let defined = one.defines.iter().filter(|value| live.contains(value)).count();
-    let mut opened: Vec<u32> =
-        one.uses.iter().copied().filter(|&value| counted(value) && !live.contains(&value)).collect();
-    opened.sort_unstable();
-    opened.dedup();
-    live.len() - defined + opened.len()
+/// `LLRM_MS_TRACE`: each pick with the reason `tracePick` of the pin names, for
+/// a line-by-line reading against `llc -debug-only=machine-scheduler`.
+fn trace() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_MS_TRACE").is_some())
 }
 
-/// The most values live at once while `order` (program order, as indexes into
-/// `insns`) runs above `live_out`.
-fn peak(
-    insns: &[Arc<Insn>],
-    order: &[usize],
-    live_out: &HashSet<u32>,
-    counted: &impl Fn(u32) -> bool,
-) -> usize {
-    let mut live = live_out.clone();
-    let mut most = live.len();
-    for &node in order.iter().rev() {
-        for value in &insns[node].defines {
-            live.remove(value);
+/// What the tracker needs to follow a region's pressure bottom-up.
+pub struct Tracking<'a> {
+    pub model: &'a Model,
+    /// The values live below the region that count (`closeBottom`).
+    pub live_out: Vec<u32>,
+    /// `initLiveThru`: the live-out values no untied def in the region makes.
+    pub live_thru: Vec<u32>,
+}
+
+/// `tryCandidate` (MachineScheduler.cpp#L3965) of `GenericScheduler` for a
+/// bottom-up region of a target with no schedule model: `RegExcess`,
+/// `RegCritical`, `RegMax` where pressure is tracked, then `NodeOrder` (the
+/// later one first). Left out: `tryBiasPhysRegs` (no physical-register copy is
+/// in a region, MS4), stalls, clusters, weak edges and resources (no model),
+/// and latency, which only `ReduceLatency` turns on and `pickNode` of a
+/// bottom-up region never sets (`NoPolicy`).
+fn try_candidate(
+    try_node: usize,
+    try_delta: &Delta,
+    cand_node: usize,
+    cand_delta: &Delta,
+    tracked: bool,
+) -> Option<&'static str> {
+    if tracked {
+        for (name, try_p, cand_p) in [
+            ("REG-EXCESS", try_delta.excess, cand_delta.excess),
+            ("REG-CRIT", try_delta.critical_max, cand_delta.critical_max),
+            ("REG-MAX", try_delta.current_max, cand_delta.current_max),
+        ] {
+            match try_pressure(try_p, cand_p) {
+                Pick::Try => return Some(name),
+                Pick::Cand => return None,
+                Pick::Neither => {}
+            }
         }
-        live.extend(insns[node].uses.iter().copied().filter(|&value| counted(value)));
-        most = most.max(live.len());
     }
-    most
+    (try_node > cand_node).then_some("ORDER")
 }
 
-/// The order of a region scheduled bottom-up as `GenericScheduler` does for a
-/// target with no schedule model (MachineScheduler.cpp, #L3965): an
-/// instruction is available once every reader is placed and its ready cycle
-/// has come (`SchedBoundary::releaseNode`: the reader's cycle plus the edge's
-/// latency, so a load waits four cycles above its reader while anything else
-/// can go first; each placed instruction takes a cycle, and with nothing
-/// available the cycle jumps to the earliest ready one); among those
-/// available, with pressure tracked (a region of more than `limit / 2`
-/// instructions, `initPolicy` #L3688) the one that leaves the least excess
-/// over `limit`, then the lowest pressure, then the latest in the original
-/// order (`NodeOrder`). `live_out` holds the values live below the region.
+/// The order of a region scheduled bottom-up as `GenericScheduler` does for
+/// the i486 (MachineScheduler.cpp, #L3965): `X86.td` gives it `GenericModel`
+/// (issue width 4, a micro-op buffer of 32, no instruction schedules), so
+/// `SchedBoundary::releaseNode` never defers a node (`IsBuffered`, and one
+/// micro-op never overfills a cycle) and the latency of an edge does not
+/// order anything: an instruction is available once every reader is placed,
+/// and [`try_candidate`] picks among those. With `tracking` (a region of more
+/// than half the allocatable registers' worth of instructions, `initPolicy`
+/// #L3688) pressure is followed per set.
+///
+/// Not translated (MS6): `Rem.IsAcyclicLatencyLimited`, which turns on the
+/// height and depth heuristic in a loop whose in-flight micro-ops pass the
+/// buffer (32).
 pub fn bottom_up(
     insns: &[Arc<Insn>],
     graph: &Graph,
-    live_out: &HashSet<u32>,
-    limit: usize,
-    counted: impl Fn(u32) -> bool,
+    tracking: Option<&Tracking>,
 ) -> Vec<usize> {
     let n = insns.len();
-    let track = n > limit / 2;
     let mut waiting: Vec<usize> = graph.succs.iter().map(Vec::len).collect();
-    let mut ready_at = vec![0u32; n];
     let mut available: Vec<usize> = (0..n).filter(|&node| waiting[node] == 0).collect();
-    let mut pending: Vec<usize> = Vec::new();
-    let mut cycle = 0u32;
-    let mut live = live_out.clone();
     let mut placed = Vec::with_capacity(n);
-    while placed.len() < n {
-        if available.is_empty() {
-            // `pickOnlyChoice`: advance to the earliest ready instruction.
-            cycle = cycle.max(pending.iter().map(|&node| ready_at[node]).min().expect("a pending instruction"));
-            let (now, later): (Vec<usize>, Vec<usize>) = pending.iter().partition(|&&node| ready_at[node] <= cycle);
-            available = now;
-            pending = later;
+    // `RegionPressure` (program order) and `RegionCriticalPSets`.
+    let mut region_max: Vec<u32> = Vec::new();
+    let mut critical: Vec<PressureChange> = Vec::new();
+    let mut tracker = tracking.map(|tracking| {
+        let mut program = Tracker::new(tracking.model, tracking.live_out.iter().copied(), []);
+        for one in insns.iter().rev() {
+            program.advance_upward(one);
         }
+        region_max = program.max().to_vec();
+        critical = Tracker::critical_sets(tracking.model, &region_max);
+        Tracker::new(tracking.model, tracking.live_out.iter().copied(), tracking.live_thru.iter().copied())
+    });
+    while placed.len() < n {
         let mut best = 0;
-        for candidate in 1..available.len() {
-            let (cand, held) = (available[candidate], available[best]);
-            let better = if track {
-                let (cand_p, held_p) =
-                    (pressure_after(&insns[cand], &live, &counted), pressure_after(&insns[held], &live, &counted));
-                let (cand_excess, held_excess) = (cand_p.saturating_sub(limit), held_p.saturating_sub(limit));
-                if cand_excess != held_excess {
-                    cand_excess < held_excess
-                } else if cand_p != held_p {
-                    cand_p < held_p
-                } else {
-                    cand > held
+        let mut why = "ONLY1";
+        // `pickOnlyChoice` when only one is available.
+        if available.len() > 1 {
+            why = "FIRST";
+            let deltas: Vec<Delta> = match &tracker {
+                Some(tracker) => {
+                    available.iter().map(|&node| tracker.upward_delta(&insns[node], &critical, &region_max)).collect()
                 }
-            } else {
-                cand > held
+                None => vec![Delta::default(); available.len()],
             };
-            if better {
-                best = candidate;
+            for candidate in 1..available.len() {
+                if let Some(reason) = try_candidate(
+                    available[candidate],
+                    &deltas[candidate],
+                    available[best],
+                    &deltas[best],
+                    tracker.is_some(),
+                ) {
+                    best = candidate;
+                    why = reason;
+                }
             }
         }
         let node = available.swap_remove(best);
-        if track {
-            for value in &insns[node].defines {
-                live.remove(value);
+        if trace() {
+            eprintln!("machinesched pick {node} {:?} {why} tracked={}", insns[node].defines, tracker.is_some());
+        }
+        if let Some(tracker) = &mut tracker {
+            tracker.advance_upward(&insns[node]);
+            // `updateScheduledPressure`.
+            for entry in &mut critical {
+                let most = tracker.max()[entry.set] as i32;
+                if most > entry.inc {
+                    entry.inc = most;
+                }
             }
-            live.extend(insns[node].uses.iter().copied().filter(|&value| counted(value)));
         }
         placed.push(node);
-        for (&before, &latency) in graph.preds[node].iter().zip(&graph.latencies[node]) {
-            ready_at[before] = ready_at[before].max(cycle + latency);
+        for &before in &graph.preds[node] {
             waiting[before] -= 1;
             if waiting[before] == 0 {
-                pending.push(before);
+                available.push(before);
             }
         }
-        // The placed instruction took its cycle (issue width one).
-        cycle += 1;
-        let (now, later): (Vec<usize>, Vec<usize>) = pending.iter().partition(|&&node| ready_at[node] <= cycle);
-        available.extend(now);
-        pending = later;
     }
     placed.reverse();
     placed
 }
 
-/// The pre-RA machine scheduler: each region of a block that is longer than
-/// half the allocatable registers is ordered by [`bottom_up`] (DEVIATE MS3:
-/// values that pass through the block are not counted in its pressure; the
-/// limit is the number of allocatable registers, not the pin's per-set limits).
+/// The pre-RA machine scheduler: every region of a block ordered by
+/// [`bottom_up`]. DEVIATE MS4: regions end at more instructions than the
+/// pin's. DEVIATE RP1/RP2 are `regpressure.rs`'s.
 pub struct MachineScheduler {
     pub classes: Rc<RegisterClasses>,
+    pub segments: Segments,
 }
 
 impl LIRTransform for MachineScheduler {
@@ -530,7 +549,53 @@ impl LIRTransform for MachineScheduler {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(scheduled(&body, self.classes.available.len()))
+        let registers = &self.classes;
+        let segments = &self.segments;
+        Ok(scheduled(&body, registers.available.len(), |body, counted| {
+            let confined = regclass::classes(body, &BTreeSet::new(), segments, registers);
+            let mut widths: IndexMap<u32, i64> = IndexMap::default();
+            for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+                if let Some(what) = &one.what {
+                    for place in what.dests.iter().chain(&what.sources) {
+                        if let Loc::Held(held) = place {
+                            let held_width = i64::from(held.width);
+                            let width = widths.entry(held.value).or_insert(held_width);
+                            *width = (*width).max(held_width);
+                        }
+                    }
+                }
+            }
+            let everywhere: Vec<RegId> = registers.available.iter().map(|&reg| body.regs().root(reg)).collect();
+            let allowed: Vec<(u32, i64, Vec<RegId>)> = widths
+                .iter()
+                .filter(|&(&value, _)| counted(value))
+                .map(|(&value, &width)| {
+                    let roots = confined
+                        .get(&value)
+                        .map_or_else(
+                            || everywhere.clone(),
+                            |set| set.iter().map(|&reg| body.regs().root(reg)).collect(),
+                        );
+                    (value, width, roots)
+                })
+                .collect();
+            // DEVIATE MS5: a target with no pressure sets (m16) counts every
+            // value once against one set of its allocatable registers.
+            let Some((sets, limits)) = registers.pressure.as_ref() else {
+                let mut model = Model::new(vec![registers.available.len() as u32]);
+                let one: Rc<[usize]> = Rc::from(vec![0]);
+                for (value, _, _) in &allowed {
+                    model.count(*value, 1, one.clone());
+                }
+                return model;
+            };
+            Model::of_values(
+                sets,
+                body.regs(),
+                |set| limits[set],
+                allowed.iter().map(|(value, width, roots)| (*value, *width, &roots[..])),
+            )
+        }))
     }
 }
 
@@ -558,11 +623,13 @@ pub(crate) fn x87_values<'a>(insns: impl Iterator<Item = &'a Arc<Insn>>) -> Hash
         .collect()
 }
 
-/// `body` with each long region reordered; `limit` is the pressure it may
-/// reach.
+/// `body` with each region reordered; a region of more than `limit / 2`
+/// instructions is tracked with the model `model` makes of the body (given
+/// the test of whether a value counts).
 pub fn scheduled(
     body: &LirBody,
     limit: usize,
+    model: impl FnOnce(&LirBody, &dyn Fn(u32) -> bool) -> Model,
 ) -> LirBody {
     let (regs, bits) = (body.regs(), body.bits);
     // The x87 stack is its own register set with its own limit (DEVIATE MS3):
@@ -571,6 +638,8 @@ pub fn scheduled(
     let stack = x87_values(body.blocks.iter().flat_map(|block| block.insns.iter()));
     let counted = |value: u32| !stack.contains(&value);
     let mut live = None;
+    let mut model = Some(model);
+    let mut made: Option<Model> = None;
     let mut changed = false;
     let blocks: Vec<_> = body
         .blocks
@@ -582,9 +651,8 @@ pub fn scheduled(
             if regions.iter().all(|region| region.len() < 2) {
                 return block.clone();
             }
-            // Pressure is tracked, and so what is live below a region asked,
-            // for a region of more than half the allocatable
-            // registers only.
+            // What is live below a region is asked for a region of more than
+            // half the allocatable registers only.
             let mut now: HashSet<u32> = HashSet::default();
             if regions.iter().any(|region| region.len() > limit / 2) {
                 let live = live.get_or_insert_with(|| live_rows(body));
@@ -593,6 +661,9 @@ pub fn scheduled(
                 values.sort_unstable();
                 values.dedup();
                 now = values.into_iter().filter(|&value| counted(value) && live.live_out(block.at, value)).collect();
+                if let Some(make) = model.take() {
+                    made = Some(make(body, &counted));
+                }
             }
             let step = |now: &mut HashSet<u32>, one: &Insn| {
                 for value in &one.defines {
@@ -607,22 +678,22 @@ pub fn scheduled(
                     step(&mut now, one);
                 }
                 let slice = &insns[region.clone()];
-                // Without pressure tracked or a load (the only latency over
-                // one), every instruction is ready at once, and
-                // the latest-first choice gives back the source
-                // order: nothing to build.
-                let loads = slice.iter().any(|one| def_latency(one) > 1);
-                if slice.len() >= 2 && (loads || slice.len() > limit / 2) {
-                    let order = bottom_up(slice, &graph(slice, regs, bits), &now, limit, &counted);
-                    let source: Vec<usize> = (0..slice.len()).collect();
-                    // DEVIATE MS3: where pressure is tracked, an order that
-                    // does not lower the peak pressure is not taken (the pin
-                    // keeps source order on ties and tracks per-set limits that
-                    // are not modelled here).
-                    let taken = order != source
-                        && (slice.len() <= limit / 2
-                            || peak(slice, &order, &now, &counted) < peak(slice, &source, &now, &counted));
-                    if taken {
+                if slice.len() >= 2 {
+                    let tracking = made.as_ref().filter(|_| slice.len() > limit / 2).map(|model| {
+                        let mut live_out: Vec<u32> = now.iter().copied().collect();
+                        live_out.sort_unstable();
+                        // `initLiveThru`: a live-out value counts unless a def
+                        // in the region ties it (two-address).
+                        let tied: HashSet<u32> = slice
+                            .iter()
+                            .filter(|one| one.what.as_ref().is_some_and(twoaddr::ties))
+                            .flat_map(|one| one.defines.iter().copied())
+                            .collect();
+                        let live_thru = live_out.iter().copied().filter(|value| !tied.contains(value)).collect();
+                        Tracking { model, live_out, live_thru }
+                    });
+                    let order = bottom_up(slice, &graph(slice, regs, bits), tracking.as_ref());
+                    if order.iter().enumerate().any(|(place, &node)| place != node) {
                         let mut ats: Vec<i64> = slice.iter().map(|one| one.at).collect();
                         ats.sort_unstable();
                         for (place, &node) in order.iter().enumerate() {
@@ -676,6 +747,15 @@ mod tests {
         uses: Vec<u32>,
     ) -> Arc<Insn> {
         Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
+    }
+
+    /// Values 1..=9 weigh one in a single set whose limit is `limit`.
+    fn one_set(limit: u32) -> crate::backend::regpressure::Model {
+        let mut model = crate::backend::regpressure::Model::new(vec![limit]);
+        for value in 1..=9 {
+            model.count(value, 1, std::rc::Rc::from(vec![0]));
+        }
+        model
     }
 
     fn body() -> Vec<Arc<Insn>> {
@@ -738,10 +818,11 @@ mod tests {
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
         let found = graph(&insns, regs, 16);
-        let live_out: crate::support::hash::HashSet<u32> = [6].into_iter().collect();
-        assert_eq!(bottom_up(&insns, &found, &live_out, 2, |_| true), [0, 1, 3, 2, 4, 5]);
-        // A limit that is never reached leaves the order alone.
-        assert_eq!(bottom_up(&insns, &found, &live_out, 16, |_| true), [0, 1, 2, 3, 4, 5]);
+        let model = one_set(2);
+        let tracking = super::Tracking { model: &model, live_out: vec![6], live_thru: vec![] };
+        assert_eq!(bottom_up(&insns, &found, Some(&tracking)), [0, 1, 3, 2, 4, 5]);
+        // Pressure not followed (a small region) leaves the order alone.
+        assert_eq!(bottom_up(&insns, &found, None), [0, 1, 2, 3, 4, 5]);
     }
 
     /// The long region of a block was kept in source order whatever the
@@ -770,20 +851,23 @@ mod tests {
         );
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         let defined: Vec<u32> =
-            scheduled(&body, 2).blocks[0].insns.iter().flat_map(|one| one.defines.clone()).collect();
+            scheduled(&body, 2, |_, _| one_set(2)).blocks[0].insns.iter().flat_map(|one| one.defines.clone()).collect();
         assert_eq!(defined, [1, 2, 4, 3, 5, 6]);
-        let kept: Vec<u32> = scheduled(&body, 16).blocks[0].insns.iter().flat_map(|one| one.defines.clone()).collect();
+        let kept: Vec<u32> = scheduled(&body, 16, |_, _| one_set(2)).blocks[0]
+            .insns
+            .iter()
+            .flat_map(|one| one.defines.clone())
+            .collect();
         assert_eq!(kept, [1, 2, 3, 4, 5, 6]);
     }
 
-    /// A load is ready four cycles above its reader (the default model's
-    /// `getLoadLatency`) and a copy at once: with two independent
-    /// instructions to place meanwhile, bottom-up puts the load at the top of
-    /// the region, away from its reader, as the pin's scheduler does on an
-    /// i486. Source order had it next to the reader (x_list's loops, the
-    /// pointer chase).
+    /// A load was held back four cycles above its reader (the unbuffered
+    /// default model's `getLoadLatency`), which hoisted the loads of a block
+    /// to its top: x_dct +10 instructions. The i486's `GenericModel` is
+    /// buffered, so a load is available as soon as its reader is placed and
+    /// the order is the source's.
     #[test]
-    fn test_a_load_is_placed_four_cycles_above_its_reader_when_others_can_fill_them() {
+    fn test_a_load_stays_next_to_its_reader() {
         use super::bottom_up;
         let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
         let insns = vec![
@@ -794,19 +878,8 @@ mod tests {
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
         let found = graph(&insns, regs, 16);
-        assert_eq!(found.latencies[3], [4], "the reader waits four cycles for the load");
-        let live_out: crate::support::hash::HashSet<u32> = [1, 2, 4].into_iter().collect();
-        assert_eq!(bottom_up(&insns, &found, &live_out, 16, |_| true), [2, 0, 1, 3]);
-        // A copy is ready at once: the order stays.
-        let copies = vec![
-            insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![imm(1)]), vec![1], vec![]),
-            insn(1, semantics(Operation::Move, "mov", vec![held(2)], vec![imm(2)]), vec![2], vec![]),
-            insn(2, semantics(Operation::Move, "mov", vec![held(3)], vec![held(9)]), vec![3], vec![9]),
-            insn(3, semantics(Operation::Binary, "add", vec![held(4)], vec![held(3), imm(1)]), vec![4], vec![3]),
-        ];
-        let found = graph(&copies, regs, 16);
-        assert_eq!(found.latencies[3], [0]);
-        assert_eq!(bottom_up(&copies, &found, &live_out, 16, |_| true), [0, 1, 2, 3]);
+        assert_eq!(found.latencies[3], [4], "the reader still waits four cycles for the load");
+        assert_eq!(bottom_up(&insns, &found, None), [0, 1, 2, 3]);
     }
 
     /// A zero made before `add` was scheduled between `add` and `adc` (i64

@@ -215,7 +215,10 @@ pub fn machine_with<'a>(
         }),
         // Before any value is placed: the pin's pre-RA scheduler, bottom-up by
         // pressure.
-        Box::new(crate::backend::machinesched::MachineScheduler { classes: Rc::clone(classes) }),
+        Box::new(crate::backend::machinesched::MachineScheduler {
+            classes: Rc::clone(classes),
+            segments: segments.clone(),
+        }),
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
         Box::new(crate::backend::fixupsetcc::FixupSetCc),

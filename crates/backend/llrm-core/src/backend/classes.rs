@@ -79,6 +79,8 @@ pub struct RegisterClasses {
     status_word: Option<RegId>,
     /// The register file of the target these classes are of.
     pub registers: llrm_lir::registers::Regs,
+    /// The pressure sets and limits of the target, where it has them.
+    pub pressure: Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)>,
 }
 
 impl RegisterClasses {
@@ -160,6 +162,7 @@ impl RegisterClasses {
             },
             status_word: None,
             registers: llrm_lir::registers::Regs(arch.registers()),
+            pressure: arch.pressure(),
         };
         classes.status_word = classes.found_status_word();
         classes
