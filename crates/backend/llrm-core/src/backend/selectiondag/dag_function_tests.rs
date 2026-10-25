@@ -3250,3 +3250,24 @@ fn a_dominant_case_is_peeled_and_the_rest_follows() {
         done.body.blocks.len()
     );
 }
+
+const SDIV_FIX: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a, i32 %b) {
+entry:
+  %r = call i32 @llvm.sdiv.fix.i32(i32 %a, i32 %b, i32 9)
+  ret i32 %r
+}
+declare i32 @llvm.sdiv.fix.i32(i32, i32, i32 immarg)
+";
+
+/// `sdiv.fix` is a divide of the numerator shifted up by the scale, rounded
+/// toward negative infinity. The builder widens by one bit and the i33 result
+/// stopped the type legalizer (`promote result`: `nbody_fixed` under
+/// `--isel=dag`).
+#[test]
+fn a_fixed_point_divide_is_selected() {
+    let made = names(SDIV_FIX).unwrap_or_else(|why| panic!("{why}"));
+    // the numerator shifted up, the 64-bit divide and remainder as helper calls
+    assert!(made.iter().any(|name| name == "shld"), "{made:?}");
+    assert_eq!(made.iter().filter(|name| *name == "call").count(), 2, "{made:?}");
+}
