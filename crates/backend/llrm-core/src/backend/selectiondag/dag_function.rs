@@ -1166,14 +1166,27 @@ fn set_odds(
     edges: &[(llrm_mir::module::BlockId, llrm_mir::module::BlockId, u32)],
     block_at: &HashMap<u32, i64>,
 ) {
+    let mut stated: IndexMap<(i64, i64), u64> = IndexMap::default();
     for &(from, to, probability) in edges {
         let (Some(&at), Some(&to_at)) = (block_at.get(&from.0), block_at.get(&to.0)) else { continue };
         let Some(lir) = body.blocks.iter().find(|one| one.at == at) else { continue };
         if lir.succ.len() < 2 || !lir.succ.contains(&to_at) {
             continue;
         }
-        let entry = body.odds.taken.entry((at, to_at)).or_insert(0);
-        *entry = entry.saturating_add(probability).min(1 << 31);
+        *stated.entry((at, to_at)).or_insert(0) += u64::from(probability);
+    }
+    // `normalizeSuccProbs`: the edges of a block share one.
+    let mut total: IndexMap<i64, u64> = IndexMap::default();
+    for (&(at, _), &probability) in &stated {
+        *total.entry(at).or_insert(0) += probability;
+    }
+    for (&(at, to_at), &probability) in &stated {
+        let sum = total[&at];
+        if sum == 0 {
+            continue;
+        }
+        let scaled = u128::from(probability) * (1u128 << 31) / u128::from(sum);
+        body.odds.taken.insert((at, to_at), scaled.min(1 << 31) as u32);
     }
 }
 

@@ -35,3 +35,69 @@ fn a_loops_back_edge_is_the_likely_edge_of_the_dag_body() {
         crate::model::lir::BlockOdds::CERTAIN
     );
 }
+
+const WEIGHTED_SWITCH: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %x) {
+entry:
+  switch i32 %x, label %d [ i32 1, label %a
+                            i32 100, label %b
+                            i32 5000, label %c ], !prof !0
+a:
+  ret i32 10
+b:
+  ret i32 20
+c:
+  ret i32 30
+d:
+  ret i32 0
+}
+!0 = !{!\"branch_weights\", i32 1, i32 90, i32 5, i32 4}
+";
+
+/// The probability of reaching `target` from `from` through the body's odds
+/// (a missing edge counts as an even split).
+fn reach(
+    body: &crate::model::lir::LirBody,
+    from: i64,
+    target: i64,
+) -> f64 {
+    if from == target {
+        return 1.0;
+    }
+    let Some(block) = body.blocks.iter().find(|one| one.at == from) else { return 0.0 };
+    let succs = crate::model::lir::distinct(&block.succ);
+    succs
+        .iter()
+        .map(|to| {
+            let p =
+                body.odds.taken.get(&(from, *to)).map_or(1.0 / succs.len() as f64, |p| f64::from(*p) / 2_147_483_648.0);
+            p * reach(body, *to, target)
+        })
+        .sum()
+}
+
+/// A switch weighted 90 to one case was a chain of 50/50 compares in the DAG
+/// body: its likely case weighed like the others. Leaving by each case has the
+/// probability the IR's weights gave it.
+#[test]
+fn a_weighted_switch_leaves_by_each_case_with_the_irs_probability() {
+    let module = llrm_mir::parse::module(WEIGHTED_SWITCH).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let body = &done.body;
+    let returns = |value: i64| {
+        body.blocks
+            .iter()
+            .find(|block| {
+                block.insns.iter().any(|insn| {
+                    insn.what.as_ref().is_some_and(|what| {
+                        what.sources.iter().any(|s| matches!(s, crate::model::ir::Loc::Imm(imm) if imm.value == value))
+                    })
+                })
+            })
+            .map(|block| block.at)
+            .unwrap_or_else(|| panic!("a block returning {value}"))
+    };
+    let a = reach(body, body.entry, returns(10));
+    assert!((a - 0.9).abs() < 0.03, "leaves by the 90-weight case with {a}");
+}
