@@ -2794,7 +2794,7 @@ impl Compiler {
         let runtime_bounds = declaration.array
             && !declaration.bounds.is_empty()
             && storage != "static"
-            && (element == STRING || declaration.dynamic || spills);
+            && (element == STRING || declaration.dynamic || spills || !self.constant_bounds(declaration));
         let bounds = if runtime_bounds {
             Vec::new()
         } else {
@@ -6234,6 +6234,18 @@ impl Compiler {
         }
         let (value, type_id) = self.expression(expression)?;
         self.convert(value, type_id, INTEGER)
+    }
+
+    /// Whether every bound of `declaration` is a constant; a DIM with a
+    /// variable bound is a dynamic array, dimensioned where the DIM runs.
+    fn constant_bounds(
+        &self,
+        declaration: &Declaration,
+    ) -> bool {
+        declaration
+            .bounds
+            .iter()
+            .all(|one| one.lower.iter().chain([&one.upper]).all(|bound| self.constant(bound).is_ok()))
     }
 
     /// REDIM, or REDIM PRESERVE: PDS 7.1 BC passes B$RDMP the operands B$RDIM
