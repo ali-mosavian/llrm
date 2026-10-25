@@ -188,7 +188,7 @@ impl Globals {
         ids: &BTreeSet<GlobalId>,
     ) -> u64 {
         use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = llrm_mir::hash::Fx::default();
         (&self.tracked, &self.named, &self.entries).hash(&mut hasher);
         // By what each is, not by its id: a copy of a body is the body.
         let mut each: Vec<(bool, Option<&BTreeSet<GlobalId>>)> =
