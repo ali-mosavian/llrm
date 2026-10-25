@@ -904,7 +904,7 @@ fn staged(
             )
         })
     };
-    let Selected { body, convention, calls, inline, inline_places, inline_symbols, far, pops, depth, extents, landing } =
+    let Selected { body, convention, calls, inline, inline_places, inline_symbols, far, pops, depth, extents, landing, landings: _ } =
         selected.map_err(|error| format!("@{name}: {}", error.0))?;
     let mut registers =
         llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };

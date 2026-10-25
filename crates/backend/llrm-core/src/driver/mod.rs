@@ -466,6 +466,7 @@ pub fn optimized(
                 |module| crate::backend::ehprepare::prepared(module, &llrm_target::Target::layout(&*options.arch)),
             )
     })?;
+    timed("mir cxxeh", || program.modules.iter_mut().try_for_each(crate::backend::cxxeh::prepared))?;
     if options.arch.expands("fptoui.i64") {
         timed("mir fp to unsigned", || program.modules.iter_mut().try_for_each(crate::backend::fpconvert::expanded))?;
     }

@@ -580,6 +580,7 @@ impl<'m> Machine<'m> {
                 return unsupported("a variadic argument list");
             }
             Intrinsic::StackSave | Intrinsic::StackRestore => return unsupported("a stack pointer"),
+            Intrinsic::EhTypeidFor => return unsupported("an exception type"),
             Intrinsic::Code => return unsupported("inline code"),
             Intrinsic::Asm => return unsupported("inline assembly"),
         })

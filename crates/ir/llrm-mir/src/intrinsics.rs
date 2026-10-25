@@ -116,6 +116,9 @@ pub enum Intrinsic {
     /// `llvm.stackrestore`: the stack pointer `stacksave` returned made the
     /// stack pointer again, releasing what was allocated since.
     StackRestore,
+    /// `llvm.eh.typeid.for`: the selector a landing pad is given for a catch of the type. The exception pass makes it a
+    /// constant before selection.
+    EhTypeidFor,
     /// Inline machine code, laid down where it is called: its name carries
     /// the bytes, and each argument is a frame place whose displacement it
     /// reads at a byte offset the name gives. It answers what it leaves in
@@ -425,7 +428,7 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 51] = [
+const TABLE: [Spec; 52] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -592,6 +595,14 @@ const TABLE: [Spec; 51] = [
         returns: Slot::Void,
         parameters: &[Slot::Any(0)],
         own: None,
+    },
+    Spec {
+        name: "llvm.eh.typeid.for",
+        intrinsic: Intrinsic::EhTypeidFor,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Int(32),
+        parameters: &[Slot::Any(0)],
+        own: Some(Own { attrs: PURE, memory: NO_MEMORY, parameters: &[] }),
     },
     Spec {
         name: "llvm.va_copy",

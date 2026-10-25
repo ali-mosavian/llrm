@@ -523,6 +523,46 @@ fn a_landing_pad_is_marked_and_reachable_from_the_entry() {
     assert_eq!(done.calls.get(&landing).map(String::as_str), Some("__LANDING"));
 }
 
+const TWO_PADS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define cc 1000 void @f() addrspace(1) personality ptr addrspace(1) @llrm.qb.personality {
+entry:
+  invoke cc 1000 addrspace(1) void @llrm.qb.B$CEND() to label %next unwind label %first
+next:
+  invoke cc 1000 addrspace(1) void @llrm.qb.B$CEND() to label %done unwind label %second
+done:
+  ret void
+first:
+  %a = landingpad { ptr, i32 } cleanup
+  ret void
+second:
+  %b = landingpad { ptr, i32 } cleanup
+  ret void
+}
+declare cc 1000 void @llrm.qb.B$CEND() addrspace(1)
+declare i32 @llrm.qb.personality(...) addrspace(1)
+";
+
+/// C++ functions have a pad per cleanup. The DAG path refused the second one ("more than one landing pad"), which stopped
+/// any function with two destructors to run; each pad now has its marker and a root that reaches it.
+#[test]
+fn every_landing_pad_is_marked_and_reachable_from_the_entry() {
+    let done = select_with_contracts(TWO_PADS).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(done.landings.len(), 2, "{:?}", done.landings);
+    let by_at: std::collections::HashMap<i64, &crate::model::lir::Block> =
+        done.body.blocks.iter().map(|b| (b.at, b)).collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut work = vec![done.body.entry];
+    while let Some(at) = work.pop() {
+        if seen.insert(at) {
+            work.extend(by_at[&at].succ.iter().copied());
+        }
+    }
+    for pad in &done.landings {
+        assert!(seen.contains(pad), "{seen:?} {pad}");
+        assert_eq!(done.calls.get(pad).map(String::as_str), Some("__LANDING"));
+    }
+}
+
 const INLINE_CODE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
 declare i32 @llrm.ia16.code.89a60000.2p0(ptr)
 define i32 @f() {

@@ -724,6 +724,8 @@ pub struct Selected {
     pub extents: Vec<(i64, i64)>,
     /// The `at` of what starts the landing pad, which the runtime enters.
     pub landing: Option<i64>,
+    /// The `at` of every pad: C++ has several.
+    pub landings: Vec<i64>,
 }
 
 /// What the selector tells MIR types apart by: the one place a type's layout is
@@ -1130,6 +1132,7 @@ pub fn selected_with<'c>(
         far: BTreeSet::new(),
         pops: IndexMap::default(),
         landing: None,
+        landings: Vec::new(),
         reachable: BTreeSet::new(),
         flagged: BTreeSet::new(),
         pool,
@@ -1194,6 +1197,7 @@ pub fn selected_with<'c>(
         depth: selector.depth,
         extents: selector.extents,
         landing: selector.landing,
+        landings: selector.landings,
     })
 }
 
@@ -1770,6 +1774,8 @@ pub struct Selector<'m, 'c, 'p> {
     pops: IndexMap<i64, i64>,
     /// The `at` of what starts the landing pad.
     landing: Option<i64>,
+    /// The `at` of what starts each.
+    landings: Vec<i64>,
     /// The blocks execution can reach.
     reachable: BTreeSet<BlockId>,
     /// Calls whose result is the flags their contract says they leave.
@@ -2274,7 +2280,7 @@ impl Selector<'_, '_, '_> {
             self.cpu,
             self.compiled.rules(),
         ))?;
-        let (blocks, root) = self.rooted(blocks, block_at[&entry], pads.first().map(|pad| block_at[pad]), at);
+        let (blocks, root) = self.rooted(blocks, block_at[&entry], &pads.iter().map(|pad| block_at[pad]).collect::<Vec<_>>(), at);
         let mut body = LirBody::new(name, root, blocks, IndexMap::default(), self.pins.clone());
         body.bits = self.arch.object().bitness;
         body.registers = Some(llrm_lir::registers::Regs(self.arch.registers()));

@@ -4,14 +4,14 @@
 //! The runtime transfers control to a pad with no register intact, so the pad
 //! begins with a pseudo-call, `__LANDING`, that clobbers every register and
 //! carries the one byte `cld`. `landing_pad` emits it and records the pad's
-//! position; a function has at most one pad, and its value must have no reader.
+//! position; a pad's value must have no reader.
 //! Selection treats the pad's blocks as roots of reachability and selects them
 //! after the blocks the entry reaches.
 //!
-//! No edge leads to the pad, so `rooted` gives the function a new root block
-//! that compares the stack pointer with zero and branches to the pad on equal.
-//! The branch is never taken, and it makes the pad reachable in the machine
-//! CFG:
+//! No edge leads to a pad, so `rooted` gives the function a new root block per
+//! pad, in a chain, that compares the stack pointer with zero and branches to
+//! the pad on equal. The branch is never taken, and it makes the pad reachable
+//! in the machine CFG:
 //!
 //! ```mermaid
 //! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
@@ -95,9 +95,8 @@ impl Selector<'_, '_, '_> {
         if self.function.instruction(inst).result.is_some_and(|value| !self.function.users(value).is_empty()) {
             return Err(Unselected("a landing pad's value read after the backend prepared it".to_owned()));
         }
-        if self.landing.replace(at).is_some() {
-            return Err(Unselected("more than one landing pad".to_owned()));
-        }
+        self.landing.get_or_insert(at);
+        self.landings.push(at);
         let contract = _helper(LANDING, Default::default(), EVERY.clone());
         out.push(Arc::new(Insn {
             clobbers: call_clobbers(&contract, self.segments, &self.cpu.general),
@@ -109,23 +108,33 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
-    /// `blocks` entered at a new root `at` when there is a pad: a branch
-    /// that is never taken to it, and on to `entry`. The root, and `blocks`.
+    /// `blocks` entered at new roots when there are pads: each a branch that is never taken to a pad, and on to the next
+    /// root, the last to `entry`. The roots, and `blocks`.
     pub(super) fn rooted(
         &self,
         blocks: Vec<Block>,
         entry: i64,
-        pad: Option<i64>,
+        pads: &[i64],
         at: i64,
     ) -> (Vec<Block>, i64) {
-        let Some(pad) = pad else { return (blocks, entry) };
+        if pads.is_empty() {
+            return (blocks, entry);
+        }
         let sp = Loc::Reg(Reg { register: crate::model::ir::STACK, width: 2 });
         let zero = Loc::Imm(Imm { value: 0, width: 2, address: None });
-        let never = [
-            insn(at, semantics(Operation::Compare, "cmp", vec![], vec![sp, zero])),
-            insn(at, Semantics { target: Some(pad), ..semantics(Operation::Branch, "je", vec![], vec![]) }),
-        ];
-        let root = LirBlock { succ: vec![pad, entry].into(), ..LirBlock::new(at, never.to_vec()) };
-        (std::iter::once(Block::from(root)).chain(blocks).collect(), at)
+        let roots: Vec<Block> = pads
+            .iter()
+            .enumerate()
+            .map(|(one, &pad)| {
+                let here = at + one as i64;
+                let next = if one + 1 < pads.len() { here + 1 } else { entry };
+                let never = [
+                    insn(here, semantics(Operation::Compare, "cmp", vec![], vec![sp.clone(), zero.clone()])),
+                    insn(here, Semantics { target: Some(pad), ..semantics(Operation::Branch, "je", vec![], vec![]) }),
+                ];
+                Block::from(LirBlock { succ: vec![pad, next].into(), ..LirBlock::new(here, never.to_vec()) })
+            })
+            .collect();
+        (roots.into_iter().chain(blocks).collect(), at)
     }
 }

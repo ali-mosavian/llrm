@@ -664,7 +664,7 @@ fn body_start(
 
 /// Each phi of the pad a slot its predecessors store into before they call,
 /// as DemotePHIToStack makes it.
-fn demote_phis(
+pub(super) fn demote_phis(
     context: &Context,
     function: &mut Function,
     pad: BlockId,
@@ -737,7 +737,7 @@ fn live_in(function: &Function) -> BTreeMap<BlockId, BTreeSet<ValueId>> {
 
 /// Each value live into the pad kept in a slot: stored where it is made,
 /// loaded where it is read, as DemoteRegToStack does.
-fn demote_live(
+pub(super) fn demote_live(
     context: &Context,
     function: &mut Function,
     pad: BlockId,

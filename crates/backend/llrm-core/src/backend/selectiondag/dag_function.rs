@@ -846,7 +846,7 @@ fn selected_in(
     let mut emitted: Vec<EmitBlock> = Vec::new();
     let mut calls = IndexMap::default();
     // the landing pad the runtime enters, which no edge reaches
-    let mut landing: Option<i64> = None;
+    let mut landings: Vec<i64> = Vec::new();
     let mut sinks: HashSet<i64> = HashSet::default();
     let mut inline_places = IndexMap::default();
     // the call sites whose callee is far code (address space 1): a far call
@@ -923,10 +923,8 @@ fn selected_in(
             let Some(contracts) = contracts.filter(|contracts| contracts.runtime) else {
                 return refuse("a landing pad of a program with no runtime contracts");
             };
-            if landing.replace(emitted[from].at).is_some() {
-                return refuse("more than one landing pad");
-            }
             let at = emitted[from].at;
+            landings.push(at);
             let pad = landing_pad_insn(at, contracts.segments, &cpu.general);
             emitted[from].insns.insert(0, std::sync::Arc::new(pad));
             calls.insert(at, LANDING.to_owned());
@@ -979,11 +977,11 @@ fn selected_in(
     // `UnreachableMachineBlockElim`: a block no edge leads to (the
     // `unreachable` default of a switch whose cases cover its values) is
     // dropped, with the phi inputs that came from it.
-    let (emitted, succ) = without_unreachable(emitted, succ, landing);
+    let (emitted, succ) = without_unreachable(emitted, succ, landings.iter().copied());
     // Every value read is defined on every path to the read (a phi, an
     // instruction, an arrival): a LIR that reads one nothing defines on some
     // path stops the allocator's liveness, so it is a refusal here.
-    if let Some((value, name)) = read_before_defined(&emitted, &succ, landing) {
+    if let Some((value, name)) = read_before_defined(&emitted, &succ, landings.iter().copied()) {
         return refuse(format!("--isel=dag: value {value} is read and not defined on every path ({name:?})"));
     }
     // A floating value is a 10-byte register value: read at another width it is
@@ -1018,10 +1016,14 @@ fn selected_in(
     // the function is refused (the stackifier would fail the compile).
     // A function with a pad is entered through a root block that never branches
     // to it, so the pad is reachable in the machine's graph.
-    let root_at = landing.map(|_| state.next_address());
-    let blocks: Vec<Block> = root_at
-        .zip(landing)
-        .map(|(at, pad)| {
+    let roots: Vec<i64> = landings.iter().map(|_| state.next_address()).collect();
+    let root_at = roots.first().copied();
+    let blocks: Vec<Block> = roots
+        .iter()
+        .copied()
+        .zip(landings.iter().copied())
+        .enumerate()
+        .map(|(one, (at, pad))| {
             let never = [
                 crate::backend::isel::insn(
                     at,
@@ -1046,8 +1048,10 @@ fn selected_in(
                     },
                 ),
             ];
-            Block::from(LirBlock { succ: vec![pad, emitted[0].at].into(), ..LirBlock::new(at, never.to_vec().into()) })
+            let next = roots.get(one + 1).copied().unwrap_or(emitted[0].at);
+            Block::from(LirBlock { succ: vec![pad, next].into(), ..LirBlock::new(at, never.to_vec().into()) })
         })
+        .collect::<Vec<_>>()
         .into_iter()
         .chain(emitted.iter().zip(succ).map(|(block, succ)| -> Block {
             LirBlock {
@@ -1094,7 +1098,7 @@ fn selected_in(
             }
         }
     }
-    if let Some(at) = landing {
+    for &at in &landings {
         inline.insert(at, vec![CLD]);
     }
     // Inline code: its bytes with each frame place patched as a displacement
@@ -1135,7 +1139,8 @@ fn selected_in(
         pops: IndexMap::default(),
         depth: frame.depth.get(),
         extents: frame.locals.borrow().clone(),
-        landing,
+        landing: landings.first().copied(),
+        landings,
     })
 }
 
@@ -1144,12 +1149,12 @@ fn selected_in(
 fn without_unreachable(
     mut emitted: Vec<EmitBlock>,
     succ: Vec<Vec<i64>>,
-    landing: Option<i64>,
+    landings: impl IntoIterator<Item = i64>,
 ) -> (Vec<EmitBlock>, Vec<Vec<i64>>) {
     let index: HashMap<i64, usize> = emitted.iter().enumerate().map(|(i, b)| (b.at, i)).collect();
     let mut reached = vec![false; emitted.len()];
     let mut work: Vec<usize> = vec![0];
-    work.extend(landing.and_then(|at| index.get(&at).copied()));
+    work.extend(landings.into_iter().filter_map(|at| index.get(&at).copied()));
     while let Some(at) = work.pop() {
         if std::mem::replace(&mut reached[at], true) {
             continue;
@@ -1287,7 +1292,7 @@ fn set_odds(
 pub(super) fn read_before_defined(
     blocks: &[EmitBlock],
     succ: &[Vec<i64>],
-    landing: Option<i64>,
+    landings: impl IntoIterator<Item = i64>,
 ) -> Option<(u32, Option<String>)> {
     let index: llrm_support::hash::HashMap<i64, usize> = blocks.iter().enumerate().map(|(i, b)| (b.at, i)).collect();
     // A copy of a value to itself defines nothing.
@@ -1336,7 +1341,7 @@ pub(super) fn read_before_defined(
     entry[0] = Some(Values::new(bits));
     // The runtime enters a landing pad with no value defined: a root of its
     // own.
-    if let Some(&pad) = landing.and_then(|at| index.get(&at)) {
+    for pad in landings.into_iter().filter_map(|at| index.get(&at).copied()) {
         entry[pad] = Some(Values::new(bits));
     }
     let mut work: std::collections::VecDeque<usize> = (0..blocks.len()).filter(|&at| entry[at].is_some()).collect();
