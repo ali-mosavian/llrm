@@ -598,3 +598,31 @@ fn a_bitcast_between_a_float_and_an_integer_goes_through_the_stack() {
             .unwrap_or_else(|e| panic!("{name}: {}", e.0));
     }
 }
+
+const FLOAT_NOT_COMPARE_BRANCH: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @g()
+declare void @h()
+define void @f(float %a, float %b) {
+  %d = fsub float %a, %b
+  %c = fcmp ogt float %d, 0.0
+  %n = xor i1 %c, true
+  br i1 %n, label %x, label %y
+x:
+  call void @g()
+  ret void
+y:
+  call void @h()
+  ret void
+}
+";
+
+/// `if (!(d > 0))` (a float select branches the same way) was `fcom; sahf; seta
+/// al; xor al, 1; test al, 1; jne`: the `xor` of a float `setcc` was only
+/// folded for integer compares. The pin inverts the condition (`ogt` to `ule`)
+/// and branches on the flags, `jbe`. QCport pl_move.c -Os m16: 26 `seta`,
+/// mdl_ai.c: 64 (pin 15).
+#[test]
+fn a_branch_on_a_negated_float_compare_reads_the_compares_flags() {
+    let seen = names(FLOAT_NOT_COMPARE_BRANCH).expect("selects");
+    assert!(!seen.iter().any(|n| matches!(n.as_str(), "seta" | "setbe" | "xor" | "test")), "{seen:?}");
+}

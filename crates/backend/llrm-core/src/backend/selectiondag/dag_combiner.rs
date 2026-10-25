@@ -554,11 +554,18 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let (lhs, rhs) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
-        if !self.dag.value_type(lhs).is_integer() {
+        let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(n0, 2)).data else { return None };
+        if self.dag.value_type(lhs).is_integer() {
+            return Some(self.dag.get_setcc(vt, lhs, rhs, cc.inverse_integer()));
+        }
+        // `!(x cc y) -> (x !cc y)`; X86 expands `oeq` and `une` on every
+        // floating-point type (two flags), so after legalization the
+        // inverse must not be one of them.
+        let not_cc = cc.inverse_float();
+        if self.level == CombineLevel::AfterLegalizeDag && matches!(not_cc, CondCode::SetOEq | CondCode::SetUNe) {
             return None;
         }
-        let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(n0, 2)).data else { return None };
-        Some(self.dag.get_setcc(vt, lhs, rhs, cc.inverse_integer()))
+        Some(self.dag.get_setcc(vt, lhs, rhs, not_cc))
     }
 
     /// The users of `old` read `new`, and are looked at again.
