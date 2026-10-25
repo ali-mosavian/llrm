@@ -182,15 +182,15 @@ fn a_copy_to_a_physical_register_is_a_mov() {
     });
 }
 
-/// A condition-coded opcode has no single form: it is refused, not guessed.
+/// An opcode with no form (an atomic exchange-add) is refused, not guessed.
 #[test]
 fn an_unmapped_opcode_is_an_error() {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let entry = dag.entry_node();
     let a = copy_from(&mut dag, entry, 10);
     let b = copy_from(&mut dag, entry, 11);
-    let bsf = machine(&mut dag, "BSF32rr", &[EVT::I32], &[a, b]);
-    let root = copy_to(&mut dag, entry, 12, bsf);
+    let cmov = machine(&mut dag, "LXADD32", &[EVT::I32], &[a, b]);
+    let root = copy_to(&mut dag, entry, 12, cmov);
     context(|ctx| {
         let units = schedule(&dag, root, &Info);
         assert!(matches!(emit(&dag, &units, ctx), Err(EmitError::Unmapped(_))));
