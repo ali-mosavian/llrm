@@ -40,6 +40,36 @@ def defined(ir: str) -> list[str]:
     return [name.strip('"') for name in re.findall(r'^define\b[^@\n]*@("[^"\n]+"|[^\s(]+)\(', ir, re.M)]
 
 
+def fp80(match: re.Match) -> str:
+    """`x86_fp80 0x<double bits>` (how llrm writes it) as LLVM's `0xK<sign+exponent><mantissa>`."""
+    bits = int(match.group(1), 16)
+    sign, exponent, fraction = bits >> 63, (bits >> 52) & 0x7FF, bits & ((1 << 52) - 1)
+    if exponent == 0x7FF:
+        exponent, mantissa = 0x7FFF, (1 << 63) | (fraction << 11)
+    elif exponent == 0:
+        exponent, mantissa = 0, fraction << 11
+        if fraction:
+            shift = 64 - mantissa.bit_length()
+            exponent, mantissa = 16383 - 1022 - shift, mantissa << shift
+    else:
+        exponent, mantissa = exponent - 1023 + 16383, (1 << 63) | (fraction << 11)
+    return f"x86_fp80 0xK{sign << 15 | exponent:04X}{mantissa:016X}"
+
+
+def pin_ir(text: str) -> str:
+    """llrm's IR as the pin reads it: llrm's calling conventions are not LLVM's, `switch table` is llrm's own form of a switch, and an
+    fp80 constant is spelled with the bits of a double."""
+    text = re.sub(r"\b(?:watcallcc|sysvcc|regparm3cc|cdeclcc|pascalcc|ia16cc) ", "", text)
+    text = text.replace("switch table ", "switch ")
+    return re.sub(r"x86_fp80 0x([0-9A-Fa-f]{16})\b", fp80, text)
+
+
+def first_error(stderr: str) -> str:
+    """The first line that says `error`, else the last line: llc's last line is the caret under it."""
+    lines = stderr.strip().splitlines() or ["?"]
+    return next((line for line in lines if "error" in line), lines[-1]).strip()
+
+
 def whole_program(program: str, ir: str, bucket: str) -> list[tuple[str, str, str]]:
     """A failure of the whole run: every defined function lands in `bucket`, so the total holds."""
     return [(program, f, bucket) for f in defined(ir)] or [(program, "*", bucket)]
@@ -153,7 +183,7 @@ def compare(shadow: str, ir: Path, program: str) -> list[tuple[str, str, str]]:
     funcs, refused = ours(mine.stdout)
     theirs = pin.llc(["-O2", "-stop-after=finalize-isel", "-o", "-"], ir.read_text(), pin.target("m32"))
     if theirs.returncode != 0:
-        return whole_program(program, ir.read_text(), "pin llc failed: " + (theirs.stderr.strip().splitlines() or ["?"])[-1][:60])
+        return whole_program(program, ir.read_text(), "pin llc failed: " + first_error(theirs.stderr)[-60:])
     return rows_of(program, funcs, refused, pin_opcodes(theirs.stdout), ir.read_text())
 
 
@@ -178,9 +208,9 @@ def one(llrm_c: str, shadow: str, source: Path, m16: bool = False, level: str = 
         funcs, refused = ours(mine.stdout)
         if m16:
             return rows_of(source.stem, funcs, refused, None, ir.read_text())
-        theirs = pin.llc(["-O2", "-stop-after=finalize-isel", "-o", "-"], ir.read_text(), pin.target("m32", optsize=level == "-Os"))
+        theirs = pin.llc(["-O2", "-stop-after=finalize-isel", "-o", "-"], pin_ir(ir.read_text()), pin.target("m32", optsize=level == "-Os"))
         if theirs.returncode != 0:
-            return whole_program(source.stem, ir.read_text(), "pin llc failed: " + (theirs.stderr.strip().splitlines() or ["?"])[-1][:60])
+            return whole_program(source.stem, ir.read_text(), "pin llc failed: " + first_error(theirs.stderr)[-60:])
         pinned = pin_opcodes(theirs.stdout)
         return rows_of(source.stem, funcs, refused, pinned, ir.read_text())
 
@@ -213,6 +243,8 @@ def main() -> int:
     print(f"{buckets[good]} {good} of {len(rows)} defined functions in {len(sources)} programs")
     for bucket, n in buckets.most_common():
         print(f"{n:6d}  {bucket}")
+    skipped = sum(n for bucket, n in buckets.items() if "failed" in bucket or "crashed" in bucket)
+    print(f"{skipped} of {len(rows)} functions were not compared (a tool failed on their program)")
     if args.out:
         Path(args.out).write_text("".join(f"{p}\t{f}\t{b}\n" for p, f, b in rows))
     return 0 if buckets[good] == len(rows) else 1
