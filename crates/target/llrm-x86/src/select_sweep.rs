@@ -4414,11 +4414,11 @@ fn sweep_10() {
     check(sem(Op::Unary, Some("dec"), vec![m(Some(a(Space::Literal, 64, 0, R::None, R::None)), 4, R::EBX, 0, 0, None, Some(h(3, 4)), 4, R::ECX)], vec![m(Some(a(Space::Literal, 64, 0, R::None, R::None)), 4, R::EBX, 0, 0, None, Some(h(3, 4)), 4, R::ECX)], None, false), 0, false, false, None, None, Some(("6667ff4c8b40", Some(5), None, vec![], false)));
     check(sem(Op::Unary, Some("dec"), vec![m(Some(a(Space::Literal, 0, 0, R::None, R::None)), 4, R::BX, 0, 0, Some(h(4, 2)), None, 1, R::None)], vec![m(Some(a(Space::Literal, 0, 0, R::None, R::None)), 4, R::BX, 0, 0, Some(h(4, 2)), None, 1, R::None)], None, false), 0, false, false, None, None, Some(("66ff0f", None, None, vec![], false)));
     check(sem(Op::Unary, Some("bswap"), vec![rg(R::AX, 2)], vec![rg(R::AX, 2)], None, false), 0, false, false, None, None, None);
-    check(sem(Op::Unary, Some("bswap"), vec![rg(R::EAX, 4)], vec![rg(R::EAX, 4)], None, false), 0, false, false, None, None, None);
+    check(sem(Op::Unary, Some("bswap"), vec![rg(R::EAX, 4)], vec![rg(R::EAX, 4)], None, false), 0, false, false, None, None, Some(("660fc8", None, None, vec![], true)));
     check(sem(Op::Unary, Some("bswap"), vec![rg(R::BX, 2)], vec![rg(R::BX, 2)], None, false), 0, false, false, None, None, None);
     check(sem(Op::Unary, Some("bswap"), vec![rg(R::AL, 1)], vec![rg(R::AL, 1)], None, false), 0, false, false, None, None, None);
     check(sem(Op::Unary, Some("bswap"), vec![rg(R::SI, 2)], vec![rg(R::SI, 2)], None, false), 0, false, false, None, None, None);
-    check(sem(Op::Unary, Some("bswap"), vec![rg(R::EDI, 4)], vec![rg(R::EDI, 4)], None, false), 0, false, false, None, None, None);
+    check(sem(Op::Unary, Some("bswap"), vec![rg(R::EDI, 4)], vec![rg(R::EDI, 4)], None, false), 0, false, false, None, None, Some(("660fcf", None, None, vec![], true)));
     check(sem(Op::Unary, Some("bswap"), vec![m(Some(a(Space::Frame, -4, 0, R::None, R::None)), 1, R::None, 0, 0, None, None, 1, R::None)], vec![m(Some(a(Space::Frame, -4, 0, R::None, R::None)), 1, R::None, 0, 0, None, None, 1, R::None)], None, false), 0, false, false, None, None, None);
     check(sem(Op::Unary, Some("bswap"), vec![m(Some(a(Space::Frame, 6, 0, R::None, R::None)), 1, R::None, 0, 0, None, None, 1, R::BX)], vec![m(Some(a(Space::Frame, 6, 0, R::None, R::None)), 1, R::None, 0, 0, None, None, 1, R::BX)], None, false), 0, false, false, None, None, None);
     check(sem(Op::Unary, Some("bswap"), vec![m(Some(a(Space::Segment, 2, 0, R::SI, R::None)), 1, R::BX, 2, 1, Some(h(17, 2)), None, 1, R::None)], vec![m(Some(a(Space::Segment, 2, 0, R::SI, R::None)), 1, R::BX, 2, 1, Some(h(17, 2)), None, 1, R::None)], None, false), 0, false, false, None, None, None);

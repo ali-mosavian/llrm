@@ -1669,21 +1669,26 @@ fn addressed_pass(
                         depth = None;
                     }
                     Operation::Jump | Operation::Branch => {
-                        if what.indirect {
+                        // A jump table's targets are all the labels it names.
+                        if what.indirect && what.table.is_empty() {
                             return Err(stop(procedure, "an indirect jump"));
                         }
-                        let target = name_of(what.target.ok_or(Stop::Refused)?);
-                        match known.get(&target) {
-                            _ if in_dead => {}
-                            Some(&there) if there != here => {
-                                return Err(stop(
-                                    procedure,
-                                    &format!("a jump to {target} at depth {here} and {there}"),
-                                ));
-                            }
-                            Some(_) => {}
-                            None => {
-                                known.insert(target, here);
+                        let targets: Vec<i64> =
+                            if what.indirect { what.table.clone() } else { vec![what.target.ok_or(Stop::Refused)?] };
+                        for target in targets {
+                            let target = name_of(target);
+                            match known.get(&target) {
+                                _ if in_dead => {}
+                                Some(&there) if there != here => {
+                                    return Err(stop(
+                                        procedure,
+                                        &format!("a jump to {target} at depth {here} and {there}"),
+                                    ));
+                                }
+                                Some(_) => {}
+                                None => {
+                                    known.insert(target, here);
+                                }
                             }
                         }
                         if what.op == Operation::Jump {
