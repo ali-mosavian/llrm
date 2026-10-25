@@ -783,6 +783,7 @@ pub mod x86 {
     pub const SBB16mr: u16 = 4171;
     pub const SBB32mi: u16 = 4190;
     pub const SBB32mr: u16 = 4196;
+    pub const SBB32rr: u16 = 4208;
     pub const SBB8mi: u16 = 4240;
     pub const SBB8mr: u16 = 4244;
     pub const SS: u16 = 68;
@@ -802,6 +803,7 @@ pub mod x86 {
     pub const XOR8mi: u16 = 22709;
     pub const XOR8mr: u16 = 22715;
     pub const sub_16bit: u16 = 4;
+    pub const sub_8bit: u16 = 1;
     pub const sub_8bit_hi: u16 = 2;
     /// The extras that are instructions, by number.
     pub const NAMES: &[(u16, &str)] = &[
@@ -862,6 +864,7 @@ pub mod x86 {
         (4171, "SBB16mr"),
         (4190, "SBB32mi"),
         (4196, "SBB32mr"),
+        (4208, "SBB32rr"),
         (4240, "SBB8mi"),
         (4244, "SBB8mr"),
         (4744, "SUB16mi"),
