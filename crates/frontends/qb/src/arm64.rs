@@ -155,7 +155,7 @@ fn framed_function(lines: &[&str]) -> String {
         at += 1;
     }
     let label = lines[entry].trim_end_matches(':');
-    let from_entry = format!(", %{label}X ]");
+    let from_entry = format!(", %{label} ]");
     let name = |line: &str| line.trim().split(' ').next().unwrap_or("").to_owned();
     for (number, line) in lines.iter().enumerate() {
         if number == at {
