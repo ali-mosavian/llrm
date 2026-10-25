@@ -144,6 +144,7 @@ pub mod manager;
 pub mod memdep;
 pub mod memdepchecker;
 pub mod memory;
+pub mod aliasdiff;
 pub mod memoryssa;
 pub mod mssa;
 pub mod mustexecute;
