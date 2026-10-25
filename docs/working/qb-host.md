@@ -130,3 +130,33 @@ can be written on a headless machine. Report commits and the rows' results; no P
 Mac findings: sdl2-compat (Homebrew's default `sdl2-config`, on SDL3) crashes on a synthetic `SDL_TEXTINPUT` pushed with no
 window, which `sdl_smoke.c` does; use real SDL2 2.32.x. `cargo test` on macOS stops in `crates/frontends/llrm-c/build.rs`
 (Open Watcom bootstrap, `cpyright.exe` is never built); build the smoke by hand with the `cc` line of `tests/qb_sdl.rs`.
+
+### Mac results (macOS 27.2, Xcode 27.1, Apple M3, clang 21)
+
+Setup: `cargo test --release --no-default-features ...` (the default `toolchain` feature needs the Open Watcom bootstrap,
+below). Use real SDL2 (`/opt/homebrew/Cellar/sdl2/2.32.10`, `DYLD_LIBRARY_PATH` to its `lib`): brew's `sdl2-config` is
+sdl2-compat on SDL3, where `SDL_PushEvent(SDL_TEXTINPUT)` with no window segfaults inside libSDL3, so the smoke's
+`press()` crashes. Unsupported.
+
+Fixed on `qb-host-mac`: `sdl.h` renamed `qbsdl.h` (it collided with SDL2's `SDL.h`; guard test in `qb_sdl.rs`);
+`qb_start` prototype; weak no-op hooks instead of weak undefined references (Mach-O's linker rejects them:
+`qb_headless` failed 3/3). `posix_os`, `qb_dev_interface`, `qb_headless`, `qb_sdl` all pass.
+
+1. Real window: pass. Driver `cocoa`, title QuickBASIC, 4:3, the text screen and SCREEN 13 lines and plots draw with
+   no visible tearing.
+2. Main-thread SDL: pass, no abort. Window close and Cmd-Q both end the program, with exit code 0 when the program
+   polls a device (`dev.c` `llrm_os_exit(0)`); 1 is only the never-looked path. The row's "exit code 1" is not what
+   happens.
+3. Retina: pass, crisp pixels at 2x, not a quarter size.
+4. Audio: `dev_tone(440)` audible (confirmed by ear). BEEP, SOUND and PLAY not run.
+5. Keyboard (injected with System Events): `a` 61, F1 00 3B, Up 00 48, F10 00 44, Enter 0D, Esc 1B, Backspace 08,
+   Tab 09, keypad 5 `5`: all as on DOS. Shift/Caps, Cmd/Option, the rest of the keypad not run.
+6. TSan: 3 of 3 runs report data races (`convert_line` pixel read against `draw_cell` writes, `gd_set_mode` mode
+   fields against `host_colors`, `sdl_audio_current` plain int), and the first `frame_matches()` (smoke line 84)
+   FAILS under TSan every run; without TSan 20/20 `ok`. Unexplained: not yet known whether TSan's timing or a
+   sync_request that does not guarantee a full frame.
+7. `llrm-qb -m64 -fobject-format=macho`: `llrm-qb: error: x86-m64 cannot write macho; it writes elf`.
+
+Open: Open Watcom `./build.sh boot` on macOS never builds `bld/git/binbuild/cpyright.exe` ("Can not open
+.../bld/git/binbuild/cpyright.exe for reading", then "Build failed"), so plain `cargo test` fails in
+`crates/frontends/llrm-c/build.rs`.
