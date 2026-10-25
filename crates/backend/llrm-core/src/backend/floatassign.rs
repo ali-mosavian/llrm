@@ -873,7 +873,7 @@ fn _live_after(
 
 /// Later loads of a cell nothing wrote since are its first load's value.
 fn _aliased(body: &LirBody) -> LirBody {
-    _aliased_by(body, &live(body).1).0
+    _aliased_by(body, &crate::backend::allocate::live_out(body)).0
 }
 
 /// `_aliased` with the body's liveness at block exits given; whether any load

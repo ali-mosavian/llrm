@@ -93,6 +93,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                     continue;
                 }
                 any = true;
+                self.dag.cur_order = self.dag.node(SDValue { node: n, res: 0 }).order;
                 self.legalize_op(n)?;
             }
             if !any {

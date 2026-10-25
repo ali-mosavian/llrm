@@ -456,3 +456,28 @@ d: ret i32 0
     let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
     assert!(done.body.insns().iter().all(|i| i.what.as_ref().is_none_or(|w| !w.indirect)));
 }
+
+/// A block fill or copy at m64 reached `REP_STOSB_64` / `REP_MOVSB_64` with the
+/// count and pointers in `ecx`/`edi`/`esi`, as at m32, and stopped with
+/// `Unmapped("REP_STOSB_64")`: 24 of the vsgcc programs (sieve, histo,
+/// bintree...) were refused under `--isel=dag`. The pin copies through `RCX`,
+/// `RDI`, `RSI`.
+#[test]
+fn an_m64_block_fill_and_copy_are_rep_string_operations_on_the_wide_registers() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)
+define void @f(ptr %d, ptr %s, i64 %n) {
+entry:
+  call void @llvm.memset.p0.i64(ptr %d, i8 0, i64 %n, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 %n, i1 false)
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| Some(i.what.as_ref()?.name.as_deref()?.to_owned())).collect();
+    assert!(names.iter().any(|n| n == "stosb") && names.iter().any(|n| n == "movsb"), "{names:?}");
+}
