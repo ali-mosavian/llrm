@@ -2376,3 +2376,16 @@ fn redim_preserve_calls_b_rdmp_with_redims_operands() {
     assert_eq!(kept.matches("\"callee\":\"B$RDMP\"").count(), 1, "{kept}");
     assert_eq!(plain.matches("\"callee\":\"B$RDMP\"").count(), 0, "{plain}");
 }
+
+#[test]
+fn kill_name_and_the_directory_statements_call_their_runtime_routines() {
+    // KILL, NAME, MKDIR, CHDIR and RMDIR were refused as unknown procedures. BC
+    // calls B$KILL, B$NAME, B$MDIR, B$CDIR and B$RDIR with the names'
+    // descriptors (QB 4.5 rt/dkstmt.asm, directry.asm).
+    let source = "KILL \"A\"\r\nNAME \"A\" AS \"B\"\r\nMKDIR \"D\"\r\nCHDIR \"D\"\r\nRMDIR \"D\"\r\n";
+    let module = parse(source, Dialect::QuickBasic45).unwrap();
+    let hir = compile(&module, "names", Dialect::QuickBasic45, "qb45").unwrap();
+    for routine in ["B$KILL", "B$NAME", "B$MDIR", "B$CDIR", "B$RDIR"] {
+        assert_eq!(hir.matches(&format!("\"callee\":\"{routine}\"")).count(), 1, "{routine}: {hir}");
+    }
+}

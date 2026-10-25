@@ -42,3 +42,10 @@ range at run time. The compiler keeps the call and does NOT refuse a string arra
 would stop HELP.BAS compiling at all, a run-time error only the path that reaches it. String-array preserve (move the
 string descriptors, re-own their strings) is due 2026-11-06 with a fail-first `tests/run/qb` program under DOSBox.
 Order after #4329: PALETTE USING row, RESUME NEXT, string-array preserve.
+
+## KILL, NAME, MKDIR, CHDIR, RMDIR
+BC calls `B$KILL(psd)`, `B$NAME(psdOld, psdNew)`, `B$MDIR`, `B$CDIR`, `B$RDIR` (QB 4.5 `rt/dkstmt.asm`, `rt/directry.asm`;
+pascal far, callee cleanup 2, 4, 2, 2, 2). llrm's runtime runs them over the OS layer's `files` group
+(`runtime/shared/interface.toml`: delete, rename, mkdir, chdir, rmdir; DOS int 21h 41h, 56h, 39h, 3Bh, 3Ah). Error
+numbers match BCOM45 in `tests/qbrt/file_names.bas`. Not done: KILL with a wildcard (BC finds each match; the layer
+has no find-first/next), and KILL of a file open on a channel (BC's `B$CHKFOPEN` answers File already open).

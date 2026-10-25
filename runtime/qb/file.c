@@ -95,6 +95,75 @@ void B_OPEN(SD *name, short channel, short record_length, unsigned short mode)
         llrm_os_seek(handle, 0, ORIGIN_END);
 }
 
+/* B$KILL: KILL "name". One file: no wildcards. As the QB 4.5 runtime's KILL does, it first looks for the file (a
+   missing one is File not found whatever DOS would answer to the delete); a refusal is then Path/File access error,
+   any other failure File not found. */
+void B_KILL(SD *name)
+{
+    char path[PATH_MAX];
+    long result;
+
+    path_of(name, path);
+    str_tmp_free(name);
+    result = llrm_os_open((os_path)path, 0);
+    if (result < 0)
+        qb_error(BE_NOFILE);
+    llrm_os_close(result);
+    result = llrm_os_delete((os_path)path);
+    if (result < 0)
+        qb_error(-result == LLRM_OS_DENIED ? BE_ACCESS : BE_NOFILE);
+}
+
+/* B$NAME: NAME old AS new. An existing new name is File already exists, as the QB 4.5 runtime's NAME answers; a
+   different drive is Rename across disks. */
+void B_NAME(SD *old, SD *new_name)
+{
+    char from[PATH_MAX], to[PATH_MAX];
+    long result;
+
+    path_of(old, from);
+    path_of(new_name, to);
+    str_tmp_free(old);
+    str_tmp_free(new_name);
+    result = llrm_os_rename((os_path)from, (os_path)to);
+    if (result >= 0)
+        return;
+    switch (-result) {
+    case LLRM_OS_NOT_FOUND:
+        qb_error(BE_NOFILE);
+    case LLRM_OS_PATH_NOT_FOUND:
+        qb_error(BE_NOTFOUND);
+    case 17:
+        qb_error(BE_RENAMEDISK);
+    default:
+        qb_error(BE_EXISTS);
+    }
+}
+
+/* The directory statements: a missing path is Path not found, a refusal Path/File access error. */
+enum DirectoryCall { DIR_MAKE, DIR_CHANGE, DIR_REMOVE };
+
+static void directory_call(SD *name, enum DirectoryCall call)
+{
+    char path[PATH_MAX];
+    long result;
+
+    path_of(name, path);
+    str_tmp_free(name);
+    if (call == DIR_MAKE)
+        result = llrm_os_mkdir((os_path)path);
+    else if (call == DIR_CHANGE)
+        result = llrm_os_chdir((os_path)path);
+    else
+        result = llrm_os_rmdir((os_path)path);
+    if (result < 0)
+        qb_error(-result == LLRM_OS_DENIED ? BE_ACCESS : BE_NOTFOUND);
+}
+
+void B_MDIR(SD *name) { directory_call(name, DIR_MAKE); }
+void B_CDIR(SD *name) { directory_call(name, DIR_CHANGE); }
+void B_RDIR(SD *name) { directory_call(name, DIR_REMOVE); }
+
 /* One buffer serves whichever file is being read or written by character: the
    other operations on the file first give back what it holds. */
 enum { BUFFER = 128, END_OF_TEXT = 26, FILE_WIDTH = 255 };
@@ -526,6 +595,11 @@ void file_xinit(void)
 }
 
 #pragma aux B_OPEN "B$OPEN"
+#pragma aux B_KILL "B$KILL"
+#pragma aux B_NAME "B$NAME"
+#pragma aux B_MDIR "B$MDIR"
+#pragma aux B_CDIR "B$CDIR"
+#pragma aux B_RDIR "B$RDIR"
 #pragma aux B_GET3 "B$GET3"
 #pragma aux B_PUT3 "B$PUT3"
 #pragma aux B_FLOF "B$FLOF"

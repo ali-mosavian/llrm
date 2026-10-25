@@ -1,4 +1,4 @@
-;; name: LL$OPEN, LL$CREATE, LL$READ, LL$SEEK, LL$WRITE_FILE, LL$CLOSE, LL$EXIT, LL$MORE, LL$BLOCK_RESIZE, LL$VECTOR, LL$SET_VECTOR, LL$CHAIN, LL$RESTORE_VECTORS, LL$CONSOLE_READ_KEY, LL$CONSOLE_KEY_READY, LL$COMMAND_LINE, LL$ENVIRONMENT
+;; name: LL$OPEN, LL$CREATE, LL$READ, LL$SEEK, LL$WRITE_FILE, LL$CLOSE, LL$EXIT, LL$MORE, LL$BLOCK_RESIZE, LL$VECTOR, LL$SET_VECTOR, LL$CHAIN, LL$RESTORE_VECTORS, LL$CONSOLE_READ_KEY, LL$CONSOLE_KEY_READY, LL$COMMAND_LINE, LL$ENVIRONMENT, LL$DELETE, LL$RENAME, LL$MKDIR, LL$CHDIR, LL$RMDIR
 ;; desc: the OS layer shared by C, Nib and BASIC programs: x86-m16, real-mode DOS
 ;;
 ;; args: the interface of runtime/shared/interface.toml, in cdecl16: arguments in word slots from [bp+6],
@@ -20,8 +20,9 @@
 G_CORE          equ     1
 G_CONSOLE       equ     2
 G_PROCESS       equ     4
+G_FILES         equ     8
 ifndef OS_GROUPS
-OS_GROUPS       equ     7
+OS_GROUPS       equ     15
 endif
 
 if OS_GROUPS and G_CORE
@@ -37,6 +38,13 @@ endif
 if OS_GROUPS and G_CONSOLE
 public LL$CONSOLE_READ_KEY
 public LL$CONSOLE_KEY_READY
+endif
+if OS_GROUPS and G_FILES
+public LL$DELETE
+public LL$RENAME
+public LL$MKDIR
+public LL$CHDIR
+public LL$RMDIR
 endif
 if OS_GROUPS and G_PROCESS
 public LL$COMMAND_LINE
@@ -534,6 +542,73 @@ environment_done:
                 pop     bp
                 retf
 LL$ENVIRONMENT  endp
+endif
+
+if OS_GROUPS and G_FILES
+;;::::::::::::::
+;; The file-name calls: DOS function in AH, the name at DS:DX (the new name at ES:DI for a rename); a carry is
+;; the error code in AX, negated; 0 on success (DOS leaves AX undefined).
+LL$DELETE       proc    far
+                push    bp
+                mov     bp, sp
+                push    ds
+                lds     dx, [bp+6]
+                mov     ah, DOS_DELETE
+                jmp     short file_name_call
+LL$DELETE       endp
+
+LL$RENAME       proc    far
+                push    bp
+                mov     bp, sp
+                push    ds
+                push    di
+                push    es
+                lds     dx, [bp+6]
+                les     di, [bp+10]
+                mov     ah, DOS_RENAME
+                int     DOS_INT
+                pop     es
+                pop     di
+                jmp     short file_name_checked
+LL$RENAME       endp
+
+LL$MKDIR        proc    far
+                push    bp
+                mov     bp, sp
+                push    ds
+                lds     dx, [bp+6]
+                mov     ah, DOS_MKDIR
+                jmp     short file_name_call
+LL$MKDIR        endp
+
+LL$CHDIR        proc    far
+                push    bp
+                mov     bp, sp
+                push    ds
+                lds     dx, [bp+6]
+                mov     ah, DOS_CHDIR
+                jmp     short file_name_call
+LL$CHDIR        endp
+
+LL$RMDIR        proc    far
+                push    bp
+                mov     bp, sp
+                push    ds
+                lds     dx, [bp+6]
+                mov     ah, DOS_RMDIR
+file_name_call::
+                int     DOS_INT
+file_name_checked::
+                jc      short file_name_failed
+                xor     ax, ax
+                jmp     short file_name_done
+file_name_failed:
+                neg     ax
+file_name_done:
+                pop     ds
+                pop     bp
+                retf
+LL$RMDIR        endp
 endif
 
 end

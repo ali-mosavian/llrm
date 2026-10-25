@@ -3510,6 +3510,19 @@ impl Compiler {
                         self.select_block(continuation);
                     }
                     "BLOAD" | "BSAVE" => self.binary_memory_statement(name, arguments)?,
+                    "KILL" | "MKDIR" | "CHDIR" | "RMDIR" => {
+                        let [path] = arguments.as_slice() else {
+                            return self.fail(format!("{name} takes one file or directory name"));
+                        };
+                        let path = self.string_descriptor(path)?;
+                        let routine = match name.as_str() {
+                            "KILL" => "B$KILL",
+                            "MKDIR" => "B$MDIR",
+                            "CHDIR" => "B$CDIR",
+                            _ => "B$RDIR",
+                        };
+                        self.emit_runtime_call(routine, Vec::new(), vec![path]);
+                    }
                     "RANDOMIZE" => {
                         let [seed] = arguments.as_slice() else {
                             return self.fail("RANDOMIZE needs a seed here, as in `RANDOMIZE TIMER`");
@@ -3925,6 +3938,14 @@ impl Compiler {
                     self.select_block(continuation);
                 }
                 Statement::Runtime { name, arguments, .. } => match name.as_str() {
+                    "NAME" => {
+                        let [old, new] = arguments.as_slice() else {
+                            return self.fail("NAME takes the old and the new file name, as in `NAME \"A\" AS \"B\"`");
+                        };
+                        let old = self.string_descriptor(old)?;
+                        let new = self.string_descriptor(new)?;
+                        self.emit_runtime_call("B$NAME", Vec::new(), vec![old, new]);
+                    }
                     "BEEP" => {
                         if !arguments.is_empty() {
                             return self.fail("BEEP takes no arguments");

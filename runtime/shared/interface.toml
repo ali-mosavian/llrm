@@ -137,3 +137,39 @@ name = "environment"
 doc = "The `index`th (from 0) string of the environment, NAME=VALUE, copied to `data` (at most `max` bytes); its length, or -1 past the last."
 args = [["index", "usize"], ["data", "bytes_mut"], ["max", "usize"]]
 returns = "isize"
+
+# Files and directories by name, where the operating system has them.
+[[op]]
+group = "files"
+name = "delete"
+doc = "Deletes the file `name`; 0 on success. No wildcards."
+args = [["name", "path"]]
+returns = "isize"
+
+[[op]]
+group = "files"
+name = "rename"
+doc = "Renames `old` to `new`, which may be in another directory of the same drive; 0 on success."
+args = [["old", "path"], ["new", "path"]]
+returns = "isize"
+
+[[op]]
+group = "files"
+name = "mkdir"
+doc = "Makes the directory `name`; 0 on success."
+args = [["name", "path"]]
+returns = "isize"
+
+[[op]]
+group = "files"
+name = "chdir"
+doc = "Makes the directory `name` the current one; 0 on success."
+args = [["name", "path"]]
+returns = "isize"
+
+[[op]]
+group = "files"
+name = "rmdir"
+doc = "Removes the empty directory `name`; 0 on success."
+args = [["name", "path"]]
+returns = "isize"
