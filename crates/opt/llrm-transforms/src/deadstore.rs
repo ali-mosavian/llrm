@@ -361,6 +361,10 @@ impl<'a> Dse<'a> {
         &self,
         inst: InstId,
     ) -> bool {
+        // A load or store is its own bytes (`own_bytes`): no list to derive.
+        if let Some(own) = llrm_analysis::memory::own_bytes(&self.function.instruction(inst).opcode) {
+            return own.writes;
+        }
         self.accesses.writes_in(self.aa.unit(), inst).is_none_or(|writes| !writes.is_empty())
     }
 
@@ -369,6 +373,9 @@ impl<'a> Dse<'a> {
         &self,
         inst: InstId,
     ) -> bool {
+        if let Some(own) = llrm_analysis::memory::own_bytes(&self.function.instruction(inst).opcode) {
+            return own.reads;
+        }
         self.accesses.reads_in(self.aa.unit(), inst).is_none_or(|reads| !reads.is_empty())
     }
 

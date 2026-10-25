@@ -355,3 +355,17 @@ fn the_innermost_loop_of_a_block_is_the_smallest_that_holds_it() {
     }
     assert_eq!(shape.loops.len(), 2);
 }
+
+/// `may_write` and `may_read` derived a load's or store's whole list to learn
+/// it is not empty (`loc_for_write` 0.78 M Ir in d_faces, 609 lists): a body of
+/// loads and stores derives none.
+#[test]
+fn asking_whether_a_load_or_store_writes_derives_no_list() {
+    let before = llrm_analysis::memoryssa::lazy_lists();
+    let after = eliminated(
+        "@g = global i16 0\n\ndefine i16 @f(i16 %x) {\nb0:\n  store i16 1, ptr @g\n  store i16 %x, ptr @g\n  %r = load i16, ptr @g\n  ret i16 %r\n}\n",
+        &[&[7]],
+    );
+    assert!(!after.contains("store i16 1"), "{after}");
+    assert_eq!(llrm_analysis::memoryssa::lazy_lists(), before, "lists derived for loads and stores");
+}
