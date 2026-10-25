@@ -46,6 +46,7 @@
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::fmt;
+use std::mem::ManuallyDrop;
 
 use crate::model::lir::LirBody;
 use crate::support::hash::HashMap;
@@ -72,19 +73,27 @@ struct Arena {
     free: Vec<EntryId>,
 }
 
+/// The thread's arena, without a destructor (see `ARENA`).
+type ArenaCell = ManuallyDrop<RefCell<Arena>>;
+
 thread_local! {
     /// The entries of every `SlotIndexes` of this thread: a `SlotIndex` is a
     /// copyable (entry, slot) pair whose number is read here, so renumbering
     /// the list moves every index held anywhere without touching them.
-    static ARENA: RefCell<Arena> = const {
-        RefCell::new(Arena {
+    ///
+    /// Never dropped: a type with a destructor makes every access check and
+    /// register its state through a call, which a stale compare pays 131 K
+    /// times on d_faces. The columns are emptied by `SlotIndexes::clear`; the
+    /// capacity is kept to the thread's end.
+    static ARENA: ArenaCell = const {
+        ManuallyDrop::new(RefCell::new(Arena {
             epoch: 0,
             instr: Vec::new(),
             index: Vec::new(),
             prev: Vec::new(),
             next: Vec::new(),
             free: Vec::new(),
-        })
+        }))
     };
     /// How many bodies this thread has numbered: a `SlotIndexes` kept across
     /// another's numbering has lost its entries.
@@ -954,6 +963,14 @@ mod tests {
     use super::*;
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
+
+    /// A thread-local with a destructor is reached through a registration
+    /// check and a call on every access: 48 Ir a stale compare, 131 K of them
+    /// (0.8 M Ir with the other accesses) on d_faces -O2.
+    #[test]
+    fn test_arena_has_no_destructor_so_access_is_not_a_call() {
+        assert!(!std::mem::needs_drop::<ArenaCell>());
+    }
 
     fn insn() -> Arc<Insn> {
         Arc::new(Insn::new(0, None, None, vec![], vec![]))

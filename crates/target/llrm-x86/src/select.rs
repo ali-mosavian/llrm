@@ -522,6 +522,11 @@ pub fn _scaled_operand(
         let size = _displacement_size(base, what.index_through, disp, bits);
         return Some((memory_operand(base, what.index_through, 1, disp, size, RegId::from(segment)), false));
     }
+    // The frame token is a word register: with a wide index (`[bp + rdx]`)
+    // there is no encoding until the frame layout names it.
+    if addr.space == Space::Frame && width_of(base) < Some(4) && width_of(what.index_through) >= Some(4) {
+        return None;
+    }
     let size = _displacement_size(base, what.index_through, disp, bits);
     Some((memory_operand(base, what.index_through, what.scale, disp, size, RegId::from(segment)), false))
 }
@@ -2009,7 +2014,7 @@ pub fn arith_into_imm(
     relocated: bool,
 ) -> Option<Emitted> {
     let built = operand_of(cell, at.bits);
-    if !TWO_OPERAND.contains(&name) || built.is_none() || ![1, 2, 4].contains(&cell.width) {
+    if !TWO_OPERAND.contains(&name) || built.is_none() || ![1, 2, 4, 8].contains(&cell.width) {
         return None;
     }
     let (r#where, symbolic) = built?;
@@ -2018,7 +2023,12 @@ pub fn arith_into_imm(
     if width == 1 {
         value = ((value & 0xFF) ^ 0x80) - 0x80;
     }
-    let all: Vec<i64> = if fits_in_a_byte(value) && !relocated { vec![8, width * 8] } else { vec![width * 8] };
+    // A quadword takes a sign-extended dword at most.
+    let widest = if width == 8 { 32 } else { width * 8 };
+    if width == 8 && i32::try_from(value).is_err() {
+        return None;
+    }
+    let all: Vec<i64> = if fits_in_a_byte(value) && !relocated { vec![8, widest] } else { vec![widest] };
     for bits in all {
         let Some(code) = code_of!(Upper(name), "_RM", width * 8, "_IMM", bits) else {
             continue;
@@ -2400,12 +2410,16 @@ pub fn emit_in(
         // BINARY's own rule: sources[0] IS dests[0].
         let (dest, source) = (&dests[0], &sources[1]);
         if let (Some(into), Some(outof)) = (reg_of(dest), reg_of(source)) {
-            if name == "btc" {
+            if let Some(code) = ["btc", "bts", "btr"].iter().position(|bit| name == *bit) {
                 let width = width_of(into)?;
                 if width_of(outof) != Some(width) {
                     return None;
                 }
-                let code = code_of!("BTC_RM", width * 8, "_R", width * 8)?;
+                let code = match code {
+                    0 => code_of!("BTC_RM", width * 8, "_R", width * 8)?,
+                    1 => code_of!("BTS_RM", width * 8, "_R", width * 8)?,
+                    _ => code_of!("BTR_RM", width * 8, "_R", width * 8)?,
+                };
                 return _assemble(&raised(create_reg_reg(code, into, outof)), at, true);
             }
             return arith(name, into, outof, at);
