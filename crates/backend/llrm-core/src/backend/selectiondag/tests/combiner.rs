@@ -180,6 +180,8 @@ fn a_far_pointer_null_test_is_the_or_of_its_halves() {
         let joined = dag.operand(cond, 0);
         assert_eq!((dag.opcode(cond), dag.opcode(joined), dag.value_type(joined)), (ISD::SetCC, ISD::Or, EVT::I16));
         assert!(matches!(dag.node(dag.operand(cond, 2)).data, NodeData::CondCode(c) if c == cc));
+    }
+}
 
 /// A clamp `x > 1.0 ? 1.0 : x` laid out with the true block next branched on
 /// `xor (setcc ogt), true`: `seta; xor 1; test 1; jne` where the old selector
