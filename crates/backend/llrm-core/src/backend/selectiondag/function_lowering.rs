@@ -34,6 +34,18 @@ pub struct FunctionLoweringInfo {
     /// frame index order after the static allocas.
     pub objects: Vec<(u32, u32)>,
     next_frame_index: i32,
+    /// The names and locality of the module's globals and the function's
+    /// blocks, made at the first block and shared by the DAGs of the rest
+    /// (a table per block was a quadratic share of the compile).
+    pub(super) tables: Option<Tables>,
+}
+
+/// What every block's DAG reads about the module and the function.
+#[derive(Clone)]
+pub(super) struct Tables {
+    pub global_names: std::rc::Rc<Vec<String>>,
+    pub local_symbols: std::rc::Rc<Vec<bool>>,
+    pub block_names: std::rc::Rc<Vec<String>>,
 }
 
 impl FunctionLoweringInfo {
@@ -65,6 +77,7 @@ impl FunctionLoweringInfo {
             next_block: 0,
             objects: Vec::new(),
             next_frame_index: 0,
+            tables: None,
         };
         let entry = function.entry();
         for &block in function.layout() {
