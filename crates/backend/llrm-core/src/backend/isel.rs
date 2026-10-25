@@ -260,6 +260,10 @@ pub struct Convention {
     /// Where the first stack argument the function does not name lies, by its
     /// displacement from the frame register.
     pub stack_arguments: i64,
+    /// Where its first stack argument lies before any hidden pointer
+    /// (`Target::first_argument_offset`): a far function's is past the longer
+    /// return address.
+    pub first: i64,
 }
 
 /// A variadic function's `va_list` under `sysv-amd64`: what `va_start` writes.
@@ -601,7 +605,7 @@ pub fn convention_for(
         0
     };
     let saved = saved(arch, described, &parameters, &returns);
-    Ok(Convention { parameters, returns, popped, saved, stack_arguments: cursor })
+    Ok(Convention { parameters, returns, popped, saved, stack_arguments: cursor, first })
 }
 
 /// The stack bytes the address of a struct result takes where `entry` passes it

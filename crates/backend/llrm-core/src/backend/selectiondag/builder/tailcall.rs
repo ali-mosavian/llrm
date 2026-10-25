@@ -37,10 +37,21 @@ impl Builder<'_> {
         info: &llrm_mir::opcode::CallInfo,
         plan: &Convention,
         variadic: bool,
-        direct: bool,
+        callee: Option<llrm_mir::GlobalId>,
+        plan_first: i64,
         arguments: &[Operand],
     ) -> bool {
         let caller = &self.convention;
+        let direct = callee.is_some();
+        // the callee returns to our caller: a far callee to a far caller and a
+        // near one to a near, or the return address is the wrong size
+        let (far, near) = (self.arch.first_argument_offset(true), self.arch.first_argument_offset(false));
+        if far != near {
+            let callee_far = callee.is_some_and(|id| self.module.global(id).address_space == 1);
+            if (caller.first == far) != callee_far {
+                return false;
+            }
+        }
         // a far pointer callee is stored to a cell and called through it
         // (`LLRM_FARCALL`); the jump has no such form yet
         if !direct && self.target.dag.pointer == super::super::mvt::EVT::I16 {
@@ -108,7 +119,13 @@ impl Builder<'_> {
                 match parameter {
                     // already laid out as the caller's incoming one
                     Parameter::Cell(_) => {
-                        if arguments.get(at).and_then(incoming) != Some(parameter) {
+                        // offsets are from each function's own first stack
+                        // argument
+                        let moved = Parameter::Cell(match parameter {
+                            Parameter::Cell(cell) => cell - plan_first + caller.first,
+                            _ => unreachable!(),
+                        });
+                        if arguments.get(at).and_then(incoming) != Some(&moved) {
                             return false;
                         }
                     }
