@@ -20,14 +20,13 @@
 //! # Example
 //! `getelementptr i32, ptr %p, i64 1` is consecutive after `%p`.
 
-use std::collections::HashMap;
-
 use llrm_mir::context::{mask, signed};
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Attribute, BinaryOp, Flags as IrFlags, Opcode};
 use llrm_mir::types::{Type, TypeId};
 use llrm_mir::valuetracking::guarantee::is_guaranteed_not_to_be_undef_or_poison;
 use llrm_mir::valuetracking::nonzero::strip_and_accumulate_constant_offsets;
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::scev::expr::{Kind, Scev, Ty, Use};
 use crate::scev::{Cx, Flags, ScalarEvolution};
@@ -338,7 +337,7 @@ pub fn visit_pointers(
     mut add_pointer: impl FnMut(Operand),
 ) {
     let found = cx.loops.get_loop_for(lp).expect("the header of a loop");
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = HashSet::default();
     let mut work_list = vec![start];
 
     while let Some(ptr) = work_list.pop() {

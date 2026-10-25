@@ -11,8 +11,9 @@
 //! After `union_sets(1, 2)`, `insert(4)` and `union_sets(5, 1)`, `members(1)`
 //! gives `5, 1, 2` and `members(4)` gives `4`.
 
-use std::collections::HashMap;
 use std::hash::Hash;
+
+use llrm_support::hash::HashMap;
 
 #[derive(Clone, Debug)]
 struct Node<T> {
@@ -34,7 +35,7 @@ pub struct EquivalenceClasses<T> {
 
 impl<T> Default for EquivalenceClasses<T> {
     fn default() -> Self {
-        Self { mapping: HashMap::new(), nodes: Vec::new() }
+        Self { mapping: HashMap::default(), nodes: Vec::new() }
     }
 }
 

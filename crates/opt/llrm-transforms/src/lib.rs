@@ -93,6 +93,7 @@ pub mod canonical;
 pub mod cfg;
 pub mod cgpaddr;
 pub mod cgpbranch;
+pub mod cgpswitch;
 pub mod cmpopt;
 #[cfg(test)]
 mod codegen_slots_tests;
@@ -135,6 +136,7 @@ pub mod combine_select_bools;
 pub mod combine_select_ext_const;
 pub mod combine_select_into_op;
 pub mod combine_select_op_op;
+pub mod combine_select_spf;
 #[cfg(test)]
 mod combine_semantics_tests;
 pub mod combine_shared;

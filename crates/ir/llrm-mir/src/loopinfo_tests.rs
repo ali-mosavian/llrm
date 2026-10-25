@@ -284,3 +284,30 @@ fn a_latch_that_branches_unconditionally_has_no_latch_cmp() {
     let text = "define void @f(i1 %c) {\nb0:\n  br label %h\nh:\n  br i1 %c, label %l, label %x\nl:\n  br label %h\nx:\n  ret void\n}\n";
     only_loop(text, |_, function, one| assert!(one.get_latch_cmp_inst(function).is_none()));
 }
+
+/// `children` found the terminator again for every edge (`get_exiting_blocks`
+/// cost 4.6x the pin's on d_faces): a switch of four edges took five lookups.
+/// It takes one, and gives the edges of `child` with repeats in operand order.
+#[test]
+fn test_children_find_the_terminator_once_and_are_the_edges_of_child() {
+    use crate::loopinfo::LoopGraph;
+    use crate::module::TERMINATOR_LOOKUPS;
+
+    let mut module = parse::module(
+        "define i32 @f(i32 %x) {\nentry:\n  switch i32 %x, label %b [ i32 0, label %a i32 1, label %b i32 2, label %a ]\na:\n  br label %b\nb:\n  ret i32 0\n}\n",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let f = module.function_mut("f").expect("@f").1;
+    for &block in f.layout() {
+        let mut cursor = 0;
+        let mut by_child = Vec::new();
+        while let Some(next) = f.child(block, &mut cursor) {
+            by_child.push(next);
+        }
+        assert_eq!(f.children(block).collect::<Vec<_>>(), by_child);
+    }
+    let entry = f.layout()[0];
+    let before = TERMINATOR_LOOKUPS.with(std::cell::Cell::get);
+    assert_eq!(f.children(entry).count(), 4, "default and three cases, repeats kept");
+    assert_eq!(TERMINATOR_LOOKUPS.with(std::cell::Cell::get) - before, 1, "one lookup for four edges");
+}
