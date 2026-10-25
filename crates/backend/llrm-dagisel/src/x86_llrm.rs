@@ -8,9 +8,10 @@
 //! covers them; this case morphs the node into [`LLRM_ASM_OPCODE`] with the
 //! same operands and result types, and the emitter prints the text.
 //!
-//! Numbered deviation: **SD305** these nodes and the pseudo are llrm's own, not
-//! the pin's. Owner sdag-c. Exit: the frontend emits the pin's `INLINEASM`.
-//! Review 2026-12-10.
+//! Numbered deviations: **SD214** (the transcendental opcodes below, sdag-b,
+//! exit: libm calls on a target with a libm, review 2026-12-10); **SD305**
+//! these nodes and the pseudo are llrm's own, not the pin's. Owner sdag-c.
+//! Exit: the frontend emits the pin's `INLINEASM`. Review 2026-12-10.
 //!
 //! # Used by
 //! [`crate::x86_select::select_node`].
@@ -51,6 +52,19 @@ pub const LLRM_PORT: u16 = 24586;
 
 /// The machine opcode `LLRM_PORT` becomes.
 pub const PORT_OPCODE: u16 = 30014;
+
+/// The machine opcodes the transcendental `FLOG`, `FEXP`, `FLOG2`, `FEXP2`,
+/// `FSIN`, `FCOS` and `FATAN` become (SD214): the x87 operations or
+/// sequences `fln`, `fexp`, `flog2`, `fexp2`, `fsin`, `fcos` and `fatan`,
+/// which the pin has no pattern for (it calls libm unless unsafe math is on;
+/// llrm's targets have none).
+pub const FLN_OPCODE: u16 = 30015;
+pub const FEXP_OPCODE: u16 = 30016;
+pub const FLOG2_OPCODE: u16 = 30017;
+pub const FEXP2_OPCODE: u16 = 30018;
+pub const FSIN_OPCODE: u16 = 30019;
+pub const FCOS_OPCODE: u16 = 30020;
+pub const FATAN_OPCODE: u16 = 30021;
 
 /// The pseudo opcode an llrm node of this id becomes.
 pub fn llrm_opcode(node: u16) -> Option<u16> {
