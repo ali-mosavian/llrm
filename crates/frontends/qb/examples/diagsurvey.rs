@@ -1,6 +1,6 @@
 //! The wording of every refusal over a set of sources: `diagsurvey DIALECT FILE...`.
 //! Groups by BC's name and prints a count and a few distinct messages for each.
-use qbfront::{front, source, Dialect};
+use llrm_qb::{front, source, Dialect};
 use std::collections::BTreeMap;
 
 fn main() {
