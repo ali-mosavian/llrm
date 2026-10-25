@@ -40,9 +40,45 @@ fn a_call_is_a_sequence_around_a_call_instruction() {
     );
     let names: Vec<String> =
         insns.iter().filter_map(|i| i.what.as_ref()).map(|w| w.name.as_deref().unwrap_or("").to_owned()).collect();
-    let (down, up) = (names.iter().position(|n| n == "sub").unwrap(), names.iter().rposition(|n| n == "add").unwrap());
+    // The arguments are pushed (the area's dword stores, `pushed_dwords`), the
+    // caller releases them after the call.
     let called = names.iter().position(|n| n == "call").unwrap();
-    assert!(down < called && called < up, "{names:?}");
+    let up = names.iter().rposition(|n| n == "add").unwrap();
+    assert_eq!(names[..called].iter().filter(|n| *n == "push").count(), 2, "{names:?}");
+    assert!(!names.iter().any(|n| n == "sub"), "{names:?}");
+    assert!(called < up, "{names:?}");
+}
+
+const TWO_CALLS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare i32 @f(i32, i32, i32)
+define i32 @g(ptr %p) {
+entry:
+  %a = load i32, ptr %p
+  %b = load i32, ptr getelementptr (i32, ptr null, i32 1)
+  %r = call i32 @f(i32 %a, i32 %b, i32 7)
+  ret i32 %r
+}
+";
+
+/// Three dword arguments were `sub esp, 12`, three `mov [esp+k]`, the call,
+/// `add esp, 12` at m32 (the old selector's `push` x3): QCport -Os grew 18.9%
+/// on its calls alone (push 349 -> 42, sub 12 -> 171 in savegame.c).
+#[test]
+fn dword_arguments_on_the_stack_are_pushed_last_first() {
+    let module = llrm_mir::parse::module(TWO_CALLS).expect("parses");
+    let done = selected(&module, "g", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let pushes: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.op == Operation::Push)
+        .map(|w| w.sources[0].clone())
+        .collect();
+    assert_eq!(pushes.len(), 3, "{pushes:?}");
+    // The last argument (7) goes first.
+    assert!(matches!(pushes[0], crate::model::ir::Loc::Imm(ref imm) if imm.value == 7), "{pushes:?}");
 }
 
 const INDIRECT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -804,4 +840,24 @@ fn a_word_argument_is_required_in_the_word_register() {
     let registers: Vec<RegId> = call.requires.iter().map(|(_, register)| *register).collect();
     assert!(registers.iter().all(|r| matches!(*r, RegId::AX | RegId::DX | RegId::CX)), "{registers:?}");
     assert_eq!(registers.len(), 3, "{registers:?}");
+}
+
+const CALL_AT_ADDRESS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define void @f() {
+entry:
+  call void inttoptr (i32 4096 to ptr)()
+  ret void
+}
+";
+
+/// A call whose callee is a constant expression (`inttoptr` of a number) was
+/// refused ("call of a constant expression"); the pin calls the value.
+#[test]
+fn a_call_of_a_constant_expression_calls_its_value() {
+    let module = llrm_mir::parse::module(CALL_AT_ADDRESS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let call = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.op == Operation::Call).expect("a call");
+    assert!(call.indirect, "{call:?}");
 }

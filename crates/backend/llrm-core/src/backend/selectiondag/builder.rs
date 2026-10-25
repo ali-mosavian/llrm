@@ -832,7 +832,9 @@ impl Builder<'_> {
         let direct = match *callee {
             Operand::Constant(id) => match self.module.context.get(id).kind {
                 ConstantKind::Global(global) => Some(global),
-                _ => return Err(Refused("call of a constant expression")),
+                // a constant expression (`inttoptr`, a cast of a global): the
+                // value is the callee, as for a pointer in a register
+                _ => None,
             },
             _ => None,
         };
