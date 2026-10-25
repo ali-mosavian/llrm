@@ -540,3 +540,38 @@ exit:
         });
     }
 }
+
+/// `print<scalar-evolution>` of a loop whose exit test is on the `sext` of a
+/// 16-bit counter: the pin proves a count under a run-time no-signed-wrap
+/// check, where this printed only "Unpredictable" (3 of the oracle's
+/// corpus files differed). The text is the pinned opt's.
+#[test]
+fn test_a_count_under_a_wrap_check_is_printed_predicated() {
+    let module = llrm_mir::parse::module(
+        "define void @f(i32 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %i.next, %loop ]
+  %i.next = add i16 %i, 1
+  %ext = sext i16 %i.next to i32
+  %c = icmp slt i32 %ext, %n
+  br i1 %c, label %loop, label %exit
+exit:
+  ret void
+}
+",
+    )
+    .expect("a module");
+    let counts = super::values::print_module_counts(&module);
+    let predicates = " Predicates:\n    {1,+,1}<%loop> Added Flags: <nssw>\n";
+    let expected = format!(
+        "Loop %loop: Unpredictable backedge-taken count.\n\
+         Loop %loop: Unpredictable constant max backedge-taken count. \n\
+         Loop %loop: Unpredictable symbolic max backedge-taken count. \n\
+         Loop %loop: Predicated backedge-taken count is (-1 + (1 smax %n))<nsw>\n{predicates}\
+         Loop %loop: Predicated constant max backedge-taken count is i32 2147483646\n{predicates}\
+         Loop %loop: Predicated symbolic max backedge-taken count is (-1 + (1 smax %n))<nsw>\n{predicates}"
+    );
+    assert!(counts.ends_with(&expected), "{counts}");
+}

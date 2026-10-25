@@ -25,14 +25,19 @@
 // CHECK-LABEL: {{_changed(@3)?}} proc
 // CHECK-NOT: rep
 // CHECK: {{_changed(@3)?}} endp
+// The pin (clang d1106deb71cc -O2 -m32 -march=i486) distributes it into llvm.memset (c) and llvm.memcpy (a <- b), as LoopIdiomRecognize does a loop of
+// independent stores: two string moves, not none.
 // CHECK-LABEL: {{_two_stores(@3)?}} proc
-// CHECK-NOT: rep
+// CHECK: rep stos
+// CHECK: rep movs
 // CHECK: {{_two_stores(@3)?}} endp
 // CHECK-LABEL: {{_strides(@3)?}} proc
 // CHECK-NOT: rep
 // CHECK: {{_strides(@3)?}} endp
+// The pin makes b = 0 and a = b two llvm.memset calls (the second store reads what the first wrote, which is a constant).
 // CHECK-LABEL: {{_written(@3)?}} proc
-// CHECK-NOT: rep
+// CHECK: rep stos
+// CHECK: rep stos
 // CHECK: {{_written(@3)?}} endp
 short a[160], b[160], c[160], pal[64];
 void copy(short n) { short i; for (i = 0; i < n; ++i) a[i] = b[i]; }

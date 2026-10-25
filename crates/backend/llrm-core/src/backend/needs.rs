@@ -9,10 +9,8 @@
 //!
 //! ```text
 //!   COPY        register-to-register mov       regthrash, machinecp
-//!   INSERTED    inserted instruction defining  secondary_bases
 //!   UNHELD      cell read via a reg32          upperzero
 //!   EXACT_CELL  a cell lowering proved exact   exactaddress
-//!   BASED       a cell addressed via a value   secondary_bases
 //! ```
 //!
 //! A bit is the sub-pass's own candidate test (`regthrash::_plain_copy`,
@@ -41,15 +39,10 @@ use crate::model::lir::{Insn, Insns, LirBody};
 /// A register-to-register `mov`: what copy propagation forwards and register
 /// thrashing renames.
 pub const COPY: u8 = 1;
-/// An instruction the allocator inserted that defines a value: what
-/// `secondary_bases` derives its candidates from.
-pub const INSERTED: u8 = 2;
 /// A cell read through a 32-bit register no value holds.
 pub const UNHELD: u8 = 4;
 /// A cell lowering proved exact.
 pub const EXACT_CELL: u8 = 8;
-/// A cell addressed through a value (`Mem::base`).
-pub const BASED: u8 = 16;
 
 /// The bits `one` has.
 fn of(
@@ -57,22 +50,11 @@ fn of(
     one: &Insn,
 ) -> u8 {
     let mut bits = 0;
-    if one.inserted() && !one.defines.is_empty() {
-        bits |= INSERTED;
-    }
     if let Some(what) = &one.what {
         if let (Operation::Move, Some("mov"), [Loc::Reg(_)], [Loc::Reg(_)]) =
             (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice())
         {
             bits |= COPY;
-        }
-        if what
-            .dests
-            .iter()
-            .chain(&what.sources)
-            .any(|operand| matches!(operand, Loc::Mem(cell) if cell.base.is_some()))
-        {
-            bits |= BASED;
         }
         if what.dests.iter().chain(&what.sources).any(|operand| matches!(operand, Loc::Mem(_))) {
             if upperzero::wide_roots(regs, one) != 0 {

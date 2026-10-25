@@ -2833,3 +2833,27 @@ fn the_llrm_only_module_passes_are_off_by_default_at_every_level() {
         assert!(!level.spare_loads && !level.stored_homes && !level.stable_loads);
     }
 }
+
+/// The premise of `cgpaddr`'s `optimizeExtUses` (DEVIATE CGP2 closed, #4421):
+/// the pin deletes unreachable blocks as CodeGenPrepare starts
+/// (`removeUnreachableBlocks`), and `cgpaddr` does not, because the pipeline
+/// has done it long before: the first function pass of every level is
+/// SimplifyCFG, which deletes a block nothing reaches. End to end, a C function
+/// with a labelled block nothing jumps to has it at `--dump`'s first stage
+/// (01-globalopt.ll) and not at the second (04-pipeline.ll), at -O1, -O2, -O3
+/// and -Os; `-O0` runs no `cgpaddr`.
+#[test]
+fn test_simplifycfg_runs_first_so_no_unreachable_block_reaches_cgpaddr() {
+    use crate::parity::Phase;
+    for options in [
+        pipeline::Options::basic(),
+        pipeline::Options::standard(),
+        pipeline::Options::speed(),
+        pipeline::Options::size(),
+    ] {
+        let applied = Applied { options: pipeline::Options { llvm_order: true, ..options }, ..Applied::default() };
+        let early: Vec<_> = pipeline::llvm_order(&applied, Phase::Early).iter().map(|one| one.name()).collect();
+        let first = early.iter().find(|name| !name.starts_with("lowerexpect")).expect("a pass");
+        assert!(first.starts_with("decide@") || first.starts_with("simplifycfg"), "{early:?}");
+    }
+}

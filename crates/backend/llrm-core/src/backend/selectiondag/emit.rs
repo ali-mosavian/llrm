@@ -1310,7 +1310,7 @@ impl Emitter<'_, '_> {
         &self,
         n: u32,
     ) -> bool {
-        self.glue_reaches(n, |name| name.starts_with("CALL"))
+        self.glue_reaches(n, |name| name.starts_with("CALL") || name.starts_with("TCRETURN"))
     }
 
     /// Whether `glue` (the third operand of a `CopyFromReg`) comes from a call,
@@ -1406,8 +1406,10 @@ impl Emitter<'_, '_> {
                     width: 2,
                     address: Some(self.ctx.globals.segment(self.global_displacement(origin))),
                 }),
-                ("OR32rr", _) => {
-                    // A huge pointer built as `offset | (selector << 16)`.
+                ("OR32rr" | "ADD32rr_DB", _) => {
+                    // A huge pointer built as `offset | (selector << 16)`, or
+                    // as the same sum once the combiner
+                    // turns a disjoint or into an add.
                     let selector = self
                         .huge_selector(origin)
                         .ok_or_else(
@@ -1499,6 +1501,21 @@ impl Emitter<'_, '_> {
                 }
                 return Ok(Some(()));
             }
+            // A sibling call: the frame pass puts the epilogue before this
+            // return, which is a jump to the callee (`masm`).
+            "TCRETURNdi" => {
+                let callee = self
+                    .direct_callee(node.ops[0])
+                    .ok_or_else(|| EmitError::Unsupported("a sibling call of a non-global".to_owned()))?;
+                let at = self.next_address();
+                let requires = std::mem::take(&mut self.arguments);
+                let uses = requires.iter().map(|(held, _)| held.value).collect();
+                let what = Semantics { name: Some("jmp".into()), ..Semantics::new(Operation::Return) };
+                let insn = Insn { requires, ..Insn::new(at, Some((at, at)), Some(what), vec![], uses) };
+                self.blocks.last_mut().expect("a block").insns.push(Arc::new(insn));
+                self.calls.push((at, callee));
+                return Ok(Some(()));
+            }
             "CALLpcrel32" => {
                 let callee = self
                     .direct_callee(node.ops[0])
@@ -1543,6 +1560,27 @@ impl Emitter<'_, '_> {
                 );
                 self.calls.push((at, callee));
                 self.inline_places.push((at, patched));
+                return Ok(Some(()));
+            }
+            // `llrm.ia16.in`/`out`: a barrier the later passes give `in`/`out`
+            // forms; the port is an immediate byte or `dx`. A node with a
+            // value result reads.
+            "PORT_IO" => {
+                let reading = node.values.first().is_some_and(|vt| *vt != EVT::OTHER);
+                let port = match self.dag.node(node.ops[1]).data {
+                    NodeData::Const { bits, .. } if (0..256).contains(&(bits as i64)) => {
+                        Loc::Imm(Imm { value: bits as i64, width: 1, address: None })
+                    }
+                    _ => self.operand(node.ops[1])?,
+                };
+                if reading {
+                    let held = self.fresh(width_of(self.dag, SDValue { node: n, res: 0 }));
+                    self.values.insert(SDValue { node: n, res: 0 }, held.value);
+                    self.push(Operation::Barrier, "in", vec![Loc::Held(held)], vec![port]);
+                } else {
+                    let value = self.operand(node.ops[2])?;
+                    self.push(Operation::Barrier, "out", Vec::new(), vec![port, value]);
+                }
                 return Ok(Some(()));
             }
             // `llrm.ia16.asm`: a block of bytes laid down at the site, its
@@ -2093,7 +2131,7 @@ impl Emitter<'_, '_> {
                 let mnemonic = if prefix == "ST" { "fst" } else { "fistp" };
                 self.push(Operation::FloatStore, mnemonic, vec![Loc::Mem(cell)], vec![Loc::Held(source)]);
             }
-            "CHS" | "ABS" | "SQRT" => {
+            "CHS" | "ABS" | "SQRT" | "LN" | "EXP" | "LOG2" | "EXP2" | "SIN" | "COS" | "ATAN" | "RNDINT" => {
                 let Loc::Held(source) = self.operand(node.ops[0])? else {
                     return Err(EmitError::Unsupported(format!("{name}: an operand that is no register")));
                 };
@@ -2323,7 +2361,8 @@ impl Emitter<'_, '_> {
                     pooled.width
                 )));
             }
-            return Ok(Mem { base, index, scale, ..pooled });
+            // as wide as the read, which may be inside the entry
+            return Ok(Mem { base, index, scale, width: cell_width, ..pooled });
         }
         let disp = self.constant(group[3])?;
         if self.address_register(group[4], Role::Segment)?.is_some() {

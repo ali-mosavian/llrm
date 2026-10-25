@@ -241,7 +241,7 @@ pub fn sort_and_rangeify(clusters: &mut Vec<CaseCluster>) {
 const SWITCH_PEEL_THRESHOLD: u32 = 66;
 
 /// `scaleCaseProbality`.
-fn scale_case_probability(
+pub fn scale_case_probability(
     case: BranchProbability,
     peeled: BranchProbability,
 ) -> BranchProbability {

@@ -16,9 +16,6 @@ impl Builder<'_> {
         name: &str,
     ) -> Result<(), Refused> {
         let block = llrm_mir::intrinsics::asm(name).ok_or(Refused("inline assembly that does not parse"))?;
-        if block.outputs.len() > 1 {
-            return Err(Refused("inline assembly with several outputs"));
-        }
         let arguments = &instruction.operands[..instruction.operands.len() - 1];
         let (symbols, inputs) = arguments.split_at(block.fixups.len());
         let pointer = self.target.dag.pointer;
@@ -44,15 +41,35 @@ impl Builder<'_> {
             registers.push((self.sized_register(self.arch.register_named(register), vt), value));
         }
         let mut outputs = Vec::new();
-        if let Some(register) = block.outputs.first() {
+        if block.outputs.len() > 1 {
+            // several outputs come back as the fields of an aggregate
+            let llrm_mir::types::Type::Struct { fields, .. } = self.module.context.types.get(instruction.ty).clone()
+            else {
+                return Err(Refused("inline assembly with several outputs and no aggregate result"));
+            };
+            if fields.len() != block.outputs.len() {
+                return Err(Refused("inline assembly whose outputs are not the result's fields"));
+            }
+            for (register, field) in block.outputs.iter().zip(fields) {
+                let vt = self.type_of(field)?;
+                outputs.push((self.sized_register(self.arch.register_named(register), vt), vt));
+            }
+        } else if let Some(register) = block.outputs.first() {
             let vt = self.type_of(instruction.ty)?;
             outputs.push((self.sized_register(self.arch.register_named(register), vt), vt));
         }
         let root = self.root();
         let (chain, results) = lower_asm(&mut self.dag, root, name, &fixups, &registers, &outputs);
         self.dag.set_root(chain);
-        if let (Some(result), Some(value)) = (instruction.result, results.first()) {
-            self.set_value(result, *value);
+        if let Some(result) = instruction.result {
+            if results.len() > 1 {
+                // the aggregate is one node whose results are the fields
+                let vts: Vec<_> = results.iter().map(|value| self.dag.value_type(*value)).collect();
+                let merged = self.dag.get_node_multi(super::super::isd::ISD::MergeValues, &vts, &results);
+                self.set_value(result, merged);
+            } else if let Some(value) = results.first() {
+                self.set_value(result, *value);
+            }
         }
         Ok(())
     }

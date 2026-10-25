@@ -42,9 +42,9 @@
 use std::collections::HashSet;
 
 use super::actions::{Action, LoadExt, TargetLowering};
-use super::dag::{NodeData, Rauw, SDNodeFlags, SDValue, SelectionDAG};
+use super::dag::{MemInfo, NodeData, Rauw, SDNodeFlags, SDValue, SelectionDAG};
 use super::isd::{CondCode, ISD};
-use super::mvt::EVT;
+use super::mvt::{EVT, MVT};
 
 /// `CombineLevel`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -74,6 +74,18 @@ pub trait CombineHooks {
         None
     }
 
+    /// `targetShrinkDemandedConstant`: `None` is "not handled" (the generic
+    /// shrink runs); `Some(None)` keeps the node as it is; `Some(Some(new))`
+    /// replaces it.
+    fn target_shrink_demanded_constant(
+        &mut self,
+        _dag: &mut SelectionDAG,
+        _op: SDValue,
+        _demanded: u128,
+    ) -> Option<Option<SDValue>> {
+        None
+    }
+
     /// `IsDesirableToPromoteOp`, with `isTypeDesirableForOp` before it: the
     /// type a legal operation is better done in, or `None`.
     fn promote_type(
@@ -93,7 +105,7 @@ impl CombineHooks for NoCombines {}
 
 pub struct DagCombiner<'a, H: CombineHooks> {
     pub(super) dag: &'a mut SelectionDAG,
-    hooks: &'a mut H,
+    pub(super) hooks: &'a mut H,
     pub(super) level: CombineLevel,
     worklist: Vec<u32>,
     queued: HashSet<u32>,
@@ -163,6 +175,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
 
     /// `Run`.
     pub fn run(&mut self) {
+        // `RemoveDeadNodes`: what an earlier phase replaced no longer counts as
+        // a user. Newest first, so a user goes before the nodes it reads.
+        for node in self.dag.node_ids().rev() {
+            self.dag.delete_dead(node);
+        }
         // Oldest first, so the newest is taken first.
         for node in self.dag.node_ids() {
             self.add_to_worklist(node);
@@ -199,6 +216,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             if self.dag.opcode(result) != ISD::EntryToken {
                 self.add_to_worklist_with_users(result.node);
             }
+            self.dag.delete_dead(n);
         }
     }
 
@@ -226,12 +244,15 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         match self.dag.opcode(node) {
             ISD::MergeValues => self.visit_merge_values(node),
             ISD::Select => self.visit_select(node),
+            ISD::Store => self.visit_store(node),
+            ISD::Freeze => self.visit_freeze(node),
             ISD::SetCC => self.visit_setcc(node),
             ISD::Xor => self.visit_xor(node).or_else(|| self.simplify_demanded(node)),
             ISD::Mul => self.visit_mul(node),
             ISD::And => self.visit_and(node).or_else(|| self.simplify_demanded(node)),
             ISD::Or => self.visit_or(node).or_else(|| self.simplify_demanded(node)),
             ISD::Add => self.visit_add(node),
+            ISD::Sub => self.visit_sub(node),
             ISD::Shl | ISD::Srl => self.visit_shift(node).or_else(|| self.simplify_demanded(node)),
             ISD::Sra => self.visit_sra(node).or_else(|| self.visit_shift(node)),
             ISD::SDiv => self.visit_sdiv(node),
@@ -483,6 +504,27 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         node: SDValue,
     ) -> Option<SDValue> {
         let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let vt = self.dag.value_type(node);
+        // `not (or|and a, b)` of `i1`s, when one is a one-use compare, is the
+        // and/or of the nots (De Morgan), each of which flips its compare:
+        // `xor (or (setcc), (setcc)), 1` was `or; xor 1; test 1; je`.
+        if self.dag.constant(n1) == Some(1)
+            && vt == EVT::I1
+            && matches!(self.dag.opcode(n0), ISD::Or | ISD::And)
+            && self.dag.use_count(n0.node) == 1
+        {
+            let (a, b) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            let one_use_setcc =
+                |dag: &SelectionDAG, v: SDValue| dag.opcode(v) == ISD::SetCC && dag.use_count(v.node) == 1;
+            if one_use_setcc(self.dag, a) || one_use_setcc(self.dag, b) {
+                let flipped = if self.dag.opcode(n0) == ISD::And { ISD::Or } else { ISD::And };
+                let (not_a, not_b) =
+                    (self.dag.get_node(ISD::Xor, vt, &[a, n1]), self.dag.get_node(ISD::Xor, vt, &[b, n1]));
+                self.add_to_worklist(not_a.node);
+                self.add_to_worklist(not_b.node);
+                return Some(self.dag.get_node(flipped, vt, &[not_a, not_b]));
+            }
+        }
         if self.dag.constant(n1) != Some(1) || self.dag.opcode(n0) != ISD::SetCC {
             return None;
         }
@@ -491,7 +533,6 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(n0, 2)).data else { return None };
-        let vt = self.dag.value_type(node);
         Some(self.dag.get_setcc(vt, lhs, rhs, cc.inverse_integer()))
     }
 
@@ -874,6 +915,67 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         Some(self.dag.get_constant(0, vt))
     }
 
+    /// `visitFREEZE`, the first fold: `freeze x` is `x` when `x` cannot be
+    /// undef or poison. (The pin's second fold, hoisting the freeze over a
+    /// multi-use operand, is not translated.)
+    fn visit_freeze(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let x = self.dag.operand(node, 0);
+        if !self.guaranteed_not_undef_or_poison(x, 0) {
+            return None;
+        }
+        // The users now read `x` directly: their users may fold with it too
+        // (`not (or (cmp), freeze (cmp))` was visited with the freeze there).
+        let users: Vec<u32> = self.dag.users(node).collect();
+        for user in users {
+            self.add_to_worklist_with_users(user);
+        }
+        Some(x)
+    }
+
+    /// `isGuaranteedNotToBeUndefOrPoison`, for the nodes the combiner builds:
+    /// constants, registers, frame indexes and `freeze`; a load through such a
+    /// pointer; and an integer operation without a poison-generating flag whose
+    /// operands are.
+    ///
+    /// DEVIATE SD213: no vector, `AssertSext`/`AssertZext`, overflow-flag or
+    /// shift-amount range reasoning beyond a constant amount below the width.
+    /// Exit: those. Owner sdag-b. Review 2026-12-10.
+    fn guaranteed_not_undef_or_poison(
+        &self,
+        value: SDValue,
+        depth: u32,
+    ) -> bool {
+        if self.dag.opcode(value) == ISD::Freeze {
+            return true;
+        }
+        if depth >= 6 {
+            return false;
+        }
+        if self.dag.constant(value).is_some() {
+            return true;
+        }
+        let poison_flags = SDNodeFlags::NO_UNSIGNED_WRAP.0 | SDNodeFlags::NO_SIGNED_WRAP.0 | SDNodeFlags::EXACT.0;
+        let flagged = self.dag.node(value).flags.0 & poison_flags != 0;
+        let all = |ops: &[usize]| {
+            ops.iter().all(|&i| self.guaranteed_not_undef_or_poison(self.dag.operand(value, i), depth + 1))
+        };
+        match self.dag.opcode(value) {
+            ISD::Register | ISD::FrameIndex | ISD::ValueType | ISD::CopyFromReg => true,
+            ISD::Load => all(&[1]),
+            ISD::SetCC => all(&[0, 1]),
+            ISD::And | ISD::Or | ISD::Xor | ISD::Add | ISD::Sub | ISD::Mul if !flagged => all(&[0, 1]),
+            ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend | ISD::Truncate if !flagged => all(&[0]),
+            ISD::Shl | ISD::Srl | ISD::Sra if !flagged => {
+                let width = u128::from(self.dag.value_type(value).size_in_bits());
+                self.dag.constant(self.dag.operand(value, 1)).is_some_and(|by| by < width) && all(&[0])
+            }
+            _ => false,
+        }
+    }
+
     /// `PromoteIntBinOp`, `PromoteIntShiftOp` and `PromoteExtend`: an operation
     /// the target wants in a wider type is done there, and truncated.
     ///
@@ -968,6 +1070,63 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let promoted = self.promote_operand(value, wide)?;
         let mask = self.dag.get_constant(super::fold::mask(old.size_in_bits()), wide);
         Some(self.dag.get_node(ISD::And, wide, &[promoted, mask]))
+    }
+
+    /// `visitSUB`, the first folds: `x - x` is 0, and `x - C` is `x + -C`, so
+    /// the add-shaped folds and the matcher's `dec`/`lea` patterns see one
+    /// form. (The pin's `umin`, select, `ctlz` and negation folds are not
+    /// translated.)
+    fn visit_sub(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let vt = self.dag.value_type(node);
+        if !vt.is_integer() {
+            return None;
+        }
+        if n0 == n1 {
+            return Some(self.dag.get_constant(0, vt));
+        }
+        let c = self.dag.constant(n1).filter(|_| !self.dag.is_opaque(n1))?;
+        let negated = self.dag.get_constant(c.wrapping_neg() & super::fold::mask(vt.size_in_bits()), vt);
+        Some(self.dag.get_node(ISD::Add, vt, &[n0, negated]))
+    }
+
+    /// `visitSTORE`, `replaceStoreOfFPConstant`: `store float 1.5, p` is
+    /// `store i32 0x3fc00000, p`, and a double constant the FPU cannot load
+    /// directly is two `i32` stores, so the constant is never loaded onto the
+    /// x87 stack to be stored. (The pin's `f16`, `f80` and `f128` stay.)
+    fn visit_store(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (chain, value, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+        let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+        if self.dag.opcode(value) != ISD::ConstantFP || info.volatile || info.mem_vt != self.dag.value_type(value) {
+            return None;
+        }
+        let NodeData::ConstFp { bits } = self.dag.node(value).data else { return None };
+        let tli = self.tli?;
+        let int_info = |mem_vt: EVT, align: u32, base| MemInfo { mem_vt, align, base, ..info };
+        match self.dag.value_type(value) {
+            EVT::Simple(MVT::F32) => {
+                let constant = self.dag.get_constant(bits & 0xFFFF_FFFF, EVT::I32);
+                Some(self.dag.get_store(chain, constant, ptr, int_info(EVT::I32, info.align, info.base)))
+            }
+            EVT::Simple(MVT::F64) if !tli.is_fp_imm_legal(MVT::F64, bits) => {
+                let lo = self.dag.get_constant(bits & 0xFFFF_FFFF, EVT::I32);
+                let hi = self.dag.get_constant((bits >> 32) & 0xFFFF_FFFF, EVT::I32);
+                let first = self.dag.get_store(chain, lo, ptr, int_info(EVT::I32, info.align, info.base));
+                let four = self.dag.get_constant(4, self.dag.value_type(ptr));
+                let next = self.dag.get_mem_base_plus_offset(ptr, four, SDNodeFlags::default());
+                let second = self
+                    .dag
+                    .get_store(chain, hi, next, int_info(EVT::I32, info.align.min(4), super::dag::MemBase::Unknown));
+                Some(self.dag.get_token_factor(&[first, second]))
+            }
+            _ => None,
+        }
     }
 
     /// `visitMUL`, up to the multiply-by-power-of-two folds.

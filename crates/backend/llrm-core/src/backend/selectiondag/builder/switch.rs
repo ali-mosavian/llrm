@@ -47,6 +47,8 @@ pub(super) enum Deferred {
     JumpTable { block: BlockId, reg: u32, index: u32 },
     /// `visitBitTestHeader` in a block other than the switch's.
     BitTestHeader(BitTestHeader),
+    /// A block `FindMergedConditions` placed: one compare and branch.
+    Merged(super::mergedcond::MergedCase),
     /// `visitBitTestCase`: one mask test.
     BitTestCase { block: BlockId, header: BitTestHeader, case: usize, next: BlockId },
 }
@@ -58,6 +60,7 @@ impl Deferred {
             Deferred::JumpTableHeader(header) => header.block,
             Deferred::JumpTable { block, .. } | Deferred::BitTestCase { block, .. } => *block,
             Deferred::BitTestHeader(header) => header.block,
+            Deferred::Merged(case) => case.block(),
         }
     }
 }
@@ -102,7 +105,7 @@ struct WorkItem {
 
 impl Builder<'_> {
     /// The block after `block` in the layout so far.
-    fn layout_next(
+    pub(super) fn layout_next(
         &self,
         block: BlockId,
     ) -> Option<BlockId> {
@@ -112,7 +115,7 @@ impl Builder<'_> {
 
     /// A new block, placed at `*at` in the layout (and `*at` moves past it),
     /// named as the switch's block.
-    fn new_block(
+    pub(super) fn new_block(
         &mut self,
         at: &mut usize,
     ) -> BlockId {
@@ -130,7 +133,7 @@ impl Builder<'_> {
     }
 
     /// `ExportFromCurrentBlock(Cond)`.
-    fn export_condition(
+    pub(super) fn export_condition(
         &mut self,
         cond: Operand,
     ) -> Result<(), Refused> {
@@ -180,26 +183,8 @@ impl Builder<'_> {
             let shift = 128 - width;
             cases.push((((bits << shift) as i128) >> shift, dest.0, edge(at + 1)));
         }
-        let successors =
-            std::iter::once(default).chain(instruction.operands[2..].chunks(2).filter_map(|pair| match pair[1] {
-                Operand::Block(block) => Some(block),
-                _ => None,
-            }));
-        for successor in successors {
-            if self
-                .function
-                .iter_block(successor)
-                .next()
-                .is_some_and(|inst| self.function.instruction(inst).opcode == Opcode::Phi)
-            {
-                return Err(Refused("switch to a block with phis"));
-            }
-        }
         let target = SwitchTarget::x86(self.target.dag.pointer.size_in_bits());
         let plan = switchcg::plan_with(&cases, default.0, &target);
-        if plan.peeled.is_some() {
-            return Err(Refused("switch with a peeled case"));
-        }
         if plan.clusters.is_empty() {
             let next = self.layout_next(self.block);
             if Some(default) != next {
@@ -211,20 +196,31 @@ impl Builder<'_> {
             return Ok(());
         }
         let clusters = plan.clusters.clone();
+        let peeled = plan.peeled.clone();
         self.plan = Some(plan);
         let unreachable_default = self
             .function
             .iter_block(default)
             .next()
             .is_some_and(|inst| self.function.instruction(inst).opcode == Opcode::Unreachable);
-        let mut work = vec![WorkItem {
-            block: self.block,
-            first: 0,
-            last: clusters.len() - 1,
-            ge: None,
-            lt: None,
-            default_prob: default_edge,
-        }];
+        // `peelDominantCaseCluster`: the cluster most of the switch goes to is
+        // tested first, in this block, and falls through to a block after it
+        // where the rest of the switch is lowered.
+        let (start, default_prob) = match peeled {
+            Some((cluster, prob)) => {
+                let mut at = self.order.iter().position(|one| *one == self.block).expect("a placed block") + 1;
+                let rest = self.new_block(&mut at);
+                self.export_condition(cond)?;
+                let mut one = [cluster];
+                let item =
+                    WorkItem { block: self.block, first: 0, last: 0, ge: None, lt: None, default_prob: prob.compl() };
+                self.lower_work_item(&item, &mut one, cond, rest, false)?;
+                (rest, switchcg::scale_case_probability(default_edge, prob))
+            }
+            None => (self.block, default_edge),
+        };
+        let mut work =
+            vec![WorkItem { block: start, first: 0, last: clusters.len() - 1, ge: None, lt: None, default_prob }];
         let mut clusters = clusters;
         while let Some(item) = work.pop() {
             if item.last - item.first + 1 > 3 && self.target_optimizes() {
@@ -242,6 +238,7 @@ impl Builder<'_> {
     ) -> Result<(), Refused> {
         match item {
             Deferred::Case(case, cond) => self.visit_switch_case(case, cond),
+            Deferred::Merged(case) => self.emit_merged_case(&case),
             Deferred::JumpTableHeader(header) => self.emit_jump_table_header(&header),
             Deferred::JumpTable { reg, index, .. } => {
                 // visitJumpTable: `br_jt (CopyFromReg reg):1, JumpTable, index`
@@ -368,7 +365,7 @@ impl Builder<'_> {
         Ok(())
     }
 
-    fn target_optimizes(&self) -> bool {
+    pub(super) fn target_optimizes(&self) -> bool {
         true
     }
 

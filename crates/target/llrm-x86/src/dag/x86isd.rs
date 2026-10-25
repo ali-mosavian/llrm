@@ -9,6 +9,9 @@ pub const REP_STOS: ISD = ISD::Target(3);
 pub const REP_MOVS: ISD = ISD::Target(4);
 /// A float call's result, popped from `st(0)`: `chain, Register $fp0, glue`.
 pub const POP_FROM_X87_REG: ISD = ISD::Target(5);
+/// A sibling call: `chain, callee, TargetConstant fpdiff, registers, regmask`;
+/// the block's end (it returns by the callee's `ret`).
+pub const TC_RETURN: ISD = ISD::Target(6);
 /// A `llrm.ia16.asm.*` block (`tools/dagisel/own_ids.txt`); see
 /// `selectiondag::inline_asm` in llrm-core.
 pub const LLRM_ASM: ISD = ISD::Target(24578);
@@ -35,6 +38,12 @@ pub const LLRM_PTRDIFF: ISD = ISD::Target(24583);
 /// then the selector to a 4-byte temporary and did `call m16:16` through it.
 /// Exit: none (m16 only). Owner sdag-b. Review 2026-12-10.
 pub const LLRM_FARCALL: ISD = ISD::Target(24584);
+
+/// A read from or a write to an I/O port (`llrm.ia16.in`/`out`): `chain, port`
+/// giving the value and the chain, or `chain, port, value` giving the chain.
+/// DEVIATE: the pin has no port intrinsics; the old selector made `in`/`out`
+/// barriers. Owner sdag-a (w9).
+pub const LLRM_PORT: ISD = ISD::Target(24586);
 /// A QB runtime routine's answer, which is the flags as `cmp answer, 0` leaves
 /// them: `flags` (the `EFLAGS` copy after the call) -> the answer. Only a
 /// compare with zero reads it, and `EmitCmp` returns the flags operand; no
@@ -52,11 +61,13 @@ pub fn name(code: u16) -> String {
         3 => "X86ISD::REP_STOS".into(),
         4 => "X86ISD::REP_MOVS".into(),
         5 => "X86ISD::POP_FROM_X87_REG".into(),
+        6 => "X86ISD::TC_RETURN".into(),
         24578 => "X86ISD::LLRM_ASM".into(),
         24580 => "X86ISD::SEGMENT_OF".into(),
         24581 => "X86ISD::LLRM_WINDOW".into(),
         24582 => "X86ISD::LLRM_CODE".into(),
         24584 => "X86ISD::LLRM_FARCALL".into(),
+        24586 => "X86ISD::LLRM_PORT".into(),
         24585 => "X86ISD::LLRM_CALL_FLAGS".into(),
         24583 => "X86ISD::LLRM_PTRDIFF".into(),
         other => format!("X86ISD#{other}"),

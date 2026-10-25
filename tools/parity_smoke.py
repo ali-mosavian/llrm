@@ -612,6 +612,12 @@ def integration_map(
         used = named(text)
         for name in set(re.findall(r"CARGO_BIN_EXE_([\w-]+)", text)):
             used |= {name} & bins.keys() and bins[name]
+        if source.stem == "check":
+            # tests/check.rs runs whichever tool a file's RUN line names, from beside llrm-qb: the compilers of its RUN lines, not only the one CARGO_BIN_EXE names
+            # (copy_idioms.c, which drives llrm-c, went red on parity unseen: a change to llrm-c ran no check).
+            for case in (root / "tests" / "check").rglob("*"):
+                for tool in re.findall(r"RUN:\s*(?:not\s+)?([\w-]+)", case.read_text(errors="replace") if case.is_file() else ""):
+                    used |= bins.get(tool, set())
         if "tools/dosbatch" in text or "run_tests" in text:
             used |= set().union(*(bins.get(name, set()) for name in TOOL_COMPILERS))
         reach = set(used)

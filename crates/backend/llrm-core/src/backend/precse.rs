@@ -40,9 +40,11 @@
 //! two. A copy no one reads is dropped again (the pin leaves it to
 //! `DeadMachineInstructionElim`).
 //!
-//! DEVIATE CSE1 (owner w-1, exit 2026-11-10): no `hasMinSize` shortcut (the
-//! selector has no minsize flag, isel.rs I2) and no `isLegalToHoistInto` test
-//! (no block says it is a landing pad).
+//! DEVIATE CSE1 (owner w-2, exit with isel.rs I2): no `hasMinSize` shortcut
+//! (the machine phases have no minsize flag; it is -Oz only, which no sweep
+//! covers). `isLegalToHoistInto` is translated: a return block is no target;
+//! the pin's other two conditions cannot hold on this LIR (see
+//! `legal_to_hoist_into`).
 //!
 //! DEVIATE CSE2 (owner funcattrs-port, exit 2026-11-13): an operation with no
 //! register operand is not a candidate, a load of a constant global with a
@@ -114,6 +116,14 @@ fn candidate(
     classes: &RegisterClasses,
 ) -> bool {
     let Some(what) = &one.what else { return false };
+    // An instruction that reads the flags is not a candidate: `sbb v, v` after
+    // two different compares is two values (the pin: an operation that uses a
+    // physical register, EFLAGS, is not a CSE candidate).
+    if what.name.as_deref().is_some_and(|name| {
+        matches!(name, "adc" | "sbb" | "rcl" | "rcr") || name.starts_with("set") || name.starts_with("cmov")
+    }) {
+        return false;
+    }
     // A pinned operand is a physical register the instruction defines or
     // reads (`cdq` writes `edx`): `hasLivePhysRegDefUses` keeps those apart.
     if !classes.requirements(what).is_empty() {
@@ -406,6 +416,16 @@ fn is_terminator(one: &Insn) -> bool {
         )
 }
 
+/// `MachineBasicBlock::isLegalToHoistInto`
+/// ([MachineBasicBlock.cpp#L316](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineBasicBlock.cpp#L316)):
+/// no return block. The other two conditions cannot hold here: the QB landing
+/// pad is entered by the runtime and reached by no edge (`ehprepare`), so no
+/// block has it as a successor and no block is a candidate that it dominates;
+/// and no instruction branches out of inline assembly.
+fn legal_to_hoist_into(block: &crate::model::lir::Block) -> bool {
+    !block.insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Return))
+}
+
 /// `isPotentiallyReachable(from, to)` over the blocks' edges: a search that
 /// gives up after 32 blocks and answers yes (CFG.cpp,
 /// `DefaultMaxBBsToExplore`).
@@ -508,6 +528,10 @@ fn hoisted(
                 continue;
             }
             let common = by_at[&up];
+            // `isLegalToHoistInto`.
+            if !legal_to_hoist_into(&body.blocks[common]) {
+                continue;
+            }
             // `isProfitableToHoistInto`: `BlockFrequency` adds saturating.
             let mbfi = frequencies.get_or_init(|| MachineBlockFrequencyInfo::of(body));
             let freq = |block: usize| mbfi.get_block_freq(block).get_frequency();
@@ -800,5 +824,90 @@ mod tests {
         assert_eq!(count(&shared, "add"), 1);
         let copy_of_v1 = shared.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| one.defines == [10]);
         assert!(!copy_of_v1, "the copy nothing reads is erased");
+    }
+
+    /// `PerformSimplePRE` hoisted an expression into a block that ends in `ret`
+    /// (a conditional-return form), where the pin's `isLegalToHoistInto`
+    /// refuses a return block. Two blocks compute `not v1` (no flags: the
+    /// pin does not hoist an operation that defines EFLAGS), one reaching
+    /// the other; their nearest common dominator is block 0.
+    #[test]
+    fn test_nothing_is_hoisted_into_a_return_block() {
+        let add = |at: i64, result: u32| {
+            insn(at, Operation::Unary, "not", vec![held(result)], vec![held(1)], vec![result], vec![1])
+        };
+        let jump = |at: i64| insn(at, Operation::Branch, "jle", vec![], vec![], vec![], vec![]);
+        let ret = |at: i64| insn(at, Operation::Return, "ret", vec![], vec![], vec![], vec![]);
+        let build = |ends: Vec<Arc<Insn>>| {
+            let entry = LirBlock { succ: vec![1, 2].into(), ..LirBlock::new(0, ends) };
+            let read = |at: i64, value: u32| {
+                insn(at, Operation::Compare, "cmp", vec![], vec![held(value), held(value)], vec![], vec![value])
+            };
+            let left = LirBlock { succ: vec![2].into(), ..LirBlock::new(1, vec![add(1, 10), read(3, 10)]) };
+            let right = LirBlock::new(2, vec![add(2, 11), read(4, 11)]);
+            let mut body = LirBody::new(
+                "pre",
+                0,
+                vec![entry.into(), left.into(), right.into()],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            body.inputs = [1, 2].into_iter().collect();
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            body
+        };
+        let adds = |body: &LirBody| {
+            body.blocks
+                .iter()
+                .flat_map(|block| block.insns.iter())
+                .filter(|one| one.what.as_ref().and_then(|what| what.name.as_deref()) == Some("not"))
+                .count()
+        };
+        let plain = shared(&build(vec![jump(0)]), &RegisterClasses::m16());
+        assert!(
+            plain.blocks[0]
+                .insns
+                .iter()
+                .any(|one| one.defines.len() == 1 && one.what.as_ref().and_then(|w| w.name.as_deref()) == Some("not")),
+            "the premise: hoisted into block 0 without the return"
+        );
+        let returning = shared(&build(vec![jump(0), ret(0)]), &RegisterClasses::m16());
+        assert!(
+            !returning.blocks[0]
+                .insns
+                .iter()
+                .any(|one| one.what.as_ref().and_then(|w| w.name.as_deref()) == Some("not")),
+            "{returning:?}"
+        );
+        assert_eq!(adds(&returning), 2);
+    }
+
+    /// `bt a, 1; sbb m1 := x, x` and later `bt b, 1; sbb m2 := x, x`: the
+    /// second read another carry, and sharing them gave every step of a CRC
+    /// the first step's mask (bench crc under `--isel=dag` returned
+    /// -46801).
+    #[test]
+    fn test_two_sbbs_of_the_same_values_after_different_compares_are_two_values() {
+        let entry = LirBlock::new(
+            0,
+            vec![
+                insn(0, Operation::Compare, "bt", vec![], vec![held(1), held(2)], vec![], vec![1, 2]),
+                insn(1, Operation::Binary, "sbb", vec![held(10)], vec![held(3), held(3)], vec![10], vec![3]),
+                insn(2, Operation::Compare, "bt", vec![], vec![held(4), held(2)], vec![], vec![4, 2]),
+                insn(3, Operation::Binary, "sbb", vec![held(11)], vec![held(3), held(3)], vec![11], vec![3]),
+                insn(4, Operation::Binary, "xor", vec![held(12)], vec![held(10), held(11)], vec![12], vec![10, 11]),
+            ],
+        );
+        let mut body = LirBody::new("sbbs", 0, vec![entry.into()], IndexMap::default(), IndexMap::default());
+        body.inputs = [1, 2, 3, 4].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let shared = shared(&body, &RegisterClasses::m16());
+        let sbbs = shared
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter(|one| one.what.as_ref().and_then(|what| what.name.as_deref()) == Some("sbb"))
+            .count();
+        assert_eq!(sbbs, 2);
     }
 }

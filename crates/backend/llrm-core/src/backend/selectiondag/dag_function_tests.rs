@@ -2286,6 +2286,27 @@ fn a_remainder_used_by_a_store_and_an_address_is_selected() {
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
 
+const FPROUND_F32: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+define cc 1000 ptr @h(ptr %0, ptr %1) addrspace(1) {
+b1:
+  %2 = load float, ptr %0
+  %3 = fmul float %2, 5.000000e-01
+  %4 = fpround float %3 to float
+  store float %4, ptr %1
+  ret ptr %1
+}
+";
+
+/// `fpround float to float` stores to a slot and loads it back; the slot was a
+/// frame object the frame did not know (`Emit(Unsupported("frame index 0"))`:
+/// `byref2.bas`, a rounded SINGLE).
+#[test]
+fn a_rounded_float_has_its_slot_in_the_frame() {
+    let module = llrm_mir::parse::module(FPROUND_F32).expect("parses");
+    selected(&module, "h", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+}
+
 const INLINE_CODE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
 declare i32 @llrm.ia16.code.89a60000.2p0(ptr)
 define i32 @f() {
@@ -2961,6 +2982,85 @@ fn the_flags_of_a_sub_are_made_again_after_another_unit_wrote_them() {
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
 
+const PAD_READS_THE_ENTRY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+@g = internal global i16 0
+define cc 1000 void @f(i16 %x) addrspace(1) personality ptr addrspace(1) @llrm.qb.personality {
+entry:
+  %y = add i16 %x, 1
+  invoke cc 1000 addrspace(1) void @llrm.qb.B$CEND() to label %next unwind label %landing
+next:
+  ret void
+landing:
+  %e = landingpad { ptr, i32 } catch ptr null
+  store i16 %y, ptr @g
+  ret void
+}
+declare cc 1000 void @llrm.qb.B$CEND() addrspace(1)
+declare i32 @llrm.qb.personality(...) addrspace(1)
+";
+
+/// The runtime enters a landing pad with no register intact, so a value the
+/// entry block defined is not there. The DAG path took such a function and the
+/// verifier stopped the compile (`value is read but never defined`, qb
+/// `onerr` and `erlnum`): it is refused and the old selector takes it.
+#[test]
+fn a_landing_pad_reading_an_entry_value_is_refused() {
+    let refused = select_with_contracts(PAD_READS_THE_ENTRY).err().expect("refused");
+    assert!(refused.contains("read and not defined"), "{refused}");
+}
+
+const RUNTIME_CALL_MORE_ARGS_THAN_DECLARED: &str =
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define cc 1000 void @f(i16 %a) addrspace(1) {
+entry:
+  call cc 1000 addrspace(1) void (i16, i16, i16) @llrm.qb.B$RDIM(i16 %a, i16 1, i16 2)
+  ret void
+}
+declare cc 1000 void @llrm.qb.B$RDIM() addrspace(1)
+";
+
+/// A runtime routine's declaration names no parameters (`B$RDIM()`), but its
+/// callers push their arguments and it pops them all. The builder took the
+/// declared count as what the callee pops and left 4 bytes to the caller:
+/// `add sp, 4` after the call, and qb `bounds.bas` (`LOCALS`) crashed once
+/// pads were selected.
+#[test]
+fn a_runtime_call_pops_every_argument_it_is_given() {
+    let module = llrm_mir::parse::module(RUNTIME_CALL_MORE_ARGS_THAN_DECLARED).expect("parses");
+    let contracts =
+        super::dag_function::RuntimeContracts { abi: &Stub { flags: false }, segments: &crate::backend::target::BASIC };
+    let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
+    let done = super::dag_function::selected_in_pool(
+        &module,
+        "f",
+        &llrm_x86_m16::M16,
+        crate::backend::cpu::profile("386").expect("a cpu"),
+        &[],
+        Some(&contracts),
+        pool,
+    )
+    .unwrap_or_else(|why| panic!("{}", why.0));
+    let adjusts = done
+        .body
+        .insns()
+        .iter()
+        .filter(|i| {
+            i.what
+                .as_ref()
+                .is_some_and(
+                    |w| w.name.as_deref() == Some("add")
+                        && w.dests.iter().any(|d| {
+                            matches!(
+                                d,
+                                crate::model::ir::Loc::Reg(r) if r.register == crate::model::ir::STACK
+                            )
+                        }),
+                )
+        })
+        .count();
+    assert_eq!(adjusts, 0, "the caller removes nothing");
+}
+
 const SMUL_FIX: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f(i32 %a, i32 %b) {
 entry:
@@ -2978,4 +3078,207 @@ fn a_fixed_point_multiply_is_a_widening_multiply_and_a_funnel_shift() {
     let names = names(SMUL_FIX).unwrap_or_else(|why| panic!("{why}"));
     assert!(names.iter().any(|n| n == "imul" || n == "mul"), "{names:?}");
     assert!(names.iter().any(|n| n == "shrd"), "{names:?}");
+}
+
+const MERGED_WITH_PHI: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a, i32 %b, ptr %p, ptr %q) {
+entry:
+  %x = icmp slt i32 %a, %b
+  %l = load i32, ptr %p
+  %m = load i32, ptr %q
+  %s = mul i32 %l, %m
+  %k = add i32 %a, 1
+  %y = icmp sgt i32 %s, 7
+  %o = or i1 %x, %y
+  br i1 %o, label %t, label %e
+t:
+  br label %j
+e:
+  br label %j
+j:
+  %r = phi i32 [ %k, %t ], [ %b, %e ]
+  %u = add i32 %r, %k
+  ret i32 %u
+}
+";
+
+/// A condition split into branches whose right side uses a value the join
+/// block also reads: the value is exported from the first block and read in
+/// the second, the phi takes its inputs from every block that branches to it.
+#[test]
+fn a_split_condition_exports_what_the_later_blocks_read() {
+    let module = llrm_mir::parse::module(MERGED_WITH_PHI).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    assert_eq!(done.body.blocks.len(), 5, "entry, the second compare, then, else, join");
+}
+
+const PORTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+declare i8 @llrm.ia16.in.i8(i16)
+declare void @llrm.ia16.out.i8(i16, i8)
+define i8 @f(i16 %p) {
+entry:
+  call void @llrm.ia16.out.i8(i16 968, i8 7)
+  %v = call i8 @llrm.ia16.in.i8(i16 %p)
+  ret i8 %v
+}
+";
+
+/// Port I/O (`OUT`, `INP` of QB): a write to an immediate port, then a read
+/// through `dx`, in that order, as `out` and `in` barriers. The builder
+/// refused them ("intrinsic call llrm.ia16.out.i8": palette_using_pds71).
+#[test]
+fn port_writes_and_reads_stay_in_order() {
+    let module = llrm_mir::parse::module(PORTS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let names: Vec<&str> = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.op == crate::model::ir::Operation::Barrier)
+        .filter_map(|w| w.name.as_deref())
+        .collect();
+    assert_eq!(names, ["out", "in"]);
+}
+
+const ASM_TWO_OUTPUTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define i32 @f() addrspace(1) {
+entry:
+  %r = call { i16, i16 } @llrm.ia16.asm.cd1a.-.cx_dx.ax.n()
+  %hi = extractvalue { i16, i16 } %r, 0
+  %lo = extractvalue { i16, i16 } %r, 1
+  %h = zext i16 %hi to i32
+  %l = zext i16 %lo to i32
+  %s = shl i32 %h, 16
+  %v = or i32 %s, %l
+  ret i32 %v
+}
+declare { i16, i16 } @llrm.ia16.asm.cd1a.-.cx_dx.ax.n()
+";
+
+/// An inline block with two outputs (`speaker.nib`'s BIOS tick count in
+/// `cx:dx`) comes back as the fields of one aggregate; the builder refused
+/// every block with more than one output.
+#[test]
+fn an_inline_block_with_two_outputs_is_selected() {
+    let module = llrm_mir::parse::module(ASM_TWO_OUTPUTS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+    assert!(done.inline.values().any(|bytes| bytes[..] == [0xCD, 0x1A]), "{:?}", done.inline);
+}
+
+const SWITCH_TO_PHI: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %x, i32 %a, i32 %b) {
+entry:
+  switch i32 %x, label %d [ i32 0, label %j
+    i32 1, label %k
+    i32 2, label %j
+    i32 3, label %k
+    i32 4, label %j
+    i32 5, label %k ]
+d:
+  ret i32 0
+j:
+  %p = phi i32 [ %a, %entry ]
+  ret i32 %p
+k:
+  %q = phi i32 [ %b, %entry ]
+  ret i32 %q
+}
+";
+
+/// A switch whose targets have phis: the incoming values are copied once in
+/// the switch's block and every block of the lowering that branches there (the
+/// header, the compare blocks, the table) is an edge of the phi. The builder
+/// refused it ("switch to a block with phis": 29 functions of the corpora with
+/// the MIR switch lowering off).
+#[test]
+fn a_switch_to_blocks_with_phis_is_lowered() {
+    use crate::model::ir::Operation;
+    let module = llrm_mir::parse::module(SWITCH_TO_PHI).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let branches = done
+        .body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|i| i.what.as_ref().is_some_and(|w| matches!(w.op, Operation::Branch | Operation::Jump)))
+        .count();
+    assert!(branches >= 2, "the switch became branches");
+    let edges: usize =
+        done.body.blocks.iter().map(|block| block.phis.iter().map(|phi| phi.incoming.len()).sum::<usize>()).sum();
+    assert!(edges >= 2, "each phi has an edge from the lowering's blocks");
+}
+
+const PEELED_SWITCH: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @a()
+declare void @b()
+declare void @c()
+define void @f(i32 %x) {
+entry:
+  switch i32 %x, label %d [ i32 1, label %hot
+    i32 20, label %b
+    i32 40, label %c ], !prof !0
+d:
+  ret void
+hot:
+  call void @a()
+  ret void
+b:
+  call void @b()
+  ret void
+c:
+  call void @c()
+  ret void
+}
+!0 = !{!\"branch_weights\", i32 1, i32 1000, i32 1, i32 1}
+";
+
+/// A case that takes most of the probability (`peelDominantCaseCluster`) is
+/// tested first, in the switch's block, and falls through to a block of the
+/// rest. The builder refused it ("switch with a peeled case": bounds, onerr).
+#[test]
+fn a_dominant_case_is_peeled_and_the_rest_follows() {
+    let module = llrm_mir::parse::module(PEELED_SWITCH).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    assert!(
+        done.body.blocks.len() >= 7,
+        "the peeled test and the rest are blocks of their own: {}",
+        done.body.blocks.len()
+    );
+}
+
+const UINT32_TO_DOUBLE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define double @f(i64 %a) {
+entry:
+  %r = uitofp i64 %a to double
+  ret double %r
+}
+";
+
+/// The fudge of an unsigned conversion is two floats in one pool entry, and the
+/// `fadd` reads one of them by its sign: a dword. The memory operand took the
+/// entry's eight bytes (`fadd qword ptr $K[bx]`), added a huge double, and
+/// `regparm3_matrix_4`'s `f3` returned `-2147483648` under `--isel=dag`.
+#[test]
+fn the_fudge_of_an_unsigned_conversion_is_read_as_a_float() {
+    use crate::model::ir::Loc;
+    let module = llrm_mir::parse::module(UINT32_TO_DOUBLE).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+    let indexed: Vec<u32> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .flat_map(|w| w.sources.iter())
+        .filter_map(|loc| match loc {
+            Loc::Mem(m) if m.index.is_some() => Some(m.width),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(indexed, [4], "the fudge is indexed by the sign and is a float");
 }

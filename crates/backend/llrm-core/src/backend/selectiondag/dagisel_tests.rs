@@ -262,8 +262,161 @@ fn an_f80_zero_and_one_are_selected_as_the_x87_constants() {
 #[test]
 fn every_own_node_has_a_pin_id() {
     use super::dagisel_adapter::pin_opcode;
-    use super::x86isd::{LLRM_ASM, LLRM_CODE, LLRM_FARCALL, LLRM_PTRDIFF, LLRM_WINDOW, SEGMENT_OF};
-    for node in [LLRM_ASM, LLRM_CODE, LLRM_FARCALL, LLRM_PTRDIFF, LLRM_WINDOW, SEGMENT_OF] {
+    use super::x86isd::{LLRM_ASM, LLRM_CODE, LLRM_FARCALL, LLRM_PORT, LLRM_PTRDIFF, LLRM_WINDOW, SEGMENT_OF};
+    for node in [LLRM_ASM, LLRM_CODE, LLRM_FARCALL, LLRM_PORT, LLRM_PTRDIFF, LLRM_WINDOW, SEGMENT_OF] {
         assert_ne!(pin_opcode(node), u16::MAX, "{node:?}");
     }
+}
+
+/// Every `Target(24xxx)` of `x86isd.rs` (ours, not the pin's) is a line of
+/// `own_ids.txt`: `LLRM_CALL_FLAGS` (24585) was added to the node list and not
+/// to the file, so the generated ids did not know it.
+#[test]
+fn every_own_target_id_is_in_own_ids() {
+    let nodes = include_str!("../../../../../../crates/target/llrm-x86/src/dag/x86isd.rs");
+    let ids = include_str!("../../../../../../tools/dagisel/own_ids.txt");
+    let listed: Vec<(&str, &str)> = ids.lines().filter_map(|line| line.split_once(' ')).collect();
+    let mut missing = Vec::new();
+    for line in nodes.lines().filter(|line| line.starts_with("pub const ")) {
+        let Some((name, rest)) = line["pub const ".len()..].split_once(':') else { continue };
+        let Some(number) = rest.split("Target(").nth(1).and_then(|tail| tail.split(')').next()) else { continue };
+        if number.starts_with("24") && !listed.iter().any(|(id, n)| id.ends_with(&format!("::{name}")) && *n == number)
+        {
+            missing.push(format!("{name} {number}"));
+        }
+    }
+    assert!(missing.is_empty(), "not in tools/dagisel/own_ids.txt: {missing:?}");
+}
+
+/// `log`, `exp`, `log2`, `exp2`, `sin`, `cos` and `atan` of a double had no
+/// pattern (the pin calls libm): `CannotSelect` in 36 qb/nib programs under
+/// `--isel=dag`. llrm's targets have no libm, so they select as the x87
+/// sequences the old selector spells.
+#[test]
+fn a_natural_log_exp_and_log2_are_the_x87_sequences() {
+    for (op, name) in [
+        (ISD::FLog, "LN_Fp80"),
+        (ISD::FExp, "EXP_Fp80"),
+        (ISD::FLog2, "LOG2_Fp80"),
+        (ISD::FExp2, "EXP2_Fp80"),
+        (ISD::FSin, "SIN_Fp80"),
+        (ISD::FCos, "COS_Fp80"),
+        (ISD::FAtan, "ATAN_Fp80"),
+        (ISD::FRint, "RNDINT_Fp80"),
+    ] {
+        let mut dag = SelectionDAG::new(DagConfig::default());
+        let x = {
+            let entry = dag.entry_node();
+            dag.get_copy_from_reg(entry, 40, EVT::Simple(super::mvt::MVT::F64))
+        };
+        let node = dag.get_node(op, EVT::Simple(super::mvt::MVT::F64), &[x]);
+        let mut adapter = DagisAdapter::new(&mut dag);
+
+        assert_eq!(
+            select_node(&Selector::new(table::TABLE), &mut adapter, &mut hooks(), node.node),
+            Outcome::Selected,
+            "{op:?}"
+        );
+
+        let ISD::Machine(code) = dag.nodes()[node.node as usize].opcode else { panic!("{op:?} is no machine node") };
+        let own = [
+            (llrm_dagisel::x86_llrm::FLN_OPCODE, "LN_Fp80"),
+            (llrm_dagisel::x86_llrm::FEXP_OPCODE, "EXP_Fp80"),
+            (llrm_dagisel::x86_llrm::FLOG2_OPCODE, "LOG2_Fp80"),
+            (llrm_dagisel::x86_llrm::FEXP2_OPCODE, "EXP2_Fp80"),
+            (llrm_dagisel::x86_llrm::FSIN_OPCODE, "SIN_Fp80"),
+            (llrm_dagisel::x86_llrm::FCOS_OPCODE, "COS_Fp80"),
+            (llrm_dagisel::x86_llrm::FATAN_OPCODE, "ATAN_Fp80"),
+            (llrm_dagisel::x86_llrm::FRINT_OPCODE, "RNDINT_Fp80"),
+        ];
+        assert_eq!(own.iter().find(|(v, _)| u32::from(*v) == code).map(|(_, n)| *n), Some(name), "{op:?}");
+    }
+}
+
+/// `(x & 1) | (y << 1)`: no shared bit, so the `or` is an add and the address
+/// `x + y*2` is one `lea` (bench `x_popcount`: the pin has `LEA32r` x2 where we
+/// had `SHL32ri` + `ADD32rr_DB`, and before known bits, `OR32rr`).
+#[test]
+fn an_or_of_values_with_no_common_bits_is_one_lea() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let (x, y) = (input(&mut dag, 40), input(&mut dag, 41));
+    let one = dag.get_constant(1, EVT::I32);
+    let by = dag.get_constant(1, EVT::I8);
+    let low = dag.get_node(ISD::And, EVT::I32, &[x, one]);
+    let high = dag.get_node(ISD::Shl, EVT::I32, &[y, by]);
+    let or = dag.get_node(ISD::Or, EVT::I32, &[low, high]);
+    let mut adapter = DagisAdapter::new(&mut dag);
+
+    assert_eq!(Selector::new(table::TABLE).select(&mut adapter, &mut hooks(), or.node), Outcome::Selected);
+
+    assert_eq!(machine_name(&dag, or.node), "LEA32r");
+}
+
+/// `lrint` and `rint` of an x87 value store with `fist` in the current rounding
+/// mode (`X86ISD::FIST`): `CannotSelect(Target(587))` in `jpeg_single.bas`
+/// under `--isel=dag`. It is `IST_Fp<float>m<int>` into the slot.
+#[test]
+fn an_x87_fist_to_a_stack_slot_is_an_ist_pseudo() {
+    use super::dag::{MemBase, SDNodeFlags};
+    for (float, int, name) in [
+        (super::mvt::MVT::F64, EVT::I32, "IST_Fp32m64"),
+        (super::mvt::MVT::F32, EVT::I32, "IST_Fp32m32"),
+        (super::mvt::MVT::F64, EVT::I16, "IST16_64"),
+    ] {
+        let mut dag = SelectionDAG::new(DagConfig::default());
+        let value = {
+            let entry = dag.entry_node();
+            dag.get_copy_from_reg(entry, 40, EVT::Simple(float))
+        };
+        let slot = dag.get_frame_index(EVT::I32, 3);
+        let chain = dag.entry_node();
+        let info = MemInfo { mem_vt: int, align: 4, volatile: false, base: MemBase::Stack(3), ext: None, space: 0 };
+        let fist = dag.intern(
+            super::x86_lowering::x86isd::FIST,
+            &[EVT::OTHER],
+            &[chain, value, slot],
+            SDNodeFlags::default(),
+            super::dag::NodeData::Mem(info),
+        );
+        let mut adapter = DagisAdapter::new(&mut dag);
+
+        let outcome = select_node(&Selector::new(table::TABLE), &mut adapter, &mut hooks(), fist.node);
+        assert_eq!(outcome, Outcome::Selected, "{float:?} to {int:?}");
+        match name.strip_prefix("IST16_") {
+            Some(_) => {
+                let ISD::Machine(code) = dag.nodes()[fist.node as usize].opcode else { panic!("no machine node") };
+                assert_eq!(code, u32::from(llrm_dagisel::x86_llrm::IST16_OPCODES[1]), "a word fist of a double");
+            }
+            None => assert_eq!(machine_name(&dag, fist.node), name),
+        }
+    }
+}
+
+/// A float constant read from the pool: `fld [const.0]`, the pool entry in the
+/// instruction's displacement. The address was a `MOV32ri` of the entry
+/// into a register first (bench `x_horner`, `floats`, `recfloat`,
+/// `nbody_single`, `x_nbody_f`: 9 `MOV32ri` the pin does not have).
+#[test]
+fn a_float_load_from_the_constant_pool_folds_the_entry_into_the_address() {
+    use super::dag::{NodeData, SDNodeFlags};
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let f64_vt = EVT::Simple(super::mvt::MVT::F64);
+    dag.constant_pool.push((0x3FF8_0000_0000_0000, f64_vt));
+    let entry = dag.intern(ISD::TargetConstantPool, &[EVT::I32], &[], SDNodeFlags::default(), NodeData::PoolIndex(0));
+    let address = dag.get_node(super::x86_lowering::x86isd::WRAPPER, EVT::I32, &[entry]);
+    let chain = dag.entry_node();
+    let info =
+        MemInfo { mem_vt: f64_vt, align: 8, volatile: false, base: MemBase::ConstantPool(0), ext: None, space: 0 };
+    let load = dag.get_load(f64_vt, chain, address, info);
+    let mut adapter = DagisAdapter::new(&mut dag);
+
+    assert_eq!(select_node(&Selector::new(table::TABLE), &mut adapter, &mut hooks(), load.node), Outcome::Selected);
+
+    assert_eq!(machine_name(&dag, load.node), "LD_Fp64m");
+    let ops = &dag.nodes()[load.node as usize].ops;
+    assert!(ops.iter().any(|op| dag.opcode(*op) == ISD::TargetConstantPool), "the entry is in the address group");
+    assert!(
+        !ops.iter().any(|op| matches!(dag.nodes()[op.node as usize].opcode, ISD::Machine(_))),
+        "no register-materialized address"
+    );
 }

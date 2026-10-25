@@ -339,7 +339,12 @@ impl Tags {
             MetadataOperand::Node(node) => *node,
             _ => return,
         };
+        // Each tag is a descriptor, a place: sized once for them all, not grown
+        // by doubling through hundreds of rehashes (`DenseMap::init`).
+        let places: usize = hir.functions.iter().map(|function| function.places.len()).sum();
+        self.arrays.reserve(places);
         let mut identities: HashMap<(i64, i64), MetadataId> = HashMap::default();
+        identities.reserve(places);
         for function in &hir.functions {
             let places: HashMap<i64, &model::Place> = function.places.iter().map(|one| (one.id, one)).collect();
             let described =
@@ -2392,6 +2397,9 @@ struct Body<'b, 'm, 'h> {
     tables: &'b Tables<'h>,
     function: &'h model::Function,
     value_types: &'b HashMap<i64, i64>,
+    /// The MIR type of each HIR type this function asked for, by id: `ty` is
+    /// asked once per operand and result (`CodeGenTypes::TypeCache`).
+    type_ids: HashMap<i64, TypeId>,
     places: &'b HashMap<i64, &'h model::Place>,
     /// Each call's ABI by its instruction.
     sites: &'b HashMap<i64, &'h model::CallAbi>,
@@ -2452,6 +2460,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             tables,
             function,
             value_types: &index.values,
+            type_ids: HashMap::default(),
             places: &index.places,
             sites: &index.sites,
             blocks: HashMap::default(),
@@ -2727,7 +2736,12 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         &mut self,
         id: i64,
     ) -> Emit<TypeId> {
-        value_type(&mut self.b.context.types, &self.tables.spaces, self.tables.types[&id])
+        if let Some(&known) = self.type_ids.get(&id) {
+            return Ok(known);
+        }
+        let made = value_type(&mut self.b.context.types, &self.tables.spaces, self.tables.types[&id])?;
+        self.type_ids.insert(id, made);
+        Ok(made)
     }
 
     fn result_type(
