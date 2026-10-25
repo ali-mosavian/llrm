@@ -254,3 +254,22 @@ runs HELLO, NIBBLES and GORILLA natively on the headless device (`tests/qb_x86_3
 On a host the object is `hosted`: stack-block routines (COLOR, LOCATE, SCREEN, DIM, CLOSE) are C varargs the caller cleans up,
 every procedure frames itself (no `B$ENRA`), and DEF SEG memory goes through `B$REAL`. DOS m16/m32 objects are byte-identical.
 Open: `ON ERROR` landing on x86 hosts (a handled procedure's frame is not built), and `-m64` floats (D64-4).
+
+### DOS identity (2026-10-25)
+
+`llrm-qb -O2` objects, base = feat/parity + INT fix (8a1ae5c2d), branch = feat/qb-host e0b5c1067+; OMF, md5 prefix:
+
+| program | target | base md5 | branch md5 |
+|---|---|---|---|
+| NIBBLES.BAS | -m16 | bbef5941de2e | bbef5941de2e |
+| NIBBLES.BAS | -m32 | 8dbe5e8392ed | 8dbe5e8392ed |
+| GORILLA.BAS | -m16 | e54de04b386d | e54de04b386d |
+| GORILLA.BAS | -m32 | fa269f57f192 | fa269f57f192 |
+| arith.bas | -m16 | 1d87d2a5cf28 | 1d87d2a5cf28 |
+| arith.bas | -m32 | 17ca9ebada59 | 17ca9ebada59 |
+| udt.bas | -m16 | d2a5bd987e45 | d2a5bd987e45 |
+| udt.bas | -m32 | 2548f2804cfd | 2548f2804cfd |
+| strcmp_smoke.bas | -m16 | 3e53e5691930 | 3e53e5691930 |
+| strcmp_smoke.bas | -m32 | 5f517c8e6eea | 5f517c8e6eea |
+
+Native x86-32: [NIBBLES level 1](qb-host-shots/x86-32-nibbles-level1.png), [GORILLA city](qb-host-shots/x86-32-gorilla-city.png).
