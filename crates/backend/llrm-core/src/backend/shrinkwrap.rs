@@ -181,12 +181,14 @@ fn touches_frame(one: &Insn) -> bool {
 /// cells: they sit directly below the arguments, and a push before the
 /// reserve would put the cells over it. With `stack_addressed` the stack
 /// pointer addresses them at the depth each block is entered at, and every
-/// block must be entered at one, whatever a piece sets up.
+/// block must be entered at one, whatever a piece sets up. With `size` a
+/// restore that needs the epilogue placed on an edge is refused.
 pub fn wrapped(
     body: &LirBody,
     kept: &BTreeSet<RegId>,
     frame: Option<(RegId, RegId)>,
     stack_addressed: bool,
+    size: bool,
 ) -> Option<Wrap> {
     if body.noreturn || (kept.is_empty() && frame.is_none()) || body.blocks.is_empty() {
         return None;
@@ -214,6 +216,12 @@ pub fn wrapped(
         // the epilogue at the end of each predecessor, before its jump to the
         // restore or where it falls into it, and refuses any other.
         let split = placement.split.as_deref().unwrap_or_default();
+        // Under `size` the split changes where the early exit lands, and a
+        // branch over the epilogue grows past its short form (QCport m16 -Os
+        // +9 B, nothing smaller): the registers stay saved at the entry.
+        if size && (!split.is_empty() || !uses.is_return(placement.restore)) {
+            continue;
+        }
         if !split.iter().all(|&one| ends_on_edge_into(body, one, placement.restore)) {
             continue;
         }
@@ -481,7 +489,8 @@ mod tests {
             block(1, vec![ret(10)], vec![]),
             block(2, vec![touch(20, RegId::ESI), ret(22)], vec![]),
         ];
-        let wrap = wrapped(&body(blocks), &BTreeSet::from([RegId::EBX, RegId::ESI]), None, false).expect("a wrap");
+        let wrap =
+            wrapped(&body(blocks), &BTreeSet::from([RegId::EBX, RegId::ESI]), None, false, false).expect("a wrap");
         let both = vec![Piece::Saved(RegId::EBX), Piece::Saved(RegId::ESI)];
         assert_eq!(wrap.opens, BTreeMap::from([(2, both.clone())]));
         assert_eq!(wrap.closes, BTreeMap::from([(2, both.into_iter().rev().collect())]));
@@ -495,7 +504,7 @@ mod tests {
             block(1, vec![ret(10)], vec![]),
             block(2, vec![touch(20, RegId::ESI), ret(22)], vec![]),
         ];
-        assert!(wrapped(&body(blocks), &BTreeSet::from([RegId::EBX, RegId::ESI]), None, false).is_none());
+        assert!(wrapped(&body(blocks), &BTreeSet::from([RegId::EBX, RegId::ESI]), None, false, false).is_none());
     }
 
     /// A return the early exit shares with the late path is reached around the
@@ -508,11 +517,24 @@ mod tests {
             block(2, vec![touch(20, RegId::ESI)], vec![3]),
             block(3, vec![ret(30)], vec![]),
         ];
-        let wrap = wrapped(&body(blocks), &BTreeSet::from([RegId::ESI]), None, false).expect("a wrap");
+        let wrap = wrapped(&body(blocks), &BTreeSet::from([RegId::ESI]), None, false, false).expect("a wrap");
         let esi = vec![Piece::Saved(RegId::ESI)];
         assert_eq!(wrap.opens, BTreeMap::from([(2, esi.clone())]));
         assert!(wrap.closes.is_empty());
         assert_eq!(wrap.closes_after, BTreeMap::from([(2, esi)]));
+    }
+
+    /// Under `size` the late edge's epilogue moves the early exit past the pops
+    /// and a short branch grows (QCport m16 -Os +9 B): the save stays at the
+    /// entry.
+    #[test]
+    fn test_a_split_restore_is_refused_under_size() {
+        let blocks = vec![
+            block(0, vec![branch(2, 3)], vec![3, 2]),
+            block(2, vec![touch(20, RegId::ESI)], vec![3]),
+            block(3, vec![ret(30)], vec![]),
+        ];
+        assert!(wrapped(&body(blocks), &BTreeSet::from([RegId::ESI]), None, false, true).is_none());
     }
 
     /// The late path that does not fall into the return but is laid out away
@@ -527,7 +549,7 @@ mod tests {
             block(5, vec![touch(50, RegId::EAX)], vec![4]),
             block(4, vec![ret(40)], vec![]),
         ];
-        let wrap = wrapped(&body(blocks), &BTreeSet::from([RegId::ESI]), None, false);
+        let wrap = wrapped(&body(blocks), &BTreeSet::from([RegId::ESI]), None, false, false);
         assert!(wrap.is_some_and(|wrap| wrap.closes_after.contains_key(&2)));
     }
 
@@ -542,7 +564,7 @@ mod tests {
             block(4, vec![touch(40, RegId::EBX), ret(42)], vec![]),
             block(3, vec![ret(30)], vec![]),
         ];
-        assert!(wrapped(&body(blocks), &BTreeSet::from([RegId::ESI]), None, false).is_none());
+        assert!(wrapped(&body(blocks), &BTreeSet::from([RegId::ESI]), None, false, false).is_none());
     }
 
     /// Two late paths that each use a register were saved and popped per exit
@@ -558,7 +580,7 @@ mod tests {
             block(5, vec![ret(50)], vec![]),
         ];
         let kept = BTreeSet::from([RegId::EBX, RegId::ESI, RegId::EDI]);
-        let wrap = wrapped(&body(blocks), &kept, None, false).expect("a wrap");
+        let wrap = wrapped(&body(blocks), &kept, None, false, false).expect("a wrap");
         assert_eq!(wrap.opens.keys().copied().collect::<Vec<_>>(), [1]);
         assert_eq!(wrap.closes.keys().copied().collect::<Vec<_>>(), [4]);
     }

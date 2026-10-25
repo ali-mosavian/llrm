@@ -679,6 +679,7 @@ fn wrap_of(
         &kept,
         (frame && movable).then_some((registers.pointer, registers.stack)),
         stack_addressed,
+        procedure.size,
     )
 }
 

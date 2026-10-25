@@ -79,3 +79,24 @@ fn a_loop_that_falls_into_the_shared_return_pops_there_and_the_early_exit_pays_n
 fn a_late_path_that_jumps_to_a_join_pops_before_the_jump_and_the_early_exit_pays_nothing() {
     pays_nothing_on_the_early_path(&listing(JOIN, "f"));
 }
+
+/// At -Os the split moved the early exit's target past the pops, and a branch
+/// over a loop grew from its short form (QCport m16 -Os +9 B, none smaller):
+/// the registers stay saved at the entry there.
+#[test]
+fn at_os_the_registers_stay_saved_at_the_entry() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(scratch.path().join("a.c"), LOOP).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .args(["-m32", "-mabi=sysv", "-march=i486", "-Os", "--isel=dag", "-S", "-o", "a.s", "a.c"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let body = text.split("_mv proc").nth(1).and_then(|rest| rest.split("_mv endp").next()).expect("mv");
+    let lines: Vec<&str> = body.lines().map(str::trim).collect();
+    let first_push = lines.iter().position(|line| line.starts_with("push ")).expect("a push");
+    let test = lines.iter().position(|line| line.starts_with("test ")).expect("the test");
+    assert!(first_push < test, "-Os wrapped the save:\n{body}");
+}
