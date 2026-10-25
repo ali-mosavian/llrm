@@ -67,7 +67,8 @@ fn arm64_text(
         let mut line = line.replace(" cc 1000", "").replace(" \"llrm-fp-eval\"=\"x87-extended\"", "");
         line = line.replace("@llrm.qb.B$", "@B_").replace("@B$", "@B_");
         line = block_entry(&line);
-        if platform == Platform::Darwin {
+        // a variadic call has no prototype to extend its arguments: on every platform the callee reads an int
+        if platform == Platform::Darwin || line.contains(", ...) @B_") {
             line = signext_i16_arguments(&line);
         }
         line = aligned(&line);

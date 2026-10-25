@@ -247,3 +247,11 @@ fn darwin_callers_extend_narrow_arguments_to_the_runtime() {
     assert!(text("linux").contains("@B_PEI2(i16 -1)"));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// `INT((row + 1) / 2)` with a SINGLE `row` took the INTEGER shortcut for INT(n / constant), set the `+ 1` aside and
+/// never put it back for a float `n`: `row = 3` printed 1, not 2 (NIBBLES' arena rows were off, on every target).
+#[test]
+fn int_of_a_single_sum_over_a_constant_keeps_the_sum() {
+    let source = b"row = 3\r\nPRINT INT((row + 1) / 2); INT((row - 1) / 2); INT((row + 1) / 4)\r\nEND\r\n";
+    assert_eq!(run_basic("intsum", source).split_whitespace().collect::<Vec<_>>(), ["2", "1", "1"]);
+}
