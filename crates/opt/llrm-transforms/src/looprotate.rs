@@ -946,12 +946,21 @@ pub fn rotate_loops(run: &mut Run) -> bool {
     changed
 }
 
+/// DEVIATE: under `-Os` the header is copied only when it is a compare and its
+/// branch. Copying more costs the bytes of the copy for the jump it saves; the
+/// pin copies up to 16 instructions at every level but `-Oz`. Measured as
+/// code bytes, m16 -Os: QCport 65 modules 262435 -> 260491, the vsgcc
+/// programs 14831 -> 14744, and 1, 3, 4, 8 and 0 all larger.
+const SIZE_MAX_HEADER: u32 = 2;
+
 /// `LoopRotatePass`: every loop of the function rotated with header
 /// duplication on (`EnableHeaderDuplication`), whose limit is the pass's
-/// default of 16 header instructions, or none where the function is optimized
-/// for size or `-fno-tree-ch` says so.
+/// default of 16 header instructions (`SIZE_MAX_HEADER` at -Os), or none where
+/// the function is optimized for size or `-fno-tree-ch` says so.
 pub struct LoopRotate {
     pub duplicate_headers: bool,
+    /// Code bytes outrank speed (`-Os`): the header is copied only when small.
+    pub size: bool,
 }
 
 impl FunctionPass for LoopRotate {
@@ -971,7 +980,13 @@ impl FunctionPass for LoopRotate {
         let outer = std::rc::Rc::clone(analyses.outer());
         let tti = target_tti(outer.target());
         let options = Options {
-            max_header_size: if self.duplicate_headers { 16 } else { 0 },
+            max_header_size: if !self.duplicate_headers {
+                0
+            } else if self.size {
+                SIZE_MAX_HEADER
+            } else {
+                16
+            },
             rotation_only: false,
             is_util_mode: false,
             prepare_for_lto: false,
