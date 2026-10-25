@@ -1051,6 +1051,42 @@ b0:
     assert!(!top.contains("call"), "the call to step stayed:\n{top}");
 }
 
+/// The same shape with the far pointers a Nib `&mut i16` argument is
+/// (`memory.nib`, 19 -> 89 bytes): the arguments are `addrspacecast (ptr @g to
+/// ptr addrspace(1))`.
+#[test]
+fn test_an_os_call_whose_far_global_arguments_hold_stored_constants_is_inlined() {
+    let top = sized(
+        "@value = internal global i16 0
+@delta = internal global i16 0
+
+define internal void @step(ptr addrspace(1) %v, ptr addrspace(1) %d) {
+b0:
+  %a = load i16, ptr addrspace(1) %v
+  %m = mul i16 %a, 3
+  %b = load i16, ptr addrspace(1) %d
+  %s = add i16 %m, %b
+  store i16 %s, ptr addrspace(1) %v
+  ret void
+}
+
+define i16 @a2f() {
+b0:
+  store i16 7, ptr @value
+  store i16 -2, ptr @delta
+  call void @step(ptr addrspace(1) addrspacecast (ptr @value to ptr addrspace(1)), ptr addrspace(1) addrspacecast (ptr @delta to ptr addrspace(1)))
+  store i16 -4, ptr @value
+  store i16 11, ptr @delta
+  call void @step(ptr addrspace(1) addrspacecast (ptr @value to ptr addrspace(1)), ptr addrspace(1) addrspacecast (ptr @delta to ptr addrspace(1)))
+  %r = load i16, ptr @value
+  ret i16 %r
+}
+",
+        "@a2f(",
+    );
+    assert!(!top.contains("call"), "the call to step stayed:\n{top}");
+}
+
 /// The same two calls with values the caller does not know fold nothing: the
 /// call stays.
 #[test]

@@ -2637,7 +2637,7 @@ fn root_of(
     }
 }
 
-/// The global a constant pointer is the address of, or a step of.
+/// The global a constant pointer is the address of, or a step or a cast of.
 fn global_of(
     context: &llrm_mir::context::Context,
     operand: llrm_mir::module::Operand,
@@ -2648,6 +2648,7 @@ fn global_of(
         match &context.get(at).kind {
             ConstantKind::Global(global) => return Some(*global),
             ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => at = *operands.first()?,
+            ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => at = *value,
             _ => return None,
         }
     }
