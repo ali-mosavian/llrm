@@ -400,3 +400,41 @@ define i32 @f(i32 %n, ...) {
         .count();
     assert_eq!(stores, 9);
 }
+
+/// A `double` copied through memory at m64 stopped at emit with
+/// `Unmapped("MOVSDrm_alt")` (the pin's name for the scalar load), and once
+/// mapped came out as 10-byte x87 cells. It is a `movsd` load and store of
+/// 8-byte cells, `float` 4.
+#[test]
+fn an_m64_scalar_float_copy_is_movsd_and_movss_of_their_own_width() {
+    for (ty, name, bytes) in [("double", "movsd_x", 8), ("float", "movss", 4)] {
+        let text = format!(
+            "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define void @f(ptr %p, ptr %q) {{
+entry:
+  %v = load {ty}, ptr %p
+  store {ty} %v, ptr %q
+  ret void
+}}
+"
+        );
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+        let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+        let insns = done.body.insns();
+        let moves: Vec<_> = insns
+            .iter()
+            .filter_map(|i| i.what.as_ref())
+            .filter(|w| w.name.as_deref() == Some(name))
+            .map(|w| {
+                let width = |loc: &crate::model::ir::Loc| match loc {
+                    crate::model::ir::Loc::Mem(m) => m.width,
+                    crate::model::ir::Loc::Held(h) => h.width,
+                    _ => 0,
+                };
+                (width(&w.dests[0]), width(&w.sources[0]))
+            })
+            .collect();
+        assert_eq!(moves, [(bytes, bytes), (bytes, bytes)], "{ty}");
+    }
+}
