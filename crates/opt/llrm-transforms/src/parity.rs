@@ -342,7 +342,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "machinecse@4",
         Backend,
         "machine-cse",
-        "criterion: a repeated pure computation before phi elimination is made once, rows identical or better and the post-RA machinecse step deletable; exit: PerformSimplePRE and the invariant-load candidate",
+        "criterion: a repeated pure computation before phi elimination is made once, rows identical or better, the post-RA machinecse step deleted (row CSE5); exit: PerformSimplePRE and the invariant-load candidate",
     ),
     partial(
         "machinesink@4",

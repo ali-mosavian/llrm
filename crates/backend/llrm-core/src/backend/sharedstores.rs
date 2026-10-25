@@ -65,7 +65,7 @@
 //!
 //! # Runs
 //! A sub-pass of [`crate::backend::peephole`], once per body, after
-//! `zeroed_loads` and before `machinecse`. It returns the body unchanged unless
+//! `zeroed_loads` and before `machinedce`. It returns the body unchanged unless
 //! the CPU profile is sized for bytes (`cpu.size`, -Os): the load costs a
 //! clock.
 

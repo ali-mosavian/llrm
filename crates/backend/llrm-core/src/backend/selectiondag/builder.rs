@@ -193,6 +193,17 @@ impl BuilderTarget {
     }
 }
 
+/// The stack pointer the pointer type names: `sp`, `esp` or `rsp`.
+pub(super) fn stack_pointer_name(pointer: EVT) -> &'static str {
+    if pointer == EVT::I16 {
+        "sp"
+    } else if pointer == EVT::I64 {
+        "rsp"
+    } else {
+        "esp"
+    }
+}
+
 /// A selected block: its DAG and the phi inputs it exports.
 pub struct BlockDag {
     pub dag: SelectionDAG,
@@ -1041,15 +1052,7 @@ impl Builder<'_> {
                             *piece
                         };
                         let sp = *stack_pointer.get_or_insert_with(|| {
-                            let sp = self
-                                .arch
-                                .register_named(
-                                    if self.target.dag.pointer == EVT::I16 {
-                                        "sp"
-                                    } else {
-                                        "esp"
-                                    },
-                                );
+                            let sp = self.arch.register_named(stack_pointer_name(self.target.dag.pointer));
                             self.dag.get_copy_from_phys_reg_plain(chain, sp, self.target.dag.pointer)
                         });
                         let part_bytes = i64::from(part_vt.size_in_bits() / 8);
@@ -1078,8 +1081,7 @@ impl Builder<'_> {
                     let (size, align) =
                         byvals.get(at).copied().flatten().ok_or(Refused("byval argument of an unknown size"))?;
                     let sp = *stack_pointer.get_or_insert_with(|| {
-                        let sp =
-                            self.arch.register_named(if self.target.dag.pointer == EVT::I16 { "sp" } else { "esp" });
+                        let sp = self.arch.register_named(stack_pointer_name(self.target.dag.pointer));
                         self.dag.get_copy_from_phys_reg_plain(chain, sp, self.target.dag.pointer)
                     });
                     let offset = self.dag.get_constant((displacement - first) as u128, self.target.dag.pointer);

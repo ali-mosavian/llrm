@@ -14,6 +14,8 @@
 //!   tables, peeled cases, phis at the targets.
 //! - `dag_function_frame_tests.rs`: Frame objects, cells and addresses, string
 //!   operations and invariant loads.
+//! - `dag_function_m64_tests.rs`: x86-64 (m64): quadword arithmetic, the SysV
+//!   call sequence, loops over arrays.
 //! - `dag_function_tail_tests.rs`: Sibling calls (tail calls): `TC_RETURN` and
 //!   what follows it.
 //! - this file: The first selections: a function of one block, a loop, a

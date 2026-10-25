@@ -1,7 +1,7 @@
 //! Far and huge pointers at m16: selectors, segments, ES, phis of far pointers.
 
 use super::dag_function::selected;
-use super::dag_function_tests::FAR_CALL;
+use super::dag_function_tests::{FAR_CALL, select_with_contracts};
 use crate::model::ir::Operation;
 
 const LOOP: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -462,6 +462,20 @@ fn a_copy_from_a_far_pointer_reads_through_its_selector() {
     assert!(!from_a_constant, "DS takes a constant (DGROUP), not the pointer's selector");
 }
 
+const SEGMENT_LOADED_IN_TWO_BLOCKS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define cc 1000 void @f() addrspace(1) {
+b1:
+  %0 = load volatile i8, ptr addrspace(1) getelementptr (i8, ptr addrspace(1) addrspacecast (ptr addrspace(2) inttoptr (i16 64 to ptr addrspace(2)) to ptr addrspace(1)), i16 108)
+  br label %b3
+b3:
+  %1 = load volatile i8, ptr addrspace(1) getelementptr (i8, ptr addrspace(1) addrspacecast (ptr addrspace(2) inttoptr (i16 64 to ptr addrspace(2)) to ptr addrspace(1)), i16 108)
+  %2 = icmp ne i8 %0, %1
+  br i1 %2, label %b4, label %b3
+b4:
+  ret void
+}
+";
+
 const M16_FAR_COPY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
 @far = addrspace(1) global [100 x i16] zeroinitializer
 @near = global [100 x i16] zeroinitializer
@@ -473,6 +487,16 @@ entry:
   ret void
 }
 ";
+
+/// A segment constant put in ES in two blocks was one value defined twice
+/// ('value N is defined 2 times in a body that should be in SSA': QB's
+/// `t = PEEK(&H6C): DO: LOOP UNTIL PEEK(&H6C) <> t`, 59 tests of llrm-qb and
+/// llrm-nib under the DAG default).
+#[test]
+fn a_selector_put_in_es_in_two_blocks_is_two_values() {
+    let selected = select_with_contracts(SEGMENT_LOADED_IN_TWO_BLOCKS).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(crate::backend::verify::verify(&selected.body, true), Vec::<String>::new());
+}
 
 /// A copy from a far global took DGROUP as the source's segment, because the
 /// far pointer was built with `add` and only `or` was recognised:
@@ -528,4 +552,42 @@ fn a_fill_through_a_far_pointer_stores_through_its_selector() {
             }),
         );
     assert!(!from_a_constant, "ES takes a constant (DGROUP), not the pointer's selector");
+}
+
+const TWO_FAR_LOADS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define cc 1000 i32 @f(i16 %0, i16 %1) addrspace(1) {
+b1:
+  %2 = inttoptr i16 %0 to ptr addrspace(2)
+  %3 = addrspacecast ptr addrspace(2) %2 to ptr addrspace(1)
+  %4 = load i16, ptr addrspace(1) %3
+  %5 = sext i16 %4 to i32
+  %6 = inttoptr i16 %1 to ptr addrspace(2)
+  %7 = addrspacecast ptr addrspace(2) %6 to ptr addrspace(1)
+  %8 = load i16, ptr addrspace(1) %7
+  %9 = sext i16 %8 to i32
+  %10 = mul nsw i32 %9, %5
+  ret i32 %10
+}
+";
+
+/// Two loads through ES from two segments read the same one: both
+/// `CopyToReg ES` came before both loads, and a load took the last selector
+/// set (QB's `CLNG(a(i, k)) * b(k, j)` read `b * b`: matmul printed 54349 for
+/// 353712).
+#[test]
+fn two_loads_through_es_read_their_own_selectors() {
+    use crate::model::ir::Loc;
+    let module = llrm_mir::parse::module(TWO_FAR_LOADS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+    let selectors: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .flat_map(|w| w.sources.iter())
+        .filter_map(|source| if let Loc::Mem(cell) = source { cell.selector } else { None })
+        .collect();
+    assert_eq!(selectors.len(), 2, "{selectors:?}");
+    assert_ne!(selectors[0], selectors[1], "both loads take one selector");
 }

@@ -3515,7 +3515,9 @@ define i16 @g() addrspace(1) {
 ";
     let f = listing(text, "f");
     let add = f.iter().position(|line| line.starts_with("add e")).expect("the low dwords' sum");
-    assert!(f[add + 1].starts_with("adc e"), "{f:?}");
+    // Only moves (a reload) may sit between: they leave the carry alone.
+    let adc = f[add + 1..].iter().position(|line| line.starts_with("adc e")).expect("the high dwords' sum");
+    assert!(f[add + 1..add + 1 + adc].iter().all(|line| line.starts_with("mov ")), "{f:?}");
     let g = listing(text, "g");
     for line in ["pushd 0", "pushd 1", "call far ptr f", "xor eax, 34", "or edx, eax"] {
         assert!(g.iter().any(|one| one == line), "{line}: {g:?}");

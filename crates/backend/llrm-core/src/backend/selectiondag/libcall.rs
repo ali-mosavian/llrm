@@ -78,7 +78,7 @@ pub fn lib_call(
         match *place {
             Place::Stack(offset) => {
                 let sp = *stack_pointer.get_or_insert_with(|| {
-                    let sp = env.arch.register_named(if env.pointer == EVT::I16 { "sp" } else { "esp" });
+                    let sp = env.arch.register_named(super::builder::stack_pointer_name(env.pointer));
                     dag.get_copy_from_phys_reg_plain(chain, sp, env.pointer)
                 });
                 let offset = dag.get_constant(offset as u128, env.pointer);

@@ -127,9 +127,7 @@ use crate::backend::intbits::{low_mask, wrap_to};
 pub use crate::backend::lanes::{Lane, Lanes};
 use crate::backend::needs::{self, gated};
 use crate::backend::peep::{self, walk::Facts};
-use crate::backend::{
-    affine, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, sharedstores, storecombine,
-};
+use crate::backend::{affine, copysink, liveness, machinedce, phielim, regthrash, select, sharedstores, storecombine};
 use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Block, Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
@@ -368,7 +366,6 @@ impl Peephole {
         };
         let body = zeroed_loads(self.rules, &body, &self.cpu)?;
         let body = sharedstores::shared(&body, &self.cpu, &self.saved, &self.classes);
-        let body = machinecse::eliminated(&body)?;
         let body = zero_compares(
             self.rules,
             &compares_again(&tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))),

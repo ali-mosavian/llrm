@@ -720,3 +720,62 @@ fn a_fixed_point_divide_is_selected() {
     assert!(made.iter().any(|name| name == "shld"), "{made:?}");
     assert_eq!(made.iter().filter(|name| *name == "call").count(), 2, "{made:?}");
 }
+
+const TRUNCATED_LONG_RESULT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+
+@_inbuf = global [512 x i8] zeroinitializer
+@_inpos = global [2 x i8] zeroinitializer
+@_inlen = global [2 x i8] zeroinitializer
+@_infile = global [2 x i8] zeroinitializer
+@_bad = global [2 x i8] zeroinitializer
+
+define cc 1005 i16 @f() addrspace(1) {
+b1:
+  %0 = load i16, ptr @_inpos
+  %1 = load i16, ptr @_inlen
+  %2 = icmp eq i16 %0, %1
+  br i1 %2, label %b3, label %b2
+
+b2:
+  %3 = phi i16 [ 0, %b3 ], [ %0, %b1 ]
+  %4 = add nsw i16 %3, 1
+  store i16 %4, ptr @_inpos
+  %5 = getelementptr inbounds i8, ptr @_inbuf, i16 %3
+  %6 = load i8, ptr %5
+  %7 = zext i8 %6 to i16
+  br label %b6
+
+b3:
+  %8 = load i16, ptr @_infile
+  %9 = tail call addrspace(1) i32 @LL$READ(i16 noundef %8, ptr addrspace(1) noundef addrspacecast (ptr @_inbuf to ptr addrspace(1)), i16 noundef 512)
+  %10 = trunc i32 %9 to i16
+  store i16 %10, ptr @_inlen
+  store i16 0, ptr @_inpos
+  %11 = icmp slt i16 %10, 1
+  br i1 %11, label %b5, label %b2
+
+b5:
+  store i16 0, ptr @_inlen
+  store i16 1, ptr @_bad
+  br label %b6
+
+b6:
+  %12 = phi i16 [ 0, %b5 ], [ %7, %b2 ]
+  ret i16 %12
+}
+
+declare i32 @LL$READ(i16, ptr addrspace(1), i16) addrspace(1)
+";
+
+/// A long result cut to an int read DX too: `movzx eax, ax; shl edx, 16; add`
+/// built the 32-bit value (a spilled `xor ax, ax; shl eax, 16` once DX was
+/// found unneeded), where the int is AX. jpeg_single: +379 bytes at m16.
+#[test]
+fn a_long_result_truncated_to_an_int_does_not_read_dx() {
+    let done = select_with_contracts(TRUNCATED_LONG_RESULT).unwrap_or_else(|why| panic!("{why}"));
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    for wide in ["shl", "or"] {
+        assert!(!names.iter().any(|n| n == wide), "{names:?}");
+    }
+}

@@ -31,7 +31,8 @@ while true; do
     cand=(); for m in $(sed -n '1,40p' $Q); do [ -z "$(group "$m")" ] && cand+=("$m"); done
     # the cheap static checks (ratchets, fmt, docs, deletions) on each PR merged with feat/parity: a failure never reaches a batch (and never halves it)
     if [ "${LAND_FAST:-}" = 1 ]; then  # the user's call: no precheck, no smoke, up to 16 PRs in queue order; merge-batch leaves out the ones that cannot join
-      batch=("${cand[@]:0:16}")
+      # only PRs that merge one after another: one that conflicts with an earlier member waits a round instead of costing the others a smoke
+      batch=($(python3 "$HERE/../parity_squash.py" assemble 16 "${cand[@]:0:40}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log")); [ ${#batch[@]} -eq 0 ] && batch=("${cand[@]:0:16}")
     else
       cand=($(prechecked "${cand[@]:0:${PRECHECK_WINDOW:-16}}"))
       batch=($(pick_disjoint 8 "${cand[@]}"))
