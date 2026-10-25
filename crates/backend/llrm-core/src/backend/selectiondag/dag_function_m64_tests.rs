@@ -428,3 +428,28 @@ entry:
     let returned: Vec<_> = ret.requires.iter().map(|(held, reg)| (held.width, *reg)).collect();
     assert_eq!(returned, [(4, RegId::EAX), (8, RegId::RDX)]);
 }
+
+/// A dense switch at m64 was lowered to `BR_JT` over a `WrapperRIP` table
+/// address, which nothing selects ("CannotSelect Target(954)", `-O0` tests/llc
+/// switches): the target prices no jump table, so the DAG makes compares as the
+/// MIR pass does.
+#[test]
+fn a_dense_switch_at_m64_is_compares_not_a_jump_table() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i32 @f(i32 %x) {
+entry:
+  switch i32 %x, label %d [ i32 0, label %a  i32 1, label %b  i32 2, label %c  i32 3, label %e  i32 4, label %g  i32 5, label %h ]
+a: ret i32 10
+b: ret i32 21
+c: ret i32 33
+e: ret i32 47
+g: ret i32 52
+h: ret i32 61
+d: ret i32 0
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    assert!(done.body.insns().iter().all(|i| i.what.as_ref().is_none_or(|w| !w.indirect)));
+}
