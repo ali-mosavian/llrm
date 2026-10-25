@@ -484,9 +484,14 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
         def: u32,
     ) -> bool {
-        self.dag.use_candidates(def).iter().all(|&user| {
-            user == node || self.dead.contains(&user) || self.dag.nodes()[user as usize].ops.iter().all(|o| o.node != def)
-        })
+        self.dag
+            .use_candidates(def)
+            .iter()
+            .all(
+                |&user| user == node
+                    || self.dead.contains(&user)
+                    || self.dag.nodes()[user as usize].ops.iter().all(|o| o.node != def),
+            )
     }
     fn has_n_uses_of_value(
         &self,
@@ -501,7 +506,11 @@ impl Dag for DagisAdapter<'_> {
             .into_iter()
             .filter(|user| !self.dead.contains(user))
             .map(|user| {
-                self.dag.nodes()[user as usize].ops.iter().filter(|op| op.node == value.node && op.res == value.res).count()
+                self.dag.nodes()[user as usize]
+                    .ops
+                    .iter()
+                    .filter(|op| op.node == value.node && op.res == value.res)
+                    .count()
             })
             .sum::<usize>()
             == n

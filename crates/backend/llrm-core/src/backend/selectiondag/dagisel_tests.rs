@@ -441,3 +441,33 @@ fn use_queries_agree_with_a_scan_of_the_live_nodes() {
     assert!(adapter.use_empty(twice.node));
     assert!(!adapter.use_empty(a.node));
 }
+
+/// `pin_opcode` built a `String` (`x86isd::name` and `format!`) for each target
+/// node, 16 K times on d_faces, and the use queries collected and sorted a
+/// `Vec` of the users on each call. A query answers from the use list without
+/// an allocation.
+#[test]
+fn pin_opcode_and_the_use_queries_allocate_nothing() {
+    use llrm_dagisel::dag::Dag;
+
+    let (_, made) = llrm_support::alloc_count::counted(|| {
+        (0..1024u16)
+            .map(|code| super::dagisel_adapter::pin_opcode(ISD::Target(code)))
+            .fold(0u32, |sum, op| sum + u32::from(op))
+    });
+    assert_eq!(made, 0, "{made} allocations to number 1,024 target opcodes");
+
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let a = dag.get_constant_with(5, EVT::I32, true, false);
+    let twice = dag.get_node(ISD::Add, EVT::I32, &[a, a]);
+    let mut adapter = DagisAdapter::new(&mut dag);
+    let pin_a = llrm_dagisel::dag::SDValue::new(a.node, 0);
+    let (_, made) = llrm_support::alloc_count::counted(|| {
+        adapter.has_live_users(a.node)
+            && adapter.has_n_uses_of_value(pin_a, 2)
+            && !adapter.has_one_use(pin_a)
+            && adapter.is_only_user_of(twice.node, a.node)
+            && adapter.use_empty(twice.node)
+    });
+    assert_eq!(made, 0, "{made} allocations to ask five use questions");
+}
