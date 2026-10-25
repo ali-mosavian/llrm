@@ -275,11 +275,14 @@ pub struct EmitState {
     pub vregs: HashMap<u32, u32>,
     pub next_value: u32,
     pub at: i64,
+    /// The bytes of the float type (4, 8 or 10) of each LIR value that is a DAG
+    /// value of a float type: `LirBody::float_bytes`, which a spill rounds to.
+    pub float_bytes: std::collections::BTreeMap<u32, u32>,
 }
 
 impl Default for EmitState {
     fn default() -> EmitState {
-        EmitState { vregs: HashMap::new(), next_value: 1, at: 1 }
+        EmitState { vregs: HashMap::new(), next_value: 1, at: 1, float_bytes: Default::default() }
     }
 }
 
@@ -378,6 +381,16 @@ pub fn emit_in(
                 emitter.mark_invariant_loads(before);
             }
         }
+    }
+    for (value, number) in &emitter.values {
+        let bytes = match dag.value_type(*value) {
+            EVT::Simple(MVT::F32) => 4,
+            EVT::Simple(MVT::F64) => 8,
+            EVT::Simple(MVT::F80) => 10,
+            _ => continue,
+        };
+        let widest = emitter.state.float_bytes.entry(*number).or_insert(0);
+        *widest = bytes.max(*widest);
     }
     let mut blocks = emitter.blocks;
     if ctx.address_mode == AddrMode::Real16 {

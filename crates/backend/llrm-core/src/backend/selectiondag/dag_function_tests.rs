@@ -3250,3 +3250,33 @@ fn a_dominant_case_is_peeled_and_the_rest_follows() {
         done.body.blocks.len()
     );
 }
+
+const FLOAT_ACROSS_A_CALL: &str = "target datalayout = \"e-p:32:32-i64:32-f80:32-n8:16:32\"
+declare void @g()
+define double @f(double %a, double %b) {
+entry:
+  %x = fadd double %a, %b
+  call void @g()
+  %y = fmul double %x, %x
+  ret double %y
+}
+";
+
+/// A double live across a call spilled as a qword whatever the language:
+/// `--isel=dag` left `LirBody::float_bytes` empty, which the spiller reads as
+/// "8". BASIC keeps the extended 10 bytes (`spills_extended`):
+/// `pow_unrolled.bas` printed 100000000 for 99999999.99999996, as log2(10) lost
+/// 11 bits across a call (8 of the 24 log/exp programs).
+#[test]
+fn a_float_spill_keeps_the_width_the_language_asks_for() {
+    let module = llrm_mir::parse::module(FLOAT_ACROSS_A_CALL).expect("parses");
+    let mut basic = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    basic.spills_extended = true;
+    let done = selected(&module, "f", &llrm_x86_m32::M32, &basic, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    assert!(!done.body.float_bytes.is_empty(), "a float table");
+    assert!(done.body.float_bytes.values().all(|bytes| *bytes == 10), "{:?}", done.body.float_bytes);
+    let mut c = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    c.rounds_float_spills = true;
+    let done = selected(&module, "f", &llrm_x86_m32::M32, &c, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    assert!(done.body.float_bytes.values().any(|bytes| *bytes == 8), "{:?}", done.body.float_bytes);
+}
