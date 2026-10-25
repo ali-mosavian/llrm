@@ -173,6 +173,62 @@ thread_local! {
     pub(crate) static WALKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// `PHICSENumPHISmallSize`: up to this many phis `EliminateDuplicatePHINodes`
+/// compares pair by pair (`EliminateDuplicatePHINodesNaiveImpl`), more it
+/// hashes.
+const NAIVE_PHIS: usize = 32;
+
+#[cfg(test)]
+thread_local! {
+    /// How many blocks `duplicate_phis_in` hashed (more than `NAIVE_PHIS`
+    /// phis).
+    pub(crate) static HASHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `isIdenticalToWhenDefined` of two phis: the same type and, for each
+/// predecessor, the same value, in any order of the arms.
+fn identical_phis(
+    function: &Function,
+    a: InstId,
+    b: InstId,
+) -> bool {
+    let (one, other) = (function.instruction(a), function.instruction(b));
+    if one.ty != other.ty || one.operands.len() != other.operands.len() {
+        return false;
+    }
+    one.operands.chunks(2).all(|arm| other.operands.chunks(2).any(|candidate| candidate == arm))
+}
+
+/// `EliminateDuplicatePHINodesNaiveImpl`: each later phi identical to an
+/// earlier one is replaced by it, and the comparison starts over from the first
+/// phi (the replacement can make earlier pairs identical). Whether any was.
+fn duplicate_phis_compared(
+    function: &mut Function,
+    mut phis: Vec<InstId>,
+) -> Result<bool, String> {
+    let mut changed = false;
+    let mut at = 0;
+    while at < phis.len() {
+        let kept = phis[at];
+        let duplicate = (at + 1..phis.len()).find(|&later| identical_phis(function, kept, phis[later]));
+        let Some(later) = duplicate else {
+            at += 1;
+            continue;
+        };
+        let phi = phis.remove(later);
+        let (result, keeps) = (
+            function.instruction(phi).result.expect("a phi's value"),
+            function.instruction(kept).result.expect("a phi's value"),
+        );
+        function.replace_value(result, Operand::Value(keeps));
+        function.set_operands(phi, Vec::new());
+        function.erase(phi)?;
+        changed = true;
+        at = 0;
+    }
+    Ok(changed)
+}
+
 /// Each phi whose arms, edge for edge, are an earlier phi's in `block`
 /// replaced by that phi: LLVM's `EliminateDuplicatePHINodes(BB)`. Whether any
 /// was.
@@ -187,9 +243,15 @@ pub fn duplicate_phis_in(
     }
     #[cfg(test)]
     WALKED.with(|walked| walked.set(walked.get() + 1));
+    let phis = edges::phis(function, block);
+    if phis.len() <= NAIVE_PHIS {
+        return duplicate_phis_compared(function, phis);
+    }
+    #[cfg(test)]
+    HASHED.with(|hashed| hashed.set(hashed.get() + 1));
     let mut changed = false;
     let mut seen = llrm_support::hash::HashMap::<(TypeId, Vec<(BlockId, Operand)>), ValueId>::default();
-    for phi in edges::phis(function, block) {
+    for phi in phis {
         let op = function.instruction(phi);
         let (ty, result) = (op.ty, op.result.expect("a phi's value"));
         let mut incoming = arms(function, phi).into_iter().map(|(value, from)| (from, value)).collect::<Vec<_>>();
