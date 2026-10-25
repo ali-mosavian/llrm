@@ -80,6 +80,13 @@ impl SchedInfo for Info {
     ) -> bool {
         llrm_dagisel::instr::desc(opcode as u16).is_some_and(|d| d.is_call())
     }
+
+    fn has_cross_copy_class(
+        &self,
+        reg: u16,
+    ) -> bool {
+        Some(reg) == super::dagisel_adapter::pin_register(super::dagisel_adapter::EFLAGS_ID)
+    }
 }
 
 /// The frame's objects: fixed object `-k` is the k-th stack-passed
