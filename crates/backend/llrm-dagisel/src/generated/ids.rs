@@ -778,6 +778,7 @@ pub mod x86 {
     pub const OR32mr: u16 = 2973;
     pub const OR8mi: u16 = 3045;
     pub const OR8mr: u16 = 3051;
+    pub const RIP: u16 = 58;
     pub const SAHF: u16 = 4033;
     pub const SBB16mi: u16 = 4165;
     pub const SBB16mr: u16 = 4171;
@@ -803,6 +804,7 @@ pub mod x86 {
     pub const XOR8mi: u16 = 22709;
     pub const XOR8mr: u16 = 22715;
     pub const sub_16bit: u16 = 4;
+    pub const sub_32bit: u16 = 6;
     pub const sub_8bit: u16 = 1;
     pub const sub_8bit_hi: u16 = 2;
     /// The extras that are instructions, by number.

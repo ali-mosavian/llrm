@@ -36,7 +36,7 @@
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L270
 
 use crate::dag::{Dag, SDValue};
-use crate::generated::ids::{isd, mvt, x86, x86isd};
+use crate::generated::ids::{isd, mvt, target_opcode, x86, x86isd};
 use crate::matcher::Vt;
 
 /// `SelectionDAG::MaxRecursionDepth`.
@@ -272,6 +272,8 @@ fn is_disp_safe_for_frame_index_or_reg_base(value: i64) -> bool {
 pub enum AddrMode {
     /// 32-bit flat: `[base + index*scale + disp32]`.
     Flat32,
+    /// 64-bit flat: `[base + index*scale + disp32]` with 64-bit registers.
+    Flat64,
     /// Real mode (SD3): `[bx|bp] + [si|di] + disp16`, no scale. Which register
     /// is which is the register class's business (SD4); the matcher only
     /// keeps one base and one index.
@@ -493,11 +495,29 @@ impl<D: AddrDag> Matcher<'_, D> {
             if !(-i64::from(u16::MAX)..=i64::from(u16::MAX)).contains(&val) {
                 return true;
             }
+        } else if self.mode == AddrMode::Flat64 {
+            // `isOffsetSuitableForCodeModel`, small code model.
+            let suitable = i32::try_from(val).is_ok() && (!am.has_symbolic_displacement() || val < 16 << 20);
+            if val != 0 && !suitable {
+                return true;
+            }
+            if am.base_type == BaseType::FrameIndex && !is_disp_safe_for_frame_index_or_reg_base(val) {
+                return true;
+            }
         } else if am.has_base_or_index_reg() && !is_disp_safe_for_frame_index_or_reg_base(val) {
             return true;
         }
         am.disp = val as i32;
         false
+    }
+
+    /// `X86ISelAddressMode::isRIPRelative`.
+    fn is_rip_relative(
+        &self,
+        am: &AddressMode,
+    ) -> bool {
+        am.base_type == BaseType::Reg
+            && am.base_reg.is_some_and(|base| self.dag.register_of(base.node) == Some(x86::RIP))
     }
 
     /// `matchWrapper` ([L1976][wrap]).
@@ -510,6 +530,11 @@ impl<D: AddrDag> Matcher<'_, D> {
         am: &mut AddressMode,
     ) -> bool {
         if am.has_symbolic_displacement() {
+            return true;
+        }
+        let rip_relative = self.opcode(n) == x86isd::WrapperRIP;
+        // %rip is the base: it takes no other register.
+        if rip_relative && am.has_base_or_index_reg() {
             return true;
         }
         let backup = *am;
@@ -527,6 +552,9 @@ impl<D: AddrDag> Matcher<'_, D> {
         if self.fold_offset_into_address(offset as u64, am) {
             *am = backup;
             return true;
+        }
+        if rip_relative {
+            am.base_reg = Some(self.dag.register(x86::RIP, mvt::i64));
         }
         false
     }
@@ -649,7 +677,7 @@ impl<D: AddrDag> Matcher<'_, D> {
             }
         }
         // x + x is x * 2.
-        if self.mode == AddrMode::Flat32
+        if self.mode != AddrMode::Real16
             && self.opcode(n) == isd::ADD
             && self.operand(n, 0) == self.operand(n, 1)
             && am.scale <= 4
@@ -673,6 +701,18 @@ impl<D: AddrDag> Matcher<'_, D> {
         if depth >= MAX_RECURSION_DEPTH {
             return self.match_address_base(n, am);
         }
+        // `%rip + disp32`: only an immediate merges into it.
+        if self.is_rip_relative(am) {
+            if matches!(am.symbol, Some(Symbol { kind: SymbolKind::JumpTable, .. })) {
+                return true;
+            }
+            if let Some(value) = self.constant(n) {
+                if !self.fold_offset_into_address(value as u64, am) {
+                    return false;
+                }
+            }
+            return true;
+        }
         let opcode = self.opcode(n);
         match opcode {
             isd::Constant => {
@@ -681,7 +721,7 @@ impl<D: AddrDag> Matcher<'_, D> {
                     return false;
                 }
             }
-            x86isd::Wrapper => {
+            x86isd::Wrapper | x86isd::WrapperRIP => {
                 if !self.match_wrapper(n, am) {
                     return false;
                 }
@@ -694,7 +734,7 @@ impl<D: AddrDag> Matcher<'_, D> {
                 }
             }
             isd::SHL => {
-                if self.mode == AddrMode::Flat32 && am.index_reg.is_none() && am.scale == 1 {
+                if self.mode != AddrMode::Real16 && am.index_reg.is_none() && am.scale == 1 {
                     if let Some(shift) = self.constant(self.operand(n, 1)) {
                         if (1..=3).contains(&(shift as u64)) {
                             let sh_val = self.operand(n, 0);
@@ -706,7 +746,7 @@ impl<D: AddrDag> Matcher<'_, D> {
                 }
             }
             isd::SRL => {
-                if self.mode == AddrMode::Flat32 && am.index_reg.is_none() && am.scale == 1 {
+                if self.mode != AddrMode::Real16 && am.index_reg.is_none() && am.scale == 1 {
                     let and = self.operand(n, 0);
                     if self.opcode(and) == isd::AND {
                         let x = self.operand(and, 0);
@@ -722,7 +762,7 @@ impl<D: AddrDag> Matcher<'_, D> {
                 }
             }
             isd::AND => {
-                if self.mode == AddrMode::Flat32 && am.index_reg.is_none() && am.scale == 1 {
+                if self.mode != AddrMode::Real16 && am.index_reg.is_none() && am.scale == 1 {
                     if let Some(mask) = self.constant(self.operand(n, 1)) {
                         let shift = self.operand(n, 0);
                         if self.opcode(shift) == isd::SRL {
@@ -742,7 +782,7 @@ impl<D: AddrDag> Matcher<'_, D> {
                 }
             }
             isd::MUL | x86isd::MUL_IMM => {
-                if self.mode == AddrMode::Flat32
+                if self.mode != AddrMode::Real16
                     && am.base_type == BaseType::Reg
                     && am.base_reg.is_none()
                     && am.index_reg.is_none()
@@ -932,6 +972,53 @@ impl<D: AddrDag> Matcher<'_, D> {
         }
         let vt = self.dag.value_type(n);
         Some(self.get_address_operands(am, vt))
+    }
+
+    /// `selectLEA64_Addr` ([L3282][lea64]): `selectLEAAddr`, then a register
+    /// narrower than 64 bits is widened with `INSERT_SUBREG` into an
+    /// `IMPLICIT_DEF`, as `LEA64_32r` and its 8/16-bit kin read 64-bit
+    /// registers.
+    ///
+    /// [lea64]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3282
+    pub fn select_lea64_addr(
+        &mut self,
+        n: SDValue,
+    ) -> Option<AddressOperands> {
+        let mut ops = self.select_lea_addr(n)?;
+        let base_type = self.dag.value_type(ops.base);
+        let sub_reg = if base_type == mvt::i8 {
+            x86::sub_8bit
+        } else if base_type == mvt::i16 {
+            x86::sub_16bit
+        } else {
+            x86::sub_32bit
+        };
+        if self.dag.register_of(ops.base.node) == Some(0) {
+            ops.base = self.dag.register(0, mvt::i64);
+        } else if matches!(base_type, t if t == mvt::i8 || t == mvt::i16 || t == mvt::i32)
+            && self.dag.opcode(ops.base.node) != isd::FrameIndex
+            && self.dag.opcode(ops.base.node) != isd::TargetFrameIndex
+        {
+            ops.base = self.insert_subreg(sub_reg, ops.base);
+        }
+        if self.dag.register_of(ops.index.node) == Some(0) {
+            ops.index = self.dag.register(0, mvt::i64);
+        } else {
+            ops.index = self.insert_subreg(sub_reg, ops.index);
+        }
+        Some(ops)
+    }
+
+    /// `getTargetInsertSubreg` into an `IMPLICIT_DEF` of 64 bits.
+    fn insert_subreg(
+        &mut self,
+        sub_reg: u16,
+        value: SDValue,
+    ) -> SDValue {
+        let undef = SDValue::new(self.dag.machine_node(target_opcode::IMPLICIT_DEF, &[mvt::i64], &[]), 0);
+        let index = self.dag.target_constant(i64::from(sub_reg), mvt::i32);
+        SDValue::new(self.dag.machine_node(target_opcode::INSERT_SUBREG, &[mvt::i64], &[undef, value, index]), 0)
     }
 
     /// `selectLEAAddr` ([L3329][lea]): an address worth an `lea` instruction.
