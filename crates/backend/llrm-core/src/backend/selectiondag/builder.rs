@@ -310,7 +310,7 @@ fn dag_name(
     dag: &SelectionDAG,
     block: BlockId,
 ) -> String {
-    dag.block_names.get(block.0 as usize).cloned().unwrap_or_default()
+    dag.block_name(block.0).to_owned()
 }
 
 impl<'a> Builder<'a> {
@@ -363,10 +363,7 @@ impl<'a> Builder<'a> {
         dag.global_names = tables.global_names;
         dag.local_symbols = tables.local_symbols;
         dag.block_names = tables.block_names;
-        let name = synthetic_name.unwrap_or_else(|| dag_name(&dag, block));
-        if dag.block_names.len() < next_synthetic as usize {
-            std::rc::Rc::make_mut(&mut dag.block_names).resize(next_synthetic as usize, name);
-        }
+        dag.synthetic_fill = synthetic_name.unwrap_or_else(|| dag_name(&dag, block));
         Builder {
             current: None,
             prelowered: Default::default(),

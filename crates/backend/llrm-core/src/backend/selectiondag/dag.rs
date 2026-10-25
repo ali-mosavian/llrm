@@ -188,6 +188,12 @@ pub struct SelectionDAG {
     /// Names the dump prints for `Global`/`Block` payloads, by id.
     pub global_names: std::rc::Rc<Vec<String>>,
     pub block_names: std::rc::Rc<Vec<String>>,
+    /// The names of the blocks the builder splits off, from `block_names.len()`
+    /// on (the shared table is not copied for them).
+    pub synthetic_names: Vec<String>,
+    /// The name of a split-off block nothing named: the block the builder
+    /// started from.
+    pub synthetic_fill: String,
     /// Names of external symbols, by id.
     pub symbol_names: Vec<String>,
     /// The constants spilled to the pool: bits and type
@@ -215,6 +221,36 @@ pub struct SelectionDAG {
 }
 
 impl SelectionDAG {
+    /// The name of `block`.
+    pub fn block_name(
+        &self,
+        block: u32,
+    ) -> &str {
+        let at = block as usize;
+        let base = self.block_names.len();
+        if at < base {
+            &self.block_names[at]
+        } else {
+            self.synthetic_names.get(at - base).map_or(self.synthetic_fill.as_str(), String::as_str)
+        }
+    }
+
+    pub fn set_block_name(
+        &mut self,
+        block: u32,
+        name: String,
+    ) {
+        let (at, base) = (block as usize, self.block_names.len());
+        if at < base {
+            std::rc::Rc::make_mut(&mut self.block_names)[at] = name;
+            return;
+        }
+        if self.synthetic_names.len() <= at - base {
+            self.synthetic_names.resize(at - base + 1, self.synthetic_fill.clone());
+        }
+        self.synthetic_names[at - base] = name;
+    }
+
     pub fn new(config: DagConfig) -> SelectionDAG {
         let zero = SDValue { node: 0, res: 0 };
         let mut dag = SelectionDAG {
@@ -227,6 +263,8 @@ impl SelectionDAG {
             root: zero,
             global_names: Default::default(),
             block_names: Default::default(),
+            synthetic_names: Vec::new(),
+            synthetic_fill: String::new(),
             symbol_names: Vec::new(),
             constant_pool: Vec::new(),
             first_temporary: 0,
