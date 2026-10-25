@@ -1,7 +1,11 @@
-//! The frame's exit sequence as instructions of the body (`masm::exits_inserted`).
+//! The frame's exit sequence as instructions of the body
+//! (`masm::exits_inserted`).
 
 /// The listing of `source` at `level` for 32-bit x86.
-fn listing(source: &str, level: &str) -> String {
+fn listing(
+    source: &str,
+    level: &str,
+) -> String {
     let dir = tempfile::tempdir().expect("a directory");
     let (input, output) = (dir.path().join("in.c"), dir.path().join("out.s"));
     std::fs::write(&input, source).expect("the source");

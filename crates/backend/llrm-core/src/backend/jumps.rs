@@ -217,7 +217,9 @@ pub fn tails_merged_after_exits(
     let returns = body
         .blocks
         .iter()
-        .filter(|block| block.insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Return)))
+        .filter(|block| {
+            block.insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Return))
+        })
         .count();
     if returns < 2 {
         return Ok(body);
