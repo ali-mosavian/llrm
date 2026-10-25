@@ -195,6 +195,34 @@ long B_FLOF(short channel)
     return size;
 }
 
+/* The file's position as the program sees it: what the buffers hold is first given back. */
+static long position_of(Fdb *fdb)
+{
+    buffer_release();
+    return llrm_os_seek(fdb->handle, 0, 1);
+}
+
+/* B$FLOC: LOC(#channel): the last record read or written of a RANDOM file, the last byte of a BINARY one, else the
+   position in 128-byte blocks. */
+long B_FLOC(short channel)
+{
+    Fdb *fdb = open_fdb(channel);
+    long at = position_of(fdb);
+
+    if (fdb->mode == MD_RANDOM)
+        return at / fdb->record_length;
+    return fdb->mode == MD_BINARY ? at : at / 128;
+}
+
+/* B$FSEK: SEEK(#channel): the next record of a RANDOM file, else the next byte. */
+long B_FSEK(short channel)
+{
+    Fdb *fdb = open_fdb(channel);
+    long at = position_of(fdb);
+
+    return fdb->mode == MD_RANDOM ? at / fdb->record_length + 1 : at + 1;
+}
+
 /* A record variable of `length` bytes, or the data of a string descriptor when
    the length is 0. */
 static void record_of(qb_data_ptr record, int length, os_data_mut *data, unsigned *bytes)
@@ -526,6 +554,8 @@ void file_xinit(void)
 }
 
 #pragma aux B_OPEN "B$OPEN"
+#pragma aux B_FLOC "B$FLOC"
+#pragma aux B_FSEK "B$FSEK"
 #pragma aux B_GET3 "B$GET3"
 #pragma aux B_PUT3 "B$PUT3"
 #pragma aux B_FLOF "B$FLOF"

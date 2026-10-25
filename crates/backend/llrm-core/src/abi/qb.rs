@@ -674,7 +674,7 @@ fn _contract_keeping(
             ),
         ));
     }
-    if name == "B$FLOF" && pushed == 2 {
+    if matches!(name, "B$FLOF" | "B$FLOC" | "B$FSEK") && pushed == 2 {
         return Ok(returns(
             2,
             format!(

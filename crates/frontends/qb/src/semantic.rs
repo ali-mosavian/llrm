@@ -7150,11 +7150,11 @@ impl Compiler {
             self.emit_runtime_call("B$FRI2", vec![result], vec![selector]);
             return Ok(Some((Operand::Value(result), LONG)));
         }
-        if intrinsic.lowering == Lowering::FileLength {
+        if let Lowering::FileQuery(routine) = intrinsic.lowering {
             let (file, file_type) = self.expression(&arguments[0])?;
             let file = self.convert(file, file_type, INTEGER)?;
             let result = self.value(LONG);
-            self.emit_runtime_call("B$FLOF", vec![result], vec![file]);
+            self.emit_runtime_call(routine, vec![result], vec![file]);
             return Ok(Some((Operand::Value(result), LONG)));
         }
         if intrinsic.lowering == Lowering::Timer {
