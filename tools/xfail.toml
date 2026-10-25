@@ -145,9 +145,3 @@ id = "unit llrm-qb::a_power_of_a_variable_base_covers_the_whole_domain"
 issue = 2848
 owner = "alim"
 date = "2026-10-27"
-[[xfail]]
-id = "run currency_tie_pds71"
-issue = 4778
-owner = "w15"
-date = "2026-10-28"
-why = "a DOUBLE constant times 10000 folds at 53 bits, BC rounds at 64; products within 1e-16 of a .5 tie differ by 1e-4 (BC .0001, .0003; compiler 0 for 0.00005#)"
