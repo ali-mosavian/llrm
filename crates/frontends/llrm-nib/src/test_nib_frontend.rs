@@ -500,7 +500,10 @@ fn test_fixed_point_types_scale_literals_and_keep_storage_width_in_mir() {
     // stays one fixed-point operation, never widened to i64.
     assert!(["sext i16", "mul i32", "ashr i32"].iter().all(|one| product.contains(one)), "{product}");
     assert!(quotient.contains("@llvm.sdiv.fix.i32("), "{quotient}");
-    assert!(!["sext", "shl", " sdiv ", "i64"].iter().any(|one| quotient.contains(one)), "{quotient}");
+    // (`sdiv.fix` floors; the one `shl` is the truncation correction `q * b !=
+    // a << s`)
+    assert!(!["sext", " sdiv ", "i64"].iter().any(|one| quotient.contains(one)), "{quotient}");
+    assert_eq!(quotient.matches("shl ").count(), 1, "{quotient}");
 }
 
 /// nbody's `nbody` as its HIR emits it.
@@ -645,7 +648,10 @@ fn test_nbody_velocity_fields_are_stored_once_per_update() {
     let assembly = listing(&parsed(&fixture("nbody.nib")), "main", &O2_calls_kept());
     let function = between(&assembly, "_nbody proc near", "_nbody endp");
     // The only stores through a body's index are its velocity's two fields.
-    let stored: Vec<String> = Regex::new(r"mov dword ptr (\[bp\+[sd]i[-+]\d+\]), e(?:ax|bx|cx|dx|si|di)\n")
+    // (a field is named by its displacement: the index register that reaches
+    // it is the allocator's to choose, `si` for the store and `di` for the
+    // load)
+    let stored: Vec<String> = Regex::new(r"mov dword ptr \[bp\+[sd]i([-+]\d+)\], e(?:ax|bx|cx|dx|si|di)\n")
         .unwrap()
         .captures_iter(function)
         .map(|found| found[1].to_owned())
@@ -653,7 +659,8 @@ fn test_nbody_velocity_fields_are_stored_once_per_update() {
 
     assert_eq!(stored.len(), 2, "{function}");
     for field in &stored {
-        let loads = Regex::new(&format!(r"e(?:ax|bx|cx|dx|si|di), dword ptr {}\n", regex::escape(field))).unwrap();
+        let loads =
+            Regex::new(&format!(r"e(?:ax|bx|cx|dx|si|di), dword ptr \[bp\+[sd]i{}\]\n", regex::escape(field))).unwrap();
         assert_eq!(loads.find_iter(function).count(), 1, "{field}\n{function}");
     }
 }
