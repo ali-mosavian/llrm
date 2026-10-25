@@ -3300,3 +3300,20 @@ fn test_a_local_read_at_a_resume_label_is_handed_to_the_handler() {
     );
     assert_eq!(reads, unread + 1, "handed with the read {reads}, without it {unread}");
 }
+
+/// `(a$ < b$) <> -1` made an `i1` add of a compare of a flags-returning call, which combine left alone
+/// and the selector refused: conformance case qb45/relational-operators did not compile at -O1 and above.
+#[test]
+fn a_string_compare_tested_against_minus_one_compiles_optimized() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let source = written(
+        &directory,
+        "relation.bas",
+        b"DIM a AS STRING, b AS STRING\r\na = \"ABC\": b = \"ABD\"\r\nIF (a < b) <> -1 OR (a = b) <> 0 THEN PRINT \"FAIL\"\r\nEND\r\n",
+    );
+    for level in ["-O1", "-O2"] {
+        let out = directory.path().join("relation.asm");
+        let argv = [source.to_str().unwrap(), level, "-S", "-o", out.to_str().unwrap()].map(str::to_owned);
+        assert_eq!(crate::cli::main(&argv), 0, "{level}");
+    }
+}
