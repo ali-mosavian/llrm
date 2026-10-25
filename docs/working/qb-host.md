@@ -24,6 +24,8 @@ runtime/qb/                portable runtime; touches the machine only through ru
 
 ## Build and run
 
+- SDL2 must be real SDL2 (2.30+), not sdl2-compat (Homebrew's default `sdl2-config`, on SDL3): it crashes on a pushed
+  `SDL_TEXTINPUT`. On a Mac use `/opt/homebrew/Cellar/sdl2/<version>` with `SDL2_CONFIG` pointing at its `sdl2-config`.
 - Tests: `cargo test --test qb_dev_interface --test qb_headless --test qb_sdl --test posix_os`. The SDL test needs SDL2:
   `SDL2_CONFIG`, `sdl2-config` on the path, or `tools/build-sdl2.sh` (private build in `~/.cache/llrm/sdl2`, dummy video
   and audio only, which the test selects with `SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy`).
@@ -126,6 +128,9 @@ Each: verify, then write the result under the row number in the open rows.
 
 Fix only portability faults, in `runtime/qb/dev/sdl` and `runtime/shared/posix`, each with a fail-first test where one
 can be written on a headless machine. Report commits and the rows' results; no PR.
+
+Closing the window ends the program with exit code 0 (a user's Ctrl-Break leaves DOS with ERRORLEVEL 0 too, and
+`tests/qb_sdl.rs` asserts the smoke's exit status).
 
 Mac findings: sdl2-compat (Homebrew's default `sdl2-config`, on SDL3) crashes on a synthetic `SDL_TEXTINPUT` pushed with no
 window, which `sdl_smoke.c` does; use real SDL2 2.32.x. `cargo test` on macOS stops in `crates/frontends/llrm-c/build.rs`
