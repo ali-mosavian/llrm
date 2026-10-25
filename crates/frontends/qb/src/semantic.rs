@@ -341,6 +341,10 @@ struct Compiler {
     /// procedure raises, on that procedure's frame, and RESUMEs there.
     module_handled: bool,
     next_type: u32,
+    /// The COMMON items that repeat a DIM: declared once.
+    common_repeats: BTreeSet<(usize, usize)>,
+    /// The arrays COMMON declared without bounds, which a later DIM dimensions.
+    common_arrays: BTreeSet<String>,
     next_value: u32,
     next_place: u32,
     next_instruction: u32,
@@ -1698,6 +1702,8 @@ impl Compiler {
             error_handlers: BTreeSet::new(),
             module_handled: false,
             next_type: 12,
+            common_repeats: BTreeSet::new(),
+            common_arrays: BTreeSet::new(),
             next_value: 1,
             next_place: 1,
             next_instruction: 1,
@@ -2386,6 +2392,38 @@ impl Compiler {
             match statement {
                 Statement::Dim(items) | Statement::Common { declarations: items, .. } => {
                     for item in items {
+                        // BC takes a COMMON that names what a DIM declared
+                        // already as that declaration,
+                        // a static array staying static (it calls no B$DDIM).
+                        if matches!(statement, Statement::Common { .. })
+                            && self.variables.contains_key(&self.declaration_key(item)?)
+                        {
+                            self.common_repeats.insert((item.span.line, item.span.start));
+                            continue;
+                        }
+                        // A DIM of an array COMMON declared without bounds
+                        // gives it its bounds (BC calls
+                        // B$DDIM for it), as the first REDIM would.
+                        if matches!(statement, Statement::Dim(_))
+                            && item.array
+                            && !item.bounds.is_empty()
+                            && self.common_arrays.contains(&self.declaration_key(item)?)
+                        {
+                            let key = self.declaration_key(item)?;
+                            if let Some(variable) = self.variables.get_mut(&key) {
+                                variable.rank.get_or_insert(item.bounds.len());
+                                if let (Some(place), Some(element)) = (variable.descriptor_place, variable.element) {
+                                    let descriptor_type = self.places.iter().find(|p| p.id == place).map(|p| p.type_id);
+                                    if let Some(descriptor_type) = descriptor_type {
+                                        self.pending_allocations.insert(
+                                            (self.position, key),
+                                            (item.clone(), place, descriptor_type, element),
+                                        );
+                                    }
+                                }
+                            }
+                            continue;
+                        }
                         let each = item.name.strip_prefix(EACH);
                         let item = &Declaration { name: each.unwrap_or(&item.name).into(), ..item.clone() };
                         if each.is_some() && !self.each_declared.insert(self.declaration_key(item)?) {
@@ -2413,6 +2451,9 @@ impl Compiler {
                             self.declare_as(&dynamic, storage)?;
                         } else {
                             self.declare_as(item, storage)?;
+                        }
+                        if matches!(statement, Statement::Common { .. }) && item.array && item.bounds.is_empty() {
+                            self.common_arrays.insert(self.declaration_key(item)?);
                         }
                     }
                 }
@@ -3320,6 +3361,9 @@ impl Compiler {
                 }
                 Statement::Dim(items) | Statement::Common { declarations: items, .. } => {
                     for item in items {
+                        if self.common_repeats.contains(&(item.span.line, item.span.start)) {
+                            continue;
+                        }
                         self.allocate(item)?;
                         self.rezero(item)?;
                     }
@@ -4125,19 +4169,32 @@ impl Compiler {
                         );
                     }
                     "PAINT" => {
-                        if !(3..=4).contains(&arguments.len()) {
-                            return self.fail("PAINT expects coordinates, fill, and optional border");
+                        // PAINT (x, y) [, paint [, border [, background]]]: a
+                        // numeric paint or none is
+                        // B$PAIN(paint, border), a tile string B$PNTC; a
+                        // left-out one is -1.
+                        if !(2..=5).contains(&arguments.len()) {
+                            return self.fail("PAINT expects coordinates, fill, border and background");
                         }
                         self.graphics_coordinate(1, &arguments[0], &arguments[1])?;
-                        let (fill, fill_type) = self.expression(&arguments[2])?;
-                        let fill = self.convert(fill, fill_type, INTEGER)?;
-                        let border = if let Some(argument) = arguments.get(3) {
-                            let (value, type_id) = self.expression(argument)?;
-                            self.convert(value, type_id, INTEGER)?
-                        } else {
-                            Operand::Constant(INTEGER, Number::Integer(-1))
+                        let omitted = Operand::Constant(INTEGER, Number::Integer(-1));
+                        let fill = arguments.get(2).filter(|one| !matches!(one, Expr::Omitted(_)));
+                        if fill.is_some_and(|one| self.string_syntax(one)) {
+                            return self.unsupported("PAINT with a tile string");
+                        }
+                        if arguments.len() > 4 {
+                            return self.fail("a PAINT background needs a tile string");
+                        }
+                        let number = |this: &mut Self, argument: Option<&Expr>| match argument {
+                            Some(Expr::Omitted(_)) | None => Ok(omitted.clone()),
+                            Some(argument) => {
+                                let (value, type_id) = this.expression(argument)?;
+                                this.convert(value, type_id, INTEGER)
+                            }
                         };
-                        self.emit_runtime_call("B$PAIN", Vec::new(), vec![fill, border]);
+                        let paint = number(self, fill)?;
+                        let border = number(self, arguments.get(3))?;
+                        self.emit_runtime_call("B$PAIN", Vec::new(), vec![paint, border]);
                     }
                     "PSET" | "PRESET" => {
                         if !(2..=3).contains(&arguments.len()) {

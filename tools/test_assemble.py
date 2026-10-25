@@ -139,6 +139,22 @@ def test_alone_counts_the_verdicts_it_read_from_the_cache(tmp_path):
     assert ps.HITS[0] == 1
 
 
+def test_a_build_refusal_names_the_error_of_the_prs_own_alone_build_not_the_batchs(tmp_path):
+    """The 16:56 batch refused #4743 with `floatassign.rs: unused import live`, the error of #4648 in the same batch; #4743 alone built clean. The first PR breaks the build, the second is clean."""
+    current = []
+
+    def merge_alone(number: str) -> bool:
+        current[:] = [number]
+        return True
+
+    def check() -> str:
+        return "floatassign.rs:124:38: unused import: `live`" if current == ["4648"] else ""
+
+    errors: dict[str, str] = {}
+    assert ps.build_offenders(["4648", "4743"], merge_alone, check, errors) == ["4648"]
+    assert errors == {"4648": "floatassign.rs:124:38: unused import: `live`"}
+
+
 def test_a_pr_whose_only_issue_is_a_fmt_difference_is_kept(tmp_path):
     """The first `alone` precheck dropped #4736 and #4744 for `fmt.sh would change selectiondag/emit.rs`; the squash formats every PR, so the s3 pair started its batch without them."""
     repo = tmp_path / "repo"
@@ -182,3 +198,19 @@ def test_a_pr_is_probed_only_for_a_package_it_can_change_and_a_new_red_test_is_s
     )
     assert probed == ["2", "3"], probed  # 1 changes llrm-nib, which llrm-core does not use; 3 is a file no package owns
     assert found == ["2"], found
+
+
+def test_a_diff_with_non_utf8_bytes_is_read_not_a_crash(tmp_path):
+    """The 20:07 batch ran unassembled: `added_names` died with UnicodeDecodeError 0xdb on a PR whose diff held CP437 bytes (a .BAS), and the runner fell back to the first 16."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    sh(repo, "checkout", "-q", "-b", "pr")
+    (repo / "prog.bas").write_bytes(b"PRINT \"\xdb\xdb\xb0\"\n")
+    (repo / "t.rs").write_text("fn a_new_test() {}\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "pr")
+    assert ps.added_names("pr", "main", repo) == {"a_new_test"}
+    assert ps.git("diff", "-U0", "main...pr", cwd=repo).count("PRINT") == 1
