@@ -415,7 +415,7 @@ impl SelectionDAG {
             .get(value.node as usize)
             .into_iter()
             .flatten()
-            .any(|&user| !self.deleted.contains(&user) && self.nodes[user as usize].ops.contains(&value))
+            .any(|&user| !self.is_deleted(user) && self.nodes[user as usize].ops.contains(&value))
     }
 
     fn note_uses(
