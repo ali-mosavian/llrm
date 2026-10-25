@@ -731,7 +731,11 @@ impl Analysis for ExposedFrames {
         };
         for change in changes {
             match change {
-                Change::BlockCreated(_) | Change::BlockErased(_) | Change::Parameters => return None,
+                Change::Parameters => return None,
+                // An exposed alloca is one of its address's uses, and a block
+                // has none: an erased one was emptied by `Erased` changes, a
+                // created one is filled by `Inserted` ones.
+                Change::BlockCreated(_) | Change::BlockErased(_) => {}
                 Change::Operand { was, .. } => read(was),
                 Change::Operands { was, .. } => was.iter().for_each(&mut read),
                 Change::Erased { inst, .. } => function.instruction(*inst).operands.iter().for_each(&mut read),
@@ -1254,16 +1258,14 @@ impl Analysis for BaseAccesses {
     const NAME: &'static str = "base-accesses";
 
     fn run(
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
+        _: &Context,
+        _: &DataLayout,
+        _: &Function,
+        _: &mut Analyses,
     ) -> Self::Result {
-        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        let unit = Unit::within(context, layout, function, analyses.outer()).with_exposed(&exposed);
-        // A call names no bytes: the AA stack answers what it does to a
-        // location.
-        Ok(std::rc::Rc::new(memoryssa::Accesses::plain(&unit, &Default::default())))
+        // Nothing is made up front: a reference, and what an instruction
+        // touches, are asked of the unit that reads them (`Accesses::lazy`).
+        Ok(std::rc::Rc::new(memoryssa::Accesses::lazy()))
     }
 }
 
