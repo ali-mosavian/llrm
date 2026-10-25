@@ -149,3 +149,19 @@ owner = "w-13"
 [[flag]]
 flag = "licm"
 owner = "w-2"
+
+[[flag]]
+flag = "sroa"
+owner = "w-3"
+
+[[flag]]
+flag = "mem2reg"
+owner = "w-3"
+
+[[flag]]
+flag = "combine"
+owner = "w-4"
+
+[[flag]]
+flag = "jumpthreading"
+owner = "w-5"
