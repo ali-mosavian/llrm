@@ -206,9 +206,10 @@ fn a_divide_is_cdq_then_idiv_on_eax_and_edx() {
     // `idiv eax` and trapped. The operands are values the form pins.
     let insns = done.body.insns();
     let divide = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("idiv")).unwrap();
+    // (The divisor may be the memory operand, as `IDIV32m`.)
     assert!(
-        divide.dests.iter().chain(&divide.sources).all(|l| matches!(l, crate::model::ir::Loc::Held(_))),
-        "idiv operands are held values: {divide:?}"
+        divide.dests.iter().chain(divide.sources.iter().take(2)).all(|l| matches!(l, crate::model::ir::Loc::Held(_))),
+        "idiv's quotient, remainder and dividend are held values: {divide:?}"
     );
 }
 
@@ -284,4 +285,35 @@ fn a_chain_of_word_operations_has_no_casts_between_them() {
         done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
     assert!(!names.iter().any(|n| n.starts_with("movzx") || n.starts_with("movsx")), "{names:?}");
     assert_eq!(names.iter().filter(|n| matches!(n.as_str(), "imul" | "add" | "and")).count(), 3, "{names:?}");
+}
+
+const COMPARE_WITH_LOADED: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(ptr %p, i32 %k) {
+  %v = load i32, ptr %p
+  %c = icmp slt i32 %k, %v
+  br i1 %c, label %a, label %b
+a:
+  ret i32 1
+b:
+  ret i32 2
+}
+";
+
+/// A node the combiner deleted still counted as a user of its operands in the
+/// matcher, so a load read by the compare never folded (`hasOneUse`): `mov;
+/// sub r, r` where the pin has `sub r, [mem]` (bintree, 6 functions of the
+/// corpus shadow; the same for `imul r, [mem], imm`).
+#[test]
+fn a_load_read_by_a_compare_is_folded_into_it() {
+    use crate::model::ir::Loc;
+    let module = llrm_mir::parse::module(COMPARE_WITH_LOADED).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let compare = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| matches!(w.name.as_deref(), Some("sub" | "cmp")))
+        .expect("a compare");
+    assert!(compare.sources.iter().any(|l| matches!(l, Loc::Mem(_))), "{compare:?}");
 }
