@@ -266,7 +266,10 @@ pub fn assembled_by(
                         if from < code.len() {
                             parts.push(masm::InlinePart::Bytes(code[from..].to_vec()));
                         }
-                        callees.insert(*at, masm::Callee { name: callee.clone(), far: false, pops: 0, code: parts });
+                        callees.insert(
+                            *at,
+                            masm::Callee { name: callee.clone(), far: false, pops: 0, code: parts, tail: false },
+                        );
                         continue;
                     }
                     // A global of this module is called by the name it is
