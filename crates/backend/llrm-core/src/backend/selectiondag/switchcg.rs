@@ -116,6 +116,9 @@ pub struct JumpTableCase {
     pub low: i128,
     pub high: i128,
     pub table: Vec<u32>,
+    /// Each destination of the table and the probability of its cases
+    /// (`JTProbs`), in first-seen order.
+    pub dests: Vec<(u32, BranchProbability)>,
 }
 
 /// `BitTestCase`: one destination of a bit-test cluster and the mask of
@@ -430,9 +433,14 @@ fn build_jump_table(
     let mut prob = BranchProbability::ZERO;
     let mut table = Vec::new();
     let mut dests: BTreeMap<u32, u32> = BTreeMap::new();
+    let mut dest_probs: Vec<(u32, BranchProbability)> = Vec::new();
     for i in first..=last {
         let cluster = &clusters[i];
         prob = prob.saturating_add(cluster.prob);
+        match dest_probs.iter_mut().find(|one| one.0 == cluster.dest) {
+            Some(one) => one.1 = one.1.saturating_add(cluster.prob),
+            None => dest_probs.push((cluster.dest, cluster.prob)),
+        }
         *dests.entry(cluster.dest).or_default() += if cluster.low == cluster.high { 1 } else { 2 };
         if i != first {
             let gap = limited(cluster.low - clusters[i - 1].high) - 1;
@@ -444,7 +452,7 @@ fn build_jump_table(
     if suitable_for_bit_tests(&dests, clusters[first].low, clusters[last].high, target) {
         return None;
     }
-    tables.push(JumpTableCase { low: clusters[first].low, high: clusters[last].high, table });
+    tables.push(JumpTableCase { low: clusters[first].low, high: clusters[last].high, table, dests: dest_probs });
     Some(CaseCluster {
         kind: ClusterKind::JumpTable(tables.len() - 1),
         low: clusters[first].low,
