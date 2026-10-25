@@ -245,3 +245,16 @@ presented once per frame during a throw (80 frames, a rotating 9x4 px crescent).
 The window is resizable. `dev/sdl/scale.c` (`sdl_fit`) places the picture at the largest size that fits the renderer's
 output size at 4:3, centred, so the scale is fractional and the other axis gets bars. `present.c` redraws when the output
 size changes (it replaced `SDL_RenderSetLogicalSize`). Unit test: `the_picture_fills_the_window_at_four_to_three`.
+
+## DOS TIMER
+
+`TIMER` on DOS read INT 21h function 2Ch, which moves with the BIOS tick: 55 ms steps. `dev_clock_fine` (tenths of a
+millisecond, a new device op) reads the tick count and the timer chip together (`dev/dos/*/devclock.c`); `TIMER` is then limited by its
+SINGLE (3.9 ms before 18:12, 7.8 ms after). The chip runs in square-wave mode and counts 65536 to 0 in each half of a tick, so the
+read-back status's output pin says which half. A tick the interrupt has not counted yet is added, never stepped back over.
+Headless and SDL define it as `dev_clock() * 100`. Test: `tests/qbrt/llrm_timer.bas` (m16 and m32, with `QB45_DIR`).
+
+## Open Watcom on macOS
+
+`setvars.sh` names GCC for every host and Open Watcom's GCC configuration has no macOS, so its bootstrap built nothing. `native_tools`
+(`toolchain/cache.sh`) names clang on Darwin; `cargo build --release` with the `toolchain` feature now builds on a Mac.

@@ -158,6 +158,11 @@ doc = "The time of day in hundredths of a second since midnight."
 
 [[op]]
 group = "timer"
+name = "dev_clock_fine"
+doc = "The time of day in tenths of a millisecond since midnight, for TIMER: a clock's own resolution where it has one finer than hundredths."
+
+[[op]]
+group = "timer"
 name = "dev_date"
 doc = "The date: year, month, day."
 

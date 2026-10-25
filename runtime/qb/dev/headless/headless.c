@@ -179,6 +179,12 @@ long dev_clock(void)
     return now;
 }
 
+/* No clock finer than hundredths here. */
+long dev_clock_fine(void)
+{
+    return dev_clock() * 100;
+}
+
 void dev_date(unsigned *year, unsigned *month, unsigned *day)
 {
     *year = date_year;

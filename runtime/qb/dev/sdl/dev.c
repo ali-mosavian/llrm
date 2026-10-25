@@ -77,6 +77,12 @@ long dev_clock(void)
     return (((long)t[3] * 60 + t[4]) * 60 + t[5]) * 100 + t[6];
 }
 
+/* No clock finer than hundredths here. */
+long dev_clock_fine(void)
+{
+    return dev_clock() * 100;
+}
+
 void dev_date(unsigned *year, unsigned *month, unsigned *day)
 {
     unsigned t[TIME_WORDS];
