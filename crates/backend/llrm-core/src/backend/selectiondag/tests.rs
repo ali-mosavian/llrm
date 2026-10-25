@@ -25,6 +25,7 @@ mod builder;
 mod cmov_constants;
 mod combiner;
 mod combiner_worklist;
+mod dead_load;
 mod demanded_bits;
 mod div_by_constant;
 mod expand_node;
