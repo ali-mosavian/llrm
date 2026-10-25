@@ -126,3 +126,7 @@ Each: verify, then write the result under the row number in the open rows.
 
 Fix only portability faults, in `runtime/qb/dev/sdl` and `runtime/shared/posix`, each with a fail-first test where one
 can be written on a headless machine. Report commits and the rows' results; no PR.
+
+Mac findings: sdl2-compat (Homebrew's default `sdl2-config`, on SDL3) crashes on a synthetic `SDL_TEXTINPUT` pushed with no
+window, which `sdl_smoke.c` does; use real SDL2 2.32.x. `cargo test` on macOS stops in `crates/frontends/llrm-c/build.rs`
+(Open Watcom bootstrap, `cpyright.exe` is never built); build the smoke by hand with the `cc` line of `tests/qb_sdl.rs`.
