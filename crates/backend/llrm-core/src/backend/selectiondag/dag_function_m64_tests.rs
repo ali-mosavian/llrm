@@ -259,3 +259,33 @@ define i64 @f(i64 %i) {
     assert!(cell.base.is_some() && cell.index.is_some(), "{cell:?}");
     assert!(cell.addr.is_none_or(|addr| addr.disp == 0 && addr.base == llrm_lir::registers::RegId::None.iced()));
 }
+
+/// A select between a loaded value and a register is `CMOV64rm` at x86-64;
+/// the emitter had only the register form ("a conditional move of a
+/// non-register") and refused the function.
+#[test]
+fn an_m64_select_of_a_loaded_value_is_a_conditional_move_from_memory() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i64 @f(ptr %p, i64 %a, i64 %b) {
+entry:
+  %v = load i64, ptr %p
+  %c = icmp slt i64 %a, %b
+  %r = select i1 %c, i64 %v, i64 %a
+  ret i64 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let select = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.op == crate::model::ir::Operation::Select)
+        .expect("a conditional move");
+    let [crate::model::ir::Loc::Held(_), crate::model::ir::Loc::Mem(cell)] = select.sources.as_slice() else {
+        panic!("{select:?}")
+    };
+    assert_eq!(cell.width, 8, "a quadword is read: {select:?}");
+    assert!(select.name.as_deref().is_some_and(|name| name.starts_with("cmov")), "{select:?}");
+}

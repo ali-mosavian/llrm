@@ -32,7 +32,6 @@
 //! sequence and frame objects in the emitter (D1e). Exit: D1e. Owner: sdag-d.
 //! Review 2026-12-03.
 
-use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 
 use indexmap::IndexMap;
@@ -42,6 +41,7 @@ use llrm_dagisel::x86_addr::AddrMode;
 use llrm_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Module, ValueDef, ValueId};
+use llrm_support::hash::{HashMap, HashSet};
 use llrm_target::Target;
 
 use super::actions::{Features, TargetLowering};
@@ -358,7 +358,7 @@ struct Tables {
 }
 
 /// One per target width.
-static TABLES: LazyLock<Mutex<HashMap<u32, std::sync::Arc<Tables>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static TABLES: LazyLock<Mutex<HashMap<u32, std::sync::Arc<Tables>>>> = LazyLock::new(|| Mutex::new(HashMap::default()));
 
 fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
     let bits = arch.object().bitness;
@@ -658,11 +658,24 @@ fn selected_in(
         let llrm_mir::opcode::Opcode::Alloca { allocated, .. } = instruction.opcode else {
             return refuse("an alloca that is not an alloca");
         };
-        if !instruction.operands.is_empty() {
-            return refuse("an alloca with a count");
-        }
+        // `FunctionLoweringInfo`: a constant count multiplies the type's size
+        let count = match instruction.operands.first() {
+            None => 1,
+            Some(llrm_mir::module::Operand::Constant(id)) => match module.context.get(*id).kind {
+                llrm_mir::context::ConstantKind::Int(count) => count,
+                _ => return refuse("an alloca whose count is not a number"),
+            },
+            Some(_) => return refuse("an alloca with a count that is not a constant"),
+        };
         let types = &module.context.types;
         let size = layout.alloc_size(types, allocated) as i64;
+        let Some(size) = i64::try_from(count)
+            .ok()
+            .and_then(|count| size.checked_mul(count))
+            .filter(|size| *size <= i64::from(i32::MAX))
+        else {
+            return refuse("an alloca too large for the frame");
+        };
         let align =
             crate::backend::isel::natural_align(types, &layout, allocated).max(size & size.wrapping_neg()).clamp(1, 4);
         let made = Temporaries(&frame).create_stack_temporary(size as u32, align as u32);
@@ -758,12 +771,12 @@ fn selected_in(
     let mut calls = IndexMap::default();
     // the landing pad the runtime enters, which no edge reaches
     let mut landing: Option<i64> = None;
-    let mut sinks: HashSet<i64> = HashSet::new();
+    let mut sinks: HashSet<i64> = HashSet::default();
     let mut inline_places = IndexMap::default();
     // the call sites whose callee is far code (address space 1): a far call
     let mut far = std::collections::BTreeSet::new();
     // The LIR blocks each MIR block became, and the phi inputs each exports.
-    let mut made: HashMap<u32, std::ops::Range<usize>> = HashMap::new();
+    let mut made: HashMap<u32, std::ops::Range<usize>> = HashMap::default();
     let mut exports: Vec<(BlockId, Vec<(ValueId, u32)>)> = Vec::new();
     for (block, parent, mut built) in work {
         if !built.live_ins.is_empty() && block != function.layout()[0] {
@@ -901,7 +914,7 @@ fn selected_in(
     // an integer's bits taken from an x87 register (`bitcast` of a double to
     // its words, reaching the matcher as a no-op), which no code can do.
     {
-        let floating: std::collections::HashSet<u32> = emitted
+        let floating: llrm_support::hash::HashSet<u32> = emitted
             .iter()
             .flat_map(|block| block.insns.iter())
             .filter_map(|insn| insn.what.as_ref())
@@ -1066,7 +1079,7 @@ fn without_unreachable(
     if reached.iter().all(|one| *one) {
         return (emitted, succ);
     }
-    let gone: std::collections::HashSet<i64> =
+    let gone: llrm_support::hash::HashSet<i64> =
         emitted.iter().zip(&reached).filter(|(_, kept)| !**kept).map(|(block, _)| block.at).collect();
     let succ: Vec<Vec<i64>> = succ.into_iter().zip(&reached).filter(|(_, kept)| **kept).map(|(s, _)| s).collect();
     let mut kept = reached.iter();
@@ -1196,7 +1209,7 @@ pub(super) fn read_before_defined(
     succ: &[Vec<i64>],
     landing: Option<i64>,
 ) -> Option<(u32, Option<String>)> {
-    let index: std::collections::HashMap<i64, usize> = blocks.iter().enumerate().map(|(i, b)| (b.at, i)).collect();
+    let index: llrm_support::hash::HashMap<i64, usize> = blocks.iter().enumerate().map(|(i, b)| (b.at, i)).collect();
     // A copy of a value to itself defines nothing.
     let defines = |insn: &Insn| -> Vec<u32> {
         let itself = insn

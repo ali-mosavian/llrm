@@ -749,3 +749,25 @@ fn a_16_byte_clear_at_m16_is_four_dword_stores() {
         .collect();
     assert_eq!(stores, [4, 4, 4, 4], "store widths");
 }
+
+const ALLOCA_COUNT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f() {
+entry:
+  %p = alloca i32, i32 4
+  store i32 7, ptr %p
+  %v = load i32, ptr %p
+  ret i32 %v
+}
+";
+
+/// An `alloca i32, i32 4` was refused ("an alloca with a count"); the frame
+/// object is the type's size times the constant count, as
+/// `FunctionLoweringInfo` has it.
+#[test]
+fn an_alloca_with_a_constant_count_is_that_many_elements() {
+    let module = llrm_mir::parse::module(ALLOCA_COUNT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    assert_eq!(done.depth, 16);
+    assert_eq!(done.extents, [(-16, 16)]);
+}

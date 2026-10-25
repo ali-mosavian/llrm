@@ -406,9 +406,16 @@ pub fn run(
                 // change.
                 let held =
                     analyses.get::<llrm_analysis::manager::MemorySsa>($view.context, $view.layout, $view.function);
-                let (mssa, accesses) = match &*held {
-                    Ok(held) => (held.mssa.clone(), (*held.accesses).clone()),
-                    Err(_) => {
+                let made = match &*held {
+                    Ok(held) => held
+                        .accesses($view.context, $view.layout, $view.function, analyses)
+                        .ok()
+                        .map(|accesses| (held.mssa.clone(), (*accesses).clone())),
+                    Err(_) => None,
+                };
+                let (mssa, accesses) = match made {
+                    Some(made) => made,
+                    None => {
                         let (mssa, accesses) = llrm_analysis::mssa::shadow::translated(&memory);
                         decisions.rebuilds += 1;
                         decisions.rebuilt_instructions += $view.function.walk().count();
