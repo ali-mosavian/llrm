@@ -4125,19 +4125,32 @@ impl Compiler {
                         );
                     }
                     "PAINT" => {
-                        if !(3..=4).contains(&arguments.len()) {
-                            return self.fail("PAINT expects coordinates, fill, and optional border");
+                        // PAINT (x, y) [, paint [, border [, background]]]: a
+                        // numeric paint or none is
+                        // B$PAIN(paint, border), a tile string B$PNTC; a
+                        // left-out one is -1.
+                        if !(2..=5).contains(&arguments.len()) {
+                            return self.fail("PAINT expects coordinates, fill, border and background");
                         }
                         self.graphics_coordinate(1, &arguments[0], &arguments[1])?;
-                        let (fill, fill_type) = self.expression(&arguments[2])?;
-                        let fill = self.convert(fill, fill_type, INTEGER)?;
-                        let border = if let Some(argument) = arguments.get(3) {
-                            let (value, type_id) = self.expression(argument)?;
-                            self.convert(value, type_id, INTEGER)?
-                        } else {
-                            Operand::Constant(INTEGER, Number::Integer(-1))
+                        let omitted = Operand::Constant(INTEGER, Number::Integer(-1));
+                        let fill = arguments.get(2).filter(|one| !matches!(one, Expr::Omitted(_)));
+                        if fill.is_some_and(|one| self.string_syntax(one)) {
+                            return self.unsupported("PAINT with a tile string");
+                        }
+                        if arguments.len() > 4 {
+                            return self.fail("a PAINT background needs a tile string");
+                        }
+                        let number = |this: &mut Self, argument: Option<&Expr>| match argument {
+                            Some(Expr::Omitted(_)) | None => Ok(omitted.clone()),
+                            Some(argument) => {
+                                let (value, type_id) = this.expression(argument)?;
+                                this.convert(value, type_id, INTEGER)
+                            }
                         };
-                        self.emit_runtime_call("B$PAIN", Vec::new(), vec![fill, border]);
+                        let paint = number(self, fill)?;
+                        let border = number(self, arguments.get(3))?;
+                        self.emit_runtime_call("B$PAIN", Vec::new(), vec![paint, border]);
                     }
                     "PSET" | "PRESET" => {
                         if !(2..=3).contains(&arguments.len()) {
