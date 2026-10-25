@@ -206,3 +206,38 @@ fn float_to_int_at_sse2_is_a_register_convert() {
         assert_eq!((dag.opcode(convert), dag.value_type(convert)), (ISD::FpToSInt, shown), "{op:?} {dst:?}");
     }
 }
+
+/// A float compare at SSE2 is the same `FCMP` flags and `SETCC` as the x87
+/// one (`ucomisd` is its pattern); `olt` swaps the operands and tests `A`.
+#[test]
+fn a_float_compare_at_sse2_is_fcmp_and_setcc() {
+    use super::super::x86_lowering::x86isd;
+    let tli = TargetLowering::x86_64(Features { sse2: true, cmov: true, ..Features::default() }, MVT::I64);
+    let mut dag = SelectionDAG::new(DagConfig { pointer: EVT::I64, ..DagConfig::default() });
+    let f64v = EVT::Simple(MVT::F64);
+    let (a, b) = (dag.get_register(f64v, 1), dag.get_register(f64v, 2));
+    let node = dag.get_setcc(EVT::I8, a, b, CondCode::SetOLt);
+    dag.set_root(node);
+    TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: true }).run().expect("legalizes");
+    let root = dag.get_root();
+    let flags = dag.operand(root, 1);
+    assert_eq!((dag.opcode(root), dag.opcode(flags)), (x86isd::SETCC, x86isd::FCMP));
+    assert_eq!((dag.operand(flags, 0), dag.operand(flags, 1)), (b, a));
+}
+
+/// Only `+0.0` is a free immediate at SSE2: `1.5` is a load from the constant
+/// pool.
+#[test]
+fn a_float_constant_at_sse2_is_a_pool_load() {
+    let tli = TargetLowering::x86_64(Features { sse2: true, cmov: true, ..Features::default() }, MVT::I64);
+    let mut dag = SelectionDAG::new(DagConfig { pointer: EVT::I64, ..DagConfig::default() });
+    let f64v = EVT::Simple(MVT::F64);
+    let one_and_a_half = dag.get_constant_fp(0x3FF8_0000_0000_0000, f64v);
+    dag.set_root(one_and_a_half);
+    TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: true }).run().expect("legalizes");
+    let root = dag.get_root();
+    assert_eq!((dag.opcode(root), dag.value_type(root)), (ISD::Load, f64v));
+    assert_eq!(dag.constant_pool, vec![(0x3FF8_0000_0000_0000, f64v)], "an f64 entry, not an f32 one");
+}
