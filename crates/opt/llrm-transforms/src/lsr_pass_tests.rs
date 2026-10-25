@@ -652,3 +652,52 @@ fn test_lsr_continues_the_expressions_the_passes_before_it_made() {
     assert!(cold > 0);
     assert!(warm < cold, "the held expressions were not read: {warm} new nodes, {cold} cold");
 }
+
+/// x_reverse (AM-BT-26): the outer loop's `k & 15` was made its own `phi i4`
+/// stepped beside the i32 counter `k`, one live value too many, which spilled
+/// the counter at m32 (50 instructions against the pin's 42). The pin's final
+/// loop reads `trunc i32 %k to i4`: no second counter.
+#[test]
+fn a_masked_counter_is_a_truncation_of_the_counter_not_a_second_induction_variable() {
+    let (_changed, after) = reduced_on(FLAT, REVERSE, "i486", &[]);
+    assert!(!after.contains("phi i4"), "a second induction variable of the masked counter:\n{after}");
+}
+
+const REVERSE: &str = "@s = global [512 x i8] zeroinitializer
+define i32 @f(i32 %n) {
+entry:
+  %c0 = icmp sgt i32 %n, 0
+  br i1 %c0, label %outer, label %done
+outer:
+  %sum = phi i32 [ %sum2, %latch ], [ 0, %entry ]
+  %k = phi i32 [ %k2, %latch ], [ 0, %entry ]
+  %m = and i32 %k, 15
+  %len = sub nuw nsw i32 400, %m
+  %p = getelementptr i8, ptr @s, i32 %len
+  br label %inner
+inner:
+  %j = phi i32 [ 0, %outer ], [ %j2, %inner ]
+  %a = getelementptr i8, ptr @s, i32 %j
+  %x = load i8, ptr %a
+  %q = getelementptr i8, ptr %p, i32 %j
+  %y = load i8, ptr %q
+  store i8 %y, ptr %a
+  store i8 %x, ptr %q
+  %j2 = add nuw nsw i32 %j, 1
+  %ic = icmp ne i32 %j2, %len
+  br i1 %ic, label %inner, label %latch
+latch:
+  %b = and i32 %k, 255
+  %ga = getelementptr inbounds nuw i8, ptr @s, i32 %b
+  %v = load i8, ptr %ga
+  %vs = sext i8 %v to i32
+  %sum2 = add nsw i32 %sum, %vs
+  %k2 = add nuw nsw i32 %k, 1
+  %ec = icmp ne i32 %k2, %n
+  br i1 %ec, label %outer, label %exit
+exit:
+  ret i32 %sum2
+done:
+  ret i32 0
+}
+";

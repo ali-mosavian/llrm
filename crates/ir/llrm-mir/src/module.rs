@@ -967,7 +967,7 @@ impl Function {
     pub fn attributes_stamp(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         STAMPS.with(|count| count.set(count.get() + 1));
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = crate::hash::Fx::default();
         self.ty.hash(&mut hasher);
         self.parameter_attrs.hash(&mut hasher);
         self.return_attrs.hash(&mut hasher);
