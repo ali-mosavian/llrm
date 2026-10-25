@@ -106,6 +106,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [row45-plan](row45-plan.md) | Row 45: PeepholeOptimizer translation plan |
 | [fp-stackifier-plan](fp-stackifier-plan.md) | X86FPStackifier: compile-cost plan |
 | [mssa-build-plan](mssa-build-plan.md) | MemorySSA build cost: the pin builds as often, 11x cheaper per build |
+| [mssa-lazy-refs-design](mssa-lazy-refs-design.md) | MemorySSA clients: references made when asked (design, priced) |
 | [row61-deleted-tests](row61-deleted-tests.md) | Row 61: the tests deleted with the non-RFP route |
 | [row63-66-plan](row63-66-plan.md) | Rows 63 (RegisterCoalescer) and 66 (RAGreedy): translation plan |
 | [row82-plan](row82-plan.md) | Row 82, Control Flow Optimizer: translation plan |
