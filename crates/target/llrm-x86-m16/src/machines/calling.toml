@@ -69,6 +69,7 @@ float = ["st0"]
 # Pascal: arguments pushed left to right and popped by the callee. Nib's pascal16.
 [pascal16]
 like = "cdecl16"
+cc = "basic"
 order = "left-to-right"
 cleanup = "callee"
 

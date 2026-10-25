@@ -782,7 +782,54 @@ impl Builder<'_> {
         // fixed object, which `va_start` stores the address of
         if self.module.signature(self.function.ty).2 {
             self.dag.var_args_frame_index = Some(-(fixed + 1));
+            if self.target.dag.pointer == EVT::I64 {
+                self.save_variadic_registers()?;
+            }
         }
+        Ok(())
+    }
+
+    /// X86's `LowerFormalArguments` for a SysV x86-64 variadic function: the
+    /// argument registers the named parameters did not take are stored in the
+    /// register save area (one 8-byte slot each, in order) that `va_start`
+    /// names. The vector registers' half of the area (48..176) is left
+    /// unwritten until floating point is selected at m64 (DEVIATE SD313: a
+    /// `double` passed to such a function is not read back).
+    fn save_variadic_registers(&mut self) -> Result<(), Refused> {
+        let calling = self.arch.calling();
+        let Some(found) = calling.by_number(self.function.calling_convention) else {
+            return Err(Refused("va_start at m64 in a function with no convention"));
+        };
+        let named: usize = self
+            .convention
+            .parameters
+            .iter()
+            .map(|parameter| match parameter {
+                Parameter::Registers(regs) => regs.len(),
+                _ => 0,
+            })
+            .sum();
+        let registers: Vec<RegId> =
+            found.argument_registers.iter().map(|name| self.arch.register_named(name)).collect();
+        let Some(save) = self.info.variadic_save else {
+            return Err(Refused("va_start at m64 with no register save area"));
+        };
+        let pointer = self.target.dag.pointer;
+        for (at, &register) in registers.iter().enumerate().skip(named) {
+            let vreg = self.info.new_reg();
+            self.live_ins.push((register, vreg));
+            let entry = self.dag.entry_node();
+            let value = self.dag.get_copy_from_reg(entry, vreg, pointer);
+            let base = self.dag.get_frame_index(pointer, save);
+            let slot = self.dag.get_constant(at as u128 * 8, pointer);
+            let address = self.dag.get_node(ISD::Add, pointer, &[base, slot]);
+            let info =
+                MemInfo { mem_vt: pointer, align: 8, volatile: false, base: MemBase::Stack(save), ext: None, space: 0 };
+            let root = self.control_root();
+            let store = self.dag.get_store(root, value, address, info);
+            self.dag.set_root(store);
+        }
+        self.dag.var_args_save = Some((save, named as u32 * 8));
         Ok(())
     }
 

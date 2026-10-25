@@ -492,7 +492,49 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_select(arm_vt, or, n1, y));
             }
         }
-        self.select_single_bit_test(n0, n1, n2)
+        self.select_sign_folds(n0, n1, n2).or_else(|| self.select_single_bit_test(n0, n1, n2))
+    }
+
+    /// `SimplifySelectCC`, the sign folds: `select (x > -1), C, ~C` is
+    /// `(x >>s 31) ^ C`, `select (x < 0), C, ~C` is `(x >>s 31) ^ ~C`, and the
+    /// sign `select (x > -1), 1, -1` is `(x >>s 31) | 1`: a mask from the sign
+    /// bit instead of a branch (an `i486` has no `cmov`).
+    fn select_sign_folds(
+        &mut self,
+        cond: SDValue,
+        then: SDValue,
+        other: SDValue,
+    ) -> Option<SDValue> {
+        if self.dag.opcode(cond) != ISD::SetCC {
+            return None;
+        }
+        let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(cond, 2)).data else { return None };
+        let (x, bound) = (self.dag.operand(cond, 0), self.dag.operand(cond, 1));
+        let x_vt = self.dag.value_type(x);
+        let vt = self.dag.value_type(then);
+        if !x_vt.is_integer() || !vt.is_integer() {
+            return None;
+        }
+        let (bound, c2, c3) = (self.dag.constant(bound)?, self.dag.constant(then)?, self.dag.constant(other)?);
+        let all = super::fold::mask(x_vt.size_in_bits());
+        let arm_mask = super::fold::mask(vt.size_in_bits());
+        let sign = match cc {
+            CondCode::SetGt if bound == all => false,
+            CondCode::SetLt if bound == 0 => true,
+            _ => return None,
+        };
+        let shift = self.dag.get_constant(u128::from(x_vt.size_in_bits() - 1), EVT::I8);
+        let sra = self.dag.get_node(ISD::Sra, x_vt, &[x, shift]);
+        let mask = self.dag.get_sext_or_trunc(sra, vt);
+        if c2 == !c3 & arm_mask {
+            let keep = self.dag.get_constant(if sign { c3 } else { c2 }, vt);
+            return Some(self.dag.get_node(ISD::Xor, vt, &[mask, keep]));
+        }
+        if !sign && c2 == 1 && c3 == arm_mask {
+            let one = self.dag.get_constant(1, vt);
+            return Some(self.dag.get_node(ISD::Or, vt, &[mask, one]));
+        }
+        None
     }
 
     /// `SimplifySelectCC`, the single-bit test: `select ((x & 2^k) == 0), 0, a`

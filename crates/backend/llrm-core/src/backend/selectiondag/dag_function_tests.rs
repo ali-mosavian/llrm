@@ -491,6 +491,35 @@ fn a_zero_extended_byte_read_as_a_dword_too_stays_a_dword() {
     assert!(matches!(extend.dests.as_slice(), [Loc::Held(h)] if h.width == 4), "{extend:?}");
 }
 
+const SIGN_SELECTS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %x) {
+  %c = icmp sgt i32 %x, -1
+  %r = select i1 %c, i32 1, i32 -1
+  ret i32 %r
+}
+define i32 @g(i32 %x) {
+  %c = icmp slt i32 %x, 0
+  %r = select i1 %c, i32 -6, i32 5
+  ret i32 %r
+}
+";
+
+/// `x > -1 ? 1 : -1` and `x < 0 ? ~5 : 5` were a test and a branch (`mov; test;
+/// jns; mov`); the pin's `SimplifySelectCC` makes the sign mask:
+/// `sar eax, 31; or eax, 1` and `sar eax, 31; xor eax, 5`.
+#[test]
+fn a_select_on_the_sign_is_the_sign_mask_not_a_branch() {
+    let module = llrm_mir::parse::module(SIGN_SELECTS).expect("parses");
+    for name in ["f", "g"] {
+        let done =
+            selected(&module, name, &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+                .unwrap_or_else(|e| panic!("{}", e.0));
+        let insns = done.body.insns();
+        let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+        assert!(seen.contains(&"sar") && !seen.iter().any(|n| n.starts_with('j')), "{name}: {seen:?}");
+    }
+}
+
 /// `if (c & 1) g(); else h();` written as a compare of the masked value, in
 /// both polarities and both arm orders, was `mov eax, [esp+4]; and al, 1; je`:
 /// only the truncate form narrowed. The pin's `X86ISD::CMP` case makes every

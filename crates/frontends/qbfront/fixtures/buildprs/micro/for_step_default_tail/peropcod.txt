@@ -1,3 +1,0 @@
-opStForStep|x
-opStFor|x
-opFnAbs|x
