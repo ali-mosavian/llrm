@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/constraintelim.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/constraintelim.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/constraintelim.rs sha256:d9bdb5a5ba7bf28efbf15be89683827604d133604c24c66623b5f62ce52b1494 -->
+<!-- src: crates/opt/llrm-transforms/src/constraintelim.rs sha256:a27548dacc5304f9747e3654124959b1d5f9a84fba03d99b75bf7dead5810a34 -->
 
 # constraintelim
 
@@ -36,8 +36,8 @@ DEVIATE (anything MIR lacks):
    get fresh names.
 5. Induction facts are in `constraintelim_induction`; every function of the
    pass is translated but the reproducer and the memory-access facts (6).
-6. Memory-access facts (`getConstraintFromMemoryAccess`) are not translated:
-   they need `getBaseObjectSize`, which MIR lacks.
+6. `getBaseObjectSize` (`valuetracking::objectsize`) does not know the size
+   of an allocation call, so no fact comes from an access into one.
 
 ## Example
 `if (x < 5) { if (x < 10) ... }`: the inner compare is decided true.
