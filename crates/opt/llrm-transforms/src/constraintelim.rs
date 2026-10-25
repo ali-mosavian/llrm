@@ -29,11 +29,8 @@
 //!    `replaceCmpWithConstant` are not translated.
 //! 4. `takeName` has no counterpart: the `usub.sat` and overflow replacements
 //!    get fresh names.
-//! 5. Induction facts (`addBoundsForHeaderInductions`, `addInfoForInductions`,
-//!    `getMonotonicityInfo`) are not translated: they need ScalarEvolution,
-//!    which scev-port owns. Exit: join them once it lands. Measured effect:
-//!    every file of the pass's tests that differs from the pinned `opt` is a
-//!    loop one (`tools/llvmport/cecompare.py`).
+//! 5. Induction facts are in `constraintelim_induction`; every function of the
+//!    pass is translated but the reproducer and the memory-access facts (6).
 //! 6. Memory-access facts (`getConstraintFromMemoryAccess`) are not translated:
 //!    they need `getBaseObjectSize`, which MIR lacks.
 //!
@@ -41,7 +38,9 @@
 //! `if (x < 5) { if (x < 10) ... }`: the inner compare is decided true.
 //!
 //! # Used by
-//! Nothing yet: `difference` and `guards::Given::holds` move here.
+//! The pipeline's `constraint-elimination@699` slot, after Reassociate
+//! (-O2, -O3, -Os; the pin's -O1 has none). `difference` and
+//! `guards::Given::holds` have yet to move here.
 
 use llrm_mir::constantrange::ConstantRange;
 use llrm_mir::constraintsystem::{ConstraintSystem, Entry, Row};
@@ -52,6 +51,8 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::valuetracking::known::{is_known_non_negative, is_known_positive};
 use llrm_mir::valuetracking::pattern::{self, Side};
 use llrm_mir::valuetracking::{MAX_ANALYSIS_RECURSION_DEPTH, Query};
+
+use crate::constraintelim_induction::Inductions;
 
 /// `MaxConstraintValue`.
 const MAX_CONSTRAINT_VALUE: i64 = i64::MAX;
@@ -510,6 +511,22 @@ fn collect_offsets(
     Some(result)
 }
 
+/// `GEPOperator::accumulateConstantOffset`: the offset of the `gep` `v`, if
+/// every index is a constant.
+pub(crate) fn constant_gep_offset(
+    q: &Query,
+    v: Operand,
+) -> Option<i64> {
+    let (_, instruction) = q.instruction_of(v)?;
+    let Opcode::GetElementPtr { source } = instruction.opcode else { return None };
+    let space = match q.context().types.get(q.type_of(instruction.operands[0])?) {
+        llrm_mir::types::Type::Pointer(space) => *space,
+        _ => return None,
+    };
+    let (constant, variable) = collect_offset(q, source, &instruction.operands, q.layout.offset_bits(space))?;
+    variable.is_empty().then_some(constant)
+}
+
 // ---- sides --------------------------------------------------------------
 
 /// The width of `s`'s integer type, a pointer's index width otherwise, 0 for
@@ -525,7 +542,7 @@ fn side_bits(
 }
 
 /// Whether `s` is an integer (or a vector of them): `Type::isIntegerTy`.
-fn is_integer(
+pub(crate) fn is_integer(
     q: &Query,
     s: Side,
 ) -> bool {
@@ -540,7 +557,7 @@ fn is_integer(
     }
 }
 
-fn is_pointer(
+pub(crate) fn is_pointer(
     q: &Query,
     s: Side,
 ) -> bool {
@@ -710,6 +727,19 @@ fn is_known_no_wrap(
     q: &Query,
     signed_wrap: bool,
 ) -> bool {
+    is_known_no_wrap_with(v, info, q, signed_wrap, None)
+}
+
+/// `isKnownNoWrap` of `v` as if it had `flags` (where given): LLVM's
+/// `tryToStrengthenFlags` sets `nsw` on the instruction before it asks about
+/// `nuw`, which reads it; here the instruction is edited after the query.
+fn is_known_no_wrap_with(
+    v: Side,
+    info: &mut ConstraintInfo,
+    q: &Query,
+    signed_wrap: bool,
+    flags: Option<Flags>,
+) -> bool {
     let Side::Value(op) = v else { return false };
     if pattern::disjoint_or(q, op).is_some() {
         return true;
@@ -751,7 +781,7 @@ fn is_known_no_wrap(
         opcode,
         Side::of(q, instruction.operands[0]),
         Side::of(q, instruction.operands[1]),
-        instruction.flags,
+        flags.unwrap_or(instruction.flags),
         info,
         q,
         signed_wrap,
@@ -1772,7 +1802,7 @@ pub struct ConditionTy {
 
 /// `FactOrCheck::EntryTy` with its payload.
 #[derive(Clone, Copy, Debug)]
-enum Entry2 {
+pub(crate) enum Entry2 {
     /// A condition that holds on entry to a block, given a pre-condition that
     /// must hold for the fact to be added to the system.
     ConditionFact { cond: ConditionTy, does_hold: Option<ConditionTy> },
@@ -1962,7 +1992,7 @@ impl<'a> State<'a> {
         dfs_numbers(self.tree, block)
     }
 
-    fn push(
+    pub(crate) fn push(
         &mut self,
         block: BlockId,
         entry: Entry2,
@@ -1978,11 +2008,11 @@ impl<'a> State<'a> {
     pub fn add_info_for(
         &mut self,
         q: &Query,
+        ind: &mut Inductions,
         bb: BlockId,
     ) {
-        // The induction facts need ScalarEvolution and LoopInfo
-        // (`addBoundsForHeaderInductions`, `addInfoForInductions`): DEVIATE
-        // 5, until the SCEV translation lands.
+        self.add_bounds_for_header_inductions(q, ind, bb);
+        self.add_info_for_inductions(q, ind, bb);
 
         // True as long as the current instruction is guaranteed to execute.
         let mut guaranteed_to_execute = true;
@@ -2291,13 +2321,14 @@ pub fn eliminate_constraints(
         q.globals = declarations;
         q.metadata = metadata;
         let mut state = State::new(&tree);
+        let mut inductions = Inductions::new(&q, &tree);
         // First, collect conditions implied by branches and blocks with their
         // Dominator DFS in and out numbers.
         for &bb in function.layout() {
             if !tree.contains(bb) {
                 continue;
             }
-            state.add_info_for(&q, bb);
+            state.add_info_for(&q, &mut inductions, bb);
         }
         // Next, sort worklist by dominance (see `fact_before`).
         let mut work_list = std::mem::take(&mut state.work_list);
@@ -2611,7 +2642,7 @@ fn process_check(
         if !flags.contains(Flags::NSW) && is_known_no_wrap(this, info, q, true) {
             flags.insert(Flags::NSW);
         }
-        if !flags.contains(Flags::NUW) && is_known_no_wrap(this, info, q, false) {
+        if !flags.contains(Flags::NUW) && is_known_no_wrap_with(this, info, q, false, Some(flags)) {
             flags.insert(Flags::NUW);
         }
         if flags != before {

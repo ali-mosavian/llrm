@@ -701,3 +701,30 @@ fn an_inline_block_with_two_outputs_is_selected() {
         .unwrap_or_else(|why| panic!("{}", why.0));
     assert!(done.inline.values().any(|bytes| bytes[..] == [0xCD, 0x1A]), "{:?}", done.inline);
 }
+
+const COMPARE_WITH_ONE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+declare i16 @g()
+define i16 @f() {
+entry:
+  %r = call i16 @g()
+  %c = icmp ne i16 %r, 1
+  br i1 %c, label %no, label %yes
+no:
+  ret i16 0
+yes:
+  ret i16 5
+}
+";
+
+/// A compare with 1 was selected as `X86ISD::SUB` and kept as `sub ax, 1; jne`,
+/// a write nothing reads (QCport `weapons.c`); the pin makes it `cmp ax, 1`.
+#[test]
+fn a_sub_whose_difference_is_unread_is_a_cmp() {
+    let module = llrm_mir::parse::module(COMPARE_WITH_ONE).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(names.iter().any(|n| n == "cmp"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "sub"), "{names:?}");
+}
