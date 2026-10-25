@@ -361,9 +361,16 @@ pub fn roots(program: &Program) -> BTreeSet<Defined> {
 
 /// Every defined procedure, in program order.
 fn defined(program: &Program) -> impl Iterator<Item = Defined> + '_ {
-    program.modules.iter().enumerate().flat_map(|(at, module)| {
-        module.functions().filter(|(_, _, function)| !function.is_declaration()).map(move |(id, _, _)| (at, id))
-    })
+    program
+        .modules
+        .iter()
+        .enumerate()
+        .flat_map(
+            |(at, module)| module
+                .functions()
+                .filter(|(_, _, function)| !function.is_declaration() && !function.is_deleted())
+                .map(move |(id, _, _)| (at, id)),
+        )
 }
 
 /// Defined procedures of module `at`, in module order.
@@ -487,9 +494,7 @@ fn bare_the_unreached(
 
 /// Whether `function` is what `bare` leaves.
 fn stub(function: &llrm_mir::module::Function) -> bool {
-    let mut body = function.walk();
-    body.next().is_some_and(|(_, inst)| function.instruction(inst).opcode == Opcode::Unreachable)
-        && body.next().is_none()
+    function.is_deleted()
 }
 
 /// `id` with a body of one `unreachable`: nothing it did, wrote or called

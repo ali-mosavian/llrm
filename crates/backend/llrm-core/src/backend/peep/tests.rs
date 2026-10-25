@@ -178,3 +178,50 @@ fn the_rule_groups_come_from_one_list() {
     assert!(super::Rules::NONE.present().is_empty());
     assert_eq!(super::Rules::GROUPS.len(), 23);
 }
+
+/// A window was built, and the group's first-pattern test run, at every
+/// instruction of a block: 24,604 tests on d_faces -O2, 856 of them passed
+/// (3.5%). A group whose rules all start on a `mov` asks `head` only at one.
+#[test]
+fn test_a_group_asks_its_first_test_only_of_the_operations_its_rules_start_on() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::walk::{self, Cx, Matcher, Rewrite, Skip, Window};
+
+    static ASKED: AtomicUsize = AtomicUsize::new(0);
+    fn head(_: &Window) -> u32 {
+        ASKED.fetch_add(1, Ordering::Relaxed);
+        0
+    }
+    fn tail(
+        _: &Cx,
+        _: &Window,
+        _: u32,
+    ) -> Option<Rewrite> {
+        None
+    }
+    let matcher = Matcher { width: 1, first: &[Operation::Move], head, tail, cross: None };
+    let value = Held { value: 1, width: 2 };
+    let insns: Vec<Arc<Insn>> =
+        [(Operation::Move, "mov"), (Operation::Binary, "add"), (Operation::Push, "push"), (Operation::Binary, "sub")]
+            .into_iter()
+            .enumerate()
+            .map(|(at, (op, name))| {
+                Arc::new(Insn::new(
+                    at as i64,
+                    Some((at as i64, at as i64)),
+                    Some(what(op, name, vec![Loc::Held(value)], vec![])),
+                    vec![],
+                    vec![],
+                ))
+            })
+            .collect();
+    let counts: IndexMap<u32, i64> = IndexMap::default();
+    walk::window_insns(
+        &insns,
+        &Facts::counted(&counts, 16, crate::backend::registerinfo::test_regs()),
+        &matcher,
+        Skip::None,
+    );
+    assert_eq!(ASKED.load(Ordering::Relaxed), 1);
+}
