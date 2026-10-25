@@ -134,3 +134,39 @@ def test_a_branch_whose_tree_still_says_union_merges_whole_with_the_clone_set_up
     merged = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "merge", "--no-edit", "-q", "second"], cwd=repo, capture_output=True, text=True, env=env)
     assert merged.returncode == 0, merged.stdout + merged.stderr
     assert parses((repo / TESTS).read_text(), tmp_path)
+
+
+PARSER = "crates/frontends/qb/tests/parser.rs"
+
+
+def parser_prs(tmp_path: Path, attributes: str) -> Path:
+    """The shape of the 12 QB PRs: one side also edits a line high in the file, both append a test at the end."""
+    repo = tmp_path / "repo"
+    (repo / PARSER).parent.mkdir(parents=True)
+    git(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / PARSER).write_text("// header\n\n" + BASE)
+    (repo / ".gitattributes").write_text(attributes)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "base")
+    git(repo, "checkout", "-qb", "second")
+    path = repo / PARSER
+    path.write_text(path.read_text() + "\n" + TEST.format(name="from_second"))
+    git(repo, "commit", "-qam", "second")
+    git(repo, "checkout", "-q", "main")
+    path.write_text(path.read_text().replace("// header", "// header, edited") + "\n" + TEST.format(name="from_main"))
+    git(repo, "commit", "-qam", "main")
+    return repo
+
+
+def test_the_repo_attributes_merge_two_qb_pr_appends_to_parser_rs_clean(tmp_path):
+    """12 QB PRs conflicted at the end of parser.rs because only `*_tests.rs` and `tests.rs` had the driver."""
+    repo = parser_prs(tmp_path, (ROOT / ".gitattributes").read_text())
+    assert git(repo, "merge", "--no-edit", "-q", "second", check=False).returncode == 0
+    text = (repo / PARSER).read_text()
+    assert "// header, edited" in text and "fn from_main" in text and "fn from_second" in text and parses(text, tmp_path)
+
+
+def test_without_the_parser_rs_line_the_same_appends_conflict(tmp_path):
+    lines = [line for line in (ROOT / ".gitattributes").read_text().splitlines() if "parser.rs" not in line]
+    repo = parser_prs(tmp_path, "\n".join(lines) + "\n")
+    assert git(repo, "merge", "--no-edit", "-q", "second", check=False).returncode != 0
