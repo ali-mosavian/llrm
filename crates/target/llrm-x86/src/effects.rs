@@ -88,7 +88,12 @@ fn used(
                 continue;
             }
             Loc::Mem(one) => {
-                let named = one.through != RegId::None || one.index_through != RegId::None || one.addr.is_some();
+                // A symbol indexed by a value the allocator has not placed
+                // names no register yet.
+                let unplaced = (one.index.is_some() && one.index_through == RegId::None)
+                    || (one.base.is_some() && one.through == RegId::None);
+                let named =
+                    one.through != RegId::None || one.index_through != RegId::None || (one.addr.is_some() && !unplaced);
                 match select::operand_of(one, bits) {
                     // An address that cannot be encoded (`[sp]` in real mode)
                     // is an instruction that cannot be.
