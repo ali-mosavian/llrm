@@ -27,6 +27,12 @@ fn o0_runs_no_peephole_and_o1_does() {
     // tests the comparison's own `i1`, so the load is its memory operand).
     let compares_to_zero =
         |text: &str| text.lines().any(|line| line.trim().starts_with("cmp ") && line.trim().ends_with(", 0"));
-    assert!(compares_to_zero(&none) && !none.contains("test eax, eax"), "{none}");
-    assert!(some.contains("test eax, eax"), "{some}");
+    // Whichever register the allocator gave the argument: `test r, r`.
+    let tests_itself = |text: &str| {
+        text.lines().any(|line| {
+            line.trim().strip_prefix("test ").and_then(|rest| rest.split_once(", ")).is_some_and(|(a, b)| a == b)
+        })
+    };
+    assert!(compares_to_zero(&none) && !tests_itself(&none), "{none}");
+    assert!(tests_itself(&some), "{some}");
 }

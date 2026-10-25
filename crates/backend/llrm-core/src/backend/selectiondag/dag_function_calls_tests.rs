@@ -513,8 +513,8 @@ fn a_landing_pad_is_marked_and_reachable_from_the_entry() {
     let done = select_with_contracts(QB_PAD).unwrap_or_else(|why| panic!("{why}"));
     let landing = done.landing.expect("the pad's address");
     let blocks = &done.body.blocks;
-    let by_at: std::collections::HashMap<i64, &crate::model::lir::Block> = blocks.iter().map(|b| (b.at, b)).collect();
-    let mut seen = std::collections::HashSet::new();
+    let by_at: llrm_support::hash::HashMap<i64, &crate::model::lir::Block> = blocks.iter().map(|b| (b.at, b)).collect();
+    let mut seen = llrm_support::hash::HashSet::default();
     let mut work = vec![done.body.entry];
     while let Some(at) = work.pop() {
         if seen.insert(at) {

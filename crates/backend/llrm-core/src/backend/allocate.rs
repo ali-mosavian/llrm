@@ -2642,13 +2642,15 @@ impl RegAlloc {
             .map(ranges::key)
             .collect();
         body = removed_unread(&body, &abandoned);
+        // Asked once: the body is the same at the next use.
+        let required = constrain::required(&body, &self.classes);
         self.pinned = prefer.clone();
-        self.pinned.extend(constrain::required(&body, &self.classes));
+        self.pinned.extend(required.iter().map(|(value, register)| (*value, *register)));
         let frame = Rc::clone(self.frame.as_ref().expect("made above"));
         drop(prepare);
         let base = llrm_support::debug::span("regalloc base");
         let mut pins = prefer.clone();
-        pins.extend(constrain::required(&body, &self.classes));
+        pins.extend(required);
         let before = last_resorts();
         // Each spill gets a slot of its own; they are shared once, over the
         // allocation (`crate::backend::slots::slots_colored`).
