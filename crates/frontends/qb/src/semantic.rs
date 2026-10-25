@@ -3786,6 +3786,7 @@ impl Compiler {
                                 &LONG => 0x14,
                                 &SINGLE => 0x04,
                                 &DOUBLE => 0x08,
+                                &CURRENCY => 0x18,
                                 _ if self.string_width(*type_id).is_some() => 0x03,
                                 _ => return self.fail("INPUT destination has an unsupported type"),
                             });
@@ -3828,6 +3829,7 @@ impl Compiler {
                             LONG => ("B$RDI4", vec![Operand::Value(address)]),
                             SINGLE => ("B$RDR4", vec![Operand::Value(address)]),
                             DOUBLE => ("B$RDR8", vec![Operand::Value(address)]),
+                            CURRENCY => ("B$RDCY", vec![Operand::Value(address)]),
                             _ if self.string_width(type_id).is_some() => {
                                 let width = self.string_width(type_id).unwrap_or(0);
                                 (
@@ -3872,6 +3874,7 @@ impl Compiler {
                             LONG => ("B$RDI4", vec![Operand::Value(address)]),
                             SINGLE => ("B$RDR4", vec![Operand::Value(address)]),
                             DOUBLE => ("B$RDR8", vec![Operand::Value(address)]),
+                            CURRENCY => ("B$RDCY", vec![Operand::Value(address)]),
                             _ if self.string_width(type_id).is_some() => {
                                 let width = self.string_width(type_id).unwrap_or(0);
                                 (
@@ -6013,9 +6016,10 @@ impl Compiler {
                     LONG => "B$STI4",
                     SINGLE => "B$STR4",
                     DOUBLE => "B$STR8",
+                    CURRENCY => "B$STCY",
                     _ => return self.fail("STR$ requires a numeric argument"),
                 };
-                if matches!(type_id, SINGLE | DOUBLE) {
+                if matches!(type_id, SINGLE | DOUBLE | CURRENCY) {
                     // Runtime STR4/STR8 consume the declared 4/8-byte value,
                     // not the frontend's extended-precision evaluation value.
                     let stored = self.temporary(type_id)?;
@@ -6030,7 +6034,11 @@ impl Compiler {
             if intrinsic.is_some_and(|one| {
                 matches!(
                     one.lowering,
-                    Lowering::PackInteger | Lowering::PackLong | Lowering::PackSingle | Lowering::PackDouble
+                    Lowering::PackInteger
+                        | Lowering::PackLong
+                        | Lowering::PackSingle
+                        | Lowering::PackDouble
+                        | Lowering::PackCurrency
                 )
             }) {
                 let lowering = intrinsic.unwrap().lowering;
@@ -6039,11 +6047,12 @@ impl Compiler {
                     Lowering::PackLong => (LONG, "B$FMKL"),
                     Lowering::PackSingle => (SINGLE, if self.options.mbf { "B$FMSF" } else { "B$FMKS" }),
                     Lowering::PackDouble => (DOUBLE, if self.options.mbf { "B$FMDF" } else { "B$FMKD" }),
+                    Lowering::PackCurrency => (CURRENCY, "B$FMKC"),
                     _ => unreachable!("matched binary packer"),
                 };
                 let (operand, type_id) = self.expression(&arguments[0])?;
                 let mut operand = self.convert(operand, type_id, target)?;
-                if matches!(target, SINGLE | DOUBLE) {
+                if matches!(target, SINGLE | DOUBLE | CURRENCY) {
                     // The runtime copies the declared 4/8-byte representation,
                     // not the frontend's extended-precision evaluation value.
                     let stored = self.temporary(target)?;
@@ -7638,6 +7647,27 @@ impl Compiler {
             let result = self.value(type_id);
             self.emit_runtime_call(if integer { "B$FCVI" } else { "B$FCVL" }, vec![result], vec![descriptor]);
             return Ok(Some((Operand::Value(result), type_id)));
+        }
+        if intrinsic.lowering == Lowering::UnpackCurrency {
+            // B$FCVC answers the near address of the converted value, as B$FCVD
+            // does.
+            let descriptor = self.string_descriptor(&arguments[0])?;
+            let pointer_type = self.pointer_type(CURRENCY);
+            let pointer = self.value(pointer_type);
+            self.emit_runtime_call("B$FCVC", vec![pointer], vec![descriptor]);
+            let result = self.value(CURRENCY);
+            self.emit(
+                "load",
+                vec![result],
+                vec![Operand::Indirect {
+                    base: pointer,
+                    offset: 0,
+                    type_id: CURRENCY,
+                    volatile: false,
+                    inbounds: false,
+                }],
+            );
+            return Ok(Some((Operand::Value(result), CURRENCY)));
         }
         if matches!(
             intrinsic.lowering,
