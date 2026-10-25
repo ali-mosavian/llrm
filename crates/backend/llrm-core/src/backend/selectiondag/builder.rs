@@ -1267,7 +1267,8 @@ impl Builder<'_> {
                 // x87 returns in st(0), which no register names: the value is
                 // RET_GLUE's operand
                 ops.push(value);
-            } else if self.dag.node(value).values.len() > 1 {
+            } else if self.function.operand_type(&self.module.context, operand).is_some_and(|ty| self.is_aggregate(ty))
+            {
                 // An aggregate (`ret {i32, i64}`): each field in the next
                 // return register at its own width (`ComputeValueVTs`), where
                 // the one-integer path would halve the first field.
