@@ -1502,9 +1502,12 @@ impl Emitter<'_, '_> {
             }
             // A sibling call: the frame pass puts the epilogue before this
             // return, which is a jump to the callee (`masm`).
-            "TCRETURNdi" => {
+            "TCRETURNdi" | "TCRETURN_16" => {
+                // the pseudo keeps the node's operands: the chain, then the
+                // callee
+                let target = if name == "TCRETURN_16" { node.ops[1] } else { node.ops[0] };
                 let callee = self
-                    .direct_callee(node.ops[0])
+                    .direct_callee(target)
                     .ok_or_else(|| EmitError::Unsupported("a sibling call of a non-global".to_owned()))?;
                 let at = self.next_address();
                 let requires = std::mem::take(&mut self.arguments);

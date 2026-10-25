@@ -41,6 +41,11 @@ impl Builder<'_> {
         arguments: &[Operand],
     ) -> bool {
         let caller = &self.convention;
+        // a far pointer callee is stored to a cell and called through it
+        // (`LLRM_FARCALL`); the jump has no such form yet
+        if !direct && self.target.dag.pointer == super::super::mvt::EVT::I16 {
+            return false;
+        }
         // "no_caller_saved_registers": the frame cannot be replaced
         if llrm_mir::memory::has(&self.function.attrs, "no_caller_saved_registers") {
             return false;

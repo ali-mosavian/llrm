@@ -262,8 +262,10 @@ fn an_f80_zero_and_one_are_selected_as_the_x87_constants() {
 #[test]
 fn every_own_node_has_a_pin_id() {
     use super::dagisel_adapter::pin_opcode;
-    use super::x86isd::{LLRM_ASM, LLRM_CODE, LLRM_FARCALL, LLRM_PORT, LLRM_PTRDIFF, LLRM_WINDOW, SEGMENT_OF};
-    for node in [LLRM_ASM, LLRM_CODE, LLRM_FARCALL, LLRM_PORT, LLRM_PTRDIFF, LLRM_WINDOW, SEGMENT_OF] {
+    use super::x86isd::{
+        LLRM_ASM, LLRM_CODE, LLRM_FARCALL, LLRM_PORT, LLRM_PTRDIFF, LLRM_TC_RETURN, LLRM_WINDOW, SEGMENT_OF,
+    };
+    for node in [LLRM_ASM, LLRM_CODE, LLRM_FARCALL, LLRM_PORT, LLRM_TC_RETURN, LLRM_PTRDIFF, LLRM_WINDOW, SEGMENT_OF] {
         assert_ne!(pin_opcode(node), u16::MAX, "{node:?}");
     }
 }
