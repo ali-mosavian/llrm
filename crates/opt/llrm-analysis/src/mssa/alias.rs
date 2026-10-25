@@ -225,7 +225,7 @@ impl<'a> AliasQuery<'a> {
             return found.clone();
         }
         let made = match self.unit.function.instruction(inst).opcode {
-            Opcode::Load { .. } | Opcode::Store { .. } => self.accesses.references.get(&inst).map(|reference| {
+            Opcode::Load { .. } | Opcode::Store { .. } => MemRef::of(self.unit, inst).as_ref().map(|reference| {
                 let made = self.location_for(reference, false);
                 // The access's own tags (`MemoryLocation::get`).
                 let tagged = crate::aa::MemoryLocation::get(self.unit, inst).filter(|_| made.memory.is_some());
