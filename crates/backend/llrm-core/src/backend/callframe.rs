@@ -107,16 +107,92 @@ impl LIRTransform for CallFrameOpt {
     }
 }
 
+/// Where the frame pseudos go, after allocation and before the prologue is
+/// made (the pin's `eliminateCallFramePseudoInstr`, from PEI). A function with
+/// no variable-sized object and no pushed call reserves its largest call area
+/// in the prologue (`hasReservedCallFrame`): the pseudos go, and what a callee
+/// popped is reserved again with `sub sp, M`. Any other function adjusts for
+/// every call (`LowerCallFrame`). Runs at every level.
+pub struct ReserveCallFrame {
+    /// `RegInfo.getStackRegister()`.
+    pub stack: RegId,
+    /// The width of the stack pointer.
+    pub width: u32,
+    /// The frame the prologue reserves; a function with none lowers every call.
+    pub frame: Option<std::rc::Rc<std::cell::RefCell<crate::backend::frame::Frame>>>,
+}
+
+impl LIRTransform for ReserveCallFrame {
+    fn class_name(&self) -> &'static str {
+        "ReserveCallFrame"
+    }
+
+    fn name(&self) -> &str {
+        "reservecallframe"
+    }
+
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
+        let pseudos = |one: &Arc<Insn>| matches!(name_of(one), Some("call_frame_setup" | "call_frame_destroy"));
+        if !body.blocks.iter().flat_map(|block| block.insns.iter()).any(pseudos) {
+            return Ok(body);
+        }
+        let pushed = body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Push));
+        let probe =
+            CallFrameOpt { slot: 0, align: 0, stack: self.stack, has_var_sized: false, slow_two_mem_ops: false };
+        let mut lowering = LowerCallFrame { stack: self.stack, width: self.width };
+        let Some(frame) = self.frame.as_ref().filter(|_| !pushed && !probe.allocates_dynamically(&body)) else {
+            return lowering.transform(body);
+        };
+        let area = body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter(|one| name_of(one) == Some("call_frame_setup"))
+            .filter_map(|one| imm_of(one, 0))
+            .max()
+            .unwrap_or(0);
+        // The destroys that re-reserve what a callee popped become `sub`.
+        let mut out = body.clone();
+        for block in &mut out.blocks {
+            let insns: Vec<Arc<Insn>> = block
+                .insns
+                .iter()
+                .filter_map(|one| match name_of(one) {
+                    Some("call_frame_setup") => None,
+                    Some("call_frame_destroy") => {
+                        let popped = imm_of(one, 1).filter(|&popped| popped != 0)?;
+                        let sp = Loc::Reg(Reg { register: self.stack, width: self.width });
+                        let what = Semantics {
+                            name: Some("sub".into()),
+                            dests: vec![sp.clone()],
+                            sources: vec![sp, Loc::Imm(Imm { value: popped, width: self.width, address: None })],
+                            ..Semantics::new(Operation::Binary)
+                        };
+                        Some(Arc::new(Insn::new(one.at, one.covers, Some(what), vec![], vec![])))
+                    }
+                    _ => Some(Arc::clone(one)),
+                })
+                .collect();
+            *block = block.with_insns(insns);
+        }
+        frame.borrow_mut().call_area = area;
+        Ok(out)
+    }
+}
+
 /// What the pin's `eliminateCallFramePseudoInstr` makes of the frame pseudos
-/// while no call frame is reserved: `call_frame_setup N, 0, A` is `sub sp, N -
+/// where no call frame is reserved: `call_frame_setup N, 0, A` is `sub sp, N -
 /// A` (the pushes made A of it) and `call_frame_destroy N, M` is `add sp, N -
-/// M` (the callee popped M). Runs at every level, after [`CallFrameOpt`].
-///
-/// DEVIATE CF4 (row 80): the pin reserves the largest call frame in the
-/// prologue and drops the pseudos; here each call adjusts for itself. Exit:
-/// the reserved frame (docs/working/callframe-translation-plan.md, piece 2).
-/// Owner: sdag-d.
-pub struct LowerCallFrame {
+/// M` (the callee popped M). [`ReserveCallFrame`] runs it for the functions
+/// that cannot reserve one.
+struct LowerCallFrame {
     /// `RegInfo.getStackRegister()`.
     pub stack: RegId,
     /// The width of the stack pointer.
@@ -743,6 +819,38 @@ mod tests {
         );
         let one = body(vec![alloca, setup(4), store(0, imm(1), vec![]), call(), destroy(4)]);
         assert_eq!(names(&pass().run(&one)), ["sub", "call_frame_setup", "push", "call", "call_frame_destroy"]);
+    }
+
+    fn reserve(insns: Vec<Arc<Insn>>) -> (Vec<String>, i64) {
+        let frame = std::rc::Rc::new(std::cell::RefCell::new(crate::backend::frame::Frame::new(0)));
+        let mut pass = ReserveCallFrame { stack: RegId::SP, width: 4, frame: Some(frame.clone()) };
+        let after = pass.transform(body(insns)).expect("reserves");
+        let area = frame.borrow().call_area;
+        (names(&after), area)
+    }
+
+    /// Calls that push nothing left a `sub`/`add` pair each; a function with
+    /// none pushed reserves the largest area once, in the prologue.
+    #[test]
+    fn a_function_with_no_pushed_call_reserves_its_largest_area() {
+        let first = vec![setup(8), store(0, held(1), vec![1]), store(4, held(2), vec![2]), call(), destroy(8)];
+        let second = vec![setup(16), store(0, held(1), vec![1]), call(), destroy(16)];
+        let (after, area) = reserve([first, second].concat());
+        assert_eq!(after, ["mov", "mov", "call", "mov", "call"]);
+        assert_eq!(area, 16);
+    }
+
+    /// One pushed call un-reserves the function (`hasPushSequences`): every
+    /// call adjusts for itself and the frame grows by nothing.
+    #[test]
+    fn a_pushed_call_keeps_the_per_call_adjustments() {
+        let pushed = insn(0, Operation::Push, "push", vec![], vec![imm(1)], vec![], vec![]);
+        let plain = vec![setup(8), store(0, held(1), vec![1]), call(), destroy(8)];
+        let made =
+            insn(0, Operation::Barrier, "call_frame_setup", vec![], vec![imm(4), imm(0), imm(4)], vec![], vec![]);
+        let (after, area) = reserve([vec![made, pushed, call(), destroy(4)], plain].concat());
+        assert_eq!(after, ["push", "call", "add", "sub", "mov", "call", "add"]);
+        assert_eq!(area, 0);
     }
 
     fn lower(insns: Vec<Arc<Insn>>) -> Vec<String> {

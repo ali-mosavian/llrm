@@ -98,7 +98,7 @@ pub fn legalized(
     legal.map_err(|e| refused_legalize(dag, &format!("{e:?}")))?;
     DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeDag).with_tli(tli).run();
     // `LLRM_DAGDUMP=all` prints every block's DAG as selection will see it.
-    if std::env::var_os("LLRM_DAGDUMP").is_some_and(|mode| mode == "all") {
+    if llrm_support::env_var("LLRM_DAGDUMP").is_some_and(|mode| mode == "all") {
         eprintln!("legalized:\n{}", dag.dump());
     }
     Ok(())
@@ -110,7 +110,7 @@ fn refused_legalize(
     dag: &SelectionDAG,
     why: &str,
 ) -> Refusal {
-    if std::env::var_os("LLRM_DAGDUMP").is_some() {
+    if llrm_support::env_set("LLRM_DAGDUMP") {
         eprintln!("legalize refused: {why}\n{}", dag.dump());
     }
     Refusal::Legalize(why.to_owned())
@@ -143,6 +143,7 @@ pub(crate) fn do_instruction_selection(
             continue;
         }
         let before = adapter.dag.nodes().len();
+        adapter.dag.cur_order = adapter.dag.nodes()[node as usize].order;
         if select_node(selector, &mut adapter, hooks, node) == Outcome::CannotSelect {
             return Err(Refusal::CannotSelect(format!("{:?}", adapter.dag.nodes()[node as usize].opcode)));
         }
