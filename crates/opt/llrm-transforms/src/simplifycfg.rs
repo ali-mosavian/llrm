@@ -257,6 +257,9 @@ pub struct Options {
     pub convert_switch_to_arithmetic: bool,
     /// `ConvertSwitchToLookupTable`.
     pub convert_switch_to_lookup_table: bool,
+    /// `-fno-jump-tables`: what clang writes on every function as the
+    /// "no-jump-tables" attribute, which stops a lookup table.
+    pub no_jump_tables: bool,
 }
 
 impl Options {
@@ -273,6 +276,7 @@ impl Options {
         convert_switch_range_to_icmp: true,
         convert_switch_to_arithmetic: true,
         convert_switch_to_lookup_table: true,
+        no_jump_tables: false,
     };
 
     /// The slot at
@@ -289,6 +293,7 @@ impl Options {
         convert_switch_range_to_icmp: true,
         convert_switch_to_arithmetic: true,
         convert_switch_to_lookup_table: false,
+        no_jump_tables: false,
     };
 }
 
@@ -303,6 +308,7 @@ impl Default for Options {
             convert_switch_range_to_icmp: true,
             convert_switch_to_arithmetic: false,
             convert_switch_to_lookup_table: false,
+            no_jump_tables: false,
         }
     }
 }
@@ -515,6 +521,9 @@ fn cond_branch_simplified(
     if function.is_placed(block) && icmpchain::folded(context, spec, function, block) {
         return true;
     }
+    if function.is_placed(block) && dominating_condition_folded(context, spec, function, block) {
+        return true;
+    }
     if options.speculate_blocks && function.is_placed(block) && branchtocommon::folded(context, spec, function, block) {
         return true;
     }
@@ -533,6 +542,37 @@ fn cond_branch_simplified(
         return true;
     }
     function.is_placed(block) && stores_merged(context, spec, function, block)
+}
+
+/// The branch ending `block` made one on a constant when the condition of its
+/// dominating predecessor implies it: `simplifyCondBranch`'s
+/// `isImpliedByDomCondition` step, before `foldBranchToCommonDest`. The
+/// constant branch is folded by the next visit.
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8989>
+fn dominating_condition_folded(
+    context: &mut Context,
+    spec: &Speculation,
+    function: &mut Function,
+    block: BlockId,
+) -> bool {
+    let Some(last) = function.terminator(block) else { return false };
+    let &[condition, Operand::Block(..), Operand::Block(..)] = &function.instruction(last).operands[..] else {
+        return false;
+    };
+    if function.instruction(last).opcode != Opcode::Br || integer(context, condition).is_some() {
+        return false;
+    }
+    let query = llrm_mir::valuetracking::Query::bare(context, function, spec.layout);
+    let Some(implied) = llrm_mir::valuetracking::context::is_implied_by_dom_condition_cond(&query, condition, last)
+    else {
+        return false;
+    };
+    let i1 = context.types.int(1);
+    let known = Operand::Constant(context.constant(Constant { ty: i1, kind: ConstantKind::Int(u128::from(implied)) }));
+    function.set_operand(last, 0, known);
+    condition_deleted(context, spec.outer.callees(), function, condition, true);
+    true
 }
 
 /// The code the two arms of the branch ending `block` share, run before it:

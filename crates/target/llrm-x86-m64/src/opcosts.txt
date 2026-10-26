@@ -36,6 +36,7 @@ fill = rep_stos + 2*mov_ri
 fill_cell = rep_stos_cell
 copy = rep_movs + 3*mov_ri
 copy_cell = rep_movs_cell
+copy_variable = 0
 direction = 2*alu_rr
 # The operations a completely unrolled loop may total, before the work its copy no longer does boosts it up to
 # fourfold (peelsize). From LLVM's `-unroll-threshold-default` (150; -O3's 300 is twice it), whose 400% boost the
@@ -73,6 +74,11 @@ x87_div = 6
 x87_load = 6
 x87_store = 6
 x87_release = 2
+sse_arith = 4
+sse_sqrt = 4
+sse_move = 4
+sse_compare = 4
+sse_logic = 3
 rep_stos = 2
 push_r = 1
 mov_ri = 5

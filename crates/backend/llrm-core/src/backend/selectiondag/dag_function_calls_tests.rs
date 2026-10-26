@@ -43,14 +43,17 @@ fn a_call_is_a_sequence_around_a_call_instruction() {
     // The area is the pin's pseudo pair around the call; `callframe.rs` makes
     // them pushes or `sub`/`add`.
     let called = names.iter().position(|n| n == "call").unwrap();
-    assert_eq!(names.iter().position(|n| n == "call_frame_setup"), Some(0), "{names:?}");
+    // After the argument load and the increment, as the pin's finalize-isel
+    // has them (`visitTokenFactor` frees the call's chain from the arguments).
+    assert_eq!(names.iter().position(|n| n == "call_frame_setup"), Some(2), "{names:?}");
     assert_eq!(names.get(called + 1).map(String::as_str), Some("call_frame_destroy"), "{names:?}");
     assert!(!names.iter().any(|n| n == "sub"), "{names:?}");
 }
 
-/// Source order (`LLRM_SRC_ORDER`) builds `s = a + 1` before the call, as the
-/// IR has it; the default scheduler opens with the call sequence. Without the
-/// flag reaching the queue both orders were the default one.
+/// Source order is the m32 default (`SchedInfo::source_order`): it builds
+/// `s = a + 1` before the call, as the IR has it, with or without
+/// `LLRM_SRC_ORDER`. Before it was the default the call sequence opened the
+/// block.
 #[test]
 fn source_order_keeps_the_ir_order_around_a_call() {
     let module = llrm_mir::parse::module(CALL).expect("parses");
@@ -68,7 +71,7 @@ fn source_order_keeps_the_ir_order_around_a_call() {
             .collect();
         names.iter().position(|n| n == "call_frame_setup").unwrap()
     };
-    assert_eq!(order(false), 0);
+    assert!(order(false) > 0, "the m32 default is source order");
     assert!(order(true) > 0);
 }
 
@@ -511,8 +514,8 @@ fn a_landing_pad_is_marked_and_reachable_from_the_entry() {
     let done = select_with_contracts(QB_PAD).unwrap_or_else(|why| panic!("{why}"));
     let landing = done.landing.expect("the pad's address");
     let blocks = &done.body.blocks;
-    let by_at: std::collections::HashMap<i64, &crate::model::lir::Block> = blocks.iter().map(|b| (b.at, b)).collect();
-    let mut seen = std::collections::HashSet::new();
+    let by_at: llrm_support::hash::HashMap<i64, &crate::model::lir::Block> = blocks.iter().map(|b| (b.at, b)).collect();
+    let mut seen = llrm_support::hash::HashSet::default();
     let mut work = vec![done.body.entry];
     while let Some(at) = work.pop() {
         if seen.insert(at) {
@@ -949,4 +952,51 @@ fn a_far_pointer_pushed_as_a_long_is_two_word_pushes() {
     let insns = done.body.insns();
     let names: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
     assert!(!names.contains(&"shl"), "no merge of the halves: {names:?}");
+}
+
+const WATCALL_FROM_M16: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+declare cc 1002 i16 @w(i16)
+define i16 @f(i16 %a) {
+entry:
+  %r = call cc 1002 i16 @w(i16 %a)
+  ret i16 %r
+}
+";
+
+/// A call in a register convention changes FS and GS though its description
+/// names neither: the DAG path kept a far pointer's segment in FS across it
+/// (`fsgs_call` at -Os read -27430 for 70).
+#[test]
+fn a_register_convention_call_changes_fs_and_gs() {
+    let done = super::dag_function_tests::select_with_contracts(WATCALL_FROM_M16).unwrap_or_else(|why| panic!("{why}"));
+    let insns = done.body.insns();
+    let call = insns.iter().find(|i| i.call.is_some()).expect("a call");
+    let (fs, gs) = (llrm_lir::registers::RegId::FS, llrm_lir::registers::RegId::GS);
+    assert!(call.clobbers.contains(&fs) && call.clobbers.contains(&gs), "{:?}", call.clobbers);
+}
+
+/// A hosted QB routine at x86-64, where the caller pops what it pushed: the
+/// float's stack block was "a stack cleanup the convention does not model" and
+/// the DAG path refused every QB program that prints a number.
+#[test]
+fn a_runtime_call_the_caller_cleans_up_is_modelled() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
+define void @f() {
+entry:
+  tail call void @llrm.qb.B$PER4(float 7.0)
+  ret void
+}
+declare void @llrm.qb.B$PER4(float) nocallback
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let function = module.global(module.named("f").expect("f")).function().expect("a body");
+    let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+    let verdicts = super::dag_function::runtime_call_verdicts(
+        &module,
+        function,
+        &layout,
+        &llrm_x86_m64::M64,
+        &super::dag_function_tests::Stub { flags: false },
+    );
+    assert_eq!(verdicts.values().copied().collect::<Vec<_>>(), [Ok(super::builder::RuntimeAnswer::Registers)]);
 }

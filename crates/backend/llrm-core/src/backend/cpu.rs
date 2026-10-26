@@ -294,7 +294,7 @@ impl Profile {
             register_capacity: arch.register_capacity(),
             general: general_registers(arch),
             spaces: arch.layout().spaces.roles,
-            private: private_convention(arch, std::env::var_os("LLRM_PRIVATE_WATCALL").is_some()),
+            private: private_convention(arch, llrm_support::env_set("LLRM_PRIVATE_WATCALL")),
             calling: Some(llrm_target::calling::Stated(arch.calling())),
             foreign: arch.flat_foreign(),
             ports: arch.flat_ports(),
@@ -725,6 +725,7 @@ mod tests {
             objects: Default::default(),
             preserved: Default::default(),
             stack_check: None,
+            hosted: false,
         };
         let target = crate::abi::qb::LoweredTarget::of(profile("486").unwrap(), abi);
         assert_eq!((target.costs().call, target.size_costs().call), (18, 5));
@@ -742,6 +743,7 @@ mod tests {
             objects: Default::default(),
             preserved: Default::default(),
             stack_check: None,
+            hosted: false,
         };
         let flat: &'static Profile = Box::leak(Box::new(Profile::new(&llrm_x86_m32::M32, "486", 1, true, 1, 0)));
         assert!(crate::abi::qb::LoweredTarget::of(flat, abi()).tti().is_some());
@@ -760,6 +762,7 @@ mod tests {
             objects: Default::default(),
             preserved: Default::default(),
             stack_check: None,
+            hosted: false,
         };
         let flat: &'static Profile = Box::leak(Box::new(Profile::new(&llrm_x86_m32::M32, "486", 1, true, 1, 0)));
         for cpu in [flat, profile("486").unwrap()] {

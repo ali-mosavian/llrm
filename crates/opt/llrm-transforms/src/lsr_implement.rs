@@ -135,6 +135,8 @@ pub struct Implement<'a, 'e> {
     pub tti: &'a dyn Tti,
     /// The header of the loop.
     pub l: BlockId,
+    /// The blocks of the loop.
+    pub body: &'a llrm_mir::dense::IdSet<BlockId>,
     /// Where the increments of the loop's induction variables go: the latch's
     /// terminator.
     pub iv_inc_insert_pos: InstId,
@@ -566,9 +568,30 @@ impl Implement<'_, '_> {
                 continue;
             }
             let term = self.function.terminator(bb).expect("a terminated block");
+            let op_ty = self.operand_ty(lf.operand);
+            // DEVIATE: a loop's exit phi with one input sits in a block of its
+            // own here, where LLVM's sits in the exit block with the paths
+            // that skip the loop, so the edge is split and the code lands
+            // there. The code goes at the top of this block, not into the loop,
+            // and the phi's readers read it (#4924).
+            let parent = self.function.parent(pn).expect("a placed phi");
+            if count == 1
+                && self.body.contains(&bb)
+                && !self.body.contains(&parent)
+                && self.function.predecessors(parent).len() == 1
+                && let Some(&exit) = crate::lcssa::operations(self.function, parent).first()
+                && let Some(result) = self.function.instruction(pn).result
+            {
+                let mut full = self.expand(lu, lf, f, exit);
+                if self.operand_ty(full) != op_ty {
+                    full = self.create_cast(full, op_ty, exit);
+                }
+                self.function.replace_all_uses_with(result, full);
+                self.dead.push(result);
+                return;
+            }
             let mut full = self.expand(lu, lf, f, term);
             // A reuse by no-op cast gets the cast.
-            let op_ty = self.operand_ty(lf.operand);
             if self.operand_ty(full) != op_ty {
                 full = self.create_cast(full, op_ty, term);
             }

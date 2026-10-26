@@ -69,6 +69,21 @@ fn test_the_built_lists_satisfy_the_registry_at_every_level() {
     }
 }
 
+/// `dead@677`, `@768`, `@801` and `@837` followed InstCombine in the Simplify
+/// slots and changed nothing in 1561 runs each over the 568 vsgcc cells (the
+/// `idle` of `LLRM_DEBUG=runs`), 5.7 M Ir of d_faces -O2 with the one at the
+/// cleanup slot; only `dead@1242` finds work (48 of 1480 runs).
+#[test]
+fn test_no_dead_pass_follows_instcombine_in_the_simplify_slots() {
+    let on = Applied {
+        options: pipeline::Options { llvm_order: true, ..pipeline::Options::standard() },
+        ..Applied::default()
+    };
+    let built = names(&on, Phase::Simplify);
+    let dead: Vec<_> = built.iter().filter(|name| name.starts_with("dead@")).collect();
+    assert!(dead.is_empty(), "{dead:?}");
+}
+
 /// The MemorySSA entry carries its dependency on alias analysis, is asked by
 /// default (EarlyCSE, LICM), and what is open of keeping it updated is named.
 #[test]
@@ -113,6 +128,7 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
     assert!(why.contains("ghost@99"), "{why}");
     let why = parity::check_backend(
         &[
+            "earlytaildup@1",
             "cmpsub@1",
             "processimpdefs@2",
             "optimizephis@1",
@@ -626,4 +642,14 @@ fn test_a_missing_entry_whose_pass_has_a_source_file_fails() {
     });
     let why = parity::check_missing_has_no_file(&registry, &stems).unwrap_err();
     assert!(why.contains("constraint-elimination"), "{why}");
+}
+
+/// `decide@809` ran after JumpThreading and CVP: 19.1 M Ir on d_faces -O2 for
+/// 3 or 4 of 65 objects, +5 to +24 B. The slot is gone.
+#[test]
+fn test_the_simplify_list_has_no_decide_after_jump_threading() {
+    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let built = names(&on, Phase::Simplify);
+    assert!(!built.contains(&"decide@809"), "decide@809 runs again: {built:?}");
+    assert!(built.contains(&"jumpthreading@809") && built.contains(&"cvp@810"));
 }

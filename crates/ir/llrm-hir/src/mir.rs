@@ -472,6 +472,8 @@ struct Tables<'h> {
     conventions: HashMap<String, u32>,
     /// The runtime routines that raise no error.
     nounwind: &'h [String],
+    /// `B$REAL` places the PC's low memory whatever the pointer's width.
+    hosted: bool,
     /// Each source line's `!dbg` node, `!{i32 line}`.
     lines: HashMap<i64, MetadataId>,
     /// The metadata the language's facts give an instruction's result, by
@@ -686,6 +688,7 @@ fn emit_module<'h>(
         tags: Tags::new(&mut module),
         classes: HashMap::default(),
         nounwind,
+        hosted: promises.hosted,
         lines: HashMap::default(),
         fact_nodes: HashMap::default(),
         accesses: HashMap::default(),
@@ -1873,6 +1876,20 @@ fn declare_outside(
                 slot.insert(module.reference(global));
             }
         }
+        if instruction.op == Op::Concat
+            && tables.spaces.segment_space().is_err()
+            && !tables.callees.contains_key(REAL_ADDRESS)
+            && let Ok(to) =
+                value_type(&mut module.context.types, &tables.spaces, tables.types[&values[&instruction.results[0]]])
+            && let Type::Pointer(space) = *module.context.types.get(to)
+            && (tables.layout.pointer(space).bits == 64 || tables.hosted)
+        {
+            let wide = module.context.types.int(tables.layout.pointer(space).bits);
+            let ty = function_type(&mut module.context.types, to, vec![wide]);
+            let global = module.add_function(REAL_ADDRESS, ty, Linkage::External)?;
+            let reference = module.reference(global);
+            tables.callees.insert(REAL_ADDRESS.to_owned(), reference);
+        }
         if instruction.op == Op::Assume {
             let types = &mut module.context.types;
             let (void, i1) = (types.void(), types.int(1));
@@ -2157,6 +2174,9 @@ pub const RETURNS_TWICE: &str = "returns_twice";
 
 /// What the language promises holds, LLVM's intrinsic.
 const ASSUME: &str = "llvm.assume";
+/// The runtime routine that places a byte of the PC's low memory on a 64-bit
+/// host.
+const REAL_ADDRESS: &str = "B$REAL";
 
 /// Where a variadic function's variadic arguments start, stored in a list.
 const VA_START: &str = "llvm.va_start.p0";
@@ -3540,7 +3560,18 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let paragraph = self.b.binary(BinaryOp::Shl, selector, four, Flags::default(), "");
                 let offset = self.convert(offset, false, wide)?;
                 let address = self.b.binary(BinaryOp::Add, paragraph, offset, Flags::default(), "");
-                let result = self.b.cast(CastOp::IntToPtr, address, ty, "");
+                // A 64-bit host has no memory at the PC's low addresses: the
+                // runtime gives the place of the byte `address` in its image
+                // of them.
+                let result = if bits == 64 || self.tables.hosted {
+                    let callee = Value::Constant(
+                        *self.tables.callees.get(REAL_ADDRESS).ok_or_else(|| format!("@{REAL_ADDRESS} undeclared"))?,
+                    );
+                    let function = function_type(&mut self.b.context.types, ty, vec![wide]);
+                    self.b.call(function, callee, &[address], "").expect("an address")
+                } else {
+                    self.b.cast(CastOp::IntToPtr, address, ty, "")
+                };
                 self.define(instruction, result);
             }
             Op::Concat => {
@@ -3565,6 +3596,21 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     _ => return Err(format!("{op} by a variable fraction")),
                 };
                 let ty = self.b.type_of(a);
+                if op == Op::FixedDiv && self.b.context.types.int_bits(ty) == Some(32) {
+                    // A fixed-point `/` truncates toward zero (the language
+                    // spec) and `llvm.sdiv.fix` rounds down: the divide the
+                    // spec states, `(a << fraction) / b` in 64 bits, is
+                    // truncating by itself, where `sdiv.fix` took a floor
+                    // and a correction (115 bytes a divide at m16 -Os).
+                    let wide = self.b.context.types.int(64);
+                    let shift = self.b.int(64, fraction);
+                    let (a, b) = (self.b.cast(CastOp::SExt, a, wide, ""), self.b.cast(CastOp::SExt, b, wide, ""));
+                    let scaled = self.b.binary(BinaryOp::Shl, a, shift, Flags::default(), "");
+                    let quotient = self.b.binary(BinaryOp::SDiv, scaled, b, Flags::default(), "");
+                    let result = self.b.cast(CastOp::Trunc, quotient, ty, "");
+                    self.define(instruction, result);
+                    return Ok(());
+                }
                 let (name, parameters) =
                     fixed(&mut self.b.context.types, op, ty).ok_or("fixed point of a non-integer")?;
                 let callee =

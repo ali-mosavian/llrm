@@ -36,6 +36,7 @@ use llrm_mir::valuetracking::nonzero::null_pointer_is_defined;
 
 use super::build::{self, Copy};
 use super::{LoopIdiomRecognize, equals, get_mem_set_pattern_value, get_num_bytes, get_start_for_neg_stride};
+use crate::profit::OperationCosts;
 
 /// Alias analysis over a function as it stands. It is made for one version of
 /// a body and the pass edits the body between queries, so the pass asks for
@@ -60,6 +61,10 @@ pub struct Run<'a> {
     pub aa: &'a dyn AaProvider,
     pub declared: &'a mut Declared,
     pub cur_loop: Loop<'a>,
+    /// The target's code-byte prices and the callees, at `-Os`.
+    pub bytes: Option<(&'a OperationCosts, &'a llrm_mir::memory::Callees)>,
+    /// `TTI`: the target's costs, where it has them.
+    pub tti: Option<&'a dyn llrm_mir::tti::Tti>,
 }
 
 /// The arguments of `processLoopStridedStore`.
@@ -576,6 +581,24 @@ impl LoopIdiomRecognize {
         // that may read or write the memory region we're storing to. This
         // includes the load that feeds the stores. Check for an alias by
         // generating the base address and checking everything.
+        // DEVIATE: at -Os a copy whose length is known only at run time stays
+        // a loop when the `rep movs` that replaces it is more bytes (no libc
+        // `memcpy` to call). Exit: none.
+        if let Some((costs, callees)) = run.bytes
+            && run.se.match_apint(args.be_count).is_none()
+        {
+            let blocks = run.cur_loop.get_blocks();
+            if !crate::loopidioms::variable_copy_pays(
+                run.context,
+                run.env.layout,
+                run.function,
+                callees,
+                &blocks,
+                costs,
+            ) {
+                return (false, false);
+            }
+        }
         let store_base_ptr = expander.expand_code_for(
             run.env,
             run.context,

@@ -8,7 +8,7 @@
 #   operation  what it computes, as ir::Operation::as_str spells it.
 #   shape      LIR's operands, dests/sources, comma separated. Each operand is
 #              the kinds it may be: r register, m memory, i immediate, a address
-#              (lea's), s an x87 value. `^N` ties a source to dest N's register.
+#              (lea's), s an x87 value, x an xmm register. `^N` ties a source to dest N's register.
 #   widths     the operand widths in bits it has forms for.
 #   cost       the profile key that prices it (cpu.rs, timings.rs).
 #   fixed      operands pinned to a register when they are one: dN or sN=REG.
@@ -54,6 +54,10 @@ shld      funnel     rm/^0,r,ri         16,32      shift_ri     s2=cx           
 shrd      funnel     rm/^0,r,ri         16,32      shift_ri     s2=cx                   -       count   -/OF,SF,ZF,AF,CF,PF  Shrd_rm{w}_r{w}_CL
 neg       unary      rm/^0              8,16,32    alu_rr       -                       -       -       -/OF,SF,ZF,AF,CF,PF  Neg_rm{w}
 not       unary      rm/^0              8,16,32    alu_rr       -                       -       -       -/-             Not_rm{w}
+# bsf, bsr, bswap: flat alu_rr; the pin has no per-CPU model at i486/P5 (cost row BSF-1).
+bsf       binary     r/^0,rm            16,32      alu_rr       -                       -       -       -/OF,SF,ZF,AF,CF,PF  Bsf_r{w}_rm{w}
+bsr       binary     r/^0,rm            16,32      alu_rr       -                       -       -       -/OF,SF,ZF,AF,CF,PF  Bsr_r{w}_rm{w}
+bswap     unary      r/^0               32         alu_rr       -                       -       -       -/-             Bswap_r32
 inc       unary      rm/^0              8,16,32    alu_rr       -                       -       -       -/OF,SF,ZF,AF,PF  Inc_rm{w}
 dec       unary      rm/^0              8,16,32    alu_rr       -                       -       -       -/OF,SF,ZF,AF,PF  Dec_rm{w}
 imul      mul        r/^0,rmi           16,32      imul_r32     -                       -       -       -/OF,SF,ZF,AF,CF,PF  Imul_r{w}_rm{w}
@@ -69,6 +73,8 @@ test      cmp        -/rm,ri            8,16,32    alu_rr       -               
 bt        cmp        -/r,r              16,32      alu_rr       -                       -       -       -/OF,SF,AF,CF,PF  Bt_rm{w}_r{w}
 bt        cmp        -/r,i              16,32      alu_rr       -                       -       -       -/OF,SF,AF,CF,PF  Bt_rm{w}_imm8
 btc       binary     r/^0,r              16,32      alu_rr       -                       -       -       -/OF,SF,AF,CF,PF  Btc_rm{w}_r{w}
+bts       binary     r/^0,r              16,32      alu_rr       -                       -       -       -/OF,SF,AF,CF,PF  Bts_rm{w}_r{w}
+btr       binary     r/^0,r              16,32      alu_rr       -                       -       -       -/OF,SF,AF,CF,PF  Btr_rm{w}_r{w}
 set{cc}   unary      rm/-               8          alu_rr       -                       -       -       cc/-            Set{cc}_rm8
 push      push       -/rmi              16,32      push_r       -                       sp,ss   sp      -/-             Push_r{w}
 pop       pop        rm/-               16,32      pop_r        -                       sp,ss   sp      -/-             Pop_r{w}

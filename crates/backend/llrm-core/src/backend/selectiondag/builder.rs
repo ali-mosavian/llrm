@@ -81,6 +81,9 @@ pub struct BuilderTarget {
     /// `-fexcess-precision=standard`: an integer too wide for its float type's
     /// mantissa is rounded to that type (x87 would keep it exact).
     pub float_store: bool,
+    /// A dense switch may be a jump table: the target prices one (the MIR pass
+    /// reads the same cost).
+    pub jump_tables: bool,
     /// For a program whose ABI gives its runtime routines contracts: whether
     /// the convention models each call of a `llrm.qb.` routine, by call. A call
     /// not listed, or listed with a reason, is refused.
@@ -112,6 +115,24 @@ impl BuilderTarget {
         on: bool,
     ) -> BuilderTarget {
         self.float_store = on;
+        self
+    }
+
+    /// This target with divides by constants kept as divides (`isIntDivCheap`).
+    pub fn with_int_div_cheap(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.dag.int_div_cheap = on;
+        self
+    }
+
+    /// This target with jump tables on or off.
+    pub fn with_jump_tables(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.jump_tables = on;
         self
     }
 
@@ -161,6 +182,7 @@ impl BuilderTarget {
             libcalls: None,
             stack_align: None,
             float_store: false,
+            jump_tables: true,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -186,6 +208,7 @@ impl BuilderTarget {
             libcalls: None,
             stack_align: None,
             float_store: false,
+            jump_tables: true,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -310,7 +333,7 @@ fn dag_name(
     dag: &SelectionDAG,
     block: BlockId,
 ) -> String {
-    dag.block_names.get(block.0 as usize).cloned().unwrap_or_default()
+    dag.block_name(block.0).to_owned()
 }
 
 impl<'a> Builder<'a> {
@@ -363,10 +386,7 @@ impl<'a> Builder<'a> {
         dag.global_names = tables.global_names;
         dag.local_symbols = tables.local_symbols;
         dag.block_names = tables.block_names;
-        let name = synthetic_name.unwrap_or_else(|| dag_name(&dag, block));
-        if dag.block_names.len() < next_synthetic as usize {
-            std::rc::Rc::make_mut(&mut dag.block_names).resize(next_synthetic as usize, name);
-        }
+        dag.synthetic_fill = synthetic_name.unwrap_or_else(|| dag_name(&dag, block));
         Builder {
             current: None,
             prelowered: Default::default(),
@@ -387,6 +407,7 @@ impl<'a> Builder<'a> {
             tail_calls: Vec::new(),
             tail_candidate: None,
             sibcall: false,
+            variadic_call: false,
             had_tail_call: false,
             volatile_memory: false,
             block,
@@ -424,6 +445,9 @@ struct Builder<'a> {
     /// The call `visit_call` is lowering is a sibling call: `lower_call` makes
     /// a `TC_RETURN`.
     sibcall: bool,
+    /// The call `visit_call` is lowering is to a variadic function: at m64
+    /// `lower_call` sets `al` to the vector registers it uses.
+    variadic_call: bool,
     /// A `TC_RETURN` ended the block: nothing after the call is built.
     had_tail_call: bool,
     /// The memory intrinsic being lowered is volatile.
@@ -710,13 +734,20 @@ impl Builder<'_> {
             match self.convention.parameters.get(at) {
                 // a byval parameter is its bytes in the caller's frame: the
                 // value is their address
-                Some(Parameter::Bytes(_)) => {
+                Some(Parameter::Bytes(offset)) => {
                     fixed += 1;
+                    self.dag.fixed_offsets.insert(-fixed, *offset);
                     pieces.push(self.dag.get_frame_index(self.target.dag.pointer, -fixed));
                 }
-                Some(Parameter::Cell(_)) => {
-                    for _ in 0..parts {
+                Some(Parameter::Cell(offset)) => {
+                    for part in 0..parts {
                         fixed += 1;
+                        self.dag
+                            .fixed_offsets
+                            .insert(
+                                -fixed,
+                                offset + part as i64 * i64::from(self.target.dag.pointer.size_in_bits() / 8),
+                            );
                         let ptr = self.dag.get_frame_index(self.target.dag.pointer, -fixed);
                         // The fixed object is a whole stack slot
                         // (`CreateFixedObject`),
@@ -831,6 +862,37 @@ impl Builder<'_> {
             let root = self.control_root();
             let store = self.dag.get_store(root, value, address, info);
             self.dag.set_root(store);
+        }
+        // The vector argument registers named parameters did not take go to
+        // the other half of the area, if `al` says any were used
+        // (`VASTART_SAVE_XMM_REGS`).
+        let vector_registers = found.float_argument_registers.len();
+        let named_vectors = self
+            .convention
+            .parameters
+            .iter()
+            .map(|parameter| match parameter {
+                Parameter::Registers(regs) => regs.iter().filter(|reg| reg.is_xmm()).count(),
+                _ => 0,
+            })
+            .sum::<usize>();
+        if vector_registers > named_vectors {
+            let vreg = self.info.new_reg();
+            self.live_ins.push((RegId::AL, vreg));
+            let entry = self.dag.entry_node();
+            let al = self.dag.get_copy_from_reg(entry, vreg, EVT::I8);
+            let frame = self.dag.get_constant_with(save as u128, EVT::I32, true, false);
+            let first = self
+                .dag
+                .get_constant_with(
+                    (found.argument_registers.len() * 8 + named_vectors * 16) as u128,
+                    EVT::I32,
+                    true,
+                    false,
+                );
+            let root = self.control_root();
+            let saved = self.dag.get_node(super::x86isd::VASTART_SAVE_XMM_REGS, EVT::OTHER, &[root, al, frame, first]);
+            self.dag.set_root(saved);
         }
         self.dag.var_args_save = Some((save, named as u32 * 8));
         Ok(())
@@ -1039,6 +1101,7 @@ impl Builder<'_> {
                 return Err(Refused("a runtime routine's flags read other than by a compare with zero"));
             }
         }
+        self.variadic_call = variadic;
         let result =
             self.lower_call(callee_node, values, &extends, &byvals, &plan, first, result_type, flags_answer)?;
         if let (true, Some(answer)) = (flags_answer, result) {
@@ -1206,6 +1269,20 @@ impl Builder<'_> {
                 _ => return Err(Refused("argument passed in several places or by value")),
             }
         }
+        // X86's `LowerCall`: a variadic call under SysV x86-64 passes the
+        // number of vector registers it uses in `al`
+        if std::mem::take(&mut self.variadic_call) && self.target.dag.pointer == EVT::I64 {
+            let vectors = plan
+                .parameters
+                .iter()
+                .map(|parameter| match parameter {
+                    Parameter::Registers(regs) => regs.iter().filter(|reg| reg.is_xmm()).count(),
+                    _ => 0,
+                })
+                .sum::<usize>();
+            let count = self.dag.get_constant(vectors as u128, EVT::I8);
+            copies.push((RegId::AL, count));
+        }
         if !stores.is_empty() {
             chain = self.dag.get_token_factor(&stores);
         }
@@ -1251,6 +1328,26 @@ impl Builder<'_> {
         if types.is_void(result_type) {
             self.dag.set_root(chain);
             return Ok(None);
+        }
+        if self.is_aggregate(result_type) {
+            // `LowerCallResult` over the leaves `ComputeValueVTs` gives: one
+            // return register each
+            let leaves = self.leaves(result_type)?;
+            if plan.returns.len() != leaves.len() {
+                return Err(Refused("an aggregate result that is not one register a member"));
+            }
+            let mut glue = glue;
+            let mut pieces = Vec::new();
+            for ((leaf, _), reg) in leaves.into_iter().zip(plan.returns.clone()) {
+                let leaf_vt = self.type_of(leaf)?;
+                let reg = self.sized_register(reg, leaf_vt);
+                let copy = self.dag.get_copy_from_phys_reg(chain, reg, leaf_vt, glue);
+                chain = SDValue { node: copy.node, res: 1 };
+                glue = SDValue { node: copy.node, res: 2 };
+                pieces.push(copy);
+            }
+            self.dag.set_root(chain);
+            return Ok(Some(self.merge(&pieces)));
         }
         let vt = self.type_of(result_type)?;
         if flags_answer {
@@ -1307,7 +1404,26 @@ impl Builder<'_> {
         let mut chain = self.control_root();
         let mut ops = Vec::new();
         let mut glue = None;
-        if let Some(&operand) = instruction.operands.first() {
+        let aggregate = instruction
+            .operands
+            .first()
+            .and_then(|&operand| self.function.operand_type(&self.module.context, operand))
+            .is_some_and(|ty| self.is_aggregate(ty));
+        if let (true, Some(&operand)) = (aggregate, instruction.operands.first()) {
+            // `LowerReturn` over the leaves: one return register each
+            let parts = self.value_parts(operand)?;
+            if parts.len() != self.convention.returns.len() {
+                return Err(Refused("an aggregate result that is not one register a member"));
+            }
+            for (piece, reg) in parts.into_iter().zip(self.convention.returns.clone()) {
+                let piece_vt = self.dag.value_type(piece);
+                let reg = self.sized_register(reg, piece_vt);
+                let copy = self.dag.get_copy_to_phys_reg(chain, reg, piece, glue);
+                chain = SDValue { node: copy.node, res: 0 };
+                glue = Some(SDValue { node: copy.node, res: 1 });
+                ops.push(self.dag.get_phys_register(piece_vt, reg));
+            }
+        } else if let Some(&operand) = instruction.operands.first() {
             let value = self.get_value(operand)?;
             let vt = self.dag.value_type(value);
             if vt.is_floating_point() {

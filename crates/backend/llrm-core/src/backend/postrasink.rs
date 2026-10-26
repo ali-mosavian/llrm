@@ -31,9 +31,7 @@
 //! reachable blocks may read the slot (`Reads`, cell liveness worked out once
 //! for the function) receives it, provided nothing after the store in its block
 //! may read or overwrite the cell or touch `r`. A target entered from elsewhere
-//! too, such as a loop header, takes the store on the edge instead, in a block
-//! of its own (a bridge, with a jump to the target) which the layout puts in
-//! line; the branch is retargeted and the block odds are rerouted.
+//! too, such as a loop header, takes no store.
 //!
 //! The point is shrink wrapping. A path that returns at once then has no copy
 //! and no store of a saved register, and the prologue can be placed after the
@@ -92,16 +90,15 @@
 //!
 //! # Keeps
 //! The body is returned unchanged where no block with several successors holds
-//! a copy or spill store. Block odds follow a bridged edge.
+//! a copy or spill store.
 //!
 //! # Deviations from the pin
 //! The copy half is `PostRAMachineSinkingImpl::tryToSinkCopy`; a copy moves
 //! when no later instruction of the block touches what it reads or writes and
 //! one successor, entered from this block alone, has its result live in.
 //! - DEVIATE P1: the spill-store half (a store to a frame cell sunk by cell
-//!   liveness, for shrink wrapping, with bridge blocks for a target entered
-//!   from elsewhere) has no counterpart in the pin, where `ShrinkWrap` places
-//!   the prologue. Exit: ShrinkWrap translated.
+//!   liveness, for shrink wrapping) has no counterpart in the pin, where
+//!   `ShrinkWrap` places the prologue. Exit: ShrinkWrap translated.
 //! - DEVIATE P2: `latched` has no counterpart in the pin (x_cordic `-Os`).
 //!   Exit: the coalescer or block placement keeps the copy off the back edge.
 //! - Blocks are walked in reverse post-order and past a call, not the pin's
@@ -116,8 +113,8 @@ use std::sync::Arc;
 
 use crate::backend::copysink::{copy_of, touches};
 use crate::backend::peephole::{_lanes, Lanes};
-use crate::model::ir::{Loc, Mem, Operation, Reg, Semantics};
-use crate::model::lir::{Block, Insn, LirBlock, LirBody};
+use crate::model::ir::{Loc, Mem, Operation, Reg};
+use crate::model::lir::{Block, Insn, LirBody};
 use crate::support::hash::IndexMap;
 
 /// The lanes live on entry to each block: the answer the clean-up already
@@ -156,7 +153,7 @@ thread_local! {
 }
 
 /// The register a plain spill store writes to a fixed frame cell, and the cell.
-fn spill_store_of(one: &Insn) -> Option<(Reg, Mem)> {
+pub(crate) fn spill_store_of(one: &Insn) -> Option<(Reg, Mem)> {
     if !one.spill_store || !one.clobbers.is_empty() || !one.requires.is_empty() || !one.delivers.is_empty() {
         return None;
     }
@@ -173,7 +170,7 @@ fn spill_store_of(one: &Insn) -> Option<(Reg, Mem)> {
 
 /// Whether `one` may read a byte of `cell`: any mention but a plain store to
 /// it. An address of the frame taken may be read through.
-fn may_read(
+pub(crate) fn may_read(
     one: &Insn,
     cell: &Mem,
 ) -> bool {
@@ -190,7 +187,7 @@ fn may_read(
 
 /// Whether `one` may write a byte of `cell`: a store sunk past it would land
 /// over the newer value.
-fn overwrites(
+pub(crate) fn overwrites(
     one: &Insn,
     cell: &Mem,
 ) -> bool {
@@ -360,11 +357,9 @@ pub fn sunk(body: &LirBody) -> LirBody {
         }
     }
     let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &*block.succ)).collect();
-    let by_at: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut insns: IndexMap<i64, Vec<Arc<Insn>>> =
         body.blocks.iter().map(|block| (block.at, block.insns.to_vec())).collect();
     let mut changed = false;
-    let mut bridged: IndexMap<(i64, i64), Vec<Arc<Insn>>> = IndexMap::default();
     for at in reverse_post_order(body) {
         let to = succ[&at];
         if to.len() < 2 {
@@ -391,15 +386,15 @@ pub fn sunk(body: &LirBody) -> LirBody {
                 {
                     continue;
                 }
-                insns.get_mut(&at).expect("a block").remove(index);
-                if preds.get(&target) == Some(&1) {
-                    insns.get_mut(&target).expect("a block").insert(0, one);
-                } else {
-                    // The target is entered from elsewhere too (a loop's
-                    // header): the store goes on the edge,
-                    // in a block of its own that the layout puts in line.
-                    bridged.entry((at, target)).or_default().insert(0, one);
+                // A target entered from elsewhere too (a loop's header) takes
+                // no store: the bridge block it needed costs a jump (jpeg_*
+                // +8 B, bintree.nib +7 B at -O3), and a store left in the
+                // branching block was no worse.
+                if preds.get(&target) != Some(&1) {
+                    continue;
                 }
+                insns.get_mut(&at).expect("a block").remove(index);
+                insns.get_mut(&target).expect("a block").insert(0, one);
                 changed = true;
                 continue;
             }
@@ -437,29 +432,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
     if !changed {
         return body.clone();
     }
-    let mut odds = body.odds.clone();
-    let mut next_at = body.blocks.iter().map(|block| block.at).max().unwrap_or(0) + 1;
-    let mut retarget: IndexMap<i64, (i64, i64)> = IndexMap::default();
-    let mut bridges: Vec<Block> = Vec::new();
-    for ((from, target), stores) in &bridged {
-        let last = stores.last().expect("a store");
-        let mut stored = stores.clone();
-        let mut jump = Insn::new(
-            last.at,
-            Some((last.at, last.at)),
-            Some(Semantics { name: Some("jmp".into()), target: Some(*target), ..Semantics::new(Operation::Jump) }),
-            Vec::new(),
-            Vec::new(),
-        );
-        jump.call = last.call.clone();
-        stored.push(Arc::new(jump));
-        let source = by_at[from];
-        odds.rerouted(*from, &source.succ, *target, &[(next_at, 1.0)]);
-        bridges.push(LirBlock { succ: vec![*target].into(), ..LirBlock::new(next_at, stored) }.into());
-        retarget.insert(*from, (*target, next_at));
-        next_at += 1;
-    }
-    let mut blocks: Vec<Block> = body
+    let blocks: Vec<Block> = body
         .blocks
         .iter()
         .map(|block| {
@@ -473,40 +446,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
             }
         })
         .collect();
-    for block in &mut blocks {
-        let Some(&(target, bridge)) = retarget.get(&block.at) else { continue };
-        let mut insns = block.insns.to_vec();
-        let mut jumped = false;
-        for one in &mut insns {
-            if let Some(what) =
-                one.what.as_ref().and_then(|what| what.remapped(|to| if to == target { bridge } else { to }))
-            {
-                let mut made = (**one).clone();
-                made.what = Some(what);
-                *one = Arc::new(made);
-                jumped = true;
-            }
-        }
-        if !jumped {
-            // The edge was a fall-through: the block now jumps to the bridge.
-            let last = insns.last().cloned().expect("a block with a branch");
-            let mut jump = Insn::new(
-                last.at,
-                Some((last.at, last.at)),
-                Some(Semantics { name: Some("jmp".into()), target: Some(bridge), ..Semantics::new(Operation::Jump) }),
-                Vec::new(),
-                Vec::new(),
-            );
-            jump.call = last.call.clone();
-            insns.push(Arc::new(jump));
-        }
-        block.succ = block.succ.iter().map(|to| if *to == target { bridge } else { *to }).collect();
-        *block = block.with_insns(insns);
-    }
-    blocks.extend(bridges);
-    let mut out = body.with_blocks(blocks);
-    out.odds = odds;
-    out
+    body.with_blocks(blocks)
 }
 
 /// A block of copies alone on a back edge, entered from the one block that

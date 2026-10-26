@@ -19,7 +19,7 @@ Source of every LLVM link: `https://github.com/llvm/llvm-project/blob/d1106deb71
 
 ## Deviations
 
-- T1 `mergeable`: a block whose last instruction is a call, barrier, data, owns source bytes or names a symbol is never a candidate; LLVM hashes any last instruction. Fact: inherited from the old `merged` (same exclusion); not measured with the exclusion lifted. Open.
+- T1 `mergeable`: a block whose last instruction is a barrier, data, owns source bytes or names a symbol is never a candidate; LLVM hashes any last instruction. Fact: inherited from the old `merged` (same exclusion); not measured with the exclusion lifted. Open.
 - T2 candidates are visited in layout order; LLVM walks `predecessors()` in edge order. Fact: the order only changes which block is first in `MergePotentials`, and the sort that follows makes the walk order irrelevant except among equal hashes (T5).
 - T3 distinct predecessors and `succ_size` count distinct successors; LLVM counts edges. Fact: duplicate edges arise only from a branch whose two ways reach one block, which `threaded` folds (`_converged`) before the merge.
 - T4 no EH pad, inline-asm-br or phi tests. Fact: LIR has no landing pads and no phis after allocation.
