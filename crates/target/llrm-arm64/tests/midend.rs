@@ -131,3 +131,15 @@ fn a_float_array_fill_loop_is_unrolled_and_folded() {
     let asm = driver::assembly(include_str!("data/fill_two_arrays.ll"), Platform::Darwin, true).expect("lowers");
     assert!(!asm.contains("fmul") && !asm.contains("b."), "the fill loop was left:\n{asm}");
 }
+
+/// `extractvalue (insertvalue (insertvalue poison, c0, 0), c1, 1), 0` was never simplified, so a
+/// struct returned in two registers and read at once kept its `insertvalue`/`extractvalue` chain
+/// and its packing shifts: `tests/llc/structs.c` came to twice the pin's size.
+#[test]
+fn a_member_read_from_an_aggregate_built_of_constants_is_the_constant() {
+    let mut program =
+        driver::program(include_str!("data/struct_by_value.ll"), Platform::Darwin).expect("the module reads");
+    driver::optimized(&mut program).expect("the pipeline runs");
+    let after = llrm_mir::print::module(&program.modules[0]);
+    assert!(!after.contains("insertvalue") && !after.contains("extractvalue"), "{after}");
+}
