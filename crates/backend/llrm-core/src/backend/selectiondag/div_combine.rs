@@ -6,8 +6,10 @@
 //! promoted-type multiply, no `BuildExactSDIV`/`BuildExactUDIV` for `exact`
 //! divides, no widened `MULHU` of an `i32`), no `DIVREM` merging, and
 //! `BuildSDIVPow2` is the generic shift sequence: the pin's `cmov` form for a
-//! CPU with `cmov` (P6 and later) is not ported. `isIntDivCheap` is false (no
-//! `minsize`). Exit: the promoted and exact forms, the `cmov` sequence.
+//! CPU with `cmov` (P6 and later) is not ported. `isIntDivCheap` is the
+//! configured `int_div_cheap` (the pin's `minsize`; the `-Os` rule of the
+//! target is not wired). Exit: the promoted and exact forms, the `cmov`
+//! sequence, the `-Os` rule.
 //! Owner sdag-b. Review 2026-11-27.
 //!
 //! # See also
@@ -153,7 +155,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 return Some(if negative { self.dag.get_negative(quotient, vt) } else { quotient });
             }
         }
-        if self.dag.constant(n1).is_some() {
+        if self.dag.constant(n1).is_some() && !self.dag.config().int_div_cheap {
             return self.build_sdiv(n0, n1, node);
         }
         None
@@ -244,7 +246,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 return Some(self.dag.get_node(ISD::Srl, vt, &[n0, total]));
             }
         }
-        if self.dag.constant(n1).is_some() {
+        if self.dag.constant(n1).is_some() && !self.dag.config().int_div_cheap {
             return self.build_udiv(n0, n1, node);
         }
         None
@@ -314,6 +316,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             return Some(self.dag.get_node(ISD::And, vt, &[n0, below]));
         }
         if self.dag.constant(n1).is_none_or(|c| c == 0) {
+            return None;
+        }
+        // "Checking cheapness here makes sense since the simplification
+        // results in fatter code."
+        if self.dag.config().int_div_cheap {
             return None;
         }
         let quotient = if signed { self.visit_sdiv_like(n0, n1, node) } else { self.visit_udiv_like(n0, n1, node) }?;

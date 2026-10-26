@@ -27,6 +27,7 @@ mod combiner;
 mod combiner_worklist;
 mod demanded_bits;
 mod div_by_constant;
+mod div_cheap;
 mod expand_node;
 mod ext_of_load;
 mod extract_element;
