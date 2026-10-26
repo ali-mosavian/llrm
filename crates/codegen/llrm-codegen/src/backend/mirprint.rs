@@ -261,7 +261,14 @@ fn instruction(
             writeln!(out, "    {} = MOV{}ri {}", vreg(d)?, bits(d.width)?, immediate(i)?).unwrap()
         }
         ("mov", Some(Loc::Held(d)), [Loc::Mem(m)]) => {
-            writeln!(out, "    {} = MOV{}rm {}", vreg(d)?, bits(d.width)?, cell(m, symbols)?).unwrap()
+            let from = cell(m, symbols)?;
+            // An argument's home is immutable: the pin rematerializes a load
+            // from it only when the instruction says what it reads.
+            let reads = match from.split(',').next().filter(|home| home.starts_with("%fixed-stack.")) {
+                Some(home) => format!(" :: (load (s{}) from {home})", m.width * 8),
+                None => String::new(),
+            };
+            writeln!(out, "    {} = MOV{}rm {}{reads}", vreg(d)?, bits(d.width)?, from).unwrap()
         }
         ("mov", Some(Loc::Mem(m)), [Loc::Held(s)]) => {
             writeln!(out, "    MOV{}mr {}, {}", bits(s.width)?, cell(m, symbols)?, vreg(s)?).unwrap()
@@ -578,6 +585,21 @@ mod tests {
         assert!(text.contains("CALLpcrel32 @callee0, csr_32"), "{text}");
         assert!(text.contains("%2 = COPY $eax"), "{text}");
         assert!(text.contains("adjustsStack: true"), "{text}");
+    }
+
+    /// A load of an argument's home printed with no memory operand, so the
+    /// pin did not see an immutable load and allocated that function as if the
+    /// value could not be made again.
+    #[test]
+    fn test_an_argument_load_names_the_immutable_slot_it_reads() {
+        use llrm_lir::{Addr, Mem, Space};
+        let cell = Mem::new(Some(Addr::new(Space::Frame, 8)), 4);
+        let load = insn("mov", Operation::Move, vec![held(1)], vec![Loc::Mem(cell)]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![load, ret]))];
+        let body = LirBody::new("arg", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains(":: (load (s32) from %fixed-stack.0)"), "{text}");
     }
 
     #[test]
