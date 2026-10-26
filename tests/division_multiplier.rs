@@ -48,7 +48,8 @@ unsigned unknown(unsigned x) { return x / 10; }
 unsigned nonnegative(unsigned x) { return (x & 0x7fffffff) / 10; }",
         "old",
     );
-    let (wide, unknown, nonnegative) = (function(&text, "wide"), function(&text, "unknown"), function(&text, "nonnegative"));
+    let (wide, unknown, nonnegative) =
+        (function(&text, "wide"), function(&text, "unknown"), function(&text, "nonnegative"));
     assert!(wide.contains("div ") && !wide.contains("mul "), "{wide}");
     assert!(unknown.contains("mul ") && !unknown.contains("div "), "an unknown dividend is gcc's: {unknown}");
     // No more than "not negative" is not a length: a loop counter below INT_MAX
