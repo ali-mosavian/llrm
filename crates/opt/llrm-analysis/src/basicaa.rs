@@ -44,6 +44,8 @@ thread_local! {
     /// batch classifies each object once.
     pub static DECOMPOSITIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub static CLASSIFICATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Fact sets built to read an argument's attributes.
+    pub static ARGUMENT_FACTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// `MaxLookupSearchDepth`.
@@ -1300,12 +1302,24 @@ impl AAResults for BasicAA<'_> {
         let callee = llrm_mir::memory::callee(self.unit.context, function, call)
             .and_then(|one| self.unit.globals.get(one.0 as usize))
             .and_then(|one| one.function());
+        // The facts of the site's attributes and of the callee's parameter,
+        // made once (each `Facts::of` allocates; most arguments state
+        // none).
+        let facts_of = |attrs: Option<&Vec<llrm_mir::opcode::Attribute>>| {
+            attrs
+                .filter(|attrs| !attrs.is_empty())
+                .map(
+                    |attrs| {
+                        #[cfg(test)]
+                        ARGUMENT_FACTS.with(|made| made.set(made.get() + 1));
+                        llrm_mir::facts::Facts::of(attrs)
+                    },
+                )
+        };
+        let site = facts_of(info.argument_attrs.get(arg as usize));
+        let parameter = facts_of(callee.and_then(|one| one.parameter_attrs.get(arg as usize)));
         let stated = |fact: fn(&llrm_mir::facts::Facts) -> bool| {
-            let site =
-                info.argument_attrs.get(arg as usize).is_some_and(|attrs| fact(&llrm_mir::facts::Facts::of(attrs)));
-            site || callee
-                .and_then(|one| one.parameter_attrs.get(arg as usize))
-                .is_some_and(|attrs| fact(&llrm_mir::facts::Facts::of(attrs)))
+            site.as_ref().is_some_and(|one| fact(one)) || parameter.as_ref().is_some_and(|one| fact(one))
         };
         if stated(llrm_mir::facts::Facts::read_none) {
             ModRefInfo::NoModRef
@@ -1734,6 +1748,22 @@ mod tests {
         assert_eq!(arg("readonly", ""), ModRefInfo::Ref);
         assert_eq!(arg("", "writeonly"), ModRefInfo::Mod);
         assert_eq!(arg("readonly", "readnone"), ModRefInfo::NoModRef);
+    }
+
+    /// Every argument query built the fact sets of the site's and the callee's
+    /// attributes up to six times (`Facts::of` allocates each; 0.95 M Ir over
+    /// d_faces' 2630 queries), where most arguments state none.
+    #[test]
+    fn an_argument_without_attributes_builds_no_facts() {
+        let made = || ARGUMENT_FACTS.with(std::cell::Cell::get);
+        let before = made();
+        let body = "declare void @g(ptr)\ndefine void @f(ptr %p) {\nentry:\n  call void @g(ptr %p)\n  ret void\n}\n";
+        call_effects(body);
+        assert_eq!(made(), before, "facts built for an argument that states none");
+        let body =
+            "declare void @g(ptr readonly)\ndefine void @f(ptr %p) {\nentry:\n  call void @g(ptr %p)\n  ret void\n}\n";
+        call_effects(body);
+        assert_eq!(made(), before + 1, "one set for the callee's parameter, none for the site's");
     }
 
     /// Distinct allocas are distinct objects.

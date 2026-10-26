@@ -2,6 +2,7 @@ use llrm_mir::dense::IdSet;
 use llrm_mir::module::BlockId;
 
 use super::{find_function_backedges, inverse_post_order_ext};
+use crate::cfg::Shape;
 use crate::testing::{block, function, parsed};
 
 const DIAMOND: &str = "define void @f(i1 %c) {
@@ -88,4 +89,59 @@ fn the_reverse_walk_from_the_exit_numbers_blocks_in_post_order() {
     // Blocks already seen are left out, and a second walk from a seen block is
     // empty.
     assert!(inverse_post_order_ext(f, at("b3"), &mut visited).is_empty());
+}
+
+/// LoopSimplify asked `irreducible(..).is_empty()` of a whole function:
+/// 137 k Ir a call on d_faces -O2 (graph, sets and maps built each time).
+/// `is_irreducible` is the same answer from one walk.
+#[test]
+fn is_irreducible_agrees_with_the_blocks_left_in_a_cycle() {
+    let reducible = "define void @f(i1 %c) {
+b0:
+  br label %b1
+
+b1:
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret void
+}
+";
+    // A cycle that nothing reaches is not counted, as `irreducible` leaves it
+    // out.
+    let unreachable = "define void @f(i1 %c) {
+b0:
+  ret void
+
+b1:
+  br label %b2
+
+b2:
+  br i1 %c, label %b1, label %b3
+
+b3:
+  ret void
+}
+";
+    let two_entries = "define void @f(i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b2
+
+b2:
+  br i1 %c, label %b1, label %b3
+
+b3:
+  ret void
+}
+";
+    for (text, want) in [(DIAMOND, false), (reducible, false), (unreachable, false), (two_entries, true)] {
+        let module = parsed(text);
+        let f = function(&module, "f");
+        let shape = Shape::of(f);
+        assert_eq!(shape.dominance.irreducible(f).is_empty(), !want, "{text}");
+        assert_eq!(shape.dominance.is_irreducible(f), want, "{text}");
+    }
 }

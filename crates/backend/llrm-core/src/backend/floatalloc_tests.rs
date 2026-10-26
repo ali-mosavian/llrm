@@ -1079,3 +1079,30 @@ fn test_a_split_edge_asks_no_second_liveness() {
     assert!(converted.blocks.len() > before, "an edge was split");
     assert_eq!(built, 2, "sets built: one liveness pass");
 }
+
+#[test]
+fn test_float_prep_asks_liveness_of_the_floating_values_only() {
+    // `prepared` solved liveness of every value for two lookups of floats:
+    // 7 M Ir of d_faces -O2.
+    use crate::backend::floatassign::{ROWS_ASKED, prepared};
+    let (source, cell) = (frame_cell(-10, 10), frame_cell(-20, 10));
+    let integer = |value: u32, from: u32| sem(Operation::Move, "mov", vec![int(value)], vec![int(from)]);
+    let body = _body(vec![_load(1, &source), integer(7, 8)]);
+    let (load, make) = (body.insns()[0].clone(), body.insns()[1].clone());
+    let (store, copy) = {
+        let later = _body(vec![_store(&cell, 1), integer(9, 7)]);
+        (later.insns()[0].clone(), later.insns()[1].clone())
+    };
+    let at = |one: &Arc<Insn>, at: i64| Arc::new(Insn { at, covers: Some((at, at + 8)), ..(**one).clone() });
+    let mut body = body.clone();
+    body.blocks = vec![
+        block(0, vec![load, make], vec![16]).into(),
+        block(16, vec![at(&store, 16), at(&copy, 24)], vec![]).into(),
+    ];
+    prepared(&body, None, None, false).unwrap();
+    assert_eq!(ROWS_ASKED.with(std::cell::Cell::get), 1);
+}
+
+fn int(value: u32) -> Loc {
+    Loc::Held(Held { value, width: 4 })
+}

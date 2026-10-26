@@ -6,10 +6,10 @@
 //! place, phi arms sorted): `tools/loopinterchange_oracle.py --refresh` writes
 //! them.
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::LazyLock;
 
+use llrm_support::hash::HashMap;
 use regex::{Captures, Regex};
 
 /// A regex compiled once.
@@ -41,7 +41,7 @@ fn canonical(
     body: &str,
     nodes: &HashMap<String, String>,
 ) -> String {
-    let mut blocks: HashMap<String, Vec<String>> = HashMap::new();
+    let mut blocks: HashMap<String, Vec<String>> = HashMap::default();
     let mut order: Vec<String> = Vec::new();
     let mut name: Option<String> = None;
     let mut entry_open = false;
@@ -97,7 +97,7 @@ fn canonical(
         stack.extend(targets.into_iter().rev());
     }
     let names: HashMap<&String, String> = dfs.iter().enumerate().map(|(n, block)| (block, format!("B{n}"))).collect();
-    let mut values: HashMap<String, String> = HashMap::new();
+    let mut values: HashMap<String, String> = HashMap::default();
     let defined = re!(r"^%([\w.$-]+) = ");
     for block in &dfs {
         for s in &blocks[block] {

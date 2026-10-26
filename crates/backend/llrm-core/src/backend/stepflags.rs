@@ -238,6 +238,39 @@ mod tests {
         assert_eq!(names(&selected(&quad(block("add", -1, "jl", false)))), ["add", "jl"]);
     }
 
+    /// A word step's flags are the word's: a dword compare of the same value
+    /// reads the 32-bit result, whose upper half the step never defined.
+    #[test]
+    fn a_step_of_another_width_than_its_compare_is_not_the_compare() {
+        for (step, compare) in [(2, 4), (4, 2)] {
+            let at = |width| Held { value: 1, width };
+            let result = Held { value: 2, width: step };
+            let imm = |width| Loc::Imm(Imm { value: 1, width, address: None });
+            let insns = vec![
+                insn(
+                    0,
+                    Operation::Binary,
+                    "sub",
+                    vec![Loc::Held(result)],
+                    vec![Loc::Held(at(step)), imm(step)],
+                    vec![2],
+                    vec![1],
+                ),
+                insn(
+                    2,
+                    Operation::Compare,
+                    "cmp",
+                    Vec::new(),
+                    vec![Loc::Held(at(compare)), imm(compare)],
+                    Vec::new(),
+                    vec![1],
+                ),
+                insn(3, Operation::Branch, "jb", Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+            ];
+            assert_eq!(names(&selected(&insns)), ["sub", "cmp", "jb"], "{step} {compare}");
+        }
+    }
+
     #[test]
     fn test_a_step_is_not_the_compare_where_the_carry_or_a_reader_differs() {
         // An add leaves the opposite carry to a subtract's borrow.

@@ -64,6 +64,16 @@ def test_the_report_states_whether_llvm_both_inlined_and_declined():
     assert alone["premise"].startswith("PREMISE FAILED: LLVM inlined all 2 sites"), alone["premise"]
 
 
+@needs_opt
+def test_a_reference_that_inlined_nothing_is_not_a_premise_even_where_llrm_disagrees():
+    """`idioms.bas` -Os: the dump's `__main` was `internal` and called by nothing, so `opt` never visited it and inlined 0 of 123 sites while llrm
+    inlined 6; the table said "premise ok" and the comparison read as llrm-only noise."""
+    dead = BEFORE.replace("define i32 @main", "define internal i32 @main")
+    report = inlinediff.compare(dead, AFTER, "inline")
+    assert report["llvm_inlined"] == 0 and classes(report)["llrm-only"] == 2, report["rows"]
+    assert report["premise"].startswith("PREMISE FAILED: LLVM inlined none of 2 sites"), report["premise"]
+
+
 def test_quoted_names_of_m16_modules_are_read():
     """m16 names a function `@"_f@3"` (its convention's decoration): the reader took only bare names and stopped at the first quoted
     `define`, so no m16 module could be compared (TypeError in `functions`)."""

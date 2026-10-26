@@ -33,6 +33,9 @@ const NAMED: &[(&str, &str)] = &[
     ("facts.toml", "*"),
     ("facts.toml", "errors.*"),
     ("os.toml", "heap_bytes"),
+    // The standard handles are the interface's `handles` names, each looked up
+    // here.
+    ("os.toml", "handles.*"),
     // The error codes are a table the interface maps over, whatever their
     // names.
     ("interface.toml", "errors.*"),

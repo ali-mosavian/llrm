@@ -225,19 +225,21 @@ impl<'a> AliasQuery<'a> {
             return found.clone();
         }
         let made = match self.unit.function.instruction(inst).opcode {
-            Opcode::Load { .. } | Opcode::Store { .. } => self.accesses.references.get(&inst).map(|reference| {
-                let made = self.location_for(reference, false);
-                // The access's own tags (`MemoryLocation::get`).
-                let tagged = crate::aa::MemoryLocation::get(self.unit, inst).filter(|_| made.memory.is_some());
-                match (Rc::try_unwrap(made), tagged) {
-                    (Ok(mut location), Some(tagged)) => {
-                        location.memory = Some(tagged);
-                        Rc::new(location)
+            Opcode::Load { .. } | Opcode::Store { .. } => {
+                self.accesses.reference_in(self.unit, inst).as_deref().map(|reference| {
+                    let made = self.location_for(reference, false);
+                    // The access's own tags (`MemoryLocation::get`).
+                    let tagged = crate::aa::MemoryLocation::get(self.unit, inst).filter(|_| made.memory.is_some());
+                    match (Rc::try_unwrap(made), tagged) {
+                        (Ok(mut location), Some(tagged)) => {
+                            location.memory = Some(tagged);
+                            Rc::new(location)
+                        }
+                        (Ok(location), None) => Rc::new(location),
+                        (Err(shared), _) => shared,
                     }
-                    (Ok(location), None) => Rc::new(location),
-                    (Err(shared), _) => shared,
-                }
-            }),
+                })
+            }
             _ => None,
         };
         self.by_instruction.borrow_mut().insert(inst, made.clone());
@@ -273,7 +275,8 @@ impl<'a> AliasQuery<'a> {
             self.cache.borrow_mut().insert(key, found);
             return found;
         }
-        let writes = self.accesses.writes(def);
+        let writes = self.accesses.writes_in(self.unit, def);
+        let writes = writes.as_deref();
         // A def whose writes the lists do not name is asked of BasicAA.
         let found = if writes.is_none() {
             self.unknown_call_mod_ref(def, loc).writes
@@ -299,7 +302,7 @@ impl<'a> AliasQuery<'a> {
         if let Some(found) = self.def_against_call(def, call) {
             return found;
         }
-        let Some(writes) = self.accesses.writes(def) else { return true };
+        let Some(writes) = self.accesses.writes_in(self.unit, def) else { return true };
         if writes.is_empty() {
             return false;
         }
@@ -307,7 +310,8 @@ impl<'a> AliasQuery<'a> {
             None => true,
             Some(list) => list.iter().any(|one| writes.iter().any(|w| self.may_overlap(one, w, Some(def)))),
         };
-        touched(self.accesses.reads(call)) || touched(self.accesses.writes(call))
+        touched(self.accesses.reads_in(self.unit, call).as_deref())
+            || touched(self.accesses.writes_in(self.unit, call).as_deref())
     }
 
     /// The object `reference` is rooted at: the root of an object's own
@@ -593,7 +597,10 @@ impl<'a> AliasQuery<'a> {
         let touches = |list: Option<&[MemRef]>| {
             list.map(|list| list.iter().any(|one| self.may_overlap(one, &loc.effective, Some(inst))))
         };
-        let (reads, writes) = (touches(self.accesses.reads(inst)), touches(self.accesses.writes(inst)));
+        let (reads, writes) = (
+            touches(self.accesses.reads_in(self.unit, inst).as_deref()),
+            touches(self.accesses.writes_in(self.unit, inst).as_deref()),
+        );
         if reads.is_some() && writes.is_some() {
             let listed = ModRef { reads: reads.unwrap_or(false), writes: writes.unwrap_or(false) };
             // A call's lists say what its attributes and `GlobalsModRef` allow;
@@ -625,8 +632,8 @@ impl<'a> AliasQuery<'a> {
         // `doesNotAccessMemory`: a BIOS poll in a loop is not loop-invariant.
         let hidden = self.inaccessible_effects(call);
         (
-            hidden.reads || self.accesses.reads(call).is_none_or(|reads| !reads.is_empty()),
-            hidden.writes || self.accesses.writes(call).is_none_or(|writes| !writes.is_empty()),
+            hidden.reads || self.accesses.reads_in(self.unit, call).is_none_or(|reads| !reads.is_empty()),
+            hidden.writes || self.accesses.writes_in(self.unit, call).is_none_or(|writes| !writes.is_empty()),
         )
     }
 
@@ -724,15 +731,16 @@ impl<'a> AliasQuery<'a> {
             }
         }
         let accesses = self.accesses;
-        let touched = |inst: InstId| -> Option<Vec<&MemRef>> {
-            let (reads, writes) = (accesses.reads(inst)?, accesses.writes(inst)?);
-            Some(reads.iter().chain(writes).collect())
+        let touched = |inst: InstId| -> Option<Vec<MemRef>> {
+            let (reads, writes) = (accesses.reads_in(self.unit, inst)?, accesses.writes_in(self.unit, inst)?);
+            Some(reads.iter().chain(writes.iter()).cloned().collect())
         };
         let (Some(first_touched), Some(second_touched)) = (touched(first), touched(second)) else {
             // One may touch anything: it conflicts unless the other touches
             // nothing.
             let nothing = |inst: InstId| {
-                accesses.reads(inst).is_some_and(<[_]>::is_empty) && accesses.writes(inst).is_some_and(<[_]>::is_empty)
+                accesses.reads_in(self.unit, inst).is_some_and(|list| list.is_empty())
+                    && accesses.writes_in(self.unit, inst).is_some_and(|list| list.is_empty())
             };
             return !(nothing(first) || nothing(second));
         };
