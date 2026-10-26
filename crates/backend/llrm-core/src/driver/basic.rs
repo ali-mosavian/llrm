@@ -76,6 +76,20 @@ pub fn _RUNTIME_FRAME_HEADER(
     }
 }
 
+/// Whether any instruction of `body` writes DS; an escape (raw bytes) may.
+fn writes_data_segment(body: &lir::LirBody) -> bool {
+    let regs = body.regs();
+    body.blocks
+        .iter()
+        .flat_map(|block| &block.insns)
+        .any(
+            |one| match crate::backend::liveness::effect(regs, body.bits, one) {
+                Some(effect) => effect.writes.iter().any(|&(register, _)| register == RegId::DS),
+                None => one.what.as_ref().is_some_and(|what| what.op == Operation::Escape),
+            },
+        )
+}
+
 /// Enter and leave a BASIC runtime frame.
 ///
 /// B$FCMD and the managed-string runtime consult BASIC's current frame, so a
@@ -95,14 +109,16 @@ pub fn _RUNTIME_FRAME_HEADER(
 /// reported a fatal error in "line 49152 of module $ p".
 ///
 /// A cell stays on the stack segment (`through`) where the stack lives in
-/// the data group: allocation may hold a selector in the data segment
-/// register, and a cell with no segment of its own reads through it.
+/// the data group and the body writes the data segment register: allocation
+/// may hold a selector there, and a cell with no segment of its own reads
+/// through it. A body that never writes DS needs no override (one byte a cell).
 pub fn _static_frame(
     body: &lir::LirBody,
     size: i64,
     through: Option<RegId>,
 ) -> lir::LirBody {
     let regs = body.regs();
+    let through = through.filter(|_| writes_data_segment(body));
     let moved = |addr: &Addr| -> Addr {
         let own = RegId::from(addr.segment);
         let segment = if own == RegId::None || regs.is_stack_segment(own) {
