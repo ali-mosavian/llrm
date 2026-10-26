@@ -3565,6 +3565,21 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     _ => return Err(format!("{op} by a variable fraction")),
                 };
                 let ty = self.b.type_of(a);
+                if op == Op::FixedDiv && self.b.context.types.int_bits(ty) == Some(32) {
+                    // A fixed-point `/` truncates toward zero (the language
+                    // spec) and `llvm.sdiv.fix` rounds down: the divide the
+                    // spec states, `(a << fraction) / b` in 64 bits, is
+                    // truncating by itself, where `sdiv.fix` took a floor
+                    // and a correction (115 bytes a divide at m16 -Os).
+                    let wide = self.b.context.types.int(64);
+                    let shift = self.b.int(64, fraction);
+                    let (a, b) = (self.b.cast(CastOp::SExt, a, wide, ""), self.b.cast(CastOp::SExt, b, wide, ""));
+                    let scaled = self.b.binary(BinaryOp::Shl, a, shift, Flags::default(), "");
+                    let quotient = self.b.binary(BinaryOp::SDiv, scaled, b, Flags::default(), "");
+                    let result = self.b.cast(CastOp::Trunc, quotient, ty, "");
+                    self.define(instruction, result);
+                    return Ok(());
+                }
                 let (name, parameters) =
                     fixed(&mut self.b.context.types, op, ty).ok_or("fixed point of a non-integer")?;
                 let callee =
