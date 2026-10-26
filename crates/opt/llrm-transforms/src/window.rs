@@ -363,7 +363,10 @@ fn _found(
     }
     // The proof's test leaves: the header's before each trip, or the latch's
     // after.
-    let proofs = induction::counted(view, loop_, Some(&view.registers()), false);
+    let mut proofs = induction::counted(view, loop_, Some(&view.registers()), false);
+    if proofs.is_empty() {
+        proofs = induction::counted_truncated(view, loop_);
+    }
     let tested = |one: &CountedLoop, block: BlockId| function.terminator(block) == Some(one.branch);
     let proof = proofs
         .into_iter()

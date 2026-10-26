@@ -746,6 +746,104 @@ pub fn counted_unless_stopped(
     proofs
 }
 
+/// A loop that leaves when a truncation of its counter first equals a
+/// constant: `trunc(i + step) == bound` at the latch, or `trunc(i)` at the
+/// header, for a counter with a constant start and step wider than the
+/// truncation. `counted` proves only a test of the counter itself; the sum
+/// of a constant start and step is the narrow counter's, so the trips are
+/// those of the narrow counter reaching the bound (`_equal_after`). The
+/// proof is the narrow counter's: its value is the truncation. LSR makes the
+/// test when a wider counter already counts (copy1d's fill: the i16 index
+/// became `trunc` of the stored i32), and the passes that need a count see
+/// none through it.
+pub fn counted_truncated(
+    unit: &Unit,
+    loop_: &Loop,
+) -> Vec<CountedLoop> {
+    let function = unit.function;
+    let Some(shape) = _control(function, loop_, false) else { return Vec::new() };
+    if shape.stops || shape.leaves {
+        return Vec::new();
+    }
+    let Some(branch) = function.terminator(cfg::block(shape.block)) else { return Vec::new() };
+    let [condition, Operand::Block(taken), Operand::Block(_)] = function.instruction(branch).operands[..] else {
+        return Vec::new();
+    };
+    let Some((compare, icmp)) = unit.defining(condition) else { return Vec::new() };
+    let Opcode::ICmp(predicate) = icmp.opcode else { return Vec::new() };
+    let continuing = if loop_.body.contains(&cfg::id(taken)) { predicate } else { predicate.inverse() };
+    if continuing != IntPredicate::Ne {
+        return Vec::new();
+    }
+    let Some(&latch) = loop_.latches.first() else { return Vec::new() };
+    let mut found = Vec::new();
+    for counter in basics(unit, loop_).values() {
+        let (AffineOperand::Const(start), AffineOperand::Const(step)) = (&counter.start, &counter.step) else {
+            continue;
+        };
+        let Some(phi) =
+            defining(function, counter.value).filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
+        else {
+            continue;
+        };
+        let Some(Operand::Value(update)) = incoming(function, phi, cfg::block(latch)) else { continue };
+        for (index, operand) in icmp.operands.iter().enumerate().take(2) {
+            let Operand::Value(cut) = operand else { continue };
+            let Some(cut_inst) = defining(function, *cut) else { continue };
+            let cut_op = function.instruction(cut_inst);
+            let (Opcode::Cast(CastOp::Trunc), Some(&Operand::Value(source))) =
+                (&cut_op.opcode, cut_op.operands.first())
+            else {
+                continue;
+            };
+            let stepped = if source == update && shape.posttested {
+                true
+            } else if source == counter.value {
+                false
+            } else {
+                continue;
+            };
+            let Some(width) = unit.int_bits(*operand).filter(|&width| width < counter.start.width()) else { continue };
+            let Some(AffineOperand::Const(bound)) = term(unit, icmp.operands[1 - index]) else { continue };
+            let modulus = BigInt::from(1) << width;
+            let (start_n, step_n) = (mod_floor(&start.n, &modulus), mod_floor(&step.n, &modulus));
+            let difference = mod_floor(&(&bound.n - &start_n), &modulus);
+            let Some(count) = _equal_after(&difference, &step_n, width, shape.posttested, stepped) else { continue };
+            found.push(CountedLoop {
+                counter: Affine {
+                    value: *cut,
+                    start: AffineOperand::constant(start_n.clone(), width),
+                    step: AffineOperand::constant(step_n.clone(), width),
+                    header: counter.header,
+                },
+                phi,
+                compare,
+                branch,
+                start: AffineOperand::constant(start_n, width),
+                bound: AffineOperand::constant(bound.n.clone(), width),
+                test: IntPredicate::Ne,
+                preheader: shape.preheader,
+                latch,
+                entered: shape.entered,
+                exit: shape.exit,
+                maximum: None,
+                step: _signed_value(&step_n, width),
+                posttested: shape.posttested,
+                stepped,
+                shifted: false,
+                stops: false,
+                leaves: false,
+                entry_guarded: false,
+                reach: Reach::Solved { shift: 0, inverse: BigInt::from(1), bits: width },
+                count: Some(count),
+                first: None,
+                last: None,
+            });
+        }
+    }
+    found
+}
+
 /// `counted_unless_stopped`, also for a loop that has other ways out that go
 /// on, not only into a block that never returns: each proof has `stops` set
 /// where there is one, and its count is the trips as long as the loop is not
