@@ -1139,7 +1139,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let feeds_memory = self
             .dag
             .users(node)
-            .any(|user| matches!(self.dag.opcode(SDValue { node: user, res: 0 }), ISD::Load | ISD::Store));
+            .any(|user| matches!(
+                self.dag.opcode(SDValue { node: user, res: 0 }),
+                ISD::Load | ISD::Store
+            ));
         if !feeds_memory {
             return self.reassociate_ops(ISD::Add, n0, n1);
         }

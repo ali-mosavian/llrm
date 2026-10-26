@@ -1,4 +1,5 @@
-//! `(add (add x, c), y)` is `(add (add x, y), c)`, so the constant lands in the last `lea`.
+//! `(add (add x, c), y)` is `(add (add x, y), c)`, so the constant lands in the
+//! last `lea`.
 
 use std::process::Command;
 
