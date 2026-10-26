@@ -34,8 +34,7 @@ in [readme.md](readme.md).
 | `frontends/nib` | The Nib frontend: lexer, parser, semantics, std, runtime, and the language server (`lsp`) |
 | `frontends/llrm-c` | C through Open Watcom's front end (`toolchain/owshim/`): capture stream and translation to HIR |
 | `bc/llrm-bcdriver` | Compiles objects BC wrote: lift, optimise, select, write a fresh object |
-| `target/llrm-x86-bcmachine` | x86 decode, blocks and runtime ABI facts for BC objects |
-| `target/llrm-x86-bc` | The BC lift: machine code of a BC object to MIR |
+| `frontends/bcobj` | The BC object frontend: x86 decode, blocks and runtime ABI facts, and the lift of a BC object to MIR |
 | `codegen/llrm-codegen` | The compile driver, instruction selection, machine phases (`flow.rs`), layout, `objbuild`, the HIR interpreter, ABIs |
 | `driver/llrm-driver` | The one place that names targets and binds each to its selector and rules |
 | `backend/llrm-iselgen` | Build-time generator of the instruction selector from `patterns.isel` |

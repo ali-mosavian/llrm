@@ -10,7 +10,7 @@ use llrm_mir::{
 fn raised(fixture: &str) -> Module {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf").join(fixture);
     let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
-    let module = llrm_x86_bc::raise(&found, &llrm_x86_m16::machine::BUILT_IN)
+    let module = llrm_bcobj::raise(&found, &llrm_x86_m16::machine::BUILT_IN)
         .unwrap_or_else(|refusal| panic!("{refusal}"))
         .module;
     let errors = llrm_mir::verify::verify(&module);
@@ -70,7 +70,7 @@ fn stub_runtime(module: &mut Module) {
         .functions()
         .filter(|(_, global, function)| {
             function.is_declaration()
-                && global.name.as_deref().is_some_and(|name| name.starts_with(llrm_x86_bc::RUNTIME))
+                && global.name.as_deref().is_some_and(|name| name.starts_with(llrm_bcobj::RUNTIME))
         })
         .map(|(id, global, _)| (id, global.name.owned().unwrap()))
         .collect();
@@ -79,7 +79,7 @@ fn stub_runtime(module: &mut Module) {
             GlobalKind::Function(function) => module.signature(function.ty).0,
             _ => unreachable!(),
         };
-        let routine = name.trim_start_matches(llrm_x86_bc::RUNTIME);
+        let routine = name.trim_start_matches(llrm_bcobj::RUNTIME);
         let mut b = module.builder(id);
         let entry = b.block("entry");
         b.position(entry);
@@ -537,7 +537,7 @@ fn a_module_without_inline_floats_keeps_the_emulators_protocol() {
     let path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf/regressions/nbody-q-o.obj");
     let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
-    let module = llrm_x86_bc::raise(&found, &llrm_x86_m16::machine::BUILT_IN)
+    let module = llrm_bcobj::raise(&found, &llrm_x86_m16::machine::BUILT_IN)
         .unwrap_or_else(|refusal| panic!("{refusal}"))
         .module;
     assert!(llrm_mir::verify::verify(&module).is_empty());
@@ -559,7 +559,7 @@ fn an_element_address_passes_the_descriptor_last() {
     let path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf/regressions/ndarr-q-o.obj");
     let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
-    let module = llrm_x86_bc::raise(&found, &llrm_x86_m16::machine::BUILT_IN)
+    let module = llrm_bcobj::raise(&found, &llrm_x86_m16::machine::BUILT_IN)
         .unwrap_or_else(|refusal| panic!("{refusal}"))
         .module;
     let text = llrm_mir::print::module(&module);
@@ -587,7 +587,7 @@ fn erl_is_the_line_bcs_statement_table_gives() {
         let path =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf/regressions").join(name);
         let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
-        let module = llrm_x86_bc::raise(&found, &llrm_x86_m16::machine::BUILT_IN)
+        let module = llrm_bcobj::raise(&found, &llrm_x86_m16::machine::BUILT_IN)
             .unwrap_or_else(|refusal| panic!("{name}: {refusal}"))
             .module;
         let text = llrm_mir::print::module(&module);
@@ -618,7 +618,7 @@ fn the_far_and_selector_spaces_are_the_machines_layouts() {
     layout.spaces.roles.far = 7;
     layout.spaces.roles.segment = Some(8);
     let machine = llrm_x86_m16::machine::BUILT_IN.clone().with_layout(layout);
-    let module = llrm_x86_bc::raise(&found, &machine).unwrap_or_else(|refusal| panic!("{refusal}")).module;
+    let module = llrm_bcobj::raise(&found, &machine).unwrap_or_else(|refusal| panic!("{refusal}")).module;
     let spaces: std::collections::BTreeSet<u32> = module.globals.iter().map(|one| one.address_space).collect();
     assert!(spaces.contains(&7) && !spaces.contains(&1), "{spaces:?}");
 }

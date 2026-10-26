@@ -16,13 +16,13 @@ use std::collections::BTreeSet;
 use iced_x86::Register;
 use llrm_mir::{BinaryOp, CastOp, Constant, ConstantKind, FloatKind, FloatPredicate, Module, Operand, Type, TypeId};
 use llrm_qbruntime::{self as runtime, Control, Memory};
-use llrm_x86_bcmachine::frontends::bc::declen::Insn;
-use llrm_x86_bcmachine::model::ir::nodes::{Call, Node};
-use llrm_x86_bcmachine::model::ir::{Loc, Operation, Semantics};
-use llrm_x86_bcmachine::objectfile::module;
 
 use crate::emit::{Bit, Emit, Emitter, Var};
+use crate::frontends::bc::declen::Insn;
 use crate::machine::Facts;
+use crate::model::ir::nodes::{Call, Node};
+use crate::model::ir::{Loc, Operation, Semantics};
+use crate::objectfile::module;
 use crate::sites::Recognizer;
 
 /// The x87's eight registers.

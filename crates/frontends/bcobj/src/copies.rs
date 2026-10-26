@@ -14,12 +14,12 @@ use std::collections::BTreeMap;
 use iced_x86::{Code, FlowControl, Mnemonic, Register, RflagsBits};
 use llrm_lir::registers::RegId;
 use llrm_mir::BinaryOp;
-use llrm_x86_bcmachine::frontends::bc::blocks::Block;
-use llrm_x86_bcmachine::frontends::bc::declen::Insn;
-use llrm_x86_bcmachine::model::ir::nodes::{Node, span};
 
 use crate::emit::{Emit, Emitter};
+use crate::frontends::bc::blocks::Block;
+use crate::frontends::bc::declen::Insn;
 use crate::machine::BodyFacts;
+use crate::model::ir::nodes::{Node, span};
 use crate::sites::Recognizer;
 
 pub struct Copies;

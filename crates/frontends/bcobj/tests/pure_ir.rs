@@ -52,7 +52,7 @@ fn every_sample_bc_object_lifts_to_ir_with_no_target_content() {
     let mut lifted = 0;
     for path in files {
         let Ok(Some(found)) = llrm_omf::module::load(&path) else { continue };
-        let Ok(raised) = llrm_x86_bc::raise(&found, &llrm_x86_m16::machine::BUILT_IN) else { continue };
+        let Ok(raised) = llrm_bcobj::raise(&found, &llrm_x86_m16::machine::BUILT_IN) else { continue };
         lifted += 1;
         let found = impure(&llrm_mir::print::module(&raised.module));
         assert!(found.is_empty(), "{}: {found:?}", path.display());
