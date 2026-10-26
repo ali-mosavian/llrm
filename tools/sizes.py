@@ -162,11 +162,17 @@ def data_bytes(obj: Path) -> tuple[int, int]:
     return sum(one.loaded for one in kept), sum(one.size - one.loaded for one in kept)
 
 
+def selected(command: list[str]) -> list[str]:
+    """`command` with `--isel=$LLRM_ISEL` after the compiler when the variable is set: without it the dag selector was never measured."""
+    mode = environ.get("LLRM_ISEL")
+    return [command[0], f"--isel={mode}", *command[1:]] if mode else command
+
+
 def measure(command: list[str], level: str) -> int | None:
     """The code bytes of the program's object, or None where it does not compile."""
     with tempfile.TemporaryDirectory() as directory:
         obj = f"{directory}/x.obj"
-        cpulimit.run([*command, level, "-o", obj], 300, capture_output=True, text=True)
+        cpulimit.run(selected([*command, level, "-o", obj]), 300, capture_output=True, text=True)
         return code_bytes(Path(obj)) if Path(obj).exists() else None
 
 
@@ -177,7 +183,7 @@ def frame(command: list[str], level: str) -> int | None:
     """Bytes the program's procedures reserve below BP: every `sub sp, N` of its listing."""
     with tempfile.TemporaryDirectory() as directory:
         listing = f"{directory}/x.s"
-        cpulimit.run([*command, level, "-S", "-o", listing], 300, capture_output=True, text=True)
+        cpulimit.run(selected([*command, level, "-S", "-o", listing]), 300, capture_output=True, text=True)
         return sum(int(one) for one in SUB_SP.findall(Path(listing).read_text())) if Path(listing).exists() else None
 
 

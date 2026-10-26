@@ -144,3 +144,32 @@ out:
 ");
     assert!(!after.contains("phi ptr ["), "{after}");
 }
+
+/// Forwarding a stored far pointer leaves its value, a constant cast of the
+/// global, where the load was: the load through a step of it kept `es:[bx+si]`
+/// (`fw.c`, w13's lru.c +145 B at -Os m16).
+#[test]
+fn a_load_through_a_step_of_a_constant_cast_is_a_near_load() {
+    let after = run("define i16 @f(i16 %i) {
+b0:
+  %a = getelementptr inbounds nuw i8, ptr addrspace(1) addrspacecast (ptr @g to ptr addrspace(1)), i16 %i
+  %v = load i16, ptr addrspace(1) %a
+  ret i16 %v
+}
+");
+    assert!(after.contains("load i16, ptr %") && !after.contains("load i16, ptr addrspace(1)"), "{after}");
+}
+
+/// A step a call also reads keeps its far pointer.
+#[test]
+fn a_step_of_a_constant_cast_that_a_call_reads_stays_far() {
+    let after = run("define i16 @f(i16 %i) {
+b0:
+  %a = getelementptr inbounds nuw i8, ptr addrspace(1) addrspacecast (ptr @g to ptr addrspace(1)), i16 %i
+  call void @sink(ptr addrspace(1) %a)
+  %v = load i16, ptr addrspace(1) %a
+  ret i16 %v
+}
+");
+    assert!(after.contains("load i16, ptr addrspace(1)"), "{after}");
+}

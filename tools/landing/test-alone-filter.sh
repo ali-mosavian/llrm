@@ -15,3 +15,9 @@ ALONE_CMD="$w/rec alone"; alone_warm 7 8; sleep 1
 [ "$(cat $w/ran 2>/dev/null)" = "alone 7 8" ] || { echo "FAIL: warm did not run ALONE_CMD: '$(cat $w/ran 2>/dev/null)'"; exit 1; }
 ALONE_CMD=echo; rm -f $w/ran; alone_warm 7 8; sleep 1; [ ! -e $w/ran ] || { echo "FAIL"; exit 1; }
 echo PASS warm
+
+# Regression: scanner text on the check's stdout ("scanners: 2 targets, 0 red (tree ...)") became PR numbers "targets," "0" "red" and the real survivors vanished: no batch for 70 min.
+printf '#!/bin/sh\nshift\necho "scanners: 2 targets, 0 red (tree abc123)"\nfor n; do echo $n; done\n' > $d/junk; chmod +x $d/junk
+ALONE_CMD="$d/junk x"; got=$(alone_filter 11 12 2>/dev/null)
+[ "$got" = "11 12" ] || { echo "FAIL: junk on stdout reached the candidates: '$got'"; exit 1; }
+echo PASS junk
