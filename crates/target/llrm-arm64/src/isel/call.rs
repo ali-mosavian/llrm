@@ -488,7 +488,8 @@ impl Selector<'_> {
                 self.inst(Inst::FpUnary { op, size, rd, rn });
                 self.define(result, Src::Val(Val::Float { reg: rd, size }))
             }
-            // The current rounding mode (to nearest even) and then the conversion: BASIC's CINT.
+            // The current rounding mode (to nearest even) and then the
+            // conversion: BASIC's CINT.
             "lrint" | "llrint" => {
                 let (rn, size) = self.float_arg(arguments[0])?;
                 let Some(bits) = self.types().int_bits(instruction.ty) else {
@@ -567,7 +568,8 @@ impl Selector<'_> {
         }
     }
 
-    /// The intrinsic `base` as the C library's function of that name (`sin`, or `sinf` for a float).
+    /// The intrinsic `base` as the C library's function of that name (`sin`, or
+    /// `sinf` for a float).
     fn libm_intrinsic(
         &mut self,
         base: &str,
@@ -583,7 +585,10 @@ impl Selector<'_> {
             let places = self.places_of(&mut assigner, ty, true)?;
             passed.push((value, places));
         }
-        let single = matches!(self.ty(instruction.ty), llrm_mir::Type::Float(llrm_mir::FloatKind::Float));
+        let single = matches!(
+            self.ty(instruction.ty),
+            llrm_mir::Type::Float(llrm_mir::FloatKind::Float)
+        );
         let name = format!("{base}{}", if single { "f" } else { "" });
         let callee = Callee::Symbol(if self.platform.underscore() { format!("_{name}") } else { name });
         let result = self.emit_call(callee, passed, assigner.stack_bytes(), instruction.ty)?;

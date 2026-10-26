@@ -438,8 +438,9 @@ impl<'a> Selector<'a> {
             Opcode::Store { .. } => self.store(&instruction),
             Opcode::GetElementPtr { source } => self.gep(&instruction, *source),
             Opcode::Call(info) => self.call(inst, &instruction, info),
-            // A call, then a branch to the normal block. The unwind edge is left unselected: nothing unwinds, and QB's
-            // landing pad is entered by the runtime, not by an unwinder.
+            // A call, then a branch to the normal block. The unwind edge is
+            // left unselected: nothing unwinds, and QB's landing pad is entered
+            // by the runtime, not by an unwinder.
             Opcode::Invoke(info) => {
                 let [.., Operand::Block(normal), Operand::Block(_), callee] = instruction.operands[..] else {
                     return refuse("an invoke without its blocks");
@@ -454,8 +455,9 @@ impl<'a> Selector<'a> {
                 jump.result = None;
                 self.br(self.current, &jump)
             }
-            // The runtime enters QB's landing pad with the frame put back, not an unwinder with an exception: the
-            // pad's value is zero, and what it reads of the error is the global ehprepare made.
+            // The runtime enters QB's landing pad with the frame put back, not
+            // an unwinder with an exception: the pad's value is zero, and what
+            // it reads of the error is the global ehprepare made.
             Opcode::LandingPad { .. } => {
                 let mut value = self.fresh(instruction.ty)?;
                 for leaf in value.leaves_mut() {

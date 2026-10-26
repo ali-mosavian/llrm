@@ -1,22 +1,26 @@
-//! `--arm64=linux|darwin`: the QB module through the shared mid-end as for any 64-bit target, then, as MIR text, through
-//! the arm64 backend (`llrm_arm64::driver`) to an ELF or Mach-O object.
+//! `--arm64=linux|darwin`: the QB module through the shared mid-end as for any
+//! 64-bit target, then, as MIR text, through the arm64 backend
+//! (`llrm_arm64::driver`) to an ELF or Mach-O object.
 //!
-//! The text step is the hand-over: the module leaves the x86 runtime lowering (`cc 1000` calls, `llrm.qb.B$X` names,
-//! the x87 evaluation attribute) as C calls and C names (`B_X`) of the host runtime in runtime/qb. The module's exports
-//! are `QB_MAIN`, `QB_DATA` (the first DATA row) and `QB_STATEMENTS` (the statement table), which runtime/qb/posix reads.
+//! The text step is the hand-over: the module leaves the x86 runtime lowering
+//! (`cc 1000` calls, `llrm.qb.B$X` names, the x87 evaluation attribute) as C
+//! calls and C names (`B_X`) of the host runtime in runtime/qb. The module's
+//! exports are `QB_MAIN`, `QB_DATA` (the first DATA row) and `QB_STATEMENTS`
+//! (the statement table), which runtime/qb/posix reads.
 
 use std::path::Path;
 
 use llrm_arm64::machine::Platform;
+use llrm_core::driver::Options;
 use llrm_core::hir::model;
 
-use super::compile::{CompileError, _inline_frame, _near_procedures, _positional_data};
-use llrm_core::driver::Options;
+use super::compile::{_inline_frame, _near_procedures, _positional_data, CompileError};
 
 /// The names the host runtime links the module by.
 const EXPORTS: [(&str, &str); 2] = [("@__main", "@QB_MAIN"), ("@$qb$statementTable", "@QB_STATEMENTS")];
 
-/// `line` with the symbol `from` (a whole name, not the start of a longer one) written `to`.
+/// `line` with the symbol `from` (a whole name, not the start of a longer one)
+/// written `to`.
 fn renamed(
     line: &str,
     from: &str,
@@ -35,9 +39,11 @@ fn renamed(
     out
 }
 
-/// `line`, a call or declaration of a runtime entry (`@B_X`), with its `i16` arguments marked `signext`. Darwin's
-/// AAPCS64 has the caller extend an argument narrower than 32 bits, and the clang-built runtime relies on it: `-1` passed
-/// as 0xFFFF reached `VIEW PRINT` as 65535, "Illegal function call". Linux's callee extends for itself.
+/// `line`, a call or declaration of a runtime entry (`@B_X`), with its `i16`
+/// arguments marked `signext`. Darwin's AAPCS64 has the caller extend an
+/// argument narrower than 32 bits, and the clang-built runtime relies on it:
+/// `-1` passed as 0xFFFF reached `VIEW PRINT` as 65535, "Illegal function
+/// call". Linux's callee extends for itself.
 fn signext_i16_arguments(line: &str) -> String {
     let Some(name) = line.find("@B_") else { return line.to_owned() };
     let Some(open) = line[name..].find('(').map(|at| name + at) else { return line.to_owned() };
@@ -67,7 +73,8 @@ fn arm64_text(
         let mut line = line.replace(" cc 1000", "").replace(" \"llrm-fp-eval\"=\"x87-extended\"", "");
         line = line.replace("@llrm.qb.B$", "@B_").replace("@B$", "@B_");
         line = block_entry(&line);
-        // a variadic call has no prototype to extend its arguments: on every platform the callee reads an int
+        // a variadic call has no prototype to extend its arguments: on every
+        // platform the callee reads an int
         if platform == Platform::Darwin || line.contains(", ...) @B_") {
             line = signext_i16_arguments(&line);
         }
@@ -75,7 +82,8 @@ fn arm64_text(
         for (from, to) in EXPORTS {
             line = renamed(&line, from, to);
         }
-        // the module's other symbols are private to it, but for what the runtime names
+        // the module's other symbols are private to it, but for what the
+        // runtime names
         line = line.replace("@$", "@Q_").replace("i16 16)", "i64 16)");
         if let Some(rest) = line.strip_prefix("define internal ").filter(|_| line.contains("@QB_MAIN")) {
             line = format!("define {rest}");
@@ -90,8 +98,9 @@ fn arm64_text(
         out.push('\n');
     }
     let mut out = framed(&without_results_on_void(&out));
-    // an empty table may have been dropped as unused: the runtime still links against it
-    // the READ/DATA rows: a position and the row's text for each, then the end
+    // an empty table may have been dropped as unused: the runtime still links
+    // against it the READ/DATA rows: a position and the row's text for
+    // each, then the end
     let bytes: String = read_data.iter().map(|byte| format!("\\{byte:02X}")).collect();
     out.push_str(&format!("@QB_DATA = constant [{} x i8] c\"{bytes}\"\n", read_data.len()));
     for name in ["QB_STATEMENTS"] {
@@ -133,10 +142,12 @@ pub fn object_bytes(
     llrm_arm64::driver::object_file(&text, platform, &name, false).map_err(fail)
 }
 
-/// ON ERROR's landing on a host: a function with a landing pad registers a `_setjmp` buffer (`qb_host_frame`, which
-/// returns the frame it replaces and gets it back before each `ret`), and the runtime's `qb_land` jumps back into the
-/// function, which takes the branch to its pad. The function's allocas are handed to `qb_host_escape` so that no
-/// pass keeps them in registers, which the jump would restore stale.
+/// ON ERROR's landing on a host: a function with a landing pad registers a
+/// `_setjmp` buffer (`qb_host_frame`, which returns the frame it replaces and
+/// gets it back before each `ret`), and the runtime's `qb_land` jumps back into
+/// the function, which takes the branch to its pad. The function's allocas are
+/// handed to `qb_host_escape` so that no pass keeps them in registers, which
+/// the jump would restore stale.
 fn framed(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut function: Vec<&str> = Vec::new();
@@ -160,7 +171,9 @@ fn framed(text: &str) -> String {
     if !text.contains("declare i16 @B_FERR()") {
         out.push_str("declare i16 @B_FERR()\n");
     }
-    out.push_str("declare ptr @qb_host_frame(ptr)\ndeclare void @qb_host_escape(ptr)\ndeclare i32 @_setjmp(ptr) returns_twice\n");
+    out.push_str(
+        "declare ptr @qb_host_frame(ptr)\ndeclare void @qb_host_escape(ptr)\ndeclare i32 @_setjmp(ptr) returns_twice\n",
+    );
     out
 }
 
@@ -184,17 +197,23 @@ fn framed_function(lines: &[&str]) -> String {
                 out.push_str(&format!("  call void @qb_host_escape(ptr {})\n", name(alloca)));
             }
             out.push_str("  %qb.jb = alloca [64 x i64], align 16\n  call void @qb_host_escape(ptr %qb.jb)\n");
-            out.push_str("  %qb.prev = call ptr @qb_host_frame(ptr %qb.jb)\n  %qb.rc = call i32 @_setjmp(ptr %qb.jb)\n");
-            out.push_str("  %qb.back = icmp ne i32 %qb.rc, 0\n  br i1 %qb.back, label %landing, label %qb.body\n\nqb.body:\n");
+            out.push_str(
+                "  %qb.prev = call ptr @qb_host_frame(ptr %qb.jb)\n  %qb.rc = call i32 @_setjmp(ptr %qb.jb)\n",
+            );
+            out.push_str(
+                "  %qb.back = icmp ne i32 %qb.rc, 0\n  br i1 %qb.back, label %landing, label %qb.body\n\nqb.body:\n",
+            );
         }
         if line.contains("= load i16, ptr @Q_QB$LANDED") {
-            // DOS lands in `$QB$LANDING`, which stores ERR there; here the jump comes straight to the pad
+            // DOS lands in `$QB$LANDING`, which stores ERR there; here the jump
+            // comes straight to the pad
             out.push_str("  %qb.err = call i16 @B_FERR()\n  store i16 %qb.err, ptr @Q_QB$LANDED\n");
         }
         if line.trim_start().starts_with("ret ") {
             out.push_str("  %qb.popped = call ptr @qb_host_frame(ptr %qb.prev)\n");
         }
-        // the rest of the entry block is the body now: a phi's edge from the entry comes from there
+        // the rest of the entry block is the body now: a phi's edge from the
+        // entry comes from there
         let line = if number > at { line.replace(&from_entry, ", %qb.body ]") } else { (*line).to_owned() };
         out.push_str(&line);
         out.push('\n');
@@ -202,8 +221,9 @@ fn framed_function(lines: &[&str]) -> String {
     out
 }
 
-/// A mid-end pass leaves a result number on a terminator or a store (`%54 = br label %b36`), which the x86 path never
-/// reads and MIR's reader refuses. Each such number is dropped and the numbers after it in the function close up.
+/// A mid-end pass leaves a result number on a terminator or a store (`%54 = br
+/// label %b36`), which the x86 path never reads and MIR's reader refuses. Each
+/// such number is dropped and the numbers after it in the function close up.
 fn without_results_on_void(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut body: Vec<&str> = Vec::new();
@@ -257,7 +277,8 @@ fn closed_up(lines: &[&str]) -> String {
     out
 }
 
-/// `line` with each numeric name (`%7`, a block label `7:`) lowered by the dropped numbers below it.
+/// `line` with each numeric name (`%7`, a block label `7:`) lowered by the
+/// dropped numbers below it.
 fn shifted(
     line: &str,
     dropped: &[u64],
@@ -294,9 +315,10 @@ fn shifted(
     out
 }
 
-/// The entries QB calls with a block of words on the stack (`B$DDIM`, `B$COLR`, ...): a host's are variadic C functions
-/// (runtime/qb/posix/blockentries.c) that read the block's words in memory order, which is the reverse of the order they
-/// were pushed in.
+/// The entries QB calls with a block of words on the stack (`B$DDIM`, `B$COLR`,
+/// ...): a host's are variadic C functions (runtime/qb/posix/blockentries.c)
+/// that read the block's words in memory order, which is the reverse of the
+/// order they were pushed in.
 const BLOCK_ENTRIES: [(&str, &str); 7] = [
     ("B_DDIM", "ptr"),
     ("B_RDIM", "ptr"),
@@ -344,8 +366,10 @@ fn block_entry(line: &str) -> String {
     line.to_owned()
 }
 
-/// QB packs its variables, and the x86 loads what it finds; arm64's `ldr x` of a symbol needs it 8 aligned for the
-/// relocation (`R_AARCH64_LDST64_ABS_LO12_NC`). Every module global starts on 8 (16 from 16 bytes).
+/// QB packs its variables, and the x86 loads what it finds; arm64's `ldr x` of
+/// a symbol needs it 8 aligned for the relocation
+/// (`R_AARCH64_LDST64_ABS_LO12_NC`). Every module global starts on 8 (16 from
+/// 16 bytes).
 fn aligned(line: &str) -> String {
     if !line.starts_with('@') || !(line.contains(" global ") || line.contains(" constant ")) {
         return line.to_owned();

@@ -1,7 +1,9 @@
-//! The speaker in virtual time (tests/sound_unit.c): BEEP, SOUND and PLAY run on the headless device, whose clock is a
-//! number, so eight seconds of sound take a fraction of one. Their tone log is rendered by the sdl platform's own
-//! renderer, and a short-time Fourier transform of the samples says what a listener would hear: which pitch, for how
-//! long, and a full-swing square wave rather than the unipolar triangle a too-slow fade once made of it.
+//! The speaker in virtual time (tests/sound_unit.c): BEEP, SOUND and PLAY run
+//! on the headless device, whose clock is a number, so eight seconds of sound
+//! take a fraction of one. Their tone log is rendered by the sdl platform's own
+//! renderer, and a short-time Fourier transform of the samples says what a
+//! listener would hear: which pitch, for how long, and a full-swing square wave
+//! rather than the unipolar triangle a too-slow fade once made of it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -19,7 +21,8 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// Builds tests/sound_unit.c, runs it, and returns its scenario lines and the samples it wrote.
+/// Builds tests/sound_unit.c, runs it, and returns its scenario lines and the
+/// samples it wrote.
 fn render() -> (Vec<(String, f64, f64)>, Vec<f64>, f64) {
     let root = root();
     let qb = root.join("runtime/qb");
@@ -59,7 +62,10 @@ fn render() -> (Vec<(String, f64, f64)>, Vec<f64>, f64) {
 }
 
 /// In-place radix-2 FFT.
-fn fft(re: &mut [f64], im: &mut [f64]) {
+fn fft(
+    re: &mut [f64],
+    im: &mut [f64],
+) {
     let n = re.len();
     let mut j = 0;
     for i in 1..n {
@@ -117,7 +123,8 @@ fn stft(samples: &[f64]) -> Vec<Frame> {
         .collect()
 }
 
-/// The frequency of the strongest bin, refined by a parabola through it and its neighbours.
+/// The frequency of the strongest bin, refined by a parabola through it and its
+/// neighbours.
 fn peak_hertz(magnitude: &[f64]) -> f64 {
     let at = (1..magnitude.len() - 1).max_by(|&a, &b| magnitude[a].total_cmp(&magnitude[b])).unwrap();
     let (a, b, c) = (magnitude[at - 1].ln(), magnitude[at].ln(), magnitude[at + 1].ln());
@@ -125,8 +132,13 @@ fn peak_hertz(magnitude: &[f64]) -> f64 {
     (at as f64 + shift) * RATE / WINDOW as f64
 }
 
-/// The level of the strongest bin within three of harmonic `n` of `hertz`, in dB.
-fn level(magnitude: &[f64], hertz: f64, n: f64) -> f64 {
+/// The level of the strongest bin within three of harmonic `n` of `hertz`, in
+/// dB.
+fn level(
+    magnitude: &[f64],
+    hertz: f64,
+    n: f64,
+) -> f64 {
     let bin = (hertz * n * WINDOW as f64 / RATE).round() as usize;
     let top = (bin.saturating_sub(3)..=(bin + 3).min(magnitude.len() - 1)).map(|k| magnitude[k]).fold(0.0, f64::max);
     20.0 * top.max(1e-9).log10()
@@ -139,9 +151,15 @@ struct Note {
     centre: usize,
 }
 
-/// The notes in frames `[from, to)`: runs of frames whose energy is over half of a full-swing square's.
-fn notes(frames: &[Frame], from: f64, to: f64) -> Vec<Note> {
-    let active = |frame: &Frame| frame.rms > 3000.0 * 0.5_f64.sqrt().max(0.5) && frame.centre >= from && frame.centre < to;
+/// The notes in frames `[from, to)`: runs of frames whose energy is over half
+/// of a full-swing square's.
+fn notes(
+    frames: &[Frame],
+    from: f64,
+    to: f64,
+) -> Vec<Note> {
+    let active =
+        |frame: &Frame| frame.rms > 3000.0 * 0.5_f64.sqrt().max(0.5) && frame.centre >= from && frame.centre < to;
     let mut found = Vec::new();
     let mut at = 0;
     while at < frames.len() {
@@ -168,11 +186,22 @@ fn semitones(from_a4: f64) -> f64 {
     440.0 * 2f64.powf(from_a4 / 12.0)
 }
 
-fn assert_note(name: &str, note: &Note, hertz: f64, length: f64, begin: f64, late: f64) {
+fn assert_note(
+    name: &str,
+    note: &Note,
+    hertz: f64,
+    length: f64,
+    begin: f64,
+    late: f64,
+) {
     assert!((note.hertz / hertz - 1.0).abs() < 0.01, "{name}: {:.1} Hz, wanted {hertz:.1}", note.hertz);
     let heard = note.end - note.start;
     assert!((heard - length).abs() < 0.06, "{name}: {heard:.3} s long, wanted {length:.3}");
-    assert!(note.start >= begin - 0.03 && note.start - begin < late, "{name}: starts {:.3} s into it", note.start - begin);
+    assert!(
+        note.start >= begin - 0.03 && note.start - begin < late,
+        "{name}: starts {:.3} s into it",
+        note.start - begin
+    );
 }
 
 #[test]
@@ -182,7 +211,11 @@ fn beep_sound_and_play_sound_as_a_listener_would_hear_them() {
     let begin = |name: &str| scenarios.iter().find(|s| s.0 == name).unwrap_or_else(|| panic!("no scenario {name}")).1;
     let end = |name: &str| scenarios.iter().find(|s| s.0 == name).unwrap().2 + 0.4;
 
-    assert!(wall < samples.len() as f64 / RATE / 4.0, "{wall:.2} s of wall clock for {:.1} s of sound: not virtual time", samples.len() as f64 / RATE);
+    assert!(
+        wall < samples.len() as f64 / RATE / 4.0,
+        "{wall:.2} s of wall clock for {:.1} s of sound: not virtual time",
+        samples.len() as f64 / RATE
+    );
 
     let mut heard: Vec<(&str, Vec<Note>)> = Vec::new();
     for (name, from, _) in &scenarios {
@@ -196,13 +229,16 @@ fn beep_sound_and_play_sound_as_a_listener_would_hear_them() {
     assert_note("beep", &beep[0], 800.0, 0.25, begin("beep"), 0.05);
 
     // SOUND hertz, ticks: 18.2 ticks a second, starting at the next tick.
-    for (name, hertz, ticks) in [("sound_440_18", 440.0, 18.0), ("sound_880_9", 880.0, 9.0), ("sound_2000_10", 2000.0, 10.0)] {
+    for (name, hertz, ticks) in
+        [("sound_440_18", 440.0, 18.0), ("sound_880_9", 880.0, 9.0), ("sound_2000_10", 2000.0, 10.0)]
+    {
         let found = of(name);
         assert_eq!(found.len(), 1, "{name}: {} notes", found.len());
         assert_note(name, &found[0], hertz, ticks / 18.2, begin(name), 0.12);
     }
 
-    // PLAY "MB T120 O3 CDEFG": five notes of seven eighths of a half-second beat, each its own sound.
+    // PLAY "MB T120 O3 CDEFG": five notes of seven eighths of a half-second
+    // beat, each its own sound.
     let play = of("play_cdefg");
     assert_eq!(play.len(), 5, "play: {} notes", play.len());
     for (note, (name, offset)) in play.iter().zip([("C", -9.0), ("D", -7.0), ("E", -5.0), ("F", -4.0), ("G", -2.0)]) {
@@ -212,8 +248,9 @@ fn beep_sound_and_play_sound_as_a_listener_would_hear_them() {
         assert!(pair[1].start - pair[0].end > 0.005, "the notes run into each other");
     }
 
-    // The wave, by the sample and by the spectrum: full swing, no offset, odd harmonics only. A fade too slow for the
-    // pitch made a unipolar triangle: swing 0 to 6000, offset 3000, third harmonic 19 dB down.
+    // The wave, by the sample and by the spectrum: full swing, no offset, odd
+    // harmonics only. A fade too slow for the pitch made a unipolar
+    // triangle: swing 0 to 6000, offset 3000, third harmonic 19 dB down.
     for (name, found) in &heard {
         for note in found {
             let (from, to) = ((note.start * RATE) as usize + 400, (note.end * RATE) as usize - 400);
@@ -228,7 +265,11 @@ fn beep_sound_and_play_sound_as_a_listener_would_hear_them() {
                 let second = level(magnitude, note.hertz, 2.0) - first;
                 let third = level(magnitude, note.hertz, 3.0) - first;
                 assert!(second < -30.0, "{name} {:.0} Hz: second harmonic {second:.1} dB", note.hertz);
-                assert!((-12.0..-7.0).contains(&third), "{name} {:.0} Hz: third harmonic {third:.1} dB, a square's is -9.5", note.hertz);
+                assert!(
+                    (-12.0..-7.0).contains(&third),
+                    "{name} {:.0} Hz: third harmonic {third:.1} dB, a square's is -9.5",
+                    note.hertz
+                );
             }
         }
     }

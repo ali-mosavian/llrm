@@ -104,11 +104,13 @@ impl Interface {
         format!("{}{}", self.prefix, op.name.to_uppercase())
     }
 
-    /// The C header of the interface for the POSIX host layer (`runtime/shared/posix/llrm_os.h`): each
-    /// operation of the groups its `os.toml` declares as `llrm_os_<name>`, in the host's C, with fixed
+    /// The C header of the interface for the POSIX host layer
+    /// (`runtime/shared/posix/llrm_os.h`): each operation of the groups its
+    /// `os.toml` declares as `llrm_os_<name>`, in the host's C, with fixed
     /// widths where the interface says a width.
     pub fn posix_c_header(&self) -> Result<String, String> {
-        let layer: toml::Table = POSIX_LAYER.parse().map_err(|error: toml::de::Error| format!("posix os.toml: {error}"))?;
+        let layer: toml::Table =
+            POSIX_LAYER.parse().map_err(|error: toml::de::Error| format!("posix os.toml: {error}"))?;
         let groups: Vec<String> = layer
             .get("groups")
             .and_then(toml::Value::as_array)
@@ -147,7 +149,8 @@ impl Interface {
         }
         let handles = layer.get("handles").and_then(toml::Value::as_table).ok_or("posix os.toml has no handles")?;
         for name in &self.handles {
-            let number = handles.get(name).and_then(toml::Value::as_integer).ok_or_else(|| format!("no handle {name}"))?;
+            let number =
+                handles.get(name).and_then(toml::Value::as_integer).ok_or_else(|| format!("no handle {name}"))?;
             text += &format!("#define LLRM_OS_{} {number}\n", name.to_uppercase());
         }
         text += "\n/* The program's arguments, which os.c answers command_line and environment from; called once by main. */\nvoid llrm_os_set_arguments(int argc, char **argv);\n/* What llrm_os_exit calls, with the code, instead of exit(): a host that runs the program on a thread stops its other threads here. */\nvoid llrm_os_set_exit_hook(void (*hook)(int code));\n\n#endif\n";

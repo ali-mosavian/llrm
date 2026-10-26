@@ -1,7 +1,10 @@
-//! A QB program compiled for 32-bit x86 Linux (`llrm-qb -m32 -fobject-format=elf`), linked with the host runtime on the
-//! headless device by `cc -m32` and run natively. The runtime is C: the object calls it by the C family, not by Open
-//! Watcom's registers (which the DOS flat target's runtime is written for), and every procedure frames itself.
-//! A machine without 32-bit libc development files fails here by name; it does not skip.
+//! A QB program compiled for 32-bit x86 Linux (`llrm-qb -m32
+//! -fobject-format=elf`), linked with the host runtime on the headless device
+//! by `cc -m32` and run natively. The runtime is C: the object calls it by the
+//! C family, not by Open Watcom's registers (which the DOS flat target's
+//! runtime is written for), and every procedure frames itself.
+//! A machine without 32-bit libc development files fails here by name; it does
+//! not skip.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,8 +14,13 @@ fn root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// Compiles `source`, links it with the runtime, runs it with `environment`; the text its screen shows.
-fn run(name: &str, source: &[u8], environment: &[(&str, &str)]) -> String {
+/// Compiles `source`, links it with the runtime, runs it with `environment`;
+/// the text its screen shows.
+fn run(
+    name: &str,
+    source: &[u8],
+    environment: &[(&str, &str)],
+) -> String {
     let dir: PathBuf = std::env::temp_dir().join(format!("{name}_{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     let bas = dir.join(format!("{name}.bas"));
@@ -64,7 +72,8 @@ fn run(name: &str, source: &[u8], environment: &[(&str, &str)]) -> String {
 
     let done = Command::new(&program).envs(environment.iter().copied()).output().expect("the program runs");
     let screen = String::from_utf8_lossy(&done.stdout).into_owned();
-    // 124: the headless driver ended a program that was still waiting, with the screen it had (QB_HEADLESS_SECONDS)
+    // 124: the headless driver ended a program that was still waiting, with the
+    // screen it had (QB_HEADLESS_SECONDS)
     assert!(
         done.status.success() || done.status.code() == Some(124),
         "the program failed ({:?}):\n{screen}{}",
@@ -75,23 +84,27 @@ fn run(name: &str, source: &[u8], environment: &[(&str, &str)]) -> String {
     screen
 }
 
-/// `-m32 -fobject-format=elf` passed the runtime's arguments in Open Watcom's registers: the first call (`PRINT`'s string)
-/// handed the C runtime whatever the stack held and the program crashed (SIGSEGV).
+/// `-m32 -fobject-format=elf` passed the runtime's arguments in Open Watcom's
+/// registers: the first call (`PRINT`'s string) handed the C runtime whatever
+/// the stack held and the program crashed (SIGSEGV).
 #[test]
 fn print_hello_runs_natively_on_x86_32() {
     assert_eq!(run("hello32", b"PRINT \"HELLO\"\nEND\n", &[]).trim_end(), "HELLO");
 }
 
-/// DEF SEG, PEEK and POKE of the PC's low memory (NIBBLES reads the keyboard flags at 0:0417) read address 0x417
-/// directly on a host: SIGSEGV. The runtime places them in its image of that memory.
+/// DEF SEG, PEEK and POKE of the PC's low memory (NIBBLES reads the keyboard
+/// flags at 0:0417) read address 0x417 directly on a host: SIGSEGV. The runtime
+/// places them in its image of that memory.
 #[test]
 fn peek_of_the_pc_low_memory_runs_on_x86_32() {
     let source = b"DEF SEG = 0\r\nPOKE &H417, 5\r\nPRINT PEEK(&H417)\r\nEND\r\n";
     assert_eq!(run("peek32", source, &[]).trim(), "5");
 }
 
-/// NIBBLES (QB 4.5's demo, from `QB45_DEMOS_DIR`) typed through its questions: the stack-block routines (COLOR, LOCATE,
-/// SCREEN, DIM) are C varargs the caller cleans up, and a procedure with local strings frames itself (no B$ENRA).
+/// NIBBLES (QB 4.5's demo, from `QB45_DEMOS_DIR`) typed through its questions:
+/// the stack-block routines (COLOR, LOCATE, SCREEN, DIM) are C varargs the
+/// caller cleans up, and a procedure with local strings frames itself (no
+/// B$ENRA).
 #[test]
 fn nibbles_reaches_its_first_level_on_x86_32() {
     let Some(dir) = std::env::var_os("QB45_DEMOS_DIR") else {
@@ -107,7 +120,8 @@ fn nibbles_reaches_its_first_level_on_x86_32() {
     assert!(screen.contains("Level 1,  Push Space"), "{screen}");
 }
 
-/// GORILLA typed through its intro and four questions: SINGLE and DOUBLE arithmetic on the x87 and the menu text.
+/// GORILLA typed through its intro and four questions: SINGLE and DOUBLE
+/// arithmetic on the x87 and the menu text.
 #[test]
 fn gorilla_reaches_its_menu_on_x86_32() {
     let Some(dir) = std::env::var_os("QB45_DEMOS_DIR") else {

@@ -1,5 +1,6 @@
-//! The POSIX OS layer (`runtime/shared/posix/os.c`) against its own header: tests/posix_os/os_test.c, built
-//! with the host's C compiler and run with an empty standard input.
+//! The POSIX OS layer (`runtime/shared/posix/os.c`) against its own header:
+//! tests/posix_os/os_test.c, built with the host's C compiler and run with an
+//! empty standard input.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -18,11 +19,7 @@ fn the_posix_os_layer_does_what_the_interface_says() {
         .output()
         .expect("cc runs");
     assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
-    let done = Command::new(&out)
-        .args(["one", "two"])
-        .stdin(Stdio::null())
-        .output()
-        .expect("the test runs");
+    let done = Command::new(&out).args(["one", "two"]).stdin(Stdio::null()).output().expect("the test runs");
     std::fs::remove_file(&out).ok();
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stdout));
     assert_eq!(String::from_utf8_lossy(&done.stdout).trim(), "ok");

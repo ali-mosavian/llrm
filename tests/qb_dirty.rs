@@ -1,6 +1,8 @@
-//! The dirty-line protocol of the host video (runtime/qb/dev/host/video.h) under a writer and a presenter thread,
-//! tests/qbhost/dirty_stress.c: plain and under ThreadSanitizer. The weak-memory case is arm64 hardware (the Mac
-//! session runs this file; qemu on an x86 host orders memory strongly and cannot show a tear).
+//! The dirty-line protocol of the host video (runtime/qb/dev/host/video.h)
+//! under a writer and a presenter thread, tests/qbhost/dirty_stress.c: plain
+//! and under ThreadSanitizer. The weak-memory case is arm64 hardware (the Mac
+//! session runs this file; qemu on an x86 host orders memory strongly and
+//! cannot show a tear).
 
 use std::path::Path;
 use std::process::Command;
@@ -13,7 +15,14 @@ fn stress(sanitize: Option<&str>) {
     if let Some(kind) = sanitize {
         build.arg(format!("-fsanitize={kind}"));
     }
-    for include in ["runtime/qb/dev", "runtime/qb/dev/sdl", "runtime/qb/dev/host", "runtime/shared/posix", "runtime/qb", "runtime/qb/posix"] {
+    for include in [
+        "runtime/qb/dev",
+        "runtime/qb/dev/sdl",
+        "runtime/qb/dev/host",
+        "runtime/shared/posix",
+        "runtime/qb",
+        "runtime/qb/posix",
+    ] {
         build.arg("-I").arg(root.join(include));
     }
     for source in [

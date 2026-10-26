@@ -1,5 +1,6 @@
-//! A QB program compiled for x86-64 (`llrm-qb -m64`, ELF64), linked with the host runtime on the headless device and
-//! run natively: the object, its module header, the runtime's start-up and the screen it leaves.
+//! A QB program compiled for x86-64 (`llrm-qb -m64`, ELF64), linked with the
+//! host runtime on the headless device and run natively: the object, its module
+//! header, the runtime's start-up and the screen it leaves.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -9,8 +10,12 @@ fn root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// Compiles `source` for x86-64, links it with the runtime, runs it; the text its screen shows.
-fn run(name: &str, source: &str) -> String {
+/// Compiles `source` for x86-64, links it with the runtime, runs it; the text
+/// its screen shows.
+fn run(
+    name: &str,
+    source: &str,
+) -> String {
     let dir: PathBuf = std::env::temp_dir().join(format!("{name}_{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     let bas = dir.join(format!("{name}.bas"));
@@ -65,8 +70,8 @@ fn run(name: &str, source: &str) -> String {
     screen
 }
 
-/// `-m64` wrote an OMF-style object that no ELF linker takes (no module header symbol, `$` in the runtime's names):
-/// the program could not be linked at all.
+/// `-m64` wrote an OMF-style object that no ELF linker takes (no module header
+/// symbol, `$` in the runtime's names): the program could not be linked at all.
 #[test]
 #[cfg(target_arch = "x86_64")]
 fn print_hello_runs_natively_on_x86_64() {

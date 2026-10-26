@@ -589,13 +589,17 @@ fn written_basic_inner(
         // The module's header, where the host's start-up finds it (the
         // flat DOS target reads it from BC_SA).
         let code = object.sections.iter().position(|one| one.name == module.code).ok_or("the code section")?;
-        object.symbols.push(llrm_object::Symbol {
-            name: HEADER.replace('$', "_"),
-            binding: llrm_object::Binding::Public,
-            definition: llrm_object::Definition::Defined { section: code, offset: 0 },
-            size: header_size,
-            group: None,
-        });
+        object
+            .symbols
+            .push(
+                llrm_object::Symbol {
+                    name: HEADER.replace('$', "_"),
+                    binding: llrm_object::Binding::Public,
+                    definition: llrm_object::Definition::Defined { section: code, offset: 0 },
+                    size: header_size,
+                    group: None,
+                },
+            );
         return objbuild::serialized(&object, format).map_err(|error| error.to_string());
     }
     let emitted = llrm_omf::write::write(&object).map_err(|error| error.to_string())?;
@@ -698,7 +702,12 @@ impl HeaderWords {
         } else if bitness == 32 {
             Self { width: 4, size: 48, statements: 12, segments: [16, 20, 24, 28, 32] }
         } else {
-            Self { width: 2, size: 48, statements: 10, segments: [NAMED[0].0, NAMED[1].0, NAMED[2].0, NAMED[3].0, NAMED[4].0] }
+            Self {
+                width: 2,
+                size: 48,
+                statements: 10,
+                segments: [NAMED[0].0, NAMED[1].0, NAMED[2].0, NAMED[3].0, NAMED[4].0],
+            }
         }
     }
 }

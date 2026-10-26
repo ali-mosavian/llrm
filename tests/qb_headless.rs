@@ -1,7 +1,9 @@
-//! The QB device interface on the headless platform (runtime/qb/dev/headless), through C programs built with the
-//! host's compiler: the device operations alone, the same random graphics oracle the DOS device passes
-//! (tests/qbgfx/fill_ops.c), and the runtime's own statements (PRINT, INKEY$, BEEP, SOUND, PLAY, TIMER, TIME$,
-//! DATE$, SCREEN 13, LINE, CIRCLE, PAINT, GET, PUT) driven as a compiled program drives them.
+//! The QB device interface on the headless platform (runtime/qb/dev/headless),
+//! through C programs built with the host's compiler: the device operations
+//! alone, the same random graphics oracle the DOS device passes (tests/qbgfx/
+//! fill_ops.c), and the runtime's own statements (PRINT, INKEY$, BEEP, SOUND,
+//! PLAY, TIMER, TIME$, DATE$, SCREEN 13, LINE, CIRCLE, PAINT, GET, PUT) driven
+//! as a compiled program drives them.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -10,8 +12,14 @@ fn root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// Builds `sources` (paths under the root) into one program and runs it with `arguments`; its standard output.
-fn build_and_run(name: &str, sources: &[&str], defines: &[&str], arguments: &[&str]) -> String {
+/// Builds `sources` (paths under the root) into one program and runs it with
+/// `arguments`; its standard output.
+fn build_and_run(
+    name: &str,
+    sources: &[&str],
+    defines: &[&str],
+    arguments: &[&str],
+) -> String {
     let out: PathBuf = std::env::temp_dir().join(format!("{name}_{}", std::process::id()));
     let qb = root().join("runtime/qb");
     let mut build = Command::new("cc");
@@ -48,8 +56,9 @@ fn the_headless_device_does_what_the_interface_says() {
     assert_eq!(printed.trim(), "ok");
 }
 
-/// The DOS device passes this on the screen (tools/dosbatch/test_qbgfxfill.py): every mode, operation, box, dot,
-/// line, circle step, search, run, GET and PUT against the pixel at a time.
+/// The DOS device passes this on the screen (tools/dosbatch/test_qbgfxfill.py):
+/// every mode, operation, box, dot, line, circle step, search, run, GET and PUT
+/// against the pixel at a time.
 #[test]
 fn the_headless_graphics_pass_the_oracle_the_dos_device_passes() {
     let mut sources = vec!["tests/qbgfx/fill_ops.c", "tests/qbhost/report.c"];

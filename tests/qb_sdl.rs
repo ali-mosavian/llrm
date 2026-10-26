@@ -1,9 +1,13 @@
-//! The sdl device platform (runtime/qb/dev/sdl) builds against SDL2 and runs under SDL's dummy video and audio drivers:
-//! tests/qbhost/sdl_smoke.c prints, draws, types and sounds on a worker thread and checks the frame the SDL thread
-//! presents, the keys made of SDL events, the tone in the audio callback, and that closing the window ends the program.
+//! The sdl device platform (runtime/qb/dev/sdl) builds against SDL2 and runs
+//! under SDL's dummy video and audio drivers: tests/qbhost/sdl_smoke.c prints,
+//! draws, types and sounds on a worker thread and checks the frame the SDL
+//! thread presents, the keys made of SDL events, the tone in the audio
+//! callback, and that closing the window ends the program.
 //!
-//! SDL2 comes from `SDL2_CONFIG`, `sdl2-config` on the path, or tools/build-sdl2.sh's private build, which the test
-//! makes (once, about two minutes) when there is none: a machine without SDL2 fails here by name, it does not skip.
+//! SDL2 comes from `SDL2_CONFIG`, `sdl2-config` on the path, or
+//! tools/build-sdl2.sh's private build, which the test makes (once, about two
+//! minutes) when there is none: a machine without SDL2 fails here by name, it
+//! does not skip.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -22,7 +26,10 @@ fn sdl2_config() -> Option<PathBuf> {
         .find(|path| Command::new(path).arg("--version").output().is_ok_and(|done| done.status.success()))
 }
 
-fn flags(config: &Path, which: &str) -> Vec<String> {
+fn flags(
+    config: &Path,
+    which: &str,
+) -> Vec<String> {
     let done = Command::new(config).arg(which).output().expect("sdl2-config runs");
     String::from_utf8_lossy(&done.stdout).split_whitespace().map(str::to_owned).collect()
 }
@@ -32,8 +39,9 @@ fn the_sdl_platform_presents_what_the_program_draws() {
     smoke(None);
 }
 
-/// ThreadSanitizer reported data races between the program and the SDL thread (mode, palette and cursor state, the
-/// audio tone) and failed the first frame check: the smoke now passes clean.
+/// ThreadSanitizer reported data races between the program and the SDL thread
+/// (mode, palette and cursor state, the audio tone) and failed the first frame
+/// check: the smoke now passes clean.
 #[test]
 fn the_sdl_platform_is_race_free_under_thread_sanitizer() {
     smoke(Some("thread"));
@@ -42,7 +50,11 @@ fn the_sdl_platform_is_race_free_under_thread_sanitizer() {
 fn smoke(sanitize: Option<&str>) {
     let config = sdl2_config().unwrap_or_else(|| {
         let built = Command::new(root().join("tools/build-sdl2.sh")).output().expect("tools/build-sdl2.sh runs");
-        assert!(built.status.success(), "no SDL2, and tools/build-sdl2.sh failed: {}", String::from_utf8_lossy(&built.stderr));
+        assert!(
+            built.status.success(),
+            "no SDL2, and tools/build-sdl2.sh failed: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
         PathBuf::from(String::from_utf8_lossy(&built.stdout).trim())
     });
     let qb = root().join("runtime/qb");
@@ -58,8 +70,8 @@ fn smoke(sanitize: Option<&str>) {
     }
     let runtime = [
         "console", "cntext", "cngfx", "gfx", "gline", "gcirc", "gpaint", "gputget", "gdraw", "play", "inkey", "sleep",
-        "timer", "datetime", "events", "screen", "varptr", "fout", "i8out", "bigint", "ifout", "fin", "rtinit", "rtterm",
-        "error", "nhstutil", "stcore", "nheap", "strcase", "string",
+        "timer", "datetime", "events", "screen", "varptr", "fout", "i8out", "bigint", "ifout", "fin", "rtinit",
+        "rtterm", "error", "nhstutil", "stcore", "nheap", "strcase", "string",
     ];
     for module in runtime {
         build.arg(qb.join(format!("{module}.c")));
@@ -101,7 +113,8 @@ fn smoke(sanitize: Option<&str>) {
         .expect("the program runs");
     std::fs::remove_file(&out).ok();
     let printed = String::from_utf8_lossy(&done.stdout).into_owned();
-    // A kernel with high ASLR entropy leaves the sanitizer no shadow memory: it never ran the program.
+    // A kernel with high ASLR entropy leaves the sanitizer no shadow memory: it
+    // never ran the program.
     if sanitize.is_some() && String::from_utf8_lossy(&done.stderr).contains("ThreadSanitizer can not mmap") {
         eprintln!("skipped: ThreadSanitizer cannot map its shadow memory on this kernel (vm.mmap_rnd_bits)");
         return;
@@ -110,20 +123,25 @@ fn smoke(sanitize: Option<&str>) {
     assert_eq!(printed.trim(), "ok");
 }
 
-/// On macOS (case-insensitive) `#include "sdl.h"` found SDL2's own `SDL.h` first, so none of this platform's
-/// declarations reached sdl_smoke.c and it failed with implicit declarations. No header here may differ from an
+/// On macOS (case-insensitive) `#include "sdl.h"` found SDL2's own `SDL.h`
+/// first, so none of this platform's declarations reached sdl_smoke.c and it
+/// failed with implicit declarations. No header here may differ from an
 /// SDL2 header only by case.
 #[test]
 fn no_header_collides_with_sdl2_case_insensitively() {
     let dir = root().join("runtime/qb/dev/sdl");
     for entry in std::fs::read_dir(dir).unwrap() {
         let name = entry.unwrap().file_name().to_string_lossy().to_lowercase();
-        assert_ne!(name, "sdl.h", "runtime/qb/dev/sdl/{name} collides with SDL2's SDL.h on case-insensitive file systems");
+        assert_ne!(
+            name, "sdl.h",
+            "runtime/qb/dev/sdl/{name} collides with SDL2's SDL.h on case-insensitive file systems"
+        );
     }
 }
 
-/// The window used to stretch to any size with SDL's logical size, so a resized window showed uneven pixels. `sdl_fit`
-/// gives the largest 4:3 picture that fits, centred.
+/// The window used to stretch to any size with SDL's logical size, so a resized
+/// window showed uneven pixels. `sdl_fit` gives the largest 4:3 picture that
+/// fits, centred.
 #[test]
 fn the_picture_fills_the_window_at_four_to_three() {
     let qb = root().join("runtime/qb");

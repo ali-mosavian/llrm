@@ -49,8 +49,9 @@ fn a_global_array_is_indexed_in_the_access() {
     assert!(!asm.lines().any(|l| l.trim().starts_with("add") && l.contains("lsl #2")), "{asm}");
 }
 
-/// QB's store of a SINGLE writes `fpround float %x to float`; the selector refused it ("the cast FPRound") and no QB
-/// program with a SINGLE variable compiled for arm64.
+/// QB's store of a SINGLE writes `fpround float %x to float`; the selector
+/// refused it ("the cast FPRound") and no QB program with a SINGLE variable
+/// compiled for arm64.
 #[test]
 fn fpround_of_a_float_to_its_own_type_is_the_value() {
     let text = "target triple = \"aarch64-unknown-linux-gnu\"\ntarget datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n\ndefine float @f(float %x) {\nb1:\n  %y = fpround float %x to float\n  ret float %y\n}\n";

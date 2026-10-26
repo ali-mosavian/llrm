@@ -1,4 +1,5 @@
-//! The source lists the host tests share (tests/qb_headless.rs, tests/qb_arm64.rs).
+//! The source lists the host tests share (tests/qb_headless.rs,
+//! tests/qb_arm64.rs).
 
 /// The headless device and the host video it draws on.
 pub const DEVICE: [&str; 4] = [
@@ -8,7 +9,8 @@ pub const DEVICE: [&str; 4] = [
     "runtime/qb/dev/host/tick.c",
 ];
 
-/// The portable runtime, the host glue and the OS layer: what a program that drives the runtime's entries links.
+/// The portable runtime, the host glue and the OS layer: what a program that
+/// drives the runtime's entries links.
 pub const RUNTIME: [&str; 36] = [
     "runtime/qb/console.c",
     "runtime/qb/cntext.c",

@@ -269,12 +269,14 @@ pub fn natively_called(
                     .is_some_and(|name| llrm_core::abi::runtime::semantics::keeps_stack_abi(name))
         };
         let natives: Vec<bool> = function.calls.iter().map(native).collect();
-        // A host's stack-block routines are C varargs: they keep the order BASIC pushes them in, and the caller
-        // removes them.
+        // A host's stack-block routines are C varargs: they keep the order
+        // BASIC pushes them in, and the caller removes them.
         if hosted {
             for call in function.calls.iter_mut().filter(|call| {
                 call.callee.is_none()
-                    && called.get(&call.instruction).is_some_and(|name| llrm_core::abi::qb::HOST_STACK_BLOCKS.contains(&name.as_str()))
+                    && called
+                        .get(&call.instruction)
+                        .is_some_and(|name| llrm_core::abi::qb::HOST_STACK_BLOCKS.contains(&name.as_str()))
             }) {
                 call.cleanup = model::StackCleanup::Caller;
                 call.convention = named.clone();

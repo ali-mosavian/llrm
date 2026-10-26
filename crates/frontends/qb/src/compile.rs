@@ -314,8 +314,7 @@ fn _header(
     }
     // The addends live in the image. The remaining words are zero.
     // OF_DS is BC_DS + 2.
-    out[words.segments[0]..words.segments[0] + words.width]
-        .copy_from_slice(&2u64.to_le_bytes()[..words.width]);
+    out[words.segments[0]..words.segments[0] + words.width].copy_from_slice(&2u64.to_le_bytes()[..words.width]);
     Ok(out)
 }
 
@@ -448,9 +447,10 @@ fn rich_assembled(
     for object_ in _placed(module) {
         placed[_segment(object_)].push(basic::Item::Object(object_.id));
     }
-    // A host has no B$ENRA: every procedure frames itself (the zero fill above covers what the runtime's frame
-    // would have cleared).
-    let hosted = llrm_target::object::Format::parse(codegen.object_format).is_ok_and(|one| one != llrm_target::object::Format::Omf);
+    // A host has no B$ENRA: every procedure frames itself (the zero fill above
+    // covers what the runtime's frame would have cleared).
+    let hosted = llrm_target::object::Format::parse(codegen.object_format)
+        .is_ok_and(|one| one != llrm_target::object::Format::Omf);
     let frames = module
         .functions
         .iter()

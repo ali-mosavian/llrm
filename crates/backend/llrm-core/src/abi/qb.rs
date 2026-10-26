@@ -896,8 +896,9 @@ impl HirAbi {
     }
 }
 
-/// The stack-block routines a host's runtime defines as C varargs (runtime/qb/posix/blockentries.c): called as BASIC
-/// pushes them, the caller removes what it pushed.
+/// The stack-block routines a host's runtime defines as C varargs
+/// (runtime/qb/posix/blockentries.c): called as BASIC pushes them, the caller
+/// removes what it pushed.
 pub const HOST_STACK_BLOCKS: [&str; 7] = ["B$DDIM", "B$RDIM", "B$RDMP", "B$CLOS", "B$COLR", "B$LOCT", "B$CSCN"];
 
 /// A routine of llrm's runtime, called as the target calls any function: the

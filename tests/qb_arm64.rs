@@ -1,6 +1,8 @@
-//! The host runtime on arm64 Linux: the headless tests of tests/qb_headless.rs built with clang for aarch64 against a
-//! private sysroot (tools/build-arm64-sysroot.sh) and run under qemu-aarch64. A machine without clang, lld or qemu fails
-//! here by name; it does not skip. An arm64 Mac runs the same C natively (docs/working/qb-host.md, "Mac session").
+//! The host runtime on arm64 Linux: the headless tests of tests/qb_headless.rs
+//! built with clang for aarch64 against a private sysroot
+//! (tools/build-arm64-sysroot.sh) and run under qemu-aarch64. A machine without
+//! clang, lld or qemu fails here by name; it does not skip. An arm64 Mac runs
+//! the same C natively (docs/working/qb-host.md, "Mac session").
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -14,13 +16,19 @@ fn root() -> &'static Path {
 }
 
 fn sysroot() -> PathBuf {
-    let made = Command::new(root().join("tools/build-arm64-sysroot.sh")).output().expect("tools/build-arm64-sysroot.sh runs");
+    let made =
+        Command::new(root().join("tools/build-arm64-sysroot.sh")).output().expect("tools/build-arm64-sysroot.sh runs");
     assert!(made.status.success(), "no arm64 sysroot: {}", String::from_utf8_lossy(&made.stderr));
     PathBuf::from(String::from_utf8_lossy(&made.stdout).trim())
 }
 
-/// Builds `sources` for aarch64 Linux, runs the program under qemu; its standard output.
-fn build_and_run(name: &str, sources: &[&str], arguments: &[&str]) -> String {
+/// Builds `sources` for aarch64 Linux, runs the program under qemu; its
+/// standard output.
+fn build_and_run(
+    name: &str,
+    sources: &[&str],
+    arguments: &[&str],
+) -> String {
     let out = std::env::temp_dir().join(format!("{name}_arm64_{}", std::process::id()));
     build_and_run_with(name, sources, arguments, None, &out, &[])
 }
@@ -40,9 +48,15 @@ fn build_and_run_with(
     let qb = root().join("runtime/qb");
     let mut build = Command::new("clang");
     build.args(["--target=aarch64-linux-gnu", "-fuse-ld=lld", "-static", "-std=gnu11", "-w", "-g", "-pthread"]);
-    // the root, not the libc directory: libm.a is a linker script that names /usr/aarch64-linux-gnu/lib/libm-2.42.a
+    // the root, not the libc directory: libm.a is a linker script that names
+    // /usr/aarch64-linux-gnu/lib/libm-2.42.a
     build.arg(format!("--sysroot={}", sysroot.display())).arg(format!("-B{}", gcc.display()));
-    build.arg(format!("-L{}", gcc.display())).arg(format!("-L{}", libc.join("lib").display())).arg("-isystem").arg(libc.join("include")).arg("-D__cdecl=");
+    build
+        .arg(format!("-L{}", gcc.display()))
+        .arg(format!("-L{}", libc.join("lib").display()))
+        .arg("-isystem")
+        .arg(libc.join("include"))
+        .arg("-D__cdecl=");
     for include in ["posix", ".", "dev", "dev/headless", "dev/host", "../shared/posix"] {
         build.arg("-I").arg(qb.join(include));
     }
@@ -53,11 +67,21 @@ fn build_and_run_with(
     build.arg("-lm").arg("-o").arg(out);
     let built = build.output().expect("clang runs");
     assert!(built.status.success(), "{name}: {}", String::from_utf8_lossy(&built.stderr));
-    let done = Command::new("qemu-aarch64").arg(out).args(arguments).envs(environment.iter().copied()).output().expect("qemu-aarch64 runs");
+    let done = Command::new("qemu-aarch64")
+        .arg(out)
+        .args(arguments)
+        .envs(environment.iter().copied())
+        .output()
+        .expect("qemu-aarch64 runs");
     std::fs::remove_file(out).ok();
     let printed = String::from_utf8_lossy(&done.stdout).into_owned();
-    // 124: the headless driver ended a program that was still waiting, with the screen it had (QB_HEADLESS_SECONDS)
-    assert!(done.status.success() || done.status.code() == Some(124), "{name} failed:\n{printed}{}", String::from_utf8_lossy(&done.stderr));
+    // 124: the headless driver ended a program that was still waiting, with the
+    // screen it had (QB_HEADLESS_SECONDS)
+    assert!(
+        done.status.success() || done.status.code() == Some(124),
+        "{name} failed:\n{printed}{}",
+        String::from_utf8_lossy(&done.stderr)
+    );
     printed
 }
 
@@ -70,8 +94,9 @@ fn the_headless_device_does_what_the_interface_says_on_arm64() {
     assert_eq!(printed.trim(), "ok");
 }
 
-/// The dirty-line protocol under a writer and a presenter thread (tests/qb_dirty.rs); qemu orders memory strongly on an
-/// x86 host, so a tear shows only on arm64 hardware.
+/// The dirty-line protocol under a writer and a presenter thread
+/// (tests/qb_dirty.rs); qemu orders memory strongly on an x86 host, so a tear
+/// shows only on arm64 hardware.
 #[test]
 fn the_presenter_never_sees_a_torn_line_on_arm64() {
     let sources = [
@@ -99,14 +124,23 @@ fn the_runtimes_statements_run_on_arm64() {
     assert_eq!(build_and_run("program_test_arm64", &sources, &[]).trim(), "ok");
 }
 
-/// Compiles `source` for arm64 Linux (`llrm-qb --arm64=linux`), links it with the whole host runtime on the headless
-/// device and runs it under qemu; the text its screen shows.
-fn run_basic(name: &str, source: &[u8]) -> String {
+/// Compiles `source` for arm64 Linux (`llrm-qb --arm64=linux`), links it with
+/// the whole host runtime on the headless device and runs it under qemu; the
+/// text its screen shows.
+fn run_basic(
+    name: &str,
+    source: &[u8],
+) -> String {
     run_basic_with(name, source, &[])
 }
 
-/// `run_basic`, with environment variables for the headless driver (runtime/qb/dev/headless/main.c).
-fn run_basic_with(name: &str, source: &[u8], environment: &[(&str, &str)]) -> String {
+/// `run_basic`, with environment variables for the headless driver
+/// (runtime/qb/dev/headless/main.c).
+fn run_basic_with(
+    name: &str,
+    source: &[u8],
+    environment: &[(&str, &str)],
+) -> String {
     let dir = std::env::temp_dir().join(format!("{name}_arm64_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let bas = dir.join(format!("{name}.bas"));
@@ -156,16 +190,18 @@ fn run_basic_with(name: &str, source: &[u8], environment: &[(&str, &str)]) -> St
     printed
 }
 
-/// `PRINT "HELLO"` through llrm-qb's own arm64 code: the first QB program to run on arm64. Before `--arm64` the compiler
-/// had no route to the arm64 backend at all.
+/// `PRINT "HELLO"` through llrm-qb's own arm64 code: the first QB program to
+/// run on arm64. Before `--arm64` the compiler had no route to the arm64
+/// backend at all.
 #[test]
 fn print_hello_runs_on_arm64() {
     assert_eq!(run_basic("hello", b"PRINT \"HELLO\"\nEND\n").trim_end(), "HELLO");
 }
 
-/// NIBBLES (QB 4.5's demo, from `QB45_DEMOS_DIR`) typed through its questions on arm64: its READ/DATA colour table, the
-/// SINGLE and DOUBLE arithmetic of its speed calibration, INPUT and the graphics-free screen. The level screen it reaches
-/// says "Level 1, Push Space".
+/// NIBBLES (QB 4.5's demo, from `QB45_DEMOS_DIR`) typed through its questions
+/// on arm64: its READ/DATA colour table, the SINGLE and DOUBLE arithmetic of
+/// its speed calibration, INPUT and the graphics-free screen. The level screen
+/// it reaches says "Level 1, Push Space".
 #[test]
 fn nibbles_reaches_its_first_level_on_arm64() {
     let Some(dir) = std::env::var_os("QB45_DEMOS_DIR") else {
@@ -181,8 +217,9 @@ fn nibbles_reaches_its_first_level_on_arm64() {
     assert!(screen.contains("Level 1,  Push Space"), "{screen}");
 }
 
-/// GORILLA (QB 4.5's demo) typed through its intro and four questions on arm64: SparklePause's INKEY$ loop, INPUT of
-/// SINGLE and DOUBLE values and the menu text. A shot in the city (SCREEN 9, floats) was checked by eye, not here.
+/// GORILLA (QB 4.5's demo) typed through its intro and four questions on arm64:
+/// SparklePause's INKEY$ loop, INPUT of SINGLE and DOUBLE values and the menu
+/// text. A shot in the city (SCREEN 9, floats) was checked by eye, not here.
 #[test]
 fn gorilla_reaches_its_menu_on_arm64() {
     let Some(dir) = std::env::var_os("QB45_DEMOS_DIR") else {
@@ -198,8 +235,9 @@ fn gorilla_reaches_its_menu_on_arm64() {
     assert!(screen.contains("Your Choice?"), "{screen}");
 }
 
-/// `ON ERROR GOTO` landed nowhere on arm64: `ERROR 5` ended the program (exit 1) before the handler printed anything.
-/// The handler now runs, RESUME NEXT continues after the faulting statement, and the module handler also takes an
+/// `ON ERROR GOTO` landed nowhere on arm64: `ERROR 5` ended the program (exit
+/// 1) before the handler printed anything. The handler now runs, RESUME NEXT
+/// continues after the faulting statement, and the module handler also takes an
 /// error raised in a procedure that has none.
 #[test]
 fn on_error_lands_in_its_handler_on_arm64() {
@@ -212,18 +250,21 @@ fn on_error_lands_in_its_handler_on_arm64() {
     );
 }
 
-/// A handled function whose first block after the entry is a loop header has a phi with an edge from the entry; the
-/// landing split the entry and the phi named a block that no longer branched there ("a phi with no value for an edge",
-/// GORILLA's PlaceGorillas).
+/// A handled function whose first block after the entry is a loop header has a
+/// phi with an edge from the entry; the landing split the entry and the phi
+/// named a block that no longer branched there ("a phi with no value for an
+/// edge", GORILLA's PlaceGorillas).
 #[test]
 fn a_handled_function_may_start_with_a_loop_on_arm64() {
     let source = b"DEFINT A-Z\r\nON ERROR GOTO h\r\nFOR i = 1 TO 3\r\nPRINT i;\r\nNEXT\r\nERROR 9\r\nPRINT \"done\"\r\nEND\r\nh:\r\nRESUME NEXT\r\n";
     assert_eq!(run_basic("onerror_loop", source).split_whitespace().collect::<Vec<_>>(), ["1", "2", "3", "done"]);
 }
 
-/// Darwin's AAPCS64 has the caller extend narrow arguments, and `PRINT -1` passed `i16 -1` bare: the clang-built runtime
-/// read 65535 and NIBBLES died on VIEW PRINT with "Illegal function call" on the Mac. Only a Mac can run it; this reads
-/// the text the backend gets: Darwin marks the runtime's `i16` arguments `signext`, Linux (callee extends) does not.
+/// Darwin's AAPCS64 has the caller extend narrow arguments, and `PRINT -1`
+/// passed `i16 -1` bare: the clang-built runtime read 65535 and NIBBLES died on
+/// VIEW PRINT with "Illegal function call" on the Mac. Only a Mac can run it;
+/// this reads the text the backend gets: Darwin marks the runtime's `i16`
+/// arguments `signext`, Linux (callee extends) does not.
 #[test]
 fn darwin_callers_extend_narrow_arguments_to_the_runtime() {
     let dir = std::env::temp_dir().join(format!("signext_{}", std::process::id()));
@@ -248,8 +289,9 @@ fn darwin_callers_extend_narrow_arguments_to_the_runtime() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// `INT((row + 1) / 2)` with a SINGLE `row` took the INTEGER shortcut for INT(n / constant), set the `+ 1` aside and
-/// never put it back for a float `n`: `row = 3` printed 1, not 2 (NIBBLES' arena rows were off, on every target).
+/// `INT((row + 1) / 2)` with a SINGLE `row` took the INTEGER shortcut for INT(n
+/// / constant), set the `+ 1` aside and never put it back for a float `n`: `row
+/// = 3` printed 1, not 2 (NIBBLES' arena rows were off, on every target).
 #[test]
 fn int_of_a_single_sum_over_a_constant_keeps_the_sum() {
     let source = b"row = 3\r\nPRINT INT((row + 1) / 2); INT((row - 1) / 2); INT((row + 1) / 4)\r\nEND\r\n";

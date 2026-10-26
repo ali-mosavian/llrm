@@ -1879,7 +1879,8 @@ fn declare_outside(
         if instruction.op == Op::Concat
             && tables.spaces.segment_space().is_err()
             && !tables.callees.contains_key(REAL_ADDRESS)
-            && let Ok(to) = value_type(&mut module.context.types, &tables.spaces, tables.types[&values[&instruction.results[0]]])
+            && let Ok(to) =
+                value_type(&mut module.context.types, &tables.spaces, tables.types[&values[&instruction.results[0]]])
             && let Type::Pointer(space) = *module.context.types.get(to)
             && (tables.layout.pointer(space).bits == 64 || tables.hosted)
         {
@@ -2173,7 +2174,8 @@ pub const RETURNS_TWICE: &str = "returns_twice";
 
 /// What the language promises holds, LLVM's intrinsic.
 const ASSUME: &str = "llvm.assume";
-/// The runtime routine that places a byte of the PC's low memory on a 64-bit host.
+/// The runtime routine that places a byte of the PC's low memory on a 64-bit
+/// host.
 const REAL_ADDRESS: &str = "B$REAL";
 
 /// Where a variadic function's variadic arguments start, stored in a list.

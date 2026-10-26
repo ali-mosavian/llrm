@@ -160,7 +160,8 @@ impl Selector<'_> {
                 self.inst(Inst::FpToFp { to: target, from, rd, rn });
                 self.define(result, Src::Val(Val::Float { reg: rd, size: target }))
             }
-            // BASIC's store of a SINGLE or DOUBLE rounds it to its type; the machine's floats are that type already.
+            // BASIC's store of a SINGLE or DOUBLE rounds it to its type; the
+            // machine's floats are that type already.
             CastOp::FPRound => {
                 let (reg, size) = self.float_operand(source)?;
                 self.define(result, Src::Val(Val::Float { reg, size }))

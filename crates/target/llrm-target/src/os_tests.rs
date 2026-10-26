@@ -1,5 +1,6 @@
-//! The POSIX host layer's C header is rendered from the interface; the copy in the tree is the one the
-//! host runtime includes, so it must be the rendering (`LLRM_BLESS=1` writes it).
+//! The POSIX host layer's C header is rendered from the interface; the copy in
+//! the tree is the one the host runtime includes, so it must be the rendering
+//! (`LLRM_BLESS=1` writes it).
 
 use crate::os::Interface;
 

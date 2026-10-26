@@ -1112,9 +1112,11 @@ pub struct RuntimePromises {
     /// Whether a routine raises its error: the program asks for run-time
     /// checks, or handles errors.
     pub checked: bool,
-    /// The runtime is a host's, linked as C: the PC's low memory (DEF SEG, PEEK, POKE) is its image of it, which
-    /// `B$REAL` places a byte in (a host has no memory there, whatever its pointers' width), and its stack-block
-    /// routines are C varargs the caller cleans up. Not carried in a program's text.
+    /// The runtime is a host's, linked as C: the PC's low memory (DEF SEG,
+    /// PEEK, POKE) is its image of it, which `B$REAL` places a byte in (a
+    /// host has no memory there, whatever its pointers' width), and its
+    /// stack-block routines are C varargs the caller cleans up. Not carried
+    /// in a program's text.
     pub hosted: bool,
 }
 

@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 /// 32-bit assembly directories of the runtime: what runs with ECX as the count.
-const DIRECTORIES: &[&str] = &["runtime/qb/dos/m32", "runtime/qb/dev/dos/m32", "runtime/shared/dos/m32", "runtime/c/x86-m32"];
+const DIRECTORIES: &[&str] =
+    &["runtime/qb/dos/m32", "runtime/qb/dev/dos/m32", "runtime/shared/dos/m32", "runtime/c/x86-m32"];
 
 /// The registers an operand names, lowercase, from `mov  cl, byte ptr [x]`'s
 /// destination.
