@@ -17,6 +17,7 @@ mod add_simplify;
 mod and_fold;
 mod and_simplify;
 mod bit_counts;
+mod bit_reverse;
 mod bit_test;
 mod bitcast_float;
 mod bool_test_flags;

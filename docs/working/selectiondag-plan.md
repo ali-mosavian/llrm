@@ -227,6 +227,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD212 | sdag-b | `SimplifyDemandedBits`: and/or/xor, shifts by a constant, zext/anyext/trunc only; no `ShrinkDemandedOp`, no narrowing rewrites, no SRA/ADD/SUB/MUL/SELECT cases | `selectiondag/demanded_bits.rs` |
 | SD214 | sdag-b | `FLOG`/`FEXP`/`FLOG2`/`FEXP2`/`FSIN`/`FCOS`/`FATAN`/`FRINT` select as the x87 sequences the finalizer spells (`fln`, `fexp`, ...), not libm calls: no target has a libm (`Target::has_libm`); with one, the node is refused (the pin's libcall is not translated) | `llrm-dagisel/src/x86_llrm.rs` |
 | SD215 | sdag-b | `X86ISD::FIST` of an `i16` selects `IST_Fp16m32/64/80`, which the pin has no pattern for (its `lrint` of a short is promoted); QB's `CINT` needs a word `fistp` | `llrm-dagisel/src/x86_fcmp.rs` |
+| SD218 | sdag-b | `expandBITREVERSE` is the byte-swap and mask form only (no loop of single bits for a width that is not a power of two; none is legal here) | `selectiondag/legalize_dag.rs` |
 
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |
 | SD101 | sdag-a | `freeze` folds away only for a constant or a `freeze` (`isGuaranteedNotToBeUndefOrPoison` is partial) | `selectiondag/fold.rs` |

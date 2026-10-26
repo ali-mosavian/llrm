@@ -87,6 +87,7 @@ impl Builder<'_> {
                 self.dag.get_node(code, dest, &[first])
             }
             Intrinsic::ByteSwap => self.dag.get_node(ISD::BSwap, dest, &[first]),
+            Intrinsic::BitReverse => self.dag.get_node(ISD::BitReverse, dest, &[first]),
             Intrinsic::Abs => {
                 let poison = matches!(
                     instruction.operands.get(1),
