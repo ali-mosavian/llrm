@@ -9375,7 +9375,11 @@ impl Compiler {
             if matches!(from, SINGLE | DOUBLE) {
                 let operand = self.convert(operand, from, DOUBLE)?;
                 let wide = self.computed("convert", EXTENDED, vec![operand]);
-                let factor = self.floating_literal("10000", EXTENDED)?;
+                // A SINGLE holds 10000 exactly, and a 4-byte constant is the
+                // pin's pool entry for it where a 10-byte one
+                // is not.
+                let factor = self.floating_literal("10000", SINGLE)?;
+                let factor = self.computed("convert", EXTENDED, vec![factor]);
                 let scaled = self.computed("fmul", EXTENDED, vec![wide, factor]);
                 return Ok(self.computed("convert", CURRENCY, vec![scaled]));
             }
@@ -9841,9 +9845,6 @@ impl Compiler {
                 .map(f64::to_le_bytes)
                 .map(Vec::from)
                 .map_err(|_| SemanticError { message: format!("invalid DOUBLE constant {text}") })?,
-            // 10000 as an x87 extended: biased exponent 0x400c, mantissa 0x9c40
-            // << 48.
-            EXTENDED if text == "10000" => vec![0, 0, 0, 0, 0, 0, 0x40, 0x9c, 0x0c, 0x40],
             _ => return self.fail("internal error: a floating literal has a non-floating type"),
         };
         // BC pools identical floating constants across a whole module. Apart
