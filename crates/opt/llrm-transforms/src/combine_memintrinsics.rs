@@ -50,6 +50,7 @@ impl Combiner<'_> {
     ) -> Visit {
         match self.intrinsic_of(call) {
             Some(Intrinsic::MemCpy | Intrinsic::MemMove) => self.simplify_any_mem_transfer(call),
+            Some(Intrinsic::MinMax { signed, max }) => self.narrow_min_max(call, signed, max),
             _ => Visit::None,
         }
     }

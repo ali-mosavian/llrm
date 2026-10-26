@@ -842,6 +842,7 @@ pub(crate) fn llvm_order(
                     "rotate@728",
                     Box::new(looprotate::LoopRotate {
                         duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
+                        size: applied.options.prefers_size(),
                     }),
                 ));
                 list.extend(canonical("loopsimplify@728", "lcssa@728"));

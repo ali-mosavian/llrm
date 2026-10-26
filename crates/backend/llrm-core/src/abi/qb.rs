@@ -110,6 +110,9 @@ static _AUDITED_GRAPHICS_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(||
         // grview.asm: seven Pascal words; `void pascal B$VEW0()`.
         ("B$VIEW", 14),
         ("B$VEW0", 0),
+        // grwindow.asm: four R4 and a word; `void pascal B$WIN0()`.
+        ("B$WIND", 18),
+        ("B$WIN0", 0),
         ("B$FTAB", 2),
     ])
 });
