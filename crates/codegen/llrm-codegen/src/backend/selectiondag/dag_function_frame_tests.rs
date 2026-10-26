@@ -85,13 +85,14 @@ define i32 @f(i32 %a) {
 entry:
   %p = alloca i32
   store i32 %a, ptr %p
-  %v = load i32, ptr %p
+  %v = load volatile i32, ptr %p
   ret i32 %v
 }
 ";
 
 /// A local is a cell below the frame pointer, written and read at one
-/// displacement; frame object 0 was `Emit(Unsupported(frame index 0))` in
+/// displacement (the load is volatile: a plain one is forwarded from the
+/// store); frame object 0 was `Emit(Unsupported(frame index 0))` in
 /// 10 functions of the corpora.
 #[test]
 fn a_local_is_a_frame_cell_below_bp() {
