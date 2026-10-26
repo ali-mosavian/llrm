@@ -31,12 +31,6 @@ owner = "w3"
 date = "2026-11-02"
 why = "LSR no longer counts to zero at flat i486 -O2 -m32: loop per trip main 5 instrs, tip 6, pin 6; the m16 bounds variant is w2's hoisted-invariant pressure (w13)"
 [[xfail]]
-id = "integration header_copy::test_a_fixed_point_product_in_a_rotated_loop_is_still_narrowed"
-issue = 4902
-owner = "w5"
-date = "2026-11-02"
-why = "mandel.nib -O2 m16 -ftree-ch: main 0 shrd / 50 instrs, tip 3 shrd / 70; the ranges lost x's bound behind the copy (no clang pin: nib)"
-[[xfail]]
 id = "integration header_copy::test_a_counted_exits_number_lets_its_counter_step_in_place"
 issue = 4903
 owner = "w3"
@@ -66,12 +60,6 @@ issue = 4924
 owner = "w4"
 date = "2026-11-02"
 why = "(i*97)%211 -Os m32: main 23 instrs (one idiv), tip 35 (two div, spill), pin 38; first bad 2abaf530fa"
-[[xfail]]
-id = "integration greedy_inline::a_load_that_can_be_made_again_is_not_kept_in_a_register_at_the_cost_of_a_spill"
-issue = 4925
-owner = "w2"
-date = "2026-11-02"
-why = "sum_three.bas SUMTHREE -O2: main 56 instrs no spill, tip 74 with sub sp (no pin: BASIC); first bad 7ee16741c1"
 [[xfail]]
 id = "integration flat_foreign::a_store_to_the_video_buffer_does_not_reload_a_variable"
 issue = 4932

@@ -5210,6 +5210,50 @@ fn test_a_reload_stays_across_a_volatile_access() {
     assert_eq!(store_then_reload(vec![device]), 3);
 }
 
+/// quicksort `_sort` at m16 -Os: `mov [bp-2],cx ; ... ; mov bx,[bp-2]` read a
+/// cell back into another register while `cx` still held it. Returns the
+/// reload's source register, or `None` when it still reads the cell.
+fn store_then_reload_elsewhere(between: Vec<Insn>) -> Option<RegId> {
+    let cell = || Loc::Mem(mem(frame(-2), 2, RegId::BP, -2, 1));
+    let mov = |at: i64, dests: Vec<Loc>, sources: Vec<Loc>| Insn {
+        spill_store: dests.iter().any(|d| matches!(d, Loc::Mem(_))),
+        ..insn(at, Some((at, at + 2)), Some(sem(Operation::Move, "mov", dests, sources)), vec![], vec![])
+    };
+    let mut insns = vec![Arc::new(mov(0, vec![cell()], vec![rl(RegId::CX, 2)]))];
+    insns.extend(between.into_iter().map(Arc::new));
+    insns.push(Arc::new(mov(100, vec![rl(RegId::BX, 2)], vec![cell()])));
+    insns.push(Arc::new(insn(
+        200,
+        Some((200, 200)),
+        Some(sem(Operation::Return, "ret", vec![], vec![])),
+        vec![],
+        vec![],
+    )));
+    let done = forwarded_copies(rules(), &body("forwarded-copy", 0, vec![block(0, insns, vec![]).into()]));
+    let reload = whats(&done.blocks[0].insns).into_iter().rev().nth(1)?.clone();
+    match reload.sources.as_slice() {
+        [Loc::Reg(held)] => Some(held.register),
+        _ => None,
+    }
+}
+
+#[test]
+fn test_a_reload_into_another_register_copies_the_register_that_filled_the_cell() {
+    assert_eq!(store_then_reload_elsewhere(vec![]), Some(RegId::CX));
+}
+
+#[test]
+fn test_a_reload_into_another_register_stays_where_the_filling_register_is_written() {
+    let write = insn(
+        10,
+        Some((10, 12)),
+        Some(sem(Operation::Binary, "add", vec![rl(RegId::CX, 2)], vec![rl(RegId::CX, 2), im(1, 2)])),
+        vec![],
+        vec![],
+    );
+    assert_eq!(store_then_reload_elsewhere(vec![write]), None);
+}
+
 /// x87 `lrint` at m16 -Os: `fistp [bp-4] ; mov eax,[bp-4] ; mov [bp-8],eax`
 /// kept the value in a second cell across a call, 4 bytes of frame and one
 /// instruction more than main. Returns the cells the reloads at the end read

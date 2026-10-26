@@ -87,6 +87,20 @@ def test_a_pr_that_merges_but_does_not_build_alone_is_refused_with_the_compiler_
     assert why and "does not build as a whole" in why[0] and "expected identifier" in why[0], why
 
 
+def test_a_did_not_run_scanner_red_alone_names_its_cause(tmp_path, monkeypatch):
+    """Eleven PRs were dropped with `integration-did-not-run` and no reason: the cause was recorded but the alone refusal never printed it."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    head = branch(repo, "ok", "b.txt", "b\n")
+    sh(repo, "checkout", "-q", "main")
+    monkeypatch.setitem(ps.parity_smoke_module().CAUSES, "integration-did-not-run", "No space left on device")
+    why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda _: {"integration-did-not-run"})
+    assert why and "No space left on device" in why[0], why
+
+
 def test_two_prs_adding_a_test_of_one_name_do_not_share_a_batch(tmp_path):
     """#4678 and #4680 added the same test in different places: no conflict, so both joined, and the batch failed 'defined multiple times'."""
     repo = tmp_path / "repo"

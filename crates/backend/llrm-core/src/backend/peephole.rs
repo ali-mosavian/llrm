@@ -24,7 +24,8 @@
 //!
 //! ```text
 //!  frame copies -> machinecp -> extensions -> copysink
-//!    -> postrasink -> forwarded reloads -> storecombine -> pushed constants
+//!    -> postrasink -> forwarded reloads -> forwarded copies
+//!    -> storecombine -> pushed constants
 //!    -> pushes, constants, commuted, transferred, high extracts, restored
 //!       copies, shuttles, overwritten, fused, fused calls, far loads,
 //!       loaded segments
@@ -342,6 +343,7 @@ impl Peephole {
             None => body,
         };
         let body = forwarded_reloads(self.rules, &body);
+        let body = forwarded_copies(self.rules, &body);
         let body = storecombine::combined(&body);
         let body = pushed_constants(self.rules, &body);
         let body = far_loads(
@@ -962,6 +964,15 @@ pub fn forwarded_reloads(
     body: &LirBody,
 ) -> LirBody {
     peep::rewritten(rules.forwarded_reloads, body, &Facts::new(body, None))
+}
+
+/// Copy the register that filled a cell instead of reloading the cell into
+/// another register (`peephole.peep`, `forwarded_copies`).
+pub fn forwarded_copies(
+    rules: &peep::Rules,
+    body: &LirBody,
+) -> LirBody {
+    peep::rewritten(rules.forwarded_copies, body, &Facts::new(body, None))
 }
 
 /// Whether `register` in an operand at `addr` is the frame base, which the

@@ -1078,7 +1078,7 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
 
     red = sorted((scanners or default_scanners)(files))
     if red:
-        return [f"scanner red alone: {', '.join(red[:5])}"]
+        return [f"scanner red alone: {', '.join(red[:5])}{smoke.causes_of(red)}"]
     # the unit tests of the crates the PR changes, less what the base fails: round 3 died on llrm-nib::test_pipeline::... and no PR was blamed
     def lib_failures(changed: list[str]) -> set[str]:
         packages, graph = smoke.workspace_graph(cwd)
