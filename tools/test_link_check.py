@@ -18,7 +18,7 @@ def test_a_program_that_does_not_link_is_named_with_its_reason(tmp_path):
 
 def test_only_a_change_to_what_programs_link_against_or_a_target_fact_asks_for_the_link_layer():
     assert lc.touches_runtime(["runtime/c/x86-m32/c.toml"])
-    assert lc.touches_runtime(["runtime/qb/dos/m32/gdscan.asm"])
+    assert lc.touches_runtime(["runtime/qb/dev/dos/m32/gdscan.asm"])
     assert lc.touches_runtime(["crates/target/llrm-x86-m32/src/machines/calling.toml"])
     assert not lc.touches_runtime(["docs/working/readme.md", "crates/backend/llrm-core/src/backend/memcpycall.rs", "tools/parity_squash.py"])
 

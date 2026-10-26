@@ -713,7 +713,7 @@ fn _contract_keeping(
             ),
         ));
     }
-    if name == "B$FLOF" && pushed == 2 {
+    if matches!(name, "B$FLOF" | "B$FLOC" | "B$FSEK") && pushed == 2 {
         return Ok(returns(
             2,
             format!(
@@ -882,6 +882,8 @@ pub struct HirAbi {
     /// The runtime's stack limit and overflow handler, where the program checks
     /// its stack.
     pub stack_check: Option<model::StackCheck>,
+    /// The runtime is a host's (`RuntimePromises::hosted`).
+    pub hosted: bool,
 }
 
 impl HirAbi {
@@ -893,9 +895,15 @@ impl HirAbi {
             objects: functions.filter_map(|one| Some((one.name.clone(), one.symbol.clone()?))).collect(),
             preserved: program.preserved.iter().map(|one| runtime::Reg::from_value(one)).collect::<Result<_, _>>()?,
             stack_check: program.stack_check.clone(),
+            hosted: program.promises.hosted,
         })
     }
 }
+
+/// The stack-block routines a host's runtime defines as C varargs
+/// (runtime/qb/posix/blockentries.c): called as BASIC pushes them, the caller
+/// removes what it pushed.
+pub const HOST_STACK_BLOCKS: [&str; 7] = ["B$DDIM", "B$RDIM", "B$RDMP", "B$CLOS", "B$COLR", "B$LOCT", "B$CSCN"];
 
 /// A routine of llrm's runtime, called as the target calls any function: the
 /// table's effects (what it reads and writes, whether it raises an error or
@@ -907,11 +915,12 @@ fn native_contract(
     pops: bool,
     pushed: i64,
     family: model::RuntimeProfile,
+    hosted: bool,
 ) -> Contract {
     // A routine that keeps BASIC's pushes pops its whole block, however many
     // words the call pushes, so the words beyond its declaration are not
     // the caller's to remove.
-    let pops = pops || runtime::semantics::keeps_stack_abi(name);
+    let pops = pops || (runtime::semantics::keeps_stack_abi(name) && !(hosted && HOST_STACK_BLOCKS.contains(&name)));
     let found = runtime::per_call(&IndexMap::from_iter([(0, name.to_owned())]), family.tables(), &BTreeSet::new())
         .swap_remove(&0)
         .expect("one call in, one contract out");
@@ -966,7 +975,7 @@ impl crate::backend::assemble::Abi for HirAbi {
         let name = callee.strip_prefix(crate::hir::mir::RUNTIME).unwrap_or(callee);
         let runtime_call = callee.starts_with(crate::hir::mir::RUNTIME);
         if self.runtime.calls_natively() && runtime_call {
-            return Ok(native_contract(name, pops, pushed, self.runtime));
+            return Ok(native_contract(name, pops, pushed, self.runtime, self.hosted));
         }
         _contract_keeping(name, runtime_call, cleanup, pushed, self.runtime, &self.preserved).map_err(|error| error.0)
     }

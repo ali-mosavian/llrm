@@ -1174,6 +1174,36 @@ def test_every_stage_of_the_fast_pass_stamps_the_batch_log():
     assert at == sorted(at), "stamped out of the order they run"
 
 
+def test_beside_runs_both_and_joins_the_background_even_when_the_foreground_raises():
+    """The overlap lets the release stages run while the lib tests do; a raising foreground must not leave the background touching the checkout the next pass reuses."""
+    import threading
+
+    started, finished = threading.Event(), []
+
+    def background():
+        started.set()
+        finished.append(True)
+        return "back"
+
+    def foreground():
+        assert started.wait(5), "the background never ran beside the foreground"
+        return "front"
+
+    assert ps.beside(background, foreground) == ("front", "back")
+
+    finished.clear()
+
+    def boom():
+        raise RuntimeError("lib tests died")
+
+    try:
+        ps.beside(lambda: finished.append(True) or "back", boom)
+        raise AssertionError("the foreground error was swallowed")
+    except RuntimeError:
+        pass
+    assert finished == [True], "the background was not finished when beside returned"
+
+
 def test_the_always_on_scanners_run_before_the_lib_tests_of_a_batch():
     """The 11:13 batch ran `lib tests ... 363s` and only then found docs_links red for three PRs: a pass of minutes bought nothing, and each refusal repeats the pass. The scanners
     that take milliseconds (docs_links, no_local_paths) now refuse first; the full set still runs after the lib tests."""

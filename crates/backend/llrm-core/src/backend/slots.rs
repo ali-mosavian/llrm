@@ -396,6 +396,61 @@ pub(crate) fn slots_colored(
     _identities_dropped(&out)
 }
 
+/// `body` with the spill slots no frame cell names any more taken out of
+/// `frame`, and the rest laid out again in the order they were, nearest the
+/// frame register first: a frame that shrinks where a cell was renamed away
+/// (`slotcopies`). The frame and the body are returned changed; with every
+/// slot still named, as they are.
+pub(crate) fn released(
+    body: &LirBody,
+    frame: &mut Frame,
+) -> LirBody {
+    if body.returns_twice || frame.native.is_some() || frame.slots.is_empty() {
+        return body.clone();
+    }
+    let mut named: Vec<i64> = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .flat_map(|one| frame_cells(one).map(|(disp, _, _)| disp))
+        .collect();
+    named.sort_unstable();
+    named.dedup();
+    let mut homes: Vec<i64> = frame.slots.values().copied().collect::<BTreeSet<i64>>().into_iter().collect();
+    homes.sort_unstable_by(|a, b| b.cmp(a));
+    let capacity = |home: i64| frame.capacities.get(&home).copied().unwrap_or(i64::from(WORD)).max(i64::from(WORD));
+    let live: Vec<i64> = homes
+        .iter()
+        .copied()
+        .filter(|home| {
+            named.get(named.partition_point(|disp| *disp < *home)).is_some_and(|disp| *disp < *home + capacity(*home))
+        })
+        .collect();
+    if live.len() == homes.len() {
+        return body.clone();
+    }
+    let mut again = Frame {
+        slots: IndexMap::default(),
+        capacities: IndexMap::default(),
+        stacks: IndexMap::default(),
+        ..frame.clone()
+    };
+    let mut moved: IndexMap<i64, i64> = IndexMap::default();
+    for home in &live {
+        let Some(key) = frame.slots.iter().find(|(_, at)| *at == home).map(|(key, _)| key.clone()) else { continue };
+        let Ok(new) = again.slot(key, capacity(*home)) else { return body.clone() };
+        moved.insert(*home, new);
+    }
+    for (key, home) in &frame.slots {
+        if let Some(new) = moved.get(home) {
+            again.slots.insert(key.clone(), *new);
+        }
+    }
+    let Some(out) = crate::backend::slots::moved(body, &moved) else { return body.clone() };
+    *frame = again;
+    out
+}
+
 /// A plain move between a value and one frame cell: the value and the cell
 /// (displacement, width).
 pub(crate) fn _cell_move(

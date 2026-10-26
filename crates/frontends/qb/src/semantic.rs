@@ -297,6 +297,9 @@ struct Compiler {
     /// where it stands.
     seen: BTreeSet<String>,
     constants: BTreeMap<String, (u32, Number)>,
+    /// CONST names of string literals, which BC substitutes where they are
+    /// used.
+    string_constants: BTreeMap<String, String>,
     signatures: BTreeMap<String, Signature>,
     callables: Vec<Callable>,
     udts: BTreeMap<String, Udt>,
@@ -601,6 +604,7 @@ pub fn compile_debugged(
     }
     shapes::applied(&mut compiler);
     absolute::applied(&mut compiler);
+    absolute::varseg(&mut compiler);
     Ok((compiler.json(), std::mem::take(&mut compiler.warnings)))
 }
 
@@ -1716,6 +1720,7 @@ impl Compiler {
             variables: BTreeMap::new(),
             seen: BTreeSet::new(),
             constants: BTreeMap::new(),
+            string_constants: BTreeMap::new(),
             signatures: BTreeMap::new(),
             callables: Vec::new(),
             udts: BTreeMap::new(),
@@ -2079,7 +2084,31 @@ impl Compiler {
         Ok(())
     }
 
+    /// A TYPE's STRING * n and array bounds may name a CONST declared above it,
+    /// but the module's constants are collected after the types: the numeric
+    /// ones are lent to the types and taken back.
     fn type_declarations(
+        &mut self,
+        module: &Module,
+    ) -> Result<(), SemanticError> {
+        let mut lent = Vec::new();
+        for statement in &module.statements {
+            if let Statement::Const { name, value, .. } = statement {
+                if let Ok(constant) = self.constant(value) {
+                    if self.constants.insert(canonical(name).into(), constant).is_none() {
+                        lent.push(canonical(name).to_owned());
+                    }
+                }
+            }
+        }
+        let result = self.type_declarations_with_constants(module);
+        for name in lent {
+            self.constants.remove(&name);
+        }
+        result
+    }
+
+    fn type_declarations_with_constants(
         &mut self,
         module: &Module,
     ) -> Result<(), SemanticError> {
@@ -2557,6 +2586,15 @@ impl Compiler {
                         if let Some(variable) = self.variables.get_mut(&key) {
                             variable.rank = Some(item.bounds.len());
                         }
+                    }
+                }
+                Statement::Const { name, value, .. } if self.string_constant(value).is_some() => {
+                    let text = self.string_constant(value).unwrap_or_default();
+                    if self.string_constants.insert(canonical(name).into(), text).is_some()
+                        || self.constants.contains_key(canonical(name))
+                        || self.variables.contains_key(&self.variable_key(name))
+                    {
+                        return self.fail(format!("duplicate declaration {name}"));
                     }
                 }
                 Statement::Const { name, value, .. } => {
@@ -5906,12 +5944,35 @@ impl Compiler {
         Operand::Value(address)
     }
 
+    /// The text of a CONST's string value; BC takes only a literal.
+    fn string_constant(
+        &self,
+        expression: &Expr,
+    ) -> Option<String> {
+        match expression {
+            Expr::Literal(Literal::String(text), _) => Some(text.clone()),
+            _ => None,
+        }
+    }
+
+    /// A use of a string constant is its literal.
+    fn string_constant_use(
+        &self,
+        expression: &Expr,
+    ) -> Option<Expr> {
+        let Expr::Name(name, span) = expression else { return None };
+        let text = self.string_constants.get(canonical(name))?;
+        Some(Expr::Literal(Literal::String(text.clone()), *span))
+    }
+
     fn string_assignment(
         &mut self,
         destination: Operand,
         destination_type: u32,
         source: &Expr,
     ) -> Result<(), SemanticError> {
+        let constant_source = self.string_constant_use(source);
+        let source = constant_source.as_ref().unwrap_or(source);
         let destination_width = self
             .string_width(destination_type)
             .ok_or_else(|| SemanticError { message: "string assignment destination lost its type".into() })?;
@@ -6082,6 +6143,9 @@ impl Compiler {
         &mut self,
         expression: &Expr,
     ) -> Result<Operand, SemanticError> {
+        if let Some(literal) = self.string_constant_use(expression) {
+            return self.string_descriptor(&literal);
+        }
         if let Expr::Slice { base, start, end, step, span } = expression {
             let call = slice_call("SLICE$", base, start, end, step, Vec::new(), *span);
             return self.string_descriptor(&call);
@@ -6494,6 +6558,9 @@ impl Compiler {
         &mut self,
         expression: &Expr,
     ) -> Result<(Operand, u32), SemanticError> {
+        if let Some(literal) = self.string_constant_use(expression) {
+            return self.expression(&literal);
+        }
         match expression {
             Expr::Omitted(_) => self.fail("omitted argument used as an expression"),
             Expr::Literal(Literal::Integer(value, type_name), _) => {
@@ -7439,11 +7506,11 @@ impl Compiler {
             self.emit_runtime_call("B$FRI2", vec![result], vec![selector]);
             return Ok(Some((Operand::Value(result), LONG)));
         }
-        if intrinsic.lowering == Lowering::FileLength {
+        if let Lowering::FileQuery(routine) = intrinsic.lowering {
             let (file, file_type) = self.expression(&arguments[0])?;
             let file = self.convert(file, file_type, INTEGER)?;
             let result = self.value(LONG);
-            self.emit_runtime_call("B$FLOF", vec![result], vec![file]);
+            self.emit_runtime_call(routine, vec![result], vec![file]);
             return Ok(Some((Operand::Value(result), LONG)));
         }
         if intrinsic.lowering == Lowering::FileAttribute {
@@ -8770,6 +8837,9 @@ impl Compiler {
         &self,
         expression: &Expr,
     ) -> bool {
+        if self.string_constant_use(expression).is_some() {
+            return true;
+        }
         if let Expr::Unary { op: Unary::Grouped, operand, .. } = expression {
             return self.string_syntax(operand);
         }
