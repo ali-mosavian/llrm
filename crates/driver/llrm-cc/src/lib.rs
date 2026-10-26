@@ -299,6 +299,12 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
             build.llc.push(flag.to_owned());
         } else if LLC_FLAGS.contains(&flag) || LLC_PREFIXES.iter().any(|one| flag.starts_with(one)) {
             build.llc.push(flag.to_owned());
+        } else if flag == "--dump" {
+            // llrm-c's switch: each backend stage written to the directory.
+            build.llc.push(flag.to_owned());
+            build.llc.push(value(&mut at)?);
+        } else if flag.starts_with("--dump=") {
+            build.llc.push(flag.to_owned());
         } else if flag == "-l" || flag == "-L" || flag == "-Xlinker" {
             build.link.push(flag.to_owned());
             build.link.push(value(&mut at)?);

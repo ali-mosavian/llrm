@@ -109,3 +109,13 @@ fn the_backends_switches_reach_the_backend() {
     );
     assert_eq!(one.clang, words("-march=i486"));
 }
+
+/// `--dump d` was taken for an input: "cannot specify -o with several
+/// inputs" and no stage written.
+#[test]
+fn dump_reaches_the_backend_with_its_directory() {
+    let one = built("--dump d -c x.c");
+    assert_eq!(one.llc, words("--dump d"));
+    assert_eq!(one.inputs.len(), 1);
+    assert_eq!(built("--dump=d -c x.c").llc, words("--dump=d"));
+}

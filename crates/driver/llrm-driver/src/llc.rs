@@ -3,7 +3,7 @@
 //! pipeline and backend to an object. The target is the one whose `llvm_triple`
 //! the module's `target triple` names, or the `-m` flag's.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use llrm_codegen::backend::{masm, objbuild};
@@ -116,8 +116,24 @@ fn bound(
 pub fn main(argv: &[String]) -> i32 {
     let mut flags = Flags::default();
     let mut source = None;
+    let mut dump = None;
     let mut at = 0;
     while at < argv.len() {
+        if let Some(value) = argv[at].strip_prefix("--dump=") {
+            dump = Some(PathBuf::from(value));
+            at += 1;
+            continue;
+        }
+        if argv[at] == "--dump" {
+            at += 1;
+            let Some(value) = argv.get(at) else {
+                eprintln!("llrm-llc: --dump: expected one argument");
+                return 2;
+            };
+            dump = Some(PathBuf::from(value));
+            at += 1;
+            continue;
+        }
         match flags.take(argv, &mut at) {
             Ok(true) => {}
             Ok(false) if !argv[at].starts_with('-') && source.is_none() => source = Some(argv[at].clone()),
@@ -136,7 +152,7 @@ pub fn main(argv: &[String]) -> i32 {
         eprintln!("usage: llrm-llc [-O2] [-m64] [-S] [-o OUT] FILE.ll");
         return 2;
     };
-    match compile(&flags, Path::new(&source)) {
+    match compile(&flags, Path::new(&source), dump.as_deref()) {
         Ok(()) => 0,
         Err(why) => {
             eprintln!("llrm-llc: {why}");
@@ -226,6 +242,17 @@ pub fn compiled(
     text: &str,
     name: &str,
 ) -> Result<(masm::Module, llrm_target::object::Format), String> {
+    compiled_dumping(flags, text, name, None)
+}
+
+/// `compiled`, writing each stage to `dump` (llrm-c's `--dump DIR`) or where
+/// `LLRM_MIR_STAGES` names.
+pub fn compiled_dumping(
+    flags: &Flags,
+    text: &str,
+    name: &str,
+    dump: Option<&Path>,
+) -> Result<(masm::Module, llrm_target::object::Format), String> {
     let (triple, text) = without_triple(text);
     let bound = bound(flags, triple.as_deref())?;
     let mut module = llrm_mir::parse::module(&text).map_err(|error| format!("{name}: {error}"))?;
@@ -234,7 +261,11 @@ pub fn compiled(
     let default = flags.convention(&*bound.target)?;
     with_default_convention(&mut module, default);
     decorate(&mut module, bound.target.calling(), default, format.name());
-    let options = options_for(&bound, flags, machine, format.name(), default);
+    let mut options = options_for(&bound, flags, machine, format.name(), default);
+    if let Some(dump) = dump {
+        std::fs::create_dir_all(dump).map_err(|error| format!("{}: {error}", dump.display()))?;
+        options.dump = Some(dump.to_path_buf());
+    }
     Ok((llrm_codegen::driver::compiled_module(module, name, &options)?, format))
 }
 
@@ -300,6 +331,21 @@ mod options_tests {
         options_for(&bound, &flags, machine, format, default)
     }
 
+    /// `llrm-cc --dump DIR` reached the backend as an input file: "cannot
+    /// specify -o with several inputs", and no stage was written.
+    #[test]
+    fn dump_writes_the_stages() {
+        let dir = std::env::temp_dir().join(format!("llrm-llc-dump-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                    target triple = \"x86_64-unknown-linux-gnu\"\n\
+                    define i32 @f(i32 %a) {\n  ret i32 %a\n}\n";
+        compiled_dumping(&Flags::default(), text, "f", Some(&dir)).unwrap();
+        let written = std::fs::read_dir(&dir).unwrap().count();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(written > 0, "no stage written");
+    }
+
     /// `llrm-cc` ran the backend with none of what the Watcom front end set
     /// for C: float spills kept 80 bits, `memcpy` stayed `rep movs`, and no
     /// loop became `strlen`.
@@ -319,10 +365,11 @@ mod options_tests {
 fn compile(
     flags: &Flags,
     source: &Path,
+    dump: Option<&Path>,
 ) -> Result<(), String> {
     let text = std::fs::read_to_string(source).map_err(|error| format!("{}: {error}", source.display()))?;
     let name = source.file_stem().and_then(|one| one.to_str()).unwrap_or("module");
-    let (built, format) = compiled(flags, &text, name)?;
+    let (built, format) = compiled_dumping(flags, &text, name, dump)?;
     let output = flags.output.clone().unwrap_or_else(|| source.with_extension(if flags.assembly { "s" } else { "o" }));
     let file = source.file_name().and_then(|one| one.to_str()).unwrap_or_default();
     if flags.assembly {
