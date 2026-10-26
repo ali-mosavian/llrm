@@ -31,8 +31,8 @@
 //!
 //! # Used by
 //! [`crate::backend::spiller`] and [`crate::backend::floatassign`] (`held`);
-//! [`crate::backend::floatfold`] and [`crate::backend::pressuresink`]
-//! (`may_write`); [`crate::backend::postrasink`] (`apart`).
+//! [`crate::backend::floatfold`] (`may_write`); [`crate::backend::postrasink`]
+//! (`apart`).
 
 use std::collections::BTreeSet;
 
