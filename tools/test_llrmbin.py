@@ -160,3 +160,18 @@ def test_a_dist_binary_not_matching_its_recorded_md5_is_stale_with_a_fresh_mtime
     repo, dist, source = _dist(tmp_path, b"other", b"built")
     os.utime(source, (1, 1))
     assert llrmbin.stale_binaries(dist, repo) == ["llrm-c"]
+
+
+def test_the_stamp_check_reads_the_binary_llrm_cc_names(tmp_path, monkeypatch):
+    """C2 moves the default C compiler to llrm-cc: a tool pinned to the name "llrm-c" stamped a dist without it, or the wrong binary."""
+    import stamp
+
+    (tmp_path / "llrm-cc").write_text("")
+    (tmp_path / "llrm-c").write_text("")
+    seen = []
+    monkeypatch.setattr(stamp, "check", lambda binary, *a, **k: seen.append(binary.name))
+    monkeypatch.setenv("LLRM_CC", "llrm-cc")
+    llrmbin.stamped(tmp_path)
+    monkeypatch.delenv("LLRM_CC")
+    llrmbin.stamped(tmp_path)
+    assert seen == ["llrm-cc", "llrm-c"]

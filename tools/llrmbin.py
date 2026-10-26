@@ -29,15 +29,20 @@ def bin_dir(env: dict | None = None, repo: Path = REPO) -> Path:
     return found
 
 
+def c_compiler() -> str:
+    """The C compiler binary tools resolve beside the bin dir: LLRM_CC, else llrm-c until the C2 switch makes llrm-cc the default."""
+    return os.environ.get("LLRM_CC") or "llrm-c"
+
+
 def stamped(found: Path) -> None:
-    """Prints the commit llrm-c was built from; refuses another than LLRM_EXPECT_SHA names. A tree with changes is the gate's own, so it is not refused here."""
+    """Prints the commit the C compiler was built from; refuses another than LLRM_EXPECT_SHA names. A tree with changes is the gate's own, so it is not refused here."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import stamp
 
     expect = os.environ.get("LLRM_EXPECT_SHA") or None
-    if (found / "llrm-c").is_file():
+    if (found / c_compiler()).is_file():
         try:
-            stamp.check(found / "llrm-c", expect, allow_dirty=True, label=str(found))
+            stamp.check(found / c_compiler(), expect, allow_dirty=True, label=str(found))
         except SystemExit:
             if expect:
                 raise  # a binary without a stamp is only refused where a sha is named
@@ -148,7 +153,7 @@ def pinned(binary: Path) -> Path:
         _pins.append(tempfile.mkdtemp(prefix="llrm-pin-", dir="/tmp"))
         atexit.register(shutil.rmtree, _pins[0], True)
     key = hashlib.sha256(str(binary).encode()).hexdigest()[:8]
-    room = PINNED_BYTES - len(_pins[0]) - len("/llrm-c") - 1
+    room = PINNED_BYTES - len(_pins[0]) - len("/" + c_compiler()) - 1
     folder = Path(_pins[0]) / (key + "p" * (room - len(key)))
     folder.mkdir(exist_ok=True)
     link = folder / binary.name
