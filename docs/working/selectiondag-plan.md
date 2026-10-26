@@ -20,7 +20,7 @@ Pin d1106deb71cc. Codegen slot row 28 ([codegen-slot-table](codegen-slot-table.m
 
 ## 2. What replaces each part today
 
-Ours selects from MIR (LLVM-IR-shaped, SSA, typed) to LIR in one forward walk: `Selector::instruction` matches each instruction against a decision automaton that `llrm-iselgen` builds from `family.isel` + `patterns.isel` + `x86.instr` ([isel.rs](../../crates/backend/llrm-core/src/backend/isel.rs), [isel/matcher.rs](../../crates/backend/llrm-core/src/backend/isel/matcher.rs)). Patterns are our own, flat (an opcode and up to three operands, one nested defining instruction via `cover`), the rest is `hook_` Rust. No node graph, no legalizer, no combiner, no scheduler: selection order is MIR order, and the machine phases do the rest.
+Ours selects from MIR (LLVM-IR-shaped, SSA, typed) to LIR in one forward walk: `Selector::instruction` matches each instruction against a decision automaton that `llrm-iselgen` builds from `family.isel` + `patterns.isel` + `x86.instr` ([isel.rs](../../crates/codegen/llrm-codegen/src/backend/isel.rs), [isel/matcher.rs](../../crates/codegen/llrm-codegen/src/backend/isel/matcher.rs)). Patterns are our own, flat (an opcode and up to three operands, one nested defining instruction via `cover`), the rest is `hook_` Rust. No node graph, no legalizer, no combiner, no scheduler: selection order is MIR order, and the machine phases do the rest.
 
 | Pin part | Ours today | What is missing against the pin |
 |---|---|---|
@@ -227,6 +227,8 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD212 | sdag-b | `SimplifyDemandedBits`: and/or/xor, shifts by a constant, zext/anyext/trunc only; no `ShrinkDemandedOp`, no narrowing rewrites, no SRA/ADD/SUB/MUL/SELECT cases | `selectiondag/demanded_bits.rs` |
 | SD214 | sdag-b | `FLOG`/`FEXP`/`FLOG2`/`FEXP2`/`FSIN`/`FCOS`/`FATAN`/`FRINT` select as the x87 sequences the finalizer spells (`fln`, `fexp`, ...), not libm calls: no target has a libm (`Target::has_libm`); with one, the node is refused (the pin's libcall is not translated) | `llrm-dagisel/src/x86_llrm.rs` |
 | SD215 | sdag-b | `X86ISD::FIST` of an `i16` selects `IST_Fp16m32/64/80`, which the pin has no pattern for (its `lrint` of a short is promoted); QB's `CINT` needs a word `fistp` | `llrm-dagisel/src/x86_fcmp.rs` |
+| SD217 | sdag-b | `mergeConsecutiveStores` merges stores of constants only: no load or vector-extract sources, no vector or truncating merged store; an address base is a frame index, a global or one node plus constant offsets (no index register); `allowsMemoryAccess` is true for every scalar the target holds | `selectiondag/combine_store_merge.rs` |
+| SD218 | sdag-b | `expandBITREVERSE` is the byte-swap and mask form only (no loop of single bits for a width that is not a power of two; none is legal here) | `selectiondag/legalize_dag.rs` |
 | SD216 | sdag-b | `visitLOAD` bypasses a dead non-volatile load only: no store-to-load forwarding, `FindBetterChain`, alignment inference, indexed or sliced loads (they need `BaseIndexOffset` and the alias queries); the root load is left alone (the pin's `HandleSDNode` holds it) | `selectiondag/combine_load.rs` |
 
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |

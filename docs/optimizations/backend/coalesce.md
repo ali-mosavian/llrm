@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/coalesce.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/coalesce.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/coalesce.rs sha256:9b88dbf4a372a8abe321815ad3dae9cdadc03adf7f87dfd5150e044e3a72c8a1 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/coalesce.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/coalesce.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/coalesce.rs sha256:9b88dbf4a372a8abe321815ad3dae9cdadc03adf7f87dfd5150e044e3a72c8a1 -->
 
 # coalesce
 

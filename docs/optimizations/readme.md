@@ -1,6 +1,6 @@
 # Optimizations
 
-How the compiler turns MIR into x86 code: the SSA optimizer in `crates/opt`, the backend in `crates/backend/llrm-core`, and one reference per pass family. For contributors.
+How the compiler turns MIR into x86 code: the SSA optimizer in `crates/opt`, the backend in `crates/codegen/llrm-codegen`, and one reference per pass family. For contributors.
 
 ## Reference
 
@@ -10,7 +10,7 @@ The reference for every pass, analysis and backend phase is the `//!` header at 
 |---|---|
 | [`crates/opt/llrm-transforms/src`](https://github.com/ali-mosavian/llrm/tree/main/crates/opt/llrm-transforms/src) | The MIR passes and the pipeline that orders them |
 | [`crates/opt/llrm-analysis/src`](https://github.com/ali-mosavian/llrm/tree/main/crates/opt/llrm-analysis/src) | The analyses and the pass manager |
-| [`crates/backend/llrm-core/src/backend`](https://github.com/ali-mosavian/llrm/tree/main/crates/backend/llrm-core/src/backend) | Lowering for selection, instruction selection and the machine phases |
+| [`crates/codegen/llrm-codegen/src/backend`](https://github.com/ali-mosavian/llrm/tree/main/crates/codegen/llrm-codegen/src/backend) | Lowering for selection, instruction selection and the machine phases |
 
 ## Pass index, in pipeline order
 

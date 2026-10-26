@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/ehprepare.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/ehprepare.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/ehprepare.rs sha256:95c4305dd771374c132f6ef3336029932ac6abba107c034423532aa125acd767 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/ehprepare.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/ehprepare.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/ehprepare.rs sha256:95c4305dd771374c132f6ef3336029932ac6abba107c034423532aa125acd767 -->
 
 # ehprepare
 

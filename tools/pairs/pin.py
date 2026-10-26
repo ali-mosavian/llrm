@@ -116,6 +116,12 @@ def opt(passes: str, text: str, of: Target | None = None, extra: list[str] | Non
     return done
 
 
+def backend_ir(dump: Path) -> Path | None:
+    """The IR a `--dump` hands to the backend: the `switchconv` stage, whatever number the pipeline gives it."""
+    found = sorted(dump.glob("*-switchconv.ll"))
+    return found[-1] if found else None
+
+
 def llc(args: list[str], text: str, of: Target | None = None, bin_dir: Path | None = None) -> subprocess.CompletedProcess:
     """`llc` over `text` retargeted to `of`, told `-mtriple`, `-mcpu` and `-mattr` besides."""
     of = _need(of)

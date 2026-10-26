@@ -69,7 +69,7 @@ flowchart TB
 
 *How the changed paths select the tier*
 
-`[compiler]` is `crates/**`, `src/**`, `build.rs`, the manifests, `rust-toolchain.toml`, `.cargo/**`. `[shared]` is the manifests, `src/**`, `tests/common/**`, `crates/ir/**`, `crates/support/**`, `crates/target/llrm-target/**`, `crates/target/llrm-object/**` and `tools/gate/**`. A path in no table is unknown and selects full. Backend and transform changes are not shared: they take fast plus every codegen heavy step (`run`, `qcport`, `pytest-programs`).
+`[compiler]` is `crates/**`, `src/**`, `build.rs`, the manifests, `rust-toolchain.toml`, `.cargo/**`. `[shared]` is the manifests, `src/**`, `tests/common/**`, `crates/ir/**`, `crates/support/**`, `crates/target/llrm-target/**`, `crates/mc/llrm-object/**` and `tools/gate/**`. A path in no table is unknown and selects full. Backend and transform changes are not shared: they take fast plus every codegen heavy step (`run`, `qcport`, `pytest-programs`).
 
 `gate.py plan [--base REF] [--files F...] [--tier auto|fast|full]` prints the tier, the reason, the steps and the run languages. A diff that changes only some crates tests those crates and the crates that depend on them (and the `[[reads]]` crates whose tests read their sources); full tests the workspace.
 

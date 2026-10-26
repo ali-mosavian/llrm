@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/exactaddress.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/exactaddress.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/exactaddress.rs sha256:19b0dee000691417ea60eef772a82342bdb2c858c591d7c7e6dfed5766d30761 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/exactaddress.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/exactaddress.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/exactaddress.rs sha256:19b0dee000691417ea60eef772a82342bdb2c858c591d7c7e6dfed5766d30761 -->
 
 # exactaddress
 

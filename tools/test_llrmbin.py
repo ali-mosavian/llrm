@@ -130,3 +130,33 @@ def test_a_source_with_a_future_mtime_is_named_as_the_reason_a_binary_stays_stal
     assert llrmbin.stale_binaries(release, tmp_path) == ["llrm-c"]
     detail = llrmbin.stale_detail(release, tmp_path)
     assert str(src) in detail and "FUTURE" in detail, detail
+
+
+def _dist(tmp_path, content: bytes, recorded: bytes):
+    import hashlib
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "Cargo.toml").write_text('[[bin]]\nname = "llrm-c"\npath = "x.rs"\n')
+    source = repo / "lib.rs"
+    source.write_text("")
+    dist = tmp_path / "sbp-abc" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "llrm-c").write_bytes(content)
+    (dist / "llrm-c.d").write_text(f"{dist}/llrm-c: {source}\n")
+    (tmp_path / "sbp-abc" / "ok").write_text(f"sha: abc\n{hashlib.md5(recorded).hexdigest()}  llrm-c\n")
+    return repo, dist, source
+
+
+def test_a_dist_binary_matching_its_recorded_md5_passes_with_an_old_mtime(tmp_path):
+    """A checkout made every source newer than the dist built from the same sha; the guard then wanted the binaries touched, which hides a real stale one."""
+    repo, dist, source = _dist(tmp_path, b"built", b"built")
+    os.utime(dist / "llrm-c", (1, 1))
+    assert llrmbin.stale_binaries(dist, repo) == []
+
+
+def test_a_dist_binary_not_matching_its_recorded_md5_is_stale_with_a_fresh_mtime(tmp_path):
+    """A fresh mtime says nothing of what the binary is: one that differs from what the dist built must be refused."""
+    repo, dist, source = _dist(tmp_path, b"other", b"built")
+    os.utime(source, (1, 1))
+    assert llrmbin.stale_binaries(dist, repo) == ["llrm-c"]

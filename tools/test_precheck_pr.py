@@ -92,13 +92,13 @@ def test_a_dead_code_error_under_deny_warnings_is_named():
     def run(command, **kwargs):
         seen["rustflags"] = kwargs["env"]["RUSTFLAGS"]
         seen["command"] = command
-        return SimpleNamespace(returncode=101, stdout="", stderr="error: function `unused` is never used\nerror: could not compile `llrm-core`\n")
+        return SimpleNamespace(returncode=101, stdout="", stderr="error: function `unused` is never used\nerror: could not compile `llrm-codegen`\n")
 
-    why = pc.warning_failures(Path("."), ["llrm-core"], run, {})
-    assert seen["rustflags"] == "-D warnings" and "--tests" in seen["command"] and "llrm-core" in seen["command"]
+    why = pc.warning_failures(Path("."), ["llrm-codegen"], run, {})
+    assert seen["rustflags"] == "-D warnings" and "--tests" in seen["command"] and "llrm-codegen" in seen["command"]
     assert why and "function `unused` is never used" in why[0]
     clean = lambda command, **kwargs: SimpleNamespace(returncode=0, stdout="", stderr="")  # noqa: E731
-    assert pc.warning_failures(Path("."), ["llrm-core"], clean, {}) == []
+    assert pc.warning_failures(Path("."), ["llrm-codegen"], clean, {}) == []
     assert pc.warning_failures(Path("."), [], clean, {}) == []
 
 
@@ -108,8 +108,8 @@ def test_a_lib_test_that_fails_here_and_passes_on_the_tip_is_named_and_one_the_t
     def run(command, **kwargs):
         return SimpleNamespace(returncode=101, stdout=out, stderr="")
 
-    why = pc.lib_failures(Path("."), ["llrm-core"], ["crates/backend/llrm-core/src/x.rs"], "origin/feat/parity", run, lambda root, failed, base: {"llrm-core": {"backend::x::test_old"}})
-    assert why == ["lib test fails here and passes on origin/feat/parity: llrm-core::backend::x::test_new"]
+    why = pc.lib_failures(Path("."), ["llrm-codegen"], ["crates/codegen/llrm-codegen/src/x.rs"], "origin/feat/parity", run, lambda root, failed, base: {"llrm-codegen": {"backend::x::test_old"}})
+    assert why == ["lib test fails here and passes on origin/feat/parity: llrm-codegen::backend::x::test_new"]
 
 
 def test_a_new_machine_phase_runs_the_slot_list_tests_of_llrm_transforms():
@@ -122,11 +122,11 @@ def test_a_new_machine_phase_runs_the_slot_list_tests_of_llrm_transforms():
         out = "failures:\n\nfailures:\n    parity_tests::test_a_translated_backend_slot_that_is_not_run_fails\n\ntest result: FAILED\n"
         return SimpleNamespace(returncode=101 if failing else 0, stdout=out if failing else "", stderr="")
 
-    why = pc.lib_failures(Path("."), ["llrm-core"], ["crates/backend/llrm-core/src/flow.rs"], "b", run, lambda root, failed, base: {})
+    why = pc.lib_failures(Path("."), ["llrm-codegen"], ["crates/codegen/llrm-codegen/src/flow.rs"], "b", run, lambda root, failed, base: {})
     assert any("parity" in command for command in ran)
     assert why == ["lib test fails here and passes on b: llrm-transforms::parity_tests::test_a_translated_backend_slot_that_is_not_run_fails"]
     ran.clear()
-    assert pc.lib_failures(Path("."), ["llrm-core"], ["crates/backend/llrm-core/src/other.rs"], "b", run, lambda root, failed, base: {}) == []
+    assert pc.lib_failures(Path("."), ["llrm-codegen"], ["crates/codegen/llrm-codegen/src/other.rs"], "b", run, lambda root, failed, base: {}) == []
     assert not any("parity" in command for command in ran)
 
 

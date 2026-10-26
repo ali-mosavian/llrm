@@ -71,7 +71,7 @@ def attribute(edges, inclusive, listed, root, floor=0):
 
 if __name__ == "__main__":
     calling, listed = sys.argv[1], set(open(sys.argv[2]).read().split("\n"))
-    root = sys.argv[3] if len(sys.argv) > 3 else "llrm_core::driver::compiled"
+    root = sys.argv[3] if len(sys.argv) > 3 else "llrm_codegen::driver::compiled"
     top = int(sys.argv[4]) if len(sys.argv) > 4 else 30
     edges, inclusive = parse_edges(calling)
     own = attribute(edges, inclusive, listed, root)

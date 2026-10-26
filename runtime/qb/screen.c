@@ -113,10 +113,10 @@ void B_VWPT(short top, short bottom)
     cn_view(top, bottom);
 }
 
-/* B$WIDT: WIDTH columns, rows. */
+/* B$WIDT: WIDTH columns, rows; -1 for one left out. */
 void B_WIDT(short columns, short rows)
 {
-    cn_set_size(columns, rows);
+    cn_set_size(columns < 0 ? 0 : columns, rows < 0 ? 0 : rows);
 }
 
 #pragma aux screen_color "@screen_color@2"

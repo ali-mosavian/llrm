@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `analysis/interprocedural_tests.rs`.
+//! Adapted from llrm-codegen's `analysis/interprocedural_tests.rs`.
 
 use std::collections::BTreeSet;
 

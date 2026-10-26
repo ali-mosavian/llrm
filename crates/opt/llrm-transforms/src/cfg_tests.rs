@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `optimize/cfg.rs` tests, the port of
+//! Adapted from llrm-codegen's `optimize/cfg.rs` tests, the port of
 //! `tests/test_cfg_merge.py`; which tests stay behind is in `cfg.rs`.
 
 use super::merged;

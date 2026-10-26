@@ -83,7 +83,7 @@
 //! fixed point (`N/NNN-rRR-pass.ll`); the pass examples come from those.
 //!
 //! # Runs
-//! Options are `Options`; `Level::options` in llrm-core's `driver/flags.rs`
+//! Options are `Options`; `Level::options` in llrm-codegen's `driver/flags.rs`
 //! maps `-O0`, `-O1`, `-O2`, `-O3`, `-Omax`, `-Os`, `-Oz`, `-Og` to
 //! `Options::none`, `basic`, `standard`, `speed`, `aggressive`, `size`,
 //! `min_size` (`-Og`: `basic` without `loopidioms`). `-f` flags set single
@@ -1582,11 +1582,10 @@ impl FunctionPass for Fixed {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         self.runs += 1;
-        let promotes = analyses
+        let promotes = !analyses
             .get::<cfg::Shape>(unit.context, unit.layout, unit.function)
             .dominance
-            .irreducible(unit.function)
-            .is_empty();
+            .is_irreducible(unit.function);
         let dump = self.dump.as_ref().map(|directory| directory.join(format!("{:02}", self.runs)));
         let mut run = Run {
             version: 0,

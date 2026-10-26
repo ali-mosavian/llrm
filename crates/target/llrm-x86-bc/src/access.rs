@@ -1,11 +1,11 @@
-//! Array element addresses: llrm-core's `raising_array_access`.
+//! Array element addresses: llrm-codegen's `raising_array_access`.
 //!
 //! BC computes an element's address itself but for a huge array (/Ah) or
 //! one whose subscripts it checks (/D): those call `B$HARY`, which takes the
 //! descriptor in BX and the subscripts, then their count, pushed, pops
 //! them, and answers the element's address in ES:BX -- or raises error 9.
 //! It stays that call, answering BX and ES, as HIR's emitter keeps it:
-//! computing the address here, as llrm-core did by default, drops the
+//! computing the address here, as llrm-codegen did by default, drops the
 //! check the program was compiled for, and a huge element is a 32-bit
 //! offset from a far pointer, which MIR's 16-bit far index cannot hold.
 

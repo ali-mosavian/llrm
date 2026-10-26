@@ -1604,7 +1604,7 @@ pub fn numeric_stack_arguments(name: &str) -> Option<i64> {
 // rewrite of one.
 pub mod semantics;
 
-pub const TABLE: &str = include_str!("runtime.toml");
+pub const TABLE: &str = include_str!("../../../crates/frontends/qb/runtime.toml");
 
 /// One row of `runtime.toml`, as `build.rs` wrote it.
 pub struct Row {
@@ -2259,8 +2259,11 @@ mod tests {
     /// time, which the build replaced, equals them all.
     #[test]
     fn the_rows_built_in_are_the_tables_text_parsed() {
-        let parsed =
-            _contracts(Some(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/runtime.toml")))).unwrap();
+        let parsed = _contracts(Some(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../crates/frontends/qb/runtime.toml"
+        ))))
+        .unwrap();
         let built = _contracts(None).unwrap();
         assert_eq!(parsed.keys().collect::<Vec<_>>(), built.keys().collect::<Vec<_>>());
         for (name, one) in &parsed {

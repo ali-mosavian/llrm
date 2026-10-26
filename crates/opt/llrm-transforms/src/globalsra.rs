@@ -74,7 +74,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::globalsaa::embedded;
 use llrm_analysis::memory::constant_bytes;
 use llrm_mir::context::{Constant, ConstantKind, GlobalId};
 use llrm_mir::datalayout::DataLayout;
@@ -167,13 +166,7 @@ pub fn split(
 
 /// The globals another global's initializer names.
 fn held(module: &Module) -> BTreeSet<GlobalId> {
-    let mut held = BTreeSet::new();
-    for global in &module.globals {
-        if let GlobalKind::Variable(variable) = &global.kind {
-            variable.initializer.iter().for_each(|&one| embedded(&module.context, one, &mut held));
-        }
-    }
-    held
+    crate::globalopt::held_by_live(module)
 }
 
 /// Every use of `id`, or none where one is not a plain load or store at a

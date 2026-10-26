@@ -1,5 +1,5 @@
 //! `cwd / idiv`: a word dividend sign-extended into DX is a word division.
-//! Adapted from llrm-core's `raising_division`. Where the quotient does not
+//! Adapted from llrm-codegen's `raising_division`. Where the quotient does not
 //! fit a word the machine traps and `sdiv i16` is undefined, as the core's
 //! 32-by-16 division leaves it.
 

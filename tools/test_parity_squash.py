@@ -753,7 +753,7 @@ def test_a_listed_test_that_passes_refuses_the_batch_and_the_head_does_not_excus
     """An `xpass unit ...` name from the lib layer is a refusal of its own: it is not a failure to compare with the head's."""
     xpass = {"xpass unit llrm-nib::test_debug::fixed"}
     on_head = lambda by_package: pytest.fail("the head is asked about a pass")  # noqa: E731
-    assert ps.new_lib_failures(["crates/frontends/llrm-nib/src/lib.rs"], on_merged=lambda packages: set(xpass), on_head=on_head) == xpass
+    assert ps.new_lib_failures(["crates/frontends/nib/src/lib.rs"], on_merged=lambda packages: set(xpass), on_head=on_head) == xpass
 
 
 def _closure(path):
@@ -766,7 +766,7 @@ def test_a_red_test_in_a_crate_that_depends_on_the_changed_one_is_refused():
     """llrm-c's lib tests were red on parity while PRs merged: each PR changed a crate llrm-c depends on, and the fast tier ran the changed crates only."""
     red = {"unit llrm-c::compile::tests::a_call_boundary_listing"}
     on_merged = lambda packages: set(red) if "llrm-c" in packages else set()  # noqa: E731
-    assert ps.new_lib_failures(["crates/backend/llrm-core/src/backend/peephole.rs"], on_merged=on_merged, on_head=lambda by_package: set()) == red
+    assert ps.new_lib_failures(["crates/codegen/llrm-codegen/src/backend/peephole.rs"], on_merged=on_merged, on_head=lambda by_package: set()) == red
 
 
 def test_a_red_test_in_a_changed_crate_is_refused_and_one_the_head_fails_too_is_not():
@@ -1026,7 +1026,7 @@ def test_the_scanner_layer_refuses_a_red_scanner_the_head_passes_and_runs_the_re
         asked.append(list(targets))
         return set(red)
 
-    files = ["crates/backend/llrm-core/src/backend/selectiondag/dag_function.rs", "tests/new_scan.rs"]
+    files = ["crates/codegen/llrm-codegen/src/backend/selectiondag/dag_function.rs", "tests/new_scan.rs"]
     assert ps.new_scanner_failures(files, on_merged=merged, on_head=lambda targets: set()) == red
     assert "selectiondag_registry" in asked[0] and "new_scan" in asked[0] and "turbo" not in asked[0]
     assert ps.new_scanner_failures(files, on_merged=merged, on_head=lambda targets: set(red)) == set()
@@ -1110,7 +1110,7 @@ def test_a_doc_naming_a_path_of_one_machine_is_refused_at_landing_without_the_li
 def test_a_pr_refused_for_its_own_head_is_held_until_its_head_changes(tmp_path):
     """#4142 was refused six times, #4145 and #4146 four, each with the same head, each retry a batch of 1-14 minutes (21:47-22:22, 2026-10-23)."""
     state = tmp_path / "held.state"
-    reasons = {"4142": "alone on the head it fails unit llrm-core::x", "4145": "alone on the head it does not build: error", "4150": "conflicts with an earlier PR of the batch or with feat/parity", "4151": "the batch dropped #4142 after its scan"}
+    reasons = {"4142": "alone on the head it fails unit llrm-codegen::x", "4145": "alone on the head it does not build: error", "4150": "conflicts with an earlier PR of the batch or with feat/parity", "4151": "the batch dropped #4142 after its scan"}
     heads = {"4142": "aaa", "4145": "bbb", "4150": "ccc", "4151": "ddd"}
     lines = ps.hold_own_refusals(["4142", "4145", "4150", "4151"], reasons, heads, state)
     assert lines == ["#4142: held until head changes: aaa", "#4145: held until head changes: bbb"]
@@ -1172,6 +1172,36 @@ def test_every_stage_of_the_fast_pass_stamps_the_batch_log():
     at = [source.find(f'stage("{name}")') for name in names]
     assert all(i >= 0 for i in at), dict(zip(names, at))
     assert at == sorted(at), "stamped out of the order they run"
+
+
+def test_beside_runs_both_and_joins_the_background_even_when_the_foreground_raises():
+    """The overlap lets the release stages run while the lib tests do; a raising foreground must not leave the background touching the checkout the next pass reuses."""
+    import threading
+
+    started, finished = threading.Event(), []
+
+    def background():
+        started.set()
+        finished.append(True)
+        return "back"
+
+    def foreground():
+        assert started.wait(5), "the background never ran beside the foreground"
+        return "front"
+
+    assert ps.beside(background, foreground) == ("front", "back")
+
+    finished.clear()
+
+    def boom():
+        raise RuntimeError("lib tests died")
+
+    try:
+        ps.beside(lambda: finished.append(True) or "back", boom)
+        raise AssertionError("the foreground error was swallowed")
+    except RuntimeError:
+        pass
+    assert finished == [True], "the background was not finished when beside returned"
 
 
 def test_the_always_on_scanners_run_before_the_lib_tests_of_a_batch():

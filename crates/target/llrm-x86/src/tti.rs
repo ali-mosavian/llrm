@@ -71,6 +71,12 @@ pub struct RealMode {
     /// The space of huge pointers: an offset there carries into the selector,
     /// so an address is one register and no more.
     pub huge_space: Option<u32>,
+    /// The target's `-Os` growth guard for inlining (SZ1, D11): a callee that
+    /// stays is inlined into an `optsize` caller only if its code does not
+    /// outgrow the call. The pin has none (its `OptSizeThreshold` 50 counts
+    /// instructions, not bytes); 16-bit code names it so a size row never
+    /// grows.
+    pub inline_size_guard: bool,
 }
 
 impl RealMode {
@@ -467,12 +473,11 @@ impl Tti for X86 {
         "X86"
     }
 
-    /// SZ1: an inline that stays must not grow the code. The pin's
-    /// threshold of 50 let crc, tile and recchop copy an external callee into
-    /// `main` at -Os (+52, +42, +15 bytes), and a fixed bound of 25 let a
-    /// 14-instruction loop in at ten sites of idioms.bas (+690 bytes).
+    /// SZ1: an inline that stays must not grow the code, where the target
+    /// says so (`RealMode::inline_size_guard`): at m32 -Os follows the pin
+    /// (crc, tile and recchop grow 52, 42 and 15 bytes there).
     fn opt_size_inline_by_code_size(&self) -> bool {
-        true
+        self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard)
     }
 
     /// A call is 5 bytes and the push of an argument 1 to 4, against 2 to 3 for

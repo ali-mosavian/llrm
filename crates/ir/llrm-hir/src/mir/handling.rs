@@ -17,7 +17,7 @@ use llrm_mir::{BlockId, Constant, ConstantKind, Operand as Value, TypeId};
 use llrm_support::hash::HashMap;
 
 use super::{Body, Emit};
-use crate::model::{self, Operand, Statement, Storage};
+use crate::model::{self, Op, Operand, Statement, Storage};
 use crate::onerror::Handled;
 
 const REGISTER: &str = "$QB$OERG:";
@@ -48,6 +48,45 @@ pub(super) const NO_RESUME: i128 = 19;
 /// Whether `callee`, somewhere in `function`, is a RESUME or RESUME NEXT.
 pub(super) fn resumes(callee: &str) -> bool {
     [NEXT, AGAIN].contains(&callee)
+}
+
+/// Whether a call of `callee` may raise an error: a RESUME marker the body
+/// falls into raises; the handlers' markers do not. `nounwind` are the
+/// runtime routines that raise none.
+pub(super) fn raises(
+    callee: &str,
+    nounwind: &[String],
+) -> bool {
+    resumes(callee) || (!owns(callee) && !nounwind.iter().any(|one| one == callee))
+}
+
+/// The rows of `rows`, `function`'s statements in source order, where an
+/// error may be raised, in order: the sites, numbered by their place here.
+/// A row a site never names is left out, as are the table and the switch of
+/// the sites that cannot exist.
+pub(super) fn sites(
+    function: &model::Function,
+    rows: &[Statement],
+    nounwind: &[String],
+) -> Vec<usize> {
+    let mut sites = BTreeSet::new();
+    for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+        let may = match instruction.callee.as_deref() {
+            Some(callee) => raises(callee, nounwind) || callee.starts_with(LABEL),
+            None => {
+                matches!(
+                    instruction.op,
+                    Op::Call | Op::Div | Op::Rem | Op::Udiv | Op::Urem | Op::Divmod | Op::Udivmod
+                )
+            }
+        };
+        if let Some(row) =
+            may.then(|| rows.partition_point(|one| one.instruction <= instruction.id).checked_sub(1)).flatten()
+        {
+            sites.insert(row);
+        }
+    }
+    sites.into_iter().collect()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -147,8 +186,11 @@ pub(super) struct Handling {
     pad: BlockId,
     selector: Value,
     site: Value,
-    /// The function's statements, in source order: a site is an index.
+    /// The function's statements, in source order.
     statements: Vec<Statement>,
+    /// The statements an error may be raised in, by index in `statements`:
+    /// a site is a position here.
+    sites: Vec<usize>,
     /// The handlers' blocks: what the pad reaches before a RESUME.
     inside: BTreeSet<i64>,
     raising: BTreeSet<usize>,
@@ -309,6 +351,7 @@ impl Body<'_, '_, '_> {
         let (frame, frame_type) = handled.frame;
         self.b.call(frame_type, Value::Constant(frame), &[site], "");
         let statements = numbered(statements, self.function.id);
+        let sites = sites(self.function, &statements, self.tables.nounwind);
         let entry = self.b.current().expect("the entry block");
         let pad = self.b.block("landing");
         let null = self.b.context.types.ptr(0);
@@ -344,6 +387,7 @@ impl Body<'_, '_, '_> {
                 selector,
                 site,
                 statements,
+                sites,
                 inside,
                 raising: BTreeSet::new(),
                 resumes: Vec::new(),
@@ -391,6 +435,7 @@ impl Body<'_, '_, '_> {
                 selector,
                 site,
                 statements,
+                sites,
                 inside,
                 raising: BTreeSet::new(),
                 resumes,
@@ -650,8 +695,12 @@ impl Body<'_, '_, '_> {
             .checked_sub(1)
             .ok_or("a call before the first statement")?;
         handling.raising.insert(site);
+        let number = handling
+            .sites
+            .binary_search(&site)
+            .map_err(|_| "a call that raises in a statement the sites leave out".to_owned())?;
         let (pad, pointer) = (handling.pad, handling.site);
-        let number = self.b.int(16, site as i128);
+        let number = self.b.int(16, number as i128);
         self.b.store(number, pointer, false);
         let next = self.b.block("");
         let answered = self.b.invoke_as(convention, ty, callee, arguments, next, pad, "");
@@ -740,7 +789,8 @@ impl Body<'_, '_, '_> {
                 if handling.inside.contains(&statement.block) {
                     return Err(format!("a RESUME into block {}, the error handler's", statement.block));
                 }
-                cases.push((self.b.int(16, raising as i128), self.block(statement.block)));
+                let number = handling.sites.binary_search(&raising).map_err(|_| "a site the sites leave out")?;
+                cases.push((self.b.int(16, number as i128), self.block(statement.block)));
             }
             let nowhere = self.b.block("");
             self.b.position(nowhere);

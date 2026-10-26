@@ -62,8 +62,21 @@ def built_from(directory: Path, default: Path) -> Path:
     return default
 
 
+def recorded_md5(directory: Path) -> dict[str, str]:
+    """name -> md5 from the `ok` file beside a `dist/` that tools/pairs/pair_build.sh built (`<md5>  <name>` lines, written at build time), else empty."""
+    ok = directory.parent / "ok"
+    if directory.name != "dist" or not ok.is_file():
+        return {}
+    pairs = (line.split() for line in ok.read_text().splitlines())
+    return {fields[1]: fields[0] for fields in pairs if len(fields) == 2 and len(fields[0]) == 32}
+
+
+def md5_of(binary: Path) -> str:
+    return hashlib.md5(binary.read_bytes()).hexdigest()
+
+
 def stale_found(directory: Path, repo: Path = REPO) -> list[tuple[str, float, str, float]]:
-    """(binary, its mtime, the newest source it is built from, that source's mtime) for each binary in `directory` older than a file cargo's dep-info says it is
+    """A binary of a pair_build dist is judged by its md5 against the `ok` record (`recorded_md5`), not by time. (binary, its mtime, the newest source it is built from, that source's mtime) for each binary in `directory` older than a file cargo's dep-info says it is
     built from, or than the toolchain patches (build.rs reruns on them; dep-info does not list them) of the tree they were built from, which is `repo` unless
     their dep-info names another. A directory without dep-info is not checked."""
     repo = built_from(directory, repo)
@@ -74,6 +87,11 @@ def stale_found(directory: Path, repo: Path = REPO) -> list[tuple[str, float, st
         if binary.name not in built_here or not binary.is_file():
             continue
         built = binary.stat().st_mtime
+        # a pair_build dist records each binary's md5 when it is built: that decides, not the mtime (a copy or a checkout moves mtimes, and touching one would pass the guard)
+        if recorded := recorded_md5(directory).get(binary.name):
+            if md5_of(binary) != recorded:
+                stale.append((binary.name, built, f"{directory.parent / 'ok'} (md5 differs)", built))
+            continue
         sources = [Path(path) for path in info.read_text().partition(":")[2].replace("\\\n", " ").split()]
         # Sources only: a build script rewrites its outputs under the target directory whenever it reruns.
         written = directory.resolve().parent

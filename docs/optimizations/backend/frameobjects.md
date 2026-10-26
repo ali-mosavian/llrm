@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/frameobjects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/frameobjects.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/frameobjects.rs sha256:9377204cb5d2d36f0a44b2c5cc45c0d333ed5465e334b91e97280fd79c5f1cc9 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/frameobjects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/frameobjects.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/frameobjects.rs sha256:9377204cb5d2d36f0a44b2c5cc45c0d333ed5465e334b91e97280fd79c5f1cc9 -->
 
 # frameobjects
 

@@ -187,7 +187,7 @@ BASIC object, written by the same `llrm_omf::write::write` path as any other.
 
 ## Verification
 
-- `crates/target/llrm-omf/src/write.rs` unit tests: a fixup is never split between LEDATA records, a call is
+- `crates/mc/llrm-omf/src/write.rs` unit tests: a fixup is never split between LEDATA records, a call is
   a self-relative fixup against an extern, a 64-bit object is refused.
 - `tests/turbo.rs` links with TLINK; `tests/cv4.rs` with LINK /CO and CVPACK; `tests/dwarf.rs` with jwlink
   (DWARF in OMF, 16- and 32-bit).

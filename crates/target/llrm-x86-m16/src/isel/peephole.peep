@@ -35,6 +35,17 @@ rule far_load_segment_first
     rewrite @0: far_loads[g] o, g, dword_cell(lo) {defines: joined_defines(@0, @1), uses: joined_uses_all(@0, @1)}
 
 
+// `mov r,[m]; mov es,r` is `mov es,[m]` (and FS, GS, DS): the segment register
+// loads straight from the cell, one instruction fewer, where r is dead after.
+group loaded_segments
+    walk gap skip nothing resume past
+
+rule loaded_segment
+    match   mov r:reg16, c:mem16 ; ... delays(@0, *) ; mov g:reg16, r
+    when    free(@0, dropped), free(@1, settled), segment(g), !segment(r), dead(@1, lanes(r)), encodable($1)
+    rewrite anchor @0 ; @1: mov g, c
+
+
 // Write only the live low word of a register-only dword move. Memory
 // sources are left alone: narrowing an access can change volatility or
 // faults.

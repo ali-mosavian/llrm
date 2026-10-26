@@ -14,6 +14,22 @@ const GLOBAL: &str = "@g = global i32 0\n\n";
 /// The cost and threshold of the `at`th call of @callee in @f, `sole`: the
 /// callee's only call (the `LastCallToStatic` bonus is in the cost, as in
 /// `opt`'s remark).
+/// i486 in 16-bit code with the target's -Os growth guard (the m16
+/// description's `inline_size_guard`).
+fn x86_real() -> llrm_x86::tti::X86 {
+    llrm_x86::tti::X86::of_cpu("i486")
+        .unwrap()
+        .in_real_mode(
+            llrm_x86::tti::RealMode {
+                scale_costs: vec![(1, 0)],
+                registers: 6,
+                scaled_index_insns: 0,
+                huge_space: None,
+                inline_size_guard: true,
+            },
+        )
+}
+
 fn priced_with(
     text: &str,
     at: usize,
@@ -173,10 +189,12 @@ b0:
 }
 
 /// An external callee that stays after the inline is not copied into an
-/// `optsize` caller on x86 (D11): crc, tile and recchop grew 52, 42 and 15
-/// bytes at -Os (cost 45, 30 and 40 against the pin's threshold of 50).
+/// `optsize` caller in 16-bit code (D11, the target's `inline_size_guard`):
+/// crc, tile and recchop grew 52, 42 and 15 bytes at -Os (cost 45, 30 and 40
+/// against the pin's threshold of 50). In 32-bit code the pin's decision
+/// stands: the `called_once` kernel's `twice` (cost 45) is inlined.
 #[test]
-fn an_optsize_caller_does_not_copy_a_callee_that_stays_on_x86() {
+fn an_optsize_caller_does_not_copy_a_callee_that_stays_in_16_bit_code() {
     let text = format!(
         "{GLOBAL}define i32 @callee(i32 %x) {{
 b0:
@@ -204,11 +222,13 @@ b0:
 }}
 "
     );
-    let x86 = llrm_x86::tti::X86::of_cpu("i486").unwrap();
+    let (x86, flat) = (x86_real(), llrm_x86::tti::X86::of_cpu("i486").unwrap());
     let (generic, bound) = priced_with(&text, 0, false, CallerSize::OptSize, None);
     let (target, held) = priced_with(&text, 0, false, CallerSize::OptSize, Some(&x86));
+    let (wide, kept) = priced_with(&text, 0, false, CallerSize::OptSize, Some(&flat));
     assert!(generic < bound, "premise: the pin inlines it, cost {generic} threshold {bound}");
-    assert!(target >= held, "x86 inlined it, cost {target} threshold {held}");
+    assert!(target >= held, "16-bit code inlined it, cost {target} threshold {held}");
+    assert!(wide < kept, "32-bit code kept it, cost {wide} threshold {kept}");
 }
 
 /// A callee at `-Os` on x86 (D11): the inline must not make the code bigger.
@@ -251,7 +271,7 @@ e:
     let small = "b0:
   %a = add i32 %x, 1
   ret i32 %a";
-    let x86 = llrm_x86::tti::X86::of_cpu("i486").unwrap();
+    let x86 = x86_real();
     let held = |text: &str, sole: bool| {
         let (cost, threshold) = priced_with(text, 0, sole, CallerSize::OptSize, Some(&x86));
         cost < threshold

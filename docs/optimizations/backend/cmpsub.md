@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/cmpsub.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/cmpsub.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/cmpsub.rs sha256:a193b3a8c98c24dbc4d8a333e225f55bb60325fce459413a7c05bbc4159b9db7 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/cmpsub.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/cmpsub.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/cmpsub.rs sha256:a193b3a8c98c24dbc4d8a333e225f55bb60325fce459413a7c05bbc4159b9db7 -->
 
 # cmpsub
 
