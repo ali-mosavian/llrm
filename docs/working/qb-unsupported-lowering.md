@@ -37,5 +37,43 @@ and the MIR has one handler block and no per-statement check.
 
 ## REDIM PRESERVE
 BC (PDS 7.1) calls `B$RDMP` with `B$RDIM`'s operands. The only real file using it (vbdos `INC/HELP.BAS`) preserves a
+UDT array and a STRING array. The runtime (#4404) preserves raw-byte elements; a string array raises Subscript out of
+range at run time. The compiler keeps the call and does NOT refuse a string array at compile time: a compile failure
+would stop HELP.BAS compiling at all, a run-time error only the path that reaches it. String-array preserve (move the
+string descriptors, re-own their strings) is due 2026-11-06 with a fail-first `tests/run/qb` program under DOSBox.
+Order after #4329: PALETTE USING row, RESUME NEXT, string-array preserve.
+
+## VIEW
+BC calls `B$VIEW(x1, y1, x2, y2, fill, border, screen)` (seven words, -1 for a colour left out) or `B$VEW0()` for a bare VIEW
+(QB 4.5 `rt/grview.asm`). The runtime keeps a viewport in `gfx.c` that PSET, POINT, LINE, CIRCLE, PAINT, DRAW, GET, PUT and CLS
+are cut to; an ordinary VIEW also moves the origin of the statements' coordinates to its corner, VIEW SCREEN does not. The fill
+covers the viewport, the border is the box one pixel outside, the cursor goes to the viewport's centre; equal corners or ones off
+the screen are Illegal function call. `tests/qbrt/view_graphics.bas` hashes the screen with POINT and matches BCOM45 at m16 and m32.
+
+## WINDOW
+BC calls `B$WIND(x1, y1, x2, y2, screen)` (four SINGLEs and a word) or `B$WIN0()` for a bare WINDOW (QB 4.5 `rt/grwindow.asm`,
+`grfpinit.asm`). While a window is on, the point-setting calls map real numbers onto the viewport (the whole screen for VIEW
+SCREEN): `round((x - xmin) * dx)`, y up unless WINDOW SCREEN; the last point is kept as reals, so STEP is in logical units;
+CIRCLE's radius scales by `dx`; POINT(x, y) maps. The rounding is the FPU's, in its wider format: a double product lands on a
+half where QB's lies just under it (`WINDOW SCREEN (-50,-20)-(50,20)`, centre (0, 0) is 159.4999...), so `gfx.c` keeps the
+product's lost error. `tests/qbrt/window_graphics.bas` hashes the screen with POINT and matches BCOM45 at m16 and m32. Not done:
+POINT(n) and PMAP, GET/PUT corners' y order under a window.
+
+## Compile sweep (the driver)
+First refusal per file over the 573 sample `.BAS` files (private tools, d32x, dos); a file counts once per procedure it fails in,
+so numbers run about three times the files. Re-run after each PR (2026-10-25, on feat/parity plus VIEW):
+
+| Refusal | Count |
+|---|---|
+| WINDOW | 36 |
+| unknown constant CFONTBLOCKSIZE | 33 |
+| CURRENCY | 33 |
+| invalid character (non-ASCII) | 24 |
+| OPEN ACCESS/LOCK/LEN/RANDOM (#4652) | 20 |
+| string CONST (#4720) | 18 |
+| WIDTH one-arg (#4722) | 9 |
+| SCREEN extra arguments | 9 |
+| NAME (#4667) | 9 |
+
 UDT array and a STRING array. The runtime preserves both: a string array's kept strings follow to the new elements
 (`str_owner_moved`) and only the cut-off ones are released. Tested on the host (`tests/hostarray/preserve_test.c`).

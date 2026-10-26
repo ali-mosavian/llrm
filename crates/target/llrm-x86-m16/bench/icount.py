@@ -50,6 +50,9 @@ def _prices():
     return harness.cost, harness.multiplier_of, harness.clocks.prefixes
 
 
+NEVER_ENTERED = "the region was never entered"
+
+
 @dataclass
 class Run:
     output: bytes = b""
@@ -295,5 +298,5 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
     if entry is not None and state["done"]:
         result.region = counts
     elif entry is not None and not result.error:
-        result.error = "the region was entered but never returned" if state["active"] else "the region was never entered"
+        result.error = "the region was entered but never returned" if state["active"] else NEVER_ENTERED
     return result
