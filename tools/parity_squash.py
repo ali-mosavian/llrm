@@ -1237,6 +1237,24 @@ def docs_refusal(before: set[str], root: Path, docs=docs_stale) -> tuple[str, se
     return (f"generated docs out of date (tools/docsbuild/build.py --sync): {', '.join(new[:5])}" if new else ""), now
 
 
+def docs_gated(merge_one, docs_before: set[str], root: Path = ROOT, docs=docs_stale):
+    """`merge_one` that also refuses, and resets `root` to where it was, a merge that leaves a generated page stale that was not stale before it."""
+    state = [docs_before]
+
+    def gated(number: str) -> str:
+        before = git("rev-parse", "HEAD", cwd=root).strip()
+        if why := merge_one(number):
+            return why
+        why, now = docs_refusal(state[0], root, docs)
+        if why:
+            git("reset", "-q", "--hard", before, cwd=root)
+            return why
+        state[0] = now
+        return ""
+
+    return gated
+
+
 def _alone_base_docs(base: str, target: Path | None) -> set[str]:
     work = (target or Path(tempfile.mkdtemp(prefix="alone-base-"))) / "base"
     _alone_checkout(work, base)
@@ -1367,10 +1385,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         git("fetch", "-q", "origin", "feat/parity")
         clean_checkout(BASE)
 
-        docs_before = docs_stale(ROOT)
-
         def merge_one(number: str) -> str:
-            nonlocal docs_before
             before = git("rev-parse", "HEAD").strip()
             git("fetch", "-q", "origin", infos[number]["headRefOid"])
             merge = subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True, text=True, errors="replace")
@@ -1384,17 +1399,12 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             if why := refusals(git("rev-parse", "HEAD").strip(), infos[number]["body"] or "", base=before, title=infos[number]["title"]):
                 git("reset", "-q", "--hard", before)
                 return "; ".join(why)
-            why, now = docs_refusal(docs_before, ROOT)
-            if why:
-                git("reset", "-q", "--hard", before)
-                return why
-            docs_before = now
             return ""
 
         failed_units.clear()
         failed_build.clear()
         stage("fast-merge")
-        kept, out = fast_merge(group, merge_one)
+        kept, out = fast_merge(group, docs_gated(merge_one, docs_stale(ROOT)))
         left_out.update(out)
         for number, why in out.items():
             print(f"#{number}: left out: {why}")

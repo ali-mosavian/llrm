@@ -1229,8 +1229,25 @@ def test_a_page_a_pr_leaves_stale_is_named_even_when_the_head_already_has_stale_
     assert ps.docs_refusal({"docs/a.md"}, Path("."), docs=lambda: set())[0] == "", "a PR that regenerates a page is not refused"
 
 
-def test_the_batch_checks_the_generated_pages_after_each_pr_it_merges():
-    import inspect
+def test_a_pr_that_stales_a_page_is_refused_and_its_merge_reset_while_the_others_stay(tmp_path):
+    """#5031, #5049 and #4988 each changed a `//!` header and landed with six pages stale: nothing refused the PR whose merge made a page new-stale."""
+    def run(*args):
+        return subprocess.run(["git", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
 
-    source = inspect.getsource(ps.merge_batch)
-    assert source.index("docs_refusal(docs_before") > source.index("refusals(git(") and 'git("reset", "-q", "--hard", before)' in source.split("docs_refusal(docs_before")[1][:200]
+    run("init", "-q", "-b", "main")
+    run("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base")
+
+    def merge_one(number):
+        (tmp_path / f"pr{number}.txt").write_text(number)
+        run("add", ".")
+        run("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", f"pr {number}")
+        return ""
+
+    stale_after = {"1": {"docs/old.md"}, "2": {"docs/old.md", "docs/new.md"}, "3": {"docs/old.md"}}
+    current = []
+    gated = ps.docs_gated(lambda number: (current.append(number), merge_one(number))[1], {"docs/old.md"}, tmp_path, docs=lambda: stale_after[current[-1]])
+    assert gated("1") == ""
+    why = gated("2")
+    assert "docs/new.md" in why and "docs/old.md" not in why
+    assert not (tmp_path / "pr2.txt").exists() and run("log", "--format=%s").splitlines() == ["pr 1", "base"], "the merge of the refused PR is reset"
+    assert gated("3") == "" and (tmp_path / "pr3.txt").exists(), "a later PR still joins"
