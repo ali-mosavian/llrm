@@ -75,7 +75,7 @@ pub fn select_block(
         debug_assert_eq!(made, dag.first_temporary + at as i32);
     }
     // `PreprocessISelDAG`: the rewrites that need no matcher.
-    super::x86_preprocess::preprocess(dag, temporaries);
+    super::x86_preprocess::preprocess(dag, temporaries, lowering.sse2);
     do_instruction_selection(dag, selector, hooks)?;
     let root = dag.get_root();
     let units = schedule(dag, root, info);
@@ -98,7 +98,7 @@ pub fn legalized(
     legal.map_err(|e| refused_legalize(dag, &format!("{e:?}")))?;
     DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeDag).with_tli(tli).run();
     // `LLRM_DAGDUMP=all` prints every block's DAG as selection will see it.
-    if std::env::var_os("LLRM_DAGDUMP").is_some_and(|mode| mode == "all") {
+    if llrm_support::env_var("LLRM_DAGDUMP").is_some_and(|mode| mode == "all") {
         eprintln!("legalized:\n{}", dag.dump());
     }
     Ok(())
@@ -110,7 +110,7 @@ fn refused_legalize(
     dag: &SelectionDAG,
     why: &str,
 ) -> Refusal {
-    if std::env::var_os("LLRM_DAGDUMP").is_some() {
+    if llrm_support::env_set("LLRM_DAGDUMP") {
         eprintln!("legalize refused: {why}\n{}", dag.dump());
     }
     Refusal::Legalize(why.to_owned())

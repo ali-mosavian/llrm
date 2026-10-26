@@ -1057,6 +1057,31 @@ fn test_bts_and_btr_of_registers_encode() {
     }
 }
 
+/// `bsf`, `bsr` and `bswap` encode (the pin's BSF32rr had no form: `cttz` and
+/// `ctlz` of a word, which the pin makes `bsf` and `bsr`, were refused).
+#[test]
+fn test_bsf_bsr_and_bswap_encode() {
+    for (name, repeat, bytes) in [("bsf", false, "660fbcc1"), ("bsf", true, "66f30fbcc1"), ("bsr", false, "660fbdc1")] {
+        let what = Semantics {
+            repeat,
+            ..sem(
+                Operation::Binary,
+                Some(name),
+                vec![rg(RegId::EAX, 4)],
+                vec![rg(RegId::EAX, 4), rg(RegId::ECX, 4)],
+                None,
+                false,
+            )
+        };
+        assert_eq!(hex(&made(emitted(&what)).code), bytes, "{name} repeat={repeat}");
+    }
+    let swap = sem(Operation::Unary, Some("bswap"), vec![rg(RegId::EAX, 4)], vec![rg(RegId::EAX, 4)], None, false);
+    assert_eq!(hex(&made(emitted(&swap)).code), "660fc8");
+    // BSWAP of a word is undefined and the pin never emits it
+    let word = sem(Operation::Unary, Some("bswap"), vec![rg(RegId::AX, 2)], vec![rg(RegId::AX, 2)], None, false);
+    assert!(emitted(&word).is_none());
+}
+
 /// A jump through a register (an indirect sibling call after its epilogue) had
 /// no encoding: `--isel=dag` with sibling calls on stopped the object build.
 #[test]

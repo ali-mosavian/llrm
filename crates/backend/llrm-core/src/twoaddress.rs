@@ -568,20 +568,12 @@ pub fn flags_dead_after(
     bits: u32,
     dead_out: bool,
 ) -> bool {
-    use crate::backend::liveness;
-    let flags = |lanes: &crate::backend::lanes::Lanes| {
-        lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
-    };
-    for later in &insns[index + 1..] {
-        let Some(effect) = liveness::effect(regs, bits, later) else { return false };
-        if flags(&effect.all_reads()) {
-            return false;
-        }
-        if flags(&effect.writes) {
-            return true;
-        }
+    use crate::backend::precse::{Flags, flags_after};
+    match flags_after(regs, bits, insns, index, false) {
+        Flags::Read => false,
+        Flags::Dead => true,
+        Flags::Out => dead_out,
     }
-    dead_out
 }
 
 /// What `SrcRegMap` and `DstRegMap` map a value to: another value, or a
@@ -611,7 +603,7 @@ pub struct Commuter<'a> {
     processed: crate::support::hash::HashSet<InstrKey>,
     /// The values `convertInstTo3Addr` made a two-register `lea` of in this
     /// block (`isConvertibleLEA`).
-    leas: std::collections::HashSet<u32>,
+    leas: llrm_support::hash::HashSet<u32>,
 }
 
 impl<'a> Commuter<'a> {

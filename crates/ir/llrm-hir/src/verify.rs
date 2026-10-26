@@ -827,7 +827,7 @@ fn _function(
                     || high.width != 2
                     || !matches!(low.width, 2 | 4)
                     || result.kind != model::TypeKind::Pointer
-                    || result.width != 4
+                    || !matches!(result.width, 4 | 8)
                 {
                     invalid!(
                         "{prefix}: pointer concat is not INTEGER:INTEGER to 16:16, or INTEGER:LONG to a flat pointer"

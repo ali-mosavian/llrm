@@ -159,3 +159,19 @@ fn test_the_program_order_map_is_made_once_for_a_loop() {
         assert_eq!(users.order_builds(), 1);
     });
 }
+
+/// IU1 ordered every instruction of the function to sort the two users of a
+/// value: d_faces -O2 paid 1.9 M instructions for 34 loops
+/// (`IdMap::from_iter`). The users alone are ordered, however much else the
+/// function holds.
+#[test]
+fn test_sorting_the_users_orders_no_more_than_the_users() {
+    let mut text = String::from("define i32 @f(ptr %p, i32 %n) {\nentry:\n  %z0 = add i32 %n, 1\n");
+    for k in 1..300 {
+        text += &format!("  %z{k} = add i32 %z{}, {k}\n", k - 1);
+    }
+    text += "  br label %loop\nloop:\n  %i = phi i32 [ 0, %entry ], [ %next, %loop ]\n  %a = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %a\n  %next = add i32 %i, 1\n  %c = icmp slt i32 %next, %n\n  br i1 %c, label %loop, label %exit\nexit:\n  %r = add i32 %next, %v\n  ret i32 %r\n}\n";
+    with_users(&text, |_, _, users, _, _| {
+        assert!(users.ordered_instructions() <= 8, "{} instructions ordered", users.ordered_instructions());
+    });
+}

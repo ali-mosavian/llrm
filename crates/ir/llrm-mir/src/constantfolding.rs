@@ -24,6 +24,12 @@
 //! 3. Target intrinsics (AMDGCN, ARM, AArch64, Wasm, NVVM, x86): the MIR
 //!    verifier rejects a `llvm.*` name `Intrinsic` does not enumerate, and it
 //!    enumerates none of them.
+//! 9. `llvm.lrint`/`llvm.llrint` of an integral constant fold to that integer
+//!    (the pin's `opt -passes=instsimplify,instcombine` leaves `lrint(double
+//!    1.0496e6)`): an integral value converts exactly in every rounding mode.
+//!    QB's `CLNG` of a constant sum was 1,378 B at m16 -Os against main's 1,231
+//!    (fpemu). Exit: none; the rest of `lrint` waits for the FP intrinsics
+//!    (#2246).
 //! 8. A GEP with an index that is not an integer constant (`ptrtoint (@g)`)
 //!    stays an instruction: the backend lowers constant GEP offsets only
 //!    (`globals::constant_offset`), LLVM's x86 ISel lowers any constant.
@@ -2106,7 +2112,10 @@ fn can_constant_fold_intrinsic(id: Folded) -> bool {
                 | UsubSat
                 | SmulFix
                 | SmulFixSat
+                | SdivFix
                 | Bitreverse
+                | Lrint
+                | Llrint
         ),
     }
 }
@@ -2200,6 +2209,9 @@ fn constant_fold_scalar_call1(
                 )
             });
         return (!null_defined).then_some(operand);
+    }
+    if matches!(id, Folded::Id(IntrinsicId::Lrint | IntrinsicId::Llrint)) {
+        return exact_rint(context, ty, operand);
     }
     if let Folded::Id(math) = id
         && let ConstantKind::Float(_) = context.get(operand).kind
@@ -2317,6 +2329,27 @@ fn constant_fold_float_call1(
         _ => u64::from((result as f32).to_bits()),
     };
     Some(context.constant(Constant { ty, kind: ConstantKind::Float(bits) }))
+}
+
+/// `lrint` of an integral float constant that fits `ty`: the integer, whatever
+/// the rounding mode (DEVIATE 9).
+fn exact_rint(
+    context: &Context,
+    ty: TypeId,
+    operand: ConstantId,
+) -> Option<ConstantId> {
+    let value = match (&context.get(operand).kind, context.types.get(ty_of(context, operand))) {
+        (ConstantKind::Float(bits), Type::Float(FloatKind::Double)) => f64::from_bits(*bits),
+        (ConstantKind::Float(bits), Type::Float(FloatKind::Float)) => f64::from(f32::from_bits(*bits as u32)),
+        (ConstantKind::Zero, Type::Float(_)) => 0.0,
+        _ => return None,
+    };
+    let width = context.types.int_bits(ty)?;
+    if width > 64 || !value.is_finite() || value.fract() != 0.0 {
+        return None;
+    }
+    let limit = 2f64.powi(width as i32 - 1);
+    (-limit <= value && value < limit).then(|| int(context, width, (value as i128 as u128) & mask(width)))
 }
 
 /// `APIntOps::pext`/`pdep`.
@@ -2513,6 +2546,27 @@ fn constant_fold_scalar_call3(
             let product = smul_fix(c0, c1, width, scale as u32, id == IntrinsicId::SmulFixSat);
             let ty_width = context.types.int_bits(ty)?;
             Some(int(context, ty_width, product))
+        }
+        // DEVIATE: LLVM folds no `sdiv.fix`, so a front end that emits one for
+        // constants leaves a run-time `idiv`. Rounded toward negative infinity,
+        // as the backend's expansion is; a zero divisor or a quotient that does
+        // not fit is left alone.
+        IntrinsicId::SdivFix => {
+            let (c0, width) = as_int(context, ops[0])?;
+            let (c1, _) = as_int(context, ops[1])?;
+            let (scale, _) = as_int(context, ops[2])?;
+            let (a, b) = (signed(c0, width), signed(c1, width));
+            if b == 0 || scale > 64 || width > 64 {
+                return None;
+            }
+            let numerator = a << scale;
+            let mut quotient = numerator / b;
+            if numerator % b != 0 && (numerator < 0) != (b < 0) {
+                quotient -= 1;
+            }
+            let ty_width = context.types.int_bits(ty)?;
+            let fits = signed(quotient as u128 & mask(width), width) == quotient;
+            fits.then(|| int(context, ty_width, quotient as u128 & mask(width)))
         }
         IntrinsicId::Fshl | IntrinsicId::Fshr => {
             let (c0, width) = as_int(context, ops[0])?;

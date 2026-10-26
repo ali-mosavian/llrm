@@ -234,7 +234,8 @@ pub fn tied(
     facts.finish(body)
 }
 
-/// `unfoldMemoryOperand` of a commutative instruction `d := op a, [m]` whose
+/// `unfoldMemoryOperand` of a commutative instruction (`add`, `and`, `or`,
+/// `xor`, the two-operand `imul`) `d := op a, [m]` whose
 /// `a` is another value: the load `t := mov [m]` and `d := op t, a`, commuted
 /// so that `t` is the tied source.
 fn _unfolded(
@@ -242,8 +243,14 @@ fn _unfolded(
     mint: &mut dyn FnMut() -> u32,
 ) -> Option<(Arc<Insn>, Arc<Insn>)> {
     let what = one.what.as_ref()?;
-    if what.op != Operation::Binary
-        || !matches!(what.name.as_deref(), Some("add" | "and" | "or" | "xor"))
+    // The two-operand `imul` commutes like `add`: `IMUL32rm`'s unfold is
+    // `IMUL32rr`.
+    let commutative = match what.op {
+        Operation::Binary => matches!(what.name.as_deref(), Some("add" | "and" | "or" | "xor")),
+        Operation::Multiply => what.name.as_deref() == Some("imul"),
+        _ => false,
+    };
+    if !commutative
         || what.dests.len() != 1
         || what.sources.len() != 2
         || one.volatile
@@ -1431,6 +1438,39 @@ mod tests {
         assert!(!names_of(&tied(&of(flags_live), All)).contains(&"lea".to_owned()));
     }
 
+    /// `add; inc; jb`: `inc` leaves CF alone, so `jb` reads the add's carry.
+    /// The add went to an `lea` (no flags) because `inc` "wrote the flags",
+    /// and `jb` read the carry of whatever came before.
+    #[test]
+    fn test_an_add_whose_carry_a_later_inc_leaves_for_a_jb_stays_an_add() {
+        let step = |at: i64, name: &str, dest: u32, source: u32| {
+            let what = Semantics {
+                name: Some(name.into()),
+                dests: vec![held(dest, 4)],
+                sources: vec![held(source, 4)],
+                ..Semantics::new(Operation::Unary)
+            };
+            Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![dest], vec![source]))
+        };
+        let jb = Arc::new(Insn::new(
+            3,
+            Some((3, 3)),
+            Some(Semantics { name: Some("jb".into()), target: Some(0), ..Semantics::new(Operation::Branch) }),
+            vec![],
+            vec![],
+        ));
+        let insns = vec![
+            imm_def(0, 7),
+            live_source_add(-1, "add")[1].clone(),
+            step(2, "inc", 9, 8),
+            jb,
+            read(4, 7),
+            read(5, 9),
+        ];
+        let names = names_of(&tied(&of(insns), All));
+        assert!(!names.contains(&"lea".to_owned()), "the add became an lea: {names:?}");
+    }
+
     // ------------------------------------------------------ tests/test_lir.py
 
     fn imm(
@@ -1782,6 +1822,34 @@ mod tests {
         assert!(
             shapes.len() == 4 && shapes[1].0 == "mov" && mem(1) && shapes[2].0 == "mov" && shapes[3].0 == "add",
             "the load comes first, then the copy of what it loaded, then the add of `a`: {shapes:?}"
+        );
+    }
+
+    /// The unfold is for every commutative two-address instruction with a
+    /// folded load, not only `add`/`and`/`or`/`xor`: `imul esi,[edx+4]` beside
+    /// a live counter was a copy and a memory multiply, where the pin loads
+    /// first and multiplies registers (x_list's inner loop, `mov esi,ecx;
+    /// imul esi,[edx+4]` against `mov edi,[edx+4]; imul edi,ecx`).
+    #[test]
+    fn test_a_folded_multiply_beside_a_live_source_is_unfolded_and_commuted() {
+        use crate::model::ir::Mem;
+        let what = Semantics {
+            name: Some("imul".into()),
+            dests: vec![held(8, 4)],
+            sources: vec![held(7, 4), Loc::Mem(Mem::new(None, 4))],
+            ..Semantics::new(Operation::Multiply)
+        };
+        let mul = Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![8], vec![7]));
+        let got = tied(&of(vec![imm_def(0, 7), mul, read(2, 8), read(3, 7)]), Off);
+        let mut shapes = Vec::new();
+        for one in got.insns().iter() {
+            let Some(what) = one.what.as_ref() else { continue };
+            shapes.push((what.name.clone().unwrap_or_default().to_string(), what.sources.clone()));
+        }
+        let mem = |at: usize| matches!(shapes[at].1.first(), Some(Loc::Mem(_)));
+        assert!(
+            shapes.len() == 4 && shapes[1].0 == "mov" && mem(1) && shapes[2].0 == "mov" && shapes[3].0 == "imul",
+            "the load comes first, then the copy of what it loaded, then the imul by `a`: {shapes:?}"
         );
     }
 

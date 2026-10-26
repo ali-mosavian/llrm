@@ -360,6 +360,7 @@ fn a_scaled_address_is_not_formed_in_real_mode_and_the_fill_steps_a_pointer() {
         registers: 6,
         scaled_index_insns: 2,
         huge_space: None,
+        inline_size_guard: false,
     };
     let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
     let mut module = parsed(&format!("{DOS}{FILL}"));
@@ -559,6 +560,7 @@ b3:
         registers: 6,
         scaled_index_insns: 2,
         huge_space: None,
+        inline_size_guard: false,
     };
     let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
     let mut module = parsed(&text);
@@ -617,6 +619,7 @@ b5:
         registers: 6,
         scaled_index_insns: 2,
         huge_space: Some(3),
+        inline_size_guard: false,
     };
     let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
     let mut module = parsed(&text);
@@ -701,3 +704,71 @@ done:
   ret i32 0
 }
 ";
+
+/// The exit value of `s += (i * 97) % 211` was expanded at the end of the loop
+/// body, a second division in every trip (`-Os` m32: 35 instructions, two
+/// `div`, a spill, where one in the loop and one after it is 23).
+#[test]
+fn an_exit_value_is_expanded_in_the_exit_block_not_the_loop() {
+    let text = "define i32 @f(i32 %n) {
+b1:
+  %c = icmp sgt i32 %n, 0
+  br i1 %c, label %pre, label %b3
+pre:
+  br label %b4
+exit:
+  %last = phi i32 [ %s2, %b4 ]
+  br label %b3
+b3:
+  %r = phi i32 [ 0, %b1 ], [ %last, %exit ]
+  ret i32 %r
+b4:
+  %s = phi i32 [ %s2, %b4 ], [ 0, %pre ]
+  %i = phi i32 [ %i2, %b4 ], [ 0, %pre ]
+  %m = mul nuw nsw i32 %i, 97
+  %q = urem i32 %m, 211
+  %s2 = add nuw nsw i32 %q, %s
+  %i2 = add nuw nsw i32 %i, 1
+  %done = icmp eq i32 %i2, %n
+  br i1 %done, label %exit, label %b4
+}
+";
+    let (_, after) = reduced_on(FLAT, text, "i486", &[&[0], &[1], &[5], &[300]]);
+    let body = after.split("b4:").nth(1).unwrap().split("\n}").next().unwrap();
+    assert_eq!(body.matches("urem").count() + body.matches("udiv").count(), 1, "{after}");
+}
+
+/// The exit value was expanded at the end of the exit block, after the store
+/// that reads it: addrm.bas -Os m16 died in live ranges ("a unique value").
+#[test]
+fn an_exit_value_is_defined_before_the_readers_in_the_exit_block() {
+    let text = "@g = global i32 0
+
+define void @f(i32 %n) {
+b1:
+  %c = icmp sgt i32 %n, 0
+  br i1 %c, label %pre, label %b3
+pre:
+  br label %b4
+exit:
+  %last = phi i32 [ %s2, %b4 ]
+  store i32 %last, ptr @g
+  br label %b3
+b3:
+  ret void
+b4:
+  %s = phi i32 [ %s2, %b4 ], [ 0, %pre ]
+  %i = phi i32 [ %i2, %b4 ], [ 0, %pre ]
+  %m = mul nuw nsw i32 %i, 97
+  %q = urem i32 %m, 211
+  %s2 = add nuw nsw i32 %q, %s
+  %i2 = add nuw nsw i32 %i, 1
+  %done = icmp eq i32 %i2, %n
+  br i1 %done, label %exit, label %b4
+}
+";
+    let (_, after) = reduced_on(FLAT, text, "i486", &[&[1], &[7]]);
+    let exit = after.split("exit:").nth(1).unwrap().split("b3:").next().unwrap();
+    let (stored, defined) = (exit.find("store").unwrap(), exit.find("urem").or(exit.find("udiv")).unwrap());
+    assert!(defined < stored, "{after}");
+}

@@ -16,9 +16,15 @@
 //! - A fill: a store, or a memset, of a loop-invariant value that is one byte
 //!   repeated, through an address `induction` derives as a GEP off an invariant
 //!   pointer, striding by the element's size. A cell whose bytes do not repeat
-//!   is `llvm.experimental.memset.pattern`. A loop with several fills to bytes
-//!   no other reaches is a memset each; fills that tile adjacent bytes with the
-//!   same byte are one.
+//!   is `llvm.experimental.memset.pattern` (DEVIATE: the pin forms none off
+//!   Darwin,
+//!   [L1214](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/LoopIdiomRecognize.cpp#L1214);
+//!   here it is priced from the target's table, so a word fill is `rep stosw`
+//!   where its clocks beat the loop's at speed, and its bytes at `-Os`; m16
+//!   `fillw` of 100 words is 407 clocks against the loop's 500, break-even
+//!   near 16 trips with the segment setup; owner w-5). A loop with several
+//!   fills to bytes no other reaches is a memset each; fills that tile adjacent
+//!   bytes with the same byte are one.
 //! - A copy: a load and a store of one cell each trip, the stored value being
 //!   the loaded one, from one pointer to another with the same step. Where the
 //!   ranges are apart it is `llvm.memcpy`; where they overlap but each trip
@@ -715,12 +721,34 @@ fn _pays(
     fills: i64,
     stored: Option<(i64, bool)>,
 ) -> bool {
-    let function = unit.function;
-    let each: i64 = std::iter::once(&header)
-        .chain(chain)
+    let each = trip_cost(
+        unit.context,
+        unit.layout,
+        unit.function,
+        callees,
+        std::iter::once(&header).chain(chain),
+        costs,
+        size,
+    );
+    let known = proof.count.as_ref().and_then(ToPrimitive::to_i64);
+    let most = proof.maximum.as_ref().and_then(ToPrimitive::to_i64);
+    _cheaper_by(each, known, most, costs, size, moved, fills, stored)
+}
+
+/// What one trip of the loop through `blocks` costs, in `costs`' units. In
+/// bytes the loop's counter work is the step and its branch: the phi is a
+/// register, the address an operand, the test the step's flags.
+fn trip_cost<'a>(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    callees: &Callees,
+    blocks: impl Iterator<Item = &'a BlockId>,
+    costs: &OperationCosts,
+    size: bool,
+) -> i64 {
+    blocks
         .flat_map(|&block| operations(function, block))
-        // In bytes the loop's counter work is the step and its branch: the phi
-        // is a register, the address an operand, the test the step's flags.
         .filter(|&inst| {
             !size
                 || !matches!(
@@ -728,11 +756,25 @@ fn _pays(
                     Opcode::Phi | Opcode::GetElementPtr { .. } | Opcode::ICmp(_)
                 )
         })
-        .map(|inst| profit::operation(unit.context, unit.layout, function, callees, inst, costs).unwrap_or(costs.add))
-        .sum();
-    let known = proof.count.as_ref().and_then(ToPrimitive::to_i64);
-    let most = proof.maximum.as_ref().and_then(ToPrimitive::to_i64);
-    _cheaper_by(each, known, most, costs, size, moved, fills, stored)
+        .map(|inst| profit::operation(context, layout, function, callees, inst, costs).unwrap_or(costs.add))
+        .sum()
+}
+
+/// DEVIATE, for `loopidiom`: whether `rep movs` over a length known only at
+/// run time is fewer code bytes than the loop over `blocks` it replaces. The
+/// pin lowers that copy to a libc call, which llrm has none of: the string
+/// instruction takes ES, three registers, the count split in dwords and odd
+/// bytes, and a second `rep movs` (x_mergesort msort at m16 -Os: three sites,
+/// 16 bytes over the loop each).
+pub(crate) fn variable_copy_pays(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    callees: &Callees,
+    blocks: &[BlockId],
+    costs: &OperationCosts,
+) -> bool {
+    trip_cost(context, layout, function, callees, blocks.iter(), costs, true) > costs.copy + costs.copy_variable
 }
 
 /// What a copy of `length` bytes costs: the loads and stores isel expands it to
@@ -804,7 +846,7 @@ fn _cheaper_by(
     };
     let copy = match known {
         Some(count) => copy_price(costs, count * bytes, backward),
-        None => string_copy(costs, trips * bytes, backward),
+        None => string_copy(costs, trips * bytes, backward) + if size { costs.copy_variable } else { 0 },
     };
     trips * each > copy
 }
