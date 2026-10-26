@@ -301,6 +301,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::mvt::EVT;
     use super::*;
     use crate::backend::selectiondag::dag::{DagConfig, MemBase, MemInfo, SelectionDAG};
     use crate::backend::selectiondag::dag_combiner::{CombineLevel, NoCombines, combine};
