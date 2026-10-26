@@ -95,14 +95,30 @@ pub fn _RUNTIME_FRAME_HEADER(
 /// reported a fatal error in "line 49152 of module $ p".
 ///
 /// A cell stays on the stack segment (`through`) where the stack lives in
-/// the data group: allocation may hold a selector in the data segment
-/// register, and a cell with no segment of its own reads through it.
+/// the data group and the body writes the data segment register: allocation
+/// held a selector in it, and a cell with no segment of its own reads
+/// through it.
 pub fn _static_frame(
     body: &lir::LirBody,
     size: i64,
     through: Option<RegId>,
 ) -> lir::LirBody {
     let regs = body.regs();
+    // Only a body that writes the data segment register can have it hold
+    // something else; the others reach their cells through it (the prefix
+    // costs a byte on every cell).
+    let through = through.filter(|_| {
+        body.blocks.iter().flat_map(|block| &block.insns).any(|one| {
+            let named = |place: &Loc| {
+                matches!(
+                    place,
+                    Loc::Reg(reg) if regs.is_data_segment(ir::root(reg.register))
+                )
+            };
+            one.requires.iter().chain(&one.delivers).any(|(_, register)| regs.is_data_segment(ir::root(*register)))
+                || one.what.as_ref().is_some_and(|what| what.dests.iter().any(named))
+        })
+    });
     let moved = |addr: &Addr| -> Addr {
         let own = RegId::from(addr.segment);
         let segment = if own == RegId::None || regs.is_stack_segment(own) {
