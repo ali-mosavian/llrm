@@ -6407,6 +6407,21 @@ define i16 @f(i16 %i) addrspace(1) {
     );
 }
 
+/// `os_screen.c` read a far constant (`0xB8000010`) through a near pointer,
+/// which the pin writes `addrspacecast (inttoptr ... to ptr addrspace(1)) to
+/// ptr`; isel refused it, "an address of no global". The near pointer is the
+/// offset.
+#[test]
+fn test_a_far_constant_cast_to_a_near_pointer_is_its_offset() {
+    let text = "define i8 @f() addrspace(1) {
+  %v = load volatile i8, ptr addrspacecast (ptr addrspace(1) inttoptr (i32 -1207959536 to ptr addrspace(1)) to ptr)
+  ret i8 %v
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|one| one.contains("[16]")), "{got:?}");
+}
+
 /// A branch's LIR odds are `BranchProbabilityInfo`'s: `p == null` is the
 /// pointer heuristic's 12 in 32, to the bit `opt -passes='print<branch-prob>'`
 /// prints (0x30000000 and 0x50000000). They were `branchprob`'s GCC estimates.
