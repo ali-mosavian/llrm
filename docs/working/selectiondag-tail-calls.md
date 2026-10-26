@@ -27,11 +27,11 @@ the shadow carry it.
 
 ## Default-on at the flip (w9, 2026-10-25)
 
-Landed: m32 direct (04b7ba0f0), indirect `TCRETURNri` (#4480), m16 `jmp far` (#4483, direct callees only). Off by default; `LLRM_TAIL_CALLS=1` turns them on, and the old selector never makes them.
+Landed: m32 direct (04b7ba0f0), indirect `TCRETURNri` (#4480), m16 `jmp far` (#4483, direct callees only). On by default under `--isel=dag` since 2026-10-26; `LLRM_TAIL_CALLS=0` turns them off (one release, then the env read goes), and the old selector never makes them.
 
 What the default needs, in order:
 
-1. **The switch.** `dag_function.rs` `with_tail_calls(env || TAIL_CALLS)` becomes true under `--isel=dag`; keep `LLRM_TAIL_CALLS=0` as the off switch for one release, then delete the env read. One line plus a test that the default builds a `TC_RETURN` (`a_sibling_call_through_a_pointer_jumps_through_a_register` and `an_m16_tail_call_jumps_to_the_callee` set the thread switch today).
+1. **The switch (done 2026-10-26).** `dag_function.rs` `with_tail_calls(env || TAIL_CALLS)` becomes true under `--isel=dag`; keep `LLRM_TAIL_CALLS=0` as the off switch for one release, then delete the env read. One line plus a test that the default builds a `TC_RETURN` (`a_sibling_call_through_a_pointer_jumps_through_a_register` and `an_m16_tail_call_jumps_to_the_callee` set the thread switch today).
 2. **Corpus proof, both targets.** `run_tests.py c alias huge nib qb` under dag with the flag on, m16 and m32, must pass the same set as with it off. Run 26 (before #4483 landed, flag on, 734 programs): 698 pass, 36 red, none caused by the flag. Re-run on the tree with #4508 (the only open red class) and post the pass set diff; expected 734 / 734 both ways.
 3. **DOSBox, the programs that exercise it.** `tests/run/c/tail_calls.c` (m16 and m32; direct, swapped and extra arguments, a framed caller, mutual recursion, a counting loop, a call through a pointer). It passes with the flag on and off. Add before the flip: a callee that pops arguments (`-mabi=regparm3` at m16), a `byval` or `sret` argument (must stay a call), a variadic call (stays a call unless every parameter is in registers), a float result, and a far-pointer callee at m16 (stays a call).
 4. **Rows.** vsgcc old/dag clocks on the recursion kernels (`x_hanoi2`, `bintree`, `x_list`, `recchop`, `recsum`): the flag should lower clocks and not raise code bytes; record the numbers in the flip table.

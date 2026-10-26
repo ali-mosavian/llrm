@@ -85,14 +85,25 @@ impl Model {
     ) -> Self {
         let mut model = Self::new((0..sets.sets.len()).map(limit).collect());
         let mut shared: HashMap<String, Rc<[usize]>> = HashMap::default();
+        // Thousands of values share a few (width, registers) signatures: the
+        // class of each is found once (the pin reads it off the class a value
+        // was selected with).
+        let mut found: HashMap<(i64, &[RegId]), Option<(u32, Rc<[usize]>)>> = HashMap::default();
         for (value, bytes, allowed) in values {
-            let names: Vec<&str> = allowed.iter().filter_map(|&root| regs.name(regs.named(root, bytes))).collect();
-            if names.is_empty() || names.len() != allowed.len() {
-                continue;
+            let class = found.entry((bytes, allowed)).or_insert_with(|| {
+                #[cfg(test)]
+                LOOKUPS.with(|count| count.set(count.get() + 1));
+                let names: Vec<&str> = allowed.iter().filter_map(|&root| regs.name(regs.named(root, bytes))).collect();
+                if names.is_empty() || names.len() != allowed.len() {
+                    return None;
+                }
+                let class = sets.class_holding(&names)?;
+                let in_sets = shared.entry(class.name.clone()).or_insert_with(|| Rc::from(class.sets.clone())).clone();
+                Some((class.weight, in_sets))
+            });
+            if let Some((weight, in_sets)) = class {
+                model.count(value, *weight, in_sets.clone());
             }
-            let Some(class) = sets.class_holding(&names) else { continue };
-            let in_sets = shared.entry(class.name.clone()).or_insert_with(|| Rc::from(class.sets.clone())).clone();
-            model.count(value, class.weight, in_sets);
         }
         model
     }
@@ -149,6 +160,12 @@ pub fn try_pressure(
         std::mem::swap(&mut try_rank, &mut cand_rank);
     }
     greater(try_rank, cand_rank)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times `Model::of_values` asked the pressure sets for a class.
+    static LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 pub struct Tracker<'a> {
@@ -360,6 +377,22 @@ mod tests {
     /// The module header's example: pressure 2 of limit 2, a use of a third
     /// value takes it one over; a def of a live value in the same instruction
     /// keeps it at the limit.
+    /// A model of a body asked the pressure sets for the class of every value
+    /// (name strings, a scan of the classes): 8.6 M instructions of d_faces'
+    /// 25 M in the scheduler. Values of one width and register list share one
+    /// lookup.
+    #[test]
+    fn values_of_one_signature_cost_one_class_lookup() {
+        let sets = llrm_target::pressure::parse("set 0 GPR 4 BIG\nclass BIG 1 4 0 eax,ebx,ecx,edx\n").unwrap();
+        let regs = Regs(&llrm_x86_m32::REGISTER_INFO);
+        let roots: Vec<RegId> =
+            [RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX].iter().map(|&reg| regs.root(reg)).collect();
+        LOOKUPS.with(|count| count.set(0));
+        let model = Model::of_values(&sets, regs, |_| 4, (1..=1000).map(|value| (value, 4, &roots[..])));
+        assert_eq!(LOOKUPS.with(std::cell::Cell::get), 1, "one lookup for 1000 values of one signature");
+        assert!(model.weight(1000).is_some(), "the values are counted");
+    }
+
     #[test]
     fn an_instruction_that_raises_pressure_past_the_limit_has_excess() {
         let model = model();
