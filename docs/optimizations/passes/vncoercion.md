@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/vncoercion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/vncoercion.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/vncoercion.rs sha256:d37bed124c0857e9df266748bea9689ae46a11aa05e30a46fab5fbaa05256f57 -->
+<!-- src: crates/opt/llrm-transforms/src/vncoercion.rs sha256:c50d4c4bde46d11334f25286bd7d88ab0c9cf1b0ccac1ef0173147f3af3e291e -->
 
 # vncoercion
 

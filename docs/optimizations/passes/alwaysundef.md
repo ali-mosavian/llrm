@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/alwaysundef.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/alwaysundef.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/alwaysundef.rs sha256:3fa1186b07d040823e116f93fb06499cc97d711baeb5812c05bff489b0195e58 -->
+<!-- src: crates/opt/llrm-transforms/src/alwaysundef.rs sha256:04cc35f350906ec79a850a8577f7f73d2092107d31df9cfac98a616becd0a44d -->
 
 # alwaysundef
 

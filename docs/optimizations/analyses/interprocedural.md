@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/interprocedural.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/interprocedural.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/interprocedural.rs sha256:9e0801999c10644d40fbc15cbb5311b225814ed7af1decf924ec669416c333e9 -->
+<!-- src: crates/opt/llrm-analysis/src/interprocedural.rs sha256:46a73bd0d673dc037904df6ad00b8963761757ae7e76f43e7585bb608fc04a56 -->
 
 # interprocedural
 

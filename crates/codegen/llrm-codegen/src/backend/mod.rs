@@ -58,7 +58,6 @@
 //!   2  SharedConstants          phiconst      one value for a constant several phi edges carry
 //!   4  liverangeshrink          liverangeshrink  instruction up to its operands' last def
 //!   4  phielim                  phielim       phis -> copy groups; SSA ends
-//!   5  pressuresink             pressuresink  move a load to its one reader
 //!   6  floatfold                floatfold     float load as memory operand
 //!   7  floatassign              floatassign   x87 stack slots per value
 //!   8  floatalloc               floatalloc    x87 stack form
@@ -97,7 +96,6 @@
 //! ```text
 //! === FarIndirectCalls   total: 18 instructions
 //! === PhiElimination     total: 27 instructions
-//! === PressureSink       total: 27 instructions
 //! === FloatFold          total: 27 instructions
 //! === FloatAssign        total: 27 instructions
 //! === FloatAlloc         total: 27 instructions
@@ -244,7 +242,6 @@ pub mod phielim;
 pub mod postings;
 pub mod postrasink;
 pub mod precse;
-pub mod pressuresink;
 pub mod prologue;
 pub mod pushfold;
 pub mod regpressure;

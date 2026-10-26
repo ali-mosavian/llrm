@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/machinesched.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/machinesched.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/machinesched.rs sha256:1dd246798496810da980ae6c2a716df32c00bf2c0fd73351a8c83f3b9ee71237 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/machinesched.rs sha256:296117de365e965a64737a6edd0906e78594d37c1f21dd33a988a817daa07564 -->
 
 # machinesched
 
@@ -31,7 +31,7 @@ the add (data), the add feeds the store (data), both loads precede the store
 load or the add.
 
 ## Runs
-`MachineScheduler`, a machine phase after `pressuresink` and before
+`MachineScheduler`, a machine phase after `phielim` and before
 `floatfold` (`machinesched@5`): each region longer than half the allocatable
 registers is ordered by `bottom_up` (pieces 2 and 3 of
 docs/working/machine-scheduler-plan.md). DEVIATE MS3: values that pass

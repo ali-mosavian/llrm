@@ -80,6 +80,7 @@ and the user's ruling of 10-20 (no vector MIR until 32-bit parity) is what keeps
 |---|---|---|---|
 | Early | lower-expect | -O1,-O2,-O3,-Os | llvm.expect reaches MIR (hir/mir.rs) and nothing lowers it; ablation 0 of 12 IRs |
 | Simplify | libcalls-shrinkwrap | -O1,-O2,-O3,-Os | errno-setting libm calls; ablation 0 of 12 IRs |
+| Simplify (inside instcombine) | SimplifyLibCalls (`LibCallSimplifier`) | -O1,-O2,-O3,-Os | MISSING, priority after the m16 -Os growers. `copysign`, `fabs`, `floor`, `ceil`, `trunc`, `rint` calls become `llvm.*` intrinsics and `sqrt` one without errno; ours keeps the call (`double copysign(double,double)` at m16 -O2 --isel=dag: `jmp copysign`). Evidence for low weight: 0 of the c corpus calls libm, and x86 expands FSIN/FREM/FCOPYSIGN back to the same libcalls, so the DAG builder's `visitUnaryFloatCall`/`visitBinaryFloatCall` rows (selectiondag-builder-gaps.md) change nothing until this pass exists. Owner: unassigned |
 | Late | drop-unnecessary-assumes | -O1,-O2,-O3,-Os | ablation 0 of 12 IRs |
 | Late | lower-constant-intrinsics | -O1,-O2,-O3,-Os | ablation 0 of 12 IRs |
 | Late | loop-rotate | -O1,-O2,-O3,-Os | the late loop nest's rotate; ablation 0 of 12 IRs (the early one: +51 instructions, matched) |

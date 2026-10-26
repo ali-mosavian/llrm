@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/switchrange.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/switchrange.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/switchrange.rs sha256:81a406ecfde168818b034f3bb27101a7ac12188d2f2847879cc69fa585bf3e30 -->
+<!-- src: crates/opt/llrm-transforms/src/switchrange.rs sha256:2286387e689b1e62139b3575bd057d9b7f8c5a87d7b51368ee5893cc51a13f4d -->
 
 # switchrange
 

@@ -164,7 +164,10 @@ def compile_command(program: Program, obj: Path) -> list[str]:
     target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
     if program.source.suffix == ".c":
         dialect = ["-I", str(dosbatch.c_include(target, obj.parent))]
-    command = [str(BIN / tool), str(program.source), *rest, *dialect, *program.flags, "-o", str(obj)]
+    # LLRM_EXCESS: a BASIC program's excess precision, set the same on both sides of a pair; LLRM_EXTRA_FLAGS: flags for every program (an ablation)
+    excess = [f"-fexcess-precision={os.environ['LLRM_EXCESS']}"] if program.source.suffix == ".bas" and os.environ.get("LLRM_EXCESS") else []
+    extra = os.environ.get("LLRM_EXTRA_FLAGS", "").split()
+    command = [str(BIN / tool), str(program.source), *rest, *dialect, *program.flags, *excess, *extra, "-o", str(obj)]
     # real mode keeps the old selector unless $LLRM_ISEL_REAL says the run is the real-mode check
     real = program.source.suffix == ".c" and target == dosbatch.REAL_MODE
     return command if real and not os.environ.get("LLRM_ISEL_REAL") else dosbatch.with_isel(command)

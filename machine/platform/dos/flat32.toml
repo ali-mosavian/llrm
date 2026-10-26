@@ -1,5 +1,5 @@
 # A 32-bit DOS program under an extender, flat. Joined at compile time with
-# llrm-target's pc-ports.toml (PC hardware). Draft against PR 3b's schema.
+# machine/platform/dos/ports.toml (PC hardware). Draft against PR 3b's schema.
 
 addressing = "flat"
 

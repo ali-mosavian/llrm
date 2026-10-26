@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_icmp_const.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_icmp_const.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_icmp_const.rs sha256:313df217f785289d235e2161f1102e6fa502df91f6aed0cee5fa39ff3491e148 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_icmp_const.rs sha256:8b9406a62e6120bbf4c1e02be7f7ecf9d552e7cee0fe8c9047ac709b336a788e -->
 
 # combine_icmp_const
 

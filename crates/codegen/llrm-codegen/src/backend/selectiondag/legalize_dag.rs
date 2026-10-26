@@ -23,9 +23,10 @@
 //! walk skips a node nothing reads. Exit: none. Owner sdag-b. Review
 //! 2026-11-13.
 //!
-//! DEVIATE SD203: `ExpandConstantFP` does not shrink an `f80` constant to a
-//! narrower pool entry (no `APFloat`, SD11), and the pool entry's alignment is
-//! the i386 data layout's preferred one by type. Exit: with an `APFloat`.
+//! DEVIATE SD203: `ExpandConstantFP` shrinks an `f80` constant by its bit
+//! pattern, not `APFloat::convert` (no `APFloat`, SD11): a normal value whose
+//! low mantissa bits are zero. The pool entry's alignment is the i386 data
+//! layout's preferred one by type. Exit: with an `APFloat`.
 //! Owner sdag-b. Review 2026-11-27.
 //!
 //! # See also
@@ -676,6 +677,12 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                     (vt, bits)
                 }
             }
+            // `ExpandConstantFP` steps f80, f64, f32 and keeps the narrowest
+            // that holds the value exactly.
+            MVT::F80 if self.tli.should_shrink_fp_constant(mvt) => match shrunk_f80(bits) {
+                Some((narrow, bits)) => (EVT::Simple(narrow), bits),
+                None => (vt, bits),
+            },
             _ => (vt, bits),
         };
         let pointer = self.dag.config().pointer;
@@ -811,4 +818,27 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         self.replace_node(node, result);
         Ok(())
     }
+}
+
+/// The narrowest of `f32` and `f64` that holds a normal `f80` exactly, with its
+/// bit pattern (`isValueValidForType`): the sign and 15-bit exponent above a
+/// 64-bit mantissa with its leading bit set.
+fn shrunk_f80(bits: u128) -> Option<(MVT, u128)> {
+    let sign = (bits >> 79) as u64 & 1;
+    let exponent = ((bits >> 64) & 0x7fff) as i64;
+    let mantissa = bits as u64;
+    if exponent == 0 || exponent == 0x7fff || mantissa >> 63 == 0 {
+        return None;
+    }
+    let unbiased = exponent - 16383;
+    let fraction = mantissa & (u64::MAX >> 1);
+    if (-126..=127).contains(&unbiased) && fraction & ((1 << 40) - 1) == 0 {
+        let word = (sign << 31) | ((unbiased + 127) as u64) << 23 | fraction >> 40;
+        return Some((MVT::F32, u128::from(word)));
+    }
+    if (-1022..=1023).contains(&unbiased) && fraction & 0x7ff == 0 {
+        let word = (sign << 63) | ((unbiased + 1023) as u64) << 52 | fraction >> 11;
+        return Some((MVT::F64, u128::from(word)));
+    }
+    None
 }

@@ -1107,6 +1107,13 @@ pub fn recorded(
     // none of its stores, as LLVM's GlobalOpt and gcc's ipa find a variable
     // only written; the dead-code pass then finds nothing names it.
     manager.add_module(globalopt::WriteOnly);
+    // A loop whose only effect was those stores is dead now: LLVM's second
+    // function round (LoopDeletion, PassBuilderPipelines.cpp:1628) follows its
+    // GlobalOpt.
+    // It reads the live-outs from exit phis, so the bodies are closed first.
+    manager.add(loopsimplify::LoopSimplify);
+    manager.add(lcssa::LoopClosedSSA);
+    manager.add(loopdeletion::LoopDeletion);
     // What no live code names any more goes before selection, as LLVM runs
     // GlobalDCE after inlining.
     manager.add_program(globaldce::GlobalDce);

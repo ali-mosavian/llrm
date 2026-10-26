@@ -119,7 +119,7 @@ _input_read endp
 
 ; void *memmove(void *dst, const void *src, unsigned n), near pointers that may overlap, in regparm3 (the default convention):
 ; dst in AX, src in DX, n in CX; dst comes back in AX. A copy with dst above src inside it runs backwards under the
-; direction flag, cleared again before the return. SI and DI are kept.
+; direction flag, cleared again before the return: the n mod 4 end bytes first, then dwords. SI and DI are kept.
 public _memmove@3
 _memmove@3 proc LINK
     push si
@@ -140,14 +140,23 @@ _memmove@3 proc LINK
     dec si
     add di, cx
     dec di
+    mov dx, cx
+    and cx, 3
     std
     rep movsb
+    sub si, 3
+    sub di, 3
+    mov cx, dx
+    shr cx, 2
+    rep movsd
     cld
     jmp finished
 forward:
-    shr cx, 1
-    rep movsw
-    adc cx, cx
+    mov dx, cx
+    shr cx, 2
+    rep movsd
+    mov cx, dx
+    and cx, 3
     rep movsb
 finished:
     pop di

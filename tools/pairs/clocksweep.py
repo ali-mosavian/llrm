@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[2]
 for path in ("tools/dosbatch", "tools", "crates/target/llrm-x86-m16/bench"):
     sys.path.insert(0, str(ROOT / path))
 
-LIMIT = 60_000_000  # instructions per program: the emulator steps about 10^6 a second
+LIMIT = 250_000_000  # instructions per program: the emulator steps about 10^6 a second; grep.bas runs 186 M
 TINY = 2.0  # a program under this many times the least count of its language is within the start-up
 MARGIN = 0.0  # a program is slower by any positive amount; the report sorts by it
 

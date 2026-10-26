@@ -354,6 +354,39 @@ fn a_pool_entry_is_read_at_its_own_width() {
     assert!(multiply.sources.iter().any(|l| matches!(l, Loc::Mem(m) if m.width == 4)), "{multiply:?}");
 }
 
+const LONG_DOUBLE_POOL_CONSTANT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define x86_fp80 @f(x86_fp80 %x) {
+entry:
+  %m = fmul x86_fp80 %x, CONSTANT
+  ret x86_fp80 %m
+}
+";
+
+/// The width at which `x * constant` reads its `f80` constant from the pool.
+fn long_double_constant_width(constant: &str) -> u32 {
+    use crate::model::ir::{Loc, Operation};
+    let text = LONG_DOUBLE_POOL_CONSTANT.replace("CONSTANT", constant);
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let multiply = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.op == Operation::FloatArith && w.name.as_deref() == Some("fmul"))
+        .expect("an fmul");
+    multiply.sources.iter().find_map(|l| if let Loc::Mem(m) = l { Some(m.width.into()) } else { None }).unwrap_or(10)
+}
+
+/// An `f80` constant a float or double holds exactly sits in the pool at that
+/// width (`ExpandConstantFP` steps f80, f64, f32): 10000 took ten bytes, and
+/// QB's float-to-CURRENCY programs grew 8 to 22 bytes at m16 -Os.
+#[test]
+fn a_long_double_constant_is_read_at_the_narrowest_exact_width() {
+    assert_eq!(long_double_constant_width("10000.0"), 4);
+    assert_eq!(long_double_constant_width("0.00005"), 8);
+}
+
 const LONG_DOUBLE_SUM: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define x86_fp80 @f(x86_fp80 %x, x86_fp80 %y) {
 entry:

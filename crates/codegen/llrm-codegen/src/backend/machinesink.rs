@@ -50,7 +50,8 @@
 //! 263235 -> 263448 (+213 B, +0.081%, 40 modules changed; -O1 to -O3
 //! identical). The rule had bought -85 B of QCport -Os on the old allocator.
 //!
-//! DEVIATE M5 (#2903): in a build for size no edge is broken. The block
+//! DEVIATE M5 (#2903): in a build for size no edge is broken, except one that
+//! leaves the loop its instruction runs in (row M6, below). The block
 //! costs a jump (`bench/recpow` -Os +5 bytes with the edge split; over the
 //! 834-object sweep at head 1b78847ae, breaking it at -Os is 37 objects larger,
 //! +228 bytes, and 26 smaller, -106 bytes). `bench/hanoi` -Os m32 keeps the
@@ -58,6 +59,13 @@
 //! constant (195 bytes against 190 with the edge broken). Exit, decided
 //! 2026-10-22 with jumps' block-by-block diff: a placement rule jumps names,
 //! or sinking with shrink-wrapping (lir-cleanup-port for the sinking half).
+//!
+//! Row M6: the edge that leaves a loop is broken in a build for size too: the
+//! pin's `mov ecx, 32` of an exit phi runs once, in a block of its own, not
+//! every trip in the latch. Measured (own dist pair, sizes.py, clocksweep, m16
+//! -Os, 312 programs): 185933 -> 185910 B, 10 programs changed (6 smaller, 4
+//! larger by 1 to 2 B), no program slower; mandel.nib 185 -> 178 B and
+//! -3.96% clocks, mandel.c -2.2%, mandel.bas -1.5%.
 //!
 //! DEVIATE M6 (no number): an instruction that reads or writes any physical
 //! register stays, where `FindSuccToSinkTo` lets a physical def marked dead
@@ -72,10 +80,6 @@
 //! DEVIATE M3 (#2903): no `PerformSinkAndFold`, no sinking into cycles
 //! (`SinkInstsIntoCycle`, off by default), no debug-value handling (an
 //! instruction has none).
-//!
-//! `pressuresink` (a load made where its reader is, within a block) has no
-//! pin counterpart: LLVM orders loads by the scheduler. It is deleted when the
-//! pre-RA machine scheduler is translated (target 2026-11-20).
 //!
 //! # Example
 //! `b1: v = mov 0; cmp x, 0; je b4` and `b4: r = phi [b1: v] [b2: w]` leave
@@ -813,8 +817,11 @@ impl Sinker {
         to: usize,
         deferred: &mut Option<usize>,
     ) -> bool {
-        // A block on an edge costs a jump the size build does not get back.
-        if self.size {
+        // A block on an edge costs a jump the size build does not get back,
+        // unless the edge leaves the loop the instruction runs in every trip
+        // of.
+        let leaves_loop = self.cycle[from].is_some() && self.cycle[to] != self.cycle[from];
+        if self.size && !leaves_loop {
             return false;
         }
         // An edge already considered this walk: sink several cheap
@@ -1257,6 +1264,62 @@ mod tests {
             .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
             .collect();
         assert_eq!(names, ["or", "jcxz"], "the or stays: its flags are read in the next block");
+    }
+
+    /// bench/mandel.nib -Os m16: the exit phi `[7, 32]` of the inner loop made
+    /// its `mov ecx, 32` in the latch, run every trip (+3.9% clocks over the
+    /// unrotated loop, +7 B). A build for size broke no edge; the edge that
+    /// leaves a loop is broken now, and the constant is made once on it.
+    #[test]
+    fn test_in_a_size_build_a_constant_of_the_loop_exit_phi_leaves_the_latch() {
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let branch = |at: i64, name: &str| insn(at, Operation::Branch, name, vec![], vec![], vec![], vec![]);
+        let cmp = |at: i64| insn(at, Operation::Compare, "cmp", vec![], vec![held(1), imm(32)], vec![], vec![1]);
+        let exit = LirBlock {
+            phis: vec![crate::model::lir::Phi { result: 6, incoming: vec![(1, 2), (2, 5)] }].into(),
+            ..LirBlock::new(3, vec![insn(30, Operation::Return, "ret", vec![], vec![], vec![], vec![])])
+        };
+        let mut body = LirBody::new(
+            "latch",
+            0,
+            vec![
+                block(0, vec![1], vec![insn(0, Operation::Move, "mov", vec![held(2)], vec![imm(0)], vec![2], vec![])])
+                    .into(),
+                block(1, vec![2, 3], vec![cmp(10), branch(11, "jbe")]).into(),
+                block(
+                    2,
+                    vec![1, 3],
+                    vec![
+                        insn(20, Operation::Move, "mov", vec![held(5)], vec![imm(32)], vec![5], vec![]),
+                        cmp(21),
+                        branch(22, "jne"),
+                    ],
+                )
+                .into(),
+                exit.into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        body.odds.taken.insert((2, 3), (0.03 * crate::model::lir::BlockOdds::CERTAIN) as u32);
+        body.odds.taken.insert((2, 1), (0.97 * crate::model::lir::BlockOdds::CERTAIN) as u32);
+        let names = |body: &LirBody, at: i64| -> Vec<String> {
+            body.blocks
+                .iter()
+                .find(|one| one.at == at)
+                .expect("the block")
+                .insns
+                .iter()
+                .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                .collect()
+        };
+        let moved = sunk(&body, true);
+        assert!(!names(&moved, 2).contains(&"mov".to_owned()), "the constant left the latch: {:?}", names(&moved, 2));
+        assert!(moved.blocks.len() == 5, "and went into a block of its own on the exit edge");
     }
 
     /// `x > 65520 ? x - 65521 : x` in a build for size: the `add` was computed
