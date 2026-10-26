@@ -27,7 +27,8 @@
 //!    -> postrasink -> forwarded reloads -> forwarded copies
 //!    -> storecombine -> pushed constants
 //!    -> pushes, constants, commuted, transferred, high extracts, restored
-//!       copies, shuttles, overwritten, fused, fused calls, far loads
+//!       copies, shuttles, overwritten, fused, fused calls, far loads,
+//!       loaded segments
 //!    -> exact addresses -> addresses (LEA) -> stepped after compare
 //!    -> secondary bases -> increments, borrows, doubled, narrowed
 //!    -> widened moves, zero extensions -> zeroed loads -> shared stores
@@ -367,6 +368,7 @@ impl Peephole {
                 ),
             ),
         );
+        let body = loaded_segments(self.rules, &body);
         let body = gated(&mut seen, needs::EXACT_CELL, body, |body| {
             crate::backend::exactaddress::exact_addresses(&body, &self.cpu)
         })?;
@@ -1489,6 +1491,15 @@ pub fn far_loads(
     body: &LirBody,
 ) -> LirBody {
     peep::rewritten(rules.far_loads, body, &Facts::new(body, None))
+}
+
+/// Load a segment register straight from the cell a temporary was loaded from
+/// (`peephole.peep`, `loaded_segments`).
+pub fn loaded_segments(
+    rules: &peep::Rules,
+    body: &LirBody,
+) -> LirBody {
+    peep::rewritten(rules.loaded_segments, body, &Facts::new(body, None))
 }
 
 /// Replace a dead temporary's shift with a scaled 67h LEA.
