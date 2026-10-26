@@ -3,9 +3,10 @@
 
 [[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_element_stores_leave_descriptors_unread"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
+issue = 3994
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "stale expectation: 4f82e22e1 (MemorySSA queries ask the AA stack with TBAA) leaves a volatile store through a far pointer as the pin does, so the cells it may reach are read every trip; the memory-space model of #3994 is the tuning that restores the hoist"
 [[xfail]]
 id = "unit llrm-qb::test_hir_part2::test_dynamic_string_array_formal_uses_adjusted_near_descriptor_base"
 issue = 2848
@@ -14,16 +15,16 @@ date = "2026-10-27"
 why = "red on parity, not bisected; family: other, not yet put in a family; a regression unless triage says stale (qb-reds-parity.md)"
 [[xfail]]
 id = "unit llrm-qb::test_hir_part3::a_poke_to_video_memory_leaves_the_loop_its_variables_and_segment"
-issue = 2848
+issue = 3994
 owner = "funcattrs-port"
 date = "2026-10-27"
-why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
+why = "stale expectation: 4f82e22e1 (MemorySSA queries ask the AA stack with TBAA) leaves a volatile store through a far pointer as the pin does, so the cells it may reach are read every trip; the memory-space model of #3994 is the tuning that restores the hoist"
 [[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_a_counted_loop_reads_an_unannotated_byref_once"
-issue = 2848
+issue = 3994
 owner = "funcattrs-port"
 date = "2026-10-27"
-why = "red on parity, not bisected; family: counted-loop strength reduction; a regression unless triage says stale (qb-reds-parity.md)"
+why = "stale expectation: 4f82e22e1 (MemorySSA queries ask the AA stack with TBAA) leaves a volatile store through a far pointer as the pin does, so the cells it may reach are read every trip; the memory-space model of #3994 is the tuning that restores the hoist"
 [[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_a_masked_far_subscript_compiles"
 issue = 2848
@@ -32,10 +33,10 @@ date = "2026-10-27"
 why = "red on parity, not bisected; family: other, not yet put in a family; a regression unless triage says stale (qb-reds-parity.md)"
 [[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_a_poke_after_a_call_that_never_runs_def_seg_keeps_its_segment"
-issue = 2848
+issue = 3994
 owner = "funcattrs-port"
 date = "2026-10-27"
-why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
+why = "stale expectation: 4f82e22e1 (MemorySSA queries ask the AA stack with TBAA) leaves a volatile store through a far pointer as the pin does, so the cells it may reach are read every trip; the memory-space model of #3994 is the tuning that restores the hoist"
 [[xfail]]
 id = "run qcport-attract -O2"
 issue = 4325
