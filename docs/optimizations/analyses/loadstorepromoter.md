@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/loadstorepromoter.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/loadstorepromoter.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/loadstorepromoter.rs sha256:a18bae2208715c68054f70101132e318e322b5259f27aef44cd31ac695df730f -->
+<!-- src: crates/opt/llrm-analysis/src/loadstorepromoter.rs sha256:67f3d27e26c9af9a92c76cd91eb20b8f4096aa313c9ac54c9bd4746ffc76e365 -->
 
 # loadstorepromoter
 

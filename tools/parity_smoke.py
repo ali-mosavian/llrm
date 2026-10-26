@@ -588,6 +588,7 @@ SCANNERS = {
     "core_depends_on_no_target": "reads crates' manifests",
     "core_fixtures_are_for_core_tests": "reads test fixtures",
     "descriptions_are_read": "reads the target descriptions",
+    "docs_in_sync": "regenerates the doc pages and compares",
     "docs_links": "reads markdown",
     "dosbox_progress": "reads the harness",
     "no_kill_by_pattern": "scans scripts",

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/walk.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/walk.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/walk.rs sha256:ada361c891935eab4920fa0e1b44bb069a6e41f04be0ceba94a83b4d52d1184c -->
+<!-- src: crates/opt/llrm-transforms/src/walk.rs sha256:1b6be9907e8e0e61e1e0556aac686a38368ca59d25863a6f65c0b67a332cf495 -->
 
 # walk
 
