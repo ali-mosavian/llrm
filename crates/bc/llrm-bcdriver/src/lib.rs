@@ -1,5 +1,5 @@
 //! The rich route for BC objects, as `llc` takes a module to an object:
-//! the object raised onto MIR by llrm-x86-bc, optimized by the MIR pipeline,
+//! the object raised onto MIR by llrm-bcobj, optimized by the MIR pipeline,
 //! each function selected by isel and run through the machine phases, and
 //! a fresh BASIC object written around the code.
 //!
@@ -47,7 +47,7 @@ pub fn program(program: &Program) -> Result<Vec<Vec<u8>>, String> {
         let found = found_module::of(&records).ok_or_else(|| format!("{name}: the module has no code segment"))?;
         parsed.push((name, records, found));
     }
-    let segments = llrm_x86_bc::segments(program.machine, parsed.iter().map(|(_, _, found)| found));
+    let segments = llrm_bcobj::segments(program.machine, parsed.iter().map(|(_, _, found)| found));
     parsed
         .iter()
         .map(|(name, records, found)| {
@@ -83,8 +83,8 @@ fn recompiled(
 ) -> Result<Vec<u8>, String> {
     let segments = omf::segments(records);
     let records = records.to_vec();
-    let llrm_x86_bc::Raised { module, runtime, placement, .. } =
-        llrm_x86_bc::raise_in(found, machine, layout).map_err(|refusal| refusal.to_string())?;
+    let llrm_bcobj::Raised { module, runtime, placement, .. } =
+        llrm_bcobj::raise_in(found, machine, layout).map_err(|refusal| refusal.to_string())?;
     let (code_segment, code, _) = omf::code_segment(&records).ok_or("the module has no code segment")?;
     let named = |id: GlobalId| module.global(id).name.owned().ok_or("an unnamed global");
     let mut symbols = BTreeMap::new();
@@ -128,7 +128,7 @@ fn recompiled(
 /// Each data segment the object had, in its order, holding its objects in
 /// their order, each where the object put it.
 fn data_segments(
-    placement: &llrm_x86_bc::Placement,
+    placement: &llrm_bcobj::Placement,
     segments: &[Option<(String, i64)>],
     code_segment: i64,
     named: &dyn Fn(GlobalId) -> Result<String, &'static str>,

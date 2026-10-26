@@ -1243,7 +1243,7 @@ impl Builder<'_> {
                             mem_vt: vt,
                             align: 1,
                             volatile: false,
-                            base: MemBase::Unknown,
+                            base: MemBase::CallArgument((displacement - first + index as i64 * part_bytes) as i32),
                             ext: None,
                             space: 0,
                         };
