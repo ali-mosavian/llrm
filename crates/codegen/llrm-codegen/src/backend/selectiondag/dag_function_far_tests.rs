@@ -67,7 +67,7 @@ fn a_call_of_far_code_is_marked_far() {
     assert_eq!(far, ["far"], "{sites:?} far={:?}", done.far);
 }
 
-const VARIABLE_MOVE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+const VARIABLE_MOVE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 declare void @llvm.memmove.p0.p0.i16(ptr, ptr, i16, i1)
 define void @f(ptr %d, ptr %s, i16 %n) {
 entry:
@@ -228,7 +228,7 @@ fn an_m16_fill_names_its_segment() {
     assert_eq!(fill.sources.len(), 4, "value, count, destination and its segment: {fill:?}");
 }
 
-const FAR_INDIRECT_ARGUMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+const FAR_INDIRECT_ARGUMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 define void @f(ptr addrspace(1) %p) {
 entry:
   call watcallcc addrspace(1) void %p(i32 7)
@@ -250,7 +250,7 @@ fn a_call_through_a_far_pointer_receives_its_arguments() {
     assert!(call.is_some_and(|call| !call.requires.is_empty()), "{insns:?}");
 }
 
-const FAR_GLOBAL_ELEMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+const FAR_GLOBAL_ELEMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 @cells = addrspace(1) global [4 x i16] zeroinitializer
 define i16 @f() {
 entry:
@@ -271,7 +271,7 @@ fn an_element_of_a_far_global_is_a_cell_through_es() {
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
 
-const STRING_OP_ON_ELEMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+const STRING_OP_ON_ELEMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 @buf = global [64 x i8] zeroinitializer
 declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
 define void @f(i16 %i, i16 %n) {
@@ -330,7 +330,7 @@ fn a_far_null_is_two_zero_words() {
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
 
-const M16_HUGE_MEMSET: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+const M16_HUGE_MEMSET: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 define cc 1005 void @f(ptr addrspace(3) %p, i32 %n) addrspace(1) {
 entry:
   call void @llvm.memset.p3.i32(ptr addrspace(3) %p, i8 1, i32 %n, i1 false)
@@ -346,7 +346,7 @@ fn huge_ir(
     metadata: &str,
 ) -> String {
     format!(
-        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 define cc 1005 void @f(ptr addrspace({dst}) %d, ptr addrspace({src}) %s, i32 %n) addrspace(1) {{
 entry:
   call void @llvm.{name}.p{dst}.p{src}.i32(ptr addrspace({dst}) %d, ptr addrspace({src}) %s, i32 %n, i1 false){metadata}
@@ -396,7 +396,7 @@ fn a_copy_through_huge_pointers_calls_the_stepped_routine() {
     assert!(refused.contains("near"), "{refused}");
 }
 
-const VARSEG: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+const VARSEG: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 @x = internal global i16 0
 define i16 @f() {
 entry:
@@ -427,7 +427,7 @@ fn a_near_pointer_cast_to_the_segment_space_is_its_segment_selector() {
     assert_eq!(spaces, [crate::model::ir::Space::Group], "{spaces:?}");
 }
 
-const FAR_COPY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+const FAR_COPY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 define void @f(ptr %d, ptr addrspace(2) %s, i16 %i, i16 %n) addrspace(1) {
 entry:
   %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(4)
@@ -519,7 +519,7 @@ fn a_copy_from_a_far_global_loads_the_globals_segment() {
     assert_ne!(group, Some(0), "DGROUP, not the global's own segment: {loaded:?}");
 }
 
-const FAR_MEMSET: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+const FAR_MEMSET: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 define void @f(ptr addrspace(2) %s, i16 %n) addrspace(1) {
 entry:
   %p = addrspacecast ptr addrspace(2) %s to ptr addrspace(4)
@@ -595,7 +595,7 @@ fn two_loads_through_es_read_their_own_selectors() {
 /// A far pointer made from a `long` call result (`(unsigned char far *)
 /// qglSfAccessWrEx(..)`), then cleared by a loop: QCport `part.c` stopped at
 /// "a string operation on a pointer of no known segment".
-const FAR_FROM_A_CALL_RESULT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+const FAR_FROM_A_CALL_RESULT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 define i16 @f(i32 %sf) addrspace(1) {
 b1:
   %r = call addrspace(1) i32 @acc(i32 %sf, i16 0, i16 1)
@@ -639,7 +639,7 @@ fn a_far_pointer_from_a_call_result_has_its_selector_for_a_fill() {
 /// `part.c` at -O3, `part_raster` inlined): the fill's address is `offset +
 /// (x & 0xFFFF0000)` for the dword `x` the call returned, and it stopped at
 /// "a string operation on a pointer of no known segment".
-const FILL_INTO_A_CALL_RESULT_IN_A_LOOP: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+const FILL_INTO_A_CALL_RESULT_IN_A_LOOP: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 
 define cc 1005 void @\"_frame@3\"(i32 noundef %0, i32 noundef %1, i16 noundef %2) addrspace(1) \"llrm-fp-eval\"=\"x87-extended\" {
 b1:
@@ -787,7 +787,7 @@ fn a_fill_at_an_offset_into_a_call_result_has_the_results_selector() {
 /// A far pointer from a near one (`addrspacecast`) with a constant byte
 /// offset added: the offset was built as a constant of the far type, which
 /// has none (`nbody.bas`: "integer constant of Simple(Far)").
-const FAR_PLUS_A_CONSTANT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+const FAR_PLUS_A_CONSTANT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 define void @f(ptr %p) addrspace(1) {
 b1:
   %w = load i16, ptr %p
@@ -811,7 +811,7 @@ fn a_constant_offset_from_a_far_pointer_is_an_offset_of_its_halves() {
 /// selector SS) read through after another far access had set ES: the cell is
 /// the frame's own. It stopped with "address component Reg(ES)" (bench
 /// `lru.nib`), reduced from its `main`.
-const FAR_FRAME_POINTER: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+const FAR_FRAME_POINTER: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 
 @$var_bord = internal global [6 x i8] zeroinitializer, align 2
 @$var_bprev = internal global [6 x i8] zeroinitializer, align 2
