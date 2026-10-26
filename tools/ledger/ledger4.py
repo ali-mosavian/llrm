@@ -24,6 +24,10 @@ def settings(environ, argv):
 
 OURS, CLANG, OT, PT, DETAIL = settings(os.environ, sys.argv)
 ours = parse(OURS); clang = parse(CLANG, pin=True)
+# Instrument check: a crate the bucket patterns name that the profile has no symbol of (a rename: llrm_core -> llrm_codegen) reads as a zero bucket.
+_missing = sorted(c for c in set(re.findall(r"llrm_[a-z0-9_]+(?=::)", open(os.path.abspath(__file__)).read())) if not any(c + "::" in sym for sym in ours))
+if _missing:
+    raise SystemExit(f"ledger4: the bucket patterns name crate(s) {', '.join(_missing)} that {OURS} has no symbol of: renamed? the buckets would read zero")
 clang_hts = [v for k, v in clang.items() if k.startswith("clang::BackendConsumer::HandleTranslationUnit(")][0]
 # bucket -> (regex on our symbol, regex on pin symbol)
 O = lambda name: r"<llrm_transforms::" + name + r" as llrm_mir::(passes::(Function|Module)Pass|program::ProgramPass)>::run$"

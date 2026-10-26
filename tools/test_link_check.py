@@ -32,3 +32,18 @@ def test_the_landing_layer_links_for_a_runtime_change_and_refuses_what_does_not_
     assert not built, "a docs change builds nothing"
     assert ps.new_link_failures(["runtime/c/x86-m32/c.toml"], build=lambda: built.append(1), check=lambda: bad) == bad
     assert built and "link: 3 QB + 2 C programs, 1 do not link" in capsys.readouterr().out
+
+
+def test_a_dangling_link_is_refused_by_name_before_anything_is_built(tmp_path):
+    """The #4972 batch crashed in the link stage on two links the re-org left dangling: no refusal, no name."""
+    (tmp_path / "tests/qbrt").mkdir(parents=True)
+    for name in lc.QB_PROGRAMS:
+        (tmp_path / "tests/qbrt" / f"{name}.bas").write_text("")
+    (tmp_path / "gone.txt").symlink_to("../old/gone.txt")
+    listing = ["120000 aa 0\tgone.txt"]
+    assert lc.unreadable_inputs(tmp_path, listing) == ["dangling link gone.txt -> ../old/gone.txt"]
+    import parity_squash as ps
+
+    built = []
+    why = ps.new_link_failures(["runtime/c/x86-m32/c.toml"], build=lambda: built.append(1), check=lambda: [], inputs=lambda: lc.unreadable_inputs(tmp_path, listing))
+    assert why == ["dangling link gone.txt -> ../old/gone.txt"] and not built

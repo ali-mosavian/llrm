@@ -43,14 +43,26 @@ def missing_in(text: str) -> set[str]:
     return {p for p in named_paths(text) if "*" not in p and not exists(p) and p not in NOT_PATHS}
 
 
+def scanned_names(tracked: list[str]) -> list[str]:
+    """The tracked files to scan. Matched without case: the pathspec `git ls-files CLA` `UDE.md` is exact, and the tracked doc is lowercase, so it matched nothing."""
+    roots = {name.lower() for name in SCANNED}
+    return [f for f in tracked if f.lower().endswith(TEXT_SUFFIXES) and f.split("/")[0].lower() in roots]
+
+
 def scanned_files() -> list[Path]:
-    out = subprocess.check_output(["git", "ls-files", *SCANNED], cwd=ROOT, text=True)
-    return [ROOT / f for f in out.split() if f.endswith(TEXT_SUFFIXES)]
+    out = subprocess.check_output(["git", "ls-files"], cwd=ROOT, text=True)
+    return [ROOT / f for f in scanned_names(out.splitlines())]
 
 
 def test_a_path_missing_from_the_tree_is_reported():
     """A doc naming tools/gone/x.py after the file moved: the scan has to report it."""
     assert missing_in("run `python3 tools/gone/x.py` and tools/nonesuch/y.sh") == {"tools/gone/x.py", "tools/nonesuch/y.sh"}
+
+
+def test_a_doc_named_in_another_case_is_scanned():
+    """The root doc is tracked in lowercase; the scan listed it by an uppercase pathspec and read nothing of it."""
+    doc = "cla" "ude.md"
+    assert scanned_names([doc, "docs/a.md", "src/lib.rs", "tools/x.py"]) == [doc, "docs/a.md"]
 
 
 def test_a_name_that_starts_a_file_name_is_a_path():
