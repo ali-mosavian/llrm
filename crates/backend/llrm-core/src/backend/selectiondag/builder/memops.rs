@@ -183,7 +183,7 @@ impl Builder<'_> {
         Ok(())
     }
 
-    fn function_has(
+    pub(super) fn function_has(
         &self,
         name: &str,
     ) -> bool {
