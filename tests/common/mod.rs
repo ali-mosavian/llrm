@@ -4,6 +4,7 @@
 
 use std::path::Path;
 
+pub mod cc;
 pub mod dosbox;
 
 fn recipe() -> toml::Table {

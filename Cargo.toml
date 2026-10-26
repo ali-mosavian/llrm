@@ -57,6 +57,7 @@ llrm-analysis = { path = "crates/opt/llrm-analysis" }
 llrm-transforms = { path = "crates/opt/llrm-transforms" }
 llrm-codegen = { path = "crates/codegen/llrm-codegen" }
 llrm-driver = { path = "crates/driver/llrm-driver" }
+llrm-cc = { path = "crates/driver/llrm-cc" }
 llrm-iselgen = { path = "crates/backend/llrm-iselgen" }
 llrm-peepgen = { path = "crates/backend/llrm-peepgen" }
 llrm-nib = { path = "crates/frontends/nib" }
@@ -84,6 +85,7 @@ llrm-driver = { workspace = true }
 llrm-nib = { workspace = true }
 llrm-qb = { workspace = true }
 llrm-c = { workspace = true }
+llrm-cc = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 
@@ -112,6 +114,10 @@ path = "src/bin/llrm-qb.rs"
 [[bin]]
 name = "llrm-c"
 path = "src/bin/llrm-c.rs"
+
+[[bin]]
+name = "llrm-cc"
+path = "src/bin/llrm-cc.rs"
 
 [[bin]]
 name = "llrm-llc"

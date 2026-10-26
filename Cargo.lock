@@ -198,6 +198,7 @@ dependencies = [
  "llrm-analysis",
  "llrm-bcdriver",
  "llrm-c",
+ "llrm-cc",
  "llrm-codegen",
  "llrm-driver",
  "llrm-mir",
