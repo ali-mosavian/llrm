@@ -293,3 +293,51 @@ def test_a_slot_checkout_keeps_its_path_and_two_processes_never_share_a_slot(tmp
     assert {first, second} == {0, 1}
     lock_a.close()
     lock_b.close()
+
+
+def test_the_alone_command_prints_the_surviving_numbers_on_stdout_and_nothing_else(monkeypatch, capsys):
+    """The scanners' `scanners: 2 targets, 0 red (tree ...)` reached stdout, the runner read it as PR numbers, and no batch formed for 70 minutes."""
+
+    def fake(numbers, heads, **_):
+        print("scanners: 2 targets, 0 red (tree abc123)")
+        return list(numbers), {}
+
+    monkeypatch.setattr(ps, "alone", fake)
+    monkeypatch.setattr(ps, "git", lambda *args, **_: "deadbeef")
+    monkeypatch.setattr(sys, "argv", ["parity_squash.py", "alone", "11", "12"])
+    assert ps.main() == 0
+    out = capsys.readouterr()
+    assert out.out.split() == ["11", "12"], out.out
+
+
+def alone_scratch(tmp_path):
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    head = branch(repo, "pr", "b.txt", "b\n")
+    sh(repo, "checkout", "-q", "main")
+    return repo, head
+
+
+def test_an_alone_check_runs_every_scanner_not_the_two_always_on(tmp_path, monkeypatch):
+    """Batch 18 died on llrm-mir's ratchet and selectiondag_registry in batches 16 and 17, and the alone pass passed their PRs: it ran docs_links and no_local_paths only."""
+    repo, head = alone_scratch(tmp_path)
+    seen = []
+    smoke = ps.parity_smoke_module()
+    monkeypatch.setattr(smoke, "integration_failures", lambda targets, root=None, **_: seen.extend(targets) or set())
+    ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), units=lambda _: set())
+    assert {"selectiondag_registry", "no_todo", "docs_links"} <= set(seen), seen
+
+
+def test_an_alone_check_runs_the_source_scanning_lib_tests_of_a_crate_upstream_of_the_change(tmp_path, monkeypatch):
+    """#4871 added three id-keyed maps in llrm-transforms; the test that forbids them lives in llrm-mir, which transforms depends on, so a dependants run never ran it."""
+    repo, head = alone_scratch(tmp_path)
+    seen = []
+    smoke = ps.parity_smoke_module()
+    monkeypatch.setattr(smoke, "workspace_graph", lambda root: ({}, {}))
+    monkeypatch.setattr(smoke, "touched_packages", lambda files, packages, root: {"llrm-transforms"})
+    monkeypatch.setattr(smoke, "dependants_lib_failures", lambda packages, **_: seen.append(set(packages)) or set())
+    ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda f: set())
+    assert seen and "llrm-mir" in seen[0], seen

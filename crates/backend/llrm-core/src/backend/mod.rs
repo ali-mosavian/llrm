@@ -241,7 +241,6 @@ pub mod peephole;
 pub mod peepholeopt;
 pub mod phiconst;
 pub mod phielim;
-pub mod pointers;
 pub mod postings;
 pub mod postrasink;
 pub mod precse;

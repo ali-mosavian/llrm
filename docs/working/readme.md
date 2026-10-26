@@ -109,6 +109,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [twoaddress-rest-plan](twoaddress-rest-plan.md) | Row 62: what of TwoAddressInstructionPass is left |
 | [row23-plan](row23-plan.md) | Row 23: CodeGenPrepare translation plan |
 | [row43-plan](row43-plan.md) | Row 43: Machine CSE, what is left |
+| [earlycse-snapshot-deviate](earlycse-snapshot-deviate.md) | EarlyCse forks the function and context where the pin mutates in place: DEVIATE EC-1, about 6.8 M |
 | [first-divergence-m32](first-divergence-m32.md) | First divergence from the pin for 71 programs, m32 -O2, counted by cause (2026-10-25) |
 | [row44-plan](row44-plan.md) | Row 44: MachineSink translation plan |
 | [row45-cost-plan](row45-cost-plan.md) | The Peephole's compile cost by sub-pass at the tip, the LLVM home of each, rows R45-1 to R45-6 with dates (2026-10-24) |
@@ -125,7 +126,9 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [selectiondag-switch-plan](selectiondag-switch-plan.md) | SelectionDAG switch plan, revised 2026-10-22 |
 | [selectiondag-builder-gaps](selectiondag-builder-gaps.md) | What the pin's `visit*` has that the DAG builder lacks (sdag-a) |
 | [selectiondag-far-builder](selectiondag-far-builder.md) | Far and huge pointers in the DAG builder (sdag-a) |
+| [old-selector-retirement](old-selector-retirement.md) | What the old selector leaves to retire after the DAG flip, surveyed by reading |
 | [selectiondag-default-readiness](selectiondag-default-readiness.md) | What must be true to make `--isel=dag` the default (sdag-a) |
+| [d64-4-s3-inventory](d64-4-s3-inventory.md) | D64-4 S3 float programs for tests/llc and the pin asm each must match at m64 (sdag-a) |
 | [selectiondag-tail-calls](selectiondag-tail-calls.md) | Tail calls in the DAG path: pin functions, steps, dates (sdag-a) |
 | [selectiondag-huge-memmove](selectiondag-huge-memmove.md) | memmove of huge pointers: the pin's behaviour, options, decision date 10-30 (sdag-a) |
 | [selectiondag-x87-contract](selectiondag-x87-contract.md) | What the DAG legalizer hands the x87 emitter and stackifier (sdag-b) |
