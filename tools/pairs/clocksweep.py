@@ -185,8 +185,11 @@ def main() -> int:
         outs = []
         for arm, dist, isel in (("base", args.base, ""), ("new", args.new, args.isel)):
             out = args.work / f"clocks-{arm}.json"
-            env = {**os.environ, "LLRM_BIN": str(dist), **({"LLRM_ISEL": isel} if isel else {})}
-            env.pop("LLRM_ISEL", None) if not isel else None
+            # LLRM_ISEL_REAL: run_tests keeps a real-mode C program on the old selector otherwise
+            env = {**os.environ, "LLRM_BIN": str(dist), **({"LLRM_ISEL": isel, "LLRM_ISEL_REAL": "1"} if isel else {})}
+            if not isel:
+                env.pop("LLRM_ISEL", None)
+                env.pop("LLRM_ISEL_REAL", None)
             subprocess.run([sys.executable, __file__, "measure", str(out), *args.select], env=env, check=True)
             outs.append(out)
         print("\n".join(compare(json.loads(outs[0].read_text()), json.loads(outs[1].read_text()))))
