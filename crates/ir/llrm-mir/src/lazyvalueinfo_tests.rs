@@ -242,3 +242,16 @@ e:
     let tried = get(Event::LviIcmpPatterns) - before;
     assert_eq!(tried, 0, "{tried} patterns for %y's edge value through %x < 10");
 }
+
+/// Old: `solveBlockValueNonLocal` built a list of the block's predecessors,
+/// each once, to walk it; the pin walks the use list in place. The list cost
+/// 0.6 M Ir more than the walk, of the 11.9 M of the largest CVP input of
+/// d_faces (4651 lists).
+#[test]
+fn solving_a_value_across_blocks_builds_no_predecessor_list() {
+    use crate::counts::{Event, get};
+    let before = get(Event::LviPredecessorLists);
+    let solved = steps(&diamonds(30)).solved;
+    assert!(solved > 30, "{solved}");
+    assert_eq!(get(Event::LviPredecessorLists), before);
+}

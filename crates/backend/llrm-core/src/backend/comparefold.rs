@@ -400,6 +400,22 @@ mod tests {
         assert_eq!(result[1].uses, vec![index]);
     }
 
+    /// `cmp movzx(byte), 0x105; je` as a byte compare matched a byte of 5.
+    #[test]
+    fn a_zero_extended_byte_compared_with_a_wide_constant_keeps_its_load() {
+        let loaded = 1;
+        let cell =
+            Mem { through: RegId::BP, offset: -4, disp_width: 1, ..Mem::new(Some(Addr::new(Space::Frame, -4)), 1) };
+        let [load, compare] = widened(loaded, &cell, Vec::new());
+        let mut wide = (*compare).clone();
+        let what = wide.what.as_mut().unwrap();
+        what.sources[1] = Loc::Imm(Imm { value: 0x105, width: 2, address: None });
+        let insns = vec![load, Arc::new(wide), branch("je")];
+        let users: IndexMap<u32, i64> = [(loaded, 1)].into_iter().collect();
+
+        assert_eq!(selected(&insns, &users, &BTreeSet::new()), insns);
+    }
+
     #[test]
     fn test_zero_extended_byte_test_keeps_the_load_when_sign_is_observed() {
         // A narrow memory compare exposes bit 7 as SF; a zero-extended word

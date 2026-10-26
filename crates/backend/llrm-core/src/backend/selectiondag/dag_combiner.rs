@@ -39,8 +39,6 @@
 //! `visitMUL`
 //! ([L4908](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4908)).
 
-use llrm_mir::hash::HashSet;
-
 use super::actions::{Action, LoadExt, TargetLowering};
 use super::dag::{MemInfo, NodeData, Rauw, SDNodeFlags, SDValue, SelectionDAG};
 use super::isd::{CondCode, ISD};
@@ -103,15 +101,49 @@ pub struct NoCombines;
 
 impl CombineHooks for NoCombines {}
 
+/// A set of node ids, one flag each (ids are dense).
+#[derive(Default)]
+struct NodeSet(Vec<bool>);
+
+impl NodeSet {
+    /// Whether `node` was not in the set.
+    fn insert(
+        &mut self,
+        node: u32,
+    ) -> bool {
+        let at = node as usize;
+        if self.0.len() <= at {
+            self.0.resize(at + 1, false);
+        }
+        !std::mem::replace(&mut self.0[at], true)
+    }
+
+    fn remove(
+        &mut self,
+        node: u32,
+    ) {
+        if let Some(flag) = self.0.get_mut(node as usize) {
+            *flag = false;
+        }
+    }
+
+    fn contains(
+        &self,
+        node: u32,
+    ) -> bool {
+        self.0.get(node as usize).copied().unwrap_or(false)
+    }
+}
+
 pub struct DagCombiner<'a, H: CombineHooks> {
     pub(super) dag: &'a mut SelectionDAG,
     pub(super) hooks: &'a mut H,
     pub(super) level: CombineLevel,
     worklist: Vec<u32>,
-    queued: HashSet<u32>,
+    queued: NodeSet,
     /// `CombinedNodes`: the nodes already visited, whose operands are not
     /// queued again by a visit of their user.
-    combined: HashSet<u32>,
+    combined: NodeSet,
     /// The action table, for the folds that ask what the target can do.
     pub(super) tli: Option<&'a TargetLowering>,
 }
@@ -122,13 +154,15 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         hooks: &'a mut H,
         level: CombineLevel,
     ) -> DagCombiner<'a, H> {
-        // Both sets grow to about the node count: size them once.
-        let nodes = dag.nodes().len();
-        let mut queued = HashSet::default();
-        let mut combined = HashSet::default();
-        queued.reserve(nodes);
-        combined.reserve(nodes);
-        DagCombiner { dag, hooks, level, worklist: Vec::new(), queued, combined, tli: None }
+        DagCombiner {
+            dag,
+            hooks,
+            level,
+            worklist: Vec::new(),
+            queued: NodeSet::default(),
+            combined: NodeSet::default(),
+            tli: None,
+        }
     }
 
     /// The action table the folds query (`TLI`).
@@ -165,7 +199,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
 
     fn next(&mut self) -> Option<u32> {
         let node = self.worklist.pop()?;
-        self.queued.remove(&node);
+        self.queued.remove(node);
         Some(node)
     }
 
@@ -179,7 +213,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return false;
         }
         let results = self.dag.node(SDValue { node, res: 0 }).values.len() as u8;
-        (0..results).all(|res| self.dag.users(SDValue { node, res }).next().is_none())
+        !(0..results).any(|res| self.dag.has_users(SDValue { node, res }))
     }
 
     /// `Run`.
@@ -202,11 +236,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             // test a DAG whose nodes share operands is walked once per path.
             let ops: Vec<u32> = self.dag.node(SDValue { node: n, res: 0 }).ops.iter().map(|op| op.node).collect();
             for op in ops {
-                if !self.combined.contains(&op) {
+                if !self.combined.contains(op) {
                     self.add_to_worklist(op);
                 }
             }
             self.combined.insert(n);
+            // `SDLoc(N)`: what the combine makes takes the node's order.
+            self.dag.cur_order = self.dag.node(SDValue { node: n, res: 0 }).order;
             let before = self.dag.node_count();
             let result = self.combine(SDValue { node: n, res: 0 });
             for made in before..self.dag.node_count() {
@@ -263,6 +299,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> Option<SDValue> {
         match self.dag.opcode(node) {
             ISD::MergeValues => self.visit_merge_values(node),
+            ISD::TokenFactor => self.visit_token_factor(node),
             ISD::Select => self.visit_select(node),
             ISD::Store => self.visit_store(node),
             ISD::Freeze => self.visit_freeze(node),

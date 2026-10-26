@@ -1054,3 +1054,29 @@ b3:
     assert!(visits >= 1, "the entry's branch is a conditional branch");
     assert!(visits <= 2, "b1, b2 and b3 end in a jump or a return: {visits} visits");
 }
+
+/// x_life -O1 kept two identical `icmp sgt n, 2`, one per loop guard LICM
+/// hoisted, in the logical-or form of `foldBranchToCommonDest`; the pin's
+/// `simplifyCondBranch` makes the second branch a constant first, from the
+/// condition of its dominating predecessor, and keeps one compare.
+#[test]
+fn test_a_branch_the_dominating_conditions_imply_is_a_jump_and_its_compare_goes() {
+    let mut module = parsed(
+        "declare void @g()\ndefine void @f(i32 %n) {\nentry:\n  %a = icmp sgt i32 %n, 2\n  %b = icmp sgt i32 %n, 2\n  br i1 %a, label %mid, label %out\nmid:\n  br i1 %b, label %in, label %out\nin:\n  call void @g()\n  br label %out\nout:\n  ret void\n}\n",
+    );
+    assert!(simplify(&mut module));
+    let out = printed(&module);
+    assert_eq!(out.matches("icmp").count(), 1, "{out}");
+    assert!(out.contains("br i1 %a, label %in, label %out"), "{out}");
+}
+
+/// A branch no dominating condition implies keeps its compare.
+#[test]
+fn test_a_branch_the_dominating_conditions_do_not_imply_keeps_its_compare() {
+    let mut module = parsed(
+        "declare void @g()\ndefine void @f(i32 %n) {\nentry:\n  %a = icmp sgt i32 %n, 2\n  %b = icmp sgt i32 %n, 5\n  br i1 %a, label %mid, label %out\nmid:\n  br i1 %b, label %in, label %out\nin:\n  call void @g()\n  br label %out\nout:\n  ret void\n}\n",
+    );
+    simplify(&mut module);
+    let out = printed(&module);
+    assert!(out.contains("icmp sgt i32 %n, 5"), "{out}");
+}

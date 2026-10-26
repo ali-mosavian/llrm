@@ -147,7 +147,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "instcombine",
         "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); the opcodes of foldICmpBinOpWithConstant not yet translated (xor, or, mul, shl, shr, srem, div, sub, add: InstCombineCompares.cpp:4124; only and is, combine_icmp_const.rs) are owed by llrm-w-4, 2026-10-24 onward; on by default, LLRM_NO_COMBINE turns it off",
     ),
-    entry("dead@677", Simplify, "instcombine", Old, "instcombine-port"),
     partial(
         "aggressive-instcombine@678",
         Simplify,
@@ -183,7 +182,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "instcombine",
         "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); the opcodes of foldICmpBinOpWithConstant not yet translated (xor, or, mul, shl, shr, srem, div, sub, add: InstCombineCompares.cpp:4124; only and is, combine_icmp_const.rs) are owed by llrm-w-4, 2026-10-24 onward; on by default, LLRM_NO_COMBINE turns it off",
     ),
-    entry("dead@768", Simplify, "instcombine", Old, "instcombine-port"),
     entry("loopsimplify@772", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@772", Simplify, "lcssa", Old, "lcssa-port"),
     entry("loopidiom@737", Simplify, "loop-idiom", Translated, ""),
@@ -214,7 +212,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "instcombine",
         "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); the opcodes of foldICmpBinOpWithConstant not yet translated (xor, or, mul, shl, shr, srem, div, sub, add: InstCombineCompares.cpp:4124; only and is, combine_icmp_const.rs) are owed by llrm-w-4, 2026-10-24 onward; on by default, LLRM_NO_COMBINE turns it off",
     ),
-    entry("dead@801", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dfajumpthreading@806", Simplify, "dfa-jump-threading", Translated, ""),
     entry(
         "jumpthreading@809",
@@ -223,7 +220,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         Translated,
         "jumpthreading.rs + jumpthreading/loadpre.rs; deviations J2 (guards: no deopt bundles in MIR), J3 (!prof/BFI/BPI), J15 (isSafeToSpeculativelyExecute reuse); see docs/architecture/jumpthreading-translation.md",
     ),
-    entry("decide@809", Simplify, "jump-threading, correlated-propagation", Old, "simplifycfg-port"),
     entry("cvp@810", Simplify, "correlated-propagation", Translated, ""),
     entry("adce@815", Simplify, "adce", Translated, ""),
     entry("memcpyopt@818", Simplify, "memcpyopt", Translated, ""),
@@ -273,7 +269,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "instcombine",
         "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); the opcodes of foldICmpBinOpWithConstant not yet translated (xor, or, mul, shl, shr, srem, div, sub, add: InstCombineCompares.cpp:4124; only and is, combine_icmp_const.rs) are owed by llrm-w-4, 2026-10-24 onward; on by default, LLRM_NO_COMBINE turns it off",
     ),
-    entry("dead@837", Simplify, "instcombine", Old, "instcombine-port"),
     // Not slots: SimplifyCFG at PassBuilderPipelines.cpp#L873
     // (`addPreInlinerPasses`, PGO instrumentation or use only) and #L1424
     // (`ExtraVectorizerPasses`, after the vectorizer) are not in the default

@@ -70,6 +70,7 @@ mod sub_sbb;
 mod sub_simplify;
 mod switch_dags;
 mod switches;
+mod token_factor;
 mod type_actions;
 mod undef_float;
 mod vastart;
