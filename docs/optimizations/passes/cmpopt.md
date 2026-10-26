@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/cmpopt.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/cmpopt.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/cmpopt.rs sha256:578afac58de20f2a75fe2dd237bf1d0f34af38c0f06756722174a6b8c9e55993 -->
+<!-- src: crates/opt/llrm-transforms/src/cmpopt.rs sha256:f6e4aa9f030f8453435f3af260898c6c4a1e8ebf45da44483b0d65d639023f18 -->
 
 # cmpopt
 

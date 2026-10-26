@@ -37,7 +37,12 @@ fn stress(sanitize: Option<&str>) {
     build.arg("-o").arg(&out);
     let built = build.output().expect("cc runs");
     assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
-    let done = Command::new(&out).env("TSAN_OPTIONS", "halt_on_error=1").output().expect("the program runs");
+    let done = Command::new("prlimit")
+        .arg("--data=unlimited")
+        .arg(&out)
+        .env("TSAN_OPTIONS", "halt_on_error=1")
+        .output()
+        .expect("the program runs");
     std::fs::remove_file(&out).ok();
     let printed = String::from_utf8_lossy(&done.stdout).into_owned();
     assert!(done.status.success(), "{printed}{}", String::from_utf8_lossy(&done.stderr));

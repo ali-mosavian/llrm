@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_pass.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_pass.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_pass.rs sha256:7dd988c172a9b5243cc4074d85f36f58a8336f8d92aa03ef9f6ea94edfbed4af -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_pass.rs sha256:4d820b14dbf7db97f5832d220d04b059f7135554edce2d33374b682b6d328a15 -->
 
 # lsr_pass
 
@@ -27,4 +27,5 @@ In the pipeline's strength slot, after `fixednarrow`.
 ## Limits
 DEVIATE: not yet ported: the debug value salvage. `DeleteDeadPHIs` reads
 the header's phis only. `replaceCongruentIVs` runs on every loop in
-simplify form, as `ReduceLoopStrength` does. A loop of more than 200 IV users is left (`MaxIVUsers`).
+simplify form, as `ReduceLoopStrength` does. A loop of more than 200 IV
+users is left (`MaxIVUsers`).

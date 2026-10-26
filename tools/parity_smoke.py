@@ -573,13 +573,19 @@ NIGHTLY_ONLY = {
     "turbo": "a Turbo Debugger session over a program: 138 s and needs the debugger's DOS image",
     "cv4": "30 s of CodeView debug-info checks",
     "run": "every tests/run program: the tests/run groups run it on the PRs that matter",
-    "qb_dirty": "its ThreadSanitizer test maps 35 TB of shadow, which testcap's 16 GB RLIMIT_DATA refuses under the runner's slots (green without them): per PR it would block every runtime change",
 }
 # Targets that build the runtime's C sources with cc and import no crate: run on a PR that changes runtime/ or tests/qbhost/.
 RUNTIME_C = {
     "posix_os": "the POSIX os layer",
     "qb_dev_interface": "the device interface headers",
     "qb_sdl": "the SDL device",
+}
+# Targets that build the runtime's C sources with cc and import no crate: run on a PR that changes runtime/ or tests/qbhost/.
+RUNTIME_C = {
+    "posix_os": "the POSIX os layer",
+    "qb_dev_interface": "the device interface headers",
+    "qb_sdl": "the SDL device",
+    "qb_dirty": "the dirty-line protocol under ThreadSanitizer (its child lifts testcap's soft data limit)",
 }
 # Targets that read files, not crates: scans of sources and docs, run on every PR (all together about 2 s).
 SCANNERS = {
@@ -588,6 +594,7 @@ SCANNERS = {
     "core_depends_on_no_target": "reads crates' manifests",
     "core_fixtures_are_for_core_tests": "reads test fixtures",
     "descriptions_are_read": "reads the target descriptions",
+    "docs_in_sync": "regenerates the doc pages and compares",
     "docs_links": "reads markdown",
     "dosbox_progress": "reads the harness",
     "no_kill_by_pattern": "scans scripts",

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/mem2reg.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/mem2reg.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/mem2reg.rs sha256:6a9c3fe8895a710f8663bf2e36acfaa2f0d3295579431e28a1188bb357da7e60 -->
+<!-- src: crates/opt/llrm-transforms/src/mem2reg.rs sha256:0d613e981fc535ba2e8fb29f3e151bb8e4fbaa9780ed4b025321cc8a74f42da5 -->
 
 # mem2reg
 

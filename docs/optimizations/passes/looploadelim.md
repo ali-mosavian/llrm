@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/looploadelim.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/looploadelim.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/looploadelim.rs sha256:9f4d75da2dd9768552b5df126f2fc4963bb1ef67a34849abb01115a8caba6a7b -->
+<!-- src: crates/opt/llrm-transforms/src/looploadelim.rs sha256:4142ea03051133d3d8f4efe8c816e3eedc06f7b4b0ad92fba34c35563bd48053 -->
 
 # looploadelim
 
