@@ -73,10 +73,6 @@
 //! (`SinkInstsIntoCycle`, off by default), no debug-value handling (an
 //! instruction has none).
 //!
-//! `pressuresink` (a load made where its reader is, within a block) has no
-//! pin counterpart: LLVM orders loads by the scheduler. It is deleted when the
-//! pre-RA machine scheduler is translated (target 2026-11-20).
-//!
 //! # Example
 //! `b1: v = mov 0; cmp x, 0; je b4` and `b4: r = phi [b1: v] [b2: w]` leave
 //! `v = mov 0` in a block on the edge b1 to b4: the path through b2 no longer
