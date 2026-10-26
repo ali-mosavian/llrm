@@ -396,7 +396,7 @@ def test_every_failing_qcport_module_is_listed_not_the_first(tmp_path, monkeypat
 
 
 def test_a_pr_touching_the_qb_frontend_x86_isel_or_the_runtime_spec_runs_every_tests_run_group():
-    for path in ("crates/frontends/qb/src/compile.rs", "crates/frontends/qb/src/semantic.rs", "runtime/qb/src/runtime.toml", "runtime/qb/strconv.c",
+    for path in ("crates/frontends/qb/src/compile.rs", "crates/frontends/qb/src/semantic.rs", "crates/frontends/qb/runtime.toml", "runtime/qb/strconv.c",
                  "crates/target/llrm-x86/src/select.rs", "crates/codegen/llrm-codegen/src/backend/isel.rs"):
         assert ps.runs_whole_groups([path]), path
     for path in ("crates/opt/llrm-transforms/src/gvn.rs", "docs/arch.md", "tools/gate/gate.py", "crates/frontends/llrm-c/src/lib.rs"):
@@ -551,7 +551,7 @@ def test_every_integration_target_is_mapped_and_an_unmapped_one_is_refused():
     assert len(mapping) >= 116 and ps.unmapped_targets(mapping) == [], ps.unmapped_targets(mapping)
     assert ps.unmapped_targets({**mapping, "a_new_target_nobody_mapped": set()}) == ["a_new_target_nobody_mapped"]
     assert "loop_rotation" in ps.integration_targets_for(["crates/opt/llrm-transforms/src/gvn.rs"], {"llrm-transforms"}, mapping)
-    nib_only = ps.integration_targets_for(["crates/frontends/llrm-nib/src/x.rs"], {"llrm-nib"}, mapping)
+    nib_only = ps.integration_targets_for(["crates/frontends/nib/src/x.rs"], {"llrm-nib"}, mapping)
     assert "loop_rotation" not in nib_only and set(ps.SCANNERS) <= set(nib_only) and not set(ps.NIGHTLY_ONLY) & set(nib_only)
     assert "docs_links" in ps.integration_targets_for(["docs/arch.md"], set(), mapping)
     assert "header_copy" in ps.integration_targets_for(["tests/header_copy.rs"], set(), mapping)
@@ -561,7 +561,7 @@ def test_the_check_target_is_mapped_to_every_compiler_its_run_lines_drive():
     """tests/check.rs names only llrm-qb (CARGO_BIN_EXE) but runs the tool of each file's RUN line: copy_idioms.c drives llrm-c, and a change to llrm-c ran no check."""
     mapping = ps.integration_map()
     packages, _ = ps.workspace_graph()
-    for tool, changed in (("llrm-c", "crates/frontends/llrm-c/src/lib.rs"), ("llrm-nib", "crates/frontends/llrm-nib/src/lib.rs"), ("llrm-qb", "crates/frontends/llrm-qb/src/lib.rs")):
+    for tool, changed in (("llrm-c", "crates/frontends/llrm-c/src/lib.rs"), ("llrm-nib", "crates/frontends/nib/src/lib.rs"), ("llrm-qb", "crates/frontends/llrm-qb/src/lib.rs")):
         chosen = ps.integration_targets_for([changed], ps.touched_packages([changed], packages), mapping)
         assert "check" in chosen, f"a change to {tool} does not run tests/check"
 

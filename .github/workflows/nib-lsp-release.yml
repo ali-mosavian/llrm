@@ -16,7 +16,7 @@ on:
       - "crates/backend/llrm-peepgen/**"
       - "crates/bc/llrm-bcdriver/**"
       - "crates/frontends/llrm-c/**"
-      - "crates/frontends/llrm-nib/**"
+      - "crates/frontends/nib/**"
       - "crates/frontends/qb/**"
       - "runtime/qb/**"
       - "crates/frontends/qb/**"

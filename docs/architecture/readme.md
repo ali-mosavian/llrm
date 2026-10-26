@@ -54,7 +54,7 @@ flowchart TB
 | Tool | Frontend | Reaches MIR by |
 | --- | --- | --- |
 | `llrm-qb` | `qbfront` parses and resolves each dialect | HIR, emitted by `llrm_hir::mir::emit` |
-| `llrm-nib` | `crates/frontends/llrm-nib/src/` | the same HIR path |
+| `llrm-nib` | `crates/frontends/nib/src/` | the same HIR path |
 | `llrm-c` | a patched Open Watcom front end records its code-generator calls (`toolchain/owshim/`) | HIR from `crates/frontends/llrm-c/src/translate.rs` |
 | `llrm-omf` | objects QuickBASIC's BC wrote (a side input, [BC objects](../frontends/bc.md)) | `llrm-x86-bc` lifts their machine code; `llrm-bcdriver` compiles it afresh |
 
@@ -278,7 +278,7 @@ step or a reader consumes, not in code:
 
 | Description | Read by |
 | --- | --- |
-| `runtime/qb/src/runtime.toml` | HIR emission, the BC lift and lowering: routine contracts |
+| `crates/frontends/qb/runtime.toml` | HIR emission, the BC lift and lowering: routine contracts |
 | `patterns.isel`, `x86.instr` | `llrm-iselgen`: the selector |
 | `peephole.peep` | `llrm-peepgen`: rewrite rules |
 | `registers.regs`, `timings.times`, `opcosts.txt`, `*.toml` per target | the target crates: registers, costs, layout, ABI |

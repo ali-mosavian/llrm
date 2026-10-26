@@ -130,7 +130,7 @@ def test_a_bisect_finds_the_first_commit_that_fails_and_runs_the_steps_only_log_
 
 def test_the_run_step_runs_only_the_languages_the_diff_can_affect():
     cfg, pkgs = gate.load(), gate.packages()
-    p = gate.plan(["crates/frontends/llrm-nib/src/lib.rs"])
+    p = gate.plan(["crates/frontends/nib/src/lib.rs"])
     assert "LLRM_RUN_ONLY='nib'" in gate.commands(p, cfg, pkgs)["run"]
 
 

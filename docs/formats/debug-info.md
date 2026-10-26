@@ -85,7 +85,7 @@ pick the writer from the object format and the `-g` flavor, and the backend buil
    the register holds it for the whole body; a parameter the code overwrites has no one place and is left
    out; DWARF gets its ranges. A parameter in two registers (a pair) is still left out
    (at `-O0` no frontend produces one; with optimization [#1368](https://github.com/ali-mosavian/llrm/issues/1368)). Tests:
-   `crates/frontends/llrm-nib/src/test_debug.rs`, `tests/cv4.rs`.
+   `crates/frontends/nib/src/test_debug.rs`, `tests/cv4.rs`.
 4. `valuetrack.rs` follows the emitted code along every path (LLVM's instruction-referencing
    LiveDebugValues): isel marks which instructions define a named value, masm marks where each landed, and
    the tracker says where each variable is, in a register or a cell. Where the code cannot be followed or the

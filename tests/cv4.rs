@@ -348,7 +348,7 @@ fn ms_link_links_a_comdat_per_procedure_and_the_program_runs() {
         run(bin.join("jwasm"), args);
     }
     let nib = bin.join("llrm-nib");
-    let runtime = root.join("crates/frontends/llrm-nib/src/runtime/runtime.nib").display().to_string();
+    let runtime = root.join("crates/frontends/nib/src/runtime/runtime.nib").display().to_string();
     for (program, cut, flags) in [("p.obj", "rt.obj", None), ("pg.obj", "rtg.obj", Some("-g"))] {
         let mut arguments: Vec<String> = vec!["-m16".into(), "-O0".into(), "--procedure-segments".into()];
         arguments.extend(flags.map(str::to_owned));
@@ -429,7 +429,7 @@ fn nib_in_codeview(
         vec![
             "-m16".into(),
             "-O0".into(),
-            root.join("crates/frontends/llrm-nib/src/runtime/runtime.nib").display().to_string(),
+            root.join("crates/frontends/nib/src/runtime/runtime.nib").display().to_string(),
             "-o".into(),
             scratch.path().join("rt.obj").display().to_string(),
         ],

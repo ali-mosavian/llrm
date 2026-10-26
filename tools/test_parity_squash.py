@@ -753,7 +753,7 @@ def test_a_listed_test_that_passes_refuses_the_batch_and_the_head_does_not_excus
     """An `xpass unit ...` name from the lib layer is a refusal of its own: it is not a failure to compare with the head's."""
     xpass = {"xpass unit llrm-nib::test_debug::fixed"}
     on_head = lambda by_package: pytest.fail("the head is asked about a pass")  # noqa: E731
-    assert ps.new_lib_failures(["crates/frontends/llrm-nib/src/lib.rs"], on_merged=lambda packages: set(xpass), on_head=on_head) == xpass
+    assert ps.new_lib_failures(["crates/frontends/nib/src/lib.rs"], on_merged=lambda packages: set(xpass), on_head=on_head) == xpass
 
 
 def _closure(path):

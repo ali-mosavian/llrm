@@ -1,6 +1,6 @@
 [workspace]
-members = [".", "crates/*/llrm-*", "crates/frontends/qb", "runtime/qb"]
-default-members = [".", "crates/*/llrm-*", "crates/frontends/qb", "runtime/qb"]
+members = [".", "crates/*/llrm-*", "crates/frontends/nib", "crates/frontends/qb", "runtime/qb"]
+default-members = [".", "crates/*/llrm-*", "crates/frontends/nib", "crates/frontends/qb", "runtime/qb"]
 resolver = "3"
 
 [workspace.package]
@@ -59,7 +59,7 @@ llrm-codegen = { path = "crates/codegen/llrm-codegen" }
 llrm-driver = { path = "crates/driver/llrm-driver" }
 llrm-iselgen = { path = "crates/backend/llrm-iselgen" }
 llrm-peepgen = { path = "crates/backend/llrm-peepgen" }
-llrm-nib = { path = "crates/frontends/llrm-nib" }
+llrm-nib = { path = "crates/frontends/nib" }
 llrm-qb = { path = "crates/frontends/qb" }
 llrm-c = { path = "crates/frontends/llrm-c" }
 llrm-qbruntime = { path = "runtime/qb" }

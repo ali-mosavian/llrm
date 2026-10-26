@@ -102,7 +102,7 @@ owners = ["crates/backend/**", "crates/codegen/**", "crates/driver/llrm-driver/*
 [run_languages]
 qb = ["crates/frontends/qb/**", "crates/frontends/qb/**", "runtime/qb/**", "tests/run/qb/**"]
 c = ["crates/frontends/llrm-c/**", "tests/run/c/**"]
-nib = ["crates/frontends/llrm-nib/**", "tests/run/nib/**"]
+nib = ["crates/frontends/nib/**", "tests/run/nib/**"]
 # Everything else (targets, examples, bench, tests/run/huge, tests/run/alias, run.rs) runs all languages.
 
 # One slow test inside an otherwise cheap binary: split out, so the binary's other tests stay cheap.

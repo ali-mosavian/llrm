@@ -31,7 +31,7 @@ in [readme.md](readme.md).
 | `frontends/qbfront` | The QB, QBasic, PDS and VBDOS parser and resolver, generated from `grammar/` |
 | `frontends/llrm-qb` | The `llrm-qb` driver: dialects, inline runtime, stage dumps |
 | `frontends/llrm-qbruntime` | QB runtime routine contracts (`runtime.toml`) |
-| `frontends/llrm-nib` | The Nib frontend: lexer, parser, semantics, std, runtime, and the language server (`lsp`) |
+| `frontends/nib` | The Nib frontend: lexer, parser, semantics, std, runtime, and the language server (`lsp`) |
 | `frontends/llrm-c` | C through Open Watcom's front end (`toolchain/owshim/`): capture stream and translation to HIR |
 | `bc/llrm-bcdriver` | Compiles objects BC wrote: lift, optimise, select, write a fresh object |
 | `target/llrm-x86-bcmachine` | x86 decode, blocks and runtime ABI facts for BC objects |
