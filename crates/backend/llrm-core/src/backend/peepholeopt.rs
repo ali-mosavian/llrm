@@ -401,6 +401,16 @@ pub fn immediates_folded(
             }
         }
     }
+    // A value with no definition is an undefined read (`ProcessImplicitDefs`
+    // removed its `IMPLICIT_DEF`): swapping it into the tied first place
+    // would make the instruction read a register nothing wrote.
+    let mut defined: HashSet<u32> = HashSet::default();
+    for block in &body.blocks {
+        defined.extend(block.phis.iter().map(|phi| phi.result));
+        for one in &block.insns {
+            defined.extend(one.defines.iter().copied().chain(one.delivers.iter().map(|(held, _)| held.value)));
+        }
+    }
     let mut out = body.clone();
     for block in &mut out.blocks {
         let mut constants: HashMap<u32, (usize, Imm)> = HashMap::default();
@@ -412,7 +422,7 @@ pub fn immediates_folded(
                 continue;
             }
             let Some((folded, value)) = copy_folded(&insns[at], &insns[at + 1..], &constants, &reads, size)
-                .or_else(|| folded_use(&insns[at], &constants, &reads, size))
+                .or_else(|| folded_use(&insns[at], &constants, &reads, &defined, size))
             else {
                 continue;
             };
@@ -516,6 +526,7 @@ fn folded_use(
     one: &Insn,
     constants: &HashMap<u32, (usize, Imm)>,
     reads: &HashMap<u32, usize>,
+    defined: &HashSet<u32>,
     size: bool,
 ) -> Option<(Insn, u32)> {
     let what = one.what.as_ref()?;
@@ -546,7 +557,9 @@ fn folded_use(
     if (size && reads.get(&value).copied().unwrap_or(0) > 1) || imm.width != kept.width && imm.width != second.width {
         return None;
     }
-    let _ = swapped;
+    if swapped && !defined.contains(&kept.value) {
+        return None;
+    }
     let sources = vec![Loc::Held(kept), Loc::Imm(Imm { width: kept.width, ..imm })];
     let mut folded = one.clone();
     folded.what = Some(Semantics { sources, ..what.clone() });
