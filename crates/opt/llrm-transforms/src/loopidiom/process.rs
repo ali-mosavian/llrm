@@ -240,6 +240,7 @@ impl LoopIdiomRecognize {
             let cx = cx!(run);
             let mut groups: Vec<(Operand, Operand)> = Vec::new();
             let mut stores = 0;
+            let mut kept = 0;
             for &block in blocks {
                 for inst in run.function.iter_block(block) {
                     let instruction = run.function.instruction(inst);
@@ -247,6 +248,16 @@ impl LoopIdiomRecognize {
                         continue;
                     }
                     stores += 1;
+                    // A store of a value the loop computes stays, and with it
+                    // the loop: a fill then saves that one store.
+                    if let Operand::Value(value) = instruction.operands[0]
+                        && matches!(
+                            run.function.value(value).def,
+                            llrm_mir::module::ValueDef::Instruction(def) if run.function.parent(def).is_some_and(|home| blocks.contains(&home))
+                        )
+                    {
+                        kept += 1;
+                    }
                     let object = llrm_mir::valuetracking::underlying::get_underlying_object(
                         &cx.query(Some(inst)),
                         instruction.operands[1],
@@ -258,6 +269,12 @@ impl LoopIdiomRecognize {
                     }
                 }
             }
+            // The fill of an object a memset sets already merges with it
+            // (`vel_x[i] = 0` after `let vel_x = [0, ...]`): the loop's zero
+            // stores are then dead, whatever else stays.
+            if kept > 0 && self.fills_a_set_object(run, &cx, &blocks) {
+                kept = 0;
+            }
             if !crate::loopidioms::fills_pay(
                 run.context,
                 run.env.layout,
@@ -267,6 +284,7 @@ impl LoopIdiomRecognize {
                 costs,
                 stores,
                 groups.len() as i64,
+                kept,
             ) {
                 return false;
             }
@@ -559,6 +577,55 @@ impl LoopIdiomRecognize {
         }
         cleaner.cleanup(&mut expander, run.function);
         changed
+    }
+
+    /// Whether every constant store of the loop over `blocks` is to an object
+    /// a `memset`, `memcpy` (an initializer) or a constant store outside the
+    /// loop sets.
+    fn fills_a_set_object(
+        &self,
+        run: &Run,
+        cx: &Cx,
+        blocks: &[llrm_mir::module::BlockId],
+    ) -> bool {
+        use llrm_mir::valuetracking::pattern::{IntrinsicId, call_arguments, call_intrinsic};
+        use llrm_mir::valuetracking::underlying::get_underlying_object;
+        let mut set = Vec::new();
+        for &block in run.function.layout() {
+            for inst in run.function.iter_block(block) {
+                let query = cx.query(Some(inst));
+                let instruction = run.function.instruction(inst);
+                if matches!(
+                    call_intrinsic(&query, inst),
+                    Some(IntrinsicId::Memset | IntrinsicId::Memcpy)
+                ) {
+                    set.push(get_underlying_object(&query, call_arguments(instruction)[0], 0));
+                } else if matches!(instruction.opcode, Opcode::Store { .. })
+                    && matches!(instruction.operands[0], Operand::Constant(_))
+                    && !blocks.contains(&block)
+                {
+                    // An aggregate initializer, before it is a memset.
+                    set.push(get_underlying_object(&query, instruction.operands[1], 0));
+                }
+            }
+        }
+        blocks
+            .iter()
+            .all(
+                |&block| run.function
+                    .iter_block(block)
+                    .all(
+                        |inst| {
+                            let instruction = run.function.instruction(inst);
+                            if !matches!(instruction.opcode, Opcode::Store { .. })
+                                || !matches!(instruction.operands[0], Operand::Constant(_))
+                            {
+                                return true;
+                            }
+                            set.contains(&get_underlying_object(&cx.query(Some(inst)), instruction.operands[1], 0))
+                        },
+                    ),
+            )
     }
 
     /// `isa<MemCpyInst>(TheStore) && MCI->isForceInlined()`.
