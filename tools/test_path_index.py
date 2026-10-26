@@ -39,7 +39,6 @@ MACHINE_NOT_YET = {
     "machine/isa/x86/i686.toml": "M3",
     "machine/isa/x86/pentium3.toml": "M3",
     "machine/tune": "tuning files arrive in M3",
-    "machine/platform/darwin/flat64.toml": "the arm64 darwin files are datalayout and object, not a platform file: not moved yet",
 }
 
 
