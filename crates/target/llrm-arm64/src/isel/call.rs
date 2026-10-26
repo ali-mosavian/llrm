@@ -6,7 +6,7 @@ use llrm_mir::{Attribute, CallInfo, GlobalKind, InstId, Instruction, Opcode, Ope
 
 use super::val::{AddrExpr, Base, G, Known, Val};
 use super::{Selected, Selector, Src, refuse};
-use crate::cc::{Assigner, Place, Scalar};
+use crate::cc::{Assigner, Place};
 use crate::machine::Platform;
 use crate::mc::inst::*;
 use crate::mc::visit::Reg;
@@ -63,28 +63,10 @@ impl Selector<'_> {
         &mut self,
         place: Place,
         leaf: &Val,
-        scalar: Scalar,
     ) -> Selected<()> {
         match (place, leaf) {
             (Place::Gpr(number), Val::Int(g)) => {
-                // `mov w, w` for a value narrower than 64 bits: it also clears
-                // the bits above the 32nd, which the caller
-                // leaves undefined.
-                let source = Gpr(number);
-                if scalar == Scalar::I32 {
-                    self.inst(Inst::LogicShifted {
-                        op: Logic::Orr,
-                        invert: false,
-                        width: Width::W,
-                        rd: g.reg,
-                        rn: Gpr::R31,
-                        rm: source,
-                        shift: Shift::Lsl,
-                        amount: 0,
-                    });
-                } else {
-                    self.emit(Op::Copy { dst: Reg::Gpr(g.reg), src: Reg::Gpr(source) });
-                }
+                self.emit(Op::Copy { dst: Reg::Gpr(g.reg), src: Reg::Gpr(Gpr(number)) });
             }
             (Place::Gpr(number), Val::Ptr(AddrExpr { base: Base::Reg(reg), .. })) => {
                 self.emit(Op::Copy { dst: Reg::Gpr(*reg), src: Reg::Gpr(Gpr(number)) });
@@ -132,10 +114,8 @@ impl Selector<'_> {
                 self.places_of(&mut assigner, ty, true)?
             };
             let mut value = self.fresh(ty)?;
-            let leaf_types = self.leaf_types(ty)?;
-            for ((place, leaf), leaf_type) in places.iter().zip(value.leaves_mut()).zip(leaf_types) {
-                let scalar = self.scalar(leaf_type)?;
-                self.copy_in(*place, leaf, scalar)?;
+            for (place, leaf) in places.iter().zip(value.leaves_mut()) {
+                self.copy_in(*place, leaf)?;
             }
             // What the attributes promise of its extension.
             let value = match value {

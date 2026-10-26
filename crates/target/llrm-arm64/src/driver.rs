@@ -173,6 +173,9 @@ pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String
         let mut machine =
             crate::isel::select(module, id, &program.layout, platform).map_err(|why| format!("@{name}: {why}"))?;
         crate::prepass::run(&mut machine);
+        if llrm_support::debug::enabled("arm64") {
+            eprintln!("@{name} before allocation:\n{machine:#?}");
+        }
         let allocation = crate::regalloc::allocate(&mut machine);
         let blocks = crate::frame::lower(&machine, &allocation).map_err(|why| format!("@{name}: {why}"))?;
         let blocks = crate::layout::fold(blocks);

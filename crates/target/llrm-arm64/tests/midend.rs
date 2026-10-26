@@ -81,3 +81,14 @@ fn the_size_level_makes_smaller_code_than_the_speed_level() {
     assert!(lines(driver::Level::Os) * 2 < lines(driver::Level::O2), "-Os is no smaller than -O2");
     assert!(driver::Level::parse("s") == Ok(driver::Level::Os) && driver::Level::parse("q").is_err());
 }
+
+/// Every i32 argument was moved with a literal `orr w, wzr, w` the register allocator could not see
+/// through, so `f(int a, int b)` spent two instructions copying its arguments (`tests/llc/call.c`:
+/// 32 bytes where the pin's `clang -O2` makes 20).
+#[test]
+fn an_i32_argument_is_used_in_the_register_it_arrives_in() {
+    let text = "define i32 @f(i32 %a, i32 %b) {\n  %x = mul i32 %a, %a\n  %y = mul i32 %b, %b\n  %r = add i32 %x, %y\n  ret i32 %r\n}\n";
+    let asm = driver::assembly(&format!("target datalayout = \"{}\"\n{text}", Platform::Darwin.datalayout()), Platform::Darwin, true)
+        .expect("lowers");
+    assert!(!asm.contains("orr"), "an argument was copied:\n{asm}");
+}
