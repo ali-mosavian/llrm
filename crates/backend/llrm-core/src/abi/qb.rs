@@ -133,6 +133,22 @@ static _AUDITED_STATEMENT_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|
         // and `call far B$REST`, nothing pushed.
         ("B$STOP", 0),
         ("B$REST", 0),
+        // QB45 rt/dkstmt.asm B$FILS(parmW fname): the pattern's descriptor.
+        ("B$FILS", 2),
+        // QB45 rt/osstmt.asm B$SSHL(parmSD sdExec): the command's descriptor.
+        ("B$SSHL", 2),
+        // QB45 rt/dvstmt.asm B$FATR(parmW channel, parmW fieldid).
+        ("B$FATR", 4),
+        // QB45 rt/osstmt.asm B$SENV(parmSD sdEnviron).
+        ("B$SENV", 2),
+        // QB45 rt/dkstmt.asm B$KILL(parmSD fname), B$NAME(parmSD oldname,
+        // parmSD newname); rt/directry.asm `pascal far B$MDIR(psdDirectory)`,
+        // B$CDIR and B$RDIR alike.
+        ("B$KILL", 2),
+        ("B$NAME", 4),
+        ("B$MDIR", 2),
+        ("B$CDIR", 2),
+        ("B$RDIR", 2),
         // QB45 rt/rlset.asm: parmW psdSource, parmD psdDest, parmW cbDest.
         ("B$LSET", 8),
         ("B$RSET", 8),
