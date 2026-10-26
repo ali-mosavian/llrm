@@ -866,7 +866,7 @@ fn _proven(
     // narrow counter of the same low bits: LSR keeps the wide value a store
     // reads and tests `trunc(i + 1) == 20000`. Only a loop tested at its
     // latch, for equality, so no wrap promise of the wide step is read.
-    let mut narrow: BTreeMap<ValueId, bool> = BTreeMap::new();
+    let mut narrow: llrm_mir::dense::IdMap<ValueId, bool> = llrm_mir::dense::IdMap::new();
     if shape.posttested && continuing == IntPredicate::Ne {
         for (counter, source) in counters.clone() {
             let Some(phi) = defining(function, source).filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
