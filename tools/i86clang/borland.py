@@ -5,7 +5,7 @@
   T * far p        the pointer object is far            -> same attribute, at file scope; dropped in a body (a local is on the stack)
   T far name       the object is far                    -> same at file scope; dropped in a body
   T far name(...)  the function is called far           -> dropped (kept as a mark for the call distance)
-  (far *fp)(...)   a far function pointer               -> dropped
+  (far *fp)(...)   a far function pointer               -> (* __ptr64 fp)(...); (near *fp) -> (* __uptr fp)(...)
 `T near *p` is a near pointer (address space 0) so it stays near under a far-data model; any other `near`, and pascal's
 neighbours cdecl, interrupt and the other modifiers, are dropped (pascal becomes clang's stdcall).
 """
@@ -69,12 +69,17 @@ def rewrite(text):
             out[i] = "__attribute__((stdcall))"
         elif t in DROP:
             out[i] = ""
+        elif t in NEAR and nxt == "*" and prev == "(":
+            # `(near *fp)(..)`: a near function pointer, whatever the model's code distance
+            out[i], out[sig[n + 1]] = "", "* __uptr "
+        elif t in FAR and nxt == "*" and prev == "(":
+            out[i], out[sig[n + 1]] = "", "* __ptr64 "
         elif t in NEAR:
             # `T near *p` is a near pointer whatever the model's default is; any other `near` is a mark on a function or object.
-            out[i] = NEAR_ATTR if nxt == "*" and prev != "(" else ""
+            out[i] = NEAR_ATTR if nxt == "*" else ""
         elif t in FAR:
             if nxt == "*":
-                out[i] = "" if prev == "(" else attr(t)
+                out[i] = attr(t)
             elif prev == "*":
                 out[i] = "" if depth > 0 else attr(t)
             elif nxtk == "id" and nxt2 == "(":

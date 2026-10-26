@@ -137,12 +137,21 @@ class Models(unittest.TestCase):
             self.assertEqual("ptr addrspace(1)" if data_far else "ptr", space_of(ir, "p"))
         self.each(check)
 
-    def test_an_explicit_function_pointer_distance_is_the_models_code_distance(self):
-        # Limit: clang cannot qualify a function type with an address space, so `int (far *)(void)` in a near-code model, or
-        # `int (near *)(void)` in a far-code one, is the model's own width. bcc and wcc give them the distance written.
+    def test_an_explicit_function_pointer_distance_is_the_one_written_in_every_model(self):
+        # `far` is always far and `near` always near, a function pointer included, whatever the model's code distance.
         def check(model, code_far, data_far):
-            sizes = constants(self.compiled(model, "defaults.c")[0])
-            self.assertEqual((4 if code_far else 2,) * 2, (sizes["s_ff"], sizes["s_nn"]))
+            ir, asm = self.compiled(model, "defaults.c")
+            sizes = constants(ir)
+            self.assertEqual((4, 2, 4 if code_far else 2), (sizes["s_ff"], sizes["s_nn"], sizes["s_nf"]))
+            self.assertTrue(any("call dword ptr" in line for line in body(asm, "c_far")), model)
+            self.assertFalse(any("call dword ptr" in line for line in body(asm, "c_near")), model)
+        self.each(check)
+
+    def test_a_far_pointer_to_a_near_function_carries_its_code_segment(self):
+        # Took DGROUP as the selector, so a call through it jumped into data.
+        def check(model, code_far, data_far):
+            lines = body(self.compiled(model, "defaults.c")[1], "c_def")
+            self.assertIn("mov ax, seg _plain", lines, model)
         self.each(check)
 
     def test_far_arithmetic_changes_the_offset_alone(self):

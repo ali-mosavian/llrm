@@ -21,8 +21,8 @@ python3 -m unittest discover -s tools/i86clang/tests
 | `compact` | near | far |
 | `large`, `huge` | far | far |
 
-The model sets the default; `near`, `far` and `huge` on a data pointer override it. A function pointer and a function follow the
-code distance. Names and argument passing come from the function's calling convention (`calling.toml`), not from this tool.
+The model sets the default; `near`, `far` and `huge` on a data pointer override it. A function pointer follows the code distance unless
+marked; `far` is always far, `near` always near (there is no `huge` function pointer). Names and argument passing come from the function's calling convention (`calling.toml`), not from this tool.
 
 ## How
 
@@ -35,8 +35,8 @@ code distance. Names and argument passing come from the function's calling conve
 
 ## Limits
 
-- Clang cannot qualify a function type with an address space, so `int (far *)(void)` under a near-code model (or `near` under a
-  far-code one) has the model's width. Likewise `near` functions inside a far-code program.
+- `near` functions inside a far-code program are far.
+- Models are m16 only; in m32 and m64 every pointer is native size and `near`/`far`/`huge` mean nothing.
 - A far-data model keeps objects in DGROUP; only pointers are far.
 - `ptrdiff_t` is `int` below compact and `long` from compact up; Borland also types `far - far` as `long` below that.
 - `-wide-size` makes `size_t` 32 bits, which a `huge` array over 64K needs; Borland's stays 16.

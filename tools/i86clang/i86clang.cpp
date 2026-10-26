@@ -10,10 +10,11 @@
 //   large    far    far
 //   huge     far    far       (+ objects over 64K when declared huge)
 //
-// Far code is the datalayout's program address space (P1): clang itself puts every function, and every function pointer, in
-// address space 1. Clang gives a function pointer the width of a default pointer, so Default's width is the CODE distance. A
-// data pointer is spelled with an explicit address space (near 0, far 1, huge 3) by a first parse that inserts the model's
-// default wherever the source does not (`annotate`). Objects stay in address space 0.
+// Far code is the datalayout's program address space (P1): clang itself puts every function in address space 1. A pointer is
+// spelled with its own distance wherever the source does not: a data pointer by an address space (near 0, far 1, huge 3), a
+// function pointer by Microsoft's pointer-size qualifier (`__uptr` near, `__ptr64` far; clang gives them no other meaning), both
+// by a first parse that writes the model's default (`annotate`). Those qualifiers act only when a default pointer is 32 bits,
+// so it is, and nothing is left to it: every pointer in the source says its distance. Objects stay in address space 0.
 #include <algorithm>
 #include <map>
 #include <memory>
@@ -23,6 +24,7 @@
 
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/AST/TypeLoc.h"
 #include "clang/Basic/CodeGenOptions.h"
 #include "clang/Basic/MacroBuilder.h"
 #include "clang/Basic/TargetInfo.h"
@@ -64,12 +66,18 @@ template <class Tag, typename Tag::type M> struct Rob { friend typename Tag::typ
 struct TargetOptsTag { typedef TargetOptions *TargetInfo::*type; friend type get(TargetOptsTag); };
 template struct Rob<TargetOptsTag, &TargetInfo::TargetOpts>;
 
+// `address_space(N)` is the target's space N; the two pointer-size qualifiers reach the same spaces.
+static LangASMap spaceMap;
+
 class I86Target : public TargetInfo {
 public:
   I86Target(const llvm::Triple &t, const TargetOptions &o) : TargetInfo(t) {
     this->*get(TargetOptsTag()) = const_cast<TargetOptions *>(&o);
-    // A default pointer is a function pointer (data pointers carry an address space of their own), so it is as wide as code is far.
-    PointerWidth = codeFar() ? 32 : 16;
+    // Microsoft's `__ptr64` and `__uptr` qualify a pointer only where a default one is 32 bits wide (clang's rule for them).
+    PointerWidth = 32;
+    for (unsigned &one : spaceMap) one = 0;
+    spaceMap[(unsigned)LangAS::ptr64] = 1;
+    AddrSpaceMap = &spaceMap;
     PointerAlign = 16; IntWidth = IntAlign = 16; LongWidth = 32; LongAlign = 16;
     LongLongWidth = 64; LongLongAlign = 16; SuitableAlign = 16;
     SizeType = WideSize ? UnsignedLong : UnsignedInt;
@@ -83,7 +91,8 @@ public:
   }
   // `address_space(N)` is the target's space N: 0 is near, the rest are segmented.
   uint64_t getPointerWidthV(LangAS as) const override {
-    return isTargetAddressSpace(as) && getTargetAddressSpace(as) == 0 ? 16 : 32;
+    if (as == LangAS::ptr32_uptr) return 16;
+    return isTargetAddressSpace(as) && toTargetAddressSpace(as) == 0 ? 16 : 32;
   }
   uint64_t getPointerAlignV(LangAS) const override { return 16; }
   // Clang computes a pointer difference in an integer this wide (`ptrtoint`, `sub`): ptrdiff_t's, so that far pointers, which
@@ -217,14 +226,25 @@ static TypeLoc specifier(TypeLoc tl) {
 struct Stars : RecursiveASTVisitor<Stars> {
   ASTContext &ctx;
   SourceManager &sm;
-  std::set<unsigned> stars;
+  std::set<unsigned> said, stars, codes;  // the `*` of each data pointer, and of each function pointer, with no distance of its own
   std::map<unsigned, std::vector<DeclaratorDecl *>> lists;  // by the start of the declaration they share
   explicit Stars(ASTContext &c) : ctx(c), sm(c.getSourceManager()) {}
   bool local(SourceLocation l) const { return l.isValid() && !l.isMacroID() && sm.isInMainFile(l); }
+  // `__ptr64` and `__uptr` are sugar until code generation: a pointer under one of them already says its distance.
+  bool VisitAttributedTypeLoc(AttributedTypeLoc tl) {
+    switch (tl.getAttrKind()) {
+    case attr::Ptr32: case attr::Ptr64: case attr::SPtr: case attr::UPtr:
+      if (auto pointer = tl.getModifiedLoc().getAs<PointerTypeLoc>(); pointer && local(pointer.getStarLoc()))
+        said.insert(sm.getFileOffset(pointer.getStarLoc()));
+      break;
+    default: break;
+    }
+    return true;
+  }
   bool VisitPointerTypeLoc(PointerTypeLoc tl) {
     QualType pointee = tl.getPointeeLoc().getType();
-    if (pointee->isFunctionType() || pointee->isArrayType() || pointee.hasAddressSpace()) return true;
-    if (local(tl.getStarLoc())) stars.insert(sm.getFileOffset(tl.getStarLoc()));
+    if (pointee.hasAddressSpace() || pointee->isArrayType() || !local(tl.getStarLoc()) || said.count(sm.getFileOffset(tl.getStarLoc()))) return true;
+    (pointee->isFunctionType() ? codes : stars).insert(sm.getFileOffset(tl.getStarLoc()));
     return true;
   }
   void list(DeclaratorDecl *d) {
@@ -247,6 +267,8 @@ struct Stars : RecursiveASTVisitor<Stars> {
     std::vector<Edit> out;
     std::string mark = std::string("__attribute__((address_space(") + (dataFar() ? "1" : "0") + "))) ";
     for (unsigned at : stars) out.push_back({at, 0, mark});
+    // After the star, where a pointer qualifier goes: `int (* __ptr64 f)(int)`.
+    for (unsigned at : codes) out.push_back({at + 1, 0, codeFar() ? " __ptr64 " : " __uptr "});
     for (auto &[start, members] : lists) {
       if (members.size() < 2 || !std::any_of(members.begin(), members.end(), [&](DeclaratorDecl *d) { return marked(d); })) continue;
       DeclaratorDecl *first = members[0];
@@ -317,6 +339,7 @@ int main(int argc, const char **argv) {
   if (commands.empty()) { llvm::errs() << "i86clang: no compile command\n"; return 1; }
   // The command line is `clang <flags> <file>`; the code is run on the source with the stars marked.
   std::vector<std::string> flags(commands[0].CommandLine.begin() + 1, commands[0].CommandLine.end() - 1);
+  flags.push_back("-fms-extensions");  // the spelling of `__ptr64` and `__uptr`
   auto buffer = llvm::MemoryBuffer::getFile(sources[0]);
   if (!buffer) { llvm::errs() << "i86clang: cannot read " << sources[0] << "\n"; return 1; }
   std::string code = annotated((*buffer)->getBuffer().str(), flags, sources[0]);
