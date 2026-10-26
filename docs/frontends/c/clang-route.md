@@ -52,4 +52,12 @@ Clang's `BackendUtil` builds these only when passes are enabled. llrm must suppl
 | `x86_32-dos`, `x86_16-dos` | `tests/cc/dos` programs against the llrm OS layer |
 | QCport m16 | 65 of 65 modules compile at -Os and draw the Borland build's frames, polys and BMP md5 (`tools/qcport-run-cc.py`) |
 
-The i8086 patch (the fork branch `llrm/clang-i8086`): target info with far/huge address spaces and far function pointers, Pascal convention as CC 1000, near/far/huge pointer conversions allowed, `far` dropped on function types and void results.
+The i8086 patch (the fork branch `llrm/clang-i8086`, all in-tree, no patch files here):
+
+- Target info with far/huge address spaces, far function pointers, Pascal as CC 1000, near/far/huge pointer conversions allowed, `far` dropped on function types.
+- Keywords `__far__`, `__near__`, `__huge__` under `-fborland-extensions` (an error on other targets); `toolchain/clang/borland.h` maps Borland's `far`/`near`/`huge` onto them.
+- `__emit__(bytes...)` is a builtin that puts the bytes in the code stream.
+- Memory models: `-mcmodel=small|medium|compact|large|huge`. Code is far (`P1`) in medium, large and huge; data pointers are far by default in compact, large and huge, and `__near__` overrides. `ptrdiff_t` is `long` with far data. Default: medium.
+- A huge object lives in a far segment (address space 1); the difference of two huge pointers is `llrm.ia16.ptrdiff`.
+- Not done: `#pragma aux` and segment pragmas (nothing in QCport or the examples uses them; Watcom's headers only name inline-asm functions that the examples do not call), and an array subscript on a huge array indexes by 16 bits, so a huge array past 64K needs a pointer.
+- Tests: `clang/test/CodeGen/i8086-*.c` in the fork (no `llvm-lit` in the local build; run their RUN lines by hand), `crates/frontends/llrm-cc/tests/{abi,models}.rs` here.
