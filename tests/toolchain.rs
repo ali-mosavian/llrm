@@ -515,6 +515,29 @@ fn test_far_and_huge_are_near_with_a_warning_on_m32() {
     assert_eq!(stderr("tests/run/nib/flat_arith.nib", &flat), "");
 }
 
+/// A huge array that is stored and read back made the layout take the far
+/// segment assembly had built for the default one, so every near global was
+/// listed twice (near and in the far segment) and far_near.nib printed 32755
+/// for 36.
+#[test]
+fn test_nib_near_globals_are_listed_once_beside_a_huge_array() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let listing = scratch.path().join("p.s");
+    let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib"))
+        .arg(root.join("tests/run/nib/far_near.nib"))
+        .args(["-O2", "-march=i486", "-S", "-o", listing.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+    let text = std::fs::read_to_string(listing).unwrap();
+    let labels: Vec<&str> = text.lines().filter(|line| line.starts_with("G$")).collect();
+    let mut unique = labels.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(labels.len(), unique.len(), "{text}");
+}
+
 /// C's far and huge are near with a warning where the target has one address
 /// space, and an unmarked pointer is near in every model: `-ml` (default data
 /// pointers far) is not a switch.

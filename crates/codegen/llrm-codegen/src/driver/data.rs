@@ -62,7 +62,9 @@ impl Placed {
         bss_begin: bool,
         segment_bytes: Option<usize>,
     ) -> Result<(), String> {
-        let (default, items) = built.data.pop().ok_or("an assembled module without its data segment")?;
+        // Assembly's far segment, if any, is laid out again below with the rest.
+        let (default, items) = built.data.drain(..).next().ok_or("an assembled module without its data segment")?;
+        built.private.clear();
         // What assembly adds after the globals' data: its constant pool and
         // jump tables.
         let is_pool = |one: &masm::Datum| {
