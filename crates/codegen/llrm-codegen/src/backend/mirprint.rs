@@ -271,11 +271,11 @@ fn instruction(
             immediate(i)?
         )
         .unwrap(),
-        ("imul", Some(Loc::Held(d)), [Loc::Held(a), Loc::Imm(i)]) => {
+        ("imul", Some(Loc::Held(d)), [Loc::Held(a), Loc::Imm(i)]) if what.dests.len() == 1 => {
             writeln!(out, "    {} = IMUL{}rri {}, {}, {eflags}", vreg(d)?, bits(d.width)?, vreg(a)?, immediate(i)?)
                 .unwrap()
         }
-        ("imul", Some(Loc::Held(d)), [Loc::Held(a), Loc::Held(b)]) => {
+        ("imul", Some(Loc::Held(d)), [Loc::Held(a), Loc::Held(b)]) if what.dests.len() == 1 => {
             writeln!(out, "    {} = IMUL{}rr {}, {}, {eflags}", vreg(d)?, bits(d.width)?, vreg(a)?, vreg(b)?).unwrap()
         }
         (op @ ("sar" | "shl" | "shr"), Some(Loc::Held(d)), [Loc::Held(a), Loc::Held(_)]) => writeln!(
@@ -460,6 +460,19 @@ mod tests {
         let body = LirBody::new("count", 0, blocks, IndexMap::default(), IndexMap::default());
         let text = mir(&body, &IndexMap::default()).expect("prints");
         assert!(text.contains("DEC32r %1, implicit-def $eflags\n    JCC_1"), "{text}");
+    }
+
+    /// The widening `v8, v9 := imul v6, v7` has two destinations; the printer
+    /// took the first and wrote `IMUL32rr` with two undefined registers, which
+    /// the pin refused as a register of no class.
+    #[test]
+    fn test_a_widening_multiply_is_refused_not_misprinted() {
+        let widening = insn("imul", Operation::Binary, vec![held(8), held(9)], vec![held(6), held(7)]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![widening, ret]))];
+        let body = LirBody::new("wide", 0, blocks, IndexMap::default(), IndexMap::default());
+        let refused = mir(&body, &IndexMap::default()).expect_err("refused");
+        assert!(refused.contains("imul"), "{refused}");
     }
 
     #[test]
