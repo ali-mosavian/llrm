@@ -31,6 +31,19 @@ extern int gfx_x1, gfx_y1, gfx_x2, gfx_y2;
 /* The last point referenced: STEP is taken from it, and DRAW starts at it. */
 extern int gfx_last_x, gfx_last_y;
 
+/* The viewport (VIEW): the rectangle drawing is cut to, in screen pixels and
+   inclusive, and the origin an ordinary VIEW moves the statements' coordinates
+   to. A mode starts with the whole screen and the origin at 0. */
+extern int gfx_view_left, gfx_view_top, gfx_view_right, gfx_view_bottom;
+extern int gfx_origin_x, gfx_origin_y;
+
+/* WINDOW (QB rt/grwindow.asm, grfpinit.asm): while a window is active the
+   statements' points are real numbers mapped onto the viewport, and the last
+   point is kept as one too. */
+extern int gfx_window_on;
+/* A window's radius scale: CIRCLE's radius in logical x units to pixels. */
+double gfx_window_scale(void);
+
 /* SCREEN: sets the mode, or returns to text with 0.  Not a mode this has is an
    Illegal function call. */
 void gfx_screen(int mode);

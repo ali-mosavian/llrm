@@ -2384,14 +2384,22 @@ fn redim_preserve_calls_b_rdmp_with_redims_operands() {
 }
 
 #[test]
-fn stop_and_reset_call_b_stop_and_b_rest() {
-    // STOP and RESET were refused as unknown procedures. BC calls B$STOP and
-    // B$REST, nothing pushed (measured in BC output of all three dialects);
-    // STOP does not return.
-    let module = parse("RESET\r\nPRINT 1\r\nSTOP\r\nPRINT 2\r\n", Dialect::QuickBasic45).unwrap();
-    let hir = compile(&module, "stop", Dialect::QuickBasic45, "qb45").unwrap();
-    assert_eq!(hir.matches("\"callee\":\"B$REST\"").count(), 1, "{hir}");
-    assert_eq!(hir.matches("\"callee\":\"B$STOP\"").count(), 1, "{hir}");
+fn open_with_access_lock_len_or_random_passes_rtps_inc_mode_word() {
+    // OPEN with ACCESS, LOCK, LEN or no FOR was refused. The mode word is
+    // rtps.inc's: the mode in the low byte (RANDOM when none is written),
+    // ACCESS and LOCK/SHARED in the high one.
+    let call = |open: &str| {
+        let source = format!("OPEN \"F\" {open}\r\n");
+        let module = parse(&source, Dialect::Pds71).unwrap();
+        let hir = compile(&module, "open", Dialect::Pds71, "pds71").unwrap();
+        let at = hir.find("\"callee\":\"B$OPEN\"").expect("B$OPEN");
+        let call = &hir[at..at + hir[at..].find("\"pure\"").unwrap()];
+        call.rsplit("\"value\":").next().unwrap().trim_end_matches(|c: char| !c.is_ascii_digit()).to_owned()
+    };
+    assert_eq!(call("AS #1"), "4");
+    assert_eq!(call("FOR INPUT ACCESS READ AS #1"), "257");
+    assert_eq!(call("FOR RANDOM ACCESS READ WRITE LOCK WRITE AS #1 LEN = 20"), "8964");
+    assert_eq!(call("FOR BINARY SHARED AS #1"), "16416");
 }
 
 #[test]
@@ -2407,3 +2415,14 @@ fn a_dim_as_in_a_procedure_may_reuse_a_name_the_module_shares_with_a_suffix() {
     assert!(parse(&sub("DIM x AS INTEGER"), Dialect::Pds71).is_ok());
     assert!(parse("DIM x% : DIM x AS INTEGER\r\n", Dialect::Pds71).is_err());
 }
+#[test]
+fn stop_and_reset_call_b_stop_and_b_rest() {
+    // STOP and RESET were refused as unknown procedures. BC calls B$STOP and
+    // B$REST, nothing pushed (measured in BC output of all three dialects);
+    // STOP does not return.
+    let module = parse("RESET\r\nPRINT 1\r\nSTOP\r\nPRINT 2\r\n", Dialect::QuickBasic45).unwrap();
+    let hir = compile(&module, "stop", Dialect::QuickBasic45, "qb45").unwrap();
+    assert_eq!(hir.matches("\"callee\":\"B$REST\"").count(), 1, "{hir}");
+    assert_eq!(hir.matches("\"callee\":\"B$STOP\"").count(), 1, "{hir}");
+}
+

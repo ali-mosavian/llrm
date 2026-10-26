@@ -327,8 +327,8 @@ impl State<'_, '_> {
     fn opcode(
         &self,
         inst: InstId,
-    ) -> Opcode {
-        self.function().instruction(inst).opcode.clone()
+    ) -> &Opcode {
+        &self.function().instruction(inst).opcode
     }
 
     fn result(
@@ -952,7 +952,7 @@ impl State<'_, '_> {
                 // more-rich 'getPredicateOnEdge' method.
                 if known.is_none()
                     && let Some(def) = self.instruction_of(value)
-                    && let Opcode::ICmp(predicate) = self.opcode(def)
+                    && let Opcode::ICmp(predicate) = *self.opcode(def)
                     && let Operand::Constant(cst) = self.op(def, 1)
                 {
                     let lhs = self.op(def, 0);
@@ -965,7 +965,7 @@ impl State<'_, '_> {
             return !result.is_empty();
         };
 
-        match self.opcode(inst) {
+        match *self.opcode(inst) {
             // If I is a PHI node, then we know the incoming values for any
             // constants.
             Opcode::Phi => {
@@ -1052,7 +1052,7 @@ impl State<'_, '_> {
             }
 
             // Handle the NOT form of XOR.
-            if self.opcode(inst) == Opcode::Binary(BinaryOp::Xor)
+            if *self.opcode(inst) == Opcode::Binary(BinaryOp::Xor)
                 && matches!(
                     self.op(inst, 1),
                     Operand::Constant(c) if self.int_bits(c) == Some(1)
@@ -1072,7 +1072,7 @@ impl State<'_, '_> {
                 }
                 return true;
             }
-        } else if let Opcode::Binary(op) = self.opcode(inst) {
+        } else if let Opcode::Binary(op) = *self.opcode(inst) {
             // Try to simplify some other binary operator values.
             if let Operand::Constant(rhs) = self.op(inst, 1)
                 && self.int_bits(rhs).is_some()
@@ -1093,11 +1093,11 @@ impl State<'_, '_> {
 
         // Handle compare with phi operand, where the PHI is defined in this
         // block.
-        if let Opcode::ICmp(pred) = self.opcode(inst) {
+        if let Opcode::ICmp(pred) = *self.opcode(inst) {
             let cmp_lhs = self.op(inst, 0);
             let cmp_rhs = self.op(inst, 1);
-            let lhs_phi = self.instruction_of(cmp_lhs).filter(|&def| self.opcode(def) == Opcode::Phi);
-            let phi = lhs_phi.or_else(|| self.instruction_of(cmp_rhs).filter(|&def| self.opcode(def) == Opcode::Phi));
+            let lhs_phi = self.instruction_of(cmp_lhs).filter(|&def| *self.opcode(def) == Opcode::Phi);
+            let phi = lhs_phi.or_else(|| self.instruction_of(cmp_rhs).filter(|&def| *self.opcode(def) == Opcode::Phi));
             // Do not perform phi translation across a loop header phi, because
             // this may result in comparison of values from two different loop
             // iterations.
@@ -1150,7 +1150,7 @@ impl State<'_, '_> {
                 // into (icmp (add (x, C1)), C2). See if we have we have such a
                 // thing with x as a live-in.
                 if let Some(cmp_bits) = self.int_bits(cmp_const)
-                    && let Some(add) = lhs_local.filter(|&def| self.opcode(def) == Opcode::Binary(BinaryOp::Add))
+                    && let Some(add) = lhs_local.filter(|&def| *self.opcode(def) == Opcode::Binary(BinaryOp::Add))
                     && let Operand::Constant(add_const) = self.op(add, 1)
                     && let Some(add_bits) = self.int_bits(add_const)
                 {
@@ -1193,7 +1193,7 @@ impl State<'_, '_> {
             }
         }
 
-        if self.opcode(inst) == Opcode::Select {
+        if *self.opcode(inst) == Opcode::Select {
             // Handle select instructions where at least one operand is a known
             // constant and we can figure out the condition value for any
             // predecessor block.
@@ -1244,7 +1244,7 @@ impl State<'_, '_> {
                 Operand::Constant(c) if self.int_bits(c) == Some(u128::from(want))
             )
         };
-        match self.opcode(inst) {
+        match *self.opcode(inst) {
             Opcode::Binary(BinaryOp::Or) => Some((true, self.op(inst, 0), self.op(inst, 1))),
             Opcode::Binary(BinaryOp::And) => Some((false, self.op(inst, 0), self.op(inst, 1))),
             Opcode::Select => {
@@ -1270,7 +1270,7 @@ impl State<'_, '_> {
         pred: BlockId,
     ) -> Operand {
         match self.instruction_of(value) {
-            Some(def) if self.opcode(def) == Opcode::Phi && self.function().parent(def) == Some(bb) => {
+            Some(def) if *self.opcode(def) == Opcode::Phi && self.function().parent(def) == Some(bb) => {
                 arms(self.function(), def).into_iter().find(|&(_, from)| from == pred).map_or(value, |(v, _)| v)
             }
             _ => value,
@@ -1326,7 +1326,7 @@ impl State<'_, '_> {
         // Look to see if the terminator is a conditional branch or switch, if
         // not we can't thread it.
         let terminator = self.function().terminator(bb).expect("a terminated block");
-        let mut condition = match self.opcode(terminator) {
+        let mut condition = match *self.opcode(terminator) {
             Opcode::Br if self.function().instruction(terminator).operands.len() == 3 => self.op(terminator, 0),
             Opcode::Switch => self.op(terminator, 0),
             _ => return false,
@@ -1362,7 +1362,7 @@ impl State<'_, '_> {
         // getBestDestForJumpOnUndef decide.
         let freeze = self
             .instruction_of(condition)
-            .filter(|&inst| self.opcode(inst) == Opcode::Freeze)
+            .filter(|&inst| *self.opcode(inst) == Opcode::Freeze)
             .filter(|&inst| self.is_undef_operand(self.op(inst, 0)) && self.single_use(inst));
         if self.is_undef_operand(condition) || freeze.is_some() {
             let best = self.best_dest_for_jump_on_undef(bb);
@@ -1400,10 +1400,10 @@ impl State<'_, '_> {
         // Some of the following optimization can safely work on the unfrozen
         // cond.
         let cond_without_freeze =
-            if self.opcode(cond_inst) == Opcode::Freeze { self.op(cond_inst, 0) } else { condition };
+            if *self.opcode(cond_inst) == Opcode::Freeze { self.op(cond_inst, 0) } else { condition };
 
         if let Some(cmp) = self.instruction_of(cond_without_freeze)
-            && let Opcode::ICmp(pred) = self.opcode(cmp)
+            && let Opcode::ICmp(pred) = *self.opcode(cmp)
             && let Operand::Constant(cond_const) = self.op(cmp, 1)
         {
             // If we're branching on a conditional, LVI might be able to
@@ -1429,7 +1429,7 @@ impl State<'_, '_> {
         }
 
         let terminator_now = self.function().terminator(bb).expect("a terminator");
-        if self.opcode(terminator_now) == Opcode::Switch && self.try_to_unfold_select_switch(terminator_now, bb) {
+        if *self.opcode(terminator_now) == Opcode::Switch && self.try_to_unfold_select_switch(terminator_now, bb) {
             return true;
         }
 
@@ -1440,7 +1440,7 @@ impl State<'_, '_> {
         // values.
         let mut simplify_value = cond_without_freeze;
         if let Some(cmp) = self.instruction_of(simplify_value)
-            && matches!(self.opcode(cmp), Opcode::ICmp(_) | Opcode::FCmp(_))
+            && matches!(*self.opcode(cmp), Opcode::ICmp(_) | Opcode::FCmp(_))
             && matches!(self.op(cmp, 1), Operand::Constant(_))
         {
             simplify_value = self.op(cmp, 0);
@@ -1448,7 +1448,7 @@ impl State<'_, '_> {
         // TODO (as the pin): there are other places where load PRE would be
         // profitable, such as more complex comparisons.
         if let Some(load) = self.instruction_of(simplify_value)
-            && matches!(self.opcode(load), Opcode::Load { .. })
+            && matches!(*self.opcode(load), Opcode::Load { .. })
             && self.simplify_partially_redundant_load(load)
         {
             return true;
@@ -1473,7 +1473,7 @@ impl State<'_, '_> {
         let terminator_now = self.function().terminator(bb).expect("a terminator");
         let is_cond_br = self.is_cond_br(terminator_now);
         if let Some(pn) = self.instruction_of(cond_without_freeze)
-            && self.opcode(pn) == Opcode::Phi
+            && *self.opcode(pn) == Opcode::Phi
             && self.function().parent(pn) == Some(bb)
             && is_cond_br
         {
@@ -1482,7 +1482,7 @@ impl State<'_, '_> {
 
         // If this is an otherwise-unfoldable branch on a XOR, see if we can
         // simplify.
-        if self.opcode(cond_inst) == Opcode::Binary(BinaryOp::Xor)
+        if *self.opcode(cond_inst) == Opcode::Binary(BinaryOp::Xor)
             && self.function().parent(cond_inst) == Some(bb)
             && is_cond_br
         {
@@ -1856,7 +1856,7 @@ impl State<'_, '_> {
         // predecessor, but SSAUpdater might need to rewrite the operand of the
         // cloned phi.
         for &inst in &insts {
-            if self.opcode(inst) != Opcode::Phi {
+            if *self.opcode(inst) != Opcode::Phi {
                 break;
             }
             let incoming = arms(self.function(), inst)
@@ -1878,7 +1878,7 @@ impl State<'_, '_> {
         // keeping track of the mapping and using it to remap operands in the
         // cloned instructions.
         for &inst in &insts {
-            if (inst == terminator && !through_terminator) || self.opcode(inst) == Opcode::Phi {
+            if (inst == terminator && !through_terminator) || *self.opcode(inst) == Opcode::Phi {
                 continue;
             }
             let new = self.unit.function.clone_instruction(inst);
@@ -1988,7 +1988,7 @@ impl State<'_, '_> {
                     |&marker| !self.function().is_erased(marker)
                         && matches!(
                             self.op(marker, 1),
-                            Operand::Value(value) if self.instruction_of(Operand::Value(value)).is_some_and(|def| self.opcode(def) == Opcode::Phi)
+                            Operand::Value(value) if self.instruction_of(Operand::Value(value)).is_some_and(|def| *self.opcode(def) == Opcode::Phi)
                         ),
                 );
             if has_phi_arg {
@@ -2115,7 +2115,7 @@ impl State<'_, '_> {
     ) -> bool {
         let Some(single_pred) = self.single_predecessor(bb) else { return false };
         let term = self.function().terminator(single_pred).expect("a terminator");
-        let special = matches!(self.opcode(term), Opcode::Invoke(_) | Opcode::Resume);
+        let special = matches!(*self.opcode(term), Opcode::Invoke(_) | Opcode::Resume);
         if special || self.successor_edges(single_pred).len() != 1 || single_pred == bb {
             return false;
         }
@@ -2313,7 +2313,7 @@ impl State<'_, '_> {
             return self.lvi_constant_on_edge(value, pred_pred_bb, pred_bb, None);
         };
 
-        match self.opcode(inst) {
+        match *self.opcode(inst) {
             // Look into a PHI argument.
             Opcode::Phi => {
                 if self.function().parent(inst) == Some(pred_bb) {
@@ -2551,7 +2551,8 @@ impl State<'_, '_> {
 
         // If the first instruction in BB isn't a phi, we won't be able to infer
         // anything special about any particular predecessor.
-        let Some(first) = self.function().iter_block(bb).next().filter(|&inst| self.opcode(inst) == Opcode::Phi) else {
+        let Some(first) = self.function().iter_block(bb).next().filter(|&inst| *self.opcode(inst) == Opcode::Phi)
+        else {
             return false;
         };
 
@@ -2676,7 +2677,7 @@ impl State<'_, '_> {
         // unconditional branch.
         let old_pred_bb = pred_bb;
         let old_pred_term = self.function().terminator(pred_bb).expect("a terminator");
-        let front_is_phi = self.function().iter_block(bb).next().is_some_and(|inst| self.opcode(inst) == Opcode::Phi);
+        let front_is_phi = self.function().iter_block(bb).next().is_some_and(|inst| *self.opcode(inst) == Opcode::Phi);
         if front_is_phi || !self.is_uncond_br(old_pred_term) {
             pred_bb = crate::edges::split_edge(self.unit.function, old_pred_bb, bb);
         }
@@ -2690,7 +2691,7 @@ impl State<'_, '_> {
         let insts: Vec<InstId> = self.function().iter_block(bb).collect();
         let mut rest = 0;
         for &inst in &insts {
-            if self.opcode(inst) != Opcode::Phi {
+            if *self.opcode(inst) != Opcode::Phi {
                 break;
             }
             let ty = self.function().instruction(inst).ty;
@@ -2819,7 +2820,7 @@ impl State<'_, '_> {
     ) -> bool {
         let Some(cond_phi) = self
             .instruction_of(self.op(switch, 0))
-            .filter(|&phi| self.opcode(phi) == Opcode::Phi && self.function().parent(phi) == Some(bb))
+            .filter(|&phi| *self.opcode(phi) == Opcode::Phi && self.function().parent(phi) == Some(bb))
         else {
             return false;
         };
@@ -2827,7 +2828,7 @@ impl State<'_, '_> {
         for (index, (value, pred)) in arms(self.function(), cond_phi).into_iter().enumerate() {
             let Some(pred_si) = self
                 .instruction_of(value)
-                .filter(|&si| self.opcode(si) == Opcode::Select)
+                .filter(|&si| *self.opcode(si) == Opcode::Select)
                 .filter(|&si| self.function().parent(si) == Some(pred) && self.single_use(si))
             else {
                 continue;
@@ -2858,10 +2859,10 @@ impl State<'_, '_> {
         bb: BlockId,
     ) -> bool {
         let term = self.function().terminator(bb).expect("a terminator");
-        let Opcode::ICmp(predicate) = self.opcode(cond_cmp) else { return false };
+        let Opcode::ICmp(predicate) = *self.opcode(cond_cmp) else { return false };
         let cond_lhs = self
             .instruction_of(self.op(cond_cmp, 0))
-            .filter(|&phi| self.opcode(phi) == Opcode::Phi && self.function().parent(phi) == Some(bb));
+            .filter(|&phi| *self.opcode(phi) == Opcode::Phi && self.function().parent(phi) == Some(bb));
         let Operand::Constant(cond_rhs) = self.op(cond_cmp, 1) else { return false };
 
         let Some(cond_lhs) = cond_lhs else { return false };
@@ -2874,7 +2875,7 @@ impl State<'_, '_> {
             // corresponding predecessor.
             let Some(si) = self
                 .instruction_of(value)
-                .filter(|&si| self.opcode(si) == Opcode::Select)
+                .filter(|&si| *self.opcode(si) == Opcode::Select)
                 .filter(|&si| self.function().parent(si) == Some(pred) && self.single_use(si))
             else {
                 continue;
@@ -2929,7 +2930,7 @@ impl State<'_, '_> {
             let pn_result = self.function().instruction(pn).result.expect("a value");
             let mut selected = None;
             for one in self.function().users(pn_result).iter().copied().collect::<Vec<_>>() {
-                match self.opcode(one.user) {
+                match *self.opcode(one.user) {
                     Opcode::ICmp(_) => {
                         // Look for a ICmp in BB that compares PN with a
                         // constant and is the condition of a Select.
@@ -2943,7 +2944,7 @@ impl State<'_, '_> {
                                 .users(self.function().instruction(cmp).result.expect("a value"))
                                 .first()
                                 .map(|only| only.user)
-                            && self.opcode(user) == Opcode::Select
+                            && *self.opcode(user) == Opcode::Select
                             && self.is_unfold_candidate(user, self.result(cmp), bb)
                         {
                             selected = Some(user);
@@ -3021,7 +3022,7 @@ impl State<'_, '_> {
         // freely fold freeze(Cond) to true without affecting other
         // instructions.
         let freeze =
-            self.instruction_of(cond).filter(|&inst| self.opcode(inst) == Opcode::Freeze && self.single_use(inst));
+            self.instruction_of(cond).filter(|&inst| *self.opcode(inst) == Opcode::Freeze && self.single_use(inst));
         if let Some(freeze) = freeze {
             cond = self.op(freeze, 0);
         }
@@ -3052,7 +3053,7 @@ impl State<'_, '_> {
             if implication.is_none()
                 && let Some(freeze) = freeze
                 && let Some(pred_freeze) =
-                    self.instruction_of(self.op(pred_term, 0)).filter(|&inst| self.opcode(inst) == Opcode::Freeze)
+                    self.instruction_of(self.op(pred_term, 0)).filter(|&inst| *self.opcode(inst) == Opcode::Freeze)
                 && self.op(pred_freeze, 0) == self.op(freeze, 0)
             {
                 implication = Some(cond_is_true);
