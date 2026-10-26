@@ -8,7 +8,7 @@ RULES = [
  (r"llrm_codegen::liveness|backend::liveness|backend::lanes|backend::incremental", "LiveIntervals/LiveVariables"),
  (r"llrm_codegen::phielimination|backend::phielim|backend::optimizephis", "PHIElimination, OptimizePHIs"),
  (r"backend::(peephole|peep::|machinecse|precse|sharedstores|regthrash|machinedce|latecleanup|machinecp|copysink|spillforward|upperzero|exactaddress|leaopt|fixupsetcc)", "Peephole, MachineCSE, DCE, late cleanup"),
- (r"backend::(machinesink|pressuresink)", "MachineSink, LiveRangeShrink"),
+ (r"backend::(machinesink)", "MachineSink, LiveRangeShrink"),
  (r"backend::(jumps|schedule|loopslots|shrinkwrap|frame|prologue|masm)", "branch folding/placement, scheduler, PEI"),
  (r"backend::(floatalloc|floatassign|floatfold|fpstack|fpregs|fpcopyprop)", "X86FloatingPoint"),
  (r"backend::(isel|selectiondag|lower|legalize|matcher|arithmetic|division|selects|booleans)|llrm_dagisel|llrm_iselgen", "isel (SelectionDAG)"),

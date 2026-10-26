@@ -671,4 +671,4 @@ impl FrameRegisters {
 
 /// The I/O ports of a PC: a `[[ports]]`-only description that a platform
 /// appends to its own text.
-pub const PC_PORTS: &str = include_str!("machines/pc-ports.toml");
+pub const PC_PORTS: &str = include_str!("../../../../machine/platform/dos/ports.toml");

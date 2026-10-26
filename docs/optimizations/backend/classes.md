@@ -38,7 +38,7 @@ From unit tests `m16_registers_are_its_description` and
 
 ## Used by
 `allocate.rs`, `coalesce.rs`, `constrain.rs`, `regclass.rs`, the spiller
-(`ssaspill.rs`), `pressuresink.rs`, `floatalloc.rs`, `sharedstores.rs`,
+(`ssaspill.rs`), `floatalloc.rs`, `sharedstores.rs`,
 `loopslots.rs` and `peephole.rs`. `assemble.rs` builds them per module and
 `flow.rs` hands them to each phase beside `Segments`; no pass reads
 another target's.

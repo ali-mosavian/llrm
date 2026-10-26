@@ -135,7 +135,7 @@ compiled with `llrm-c -O2 -m16`: the stage before `PhiElimination`, and
 
 ## Runs
 A machine phase after `ssaspill` (spiller route only) and before
-`pressuresink`, in every machine (`flow::machine_with`); `EdgePrices` come
+`machinesched`, in every machine (`flow::machine_with`); `EdgePrices` come
 from the CPU profile, and with none a copy stays in its predecessor. Also
 `placed_on_edges`, which [`crate::backend::floatalloc`](floatalloc.md) uses to put its
 selected transfers on exact edges.

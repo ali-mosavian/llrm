@@ -57,7 +57,7 @@ ROWS = [
     (r"^isel|^lir (far|schedule|shrink|duplicated)", "isel", None),
     (r"^(facts (hints|sibling prices|fold prices)|siblings )", "regalloc: hints", "hint-slope"),
     (r"^(facts |classes |intervals |regalloc |split |spill |after |lir (regalloc|ssaspill)|candidate |ssa |siblings )", "regalloc", "allocator"),
-    (r"^lir (peephole|jumps|floatassign|floatalloc|floatfold|coalesce|phielim|twoaddr|parcopy|loopslots|pressuresink|frame)", "lir passes", None),
+    (r"^lir (peephole|jumps|floatassign|floatalloc|floatfold|coalesce|phielim|twoaddr|parcopy|loopslots|frame)", "lir passes", None),
     (r"^(assemble|machine|objbuild|emit|frame laid|masm|stack checks)", "emit", None),
 ]
 # The same categories in gcc's timers and clang's trace events.

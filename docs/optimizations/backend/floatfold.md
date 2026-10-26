@@ -49,7 +49,7 @@ other value and the cell, and the load is deleted.
 it becomes the memory operand of the arithmetic that reads it. The `fsub`
 had the loaded cell on its left, so it is the reversed `fsubr`.
 
-Before (after `PressureSink`):
+Before (after `PhiElimination`):
 
 ```lir
 mix: 11 instructions
@@ -86,7 +86,7 @@ From `ISEL_DUMP=1` of the nib function `mix(p: &mut P, k: f64)` with `-m32
 -O0`.
 
 ## Runs
-Machine phase after `pressuresink` and before `floatassign`, once per
+Machine phase after `machinesched` and before `floatassign`, once per
 function. Not gated by an -O level.
 
 ## Needs
