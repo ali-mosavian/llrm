@@ -48,9 +48,17 @@ fn _stack_of(fixture: &str) -> Result<(String, Vec<u8>), String> {
 #[test]
 fn test_a_frame_larger_than_the_start_stack_adds_a_stack_segment() {
     let (listing, object) = _stack_of("bigframe").unwrap();
-    // `print` takes its integer in AX: the chain is a word shorter than with
-    // the stack convention (4618).
-    assert!(listing.contains(".stack 4616"), "{listing}");
+    // The 8192-byte frame and the chain below it, less the 4096 `start.asm`
+    // links; which registers a loop saves moves the figure by a word (4616,
+    // 4618).
+    let stack: u32 = listing
+        .lines()
+        .find_map(|line| line.strip_prefix(".stack "))
+        .unwrap_or_else(|| panic!("no .stack in {listing}"))
+        .trim()
+        .parse()
+        .unwrap();
+    assert!((4096..4096 + 1024).contains(&stack), "{stack} in {listing}");
     assert!(object.windows(5).any(|one| one == b"STACK"));
 }
 

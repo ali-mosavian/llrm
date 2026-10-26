@@ -2403,19 +2403,6 @@ fn open_with_access_lock_len_or_random_passes_rtps_inc_mode_word() {
 }
 
 #[test]
-fn loc_and_seek_functions_call_b_floc_and_b_fsek() {
-    // LOC and SEEK as functions were refused as valid but not generated. BC
-    // calls B$FLOC and B$FSEK with the channel, as it calls B$FLOF for LOF,
-    // and takes the long result.
-    let module =
-        parse("OPEN \"A\" FOR BINARY AS #1\r\nx& = LOC(1) + SEEK(1) + LOF(1)\r\n", Dialect::QuickBasic45).unwrap();
-    let hir = compile(&module, "position", Dialect::QuickBasic45, "qb45").unwrap();
-    for routine in ["B$FLOC", "B$FSEK", "B$FLOF"] {
-        assert_eq!(hir.matches(&format!("\"callee\":\"{routine}\"")).count(), 1, "{routine}: {hir}");
-    }
-}
-
-#[test]
 fn a_dim_as_in_a_procedure_may_reuse_a_name_the_module_shares_with_a_suffix() {
     // corpus [scope], BC output: `DIM SHARED x%, x%(5)` then `DIM x AS INTEGER`
     // (or `DIM x(5) AS INTEGER`) in a SUB compiles under PDS 7.1 and VBDOS;
@@ -2428,3 +2415,17 @@ fn a_dim_as_in_a_procedure_may_reuse_a_name_the_module_shares_with_a_suffix() {
     assert!(parse(&sub("DIM x AS INTEGER"), Dialect::Pds71).is_ok());
     assert!(parse("DIM x% : DIM x AS INTEGER\r\n", Dialect::Pds71).is_err());
 }
+
+#[test]
+fn loc_and_seek_functions_call_b_floc_and_b_fsek() {
+    // LOC and SEEK as functions were refused as valid but not generated. BC
+    // calls B$FLOC and B$FSEK with the channel, as it calls B$FLOF for LOF,
+    // and takes the long result.
+    let module =
+        parse("OPEN \"A\" FOR BINARY AS #1\r\nx& = LOC(1) + SEEK(1) + LOF(1)\r\n", Dialect::QuickBasic45).unwrap();
+    let hir = compile(&module, "position", Dialect::QuickBasic45, "qb45").unwrap();
+    for routine in ["B$FLOC", "B$FSEK", "B$FLOF"] {
+        assert_eq!(hir.matches(&format!("\"callee\":\"{routine}\"")).count(), 1, "{routine}: {hir}");
+    }
+}
+

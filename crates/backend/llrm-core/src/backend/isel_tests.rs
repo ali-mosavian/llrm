@@ -541,6 +541,8 @@ fn test_division_and_variable_shifts() {
 /// so no `ss:` override: it cost a byte and a clock at each access. The
 /// doubled index is made once and both accesses use it (7a574ed3ed: precse
 /// no longer reads a load as touching the flags, so the two `i + i` are one).
+/// The frame cell indexed by `i` has known effects, so it is no scheduling
+/// boundary and the argument loads keep their source order.
 #[test]
 fn test_variable_indices_are_scaled_and_added() {
     let text = "define i16 @f(ptr %p, i16 %i) addrspace(1) {
@@ -561,8 +563,8 @@ fn test_variable_indices_are_scaled_and_added() {
             "sub sp, 8",
             "push si",
             "L0_0:",
-            "mov si, word ptr [bp+8]",
             "mov bx, word ptr [bp+6]",
+            "mov si, word ptr [bp+8]",
             "add si, si",
             "mov word ptr [bp+si-8], 5",
             "mov ax, word ptr [bx+si+2]",
@@ -2581,10 +2583,10 @@ join:
     assert_eq!(
         listing(text, "f")[3..],
         [
-            "mov bx, word ptr [bp+6]",
             "cmp byte ptr [bp+8], 0",
             "je L0_3",
             "L0_4294967297:",
+            "mov bx, word ptr [bp+6]",
             "add bx, bx",
             "add bx, offset a",
             "jmp L0_4",
@@ -4815,11 +4817,13 @@ b:
             "mov bp, sp",
             "L0_0:",
             "cmp byte ptr [bp+6], 0",
-            "mov ax, word ptr [bp+8]",
-            "je L0_3",
+            "je L0_4294967297",
             "L0_1:",
             "mov ax, -4",
-            "L0_3:",
+            "pop bp",
+            "retf",
+            "L0_4294967297:",
+            "mov ax, word ptr [bp+8]",
             "pop bp",
             "retf"
         ]
@@ -6840,11 +6844,11 @@ b6:
 }
 ";
     let got = listing(text, "f");
-    // The selector goes into es from a register on each path, with no copy
-    // through ax between (which register holds each selector is the
-    // allocator's).
+    // Each path loads its selector into ax and one `mov es, ax` in the join
+    // takes it, with no copy through ax between (which register holds each
+    // selector is the allocator's; the argument loads sink into the arms).
     let into_es: Vec<_> = got.iter().filter(|line| line.starts_with("mov es, ")).collect();
-    assert_eq!(into_es.len(), 2, "{got:?}");
+    assert_eq!(into_es.len(), 1, "{got:?}");
     assert!(!got.iter().any(|line| line == "mov ax, bx"), "{got:?}");
 }
 
@@ -6931,4 +6935,26 @@ no:
     let got = listing(text, "f");
     assert!(got.iter().any(|line| line.starts_with("test ")), "{got:?}");
     assert!(!got.iter().any(|line| line.starts_with("and ")), "{got:?}");
+}
+
+/// An i1 true is -1 signed, but its byte is 1: `icmp slt i1 %a, %b` read as
+/// `cmp al, bl; jl` was false for a = true, b = false, where it holds.
+#[test]
+fn test_a_signed_compare_of_i1_orders_true_below_false() {
+    let branch = |predicate: &str| {
+        let text = format!(
+            "define i16 @f(i1 %a, i1 %b) addrspace(1) {{\n  %c = icmp {predicate} i1 %a, %b\n  br i1 %c, label %y, label %n\ny:\n  ret i16 1\nn:\n  ret i16 0\n}}\n"
+        );
+        inner(&text)[2].split(' ').next().unwrap().to_owned()
+    };
+    // The branch or its inverse, whichever block falls through.
+    for (signed, unsigned) in [
+        ("slt", ["ja", "jbe"]),
+        ("sle", ["jae", "jb"]),
+        ("sgt", ["jb", "jae"]),
+        ("sge", ["jbe", "ja"]),
+        ("ult", ["jb", "jae"]),
+    ] {
+        assert!(unsigned.contains(&branch(signed).as_str()), "icmp {signed} i1: {}", branch(signed));
+    }
 }

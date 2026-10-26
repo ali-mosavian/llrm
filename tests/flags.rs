@@ -76,7 +76,8 @@ fn tools() -> Vec<Tool> {
 }
 
 /// Binaries that name no target, and why.
-const EXEMPT: [(&str, &str); 4] = [
+const EXEMPT: [(&str, &str); 5] = [
+    ("llrm-llc", "reads LLVM IR; takes -m through the shared flag parser"),
     ("qbfront", "prints HIR text; takes -m through the shared flag parser"),
     ("llrm-mir", "reads MIR, which states its own datalayout"),
     ("llrm-pass", "runs one pass on MIR text, which states its own datalayout"),
@@ -143,15 +144,15 @@ fn the_old_spellings_are_refused_everywhere() {
 }
 
 /// A mode no target declares is a clear refusal, not a fall back to the
-/// default.
+/// default. (`-m64` stopped being one when x86-m64 landed.)
 #[test]
-fn m64_is_refused_where_no_target_declares_it() {
+fn a_mode_no_target_declares_is_refused() {
     for tool in tools().iter().filter(|one| !matches!(one.name, "llrm-omf" | "llrm-qb")) {
         let directory = tempfile::tempdir().unwrap();
-        let done = run(tool, directory.path(), &["-m64"]);
+        let done = run(tool, directory.path(), &["-m128"]);
         assert!(
-            !done.status.success() && text(&done).contains("no target for -m64"),
-            "{} -m64: {}",
+            !done.status.success() && text(&done).contains("no target for -m128"),
+            "{} -m128: {}",
             tool.name,
             text(&done)
         );
