@@ -1,6 +1,4 @@
 /* The m16 ABI clang is told: compile-only. A wrong size here once passed 59 QCport modules whose far pointers were two bytes. */
-#define far __attribute__((address_space(1)))
-#define huge __attribute__((address_space(3)))
 typedef struct { void (*f)(int); int x; char c; } Record;
 _Static_assert(sizeof(int) == 2 && sizeof(long) == 4 && sizeof(long long) == 8, "integers");
 _Static_assert(sizeof(int *) == 2 && sizeof(int far *) == 4 && sizeof(int huge *) == 4, "data pointers");
