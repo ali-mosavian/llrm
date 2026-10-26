@@ -1033,7 +1033,7 @@ def test_the_scanner_layer_refuses_a_red_scanner_the_head_passes_and_runs_the_re
     files = ["crates/codegen/llrm-codegen/src/backend/selectiondag/dag_function.rs", "tests/new_scan.rs"]
     assert ps.new_scanner_failures(files, on_merged=merged, on_head=lambda targets: set()) == red
     assert "selectiondag_registry" in asked[0] and "new_scan" in asked[0] and "turbo" not in asked[0]
-    assert ps.new_scanner_failures(files, on_merged=merged, on_head=lambda targets: set(red)) == set()
+    assert ps.new_scanner_failures(files, on_merged=merged, on_head=lambda targets: set(red), seen=tmp_path / "seen.json") == set()
     assert "scanners: " in capsys.readouterr().out
 
 

@@ -124,6 +124,18 @@ def test_a_pr_that_leaves_generated_docs_stale_alone_is_refused_but_not_for_what
     assert ps.alone_refusals(head, docs=lambda root: {"docs/a.md"}, docs_on_base=lambda: {"docs/a.md"}, **kw) == []
 
 
+def test_a_head_failure_is_named_every_cycle_and_refused_once_it_is_two_hours_old(tmp_path, capsys):
+    """docs_in_sync was red on the parity tip for hours behind `1 red`: the head's reds excused every PR without a name or an owner."""
+    seen = tmp_path / "seen.json"
+    red = "integration docs_in_sync::test_no_generated_page_is_stale"
+    assert ps.excused_head_failures({red}, seen, 1000.0) == set()
+    assert f"excused head failure: {red} (red on the head for 0.0 h" in capsys.readouterr().out
+    assert ps.excused_head_failures({red}, seen, 1000.0 + 3600) == set()
+    assert ps.excused_head_failures({red}, seen, 1000.0 + 3 * 3600) == {red}
+    assert ps.excused_head_failures(set(), seen, 1000.0 + 4 * 3600) == set()
+    assert ps.excused_head_failures({red}, seen, 1000.0 + 5 * 3600) == set(), "a name that went green is forgotten"
+
+
 def test_two_prs_adding_a_test_of_one_name_do_not_share_a_batch(tmp_path):
     """#4678 and #4680 added the same test in different places: no conflict, so both joined, and the batch failed 'defined multiple times'."""
     repo = tmp_path / "repo"
