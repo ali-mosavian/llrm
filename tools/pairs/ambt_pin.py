@@ -63,7 +63,10 @@ def main(prog: str, llrm: str) -> dict:
     res["dag_elf"] = clocks("dagElf")
     dump = work / "dump"
     sh([llrm, *flags, "--isel=dag", "--dump", str(dump), "-S", "-o", str(work / "x.s"), str(src)])
-    ir = difftest.normalise((dump / "30-switchconv.ll").read_text())
+    stage = pin.backend_ir(dump)
+    if stage is None:
+        raise SystemExit(f"ambt_pin: no switchconv stage in {dump} for {prog}")
+    ir = difftest.normalise(stage.read_text())
     target = dataclasses.replace(pin.target("m32"), triple=os.environ.get("PIN_TRIPLE", "i486-unknown-none-elf"))
     done = pin.llc(["-O2", "-disable-lsr", *os.environ.get("PIN_EXTRA", "").split(), "-filetype=obj", "-o", f"{work}/b/{prog}.pinllc.o"], ir, target)
     if done.returncode:
