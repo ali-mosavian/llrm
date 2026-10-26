@@ -56,10 +56,12 @@ while true; do
     [ "$2" = true ] && gh pr ready $m --repo $R >/dev/null
   done
   log=${LAND_TMP:-/tmp/landing}/sqb-${batch[0]}.log
-  [ "${LAND_FAST:-}" = 1 ] && alone_warm $(sed -n '1,16p' $Q)  # warms the verdict cache while the batch squashes
+  rm -f "$log.done"
+  [ "${LAND_FAST:-}" = 1 ] && alone_warm_at_squash "$log" $(sed -n '1,16p' $Q)  # warms the verdict cache while the batch squashes, not while it tests
   ( flock -n 9 || { echo "waiting for the landing lock (another landing holds the checkout)" >&2; flock -x 9; }; cd $W && git fetch -q origin && git reset -q --hard && git clean -fdq && git checkout -q --detach ${LAND_TOOLS_REF:-origin/feat/parity} \
     && { echo "STAGE assemble ${asm_s:-0}s"; WAITS=${WAITS:-$HERE/waits.txt} PARITY_BIN=$T/release CARGO_TARGET_DIR=$T CARGO_INCREMENTAL=0 PYTHONUNBUFFERED=1 uv run --project tools python tools/parity_squash.py merge-batch "${batch[@]}"; } 2>&1 \
       | stamp_lines > $log ) 9>"$W.checkout.lock"
+  touch "$log.done"
   for m in "${batch[@]}"; do
     if [ "$(gh pr view $m --repo $R --json state -q .state)" = MERGED ]; then echo "$m: MERGED  $(gh pr view $m --repo $R --json title -q .title)"
     else why=$(grep -E "#$m: REFUSED" $log | head -1); [ -n "$why" ] || why=$(grep -E "#$m|REFUSED" $log | head -2 | tr '\n' ' '); echo "$m: REFUSED: batch $log: $(echo "$why" | cut -c1-400)"; fi

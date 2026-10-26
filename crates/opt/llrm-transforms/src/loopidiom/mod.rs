@@ -10,8 +10,7 @@
 //! ScalarEvolution does.
 //!
 //! # Deviations
-//! - D9 (temporary, [#2313](https://github.com/ali-mosavian/llrm/issues/2313)):
-//!   no CRC loops (`HashRecognize`, `optimizeCRCLoop*`).
+//! - D9a: CRC loops are the table strategy only; see [`crc`].
 //! - D10: see [`process`].
 //! Absent in MIR, so skipped (facts, not choices):
 //! - Atomics: a store or load is simple and unordered unless `volatile`, so
@@ -52,6 +51,17 @@ pub struct Options {
     pub use_lir_code_size_heurs: bool,
     /// `loop-idiom-force-memset-pattern-intrinsic`.
     pub force_memset_pattern_intrinsic: bool,
+    /// `loop-idiom-crc-strategy`.
+    pub crc_strategy: CrcStrategy,
+}
+
+/// `CRCStrategyKind`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CrcStrategy {
+    Disable,
+    Auto,
+    Table,
+    Clmul,
 }
 
 impl Default for Options {
@@ -63,6 +73,7 @@ impl Default for Options {
             disable_hash_recognize: false,
             use_lir_code_size_heurs: true,
             force_memset_pattern_intrinsic: false,
+            crc_strategy: CrcStrategy::Auto,
         }
     }
 }
@@ -95,6 +106,10 @@ pub struct LoopIdiomRecognize {
     library: Library,
     /// The routines the compile states the program links (`strlen`).
     pub routines: Vec<llrm_mir::libfunc::Routine>,
+    /// The compile is -Os or -Oz: the pipeline's stand-in for the `optsize`
+    /// attribute clang puts on every function there. Read by the CRC table
+    /// only; the stores keep their own reading of the attribute.
+    pub for_size: bool,
     apply_code_size_heuristics: bool,
     has_memset: bool,
     has_memset_pattern: bool,
@@ -162,6 +177,7 @@ impl LoopIdiomRecognize {
             options,
             library,
             routines: Vec::new(),
+            for_size: false,
             apply_code_size_heuristics: false,
             has_memset: library.memset,
             has_memset_pattern: library.memset_pattern16,
@@ -494,10 +510,14 @@ fn push(
 }
 
 pub mod build;
+pub mod crc;
 pub mod driver;
+pub mod hashrecognize;
 pub mod pass;
 pub mod process;
 pub mod strlen;
 
+#[cfg(test)]
+mod crc_tests;
 #[cfg(test)]
 mod tests;
