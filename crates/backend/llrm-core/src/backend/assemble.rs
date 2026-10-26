@@ -87,7 +87,7 @@ use crate::backend::cpu::{Profile, ProfileOrName};
 use crate::backend::isel::{self, Selected};
 use crate::backend::shadow::{self, Selector};
 use crate::backend::target::Segments;
-use crate::backend::{addressvalues, executed, frame, globals, jumps, masm, select};
+use crate::backend::{addressvalues, executed, frame, globals, jumps, masm, returnsplit, select};
 use crate::flow;
 use crate::model::ir::{Addr, AddressRef, Loc, Semantics, Space};
 use crate::model::lir::LirBody;
@@ -331,6 +331,7 @@ pub fn assembled_by(
                 let procedure = if !cpu.optimized {
                     procedure
                 } else {
+                    let procedure = timed("lir split returns", || returnsplit::split(procedure));
                     // Asked only by a tail a copy could save a jump for.
                     let (overhead, unprintable) = (std::cell::OnceCell::new(), std::cell::RefCell::new(None));
                     let overhead = || {
@@ -352,7 +353,7 @@ pub fn assembled_by(
                     }
                     let procedure = masm::exits_inserted(masm::saved_first(masm::Procedure { body, ..procedure }));
                     if procedure.body.frame_exit.is_some() {
-                        let body = jumps::tails_merged_after_exits(procedure.body.clone(), cpu.size)
+                        let body = jumps::tails_merged_after_exits(procedure.body.clone(), cpu.size, Some(&calls))
                             .map_err(|error| error.to_string())?;
                         masm::Procedure { body, ..procedure }
                     } else {

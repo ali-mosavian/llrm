@@ -99,6 +99,7 @@ impl Builder<'_> {
             | Intrinsic::MinMax { .. }
             | Intrinsic::BitCount(_)
             | Intrinsic::ByteSwap
+            | Intrinsic::BitReverse
             | Intrinsic::Abs
             | Intrinsic::LRint
             | Intrinsic::Unary(_) => self.visit_math(instruction, intrinsic),

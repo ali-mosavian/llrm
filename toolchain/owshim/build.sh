@@ -15,13 +15,13 @@ OW_COMMIT=$(cat "$HERE/ow-commit")
 ow_tree() {
     git clone -q --filter=blob:none https://github.com/open-watcom/open-watcom-v2.git "$1"
     git -C "$1" checkout -q "$OW_COMMIT"
-    ( set +u; cd "$1" && . ./setvars.sh && ./build.sh boot )
+    ( set +u; cd "$1" && . ./setvars.sh && native_tools && ./build.sh boot )
 }
 if [ -z "${OWROOT:-}" ]; then
     OWROOT="${XDG_CACHE_HOME:-$HOME/.cache}/llrm/open-watcom-v2-$OW_COMMIT"
     cached "$OWROOT" ow_tree
 elif [ ! -x "$OWROOT/build/binbuild/wmake" ] || [ ! -f "$OWROOT/bld/cc/${OWCPU:-i86}/binbuild/ccheck.obj" ]; then
-    ( set +u; cd "$OWROOT" && . ./setvars.sh && ./build.sh boot )
+    ( set +u; cd "$OWROOT" && . ./setvars.sh && native_tools && ./build.sh boot )
 fi
 CPU="${OWCPU:-i86}"
 case "$CPU" in
@@ -47,7 +47,7 @@ rm -f "$OUT/stamp"
 
 # cc's own compile line from a forced dry run, so every object here sees the
 # host configuration and include path the front end was built with.
-CC_LINE=$(set +u; cd "$OWROOT" && . ./setvars.sh >/dev/null && cd "$CC_OBJ" \
+CC_LINE=$(set +u; cd "$OWROOT" && . ./setvars.sh >/dev/null && native_tools && cd "$CC_OBJ" \
     && "$OWROOT/build/binbuild/wmake" -h -a -n -f ../binmake bootstrap=1 \
     | grep -- '-o ccheck.obj' | sed -e 's|"||g' -e 's| -o ccheck.obj||' -e 's| [^ ]*/ccheck\.c$||')
 [ -n "$CC_LINE" ] || { echo "no compile line for ccheck.obj in $CC_OBJ" >&2; exit 1; }
