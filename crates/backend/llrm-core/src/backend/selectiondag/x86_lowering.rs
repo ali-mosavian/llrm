@@ -626,6 +626,22 @@ fn emit_flags_for_setcc(
             return (flags, cond_code(dag, code));
         }
     }
+    // The carry of the add stands for the compare: `(seteq (add x, -1), -1)`
+    // is `x == 0`, which `x + -1` carries out of unless it is 0 (`dec; cmp -1`
+    // was two instructions, `add -1; jb` is one).
+    if matches!(cc, CondCode::SetEq | CondCode::SetNe)
+        && dag.constant(op1) == Some(super::fold::mask(dag.value_type(op1).size_in_bits()))
+        && dag.opcode(op0) == ISD::Add
+        && dag.operand(op0, 1) == op1
+        && is_profitable_to_use_flag_op(dag, op0)
+    {
+        let vt = dag.value_type(op0);
+        let x = dag.operand(op0, 0);
+        let new = dag.get_node_multi(x86isd::ADD, &[vt, EVT::I32], &[x, op1]);
+        dag.replace_all_uses_with(op0, SDValue { node: new.node, res: 0 });
+        let code = if cc == CondCode::SetEq { cond::AE } else { cond::B };
+        return (SDValue { node: new.node, res: 1 }, cond_code(dag, code));
+    }
     let mut rhs = op1;
     let code = translate_cc(dag, cc, &mut rhs);
     let flags = emit_cmp(dag, op0, rhs, code);
