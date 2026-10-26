@@ -1,4 +1,4 @@
-"""Two PRs that append a test to the same `*_tests.rs` once merged with a conflict; `merge=union` merged them and dropped a closing `}` (#4570: llrm-core did not
+"""Two PRs that append a test to the same `*_tests.rs` once merged with a conflict; `merge=union` merged them and dropped a closing `}` (#4570: llrm-codegen did not
 compile, no conflict reported). The repo's `.gitattributes` names `tests-append`, whose driver keeps each appended block whole."""
 
 import os

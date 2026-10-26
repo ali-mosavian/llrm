@@ -20,7 +20,7 @@ Pin d1106deb71cc. Codegen slot row 28 ([codegen-slot-table](codegen-slot-table.m
 
 ## 2. What replaces each part today
 
-Ours selects from MIR (LLVM-IR-shaped, SSA, typed) to LIR in one forward walk: `Selector::instruction` matches each instruction against a decision automaton that `llrm-iselgen` builds from `family.isel` + `patterns.isel` + `x86.instr` ([isel.rs](../../crates/backend/llrm-core/src/backend/isel.rs), [isel/matcher.rs](../../crates/backend/llrm-core/src/backend/isel/matcher.rs)). Patterns are our own, flat (an opcode and up to three operands, one nested defining instruction via `cover`), the rest is `hook_` Rust. No node graph, no legalizer, no combiner, no scheduler: selection order is MIR order, and the machine phases do the rest.
+Ours selects from MIR (LLVM-IR-shaped, SSA, typed) to LIR in one forward walk: `Selector::instruction` matches each instruction against a decision automaton that `llrm-iselgen` builds from `family.isel` + `patterns.isel` + `x86.instr` ([isel.rs](../../crates/codegen/llrm-codegen/src/backend/isel.rs), [isel/matcher.rs](../../crates/codegen/llrm-codegen/src/backend/isel/matcher.rs)). Patterns are our own, flat (an opcode and up to three operands, one nested defining instruction via `cover`), the rest is `hook_` Rust. No node graph, no legalizer, no combiner, no scheduler: selection order is MIR order, and the machine phases do the rest.
 
 | Pin part | Ours today | What is missing against the pin |
 |---|---|---|

@@ -19,5 +19,5 @@ def test_a_root_integration_target_is_never_run_by_the_gate_and_a_scanner_is():
 
 
 def test_a_lib_target_is_run_by_the_gate():
-    rows = inventory.targets(artifact("llrm_core", "lib", "crates/backend/llrm-core/src/lib.rs"))
+    rows = inventory.targets(artifact("llrm_codegen", "lib", "crates/codegen/llrm-codegen/src/lib.rs"))
     assert inventory.gate_runs(rows[0], inventory.package_name(rows[0])) == "lib"

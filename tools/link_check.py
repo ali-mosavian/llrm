@@ -19,7 +19,7 @@ ROOT = HERE.parent
 QB_PROGRAMS = ("arena_type", "color_masks", "bc_draw")  # the three the memcpy_ fact broke: fin.c, varptr.c
 C_PROGRAMS = ("memcpy_runtime", "memfuncs_runtime")  # the C runtime's ext.asm, in both conventions
 
-TOUCHING = ("runtime/", "runtime/qb/", "crates/target/")
+TOUCHING = ("runtime/", "runtime/qb/", "crates/target/", "crates/mc/")
 
 
 def touches_runtime(files: list[str]) -> bool:

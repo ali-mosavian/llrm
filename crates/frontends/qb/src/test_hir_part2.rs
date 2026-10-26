@@ -3,11 +3,11 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use llrm_core::hir::model::Operand;
-use llrm_core::hir::{self};
-use llrm_core::objectfile::module::CALL_FAR;
-use llrm_core::objectfile::omf;
-use llrm_core::support::hash::IndexMap;
+use llrm_codegen::hir::model::Operand;
+use llrm_codegen::hir::{self};
+use llrm_codegen::objectfile::module::CALL_FAR;
+use llrm_codegen::objectfile::omf;
+use llrm_codegen::support::hash::IndexMap;
 
 use super::driver as qb_driver;
 use super::test_hir::*;

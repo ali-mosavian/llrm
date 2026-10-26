@@ -8,16 +8,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 
-use llrm_core::backend::stackusage::stack_to_add;
-use llrm_core::backend::{masm, objbuild};
-use llrm_core::driver::{
+use llrm_codegen::backend::stackusage::stack_to_add;
+use llrm_codegen::backend::{masm, objbuild};
+use llrm_codegen::driver::{
     self,
     basic::{self, written_basic_in},
 };
-use llrm_core::hir::{self, model};
-use llrm_core::objectfile::module::Space;
-use llrm_core::support::hash::IndexMap;
-use llrm_core::support::pyrepr::{self, Repr};
+use llrm_codegen::hir::{self, model};
+use llrm_codegen::objectfile::module::Space;
+use llrm_codegen::support::hash::IndexMap;
+use llrm_codegen::support::pyrepr::{self, Repr};
 
 use super::abi::AbiError;
 
@@ -135,7 +135,7 @@ fn _placed(module: &model::Module) -> impl Iterator<Item = &model::DataObject> {
 
 /// Each data object's symbol, by its HIR id: its own name where external.
 fn _data_names(module: &model::Module) -> Names {
-    let mut names: Names = llrm_core::hir::symbols::symbol_names();
+    let mut names: Names = llrm_codegen::hir::symbols::symbol_names();
     let mut taken: BTreeSet<String> = BTreeSet::new();
     for object_ in &module.data {
         if [_READ_DATA_OBJECT, _STATEMENT_TABLE_OBJECT].contains(&object_.name.as_str()) {
@@ -432,7 +432,7 @@ fn rich_assembled(
     program: &model::Program,
     codegen: &driver::Options,
 ) -> Result<masm::Module, CompileError> {
-    let program = &llrm_core::support::debug::timed("hir positional data", || _positional_data(program))?;
+    let program = &llrm_codegen::support::debug::timed("hir positional data", || _positional_data(program))?;
     let module = &program.modules[0];
     let functions = module.functions.iter().map(|one| (one.name.clone(), _object_name(&one.name)));
     let symbols: BTreeMap<String, String> =
@@ -559,7 +559,7 @@ fn rich_assembled(
         &compiled,
         STACK_BASE,
         STACK_RESERVE,
-        llrm_core::backend::stackusage::stack_limit(codegen.arch.layout().segment_bytes()),
+        llrm_codegen::backend::stackusage::stack_limit(codegen.arch.layout().segment_bytes()),
         &*codegen.arch,
     )?;
     Ok(compiled)
@@ -580,17 +580,17 @@ pub fn assembled(
     observer: Option<&mut HirObserver<'_>>,
     codegen: &driver::Options,
 ) -> Result<masm::Module, CompileError> {
-    if llrm_core::support::debug::verifying() {
-        llrm_core::support::debug::timed("hir verify", || hir::verify::verify(program))
+    if llrm_codegen::support::debug::verifying() {
+        llrm_codegen::support::debug::timed("hir verify", || hir::verify::verify(program))
             .map_err(|error| CompileError::Value(error.0))?;
     }
     if let Some(observe) = observer {
         observe(program)?;
     }
-    let laid_out = llrm_core::support::debug::timed("hir zero fill", || {
+    let laid_out = llrm_codegen::support::debug::timed("hir zero fill", || {
         super::zero_fill::laid_out(program, |module, function| !_inline_frame(program, module, function))
     });
-    let program = &llrm_core::support::debug::timed("hir near procedures", || {
+    let program = &llrm_codegen::support::debug::timed("hir near procedures", || {
         _near_procedures(&laid_out, codegen.arch.layout().spaces.far_is_near())
     });
     if program.modules.len() != 1 {

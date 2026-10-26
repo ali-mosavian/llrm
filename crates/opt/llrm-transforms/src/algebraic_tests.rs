@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `optimize/algebraic_tests.rs`, the port of
+//! Adapted from llrm-codegen's `optimize/algebraic_tests.rs`, the port of
 //! `tests/test_algebraic.py`, each body now MIR text the interpreter runs
 //! before and after.
 //!

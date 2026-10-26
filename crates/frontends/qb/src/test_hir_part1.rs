@@ -5,9 +5,9 @@
 
 use std::collections::BTreeSet;
 
-use llrm_core::hir::{self, model};
-use llrm_core::objectfile::omf;
-use llrm_core::support::hash::IndexMap;
+use llrm_codegen::hir::{self, model};
+use llrm_codegen::objectfile::omf;
+use llrm_codegen::support::hash::IndexMap;
 
 use super::cli::parse_args;
 use super::qbstages;

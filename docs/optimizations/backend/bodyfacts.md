@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/bodyfacts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/bodyfacts.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/bodyfacts.rs sha256:ca03e152e9bc3a16503e66e0e2b484a5f3c8616e7a0a8060c455c5949d22ebb5 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/bodyfacts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/bodyfacts.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/bodyfacts.rs sha256:ca03e152e9bc3a16503e66e0e2b484a5f3c8616e7a0a8060c455c5949d22ebb5 -->
 
 # bodyfacts
 

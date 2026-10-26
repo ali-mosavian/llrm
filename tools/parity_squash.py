@@ -179,7 +179,7 @@ def dead_links(base: str, head: str, cwd: Path = ROOT) -> list[tuple[str, str]]:
 
 PERF_TITLE = re.compile(r"^\s*perf(\(|:)", re.I)
 REFACTOR_TITLE = re.compile(r"^\s*refactor(\(|:)", re.I)
-PASS_CODE = re.compile(r"^crates/(opt/[^/]+|backend/llrm-core)/src/(?!.*(?:_tests\.rs|/tests/)).*\.rs$")
+PASS_CODE = re.compile(r"^crates/(opt/[^/]+|codegen/llrm-codegen)/src/(?!.*(?:_tests\.rs|/tests/)).*\.rs$")
 FEAT_TITLE = re.compile(r"^\s*feat(\(|:)", re.I)
 PIPELINE_WIRING = "crates/opt/llrm-transforms/src/pipeline.rs"
 ROWS_LINE = re.compile(r"^\s*Rows:\s*\S+", re.I | re.M)

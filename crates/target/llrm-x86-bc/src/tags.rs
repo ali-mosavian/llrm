@@ -2,7 +2,7 @@
 //! (`llrm_hir::mir::Tags`): a place -- a DGROUP object, a runtime cell, a
 //! frame or the pushed bytes -- or a far allocation, an array's heap block
 //! reached through the selector its descriptor holds. The two never meet,
-//! which is what llrm-core's `allocation` said of a far access. An access
+//! which is what llrm-codegen's `allocation` said of a far access. An access
 //! with neither provenance is left untagged.
 
 use llrm_hir::mir::Tags;

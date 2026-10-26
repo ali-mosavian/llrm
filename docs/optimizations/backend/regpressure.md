@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/regpressure.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/regpressure.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/regpressure.rs sha256:cc1caba5e88a79ecd903243f3e4e5fc88ca140d8a1cbe7b4422258bd088ec44a -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/regpressure.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/regpressure.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/regpressure.rs sha256:cc1caba5e88a79ecd903243f3e4e5fc88ca140d8a1cbe7b4422258bd088ec44a -->
 
 # regpressure
 

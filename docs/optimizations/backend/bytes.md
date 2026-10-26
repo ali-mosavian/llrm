@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/bytes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/bytes.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/bytes.rs sha256:88bf276c83e16a03c3deec9beff24d7a24d928a746ba2c6f12f21bb0cdc987d3 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/bytes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/bytes.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/bytes.rs sha256:88bf276c83e16a03c3deec9beff24d7a24d928a746ba2c6f12f21bb0cdc987d3 -->
 
 # bytes
 

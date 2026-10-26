@@ -7,7 +7,7 @@ description = "The rich route for BC objects: raised, optimized, selected and wr
 
 [dependencies]
 llrm-x86-bc = { workspace = true }
-llrm-core = { workspace = true }
+llrm-codegen = { workspace = true }
 llrm-driver = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-omf = { workspace = true }

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regenerates `golden/NAME.pin.txt` from `golden/NAME.ll`: the pin's machine opcodes per function.
 
-    tools/dagisel/golden_pin.py x87        # in crates/backend/llrm-core/src/backend/selectiondag/golden
+    tools/dagisel/golden_pin.py x87        # in crates/codegen/llrm-codegen/src/backend/selectiondag/golden
 
 One line per function, `name OPCODE:count,...`, sorted, bookkeeping opcodes left out (the shadow tool's rule).
 """
@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pairs"))
 import pin  # noqa: E402
 import select_shadow as shadow  # noqa: E402
 
-GOLDEN = Path(__file__).resolve().parents[2] / "crates/backend/llrm-core/src/backend/selectiondag/golden"
+GOLDEN = Path(__file__).resolve().parents[2] / "crates/codegen/llrm-codegen/src/backend/selectiondag/golden"
 
 
 def render(ir: str) -> str:

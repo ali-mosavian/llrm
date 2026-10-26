@@ -13,7 +13,7 @@ llrm-cc [-target NAME] [cc flags] FILE.c...
 
 Only phase flags are understood (`-c -S -o -O* -g0`, inputs, link flags). `-E`, `-M`, `-MM`, `-emit-llvm` and queries run clang as is. `.s` inputs go to clang's assembler. Everything else is clang's. `-fsanitize=*`, `-fprofile-*`, `-flto`, `-g` (not `-g0`) are refused until translated.
 
-Per-target facts are in one table, [targets.toml](../../../crates/frontends/llrm-cc/targets.toml): triple, clang arguments (headers, `-D`), llrm-llc arguments, object format, link and run recipes, and the data layout. Clang's layout must lay types out as the table's does; the driver then gives llrm-llc the table's spelling.
+Per-target facts are in one table, [targets.toml](../../../crates/driver/llrm-cc/targets.toml): triple, clang arguments (headers, `-D`), llrm-llc arguments, object format, link and run recipes, and the data layout. Clang's layout must lay types out as the table's does; the driver then gives llrm-llc the table's spelling.
 
 ## The pin
 

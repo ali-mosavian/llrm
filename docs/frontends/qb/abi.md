@@ -3,7 +3,7 @@
 Audience: contributors to `qbfront` and the QB ABI adapter. Facts about the
 Microsoft BASIC procedure, array and symbol ABI, measured from compiled BASIC
 and not inferred from 16-bit C conventions. The adapter is
-`crates/backend/llrm-core/src/abi/qb.rs`.
+`crates/codegen/llrm-codegen/src/abi/qb.rs`.
 
 A runtime result is primary evidence. A BC `/A` listing is not raw code: VBDOS
 shows back-patched frame operands as zero.

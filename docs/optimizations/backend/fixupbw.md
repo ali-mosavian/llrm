@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/fixupbw.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/fixupbw.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/fixupbw.rs sha256:c67303ef508b76510f6f5c87a32a1e9b2f1d3543a04723728f06ef08e111d892 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/fixupbw.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/fixupbw.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/fixupbw.rs sha256:c67303ef508b76510f6f5c87a32a1e9b2f1d3543a04723728f06ef08e111d892 -->
 
 # fixupbw
 
