@@ -51,6 +51,9 @@ impl Combiner<'_> {
         match self.intrinsic_of(call) {
             Some(Intrinsic::MemCpy | Intrinsic::MemMove) => self.simplify_any_mem_transfer(call),
             Some(Intrinsic::MinMax { signed, max }) => self.narrow_min_max(call, signed, max),
+            Some(found @ (Intrinsic::FunnelShift { .. } | Intrinsic::ByteSwap)) => {
+                self.bswap_or_bit_reverse_of_call(call, &found)
+            }
             _ => Visit::None,
         }
     }

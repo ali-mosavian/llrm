@@ -50,6 +50,7 @@ type Fold = fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>;
 const FOLDS: &[Fold] = &[
     into_select_or_phi,
     select_binop_select,
+    bswap_or_bit_reverse,
     match_funnel_shift,
     shift_with_shift,
     xor_constant,
@@ -57,6 +58,15 @@ const FOLDS: &[Fold] = &[
     not_or_decrement,
     mask_merge,
 ];
+
+fn bswap_or_bit_reverse(
+    c: &mut Combiner,
+    inst: InstId,
+    _: Operand,
+    _: Operand,
+) -> Option<Visit> {
+    c.match_bswap_or_bit_reverse(inst, true, true)
+}
 
 fn into_select_or_phi(
     c: &mut Combiner,
