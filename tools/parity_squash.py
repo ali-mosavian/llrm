@@ -751,6 +751,23 @@ def run_smoke(known: dict[str, str] | None = None) -> tuple[bool, str]:
 
 
 FAST = os.environ.get("LAND_FAST") == "1"  # the user's call (2026-10-19): no smoke, no tests, no precheck; each PR is merged in order and squashed; only a build of the combined tree can halve a batch
+
+OVERLAP = os.environ.get("LAND_OVERLAP") == "1"  # the link check and the behavioural programs (release binaries) run beside the lib tests (debug); same checks, same order of refusal
+
+
+def beside(background, foreground):
+    """`foreground()`'s result and `background()`'s, the second running on a thread meanwhile; both are finished on return, also when `foreground` raises, as the next pass reuses the checkout."""
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(background)
+        try:
+            front = foreground()
+        finally:
+            back = future.exception()
+        if back is not None:
+            raise back
+        return front, future.result()
+
+
 MAX_BATCH = 16 if FAST else 8  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
 
 
@@ -1274,36 +1291,54 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             print(f"REFUSED: the batch does not build: {broken[:300]}")
             failed_build.append(broken)
             return False
-        # LAND_FAST_TESTS=1: also the lib tests of the crates the batch changes (the user's 10-19 call is no tests; this is the switch for the opposite call)
-        if os.environ.get("LAND_FAST_TESTS") == "1":
-            changed = git("diff", "--name-only", BASE, "HEAD").split()
-            # The always-on scanners read sources and docs (milliseconds): a red one refuses the batch before the minutes of lib tests it would otherwise wait for.
-            stage("scanners-early")
-            if new := sorted(landing_scanner_failures(changed, False)):
+        def tests_pass() -> bool:
+            """The lib tests and scanners on the merged tree; False after printing the refusal and noting the failed units."""
+            # LAND_FAST_TESTS=1: also the lib tests of the crates the batch changes (the user's 10-19 call is no tests; this is the switch for the opposite call)
+            if os.environ.get("LAND_FAST_TESTS") == "1":
+                changed = git("diff", "--name-only", BASE, "HEAD").split()
+                # The always-on scanners read sources and docs (milliseconds): a red one refuses the batch before the minutes of lib tests it would otherwise wait for.
+                stage("scanners-early")
+                if new := sorted(landing_scanner_failures(changed, False)):
+                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
+                    failed_units.update(new)
+                    return False
+                stage("lib-tests")
+                if new := sorted(new_lib_failures(changed)):
+                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
+                    failed_units.update(new)
+                    return False
+                stage("scanners")
+                if new := sorted(new_scanner_failures(changed)):
+                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
+                    failed_units.update(new)
+                    return False
+            if os.environ.get("LAND_FAST_TESTS") != "1" and (new := sorted(landing_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), False))):
                 print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
                 failed_units.update(new)
                 return False
-            stage("lib-tests")
-            if new := sorted(new_lib_failures(changed)):
-                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
-                failed_units.update(new)
-                return False
-            stage("scanners")
-            if new := sorted(new_scanner_failures(changed)):
-                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
-                failed_units.update(new)
-                return False
-        if os.environ.get("LAND_FAST_TESTS") != "1" and (new := sorted(landing_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), False))):
-            print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
-            failed_units.update(new)
+            return True
+
+        def release_pass() -> tuple[list[str], list[str]]:
+            """The link check, then the behavioural programs unless something does not link: (unlinked, red)."""
+            files = git("diff", "--name-only", BASE, "HEAD").split()
+            stage("link")
+            if unlinked := new_link_failures(files):
+                return unlinked, []
+            stage("behavioural")
+            return [], pre_merge_behavioural(files)
+
+        if OVERLAP:
+            tests_ok, (unlinked, red) = beside(release_pass, tests_pass)
+        else:
+            tests_ok = tests_pass()
+            unlinked, red = release_pass() if tests_ok else ([], [])
+        if not tests_ok:
             return False
-        stage("link")
-        if unlinked := new_link_failures(git("diff", "--name-only", BASE, "HEAD").split()):
+        if unlinked:
             print(f"REFUSED: the batch's runtime does not link: {'; '.join(unlinked)[:300]}")
             failed_units.update(f"link {line.split(':')[0]}" for line in unlinked)
             return False
-        stage("behavioural")
-        if red := pre_merge_behavioural(git("diff", "--name-only", BASE, "HEAD").split()):
+        if red:
             print(f"BEHAVIOURAL RED pre-merge: the batch, {' '.join(red)}")
             failed_units.update(f"behavioural {program}" for program in red)
             return False
