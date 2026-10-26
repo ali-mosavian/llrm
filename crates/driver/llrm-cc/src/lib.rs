@@ -523,7 +523,22 @@ fn build(
     if build.stop == Stop::Executable {
         let output = build.output.clone().unwrap_or_else(|| "a.out".into());
         let command = link_command(target, &objects, &build.link, &output).map_err(fail)?;
-        run(Path::new(&command[0]), &command[1..])?;
+        // The start-up and the externals are linked near where the model's code
+        // is near.
+        let near_code = build.clang.iter().any(|flag| matches!(flag.as_str(), "-mcmodel=small" | "-mcmodel=compact"));
+        let mut link = Command::new(&command[0]);
+        link.args(&command[1..]);
+        if near_code {
+            link.env("LLRM_NEAR_CODE", "1");
+        }
+        match link.status() {
+            Ok(status) if status.success() => {}
+            Ok(status) => return Err(status.code().unwrap_or(1)),
+            Err(error) => {
+                eprintln!("llrm-cc: {}: {error}", command[0]);
+                return Err(127);
+            }
+        }
     }
     Ok(())
 }

@@ -123,3 +123,41 @@ fn a_constant_huge_offset_carries_a_64k_step_into_the_selector() {
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
     assert!(!text.contains("24577"), "{text}");
 }
+
+/// Small and compact (near code) crashed on start-up: the runtime called `main`
+/// and `report` far, and a program in any model but medium and large never ran.
+/// Each model's sieve prints 1028, the primes below 8192.
+#[test]
+fn a_program_runs_in_each_model() {
+    if std::env::var_os("LLRM_CLANG_M16").is_none() {
+        eprintln!("skipped: LLRM_CLANG_M16 names no i8086 clang");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    for model in ["small", "medium", "compact", "large", "huge"] {
+        let exe = std::env::temp_dir().join(format!("llrm-cc-run-{model}-{}.exe", std::process::id()));
+        let built = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", "x86_16-dos")
+            .env("LLRM_LLC", root.join("target/release/llrm-llc"))
+            .args(["-w", "-O2", &format!("-mcmodel={model}"), "-o"])
+            .arg(&exe)
+            .arg(root.join("tests/cc/dos/sieve.c"))
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{model}: {}", String::from_utf8_lossy(&built.stderr));
+        let ran = Command::new("python3")
+            .args(["-I"])
+            .arg(root.join("tools/dosbatch/run_exe.py"))
+            .arg("x86-m16")
+            .arg(&exe)
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_file(&exe);
+        assert_eq!(
+            String::from_utf8_lossy(&ran.stdout).trim(),
+            "1028",
+            "{model}: {}",
+            String::from_utf8_lossy(&ran.stderr)
+        );
+    }
+}
