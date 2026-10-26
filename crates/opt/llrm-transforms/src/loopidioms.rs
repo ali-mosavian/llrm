@@ -16,9 +16,9 @@
 //! - A fill: a store, or a memset, of a loop-invariant value that is one byte
 //!   repeated, through an address `induction` derives as a GEP off an invariant
 //!   pointer, striding by the element's size. A cell whose bytes do not repeat
-//!   is `llvm.experimental.memset.pattern`. A loop with several fills to bytes
-//!   no other reaches is a memset each; fills that tile adjacent bytes with the
-//!   same byte are one.
+//!   stays a loop, as in the pin (`memset_pattern16` is Darwin's). A loop with
+//!   several fills to bytes no other reaches is a memset each; fills that tile
+//!   adjacent bytes with the same byte are one.
 //! - A copy: a load and a store of one cell each trip, the stored value being
 //!   the loaded one, from one pointer to another with the same step. Where the
 //!   ranges are apart it is `llvm.memcpy`; where they overlap but each trip
@@ -34,7 +34,7 @@
 //! (`isel/huge.rs`; Owner: clib-huge-fill-2256). A volatile access, a call, or
 //! a value the loop changes keeps the loop.
 //!
-//! A loop with one fill of constant bytes is rewritten always. A pattern, a
+//! A loop with one fill of constant bytes is rewritten always. A
 //! copy or a loop of several fills is priced (`_pays`, `_cheaper_by`) against
 //! what the loop costs for its trips (the proven count, or the profit model's
 //! estimate): the target's string-instruction setup and per-cell cost against
@@ -375,8 +375,6 @@ pub(crate) enum How {
 enum Byte {
     Operand(Operand),
     Number(u128),
-    /// A cell whose bytes do not repeat: `memset.pattern`.
-    Pattern(Operand),
 }
 
 /// The fill `loop_` is, if it is one.
@@ -493,10 +491,6 @@ fn _fill(
     {
         return None;
     }
-    let pattern = match &stored {
-        Stored::Fill(byte) => matches!(byte, Byte::Pattern(..)),
-        Stored::Copy(_) => false,
-    };
     if let Stored::Copy(copy) = &mut stored {
         copy.descending = descending;
         let Operand::Value(source) = copy.source else { return None };
@@ -507,8 +501,6 @@ fn _fill(
         }
         copy.how = _overlap(unit, copy.load, effect, from, to, &proof, &bytes, descending)?;
     }
-    // A pattern is `rep stosw` or `stosd`: priced, as a short loop beats its
-    // setup.
     let moved = match &stored {
         Stored::Copy(copy) => Some((bytes.to_i64()?, copy.descending && copy.how == How::Overlapping)),
         Stored::Fill(_) => None,
@@ -525,7 +517,7 @@ fn _fill(
         _ => None,
     };
     let body = if posttested { &chain[1..] } else { &chain };
-    if (pattern || moved.is_some() || fills > 1 || merged)
+    if (moved.is_some() || fills > 1 || merged)
         && !_pays(unit, callees, body, header, &proof, costs, size, moved, fills, filled)
     {
         return None;
@@ -619,9 +611,6 @@ fn _several(
     let mut fills = Vec::new();
     for &effect in effects {
         let (pointer, byte, bytes) = _stored(unit, callees, effect, still)?;
-        if matches!(byte, Byte::Pattern(..)) {
-            return None;
-        }
         let Operand::Value(address) = pointer else { return None };
         let formula = walk.values.get(&address).filter(|one| one.pointer.is_some())?;
         if formula.step.known()? != bytes {
@@ -861,23 +850,6 @@ pub(crate) fn _memset(
     (declared.declare(&format!("llvm.memset.p{space}.i{width}"), ty), ty)
 }
 
-/// `llvm.experimental.memset.pattern` of cells of type `cell` for pointers of
-/// `space` and counts `width` bits wide, declared where the module has none.
-fn _pattern(
-    context: &mut Context,
-    declared: &mut Declared,
-    space: u32,
-    cell: TypeId,
-    width: u32,
-) -> (GlobalId, TypeId) {
-    let bits = context.types.int_bits(cell).expect("an integer cell");
-    let types = &mut context.types;
-    let (void, pointer, count, flag) = (types.void(), types.ptr(space), types.int(width), types.int(1));
-    let ty =
-        types.intern(Type::Function { returns: void, parameters: vec![pointer, cell, count, flag], variadic: false });
-    (declared.declare(&format!("llvm.experimental.memset.pattern.p{space}.i{bits}.i{width}"), ty), ty)
-}
-
 /// `llvm.memcpy`, or `llvm.memmove` where the ranges overlap, from pointers of
 /// space `from` to ones of `to`, in lengths `width` bits wide, declared where
 /// the module has none.
@@ -918,8 +890,7 @@ fn _filled(
     let counted = trips.clone();
     let trips = seeds.widened(&trips, width);
     seeds.width = width;
-    let cells = matches!(found.stored, Stored::Fill(Byte::Pattern(..)));
-    let count = if found.bytes == BigInt::from(1) || cells {
+    let count = if found.bytes == BigInt::from(1) {
         trips.clone()
     } else {
         seeds.computed(BinaryOp::Mul, vec![trips.clone(), AffineOperand::constant(found.bytes.clone(), width)])
@@ -961,17 +932,10 @@ fn _filled(
     let off = counting::constant(seeds.context, &BigInt::from(0), 1);
     let (callee, function_type, mut operands, direction) = match &found.stored {
         Stored::Fill(byte) => {
-            let (callee, function_type) = match byte {
-                Byte::Pattern(value) => {
-                    let cell = seeds.function.operand_type(seeds.context, *value).expect("a typed cell");
-                    _pattern(seeds.context, declared, found.memset.0, cell, found.memset.1)
-                }
-                _ => _memset(seeds.context, declared, found.memset.0, found.memset.1),
-            };
+            let (callee, function_type) = _memset(seeds.context, declared, found.memset.0, found.memset.1);
             let byte = match *byte {
                 Byte::Operand(byte) => byte,
                 Byte::Number(byte) => counting::constant(seeds.context, &BigInt::from(byte), 8),
-                Byte::Pattern(value) => value,
             };
             (callee, function_type, vec![found.pointer, byte, count], None)
         }
@@ -1042,7 +1006,6 @@ fn _filled(
         let byte = match extra.byte {
             Byte::Operand(byte) => byte,
             Byte::Number(byte) => counting::constant(context, &BigInt::from(byte), 8),
-            Byte::Pattern(value) => value,
         };
         let pointer_type = context.types.ptr(0);
         let callee =
@@ -1211,9 +1174,7 @@ fn _stored(
     if let Some(byte) = _repeated(unit, value, width) {
         return Some((pointer, Byte::Number(byte), bytes));
     }
-    // LLVM's memset_pattern16: the cell is a word or dword; the stored value
-    // need not be a constant.
-    matches!(width, 16 | 32).then_some((pointer, Byte::Pattern(value), bytes))
+    None
 }
 
 /// The store and load of `one` and `other`, where the store writes the loaded

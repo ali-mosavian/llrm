@@ -58,3 +58,17 @@ def test_an_entry_without_an_owner_or_issue_or_listed_twice_is_refused(tmp_path)
     with pytest.raises(SystemExit, match="listed twice"):
         xfail.load(path)
     assert xfail.issue_of("run a", {"run a": {"issue": 3}}) == "#3" and xfail.issue_of("run b", {}) is None
+
+
+def run_integration(monkeypatch, output):
+    monkeypatch.setattr(xfail, "load", lambda path=xfail.PATH: {"integration t::t_a": {}})
+    done = type("Done", (), {"stdout": output, "returncode": 0})()
+    return ps.integration_failures(["t"], run=lambda *a, **k: done)
+
+
+def test_a_listed_integration_test_that_passes_is_an_xpass_and_one_that_fails_is_excused(monkeypatch):
+    """Only `integration` ids that fail were excused; one that was fixed stayed listed, silently, because nothing read its pass."""
+    passing = "     Running tests/t.rs (target/release/deps/t-1)\ntest t_a ... ok\ntest t_b ... ok\n"
+    assert run_integration(monkeypatch, passing) == {"xpass integration t::t_a"}
+    failing = "     Running tests/t.rs (target/release/deps/t-1)\ntest t_a ... FAILED\ntest t_b ... ok\n"
+    assert run_integration(monkeypatch, failing) == set()

@@ -4635,6 +4635,26 @@ fn test_the_dead_lanes_of_a_body_no_pass_changed_are_worked_out_once() {
     assert_eq!(liveness::exits_computed() - before, 2, "a changed body was given the last answer");
 }
 
+/// `high_extracts` solved the function's liveness and walked every block for
+/// the dead lanes after each instruction, though none held a shift to extract
+/// (3.0 M Ir of d_faces -O2). A body with nothing to extract is answered
+/// unchanged without a solve.
+#[test]
+fn test_a_body_with_nothing_to_extract_is_not_solved_for_high_extracts() {
+    let mov = Arc::new(insn(
+        0,
+        Some((0, 2)),
+        Some(sem(Operation::Move, "mov", vec![rl(RegId::AX, 4)], vec![rl(RegId::BX, 4)])),
+        vec![],
+        vec![],
+    ));
+    let input = body("f", 0, vec![block(0, vec![mov], vec![]).into()]);
+    let before = liveness::exits_computed();
+    let done = high_extracts(&input, "386").unwrap();
+    assert_eq!(done, input);
+    assert_eq!(liveness::exits_computed() - before, 0, "solved for a body with nothing to extract");
+}
+
 /// `addresses` solved the flags live out of every block and the registers live
 /// out of the function for each body, though no instruction in it starts a
 /// chain to fold into an address (7.5 M Ir of d_faces -O2). A body with nothing
@@ -5069,4 +5089,317 @@ fn test_a_repeated_frame_address_after_allocation_is_made_again() {
     let result = transform(body("cse", 0, vec![block(0, insns, vec![]).into()]));
     let leas = whats(&result.blocks[0].insns).iter().filter(|what| what.name.as_deref() == Some("lea")).count();
     assert_eq!(leas, 2, "{:?}", names(&result.blocks[0].insns));
+}
+
+/// PLASMA at m16: `mov [bp-14],di ; mov di,[bp-14]` -- a reload of what the
+/// register still held -- stood in each inner loop (a spilled one-instruction
+/// piece of a split range, then the copy that follows it).
+fn store_then_reload(between: Vec<Insn>) -> usize {
+    let cell = || Loc::Mem(mem(frame(-14), 2, RegId::BP, -14, 1));
+    let mov = |at: i64, dests: Vec<Loc>, sources: Vec<Loc>| Insn {
+        spill_store: dests.iter().any(|d| matches!(d, Loc::Mem(_))),
+        ..insn(at, Some((at, at + 2)), Some(sem(Operation::Move, "mov", dests, sources)), vec![], vec![])
+    };
+    let mut insns = vec![Arc::new(mov(0, vec![cell()], vec![rl(RegId::DI, 2)]))];
+    insns.extend(between.into_iter().map(Arc::new));
+    insns.push(Arc::new(mov(100, vec![rl(RegId::DI, 2)], vec![cell()])));
+    insns.push(Arc::new(insn(
+        200,
+        Some((200, 200)),
+        Some(sem(Operation::Return, "ret", vec![], vec![])),
+        vec![],
+        vec![],
+    )));
+    let done = forwarded_reloads(rules(), &body("forwarded-reload", 0, vec![block(0, insns, vec![]).into()]));
+    whats(&done.blocks[0].insns).iter().filter(|what| what.name.as_deref() == Some("mov")).count()
+}
+
+#[test]
+fn test_a_reload_straight_after_its_store_is_dropped() {
+    assert_eq!(store_then_reload(vec![]), 1);
+}
+
+#[test]
+fn test_a_reload_after_instructions_that_leave_the_register_and_cell_is_dropped() {
+    let other = insn(
+        10,
+        Some((10, 12)),
+        Some(sem(Operation::Binary, "add", vec![rl(RegId::AX, 2)], vec![rl(RegId::AX, 2), rl(RegId::DI, 2)])),
+        vec![],
+        vec![],
+    );
+    assert_eq!(store_then_reload(vec![other]), 1);
+}
+
+#[test]
+fn test_a_reload_stays_where_the_register_is_written_between() {
+    let write = insn(
+        10,
+        Some((10, 12)),
+        Some(sem(Operation::Binary, "add", vec![rl(RegId::DI, 2)], vec![rl(RegId::DI, 2), im(1, 2)])),
+        vec![],
+        vec![],
+    );
+    assert_eq!(store_then_reload(vec![write]), 2);
+}
+
+#[test]
+fn test_a_reload_stays_where_the_cell_is_written_between() {
+    let write = insn(
+        10,
+        Some((10, 12)),
+        Some(sem(
+            Operation::Move,
+            "mov",
+            vec![Loc::Mem(mem(frame(-14), 2, RegId::BP, -14, 1))],
+            vec![rl(RegId::AX, 2)],
+        )),
+        vec![],
+        vec![],
+    );
+    assert_eq!(store_then_reload(vec![write]), 3);
+}
+
+#[test]
+fn test_a_reload_stays_across_a_call() {
+    let call = Insn {
+        clobbers: [RegId::AX, RegId::CX, RegId::DX].into_iter().collect(),
+        ..insn(10, Some((10, 13)), Some(sem(Operation::Call, "call", vec![], vec![])), vec![], vec![])
+    };
+    assert_eq!(store_then_reload(vec![call]), 2);
+}
+
+#[test]
+fn test_a_reload_stays_across_a_volatile_access() {
+    let device = Insn {
+        volatile: true,
+        ..insn(
+            10,
+            Some((10, 12)),
+            Some(sem(Operation::Move, "mov", vec![rl(RegId::AX, 2)], vec![Loc::Mem(mem(None, 2, RegId::BX, 0, 0))])),
+            vec![],
+            vec![],
+        )
+    };
+    assert_eq!(store_then_reload(vec![device]), 3);
+}
+
+// ------------------------------------------------------------ width and flag
+// audit of the width- and flag-changing rules
+
+fn jump_if(
+    name: &str,
+    target: i64,
+) -> Arc<Insn> {
+    Arc::new(insn(9, Some((9, 9)), Some(semt(Operation::Branch, name, vec![], vec![], Some(target))), vec![], vec![]))
+}
+
+fn names_of(made: &LirBody) -> Vec<String> {
+    whats(&made.insns()).iter().map(|what| what.name.as_deref().unwrap_or_default().to_owned()).collect()
+}
+
+fn point(
+    at: i64,
+    what: Semantics,
+    defines: Vec<u32>,
+    uses: Vec<u32>,
+) -> Arc<Insn> {
+    Arc::new(insn(at, Some((at, at)), Some(what), defines, uses))
+}
+
+/// `mov eax,<symbol>` narrowed to `mov ax,0`: the low word took no relocation
+/// with it, so the address was lost.
+#[test]
+fn a_relocated_dword_immediate_is_not_narrowed_to_a_word_without_its_relocation() {
+    let address = Addr { index: 1, ..Addr::new(Space::Segment, 0) };
+    let symbol = Loc::Imm(Imm { value: 0, width: 4, address: Some(address) });
+    let source = point(1, sem(Operation::Move, "mov", vec![rl(RegId::EAX, 4)], vec![symbol]), vec![1], vec![]);
+    let finish = Insn {
+        requires: vec![(Held { value: 1, width: 2 }, RegId::AX)],
+        reads_complete: true,
+        ..insn(2, Some((2, 2)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![1])
+    };
+    let input = body("symbol", 1, vec![block(1, vec![source, Arc::new(finish)], vec![]).into()]);
+
+    assert_eq!(narrowed_moves(rules(), &input), input);
+}
+
+/// `lea cx,[bx+1]; cmp bx,5; mov bx,cx; jb` is `cmp; lea bx,[bx+1]; jb`: the
+/// lea sets no flag, so the branch reads the compare's.
+#[test]
+fn a_step_after_its_compare_leaves_the_flags_the_branch_reads() {
+    let (bx, cx) = (rl(RegId::BX, 2), rl(RegId::CX, 2));
+    let cell = Loc::Mem(Mem { through: RegId::BX, offset: 1, disp_width: 1, ..Mem::new(None, 2) });
+    for (other, rewritten) in [(im(5, 2), true), (cx.clone(), false)] {
+        let step = point(1, sem(Operation::Address, "lea", vec![cx.clone()], vec![cell.clone()]), vec![2], vec![1]);
+        let compare = point(2, sem(Operation::Compare, "cmp", vec![], vec![bx.clone(), other]), vec![], vec![1]);
+        let copy = point(3, sem(Operation::Move, "mov", vec![bx.clone()], vec![cx.clone()]), vec![3], vec![2]);
+        let insns = vec![step, compare, copy, jump_if("jb", 4)];
+        let finish = Insn {
+            reads_complete: true,
+            ..insn(4, Some((4, 4)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![])
+        };
+        let input =
+            body("step", 1, vec![block(1, insns, vec![4]).into(), block(4, vec![Arc::new(finish)], vec![]).into()]);
+
+        let made = stepped_after_compare(rules(), &input);
+
+        let expected = if rewritten { vec!["cmp", "lea", "jb", "ret"] } else { vec!["lea", "cmp", "mov", "jb", "ret"] };
+        assert_eq!(names_of(&made), expected, "{rewritten}");
+        if rewritten {
+            assert_eq!(whats(&made.insns())[1].dests, vec![bx.clone()]);
+        }
+    }
+}
+
+/// A carry read in a successor block kept `add` as `inc` would not set it.
+#[test]
+fn a_unit_add_stays_where_a_successor_reads_the_carry() {
+    for (register, width) in [(RegId::CL, 1), (RegId::CX, 2), (RegId::ECX, 4)] {
+        let counter = rl(register, width);
+        let add = point(
+            1,
+            sem(Operation::Binary, "add", vec![counter.clone()], vec![counter.clone(), im(1, width)]),
+            vec![1],
+            vec![1],
+        );
+        let bx = rl(RegId::BX, 2);
+        let carry = point(4, sem(Operation::Binary, "adc", vec![bx.clone()], vec![bx, im(0, 2)]), vec![], vec![]);
+        let input = body("carry", 1, vec![block(1, vec![add], vec![4]).into(), block(4, vec![carry], vec![]).into()]);
+
+        assert_eq!(names_of(&increments(rules(), &input))[0], "add", "{width}");
+    }
+}
+
+/// `mov cx,bx; shl cx,cl; mov bx,cx` read its count from BX's low byte; the
+/// renamed `shl bx,cl` reads CX's.
+#[test]
+fn a_shuttle_does_not_rename_a_register_that_is_the_shift_count() {
+    let (bx, cx, cl) = (rl(RegId::BX, 2), rl(RegId::CX, 2), rl(RegId::CL, 1));
+    let insns = vec![
+        point(1, sem(Operation::Move, "mov", vec![cx.clone()], vec![bx.clone()]), vec![2], vec![1]),
+        point(2, sem(Operation::Binary, "shl", vec![cx.clone()], vec![cx.clone(), cl]), vec![3], vec![2]),
+        point(3, sem(Operation::Move, "mov", vec![bx], vec![cx]), vec![4], vec![3]),
+    ];
+    let input = body("count", 1, vec![block(1, insns, vec![]).into()]);
+
+    assert_eq!(shuttles(rules(), &input), input);
+}
+
+/// A block and its successor, which compares first: of the flags, only what
+/// the first block's branch reads is live between them.
+fn flat_blocks(insns: Vec<Arc<Insn>>) -> LirBody {
+    body("flat", 0, vec![block(0, insns, vec![1]).into(), block(1, vec![compared()], vec![]).into()])
+}
+
+/// The word sum leaves the flags of 16 bits, so a branch after the extension
+/// that reads any of them keeps the dword sum.
+#[test]
+fn a_flat_dword_sum_stays_where_a_flag_is_read_after_its_extension() {
+    for reader in ["jb", "jo", "js", "je", "jp"] {
+        let input =
+            flat_blocks(vec![word_load(RegId::EAX), dword_sum(), extension(RegId::EAX, RegId::AX), jump_if(reader, 1)]);
+        let kept = names_of(&narrowed_arithmetic(flat(), &input));
+        assert_eq!(kept, ["movzx", "add", "movzx", reader, "cmp"], "{reader}");
+    }
+}
+
+/// `mov cx,ax` as a dword copy where `ecx`'s upper half is read after it
+/// copied AX's zero upper half over the one the program had.
+#[test]
+fn a_flat_word_copy_stays_where_the_upper_half_of_its_target_is_read() {
+    let copy = point(1, sem(Operation::Move, "mov", vec![rl(RegId::CX, 2)], vec![rl(RegId::AX, 2)]), vec![], vec![]);
+    let read = point(2, sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::ECX, 4), im(5, 4)]), vec![], vec![]);
+    let input = flat_body(vec![word_load(RegId::EAX), copy, read]);
+
+    assert_eq!(widened_moves(flat(), &input), input);
+}
+
+/// `shl r,1` read as `add r,r` where a successor reads the carry or overflow
+/// it sets: the add defines both as the shift does, at every width.
+#[test]
+fn a_doubling_add_keeps_the_carry_and_overflow_a_successor_reads() {
+    let cpu = peephole().cpu;
+    for (register, width) in [(RegId::CL, 1), (RegId::CX, 2), (RegId::ECX, 4)] {
+        let counter = rl(register, width);
+        let shift = point(
+            1,
+            sem(Operation::Binary, "shl", vec![counter.clone()], vec![counter.clone(), im(1, 1)]),
+            vec![1],
+            vec![1],
+        );
+        let input = body(
+            "double",
+            1,
+            vec![block(1, vec![shift, jump_if("jb", 4)], vec![4]).into(), block(4, vec![], vec![]).into()],
+        );
+
+        let made = doubled(rules(), &input, &cpu).unwrap();
+
+        assert_eq!(
+            whats(&made.insns())[0],
+            sem(Operation::Binary, "add", vec![counter.clone()], vec![counter.clone(), counter]),
+            "{width}"
+        );
+    }
+}
+
+/// `add eax,[bp-4]; mov [bp-4],eax`, the spiller's fold of a reload into an
+/// accumulating sum (m16 -Os qlight.c: 4 B and a second frame slot for 2
+/// instructions), is the read-modify-write `add [bp-4],eax` when eax dies at
+/// the store.
+fn _accumulated(
+    name: &str,
+    dies: bool,
+) -> (LirBody, Insn) {
+    let cell = Loc::Mem(mem(frame(-4), 4, RegId::BP, -4, 1));
+    let eax = rl(RegId::EAX, 4);
+    let sum = insn(
+        1,
+        Some((1, 3)),
+        Some(sem(Operation::Binary, name, vec![eax.clone()], vec![eax.clone(), cell.clone()])),
+        vec![10],
+        vec![1],
+    );
+    let stored =
+        insn(3, Some((3, 3)), Some(sem(Operation::Move, "mov", vec![cell], vec![eax.clone()])), vec![], vec![10]);
+    let after = insn(
+        4,
+        Some((4, 5)),
+        Some(sem(Operation::Move, "mov", vec![rl(RegId::EBX, 4)], vec![if dies { im(0, 4) } else { eax.clone() }])),
+        vec![12],
+        vec![],
+    );
+    let clear =
+        insn(5, Some((5, 6)), Some(sem(Operation::Move, "mov", vec![eax.clone()], vec![im(0, 4)])), vec![13], vec![]);
+    let insns = if dies {
+        vec![Arc::new(sum), Arc::new(stored.clone()), Arc::new(clear)]
+    } else {
+        vec![Arc::new(sum), Arc::new(stored.clone()), Arc::new(after)]
+    };
+    (body("sum", 0, vec![block(0, insns, vec![]).into()]), stored)
+}
+
+#[test]
+fn test_a_sum_stored_back_to_the_cell_it_added_is_a_read_modify_write() {
+    for name in ["add", "and", "or", "xor"] {
+        let (input, stored) = _accumulated(name, true);
+        let result = transferred(rules(), &input).insns();
+        let cell = Loc::Mem(mem(frame(-4), 4, RegId::BP, -4, 1));
+        assert_eq!(
+            result[0].what,
+            Some(sem(Operation::Binary, name, vec![cell.clone()], vec![cell, rl(RegId::EAX, 4)])),
+            "{name}"
+        );
+        assert_eq!(result[1].what.as_ref().unwrap().op, Operation::Nothing, "{name}");
+        assert_eq!(result[1].uses, stored.uses, "{name}");
+    }
+}
+
+#[test]
+fn test_a_sum_still_read_after_its_store_keeps_its_register_form() {
+    let (input, _) = _accumulated("add", false);
+    assert_eq!(transferred(rules(), &input).insns(), input.blocks[0].insns.to_vec());
+    let (input, _) = _accumulated("sub", true);
+    assert_eq!(transferred(rules(), &input).insns(), input.blocks[0].insns.to_vec());
 }

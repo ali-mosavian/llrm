@@ -47,8 +47,10 @@
 
 use std::sync::Arc;
 
-use llrm_lir::registers::RegId;
+use iced_x86::RflagsBits;
 
+use crate::backend::lanes::Lanes;
+use crate::backend::precse::flag_lanes;
 use crate::model::ir::{Loc, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
@@ -221,14 +223,16 @@ fn flags_reused(body: &LirBody) -> LirBody {
             }
         }
     }
-    let flags = |one: &Insn| -> Option<(bool, bool)> {
+    // The flag lanes `one` reads and writes.
+    let flags = |one: &Insn| -> Option<(Lanes, Lanes)> {
         let Some(effect) = crate::backend::liveness::effect(body.regs(), body.bits, one) else {
             // a conditional branch reads the flags and writes nothing
             let branch = one.what.as_ref().filter(|what| what.op == Operation::Branch && !what.indirect);
-            return branch.filter(|what| what.name.as_deref().and_then(condition_of).is_some()).map(|_| (true, false));
+            return branch
+                .filter(|what| what.name.as_deref().and_then(condition_of).is_some())
+                .map(|_| (Lanes::flags(u32::MAX), Lanes::new()));
         };
-        let on = |lanes: crate::backend::lanes::Lanes| lanes.iter().any(|lane| lane.0 == RegId::None);
-        Some((on(effect.reads), on(effect.writes)))
+        Some((flag_lanes(&effect.reads), flag_lanes(&effect.writes)))
     };
     let mut changed = false;
     let blocks: Vec<_> = body
@@ -283,7 +287,7 @@ fn reusable(
     at: usize,
     value: u32,
     reads: &HashMap<u32, usize>,
-    flags: &dyn Fn(&Insn) -> Option<(bool, bool)>,
+    flags: &dyn Fn(&Insn) -> Option<(Lanes, Lanes)>,
 ) -> bool {
     // the scan back from the compare: no other writer of the flags before the
     // definition of the value
@@ -298,7 +302,7 @@ fn reusable(
             continue;
         }
         match flags(one) {
-            Some((_, false)) => {}
+            Some((_, writes)) if writes.is_empty() => {}
             _ => return false,
         }
     }
@@ -313,44 +317,52 @@ fn reusable(
         return false;
     }
     // the scan forward from the compare: the readers of the flags read only
-    // what the definition sets, until something writes them again
-    let mut killed = false;
+    // what the definition sets, until something writes them again. A write of
+    // some flags (`inc` leaves CF) kills only those.
+    let mut pending =
+        Lanes::flags((RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::CF | RflagsBits::PF) as u32);
     for one in &insns[at + 1..] {
         if one.is_meta() {
             continue;
         }
-        let Some((reads_flags, writes_flags)) = flags(one) else { return false };
-        if reads_flags {
+        let Some((reads, writes)) = flags(one) else {
+            return false;
+        };
+        if !reads.is_disjoint(&pending) {
             let named = one.what.as_ref().and_then(|what| what.name.as_deref());
             if !named.is_some_and(|name| reads_what_it_sets(name, sets)) {
                 return false;
             }
         }
-        if writes_flags {
-            killed = true;
-            break;
+        pending = pending.minus(&writes);
+        if pending.is_empty() {
+            return true;
         }
     }
-    // not written again in the block: the flags must not be read in a successor
-    // before they are written there
-    killed || block.succ.iter().all(|next| successor_overwrites_flags(body, *next, flags))
+    // not written again in the block: a successor must write them before it
+    // reads them
+    block.succ.iter().all(|next| successor_overwrites_flags(body, *next, flags, pending))
 }
 
-/// Whether the block at `at` writes the flags before it reads them.
+/// Whether the block at `at` writes every one of `pending` before it reads any.
 fn successor_overwrites_flags(
     body: &LirBody,
     at: i64,
-    flags: &dyn Fn(&Insn) -> Option<(bool, bool)>,
+    flags: &dyn Fn(&Insn) -> Option<(Lanes, Lanes)>,
+    mut pending: Lanes,
 ) -> bool {
     let Some(block) = body.blocks.iter().find(|one| one.at == at) else { return false };
     for one in &block.insns {
         if one.is_meta() {
             continue;
         }
-        match flags(one) {
-            Some((true, _)) | None => return false,
-            Some((false, true)) => return true,
-            Some((false, false)) => {}
+        let Some((reads, writes)) = flags(one) else { return false };
+        if !reads.is_disjoint(&pending) {
+            return false;
+        }
+        pending = pending.minus(&writes);
+        if pending.is_empty() {
+            return true;
         }
     }
     false
@@ -525,5 +537,72 @@ mod tests {
             insn(2, Operation::Branch, "jne", vec![], vec![], vec![], vec![]),
         ]);
         assert_eq!(names(&compared(&body), true), ["shr", "test", "jne"], "a count of 32 is zero");
+    }
+
+    fn narrow(
+        value: u32,
+        width: u32,
+    ) -> Loc {
+        Loc::Held(Held { value, width })
+    }
+
+    /// `v2 := shr v1, 2` (a dword) read as a word by `test v2w, v2w`: the
+    /// shift's ZF and SF are the dword's, the test's are the word's, and the
+    /// test went.
+    #[test]
+    fn test_a_word_test_of_a_dword_shift_keeps_its_test() {
+        let body = body_of(vec![
+            insn(0, Operation::Binary, "shr", vec![held(2)], vec![held(1), imm(2)], vec![2], vec![1]),
+            insn(1, Operation::Compare, "test", vec![], vec![narrow(2, 2), narrow(2, 2)], vec![], vec![2, 2]),
+            insn(2, Operation::Branch, "jne", vec![], vec![], vec![], vec![]),
+        ]);
+        assert_eq!(names(&compared(&body), true), ["shr", "test", "jne"]);
+    }
+
+    /// The other way: a word shift read as a dword by `cmp v2, 0` (the upper
+    /// half is stale).
+    #[test]
+    fn test_a_dword_compare_of_a_word_shift_keeps_its_compare() {
+        let zero = Loc::Imm(Imm { value: 0, width: 4, address: None });
+        let body = body_of(vec![
+            insn(0, Operation::Binary, "shr", vec![narrow(2, 2)], vec![narrow(1, 2), imm(2)], vec![2], vec![1]),
+            insn(1, Operation::Compare, "cmp", vec![], vec![held(2), zero], vec![], vec![2]),
+            insn(2, Operation::Branch, "jne", vec![], vec![], vec![], vec![]),
+        ]);
+        assert_eq!(names(&compared(&body), true), ["shr", "cmp", "jne"]);
+    }
+
+    /// A word subtract nothing reads is a word compare, not a dword one.
+    #[test]
+    fn test_a_word_subtract_is_a_word_compare() {
+        let body = body_of(vec![
+            insn(
+                0,
+                Operation::Binary,
+                "sub",
+                vec![narrow(3, 2)],
+                vec![narrow(1, 2), narrow(2, 2)],
+                vec![3],
+                vec![1, 2],
+            ),
+            insn(1, Operation::Branch, "ja", vec![], vec![], vec![], vec![]),
+        ]);
+        let done = compared(&body);
+        assert_eq!(names(&done, true), ["cmp", "ja"]);
+        assert_eq!(done.blocks[0].insns[0].what.as_ref().unwrap().sources, [narrow(1, 2), narrow(2, 2)]);
+    }
+
+    /// `shr; test; inc; jb`: `inc` leaves CF alone, so `jb` reads the carry of
+    /// the `test` (clear), not of the shift. The test went because `inc`
+    /// "wrote the flags".
+    #[test]
+    fn test_a_carry_read_after_an_inc_keeps_the_test() {
+        let body = body_of(vec![
+            insn(0, Operation::Binary, "shr", vec![held(2)], vec![held(1), imm(2)], vec![2], vec![1]),
+            insn(1, Operation::Compare, "test", vec![], vec![held(2), held(2)], vec![], vec![2, 2]),
+            insn(2, Operation::Unary, "inc", vec![held(4)], vec![held(3)], vec![4], vec![3]),
+            insn(3, Operation::Branch, "jb", vec![], vec![], vec![], vec![]),
+        ]);
+        assert_eq!(names(&compared(&body), true), ["shr", "test", "inc", "jb"]);
     }
 }

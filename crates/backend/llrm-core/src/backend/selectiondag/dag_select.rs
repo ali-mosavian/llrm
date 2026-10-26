@@ -75,7 +75,7 @@ pub fn select_block(
         debug_assert_eq!(made, dag.first_temporary + at as i32);
     }
     // `PreprocessISelDAG`: the rewrites that need no matcher.
-    super::x86_preprocess::preprocess(dag, temporaries);
+    super::x86_preprocess::preprocess(dag, temporaries, lowering.sse2);
     do_instruction_selection(dag, selector, hooks)?;
     let root = dag.get_root();
     let units = schedule(dag, root, info);

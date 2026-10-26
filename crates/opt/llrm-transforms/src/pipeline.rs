@@ -842,6 +842,7 @@ pub(crate) fn llvm_order(
                     "rotate@728",
                     Box::new(looprotate::LoopRotate {
                         duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
+                        size: applied.options.prefers_size(),
                     }),
                 ));
                 list.extend(canonical("loopsimplify@728", "lcssa@728"));
@@ -866,7 +867,7 @@ pub(crate) fn llvm_order(
                 slot(
                     "loopidiom@737",
                     Box::new(crate::loopidiom::pass::LoopIdiom {
-                        size: applied.options.prefers_size(),
+                        for_size: size,
                         ..crate::loopidiom::pass::LoopIdiom::with_routines(applied.options.library.clone())
                     }),
                 ),
@@ -1235,6 +1236,9 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // counter rebased by it), as LLVM's LSR cleans with
         // SimplifyInstructions.
         passes.push(Box::new(algebraic::Differences));
+        // The remainder LSR wrote out as a quotient and a product, back to one
+        // where the divide stays.
+        passes.push(Box::new(crate::remidiom::RemainderIdiom { size: applied.options.prefers_size() }));
     }
     passes
 }

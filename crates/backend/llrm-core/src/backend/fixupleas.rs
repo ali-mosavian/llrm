@@ -780,6 +780,24 @@ mod tests {
             .collect()
     }
 
+    /// `lea eax,[eax+ecx]` is `add eax,ecx` only where no flag is live after
+    /// it: `add` sets all six, `lea` none, and a `jb` after it read the carry
+    /// of something else.
+    #[test]
+    fn a_lea_becomes_an_add_only_where_every_flag_is_dead() {
+        let b = block(vec![lea_of(0, RegId::EAX, RegId::EAX, RegId::ECX)], vec![]);
+        let key = id(&b.insns[0]);
+        let flags = arithmetic_flags();
+        let dead: DeadAfter = [(key, flags)].into_iter().collect();
+        let made = opt_two_addr_lea(regs(), &b, 0, &dead, true).expect("flags dead: an add");
+        assert_eq!(made[0].what.as_ref().unwrap().name.as_deref(), Some("add"));
+        for live in [RflagsBits::CF, RflagsBits::ZF] {
+            let kept = flags.minus(&Lanes::flags(live));
+            let dead: DeadAfter = [(key, kept)].into_iter().collect();
+            assert!(opt_two_addr_lea(regs(), &b, 0, &dead, true).is_none(), "flag {live:#x} live");
+        }
+    }
+
     #[test]
     fn an_ebp_base_with_an_index_is_inefficient() {
         assert!(inefficient_lea_base(regs(), RegId::EBP, RegId::ECX));

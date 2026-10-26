@@ -1005,14 +1005,17 @@ def fast_merge(numbers: list[str], merge_one) -> tuple[list[str], dict[str, str]
     return kept, left_out
 
 
-def _in_target(target: Path | None):
-    """`subprocess.run` with CARGO_TARGET_DIR set to `target/test`; the plain one when there is no target."""
+def _in_target(target: Path | None, kind: str = "test"):
+    """`subprocess.run` with CARGO_TARGET_DIR set to `target/<kind>`; the plain one when there is no target."""
     if target is None:
         return subprocess.run
-    return lambda command, **kw: subprocess.run(command, env={**os.environ, "CARGO_TARGET_DIR": str(target / "test")}, **kw)
+    return lambda command, **kw: subprocess.run(command, env={**os.environ, "CARGO_TARGET_DIR": str(target / kind)}, **kw)
 
 
-def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, scanners=None, differs=None, target: Path | None = None) -> list[str]:
+SOURCE_SCANNING_PACKAGES = {"llrm-mir"}  # lib tests that scan other crates' sources (no_file_gains_*): upstream of the crates they judge, so a dependants run never reaches them
+
+
+def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, scanners=None, differs=None, target: Path | None = None, units=None, on_base=None) -> list[str]:
     """Why the PR at `head`, alone on `base` (a scratch checkout at `base` in `cwd`), fails the cheap checks a batch would fail on: the merge, the workspace build, the
     always-on scanners (fmt differences only warn: the squash formats every PR). The 15:34 batch spent 62% of its time on reruns of PRs that failed these."""
     smoke = parity_smoke_module()
@@ -1023,8 +1026,27 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
     if unformatted := sorted((differs or fmt_differs)(cwd, files)):
         print(f"alone: fmt.sh would change {', '.join(unformatted[:5])} (the squash formats it; not a refusal)", file=sys.stderr)
     # the scanners read the scratch tree: `integration_failures` defaults to ROOT, so every PR was judged on the tree the runner stands in
-    red = sorted((scanners or (lambda f: landing_scanner_failures(f, False, on_merged=lambda targets: smoke.integration_failures(targets, root=cwd, run=_in_target(target)))))(files))
-    return [f"scanner red alone: {', '.join(red[:5])}"] if red else []
+    # every scanner, not the always-on two: they read other crates' sources and docs, so a PR in one crate turns them red from outside it (#4871 added id-keyed maps in llrm-transforms; batch 18 died on llrm-mir's ratchet)
+    red = sorted((scanners or (lambda f: landing_scanner_failures(f, True, on_merged=lambda targets: smoke.integration_failures(targets, root=cwd, run=_in_target(target)))))(files))
+    if red:
+        return [f"scanner red alone: {', '.join(red[:5])}"]
+    # the unit tests of the crates the PR changes, less what the base fails: round 3 died on llrm-nib::test_pipeline::... and no PR was blamed
+    def lib_failures(changed: list[str]) -> set[str]:
+        packages, _ = smoke.workspace_graph(cwd)
+        touched = smoke.touched_packages(changed, packages, cwd)
+        return smoke.dependants_lib_failures(touched | SOURCE_SCANNING_PACKAGES, root=cwd, run=_in_target(target, "lib")) if touched else set()
+
+    failed = (units or lib_failures)(files)
+    failed = {name for name in failed if not name.startswith("xpass ")}
+    if not failed:
+        return []
+    by_package: dict[str, set[str]] = {}
+    for name in failed:
+        package, test = name[len("unit ") :].split("::", 1)
+        by_package.setdefault(package, set()).add(test)
+    red_on_base = (on_base or (lambda wanted: _alone_base_red(wanted, base, target)))(by_package)
+    new = sorted(f"unit {package}::{test}" for package, tests in by_package.items() for test in tests - {t for p, t in red_on_base if p == package})
+    return [f"unit tests fail alone: {', '.join(new[:5])}"] if new else []
 
 
 HITS = [0]  # verdicts read from the cache by this process
@@ -1072,15 +1094,46 @@ def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=
     return kept, {number: verdicts[number] for number in numbers if verdicts.get(number)}
 
 
+def _alone_base_red(by_package: dict[str, set[str]], base: str, target: Path | None) -> set[tuple[str, str]]:
+    """{(package, test)} of `by_package` that fail on `base` itself: a checkout of its own beside the slot's, so the batch's tree is never touched."""
+    work = (target or Path(tempfile.mkdtemp(prefix="alone-base-"))) / "base"
+    _alone_checkout(work, base)
+    env = {**os.environ, "CARGO_TARGET_DIR": str((target or work.parent) / "lib")}
+    return {(package, test) for package, tests in by_package.items() for test in failing_on_checkout(package, tests, cwd=work, env=env)}
+
+
+def _alone_checkout(work: Path, ref: str, repo: Path = ROOT) -> None:
+    """A worktree at a path that stays: cargo fingerprints by path, so a fresh directory per PR rebuilt everything (2-3 min a PR); reused, only the files that differ rebuild."""
+    if (work / ".git").exists():
+        clean_checkout(ref, cwd=work)
+    else:
+        work.parent.mkdir(parents=True, exist_ok=True)
+        git("worktree", "add", "-q", "--detach", str(work), ref, cwd=repo)
+
+
+def _claim_slot(root: Path, count: int):
+    """(slot, lock file) of the first slot no other `alone` process holds; waits for one. Two processes (the filter and a warm-up) never share a checkout."""
+    while True:
+        for slot in range(count):
+            root.mkdir(parents=True, exist_ok=True)
+            handle = open(root / f"alone-{slot}.lock", "w")
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return slot, handle
+            except OSError:
+                handle.close()
+        time.sleep(2)
+
+
 def _alone_in_scratch(head: str, base: str, slot: int = 0) -> list[str]:
-    scratch = Path(tempfile.mkdtemp(prefix="alone-", dir=os.environ.get("LAND_TMP", "/tmp")))
-    git("worktree", "add", "-q", "--detach", str(scratch / "w"), base)
-    targets = Path(os.environ.get("ALONE_TARGETS", Path.home() / ".cache/llrm")) / f"alone-{slot}"  # one cargo target per slot: parallel checks on one target wait for its lock
+    root = Path(os.environ.get("ALONE_TARGETS", Path.home() / ".cache/llrm"))
+    slot, lock = _claim_slot(root, int(os.environ.get("ALONE_SLOTS", "6")))
+    targets = root / f"alone-{slot}"  # one cargo target and one checkout per slot
     try:
-        return alone_refusals(head, base, scratch / "w", target=targets)
+        _alone_checkout(targets / "w", base)
+        return alone_refusals(head, base, targets / "w", target=targets)
     finally:
-        subprocess.run(["git", "worktree", "remove", "--force", str(scratch / "w")], cwd=ROOT, capture_output=True)
-        shutil.rmtree(scratch, ignore_errors=True)
+        lock.close()
 
 
 ADDED_ITEM = re.compile(r"^\+\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:fn|def)\s+(\w+)", re.M)
@@ -1407,14 +1460,14 @@ def head_expanded(head: set[str], merged: set[str], run_on_head) -> set[str]:
 LAST_PANICS: dict[str, str] = {}  # test name -> its first panic line, from the last `failing_on_checkout`
 
 
-def failing_on_checkout(crate: str, tests: set[str], cwd: Path = ROOT) -> set[str]:
+def failing_on_checkout(crate: str, tests: set[str], cwd: Path = ROOT, env: dict | None = None) -> set[str]:
     """Which of `tests` of `crate` fail on the checkout in `cwd` (exact names, release not needed: the smoke ran them as `cargo test -q --lib`)."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import parity_smoke
     from buildslot import slotted  # noqa: PLC0415
 
     command = parity_smoke.lib_command(crate)
-    done = subprocess.run(slotted([*command, "--", "--exact", *sorted(tests)]), cwd=cwd, capture_output=True, text=True, errors="replace")
+    done = subprocess.run(slotted([*command, "--", "--exact", *sorted(tests)]), cwd=cwd, capture_output=True, text=True, errors="replace", env=env)
     LAST_PANICS.update(parity_smoke.panic_reasons(done.stdout + done.stderr))
     return {name for name in tests if name in set(parity_smoke.failed_tests(done.stdout + done.stderr))}
 
@@ -1681,7 +1734,9 @@ def dispatch() -> int:
         for number in numbers:
             git("fetch", "-q", "origin", f"refs/pull/{number}/head")
             heads[number] = git("rev-parse", "FETCH_HEAD").strip()
-        kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", "3")), cap=float(os.environ.get("ALONE_CAP", "600")))
+        # stdout is the survivors and nothing else: the scanners print their summary line, and the runner reads this output as PR numbers
+        with contextlib.redirect_stdout(sys.stderr):
+            kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", "3")), cap=float(os.environ.get("ALONE_CAP", "600")))
         for number, why in dropped.items():
             print(f"{number}: REFUSED: alone: {why[:300]}", file=sys.stderr)
         print(f"alone: {len(numbers)} PRs, {HITS[0]} cached, {len(numbers) - HITS[0]} checked, {len(dropped)} dropped", file=sys.stderr)
