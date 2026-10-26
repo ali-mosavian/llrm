@@ -552,6 +552,46 @@ pub fn implies_poison(
     implies_poison_at(q, val_assumed_poison, v, 0)
 }
 
+/// The pin's `SmallPtrSet<const Value *, 4>`: a few values in place, a hash
+/// set past that. A cast chain is rarely longer, and the set was allocated on
+/// the first insert of each of the calls LVI makes.
+#[derive(Default)]
+pub(crate) struct Seen {
+    few: [Option<Operand>; Seen::FEW],
+    len: usize,
+    many: HashSet<Operand>,
+}
+
+impl Seen {
+    const FEW: usize = 4;
+
+    /// Whether the set outgrew its inline slots.
+    #[cfg(test)]
+    pub(crate) fn spilled(&self) -> bool {
+        self.len > Self::FEW
+    }
+
+    /// Whether `v` was not in the set.
+    pub(crate) fn insert(
+        &mut self,
+        v: Operand,
+    ) -> bool {
+        if self.len <= Self::FEW {
+            if self.few[..self.len].contains(&Some(v)) {
+                return false;
+            }
+            if self.len < Self::FEW {
+                self.few[self.len] = Some(v);
+                self.len += 1;
+                return true;
+            }
+            self.many.extend(self.few.iter().flatten().copied());
+            self.len = Self::FEW + 1;
+        }
+        self.many.insert(v)
+    }
+}
+
 /// `stripPointerCastsSameRepresentation()`.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Value.cpp#L642>
@@ -562,7 +602,7 @@ pub fn strip_pointer_casts_same_representation(
     if !q.is_pointer(v) {
         return v;
     }
-    let mut visited = HashSet::default();
+    let mut visited = Seen::default();
     let mut v = v;
     visited.insert(v);
     loop {

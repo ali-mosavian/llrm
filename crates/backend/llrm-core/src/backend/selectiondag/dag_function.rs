@@ -59,7 +59,9 @@ use crate::backend::isel::{Parameter, Selected, Unselected};
 use crate::model::ir::{Addr, Held, Mem, Space};
 use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 
-struct Info;
+struct Info {
+    source_order: bool,
+}
 
 impl SchedInfo for Info {
     fn num_defs(
@@ -81,6 +83,10 @@ impl SchedInfo for Info {
         opcode: u32,
     ) -> bool {
         llrm_dagisel::instr::desc(opcode as u16).is_some_and(|d| d.is_call())
+    }
+
+    fn source_order(&self) -> bool {
+        self.source_order
     }
 
     fn has_cross_copy_class(
@@ -273,7 +279,9 @@ fn modelled(
     if contract.control == llrm_qbruntime::Control::InlineTable {
         return Err("QB runtime routine that returns to an inline table");
     }
-    if contract.cleanup != Some(plan.popped) || plan.popped != pushed {
+    // The callee pops all it was pushed (16/32-bit routines), or the caller
+    // pops it and the routine cleans nothing (SysV, where QB calls are C).
+    if contract.cleanup != Some(plan.popped) || (plan.popped != pushed && plan.popped != 0) {
         return Err("QB runtime routine whose stack cleanup the convention does not model");
     }
     Ok(if contract.flags_result { RuntimeAnswer::Flags } else { RuntimeAnswer::Registers })
@@ -387,6 +395,14 @@ impl super::emit::Conventions for CallConventions<'_> {
             .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
             .map(|name| regs.root(self.arch.register_named(name)))
             .collect();
+        // the contract names no FS or GS, yet the callee may use them
+        if let (Some(contract), Some(contracts)) = (self.contract(callee), self.contracts) {
+            out.extend(crate::backend::callregs::unnamed_selectors_clobbered(
+                &contract,
+                contracts.segments,
+                self.general,
+            ));
+        }
         // a runtime routine also destroys what its contract says
         if let (Some(contracts), Some(Callee::Global(id))) = (self.contracts, callee) {
             let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned().unwrap_or_default();
@@ -673,7 +689,11 @@ fn selected_in(
     let builder_target = builder_target
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)
-        .with_tail_calls(std::env::var_os("LLRM_TAIL_CALLS").is_some() || TAIL_CALLS.get())
+        // llrm's -Os keeps the divide too, as the old selector does (the pin:
+        // minsize only)
+        .with_int_div_cheap(cpu.size || cpu.min_size)
+        .with_jump_tables(cpu.target().costs().jump_table != 0)
+        .with_tail_calls(llrm_support::env_set("LLRM_TAIL_CALLS") || TAIL_CALLS.get())
         .with_tti(cpu.target().tti())
         .with_runtime_call_verdicts(
             contracts
@@ -853,10 +873,10 @@ fn selected_in(
         let done = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: false },
+            &mut X86Lowering { cmov: false, sse2: false },
             &selector,
             &mut hooks,
-            &Info,
+            &Info { source_order: bitness == 32 },
             &ctx,
             &mut state,
             block_at[&block.0],

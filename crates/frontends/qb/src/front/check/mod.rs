@@ -7,7 +7,7 @@
 //! BC's own wording where BC's is known; what matters, and what the sweeps
 //! against BC compare, is whether a program has any.
 
-use std::collections::{HashMap, HashSet};
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::Dialect;
 use crate::front::sigs::{self, Class, Ret};
@@ -93,9 +93,9 @@ impl Checker {
             dialect,
             errors: Vec::new(),
             def_types: std::array::from_fn(|_| Ty::Single),
-            records: HashMap::new(),
-            consts: HashMap::new(),
-            procs: HashMap::new(),
+            records: HashMap::default(),
+            consts: HashMap::default(),
+            procs: HashMap::default(),
             module_scope: Scope::default(),
             scope: Scope::default(),
             procedure: None,
@@ -107,11 +107,11 @@ impl Checker {
             declaring: false,
             assigning: false,
             for_counters: Vec::new(),
-            labels: HashSet::new(),
-            weak_labels: HashSet::new(),
+            labels: HashSet::default(),
+            weak_labels: HashSet::default(),
             zero_referenced: false,
-            module_labels: HashSet::new(),
-            all_labels: HashSet::new(),
+            module_labels: HashSet::default(),
+            all_labels: HashSet::default(),
             span: Span { line: 1, start: 0, end: 0 },
             in_loop: Vec::new(),
             field_rank: None,
@@ -696,6 +696,8 @@ impl Checker {
         let saved_scope = std::mem::take(&mut self.scope);
         let saved_labels = std::mem::take(&mut self.labels);
         let saved_weak = std::mem::take(&mut self.weak_labels);
+        // a CONST in a procedure is local to it
+        let saved_consts = self.consts.clone();
         self.procedure = Some((procedure.kind, procedure.name.clone()));
         self.static_scope = procedure.is_static;
         if procedure.module_scope {
@@ -710,6 +712,7 @@ impl Checker {
             self.statement(statement);
         }
         self.procedure = None;
+        self.consts = saved_consts;
         self.scope = saved_scope;
         self.labels = saved_labels;
         self.weak_labels = saved_weak;

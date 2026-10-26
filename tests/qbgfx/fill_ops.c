@@ -1,4 +1,4 @@
-/* The box fills of runtime/qb/dos/gfxdev.c on the screen, every mode and every
+/* The box fills of runtime/qb/dev/dos/gfxdev.c on the screen, every mode and every
    operation: a random box over random pixels leaves what the operation says of
    each pixel, and the pixels around it as they were; so does a dot of the same
    fill, and a line is what Bresenham's loop through the dot draws, and GET and

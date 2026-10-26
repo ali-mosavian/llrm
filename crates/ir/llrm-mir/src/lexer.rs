@@ -44,8 +44,15 @@ pub enum Token {
         negative: bool,
         magnitude: u128,
     },
-    /// A decimal floating literal.
-    Float(f64),
+    /// A decimal floating literal, rounded once to a double and once to a
+    /// float: a float constant is the nearest float to the decimal, not to the
+    /// double nearest to it.
+    Float(f64, f32),
+    /// `f0x` and the digits of a float or double: that type's bits.
+    FloatBits {
+        bits: u64,
+        digits: usize,
+    },
     /// `0x` and 16 hex digits: a double's bits.
     HexFloat(u64),
     Str(Vec<u8>),
@@ -134,6 +141,11 @@ pub fn lex(text: &str) -> Result<Vec<(Token, usize)>, ParseError> {
             b'+' | b'-' if special_float_at(text, at).is_some() => {
                 let (bits, next) = special_float_at(text, at).expect("checked by the guard");
                 out.push((Token::HexFloat(bits), line));
+                at = next;
+            }
+            b'f' if float_bits_at(text, at).is_some() => {
+                let (token, next) = float_bits_at(text, at).expect("checked by the guard");
+                out.push((token, line));
                 at = next;
             }
             b'-' | b'0'..=b'9' => {
@@ -282,6 +294,21 @@ fn special_float_at(
     }
 }
 
+/// `f0x` and 1 to 16 hex digits, not the start of a longer name.
+fn float_bits_at(
+    text: &str,
+    at: usize,
+) -> Option<(Token, usize)> {
+    let bytes = text.as_bytes();
+    text[at..].strip_prefix("f0x")?;
+    let end = scan(bytes, at + 3, |b| b.is_ascii_hexdigit());
+    let digits = &text[at + 3..end];
+    if digits.is_empty() || digits.len() > 16 || bytes.get(end).is_some_and(|b| is_name(*b)) {
+        return None;
+    }
+    Some((Token::FloatBits { bits: u64::from_str_radix(digits, 16).ok()?, digits: digits.len() }, end))
+}
+
 fn number_at(
     text: &str,
     at: usize,
@@ -311,5 +338,6 @@ fn number_at(
         end = scan(bytes, end + 1 + sign, |b| b.is_ascii_digit());
     }
     let value: f64 = text[at..end].parse().map_err(|_| format!("{} is not a number", &text[at..end]))?;
-    Ok((Token::Float(value), end))
+    let narrow: f32 = text[at..end].parse().map_err(|_| format!("{} is not a number", &text[at..end]))?;
+    Ok((Token::Float(value, narrow), end))
 }

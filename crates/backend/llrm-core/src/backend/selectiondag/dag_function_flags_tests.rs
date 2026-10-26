@@ -226,7 +226,7 @@ b:
 #[test]
 fn a_branch_on_a_constant_leaves_no_branch_to_a_dropped_block() {
     let done = select_with_contracts(CONSTANT_BRANCH).unwrap_or_else(|why| panic!("{why}"));
-    let present: std::collections::HashSet<i64> = done.body.blocks.iter().map(|b| b.at).collect();
+    let present: llrm_support::hash::HashSet<i64> = done.body.blocks.iter().map(|b| b.at).collect();
     for block in &done.body.blocks {
         assert!(block.succ.iter().all(|next| present.contains(next)), "{:?} leaves for a missing block", block.at);
     }
@@ -238,9 +238,9 @@ fn a_branch_on_a_constant_leaves_no_branch_to_a_dropped_block() {
 #[test]
 fn a_block_no_edge_reaches_is_dropped() {
     let done = select_with_contracts(DEAD_DEFAULT).unwrap_or_else(|why| panic!("{why}"));
-    let by_at: std::collections::HashMap<i64, &crate::model::lir::Block> =
+    let by_at: llrm_support::hash::HashMap<i64, &crate::model::lir::Block> =
         done.body.blocks.iter().map(|b| (b.at, b)).collect();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = llrm_support::hash::HashSet::default();
     let mut work = vec![done.body.entry];
     while let Some(at) = work.pop() {
         if seen.insert(at) {
@@ -334,8 +334,8 @@ b4:
 /// A 64-bit add's carry read after a select's `test` came between: the pin
 /// glues the `adc` to the `add` and the scheduler here could not keep the
 /// pair together ('flags overwritten between their producer and a consumer',
-/// vsgcc x_ll_arith). The carry is saved in a byte before the `test` and put
-/// back before its reader.
+/// vsgcc x_ll_arith). The carries are `adc`s of the `add`s' own flags
+/// (`combineCarryThroughADD`), with no byte round trip.
 #[test]
 fn a_carry_survives_a_flag_writer_scheduled_between_the_add_and_its_reader() {
     let module = llrm_mir::parse::module(CARRY_ACROSS_A_TEST).expect("parses");
@@ -347,8 +347,17 @@ fn a_carry_survives_a_flag_writer_scheduled_between_the_add_and_its_reader() {
         &[],
     )
     .unwrap_or_else(|e| panic!("{}", e.0));
-    let saved = done.body.insns().iter().filter_map(|i| i.what.as_ref()).any(|w| w.name.as_deref() == Some("setb"));
-    assert!(saved, "the carry is saved in a byte");
+    let names: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter_map(|w| w.name.as_deref().map(str::to_owned))
+        .collect();
+    assert!(
+        names.iter().filter(|n| n.as_str() == "adc").count() >= 3 && !names.iter().any(|n| n.as_str() == "setb"),
+        "{names:?}"
+    );
 }
 
 const AFTER_UNREACHABLE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"

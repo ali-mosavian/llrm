@@ -11,7 +11,9 @@
 //! `masm`.
 //!
 //! A path that never reaches Save pays nothing: no push, no frame, a bare
-//! `ret`. There is one epilogue, so no return is copied to give a path its own.
+//! `ret`. A path that falls into a return the early paths share takes its
+//! registers back at its own end, before the jump or where it falls in
+//! (`tryToSplitRestore`'s split block, without the block).
 //!
 //! ```mermaid
 //! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
@@ -34,8 +36,10 @@
 //!
 //! A wrap is refused where the placement cannot be used as it is:
 //!
-//! - The Restore does not end in a return (the epilogue would sit before a
-//!   jump).
+//! - The Restore does not end in a return and does not leave by one jump (the
+//!   epilogue would sit before a branch that reads the flags).
+//! - The Restore is split, and a block that takes it back does not jump to it
+//!   or fall into it with no branch of its own to it.
 //! - Some block the Save reaches is also reached around it, for the frame and
 //!   wherever the stack pointer addresses the frame cells, so a block would be
 //!   entered at two stack depths.
@@ -88,8 +92,10 @@
 //! There is no level switch beyond that.
 //!
 //! DEVIATE 1: LLVM's `postShrinkWrapping` splits the restore block so that the
-//! paths that need nothing skip it; masm makes no new block, so a placement
-//! that asks for the split is refused (`saverestore`'s DEVIATE 2).
+//! paths that need nothing skip it; masm makes no new block. The epilogue goes
+//! at the end of each block that was to get the split block: before its jump to
+//! the restore, or where it falls into it. A block that reaches the restore any
+//! other way refuses the placement (`saverestore`'s DEVIATE 2).
 //!
 //! # See also
 //! LLVM's
@@ -121,6 +127,10 @@ pub enum Piece {
 pub struct Wrap {
     pub opens: BTreeMap<i64, Vec<Piece>>,
     pub closes: BTreeMap<i64, Vec<Piece>>,
+    /// Taken back at the end of the block, before its jump to the restore or
+    /// where it falls into it (the edge `tryToSplitRestore` puts the epilogue
+    /// on), in that order.
+    pub closes_after: BTreeMap<i64, Vec<Piece>>,
     pub wrapped: BTreeSet<Piece>,
 }
 
@@ -171,12 +181,14 @@ fn touches_frame(one: &Insn) -> bool {
 /// cells: they sit directly below the arguments, and a push before the
 /// reserve would put the cells over it. With `stack_addressed` the stack
 /// pointer addresses them at the depth each block is entered at, and every
-/// block must be entered at one, whatever a piece sets up.
+/// block must be entered at one, whatever a piece sets up. With `size` a
+/// restore that needs the epilogue placed on an edge is refused.
 pub fn wrapped(
     body: &LirBody,
     kept: &BTreeSet<RegId>,
     frame: Option<(RegId, RegId)>,
     stack_addressed: bool,
+    size: bool,
 ) -> Option<Wrap> {
     if body.noreturn || (kept.is_empty() && frame.is_none()) || body.blocks.is_empty() {
         return None;
@@ -200,21 +212,40 @@ pub fn wrapped(
     for with_frame in attempts {
         let uses = Uses::of(body, kept, frame.filter(|_| with_frame));
         let Some(placement) = saverestore::run(&graph, &uses, &frequencies) else { continue };
-        // DEVIATE 1: the consumer makes no block to split the restore.
-        if placement.split.is_some() {
+        // DEVIATE 1: the consumer makes no block to split the restore; it puts
+        // the epilogue at the end of each predecessor, before its jump to the
+        // restore or where it falls into it, and refuses any other.
+        let split = placement.split.as_deref().unwrap_or_default();
+        // Under `size` the split changes where the early exit lands, and a
+        // branch over the epilogue grows past its short form (QCport m16 -Os
+        // +9 B, nothing smaller): the registers stay saved at the entry.
+        if size && (!split.is_empty() || !uses.is_return(placement.restore)) {
+            continue;
+        }
+        if !split.iter().all(|&one| ends_on_edge_into(body, one, placement.restore)) {
             continue;
         }
         let (save, restore) = (body.blocks[placement.save.0 as usize].at, body.blocks[placement.restore.0 as usize].at);
-        // The epilogue goes before a return; a block that jumps on would need
-        // the flags and the stack as they are.
-        if !uses.is_return(placement.restore) {
+        // The epilogue goes before a return. A restore that does not end in
+        // one has it before its one jump, or at its end: nothing else may leave
+        // it, for the flags and the stack as the jump finds them.
+        let returns = uses.is_return(placement.restore);
+        if !returns && !split.is_empty() {
+            continue;
+        }
+        let leaves = (!returns).then(|| body.blocks[placement.restore.0 as usize].succ.to_vec());
+        if leaves.as_ref().is_some_and(|leaves| !leaves_by_one_jump(body, placement.restore, leaves)) {
             continue;
         }
         // A block the save reaches that something else also reaches is entered
-        // at two depths.
+        // at two depths; the edges the epilogue is on are where it has run.
         if stack_addressed || with_frame {
-            let from_save = dominance(&body.blocks, Some(save));
-            if body.blocks.iter().any(|block| from_save.reachable(block.at) && !from_entry.dominates(save, block.at)) {
+            let torn_down: Vec<(i64, i64)> = match &leaves {
+                Some(leaves) => leaves.iter().map(|&next| (restore, next)).collect(),
+                None => split.iter().map(|one| (body.blocks[one.0 as usize].at, restore)).collect(),
+            };
+            let from_save = reached_from(body, save, &torn_down);
+            if body.blocks.iter().any(|block| from_save.contains(&block.at) && !from_entry.dominates(save, block.at)) {
                 continue;
             }
         }
@@ -224,13 +255,85 @@ pub fn wrapped(
         }
         pieces.extend(kept.iter().map(|&register| Piece::Saved(register)));
         let closes: Vec<Piece> = pieces.iter().rev().copied().collect();
+        let (closes, closes_after) = if !split.is_empty() {
+            (BTreeMap::new(), split.iter().map(|one| (body.blocks[one.0 as usize].at, closes.clone())).collect())
+        } else if returns {
+            (BTreeMap::from([(restore, closes)]), BTreeMap::new())
+        } else {
+            (BTreeMap::new(), BTreeMap::from([(restore, closes)]))
+        };
         return Some(Wrap {
             wrapped: pieces.iter().copied().collect(),
             opens: BTreeMap::from([(save, pieces)]),
-            closes: BTreeMap::from([(restore, closes)]),
+            closes,
+            closes_after,
         });
     }
     None
+}
+
+/// Whether the end of `from` is on its one edge into `to` and no other: it
+/// jumps to `to` (the epilogue goes before the jump), or falls into `to`, the
+/// block laid out after it, with no jump.
+fn ends_on_edge_into(
+    body: &LirBody,
+    from: BlockId,
+    to: BlockId,
+) -> bool {
+    let (Some(block), Some(restore)) = (body.blocks.get(from.0 as usize), body.blocks.get(to.0 as usize)) else {
+        return false;
+    };
+    let next = from.0 + 1 == to.0;
+    let only = block.succ.len() == 1 && block.succ.contains(&restore.at);
+    let Some(what) =
+        block.insns.iter().rev().find(|one| crate::backend::masm::prints(one)).and_then(|one| one.what.as_ref())
+    else {
+        return next && only;
+    };
+    match what.op {
+        ir::Operation::Jump => only && what.target == Some(restore.at),
+        // The edge not taken falls through.
+        ir::Operation::Branch => next && block.succ.contains(&restore.at) && what.target != Some(restore.at),
+        ir::Operation::Return => false,
+        _ => next && only,
+    }
+}
+
+/// Whether `from` leaves by one jump, or falls out by none, and so can take the
+/// epilogue at its end.
+fn leaves_by_one_jump(
+    body: &LirBody,
+    from: BlockId,
+    leaves: &[i64],
+) -> bool {
+    let Some(block) = body.blocks.get(from.0 as usize) else { return false };
+    let last = block.insns.iter().rev().find(|one| crate::backend::masm::prints(one)).and_then(|one| one.what.as_ref());
+    leaves.len() == 1
+        && match last.map(|what| what.op) {
+            None => true,
+            Some(ir::Operation::Jump) => true,
+            Some(ir::Operation::Branch | ir::Operation::Return) => false,
+            Some(_) => true,
+        }
+}
+
+/// The blocks reached from `from` without crossing the `cut` edges.
+fn reached_from(
+    body: &LirBody,
+    from: i64,
+    cut: &[(i64, i64)],
+) -> BTreeSet<i64> {
+    let mut seen = BTreeSet::from([from]);
+    let mut work = vec![from];
+    while let Some(at) = work.pop() {
+        let Some(block) = body.blocks.iter().find(|one| one.at == at) else { continue };
+        for &next in block.succ.iter() {
+            if !cut.contains(&(at, next)) && seen.insert(next) {
+                work.push(next);
+            }
+        }
+    }
+    seen
 }
 
 /// What `body`'s blocks do with the frame and the kept registers
@@ -386,7 +489,8 @@ mod tests {
             block(1, vec![ret(10)], vec![]),
             block(2, vec![touch(20, RegId::ESI), ret(22)], vec![]),
         ];
-        let wrap = wrapped(&body(blocks), &BTreeSet::from([RegId::EBX, RegId::ESI]), None, false).expect("a wrap");
+        let wrap =
+            wrapped(&body(blocks), &BTreeSet::from([RegId::EBX, RegId::ESI]), None, false, false).expect("a wrap");
         let both = vec![Piece::Saved(RegId::EBX), Piece::Saved(RegId::ESI)];
         assert_eq!(wrap.opens, BTreeMap::from([(2, both.clone())]));
         assert_eq!(wrap.closes, BTreeMap::from([(2, both.into_iter().rev().collect())]));
@@ -400,19 +504,67 @@ mod tests {
             block(1, vec![ret(10)], vec![]),
             block(2, vec![touch(20, RegId::ESI), ret(22)], vec![]),
         ];
-        assert!(wrapped(&body(blocks), &BTreeSet::from([RegId::EBX, RegId::ESI]), None, false).is_none());
+        assert!(wrapped(&body(blocks), &BTreeSet::from([RegId::EBX, RegId::ESI]), None, false, false).is_none());
     }
 
     /// A return the early exit shares with the late path is reached around the
-    /// save: nothing is saved late, and no tail is copied to change that.
+    /// save: the late path takes its register back where it falls into the
+    /// return, and the early exit jumps over that.
     #[test]
-    fn test_a_return_the_early_exit_shares_with_the_late_path_keeps_the_save_at_the_entry() {
+    fn test_a_return_the_early_exit_shares_with_the_late_path_is_split_on_the_late_edge() {
         let blocks = vec![
             block(0, vec![branch(2, 3)], vec![3, 2]),
             block(2, vec![touch(20, RegId::ESI)], vec![3]),
             block(3, vec![ret(30)], vec![]),
         ];
-        assert!(wrapped(&body(blocks), &BTreeSet::from([RegId::ESI]), None, false).is_none());
+        let wrap = wrapped(&body(blocks), &BTreeSet::from([RegId::ESI]), None, false, false).expect("a wrap");
+        let esi = vec![Piece::Saved(RegId::ESI)];
+        assert_eq!(wrap.opens, BTreeMap::from([(2, esi.clone())]));
+        assert!(wrap.closes.is_empty());
+        assert_eq!(wrap.closes_after, BTreeMap::from([(2, esi)]));
+    }
+
+    /// Under `size` the late edge's epilogue moves the early exit past the pops
+    /// and a short branch grows (QCport m16 -Os +9 B): the save stays at the
+    /// entry.
+    #[test]
+    fn test_a_split_restore_is_refused_under_size() {
+        let blocks = vec![
+            block(0, vec![branch(2, 3)], vec![3, 2]),
+            block(2, vec![touch(20, RegId::ESI)], vec![3]),
+            block(3, vec![ret(30)], vec![]),
+        ];
+        assert!(wrapped(&body(blocks), &BTreeSet::from([RegId::ESI]), None, false, true).is_none());
+    }
+
+    /// The late path that does not fall into the return but is laid out away
+    /// from it jumps there: its pops go before the jump.
+    #[test]
+    fn test_a_late_path_that_jumps_to_the_shared_return_pops_before_the_jump() {
+        let jump =
+            insn(25, Semantics { name: Some("jmp".into()), target: Some(4), ..Semantics::new(ir::Operation::Jump) });
+        let blocks = vec![
+            block(0, vec![branch(1, 5)], vec![5, 2]),
+            block(2, vec![touch(20, RegId::ESI), jump], vec![4]),
+            block(5, vec![touch(50, RegId::EAX)], vec![4]),
+            block(4, vec![ret(40)], vec![]),
+        ];
+        let wrap = wrapped(&body(blocks), &BTreeSet::from([RegId::ESI]), None, false, false);
+        assert!(wrap.is_some_and(|wrap| wrap.closes_after.contains_key(&2)));
+    }
+
+    /// A late path whose conditional branch takes it to the return has its
+    /// not-taken edge elsewhere: the end of the block is on neither edge alone,
+    /// and nothing is saved late.
+    #[test]
+    fn test_a_late_path_that_branches_to_the_shared_return_keeps_the_save_at_the_entry() {
+        let blocks = vec![
+            block(0, vec![branch(2, 3)], vec![3, 2]),
+            block(2, vec![touch(20, RegId::ESI), branch(22, 3)], vec![3, 4]),
+            block(4, vec![touch(40, RegId::EBX), ret(42)], vec![]),
+            block(3, vec![ret(30)], vec![]),
+        ];
+        assert!(wrapped(&body(blocks), &BTreeSet::from([RegId::ESI]), None, false, false).is_none());
     }
 
     /// Two late paths that each use a register were saved and popped per exit
@@ -428,7 +580,7 @@ mod tests {
             block(5, vec![ret(50)], vec![]),
         ];
         let kept = BTreeSet::from([RegId::EBX, RegId::ESI, RegId::EDI]);
-        let wrap = wrapped(&body(blocks), &kept, None, false).expect("a wrap");
+        let wrap = wrapped(&body(blocks), &kept, None, false, false).expect("a wrap");
         assert_eq!(wrap.opens.keys().copied().collect::<Vec<_>>(), [1]);
         assert_eq!(wrap.closes.keys().copied().collect::<Vec<_>>(), [4]);
     }

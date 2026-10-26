@@ -60,6 +60,13 @@ pub fn is_trivially_re_materializable(
         // `MOV32ri`: a literal and nothing else.
         (Operation::Move, Some("mov"), [Loc::Imm(imm)]) => def.uses.is_empty() && into.width == imm.width,
         // `LEA32r` of a frame index or a global, no register in it.
+        // `LEA32r` of registers: the
+        // generic `isReallyTriviallyReMaterializable` takes a virtual-register
+        // use; `allUsesAvailableAt` asks at the use whether the registers still
+        // hold.
+        (Operation::Address, Some("lea"), [Loc::Mem(cell)]) if !def.uses.is_empty() => {
+            into.width == 4 && cell.width == 4 && def.spread.is_empty() && !def.volatile
+        }
         (Operation::Address, Some("lea"), [source]) => {
             let (addr, through, index) = match source {
                 Loc::Address(a) => (a.addr, a.through, a.index_through),
@@ -274,6 +281,22 @@ mod tests {
         let load = def(vec![Loc::Mem(cell)], Operation::Move, "mov");
         assert!(!is_trivially_re_materializable(&load, false), "a load nothing proves invariant stays");
         assert!(is_trivially_re_materializable(&load, true));
+    }
+
+    /// queens `_place`: `lea t, [row+1]` was spilled and reloaded across the
+    /// call, because only a `lea` that reads no register was made again; the
+    /// pin makes it again where `row` still holds (`allUsesAvailableAt`).
+    #[test]
+    fn test_a_lea_of_a_register_is_made_again() {
+        let cell = Mem { base: Some(Held { value: 2, width: 4 }), offset: 1, ..Mem::new(None, 4) };
+        let what = Semantics {
+            name: Some("lea".into()),
+            dests: vec![Loc::Held(Held { value: 1, width: 4 })],
+            sources: vec![Loc::Mem(cell)],
+            ..Semantics::new(Operation::Address)
+        };
+        let lea = Insn::new(0, None, Some(what), vec![1], vec![2]);
+        assert!(is_trivially_re_materializable(&lea, false));
     }
 
     /// `values` leaves out a literal read wider than the move that makes it

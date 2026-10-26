@@ -136,7 +136,7 @@ static void move_by(Drawing *d, long dx, long dy)
 static void absolute(Drawing *d, long x, long y)
 {
     d->fx = d->fy = HALF;
-    move_to(d, (int)x, (int)y);
+    move_to(d, (int)x + gfx_origin_x, (int)y + gfx_origin_y);
 }
 
 /* M: to a point, or by an offset if the first number has a sign. */

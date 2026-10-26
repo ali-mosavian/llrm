@@ -241,6 +241,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 }
             }
             self.combined.insert(n);
+            // `SDLoc(N)`: what the combine makes takes the node's order.
+            self.dag.cur_order = self.dag.node(SDValue { node: n, res: 0 }).order;
             let before = self.dag.node_count();
             let result = self.combine(SDValue { node: n, res: 0 });
             for made in before..self.dag.node_count() {
@@ -297,6 +299,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> Option<SDValue> {
         match self.dag.opcode(node) {
             ISD::MergeValues => self.visit_merge_values(node),
+            ISD::Load => self.visit_load(node),
+            ISD::TokenFactor => self.visit_token_factor(node),
             ISD::Select => self.visit_select(node),
             ISD::Store => self.visit_store(node),
             ISD::Freeze => self.visit_freeze(node),
@@ -307,6 +311,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::Or => self.visit_or(node).or_else(|| self.simplify_demanded(node)),
             ISD::Add => self.visit_add(node),
             ISD::Sub => self.visit_sub(node),
+            ISD::FAdd => self.visit_fadd(node),
+            ISD::FSub => self.visit_fsub(node),
+            ISD::FMul => self.visit_fmul(node),
             ISD::Shl | ISD::Srl => self.visit_shift(node).or_else(|| self.simplify_demanded(node)),
             ISD::Sra => self.visit_sra(node).or_else(|| self.visit_shift(node)),
             ISD::SDiv => self.visit_sdiv(node),

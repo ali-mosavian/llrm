@@ -369,7 +369,7 @@ fn _simplified(
     // nothing is grouped whether the body is irreducible or not.
     if function.entry().is_none()
         || !shape.loops.iter().any(|loop_| _needs_grouping(function, loop_))
-        || !shape.dominance.irreducible(function).is_empty()
+        || shape.dominance.is_irreducible(function)
     {
         return false;
     }

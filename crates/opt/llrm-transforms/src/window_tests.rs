@@ -136,3 +136,37 @@ fn test_a_walk_down_is_split_into_windows() {
     let got = same(&text, &[&[0], &[1], &[99], &[100], &[101], &[350], &[500]]);
     assert!(got.contains("windows:"), "{got}");
 }
+
+/// copy1d's first fill loop after LSR: the i16 counter was folded into the
+/// i32 value counter, so the exit test reads `trunc` of it.
+const TRUNC_EXIT: &str = "@g = addrspace(1) global [3000 x i8] zeroinitializer
+
+define i32 @f() {
+start:
+  %a = addrspacecast ptr addrspace(1) @g to ptr addrspace(3)
+  br label %l
+
+l:
+  %p = phi ptr addrspace(3) [ %a, %start ], [ %p.next, %l ]
+  %v = phi i32 [ 0, %start ], [ %v.next, %l ]
+  store i32 %v, ptr addrspace(3) %p
+  %v.next = add nuw nsw i32 %v, 1
+  %t = trunc i32 %v.next to i16
+  %p.next = getelementptr i8, ptr addrspace(3) %p, i32 4
+  %c = icmp eq i16 %t, 700
+  br i1 %c, label %done, label %l
+
+done:
+  ret i32 0
+}
+";
+
+/// copy1d's first fill, 16 instructions a trip: LSR counted it by `trunc` of
+/// the stored i32, the induction proof saw no count through the truncation,
+/// and the huge pointer's step kept its carry (`sbb; and; add`) on every
+/// trip, where the other loops of the file were split into windows.
+#[test]
+fn test_a_walk_counted_by_a_truncation_of_its_counter_is_split_into_windows() {
+    let got = same(TRUNC_EXIT, &[&[]]);
+    assert!(got.contains("windows:") && got.contains("phi ptr addrspace(1)"), "{got}");
+}

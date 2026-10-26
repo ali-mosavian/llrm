@@ -128,6 +128,7 @@ pub fn before_phase_skipping<'a>(
             Calls::Everything => Default::default(),
         },
         stack_check: None,
+        hosted: false,
     };
     let cpu = cpu::profile(cpu_name).unwrap();
     let pool = Rc::new(RefCell::new(Pool::new(0)));

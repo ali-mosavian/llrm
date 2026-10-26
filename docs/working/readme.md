@@ -11,13 +11,18 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [pass-table-dist](pass-table-dist.md) | Optimizer passes on dist, ours against the pin: Ir, runs, excess and owners |
 | [presize-plan](presize-plan.md) | Vectors that grow by doubling to a size known up front: sites, growth Ir, capacities (2026-10-24) |
 | [f2-plan](f2-plan.md) | F2 `emit_module`: profile, pin counterpart, four rows |
+| [alias-stack-plan](alias-stack-plan.md) | Alias stack: module-by-module route to the pin's BasicAA/TBAA/CaptureTracking structure, Ir budget per stage |
 | [frontend-bucket-plan](frontend-bucket-plan.md) | Front end compile-time bucket (qbq-llrm d_faces): attribution and rows F1-F4 (2026-10-23) |
 | [loop-bucket-callees](loop-bucket-callees.md) | Loop and scalar buckets: top 10 callees on d_faces -O2 with owner and date |
 | [scev-predicates-plan](scev-predicates-plan.md) | SCEV predicates (S3 rank 5, DEVIATE 1): plan (2026-10-23) |
 | [stable-loads](stable-loads.md) | D-I: stable-load rematerialization off by default; AM-DI rows, the argument rule, the exit |
 | [regclass-on-body](regclass-on-body.md) | register classes carried on the body, as the pin's MRI: the rescans, the creators, the steps |
+| [dag-refusals-2026-10-25](dag-refusals-2026-10-25.md) | Every corpus under `--isel=dag`: refusals and failed compiles by cause (0 at m16/m32; m64 `vla`) |
 | [x86-64-dag-plan](x86-64-dag-plan.md) | The DAG path at m64, LEA first: D64-0..4 and the D64-1 design (2026-10-24) |
+| [clocks-sweep](clocks-sweep.md) | Clocks of every runnable program at m16 -Os, main vs parity: the slower list, method, DOSBox check (2026-10-26) |
 | [qb-runtime-contract-plan](qb-runtime-contract-plan.md) | The QB runtime's contract in the DAG path: five dated PRs (2026-10-24) |
+| [bench-table-a33fdfff7](bench-table-a33fdfff7.md) | vsgcc bench table at tip a33fdfff7: old and dag selectors against min(gcc, clang) |
+| [flip-packet](flip-packet.md) | The default flip to `--isel=dag`: the five conditions, status and evidence per condition |
 | [testing](testing.md) | Running the tests |
 | [pr-rules](pr-rules.md) | The goal, what a PR carries, how it lands, how to measure, safety |
 | [gate](gate.md) | What CI and the gate run, the tiers, what must pass |
@@ -35,11 +40,14 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [undef-table](undef-table.md) | MIR `undef`: each pass and pin function that treats it apart from poison, and its state |
 | [llrm-only-inventory](llrm-only-inventory.md) | Passes and analyses with no pin counterpart in the d_faces -O2 profile: Ir, why, delete or translate first (2026-10-25) |
 | [residual-split](residual-split.md) | The 59 M of ledger residual outside the buckets, per item Ir, pin counterpart, verdict (2026-10-25) |
+| [instcombine-like-for-like](instcombine-like-for-like.md) | InstCombine on the same IR against the pin: per function, per run, the cost outside the loop (d_faces -O2, 2026-10-25) |
 | [icmp-canonical-cells](icmp-canonical-cells.md) | `canonicalizeICmpPredicate`: the cells that grew when compares took the pin's canonical form, with causes |
 | [layout-fidelity](layout-fidelity.md) | Where the pin lays out the blocks its helpers create, and which of ours match; the cells that grew when ours moved |
 | [qb-float-rows](qb-float-rows.md) | The 41 QB float rows above main after BC's per-assignment rounding (#3352): the numbers, owner and exit |
 | [qb-lalr-handoff](qb-lalr-handoff.md) | The QB front takeover: what landed and what is left |
 | [qb-unsupported-lowering](qb-unsupported-lowering.md) | BC output for the lowerings the QB front refused: PALETTE USING, ON ERROR RESUME NEXT, REDIM PRESERVE |
+| [qb-currency](qb-currency.md) | The CURRENCY type: what PDS BC calls, the design, three phases |
+| [qb-vbdos-forms](qb-vbdos-forms.md) | VBDOS forms: what the front needs for FORM and CONTROL types, and what stays deferred |
 | [qcport-os-rows](qcport-os-rows.md) | The QCport modules bigger at -Os after #3369 and after its re-land: numbers, owner and exit |
 | [phi-pre-ra-translation](phi-pre-ra-translation.md) | PHIElimination, TwoAddressInstruction and the pass order before greedy, against the pin: same, differs, missing |
 | [livevariables-plan](livevariables-plan.md) | The pin's LiveVariables translated for TwoAddress and PHIElimination: functions, callers, dates (2026-10-24) |
@@ -48,6 +56,9 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [vreg-class-field-plan](vreg-class-field-plan.md) | A register class on each virtual register: pin sites, touched types, caller counts, order |
 | [local-reassign](local-reassign.md) | `canReassign` in the greedy allocator: the QCport -Os modules that change, vs parity and main |
 | [qcport-vs-main](qcport-vs-main.md) | QCport -Os and -O2, parity against main, per module, with the owner of each module above main |
+| [flip-ambt-table](flip-ambt-table.md) | The 22 AM-BT rows by dag/old and dag/pin at m32 -O2: verdict, cause and owner per row (2026-10-25) |
+| [flip-ambt-rows-8-14](flip-ambt-rows-8-14.md) | Rows 8-14 re-run on tip c76f9a6a5 with the pin's i486 triple: old, dag and pin llc clocks, instructions and code bytes (2026-10-26) |
+| [bsf-bsr-cost-row](bsf-bsr-cost-row.md) | BSF/BSR cost row and the pin's `rep` prefix rule on BSF (2026-10-26) |
 | [compile-ledger-w1](compile-ledger-w1.md) | Plan for the regalloc-glue and scalar buckets of the compile ledger: ours vs the pin per pass, callees, levers and dates |
 | [unroll-o1-rows](unroll-o1-rows.md) | x_life and x_isqrt against main: the -O1 unroll mechanism and the select diamond, both the pin's |
 | [above-main-rows](above-main-rows.md) | Rows above main |
@@ -66,6 +77,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [forged-sel-2](forged-sel-2.md) | FORGED-SEL-2: what a forged selector reaches |
 | [fp-constant-fold-plan](fp-constant-fold-plan.md) | FP binary constant fold: plan (2026-10-22) |
 | [fpround-pricing](fpround-pricing.md) | FPRound is priced as one instruction |
+| [floatprep-into-selection-plan](floatprep-into-selection-plan.md) | FloatPrep into selection: the plan |
 | [gate-coverage](gate-coverage.md) | What the landing gate runs, and what it does not |
 | [instruction-gap-vs-pin](instruction-gap-vs-pin.md) | Instructions against the pin's llc, on the same IR |
 | [irreducible-counts](irreducible-counts.md) | Irreducible cycles in the corpora (BRIDGE-1) |
@@ -85,6 +97,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [loops-compile-plan](loops-compile-plan.md) | Loops compile-time bucket: dated plan to 1.0x of the pin |
 | [licm-compile-cost](licm-compile-cost.md) | LICM and loop-pass compile cost (w-3, plan note 2026-10-22) |
 | [live-range-shrink](live-range-shrink.md) | Live Range Shrink (codegen slot 47) |
+| [liveness-reuse-plan](liveness-reuse-plan.md) | One lane solve serving flags: built and dropped, 0.50 M on `d_faces` |
 | [llrm-c-reds](llrm-c-reds.md) | The llrm-c lib reds (`cargo test --release -p llrm-c --lib --features toolchain`) |
 | [llrm-only-passes](llrm-only-passes.md) | llrm-only MIR passes bucket (d_faces -O2 m32, tip 3b5ac93b68) |
 | [lsr-address-registers](lsr-address-registers.md) | LSR address-register term (LU2): tried, not landed |
@@ -93,21 +106,26 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [machine-cleanup-compile-plan](machine-cleanup-compile-plan.md) | Machine clean-up compile time: plan to 1.0x of the pin |
 | [machinecombiner-translation-plan](machinecombiner-translation-plan.md) | Translating MachineCombiner (slot 40) |
 | [old-allocator-modules](old-allocator-modules.md) | Old allocator modules: last callers and the PR that deletes each |
+| [peephole-vs-pin](peephole-vs-pin.md) | Peephole cost by sub-pass against the pin on d_faces -O2 (2026-10-25) |
 | [pei-plan](pei-plan.md) | Prologue/Epilogue Insertion and Frame Finalization (row 80): plan |
 | [phielimination-completion-plan](phielimination-completion-plan.md) | PHIElimination: completing the translation (row 61) |
 | [pin-slot-table](pin-slot-table.md) | Pin pipeline slots against llrm's pipeline |
 | [premise-peephole-sink-scheduler](premise-peephole-sink-scheduler.md) | Premise tests: Peephole, MachineSink, Machine Scheduler |
 | [process-implicit-defs-plan](process-implicit-defs-plan.md) | ProcessImplicitDefs: the translation |
+| [qb-host](qb-host.md) | The QB runtime on a Linux or macOS host with SDL: layout, build, what was checked, what is missing (#4669) |
 | [x-base64-ties](x-base64-ties.md) | x_base64: the two ties that flip in the shared-LiveIntervals landing |
 | [twoaddress-cost-plan](twoaddress-cost-plan.md) | TwoAddress and LiveIntervals compile cost against the pin: callgrind attribution, four steps |
 | [twoaddress-rest-plan](twoaddress-rest-plan.md) | Row 62: what of TwoAddressInstructionPass is left |
 | [row23-plan](row23-plan.md) | Row 23: CodeGenPrepare translation plan |
 | [row43-plan](row43-plan.md) | Row 43: Machine CSE, what is left |
+| [earlycse-snapshot-deviate](earlycse-snapshot-deviate.md) | EarlyCse forks the function and context where the pin mutates in place: DEVIATE EC-1, about 6.8 M |
+| [first-divergence-m32](first-divergence-m32.md) | First divergence from the pin for 71 programs, m32 -O2, counted by cause (2026-10-25) |
 | [row44-plan](row44-plan.md) | Row 44: MachineSink translation plan |
 | [row45-cost-plan](row45-cost-plan.md) | The Peephole's compile cost by sub-pass at the tip, the LLVM home of each, rows R45-1 to R45-6 with dates (2026-10-24) |
 | [row45-plan](row45-plan.md) | Row 45: PeepholeOptimizer translation plan |
 | [fp-stackifier-plan](fp-stackifier-plan.md) | X86FPStackifier: compile-cost plan |
 | [mssa-build-plan](mssa-build-plan.md) | MemorySSA build cost: the pin builds as often, 11x cheaper per build |
+| [mssa-lazy-refs-design](mssa-lazy-refs-design.md) | MemorySSA clients: references made when asked (design, priced) |
 | [row61-deleted-tests](row61-deleted-tests.md) | Row 61: the tests deleted with the non-RFP route |
 | [row63-66-plan](row63-66-plan.md) | Rows 63 (RegisterCoalescer) and 66 (RAGreedy): translation plan |
 | [row82-plan](row82-plan.md) | Row 82, Control Flow Optimizer: translation plan |
@@ -118,7 +136,11 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [selectiondag-switch-plan](selectiondag-switch-plan.md) | SelectionDAG switch plan, revised 2026-10-22 |
 | [selectiondag-builder-gaps](selectiondag-builder-gaps.md) | What the pin's `visit*` has that the DAG builder lacks (sdag-a) |
 | [selectiondag-far-builder](selectiondag-far-builder.md) | Far and huge pointers in the DAG builder (sdag-a) |
+| [old-selector-retirement](old-selector-retirement.md) | What the old selector leaves to retire after the DAG flip, surveyed by reading |
 | [selectiondag-default-readiness](selectiondag-default-readiness.md) | What must be true to make `--isel=dag` the default (sdag-a) |
+| [jumps-profile-d_faces](jumps-profile-d_faces.md) | Line profile of ControlFlow (`jumps`) on d_faces -O2 against the pin's BranchFolder (2026-10-25) |
+| [landing-batch-time](landing-batch-time.md) | Where a landing batch's wall clock goes: stages, the long pole, changes that keep the gate (2026-10-25) |
+| [d64-4-s3-inventory](d64-4-s3-inventory.md) | D64-4 S3 float programs for tests/llc and the pin asm each must match at m64 (sdag-a) |
 | [selectiondag-tail-calls](selectiondag-tail-calls.md) | Tail calls in the DAG path: pin functions, steps, dates (sdag-a) |
 | [selectiondag-huge-memmove](selectiondag-huge-memmove.md) | memmove of huge pointers: the pin's behaviour, options, decision date 10-30 (sdag-a) |
 | [selectiondag-x87-contract](selectiondag-x87-contract.md) | What the DAG legalizer hands the x87 emitter and stackifier (sdag-b) |
@@ -135,3 +157,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 
 A change to a pass, analysis, flag, level, tool, target or runtime updates its doc in the same PR. A pass's `//!` header is its doc; after editing one, run `tools/fmt.sh` (it rewraps header comments), then `python3 tools/docsbuild/build.py --sync` and commit what it writes. A page of `docs/architecture/` joins its readme's Contents list by front matter (`architecture-index:` and `architecture-order:`, tools/docsbuild/archindex.py); `build.py --sync` rewrites the list, and `--check` fails on a stale one. The tests (`pytest tools/docsbuild`, `tests/header_mir.rs`) fail on a stale page, a missing section or a malformed MIR example.
 | [selectiondag-plan](selectiondag-plan.md) | Translating SelectionDAG selection (slot row 28): the pin's structure, what replaces each part, the generated matcher, shadow mode then switch then delete, with owners and dates |
+| [regalloc-matrix-profile](regalloc-matrix-profile.md) | LiveRegMatrix cost on d_faces m32 -O2 against the pin: ~10.8 M of the 77.6 M allocator, ~4.5 M over the pin |
+| [regpressure-plan](regpressure-plan.md) | Per-set register pressure for the pre-RA scheduler: tracker, limits, deltas; the half w2 calls |
+| [alloc-by-caller](alloc-by-caller.md) | Allocation and copy cost of d_faces -O2 by caller: flat, 9.4% of Ir, no single cut; successors/predecessors do not allocate |
+| [cgp-switch-type](cgp-switch-type.md) | `optimizeSwitchType`: a switch on i8/i16 is widened to i32 as the pin does; m16 keeps it narrow; byte evidence |

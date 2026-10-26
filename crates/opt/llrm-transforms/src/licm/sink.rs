@@ -62,7 +62,18 @@ fn may_have_side_effects(
         Opcode::Store { .. } => true,
         Opcode::Load { volatile, .. } => *volatile,
         Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Resume => {
-            accesses.writes(inst).is_none_or(|writes| !writes.is_empty())
+            accesses
+                .writes_in(
+                    &llrm_analysis::memory::Unit::over(
+                        unit.context,
+                        unit.layout,
+                        &outer.metadata,
+                        &outer.globals,
+                        function,
+                    ),
+                    inst,
+                )
+                .is_none_or(|writes| !writes.is_empty())
                 || calls::may_throw(outer, unit.context, function, inst)
                 || !calls::will_return(outer, unit.context, function, inst)
         }

@@ -249,7 +249,7 @@ b3:
 fn with_exit_values(text: &str) -> String {
     let mut module = crate::testing::parsed(text);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(super::IndVars { lftr: true });
+    manager.add(super::IndVars { lftr: true, size: false });
     manager.run_module(&mut module, Rc::new(llrm_x86_m16::Dos::default())).unwrap();
     crate::testing::printed(&module)
 }
@@ -403,7 +403,7 @@ fn header_phis(module: &mut Module) -> usize {
 #[test]
 fn counters_with_one_start_and_one_step_are_one_counter() {
     let mut module = parsed(&two_counters(0, 1));
-    managed(&mut module, IndVars { lftr: true });
+    managed(&mut module, IndVars { lftr: true, size: false });
     assert_eq!(header_phis(&mut module), 1, "{}", printed(&module));
     let mut other = parsed(&two_counters(0, 1));
     assert_eq!(results(&module, &[&[0], &[3], &[9]]), results(&other, &[&[0], &[3], &[9]]));
@@ -417,7 +417,7 @@ fn counters_with_one_start_and_one_step_are_one_counter() {
 fn counters_whose_steps_are_the_same_add_are_one_counter() {
     let text = two_counters(0, 1).replace("%j.next = add i16 %j, 1", "%j.next = add i16 %i, 1");
     let mut module = parsed(&text);
-    managed(&mut module, IndVars { lftr: true });
+    managed(&mut module, IndVars { lftr: true, size: false });
     assert_eq!(header_phis(&mut module), 1, "{}", printed(&module));
     let other = parsed(&text);
     assert_eq!(results(&module, &[&[0], &[3], &[9]]), results(&other, &[&[0], &[3], &[9]]));
@@ -428,7 +428,7 @@ fn counters_whose_steps_are_the_same_add_are_one_counter() {
 fn counters_that_start_or_step_otherwise_stay_two() {
     for (start, step) in [(1, 1), (0, 2)] {
         let mut module = parsed(&two_counters(start, step));
-        managed(&mut module, IndVars { lftr: true });
+        managed(&mut module, IndVars { lftr: true, size: false });
         assert_eq!(header_phis(&mut module), 2, "{start} {step}: {}", printed(&module));
     }
 }
@@ -487,7 +487,7 @@ fn a_run_that_changes_no_block_finds_the_loops_once() {
         managed(module, AsksWhatIndVarsDoes);
     }));
     let indvars = derived(Box::new(|module| {
-        managed(module, IndVars { lftr: true });
+        managed(module, IndVars { lftr: true, size: false });
     }));
     assert!(indvars <= manager, "{indvars} shapes against the manager's {manager}");
 }
@@ -621,7 +621,7 @@ e:
 ",
     );
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(IndVars { lftr: true });
+    manager.add(IndVars { lftr: true, size: false });
     manager.run_module(&mut module, m32()).unwrap();
     let after = printed(&module);
     assert_eq!(leaks_a_loop_value(&module), None, "{after}");
@@ -658,11 +658,11 @@ b2:
 #[test]
 fn test_lftr_off_leaves_the_test_of_a_loop_not_rotated() {
     let mut off = parsed(TOP_TESTED);
-    managed(&mut off, IndVars { lftr: false });
+    managed(&mut off, IndVars { lftr: false, size: false });
     let off = printed(&off);
     assert!(!off.contains("umax") && !off.contains("exitcond"), "{off}");
     let mut on = parsed(TOP_TESTED);
-    managed(&mut on, IndVars { lftr: true });
+    managed(&mut on, IndVars { lftr: true, size: false });
     let on = printed(&on);
     assert!(on.contains("exitcond"), "{on}");
 }
@@ -695,7 +695,7 @@ b3:
 }
 ",
     );
-    managed(&mut module, IndVars { lftr: false });
+    managed(&mut module, IndVars { lftr: false, size: false });
     let after = printed(&module);
     assert!(after.contains("br i1 false, label %b4, label %b3"), "{after}");
 }
@@ -725,7 +725,7 @@ fn counted_loops(loops: usize) -> String {
 fn computed_counts(loops: usize) -> usize {
     let mut module = parsed(&counted_loops(loops));
     let before = llrm_analysis::scev::trip::backedge_taken_computations();
-    managed(&mut module, IndVars { lftr: true });
+    managed(&mut module, IndVars { lftr: true, size: false });
     llrm_analysis::scev::trip::backedge_taken_computations() - before
 }
 
@@ -746,7 +746,7 @@ fn a_loop_nothing_changes_has_its_trip_count_worked_out_once_in_a_run() {
 fn simplify_form_scans(loops: usize) -> usize {
     let mut module = parsed(&counted_loops(loops));
     let before = llrm_mir::loopinfo::simplify_form_scans();
-    managed(&mut module, IndVars { lftr: true });
+    managed(&mut module, IndVars { lftr: true, size: false });
     llrm_mir::loopinfo::simplify_form_scans() - before
 }
 
@@ -886,7 +886,19 @@ b5:
 ";
     let mut module = parsed(text);
     let before = results(&module, &[&[]]);
-    managed(&mut module, IndVars { lftr: true });
+    managed(&mut module, IndVars { lftr: true, size: false });
     assert!(!printed(&module).contains("icmp slt i16 %i, -5"), "{}", printed(&module));
     assert_eq!(results(&module, &[&[]]), before);
+}
+
+/// After its edits `indvars` swept the whole function for dead code: 0.8 M Ir
+/// on d_faces' largest body, where the pin deletes what an edit stopped
+/// reading. The edits' own seeds are enough.
+#[test]
+fn a_run_that_edits_a_loop_does_not_sweep_the_function_for_dead_code() {
+    let mut module = parsed(&two_counters(0, 1));
+    crate::dead::SCANNED.with(|scanned| scanned.set(0));
+    managed(&mut module, IndVars { lftr: true, size: false });
+    assert_eq!(header_phis(&mut module), 1, "{}", printed(&module));
+    assert_eq!(crate::dead::SCANNED.with(std::cell::Cell::get), 0);
 }
