@@ -85,6 +85,13 @@ impl Exit {
     }
 }
 
+/// A branch that reads or writes a counter (`jcxz`, `loop`), not only the
+/// flags: it has no opposite, and dropping, hoisting over or merging it changes
+/// the counter. LLVM's `analyzeBranch` gives up on it.
+fn counted(one: &Insn) -> bool {
+    one.what.as_ref().and_then(|what| what.name.as_deref()).is_some_and(|name| !_OPPOSITE.contains_key(name))
+}
+
 /// `one` going to `target`, the condition made `name` if given.
 fn aimed(
     one: &Arc<Insn>,
@@ -255,6 +262,9 @@ impl<'a> Folder<'a> {
             return true;
         }
         let exit = Exit::of(&block);
+        if exit.cond.as_deref().is_some_and(counted) {
+            return false;
+        }
         // A conditional whose two ways are one block.
         if let (Some(cond), Some(jump)) = (&exit.cond, &exit.jump)
             && exit.taken == exit.other
@@ -359,6 +369,7 @@ impl<'a> Folder<'a> {
             let ahead = Exit::of(&previous);
             let name = |one: &Arc<Insn>| one.what.as_ref().and_then(|what| what.name.clone());
             if let (Some(earlier), None, Some(there)) = (&ahead.cond, &ahead.jump, ahead.taken)
+                && !counted(earlier)
                 && there == taken
                 && name(earlier) == name(cond)
                 && self.after(before) == Some(block.at)

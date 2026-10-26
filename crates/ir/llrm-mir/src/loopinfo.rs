@@ -224,6 +224,22 @@ impl LoopGraph for Function {
         None
     }
 
+    fn children(
+        &self,
+        block: BlockId,
+    ) -> impl Iterator<Item = BlockId> {
+        // The terminator is found once, not once per edge as `child` does.
+        let operands = self.terminator(block).map(|one| self.instruction(one).operands.as_slice()).unwrap_or_default();
+        operands
+            .iter()
+            .filter_map(
+                |operand| match operand {
+                    Operand::Block(target) => Some(*target),
+                    _ => None,
+                },
+            )
+    }
+
     fn inverse_children(
         &self,
         block: BlockId,
