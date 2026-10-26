@@ -1672,6 +1672,34 @@ impl Emitter<'_, '_> {
         Ok(offset)
     }
 
+    /// Whether the pointer in `register` is a near one into DGROUP: the address
+    /// of a global that lives there, or any near pointer the builder took
+    /// for one (`segment_of_pointer` loads the same selector for these).
+    fn is_dgroup_pointer(
+        &self,
+        register: llrm_lir::registers::RegId,
+    ) -> bool {
+        let Some(&origin) = self.origins.get(&register) else { return false };
+        if self.selectors.contains_key(&origin.node) {
+            return false;
+        }
+        let dgroup = self.ctx.globals.segment(None);
+        let ISD::Machine(op) = self.dag.opcode(origin) else {
+            return width_of(self.ctx.map.scalar_sse(), self.dag, origin) == 2;
+        };
+        let name = self.ctx.names.get(&(op as u16)).map_or("", |name| name.split('|').next().unwrap_or(name));
+        let first = self.dag.node(origin).ops.first().copied();
+        match (name, first.map(|op| self.dag.node(op).data.clone())) {
+            ("MOV16ri", Some(NodeData::Global { symbol, .. })) => self.ctx.globals.segment(Some(symbol)) == dgroup,
+            ("LEA16r", Some(NodeData::FrameIndex(_))) => false,
+            ("LEA16r", _) if self.global_displacement(origin).is_some() => {
+                self.ctx.globals.segment(self.global_displacement(origin)) == dgroup
+            }
+            ("OR32rr" | "ADD32rr" | "SHL32ri" | "ADD32rr_DB", _) => false,
+            _ => width_of(self.ctx.map.scalar_sse(), self.dag, origin) == 2,
+        }
+    }
+
     /// The selector of the segment the pointer in `register` is in, as a value:
     /// DGROUP for the address of a global, SS for one of the frame, the
     /// selector loaded with a far pointer.
@@ -2122,7 +2150,14 @@ impl Emitter<'_, '_> {
                     self.offset_of_pointer(RegId::SI)?,
                     self.offset_of_pointer(RegId::DI)?,
                 );
-                let (from, to) = (self.segment_of_pointer(RegId::SI)?, self.segment_of_pointer(RegId::DI)?);
+                // a source in DGROUP is read through DS, which holds it: no
+                // segment to load and no override
+                let from = if self.is_dgroup_pointer(RegId::SI) {
+                    Loc::Reg(Reg { register: RegId::DS, width: 2 })
+                } else {
+                    Loc::Held(self.segment_of_pointer(RegId::SI)?)
+                };
+                let to = self.segment_of_pointer(RegId::DI)?;
                 let (source_after, destination_after, emptied) = (self.fresh(2), self.fresh(2), self.fresh(2));
                 self.push(
                     Operation::Copy,
@@ -2133,7 +2168,7 @@ impl Emitter<'_, '_> {
                         Loc::Held(destination_after),
                         Loc::Held(emptied),
                     ],
-                    vec![Loc::Held(count), Loc::Held(source), Loc::Held(destination), Loc::Held(from), Loc::Held(to)],
+                    vec![Loc::Held(count), Loc::Held(source), Loc::Held(destination), from, Loc::Held(to)],
                 );
                 // a `rep` glued after this one goes on from where it stopped
                 self.accumulator.insert(RegId::CX, emptied);

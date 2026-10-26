@@ -808,3 +808,33 @@ define void @f(i16 %n) {
     let at = |name: &str| names.iter().position(|n| n == name);
     assert!(at("movsd") < at("movsb") && at("movsd").is_some(), "{names:?}");
 }
+
+/// A copy out of a global was loaded a segment register (`pushw DGROUP; pop
+/// fs`) and read through an `fs:` override; the old selector reads it through
+/// DS, which holds DGROUP (copy_idioms.c: 3 bytes a copy).
+#[test]
+fn a_copy_out_of_a_global_reads_through_ds() {
+    use crate::model::ir::Loc;
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+@a = global [100 x i16] zeroinitializer, align 2
+@b = global [100 x i16] zeroinitializer, align 2
+declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+define void @f(i16 %n) {
+  call void @llvm.memcpy.p0.p0.i16(ptr @a, ptr @b, i16 %n, i1 false)
+  ret void
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let copies: Vec<_> =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.op == crate::model::ir::Operation::Copy).collect();
+    assert!(!copies.is_empty());
+    for copy in copies {
+        let from = &copy.sources[copy.sources.len() - 2];
+        assert!(matches!(from, Loc::Reg(r) if r.register == llrm_lir::registers::RegId::DS), "{from:?}");
+    }
+}
