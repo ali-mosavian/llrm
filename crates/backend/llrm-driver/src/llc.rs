@@ -98,6 +98,26 @@ pub fn main(argv: &[String]) -> i32 {
     }
 }
 
+/// Every symbol as `format` spells it under its convention (`_main`, `main_`,
+/// `MAIN`): a C front end for these targets records decorated names, and the
+/// start-up and the OS layer call them so. A function takes its own
+/// convention's spelling, a variable the target's default. Intrinsics keep
+/// theirs.
+fn decorate(
+    module: &mut llrm_mir::module::Module,
+    calling: &llrm_target::calling::Calling,
+    default: &llrm_target::calling::Convention,
+    format: &str,
+) {
+    for global in &mut module.globals {
+        let convention = global.function().and_then(|one| calling.by_number(one.calling_convention)).unwrap_or(default);
+        let Some(name) = global.name.as_deref().filter(|name| !name.starts_with("llvm.")) else { continue };
+        if let Some(spelled) = convention.decorated(format, name) {
+            global.name = Some(spelled).into();
+        }
+    }
+}
+
 /// `text`, LLVM IR, compiled for the target its `target triple` (or `flags`)
 /// names.
 pub fn compiled(
@@ -107,9 +127,10 @@ pub fn compiled(
 ) -> Result<(masm::Module, llrm_target::object::Format), String> {
     let (triple, text) = without_triple(text);
     let bound = bound(flags, triple.as_deref())?;
-    let module = llrm_mir::parse::module(&text).map_err(|error| format!("{name}: {error}"))?;
+    let mut module = llrm_mir::parse::module(&text).map_err(|error| format!("{name}: {error}"))?;
     let machine = flags.machine(&*bound.target, bound.target.machine())?;
     let format = flags.format(&*bound.target)?;
+    decorate(&mut module, bound.target.calling(), flags.convention(&*bound.target)?, format.name());
     let options = llrm_core::driver::Options { object_format: format.name(), ..bound.options(flags, machine) };
     Ok((llrm_core::driver::compiled_module(module, name, &options)?, format))
 }
