@@ -26,11 +26,16 @@ pub struct Placed {
     pub zero: bool,
 }
 
+/// The linker's name for the IR name `name`: a leading `\01` marks it already spelled, as LLVM's mangler reads it.
 pub fn symbol_name(
     platform: Platform,
     name: &str,
 ) -> String {
-    if platform.underscore() { format!("_{name}") } else { name.to_owned() }
+    match name.strip_prefix('\u{1}') {
+        Some(verbatim) => verbatim.to_owned(),
+        None if platform.underscore() => format!("_{name}"),
+        None => name.to_owned(),
+    }
 }
 
 /// Every global variable `module` defines, laid out.

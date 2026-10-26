@@ -530,10 +530,7 @@ impl Selector<'_> {
                     passed.push((value, places));
                 }
                 let void = self.types().void();
-                let callee = Callee::Symbol(match self.platform.underscore() {
-                    true => format!("_{base}"),
-                    false => base.to_owned(),
-                });
+                let callee = Callee::Symbol(crate::data::symbol_name(self.platform, base));
                 self.emit_call(callee, passed, assigner.stack_bytes(), void)?;
                 Ok(())
             }
@@ -590,7 +587,7 @@ impl Selector<'_> {
             llrm_mir::Type::Float(llrm_mir::FloatKind::Float)
         );
         let name = format!("{base}{}", if single { "f" } else { "" });
-        let callee = Callee::Symbol(if self.platform.underscore() { format!("_{name}") } else { name });
+        let callee = Callee::Symbol(crate::data::symbol_name(self.platform, &name));
         let result = self.emit_call(callee, passed, assigner.stack_bytes(), instruction.ty)?;
         if let (Some(value), Some(result_id)) = (result, instruction.result) {
             self.vals.insert(result_id, value);
