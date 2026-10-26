@@ -87,7 +87,7 @@ use crate::backend::cpu::{Profile, ProfileOrName};
 use crate::backend::isel::{self, Selected};
 use crate::backend::shadow::{self, Selector};
 use crate::backend::target::Segments;
-use crate::backend::{addressvalues, executed, frame, globals, jumps, masm, select};
+use crate::backend::{addressvalues, executed, frame, globals, jumps, masm, returnsplit, select};
 use crate::flow;
 use crate::model::ir::{Addr, AddressRef, Loc, Semantics, Space};
 use crate::model::lir::LirBody;
@@ -331,6 +331,7 @@ pub fn assembled_by(
                 let procedure = if !cpu.optimized {
                     procedure
                 } else {
+                    let procedure = timed("lir split returns", || returnsplit::split(procedure));
                     // Asked only by a tail a copy could save a jump for.
                     let (overhead, unprintable) = (std::cell::OnceCell::new(), std::cell::RefCell::new(None));
                     let overhead = || {

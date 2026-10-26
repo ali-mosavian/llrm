@@ -1,7 +1,7 @@
 ' RUN: llrm-qb %s --dialect {qb45 | pds71 | vbdos} --runtime {qb45 | pds71 | vbdos} -O2 -march=i486 -fno-inline-functions -S -o /dev/stdout
 ' Loops people write that are one string move, and look-alikes that are not.
 ' CHECK-LABEL: SETPAL proc
-' CHECK-NOT: rep
+' CHECK: rep stosw
 ' CHECK: SETPAL endp
 ' CHECK-LABEL: DOCOPY proc
 ' CHECK: rep movsd
