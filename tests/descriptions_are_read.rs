@@ -190,7 +190,8 @@ fn every_toml_key_has_a_reader() {
         keys("", &toml::Value::Table(value), &mut all);
         for (at, key) in all {
             let named = NAMED.iter().any(|(file, pattern)| *file == name && matches(pattern, &at))
-                || (path.to_string_lossy().contains("/machine/tune/") && TUNE_NAMED.iter().any(|pattern| matches(pattern, &at)));
+                || (path.to_string_lossy().contains("/machine/tune/")
+                    && TUNE_NAMED.iter().any(|pattern| matches(pattern, &at)));
             // A reader that takes the key through a closure or a helper:
             // `name("code")`, `number("fixed")`.
             let called = regex::Regex::new(&format!(r#"(?:\w\(|,\s*)"{}"\s*[,)]"#, regex::escape(&key))).unwrap();

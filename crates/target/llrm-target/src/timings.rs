@@ -119,7 +119,8 @@ impl Timings {
             for (at_cpu, (table, value)) in tables.iter_mut().zip(values).enumerate() {
                 let tuned;
                 let value = if *value == "=" {
-                    tuned = tune_value(tunes, &mut docs, &marches, at_cpu, section, name).map_err(|e| format!("{at}: {e}"))?;
+                    tuned = tune_value(tunes, &mut docs, &marches, at_cpu, section, name)
+                        .map_err(|e| format!("{at}: {e}"))?;
                     &tuned.as_str()
                 } else {
                     value
@@ -245,7 +246,10 @@ mod tests {
         let timings = Timings::parse_tuned(text, &tunes).unwrap();
         let (a, b) = (timings.cpu("a").unwrap(), timings.cpu("b").unwrap());
         assert_eq!((a.issue, b.issue), (1, 2));
-        assert_eq!((a.clocks.clone(), b.clocks.clone()), (vec![("alu".into(), 3), ("mul".into(), 9)], vec![("alu".into(), 4), ("mul".into(), 7)]));
+        assert_eq!(
+            (a.clocks.clone(), b.clocks.clone()),
+            (vec![("alu".into(), 3), ("mul".into(), 9)], vec![("alu".into(), 4), ("mul".into(), 7)])
+        );
     }
 
     #[test]

@@ -1,3 +1,6 @@
+# `=` in a cell: the price is in the CPU's file, machine/tune/x86/<march>.toml, which holds the rows every
+# target with that CPU agrees on. Correct such a price there; a row only this target states is here.
+#
 # x86-m32 prices, clocks, per CPU. Keys are the cost keys of the forms; a
 # key absent here is the target having no such form (no far call, no segment
 # load). Values are x86-m16's `timings.times` 486 and P5 columns for the forms

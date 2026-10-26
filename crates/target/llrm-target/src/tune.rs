@@ -1,6 +1,6 @@
 //! A CPU's prices, from the family's `machine/tune/<family>/` files: one file
-//! a CPU, named by its gcc `-march`. A target's `timings.times` reads a row from
-//! here where its cell is `=` (`Timings::parse_tuned`).
+//! a CPU, named by its gcc `-march`. A target's `timings.times` reads a row
+//! from here where its cell is `=` (`Timings::parse_tuned`).
 
 /// x86's CPUs: `-march` name and file text.
 pub const X86: &[(&str, &str)] = &[

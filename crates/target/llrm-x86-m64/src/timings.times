@@ -1,3 +1,6 @@
+# `=` in a cell: the price is in the CPU's file, machine/tune/x86/<march>.toml, which holds the rows every
+# target with that CPU agrees on. Correct such a price there; a row only this target states is here.
+#
 # x86-64 prices, clocks, one CPU. PROVISIONAL (POC spike): the integer rows are recalled Skylake-class
 # figures (Agner Fog, Instruction tables), not yet checked against the tables; the x87 and string rows are
 # the P5 column of x86-m32's. Exit: replace by X86 scheduling-model figures (SkylakeClient) before any row

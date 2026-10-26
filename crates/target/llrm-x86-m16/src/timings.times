@@ -1,3 +1,6 @@
+# `=` in a cell: the price is in the CPU's file, machine/tune/x86/<march>.toml, which holds the rows every
+# target with that CPU agrees on. Correct such a price there; a row only this target states is here.
+#
 # x86's CPU timings: one column a CPU, `-` where the CPU has no price for a
 # form (the 386 has no `unknown`, and the others no `mov_seg_r`). Read by
 # `llrm-target`; a target's mapping from these prices to its operations is
