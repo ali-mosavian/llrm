@@ -2210,12 +2210,11 @@ fn test_a_selector_the_loop_never_changes_is_loaded_before_it() {
         })
         .collect::<Vec<_>>();
     // Direct (`mov es, [bp-N]`) or through a register (`mov cx, [bp-N]; mov es,
-    // cx`); the regex crate has no backreference, so the two names compare here.
+    // cx`); the regex crate has no backreference, so the two names compare
+    // here.
     let direct = regex::Regex::new(r"mov [c-gs]s, word ptr \[bp").unwrap();
     let through = regex::Regex::new(r"mov (\w+), word ptr \[bp[^\n]*\n\s*mov [c-gs]s, (\w+)\b").unwrap();
-    let reloads = |one: &str| {
-        direct.is_match(one) || through.captures_iter(one).any(|found| found[1] == found[2])
-    };
+    let reloads = |one: &str| direct.is_match(one) || through.captures_iter(one).any(|found| found[1] == found[2]);
     for one in loops.iter().filter(|one| !loops.iter().any(|other| other.len() < one.len() && one.contains(*other))) {
         assert!(!reloads(one), "{one}");
     }
