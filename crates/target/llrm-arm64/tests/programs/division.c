@@ -25,7 +25,7 @@ static u64 i8_run(void) {
     h = h * 31 + (u64)(long)(x / (signed char)-100); h = h * 31 + (u64)(long)(x % (signed char)-100);
     h = h * 31 + (u64)(long)(x / (signed char)125); h = h * 31 + (u64)(long)(x % (signed char)125);
     h = h * 31 + (u64)(long)(x / (signed char)255); h = h * 31 + (u64)(long)(x % (signed char)255);
-    h = h * 31 + (u64)(long)(x / (signed char)-256); h = h * 31 + (u64)(long)(x % (signed char)-256);
+    h = h * 31 + (u64)(long)(x / (signed char)-128); h = h * 31 + (u64)(long)(x % (signed char)-128);
     h = h * 31 + (u64)(long)(x / (signed char)641); h = h * 31 + (u64)(long)(x % (signed char)641);
     h = h * 31 + (u64)(long)(x / (signed char)1000); h = h * 31 + (u64)(long)(x % (signed char)1000);
     h = h * 31 + (u64)(long)(x / (signed char)-1000); h = h * 31 + (u64)(long)(x % (signed char)-1000);
