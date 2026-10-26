@@ -81,8 +81,7 @@ each site's cost and threshold beside the existing decision; with
   the 13.3 M, inlining `clamp` (x3, cost -10) alone recovers 7.3 M for +7 B;
   the same relaxation by cost sign grows 4 of 48 C programs by 167 B
   (`qlight.c` +134), so the lever is the bound for bytes-cheap sites, not
-  the sign. The rest is LSR, 2abaf530f and RFP. Evidence:
-  `pair-m16os/d11ab.txt`. Decision: bytes first.
+  the sign. The rest is LSR, 2abaf530f and RFP. Decision: bytes first.
 - D12 (SZ2): a call the -Os bound (D11) alone refuses, that passes the
   address of a stack slot or a global the caller stored a constant to and
   whose callee loads through that parameter, is inlined if the caller,
