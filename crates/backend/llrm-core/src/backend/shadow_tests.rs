@@ -137,3 +137,33 @@ fn test_isel_only_lists_the_functions_the_dag_path_selects() {
     assert!(!shadow::only_listed(Some("f,g"), "h"));
     assert!(!shadow::only_listed(Some(""), "f"));
 }
+
+const DIVIDES: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
+define i64 @f(i64 %a, i64 %b) addrspace(1) {
+entry:
+  %q = sdiv i64 %a, %b
+  %r = sdiv i64 %q, %b
+  ret i64 %r
+}
+define i64 @g(i64 %a, i64 %b) addrspace(1) {
+entry:
+  %q = sdiv i64 %a, %b
+  ret i64 %q
+}
+";
+
+/// The DAG route pasted the i64 divide routine (110 bytes) at every divide of
+/// every function: `stft_fixed.nib` at m16 -Os held eleven copies, 1,212
+/// bytes, where the old selector's `idiv` was 20 per site. The routine is one
+/// procedure of the module and each divide a call to it.
+#[test]
+fn test_the_dag_route_holds_the_i64_divide_routine_once_per_module() {
+    let module = assembled_text(DIVIDES, Selector::Dag).expect("selects");
+    let held: Vec<&str> =
+        module.procedures.iter().map(|p| p.name.as_str()).filter(|name| name.starts_with("$div64_")).collect();
+    assert_eq!(held, ["$div64_s"], "one routine for three divides");
+    let calls = module.procedures.iter().filter(|p| !p.name.starts_with('$')).flat_map(|p| p.callees.values());
+    let (shared, pasted): (Vec<_>, Vec<_>) =
+        calls.filter(|c| c.name.contains("div64_")).partition(|c| c.code.is_empty());
+    assert_eq!((shared.len(), pasted.len()), (3, 0), "every divide calls it");
+}

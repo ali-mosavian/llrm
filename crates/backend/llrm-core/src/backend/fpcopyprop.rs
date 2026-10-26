@@ -21,6 +21,8 @@
 //! reads `t` before a store rewrites it. pow_stack_depth rounded each of its
 //! six doubles twice (m16 -Os 1644 B against main's 1462).
 //!
+//! Stored back into `t`, the reload and second store go and the first stays.
+//!
 //! ```text
 //!   [t] := fstp fp0             [h] := fstp fp0
 //!   fp1 := fld [t]       =>
@@ -279,9 +281,17 @@ fn without_double_roundings(
             || width(&insns[at], false) != width(&insns[at + 2], false)
             || width(&insns[at], false) != width(&insns[at + 1], true)
             || insns[at + 1].volatile()
-            || home == cell
-            || !rewritten(&insns[at + 3..], cell)
         {
+            continue;
+        }
+        // Back into the same cell, the reload and second store change nothing.
+        if home == cell {
+            made[at + 1] = lir::anchor(Arc::clone(&insns[at + 1]));
+            made[at + 2] = lir::anchor(Arc::clone(&insns[at + 2]));
+            changed = true;
+            continue;
+        }
+        if !rewritten(&insns[at + 3..], cell) {
             continue;
         }
         let mut fused = (*insns[at + 2]).clone();
