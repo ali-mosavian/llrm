@@ -669,3 +669,12 @@ assertion `left == right` failed: a node on the worklist is ready
 """
     reasons = ps.panic_reasons(output)
     assert reasons["the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector"] == "assertion `left == right` failed: a node on the worklist is ready (left: Processed, right: Ready)"
+
+
+def test_the_compile_smoke_drives_the_c_compiler_llrm_cc_names(tmp_path, monkeypatch):
+    """C2 switches the C compiler to llrm-cc: a smoke that compiled with the name "llrm-c" would still pass on a dist that has only the old binary."""
+    seen = []
+    monkeypatch.setattr(ps, "compile_ok", lambda command, env: seen.append(Path(command[0]).name))
+    monkeypatch.setenv("LLRM_CC", "llrm-cc")
+    ps.programs(tmp_path)
+    assert {"llrm-cc"} <= set(seen) and "llrm-c" not in seen

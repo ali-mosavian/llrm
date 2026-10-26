@@ -373,9 +373,9 @@ def compile_ok(command: list[str], env: dict[str, str]) -> str | None:
 
 def programs(bins: Path) -> tuple[str, str]:
     jobs = []
-    for tool, ext in (("llrm-qb", "bas"), ("llrm-nib", "nib"), ("llrm-c", "c")):
+    for tool, ext in (("llrm-qb", "bas"), ("llrm-nib", "nib"), (llrmbin.c_compiler(), "c")):
         for machine in ("-m16", "-m32"):
-            extra = ["-mabi=sysv", "-march=i486"] if tool == "llrm-c" and machine == "-m32" else []
+            extra = ["-mabi=sysv", "-march=i486"] if tool == llrmbin.c_compiler() and machine == "-m32" else []
             jobs.append([str(bins / tool), str(PROGRAM / f"bintree.{ext}"), "-O2", machine, *extra, "-o", os.devnull])
     for command in jobs:
         if why := compile_ok(command, oracle_env()):
@@ -390,7 +390,7 @@ def sc(bins: Path) -> tuple[str, str]:
     if not source.is_file() or not include.is_dir():
         return "skipped", f"no QCport sources ({qcport})"
     flags = [f for part in ("", "render", "game", "host", "qgl", "model", "sound", "ui") for f in ("-I", str(qcport / part if part else qcport))] + ["-I", str(include)]
-    why = compile_ok([str(bins / "llrm-c"), "-O1", *flags, str(source), "-o", os.devnull], oracle_env())
+    why = compile_ok([str(bins / llrmbin.c_compiler()), "-O1", *flags, str(source), "-o", os.devnull], oracle_env())
     return ("fail", why) if why else ("ok", "sc.c -m16 -O1")
 
 
@@ -422,7 +422,7 @@ def qc_d_faces(bins: Path) -> tuple[str, str]:
     if not source.is_file() or not include.is_dir():
         return "skipped", f"no QCport sources ({qcport})"
     flags = [f for part in ("host", "render", "model", "game", "sound", "ui", "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include)]
-    broken = {level: why for level in ("-O1", "-O2", "-O3", "-Os") if (why := compile_ok([str(bins / "llrm-c"), level, *flags, str(source), "-o", os.devnull], os.environ))}
+    broken = {level: why for level in ("-O1", "-O2", "-O3", "-Os") if (why := compile_ok([str(bins / llrmbin.c_compiler()), level, *flags, str(source), "-o", os.devnull], os.environ))}
     if broken:
         first = next(iter(broken))
         return "fail", f"QCport d_faces.c {first}: {broken[first]}", [f"qc_d_faces {level}" for level in broken]
@@ -440,7 +440,7 @@ def qc_modules(bins: Path) -> tuple[str, str]:
     if not (qcport / QC_MODULES[0]).is_file() or not include.is_dir():
         return "skipped", f"no QCport sources ({qcport})"
     flags = [f for part in ("host", "render", "model", "game", "sound", "ui", "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include)]
-    broken = {module: why for module in QC_MODULES if (why := compile_ok([str(bins / "llrm-c"), "-O2", *flags, str(qcport / module), "-o", os.devnull], os.environ))}
+    broken = {module: why for module in QC_MODULES if (why := compile_ok([str(bins / llrmbin.c_compiler()), "-O2", *flags, str(qcport / module), "-o", os.devnull], os.environ))}
     if broken:
         first = next(iter(broken))
         return "fail", f"QCport {first} -O2: {broken[first]}", [f"qc_modules {module}" for module in broken]
@@ -742,7 +742,7 @@ def qcport_failures(
     include = Path(os.environ.get("QCPORT_INC", Path.home() / "scratch/qctc/inc")).expanduser()
     if not qcport.is_dir() or not include.is_dir():
         return set()
-    return {f"qc {module} {level}" for module, level, _ in (sweep or qcport_sweep.sweep)(Path(bins) / "llrm-c", qcport, include)}
+    return {f"qc {module} {level}" for module, level, _ in (sweep or qcport_sweep.sweep)(Path(bins) / llrmbin.c_compiler(), qcport, include)}
 
 
 def run_cases(bins: Path) -> tuple[str, str]:
