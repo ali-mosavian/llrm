@@ -83,3 +83,37 @@ fn stores_with_a_gap_or_volatile_or_full_width_are_not_merged() {
 fn three_word_stores_are_a_dword_and_a_word() {
     assert_eq!(merged(&[20, 22, 24], EVT::I16, false), vec![(20, 0x0011_0010, EVT::I32), (24, 0x12, EVT::I16)]);
 }
+
+/// The argument stores of a call sequence stay separate: they become pushes,
+/// and `pushw 63; pushw 4; pushw 257` merged into `pushd 63; pushd 262401` grew
+/// queens.bas by 3 bytes and jpeg_fixed.bas by 23 at m16 -Os.
+#[test]
+fn argument_stores_of_a_call_sequence_are_not_merged() {
+    let tli = TargetLowering::x86_16(Features::default(), MVT::I16);
+    let mut dag = dag();
+    let entry = dag.entry_node();
+    let start = dag.get_callseq_start(entry, 4);
+    let chain = SDValue { node: start.node, res: 0 };
+    let mut stores = Vec::new();
+    for (i, offset) in [0i64, 2].into_iter().enumerate() {
+        let ptr = dag.get_global_address(EVT::I16, 0, offset);
+        let value = dag.get_constant(1 + i as u128, EVT::I16);
+        stores.push(dag.get_store(chain, value, ptr, info(EVT::I16, false)));
+    }
+    let root = dag.get_token_factor(&stores);
+    dag.set_root(root);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+    let mut seen = vec![dag.get_root()];
+    let mut widths = Vec::new();
+    while let Some(node) = seen.pop() {
+        match dag.opcode(node) {
+            ISD::TokenFactor => seen.extend((0..dag.node(node).ops.len()).map(|i| dag.operand(node, i))),
+            ISD::Store => {
+                let NodeData::Mem(info) = dag.node(node).data else { panic!("mem") };
+                widths.push(info.mem_vt);
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(widths, vec![EVT::I16, EVT::I16]);
+}

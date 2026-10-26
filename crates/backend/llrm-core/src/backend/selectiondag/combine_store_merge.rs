@@ -7,7 +7,9 @@
 //! promotes), the base of an address is a frame index, a global or one node
 //! plus constant offsets (`BaseIndexOffset::match` without the index
 //! register), and `allowsMemoryAccess` is true for every scalar the target
-//! holds (x86 assumes up to 8 bytes fast). Exit: the load source with the
+//! holds (x86 assumes up to 8 bytes fast), and the argument stores of a call
+//! sequence (chained off `CALLSEQ_START`) are not merged: they are pushes,
+//! and a merged `pushd` is longer at m16. Exit: the load source with the
 //! alias queries, the vectors. Owner w10. Review 2026-11-13.
 //!
 //! # See also
@@ -78,6 +80,13 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let ptr = self.dag.operand(st, 2);
         let (base, here) = self.match_address(ptr);
         let root = self.dag.operand(st, 0);
+        // Deviation: the argument stores of a call sequence become pushes, and
+        // a merged one is a `pushd` with an operand-size prefix and a
+        // 32-bit immediate (`push 63; push 4` grew by a byte at m16
+        // -Os).
+        if self.dag.opcode(root) == ISD::CallSeqStart {
+            return Vec::new();
+        }
         let mut found = Vec::new();
         for user in self.dag.users(root).take(MAX_SEARCH_NODES) {
             let other = SDValue { node: user, res: 0 };
