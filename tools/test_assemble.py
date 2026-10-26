@@ -124,6 +124,16 @@ def test_a_docs_check_that_only_counts_lint_hits_is_not_a_failed_regeneration():
     assert ps.docs_stale_lines(lint) == [] and ps.docs_stale_lines(stale) == ["docs/optimizations/backend/a.md"]
 
 
+def test_a_long_alone_refusal_is_written_whole_to_a_file_the_log_line_names(tmp_path):
+    """#4991's refusal printed three failing tests and cut the third mid-name; the author could not tell which others failed."""
+    why = "unit tests fail alone: " + ", ".join(f"unit llrm-qb::test_{i}_a_long_enough_name_to_need_cutting" for i in range(12))
+    line = ps.refusal_line("4991", why, "9c833bc12abc", tmp_path)
+    assert len(line) < 400
+    path = next(tmp_path.glob("4991-*.txt"))
+    assert path.read_text().strip() == why and str(path) in line and f"{len(why)} chars" in line
+    assert ps.refusal_line("1", "short", "abc", tmp_path) == "1: REFUSED: alone: short"
+
+
 def test_two_prs_adding_a_test_of_one_name_do_not_share_a_batch(tmp_path):
     """#4678 and #4680 added the same test in different places: no conflict, so both joined, and the batch failed 'defined multiple times'."""
     repo = tmp_path / "repo"

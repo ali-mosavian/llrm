@@ -1119,10 +1119,20 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
         by_package.setdefault(package, set()).add(test)
     red_on_base = (on_base or (lambda wanted: _alone_base_red(wanted, base, target)))(by_package)
     new = sorted(f"unit {package}::{test}" for package, tests in by_package.items() for test in tests - {t for p, t in red_on_base if p == package})
-    return [f"unit tests fail alone: {', '.join(new[:5])}"] if new else []
+    return [f"unit tests fail alone: {', '.join(new)}"] if new else []
 
 
 HITS = [0]  # verdicts read from the cache by this process
+
+
+def refusal_line(number: str, why: str, head: str, directory: Path, width: int = 300) -> str:
+    """The runner-log line of a refusal: all of `why` when it fits in `width`, else its start, its length and the file that holds all of it (#4991's list of failing tests was cut mid-name)."""
+    if len(why) <= width:
+        return f"{number}: REFUSED: alone: {why}"
+    directory.mkdir(parents=True, exist_ok=True)
+    full = directory / f"{number}-{head[:9]}.txt"
+    full.write_text(why + "\n")
+    return f"{number}: REFUSED: alone: {why[:width - 80]} ... ({len(why)} chars, all in {full})"
 
 
 def _current_head(number: str) -> str:
@@ -1862,7 +1872,7 @@ def dispatch() -> int:
         with contextlib.redirect_stdout(sys.stderr):
             kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", ALONE_JOBS)), cap=float(os.environ.get("ALONE_CAP", "600")), current=_current_head)
         for number, why in dropped.items():
-            print(f"{number}: REFUSED: alone: {why[:300]}", file=sys.stderr)
+            print(refusal_line(number, why, heads[number], Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-full"), file=sys.stderr)
         print(f"alone: {len(numbers)} PRs, {HITS[0]} cached, {len(numbers) - HITS[0]} checked, {len(dropped)} dropped", file=sys.stderr)
         print("\n".join(kept))
         return 0
