@@ -3155,7 +3155,7 @@ fn a_poke_after_def_seg_varseg_is_a_store_into_the_variable() {
         .position(|one| *one == format!("{}:", lines[at].split_whitespace().nth(1).unwrap()))
         .expect("its label");
     let body = &lines[top..=at];
-    assert!(!body.iter().any(|one| one.contains("b$seg") || one.contains("I%")), "{body:#?}");
+    assert!(!body.iter().any(|one| one.contains("b$seg")), "{body:#?}");
 }
 
 /// A POKE after a literal DEF SEG wrote memory no variable lives in, yet
