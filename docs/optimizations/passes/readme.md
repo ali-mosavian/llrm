@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 196 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 200 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -45,11 +45,13 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_icmp_logic | `foldBooleanAndOr`: an `and` or `or` of two `i1` compares, folded to one compare. | `visit_and` and `visit_or` (the bitwise forms). | [combine_icmp_logic](combine_icmp_logic.md) |
 | combine_loadstore | InstCombine's stores and allocas: the store that cannot matter is erased, the one that cannot execute stores poison; an alloca's count is an array type and a zero-size alloca is one at the top of the entry block. | `combine` (its `visit`). | [combine_loadstore](combine_loadstore.md) |
 | combine_memintrinsics | InstCombine's memory intrinsics: a `memcpy` or `memmove` of 1, 2, 4 or 8 bytes is one integer load and one store. | `combine` (its `visit`, the `Call` opcode). | [combine_memintrinsics](combine_memintrinsics.md) |
+| combine_minmax | InstCombine's min/max intrinsics: the narrowing folds of `InstCombinerImpl::visitCallInst` for `umin`, `umax`, `smin` and `smax` ([InstCombineCalls.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCalls.cpp#L2261)). | `visit_call` (`combine_memintrinsics`). | [combine_minmax](combine_minmax.md) |
 | combine_muldivrem | InstCombine's `visitMul`, `visitUDiv`, `visitSDiv`, `visitURem`, `visitSRem` and the helpers they call, from [`InstCombineMulDivRem.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineMulDivRem.cpp) at d1106deb71cc. | `combine::visit`, once the mul, div and rem slots are flipped. | [combine_muldivrem](combine_muldivrem.md) |
 | combine_negator | `Negator`: sinks a negation into an expression tree when that does not add an instruction. | `combine_addsub::visit_sub`, `combine_muldivrem`. | [combine_negator](combine_negator.md) |
 | combine_or | `InstCombinerImpl::visitOr`: the integer `or` folds. |  | [combine_or](combine_or.md) |
 | combine_pass | The pass: InstCombine as a function pass of the pipeline. | `pipeline` (`combine@N`, in front of the old `fold@N` of each InstCombine | [combine_pass](combine_pass.md) |
 | combine_phi | `foldOpIntoPhi`: an instruction that reads a phi becomes a phi of the instruction applied to each incoming value. | The `visit*` of the families that fold an operation into a phi | [combine_phi](combine_phi.md) |
+| combine_phi_args | `visitPHINode`'s argument folds: a phi of the same operation applied to different values is the operation applied to a phi of those values. | `combine` (its `visit`, the `Phi` opcode). | [combine_phi_args](combine_phi_args.md) |
 | combine_select | `FoldOpIntoSelect`: an instruction that reads a select becomes a select of the instruction applied to each arm. | `foldBinOpIntoSelectOrPhi` and the `visit*` of the families that fold an | [combine_select](combine_select.md) |
 | combine_select_bools | `foldSelectOfBools`: a `select` of `i1` as a logical operation. |  | [combine_select_bools](combine_select_bools.md) |
 | combine_select_ext_const | `foldSelectExtConst`: `select c, (ext x), C` as `ext (select c, x, C')`. |  | [combine_select_ext_const](combine_select_ext_const.md) |
@@ -163,6 +165,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | reassociate_pairs | Reassociate's pair map: how often two operands are combined by the same operation, so that the most popular pair is formed first and CSE finds it. | `crate::reassociate`, `crate::reassociate_inst`. | [reassociate_pairs](reassociate_pairs.md) |
 | reassociate_rank | Reassociate's ranks: how late in the function each value is computed. | `crate::reassociate`. | [reassociate_rank](reassociate_rank.md) |
 | reassociate_tree | Reassociate's expression trees: collect the leaves of a tree of one associative operation with their weights, and write a new leaf list back into the tree's own nodes. | `crate::reassociate` (`ReassociateExpression`) and | [reassociate_tree](reassociate_tree.md) |
+| remidiom | The remainder idiom `x - (x / c) * c` read back as `x % c`, where the target keeps the divide. | After `lsr` and `differences`, in the strength slot | [remidiom](remidiom.md) |
 | rotate | Loop rotation: a loop proven to run at least once is entered at its body, not its test; a loop that is not proven is entered behind a copy of its test (gcc's `-ftree-ch`). | Twice in [`crate::pipeline`](pipeline.md), outside the per-body fixed point. `copy` runs | [rotate](rotate.md) |
 | runtimechecks | Runtime memory checks: code that proves, when a loop is entered, that the groups of pointers it accesses do not overlap. | Called by [`crate::loopversioning`](loopversioning.md); the vectorizer will call it too. | [runtimechecks](runtimechecks.md) |
 | sccp | Sparse conditional constant propagation. |  | [sccp](sccp.md) |

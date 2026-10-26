@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_funnel.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_funnel.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_funnel.rs sha256:7720707806f9abd4f0cd9a9056ee4b658b3e4cf9536174b236dc3c89b85455dd -->
+<!-- src: crates/opt/llrm-transforms/src/combine_funnel.rs sha256:a6670ea1065074aa6ab62b2263c0560634949c20e1f7d31a9199730d8ae36bd1 -->
 
 # combine_funnel
 

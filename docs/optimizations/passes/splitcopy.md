@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/splitcopy.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/splitcopy.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/splitcopy.rs sha256:b27c70ccc4055c441c8acc4bfa4ed7040e61ce9a945cf2e6945f5aa5556b6c79 -->
+<!-- src: crates/opt/llrm-transforms/src/splitcopy.rs sha256:a1132d3b2dbc030cc0b0f8d7952e214e86081dd868c2f44af4b6672d75ea0078 -->
 
 # splitcopy
 

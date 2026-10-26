@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documented, 0 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -103,7 +103,6 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documen
 | peepholeopt | A subtract whose difference nothing reads is a compare. | A machine phase on SSA after MachineSink and ahead of MachineCombiner (the | [peepholeopt](peepholeopt.md) |
 | phiconst | One value for a constant that several edges of a phi carry. | Phase 1 of the machine phases, before `SsaSpill`, so both allocation routes | [phiconst](phiconst.md) |
 | phielim | Takes LIR out of SSA: each phi becomes parallel copies on its incoming edges. | A machine phase after `ssaspill` (spiller route only) and before | [phielim](phielim.md) |
-| pointers | Advances a packed huge pointer by a displacement as arithmetic on its 32-bit form. | Nothing outside the file's own tests: a grep finds no caller. Isel states | [pointers](pointers.md) |
 | postings | An index of where each value is defined, read and required in a body, kept current as the body is rewritten. | [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md), | [postings](postings.md) |
 | postrasink | Moves a register copy, or a spill store, into the one successor that needs it. | A sub-pass of [`crate::backend::peephole`](peephole.md), after `copysink`. Once per | [postrasink](postrasink.md) |
 | precse | The same pure computation made twice, made once: `MachineCSE` before PHI elimination, where a value has one definition. | A machine phase before `machinesink` (`flow::machine_with`), at every -O | [precse](precse.md) |
@@ -116,6 +115,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documen
 | regpressure | Register pressure per pressure set, for the pre-RA scheduler: `RegPressureTracker` of the pin (RegisterPressure.cpp) as `GenericScheduler` asks it of a bottom-up region. |  | [regpressure](regpressure.md) |
 | regthrash | Renames a definition's register so that a copy after it is a copy of a register to itself. | First sub-pass of [`crate::backend::peephole`](peephole.md), gated on a register copy | [regthrash](regthrash.md) |
 | relayout | Lays a function's frame out a second time, with a hole for the spill slots, by moving each frame cell of the first layout. | In `machined_once` (`assemble.rs`), after the first layout is chosen, unless | [relayout](relayout.md) |
+| repbsf | `bsf` gets the `rep` prefix (the TZCNT encoding, which processors without `tzcnt` run as the same `bsf`) unless the function is optimised for size or the instruction's flags are read. |  | [repbsf](repbsf.md) |
 | returnsplit | Gives a return that reloads a spilled constant its own block on the edges that stored the constant, where that lets the frame be set up later. | In `assemble`, ahead of `jumps::duplicated_returns`, at -O1 and above. | [returnsplit](returnsplit.md) |
 | rewriter | `VirtRegRewriter`: the allocation put into the function. | `allocate::RegAlloc`. | [rewriter](rewriter.md) |
 | rmw | Selects a private load, update and store of one cell as a single memory-destination instruction, before register allocation. | During instruction selection, in the combining step of `isel/combined.rs`, | [rmw](rmw.md) |
@@ -127,6 +127,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documen
 | shadow | Which instruction selector runs, and the row each function leaves for `tools/pairs/isel_shadow.py`. | `assemble::staged` (the choice and the dump), `assemble::machined` (the | [shadow](shadow.md) |
 | sharedstores | At -Os, a run of stores of one literal becomes the literal loaded once into a dead register, then register stores. | A sub-pass of [`crate::backend::peephole`](peephole.md), once per body, after | [sharedstores](sharedstores.md) |
 | shrinkwrap | Sets up a procedure's frame and kept registers where they are first needed, not at the entry, and takes them back only on the returns that path reaches. | `wrapped` runs when masm builds a procedure's items, for a procedure that | [shrinkwrap](shrinkwrap.md) |
+| slotcopies | Keeps one frame cell where a value is copied from a cell into a spill cell. | A sub-pass of [`crate::backend::peephole`](peephole.md), after `postrasink`. | [slotcopies](slotcopies.md) |
 | slots | Lets two values share one frame slot when they are never live together, so a frame holds the most that is live at once, not the sum of all spills. | - `crate::backend::spiller`, which shares spill slots by the live range of | [slots](slots.md) |
 | spillplacement | Decides, for each value being split, which edge bundles hold it in a register and which on the stack. | Not a pass: `crate::backend::splitkit` queries it for each value it | [spillplacement](spillplacement.md) |
 | stackusage | How much stack a program may use, as gcc's `-fstack-usage` and `-Wstack-usage` report it. | `elide_checks` is the `stack checks` step of assembly, once per module. | [stackusage](stackusage.md) |
