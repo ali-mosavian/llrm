@@ -36,3 +36,27 @@ fn a_volatile_load_nobody_reads_stays_in_the_chain() {
     let (dag, root) = chain_after_load(true);
     assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::Load);
 }
+
+/// A load that is the DAG root has no users and was queued again through its
+/// own chain forever: `an_extension_of_a_load_is_an_extending_load` and two
+/// more ran 4 h at 300% CPU.
+#[test]
+fn a_load_that_is_the_root_does_not_loop() {
+    let done = std::thread::spawn(|| {
+        let mut dag = dag();
+        let entry = dag.entry_node();
+        let ptr = dag.get_register(EVT::I32, 7);
+        let load = dag.get_load(EVT::I32, entry, ptr, info(1));
+        dag.set_root(load);
+        DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+        dag.opcode(dag.get_root())
+    });
+    for _ in 0..100 {
+        if done.is_finished() {
+            assert_eq!(done.join().unwrap(), ISD::Load);
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    panic!("the combiner is still running after 10 s");
+}

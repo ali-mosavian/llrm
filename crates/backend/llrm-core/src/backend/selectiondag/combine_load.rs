@@ -19,7 +19,12 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         node: SDValue,
     ) -> Option<SDValue> {
         let NodeData::Mem(info) = self.dag.node(node).data else { return None };
-        if info.volatile || self.dag.users(SDValue { node: node.node, res: 0 }).next().is_some() {
+        // The root has no users but is not dead (the pin's `HandleSDNode` holds
+        // it); revisiting it would re-queue it through its own chain.
+        if info.volatile
+            || node.node == self.dag.get_root().node
+            || self.dag.users(SDValue { node: node.node, res: 0 }).next().is_some()
+        {
             return None;
         }
         // "It's not safe to use the two value CombineTo variant here": only
