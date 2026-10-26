@@ -371,16 +371,17 @@ fn test_an_exact_static_subscript_folds_into_a_32_bit_symbolic_address() {
 }
 
 /// A negative subscript leaf, zero-extended, addressed `A%+20[esi+esi]`
-/// 128K past the element.
+/// 128K past the element. The address stays 16 bit; the scaled index may be
+/// computed in a 32-bit `lea` (its low half is the same, and no header copy
+/// reshapes the loop now).
 #[test]
 fn test_a_negative_static_subscript_stays_16_bit() {
     let body = main_listing(
         "NEGATIVE.BAS",
         b"DEFINT A-Z\r\nDIM a(-10 TO 10)\r\nFOR j = 0 TO 99\r\ni = (PEEK(j) AND 7) - 5\r\na(i) = j\r\nNEXT\r\nPRINT a(5)\r\n",
     );
-    // Addresses only: a 32-bit `lea` computing the 16-bit offset is no address.
-    let addressed = body.lines().filter(|line| !line.trim_start().starts_with("lea ")).any(|line| line.contains("[e"));
-    assert!(!addressed, "{body}");
+    let wide: Vec<&str> = body.lines().filter(|line| line.contains("A%") && line.contains("[e")).collect();
+    assert!(wide.is_empty(), "{wide:?}\n{body}");
 }
 
 /// D_SURF SC_FTAKE lost far-array address definitions during secondary folding.
@@ -1064,8 +1065,8 @@ fn test_an_error_statement_is_placed_after_the_hot_path() {
 /// LBOUND(a, 1) compared the rank against 1 before reading the descriptor.
 ///
 /// Every allocated array has a first dimension, so only the allocation
-/// test may branch to the runtime call. Distinct branches: tail
-/// duplication may copy that test, which is no second condition.
+/// test may branch to the runtime call: one branch (no header copy under
+/// LLVM's order duplicates it; a rank check would be a second).
 #[test]
 fn test_the_first_dimension_is_not_rank_checked() {
     let procedure = sum_three(true);
@@ -1076,7 +1077,7 @@ fn test_the_first_dimension_is_not_rank_checked() {
         .filter(|(_, _, label)| calls.contains(label))
         .map(|(start, end, _)| procedure[*start..*end].trim())
         .collect();
-    assert!((1..=2).contains(&branches.len()), "{branches:?}");
+    assert_eq!(branches.len(), 1, "{branches:?}");
 }
 
 /// Without -fsanitize=bounds LBOUND trusts the descriptor: no B$LBND/B$UBND
