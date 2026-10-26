@@ -145,6 +145,16 @@ int qb_host_program(int argc, char **argv)
     gd_palette_mix(5, 63, 0, 0);
     CHECK(frame_matches());
 
+    /* SCREEN's pages: the host had no gd_set_pages, so a runtime that called it did not link. Drawing goes to the
+       active page and only the visible one is on the screen. */
+    gfx_screen(7);
+    CHECK(gd_set_pages(1, 0) && !gd_set_pages(8, 0));
+    gd_plot(3, 4, 9, 0);
+    CHECK(host_pixels()[4 * 320 + 3] == 0 && frame_matches());
+    CHECK(gd_set_pages(1, 1));
+    CHECK(host_pixels()[4 * 320 + 3] == 9 && frame_matches());
+    CHECK(gd_set_pages(0, 0) && host_pixels()[4 * 320 + 3] == 0);
+
     /* polling for a key or the clock asks for no frame: a loop that polled and drew in step with the presenter showed
        the same phase in every frame (NIBBLES' sparkles stood still on the Mac) */
     asked = sdl_sync_requests();

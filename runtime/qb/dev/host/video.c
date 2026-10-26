@@ -35,7 +35,12 @@ _Atomic uint8_t host_dirty[HOST_MAX_HEIGHT];
 /* A weak no-op, not a weak undefined reference: Mach-O's linker rejects the latter. */
 __attribute__((weak)) void host_video_mode_changed(void) {}
 
-static uint8_t pixels[HOST_MAX_WIDTH * HOST_MAX_HEIGHT];
+/* The pages SCREEN can name (mode 0Dh has eight): drawing goes to `pixels`, the page being drawn, and the presenter reads `shown`. */
+enum { MAX_PAGES = 8 };
+static uint8_t page_store[MAX_PAGES][HOST_MAX_WIDTH * HOST_MAX_HEIGHT];
+static uint8_t *pixels = page_store[0];
+static _Atomic(const uint8_t *) shown = page_store[0];
+static unsigned page_count = 1;
 static unsigned width = HOST_TEXT_COLUMNS * HOST_CELL_WIDTH, height = HOST_TEXT_ROWS * HOST_CELL_HEIGHT;
 static unsigned mode = HOST_MODE_TEXT, kind = KIND_TEXT, serial;
 static unsigned pixel_mask = 0x0F;
@@ -101,7 +106,7 @@ unsigned host_mode(void)
 
 const uint8_t *host_pixels(void)
 {
-    return pixels;
+    return atomic_load_explicit(&shown, memory_order_acquire);
 }
 
 unsigned host_mode_serial(void)
@@ -227,7 +232,10 @@ int gd_set_mode(unsigned requested)
     height = new_height;
     pixel_mask = kind == KIND_LINEAR ? 0xFF : kind == KIND_PACKED4 ? 3 : kind == KIND_PACKED2 ? 1 : 0x0F;
     reset_palette();
-    memset(pixels, 0, sizeof pixels);
+    memset(page_store, 0, sizeof page_store);
+    page_count = number == MODE_320 ? 8 : number == MODE_640 ? 4 : number == MODE_350 ? 2 : 1;
+    pixels = page_store[0];
+    atomic_store_explicit(&shown, page_store[0], memory_order_release);
     if (kind == KIND_TEXT) {
         for (row = 0; row < HOST_TEXT_ROWS; row++)
             for (column = 0; column < HOST_TEXT_COLUMNS; column++)
@@ -239,6 +247,18 @@ int gd_set_mode(unsigned requested)
     touch_all();
     host_state_unlock();
     host_video_mode_changed();
+    return 1;
+}
+
+int gd_set_pages(unsigned active, unsigned visible)
+{
+    if (active >= page_count || visible >= page_count)
+        return 0;
+    host_state_lock();
+    pixels = page_store[active];
+    atomic_store_explicit(&shown, page_store[visible], memory_order_release);
+    touch_all();
+    host_state_unlock();
     return 1;
 }
 
@@ -594,6 +614,6 @@ int host_dump_ppm(const char *path)
     host_colors(rgb);
     fprintf(file, "P6\n%u %u\n255\n", width, height);
     for (at = 0; at < width * height; at++)
-        fwrite(rgb[pixels[at]], 1, 3, file);
+        fwrite(rgb[host_pixels()[at]], 1, 3, file);
     return fclose(file) ? -1 : 0;
 }
