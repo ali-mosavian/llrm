@@ -1056,7 +1056,7 @@ def own_test_targets(files: list[str], root: Path) -> set[str]:
     return {Path(f).stem for f in files if f.startswith("tests/") and f.endswith(".rs") and "/" not in f[len("tests/") :] and (root / f).exists()}
 
 
-def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, scanners=None, differs=None, target: Path | None = None, units=None, on_base=None) -> list[str]:
+def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, scanners=None, differs=None, target: Path | None = None, units=None, on_base=None, docs=None, docs_on_base=None) -> list[str]:
     """Why the PR at `head`, alone on `base` (a scratch checkout at `base` in `cwd`), fails the cheap checks a batch would fail on: the merge, the workspace build, the
     always-on scanners (fmt differences only warn: the squash formats every PR). The 15:34 batch spent 62% of its time on reruns of PRs that failed these."""
     smoke = parity_smoke_module()
@@ -1089,6 +1089,11 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
     red = sorted((scanners or default_scanners)(files))
     if red:
         return [f"scanner red alone: {', '.join(red[:5])}{smoke.causes_of(red)}"]
+    # the generated pages the PR leaves out of date, less what the base already has stale: #4972 landed with 411 stale pages because LAND_FAST skips the precheck and nothing else ran the docs check
+    if stale := (docs or docs_stale)(cwd):
+        new = sorted(stale - (docs_on_base or (lambda: _alone_base_docs(base, target)))())
+        if new:
+            return [f"generated docs out of date (tools/docsbuild/build.py --sync): {', '.join(new[:5])}"]
     # the unit tests of the crates the PR changes, less what the base fails: round 3 died on llrm-nib::test_pipeline::... and no PR was blamed
     def lib_failures(changed: list[str]) -> set[str]:
         packages, graph = smoke.workspace_graph(cwd)
@@ -1156,6 +1161,22 @@ def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=
         thread.join(None if deadline is None else max(0.0, deadline - time.monotonic()))
     kept = [number for number in numbers if not verdicts.get(number)]  # unchecked at the cap: kept
     return kept, {number: verdicts[number] for number in numbers if verdicts.get(number)}
+
+
+def docs_stale(root: Path) -> set[str]:
+    """The generated pages `tools/docsbuild/build.py --check` reports out of date in `root` (`docsbuild --check failed` when it fails without naming one)."""
+    if not (root / "tools/docsbuild/build.py").is_file():
+        return set()
+    done = subprocess.run([sys.executable, "tools/docsbuild/build.py", "--check"], cwd=root, capture_output=True, text=True, errors="replace")
+    if not done.returncode:
+        return set()
+    return {line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip().startswith("docs/")} or {"docsbuild --check failed"}
+
+
+def _alone_base_docs(base: str, target: Path | None) -> set[str]:
+    work = (target or Path(tempfile.mkdtemp(prefix="alone-base-"))) / "base"
+    _alone_checkout(work, base)
+    return docs_stale(work)
 
 
 def _alone_base_red(by_package: dict[str, set[str]], base: str, target: Path | None) -> set[tuple[str, str]]:

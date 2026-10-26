@@ -573,6 +573,13 @@ NIGHTLY_ONLY = {
     "turbo": "a Turbo Debugger session over a program: 138 s and needs the debugger's DOS image",
     "cv4": "30 s of CodeView debug-info checks",
     "run": "every tests/run program: the tests/run groups run it on the PRs that matter",
+    "qb_dirty": "its ThreadSanitizer test maps 35 TB of shadow, which testcap's 16 GB RLIMIT_DATA refuses under the runner's slots (green without them): per PR it would block every runtime change",
+}
+# Targets that build the runtime's C sources with cc and import no crate: run on a PR that changes runtime/ or tests/qbhost/.
+RUNTIME_C = {
+    "posix_os": "the POSIX os layer",
+    "qb_dev_interface": "the device interface headers",
+    "qb_sdl": "the SDL device",
 }
 # Targets that read files, not crates: scans of sources and docs, run on every PR (all together about 2 s).
 SCANNERS = {
@@ -629,7 +636,7 @@ def integration_map(
 
 def unmapped_targets(mapping: dict[str, set[str]]) -> list[str]:
     """The targets with no crate behind them that SCANNERS and NIGHTLY_ONLY do not name."""
-    return sorted(name for name, reach in mapping.items() if not reach and name not in SCANNERS and name not in NIGHTLY_ONLY)
+    return sorted(name for name, reach in mapping.items() if not reach and name not in SCANNERS and name not in NIGHTLY_ONLY and name not in RUNTIME_C)
 
 
 def integration_targets_for(
@@ -640,6 +647,8 @@ def integration_targets_for(
     """The root integration targets a PR runs: those whose crates include a touched one, every scanner, and a target whose own tests/NAME.rs changed; never NIGHTLY_ONLY."""
     own = {Path(path).stem for path in files if path.startswith("tests/") and path.endswith(".rs") and "/" not in path[len("tests/"):]}
     chosen = {name for name, reach in mapping.items() if reach & touched} | set(SCANNERS) | own
+    if any(path.startswith(("runtime/", "tests/qbhost/")) for path in files):
+        chosen |= set(RUNTIME_C)
     return sorted(name for name in chosen if name in mapping and name not in NIGHTLY_ONLY)
 
 
