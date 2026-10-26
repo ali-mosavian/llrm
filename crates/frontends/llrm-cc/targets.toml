@@ -2,6 +2,7 @@
 # triple. `clang` are the arguments the pinned clang gets (triple, headers, macros), `llc` the ones llrm-llc gets.
 # `datalayout` is what clang must print for the triple: a mismatch is refused before llrm sees the IR.
 # `llc_program` (default llrm-llc) and `llc_level` (default true: it takes -O<n>) say how the backend is run.
+# `clang_env` names an environment variable holding a clang for the target (m16's carries the i8086 patch).
 # `link` is the recipe for objects to an executable; `{objects}` and `{flags}` stand for lists, `{output}` for a path, `{root}` for the llrm checkout.
 
 [x86_64-linux]
@@ -38,3 +39,22 @@ llc_level = false
 object = "elf"
 link = ["{root}/tools/arm64_link.sh", "{output}", "{objects}"]
 run = ["qemu-aarch64"]
+
+# Real-mode DOS, Borland medium model: far code (function pointers and `P1` functions), near data, byte-packed
+# structs. `far`, `huge`, `near` are Borland's keywords on clang's address spaces (toolchain/clang/patches).
+# Needs the patched clang: tools/build-clang-m16.sh, then LLRM_CLANG_M16=<its path>.
+[x86_16-dos]
+triple = "i386-unknown-unknown-code16"
+datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2"
+clang_env = "LLRM_CLANG_M16"
+clang = [
+  "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-fno-pic",
+  "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1",
+  "-Dnear=", "-D__near=", "-D_near=", "-Dfar=__attribute__((address_space(1)))",
+  "-D__far=__attribute__((address_space(1)))", "-D_far=__attribute__((address_space(1)))",
+  "-Dhuge=__attribute__((address_space(3)))", "-D__huge=__attribute__((address_space(3)))",
+]
+llc = ["-mabi=cdecl"]
+object = "omf"
+link = ["python3", "-I", "{root}/tools/dosbatch/link_objects.py", "x86-m16", "{output}", "{objects}"]
+run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m16"]

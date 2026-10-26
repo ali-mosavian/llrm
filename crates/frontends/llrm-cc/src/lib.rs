@@ -67,6 +67,9 @@ pub struct Target {
     /// its own.
     #[serde(default = "default_llc")]
     pub llc_program: String,
+    /// An environment variable naming a clang for this target (a patched
+    /// build), ahead of the pinned one.
+    pub clang_env: Option<String>,
     /// Whether the backend takes `-O<n>`.
     #[serde(default = "yes")]
     pub llc_level: bool,
@@ -311,8 +314,9 @@ pub fn link_command(
     Ok(command)
 }
 
-fn clang_path() -> PathBuf {
-    std::env::var_os("LLRM_PIN_CLANG")
+fn clang_path(target: &Target) -> PathBuf {
+    let own = target.clang_env.as_deref().and_then(std::env::var_os);
+    own.or_else(|| std::env::var_os("LLRM_PIN_CLANG"))
         .map(PathBuf::from)
         .unwrap_or_else(
             || PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join("scratch/llvm-build/bin/clang"),
@@ -365,7 +369,7 @@ fn build(
     build: &Build,
     scratch: &Path,
 ) -> Result<(), i32> {
-    let clang = clang_path();
+    let clang = clang_path(target);
     let fail = |why: String| {
         eprintln!("llrm-cc: {why}");
         1
@@ -452,7 +456,7 @@ pub fn run_main(argv: &[String]) -> i32 {
             eprintln!("llrm-cc: {why}");
             1
         })?;
-        check_pin(&clang_path()).map_err(|why| {
+        check_pin(&clang_path(target)).map_err(|why| {
             eprintln!("llrm-cc: {why}");
             1
         })?;
@@ -460,7 +464,7 @@ pub fn run_main(argv: &[String]) -> i32 {
             Job::Passthrough(args) => {
                 let mut all = target.clang.clone();
                 all.extend(args);
-                run(&clang_path(), &all)
+                run(&clang_path(target), &all)
             }
             Job::Build(one) => {
                 let scratch = std::env::temp_dir().join(format!("llrm-cc-{}", std::process::id()));
