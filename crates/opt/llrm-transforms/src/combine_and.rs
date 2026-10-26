@@ -10,8 +10,7 @@
 //!
 //! DEVIATE 1: no vectors (`foldVectorBinop`).
 //!
-//! DEVIATE 2: `SimplifyDemandedInstructionBits` (`combine_demanded`),
-//! `foldComplexAndOrPatterns` are the next strip or another family's.
+//! DEVIATE 2: `foldComplexAndOrPatterns` is the next strip or another family's.
 //!
 //! DEVIATE 3: of the shifted-power-of-two folds (:2688-:2740) only the
 //! single-shift one is translated; the two double-shift ones follow.
@@ -418,7 +417,12 @@ pub fn visit_and(
     if !matches!(found, Visit::None) {
         return found;
     }
-    // DEVIATE 2: SimplifyDemandedInstructionBits.
+    // See if we can simplify any instructions used by the instruction whose
+    // sole purpose is to compute bits we don't care about.
+    let found = c.simplify_demanded_instruction_bits(inst);
+    if !matches!(found, Visit::None) {
+        return found;
+    }
     let (op0, op1, _) = parts(c, inst);
     // Do this before using distributive laws to catch simple and/or/not
     // patterns.

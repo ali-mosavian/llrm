@@ -6,16 +6,20 @@
 //! Refusal is fatal: `raise` answers the first function it cannot express,
 //! and why.
 
+pub mod abi;
 pub mod access;
 pub mod addresses;
+pub mod analysis;
 pub mod arrays;
 pub mod cells;
 pub mod copies;
 pub mod division;
 pub mod emit;
 pub mod floats;
+pub mod frontends;
 pub mod longs;
 pub mod machine;
+pub mod model;
 pub mod objects;
 pub mod pairs;
 pub mod runtime;
@@ -25,6 +29,8 @@ pub mod tags;
 use std::collections::BTreeMap;
 
 pub use llrm_hir::mir::RUNTIME;
+pub use llrm_omf as objectfile;
+pub use llrm_support as support;
 
 /// The selector-alone address space of `spaces`: BC's objects are real mode's,
 /// which has one.
@@ -36,13 +42,13 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::program::SegmentLayout;
 use llrm_mir::{GlobalId, GlobalKind, Linkage, Module, Type};
 use llrm_target::machine::Machine;
-use llrm_x86_bcmachine::frontends::bc::blocks::has_header;
-use llrm_x86_bcmachine::frontends::bc::extent::BodyKind;
-use llrm_x86_bcmachine::objectfile::module::{self as found_module, Family};
-use llrm_x86_bcmachine::objectfile::omf;
 
 use crate::emit::Unit;
+use crate::frontends::bc::blocks::has_header;
+use crate::frontends::bc::extent::BodyKind;
 use crate::machine::{Answer, Facts, function_name};
+use crate::objectfile::module::{self as found_module, Family};
+use crate::objectfile::omf;
 use crate::objects::{Carving, Objects};
 
 /// A function the raise cannot express, and why. `<module>` names one

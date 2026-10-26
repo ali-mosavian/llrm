@@ -11,9 +11,9 @@
 
 use iced_x86::Register;
 use llrm_mir::CastOp;
-use llrm_x86_bcmachine::model::ir::nodes::Node;
 
 use crate::emit::{Emit, Emitter, Var};
+use crate::model::ir::nodes::Node;
 use crate::sites::Recognizer;
 
 pub const ADDRESS: &str = "B$HARY";

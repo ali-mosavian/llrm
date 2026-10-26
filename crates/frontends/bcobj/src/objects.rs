@@ -14,12 +14,12 @@ use llrm_mir::program::SegmentLayout;
 use llrm_mir::{
     CastOp, Constant, ConstantExpr, ConstantId, ConstantKind, GlobalId, GlobalVariable, Linkage, Module, Type, TypeId,
 };
-use llrm_x86_bcmachine::model::ir::Loc;
-use llrm_x86_bcmachine::model::ir::nodes::Node;
-use llrm_x86_bcmachine::objectfile::module::{self, Space};
-use llrm_x86_bcmachine::objectfile::{cvinfo, omf};
 
 use crate::machine::Facts;
+use crate::model::ir::Loc;
+use crate::model::ir::nodes::Node;
+use crate::objectfile::module::{self, Space};
+use crate::objectfile::{cvinfo, omf};
 
 /// What DGROUP is carved by: the program's segment layout -- DGROUP's
 /// segments, the COMMON ones other modules share, the code segment, whether

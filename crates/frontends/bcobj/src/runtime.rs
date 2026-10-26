@@ -14,13 +14,13 @@ use std::collections::BTreeMap;
 use iced_x86::Register;
 use llrm_mir::{Attribute, ConstantId, GlobalId, Linkage, Module, Type, TypeId};
 use llrm_qbruntime::{self as runtime, Contract, Control, Memory};
-use llrm_x86_bcmachine::model::ir::nodes::{Node, span};
-use llrm_x86_bcmachine::support::hash::IndexMap;
 
 use crate::RUNTIME;
 pub use crate::machine::{Answer, Interface};
 use crate::machine::{FLAGS, FRAME_ENTRY, FRAME_EXIT, Facts, Registers, TRACKED, Word, Words, from_contract};
+use crate::model::ir::nodes::{Node, span};
 use crate::sites;
+use crate::support::hash::IndexMap;
 
 /// A callee, declared.
 #[derive(Clone, Debug)]

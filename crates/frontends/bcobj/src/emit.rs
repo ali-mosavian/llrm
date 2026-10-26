@@ -29,21 +29,21 @@ use llrm_mir::{
     Operand, Position, Type, TypeId, ValueId,
 };
 use llrm_support::hash::HashMap;
-use llrm_x86_bcmachine::analysis::flags::{self as flagged, Flag};
-use llrm_x86_bcmachine::frontends::bc::blocks::{self, Block, Ends};
-use llrm_x86_bcmachine::frontends::bc::declen::Insn;
-use llrm_x86_bcmachine::frontends::bc::extent::BodyKind;
-use llrm_x86_bcmachine::model::ir::nodes::{Node, span};
-use llrm_x86_bcmachine::model::ir::{Effects, Imm, Loc, Operation, Reg, Semantics};
-use llrm_x86_bcmachine::objectfile::module::{Addr, Space};
-use llrm_x86_bcmachine::support::hash::IndexMap;
 
+use crate::analysis::flags::{self as flagged, Flag};
+use crate::frontends::bc::blocks::{self, Block, Ends};
+use crate::frontends::bc::declen::Insn;
+use crate::frontends::bc::extent::BodyKind;
 use crate::machine::{
     Answer, BodyFacts, FRAME_ENTRY, FRAME_EXIT, Facts, Interface, TRACKED, never_returns, restore_pair, tracked,
 };
+use crate::model::ir::nodes::{Node, span};
+use crate::model::ir::{Effects, Imm, Loc, Operation, Reg, Semantics};
+use crate::objectfile::module::{Addr, Space};
 use crate::objects::Objects;
 use crate::runtime::Callees;
 use crate::sites;
+use crate::support::hash::IndexMap;
 
 mod handling;
 pub use handling::owns;
@@ -2151,7 +2151,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         let size = self.constant(size).ok_or("a frame of variable size")?;
         // VBDOS's B$ENRA takes in BX the string temporaries it gives the
         // frame; QB 4.5's and PDS's code sets no BX for it.
-        if self.unit.facts.family() == llrm_x86_bcmachine::objectfile::module::Family::Vbdos {
+        if self.unit.facts.family() == crate::objectfile::module::Family::Vbdos {
             let temporaries = self.register(Register::BX)?;
             if self.constant(temporaries) != Some(0) {
                 return Err(format!("{FRAME_ENTRY} with string temporaries"));

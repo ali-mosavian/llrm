@@ -6,12 +6,12 @@
 
 use iced_x86::Register;
 use llrm_mir::{BinaryOp, CastOp, IntPredicate, Opcode, Operand, ValueDef};
-use llrm_x86_bcmachine::analysis::flags::Flag;
-use llrm_x86_bcmachine::frontends::bc::declen::Insn;
-use llrm_x86_bcmachine::model::ir::nodes::{Node, span};
-use llrm_x86_bcmachine::objectfile::module::{Addr, Space};
 
+use crate::analysis::flags::Flag;
 use crate::emit::{Bit, Desc, Emit, Emitter, Kind};
+use crate::frontends::bc::declen::Insn;
+use crate::model::ir::nodes::{Node, span};
+use crate::objectfile::module::{Addr, Space};
 use crate::pairs::{Pair, Shape, Source};
 use crate::sites::Recognizer;
 
