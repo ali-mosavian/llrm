@@ -88,6 +88,10 @@ fn smoke(sanitize: Option<&str>) {
     }
     build.arg("-lm").arg("-o").arg(&out);
     let built = build.output().expect("cc runs");
+    if sanitize.is_some() && String::from_utf8_lossy(&built.stderr).contains("tsan") {
+        eprintln!("skipped: this compiler has no thread sanitizer runtime");
+        return;
+    }
     assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
     let done = Command::new(&out)
         .env("TSAN_OPTIONS", "halt_on_error=1")
@@ -97,6 +101,11 @@ fn smoke(sanitize: Option<&str>) {
         .expect("the program runs");
     std::fs::remove_file(&out).ok();
     let printed = String::from_utf8_lossy(&done.stdout).into_owned();
+    // A kernel with high ASLR entropy leaves the sanitizer no shadow memory: it never ran the program.
+    if sanitize.is_some() && String::from_utf8_lossy(&done.stderr).contains("ThreadSanitizer can not mmap") {
+        eprintln!("skipped: ThreadSanitizer cannot map its shadow memory on this kernel (vm.mmap_rnd_bits)");
+        return;
+    }
     assert!(done.status.success(), "{printed}{}", String::from_utf8_lossy(&done.stderr));
     assert_eq!(printed.trim(), "ok");
 }
