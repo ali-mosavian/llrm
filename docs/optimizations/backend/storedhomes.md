@@ -36,5 +36,4 @@ no LIR of their own. Read the spiller's `ISEL_DUMP=1` output (see
 
 ## Used by
 `crate::backend::spiller` and [`crate::backend::floatassign`](floatassign.md) (`held`);
-[`crate::backend::floatfold`](floatfold.md) and [`crate::backend::pressuresink`](pressuresink.md)
-(`may_write`); [`crate::backend::postrasink`](postrasink.md) (`apart`).
+[`crate::backend::floatfold`](floatfold.md) (`may_write`); [`crate::backend::postrasink`](postrasink.md) (`apart`).

@@ -13,7 +13,7 @@ use llrm_target::CostModel;
 use llrm_target::machine::Machine;
 
 /// A Linux user program: flat, no ports.
-pub const LINUX64: &str = include_str!("machines/linux64.toml");
+pub const LINUX64: &str = include_str!("../../../../machine/platform/linux/flat64.toml");
 
 /// The processors flat code is priced for: the columns of `timings.times`.
 pub static CPUS: LazyLock<Vec<&'static str>> = LazyLock::new(|| TIMINGS.cpus());

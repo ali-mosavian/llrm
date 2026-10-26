@@ -61,7 +61,6 @@ const UNOPTIMIZED: &[&str] = &[
     "LoopSlots",
     "Scheduler",
     "Coalescer",
-    "PressureSink",
     "MachineScheduler",
     "MachineSink",
     "PeepholeOptimizer",
@@ -98,7 +97,6 @@ const SLOTS: &[(&str, &str)] = &[
     ("PeepholeOptimizer", "peepholeopt@4"),
     ("MachineCombiner", "combiner@4"),
     ("LiveRangeShrink", "liverangeshrink@4"),
-    ("PressureSink", "pressuresink@5"),
     ("MachineScheduler", "machinesched@5"),
     ("FixupSetCC", "fixupsetcc@5"),
     ("CallFrameOpt", "callframe@5"),
@@ -211,11 +209,6 @@ pub fn machine_with<'a>(
         // (X86FlagsCopyLowering, every level).
         Box::new(crate::backend::flagscopy::FlagsCopy),
         Box::new(phielim::PhiElimination),
-        // Before any value is placed: a load made where its reader is.
-        Box::new(crate::backend::pressuresink::PressureSink {
-            segments: segments.clone(),
-            classes: Rc::clone(classes),
-        }),
         // Before any value is placed: the pin's pre-RA scheduler, bottom-up by
         // pressure.
         Box::new(crate::backend::machinesched::MachineScheduler {

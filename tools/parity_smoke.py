@@ -579,6 +579,12 @@ RUNTIME_C = {
     "posix_os": "the POSIX os layer",
     "qb_dev_interface": "the device interface headers",
     "qb_sdl": "the SDL device",
+}
+# Targets that build the runtime's C sources with cc and import no crate: run on a PR that changes runtime/ or tests/qbhost/.
+RUNTIME_C = {
+    "posix_os": "the POSIX os layer",
+    "qb_dev_interface": "the device interface headers",
+    "qb_sdl": "the SDL device",
     "qb_dirty": "the dirty-line protocol under ThreadSanitizer (its child lifts testcap's soft data limit)",
 }
 # Targets that read files, not crates: scans of sources and docs, run on every PR (all together about 2 s).

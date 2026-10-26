@@ -43,7 +43,7 @@ class where its members agree. A member with a class of its own keeps it.
 coalescer has not merged: the two sides of a phi edge's copy also join, and
 address classes are read through webs. `classes_given` takes intervals and
 masks a caller already has. `confining_uses` lists each confining read
-(`Use`), for the pressure sink. `Scan` keeps per-value counts of what
+(`Use`), for `constrain`. `Scan` keeps per-value counts of what
 instructions say, so a rewrite takes the counts of the instructions it lost
 and gained and recomputes only the values they name.
 
@@ -85,15 +85,13 @@ From unit test `test_a_segment_only_a_phi_reads_has_the_class_of_its_web` in
 sets.
 
 ## Runs
-Not a pass: queried on demand, by `coalesce`, `constrain`, `allocate` and
-the pressure sink, at every -O level. `LLRM_DEBUG=regclass` also checks
+Not a pass: queried on demand, by `coalesce`, `constrain`, `allocate`, at every -O level. `LLRM_DEBUG=regclass` also checks
 each body after the phases from `ssaspill` to `coalesce`.
 
 ## Provides
 One answer to "which registers may this value be in", owned here (#441).
 Read by `crate::backend::ssaspill`, [`crate::backend::allocate`](allocate.md),
-[`crate::backend::coalesce`](coalesce.md), [`crate::backend::constrain`](constrain.md),
-[`crate::backend::pressuresink`](pressuresink.md) and `target.rs`.
+[`crate::backend::coalesce`](coalesce.md), [`crate::backend::constrain`](constrain.md) and `target.rs`.
 
 ## Needs
 The target's register sets ([`crate::backend::classes`](classes.md),
