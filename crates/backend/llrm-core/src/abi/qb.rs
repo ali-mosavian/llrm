@@ -99,6 +99,8 @@ static _AUDITED_GRAPHICS_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(||
         ("B$CIRC", 6),
         ("B$LINE", 6),
         ("B$PAIN", 4),
+        // paint.asm: parmSD sdTile, parmW Border, parmSD sdBkgd (-1 for none).
+        ("B$PNTC", 6),
         ("B$PSTC", 2),
         // grpoint.asm: `void pascal B$PSET()` and B$PRST, no parameters.
         ("B$PSET", 0),
