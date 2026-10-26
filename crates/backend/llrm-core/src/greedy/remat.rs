@@ -15,7 +15,8 @@
 //! DEVIATE D-I (exit: an invariant-load flag on the instruction): the pin takes
 //! a load when its memory operand is a dereferenceable invariant load
 //! (`isLoadFromInvariantOrConstantMemory`); llrm proves it per live range
-//! (`spiller::_stable_loads_by`), so the load is passed in as a fact.
+//! (`crate::backend::bodyfacts::_stable_loads_by`), so the load is passed in as
+//! a fact.
 //!
 //! DEVIATE R1 (no number): a literal read wider than the move that makes it is
 //! not made again, and a use inside a parallel copy that cannot take a literal
@@ -59,6 +60,13 @@ pub fn is_trivially_re_materializable(
         // `MOV32ri`: a literal and nothing else.
         (Operation::Move, Some("mov"), [Loc::Imm(imm)]) => def.uses.is_empty() && into.width == imm.width,
         // `LEA32r` of a frame index or a global, no register in it.
+        // `LEA32r` of registers: the
+        // generic `isReallyTriviallyReMaterializable` takes a virtual-register
+        // use; `allUsesAvailableAt` asks at the use whether the registers still
+        // hold.
+        (Operation::Address, Some("lea"), [Loc::Mem(cell)]) if !def.uses.is_empty() => {
+            into.width == 4 && cell.width == 4 && def.spread.is_empty() && !def.volatile
+        }
         (Operation::Address, Some("lea"), [source]) => {
             let (addr, through, index) = match source {
                 Loc::Address(a) => (a.addr, a.through, a.index_through),
@@ -87,6 +95,76 @@ pub fn is_trivially_re_materializable(
         }
         _ => false,
     }
+}
+
+/// The loads of an incoming stack argument that nothing in `body` writes or
+/// takes the address of. X86 lowers a stack argument to an immutable fixed
+/// stack object, and `isLoadFromInvariantOrConstantMemory` takes a load of one
+/// (`MachineFrameInfo::isImmutableObjectIndex`): the pin's own rule, which
+/// needs no per-live-range proof. Incoming arguments are the frame cells above
+/// the frame pointer.
+pub fn argument_loads(body: &LirBody) -> BTreeSet<u32> {
+    let incoming = |cell: &crate::model::ir::Mem| {
+        cell.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0)
+            && cell.base.is_none()
+            && cell.index.is_none()
+    };
+    let mut written: Vec<(i64, i64)> = Vec::new();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        let Some(what) = one.what.as_ref() else { continue };
+        for place in what.dests.iter().chain(&what.sources) {
+            let span = |addr: crate::model::ir::Addr, width: u32| (addr.disp, addr.disp + i64::from(width));
+            match place {
+                // Its address is taken: any callee may write it.
+                Loc::Address(a) if a.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0) => {
+                    return BTreeSet::new();
+                }
+                Loc::Imm(imm) if imm.address.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0) => {
+                    return BTreeSet::new();
+                }
+                _ => {}
+            }
+            if what.op == Operation::Address {
+                if let Loc::Mem(cell) = place {
+                    if cell.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0) {
+                        return BTreeSet::new();
+                    }
+                }
+            }
+            if let Loc::Mem(cell) = place {
+                let is_dest = what.dests.iter().any(|d| matches!(d, Loc::Mem(c) if c == cell));
+                if is_dest && cell.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0) {
+                    written.push(span(cell.addr.expect("an address"), cell.width));
+                }
+            }
+        }
+    }
+    let mut definitions: IndexMap<u32, usize> = IndexMap::default();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        for value in &one.defines {
+            *definitions.entry(*value).or_default() += 1;
+        }
+    }
+    body.blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter_map(|one| {
+            let what = one.what.as_ref()?;
+            let ([Loc::Held(into)], [Loc::Mem(cell)]) = (what.dests.as_slice(), what.sources.as_slice()) else {
+                return None;
+            };
+            let addr = cell.addr?;
+            let (from, to) = (addr.disp, addr.disp + i64::from(cell.width));
+            (what.op == Operation::Move
+                && what.name.as_deref() == Some("mov")
+                && incoming(cell)
+                && into.width == cell.width
+                && one.defines == [into.value]
+                && definitions.get(&into.value) == Some(&1)
+                && !written.iter().any(|(start, end)| *start < to && from < *end))
+            .then_some(into.value)
+        })
+        .collect()
 }
 
 /// The values of `body` with one definition that
@@ -184,7 +262,7 @@ mod tests {
         name: &str,
     ) -> Insn {
         let what = Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests: vec![Loc::Held(Held { value: 1, width: 4 })],
             sources,
             ..Semantics::new(op)
@@ -205,6 +283,22 @@ mod tests {
         assert!(is_trivially_re_materializable(&load, true));
     }
 
+    /// queens `_place`: `lea t, [row+1]` was spilled and reloaded across the
+    /// call, because only a `lea` that reads no register was made again; the
+    /// pin makes it again where `row` still holds (`allUsesAvailableAt`).
+    #[test]
+    fn test_a_lea_of_a_register_is_made_again() {
+        let cell = Mem { base: Some(Held { value: 2, width: 4 }), offset: 1, ..Mem::new(None, 4) };
+        let what = Semantics {
+            name: Some("lea".into()),
+            dests: vec![Loc::Held(Held { value: 1, width: 4 })],
+            sources: vec![Loc::Mem(cell)],
+            ..Semantics::new(Operation::Address)
+        };
+        let lea = Insn::new(0, None, Some(what), vec![1], vec![2]);
+        assert!(is_trivially_re_materializable(&lea, false));
+    }
+
     /// `values` leaves out a literal read wider than the move that makes it
     /// (DEVIATE R1) and takes the one read at its width.
     #[test]
@@ -222,5 +316,72 @@ mod tests {
             Default::default(),
         );
         assert_eq!(values(&body, &BTreeSet::new()), BTreeSet::from([1]));
+    }
+
+    fn one_block(insns: Vec<Arc<Insn>>) -> LirBody {
+        LirBody::new(
+            "args",
+            0,
+            vec![crate::model::lir::Block::from(crate::model::lir::LirBlock::new(0, insns))],
+            Default::default(),
+            Default::default(),
+        )
+    }
+
+    fn move_of(
+        at: i64,
+        dest: Loc,
+        source: Loc,
+        defines: Vec<u32>,
+    ) -> Arc<Insn> {
+        let what = crate::model::ir::Semantics {
+            name: Some("mov".into()),
+            dests: vec![dest],
+            sources: vec![source],
+            ..crate::model::ir::Semantics::new(Operation::Move)
+        };
+        Arc::new(Insn::new(at, None, Some(what), defines, vec![]))
+    }
+
+    fn argument(disp: i64) -> Loc {
+        Loc::Mem(Mem::new(Some(crate::model::ir::Addr::new(Space::Frame, disp)), 2))
+    }
+
+    fn word(value: u32) -> Loc {
+        Loc::Held(Held { value, width: 2 })
+    }
+
+    /// The pin takes a load of an incoming stack argument as invariant (an
+    /// immutable fixed stack object): hanoi's three parameters were stored to
+    /// slots and read back (`mov [bp-6], cx`), not read again from `[bp+6]`
+    /// (m16 BASIC memory operands +15.8% with the per-range proof off).
+    #[test]
+    fn test_a_load_of_an_unwritten_incoming_argument_is_invariant() {
+        let body =
+            one_block(vec![move_of(0, word(1), argument(6), vec![1]), move_of(1, word(2), argument(8), vec![2])]);
+        assert_eq!(argument_loads(&body), BTreeSet::from([1, 2]));
+    }
+
+    /// A parameter the function assigns, or whose address it takes, is not
+    /// immutable: the loads of it stay.
+    #[test]
+    fn test_a_written_or_address_taken_argument_is_not_invariant() {
+        let body = one_block(vec![
+            move_of(0, word(1), argument(6), vec![1]),
+            move_of(1, word(2), argument(8), vec![2]),
+            move_of(2, argument(8), word(3), vec![]),
+        ]);
+        assert_eq!(argument_loads(&body), BTreeSet::from([1]), "only the cell nobody writes");
+        let lea = {
+            let what = crate::model::ir::Semantics {
+                name: Some("lea".into()),
+                dests: vec![word(4)],
+                sources: vec![argument(6)],
+                ..crate::model::ir::Semantics::new(Operation::Address)
+            };
+            Arc::new(Insn::new(3, None, Some(what), vec![4], vec![]))
+        };
+        let taken = one_block(vec![move_of(0, word(1), argument(6), vec![1]), lea]);
+        assert!(argument_loads(&taken).is_empty(), "an address taken: any call may write");
     }
 }

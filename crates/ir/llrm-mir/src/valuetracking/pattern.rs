@@ -450,6 +450,7 @@ intrinsics! {
     UshlSat => "ushl.sat",
     SmulFix => "smul.fix",
     SmulFixSat => "smul.fix.sat",
+    SdivFix => "sdiv.fix",
     UmulFix => "umul.fix",
     UmulFixSat => "umul.fix.sat",
     Pow => "pow",
@@ -535,7 +536,7 @@ pub fn intrinsic_id(
     q: &Query,
     inst: InstId,
 ) -> Option<IntrinsicId> {
-    intrinsic_id_of_name(q.callee_name(inst)?)
+    q.callee_intrinsic_id(inst)
 }
 
 // ---- nonzero.rs ----

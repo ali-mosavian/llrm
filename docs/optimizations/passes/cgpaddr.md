@@ -1,47 +1,116 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/cgpaddr.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/cgpaddr.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/cgpaddr.rs sha256:fcfa806e8eb8e1e34d5f4d46c4a2a5001b42cc271dcf98e11a9b42a50f248552 -->
+<!-- src: crates/opt/llrm-transforms/src/cgpaddr.rs sha256:8034511e647a216129cef850d62b8e5913373b81c631f8fd6dd8bf51befa8005 -->
 
 # cgpaddr
 
-Sinks the arithmetic of an address into the block that uses it, where the
-target folds it into the access: CodeGenPrepare's `optimizeMemoryInst`
-([CodeGenPrepare.cpp#L5903](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L5903)).
+CodeGenPrepare: comparison and address sinking, so isel sees one form:
+LLVM's `sinkCmpExpression`, `sinkAndCmp0Expression` and `optimizeMemoryInst`
+(address-mode sinking, below), and GVNSink's merge of equal arms.
 
 ## How it works
-For a `load` or `store` the address is matched as `AddressingModeMatcher`
-does: a `gep` chain read as `base + constant + scale * index` (one variable
-index in all, to depth 4), each step kept only while the target's
-`isLegalAddressingMode` says the whole is one access. When some
-instruction of the match is in another block, the address is made again
-just before the access, from the match alone (`sunkaddr`: a `gep` of the
-scaled index, a `gep` of the constant), one copy for each block and
-address. The `gep`s left unread go.
+Four rewrites, each on one function, none of which touches an edge.
 
-```text
- b1: %p = gep i32, ptr %a, i16 %i       b1: br b2
-     br b2                              b2: %s = mul i16 %i, 4
- b2: store i32 0, ptr %p                    %q = gep i8, ptr %a, i16 %s
-                                            store i32 0, ptr %q
-```
+A comparison (`icmp` or `fcmp`) read by a branch, select or other user in
+another block is made again at the top of that block (one copy per block);
+the original goes once nothing reads it. A phi's incoming block is not a
+read. isel can then keep the result in the flags instead of an `i1` held
+across the loop body (`sete`, a store of the byte, `cmp`, `jne`). This runs
+only where the target has a single condition register
+(`!target().multiple_condition_registers()`).
 
-MIRROR: the depth limit, the one-index-and-a-scale form of the match,
-the legality test at each step, the rule that nothing is made when every
-matched instruction is already in the access's block, and one `sunkaddr`
-for each (block, address).
+An `and` that only compares of it with zero read (`x & mask == 0`), some in
+other blocks than its own, is made again before each of those compares,
+where the target's lowering says the pair folds
+(`Lowering::is_mask_and_cmp0_folding_beneficial`) and the copy would not
+stretch two values read nowhere else (`sinkAndCmp0Expression`). Numbering
+made one value of the repeated tests of a bit; the compares sunk into the
+blocks that branch on it left the `and` held across all of them.
 
-DEVIATE CGP1: no promoted extensions (`TypePromotionTransaction`), no
-`AddressingModeCombiner` for a phi or select of addresses (`addresssink`
-makes the phi one address first), no base-register-and-global form
-(a global stays the base) and no matching through `ptrtoint`/`inttoptr`.
-Exit: those parts translated.
+A phi read only as an address (`spill::address_only`: loads, stores through
+it, and GEPs of up to three levels that are themselves only addresses) whose
+arms each compute the same pure operation (`gep`, `zext`, `sext`, `trunc`,
+`add`, `sub`, `mul`, `shl`, `and`, `or`, `xor`, of equal type and flags, to
+depth 3) over operands that reach the join (they dominate it) is that
+computation made once, before the join's first non-phi. What only the phi
+read, the arms' copies, is erased.
+
+Any phi that `simplifyInstruction` reduces to a value (arms all one value,
+or the phi itself; `optimizeInst`'s phi case, L8947) is that value, whatever
+reads it; this is how a closing phi left by `lcssa` goes. Each phi is
+visited once, and the phis that read it are queued again.
+
+A phi whose arms differ in kind stays.
+
+DEVIATE C1 (m32): the rest of CodeGenPrepare's work is done by isel, which
+rebuilds an address expression in the block that uses it, and by the select
+lowering; the width of a switch condition is `cgpswitch`'s
+(`optimizeSwitchType`); this file is the compare and address-phi part.
+Evidence, 2026-10-23, per function on the same IR against the pin's `llc`
+with and without the pass (`docs/working/codegenprepare.md`): at m32 the
+pass changes 16-17 of about 160 functions in the pin and ours is at its
+level (at -Os 1287 instructions against 1271 with and 1343 without), and
+the `lea` count equals the pin's with the pass (2092 against 2139, 3983
+without, QCport -Os). Owner w-4, review 2026-12-01. At m16 (QCport -Os)
+ours has fewer `lea` than the pin with the pass (2118 against 2264) and
+holds 59% of its gain; the residual 1505 instructions are spills and
+reloads, not addresses: row AM-C2, resolved.
 
 ## Example
-The test `test_an_address_made_in_another_block_is_made_where_it_is_used`
-in `cgpaddr_tests.rs` is the sketch above.
+Before:
+
+```mir
+b1:
+  %k1 = sub i16 %i, -3
+  %p1 = getelementptr inbounds i16, ptr @g, i16 %k1
+  store i16 0, ptr %p1
+  br label %b5
+
+; ...
+
+b5:
+  %p = phi ptr [ %p1, %b1 ], [ %p3, %b3 ], [ %p4, %b4 ]
+  store i16 %c, ptr %p
+  ret void
+```
+
+After:
+
+```mir
+b1:
+  %k1 = sub i16 %i, -3
+  %p1 = getelementptr inbounds i16, ptr @g, i16 %k1
+  store i16 0, ptr %p1
+  br label %b5
+
+; ...
+
+b5:
+  %0 = sub i16 %i, -3
+  %1 = getelementptr inbounds i16, ptr @g, i16 %0
+  store i16 %c, ptr %1
+  ret void
+```
+
+The phi of the three arms' addresses is the address computed once in the
+join (`b3` and `b4` are as `b1`, with their own stores); the arms' copies
+stay where their own stores read them.
+
+From unit test
+`test_a_phi_of_one_address_in_every_arm_is_that_address_in_the_join` in
+`cgpaddr_sink_tests.rs`.
 
 ## Runs
-Once, after `addresssink`, in the same gate. Off with `-fno-strength-reduce`
-and at -O0.
+Once, last of the function passes before `spares` and `homes`, after
+`gepoffset`: until then gvn's partial redundancy elimination makes exactly
+this phi so a load after the join reads what the arms stored, and an earlier
+sink would be undone. Off with `-fno-strength-reduce` and at -O0.
 
 ## Keeps
-Blocks and edges are unchanged: dominators and loops are preserved.
+Blocks and edges are unchanged, so dominators and loops are preserved. A
+change that only replaced trivial phis also keeps the assumption cache and
+the exposed frame objects; value facts are recomputed.
+
+## See also
+LLVM `CodeGenPrepare::sinkCmpExpression`, `sinkAndCmp0Expression` and
+`optimizeMemoryInst`; issue
+##386 (RGBLIGHTS `a(i) = ...` under an `IF`).

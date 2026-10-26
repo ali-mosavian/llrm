@@ -2308,8 +2308,24 @@ pub fn calls_by_attributes(unit: &Unit) -> llrm_mir::dense::IdMap<InstId, Effect
             Provenance { slices: crate::memory::Sorted::from([one.clone()]), restrict: crate::memory::Sorted::new() },
         )
     };
-    // What a call reaches elsewhere depends on its callee alone.
+    // What a call reaches elsewhere depends on its callee alone, and on the
+    // module analyses the unit reads: kept with the proxy that holds them,
+    // where the unit is made under it.
+    let memo = unit.outer.filter(|outer| {
+        let same = |held: Option<*const ()>, now: Option<*const ()>| held == now;
+        same(
+            unit.globals_aa.map(|one| std::ptr::from_ref(one).cast()),
+            outer
+                .cached_ref::<crate::manager::GlobalsAA>()
+                .and_then(|one| one.as_ref().ok())
+                .map(|one| std::ptr::from_ref(one).cast()),
+        ) && same(
+            unit.globals_mr.map(|one| std::ptr::from_ref(one).cast()),
+            outer.cached_ref::<crate::manager::GlobalsModRefAnalysis>().map(|one| std::ptr::from_ref(one).cast()),
+        )
+    });
     let reaches = |callee: Option<GlobalId>, nocallback: bool| -> (Rc<[MemRef]>, Rc<[MemRef]>) {
+        REACHES.with(|made| made.set(made.get() + 1));
         // A callee that cannot call back writes of the tracked globals only
         // what the runtime module promises of it (`!llrm.writes`).
         let promised = if nocallback { unit.globals_aa.map(|aa| aa.unsummarized(callee)) } else { None };
@@ -2340,6 +2356,10 @@ pub fn calls_by_attributes(unit: &Unit) -> llrm_mir::dense::IdMap<InstId, Effect
             }
         }
         (reads.iter().map(&reference).collect(), writes.iter().map(&reference).collect())
+    };
+    let remembered = |key: u64, make: &dyn Fn() -> (Rc<[MemRef]>, Rc<[MemRef]>)| match memo {
+        Some(outer) => (*outer.memo(key, make)).clone(),
+        None => make(),
     };
     let mut elsewhere: llrm_mir::dense::IdMap<u32, (Rc<[MemRef]>, Rc<[MemRef]>)> = llrm_mir::dense::IdMap::default();
     let mut elsewhere_unknown = None;
@@ -2400,11 +2420,11 @@ pub fn calls_by_attributes(unit: &Unit) -> llrm_mir::dense::IdMap<InstId, Effect
             Some(id) => {
                 let key = id.0 * 2 + u32::from(nocallback);
                 if !elsewhere.contains_key(&key) {
-                    elsewhere.insert(key, reaches(callee, nocallback));
+                    elsewhere.insert(key, remembered(u64::from(key), &|| reaches(callee, nocallback)));
                 }
                 elsewhere.get(&key).expect("inserted above")
             }
-            None => elsewhere_unknown.get_or_insert_with(|| reaches(None, false)),
+            None => elsewhere_unknown.get_or_insert_with(|| remembered(u64::MAX, &|| reaches(None, false))),
         };
         if allowed.other.reads {
             loads.extend(other_loads.iter().cloned());
@@ -2599,12 +2619,20 @@ thread_local! {
     static VALUE_ROUNDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static LIMIT_COLLAPSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static FOOTPRINTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static REACHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// How many times this thread has worked out the footprints of a body's calls
 /// (`calls_by_attributes`), for a test that `Writes` and `Accesses` share one.
 pub fn footprints_made() -> usize {
     FOOTPRINTS.with(std::cell::Cell::get)
+}
+
+/// How many times this thread has worked out what a callee reaches elsewhere
+/// (the `reaches` of `calls_by_attributes`), for a test that a proxy keeps
+/// them.
+pub fn reaches_made() -> usize {
+    REACHES.with(std::cell::Cell::get)
 }
 
 /// How many rounds over the blocks the value solves of this thread have made,
@@ -3618,8 +3646,11 @@ pub fn annotated(unit: &Unit) -> Result<IndexMap<InstId, MemRef>, String> {
 ///
 /// DEVIATE AN2 (owner funcattrs-port, review 2026-11-13): an index's range is
 /// `computeConstantRange` at the access, with the dominator tree and no
-/// assumption cache; BasicAA's SCEV `getSignedRange` of an add recurrence is
-/// not asked, so a loop counter's interval is its ValueTracking range only.
+/// assumption cache; BasicAA's `analyzeVariableOffsets` passes both. It asks no
+/// SCEV and no LVI range of an index, so a loop counter's interval is its
+/// ValueTracking range, as at the pin; a counted loop's span or a dominating
+/// guard is not the pin's answer. Exit: the
+/// assumption cache is passed (MemorySSA S3, where BasicAA asks per query).
 /// The range `analyzeVariableOffsets` finds of a variable index:
 /// `computeConstantRange` at `at` intersected with `fromKnownBits(Known,
 /// IsSigned)`, read as the signed interval of `value`; none where it is the
@@ -3632,33 +3663,7 @@ fn signed_range_at(
     at: InstId,
     value: ValueId,
 ) -> Option<Interval> {
-    let q = llrm_mir::valuetracking::Query {
-        context: unit.context,
-        globals: unit.globals,
-        metadata: unit.metadata,
-        function: unit.function,
-        layout: unit.layout,
-        dt: tree,
-        assumptions: None,
-        dom_conditions: None,
-        cond_context: None,
-        cxt: Some(at),
-    };
-    let operand = Operand::Value(value);
-    let known = llrm_mir::valuetracking::known::compute_known_bits(&q, operand, 0);
-    let range = llrm_mir::valuetracking::range::compute_constant_range(&q, operand, false, 0).intersect_with(
-        &llrm_mir::constantrange::ConstantRange::from_known_bits(&known, true),
-        llrm_mir::constantrange::PreferredRangeType::Signed,
-    );
-    let width = range.width;
-    if range.is_full_set() || range.is_empty_set() {
-        return None;
-    }
-    let signed = |bits: u128| {
-        let bits = BigInt::from(bits);
-        if bits >= BigInt::from(1_u8) << (width - 1) { bits - (BigInt::from(1_u8) << width) } else { bits }
-    };
-    Some(Interval { low: signed(range.get_signed_min()), high: signed(range.get_signed_max()), width })
+    ranges::value_tracking_at(unit, tree, None, at, Operand::Value(value))
 }
 
 pub fn annotated_with(
@@ -3745,7 +3750,8 @@ pub fn annotated_with(
         Ok(MemRef { provenance: got, ..reference.clone() })
     };
 
-    let mut out = IndexMap::default();
+    let mut out =
+        IndexMap::with_capacity_and_hasher(crate::memory::loads_and_stores(unit.function), Default::default());
     for (_, inst) in unit.function.walk() {
         if !matches!(
             unit.function.instruction(inst).opcode,

@@ -45,7 +45,7 @@
 //! `$K4` holds 2.5 and `$K5` 1.25, as f32 bytes.
 //!
 //! From `ISEL_DUMP=1 llrm-nib -O2 -fno-inline-functions
-//! -fno-inline-functions-called-once -fno-ipa-cp-clone -fno-ipa-vrp
+//! -fno-inline-functions-called-once -fno-ipa-cp-clone
 //! -march=i386` of `fn scale(x: f32) -> f32`, stage `FarIndirectCalls` and
 //! `-S`.
 //!
@@ -96,6 +96,22 @@ impl Pool {
             }
         };
         Mem { disp_width: 2, ..Mem::new(Some(Addr { index: id, ..Addr::new(Space::Segment, 0) }), width) }
+    }
+
+    /// Where the pool is now, for [`Pool::rewind`]: what a selection that is
+    /// not kept asked for goes with it.
+    #[must_use]
+    pub fn mark(&self) -> (usize, i64) {
+        (self.entries.len(), self.count)
+    }
+
+    /// The pool as it was at `mark`, if only data were added since.
+    pub fn rewind(
+        &mut self,
+        mark: (usize, i64),
+    ) {
+        self.entries.truncate(mark.0);
+        self.count = mark.1;
     }
 
     /// A new jump table's id. Its entries are the final procedure's, written

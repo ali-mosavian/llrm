@@ -432,6 +432,8 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
         Opcode::Binary(BinaryOp::Or) => &[visit_or],
         Opcode::Binary(BinaryOp::Xor) => &[visit_xor],
         Opcode::Binary(BinaryOp::Sub) => &[visit_sub],
+        Opcode::Binary(BinaryOp::FDiv) => &[crate::combine_fp::visit_fdiv],
+        Opcode::Binary(BinaryOp::FAdd | BinaryOp::FMul) => &[crate::combine_fp::visit_fadd_or_fmul],
         Opcode::Binary(BinaryOp::UDiv) => &[visit_udiv],
         Opcode::Binary(BinaryOp::SDiv) => &[visit_sdiv],
         Opcode::Binary(BinaryOp::URem) => &[visit_urem],
@@ -449,8 +451,41 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
         Opcode::Select => &[|c, inst| c.visit_select(inst)],
         Opcode::Br => &[|c, inst| c.visit_cond_br(inst)],
         Opcode::Call(_) => &[|c, inst| c.visit_call(inst)],
+        Opcode::Phi => &[|c, inst| c.visit_phi(inst)],
         _ => &[],
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The instructions `visit` asked the generic `simplify_instruction_in`
+    /// about.
+    pub(crate) static GENERIC_SIMPLIFIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Whether the visitor of `opcode` opens with its own `simplify*Inst`
+/// (`simplify_visited`, `simplify_first`, the shifts' `simplified` and the
+/// compare's), unconditionally and before it changes anything.
+fn simplifies_itself(opcode: &Opcode) -> bool {
+    matches!(
+        opcode,
+        Opcode::ICmp(_)
+            | Opcode::Binary(
+                BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::And
+                    | BinaryOp::Or
+                    | BinaryOp::Xor
+                    | BinaryOp::Mul
+                    | BinaryOp::UDiv
+                    | BinaryOp::SDiv
+                    | BinaryOp::URem
+                    | BinaryOp::SRem
+                    | BinaryOp::Shl
+                    | BinaryOp::LShr
+                    | BinaryOp::AShr
+            )
+    )
 }
 
 /// `InstCombinerImpl::run`'s per-instruction step: what the instruction
@@ -460,9 +495,16 @@ pub fn visit(
     inst: InstId,
 ) -> Visit {
     let env = c.env;
-    if let Some(result) = c.function.instruction(inst).result
-        && let Some(found) =
+    // The visitors below open with their own `simplify*Inst`, as the pin's do;
+    // a pass of the generic one before them asked the same question twice
+    // (d_faces -O2: 9,931 asks, 18.6 M Ir, 9.6 M of it on compares).
+    if !simplifies_itself(&c.function.instruction(inst).opcode)
+        && let Some(result) = c.function.instruction(inst).result
+        && let Some(found) = {
+            #[cfg(test)]
+            GENERIC_SIMPLIFIES.with(|one| one.set(one.get() + 1));
             simplify_instruction_in(c.context, env.globals, env.layout, Some(&env.analyses), c.function, inst)
+        }
         && found != Operand::Value(result)
     {
         return Visit::Replace(found);
@@ -471,13 +513,23 @@ pub fn visit(
     // comparison nor what reads it (`sext (icmp slt v, 0)`) is rewritten into
     // a user of `v` that is not a comparison.
     let compares_flags = |inst| llrm_mir::facts::compares_flags_result(c.context, env.globals, c.function, inst);
-    if compares_flags(inst)
-        || c.function.instruction(inst).operands.iter().any(|operand| {
+    // An `i1` add, subtract or multiply is a xor or an and of the compare
+    // (never a user of the flags): the selector refuses the arithmetic, so
+    // it is always rewritten.
+    let boolean_arithmetic =
+        matches!(
+            c.function.instruction(inst).opcode,
+            Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
+        )
+            && c.context.types.int_bits(c.function.instruction(inst).ty) == Some(1);
+    if !boolean_arithmetic
+        && (compares_flags(inst)
+            || c.function.instruction(inst).operands.iter().any(|operand| {
             matches!(
                 operand,
                 Operand::Value(value) if matches!(c.function.value(*value).def, ValueDef::Instruction(one) if compares_flags(one))
             )
-        })
+        }))
     {
         return Visit::None;
     }
@@ -603,9 +655,9 @@ pub(crate) fn combine_with_sinking(
     sinking: bool,
     declared: &mut Declared,
 ) -> bool {
-    // InstCombine's `SQ.DC`: what the branches dominating an instruction say.
-    let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function)
-        .with_dom_conditions_of(context, globals, metadata, function);
+    // InstCombine's `SQ.DC`: what the branches dominating an instruction say,
+    // those visited so far.
+    let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function).with_lazy_dom_conditions();
     let env = Env { globals, callees, layout, analyses, sinking, back_edges: Default::default() };
     let mut c = Combiner { context, function, env: &env, worklist: InstWorklist::default(), declared };
     let mut changed = prepare(&env, c.context, c.function, &mut c.worklist);

@@ -1,11 +1,13 @@
 //! `getSequentialMinMaxExpr`: `umin_seq`, with the visitor that keeps only the
 //! first instance of an operand.
 
+use std::borrow::Cow;
+
 use llrm_mir::hash::HashSet;
 use llrm_mir::opcode::IntPredicate;
 
 use super::expr::{Kind, Scev, Type, Use};
-use super::{Cx, Key, ScalarEvolution};
+use super::{Cx, Key, KeyLike, ScalarEvolution};
 
 /// `SCEVSequentialMinMaxExpr::getEquivalentNonSequentialSCEVType`.
 fn equivalent_non_sequential_scev_type(kind: Type) -> Type {
@@ -140,8 +142,8 @@ impl ScalarEvolution {
         // *NOT* do any kind of sorting of the expressions!
 
         // Check if we have created the same expression before.
-        let key = Key { tag: kind, ops: ops.clone(), ty: None, constant: None, value: None, header: None };
-        if let Some(&s) = self.unique.get(&key) {
+        let key = Key { tag: kind, ops: Cow::Borrowed(&ops), ty: None, constant: None, value: None, header: None };
+        if let Some(&s) = self.unique.get(&key as &dyn KeyLike) {
             return s;
         }
 
@@ -214,11 +216,8 @@ impl ScalarEvolution {
 
         // Okay, it looks like we really DO need an expr. Check to see if we
         // already have one, otherwise create a new one.
-        let key = Key { tag: kind, ops: ops.clone(), ty: None, constant: None, value: None, header: None };
-        if let Some(&existing) = self.unique.get(&key) {
-            return existing;
-        }
         let size = self.compute_expression_size(&ops);
-        self.intern(key, Kind::SequentialUMin(ops), Some(ty), size)
+        let key = Key { tag: kind, ops: Cow::Borrowed(&ops), ty: None, constant: None, value: None, header: None };
+        self.intern(key, || Kind::SequentialUMin(ops.clone()), Some(ty), size)
     }
 }

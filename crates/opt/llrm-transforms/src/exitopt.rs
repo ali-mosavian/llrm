@@ -416,7 +416,7 @@ impl ExitOpt<'_> {
             for &icmp in &leaf_conditions {
                 let cx = self.env.cx(&*self.context, &*self.function);
                 let result = Operand::Value(self.function.instruction(icmp).result.expect("a compare value"));
-                let limit = self.se.compute_exit_limit_from_cond(&cx, header, result, inverted, false);
+                let limit = self.se.compute_exit_limit_from_cond(&cx, header, result, inverted, false, false);
                 let exit_max = limit.symbolic_max_not_taken;
                 if exit_max == self.se.get_could_not_compute() {
                     continue;

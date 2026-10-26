@@ -8,6 +8,7 @@ pub mod machine;
 pub mod object;
 pub mod opcosts;
 pub mod os;
+pub mod pressure;
 pub mod registers;
 pub mod routines;
 pub mod runtime;
@@ -266,6 +267,14 @@ impl llrm_mir::target::Machine for Described {
         self.sizes.clone().unwrap_or_else(|| self.costs())
     }
 
+    fn keeps_division(
+        &self,
+        bits: u32,
+        size: bool,
+    ) -> bool {
+        keeps_division(i64::from(bits / 8), size)
+    }
+
     fn registers(&self) -> i64 {
         self.registers
     }
@@ -285,6 +294,19 @@ impl llrm_mir::target::Machine for Described {
     fn address_forms(&self) -> Vec<AddressForm> {
         self.address_forms.clone()
     }
+}
+
+/// Whether a division by a constant of `bytes`-byte values stays a
+/// `div`/`idiv`: a word (no multiply-high), or any size when the build is for
+/// size. The pin's `isIntDivCheap` is `minsize` only (DEVIATE: main keeps the
+/// divide at -Os, which the size bar holds to). The one answer both the
+/// instruction selector's reciprocal (`backend::division`) and the IR's
+/// remainder fold read.
+pub fn keeps_division(
+    bytes: i64,
+    size: bool,
+) -> bool {
+    bytes != 4 || size
 }
 
 /// A target's cost model, built from a CPU's prices: what the passes ask of it.
@@ -443,6 +465,13 @@ pub trait Target {
         &self,
         down: bool,
     ) -> Result<routines::HugeString, String>;
+
+    /// Whether the target links a C math library (`log`, `exp`, `log2` ...). It
+    /// has none: the natural logarithm and the exponentials are x87
+    /// sequences the finalizer spells (`fln`, `fexp`, `flog2`), not calls.
+    fn has_libm(&self) -> bool {
+        false
+    }
 
     /// The inline 64-bit divide, signed or not, by a divisor of two dwords or
     /// one.

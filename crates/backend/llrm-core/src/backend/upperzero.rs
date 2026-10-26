@@ -464,8 +464,8 @@ pub(crate) fn wide_roots(
         return 0;
     };
     // A `lea` is arithmetic: the low 16 bits of `[e?x+e?x+k]` are those of the
-    // 16-bit sum whatever the upper halves hold, and a 32-bit result is the full
-    // sum; a cell that reads the result asks for its own upper half.
+    // 16-bit sum whatever the upper halves hold, and a 32-bit result is the
+    // full sum; a cell that reads the result asks for its own upper half.
     if what.op == Operation::Address {
         return 0;
     }
@@ -675,7 +675,7 @@ mod tests {
         sources: Vec<Loc>,
         target: Option<i64>,
     ) -> Arc<Insn> {
-        let what = Semantics { name: Some(name.to_owned()), dests, sources, target, ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), dests, sources, target, ..Semantics::new(op) };
         Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![], vec![]))
     }
 
@@ -714,20 +714,25 @@ mod tests {
         let names: Vec<_> = established(&body)
             .blocks
             .iter()
-            .flat_map(|block| block.insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()))
+            .flat_map(|block| {
+                block.insns.iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+            })
             .collect();
         assert_eq!(names, ["add", "movzx", "mov"], "esi is zero-extended between its write and the cell");
     }
 
-    /// A `lea` is arithmetic, not an address read: `lea ecx, [eax-1]` of a dword `eax` is the dword sum, and
-    /// a `movzx eax, ax` put before it by the cell rule destroyed the upper half of a `long` (the first
-    /// version of the m16 conversion of a tied add to a `lea`, `g(long *p, long n)` in ~/scratch/w1-gate/xa/l32.c).
+    /// A `lea` is arithmetic, not an address read: `lea ecx, [eax-1]` of a
+    /// dword `eax` is the dword sum, and a `movzx eax, ax` put before it by
+    /// the cell rule destroyed the upper half of a `long` (the first
+    /// version of the m16 conversion of a tied add to a `lea`, `g(long *p, long
+    /// n)` in ~/scratch/w1-gate/xa/l32.c).
     #[test]
     fn test_a_lea_cell_does_not_ask_for_its_registers_upper_half() {
         use crate::model::ir::{Held, Mem};
         let (esi, ebx) =
             (Loc::Reg(Reg { register: RegId::ESI, width: 4 }), Loc::Reg(Reg { register: RegId::EBX, width: 4 }));
-        let cell = Mem { through: RegId::ESI, base: Some(Held { value: 7, width: 4 }), offset: -1, ..Mem::new(None, 4) };
+        let cell =
+            Mem { through: RegId::ESI, base: Some(Held { value: 7, width: 4 }), offset: -1, ..Mem::new(None, 4) };
         let lea = one(
             1,
             Operation::Address,
@@ -749,7 +754,9 @@ mod tests {
         let names: Vec<_> = established(&body)
             .blocks
             .iter()
-            .flat_map(|block| block.insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()))
+            .flat_map(|block| {
+                block.insns.iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+            })
             .collect();
         assert_eq!(names, ["add", "lea"]);
     }
@@ -922,8 +929,13 @@ mod tests {
         let after = hoisted(&body);
 
         assert_ne!(before(&after)[&widening] & ebx_bit, 0, "the loop's widening reads a register zero above its word");
-        let names =
-            |block: &Block| block.insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect::<Vec<_>>();
+        let names = |block: &Block| {
+            block
+                .insns
+                .iter()
+                .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                .collect::<Vec<_>>()
+        };
         assert_eq!(names(&after.blocks[0]), ["mov", "movzx", "jmp"]);
         assert_eq!(names(&after.blocks[1]), ["movzx", "add", "cmp", "jne"]);
     }
@@ -992,5 +1004,35 @@ mod tests {
         before(&body(last(0x12345)));
         let [whole_now, partly_now, same_now] = super::asks();
         assert_eq!((whole_now - whole, partly_now - partly, same_now - same), (1, 1, 1));
+    }
+
+    /// Only a write that leaves nothing above bit 15 counts as zeroing: a
+    /// dword constant or mask past a word, `xor` of two registers, `movsx`,
+    /// `or` and a word-wide destination each claimed a zero upper half that a
+    /// 32-bit address then read through.
+    #[test]
+    fn test_only_a_write_that_clears_the_upper_half_is_counted_zero() {
+        let reg = |register, width| Loc::Reg(Reg { register, width });
+        let imm = |value| Loc::Imm(Imm { value, width: 4, address: None });
+        let (eax, ebx, ax, bx) = (reg(RegId::EAX, 4), reg(RegId::EBX, 4), reg(RegId::AX, 2), reg(RegId::BX, 2));
+        let zeroes = |op, name: &str, dest: &Loc, sources: Vec<Loc>| {
+            super::zeroing(&one(0, op, name, vec![dest.clone()], sources, None)) != 0
+        };
+        for (op, name, sources, expect) in [
+            (Operation::Move, "mov", vec![imm(0xFFFF)], true),
+            (Operation::Move, "mov", vec![imm(0x10000)], false),
+            (Operation::Move, "mov", vec![imm(-1)], false),
+            (Operation::Binary, "and", vec![eax.clone(), imm(0xFFFF)], true),
+            (Operation::Binary, "and", vec![eax.clone(), imm(0x1FFFF)], false),
+            (Operation::Binary, "or", vec![eax.clone(), imm(0)], false),
+            (Operation::Binary, "xor", vec![eax.clone(), eax.clone()], true),
+            (Operation::Binary, "xor", vec![eax.clone(), ebx.clone()], false),
+            (Operation::Binary, "sub", vec![eax.clone(), ebx.clone()], false),
+            (Operation::Extend, "movzx", vec![bx.clone()], true),
+            (Operation::Extend, "movsx", vec![bx.clone()], false),
+        ] {
+            assert_eq!(zeroes(op, name, &eax, sources.clone()), expect, "{name} {sources:?}");
+        }
+        assert!(!zeroes(Operation::Move, "mov", &ax, vec![imm(5)]), "a word write leaves the upper half as it was");
     }
 }

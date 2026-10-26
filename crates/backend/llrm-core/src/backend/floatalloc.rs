@@ -123,7 +123,7 @@
 //! `X86FloatingPoint.cpp`.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -133,7 +133,7 @@ use crate::backend::classes::RegisterClasses;
 #[cfg(test)]
 use crate::backend::constpool::Pool;
 #[cfg(test)]
-use crate::backend::cpu::{self as targets, ProfileOrName};
+use crate::backend::cpu::ProfileOrName;
 use crate::backend::floatregions::Raised;
 use crate::backend::floatregions::Unlowered;
 use crate::backend::frame::Frame;
@@ -159,7 +159,7 @@ pub(super) fn semantics(
     dests: Vec<Loc>,
     sources: Vec<Loc>,
 ) -> Semantics {
-    Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+    Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
 }
 
 /// `lir.Insn(at, (at, at), what, (), ())`.
@@ -355,18 +355,17 @@ pub(super) fn _terminators(block: &LirBlock) -> usize {
     cut
 }
 
-/// Both passes: `floatassign`'s decisions, then stack form.
+/// Stack form of a body whose x87 values are in registers, as the pipeline
+/// hands it over.
 #[cfg(test)]
 pub fn allocated<'a>(
     body: &LirBody,
-    mut frame: Option<&mut Frame>,
-    pool: Option<&mut Pool>,
-    basic_semantics: bool,
-    cpu: impl Into<ProfileOrName<'a>>,
+    frame: Option<&mut Frame>,
+    _pool: Option<&mut Pool>,
+    _basic_semantics: bool,
+    _cpu: impl Into<ProfileOrName<'a>>,
 ) -> Result<LirBody, Raised> {
-    let target = targets::profile(cpu).map_err(Raised::Value)?;
-    let assigned = crate::backend::floatassign::assigned(body, frame.as_deref_mut(), pool, basic_semantics, target)?;
-    _truncating(&crate::backend::fpstack::converted(&assigned, &RegisterClasses::of(&llrm_x86_m16::M16))?, frame)
+    _truncating(&crate::backend::fpstack::converted(body, &RegisterClasses::of(&llrm_x86_m16::M16))?, frame)
 }
 
 /// The control word an x87 instruction needs: the one place the fact lives.
@@ -404,21 +403,21 @@ enum Mode {
 /// takes its source's mode for its target instead, and where the modes cannot
 /// all agree every block restores the caller's before it ends.
 struct Modes {
-    entering: BTreeMap<i64, Mode>,
+    entering: HashMap<i64, Mode>,
     restore: bool,
 }
 
 fn _modes(body: &LirBody) -> Modes {
     let graph = &body.blocks;
     let predecessors = loops::predecessors(graph);
-    let index = graph.iter().enumerate().map(|(position, block)| (block.at, position)).collect::<BTreeMap<_, _>>();
-    let mut weight = BTreeMap::<i64, i64>::new();
+    let index = graph.iter().enumerate().map(|(position, block)| (block.at, position)).collect::<HashMap<_, _>>();
+    let mut weight = HashMap::<i64, i64>::default();
     for one in loops::loops(graph, Some(body.entry)) {
         for at in &one.body {
             *weight.entry(*at).or_insert(1) *= 8;
         }
     }
-    let (first, last): (BTreeMap<_, _>, BTreeMap<_, _>) = graph
+    let (first, last): (HashMap<_, _>, HashMap<_, _>) = graph
         .iter()
         .map(|block| {
             let needs = block.insns.iter().filter_map(|one| _needs(one)).collect::<Vec<_>>();
@@ -453,9 +452,9 @@ fn _modes(body: &LirBody) -> Modes {
         .map(|block| {
             (block.at, if block.at == body.entry { Mode::Caller } else { want[&block.at].unwrap_or(Mode::Caller) })
         })
-        .collect::<BTreeMap<_, _>>();
-    let leaving = |entering: &BTreeMap<i64, Mode>, at: i64| last[&at].unwrap_or(entering[&at]);
-    let placeable = |entering: &BTreeMap<i64, Mode>, from: i64, to: i64| {
+        .collect::<HashMap<_, _>>();
+    let leaving = |entering: &HashMap<i64, Mode>, at: i64| last[&at].unwrap_or(entering[&at]);
+    let placeable = |entering: &HashMap<i64, Mode>, from: i64, to: i64| {
         leaving(entering, from) == entering[&to]
             || graph[index[&from]].succ.len() == 1
             || (predecessors[&to].len() == 1 && to != body.entry)
@@ -476,7 +475,7 @@ fn _modes(body: &LirBody) -> Modes {
     }
     // The switches an assignment costs, each weighted by its block's depth:
     // none if an edge cannot take its switch.
-    let cost = |entering: &BTreeMap<i64, Mode>, restore: bool| -> Option<i64> {
+    let cost = |entering: &HashMap<i64, Mode>, restore: bool| -> Option<i64> {
         let mut total = 0;
         for block in graph {
             let at = weight.get(&block.at).copied().unwrap_or(1);
@@ -503,7 +502,7 @@ fn _modes(body: &LirBody) -> Modes {
         }
         Some(total)
     };
-    let restoring = graph.iter().map(|block| (block.at, Mode::Caller)).collect::<BTreeMap<_, _>>();
+    let restoring = graph.iter().map(|block| (block.at, Mode::Caller)).collect::<HashMap<_, _>>();
     // Following demand can cost more than restoring at the end of each block: a
     // loop that converts and rounds alike in a trip gains nothing from entering
     // in one mode and pays the switch on its entry and exit.
@@ -533,14 +532,8 @@ pub(super) fn _truncating(
     };
     // Python keys these slots by the 1-tuples ("control",) and ("chop",).
     let (saved, chop) = (frame.cell(("control", 0), 2)?, frame.cell(("chop", 0), 2)?);
-    let loaded_id = body.next_value();
-    let chopped_id = loaded_id + 1;
-    let loaded = Held { value: loaded_id, width: 2 };
-    let chopped = Held { value: chopped_id, width: 2 };
-    // Under RFP the registers are allocated by now: no value is
-    // left to hold the word, so it goes through memory alone.
-    let through_memory = super::allocate::rfp_on();
-
+    // The registers are allocated by now: no value is left to hold the word, so
+    // it goes through memory alone.
     let insn = |what: Semantics, at: i64| -> Arc<Insn> {
         let held = |args: &[Loc]| -> Vec<Held> {
             args.iter()
@@ -573,36 +566,19 @@ pub(super) fn _truncating(
         if block.at == body.entry {
             let at = block.insns.first().map_or(block.at, |first| first.at);
             insns.extend(block.insns[..arrivals].iter().cloned());
-            if through_memory {
-                insns.extend([
-                    insn(semantics(Operation::Barrier, "fnstcw", vec![Loc::Mem(saved.clone())], Vec::new()), at),
-                    insn(semantics(Operation::Barrier, "fnstcw", vec![Loc::Mem(chop.clone())], Vec::new()), at),
-                    insn(
-                        semantics(
-                            Operation::Binary,
-                            "or",
-                            vec![Loc::Mem(chop.clone())],
-                            vec![Loc::Mem(chop.clone()), Loc::Imm(Imm { value: 0x0C00, width: 2, address: None })],
-                        ),
-                        at,
+            insns.extend([
+                insn(semantics(Operation::Barrier, "fnstcw", vec![Loc::Mem(saved.clone())], Vec::new()), at),
+                insn(semantics(Operation::Barrier, "fnstcw", vec![Loc::Mem(chop.clone())], Vec::new()), at),
+                insn(
+                    semantics(
+                        Operation::Binary,
+                        "or",
+                        vec![Loc::Mem(chop.clone())],
+                        vec![Loc::Mem(chop.clone()), Loc::Imm(Imm { value: 0x0C00, width: 2, address: None })],
                     ),
-                ]);
-            } else {
-                insns.extend([
-                    insn(semantics(Operation::Barrier, "fnstcw", vec![Loc::Mem(saved.clone())], Vec::new()), at),
-                    insn(semantics(Operation::Move, "mov", vec![Loc::Held(loaded)], vec![Loc::Mem(saved.clone())]), at),
-                    insn(
-                        semantics(
-                            Operation::Binary,
-                            "or",
-                            vec![Loc::Held(chopped)],
-                            vec![Loc::Held(loaded), Loc::Imm(Imm { value: 0x0C00, width: 2, address: None })],
-                        ),
-                        at,
-                    ),
-                    insn(semantics(Operation::Move, "mov", vec![Loc::Mem(chop.clone())], vec![Loc::Held(chopped)]), at),
-                ]);
-            }
+                    at,
+                ),
+            ]);
         }
         let mut current = modes.entering[&block.at];
         for one in &block.insns[arrivals..] {
@@ -618,7 +594,7 @@ pub(super) fn _truncating(
                 let mut made = (**one).clone();
                 let kept = name_is(one.what.as_ref().expect("checked above"), "fistt");
                 made.what = Some(Semantics {
-                    name: Some(if kept { "fist" } else { "fistp" }.to_owned()),
+                    name: Some(if kept { "fist" } else { "fistp" }.into()),
                     ..one.what.clone().expect("checked above")
                 });
                 insns.push(Arc::new(made));
@@ -629,8 +605,8 @@ pub(super) fn _truncating(
         walked.push((insns, current));
     }
     // The switch on each edge whose ends disagree.
-    let mut ends = BTreeMap::<i64, Vec<Mode>>::new();
-    let mut starts = BTreeMap::<i64, Mode>::new();
+    let mut ends = HashMap::<i64, Vec<Mode>>::default();
+    let mut starts = HashMap::<i64, Mode>::default();
     for (block, (_, current)) in body.blocks.iter().zip(&walked) {
         if modes.restore {
             continue;
@@ -724,7 +700,7 @@ impl LIRTransform for FloatAlloc {
         body: LirBody,
     ) -> Result<LirBody, String> {
         let mut frame = self.frame.as_ref().map(|frame| frame.borrow_mut());
-        let propagated = if super::allocate::rfp_on() { crate::backend::fpcopyprop::propagated(&body) } else { None };
+        let propagated = crate::backend::fpcopyprop::propagated(&body);
         crate::backend::fpstack::converted(propagated.as_ref().unwrap_or(&body), &self.classes)
             .and_then(|converted| _truncating(&converted, frame.as_deref_mut()))
             .map_err(|error| error.to_string())

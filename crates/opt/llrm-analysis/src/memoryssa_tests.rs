@@ -444,6 +444,67 @@ b0:
     }
 }
 
+/// A call is a clobber of a cell where the AA stack cannot rule it out
+/// (`instructionClobbersQuery`): `lifetime.end` of another slot is apart from
+/// this one (the pin's NoModRef), a call given the slot is not. The footprint
+/// made both clobbers (33 `lifetime.end` and 15 `lifetime.start` queries over
+/// QCport's modules).
+#[test]
+fn test_a_call_the_aa_stack_rules_out_does_not_clobber_the_cell() {
+    let parsed = Parsed::new(
+        "declare void @llvm.lifetime.end.p0(i64, ptr)
+declare void @given(ptr)
+
+define i16 @f() {
+b0:
+  %slot = alloca i16
+  %other = alloca i16
+  store i16 1, ptr %slot
+  call void @llvm.lifetime.end.p0(i64 2, ptr %other)
+  %x = load i16, ptr %slot
+  call void @given(ptr %slot)
+  %y = load i16, ptr %slot
+  ret i16 %x
+}
+",
+    );
+    let unit = parsed.unit();
+    let (store, ended, load, given, again) =
+        (site(&unit, "b0", 2), site(&unit, "b0", 3), site(&unit, "b0", 4), site(&unit, "b0", 5), site(&unit, "b0", 6));
+    let graph = graph(&unit);
+    assert_eq!(
+        graph.clobbers(load, &cell(&unit, load)),
+        BTreeSet::from([graph.at(store).id]),
+        "lifetime.end {ended:?}"
+    );
+    assert_eq!(graph.clobbers(again, &cell(&unit, again)), BTreeSet::from([graph.at(given).id]));
+}
+
+/// A store the AA stack rules out (a `noalias` argument against a pointer
+/// derived from another argument) is not a clobber of the cell; the walker
+/// asked the stack only for calls and found the store.
+#[test]
+fn test_a_store_the_aa_stack_rules_out_does_not_clobber_the_cell() {
+    let parsed = Parsed::new(
+        "define i16 @f(ptr noalias %p, ptr %q, i16 %i) {
+b0:
+  %r = getelementptr i16, ptr %q, i16 %i
+  store i16 1, ptr %p
+  %x = load i16, ptr %r
+  store i16 2, ptr %r
+  %y = load i16, ptr %p
+  ret i16 %x
+}
+",
+    );
+    let unit = parsed.unit();
+    let (first, load, _second, again) =
+        (site(&unit, "b0", 1), site(&unit, "b0", 2), site(&unit, "b0", 3), site(&unit, "b0", 4));
+    let graph = graph(&unit);
+    assert_eq!(graph.clobbers(again, &cell(&unit, again)), BTreeSet::from([graph.at(first).id]));
+    let _ = load;
+}
+
 /// A loop write invalidates a dominating read made before entering the loop.
 #[test]
 fn test_loop_backedge_write_prevents_read_reuse() {
@@ -600,8 +661,9 @@ b0:
     assert!(!covers(&unit, &pointed, &long), "unrelated roots");
 }
 
-/// `@g` and `@h` are apart only once alias names each access's object; a call
-/// is asked of `AAResults` (BasicAA, GlobalsAA) and not kept in the accesses.
+/// `@g` and `@h` are apart by the AA stack (BasicAA, GlobalsAA) whether or not
+/// the accesses are resolved: the store to `@h` and the call are both asked of
+/// it, and neither is kept in the accesses.
 #[test]
 fn test_resolved_accesses_prove_two_globals_apart() {
     let parsed = Parsed::new(&format!(
@@ -624,17 +686,15 @@ b0:
 "
     ));
     let unit = parsed.unit();
-    let (second, call, load) = (site(&unit, "b0", 1), site(&unit, "b0", 2), site(&unit, "b0", 3));
+    let (first, call, load) = (site(&unit, "b0", 0), site(&unit, "b0", 2), site(&unit, "b0", 3));
     for accesses in [Accesses::plain(&unit, &Calls::default()), Accesses::resolved(&unit).unwrap()] {
         let graph = built(&unit, &accesses);
         assert_eq!(graph.clobbers(load, &accesses.references[&load]), BTreeSet::from([graph.at(call).id]));
     }
+    // A call known to write nothing leaves the first store.
     let plain = Accesses::plain(&unit, &Calls::from_iter([(call, std::rc::Rc::from([]))]));
-    assert_eq!(
-        built(&unit, &plain).clobbers(load, &plain.references[&load]),
-        BTreeSet::from([graph(&unit).at(second).id]),
-        "unresolved, @h may be @g"
-    );
+    let graph = built(&unit, &plain);
+    assert_eq!(graph.clobbers(load, &plain.references[&load]), BTreeSet::from([graph.at(first).id]));
 }
 
 /// `Accesses`, `memory::unmodeled_write` and `effects::unmodeled` each say

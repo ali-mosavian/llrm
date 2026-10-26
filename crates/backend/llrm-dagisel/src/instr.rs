@@ -1,11 +1,14 @@
-//! The pin's `MCInstrDesc` of a machine opcode: the fields selection, scheduling and emission read.
+//! The pin's `MCInstrDesc` of a machine opcode: the fields selection,
+//! scheduling and emission read.
 //!
-//! The tables are generated (`generated/instrinfo.rs`) from the pin's `X86GenInstrInfo.inc` for the
-//! opcodes the matcher tables emit; [`desc`] finds one by opcode.
+//! The tables are generated (`generated/instrinfo.rs`) from the pin's
+//! `X86GenInstrInfo.inc` for the opcodes the matcher tables emit; [`desc`]
+//! finds one by opcode.
 
 pub use crate::generated::instrinfo::flag;
 
-/// `MCOI` operand types, the ones every target shares; a target's own are `>= FIRST_TARGET`.
+/// `MCOI` operand types, the ones every target shares; a target's own are `>=
+/// FIRST_TARGET`.
 pub mod operand_type {
     pub const UNKNOWN: u16 = 0;
     pub const IMMEDIATE: u16 = 1;
@@ -13,6 +16,9 @@ pub mod operand_type {
     pub const MEMORY: u16 = 3;
     pub const PCREL: u16 = 4;
     pub const FIRST_TARGET: u16 = 15;
+    /// `X86::OPERAND_COND_CODE` (`OPERAND_ROUNDING_CONTROL` is the first target
+    /// type).
+    pub const X86_COND_CODE: u16 = FIRST_TARGET + 1;
 }
 
 /// One operand of an instruction (`MCOperandInfo`).
@@ -25,7 +31,8 @@ pub struct OperandDesc {
     /// The operand this one is tied to, or `-1`.
     pub tied_to: i8,
     pub early_clobber: bool,
-    /// `reg_class` names a pointer class chosen by the hardware mode (`LookupRegClassByHwMode`).
+    /// `reg_class` names a pointer class chosen by the hardware mode
+    /// (`LookupRegClassByHwMode`).
     pub pointer_class: bool,
     pub branch_target: bool,
 }
@@ -46,7 +53,10 @@ pub struct InstrDesc {
 }
 
 impl InstrDesc {
-    pub fn has(&self, flag: u64) -> bool {
+    pub fn has(
+        &self,
+        flag: u64,
+    ) -> bool {
         self.flags & flag != 0
     }
     pub fn may_load(&self) -> bool {

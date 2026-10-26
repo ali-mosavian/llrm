@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/precse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/precse.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/precse.rs sha256:3865f4be1f01feebe53429cb22ec3169166be4fe67974c7e847651380d23bf4b -->
+<!-- src: crates/backend/llrm-core/src/backend/precse.rs sha256:711d45c651e91bce47130f772aaca691e762a703ced818004179fe73caefa220 -->
 
 # precse
 
@@ -25,9 +25,10 @@ table's, when `profitable` agrees:
 - a value is shared only if every reader of the new one also reads the old
   one, or the old one is read in the block (heuristics 2 and 3).
 
-Before the table is asked, an operand made by a plain copy names the copy's
-source (`PerformTrivialCopyPropagation`), and a commutative operation is
-asked with its sources swapped if the first form is not there.
+When the table has no entry, an operand made by a plain copy is moved to the
+copy's source and a copy nothing else reads is erased
+(`PerformTrivialCopyPropagation`); a commutative operation is then asked
+with its sources swapped if the first form is still not there.
 
 An operation that sets flags is shared only where nothing after it in its
 block reads them (the pin's `hasLivePhysRegDefUses`: EFLAGS).
@@ -44,36 +45,31 @@ runs no more often than the two together); the walk above then removes the
 two. A copy no one reads is dropped again (the pin leaves it to
 `DeadMachineInstructionElim`).
 
-DEVIATE CSE1 (owner funcattrs-port, exit 2026-11-13):
-`isProfitableToHoistInto` reads the block frequencies selection estimated
-(`LirBody::frequencies`, kept through rewrites), not
-`MachineBlockFrequencyInfo` of the current CFG; a body with no table gets no
-PRE. No `hasMinSize` shortcut (the selector has no minsize flag, isel.rs I2)
-and no `isLegalToHoistInto` test (no block says it is a landing pad).
+DEVIATE CSE1 (owner w-2, exit with isel.rs I2): no `hasMinSize` shortcut
+(the machine phases have no minsize flag; it is -Oz only, which no sweep
+covers). `isLegalToHoistInto` is translated: a return block is no target;
+the pin's other two conditions cannot hold on this LIR (see
+`legal_to_hoist_into`).
 
-DEVIATE CSE2 (owner funcattrs-port, exit 2026-11-13): an operation with no
-register operand is not a candidate, a load of a constant global with a
-fixed address among them (the pin shares and rematerializes it; ours cannot
-once TwoAddress and the coalescer write over it in place: compare_to_int64.c
--Os 346 to 361 bytes, grep -O2 -m32 +21.9% instructions). Exit: the
-allocator remakes a value with two defs. (This was E3.)
+Row CSE2 (was DEVIATE CSE2, retired 2026-10-25): a constant with no register operand is a
+candidate again. The address of a symbol stays out: the pin shares it and ours cannot make
+it again. 71 programs -O2 net 0 (lru -1, x_ll_div +1), -Os and m16 unchanged; the skip-edge
+zero of x_life waits on phi operands without a copy (DAG isel).
 
-DEVIATE CSE3 (owner funcattrs-port, exit 2026-11-13): only a load selected
-by a pattern from a constant global is invariant. The pin also takes
-`!invariant.load`, GOT and constant-pool loads and the immutable fixed stack
-objects (incoming arguments); those loads are kept.
+DEVIATE CSE3 (owner w-1, exit 2026-11-08): both selectors mark a load
+invariant when it reads a constant global or says so (`!invariant.load`, a
+`noalias readonly` argument), and the DAG selector the load of an incoming
+stack argument (an immutable fixed object). The pin also takes GOT and
+constant-pool loads, which ours lacks; the old selector reads an incoming
+argument as a memory operand of its reader, not a load of its own.
 
-DEVIATE CSE4 (owner funcattrs-port, exit 2026-11-13):
-`PerformTrivialCopyPropagation` renames an operand in the table's key
-without moving the instruction's read to the copy's source, so the readers
-of a copy's source are counted from the body as it was. Heuristics 2 and 3
-see the pin's lists except for that.
-
-DEVIATE CSE5 (owner funcattrs-port, exit 2026-11-13): `machinecse.rs`, the
-same elimination after allocation, is ours alone (the pin runs MachineCSE
-once, before allocation). Removed, 10 of 568 objects grow and none shrinks
-(shellsort m16 +15 B, x_mergesort m32 +34, m16 +187, same tree both sides):
-it stays until what it finds there is found before allocation.
+Row CSE5 (was DEVIATE CSE5, retired 2026-10-25): `machinecse.rs`, the same
+elimination after allocation, was ours alone (the pin runs MachineCSE once,
+before allocation). Deleted: d_faces -3.60 M Ir (dist). 7 of 568 objects grow
+and none shrinks (x_mergesort +34 B at m32 -Os and m16 -O1 to -Os, shellsort
+m16 +22 at -O1/-O2), QCport (tools/rows/qcport.py) +0.030% -O1, +0.080% -O2,
++0.116% -O3, +0.025% -Os, x_mergesort -Os +0.43% clocks. Exit: CSE2 and
+rematerialization of multi-def values in RA (w13/w14).
 
 ## Example
 `v3 := add v1, v2` in a block and `v7 := add v1, v2` in a block it

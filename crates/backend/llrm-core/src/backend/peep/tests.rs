@@ -16,7 +16,7 @@ fn what(
     dests: Vec<Loc>,
     sources: Vec<Loc>,
 ) -> Semantics {
-    Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+    Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
 }
 
 fn argument() -> Mem {
@@ -177,4 +177,86 @@ fn the_rule_groups_come_from_one_list() {
     assert_eq!(present, all);
     assert!(super::Rules::NONE.present().is_empty());
     assert_eq!(super::Rules::GROUPS.len(), 24);
+}
+
+/// A window was built, and the group's first-pattern test run, at every
+/// instruction of a block: 24,604 tests on d_faces -O2, 856 of them passed
+/// (3.5%). A group whose rules all start on a `mov` asks `head` only at one.
+#[test]
+fn test_a_group_asks_its_first_test_only_of_the_operations_its_rules_start_on() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::walk::{self, Cx, Matcher, Rewrite, Skip, Window};
+
+    static ASKED: AtomicUsize = AtomicUsize::new(0);
+    fn head(_: &Window) -> u32 {
+        ASKED.fetch_add(1, Ordering::Relaxed);
+        0
+    }
+    fn tail(
+        _: &Cx,
+        _: &Window,
+        _: u32,
+    ) -> Option<Rewrite> {
+        None
+    }
+    let matcher = Matcher { width: 1, first: &[Operation::Move], head, tail, cross: None };
+    let value = Held { value: 1, width: 2 };
+    let insns: Vec<Arc<Insn>> =
+        [(Operation::Move, "mov"), (Operation::Binary, "add"), (Operation::Push, "push"), (Operation::Binary, "sub")]
+            .into_iter()
+            .enumerate()
+            .map(|(at, (op, name))| {
+                Arc::new(Insn::new(
+                    at as i64,
+                    Some((at as i64, at as i64)),
+                    Some(what(op, name, vec![Loc::Held(value)], vec![])),
+                    vec![],
+                    vec![],
+                ))
+            })
+            .collect();
+    let counts: IndexMap<u32, i64> = IndexMap::default();
+    walk::window_insns(
+        &insns,
+        &Facts::counted(&counts, 16, crate::backend::registerinfo::test_regs()),
+        &matcher,
+        Skip::None,
+    );
+    assert_eq!(ASKED.load(Ordering::Relaxed), 1);
+}
+
+/// Every instruction of a block got a copy of its window's indices before the
+/// first-pattern test: d_faces -O2 made 24 K such vectors, 23 K for nothing.
+/// A block with no instruction a rule starts on now costs a constant.
+#[test]
+fn test_a_block_no_rule_starts_in_allocates_nothing_per_instruction() {
+    use super::walk::{self, Cx, Matcher, Rewrite, Skip, Window};
+
+    fn head(_: &Window) -> u32 {
+        0
+    }
+    fn tail(
+        _: &Cx,
+        _: &Window,
+        _: u32,
+    ) -> Option<Rewrite> {
+        None
+    }
+    let matcher = Matcher { width: 2, first: &[Operation::Move], head, tail, cross: None };
+    let insns: Vec<Arc<Insn>> = (0..64)
+        .map(|at| {
+            Arc::new(Insn::new(
+                at,
+                Some((at, at)),
+                Some(what(Operation::Binary, "add", vec![], vec![])),
+                vec![],
+                vec![],
+            ))
+        })
+        .collect();
+    let counts: IndexMap<u32, i64> = IndexMap::default();
+    let facts = Facts::counted(&counts, 16, crate::backend::registerinfo::test_regs());
+    let (_, made) = llrm_support::alloc_count::counted(|| walk::window_insns(&insns, &facts, &matcher, Skip::None));
+    assert!(made <= 8, "{made} allocations walking 64 instructions no rule starts on");
 }

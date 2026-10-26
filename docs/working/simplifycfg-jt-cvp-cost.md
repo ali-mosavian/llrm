@@ -2,7 +2,7 @@
 
 Ledger e90b803c8a bucket: ours 90.9 M Ir against the pin's 33.6 M (2.70x) on d_faces -O2.
 
-Method: callgrind, `llrm-c -m32 -mabi=sysv -march=i486 -O2` on `render/d_faces.c` (release, parity 1bd7d34afc + #3660; `/tmp/cg.sw.out`) against the pin's `opt -passes=default<O2>` callgrind on the same stage (`~/scratch/ledger2/cg-opt.out`), inclusive Ir, `callgrind_annotate --tree=calling`.
+Method: callgrind, `llrm-c -m32 -mabi=sysv -march=i486 -O2` on `render/d_faces.c` (release, parity 1bd7d34afc + #3660; `cg.sw.out`) against the pin's `opt -passes=default<O2>` callgrind on the same stage (`cg-opt.out`), inclusive Ir, `callgrind_annotate --tree=calling`.
 
 ## Pass totals
 
@@ -59,3 +59,60 @@ The targets are guesses from the callee costs until each is profiled in isolatio
 Two sites that name their cost: `masm::frame_omitted` clones the whole item list 11 times (5.65 M inclusive: `stack_addressed` does `items.clone()` for each pass of its retry loop), and `peephole::_register_effects_worked` clones a `Semantics` as the cache key 5,559 times (5.8 M inclusive, `EffectsHeld::remember`). `Semantics` carries a `String` name and two `Vec<Loc>`: every clone of an `Insn` is three allocations.
 
 Next, each its own PR with Ir on both arms and objects identical: `Semantics` names as `&'static str`/`Arc<str>` (removes the String clones), the key of `EffectsHeld` by reference, `stack_addressed` without the per-pass clone, and `with_capacity` at the `RawVec<u32>` pushes.
+
+## Closed: the flat tail (2026-10-24, parity 4b9b80871f)
+
+- `RawVec<u32>::grow_one` is 1.69 M Ir inclusive (the 5.4 M above was `finish_grow`'s share), in a dozen callers of at most 0.57 M each (`exposed_allocas`, `LiveIntervals::new`, `push_operand`, `references::of`): a `with_capacity` at each is about 1 M.
+- The SimplifyCfg visitors are 0.4 to 1.4 M each after #3834; `occurrence::arms` allocates 2.6 M in 14 callers, and `undefpred::removed` mutates while it walks them, so no iterator replaces the `Vec`.
+- LVI: the asks equal the pin's (593 / 574 against 516 / 475), the edge evaluations are 1.85x (12.3 K against 6.6 K), `get_edge_value_local` is a faithful port (1,153 against 498 Ir a call, flat); sharing CVP's `LviCache` with JumpThreading moved nothing (+37 K Ir, objects identical) and was not landed.
+- Landed: #3792 (-1.41 M), #3834 (-3.62 M), #3871 (-1.86 M), #3872 (-3.43 M). Open: `Vec<Loc>` clones in `Semantics` (11 M inclusive), 2026-11-06.
+
+## Dated plan at parity 00a8ea652 (2026-10-25)
+
+callgrind d_faces -O2 on the ledger command (release), ours against the pin's `opt` (cg-opt.out):
+
+| pass | ours | pin | excess | ratio |
+|---|--:|--:|--:|--:|
+| SimplifyCfg, 99 `iterativelySimplified` (the pin: 80) | 33.5 M | 8.58 M | 24.9 M | 3.9x |
+| CorrelatedValuePropagation, 22 runs | 29.0 M | 9.51 M | 19.5 M | 3.0x |
+| JumpThreading, 22 runs | 19.6 M | 7.21 M | 12.4 M | 2.7x |
+| of which LVI `solve` (under CVP and JT) | 27.3 M | 9.90 M | 17.4 M | 2.8x |
+
+Steps, one PR each, Ir on both arms and identical objects, the pin pass each mirrors named:
+
+| # | step | mirrors | target | date |
+|--:|---|---|--:|---|
+| 1 | `loop_form_blocks` from the manager's cached loop analysis (4.9 M in 36 asks, 137 K each) | `NeedCanonicalLoop` via `LoopInfo` | -3 M | 2026-11-03 |
+| 2 | the per-block visitors take `sole_predecessor`/`has_n_predecessors` in place of `predecessors()` (9,955 calls, 1.7 M) and `branchtocommon::folded` asks the cheap shape first (2.7 M, 3,661 calls) | `simplifyCFG` / `foldBranchToCommonDest`'s early exits | -2 M | 2026-11-06 |
+| 3 | LVI: one evaluation of a branch condition for all the values asked of it in a solve (`get_value_from_condition` 11 K calls at 1.15 K Ir against the pin's 498) | `getValueFromCondition` with its `ValueLatticeElement` cache | -6 M | 2026-11-10 |
+| 4 | CVP: `get_constant_on_edge` (528 calls, 14.8 K Ir each) and `get_constant_range_at_use` (554) reuse the block-value cache across the processed blocks | `CorrelatedValuePropagation::runImpl` order | -4 M | 2026-11-14 |
+| 5 | JumpThreading `process_threadable_edges` (619 calls, 17 K each): `computeValueKnownInPredecessors` memo per (value, block) | `computeValueKnownInPredecessorsImpl` | -3 M | 2026-11-17 |
+| 6 | re-take on the ledger (dist), the remaining top-5 callees by Ir | - | - | 2026-11-18 |
+
+Step 3's counts (callgrind d_faces -O2, parity 00a8ea652; the pin side from `ledger2/cg-opt.out`, where `matchICmpOperand` is inlined): `get_value_from_icmp_condition` 6,781 calls against the pin's `getValueFromICmpCondition` 4,869; `match_icmp_operand` 19,174 calls (2.8 per condition: the pin makes at most two, inline) with `scalar_size_in_bits` 30,782 calls (4.5 per condition: the pin's `getScalarSizeInBits` is a field read) and `pattern::binary` 44,254 calls (6.5 per condition). So the lever is calls per condition: the width once, the pattern shape once, the two operands matched together.
+
+Each target is a guess from the callee cost until the step is profiled; the PR states the measured number.
+
+## Dist re-take at parity d4869997c (2026-10-25): buckets and dated rows
+
+callgrind d_faces -O2 on the ledger command, dist build (`tools/pairs/pair_build.sh`), total 899.6 M Ir; the pin column is `cg-opt.out` (clang, same module):
+
+| bucket | ours (dist) | pin | excess | top callees (calls; Ir a call) |
+|---|--:|--:|--:|---|
+| InstCombine (`combine`, 54 runs) | 72.3 M | 55.1 M | 17.2 M | `simplify_instruction_with` 18.6 M (9,931; 1.9 K); `visit_icmp` 16.3 M (995; 16.4 K); `visit_add` 4.6 M (555; 8.2 K); `visit_ashr` 2.8 M (200; 14 K); `visit_shl` 2.3 M (175; 13 K); `visit_sext` 2.0 M (385) |
+| SimplifyCfg (88 driver calls) | 22.8 M | 8.58 M | 14.2 M | after #4148, #4175, #4249, #4279, #4353 (-6.3 M of the 33.5 M); the rest is flat (see the call-count table above) |
+| CVP (22 runs) | 27.4 M | 9.51 M | 17.9 M | `get_constant_on_edge` 7.4 M (529; 14 K); `get_constant_range_at_use` 6.2 M (576; 10.8 K); `get_predicate_at` 4.8 M (256; 18.9 K); `get_constant_at` 4.1 M (193; 21 K) |
+| JumpThreading (22 runs) | 16.2 M | 7.21 M | 9.0 M | `process_threadable_edges` 9.7 M (619; 15.6 K); `lvi_predicate_at` 2.2 M (345; 6.3 K) |
+| LVI `solve` (inclusive, under CVP and JT) | 25.7 M | 9.90 M | 15.8 M | `get_edge_value` 16.7 M (11,123; 1.5 K); `predecessors` 2.3 M (9,776 lists); `insert_result` 2.2 M (6,541) |
+
+CFG/JT/CVP together are 66.4 M against the pin's 25.3 M (the earlier 78.0 against 33.6 was the release profile). Dated rows, each one PR with the dist Ir on both arms and identical objects, the pin function it mirrors named; a target is a guess until profiled:
+
+| # | row | mirrors | owner | date |
+|--:|---|---|---|---|
+| B1 | `visit_icmp`: its callees by Ir (16.4 K a call over 995 calls), then the cut | `InstCombinerImpl::visitICmpInst` | w-4 | profile 2026-11-10, PR 2026-11-17 |
+| B2 | `simplify_instruction_with`: the per-call cost of a query (1.9 K a call; the `Query`, the dominator and assumption lookups built per ask) | `simplifyInstruction` with a held `SimplifyQuery` | w-4 | 2026-11-14 |
+| B3 | LVI `get_edge_value` (11,123 calls) and the `predecessors` lists (9,776): step 3, the per-condition evaluation, then a predecessor slice in place of the list | `getEdgeValue`, `pred_begin` | w-4 | step 3 2026-11-10, lists 2026-11-14 |
+| B4 | CVP `get_constant_on_edge`, `get_constant_range_at_use`, `get_predicate_at`: one block-value cache across the blocks of a run (step 4) | `CorrelatedValuePropagation::runImpl` | w-4 | 2026-11-17 |
+| B5 | JumpThreading `process_threadable_edges`: the known-in-predecessor memo (step 5) | `computeValueKnownInPredecessorsImpl` | w-4 | 2026-11-19 |
+| B6 | the SimplifyCfg flat tail: self cost per call of `duplicate_phis_in`, `terminator_folded`, `merged_into_predecessor`, `hoistcommon` at equal call counts | `EliminateDuplicatePHINodes`, `ConstantFoldTerminator`, `MergeBlockIntoPredecessor`, `hoistCommonCodeFromSuccessors` | w-4 | 2026-11-21 |
+| B7 | re-take on a dist, the remaining top-5 callees by Ir | - | w-4 | 2026-11-24 |

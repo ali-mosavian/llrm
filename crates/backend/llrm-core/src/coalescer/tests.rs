@@ -27,7 +27,7 @@ fn copy(
     src: u32,
 ) -> Arc<Insn> {
     let what = Semantics {
-        name: Some("mov".to_owned()),
+        name: Some("mov".into()),
         dests: vec![held(dst)],
         sources: vec![held(src)],
         ..Semantics::new(Operation::Move)
@@ -38,7 +38,7 @@ fn copy(
 /// A definition of `v` from nothing: not a copy.
 fn def(v: u32) -> Arc<Insn> {
     let what = Semantics {
-        name: Some("mov".to_owned()),
+        name: Some("mov".into()),
         dests: vec![held(v)],
         sources: vec![Loc::Imm(crate::model::ir::Imm { value: 7, width: 4, address: None })],
         ..Semantics::new(Operation::Move)
@@ -50,7 +50,7 @@ fn def(v: u32) -> Arc<Insn> {
 /// make again.
 fn load(v: u32) -> Arc<Insn> {
     let what = Semantics {
-        name: Some("mov".to_owned()),
+        name: Some("mov".into()),
         dests: vec![held(v)],
         sources: vec![Loc::Mem(crate::model::ir::Mem::new(None, 0))],
         ..Semantics::new(Operation::Move)
@@ -104,6 +104,68 @@ fn test_a_copy_between_values_that_do_not_overlap_is_joined_and_removed() {
     assert_eq!(kept[1], (vec![], vec![survivor]), "the read names the value the def does");
     assert!(!lis.has_interval(if survivor == 1 { 2 } else { 1 }), "the absorbed interval is gone");
     assert_consistent(&lis, &was, 1);
+}
+
+/// `v1 := def; v2 := mov v1` and nothing reads `v2`: the copy is dead, and so
+/// then is the definition it alone read. Only the copy went, leaving a `v1`
+/// that nothing reads (C5: `eliminateDeadDefs` was not run).
+#[test]
+fn test_a_dead_copy_takes_the_definition_only_it_read() {
+    let (a, c) = (def(1), copy(2, 1));
+    let was = body(&[(&[Arc::clone(&a), Arc::clone(&c)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Joined);
+    assert!(names(&lis).is_empty(), "both the copy and the def are gone: {:?}", names(&lis));
+}
+
+/// `v1 := call; v2 := mov v1` and nothing reads `v2`: the copy goes, the call
+/// stays. Run on the sweep's regparm3 matrix callers (#4152) it erased the
+/// calls whose delivered value nothing read: wrong output.
+#[test]
+fn test_a_dead_copy_does_not_take_a_call_that_delivered_its_source() {
+    let what = Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) };
+    let mut call = Insn::new(0, None, Some(what), vec![1], vec![]);
+    call.delivers = vec![(Held { value: 1, width: 4 }, llrm_lir::registers::RegId::EAX)];
+    let (call, c) = (Arc::new(call), copy(2, 1));
+    let was = body(&[(&[Arc::clone(&call), Arc::clone(&c)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Joined);
+    assert_eq!(names(&lis), vec![(vec![1], vec![])], "the call stays, the copy goes");
+}
+
+/// `v25 := mov v24; v25 += v3` (`v3` dies), `v3 := mov v25`, then `v25 += v25`
+/// reads that value and writes a new one. Commuting the first add to write `v3`
+/// rewrote the second add whole, its definition too, so the value it made was
+/// named `v3` and its reader named `v25` (m16 `decode` of a canonical Huffman
+/// table: the code of the next bit was read from the wrong register).
+#[test]
+fn test_commuting_a_def_leaves_a_reader_that_redefines_the_value_alone() {
+    let op = |dest: u32, source: u32| {
+        let what = Semantics {
+            name: Some("add".into()),
+            dests: vec![held(dest)],
+            sources: vec![held(dest), held(source)],
+            ..Semantics::new(Operation::Binary)
+        };
+        Arc::new(Insn::new(0, None, Some(what), vec![dest], vec![dest, source]))
+    };
+    let copy_back = copy(3, 25);
+    let insns = [load(3), load(24), copy(25, 24), op(25, 3), Arc::clone(&copy_back), op(25, 25), read(25), read(3)];
+    let was = body(&[(&insns, &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(3);
+    lis.interval(25);
+    super::join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), copy_back.id());
+    let after = lis.body_like(&was);
+    let all: Vec<_> = after.blocks.iter().flat_map(|one| one.insns.iter()).collect();
+    let (add, read) = (all[all.len() - 3], all[all.len() - 2]);
+    assert_eq!(read.uses, add.defines, "the read of the second add's value names what the add defines");
 }
 
 /// `v1` redefined while `v2` (a copy of its first value) is live: the join
@@ -304,7 +366,7 @@ fn test_a_coalesced_address_keeps_its_memory_operand_defined() {
     use crate::model::ir::Mem;
     let memory = Mem { base: Some(Held { value: 2, width: 2 }), ..Mem::new(None, 2) };
     let what = Semantics {
-        name: Some("mov".to_owned()),
+        name: Some("mov".into()),
         dests: vec![held(3)],
         sources: vec![Loc::Mem(memory)],
         ..Semantics::new(Operation::Move)
@@ -364,7 +426,7 @@ fn swap_loop() -> LirBody {
     };
     let step = {
         let what = Semantics {
-            name: Some("idiv".to_owned()),
+            name: Some("idiv".into()),
             dests: vec![held(t)],
             sources: vec![held(a), held(b)],
             ..Semantics::new(Operation::Binary)
@@ -372,7 +434,7 @@ fn swap_loop() -> LirBody {
         Arc::new(Insn::new(0, None, Some(what), vec![t], vec![a, b]))
     };
     let branch = {
-        let what = Semantics { name: Some("jne".to_owned()), target: Some(1), ..Semantics::new(Operation::Branch) };
+        let what = Semantics { name: Some("jne".into()), target: Some(1), ..Semantics::new(Operation::Branch) };
         Arc::new(Insn::new(0, None, Some(what), vec![], vec![]))
     };
     body_of(vec![
@@ -417,7 +479,7 @@ fn body_of(blocks: Vec<LirBlock>) -> LirBody {
 }
 
 fn jump(target: i64) -> Arc<Insn> {
-    let what = Semantics { name: Some("jmp".to_owned()), target: Some(target), ..Semantics::new(Operation::Jump) };
+    let what = Semantics { name: Some("jmp".into()), target: Some(target), ..Semantics::new(Operation::Jump) };
     Arc::new(Insn::new(0, None, Some(what), vec![], vec![]))
 }
 
@@ -600,7 +662,7 @@ fn test_a_copy_at_a_loop_entry_that_the_latch_reverses_moves_to_the_preheader() 
 /// A store of a register to memory, the other half of a spill: not a copy.
 fn store(v: u32) -> Arc<Insn> {
     let what = Semantics {
-        name: Some("mov".to_owned()),
+        name: Some("mov".into()),
         dests: vec![Loc::Mem(crate::model::ir::Mem::new(None, 0))],
         sources: vec![held(v)],
         ..Semantics::new(Operation::Move)
@@ -630,7 +692,7 @@ fn test_a_store_of_a_register_is_no_left_copy() {
 fn test_a_copy_after_a_commutable_two_address_def_goes_by_commuting_it() {
     let (b0, a2, tie, copy_back) = (load(2), load(3), copy(1, 3), copy(2, 1));
     let what = Semantics {
-        name: Some("add".to_owned()),
+        name: Some("add".into()),
         dests: vec![held(1)],
         sources: vec![held(1), held(2)],
         ..Semantics::new(Operation::Binary)

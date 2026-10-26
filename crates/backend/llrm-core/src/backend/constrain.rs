@@ -76,7 +76,7 @@
 //! ```
 //!
 //! From `ISEL_DUMP=1 llrm-nib -O2 -fno-inline-functions
-//! -fno-inline-functions-called-once -fno-ipa-cp-clone -fno-ipa-vrp
+//! -fno-inline-functions-called-once -fno-ipa-cp-clone
 //! -march=i386` of the program under `calleefacts`.
 //!
 //! # Used by
@@ -94,7 +94,7 @@ use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
 
 use crate::backend::classes::RegisterClasses;
-use crate::backend::{regclass, spiller, target};
+use crate::backend::{regclass, target};
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::{IndexMap, IndexSet};
@@ -161,7 +161,7 @@ pub fn constrained(
 
     let defined: BTreeSet<u32> =
         body.blocks.iter().flat_map(|block| &block.insns).flat_map(|one| one.defines.iter().copied()).collect();
-    let constants = spiller::_constants(body, &defined);
+    let constants = crate::backend::bodyfacts::_constants(body, &defined);
 
     let source = |value: u32, width: u32| -> Loc {
         match constants.get(&value) {
@@ -405,8 +405,18 @@ pub fn distinct_classes(
     registers: &RegisterClasses,
 ) -> LirBody {
     let uses = regclass::confining_uses(body, segments, registers);
+    distinct_classes_given(body, floor, &uses).unwrap_or_else(|| body.clone())
+}
+
+/// `distinct_classes`, given the body's confining reads: None where no value
+/// needs a copy.
+pub fn distinct_classes_given(
+    body: &LirBody,
+    floor: u32,
+    uses: &[regclass::Use],
+) -> Option<LirBody> {
     let mut by_value: IndexMap<u32, Vec<&regclass::Use>> = IndexMap::default();
-    for one in &uses {
+    for one in uses {
         by_value.entry(one.value).or_default().push(one);
     }
     // Which (block, instruction, value, role) reads take a copy.
@@ -441,7 +451,7 @@ pub fn distinct_classes(
         }
     }
     if peeled.is_empty() {
-        return body.clone();
+        return None;
     }
     // The widest any instruction names a value at: a phi's result has no
     // defining operand.
@@ -522,7 +532,12 @@ pub fn distinct_classes(
         }
         blocks.push(block.with_insns(insns));
     }
-    body.with_blocks(blocks)
+    Some(body.with_blocks(blocks))
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static REQUIRED_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Where each value the body's instructions require has to live.
@@ -530,6 +545,8 @@ pub fn required(
     body: &LirBody,
     classes: &RegisterClasses,
 ) -> IndexMap<u32, RegId> {
+    #[cfg(test)]
+    REQUIRED_ASKED.with(|asked| asked.set(asked.get() + 1));
     required_in(body, classes, &(0..body.blocks.len()).collect::<Vec<_>>())
 }
 
@@ -662,7 +679,7 @@ fn _move(
         beside.at,
         Some((beside.at, beside.at)),
         Some(Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![Loc::Held(into)],
             sources: vec![out_of],
             ..Semantics::new(Operation::Move)
@@ -818,9 +835,8 @@ mod tests {
 
     use llrm_lir::registers::RegId;
 
-    use super::{constrained, hoisted, required};
-    use crate::backend::frame::Frame;
-    use crate::backend::{allocate, select, spiller, target};
+    use super::{constrained, hoisted};
+    use crate::backend::{allocate, select, target};
     use crate::model::ir::{self, Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
@@ -831,7 +847,7 @@ mod tests {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Semantics {
-        Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+        Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
     }
 
     fn held(
@@ -891,58 +907,12 @@ mod tests {
         }
     }
 
-    fn merged(
-        one: &IndexMap<u32, RegId>,
-        other: &IndexMap<u32, RegId>,
-    ) -> IndexMap<u32, RegId> {
-        let mut out = one.clone();
-        out.extend(other.iter().map(|(value, register)| (*value, *register)));
-        out
-    }
-
     fn what(one: &Insn) -> &Semantics {
         one.what.as_ref().expect("semantics")
     }
 
     fn pinned(pairs: &[(u32, RegId)]) -> IndexMap<u32, RegId> {
         pairs.iter().copied().collect()
-    }
-
-    /// H_BENCH printed ft_n=0 and infinite ft_mean: SI's result was spilled
-    /// from BX.
-    #[test]
-    fn test_call_result_spill_keeps_its_register_after_input_split() {
-        let (argument, result) = (Held { value: 1, width: 2 }, Held { value: 2, width: 2 });
-        let source =
-            _insn(semantics(Operation::Move, "mov", vec![Loc::Held(argument)], vec![imm(7, 2)]), &[1], &[], 0x100);
-        let mut call = _insn(semantics(Operation::Call, "call", vec![], vec![]), &[2], &[1], 0x108);
-        call.requires = vec![(argument, RegId::AX)];
-        call.delivers = vec![(result, RegId::SI)];
-        let use_ =
-            _insn(semantics(Operation::Move, "mov", vec![held(3, 2)], vec![Loc::Held(result)]), &[3], &[2], 0x110);
-        let (split, pins) = constrained(
-            &_body(vec![source, call, use_]),
-            Some(&pinned(&[(2, RegId::SI)])),
-            &crate::backend::classes::RegisterClasses::m16(),
-        );
-        let mut frame = Frame::new(0);
-        let (spilled, _) = spiller::spilled(
-            &split,
-            &BTreeSet::from([2]),
-            Some(&mut frame),
-            &crate::backend::classes::RegisterClasses::m16(),
-        )
-        .unwrap();
-        let assignment =
-            allocated(&spilled, &merged(&pins, &required(&spilled, &crate::backend::classes::RegisterClasses::m16())));
-        let placed =
-            crate::backend::rewriter::rewrite(&spilled, &assignment, &crate::backend::classes::RegisterClasses::m16())
-                .unwrap();
-        let insns = placed.insns();
-        let call_index = insns.iter().position(|one| what(one).op == Operation::Call).unwrap();
-        let store = &insns[call_index + 1];
-        assert!(matches!(what(store).dests[0], Loc::Mem(_)));
-        assert_eq!(what(store).sources, vec![Loc::Reg(Reg { register: RegId::SI, width: 2 })]);
     }
 
     /// JUMPS refused emission: ON GOTO read old v20 while its required input
@@ -1334,6 +1304,64 @@ mod tests {
         let insns = got.insns();
         assert_eq!(insns.len(), 4, "one copy");
         assert!(insns[1].defines.len() == 1 && insns[1].uses == [1], "the copy reads the index");
+    }
+
+    /// `lea [v1 + v2]` with both read as bytes elsewhere: neither spelling of
+    /// the pair (base BX/BP, index SI/DI) leaves both a register, the roles
+    /// fall back to the source spelling and `v2`, an index, has no register
+    /// that is also a byte register. `distinct_classes` saw only the byte
+    /// reads (sc.c `_sc_alloc@3` under `--isel=shadow`: "could not place
+    /// every range"). The pair's read of `v2` takes a copy of its own.
+    #[test]
+    fn test_a_byte_read_value_in_a_two_register_address_reads_a_copy_there() {
+        let cell = Mem {
+            base: Some(Held { value: 1, width: 2 }),
+            index: Some(Held { value: 2, width: 2 }),
+            ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2)
+        };
+        let byte_read = |into: u32, from: u32, at: i64| {
+            Insn::new(
+                at,
+                Some((at, at + 2)),
+                Some(semantics(Operation::Move, "mov", vec![held(into, 1)], vec![held(from, 1)])),
+                vec![into],
+                vec![from],
+            )
+        };
+        let body = _body(vec![
+            Insn::new(
+                0x10,
+                Some((0x10, 0x12)),
+                Some(semantics(Operation::Move, "mov", vec![held(1, 2)], vec![imm(0, 2)])),
+                vec![1],
+                vec![],
+            ),
+            Insn::new(
+                0x12,
+                Some((0x12, 0x14)),
+                Some(semantics(Operation::Move, "mov", vec![held(2, 2)], vec![imm(0, 2)])),
+                vec![2],
+                vec![],
+            ),
+            byte_read(3, 1, 0x14),
+            byte_read(4, 2, 0x16),
+            byte_read(5, 2, 0x18),
+            Insn::new(
+                0x1a,
+                Some((0x1a, 0x1d)),
+                Some(semantics(Operation::Address, "lea", vec![held(6, 2)], vec![Loc::Mem(cell)])),
+                vec![6],
+                vec![1, 2],
+            ),
+        ]);
+        let m16 = crate::backend::classes::RegisterClasses::m16();
+        let stuck = |body: &LirBody| {
+            let found = crate::backend::regclass::classes(body, &BTreeSet::new(), &target::BUILT_IN, &m16);
+            found.values().filter(|class| target::order(Some(*class), &target::BUILT_IN, &m16).is_empty()).count()
+        };
+        assert_eq!(stuck(&body), 1, "premise: the index has no register");
+        let got = super::distinct_classes(&body, 7, &target::BUILT_IN, &m16);
+        assert_eq!(stuck(&got), 0);
     }
 
     // ---- hoisted ----

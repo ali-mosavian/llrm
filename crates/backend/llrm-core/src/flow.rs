@@ -19,7 +19,7 @@ use crate::backend::target::Segments;
 use crate::backend::verify::{self, Malformed};
 use crate::backend::{
     allocate, coalesce, farcall, floatalloc, floatassign, jumps, loopslots, parcopy, peephole, phielim, prologue,
-    schedule, ssaspill, twoaddr,
+    schedule, twoaddr,
 };
 use crate::model::lir::LirBody;
 use crate::model::passes::LIRTransform;
@@ -40,7 +40,6 @@ pub fn machine<'a>(
     basic_semantics: bool,
     cpu: impl Into<ProfileOrName<'a>>,
     segments: &Segments,
-    spilling: bool,
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
     machine_with(
         pinned,
@@ -51,7 +50,6 @@ pub fn machine<'a>(
         cpu,
         segments,
         &crate::backend::classes::RegisterClasses::m16(),
-        spilling.then(Rc::<ssaspill::Run>::default),
         &crate::backend::targets::x86_m16::RULES,
         &llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
     )
@@ -64,37 +62,47 @@ const UNOPTIMIZED: &[&str] = &[
     "Scheduler",
     "Coalescer",
     "PressureSink",
+    "MachineScheduler",
     "MachineSink",
+    "PeepholeOptimizer",
     "MachineCSE",
     "OptimizePHIs",
     "LateCleanup",
     "MachineCombiner",
     "PushFold",
+    "LoadFold",
     "FixupSetCC",
     "CopyPropagation",
     "LiveRangeShrink",
     "X86OptimizeLEAs",
     "MachineLICM",
     "FixupBW",
+    "FixupLEAs",
     "CmpAsSub",
+    "CallFrameOpt",
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
 const SLOTS: &[(&str, &str)] = &[
+    ("EarlyTailDuplicate", "earlytaildup@1"),
     ("FarIndirectCalls", "farcall@1"),
+    ("LoadFold", "pushfold@6"),
     ("CmpAsSub", "cmpsub@1"),
     ("OptimizePHIs", "optimizephis@1"),
     ("SharedConstants", "phiconst@2"),
     ("ProcessImplicitDefs", "processimpdefs@2"),
-    ("SsaSpill", "ssaspill@3"),
     ("PhiElimination", "phielim@4"),
     ("MachineLICM", "machinelicm@4"),
     ("MachineCSE", "machinecse@4"),
     ("MachineSink", "machinesink@4"),
+    ("PeepholeOptimizer", "peepholeopt@4"),
     ("MachineCombiner", "combiner@4"),
     ("LiveRangeShrink", "liverangeshrink@4"),
     ("PressureSink", "pressuresink@5"),
+    ("MachineScheduler", "machinesched@5"),
     ("FixupSetCC", "fixupsetcc@5"),
+    ("CallFrameOpt", "callframe@5"),
+    ("ReserveCallFrame", "callframe@5"),
     ("FlagsCopy", "flagscopy@5"),
     ("X86OptimizeLEAs", "leaopt@5"),
     ("FloatFold", "floatfold@6"),
@@ -110,14 +118,14 @@ const SLOTS: &[(&str, &str)] = &[
     ("LateCleanup", "latecleanup@13"),
     ("Peephole", "peephole@14"),
     ("FixupBW", "fixupbw@14"),
+    ("FixupLEAs", "fixupleas@14"),
     ("LoopSlots", "loopslots@15"),
     ("Scheduler", "schedule@16"),
     ("ControlFlow", "jumps@17"),
     ("CopyPropagation", "copyprop@18"),
 ];
 
-/// `machine`, its peephole made of the rules `rules` holds; the spiller, where
-/// `spilling` names a run, reports to it.
+/// `machine`, its peephole made of the rules `rules` holds.
 #[allow(clippy::too_many_arguments)]
 pub fn machine_with<'a>(
     pinned: &IndexMap<u32, RegId>,
@@ -128,7 +136,6 @@ pub fn machine_with<'a>(
     cpu: impl Into<ProfileOrName<'a>>,
     segments: &Segments,
     classes: &Rc<crate::backend::classes::RegisterClasses>,
-    spilling: Option<Rc<ssaspill::Run>>,
     rules: &'static crate::backend::peep::Rules,
     registers: &llrm_target::FrameRegisters,
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
@@ -142,7 +149,13 @@ pub fn machine_with<'a>(
     }
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
     let mut phases: Vec<Box<dyn LIRTransform + 'a>> = vec![
+        // Directly after selection, as the pin has it: a small join copied into
+        // the blocks that jump to it (EarlyTailDuplicate).
+        Box::new(crate::backend::earlytaildup::EarlyTailDuplicate { size: target.size }),
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
+        // As the pin's selection has it: a once-read load is the memory operand
+        // of its reader before MachineCombiner sees the chain.
+        Box::new(crate::backend::pushfold::LoadFold),
         // The compare of a value with the constant it was just subtracted by
         // shares the subtract's flags (X86TargetLowering::EmitCmp).
         Box::new(crate::backend::cmpsub::CmpAsSub),
@@ -154,13 +167,10 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::phiconst::SharedConstants),
         // Before the phis go: a value nothing defines is read as undef.
         Box::new(crate::processimpdefs::ProcessImplicitDefs),
-        Box::new(ssaspill::SsaSpill {
-            frame: or_empty(),
-            segments: segments.clone(),
-            classes: Rc::clone(classes),
-            prices: ssaspill::Prices::of(target),
-            run: spilling.clone().unwrap_or_default(),
-        }),
+        // On SSA, ahead of the cmov conversion and EarlyMachineLICM (the pin's
+        // addILPOpts): a chain of one integer operation rebuilt so its late
+        // operand joins last.
+        Box::new(crate::backend::combiner::MachineCombiner),
         // On SSA, a loop-invariant computation in the preheader (the pin:
         // EarlyMachineLICM, ahead of MachineCSE).
         Box::new(crate::backend::machinelicm::MachineLicm { classes: Rc::clone(classes) }),
@@ -168,10 +178,10 @@ pub fn machine_with<'a>(
         // MachineSink).
         Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
         // On SSA, where a def with phi users alone can go to its edge.
-        Box::new(crate::backend::machinesink::MachineSink { size: target.size }),
-        // On SSA, after sinking (the pin's addILPOpts): a chain of one integer
-        // operation rebuilt so its late operand joins last.
-        Box::new(crate::backend::combiner::MachineCombiner),
+        Box::new(crate::backend::machinesink::MachineSink { size: target.size, limit: classes.available.len() }),
+        // On SSA, after sinking (the pin's PeepholeOptimizer): a subtract
+        // nothing reads is a compare (optimizeCompareInstr).
+        Box::new(crate::backend::peepholeopt::PeepholeOptimizer),
         // On SSA, before the pin allocates: two addresses that differ in a
         // displacement are one (X86OptimizeLEAs, pre-RA).
         Box::new(crate::backend::leaopt::OptimizeLeas { size: target.size }),
@@ -181,57 +191,72 @@ pub fn machine_with<'a>(
             segments: segments.clone(),
             classes: Rc::clone(classes),
         }),
-        Box::new(phielim::PhiElimination { prices: phielim::EdgePrices::of(target) }),
+        // On SSA, as the pin's `addPreRegAlloc` has it
+        // (X86CallFrameOptimization).
+        Box::new(crate::backend::callframe::CallFrameOpt {
+            slot: registers.slot,
+            align: registers.align,
+            stack: registers.stack,
+            // A function with variable-sized objects reserves no frame and
+            // pushes every area (`CallFrameOpt::allocates_dynamically`).
+            has_var_sized: false,
+            slow_two_mem_ops: false,
+        }),
+        // On SSA, right after the pushes are made: a pushed value a load made,
+        // read nowhere else, is pushed from the load's cell (the pin:
+        // X86CallFrameOptimization's push folding).
+        Box::new(crate::backend::pushfold::PushFold),
+        // On SSA, as the pin's `addPreRegAlloc` has it: flags kept across an
+        // instruction that clobbers them become a byte per condition
+        // (X86FlagsCopyLowering, every level).
+        Box::new(crate::backend::flagscopy::FlagsCopy),
+        Box::new(phielim::PhiElimination),
         // Before any value is placed: a load made where its reader is.
         Box::new(crate::backend::pressuresink::PressureSink {
             segments: segments.clone(),
             classes: Rc::clone(classes),
         }),
+        // Before any value is placed: the pin's pre-RA scheduler, bottom-up by
+        // pressure.
+        Box::new(crate::backend::machinesched::MachineScheduler { classes: Rc::clone(classes) }),
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
         Box::new(crate::backend::fixupsetcc::FixupSetCc),
-        // Flags kept across an instruction that clobbers them become a byte
-        // per condition (the pin: X86FlagsCopyLowering, every level).
-        Box::new(crate::backend::flagscopy::FlagsCopy),
         // A float load only one arithmetic instruction reads is its memory
         // operand.
         Box::new(crate::backend::floatfold::FloatFold { cpu: target }),
-        // A pushed value a load made, read nowhere else, is pushed from the
-        // load's cell (the pin: X86CallFrameOptimization's push folding).
-        Box::new(crate::backend::pushfold::PushFold),
         // After phi elimination: a phi's copies are where the stack shuffles.
-        if crate::backend::allocate::rfp_on() {
-            Box::new(floatassign::FloatPrep {
-                frame: frame.clone(),
-                pool,
-                basic_semantics,
-                status_word: classes.status_word(),
-            }) as Box<dyn LIRTransform + 'a>
-        } else {
-            Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target })
-        },
+        Box::new(floatassign::FloatPrep {
+            frame: frame.clone(),
+            pool,
+            basic_semantics,
+            status_word: classes.status_word(),
+        }),
         Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),
         Box::new(twoaddr::TwoAddress {
             lea: match target.dword_address_form() {
                 None => crate::twoaddress::ThreeAddress::Off,
-                Some(form) if form.secondary => crate::twoaddress::ThreeAddress::AddSub,
+                Some(form) if form.secondary => crate::twoaddress::ThreeAddress::AddSubWords,
                 Some(_) => crate::twoaddress::ThreeAddress::All,
             },
         }),
         Box::new(coalesce::Coalescer { size: target.size, ..coalesce::Coalescer::new(None, segments, classes) }),
-        Box::new(allocate::RegAlloc::new(
-            Some(&pinned),
-            frame.clone(),
-            ProfileOrName::Profile(target),
-            segments,
-            classes,
-        )?),
+        Box::new(
+            allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments, classes)?
+                .with_saved(registers.saved.iter().map(|(whole, _)| *whole).collect()),
+        ),
         // After allocation: which moves in a phi's copy conflict is a question
         // about locations.
         Box::new(parcopy::ParallelCopy {
             prices: parcopy::CyclePrices::of(target),
             available: classes.available.clone(),
             saved: registers.saved.iter().map(|(whole, _)| *whole).collect(),
+        }),
+        // The pin's PEI: the call frame is reserved, or each call adjusts.
+        Box::new(crate::backend::callframe::ReserveCallFrame {
+            stack: registers.stack,
+            width: registers.slot as u32,
+            frame: frame.clone(),
         }),
         Box::new(prologue::Prologue::new(or_empty(), calls.cloned())),
         // After frame finalization, as the pin: a constant loaded again where
@@ -246,6 +271,11 @@ pub fn machine_with<'a>(
         )?),
         // After the peephole, as the pin runs it late (X86FixupBWInsts).
         Box::new(crate::backend::fixupbw::FixupBw { size: target.size }),
+        Box::new(crate::backend::fixupleas::FixupLeas {
+            slow_3ops: target.slow_3ops_lea(),
+            size: target.size,
+            ..Default::default()
+        }),
         // Once spill traffic is final: which slots a loop still reaches.
         Box::new(loopslots::LoopSlots::new(frame.clone(), target, registers.slot as u32, classes)?),
         // Scheduling may only move fully allocated machine occurrences.
@@ -256,18 +286,13 @@ pub fn machine_with<'a>(
         // The pin runs MachineCopyPropagation again after tail duplication.
         Box::new(crate::backend::machinecp::CopyPropagation),
     ];
-    if spilling.is_none() {
-        phases.retain(|phase| phase.class_name() != "SsaSpill");
-    }
     // -O0: gcc and clang improve nothing after selection and allocation.
     if !target.optimized {
         phases.retain(|phase| !UNOPTIMIZED.contains(&phase.class_name()));
     }
     // Under RFP the stackifier runs after allocation, on the FP
     // registers greedy assigned, as X86FloatingPoint does.
-    if crate::backend::allocate::rfp_on()
-        && let Some(fps) = phases.iter().position(|phase| phase.class_name() == "FloatAlloc")
-    {
+    if let Some(fps) = phases.iter().position(|phase| phase.class_name() == "FloatAlloc") {
         let moved = phases.remove(fps);
         let after = phases.iter().position(|phase| phase.class_name() == "RegAlloc").map_or(phases.len(), |at| at + 1);
         phases.insert(after, moved);
@@ -340,9 +365,7 @@ pub fn checked(
     if crate::support::debug::enabled("regclass")
         && matches!(
             stage.as_str(),
-            "SsaSpill"
-                | "ssaspill"
-                | "PhiElimination"
+            "PhiElimination"
                 | "phielim"
                 | "FloatAssign"
                 | "FloatAlloc"
@@ -488,23 +511,52 @@ mod tests {
     /// and the stackifier runs after allocation, on the FP registers greedy
     /// assigned (X86FloatingPoint's place); without it the order is as ever.
     #[test]
-    fn test_the_stackifier_runs_after_allocation_under_rfp() {
+    fn test_the_stackifier_runs_after_allocation() {
         let names = || -> Vec<&'static str> {
-            machine(&IndexMap::default(), None, None, None, false, "486", &crate::backend::target::BUILT_IN, false)
+            machine(&IndexMap::default(), None, None, None, false, "486", &crate::backend::target::BUILT_IN)
                 .expect("phases")
                 .iter()
                 .map(|phase| phase.class_name())
                 .collect()
         };
         let at = |names: &[&str], one: &str| names.iter().position(|name| *name == one);
-        let old = crate::backend::allocate::RfpOn::off();
-        let before = names();
-        assert!(at(&before, "FloatAlloc") < at(&before, "RegAlloc") && at(&before, "FloatAssign").is_some());
-        drop(old);
         let after = names();
         assert_eq!(at(&after, "FloatAssign"), None);
-        assert_eq!(at(&after, "FloatPrep"), at(&before, "FloatAssign"));
+        assert!(at(&after, "FloatPrep") < at(&after, "RegAlloc"), "{after:?}");
         assert_eq!(at(&after, "FloatAlloc"), at(&after, "RegAlloc").map(|one| one + 1), "{after:?}");
+    }
+
+    /// The pin folds a once-read load into `ADD32rm` in selection, before the
+    /// combiner. Folded after it, the combiner saw `add rr` for a stack
+    /// argument and rebuilt a six-term sum as a tree: `mov eax, edx` and a
+    /// different register order in two llrm-c listings.
+    #[test]
+    fn test_a_load_is_folded_before_the_combiner_sees_the_chain() {
+        let names: Vec<&'static str> =
+            machine(&IndexMap::default(), None, None, None, false, "486", &crate::backend::target::BUILT_IN)
+                .expect("phases")
+                .iter()
+                .map(|phase| phase.class_name())
+                .collect();
+        let at = |one: &str| names.iter().position(|name| *name == one);
+        assert!(at("LoadFold").is_some() && at("LoadFold") < at("MachineCombiner"), "{names:?}");
+    }
+
+    /// The pin runs the MachineCombiner before EarlyMachineLICM, MachineCSE,
+    /// the sink and the peephole (`llc -O2 -debug-pass`); ours ran after the
+    /// peephole, so the chains it rebuilds were already rewritten.
+    #[test]
+    fn test_the_combiner_runs_before_licm_cse_sink_and_peephole() {
+        let names: Vec<&'static str> =
+            machine(&IndexMap::default(), None, None, None, false, "486", &crate::backend::target::BUILT_IN)
+                .expect("phases")
+                .iter()
+                .map(|phase| phase.class_name())
+                .collect();
+        let at = |one: &str| names.iter().position(|name| *name == one).expect(one);
+        for later in ["MachineLICM", "MachineCSE", "MachineSink", "PeepholeOptimizer"] {
+            assert!(at("MachineCombiner") < at(later), "{later}: {names:?}");
+        }
     }
 
     #[test]

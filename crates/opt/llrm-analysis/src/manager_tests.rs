@@ -291,6 +291,20 @@ fn summaries_and_globals_aa_make_no_shape() {
     assert!(analyses.cached_function::<Shape>(module.named("f").unwrap()).is_none(), "a manager's shape was asked");
 }
 
+/// `Summaries` made a `GlobalsModRef` of its own on every run (17 of the 19 on
+/// d_faces -O2, 5.2 M Ir) beside the one `GlobalsModRefAnalysis` holds; the
+/// pin has one `GlobalsAAResult`. It reads the held one.
+#[test]
+fn summaries_read_the_globals_modref_the_manager_holds() {
+    let module =
+        parsed("@g = global i16 0\n\ndefine i16 @f(ptr %p) {\nentry:\n  %x = load i16, ptr @g\n  ret i16 %x\n}\n");
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    analyses.get::<super::GlobalsModRefAnalysis>(&module);
+    let before = crate::globalsmodref::computes_made();
+    analyses.get::<Summaries>(&module);
+    assert_eq!(crate::globalsmodref::computes_made() - before, 0, "Summaries made a GlobalsModRef of its own");
+}
+
 /// A body that calls something unknown may call back into any entry, so its
 /// summary reads each entry's. Solved callees-first, `@p` was visited before
 /// `@entry` had @h's store from its callee, and never again: QCport's `dl` and
@@ -330,6 +344,92 @@ entry:
     };
     assert!(reaches_g("entry"), "the entry writes @g through @h");
     assert!(reaches_g("p"), "@p's unknown call may call back into @entry");
+}
+
+/// The MemorySSA the manager builds asks no `PlainAccesses`: no reference is
+/// made to build a graph (1.36 M Ir a build against the pin's 119 K), and
+/// what the graph says is what a build from the accesses said.
+#[test]
+fn test_a_memoryssa_build_asks_no_plain_accesses_and_says_what_they_said() {
+    for (name, module) in corpus() {
+        let layout = layout(&module);
+        let mut outer = Outer::of(&module, None);
+        outer.require::<Summaries>(&module);
+        let outer = Rc::new(outer);
+        for (_, global, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
+            let at = format!("{name}/@{}", global.name.as_deref().unwrap_or(""));
+            let mut analyses = Analyses::new(Rc::clone(&outer));
+            let graph = analyses.get::<super::MemorySsa>(&module.context, &layout, function);
+            let Ok(graph) = &*graph else { continue };
+            assert!(analyses.cached::<super::PlainAccesses>().is_none(), "{at}: the build made the accesses");
+            assert!(analyses.cached::<super::Writes>().is_none(), "{at}: the build asked the calls' footprints");
+            let accesses = graph.accesses(&module.context, &layout, function, &mut analyses).expect("accesses");
+            let shape = analyses.get::<crate::cfg::Shape>(&module.context, &layout, function);
+            let unit = Unit::within(&module.context, &layout, function, &outer);
+            let said = crate::mssa::Mssa::build(
+                function,
+                &shape.dominance,
+                &crate::mssa::shadow::effect_of_in(&accesses, &unit),
+            );
+            assert!(
+                crate::mssa::shadow::said(&graph.mssa) == crate::mssa::shadow::said(&said),
+                "{at}: the graph built from opcodes differs from the one built from the accesses"
+            );
+        }
+    }
+}
+
+/// The accesses a MemorySSA client reads with the graph annotate nothing:
+/// EarlyCSE, MemCpyOpt and LICM answered from the AA stack and made
+/// `Annotated` and its inputs for it all the same (33 M Ir on d_faces -O2).
+#[test]
+fn test_the_accesses_of_a_graph_are_read_without_annotating() {
+    for (name, module) in corpus() {
+        let layout = layout(&module);
+        let mut outer = Outer::of(&module, None);
+        outer.require::<Summaries>(&module);
+        let outer = Rc::new(outer);
+        for (_, global, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
+            let at = format!("{name}/@{}", global.name.as_deref().unwrap_or(""));
+            let mut analyses = Analyses::new(Rc::clone(&outer));
+            let graph = analyses.get::<super::MemorySsa>(&module.context, &layout, function);
+            let Ok(graph) = &*graph else { continue };
+            graph.accesses(&module.context, &layout, function, &mut analyses).expect("accesses");
+            assert!(analyses.cached::<Annotated>().is_none(), "{at}: the accesses were annotated");
+            assert!(analyses.cached::<super::Writes>().is_none(), "{at}: the calls' footprints were made");
+            assert!(analyses.cached::<super::PlainAccesses>().is_none(), "{at}: the plain accesses were made");
+        }
+    }
+}
+
+/// The graph's accesses make no reference up front (the clients ask 1.6 % of
+/// them: `BaseAccesses` was 8.0 M Ir over 28 builds on d_faces -O2), and what
+/// they say when asked is what the eager accesses of the same body say, for
+/// every instruction of every corpus function.
+#[test]
+fn test_the_graphs_accesses_are_lazy_and_say_what_the_eager_ones_say() {
+    for (name, module) in corpus() {
+        let layout = layout(&module);
+        let mut outer = Outer::of(&module, None);
+        outer.require::<Summaries>(&module);
+        let outer = Rc::new(outer);
+        for (_, global, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
+            let at = format!("{name}/@{}", global.name.as_deref().unwrap_or(""));
+            let mut analyses = Analyses::new(Rc::clone(&outer));
+            let graph = analyses.get::<super::MemorySsa>(&module.context, &layout, function);
+            let Ok(graph) = &*graph else { continue };
+            let lazy = graph.accesses(&module.context, &layout, function, &mut analyses).expect("accesses");
+            assert!(lazy.is_lazy(), "{at}: the graph's accesses were made up front");
+            let exposed = analyses.get::<super::ExposedFrames>(&module.context, &layout, function);
+            let unit = Unit::within(&module.context, &layout, function, &outer).with_exposed(&exposed);
+            let eager = crate::memoryssa::Accesses::plain(&unit, &Default::default());
+            for (_, inst) in function.walk() {
+                assert_eq!(lazy.reference_in(&unit, inst), eager.reference_in(&unit, inst), "{at} {inst:?}");
+                assert_eq!(lazy.reads_in(&unit, inst), eager.reads_in(&unit, inst), "{at} {inst:?} reads");
+                assert_eq!(lazy.writes_in(&unit, inst), eager.writes_in(&unit, inst), "{at} {inst:?} writes");
+            }
+        }
+    }
 }
 
 /// Each access asked of its own alloca's uses whether the address is exposed,
@@ -509,120 +609,6 @@ fn a_change_to_a_branch_bound_reworks_the_blocks_past_it() {
     assert_eq!(after, states(&mut fresh, &module), "what was brought up to date is what working every block gives");
 }
 
-/// The second loop starts straight from the first's header, below no block of
-/// its own, and carries what the first knows of values it never reads.
-const DIRECT: &str = "define i16 @f() {
-b0:
-  %nine = add i16 4, 5
-  %three = add i16 1, 2
-  %four = add i16 2, 2
-  br label %h0
-
-h0:
-  %i = phi i16 [ 0, %b0 ], [ %i.next, %l0 ]
-  %t = mul i16 %i, %three
-  br label %l0
-
-l0:
-  %i.next = add i16 %i, 1
-  %c = icmp slt i16 %i.next, %nine
-  br i1 %c, label %h0, label %h1
-
-h1:
-  %j = phi i16 [ 0, %h0 ], [ %j.next, %l1 ]
-  %d = icmp slt i16 %j, 5
-  br i1 %d, label %l1, label %end
-
-l1:
-  %j.next = add i16 %j, 1
-  br label %h1
-
-end:
-  ret i16 %j
-}
-";
-
-/// What a loop knows is read from the loop its header's dominator is in, as
-/// well as from the blocks above: a change in the first of two such loops to a
-/// value the second never reads left the second's facts, which carry it, stale.
-#[test]
-fn a_change_to_a_loop_reworks_the_loop_that_starts_from_it() {
-    let mut module = parsed(&format!("{DOS}{DIRECT}"));
-    let layout = layout(&module);
-    let outer = Rc::new(Outer::of(&module, None));
-    let mut analyses = Analyses::new(Rc::clone(&outer));
-    let facts = |analyses: &mut Analyses, module: &llrm_mir::module::Module| {
-        let function = function(module, "f");
-        let held = super::Ranges::of(&module.context, &layout, function, analyses, true);
-        let unit = held.unit(&module.context, &layout, function, analyses.outer());
-        match held.bounds() {
-            Some(Ok(bounds)) => bounds.complete(&unit),
-            _ => panic!("bounds"),
-        }
-    };
-    let before = facts(&mut analyses, &module);
-    {
-        let (_, function) = module.function_mut("f").unwrap();
-        let t = value(function, "t");
-        let t =
-            function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(t)).unwrap();
-        let four = Operand::Value(value(function, "four"));
-        function.set_operand(t, 1, four);
-        analyses.invalidate(function, &PreservedAnalyses::none());
-    }
-    let after = facts(&mut analyses, &module);
-    assert_ne!(before, after, "the value the change reached");
-    assert_eq!(
-        after,
-        facts(&mut Analyses::new(outer), &module),
-        "what was brought up to date is what working every loop gives"
-    );
-}
-
-/// A loop carries what is known of the values made above it, whether it reads
-/// them or not: an instruction erased there, which no loop's blocks held, was
-/// still in the loop's facts. Seven bench programs and four pipeline tests
-/// found it.
-#[test]
-fn an_instruction_erased_above_a_loop_leaves_the_loops_facts() {
-    let mut module = parsed(&format!("{DOS}{LIMITED}"));
-    let layout = layout(&module);
-    let outer = Rc::new(Outer::of(&module, None));
-    let mut analyses = Analyses::new(Rc::clone(&outer));
-    let facts = |analyses: &mut Analyses, module: &llrm_mir::module::Module| {
-        let function = function(module, "f");
-        let held = super::Ranges::of(&module.context, &layout, function, analyses, true);
-        let unit = held.unit(&module.context, &layout, function, analyses.outer());
-        match held.bounds() {
-            Some(Ok(bounds)) => bounds.complete(&unit),
-            _ => panic!("bounds"),
-        }
-    };
-    let seven = {
-        let function = function(&module, "f");
-        value(function, "seven")
-    };
-    let before = facts(&mut analyses, &module);
-    assert!(before.values().any(|known| known.contains_key(&seven)), "a loop carries it");
-    {
-        let (_, function) = module.function_mut("f").unwrap();
-        let made = function
-            .walk()
-            .map(|(_, inst)| inst)
-            .find(|&inst| function.instruction(inst).result == Some(seven))
-            .unwrap();
-        function.erase(made).unwrap();
-        analyses.invalidate(function, &PreservedAnalyses::none());
-    }
-    let after = facts(&mut analyses, &module);
-    assert!(after.values().all(|known| !known.contains_key(&seven)), "gone from every loop");
-    assert_eq!(
-        after,
-        facts(&mut Analyses::new(outer), &module),
-        "what was brought up to date is what working every loop gives"
-    );
-}
-
 /// Every pass that said it changed something dropped the pointer analyses,
 /// though five in six of them (twelve call-effects runs a function in QCport)
 /// were true after it: the change was to integers.
@@ -788,6 +774,34 @@ fn test_a_result_derived_from_the_body_as_it_stands_is_dropped_at_an_invalidatio
     let of_effects: Vec<_> =
         counts.iter().filter(|(name, ..)| *name == "writes").map(|&(_, _, how, n)| (how, n)).collect();
     assert_eq!(of_effects, vec![("first", 1), ("replayed", 1)], "{counts:?}");
+}
+
+/// A pass that made a block and removed it (jump threading, rotate, lcssa, the
+/// cleanups: 12 of 24 `ExposedFrames` runs on d_faces -O2) gave the exposed
+/// frames up: `update` returned none for a block change and the whole body was
+/// scanned again, to the same answer. An alloca is exposed by its address's
+/// uses, which a block change does not touch.
+#[test]
+fn test_a_block_made_and_removed_leaves_the_exposed_frames_to_be_updated_not_rerun() {
+    let mut module = parsed(&format!(
+        "{DOS}declare void @use(ptr)\n\ndefine void @f() {{\nb:\n  %a = alloca i16\n  call void @use(ptr %a)\n  ret void\n}}\n"
+    ));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let (context, f) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(outer);
+    llrm_mir::passes::trace_recomputes(true);
+    analyses.get::<super::ExposedFrames>(context, &layout, f);
+    let block = f.create_block(Some("scratch"));
+    f.erase_block(block).expect("an empty block nothing names");
+    analyses.invalidate(f, &PreservedAnalyses::none());
+    let kept = analyses.get::<super::ExposedFrames>(context, &layout, f).len();
+    let counts = llrm_mir::passes::recomputes();
+    llrm_mir::passes::trace_recomputes(false);
+    assert_eq!(kept, 1, "the alloca passed to a call is exposed");
+    let frames: Vec<_> =
+        counts.iter().filter(|(name, ..)| *name == "exposed-frames").map(|&(_, _, how, n)| (how, n)).collect();
+    assert_eq!(frames, vec![("first", 1), ("replayed", 1)], "{counts:?}");
 }
 
 /// A scalar written in each arm of N joins is reached by up to N stores at
@@ -1327,39 +1341,6 @@ b2:
     let error = run(PreservedAnalyses::none().preserve::<Scevs>()).unwrap_err();
     assert!(error.contains("scev"), "{error}");
     run(PreservedAnalyses::none()).expect("an edit that drops Scevs is fine");
-}
-
-/// `Annotated` solved the counted loops' intervals (`Bounded`) to narrow one
-/// variable-index access: 118 M of 1252 M instructions on d_faces -O2. It asks
-/// `computeConstantRange` at the access (BasicAA's `analyzeVariableOffsets`).
-#[test]
-fn annotated_solves_no_counted_loop() {
-    let module = parsed(&format!(
-        "{DOS}define i16 @f() {{
-entry:
-  %a = alloca [10 x i16]
-  br label %h
-
-h:
-  %i = phi i16 [ 0, %entry ], [ %n, %h ]
-  %p = getelementptr [10 x i16], ptr %a, i16 0, i16 %i
-  store i16 1, ptr %p
-  %n = add nsw i16 %i, 1
-  %c = icmp slt i16 %n, 10
-  br i1 %c, label %h, label %x
-
-x:
-  ret i16 0
-}}
-"
-    ));
-    let layout = layout(&module);
-    let mut outer = Outer::of(&module, None);
-    outer.require::<Summaries>(&module);
-    let mut analyses = Analyses::new(Rc::new(outer));
-    let solved = ranges::loops_solved();
-    analyses.get::<Annotated>(&module.context, &layout, function(&module, "f")).as_ref().as_ref().unwrap();
-    assert_eq!(ranges::loops_solved() - solved, 0, "Annotated solved the counted loops' intervals");
 }
 
 /// The alias answers of every pair of accesses of every corpus function, by

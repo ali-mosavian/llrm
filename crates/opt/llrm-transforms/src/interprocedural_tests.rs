@@ -44,7 +44,6 @@ fn stepped(
             None,
             0,
             threshold,
-            true,
             &mut |module, _, id, stage| {
                 stages.push((module.global(id).name.owned().unwrap(), stage.to_owned()));
                 Ok(())
@@ -135,16 +134,15 @@ b:
 ";
 
 #[test]
-fn test_agreed_actuals_specialize_and_a_constant_return_is_carried() {
+fn test_a_constant_return_is_carried_to_the_caller() {
     let mut module = parsed(STORES);
     // With no inlining: a callee that stores to memory is inlined otherwise.
     let (_, stages) = stepped(&mut module, &["f"], 40, Threshold::none());
     let text = printed(&module);
-    assert!(text.contains("  store i16 5, ptr @g\n"), "{text}");
     assert!(text.contains("  %s = add i16 7, %a\n"), "{text}");
     // Both calls with effects stay.
     assert_eq!(text.matches("call ").count(), 3, "{text}");
-    assert!(staged(&stages, "set", "ipa-args0.") && staged(&stages, "f", "ipa0."), "{stages:?}");
+    assert!(staged(&stages, "f", "ipa0."), "{stages:?}");
 }
 
 #[test]
@@ -854,125 +852,6 @@ fn test_a_body_a_pass_changed_without_saying_so_is_reported() {
     assert!(modules.cached_function::<llrm_analysis::cfg::Shape>(g).is_some(), "an untouched body lost its analyses");
 }
 
-/// A body whose address is taken is also called through it, with actuals no
-/// site names: its one direct call passed 5, and the call through the
-/// pointer stored 5 as well.
-#[test]
-fn test_a_body_whose_address_is_taken_keeps_its_parameters() {
-    let text = STORES
-        .replace("@g = global i16 0\n", "@g = global i16 0\n@slot = global ptr @set\n")
-        .replace(
-            "  call void @set(i16 5)\n  call void @set(i16 5)\n",
-            "  call void @set(i16 5)\n  %p = load ptr, ptr @slot\n  call void %p(i16 %a)\n",
-        );
-    let mut module = parsed(&text);
-    stepped(&mut module, &["f"], 40, Threshold::none());
-    let after = printed(&module);
-    assert!(after.contains("  store i16 %x, ptr @g\n"), "{after}");
-}
-
-/// queens' `place(q, row, n)` recurses with `row + 1` and its own `n`: the
-/// one outside call passes 7, so every call does, and `n` is 7 inside.
-/// The recursive call named `%n` as a second value for it, so none was found.
-fn recursive(
-    first: &str,
-    second: &str,
-) -> String {
-    format!(
-        "define internal i16 @place(i16 %row, i16 %n) {{
-b:
-  %done = icmp eq i16 %row, %n
-  br i1 %done, label %leaf, label %more
-more:
-  %next = add i16 %row, 1
-  %r = call i16 @place({first})
-  %s = add i16 %r, %row
-  ret i16 %s
-leaf:
-  ret i16 1
-}}
-
-define i16 @f(i16 %a) {{
-b:
-  %x = call i16 @place(i16 0, i16 7)
-{second}  ret i16 %x
-}}
-"
-    )
-}
-
-#[test]
-fn test_a_recursive_call_passing_a_parameter_on_leaves_the_others_actuals_agreed() {
-    let mut module = parsed(&recursive("i16 %next, i16 %n", ""));
-    stepped(&mut module, &["f"], 40, Threshold::none());
-    let text = printed(&module);
-    assert!(text.contains("icmp eq i16 %row, 7"), "{text}");
-}
-
-/// A second outside call with another value, or the recursion passing the
-/// parameters swapped, keeps `n` unknown.
-#[test]
-fn test_another_actual_for_the_parameter_keeps_it_unknown() {
-    for text in
-        [recursive("i16 %next, i16 %n", "  %y = call i16 @place(i16 0, i16 %a)\n"), recursive("i16 %n, i16 %next", "")]
-    {
-        let mut module = parsed(&text);
-        stepped(&mut module, &["f"], 40, Threshold::none());
-        let after = printed(&module);
-        assert!(after.contains("icmp eq i16 %row, %n"), "{after}");
-    }
-}
-
-/// queens' `place`: `row` from 0 and from `row + 1` below `n`, the calls
-/// known to be those of the program: `row` is in 0 to 7, which `row <u 12`, the
-/// length's check, then leaves nothing to decide (`decide` reads the stamp).
-fn bounded_recursion(extra: &str) -> String {
-    format!(
-        "define internal i16 @place(i16 %row, i16 %n) {{
-b:
-  %done = icmp eq i16 %row, %n
-  br i1 %done, label %leaf, label %more
-more:
-  %fits = icmp ult i16 %row, 12
-  br i1 %fits, label %next, label %crash
-next:
-  %up = add nsw i16 %row, 1
-  %r = call i16 @place(i16 %up, i16 %n)
-  ret i16 %r
-leaf:
-  ret i16 1
-crash:
-  ret i16 99
-}}
-
-define i16 @f(i16 %a) {{
-b:
-  %x = call i16 @place(i16 0, i16 7)
-{extra}  ret i16 %x
-}}
-"
-    )
-}
-
-#[test]
-fn test_what_the_callers_pass_bounds_a_parameter_the_body_checks() {
-    let mut module = parsed(&bounded_recursion(""));
-    assert!(printed(&module).contains("icmp ult i16 %row, 12"), "premise");
-    stepped(&mut module, &["f"], 40, Threshold::none());
-    let text = printed(&module);
-    assert!(text.contains("range(i16 0, 8) %row"), "{text}");
-}
-
-/// A call from elsewhere with a value of its own, or through a pointer, leaves
-/// the parameter unbounded.
-#[test]
-fn test_another_caller_leaves_the_parameter_unbounded() {
-    let mut module = parsed(&bounded_recursion("  %y = call i16 @place(i16 %a, i16 7)\n"));
-    stepped(&mut module, &["f"], 40, Threshold::none());
-    let text = printed(&module);
-    assert!(text.contains("icmp ult i16 %row, 12"), "{text}");
-}
-
 /// A function called with a constant is copied for it at -O3 (gcc's
 /// `-fipa-cp-clone`): `g`'s loop runs `%k` trips, which the copies for 4 and
 /// for 5 know. gcc's -O3 queens is eight such copies of its recursive `place`,
@@ -1017,69 +896,6 @@ fn test_a_function_called_with_two_constants_is_cloned_for_each_at_o3() {
     };
     assert_eq!(cloned(false), (false, false));
     assert_eq!(cloned(true), (true, true));
-}
-
-/// `rectwo`'s `paths` is nine operations, over the six a call admits: the
-/// recursion's admission is gcc's `max-inline-insns-auto` 15 (params.opt:545),
-/// not the six an ordinary call is. Its copies are what the early exits' tests
-/// fold in (`n == 3`), and what the shrink-wrapped prologue is for.
-/// A round assumes a parameter's range before it proves it (`place`'s `row` is
-/// 0 at first), and under it a loop `r < row` that runs from 0 is never
-/// entered: the facts of the loop around it and of its own contradict each
-/// other there, and a call in it passes nothing. Passing what the contradiction
-/// left (`r` below 0) made the callee's parameter range wide for good.
-#[test]
-fn test_a_call_in_a_block_the_assumed_range_makes_unreachable_passes_nothing() {
-    let mut module = parsed(
-        "define internal i16 @sink(i16 %x) {
-b:
-  %y = add i16 %x, 1
-  ret i16 %y
-}
-
-define internal i16 @place(i16 %row, i16 %n) {
-b:
-  %done = icmp eq i16 %row, %n
-  br i1 %done, label %leaf, label %scan
-scan:
-  br label %outer
-outer:
-  %c = phi i16 [ 0, %scan ], [ %c1, %latch ]
-  %more = icmp slt i16 %c, %n
-  br i1 %more, label %pre, label %next
-pre:
-  br label %head
-head:
-  %r = phi i16 [ 0, %pre ], [ %r1, %body ]
-  %go = icmp slt i16 %r, %row
-  br i1 %go, label %body, label %latch
-body:
-  %s = call i16 @sink(i16 %r)
-  %r1 = add nsw i16 %r, 1
-  br label %head
-latch:
-  %c1 = add nsw i16 %c, 1
-  br label %outer
-next:
-  %up = add nsw i16 %row, 1
-  %p = call i16 @place(i16 %up, i16 %n)
-  ret i16 %p
-leaf:
-  ret i16 1
-}
-
-define i16 @f(i16 %a) {
-b:
-  %x = call i16 @place(i16 0, i16 7)
-  ret i16 %x
-}
-",
-    );
-    stepped(&mut module, &["f"], 40, Threshold::none());
-    let text = printed(&module);
-    assert!(text.contains("range(i16 0, ") && text.contains("%x)"), "{text}");
-    let sink = text.lines().find(|line| line.contains("@sink(")).unwrap_or_default();
-    assert!(!sink.contains("range(i16 -"), "{sink}\n{text}");
 }
 
 /// A function only an invoke or a `!callees` list names is still called.

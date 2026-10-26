@@ -1,8 +1,8 @@
 //! The C++ boolean expressions of `CheckPatternPredicate`, decided for one CPU.
 //!
-//! An expression is `!`, `&&`, `||`, parentheses and atoms (`Subtarget->hasX87()`,
-//! `shouldOptForSize(MF)`). An atom is true or false for the CPU, or is left to the selector at
-//! run time ([`Atom::Dynamic`]).
+//! An expression is `!`, `&&`, `||`, parentheses and atoms
+//! (`Subtarget->hasX87()`, `shouldOptForSize(MF)`). An atom is true or false
+//! for the CPU, or is left to the selector at run time ([`Atom::Dynamic`]).
 
 use std::collections::BTreeMap;
 
@@ -45,7 +45,10 @@ impl Parser<'_> {
         }
     }
 
-    fn eat(&mut self, token: &str) -> bool {
+    fn eat(
+        &mut self,
+        token: &str,
+    ) -> bool {
         self.skip();
         if self.text[self.at..].starts_with(token.as_bytes()) {
             self.at += token.len();
@@ -87,8 +90,8 @@ impl Parser<'_> {
         self.atom()
     }
 
-    /// Whether the `(` at the cursor wraps a whole operand, not the start of a call's arguments or
-    /// of a comparison such as `(a) == b`.
+    /// Whether the `(` at the cursor wraps a whole operand, not the start of a
+    /// call's arguments or of a comparison such as `(a) == b`.
     fn group_is_whole_operand(&self) -> bool {
         let mut depth = 0;
         for (i, &b) in self.text[self.at..].iter().enumerate() {
@@ -99,7 +102,8 @@ impl Parser<'_> {
                     if depth == 0 {
                         let rest = &self.text[self.at + i + 1..];
                         let rest = rest.iter().position(|b| !b.is_ascii_whitespace()).map(|p| &rest[p..]);
-                        return rest.is_none_or(|r| r.starts_with(b"&&") || r.starts_with(b"||") || r.starts_with(b")"));
+                        return rest
+                            .is_none_or(|r| r.starts_with(b"&&") || r.starts_with(b"||") || r.starts_with(b")"));
                     }
                 }
                 _ => {}
@@ -131,9 +135,13 @@ impl Parser<'_> {
 }
 
 impl Expr {
-    /// Replaces each atom the CPU decides by its constant and folds: `Some(true)`/`Some(false)`
-    /// when the whole expression is decided, `None` with the remaining expression otherwise.
-    pub fn decide(&self, verdict: &dyn Fn(&str) -> Result<Verdict, String>) -> Result<Decided, String> {
+    /// Replaces each atom the CPU decides by its constant and folds:
+    /// `Some(true)`/`Some(false)` when the whole expression is decided,
+    /// `None` with the remaining expression otherwise.
+    pub fn decide(
+        &self,
+        verdict: &dyn Fn(&str) -> Result<Verdict, String>,
+    ) -> Result<Decided, String> {
         Ok(match self {
             Expr::Atom(a) => match verdict(a)? {
                 Verdict::Yes => Decided::Yes,
@@ -179,7 +187,10 @@ impl Expr {
     }
 
     /// The atoms, with how many expressions use each.
-    pub fn atoms<'a>(&'a self, out: &mut BTreeMap<&'a str, usize>) {
+    pub fn atoms<'a>(
+        &'a self,
+        out: &mut BTreeMap<&'a str, usize>,
+    ) {
         match self {
             Expr::Atom(a) => *out.entry(a).or_default() += 1,
             Expr::Not(e) => e.atoms(out),
@@ -223,10 +234,10 @@ mod tests {
         let e = parse("MF->getFunction().getCallingConv() != CallingConv::HiPE && !Subtarget->hasCMOV()").unwrap();
         let mut atoms = BTreeMap::new();
         e.atoms(&mut atoms);
-        assert_eq!(atoms.keys().copied().collect::<Vec<_>>(), [
-            "MF->getFunction().getCallingConv() != CallingConv::HiPE",
-            "Subtarget->hasCMOV()"
-        ]);
+        assert_eq!(
+            atoms.keys().copied().collect::<Vec<_>>(),
+            ["MF->getFunction().getCallingConv() != CallingConv::HiPE", "Subtarget->hasCMOV()"]
+        );
     }
 
     #[test]

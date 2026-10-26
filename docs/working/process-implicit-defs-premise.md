@@ -11,7 +11,7 @@ Pin d1106deb71cc, [`ProcessImplicitDefs.cpp`](https://github.com/llvm/llvm-proje
 
 ## Ours
 
-LIR has no `IMPLICIT_DEF` and no undef flag (`phielimination.rs` P2); an uninitialized read is zero, until MIR undef lands. A 16-bit value that a 32-bit address form reads is widened explicitly: `promote` in `addressforms.rs` makes its definition a `movzx`, because the 67h forms read whole dwords and need the upper half zero.
+LIR has `implicit_def` (isel) and `Insn::undefs`; a phi reads an undefined value as an `implicit_def` in PHIElimination (P2), and no code is made for it. A 16-bit value that a 32-bit address form reads is widened explicitly: `promote` in `addressforms.rs` makes its definition a `movzx`, because the 67h forms read whole dwords and need the upper half zero.
 
 ## Whole effect, one instrument
 

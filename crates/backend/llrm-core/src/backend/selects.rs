@@ -132,6 +132,18 @@ pub fn minmax_expanded(module: &mut Module) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether the selector takes a select of type `ty` as it is: the DAG keeps an
+/// integer select to `LowerSELECT` and `EmitLoweredSelect`, as the pin does
+/// (S2's exit); `(c & 1) ? x ^ k : x` is then `x ^ (k & -(c & 1))`, where the
+/// branch it was made into computed both arms and jumped. Floats and the
+/// rest are still branched here (no `CMOV_RFP*` expansion yet).
+pub fn kept_for_isel(
+    isel: crate::backend::shadow::Selector,
+    ty: &str,
+) -> bool {
+    isel == crate::backend::shadow::Selector::Dag && matches!(ty, "i8" | "i16" | "i32")
+}
+
 /// Every select of `module`'s functions made a branch and a phi.
 pub fn lowered(
     module: &mut Module,
@@ -178,6 +190,9 @@ pub fn priced(
             }
         }
         crate::backend::booleans::branched(context, function, price, wanted, word_bits)?;
+        // After the pricing: the pin keeps this `setcc` chain, it branches
+        // none.
+        crate::backend::selectconstants::inverted_setcc_sums(context, function)?;
         loop {
             let found = function
                 .walk()
@@ -638,5 +653,19 @@ done:
                 run(&before, "f", arguments(a, b), 100).unwrap()
             );
         }
+    }
+
+    /// `(c & 1) ? x ^ k : x` was branched here before the DAG saw it (`shr;
+    /// xor; test; jne; mov`, 8 chained diamonds in x_crc32 -O3: 162 lines
+    /// against the pin's 100); the DAG's select lowering makes it
+    /// `x ^ (k & -(c & 1))`, no branch. The DAG run keeps integer selects.
+    #[test]
+    fn the_dag_run_keeps_an_integer_select_for_its_own_lowering() {
+        use crate::backend::shadow::Selector;
+        for ty in ["i8", "i16", "i32"] {
+            assert!(super::kept_for_isel(Selector::Dag, ty), "{ty}");
+            assert!(!super::kept_for_isel(Selector::Old, ty), "{ty}");
+        }
+        assert!(!super::kept_for_isel(Selector::Dag, "float"), "no CMOV_RFP expansion yet");
     }
 }

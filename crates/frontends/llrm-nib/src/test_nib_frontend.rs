@@ -298,6 +298,14 @@ pub(crate) fn O2_calls_kept() -> Options {
     options
 }
 
+/// -O3 where the function under test stays a function (`O2_calls_kept`).
+#[allow(non_snake_case)]
+pub(crate) fn O3_calls_kept() -> Options {
+    let mut options = level("O3");
+    options.pipeline.inline = llrm_transforms::inline::Threshold::none();
+    options
+}
+
 /// `program` compiled to an object.
 fn object_of(
     program: &model::Program,
@@ -488,11 +496,13 @@ fn test_fixed_point_types_scale_literals_and_keep_storage_width_in_mir() {
 
     let text = emitted_text(&program);
     let (product, quotient) = (defined(&text, "product"), defined(&text, "quotient"));
-    // fixed8 uses a 32-bit intermediate; fixed16 is already based on i32 and
-    // stays one fixed-point operation, never widened to i64.
+    // fixed8 uses a 32-bit intermediate; fixed16's product is one fixed-point
+    // operation. Its quotient is the spec's `(a << s) / b` in 64 bits, which
+    // truncates toward zero where `llvm.sdiv.fix` rounds down and needed a
+    // correction (115 bytes a divide at m16 -Os).
     assert!(["sext i16", "mul i32", "ashr i32"].iter().all(|one| product.contains(one)), "{product}");
-    assert!(quotient.contains("@llvm.sdiv.fix.i32("), "{quotient}");
-    assert!(!["sext", "shl", " sdiv ", "i64"].iter().any(|one| quotient.contains(one)), "{quotient}");
+    assert!(["sext i32", "shl i64", " sdiv i64 ", "trunc i64"].iter().all(|one| quotient.contains(one)), "{quotient}");
+    assert!(!quotient.contains("sdiv.fix"), "{quotient}");
 }
 
 /// nbody's `nbody` as its HIR emits it.
@@ -504,9 +514,11 @@ fn nbody_emitted() -> String {
 #[test]
 fn test_fixed_i32_product_stays_a_storage_width_operation() {
     // Native nbody used to route every Q23.9 product through generic i64 MIR.
+    // The quotient is the one i64 operation: a truncating divide of the shifted
+    // dividend (`sdiv.fix` floors and cost a correction per divide).
     let nbody = nbody_emitted();
-    assert!(nbody.contains("@llvm.smul.fix.i32(") && nbody.contains("@llvm.sdiv.fix.i32("), "{nbody}");
-    assert!(!nbody.contains("i64"), "{nbody}");
+    assert!(nbody.contains("@llvm.smul.fix.i32(") && !nbody.contains("sdiv.fix"), "{nbody}");
+    assert!(nbody.contains(" sdiv i64 ") && !nbody.contains("mul i64"), "{nbody}");
 }
 
 #[test]
@@ -560,15 +572,9 @@ fn test_nbody_arrays_strings_and_print_cross_hir_and_verify_in_mir() {
     );
 
     let nbody = nbody_emitted();
-    for one in [
-        "getelementptr",
-        "br i1 ",
-        "addrspace(1) void @N$",
-        "@llvm.sdiv.fix.i32(",
-        "@llvm.smul.fix.i32(",
-        " = load ",
-        "store ",
-    ] {
+    for one in
+        ["getelementptr", "br i1 ", "addrspace(1) void @N$", " sdiv i64 ", "@llvm.smul.fix.i32(", " = load ", "store "]
+    {
         assert!(nbody.contains(one), "{one}\n{nbody}");
     }
 
@@ -637,7 +643,10 @@ fn test_nbody_velocity_fields_are_stored_once_per_update() {
     let assembly = listing(&parsed(&fixture("nbody.nib")), "main", &O2_calls_kept());
     let function = between(&assembly, "_nbody proc near", "_nbody endp");
     // The only stores through a body's index are its velocity's two fields.
-    let stored: Vec<String> = Regex::new(r"mov dword ptr (\[bp\+[sd]i[-+]\d+\]), e(?:ax|bx|cx|dx|si|di)\n")
+    // (a field is named by its displacement: the index register that reaches
+    // it is the allocator's to choose, `si` for the store and `di` for the
+    // load)
+    let stored: Vec<String> = Regex::new(r"mov dword ptr \[bp\+[sd]i([-+]\d+)\], e(?:ax|bx|cx|dx|si|di)\n")
         .unwrap()
         .captures_iter(function)
         .map(|found| found[1].to_owned())
@@ -645,7 +654,8 @@ fn test_nbody_velocity_fields_are_stored_once_per_update() {
 
     assert_eq!(stored.len(), 2, "{function}");
     for field in &stored {
-        let loads = Regex::new(&format!(r"e(?:ax|bx|cx|dx|si|di), dword ptr {}\n", regex::escape(field))).unwrap();
+        let loads =
+            Regex::new(&format!(r"e(?:ax|bx|cx|dx|si|di), dword ptr \[bp\+[sd]i{}\]\n", regex::escape(field))).unwrap();
         assert_eq!(loads.find_iter(function).count(), 1, "{field}\n{function}");
     }
 }
@@ -908,8 +918,13 @@ fn test_runtime_bounded_array_loop_advances_its_payload_address() {
 
     assert!(!Regex::new(r"\b(?:imul|shl|lea)\b").unwrap().is_match(&hot), "{hot}");
     assert!(function.contains("xor ax, ax"));
-    assert!(!function.contains("dec "));
-    assert!(Regex::new(r"\badd\s+(?:si|di|bx),\s*2\s*\n(?:L\w+:\n)?\s*jne\b").unwrap().is_match(&hot), "{hot}");
+    // LLVM's LSR (the default since 7ee16741c) keeps the trip counter beside
+    // the stepped address, so the loop ends on `dec cx`, not on a compare
+    // with the end address.
+    assert!(
+        Regex::new(r"\badd\s+(?:si|di|bx),\s*2\s*\n(?:\s*dec\s+cx\s*\n)?(?:L\w+:\n)?\s*jne\b").unwrap().is_match(&hot),
+        "{hot}"
+    );
 }
 
 #[test]
@@ -1082,7 +1097,7 @@ fn test_a_fill_leaves_the_rest_of_its_function_priceable() {
         "priced_fill.nib",
         "fn value(v: &[i16]) -> i32:\n    let mut a: i32[64] = [0] * 64\n    let mut total: i16 = 0\n    unsafe:\n        for i in 0..4:\n            total += v[i]\n        a[total] = 5\n    return a[1]\nfn main() -> i16:\n    let v: i16[4] = [1, 2, 3, 4]\n    return i16(value(&v))\n",
     );
-    let assembly = listing(&parsed(&source), "main", &O3());
+    let assembly = listing(&parsed(&source), "main", &O3_calls_kept());
     let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
 
     assert!(body.contains("rep stosd"));
@@ -1097,16 +1112,17 @@ fn test_an_array_field_fills_and_copies_as_one_run_each() {
     let source = written(
         &directory,
         "field_runs.nib",
-        "struct File:\n    handle: i16\n    mut buffer: u8[128]\n    mut start: u16\n\nfn opened(h: i16) -> File:\n    return File(handle=h, buffer=[0] * 128, start=0)\n\nfn relay(h: i16) -> File:\n    let f = opened(h)\n    return f\n\nfn main() -> i16:\n    let f = relay(3)\n    let g = relay(4)\n    return f.handle + g.handle + i16(f.buffer[5])\n",
+        "struct File:\n    handle: i16\n    mut buffer: u8[128]\n    mut start: u16\n\nfn opened(h: i16) -> File:\n    return File(handle=h, buffer=[0] * 128, start=0)\n\nfn relay(h: i16) -> File:\n    let f = opened(h)\n    return f\n\n@extern(\"cdecl16\")\nfn seed() -> i16\n\nfn main() -> i16:\n    unsafe:\n        let f = relay(seed())\n        let g = relay(seed())\n        return f.handle + g.handle + i16(f.buffer[seed() & 127]) + i16(g.buffer[seed() & 127])\n",
     );
-    // `opened` is inlined into `relay`; two calls keep `relay` a function.
+    // `opened` is inlined into `relay`; with inlining off `relay` stays a
+    // function (inlined, `main` folds to the constant 7).
     let assembly = listing(&parsed(&source), "main", &O2());
-    let relay = between(&assembly, "_relay proc", "_relay endp");
+    let main = between(&assembly, "_main proc far", "_main endp");
 
-    assert!(relay.contains("rep stos"), "{relay}");
+    assert_eq!(main.matches("rep stos").count(), 2, "{main}");
     // MemCpyOpt builds the fill in the returned struct, so no copy is left.
-    assert!(!relay.contains("movs") && !Regex::new(r"\bj\w+\s").unwrap().is_match(relay), "{relay}");
-    assert!(relay.matches("byte ptr").count() < 8, "{relay}");
+    assert!(!main.contains("movs") && !Regex::new(r"\bj\w+\s").unwrap().is_match(main), "{main}");
+    assert!(main.matches("byte ptr").count() < 8, "{main}");
 }
 
 #[test]
@@ -1730,7 +1746,7 @@ fn a_float_converts_to_every_integer_width() {
 /// test waited a minute for a release rebuild and every other one for its lock.
 #[test]
 fn test_parsing_runs_no_cargo() {
-    if llrm_core::support::env_set("LLRM_NO_CARGO") {
+    if llrm_core::support::env_flag!("LLRM_NO_CARGO") {
         parsed(&fixture("fixed.nib"));
         return;
     }
@@ -2093,7 +2109,7 @@ fn test_inline_assembly_is_its_bytes_between_its_register_constraints() {
          fn five() -> u16:\n    return 5\n\n\
          fn main() -> i16:\n    return i16(mix(3, 4) + mix(five(), 9))\n",
     );
-    let assembly = listing_on(&parsed(&source), "main", &O2(), "486");
+    let assembly = listing_on(&parsed(&source), "main", &O2_calls_kept(), "486");
     let mix = between(&assembly, "_mix proc near", "_mix endp");
     let pattern = r"(?s)or ax, 1792\n    mov dx, (\w+)\n    mov cx, (\w+)\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n(?:    mov ax, bx\n)?    shr cx, 8\n";
     let found = Regex::new(pattern).unwrap().captures(mix).unwrap_or_else(|| panic!("{mix}"));
@@ -2137,6 +2153,16 @@ fn test_inline_assembly_inputs_reach_the_registers_they_name() {
     }
 }
 
+/// Whether `line`, the instruction after an asm block that leaves its output in
+/// cx, takes it from cx: a `mov`/`add` with cx as the source, or an address
+/// formed on ecx (the walk now simplifies a body before it is unrolled, so the
+/// running sum is a `lea` of the copies, not `add ax, cx`).
+fn reads_cx(line: &str) -> bool {
+    let line = line.trim_start();
+    ((line.starts_with("mov ") || line.starts_with("add ")) && line.ends_with(", cx"))
+        || (line.starts_with("lea ") && line.contains("[ecx"))
+}
+
 /// Outputs were pinned by value, and a loop unrolled after physicalization
 /// gave each copy new values: spin(3) read its `cx` output from ax.
 #[test]
@@ -2153,7 +2179,7 @@ fn test_inline_assembly_outputs_survive_unrolling() {
     let after: Vec<&str> =
         assembly.split("db 089h,0d9h\n").skip(1).map(|rest| rest.lines().next().unwrap_or("")).collect();
     assert_eq!(after.len(), 3, "{assembly}");
-    assert!(after.iter().all(|line| line.ends_with(", cx")), "{assembly}");
+    assert!(after.iter().all(|line| reads_cx(line)), "{assembly}");
 }
 
 /// `source` through the rich MIR, as masm.
@@ -2162,14 +2188,24 @@ fn rich(
     name: &str,
     source: &str,
 ) -> String {
+    rich_with(directory, name, source, false)
+}
+
+/// `rich` with the calls kept when `kept`: the walk simplifies a callee before
+/// the call is priced, so a small one is inlined and has no listing of its own.
+fn rich_with(
+    directory: &tempfile::TempDir,
+    name: &str,
+    source: &str,
+    kept: bool,
+) -> String {
     let program = parsed(&written(directory, name, source));
-    let module = nib_compile::assembled(
-        &program,
-        "main",
-        &llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)),
-        &crate::real_mode().os,
-    )
-    .unwrap_or_else(|error| panic!("{error}"));
+    let mut options = llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os));
+    if kept {
+        options.pipeline.inline = llrm_transforms::inline::Threshold::none();
+    }
+    let module = nib_compile::assembled(&program, "main", &options, &crate::real_mode().os)
+        .unwrap_or_else(|error| panic!("{error}"));
     masm::text(&module).expect("prints")
 }
 
@@ -2186,7 +2222,7 @@ fn test_the_rich_mir_lays_an_inline_block_between_its_register_constraints() {
          fn five() -> u16:\n    return 5\n\n\
          fn main() -> i16:\n    return i16(mix(3, 4) + mix(five(), 9))\n";
     assert!(source.contains("asm("), "the shape that was refused");
-    let assembly = rich(&directory, "blocks.nib", source);
+    let assembly = rich_with(&directory, "blocks.nib", source, true);
     let mix = between(&assembly, "_mix proc near", "_mix endp");
     let pattern = r"(?s)or ax, 1792\n    mov dx, (\w+)\n    mov cx, (\w+)\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n(?:    mov ax, bx\n)?    shr cx, 8\n";
     let found = Regex::new(pattern).unwrap().captures(mix).unwrap_or_else(|| panic!("{mix}"));
@@ -2238,12 +2274,7 @@ fn test_the_rich_mir_reads_a_block_output_from_its_register_when_unrolled() {
     let after: Vec<&str> =
         assembly.split("db 089h,0d9h\n").skip(1).map(|rest| rest.lines().next().unwrap_or("")).collect();
     assert_eq!(after.len(), 3, "{assembly}");
-    assert!(
-        after
-            .iter()
-            .all(|line| line.trim_start().starts_with("mov ax, cx") || line.trim_start().starts_with("add ax, cx")),
-        "{assembly}"
-    );
+    assert!(after.iter().all(|line| reads_cx(line)), "{assembly}");
 }
 
 /// A raw pointer walk (#105): `p != e` of far pointers was refused "a ptr
@@ -2370,20 +2401,28 @@ fn test_a_program_compiles_through_the_rich_mir() {
     );
 }
 
-/// The rich route priced every CPU as a 486, so a P5's prices did not change
-/// what `logic`'s calls become. Now a body of products is folded into `main`
-/// on the 486 and 386 (no call left) and kept as four calls on the P5. (The
-/// 486/386 pair this test began with no longer differs: LLVM's inliner takes
-/// the call of the short boolean body on both.)
+/// The inliner's verdict on `logic` is the same on every CPU: LLVM prices
+/// 16-bit code with the i386 X86 model, whatever `-mcpu` (llrm-x86-m16's
+/// `Dos::tti`), so the 486, 386 and P5 inline a short body into its four call
+/// sites (no call left) and keep a long one (four calls). This began as "a
+/// P5 keeps four calls where the 486 folds them" while the rich route priced
+/// the configured CPU; the model was made the pin's, and `reassociate@696`
+/// shrank the body, so that pair is gone.
 #[test]
-fn test_the_rich_route_prices_the_configured_cpu() {
+fn test_the_inliners_verdict_is_the_same_on_every_cpu() {
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(
-        &directory,
-        "logic.nib",
-        "fn logic(a: i16, b: i16) -> bool:\n    return a * b + a * 3 + b * 5 == 17\n\nfn main() -> i16:\n    print(f\"{i16(logic(1, 2))} {i16(logic(0, 2))} {i16(logic(3, 7))} {i16(logic(3, 2))}\")\n    return 0\n",
-    );
-    let calls = |cpu: &'static str| {
+    let calls = |levels: usize, cpu: &'static str| {
+        let mut body = "a".to_owned();
+        for level in 1..=levels {
+            body = format!("(({body}) * (b + {level}) + a * {})", level + 4);
+        }
+        let source = written(
+            &directory,
+            "logic.nib",
+            &format!(
+                "@extern(\"cdecl16\")\nfn get(number: i16) -> i16\n\nfn logic(a: i16, b: i16) -> i16:\n    return {body}\n\nfn main() -> i16:\n    unsafe:\n        print(f\"{{logic(get(1), get(2))}} {{logic(get(3), get(4))}} {{logic(get(5), get(6))}} {{logic(get(7), get(8))}}\")\n    return 0\n"
+            ),
+        );
         let module = nib_compile::assembled(
             &parsed(&source),
             "main",
@@ -2400,7 +2439,9 @@ fn test_the_rich_route_prices_the_configured_cpu() {
             .filter(|line| line.contains("call") && line.contains("_logic"))
             .count()
     };
-    assert_eq!((calls("486"), calls("386"), calls("P5")), (0, 0, 4));
+    // The arguments come from `get`: constants would fold the calls whole.
+    assert_eq!((calls(12, "486"), calls(12, "386"), calls(12, "P5")), (0, 0, 0), "a short body is inlined");
+    assert_eq!((calls(40, "486"), calls(40, "386"), calls(40, "P5")), (4, 4, 4), "a long body stays a call");
 }
 
 /// runtime.nib's floats.assign: affine rewrote `at * 2 + copy(a)`, its own
@@ -2582,10 +2623,15 @@ fn test_the_level_reaches_the_rich_route() {
 /// `dst: &mut P` and `src: &P` are stated noalias, so `src.y` is loaded
 /// once, before the loop. Unstated, the loop reloaded it after every store
 /// to `dst.x`.
+///
+/// The step is `x * 3 + y`: since the translated LICM (caf370d12) promotes
+/// `dst.x`, `x += y` left an add recurrence whose exit value indvars computed,
+/// and the loop was deleted, as the pin's clang does (`range(i16 4, 6)` on
+/// `n`).
 #[test]
 fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() {
     use llrm_mir::facts::Fact;
-    let source = "struct P:\n    mut x: i16\n    y: i16\n\nfn bump(dst: &mut P, src: &P, n: i16) -> void:\n    for i in 0..n:\n        dst.x += src.y\n\nfn main() -> i16:\n    let mut a = P(x=0, y=0)\n    let b = P(x=0, y=3)\n    let c = P(x=0, y=4)\n    bump(a, b, 4)\n    bump(a, c, 5)\n    return a.x\n";
+    let source = "struct P:\n    mut x: i16\n    y: i16\n\nfn bump(dst: &mut P, src: &P, n: i16) -> void:\n    for i in 0..n:\n        dst.x = dst.x * 3 + src.y\n\nfn main() -> i16:\n    let mut a = P(x=0, y=0)\n    let b = P(x=0, y=3)\n    let c = P(x=0, y=4)\n    bump(a, b, 4)\n    bump(a, c, 5)\n    return a.x\n";
     let directory = tempfile::tempdir().unwrap();
     let program = parsed(&written(&directory, "bump.nib", source));
     let bump = function(&program, "bump");
@@ -2701,14 +2747,16 @@ fn test_mir_infers_what_a_nib_function_touches() {
     assert_eq!(memory("writes"), [(Some("argmem".to_owned()), "write".to_owned())]);
 }
 
-/// A range loop's counter cannot wrap (`nsw`), so its trip count is `n` and
-/// the loop counts down to zero, testing the flags `dec` leaves: no `cmp`
+/// The body is not linear in `s`: with `s += values[0]` the SCEV trip count
+/// (239e6625e) folds the whole loop to `values[0] * n` and no loop is left to
+/// test. A range loop's counter cannot wrap (`nsw`), so its trip count is `n`
+/// and the loop counts down to zero, testing the flags `dec` leaves: no `cmp`
 /// in the loop. Three callers pass 5, 6 and 1000: with one, or with 5 and 6
 /// (a range IPSCCP knows), the bound is known to the body, and the loop (which
 /// leaves by its bounds check as well) is copied out by it.
 #[test]
 fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
-    let source = "fn total(values: &[i16], n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += values[0]\n    return s\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    print(total(a, 5))\n    print(total(a, 6))\n    print(total(a, 1000))\n    return 0\n";
+    let source = "fn total(values: &[i16], n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s = s * 3 + values[0]\n    return s\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    print(total(a, 5))\n    print(total(a, 6))\n    print(total(a, 1000))\n    return 0\n";
     let directory = tempfile::tempdir().unwrap();
     let program = parsed(&written(&directory, "trip.nib", source));
     let pipeline =
@@ -2726,7 +2774,7 @@ fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
         .captures_iter(body)
         .map(|one| (one[1].to_owned(), one.get(0).unwrap().start()))
         .find(|(label, at)| body[..*at].contains(&format!("{label}:\n")))
-        .expect("a loop");
+        .unwrap_or_else(|| panic!("a loop in\n{body}"));
     let looped = between(&body[..end], &format!("{head}:\n"), "\0");
     assert!(!looped.contains("cmp"), "{looped}");
 }
@@ -3205,14 +3253,15 @@ fn test_a_library_cut_to_nothing_assembles_without_an_entry() {
     );
 }
 
-/// `zip(a, b)` walks two slices' elements by one counter, bounded by the
-/// `inbounds` accesses of both. Behind the header copy the loop is tested for
-/// equality, and its trips were counted to 65536 (the width's period) where
-/// the accesses allow 32768: the biased byte counter `add bx, 2` was no exit
-/// test, and the loop kept `inc cx; jne` beside it and reloaded a segment
-/// offset from `[bp-2]` each trip (7 instructions, one of them a load).
+/// `zip(a, b)` walks two slices' elements by one counter and stops at the
+/// shorter: the loop tests each length, as the pin's clang -O2 does on the C
+/// with `i < a->len && i < b->len` (two exits, one counter).
+///
+/// This pinned one exit, on the flags of a biased byte counter, and no `[bp-`
+/// operand. The LLVM order on by default (#2369, 7b2e73546) keeps both tests,
+/// as LLVM does; the pin's loop also reads both data pointers each trip.
 #[test]
-fn test_a_zip_loop_tested_for_equality_ends_on_the_flags_of_its_byte_counter() {
+fn test_a_zip_loop_tests_each_slices_length_as_llvm_does() {
     let directory = tempfile::tempdir().unwrap();
     let source = "fn dot(a: &[i16], b: &[i16]) -> i32:\n    let mut total: i32 = 0\n    for (x, y) in zip(a, b):\n        total += i32(x) * i32(y)\n    return total\n\nfn main() -> i16:\n    return 0\n";
     let program = parsed(&written(&directory, "dot.nib", source));
@@ -3224,17 +3273,19 @@ fn test_a_zip_loop_tested_for_equality_ends_on_the_flags_of_its_byte_counter() {
     )
     .expect("assembles");
     let asm = masm::text(&module).expect("prints");
-    let from = asm.find("_dot proc").expect("the function");
-    let body: Vec<&str> = asm[from..]
-        .lines()
-        .skip(1)
-        .map(str::trim)
-        .take_while(|one| !one.ends_with("endp"))
-        .filter(|one| !one.ends_with(':'))
-        .collect();
-    let at = body.iter().position(|one| *one == "add bx, 2").expect("the byte counter steps");
-    assert_eq!(body.get(at + 1).map(|one| &one[..4]), Some("jne "), "{body:?}");
-    assert!(!body.iter().any(|one| one.contains("[bp-")), "{body:?}");
+    let lines: Vec<&str> = between(&asm, "_dot proc", "_dot endp").lines().map(str::trim).collect();
+    // The loop: from the label its backward jump names to that jump.
+    let (head, end) = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, one)| one.starts_with('j'))
+        .find_map(|(at, one)| {
+            let label = format!("{}:", one.split_whitespace().last()?);
+            lines[..at].iter().position(|line| *line == label).map(|head| (head, at))
+        })
+        .expect("a loop");
+    let tests = lines[head..=end].iter().filter(|one| one.starts_with('j') && !one.starts_with("jmp")).count();
+    assert_eq!(tests, 2, "{:#?}", &lines[head..=end]);
 }
 
 /// `@noipa` keeps a bench kernel a procedure its caller calls: at -O3
@@ -3253,4 +3304,23 @@ fn test_a_noipa_kernel_survives_o3_as_a_procedure_main_calls() {
     assert!(kept.contains("bench_crc proc"), "{kept}");
     let main = &kept[kept.find("_main proc").expect("main")..kept.find("_main endp").expect("main ends")];
     assert!(main.contains("call") && main.contains("_bench_crc"), "{kept}");
+}
+
+/// A fixed-point `/` was `llvm.sdiv.fix`, which the selector floored, then a
+/// correction back to the truncation the language states: `kdiv` at m16 -Os
+/// was 75 lines with a frame, `imul` and `setl`/`setne` after the divides
+/// (461 bytes, main's 346). The divide is the 64-bit quotient the spec writes.
+#[test]
+fn a_fixed_point_divide_is_one_truncating_divide() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "kdiv.nib",
+        "type Q = fixed i32, fraction=9\n\nfn kdiv(x: i32) -> i32:\n    let d: Q = Q(x + 1)\n    let w: Q = Q(1) / d\n    return i32(w * 512)\n\nfn main() -> i16:\n    print(kdiv(3))\n    print(kdiv(-4))\n    return 0\n",
+    );
+    let assembly = listing(&parsed(&source), "main", &os_calls_kept());
+    let kdiv = between(&assembly, "_kdiv proc near", "_kdiv endp");
+    assert!(!kdiv.contains("setl") && !kdiv.contains("setne"), "no floor correction after the divide: {kdiv}");
+    let lines = kdiv.lines().filter(|line| !line.trim().is_empty()).count();
+    assert!(lines <= 25, "{lines} lines: {kdiv}");
 }

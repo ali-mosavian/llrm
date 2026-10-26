@@ -43,14 +43,20 @@ fn c_exponent(value: f64) -> String {
 }
 
 impl SelectionDAG {
-    fn name_of(&self, node: &SDNode) -> String {
+    fn name_of(
+        &self,
+        node: &SDNode,
+    ) -> String {
         match node.data {
             NodeData::CondCode(cond) => cond.name().to_string(),
             _ => node.opcode.name(),
         }
     }
 
-    fn details(&self, node: &SDNode) -> String {
+    fn details(
+        &self,
+        node: &SDNode,
+    ) -> String {
         let mut text = String::new();
         let flags = node.flags;
         for (flag, name) in [
@@ -79,8 +85,12 @@ impl SelectionDAG {
                 write!(text, "<{signed}>").ok();
             }
             NodeData::ConstFp { bits } => match node.values[0] {
-                EVT::Simple(MVT::F32) => write!(text, "<{}>", c_exponent(f64::from(f32::from_bits(bits as u32)))).ok().unwrap_or(()),
-                EVT::Simple(MVT::F64) => write!(text, "<{}>", c_exponent(f64::from_bits(bits as u64))).ok().unwrap_or(()),
+                EVT::Simple(MVT::F32) => {
+                    write!(text, "<{}>", c_exponent(f64::from(f32::from_bits(bits as u32)))).ok().unwrap_or(())
+                }
+                EVT::Simple(MVT::F64) => {
+                    write!(text, "<{}>", c_exponent(f64::from_bits(bits as u64))).ok().unwrap_or(())
+                }
                 _ => write!(text, "<APFloat({bits})>").ok().unwrap_or(()),
             },
             NodeData::Global { symbol, offset } => {
@@ -94,8 +104,14 @@ impl SelectionDAG {
             NodeData::ValueType(vt) => {
                 write!(text, ":{}", type_text(vt)).ok();
             }
+            NodeData::PoolIndex(index) => {
+                write!(text, "<{index}>").ok();
+            }
             NodeData::Symbol(id) => {
                 write!(text, "'{}'", self.symbol_names[id as usize]).ok();
+            }
+            NodeData::Src(key) => {
+                write!(text, "<0x{key:x}>").ok();
             }
             NodeData::JumpTable(index) => {
                 write!(text, "<{index}>").ok();
@@ -104,10 +120,13 @@ impl SelectionDAG {
                 write!(text, "<{index}>").ok();
             }
             NodeData::Block(block) => {
-                write!(text, "<{} 0x0>", self.block_names[block as usize]).ok();
+                write!(text, "<{} 0x0>", self.block_name(block)).ok();
             }
             NodeData::PhysReg(reg) => {
-                write!(text, " ${}", format!("{reg:?}").to_lowercase()).ok();
+                // the allocator's x87 registers are iced's MM0..MM6, the pin's
+                // FP0..FP6
+                let name = format!("{reg:?}").to_lowercase();
+                write!(text, " ${}", name.strip_prefix("mm").map_or(name.clone(), |n| format!("fp{n}"))).ok();
             }
             NodeData::Register(reg) => {
                 write!(text, " %{reg}").ok();
@@ -118,16 +137,34 @@ impl SelectionDAG {
                     MemBase::Unknown => "unknown-address".to_string(),
                     MemBase::Global(id) => format!("@{}", self.global_names[id as usize]),
                     MemBase::Stack(index) => format!("%stack.{index}"),
+                    MemBase::ConstantPool(_) => "constant-pool".to_string(),
+                    MemBase::JumpTable => "jump-table".to_string(),
                 };
                 let volatile = if info.volatile { "volatile " } else { "" };
-                write!(text, "<({volatile}{verb} (s{}) {to} {base})>", info.mem_vt.size_in_bits()).ok();
+                write!(text, "<({volatile}{verb} (s{}) {to} {base}", info.mem_vt.size_in_bits()).ok();
+                if info.space != 0 {
+                    write!(text, ", addrspace {}", info.space).ok();
+                }
+                text.push(')');
+                if let Some(ext) = info.ext {
+                    let name = match ext {
+                        super::actions::LoadExt::ExtLoad => "anyext",
+                        super::actions::LoadExt::SExtLoad => "sext",
+                        super::actions::LoadExt::ZExtLoad => "zext",
+                    };
+                    write!(text, ", {name} from {}", type_text(info.mem_vt)).ok();
+                }
+                text.push('>');
             }
             _ => {}
         }
         text
     }
 
-    fn operand_text(&self, value: SDValue) -> String {
+    fn operand_text(
+        &self,
+        value: SDValue,
+    ) -> String {
         let node = self.node(value);
         if prints_inline(node) {
             return format!("{}:{}{}", self.name_of(node), types(node), self.details(node));
@@ -138,7 +175,10 @@ impl SelectionDAG {
         }
     }
 
-    fn node_line(&self, index: u32) -> String {
+    fn node_line(
+        &self,
+        index: u32,
+    ) -> String {
         let node = &self.nodes()[index as usize];
         let mut line = format!("t{index}: {} = {}{}", types(node), self.name_of(node), self.details(node));
         for (at, op) in node.ops.iter().enumerate() {
@@ -148,7 +188,12 @@ impl SelectionDAG {
         line
     }
 
-    fn dump_nodes(&self, index: u32, indent: usize, out: &mut String) {
+    fn dump_nodes(
+        &self,
+        index: u32,
+        indent: usize,
+        out: &mut String,
+    ) {
         for op in &self.nodes()[index as usize].ops {
             if prints_inline(self.node(*op)) {
                 continue;
@@ -215,7 +260,10 @@ pub fn normalized(dump: &str) -> String {
 
 /// Virtual register numbers by first appearance: selection of earlier blocks
 /// allocates registers between the exported ones (SD17).
-fn renumber_registers(line: &str, regs: &mut Vec<String>) -> String {
+fn renumber_registers(
+    line: &str,
+    regs: &mut Vec<String>,
+) -> String {
     let mut out = String::new();
     let mut rest = line;
     while let Some(at) = rest.find(" %") {
@@ -226,10 +274,15 @@ fn renumber_registers(line: &str, regs: &mut Vec<String>) -> String {
             rest = tail;
             continue;
         }
-        let id = regs.iter().position(|seen| *seen == digits).unwrap_or_else(|| {
-            regs.push(digits.clone());
-            regs.len() - 1
-        });
+        let id = regs
+            .iter()
+            .position(|seen| *seen == digits)
+            .unwrap_or_else(
+                || {
+                    regs.push(digits.clone());
+                    regs.len() - 1
+                },
+            );
         write!(out, "{id}").ok();
         rest = &tail[digits.len()..];
     }
@@ -242,12 +295,28 @@ fn renumber_registers(line: &str, regs: &mut Vec<String>) -> String {
 fn strip_decorations(line: &str) -> String {
     let mut text = line.to_string();
     while let Some(start) = text.find("<(") {
-        let end = text[start..].find(")>").map_or(text.len(), |end| start + end + 2);
-        text.replace_range(start..end, "");
+        let mut depth = 0;
+        let close = text[start + 1..]
+            .char_indices()
+            .find_map(|(at, c)| {
+                depth += i32::from(c == '(') - i32::from(c == ')');
+                (depth == 0).then_some(start + 1 + at + 1)
+            })
+            .unwrap_or(text.len());
+        text.replace_range(start + 1..close, "");
+        if text[start..].starts_with("<>") {
+            text.replace_range(start..start + 2, "");
+        } else if text[start..].starts_with("<, ") {
+            text.replace_range(start + 1..start + 3, "");
+        }
     }
     while let Some(start) = text.find(" [TF=") {
         let end = text[start..].find(']').map_or(text.len(), |end| start + end + 1);
         text.replace_range(start..end, "");
+    }
+    while let Some(start) = text.find("<0x") {
+        let end = text[start..].find('>').map_or(text.len(), |end| start + end + 1);
+        text.replace_range(start..end, "<>");
     }
     while let Some(start) = text.find(" 0x") {
         let end = text[start + 3..].find(|c: char| !c.is_ascii_hexdigit()).map_or(text.len(), |end| start + 3 + end);

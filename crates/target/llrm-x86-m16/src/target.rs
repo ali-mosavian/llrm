@@ -155,7 +155,7 @@ impl Machine for Dos {
     }
 
     fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {
-        Some(std::rc::Rc::new(llrm_x86::lowering::X86))
+        Some(std::rc::Rc::new(llrm_x86::lowering::X86 { is_64bit: false }))
     }
 
     fn private_convention(&self) -> Option<llrm_mir::target::PrivateConvention> {
@@ -198,6 +198,14 @@ impl Machine for Dos {
 
     fn costs(&self) -> OperationCosts {
         self.costs.clone()
+    }
+
+    fn keeps_division(
+        &self,
+        bits: u32,
+        size: bool,
+    ) -> bool {
+        llrm_target::keeps_division(i64::from(bits / 8), size)
     }
 
     fn size_costs(&self) -> OperationCosts {
@@ -332,6 +340,19 @@ mod tests {
     use llrm_mir::target::Machine;
 
     use super::Dos;
+
+    /// BASIC's convention (MIR's cc 1000, `pascal far`) had no row in
+    /// calling.toml, so the DAG path took a call of it to destroy every
+    /// register, SI and DI too, and spilled the pointer it kept in SI (the
+    /// ABI's contract kept them). The row states what it destroys.
+    #[test]
+    fn basic_has_a_calling_row_that_keeps_si_and_di() {
+        use llrm_target::Target;
+        let found = super::super::M16.calling().by_number(llrm_mir::opcode::BASIC).expect("a row for cc 1000");
+        assert_eq!(found.cc.as_deref(), Some("basic"));
+        assert!(found.clobbered.iter().all(|name| !matches!(name.as_str(), "si" | "di")), "{:?}", found.clobbered);
+        assert!(found.clobbered.iter().any(|name| name == "bx"), "{:?}", found.clobbered);
+    }
 
     /// LSR reads the addressing hooks of the model: real mode's `[bx+si]` is
     /// free, a scaled or any-register address pays the prefix and its stall,

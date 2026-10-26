@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/selectiondag.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/selectiondag.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:e821476b2d60f12d17ec1b415d0e5767facb653d6b34b3d5e67f0059705f217d -->
+<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:a9499ce54be37d12080e38edf01efdd9ab0fcee7e340738e4d21b019461e99f3 -->
 
 # selectiondag
 
@@ -28,9 +28,21 @@ parameters are loads of fixed objects, register ones live-in copies;
 `ret` is `RET_GLUE`); a direct call is `callseq_start`, stack stores,
 register copies, `X86ISD::CALL`, `callseq_end`, the result read back.
 A `switch` of range clusters is the split-and-chain compare blocks of
-`visitSwitch` (jump tables and bit tests included). Small constant copies and fills are loads and stores; indirect calls,
-intrinsics, floats and values wider than a
-register are refused (`Refused`) until their pieces land.
+`visitSwitch` (jump tables and bit tests included). Small constant copies
+and fills are loads and stores; indirect calls, intrinsics, floats and
+values wider than a register are refused (`Refused`) until their pieces
+land.
+
+## Example
+`%s = add i32 %a, %b` with `%a` and `%b` exported from an earlier block,
+then `store i32 %s, ptr @g`:
+
+```text
+t2: i32,ch = CopyFromReg t0, Register:i32 %0
+t4: i32,ch = CopyFromReg t0, Register:i32 %1
+t5: i32 = add t2, t4
+t6: ch = store t0, t5, GlobalAddress:i32<ptr @g> 0, poison:i32
+```
 
 ## Runs
 Nothing runs it yet but the tests and the shadow harness (sdag-d). The
@@ -57,9 +69,10 @@ DEVIATE SD13: no vector types or nodes (`BUILD_VECTOR`, `SPLAT_VECTOR`,
 `VSCALE`, ...). Reason: no vectors until 32-bit parity. Exit: with
 vector MIR. Owner sdag-a. Review 2026-11-13.
 
-DEVIATE SD15: `FindMergedConditions` (`a && b` branches split into two
-branches) is not ported; the condition stays one `setcc`/`and`. Exit: the
-switch-lowering piece (A2). Owner sdag-a. Review 2026-11-13.
+DEVIATE SD15: `FindMergedConditions` is ported (`builder/mergedcond.rs`)
+without the edge probabilities (`TProb`/`FProb`) the pin keeps on the blocks
+it makes. Exit: probabilities kept by the DAG builder. Owner sdag-a.
+Review 2026-11-13.
 
 DEVIATE SD16: no `LiveOutRegInfo`: a value copied out of a block reads
 back without `AssertZext`/`AssertSext`. Exit: with `computeKnownBits`
@@ -76,6 +89,15 @@ Owner sdag-a. Review 2026-11-13.
 DEVIATE SD100: a call's `TargetGlobalAddress` carries no relocation flag
 (`[TF=7]`, PLT, in the pin): the object writer picks the relocation.
 Exit: none. Owner sdag-a.
+
+DEVIATE SD101: `freeze` folds away only for a constant or another
+`freeze` (`isGuaranteedNotToBeUndefOrPoison` also looks through
+arithmetic on frozen operands, `Register`s of known width and the like).
+Exit: with the known-bits translation (sdag-b). Owner sdag-a.
+
+DEVIATE SD102: an `invoke` has no `EH_LABEL`s around its call and a
+`landingpad` builds nothing: the QB personality's pad is entered by the
+runtime (`ehprepare`), with no unwind tables. Exit: none. Owner sdag-a.
 
 ## See also
 LLVM's `SelectionDAG::getNode`

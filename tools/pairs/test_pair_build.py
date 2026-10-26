@@ -35,7 +35,7 @@ def stub(scratch: Path, log: Path) -> dict:
         # llrm-c reads a header from the tree it was built in when it runs, as the real one does
         for b in llrm-c llrm-qb llrm-nib nibfront; do printf '#!/bin/sh\\n# %s\\ncat "%s/tree.txt"\\n' "$(git rev-parse HEAD)" "$(pwd)" > $CARGO_TARGET_DIR/dist/$b; done
         for t in jwasm jwlink dosbox-x; do echo $t > $CARGO_TARGET_DIR/dist/$t; done
-        chmod +x $CARGO_TARGET_DIR/dist/*; echo "llrm-c: src.rs" > $CARGO_TARGET_DIR/dist/llrm-c.d
+        chmod +x $CARGO_TARGET_DIR/dist/*; echo "llrm-c: $(pwd)/src.rs" > $CARGO_TARGET_DIR/dist/llrm-c.d
         """))
     stub.chmod(0o755)
     return {**os.environ, "PAIR_CARGO": f"{stub} cargo"}
@@ -131,3 +131,35 @@ def test_the_dist_still_compiles_after_the_pair_and_an_old_worktree_is_pruned(tm
     head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     build(scratch, repo, head, {**env, "PAIR_KEEP_MIN": "60"})
     assert not old.exists()
+
+
+def test_a_failed_cargo_build_publishes_no_dist(tmp_path):
+    """w5 found by md5 a head dist with the base's binaries: cargo failed to compile the head, the script went on and copied what the shared target held (the base's build) under the head's sha, so a pair measured the base twice."""
+    repo = tmp_path / "wt-head10"
+    base, head = repo_with_commits(repo, 2)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    env = stub(scratch, tmp_path / "targets.log")
+    build(scratch, repo, base, env)
+    failing = scratch / "cargo-fails"
+    failing.write_text("#!/bin/bash\necho 'error[E0425]: cannot find value' >&2\nexit 101\n")
+    failing.chmod(0o755)
+    done = subprocess.run(["bash", str(SCRIPT), str(scratch), head], cwd=repo, env={**env, "PAIR_CARGO": f"{failing} cargo"}, capture_output=True, text=True)
+    assert done.returncode != 0
+    assert not (scratch / f"sbp-{head}" / "ok").exists() and not (scratch / f"sbp-{head}" / "dist" / "llrm-c").exists()
+
+
+def test_a_build_that_left_the_previous_binary_in_place_is_refused_not_stored_under_the_new_sha(tmp_path):
+    """Four dists (5e4cac094d, aa8170fbbd, 8cb8ed34df, 3d22dc1faa) were the previous build copied under a new sha: their llrm-c.d named another commit's worktree."""
+    repo = tmp_path / "wt-head10"
+    first, second = repo_with_commits(repo, 2)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    env = stub(scratch, tmp_path / "targets.log")
+    build(scratch, repo, first, env)
+    idle = scratch / "cargo-idle"
+    idle.write_text("#!/bin/bash\nexit 0\n")  # cargo found nothing to do: tgt-dist keeps the first build
+    idle.chmod(0o755)
+    done = subprocess.run(["bash", str(SCRIPT), str(scratch), second], cwd=repo, env={**env, "PAIR_CARGO": f"{idle} cargo"}, capture_output=True, text=True)
+    assert done.returncode != 0 and "not built from" in done.stderr, done.stderr
+    assert not (scratch / f"sbp-{second}" / "dist" / "llrm-c").exists()

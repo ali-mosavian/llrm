@@ -13,12 +13,8 @@
 //! Probabilities are the pin's 31-bit fractions ([`BranchProbability`]).
 //!
 //! # Runs
-//! Called by the builder's `switch` (A2c, next piece) at -O1 and above.
-//!
-//! DEVIATE SD101: every case has probability `1/(cases+1)`, as the pin's
-//! `BranchProbabilityInfo` gives a switch with no unreachable, cold-call or
-//! loop successors; those heuristics are not ported. Exit: with a BPI port
-//! (outside this group). Owner sdag-a. Review 2026-11-13.
+//! Called by the builder's `switch` at -O1 and above, with the IR switch's
+//! edge probabilities from `llrm_analysis::bpi`.
 //!
 //! # See also
 //! LLVM's `findJumpTables`
@@ -40,12 +36,17 @@ impl BranchProbability {
     pub const ZERO: BranchProbability = BranchProbability(0);
 
     /// `BranchProbability(Numerator, Denominator)`, rounded to nearest.
-    pub fn new(numerator: u32, denominator: u32) -> BranchProbability {
+    pub fn new(
+        numerator: u32,
+        denominator: u32,
+    ) -> BranchProbability {
         assert!(denominator > 0 && numerator <= denominator);
         if denominator == D {
             return BranchProbability(numerator);
         }
-        BranchProbability(((u64::from(numerator) * u64::from(D) + u64::from(denominator / 2)) / u64::from(denominator)) as u32)
+        BranchProbability(
+            ((u64::from(numerator) * u64::from(D) + u64::from(denominator / 2)) / u64::from(denominator)) as u32,
+        )
     }
 
     pub fn compl(self) -> BranchProbability {
@@ -57,20 +58,32 @@ impl BranchProbability {
     }
 
     /// `operator/(uint32_t)`.
-    pub fn div(self, by: u32) -> BranchProbability {
+    pub fn div(
+        self,
+        by: u32,
+    ) -> BranchProbability {
         BranchProbability(self.0 / by)
     }
 
     /// `scale(Num)`: `Num * self`, rounded down.
-    pub fn scale(self, num: u64) -> u64 {
+    pub fn scale(
+        self,
+        num: u64,
+    ) -> u64 {
         (u128::from(num) * u128::from(self.0) / u128::from(D)) as u64
     }
 
-    pub fn saturating_add(self, other: BranchProbability) -> BranchProbability {
+    pub fn saturating_add(
+        self,
+        other: BranchProbability,
+    ) -> BranchProbability {
         BranchProbability(self.0.saturating_add(other.0).min(D))
     }
 
-    pub fn saturating_sub(self, other: BranchProbability) -> BranchProbability {
+    pub fn saturating_sub(
+        self,
+        other: BranchProbability,
+    ) -> BranchProbability {
         BranchProbability(self.0.saturating_sub(other.0))
     }
 }
@@ -103,6 +116,9 @@ pub struct JumpTableCase {
     pub low: i128,
     pub high: i128,
     pub table: Vec<u32>,
+    /// Each destination of the table and the probability of its cases
+    /// (`JTProbs`), in first-seen order.
+    pub dests: Vec<(u32, BranchProbability)>,
 }
 
 /// `BitTestCase`: one destination of a bit-test cluster and the mask of
@@ -177,10 +193,26 @@ pub fn describe(clusters: &[CaseCluster]) -> String {
 
 /// `visitSwitch` up to the work list: the cases `(value, destination)` of a
 /// switch whose default goes to `default`.
-pub fn plan(cases: &[(i128, u32)], default: u32, target: &SwitchTarget) -> SwitchPlan {
+pub fn plan(
+    cases: &[(i128, u32)],
+    default: u32,
+    target: &SwitchTarget,
+) -> SwitchPlan {
     let prob = BranchProbability::new(1, cases.len() as u32 + 1);
-    let mut clusters: Vec<CaseCluster> =
-        cases.iter().map(|&(value, dest)| CaseCluster { kind: ClusterKind::Range, low: value, high: value, dest, prob }).collect();
+    let with: Vec<(i128, u32, BranchProbability)> = cases.iter().map(|&(value, dest)| (value, dest, prob)).collect();
+    plan_with(&with, default, target)
+}
+
+/// [`plan`] with each case's own probability (the IR switch's edge).
+pub fn plan_with(
+    cases: &[(i128, u32, BranchProbability)],
+    default: u32,
+    target: &SwitchTarget,
+) -> SwitchPlan {
+    let mut clusters: Vec<CaseCluster> = cases
+        .iter()
+        .map(|&(value, dest, prob)| CaseCluster { kind: ClusterKind::Range, low: value, high: value, dest, prob })
+        .collect();
     sort_and_rangeify(&mut clusters);
     let mut plan = SwitchPlan::default();
     plan.peeled = peel_dominant_case_cluster(&mut clusters, target);
@@ -212,7 +244,10 @@ pub fn sort_and_rangeify(clusters: &mut Vec<CaseCluster>) {
 const SWITCH_PEEL_THRESHOLD: u32 = 66;
 
 /// `scaleCaseProbality`.
-fn scale_case_probability(case: BranchProbability, peeled: BranchProbability) -> BranchProbability {
+pub fn scale_case_probability(
+    case: BranchProbability,
+    peeled: BranchProbability,
+) -> BranchProbability {
     if peeled.is_one() {
         return BranchProbability::ZERO;
     }
@@ -224,7 +259,10 @@ fn scale_case_probability(case: BranchProbability, peeled: BranchProbability) ->
 
 /// `peelDominantCaseCluster`: the cluster with the top probability at or
 /// above 66%, taken out of `clusters`; the others are scaled to what is left.
-fn peel_dominant_case_cluster(clusters: &mut Vec<CaseCluster>, target: &SwitchTarget) -> Option<(CaseCluster, BranchProbability)> {
+fn peel_dominant_case_cluster(
+    clusters: &mut Vec<CaseCluster>,
+    target: &SwitchTarget,
+) -> Option<(CaseCluster, BranchProbability)> {
     if clusters.len() < 2 || !target.optimize || target.opt_size {
         return None;
     }
@@ -249,19 +287,32 @@ fn limited(value: i128) -> u64 {
 }
 
 /// `getJumpTableRange`.
-fn jump_table_range(clusters: &[CaseCluster], first: usize, last: usize) -> u64 {
+fn jump_table_range(
+    clusters: &[CaseCluster],
+    first: usize,
+    last: usize,
+) -> u64 {
     let span = limited(clusters[last].high - clusters[first].low).min((u64::MAX - 1) / 100);
     span + 1
 }
 
 /// `isSuitableForJumpTable`.
-fn suitable_for_jump_table(num_cases: u64, range: u64, target: &SwitchTarget) -> bool {
+fn suitable_for_jump_table(
+    num_cases: u64,
+    range: u64,
+    target: &SwitchTarget,
+) -> bool {
     let min_density = if target.opt_size { 40 } else { 10 };
     num_cases * 100 >= range * min_density
 }
 
 /// `isSuitableForBitTests`.
-fn suitable_for_bit_tests(dests: &BTreeMap<u32, u32>, low: i128, high: i128, target: &SwitchTarget) -> bool {
+fn suitable_for_bit_tests(
+    dests: &BTreeMap<u32, u32>,
+    low: i128,
+    high: i128,
+    target: &SwitchTarget,
+) -> bool {
     if !range_fits_in_word(low, high, target) {
         return false;
     }
@@ -275,13 +326,22 @@ fn suitable_for_bit_tests(dests: &BTreeMap<u32, u32>, low: i128, high: i128, tar
 }
 
 /// `rangeFitsInWord`.
-fn range_fits_in_word(low: i128, high: i128, target: &SwitchTarget) -> bool {
+fn range_fits_in_word(
+    low: i128,
+    high: i128,
+    target: &SwitchTarget,
+) -> bool {
     let range = limited(high - low).min(u64::MAX - 1) + 1;
     range <= u64::from(target.pointer_bits)
 }
 
 /// `findJumpTables`.
-pub fn find_jump_tables(clusters: &mut Vec<CaseCluster>, default: u32, target: &SwitchTarget, tables: &mut Vec<JumpTableCase>) {
+pub fn find_jump_tables(
+    clusters: &mut Vec<CaseCluster>,
+    default: u32,
+    target: &SwitchTarget,
+    tables: &mut Vec<JumpTableCase>,
+) {
     if !target.jump_tables {
         return;
     }
@@ -347,7 +407,11 @@ pub fn find_jump_tables(clusters: &mut Vec<CaseCluster>, default: u32, target: &
     let mut first = 0;
     while first < n {
         let last = last_element[first];
-        let built = if last - first + 1 >= min_entries { build_jump_table(clusters, first, last, default, target, tables) } else { None };
+        let built = if last - first + 1 >= min_entries {
+            build_jump_table(clusters, first, last, default, target, tables)
+        } else {
+            None
+        };
         match built {
             Some(cluster) => out.push(cluster),
             None => out.extend_from_slice(&clusters[first..=last]),
@@ -358,13 +422,25 @@ pub fn find_jump_tables(clusters: &mut Vec<CaseCluster>, default: u32, target: &
 }
 
 /// `buildJumpTable`: `None` where the run suits bit tests better.
-fn build_jump_table(clusters: &[CaseCluster], first: usize, last: usize, default: u32, target: &SwitchTarget, tables: &mut Vec<JumpTableCase>) -> Option<CaseCluster> {
+fn build_jump_table(
+    clusters: &[CaseCluster],
+    first: usize,
+    last: usize,
+    default: u32,
+    target: &SwitchTarget,
+    tables: &mut Vec<JumpTableCase>,
+) -> Option<CaseCluster> {
     let mut prob = BranchProbability::ZERO;
     let mut table = Vec::new();
     let mut dests: BTreeMap<u32, u32> = BTreeMap::new();
+    let mut dest_probs: Vec<(u32, BranchProbability)> = Vec::new();
     for i in first..=last {
         let cluster = &clusters[i];
         prob = prob.saturating_add(cluster.prob);
+        match dest_probs.iter_mut().find(|one| one.0 == cluster.dest) {
+            Some(one) => one.1 = one.1.saturating_add(cluster.prob),
+            None => dest_probs.push((cluster.dest, cluster.prob)),
+        }
         *dests.entry(cluster.dest).or_default() += if cluster.low == cluster.high { 1 } else { 2 };
         if i != first {
             let gap = limited(cluster.low - clusters[i - 1].high) - 1;
@@ -376,12 +452,22 @@ fn build_jump_table(clusters: &[CaseCluster], first: usize, last: usize, default
     if suitable_for_bit_tests(&dests, clusters[first].low, clusters[last].high, target) {
         return None;
     }
-    tables.push(JumpTableCase { low: clusters[first].low, high: clusters[last].high, table });
-    Some(CaseCluster { kind: ClusterKind::JumpTable(tables.len() - 1), low: clusters[first].low, high: clusters[last].high, dest: 0, prob })
+    tables.push(JumpTableCase { low: clusters[first].low, high: clusters[last].high, table, dests: dest_probs });
+    Some(CaseCluster {
+        kind: ClusterKind::JumpTable(tables.len() - 1),
+        low: clusters[first].low,
+        high: clusters[last].high,
+        dest: 0,
+        prob,
+    })
 }
 
 /// `findBitTestClusters`.
-pub fn find_bit_test_clusters(clusters: &mut Vec<CaseCluster>, target: &SwitchTarget, tests: &mut Vec<BitTestBlock>) {
+pub fn find_bit_test_clusters(
+    clusters: &mut Vec<CaseCluster>,
+    target: &SwitchTarget,
+    tests: &mut Vec<BitTestBlock>,
+) {
     if !target.optimize {
         return;
     }
@@ -431,7 +517,13 @@ pub fn find_bit_test_clusters(clusters: &mut Vec<CaseCluster>, target: &SwitchTa
 }
 
 /// `buildBitTests`.
-fn build_bit_tests(clusters: &[CaseCluster], first: usize, last: usize, target: &SwitchTarget, tests: &mut Vec<BitTestBlock>) -> Option<CaseCluster> {
+fn build_bit_tests(
+    clusters: &[CaseCluster],
+    first: usize,
+    last: usize,
+    target: &SwitchTarget,
+    tests: &mut Vec<BitTestBlock>,
+) -> Option<CaseCluster> {
     if first == last {
         return None;
     }
@@ -444,7 +536,8 @@ fn build_bit_tests(clusters: &[CaseCluster], first: usize, last: usize, target: 
         return None;
     }
     let bit_width = i128::from(target.pointer_bits);
-    let mut contiguous = clusters[first + 1..=last].iter().zip(&clusters[first..]).all(|(next, previous)| next.low == previous.high + 1);
+    let mut contiguous =
+        clusters[first + 1..=last].iter().zip(&clusters[first..]).all(|(next, previous)| next.low == previous.high + 1);
     let (low_bound, range);
     if low > 0 && high < bit_width {
         low_bound = 0;

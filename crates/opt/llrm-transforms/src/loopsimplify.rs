@@ -243,7 +243,8 @@ pub fn grouped(
         _ => unreachable!("a phi's block operand"),
     };
     let bridge = function.create_block(None);
-    function.insert_block(bridge, None).expect("a new block");
+    // Right before `destination`, as `SplitBlockPredecessors` lays it out.
+    function.insert_block_before(bridge, destination).expect("a new block");
     for phi in phis {
         let pairs = incoming(function, phi);
         let (grouped, kept): (Vec<_>, Vec<_>) = pairs.into_iter().partition(|&(_, block)| sources.contains(&at(block)));
@@ -330,6 +331,29 @@ fn _reached_only_from(
     function.predecessors(cfg::block(target)).into_iter().all(|from| body.contains(&cfg::id(from)))
 }
 
+/// `placeSplitBlockCarefully`
+/// ([LoopSimplify.cpp:80](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopSimplify.cpp#L80)):
+/// a preheader stands right after an outside predecessor, so the jump into
+/// the loop falls through and the block is not inside the loop's run.
+fn place_carefully(
+    function: &mut Function,
+    new: BlockId,
+    entries: &[BlockId],
+    body: &llrm_mir::forest::Body,
+) {
+    let layout = function.layout();
+    let at = layout.iter().position(|&one| one == new).expect("a placed block");
+    if at > 0 && entries.contains(&layout[at - 1]) {
+        return;
+    }
+    let next_in_loop = |pred: &BlockId| {
+        let at = layout.iter().position(|one| one == pred).expect("a placed block");
+        layout.get(at + 1).is_some_and(|next| body.contains(&cfg::id(*next)))
+    };
+    let after = entries.iter().find(|pred| next_in_loop(pred)).unwrap_or(&entries[0]);
+    function.move_block_after(new, *after).expect("placed blocks");
+}
+
 /// Whether any loop changed.
 pub fn simplified(function: &mut Function) -> bool {
     let shape = cfg::Shape::of(function);
@@ -345,7 +369,7 @@ fn _simplified(
     // nothing is grouped whether the body is irreducible or not.
     if function.entry().is_none()
         || !shape.loops.iter().any(|loop_| _needs_grouping(function, loop_))
-        || !shape.dominance.irreducible(function).is_empty()
+        || shape.dominance.is_irreducible(function)
     {
         return false;
     }
@@ -385,11 +409,25 @@ fn _simplified(
         if plan.is_empty() || !plan.iter().all(|(target, sources)| groupable(function, *target, sources)) {
             continue;
         }
+        // The order LLVM visits the header's predecessors in places the new
+        // blocks, so it is taken before any is grouped.
+        let header = cfg::block(original.header);
+        let (entries, latches): (Vec<BlockId>, Vec<BlockId>) =
+            function.predecessors(header).into_iter().partition(|&one| !original.body.contains(&cfg::id(one)));
         let mut bridges: Vec<(i64, i64, BTreeSet<i64>)> = Vec::new();
         for (target, sources) in plan {
             let Some(bridge) = grouped(function, target, &sources) else {
                 unreachable!("groupable said it could be made");
             };
+            if target == original.header {
+                if sources.contains(&cfg::id(entries[0])) {
+                    place_carefully(function, bridge, &entries, &original.body);
+                } else if let Some(&last) = latches.last() {
+                    // `insertUniqueBackedgeBlock`: right after the last
+                    // backedge block.
+                    function.move_block_after(bridge, last).expect("placed blocks");
+                }
+            }
             bridges.push((cfg::id(bridge), target, sources));
         }
         changed = true;

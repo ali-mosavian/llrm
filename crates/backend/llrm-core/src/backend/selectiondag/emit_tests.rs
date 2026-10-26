@@ -1,16 +1,16 @@
-use std::collections::HashMap;
-
 use llrm_dagisel::generated::x86_i486::MACHINE_OPCODES;
 use llrm_dagisel::x86_addr::AddrMode;
 use llrm_lir::registers::RegId;
+use llrm_support::hash::HashMap;
 use llrm_target::Target;
 
-use super::emit::{EmitContext, EmitError, RegisterFile, emit};
+use super::emit::{EmitContext, EmitError, emit};
 use super::opcodes::OpcodeMap;
 use super::schedule::{SchedInfo, schedule};
 use super::*;
 use crate::model::ir::{Loc, Reg};
 
+const EAX: u32 = u32::MAX;
 const NO_FLAGS: &[u16] = &[];
 
 struct Info;
@@ -38,15 +38,37 @@ impl SchedInfo for Info {
     }
 }
 
-/// Physical register 1 is EAX; everything else is virtual.
-struct Regs;
+struct NoGlobals;
 
-impl RegisterFile for Regs {
-    fn physical(
+impl super::emit::GlobalMap for NoGlobals {
+    fn segment(
         &self,
-        reg: u32,
-    ) -> Option<Reg> {
-        (reg == 1).then_some(Reg { register: RegId::EAX, width: 32 })
+        _symbol: Option<u32>,
+    ) -> crate::model::ir::Addr {
+        crate::model::ir::Addr::new(crate::model::ir::Space::Group, 0)
+    }
+
+    fn address(
+        &self,
+        symbol: u32,
+        offset: i64,
+    ) -> crate::model::ir::Addr {
+        crate::model::ir::Addr {
+            index: i64::from(symbol),
+            ..crate::model::ir::Addr::new(crate::model::ir::Space::Segment, offset)
+        }
+    }
+}
+
+struct NoFrame;
+
+impl super::emit::FrameMap for NoFrame {
+    fn cell(
+        &self,
+        _index: i32,
+        _width: u32,
+    ) -> Option<crate::model::ir::Mem> {
+        None
     }
 }
 
@@ -65,7 +87,21 @@ fn context_in(
     let target = llrm_x86_m32::M32;
     let map = OpcodeMap::new(llrm_instr::parse(&target.forms_text(), target.dialect()).expect("x86.instr"));
     let names: HashMap<u16, &str> = MACHINE_OPCODES.iter().copied().collect();
-    f(&EmitContext { address_mode: mode, map: &map, names: &names, regs: &Regs });
+    let no_blocks = HashMap::default();
+    f(&EmitContext {
+        tables: &[],
+        caller_saved: &Default::default(),
+        conventions: &super::emit::NoConventions,
+        constants: &super::emit::NoConstants,
+        stack_pointer: RegId::SP,
+        globals: &NoGlobals,
+        block_at: &no_blocks,
+        frame: &NoFrame,
+        address_mode: mode,
+        call_alignment: 1,
+        map: &map,
+        names: &names,
+    });
 }
 
 fn text(insns: &[std::sync::Arc<crate::model::lir::Insn>]) -> Vec<String> {
@@ -93,15 +129,16 @@ fn copy_to(
     reg: u32,
     value: SDValue,
 ) -> SDValue {
-    let register = dag.get_register(EVT::I32, reg);
+    let register =
+        if reg == EAX { dag.get_phys_register(EVT::I32, RegId::EAX) } else { dag.get_register(EVT::I32, reg) };
     dag.get_node_multi(ISD::CopyToReg, &[EVT::OTHER], &[chain, register, value])
 }
 
-/// `r3 = r1 + r2` through `ADD32rr` and a copy: the add reads both source
-/// registers and the copy reads the add's result. A `CopyToReg` the emitter
-/// dropped would leave the register unwritten.
+/// `r3 = r1 + r2` through `ADD32rr` and a copy: the add defines r3 itself
+/// (`InstrEmitter::CreateVirtualRegisters`); a `mov` after it was a phi copy
+/// per loop edge in x_isqrt that the pin does not have.
 #[test]
-fn an_add_and_a_copy_become_two_instructions() {
+fn an_add_copied_to_a_virtual_register_defines_it() {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let entry = dag.entry_node();
     let a = copy_from(&mut dag, entry, 10);
@@ -113,13 +150,9 @@ fn an_add_and_a_copy_become_two_instructions() {
         let blocks = emit(&dag, &units, ctx).expect("emits").blocks;
         let insns = &blocks[0].insns;
         let lines = text(insns);
-        assert_eq!(insns.len(), 2, "{lines:?}");
+        assert_eq!(insns.len(), 1, "{lines:?}");
         assert!(lines[0].contains("add"), "{lines:?}");
-        assert!(lines[1].contains("mov"), "{lines:?}");
-        let add = insns[0].what.as_ref().unwrap();
-        let mov = insns[1].what.as_ref().unwrap();
-        assert_eq!(add.sources.len(), 2);
-        assert_eq!(mov.sources[0], add.dests[0]);
+        assert_eq!(insns[0].what.as_ref().unwrap().sources.len(), 2);
     });
 }
 
@@ -138,7 +171,7 @@ fn a_copy_to_a_physical_register_is_a_mov() {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let entry = dag.entry_node();
     let five = dag.get_constant(5, EVT::I32);
-    let root = copy_to(&mut dag, entry, 1, five);
+    let root = copy_to(&mut dag, entry, EAX, five);
     context(|ctx| {
         let units = schedule(&dag, root, &Info);
         let blocks = emit(&dag, &units, ctx).expect("emits").blocks;
@@ -149,15 +182,15 @@ fn a_copy_to_a_physical_register_is_a_mov() {
     });
 }
 
-/// A condition-coded opcode has no single form: it is refused, not guessed.
+/// An opcode with no form (an atomic exchange-add) is refused, not guessed.
 #[test]
 fn an_unmapped_opcode_is_an_error() {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let entry = dag.entry_node();
     let a = copy_from(&mut dag, entry, 10);
     let b = copy_from(&mut dag, entry, 11);
-    let bsf = machine(&mut dag, "BSF32rr", &[EVT::I32], &[a, b]);
-    let root = copy_to(&mut dag, entry, 12, bsf);
+    let cmov = machine(&mut dag, "LXADD32", &[EVT::I32], &[a, b]);
+    let root = copy_to(&mut dag, entry, 12, cmov);
     context(|ctx| {
         let units = schedule(&dag, root, &Info);
         assert!(matches!(emit(&dag, &units, ctx), Err(EmitError::Unmapped(_))));
@@ -189,8 +222,9 @@ fn a_select_without_cmov_becomes_a_branch_and_a_phi() {
         assert_eq!(phi.incoming.len(), 2);
         assert_eq!(phi.incoming[0].0, fallthrough.at, "the false value comes from the false block");
         assert_eq!(phi.incoming[1].0, this.at, "the true value from the block that branched");
-        let mov = sink.insns[0].what.as_ref().expect("the copy lands in the join block");
-        assert_eq!(mov.sources[0], Loc::Held(crate::model::ir::Held { value: phi.result, width: 32 }));
+        // The result is made in %12 itself (`CreateVirtualRegisters`): no
+        // export copy follows the select.
+        assert!(sink.insns.is_empty(), "{:?}", sink.insns);
     });
 }
 
@@ -229,4 +263,54 @@ fn real_mode_address_components_are_confined_to_their_classes() {
             assert_eq!(got, want, "{mode:?} {}", value(&Loc::Held(cell.base.unwrap())));
         });
     }
+}
+
+/// `SHL32rCL` reads `CL` with no operand: the amount is copied to `CL` by
+/// the `CopyToReg` glued to it. The emitter looked for a second source in the
+/// node's operands and stopped at "SHL32rCL: missing source" (9 m32 programs).
+#[test]
+fn a_shift_by_cl_reads_cl() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let value = copy_from(&mut dag, entry, 10);
+    let register = dag.get_register(EVT::I8, 11);
+    let amount = dag.get_node_multi(ISD::CopyFromReg, &[EVT::I8, EVT::OTHER], &[entry, register]);
+    let cl = dag.get_phys_register(EVT::I8, RegId::CL);
+    let set = dag.get_node_multi(ISD::CopyToReg, &[EVT::OTHER, EVT::GLUE], &[entry, cl, amount]);
+    let glue = SDValue { node: set.node, res: 1 };
+    let shifted = machine(&mut dag, "SHL32rCL", &[EVT::I32, EVT::I32], &[value, glue]);
+    let root = copy_to(&mut dag, entry, 12, shifted);
+    context(|ctx| {
+        let units = schedule(&dag, root, &Info);
+        let blocks = emit(&dag, &units, ctx).expect("emits").blocks;
+        let lines = text(&blocks[0].insns);
+        let shl =
+            blocks[0].insns.iter().find(|one| one.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("shl")));
+        let shl = shl.unwrap_or_else(|| panic!("{lines:?}")).what.as_ref().unwrap();
+        // the amount is a value the form pins to `cx`, not a physical register
+        // nobody defines (the LIR verifier: "value defined N times")
+        assert!(matches!(shl.sources.last(), Some(Loc::Held(_))), "{lines:?}");
+        assert!(lines.iter().all(|line| !line.contains("CL")), "{lines:?}");
+    });
+}
+
+/// `lea ax, [index*4 + 160]` at m16 was refused ('a lea of a symbol and a
+/// scaled index at m16': QCport's menu.c and sbar.c under the DAG default):
+/// 16-bit addressing has no scale, so the index is shifted first.
+#[test]
+fn a_lea_of_a_constant_and_a_scaled_index_at_m16_shifts_the_index() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let index = copy_from(&mut dag, entry, 11);
+    let scale = dag.get_constant(4, EVT::I8);
+    let disp = dag.get_constant(160, EVT::I32);
+    let noreg = dag.get_register(EVT::I16, 0);
+    let lea = machine(&mut dag, "LEA32r", &[EVT::I32], &[noreg, scale, index, disp, noreg]);
+    let root = copy_to(&mut dag, entry, 12, lea);
+    context_in(AddrMode::Real16, |ctx| {
+        let units = schedule(&dag, root, &Info);
+        let emitted = emit(&dag, &units, ctx).expect("emits");
+        let names: Vec<_> = emitted.blocks[0].insns.iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+        assert_eq!(names.iter().map(|n| &**n).collect::<Vec<_>>(), ["shl", "lea", "mov"]);
+    });
 }

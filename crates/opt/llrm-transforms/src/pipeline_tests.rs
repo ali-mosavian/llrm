@@ -474,7 +474,7 @@ b3:
     .unwrap();
     let text = llrm_mir::print::module(&module);
     let body = &text[text.find("b2:").expect("the loop")..];
-    let body = &body[..body.find("br label").expect("its latch")];
+    let body = &body[..body.find("\n\n").unwrap_or(body.len())];
     assert_eq!(body.matches("call void @llrm.ia16.asm.fa").count(), 2, "{text}");
     assert_eq!(body.matches(&format!("@{block}(")).count(), 2, "{text}");
 }
@@ -639,11 +639,11 @@ b:
     assert_eq!(llrm_mir::print::module(&module).matches("call i16 @mix").count(), 3);
 }
 
-/// gcc states what a function's callers pass as a range on its parameters at
-/// -O2 and up (`-fipa-vrp`). -O1 ran it too, 1.0% of the compile of bench and
-/// QCport for no change in size to within 0.2% of four files.
+/// The pin's IPSCCP states what a function's callers pass as a range on its
+/// parameters at -O1 too. The stand-in it replaced (gcc's `-fipa-vrp`) ran at
+/// -O2 and up, and -O1 stated nothing.
 #[test]
-fn test_o1_states_no_ranges_from_the_callers_arguments_and_o2_does() {
+fn test_o1_states_the_ranges_from_the_callers_arguments_as_o2_does() {
     let text = "define internal i16 @pick(i16 %x) {
 b:
   %small = icmp ult i16 %x, 10
@@ -672,18 +672,15 @@ b:
             .unwrap();
         crate::testing::printed(&module).contains("range(")
     };
-    assert!(!pipeline::Options::basic().ipa_ranges && pipeline::Options::standard().ipa_ranges);
     assert!(ranged(pipeline::Options::standard()), "premise: -O2 states the range");
-    assert!(!ranged(pipeline::Options::basic()), "-O1 stated a range from the callers' arguments");
+    assert!(ranged(pipeline::Options::basic()), "-O1 stated no range from the callers' arguments");
 }
 
-/// gcc's -O1 has value ranges for induction variables only (SCEV with the
-/// loop's iteration bound) and none from -O2's `-ftree-vrp`. Our alias and
-/// branch decisions asked the counted loops' intervals at every level: 24 of
-/// the 25 runs of `Bounded` on x_life at -O1, 42 M of its 510 M. At -O1 they
-/// take none, and with nothing else asking `Bounded` here it is not worked out.
+/// `decide` and `ports` asked the counted loops' intervals (`Bounded`,
+/// llrm-only) at -O2: about 7 M of d_faces' 1176 M. The pin's passes ask
+/// ValueTracking, and no level works the intervals out.
 #[test]
-fn alias_and_decisions_ask_no_loop_intervals_at_o1() {
+fn no_level_works_out_the_counted_loops_intervals() {
     let text = "
 @a = global [16 x i16] zeroinitializer
 
@@ -718,9 +715,9 @@ done:
         llrm_mir::passes::trace_recomputes(false);
         runs.iter().filter(|(name, ..)| *name == "bounded").map(|(.., count)| count).sum::<usize>()
     };
-    assert!(!pipeline::Options::basic().loop_intervals && pipeline::Options::standard().loop_intervals);
-    assert!(asked(pipeline::Options::standard()) > 0, "premise: -O2 asks for the loop's intervals");
-    assert_eq!(asked(pipeline::Options::basic()), 0, "-O1 worked out the counted loops' intervals");
+    for options in [pipeline::Options::basic(), pipeline::Options::standard()] {
+        assert_eq!(asked(options), 0, "the counted loops' intervals were worked out");
+    }
 }
 
 const SUMMARISED: &str = "
@@ -845,13 +842,27 @@ entry:
     assert!(printed.contains("load i16, ptr @g"), "the load after the call was forwarded from before it:\n{printed}");
 }
 
+/// gcc's `pass_ch` stage ran after the interprocedural step under LLVM's order
+/// too, 8 passes the pin has no counterpart for: d_faces compile +52 M
+/// instructions at -O1, +41 M at -O2, +72 M at -O3.
+#[test]
+fn test_the_llvm_order_has_no_gcc_header_copy_stage() {
+    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let off = Applied { options: pipeline::Options { llvm_order: false, ..Default::default() }, ..Applied::default() };
+    assert!(pipeline::header_copied(&on).is_empty(), "premise: LLVM's order copies headers in LoopRotate");
+    assert!(!pipeline::header_copied(&off).is_empty(), "premise: gcc's order has the stage");
+}
+
 /// What the pipeline runs after the summaries are made and holds them past
 /// (`manager.freeze`) adds no memory operation. Six of those passes
 /// (loop-simplify, LCSSA, fold, algebraic, indvars, dead) did not say so, and
 /// each edit of theirs made the module's summaries and globals' facts again.
 #[test]
 fn the_passes_after_the_summaries_add_no_memory_operation() {
-    let applied = Applied { options: pipeline::Options::basic(), ..Applied::default() };
+    let applied = Applied {
+        options: pipeline::Options { llvm_order: false, ..pipeline::Options::basic() },
+        ..Applied::default()
+    };
     let passes = pipeline::header_copied(&applied);
     assert!(passes.len() >= 7, "premise: the pass list this test names");
     let adding: Vec<_> = passes.iter().filter(|pass| pass.adds_memory_operations()).map(|pass| pass.name()).collect();
@@ -1391,7 +1402,7 @@ entry:
 }
 ";
     let o1 = pipeline::Options::basic();
-    assert!(!o1.searches() && !o1.compares_routes());
+    assert!(!o1.searches());
     let o2 = pipeline::Options::standard();
     let (kept, _) = pipelined(text, o1);
     let kept = crate::testing::printed(&kept);
@@ -1523,12 +1534,14 @@ fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
             "float2int@1594",
             "loop-interchange@1631",
             "loop-load-elim@1400",
+            "combine@1403",
             "simplifycfg@1438",
+            "combine@1464",
+            "combine@1499",
             "licm@1508",
             "instsimplify@1662",
             "tailrec@1677",
-            "simplifycfg@1682",
-            "simplifycfg@2376"
+            "simplifycfg@1682"
         ]
     );
     let kind = crate::parity::REGISTRY.iter().find(|one| one.slot == "instsimplify@1662").map(|one| one.kind);
@@ -1780,7 +1793,7 @@ impl llrm_mir::passes::FunctionPass for Agree {
         if unit.function.layout().is_empty() {
             return llrm_mir::passes::PreservedAnalyses::all();
         }
-        let held = Ranges::of(unit.context, unit.layout, unit.function, analyses, false);
+        let held = Ranges::of(unit.context, unit.layout, unit.function, analyses);
         let seen = held.unit(unit.context, unit.layout, unit.function, analyses.outer());
         let facts = held.registers();
         let ranger = seen.edges.expect("edges").over(&seen, facts);
@@ -2140,12 +2153,10 @@ declare cc 1005 void @N$PN() addrspace(1) memory(inaccessiblemem: readwrite)
 }
 
 /// GlobalsAA was made 9 times for one compile of d_faces -O2 (8 for the corpus
-/// module below): each of the order's three function stages started from a
-/// dropped one. LLVM keeps it past every function pass, so the stages add no
-/// computation. What is left are the program passes (the first ask, `ports`,
-/// `Stamp`, the interprocedural stage, and `ModuleIpo` between Early and the
-/// Simplify list, and `Walk` after Cleanup, module passes LLVM's GlobalsAA does
-/// not survive either); 10 here, which this holds at.
+/// module below): each program pass dropped it and the next function pass made
+/// it again. LLVM makes it twice, at `RequireAnalysisPass<GlobalsAA>` before
+/// the inliner and `RecomputeGlobalsAAPass`, and keeps it past every pass
+/// between.
 #[test]
 fn test_the_llvm_order_does_not_make_globals_aa_again_for_each_function_stage() {
     assert!(
@@ -2170,7 +2181,7 @@ fn test_the_llvm_order_does_not_make_globals_aa_again_for_each_function_stage() 
     .and_then(|done| done)
     .unwrap_or_else(|error| panic!("{name}: {error}"));
     let made = llrm_mir::counts::analysed("globals-aa").1 - before;
-    assert!(made <= 10, "{name}: globals-aa made {made} times, 8 before it was held past the function stages");
+    assert_eq!(made, 2, "{name}: globals-aa made other than at LLVM's two points");
 }
 
 /// The fixed point hashed the body before it ran even when its list runs once
@@ -2293,13 +2304,12 @@ fn test_a_slot_of_the_order_can_be_run_alone_when_the_level_builds_it() {
 }
 
 /// The order had no SimplifyCFG after the Simplify stage: L1438 (hoist and
-/// sink common code, loops need not stay canonical) and L2376 (hoist) were
-/// Missing. Their slots are built, in the pin's order around
-/// `instsimplify@1662`.
+/// sink common code, loops need not stay canonical) and L1682 were Missing.
+/// Their slots are built, in the pin's order around `instsimplify@1662`.
 #[test]
 fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
     let o2 = Applied::default();
-    for slot in ["simplifycfg@1438", "simplifycfg@1682", "simplifycfg@2376"] {
+    for slot in ["simplifycfg@1438", "simplifycfg@1682"] {
         assert!(pipeline::slot_built(&o2, slot), "{slot}");
     }
     let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
@@ -2310,12 +2320,14 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
             "float2int@1594",
             "loop-interchange@1631",
             "loop-load-elim@1400",
+            "combine@1403",
             "simplifycfg@1438",
+            "combine@1464",
+            "combine@1499",
             "licm@1508",
             "instsimplify@1662",
             "tailrec@1677",
-            "simplifycfg@1682",
-            "simplifycfg@2376"
+            "simplifycfg@1682"
         ]
     );
 }
@@ -2323,11 +2335,10 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
 /// d_faces -O2 under the LLVM order ran `hoist` three times in its slots and
 /// `sink` (a register-pressure forecast) after the fixed point, where LLVM has
 /// no such pass; `sink` is gone and the translated LICM runs in the pin's four
-/// slots (the fourth, `licm@1508`, after the unroll: x_gcd's `umax(n/20, 2)`
-/// was computed inside the outer loop without it) and once after the header
-/// copy (`rotate` is not a slot yet).
+/// slots and not after gcc's header copy, which LLVM's order does not run
+/// (`rotate` is not a slot yet).
 #[test]
-fn test_the_llvm_order_runs_licm_in_the_pins_four_slots_and_once_after_the_header_copy() {
+fn test_the_llvm_order_runs_licm_in_the_pins_four_slots_and_not_after_a_header_copy() {
     let text = "define i16 @f(i16 %n, i16 %a) {\nb0:\n  br label %h\nh:\n  %i = phi i16 [ 0, %b0 ], [ %j, %b ]\n  %c = icmp slt i16 %i, %n\n  br i1 %c, label %b, label %x\nb:\n  %k = mul i16 %a, 3\n  %j = add i16 %i, %k\n  br label %h\nx:\n  ret i16 %i\n}\n";
     llrm_mir::counts::per_pass();
     let ran = |licm: bool| {
@@ -2351,11 +2362,7 @@ fn test_the_llvm_order_runs_licm_in_the_pins_four_slots_and_once_after_the_heade
         let after = llrm_mir::counts::lines();
         runs(&after, "licm") - runs(&before, "licm")
     };
-    assert_eq!(
-        ran(true),
-        5,
-        "licm@724, licm@730, licm@823, licm@1508 (the pin has four) and the one after the header copy"
-    );
+    assert_eq!(ran(true), 4, "licm@724, licm@730, licm@823 and licm@1508; none after a header copy");
 }
 
 /// The write-through `Promote` ran after the translated SROA and mem2reg at
@@ -2805,6 +2812,48 @@ fn lsr_runs_on_simplified_loops_in_lcssa_form() {
         let names: Vec<&str> = pipeline::strength_slot(&applied).iter().map(|one| one.name()).collect();
         let at = names.iter().position(|one| *one == "lsr").expect("lsr is in the slot");
         assert_eq!(&names[at.saturating_sub(3)..at], ["loopsimplify", "lcssa", "canonfreeze"], "{names:?}");
-        assert_eq!(names.last(), Some(&"opened"), "the exit phis go again: {names:?}");
+    }
+}
+
+/// `Spares` and `Homes` are llrm-only (the pin has no counterpart for either)
+/// and cost 16.4 M Ir at d_faces; the default pipeline ran both. They are off
+/// at every level until `-fllrm-spares` / `-fllrm-homes`
+/// (docs/working/homes-spares.md).
+#[test]
+fn the_llrm_only_module_passes_are_off_by_default_at_every_level() {
+    for level in [
+        pipeline::Options::none(),
+        pipeline::Options::basic(),
+        pipeline::Options::standard(),
+        pipeline::Options::speed(),
+        pipeline::Options::aggressive(),
+        pipeline::Options::size(),
+        pipeline::Options::min_size(),
+    ] {
+        assert!(!level.spare_loads && !level.stored_homes && !level.stable_loads);
+    }
+}
+
+/// The premise of `cgpaddr`'s `optimizeExtUses` (DEVIATE CGP2 closed, #4421):
+/// the pin deletes unreachable blocks as CodeGenPrepare starts
+/// (`removeUnreachableBlocks`), and `cgpaddr` does not, because the pipeline
+/// has done it long before: the first function pass of every level is
+/// SimplifyCFG, which deletes a block nothing reaches. End to end, a C function
+/// with a labelled block nothing jumps to has it at `--dump`'s first stage
+/// (01-globalopt.ll) and not at the second (04-pipeline.ll), at -O1, -O2, -O3
+/// and -Os; `-O0` runs no `cgpaddr`.
+#[test]
+fn test_simplifycfg_runs_first_so_no_unreachable_block_reaches_cgpaddr() {
+    use crate::parity::Phase;
+    for options in [
+        pipeline::Options::basic(),
+        pipeline::Options::standard(),
+        pipeline::Options::speed(),
+        pipeline::Options::size(),
+    ] {
+        let applied = Applied { options: pipeline::Options { llvm_order: true, ..options }, ..Applied::default() };
+        let early: Vec<_> = pipeline::llvm_order(&applied, Phase::Early).iter().map(|one| one.name()).collect();
+        let first = early.iter().find(|name| !name.starts_with("lowerexpect")).expect("a pass");
+        assert!(first.starts_with("decide@") || first.starts_with("simplifycfg"), "{early:?}");
     }
 }

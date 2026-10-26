@@ -257,6 +257,43 @@ def failed_tests(output: str) -> list[str]:
     return list(dict.fromkeys(line.strip() for line in block.splitlines() if re.fullmatch(r"    [\w:]+", line)))
 
 
+# `unit X::did-not-run` / `integration-did-not-run` -> why: the first error lines of the cargo output, else the exit status and its last 20 lines. A refusal that named only the
+# token left #4269's author (refused twice) with nothing to read.
+CAUSES: dict[str, str] = {}
+
+
+def did_not_run_cause(
+    output: str,
+    returncode: int,
+) -> str:
+    lines = [line.rstrip() for line in output.splitlines() if line.strip()]
+    first = next((at for at, line in enumerate(lines) if re.match(r"(error|thread .* panicked)", line.lstrip())), None)
+    shown = lines[first : first + 8] if first is not None else [f"exit status {returncode}", *lines[-20:]]
+    return " | ".join(shown)[:600]
+
+
+def causes_of(names) -> str:
+    """` [name: cause; ...]` for the did-not-run names among `names` that have a recorded cause, else an empty string."""
+    text = "; ".join(f"{name}: {CAUSES[name]}" for name in sorted(names) if name in CAUSES)
+    return f" [{text}]" if text else ""
+
+
+def panic_reasons(output: str) -> dict[str, str]:
+    """Each test's first panic message from a `cargo test` output: `thread 'NAME' (id) panicked at FILE:L:C:` and the line after it, with a `left:`/`right:` pair appended. A refusal that
+    names only the test sent its author to rerun the runner's command to see what failed (#4172's `debug_assert_eq!`, which fires in the debug profile the runner uses and not in release)."""
+    found: dict[str, str] = {}
+    lines = output.splitlines()
+    for at, line in enumerate(lines):
+        if not (m := re.match(r"thread '(?P<name>[^']+)'(?: \(\d+\))? panicked at .*:$", line)) or at + 1 >= len(lines):
+            continue
+        reason = lines[at + 1].strip()
+        pair = [one.strip() for one in lines[at + 2 : at + 4] if re.match(r"\s*(left|right):", one)]
+        short = m["name"].rsplit("::", 1)[-1]
+        found.setdefault(short, reason + (f" ({', '.join(pair)})" if pair else ""))
+        found.setdefault(m["name"], found[short])
+    return found
+
+
 def selection() -> dict:
     return tomllib.loads(SELECTION.read_text()) if SELECTION.exists() else {}
 
@@ -318,9 +355,12 @@ def oracle_env() -> dict[str, str]:
 
 
 def compile_ok(command: list[str], env: dict[str, str]) -> str | None:
-    """None where the compile succeeded; else its first line of complaint."""
+    """None where the compile succeeded; else its first line of complaint. A `-o /dev/null` is an object in a scratch directory: llrm-c encodes only for an `.o` or
+    `.obj` output, so the null device never reached the encoder."""
     try:
-        done = cpulimit.run(command, 300, capture_output=True, text=True, env=env)
+        with tempfile.TemporaryDirectory(prefix="smoke-") as work:
+            command = [str(Path(work) / "out.obj") if after == "-o" and arg == os.devnull else arg for after, arg in zip(["", *command], command)]
+            done = cpulimit.run(command, 300, capture_output=True, text=True, env=env)
     except cpulimit.MemoryLimit as error:
         return f"memory limit: {error}"
     except subprocess.TimeoutExpired:
@@ -418,9 +458,9 @@ def failing_programs(output: str) -> list[str]:
 # A PR touching one of these changes what a BASIC (or any) program prints without a unit test saying so: log_exp_digits, pow_stack_depth and pow_unrolled went red on
 # parity for 12 results and the gate, which ran a dozen programs, did not see it. Such a PR runs every tests/run group (75 s of wall in all, the qb group 6 s).
 WHOLE_GROUP_TRIGGERS = (
-    "crates/frontends/llrm-qb/",
-    "crates/frontends/qbfront/",
-    "crates/frontends/llrm-qbruntime/",
+    "crates/frontends/qb/",
+    "crates/frontends/qb/",
+    "runtime/qb/",
     "runtime/qb/",
     "crates/target/llrm-x86/",
     "crates/backend/llrm-core/",
@@ -501,6 +541,9 @@ def dependants_lib_failures(
     import xfail  # noqa: PLC0415
 
     failed = set()
+    # A listed test that passed: its fix removes its entry, and the list says otherwise (17 entries of llrm-nib, qb and transforms stood after their tests passed or went).
+    stale = set()
+    listed = xfail.load()
     started = time.monotonic()
     passed, names = 0, []
     for package in sorted(packages):
@@ -509,7 +552,9 @@ def dependants_lib_failures(
         found = {f"unit {package}::{test}" for test in failed_tests(output)}
         if done.returncode and not found and "no library targets" not in output and "error: " in output:
             found = {f"unit {package}::did-not-run"}
+            CAUSES[f"unit {package}::did-not-run"] = did_not_run_cause(output, done.returncode)
         failed |= found
+        stale |= {f"xpass unit {package}::{name}" for name in re.findall(r"^test (\S+) \.\.\. ok$", output, re.M) if f"unit {package}::{name}" in listed}
         passed += sum(int(count) for count in re.findall(r"test result: \w+\. (\d+) passed", output))
         names += [f"{package}::{name}" for name in re.findall(r"^test (\S+) \.\.\. (?:ok|FAILED)$", output, re.M)]
     # What ran, kept for the line the gate prints: a pass that says nothing cannot be told from a gate that never ran.
@@ -520,7 +565,7 @@ def dependants_lib_failures(
         names=hashlib.sha1("\n".join(sorted(names)).encode()).hexdigest()[:8],
         seconds=time.monotonic() - started,
     )
-    return failed - xfail.load().keys()
+    return (failed - listed.keys()) | stale
 
 
 # Root integration targets (tests/*.rs) the landing gate does not run per PR, with the reason: the nightly run (tools/gate/nightly_integration.py) does.
@@ -539,6 +584,8 @@ SCANNERS = {
     "docs_links": "reads markdown",
     "dosbox_progress": "reads the harness",
     "no_kill_by_pattern": "scans scripts",
+    "no_partial_ecx_counts": "scans the 32-bit runtime assembly",
+    "selectiondag_registry": "reads the SD registry in the plan and every source's SD numbers",
     "no_local_paths": "scans docs",
     "no_todo": "scans sources",
     "tracked_build_products": "lists tracked files",
@@ -565,6 +612,12 @@ def integration_map(
         used = named(text)
         for name in set(re.findall(r"CARGO_BIN_EXE_([\w-]+)", text)):
             used |= {name} & bins.keys() and bins[name]
+        if source.stem == "check":
+            # tests/check.rs runs whichever tool a file's RUN line names, from beside llrm-qb: the compilers of its RUN lines, not only the one CARGO_BIN_EXE names
+            # (copy_idioms.c, which drives llrm-c, went red on parity unseen: a change to llrm-c ran no check).
+            for case in (root / "tests" / "check").rglob("*"):
+                for tool in re.findall(r"RUN:\s*(?:not\s+)?([\w-]+)", case.read_text(errors="replace") if case.is_file() else ""):
+                    used |= bins.get(tool, set())
         if "tools/dosbatch" in text or "run_tests" in text:
             used |= set().union(*(bins.get(name, set()) for name in TOOL_COMPILERS))
         reach = set(used)
@@ -588,6 +641,17 @@ def integration_targets_for(
     own = {Path(path).stem for path in files if path.startswith("tests/") and path.endswith(".rs") and "/" not in path[len("tests/"):]}
     chosen = {name for name, reach in mapping.items() if reach & touched} | set(SCANNERS) | own
     return sorted(name for name in chosen if name in mapping and name not in NIGHTLY_ONLY)
+
+
+def test_outcomes(output: str, status: str) -> list[str]:
+    """`integration <target>::<test>` of each `test NAME ... STATUS` line, by the `Running tests/TARGET.rs` line above it."""
+    target, found = "?", []
+    for line in output.splitlines():
+        if match := re.match(r"\s+Running (?:unittests )?(?:tests/)?(\w+?)(?:\.rs)?\s", line):
+            target = match[1]
+        if match := re.match(rf"test (?!result:)(\S+) \.\.\. {status}", line):
+            found.append(f"integration {target}::{match[1]}")
+    return sorted(dict.fromkeys(found))
 
 
 def red_tests(output: str) -> list[str]:
@@ -619,7 +683,11 @@ def integration_failures(
     found = set(red_tests(done.stdout))
     if done.returncode and not found:
         found = {"integration-did-not-run"}
-    return found - xfail.load().keys()
+        CAUSES["integration-did-not-run"] = did_not_run_cause(done.stdout, done.returncode)
+    listed = xfail.load().keys()
+    # a listed test that passes is as much a gate failure as an unlisted one that fails: its fix removes its entry
+    passing = {f"xpass {one}" for one in test_outcomes(done.stdout, "ok") if one in listed}
+    return (found - listed) | passing
 
 
 def qbrt_failures(

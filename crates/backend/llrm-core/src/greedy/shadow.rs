@@ -60,6 +60,11 @@ pub struct ShadowInputs<'a> {
     /// takes the class its own instructions give (`recomputeRegClass`),
     /// else its parent's.
     pub sets: Option<&'a crate::backend::regclass::Sets>,
+    /// `Profile::stable_loads`: rematerialize loads of cells nothing writes.
+    pub stable_loads: bool,
+    /// The callee-saved registers, whole (`getLastCalleeSavedAlias`): none
+    /// turns the first-use cost of one off.
+    pub saved: &'a [RegId],
 }
 
 /// What the shadow allocator decided.
@@ -81,6 +86,7 @@ struct BodyEnv {
     pins: IndexMap<u32, RegId>,
     freq: Vec<f32>,
     exiting: Vec<bool>,
+    saved: Vec<RegId>,
 }
 
 impl SpillWeightEnv for BodyEnv {
@@ -181,6 +187,18 @@ impl GreedyEnv for BodyEnv {
         _virt: u32,
     ) -> bool {
         false
+    }
+
+    fn callee_saved_alias(
+        &self,
+        phys: RegId,
+    ) -> Option<RegId> {
+        self.saved.contains(&phys).then_some(phys)
+    }
+
+    fn csr_first_use_cost(&self) -> u32 {
+        // push + pop (`X86RegisterInfo::getCSRFirstUseCost`).
+        if self.saved.is_empty() { 0 } else { 2 }
     }
 }
 
@@ -438,7 +456,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
             self.tables.float_bytes.borrow_mut().insert(to, bytes);
         }
         let what = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![Loc::Held(Held { value: to, width })],
             sources: vec![Loc::Held(Held { value: from, width })],
             ..Semantics::new(Operation::Move)
@@ -524,6 +542,129 @@ impl CallMasks {
         let at = self.blocks.partition_point(|(begin, ..)| *begin <= start).checked_sub(1)?;
         let (_, end, run) = &self.blocks[at];
         (stop.get_prev_slot() < *end).then(|| run.clone())
+    }
+}
+
+/// LLVM's physical register range for a value an instruction pins to a
+/// register (`LIS->getRegUnit`), behind `LLRM_FIXED_PINS` (POC): the value is
+/// not allocated; every other range meets it as a fixed range, except where
+/// the overlap starts at a copy between the two (`LiveRange::overlaps(Other,
+/// CP, Indexes)`, `LiveRegMatrix::checkRegUnitInterference`).
+struct FixedPins {
+    tri: RegisterInfo,
+    pins: Vec<FixedPin>,
+    /// The pinned ranges of each register unit, merged (`LIS->getRegUnit`):
+    /// what the interference cache and the region splitter see of them.
+    units: std::collections::HashMap<u32, crate::liveness::liverange::LiveRange>,
+    /// The copies of the body by the slot they define at: (destination,
+    /// source).
+    copies: std::collections::HashMap<SlotIndex, (u32, u32)>,
+}
+
+struct FixedPin {
+    reg: u32,
+    root: RegId,
+    segments: Vec<(SlotIndex, SlotIndex)>,
+}
+
+impl FixedPins {
+    fn interferes(
+        &self,
+        li: &LiveInterval,
+        phys: RegId,
+    ) -> bool {
+        self.pins.iter().filter(|pin| self.tri.overlaps(pin.root, phys)).any(|pin| {
+            let (mut i, mut j) = (0, 0);
+            while i < li.segments.len() && j < pin.segments.len() {
+                let (a, b) = (&li.segments[i], &pin.segments[j]);
+                if a.start < b.1 && b.0 < a.end {
+                    let def = std::cmp::max(a.start.clone(), b.0.clone());
+                    let excused = !def.is_block()
+                        && self
+                            .copies
+                            .get(&def)
+                            .is_some_and(|&(d, s)| (d, s) == (li.reg(), pin.reg) || (d, s) == (pin.reg, li.reg()));
+                    if !excused {
+                        return true;
+                    }
+                }
+                if a.end <= b.1 {
+                    i += 1;
+                } else {
+                    j += 1;
+                }
+            }
+            false
+        })
+    }
+}
+
+/// The calls and the pinned ranges as the matrix's fixed constraints.
+struct Fixed {
+    calls: CallMasks,
+    pins: Rc<std::cell::OnceCell<FixedPins>>,
+}
+
+impl PhysInterference for Fixed {
+    fn reg_mask_clobbered(
+        &self,
+        li: &LiveInterval,
+    ) -> Option<RegSet> {
+        self.calls.reg_mask_clobbered(li)
+    }
+
+    fn reg_unit_interferes(
+        &self,
+        li: &LiveInterval,
+        phys: RegId,
+    ) -> bool {
+        self.pins.get().is_some_and(|pins| pins.interferes(li, phys))
+    }
+
+    fn fixed_range(
+        &self,
+        unit: u32,
+    ) -> Option<&crate::liveness::liverange::LiveRange> {
+        self.pins.get().and_then(|pins| pins.units.get(&unit))
+    }
+
+    fn reg_mask_range(
+        &self,
+        start: SlotIndex,
+        stop: SlotIndex,
+    ) -> std::ops::Range<usize> {
+        self.calls.reg_mask_range(start, stop)
+    }
+
+    fn reg_mask_range_in_block(
+        &self,
+        mbb: usize,
+        start: SlotIndex,
+        stop: SlotIndex,
+    ) -> std::ops::Range<usize> {
+        self.calls.reg_mask_range_in_block(mbb, start, stop)
+    }
+
+    fn reg_mask_destroys(
+        &self,
+        i: usize,
+    ) -> bool {
+        self.calls.reg_mask_destroys(i)
+    }
+
+    fn reg_mask_slot(
+        &self,
+        i: usize,
+    ) -> SlotIndex {
+        self.calls.reg_mask_slot(i)
+    }
+
+    fn reg_mask_clobbers(
+        &self,
+        i: usize,
+        phys: RegId,
+    ) -> bool {
+        self.calls.reg_mask_clobbers(i, phys)
     }
 }
 
@@ -722,7 +863,13 @@ pub fn decide_with_split(
     if body.blocks.iter().any(|block| !block.phis.is_empty()) || body.blocks.is_empty() {
         return None;
     }
-    if std::env::var("LLRM_INPUT_DUMP").is_ok_and(|n| n == body.name) {
+    if llrm_support::env_var("LLRM_MIR_PRINT").is_some_and(|n| n == &*body.name) {
+        match crate::backend::mirprint::mir(body, inputs.pins) {
+            Ok(text) => eprintln!("{text}"),
+            Err(why) => eprintln!("MIR-PRINT-REFUSED {}: {why}", body.name),
+        }
+    }
+    if llrm_support::env_var("LLRM_INPUT_DUMP").is_some_and(|n| n == &*body.name) {
         for (b, block) in body.blocks.iter().enumerate() {
             for (at, one) in block.insns.iter().enumerate() {
                 eprintln!(
@@ -736,7 +883,8 @@ pub fn decide_with_split(
             }
         }
     }
-    let mut lis = LiveIntervals::new(body);
+    let mut lis =
+        crate::liveness::liveintervals::take_handed_over_edited_to(body).unwrap_or_else(|| LiveIntervals::new(body));
     // The environment: orders, frequencies, loop exits.
     let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
     let freq: Vec<f32> =
@@ -757,11 +905,7 @@ pub fn decide_with_split(
     let tables = Rc::new(Tables::default());
     // Under RFP the x87 values take FP0..FP6 (LLVM's RFP
     // classes); a stack position an instruction names is the stackifier's.
-    let floats = if crate::backend::allocate::rfp_on() {
-        crate::backend::floatassign::_floating_values(body)
-    } else {
-        Default::default()
-    };
+    let floats = crate::backend::floatassign::_floating_values(body);
     for reg in lis.virt_regs() {
         let mut order: Vec<RegId> = if floats.contains(&reg) {
             crate::backend::allocate::RFP.to_vec()
@@ -775,18 +919,22 @@ pub fn decide_with_split(
         tables.widths.borrow_mut().insert(value, width);
     }
     tables.float_bytes.borrow_mut().extend(super::inlinespiller::float_precisions(body));
-    let invariant = crate::backend::postings::following(body, |postings| {
-        let defined: std::collections::BTreeSet<u32> = body
-            .blocks
-            .iter()
-            .flat_map(|block| block.insns.iter())
-            .flat_map(|one| one.defines.iter().copied())
-            .collect();
-        crate::backend::spiller::_stable_loads_by(body, &defined, &Default::default(), postings)
-            .keys()
-            .copied()
-            .collect::<std::collections::BTreeSet<u32>>()
-    });
+    let invariant = if !inputs.stable_loads {
+        super::remat::argument_loads(body)
+    } else {
+        crate::backend::postings::following(body, |postings| {
+            let defined: std::collections::BTreeSet<u32> = body
+                .blocks
+                .iter()
+                .flat_map(|block| block.insns.iter())
+                .flat_map(|one| one.defines.iter().copied())
+                .collect();
+            crate::backend::bodyfacts::_stable_loads_by(body, &defined, &Default::default(), postings)
+                .keys()
+                .copied()
+                .collect::<std::collections::BTreeSet<u32>>()
+        })
+    };
     tables.remat.borrow_mut().extend(super::remat::values(body, &invariant));
     let pins = inputs
         .pins
@@ -794,7 +942,13 @@ pub fn decide_with_split(
         .filter(|(reg, _)| !floats.contains(reg))
         .map(|(&reg, &phys)| (reg, crate::model::ir::root(phys)))
         .collect();
-    let env = BodyEnv { orders: Rc::clone(&tables), pins, freq, exiting };
+    let env = BodyEnv {
+        orders: Rc::clone(&tables),
+        pins,
+        freq,
+        exiting,
+        saved: inputs.saved.iter().map(|one| crate::model::ir::root(*one)).collect(),
+    };
     // The calls.
     let mut calls = Vec::new();
     let mut blocks = Vec::with_capacity(body.blocks.len());
@@ -839,9 +993,11 @@ pub fn decide_with_split(
         );
         blocks.push((start, end, first..calls.len()));
     }
+    let fixed_pins = llrm_support::env_flag!("LLRM_FIXED_PINS");
+    let pins_cell: Rc<std::cell::OnceCell<FixedPins>> = Rc::default();
     let matrix = LiveRegMatrix::new(
         RegisterInfo::new(inputs.registers),
-        Box::new(CallMasks::of(calls, blocks, Rc::clone(&tables))),
+        Box::new(Fixed { calls: CallMasks::of(calls, blocks, Rc::clone(&tables)), pins: Rc::clone(&pins_cell) }),
     );
     let inline = matches!(mode, Mode::Inline { .. });
     // A split edits the function, and a caller that only records what to spill
@@ -874,6 +1030,72 @@ pub fn decide_with_split(
         greedy.split = Some(super::regionsplit::SplitSupport::new(split_env, mbfi, &greedy.lis.cfg.succs));
     }
     greedy.calculate_spill_weights_and_hints();
+    let fixed_regs: Vec<(u32, RegId)> = if fixed_pins {
+        let mut copies = std::collections::HashMap::new();
+        for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+            if let Some((d, s)) =
+                one.what.as_ref().and_then(|w| match (w.name.as_deref(), &w.dests[..], &w.sources[..]) {
+                    (Some("mov"), [llrm_lir::Loc::Held(d)], [llrm_lir::Loc::Held(s)]) => Some((d.value, s.value)),
+                    _ => None,
+                })
+            {
+                copies.insert(greedy.lis.indexes.get_instruction_index(one.id()).get_reg_slot(false), (d, s));
+            }
+        }
+        let wanted: Vec<(u32, RegId)> = inputs
+            .pins
+            .iter()
+            .filter(|(reg, _)| !floats.contains(reg) && greedy.lis.has_interval(**reg))
+            .map(|(&reg, &phys)| (reg, phys))
+            .collect();
+        let pins: Vec<FixedPin> = wanted
+            .into_iter()
+            .map(|(reg, phys)| FixedPin {
+                reg,
+                root: crate::model::ir::root(phys),
+                segments: greedy
+                    .lis
+                    .interval_rc(reg)
+                    .segments
+                    .iter()
+                    .map(|s| (s.start.clone(), s.end.clone()))
+                    .collect(),
+            })
+            .collect();
+        let regs = pins.iter().map(|pin| (pin.reg, pin.root)).collect();
+        let tri = RegisterInfo::new(inputs.registers);
+        let mut spans: std::collections::HashMap<u32, Vec<(SlotIndex, SlotIndex)>> = std::collections::HashMap::new();
+        for pin in &pins {
+            for unit in tri.regunits(pin.root) {
+                spans.entry(unit).or_default().extend(pin.segments.iter().cloned());
+            }
+        }
+        let units = spans
+            .into_iter()
+            .map(|(unit, mut list)| {
+                list.sort();
+                let mut merged: Vec<(SlotIndex, SlotIndex)> = Vec::new();
+                for (start, end) in list {
+                    match merged.last_mut() {
+                        Some(last) if start <= last.1 => last.1 = std::cmp::max(last.1.clone(), end),
+                        _ => merged.push((start, end)),
+                    }
+                }
+                let range = crate::liveness::liverange::LiveRange {
+                    segments: merged
+                        .into_iter()
+                        .map(|(start, end)| crate::liveness::liverange::Segment::new(start, end, None))
+                        .collect(),
+                    valnos: Vec::new(),
+                };
+                (unit, range)
+            })
+            .collect();
+        let _ = pins_cell.set(FixedPins { tri, pins, units, copies });
+        regs
+    } else {
+        Vec::new()
+    };
     let values = greedy.lis.virt_regs().len();
     // Values that may not be spilled, and the pinned ones in the registers that
     // fix them.
@@ -891,11 +1113,21 @@ pub fn decide_with_split(
     for (&reg, &phys) in inputs.pins {
         if !greedy.lis.reg_nodbg_empty(reg) && !floats.contains(&reg) {
             tables.orders.borrow_mut().insert(reg, vec![crate::model::ir::root(phys)]);
-            greedy.pinned.insert(reg);
+            if !fixed_regs.iter().any(|(fixed, _)| *fixed == reg) {
+                greedy.pinned.insert(reg);
+            }
         }
+    }
+    for (reg, root) in &fixed_regs {
+        greedy.fixed.insert(*reg);
+        greedy.matrix.vrm.assign_virt2phys(*reg, *root);
+    }
+    if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
+        eprintln!("== {}", body.name);
     }
     greedy.allocate_phys_regs();
     if inline {
+        greedy.hoist_spills(body);
         greedy.stacked_spills();
     }
     let mut signature = 0u64;
@@ -905,13 +1137,16 @@ pub fn decide_with_split(
         }
     }
     let (reloads, stores, folded) = greedy.spill_counts();
+    if llrm_support::env_var("LLRM_MIR_PRINT").is_some_and(|n| n == &*body.name) {
+        eprintln!("SPILL-COUNTS {} stores={stores} reloads={reloads} folded={folded}", body.name);
+    }
     let mut placed: Vec<(u32, RegId)> = Vec::new();
     for reg in greedy.lis.virt_regs() {
         if let Some(phys) = greedy.matrix.vrm.get_phys(reg) {
             placed.push((reg, phys));
         }
     }
-    if std::env::var("LLRM_PLACED_DEBUG").is_ok() {
+    if llrm_support::env_set("LLRM_PLACED_DEBUG") {
         for reg in greedy.lis.values().collect::<Vec<_>>() {
             if greedy.matrix.vrm.get_phys(reg).is_none() {
                 eprintln!(
@@ -976,11 +1211,10 @@ mod tests {
     #[test]
     fn test_x87_values_take_fp0_to_fp6_and_the_rest_spill() {
         use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Semantics, Space};
-        let _rfp = crate::backend::allocate::RfpOn::set();
         let float = |value: u32| Loc::Held(Held { value, width: 10 });
         let cell = |disp: i64| Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, disp)), 8));
         let what = |op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>| Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests,
             sources,
             ..Semantics::new(op)
@@ -1014,6 +1248,8 @@ mod tests {
             unspillable: &BTreeSet::new(),
             data: None,
             sets: None,
+            stable_loads: true,
+            saved: &[],
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("greedy allocated the body");
         let rfp = crate::backend::allocate::RFP;
@@ -1049,6 +1285,8 @@ mod tests {
             unspillable: &BTreeSet::new(),
             data: None,
             sets: None,
+            stable_loads: true,
+            saved: &[],
         };
         let before = crate::analysis::frequency::OF_CALLS.with(std::cell::Cell::get);
         assert!(decide_with(&inputs, Mode::Simple).is_some(), "premise: greedy allocated the body");
@@ -1162,9 +1400,8 @@ mod tests {
     #[test]
     fn test_a_selector_is_not_placed_in_ds_across_a_block_an_x87_value_lives_through() {
         use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
-        let _rfp = crate::backend::allocate::RfpOn::set();
         let what = |op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>| Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests,
             sources,
             ..Semantics::new(op)
@@ -1217,6 +1454,8 @@ mod tests {
                 unspillable: &BTreeSet::new(),
                 data: Some(RegId::DS),
                 sets: None,
+                stable_loads: true,
+                saved: &[],
             };
             let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
             decided
@@ -1269,6 +1508,8 @@ mod tests {
             unspillable: &BTreeSet::new(),
             data: None,
             sets: None,
+            stable_loads: true,
+            saved: &[],
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
         assert_eq!(decided.report.stats.spilled_ranges, 0, "{:?}", decided.report.stats);
@@ -1365,6 +1606,8 @@ mod tests {
             unspillable: &BTreeSet::new(),
             data: None,
             sets: None,
+            stable_loads: true,
+            saved: &[],
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
@@ -1409,6 +1652,8 @@ mod tests {
             unspillable: &BTreeSet::new(),
             data: None,
             sets: None,
+            stable_loads: true,
+            saved: &[],
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
@@ -1427,7 +1672,7 @@ mod tests {
         use crate::greedy::splitkit::SplitEnv as _;
         use crate::model::ir::{Held, Loc, Operation, Semantics};
         let what = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![Loc::Held(Held { value: 1, width: 4 })],
             sources: vec![Loc::Held(Held { value: 2, width: 4 })],
             ..Semantics::new(Operation::Move)
@@ -1458,7 +1703,7 @@ mod tests {
         use crate::greedy::splitkit::SplitEnv as _;
         use crate::model::ir::{Held, Loc, Operation, Semantics};
         let what = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![Loc::Held(Held { value: 1, width: 2 })],
             sources: vec![Loc::Held(Held { value: 2, width: 2 })],
             ..Semantics::new(Operation::Move)
@@ -1491,13 +1736,13 @@ mod tests {
         use crate::model::ir::{Held, Imm, Loc, Mem, Operation, Semantics};
         let held = |value| Loc::Held(Held { value, width: 4 });
         let literal = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![held(1)],
             sources: vec![Loc::Imm(Imm { value: 0, width: 4, address: None })],
             ..Semantics::new(Operation::Move)
         };
         let add = Semantics {
-            name: Some("add".to_owned()),
+            name: Some("add".into()),
             dests: vec![held(1)],
             sources: vec![held(1), held(2)],
             ..Semantics::new(Operation::Binary)
@@ -1520,7 +1765,7 @@ mod tests {
         // A load still needs the register's facts (D-I): nothing says the cell
         // is unchanged at the split.
         let load = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![held(1)],
             sources: vec![Loc::Mem(Mem {
                 addr: None,
@@ -1554,7 +1799,7 @@ mod tests {
         let (base, word) = (1u32, 2u32);
         let held = |value| Loc::Held(Held { value, width: 2 });
         let what = |op, name: &str, dests, sources| Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests,
             sources,
             ..Semantics::new(op)
@@ -1588,5 +1833,54 @@ mod tests {
             vec![RegId::EBX, RegId::ESI, RegId::EDI],
             "an address base stays among the address registers"
         );
+    }
+
+    fn fixed_pin_slots() -> Vec<SlotIndex> {
+        let insns: Vec<Arc<Insn>> = (0..40).map(|_| Arc::new(Insn::new(0, None, None, vec![], vec![]))).collect();
+        let body = LirBody::new(
+            "pins",
+            0,
+            vec![Block::from(LirBlock::new(0, insns.clone()))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let indexes = SlotIndexes::new(&body);
+        insns.iter().map(|one| indexes.get_instruction_index(one.id()).get_reg_slot(false)).collect()
+    }
+
+    fn span(
+        reg: u32,
+        from: usize,
+        to: usize,
+        at: &[SlotIndex],
+    ) -> LiveInterval {
+        let mut li = LiveInterval::new(reg, 1.0);
+        let v = li.get_next_value(at[from]);
+        li.add_segment(Segment::new(at[from], at[to], Some(v)));
+        li
+    }
+
+    /// A value copied into the register a pinned value holds may sit in it:
+    /// the overlap starts at the copy (`LiveRange::overlaps(Other, CP)`). The
+    /// pinned value was a vreg that every other range had to avoid, so `k`
+    /// was moved out of ecx and back with a `mov ecx, edx` per trip (x_cordic).
+    /// Any other range over the pin, and the pin's register's aliases only,
+    /// still meet it.
+    #[test]
+    fn a_range_meets_a_fixed_pin_except_at_the_copy_that_makes_it() {
+        let at = fixed_pin_slots();
+        let tri = RegisterInfo::new(Regs(&llrm_x86_m16::REGISTER_INFO));
+        // Value 2 is pinned to ecx over [10, 20) and is made by `mov v2, v1` at
+        // 10.
+        let pins = FixedPins {
+            tri,
+            pins: vec![FixedPin { reg: 2, root: RegId::ECX, segments: vec![(at[10].clone(), at[20].clone())] }],
+            units: Default::default(),
+            copies: [(at[10].clone(), (2, 1))].into_iter().collect(),
+        };
+        assert!(!pins.interferes(&span(1, 5, 30, &at), RegId::ECX), "the copy's source shares ecx");
+        assert!(pins.interferes(&span(3, 5, 30, &at), RegId::ECX), "another range over the pin");
+        assert!(!pins.interferes(&span(3, 5, 30, &at), RegId::EDX), "a register the pin does not hold");
+        assert!(pins.interferes(&span(1, 12, 30, &at), RegId::ECX), "a range that starts inside, not at the copy");
     }
 }

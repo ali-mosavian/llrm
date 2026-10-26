@@ -24,7 +24,7 @@
 //!
 //! ```text
 //!  frame copies -> machinecp -> extensions -> copysink
-//!    -> spillforward -> postrasink -> storecombine -> pushed constants
+//!    -> postrasink -> forwarded reloads -> storecombine -> pushed constants
 //!    -> pushes, constants, commuted, transferred, high extracts, restored
 //!       copies, shuttles, overwritten, fused, fused calls, far loads
 //!    -> exact addresses -> addresses (LEA) -> stepped after compare
@@ -46,8 +46,8 @@
 //! ```
 //!
 //! A sub-pass whose subject the body lacks is skipped. `needs.rs` keeps one bit
-//! per candidate shape (a register copy, an inserted definition, a cell read
-//! through an unheld 32-bit register, an exact cell, a based cell) per block,
+//! per candidate shape (a register copy, a cell read through an unheld 32-bit
+//! register, an exact cell) per block,
 //! and `gated` runs the pass only if some block has its bit. `LLRM_CHECK_NEEDS`
 //! runs the skipped pass anyway and asserts it changed nothing.
 //!
@@ -127,10 +127,7 @@ use crate::backend::intbits::{low_mask, wrap_to};
 pub use crate::backend::lanes::{Lane, Lanes};
 use crate::backend::needs::{self, gated};
 use crate::backend::peep::{self, walk::Facts};
-use crate::backend::{
-    affine, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, sharedstores, spillforward,
-    storecombine,
-};
+use crate::backend::{affine, copysink, liveness, machinedce, phielim, regthrash, select, sharedstores, storecombine};
 use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Block, Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
@@ -166,7 +163,7 @@ fn semantics(
     dests: Vec<Loc>,
     sources: Vec<Loc>,
 ) -> Semantics {
-    Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+    Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
 }
 
 fn with_what(
@@ -249,7 +246,8 @@ impl Peephole {
             return body;
         };
         let frame = frame.borrow();
-        if frame.size() == 0 {
+        // The reserved call area is stack storage no cell names a spill of.
+        if frame.size() == 0 || frame.call_area != 0 {
             return body;
         }
         for one in body.insns() {
@@ -320,14 +318,13 @@ impl Peephole {
         // that can remove a copy the coalescer refused on colourability.
         let mut seen = needs::Contents::default();
         let body = phielim::unsplit(&body);
-        let body = frame_copies(&body, &self.cpu, &self.classes)?;
         let body = gated(&mut seen, needs::COPY, body, |body| Ok(crate::backend::machinecp::propagated(&body)))?;
         let body = extensions(self.rules, &body);
         let body = copysink::sunk(&body);
-        let body = spillforward::forwarded(&body);
         // After the forwarding: a reload on the other path is gone, and the
         // store need not run there.
         let body = crate::backend::postrasink::latched(&crate::backend::postrasink::sunk(&body));
+        let body = forwarded_reloads(self.rules, &body);
         let body = storecombine::combined(&body);
         let body = pushed_constants(self.rules, &body);
         let body = far_loads(
@@ -357,8 +354,7 @@ impl Peephole {
         })?;
         let body = addresses(&body, &self.cpu)?;
         let body = stepped_after_compare(self.rules, &body);
-        let body = gated(&mut seen, needs::INSERTED | needs::BASED, body, |body| secondary_bases(&body, &self.cpu))?;
-        let body = borrows(self.rules, &increments(self.rules, &lea_fixed(self.rules, &body)));
+        let body = borrows(self.rules, &increments(self.rules, &body));
         let body = doubled(self.rules, &body, &self.cpu)?;
         let body = narrowed_arithmetic(self.rules, &body);
         // A zero upper half proven by the first is what the second reads, and
@@ -372,12 +368,12 @@ impl Peephole {
         };
         let body = zeroed_loads(self.rules, &body, &self.cpu)?;
         let body = sharedstores::shared(&body, &self.cpu, &self.saved, &self.classes);
-        let body = machinecse::eliminated(&body)?;
-        let body = waits(&zero_compares(
+        let body = zero_compares(
             self.rules,
             &compares_again(&tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))),
-        ));
+        );
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
+        let body = crate::backend::repbsf::marked(&body, &self.cpu);
         // Last: EBP zeroed above for each cell reading it 32 bits wide, where a
         // 32-bit address is the prefixed form of a 16-bit one. A native
         // one reads whole registers.
@@ -402,30 +398,37 @@ pub fn popped_arguments(
     let unit = i64::from(body.bits / 8);
     let arithmetic =
         RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::AF | RflagsBits::CF | RflagsBits::PF;
-    let exits = liveness::dead_at_exit(body);
+    let sp = Loc::Reg(reg(RegId::SP, 2));
+    // The words an `add sp, n` takes back, or 0.
+    let words_of = |one: &Insn| match &one.what {
+        Some(what)
+            if what.op == Operation::Binary && what.name.as_deref() == Some("add") && what.dests == [sp.clone()] =>
+        {
+            match what.sources.as_slice() {
+                [first, Loc::Imm(Imm { value, address: None, .. })]
+                    if *first == sp && value % unit == 0 && *value > 0 =>
+                {
+                    value / unit
+                }
+                _ => 0,
+            }
+        }
+        _ => 0,
+    };
+    // Solved for the first block that has a cleanup, and not at all for a
+    // body that has none.
+    let mut exits = None;
     let mut blocks = Vec::new();
     for block in &body.blocks {
+        if block.insns.iter().all(|one| words_of(one) == 0) {
+            blocks.push(block.clone());
+            continue;
+        }
+        let exits = exits.get_or_insert_with(|| liveness::dead_at_exit(body));
         let dead_after = regthrash::_dead_after(regs, body.bits, block, exits[&block.at].clone());
         let mut insns = Vec::with_capacity(block.insns.len());
         for one in &block.insns {
-            let sp = Loc::Reg(reg(RegId::SP, 2));
-            let words = match &one.what {
-                Some(what)
-                    if what.op == Operation::Binary
-                        && what.name.as_deref() == Some("add")
-                        && what.dests == [sp.clone()] =>
-                {
-                    match what.sources.as_slice() {
-                        [first, Loc::Imm(Imm { value, address: None, .. })]
-                            if *first == sp && value % unit == 0 && *value > 0 =>
-                        {
-                            value / unit
-                        }
-                        _ => 0,
-                    }
-                }
-                _ => 0,
-            };
+            let words = words_of(one);
             let dead = &dead_after[&id(one)];
             let scratch = regs.scratch.iter().copied().find(|register| _lanes(regs, *register).is_subset(dead));
             match scratch {
@@ -454,129 +457,6 @@ pub fn popped_arguments(
         blocks.push(block.with_insns(insns));
     }
     Ok(LirBody { blocks, ..body.clone() })
-}
-
-/// Use a dead GPR for an allocated frame-to-frame parallel copy.
-///
-/// Parallel-copy scheduling has to work even when every GPR is live, so its
-/// unconditional spelling is a balanced PUSH-memory/POP-memory pair.  After
-/// allocation, physical liveness can prove that a same-width register is
-/// dead across a particular pair.  Two MOVs then avoid the temporary stack
-/// traffic without changing flags, stack depth, or either frame address.
-pub fn frame_copies<'a>(
-    body: &LirBody,
-    cpu: impl Into<ProfileOrName<'a>>,
-    classes: &RegisterClasses,
-) -> Result<LirBody, String> {
-    let regs = body.regs();
-    let profile = targets::profile(cpu)?;
-    let forms = ["push_m", "pop_m", "mov_rm", "mov_mr"];
-    if !forms.iter().all(|form| profile.prices(form)) {
-        return Ok(body.clone());
-    }
-    if profile.cost("mov_rm")? + profile.cost("mov_mr")? >= profile.cost("push_m")? + profile.cost("pop_m")? {
-        return Ok(body.clone());
-    }
-    if !body.blocks.iter().any(|block| {
-        block
-            .insns
-            .iter()
-            .zip(block.insns.iter().skip(1))
-            .any(
-                |(first, second)| first.what.as_ref().is_some_and(|what| what.op == Operation::Push)
-                    && second.what.as_ref().is_some_and(|what| what.op == Operation::Pop),
-            )
-    }) {
-        // avoid whole-body liveness when no stack shuttle exists
-        return Ok(body.clone());
-    }
-
-    let exits = liveness::dead_at_exit(body);
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let dead_after = regthrash::_dead_after(regs, body.bits, block, exits[&block.at].clone());
-        let mut insns = block.insns.to_vec();
-        for index in 0..insns.len().saturating_sub(1) {
-            let (pushed, popped) = (Arc::clone(&insns[index]), Arc::clone(&insns[index + 1]));
-            if [&pushed, &popped].into_iter().any(|one| {
-                one.what.is_none()
-                    || !one.clobbers.is_empty()
-                    || !one.clobbers_high.is_empty()
-                    || !one.requires.is_empty()
-                    || !one.delivers.is_empty()
-                    || !one.spread.is_empty()
-                    || one.group.is_some()
-                    || one.symbol == Some(true)
-                    || one.frame_adjust
-                    || one.spill_reload
-                    || one.spill_store
-            }) {
-                continue;
-            }
-            if pushed.at != popped.at
-                || popped.covers != Some((pushed.at, pushed.at))
-                || popped.call.is_some()
-                || !pushed.defines.is_empty()
-                || !pushed.uses.is_empty()
-                || !popped.defines.is_empty()
-                || !popped.uses.is_empty()
-            {
-                continue; // only parcopy's synthetic balanced transfer
-            }
-            let (Some(first), Some(second)) = (&pushed.what, &popped.what) else {
-                continue;
-            };
-            let (source, destination) = match (
-                (first.op, first.name.as_deref(), first.dests.as_slice(), first.sources.as_slice()),
-                (second.op, second.name.as_deref(), second.dests.as_slice(), second.sources.as_slice()),
-            ) {
-                (
-                    (Operation::Push, Some("push"), [], [Loc::Mem(source)]),
-                    (Operation::Pop, Some("pop"), [Loc::Mem(destination)], []),
-                ) => {
-                    if source.width != destination.width
-                        || ![2, 4].contains(&source.width)
-                        || !_frame_cell(source)
-                        || !_frame_cell(destination)
-                    {
-                        continue;
-                    }
-                    (source.clone(), destination.clone())
-                }
-                _ => continue,
-            };
-            let scratch = classes
-                .available
-                .iter()
-                .copied()
-                .filter(|register| {
-                    _lanes(regs, regs.named(*register, i64::from(source.width))).is_subset(&dead_after[&id(&popped)])
-                })
-                .map(|register| regs.named(register, i64::from(source.width)))
-                .next();
-            let Some(scratch) = scratch else {
-                continue;
-            };
-            let temporary = reg(scratch, source.width);
-            let load = with_what(
-                &pushed,
-                semantics(Operation::Move, "mov", vec![Loc::Reg(temporary)], vec![Loc::Mem(source)]),
-            );
-            let store = with_what(
-                &popped,
-                semantics(Operation::Move, "mov", vec![Loc::Mem(destination)], vec![Loc::Reg(temporary)]),
-            );
-            if emit(body.bits, load.what.as_ref().expect("set above")).is_none()
-                || emit(body.bits, store.what.as_ref().expect("set above")).is_none()
-            {
-                continue;
-            }
-            insns[index] = Arc::new(load);
-            insns[index + 1] = Arc::new(store);
-        }
-        blocks.push(block.with_insns(insns));
-    }
-    Ok(body.with_blocks(blocks))
 }
 
 /// Fold a load or transitive extension into one widening instruction
@@ -659,14 +539,14 @@ pub fn _lanes(
 ) -> Lanes {
     if regs.is_segment(register) {
         let width = regs.width_of(register).expect("a segment register has a width");
-        return (0..width).map(|byte| (register, byte as u32)).collect();
+        return Lanes::span(register, 0, width as u32);
     }
     let full = full32(regs, register);
     if !regs.in_class(full, llrm_lir::registers::class::INT) || regs.is_stack(full) {
         return Lanes::new();
     }
     let start = regs.get(register).map_or(0, |one| one.lane / 8);
-    (start..start + register.size() as u32).map(|byte| (full, byte)).collect()
+    Lanes::span(full, start, register.size() as u32)
 }
 
 /// Write only the live low word of a register-only dword move
@@ -722,10 +602,18 @@ pub fn high_extracts<'a>(
             }
         }
     }
-    let exits = liveness::dead_at_exit(body);
+    // Worked out for the first window that gets as far as asking.
+    let exits = std::cell::OnceCell::new();
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let dead_after = regthrash::_dead_after(regs, body.bits, block, exits[&block.at].clone());
+        let dead = std::cell::OnceCell::new();
+        let dead_after = |at: usize| -> Lanes {
+            dead.get_or_init(|| {
+                let exits = exits.get_or_init(|| liveness::dead_at_exit(body));
+                regthrash::_dead_after(regs, body.bits, block, exits[&block.at].clone())
+            })[&at]
+                .clone()
+        };
         let insns = _code_windows(&block.insns, 3, |run| -> Result<_, String> {
             if run.len() == 3 {
                 if let Some(changed) =
@@ -752,7 +640,7 @@ fn _register_high_extract(
     regs: Regs,
     bits: u32,
     parts: &[Arc<Insn>],
-    dead_after: &DeadAfter,
+    dead_after: &dyn Fn(usize) -> Lanes,
     virtual_uses: &Counter,
     cpu: &Profile,
 ) -> Result<Option<Vec<Arc<Insn>>>, String> {
@@ -804,7 +692,7 @@ fn _register_high_extract(
     };
     let upper: Lanes = _lanes(regs, wide_high.register).minus(&_lanes(regs, high.register));
     let flags: Lanes = effects.1.and(&_flag_lanes(0xFFFF_FFFF));
-    if !upper.or(&flags).is_subset(&dead_after[&id(kept)]) {
+    if !upper.or(&flags).is_subset(&dead_after(id(kept))) {
         return Ok(None);
     }
     let old_cost = cpu.cost("push_r")? + 2 * cpu.cost("pop_r")?;
@@ -816,7 +704,7 @@ fn _register_high_extract(
             .difference(&_lanes(regs, high.register))
             .copied()
             .collect::<Lanes>()
-            .is_subset(&dead_after[&id(kept)])
+            .is_subset(&dead_after(id(kept)))
             && cpu.cost("shift_ri")? <= old_cost
             && emit(bits, &shift).is_some()
         {
@@ -854,7 +742,7 @@ fn _selected_register_high_extract(
     regs: Regs,
     bits: u32,
     parts: &[Arc<Insn>],
-    dead_after: &DeadAfter,
+    dead_after: &dyn Fn(usize) -> Lanes,
     virtual_uses: &Counter,
     cpu: &Profile,
 ) -> Result<Option<Vec<Arc<Insn>>>, String> {
@@ -938,7 +826,7 @@ fn _selected_register_high_extract(
         .intersection(&_flag_lanes(0xFFFF_FFFF))
         .copied()
         .collect();
-    if !upper.or(&flags).is_subset(&dead_after[&id(shift)]) {
+    if !upper.or(&flags).is_subset(&dead_after(id(shift))) {
         return Ok(None);
     }
     let new_cost = cpu.cost("shift_ri")?;
@@ -960,7 +848,7 @@ fn _high_extract(
     regs: Regs,
     bits: u32,
     parts: &[Arc<Insn>],
-    dead_after: &DeadAfter,
+    dead_after: &dyn Fn(usize) -> Lanes,
 ) -> Option<Vec<Arc<Insn>>> {
     let (load, shift) = (&parts[0], &parts[1]);
     if parts.iter().any(|one| {
@@ -1018,7 +906,7 @@ fn _high_extract(
     let preserved: Lanes = _lanes(regs, wide.register).minus(&_lanes(regs, low.register));
     let effects = _register_effects(regs, bits, shift, false, true)?;
     let flags: Lanes = effects.1.and(&_flag_lanes(0xFFFF_FFFF));
-    if !preserved.or(&flags).is_subset(&dead_after[&id(shift)]) {
+    if !preserved.or(&flags).is_subset(&dead_after(id(shift))) {
         return None;
     }
 
@@ -1047,6 +935,15 @@ pub fn restored_copies(
     body: &LirBody,
 ) -> LirBody {
     peep::rewritten(rules.restored_copies, body, &Facts::new(body, None))
+}
+
+/// Drop the reload of a cell into the register that filled it
+/// (`peephole.peep`, `forwarded_reloads`).
+pub fn forwarded_reloads(
+    rules: &peep::Rules,
+    body: &LirBody,
+) -> LirBody {
+    peep::rewritten(rules.forwarded_reloads, body, &Facts::new(body, None))
 }
 
 /// Whether `register` in an operand at `addr` is the frame base, which the
@@ -1185,12 +1082,14 @@ pub fn _register_effects_of_what(
         return None;
     }
     let key = EffectKey { bits, may_write, flags, what, requires: &[], delivers: &[] };
-    if let Some(found) = EFFECTS.with(|held| held.borrow().find(&key)) {
+    // Hashed once: a miss remembers under the hashes it looked up.
+    let hashes = key.hashes();
+    if let Some(found) = EFFECTS.with(|held| held.borrow().find(hashes)) {
         return found;
     }
     EFFECTS_COMPUTED.with(|count| count.set(count.get() + 1));
     let answer = _register_effects_of(regs, bits, &Insn::new(0, None, None, vec![], vec![]), what, may_write, flags);
-    EFFECTS.with(|held| held.borrow_mut().remember(&key, answer.clone()));
+    EFFECTS.with(|held| held.borrow_mut().remember(hashes, answer.clone()));
     answer
 }
 
@@ -1242,12 +1141,13 @@ fn _register_effects_worked(
     // of an `-O2` module's 16,000, #924): the answer depends on these fields
     // alone, and is remembered by their value.
     let key = EffectKey { bits, may_write, flags, what, requires: &one.requires, delivers: &one.delivers };
-    if let Some(found) = EFFECTS.with(|held| held.borrow().find(&key)) {
+    let hashes = key.hashes();
+    if let Some(found) = EFFECTS.with(|held| held.borrow().find(hashes)) {
         return found;
     }
     EFFECTS_COMPUTED.with(|count| count.set(count.get() + 1));
     let answer = _register_effects_of(regs, bits, one, what, may_write, flags);
-    EFFECTS.with(|held| held.borrow_mut().remember(&key, answer.clone()));
+    EFFECTS.with(|held| held.borrow_mut().remember(hashes, answer.clone()));
     answer
 }
 
@@ -1263,46 +1163,45 @@ struct EffectKey<'a> {
 }
 
 impl EffectKey<'_> {
-    fn hash(&self) -> u64 {
+    /// Two hashes of the fields, the second seeded apart from the first.
+    fn hashes(&self) -> (u64, u64) {
         use std::hash::{Hash, Hasher};
-        let mut hasher = rustc_hash::FxHasher::default();
-        (self.bits, self.may_write, self.flags, self.what, self.requires, self.delivers).hash(&mut hasher);
-        hasher.finish()
+        #[cfg(test)]
+        EFFECTS_HASHED.with(|count| count.set(count.get() + 1));
+        let fields = (self.bits, self.may_write, self.flags, self.what, self.requires, self.delivers);
+        let mut first = rustc_hash::FxHasher::default();
+        fields.hash(&mut first);
+        let mut second = rustc_hash::FxHasher::default();
+        0x9e37_79b9_7f4a_7c15_u64.hash(&mut second);
+        fields.hash(&mut second);
+        (first.finish(), second.finish())
     }
 }
 
 type Effects = Option<(Lanes, Lanes)>;
 
-/// What `_register_effects` answered, by the hash of what it was asked, and the
-/// asked kept to tell a hash that is another's.
+/// What `_register_effects` answered, by two independent 64-bit hashes of what
+/// it was asked. The asked was once kept beside the answer to tell a hash that
+/// is another's: a clone of its `Semantics` (a name and two operand lists) for
+/// each of the 5,559 answers a d_faces -O2 compile remembers, 5.8 M Ir. Two
+/// hashes are one in 2^128 a pair of different asks.
 #[derive(Default)]
 struct EffectsHeld {
-    by_hash: HashMap<u64, Vec<(u32, bool, bool, Semantics, Vec<(Held, RegId)>, Vec<(Held, RegId)>, Effects)>>,
+    by_hash: HashMap<(u64, u64), Effects>,
     count: usize,
 }
 
 impl EffectsHeld {
     fn find(
         &self,
-        key: &EffectKey,
+        hashes: (u64, u64),
     ) -> Option<Effects> {
-        self.by_hash
-            .get(&key.hash())?
-            .iter()
-            .find(|(bits, may_write, flags, what, requires, delivers, _)| {
-                *bits == key.bits
-                    && *may_write == key.may_write
-                    && *flags == key.flags
-                    && what == key.what
-                    && requires == key.requires
-                    && delivers == key.delivers
-            })
-            .map(|(.., answer)| answer.clone())
+        self.by_hash.get(&hashes).cloned()
     }
 
     fn remember(
         &mut self,
-        key: &EffectKey,
+        hashes: (u64, u64),
         answer: Effects,
     ) {
         // A function's instructions, not the run's.
@@ -1310,26 +1209,22 @@ impl EffectsHeld {
             *self = Self::default();
         }
         self.count += 1;
-        self.by_hash
-            .entry(key.hash())
-            .or_default()
-            .push(
-                (
-                    key.bits,
-                    key.may_write,
-                    key.flags,
-                    key.what.clone(),
-                    key.requires.to_vec(),
-                    key.delivers.to_vec(),
-                    answer,
-                ),
-            );
+        self.by_hash.insert(hashes, answer);
     }
 }
 
 thread_local! {
     static EFFECTS: RefCell<EffectsHeld> = RefCell::new(EffectsHeld::default());
     static EFFECTS_COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    #[cfg(test)]
+    static EFFECTS_HASHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has hashed an ask, for a test that a miss hashes
+/// it once.
+#[cfg(test)]
+pub fn effects_hashed() -> usize {
+    EFFECTS_HASHED.with(std::cell::Cell::get)
 }
 
 /// How many times this thread has worked out an instruction's register effects,
@@ -1665,13 +1560,11 @@ fn _loaded_scaled_add<'a>(
 /// Select physically adjacent load/scale/add tails across inert anchors.
 fn _loaded_addresses(
     regs: Regs,
-    bits: u32,
     block: &LirBlock,
-    flags_dead_out: bool,
+    dead: &dyn Fn(usize) -> bool,
     uses: &Counter,
     cpu: &Profile,
 ) -> Result<LirBlock, String> {
-    let dead = _flags_dead_after(regs, bits, block, flags_dead_out);
     let mut insns = block.insns.to_vec();
     let work: Vec<usize> =
         insns.iter().enumerate().filter(|(_, one)| !_skippable_nothing(one)).map(|(index, _)| index).collect();
@@ -1680,7 +1573,10 @@ fn _loaded_addresses(
     while at + 2 < work.len() {
         let indexes = &work[at..at + 3];
         let parts: Vec<Arc<Insn>> = indexes.iter().map(|index| Arc::clone(&insns[*index])).collect();
-        let combined = if dead.contains(&id(&parts[2])) { _loaded_scaled_add(regs, &parts, uses, cpu)? } else { None };
+        let combined = match _loaded_scaled_add(regs, &parts, uses, cpu)? {
+            Some(combined) if dead(id(&parts[2])) => Some(combined),
+            _ => None,
+        };
         let Some(combined) = combined else {
             at += 1;
             continue;
@@ -1825,20 +1721,35 @@ pub fn addresses<'a>(
             }
         }
     }
-    let (_, live_out) = crate::backend::allocate::live(body);
-    let flags_out = _flags_live_out(body);
+    // Each fact is worked out for the first window that gets as far as asking
+    // for it: most bodies have none that does.
+    let live_out = std::cell::OnceCell::new();
+    let flags_out = std::cell::OnceCell::new();
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let flags_dead_out = flags_out.entering.get(&block.at).is_some_and(Lanes::is_empty);
-        let block = _loaded_addresses(regs, body.bits, block, flags_dead_out, &virtual_uses, target_cpu)?;
-        let dead = _flags_dead_after(regs, body.bits, &block, flags_dead_out);
-        let live_out = live_out.get(&block.at).cloned().unwrap_or_default();
+        let flags_dead_out =
+            || flags_out.get_or_init(|| _flags_live_out(body)).entering.get(&block.at).is_some_and(Lanes::is_empty);
+        let loaded_dead = std::cell::OnceCell::new();
+        let block = _loaded_addresses(
+            regs,
+            block,
+            &|at| loaded_dead.get_or_init(|| _flags_dead_after(regs, body.bits, block, flags_dead_out())).contains(&at),
+            &virtual_uses,
+            target_cpu,
+        )?;
+        let dead = std::cell::OnceCell::new();
         let insns = _code_windows(&block.insns, block.insns.len(), |rest| -> Result<_, String> {
-            Ok(match _affine_address(regs, body.bits, rest, &dead, target_cpu)? {
-                Some((taken, made)) if !_loses_live_definition(&rest[..taken], &made[0], &rest[taken..], &live_out) => {
-                    Some((taken, made))
+            let dead_after = |at: usize| {
+                dead.get_or_init(|| _flags_dead_after(regs, body.bits, &block, flags_dead_out())).contains(&at)
+            };
+            Ok(match _affine_address(regs, body.bits, rest, &dead_after, target_cpu)? {
+                Some((taken, made)) => {
+                    let live_out = live_out.get_or_init(|| crate::backend::allocate::live_out(body));
+                    let live_out = live_out.get(&block.at).cloned().unwrap_or_default();
+                    (!_loses_live_definition(&rest[..taken], &made[0], &rest[taken..], &live_out))
+                        .then_some((taken, made))
                 }
-                _ => None,
+                None => None,
             })
         })?;
         blocks.push(block.with_insns(insns));
@@ -1857,263 +1768,6 @@ fn _root_get(
     key.then_some(rooted)
 }
 
-#[cfg(test)]
-thread_local! {
-    /// The values `secondary_bases` tried as derived from a candidate.
-    pub static SECONDARY_TRIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-/// Replace repeated allocated address shuttles with one clean 67h base.
-///
-/// Constrained-occurrence splitting keeps a long-lived word value in any GPR
-/// and creates short BX/SI/DI copies at native memory uses.  Once allocation
-/// has chosen physical registers, several such copies may be dearer than
-/// zero-extending the owner once and addressing through its 32-bit root.  The
-/// latter is the medium model's legal address-size-prefixed fallback.
-///
-/// This is deliberately post-allocation: it recognizes only copies created
-/// by allocation, changes no program algebra, checks every virtual consumer,
-/// and compares both the selected CPU cost and exact encoded byte totals.
-pub fn secondary_bases<'a>(
-    body: &LirBody,
-    cpu: impl Into<ProfileOrName<'a>>,
-) -> Result<LirBody, String> {
-    let regs = body.regs();
-    let profile = targets::profile(cpu)?;
-    let Some(secondary) = profile.dword_address_form() else {
-        return Ok(body.clone());
-    };
-
-    let mut definitions: IndexMap<u32, Option<Arc<Insn>>> = IndexMap::default();
-    let mut uses: IndexMap<u32, Vec<Arc<Insn>>> = IndexMap::default();
-    for one in body.insns() {
-        for value in &one.defines {
-            if definitions.contains_key(value) {
-                definitions.insert(*value, None);
-            } else {
-                definitions.insert(*value, Some(Arc::clone(&one)));
-            }
-        }
-        for value in one.uses.iter().copied().collect::<BTreeSet<u32>>() {
-            uses.entry(value).or_default().push(Arc::clone(&one));
-        }
-    }
-
-    let source_register = |one: &Insn, value: u32| -> Option<Reg> {
-        let what = one.what.as_ref()?;
-        for (named, destination) in one.defines.iter().zip(&what.dests) {
-            if let Loc::Reg(destination) = destination {
-                if *named == value && destination.width == 2 {
-                    return Some(*destination);
-                }
-            }
-        }
-        None
-    };
-
-    let derived = |value: u32, original: u32, source: &Reg| -> Option<(Arc<Insn>, Vec<Arc<Insn>>)> {
-        #[cfg(test)]
-        SECONDARY_TRIES.with(|count| count.set(count.get() + 1));
-        let definition = definitions.get(&value)?.as_ref()?;
-        let consumers = uses.get(&value).map_or(&[][..], Vec::as_slice);
-        if !definition.inserted() || definition.uses != [original] || consumers.len() != 1 {
-            return None;
-        }
-        if let Some(what) = &definition.what {
-            if what.op != Operation::Nothing {
-                match (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice()) {
-                    (Operation::Move, Some("mov"), [Loc::Reg(destination)], [Loc::Reg(copied)]) => {
-                        if destination.width != 2 || copied != source {
-                            return None;
-                        }
-                    }
-                    _ => return None,
-                }
-            }
-        }
-        let consumer = &consumers[0];
-        if Arc::ptr_eq(consumer, &definition) {
-            return None;
-        }
-        let consumed = consumer.what.as_ref()?;
-        let mut seen = 0;
-        for operand in consumed.dests.iter().chain(&consumed.sources) {
-            let selector_alias = matches!(
-                operand,
-                Loc::Mem(cell) if cell.selector.is_some_and(|selector| selector.value == value)
-            );
-            for held in ir::values(operand) {
-                if held.value == value {
-                    seen += 1;
-                    if !matches!(operand, Loc::Mem(cell)
-                        if cell.base == Some(held)
-                            && cell.index.is_none()
-                            && !selector_alias
-                            // A frame cell has two independent address
-                            // components: fixed BP and the allocated dynamic
-                            // index.  This rewrite widens one value only, so it
-                            // cannot legally turn the pair into a 32-bit
-                            // address.
-                            && !cell.addr.is_some_and(|addr| addr.space == Space::Frame)
-                            && regs.width_of(cell.through) == Some(2))
-                    {
-                        return None;
-                    }
-                }
-            }
-        }
-        if seen != 0 { Some((Arc::clone(definition), consumers.to_vec())) } else { None }
-    };
-
-    let rewritten = |one: &Insn, substitutions: &IndexMap<u32, (u32, RegId)>| -> Arc<Insn> {
-        let operand = |where_: &Loc| -> Loc {
-            let Loc::Mem(cell) = where_ else {
-                return where_.clone();
-            };
-            let Some(base) = cell.base else {
-                return where_.clone();
-            };
-            let Some((original, register)) = substitutions.get(&base.value) else {
-                return where_.clone();
-            };
-            Loc::Mem(Mem { base: Some(Held { value: *original, width: 4 }), through: *register, ..cell.clone() })
-        };
-        let what = one.what.as_ref().expect("a rewritten consumer has semantics");
-        Arc::new(Insn {
-            what: Some(Semantics {
-                dests: what.dests.iter().map(operand).collect(),
-                sources: what.sources.iter().map(operand).collect(),
-                ..what.clone()
-            }),
-            uses: one
-                .uses
-                .iter()
-                .map(|value| substitutions.get(value).map_or(*value, |substituted| substituted.0))
-                .collect(),
-            ..one.clone()
-        })
-    };
-
-    let mut substitutions: IndexMap<u32, (u32, RegId)> = IndexMap::default();
-    let mut remove: HashSet<usize> = HashSet::default();
-    let mut insert_after: HashMap<usize, Arc<Insn>> = HashMap::default();
-    // `derived` needs a definition that uses its candidate alone, so the values
-    // to try for a candidate are those, found once (every candidate tried every
-    // definition, with a copy of its uses).
-    let mut used_alone: HashMap<u32, Vec<u32>> = HashMap::default();
-    for (value, made) in &definitions {
-        if let Some([only]) = made.as_ref().map(|made| made.uses.as_slice()) {
-            used_alone.entry(*only).or_default().push(*value);
-        }
-    }
-    for (candidate, definition) in definitions.clone() {
-        let Some(definition) = definition else {
-            continue;
-        };
-        let Some(source) = source_register(&definition, candidate) else {
-            continue;
-        };
-        let Some(root) = _root_get(regs, source.register) else {
-            continue;
-        };
-        if regs.width_of(root) != Some(4) {
-            continue;
-        }
-        let mut group = Vec::new();
-        for value in used_alone.get(&candidate).into_iter().flatten() {
-            if *value == candidate {
-                continue;
-            }
-            if let Some((made, found)) = derived(*value, candidate, &source) {
-                group.push((*value, made, found));
-            }
-        }
-        if group.is_empty() {
-            continue;
-        }
-        let trial_substitutions: IndexMap<u32, (u32, RegId)> =
-            group.iter().map(|(value, _made, _consumers)| (*value, (candidate, root))).collect();
-        let mut consumers: IndexMap<usize, Arc<Insn>> = IndexMap::default();
-        for (_v, _d, found) in &group {
-            for one in found {
-                consumers.insert(id(one), rewritten(one, &trial_substitutions));
-            }
-        }
-        let extension = Arc::new(Insn {
-            call: definition.call.clone(),
-            ..Insn::new(
-                definition.at,
-                Some((definition.at, definition.at)),
-                Some(semantics(Operation::Extend, "movzx", vec![Loc::Reg(reg(root, 4))], vec![Loc::Reg(source)])),
-                vec![candidate],
-                vec![candidate],
-            )
-        });
-        let copies: Vec<Semantics> = group
-            .iter()
-            .filter_map(|(_value, made, _found)| made.what.clone())
-            .filter(|what| what.name.as_deref() == Some("mov"))
-            .collect();
-        let before_parts: Vec<Semantics> = copies
-            .iter()
-            .cloned()
-            .chain(
-                group
-                    .iter()
-                    .flat_map(|(_value, _made, found)| found.iter().map(|one| one.what.clone().expect("a consumer"))),
-            )
-            .collect();
-        let after_parts: Vec<Semantics> = std::iter::once(extension.what.clone().expect("set above"))
-            .chain(consumers.values().map(|one| one.what.clone().expect("a consumer")))
-            .collect();
-        let before_encoded: Vec<Option<select::Emitted>> =
-            before_parts.iter().map(|what| emit(body.bits, what)).collect();
-        let after_encoded: Vec<Option<select::Emitted>> =
-            after_parts.iter().map(|what| emit(body.bits, what)).collect();
-        if before_encoded.iter().chain(&after_encoded).any(Option::is_none) {
-            continue;
-        }
-        let before_cost = copies.len() as i64 * profile.cost("mov_rr")?;
-        // The defining word write is immediately read as a full register by
-        // MOVZX.  This is exactly the partial-register transition charged by
-        // the final scorer; omitting it made P6/Core select a locally smaller
-        // sequence that was substantially slower under their own profiles.
-        let after_cost =
-            profile.cost("movzx")? + profile.partial_register_stall + consumers.len() as i64 * secondary.use_cost;
-        let before_bytes: usize = before_encoded.iter().flatten().map(|one| one.code.len()).sum();
-        let after_bytes: usize = after_encoded.iter().flatten().map(|one| one.code.len()).sum();
-        if after_cost >= before_cost || after_bytes > before_bytes {
-            continue;
-        }
-        substitutions.extend(trial_substitutions);
-        remove.extend(group.iter().map(|(_value, made, _found)| id(made)));
-        insert_after.insert(id(&definition), extension);
-    }
-
-    if substitutions.is_empty() {
-        return Ok(body.clone());
-    }
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let mut insns = Vec::new();
-        for one in &block.insns {
-            if remove.contains(&id(one)) {
-                continue;
-            }
-            insns.push(if one.uses.iter().any(|value| substitutions.contains_key(value)) {
-                rewritten(one, &substitutions)
-            } else {
-                Arc::clone(one)
-            });
-            if let Some(extension) = insert_after.get(&id(one)) {
-                insns.push(Arc::clone(extension));
-            }
-        }
-        blocks.push(block.with_insns(insns));
-    }
-    Ok(body.with_blocks(blocks))
-}
-
 /// `mov z,y` and the arithmetic after it that only rewrites z, as one 67h LEA.
 ///
 /// Each step keeps z an affine sum of registers (`affine::step`). The
@@ -2126,7 +1780,7 @@ fn _affine_address(
     regs: Regs,
     mode: u32,
     parts: &[Arc<Insn>],
-    dead: &HashSet<usize>,
+    dead: &dyn Fn(usize) -> bool,
     cpu: &Profile,
 ) -> Result<Option<(usize, Vec<Arc<Insn>>)>, String> {
     let Some(copy) = parts.first() else {
@@ -2180,7 +1834,7 @@ fn _affine_address(
         if terms.len() > 2 || terms.iter().any(|term| term.1 > 9) {
             break;
         }
-        if !dead.contains(&id(one)) {
+        if !dead(id(one)) {
             continue;
         }
         if written.width == 2
@@ -2228,9 +1882,7 @@ fn _affine_address(
             return Ok(None);
         };
         let unit = match (part.name.as_deref(), part.dests.as_slice(), part.sources.as_slice()) {
-            (Some(name @ ("add" | "sub")), [Loc::Reg(register)], [_, Loc::Imm(Imm { value, .. })])
-                if dead.contains(&id(one)) =>
-            {
+            (Some(name @ ("add" | "sub")), [Loc::Reg(register)], [_, Loc::Imm(Imm { value, .. })]) if dead(id(one)) => {
                 // By the register's width: 1 and -1 (0xFFFF in a word) are the
                 // unit.
                 let bits = i64::from(register.width) * 8;
@@ -2292,15 +1944,6 @@ fn _affine_address(
         None::<fn(&Arc<Insn>) -> Arc<Insn>>,
     );
     Ok(Some((last + 1, made)))
-}
-
-/// An LEA that is a two-address add or step, as the add, where no flag is read
-/// after it (`peephole.peep`; X86FixupLEAs `optTwoAddrLEA`).
-pub fn lea_fixed(
-    rules: &peep::Rules,
-    body: &LirBody,
-) -> LirBody {
-    peep::rewritten(rules.lea_fixup, body, &Facts::new(body, None))
 }
 
 /// Select compact INC/DEC for a unit add whose carry result is dead
@@ -2872,6 +2515,13 @@ thread_local! {
     static FLAGS: crate::backend::incremental::Kept<FlagLive> = const { crate::backend::incremental::Kept::new() };
 }
 
+/// How many flag-liveness answers this thread has worked out, whole or in
+/// part, for a test that a pass with nothing to fold does not ask.
+pub fn flags_computed() -> usize {
+    let [whole, partly, _] = FLAGS.with(crate::backend::incremental::Kept::asks);
+    whole + partly
+}
+
 /// The flags live after each block of `body`, solved from nothing held: what
 /// `LLRM_CHECK_LIVENESS` compares an answer brought up to date with.
 fn flags_from_scratch(body: &LirBody) -> IndexMap<i64, Lanes> {
@@ -2949,43 +2599,6 @@ pub fn zeroes(body: &LirBody) -> LirBody {
             insns.push(one);
         }
         insns.reverse();
-        blocks.push(block.with_insns(insns));
-    }
-    body.with_blocks(blocks)
-}
-
-const _WAITING: [&str; 36] = [
-    "wait", "fwait", "fld", "fild", "fst", "fstp", "fist", "fistp", "fadd", "faddp", "fiadd", "fsub", "fsubp", "fsubr",
-    "fsubrp", "fisub", "fisubr", "fmul", "fmulp", "fimul", "fdiv", "fdivp", "fdivr", "fdivrp", "fidiv", "fidivr",
-    "fchs", "fabs", "fsqrt", "fxch", "fcom", "fcomp", "fcompp", "fucom", "fucomp", "fucompp",
-];
-
-/// An immediately following waiting instruction already checks pending FP
-/// exceptions.
-///
-/// Intel SDM Vol. 1 section 8.3.12. Never cross integer work, an unknown
-/// instruction, a non-waiting control instruction, or a block boundary.
-pub fn waits(body: &LirBody) -> LirBody {
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let mut following: Option<&Semantics> = None;
-        let mut redundant: HashSet<usize> = HashSet::default();
-        for one in block.insns.iter().rev() {
-            let what = one.what.as_ref();
-            if what.is_some_and(|what| what.op == Operation::Nothing && what.name.as_deref().is_none_or(str::is_empty))
-            {
-                continue;
-            }
-            if what.is_some_and(|what| matches!(what.name.as_deref(), Some("wait" | "fwait")))
-                && following
-                    .is_some_and(|following| following.name.as_deref().is_some_and(|name| _WAITING.contains(&name)))
-            {
-                redundant.insert(id(one));
-            } else {
-                following = what;
-            }
-        }
-        let insns = lir::without(&block.insns, |one| redundant.contains(&id(one)), None::<fn(&Arc<Insn>) -> Arc<Insn>>);
         blocks.push(block.with_insns(insns));
     }
     body.with_blocks(blocks)

@@ -256,7 +256,7 @@ mod tests {
             ..Mem::new(Some(Addr { segment: (RegId::ES).iced(), ..Addr::new(Space::Far, 0) }), 2)
         };
         let semantics = |op, name: &str, dests, sources| Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests,
             sources,
             ..Semantics::new(op)
@@ -314,7 +314,7 @@ mod tests {
             1,
             None,
             Some(Semantics {
-                name: Some("movzx".to_owned()),
+                name: Some("movzx".into()),
                 dests: vec![Loc::Held(Held { value: loaded, width: 2 })],
                 sources: vec![Loc::Mem(cell.clone())],
                 ..Semantics::new(Operation::Extend)
@@ -326,7 +326,7 @@ mod tests {
             2,
             None,
             Some(Semantics {
-                name: Some("cmp".to_owned()),
+                name: Some("cmp".into()),
                 sources: vec![
                     Loc::Held(Held { value: loaded, width: 2 }),
                     Loc::Imm(Imm { value: 0, width: 2, address: None }),
@@ -347,8 +347,7 @@ mod tests {
         let cell = Mem::new(Some(Addr::new(Space::Frame, 8)), 2);
         let [load, compare] = widened(5, &cell, Vec::new());
         let mut plain = (*load).clone();
-        plain.what =
-            Some(Semantics { name: Some("mov".to_owned()), op: Operation::Move, ..plain.what.clone().unwrap() });
+        plain.what = Some(Semantics { name: Some("mov".into()), op: Operation::Move, ..plain.what.clone().unwrap() });
         plain.rematerialized = true;
         let compare = {
             let mut one = (*compare).clone();
@@ -371,7 +370,7 @@ mod tests {
         Arc::new(Insn::new(
             3,
             None,
-            Some(Semantics { name: Some(name.to_owned()), target: Some(9), ..Semantics::new(Operation::Branch) }),
+            Some(Semantics { name: Some(name.into()), target: Some(9), ..Semantics::new(Operation::Branch) }),
             Vec::new(),
             Vec::new(),
         ))
@@ -399,6 +398,22 @@ mod tests {
             vec![Loc::Mem(cell), Loc::Imm(Imm { value: 0, width: 1, address: None })]
         );
         assert_eq!(result[1].uses, vec![index]);
+    }
+
+    /// `cmp movzx(byte), 0x105; je` as a byte compare matched a byte of 5.
+    #[test]
+    fn a_zero_extended_byte_compared_with_a_wide_constant_keeps_its_load() {
+        let loaded = 1;
+        let cell =
+            Mem { through: RegId::BP, offset: -4, disp_width: 1, ..Mem::new(Some(Addr::new(Space::Frame, -4)), 1) };
+        let [load, compare] = widened(loaded, &cell, Vec::new());
+        let mut wide = (*compare).clone();
+        let what = wide.what.as_mut().unwrap();
+        what.sources[1] = Loc::Imm(Imm { value: 0x105, width: 2, address: None });
+        let insns = vec![load, Arc::new(wide), branch("je")];
+        let users: IndexMap<u32, i64> = [(loaded, 1)].into_iter().collect();
+
+        assert_eq!(selected(&insns, &users, &BTreeSet::new()), insns);
     }
 
     #[test]

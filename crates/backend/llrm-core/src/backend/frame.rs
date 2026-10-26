@@ -177,6 +177,11 @@ pub struct Frame {
     /// dword or a quad is not left across a doubleword boundary, which a 486
     /// charges 3 clocks for (`WORD` where BC's frame is word-aligned).
     pub align: i64,
+    /// The largest outgoing-argument area of a call, reserved in the
+    /// prologue where no call is pushed
+    /// (`backend::callframe::ReserveCallFrame`;
+    /// the pin's `MaxCallFrameSize`). The lowest bytes of the frame.
+    pub call_area: i64,
 }
 
 impl Frame {
@@ -193,6 +198,7 @@ impl Frame {
             defer_colours: false,
             stacks: IndexMap::default(),
             align: WORD,
+            call_area: 0,
         }
     }
 
@@ -300,7 +306,7 @@ impl Frame {
     /// How many bytes the prologue has to reserve beyond BC's own.
     #[must_use]
     pub fn size(&self) -> i64 {
-        -(self.lowest() - self.floor)
+        -(self.lowest() - self.floor) + self.call_area
     }
 
     /// The lowest home, or the floor.
@@ -464,7 +470,7 @@ mod tests {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Semantics {
-        Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+        Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
     }
 
     fn body_of(insns: Vec<Insn>) -> LirBody {

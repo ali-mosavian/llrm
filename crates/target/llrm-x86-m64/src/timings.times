@@ -64,6 +64,11 @@ x87_load            1
 x87_exchange        1
 x87_store           2
 x87_release         1
+sse_arith           4
+sse_sqrt            18
+sse_move            1
+sse_compare         3
+sse_logic           1
 x87_add             3
 x87_mul             3
 x87_div             39
@@ -137,6 +142,11 @@ x87_load            1
 x87_exchange        1
 x87_store           2
 x87_release         1
+sse_arith           4
+sse_sqrt            18
+sse_move            1
+sse_compare         3
+sse_logic           1
 x87_add             3
 x87_mul             3
 x87_div             39

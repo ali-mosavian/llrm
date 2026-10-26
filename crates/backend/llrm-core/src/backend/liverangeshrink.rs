@@ -38,6 +38,12 @@
 //! with a live flags def does not move), and one that reads them does not
 //! move. Exit: none; the register and flag model of the LIR.
 //!
+//! DEVIATE LRS2 (owner w-8, review 2026-11-14): the pin's `COPY` from a
+//! physical register is a value the entry delivers; a call's result is a `COPY`
+//! there too, and counted here as a definition that shortens a range. Not
+//! counting it grew recchop -O3 by 16 bytes. Exit: the allocation that makes
+//! the call result's copy coalesce.
+//!
 //! # Example
 //! ```text
 //! b1: v1 = load [p]      b1: v1 = load [p]
@@ -136,9 +142,15 @@ fn safe_to_move(
 
 /// `TII.isCopyInstr`: a register-to-register move.
 fn is_copy(one: &Insn) -> bool {
-    one.what.as_ref().is_some_and(|what| {
-        what.op == Operation::Move && matches!((what.dests.as_slice(), what.sources.as_slice()), ([Loc::Held(_)], [Loc::Held(_)]))
-    })
+    one.what
+        .as_ref()
+        .is_some_and(
+            |what| what.op == Operation::Move
+                && matches!(
+                    (what.dests.as_slice(), what.sources.as_slice()),
+                    ([Loc::Held(_)], [Loc::Held(_)])
+                ),
+        )
 }
 
 /// What a value is, for the same-class test: the set it is confined to, its
@@ -231,11 +243,14 @@ pub fn shrunk(
                     at += 1;
                     continue;
                 }
-                let target = landing(&one, body, &position, &order, block_at, &def_site, &phi_site, &defined, &read, &class_of);
+                let target =
+                    landing(&one, body, &position, &order, block_at, &def_site, &phi_site, &defined, &read, &class_of);
                 at += 1;
                 let Some(after) = target else { continue };
                 let place = if after == PHI { 0 } else { position[after] + 1 };
-                if place >= position[me] || !flags_allow(regs, body.bits, &insns, place, position[me], !block.succ.is_empty()) {
+                if place >= position[me]
+                    || !flags_allow(regs, body.bits, &insns, place, position[me], !block.succ.is_empty())
+                {
                     continue;
                 }
                 // The instruction takes the position of the one it lands
@@ -295,7 +310,12 @@ fn landing(
             eligible += 1;
             continue;
         };
-        if !is_copy(&body.blocks[block].insns[def]) {
+        // A value the entry delivers in a register is the pin's `COPY` from
+        // that physical register. A call's result is the pin's
+        // `COPY` too, and counted here: not counting it grew recchop -O3 by 16
+        // bytes (DEVIATE LRS2).
+        let site = &body.blocks[block].insns[def];
+        if !is_copy(site) && (site.call.is_some() || !site.delivers.iter().any(|(held, _)| held.value == *value)) {
             eligible += 1;
         }
         insert = dominated(block, block_at, def, insert, position, order);
@@ -386,6 +406,8 @@ fn flags_allow(
 mod tests {
     use std::sync::Arc;
 
+    use llrm_lir::registers::RegId;
+
     use super::*;
     use crate::model::ir::{Held, Imm, Semantics};
     use crate::model::lir::{Insn, LirBlock};
@@ -404,7 +426,7 @@ mod tests {
         defines: Vec<u32>,
         uses: Vec<u32>,
     ) -> Arc<Insn> {
-        let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
         Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
     }
 
@@ -412,7 +434,15 @@ mod tests {
         at: i64,
         into: u32,
     ) -> Arc<Insn> {
-        insn(at, Operation::Move, "mov", vec![held(into)], vec![Loc::Imm(Imm { value: i64::from(into), width: 4, address: None })], vec![into], vec![])
+        insn(
+            at,
+            Operation::Move,
+            "mov",
+            vec![held(into)],
+            vec![Loc::Imm(Imm { value: i64::from(into), width: 4, address: None })],
+            vec![into],
+            vec![],
+        )
     }
 
     fn add(
@@ -421,7 +451,15 @@ mod tests {
         left: u32,
         right: u32,
     ) -> Arc<Insn> {
-        insn(at, Operation::Binary, "add", vec![held(into)], vec![held(left), held(right)], vec![into], vec![left, right])
+        insn(
+            at,
+            Operation::Binary,
+            "add",
+            vec![held(into)],
+            vec![held(left), held(right)],
+            vec![into],
+            vec![left, right],
+        )
     }
 
     fn ret(at: i64) -> Arc<Insn> {
@@ -429,7 +467,8 @@ mod tests {
     }
 
     fn body(insns: Vec<Arc<Insn>>) -> LirBody {
-        let mut body = LirBody::new("f", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
+        let mut body =
+            LirBody::new("f", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         body
     }
@@ -460,11 +499,32 @@ mod tests {
         assert_eq!(defines(&shrink(&before)), [10, 11, 12, 13]);
     }
 
+    /// A value the entry delivers in a register is the pin's `COPY` from a
+    /// physical register: it does not count either. `a + b` of two
+    /// arguments was hoisted above the sum of the other two, which made the
+    /// two-address pass see the `lea` first and left `lea ecx,[ebx+ecx]` and
+    /// `add` apart in six_.
+    #[test]
+    fn test_a_value_delivered_in_a_register_does_not_count_as_a_shortened_range() {
+        let entry = Arc::new(Insn {
+            delivers: vec![(Held { value: 10, width: 4 }, RegId::EAX), (Held { value: 11, width: 4 }, RegId::EDX)],
+            ..Insn::new(0, None, None, vec![10, 11], vec![])
+        });
+        let before = body(vec![entry, constant(1, 12), add(2, 13, 10, 11), ret(3)]);
+        assert_eq!(defines(&shrink(&before)), [10, 11, 12, 13]);
+    }
+
     /// A value read twice is not shortened by the move.
     #[test]
     fn test_a_value_read_twice_keeps_the_instruction_where_it_is() {
-        let before =
-            body(vec![constant(0, 10), constant(1, 11), constant(2, 12), add(3, 13, 10, 11), add(4, 14, 10, 12), ret(5)]);
+        let before = body(vec![
+            constant(0, 10),
+            constant(1, 11),
+            constant(2, 12),
+            add(3, 13, 10, 11),
+            add(4, 14, 10, 12),
+            ret(5),
+        ]);
         assert_eq!(defines(&shrink(&before)), [10, 11, 12, 13, 14]);
     }
 
@@ -484,8 +544,11 @@ mod tests {
         let cmp = insn(2, Operation::Compare, "cmp", vec![], vec![held(1), held(2)], vec![], vec![1, 2]);
         let branch = insn(4, Operation::Branch, "je", vec![], vec![], vec![], vec![]);
         let before = body(vec![constant(0, 10), constant(1, 11), cmp, add(3, 13, 10, 11), branch, ret(5)]);
-        let names: Vec<_> =
-            shrink(&before).blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
+        let names: Vec<_> = shrink(&before).blocks[0]
+            .insns
+            .iter()
+            .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+            .collect();
         assert_eq!(names, ["mov", "mov", "cmp", "add", "je", "ret"]);
     }
 }

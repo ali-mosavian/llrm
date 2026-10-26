@@ -24,12 +24,6 @@
 //! verifier says the same, `a phi ... is not a predecessor`); it was left alone
 //! before.
 //!
-//! DEVIATE P4 (exit: floatassign deleted): without RFP a phi of an x87 value
-//! is left for `phielim`'s own lowering. Fact: `FloatAssign` and `FloatAlloc`
-//! run before the coalescer on that route, where LLVM's FPS runs after
-//! register allocation, so a copy of an x87 value costs an `fld` and an `fstp`
-//! that nothing joins away. Under RFP the phis are lowered like any other.
-//!
 //! DEVIATE P6 (exit: a class set at creation, once isel allocates classes,
 //! CF-3 in docs/working/vreg-class-field-plan.md; owner mir-undef; review
 //! 2026-11-14): a temporary is made in its result's class by name
@@ -41,9 +35,13 @@
 //! asks (`Coalescer::llvm_env`). A far pointer's selector read through ES is
 //! the case (render/dl).
 //!
-//! DEVIATE P2 (no number): `IMPLICIT_DEF` and undef incoming values do not
-//! exist in LIR, so `allPhiOperandsUndefined`, `ImpDefs` and `SrcUndef` are not
-//! translated.
+//! DEVIATE P7 (no number): `findPHICopyInsertPoint` and `LowerPHINode` do not
+//! treat an EH-pad successor or an `INLINEASM_BR` indirect target. The unwind
+//! edge of an `invoke` is the runtime's, not an edge of the LIR body (the
+//! selector's successor list keeps the normal one, `isel.rs`), so no phi copy
+//! is asked of it and a landing pad has no machine predecessor to copy in; and
+//! no front end emits `callbr`. A front end that does has to restore both where
+//! each edge's copies are placed.
 //!
 //! DEVIATE P3 (no number): `MachineLoopInfo::getLoopFor` is the innermost loop
 //! of the body's loop forest; `isLiveIn` and `isLiveOutPastPHIs` read the
@@ -67,6 +65,13 @@ use crate::model::ir::Held;
 use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 use crate::support::hash::{HashMap, IndexMap};
 
+#[cfg(test)]
+thread_local! {
+    /// The liveness rows `edges_to_split` solved, for the test that fixes it at
+    /// none where no critical edge asks.
+    static ROWS_SOLVED: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
 /// `SplitPHIEdges`: the critical edges worth a block of their own, as
 /// `(predecessor, block)`.
 fn edges_to_split(
@@ -74,10 +79,29 @@ fn edges_to_split(
     at_of: &IndexMap<i64, &Block>,
 ) -> Vec<(i64, i64)> {
     // Asked one value and block at a time: the rows answer it, without a set
-    // for every block's entry and exit (`LiveIntervals::liveAt`).
-    let rows = crate::backend::allocate::live_rows(body);
+    // for every block's entry and exit (`LiveIntervals::liveAt`). Solved when
+    // the first critical edge asks (the pin reads the `LiveVariables` it
+    // already has): most bodies have none.
+    let rows = std::cell::OnceCell::new();
     let forest = crate::analysis::loops::forest_of(&body.blocks, Some(body.entry));
-    let live_in = |value: u32, at: i64| crate::backend::allocate::LiveAt::live_in(&rows, at, value);
+    // Only the values a critical edge's phi hands over are asked: rows of
+    // those.
+    let asked: llrm_support::hash::HashSet<u32> = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.phis.iter())
+        .flat_map(|phi| phi.incoming.iter())
+        .filter(|(pre, _)| at_of.get(pre).is_some_and(|block| block.succ.len() > 1))
+        .map(|&(_, reg)| reg)
+        .collect();
+    let live_in = |value: u32, at: i64| {
+        let rows = rows.get_or_init(|| {
+            #[cfg(test)]
+            ROWS_SOLVED.with(|one| one.set((one.get().0 + 1, one.get().1 + asked.len())));
+            crate::backend::allocate::live_rows_by(body, |one| asked.contains(&one))
+        });
+        crate::backend::allocate::LiveAt::live_in(rows, at, value)
+    };
     let mut split: Vec<(i64, i64)> = Vec::new();
     for block in &body.blocks {
         if block.phis.is_empty() {
@@ -170,9 +194,24 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
     };
     let at_of: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut next = body.next_value();
+    // `isImplicitlyDefined`: every definition is an `implicit_def`.
+    let undefined: crate::support::hash::HashSet<u32> = {
+        let mut seen: HashMap<u32, (usize, usize)> = HashMap::default();
+        for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+            let implicit = crate::processimpdefs::implicit_def_of(one).is_some();
+            for &value in &one.defines {
+                let entry = seen.entry(value).or_insert((0, 0));
+                entry.0 += 1;
+                entry.1 += usize::from(implicit);
+            }
+        }
+        seen.into_iter().filter(|&(_, (all, implicit))| all == implicit).map(|(value, _)| value).collect()
+    };
+    // `ImpDefs`: the `implicit_def`s a phi read, erased once nothing reads
+    // them.
+    let mut imp_defs: crate::support::hash::HashSet<u32> = crate::support::hash::HashSet::default();
     let mut head: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     let mut tails: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
-    let mut left: IndexMap<i64, Vec<Phi>> = IndexMap::default();
     let mut born: IndexMap<u32, u32> = IndexMap::default();
     let mut preds: IndexMap<i64, usize> = IndexMap::default();
     for block in &body.blocks {
@@ -180,26 +219,20 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
             *preds.entry(to).or_insert(0) += 1;
         }
     }
-    // The x87 values, left alone without RFP: the stackifier follows allocation
-    // only there.
-    let x87 = if crate::backend::allocate::rfp_on() {
-        Default::default()
-    } else {
-        crate::backend::floatassign::_floating_values(body)
-    };
     for block in &body.blocks {
-        let mut stays = Vec::new();
         // If all incoming edges are critical, identical phis are lowered
         // through one register, so fewer copies are made.
         let all_critical = preds.get(&block.at).copied().unwrap_or(0) >= 2
             && body.blocks.iter().filter(|one| one.succ.contains(&block.at)).all(|one| one.succ.len() >= 2);
         let mut lowered_phis: HashMap<Vec<(i64, u32)>, u32> = HashMap::default();
         for phi in block.phis.iter() {
-            if x87.contains(&phi.result) {
-                stays.push(phi.clone());
+            let width = widths[&phi.result];
+            // `allPhiOperandsUndefined`: an `implicit_def` of the result, and
+            // no copy on any edge.
+            if phi.incoming.iter().all(|(_, value)| undefined.contains(value)) {
+                head.entry(block.at).or_default().push(_implicit_def(block, phi.result, width));
                 continue;
             }
-            let width = widths[&phi.result];
             let key = {
                 let mut key = phi.incoming.clone();
                 key.sort_unstable();
@@ -217,7 +250,9 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
             if reused.is_none() {
                 born.insert(incoming, phi.result);
             }
-            // The copy at the top of the block, after any remaining phis.
+            // The copy at the top of the block, after any remaining phis
+            // (`head` is in lowering order; the block gets it
+            // reversed).
             head.entry(block.at).or_default().push(phielim::_copy(block, phi.result, incoming, None, width));
             if reused.is_some() {
                 continue;
@@ -229,10 +264,17 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
                     continue;
                 }
                 done.push(pre);
-                tails.entry(pre).or_default().push(phielim::_copy(at_of[&pre], incoming, source, None, width));
+                // `SrcUndef`: nothing to copy, but a definition to keep the
+                // temporary jointly dominated.
+                let made = if undefined.contains(&source) {
+                    imp_defs.insert(source);
+                    _implicit_def(at_of[&pre], incoming, width)
+                } else {
+                    phielim::_copy(at_of[&pre], incoming, source, None, width)
+                };
+                tails.entry(pre).or_default().push(made);
             }
         }
-        left.insert(block.at, stays);
     }
     let mut out = body.clone();
     if !born.is_empty() {
@@ -243,12 +285,58 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
         let first = block.insns.iter().position(|one| !one.arrival()).unwrap_or(block.insns.len());
         let tail = phielim::_before_the_terminator(block, tails.get(&block.at).map_or(&[][..], Vec::as_slice));
         insns.extend(tail[..first].iter().cloned());
-        insns.extend(head.get(&block.at).into_iter().flatten().cloned());
+        // Each copy is made before the ones made earlier: the pin inserts at
+        // `std::next(LastPHIIt)`, the node after the last phi, which is the
+        // previous copy once there is one.
+        insns.extend(head.get(&block.at).into_iter().flatten().rev().cloned());
         insns.extend(tail[first..].iter().cloned());
-        let stays = &left[&block.at];
-        *block = LirBlock { insns: insns.into(), phis: stays.clone().into(), ..(**block).clone() }.into();
+        *block = LirBlock { insns: insns.into(), phis: Vec::new().into(), ..(**block).clone() }.into();
+    }
+    if !imp_defs.is_empty() {
+        // Remove dead `implicit_def`s: the definitions no phi's source copy
+        // reads now.
+        let read: crate::support::hash::HashSet<u32> =
+            out.blocks.iter().flat_map(|block| block.insns.iter()).flat_map(|one| one.uses.iter().copied()).collect();
+        for block in &mut out.blocks {
+            if block.insns.iter().any(|one| {
+                crate::processimpdefs::implicit_def_of(one)
+                    .is_some_and(|value| imp_defs.contains(&value) && !read.contains(&value))
+            }) {
+                let insns: Vec<Arc<Insn>> = block
+                    .insns
+                    .iter()
+                    .filter(|one| {
+                        !crate::processimpdefs::implicit_def_of(one)
+                            .is_some_and(|value| imp_defs.contains(&value) && !read.contains(&value))
+                    })
+                    .cloned()
+                    .collect();
+                *block = LirBlock { insns: insns.into(), ..(**block).clone() }.into();
+            }
+        }
     }
     Ok(out)
+}
+
+/// An `implicit_def` of `value`, placed like a copy into `block` (`_copy`).
+fn _implicit_def(
+    block: &LirBlock,
+    value: u32,
+    width: u32,
+) -> Arc<Insn> {
+    let last = block.insns.last();
+    let at = last.map_or(block.at, |last| last.at);
+    let edge = phielim::_nothing(last.map(|last| &**last), at);
+    let what = crate::model::ir::Semantics {
+        op: crate::model::ir::Operation::Nothing,
+        name: Some(crate::processimpdefs::IMPLICIT_DEF.into()),
+        dests: vec![crate::model::ir::Loc::Held(Held { value, width })],
+        sources: Vec::new(),
+        ..crate::model::ir::Semantics::new(crate::model::ir::Operation::Nothing)
+    };
+    let mut one = Insn::new(at, Some(edge), Some(what), vec![value], Vec::new());
+    one.call = last.and_then(|last| last.call.clone());
+    Arc::new(one)
 }
 
 #[allow(dead_code)]
@@ -270,7 +358,7 @@ mod tests {
 
     fn def(v: u32) -> Arc<Insn> {
         let what = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![held(v)],
             sources: vec![Loc::Imm(Imm { value: 7, width: 4, address: None })],
             ..Semantics::new(Operation::Move)
@@ -283,13 +371,12 @@ mod tests {
     }
 
     fn jump(target: i64) -> Arc<Insn> {
-        let what = Semantics { name: Some("jmp".to_owned()), target: Some(target), ..Semantics::new(Operation::Jump) };
+        let what = Semantics { name: Some("jmp".into()), target: Some(target), ..Semantics::new(Operation::Jump) };
         Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![], vec![]))
     }
 
     fn branch(target: i64) -> Arc<Insn> {
-        let what =
-            Semantics { name: Some("jne".to_owned()), target: Some(target), ..Semantics::new(Operation::Branch) };
+        let what = Semantics { name: Some("jne".into()), target: Some(target), ..Semantics::new(Operation::Branch) };
         Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![], vec![]))
     }
 
@@ -314,6 +401,56 @@ mod tests {
 
     fn copies(block: &Block) -> Vec<(u32, u32)> {
         block.insns.iter().filter_map(|one| one.copy_of()).collect()
+    }
+
+    fn undef(v: u32) -> Arc<Insn> {
+        let what = Semantics {
+            name: Some(crate::processimpdefs::IMPLICIT_DEF.into()),
+            dests: vec![held(v)],
+            ..Semantics::new(Operation::Nothing)
+        };
+        Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![v], vec![]))
+    }
+
+    fn implicit_defs(block: &Block) -> Vec<u32> {
+        block.insns.iter().filter_map(|one| crate::processimpdefs::implicit_def_of(one)).collect()
+    }
+
+    /// A phi of values only `implicit_def`s define was lowered like any other:
+    /// a copy of each into the temporary on every edge, then a copy out. The
+    /// pin makes it one `implicit_def` of the result and no copy
+    /// (`allPhiOperandsUndefined`).
+    #[test]
+    fn test_a_phi_of_undefined_values_is_an_implicit_def_of_its_result_and_no_copy() {
+        let phis = vec![Phi { result: 10, incoming: vec![(0, 1), (1, 2)] }];
+        let was = body(vec![
+            block(0, vec![undef(1), branch(2)], &[1, 2], vec![]),
+            block(1, vec![undef(2), jump(2)], &[2], vec![]),
+            block(2, vec![read(10)], &[], phis),
+        ]);
+        let got = lowered(&was).expect("lowers");
+        assert!(got.blocks.iter().all(|block| copies(block).is_empty()), "no copy on any edge");
+        assert_eq!(implicit_defs(&got.blocks[2]), [10], "the result is undefined where the phi was");
+    }
+
+    /// An incoming value only an `implicit_def` defines was copied into the
+    /// temporary on its edge, and its definition stayed: the pin makes it an
+    /// `implicit_def` of the temporary there (`SrcUndef`) and erases the old
+    /// one once nothing reads it (`ImpDefs`).
+    #[test]
+    fn test_an_undefined_incoming_value_is_an_implicit_def_of_the_temporary_on_its_edge() {
+        let phis = vec![Phi { result: 10, incoming: vec![(0, 1), (1, 2)] }];
+        let was = body(vec![
+            block(0, vec![undef(1), branch(2)], &[1, 2], vec![]),
+            block(1, vec![def(2), jump(2)], &[2], vec![]),
+            block(2, vec![read(10)], &[], phis),
+        ]);
+        let got = lowered(&was).expect("lowers");
+        let temporary = copies(&got.blocks[2])[0].1;
+        assert_eq!(implicit_defs(&got.blocks[0]), [temporary], "the undefined edge defines the temporary");
+        assert!(copies(&got.blocks[0]).is_empty(), "and copies nothing");
+        assert_eq!(copies(&got.blocks[1]), [(temporary, 2)], "the defined edge still copies");
+        assert!(!implicit_defs(&got.blocks[0]).contains(&1), "the old definition went");
     }
 
     /// `SplitPHIEdges` asks whether one value is live into one block, and was
@@ -344,7 +481,7 @@ mod tests {
         let wide = |value: u32| Loc::Held(Held { value, width: 8 });
         let make = |value: u32| {
             let what = Semantics {
-                name: Some("mov".to_owned()),
+                name: Some("mov".into()),
                 dests: vec![wide(value)],
                 sources: vec![Loc::Imm(Imm { value: 7, width: 8, address: None })],
                 ..Semantics::new(Operation::Move)
@@ -361,15 +498,14 @@ mod tests {
         assert_eq!(now.blocks.iter().map(|one| one.phis.len()).sum::<usize>(), 0, "no phi is left for the old stage");
     }
 
-    /// The x87 phi of a loop: floatassign's route leaves it for `phielim`'s own
-    /// lowering, RFP lowers it like any other. The skip was removed for both
-    /// routes at once and nbody -O3 ran 10.5% more instructions on the old one.
+    /// The x87 phi of a loop is lowered like any other (the old route left it
+    /// for `phielim`'s own lowering, which is deleted).
     #[test]
-    fn test_an_x87_phi_is_left_alone_only_without_rfp() {
+    fn test_an_x87_phi_is_lowered_like_any_other() {
         let float = |value: u32| Loc::Held(Held { value, width: 10 });
         let load = |value: u32| {
             let what = Semantics {
-                name: Some("fldz".to_owned()),
+                name: Some("fldz".into()),
                 dests: vec![float(value)],
                 ..Semantics::new(Operation::FloatLoad)
             };
@@ -377,7 +513,7 @@ mod tests {
         };
         let store = |value: u32| {
             let what = Semantics {
-                name: Some("fstp".to_owned()),
+                name: Some("fstp".into()),
                 dests: vec![Loc::Reg(crate::model::ir::Reg { register: llrm_lir::registers::RegId::BX, width: 4 })],
                 sources: vec![float(value)],
                 ..Semantics::new(Operation::FloatStore)
@@ -391,16 +527,17 @@ mod tests {
             block(2, vec![store(10)], &[], vec![]),
         ]);
         let phis_left = |now: &LirBody| now.blocks.iter().map(|one| one.phis.len()).sum::<usize>();
-        let old = crate::backend::allocate::RfpOn::off();
-        assert_eq!(phis_left(&lowered(&was).expect("lowers")), 1, "left for phielim");
-        drop(old);
-        let _rfp = crate::backend::allocate::RfpOn::set();
         assert_eq!(phis_left(&lowered(&was).expect("lowers")), 0, "lowered");
     }
 
     /// Two counters carried round a loop: each phi gets a register of its own,
     /// the copies at the end of the loop write those, and the top of the loop
-    /// copies them into the phis' results.
+    /// copies them into the phis' results, the last phi's first (the pin's
+    /// `LowerPHINode` inserts each copy before the earlier ones).
+    ///
+    /// x_list's sum loop kept the copy of the new pointer ahead of the copy of
+    /// the old one, so the old pointer was live across the new one's definition
+    /// and took a register of its own: +1 instruction a trip.
     #[test]
     fn test_independent_phis_are_lowered_through_registers_of_their_own() {
         let phis = vec![
@@ -417,11 +554,11 @@ mod tests {
         let (pre, lop) = (copies(&now.blocks[0]), copies(&now.blocks[1]));
         assert_eq!(pre.len(), 2, "one copy for each phi at the end of the entry: {pre:?}");
         assert_eq!(lop.len(), 4, "{lop:?}");
-        assert_eq!((lop[0].0, lop[1].0), (10, 11), "the results are copied at the top");
+        assert_eq!((lop[0].0, lop[1].0), (11, 10), "the results are copied at the top, last phi first");
         let (first, second) = (lop[2], lop[3]);
         assert_eq!((first.1, second.1), (12, 13));
         assert!(first.0 != 10 && first.0 != 11 && second.0 != 10 && second.0 != 11, "into registers made for the phis");
-        assert_eq!((lop[0].1, lop[1].1), (first.0, second.0), "the top reads what the end wrote");
+        assert_eq!((lop[0].1, lop[1].1), (second.0, first.0), "the top reads what the end wrote");
     }
 
     /// `a = phi [.., b]`, `b = phi [.., c]`: a hands over `b`, which another
@@ -479,5 +616,37 @@ mod tests {
         assert_eq!(made.succ.to_vec(), vec![2]);
         assert!(!now.blocks[0].succ.contains(&2), "the branch no longer goes to the phi's block");
         assert_eq!(copies(made).len(), 1, "the copy is in the edge block");
+    }
+
+    /// The rows of liveness were solved for every value of every body with a
+    /// phi, though only the values a critical edge's phi hands over are asked
+    /// (d_faces dist: 1.5 M Ir in three solves). Asked of a body with none they
+    /// are not solved, and otherwise only for those values.
+    #[test]
+    fn test_the_liveness_rows_are_solved_only_where_a_critical_edge_asks() {
+        let phis = vec![
+            Phi { result: 10, incoming: vec![(0, 1), (1, 11)] },
+            Phi { result: 11, incoming: vec![(0, 2), (1, 12)] },
+        ];
+        let plain = body(vec![
+            block(0, vec![def(1), def(2), jump(1)], &[1], vec![]),
+            block(1, vec![def(12), read(10), read(11), branch(1)], &[1, 2], phis),
+            block(2, vec![read(10)], &[], vec![]),
+        ]);
+        let before = ROWS_SOLVED.with(std::cell::Cell::get);
+        lowered(&plain).expect("lowers");
+        assert_eq!(ROWS_SOLVED.with(std::cell::Cell::get), before, "no critical edge, no rows");
+        let phis = vec![Phi { result: 10, incoming: vec![(0, 1), (3, 2)] }];
+        let mut critical = body(vec![
+            block(0, vec![def(1), branch(2)], &[2, 1], vec![]),
+            block(1, vec![read(1), jump(3)], &[3], vec![]),
+            block(2, vec![read(10), read(1)], &[], vec![]),
+            block(3, vec![def(2), jump(2)], &[2], vec![]),
+        ]);
+        critical.blocks[2] = Block::from(block(2, vec![read(10)], &[], phis));
+        let before = ROWS_SOLVED.with(std::cell::Cell::get);
+        lowered(&critical).expect("lowers");
+        let after = ROWS_SOLVED.with(std::cell::Cell::get);
+        assert_eq!((after.0 - before.0, after.1 - before.1), (1, 1), "one solve, of the one value the edge hands over");
     }
 }

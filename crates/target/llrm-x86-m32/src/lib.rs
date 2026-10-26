@@ -56,9 +56,33 @@ static TIMINGS: LazyLock<llrm_target::timings::Timings> = LazyLock::new(|| {
     llrm_target::timings::Timings::parse(include_str!("timings.times")).expect("timings.times parses")
 });
 
+/// The pin's register pressure sets for the registers described above:
+/// `pressure.sets`.
+static PRESSURE: LazyLock<llrm_target::pressure::PressureSets> =
+    LazyLock::new(|| llrm_target::pressure::parse(include_str!("pressure.sets")).expect("pressure.sets parses"));
+
 static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
     llrm_target::addressing::forms(include_str!("machines/datalayout.toml")).expect("datalayout.toml parses")
 });
+
+impl M32 {
+    /// The pressure sets and classes of the pin's x86.
+    pub fn pressure_sets() -> &'static llrm_target::pressure::PressureSets {
+        &PRESSURE
+    }
+
+    /// The limit of pressure set `set` here (`computePSetLimit`): a register
+    /// may be allocated if its root is a `gpr`.
+    pub fn pressure_limit(set: usize) -> u32 {
+        PRESSURE.limit(set, |name| {
+            REGISTERS
+                .iter()
+                .find(|one| one.name == name)
+                .and_then(|one| REGISTERS.iter().find(|root| root.name == one.root))
+                .is_some_and(|root| root.is("gpr"))
+        })
+    }
+}
 
 impl llrm_target::Target for M32 {
     fn registers(&self) -> &'static llrm_lir::registers::Info {
@@ -163,7 +187,11 @@ impl llrm_target::Target for M32 {
 
     /// Flat: no segments, one model.
     fn object(&self) -> llrm_target::object::ObjectFormat {
-        llrm_target::object::ObjectFormat::parse(include_str!("machines/object.toml")).expect("flat object.toml parses")
+        static OBJECT: std::sync::LazyLock<llrm_target::object::ObjectFormat> = std::sync::LazyLock::new(|| {
+            llrm_target::object::ObjectFormat::parse(include_str!("machines/object.toml"))
+                .expect("flat object.toml parses")
+        });
+        OBJECT.clone()
     }
 
     fn return_address_bytes(
@@ -341,7 +369,7 @@ impl llrm_target::Target for M32 {
                     .zip(layout().llvm_cpu)
                     .and_then(|(tti, cpu)| llrm_x86::tti::X86::described(&tti, &cpu))
                     .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>),
-                Some(std::rc::Rc::new(llrm_x86::lowering::X86)),
+                Some(std::rc::Rc::new(llrm_x86::lowering::X86 { is_64bit: false })),
             )
         }
     }
@@ -356,6 +384,37 @@ impl llrm_target::Target for M32 {
 
 #[cfg(test)]
 mod tests {
+    /// The limits the pin's `computePSetLimit` gives the x86-32 sets with the
+    /// six general registers allocatable, worked by hand from the table:
+    /// set 35 (GR16) is 66 - 2 * (34 - 6) of its largest class,
+    /// LOW32_ADDR_ACCESS_RBP; GR32_BPSP (ebp, esp) has none free, so its
+    /// raw 6; GR32_BSI has both; GR8_NOREX has its eight; GR8 is 38 - (36 -
+    /// 8). Without the reserved-register step every set read its raw limit
+    /// and the scheduler saw 66 words of room.
+    #[test]
+    fn pressure_set_limits_come_off_the_reserved_registers() {
+        let limits: Vec<(usize, u32)> =
+            [35, 1, 3, 13, 26].iter().map(|&set| (set, super::M32::pressure_limit(set))).collect();
+        assert_eq!(limits, [(35, 10), (1, 6), (3, 6), (13, 10), (26, 10)]);
+    }
+
+    /// `object()` and the runtime tables are parsed once and kept; each must
+    /// equal a fresh parse of its toml (35 parses of object.toml and 4 of the
+    /// runtime table cost 3.3 M Ir of every compile).
+    #[test]
+    fn test_cached_tomls_equal_a_fresh_parse() {
+        use llrm_target::Target;
+        let fresh = llrm_target::object::ObjectFormat::parse(include_str!("machines/object.toml")).unwrap();
+        assert_eq!(M32.object(), fresh);
+        assert_eq!(M32.object(), fresh, "a second ask");
+        for language in ["c", "nib"] {
+            let Some(description) = M32.runtime(language) else { continue };
+            let fresh: toml::Table = description.text.parse().unwrap();
+            assert_eq!(*description.table().unwrap(), fresh, "{language}");
+            assert!(std::sync::Arc::ptr_eq(&description.table().unwrap(), &description.table().unwrap()));
+        }
+    }
+
     /// gcc's by-pieces ratios of a constant memset, read from the description:
     /// `i486_cost` and `pentium_cost` (x86-tune-costs.h, gcc 13.4.0), and the
     /// size table every CPU takes.
@@ -556,7 +615,10 @@ mod tests {
     #[test]
     fn test_calling_toml_states_watcall32_at_the_top_of_its_table() {
         let one = CALLING.native();
-        assert_eq!((one.name.as_str(), CONVENTIONS.as_slice()), ("watcall32", &["watcall32", "cdecl32", "fastcc32", "sysv32"][..]));
+        assert_eq!(
+            (one.name.as_str(), CONVENTIONS.as_slice()),
+            ("watcall32", &["watcall32", "cdecl32", "fastcc32", "sysv32"][..])
+        );
         assert_eq!(one.aggregate.as_ref().map(|one| one.style.as_str()), Some("hidden-pointer"));
         assert_eq!(
             (one.promotion.as_str(), one.wide_slots, one.results.keys().cloned().collect::<Vec<_>>()),

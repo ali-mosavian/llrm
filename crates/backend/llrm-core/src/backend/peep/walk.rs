@@ -117,6 +117,10 @@ pub struct Rewrite {
 /// `cross` says whether a gap may take in another instruction.
 pub struct Matcher {
     pub width: usize,
+    /// The operations a window's first instruction may have: every rule's
+    /// first pattern names one, so `head` answers no state for any other and
+    /// the walks do not ask it (empty: any).
+    pub first: &'static [Operation],
     pub head: fn(&Window) -> u32,
     pub tail: fn(&Cx, &Window, u32) -> Option<Rewrite>,
     pub cross: Option<fn(&Cx, &Window, &Arc<Insn>, u32) -> bool>,
@@ -523,6 +527,16 @@ impl<'a> Cx<'a> {
     }
 }
 
+impl Matcher {
+    /// Whether a window can start at `one`.
+    fn starts(
+        &self,
+        one: &Insn,
+    ) -> bool {
+        self.first.is_empty() || one.what.as_ref().is_some_and(|what| self.first.contains(&what.op))
+    }
+}
+
 fn run(
     cx: &Cx,
     matcher: &Matcher,
@@ -537,17 +551,26 @@ fn run(
 /// `each` walks one block and answers its instructions if it changed any, none
 /// if it changed nothing: that block is then the same allocation in the result,
 /// and nothing was copied to find out.
+///
+/// A block with no instruction `matcher` can start a window at is not walked:
+/// a rule matches only from such an instruction, so it would change nothing.
 fn blocks(
     body: &LirBody,
     facts: &Facts,
+    matcher: &Matcher,
     mut each: impl FnMut(&Cx) -> Option<Vec<Arc<Insn>>>,
 ) -> LirBody {
     let blocks = body
         .blocks
         .iter()
-        .map(|block| match each(&Cx::new(facts, Some(block), &block.insns)) {
-            Some(insns) => block.with_insns(insns),
-            None => block.clone(),
+        .map(|block| {
+            if !block.insns.iter().any(|one| matcher.starts(one)) {
+                return block.clone();
+            }
+            match each(&Cx::new(facts, Some(block), &block.insns)) {
+                Some(insns) => block.with_insns(insns),
+                None => block.clone(),
+            }
         })
         .collect();
     body.with_blocks(blocks)
@@ -559,10 +582,15 @@ pub fn each(
     facts: &Facts,
     matcher: &Matcher,
 ) -> LirBody {
-    blocks(body, facts, |cx| {
+    blocks(body, facts, matcher, |cx| {
         let mut out: Option<Vec<Arc<Insn>>> = None;
         for at in 0..cx.insns.len() {
-            match run(cx, matcher, &Window::new(cx.insns, vec![at], &[])).map(|made| made.out) {
+            let made = if matcher.starts(&cx.insns[at]) {
+                run(cx, matcher, &Window::new(cx.insns, vec![at], &[])).map(|made| made.out)
+            } else {
+                None
+            };
+            match made {
                 Some(mut made) => match made.pop() {
                     Some(Out::Put(made)) => out.get_or_insert_with(|| cx.insns[..at].to_vec()).push(made),
                     _ => unreachable!("an each rule puts one instruction"),
@@ -599,7 +627,7 @@ pub fn window(
     matcher: &Matcher,
     skip: Skip,
 ) -> LirBody {
-    blocks(body, facts, |cx| windows(cx, matcher, skip))
+    blocks(body, facts, matcher, |cx| windows(cx, matcher, skip))
 }
 
 /// `window` over instructions outside a body.
@@ -629,8 +657,13 @@ fn windows(
         if let Some(out) = &mut out {
             out.extend(insns[next..code[at]].iter().cloned());
         }
-        let taken = code[at..(at + matcher.width).min(code.len())].to_vec();
-        match run(cx, matcher, &Window::new(insns, taken, &[])) {
+        let made = if matcher.starts(&insns[code[at]]) {
+            let taken = code[at..(at + matcher.width).min(code.len())].to_vec();
+            run(cx, matcher, &Window::new(insns, taken, &[]))
+        } else {
+            None
+        };
+        match made {
             Some(made) => {
                 // Until a match the output is the input, so the first one
                 // starts it with what lies before the window.
@@ -688,7 +721,7 @@ pub fn slide(
     matcher: &Matcher,
     advance: usize,
 ) -> LirBody {
-    blocks(body, facts, |cx| {
+    blocks(body, facts, matcher, |cx| {
         // The block's own instructions until a rule matches; a copy of them
         // after.
         let mut owned: Option<Vec<Arc<Insn>>> = None;
@@ -697,6 +730,10 @@ pub fn slide(
         while at + matcher.width <= cx.insns.len() {
             let insns: &[Arc<Insn>] = owned.as_deref().unwrap_or(cx.insns);
             if !removed.is_empty() && insns[at..at + matcher.width].iter().any(|one| removed.contains(&id(one))) {
+                at += 1;
+                continue;
+            }
+            if !matcher.starts(&insns[at]) {
                 at += 1;
                 continue;
             }
@@ -734,7 +771,7 @@ pub fn gap(
     resume_past: bool,
 ) -> LirBody {
     let cross = matcher.cross.expect("a gap group says what it may cross");
-    blocks(body, facts, |cx| {
+    blocks(body, facts, matcher, |cx| {
         let original = cx.insns;
         // The block's own instructions until a rule matches; a copy of them
         // after.
@@ -756,6 +793,10 @@ pub fn gap(
             }
             let first = if first_original { Arc::clone(&original[work[at]]) } else { Arc::clone(&insns[work[at]]) };
             let mut next = at + 1;
+            if !matcher.starts(&first) {
+                at = next;
+                continue;
+            }
             let head = Window { insns: vec![&first], at: vec![work[at]], list: insns, gap: &[] };
             let state = (matcher.head)(&head);
             if state != 0 {

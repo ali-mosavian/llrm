@@ -12,7 +12,9 @@
 //! moves to the end of the preheader, before its jump, when:
 //!
 //! - it is a pure operation on registers and constants with one result, no
-//!   pinned operand, no memory, no call, no x87 value (`candidate`);
+//!   pinned operand, no call, no x87 value (`candidate`), or a load in a block
+//!   that runs on every trip of a loop with no store, call or volatile access
+//!   (`InitializeLoadsHoistableLoops` L1472, `IsGuaranteedToExecute`);
 //! - every value it reads is defined outside the loop or was hoisted
 //!   (`IsLoopInvariantInst`);
 //! - it is not as cheap as a move (`IsProfitableToHoist`: a cheap instruction
@@ -24,9 +26,9 @@
 //!   the loop standing for the pressure: DEVIATE ML1, the pin tracks the live
 //!   registers of each block of the loop).
 //!
-//! DEVIATE ML2: no preheader is made where a loop has none; no load of an
-//! invariant cell (`ExtractHoistableLoad`); no CSE of the hoisted value
-//! (`MayCSE`).
+//! DEVIATE ML2: no preheader is made where a loop has none; no load folded
+//! into its reader is taken apart (`ExtractHoistableLoad`); no CSE of the
+//! hoisted value (`MayCSE`).
 //!
 //! # Example
 //! A loop that adds `a[i] * k3` where `k3 := k + 3` is made inside it (the
@@ -51,7 +53,7 @@ use std::sync::Arc;
 use crate::analysis::loops as loopy;
 use crate::backend::classes::RegisterClasses;
 use crate::backend::liveness;
-use crate::model::ir::{Loc, Operation};
+use crate::model::ir::{Loc, Mem, Operation};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet};
@@ -77,25 +79,59 @@ impl LIRTransform for MachineLicm {
     }
 }
 
-/// `IsLICMCandidate` for what this pass moves.
+/// The cell `one` loads into a value, where it is a plain load.
+fn loaded(one: &Insn) -> Option<&Mem> {
+    let what = one.what.as_ref()?;
+    match (what.op, what.dests.as_slice(), what.sources.as_slice()) {
+        (Operation::Move, [Loc::Held(_)], [Loc::Mem(cell)]) => Some(cell),
+        _ => None,
+    }
+}
+
+/// `isLoadFoldBarrier() || mayStore() || isCall() || hasOrderedMemoryRef()`:
+/// what keeps every load of the loop in it (`InitializeLoadsHoistableLoops`).
+fn keeps_loads(one: &Insn) -> bool {
+    if one.is_meta() && one.what.as_ref().is_some_and(|what| what.op != Operation::Barrier) {
+        return false;
+    }
+    crate::backend::machinesink::may_store(one)
+        || one.what.as_ref().is_none_or(|what| {
+            matches!(
+                what.op,
+                Operation::Push | Operation::Pop | Operation::Leave | Operation::Exchange | Operation::Nothing
+            )
+        })
+}
+
+/// `IsLICMCandidate` for what this pass moves. `loads`: the loop has nothing
+/// that keeps a load in it, and the load's block runs on every trip.
 fn candidate(
     one: &Insn,
     classes: &RegisterClasses,
+    loads: bool,
 ) -> bool {
     let Some(what) = &one.what else { return false };
     if !classes.requirements(what).is_empty() {
         return false;
     }
-    let pure = matches!(
-        what.op,
-        Operation::Address
-            | Operation::Extend
-            | Operation::Binary
-            | Operation::Unary
-            | Operation::Multiply
-            | Operation::Funnel
-    );
-    let held = |place: &Loc| matches!(place, Loc::Held(_) | Loc::Imm(_) | Loc::Address(_));
+    let load = loads && loaded(one).is_some();
+    let pure = load
+        || matches!(
+            what.op,
+            Operation::Address
+                | Operation::Extend
+                | Operation::Binary
+                | Operation::Unary
+                | Operation::Multiply
+                | Operation::Funnel
+        );
+    // `lea` names a cell and reads none (LEA32r is not `mayLoad`).
+    let cell = |cell: &Mem| (what.op == Operation::Address || load) && cell.selector.is_none() && !cell.stack_argument;
+    let held = |place: &Loc| match place {
+        Loc::Held(_) | Loc::Imm(_) | Loc::Address(_) => true,
+        Loc::Mem(one) => cell(one),
+        _ => false,
+    };
     pure && what.target.is_none()
         && !what.indirect
         && !one.uses.is_empty()
@@ -126,6 +162,7 @@ pub fn hoisted(
         return body.clone();
     }
     let floating = crate::backend::regclass::floating(body);
+    let dominance = loopy::dominance(&body.blocks, Some(body.entry));
     let mut blocks: Vec<crate::model::lir::Block> = body.blocks.clone();
     let place: HashMap<i64, usize> = blocks.iter().enumerate().map(|(number, block)| (block.at, number)).collect();
     // Where each value is defined: the block, by position.
@@ -172,12 +209,21 @@ pub fn hoisted(
             .filter(|value| !floating.contains(value))
             .collect();
         let limit = classes.available.len();
+        // `InitializeLoadsHoistableLoops`: no store, call or ordered load in
+        // the loop, its inner loops among it.
+        let loads = !inside.iter().any(|at| blocks[place[at]].insns.iter().any(|one| keeps_loads(one)));
+        // `IsGuaranteedToExecute`: the header, or a block over every exiting
+        // block.
+        let exiting: Vec<i64> =
+            inside.iter().copied().filter(|at| blocks[place[at]].succ.iter().any(|to| !inside.contains(to))).collect();
+        let every_trip = |at: i64| at == lp.header || exiting.iter().all(|&out| dominance.dominates(at, out));
         let mut moved: Vec<Arc<Insn>> = Vec::new();
         let mut hoisted_values: HashSet<u32> = HashSet::default();
         loop {
             let mut any = false;
             for at in blocks.iter().map(|block| block.at).filter(|at| inside.contains(at)).collect::<Vec<_>>() {
                 let number = place[&at];
+                let loads_here = loads && every_trip(at);
                 let mut keep: Vec<Arc<Insn>> = Vec::new();
                 let insns: Vec<Arc<Insn>> = blocks[number].insns.iter().cloned().collect();
                 for (index, one) in insns.iter().enumerate() {
@@ -188,7 +234,7 @@ pub fn hoisted(
                     let flags = |lanes: &crate::backend::lanes::Lanes| {
                         lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
                     };
-                    let mut movable = candidate(one, classes)
+                    let mut movable = candidate(one, classes, loads_here)
                         && invariant
                         && value.is_some_and(|value| !floating.contains(&value))
                         && named.len() < limit;
@@ -284,7 +330,7 @@ mod tests {
         defines: Vec<u32>,
         uses: Vec<u32>,
     ) -> Arc<Insn> {
-        let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
         Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
     }
 
@@ -315,9 +361,78 @@ mod tests {
         let classes = RegisterClasses::m16();
         let done = hoisted(&body, &classes);
         let names = |at: usize| -> Vec<String> {
-            done.blocks[at].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect()
+            done.blocks[at]
+                .insns
+                .iter()
+                .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                .collect()
         };
         assert_eq!(names(0), ["add", "jmp"]);
         assert_eq!(names(1), ["mov", "jcxz"]);
+    }
+
+    /// bintree's `insert` at -O1, a loop after `tailrecurse`: `t[3*node]` is
+    /// read on every trip of a loop that stores nothing. The pin's
+    /// EarlyMachineLICM hoists its `lea` and load (`AllowedToHoistLoads`);
+    /// both stayed in the loop, 96366 clocks against 93475 hoisted. A store in
+    /// the loop keeps the load in it.
+    #[test]
+    fn test_a_load_of_a_cell_a_loop_never_stores_is_made_before_the_loop() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let cell = |base: u32, index: u32, scale: i64| {
+            Loc::Mem(Mem {
+                base: Some(Held { value: base, width: 4 }),
+                index: Some(Held { value: index, width: 4 }),
+                scale,
+                ..Mem::new(None, 4)
+            })
+        };
+        let run = |stores: bool| {
+            let lea = insn(10, Operation::Address, "lea", vec![held(10)], vec![cell(2, 2, 2)], vec![10], vec![2, 2]);
+            let load = insn(11, Operation::Move, "mov", vec![held(11)], vec![cell(1, 10, 4)], vec![11], vec![1, 10]);
+            let mut inside = vec![lea, load];
+            if stores {
+                inside.push(insn(
+                    12,
+                    Operation::Move,
+                    "mov",
+                    vec![cell(1, 3, 4)],
+                    vec![held(11)],
+                    vec![],
+                    vec![1, 3, 11],
+                ));
+            }
+            inside.push(branch(13));
+            let mut body = LirBody::new(
+                "loop",
+                0,
+                vec![
+                    block(0, vec![1], vec![jump(0)]).into(),
+                    block(1, vec![1, 2], inside).into(),
+                    block(2, vec![], vec![insn(14, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+                ],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            body.inputs = [1, 2, 3].into_iter().collect();
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            let done = hoisted(&body, &RegisterClasses::m16());
+            let names = |at: usize| -> Vec<String> {
+                done.blocks[at]
+                    .insns
+                    .iter()
+                    .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                    .collect()
+            };
+            (names(0), names(1))
+        };
+        assert_eq!(run(false), (vec!["lea".to_owned(), "mov".into(), "jmp".into()], vec!["jcxz".to_owned()]));
+        assert_eq!(
+            run(true),
+            (vec!["lea".to_owned(), "jmp".into()], vec!["mov".to_owned(), "mov".into(), "jcxz".into()])
+        );
     }
 }

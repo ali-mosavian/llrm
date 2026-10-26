@@ -84,6 +84,11 @@ pub fn fold_memory_operand(
         return None;
     }
     let mut out = (**one).clone();
+    // The copy that defined a spilled value, folded: it is the spill store, and
+    // `postrasink` may move it into the one successor that reads the cell.
+    if dests == 1 && sources == 0 && made.op == Operation::Move {
+        out.spill_store = true;
+    }
     out.what = Some(made);
     out.defines.retain(|value| *value != reg);
     out.uses.retain(|value| *value != reg);
@@ -132,12 +137,7 @@ pub(crate) fn _mov(
     into: Loc,
     out_of: Loc,
 ) -> Semantics {
-    Semantics {
-        name: Some("mov".to_owned()),
-        dests: vec![into],
-        sources: vec![out_of],
-        ..Semantics::new(Operation::Move)
-    }
+    Semantics { name: Some("mov".into()), dests: vec![into], sources: vec![out_of], ..Semantics::new(Operation::Move) }
 }
 
 /// `X86InstrInfo::loadRegFromStackSlot`, as `InlineSpiller::insertReload` calls

@@ -116,8 +116,10 @@ pub fn fused(body: &LirBody) -> LirBody {
                 let [Loc::Held(source), Loc::Imm(Imm { value: j, address: None, .. })] = what.sources[..] else {
                     return block.clone();
                 };
-                let [Loc::Held(_)] = what.dests[..] else { return block.clone() };
-                if source.value != x.value || one.uses.len() != 1 {
+                let [Loc::Held(result)] = what.dests[..] else { return block.clone() };
+                // The flags are the compare's only at its width.
+                if source.value != x.value || one.uses.len() != 1 || source.width != x.width || result.width != x.width
+                {
                     return block.clone();
                 }
                 let subtracted =
@@ -133,7 +135,7 @@ pub fn fused(body: &LirBody) -> LirBody {
                     return block.clone();
                 };
                 let sub = Semantics {
-                    name: Some("sub".to_owned()),
+                    name: Some("sub".into()),
                     sources: vec![
                         Loc::Held(source),
                         Loc::Imm(Imm { value: subtracted as i64, width: source.width, address: None }),
@@ -147,7 +149,7 @@ pub fn fused(body: &LirBody) -> LirBody {
                     } else if position == compare {
                         continue;
                     } else if position == branch {
-                        let renamed = Semantics { name: Some(condition.to_owned()), ..jcc.clone() };
+                        let renamed = Semantics { name: Some(condition.into()), ..jcc.clone() };
                         out.push(Arc::new(Insn { what: Some(renamed), ..(**insn).clone() }));
                     } else {
                         out.push(Arc::clone(insn));
@@ -186,7 +188,7 @@ mod tests {
         defines: Vec<u32>,
         uses: Vec<u32>,
     ) -> Arc<Insn> {
-        let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
         Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
     }
 
@@ -210,8 +212,42 @@ mod tests {
         let mut body = LirBody::new("f", 0, vec![block.into()], IndexMap::default(), IndexMap::default());
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         let done = fused(&body);
-        let names: Vec<String> =
-            done.blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
+        let names: Vec<String> = done.blocks[0]
+            .insns
+            .iter()
+            .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+            .collect();
         assert_eq!(names, ["sub", "jae"]);
+    }
+
+    /// A word compare after a dword `add` of the same value became `sub`, `ja`
+    /// on the whole register: jpeg_single at -m32 left `length` stale in the
+    /// upper half and printed "16-bit quantization tables not supported".
+    /// Also with a constant of 32768 or more, and a negative one.
+    #[test]
+    fn test_a_compare_narrower_than_the_subtract_is_kept() {
+        let word = |value| Loc::Held(Held { value, width: 2 });
+        for (added, compared) in [(-65, 65), (-40000, 40000), (2, -2)] {
+            let block = LirBlock {
+                succ: vec![1, 2].into(),
+                ..LirBlock::new(
+                    0,
+                    vec![
+                        insn(0, Operation::Binary, "add", vec![held(2)], vec![held(1), imm(added)], vec![2], vec![1]),
+                        insn(1, Operation::Compare, "cmp", vec![], vec![word(1), imm(compared)], vec![], vec![1]),
+                        insn(2, Operation::Branch, "ja", vec![], vec![], vec![], vec![]),
+                    ],
+                )
+            };
+            let mut body = LirBody::new("f", 0, vec![block.into()], IndexMap::default(), IndexMap::default());
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            let done = fused(&body);
+            let names: Vec<String> = done.blocks[0]
+                .insns
+                .iter()
+                .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                .collect();
+            assert_eq!(names, ["add", "cmp", "ja"], "add {added}, cmp {compared}");
+        }
     }
 }

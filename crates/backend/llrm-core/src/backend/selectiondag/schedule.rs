@@ -28,14 +28,14 @@
 //! Nothing runs it yet: the emitter (D1b) takes [`schedule`]'s units. The
 //! old selector stays the default; the DAG path is `--isel=dag` (shadow).
 //!
-//! DEVIATE SD30: not translated yet: physical-register live interference
-//! (`DelayForLiveRegsBottomUp`, `BacktrackBottomUp`, `CopyAndMoveSuccessors`,
-//! the call-frame resource), `ClusterNodes`, and the virtual-register cycle
-//! check (`initVRegCycle`, only for blocks that branch to themselves).
-//! Reason: they need the machine instruction descriptions and register
-//! classes of the matcher's output (sdag-c), which does not exist yet; the
-//! flags register travels as glue, so the schedule of a glue-only function
-//! is the pin's. Exit: D1c, before the switch gate. Owner: sdag-d. Review
+//! DEVIATE SD30: part translated. Physical-register live interference
+//! (`DelayForLiveRegsBottomUp`, `CheckForLiveRegDef`, `LiveRegDefs`,
+//! `Interferences`, `releaseInterferences`) is in; not translated:
+//! `InsertCopiesAndMoveSuccs` (when no clone is possible the first held
+//! unit goes anyway), the call-frame resource, `ClusterNodes`, and the
+//! virtual-register cycle check (`initVRegCycle`, only for blocks that branch
+//! to themselves). Reason: they need register classes of the matcher's output
+//! for copies. Exit: before the switch gate. Owner: sdag-d. Review
 //! 2026-12-03.
 //!
 //! DEVIATE SD31: no IR order (`SDNode::getIROrder`), so the call-ordering tie
@@ -55,7 +55,7 @@
 //! ([L536](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGSDNodes.cpp#L536)),
 //! `ScheduleDAG.cpp` (`SUnit::addPred`, `ScheduleDAGTopologicalSort`).
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use super::dag::{NodeData, SDValue, SelectionDAG};
 use super::isd::ISD;
@@ -78,6 +78,18 @@ pub trait SchedInfo {
         &self,
         opcode: u32,
     ) -> bool;
+    /// Whether the target runs the pin's source-order queue by default.
+    fn source_order(&self) -> bool {
+        false
+    }
+    /// `TRI->getCrossCopyRegClass(RC) != RC` for the register's class: the
+    /// value cannot be copied within its class (x86's EFLAGS).
+    fn has_cross_copy_class(
+        &self,
+        _reg: u16,
+    ) -> bool {
+        false
+    }
     /// `TRI->regsOverlap`.
     fn regs_overlap(
         &self,
@@ -100,6 +112,8 @@ enum Kind {
     Data,
     /// `SDep::Barrier`, a chain edge.
     Barrier,
+    /// `SDep::Artificial`, an edge the scheduler added itself.
+    Artificial,
 }
 
 /// `SDep`.
@@ -108,6 +122,9 @@ struct Dep {
     su: usize,
     kind: Kind,
     latency: u32,
+    /// `SDep::getReg`: the physical register the edge carries (an assigned
+    /// register dependence), by the pin's register number.
+    reg: Option<u16>,
 }
 
 impl Dep {
@@ -120,7 +137,12 @@ impl Dep {
         self,
         other: Dep,
     ) -> bool {
-        self.su == other.su && self.kind == other.kind
+        self.su == other.su && self.kind == other.kind && self.reg == other.reg
+    }
+
+    /// `SDep::isAssignedRegDep`.
+    fn is_assigned_reg(self) -> bool {
+        self.kind == Kind::Data && self.reg.is_some()
     }
 }
 
@@ -224,6 +246,16 @@ struct Graph<'a> {
     /// The live users of each node (`N->users()`), by node.
     users: Vec<Vec<u32>>,
     cur_cycle: u32,
+    /// `LiveRegDefs`: the unit whose definition of a physical register is
+    /// still wanted by a unit already scheduled below it.
+    live_reg_defs: HashMap<u16, usize>,
+    /// `LiveRegGens`: the first scheduled unit that wants it.
+    live_reg_gens: HashMap<u16, usize>,
+    /// `Interferences`: available units held back for a live register, with
+    /// the registers (`LRegsMap`).
+    interferences: Vec<(usize, Vec<u16>)>,
+    /// `Sequence`: the units scheduled so far, bottom first.
+    sequence: Vec<usize>,
 }
 
 impl<'a> Graph<'a> {
@@ -304,6 +336,10 @@ impl<'a> Graph<'a> {
             node_id: vec![-1; dag.node_count()],
             users: Self::live_users(dag, root),
             cur_cycle: 0,
+            live_reg_defs: HashMap::default(),
+            live_reg_gens: HashMap::default(),
+            interferences: Vec::new(),
+            sequence: Vec::new(),
         };
         graph.build_sched_units(root);
         graph.add_sched_edges();
@@ -421,7 +457,7 @@ impl<'a> Graph<'a> {
                         self.sus[su].has_phys_reg_defs = true;
                     }
                 }
-                for operand in self.ops(n).to_vec() {
+                for (at, operand) in self.ops(n).to_vec().into_iter().enumerate() {
                     let op_node = operand.node;
                     if is_passive(self.opcode(op_node)) {
                         continue;
@@ -437,11 +473,42 @@ impl<'a> Graph<'a> {
                     if is_chain && self.opcode(op_node) == ISD::TokenFactor {
                         latency = 0;
                     }
-                    let dep = Dep { su: op_su, kind: if is_chain { Kind::Barrier } else { Kind::Data }, latency };
+                    let reg = if is_chain { None } else { self.phys_reg_dependency(operand, n, at) };
+                    let dep = Dep { su: op_su, kind: if is_chain { Kind::Barrier } else { Kind::Data }, latency, reg };
                     self.add_pred(su, dep);
                 }
             }
         }
+    }
+
+    /// `CheckForPhysRegDependency`: the physical register `user` takes from
+    /// `def`'s implicit result when `user` is a `CopyToReg` of it (operand 2).
+    fn phys_reg_dependency(
+        &self,
+        def: SDValue,
+        user: u32,
+        at: usize,
+    ) -> Option<u16> {
+        if at != 2 || self.opcode(user) != ISD::CopyToReg {
+            return None;
+        }
+        let reg = match self.dag.node(self.ops(user)[1]).data {
+            NodeData::PhysReg(id) => super::dagisel_adapter::pin_register(id)?,
+            _ => return None,
+        };
+        // a physical register read back by `CopyFromReg` (a call's flags)
+        if self.opcode(def.node) == ISD::CopyFromReg
+            && matches!(
+                self.dag.node(self.ops(def.node)[1]).data,
+                NodeData::PhysReg(id) if super::dagisel_adapter::pin_register(id) == Some(reg)
+            )
+        {
+            return Some(reg);
+        }
+        let op = self.machine(def.node)?;
+        let first = self.info.num_defs(op);
+        let result = usize::from(def.res);
+        (result >= first && self.info.implicit_defs(op).get(result - first) == Some(&reg)).then_some(reg)
     }
 
     /// `SUnit::addPred` (Required): false where the edge was already there.
@@ -630,21 +697,294 @@ impl<'a> Graph<'a> {
         root: SDValue,
         queue: &mut Queue,
     ) -> Vec<usize> {
-        let mut sequence = Vec::with_capacity(self.sus.len());
+        self.sequence = Vec::with_capacity(self.sus.len());
         if !self.sus.is_empty() {
             let root_su = self.node_id[root.node as usize] as usize;
             debug_assert!(self.sus[root_su].succs.is_empty(), "the graph's root has no successors");
             self.sus[root_su].is_available = true;
             queue.push(&mut self.sus, root_su);
         }
-        while let Some(su) = queue.pop(self) {
+        while let Some(su) = self.pick_node_to_schedule_bottom_up(queue) {
             // `AdvancePastStalls` is a no-op without a hazard recognizer and
             // with unit latencies: the height is at most the cycle.
             self.schedule_node_bottom_up(su, queue);
-            sequence.push(su);
+            self.sequence.push(su);
         }
+        let mut sequence = std::mem::take(&mut self.sequence);
         sequence.reverse();
         sequence
+    }
+
+    /// `PickNodeToScheduleBottomUp`: the best available unit that clobbers no
+    /// live physical register; the ones that would wait in `interferences`.
+    ///
+    /// DEVIATE SD30 (part): when every candidate is held back the pin
+    /// backtracks, duplicates a node or inserts cross-class copies
+    /// (`BacktrackBottomUp`, `CopyAndMoveSuccessors`); here the first held
+    /// unit goes anyway.
+    fn pick_node_to_schedule_bottom_up(
+        &mut self,
+        queue: &mut Queue,
+    ) -> Option<usize> {
+        let mut current = queue.pop(self);
+        while let Some(su) = current {
+            let live = self.delay_for_live_regs_bottom_up(su);
+            if live.is_empty() {
+                break;
+            }
+            self.interferences.push((su, live));
+            current = queue.pop(self);
+        }
+        if current.is_some() {
+            return current;
+        }
+        if self.interferences.is_empty() {
+            return None;
+        }
+        // Every candidate waits for a live register: unschedule back to the
+        // unit that wants it and force the waiting unit below it
+        // (`BacktrackBottomUp`).
+        for i in 0..self.interferences.len() {
+            let (try_su, lregs) = self.interferences[i].clone();
+            let mut bt: Option<usize> = None;
+            for reg in &lregs {
+                let Some(&gen_su) = self.live_reg_gens.get(reg) else { continue };
+                if bt.is_none_or(|b| self.height(gen_su) < self.height(b)) {
+                    bt = Some(gen_su);
+                }
+            }
+            let Some(bt) = bt else { continue };
+            if self.reaches(try_su, bt) {
+                continue;
+            }
+            self.backtrack_bottom_up(try_su, bt, queue);
+            // Force the waiting unit to be scheduled before the unit that
+            // wants the register: `bt` precedes it in the program.
+            if self.sus[bt].is_available {
+                self.sus[bt].is_available = false;
+                Self::dequeue(&mut self.sus, queue, bt);
+            }
+            self.add_pred(try_su, Dep { su: bt, kind: Kind::Barrier, latency: 0, reg: None });
+            return if !self.sus[try_su].is_available || queue_free(&self.sus, try_su) {
+                queue.pop(self)
+            } else {
+                Self::dequeue(&mut self.sus, queue, try_su);
+                Some(try_su)
+            };
+        }
+        // Nothing to backtrack to: the live register's definition is cloned
+        // where the target cannot copy the register (`CopyAndMoveSuccessors`).
+        let (try_su, lregs) = self.interferences[0].clone();
+        if let [reg] = lregs[..]
+            && self.info.has_cross_copy_class(reg)
+            && let Some(&lr_def) = self.live_reg_defs.get(&reg)
+            && let Some(new_def) = self.copy_and_move_successors(lr_def, queue)
+        {
+            self.live_reg_defs.insert(reg, new_def);
+            self.add_pred(new_def, Dep { su: try_su, kind: Kind::Artificial, latency: 0, reg: None });
+            self.sus[try_su].is_available = false;
+            return Some(new_def);
+        }
+        // DEVIATE SD30 (part): the cross-class copies
+        // (`InsertCopiesAndMoveSuccs`) are not translated; the first
+        // held unit goes anyway.
+        let (su, _) = self.interferences.remove(0);
+        Some(su)
+    }
+
+    /// `CopyAndMoveSuccessors`: a clone of `su` with the same predecessors
+    /// that takes over the successors already scheduled. None for a unit of
+    /// several nodes or one with a chain or glue result (the pin unfolds a
+    /// load there, which is not translated).
+    fn copy_and_move_successors(
+        &mut self,
+        su: usize,
+        queue: &mut Queue,
+    ) -> Option<usize> {
+        if self.sus[su].nodes.len() != 1
+            || self.values(self.sus[su].node()).iter().any(|vt| *vt == EVT::GLUE || *vt == EVT::OTHER)
+        {
+            return None;
+        }
+        let new = self.sus.len();
+        let mut clone = self.sus[su].clone();
+        clone.preds.clear();
+        clone.succs.clear();
+        clone.num_preds = 0;
+        clone.num_succs = 0;
+        clone.num_preds_left = 0;
+        clone.num_succs_left = 0;
+        clone.depth_current = false;
+        clone.height_current = false;
+        clone.is_available = false;
+        clone.is_scheduled = false;
+        clone.queue_id = 0;
+        self.sus.push(clone);
+        for pred in self.sus[su].preds.clone() {
+            if pred.kind != Kind::Artificial {
+                self.add_pred(new, pred);
+            }
+        }
+        let mut moved = Vec::new();
+        for succ in self.sus[su].succs.clone() {
+            if succ.kind != Kind::Artificial && self.sus[succ.su].is_scheduled {
+                self.add_pred(succ.su, Dep { su: new, ..succ });
+                moved.push((succ.su, Dep { su, ..succ }));
+            }
+        }
+        for (from, dep) in moved {
+            self.remove_pred(from, dep);
+        }
+        // `updateNode(SU)` and `addNode(NewSU)`.
+        queue.sethi_ullman.resize(self.sus.len(), 0);
+        queue.sethi_ullman[su] = 0;
+        queue.calc_sethi_ullman(&self.sus, su);
+        queue.calc_sethi_ullman(&self.sus, new);
+        Some(new)
+    }
+
+    /// Whether `to` is reached from `from` through successors.
+    fn reaches(
+        &self,
+        from: usize,
+        to: usize,
+    ) -> bool {
+        let mut seen = vec![false; self.sus.len()];
+        let mut work = vec![from];
+        while let Some(su) = work.pop() {
+            for succ in &self.sus[su].succs {
+                if succ.su == to {
+                    return true;
+                }
+                if !seen[succ.su] {
+                    seen[succ.su] = true;
+                    work.push(succ.su);
+                }
+            }
+        }
+        false
+    }
+
+    /// `AvailableQueue->remove(su)`.
+    fn dequeue(
+        sus: &mut [SUnit],
+        queue: &mut Queue,
+        su: usize,
+    ) {
+        if let Some(at) = queue.queue.iter().position(|&one| one == su) {
+            queue.queue.swap_remove(at);
+            sus[su].queue_id = 0;
+        }
+    }
+
+    /// `BacktrackBottomUp`: the scheduled units back to and including `bt`
+    /// are unscheduled.
+    fn backtrack_bottom_up(
+        &mut self,
+        _su: usize,
+        bt: usize,
+        queue: &mut Queue,
+    ) {
+        while let Some(old) = self.sequence.pop() {
+            self.cur_cycle = self.height(old);
+            self.unschedule_node_bottom_up(old, queue);
+            if old == bt {
+                break;
+            }
+        }
+    }
+
+    /// `UnscheduleNodeBottomUp`.
+    fn unschedule_node_bottom_up(
+        &mut self,
+        su: usize,
+        queue: &mut Queue,
+    ) {
+        for pred in self.sus[su].preds.clone() {
+            if let Some(reg) = pred.reg.filter(|_| pred.is_assigned_reg())
+                && self.live_reg_gens.get(&reg) == Some(&su)
+            {
+                self.live_reg_defs.remove(&reg);
+                self.live_reg_gens.remove(&reg);
+                self.release_interferences(Some(reg), queue);
+            }
+        }
+        for succ in self.sus[su].succs.clone() {
+            if let Some(reg) = succ.reg.filter(|_| succ.is_assigned_reg()) {
+                self.live_reg_defs.entry(reg).or_insert(su);
+                // The earliest scheduled unit that wants it.
+                let mut gen_su = succ.su;
+                for other in self.sus[su].succs.clone() {
+                    if other.is_assigned_reg()
+                        && other.reg == Some(reg)
+                        && self.sus[other.su].is_scheduled
+                        && self.height(other.su) < self.height(gen_su)
+                    {
+                        gen_su = other.su;
+                    }
+                }
+                self.live_reg_gens.insert(reg, gen_su);
+            }
+        }
+        // Its predecessors have a successor to wait for again.
+        for pred in self.sus[su].preds.clone() {
+            let p = pred.su;
+            self.sus[p].num_succs_left += 1;
+            if self.sus[p].is_available {
+                self.sus[p].is_available = false;
+                Self::dequeue(&mut self.sus, queue, p);
+                self.interferences.retain(|(held, _)| *held != p);
+            }
+        }
+        self.sus[su].is_scheduled = false;
+        if self.sus[su].num_succs_left == 0 {
+            self.sus[su].is_available = true;
+            if queue_free(&self.sus, su) {
+                queue.push(&mut self.sus, su);
+            }
+        }
+    }
+
+    /// `DelayForLiveRegsBottomUp`: the live physical registers `su` would
+    /// clobber (or whose definition it would separate from its consumer).
+    fn delay_for_live_regs_bottom_up(
+        &self,
+        su: usize,
+    ) -> Vec<u16> {
+        if self.live_reg_defs.is_empty() {
+            return Vec::new();
+        }
+        let mut live = Vec::new();
+        // The registers `su` takes from a unit that is not the live definition
+        // of that register.
+        for pred in &self.sus[su].preds {
+            if let Some(reg) = pred.reg.filter(|_| pred.is_assigned_reg())
+                && self.live_reg_defs.get(&reg) != Some(&su)
+            {
+                self.check_for_live_reg_def(pred.su, reg, &mut live);
+            }
+        }
+        for &node in &self.sus[su].nodes {
+            let Some(op) = self.machine(node) else { continue };
+            for &reg in self.info.implicit_defs(op) {
+                self.check_for_live_reg_def(su, reg, &mut live);
+            }
+        }
+        live
+    }
+
+    /// `CheckForLiveRegDef`.
+    fn check_for_live_reg_def(
+        &self,
+        su: usize,
+        reg: u16,
+        live: &mut Vec<u16>,
+    ) {
+        for (&other, &def) in &self.live_reg_defs {
+            if def != su && self.info.regs_overlap(reg, other) && !live.contains(&other) {
+                live.push(other);
+            }
+        }
     }
 
     /// `ScheduleNodeBottomUp`.
@@ -659,8 +999,41 @@ impl<'a> Graph<'a> {
         self.cur_cycle += 1;
         for pred in self.sus[su].preds.clone() {
             self.release_pred(pred.su, queue);
+            if let Some(reg) = pred.reg.filter(|_| pred.is_assigned_reg()) {
+                // A physical register dependence: nothing that can clobber the
+                // register may go between the definition and this unit.
+                self.live_reg_defs.insert(reg, pred.su);
+                self.live_reg_gens.entry(reg).or_insert(su);
+            }
+        }
+        // The definitions that were live for this unit are done.
+        for succ in self.sus[su].succs.clone() {
+            if let Some(reg) = succ.reg.filter(|_| succ.is_assigned_reg())
+                && self.live_reg_defs.get(&reg) == Some(&su)
+            {
+                self.live_reg_defs.remove(&reg);
+                self.live_reg_gens.remove(&reg);
+                self.release_interferences(Some(reg), queue);
+            }
         }
         self.sus[su].is_scheduled = true;
+    }
+
+    /// `releaseInterferences`: the held units that waited for `reg` (any, for
+    /// none) are available again.
+    fn release_interferences(
+        &mut self,
+        reg: Option<u16>,
+        queue: &mut Queue,
+    ) {
+        let held = std::mem::take(&mut self.interferences);
+        for (su, live) in held {
+            if reg.is_some_and(|reg| !live.contains(&reg)) {
+                self.interferences.push((su, live));
+            } else if self.sus[su].is_available && queue_free(&self.sus, su) {
+                queue.push(&mut self.sus, su);
+            }
+        }
     }
 
     /// `ReleasePred`.
@@ -697,6 +1070,14 @@ impl<'a> Graph<'a> {
     }
 }
 
+/// Whether a held unit may go back to the queue: it is not in it.
+fn queue_free(
+    sus: &[SUnit],
+    su: usize,
+) -> bool {
+    sus[su].queue_id == 0
+}
+
 /// `ScheduleDAGTopologicalSort`.
 struct Topo {
     node2index: Vec<i32>,
@@ -713,7 +1094,7 @@ impl Topo {
             index2node: vec![0; sus.len()],
             dirty: false,
             updates: Vec::new(),
-            reachable: HashMap::new(),
+            reachable: HashMap::default(),
         };
         topo.init(sus);
         topo
@@ -876,8 +1257,29 @@ impl Topo {
     }
 }
 
-/// `RegReductionPQBase` with `BURegReductionPriorityQueue`: Sethi-Ullman
-/// numbers and `bu_ls_rr_sort`.
+thread_local! {
+    /// Source order on for this thread: what `LLRM_SRC_ORDER` does for the
+    /// process.
+    pub(super) static SRC_ORDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `createDefaultScheduler`: X86 enables the machine scheduler and its default
+/// scheduler role (`enableMachineScheduler() &&
+/// enableMachineSchedDefaultSched()`), so the pin's DAG scheduler is
+/// `createSourceListDAGScheduler`: a `SrcRegReductionPriorityQueue`
+/// (`srcorder`), IR order first. DEVIATE: on for m32 only
+/// (`SchedInfo::source_order`), elsewhere off unless `LLRM_SRC_ORDER`: at m16
+/// our machine scheduler is not the pin's `GenericScheduler` and the source
+/// order costs bytes (QCport -Os +0.30%); at m32 it saves 0.99%. Static
+/// instructions over the 71 vsgcc programs at m32, source order against the
+/// queue without it: -O2 +58 (pin +18 over the queue without it), -Os +17 (pin
+/// 57 fewer).
+fn src_order(info: &dyn SchedInfo) -> bool {
+    info.source_order() || SRC_ORDER.get() || llrm_support::env_set("LLRM_SRC_ORDER")
+}
+
+/// `RegReductionPQBase` with `SrcRegReductionPriorityQueue`: Sethi-Ullman
+/// numbers and `src_ls_rr_sort`.
 #[derive(Default)]
 struct Queue {
     queue: Vec<usize>,
@@ -894,7 +1296,11 @@ impl Queue {
         graph: &mut Graph<'_>,
         topo: &mut Topo,
     ) {
-        self.preschedule_nodes_with_multiple_uses(graph, topo);
+        // `!TracksRegPressure && !SrcOrder`: the source-order queue X86 uses
+        // leaves the edges alone.
+        if !src_order(graph.info) {
+            self.preschedule_nodes_with_multiple_uses(graph, topo);
+        }
         self.sethi_ullman = vec![0; graph.sus.len()];
         for su in 0..graph.sus.len() {
             self.calc_sethi_ullman(&graph.sus, su);
@@ -1052,7 +1458,19 @@ impl Queue {
         Some(su)
     }
 
-    /// `bu_ls_rr_sort`: whether `right` goes before `left`.
+    /// `getNodeOrdering`: the IR order of the unit's node under `SrcOrder`.
+    fn node_ordering(
+        graph: &Graph<'_>,
+        su: usize,
+    ) -> u32 {
+        if !src_order(graph.info) {
+            return 0;
+        }
+        graph.dag.node(SDValue { node: graph.sus[su].node(), res: 0 }).order
+    }
+
+    /// `src_ls_rr_sort`: whether `right` goes before `left`. The lower
+    /// non-zero IR order goes first; `BURRSort` breaks ties.
     fn bu_ls_rr_sort(
         &self,
         graph: &mut Graph<'_>,
@@ -1063,6 +1481,12 @@ impl Queue {
         let (l_low, r_low) = (graph.sus[left].is_schedule_low, graph.sus[right].is_schedule_low);
         if l_low != r_low {
             return l_low < r_low;
+        }
+        if src_order(graph.info) {
+            let (l_order, r_order) = (Self::node_ordering(graph, left), Self::node_ordering(graph, right));
+            if (l_order != 0 || r_order != 0) && l_order != r_order {
+                return l_order != 0 && (l_order < r_order || r_order == 0);
+            }
         }
         // BURRSort
         let (l_phys, r_phys) = (graph.sus[left].has_phys_reg_defs, graph.sus[right].has_phys_reg_defs);
@@ -1082,7 +1506,12 @@ impl Queue {
         if l_priority != r_priority {
             return l_priority > r_priority;
         }
-        // The call-ordering tie break reads the IR order (SD31).
+        if graph.sus[left].is_call || graph.sus[right].is_call {
+            let (l_order, r_order) = (Self::node_ordering(graph, left), Self::node_ordering(graph, right));
+            if (l_order != 0 || r_order != 0) && l_order != r_order {
+                return l_order != 0 && (l_order < r_order || r_order == 0);
+            }
+        }
         let (l_dist, r_dist) = (graph.closest_succ(left), graph.closest_succ(right));
         if l_dist != r_dist {
             return l_dist < r_dist;
@@ -1136,18 +1565,11 @@ impl Queue {
     }
 }
 
-/// `cast<RegisterSDNode>(reg)->getReg().isVirtual()`: register numbers at or
-/// above [`FIRST_VIRTUAL`] are virtual.
+/// `cast<RegisterSDNode>(reg)->getReg().isVirtual()`: a `Register` node
+/// holds a virtual register, a `PhysReg` node a physical one.
 fn virtual_register(
     graph: &Graph<'_>,
     reg: SDValue,
 ) -> bool {
-    matches!(
-        graph.dag.node(reg).data,
-        NodeData::Register(r) if r >= FIRST_VIRTUAL
-    )
+    matches!(graph.dag.node(reg).data, NodeData::Register(_))
 }
-
-/// The first virtual register number a `Register` node holds; below it the
-/// numbers are the target's physical registers.
-pub const FIRST_VIRTUAL: u32 = 1 << 16;

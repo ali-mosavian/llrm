@@ -19,9 +19,9 @@
 //! - With several exit blocks, [`crate::lcssamerges`] makes a phi at each and
 //!   merges them where the exits' paths join.
 //!
-//! First, a phi outside any loop exit whose inputs are all one value is
-//! replaced by that value: no loop closes there any more. The new phi is named
-//! after its value with `.lcssa`. The pass is idempotent.
+//! Phis are only added, as `formLCSSA` does: a phi whose inputs are all one
+//! value stays for CodeGenPrepare's phi fold. The new phi is named after its
+//! value with `.lcssa`. The pass is idempotent.
 //!
 //! The helpers `arms`, `from_arms`, `operations`, `definitions`, `exit_phi` and
 //! `place_phi` read and build phis for many other loop passes.
@@ -86,37 +86,9 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
 
-use crate::{edges, lcssamerges};
+use crate::lcssamerges;
 
 pub struct LoopClosedSSA;
-
-/// Takes the loop-closing phis away again once the loop passes are done: a
-/// phi that names one value is that value. The code generator copies each
-/// one (recmany -Os grew 189 bytes under the exit phis LSR's `lcssa` made).
-pub struct LoopOpened;
-
-impl FunctionPass for LoopOpened {
-    fn adds_memory_operations(&self) -> bool {
-        false
-    }
-
-    fn name(&self) -> &'static str {
-        "opened"
-    }
-
-    fn run(
-        &mut self,
-        unit: &mut Unit,
-        analyses: &mut Analyses,
-    ) -> PreservedAnalyses {
-        let shape = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function);
-        match opened_in(unit.function, &shape, true) {
-            Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
-            Ok(false) => PreservedAnalyses::all(),
-            Err(error) => panic!("opened: {error}"),
-        }
-    }
-}
 
 impl FunctionPass for LoopClosedSSA {
     fn adds_memory_operations(&self) -> bool {
@@ -155,8 +127,7 @@ pub fn closed_in(
 ) -> Result<bool, String> {
     // The edges leaving each loop, found once: closing adds phis, never edges.
     let exits = shape.loops.iter().map(|loop_| loop_.exits(function)).collect::<Vec<_>>();
-    let opened = opened_with(function, shape, false, Some(&exits))?;
-    Ok(formed_with(function, shape, &exits)? | opened)
+    formed_with(function, shape, &exits)
 }
 
 /// `formLCSSA` of every loop: the exit phis a loop lacks are added, and none
@@ -177,7 +148,7 @@ fn formed_with(
     // value an ordinary definition in an enclosing loop.
     // The dominators and the graph, found once: closing adds phis, no block or
     // edge.
-    let mut flow = lcssamerges::Flow::default();
+    let mut flow = lcssamerges::Flow::with_dominance(shape.dominance.clone());
     for (loop_, exiting) in shape.loops.iter().zip(exits) {
         changed |= _closed_loop(function, loop_, exiting, &mut flow)?;
     }
@@ -275,58 +246,6 @@ pub(crate) fn place_phi(
     function.insert(phi, first.map_or(Position::End(block), Position::Before))
 }
 
-/// Without the phis outside any loop exit that name one value: no loop
-/// closes there any longer (unrolled or peeled away), and each is a copy.
-/// Without the phis that name one value, those at loop exits too if
-/// `exits_too`.
-fn opened_in(
-    function: &mut Function,
-    shape: &cfg::Shape,
-    exits_too: bool,
-) -> Result<bool, String> {
-    opened_with(function, shape, exits_too, None)
-}
-
-/// [`opened_in`], the edges leaving each loop given where the caller has them.
-fn opened_with(
-    function: &mut Function,
-    shape: &cfg::Shape,
-    exits_too: bool,
-    leaving: Option<&[Vec<(i64, i64)>]>,
-) -> Result<bool, String> {
-    let graph = cfg::graph(function);
-    let mut exits = BTreeSet::new();
-    if !exits_too {
-        match leaving {
-            Some(leaving) => exits.extend(leaving.iter().flatten().map(|&(_, to)| to)),
-            None => {
-                for loop_ in &shape.loops {
-                    exits.extend(loop_.exits(function).into_iter().map(|(_, to)| to));
-                }
-            }
-        }
-    }
-    let one = |function: &Function, phi: InstId| {
-        let values = arms(function, phi).into_iter().map(|(value, _)| value).collect::<Vec<_>>();
-        let result = Operand::Value(function.instruction(phi).result.expect("a phi's value"));
-        values.first().copied().filter(|&first| first != result && values.iter().all(|&value| value == first))
-    };
-    let swap = graph
-        .iter()
-        .filter(|block| !exits.contains(&block.at))
-        .flat_map(|block| edges::phis(function, cfg::block(block.at)))
-        .filter(|&phi| one(function, phi).is_some())
-        .collect::<Vec<_>>();
-    // Each is read again as it goes: an earlier one may have been its value.
-    for &phi in &swap {
-        let value = one(function, phi).expect("one value");
-        function.replace_all_uses_with(function.instruction(phi).result.expect("a phi's value"), value);
-        function.set_operands(phi, Vec::new());
-        function.erase(phi)?;
-    }
-    Ok(!swap.is_empty())
-}
-
 pub fn _closed_loop(
     function: &mut Function,
     loop_: &Loop,
@@ -335,7 +254,7 @@ pub fn _closed_loop(
 ) -> Result<bool, String> {
     let exits = exiting.iter().map(|&(_, target)| target).collect::<BTreeSet<_>>();
     if exits.len() > 1 {
-        return lcssamerges::closed(function, loop_, flow);
+        return lcssamerges::closed(function, loop_, exiting, flow);
     }
     let dominance = &mut flow.dominance;
     let Some(&exit_at) = exits.first() else {

@@ -672,6 +672,21 @@ impl Function {
         self.log(Change::Rewritten(inst));
     }
 
+    /// Gives an instruction's result another type (`Value::mutateType`); the
+    /// operands and users stay, and what reads the old type is the caller's to
+    /// put right.
+    pub fn set_type(
+        &mut self,
+        inst: InstId,
+        ty: TypeId,
+    ) {
+        self.instructions[inst.0 as usize].ty = ty;
+        if let Some(result) = self.instructions[inst.0 as usize].result {
+            self.values[result.0 as usize].ty = ty;
+        }
+        self.log(Change::Rewritten(inst));
+    }
+
     /// Replaces an instruction's flags.
     pub fn set_flags(
         &mut self,
@@ -1323,6 +1338,31 @@ impl Function {
             .ok_or_else(|| format!("block {} is not placed", before.0))?;
         self.layout.insert(at, block);
         self.blocks[block.0 as usize].placed = true;
+        Ok(())
+    }
+
+    /// `BasicBlock::moveBefore`: the placed `block` moved to stand right
+    /// before the placed `before`.
+    pub fn move_block_before(
+        &mut self,
+        block: BlockId,
+        before: BlockId,
+    ) -> Result<(), String> {
+        if block == before {
+            return Ok(());
+        }
+        let from = self
+            .layout
+            .iter()
+            .position(|one| *one == block)
+            .ok_or_else(|| format!("block {} is not placed", block.0))?;
+        self.layout.remove(from);
+        let at = self
+            .layout
+            .iter()
+            .position(|one| *one == before)
+            .ok_or_else(|| format!("block {} is not placed", before.0))?;
+        self.layout.insert(at, block);
         Ok(())
     }
 

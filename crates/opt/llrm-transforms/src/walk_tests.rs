@@ -222,7 +222,9 @@ b0:
         &mut module,
         std::rc::Rc::new(llrm_x86_m16::Dos::default()),
         |program: &mut llrm_mir::program::Program| {
-            crate::pipeline::applied(program, &crate::pipeline::Applied::default())
+            let mut options = crate::pipeline::Options::default();
+            options.inline.recursive = true;
+            crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
         },
     )
     .and_then(|done| done)
@@ -253,7 +255,10 @@ fn test_a_recursion_with_copies_runs_the_simplify_list_twice() {
             std::rc::Rc::new(llrm_x86_m16::Dos::default()),
             |program: &mut llrm_mir::program::Program| {
                 let mut analyses = Default::default();
-                let mut walk = crate::walk::Walk { inline: Default::default(), simplify: Box::new(|_, _, _, _| {}) };
+                let mut walk = crate::walk::Walk {
+                    inline: crate::inline::Threshold { recursive: true, ..Default::default() },
+                    simplify: Box::new(|_, _, _, _| {}),
+                };
                 walk.run(program, &mut analyses)?;
                 let mut modules = super::managers(program, &mut analyses);
                 let mut late = crate::walk::SelfInline {
@@ -393,7 +398,10 @@ b0:
         &mut module,
         std::rc::Rc::new(llrm_x86_m16::Dos::default()),
         |program: &mut llrm_mir::program::Program| {
-            let mut walk = crate::walk::Walk { inline: Default::default(), simplify: Box::new(|_, _, _, _| {}) };
+            let mut walk = crate::walk::Walk {
+                inline: crate::inline::Threshold { recursive: true, ..Default::default() },
+                simplify: Box::new(|_, _, _, _| {}),
+            };
             walk.run(program, &mut Default::default())
         },
     )
@@ -602,13 +610,16 @@ b0:
 #[test]
 fn test_only_a_tree_recursion_waits_for_its_tail_call_elimination() {
     use llrm_mir::program::ProgramPass;
-    let marked = |text: &str, name: &str| {
+    let marked_with = |text: &str, name: &str, recursive: bool| {
         let mut module = parsed(text);
         llrm_mir::program::Program::lend(
             &mut module,
             std::rc::Rc::new(llrm_x86_m16::Dos::default()),
             |program: &mut llrm_mir::program::Program| {
-                let mut walk = crate::walk::Walk { inline: Default::default(), simplify: Box::new(|_, _, _, _| {}) };
+                let mut walk = crate::walk::Walk {
+                    inline: crate::inline::Threshold { recursive, ..Default::default() },
+                    simplify: Box::new(|_, _, _, _| {}),
+                };
                 walk.run(program, &mut Default::default())
             },
         )
@@ -662,8 +673,64 @@ b0:
   ret i32 %r
 }
 ";
+    let marked = |text: &str, name: &str| marked_with(text, name, true);
     assert!(marked(tree, "fib"), "fib waits for tail-call elimination");
     assert!(!marked(linear, "down"), "a count-down does not");
+    assert!(!marked_with(tree, "fib", false), "by default nothing waits: the copies are `-finline-recursive`'s");
+}
+
+/// The pin refuses a callee that calls itself (`IsRecursiveCall`, no
+/// `AllowRecursiveCall`): `report(fib(30))` keeps its one call of `fib`. The
+/// walk inlined it by default, and the unrolled loop it brought left 15 calls
+/// of `fib` in `main`.
+#[test]
+fn test_a_callee_that_calls_itself_is_not_inlined_unless_recursion_is_on() {
+    use llrm_mir::program::ProgramPass;
+    let calls_of_fib_in_main = |recursive: bool| {
+        let mut module = parsed(
+            "define internal i32 @fib(i32 %n) {
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %rec
+
+base:
+  ret i32 %n
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @fib(i32 %a)
+  %y = call i32 @fib(i32 %b)
+  %s = add i32 %x, %y
+  ret i32 %s
+}
+
+define i32 @main() {
+b0:
+  %r = call i32 @fib(i32 30)
+  ret i32 %r
+}
+",
+        );
+        llrm_mir::program::Program::lend(
+            &mut module,
+            std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+            |program: &mut llrm_mir::program::Program| {
+                let mut walk = crate::walk::Walk {
+                    inline: crate::inline::Threshold { recursive, ..Default::default() },
+                    simplify: Box::new(|_, _, _, _| {}),
+                };
+                walk.run(program, &mut Default::default())
+            },
+        )
+        .and_then(|done| done)
+        .expect("the walk runs");
+        let text = llrm_mir::print::module(&module);
+        let main = text.split("define").find(|one| one.contains("@main(")).expect("main").to_owned();
+        main.matches("call i32 @fib(").count()
+    };
+    assert_eq!(calls_of_fib_in_main(false), 1, "the pin leaves the call");
+    assert_ne!(calls_of_fib_in_main(true), 1, "-finline-recursive inlines it");
 }
 
 /// ipa-cp prices the callee whole: copies made in the walk first left
@@ -688,13 +755,24 @@ fn test_ipa_cp_clones_a_tree_recursion_before_it_is_copied_into_itself() {
 
 /// The module `text` after the walk alone (no simplifier), `top`'s body.
 fn walked_top(text: &str) -> String {
+    walked_top_with(text, true)
+}
+
+/// `walked_top` with gcc's recursive inlining (`-finline-recursive`) on or off.
+fn walked_top_with(
+    text: &str,
+    recursive: bool,
+) -> String {
     use llrm_mir::program::ProgramPass;
     let mut module = parsed(text);
     llrm_mir::program::Program::lend(
         &mut module,
         std::rc::Rc::new(llrm_x86_m16::Dos::default()),
         |program: &mut llrm_mir::program::Program| {
-            let mut walk = crate::walk::Walk { inline: Default::default(), simplify: Box::new(|_, _, _, _| {}) };
+            let mut walk = crate::walk::Walk {
+                inline: crate::inline::Threshold { recursive, ..Default::default() },
+                simplify: Box::new(|_, _, _, _| {}),
+            };
             walk.run(program, &mut Default::default())
         },
     )
@@ -738,6 +816,16 @@ fn test_a_linear_recursive_callee_is_peeled_in_its_caller() {
     let top = walked_top(LINEAR);
     let copies = top.matches("mul i32 %").count();
     assert_eq!(copies, 9, "{copies} copies of down in top:\n{top}");
+}
+
+/// The default is the pin's inliner: a callee that calls itself is not copied
+/// into its caller (`IsRecursiveCall`; hanoi's nine copies and its lookup
+/// table, 40 instructions where gcc runs 35,764 and clang 249,852, are
+/// `-finline-recursive`, a DEVIATE (recursion) the pin has no counterpart of).
+#[test]
+fn test_the_default_does_not_copy_a_recursive_callee() {
+    let copies = walked_top_with(LINEAR, false).matches("mul i32 %").count();
+    assert_eq!(copies, 0, "{copies} copies of down in top by default");
 }
 
 /// A tree is not peeled: the copy doubles at each level (bintree -O2 +0.13%
@@ -906,6 +994,134 @@ fn test_an_os_call_whose_stack_arguments_are_unknown_stays_a_call() {
     assert!(top.contains("call i32 @parity"), "parity was inlined for nothing:\n{top}");
 }
 
+/// `@top` after the pipeline sized for bytes over `text`.
+fn sized(
+    text: &str,
+    name: &str,
+) -> String {
+    let mut module = parsed(text);
+    let applied = crate::pipeline::Applied { options: crate::pipeline::Options::size(), ..Default::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let printed = llrm_mir::print::module(&module);
+    printed.split("define").find(|one| one.contains(name)).expect("the function").to_owned()
+}
+
+/// `step(&value, &delta)` on two private globals the caller has just stored
+/// constants to folds to a constant once inlined, and the call (two pushed
+/// addresses) costs more bytes than the constant; the pin inlines it at -Os
+/// (`cost=-15, threshold=75`). The -Os bound alone refused it, and the trial
+/// (D12) looked at stack slots only: a2_small_function_twice.c 14 -> 73 bytes,
+/// memory.nib 19 -> 89.
+#[test]
+fn test_an_os_call_whose_global_arguments_hold_stored_constants_is_inlined() {
+    let top = sized(
+        "@value = internal global i16 0
+@delta = internal global i16 0
+
+define internal void @step(ptr %v, ptr %d) {
+b0:
+  %a = load i16, ptr %v
+  %m = mul i16 %a, 3
+  %b = load i16, ptr %d
+  %s = add i16 %m, %b
+  store i16 %s, ptr %v
+  ret void
+}
+
+define i16 @a2b() {
+b0:
+  store i16 7, ptr @value
+  store i16 -2, ptr @delta
+  call void @step(ptr @value, ptr @delta)
+  store i16 -4, ptr @value
+  store i16 11, ptr @delta
+  call void @step(ptr @value, ptr @delta)
+  %r = load i16, ptr @value
+  ret i16 %r
+}
+",
+        "@a2b(",
+    );
+    assert!(!top.contains("call"), "the call to step stayed:\n{top}");
+}
+
+/// The same shape with the far pointers a Nib `&mut i16` argument is
+/// (`memory.nib`, 19 -> 89 bytes): the arguments are `addrspacecast (ptr @g to
+/// ptr addrspace(1))`.
+#[test]
+fn test_an_os_call_whose_far_global_arguments_hold_stored_constants_is_inlined() {
+    let top = sized(
+        "@value = internal global i16 0
+@delta = internal global i16 0
+
+define internal void @step(ptr addrspace(1) %v, ptr addrspace(1) %d) {
+b0:
+  %a = load i16, ptr addrspace(1) %v
+  %m = mul i16 %a, 3
+  %b = load i16, ptr addrspace(1) %d
+  %s = add i16 %m, %b
+  store i16 %s, ptr addrspace(1) %v
+  ret void
+}
+
+define i16 @a2f() {
+b0:
+  store i16 7, ptr @value
+  store i16 -2, ptr @delta
+  call void @step(ptr addrspace(1) addrspacecast (ptr @value to ptr addrspace(1)), ptr addrspace(1) addrspacecast (ptr @delta to ptr addrspace(1)))
+  store i16 -4, ptr @value
+  store i16 11, ptr @delta
+  call void @step(ptr addrspace(1) addrspacecast (ptr @value to ptr addrspace(1)), ptr addrspace(1) addrspacecast (ptr @delta to ptr addrspace(1)))
+  %r = load i16, ptr @value
+  ret i16 %r
+}
+",
+        "@a2f(",
+    );
+    assert!(!top.contains("call"), "the call to step stayed:\n{top}");
+}
+
+/// The same two calls with values the caller does not know fold nothing: the
+/// call stays.
+#[test]
+fn test_an_os_call_whose_global_arguments_hold_unknown_values_stays_a_call() {
+    let top = sized(
+        "@value = internal global i16 0
+@delta = internal global i16 0
+
+define internal void @step(ptr %v, ptr %d) {
+b0:
+  %a = load i16, ptr %v
+  %m = mul i16 %a, 3
+  %b = load i16, ptr %d
+  %s = add i16 %m, %b
+  store i16 %s, ptr %v
+  ret void
+}
+
+define i16 @a2c(i16 %x, i16 %y) {
+b0:
+  store i16 %x, ptr @value
+  store i16 %y, ptr @delta
+  call void @step(ptr @value, ptr @delta)
+  store i16 %y, ptr @value
+  store i16 %x, ptr @delta
+  call void @step(ptr @value, ptr @delta)
+  %r = load i16, ptr @value
+  ret i16 %r
+}
+",
+        "@a2c(",
+    );
+    assert!(top.contains("call"), "step was inlined for nothing:\n{top}");
+}
+
 /// LLRM_CHECK_CALLEES said `the declarations held by the module's analyses
 /// differ from a fresh listing` of 26 programs: what `post_order` stated of a
 /// callee (`memory(argmem: write)`, `writeonly`) was reported edited, but the
@@ -950,4 +1166,32 @@ b0:
     .and_then(|done| done)
     .expect("the walk runs");
     assert!(!stale.get(), "the held declarations differ from a fresh listing");
+}
+
+/// AM-BD-6: `ModuleIpo` states what the pin's `opt -passes=ipsccp` states.
+/// The counted loop's `%r` reaches `@sink` below `%row`, in [0, 8): the pin's
+/// `range(i16 -32768, 6)`. The stand-in (`parameter_ranges`) stated
+/// [-32768, 32767), and nothing at -O1.
+#[test]
+fn test_module_ipo_states_the_argument_ranges_the_pins_ipsccp_does() {
+    use llrm_mir::program::ProgramPass;
+    let mut module = parsed(crate::ipsccp::tests::AM_BD_6);
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none() };
+            ipo.run(program, &mut Default::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("ModuleIpo runs");
+    let text = crate::testing::printed(&module);
+    let header = |name: &str| {
+        let at = format!("@{name}(");
+        text.lines().find(|line| line.starts_with("define") && line.contains(&at)).unwrap_or_default().to_owned()
+    };
+    assert!(header("sink").contains("range(i16 -32768, 6) %x"), "{text}");
+    assert!(header("place").contains("range(i16 0, 8) %row"), "{text}");
+    assert!(text.contains("icmp eq i16 %row, 7"), "{text}");
 }

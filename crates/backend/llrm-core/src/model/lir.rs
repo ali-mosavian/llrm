@@ -118,8 +118,8 @@ pub struct Insn {
     pub uses: Vec<u32>,
     /// Values its operands name and read as undefined (`ProcessImplicitDefs`'
     /// `undef` flag): no definition reaches them and none is needed, so none is
-    /// in `uses`, no live range starts at them, and the allocator gives them any
-    /// register of their class.
+    /// in `uses`, no live range starts at them, and the allocator gives them
+    /// any register of their class.
     pub undefs: Vec<u32>,
     pub clobbers: BTreeSet<RegId>,
     pub clobbers_high: BTreeSet<RegId>,
@@ -458,7 +458,9 @@ impl Insn {
         }
         llrm_mir::counts::bump(llrm_mir::counts::Event::LirRenameRebuilds);
         let mut made = (**self).clone();
-        if let Some(what) = &self.what {
+        // The copy's own operands are rewritten in place: building a second
+        // `Semantics` from `what.clone()` copied every operand list again.
+        if let Some(what) = made.what.as_mut() {
             let settled = |place: &Loc| -> Result<Loc, E> {
                 let mut failed = None;
                 let out = llrm_lir::mapped(place, |held| match rename(held.value) {
@@ -470,11 +472,9 @@ impl Insn {
                 });
                 failed.map_or(Ok(out), Err)
             };
-            made.what = Some(Semantics {
-                dests: what.dests.iter().map(settled).collect::<Result<_, E>>()?,
-                sources: what.sources.iter().map(settled).collect::<Result<_, E>>()?,
-                ..what.clone()
-            });
+            for place in what.dests.iter_mut().chain(what.sources.iter_mut()) {
+                *place = settled(place)?;
+            }
         }
         let value = |value: &u32| rename(*value);
         made.defines = self.defines.iter().map(value).collect::<Result<_, E>>()?;
@@ -1082,8 +1082,9 @@ pub struct LirBody {
     pub pins: IndexMap<u32, RegId>,
     /// The value whose register class a value made after instruction selection
     /// has: a phi's temporary is made in its result's class
-    /// (`createVirtualRegister(getRegClass(DestReg))`, PHIElimination.cpp#L414-L415).
-    /// A value with no entry has the class its uses give it (`regclass::classes`).
+    /// (`createVirtualRegister(getRegClass(DestReg))`,
+    /// PHIElimination.cpp#L414-L415). A value with no entry has the class
+    /// its uses give it (`regclass::classes`).
     pub class_like: Arc<IndexMap<u32, u32>>,
     pub inputs: BTreeSet<u32>,
     pub loop_trip_counts: Vec<(i64, i64)>,
@@ -1111,6 +1112,9 @@ pub struct LirBody {
     /// It calls a routine that returns twice (`setjmp`): no frame slot is
     /// shared.
     pub returns_twice: bool,
+    /// The function is `minsize` (`-Oz`, `Function::hasMinSize`): the passes
+    /// that ask it take size over speed.
+    pub min_size: bool,
     /// (load, write) by `at`: the optimizer proved the write leaves the load's
     /// cell as it was (`!llrm.spares`).
     pub spares: Arc<BTreeSet<(i64, i64)>>,
@@ -1138,6 +1142,17 @@ pub struct LirBody {
     /// distance from the caller's frame (`FrameBase::Cfa`), whichever register
     /// the code addresses it by.
     pub cfa_variables: bool,
+    /// The callee-saved registers are pushed before the locals' space is
+    /// allocated (the pin's order), so every local lies that much lower
+    /// (`masm::saved_first`).
+    pub saved_first: bool,
+    /// What each return takes back is instructions of the body, made while the
+    /// frame register was omitted (`true`) or kept (`false`)
+    /// (`masm::exits_inserted`); the printer adds nothing at a return.
+    pub frame_exit: Option<bool>,
+    /// The registers the frame saved, found before its exit was made: the
+    /// exit's own pops name them and the frame register.
+    pub frame_saved: Option<Vec<RegId>>,
     /// What `-g` says of its variables at points in the code, by the numbers
     /// `DebugTags::before` holds.
     pub notes: Arc<Vec<DebugNote>>,
@@ -1307,6 +1322,7 @@ impl LirBody {
             odds: BlockOdds::default(),
             frequencies: None,
             returns_twice: false,
+            min_size: false,
             spares: Arc::default(),
             float_stack: 0,
             homes: Arc::default(),
@@ -1315,6 +1331,9 @@ impl LirBody {
             registers: Self::default_registers(),
             slotted: false,
             cfa_variables: false,
+            saved_first: false,
+            frame_exit: None,
+            frame_saved: None,
             notes: Arc::default(),
             arguments_in_cells: Arc::default(),
             facts: Default::default(),
@@ -1371,6 +1390,7 @@ impl LirBody {
             odds: self.odds.clone(),
             frequencies,
             returns_twice: self.returns_twice,
+            min_size: self.min_size,
             spares: Arc::clone(&self.spares),
             float_stack: self.float_stack,
             homes: Arc::clone(&self.homes),
@@ -1379,6 +1399,9 @@ impl LirBody {
             registers: self.registers,
             slotted: self.slotted,
             cfa_variables: self.cfa_variables,
+            saved_first: self.saved_first,
+            frame_exit: self.frame_exit,
+            frame_saved: self.frame_saved.clone(),
             notes: Arc::clone(&self.notes),
             arguments_in_cells: Arc::clone(&self.arguments_in_cells),
             facts: self.facts.clone(),
@@ -1412,7 +1435,7 @@ impl LirBody {
 /// selects to no bytes. Named `nop`, select emits a real one.
 #[must_use]
 pub fn inert() -> Semantics {
-    Semantics { name: Some(String::new()), ..Semantics::new(Operation::Nothing) }
+    Semantics { name: Some("".into()), ..Semantics::new(Operation::Nothing) }
 }
 
 /// Keep virtual dataflow and source-byte ownership for an elided machine op.
@@ -1760,7 +1783,7 @@ mod tests {
             16,
             Some((16, 18)),
             Some(Semantics {
-                name: Some("call".to_owned()),
+                name: Some("call".into()),
                 sources: vec![Loc::Held(Held { value: 1, width: 2 })],
                 target: Some(5),
                 ..Semantics::new(Operation::Call)

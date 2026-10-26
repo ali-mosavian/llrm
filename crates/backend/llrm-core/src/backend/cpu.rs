@@ -19,7 +19,7 @@
 //!   linkStyle default stroke:#64748b,stroke-width:2.2px
 //!   tab["<b>Target::cpu_table(name)</b>"]:::src
 //!   tgt["<b>Target</b><br/><small>registers, spaces,<br/>calling, cost model</small>"]:::src
-//!   drv["<b>driver</b><br/><small>size, search,<br/>exhaustive, routes</small>"]:::src
+//!   drv["<b>driver</b><br/><small>size, search,<br/>exhaustive</small>"]:::src
 //!   prof["<b>Profile</b>"]:::opt
 //!   q["<b>cost(alu_rr), latency(..)</b><br/><small>doubling()<br/>clears_before_byte_load()<br/>pops_arguments(n), ...</small>"]:::mid
 //!   mir["<b>target()</b><br/><small>the MIR cost model</small>"]:::mid
@@ -37,7 +37,7 @@
 //! shapes of a body), `exhaustive` (every shape) and `routes` (both the
 //! allocator alone and the spiller route are made and the cheaper kept).
 //! They are part of the profile so that every phase reads one value.
-//! [`tuned_routing`] builds a profile once per (target, CPU, size, search,
+//! [`tuned_optimizing`] builds a profile once per (target, CPU, size, search,
 //! exhaustive, routes) and leaks it, so a profile is a `&'static` reference
 //! that passes hold freely. An unknown CPU is an error that lists the
 //! target's CPUs.
@@ -140,9 +140,6 @@ pub struct Profile {
     /// Whether the allocator tries other shapes of a body than the one it is
     /// given and keeps the cheapest, as LLVM and GCC do not.
     pub search: bool,
-    /// Whether a function is made by both routes (the allocator alone and the
-    /// spiller's) and the cheaper kept; else by the allocator alone.
-    pub routes: bool,
     /// Whether the backend's optional phases run: off at -O0, where like gcc's
     /// and clang's nothing is improved after selection and allocation
     /// (`flow::machine_with`).
@@ -160,6 +157,14 @@ pub struct Profile {
     /// the language allows to stay (Nib and BASIC: only a store the program
     /// writes rounds).
     pub rounds_float_spills: bool,
+    /// A load of a cell nothing writes while the value lives is made again
+    /// where it is read (DEVIATE D-I: the pin remats only invariant loads).
+    /// Off by default (`-fllrm-stable-loads` turns it on): it cost 6.6 M Ir
+    /// and saved QCport 1.4% bytes (docs/working/stable-loads.md).
+    pub stable_loads: bool,
+    /// -Oz (`Function::hasMinSize` on every function, as clang marks them): the
+    /// machine passes that ask it take size over speed.
+    pub min_size: bool,
     /// A spill of an x87 value keeps the register's 80 bits (`fstp tbyte`),
     /// as real BC keeps a temporary (BASIC). DEVIATE D-RFP5, exit: none, the
     /// pin rounds; QB follows real BC text.
@@ -289,7 +294,7 @@ impl Profile {
             register_capacity: arch.register_capacity(),
             general: general_registers(arch),
             spaces: arch.layout().spaces.roles,
-            private: private_convention(arch, std::env::var_os("LLRM_PRIVATE_WATCALL").is_some()),
+            private: private_convention(arch, llrm_support::env_set("LLRM_PRIVATE_WATCALL")),
             calling: Some(llrm_target::calling::Stated(arch.calling())),
             foreign: arch.flat_foreign(),
             ports: arch.flat_ports(),
@@ -308,11 +313,12 @@ impl Profile {
             address_prefix_stall: 0,
             size: false,
             search: true,
-            routes: true,
             optimized: true,
             aggressive: false,
             float_store: false,
             rounds_float_spills: false,
+            stable_loads: true,
+            min_size: false,
             spills_extended: false,
             exhaustive: false,
             model: arch.cost_model(),
@@ -326,6 +332,14 @@ impl Profile {
         operation: &str,
     ) -> Result<i64, String> {
         _listed(&self._costs, operation).ok_or_else(|| format!("{} has no cost for {operation}", self.name))
+    }
+
+    /// `TuningSlow3OpsLEA`: a three-operand LEA takes three cycles, so
+    /// X86FixupLEAs splits it. Of the nine `-march`es only `x86-64`, tuned as
+    /// clang and llc tune it by default, `generic` (X86.td L1903): not
+    /// `TuningSlowIncDec`, which only `X86_64V1Tuning` carries.
+    pub fn slow_3ops_lea(&self) -> bool {
+        self.name == "x86-64"
     }
 
     /// The cheaper way to double a register: `add r,r` or `shl r,1`, which
@@ -450,7 +464,7 @@ fn _profile(
 static _MADE: LazyLock<
     std::sync::Mutex<
         crate::support::hash::HashMap<
-            (&'static str, String, bool, bool, bool, bool, bool, bool, bool, bool, bool),
+            (&'static str, String, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool),
             &'static Profile,
         >,
     >,
@@ -494,23 +508,10 @@ pub fn tuned_with(
     search: bool,
     exhaustive: bool,
 ) -> Result<&'static Profile, String> {
-    tuned_routing(arch, name, size, search, exhaustive, search)
+    tuned_optimizing(arch, name, size, search, exhaustive, true, false, false, false, false, true, false)
 }
 
-/// `tuned_with`, the routes compared where `routes` whatever the search: -O1 to
-/// -Os allocate once, and choose the route.
-pub fn tuned_routing(
-    arch: &dyn Target,
-    name: &str,
-    size: bool,
-    search: bool,
-    exhaustive: bool,
-    routes: bool,
-) -> Result<&'static Profile, String> {
-    tuned_optimizing(arch, name, size, search, exhaustive, routes, true, false, false, false, false)
-}
-
-/// `tuned_routing`, the backend's optional phases left out where not
+/// `tuned_with`, the backend's optional phases left out where not
 /// `optimized` (-O0).
 pub fn tuned_optimizing(
     arch: &dyn Target,
@@ -518,12 +519,13 @@ pub fn tuned_optimizing(
     size: bool,
     search: bool,
     exhaustive: bool,
-    routes: bool,
     optimized: bool,
     float_store: bool,
     aggressive: bool,
     rounds_float_spills: bool,
     spills_extended: bool,
+    stable_loads: bool,
+    min_size: bool,
 ) -> Result<&'static Profile, String> {
     if !arch.cpus().contains(&name) {
         return Err(format!("unknown CPU target: {name}; {} has {}", arch.name(), arch.cpus().join(", ")));
@@ -535,12 +537,13 @@ pub fn tuned_optimizing(
         size,
         search,
         exhaustive,
-        routes,
         optimized,
         float_store,
         aggressive,
         rounds_float_spills,
         spills_extended,
+        stable_loads,
+        min_size,
     );
     if let Some(&one) = made.get(&key) {
         return Ok(one);
@@ -549,12 +552,13 @@ pub fn tuned_optimizing(
         size,
         search,
         exhaustive,
-        routes,
         optimized,
         float_store,
         aggressive,
         rounds_float_spills,
         spills_extended,
+        stable_loads,
+        min_size,
         ..(_profile(arch, name)).expect("every listed CPU has a profile")
     }));
     made.insert(key, one);
@@ -783,7 +787,8 @@ mod tests {
 
 /// The convention `arch`'s description gives a private function, and the ones
 /// that may take it. `instrument` (`LLRM_PRIVATE_WATCALL`, the CC1 comparison)
-/// gives it the description's `private_instrument` instead, where it states one.
+/// gives it the description's `private_instrument` instead, where it states
+/// one.
 fn private_convention(
     arch: &dyn Target,
     instrument: bool,

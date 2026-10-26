@@ -77,8 +77,7 @@ fn set_byte(one: &Insn) -> Option<u32> {
     let what = one.what.as_ref()?;
     let name = what.name.as_deref()?;
     let ([Loc::Held(into)], []) = (what.dests.as_slice(), what.sources.as_slice()) else { return None };
-    (what.op == Operation::Unary && name.starts_with("set") && into.width == 1)
-        .then_some(into.value)
+    (what.op == Operation::Unary && name.starts_with("set") && into.width == 1).then_some(into.value)
 }
 
 /// `movzx into, byte`: `into`.
@@ -88,8 +87,7 @@ fn zero_extend_of(
 ) -> Option<Held> {
     let what = one.what.as_ref()?;
     let ([Loc::Held(into)], [Loc::Held(from)]) = (what.dests.as_slice(), what.sources.as_slice()) else { return None };
-    (what.name.as_deref() == Some("movzx") && from.value == byte && from.width == 1 && into.width == 4)
-        .then_some(*into)
+    (what.name.as_deref() == Some("movzx") && from.value == byte && from.width == 1 && into.width == 4).then_some(*into)
 }
 
 /// `body` with its `setcc`-and-`movzx` pairs made zero-then-`setcc`.
@@ -97,8 +95,8 @@ pub fn fixed(body: &LirBody) -> LirBody {
     let regs = body.regs();
     let bits = body.bits;
     // Every reader of each value, to find a byte read once.
-    let mut readers: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
-    let mut definers: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    let mut readers: llrm_mir::hash::HashMap<u32, usize> = Default::default();
+    let mut definers: llrm_mir::hash::HashMap<u32, usize> = Default::default();
     for block in &body.blocks {
         for phi in block.phis.iter() {
             for &(_, value) in &phi.incoming {
@@ -115,8 +113,26 @@ pub fn fixed(body: &LirBody) -> LirBody {
             }
         }
     }
-    let mut next = body.blocks.iter().flat_map(|b| b.insns.iter()).flat_map(|one| one.defines.iter().chain(&one.uses)).copied().max().unwrap_or(0) + 1;
-    let flag_lane = |lanes: &crate::backend::lanes::Lanes| lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None);
+    let mut next = body
+        .blocks
+        .iter()
+        .flat_map(|b| b.insns.iter())
+        .flat_map(|one| one.defines.iter().chain(&one.uses))
+        .copied()
+        .max()
+        .unwrap_or(0)
+        + 1;
+    let flag_lane = |lanes: &crate::backend::lanes::Lanes| {
+        lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
+    };
+
+    let every_flag = crate::backend::lanes::Lanes::flags(
+        (iced_x86::RflagsBits::OF
+            | iced_x86::RflagsBits::SF
+            | iced_x86::RflagsBits::ZF
+            | iced_x86::RflagsBits::CF
+            | iced_x86::RflagsBits::PF) as u32,
+    );
 
     let mut out = body.clone();
     for block in &mut out.blocks {
@@ -147,7 +163,10 @@ pub fn fixed(body: &LirBody) -> LirBody {
                 let into = zero_extend_of(&insns[at], byte)?;
                 // Nothing between the set and the movzx may touch the result
                 // value.
-                if insns[index + 1..at].iter().any(|between| between.defines.contains(&into.value) || between.uses.contains(&into.value)) {
+                if insns[index + 1..at]
+                    .iter()
+                    .any(|between| between.defines.contains(&into.value) || between.uses.contains(&into.value))
+                {
                     return None;
                 }
                 Some((flags_at, at, into))
@@ -161,7 +180,7 @@ pub fn fixed(body: &LirBody) -> LirBody {
                     at_flags,
                     Some((at_flags, at_flags)),
                     Some(Semantics {
-                        name: Some("mov".to_owned()),
+                        name: Some("mov".into()),
                         dests: vec![Loc::Held(Held { value: zero, width: 4 })],
                         sources: vec![Loc::Imm(Imm { value: 0, width: 4, address: None })],
                         ..Semantics::new(Operation::Move)
@@ -178,17 +197,70 @@ pub fn fixed(body: &LirBody) -> LirBody {
                 insns[index] = Arc::new(set);
                 insns.remove(at);
                 insns.insert(flags_at, make_zero);
-                // The zero is before `flags_at`, so every later index moved by one.
+                // The zero is before `flags_at`, so every later index moved by
+                // one.
                 flags_def = Some(flags_at + 1);
                 index += 2;
                 continue;
             }
             if writes_flags {
-                flags_def = Some(index);
+                // `inc` leaves CF: a `setb` after it reads an earlier carry,
+                // which a zero put before `inc` would clear.
+                let all = effect.as_ref().is_some_and(|e| every_flag.is_subset(&e.writes));
+                flags_def = all.then_some(index);
             }
             index += 1;
         }
         *block = block.with_insns(insns);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::lir::LirBlock;
+    use crate::support::hash::IndexMap;
+
+    fn held(
+        value: u32,
+        width: u32,
+    ) -> Loc {
+        Loc::Held(Held { value, width })
+    }
+
+    fn insn(
+        at: i64,
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+        defines: Vec<u32>,
+        uses: Vec<u32>,
+    ) -> Arc<Insn> {
+        let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
+        Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
+    }
+
+    /// The names of `cmp; [inc]; setb; movzx` after the pass.
+    fn names(between: Option<Arc<Insn>>) -> Vec<String> {
+        let mut insns =
+            vec![insn(0, Operation::Compare, "cmp", vec![], vec![held(1, 4), held(2, 4)], vec![], vec![1, 2])];
+        insns.extend(between);
+        insns.push(insn(2, Operation::Unary, "setb", vec![held(3, 1)], vec![], vec![3], vec![]));
+        insns.push(insn(3, Operation::Extend, "movzx", vec![held(6, 4)], vec![held(3, 1)], vec![6], vec![3]));
+        let body = LirBody::new("f", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
+        let done = fixed(&body);
+        done.blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
+    }
+
+    /// `cmp; inc; setb`: `inc` leaves CF, so `setb` reads the compare's carry.
+    /// The zero went before the `inc` (an `xor` after allocation, which clears
+    /// CF), and `setb` read zero's carry.
+    #[test]
+    fn test_a_setcc_reading_a_carry_an_inc_left_keeps_its_movzx() {
+        assert_eq!(names(None), ["mov", "cmp", "setb"], "the control: nothing between");
+        let inc = insn(1, Operation::Unary, "inc", vec![held(4, 4)], vec![held(5, 4)], vec![4], vec![5]);
+        assert_eq!(names(Some(inc)), ["cmp", "inc", "setb", "movzx"]);
+    }
 }

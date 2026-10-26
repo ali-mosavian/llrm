@@ -653,7 +653,7 @@ mod tests {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Semantics {
-        Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+        Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
     }
 
     fn held(
@@ -697,7 +697,7 @@ mod tests {
         at: i64,
         to: i64,
     ) -> Insn {
-        let what = Semantics { name: Some("jmp".to_owned()), target: Some(to), ..Semantics::new(Operation::Jump) };
+        let what = Semantics { name: Some("jmp".into()), target: Some(to), ..Semantics::new(Operation::Jump) };
         Insn::new(at, Some((at, at + 2)), Some(what), vec![], vec![])
     }
 
@@ -931,5 +931,24 @@ impl Alive {
         values: impl IntoIterator<Item = u32>,
     ) {
         values.into_iter().for_each(|value| self.insert(value));
+    }
+}
+
+#[cfg(test)]
+mod handoff_tests {
+    use crate::backend::regalloc_input::{Calls, before_phase};
+    use crate::liveness::liveintervals::{BUILT, take_handed_over};
+
+    /// TwoAddress reads `LiveVariables` and leaves no intervals (the pin's
+    /// `LiveIntervals` is one analysis built before the coalescer, which is
+    /// `intervals-once.md` step 3): until then the coalescer builds its own,
+    /// once per function.
+    #[test]
+    fn test_the_coalescer_builds_its_intervals_once_when_two_address_leaves_none() {
+        let (body, mut phases) = before_phase(Calls::Everything, "sievejumps.ll", "bench_sieve", "486", "Coalescer");
+        assert!(take_handed_over(&body).is_none(), "the premise: TwoAddress left no intervals");
+        let before = BUILT.with(std::cell::Cell::get);
+        phases[0].transform(body).expect("coalesces");
+        assert_eq!(BUILT.with(std::cell::Cell::get) - before, 1);
     }
 }

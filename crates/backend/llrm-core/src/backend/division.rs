@@ -13,7 +13,8 @@
 //! shift. The sequences, with `x` the dividend and `q`, `r` the results:
 //!
 //! ```text
-//!   signed (divisor d, 1 < d < 2^31)       unsigned (3 <= d < 2^31, not 2^k)
+//!   signed (divisor d, 1 < d < 2^31,       unsigned (3 <= d < 2^31, not 2^k)
+//!   not 2^k: shifts, `power_of_two`)
 //!     m = MAGIC                              m = MAGIC
 //!     (lo,hi) = imul m, x                    (lo,hi) = mul m, x
 //!     hi += x          if MAGIC < 0          t  = x - hi        } if the
@@ -127,7 +128,7 @@ fn chain_product(
             let cell =
                 ir::Mem { base: Some(product), index: Some(product), scale: amount, ..ir::Mem::new(None, width) };
             parts.push(ir::Semantics {
-                name: Some("lea".to_owned()),
+                name: Some("lea".into()),
                 dests: vec![ir::Loc::Held(into)],
                 sources: vec![ir::Loc::Mem(cell)],
                 ..ir::Semantics::new(ir::Operation::Address)
@@ -138,14 +139,14 @@ fn chain_product(
         if name == "fadd" || name == "fsub" {
             let shifted = ir::Held { value: fresh(), width };
             parts.push(ir::Semantics {
-                name: Some("shl".to_owned()),
+                name: Some("shl".into()),
                 dests: vec![ir::Loc::Held(shifted)],
                 sources: vec![ir::Loc::Held(product), ir::Loc::Imm(ir::Imm { value: amount, width: 1, address: None })],
                 ..ir::Semantics::new(ir::Operation::Binary)
             });
             let op = if name == "fadd" { "add" } else { "sub" };
             parts.push(ir::Semantics {
-                name: Some(op.to_owned()),
+                name: Some(op.into()),
                 dests: vec![ir::Loc::Held(into)],
                 sources: vec![ir::Loc::Held(shifted), ir::Loc::Held(product)],
                 ..ir::Semantics::new(ir::Operation::Binary)
@@ -157,7 +158,7 @@ fn chain_product(
             let cell =
                 ir::Mem { base: Some(quotient), index: Some(product), scale: amount, ..ir::Mem::new(None, width) };
             ir::Semantics {
-                name: Some("lea".to_owned()),
+                name: Some("lea".into()),
                 dests: vec![ir::Loc::Held(into)],
                 sources: vec![ir::Loc::Mem(cell)],
                 ..ir::Semantics::new(ir::Operation::Address)
@@ -169,7 +170,7 @@ fn chain_product(
                 ir::Loc::Held(quotient)
             };
             ir::Semantics {
-                name: Some(name.to_owned()),
+                name: Some(name.into()),
                 dests: vec![ir::Loc::Held(into)],
                 sources: vec![ir::Loc::Held(product), other],
                 ..ir::Semantics::new(ir::Operation::Binary)
@@ -215,12 +216,56 @@ pub fn reciprocal<'a>(
         return Ok(None);
     };
     parts.push(ir::Semantics {
-        name: Some("neg".to_owned()),
+        name: Some("neg".into()),
         dests: vec![ir::Loc::Held(results[0])],
         sources: vec![ir::Loc::Held(magnitude)],
         ..ir::Semantics::new(ir::Operation::Unary)
     });
     Ok(Some(parts))
+}
+
+/// `x / 2^k` by shifts, as the pin's DAGCombiner `BuildSDIVPow2` makes it: a
+/// negative dividend is biased by `2^k - 1` (its sign, shifted down to the
+/// bias) before the arithmetic shift rounds toward zero:
+///
+/// ```text
+///   s = sar x, 31;  b = shr s, 32 - k;  q = sar (add x, b), k
+///   r = sub x, (shl q, k)                        (remainder wanted)
+/// ```
+///
+/// A multiply by the magic number was the choice for a power of two (the
+/// pass `algebraic` had expanded it before isel saw it): `imul` and three
+/// fixups for what is four shifts and an add, 31% of `nbody_fixed`'s clocks.
+fn power_of_two(
+    dividend: ir::Held,
+    divisor: i64,
+    results: &[ir::Held],
+    fresh: &mut dyn FnMut() -> u32,
+    remainder: bool,
+) -> Vec<ir::Semantics> {
+    let width = dividend.width;
+    let k = i64::from(divisor.trailing_zeros());
+    let imm = |value: i64| ir::Loc::Imm(ir::Imm { value, width: 1, address: None });
+    let mut parts = Vec::new();
+    let mut emit = |name: &str, sources: Vec<ir::Loc>, into: Option<ir::Held>| -> ir::Held {
+        let into = into.unwrap_or_else(|| ir::Held { value: fresh(), width });
+        parts.push(ir::Semantics {
+            name: Some(name.into()),
+            dests: vec![ir::Loc::Held(into)],
+            sources,
+            ..ir::Semantics::new(ir::Operation::Binary)
+        });
+        into
+    };
+    let sign = emit("sar", vec![ir::Loc::Held(dividend), imm(i64::from(width) * 8 - 1)], None);
+    let bias = emit("shr", vec![ir::Loc::Held(sign), imm(i64::from(width) * 8 - k)], None);
+    let biased = emit("add", vec![ir::Loc::Held(dividend), ir::Loc::Held(bias)], None);
+    let quotient = emit("sar", vec![ir::Loc::Held(biased), imm(k)], Some(results[0]));
+    if remainder {
+        let product = emit("shl", vec![ir::Loc::Held(quotient), imm(k)], None);
+        emit("sub", vec![ir::Loc::Held(dividend), ir::Loc::Held(product)], Some(results[1]));
+    }
+    parts
 }
 
 fn positive_reciprocal<'a>(
@@ -234,7 +279,15 @@ fn positive_reciprocal<'a>(
 ) -> Result<Option<Vec<ir::Semantics>>, String> {
     let cpu = targets::profile(cpu)?;
     let width = dividend.width;
-    if width != 4 || !(1 < divisor && divisor < 1 << 31) || cpu.size {
+    if !matches!(width, 2 | 4) || !(1 < divisor && divisor < 1 << (8 * width - 1)) {
+        return Ok(None);
+    }
+    // The pin shifts a power of two at every size (`visitSDIVLike` has no
+    // size test; `isIntDivCheap` guards only the reciprocal below).
+    if divisor & (divisor - 1) == 0 {
+        return Ok(Some(power_of_two(dividend, divisor, results, fresh, remainder)));
+    }
+    if llrm_target::keeps_division(i64::from(width), cpu.size) {
         return Ok(None);
     }
     // The magic is in the accumulator and the dividend where the early-out
@@ -308,7 +361,7 @@ fn positive_reciprocal<'a>(
      -> ir::Held {
         let into = into.unwrap_or_else(|| ir::Held { value: fresh(), width });
         parts.push(ir::Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests: vec![ir::Loc::Held(into)],
             sources,
             ..ir::Semantics::new(operation)
@@ -321,7 +374,7 @@ fn positive_reciprocal<'a>(
     let low = ir::Held { value: fresh(), width };
     let mut high = ir::Held { value: fresh(), width };
     parts.push(ir::Semantics {
-        name: Some("imul".to_owned()),
+        name: Some("imul".into()),
         dests: vec![ir::Loc::Held(low), ir::Loc::Held(high)],
         // The accumulator is the first source and the r/m operand the last: the
         // dividend, the one whose length the early-out reads, goes where it is
@@ -435,7 +488,10 @@ pub fn unsigned_reciprocal<'a>(
 ) -> Result<Option<Vec<ir::Semantics>>, String> {
     let cpu = targets::profile(cpu)?;
     let width = dividend.width;
-    if width != 4 || !(2 < divisor && divisor < 1 << 31) || (divisor & (divisor - 1)) == 0 || cpu.size {
+    if !(2 < divisor && divisor < 1 << 31)
+        || (divisor & (divisor - 1)) == 0
+        || llrm_target::keeps_division(i64::from(width), cpu.size)
+    {
         return Ok(None);
     }
     let (Some(multiply), Some(divide)) =
@@ -492,7 +548,7 @@ pub fn unsigned_reciprocal<'a>(
      -> ir::Held {
         let into = into.unwrap_or_else(|| ir::Held { value: fresh(), width });
         parts.push(ir::Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests: vec![ir::Loc::Held(into)],
             sources,
             ..ir::Semantics::new(operation)
@@ -503,7 +559,7 @@ pub fn unsigned_reciprocal<'a>(
     let low = ir::Held { value: fresh(), width };
     let high = ir::Held { value: fresh(), width };
     parts.push(ir::Semantics {
-        name: Some("mul".to_owned()),
+        name: Some("mul".into()),
         dests: vec![ir::Loc::Held(low), ir::Loc::Held(high)],
         sources: vec![ir::Loc::Held(constant), ir::Loc::Held(dividend)],
         ..ir::Semantics::new(ir::Operation::Multiply)
@@ -687,6 +743,24 @@ mod tests {
         );
     }
 
+    /// Tuned for size a power of two is still shifts (the pin's `visitSDIVLike`
+    /// has no size test for it): recchop -Os read `(lo + hi) / 2` as `cwd;
+    /// idiv` and nbody_fixed -Os ran 48% slower without the shifts.
+    #[test]
+    fn test_tuned_for_size_a_division_by_a_power_of_two_is_still_shifts() {
+        let m16 = crate::backend::cpu::tuned_for(&llrm_x86_m16::M16, "486", true).unwrap();
+        let results = [ir::Held { value: 2, width: 2 }, ir::Held { value: 3, width: 2 }];
+        let mut count = 4..;
+        let mut fresh = || count.next().unwrap();
+        let parts = reciprocal(ir::Held { value: 1, width: 2 }, 2, &results, &mut fresh, m16, false, None)
+            .unwrap()
+            .expect("shifts");
+        assert!(parts.iter().all(|one| one.op == ir::Operation::Binary), "{parts:?}");
+        // The reciprocal still waits for the clocks: not at -Os.
+        let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
+        assert_eq!(reciprocal(ir::Held { value: 1, width: 4 }, 7, &results, &mut fresh, m16, false, None), Ok(None));
+    }
+
     /// LNGMXX's q+r needs both answers, including negative truncation and
     /// INT_MIN; here also by negative divisors, whose quotient is the one
     /// by the magnitude, negated, and whose remainder is the same.
@@ -729,6 +803,61 @@ mod tests {
                         other => panic!("{other}"),
                     };
                     values.insert(held(&part.dests[0]), signed(answer));
+                }
+                let quotient = number / divisor;
+                assert_eq!(values[&2], quotient, "{number} / {divisor}");
+                assert_eq!(values[&3], number - quotient * divisor, "{number} % {divisor}");
+            }
+        }
+    }
+
+    /// A signed division by a power of two is shifts, the pin's
+    /// `BuildSDIVPow2`, never the magic multiply: `nbody_fixed`'s `/ 512`
+    /// took `imul` and three fixups once `algebraic` no longer expanded it,
+    /// and ran 31% slower.
+    #[test]
+    fn test_a_signed_division_by_a_power_of_two_is_shifts() {
+        // Words too: `(lo + hi) / 2` at m16 was `cwd; idiv` (recchop -Os).
+        for (width, divisor) in [2, 4, 16, 512, 1 << 30, -2, -16, -512]
+            .into_iter()
+            .map(|divisor| (4, divisor))
+            .chain([2, 4, 16, 512, 1 << 14, -2, -16, -512].into_iter().map(|divisor| (2, divisor)))
+        {
+            let source = ir::Held { value: 1, width };
+            let results = [ir::Held { value: 2, width }, ir::Held { value: 3, width }];
+            let bits = 8 * i64::from(width);
+            let wrap = |value: i64| (value << (64 - bits)) >> (64 - bits);
+            let mut count = 4..;
+            let mut fresh = || count.next().unwrap();
+            let parts =
+                reciprocal(source, divisor, &results, &mut fresh, "486", true, None).unwrap().expect("a sequence");
+            assert!(!parts.iter().any(|one| one.op == ir::Operation::Multiply), "{divisor}: a multiply in {parts:?}");
+            for number in [-2147483648, -513, -512, -17, -1, 0, 1, 16, 511, 512, 513, 2147483647]
+                .into_iter()
+                .map(wrap)
+                .filter(|&number| width == 4 || (-32768..=32767).contains(&number))
+            {
+                let mut values: HashMap<u32, i64> = HashMap::from_iter([(1, number)]);
+                for part in &parts {
+                    let args: Vec<i64> = part
+                        .sources
+                        .iter()
+                        .map(|arg| match arg {
+                            ir::Loc::Held(held) => values[&held.value],
+                            ir::Loc::Imm(imm) => imm.value,
+                            other => panic!("{other:?}"),
+                        })
+                        .collect();
+                    let answer = match part.name.as_deref().unwrap() {
+                        "add" => args[0] + args[1],
+                        "sub" => args[0] - args[1],
+                        "shl" => args[0] << args[1],
+                        "shr" => (args[0] & ((1i64 << bits) - 1)) >> args[1],
+                        "sar" => args[0] >> args[1],
+                        "neg" => -args[0],
+                        other => panic!("{other}"),
+                    };
+                    values.insert(held(&part.dests[0]), wrap(answer));
                 }
                 let quotient = number / divisor;
                 assert_eq!(values[&2], quotient, "{number} / {divisor}");

@@ -37,6 +37,40 @@ fn same_as_today(body: &str) {
     shadow::compare(&parsed.unit()).unwrap();
 }
 
+/// The access vector is sized from the function when the graph is built: it
+/// grew nine times a build (0.55 M Ir on d_faces -O2), so its capacity was a
+/// doubling of what it held, not the size it was made at.
+#[test]
+fn test_the_accesses_are_reserved_when_the_graph_is_built() {
+    let text = format!(
+        "define i16 @f(i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b1 ]
+  store i16 %i, ptr getelementptr (i8, ptr @g, i16 32)
+  %x = load i16, ptr getelementptr (i8, ptr @g, i16 32)
+  store i16 %x, ptr getelementptr (i8, ptr @g, i16 34)
+  store i16 %x, ptr getelementptr (i8, ptr @g, i16 36)
+  store i16 %x, ptr getelementptr (i8, ptr @g, i16 38)
+  %j = add i16 %i, 1
+  %c = icmp slt i16 %j, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %x
+}}
+"
+    );
+    let parsed = Parsed::new(&text);
+    let unit = parsed.unit();
+    let (mssa, _) = translated(&unit);
+    let reserved = unit.function.instruction_count() / 3 + unit.function.layout().len() + 1;
+    assert!(mssa.accesses.len() > 4 && mssa.accesses.len() <= reserved);
+    assert_eq!(mssa.accesses.capacity(), reserved, "the access vector grew while the graph was built");
+}
+
 /// A join of two arms that store: one phi, at the join; the load after it uses
 /// the phi.
 #[test]
@@ -960,6 +994,48 @@ b0:
     let mut held = build();
     let aa = AliasQuery::new(&unit, &accesses);
     shadow::walked(&mut held, &aa, unit.function);
-    let graph = |mssa| crate::manager::MssaGraph { mssa, accesses: std::rc::Rc::clone(&accesses) };
+    let graph = |mssa| crate::manager::MssaGraph::new(mssa, Some(std::rc::Rc::clone(&accesses)));
     assert!(graph(held) == graph(build()));
+}
+
+/// A client that holds pointers and no access names them (MemCpyOpt, made
+/// with `Accesses::resolved`, 2.7 M of `Pointers::run`) asks the stack: with no
+/// access list at all, a store is apart from another object and not from its
+/// own, a call is no better than its attributes, and two locations alias as the
+/// pin's BasicAA says.
+#[test]
+fn test_the_queries_of_a_pointer_need_no_access_lists() {
+    use super::alias::{AliasQuery, AliasResult};
+    let parsed = Parsed::new(
+        "declare void @llvm.lifetime.end.p0(i64, ptr)
+
+define i16 @f() {
+b0:
+  %a = alloca i16
+  %b = alloca i16
+  store i16 1, ptr %a
+  %x = load i16, ptr %a
+  %y = load i16, ptr %b
+  call void @llvm.lifetime.end.p0(i64 2, ptr %b)
+  ret i16 %x
+}
+",
+    );
+    let unit = parsed.unit();
+    let none = Accesses::default();
+    let aa = AliasQuery::new(&unit, &none);
+    let inst = |at: usize| unit.function.iter_block(crate::testing::block(unit.function, "b0")).nth(at).unwrap();
+    let (store, load_a, load_b, ended) = (inst(2), inst(3), inst(4), inst(5));
+    let pointer = |name: &str| llrm_mir::module::Operand::Value(crate::testing::value(unit.function, name));
+    let (at_a, at_b) = (aa.location_at(pointer("a"), 2), aa.location_at(pointer("b"), 2));
+    assert_eq!(aa.alias(&at_a, &at_b), AliasResult::No);
+    assert_eq!(aa.alias(&at_a, &aa.location_at(pointer("a"), 2)), AliasResult::Must);
+    assert!(aa.get_mod_ref_info(store, &at_a).writes, "a store writes its own cell");
+    assert!(!aa.get_mod_ref_info(store, &at_b).writes, "and not another object's");
+    assert!(!aa.get_mod_ref_info(ended, &at_a).is_mod_or_ref(), "lifetime.end of %b leaves %a alone");
+    assert!(aa.get_mod_ref_info(ended, &at_b).is_mod_or_ref());
+    assert!(aa.mod_ref_instructions(store, load_a), "the store and the load of %a");
+    assert!(!aa.mod_ref_instructions(store, load_b), "the store to %a and the load of %b");
+    assert!(!aa.mod_ref_instructions(ended, load_a) && aa.mod_ref_instructions(ended, load_b));
+    assert!(!aa.mod_set_call(store, ended), "a store to %a against a call that touches %b");
 }

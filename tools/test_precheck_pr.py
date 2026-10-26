@@ -69,13 +69,13 @@ def test_a_squash_that_deletes_a_file_needs_it_named_in_a_deletes_line(tmp_path)
     assert pc.parity_squash.body_checks("HEAD", "Owner: x\nRows: none\nDeletes: keep.rs", "parity", root, "fix: remove") == []
 
 
-def test_an_added_line_naming_a_claude_path_is_refused(tmp_path):
+def test_an_added_line_naming_a_config_dir_path_is_refused(tmp_path):
     root = repo(tmp_path)
     commit(root, "notes.md", "see " + "." + "clau" + "de/worktrees/x for it\n", "pr")
-    why = pc.claude_paths(root, "parity")
+    why = pc.config_dir_paths(root, "parity")
     assert len(why) == 1 and "notes.md" in why[0]
     commit(root, "notes.md", "nothing here\n", "pr")
-    assert pc.claude_paths(root, "parity") == []
+    assert pc.config_dir_paths(root, "parity") == []
 
 
 def test_an_added_line_naming_the_assistant_is_refused_by_the_runners_own_check(tmp_path):
@@ -180,3 +180,41 @@ def test_a_changed_rust_file_that_fmt_would_change_is_named(tmp_path, monkeypatc
     monkeypatch.setattr(pc, "changed_packages", lambda root_, files: [])
     why = pc.precheck(root, "style: x", "Owner: w-8\nRows: none", "parity", subprocess.run)
     assert any("a.rs: tools/fmt.sh would change it" in line for line in why), why
+
+
+LEDGER = (
+    "d_faces qbq-llrm: 1305.5 -> 1259.9 M Ir (valgrind --tool=callgrind, dist, "
+    "llrm-c -m32 -mabi=sysv -march=i486 -O2 -Dfar= ... d_faces.c)"
+)
+
+
+def test_a_perf_pr_states_the_ledger_command_and_a_d_faces_qbq_llrm_number():
+    """#3818's first pair was taken on another program: a number for QCport's d_faces next to the board's qbq-llrm one made the totals look wrong by 50 M."""
+    head = "TL;DR: x\nOwner: w-6\nRows: fold@677\n"
+    why = pc.description_failures("perf(pipeline): fold@677 is combine's alone", head)
+    assert len(why) == 1 and "d_faces qbq-llrm" in why[0] and "docs/working/ledger-command.md" in why[0]
+    assert pc.description_failures("perf(pipeline): x", head + LEDGER) == []
+    other = head + "d_faces QCport: 979.6 M Ir (-m32 -mabi=sysv -march=i486 -O2)\n"
+    assert pc.description_failures("perf(pipeline): x", other) != []
+    assert pc.description_failures("fix(flow): x", head) == []
+
+
+def test_a_docs_only_branch_is_told_of_a_scanner_it_turns_red(tmp_path, monkeypatch):
+    """#3899 and the docs that name a path of one machine landed with their scanners red: a docs-only PR plans no gate step. The precheck runs the root scanners
+    and names one that fails here and passes on the base; one red on both is the base's."""
+    monkeypatch.setattr(pc.parity_smoke, "integration_failures", lambda targets, root=None, run=None: {"integration docs_links::test_every_markdown_link_resolves"})
+    named = pc.scanner_failures(tmp_path, ["docs/working/x.md"], on_base=lambda targets: set())
+    assert named == ["scanner fails here and passes on origin/feat/parity: integration docs_links::test_every_markdown_link_resolves"]
+    assert pc.scanner_failures(tmp_path, ["docs/working/x.md"], on_base=lambda targets: {"integration docs_links::test_every_markdown_link_resolves"}) == []
+
+
+def test_a_pr_touching_llrm_c_is_checked_and_tested_with_the_toolchain_feature():
+    """llrm-c's lib tests are a compile_error without `--features toolchain`: the precheck's cargo check and lib run failed ("did-not-run") for any PR touching llrm-c, for a reason that was not the PR's."""
+
+    def cargo(command, **kwargs):
+        has = any("toolchain" in part for part in command)
+        refused = SimpleNamespace(returncode=101, stdout="", stderr="error: llrm-c's lib tests need --features toolchain\n")
+        return SimpleNamespace(returncode=0, stdout="test result: ok. 1 passed\n", stderr="") if has else refused
+
+    assert pc.warning_failures(Path("."), ["llrm-c"], cargo, {}) == []
+    assert pc._failing(Path("."), "llrm-c", None, cargo) == set()

@@ -2080,12 +2080,33 @@ fn can_constant_fold_intrinsic(id: Folded) -> bool {
                 | UmulWithOverflow
                 | Smulh
                 | Umulh
+                | Fabs
+                | Floor
+                | Ceil
+                | Trunc
+                | Round
+                | Roundeven
+                | Rint
+                | Nearbyint
+                | Sqrt
+                | Sin
+                | Cos
+                | Atan
+                | Sinh
+                | Cosh
+                | Log
+                | Log2
+                | Log10
+                | Exp
+                | Exp2
+                | Exp10
                 | SaddSat
                 | UaddSat
                 | SsubSat
                 | UsubSat
                 | SmulFix
                 | SmulFixSat
+                | SdivFix
                 | Bitreverse
         ),
     }
@@ -2181,6 +2202,11 @@ fn constant_fold_scalar_call1(
             });
         return (!null_defined).then_some(operand);
     }
+    if let Folded::Id(math) = id
+        && let ConstantKind::Float(_) = context.get(operand).kind
+    {
+        return constant_fold_float_call1(context, math, ty, operand, caller);
+    }
     let (value, width) = as_int(context, operand)?;
     let Folded::Id(id) = id else { return None };
     match id {
@@ -2192,6 +2218,106 @@ fn constant_fold_scalar_call1(
         IntrinsicId::Bitreverse => Some(int(context, width, value.reverse_bits() >> (128 - width))),
         _ => None,
     }
+}
+
+/// The function attribute a lowering sets when it evaluates float math at the
+/// x87's extended precision (BASIC's runtime does); without it a call is
+/// evaluated by the host libm at double precision, as the pin folds it.
+pub const FP_EVAL: &str = "llrm-fp-eval";
+pub const FP_EVAL_EXTENDED: &str = "x87-extended";
+
+/// `ConstantFoldScalarCall1`'s float arms
+/// ([L2738](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L2738)
+/// rounding,
+/// [L2899](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L2899)
+/// the host libm).
+///
+/// MIRROR: the rounding group is exact at any width and folds anywhere; the
+/// libm group folds a finite argument whose double result raised no
+/// exception (`ConstantFoldFP`: invalid, divide by zero, overflow,
+/// underflow; inexact is allowed), floats through double.
+///
+/// DEVIATE 1: the libm group folds only where the caller is known and does
+/// not evaluate at extended precision (`FP_EVAL`): BASIC's `LOG` and `^` are
+/// computed in 80 bits by the runtime sequence, and a double constant is a
+/// different last digit (rp5, log_exp_digits). The pin has no such function
+/// attribute. DEVIATE 2: a NaN or infinite argument of the rounding group is
+/// not folded. DEVIATE 3: no `fenv`; the exceptions are read off the result
+/// (a non-finite result, or a subnormal or zero one from a nonzero argument).
+fn constant_fold_float_call1(
+    context: &Context,
+    id: IntrinsicId,
+    ty: TypeId,
+    operand: ConstantId,
+    caller: Option<&Function>,
+) -> Option<ConstantId> {
+    use IntrinsicId::*;
+    let Type::Float(kind) = context.types.get(ty) else { return None };
+    let ConstantKind::Float(bits) = context.get(operand).kind else { return None };
+    let value = match (kind, context.types.get(ty_of(context, operand))) {
+        (FloatKind::Double, Type::Float(FloatKind::Double)) => f64::from_bits(bits),
+        (FloatKind::Float, Type::Float(FloatKind::Float)) => f64::from(f32::from_bits(bits as u32)),
+        _ => return None,
+    };
+    if !value.is_finite() {
+        return None;
+    }
+    let result = match id {
+        Fabs => value.abs(),
+        Floor => value.floor(),
+        Ceil => value.ceil(),
+        Trunc => value.trunc(),
+        Round => value.round(),
+        Roundeven | Rint | Nearbyint => value.round_ties_even(),
+        Sqrt | Sin | Cos | Atan | Sinh | Cosh | Log | Log2 | Log10 | Exp | Exp2 | Exp10 => {
+            let host_double = caller.is_some_and(|caller| {
+                !caller
+                    .attrs
+                    .iter()
+                    .any(
+                        |attr| matches!(
+                            attr,
+                            Attribute::Str(name, Some(value)) if name == FP_EVAL && value == FP_EVAL_EXTENDED
+                        ),
+                    )
+            });
+            if !host_double {
+                return None;
+            }
+            match id {
+                Log | Log2 | Log10 if value == 0.0 => return None,
+                Log | Log2 | Log10 if value < 0.0 => return None,
+                Log | Log2 | Log10 if value == 1.0 => 0.0,
+                Atan if value == 0.0 => value,
+                Sqrt => value.sqrt(),
+                Sin => value.sin(),
+                Cos => value.cos(),
+                Atan => value.atan(),
+                Sinh => value.sinh(),
+                Cosh => value.cosh(),
+                Log => value.ln(),
+                Log2 => value.log2(),
+                Log10 => value.log10(),
+                Exp => value.exp(),
+                Exp2 => 2f64.powf(value),
+                Exp10 => 10f64.powf(value),
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    let libm = matches!(
+        id,
+        Sqrt | Sin | Cos | Atan | Sinh | Cosh | Log | Log2 | Log10 | Exp | Exp2 | Exp10
+    );
+    if libm && (!result.is_finite() || (result.abs() < f64::MIN_POSITIVE && value != 0.0 && result != 0.0)) {
+        return None;
+    }
+    let bits = match kind {
+        FloatKind::Double => result.to_bits(),
+        _ => u64::from((result as f32).to_bits()),
+    };
+    Some(context.constant(Constant { ty, kind: ConstantKind::Float(bits) }))
 }
 
 /// `APIntOps::pext`/`pdep`.
@@ -2389,6 +2515,27 @@ fn constant_fold_scalar_call3(
             let ty_width = context.types.int_bits(ty)?;
             Some(int(context, ty_width, product))
         }
+        // DEVIATE: LLVM folds no `sdiv.fix`, so a front end that emits one for
+        // constants leaves a run-time `idiv`. Rounded toward negative infinity,
+        // as the backend's expansion is; a zero divisor or a quotient that does
+        // not fit is left alone.
+        IntrinsicId::SdivFix => {
+            let (c0, width) = as_int(context, ops[0])?;
+            let (c1, _) = as_int(context, ops[1])?;
+            let (scale, _) = as_int(context, ops[2])?;
+            let (a, b) = (signed(c0, width), signed(c1, width));
+            if b == 0 || scale > 64 || width > 64 {
+                return None;
+            }
+            let numerator = a << scale;
+            let mut quotient = numerator / b;
+            if numerator % b != 0 && (numerator < 0) != (b < 0) {
+                quotient -= 1;
+            }
+            let ty_width = context.types.int_bits(ty)?;
+            let fits = signed(quotient as u128 & mask(width), width) == quotient;
+            fits.then(|| int(context, ty_width, quotient as u128 & mask(width)))
+        }
         IntrinsicId::Fshl | IntrinsicId::Fshr => {
             let (c0, width) = as_int(context, ops[0])?;
             let (c1, _) = as_int(context, ops[1])?;
@@ -2436,12 +2583,13 @@ pub fn constant_fold_intrinsic(
     name: &str,
     ops: &[ConstantId],
     ty: TypeId,
+    caller: Option<&Function>,
 ) -> Option<ConstantId> {
     let id = folded_intrinsic(name)?;
     if !can_constant_fold_intrinsic(id) || matches!(context.types.get(ty), Type::Vector { .. }) {
         return None;
     }
-    constant_fold_scalar_call(context, id, ty, ops, None)
+    constant_fold_scalar_call(context, id, ty, ops, caller)
 }
 
 /// `ConstantFoldCall`

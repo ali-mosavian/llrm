@@ -339,3 +339,45 @@ fn test_the_huge_string_routines_assemble() {
         assert!(routine.clobbers.contains(&RegId::ES), "{}", routine.name);
     }
 }
+
+/// Every call site of a huge-pointer or 64-bit divide routine assembled its
+/// source again ("huge_copy/fill helper assembly" 48 M and "M32 divide helper
+/// assembly" 60 M of the dag path's compile): a block is assembled once.
+#[test]
+fn a_helper_asked_for_twice_is_assembled_once() {
+    let before = crate::asm::ASSEMBLED.with(|count| count.get());
+    let first = crate::asm::assembled(
+        &["    mov eax, 0x5a5a1234", "    ret"],
+        crate::asm::Mode { bits: 32, segmented: false, address_bytes: 4, wide: true },
+    );
+    let again = crate::asm::assembled(
+        &["    mov eax, 0x5a5a1234", "    ret"],
+        crate::asm::Mode { bits: 32, segmented: false, address_bytes: 4, wide: true },
+    );
+    assert_eq!(first, again);
+    assert_eq!(crate::asm::ASSEMBLED.with(|count| count.get()) - before, 1);
+}
+
+/// The selector assembles a routine only for a call whose name starts with
+/// the routine kind's prefix: a routine named otherwise would be called and
+/// never laid down.
+#[test]
+fn every_routine_name_starts_with_its_kinds_prefix() {
+    use llrm_target::routines::{DIVIDE_PREFIX, HUGE_PREFIX};
+    for signed in [true, false] {
+        for wide in [true, false] {
+            for bits in [16, 32] {
+                let name = divide(signed, wide, bits).expect("a divide").name;
+                assert!(name.starts_with(DIVIDE_PREFIX), "{name}");
+            }
+        }
+    }
+    for cell in [1, 2, 4] {
+        let name = huge_fill(cell).expect("a fill").name;
+        assert!(name.starts_with(HUGE_PREFIX), "{name}");
+    }
+    for down in [false, true] {
+        let name = huge_copy(down).expect("a copy").name;
+        assert!(name.starts_with(HUGE_PREFIX), "{name}");
+    }
+}

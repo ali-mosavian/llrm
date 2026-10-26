@@ -75,6 +75,7 @@
 //! # Needs
 //! [`crate::backend::floatassign`], `live`, `spillplacement::bundles`.
 
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -91,7 +92,7 @@ use crate::backend::floatregions::{Raised, clears_stack};
 use crate::backend::spillplacement;
 use crate::model::ir::{Held, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{Block, Insn, LirBody};
-use crate::support::hash::{HashSet, IndexMap};
+use crate::support::hash::{HashMap, HashSet, IndexMap};
 
 /// What one step (an instruction, or a group of copies taken together) reads
 /// and writes of the floating values, and what is live after it.
@@ -155,7 +156,7 @@ struct Fps<'a> {
 /// popping form of an instruction that acts on the top of the stack.
 fn popping(what: &Semantics) -> Option<Semantics> {
     let name = what.name.as_deref()?;
-    let renamed = |name: &str| Semantics { name: Some(name.to_owned()), ..what.clone() };
+    let renamed = |name: &str| Semantics { name: Some(name.into()), ..what.clone() };
     match (what.op, name) {
         (Operation::FloatStore, "fst") => Some(renamed("fstp")),
         (Operation::FloatStore, "fist") => Some(renamed("fistp")),
@@ -171,7 +172,7 @@ fn popping(what: &Semantics) -> Option<Semantics> {
                     [first, second] if *first == what.dests[0] && *second == st(0)
                 ) =>
         {
-            Some(Semantics { op: Operation::FloatArithPop, name: Some(format!("{name}p")), ..what.clone() })
+            Some(Semantics { op: Operation::FloatArithPop, name: Some(format!("{name}p").into()), ..what.clone() })
         }
         _ => None,
     }
@@ -432,10 +433,10 @@ impl Fps<'_> {
             let floating = |loc: &Loc| matches!(loc, Loc::Held(held) if held.width == 10);
             match (what.dests.as_slice(), what.sources.as_slice()) {
                 ([Loc::Mem(_)], [source]) if floating(source) => {
-                    what = Semantics { op: Operation::FloatStore, name: Some("fstp".to_owned()), ..what };
+                    what = Semantics { op: Operation::FloatStore, name: Some("fstp".into()), ..what };
                 }
                 ([dest], [Loc::Mem(_)]) if floating(dest) => {
-                    what = Semantics { op: Operation::FloatLoad, name: Some("fld".to_owned()), ..what };
+                    what = Semantics { op: Operation::FloatLoad, name: Some("fld".into()), ..what };
                 }
                 _ => {}
             }
@@ -465,10 +466,13 @@ impl Fps<'_> {
             self.handle_two_arg_fp(step, name, *left, *right, results[0])?;
         } else if what.op == Operation::FloatLoad && unnamed(&what) && what.sources.is_empty() && !results.is_empty() {
             // `handleCall`'s STReturns: the callee left the result in st(0).
-            if !self.values.is_empty() {
-                return Err(unlowered("a call's floating result arrives on a stack that is not empty"));
+            // The stack was empty at the call (`flush`), so the result is the
+            // bottom entry: a value the allocator reloaded after
+            // the call (a `fld` ahead of this pseudo) was pushed on top of it.
+            if self.values.len() >= self.depth {
+                return Err(unlowered("floating instruction requires too many stack operands"));
             }
-            self.push(results[0])?;
+            self.values.push(results[0]);
             self.vacate();
         } else if what.op == Operation::FloatStore && unnamed(&what) && what.dests.is_empty() && operands.len() == 1 {
             self.handle_return(operands[0])?;
@@ -545,7 +549,7 @@ impl Fps<'_> {
     ) -> Result<(), Raised> {
         let what = self.one().what.clone().expect("a floating instruction has semantics");
         self.move_to_top(source)?;
-        let name = if name_is(&what, "fst") { Some("fstp".to_owned()) } else { what.name.clone() };
+        let name = if name_is(&what, "fst") { Some("fstp".into()) } else { what.name.clone() };
         if !step.kills(source) {
             let sized = |widths: &[u32]| {
                 what.dests
@@ -567,7 +571,7 @@ impl Fps<'_> {
                 _ => None,
             };
             if let Some(kept) = kept {
-                self.emit(Semantics { name: Some(kept.to_owned()), sources: vec![st(0)], ..what });
+                self.emit(Semantics { name: Some(kept.into()), sources: vec![st(0)], ..what });
                 return Ok(());
             }
             let scratch = self.take_fresh();
@@ -749,7 +753,7 @@ impl Fps<'_> {
         let what = self.one().what.clone().expect("a floating instruction has semantics");
         let integer = what.name.as_deref().is_some_and(|name| name.starts_with("fi"));
         let name = if integer { "ficom" } else { "fcom" };
-        self.emit(Semantics { name: Some(name.to_owned()), dests: Vec::new(), sources: vec![st(0), cell], ..what });
+        self.emit(Semantics { name: Some(name.into()), dests: Vec::new(), sources: vec![st(0), cell], ..what });
         if step.kills(left) {
             self.pop_stack_after();
         }
@@ -929,7 +933,17 @@ fn steps(
 /// `DEPTH` such blocks.
 const DEPTH: usize = 3;
 
+thread_local! {
+    /// The blocks `Ahead::renames` has scanned, counted for the test that fixes
+    /// it at one scan a block.
+    pub(super) static RENAME_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// What `Ahead::renames` found, by block.
+type Renamed = RefCell<HashMap<i64, Option<Vec<(u32, u32)>>>>;
+
 struct Ahead<'a> {
+    renamed: &'a Renamed,
     at_of: &'a IndexMap<i64, &'a Block>,
     bundles: &'a spillplacement::Bundles,
     live_bundles: &'a IndexMap<usize, LiveBundle>,
@@ -943,6 +957,22 @@ impl Ahead<'_> {
         &self,
         block: &Block,
     ) -> Option<Vec<(u32, u32)>> {
+        if let Some(found) = self.renamed.borrow().get(&block.at) {
+            return found.clone();
+        }
+        let found = self.scanned(block);
+        self.renamed.borrow_mut().insert(block.at, found.clone());
+        found
+    }
+
+    /// `renames`, worked out: asked once a block, since it reads every
+    /// instruction and `order` asks it of each block ahead again for every
+    /// block behind it.
+    fn scanned(
+        &self,
+        block: &Block,
+    ) -> Option<Vec<(u32, u32)>> {
+        RENAME_SCANS.with(|scans| scans.set(scans.get() + 1));
         let mut pairs = Vec::new();
         for one in &block.insns {
             let floats = one.what.as_ref().is_some_and(|what| what.sources.iter().chain(&what.dests).any(_floating));
@@ -1042,7 +1072,17 @@ pub(super) fn converted(
     let split = floatalloc::_split_for_the_stack(body, &floating, (&live_in, &live_out), &bundles);
     let (body, live_in, live_out, bundles) = match split {
         Some(body) => {
-            let (live_in, live_out) = live_among(&body, |value| floating.contains(&value));
+            // A block made on an edge holds no instruction: what is live at its
+            // entry and its exit is what is live into the block it
+            // leads to, and no other block's rows change.
+            let (mut live_in, mut live_out) = (live_in, live_out);
+            for block in &body.blocks {
+                if !live_in.contains_key(&block.at) {
+                    let into = live_in[&block.succ[0]].clone();
+                    live_out.insert(block.at, into.clone());
+                    live_in.insert(block.at, into);
+                }
+            }
             let bundles = spillplacement::bundles(&body);
             (std::borrow::Cow::Owned(body), live_in, live_out, bundles)
         }
@@ -1092,6 +1132,7 @@ pub(super) fn converted(
     };
     let border = |at: i64| Arc::new(inserted(at, semantics(Operation::Nothing, "", Vec::new(), Vec::new())));
     let mut made: IndexMap<i64, Block> = IndexMap::default();
+    let renamed: Renamed = RefCell::new(HashMap::default());
     for at in depth_first(body) {
         let block = at_of[&at];
         let (entry, exit) = bundles.of[&at];
@@ -1131,7 +1172,13 @@ pub(super) fn converted(
         fps.one = Some(border(block.insns.get(cut).or(block.insns.last()).map_or(block.at, |one| one.at)));
         if block.succ.iter().any(|successor| at_of.contains_key(successor)) {
             let mut bundle = std::mem::take(live_bundles.get_mut(&exit).expect("a bundle"));
-            let ahead = Ahead { at_of: &at_of, bundles: &bundles, live_bundles: &live_bundles, floating: &floating };
+            let ahead = Ahead {
+                renamed: &renamed,
+                at_of: &at_of,
+                bundles: &bundles,
+                live_bundles: &live_bundles,
+                floating: &floating,
+            };
             let hint = successor_order(&ahead, block, &bundle.mask);
             let finished = fps.finish_block_stack(&mut bundle, hint);
             live_bundles.insert(exit, bundle);

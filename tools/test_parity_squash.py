@@ -11,6 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import parity_squash as ps  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
 
 
 def sh(repo: Path, *args: str) -> str:
@@ -748,6 +749,26 @@ def test_a_head_cached_with_a_bare_step_name_covers_that_steps_tests():
     assert ps.new_names({"ratchet:x"}, {"ratchet:x::t", "ratchet:y::t"}) == ["ratchet:y::t"]
 
 
+def test_a_listed_test_that_passes_refuses_the_batch_and_the_head_does_not_excuse_it():
+    """An `xpass unit ...` name from the lib layer is a refusal of its own: it is not a failure to compare with the head's."""
+    xpass = {"xpass unit llrm-nib::test_debug::fixed"}
+    on_head = lambda by_package: pytest.fail("the head is asked about a pass")  # noqa: E731
+    assert ps.new_lib_failures(["crates/frontends/llrm-nib/src/lib.rs"], on_merged=lambda packages: set(xpass), on_head=on_head) == xpass
+
+
+def _closure(path):
+    smoke = ps.parity_smoke_module()
+    packages, graph = smoke.workspace_graph()
+    return smoke.dependants(smoke.touched_packages([path], packages), graph)
+
+
+def test_a_red_test_in_a_crate_that_depends_on_the_changed_one_is_refused():
+    """llrm-c's lib tests were red on parity while PRs merged: each PR changed a crate llrm-c depends on, and the fast tier ran the changed crates only."""
+    red = {"unit llrm-c::compile::tests::a_call_boundary_listing"}
+    on_merged = lambda packages: set(red) if "llrm-c" in packages else set()  # noqa: E731
+    assert ps.new_lib_failures(["crates/backend/llrm-core/src/backend/peephole.rs"], on_merged=on_merged, on_head=lambda by_package: set()) == red
+
+
 def test_a_red_test_in_a_changed_crate_is_refused_and_one_the_head_fails_too_is_not():
     """#3578 landed with four red llrm-transforms lib tests: the fast path ran no test. With LAND_FAST_TESTS the changed crates' lib tests run on the merged tree and a failing one the head
     passes refuses the batch. Control on the real functions (a planted `assert!(false)` in llrm-transforms): refused naming it in 88 s; none on the clean head."""
@@ -760,7 +781,7 @@ def test_a_red_test_in_a_changed_crate_is_refused_and_one_the_head_fails_too_is_
         return set(red)
 
     assert ps.new_lib_failures(files, on_merged=on_merged, on_head=lambda by_package: set()) == red
-    assert asked["packages"] == {"llrm-transforms", "llrm-mir"}
+    assert asked["packages"] == _closure("crates/opt/llrm-transforms/src/memcpyoptimizer.rs") | {"llrm-mir"}
     assert ps.new_lib_failures(files, on_merged=on_merged, on_head=lambda by_package: {next(iter(red))}) == set()
     assert ps.new_lib_failures(["docs/x.md"], on_merged=on_merged, on_head=lambda by_package: set()) == set()
 
@@ -774,7 +795,8 @@ def test_a_passing_batch_prints_what_the_lib_layer_ran(capsys):
         return set()
 
     assert ps.new_lib_failures(["crates/opt/llrm-transforms/src/gvn.rs"], on_merged=on_merged, on_head=lambda by_package: set()) == set()
-    assert "lib tests: 2 crates, 940 tests passed (abcd1234), 12s" in capsys.readouterr().out
+    crates = len(_closure("crates/opt/llrm-transforms/src/gvn.rs") | {"llrm-mir"})
+    assert f"lib tests: {crates} crates, 940 tests passed (abcd1234), 12s" in capsys.readouterr().out
     assert ps.new_lib_failures(["docs/x.md"], on_merged=on_merged, on_head=lambda by_package: set()) == set()
     assert "lib tests: 0 crates, 0 tests passed (no crate changed)" in capsys.readouterr().out
 
@@ -789,7 +811,7 @@ def test_a_change_to_any_crate_source_also_runs_the_scan_crates_lib_tests():
 
     ps.new_lib_failures(["crates/opt/llrm-transforms/src/extload.rs"], on_merged=on_merged, on_head=lambda by_package: set())
     ps.new_lib_failures(["docs/x.md"], on_merged=on_merged, on_head=lambda by_package: set())
-    assert asked == [{"llrm-transforms", "llrm-mir"}]
+    assert asked == [_closure("crates/opt/llrm-transforms/src/extload.rs") | {"llrm-mir"}]
 
 
 def test_a_unit_the_head_passes_names_the_offender_and_the_rest_are_tested_once():
@@ -979,7 +1001,7 @@ def test_a_change_to_llrm_hir_also_runs_llrm_cs_toolchain_lib_tests():
     ps.new_lib_failures(["crates/ir/llrm-hir/src/mir.rs"], on_merged=on_merged, on_head=lambda by_package: set())
     ps.new_lib_failures(["crates/opt/llrm-transforms/src/gvn.rs"], on_merged=on_merged, on_head=lambda by_package: set())
     assert "llrm-c" in asked[0] and "llrm-hir" in asked[0]
-    assert "llrm-c" not in asked[1]
+    assert "llrm-c" in asked[1]
 
 
 def test_the_tool_modules_are_loaded_before_a_landing_can_change_them(tmp_path, monkeypatch):
@@ -993,3 +1015,173 @@ def test_the_tool_modules_are_loaded_before_a_landing_can_change_them(tmp_path, 
 
     assert importlib.import_module("fake_tool").VERSION == 1
     assert {"parity_smoke", "xfail", "buildslot"} <= set(ps.TOOL_MODULES)
+
+
+def test_the_scanner_layer_refuses_a_red_scanner_the_head_passes_and_runs_the_registry(capsys):
+    """#3899 landed with tests/selectiondag_registry.rs red: the fast layer ran lib tests only. It now runs the root scanners and a test file the batch changes."""
+    asked = []
+    red = {"integration selectiondag_registry::a_number_with_no_row_is_reported"}
+
+    def merged(targets):
+        asked.append(list(targets))
+        return set(red)
+
+    files = ["crates/backend/llrm-core/src/backend/selectiondag/dag_function.rs", "tests/new_scan.rs"]
+    assert ps.new_scanner_failures(files, on_merged=merged, on_head=lambda targets: set()) == red
+    assert "selectiondag_registry" in asked[0] and "new_scan" in asked[0] and "turbo" not in asked[0]
+    assert ps.new_scanner_failures(files, on_merged=merged, on_head=lambda targets: set(red)) == set()
+    assert "scanners: " in capsys.readouterr().out
+
+
+def test_a_pr_added_to_waits_during_the_batch_is_not_pushed_and_is_held(tmp_path, monkeypatch):
+    """#4057 landed through a hold the coordinator added while its batch ran: waits.txt was read once, to build the queue. The squash reads it again."""
+    waits = tmp_path / "waits.txt"
+    waits.write_text("# owner waits\n2697 # parked\n")
+    monkeypatch.setenv("WAITS", str(waits))
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b"}
+    assert ps.squash("4057", info, "body", run=run) is True and calls, "not held: squashed"
+    calls.clear()
+    waits.write_text("# owner waits\n2697 # parked\n4057 # held mid-batch\n")
+    assert ps.squash("4057", info, "body", run=run) is None
+    assert not calls, "nothing was pushed or merged"
+    assert ps.waiting("4057") and not ps.waiting("405") and not ps.waiting("2698")
+
+
+def test_the_docs_scanner_runs_at_landing_without_the_lib_tests_switch():
+    """#4039 landed an unlinked docs page red (tests/docs_links): the scanner layer ran only with LAND_FAST_TESTS=1, which the runner does not set."""
+    asked = []
+
+    def on_merged(targets):
+        asked.append(list(targets))
+        return {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}
+
+    assert ps.landing_scanner_failures(["docs/working/x.md"], False, on_merged=on_merged, on_head=lambda t: set()) == {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}
+    assert asked == [["docs_links", "no_local_paths"]]
+    asked.clear()
+    ps.landing_scanner_failures(["docs/working/x.md"], True, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
+    assert "docs_links" in asked[0] and len(asked[0]) > 1
+
+
+def test_the_scanner_line_names_the_tree_it_scanned():
+    """#4039 landed after `scanners: 13 targets, 0 red`; replaying its PRs on the head is red, and the log did not say which tree the scanners saw."""
+    assert ps.scanner_tests_line(["docs_links"], set(), "abc123def") == "scanners: 1 targets, 0 red (tree abc123def)"
+    assert ps.scanner_tests_line(["docs_links"], {"x"}) == "scanners: 1 targets, 1 red"
+
+
+def test_a_pr_is_rescanned_when_the_batch_dropped_one_after_its_scan():
+    """The batch's scanners ran on a tree with #4042 in it; #4042 failed at the squash ("Head branch was modified") and the others were pushed on a tree no scanner had seen."""
+    asked = []
+    red = lambda number, info: asked.append(number) or {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}  # noqa: E731
+    assert ps.rescanned_refusal("4039", {}, [], rescan=red) == "" and not asked, "nothing dropped: the batch's scan stands"
+    why = ps.rescanned_refusal("4039", {}, ["4042"], rescan=red)
+    assert asked == ["4039"] and "dropped #4042" in why and "docs_links" in why
+    assert ps.rescanned_refusal("4039", {}, ["4042"], rescan=lambda n, i: set()) == ""
+    import inspect
+
+    assert "rescanned_refusal(number" in inspect.getsource(ps.merge_batch), "land() calls it before pushing"
+
+
+def test_a_squash_github_refuses_prints_the_reason(capsys):
+    """`4108: REFUSED: #4108 ` named no reason: the log held GitHub's message on a line the summary does not carry, and the only REFUSED text left was the batch's summary."""
+    info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b"}
+    refuse = lambda command, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)\n")  # noqa: E731
+    assert ps.squash("4108", info, "body", run=refuse) is False
+    out = capsys.readouterr().out
+    assert "#4108: REFUSED: the squash was refused by GitHub: GraphQL: Head branch was modified" in out and "(mergePullRequest)" in out
+
+
+def test_a_doc_naming_a_path_of_one_machine_is_refused_at_landing_without_the_lib_tests_switch():
+    """tests/no_local_paths went red on parity from a doc naming ~/scratch (#4086) and nothing at landing ran it."""
+    def on_merged(targets):
+        return {"integration no_local_paths::test_no_tracked_markdown_names_a_path_of_one_machine"} if "no_local_paths" in targets else set()
+
+    failed = ps.landing_scanner_failures(["docs/working/machine-cleanup-compile-plan.md"], False, on_merged=on_merged, on_head=lambda t: set())
+    assert failed == {"integration no_local_paths::test_no_tracked_markdown_names_a_path_of_one_machine"}
+    smoke = ps.parity_smoke_module()
+    assert set(ps.ALWAYS_SCANNERS) <= set(smoke.SCANNERS) and not set(ps.ALWAYS_SCANNERS) & set(smoke.NIGHTLY_ONLY)
+
+
+def test_a_pr_refused_for_its_own_head_is_held_until_its_head_changes(tmp_path):
+    """#4142 was refused six times, #4145 and #4146 four, each with the same head, each retry a batch of 1-14 minutes (21:47-22:22, 2026-10-23)."""
+    state = tmp_path / "held.state"
+    reasons = {"4142": "alone on the head it fails unit llrm-core::x", "4145": "alone on the head it does not build: error", "4150": "conflicts with an earlier PR of the batch or with feat/parity", "4151": "the batch dropped #4142 after its scan"}
+    heads = {"4142": "aaa", "4145": "bbb", "4150": "ccc", "4151": "ddd"}
+    lines = ps.hold_own_refusals(["4142", "4145", "4150", "4151"], reasons, heads, state)
+    assert lines == ["#4142: held until head changes: aaa", "#4145: held until head changes: bbb"]
+    assert ps.held_at("4142", "aaa", state), "the same head twice: held the second time"
+    assert not ps.held_at("4142", "zzz", state), "a new head: included"
+    assert not ps.held_at("4150", "ccc", state) and not ps.held_at("4151", "ddd", state), "a conflict and a dropped batch are not the PR's own"
+    ps.hold_own_refusals(["4142"], reasons, {"4142": "zzz"}, state)
+    assert ps.held_at("4142", "zzz", state) and not ps.held_at("4142", "aaa", state), "one line per PR, the latest head"
+
+
+def _gh(outcomes):
+    """A gh whose successive `pr merge` calls end as `outcomes` (a stderr, or "" for success)."""
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        said = outcomes[len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) - 1] if command[:3] == ["gh", "pr", "merge"] else ""
+        return SimpleNamespace(returncode=1 if said else 0, stdout="", stderr=said)
+
+    return run, calls
+
+
+OUT_OF_DATE = "GraphQL: Head branch is out of date. Review and try the merge again. (mergePullRequest)"
+
+
+def test_a_head_that_is_only_out_of_date_gets_parity_merged_and_the_squash_retried_once(capsys):
+    """#3477 was refused twice with `Head branch is out of date`: another landing had moved feat/parity, the owner had done nothing."""
+    run, calls = _gh([OUT_OF_DATE, ""])
+    info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b"}
+    assert ps.squash("3477", info, "body", run=run, settle=0, merge=lambda head, branch: "c" * 40) is True
+    merges = [c for c in calls if c[:3] == ["gh", "pr", "merge"]]
+    assert len(merges) == 2 and merges[1][merges[1].index("--match-head-commit") + 1] == "c" * 40
+    assert "#3477: head out of date: merged parity ccccccccc, retried" in capsys.readouterr().out
+
+
+def test_out_of_date_with_a_conflict_is_the_owners_and_a_second_out_of_date_is_refused(capsys):
+    info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b"}
+    run, calls = _gh([OUT_OF_DATE, ""])
+    assert ps.squash("1", info, "body", run=run, settle=0, merge=lambda head, branch: "") is False
+    assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 1, "a conflict: no retry"
+    assert "does not merge into it cleanly" in capsys.readouterr().out
+    run, calls = _gh([OUT_OF_DATE, OUT_OF_DATE, ""])
+    assert ps.squash("2", info, "body", run=run, settle=0, merge=lambda head, branch: "d" * 40) is False
+    assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 2, "one merge and one retry, no more"
+
+
+def test_a_race_with_another_landing_is_not_held_as_the_prs_own():
+    assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Head branch is out of date. Review and try the merge again.")
+    assert not ps.own_refusal("head out of date and feat/parity does not merge into it cleanly: the owner merges fresh feat/parity")
+
+
+def test_every_stage_of_the_fast_pass_stamps_the_batch_log():
+    """The 11:13 batch (58 min) logged the lib tests' and the behavioural stage's seconds and nothing else: 37 min of builds, checks and waits could not be placed. Each stage of
+    `passes_fast` now prints a STAGE line before its work, in the order they run."""
+    import inspect
+
+    source = inspect.getsource(ps.merge_batch)
+    names = ["fast-merge", "workspace-check", "lib-tests", "scanners", "link", "behavioural"]
+    at = [source.find(f'stage("{name}")') for name in names]
+    assert all(i >= 0 for i in at), dict(zip(names, at))
+    assert at == sorted(at), "stamped out of the order they run"
+
+
+def test_the_always_on_scanners_run_before_the_lib_tests_of_a_batch():
+    """The 11:13 batch ran `lib tests ... 363s` and only then found docs_links red for three PRs: a pass of minutes bought nothing, and each refusal repeats the pass. The scanners
+    that take milliseconds (docs_links, no_local_paths) now refuse first; the full set still runs after the lib tests."""
+    import inspect
+
+    source = inspect.getsource(ps.merge_batch)
+    early = source.find('stage("scanners-early")')
+    lib = source.find('stage("lib-tests")')
+    assert 0 <= early < lib, (early, lib)
+    assert "landing_scanner_failures(changed, False)" in source[early:lib]
+    assert source.find('stage("scanners")') > lib, "the full scanner set still runs after the lib tests"

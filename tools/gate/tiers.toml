@@ -76,7 +76,7 @@ owners = ["tests/test_programs_compile.py", "tests/test_loops.py", "tests/test_i
 [[heavy]]
 step = "dos-slow"
 why = "NIBBLES and GORILLA played on dos32 against BCOM45, and the graphics sweeps: 5 to 8 minutes (tools/dosbatch/conftest.py's slow_dos tier)"
-owners = ["runtime/qb/**", "runtime/shared/dos/**", "crates/frontends/qbfront/**", "crates/frontends/llrm-qb/**", "crates/frontends/llrm-qbruntime/**", "crates/ir/llrm-hir/src/mir*", "crates/backend/llrm-core/src/driver/basic.rs", "tools/dosbatch/**", "toolchain/dosrunbuild.sh"]
+owners = ["runtime/qb/**", "runtime/shared/dos/**", "crates/frontends/qb/**", "crates/frontends/qb/**", "runtime/qb/**", "crates/ir/llrm-hir/src/mir*", "crates/backend/llrm-core/src/driver/basic.rs", "tools/dosbatch/**", "toolchain/dosrunbuild.sh"]
 
 [[heavy]]
 step = "qcport"
@@ -100,7 +100,7 @@ owners = ["crates/backend/**", "crates/opt/**", "crates/frontends/llrm-c/**", "c
 
 # `run` always runs when code changed, on the languages the diff can affect (all, in a full tier).
 [run_languages]
-qb = ["crates/frontends/llrm-qb/**", "crates/frontends/qbfront/**", "crates/frontends/llrm-qbruntime/**", "tests/run/qb/**"]
+qb = ["crates/frontends/qb/**", "crates/frontends/qb/**", "runtime/qb/**", "tests/run/qb/**"]
 c = ["crates/frontends/llrm-c/**", "tests/run/c/**"]
 nib = ["crates/frontends/llrm-nib/**", "tests/run/nib/**"]
 # Everything else (targets, examples, bench, tests/run/huge, tests/run/alias, run.rs) runs all languages.
@@ -156,6 +156,10 @@ step = "integration"
 
 [[scan]]
 file = "tests/no_kill_by_pattern.rs"
+step = "integration"
+
+[[scan]]
+file = "tests/no_partial_ecx_counts.rs"
 step = "integration"
 
 # Whole binaries that are heavy: every test in them is slow.

@@ -279,7 +279,9 @@ def linked_objects(source: Path, work: Path, runtime: str = "qb45", flags: tuple
             library = source.parent / name
             obj = work / f"{library.stem}.{runtime}{tag}.obj"
             done = subprocess.run(
-                [str(dosbatch.BIN / "llrm-nib"), str(library), "-o", str(obj), "-O2", f"--basic-runtime={runtime}", *flags],
+                dosbatch.with_isel(
+                    [str(dosbatch.BIN / "llrm-nib"), str(library), "-o", str(obj), "-O2", f"--basic-runtime={runtime}", *flags]
+                ),
                 capture_output=True,
                 text=True,
             )

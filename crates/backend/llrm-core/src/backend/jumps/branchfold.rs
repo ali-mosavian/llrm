@@ -85,6 +85,13 @@ impl Exit {
     }
 }
 
+/// A branch that reads or writes a counter (`jcxz`, `loop`), not only the
+/// flags: it has no opposite, and dropping, hoisting over or merging it changes
+/// the counter. LLVM's `analyzeBranch` gives up on it.
+fn counted(one: &Insn) -> bool {
+    one.what.as_ref().and_then(|what| what.name.as_deref()).is_some_and(|name| !_OPPOSITE.contains_key(name))
+}
+
 /// `one` going to `target`, the condition made `name` if given.
 fn aimed(
     one: &Arc<Insn>,
@@ -92,7 +99,7 @@ fn aimed(
     name: Option<&str>,
 ) -> Arc<Insn> {
     let what = one.what.as_ref().expect("a branch has semantics");
-    let name = name.map(str::to_owned).or_else(|| what.name.clone());
+    let name = name.map(std::sync::Arc::<str>::from).or_else(|| what.name.clone());
     Arc::new(Insn { what: Some(Semantics { name, target: Some(target), ..what.clone() }), ..(**one).clone() })
 }
 
@@ -251,7 +258,13 @@ impl<'a> Folder<'a> {
         {
             return self.bypass(index, onward);
         }
+        if self.merged(index) {
+            return true;
+        }
         let exit = Exit::of(&block);
+        if exit.cond.as_deref().is_some_and(counted) {
+            return false;
+        }
         // A conditional whose two ways are one block.
         if let (Some(cond), Some(jump)) = (&exit.cond, &exit.jump)
             && exit.taken == exit.other
@@ -276,11 +289,7 @@ impl<'a> Folder<'a> {
             && block.succ.len() == 1
         {
             let jump = Arc::new(Insn {
-                what: Some(Semantics {
-                    name: Some("jmp".to_owned()),
-                    target: Some(to),
-                    ..Semantics::new(Operation::Jump)
-                }),
+                what: Some(Semantics { name: Some("jmp".into()), target: Some(to), ..Semantics::new(Operation::Jump) }),
                 uses: Vec::new(),
                 ..(**cond).clone()
             });
@@ -360,6 +369,7 @@ impl<'a> Folder<'a> {
             let ahead = Exit::of(&previous);
             let name = |one: &Arc<Insn>| one.what.as_ref().and_then(|what| what.name.clone());
             if let (Some(earlier), None, Some(there)) = (&ahead.cond, &ahead.jump, ahead.taken)
+                && !counted(earlier)
                 && there == taken
                 && name(earlier) == name(cond)
                 && self.after(before) == Some(block.at)
@@ -382,6 +392,51 @@ impl<'a> Folder<'a> {
             }
         }
         self.hoist_common(index, &exit)
+    }
+
+    /// The block before runs into this one and nothing else enters it: the
+    /// two are one block, the contents of this one moved to the end of the
+    /// other (L1515).
+    fn merged(
+        &mut self,
+        index: usize,
+    ) -> bool {
+        let block = self.blocks[index].clone();
+        let Some(before) = self.prev[index] else { return false };
+        let previous = self.blocks[before].clone();
+        let exit = Exit::of(&previous);
+        if block.at == self.entry
+            || self.protected.contains(&block.at)
+            || !block.phis.is_empty()
+            || exit.cond.is_some()
+            || exit.jump.is_some()
+            || previous.succ.len() != 1
+            || !previous.succ.contains(&block.at)
+            || !runs_off(&previous)
+            || self.after(before) != Some(block.at)
+            || self.preds.get(&block.at).is_none_or(|entering| entering.len() != 1 || !entering.contains(&previous.at))
+        {
+            return false;
+        }
+        for (to, chance) in self.odds.chances(block.at, &block.succ) {
+            self.odds
+                .taken
+                .insert((previous.at, to), (chance * BlockOdds::CERTAIN).round().min(f64::from(u32::MAX)) as u32);
+        }
+        for to in block.succ.iter() {
+            if let Some(entering) = self.preds.get_mut(to) {
+                entering.remove(&block.at);
+                entering.insert(previous.at);
+            }
+        }
+        let insns = previous.insns.iter().chain(block.insns.iter()).cloned().collect();
+        self.set(before, LirBlock { succ: block.succ.clone(), ..previous.with_insns(insns).into_inner() });
+        // `pass` removes it: nothing enters it and it enters no one.
+        self.set(index, LirBlock { succ: Default::default(), ..block.with_insns(Vec::new()).into_inner() });
+        if let Some(entering) = self.preds.get_mut(&block.at) {
+            entering.clear();
+        }
+        true
     }
 
     /// `HoistCommonCodeInSuccs` (L2043): the first instruction both ways of a
@@ -519,7 +574,7 @@ impl<'a> Folder<'a> {
         let jump = Insn::new(
             at,
             Some((at, at)),
-            Some(Semantics { name: Some("jmp".to_owned()), target: Some(to), ..Semantics::new(Operation::Jump) }),
+            Some(Semantics { name: Some("jmp".into()), target: Some(to), ..Semantics::new(Operation::Jump) }),
             Vec::new(),
             Vec::new(),
         );

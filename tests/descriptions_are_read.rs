@@ -65,6 +65,11 @@ fn descriptions() -> Vec<PathBuf> {
         .into_iter()
         .filter(|path| {
             let name = path.file_name().unwrap().to_string_lossy();
+            // The QB runtime's own routine table, rows named by routine; its
+            // crate reads it whole, as the frontend crate did before it moved.
+            if path.ends_with("runtime/qb/src/runtime.toml") {
+                return false;
+            }
             let in_src = path.components().any(|one| one.as_os_str() == "src" || one.as_os_str() == "runtime")
                 || name == "platform.toml";
             in_src

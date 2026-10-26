@@ -241,7 +241,7 @@ fn test_the_key_of_a_sum_is_hashed_in_a_few_writes() {
     use super::expr::{Scev, Type, Use};
     let key = super::Key {
         tag: Type::Add,
-        ops: vec![Use::of(Scev(3)), Use::of(Scev(4))],
+        ops: std::borrow::Cow::Owned(vec![Use::of(Scev(3)), Use::of(Scev(4))]),
         ty: Some(super::expr::Ty::Int(32)),
         constant: None,
         value: None,

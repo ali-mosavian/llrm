@@ -19,7 +19,7 @@ use crate::abi::machine::Machine;
 use crate::backend::shadow::Selector;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-fno-inline=NAME]... [-disable-lsr] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-fexcess-precision=standard|fast] [-f[no-]float-store] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [-m[no-]bss-begin] [-mcode-segment=NAME] [--isel=old|dag] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-g] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-fno-inline=NAME]... [-disable-lsr] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-fexcess-precision=standard|fast] [-f[no-]float-store] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [-m[no-]bss-begin] [-mcode-segment=NAME] [--isel=old|dag|shadow] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-g] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -79,7 +79,6 @@ impl Level {
 /// gcc's `-f` pass names, each with the options it sets.
 const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("allocation-search", |options, on| options.search = on),
-    ("allocation-routes", |options, on| options.routes = on),
     ("allocation-search-all", |options, on| options.exhaustive = on),
     ("unroll-loops", |options, on| {
         options.unroll = on;
@@ -103,7 +102,7 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("loop-unroll-and-jam", |options, on| options.unroll_and_jam = on),
     ("tree-ch", |options, on| options.copy_headers = on),
     ("ipa-cp-clone", |options, on| options.inline.cp_clone = on),
-    ("ipa-vrp", |options, on| options.ipa_ranges = on),
+    ("inline-recursive", |options, on| options.inline.recursive = on),
     ("gcse", |options, on| (options.forward, options.drop_loads) = (on, on)),
     ("tree-pre", |options, on| options.pre = on),
     ("tree-switch-conversion", |options, on| options.switch_conversion = on),
@@ -111,6 +110,9 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("tree-dse", |options, on| options.drop_stores = on),
     ("tree-dce", |options, on| options.dead = on),
     ("tree-sink", |options, on| options.sink = on),
+    ("llrm-spares", |options, on| options.spare_loads = on),
+    ("llrm-homes", |options, on| options.stored_homes = on),
+    ("llrm-stable-loads", |options, on| options.stable_loads = on),
     ("tree-sra", |options, on| options.promote = on),
     ("move-loop-invariants", |options, on| options.hoist = on),
     ("tree-loop-distribute-patterns", |options, on| options.loopidioms = on),

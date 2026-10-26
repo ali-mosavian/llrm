@@ -24,12 +24,15 @@
 //! views are never the destination; a byte load is left alone when the code is
 //! for size (`OptForSize`, L455).
 //!
+//! The second half of `getSuperRegDestIfDead` (an implicit-def of the super
+//! register on a `MOV8rm`, `MOV16rm`, `MOV8rr` or `MOV16rr` whose upper bits
+//! were undefined, where the pin's liveness has no sub-register lanes) is N/A:
+//! `dead_after` is per lane, so a dead upper half is already dead.
+//!
 //! DEVIATE W1 (no number yet): in real mode the dword form takes the 0x66
 //! prefix, so the pin's claim that the size is the same is false there; the
 //! rewrite is made only if it is no longer. Exit: none (a fact of the
-//! encoding). DEVIATE W3 (no number yet): the pin refuses `movsx ax,al` only as
-//! the registers AX and AL; here a `movsx` within one register is refused
-//! whatever the registers. Owner w-5.
+//! encoding). `movsx ax,al` stays `cbw`, as the pin leaves it.
 //!
 //! # Example
 //! `unsigned char c = *p;` at `-m32 -O2`, where the rest of `eax` is dead:
@@ -55,7 +58,7 @@ use crate::backend::peep::guards::{free_fields, short_in_real_mode_at};
 use crate::backend::peep::{field, make};
 use crate::backend::peephole::{_lanes, id};
 use crate::backend::regthrash::_dead_after;
-use crate::model::ir::{self, Loc, Operation, Reg};
+use crate::model::ir::{Loc, Operation, Reg};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 
@@ -229,15 +232,13 @@ impl FixupBw {
     ) -> Option<Insn> {
         let wide = Self::super_reg_dest_if_dead(regs, dest, dead)?;
         let name = one.what.as_ref()?.name.clone()?;
-        if let Some(src) = src {
-            // Do not interfere with the formation of `cbw` (DEVIATE W3: any
-            // extension within one register).
-            if regs.is_segment(src.register)
-                || !_lanes(regs, src.register).iter().all(|lane| lane.1 < src.width as u32)
-                || (name == "movsx" && ir::root(src.register) == ir::root(dest.register))
-            {
-                return None;
-            }
+        // Don't interfere with the formation of `cbw`, a shorter encoding than
+        // even the `movsx` to a dword.
+        if &*name == "movsx"
+            && dest.register == llrm_lir::registers::RegId::AX
+            && src.is_some_and(|src| src.register == llrm_lir::registers::RegId::AL)
+        {
+            return None;
         }
         let new = rebuilt(one, &name, Operation::Extend, wide, None);
         let fields = if src.is_some() { WIDENING } else { WIDENING_LOAD };
@@ -256,11 +257,118 @@ fn rebuilt(
 ) -> Insn {
     let mut new = (**one).clone();
     let what = new.what.as_mut().expect("semantics");
-    what.name = Some(name.to_owned());
+    what.name = Some(name.into());
     what.op = op;
     what.dests = vec![Loc::Reg(wide)];
     if let Some(source) = source {
         what.sources = vec![source];
     }
     new
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use llrm_lir::registers::RegId;
+
+    use super::*;
+    use crate::model::ir::Semantics;
+    use crate::model::lir::{Insn, LirBlock};
+    use crate::support::hash::IndexMap;
+
+    fn reg(
+        register: RegId,
+        width: u32,
+    ) -> Loc {
+        Loc::Reg(Reg { register, width })
+    }
+
+    /// `movsx dest, src` alone in a body, `dest`'s register dead after it.
+    fn extended(
+        dest: Loc,
+        src: Loc,
+    ) -> (String, Loc) {
+        let what = Semantics {
+            name: Some("movsx".into()),
+            dests: vec![dest],
+            sources: vec![src],
+            ..Semantics::new(Operation::Extend)
+        };
+        let insn = Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![], vec![]));
+        let ret = Semantics { name: Some("ret".into()), ..Semantics::new(Operation::Return) };
+        let mut ret = Insn::new(1, Some((1, 1)), Some(ret), vec![], vec![]);
+        // A return that reads nothing but what it requires and the epilogue's.
+        ret.reads_complete = true;
+        let ret = Arc::new(ret);
+        let mut body = LirBody::new(
+            "f",
+            0,
+            vec![LirBlock::new(0, vec![insn, ret]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.bits = 32;
+        let done = FixupBw { size: false }.fixed(&body);
+        let one = &done.blocks[0].insns[0];
+        let what = one.what.as_ref().expect("semantics");
+        (what.name.as_deref().expect("a name").to_owned(), what.dests[0].clone())
+    }
+
+    /// The pin leaves only `movsx ax, al` (`cbw`); `movsx cx, cl` is
+    /// `movsx ecx, cl`. A `movsx` within one register was refused whatever its
+    /// registers.
+    #[test]
+    fn only_movsx_ax_al_stays_as_cbw() {
+        assert_eq!(extended(reg(RegId::AX, 2), reg(RegId::AL, 1)).1, reg(RegId::AX, 2));
+        assert_eq!(extended(reg(RegId::CX, 2), reg(RegId::CL, 1)).1, reg(RegId::ECX, 4));
+    }
+
+    /// `mov ax, [esi]` then `reader`, whose result nobody reads: the name of
+    /// the load after the pass.
+    fn load_before(reader: Semantics) -> String {
+        let cell = Loc::Mem(crate::model::ir::Mem { through: RegId::ESI, ..crate::model::ir::Mem::new(None, 2) });
+        let what = Semantics {
+            name: Some("mov".into()),
+            dests: vec![reg(RegId::AX, 2)],
+            sources: vec![cell],
+            ..Semantics::new(Operation::Move)
+        };
+        let load = Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![], vec![]));
+        let read = Arc::new(Insn::new(1, Some((1, 1)), Some(reader), vec![], vec![]));
+        let ret = Semantics { name: Some("ret".into()), ..Semantics::new(Operation::Return) };
+        let mut ret = Insn::new(2, Some((2, 2)), Some(ret), vec![], vec![]);
+        ret.reads_complete = true;
+        let mut body = LirBody::new(
+            "f",
+            0,
+            vec![LirBlock::new(0, vec![load, read, Arc::new(ret)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.bits = 32;
+        let done = FixupBw { size: false }.fixed(&body);
+        done.blocks[0].insns[0].what.as_ref().expect("semantics").name.clone().expect("a name").to_string()
+    }
+
+    fn copy(
+        dest: Loc,
+        source: Loc,
+    ) -> Semantics {
+        Semantics {
+            name: Some("mov".into()),
+            dests: vec![dest],
+            sources: vec![source],
+            ..Semantics::new(Operation::Move)
+        }
+    }
+
+    /// `mov ax,[esi]; mov ebx,eax`: the dword copy reads the upper half of EAX,
+    /// which the load leaves as it was. Made `movzx eax,[esi]`, the copy read
+    /// zeros.
+    #[test]
+    fn a_word_load_stays_where_the_dword_is_read_after_it() {
+        assert_eq!(load_before(copy(reg(RegId::EBX, 4), reg(RegId::EAX, 4))), "mov");
+        assert_eq!(load_before(copy(reg(RegId::BX, 2), reg(RegId::AX, 2))), "movzx");
+    }
 }

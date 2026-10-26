@@ -18,7 +18,7 @@ fn insn(
     dests: Vec<Loc>,
     sources: Vec<Loc>,
 ) -> Arc<Insn> {
-    let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+    let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
     Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![], vec![]))
 }
 
@@ -57,7 +57,7 @@ fn shape(made: &LirBody) -> Vec<(String, Vec<Loc>)> {
         .iter()
         .map(|one| {
             let what = one.what.as_ref().unwrap();
-            (what.name.clone().unwrap_or_default(), what.sources.clone())
+            (what.name.as_deref().map(str::to_owned).unwrap_or_default(), what.sources.clone())
         })
         .collect()
 }
@@ -99,7 +99,7 @@ fn test_a_call_ends_the_copies() {
     let call = Arc::new(Insn::new(
         2,
         Some((2, 2)),
-        Some(Semantics { name: Some("call".to_owned()), ..Semantics::new(Operation::Call) }),
+        Some(Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) }),
         vec![],
         vec![],
     ));
@@ -116,4 +116,51 @@ fn test_a_copy_that_repeats_a_valid_one_is_dropped() {
     let shaped = shape(&made);
     assert_eq!(shaped[2].0, "");
     assert_eq!(shaped[3], ("fstp".to_owned(), vec![fp(1)]));
+}
+
+fn cell_at(disp: i64) -> Loc {
+    Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, disp)), 8))
+}
+
+fn names(made: &LirBody) -> Vec<String> {
+    made.blocks[0]
+        .insns
+        .iter()
+        .map(|one| one.what.as_ref().unwrap().name.as_deref().unwrap_or_default().to_owned())
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+/// pow_stack_depth rounded each double through a scratch cell and stored it on
+/// (`fstp [t]; fld [t]; fstp [h]`): 1644 B at m16 -Os where main's is 1462.
+#[test]
+fn test_a_rounding_through_a_dead_cell_is_stored_once() {
+    let first = insn(0, Operation::FloatStore, "fstp", vec![cell_at(-8)], vec![fp(0)]);
+    let again = insn(1, Operation::FloatLoad, "fld", vec![fp(1)], vec![cell_at(-8)]);
+    let home = insn(2, Operation::FloatStore, "fstp", vec![cell_at(-40)], vec![fp(1)]);
+    let next = insn(3, Operation::FloatStore, "fstp", vec![cell_at(-8)], vec![fp(2)]);
+    let made = propagated(&body(vec![LirBlock::new(0, vec![first, again, home, next])])).expect("a rounding");
+    assert_eq!(names(&made), ["fstp", "fstp"]);
+    assert_eq!(made.blocks[0].insns[2].what.as_ref().unwrap().sources, vec![fp(0)]);
+}
+
+#[test]
+fn test_a_rounding_through_a_cell_read_later_stays() {
+    let first = insn(0, Operation::FloatStore, "fstp", vec![cell_at(-8)], vec![fp(0)]);
+    let again = insn(1, Operation::FloatLoad, "fld", vec![fp(1)], vec![cell_at(-8)]);
+    let home = insn(2, Operation::FloatStore, "fstp", vec![cell_at(-40)], vec![fp(1)]);
+    let read = insn(3, Operation::FloatLoad, "fld", vec![fp(2)], vec![cell_at(-4)]);
+    assert!(propagated(&body(vec![LirBlock::new(0, vec![first, again, home, read])])).is_none());
+}
+
+/// data_after_checked rounded a double through a cell and stored it back into
+/// the same cell (`fstp [t]; fld [t]; fstp [t]`): 926 B at m16 -Os.
+#[test]
+fn test_a_rounding_stored_back_into_its_cell_is_stored_once() {
+    let first = insn(0, Operation::FloatStore, "fstp", vec![cell_at(-8)], vec![fp(0)]);
+    let again = insn(1, Operation::FloatLoad, "fld", vec![fp(1)], vec![cell_at(-8)]);
+    let back = insn(2, Operation::FloatStore, "fstp", vec![cell_at(-8)], vec![fp(1)]);
+    let read = insn(3, Operation::FloatLoad, "fld", vec![fp(2)], vec![cell_at(-8)]);
+    let made = propagated(&body(vec![LirBlock::new(0, vec![first, again, back, read])])).expect("a rounding");
+    assert_eq!(names(&made), ["fstp", "fld"]);
 }

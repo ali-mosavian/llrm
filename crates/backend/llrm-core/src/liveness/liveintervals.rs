@@ -35,6 +35,8 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
+mod handlemove;
+
 use super::cfg::{Cfg, DomTree};
 use super::eqclasses::{ConnectedVNInfoEqClasses, distribute_range};
 use super::liverange::{LiveInterval, LiveRange, Segment, VNInfo, Vn};
@@ -50,6 +52,113 @@ thread_local! {
     pub(crate) static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+// The `LiveIntervals` a pass leaves for the next one (the pin's analysis,
+// preserved across TwoAddress and the register coalescer), with the
+// instructions of the body it was made for: the next pass takes it only for
+// that body. One per thread, since the slot indexes of a thread share an arena.
+thread_local! {
+    static HANDED_OVER: std::cell::RefCell<Option<HandedOver>> = const { std::cell::RefCell::new(None) };
+}
+
+/// What a pass leaves for the next. A set still held when its thread ends is
+/// leaked, not dropped: dropping a `LiveIntervals` reads the slot-index arena,
+/// a thread local that may be gone by then (a coalescer run with no allocator
+/// after it aborted the process: "thread local panicked on drop").
+struct HandedOver {
+    instructions: Vec<Vec<InstrKey>>,
+    analysed: u64,
+    lis: Option<LiveIntervals>,
+}
+
+impl Drop for HandedOver {
+    fn drop(&mut self) {
+        if let Some(lis) = self.lis.take() {
+            std::mem::forget(lis);
+        }
+    }
+}
+
+fn instructions_of(body: &LirBody) -> Vec<Vec<InstrKey>> {
+    body.blocks.iter().map(|block| block.insns.iter().map(|one| one.id()).collect()).collect()
+}
+
+/// `lis` is left for the next pass, which has `body`.
+pub fn hand_over(
+    lis: LiveIntervals,
+    body: &LirBody,
+) {
+    HANDED_OVER.with(|slot| {
+        *slot.borrow_mut() = Some(HandedOver {
+            instructions: instructions_of(body),
+            analysed: super::slotindex::analysed(),
+            lis: Some(lis),
+        });
+    });
+}
+
+/// The `LiveIntervals` handed over for exactly this `body`, if there is one.
+pub fn take_handed_over(body: &LirBody) -> Option<LiveIntervals> {
+    HANDED_OVER.with(|slot| {
+        let mut held = slot.borrow_mut().take()?;
+        // Taken only if no other body was numbered since: its entries are the
+        // arena's.
+        let fits = held.instructions == instructions_of(body) && held.analysed == super::slotindex::analysed();
+        let lis = held.lis.take();
+        if fits { lis } else { None }
+    })
+}
+
+/// The `LiveIntervals` a pass handed over, edited to `body`, where the passes
+/// between only added, removed or rewrote instructions (the pin keeps one
+/// analysis from the coalescer to the allocator): taken if no other body was
+/// numbered since and the edit applies.
+pub fn take_handed_over_edited_to(body: &LirBody) -> Option<LiveIntervals> {
+    HANDED_OVER.with(|slot| {
+        let mut held = slot.borrow_mut().take()?;
+        if held.analysed != super::slotindex::analysed() {
+            return None;
+        }
+        held.lis.take()?.edited_to(body)
+    })
+}
+
+/// Where one instruction's operands of one value sit in the value's list:
+/// nearly always one, which then costs no allocation.
+enum Slots {
+    One(u32),
+    Many(Vec<u32>),
+}
+
+impl Slots {
+    fn push(
+        &mut self,
+        at: u32,
+    ) {
+        match self {
+            Slots::One(first) => *self = Slots::Many(vec![*first, at]),
+            Slots::Many(list) => list.push(at),
+        }
+    }
+
+    fn iter_mut(&mut self) -> std::slice::IterMut<'_, u32> {
+        match self {
+            Slots::One(one) => std::slice::from_mut(one).iter_mut(),
+            Slots::Many(list) => list.iter_mut(),
+        }
+    }
+
+    /// The positions, highest first.
+    fn descending(self) -> Vec<u32> {
+        match self {
+            Slots::One(one) => vec![one],
+            Slots::Many(mut list) => {
+                list.sort_unstable_by(|a, b| b.cmp(a));
+                list
+            }
+        }
+    }
+}
+
 /// `LiveIntervals` (LiveIntervals.h).
 pub struct LiveIntervals {
     pub indexes: SlotIndexes,
@@ -61,7 +170,7 @@ pub struct LiveIntervals {
     /// Where each instruction's operands of a value sit in `operands`, so
     /// removing them is not a scan of the list (the use-def chain of C++
     /// unlinks in O(1)).
-    slots: HashMap<(u32, InstrKey), Vec<u32>>,
+    slots: HashMap<(u32, InstrKey), Slots>,
     /// Every instruction by its key (`MachineInstr*`).
     insns: HashMap<InstrKey, Arc<Insn>>,
     /// The values defined on entry (parameters), which no instruction defines.
@@ -79,14 +188,20 @@ impl LiveIntervals {
         let indexes = SlotIndexes::new(body);
         let cfg = Cfg::of(body);
         let dom = DomTree::of(&cfg);
+        // The tables are sized once: an operand names one value, a value is
+        // named a few times.
+        let (insns, named) =
+            body.blocks.iter().flat_map(|block| block.insns.iter()).fold((0, 0), |(many, named), one| {
+                (many + 1, named + one.defines.len() + one.uses.len() + one.undefs.len())
+            });
         let mut found = Self {
             indexes,
             cfg,
             dom,
             blocks: Vec::with_capacity(body.blocks.len()),
-            operands: HashMap::default(),
-            slots: HashMap::default(),
-            insns: HashMap::default(),
+            operands: HashMap::with_capacity_and_hasher(named / 2, Default::default()),
+            slots: HashMap::with_capacity_and_hasher(named, Default::default()),
+            insns: HashMap::with_capacity_and_hasher(insns, Default::default()),
             inputs: body.inputs.clone(),
             intervals: HashMap::default(),
             calc: LiveIntervalCalc::new(),
@@ -129,7 +244,13 @@ impl LiveIntervals {
         operand: Operand,
     ) {
         let list = self.operands.entry(value).or_default();
-        self.slots.entry((value, operand.instr)).or_default().push(list.len() as u32);
+        let at = list.len() as u32;
+        match self.slots.entry((value, operand.instr)) {
+            std::collections::hash_map::Entry::Occupied(mut one) => one.get_mut().push(at),
+            std::collections::hash_map::Entry::Vacant(none) => {
+                none.insert(Slots::One(at));
+            }
+        }
         list.push(operand);
     }
 
@@ -138,13 +259,12 @@ impl LiveIntervals {
         one: &Insn,
     ) {
         let instr = one.id();
-        for &value in one.defines.iter().chain(&one.uses) {
+        for &value in one.defines.iter().chain(&one.uses).chain(&one.undefs) {
             // A value named twice finds its slots gone the second time.
-            let Some(mut mine) = self.slots.remove(&(value, instr)) else { continue };
+            let Some(mine) = self.slots.remove(&(value, instr)) else { continue };
             let list = self.operands.get_mut(&value).expect("a slot names a listed operand");
             // Highest first: the operand swapped in is then never one of ours.
-            mine.sort_unstable_by(|a, b| b.cmp(a));
-            for at in mine {
+            for at in mine.descending() {
                 let at = at as usize;
                 let last = list.len() - 1;
                 list.swap_remove(at);
@@ -175,6 +295,14 @@ impl LiveIntervals {
         reg: u32,
     ) -> bool {
         !self.operands.contains_key(&reg)
+    }
+
+    /// Whether an instruction with this key is still in the function.
+    pub fn has_instr(
+        &self,
+        key: InstrKey,
+    ) -> bool {
+        self.insns.contains_key(&key)
     }
 
     /// The instruction with this key.
@@ -224,6 +352,58 @@ impl LiveIntervals {
     /// The number the next `create_virtual_register` gives.
     pub fn next_virtual_register(&self) -> u32 {
         self.next_vreg
+    }
+
+    /// This function edited to `body`, the same blocks with instructions added,
+    /// removed or replaced: the instructions go in and out through the maps as
+    /// the spiller's do, and the interval of every register one of them names
+    /// is made again when asked for, where the rest stay as they are. None if
+    /// the blocks, the inputs or the order of the instructions both bodies keep
+    /// differ.
+    pub fn edited_to(
+        mut self,
+        body: &LirBody,
+    ) -> Option<Self> {
+        if body.blocks.len() != self.blocks.len() || body.inputs != self.inputs {
+            return None;
+        }
+        let mut touched: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+        for (n, block) in body.blocks.iter().enumerate() {
+            let wanted: HashSet<InstrKey> = block.insns.iter().map(|one| one.id()).collect();
+            let gone: Vec<InstrKey> =
+                self.blocks[n].iter().map(|one| one.id()).filter(|key| !wanted.contains(key)).collect();
+            for key in gone {
+                let insn = Arc::clone(&self.insns[&key]);
+                touched.extend(insn.defines.iter().chain(&insn.uses).copied());
+                self.remove_instr(n, key);
+            }
+            let mut previous: Option<InstrKey> = None;
+            for one in block.insns.iter() {
+                if self.insns.contains_key(&one.id()) {
+                    previous = Some(one.id());
+                    continue;
+                }
+                touched.extend(one.defines.iter().chain(&one.uses).copied());
+                match previous {
+                    Some(after) => {
+                        self.insert_instr_after(n, after, Arc::clone(one));
+                    }
+                    None => {
+                        let first = self.blocks[n].first().map(|first| first.id());
+                        self.insert_instr_before(n, first, Arc::clone(one));
+                    }
+                }
+                previous = Some(one.id());
+            }
+            if !self.blocks[n].iter().map(|one| one.id()).eq(block.insns.iter().map(|one| one.id())) {
+                return None;
+            }
+        }
+        for reg in touched {
+            self.intervals.remove(&reg);
+            self.next_vreg = self.next_vreg.max(reg + 1);
+        }
+        Some(self)
     }
 
     /// The function as edited: the instructions of every block, in order.
@@ -991,7 +1171,7 @@ impl LiveIntervals {
             let again = fresh.compute_virt_reg_interval(reg);
             let now = shape(&fresh, &again);
             if was != now {
-                if std::env::var("LLRM_AFRESH_DUMP").is_ok() {
+                if llrm_support::env_set("LLRM_AFRESH_DUMP") {
                     eprintln!(
                         "  held interval of v{reg}: {:?}",
                         self.intervals[&reg].segments.iter().map(|g| (g.start, g.end)).collect::<Vec<_>>()
@@ -1075,8 +1255,49 @@ mod tests {
         Arc::new(one)
     }
 
-    /// A value an operand reads as undef (`ProcessImplicitDefs`) has no def and none is needed: no segment
-    /// is made for it, where a plain read of a value nothing defines stops the calculation ("a unique value"),
+    /// The allocator starts from the coalescer's intervals, edited to the body
+    /// the passes between made: an instruction put in, one taken out, and the
+    /// registers they name made again. Every interval then covers what a fresh
+    /// build gives, and the untouched ones are the same objects.
+    #[test]
+    fn test_intervals_edited_to_the_next_body_are_those_a_fresh_build_covers() {
+        let (def_a, def_b, use_both) = (insn(&[1], &[]), insn(&[2], &[]), insn(&[], &[1, 2]));
+        let before = body(&[Arc::clone(&def_a), Arc::clone(&def_b), Arc::clone(&use_both)]);
+        let mut lis = LiveIntervals::new(&before);
+        let kept = lis.interval_rc(1);
+        lis.interval(2);
+        // A copy of v2 into v3 put in, the read of v2 now reads v3, and v1
+        // stays.
+        let copy = insn(&[3], &[2]);
+        let reader = insn(&[], &[1, 3]);
+        let after = body(&[Arc::clone(&def_a), Arc::clone(&def_b), Arc::clone(&copy), Arc::clone(&reader)]);
+        let mut edited = lis.edited_to(&after).expect("the edit applies");
+        for reg in [1, 2, 3] {
+            edited.interval(reg);
+        }
+        assert_eq!(edited.assert_intervals_cover_afresh(&after), 3, "v1, v2 and v3 are compared");
+        assert!(!Rc::ptr_eq(&kept, &edited.get_interval_rc(1)), "v1 is named by the new reader: made again");
+        // A body whose shared instructions run in another order is refused.
+        let swapped = body(&[Arc::clone(&def_b), Arc::clone(&def_a), Arc::clone(&copy), Arc::clone(&reader)]);
+        assert!(LiveIntervals::new(&after).edited_to(&swapped).is_none());
+    }
+
+    /// An instruction taken out of the maps took its undef operands with it:
+    /// the operand of a value read as undef stayed listed, and the
+    /// coalescer asked the maps for an instruction that was gone
+    /// ("Instruction not found in maps").
+    #[test]
+    fn test_removing_an_instruction_removes_its_undef_operands() {
+        let (def, reader) = (insn(&[1], &[]), undef_reader(&[2], &[9]));
+        let mut lis = LiveIntervals::new(&body(&[Arc::clone(&def), Arc::clone(&reader)]));
+        assert_eq!(lis.operands(9).len(), 1);
+        lis.remove_instr(0, reader.id());
+        assert!(lis.operands(9).is_empty(), "an operand of a removed instruction is still listed");
+    }
+
+    /// A value an operand reads as undef (`ProcessImplicitDefs`) has no def and
+    /// none is needed: no segment is made for it, where a plain read of a
+    /// value nothing defines stops the calculation ("a unique value"),
     /// and the values around it keep theirs.
     #[test]
     fn test_a_value_read_as_undef_has_no_live_range_and_costs_its_reader_nothing() {
@@ -1088,8 +1309,8 @@ mod tests {
         assert!(!lis.operands(9)[0].reads_reg);
     }
 
-    /// A join that renames a value renames the one an operand reads as undef too: left alone, the operand
-    /// would name a value nothing places.
+    /// A join that renames a value renames the one an operand reads as undef
+    /// too: left alone, the operand would name a value nothing places.
     #[test]
     fn test_renaming_a_value_renames_the_undef_reads_of_it() {
         let one = undef_reader(&[2], &[9]);

@@ -629,9 +629,10 @@ b50:
     let tagged = annotated(&parsed.unit()).unwrap()[&load].provenance.clone().expect("a provenance");
     let root = MemRef::of(&parsed.unit(), load).and_then(|one| one.root).expect("a root");
     let global = object_of(&parsed.unit(), root).expect("an object");
-    // DEVIATE AN2: the guard `%i < 4` and the counted loop narrowed this to
-    // [4, 11) by 2 (`Bounded`); `computeConstantRange` reads neither a phi nor
-    // a dominating branch, so the slice is the whole object (AM-BD-4).
+    // The guard `%i < 4` and the counted loop narrowed this to [4, 11) by 2
+    // (`Bounded`, llrm-only); `computeConstantRange` reads neither a phi nor a
+    // dominating branch, and neither does the pin's BasicAA, so the slice is
+    // the whole object (AM-BD-4, pin-faithful).
     assert_eq!(tagged.slices, crate::memory::Sorted::from([Slice::new(global, 0, 64, 1, 2).unwrap()]));
 }
 
@@ -1693,6 +1694,28 @@ fn a_calls_footprint_reaches_a_local_published_later_but_not_one_never_published
     let effect = found.iter().next().map(|(_, effect)| effect).expect("the call");
     assert!(writes(effect, &bytes(&parsed.object("escaped"), 0, 4)), "published later: reached (AM-CA-8)");
     assert!(!writes(effect, &bytes(&parsed.object("private"), 0, 4)), "never published: not reached");
+}
+
+/// What a callee reaches elsewhere depends on the module analyses alone: made
+/// under one proxy it is worked out once for the callee, not again for each
+/// body state (76 runs of the footprints on d_faces -O2, 6.5 M and 3.8 M Ir of
+/// `reaches`).
+#[test]
+fn what_a_callee_reaches_elsewhere_is_worked_out_once_under_one_proxy() {
+    let module = crate::testing::parsed(
+        "@g = internal global i16 0\n\ndeclare void @external()\n\ndefine void @f() {\nb0:\n  call void @external()\n  ret void\n}\n",
+    );
+    let layout = crate::testing::layout(&module);
+    let f = crate::testing::function(&module, "f");
+    let outer = llrm_mir::passes::Outer::of(&module, None);
+    let footprints = || {
+        let before = crate::alias::reaches_made();
+        let unit = crate::memory::Unit::within(&module.context, &layout, f, &outer);
+        crate::alias::calls_by_attributes(&unit);
+        crate::alias::reaches_made() - before
+    };
+    assert_eq!(footprints(), 1, "the first body state works it out");
+    assert_eq!(footprints(), 0, "the next asks the proxy");
 }
 
 /// A byval parameter is the callee's own copy: the call writes nothing of the

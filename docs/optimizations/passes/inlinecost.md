@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inlinecost.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inlinecost.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:4a93a110bacaaac713284ff3bb4b524370dcca7a1178a7c8d4f1a0612d93e724 -->
+<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:02fa4b23ce7573e8af906e844fb2b51b2639abafa625d5fea360bd94fe66548a -->
 
 # inlinecost
 
@@ -77,20 +77,21 @@ each site's cost and threshold beside the existing decision; with
   of a local callee, which goes with it, is the pin's. No shape of callee
   but the loop and the one smaller than its call is tested.
 - D12 (SZ2): a call the -Os bound (D11) alone refuses, that passes the
-  address of a stack slot the caller stored a constant to and whose callee
-  loads through that parameter, is inlined if the caller, simplified again
-  with the call inlined, is smaller by the target's size cost (`walk.rs`,
-  callers of at most 300 instructions; the sites of a private callee that
-  dies with its last call are tried together, its body credited). The pin's
-  cost does not follow a load through a pointer argument, so it never sees
-  the loop or the arithmetic fold.
+  address of a stack slot or a global the caller stored a constant to and
+  whose callee loads through that parameter, is inlined if the caller,
+  simplified again with the call inlined, is smaller by the target's size
+  cost (`walk.rs`, callers of at most 300 instructions; the sites of a
+  private callee that dies with its last call are tried together, its body
+  credited). The pin's cost does not follow a load through a pointer
+  argument, so it never sees the loop or the arithmetic fold.
 - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
   attribute decision.
 - D7: the minsize loop penalty counts retreating-edge headers, not
   `LoopInfo`.
-- D10: a callee that calls itself is priced as any (LLVM: "recursive",
-  `IsRecursiveCall`), and `decide` leaves a call of the caller itself to the
-  copies `walk::SelfInline` makes (gcc's `recursive_inlining`,
+- D10 (`-finline-recursive`, off by default): a callee that calls itself is
+  priced as any (LLVM: "recursive", `IsRecursiveCall`, unless
+  `AllowRecursiveCall`), and `decide` leaves a call of the caller itself to
+  the copies `walk::SelfInline` makes (gcc's `recursive_inlining`,
   ipa-inline.cc:1645: depth `MAX_INLINE_RECURSIVE_DEPTH` 3 against gcc's 8,
   `MAX_INLINE_INSNS_RECURSIVE` 150 against 450, the call's frequency above
   10%; none at -Os; calls of a function that reads and writes nothing with

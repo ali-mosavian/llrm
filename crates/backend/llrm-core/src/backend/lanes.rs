@@ -33,7 +33,7 @@
 //!
 //! # Used by
 //! `liveness`, `peephole` and its sub-passes (`copysink`, `postrasink`,
-//! `regthrash`, `exactaddress`, `sharedstores`, `machinecse`), `loopslots`,
+//! `regthrash`, `exactaddress`, `sharedstores`), `loopslots`,
 //! `schedule`, `parcopy`, and `peep/guards`, `peep/walk`, `peep/make`.
 
 use std::fmt;
@@ -106,10 +106,47 @@ impl Lanes {
         Self(0)
     }
 
+    /// The lanes as a bit mask, a lane to a bit (`Lanes::flags` for the flags).
+    pub const fn mask(&self) -> u128 {
+        self.0
+    }
+
+    /// How many lanes there are: the bits of a mask in use.
+    pub fn count() -> usize {
+        TABLE.lanes.len()
+    }
+
+    /// The lanes of a bit mask, as `mask` gives it.
+    pub const fn from_mask(mask: u128) -> Self {
+        Self(mask)
+    }
+
     /// The flag lanes of an rflags mask. `RegId::None` sorts first, so flag
     /// bit `i` is lane bit `i`.
     pub fn flags(mask: u32) -> Self {
         Self(u128::from(mask))
+    }
+
+    /// Bytes `start..start + len` of a register: the lanes `(register, byte)`
+    /// for each, without a table lookup per byte.
+    pub fn span(
+        register: RegId,
+        start: u32,
+        len: u32,
+    ) -> Self {
+        if len == 0 {
+            return Self(0);
+        }
+        let table = &*TABLE;
+        let slot = register.index();
+        let last = start + len - 1;
+        assert!(
+            slot < REGISTERS && last < u32::from(table.bytes[slot]),
+            "{register:?} bytes {start}..={last} are no lanes"
+        );
+        let (first, top) = (u32::from(table.first[slot]), u32::from(table.count[slot]) - 1);
+        let (low, high) = (first + start.min(top), first + last.min(top));
+        Self((u128::MAX >> (127 - (high - low))) << low)
     }
 
     pub fn insert(
@@ -385,6 +422,22 @@ mod tests {
                     set.difference(&theirs).copied().collect::<Vec<_>>(),
                     tree.difference(&their_tree).copied().collect::<Vec<_>>()
                 );
+            }
+        }
+    }
+
+    /// `span` must name the lanes a byte-by-byte `collect` names, including a
+    /// root's upper bytes folded into one lane.
+    #[test]
+    fn span_matches_the_lanes_of_each_byte() {
+        let registers: BTreeSet<RegId> = TABLE.lanes.iter().map(|lane| lane.0).collect();
+        for register in registers.into_iter().filter(|register| *register != RegId::None) {
+            let bytes = u32::from(TABLE.bytes[register.index()]);
+            for start in 0..bytes {
+                for len in 0..=bytes - start {
+                    let each: Lanes = (start..start + len).map(|byte| (register, byte)).collect();
+                    assert_eq!(Lanes::span(register, start, len), each, "{register:?} {start}+{len}");
+                }
             }
         }
     }

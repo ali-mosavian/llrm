@@ -93,12 +93,14 @@ const MSSA_OPT_CAP: usize = 500;
 /// ScopedHashTable: `insert` shadows, `lookup` finds the innermost, and
 /// leaving a scope takes back what it inserted.
 struct Scoped<K, V> {
-    map: HashMap<K, Vec<V>>,
-    inserted: Vec<K>,
+    map: HashMap<K, V>,
+    /// What each insert shadowed, to put back when its scope is left: a
+    /// table of one value a key, not a stack of them.
+    inserted: Vec<(K, Option<V>)>,
     marks: Vec<usize>,
 }
 
-impl<K: std::hash::Hash + Eq + Clone, V: Clone> Scoped<K, V> {
+impl<K: std::hash::Hash + Eq + Clone, V> Scoped<K, V> {
     fn new() -> Self {
         Self { map: HashMap::default(), inserted: Vec::new(), marks: Vec::new() }
     }
@@ -110,10 +112,12 @@ impl<K: std::hash::Hash + Eq + Clone, V: Clone> Scoped<K, V> {
     fn leave(&mut self) {
         let mark = self.marks.pop().expect("a scope entered");
         while self.inserted.len() > mark {
-            let key = self.inserted.pop().expect("a key");
-            if let Some(stack) = self.map.get_mut(&key) {
-                stack.pop();
-                if stack.is_empty() {
+            let (key, shadowed) = self.inserted.pop().expect("a key");
+            match shadowed {
+                Some(value) => {
+                    self.map.insert(key, value);
+                }
+                None => {
                     self.map.remove(&key);
                 }
             }
@@ -125,15 +129,15 @@ impl<K: std::hash::Hash + Eq + Clone, V: Clone> Scoped<K, V> {
         key: K,
         value: V,
     ) {
-        self.map.entry(key.clone()).or_default().push(value);
-        self.inserted.push(key);
+        let shadowed = self.map.insert(key.clone(), value);
+        self.inserted.push((key, shadowed));
     }
 
     fn lookup(
         &self,
         key: &K,
     ) -> Option<&V> {
-        self.map.get(key).and_then(|stack| stack.last())
+        self.map.get(key)
     }
 }
 
@@ -169,7 +173,57 @@ enum Tag {
 struct SimpleKey {
     tag: Tag,
     ty: TypeId,
-    operands: Vec<Operand>,
+    operands: Ops,
+}
+
+/// A key's operands: up to four held in place, as the operations a key is made
+/// of have two or three; more (a call's arguments) go to a vector. A vector
+/// for each key was 1,386 allocations on d_faces' largest body.
+#[derive(Clone, Debug)]
+enum Ops {
+    Inline(u8, [Operand; 4]),
+    Heap(Vec<Operand>),
+}
+
+impl Ops {
+    fn of(operands: &[Operand]) -> Self {
+        match operands {
+            [] => Self::Heap(Vec::new()),
+            [first, ..] if operands.len() <= 4 => {
+                let mut items = [*first; 4];
+                items[..operands.len()].copy_from_slice(operands);
+                Self::Inline(operands.len() as u8, items)
+            }
+            _ => Self::Heap(operands.to_vec()),
+        }
+    }
+
+    fn as_slice(&self) -> &[Operand] {
+        match self {
+            Self::Inline(len, items) => &items[..*len as usize],
+            Self::Heap(items) => items,
+        }
+    }
+}
+
+impl PartialEq for Ops {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl Eq for Ops {}
+
+impl std::hash::Hash for Ops {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+    ) {
+        self.as_slice().hash(state);
+    }
 }
 
 /// `GEPValue`: the pointer and the constant offset, or the whole GEP.
@@ -248,6 +302,49 @@ pub trait MemorySsaView {
     /// The graph as the removals left it, where the view holds one.
     fn into_mssa(self: Box<Self>) -> Option<Mssa> {
         None
+    }
+    /// Whether there is a MemorySSA behind the view (`MSSA` is not null).
+    fn present(&self) -> bool {
+        true
+    }
+}
+
+/// No MemorySSA (`MSSA == nullptr`): `removeMSSA` does nothing and
+/// `isSameMemGeneration` is false unless the generations are equal.
+struct Detached;
+
+impl MemorySsaView for Detached {
+    fn memory_access(
+        &self,
+        _inst: InstId,
+    ) -> Option<usize> {
+        None
+    }
+
+    fn clobbering_access(
+        &self,
+        _inst: InstId,
+    ) -> Option<usize> {
+        None
+    }
+
+    fn defining_access(
+        &self,
+        _inst: InstId,
+    ) -> Option<usize> {
+        None
+    }
+
+    fn dominates(
+        &self,
+        _ahead: usize,
+        _access: usize,
+    ) -> bool {
+        false
+    }
+
+    fn present(&self) -> bool {
+        false
     }
 }
 
@@ -427,15 +524,15 @@ impl Walk<'_> {
     ) -> Option<SimpleKey> {
         let op = self.function.instruction(inst);
         let ty = op.ty;
-        let operands = op.operands.clone();
-        let key = |tag, operands| Some(SimpleKey { tag, ty, operands });
+        let operands = op.operands.as_slice();
+        let key = |tag, operands: &[Operand]| Some(SimpleKey { tag, ty, operands: Ops::of(operands) });
         match &op.opcode {
             Opcode::Binary(binary) => {
-                let mut operands = operands;
-                if commutes(*binary) && operands[0] > operands[1] {
-                    operands.swap(0, 1);
+                let mut pair = [operands[0], operands[1]];
+                if commutes(*binary) && pair[0] > pair[1] {
+                    pair.swap(0, 1);
                 }
-                key(Tag::Binary(*binary), operands)
+                key(Tag::Binary(*binary), &pair)
             }
             Opcode::ICmp(predicate) => {
                 let (mut left, mut right, mut predicate) = (operands[0], operands[1], *predicate);
@@ -444,7 +541,7 @@ impl Walk<'_> {
                     std::mem::swap(&mut left, &mut right);
                     predicate = swapped;
                 }
-                key(Tag::ICmp(predicate), vec![left, right])
+                key(Tag::ICmp(predicate), &[left, right])
             }
             Opcode::FCmp(predicate) => key(Tag::FCmp(*predicate), operands),
             Opcode::Cast(cast) => key(Tag::Cast(*cast), operands),
@@ -458,7 +555,7 @@ impl Walk<'_> {
                     if a > b {
                         std::mem::swap(&mut a, &mut b);
                     }
-                    return key(Tag::MinMax(flavor), vec![a, b]);
+                    return key(Tag::MinMax(flavor), &[a, b]);
                 }
                 let compare = self.definer(cond).map(|one| self.function.instruction(one));
                 match compare {
@@ -468,14 +565,14 @@ impl Walk<'_> {
                             let (x, y) = (compare.operands[0], compare.operands[1]);
                             if rank(inverse) < rank(predicate) {
                                 std::mem::swap(&mut a, &mut b);
-                                key(Tag::SelectCmp(inverse), vec![x, y, a, b])
+                                key(Tag::SelectCmp(inverse), &[x, y, a, b])
                             } else {
-                                key(Tag::SelectCmp(predicate), vec![x, y, a, b])
+                                key(Tag::SelectCmp(predicate), &[x, y, a, b])
                             }
                         }
-                        _ => key(Tag::Select, vec![cond, a, b]),
+                        _ => key(Tag::Select, &[cond, a, b]),
                     },
-                    None => key(Tag::Select, vec![cond, a, b]),
+                    None => key(Tag::Select, &[cond, a, b]),
                 }
             }
             Opcode::Call(info) => {
@@ -532,7 +629,7 @@ impl Walk<'_> {
         Some(SimpleKey {
             tag: Tag::Call(info.function_type, info.calling_convention),
             ty: op.ty,
-            operands: op.operands.clone(),
+            operands: Ops::of(&op.operands),
         })
     }
 
@@ -654,6 +751,10 @@ impl Walk<'_> {
     ) -> bool {
         if earlier_generation == later_generation {
             return true;
+        }
+        // `if (!MSSA) return false;` (EarlyCSE.cpp#L1074).
+        if !self.mssa.present() {
+            return false;
         }
         let (Some(earlier_access), Some(_)) = (self.mssa.memory_access(earlier), self.mssa.memory_access(later)) else {
             return true;
@@ -1147,8 +1248,18 @@ impl Walk<'_> {
 /// `EarlyCSEPass`
 /// (https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L1809)
 /// with MemorySSA.
-#[derive(Default)]
-pub struct EarlyCse;
+pub struct EarlyCse {
+    /// `UseMemorySSA` (`EarlyCSEPass(true)`, EarlyCSE.cpp#L1809): the pass at
+    /// `earlycse@649` has it, EarlyFPM's at `earlycse@1180` has none
+    /// (PassBuilderPipelines.cpp#L508, #L649, #L1180).
+    pub memory_ssa: bool,
+}
+
+impl Default for EarlyCse {
+    fn default() -> Self {
+        Self { memory_ssa: true }
+    }
+}
 
 impl FunctionPass for EarlyCse {
     fn name(&self) -> &'static str {
@@ -1165,10 +1276,11 @@ impl FunctionPass for EarlyCse {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
-        let accesses = match Accesses::managed(unit.context, unit.layout, unit.function, analyses) {
-            Ok(accesses) => accesses,
-            Err(error) => panic!("earlycse: {error}"),
-        };
+        let accesses =
+            self.memory_ssa.then(|| match Accesses::managed(unit.context, unit.layout, unit.function, analyses) {
+                Ok(accesses) => accesses,
+                Err(error) => panic!("earlycse: {error}"),
+            });
         let tree = analyses.get::<Dominators>(unit.context, unit.layout, unit.function);
         // MemorySSA describes the function as it is now; the walk changes
         // `unit.function`, which this copy and the context's copy do not
@@ -1182,17 +1294,24 @@ impl FunctionPass for EarlyCse {
         // The manager's graph of this body, cloned: the removals below update
         // the clone, which is put back (`MemorySSAUpdater`, as EarlyCSE.cpp
         // keeps MemorySSA through `PA.preserve<MemorySSAAnalysis>()`).
-        let held = analyses.get::<MemorySsa>(unit.context, unit.layout, unit.function);
-        let (mssa, kept_accesses) = match &*held {
-            Ok(held) => (held.mssa.clone(), Some(Rc::clone(&held.accesses))),
-            Err(_) => (Mssa::build(&before, &shape.dominance, &shadow::effect_of(&accesses, &before)), None),
+        let (view_of_memory, kept_accesses): (Box<dyn MemorySsaView + '_>, _) = match &accesses {
+            Some(accesses) => {
+                let held = analyses.get::<MemorySsa>(unit.context, unit.layout, unit.function);
+                let (mssa, kept_accesses) = match &*held {
+                    Ok(held) => {
+                        (held.mssa.clone(), held.accesses(unit.context, unit.layout, unit.function, analyses).ok())
+                    }
+                    Err(_) => (Mssa::build(&before, &shape.dominance, &shadow::effect_of(accesses, &before)), None),
+                };
+                (Box::new(Translated::new(&view, accesses, mssa)), kept_accesses)
+            }
+            None => (Box::new(Detached), None),
         };
-        let translated = Translated::new(&view, &accesses, mssa);
         let mut walk = Walk {
             context: unit.context,
             function: unit.function,
             view: &view,
-            mssa: Box::new(translated),
+            mssa: view_of_memory,
             callees: outer.callees(),
             tree: &tree,
             analyses: &simplifier,
@@ -1219,7 +1338,7 @@ impl FunctionPass for EarlyCse {
         }
         let mut preserved = PreservedAnalyses::none().preserve::<Dominators>();
         if let (Some(updated), Some(accesses)) = (walk.mssa.into_mssa(), kept_accesses) {
-            analyses.replace::<MemorySsa>(&*function, Ok(Rc::new(MssaGraph { mssa: updated, accesses })));
+            analyses.replace::<MemorySsa>(&*function, Ok(Rc::new(MssaGraph::new(updated, Some(accesses)))));
             preserved = preserved.preserve_updated::<MemorySsa>();
         }
         preserved

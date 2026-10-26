@@ -515,7 +515,7 @@ mod tests {
         defines: Vec<u32>,
         uses: Vec<u32>,
     ) -> Arc<Insn> {
-        let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
         Arc::new(Insn::new(at, Some((at, at + 1)), Some(what), defines, uses))
     }
 
@@ -585,7 +585,7 @@ mod tests {
         let one = insns.iter().find(|one| one.defines == [value]).expect("defined");
         let what = one.what.as_ref().expect("semantics");
         let [Loc::Held(left), Loc::Held(right)] = &what.sources[..] else { panic!("registers") };
-        (what.name.clone().expect("named"), left.value, right.value)
+        (what.name.as_deref().map(str::to_owned).expect("named"), left.value, right.value)
     }
 
     /// What `value` is, the leaves taken as their numbers and the load as 1000.
@@ -691,6 +691,18 @@ mod tests {
         let jump = insn(50, Operation::Branch, "jz", vec![], vec![], vec![], vec![]);
         let before =
             with_leaves(vec![binary("add", 10, 1, 9), binary("add", 11, 10, 2), jump, binary("add", 12, 11, 3)]);
+        assert!(result(&combined(before.clone())) == result(&before), "left alone");
+    }
+
+    /// `inc` leaves CF alone, so a `jb` after it reads the carry of the add
+    /// before it: the add counted as dead flags and was rebuilt, and `jb` read
+    /// the carry of the new instruction.
+    #[test]
+    fn an_add_whose_carry_a_later_inc_leaves_for_a_jb_is_left() {
+        let inc = insn(51, Operation::Unary, "inc", vec![held(13)], vec![held(1)], vec![13], vec![1]);
+        let jump = insn(50, Operation::Branch, "jb", vec![], vec![], vec![], vec![]);
+        let before =
+            with_leaves(vec![binary("add", 10, 1, 9), binary("add", 11, 10, 2), inc, jump, binary("add", 12, 11, 3)]);
         assert!(result(&combined(before.clone())) == result(&before), "left alone");
     }
 

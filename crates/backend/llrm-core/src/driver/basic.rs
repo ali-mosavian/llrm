@@ -52,7 +52,7 @@ pub fn _semantics(
     dests: Vec<Loc>,
     sources: Vec<Loc>,
 ) -> Semantics {
-    Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+    Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
 }
 
 pub fn _reg(register: RegId) -> Loc {
@@ -612,6 +612,7 @@ pub fn finalized(
                     far: false,
                     pops: 0,
                     code: vec![masm::InlinePart::Bytes(code)],
+                    tail: false,
                 },
             );
             let mut replaced = (**instruction).clone();
@@ -888,6 +889,7 @@ pub fn assembled(
             runtime: runtime.tables(),
             basic: true,
             zeroed: matches!(frame, Frame::Runtime { .. }),
+            libcalls: &options.libcalls,
         };
         let (procedure, landing, statics) =
             llrm_support::debug::in_function(module.global(id).name.as_deref().unwrap_or_default(), || {
@@ -1096,6 +1098,7 @@ fn procedure(
                     far: false,
                     pops: 0,
                     code: vec![masm::InlinePart::Bytes(code.clone())],
+                    tail: false,
                 },
             );
             continue;

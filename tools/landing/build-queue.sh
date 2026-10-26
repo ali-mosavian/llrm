@@ -10,6 +10,9 @@ ready=$(gh pr list --repo "$R" --state open --base feat/parity --limit 1000 --js
 STATE=${REFUSED_STATE:-${LAND_TMP:-/tmp/landing}/refused.state}
 parity=$(gh api "repos/$R/git/ref/heads/feat/parity" -q .object.sha 2>/dev/null)
 ready=$(echo "$ready" | while read -r n m o h; do grep -qx "$n $h $parity" "$STATE" 2>/dev/null || echo "$n $m $o $h"; done)
+# a PR refused for its own head stays out until that head changes (held.state, written by the runner: `<PR> <head sha>`); a retry at the same head cost a batch each time
+HELD=${HELD_STATE:-${LAND_TMP:-/tmp/landing}/held.state}
+ready=$(echo "$ready" | while read -r n m o h; do grep -qx "$n $h" "$HELD" 2>/dev/null || echo "$n $m $o $h"; done)
 # GitHub's mergeable flag is against the base: a PR that conflicts with feat/parity cannot land, alone or in a batch
 echo "$ready" | awk '$2=="CONFLICTING"{printf "%s: REFUSED: conflicts with feat/parity (GitHub mergeable=CONFLICTING); owner %s merges fresh feat/parity (push rejected? git pull --no-rebase, then push; never force)\n", $1, $3}' >&2
 # Owner: <session> in the PR body names who to tell. BODY_CHECKS=warn (the default, the user's call while the backend parts land) only warns in the log and the PR

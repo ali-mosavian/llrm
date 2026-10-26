@@ -264,7 +264,7 @@ pub fn split_push_smaller(
 ) -> bool {
     let push = |width: u32, value: i64| {
         let what = ir::Semantics {
-            name: Some("push".to_owned()),
+            name: Some("push".into()),
             sources: vec![Loc::Imm(Imm { value, width, address: None })],
             ..ir::Semantics::new(Operation::Push)
         };
@@ -495,6 +495,46 @@ pub fn clear_of(
         .is_some_and(|(reads, writes)| reads.is_disjoint(&temporary) && writes.is_disjoint(&temporary.or(&source)))
 }
 
+/// What `crossed` leaves alone of a store `mov [cell], r`: the register `r`
+/// and what addresses the cell are not written, and the cell still holds what
+/// the store put there (`bodyfacts::_keeps`: a call, a volatile access, a
+/// barrier or any write that may reach the cell fails).
+pub fn holds_after(
+    cx: &Cx,
+    store: &Insn,
+    crossed: &Arc<Insn>,
+) -> bool {
+    let (Some(what), Some(stored)) = (&crossed.what, &store.what) else {
+        return false;
+    };
+    let ([Loc::Mem(cell)], [Loc::Reg(held)]) = (stored.dests.as_slice(), stored.sources.as_slice()) else {
+        return false;
+    };
+    if store.volatile
+        || crossed.volatile
+        || what.op == Operation::Barrier
+        || !crossed.clobbers.is_empty()
+        || !crossed.requires.is_empty()
+        || !crossed.delivers.is_empty()
+        || !crossed.spread.is_empty()
+        || crossed.group.is_some()
+        || crossed.symbol == Some(true)
+        || crossed.frame_adjust
+    {
+        return false;
+    }
+    let regs = cx.regs();
+    let Some((_, writes)) = _register_effects(regs, cx.bits(), crossed, false, true) else {
+        return false;
+    };
+    let mut guarded = BTreeSet::from([cell.through, cell.index_through, held.register]);
+    if let Some(addr) = cell.addr {
+        guarded.insert(RegId::from(addr.segment));
+    }
+    let guarded: Lanes = guarded.into_iter().flat_map(|one| _lanes(regs, one)).collect();
+    writes.is_disjoint(&guarded) && crate::backend::bodyfacts::_keeps(crossed, store, cell, true, cx.facts.body())
+}
+
 /// `load` may read its cell after `crossed`, which only materializes a
 /// register: it neither consumes nor replaces the loaded register nor
 /// changes anything the cell is addressed by. Instructions that write
@@ -544,9 +584,9 @@ fn delayed(
         return false;
     }
     // A write to memory crosses where the cell still holds after it
-    // (`spiller::_keeps`: the optimizer's proofs included); anything else
-    // must write registers alone, which the lane check below keeps from the
-    // load's.
+    // (`crate::backend::bodyfacts::_keeps`: the optimizer's proofs included);
+    // anything else must write registers alone, which the lane check below
+    // keeps from the load's.
     let writes_memory = crossed_what.dests.iter().any(|dest| matches!(dest, Loc::Mem(_)));
     let load_cell = match load.what.as_ref().map(|what| what.sources.as_slice()) {
         Some([Loc::Mem(cell)]) => Some(cell),
@@ -554,7 +594,7 @@ fn delayed(
     };
     if writes_memory {
         let Some(cell) = load_cell else { return false };
-        if !crate::backend::spiller::_keeps(crossed, load, cell, true, cx.facts.body()) {
+        if !crate::backend::bodyfacts::_keeps(crossed, load, cell, true, cx.facts.body()) {
             return false;
         }
     } else if !(matches!(
@@ -614,31 +654,15 @@ pub fn operand(
         )
 }
 
-/// `lea d,[x+y]`: an address of scale 1, no displacement, no symbol or
-/// segment, that names `d` and a second register (`optTwoAddrLEA`, case 1).
-pub fn sums_into(
-    _cx: &Cx,
-    one: &Loc,
-    d: Reg,
-) -> bool {
-    let Loc::Address(a) = one else { return false };
-    a.addr.is_none()
-        && a.scale == 1
-        && a.offset == 0
-        && a.through != RegId::None
-        && a.index_through != RegId::None
-        && (a.through == d.register || a.index_through == d.register)
-}
-
-/// `lea d,[d+disp]`: a base and a displacement alone, no symbol or segment
-/// (`optTwoAddrLEA`, case 2).
-pub fn steps_in_place(
-    _cx: &Cx,
-    one: &Loc,
-    d: Reg,
-) -> bool {
-    let Loc::Address(a) = one else { return false };
-    a.addr.is_none() && a.through == d.register && a.index_through == RegId::None
+/// The registers, scale and displacement of the address an LEA names, whether
+/// LIR spells it as an address or, as the two-address pass makes it, as a
+/// memory operand: (symbol, base, index, scale, offset).
+pub fn lea_cell(one: &Loc) -> Option<(bool, RegId, RegId, i64, i64)> {
+    match one {
+        Loc::Address(a) => Some((a.addr.is_some(), a.through, a.index_through, a.scale, a.offset)),
+        Loc::Mem(m) => Some((m.addr.is_some(), m.through, m.index_through, m.scale, m.offset)),
+        _ => None,
+    }
 }
 
 /// `r` is how the cell is reached.

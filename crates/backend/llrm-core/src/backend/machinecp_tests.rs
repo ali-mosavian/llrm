@@ -14,7 +14,7 @@ fn semantics(
     dests: Vec<Loc>,
     sources: Vec<Loc>,
 ) -> Semantics {
-    Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+    Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
 }
 
 fn rl(
@@ -281,7 +281,7 @@ fn test_a_tied_producer_works_on_the_register_that_already_holds_its_value() {
 fn stosd(at: i64) -> Arc<Insn> {
     use crate::model::ir::Mem;
     let what = Semantics {
-        name: Some("stosd".to_owned()),
+        name: Some("stosd".into()),
         dests: vec![Loc::Mem(Mem::new(None, 0)), rl(RegId::DI, 2), rl(RegId::CX, 2)],
         sources: vec![rl(RegId::EAX, 4), rl(RegId::CX, 2), rl(RegId::DI, 2), rl(RegId::ES, 2)],
         ..Semantics::new(Operation::Fill)
@@ -307,7 +307,7 @@ fn test_a_copy_is_not_forwarded_across_a_string_store_that_writes_its_source() {
 fn test_a_copy_is_not_forwarded_across_a_string_move_that_writes_its_source() {
     use crate::model::ir::Mem;
     let what = Semantics {
-        name: Some("movsd".to_owned()),
+        name: Some("movsd".into()),
         dests: vec![Loc::Mem(Mem::new(None, 0)), rl(RegId::SI, 2), rl(RegId::DI, 2), rl(RegId::CX, 2)],
         sources: vec![Loc::Mem(Mem::new(None, 0)), rl(RegId::CX, 2), rl(RegId::SI, 2), rl(RegId::DI, 2)],
         ..Semantics::new(Operation::Copy)
@@ -320,4 +320,85 @@ fn test_a_copy_is_not_forwarded_across_a_string_move_that_writes_its_source() {
         ));
         assert_eq!(lines(&got)[2], format!("add BX,BX,{copy:?}"), "{:?}", lines(&got));
     }
+}
+
+/// Both walks of a block asked `written` and the read mask of each
+/// instruction again (2,440 times for d_faces' 829 walked ones, 1.7 M Ir):
+/// they are worked out once when the block is read.
+#[test]
+fn test_a_walk_works_out_what_an_instruction_writes_once() {
+    let mut head = vec![mov(0, rl(RegId::BX, 2), rl(RegId::AX, 2))];
+    for n in 1..9 {
+        head.push(add(n, rl(RegId::CX, 2), rl(RegId::DX, 2)));
+    }
+    let before = super::masks_made();
+    propagated(&body(head, &[RegId::BX, RegId::CX]));
+    let made = super::masks_made() - before;
+    assert!(made <= 9 + 2, "{made} asks for 9 instructions");
+}
+
+/// `register_mask` listed the lanes of a register each time a walk named it
+/// (939 times for 0.3 M Ir in d_faces): once for each register.
+#[test]
+fn test_a_register_s_units_are_worked_out_once_for_a_body() {
+    let mut head = vec![mov(0, rl(RegId::BX, 2), rl(RegId::AX, 2))];
+    for n in 1..9 {
+        head.push(add(n, rl(RegId::CX, 2), rl(RegId::BX, 2)));
+    }
+    let before = super::register_masks_made();
+    propagated(&body(head, &[RegId::BX, RegId::CX]));
+    let made = super::register_masks_made() - before;
+    assert!(made <= 6, "{made} derivations for a body of 4 registers");
+}
+
+/// Equivalence, not fail-first: `mask` read each lane through the lane table
+/// (a lazy lookup per step; 0.4 M Ir of `masks_of` in d_faces) and now reads a
+/// table of bits. Same units for every lane bit and for unions of them.
+#[test]
+fn test_the_mask_of_lanes_is_the_units_of_each_lane() {
+    let at = body(vec![mov(0, rl(RegId::BX, 2), rl(RegId::AX, 2))], &[RegId::BX]);
+    let machine = super::Machine::new(&at);
+    let old = |lanes: &crate::backend::lanes::Lanes| -> u64 {
+        lanes.iter().filter_map(|lane| machine.unit(lane)).fold(0, |mask, unit| mask | 1 << unit)
+    };
+    let mut state = 0x9e37_79b9_7f4a_7c15_u128;
+    let count = crate::backend::lanes::Lanes::count();
+    for bit in 0..count {
+        let one = crate::backend::lanes::Lanes::from_mask(1 << bit);
+        assert_eq!(machine.mask(&one), old(&one), "bit {bit}");
+        state = state.wrapping_mul(0x2545_f491_4f6c_dd1d).rotate_left(29) ^ (state >> 7);
+        let some = crate::backend::lanes::Lanes::from_mask(state & ((1 << count) - 1));
+        assert_eq!(machine.mask(&some), old(&some), "union {state:x}");
+    }
+}
+
+/// The check for a copy in a block asked `copy_of` of its instructions, and
+/// the walk of a block with one asked all of them again (6,368 asks for
+/// d_faces' 1,251 walked instructions): once for each.
+#[test]
+fn test_a_walked_block_is_asked_for_its_copies_once() {
+    let mut head: Vec<_> = (0..8).map(|n| add(n, rl(RegId::CX, 2), rl(RegId::DX, 2))).collect();
+    head.push(mov(8, rl(RegId::BX, 2), rl(RegId::AX, 2)));
+    let before = super::copy_ofs();
+    propagated(&body(head, &[RegId::BX, RegId::CX]));
+    let asked = super::copy_ofs() - before;
+    // 9 instructions of the head and the 2 of the tail, and each rewrite once.
+    assert!(asked <= 11 + 3, "{asked} asks for 11 instructions");
+}
+
+/// x_hanoi2 `mv`: `mov bx, ax; test bx, bx` kept reading bx, one operand
+/// renamed alone is another instruction, so the copy stayed in the entry and
+/// shrink wrapping found a callee-saved definition there (13 instructions a
+/// leaf call against the pin's 3).
+#[test]
+fn test_an_instruction_that_reads_the_copys_destination_twice_reads_the_source_twice() {
+    let test = Arc::new(Insn::new(
+        1,
+        Some((1, 1)),
+        Some(semantics(Operation::Compare, "test", vec![], vec![rl(RegId::BX, 2), rl(RegId::BX, 2)])),
+        vec![],
+        vec![],
+    ));
+    let got = propagated(&body(vec![mov(0, rl(RegId::BX, 2), rl(RegId::AX, 2)), test], &[RegId::BX]));
+    assert_eq!(lines(&got), ["-", "test AX,AX"]);
 }

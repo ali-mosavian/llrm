@@ -1035,9 +1035,15 @@ impl ScalarEvolution {
         // The loops form a linear order by domination: the innermost is the one
         // no other loop's header is properly dominated by.
         let Some(&first) = used.first() else { return false };
-        let mdl = used.iter().copied().fold(first, |best, one| {
-            if cx.tree.properly_dominates(best, one) { one } else { best }
-        });
+        let mdl = used
+            .iter()
+            .copied()
+            .fold(
+                first,
+                |best, one| {
+                    if cx.tree.properly_dominates(best, one) { one } else { best }
+                },
+            );
 
         // Get init and post increment value for LHS.
         let (lhs_init, lhs_post) = self.split_into_init_and_post_inc(cx, mdl, lhs);

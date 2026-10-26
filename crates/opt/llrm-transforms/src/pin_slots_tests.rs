@@ -169,7 +169,7 @@ enum Why {
     Order,
     /// Run by a stage of ours that is outside the registry (the executed order
     /// of a compile, `--dump` of d_faces -O1/-O2/-Os: globalopt, ports, stamp,
-    /// the early function list, ipo-early, sccp, the cleanup list, walk, the
+    /// the early function list, ipo-early, the cleanup list, walk, the
     /// late list, interprocedural, writeonly, globaldce,
     /// available-externally, calleepop, ...; pipeline.rs `recorded`).
     Executed,
@@ -226,21 +226,6 @@ const ROWS: &[Disposition] = &[
         Why::Missing,
         "errno-setting libm calls; ablation 0 of 12 IRs",
         "funcattrs-port, 11-09",
-    ),
-    row(Simplify, "constraint-elimination", Why::Missing, "registry Missing entry; ablation 0 of 12 IRs", "w-4, 11-09"),
-    row(
-        Simplify,
-        "loop-instsimplify",
-        Why::Missing,
-        "registry Missing entry; ablation 0 of 12 IRs",
-        "w-3 (w-5 if silent at 09:00), 11-09",
-    ),
-    row(
-        Simplify,
-        "loop-simplifycfg",
-        Why::Missing,
-        "registry Missing entry; ablation 0 of 12 IRs",
-        "w-3 (w-5 if silent at 09:00), 11-09",
     ),
     row(
         Simplify,
@@ -305,13 +290,6 @@ const ROWS: &[Disposition] = &[
         "",
     ),
     row(Late, "infer-alignment", Why::Missing, "ablation 0 of 12 IRs", "w-1, 11-09"),
-    row(
-        Late,
-        "instcombine",
-        Why::Missing,
-        "the three late runs; ours has no combine slot in the late list",
-        "w-4, 11-09",
-    ),
     row(
         Late,
         "loop-unroll",
@@ -432,7 +410,7 @@ const ROWS: &[Disposition] = &[
         Module,
         "ipsccp",
         Why::Deviate,
-        "DEVIATE (pipeline.rs): ipo-early (walk::ModuleIpo: ipa-args, ipa-range) + sccp; what flows between bodies is ModuleIpo's, not the solver's; exit: ModuleIpo runs the solver over the program",
+        "DEVIATE (ipsccp.rs): ipo-early (walk::ModuleIpo: run_ipsccp); no FunctionSpecializer, ipa-cp clones stand for it (ipsccp.rs DEVIATE 1)",
         "",
     ),
     row(Module, "called-value-propagation", Why::Missing, "indirect calls only; not measured", "w-6, 11-09"),
@@ -522,10 +500,6 @@ const ROWS: &[Disposition] = &[
 
 /// The built slot groups no pin slot is matched to, with why.
 const OURS_ONLY: &[(&str, &str)] = &[
-    (
-        "2376: simplifycfg@2376",
-        "registry Partial: its position in the Late list is not the pin's (unverified which pin simplifycfg it is)",
-    ),
     ("1474: loop-unroll-and-jam@1474", "-O3: the pin's printed list has no unroll-and-jam in this fixture; unverified"),
     (
         "764: loopsimplify@764 + lcssa@764",
@@ -538,10 +512,6 @@ const OURS_ONLY: &[(&str, &str)] = &[
     ),
     (
         "787: inferspace@787",
-        "-O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot)",
-    ),
-    (
-        "809: decide@809",
         "-O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot)",
     ),
     (
@@ -777,6 +747,26 @@ fn every_pin_slot_is_matched_or_accounted_for() {
     errors.sort();
     errors.dedup();
     assert!(errors.is_empty(), "{} problems:\n{}", errors.len(), errors.join("\n"));
+}
+
+/// `simplifycfg@2376` is LateFPM of buildLTODefaultPipeline, not of
+/// `default<O2>`: it ran a ninth SimplifyCFG on every function (+1.4 M Ir on
+/// d_faces -O2, object unchanged).
+#[test]
+fn test_o2_has_the_pins_simplifycfg_slots_and_no_more() {
+    let pin = parse(FIXTURES[1].1).iter().filter(|slot| slot.name == "simplifycfg").count();
+    let ours: usize = [Phase::Early, Phase::Cleanup, Phase::Simplify, Phase::Late]
+        .into_iter()
+        .map(|phase| {
+            built_groups("-O2", phase)
+                .iter()
+                .filter(|(_, entries)| {
+                    entries.iter().any(|entry| llvm_names(entry).iter().any(|name| name == "simplifycfg"))
+                })
+                .count()
+        })
+        .sum();
+    assert_eq!(ours, pin);
 }
 
 /// Every pin slot of every level is in exactly one of six states, and the

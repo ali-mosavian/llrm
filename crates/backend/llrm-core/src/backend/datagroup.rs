@@ -194,12 +194,13 @@ fn _restore(
     let at = one.covers.map_or(one.at, |covers| covers.0);
     let what = Semantics {
         op: Operation::Move,
-        name: Some("mov".to_owned()),
+        name: Some("mov".into()),
         dests: vec![Loc::Reg(ir::Reg { register: data, width: 2 })],
         sources: vec![Loc::Reg(ir::Reg { register: through, width: 2 })],
         target: None,
         indirect: false,
         table: Vec::new(),
+        repeat: false,
     };
     let mut made = Insn::new(one.at, Some((at, at)), Some(what), vec![], vec![]);
     made.call = one.call.clone();

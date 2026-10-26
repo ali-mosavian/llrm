@@ -71,7 +71,7 @@ use std::sync::Arc;
 use crate::backend::assemble::Machined;
 use crate::backend::frame::Frame;
 use crate::model::ir::{Addr, AddressRef, Loc, Mem, Semantics, Space};
-use crate::model::lir::{CallMemory, DebugPlace, DebugVariable, Insn, LirBlock, WHOLE_FRAME, outside};
+use crate::model::lir::{CallMemory, DebugPlace, DebugVariable, Insn, LirBlock, LirBody, WHOLE_FRAME, outside};
 use crate::support::hash::IndexMap;
 
 /// `first`, which was laid out under `frame` (no hole), laid out with `hole`
@@ -86,25 +86,8 @@ pub fn laid_again(
         return None;
     }
     let (again, homes) = replayed(frame, hole)?;
-    let moved = Moves { frame, homes: &homes, hole };
-    let mut blocks = Vec::with_capacity(first.body.blocks.len());
-    for block in &first.body.blocks {
-        let mut insns = Vec::with_capacity(block.insns.len());
-        for one in &block.insns {
-            insns.push(moved.insn(one)?);
-        }
-        blocks.push(LirBlock { insns: insns.into(), ..block.clone().into_inner() }.into());
-    }
-    let mut body = first.body.with_blocks(blocks);
-    body.homes = Arc::new(
-        first
-            .body
-            .homes
-            .iter()
-            .map(|(value, cell)| Some((*value, moved.mem(cell)?)))
-            .collect::<Option<std::collections::BTreeMap<_, _>>>()?,
-    );
-    body.variables = first.body.variables.iter().map(|one| moved.variable(one)).collect::<Option<Vec<_>>>()?;
+    let moved = Moves { frame: Some(frame), homes: &homes, hole };
+    let body = moved_body(&first.body, &moved)?;
     let reserve = -std::cmp::min(again.slots.values().copied().min().unwrap_or(0), again.floor);
     let mut inline = first.inline.clone();
     for (at, places) in &first.inline_places {
@@ -144,6 +127,40 @@ pub fn laid_again(
     Some((machined, again))
 }
 
+/// `body` with every cell moved by `moved`.
+fn moved_body(
+    body: &LirBody,
+    moved: &Moves,
+) -> Option<LirBody> {
+    let mut blocks = Vec::with_capacity(body.blocks.len());
+    for block in &body.blocks {
+        let mut insns = Vec::with_capacity(block.insns.len());
+        for one in &block.insns {
+            insns.push(moved.insn(one)?);
+        }
+        blocks.push(LirBlock { insns: insns.into(), ..block.clone().into_inner() }.into());
+    }
+    let mut out = body.with_blocks(blocks);
+    out.homes = Arc::new(
+        body.homes
+            .iter()
+            .map(|(value, cell)| Some((*value, moved.mem(cell)?)))
+            .collect::<Option<std::collections::BTreeMap<_, _>>>()?,
+    );
+    out.variables = body.variables.iter().map(|one| moved.variable(one)).collect::<Option<Vec<_>>>()?;
+    Some(out)
+}
+
+/// `body` with every cell below BP `bytes` lower, as a frame whose callee-saved
+/// registers are pushed first lays it out; None where a cell names no slot.
+pub fn pushed_down(
+    body: &LirBody,
+    bytes: i64,
+) -> Option<LirBody> {
+    let homes = IndexMap::default();
+    moved_body(body, &Moves { frame: None, homes: &homes, hole: bytes })
+}
+
 /// The frame `frame` would be with `hole`: the same floor lowered by the hole,
 /// the selector's slots moved, and the spill slots handed out again in the
 /// order they were first made.
@@ -176,7 +193,8 @@ fn replayed(
 }
 
 struct Moves<'a> {
-    frame: &'a Frame,
+    /// None: every cell below BP moves by `hole` (`pushed_down`).
+    frame: Option<&'a Frame>,
     /// Each spill slot's first byte in the old layout and in the new.
     homes: &'a IndexMap<i64, i64>,
     hole: i64,
@@ -192,10 +210,11 @@ impl Moves<'_> {
         if home == 0 {
             return Some(0);
         }
+        let Some(frame) = self.frame else { return Some(home - self.hole) };
         if let Some(found) = self.homes.get(&home) {
             return Some(*found);
         }
-        self.frame.extents.iter().any(|(start, _)| *start == home).then_some(home - self.hole)
+        frame.extents.iter().any(|(start, _)| *start == home).then_some(home - self.hole)
     }
 
     /// Where the byte at `disp` of a cell tagged with slot `home` is in the new
@@ -208,12 +227,13 @@ impl Moves<'_> {
         if home == 0 {
             return Some(disp);
         }
+        let Some(frame) = self.frame else { return Some(disp - self.hole) };
         // A spill slot: where the replay put the slot, and the cell's place in
         // it.
         if let Some(found) = self.homes.get(&home) {
             return Some(disp - home + found);
         }
-        if self.frame.extents.iter().any(|(start, _)| *start == home) {
+        if frame.extents.iter().any(|(start, _)| *start == home) {
             return Some(disp - self.hole);
         }
         None
@@ -268,22 +288,31 @@ impl Moves<'_> {
         &self,
         one: &Arc<Insn>,
     ) -> Option<Arc<Insn>> {
+        // Most instructions name no cell that moves: they are shared as they
+        // are, without a copy of their semantics.
         let what = match &one.what {
-            Some(what) => Some(Semantics {
-                dests: what.dests.iter().map(|place| self.loc(place)).collect::<Option<_>>()?,
-                sources: what.sources.iter().map(|place| self.loc(place)).collect::<Option<_>>()?,
-                ..what.clone()
-            }),
+            Some(what) => {
+                let dests: Vec<Loc> = what.dests.iter().map(|place| self.loc(place)).collect::<Option<_>>()?;
+                let sources: Vec<Loc> = what.sources.iter().map(|place| self.loc(place)).collect::<Option<_>>()?;
+                (dests != what.dests || sources != what.sources).then(|| Semantics { dests, sources, ..what.clone() })
+            }
             None => None,
         };
         let call = match &one.call {
-            Some(call) => Some(Arc::new(CallMemory { private: self.private(&call.private)?, ..(**call).clone() })),
+            Some(call) => {
+                let private = self.private(&call.private)?;
+                (private != call.private).then(|| Arc::new(CallMemory { private, ..(**call).clone() }))
+            }
             None => None,
         };
-        if what == one.what && call == one.call {
+        if what.is_none() && call.is_none() {
             return Some(Arc::clone(one));
         }
-        Some(Arc::new(Insn { what, call, ..(**one).clone() }))
+        Some(Arc::new(Insn {
+            what: what.or_else(|| one.what.clone()),
+            call: call.or_else(|| one.call.clone()),
+            ..(**one).clone()
+        }))
     }
 
     /// The call-private ranges when the selector's slots are `hole` lower: the
@@ -405,7 +434,7 @@ mod tests {
     fn load(addr: Addr) -> Semantics {
         let cell = Mem { through: RegId::EBP, ..Mem::new(Some(addr), 4) };
         Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![Loc::Reg(Reg { register: RegId::EAX, width: 4 })],
             sources: vec![Loc::Mem(cell)],
             ..Semantics::new(Operation::Move)
@@ -441,7 +470,7 @@ mod tests {
         use crate::backend::frame::Frame;
         let frame = Frame::new(0);
         let homes = crate::support::hash::IndexMap::default();
-        let moves = Moves { frame: &frame, homes: &homes, hole: 6 };
+        let moves = Moves { frame: Some(&frame), homes: &homes, hole: 6 };
         let reach = |ranges: &[(i64, i64)]| crate::model::lir::outside(&ranges.iter().copied().collect());
         assert_eq!(moves.private(&reach(&[(-40, -8), (4, 12)])), Some(reach(&[(-46, -14), (4, 12)])));
     }
@@ -457,7 +486,7 @@ mod tests {
         let mut frame = Frame::new(0);
         frame.extents = vec![(-100, 32)];
         let homes = [(-12, -20)].into_iter().collect();
-        let moves = Moves { frame: &frame, homes: &homes, hole: 8 };
+        let moves = Moves { frame: Some(&frame), homes: &homes, hole: 8 };
         let cell = |disp: i64, home: i64| Addr::new(Space::Frame, disp).in_slot(home);
         let (spilled, _) = moves.addr(cell(-10, -12), 0).expect("a spill slot moves");
         assert_eq!((spilled.disp, spilled.slot_home()), (-18, Some(-20)));
@@ -465,5 +494,34 @@ mod tests {
         assert_eq!((laid.disp, laid.slot_home()), (-98, Some(-108)));
         let (incoming, _) = moves.addr(cell(8, 0), 0).expect("an incoming argument stays");
         assert_eq!((incoming.disp, incoming.slot_home()), (8, Some(0)));
+    }
+
+    #[global_allocator]
+    static COUNTING: llrm_support::alloc_count::Counting = llrm_support::alloc_count::Counting;
+
+    /// An instruction that names no cell that moves was copied whole (its
+    /// semantics twice) before it was found equal and shared: d_faces -O2
+    /// spent 1.6 M Ir on 4 K such copies. Now it costs the two operand lists.
+    #[test]
+    fn test_an_instruction_naming_no_moved_cell_is_shared_without_a_copy() {
+        use std::sync::Arc;
+
+        use super::Moves;
+        use crate::backend::frame::Frame;
+        use crate::model::lir::Insn;
+        let reg = |register| Loc::Reg(Reg { register, width: 4 });
+        let what = Semantics {
+            name: Some("add".into()),
+            dests: vec![reg(RegId::EAX)],
+            sources: vec![reg(RegId::EAX), reg(RegId::EDX)],
+            ..Semantics::new(Operation::Move)
+        };
+        let one = Arc::new(Insn::new(0, None, Some(what), vec![], vec![]));
+        let frame = Frame::new(0);
+        let homes = crate::support::hash::IndexMap::default();
+        let moves = Moves { frame: Some(&frame), homes: &homes, hole: 8 };
+        let (moved, made) = llrm_support::alloc_count::counted(|| moves.insn(&one));
+        assert!(Arc::ptr_eq(&moved.expect("nothing to refuse"), &one));
+        assert!(made <= 2, "{made} allocations for an instruction that does not move");
     }
 }

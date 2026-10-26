@@ -56,7 +56,6 @@
 //!   #  phase (name)             module        notes
 //!   1  far-indirect-calls       farcall       memory operand for a far call
 //!   2  SharedConstants          phiconst      one value for a constant several phi edges carry
-//!   3  SsaSpill                 ssaspill      spiller route only
 //!   4  liverangeshrink          liverangeshrink  instruction up to its operands' last def
 //!   4  phielim                  phielim       phis -> copy groups; SSA ends
 //!   5  pressuresink             pressuresink  move a load to its one reader
@@ -76,12 +75,12 @@
 //! ```
 //!
 //! Phases 4 to 9 are in `machine_with` before `allocate`; `allocate` calls
-//! `splitkit`, `spillplacement`, `spiller`, `spillforward` and `postings` for
-//! live-range splitting and spilling, and consults `constrain`, `classes`,
+//! `spillplacement`, `slots` and `postings` for live-range splitting and
+//! spilling, and consults `constrain`, `classes`,
 //! `registerinfo` and `datagroup` for what each value may be assigned.
 //! `peephole` calls the sub-passes `regthrash`, `machinecp`, `copysink`,
-//! `spillforward`, `postrasink`, `storecombine`, `sharedstores`,
-//! `exactaddress`, `machinecse`, `machinedce` and `upperzero`, and the rule
+//! `postrasink`, `storecombine`, `sharedstores`,
+//! `exactaddress`, `machinedce` and `upperzero`, and the rule
 //! groups of `peep`.
 //!
 //! The analyses the phases share: `liveness` and `lanes` (register and flag
@@ -116,8 +115,8 @@
 //! `-m16 -O2`.
 //!
 //! # Runs
-//! `assemble::assembled_by` runs it once per module. The gating of the two
-//! allocation routes (`-fallocation-routes`, `-fallocation-search`,
+//! `assemble::assembled_by` runs it once per module. The gating of the
+//! allocation search (`-fallocation-search`,
 //! `-fallocation-search-all`, at -Os candidates priced in bytes) is described
 //! in `assemble` and `allocate`. `ISEL_DUMP=1` prints the LIR after each
 //! machine phase (`lirtext`).
@@ -190,9 +189,12 @@ pub mod selectors {
     include!(concat!(env!("OUT_DIR"), "/selectors.rs"));
 }
 pub mod booleans;
+pub mod callframe;
 pub mod cmpsub;
+pub mod earlytaildup;
 pub mod edges;
 pub mod fixupbw;
+pub mod fixupleas;
 pub mod fixupsetcc;
 pub mod flagscopy;
 pub mod incremental;
@@ -214,12 +216,18 @@ pub mod liveunion;
 pub mod loopslots;
 pub mod lower_int64;
 pub mod machinecp;
-pub mod machinecse;
 pub mod machinedce;
 pub mod machinelicm;
 pub mod machinesched;
 pub mod machinesink;
 pub mod masm;
+pub mod memcpycall;
+#[cfg(test)]
+mod memcpycall_tests;
+pub mod memsetpattern;
+#[cfg(test)]
+mod memsetpattern_tests;
+pub mod mirprint;
 pub mod nativeframe;
 pub mod nearcode;
 pub mod needs;
@@ -230,17 +238,19 @@ pub mod overlap;
 pub mod parcopy;
 pub mod peep;
 pub mod peephole;
+pub mod peepholeopt;
 pub mod phiconst;
 pub mod phielim;
-pub mod pointers;
 pub mod postings;
 pub mod postrasink;
 pub mod precse;
 pub mod pressuresink;
 pub mod prologue;
 pub mod pushfold;
+pub mod regpressure;
 pub mod regthrash;
 pub mod relayout;
+pub mod returnsplit;
 pub mod rmw;
 pub mod saverestore;
 pub mod schedule;
@@ -318,15 +328,13 @@ pub mod select {
         emit_in(BITNESS, what, at, r#where, short, relocated, held)
     }
 }
+pub mod bodyfacts;
 pub mod regclass;
 pub mod registerinfo;
+pub mod repbsf;
 pub mod rewriter;
 pub mod sharedstores;
-pub mod spiller;
-pub mod spillforward;
 pub mod spillplacement;
-pub mod ssarepair;
-pub mod ssaspill;
 pub mod storecombine;
 pub mod storedhomes;
 pub mod target;
@@ -343,5 +351,3 @@ pub(crate) mod regalloc_fuzz_tests;
 pub mod regalloc_input;
 #[cfg(test)]
 mod regalloc_total_tests;
-#[cfg(test)]
-mod ssaspill_tests;

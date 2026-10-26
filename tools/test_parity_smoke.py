@@ -396,12 +396,12 @@ def test_every_failing_qcport_module_is_listed_not_the_first(tmp_path, monkeypat
 
 
 def test_a_pr_touching_the_qb_frontend_x86_isel_or_the_runtime_spec_runs_every_tests_run_group():
-    for path in ("crates/frontends/llrm-qb/src/compile.rs", "crates/frontends/qbfront/src/semantic.rs", "crates/frontends/llrm-qbruntime/src/runtime.toml", "runtime/qb/strconv.c",
+    for path in ("crates/frontends/qb/src/compile.rs", "crates/frontends/qb/src/semantic.rs", "runtime/qb/src/runtime.toml", "runtime/qb/strconv.c",
                  "crates/target/llrm-x86/src/select.rs", "crates/backend/llrm-core/src/backend/isel.rs"):
         assert ps.runs_whole_groups([path]), path
     for path in ("crates/opt/llrm-transforms/src/gvn.rs", "docs/arch.md", "tools/gate/gate.py", "crates/frontends/llrm-c/src/lib.rs"):
         assert not ps.runs_whole_groups([path]), path
-    assert ps.runs_whole_groups(["docs/arch.md", "crates/frontends/qbfront/src/lexer.rs"])
+    assert ps.runs_whole_groups(["docs/arch.md", "crates/frontends/qb/src/lexer.rs"])
 
 
 def test_a_planted_qb_output_diff_in_a_group_goes_red_and_refuses_the_merge():
@@ -508,6 +508,42 @@ def test_dependants_lib_failures_name_each_failing_test_per_package():
     assert ran == [["-p", "llrm-core", "--lib"]]
 
 
+def test_a_crate_that_did_not_run_shows_why_in_its_refusal():
+    """#4269 was refused twice for `unit <crate>::did-not-run` and the log held nothing else: the compile error (or the crash's exit and last lines) of the crate's test run is kept."""
+
+    def failing(stderr, code):
+        class Done:
+            returncode = code
+            stdout = ""
+
+        Done.stderr = stderr
+        return lambda command, **kwargs: Done()
+
+    ps.CAUSES.clear()
+    broken = "   Compiling llrm-core\nerror[E0432]: unresolved import `crate::nothing`\n --> src/lib.rs:1:5\nerror: could not compile `llrm-core` (lib test)\n"
+    assert ps.dependants_lib_failures({"llrm-core"}, run=failing(broken, 101)) == {"unit llrm-core::did-not-run"}
+    assert "unresolved import `crate::nothing`" in ps.causes_of({"unit llrm-core::did-not-run"})
+    ps.CAUSES.clear()
+    crashed = "running 3 tests\nerror: test failed, to rerun pass `-p llrm-core --lib`\n\nCaused by:\n  process didn't exit successfully (signal: 11, SIGSEGV)\n"
+    ps.dependants_lib_failures({"llrm-core"}, run=failing(crashed, 101))
+    assert "SIGSEGV" in ps.causes_of({"unit llrm-core::did-not-run"})
+    assert ps.causes_of({"unit llrm-core::some_test"}) == ""
+
+
+def test_a_listed_test_that_passes_is_reported(monkeypatch):
+    """tools/xfail.toml still listed 17 tests after they passed or were gone, and PRs landed: the header says a listed test that passes fails the gate."""
+    import xfail
+
+    monkeypatch.setattr(xfail, "load", lambda *a, **k: {"unit llrm-nib::test_debug::fixed": {"issue": 1}, "unit llrm-nib::test_debug::still_red": {"issue": 1}})
+
+    class Done:
+        returncode = 101
+        stdout = "test test_debug::fixed ... ok\ntest test_debug::still_red ... FAILED\nfailures:\n\nfailures:\n    test_debug::still_red\n\ntest result: FAILED. 1 passed; 1 failed\n"
+        stderr = ""
+
+    assert ps.dependants_lib_failures({"llrm-nib"}, run=lambda command, **kwargs: Done()) == {"xpass unit llrm-nib::test_debug::fixed"}
+
+
 def test_every_integration_target_is_mapped_and_an_unmapped_one_is_refused():
     """A transforms PR that breaks loop_rotation must run it: each root integration target is mapped from what its source imports and the compilers it runs. A new target with
     no crate behind it that is neither a scanner nor nightly-only fails here."""
@@ -519,6 +555,15 @@ def test_every_integration_target_is_mapped_and_an_unmapped_one_is_refused():
     assert "loop_rotation" not in nib_only and set(ps.SCANNERS) <= set(nib_only) and not set(ps.NIGHTLY_ONLY) & set(nib_only)
     assert "docs_links" in ps.integration_targets_for(["docs/arch.md"], set(), mapping)
     assert "header_copy" in ps.integration_targets_for(["tests/header_copy.rs"], set(), mapping)
+
+
+def test_the_check_target_is_mapped_to_every_compiler_its_run_lines_drive():
+    """tests/check.rs names only llrm-qb (CARGO_BIN_EXE) but runs the tool of each file's RUN line: copy_idioms.c drives llrm-c, and a change to llrm-c ran no check."""
+    mapping = ps.integration_map()
+    packages, _ = ps.workspace_graph()
+    for tool, changed in (("llrm-c", "crates/frontends/llrm-c/src/lib.rs"), ("llrm-nib", "crates/frontends/llrm-nib/src/lib.rs"), ("llrm-qb", "crates/frontends/llrm-qb/src/lib.rs")):
+        chosen = ps.integration_targets_for([changed], ps.touched_packages([changed], packages), mapping)
+        assert "check" in chosen, f"a change to {tool} does not run tests/check"
 
 
 def test_integration_failures_name_the_red_tests_less_the_listed_ones():
@@ -579,3 +624,39 @@ def test_llrm_c_lib_tests_run_with_the_toolchain_feature_and_other_crates_withou
     ps.dependants_lib_failures({"llrm-c", "llrm-core"}, run=run)
     assert any("--features" in command and "llrm-c" in command for command in ran)
     assert not any("--features" in command and "llrm-core" in command for command in ran)
+
+
+def test_a_selectiondag_change_runs_the_selectiondag_registry():
+    """#3899 landed with tests/selectiondag_registry.rs red (SD403 had no row): the target read no crate, was in neither SCANNERS nor NIGHTLY_ONLY, so no selection
+    of a PR's targets ever named it."""
+    mapping = ps.integration_map()
+    files = ["crates/backend/llrm-core/src/backend/selectiondag/dag_function.rs"]
+    packages, _ = ps.workspace_graph()
+    chosen = ps.integration_targets_for(files, ps.touched_packages(files, packages), mapping)
+    assert "selectiondag_registry" in chosen, chosen
+
+
+def test_a_compile_to_the_null_device_reaches_the_encoder(tmp_path):
+    """The smoke layer compiled with `-o /dev/null`, where llrm-c writes assembly text and never encodes: a program that died in the encoder passed."""
+    compiler = tmp_path / "llrm-c"
+    compiler.write_text("#!/usr/bin/env python3\nimport sys\nout = sys.argv[sys.argv.index('-o') + 1]\nif out.endswith('.obj'):\n    sys.exit('llrm-c: Semantics(op=BINARY)')\n")
+    compiler.chmod(0o755)
+    assert ps.compile_ok([str(compiler), "x.c", "-o", __import__("os").devnull], {}) is not None
+
+
+def test_a_refusal_can_carry_the_first_panic_line_of_a_failed_test():
+    """#4172 was refused three times with the test's name and nothing else; the cause was a `debug_assert_eq!` that fires in the runner's debug profile and not in release."""
+    output = """running 1 test
+test backend::selectiondag::tests::legalize_types::the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector ... FAILED
+
+failures:
+
+---- backend::selectiondag::tests::legalize_types::the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector stdout ----
+
+thread 'backend::selectiondag::tests::legalize_types::the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector' (1924096) panicked at crates/backend/llrm-core/src/backend/selectiondag/legalize_types.rs:173:13:
+assertion `left == right` failed: a node on the worklist is ready
+  left: Processed
+ right: Ready
+"""
+    reasons = ps.panic_reasons(output)
+    assert reasons["the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector"] == "assertion `left == right` failed: a node on the worklist is ready (left: Processed, right: Ready)"

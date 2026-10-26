@@ -5,6 +5,8 @@
 # scratch directory was overwritten by another session: this one lives in the repo and finds everything from its own path.
 set -u
 R=$(cd "$(dirname "$0")/../.." && pwd); S=${PAIR_SCRATCH:-$HOME/scratch}; N=$1; B=$2; W=$3; D=$S/pair-$N; mkdir -p $D
+# BASE must be an ancestor of NEW, or the delta is not NEW's own commits (a pair once compared a base from another branch): refused unless --cross-branch is the 4th argument.
+python3 $R/tools/pairs/ancestry.py $B $W ${4:-} > $D/header.txt || { cat $D/header.txt >&2; exit 2; }
 cd "$S/${PAIR_WT:?PAIR_WT: a worktree to build the shas in}" || exit 2
 for p in "base $B" "new $W"; do set -- $p
   T=$S/sbp-$2; ln -sfn $T $S/sb-$N-$1
@@ -17,14 +19,16 @@ done
 python3 $R/tools/stamp.py --expect-sha $B $S/sb-$N-base/dist/llrm-c && python3 $R/tools/stamp.py --expect-sha $W $S/sb-$N-new/dist/llrm-c || { echo "stamp refused" >> $D/status; exit 3; }
 { md5sum $S/sb-$N-base/dist/llrm-c $S/sb-$N-new/dist/llrm-c | awk '{print substr($1,1,12), $2}'; } > $D/md5.txt
 cd $R
+# The rows and sizes steps run this tree's llrm-run, llrm-qb ...: a stale one stopped both ("stale binaries", pair csr, 2026-10-25).
+cargo build --release --bins -q || { echo "bins build failed" >> $D/status; exit 3; }
 export ROWS_WORK=$S/rows-$N; mkdir -p $ROWS_WORK; ln -sfn $S/rows/main24d $ROWS_WORK/main24d
 nice -n 10 tools/rows/run.sh base $S/sb-$N-base/dist/llrm-c main24d > $ROWS_WORK/base.log 2>&1
 nice -n 10 tools/rows/run.sh main $S/sb-$N-new/dist/llrm-c main24d > $ROWS_WORK/main.log 2>&1
 for n in base main; do grep -E '"variant": ?"(gcc|clang)' $ROWS_WORK/main24d/results.jsonl >> $ROWS_WORK/$n/results.jsonl; done
 bash tools/pairs/analyse_pair.sh rows-$N $S/sb-$N-base/dist $S/sb-$N-new/dist
-cp $ROWS_WORK/report.txt $D/rows-report.txt
+{ cat $D/header.txt; cat $ROWS_WORK/report.txt; } > $D/rows-report.txt
 python3 tools/sizes.py $S/sb-$N-base/dist $S/sb-$N-new/dist -O1 -O2 -O3 -Os > $D/sizes.txt 2>&1
-python3 tools/pairs/objsweep.py $S/sb-$N-base/dist/llrm-c $S/sb-$N-new/dist/llrm-c --src $ROWS_WORK/main/b > $D/objsweep.txt 2>&1
+python3 tools/pairs/objsweep.py $S/sb-$N-base/dist/llrm-c $S/sb-$N-new/dist/llrm-c --src $ROWS_WORK/main/b ${4:-} > $D/objsweep.txt 2>&1
 for side in base new; do sha=$([ $side = base ] && echo $B || echo $W)
   bash tools/pairs/runpinned.sh $sha $S/sb-$N-$side/dist $D/runs-$side.txt
 done

@@ -1,42 +1,67 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/flagscopy.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/flagscopy.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/flagscopy.rs sha256:35087d36b51cf6512b16e73997b1ae5dd4ecac6d557c5cca02b15be85601962b -->
+<!-- src: crates/backend/llrm-core/src/backend/flagscopy.rs sha256:ab68d9e83ab21c1c8e54a5c7a6e4e2d4d28fd94459a92debda6e241a5f1b7204 -->
 
 # flagscopy
 
 Flags kept across an instruction that clobbers them: `X86FlagsCopyLowering`.
 Translated from
-[X86FlagsCopyLowering.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp)
-(`runOnMachineFunction`).
+[X86FlagsCopyLowering.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp),
+function by function, in the pin's order.
 
 ## How it works
-A copy of the flags is two pseudo instructions: `v := flags_copy` where the
-flags are live, and `flags_restore v` where they are wanted back. Each
-condition read after the restore (up to the next instruction that writes
-the flags) gets a byte, `setcc`, made where the copy was; the reader is
-preceded by `test byte, byte` and reads `ne` (`e` for the inverse
-condition, which shares the byte). `adc`/`sbb` read the carry: it is saved
-as `setb` and made again by `add byte, 0xff`. A reader right after another
-of the same byte reuses the `test`. The pseudo instructions go.
+A copy of the flags is the pin's two `COPY`s as two pseudo instructions:
+`v := flags_copy` (`%1 = COPY $eflags`) and `flags_restore v`
+(`$eflags = COPY %1`). For each restore, in reverse post-order, the
+conditions the code after it reads are saved as bytes by `setcc` at the
+copy (`promote_cond_to_reg`, [L744]) and each reader is rewritten:
+a `setcc` takes the saved byte (`rewriteSetCC`),
+`adc`/`sbb`/`rcl`/`rcr` rebuild the carry with `add byte, 255`
+(`rewriteArithmetic`), any other reader (`jcc`, `cmov`) is preceded
+by `test byte, byte` and reads `ne`, or `e` of the opposite condition's byte
+(`rewriteMI`, `getCondOrInverseInReg`,
+`insertTest`). A reader after the first jump of a block needs the
+block split (`splitBlock`).
 
-Pin functions, in order: [`runOnMachineFunction`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L263) is `lowered`;
-[`collectCondsInRegs`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L721) and [`promoteCondToReg`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L744) are the
-byte made per condition (`bytes`, `setcc` at the copy);
-[`getCondOrInverseInReg`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L761) is the shared byte for a condition and
-its inverse (`PAIRS`); [`insertTest`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L775) is the `test`;
-[`rewriteSetCC`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L785) and [`rewriteMI`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L899) (jcc, cmov) are the
-`Read::Cond` arm; [`rewriteArithmetic`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L824) (adc, sbb) is the
-`Read::Carry` arm.
+Pin functions in file order: `isArithmeticOp` ([L144]) is `reads::Arith`;
+`splitBlock` ([L149]) is `split_block`; `getClobberType` ([L251]) only
+serves the NF variants, which the target lacks (`hasNF` is APX: N/A);
+`runOnMachineFunction` ([L263]) is `lowered` and `lower_copy`;
+`collectCondsInRegs` ([L721]), `promoteCondToReg` ([L744]),
+`getCondOrInverseInReg` ([L761]), `insertTest` ([L775]), `rewriteSetCC`
+([L785]), `rewriteArithmetic` ([L824]), `getImplicitCondFromMI` ([L855],
+the x87 `fcmov`s: LIR has none before allocation, N/A) and `rewriteMI`
+([L899]) keep their names in snake case.
 
-DEVIATE R2 (no number yet): the pin finds `COPY $eflags` that isel and
-earlier passes leave; LIR has none, so the copy is the pseudo pair and
-`lowered` takes the place of the search. The pin splits blocks
-([`splitBlock`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L149)) to follow a copy across them; see R1. Owner w-5,
-review 2026-11-19; exit: an isel producer of a flags copy.
+[L144]:
+https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L144
+[L149]:
+https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L149
+[L744]:
+https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L744
+[L761]:
+https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L761
+[L775]:
+https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L775
+[L785]:
+https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L785
+[L824]:
+https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L824
+[L899]:
+https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L899
 
-DEVIATE R1 (no number yet): a copy and its restore must be in one block (the
-pin follows the copy across blocks by dominance); else the pass fails.
-Exit: the first isel producer of a cross-block copy. Nothing in isel makes
-a copy yet, so the pass does nothing on the corpus.
+Cross-block lowering follows the pin: the copy may be in another block than
+its restore, the test position is hoisted up the dominator tree while the
+flags live in and nothing clobbers them (`HasEFLAGSClobber`,
+`HasEFLAGSClobberPath`), the flags live into successors are rewritten
+where they are read (the copy's block must dominate them; else the pin's
+fatal error, here an `Err`), and a second `jcc` on the flags goes to a block
+split off (`splitBlock`) with its edges, probabilities and phis.
+The NF variants (`hasNF` is APX) and the x87 `fcmov` forms have no
+counterpart: N/A.
+
+DEVIATE R2 (no number yet): no isel producer of `flags_copy`/`flags_restore`
+exists, so tests hand-build LIR; owner w-5, review 2026-11-19, exit an isel
+producer.
 
 ## Example
 ```lir

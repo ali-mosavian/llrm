@@ -11,8 +11,9 @@
 //! `[isel] NAME selector=old instructions=21 copies=3 executed=40 memory=12`.
 //! `executed` and `memory` are `executed::executed`'s estimate (`-` where the
 //! body has no finite one); `copies` are register-to-register `mov`s.
-//! `ISEL_DUMP=1` also prints `=== ISel old` (or `dag`) right after selection,
-//! before any machine phase.
+//! `LLRM_ISEL_REPORT=FILE` appends `NAME dag|old` per function: who selected
+//! it. `ISEL_DUMP=1` also prints `=== ISel old` (or `dag`) right after
+//! selection, before any machine phase.
 //!
 //! # Example
 //! A function of 3 instructions holding one register copy:
@@ -42,6 +43,9 @@ pub enum Selector {
     Old,
     /// The SelectionDAG translation, `selectiondag-plan.md`.
     Dag,
+    /// The DAG path where it can select, else the old selector, each refusal
+    /// reported (`[isel] NAME refused: WHY`): what the harness measures.
+    Shadow,
 }
 
 impl Selector {
@@ -50,6 +54,7 @@ impl Selector {
         match self {
             Self::Old => "old",
             Self::Dag => "dag",
+            Self::Shadow => "shadow",
         }
     }
 
@@ -58,9 +63,66 @@ impl Selector {
         match text {
             "old" => Ok(Self::Old),
             "dag" => Ok(Self::Dag),
-            _ => Err(format!("unknown --isel={text}; choose old or dag")),
+            "shadow" => Ok(Self::Shadow),
+            _ => Err(format!("unknown --isel={text}; choose old, dag or shadow")),
         }
     }
+}
+
+/// Whether `LLRM_ISEL_ONLY` (a comma-separated list of function names; unset,
+/// every function) lets the DAG path select `name`.
+pub fn only(name: &str) -> bool {
+    only_in(llrm_support::env_var("LLRM_ISEL_ONLY").and_then(|list| list.to_str()), name)
+}
+
+fn only_in(
+    list: Option<&str>,
+    name: &str,
+) -> bool {
+    list.is_none_or(|list| list.split(',').any(|one| one == name))
+}
+
+#[cfg(test)]
+pub(super) fn only_listed(
+    list: Option<&str>,
+    name: &str,
+) -> bool {
+    only_in(list, name)
+}
+
+/// `LLRM_ISEL_REPORT=FILE`: one line `NAME dag` or `NAME old` appended per
+/// function, for the one that selected it (a shadow run's refused function is
+/// `old`). A run that reports a selection percentage or an execution count
+/// proves with it which selector compiled what: the flag alone does not.
+pub fn record(
+    name: &str,
+    by: Selector,
+) {
+    if let Some(path) = llrm_support::env_var("LLRM_ISEL_REPORT") {
+        record_to(std::path::Path::new(&path), name, by);
+    }
+}
+
+fn record_to(
+    path: &std::path::Path,
+    name: &str,
+    by: Selector,
+) {
+    use std::io::Write;
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        // one write: parallel compiles append to one report, and `writeln!` is
+        // several
+        let _ = file.write_all(format!("{name} {}\n", by.name()).as_bytes());
+    }
+}
+
+#[cfg(test)]
+pub(super) fn recorded_to(
+    path: &std::path::Path,
+    name: &str,
+    by: Selector,
+) {
+    record_to(path, name, by);
 }
 
 /// The `isel` channel's row for `body`, finished by `selector`.

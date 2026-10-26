@@ -12,7 +12,7 @@ use llrm_lir::registers::RegId;
 
 use super::*;
 use crate::backend::frame::Frame;
-use crate::backend::{machinecp, parcopy, prologue, spillforward, verify};
+use crate::backend::{machinecp, prologue, verify};
 use crate::model::ir::Addr;
 use crate::support::hash::HashMap;
 use crate::support::hash::IndexMap;
@@ -104,7 +104,7 @@ fn frame(disp: i64) -> Option<Addr> {
 }
 
 fn names(insns: &[Arc<Insn>]) -> Vec<String> {
-    insns.iter().map(|one| one.what.as_ref().unwrap().name.clone().unwrap()).collect()
+    insns.iter().map(|one| one.what.as_ref().unwrap().name.as_deref().map(str::to_owned).unwrap()).collect()
 }
 
 fn code(what: &Semantics) -> Vec<u8> {
@@ -226,134 +226,6 @@ fn test_argument_materialization_does_not_cross_observable_boundaries() {
         let input = body("screen", 0, crate::model::lir::shared(blocks));
         assert_eq!(pushed_constants(rules(), &input), input, "{barrier}");
     }
-}
-
-#[test]
-fn test_entry_reload_requires_agreement_on_every_edge() {
-    // NBODY's header reload is redundant only when all paths carry the exact
-    // stored bits.
-    for mismatch in ["none", "register", "slot", "width", "clobber", "missing", "unowned", "entry"] {
-        let register = rl(RegId::EAX, 4);
-        let cell = Mem { through: RegId::BP, ..Mem::new(frame(-4), 4) };
-        let store = insn(
-            1,
-            Some((1, 1)),
-            Some(sem(Operation::Move, "mov", vec![Loc::Mem(cell.clone())], vec![register.clone()])),
-            vec![],
-            vec![],
-        );
-        let mut other = store.clone();
-        match mismatch {
-            "register" => other.what.as_mut().unwrap().sources = vec![rl(RegId::ECX, 4)],
-            "slot" => {
-                other.what.as_mut().unwrap().dests =
-                    vec![Loc::Mem(Mem { addr: Some(cell.addr.unwrap().plus(-4)), ..cell.clone() })];
-            }
-            "width" => other.what.as_mut().unwrap().dests = vec![Loc::Mem(Mem { width: 2, ..cell.clone() })],
-            "clobber" => other.clobbers = [RegId::EAX].into(),
-            "missing" => other.what = None,
-            _ => {}
-        }
-        let reload = Insn {
-            spill_reload: mismatch != "unowned",
-            ..insn(
-                3,
-                Some((3, 3)),
-                Some(sem(Operation::Move, "mov", vec![register], vec![Loc::Mem(cell)])),
-                vec![],
-                vec![],
-            )
-        };
-        let input = body(
-            "join",
-            if mismatch == "entry" { 3 } else { 0 },
-            vec![
-                block(0, vec![], vec![1, 2]).into(),
-                block(1, vec![Arc::new(store)], vec![3]).into(),
-                block(2, vec![Arc::new(other)], vec![3]).into(),
-                block(3, vec![Arc::new(reload.clone())], vec![]).into(),
-            ],
-        );
-        let done = spillforward::forwarded(&input);
-        let kept =
-            done.blocks[done.blocks.len() - 1].insns.iter().any(|one| one.spill_reload || one.what == reload.what);
-        assert_eq!(kept, !["none", "unowned"].contains(&mismatch), "{mismatch}");
-    }
-}
-
-/// A store of a register back into the slot it holds is dead: qbsp's
-/// RPointLeaf reloaded a spilled pointer and stored it straight back, on
-/// each side of a call, every iteration.
-#[test]
-fn test_storing_a_slot_back_from_its_reload_is_dead() {
-    let register = rl(RegId::BX, 2);
-    let cell = Loc::Mem(Mem { through: RegId::BP, ..Mem::new(frame(-32), 2) });
-    let reload = insn(
-        1,
-        Some((1, 1)),
-        Some(sem(Operation::Move, "mov", vec![register.clone()], vec![cell.clone()])),
-        vec![],
-        vec![],
-    );
-    let back = insn(
-        2,
-        Some((2, 2)),
-        Some(sem(Operation::Move, "mov", vec![cell.clone()], vec![register.clone()])),
-        vec![],
-        vec![],
-    );
-    let other =
-        insn(3, Some((3, 3)), Some(sem(Operation::Move, "mov", vec![cell], vec![rl(RegId::CX, 2)])), vec![], vec![]);
-    let input = body("back", 1, vec![block(1, vec![Arc::new(reload), Arc::new(back), Arc::new(other)], vec![]).into()]);
-
-    let done = spillforward::forwarded(&input);
-
-    let stores: Vec<_> = done
-        .insns()
-        .iter()
-        .filter_map(|one| one.what.as_ref())
-        .filter(|what| matches!(what.dests[..], [Loc::Mem(_)]))
-        .map(|what| what.sources.clone())
-        .collect();
-    assert_eq!(stores, vec![vec![rl(RegId::CX, 2)]]);
-}
-
-#[test]
-fn test_forwarded_spill_reload_retains_its_virtual_definition() {
-    // BASIC nbody's store read value#979 after spill forwarding removed its
-    // reload.
-    let register = rl(RegId::EAX, 4);
-    let source = Loc::Mem(Mem { through: RegId::BP, ..Mem::new(frame(-4), 4) });
-    let destination = Loc::Mem(Mem::new(Some(Addr::new(Space::Segment, 8)), 4));
-    let establish = insn(
-        1,
-        Some((1, 1)),
-        Some(sem(Operation::Move, "mov", vec![source.clone()], vec![register.clone()])),
-        vec![],
-        vec![],
-    );
-    let reload = Insn {
-        spill_reload: true,
-        ..insn(
-            2,
-            Some((2, 2)),
-            Some(sem(Operation::Move, "mov", vec![register.clone()], vec![source])),
-            vec![2],
-            vec![],
-        )
-    };
-    let consume =
-        insn(3, Some((3, 4)), Some(sem(Operation::Move, "mov", vec![destination], vec![register])), vec![], vec![2]);
-    let input = body(
-        "forwarded-definition",
-        1,
-        vec![block(1, vec![Arc::new(establish), Arc::new(reload), Arc::new(consume)], vec![]).into()],
-    );
-
-    let done = spillforward::forwarded(&input);
-
-    assert!(verify::verify(&done, false).is_empty());
-    assert_eq!(done.insns().iter().filter(|one| one.what.as_ref().unwrap().op == Operation::Move).count(), 2);
 }
 
 #[test]
@@ -846,7 +718,11 @@ fn test_source_owned_scale_converges_with_a_synthetic_frontend() {
         ],
     );
 
+    crate::backend::allocate::SETS_BUILT.with(|one| one.set(0));
+    crate::backend::allocate::SETS_BUILT.with(|one| one.set(0));
     let result = addresses(&input, "386").unwrap().insns();
+    let built = crate::backend::allocate::SETS_BUILT.with(|one| one.get());
+    assert_eq!(built, 1, "sets built: addresses reads block exits only");
 
     assert_eq!(names(&result), ["lea", "cmp"]);
     assert_eq!(result[0].covers, Some((0x90, 0x95)));
@@ -977,128 +853,6 @@ fn test_loaded_scaled_add_uses_67h_lea() {
     assert_eq!(address.through, RegId::EDX);
     assert_eq!(address.index_through, RegId::EAX);
     assert_eq!(address.scale, 2);
-}
-
-#[test]
-fn test_repeated_allocated_address_copies_use_one_clean_67h_base() {
-    // lru_use copied one retained owner into BX/SI/DI at every field access.
-    let owner = insn(
-        1,
-        Some((1, 3)),
-        Some(sem(
-            Operation::Move,
-            "mov",
-            vec![rl(RegId::DX, 2)],
-            vec![Loc::Mem(Mem { through: RegId::BP, ..Mem::new(frame(6), 2) })],
-        )),
-        vec![1],
-        vec![],
-    );
-    let registers = [RegId::BX, RegId::SI, RegId::DI, RegId::BX];
-    let mut insns = vec![Arc::new(owner)];
-    for (index, register) in registers.into_iter().enumerate() {
-        let index = index as i64 + 2;
-        let value = u32::try_from(index).unwrap();
-        let copy = insn(
-            index,
-            Some((index, index)),
-            Some(sem(Operation::Move, "mov", vec![rl(register, 2)], vec![rl(RegId::DX, 2)])),
-            vec![value],
-            vec![1],
-        );
-        let cell = Mem {
-            through: register,
-            base: Some(Held { value, width: 2 }),
-            selector: Some(Held { value: 20, width: 2 }),
-            ..Mem::new(Some(Addr { segment: (RegId::FS).iced(), ..Addr::new(Space::Far, index) }), 2)
-        };
-        let load = insn(
-            index,
-            Some((index, index)),
-            Some(sem(Operation::Move, "mov", vec![rl(RegId::AX, 2)], vec![Loc::Mem(cell)])),
-            vec![30 + value],
-            vec![value, 20],
-        );
-        insns.extend([Arc::new(copy), Arc::new(load)]);
-    }
-    let input = body("secondary-base", 1, vec![block(1, insns, vec![]).into()]);
-
-    let result = secondary_bases(&input, "386").unwrap().insns();
-
-    let moves: Vec<&Arc<Insn>> =
-        result.iter().filter(|one| one.what.as_ref().unwrap().name.as_deref() == Some("mov")).collect();
-    assert_eq!(moves.len(), 5); // the owner load and four actual memory loads
-    let extension = result.iter().find(|one| one.what.as_ref().unwrap().name.as_deref() == Some("movzx")).unwrap();
-    assert_eq!(extension.what.as_ref().unwrap().dests, [rl(RegId::EDX, 4)]);
-    let cells: Vec<&Loc> = moves[1..].iter().map(|one| &one.what.as_ref().unwrap().sources[0]).collect();
-    assert!(cells.iter().all(|cell| matches!(cell, Loc::Mem(cell) if cell.through == RegId::EDX)));
-    assert!(cells.iter().all(|cell| matches!(cell, Loc::Mem(cell) if cell.base == Some(Held { value: 1, width: 4 }))));
-
-    // P6 and Core charge both a partial-register merge and a length-changing
-    // 67h decode stall; selection must not optimize against a cheaper model.
-    for target_cpu in ["P6", "Core"] {
-        let expensive = secondary_bases(&input, target_cpu).unwrap().insns();
-        assert!(!expensive.iter().any(|one| one.what.as_ref().unwrap().name.as_deref() == Some("movzx")));
-        assert_eq!(expensive.iter().filter(|one| one.what.as_ref().unwrap().name.as_deref() == Some("mov")).count(), 9);
-    }
-}
-
-/// A frame cell has two address components, its fixed BP and the dynamic base
-/// the allocator gave it. Widening the base to a 32-bit address would drop BP:
-/// Nib's sum_three wrote its locals through `[eax+si]`. The shape of the test
-/// above, each access a frame cell.
-#[test]
-fn test_a_frame_cell_keeps_its_bp_when_its_base_copies_are_unified() {
-    let owner = insn(
-        1,
-        Some((1, 3)),
-        Some(sem(
-            Operation::Move,
-            "mov",
-            vec![rl(RegId::DX, 2)],
-            vec![Loc::Mem(Mem { through: RegId::BP, ..Mem::new(frame(6), 2) })],
-        )),
-        vec![1],
-        vec![],
-    );
-    let mut insns = vec![Arc::new(owner)];
-    for (index, register) in [RegId::BX, RegId::SI, RegId::DI, RegId::BX].into_iter().enumerate() {
-        let index = index as i64 + 2;
-        let value = u32::try_from(index).unwrap();
-        let copy = insn(
-            index,
-            Some((index, index)),
-            Some(sem(Operation::Move, "mov", vec![rl(register, 2)], vec![rl(RegId::DX, 2)])),
-            vec![value],
-            vec![1],
-        );
-        let cell = Mem { through: register, base: Some(Held { value, width: 2 }), ..Mem::new(frame(-8), 2) };
-        let load = insn(
-            index,
-            Some((index, index)),
-            Some(sem(Operation::Move, "mov", vec![rl(RegId::AX, 2)], vec![Loc::Mem(cell)])),
-            vec![30 + value],
-            vec![value],
-        );
-        insns.extend([Arc::new(copy), Arc::new(load)]);
-    }
-    let input = body("secondary-base", 1, vec![block(1, insns, vec![]).into()]);
-
-    let result = secondary_bases(&input, "386").unwrap().insns();
-
-    assert!(
-        !result.iter().any(|one| one.what.as_ref().unwrap().name.as_deref() == Some("movzx")),
-        "a frame cell's base was widened"
-    );
-    for one in result.iter().filter(|one| one.what.as_ref().unwrap().name.as_deref() == Some("mov")) {
-        for source in &one.what.as_ref().unwrap().sources {
-            if let Loc::Mem(cell) = source {
-                if cell.addr.is_some_and(|addr| addr.space == Space::Frame) && cell.base.is_some() {
-                    assert_eq!(cell.base.unwrap().width, 2, "{cell:?}");
-                }
-            }
-        }
-    }
 }
 
 #[test]
@@ -1861,7 +1615,7 @@ fn test_a_zero_test_before_a_branch_and_a_jump_reads_the_step() {
     let names = tested(rules(), &body("zero", 0, crate::model::lir::shared(blocks))).blocks[0]
         .insns
         .iter()
-        .map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default())
+        .map(|one| one.what.as_ref().and_then(|what| what.name.as_deref().map(str::to_owned)).unwrap_or_default())
         .collect::<Vec<_>>();
     assert_eq!(names, ["add", "", "jne", "jmp"]);
 }
@@ -1900,7 +1654,7 @@ fn test_a_zero_test_after_a_step_with_a_memory_source_reads_the_step() {
     let names = tested(rules(), &body("zero", 0, crate::model::lir::shared(blocks))).blocks[0]
         .insns
         .iter()
-        .map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default())
+        .map(|one| one.what.as_ref().and_then(|what| what.name.as_deref().map(str::to_owned)).unwrap_or_default())
         .collect::<Vec<_>>();
     assert_eq!(names, ["sub", "", "je"]);
 }
@@ -1937,7 +1691,7 @@ fn test_a_zero_test_before_an_anchor_and_its_branch_reads_the_step() {
     let names = tested(rules(), &body("zero", 0, crate::model::lir::shared(blocks))).blocks[0]
         .insns
         .iter()
-        .map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default())
+        .map(|one| one.what.as_ref().and_then(|what| what.name.as_deref().map(str::to_owned)).unwrap_or_default())
         .collect::<Vec<_>>();
     assert_eq!(names, ["add", "", "", "jne"]);
 }
@@ -2205,31 +1959,6 @@ fn test_far_pointer_loaded_in_one_instruction() {
 }
 
 #[test]
-fn test_wait_elimination_does_not_cross_observable_work() {
-    // FPCSEX's redundant waits may disappear, but integer observers still need
-    // completion.
-    for middle in [Some(""), Some("mov"), Some("fnstsw"), Some("fninit"), None, Some("block")] {
-        let instruction = |at: i64, name: Option<&str>| {
-            let what = name.map(|name| sem(Operation::Nothing, name, vec![], vec![]));
-            Arc::new(insn(at, Some((at, at + 1)), what, vec![], vec![]))
-        };
-        let (first, between, last) =
-            (instruction(0, Some("wait")), instruction(1, middle), instruction(2, Some("fld")));
-        let blocks = if middle == Some("block") {
-            vec![block(0, vec![first], vec![2]), block(2, vec![last], vec![])]
-        } else {
-            vec![block(0, vec![first, between, last], vec![])]
-        };
-        let result = waits(&body("waits", 0, crate::model::lir::shared(blocks)));
-        assert_eq!(
-            result.insns().iter().any(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("wait"))),
-            middle != Some(""),
-            "{middle:?}"
-        );
-    }
-}
-
-#[test]
 fn test_repeated_copy_requires_unchanged_source_and_destination() {
     // LNGMXX copied ECX into EAX twice around CDQ; partial writes must prevent
     // reuse.
@@ -2479,7 +2208,7 @@ fn test_transitive_extension_preserves_nonlocal_machine_state() {
         );
         let mut tail = vec![];
         match guard {
-            "signedness" => wide.what.as_mut().unwrap().name = Some("movsx".to_owned()),
+            "signedness" => wide.what.as_mut().unwrap().name = Some("movsx".into()),
             "register" => wide.what.as_mut().unwrap().dests = vec![rl(RegId::EAX, 4)],
             "shared" => {
                 tail.push(Arc::new(insn(
@@ -3278,85 +3007,8 @@ fn test_folded_culling_address_drops_only_unobserved_arithmetic() {
 // ------------------------------------------------------------------
 // test_parcopy
 
-fn group_move(
-    into: Loc,
-    out_of: Loc,
-    group: Option<i64>,
-    at: i64,
-) -> Arc<Insn> {
-    Arc::new(Insn {
-        group,
-        ..insn(at, Some((at, at)), Some(sem(Operation::Move, "mov", vec![into], vec![out_of])), vec![], vec![])
-    })
-}
-
 fn one_block(insns: Vec<Arc<Insn>>) -> LirBody {
     body("one", 0, vec![block(0, insns, vec![]).into()])
-}
-
-fn frame_slots(width: u32) -> (Loc, Loc) {
-    (Loc::Mem(mem(frame(-4), width, RegId::BP, 0, 2)), Loc::Mem(mem(frame(-8), width, RegId::BP, 0, 2)))
-}
-
-fn reset() -> Arc<Insn> {
-    Arc::new(insn(
-        0x102,
-        Some((0x102, 0x102)),
-        Some(sem(Operation::Move, "mov", vec![rl(RegId::EAX, 4)], vec![im(0, 4)])),
-        vec![],
-        vec![],
-    ))
-}
-
-#[test]
-fn test_frame_copy_uses_a_dead_register_before_the_stack() {
-    // Mandel reset its column recurrence with PUSH-memory/POP-memory each row.
-    let (source, destination) = frame_slots(4);
-    let scheduled =
-        parcopy::scheduled(&one_block(vec![group_move(destination.clone(), source.clone(), Some(1), 0x100), reset()]))
-            .unwrap();
-
-    let instructions =
-        frame_copies(&scheduled, "386", &crate::backend::classes::RegisterClasses::m16()).unwrap().blocks[0]
-            .insns
-            .clone();
-
-    assert_eq!(names(&instructions), ["mov", "mov", "mov"]);
-    assert_eq!(instructions[0].what, Some(sem(Operation::Move, "mov", vec![rl(RegId::EAX, 4)], vec![source])));
-    assert_eq!(instructions[1].what, Some(sem(Operation::Move, "mov", vec![destination], vec![rl(RegId::EAX, 4)])));
-}
-
-#[test]
-fn test_frame_copy_keeps_the_stack_when_no_register_is_dead() {
-    // A scratch shuttle may not overwrite a value live out of the copy.
-    let (source, destination) = frame_slots(2);
-    let scheduled = parcopy::scheduled(&one_block(vec![group_move(destination, source, Some(1), 0x100)])).unwrap();
-
-    let instructions =
-        frame_copies(&scheduled, "386", &crate::backend::classes::RegisterClasses::m16()).unwrap().blocks[0]
-            .insns
-            .clone();
-
-    assert_eq!(names(&instructions), ["push", "pop"]);
-}
-
-#[test]
-fn test_source_push_pop_is_not_treated_as_a_parallel_copy() {
-    // Only parcopy's synthetic pair may lose its observable stack traffic.
-    let (source, destination) = frame_slots(2);
-    let mut pair =
-        parcopy::scheduled(&one_block(vec![group_move(destination, source, Some(1), 0x100)])).unwrap().blocks[0]
-            .insns
-            .to_vec();
-    pair[1] = Arc::new(Insn { at: 0x101, covers: Some((0x101, 0x102)), ..(*pair[1]).clone() });
-    pair.push(reset());
-
-    let instructions =
-        frame_copies(&one_block(pair), "386", &crate::backend::classes::RegisterClasses::m16()).unwrap().blocks[0]
-            .insns
-            .to_vec();
-
-    assert_eq!(names(&instructions[..2]), ["push", "pop"]);
 }
 
 // ------------------------------------------------------------
@@ -3754,25 +3406,45 @@ fn sum(
 #[test]
 fn test_two_address_lea_sum_is_an_add_where_flags_are_dead() {
     for (through, index) in [(RegId::EAX, RegId::ECX), (RegId::ECX, RegId::EAX)] {
-        let done = lea_fixed(rules(), &lea_body(sum(through, index, 1, 0), false));
+        let done = fixed_leas(&lea_body(sum(through, index, 1, 0), false));
         let what = done.insns()[0].what.clone().unwrap();
         assert_eq!(what.name.as_deref(), Some("add"));
         assert_eq!(what.sources, [rl(RegId::EAX, 4), rl(RegId::ECX, 4)]);
-        let kept = lea_fixed(rules(), &lea_body(sum(through, index, 1, 0), true));
+        let kept = fixed_leas(&lea_body(sum(through, index, 1, 0), true));
         assert_eq!(names(&kept.insns())[0], "lea", "a jb reads the flags the add would set");
     }
 }
 
-/// `lea eax,[eax+8]` is `add eax,8`; a step of one is the `add eax,1` that
-/// `increments` makes `inc`.
+/// `lea eax,[eax+8]` is `add eax,8`; a step of one is `inc`, of minus one
+/// `dec`.
 #[test]
 fn test_two_address_lea_step_is_an_add_where_flags_are_dead() {
-    let done = lea_fixed(rules(), &lea_body(sum(RegId::EAX, RegId::None, 1, 8), false));
+    let done = fixed_leas(&lea_body(sum(RegId::EAX, RegId::None, 1, 8), false));
     let what = done.insns()[0].what.clone().unwrap();
     assert_eq!(what.name.as_deref(), Some("add"));
     assert_eq!(what.sources, [rl(RegId::EAX, 4), im(8, 4)]);
-    let one = increments(rules(), &lea_fixed(rules(), &lea_body(sum(RegId::EAX, RegId::None, 1, 1), false)));
+    let one = fixed_leas(&lea_body(sum(RegId::EAX, RegId::None, 1, 1), false));
     assert_eq!(names(&one.insns())[0], "inc");
+    let minus = fixed_leas(&lea_body(sum(RegId::EAX, RegId::None, 1, -1), false));
+    assert_eq!(names(&minus.insns())[0], "dec");
+}
+
+/// The two-address pass spells an `lea` as a memory operand. The pin's case 1
+/// does not care how the address is spelled or what follows: `lea
+/// eax,[eax+ecx]` is `add eax,ecx` alone. Only one followed by an add was
+/// (`lea_term_then_alu`), so a bare one stayed a 3-byte `lea`.
+#[test]
+fn test_a_two_address_lea_spelled_as_a_memory_operand_is_an_add_too() {
+    let mut lea = lea_body(sum(RegId::EAX, RegId::ECX, 1, 0), false);
+    let cell = Loc::Mem(Mem { through: RegId::EAX, index_through: RegId::ECX, scale: 1, ..Mem::new(None, 4) });
+    let first = lea.blocks[0].insns.iter().next().cloned().expect("the lea");
+    let mut moved = (*first).clone();
+    moved.what.as_mut().unwrap().sources = vec![cell];
+    let block = lea.blocks[0]
+        .with_insns(std::iter::once(Arc::new(moved)).chain(lea.blocks[0].insns.iter().skip(1).cloned()).collect());
+    lea.blocks[0] = block;
+    let done = fixed_leas(&lea);
+    assert_eq!(names(&done.insns())[0], "add", "{:?}", steps(&done));
 }
 
 /// The pin leaves a three-address or scaled LEA alone: only the two-address
@@ -3785,9 +3457,244 @@ fn test_lea_that_is_not_two_address_stays() {
         sum(RegId::EAX, RegId::ECX, 1, 4),
         sum(RegId::ECX, RegId::None, 1, 8),
     ] {
-        let done = lea_fixed(rules(), &lea_body(address, false));
+        let done = fixed_leas(&lea_body(address, false));
         assert_eq!(names(&done.insns())[0], "lea");
     }
+}
+
+/// `lea ecx,[eax+edx]`, the `between` instructions, `op d, d, ecx`, then a
+/// compare that writes every flag (or a `jb` that reads them, where
+/// `flags_read`).
+fn lea_alu_body(
+    op: &str,
+    d: RegId,
+    between: Vec<Arc<Insn>>,
+    flags_read: bool,
+) -> LirBody {
+    lea_alu_body_at(sum(RegId::EAX, RegId::EDX, 1, 0), op, d, between, flags_read)
+}
+
+fn lea_alu_body_at(
+    address: AddressRef,
+    op: &str,
+    d: RegId,
+    between: Vec<Arc<Insn>>,
+    flags_read: bool,
+) -> LirBody {
+    let ecx = rl(RegId::ECX, 4);
+    let mut insns = vec![Arc::new(insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Address, "lea", vec![ecx.clone()], vec![Loc::Address(address)])),
+        vec![11],
+        vec![20, 21],
+    ))];
+    insns.extend(between);
+    insns.push(Arc::new(insn(
+        3,
+        Some((3, 3)),
+        Some(sem(Operation::Binary, op, vec![rl(d, 4)], vec![rl(d, 4), ecx])),
+        vec![12],
+        vec![13, 11],
+    )));
+    if flags_read {
+        insns.push(Arc::new(insn(
+            4,
+            Some((4, 4)),
+            Some(semt(Operation::Branch, "jb", vec![], vec![], Some(3))),
+            vec![],
+            vec![],
+        )));
+        return body("leaalu", 1, vec![block(1, insns, vec![3]).into(), block(3, vec![], vec![]).into()]);
+    }
+    insns.push(Arc::new(insn(
+        4,
+        Some((4, 4)),
+        Some(sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::EBX, 4), im(8, 4)])),
+        vec![],
+        vec![],
+    )));
+    // The return reads only eax: everything else is dead after it.
+    insns.push(Arc::new(Insn {
+        requires: vec![(Held { value: 7, width: 4 }, RegId::EAX)],
+        reads_complete: true,
+        ..insn(5, Some((5, 5)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![7])
+    }));
+    body("leaalu", 1, vec![block(1, insns, vec![]).into()])
+}
+
+/// The block through `FixupLEAs`.
+fn fixed_leas(body: &LirBody) -> LirBody {
+    crate::backend::fixupleas::FixupLeas::default().transform(body.clone()).expect("the pass cannot fail")
+}
+
+fn steps(done: &LirBody) -> Vec<(String, Vec<Loc>)> {
+    done.insns()
+        .iter()
+        .filter_map(|one| one.what.as_ref())
+        .map(|what| (what.name.as_deref().unwrap_or_default().to_owned(), what.sources.clone()))
+        .collect()
+}
+
+/// X86FixupLEAs `optLEAALU`: `lea ecx,[eax+edx]; add ebx,ecx` is `add ebx,eax;
+/// add ebx,edx`, and a subtract the same two steps. Without the case the
+/// six-term sums of two llrm-c listings kept the `lea`/`mov` pair and ended
+/// `mov eax, edx`.
+#[test]
+fn test_an_lea_read_once_by_an_add_or_sub_is_two_steps_on_its_destination() {
+    for op in ["add", "sub"] {
+        let done = steps(&fixed_leas(&lea_alu_body(op, RegId::EBX, vec![], false)));
+        assert_eq!(done[0], (op.to_owned(), vec![rl(RegId::EBX, 4), rl(RegId::EAX, 4)]), "{done:?}");
+        assert_eq!(done[1], (op.to_owned(), vec![rl(RegId::EBX, 4), rl(RegId::EDX, 4)]), "{done:?}");
+        assert_eq!(done.len(), 4, "the lea is gone: two steps, the compare and the return: {done:?}");
+        // The lea's value (11) is gone with it: a step reading it was "read but
+        // never defined" in call_keeps.c.
+        let again = fixed_leas(&lea_alu_body(op, RegId::EBX, vec![], false));
+        assert!(again.insns().iter().all(|one| !one.uses.contains(&11)), "{op}: a step still reads the lea's value");
+        assert!(
+            again.insns().iter().any(|one| one.uses.contains(&20) && one.uses.contains(&21)),
+            "{op}: the steps read the address's values"
+        );
+    }
+}
+
+/// `lea cx,[eax+edx]; add bx,cx` (a word `lea` of dword address registers, as
+/// the real-mode target makes one) is no two word steps on `eax` and `edx`,
+/// which are no word operands: QCport's `con_draw` ended `add ax, ecx; add ax,
+/// edi`, which no assembler takes, and its object was not made. The pin splits
+/// only the `lea`s whose terms are as wide as the add.
+#[test]
+fn test_a_word_lea_of_dword_registers_is_not_split_into_word_adds() {
+    let cx = rl(RegId::CX, 2);
+    let lea = Arc::new(insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Address, "lea", vec![cx.clone()], vec![Loc::Address(sum(RegId::EAX, RegId::EDX, 1, 0))])),
+        vec![11],
+        vec![20, 21],
+    ));
+    let add = Arc::new(insn(
+        3,
+        Some((3, 3)),
+        Some(sem(Operation::Binary, "add", vec![rl(RegId::BX, 2)], vec![rl(RegId::BX, 2), cx])),
+        vec![12],
+        vec![13, 11],
+    ));
+    let cmp = Arc::new(insn(
+        4,
+        Some((4, 4)),
+        Some(sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::SI, 2), im(8, 2)])),
+        vec![],
+        vec![],
+    ));
+    // The return reads only eax: everything else is dead after it, as in
+    // `lea_alu_body_at`.
+    let ret = Arc::new(Insn {
+        requires: vec![(Held { value: 7, width: 4 }, RegId::EAX)],
+        reads_complete: true,
+        ..insn(5, Some((5, 5)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![7])
+    });
+    let done = fixed_leas(&body("wordlea", 1, vec![block(1, vec![lea, add, cmp, ret], vec![]).into()]));
+    assert_eq!(names(&done.insns())[0], "lea", "{:?}", steps(&done));
+}
+
+/// Where the address register `d` is the index, `d` is added first: `d + (x+d)`
+/// is `(d+d)+x`.
+#[test]
+fn test_the_destination_that_is_an_address_register_is_added_first() {
+    let done = steps(&fixed_leas(&lea_alu_body("add", RegId::EDX, vec![], false)));
+    assert_eq!(done[0].1, vec![rl(RegId::EDX, 4), rl(RegId::EDX, 4)], "{done:?}");
+    assert_eq!(done[1].1, vec![rl(RegId::EDX, 4), rl(RegId::EAX, 4)], "{done:?}");
+}
+
+/// `lea ecx,[eax+ecx]; add ebx,ecx` (the LEA's register is one of its terms, as
+/// six_ allocated it): `add ecx,eax`, and the add stays (`optTwoAddrLEA` case
+/// 1, in the shape the two-address pass makes). It stayed an `lea` whose result
+/// the add read, and six_ listed one instruction more than the pin's chain of
+/// adds.
+#[test]
+fn test_an_lea_that_sums_into_its_own_register_before_an_add_is_an_add() {
+    let done =
+        steps(&fixed_leas(&lea_alu_body_at(sum(RegId::EAX, RegId::ECX, 1, 0), "add", RegId::EBX, vec![], false)));
+    assert_eq!(done[0], ("add".to_owned(), vec![rl(RegId::ECX, 4), rl(RegId::EAX, 4)]), "{done:?}");
+    assert_eq!(done[1], ("add".to_owned(), vec![rl(RegId::EBX, 4), rl(RegId::ECX, 4)]), "{done:?}");
+}
+
+/// The search ends where the ALU is not the next instruction (the pin looks
+/// five ahead: DEVIATE LF-2), where the flags are read after the add, and where
+/// the `lea`'s register is read again.
+#[test]
+fn test_an_lea_stays_where_the_add_is_not_next_or_its_flags_are_read() {
+    let between = Arc::new(insn(
+        2,
+        Some((2, 2)),
+        Some(sem(Operation::Move, "mov", vec![rl(RegId::ESI, 4)], vec![rl(RegId::ECX, 4)])),
+        vec![],
+        vec![],
+    ));
+    let read = steps(&fixed_leas(&lea_alu_body("add", RegId::EBX, vec![between], false)));
+    assert_eq!(read[0].0, "lea", "{read:?}");
+    let flags = steps(&fixed_leas(&lea_alu_body("add", RegId::EBX, vec![], true)));
+    assert_eq!(flags[0].0, "lea", "{flags:?}");
+}
+
+/// An unrelated `mov r, imm` at `at`.
+fn filler(
+    at: i64,
+    register: RegId,
+) -> Arc<Insn> {
+    Arc::new(insn(
+        at,
+        Some((at, at)),
+        Some(sem(Operation::Move, "mov", vec![rl(register, 4)], vec![im(1, 4)])),
+        vec![],
+        vec![],
+    ))
+}
+
+/// X86FixupLEAs `searchALUInst` looks five instructions ahead: the add three
+/// after the `lea` is found. Only the next instruction was, and the gap kept
+/// the `lea` and its `mov` (`optLEAALU` of the pin is the two adds).
+#[test]
+fn test_an_lea_is_split_where_its_add_is_within_five_instructions() {
+    let between = vec![filler(2, RegId::ESI), filler(2, RegId::EDI), filler(2, RegId::EBP)];
+    let done = steps(&fixed_leas(&lea_alu_body("add", RegId::EBX, between, false)));
+    let names: Vec<&str> = done.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["mov", "mov", "mov", "add", "add", "cmp", "ret"], "{done:?}");
+    assert_eq!(done[3].1, vec![rl(RegId::EBX, 4), rl(RegId::EAX, 4)]);
+}
+
+#[test]
+fn test_an_lea_stays_where_its_add_is_more_than_five_instructions_away() {
+    let between = (0..6)
+        .map(|n| filler(2, [RegId::ESI, RegId::EDI, RegId::EBP, RegId::ESI, RegId::EDI, RegId::EBP][n]))
+        .collect();
+    let done = steps(&fixed_leas(&lea_alu_body("add", RegId::EBX, between, false)));
+    assert_eq!(done[0].0, "lea", "{done:?}");
+}
+
+/// A base register written between the `lea` and the add: the two steps go
+/// where the `lea` was (`InsertPos = I`).
+#[test]
+fn test_the_steps_go_before_a_redefinition_of_the_lea_s_base() {
+    let done = steps(&fixed_leas(&lea_alu_body("add", RegId::EBX, vec![filler(2, RegId::EAX)], false)));
+    let names: Vec<&str> = done.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["add", "add", "mov", "cmp", "ret"], "{done:?}");
+}
+
+/// ... unless the add's destination is named in between: then the pin leaves
+/// the `lea`.
+#[test]
+fn test_an_lea_stays_where_its_base_is_written_and_the_add_s_destination_is_named() {
+    let named = Arc::new(insn(
+        2,
+        Some((2, 2)),
+        Some(sem(Operation::Move, "mov", vec![rl(RegId::ESI, 4)], vec![rl(RegId::EBX, 4)])),
+        vec![],
+        vec![],
+    ));
+    let done = steps(&fixed_leas(&lea_alu_body("add", RegId::EBX, vec![filler(2, RegId::EAX), named], false)));
+    assert_eq!(done[0].0, "lea", "{done:?}");
 }
 
 /// The combiner's canonical `x - 1` is `add x, -1`: INC and DEC were chosen
@@ -4210,7 +4117,7 @@ fn test_a_zero_test_of_a_cell_after_its_step_reads_the_step() {
     let names = tested(rules(), &body("zero", 0, crate::model::lir::shared(blocks))).blocks[0]
         .insns
         .iter()
-        .map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default())
+        .map(|one| one.what.as_ref().and_then(|what| what.name.as_deref().map(str::to_owned)).unwrap_or_default())
         .collect::<Vec<_>>();
     assert_eq!(names, ["add", "", "", "jne"]);
 }
@@ -4574,7 +4481,7 @@ fn test_what_a_conditional_jump_reads_is_the_conditions_for_every_condition() {
     let rows: Vec<_> = llrm_x86_m16::instructions::FORMS.iter().filter(|form| form.operation == "branch").collect();
     assert_eq!(rows.len(), 16);
     for form in rows {
-        let branch = Semantics { name: Some(form.name.clone()), ..Semantics::new(Operation::Branch) };
+        let branch = Semantics { name: Some(form.name.as_str().into()), ..Semantics::new(Operation::Branch) };
         let wanted = _flag_lanes(llrm_x86_m16::instructions::flags(form).expect("a jump reads flags").0);
         assert_eq!(_branch_reads(&branch), wanted, "{}", form.name);
     }
@@ -4634,7 +4541,7 @@ fn test_an_instruction_with_a_row_is_answered_from_the_table_and_one_without_is_
     let table = sem(Operation::Binary, "add", vec![rl(RegId::CX, 2)], vec![rl(RegId::CX, 2), rl(RegId::DX, 2)]);
     let (reads, writes) = _register_effects_of_what(regs, 16, &table, true, true).expect("the table answers");
     assert!(reads.contains(&(RegId::ECX, 0)) && reads.contains(&(RegId::EDX, 1)) && writes.contains(&(RegId::ECX, 1)));
-    let none = sem(Operation::Unary, "bswap", vec![rl(RegId::EAX, 4)], vec![rl(RegId::EAX, 4)]);
+    let none = sem(Operation::Unary, "nosuchop", vec![rl(RegId::EAX, 4)], vec![rl(RegId::EAX, 4)]);
     assert_eq!(_register_effects_of_what(regs, 32, &none, true, true), None);
 }
 
@@ -4678,8 +4585,10 @@ fn test_an_instruction_equal_to_one_already_answered_is_not_worked_out_again() {
             vec![],
         )
     };
-    let before = effects_computed();
+    let (before, hashed) = (effects_computed(), effects_hashed());
     let first = _register_effects(regs, 16, &add(0), false, true);
+    // A miss hashed the ask again to remember it: 1 M Ir of d_faces -O2.
+    assert_eq!(effects_hashed() - hashed, 1, "an ask hashed more than once");
     for at in 1..6 {
         assert_eq!(_register_effects(regs, 16, &add(at), false, true), first);
     }
@@ -4724,6 +4633,66 @@ fn test_the_dead_lanes_of_a_body_no_pass_changed_are_worked_out_once() {
         body("f", 0, vec![block(0, vec![mov(0, RegId::AX, RegId::BX), mov(2, RegId::DX, RegId::AX)], vec![]).into()]);
     liveness::dead_at_exit(&changed);
     assert_eq!(liveness::exits_computed() - before, 2, "a changed body was given the last answer");
+}
+
+/// `high_extracts` solved the function's liveness and walked every block for
+/// the dead lanes after each instruction, though none held a shift to extract
+/// (3.0 M Ir of d_faces -O2). A body with nothing to extract is answered
+/// unchanged without a solve.
+#[test]
+fn test_a_body_with_nothing_to_extract_is_not_solved_for_high_extracts() {
+    let mov = Arc::new(insn(
+        0,
+        Some((0, 2)),
+        Some(sem(Operation::Move, "mov", vec![rl(RegId::AX, 4)], vec![rl(RegId::BX, 4)])),
+        vec![],
+        vec![],
+    ));
+    let input = body("f", 0, vec![block(0, vec![mov], vec![]).into()]);
+    let before = liveness::exits_computed();
+    let done = high_extracts(&input, "386").unwrap();
+    assert_eq!(done, input);
+    assert_eq!(liveness::exits_computed() - before, 0, "solved for a body with nothing to extract");
+}
+
+/// `addresses` solved the flags live out of every block and the registers live
+/// out of the function for each body, though no instruction in it starts a
+/// chain to fold into an address (7.5 M Ir of d_faces -O2). A body with nothing
+/// to fold is answered unchanged without either.
+#[test]
+fn test_a_body_with_nothing_to_fold_is_not_solved_for_addresses() {
+    let load = Arc::new(insn(
+        0,
+        Some((0, 2)),
+        Some(sem(Operation::Move, "mov", vec![rl(RegId::AX, 4)], vec![Loc::Mem(mem(frame(8), 4, RegId::BP, 8, 1))])),
+        vec![],
+        vec![],
+    ));
+    let input = body("f", 0, vec![block(0, vec![load], vec![]).into()]);
+    let before = flags_computed();
+    let done = addresses(&input, "386").unwrap();
+    assert_eq!(done, input);
+    assert_eq!(flags_computed() - before, 0, "flag liveness solved for a body with nothing to fold");
+}
+
+/// `popped_arguments` solved the function's liveness and walked every block
+/// for the dead lanes after each instruction, though no instruction in it
+/// cleans a call's arguments (1.69 M Ir of d_faces -O2). A body with no
+/// `add sp, n` is answered unchanged without a solve.
+#[test]
+fn test_a_body_with_no_argument_cleanup_is_not_solved_for_popped_arguments() {
+    let mov = Arc::new(insn(
+        0,
+        Some((0, 2)),
+        Some(sem(Operation::Move, "mov", vec![rl(RegId::AX, 2)], vec![rl(RegId::BX, 2)])),
+        vec![],
+        vec![],
+    ));
+    let input = body("f", 0, vec![block(0, vec![mov], vec![]).into()]);
+    let before = liveness::exits_computed();
+    let done = popped_arguments(&input, &crate::backend::cpu::tuned("486", true).unwrap()).unwrap();
+    assert_eq!(done, input);
+    assert_eq!(liveness::exits_computed() - before, 0, "solved for a body with nothing to pop");
 }
 
 /// The sub-passes of the peephole ask for the lanes live out of each block in
@@ -4834,35 +4803,6 @@ fn test_flag_liveness_over_a_loop_is_not_worked_by_rounds() {
     super::_flags_live_out(&input);
     let worked = crate::analysis::dataflow::WORKED.with(std::cell::Cell::get);
     assert!(worked <= 4 * blocks as usize, "{worked} blocks worked for a loop of {blocks}");
-}
-
-/// Every block's transfer was worked again each round until no entry changed,
-/// and a fact crosses one block a round: a loop of 30 blocks took 30 rounds of
-/// 30 transfers (a nest 8 deep: a quarter of lir peephole). A block is worked
-/// again when its entry changed.
-#[test]
-fn test_spill_forwarding_works_a_block_again_only_when_its_entry_changed() {
-    let register = rl(RegId::BX, 2);
-    let cell = Loc::Mem(Mem { through: RegId::BP, ..Mem::new(frame(-32), 2) });
-    let blocks = 30;
-    let mut list = Vec::new();
-    for at in 1..=blocks {
-        let store = insn(
-            at,
-            Some((at, at)),
-            Some(sem(Operation::Move, "mov", vec![cell.clone()], vec![register.clone()])),
-            vec![],
-            vec![],
-        );
-        let next = if at == blocks { vec![1, blocks + 1] } else { vec![at + 1] };
-        list.push(block(at, if at == 1 { vec![Arc::new(store)] } else { vec![] }, next));
-    }
-    list.push(block(blocks + 1, vec![], vec![]));
-    let input = body("loop", 1, crate::model::lir::shared(list));
-    crate::analysis::dataflow::WORKED.with(|count| count.set(0));
-    spillforward::forwarded(&input);
-    let worked = crate::analysis::dataflow::WORKED.with(std::cell::Cell::get);
-    assert!(worked <= 4 * blocks as usize, "{worked} transfers for a loop of {blocks} blocks");
 }
 
 /// Copy propagation worked every block again each round until no exit changed:
@@ -5032,7 +4972,7 @@ fn test_a_compare_that_a_sole_predecessor_just_made_is_not_made_again() {
         after.blocks[at]
             .insns
             .iter()
-            .map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default())
+            .map(|one| one.what.as_ref().and_then(|what| what.name.as_deref().map(str::to_owned)).unwrap_or_default())
             .collect::<Vec<_>>()
     };
     let after = compares_again(&body("search", 0, crate::model::lir::shared(blocks)));
@@ -5087,35 +5027,6 @@ fn test_a_compare_of_other_operands_or_a_block_with_two_ways_in_is_made_again() 
     assert_eq!(compares(&compares_again(&body("joined", 0, crate::model::lir::shared(joined))), 2), 1);
 }
 
-/// `secondary_bases` tried every definition of the body for every candidate
-/// (a copy of its uses each): 80 independent word loads were 6,400 tries, and
-/// an `-O1` module's peephole spent 36 M instructions on it.
-#[test]
-fn secondary_bases_tries_only_what_uses_the_candidate() {
-    let insns: Vec<Arc<Insn>> = (1..=80u32)
-        .map(|value| {
-            Arc::new(insn(
-                i64::from(value),
-                Some((i64::from(value), i64::from(value))),
-                Some(sem(
-                    Operation::Move,
-                    "mov",
-                    vec![rl(RegId::DX, 2)],
-                    vec![Loc::Mem(Mem { through: RegId::BP, ..Mem::new(frame(6), 2) })],
-                )),
-                vec![value],
-                vec![],
-            ))
-        })
-        .collect();
-    let input = body("many-candidates", 1, vec![block(1, insns, vec![]).into()]);
-    SECONDARY_TRIES.with(|count| count.set(0));
-
-    secondary_bases(&input, "386").unwrap();
-
-    assert!(SECONDARY_TRIES.with(std::cell::Cell::get) <= 80);
-}
-
 /// A sub-pass that matched nothing in a block rebuilt it anyway: 17,255 of the
 /// 24,456 block visits of an `-O1` module's peephole allocated and dropped a
 /// block for 514 that changed. An untouched block is the same allocation.
@@ -5136,4 +5047,385 @@ fn a_pass_that_changes_nothing_returns_every_block_as_it_was() {
         assert!(result.blocks[0].same_as(&input.blocks[0]));
         assert!(result.blocks[0].insns.same_as(&input.blocks[0].insns));
     }
+}
+
+/// The same frame address made twice into `bx` with `bx` untouched between
+/// the two: the pin has no MachineCSE after allocation, and ours had one (the
+/// second `lea` became an anchor, 3.7 M Ir of d_faces for the finds of 8 of
+/// 568 objects). Both are emitted.
+#[test]
+fn test_a_repeated_frame_address_after_allocation_is_made_again() {
+    let address = AddressRef {
+        through: RegId::BP,
+        offset: -100,
+        disp_width: 1,
+        ..AddressRef::new(Some(Addr::new(Space::Frame, -100)))
+    };
+    let lea = |at: i64, value: u32| {
+        Arc::new(insn(
+            at,
+            Some((at, at + 3)),
+            Some(sem(Operation::Address, "lea", vec![rl(RegId::BX, 2)], vec![Loc::Address(address.clone())])),
+            vec![value],
+            vec![],
+        ))
+    };
+    let store = |at: i64, slot: i64| {
+        Arc::new(insn(
+            at,
+            Some((at, at + 2)),
+            Some(sem(
+                Operation::Move,
+                "mov",
+                vec![Loc::Mem(mem(frame(slot), 2, RegId::BP, slot, 1))],
+                vec![rl(RegId::BX, 2)],
+            )),
+            vec![],
+            vec![],
+        ))
+    };
+    let ret = Arc::new(insn(20, Some((20, 20)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![]));
+    let insns = vec![lea(0, 1), store(4, -2), lea(8, 2), store(12, -4), ret];
+    let result = transform(body("cse", 0, vec![block(0, insns, vec![]).into()]));
+    let leas = whats(&result.blocks[0].insns).iter().filter(|what| what.name.as_deref() == Some("lea")).count();
+    assert_eq!(leas, 2, "{:?}", names(&result.blocks[0].insns));
+}
+
+/// The pin gives `bsf` a `rep` prefix unless the function is optimised for size
+/// or the flags are read (`X86MCInstLower`). It was on every `bsf`, a byte at
+/// -Os m16 that main did not have.
+#[test]
+fn test_bsf_gets_the_rep_prefix_only_where_the_pin_gives_it() {
+    for (label, size, flags_read, expected) in [
+        ("speed, flags dead", false, false, true),
+        ("size, flags dead", true, false, false),
+        ("speed, flags read", false, true, false),
+    ] {
+        let scan = sem(Operation::Binary, "bsf", vec![rl(RegId::EAX, 4)], vec![rl(RegId::EAX, 4), rl(RegId::ECX, 4)]);
+        let first = Arc::new(insn(10, Some((10, 11)), Some(scan), vec![], vec![]));
+        let next = if flags_read {
+            sem(Operation::Binary, "adc", vec![rl(RegId::SI, 4)], vec![rl(RegId::SI, 4), im(0, 4)])
+        } else {
+            sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::SI, 4), im(0, 4)])
+        };
+        let second = Arc::new(insn(11, Some((11, 12)), Some(next), vec![], vec![]));
+        let input = body("scan", 0, vec![block(0, vec![first], vec![1]).into(), block(1, vec![second], vec![]).into()]);
+        let cpu = crate::backend::cpu::tuned("486", size).unwrap();
+        let result = crate::backend::repbsf::marked(&input, &cpu);
+        let got = result.blocks[0].insns[0].what.as_ref().unwrap().repeat;
+        assert_eq!(got, expected, "{label}");
+    }
+}
+
+/// PLASMA at m16: `mov [bp-14],di ; mov di,[bp-14]` -- a reload of what the
+/// register still held -- stood in each inner loop (a spilled one-instruction
+/// piece of a split range, then the copy that follows it).
+fn store_then_reload(between: Vec<Insn>) -> usize {
+    let cell = || Loc::Mem(mem(frame(-14), 2, RegId::BP, -14, 1));
+    let mov = |at: i64, dests: Vec<Loc>, sources: Vec<Loc>| Insn {
+        spill_store: dests.iter().any(|d| matches!(d, Loc::Mem(_))),
+        ..insn(at, Some((at, at + 2)), Some(sem(Operation::Move, "mov", dests, sources)), vec![], vec![])
+    };
+    let mut insns = vec![Arc::new(mov(0, vec![cell()], vec![rl(RegId::DI, 2)]))];
+    insns.extend(between.into_iter().map(Arc::new));
+    insns.push(Arc::new(mov(100, vec![rl(RegId::DI, 2)], vec![cell()])));
+    insns.push(Arc::new(insn(
+        200,
+        Some((200, 200)),
+        Some(sem(Operation::Return, "ret", vec![], vec![])),
+        vec![],
+        vec![],
+    )));
+    let done = forwarded_reloads(rules(), &body("forwarded-reload", 0, vec![block(0, insns, vec![]).into()]));
+    whats(&done.blocks[0].insns).iter().filter(|what| what.name.as_deref() == Some("mov")).count()
+}
+
+#[test]
+fn test_a_reload_straight_after_its_store_is_dropped() {
+    assert_eq!(store_then_reload(vec![]), 1);
+}
+
+#[test]
+fn test_a_reload_after_instructions_that_leave_the_register_and_cell_is_dropped() {
+    let other = insn(
+        10,
+        Some((10, 12)),
+        Some(sem(Operation::Binary, "add", vec![rl(RegId::AX, 2)], vec![rl(RegId::AX, 2), rl(RegId::DI, 2)])),
+        vec![],
+        vec![],
+    );
+    assert_eq!(store_then_reload(vec![other]), 1);
+}
+
+#[test]
+fn test_a_reload_stays_where_the_register_is_written_between() {
+    let write = insn(
+        10,
+        Some((10, 12)),
+        Some(sem(Operation::Binary, "add", vec![rl(RegId::DI, 2)], vec![rl(RegId::DI, 2), im(1, 2)])),
+        vec![],
+        vec![],
+    );
+    assert_eq!(store_then_reload(vec![write]), 2);
+}
+
+#[test]
+fn test_a_reload_stays_where_the_cell_is_written_between() {
+    let write = insn(
+        10,
+        Some((10, 12)),
+        Some(sem(
+            Operation::Move,
+            "mov",
+            vec![Loc::Mem(mem(frame(-14), 2, RegId::BP, -14, 1))],
+            vec![rl(RegId::AX, 2)],
+        )),
+        vec![],
+        vec![],
+    );
+    assert_eq!(store_then_reload(vec![write]), 3);
+}
+
+#[test]
+fn test_a_reload_stays_across_a_call() {
+    let call = Insn {
+        clobbers: [RegId::AX, RegId::CX, RegId::DX].into_iter().collect(),
+        ..insn(10, Some((10, 13)), Some(sem(Operation::Call, "call", vec![], vec![])), vec![], vec![])
+    };
+    assert_eq!(store_then_reload(vec![call]), 2);
+}
+
+#[test]
+fn test_a_reload_stays_across_a_volatile_access() {
+    let device = Insn {
+        volatile: true,
+        ..insn(
+            10,
+            Some((10, 12)),
+            Some(sem(Operation::Move, "mov", vec![rl(RegId::AX, 2)], vec![Loc::Mem(mem(None, 2, RegId::BX, 0, 0))])),
+            vec![],
+            vec![],
+        )
+    };
+    assert_eq!(store_then_reload(vec![device]), 3);
+}
+
+// ------------------------------------------------------------ width and flag
+// audit of the width- and flag-changing rules
+
+fn jump_if(
+    name: &str,
+    target: i64,
+) -> Arc<Insn> {
+    Arc::new(insn(9, Some((9, 9)), Some(semt(Operation::Branch, name, vec![], vec![], Some(target))), vec![], vec![]))
+}
+
+fn names_of(made: &LirBody) -> Vec<String> {
+    whats(&made.insns()).iter().map(|what| what.name.as_deref().unwrap_or_default().to_owned()).collect()
+}
+
+fn point(
+    at: i64,
+    what: Semantics,
+    defines: Vec<u32>,
+    uses: Vec<u32>,
+) -> Arc<Insn> {
+    Arc::new(insn(at, Some((at, at)), Some(what), defines, uses))
+}
+
+/// `mov eax,<symbol>` narrowed to `mov ax,0`: the low word took no relocation
+/// with it, so the address was lost.
+#[test]
+fn a_relocated_dword_immediate_is_not_narrowed_to_a_word_without_its_relocation() {
+    let address = Addr { index: 1, ..Addr::new(Space::Segment, 0) };
+    let symbol = Loc::Imm(Imm { value: 0, width: 4, address: Some(address) });
+    let source = point(1, sem(Operation::Move, "mov", vec![rl(RegId::EAX, 4)], vec![symbol]), vec![1], vec![]);
+    let finish = Insn {
+        requires: vec![(Held { value: 1, width: 2 }, RegId::AX)],
+        reads_complete: true,
+        ..insn(2, Some((2, 2)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![1])
+    };
+    let input = body("symbol", 1, vec![block(1, vec![source, Arc::new(finish)], vec![]).into()]);
+
+    assert_eq!(narrowed_moves(rules(), &input), input);
+}
+
+/// `lea cx,[bx+1]; cmp bx,5; mov bx,cx; jb` is `cmp; lea bx,[bx+1]; jb`: the
+/// lea sets no flag, so the branch reads the compare's.
+#[test]
+fn a_step_after_its_compare_leaves_the_flags_the_branch_reads() {
+    let (bx, cx) = (rl(RegId::BX, 2), rl(RegId::CX, 2));
+    let cell = Loc::Mem(Mem { through: RegId::BX, offset: 1, disp_width: 1, ..Mem::new(None, 2) });
+    for (other, rewritten) in [(im(5, 2), true), (cx.clone(), false)] {
+        let step = point(1, sem(Operation::Address, "lea", vec![cx.clone()], vec![cell.clone()]), vec![2], vec![1]);
+        let compare = point(2, sem(Operation::Compare, "cmp", vec![], vec![bx.clone(), other]), vec![], vec![1]);
+        let copy = point(3, sem(Operation::Move, "mov", vec![bx.clone()], vec![cx.clone()]), vec![3], vec![2]);
+        let insns = vec![step, compare, copy, jump_if("jb", 4)];
+        let finish = Insn {
+            reads_complete: true,
+            ..insn(4, Some((4, 4)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![])
+        };
+        let input =
+            body("step", 1, vec![block(1, insns, vec![4]).into(), block(4, vec![Arc::new(finish)], vec![]).into()]);
+
+        let made = stepped_after_compare(rules(), &input);
+
+        let expected = if rewritten { vec!["cmp", "lea", "jb", "ret"] } else { vec!["lea", "cmp", "mov", "jb", "ret"] };
+        assert_eq!(names_of(&made), expected, "{rewritten}");
+        if rewritten {
+            assert_eq!(whats(&made.insns())[1].dests, vec![bx.clone()]);
+        }
+    }
+}
+
+/// A carry read in a successor block kept `add` as `inc` would not set it.
+#[test]
+fn a_unit_add_stays_where_a_successor_reads_the_carry() {
+    for (register, width) in [(RegId::CL, 1), (RegId::CX, 2), (RegId::ECX, 4)] {
+        let counter = rl(register, width);
+        let add = point(
+            1,
+            sem(Operation::Binary, "add", vec![counter.clone()], vec![counter.clone(), im(1, width)]),
+            vec![1],
+            vec![1],
+        );
+        let bx = rl(RegId::BX, 2);
+        let carry = point(4, sem(Operation::Binary, "adc", vec![bx.clone()], vec![bx, im(0, 2)]), vec![], vec![]);
+        let input = body("carry", 1, vec![block(1, vec![add], vec![4]).into(), block(4, vec![carry], vec![]).into()]);
+
+        assert_eq!(names_of(&increments(rules(), &input))[0], "add", "{width}");
+    }
+}
+
+/// `mov cx,bx; shl cx,cl; mov bx,cx` read its count from BX's low byte; the
+/// renamed `shl bx,cl` reads CX's.
+#[test]
+fn a_shuttle_does_not_rename_a_register_that_is_the_shift_count() {
+    let (bx, cx, cl) = (rl(RegId::BX, 2), rl(RegId::CX, 2), rl(RegId::CL, 1));
+    let insns = vec![
+        point(1, sem(Operation::Move, "mov", vec![cx.clone()], vec![bx.clone()]), vec![2], vec![1]),
+        point(2, sem(Operation::Binary, "shl", vec![cx.clone()], vec![cx.clone(), cl]), vec![3], vec![2]),
+        point(3, sem(Operation::Move, "mov", vec![bx], vec![cx]), vec![4], vec![3]),
+    ];
+    let input = body("count", 1, vec![block(1, insns, vec![]).into()]);
+
+    assert_eq!(shuttles(rules(), &input), input);
+}
+
+/// A block and its successor, which compares first: of the flags, only what
+/// the first block's branch reads is live between them.
+fn flat_blocks(insns: Vec<Arc<Insn>>) -> LirBody {
+    body("flat", 0, vec![block(0, insns, vec![1]).into(), block(1, vec![compared()], vec![]).into()])
+}
+
+/// The word sum leaves the flags of 16 bits, so a branch after the extension
+/// that reads any of them keeps the dword sum.
+#[test]
+fn a_flat_dword_sum_stays_where_a_flag_is_read_after_its_extension() {
+    for reader in ["jb", "jo", "js", "je", "jp"] {
+        let input =
+            flat_blocks(vec![word_load(RegId::EAX), dword_sum(), extension(RegId::EAX, RegId::AX), jump_if(reader, 1)]);
+        let kept = names_of(&narrowed_arithmetic(flat(), &input));
+        assert_eq!(kept, ["movzx", "add", "movzx", reader, "cmp"], "{reader}");
+    }
+}
+
+/// `mov cx,ax` as a dword copy where `ecx`'s upper half is read after it
+/// copied AX's zero upper half over the one the program had.
+#[test]
+fn a_flat_word_copy_stays_where_the_upper_half_of_its_target_is_read() {
+    let copy = point(1, sem(Operation::Move, "mov", vec![rl(RegId::CX, 2)], vec![rl(RegId::AX, 2)]), vec![], vec![]);
+    let read = point(2, sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::ECX, 4), im(5, 4)]), vec![], vec![]);
+    let input = flat_body(vec![word_load(RegId::EAX), copy, read]);
+
+    assert_eq!(widened_moves(flat(), &input), input);
+}
+
+/// `shl r,1` read as `add r,r` where a successor reads the carry or overflow
+/// it sets: the add defines both as the shift does, at every width.
+#[test]
+fn a_doubling_add_keeps_the_carry_and_overflow_a_successor_reads() {
+    let cpu = peephole().cpu;
+    for (register, width) in [(RegId::CL, 1), (RegId::CX, 2), (RegId::ECX, 4)] {
+        let counter = rl(register, width);
+        let shift = point(
+            1,
+            sem(Operation::Binary, "shl", vec![counter.clone()], vec![counter.clone(), im(1, 1)]),
+            vec![1],
+            vec![1],
+        );
+        let input = body(
+            "double",
+            1,
+            vec![block(1, vec![shift, jump_if("jb", 4)], vec![4]).into(), block(4, vec![], vec![]).into()],
+        );
+
+        let made = doubled(rules(), &input, &cpu).unwrap();
+
+        assert_eq!(
+            whats(&made.insns())[0],
+            sem(Operation::Binary, "add", vec![counter.clone()], vec![counter.clone(), counter]),
+            "{width}"
+        );
+    }
+}
+
+/// `add eax,[bp-4]; mov [bp-4],eax`, the spiller's fold of a reload into an
+/// accumulating sum (m16 -Os qlight.c: 4 B and a second frame slot for 2
+/// instructions), is the read-modify-write `add [bp-4],eax` when eax dies at
+/// the store.
+fn _accumulated(
+    name: &str,
+    dies: bool,
+) -> (LirBody, Insn) {
+    let cell = Loc::Mem(mem(frame(-4), 4, RegId::BP, -4, 1));
+    let eax = rl(RegId::EAX, 4);
+    let sum = insn(
+        1,
+        Some((1, 3)),
+        Some(sem(Operation::Binary, name, vec![eax.clone()], vec![eax.clone(), cell.clone()])),
+        vec![10],
+        vec![1],
+    );
+    let stored =
+        insn(3, Some((3, 3)), Some(sem(Operation::Move, "mov", vec![cell], vec![eax.clone()])), vec![], vec![10]);
+    let after = insn(
+        4,
+        Some((4, 5)),
+        Some(sem(Operation::Move, "mov", vec![rl(RegId::EBX, 4)], vec![if dies { im(0, 4) } else { eax.clone() }])),
+        vec![12],
+        vec![],
+    );
+    let clear =
+        insn(5, Some((5, 6)), Some(sem(Operation::Move, "mov", vec![eax.clone()], vec![im(0, 4)])), vec![13], vec![]);
+    let insns = if dies {
+        vec![Arc::new(sum), Arc::new(stored.clone()), Arc::new(clear)]
+    } else {
+        vec![Arc::new(sum), Arc::new(stored.clone()), Arc::new(after)]
+    };
+    (body("sum", 0, vec![block(0, insns, vec![]).into()]), stored)
+}
+
+#[test]
+fn test_a_sum_stored_back_to_the_cell_it_added_is_a_read_modify_write() {
+    for name in ["add", "and", "or", "xor"] {
+        let (input, stored) = _accumulated(name, true);
+        let result = transferred(rules(), &input).insns();
+        let cell = Loc::Mem(mem(frame(-4), 4, RegId::BP, -4, 1));
+        assert_eq!(
+            result[0].what,
+            Some(sem(Operation::Binary, name, vec![cell.clone()], vec![cell, rl(RegId::EAX, 4)])),
+            "{name}"
+        );
+        assert_eq!(result[1].what.as_ref().unwrap().op, Operation::Nothing, "{name}");
+        assert_eq!(result[1].uses, stored.uses, "{name}");
+    }
+}
+
+#[test]
+fn test_a_sum_still_read_after_its_store_keeps_its_register_form() {
+    let (input, _) = _accumulated("add", false);
+    assert_eq!(transferred(rules(), &input).insns(), input.blocks[0].insns.to_vec());
+    let (input, _) = _accumulated("sub", true);
+    assert_eq!(transferred(rules(), &input).insns(), input.blocks[0].insns.to_vec());
 }

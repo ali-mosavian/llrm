@@ -55,7 +55,6 @@
 //! # Used by
 //! `RAGreedy::trySplit` and its region, block and local splits.
 
-use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -101,17 +100,18 @@ pub enum ComplementSpillMode {
 /// (index 0).
 #[derive(Default)]
 pub struct RegAssignMap {
-    /// start -> (stop, register index).
-    map: BTreeMap<SlotIndex, (SlotIndex, u32)>,
+    /// (start, stop, register index) by start: a handful of ranges per split,
+    /// so one search and one splice beat a tree's five.
+    ranges: Vec<(SlotIndex, SlotIndex, u32)>,
 }
 
 impl RegAssignMap {
     pub fn clear(&mut self) {
-        self.map.clear();
+        self.ranges.clear();
     }
 
     pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
+        self.ranges.is_empty()
     }
 
     /// `insert(a, b, y)`: the new range joins a neighbour that ends or starts
@@ -123,25 +123,37 @@ impl RegAssignMap {
         value: u32,
     ) {
         assert!(start < stop, "Empty interval");
-        if let Some((_, (prev_stop, _))) = self.map.range(..=start).next_back() {
-            assert!(*prev_stop <= start, "RegAssign ranges overlap");
-        }
-        if let Some((next_start, _)) = self.map.range(start..).next() {
-            assert!(*next_start >= stop, "RegAssign ranges overlap");
-        }
-        if let Some((&left, &(left_stop, left_value))) = self.map.range(..start).next_back() {
+        // The first range starting at or after `start`.
+        let at = self.ranges.partition_point(|&(s, ..)| s < start);
+        let mut from = at;
+        if let Some(&(left, left_stop, left_value)) = at.checked_sub(1).map(|i| &self.ranges[i]) {
+            assert!(left_stop <= start, "RegAssign ranges overlap");
             if left_stop == start && left_value == value {
-                self.map.remove(&left);
                 start = left;
+                from = at - 1;
             }
         }
-        if let Some(&(right_stop, right_value)) = self.map.get(&stop) {
-            if right_value == value {
-                self.map.remove(&stop);
-                stop = right_stop;
+        let mut to = at;
+        if let Some(&(next, next_stop, next_value)) = self.ranges.get(at) {
+            assert!(next >= stop, "RegAssign ranges overlap");
+            if next == stop && next_value == value {
+                stop = next_stop;
+                to = at + 1;
             }
         }
-        self.map.insert(start, (stop, value));
+        self.ranges.splice(from..to, [(start, stop, value)]);
+    }
+
+    /// The range holding `x`, if one does, else the index of the next.
+    fn holding(
+        &self,
+        x: SlotIndex,
+    ) -> Result<usize, usize> {
+        let next = self.ranges.partition_point(|&(s, ..)| s <= x);
+        match next.checked_sub(1) {
+            Some(i) if self.ranges[i].1 > x => Ok(i),
+            _ => Err(next),
+        }
     }
 
     /// `lookup(x)`: the value of the range holding `x`, 0 in a hole.
@@ -149,10 +161,7 @@ impl RegAssignMap {
         &self,
         x: SlotIndex,
     ) -> u32 {
-        match self.map.range(..=x).next_back() {
-            Some((_, &(stop, value))) if stop > x => value,
-            _ => 0,
-        }
+        self.holding(x).map_or(0, |i| self.ranges[i].2)
     }
 
     /// `find(x)`: the range holding `x`, or None (`I.valid()` false or
@@ -161,10 +170,7 @@ impl RegAssignMap {
         &self,
         x: SlotIndex,
     ) -> Option<(SlotIndex, SlotIndex, u32)> {
-        match self.map.range(..=x).next_back() {
-            Some((&start, &(stop, value))) if stop > x => Some((start, stop, value)),
-            _ => self.map.range(x..).next().map(|(&start, &(stop, value))| (start, stop, value)),
-        }
+        self.ranges.get(self.holding(x).unwrap_or_else(|next| next)).copied()
     }
 
     /// `setStop` of the range starting at `start`.
@@ -173,12 +179,13 @@ impl RegAssignMap {
         start: SlotIndex,
         stop: SlotIndex,
     ) {
-        self.map.get_mut(&start).expect("a range starts there").0 = stop;
+        let at = self.ranges.binary_search_by(|&(s, ..)| s.cmp(&start)).expect("a range starts there");
+        self.ranges[at].1 = stop;
     }
 
     /// The ranges in order: (start, stop, value).
     pub fn iter(&self) -> impl Iterator<Item = (SlotIndex, SlotIndex, u32)> + '_ {
-        self.map.iter().map(|(&start, &(stop, value))| (start, stop, value))
+        self.ranges.iter().copied()
     }
 }
 
@@ -1706,7 +1713,7 @@ mod tests {
             _beside: Option<&Insn>,
         ) -> Arc<Insn> {
             let what = Semantics {
-                name: Some("mov".to_owned()),
+                name: Some("mov".into()),
                 dests: vec![Loc::Held(Held { value: to, width: 2 })],
                 sources: vec![Loc::Held(Held { value: from, width: 2 })],
                 ..Semantics::new(Operation::Move)
@@ -1836,6 +1843,71 @@ mod tests {
         assert_eq!(ed.reg_assign.lookup(start), 1, "the open register holds the value until the copy");
     }
 
+    /// `RegAssignMap` kept its ranges in a tree and searched it five times per
+    /// insert (2.56 M for 1,260 inserts on d_faces, the pin's `IntervalMap`
+    /// insert is one descent). Its answers match the tree's on any order of
+    /// inserts, lookups and stop changes.
+    #[test]
+    fn reg_assign_answers_as_the_tree_it_replaced_did() {
+        use std::collections::BTreeMap;
+
+        use crate::liveness::slotindex::SlotIndexes;
+
+        let insns: Vec<Arc<Insn>> = (0..64).map(|_| Arc::new(Insn::new(0, None, None, vec![], vec![]))).collect();
+        let body = LirBody::new(
+            "assign",
+            0,
+            vec![Block::from(LirBlock::new(0, insns.clone()))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let indexes = SlotIndexes::new(&body);
+        let at = |n: usize| indexes.get_instruction_index(insns[n].id()).get_reg_slot(false);
+        let mut model: BTreeMap<SlotIndex, (SlotIndex, u32)> = BTreeMap::new();
+        let mut ours = RegAssignMap::default();
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n) as usize
+        };
+        for _ in 0..400 {
+            let (a, b) = (next(63), next(63));
+            let (a, b) = (a.min(b), a.max(b) + 1);
+            let value = 1 + next(2) as u32;
+            let (start, stop) = (at(a), at(b));
+            let free = model.range(..stop).next_back().is_none_or(|(_, &(e, _))| e <= start)
+                && model.range(start..).next().is_none_or(|(&s, _)| s >= stop);
+            if free {
+                let (mut s0, mut e0) = (start, stop);
+                if let Some((&l, &(le, lv))) = model.range(..s0).next_back() {
+                    if le == s0 && lv == value {
+                        model.remove(&l);
+                        s0 = l;
+                    }
+                }
+                if let Some(&(re, rv)) = model.get(&e0) {
+                    if rv == value {
+                        model.remove(&e0);
+                        e0 = re;
+                    }
+                }
+                model.insert(s0, (e0, value));
+                ours.insert(start, stop, value);
+            }
+            let x = at(next(64));
+            let held = match model.range(..=x).next_back() {
+                Some((&s, &(e, v))) if e > x => Some((s, e, v)),
+                _ => None,
+            };
+            assert_eq!(ours.lookup(x), held.map_or(0, |r| r.2));
+            let found = held.or_else(|| model.range(x..).next().map(|(&s, &(e, v))| (s, e, v)));
+            assert_eq!(ours.find(x), found);
+        }
+        assert_eq!(ours.iter().collect::<Vec<_>>(), model.iter().map(|(&s, &(e, v))| (s, e, v)).collect::<Vec<_>>());
+    }
+
     #[test]
     fn overlapping_ranges_in_reg_assign_are_refused() {
         let (lis, _) = three_blocks();
@@ -1863,7 +1935,7 @@ mod tests {
         use crate::model::ir::Imm;
         let literal = |value: i64| {
             let what = Semantics {
-                name: Some("mov".to_owned()),
+                name: Some("mov".into()),
                 dests: vec![Loc::Held(Held { value: 2, width: 2 })],
                 sources: vec![Loc::Imm(Imm { value, width: 2, address: None })],
                 ..Semantics::new(Operation::Move)

@@ -166,28 +166,6 @@ pub fn renamed(
     _register_operand(regs, one, from.register, to.register)
 }
 
-/// The register of a sum `lea d,[x+y]` that is not `d`: both are `d` when the
-/// address doubles it.
-pub fn other_term(
-    _regs: Regs,
-    one: &Loc,
-    d: Reg,
-) -> Loc {
-    let Loc::Address(a) = one else { unreachable!("sums_into proved an address") };
-    let other = if a.through == d.register { a.index_through } else { a.through };
-    Loc::Reg(Reg { register: other, width: d.width })
-}
-
-/// The displacement of `lea d,[d+disp]` as an immediate the width of `d`.
-pub fn step(
-    _regs: Regs,
-    one: &Loc,
-    d: Reg,
-) -> Loc {
-    let Loc::Address(a) = one else { unreachable!("steps_in_place proved an address") };
-    Loc::Imm(Imm { value: a.offset, width: d.width, address: None })
-}
-
 /// The point `one` stands at.
 pub fn point(
     _regs: Regs,

@@ -6,7 +6,8 @@
 //! `join_copy` takes one copy of the function `LiveIntervals` holds:
 //!
 //! 1. `CoalescerPair::set_registers`; not a move the coalescer joins, refuse.
-//! 2. A copy whose result is dead is removed (DEVIATE C5).
+//! 2. A copy whose result is dead is removed, and what that leaves dead with it
+//!    (`eliminateDeadDefs`).
 //! 3. A copy of a value to itself (a join made it so) merges the two value
 //!    numbers at the copy and goes.
 //! 4. The larger interval stays: the pair is flipped when the source has more
@@ -17,10 +18,6 @@
 //!    to the end points the pruning left.
 //! 6. Every instruction that names the absorbed value names the surviving one
 //!    (`updateRegDefsUses`), and the absorbed interval goes.
-//!
-//! DEVIATE C5 (no number): a dead copy is removed with its source shrunk and
-//! the destination's interval made again, where C++ calls
-//! `LiveRangeEdit::eliminateDeadDefs`. Exit: that function translated.
 //!
 //! DEVIATE C10 (no number): `reMaterializeDef` in a build for size makes a copy
 //! of a constant again only where the source has no other reader, so its own
@@ -51,6 +48,34 @@ use crate::liveness::liverange::{LiveInterval, Segment, Vn};
 use crate::liveness::slotindex::InstrKey;
 use crate::model::ir::Loc;
 use crate::support::hash::{HashMap, HashSet};
+
+/// Whether `one` does nothing but define its values: a copy or a definition
+/// the spiller could make again (`isTriviallyReMaterializable`).
+fn effect_free(one: &crate::model::lir::Insn) -> bool {
+    one.copy_of().is_some() || crate::greedy::inlinespiller::remat_shape(one)
+}
+
+/// `RegisterCoalescer::eliminateDeadDefs` (`LiveRangeEdit::eliminateDeadDefs`
+/// over `DeadDefs`): the instructions of `dead` whose values nothing reads go,
+/// the registers they read are cut back, and what that leaves dead goes in
+/// turn.
+fn eliminate_dead_defs(
+    lis: &mut LiveIntervals,
+    state: &mut State,
+    mut dead: Vec<InstrKey>,
+) {
+    while !dead.is_empty() {
+        // Only what has no effect of its own goes: a call that delivers a
+        // value nothing reads still calls (`LiveRangeEdit::isDead` is
+        // `wouldBeTriviallyDead`).
+        let round: Vec<InstrKey> = std::mem::take(&mut dead)
+            .into_iter()
+            .filter(|&key| effect_free(lis.instr(key)) && lis.all_defs_are_dead(key))
+            .collect();
+        state.erased.extend(round.iter().copied());
+        dead = lis.erase_dead_defs(&round);
+    }
+}
 
 /// `RegisterCoalescer::JoinResult`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -131,9 +156,7 @@ pub fn join_copy(
     // sometimes dead copies slip through, and we can't generate invalid live
     // ranges.
     if lis.all_defs_are_dead(copy) {
-        state.erased.insert(copy);
-        lis.remove_instr(block, copy);
-        lis.shrink_to_uses(cp.src_reg());
+        eliminate_dead_defs(lis, state, vec![copy]);
         lis.remove_interval(cp.dst_reg());
         return JoinResult::Joined;
     }
@@ -319,13 +342,8 @@ fn re_materialize_def(
     state.erased.insert(copy);
     // The source interval can become smaller because we removed a use, and
     // its definition may now be dead.
-    let mut dead = lis.shrink_to_uses(src.value).1;
-    while let Some(key) = dead.pop() {
-        if lis.all_defs_are_dead(key) {
-            state.erased.insert(key);
-            dead.extend(lis.erase_dead_def(key));
-        }
-    }
+    let dead = lis.shrink_to_uses(src.value).1;
+    eliminate_dead_defs(lis, state, dead);
     // The move owns the definition's bytes only where the definition went; else
     // two instructions claim them.
     if !state.erased.contains(&def) {
@@ -556,8 +574,10 @@ fn remove_copy_by_commuting_def(
         if !inside.is_some_and(|seg| seg.valno.as_ref().is_some_and(|v| Rc::ptr_eq(v, &a_val))) {
             continue;
         }
-        // Partial defs and tied uses can't be rewritten independently.
-        if operand.is_def || lis.instr(operand.instr).group.is_some() {
+        // Partial defs and tied uses can't be rewritten independently: a
+        // reader that also defines `a_reg` is a tied use.
+        let reader = lis.instr(operand.instr);
+        if operand.is_def || reader.group.is_some() || reader.defines.contains(&a_reg) {
             return false;
         }
         readers.push(operand.instr);

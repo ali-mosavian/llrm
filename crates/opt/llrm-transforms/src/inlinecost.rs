@@ -72,20 +72,21 @@
 //!   of a local callee, which goes with it, is the pin's. No shape of callee
 //!   but the loop and the one smaller than its call is tested.
 //! - D12 (SZ2): a call the -Os bound (D11) alone refuses, that passes the
-//!   address of a stack slot the caller stored a constant to and whose callee
-//!   loads through that parameter, is inlined if the caller, simplified again
-//!   with the call inlined, is smaller by the target's size cost (`walk.rs`,
-//!   callers of at most 300 instructions; the sites of a private callee that
-//!   dies with its last call are tried together, its body credited). The pin's
-//!   cost does not follow a load through a pointer argument, so it never sees
-//!   the loop or the arithmetic fold.
+//!   address of a stack slot or a global the caller stored a constant to and
+//!   whose callee loads through that parameter, is inlined if the caller,
+//!   simplified again with the call inlined, is smaller by the target's size
+//!   cost (`walk.rs`, callers of at most 300 instructions; the sites of a
+//!   private callee that dies with its last call are tried together, its body
+//!   credited). The pin's cost does not follow a load through a pointer
+//!   argument, so it never sees the loop or the arithmetic fold.
 //! - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
 //!   attribute decision.
 //! - D7: the minsize loop penalty counts retreating-edge headers, not
 //!   `LoopInfo`.
-//! - D10: a callee that calls itself is priced as any (LLVM: "recursive",
-//!   `IsRecursiveCall`), and `decide` leaves a call of the caller itself to the
-//!   copies `walk::SelfInline` makes (gcc's `recursive_inlining`,
+//! - D10 (`-finline-recursive`, off by default): a callee that calls itself is
+//!   priced as any (LLVM: "recursive", `IsRecursiveCall`, unless
+//!   `AllowRecursiveCall`), and `decide` leaves a call of the caller itself to
+//!   the copies `walk::SelfInline` makes (gcc's `recursive_inlining`,
 //!   ipa-inline.cc:1645: depth `MAX_INLINE_RECURSIVE_DEPTH` 3 against gcc's 8,
 //!   `MAX_INLINE_INSNS_RECURSIVE` 150 against 450, the call's frequency above
 //!   10%; none at -Os; calls of a function that reads and writes nothing with
@@ -175,6 +176,12 @@ pub struct InlineParams {
     /// `ComputeFullInlineCost`: the whole cost, past the threshold too (an
     /// optimisation remark asks for it).
     pub compute_full_inline_cost: bool,
+    /// `AllowRecursiveCall`: a callee that calls itself is priced, not
+    /// refused. The pin's is false; D10 (`-finline-recursive`) sets it.
+    pub allow_recursive_call: bool,
+    /// The `LastCallToStatic` bonus applies. The pin's always does;
+    /// `-fno-inline-functions-called-once` turns it off.
+    pub last_call_to_static: bool,
     /// Which target's answers `getInstructionCost` and its kin give (D2).
     pub tti: Tti,
 }
@@ -203,6 +210,8 @@ impl InlineParams {
             opt_min_size_threshold: OPT_MIN_SIZE_THRESHOLD,
             opt_size_threshold: OPT_SIZE_THRESHOLD,
             compute_full_inline_cost: false,
+            allow_recursive_call: false,
+            last_call_to_static: true,
             tti: Tti::Generic,
         }
     }
@@ -439,6 +448,7 @@ struct Analyzer<'a> {
     known_successors: HashMap<u32, BlockId>,
     load_addrs: BTreeSet<Operand>,
     enable_load_elimination: bool,
+    is_recursive_call: bool,
     exposes_returns_twice: bool,
     has_dynamic_alloca: bool,
     contains_noduplicate_call: bool,
@@ -483,6 +493,7 @@ impl<'a> Analyzer<'a> {
             known_successors: HashMap::default(),
             load_addrs: BTreeSet::new(),
             enable_load_elimination: true,
+            is_recursive_call: false,
             exposes_returns_twice: false,
             has_dynamic_alloca: false,
             contains_noduplicate_call: false,
@@ -1423,6 +1434,12 @@ impl<'a> Analyzer<'a> {
             }
             return self.visit_default(inst);
         };
+        // `F == Call.getCalledFunction()`: "This flag will fully abort the
+        // analysis" unless the params allow a recursive call (:2481).
+        if target == self.site.callee_id && !self.params.allow_recursive_call {
+            self.is_recursive_call = true;
+            return false;
+        }
         // simplifyCallSite: D3, no library folding.
         let name = self.site.module.global(target).name.clone();
         // A declaration flagged `frame_bound` (the QB error-handler
@@ -1471,10 +1488,6 @@ impl<'a> Analyzer<'a> {
             }
             return self.visit_default(inst);
         }
-        // D-recursion: `F == Call.getFunction()` (the callee calls itself) is
-        // an ordinary call here, not the refusal "recursive": a recursive
-        // callee is inlined into another caller as gcc does, and into itself
-        // by `walk`'s bounded self-inlining.
         if lowered_to_call(self.site.module, target) {
             // onLoweredCall (:732), a direct call.
             self.add_cost(arguments as i64 * INSTR_COST);
@@ -1676,7 +1689,9 @@ impl<'a> Analyzer<'a> {
                     self.cost - before
                 );
             }
-            if self.exposes_returns_twice {
+            if self.is_recursive_call {
+                return Err("recursive".into());
+            } else if self.exposes_returns_twice {
                 return Err("exposes returns twice".into());
             } else if self.has_dynamic_alloca {
                 return Err("dynamic alloca".into());
@@ -1706,7 +1721,7 @@ impl<'a> Analyzer<'a> {
         } else {
             let mut single_bb_percent = 50;
             let mut vector_percent = VECTOR_BONUS_PERCENT;
-            let mut last_call_bonus = LAST_CALL_TO_STATIC_BONUS;
+            let mut last_call_bonus = if self.params.last_call_to_static { LAST_CALL_TO_STATIC_BONUS } else { 0 };
             let caller_size = self.site.caller_size;
             match caller_size {
                 CallerSize::MinSize => {
@@ -2622,10 +2637,27 @@ fn root_of(
     }
 }
 
+/// The global a constant pointer is the address of, or a step or a cast of.
+fn global_of(
+    context: &llrm_mir::context::Context,
+    operand: llrm_mir::module::Operand,
+) -> Option<GlobalId> {
+    use llrm_mir::context::{ConstantExpr, ConstantKind};
+    let llrm_mir::module::Operand::Constant(mut at) = operand else { return None };
+    loop {
+        match &context.get(at).kind {
+            ConstantKind::Global(global) => return Some(*global),
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => at = *operands.first()?,
+            ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => at = *value,
+            _ => return None,
+        }
+    }
+}
+
 /// SZ2: whether a site refused by the -Os bound is worth inlining to see: the
-/// call passes the address of a stack slot the caller wrote a constant to, and
-/// the callee reads through that parameter, which the cost model does not
-/// follow (a constant argument it folds itself).
+/// call passes the address of a stack slot (or of a global) the caller wrote a
+/// constant to, and the callee reads through that parameter, which the cost
+/// model does not follow (a constant argument it folds itself).
 fn worth_a_trial(
     module: &Module,
     caller: &llrm_mir::module::Function,
@@ -2650,6 +2682,20 @@ fn worth_a_trial(
                 },
             )
     };
+    // A gate, not dataflow: the store may be to another field, or after the
+    // call; the trial decides on bytes.
+    let written_global = |global: GlobalId| {
+        caller
+            .walk()
+            .any(
+                |(_, inst)| {
+                    let store = caller.instruction(inst);
+                    matches!(store.opcode, Opcode::Store { .. })
+                        && matches!(store.operands[0], llrm_mir::module::Operand::Constant(_))
+                        && global_of(&module.context, store.operands[1]) == Some(global)
+                },
+            )
+    };
     let read_through: Vec<llrm_mir::module::ValueId> = callee
         .walk()
         .filter_map(|(_, inst)| {
@@ -2660,16 +2706,21 @@ fn worth_a_trial(
             }
         })
         .collect();
-    arguments
-        .iter()
-        .zip(callee.parameters())
-        .any(
-            |(argument, parameter)| read_through.contains(parameter)
-                && matches!(
+    // A callee that reads a global directly (its pointer arguments were
+    // propagated into it), one the caller has stored a constant to.
+    let reads_written_global = callee.walk().any(|(_, inst)| {
+        let load = callee.instruction(inst);
+        matches!(load.opcode, Opcode::Load { .. })
+            && load.operands.first().and_then(|ptr| global_of(&module.context, *ptr)).is_some_and(written_global)
+    });
+    reads_written_global
+        || arguments.iter().zip(callee.parameters()).any(|(argument, parameter)| {
+            read_through.contains(parameter)
+                && (matches!(
                     root_of(caller, *argument),
                     Some(Root::Slot(slot)) if written(slot)
-                ),
-        )
+                ) || global_of(&module.context, *argument).is_some_and(written_global))
+        })
 }
 
 /// What `decide` reads of the module besides the site.

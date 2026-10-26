@@ -51,7 +51,7 @@
 //! `Unit` is what the analyses read: the function, its module's types,
 //! constants, layout, metadata and globals, the program's target and segment
 //! layout, and optional facts handed in with `with_*` (shape, registers,
-//! pointers, annotated references, assumptions, counted loops, bounds, edges,
+//! pointers, annotated references, assumptions, counted loops, edges,
 //! exposed frames, GlobalsAA, callbacks). A fact not handed in is derived on
 //! demand, which is correct but repeats work; [`crate::manager`]'s
 //! `Unit::within` fills them from cached analyses. `Standing` holds the
@@ -1089,6 +1089,9 @@ pub struct Unit<'a> {
     /// the manager's `GlobalsModRefAnalysis`; without it a call says nothing
     /// of a global.
     pub globals_mr: Option<&'a crate::globalsmodref::GlobalsModRef>,
+    /// The proxy `within` made the unit under, whose memo holds what depends on
+    /// its module analyses alone.
+    pub outer: Option<&'a llrm_mir::passes::Outer>,
     /// Dominance and loops, the manager's; without them each ask finds them.
     pub shape: Option<&'a Shape>,
     /// What consts knows without memory, the manager's `Registers`.
@@ -1110,9 +1113,6 @@ pub struct Unit<'a> {
     /// What the unavoidable branch edges bound at each block, under
     /// `registers`: the manager's `DominatedEdges`.
     pub edges: Option<&'a crate::ranger::EdgeFacts>,
-    /// What each counted loop bounds at each block, under `registers`: the
-    /// manager's `Bounded`.
-    pub bounds: Option<&'a crate::ranges::Bounds>,
     /// The allocas whose address is exposed, the manager's `ExposedFrames`;
     /// without it each ask scans the alloca's uses.
     pub exposed: Option<&'a BTreeSet<ValueId>>,
@@ -1123,10 +1123,6 @@ pub struct Unit<'a> {
     /// The pointer value solve of this body, the manager's `PointerValues`;
     /// without it each `points_to` makes its own.
     pub point_values: Option<&'a crate::alias::PointValues>,
-    /// Whether the unit's `bounds`, held, are the counted loops' intervals: at
-    /// a level without them (`Outer::loop_intervals`) they are empty on
-    /// purpose.
-    pub loop_intervals: bool,
     /// The congruences of this body under these registers
     /// (`alias::congruences_of`), where a caller asking many times of one
     /// body made a cell for them: each proof of a loop's trips asked of the
@@ -1188,6 +1184,7 @@ impl<'a> Unit<'a> {
             function,
             globals_aa: None,
             globals_mr: None,
+            outer: None,
             references: None,
             shape: None,
             registers: None,
@@ -1197,11 +1194,9 @@ impl<'a> Unit<'a> {
             counted: None,
             followers: None,
             edges: None,
-            bounds: None,
             exposed: None,
             plain: None,
             point_values: None,
-            loop_intervals: true,
             congruent: None,
             proved: None,
         }
@@ -1268,13 +1263,6 @@ impl<'a> Unit<'a> {
         assumptions: &'a Assumptions,
     ) -> Self {
         Self { assumptions: Some(assumptions), ..self }
-    }
-
-    pub fn with_bounds(
-        self,
-        bounds: &'a crate::ranges::Bounds,
-    ) -> Self {
-        Self { bounds: Some(bounds), ..self }
     }
 
     pub fn with_edges(
@@ -1497,9 +1485,6 @@ pub type Knowns = llrm_support::hash::SparseIdMap<ValueId, Known>;
 /// place a unit's registers are derived outside the manager.
 pub struct Standing<'h> {
     held: Option<&'h Knowns>,
-    /// What the counted loops bound, held for the same body as `held`, where
-    /// the caller has it.
-    bounds: Option<&'h crate::ranges::Bounds>,
     derived: Option<Knowns>,
     /// What stood before an edit, and the values the edit reached: `derived`
     /// is made from them when next asked.
@@ -1535,24 +1520,6 @@ impl<'h> Standing<'h> {
     pub fn held(registers: &'h Knowns) -> Self {
         Self {
             held: Some(registers),
-            bounds: None,
-            derived: None,
-            edited: None,
-            shape: None,
-            renew: None,
-            renewed: None,
-            reshaped: false,
-        }
-    }
-
-    /// `held`, and the bounds the manager found of the same body.
-    pub fn held_with(
-        registers: &'h Knowns,
-        bounds: &'h crate::ranges::Bounds,
-    ) -> Self {
-        Self {
-            held: Some(registers),
-            bounds: Some(bounds),
             derived: None,
             edited: None,
             shape: None,
@@ -1564,16 +1531,7 @@ impl<'h> Standing<'h> {
 
     /// No one has found them: derived when first asked.
     pub fn underived() -> Self {
-        Self {
-            held: None,
-            bounds: None,
-            derived: None,
-            edited: None,
-            shape: None,
-            renew: None,
-            renewed: None,
-            reshaped: false,
-        }
+        Self { held: None, derived: None, edited: None, shape: None, renew: None, renewed: None, reshaped: false }
     }
 
     /// `self`, the shape of the body as the manager found it.
@@ -1604,7 +1562,6 @@ impl<'h> Standing<'h> {
     /// The body changed: what was found of it no longer holds.
     pub fn changed(&mut self) {
         self.held = None;
-        self.bounds = None;
         self.derived = None;
         self.edited = None;
         self.renewed = None;
@@ -1630,7 +1587,6 @@ impl<'h> Standing<'h> {
                 return;
             }
         };
-        self.bounds = None;
         self.renewed = None;
         let mut kept = kept;
         let mut touched = llrm_mir::dense::IdSet::<ValueId>::new();
@@ -1678,16 +1634,6 @@ impl<'h> Standing<'h> {
         self.edited = Some((kept, dirty));
     }
 
-    /// `of`, and the manager's bounds of the body where it is still as they
-    /// were found of it.
-    pub fn of_with_bounds(
-        &mut self,
-        unit: &Unit,
-    ) -> (&Knowns, Option<&'h crate::ranges::Bounds>) {
-        let bounds = self.bounds;
-        (self.of(unit), bounds)
-    }
-
     /// What is known of `unit`'s body as it stands, which it must be the one
     /// these were asked of.
     pub fn of(
@@ -1712,6 +1658,18 @@ impl<'h> Standing<'h> {
         }
         self.derived.get_or_insert_with(|| crate::consts::known(&Unit { registers: None, ..*unit }))
     }
+}
+
+/// The loads and stores of `function`: the capacity of a map of each one's
+/// reference.
+pub(crate) fn loads_and_stores(function: &Function) -> usize {
+    function
+        .walk()
+        .filter(|&(_, inst)| matches!(
+            function.instruction(inst).opcode,
+            Opcode::Load { .. } | Opcode::Store { .. }
+        ))
+        .count()
 }
 
 /// The allocas of `unit`'s function whose address is exposed, in one pass: what

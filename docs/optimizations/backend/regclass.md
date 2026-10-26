@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/regclass.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/regclass.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/regclass.rs sha256:37904712fe87554384a10f0dbac45a668541f247c274309ff531fccee4179106 -->
+<!-- src: crates/backend/llrm-core/src/backend/regclass.rs sha256:8976d304f2db8b4bc8a14bc9fdc360fa433a1dc6a7b8506f29b27d56c9154bdf -->
 
 # regclass
 
@@ -91,7 +91,7 @@ each body after the phases from `ssaspill` to `coalesce`.
 
 ## Provides
 One answer to "which registers may this value be in", owned here (#441).
-Read by [`crate::backend::ssaspill`](ssaspill.md), [`crate::backend::allocate`](allocate.md),
+Read by `crate::backend::ssaspill`, [`crate::backend::allocate`](allocate.md),
 [`crate::backend::coalesce`](coalesce.md), [`crate::backend::constrain`](constrain.md),
 [`crate::backend::pressuresink`](pressuresink.md) and `target.rs`.
 

@@ -180,6 +180,21 @@ struct Spare<'a> {
     free: &'a [RegId],
 }
 
+/// `body` without its `implicit_def`s: what reads such a value reads it as
+/// undef, and the definition goes (`ExpandPostRAPseudos`' `IMPLICIT_DEF` case;
+/// here the first phase after allocation, using `ProcessImplicitDefs`' own
+/// work).
+pub fn expanded(body: &LirBody) -> LirBody {
+    let is_implicit = |one: &Insn| {
+        one.uses.is_empty()
+            && one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some(crate::processimpdefs::IMPLICIT_DEF))
+    };
+    if !body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| is_implicit(one)) {
+        return body.clone();
+    }
+    crate::processimpdefs::processed(body)
+}
+
 impl LIRTransform for ParallelCopy {
     fn class_name(&self) -> &'static str {
         "ParallelCopy"
@@ -193,14 +208,15 @@ impl LIRTransform for ParallelCopy {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        scheduled_with(&body, self.prices, &self.available, &self.saved).map_err(|refused| refused.to_string())
+        scheduled_with(&expanded(&body), self.prices, &self.available, &self.saved)
+            .map_err(|refused| refused.to_string())
     }
 
     fn transform_raising(
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, Exception> {
-        scheduled_with(&body, self.prices, &self.available, &self.saved)
+        scheduled_with(&expanded(&body), self.prices, &self.available, &self.saved)
             .map_err(|malformed| Exception::defined_in("qbopt.backend.parcopy", "Malformed", malformed.to_string()))
     }
 }
@@ -211,7 +227,7 @@ fn semantics(
     dests: Vec<Loc>,
     sources: Vec<Loc>,
 ) -> Semantics {
-    Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+    Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
 }
 
 fn _width(one: &Loc) -> u32 {
@@ -412,28 +428,6 @@ pub(crate) fn ready<K: Eq + std::hash::Hash>(
             !writes[*one].iter().any(|place| others.contains(place))
         })
         .collect()
-}
-
-/// One copy of a cycle `ready` is stuck on, when none of `left` may go:
-/// following who is waited for until a copy comes round again. Taking that
-/// copy's sources first breaks the cycle.
-pub(crate) fn in_cycle<K: Eq + std::hash::Hash>(
-    reads: &[Vec<K>],
-    writes: &[Vec<K>],
-    left: &[usize],
-) -> Option<usize> {
-    let waiting_for = |one: usize| {
-        left.iter()
-            .copied()
-            .find(|other| *other != one && reads[*other].iter().any(|place| writes[one].contains(place)))
-    };
-    let mut seen = Vec::new();
-    let mut one = *left.first()?;
-    while !seen.contains(&one) {
-        seen.push(one);
-        one = waiting_for(one)?;
-    }
-    Some(one)
 }
 
 type Rotation = (Vec<Arc<Insn>>, Vec<Arc<Insn>>);
@@ -640,7 +634,7 @@ mod tests {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Option<Semantics> {
-        Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) })
+        Some(Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) })
     }
 
     fn _move(
@@ -701,7 +695,7 @@ mod tests {
     }
 
     fn name(one: &Insn) -> String {
-        one.what.as_ref().unwrap().name.clone().unwrap()
+        one.what.as_ref().unwrap().name.as_deref().map(str::to_owned).unwrap()
     }
 
     fn names(insns: &[Arc<Insn>]) -> Vec<String> {
@@ -1027,5 +1021,47 @@ mod tests {
         let mut other = _other(0x100);
         other.group = Some(1);
         assert!(matches!(scheduled(&_body(vec![other])), Err(Malformed(_))));
+    }
+
+    /// PHIElimination makes `implicit_def`s the allocator gives registers; one
+    /// left in the body after allocation printed as an instruction no
+    /// assembler knows, and one simply dropped left its readers reading a value
+    /// nothing defines (jpeg_fixed and desk.nib: "value is read but never
+    /// defined"). The definition goes and the readers read it as undef.
+    #[test]
+    fn test_an_implicit_def_is_gone_after_allocation_and_its_readers_read_undef() {
+        let held = |value: u32| Loc::Held(crate::model::ir::Held { value, width: 4 });
+        let undef = Insn::new(
+            0,
+            Some((0, 0)),
+            semantics(Operation::Nothing, crate::processimpdefs::IMPLICIT_DEF, vec![held(1)], vec![]),
+            vec![1],
+            vec![],
+        );
+        let reader = Insn::new(
+            1,
+            Some((1, 1)),
+            semantics(
+                Operation::Binary,
+                "add",
+                vec![held(2)],
+                vec![held(1), Loc::Imm(crate::model::ir::Imm { value: 3, width: 4, address: None })],
+            ),
+            vec![2],
+            vec![1],
+        );
+        let body = LirBody::new(
+            "expanded",
+            0,
+            vec![LirBlock::new(0, vec![Arc::new(undef), Arc::new(reader)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let got = super::expanded(&body);
+        let names: Vec<String> =
+            got.insns().iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+        assert_eq!(names, ["add"]);
+        let add = &got.insns()[0];
+        assert!(add.uses.is_empty() && add.undefs == [1], "uses {:?} undefs {:?}", add.uses, add.undefs);
     }
 }

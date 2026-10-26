@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_use.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_use.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_use.rs sha256:adfada0be92b5766e70afd36b58e83eb6fa9d69fe4bee991fa8d921a5be1a8fb -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_use.rs sha256:14acd8b1221183128ab05edf7cac846361b37c502adc09c051060308d42bfbf0 -->
 
 # lsr_use
 
@@ -52,10 +52,10 @@ the four addressing registers; reviewed 2026-11-30.
 
 Its -O2 cost is measured, not counted statically (static counts said
 smaller): QCport's 61-frame BENCH run in the dosrun emulator, every object
-main's but `d_faces.obj` (~/scratch/dfdyn: build.py, run.py). Executed
-instructions: main 485,835,518; parity +2,383,382 (+0.49%); head +2,816,018
-(+0.58%), so this charge adds +432,636 (+0.09%). The parity loss is row
-DFACES-DYN-1, not LU1's.
+main's but `d_faces.obj` (the DFACES-DYN harness: build.py, run.py).
+Executed instructions: main 485,835,518; parity +2,383,382 (+0.49%); head
++2,816,018 (+0.58%), so this charge adds +432,636 (+0.09%). The parity loss
+is row DFACES-DYN-1, not LU1's.
 
 DEVIATE: the target hooks have no access type or address space on the
 legality call, and no per-instruction query (`LSRWithInstrQueries`); x86 has

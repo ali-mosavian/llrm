@@ -22,8 +22,8 @@
 //!           + evict  a round  (S2)                 recoloring
 //! ```
 //!
-//! DEVIATE (until S2, named, no number): `tryAssignCSRFirstTime`,
-//! `trySplitAroundHintReg` and `tryHintsRecoloring` are not translated, so a
+//! DEVIATE (until S2, named, no number): `trySplitAroundHintReg` and
+//! `tryHintsRecoloring` are not translated, so a
 //! range that cannot get a register goes from `RS_Split` straight to spill;
 //! this target's register costs are all zero (`RegCosts`), so the cost-per-use
 //! path of `tryAssign` is dropped. Callee-saved register cost is the shrink
@@ -61,6 +61,8 @@ use std::collections::{BTreeMap, BinaryHeap};
 use std::rc::Rc;
 
 use llrm_lir::registers::RegId;
+use llrm_mir::blockfrequency::BranchProbability;
+use llrm_mir::blockfrequency::frequency::BlockFrequency;
 
 use super::matrix::{InterferenceKind, LiveRegMatrix};
 use super::regionsplit::{SplitSupport, Splitter};
@@ -328,6 +330,48 @@ pub trait GreedyEnv: SpillWeightEnv {
         &self,
         virt: u32,
     ) -> bool;
+    /// `RegClassInfo.getLastCalleeSavedAlias(PhysReg)`: the callee-saved
+    /// register `phys` is, or none.
+    fn callee_saved_alias(
+        &self,
+        _phys: RegId,
+    ) -> Option<RegId> {
+        None
+    }
+    /// `TRI->getCSRFirstUseCost(MF)`: what the first use of a callee-saved
+    /// register costs in entry-block executions (X86: `push` and `pop`).
+    fn csr_first_use_cost(&self) -> u32 {
+        0
+    }
+}
+
+/// `-regalloc-csr-cost-scale` / `TRI->getCSRCostScale(MF)`: the percentage of
+/// the first-use cost the allocator charges (X86 takes the default).
+const CSR_COST_SCALE: u32 = 30;
+
+/// `DefaultEvictionAdvisor::isUnusedCalleeSavedReg`
+/// (RegAllocEvictionAdvisor.cpp): `phys` is a callee-saved register no
+/// virtual register has been given yet.
+pub(crate) fn is_unused_callee_saved_reg(
+    env: &dyn GreedyEnv,
+    matrix: &LiveRegMatrix,
+    phys: RegId,
+) -> bool {
+    env.callee_saved_alias(phys).is_some_and(|csr| !matrix.is_phys_reg_used(csr))
+}
+
+/// The cost of using a callee-saved register for the first time: its push and
+/// pop (`first_use` entry executions) scaled by `CSR_COST_SCALE` percent.
+fn csr_cost_of(
+    first_use: u32,
+    entry: u64,
+) -> BlockFrequency {
+    let cost = BlockFrequency(u64::from(first_use) * entry);
+    if CSR_COST_SCALE < 100 {
+        cost * BranchProbability::new(CSR_COST_SCALE, 100)
+    } else {
+        cost / BranchProbability::new(100, CSR_COST_SCALE)
+    }
 }
 
 /// What `RAGreedy` gives a spiller to work with (`LiveRangeEdit`'s world).
@@ -367,6 +411,17 @@ pub trait Spiller {
         false
     }
 
+    /// `postOptimization` (`HoistSpillHelper::hoistAllSpills`): the stores of
+    /// one value are merged and moved to the colder places of its dominator
+    /// tree. Run once the allocation is done.
+    fn hoist_spills(
+        &mut self,
+        _lis: &mut LiveIntervals,
+        _matrix: &mut LiveRegMatrix,
+        _body: &crate::model::lir::LirBody,
+    ) {
+    }
+
     /// The ranges of the homes the spills went to (`LiveStacks`), left where
     /// the allocator's caller reads them, once the allocation is done.
     fn stacked(&mut self) {}
@@ -394,6 +449,20 @@ pub struct Stats {
     pub failed: usize,
 }
 
+/// One line of `LLRM_GREEDY_DECISIONS`: the interval `reg` that `selectOrSplit`
+/// took off the queue at `stage`, with its segment count and weight, and what
+/// it decided. Two builds' lines for one function diff to the first decision
+/// that changed.
+fn decision_line(
+    reg: u32,
+    stage: LiveRangeStage,
+    size: usize,
+    weight: f32,
+    verdict: &str,
+) -> String {
+    format!("dec v{reg} stage={stage:?} size={size} w={weight:.4} -> {verdict}")
+}
+
 type RecolorStack = Vec<(Rc<LiveInterval>, RegId)>;
 
 /// `RAGreedy` (RegAllocGreedy.h#L55) over `RegAllocBase`.
@@ -408,12 +477,17 @@ pub struct RAGreedy<'a> {
     /// require one (pre-assigned): nothing recolors them (DEVIATE: LLVM
     /// models a fixed register as the reg units of a physical register).
     pub pinned: HashSet<u32>,
+    /// Pinned values that are fixed ranges, not allocated (`LLRM_FIXED_PINS`).
+    pub fixed: HashSet<u32>,
     queue: BinaryHeap<(u32, u32)>,
     spiller: Box<dyn Spiller + 'a>,
     pub stats: Stats,
     /// What `trySplit` works with; none until the caller gives it the
     /// function's blocks (then a range that does not fit is spilled).
     pub split: Option<SplitSupport>,
+    /// `CSRCost`: what the first use of a callee-saved register costs,
+    /// relative to the entry block's frequency (`initializeCSRCost`).
+    csr_cost: BlockFrequency,
 }
 
 impl<'a> RAGreedy<'a> {
@@ -431,10 +505,12 @@ impl<'a> RAGreedy<'a> {
             hints: BTreeMap::new(),
             extra: ExtraRegInfo::default(),
             pinned: HashSet::default(),
+            fixed: HashSet::default(),
             queue: BinaryHeap::new(),
             spiller,
             stats: Stats::default(),
             split: None,
+            csr_cost: BlockFrequency(0),
         }
     }
 
@@ -442,6 +518,14 @@ impl<'a> RAGreedy<'a> {
     /// The registers a recording spiller was asked to spill.
     pub fn recorded_spills(&self) -> Vec<u32> {
         self.spiller.recorded()
+    }
+
+    /// `postOptimization`: `hoistAllSpills`.
+    pub fn hoist_spills(
+        &mut self,
+        body: &crate::model::lir::LirBody,
+    ) {
+        self.spiller.hoist_spills(&mut self.lis, &mut self.matrix, body);
     }
 
     /// `LiveStacks` left for the caller (the spiller's homes' ranges).
@@ -490,6 +574,9 @@ impl<'a> RAGreedy<'a> {
     /// `seedLiveRegs` (RegAllocBase.cpp#L75).
     fn seed_live_regs(&mut self) {
         for reg in self.lis.virt_regs() {
+            if self.fixed.contains(&reg) {
+                continue;
+            }
             let li = self.lis.interval_rc(reg);
             self.enqueue(&li);
         }
@@ -577,6 +664,7 @@ impl<'a> RAGreedy<'a> {
     /// `RegAllocBase::allocatePhysRegs` (RegAllocBase.cpp#L88): seeds the queue
     /// and assigns registers one at a time.
     pub fn allocate_phys_regs(&mut self) {
+        self.initialize_csr_cost();
         self.seed_live_regs();
         // Continue assigning vregs one at a time to available physical
         // registers.
@@ -595,7 +683,28 @@ impl<'a> RAGreedy<'a> {
             // physical register if possible and populate a list of
             // new live intervals that result from splitting.
             let mut split_vregs: Vec<u32> = Vec::new();
-            match self.select_or_split(&virt_reg, &mut split_vregs) {
+            let decision = self.select_or_split(&virt_reg, &mut split_vregs);
+            if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
+                let verdict = match &decision {
+                    Select::Reg(phys) => format!("assign {phys:?}"),
+                    Select::Fail => "FAIL".to_owned(),
+                    Select::None => format!("split/spill into {split_vregs:?}"),
+                };
+                eprintln!(
+                    "{}",
+                    decision_line(
+                        virt_reg.reg(),
+                        self.extra.get_stage(virt_reg.reg()),
+                        virt_reg.size(),
+                        virt_reg.weight(),
+                        &verdict
+                    )
+                );
+                if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS_INTERVALS") {
+                    eprintln!("    {}", virt_reg);
+                }
+            }
+            match decision {
                 Select::Fail => {
                     // selectOrSplit failed to find a register: no valid
                     // allocation.
@@ -943,6 +1052,56 @@ impl<'a> RAGreedy<'a> {
         self.select_or_split_impl(virt, new_vregs, &mut fixed, &mut recolor_stack, 0)
     }
 
+    /// `initializeCSRCost` (RegAllocGreedy.cpp#L2423), the target's branch:
+    /// `getCSRFirstUseCost` entry-block executions, scaled by
+    /// `getCSRCostScale` percent. No split support, no cost: a range never
+    /// pre-splits.
+    fn initialize_csr_cost(&mut self) {
+        self.csr_cost = BlockFrequency(0);
+        let Some(split) = &self.split else { return };
+        let entry = split.mbfi.get_entry_freq().get_frequency();
+        self.csr_cost = csr_cost_of(self.env.csr_first_use_cost(), entry);
+    }
+
+    /// `tryAssignCSRFirstTime` (RegAllocGreedy.cpp#L2384): a callee-saved
+    /// register costs a `push` and a `pop` the first time it is used, so a
+    /// cheaper split (or spill) of the range wins over it. The register to use,
+    /// or none, with the pre-split's ranges in `new_vregs`.
+    ///
+    /// DEVIATE CSR1 (no number yet): `CostPerUseLimit` is not passed to
+    /// `tryEvict`, as this target's per-register costs are all zero.
+    fn try_assign_csr_first_time(
+        &mut self,
+        virt: &Rc<LiveInterval>,
+        order: &AllocationOrder,
+        phys: RegId,
+        new_vregs: &mut Vec<u32>,
+    ) -> Option<RegId> {
+        let stage = self.extra.get_stage(virt.reg());
+        let csr_cost = self.csr_cost;
+        let ss = self.split.as_mut()?;
+        let mut splitter = Splitter {
+            lis: &mut self.lis,
+            matrix: &mut self.matrix,
+            extra: &mut self.extra,
+            ss,
+            env: self.env,
+            original: &self.original,
+            hints: &mut self.hints,
+        };
+        if stage == LiveRangeStage::Spill && virt.is_spillable() {
+            // We choose spill over using the CSR for the first time if the
+            // spill cost is lower than CSRCost.
+            return splitter.csr_spill_is_dearer(virt, csr_cost).then_some(phys);
+        }
+        if stage < LiveRangeStage::Split {
+            // We choose pre-splitting over using the CSR for the first time if
+            // the cost of splitting is lower than CSRCost.
+            return splitter.csr_pre_split(virt, order, csr_cost, new_vregs).then_some(phys);
+        }
+        Some(phys)
+    }
+
     /// `selectOrSplitImpl` (RegAllocGreedy.cpp#L2655).
     fn select_or_split_impl(
         &mut self,
@@ -955,7 +1114,29 @@ impl<'a> RAGreedy<'a> {
         // First try assigning a free register.
         let order = self.order_of(virt.reg());
         if let Some(phys) = self.try_assign(virt, &order, new_vregs, fixed) {
-            return Select::Reg(phys);
+            // When NewVRegs is not empty, we may have made decisions such as
+            // evicting a virtual register, go with the earlier decisions and
+            // use the physical register.
+            //
+            // DEVIATE CSR2 (no number yet): not while recoloring (`depth > 0`).
+            // A pre-split there makes new vregs, which
+            // `tryRecoloringCandidates` takes for a failed recolor;
+            // recpow -O1 m32 --isel=old went from allocating to an
+            // error. The recolored range takes the CSR.
+            if depth == 0
+                && self.csr_cost.get_frequency() != 0
+                && is_unused_callee_saved_reg(self.env, &self.matrix, phys)
+                && new_vregs.is_empty()
+            {
+                let csr = self.try_assign_csr_first_time(virt, &order, phys, new_vregs);
+                // Return now if we decide to use a CSR or create new vregs due
+                // to pre-splitting.
+                if csr.is_some() || !new_vregs.is_empty() {
+                    return csr.map_or(Select::None, Select::Reg);
+                }
+            } else {
+                return Select::Reg(phys);
+            }
         }
         // Non empty NewVRegs means VirtReg has been split.
         if !new_vregs.is_empty() {
@@ -1218,6 +1399,28 @@ mod tests {
     use crate::greedy::virtregmap::RegisterInfo;
     use crate::model::lir::{Block, Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
+
+    /// The line `LLRM_GREEDY_DECISIONS` prints is the one a diff of two builds
+    /// reads: it names the interval, its stage, size and weight, and the
+    /// outcome. A sys.c function's allocation changed by one removed copy, and
+    /// no line said which interval it was (v127, w 0.4365 to 0.3018).
+    #[test]
+    fn test_a_decision_line_names_the_interval_its_stage_weight_and_outcome() {
+        let line = decision_line(127, LiveRangeStage::Split, 1, 0.30180937, "assign EBX");
+        assert_eq!(line, "dec v127 stage=Split size=1 w=0.3018 -> assign EBX");
+    }
+
+    /// Using a callee-saved register for the first time was free
+    /// (`tryAssignCSRFirstTime` untranslated), so a range live across one call
+    /// in a cold block took EBX and the function paid a push and a pop on every
+    /// entry. It costs 30% of two entry executions.
+    #[test]
+    fn test_a_first_use_of_a_callee_saved_register_costs_thirty_percent_of_two_entries() {
+        // BranchProbability is 31-bit fixed point: 30/100 of 2000 rounds to
+        // 599.
+        let cost = csr_cost_of(2, 1000).get_frequency();
+        assert!(cost.abs_diff(600) <= 1, "{cost}");
+    }
 
     struct Env {
         regs: Vec<RegId>,

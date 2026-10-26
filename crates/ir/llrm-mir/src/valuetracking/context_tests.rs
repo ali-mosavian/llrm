@@ -251,3 +251,99 @@ fn test_function_analyses_find_the_assume() {
         "no assumptions, no fact"
     );
 }
+
+/// A function's intrinsic id is found with its name, once: `intrinsic_id` of a
+/// call read it from the text of every call the combiner visited. The cached
+/// id is the one the text gives, for a suffix, a longer name and a
+/// non-intrinsic.
+#[test]
+fn a_global_name_carries_the_intrinsic_id_of_its_text() {
+    use crate::module::GlobalName;
+    use crate::valuetracking::pattern::intrinsic_id_of_name;
+    for text in ["llvm.smax.i32", "llvm.umin.i16", "llvm.memcpy.p0.p0.i32", "llvm.nosuch.i8", "printf", "llvm."] {
+        let name = GlobalName::from(text.to_owned());
+        assert_eq!(name.intrinsic_id(), intrinsic_id_of_name(text), "{text}");
+    }
+    assert_eq!(GlobalName::default().intrinsic_id(), None);
+    assert!(GlobalName::from("llvm.smax.i32".to_owned()).intrinsic_id().is_some(), "premise: smax is an id");
+}
+
+/// `findValuesAffectedByCondition` visits each condition once: ten compares
+/// joined by `and` (past the eight a `SmallPtrSet` keeps inline), the first
+/// and the last of them twice, give each compared value once.
+#[test]
+fn affected_values_of_a_wide_condition_are_each_found_once() {
+    let mut text = String::from("define void @f(");
+    text += &(0..10).map(|i| format!("i8 %x{i}")).collect::<Vec<_>>().join(", ");
+    text += ") {\n";
+    for i in 0..10 {
+        text += &format!("  %c{i} = icmp eq i8 %x{i}, 0\n");
+    }
+    text += "  %a0 = and i1 %c0, %c0\n";
+    for i in 1..10 {
+        text += &format!("  %a{i} = and i1 %a{}, %c{i}\n", i - 1);
+    }
+    text += "  %t = and i1 %c9, %a9\n  ret void\n}\n";
+    let module = parse::module(&text).expect("parses");
+    let layout = DataLayout::default();
+    let function = module
+        .globals
+        .iter()
+        .find_map(|global| match &global.kind {
+            GlobalKind::Function(function) if !function.is_declaration() => Some(function),
+            _ => None,
+        })
+        .expect("@f");
+    let q = Query::new(&module, function, &layout);
+    let cond = function
+        .walk()
+        .filter_map(|(_, inst)| function.instruction(inst).result)
+        .last()
+        .map(Operand::Value)
+        .expect("%t");
+    let mut found = Vec::new();
+    find_values_affected_by_condition(&q, cond, false, &mut |v| found.push(v));
+    assert_eq!(found.len(), 10, "{found:?}");
+    let mut want: Vec<Operand> = function.parameters().iter().map(|&p| Operand::Value(p)).collect();
+    found.sort_by_key(|v| format!("{v:?}"));
+    want.sort_by_key(|v| format!("{v:?}"));
+    assert_eq!(found, want);
+}
+
+fn skipped_walks() -> u32 {
+    crate::valuetracking::query::SKIPPED_WALKS.with(std::cell::Cell::get)
+}
+
+/// The assumption cache walked every instruction of every function for a call
+/// to `llvm.assume`, 1.0 M Ir over the 90 caches of one d_faces compile, where
+/// the module declares none.
+#[test]
+fn a_module_that_declares_no_assume_has_its_bodies_left_unwalked() {
+    let module = crate::parse::module(
+        "declare i32 @g(i32)\ndefine i32 @f(i32 %x) {\n  %y = add i32 %x, 1\n  %z = call i32 @g(i32 %y)\n  ret i32 %z\n}\n",
+    )
+    .expect("parses");
+    let crate::module::GlobalKind::Function(function) = &module.global(module.named("f").expect("@f")).kind else {
+        unreachable!()
+    };
+    let before = skipped_walks();
+    let cache = crate::valuetracking::AssumptionCache::new(&module, function);
+    assert_eq!(skipped_walks() - before, 1, "no walk");
+    assert!(cache.assumptions_for(crate::module::Operand::Value(function.parameters()[0])).is_empty());
+}
+
+/// What the skip must not do: lose an assume of a module that declares one.
+#[test]
+fn a_module_that_declares_an_assume_still_finds_it() {
+    let module = crate::parse::module(
+        "declare void @llvm.assume(i1)\ndefine i32 @f(i32 %x) {\n  %c = icmp ult i32 %x, 16\n  call void @llvm.assume(i1 %c)\n  ret i32 %x\n}\n",
+    )
+    .expect("parses");
+    let crate::module::GlobalKind::Function(function) = &module.global(module.named("f").expect("@f")).kind else {
+        unreachable!()
+    };
+    let before = skipped_walks();
+    let cache = crate::valuetracking::AssumptionCache::new(&module, function);
+    assert_eq!(skipped_walks() - before, 0, "walked");
+    assert_eq!(cache.assumptions_for(crate::module::Operand::Value(function.parameters()[0])).len(), 1);
+}

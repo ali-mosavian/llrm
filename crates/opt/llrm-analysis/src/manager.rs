@@ -17,9 +17,9 @@
 //!   pointers, aggregates and calls only, so a change to integer arithmetic
 //!   leaves them standing.
 //! - `INCREMENTAL` with `update`: the entry is brought up to date from the
-//!   change log. `DominatedEdges`, `Bounded` and `Counted` redo only the blocks
-//!   or loops `Touched::reach` the changes (a change to a terminator or to the
-//!   CFG redoes all); `Accesses` in [`crate::memoryssa`] survives pure moves.
+//!   change log. `DominatedEdges` and `Counted` redo only the blocks or loops
+//!   `Touched::reach` the changes (a change to a terminator or to the CFG
+//!   redoes all); `Accesses` in [`crate::memoryssa`] survives pure moves.
 //! - `LLRM_CHECK_REPLAY` asserts that every kept or updated result equals a
 //!   fresh `run`.
 //!
@@ -64,7 +64,6 @@
 //!  Followers        Registers
 //!  Counted          Registers
 //!  DominatedEdges   Registers
-//!  Bounded          Registers, Counted, DominatedEdges
 //!  Annotated        PointerValues, Registers, Counted, DominatedEdges
 //!  Accesses         Annotated, CallFootprints, PointerValues (memoryssa)
 //!  PlainAccesses    Writes, Annotated                       (the graph's structure, once)
@@ -85,7 +84,6 @@
 //! module, target and program), carrying whichever cached results the caller
 //! holds. `Held` and `Ranges` bundle the cached results a pass passes on to a
 //! `Unit`, so the facts are the manager's and not a solve of the pass's own.
-//! `Bounded` is empty where `Outer::loop_intervals` is off (-O1).
 //!
 //! # Example
 //! A pass replaces the uses of `%x` by `%a`, an integer edit:
@@ -134,8 +132,8 @@
 //! # Provides
 //! The entries: `ExposedFrames`, `PointerValues`, `Pointers`, `Annotated`,
 //! `Writes`, `Registers`, `DemandedBits`, `AssumptionCache`,
-//! `Followers`, `Counted`, `ThroughMemory`, `FloatFacts`, `DominatedEdges`,
-//! `Bounded`; module entries `GlobalsAA`, `Summaries`; program
+//! `Followers`, `Counted`, `ThroughMemory`, `FloatFacts`, `DominatedEdges`;
+//! module entries `GlobalsAA`, `Summaries`; program
 //! entry `ProgramSummaries`; `Held`, `Ranges`, `Touched::reach`,
 //! `writes`. [`crate::cfg`]'s `Shape`, [`crate::memoryssa`]'s
 //! `Accesses` is an entry defined beside its analysis.
@@ -169,7 +167,6 @@ use crate::globalsaa::{self, Globals, ProgramGlobals};
 use crate::induction;
 use crate::memory::{Identity, MemRef, MemoryKind, MemoryObject, ObjectInterner, Slice, Unit};
 use crate::memoryssa;
-use crate::ranges;
 
 impl<'a> Unit<'a> {
     /// `function` as the manager's analyses see it: its module and target
@@ -193,6 +190,7 @@ impl<'a> Unit<'a> {
             function,
             globals_aa,
             globals_mr,
+            outer: Some(outer),
             references: None,
             shape: None,
             registers: None,
@@ -202,11 +200,9 @@ impl<'a> Unit<'a> {
             counted: None,
             followers: None,
             edges: None,
-            bounds: None,
             exposed: None,
             plain: None,
             point_values: None,
-            loop_intervals: outer.loop_intervals(),
             congruent: None,
             proved: None,
         }
@@ -304,9 +300,22 @@ impl ModuleAnalysis for Summaries {
         module: &Module,
         analyses: &mut ModuleAnalyses,
     ) -> Self::Result {
-        let globals_held = analyses.get::<GlobalsAA>(module);
-        let globals = Result::as_ref(&*globals_held).map_err(String::clone)?;
-        Ok(crate::attrsummary::summaries(module, &analyses.program().layout, globals.tracked_globals()))
+        // Where GlobalsAA is read cached (`PassManager::require_cached`) and
+        // not yet made, no global is tracked.
+        let globals_held = match analyses.cached::<GlobalsAA>() {
+            Some(held) => Some(held),
+            None if analyses.is_stateless::<GlobalsAA>() => None,
+            None => Some(analyses.get::<GlobalsAA>(module)),
+        };
+        let none = BTreeSet::new();
+        let tracked = match &globals_held {
+            Some(held) => Result::as_ref(&**held).map_err(String::clone)?.tracked_globals(),
+            None => &none,
+        };
+        // The one `GlobalsAAResult` of the module, as the pin has: the held
+        // `GlobalsModRef`, not another made for each run.
+        let found = analyses.get::<GlobalsModRefAnalysis>(module);
+        Ok(crate::attrsummary::summaries(module, &analyses.program().layout, tracked, &found))
     }
 }
 
@@ -725,7 +734,11 @@ impl Analysis for ExposedFrames {
         };
         for change in changes {
             match change {
-                Change::BlockCreated(_) | Change::BlockErased(_) | Change::Parameters => return None,
+                Change::Parameters => return None,
+                // An exposed alloca is one of its address's uses, and a block
+                // has none: an erased one was emptied by `Erased` changes, a
+                // created one is filled by `Inserted` ones.
+                Change::BlockCreated(_) | Change::BlockErased(_) => {}
                 Change::Operand { was, .. } => read(was),
                 Change::Operands { was, .. } => was.iter().for_each(&mut read),
                 Change::Erased { inst, .. } => function.instruction(*inst).operands.iter().for_each(&mut read),
@@ -1238,10 +1251,65 @@ impl Analysis for PlainAccesses {
     }
 }
 
-/// A body's translated MemorySSA with the accesses it was made from.
+/// The body's accesses with each reference as it stands (`MemRef::of`), no
+/// provenance annotated: what MemorySSA's clients read once the AA stack
+/// answers every pair (`Annotated` and its inputs are not asked).
+pub struct BaseAccesses;
+
+impl Analysis for BaseAccesses {
+    type Result = Result<std::rc::Rc<memoryssa::Accesses>, String>;
+    const NAME: &'static str = "base-accesses";
+
+    fn run(
+        _: &Context,
+        _: &DataLayout,
+        _: &Function,
+        _: &mut Analyses,
+    ) -> Self::Result {
+        // Nothing is made up front: a reference, and what an instruction
+        // touches, are asked of the unit that reads them (`Accesses::lazy`).
+        Ok(std::rc::Rc::new(memoryssa::Accesses::lazy()))
+    }
+}
+
+/// A body's translated MemorySSA. The accesses it is read with are the
+/// manager's `BaseAccesses`, fetched by the first client that asks
+/// (`accesses`): building the graph needs none of their references.
 pub struct MssaGraph {
     pub mssa: crate::mssa::Mssa,
-    pub accesses: std::rc::Rc<memoryssa::Accesses>,
+    accesses: std::cell::OnceCell<std::rc::Rc<memoryssa::Accesses>>,
+}
+
+impl MssaGraph {
+    /// A graph with the accesses a pass that updated it kept, if it did.
+    pub fn new(
+        mssa: crate::mssa::Mssa,
+        accesses: Option<std::rc::Rc<memoryssa::Accesses>>,
+    ) -> Self {
+        Self { mssa, accesses: accesses.map(std::cell::OnceCell::from).unwrap_or_default() }
+    }
+
+    /// The accesses of the body this graph is of: the ones kept with it, else
+    /// the manager's.
+    pub fn accesses(
+        &self,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Result<std::rc::Rc<memoryssa::Accesses>, String> {
+        if let Some(held) = self.accesses.get() {
+            return Ok(std::rc::Rc::clone(held));
+        }
+        let base = analyses.get::<BaseAccesses>(context, layout, function);
+        let made = Result::as_ref(&*base).map_err(String::clone)?;
+        Ok(std::rc::Rc::clone(self.accesses.get_or_init(|| std::rc::Rc::clone(made))))
+    }
+
+    /// Whether the accesses have been fetched or kept.
+    pub fn has_accesses(&self) -> bool {
+        self.accesses.get().is_some()
+    }
 }
 
 /// Two graphs are equal when every access says the same (`shadow::said`): the
@@ -1299,12 +1367,18 @@ impl Analysis for MemorySsa {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Self::Result {
-        let plain = analyses.get::<PlainAccesses>(context, layout, function);
-        let accesses = Result::as_ref(&*plain).map_err(String::clone)?;
+        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         let shape = analyses.get::<Shape>(context, layout, function);
+        let unit = Unit::within(context, layout, function, analyses.outer()).with_exposed(&exposed);
+        // `AAResults::getModRefInfo(Call, nullptr)` over the pin's stack.
+        let mut stack = crate::aggregate::AggregateAA::new().with_unit(&unit);
+        stack.add_aa_result(crate::basicaa::BasicAA::new(&unit));
+        if let Some(info) = unit.globals_mr {
+            stack.add_aa_result(crate::globalsmodref::GlobalsAAResult::new(&unit, info));
+        }
         let mssa =
-            crate::mssa::Mssa::build(function, &shape.dominance, &crate::mssa::shadow::effect_of(accesses, function));
-        Ok(std::rc::Rc::new(MssaGraph { mssa, accesses: std::rc::Rc::clone(accesses) }))
+            crate::mssa::Mssa::build(function, &shape.dominance, &crate::mssa::shadow::effect_from_aa(&unit, stack));
+        Ok(std::rc::Rc::new(MssaGraph::new(mssa, None)))
     }
 }
 
@@ -1485,56 +1559,8 @@ pub fn dominated_by(
     false
 }
 
-/// The facts each counted loop gives its blocks, and where there is none the
-/// edges': `ranges::bounded`.
-pub struct Bounded;
-
-impl Analysis for Bounded {
-    type Result = Result<ranges::Bounds, String>;
-    const NAME: &'static str = "bounded";
-    const INCREMENTAL: bool = true;
-
-    fn run(
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Self::Result {
-        Self::solved(context, layout, function, analyses, None)
-    }
-
-    /// A loop's facts read its own blocks, the facts of the values its
-    /// operations read, the edges' facts above it and the facts of the
-    /// loops it starts from; the loops a change reaches by any of these are
-    /// worked again.
-    fn update(
-        previous: &Self::Result,
-        changes: &[Change],
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Option<Self::Result> {
-        let bounds = previous.as_ref().ok()?;
-        let reach = function.reach_of(changes)?;
-        if reach.cfg_changed() {
-            return None;
-        }
-        let shape = analyses.get::<Shape>(context, layout, function);
-        let edges = analyses.get::<DominatedEdges>(context, layout, function);
-        edges.as_ref().as_ref().ok()?;
-        // A loop starts from the edges' facts of its dominator: those of a
-        // block a change reached or one it dominates may have changed.
-        let reached: llrm_mir::dense::IdSet<i64> = reach.blocks.iter().map(crate::cfg::id).collect();
-        let dirty = ranges::loops_reached(function, &shape, &reach.blocks, &reach.conditions, &|at| {
-            dominated_by(&shape, function, &reached, at)
-        });
-        Some(Self::solved(context, layout, function, analyses, Some((bounds, &dirty))))
-    }
-}
-
 /// What a pass asks of the ranges of a body as it stands: the manager's
-/// registers, bounds and edges, and the unit that carries them.
+/// registers and edges, and the unit that carries them.
 pub struct Ranges {
     shape: Rc<Shape>,
     assumptions: Rc<<AssumptionCache as Analysis>::Result>,
@@ -1542,17 +1568,14 @@ pub struct Ranges {
     exposed: Rc<<ExposedFrames as Analysis>::Result>,
     counted: Rc<<Counted as Analysis>::Result>,
     edges: Rc<<DominatedEdges as Analysis>::Result>,
-    bounds: Option<Rc<<Bounded as Analysis>::Result>>,
 }
 
 impl Ranges {
-    /// With the bounds too, which `Bounded` itself works out from the rest.
     pub fn of(
         context: &Context,
         layout: &DataLayout,
         function: &Function,
         analyses: &mut Analyses,
-        with_bounds: bool,
     ) -> Self {
         Self {
             shape: analyses.get::<Shape>(context, layout, function),
@@ -1561,32 +1584,11 @@ impl Ranges {
             exposed: analyses.get::<ExposedFrames>(context, layout, function),
             counted: analyses.get::<Counted>(context, layout, function),
             edges: analyses.get::<DominatedEdges>(context, layout, function),
-            bounds: None,
         }
-        .bounded(context, layout, function, analyses, with_bounds)
-    }
-
-    fn bounded(
-        mut self,
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-        with_bounds: bool,
-    ) -> Self {
-        if with_bounds {
-            self.bounds = Some(analyses.get::<Bounded>(context, layout, function));
-        }
-        self
     }
 
     pub fn registers(&self) -> &Rc<<Registers as Analysis>::Result> {
         &self.registers
-    }
-
-    /// The bounds, where they were asked for.
-    pub fn bounds(&self) -> Option<&<Bounded as Analysis>::Result> {
-        self.bounds.as_deref()
     }
 
     pub fn unit<'a>(
@@ -1605,42 +1607,7 @@ impl Ranges {
         if let Ok(edges) = &*self.edges {
             unit = unit.with_edges(edges);
         }
-        if let Some(Ok(bounds)) = self.bounds.as_deref() {
-            unit = unit.with_bounds(bounds);
-        }
         unit
-    }
-}
-
-impl Bounded {
-    fn solved(
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-        prior: Option<(&ranges::Bounds, &llrm_mir::dense::IdSet<i64>)>,
-    ) -> <Self as Analysis>::Result {
-        let held = Ranges::of(context, layout, function, analyses, false);
-        ranges::bounded_solved(&held.unit(context, layout, function, analyses.outer()), held.registers(), prior, true)
-    }
-}
-
-/// The counted loops' intervals for alias and decisions: `Bounded`, or none at
-/// a level without them (-O1: gcc's has value ranges only from -O2's
-/// `-ftree-vrp`; its -O1 reaches an induction variable's range through SCEV and
-/// the loop's iteration bound, which `indvars`, `loopexit`, `hoist` and
-/// `algebraic` still ask `Bounded` for). Empty, the unit does not solve them
-/// itself.
-fn loop_bounds(
-    context: &Context,
-    layout: &DataLayout,
-    function: &Function,
-    analyses: &mut Analyses,
-) -> Rc<<Bounded as Analysis>::Result> {
-    if analyses.outer().loop_intervals() {
-        analyses.get::<Bounded>(context, layout, function)
-    } else {
-        Rc::new(Ok(ranges::Bounds::default()))
     }
 }
 
@@ -1656,7 +1623,6 @@ pub struct Held {
     annotated: Option<Rc<<Annotated as Analysis>::Result>>,
     counted: Option<Rc<<Counted as Analysis>::Result>>,
     followers: Option<Rc<<Followers as Analysis>::Result>>,
-    bounded: Option<Rc<<Bounded as Analysis>::Result>>,
 }
 
 impl Held {
@@ -1677,7 +1643,6 @@ impl Held {
             // Annotated has proved them already.
             counted: alias.then(|| analyses.get::<Counted>(context, layout, function)),
             followers: alias.then(|| analyses.get::<Followers>(context, layout, function)),
-            bounded: None,
         }
     }
 
@@ -1697,20 +1662,6 @@ impl Held {
             followers: Some(analyses.get::<Followers>(context, layout, function)),
             ..Self::of(context, layout, function, analyses, false)
         }
-    }
-
-    /// Also what the counted loops bound: for a pass that asks it, so that it
-    /// is the manager's, kept and brought up to date, and not a solve of
-    /// the pass's own.
-    pub fn with_bounded(
-        mut self,
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Self {
-        self.bounded = Some(loop_bounds(context, layout, function, analyses));
-        self
     }
 
     /// A unit over `function`, the body these were found of.
@@ -1737,9 +1688,6 @@ impl Held {
         }
         if let Some(followers) = self.followers.as_deref() {
             unit = unit.with_followers(followers);
-        }
-        if let Some(Ok(bounds)) = self.bounded.as_deref() {
-            unit = unit.with_bounds(bounds);
         }
         unit
     }
@@ -1809,9 +1757,6 @@ pub fn ask_some(
     }
     if chosen() {
         analyses.get::<DominatedEdges>(context, layout, function);
-    }
-    if chosen() {
-        analyses.get::<Bounded>(context, layout, function);
     }
     if chosen() {
         analyses.get::<TableLoads>(context, layout, function);

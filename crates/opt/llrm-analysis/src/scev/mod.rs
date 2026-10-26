@@ -52,10 +52,6 @@ mod golden_tests;
 pub mod guards;
 #[cfg(test)]
 mod guards_tests;
-#[cfg(test)]
-mod range_factoring_tests;
-#[cfg(test)]
-mod range_recurrence_tests;
 pub mod how_many;
 pub mod implied;
 pub mod invariant;
@@ -65,8 +61,15 @@ pub mod normalize;
 pub mod pattern;
 pub mod poison;
 pub mod predicate;
+pub mod predicate_rewrite;
+pub mod predicated;
 pub mod print;
+pub mod quadratic;
 pub mod range;
+#[cfg(test)]
+mod range_factoring_tests;
+#[cfg(test)]
+mod range_recurrence_tests;
 pub mod rewrite;
 pub mod scope;
 #[cfg(test)]
@@ -80,6 +83,7 @@ pub mod values;
 #[cfg(test)]
 mod values_tests;
 pub mod verify;
+pub mod wrap_predicate;
 pub mod wrap_proof;
 
 use llrm_mir::context::Context;
@@ -141,18 +145,72 @@ impl<'a> Cx<'a> {
 /// operands as pointers with their use bits, the type, and what else the kind
 /// holds.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct Key {
+pub(super) struct Key<'a> {
     pub(super) tag: Type,
-    pub(super) ops: Vec<Use>,
+    pub(super) ops: std::borrow::Cow<'a, [Use]>,
     pub(super) ty: Option<Ty>,
     pub(super) constant: Option<Ap>,
     pub(super) value: Option<Operand>,
     pub(super) header: Option<BlockId>,
 }
 
+impl Key<'_> {
+    /// The key that owns its operands, for a node that is made.
+    fn into_owned(self) -> Key<'static> {
+        llrm_mir::counts::bump(llrm_mir::counts::Event::ScevKeysOwned);
+        Key {
+            tag: self.tag,
+            ops: std::borrow::Cow::Owned(self.ops.into_owned()),
+            ty: self.ty,
+            constant: self.constant,
+            value: self.value,
+            header: self.header,
+        }
+    }
+}
+
+/// A key by what it holds, so that `UniqueSCEVs` is asked with operands
+/// borrowed from the caller (`FoldingSetNodeID` over a `SmallVector` the
+/// caller keeps): a lookup that finds its node builds nothing.
+pub(super) trait KeyLike {
+    fn key(&self) -> &Key<'_>;
+}
+
+impl KeyLike for Key<'_> {
+    fn key(&self) -> &Key<'_> {
+        self
+    }
+}
+
+impl<'a> std::borrow::Borrow<dyn KeyLike + 'a> for Key<'static> {
+    fn borrow(&self) -> &(dyn KeyLike + 'a) {
+        self
+    }
+}
+
+impl std::hash::Hash for dyn KeyLike + '_ {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+    ) {
+        std::hash::Hash::hash(self.key(), state);
+    }
+}
+
+impl PartialEq for dyn KeyLike + '_ {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.key() == other.key()
+    }
+}
+
+impl Eq for dyn KeyLike + '_ {}
+
 /// What `FoldingSetNodeID` does: the key goes into the hasher as a few words,
 /// the operands one word each, not the fields one write at a time.
-impl std::hash::Hash for Key {
+impl std::hash::Hash for Key<'_> {
     fn hash<H: std::hash::Hasher>(
         &self,
         state: &mut H,
@@ -163,7 +221,7 @@ impl std::hash::Hash for Key {
             Some(Ty::Ptr(space)) => 2 | u64::from(space) << 2,
         };
         state.write_u64(self.tag as u64 | (self.ops.len() as u64) << 8 | ty << 32);
-        for op in &self.ops {
+        for op in self.ops.iter() {
             state.write_u64(u64::from(op.scev.0) | u64::from(op.bits) << 32);
         }
         if let Some(constant) = self.constant {
@@ -197,7 +255,7 @@ impl Flags {
 pub struct ScalarEvolution {
     pub(super) nodes: Vec<Node>,
     /// `UniqueSCEVs`.
-    pub(super) unique: HashMap<Key, Scev>,
+    pub(super) unique: HashMap<Key<'static>, Scev>,
     /// `FoldCache`: the extensions already folded.
     pub(super) fold_cache: HashMap<(Type, Use, Ty), Scev>,
     /// `ProvingSplitPredicate`.
@@ -208,6 +266,12 @@ pub struct ScalarEvolution {
     pub(super) signed_ranges: HashMap<Scev, llrm_mir::constantrange::ConstantRange>,
     /// `ConstantMultipleCache`.
     pub(super) constant_multiple_cache: HashMap<Scev, Ap>,
+    /// `getNotSCEV` of a non-constant: built once per expression (it is
+    /// asked 728 times for 426 builds on d_faces, 11 K Ir each).
+    pub(super) not_cache: HashMap<Scev, Scev>,
+    /// `PredicatedSCEVRewrites`: the recurrence a header phi is under
+    /// predicates, by phi and loop; the phi itself where it is none.
+    pub(super) predicated_rewrites: HashMap<(Scev, BlockId), (Scev, Vec<wrap_predicate::Predicate>)>,
     /// `LoopDispositions`: by expression, as LLVM's, so that forgetting one
     /// does not scan them all.
     pub(super) loop_dispositions: HashMap<Scev, Vec<(Option<BlockId>, disposition::LoopDisposition)>>,
@@ -261,6 +325,8 @@ impl ScalarEvolution {
             unsigned_ranges: HashMap::default(),
             signed_ranges: HashMap::default(),
             constant_multiple_cache: HashMap::default(),
+            not_cache: HashMap::default(),
+            predicated_rewrites: HashMap::default(),
             loop_dispositions: HashMap::default(),
             block_dispositions: HashMap::default(),
             value_expr_map: IdMap::new(),
@@ -494,18 +560,18 @@ impl ScalarEvolution {
     /// place a node is made (`new (SCEVAllocator) ...; UniqueSCEVs.insert`).
     pub(super) fn intern(
         &mut self,
-        key: Key,
-        kind: Kind,
+        key: Key<'_>,
+        kind: impl FnOnce() -> Kind,
         ty: Option<Ty>,
         size: u16,
     ) -> Scev {
         let at = Scev(self.nodes.len() as u32);
-        // One hash of the key for the find and the insert.
-        match self.unique.entry(key) {
-            std::collections::hash_map::Entry::Occupied(found) => return *found.get(),
-            std::collections::hash_map::Entry::Vacant(slot) => slot.insert(at),
-        };
-        self.nodes.push(Node { kind, ty, size, flags: 0, canonical: at });
+        // The find borrows the key's operands; a node that is made owns them.
+        if let Some(&found) = self.unique.get(&key as &dyn KeyLike) {
+            return found;
+        }
+        self.unique.insert(key.into_owned(), at);
+        self.nodes.push(Node { kind: kind(), ty, size, flags: 0, canonical: at });
         // `LoopUsers[L].push_back(S)` and `registerUser(S, Ops)`, made where
         // each constructor makes a node.
         if let Kind::AddRec(_, header) = self.nodes[at.0 as usize].kind {
@@ -530,13 +596,13 @@ impl ScalarEvolution {
     ) -> Scev {
         let key = Key {
             tag: Type::Constant,
-            ops: Vec::new(),
+            ops: std::borrow::Cow::Borrowed(&[]),
             ty: Some(Ty::Int(value.width)),
             constant: Some(value),
             value: None,
             header: None,
         };
-        self.intern(key, Kind::Constant(value), Some(Ty::Int(value.width)), 1)
+        self.intern(key, || Kind::Constant(value), Some(Ty::Int(value.width)), 1)
     }
 
     /// `ScalarEvolution::getConstant(Type *, uint64_t, bool)`.
@@ -575,9 +641,15 @@ impl ScalarEvolution {
         v: Operand,
     ) -> Scev {
         let ty = self.operand_ty(cx, v);
-        let key =
-            Key { tag: Type::Unknown, ops: Vec::new(), ty: Some(ty), constant: None, value: Some(v), header: None };
-        self.intern(key, Kind::Unknown(v), Some(ty), 1)
+        let key = Key {
+            tag: Type::Unknown,
+            ops: std::borrow::Cow::Borrowed(&[]),
+            ty: Some(ty),
+            constant: None,
+            value: Some(v),
+            header: None,
+        };
+        self.intern(key, || Kind::Unknown(v), Some(ty), 1)
     }
 
     /// The constant `s` is, if it is one.
