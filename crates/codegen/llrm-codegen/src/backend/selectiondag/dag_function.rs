@@ -571,14 +571,20 @@ pub(super) fn stack_cells(
     cells
 }
 
+/// Sibling calls are the pin's default at -O1 and up; `LLRM_TAIL_CALLS=0` turns
+/// them off (kept for one release, then deleted).
+fn tail_calls_on() -> bool {
+    !TAIL_CALLS_OFF.get() && llrm_support::env_var("LLRM_TAIL_CALLS").is_none_or(|value| value != "0")
+}
+
 fn refuse<T>(why: impl Into<String>) -> Result<T, Unselected> {
     Err(Unselected(format!("--isel=dag: {}", why.into())))
 }
 
 thread_local! {
-    /// Sibling calls on for this thread: what `LLRM_TAIL_CALLS` does for the
+    /// Sibling calls off for this thread: what `LLRM_TAIL_CALLS=0` does for the
     /// process, for a test that cannot set the environment.
-    pub(super) static TAIL_CALLS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub(super) static TAIL_CALLS_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// `name` of `module` selected by the DAG path. A panic in a stage (a builder
@@ -694,7 +700,7 @@ fn selected_in(
         .with_int_div_cheap(cpu.size || cpu.min_size)
         .with_jump_tables(cpu.target().costs().jump_table != 0)
         .with_opt_size(cpu.size || cpu.min_size)
-        .with_tail_calls(llrm_support::env_set("LLRM_TAIL_CALLS") || TAIL_CALLS.get())
+        .with_tail_calls(tail_calls_on())
         .with_tti(cpu.target().tti())
         .with_runtime_call_verdicts(
             contracts

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/floatregions.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/floatregions.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/floatregions.rs sha256:bf8ece0fb2f25690fc019fd37be29299afd0ee2e9c9e19e78fad7addf48ea14b -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/floatregions.rs sha256:39b308063e271dd04277862b368c294f42ec2cc4a979c2ba965c809a3f2da657 -->
 
 # floatregions
 
@@ -12,8 +12,7 @@ instruction: a call, a barrier, an instruction with no semantics, or one
 that names an x87 register by position (`target::positional_place`). The
 allocator's passes treat each such instruction as a point where no value may
 be live on the stack: [`crate::backend::floatassign`](floatassign.md) ends a register
-stretch there, [`crate::backend::floatalloc`](floatalloc.md) flushes the stack there, and
-`pressuresink` does not move a load across it.
+stretch there, [`crate::backend::floatalloc`](floatalloc.md) flushes the stack there.
 
 `Raised` is the error of those two passes: an operand that cannot be lowered
 (`Unlowered`), a frame cell refused (`frame::Refused`), or a bad value.
@@ -24,4 +23,4 @@ neither rewrites LIR. The effect of a boundary is visible in the
 `floatassign` example, where the call ends the register stretch of `a`.
 
 ## Used by
-`floatassign`, `floatalloc`, `pressuresink`.
+`floatassign`, `floatalloc`.

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/fixupsetcc.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/fixupsetcc.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/fixupsetcc.rs sha256:15fa921f6fb9873888fdabacdbd2780e5cfd49ff4c2c4163d3867e28e4626bcd -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/fixupsetcc.rs sha256:0fa6b132fdac8365d8a15760f26f183d00c37fbb5ea46ba6ba2921c09e7af062 -->
 
 # fixupsetcc
 
@@ -49,4 +49,4 @@ v5 := setl          ; the low byte of v5
 ```
 
 ## Runs
-After `PressureSink`, before the float phases. Optimizing levels only.
+After `MachineScheduler`, before the float phases. Optimizing levels only.

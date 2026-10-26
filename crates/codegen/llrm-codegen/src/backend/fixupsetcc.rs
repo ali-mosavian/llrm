@@ -44,7 +44,7 @@
 //! ```
 //!
 //! # Runs
-//! After `PressureSink`, before the float phases. Optimizing levels only.
+//! After `MachineScheduler`, before the float phases. Optimizing levels only.
 
 use std::sync::Arc;
 

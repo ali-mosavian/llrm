@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/floatfold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/floatfold.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/floatfold.rs sha256:70e8902efa3762e3c4c977bb1dbd2aab4c539481b05c7db0d908a3bcae677009 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/floatfold.rs sha256:f4982f16cca35e6916d4df6ef5ebc776a3a0552eeeee84e182b2471c213974ac -->
 
 # floatfold
 
@@ -49,7 +49,7 @@ other value and the cell, and the load is deleted.
 it becomes the memory operand of the arithmetic that reads it. The `fsub`
 had the loaded cell on its left, so it is the reversed `fsubr`.
 
-Before (after `PressureSink`):
+Before (after `PhiElimination`):
 
 ```lir
 mix: 11 instructions
@@ -86,7 +86,7 @@ From `ISEL_DUMP=1` of the nib function `mix(p: &mut P, k: f64)` with `-m32
 -O0`.
 
 ## Runs
-Machine phase after `pressuresink` and before `floatassign`, once per
+Machine phase after `machinesched` and before `floatassign`, once per
 function. Not gated by an -O level.
 
 ## Needs

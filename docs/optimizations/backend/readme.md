@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documented, 0 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -47,12 +47,12 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documen
 | farload | Select a far pointer's two word loads as one `les`-form load. | Per block in isel's cross-instruction selection (`isel/combined.rs`), | [farload](farload.md) |
 | fixupbw | A byte or word load, copy or extension is the dword form when the rest of its register is dead: `X86FixupBWInsts`. | After `Peephole`, optimizing levels only. | [fixupbw](fixupbw.md) |
 | fixupleas | `X86FixupLEAs`. | After `FixupBW`, optimizing levels only. | [fixupleas](fixupleas.md) |
-| fixupsetcc | `setcc` into a register zeroed before the compare, not a `movzx` of a byte after it: `X86FixupSetCC`. | After `PressureSink`, before the float phases. Optimizing levels only. | [fixupsetcc](fixupsetcc.md) |
+| fixupsetcc | `setcc` into a register zeroed before the compare, not a `movzx` of a byte after it: `X86FixupSetCC`. | After `MachineScheduler`, before the float phases. Optimizing levels only. | [fixupsetcc](fixupsetcc.md) |
 | flagscopy | Flags kept across an instruction that clobbers them: `X86FlagsCopyLowering`. | After `FixupSetCC`, before the float phases. Every level (the pin's pass is | [flagscopy](flagscopy.md) |
 | floatalloc | Converts floating values held in flat x87 registers to stack form: `fld`, `fxch`, `fstp st(i)` and `st(i)` operands. | After `floatassign` in the machine phases, once per function, on bodies with | [floatalloc](floatalloc.md) |
 | floatassign | Decides which floating values hold one of the eight flat x87 registers and which live in memory, and makes every spill, restore and memory operand explicit. | Machine phase after `floatfold` and `phielim`, before `floatalloc`, once per | [floatassign](floatassign.md) |
-| floatfold | A float load that only one arithmetic instruction reads becomes that instruction's memory operand: `fld [m]; faddp` is `fadd [m]`. | Machine phase after `pressuresink` and before `floatassign`, once per | [floatfold](floatfold.md) |
-| floatregions | Where the x87 stack cannot reach, and the error type the x87 allocator raises. | `floatassign`, `floatalloc`, `pressuresink`. | [floatregions](floatregions.md) |
+| floatfold | A float load that only one arithmetic instruction reads becomes that instruction's memory operand: `fld [m]; faddp` is `fadd [m]`. | Machine phase after `machinesched` and before `floatassign`, once per | [floatfold](floatfold.md) |
+| floatregions | Where the x87 stack cannot reach, and the error type the x87 allocator raises. | `floatassign`, `floatalloc`. | [floatregions](floatregions.md) |
 | fpconvert | Rewrites a float converted to an unsigned 64-bit integer as signed conversions and a select, in MIR before instruction selection. | `mir fp to unsigned` in `driver::optimized`, after `ehprepare` and before | [fpconvert](fpconvert.md) |
 | fpcopyprop | Copy propagation over the x87 registers FP0..FP6: LLVM's `MachineCopyPropagation` for the RFP class. | At the start of `FloatAlloc`, under RFP. | [fpcopyprop](fpcopyprop.md) |
 | fpregs | The x87 registers FP0..FP6 as the values the stackifier tracks. | At the start of `fpstack::converted`; a body with no x87 register operand | [fpregs](fpregs.md) |
@@ -85,7 +85,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documen
 | machinecp | Forward and backward copy propagation inside a block, and dead-copy removal: LLVM's `MachineCopyPropagation`. | In the peephole phase, where `copyprop` ran (it and `regthrash`'s rename | [machinecp](machinecp.md) |
 | machinedce | Removes a pure allocated instruction whose whole result is dead. | The last body rewrite of `peephole` before `popped_arguments`, and | [machinedce](machinedce.md) |
 | machinelicm | Early `MachineLICM`: a pure computation of values defined outside a loop, made in the loop, is made once in its preheader. | A machine phase before `precse` (`flow::machine_with`), at every -O level | [machinelicm](machinelicm.md) |
-| machinesched | The dependency graph of a scheduling region of LIR, before allocation: `ScheduleDAGInstrs` for the pre-RA machine scheduler (row 65). | `MachineScheduler`, a machine phase after `pressuresink` and before | [machinesched](machinesched.md) |
+| machinesched | The dependency graph of a scheduling region of LIR, before allocation: `ScheduleDAGInstrs` for the pre-RA machine scheduler (row 65). | `MachineScheduler`, a machine phase after `phielim` and before | [machinesched](machinesched.md) |
 | machinesink | Moves a computation into the one successor block that uses it, breaking a critical edge where that is what lets it go. | A machine phase before `phielim` (`flow::machine_with`), in every machine | [machinesink](machinesink.md) |
 | masm | The assembly-level module: allocated LIR with its frame sequences written out, as the items `objbuild` encodes and the jwasm source `-S` prints. | Once per procedure after the machine phases. `cleaned_returns` runs in | [masm](masm.md) |
 | memcpycall | Turns an `llvm.memcpy` the target should not copy inline into a call of `memcpy`, as the pin's `EmitTargetCodeForMemcpy` leaves it: a call for a length the target cannot move in a few loads and stores. | Once per module in `driver::optimized`, when the target names `memcpy` | [memcpycall](memcpycall.md) |
@@ -106,11 +106,10 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documen
 | postings | An index of where each value is defined, read and required in a body, kept current as the body is rewritten. | [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md), | [postings](postings.md) |
 | postrasink | Moves a register copy, or a spill store, into the one successor that needs it. | A sub-pass of [`crate::backend::peephole`](peephole.md), after `copysink`. Once per | [postrasink](postrasink.md) |
 | precse | The same pure computation made twice, made once: `MachineCSE` before PHI elimination, where a value has one definition. | A machine phase before `machinesink` (`flow::machine_with`), at every -O | [precse](precse.md) |
-| pressuresink | Moves a load down to just before its one reader when that raises the pressure of no register class and lowers it for some. | A machine phase after `phielim` and before `floatfold` | [pressuresink](pressuresink.md) |
 | prologue | Reserves the stack the spiller asked for (`sub sp, N`) and gives it back (`add sp, N`) at every exit. | A machine phase after `parcopy` and before `peephole`, in every machine | [prologue](prologue.md) |
 | pushfold | A value that a load made and nothing else reads is read from memory where it is pushed or added: `mov r, [m]; push r` is `push [m]`, and `v2 := add v0, v1` with `v1` such a load is `v2 := add v0, [m]`, whichever operand of a commutative operation the load is. | Twice. As `LoadFold` first of the machine phases, after selection: the pin's | [pushfold](pushfold.md) |
 | regalloc_input | Test support: the machine-phase list and the LIR a fixture has reached just before a chosen phase. | Tests of [`crate::backend::allocate`](allocate.md), `crate::backend::ssaspill`, | [regalloc_input](regalloc_input.md) |
-| regclass | The register class of each value: the set of registers an instruction's operands allow it to be in. | Not a pass: queried on demand, by `coalesce`, `constrain`, `allocate` and | [regclass](regclass.md) |
+| regclass | The register class of each value: the set of registers an instruction's operands allow it to be in. | Not a pass: queried on demand, by `coalesce`, `constrain`, `allocate`, at | [regclass](regclass.md) |
 | registerinfo | The backend's view of a target's register file: re-exports of the types a target's `registers.regs` description generates. | [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md), | [registerinfo](registerinfo.md) |
 | regpressure | Register pressure per pressure set, for the pre-RA scheduler: `RegPressureTracker` of the pin (RegisterPressure.cpp) as `GenericScheduler` asks it of a bottom-up region. |  | [regpressure](regpressure.md) |
 | regthrash | Renames a definition's register so that a copy after it is a copy of a register to itself. | First sub-pass of [`crate::backend::peephole`](peephole.md), gated on a register copy | [regthrash](regthrash.md) |

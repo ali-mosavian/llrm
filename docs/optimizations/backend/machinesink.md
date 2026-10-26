@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/machinesink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/machinesink.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/machinesink.rs sha256:c2266309defe0fbbbb78e0ede1e7287d1669c571b06f87be834c8c38ee42b1c9 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/machinesink.rs sha256:7c86265a2be9aec0c779404c55e3094af73897510bb4608604904d01ee7673f9 -->
 
 # machinesink
 
@@ -77,10 +77,6 @@ Exit: honor a dead implicit def when LIR marks one.
 DEVIATE M3 (#2903): no `PerformSinkAndFold`, no sinking into cycles
 (`SinkInstsIntoCycle`, off by default), no debug-value handling (an
 instruction has none).
-
-`pressuresink` (a load made where its reader is, within a block) has no
-pin counterpart: LLVM orders loads by the scheduler. It is deleted when the
-pre-RA machine scheduler is translated (target 2026-11-20).
 
 ## Example
 `b1: v = mov 0; cmp x, 0; je b4` and `b4: r = phi [b1: v] [b2: w]` leave

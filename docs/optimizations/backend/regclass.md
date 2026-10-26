@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/regclass.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/regclass.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/regclass.rs sha256:02c0c8ec045d134929f9026a87934eccfcdca3f3e9b00b9228df93e8461e5fd0 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/regclass.rs sha256:d2834c4c20011865dde03d47f96127762f546831d418c466f1026b66284592de -->
 
 # regclass
 
@@ -43,7 +43,7 @@ class where its members agree. A member with a class of its own keeps it.
 coalescer has not merged: the two sides of a phi edge's copy also join, and
 address classes are read through webs. `classes_given` takes intervals and
 masks a caller already has. `confining_uses` lists each confining read
-(`Use`), for the pressure sink. `Scan` keeps per-value counts of what
+(`Use`), for `constrain`. `Scan` keeps per-value counts of what
 instructions say, so a rewrite takes the counts of the instructions it lost
 and gained and recomputes only the values they name.
 
@@ -85,15 +85,15 @@ From unit test `test_a_segment_only_a_phi_reads_has_the_class_of_its_web` in
 sets.
 
 ## Runs
-Not a pass: queried on demand, by `coalesce`, `constrain`, `allocate` and
-the pressure sink, at every -O level. `LLRM_DEBUG=regclass` also checks
-each body after the phases from `ssaspill` to `coalesce`.
+Not a pass: queried on demand, by `coalesce`, `constrain`, `allocate`, at
+every -O level. `LLRM_DEBUG=regclass` also checks each body after the phases
+from `ssaspill` to `coalesce`.
 
 ## Provides
 One answer to "which registers may this value be in", owned here (#441).
 Read by `crate::backend::ssaspill`, [`crate::backend::allocate`](allocate.md),
 [`crate::backend::coalesce`](coalesce.md), [`crate::backend::constrain`](constrain.md),
-[`crate::backend::pressuresink`](pressuresink.md) and `target.rs`.
+and `target.rs`.
 
 ## Needs
 The target's register sets ([`crate::backend::classes`](classes.md),
