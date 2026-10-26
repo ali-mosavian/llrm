@@ -295,7 +295,24 @@ pub fn graph(
     let mut preds: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut latencies: Vec<Vec<u32>> = vec![Vec::new(); n];
     let mut by_value: HashMap<u32, (Option<usize>, Vec<usize>)> = HashMap::default();
-    let mut by_lane: Vec<(Option<usize>, Vec<usize>)> = vec![(None, Vec::new()); 128];
+    // Per lane: the defs still standing (a live def replaces them, a dead one
+    // joins them, as the pin's `Defs`) and the readers since.
+    let mut by_lane: Vec<(Vec<usize>, Vec<usize>)> = vec![(Vec::new(), Vec::new()); 128];
+    // The lanes each instruction writes that nothing reads before the next
+    // write (`MO.isDead()`); what is live below the region is not known, so the
+    // last write of a lane is live.
+    let mut dead = vec![0u128; n];
+    let mut live = u128::MAX;
+    for later in (0..n).rev() {
+        match &effects[later] {
+            Some(effect) => {
+                let writes = effect.writes.mask();
+                dead[later] = writes & !live;
+                live = (live & !writes) | effect.all_reads().mask();
+            }
+            None => live = u128::MAX,
+        }
+    }
     // The last store and the loads since it; the last instruction of unknown
     // effect and everything since it.
     let (mut store, mut loads): (Option<usize>, Vec<usize>) = (None, Vec::new());
@@ -321,12 +338,20 @@ pub fn graph(
         match masks {
             Some((reads, writes)) => {
                 for bit in bits_of(reads) {
-                    if let Some(def) = by_lane[bit].0 {
+                    if let Some(&def) = by_lane[bit].0.last() {
                         edges.push((def, def_latency(&insns[def])));
                     }
                 }
                 for bit in bits_of(writes) {
-                    edges.extend(by_lane[bit].0.map(|earlier| (earlier, 1)));
+                    // No output edge between two dead defs (`addPhysRegDeps`).
+                    let this_dead = dead[later] >> bit & 1 == 1;
+                    edges.extend(
+                        by_lane[bit]
+                            .0
+                            .iter()
+                            .filter(|&&earlier| !(this_dead && dead[earlier] >> bit & 1 == 1))
+                            .map(|&earlier| (earlier, 1)),
+                    );
                     edges.extend(by_lane[bit].1.iter().map(|&earlier| (earlier, 0)));
                 }
             }
@@ -365,14 +390,19 @@ pub fn graph(
                 by_lane[bit].1.push(later);
             }
             for bit in bits_of(writes) {
-                by_lane[bit] = (Some(later), Vec::new());
+                let entry = &mut by_lane[bit];
+                if dead[later] >> bit & 1 == 0 {
+                    entry.0.clear();
+                }
+                entry.0.push(later);
+                entry.1.clear();
             }
         } else {
             unknown = Some(later);
             since.clear();
             // Everything before it is behind it now.
             by_value.clear();
-            by_lane.iter_mut().for_each(|entry| *entry = (None, Vec::new()));
+            by_lane.iter_mut().for_each(|entry| *entry = (Vec::new(), Vec::new()));
             store = None;
             loads.clear();
         }
@@ -822,6 +852,25 @@ mod tests {
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
         assert_eq!(graph(&insns, regs, 16).preds[1], [0], "the zero stays before the add");
+    }
+
+    /// Flags no one reads before the next flag writer are a dead def, and the
+    /// pin adds no output edge between two dead defs (`addPhysRegDeps`). Ours
+    /// chained every `add` through the flags, so the seven `add v1, K` leaves
+    /// of bench_parity stayed in a row above their readers (4 spill ops, pin
+    /// 0).
+    #[test]
+    fn test_two_flag_writes_nobody_reads_have_no_edge() {
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let insns = vec![
+            insn(0, semantics(Operation::Binary, "add", vec![held(2)], vec![held(1), imm(4)]), vec![2], vec![1]),
+            insn(1, semantics(Operation::Binary, "add", vec![held(3)], vec![held(1), imm(7)]), vec![3], vec![1]),
+            insn(2, semantics(Operation::Binary, "add", vec![held(4)], vec![held(2), held(3)]), vec![4], vec![2, 3]),
+        ];
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let found = graph(&insns, regs, 32);
+        assert!(found.preds[1].is_empty(), "the second add waits for the first only through flags: {:?}", found.preds);
+        assert_eq!(found.preds[2], [0, 1], "the third reads both");
     }
 
     /// `push` writes the stack pointer, which no lane orders: the scheduler put
