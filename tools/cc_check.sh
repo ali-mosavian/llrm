@@ -12,6 +12,7 @@ export LLRM_LLC=${LLRM_LLC:-$bin/llrm-llc}
 opt=${LLRM_CC_OPT:--O2}
 dir=${LLRM_CC_DIR:-$root/tests/llc}
 runner=${LLRM_CC_RUN:-}
+# LLRM_CC_REF_FLAGS: flags for the host reference (-m32 for x86_32-linux).
 # A reference that is not the host's (arm64 under qemu): LLRM_CC_REF_CLANG -target LLRM_CC_REF_TRIPLE, linked by LLRM_CC_REF_LINK.
 reftriple=${LLRM_CC_REF_TRIPLE:-}
 refrun=; [ -z "$reftriple" ] || refrun=$runner
@@ -20,13 +21,17 @@ progs=${*:-$(cd "$dir" && ls *.c | sed 's/\.c$//')}
 bad=0
 for p in $progs; do
   src=$dir/$p.c
+  # A program that reports through `extern void report(long)` gets the one printing it with a library's printf.
+  extra=; grep -q "extern void report" "$src" && extra=$root/tests/cc/report.c
+  # `far`/`near`/`huge` mean something only on the segmented target; elsewhere they are empty, as in a flat C compiler.
+  case ${LLRM_CC_TARGET:-} in x86_16*) farless= ;; *) farless="-Dfar= -Dnear= -Dhuge=" ;; esac
   if [ -n "$reftriple" ]; then
     "${LLRM_CC_REF_CLANG:-$clang}" -target "$reftriple" -ffreestanding -fno-builtin $opt -c "$src" -o "$out/ref.o" 2>/dev/null &&
       $LLRM_CC_REF_LINK "$out/ref" "$out/ref.o" 2>/dev/null || { echo "$p: reference failed"; bad=1; continue; }
   else
-    "$clang" $opt "$src" -o "$out/ref" -lm 2>/dev/null || { echo "$p: reference failed"; bad=1; continue; }
+    "$clang" ${LLRM_CC_REF_FLAGS:-} $opt -Dfar= -Dnear= -Dhuge= "$src" $extra -o "$out/ref" -lm 2>/dev/null || { echo "$p: reference failed"; bad=1; continue; }
   fi
-  if "$cc" $opt "$src" -o "$out/llrm.exe" -lm 2> "$out/err"; then
+  if "$cc" $opt $farless "$src" $extra -o "$out/llrm.exe" -lm 2> "$out/err"; then
     $refrun "$out/ref" > "$out/ref.out" 2>/dev/null; rr=$?
     $runner "$out/llrm.exe" > "$out/llrm.out" 2>/dev/null; lr=$?
     if [ $rr = $lr ] && cmp -s "$out/ref.out" "$out/llrm.out"; then echo "ok    $p"; else echo "DIFF  $p"; bad=1; fi

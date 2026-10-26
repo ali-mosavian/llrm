@@ -859,6 +859,8 @@ def new_scanner_failures(
     on_merged=None,
     on_head=None,
     only: tuple[str, ...] | None = None,
+    seen: Path | None = None,
+    now=time.time,
 ) -> set[str]:
     """The failing `integration <target>::<test>` of the root scanners (tests that read sources and docs, SCANNERS) and of a test file the batch changes, on the merged tree, that the head
     passes. #3899 landed with `tests/selectiondag_registry.rs` red (SD403 had no row): the layer ran lib tests only, and the target was in no map. `on_merged(targets)` and
@@ -870,7 +872,31 @@ def new_scanner_failures(
     print(scanner_tests_line(targets, failed, git("rev-parse", "HEAD").strip()[:9]))
     if not failed:
         return set()
-    return failed - (on_head or _scanners_failing_on_head)(targets)
+    head = (on_head or _scanners_failing_on_head)(targets)
+    # a red the head has is excused for the PR, but named every cycle with its age; one older than HEAD_RED_HOURS (and it has no xfail row, or it would not be here) refuses
+    stale = excused_head_failures(failed & head, seen or Path(os.environ.get("LAND_TMP", "/tmp")) / "head-failure-seen.json", now())
+    return (failed - head) | stale
+
+
+HEAD_RED_HOURS = 2
+
+
+def excused_head_failures(excused: set[str], path: Path, now: float) -> set[str]:
+    """Prints each name of `excused` on its own line with the hours it has been red on the head, and returns those red longer than HEAD_RED_HOURS. The first time a name is seen is kept in `path`;
+    a name no longer red is forgotten. #4993's docs_in_sync was red on the tip for hours behind a bare `1 red`."""
+    if not excused and not path.exists():
+        return set()
+    first = json.loads(path.read_text()) if path.exists() else {}
+    first = {name: first.get(name, now) for name in excused}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(first))
+    stale = set()
+    for name in sorted(excused):
+        hours = (now - first[name]) / 3600
+        print(f"excused head failure: {name} (red on the head for {hours:.1f} h; no xfail row)")
+        if hours > HEAD_RED_HOURS:
+            stale.add(name)
+    return stale
 
 
 def new_link_failures(
@@ -1170,6 +1196,8 @@ def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=
             slot = slots.get()
             try:
                 why = "; ".join(refusals(heads[number], base) if refusals else _alone_in_scratch(heads[number], base, slot))
+            except BaseException as error:  # a thread drops SystemExit silently: #5008 was kept with no verdict, unchecked and counted as checked, and broke the 21:53 batch
+                why = f"alone check crashed: {type(error).__name__}: {str(error)[-200:]}"
             finally:
                 slots.put(slot)
             if cache:
@@ -1294,6 +1322,17 @@ def assemble(numbers: list[str], heads: dict[str, str], base: str = BASE, cwd: P
     return kept, waits
 
 
+def batch_blame(heads: dict[str, str], base: str, cwd: Path = ROOT) -> list[str]:
+    """One line per PR of a batch naming the markdown files it adds, deletes or moves: the doc a `docs_*` scanner finds unreachable or stale is one of them (#5008 added a page nothing linked
+    and the refusal named only the test)."""
+    lines = []
+    for number, head in heads.items():
+        out = subprocess.run(["git", "diff", "--name-status", f"{base}...{head}", "--", "*.md"], cwd=cwd, capture_output=True, text=True, errors="replace").stdout.splitlines()
+        if out:
+            lines.append(f"  #{number}: " + ", ".join(" ".join(line.split()) for line in out[:8]))
+    return lines
+
+
 def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
     """`parity_squash.py merge-batch N1..N8`: the PRs in order, one smoke on the base with all of them merged in, each squashed with its head lease."""
     known = known or {}
@@ -1350,6 +1389,11 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             print(f"REFUSED: the batch does not build: {broken[:300]}")
             failed_build.append(broken)
             return False
+        def blame(new: list[str]) -> None:
+            if any(name.startswith("integration docs") for name in new):
+                for line in batch_blame({number: infos[number]["headRefOid"] for number in group}, BASE):
+                    print(line)
+
         def tests_pass() -> bool:
             """The lib tests and scanners on the merged tree; False after printing the refusal and noting the failed units."""
             # LAND_FAST_TESTS=1: also the lib tests of the crates the batch changes (the user's 10-19 call is no tests; this is the switch for the opposite call)
@@ -1360,20 +1404,24 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 if new := sorted(landing_scanner_failures(changed, False)):
                     print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
                     failed_units.update(new)
+                    blame(new)
                     return False
                 stage("lib-tests")
                 if new := sorted(new_lib_failures(changed)):
                     print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
                     failed_units.update(new)
+                    blame(new)
                     return False
                 stage("scanners")
                 if new := sorted(new_scanner_failures(changed)):
                     print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
                     failed_units.update(new)
+                    blame(new)
                     return False
             if os.environ.get("LAND_FAST_TESTS") != "1" and (new := sorted(landing_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), False))):
                 print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
                 failed_units.update(new)
+                blame(new)
                 return False
             return True
 

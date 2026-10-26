@@ -3360,6 +3360,14 @@ impl Selector<'_, '_, '_> {
             let moved =
                 crate::backend::globals::constant_offset(self.module, &self.layout, *source, &operands[1..]).ok()?;
             let Type::Pointer(space) = *self.types().get(context.get(id).ty) else { return None };
+            // A huge pointer carries past its offset into the selector, a
+            // stride at a time; a far one wraps within the segment.
+            if self.spaces.huge_space().is_ok_and(|huge| huge == space) {
+                let shift = self.segments.huge_shift?;
+                let total = (base & 0xffff) + moved;
+                let selector = (base >> 16 & 0xffff) + ((total >> 16) << shift);
+                return Some((selector & 0xffff) << 16 | total & 0xffff);
+            }
             let wrap = (1i64 << self.layout.offset_bits(space)) - 1;
             return Some(base & !wrap | (base + moved) & wrap);
         }

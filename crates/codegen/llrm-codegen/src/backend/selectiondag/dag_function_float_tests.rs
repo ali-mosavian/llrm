@@ -101,7 +101,7 @@ fn a_float_compare_is_an_fcom_and_a_set() {
     assert!(whats[compare..].iter().any(|w| w.name.as_deref().is_some_and(|n| n.starts_with("set"))));
 }
 
-const FLOAT_COMPARE_AND_ADD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+const FLOAT_COMPARE_AND_ADD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 
 define internal cc 1000 void @f() addrspace(1) \"llrm-fp-eval\"=\"x87-extended\" norecurse {
 b1:
@@ -496,7 +496,7 @@ fn a_double_argument_is_stored_through_a_copy_of_sp_at_m16() {
     assert!(cell.base.is_some() && cell.through == llrm_lir::registers::RegId::None, "{cell:?}");
 }
 
-const FPROUND_F32: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+const FPROUND_F32: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 define cc 1000 ptr @h(ptr %0, ptr %1) addrspace(1) {
 b1:
   %2 = load float, ptr %0

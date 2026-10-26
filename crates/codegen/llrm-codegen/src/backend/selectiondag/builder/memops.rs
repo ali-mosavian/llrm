@@ -183,6 +183,18 @@ impl Builder<'_> {
         Ok(())
     }
 
+    /// The pin's `hasOptSize`: clang puts `optsize` on every function of a
+    /// `-Os` build, llrm's front ends do not, so the build's level stands for
+    /// it.
+    pub(super) fn has_opt_size(&self) -> bool {
+        self.target.opt_size || self.function_has("optsize") || self.function_has("minsize")
+    }
+
+    /// The pin's `hasMinSize` (`-Oz`), as [`Self::has_opt_size`].
+    pub(super) fn has_min_size(&self) -> bool {
+        self.target.min_size || self.function_has("minsize")
+    }
+
     pub(super) fn function_has(
         &self,
         name: &str,
@@ -642,7 +654,7 @@ impl Builder<'_> {
         let alignment = dst_align.min(src_align);
         let root = self.memory_root();
 
-        let opt_size = self.function_has("optsize") || self.function_has("minsize");
+        let opt_size = self.has_opt_size();
         let constant = self.constant_size(size);
         if constant == Some(0) {
             return Ok(());
@@ -659,7 +671,7 @@ impl Builder<'_> {
                 };
                 match (inline, which, constant) {
                     (Some(chain), _, _) => chain,
-                    (None, Intrinsic::MemCpy, Some(bytes)) if self.function_has("minsize") => {
+                    (None, Intrinsic::MemCpy, Some(bytes)) if self.has_min_size() => {
                         self.rep_movs(root, dst, other, bytes, 1, dst_align, src_align)?
                     }
                     (None, Intrinsic::MemCpy, Some(bytes)) if bytes <= MAX_INLINE_SIZE && alignment >= 4 => {
@@ -714,9 +726,7 @@ impl Builder<'_> {
                 };
                 match (inline, constant) {
                     (Some(chain), _) => chain,
-                    (None, Some(bytes))
-                        if self.function_has("minsize") || (bytes <= MAX_INLINE_SIZE && alignment >= 4) =>
-                    {
+                    (None, Some(bytes)) if self.has_min_size() || (bytes <= MAX_INLINE_SIZE && alignment >= 4) => {
                         self.rep_stos(root, dst, other, bytes, alignment)?
                     }
                     _ if !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
@@ -955,7 +965,7 @@ impl Builder<'_> {
     ) -> Result<SDValue, Refused> {
         let chain_in = chain;
         let pointer = self.target.dag.pointer;
-        let block = if self.function_has("minsize") { 1 } else { alignment };
+        let block = if self.has_min_size() { 1 } else { alignment };
         let (count, left) = (size / block, size % block);
         let (cx, di, si) = (self.reg("ecx", "cx"), self.reg("edi", "di"), self.reg("esi", "si"));
         let count = self.dag.get_constant(u128::from(count), pointer);
@@ -1008,7 +1018,7 @@ impl Builder<'_> {
         alignment: u64,
     ) -> Result<SDValue, Refused> {
         let pointer = self.target.dag.pointer;
-        let minsize = self.function_has("minsize");
+        let minsize = self.has_min_size();
         let word = u64::from(pointer.size_in_bits() / 8);
         let chain_in = chain;
         let (block, count, mut val) = if minsize {

@@ -204,7 +204,7 @@ b0:
   %b = getelementptr i8, ptr %p, i16 5
   %x = ptrtoint ptr %a to i16
   %y = ptrtoint ptr %b to i16
-  %r = sub i16 %x, %y
+  %r = add i16 %x, %y
   ret i16 %r
 }
 ",
