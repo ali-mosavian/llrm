@@ -66,7 +66,7 @@ def build_variants(src, lvl, tmp, ver):
     else:
         ll = src
     o = tmp / f"{name}.clang.o"
-    r = sh([str(PIN / "bin/clang"), f"-{lvl}", *TARGET, "-Wno-override-module", "-x", "ir", "-c", str(ll), "-o", str(o)])
+    r = sh([str(PIN / "bin/clang"), f"-{lvl}", *TARGET, "-fno-vectorize", "-fno-slp-vectorize", "-Wno-override-module", "-x", "ir", "-c", str(ll), "-o", str(o)])
     v["clang"] = o if r.returncode == 0 else "clang: " + r.stderr[:200]
     o = tmp / f"{name}.ours.o"
     r = sh([str(BIN / "llrm-arm64-llc"), f"-{lvl}", "-o", str(o), str(ll)])
