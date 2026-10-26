@@ -126,6 +126,14 @@ pub fn fixed(body: &LirBody) -> LirBody {
         lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
     };
 
+    let every_flag = crate::backend::lanes::Lanes::flags(
+        (iced_x86::RflagsBits::OF
+            | iced_x86::RflagsBits::SF
+            | iced_x86::RflagsBits::ZF
+            | iced_x86::RflagsBits::CF
+            | iced_x86::RflagsBits::PF) as u32,
+    );
+
     let mut out = body.clone();
     for block in &mut out.blocks {
         let mut insns: Vec<Arc<Insn>> = block.insns.iter().cloned().collect();
@@ -196,11 +204,63 @@ pub fn fixed(body: &LirBody) -> LirBody {
                 continue;
             }
             if writes_flags {
-                flags_def = Some(index);
+                // `inc` leaves CF: a `setb` after it reads an earlier carry,
+                // which a zero put before `inc` would clear.
+                let all = effect.as_ref().is_some_and(|e| every_flag.is_subset(&e.writes));
+                flags_def = all.then_some(index);
             }
             index += 1;
         }
         *block = block.with_insns(insns);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::lir::LirBlock;
+    use crate::support::hash::IndexMap;
+
+    fn held(
+        value: u32,
+        width: u32,
+    ) -> Loc {
+        Loc::Held(Held { value, width })
+    }
+
+    fn insn(
+        at: i64,
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+        defines: Vec<u32>,
+        uses: Vec<u32>,
+    ) -> Arc<Insn> {
+        let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
+        Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
+    }
+
+    /// The names of `cmp; [inc]; setb; movzx` after the pass.
+    fn names(between: Option<Arc<Insn>>) -> Vec<String> {
+        let mut insns =
+            vec![insn(0, Operation::Compare, "cmp", vec![], vec![held(1, 4), held(2, 4)], vec![], vec![1, 2])];
+        insns.extend(between);
+        insns.push(insn(2, Operation::Unary, "setb", vec![held(3, 1)], vec![], vec![3], vec![]));
+        insns.push(insn(3, Operation::Extend, "movzx", vec![held(6, 4)], vec![held(3, 1)], vec![6], vec![3]));
+        let body = LirBody::new("f", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
+        let done = fixed(&body);
+        done.blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
+    }
+
+    /// `cmp; inc; setb`: `inc` leaves CF, so `setb` reads the compare's carry.
+    /// The zero went before the `inc` (an `xor` after allocation, which clears
+    /// CF), and `setb` read zero's carry.
+    #[test]
+    fn test_a_setcc_reading_a_carry_an_inc_left_keeps_its_movzx() {
+        assert_eq!(names(None), ["mov", "cmp", "setb"], "the control: nothing between");
+        let inc = insn(1, Operation::Unary, "inc", vec![held(4, 4)], vec![held(5, 4)], vec![4], vec![5]);
+        assert_eq!(names(Some(inc)), ["cmp", "inc", "setb", "movzx"]);
+    }
 }
