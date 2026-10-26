@@ -2384,6 +2384,47 @@ fn redim_preserve_calls_b_rdmp_with_redims_operands() {
 }
 
 #[test]
+fn width_with_one_argument_or_a_gap_calls_b_widt() {
+    // WIDTH 80 and WIDTH , 25 were refused ("needs columns and rows"). BC
+    // passes -1 for the argument left out (measured in BC output, QB 4.5
+    // and PDS 7.1).
+    let module = parse("WIDTH 80\r\nWIDTH , 25\r\nWIDTH 80, 25\r\n", Dialect::QuickBasic45).unwrap();
+    let hir = compile(&module, "width", Dialect::QuickBasic45, "qb45").unwrap();
+    assert_eq!(hir.matches("\"callee\":\"B$WIDT\"").count(), 3, "{hir}");
+}
+
+#[test]
+fn lset_and_rset_call_their_runtime_routines_with_the_field_length() {
+    // LSET and RSET were refused as unknown procedures. BC calls B$LSET and
+    // B$RSET with the source descriptor, the destination's far address and
+    // its length (0 for a variable-length string).
+    let source = "a$ = \"abcd\"\r\nDIM c AS STRING * 5\r\nLSET a$ = \"x\"\r\nRSET c = a$\r\n";
+    let module = parse(source, Dialect::QuickBasic45).unwrap();
+    let hir = compile(&module, "justify", Dialect::QuickBasic45, "qb45").unwrap();
+    assert_eq!(hir.matches("\"callee\":\"B$LSET\"").count(), 1, "{hir}");
+    assert_eq!(hir.matches("\"callee\":\"B$RSET\"").count(), 1, "{hir}");
+}
+
+#[test]
+fn open_with_access_lock_len_or_random_passes_rtps_inc_mode_word() {
+    // OPEN with ACCESS, LOCK, LEN or no FOR was refused. The mode word is
+    // rtps.inc's: the mode in the low byte (RANDOM when none is written),
+    // ACCESS and LOCK/SHARED in the high one.
+    let call = |open: &str| {
+        let source = format!("OPEN \"F\" {open}\r\n");
+        let module = parse(&source, Dialect::Pds71).unwrap();
+        let hir = compile(&module, "open", Dialect::Pds71, "pds71").unwrap();
+        let at = hir.find("\"callee\":\"B$OPEN\"").expect("B$OPEN");
+        let call = &hir[at..at + hir[at..].find("\"pure\"").unwrap()];
+        call.rsplit("\"value\":").next().unwrap().trim_end_matches(|c: char| !c.is_ascii_digit()).to_owned()
+    };
+    assert_eq!(call("AS #1"), "4");
+    assert_eq!(call("FOR INPUT ACCESS READ AS #1"), "257");
+    assert_eq!(call("FOR RANDOM ACCESS READ WRITE LOCK WRITE AS #1 LEN = 20"), "8964");
+    assert_eq!(call("FOR BINARY SHARED AS #1"), "16416");
+}
+
+#[test]
 fn a_dim_as_in_a_procedure_may_reuse_a_name_the_module_shares_with_a_suffix() {
     // corpus [scope], BC output: `DIM SHARED x%, x%(5)` then `DIM x AS INTEGER`
     // (or `DIM x(5) AS INTEGER`) in a SUB compiles under PDS 7.1 and VBDOS;

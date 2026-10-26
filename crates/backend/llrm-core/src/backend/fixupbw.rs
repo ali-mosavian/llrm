@@ -323,4 +323,52 @@ mod tests {
         assert_eq!(extended(reg(RegId::AX, 2), reg(RegId::AL, 1)).1, reg(RegId::AX, 2));
         assert_eq!(extended(reg(RegId::CX, 2), reg(RegId::CL, 1)).1, reg(RegId::ECX, 4));
     }
+
+    /// `mov ax, [esi]` then `reader`, whose result nobody reads: the name of
+    /// the load after the pass.
+    fn load_before(reader: Semantics) -> String {
+        let cell = Loc::Mem(crate::model::ir::Mem { through: RegId::ESI, ..crate::model::ir::Mem::new(None, 2) });
+        let what = Semantics {
+            name: Some("mov".into()),
+            dests: vec![reg(RegId::AX, 2)],
+            sources: vec![cell],
+            ..Semantics::new(Operation::Move)
+        };
+        let load = Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![], vec![]));
+        let read = Arc::new(Insn::new(1, Some((1, 1)), Some(reader), vec![], vec![]));
+        let ret = Semantics { name: Some("ret".into()), ..Semantics::new(Operation::Return) };
+        let mut ret = Insn::new(2, Some((2, 2)), Some(ret), vec![], vec![]);
+        ret.reads_complete = true;
+        let mut body = LirBody::new(
+            "f",
+            0,
+            vec![LirBlock::new(0, vec![load, read, Arc::new(ret)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.bits = 32;
+        let done = FixupBw { size: false }.fixed(&body);
+        done.blocks[0].insns[0].what.as_ref().expect("semantics").name.clone().expect("a name").to_string()
+    }
+
+    fn copy(
+        dest: Loc,
+        source: Loc,
+    ) -> Semantics {
+        Semantics {
+            name: Some("mov".into()),
+            dests: vec![dest],
+            sources: vec![source],
+            ..Semantics::new(Operation::Move)
+        }
+    }
+
+    /// `mov ax,[esi]; mov ebx,eax`: the dword copy reads the upper half of EAX,
+    /// which the load leaves as it was. Made `movzx eax,[esi]`, the copy read
+    /// zeros.
+    #[test]
+    fn a_word_load_stays_where_the_dword_is_read_after_it() {
+        assert_eq!(load_before(copy(reg(RegId::EBX, 4), reg(RegId::EAX, 4))), "mov");
+        assert_eq!(load_before(copy(reg(RegId::BX, 2), reg(RegId::AX, 2))), "movzx");
+    }
 }
