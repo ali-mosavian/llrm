@@ -8,12 +8,6 @@ owner = "funcattrs-port"
 date = "2026-10-27"
 why = "stale expectation: 4f82e22e1 (MemorySSA queries ask the AA stack with TBAA) leaves a volatile store through a far pointer as the pin does, so the cells it may reach are read every trip; the memory-space model of #3994 is the tuning that restores the hoist"
 [[xfail]]
-id = "unit llrm-qb::test_hir_part2::test_dynamic_string_array_formal_uses_adjusted_near_descriptor_base"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: other, not yet put in a family; a regression unless triage says stale (qb-reds-parity.md)"
-[[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_a_poke_after_a_call_that_never_runs_def_seg_keeps_its_segment"
 issue = 3994
 owner = "funcattrs-port"
