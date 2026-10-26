@@ -153,3 +153,17 @@ fn a_call_the_inlining_of_a_helper_makes_direct_is_inlined_too() {
     let calls: Vec<&str> = asm.lines().filter(|l| l.trim_start().starts_with("bl ")).collect();
     assert_eq!(calls.len(), 1, "only printf is called: {calls:?}");
 }
+
+/// `llvm.fmuladd` of constants were never folded, so `tests/darwin/floats.ll` kept a chain
+/// of `fmadd` on `fmov` constants where the pin prints the results.
+#[test]
+fn a_fused_multiply_add_of_constants_is_a_constant() {
+    let text = format!(
+        "target datalayout = \"{}\"\ndeclare double @llvm.fmuladd.f64(double, double, double)\ndeclare float @llvm.fmuladd.f32(float, float, float)\n\
+         define double @d() {{\n  %r = call double @llvm.fmuladd.f64(double 2.0, double 3.0, double 1.0)\n  ret double %r\n}}\n\
+         define float @s() {{\n  %r = call float @llvm.fmuladd.f32(float 2.0, float 4.0, float 1.0)\n  ret float %r\n}}\n",
+        Platform::Darwin.datalayout()
+    );
+    let asm = driver::assembly(&text, Platform::Darwin, true).expect("lowers");
+    assert!(!asm.contains("fmadd") && asm.contains("#7.0") && asm.contains("#9.0"), "{asm}");
+}
