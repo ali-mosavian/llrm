@@ -546,7 +546,7 @@ b3:
 /// so a loop that never stores leaves it as it was.
 #[test]
 fn test_a_store_made_on_some_trips_is_preceded_by_a_load_before_the_loop() {
-    let text = global_loop("  store i16 %i, ptr @g\n");
+    let text = global_loop("  %x = load i16, ptr @g\n  store i16 %x, ptr @h\n  store i16 %i, ptr @g\n");
     let (_, after) = applied(&text, &trips());
     assert!(!block_of(&after, "b2").iter().any(|line| line.contains("@g")), "{after}");
     assert!(block_of(&after, "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{after}");
@@ -631,7 +631,7 @@ b5:
 /// was 7).
 #[test]
 fn test_a_store_after_the_exit_test_leaves_the_value_of_the_last_trip() {
-    let text = global_loop("  store i16 %i, ptr @g\n");
+    let text = global_loop("  %x = load i16, ptr @g\n  store i16 %x, ptr @h\n  store i16 %i, ptr @g\n");
     let (_, after) = applied(&text, &trips());
     assert!(block_of(&after, "b3").iter().any(|line| line.starts_with("store i16")), "{after}");
 }
