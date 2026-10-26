@@ -3137,6 +3137,27 @@ fn listing_of(
     std::fs::read_to_string(&out).expect("the listing")
 }
 
+/// `DEF SEG = VARSEG(x)` then `POKE VARPTR(x) + k, ...` writes into x: the
+/// pointer `ADDRESS(x) + k`, not a segment loaded from `b$seg` and an offset,
+/// which a loop's cells and `b$seg` itself could not be kept in registers
+/// across (far_poke_loop_variable.bas, +33 B and +266 clocks against main).
+#[test]
+fn a_poke_after_def_seg_varseg_is_a_store_into_the_variable() {
+    let text = listing_of(
+        "varseg_poke",
+        "DEFINT A-Z\r\nDIM SHARED x AS INTEGER, y AS LONG\r\nx = 0\r\nDEF SEG = VARSEG(x)\r\nFOR i = 0 TO 3000\r\nPOKE VARPTR(x), (i * 37) AND 255\r\nPOKE VARPTR(x) + 1, (i * 11) AND 127\r\ny = y + x\r\nNEXT i\r\nDEF SEG\r\nPRINT x; y\r\nEND\r\n",
+    );
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let lines = main.lines().map(str::trim).collect::<Vec<_>>();
+    let at = lines.iter().rposition(|one| one.starts_with('j') && !one.starts_with("jmp")).expect("the loop's branch");
+    let top = lines
+        .iter()
+        .position(|one| *one == format!("{}:", lines[at].split_whitespace().nth(1).unwrap()))
+        .expect("its label");
+    let body = &lines[top..=at];
+    assert!(!body.iter().any(|one| one.contains("b$seg") || one.contains("I%")), "{body:#?}");
+}
+
 /// A POKE after a literal DEF SEG wrote memory no variable lives in, yet
 /// the loop below reloaded `b$seg` (and the segment register from it) before
 /// every byte: the volatile store was a barrier to every cell.

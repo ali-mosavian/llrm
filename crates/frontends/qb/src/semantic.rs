@@ -601,6 +601,7 @@ pub fn compile_debugged(
     }
     shapes::applied(&mut compiler);
     absolute::applied(&mut compiler);
+    absolute::varseg(&mut compiler);
     Ok((compiler.json(), std::mem::take(&mut compiler.warnings)))
 }
 
