@@ -1953,6 +1953,29 @@ fn test_a_repeated_conditional_branch_is_dropped_from_the_block_before() {
     assert_eq!(lines.iter().filter(|line| line.starts_with("je")).count(), 1, "{lines:?}");
 }
 
+/// `loop` counts ECX down as it branches: two in a row are two counts, and
+/// one to the block it runs into still counts. The repeat rule dropped the
+/// first and the fall-through rule made the second a `jmp`.
+#[test]
+fn test_a_loop_branch_is_never_dropped_or_made_a_jump() {
+    let loops = |blocks: Vec<Block>| {
+        let folded = branchfold::folded(&body("f", 1, blocks), &std::collections::BTreeSet::new());
+        physical(&folded).into_iter().filter(|what| what.name.as_deref() == Some("loop")).count()
+    };
+    let repeated = vec![
+        block(1, vec![_compare(1), _branch(2, "loop", 9)], vec![9, 4]).into(),
+        block(4, vec![_branch(5, "loop", 9)], vec![9, 7]).into(),
+        block(7, vec![_move(7, cx()), _return(8)], vec![]).into(),
+        block(9, vec![_return(9)], vec![]).into(),
+    ];
+    assert_eq!(loops(repeated), 2, "a repeated loop branch");
+    let onward = vec![
+        block(1, vec![_compare(1), _branch(2, "loop", 4)], vec![4]).into(),
+        block(4, vec![_return(5)], vec![]).into(),
+    ];
+    assert_eq!(loops(onward), 1, "a loop branch to the next block");
+}
+
 /// `HoistCommonCodeInSuccs` (L2043): both ways begin with `mov cx, 5` and this
 /// block is the only way into either; it runs once, ahead of the compare.
 #[test]

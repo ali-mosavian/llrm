@@ -185,7 +185,12 @@ impl Builder<'_> {
             let shift = 128 - width;
             cases.push((((bits << shift) as i128) >> shift, dest.0, edge(at + 1)));
         }
-        let target = SwitchTarget::x86(self.target.dag.pointer.size_in_bits());
+        // The target prices a jump table at 0 where it has none to select (the
+        // MIR pass reads the same cost).
+        let target = SwitchTarget {
+            jump_tables: self.target.jump_tables,
+            ..SwitchTarget::x86(self.target.dag.pointer.size_in_bits())
+        };
         let plan = switchcg::plan_with(&cases, default.0, &target);
         if plan.clusters.is_empty() {
             let next = self.layout_next(self.block);

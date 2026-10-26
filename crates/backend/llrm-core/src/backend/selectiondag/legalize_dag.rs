@@ -81,7 +81,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         tli: &'a TargetLowering,
         hooks: &'a mut H,
     ) -> DagLegalizer<'a, H> {
-        DagLegalizer { dag, tli, hooks, legalized: HashSet::default() }
+        let legalized = HashSet::with_capacity_and_hasher(dag.nodes().len(), Default::default());
+        DagLegalizer { dag, tli, hooks, legalized }
     }
 
     /// `SelectionDAG::Legalize`.
@@ -93,6 +94,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                     continue;
                 }
                 any = true;
+                self.dag.cur_order = self.dag.node(SDValue { node: n, res: 0 }).order;
                 self.legalize_op(n)?;
             }
             if !any {
@@ -104,7 +106,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     /// The nodes reachable from the root, users before their operands.
     fn reverse_topological(&self) -> Vec<u32> {
         let mut order = Vec::new();
-        let mut seen = HashSet::default();
+        let mut seen = HashSet::with_capacity_and_hasher(self.dag.nodes().len(), Default::default());
         let mut stack = vec![(self.dag.get_root().node, false)];
         while let Some((n, expanded)) = stack.pop() {
             if expanded {
@@ -448,6 +450,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             ISD::Abs => Some(vec![self.expand_abs(node)]),
             ISD::CtPop => self.expand_ctpop(node).map(|result| vec![result]),
             ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),
+            ISD::BitReverse => self.expand_bitreverse(node).map(|result| vec![result]),
             // `vaend` has nothing to do; `vacopy` is a load of the source list
             // and a store to the destination.
             ISD::VAEnd => Some(vec![self.dag.operand(node, 0)]),
@@ -605,6 +608,33 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(self.dag.get_node(ISD::Srl, vt, &[wide, top]))
     }
 
+    /// `TargetLowering::expandBITREVERSE`: a byte swap, then the nibbles, the
+    /// bit pairs and the bits of each byte swapped. DEVIATE SD218: a width
+    /// that is not a power of two (the pin's loop of single bits) is not
+    /// translated; none is legal on the targets here.
+    fn expand_bitreverse(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        let bits = vt.size_in_bits();
+        if bits < 8 || !bits.is_power_of_two() {
+            return None;
+        }
+        let op = self.dag.operand(node, 0);
+        let splat = |byte: u128| (0..bits / 8).fold(0u128, |acc, i| acc | byte << (8 * i));
+        let mut value = if bits > 8 { self.dag.get_node(ISD::BSwap, vt, &[op]) } else { op };
+        for (by, mask) in [(4u128, 0x0F), (2, 0x33), (1, 0x55)] {
+            let (by, mask) = (self.dag.get_constant(by, EVT::I8), self.dag.get_constant(splat(mask), vt));
+            let high = self.dag.get_node(ISD::Srl, vt, &[value, by]);
+            let high = self.dag.get_node(ISD::And, vt, &[high, mask]);
+            let low = self.dag.get_node(ISD::And, vt, &[value, mask]);
+            let low = self.dag.get_node(ISD::Shl, vt, &[low, by]);
+            value = self.dag.get_node(ISD::Or, vt, &[high, low]);
+        }
+        Some(value)
+    }
+
     /// `TargetLowering::expandBSWAP`, for `i16` (a rotate by 8). Other widths
     /// are legal on the targets here or not yet translated.
     fn expand_bswap(
@@ -637,7 +667,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         // `ShouldShrinkFPConstant` (no SSE2): a double that is exactly a float
         // is stored as one.
         let (pool_vt, pool_bits) = match mvt {
-            MVT::F64 => {
+            MVT::F64 if self.tli.should_shrink_fp_constant(mvt) => {
                 let value = f64::from_bits(bits as u64);
                 let narrow = value as f32;
                 if f64::from(narrow).to_bits() == bits as u64 && !value.is_nan() {

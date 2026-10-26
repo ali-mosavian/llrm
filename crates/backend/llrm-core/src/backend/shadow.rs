@@ -72,7 +72,7 @@ impl Selector {
 /// Whether `LLRM_ISEL_ONLY` (a comma-separated list of function names; unset,
 /// every function) lets the DAG path select `name`.
 pub fn only(name: &str) -> bool {
-    only_in(std::env::var("LLRM_ISEL_ONLY").ok().as_deref(), name)
+    only_in(llrm_support::env_var("LLRM_ISEL_ONLY").and_then(|list| list.to_str()), name)
 }
 
 fn only_in(
@@ -98,7 +98,7 @@ pub fn record(
     name: &str,
     by: Selector,
 ) {
-    if let Some(path) = std::env::var_os("LLRM_ISEL_REPORT") {
+    if let Some(path) = llrm_support::env_var("LLRM_ISEL_REPORT") {
         record_to(std::path::Path::new(&path), name, by);
     }
 }

@@ -132,6 +132,9 @@ costs (`profit`, `OperationCosts`).
 Blocks and edges change (a loop becomes one trip): every analysis is
 invalidated when anything was rewritten.
 
+## CRC loops
+A loop `HashRecognize` takes for a CRC becomes a 256-entry Sarwate table lookup (`crc.rs`, `optimizeCRCLoopUsingTableLookup`) when the TTI cost is lower and the trip count is a multiple of 8. The table is 256 elements of the CRC width, in rodata.
+
 ## See also
 [`crate::counting`](counting.md) builds the count and exit values;
 [`crate::loopunrollpass`](loopunrollpass.md), [`crate::looppeel`](looppeel.md) precede it.

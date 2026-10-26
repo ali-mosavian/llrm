@@ -498,3 +498,25 @@ b0:
     let info = result.get_mod_ref_info_for_global(&quiet.globals, Some(callee), g, || ModRefInfo::NoModRef);
     assert!(!info.is_mod_set(), "premise: without a taken address the unexported global is tracked");
 }
+
+/// A global lost to a join was followed with a second scan of the whole module
+/// for its use sites (`Sites::of`, 112 K a scan on `d_faces`, 17 runs): the
+/// sites are the module's, not an analysis's.
+#[test]
+fn a_global_followed_through_a_join_costs_no_second_scan_of_the_module() {
+    let module = parsed(
+        "@g = internal global i16 0
+
+define i16 @f(i1 %c) {
+b0:
+  %p = select i1 %c, ptr @g, ptr @g
+  %v = load i16, ptr %p
+  ret i16 %v
+}
+",
+    );
+    let before = built();
+    let result = compute(&module);
+    assert!(!result.is_non_address_taken(module.named("g").unwrap()), "premise: a join is followed");
+    assert_eq!(built() - before, 1, "the module was scanned for sites more than once");
+}

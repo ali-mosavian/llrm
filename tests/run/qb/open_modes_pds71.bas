@@ -1,0 +1,24 @@
+' dialect: pds71
+DEFINT A-Z
+TYPE Rec
+  n AS INTEGER
+  s AS STRING * 8
+END TYPE
+DIM r AS Rec, q AS Rec
+OPEN "OPENMODE.DAT" FOR RANDOM ACCESS READ WRITE AS #1 LEN = LEN(r)
+r.n = 7: r.s = "seven"
+PUT #1, 2, r
+r.n = 3: r.s = "three"
+PUT #1, 1, r
+CLOSE #1
+OPEN "OPENMODE.DAT" AS #2 LEN = LEN(q)
+GET #2, 2, q
+PRINT q.n; q.s
+GET #2, 1, q
+PRINT q.n; q.s
+PRINT LOF(2) \ LEN(q)
+CLOSE #2
+OPEN "OPENMODE.DAT" FOR INPUT ACCESS READ AS #3
+PRINT EOF(3)
+CLOSE #3
+END

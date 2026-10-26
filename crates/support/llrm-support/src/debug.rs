@@ -22,8 +22,7 @@ pub fn require_verification() {
 /// run set it, so a frontend or a phase that breaks an invariant is caught in
 /// every gate run.
 pub fn verifying() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    REQUIRED.load(Ordering::Relaxed) || *ON.get_or_init(|| crate::env_set("LLRM_VERIFY"))
+    REQUIRED.load(Ordering::Relaxed) || crate::env_flag!("LLRM_VERIFY")
 }
 
 /// Whether `channel` is on.
@@ -95,7 +94,13 @@ fn work_fd() -> i32 {
         attr[5] = (1 << 5) | (1 << 6);
         // SAFETY: `attr` is a valid, zero-padded perf_event_attr of the size it
         // states; the others are the syscall's own numbers.
+        #[cfg(target_os = "linux")]
         let opened = unsafe { libc::syscall(libc::SYS_perf_event_open, attr.as_ptr(), 0, -1, -1, 8u64) };
+        #[cfg(not(target_os = "linux"))]
+        let opened: i64 = {
+            let _ = &attr;
+            -1
+        };
         let found = i32::try_from(opened).unwrap_or(-1);
         fd.set(Some(found));
         found

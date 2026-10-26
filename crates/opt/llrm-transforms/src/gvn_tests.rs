@@ -1225,3 +1225,16 @@ b5:
         assert_eq!(after.matches("load i16, ptr %p").count(), 1, "{registers} registers\n{after}");
     }
 }
+
+/// A min/max of two constants a load forwarded folds in the same pass (`opt`
+/// agrees): `process_instruction` asked `simplifyInstruction` of binary
+/// operators, compares, selects and casts only, so a `umax` the select
+/// canonicalization made kept its call and the pointer selects behind it
+/// stayed (borrow_puzzles.nib -Os +25 B).
+#[test]
+fn test_an_intrinsic_of_forwarded_constants_folds() {
+    let after = managed(
+        "declare i16 @llvm.umax.i16(i16, i16)\n\ndefine i16 @f() {\nb0:\n  %a = alloca i16\n  store i16 5, ptr %a\n  %x = load i16, ptr %a\n  %m = call i16 @llvm.umax.i16(i16 %x, i16 4)\n  ret i16 %m\n}\n",
+    );
+    assert!(after.contains("ret i16 5") && !after.contains("call i16 @llvm.umax"), "{after}");
+}

@@ -44,7 +44,7 @@ void B_PAIN(short fill, short border)
     spans = (Span *)qb_paint_queue_open(&bytes);
     span_room = (unsigned)(bytes / sizeof(Span));
     gd_fill_select(&painter, paint, OP_SET);
-    last = (int)gfx_current->width - 1;
+    last = gfx_view_right;
     /* the first run is the one through the point, which is neither border nor
      * fill */
     gd_run(gfx_x1, gfx_x1, (unsigned)gfx_y1, edge, paint, last, &left, &right);
@@ -55,7 +55,7 @@ void B_PAIN(short fill, short border)
         Span span = spans[--span_count];
         int y = span.y + span.step, x = span.left;
 
-        if (y < 0 || y >= (int)gfx_current->height)
+        if (y < gfx_view_top || y > gfx_view_bottom)
             continue;
         /* each pixel here that is neither border nor fill is in a run the fill
            has not reached; the run is painted whole and left to look at the

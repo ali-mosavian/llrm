@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Whether two llrm-c builds write the same object bytes over the vsgcc programs, per target and level.
 
-    tools/pairs/objsweep.py OLD_LLRM_C NEW_LLRM_C [--src DIR] [--levels O1,O2,O3,Os] [--targets m32,m16] [--jobs N]
+    [OBJSWEEP_FLAGS="--isel=dag"] tools/pairs/objsweep.py OLD_LLRM_C NEW_LLRM_C [--src DIR] [--levels O1,O2,O3,Os] [--targets m32,m16] [--jobs N]
 
 DIR holds the wrapped sources vsgcc compiles (`ROWS_WORK/<name>/b/*.c`, written by crates/target/llrm-x86-m32/vsgcc/build.sh).
 Prints one line: `objsweep old <md5> new <md5>: N objects changed (targets, levels)`, then the changed objects with their sizes and every
@@ -44,7 +44,7 @@ FLAGS = {"m32": ["-m32", "-mabi=sysv", "-march=i486"], "m16": ["-m16", "-march=i
 
 def compile_one(binary: str, source: Path, target: str, level: str, out: Path, isel: str = "old") -> tuple[bytes | None, str]:
     """(object bytes, '') or (None, first line of stderr). `out` ends in `.o`: llrm-c writes any other name as assembly text."""
-    done = subprocess.run([binary, *FLAGS[target], f"--isel={isel}", f"-{level}", "-o", str(out), str(source)], capture_output=True, text=True, timeout=600)
+    done = subprocess.run([binary, *FLAGS[target], f"--isel={isel}", *os.environ.get("OBJSWEEP_FLAGS", "").split(), f"-{level}", "-o", str(out), str(source)], capture_output=True, text=True, timeout=600)
     if done.returncode != 0 or not out.exists():
         return None, (done.stderr.strip().splitlines() or [f"exit {done.returncode}"])[-1][:120]
     data = out.read_bytes()

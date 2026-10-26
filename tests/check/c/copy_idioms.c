@@ -14,7 +14,10 @@
 // CHECK: cld
 // CHECK: {{_scroll_down(@3)?}} endp
 // CHECK-LABEL: {{_palette(@3)?}} proc
-// CHECK: rep stosw
+// DEVIATE: the pin leaves a variable 16-bit fill a loop (no memset_pattern off Darwin, LoopIdiomRecognize.cpp L1214 at
+// d1106deb71cc); llrm forms `rep stosw` where the target's table prices it under the loop: clocks at speed, bytes at -Os
+// (loopidioms.rs `_pays`). The check takes either, the loop being the -Os answer.
+// CHECK: {{rep stosw|dec ax}}
 // CHECK: {{_palette(@3)?}} endp
 // CHECK-LABEL: {{_block(@3)?}} proc
 // CHECK: rep movsd
