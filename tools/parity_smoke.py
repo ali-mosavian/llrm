@@ -543,7 +543,7 @@ def dependants_lib_failures(
     failed = set()
     # A listed test that passed: its fix removes its entry, and the list says otherwise (17 entries of llrm-nib, qb and transforms stood after their tests passed or went).
     stale = set()
-    listed = xfail.load()
+    listed = xfail.load_for(root)
     started = time.monotonic()
     passed, names = 0, []
     for package in sorted(packages):
@@ -684,7 +684,7 @@ def integration_failures(
     if done.returncode and not found:
         found = {"integration-did-not-run"}
         CAUSES["integration-did-not-run"] = did_not_run_cause(done.stdout, done.returncode)
-    listed = xfail.load().keys()
+    listed = xfail.load_for(root).keys()
     # a listed test that passes is as much a gate failure as an unlisted one that fails: its fix removes its entry
     passing = {f"xpass {one}" for one in test_outcomes(done.stdout, "ok") if one in listed}
     return (found - listed) | passing
@@ -749,7 +749,7 @@ def unit_step(package: str, allowance: float):
         code, output = run_cut(slotted(command), allowance + CARGO_OVERHEAD, ROOT)
         if code is None:
             return "ok", f"{package}: no ranking yet, cut at {allowance:.1f} s without a failure"
-        listed = xfail.load()
+        listed = xfail.load_for(ROOT)
         failed = {f"unit {package}::{test}" for test in failed_tests(output)}
         ran = {f"unit {package}::{name}" for name in names} if names else {one for one in listed if one.startswith(f"unit {package}::")}
         unexpected, expected, passing = xfail.classify(failed, ran, listed)
