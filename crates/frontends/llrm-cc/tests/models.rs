@@ -43,3 +43,28 @@ fn each_model_picks_the_distance_of_its_code_and_its_data() {
         assert_eq!(text.contains("es:[bx]"), far_data, "{model} data:\n{text}");
     }
 }
+
+/// Borland's pointer probes (arithmetic, comparison and conversion of each
+/// distance, declaration lists, conventions) once came from i86clang; every
+/// model must still compile them. `llrm.ia16.ptrdiff` was missing, so a huge
+/// difference was refused.
+#[test]
+fn the_borland_probes_compile_in_every_model() {
+    if std::env::var_os("LLRM_CLANG_M16").is_none() {
+        eprintln!("skipped: LLRM_CLANG_M16 names no i8086 clang");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    for probe in ["conventions", "defaults", "lists", "pointers"] {
+        for model in ["small", "medium", "compact", "large", "huge"] {
+            let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+                .env("LLRM_CC_TARGET", "x86_16-dos")
+                .env("LLRM_LLC", root.join("target/release/llrm-llc"))
+                .args(["-S", "-O1", &format!("-mcmodel={model}"), "-o", "/dev/null"])
+                .arg(root.join("tests/cc/models").join(format!("{probe}.c")))
+                .output()
+                .unwrap();
+            assert!(run.status.success(), "{probe} in {model}: {}", String::from_utf8_lossy(&run.stderr));
+        }
+    }
+}
