@@ -407,6 +407,38 @@ impl SelectionDAG {
         }
     }
 
+    /// A load or store a combine replaced (`CombineTo`): the pin removes it at
+    /// once, and what it read no longer counts it among its users.
+    /// `delete_dead` keeps chain nodes, so a replaced store stayed a reader
+    /// of its value and an `add` the store was the only user of looked
+    /// shared (a second store of it made `IsFoldableRMW` false and the
+    /// `i16` read-modify-write was promoted to `i32`).
+    pub fn delete_replaced(
+        &mut self,
+        node: u32,
+    ) {
+        if node == self.root.node
+            || node == self.entry.node
+            || self.is_deleted(node)
+            || !matches!(self.nodes[node as usize].opcode, ISD::Load | ISD::Store)
+        {
+            return;
+        }
+        let results = self.nodes[node as usize].values.len() as u8;
+        if (0..results).any(|res| self.has_users(SDValue { node, res })) {
+            return;
+        }
+        self.cse_forget(node);
+        if self.deleted.len() <= node as usize {
+            self.deleted.resize(self.nodes.len(), false);
+        }
+        self.deleted[node as usize] = true;
+        let operands: Vec<u32> = self.nodes[node as usize].ops.iter().map(|op| op.node).collect();
+        for op in operands {
+            self.delete_dead(op);
+        }
+    }
+
     /// Whether `delete_dead` removed `node`: nothing reads it, and it reads
     /// nothing that counts.
     pub fn is_deleted(
