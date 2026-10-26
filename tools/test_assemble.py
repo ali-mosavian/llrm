@@ -293,3 +293,18 @@ def test_a_slot_checkout_keeps_its_path_and_two_processes_never_share_a_slot(tmp
     assert {first, second} == {0, 1}
     lock_a.close()
     lock_b.close()
+
+
+def test_the_alone_command_prints_the_surviving_numbers_on_stdout_and_nothing_else(monkeypatch, capsys):
+    """The scanners' `scanners: 2 targets, 0 red (tree ...)` reached stdout, the runner read it as PR numbers, and no batch formed for 70 minutes."""
+
+    def fake(numbers, heads, **_):
+        print("scanners: 2 targets, 0 red (tree abc123)")
+        return list(numbers), {}
+
+    monkeypatch.setattr(ps, "alone", fake)
+    monkeypatch.setattr(ps, "git", lambda *args, **_: "deadbeef")
+    monkeypatch.setattr(sys, "argv", ["parity_squash.py", "alone", "11", "12"])
+    assert ps.main() == 0
+    out = capsys.readouterr()
+    assert out.out.split() == ["11", "12"], out.out
