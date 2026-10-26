@@ -13,8 +13,10 @@ use llrm_target::CostModel;
 use llrm_target::machine::Machine;
 
 /// Flat DOS under an extender, and the PC ports it shares.
-pub const DOS32: &str =
-    concat!(include_str!("machines/dos32.toml"), include_str!("../../llrm-target/src/machines/pc-ports.toml"));
+pub const DOS32: &str = concat!(
+    include_str!("../../../../machine/platform/dos/flat32.toml"),
+    include_str!("../../../../machine/platform/dos/ports.toml")
+);
 
 /// The processors flat code is priced for: the columns of `timings.times`.
 pub static CPUS: LazyLock<Vec<&'static str>> = LazyLock::new(|| TIMINGS.cpus());

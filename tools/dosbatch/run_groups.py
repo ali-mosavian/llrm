@@ -33,11 +33,12 @@ def main() -> int:
         lines = (done.stdout + done.stderr).splitlines()
         summary = next((line for line in reversed(lines) if " programs: " in line), f"{group}: no summary (rc {done.returncode})")
         bad = [line for line in lines if line.startswith("FAIL")]
+        proof = [line for line in lines if line.startswith("isel proof")]
         flood = [line for line in bad if "launch was stopped" in line]
         failed += len(bad)
         stopped += bool(flood)
         print(f"[{group}] {summary}" + (f"  LAUNCH STOPPED ({len(flood)} programs unjudged)" if flood else ""))
-        print("\n".join(bad))
+        print("\n".join(proof + bad))
     return 1 if failed or stopped else 0
 
 

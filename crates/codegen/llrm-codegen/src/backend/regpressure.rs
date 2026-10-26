@@ -27,6 +27,7 @@
 //! keeps). The downward direction (`TopRPTracker`) waits for a top-down pass.
 
 use std::rc::Rc;
+use std::sync::Arc;
 
 use llrm_lir::registers::{RegId, Regs};
 use llrm_target::pressure::PressureSets;
@@ -85,14 +86,25 @@ impl Model {
     ) -> Self {
         let mut model = Self::new((0..sets.sets.len()).map(limit).collect());
         let mut shared: HashMap<String, Rc<[usize]>> = HashMap::default();
+        // Thousands of values share a few (width, registers) signatures: the
+        // class of each is found once (the pin reads it off the class a value
+        // was selected with).
+        let mut found: HashMap<(i64, &[RegId]), Option<(u32, Rc<[usize]>)>> = HashMap::default();
         for (value, bytes, allowed) in values {
-            let names: Vec<&str> = allowed.iter().filter_map(|&root| regs.name(regs.named(root, bytes))).collect();
-            if names.is_empty() || names.len() != allowed.len() {
-                continue;
+            let class = found.entry((bytes, allowed)).or_insert_with(|| {
+                #[cfg(test)]
+                LOOKUPS.with(|count| count.set(count.get() + 1));
+                let names: Vec<&str> = allowed.iter().filter_map(|&root| regs.name(regs.named(root, bytes))).collect();
+                if names.is_empty() || names.len() != allowed.len() {
+                    return None;
+                }
+                let class = sets.class_holding(&names)?;
+                let in_sets = shared.entry(class.name.clone()).or_insert_with(|| Rc::from(class.sets.clone())).clone();
+                Some((class.weight, in_sets))
+            });
+            if let Some((weight, in_sets)) = class {
+                model.count(value, *weight, in_sets.clone());
             }
-            let Some(class) = sets.class_holding(&names) else { continue };
-            let in_sets = shared.entry(class.name.clone()).or_insert_with(|| Rc::from(class.sets.clone())).clone();
-            model.count(value, class.weight, in_sets);
         }
         model
     }
@@ -101,6 +113,8 @@ impl Model {
         &self,
         value: u32,
     ) -> Option<(u32, &[usize])> {
+        #[cfg(test)]
+        WEIGHTS.with(|count| count.set(count.get() + 1));
         self.classes.get(&value).map(|(weight, sets)| (*weight, &sets[..]))
     }
 }
@@ -151,6 +165,18 @@ pub fn try_pressure(
     greater(try_rank, cand_rank)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many times `Model::of_values` asked the pressure sets for a class.
+    static LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times a value's weight was asked of the model.
+    static WEIGHTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub struct Tracker<'a> {
     model: &'a Model,
     live: HashSet<u32>,
@@ -160,6 +186,49 @@ pub struct Tracker<'a> {
     max: Vec<u32>,
     /// `LiveThruPressure`: raises each set's limit.
     live_thru: Vec<u32>,
+    /// `PressureDiff`s: per node of the region, in `sets` entries, what placing
+    /// it next does to each set. Empty for a tracker over no region.
+    diffs: Vec<i32>,
+    /// Per value, the nodes that read (`.1`) or write (`.2`) it.
+    occurs: HashMap<u32, Vec<(u32, bool, bool)>>,
+}
+
+/// The distinct values `one` reads and writes, each once, with how.
+fn operands(one: &Insn) -> impl Iterator<Item = (u32, bool, bool)> {
+    let mut all: Vec<(u32, bool, bool)> = one
+        .uses
+        .iter()
+        .map(|&value| (value, true, false))
+        .chain(one.defines.iter().map(|&value| (value, false, true)))
+        .collect();
+    all.sort_unstable_by_key(|operand| operand.0);
+    all.dedup_by(|later, earlier| {
+        let same = later.0 == earlier.0;
+        if same {
+            earlier.1 |= later.1;
+            earlier.2 |= later.2;
+        }
+        same
+    });
+    all.into_iter()
+}
+
+/// What a node does to a set's pressure for one value: a read of a value not
+/// live raises it by its weight, a write of a live one lowers it.
+fn effect(
+    weight: u32,
+    reads: bool,
+    writes: bool,
+    live: bool,
+) -> i32 {
+    let mut inc = 0;
+    if reads && !live {
+        inc += weight as i32;
+    }
+    if writes && live {
+        inc -= weight as i32;
+    }
+    inc
 }
 
 impl<'a> Tracker<'a> {
@@ -178,6 +247,8 @@ impl<'a> Tracker<'a> {
             current: vec![0; sets],
             max: vec![0; sets],
             live_thru: vec![0; sets],
+            diffs: Vec::new(),
+            occurs: HashMap::default(),
         };
         for value in live_out {
             tracker.make_live(value);
@@ -191,6 +262,71 @@ impl<'a> Tracker<'a> {
             }
         }
         tracker
+    }
+
+    /// A tracker over a region's `insns`, with the `PressureDiff` of each
+    /// computed once (`ScheduleDAGMILive::buildDAGWithRegPressure`);
+    /// [`Self::place`] keeps them current and [`Self::delta`] reads one.
+    pub fn over(
+        model: &'a Model,
+        live_out: impl IntoIterator<Item = u32>,
+        live_thru: impl IntoIterator<Item = u32>,
+        insns: &[Arc<Insn>],
+    ) -> Self {
+        let mut tracker = Self::new(model, live_out, live_thru);
+        let sets = model.limits.len();
+        tracker.diffs = vec![0; insns.len() * sets];
+        for (node, one) in insns.iter().enumerate() {
+            for (value, reads, writes) in operands(one) {
+                let Some((weight, in_sets)) = model.weight(value) else { continue };
+                tracker.occurs.entry(value).or_default().push((node as u32, reads, writes));
+                let inc = effect(weight, reads, writes, tracker.live.contains(&value));
+                for &set in in_sets {
+                    tracker.diffs[node * sets + set] += inc;
+                }
+            }
+        }
+        tracker
+    }
+
+    /// `updatePressureDiffs` after `recede`: `one` is placed; each value whose
+    /// liveness it changed moves the diffs of the nodes that touch it.
+    pub fn place(
+        &mut self,
+        one: &Insn,
+    ) {
+        let touched: Vec<(u32, bool)> = operands(one).map(|(value, ..)| (value, self.live.contains(&value))).collect();
+        self.advance_upward(one);
+        let sets = self.current.len();
+        let occurs = std::mem::take(&mut self.occurs);
+        for (value, was) in touched {
+            let now = self.live.contains(&value);
+            let Some((weight, in_sets)) = self.model.weight(value) else { continue };
+            if was == now {
+                continue;
+            }
+            for &(other, reads, writes) in occurs.get(&value).into_iter().flatten() {
+                let inc = effect(weight, reads, writes, now) - effect(weight, reads, writes, was);
+                if inc != 0 {
+                    for &set in in_sets {
+                        self.diffs[other as usize * sets + set] += inc;
+                    }
+                }
+            }
+        }
+        self.occurs = occurs;
+    }
+
+    /// `getUpwardPressureDelta` for a node of the region from its
+    /// `PressureDiff`: the work is the number of sets, whatever the node reads.
+    pub fn delta(
+        &self,
+        node: usize,
+        critical: &[PressureChange],
+        max_limit: &[u32],
+    ) -> Delta {
+        let sets = self.current.len();
+        self.delta_of(&self.diffs[node * sets..(node + 1) * sets], critical, max_limit)
     }
 
     pub fn current(&self) -> &[u32] {
@@ -277,6 +413,15 @@ impl<'a> Tracker<'a> {
                 }
             }
         }
+        self.delta_of(&change, critical, max_limit)
+    }
+
+    fn delta_of(
+        &self,
+        change: &[i32],
+        critical: &[PressureChange],
+        max_limit: &[u32],
+    ) -> Delta {
         let mut delta = Delta::default();
         for (set, &inc) in change.iter().enumerate() {
             if inc == 0 {
@@ -360,6 +505,22 @@ mod tests {
     /// The module header's example: pressure 2 of limit 2, a use of a third
     /// value takes it one over; a def of a live value in the same instruction
     /// keeps it at the limit.
+    /// A model of a body asked the pressure sets for the class of every value
+    /// (name strings, a scan of the classes): 8.6 M instructions of d_faces'
+    /// 25 M in the scheduler. Values of one width and register list share one
+    /// lookup.
+    #[test]
+    fn values_of_one_signature_cost_one_class_lookup() {
+        let sets = llrm_target::pressure::parse("set 0 GPR 4 BIG\nclass BIG 1 4 0 eax,ebx,ecx,edx\n").unwrap();
+        let regs = Regs(&llrm_x86_m32::REGISTER_INFO);
+        let roots: Vec<RegId> =
+            [RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX].iter().map(|&reg| regs.root(reg)).collect();
+        LOOKUPS.with(|count| count.set(0));
+        let model = Model::of_values(&sets, regs, |_| 4, (1..=1000).map(|value| (value, 4, &roots[..])));
+        assert_eq!(LOOKUPS.with(std::cell::Cell::get), 1, "one lookup for 1000 values of one signature");
+        assert!(model.weight(1000).is_some(), "the values are counted");
+    }
+
     #[test]
     fn an_instruction_that_raises_pressure_past_the_limit_has_excess() {
         let model = model();
@@ -438,6 +599,90 @@ mod tests {
         // value 1: PAIR (weight 2, sets 0 and 1); value 2: ALL (2, set 0);
         // value 3: BYTES (1, set 0).
         assert_eq!(tracker.current(), &[5, 2]);
+    }
+
+    /// Each distinct value of a region's nodes has an operand set; `n` nodes of
+    /// `seed`-chosen reads and writes over values 1..=12.
+    fn region(
+        seed: u64,
+        n: usize,
+    ) -> Vec<Arc<Insn>> {
+        let mut state = seed;
+        let mut next = move |bound: u64| {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (state >> 33) % bound
+        };
+        (0..n)
+            .map(|_| {
+                let defines: Vec<u32> = (0..next(3)).map(|_| 1 + next(12) as u32).collect();
+                let uses: Vec<u32> = (0..next(4)).map(|_| 1 + next(12) as u32).collect();
+                Arc::new(insn(&defines, &uses))
+            })
+            .collect()
+    }
+
+    fn wide_model() -> Model {
+        let mut model = Model::new(vec![2, 3]);
+        for value in 1..=12 {
+            if value % 4 == 0 {
+                model.count(value, 2, Rc::from(vec![0, 1]));
+            } else {
+                model.count(value, 1, Rc::from(vec![0]));
+            }
+        }
+        model
+    }
+
+    /// The `PressureDiff`s kept current by `place` must give the delta that
+    /// rescanning the node against the live values gives, at every step of any
+    /// placement order: an update that missed a value turning live or dead
+    /// would pick by a stale count.
+    #[test]
+    fn the_kept_diffs_give_the_delta_a_rescan_gives_after_each_placement() {
+        let model = wide_model();
+        for seed in 1..=20u64 {
+            let insns = region(seed, 30);
+            let live_out = [1, 5, 9];
+            let mut kept = Tracker::over(&model, live_out, [2], &insns);
+            let mut scanned = Tracker::new(&model, live_out, [2]);
+            let critical = [PressureChange { set: 0, inc: 1 }];
+            // 7 is coprime to 30: every node once.
+            let order = (0..insns.len()).map(|step| (step * 7 + seed as usize) % insns.len());
+            let mut placed = HashSet::default();
+            for node in order {
+                placed.insert(node);
+                for other in (0..insns.len()).filter(|other| !placed.contains(other)) {
+                    assert_eq!(
+                        kept.delta(other, &critical, &[1, 1]),
+                        scanned.upward_delta(&insns[other], &critical, &[1, 1]),
+                        "seed {seed}, node {other} after placing {node}"
+                    );
+                }
+                kept.place(&insns[node]);
+                scanned.advance_upward(&insns[node]);
+            }
+        }
+    }
+
+    /// Choosing among candidates asked the model for the weight of every value
+    /// each reads or writes, on every pick (3.0 M instructions of d_faces in
+    /// `Vec<Delta>` building and 3.7 M more in `bottom_up`). A diff is read in
+    /// the work of the sets: 300 reads cost the same as 1.
+    #[test]
+    fn a_candidates_delta_costs_the_sets_not_what_it_reads() {
+        let mut model = Model::new(vec![2]);
+        for value in 1..=300 {
+            model.count(value, 1, Rc::from(vec![0]));
+        }
+        let wide = Arc::new(insn(&[], &(1..=300).collect::<Vec<u32>>()));
+        let insns = [wide, Arc::new(insn(&[], &[1]))];
+        let tracker = Tracker::over(&model, [], [], &insns);
+        WEIGHTS.with(|count| count.set(0));
+        let delta = tracker.delta(0, &[], &[0]);
+        assert_eq!(WEIGHTS.with(std::cell::Cell::get), 0, "no weight asked at pick time");
+        assert_eq!(delta.excess, Some(PressureChange { set: 0, inc: 300 - 2 }));
+        tracker.upward_delta(&insns[0], &[], &[0]);
+        assert!(WEIGHTS.with(std::cell::Cell::get) >= 300, "premise: the rescan asks for every read");
     }
 
     fn change(

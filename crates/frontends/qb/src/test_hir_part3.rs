@@ -1072,19 +1072,19 @@ fn test_an_error_statement_is_placed_after_the_hot_path() {
 /// LBOUND(a, 1) compared the rank against 1 before reading the descriptor.
 ///
 /// Every allocated array has a first dimension, so only the allocation
-/// test may branch to the runtime call: one branch (no header copy under
-/// LLVM's order duplicates it; a rank check would be a second).
+/// test (`cmp word ptr [descriptor+2], 0`) may branch to a runtime call: the
+/// test before each such branch is that compare, and none is the rank's.
 #[test]
 fn test_the_first_dimension_is_not_rank_checked() {
     let procedure = sum_three(true);
 
     let calls = bound_call_labels(&procedure);
-    let branches: BTreeSet<&str> = jumps(&procedure, false)
+    let tests: BTreeSet<&str> = jumps(&procedure, false)
         .iter()
         .filter(|(_, _, label)| calls.contains(label))
-        .map(|(start, end, _)| procedure[*start..*end].trim())
+        .map(|(start, _, _)| procedure[..*start].trim_end().lines().last().unwrap_or("").trim())
         .collect();
-    assert_eq!(branches.len(), 1, "{branches:?}");
+    assert!(!tests.is_empty() && tests.iter().all(|test| test.ends_with("+2], 0")), "{tests:?}");
 }
 
 /// Without -fsanitize=bounds LBOUND trusts the descriptor: no B$LBND/B$UBND
@@ -2039,8 +2039,10 @@ fn test_a_dividend_two_instructions_require_is_copied_into_its_register_once() {
     // so the extended value sat in EDI across both and one of the three
     // recurrences spilled: `mov ax, [bp-2]` and `add word ptr [bp-2], 5`. A
     // divisor read from memory stays a division; a constant is a reciprocal.
+    // The divisor is not a constant (RND * 3: with the scalars out of memory
+    // `INT(RND * 1)` is 0) and the loop is long (to 100 it is fully unrolled).
     // CVP narrows `i \\ d(0)` to 16 bits as the pin does (`sdiv i16`): `cwd`.
-    let source = "DEFINT A-Z\nDIM b(200), d(1)\nDIM i, t\nd(0) = 5 + INT(RND * 1)\nt = 0\nFOR i = 0 TO 100 STEP 5\n    b(i) = i \\ d(0)\n    t = t + b(i)\nNEXT i\nPRINT \"T=\"; t\n";
+    let source = "DEFINT A-Z\nDIM b(1000), d(1)\nDIM i, t\nd(0) = 5 + INT(RND * 3)\nt = 0\nFOR i = 0 TO 1000 STEP 5\n    b(i) = i \\ d(0)\n    t = t + b(i)\nNEXT i\nPRINT \"T=\"; t\n";
     let basic = std::env::temp_dir().join(format!("stride_variable_divisor_{}.bas", std::process::id()));
     std::fs::write(&basic, source).expect("writes the program");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
@@ -2052,15 +2054,13 @@ fn test_a_dividend_two_instructions_require_is_copied_into_its_register_once() {
 fn test_a_constant_divisor_of_a_non_negative_counter_is_a_reciprocal_without_a_spill() {
     // stride's `i \ 5` was `cdq; idiv` and spilled one of three recurrences;
     // `i` is DEFINT and counts up from 0, so it was `mul` by the reciprocal.
-    // The division is a counter now (`i \ 5` runs 0, 1, 2 ...: one `inc`), so
-    // the loop holds no division of either kind and no spill.
+    // The division is a counter (`i \ 5` runs 0, 1, 2 ...), and with `t` and
+    // `b` out of memory the sum is the constant 210: the loop holds no
+    // division of either kind and no spill.
     let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/run/qb/stride.bas");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let body = backward_loop(&listing(&program));
-    assert!(
-        !body.contains("[bp") && !body.contains("idiv") && !body.contains("mul") && body.contains("inc "),
-        "{body}"
-    );
+    assert!(!body.contains("[bp") && !body.contains("idiv") && !body.contains("mul"), "{body}");
 }
 
 #[test]
@@ -2210,11 +2210,13 @@ fn test_a_selector_the_loop_never_changes_is_loaded_before_it() {
         })
         .collect::<Vec<_>>();
     // Direct (`mov es, [bp-N]`) or through a register (`mov cx, [bp-N]; mov es,
-    // cx`).
-    let reload =
-        regex::Regex::new(r"mov [c-gs]s, word ptr \[bp|mov (\w+), word ptr \[bp[^\n]*\n\s*mov [c-gs]s, \1\b").unwrap();
+    // cx`); the regex crate has no backreference, so the two names compare
+    // here.
+    let direct = regex::Regex::new(r"mov [c-gs]s, word ptr \[bp").unwrap();
+    let through = regex::Regex::new(r"mov (\w+), word ptr \[bp[^\n]*\n\s*mov [c-gs]s, (\w+)\b").unwrap();
+    let reloads = |one: &str| direct.is_match(one) || through.captures_iter(one).any(|found| found[1] == found[2]);
     for one in loops.iter().filter(|one| !loops.iter().any(|other| other.len() < one.len() && one.contains(*other))) {
-        assert!(!reload.is_match(one), "{one}");
+        assert!(!reloads(one), "{one}");
     }
 }
 
@@ -2648,11 +2650,13 @@ fn test_def_seg_stores_the_runtime_segment_cell() {
 }
 
 /// Load speculation takes a word array to lie at an even offset; placed
-/// after three bytes, it lay at an odd one.
+/// after three bytes, it lay at an odd one. The array is read at another
+/// index than it is written: read back at `k`, the load folds to the store and
+/// the array, written and never read, is deleted.
 #[test]
 fn test_a_word_array_after_an_odd_object_lies_at_an_even_offset() {
     let directory = tempfile::tempdir().expect("a directory");
-    let text = "DEFINT A-Z\r\nDIM SHARED s AS STRING * 3, f3(10)\r\ns = \"abc\"\r\nk = LEN(COMMAND$)\r\nf3(k) = LEN(s)\r\nPRINT f3(k), s\r\n";
+    let text = "DEFINT A-Z\r\nDIM SHARED s AS STRING * 3, f3(10)\r\ns = \"abc\"\r\nk = LEN(COMMAND$)\r\nf3(k) = LEN(s)\r\nPRINT f3(k + 1), s\r\n";
     let program = parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45");
     let codegen = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
     let module = qb_compile::assembled(&program, None, &codegen).expect("assembles");
@@ -3467,4 +3471,40 @@ fn test_erl_table_numbers_only_the_statements_that_raise() {
     );
     let words = table_words(&text, "$QB$ERL$__main").unwrap_or_else(|| panic!("no table\n{text}"));
     assert!(words <= 4, "{words} words\n{text}");
+}
+
+/// Whether a listing compares something with -1: BC's LONG divide wraps MIN \
+/// -1 where the processor traps, so the front guards a divisor of -1.
+fn tests_against_minus_one(text: &str) -> bool {
+    text.lines().map(str::trim).any(|line| line.starts_with("cmp") && line.ends_with(", -1"))
+}
+
+/// `PULL \ d` with a constant dividend carried the divisor-is--1 guard
+/// (`cmp edi, -1 / je`, 6 B) though only MIN \ -1 traps: nbody_fixed.bas was 9
+/// B larger than main at -Os m16.
+#[test]
+fn a_constant_dividend_that_is_not_long_min_has_no_minus_one_guard() {
+    let text = listing_of(
+        "const_dividend",
+        "DEFINT A-Z\r\nDIM d AS LONG\r\nINPUT d\r\nPRINT 512& \\ d\r\nPRINT 512& MOD d\r\n",
+    );
+    assert!(!tests_against_minus_one(&text), "{text}");
+}
+
+/// The guard stays where the dividend may be LONG's minimum and the divisor -1.
+#[test]
+fn a_variable_dividend_keeps_the_minus_one_guard() {
+    let text = listing_of(
+        "variable_dividend",
+        "DEFINT A-Z\r\nDIM d AS LONG, x AS LONG\r\nINPUT d\r\nINPUT x\r\nPRINT x \\ d\r\n",
+    );
+    assert!(tests_against_minus_one(&text), "{text}");
+}
+
+/// A constant dividend of LONG's minimum still wraps.
+#[test]
+fn a_dividend_of_long_min_keeps_the_minus_one_guard() {
+    let text =
+        listing_of("min_dividend", "DEFINT A-Z\r\nDIM d AS LONG\r\nINPUT d\r\nPRINT (-2147483647& - 1&) \\ d\r\n");
+    assert!(tests_against_minus_one(&text), "{text}");
 }

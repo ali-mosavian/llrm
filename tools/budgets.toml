@@ -412,15 +412,6 @@ why = "measured 33.6 -> 91.5 Minstr (x2.72)"
 [[debt]]
 kind = "steps"
 axis = "branches"
-name = "lir pressuresink"
-ratio = 3.4
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 7.0 -> 21.3 Minstr (x3.06)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
 name = "mir hoist"
 ratio = 4.0
 issue = "https://github.com/ali-mosavian/llrm/issues/2260"
@@ -950,15 +941,6 @@ ratio = 2.8
 issue = "https://github.com/ali-mosavian/llrm/issues/2260"
 owner = "coordinator (to assign)"
 why = "measured 8.2 -> 20.1 Minstr (x2.46)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "lir pressuresink"
-ratio = 4.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 3.2 -> 13.9 Minstr (x4.34)"
 
 [[debt]]
 kind = "steps"

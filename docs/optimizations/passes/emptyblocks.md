@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/emptyblocks.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/emptyblocks.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/emptyblocks.rs sha256:4a0a3e46665c82d4b349b9f2062900db95a3e7de4b6fde7aabe0fd6e7c52221b -->
+<!-- src: crates/opt/llrm-transforms/src/emptyblocks.rs sha256:2a67fc1ad80e2ef603ad7a40a65e9dfcb1e984e70aa3a53cad66d49d06a02503 -->
 
 # emptyblocks
 

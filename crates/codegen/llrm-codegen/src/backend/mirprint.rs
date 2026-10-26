@@ -157,12 +157,32 @@ fn condition(name: &str) -> Option<u8> {
     })
 }
 
+/// The last `$eflags` definition of the block being printed is read by the
+/// branch about to follow: it is not `dead`, which the pin's verifier refuses.
+fn flags_are_read(text: &mut String) {
+    let mut end = text.len();
+    while end > 0 {
+        let start = text[..end].rfind('\n').map_or(0, |at| at + 1);
+        let line = &text[start..end];
+        if line.starts_with("  bb.") {
+            return;
+        }
+        if line.contains("implicit-def") && line.contains("$eflags") {
+            let live = line.replace("implicit-def dead $eflags", "implicit-def $eflags");
+            text.replace_range(start..end, &live);
+            return;
+        }
+        end = start.saturating_sub(1);
+    }
+}
+
 /// One instruction as MIR lines.
 fn instruction(
     one: &Insn,
     targets: &[usize],
     jumps: &mut usize,
     symbols: &mut BTreeSet<i64>,
+    callees: &mut BTreeSet<i64>,
     in_register: &BTreeSet<u32>,
     out: &mut String,
 ) -> Result<(), String> {
@@ -184,6 +204,46 @@ fn instruction(
                 one.requires.iter().map(|(_, r)| format!("implicit ${}", format!("{r:?}").to_lowercase())).collect();
             writeln!(out, "    RET 0{}", used.iter().map(|u| format!(", {u}")).collect::<String>()).unwrap();
         }
+        ("call_frame_setup", None, [Loc::Imm(size), Loc::Imm(adjust), Loc::Imm(more)]) => writeln!(
+            out,
+            "    ADJCALLSTACKDOWN32 {}, {}, {}, implicit-def dead $esp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $esp, implicit $ssp",
+            immediate(size)?,
+            immediate(adjust)?,
+            immediate(more)?
+        )
+        .unwrap(),
+        ("call_frame_destroy", None, [Loc::Imm(size), Loc::Imm(adjust)]) => writeln!(
+            out,
+            "    ADJCALLSTACKUP32 {}, {}, implicit-def dead $esp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $esp, implicit $ssp",
+            immediate(size)?,
+            immediate(adjust)?
+        )
+        .unwrap(),
+        ("push", None, [Loc::Held(s)]) if s.width == 4 => {
+            writeln!(out, "    PUSH32r {}, implicit-def $esp, implicit $esp", vreg(s)?).unwrap()
+        }
+        ("push", None, [Loc::Imm(i)]) if i.address.is_none() => {
+            writeln!(out, "    PUSH32i {}, implicit-def $esp, implicit $esp", immediate(i)?).unwrap()
+        }
+        ("call", None, []) if !what.indirect => {
+            let callee = what.target.unwrap_or_default();
+            callees.insert(callee);
+            let used: String =
+                one.requires.iter().map(|(_, r)| format!(", implicit ${}", format!("{r:?}").to_lowercase())).collect();
+            let made: String = one
+                .delivers
+                .iter()
+                .map(|(_, r)| format!(", implicit-def ${}", format!("{r:?}").to_lowercase()))
+                .collect();
+            writeln!(
+                out,
+                "    CALLpcrel32 @callee{callee}, csr_32, implicit $esp, implicit $ssp, implicit-def $esp, implicit-def $ssp{used}{made}"
+            )
+            .unwrap();
+            for (held, register) in &one.delivers {
+                writeln!(out, "    {} = COPY ${}", vreg(held)?, format!("{register:?}").to_lowercase()).unwrap();
+            }
+        }
         ("jmp", None, []) => {
             let to = targets.get(*jumps).or(targets.last()).ok_or("a jump without a successor")?;
             writeln!(out, "    JMP_1 %bb.{to}").unwrap();
@@ -201,7 +261,14 @@ fn instruction(
             writeln!(out, "    {} = MOV{}ri {}", vreg(d)?, bits(d.width)?, immediate(i)?).unwrap()
         }
         ("mov", Some(Loc::Held(d)), [Loc::Mem(m)]) => {
-            writeln!(out, "    {} = MOV{}rm {}", vreg(d)?, bits(d.width)?, cell(m, symbols)?).unwrap()
+            let from = cell(m, symbols)?;
+            // An argument's home is immutable: the pin rematerializes a load
+            // from it only when the instruction says what it reads.
+            let reads = match from.split(',').next().filter(|home| home.starts_with("%fixed-stack.")) {
+                Some(home) => format!(" :: (load (s{}) from {home})", m.width * 8),
+                None => String::new(),
+            };
+            writeln!(out, "    {} = MOV{}rm {}{reads}", vreg(d)?, bits(d.width)?, from).unwrap()
         }
         ("mov", Some(Loc::Mem(m)), [Loc::Held(s)]) => {
             writeln!(out, "    MOV{}mr {}, {}", bits(s.width)?, cell(m, symbols)?, vreg(s)?).unwrap()
@@ -252,11 +319,11 @@ fn instruction(
             immediate(i)?
         )
         .unwrap(),
-        ("imul", Some(Loc::Held(d)), [Loc::Held(a), Loc::Imm(i)]) => {
+        ("imul", Some(Loc::Held(d)), [Loc::Held(a), Loc::Imm(i)]) if what.dests.len() == 1 => {
             writeln!(out, "    {} = IMUL{}rri {}, {}, {eflags}", vreg(d)?, bits(d.width)?, vreg(a)?, immediate(i)?)
                 .unwrap()
         }
-        ("imul", Some(Loc::Held(d)), [Loc::Held(a), Loc::Held(b)]) => {
+        ("imul", Some(Loc::Held(d)), [Loc::Held(a), Loc::Held(b)]) if what.dests.len() == 1 => {
             writeln!(out, "    {} = IMUL{}rr {}, {}, {eflags}", vreg(d)?, bits(d.width)?, vreg(a)?, vreg(b)?).unwrap()
         }
         (op @ ("sar" | "shl" | "shr"), Some(Loc::Held(d)), [Loc::Held(a), Loc::Held(_)]) => writeln!(
@@ -282,6 +349,7 @@ pub fn mir(
     let at: Vec<i64> = body.blocks.iter().map(|b| b.at).collect();
     let odds = crate::liveness::blockfrequency::MachineBranchProbabilityInfo::of(body);
     let mut symbols = BTreeSet::new();
+    let mut callees = BTreeSet::new();
     let mut text = String::new();
     let mut widths = BTreeSet::new();
     let mut register_only = BTreeSet::new();
@@ -320,9 +388,38 @@ pub fn mir(
                 .collect();
             writeln!(text, "    successors: {}", list.join(", ")).unwrap();
         }
+        // The entry's own nameless instruction that defines only values pinned
+        // to registers, with others after it, is the arguments arriving in
+        // them: live-ins copied out, not a return.
+        let entry_arguments = (n == 0 && block.insns.len() > 1)
+            .then(|| block.insns.first())
+            .flatten()
+            .filter(
+                |one| one.what.as_ref().is_some_and(|w| {
+                    w.name.as_deref().unwrap_or("").is_empty() && w.dests.is_empty() && w.sources.is_empty()
+                }) && !one.defines.is_empty()
+                    && one.defines.iter().all(|value| pins.contains_key(value)),
+            );
+        if let Some(arrive) = entry_arguments {
+            let list: Vec<String> = arrive
+                .defines
+                .iter()
+                .map(|value| {
+                    physical(pins[value], value_widths.get(value).copied().unwrap_or(4)).map(|r| format!("${r}"))
+                })
+                .collect::<Result<_, _>>()?;
+            writeln!(text, "    liveins: {}", list.join(", ")).unwrap();
+        }
         let mut jumps = 0;
         for one in block.insns.iter() {
             widths.extend(one.defines.iter().chain(&one.uses).copied());
+            if entry_arguments.is_some_and(|arrive| std::sync::Arc::ptr_eq(arrive, one)) {
+                for value in &one.defines {
+                    let register = physical(pins[value], value_widths.get(value).copied().unwrap_or(4))?;
+                    writeln!(text, "    %{value} = COPY ${register}").unwrap();
+                }
+                continue;
+            }
             // A copy into a pinned value is the pin's own `$cl = COPY
             // %k.sub_8bit`: the register is the destination, no
             // virtual register stands between.
@@ -338,7 +435,10 @@ pub fn mir(
                 register_only.insert(dest.value);
                 continue;
             }
-            instruction(one, &targets, &mut jumps, &mut symbols, &register_only, &mut text)
+            if one.what.as_ref().and_then(|w| w.name.as_deref()).is_some_and(|name| condition(name).is_some()) {
+                flags_are_read(&mut text);
+            }
+            instruction(one, &targets, &mut jumps, &mut symbols, &mut callees, &register_only, &mut text)
                 .map_err(|why| format!("block {n}: {why}"))?;
             // A value pinned to a register is that register from its
             // definition on: the `$cl = COPY` an instruction's implicit use
@@ -372,8 +472,12 @@ pub fn mir(
     for s in &symbols {
         writeln!(out, "  @seg{s} = global [65536 x i8] zeroinitializer").unwrap();
     }
+    for callee in &callees {
+        writeln!(out, "  declare void @callee{callee}()").unwrap();
+    }
     writeln!(out, "  define i32 @{}(i32 %a) {{\n    ret i32 0\n  }}\n...", body.name).unwrap();
-    writeln!(out, "---\nname: {}\ntracksRegLiveness: true\nregisters:", body.name).unwrap();
+    let adjusts = if callees.is_empty() { "" } else { "frameInfo:\n  adjustsStack: true\n" };
+    writeln!(out, "---\nname: {}\ntracksRegLiveness: true\n{adjusts}registers:", body.name).unwrap();
     for v in widths.iter().filter(|v| !register_only.contains(*v)) {
         let class = match (value_widths.get(v), indexed.contains(v), byte_read.contains(v)) {
             (Some(1), ..) => "gr8",
@@ -395,6 +499,7 @@ pub fn mir(
 mod tests {
     use std::sync::Arc;
 
+    use llrm_lir::registers::RegId;
     use llrm_lir::{Held, Imm, Loc, Operation, Semantics};
 
     use super::mir;
@@ -422,6 +527,81 @@ mod tests {
     /// `add`, an immediate compare, and a conditional jump whose fallthrough
     /// block is not the next one gets the `JMP_1` MIR needs (its absence was
     /// "CFG successors don't match" on every `jne` that skips a block).
+    /// A loop counter's `dec` sets the flags its `jne` reads. The printer wrote
+    /// `implicit-def dead $eflags`, and the pin's `llc` refused the MIR ("Using
+    /// an undefined physical register"), so no loop with a `dec; jne` could be
+    /// allocated by the pin.
+    #[test]
+    fn test_a_flag_setting_op_the_branch_reads_is_not_dead() {
+        let dec = insn("dec", Operation::Binary, vec![held(1)], vec![held(1)]);
+        let jne = insn("jne", Operation::Branch, vec![], vec![]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![
+            Block::from(LirBlock { succ: vec![0, 1].into(), ..LirBlock::new(0, vec![dec, jne]) }),
+            Block::from(LirBlock::new(1, vec![ret])),
+        ];
+        let body = LirBody::new("count", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("DEC32r %1, implicit-def $eflags\n    JCC_1"), "{text}");
+    }
+
+    /// The widening `v8, v9 := imul v6, v7` has two destinations; the printer
+    /// took the first and wrote `IMUL32rr` with two undefined registers, which
+    /// the pin refused as a register of no class.
+    #[test]
+    fn test_a_widening_multiply_is_refused_not_misprinted() {
+        let widening = insn("imul", Operation::Binary, vec![held(8), held(9)], vec![held(6), held(7)]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![widening, ret]))];
+        let body = LirBody::new("wide", 0, blocks, IndexMap::default(), IndexMap::default());
+        let refused = mir(&body, &IndexMap::default()).expect_err("refused");
+        assert!(refused.contains("imul"), "{refused}");
+    }
+
+    /// `place` of the queens row calls itself: the pin's `llc` refused the MIR
+    /// of any function with a call or a register argument, so none of them
+    /// could be allocated by the pin on llrm's input.
+    #[test]
+    fn test_a_register_argument_and_a_call_print_as_the_pin_reads_them() {
+        let imm = |value| Loc::Imm(Imm { value, width: 4, address: None });
+        let arrive = Arc::new(Insn { defines: vec![1], ..Insn::clone(&insn("", Operation::Return, vec![], vec![])) });
+        let setup = insn("call_frame_setup", Operation::Move, vec![], vec![imm(4), imm(0), imm(0)]);
+        let push = insn("push", Operation::Push, vec![], vec![held(1)]);
+        let call = Arc::new(Insn {
+            requires: vec![(Held { value: 1, width: 4 }, RegId::ECX)],
+            delivers: vec![(Held { value: 2, width: 4 }, RegId::EAX)],
+            ..Insn::clone(&insn("call", Operation::Call, vec![], vec![]))
+        });
+        let destroy = insn("call_frame_destroy", Operation::Move, vec![], vec![imm(4), imm(0)]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![arrive, setup, push, call, destroy, ret]))];
+        let body = LirBody::new("calls", 0, blocks, IndexMap::default(), IndexMap::default());
+        let pins: IndexMap<u32, RegId> = [(1, RegId::ECX)].into_iter().collect();
+        let text = mir(&body, &pins).expect("prints");
+        assert!(text.contains("liveins: $ecx\n"), "{text}");
+        assert!(text.contains("%1 = COPY $ecx"), "{text}");
+        assert!(text.contains("ADJCALLSTACKDOWN32 4, 0, 0,"), "{text}");
+        assert!(text.contains("PUSH32r %1,"), "{text}");
+        assert!(text.contains("CALLpcrel32 @callee0, csr_32"), "{text}");
+        assert!(text.contains("%2 = COPY $eax"), "{text}");
+        assert!(text.contains("adjustsStack: true"), "{text}");
+    }
+
+    /// A load of an argument's home printed with no memory operand, so the
+    /// pin did not see an immutable load and allocated that function as if the
+    /// value could not be made again.
+    #[test]
+    fn test_an_argument_load_names_the_immutable_slot_it_reads() {
+        use llrm_lir::{Addr, Mem, Space};
+        let cell = Mem::new(Some(Addr::new(Space::Frame, 8)), 4);
+        let load = insn("mov", Operation::Move, vec![held(1)], vec![Loc::Mem(cell)]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![load, ret]))];
+        let body = LirBody::new("arg", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains(":: (load (s32) from %fixed-stack.0)"), "{text}");
+    }
+
     #[test]
     fn test_a_branch_to_a_far_block_gets_its_jump_and_forms_are_32_bit() {
         let imm = |value| Loc::Imm(Imm { value, width: 4, address: None });

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/machinesink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/machinesink.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/machinesink.rs sha256:06c76cfd7fa1402660a549d6f3849d4347b6f056f88d3d52cef641461691e33c -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/machinesink.rs sha256:7c86265a2be9aec0c779404c55e3094af73897510bb4608604904d01ee7673f9 -->
 
 # machinesink
 
@@ -38,10 +38,11 @@ ordered access as one that may alias the load: no alias analysis reaches
 LIR (`mayAlias(AA, MI)` is always true). Retires M1, which sank no load
 along a critical edge. Exit: memory operands with an alias query on LIR.
 
-DEVIATE M2 (#2903): `isProfitableToSinkTo` ends by asking the register
-pressure of the target (`registerPressureSetExceedsLimit`) for an
-instruction inside a cycle; no instruction here sinks on that ground.
-Exit: the target description's pressure limits.
+Row M2 (was DEVIATE M2 #2903, retired 2026-10-25): inside a cycle an
+instruction goes to a post-dominating block when no in-cycle operand it
+reads would be held there past the block's pressure (the limit is the number
+of allocatable registers, one for every set). x_bubble -O2 m32: the inner
+loop's `inc` goes to the latch as the pin has it.
 
 Row M4 (was DEVIATE M4, retired 2026-10-25 on the greedy allocator): a build
 for size moves what the pin moves; the rule that kept an instruction in
@@ -76,10 +77,6 @@ Exit: honor a dead implicit def when LIR marks one.
 DEVIATE M3 (#2903): no `PerformSinkAndFold`, no sinking into cycles
 (`SinkInstsIntoCycle`, off by default), no debug-value handling (an
 instruction has none).
-
-`pressuresink` (a load made where its reader is, within a block) has no
-pin counterpart: LLVM orders loads by the scheduler. It is deleted when the
-pre-RA machine scheduler is translated (target 2026-11-20).
 
 ## Example
 `b1: v = mov 0; cmp x, 0; je b4` and `b4: r = phi [b1: v] [b2: w]` leave
