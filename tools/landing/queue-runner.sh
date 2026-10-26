@@ -45,8 +45,7 @@ while true; do
     fi
     [ ${#batch[@]} -eq 0 ] && { sleep 60; continue; }
   fi
-  for m in "${batch[@]}"; do sed -i "/^$m\$/d" $Q; done
-  open=($(open_only "${batch[@]}"))
+  open=($(pop_open $Q "${batch[@]}"))
   batch=("${open[@]}"); [ ${#batch[@]} -eq 0 ] && continue; n=${batch[0]}
   echo "== $(date +%H:%M) landing ${batch[*]}"
   if [ ${#batch[@]} -eq 1 ]; then "$HERE/land.sh" "$n" 2>&1 | cut -c1-260; continue; fi
