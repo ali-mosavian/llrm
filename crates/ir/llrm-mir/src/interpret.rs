@@ -431,6 +431,10 @@ impl<'m> Machine<'m> {
                 let Val::Int { bits, width } = argument(0) else { return Ok(Val::Poison) };
                 Val::Int { bits: bits.swap_bytes() >> (128 - width), width }
             }
+            Intrinsic::BitReverse => {
+                let Val::Int { bits, width } = argument(0) else { return Ok(Val::Poison) };
+                Val::Int { bits: bits.reverse_bits() >> (128 - width), width }
+            }
             Intrinsic::FunnelShift { left } => {
                 let (Val::Int { bits: a, width }, Val::Int { bits: b, .. }, Val::Int { bits: by, .. }) =
                     (argument(0), argument(1), argument(2))

@@ -14,6 +14,7 @@ fn qb() -> HirAbi {
         objects: Default::default(),
         preserved: Default::default(),
         stack_check: None,
+        hosted: false,
     }
 }
 
@@ -55,6 +56,7 @@ fn borland() -> HirAbi {
         objects: Default::default(),
         preserved: EVERY.iter().copied().filter(|one| !clobbered.contains(one)).collect(),
         stack_check: None,
+        hosted: false,
     }
 }
 
@@ -3741,7 +3743,7 @@ b1:
             "shl ebx, 16",
             "mov eax, ebx",
             "idiv esi",
-            "xor ecx, esi",
+            "xor ecx, 196608",
             "sar ecx, 31",
             "imul esi, eax",
             "sub ebx, esi",

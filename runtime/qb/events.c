@@ -4,7 +4,7 @@
    each statement whether an event is due (B$EVAN), and calls the handlers
    of those that are (B$EVPD, B$EVDN) itself. */
 #include "console.h"
-#include "device.h"
+#include "dev.h"
 #include "error.h"
 #include "qb.h"
 
@@ -47,8 +47,6 @@ static const byte key_scan[KEYS] = {
     0, 0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0x85, 0x86};
 
 extern unsigned music_waiting(void);
-extern int ev_next_extended_scan(void);
-extern void ev_discard_key(void);
 
 static int take_keys(void);
 
@@ -103,7 +101,7 @@ void B_EVSW(short device, long number, short mode)
    one, or there is none. */
 static int trapped_key(void)
 {
-    int scan = ev_next_extended_scan(), key;
+    int scan = dev_key_peek_scan(), key;
 
     if (scan < 0)
         return 0;
@@ -111,7 +109,7 @@ static int trapped_key(void)
         Trap *trap = &traps[1 + key];
 
         if (key_scan[key] == scan && trap->handler && trap->state != OFF) {
-            ev_discard_key();
+            dev_key_discard();
             trap->due = 1;
             return 1;
         }

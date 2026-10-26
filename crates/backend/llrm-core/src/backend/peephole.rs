@@ -238,6 +238,18 @@ impl Peephole {
         Ok(Self { frame, cpu: targets::profile(cpu)?.clone(), rules, saved, classes })
     }
 
+    /// The frame without the spill slots no cell names, and the cells where
+    /// they moved to.
+    fn released(
+        &self,
+        body: LirBody,
+    ) -> LirBody {
+        match &self.frame {
+            Some(frame) => crate::backend::slots::released(&body, &mut frame.borrow_mut()),
+            None => body,
+        }
+    }
+
     /// Drop only synthetic reservations when no added stack storage remains.
     fn _frame(
         &self,
@@ -325,6 +337,10 @@ impl Peephole {
         // After the forwarding: a reload on the other path is gone, and the
         // store need not run there.
         let body = crate::backend::postrasink::latched(&crate::backend::postrasink::sunk(&body));
+        let body = match crate::backend::slotcopies::merged(&body) {
+            Some(merged) => self.released(merged),
+            None => body,
+        };
         let body = forwarded_reloads(self.rules, &body);
         let body = storecombine::combined(&body);
         let body = pushed_constants(self.rules, &body);
