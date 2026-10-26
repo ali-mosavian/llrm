@@ -40,3 +40,18 @@ fn a_cheap_divide_by_a_power_of_two_is_still_a_shift() {
         assert_eq!(dag.opcode(root), want, "{op:?}");
     }
 }
+
+/// An `i8` divide has no `DIV8r` in the selector (SD302): at -Oz `(x >> 8) % 6`
+/// of examples/dice.nib and easing.nib stopped compiling (`CannotSelect
+/// ("UDivRem")`), so it keeps the multiply.
+#[test]
+fn a_cheap_i8_divide_by_a_constant_stays_a_multiply() {
+    let tli = TargetLowering::x86_16(Features::default(), MVT::I16);
+    let mut dag = SelectionDAG::new(DagConfig { int_div_cheap: true, ..DagConfig::default() });
+    let x = dag.get_register(EVT::I8, 5);
+    let divisor = dag.get_constant(6, EVT::I8);
+    let rem = dag.get_node(ISD::URem, EVT::I8, &[x, divisor]);
+    dag.set_root(rem);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+    assert_ne!(dag.opcode(dag.get_root()), ISD::URem);
+}
