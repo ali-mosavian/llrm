@@ -167,7 +167,7 @@ b2:
 }
 
 /// The flat 32-bit target of x86: the pin's TTI with scaled indexes free.
-struct Flat;
+pub(crate) struct Flat;
 
 impl llrm_mir::target::Machine for Flat {
     fn foreign_span(

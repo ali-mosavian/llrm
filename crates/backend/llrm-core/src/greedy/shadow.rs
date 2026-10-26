@@ -545,6 +545,129 @@ impl CallMasks {
     }
 }
 
+/// LLVM's physical register range for a value an instruction pins to a
+/// register (`LIS->getRegUnit`), behind `LLRM_FIXED_PINS` (POC): the value is
+/// not allocated; every other range meets it as a fixed range, except where
+/// the overlap starts at a copy between the two (`LiveRange::overlaps(Other,
+/// CP, Indexes)`, `LiveRegMatrix::checkRegUnitInterference`).
+struct FixedPins {
+    tri: RegisterInfo,
+    pins: Vec<FixedPin>,
+    /// The pinned ranges of each register unit, merged (`LIS->getRegUnit`):
+    /// what the interference cache and the region splitter see of them.
+    units: std::collections::HashMap<u32, crate::liveness::liverange::LiveRange>,
+    /// The copies of the body by the slot they define at: (destination,
+    /// source).
+    copies: std::collections::HashMap<SlotIndex, (u32, u32)>,
+}
+
+struct FixedPin {
+    reg: u32,
+    root: RegId,
+    segments: Vec<(SlotIndex, SlotIndex)>,
+}
+
+impl FixedPins {
+    fn interferes(
+        &self,
+        li: &LiveInterval,
+        phys: RegId,
+    ) -> bool {
+        self.pins.iter().filter(|pin| self.tri.overlaps(pin.root, phys)).any(|pin| {
+            let (mut i, mut j) = (0, 0);
+            while i < li.segments.len() && j < pin.segments.len() {
+                let (a, b) = (&li.segments[i], &pin.segments[j]);
+                if a.start < b.1 && b.0 < a.end {
+                    let def = std::cmp::max(a.start.clone(), b.0.clone());
+                    let excused = !def.is_block()
+                        && self
+                            .copies
+                            .get(&def)
+                            .is_some_and(|&(d, s)| (d, s) == (li.reg(), pin.reg) || (d, s) == (pin.reg, li.reg()));
+                    if !excused {
+                        return true;
+                    }
+                }
+                if a.end <= b.1 {
+                    i += 1;
+                } else {
+                    j += 1;
+                }
+            }
+            false
+        })
+    }
+}
+
+/// The calls and the pinned ranges as the matrix's fixed constraints.
+struct Fixed {
+    calls: CallMasks,
+    pins: Rc<std::cell::OnceCell<FixedPins>>,
+}
+
+impl PhysInterference for Fixed {
+    fn reg_mask_clobbered(
+        &self,
+        li: &LiveInterval,
+    ) -> Option<RegSet> {
+        self.calls.reg_mask_clobbered(li)
+    }
+
+    fn reg_unit_interferes(
+        &self,
+        li: &LiveInterval,
+        phys: RegId,
+    ) -> bool {
+        self.pins.get().is_some_and(|pins| pins.interferes(li, phys))
+    }
+
+    fn fixed_range(
+        &self,
+        unit: u32,
+    ) -> Option<&crate::liveness::liverange::LiveRange> {
+        self.pins.get().and_then(|pins| pins.units.get(&unit))
+    }
+
+    fn reg_mask_range(
+        &self,
+        start: SlotIndex,
+        stop: SlotIndex,
+    ) -> std::ops::Range<usize> {
+        self.calls.reg_mask_range(start, stop)
+    }
+
+    fn reg_mask_range_in_block(
+        &self,
+        mbb: usize,
+        start: SlotIndex,
+        stop: SlotIndex,
+    ) -> std::ops::Range<usize> {
+        self.calls.reg_mask_range_in_block(mbb, start, stop)
+    }
+
+    fn reg_mask_destroys(
+        &self,
+        i: usize,
+    ) -> bool {
+        self.calls.reg_mask_destroys(i)
+    }
+
+    fn reg_mask_slot(
+        &self,
+        i: usize,
+    ) -> SlotIndex {
+        self.calls.reg_mask_slot(i)
+    }
+
+    fn reg_mask_clobbers(
+        &self,
+        i: usize,
+        phys: RegId,
+    ) -> bool {
+        self.calls.reg_mask_clobbers(i, phys)
+    }
+}
+
 impl PhysInterference for CallMasks {
     /// `LiveIntervals::checkRegMaskInterference`: the slots are ascending, so
     /// the calls the range is live across are found by one merge with its
@@ -870,9 +993,11 @@ pub fn decide_with_split(
         );
         blocks.push((start, end, first..calls.len()));
     }
+    let fixed_pins = llrm_support::env_flag!("LLRM_FIXED_PINS");
+    let pins_cell: Rc<std::cell::OnceCell<FixedPins>> = Rc::default();
     let matrix = LiveRegMatrix::new(
         RegisterInfo::new(inputs.registers),
-        Box::new(CallMasks::of(calls, blocks, Rc::clone(&tables))),
+        Box::new(Fixed { calls: CallMasks::of(calls, blocks, Rc::clone(&tables)), pins: Rc::clone(&pins_cell) }),
     );
     let inline = matches!(mode, Mode::Inline { .. });
     // A split edits the function, and a caller that only records what to spill
@@ -905,6 +1030,72 @@ pub fn decide_with_split(
         greedy.split = Some(super::regionsplit::SplitSupport::new(split_env, mbfi, &greedy.lis.cfg.succs));
     }
     greedy.calculate_spill_weights_and_hints();
+    let fixed_regs: Vec<(u32, RegId)> = if fixed_pins {
+        let mut copies = std::collections::HashMap::new();
+        for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+            if let Some((d, s)) =
+                one.what.as_ref().and_then(|w| match (w.name.as_deref(), &w.dests[..], &w.sources[..]) {
+                    (Some("mov"), [llrm_lir::Loc::Held(d)], [llrm_lir::Loc::Held(s)]) => Some((d.value, s.value)),
+                    _ => None,
+                })
+            {
+                copies.insert(greedy.lis.indexes.get_instruction_index(one.id()).get_reg_slot(false), (d, s));
+            }
+        }
+        let wanted: Vec<(u32, RegId)> = inputs
+            .pins
+            .iter()
+            .filter(|(reg, _)| !floats.contains(reg) && greedy.lis.has_interval(**reg))
+            .map(|(&reg, &phys)| (reg, phys))
+            .collect();
+        let pins: Vec<FixedPin> = wanted
+            .into_iter()
+            .map(|(reg, phys)| FixedPin {
+                reg,
+                root: crate::model::ir::root(phys),
+                segments: greedy
+                    .lis
+                    .interval_rc(reg)
+                    .segments
+                    .iter()
+                    .map(|s| (s.start.clone(), s.end.clone()))
+                    .collect(),
+            })
+            .collect();
+        let regs = pins.iter().map(|pin| (pin.reg, pin.root)).collect();
+        let tri = RegisterInfo::new(inputs.registers);
+        let mut spans: std::collections::HashMap<u32, Vec<(SlotIndex, SlotIndex)>> = std::collections::HashMap::new();
+        for pin in &pins {
+            for unit in tri.regunits(pin.root) {
+                spans.entry(unit).or_default().extend(pin.segments.iter().cloned());
+            }
+        }
+        let units = spans
+            .into_iter()
+            .map(|(unit, mut list)| {
+                list.sort();
+                let mut merged: Vec<(SlotIndex, SlotIndex)> = Vec::new();
+                for (start, end) in list {
+                    match merged.last_mut() {
+                        Some(last) if start <= last.1 => last.1 = std::cmp::max(last.1.clone(), end),
+                        _ => merged.push((start, end)),
+                    }
+                }
+                let range = crate::liveness::liverange::LiveRange {
+                    segments: merged
+                        .into_iter()
+                        .map(|(start, end)| crate::liveness::liverange::Segment::new(start, end, None))
+                        .collect(),
+                    valnos: Vec::new(),
+                };
+                (unit, range)
+            })
+            .collect();
+        let _ = pins_cell.set(FixedPins { tri, pins, units, copies });
+        regs
+    } else {
+        Vec::new()
+    };
     let values = greedy.lis.virt_regs().len();
     // Values that may not be spilled, and the pinned ones in the registers that
     // fix them.
@@ -922,8 +1113,14 @@ pub fn decide_with_split(
     for (&reg, &phys) in inputs.pins {
         if !greedy.lis.reg_nodbg_empty(reg) && !floats.contains(&reg) {
             tables.orders.borrow_mut().insert(reg, vec![crate::model::ir::root(phys)]);
-            greedy.pinned.insert(reg);
+            if !fixed_regs.iter().any(|(fixed, _)| *fixed == reg) {
+                greedy.pinned.insert(reg);
+            }
         }
+    }
+    for (reg, root) in &fixed_regs {
+        greedy.fixed.insert(*reg);
+        greedy.matrix.vrm.assign_virt2phys(*reg, *root);
     }
     if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
         eprintln!("== {}", body.name);
@@ -1636,5 +1833,54 @@ mod tests {
             vec![RegId::EBX, RegId::ESI, RegId::EDI],
             "an address base stays among the address registers"
         );
+    }
+
+    fn fixed_pin_slots() -> Vec<SlotIndex> {
+        let insns: Vec<Arc<Insn>> = (0..40).map(|_| Arc::new(Insn::new(0, None, None, vec![], vec![]))).collect();
+        let body = LirBody::new(
+            "pins",
+            0,
+            vec![Block::from(LirBlock::new(0, insns.clone()))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let indexes = SlotIndexes::new(&body);
+        insns.iter().map(|one| indexes.get_instruction_index(one.id()).get_reg_slot(false)).collect()
+    }
+
+    fn span(
+        reg: u32,
+        from: usize,
+        to: usize,
+        at: &[SlotIndex],
+    ) -> LiveInterval {
+        let mut li = LiveInterval::new(reg, 1.0);
+        let v = li.get_next_value(at[from]);
+        li.add_segment(Segment::new(at[from], at[to], Some(v)));
+        li
+    }
+
+    /// A value copied into the register a pinned value holds may sit in it:
+    /// the overlap starts at the copy (`LiveRange::overlaps(Other, CP)`). The
+    /// pinned value was a vreg that every other range had to avoid, so `k`
+    /// was moved out of ecx and back with a `mov ecx, edx` per trip (x_cordic).
+    /// Any other range over the pin, and the pin's register's aliases only,
+    /// still meet it.
+    #[test]
+    fn a_range_meets_a_fixed_pin_except_at_the_copy_that_makes_it() {
+        let at = fixed_pin_slots();
+        let tri = RegisterInfo::new(Regs(&llrm_x86_m16::REGISTER_INFO));
+        // Value 2 is pinned to ecx over [10, 20) and is made by `mov v2, v1` at
+        // 10.
+        let pins = FixedPins {
+            tri,
+            pins: vec![FixedPin { reg: 2, root: RegId::ECX, segments: vec![(at[10].clone(), at[20].clone())] }],
+            units: Default::default(),
+            copies: [(at[10].clone(), (2, 1))].into_iter().collect(),
+        };
+        assert!(!pins.interferes(&span(1, 5, 30, &at), RegId::ECX), "the copy's source shares ecx");
+        assert!(pins.interferes(&span(3, 5, 30, &at), RegId::ECX), "another range over the pin");
+        assert!(!pins.interferes(&span(3, 5, 30, &at), RegId::EDX), "a register the pin does not hold");
+        assert!(pins.interferes(&span(1, 12, 30, &at), RegId::ECX), "a range that starts inside, not at the copy");
     }
 }

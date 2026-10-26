@@ -37,7 +37,10 @@ fn test_an_address_use_adds_no_candidate_for_its_constant_and_the_exit_counts_to
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
         .current_dir(directory)
-        .args(["-m32", "-O2", "-march=i486", "-S", "-o", "a.s", "a.c"])
+        // Without the unroller: since the pin's LoopFullUnroll cost
+        // (7761d2b672) the `dy` loop may be copied out at -O2, and what this
+        // test pins is lsr's choice for the loop that stays.
+        .args(["-m32", "-O2", "-march=i486", "-fno-unroll-loops", "-S", "-o", "a.s", "a.c"])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));

@@ -288,7 +288,7 @@ impl Checker {
             "WAIT" => "n i i?",
             "BEEP" | "TRON" | "TROFF" => "",
             "SYSTEM" | "END" => "i?",
-            "FILES" => "s?",
+            "FILES" | "SHELL" => "s?",
             "RUN" => "x?",
             "CHAIN" => "s",
             "ERROR" => "n",

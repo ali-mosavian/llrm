@@ -1012,6 +1012,10 @@ def _in_target(target: Path | None, kind: str = "test"):
     return lambda command, **kw: subprocess.run(command, env={**os.environ, "CARGO_TARGET_DIR": str(target / kind)}, **kw)
 
 
+ALONE_JOBS = "2"  # PRs checked at once: three took 6 of 8 cargo processes beside the batch's tests
+SOURCE_SCANNING_PACKAGES = {"llrm-mir"}  # lib tests that scan other crates' sources (no_file_gains_*): upstream of the crates they judge, so a dependants run never reaches them
+
+
 def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, scanners=None, differs=None, target: Path | None = None, units=None, on_base=None) -> list[str]:
     """Why the PR at `head`, alone on `base` (a scratch checkout at `base` in `cwd`), fails the cheap checks a batch would fail on: the merge, the workspace build, the
     always-on scanners (fmt differences only warn: the squash formats every PR). The 15:34 batch spent 62% of its time on reruns of PRs that failed these."""
@@ -1023,17 +1027,40 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
     if unformatted := sorted((differs or fmt_differs)(cwd, files)):
         print(f"alone: fmt.sh would change {', '.join(unformatted[:5])} (the squash formats it; not a refusal)", file=sys.stderr)
     # the scanners read the scratch tree: `integration_failures` defaults to ROOT, so every PR was judged on the tree the runner stands in
-    red = sorted((scanners or (lambda f: landing_scanner_failures(f, False, on_merged=lambda targets: smoke.integration_failures(targets, root=cwd, run=_in_target(target)))))(files))
+    # every scanner, not the always-on two: they read other crates' sources and docs, so a PR in one crate turns them red from outside it (#4871 added id-keyed maps in llrm-transforms; batch 18 died on llrm-mir's ratchet)
+    def default_scanners(changed: list[str]) -> set[str]:
+        # the scanners, the PR's own test files, and the integration targets xfail.toml lists that the PR can reach: one it makes pass is an xpass the gate refuses (#4673 cost batches 19 and 20)
+        import xfail  # noqa: PLC0415
+
+        packages, _ = smoke.workspace_graph(cwd)
+        listed = {one.split()[1].split("::")[0] for one in xfail.load() if one.startswith("integration ")}
+        reach = set(smoke.integration_targets_for(changed, smoke.touched_packages(changed, packages, cwd), smoke.integration_map(cwd))) & listed
+        own = {Path(f).stem for f in changed if f.startswith("tests/") and f.endswith(".rs") and "/" not in f[len("tests/") :]}
+        only = (set(smoke.SCANNERS) | own | reach) - set(smoke.NIGHTLY_ONLY)
+        merged: set[str] = set()
+
+        def on_merged(targets: list[str]) -> set[str]:
+            merged.update(smoke.integration_failures(targets, root=cwd, run=_in_target(target)))
+            return merged
+
+        # an xpass is not the head's to excuse: the entry goes
+        return new_scanner_failures(changed, on_merged, only=tuple(sorted(only))) | {name for name in merged if name.startswith("xpass ")}
+
+    red = sorted((scanners or default_scanners)(files))
     if red:
         return [f"scanner red alone: {', '.join(red[:5])}"]
     # the unit tests of the crates the PR changes, less what the base fails: round 3 died on llrm-nib::test_pipeline::... and no PR was blamed
     def lib_failures(changed: list[str]) -> set[str]:
         packages, _ = smoke.workspace_graph(cwd)
         touched = smoke.touched_packages(changed, packages, cwd)
-        return smoke.dependants_lib_failures(touched, root=cwd, run=_in_target(target, "lib")) if touched else set()
+        return smoke.dependants_lib_failures(touched | SOURCE_SCANNING_PACKAGES, root=cwd, run=_in_target(target, "lib")) if touched else set()
 
     failed = (units or lib_failures)(files)
+    # a listed test that now passes is the PR's to unlist: the gate refuses the batch for it
+    xpass = sorted(name for name in failed if name.startswith("xpass "))
     failed = {name for name in failed if not name.startswith("xpass ")}
+    if xpass:
+        return [f"xfail entry whose test passes (remove it): {', '.join(xpass[:5])}"]
     if not failed:
         return []
     by_package: dict[str, set[str]] = {}
@@ -1516,6 +1543,9 @@ def head_failures(sha: str, compute=None, cache: Path = HEAD_FAILURES) -> set[st
     if compute is None:
         raise SystemExit(f"no failure set is cached for the head {sha[:9]}: check the head out, build its binaries, set PARITY_BIN to them and run `tools/parity_squash.py head-failures`")
     failed = compute()
+    # a head whose tests did not run says nothing about them: stored, it excused none of the head's real reds for good (277c2651b0, header_copy: batch 17)
+    if any(name.endswith("did-not-run") for name in failed):
+        return failed
     cache.mkdir(parents=True, exist_ok=True)
     file.write_text(json.dumps(sorted(failed)))
     return failed
@@ -1696,8 +1726,14 @@ def preload_tools(names: tuple[str, ...] = TOOL_MODULES) -> None:
 def main() -> int:
     """The landing commands run at the landing's build priority (`buildslot.landing`); the others (audit, unlogged) start no cargo."""
     preload_tools()
-    from buildslot import landing  # noqa: PLC0415
+    from buildslot import LANDING, landing  # noqa: PLC0415
 
+    if sys.argv[1:2] == ["alone"]:
+        # the precheck of the next batch runs beside this one's tests: through buildslot like any cargo, not at the landing's priority (the runner exports BUILDSLOT_BYPASS=1,
+        # and six of eight cargo processes at load 108 were alone-0..5 outside every slot)
+        os.environ.pop("BUILDSLOT_BYPASS", None)
+        os.environ.pop(LANDING, None)
+        return dispatch()
     with landing():
         return dispatch()
 
@@ -1732,7 +1768,7 @@ def dispatch() -> int:
             heads[number] = git("rev-parse", "FETCH_HEAD").strip()
         # stdout is the survivors and nothing else: the scanners print their summary line, and the runner reads this output as PR numbers
         with contextlib.redirect_stdout(sys.stderr):
-            kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", "3")), cap=float(os.environ.get("ALONE_CAP", "600")))
+            kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", ALONE_JOBS)), cap=float(os.environ.get("ALONE_CAP", "600")))
         for number, why in dropped.items():
             print(f"{number}: REFUSED: alone: {why[:300]}", file=sys.stderr)
         print(f"alone: {len(numbers)} PRs, {HITS[0]} cached, {len(numbers) - HITS[0]} checked, {len(dropped)} dropped", file=sys.stderr)

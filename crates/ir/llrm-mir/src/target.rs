@@ -270,6 +270,9 @@ pub struct OperationCosts {
     /// backward one.
     pub copy: i64,
     pub copy_cell: i64,
+    /// What a copy of a length known only at run time adds to `copy`: the
+    /// count in dwords and the odd bytes after it, a second `rep movs`.
+    pub copy_variable: i64,
     pub direction: i64,
     /// How many operations a completely unrolled loop may total before the work
     /// it saves is boosted (`peelsize::Limits`); 0: the target states none
@@ -385,6 +388,7 @@ impl Default for OperationCosts {
             fill_cell: 1,
             copy: 1,
             copy_cell: 1,
+            copy_variable: 0,
             direction: 1,
             unroll_budget: 0,
             pieces_set: 0,
