@@ -109,18 +109,18 @@ def test_buildslot_hands_cargo_the_test_cap_unless_the_caller_has_a_runner(tmp_p
     assert show({**base, "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER": "mine"}) == "mine"
 
 
-def test_only_four_builds_hold_a_slot_at_once(tmp_path):
-    """Four slots of unbounded builds ran the host out of memory; with CARGO_BUILD_JOBS=8 four slots fit 32 cores (user, 2026-10-23): a fifth command waits for a free slot."""
+def test_only_eight_builds_hold_a_slot_at_once(tmp_path):
+    """Slots, not CPU, were the bottleneck (load 2.6 of 32 cores, 224 GB free, ~20 sessions queued, 2026-10-26): eight slots by default, a ninth command waits."""
     import time
 
     script = str(Path(__file__).resolve().parent / "buildslot")
     log = tmp_path / "starts"
     env = {k: v for k, v in {**os.environ, "BUILDSLOT_DIR": str(tmp_path / "slots")}.items() if k != "BUILDSLOTS"}
-    procs = [subprocess.Popen([script, "sh", "-c", f"date +%s.%N >> {log}; sleep 2"], env=env) for _ in range(5)]
+    procs = [subprocess.Popen([script, "sh", "-c", f"date +%s.%N >> {log}; sleep 2"], env=env) for _ in range(9)]
     for p in procs:
         p.wait(timeout=60)
     starts = sorted(float(x) for x in log.read_text().split())
-    assert len(starts) == 5 and starts[4] - starts[0] >= 1.8 and starts[3] - starts[0] < 1.0, starts
+    assert len(starts) == 9 and starts[8] - starts[0] >= 1.8 and starts[7] - starts[0] < 1.0, starts
 
 
 def test_waiters_get_a_slot_in_arrival_order_and_a_priority_ticket_jumps_the_queue(tmp_path):
