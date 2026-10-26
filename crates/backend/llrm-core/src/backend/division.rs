@@ -287,7 +287,7 @@ fn positive_reciprocal<'a>(
     if divisor & (divisor - 1) == 0 {
         return Ok(Some(power_of_two(dividend, divisor, results, fresh, remainder)));
     }
-    if width != 4 || cpu.size {
+    if llrm_target::keeps_division(i64::from(width), cpu.size) {
         return Ok(None);
     }
     // The magic is in the accumulator and the dividend where the early-out
@@ -488,7 +488,10 @@ pub fn unsigned_reciprocal<'a>(
 ) -> Result<Option<Vec<ir::Semantics>>, String> {
     let cpu = targets::profile(cpu)?;
     let width = dividend.width;
-    if width != 4 || !(2 < divisor && divisor < 1 << 31) || (divisor & (divisor - 1)) == 0 || cpu.size {
+    if !(2 < divisor && divisor < 1 << 31)
+        || (divisor & (divisor - 1)) == 0
+        || llrm_target::keeps_division(i64::from(width), cpu.size)
+    {
         return Ok(None);
     }
     let (Some(multiply), Some(divide)) =

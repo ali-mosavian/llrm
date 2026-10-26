@@ -297,6 +297,7 @@ pub mod reassociate_optimize;
 pub mod reassociate_pairs;
 pub mod reassociate_rank;
 pub mod reassociate_tree;
+pub mod remidiom;
 pub mod rotate;
 pub mod runtimechecks;
 pub mod sccp;
