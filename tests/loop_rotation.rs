@@ -70,6 +70,10 @@ fn test_a_turn_that_saves_clocks_is_made_whatever_the_share_of_jumps() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
-    let counters: Vec<&str> = lines.windows(2).filter(|pair| pair[0].starts_with("inc ") || pair[0].starts_with("dec ")).map(|pair| pair[1]).collect();
+    let counters: Vec<&str> = lines
+        .windows(2)
+        .filter(|pair| pair[0].starts_with("inc ") || pair[0].starts_with("dec "))
+        .map(|pair| pair[1])
+        .collect();
     assert!(counters.iter().any(|next| next.starts_with("je ")), "the loop's test branches back: {counters:?}\n{text}");
 }
