@@ -11,13 +11,17 @@ long parity_branch(short *value)
 
 static short demo_value;
 
+/* Read through volatile so no build folds the kernel to a constant. */
+static volatile short input_low = -13;
+static volatile short input_high = 21;
+
 long bench_branch(void)
 {
     long first;
 
-    demo_value = -13;
+    demo_value = input_low;
     first = parity_branch(&demo_value);
-    demo_value = 21;
+    demo_value = input_high;
     return first * 1000L + parity_branch(&demo_value);
 }
 

@@ -37,6 +37,13 @@ extern int gfx_last_x, gfx_last_y;
 extern int gfx_view_left, gfx_view_top, gfx_view_right, gfx_view_bottom;
 extern int gfx_origin_x, gfx_origin_y;
 
+/* WINDOW (QB rt/grwindow.asm, grfpinit.asm): while a window is active the
+   statements' points are real numbers mapped onto the viewport, and the last
+   point is kept as one too. */
+extern int gfx_window_on;
+/* A window's radius scale: CIRCLE's radius in logical x units to pixels. */
+double gfx_window_scale(void);
+
 /* SCREEN: sets the mode, or returns to text with 0.  Not a mode this has is an
    Illegal function call. */
 void gfx_screen(int mode);

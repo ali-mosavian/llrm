@@ -22,6 +22,7 @@ const GfxMode *gfx_current;
 byte gfx_foreground = DEFAULT_FOREGROUND, gfx_background;
 static byte cga_background, cga_palette = 1;
 int gfx_x1, gfx_y1, gfx_x2, gfx_y2;
+int gfx_window_on;
 int gfx_view_left, gfx_view_top, gfx_view_right, gfx_view_bottom, gfx_origin_x, gfx_origin_y;
 /* The last referenced point: STEP is taken from it, and LINE -(x, y) starts at
  * it. */
@@ -38,8 +39,12 @@ void gfx_set_background(byte color)
 }
 
 /* The whole screen is the viewport, with the origin in its corner. */
+static int view_screen;
+static void window_recompute(void);
+
 static void view_reset(void)
 {
+    view_screen = 0;
     gfx_view_left = gfx_view_top = gfx_origin_x = gfx_origin_y = 0;
     gfx_view_right = (int)gfx_current->width - 1;
     gfx_view_bottom = (int)gfx_current->height - 1;
@@ -80,6 +85,7 @@ void gfx_screen(int mode)
             }
             gfx_current = &modes[at];
             active_page = visible_page = 0;
+            gfx_window_on = 0;
             view_reset();
             gfx_foreground = modes[at].colors < 16 ? modes[at].colors - 1 : DEFAULT_FOREGROUND;
             gfx_background = 0;
@@ -207,6 +213,83 @@ static void need_graphics(void)
         qb_error(BE_ILLFUN);
 }
 
+/* WINDOW (QB rt/grwindow.asm, grfpinit.asm): the logical rectangle, its ratios to the viewport's size in pixels (the
+   whole screen's for VIEW SCREEN), and the last point as reals, with the pixel it was mapped to. */
+static int window_screen;
+static double wxmin, wymin, wxmax, wymax, lxdif, lydif, pxdif, pydif;
+static float logical_x, logical_y;
+static int logical_at_x, logical_at_y;
+
+/* (v - offset) * scale rounded to a whole number as the FPU rounds it: the two operations in its wider format, then to
+   the nearest, a half to the even. A double would round the product to a half where the wider value lies just under
+   it, so the product is kept as a double and the error it lost. */
+static int scaled_round(double v, double offset, double scale)
+{
+    static const double split = 134217729.0;
+    double d, bb, derr, p, t, ah, al, bh, bl, lo, part;
+    long whole;
+
+    d = v - offset;
+    bb = d - v;
+    derr = (v - (d - bb)) + (-offset - bb);
+    p = d * scale;
+    t = split * d;
+    ah = t - (t - d);
+    al = d - ah;
+    t = split * scale;
+    bh = t - (t - scale);
+    bl = scale - bh;
+    lo = ((ah * bh - p) + ah * bl + al * bh) + al * bl + derr * scale;
+    whole = (long)p;
+    part = (p - whole) + lo;
+    if (part >= 0.5)
+        whole += part == 0.5 && !(whole & 1) ? 0 : 1;
+    else if (part <= -0.5)
+        whole -= part == -0.5 && !(whole & 1) ? 0 : 1;
+    return (int)whole;
+}
+
+static int map_x(float x)
+{
+    return scaled_round(x, wxmin, lxdif) + gfx_origin_x;
+}
+
+static int map_y(float y)
+{
+    if (window_screen)
+        return scaled_round(y, wymin, lydif) + gfx_origin_y;
+    return -scaled_round(y, wymax, lydif) + gfx_origin_y;
+}
+
+/* The logical point a pixel is. */
+static void logical_of_last(void)
+{
+    double x = (gfx_last_x - gfx_origin_x) * pxdif, y = (gfx_last_y - gfx_origin_y) * pydif;
+
+    logical_x = (float)(x + wxmin);
+    logical_y = (float)(window_screen ? y + wymin : -y + wymax);
+    logical_at_x = gfx_last_x;
+    logical_at_y = gfx_last_y;
+}
+
+/* The ratios after the window or the viewport changed; the last point keeps its pixel. */
+static void window_recompute(void)
+{
+    double vx = view_screen ? (double)gfx_current->width - 1 : (double)(gfx_view_right - gfx_view_left);
+    double vy = view_screen ? (double)gfx_current->height - 1 : (double)(gfx_view_bottom - gfx_view_top);
+
+    lxdif = vx / (wxmax - wxmin);
+    pxdif = 1.0 / lxdif;
+    lydif = vy / (wymax - wymin);
+    pydif = 1.0 / lydif;
+    logical_of_last();
+}
+
+double gfx_window_scale(void)
+{
+    return lxdif;
+}
+
 /* The first and second points of a statement, absolute (B$N..) or (B$S..) a
    step from the last point and from the first; each is the last point after. A
    step is rounded before it is added, as BC does. */
@@ -223,44 +306,89 @@ static void second_point(int x, int y)
     gfx_last_y = gfx_y2 = y;
 }
 
+/* A point while a window is active: the logical last point moves by a step or goes to the point, and is mapped. */
+static void window_point(int second, int step, float x, float y)
+{
+    need_graphics();
+    if (gfx_last_x != logical_at_x || gfx_last_y != logical_at_y)
+        logical_of_last();
+    if (step) {
+        logical_x = (float)((double)logical_x + x);
+        logical_y = (float)((double)logical_y + y);
+    } else {
+        logical_x = x;
+        logical_y = y;
+    }
+    if (second)
+        second_point(map_x(logical_x), map_y(logical_y));
+    else
+        first_point(map_x(logical_x), map_y(logical_y));
+    logical_at_x = gfx_last_x;
+    logical_at_y = gfx_last_y;
+}
+
 void B_N1I2(short x, short y)
 {
-    first_point(x + gfx_origin_x, y + gfx_origin_y);
+    if (gfx_window_on)
+        window_point(0, 0, x, y);
+    else
+        first_point(x + gfx_origin_x, y + gfx_origin_y);
 }
 
 void B_N1R4(float x, float y)
 {
-    first_point(rounded(x) + gfx_origin_x, rounded(y) + gfx_origin_y);
+    if (gfx_window_on)
+        window_point(0, 0, x, y);
+    else
+        first_point(rounded(x) + gfx_origin_x, rounded(y) + gfx_origin_y);
 }
 
 void B_N2I2(short x, short y)
 {
-    second_point(x + gfx_origin_x, y + gfx_origin_y);
+    if (gfx_window_on)
+        window_point(1, 0, x, y);
+    else
+        second_point(x + gfx_origin_x, y + gfx_origin_y);
 }
 
 void B_N2R4(float x, float y)
 {
-    second_point(rounded(x) + gfx_origin_x, rounded(y) + gfx_origin_y);
+    if (gfx_window_on)
+        window_point(1, 0, x, y);
+    else
+        second_point(rounded(x) + gfx_origin_x, rounded(y) + gfx_origin_y);
 }
 
 void B_S1I2(short x, short y)
 {
-    first_point(gfx_last_x + x, gfx_last_y + y);
+    if (gfx_window_on)
+        window_point(0, 1, x, y);
+    else
+        first_point(gfx_last_x + x, gfx_last_y + y);
 }
 
 void B_S1R4(float x, float y)
 {
-    first_point(gfx_last_x + rounded(x), gfx_last_y + rounded(y));
+    if (gfx_window_on)
+        window_point(0, 1, x, y);
+    else
+        first_point(gfx_last_x + rounded(x), gfx_last_y + rounded(y));
 }
 
 void B_S2I2(short x, short y)
 {
-    second_point(gfx_x1 + x, gfx_y1 + y);
+    if (gfx_window_on)
+        window_point(1, 1, x, y);
+    else
+        second_point(gfx_x1 + x, gfx_y1 + y);
 }
 
 void B_S2R4(float x, float y)
 {
-    second_point(gfx_x1 + rounded(x), gfx_y1 + rounded(y));
+    if (gfx_window_on)
+        window_point(1, 1, x, y);
+    else
+        second_point(gfx_x1 + rounded(x), gfx_y1 + rounded(y));
 }
 
 /* B$PSTC: PSET and PRESET at the first point. */
@@ -286,6 +414,8 @@ void B_PRST(void)
 int B_PNR4(float x, float y)
 {
     need_graphics();
+    if (gfx_window_on)
+        return gfx_pixel(map_x(x), map_y(y));
     return gfx_pixel(rounded(x) + gfx_origin_x, rounded(y) + gfx_origin_y);
 }
 
@@ -293,6 +423,8 @@ int B_PNR4(float x, float y)
 int B_PNI2(short x, short y)
 {
     need_graphics();
+    if (gfx_window_on)
+        return gfx_pixel(map_x(x), map_y(y));
     return gfx_pixel(x + gfx_origin_x, y + gfx_origin_y);
 }
 
@@ -303,6 +435,8 @@ void B_VEW0(void)
     view_reset();
     gfx_last_x = (int)gfx_current->width / 2;
     gfx_last_y = (int)gfx_current->height / 2;
+    if (gfx_window_on)
+        window_recompute();
 }
 
 /* B$VIEW: VIEW [SCREEN] (x1, y1)-(x2, y2), fill, border; -1 for a colour left out. The corners are put in order
@@ -325,6 +459,7 @@ void B_VIEW(short x1, short y1, short x2, short y2, short fill, short border, sh
     gfx_view_top = top;
     gfx_view_right = right;
     gfx_view_bottom = bottom;
+    view_screen = screen != 0;
     if (!screen) {
         gfx_origin_x = left;
         gfx_origin_y = top;
@@ -354,6 +489,32 @@ void B_VIEW(short x1, short y1, short x2, short y2, short fill, short border, sh
     }
     gfx_last_x = left + (right - left + 1) / 2;
     gfx_last_y = top + (bottom - top + 1) / 2;
+    if (gfx_window_on)
+        window_recompute();
+}
+
+/* B$WIN0: WINDOW with nothing after it: the window is off. */
+void B_WIN0(void)
+{
+    need_graphics();
+    gfx_window_on = 0;
+}
+
+/* B$WIND: WINDOW [SCREEN] (x1, y1)-(x2, y2). The corners are put in order and must differ. Unless SCREEN, y grows
+   upward. */
+void B_WIND(float x1, float y1, float x2, float y2, short screen)
+{
+    gfx_window_on = 0;
+    need_graphics();
+    wxmin = x1 < x2 ? x1 : x2;
+    wxmax = x1 < x2 ? x2 : x1;
+    wymin = y1 < y2 ? y1 : y2;
+    wymax = y1 < y2 ? y2 : y1;
+    if (x1 == x2 || y1 == y2)
+        qb_error(BE_ILLFUN);
+    window_screen = screen != 0;
+    gfx_window_on = 1;
+    window_recompute();
 }
 
 /* Whether `color` is one the palette takes: in a DAC mode red, green and blue,
@@ -429,6 +590,8 @@ void B_PALU(qb_data_ptr data, const AD *ad)
 #pragma aux B_S2I2 "B$S2I2"
 #pragma aux B_S2R4 "B$S2R4"
 #pragma aux B_VIEW "B$VIEW"
+#pragma aux B_WIND "B$WIND"
+#pragma aux B_WIN0 "B$WIN0"
 #pragma aux B_VEW0 "B$VEW0"
 #pragma aux B_PSTC "B$PSTC"
 #pragma aux B_PSET "B$PSET"

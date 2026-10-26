@@ -240,7 +240,7 @@ void B_CIRC(float radius, short color)
     gd_fill_select(&c.fill, c.color, OP_SET);
     if (radius < 0 || (!has_aspect && ratio <= 0))
         qb_error(BE_ILLFUN);
-    c.radius = (long)(radius + 0.5);
+    c.radius = gfx_window_on ? (long)(radius * gfx_window_scale() + 0.5) : (long)(radius + 0.5);
     c.points = (long)(c.radius * 0.7071067811865476 + 0.5);
     if (has_aspect) {
         c.scale_x = aspect_x;
