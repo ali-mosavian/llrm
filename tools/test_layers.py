@@ -32,16 +32,15 @@ LAYERS = [
         ],
     ),
     ("driver", ["llrm-driver", "llrm-cc", "llrm-bcdriver"]),
-    ("frontends", ["llrm-c", "llrm-nib", "llrm-qb", "llrm-qbruntime", "llrm-x86-bc", "llrm-x86-bcmachine"]),
+    ("frontends", ["llrm-c", "llrm-nib", "llrm-qb", "llrm-qbruntime", "llrm-bcobj"]),
     ("tools", ["llrm"]),
 ]
 RANK = {name: at for at, (_, names) in enumerate(LAYERS) for name in names}
 
 ALLOWED: set[tuple[str, str]] = {
     # BC objects and the QB contract point up into the backend (plan 3d: B1 to B5 remove them)
-    ("llrm-codegen", "llrm-x86-bcmachine"),
     ("llrm-codegen", "llrm-qbruntime"),
-    ("llrm-bcdriver", "llrm-x86-bc"),
+    ("llrm-bcdriver", "llrm-bcobj"),
     # target facts read from a concrete target: machine facts should be passed in (one machine description)
     ("llrm-codegen", "llrm-x86"),
     ("llrm-hir", "llrm-target"),

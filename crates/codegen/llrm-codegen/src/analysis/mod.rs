@@ -1,7 +1,5 @@
 //! The analyses.
 
-pub use llrm_x86_bcmachine::analysis::flags;
-
 pub mod dataflow;
 pub mod facts;
 pub mod frequency;

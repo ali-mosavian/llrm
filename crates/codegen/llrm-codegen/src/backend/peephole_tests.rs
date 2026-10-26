@@ -828,8 +828,8 @@ fn test_scaled_lea_does_not_require_another_shift() {
                 };
                 assert_eq!(names(&result), expected, "{amount} {following} {width}");
                 if following == "cmp" {
-                    let emitted =
-                        crate::frontends::bc::declen::decode(&code(result[0].what.as_ref().unwrap()), 0).unwrap().insn;
+                    let bytes = code(result[0].what.as_ref().unwrap());
+                    let emitted = iced_x86::Decoder::with_ip(16, &bytes, 0, iced_x86::DecoderOptions::NONE).decode();
                     assert_eq!(emitted.memory_index_scale(), 1 << amount);
                 }
             }
