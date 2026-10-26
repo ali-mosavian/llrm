@@ -1027,7 +1027,25 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
         print(f"alone: fmt.sh would change {', '.join(unformatted[:5])} (the squash formats it; not a refusal)", file=sys.stderr)
     # the scanners read the scratch tree: `integration_failures` defaults to ROOT, so every PR was judged on the tree the runner stands in
     # every scanner, not the always-on two: they read other crates' sources and docs, so a PR in one crate turns them red from outside it (#4871 added id-keyed maps in llrm-transforms; batch 18 died on llrm-mir's ratchet)
-    red = sorted((scanners or (lambda f: landing_scanner_failures(f, True, on_merged=lambda targets: smoke.integration_failures(targets, root=cwd, run=_in_target(target)))))(files))
+    def default_scanners(changed: list[str]) -> set[str]:
+        # the scanners, the PR's own test files, and the integration targets xfail.toml lists that the PR can reach: one it makes pass is an xpass the gate refuses (#4673 cost batches 19 and 20)
+        import xfail  # noqa: PLC0415
+
+        packages, _ = smoke.workspace_graph(cwd)
+        listed = {one.split()[1].split("::")[0] for one in xfail.load() if one.startswith("integration ")}
+        reach = set(smoke.integration_targets_for(changed, smoke.touched_packages(changed, packages, cwd), smoke.integration_map(cwd))) & listed
+        own = {Path(f).stem for f in changed if f.startswith("tests/") and f.endswith(".rs") and "/" not in f[len("tests/") :]}
+        only = (set(smoke.SCANNERS) | own | reach) - set(smoke.NIGHTLY_ONLY)
+        merged: set[str] = set()
+
+        def on_merged(targets: list[str]) -> set[str]:
+            merged.update(smoke.integration_failures(targets, root=cwd, run=_in_target(target)))
+            return merged
+
+        # an xpass is not the head's to excuse: the entry goes
+        return new_scanner_failures(changed, on_merged, only=tuple(sorted(only))) | {name for name in merged if name.startswith("xpass ")}
+
+    red = sorted((scanners or default_scanners)(files))
     if red:
         return [f"scanner red alone: {', '.join(red[:5])}"]
     # the unit tests of the crates the PR changes, less what the base fails: round 3 died on llrm-nib::test_pipeline::... and no PR was blamed
@@ -1037,7 +1055,11 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
         return smoke.dependants_lib_failures(touched | SOURCE_SCANNING_PACKAGES, root=cwd, run=_in_target(target, "lib")) if touched else set()
 
     failed = (units or lib_failures)(files)
+    # a listed test that now passes is the PR's to unlist: the gate refuses the batch for it
+    xpass = sorted(name for name in failed if name.startswith("xpass "))
     failed = {name for name in failed if not name.startswith("xpass ")}
+    if xpass:
+        return [f"xfail entry whose test passes (remove it): {', '.join(xpass[:5])}"]
     if not failed:
         return []
     by_package: dict[str, set[str]] = {}

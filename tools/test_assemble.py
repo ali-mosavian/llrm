@@ -120,6 +120,8 @@ def test_the_scanners_of_an_alone_check_run_in_the_scratch_tree_not_the_runners(
     seen = []
     smoke = ps.parity_smoke_module()
     monkeypatch.setattr(smoke, "integration_failures", lambda targets, root=None, **_: seen.append(root) or set())
+    monkeypatch.setattr(smoke, "workspace_graph", lambda root: ({}, {}))
+    monkeypatch.setattr(smoke, "integration_map", lambda root=None: {})
     assert ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), units=lambda _: set()) == []
     assert seen == [repo], seen
 
@@ -327,6 +329,8 @@ def test_an_alone_check_runs_every_scanner_not_the_two_always_on(tmp_path, monke
     seen = []
     smoke = ps.parity_smoke_module()
     monkeypatch.setattr(smoke, "integration_failures", lambda targets, root=None, **_: seen.extend(targets) or set())
+    monkeypatch.setattr(smoke, "workspace_graph", lambda root: ({}, {}))
+    monkeypatch.setattr(smoke, "integration_map", lambda root=None: {})
     ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), units=lambda _: set())
     assert {"selectiondag_registry", "no_todo", "docs_links"} <= set(seen), seen
 
@@ -341,3 +345,22 @@ def test_an_alone_check_runs_the_source_scanning_lib_tests_of_a_crate_upstream_o
     monkeypatch.setattr(smoke, "dependants_lib_failures", lambda packages, **_: seen.append(set(packages)) or set())
     ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda f: set())
     assert seen and "llrm-mir" in seen[0], seen
+
+
+def test_a_pr_that_makes_a_listed_unit_test_pass_is_refused_alone_and_so_is_a_listed_integration_target_it_reaches(tmp_path, monkeypatch):
+    """#4673 fixed a test without removing its xfail entry; alone dropped the `xpass` names and said clean, and batches 19 and 20 were refused for it."""
+    repo, head = alone_scratch(tmp_path)
+    smoke = ps.parity_smoke_module()
+    why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda f: set(), units=lambda _: {"xpass unit llrm-x::t_a"})
+    assert why and "xpass unit llrm-x::t_a" in why[0], why
+
+    seen = []
+    import xfail
+
+    monkeypatch.setattr(xfail, "load", lambda path=xfail.PATH: {"integration header_copy::t": {}})
+    monkeypatch.setattr(smoke, "workspace_graph", lambda root: ({}, {}))
+    monkeypatch.setattr(smoke, "touched_packages", lambda files, packages, root: {"llrm-core"})
+    monkeypatch.setattr(smoke, "integration_map", lambda root=None: {"header_copy": {"llrm-core"}})
+    monkeypatch.setattr(smoke, "integration_failures", lambda targets, root=None, **_: seen.extend(targets) or {"xpass integration header_copy::t"})
+    why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), units=lambda _: set())
+    assert "header_copy" in seen and why and "xpass integration header_copy::t" in why[0], (seen, why)
