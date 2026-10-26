@@ -6,8 +6,9 @@
 set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
 clang=${LLRM_PIN_CLANG:-$HOME/scratch/llvm-build/bin/clang}
-cc=${LLRM_CC:-$root/target/release/llrm-cc}
-export LLRM_LLC=${LLRM_LLC:-$root/target/release/llrm-llc}
+bin=$(python3 "$root/tools/llrmbin.py" bin)
+cc=${LLRM_CC:-$bin/llrm-cc}
+export LLRM_LLC=${LLRM_LLC:-$bin/llrm-llc}
 opt=${LLRM_CC_OPT:--O2}
 dir=${LLRM_CC_DIR:-$root/tests/llc}
 runner=${LLRM_CC_RUN:-}
