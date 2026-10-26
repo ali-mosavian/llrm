@@ -451,6 +451,7 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
         Opcode::Select => &[|c, inst| c.visit_select(inst)],
         Opcode::Br => &[|c, inst| c.visit_cond_br(inst)],
         Opcode::Call(_) => &[|c, inst| c.visit_call(inst)],
+        Opcode::Phi => &[|c, inst| c.visit_phi(inst)],
         _ => &[],
     }
 }
@@ -654,9 +655,9 @@ pub(crate) fn combine_with_sinking(
     sinking: bool,
     declared: &mut Declared,
 ) -> bool {
-    // InstCombine's `SQ.DC`: what the branches dominating an instruction say.
-    let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function)
-        .with_dom_conditions_of(context, globals, metadata, function);
+    // InstCombine's `SQ.DC`: what the branches dominating an instruction say,
+    // those visited so far.
+    let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function).with_lazy_dom_conditions();
     let env = Env { globals, callees, layout, analyses, sinking, back_edges: Default::default() };
     let mut c = Combiner { context, function, env: &env, worklist: InstWorklist::default(), declared };
     let mut changed = prepare(&env, c.context, c.function, &mut c.worklist);

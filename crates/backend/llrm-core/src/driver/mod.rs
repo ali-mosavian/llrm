@@ -102,7 +102,7 @@ impl Options {
         Self {
             machine,
             pipeline: Default::default(),
-            dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
+            dump: llrm_support::env_var("LLRM_MIR_STAGES").map(Into::into),
             stack_usage: false,
             stack_limit: None,
             selection,
@@ -496,6 +496,14 @@ pub fn optimized(
             .iter_mut()
             .try_for_each(|module| crate::backend::bytes::expanded(module, |operation| options.arch.expands(operation)))
     })?;
+    if options.isel == crate::backend::shadow::Selector::Old {
+        timed("mir bit reversals", || {
+            program
+                .modules
+                .iter_mut()
+                .try_for_each(|module| crate::backend::bytes::bits_reversed(module, |op| options.arch.expands(op)))
+        })?;
+    }
     timed("mir funnel shifts", || {
         program
             .modules

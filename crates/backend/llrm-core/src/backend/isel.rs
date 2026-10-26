@@ -1086,6 +1086,7 @@ pub fn selected_with<'c>(
         ats: IndexMap::default(),
         fused: BTreeSet::new(),
         covered: IndexMap::default(),
+        inverted: false,
         words: IndexMap::default(),
         joins: IndexMap::default(),
         consumed: BTreeSet::new(),
@@ -1115,6 +1116,7 @@ pub fn selected_with<'c>(
         current: None,
         symbol_registers: BTreeMap::new(),
         far_globals: IndexMap::default(),
+        far_symbols: IndexMap::default(),
         materialized: Vec::new(),
         edges: IndexMap::default(),
         chains: IndexMap::default(),
@@ -1685,6 +1687,8 @@ pub struct Selector<'m, 'c, 'p> {
     fused: BTreeSet<InstId>,
     /// Instructions a pattern rooted elsewhere selects: each one's root.
     covered: IndexMap<InstId, InstId>,
+    /// The next `compare` makes the opposite condition: a `not` of it.
+    inverted: bool,
     /// Dword loads read only as words: each word's offset and the value it is.
     words: IndexMap<InstId, Vec<(i64, ValueId)>>,
     /// A dword joined from two words: those words, low then high.
@@ -1744,6 +1748,10 @@ pub struct Selector<'m, 'c, 'p> {
     symbol_registers: BTreeMap<(Space, i64, i64), (Option<BlockId>, Held)>,
     /// Each far global's offset and selector, where a block made them.
     far_globals: IndexMap<(BlockId, GlobalId, i64), (Held, Held)>,
+    /// The symbol each `far_globals` base register holds, by its value: a
+    /// base read as a value is `mov r, sym+offset`, not an `add` held across
+    /// the block.
+    far_symbols: IndexMap<u32, (Space, i64)>,
     /// What `global` made for the instruction being selected, placed before it.
     materialized: Vec<Arc<Insn>>,
     /// The LIR blocks each MIR edge leaves from: a switch's cases leave
@@ -3799,6 +3807,15 @@ impl Selector<'_, '_, '_> {
                 };
                 semantics(Operation::Address, "lea", vec![Loc::Held(held)], vec![Loc::Address(address)])
             }
+            Pointer::Far { base: Some(base), offset, .. } if self.far_symbols.contains_key(&base.value) => {
+                let (space, index) = self.far_symbols[&base.value];
+                let symbol = Loc::Imm(Imm {
+                    value: 0,
+                    width: held.width,
+                    address: Some(Addr { index, ..Addr::new(space, offset) }),
+                });
+                semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![symbol])
+            }
             // A far pointer's offset.
             Pointer::Based { base, offset, .. } | Pointer::Far { base: Some(base), offset, .. } => {
                 let step = Loc::Imm(Imm { value: offset, width: held.width, address: None });
@@ -4035,6 +4052,7 @@ impl Selector<'_, '_, '_> {
                         self.materialized
                             .push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![from])));
                     }
+                    self.far_symbols.insert(base.value, (space, i64::from(global.0)));
                     if carry != 0 {
                         let Some(shift) = self.segments.huge_shift else {
                             return refuse("a huge pointer on a machine that states no selector stride");
@@ -7611,6 +7629,7 @@ impl Selector<'_, '_, '_> {
         at: i64,
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<Test, Unselected> {
+        let inverted = std::mem::take(&mut self.inverted);
         let instruction = self.function.instruction(inst);
         if instruction.opcode == Opcode::Cast(CastOp::Trunc) {
             let operand = instruction.operands[0];
@@ -7619,17 +7638,24 @@ impl Selector<'_, '_, '_> {
             let low = Loc::Held(Held { width: 1, ..held });
             let one = Loc::Imm(Imm { value: 1, width: 1, address: None });
             out.push(insn(at, semantics(Operation::Compare, "test", vec![], vec![low, one])));
-            return Ok(Test::One("jne"));
+            return Ok(Test::One(if inverted { "je" } else { "jne" }));
         }
         if let Opcode::FCmp(predicate) = instruction.opcode {
-            return self.float_compare(predicate, inst, at, out);
+            return self.float_compare(if inverted { predicate.inverse() } else { predicate }, inst, at, out);
         }
         let Opcode::ICmp(mut predicate) = instruction.opcode else { unreachable!("a comparison") };
+        if inverted {
+            predicate = predicate.inverse();
+        }
         let (mut a, mut b) = (instruction.operands[0], instruction.operands[1]);
         let ty = self.function.operand_type(&self.module.context, a).expect("a typed operand");
         if matches!(a, Operand::Constant(_)) {
             std::mem::swap(&mut a, &mut b);
             predicate = swapped(predicate);
+        }
+        // An i1 is a byte of 0 or 1 but true is -1 signed: the order reverses.
+        if self.types().int_bits(ty) == Some(1) {
+            predicate = unsigned_of_i1(predicate);
         }
         // A call's flags are its result compared with zero.
         if let Operand::Value(value) = a
@@ -8101,6 +8127,19 @@ fn condition_code(predicate: IntPredicate) -> &'static str {
         IntPredicate::Ule => "jbe",
         IntPredicate::Ugt => "ja",
         IntPredicate::Uge => "jae",
+    }
+}
+
+/// `predicate` on an i1's byte (0 or 1): a signed order is the unsigned order
+/// reversed, true being -1.
+fn unsigned_of_i1(predicate: IntPredicate) -> IntPredicate {
+    use IntPredicate::*;
+    match predicate {
+        Slt => Ugt,
+        Sle => Uge,
+        Sgt => Ult,
+        Sge => Ule,
+        other => other,
     }
 }
 

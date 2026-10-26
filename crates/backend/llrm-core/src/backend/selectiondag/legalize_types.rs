@@ -42,9 +42,8 @@
 //! `ReplaceValueWith`
 //! ([L636](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeTypes.cpp#L636)).
 
-use std::collections::HashMap;
-
 use llrm_mir::hash::HashSet;
+use llrm_support::hash::HashMap;
 
 use super::actions::TargetLowering;
 use super::dag::{BooleanContents, NodeData, Rauw, SDNodeFlags, SDValue, SelectionDAG};
@@ -96,9 +95,9 @@ impl<'a> TypeLegalizer<'a> {
             tli,
             ids: Vec::new(),
             worklist: Vec::new(),
-            replaced: HashMap::new(),
-            promoted: HashMap::new(),
-            expanded: HashMap::new(),
+            replaced: HashMap::default(),
+            promoted: HashMap::default(),
+            expanded: HashMap::default(),
             target: None,
             hooks: None,
         }
@@ -173,6 +172,7 @@ impl<'a> TypeLegalizer<'a> {
         }
         while let Some(n) = self.worklist.pop() {
             debug_assert_eq!(self.id(n), NodeId::Ready, "a node on the worklist is ready");
+            self.dag.cur_order = self.dag.node(SDValue { node: n, res: 0 }).order;
             if !self.ignores_results(n) && self.legalize_results(n)? {
                 changed = true;
             } else if self.legalize_operands(n)? {
@@ -843,6 +843,11 @@ impl<'a> TypeLegalizer<'a> {
                 (self.dag.get_node(ISD::Truncate, half, &[dword]), self.dag.get_node(ISD::Truncate, half, &[high]))
             }
             ISD::CtPop => self.expand_ctpop(value, half),
+            // `ExpandIntRes_BITREVERSE`: each half reversed, and swapped.
+            ISD::BitReverse => {
+                let (lo, hi) = self.expanded_integer(self.dag.operand(value, 0));
+                (self.dag.get_node(ISD::BitReverse, half, &[hi]), self.dag.get_node(ISD::BitReverse, half, &[lo]))
+            }
             op @ (ISD::CtLz | ISD::CtLzZeroPoison) => self.expand_ctlz(value, op, half),
             op @ (ISD::CtTz | ISD::CtTzZeroPoison) => self.expand_cttz(value, op, half),
             op @ (ISD::Add | ISD::Sub) => self.expand_add_sub(value, op, half)?,
@@ -1800,7 +1805,7 @@ impl<'a> TypeLegalizer<'a> {
     /// True if no reachable node has an illegal result or operand type
     /// (the pin's final check in `run`).
     pub fn all_legal(&self) -> bool {
-        let mut seen = HashSet::default();
+        let mut seen = HashSet::with_capacity_and_hasher(self.dag.nodes().len(), Default::default());
         let mut stack = vec![self.dag.get_root().node];
         while let Some(n) = stack.pop() {
             if !seen.insert(n) {
