@@ -2470,4 +2470,3 @@ fn shell_calls_b_sshl_with_the_command_or_an_empty_string() {
     let hir = compile(&module, "shell", Dialect::QuickBasic45, "qb45").unwrap();
     assert_eq!(hir.matches("\"callee\":\"B$SSHL\"").count(), 2, "{hir}");
 }
-
