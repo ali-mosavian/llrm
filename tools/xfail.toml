@@ -59,12 +59,6 @@ owner = "funcattrs-port"
 date = "2026-10-27"
 why = "red on parity, not bisected; family: other, not yet put in a family; a regression unless triage says stale (qb-reds-parity.md)"
 [[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_a_global_is_one_object_in_every_function"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
-[[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_a_masked_far_subscript_compiles"
 issue = 2848
 owner = "funcattrs-port"
