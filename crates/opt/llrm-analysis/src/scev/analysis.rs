@@ -268,11 +268,30 @@ impl ScevSession {
         function: &Function,
         mark: llrm_mir::module::Mark,
     ) {
+        self.forget_since_keeping(context, layout, globals, metadata, function, mark, false);
+    }
+
+    /// [`Self::forget_since`], where `keep_counts` the trip counts and the
+    /// expressions of values whose operands were replaced stay
+    /// (`forget_touched_keeping`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn forget_since_keeping(
+        &mut self,
+        context: &llrm_mir::context::Context,
+        layout: &DataLayout,
+        globals: &[llrm_mir::module::GlobalValue],
+        metadata: &[llrm_mir::module::MetadataNode],
+        function: &Function,
+        mark: llrm_mir::module::Mark,
+        keep_counts: bool,
+    ) {
         match function.touched_since(mark) {
             Some(touched)
                 if touched.cfg.is_empty() && touched.blocks_created.is_empty() && touched.blocks_erased.is_empty() =>
             {
-                self.ask_within(context, layout, globals, metadata, function, |se, cx| se.forget_touched(cx, &touched));
+                self.ask_within(context, layout, globals, metadata, function, |se, cx| {
+                    se.forget_touched_keeping(cx, &touched, keep_counts)
+                });
             }
             _ => self.forget_expressions(),
         }
