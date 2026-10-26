@@ -10,7 +10,7 @@ in [readme.md](readme.md).
 
 ```
  repo
- +-- crates/  support ir opt frontends bc backend target   (Rust workspace)
+ +-- crates/  support ir opt frontends bc backend driver target   (Rust workspace)
  +-- src/bin/ the command-line tools, one file each
  +-- runtime/ the per-language runtime sources and descriptions
  +-- tests/ bench/ examples/ tools/ toolchain/ editors/ docs/
@@ -37,7 +37,7 @@ in [readme.md](readme.md).
 | `target/llrm-x86-bcmachine` | x86 decode, blocks and runtime ABI facts for BC objects |
 | `target/llrm-x86-bc` | The BC lift: machine code of a BC object to MIR |
 | `backend/llrm-core` | The compile driver, instruction selection, machine phases (`flow.rs`), layout, `objbuild`, the HIR interpreter, ABIs |
-| `backend/llrm-driver` | The one place that names targets and binds each to its selector and rules |
+| `driver/llrm-driver` | The one place that names targets and binds each to its selector and rules |
 | `backend/llrm-iselgen` | Build-time generator of the instruction selector from `patterns.isel` |
 | `backend/llrm-peepgen` | Build-time generator of peephole automata from `.peep` rules |
 | `target/llrm-target` | The target-generic layer: what a target description is |
