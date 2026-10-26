@@ -869,3 +869,27 @@ fn a_proved_move_at_m16_is_inline_string_code() {
     let down = move_3840_at_m16(", !llrm.backward !0");
     assert!(down.inline.values().any(|bytes| bytes[..] == [0xFD, 0xF3, 0x66, 0xA5, 0xFC]), "{:?}", down.inline);
 }
+
+/// A byte argument was extended to the dword register (`mov edx, 12`, 6 bytes
+/// at m16) though the callee truncates it; the old selector writes `dl`
+/// (mandel.nib: 4 bytes a call).
+#[test]
+fn a_byte_argument_at_m16_goes_in_the_byte_register() {
+    use llrm_lir::registers::RegId;
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+declare cc 1005 void @g(i32, i8 zeroext)
+define void @f() {
+  call cc 1005 void @g(i32 204, i8 zeroext 12)
+  ret void
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let call = insns.iter().find(|i| i.call.is_some()).expect("a call");
+    let registers: Vec<RegId> = call.requires.iter().map(|(_, register)| *register).collect();
+    assert!(registers.contains(&RegId::DL) && !registers.contains(&RegId::EDX), "{registers:?}");
+}
