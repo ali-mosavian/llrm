@@ -160,3 +160,27 @@ issue = 4925
 owner = "w2"
 date = "2026-11-02"
 why = "sum_three.bas SUMTHREE -O2: main 56 instrs no spill, tip 74 with sub sp (no pin: BASIC); first bad 7ee16741c1"
+[[xfail]]
+id = "integration masked::test_a_masked_byte_widened_is_one_movzx_in_basic"
+issue = 4931
+owner = "unassigned"
+date = "2026-11-02"
+why = "main one movzx r32,r8; tip and bx,255 + movzx ebx,bx; first bad 26d6c9e9a3 (no pin: m16)"
+[[xfail]]
+id = "integration masked::test_a_masked_byte_widened_is_one_movzx_in_c"
+issue = 4931
+owner = "unassigned"
+date = "2026-11-02"
+why = "as masked basic"
+[[xfail]]
+id = "integration masked::test_a_masked_byte_widened_is_one_movzx_in_nib"
+issue = 4931
+owner = "unassigned"
+date = "2026-11-02"
+why = "as masked basic"
+[[xfail]]
+id = "integration flat_foreign::a_store_to_the_video_buffer_does_not_reload_a_variable"
+issue = 4932
+owner = "unassigned"
+date = "2026-11-02"
+why = "main forwards the stored 5 (1 instr fewer); tip and the pin reload g; first bad 26d6c9e9a3"
