@@ -5115,6 +5115,7 @@ fn test_bsf_gets_the_rep_prefix_only_where_the_pin_gives_it() {
         let got = result.blocks[0].insns[0].what.as_ref().unwrap().repeat;
         assert_eq!(got, expected, "{label}");
     }
+}
 
 /// PLASMA at m16: `mov [bp-14],di ; mov di,[bp-14]` -- a reload of what the
 /// register still held -- stood in each inner loop (a spilled one-instruction
