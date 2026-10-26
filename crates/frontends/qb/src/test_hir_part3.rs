@@ -949,7 +949,10 @@ fn test_a_counted_loop_reads_an_unannotated_byref_once() {
     let loop_ = poke_block(&text);
 
     assert!(!text.contains("load volatile"), "{text}");
-    assert!(!loop_.contains(" = load "), "{text}");
+    // `ch` is one plain load per trip, as the pin leaves it: a volatile far
+    // store may reach it (4f82e22e1, #3994). Not a wait on it: no volatile.
+    assert_eq!(loop_.matches(" = load ").count(), 1, "{text}");
+    assert!(loop_.contains("store volatile"), "the POKE still lands: {text}");
 }
 
 /// ENTPHI lost a dynamic-array address after its identity phi edge vanished.
@@ -3147,7 +3150,11 @@ fn a_poke_to_video_memory_leaves_the_loop_its_variables_and_segment() {
     let body = &fill[top..=at];
     let loads = body.iter().filter(|one| one.contains("ptr [") || one.contains("b$seg")).count();
     let pokes = body.iter().filter(|one| one.starts_with("mov byte ptr es:[")).count();
-    assert_eq!((loads, pokes), (0, 2), "{body:#?}");
+    // The pin's output: `opt -passes='loop-mssa(licm)'` and `default<O2>` hoist
+    // neither cell past a volatile far store (4f82e22e1, #3994 states that
+    // video memory holds no program data). Both POKEs still land every
+    // trip.
+    assert_eq!((loads, pokes), (2, 2), "{body:#?}");
 }
 
 /// The listing of `source` through `llrm-qb -O2 -march=i486 -S`, as shipped.
@@ -3161,6 +3168,27 @@ fn listing_of(
     let argv = [input.to_str().unwrap(), "-O2", "-march=i486", "-S", "-o", out.to_str().unwrap()].map(str::to_owned);
     assert_eq!(crate::cli::main(&argv), 0);
     std::fs::read_to_string(&out).expect("the listing")
+}
+
+/// `DEF SEG = VARSEG(x)` then `POKE VARPTR(x) + k, ...` writes into x: the
+/// pointer `ADDRESS(x) + k`, not a segment loaded from `b$seg` and an offset,
+/// which a loop's cells and `b$seg` itself could not be kept in registers
+/// across (far_poke_loop_variable.bas, +33 B and +266 clocks against main).
+#[test]
+fn a_poke_after_def_seg_varseg_is_a_store_into_the_variable() {
+    let text = listing_of(
+        "varseg_poke",
+        "DEFINT A-Z\r\nDIM SHARED x AS INTEGER, y AS LONG\r\nx = 0\r\nDEF SEG = VARSEG(x)\r\nFOR i = 0 TO 3000\r\nPOKE VARPTR(x), (i * 37) AND 255\r\nPOKE VARPTR(x) + 1, (i * 11) AND 127\r\ny = y + x\r\nNEXT i\r\nDEF SEG\r\nPRINT x; y\r\nEND\r\n",
+    );
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let lines = main.lines().map(str::trim).collect::<Vec<_>>();
+    let at = lines.iter().rposition(|one| one.starts_with('j') && !one.starts_with("jmp")).expect("the loop's branch");
+    let top = lines
+        .iter()
+        .position(|one| *one == format!("{}:", lines[at].split_whitespace().nth(1).unwrap()))
+        .expect("its label");
+    let body = &lines[top..=at];
+    assert!(!body.iter().any(|one| one.contains("b$seg")), "{body:#?}");
 }
 
 /// A POKE after a literal DEF SEG wrote memory no variable lives in, yet
