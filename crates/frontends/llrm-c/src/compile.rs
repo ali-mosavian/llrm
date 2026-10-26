@@ -2039,9 +2039,13 @@ mod tests {
         let path = Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs"));
         let machine =
             llrm_codegen::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
-        let built =
-            super::selected(&std::fs::read_to_string(path).unwrap(), fixture, None, &llrm_driver::m16_options_old(machine))
-                .unwrap();
+        let built = super::selected(
+            &std::fs::read_to_string(path).unwrap(),
+            fixture,
+            None,
+            &llrm_driver::m16_options_old(machine),
+        )
+        .unwrap();
         let asm = llrm_codegen::backend::masm::text(&built).unwrap();
         let from = asm.find(&format!("{function} proc")).expect("the function");
         asm[from..]
@@ -2634,7 +2638,8 @@ mod tests {
             std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/inlinecode.cgs")).unwrap();
         let machine =
             llrm_codegen::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "inlinecode", None, &llrm_driver::m16_options_old(machine)).expect("selects");
+        let built =
+            super::selected(&text, "inlinecode", None, &llrm_driver::m16_options_old(machine)).expect("selects");
         let asm = llrm_codegen::backend::masm::text(&built).unwrap();
         let body = |name: &str| -> Vec<String> {
             let from = asm.find(&format!("{name} proc")).expect("the procedure");

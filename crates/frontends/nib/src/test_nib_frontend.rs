@@ -249,7 +249,7 @@ pub(crate) fn level(name: &str) -> Options {
         // The tests pin the old selector's listings; the DAG selector is the
         // default.
         Options {
-            isel: llrm_core::backend::shadow::Selector::Old,
+            isel: llrm_codegen::backend::shadow::Selector::Old,
             ..bound.options(&flags, nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
         }
     }
