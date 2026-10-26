@@ -695,7 +695,7 @@ fn saved_of(procedure: &Procedure) -> Vec<RegId> {
 
 /// Where `procedure` saves them, and sets up its frame where `frame`, when that
 /// is not its entry (`shrinkwrap`).
-fn wrap_of(
+pub(crate) fn wrap_of(
     procedure: &Procedure,
     body: &crate::model::lir::LirBody,
     frame: bool,
