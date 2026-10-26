@@ -38,6 +38,8 @@ const UNSIGNED_INTEGER: u32 = 10;
 const UNSIGNED_LONG: u32 = 11;
 // PDS and VBDOS's CURRENCY: a 64-bit integer scaled by 10000.
 const CURRENCY: u32 = 12;
+// The x87's 80-bit format, in which BC scales a float into CURRENCY.
+const EXTENDED: u32 = 13;
 // BASCOM's declarative scanner reserves eight dimension records for an
 // array whose rank is not present in its declaration.  This is an ABI storage
 // rule, distinct from the language's 60-index parser ceiling.
@@ -1710,6 +1712,7 @@ impl Compiler {
             scalar(UNSIGNED_INTEGER, "unsigned integer", "integer", 2, Some(false), "none"),
             scalar(UNSIGNED_LONG, "unsigned long", "integer", 4, Some(false), "none"),
             scalar(CURRENCY, "currency", "integer", 8, Some(true), "none"),
+            scalar(EXTENDED, "extended", "float", 10, None, "extended80"),
         ];
         Self {
             dialect,
@@ -1772,7 +1775,7 @@ impl Compiler {
             error_handler_local: false,
             error_handlers: BTreeSet::new(),
             module_handled: false,
-            next_type: 13,
+            next_type: 14,
             common_repeats: BTreeSet::new(),
             common_arrays: BTreeSet::new(),
             next_value: 1,
@@ -9371,8 +9374,9 @@ impl Compiler {
             }
             if matches!(from, SINGLE | DOUBLE) {
                 let operand = self.convert(operand, from, DOUBLE)?;
-                let factor = scale(self)?;
-                let scaled = self.computed("fmul", DOUBLE, vec![operand, factor]);
+                let wide = self.computed("convert", EXTENDED, vec![operand]);
+                let factor = self.floating_literal("10000", EXTENDED)?;
+                let scaled = self.computed("fmul", EXTENDED, vec![wide, factor]);
                 return Ok(self.computed("convert", CURRENCY, vec![scaled]));
             }
         } else if from == CURRENCY && (integral(to) || matches!(to, SINGLE | DOUBLE)) {
@@ -9837,6 +9841,9 @@ impl Compiler {
                 .map(f64::to_le_bytes)
                 .map(Vec::from)
                 .map_err(|_| SemanticError { message: format!("invalid DOUBLE constant {text}") })?,
+            // 10000 as an x87 extended: biased exponent 0x400c, mantissa 0x9c40
+            // << 48.
+            EXTENDED if text == "10000" => vec![0, 0, 0, 0, 0, 0, 0x40, 0x9c, 0x0c, 0x40],
             _ => return self.fail("internal error: a floating literal has a non-floating type"),
         };
         // BC pools identical floating constants across a whole module. Apart
