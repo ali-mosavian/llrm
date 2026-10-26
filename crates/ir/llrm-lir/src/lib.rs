@@ -514,6 +514,9 @@ pub struct Semantics {
     /// A table jump (`indirect`, its one source the table's cell): the block
     /// each index of the table goes to. Empty for any other instruction.
     pub table: Vec<i64>,
+    /// A `rep` prefix on an instruction that is not a string operation
+    /// (`IP_HAS_REPEAT`): `bsf` as `tzcnt` on a processor that has it.
+    pub repeat: bool,
 }
 
 impl Semantics {
@@ -536,6 +539,7 @@ impl Semantics {
             && self.target == other.target
             && self.indirect == other.indirect
             && self.table == other.table
+            && self.repeat == other.repeat
             && same(&self.dests, &other.dests)
             && same(&self.sources, &other.sources)
     }
@@ -564,6 +568,7 @@ impl Semantics {
             target: None,
             indirect: false,
             table: Vec::new(),
+            repeat: false,
         }
     }
 }
@@ -580,6 +585,7 @@ pub static RESTORE_IDIOM: LazyLock<Semantics> = LazyLock::new(|| Semantics {
     target: None,
     indirect: false,
     table: Vec::new(),
+    repeat: false,
 });
 
 /// Python `TABLE_DATA`.
@@ -675,6 +681,7 @@ pub fn restoring(
         target: None,
         indirect: false,
         table: Vec::new(),
+        repeat: false,
     }
 }
 

@@ -330,6 +330,7 @@ pub mod select {
 pub mod bodyfacts;
 pub mod regclass;
 pub mod registerinfo;
+pub mod repbsf;
 pub mod rewriter;
 pub mod sharedstores;
 pub mod spillplacement;
