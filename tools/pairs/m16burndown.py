@@ -183,6 +183,14 @@ def main() -> None:
             geo = f"{math.exp(sum(map(math.log, ratios)) / len(ratios)):.2f} ({len(ratios)})" if ratios else "-"
             out.append(f"| {key} | {len(v)} | {sum(d for d, _ in v)} | {geo} |")
         out.append("")
+    languages: dict[str, list[int]] = {}
+    for n in both:
+        languages.setdefault(LANGUAGES.get(Path(n).suffix, "other"), []).append(n)
+    out += ["## per language", "", "| language | compared | main B | tip B | delta | grew | bytes left in growers |", "|---|--:|--:|--:|--:|--:|--:|"]
+    for language, names in sorted(languages.items()):
+        grown = [n for n in names if new[n] > base[n]]
+        out.append(f"| {language} | {len(names)} | {sum(base[n] for n in names)} | {sum(new[n] for n in names)} | {sum(new[n] - base[n] for n in names):+} | {len(grown)} | {sum(new[n] - base[n] for n in grown)} |")
+    out.append("")
     out += ["## growers", "", "| program | main | tip | delta | clocks tip/main | cause | owner |", "|---|--:|--:|--:|--:|---|---|"]
     out += [f"| {n} | {a} | {b} | {d:+} | {c} | {cause} | {owner} |" for n, a, b, d, c, cause, owner in rows]
     args.out.write_text("\n".join(out) + "\n")
