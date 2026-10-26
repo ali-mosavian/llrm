@@ -103,6 +103,17 @@ pub fn _static_frame(
     through: Option<RegId>,
 ) -> lir::LirBody {
     let regs = body.regs();
+    // The data segment register holds the data group unless the body writes
+    // it: only then does a cell need the stack segment to reach its frame.
+    let data_written = body
+        .insns()
+        .iter()
+        .any(
+            |one| one.what.as_ref().is_some_and(|what| {
+                what.dests.iter().any(|place| matches!(place, Loc::Reg(reg) if regs.is_data_segment(reg.register)))
+            }),
+        );
+    let through = through.filter(|_| data_written);
     let moved = |addr: &Addr| -> Addr {
         let own = RegId::from(addr.segment);
         let segment = if own == RegId::None || regs.is_stack_segment(own) {
