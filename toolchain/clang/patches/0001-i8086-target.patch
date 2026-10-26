@@ -1,3 +1,29 @@
+diff --git a/clang/lib/AST/ASTContext.cpp b/clang/lib/AST/ASTContext.cpp
+index e74423ca8c8a..56a500cedf0e 100644
+--- a/clang/lib/AST/ASTContext.cpp
++++ b/clang/lib/AST/ASTContext.cpp
+@@ -2477,11 +2477,19 @@ TypeInfo ASTContext::getTypeInfoImpl(const Type *T) const {
+     Width = Target->getPointerWidth(AS);
+     Align = Target->getPointerAlign(AS);
+     break;
+-  case Type::Pointer:
+-    AS = cast<PointerType>(T)->getPointeeType().getAddressSpace();
++  case Type::Pointer: {
++    QualType Pointee = cast<PointerType>(T)->getPointeeType();
++    AS = Pointee.getAddressSpace();
++    // i8086 medium model: code lives in the program address space (the
++    // layout's P1), a far pointer.
++    if (Pointee->isFunctionType() && AS == LangAS::Default &&
++        Target->getTriple().getEnvironment() == llvm::Triple::CODE16 &&
++        Target->getTriple().getArch() == llvm::Triple::x86)
++      AS = getLangASFromTargetAS(1);
+     Width = Target->getPointerWidth(AS);
+     Align = Target->getPointerAlign(AS);
+     break;
++  }
+   case Type::MemberPointer: {
+     const auto *MPT = cast<MemberPointerType>(T);
+     CXXABI::MemberPointerInfo MPI = ABI->getMemberPointerInfo(MPT);
 diff --git a/clang/lib/Basic/CMakeLists.txt b/clang/lib/Basic/CMakeLists.txt
 index 6329c3fa8b34..a4df1e1c14a4 100644
 --- a/clang/lib/Basic/CMakeLists.txt
@@ -61,10 +87,10 @@ index 000000000000..02366aff25f2
 +}
 diff --git a/clang/lib/Basic/Targets/I8086.h b/clang/lib/Basic/Targets/I8086.h
 new file mode 100644
-index 000000000000..506dc4b17b65
+index 000000000000..ab6d3745e880
 --- /dev/null
 +++ b/clang/lib/Basic/Targets/I8086.h
-@@ -0,0 +1,97 @@
+@@ -0,0 +1,100 @@
 +//===--- I8086.h - Declare I8086 target feature support ---------*- C++ -*-===//
 +//
 +// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -114,7 +140,7 @@ index 000000000000..506dc4b17b65
 +    PtrDiffType = SignedInt;
 +    SigAtomicType = SignedInt;
 +    MaxAtomicPromoteWidth = MaxAtomicInlineWidth = 0;
-+    resetDataLayout("e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-"
++    resetDataLayout("e-P1-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-"
 +                    "p4:32:16:16:16-i32:16-i64:16-n8:16:32");
 +  }
 +
@@ -137,6 +163,9 @@ index 000000000000..506dc4b17b65
 +    }
 +  }
 +  uint64_t getPointerAlignV(LangAS AddrSpace) const override { return 16; }
++
++  // The driver names an x86 CPU for this triple; llrm-llc takes the real one.
++  bool setCPU(StringRef Name) override { return true; }
 +
 +  bool allowsLargerPreferedTypeAlignment() const override { return false; }
 +
@@ -162,6 +191,21 @@ index 000000000000..506dc4b17b65
 +} // namespace targets
 +} // namespace clang
 +#endif // LLVM_CLANG_LIB_BASIC_TARGETS_I8086_H
+diff --git a/clang/lib/CodeGen/BackendUtil.cpp b/clang/lib/CodeGen/BackendUtil.cpp
+index 5a01779613c8..a76dc56f2a4f 100644
+--- a/clang/lib/CodeGen/BackendUtil.cpp
++++ b/clang/lib/CodeGen/BackendUtil.cpp
+@@ -580,6 +580,10 @@ void EmitAssemblyHelper::CreateTargetMachine(bool MustCreateTM) {
+   // Create the TargetMachine for generating code.
+   std::string Error;
+   const llvm::Triple &Triple = TheModule->getTargetTriple();
++  // i8086 has no machine code from clang: llrm takes the IR, with its own layout.
++  if (!MustCreateTM && Triple.getArch() == llvm::Triple::x86 &&
++      Triple.getEnvironment() == llvm::Triple::CODE16)
++    return;
+   const llvm::Target *TheTarget = TargetRegistry::lookupTarget(Triple, Error);
+   if (!TheTarget) {
+     if (MustCreateTM)
 diff --git a/clang/lib/CodeGen/CMakeLists.txt b/clang/lib/CodeGen/CMakeLists.txt
 index d3986ddecfe1..a854a22f36bc 100644
 --- a/clang/lib/CodeGen/CMakeLists.txt
