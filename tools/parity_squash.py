@@ -1730,7 +1730,9 @@ def dispatch() -> int:
         for number in numbers:
             git("fetch", "-q", "origin", f"refs/pull/{number}/head")
             heads[number] = git("rev-parse", "FETCH_HEAD").strip()
-        kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", "3")), cap=float(os.environ.get("ALONE_CAP", "600")))
+        # stdout is the survivors and nothing else: the scanners print their summary line, and the runner reads this output as PR numbers
+        with contextlib.redirect_stdout(sys.stderr):
+            kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", "3")), cap=float(os.environ.get("ALONE_CAP", "600")))
         for number, why in dropped.items():
             print(f"{number}: REFUSED: alone: {why[:300]}", file=sys.stderr)
         print(f"alone: {len(numbers)} PRs, {HITS[0]} cached, {len(numbers) - HITS[0]} checked, {len(dropped)} dropped", file=sys.stderr)
