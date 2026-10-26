@@ -161,3 +161,23 @@ fn a_program_runs_in_each_model() {
         );
     }
 }
+
+/// A static huge object past 64K stopped llrm-llc with a Rust panic (`'H' format requires 0 <= number <=
+/// 65535`) from the OMF writer; the segment cannot hold it, and the error says so.
+#[test]
+fn a_static_object_past_a_segment_is_refused_by_name() {
+    if std::env::var_os("LLRM_CLANG_M16").is_none() {
+        eprintln!("skipped: LLRM_CLANG_M16 names no i8086 clang");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let built = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_16-dos")
+        .env("LLRM_LLC", root.join("target/release/llrm-llc"))
+        .args(["-w", "-O2", "-c", "-o", "/dev/null"])
+        .arg(root.join("tests/cc/models/bigstatic.c"))
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&built.stderr);
+    assert!(!built.status.success() && !said.contains("panicked") && said.contains("65535"), "{said}");
+}
