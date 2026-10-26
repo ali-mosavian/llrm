@@ -17,6 +17,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [stable-loads](stable-loads.md) | D-I: stable-load rematerialization off by default; AM-DI rows, the argument rule, the exit |
 | [regclass-on-body](regclass-on-body.md) | register classes carried on the body, as the pin's MRI: the rescans, the creators, the steps |
 | [x86-64-dag-plan](x86-64-dag-plan.md) | The DAG path at m64, LEA first: D64-0..4 and the D64-1 design (2026-10-24) |
+| [clocks-sweep](clocks-sweep.md) | Clocks of every runnable program at m16 -Os, main vs parity: the slower list, method, DOSBox check (2026-10-26) |
 | [qb-runtime-contract-plan](qb-runtime-contract-plan.md) | The QB runtime's contract in the DAG path: five dated PRs (2026-10-24) |
 | [bench-table-a33fdfff7](bench-table-a33fdfff7.md) | vsgcc bench table at tip a33fdfff7: old and dag selectors against min(gcc, clang) |
 | [flip-packet](flip-packet.md) | The default flip to `--isel=dag`: the five conditions, status and evidence per condition |
@@ -50,6 +51,8 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [local-reassign](local-reassign.md) | `canReassign` in the greedy allocator: the QCport -Os modules that change, vs parity and main |
 | [qcport-vs-main](qcport-vs-main.md) | QCport -Os and -O2, parity against main, per module, with the owner of each module above main |
 | [flip-ambt-table](flip-ambt-table.md) | The 22 AM-BT rows by dag/old and dag/pin at m32 -O2: verdict, cause and owner per row (2026-10-25) |
+| [flip-ambt-rows-8-14](flip-ambt-rows-8-14.md) | Rows 8-14 re-run on tip c76f9a6a5 with the pin's i486 triple: old, dag and pin llc clocks, instructions and code bytes (2026-10-26) |
+| [bsf-bsr-cost-row](bsf-bsr-cost-row.md) | BSF/BSR cost row and the pin's `rep` prefix rule on BSF (2026-10-26) |
 | [compile-ledger-w1](compile-ledger-w1.md) | Plan for the regalloc-glue and scalar buckets of the compile ledger: ours vs the pin per pass, callees, levers and dates |
 | [unroll-o1-rows](unroll-o1-rows.md) | x_life and x_isqrt against main: the -O1 unroll mechanism and the select diamond, both the pin's |
 | [above-main-rows](above-main-rows.md) | Rows above main |
@@ -127,6 +130,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [selectiondag-far-builder](selectiondag-far-builder.md) | Far and huge pointers in the DAG builder (sdag-a) |
 | [old-selector-retirement](old-selector-retirement.md) | What the old selector leaves to retire after the DAG flip, surveyed by reading |
 | [selectiondag-default-readiness](selectiondag-default-readiness.md) | What must be true to make `--isel=dag` the default (sdag-a) |
+| [landing-batch-time](landing-batch-time.md) | Where a landing batch's wall clock goes: stages, the long pole, changes that keep the gate (2026-10-25) |
 | [d64-4-s3-inventory](d64-4-s3-inventory.md) | D64-4 S3 float programs for tests/llc and the pin asm each must match at m64 (sdag-a) |
 | [selectiondag-tail-calls](selectiondag-tail-calls.md) | Tail calls in the DAG path: pin functions, steps, dates (sdag-a) |
 | [selectiondag-huge-memmove](selectiondag-huge-memmove.md) | memmove of huge pointers: the pin's behaviour, options, decision date 10-30 (sdag-a) |

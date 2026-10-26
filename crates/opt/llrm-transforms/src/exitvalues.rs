@@ -67,6 +67,8 @@ struct RewritePhi {
     point: InstId,
     /// `HighCost`.
     high_cost: bool,
+    /// Under `size`: the expansion costs more code than the loop it replaces.
+    larger_than_loop: bool,
 }
 
 /// `function`'s loops' exit values rewritten (`IndVarSimplify::run`'s call of
@@ -80,7 +82,7 @@ pub fn rewritten(
     outer: &Outer,
 ) -> bool {
     let mut session = ScevSession::within(context, &outer.globals, &outer.metadata, function);
-    rewritten_in(&mut session, context, layout, function, declared, outer)
+    rewritten_in(&mut session, context, layout, function, declared, outer, false)
 }
 
 /// [`rewritten`] over `session`, whose expressions are valid for `function`.
@@ -91,6 +93,7 @@ pub fn rewritten_in(
     function: &mut Function,
     declared: &mut Declared,
     outer: &Outer,
+    size: bool,
 ) -> bool {
     let headers: Vec<BlockId> = {
         let (_, env) = session.split(layout, &outer.globals, &outer.metadata);
@@ -115,9 +118,18 @@ pub fn rewritten_in(
         if !simple {
             continue;
         }
-        changed |=
-            rewrite_loop_exit_values(context, layout, function, declared, outer, session, &mut rewriter, &tti, header)
-                > 0;
+        changed |= rewrite_loop_exit_values(
+            context,
+            layout,
+            function,
+            declared,
+            outer,
+            session,
+            &mut rewriter,
+            &tti,
+            size,
+            header,
+        ) > 0;
     }
     changed
 }
@@ -135,6 +147,7 @@ fn rewrite_loop_exit_values(
     session: &mut ScevSession,
     rewriter: &mut Expander,
     tti: &dyn ExpansionTti,
+    size: bool,
     header: BlockId,
 ) -> usize {
     let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
@@ -216,6 +229,22 @@ fn rewrite_loop_exit_values(
                         tti,
                         inst,
                     );
+                    // DEVIATE 15: under `size` a loop that can be deleted is
+                    // not rewritten aggressively when its closed form is more
+                    // code than the loop: the expansion's code-size cost
+                    // against the loop's instructions (QCport m16 -Os, a sum
+                    // widened to i64: 35 B as a loop, 107 B as a formula).
+                    let larger_than_loop = size
+                        && high_cost
+                        && rewriter.is_high_cost_expansion(
+                            &cx,
+                            se,
+                            &[exit_value],
+                            header,
+                            loop_size(function, &found),
+                            &MachineCosts { tti: outer.target().tti(), minimum_size: true },
+                            inst,
+                        );
                     // Note that we must not perform expansions until after we
                     // query *all* the costs, because if we perform temporary
                     // expansion inbetween, one that we might not intend to
@@ -229,7 +258,14 @@ fn rewrite_loop_exit_values(
                     } else {
                         inst
                     };
-                    rewrite_phi_set.push(RewritePhi { phi, index, expansion: exit_value, point, high_cost });
+                    rewrite_phi_set.push(RewritePhi {
+                        phi,
+                        index,
+                        expansion: exit_value,
+                        point,
+                        high_cost,
+                        larger_than_loop,
+                    });
                 }
             }
         }
@@ -246,7 +282,7 @@ fn rewrite_loop_exit_values(
     for rewrite in &rewrite_phi_set {
         // Only do the rewrite when the ExitValue can be expanded cheaply. If
         // LoopCanBeDel is true, rewrite exit value aggressively.
-        if !can_be_deleted && rewrite.high_cost {
+        if (!can_be_deleted && rewrite.high_cost) || rewrite.larger_than_loop {
             continue;
         }
         rewriter.set_insert_point(rewrite.point);
@@ -279,6 +315,22 @@ fn rewrite_loop_exit_values(
     // that the rewriter doesn't trip over it later.
     rewriter.clear_insert_point();
     replaced
+}
+
+/// The instructions of `l` that are code: not a phi or a terminator, which are
+/// registers and the branch the loop keeps.
+fn loop_size(
+    function: &Function,
+    l: &Loop,
+) -> u32 {
+    l.get_blocks()
+        .iter()
+        .flat_map(|&block| function.iter_block(block))
+        .filter(|&inst| {
+            let opcode = &function.instruction(inst).opcode;
+            *opcode != Opcode::Phi && !opcode.is_terminator()
+        })
+        .count() as u32
 }
 
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUtils.cpp#L1770

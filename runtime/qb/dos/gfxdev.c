@@ -25,6 +25,9 @@ enum {
     FUNCTION_SHIFT = 3,
     PLANES = 4,
     MODE_320 = 0x0D,
+    MODE_640_200 = 0x0E,
+    MODE_640_350 = 0x10,
+    SET_PAGE = 0x0500,
     MODE_LINEAR = 0x13,
     SET_COLOR_SELECT = 0x0B00,
     MODE_CGA4 = 4,
@@ -44,6 +47,7 @@ enum {
 typedef volatile u8 QB_FAR Video;
 static Video *screen = (Video *)QB_VIDEO_MEMORY(0xA000);
 static unsigned pitch = 80; /* bytes of a row of one plane */
+static unsigned page_count = 1, page_paragraphs; /* the pages the mode holds, and the paragraphs of one */
 
 static void controller(unsigned index, unsigned value)
 {
@@ -87,6 +91,9 @@ int gd_set_mode(unsigned mode)
           : kind == KIND_PACKED2 ? &packed2_ops
                                  : &planar_ops;
     pitch = mode == MODE_320 ? 40 : mode == MODE_LINEAR ? 320 : 80;
+    /* the BIOS's pages of the EGA modes: 0Dh holds 8 of 2000h bytes, 0Eh 4 of 4000h, 10h 2 of 8000h */
+    page_count = mode == MODE_320 ? 8 : mode == MODE_640_200 ? 4 : mode == MODE_640_350 ? 2 : 1;
+    page_paragraphs = mode == MODE_320 ? 0x200 : mode == MODE_640_200 ? 0x400 : 0x800;
     if (mode == MODE_CGA4 || mode == MODE_CGA2)
         screen = (Video *)QB_VIDEO_MEMORY(0xB800);
     else
@@ -96,6 +103,18 @@ int gd_set_mode(unsigned mode)
 
     if (mode > LAST_TEXT_MODE && mode != MODE_LINEAR && mode != MODE_CGA4 && mode != MODE_CGA2)
         controller(GC_MODE, WRITE_MODE_2);
+    return 1;
+}
+
+int gd_set_pages(unsigned active, unsigned visible)
+{
+    Regs r;
+
+    if (active >= page_count || visible >= page_count)
+        return 0;
+    screen = (Video *)QB_VIDEO_MEMORY(0xA000 + active * page_paragraphs);
+    r.rax = SET_PAGE | visible;
+    dev_int10(&r);
     return 1;
 }
 
