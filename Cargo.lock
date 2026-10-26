@@ -297,6 +297,7 @@ dependencies = [
 name = "llrm-cc"
 version = "0.1.0"
 dependencies = [
+ "llrm-mir",
  "serde",
  "toml",
 ]

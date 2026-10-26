@@ -168,6 +168,16 @@ def test_a_batch_scanner_refusal_can_name_the_markdown_each_pr_adds(tmp_path):
     page = branch(repo, "page", "new.md", "x\n")
     other = branch(repo, "other", "src.rs", "y\n")
     assert ps.batch_blame({"5008": page, "5007": other}, "main", repo) == ["  #5008: A new.md"]
+def test_a_head_failure_is_named_every_cycle_and_refused_once_it_is_two_hours_old(tmp_path, capsys):
+    """docs_in_sync was red on the parity tip for hours behind `1 red`: the head's reds excused every PR without a name or an owner."""
+    seen = tmp_path / "seen.json"
+    red = "integration docs_in_sync::test_no_generated_page_is_stale"
+    assert ps.excused_head_failures({red}, seen, 1000.0) == set()
+    assert f"excused head failure: {red} (red on the head for 0.0 h" in capsys.readouterr().out
+    assert ps.excused_head_failures({red}, seen, 1000.0 + 3600) == set()
+    assert ps.excused_head_failures({red}, seen, 1000.0 + 3 * 3600) == {red}
+    assert ps.excused_head_failures(set(), seen, 1000.0 + 4 * 3600) == set()
+    assert ps.excused_head_failures({red}, seen, 1000.0 + 5 * 3600) == set(), "a name that went green is forgotten"
 
 
 def test_two_prs_adding_a_test_of_one_name_do_not_share_a_batch(tmp_path):

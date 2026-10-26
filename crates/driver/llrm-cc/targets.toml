@@ -8,7 +8,7 @@
 [x86_64-linux]
 triple = "x86_64-unknown-linux-gnu"
 datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
-clang = ["-target", "x86_64-unknown-linux-gnu"]
+clang = ["-ffp-contract=off", "-target", "x86_64-unknown-linux-gnu"]
 llc = []
 object = "elf"
 link = ["cc", "{objects}", "{flags}", "-o", "{output}"]
@@ -20,7 +20,7 @@ link = ["cc", "{objects}", "{flags}", "-o", "{output}"]
 [x86_32-dos]
 triple = "i486-unknown-linux-gnu"
 datalayout = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"
-clang = ["-target", "i486-unknown-linux-gnu", "-ffreestanding", "-fno-pic", "-fno-stack-protector", "-fno-asynchronous-unwind-tables",
+clang = ["-ffp-contract=off", "-target", "i486-unknown-linux-gnu", "-ffreestanding", "-fno-pic", "-fno-stack-protector", "-fno-asynchronous-unwind-tables",
   "-U__linux__", "-U__linux", "-U__gnu_linux__", "-Ulinux", "-D__DOS__=1"]
 llc = ["-fobject-format=omf", "-mabi=sysv"]
 object = "omf"
@@ -32,7 +32,7 @@ run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m32"]
 [arm64-linux]
 triple = "aarch64-unknown-linux-gnu"
 datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
-clang = ["-target", "aarch64-unknown-linux-gnu", "-ffreestanding"]
+clang = ["-ffp-contract=off", "-target", "aarch64-unknown-linux-gnu", "-ffreestanding"]
 llc = []
 llc_program = "llrm-arm64-llc"
 llc_level = false
@@ -45,13 +45,77 @@ run = ["qemu-aarch64"]
 # Needs the patched clang: tools/build-clang-m16.sh, then LLRM_CLANG_M16=<its path>.
 [x86_16-dos]
 triple = "i386-unknown-unknown-code16"
-datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2"
+datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
-clang = [
+clang = ["-ffp-contract=off", 
   "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-fno-pic",
-  "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-include", "{root}/toolchain/clang/borland.h",
+  "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-U__STDC__", "-Wno-builtin-macro-redefined", "-std=gnu89", "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h",
 ]
 llc = ["-mabi=cdecl"]
 object = "omf"
 link = ["python3", "-I", "{root}/tools/dosbatch/link_objects.py", "x86-m16", "{output}", "{objects}"]
 run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m16"]
+
+# The same compiler against Borland C++ 3.1's headers and library, as its programs are written: LLRM_BORLAND_INC is the
+# lower-case mirror tools/lowercase-includes.sh makes of its INCLUDE, LLRM_BORLAND_LIB its LIB.
+[x86_16-bcc]
+triple = "i386-unknown-unknown-code16"
+datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3"
+clang_env = "LLRM_CLANG_M16"
+clang = ["-ffp-contract=off",
+  "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-fno-pic",
+  "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-U__STDC__", "-Wno-builtin-macro-redefined", "-std=gnu99", "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h",
+  "-nostdinc", "-isystem", "{env:LLRM_BORLAND_INC}", "-include", "{root}/toolchain/clang/floatm.h",
+]
+llc = ["-mabi=cdecl"]
+object = "omf"
+link = ["python3", "-I", "{root}/tools/bcc_link.py", "{env:LLRM_BORLAND_LIB}", "{output}", "{objects}"]
+run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m16"]
+
+# The i8086 and i386 targets on Open Watcom's headers and the C library tools/build-ow-clib.sh builds: LLRM_OW is the
+# tree it built in. Calls are Watcom's register convention, as the library's.
+[x86_16-wat]
+triple = "i386-unknown-unknown-code16"
+datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3"
+clang_env = "LLRM_CLANG_M16"
+clang = ["-ffp-contract=off",
+  "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-fno-pic",
+  "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-std=gnu99",
+  "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h", "-fdeclspec", "-Wno-unknown-attributes", "-Wno-ignored-attributes", "-include", "{root}/toolchain/clang/watcom.h", "-include", "{root}/toolchain/clang/floatm.h", "-nostdinc", "-isystem", "{root}/toolchain/clang/watcom", "-isystem", "{env:LLRM_OW}/bld/hdr/dos/h",
+]
+llc = ["-mabi=watcom"]
+object = "omf"
+link = ["python3", "-I", "{root}/tools/wat_link.py", "m16", "{env:LLRM_OW}", "{output}", "{objects}"]
+run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m16"]
+
+[x86_32-wat]
+triple = "i486-unknown-linux-gnu"
+datalayout = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"
+clang = ["-ffp-contract=off", "-target", "i486-unknown-linux-gnu", "-ffreestanding", "-fpack-struct=1", "-fno-pic", "-fno-stack-protector",
+  "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-std=gnu99", "-fdeclspec", "-Wno-unknown-attributes", "-Wno-ignored-attributes", "-include", "{root}/toolchain/clang/watcom.h", "-include", "{root}/toolchain/clang/floatm.h", "-nostdinc", "-isystem", "{root}/toolchain/clang/watcom", "-isystem", "{env:LLRM_OW}/bld/hdr/dos/h"]
+llc = ["-fobject-format=omf", "-mabi=watcom"]
+object = "omf"
+link = ["python3", "-I", "{root}/tools/wat_link.py", "m32", "{env:LLRM_OW}", "{output}", "{objects}"]
+run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m32"]
+
+# arm64 Linux on glibc, for qemu-aarch64: LLRM_ARM64_SYSROOT is the unpacked *-arm64-cross packages.
+[arm64-glibc]
+triple = "aarch64-unknown-linux-gnu"
+datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
+clang = ["-ffp-contract=off", "-target", "aarch64-unknown-linux-gnu", "-nostdinc", "-isystem", "{env:LLRM_ARM64_SYSROOT}/usr/aarch64-linux-gnu/include"]
+llc = []
+llc_program = "llrm-arm64-llc"
+llc_level = false
+object = "elf"
+link = ["{root}/tools/arm64_glibc_link.sh", "{output}", "{objects}"]
+run = ["qemu-aarch64"]
+
+# 32-bit Linux on the host's glibc (multilib), ELF32 objects linked by the system clang.
+[x86_32-linux]
+triple = "i486-unknown-linux-gnu"
+datalayout = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"
+clang = ["-ffp-contract=off", "-target", "i486-unknown-linux-gnu", "-fno-pic", "-fno-stack-protector", "-fno-asynchronous-unwind-tables"]
+llc = ["-fobject-format=elf", "-mabi=sysv"]
+object = "elf"
+link = ["clang", "-m32", "-no-pie", "-o", "{output}", "{objects}", "-lm"]
+run = []

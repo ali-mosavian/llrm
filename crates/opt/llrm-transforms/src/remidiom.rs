@@ -25,6 +25,23 @@
 //! selectors take it, and it looks through the narrowing LSR makes.
 //! Exit: the DAG selector's `foldRemainderIdiom`, and the old selector gone.
 //!
+//! # Example
+//! What LSR leaves of `trunc (urem i32 %x, 251)` at -Os, and what this pass
+//! makes of it (schematic: names are the printer's):
+//!
+//! ```text
+//!  before                                  after
+//!  %q = udiv i32 %x, 251                   %w = urem i32 %x, 251
+//!  %t = trunc i32 %q to i16                %r = trunc i32 %w to i16
+//!  %m = mul nuw i16 %t, 251
+//!  %r = sub i16 %n, %m
+//! ```
+//!
+//! From unit test
+//! `test_the_narrowed_idiom_is_one_remainder_where_the_divide_is_kept`
+//! in `remidiom_tests.rs`, which asserts the `urem` and that no `udiv` or
+//! `mul` is left.
+//!
 //! # Runs
 //! After `lsr` and `differences`, in the strength slot
 //! ([`crate::pipeline::strength_slot`]).

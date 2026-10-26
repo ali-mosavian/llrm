@@ -1,5 +1,5 @@
 //! The models.
 
-pub use llrm_x86_bcmachine::model::ir;
+pub use llrm_lir as ir;
 pub mod lir;
 pub mod passes;

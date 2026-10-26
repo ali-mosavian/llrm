@@ -859,6 +859,8 @@ def new_scanner_failures(
     on_merged=None,
     on_head=None,
     only: tuple[str, ...] | None = None,
+    seen: Path | None = None,
+    now=time.time,
 ) -> set[str]:
     """The failing `integration <target>::<test>` of the root scanners (tests that read sources and docs, SCANNERS) and of a test file the batch changes, on the merged tree, that the head
     passes. #3899 landed with `tests/selectiondag_registry.rs` red (SD403 had no row): the layer ran lib tests only, and the target was in no map. `on_merged(targets)` and
@@ -870,7 +872,31 @@ def new_scanner_failures(
     print(scanner_tests_line(targets, failed, git("rev-parse", "HEAD").strip()[:9]))
     if not failed:
         return set()
-    return failed - (on_head or _scanners_failing_on_head)(targets)
+    head = (on_head or _scanners_failing_on_head)(targets)
+    # a red the head has is excused for the PR, but named every cycle with its age; one older than HEAD_RED_HOURS (and it has no xfail row, or it would not be here) refuses
+    stale = excused_head_failures(failed & head, seen or Path(os.environ.get("LAND_TMP", "/tmp")) / "head-failure-seen.json", now())
+    return (failed - head) | stale
+
+
+HEAD_RED_HOURS = 2
+
+
+def excused_head_failures(excused: set[str], path: Path, now: float) -> set[str]:
+    """Prints each name of `excused` on its own line with the hours it has been red on the head, and returns those red longer than HEAD_RED_HOURS. The first time a name is seen is kept in `path`;
+    a name no longer red is forgotten. #4993's docs_in_sync was red on the tip for hours behind a bare `1 red`."""
+    if not excused and not path.exists():
+        return set()
+    first = json.loads(path.read_text()) if path.exists() else {}
+    first = {name: first.get(name, now) for name in excused}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(first))
+    stale = set()
+    for name in sorted(excused):
+        hours = (now - first[name]) / 3600
+        print(f"excused head failure: {name} (red on the head for {hours:.1f} h; no xfail row)")
+        if hours > HEAD_RED_HOURS:
+            stale.add(name)
+    return stale
 
 
 def new_link_failures(

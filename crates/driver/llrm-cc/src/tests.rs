@@ -66,3 +66,32 @@ fn clangs_i386_layout_is_m32s_but_double_alignment_is_not() {
     assert_eq!(layout_facts(clang), layout_facts(m32));
     assert_ne!(layout_facts(&clang.replace("f64:32:64", "f64:64:64")), layout_facts(m32));
 }
+
+/// The pin file grew comment lines after its SHA and every build was refused as
+/// "not the pinned clang".
+#[test]
+fn the_pin_is_the_first_line_alone() {
+    assert_eq!(pin().len(), 40, "{:?}", pin());
+    assert!(pin().bytes().all(|byte| byte.is_ascii_hexdigit()));
+}
+
+#[test]
+fn an_environment_placeholder_is_filled_when_set_and_named_when_not() {
+    // SAFETY: the variable is this test's own.
+    unsafe { std::env::set_var("LLRM_CC_TEST_DIR", "/inc") };
+    assert_eq!(with_environment("-I{env:LLRM_CC_TEST_DIR}/x"), "-I/inc/x");
+    assert!(unset(&with_environment("{env:LLRM_CC_TEST_UNSET}")).ends_with("LLRM_CC_TEST_UNSET"));
+}
+
+/// `-mabi=regparm3` reached clang ("unsupported option '-mabi=' for target
+/// i386-unknown-unknown-code16") instead of the backend, so the Nib interop
+/// example could not link a C library in the Nib program's convention.
+#[test]
+fn mabi_goes_to_the_backend_after_the_tables_own() {
+    let table = targets(TARGETS).unwrap();
+    let one = built("-mabi=regparm3 x.c");
+    assert!(one.clang.is_empty());
+    let args = llc_args(&table["x86_16-dos"], &one, Path::new("x.ll"), Path::new("x.obj"));
+    let last = args.iter().rposition(|arg| arg.starts_with("-mabi=")).unwrap();
+    assert_eq!(args[last], "-mabi=regparm3");
+}

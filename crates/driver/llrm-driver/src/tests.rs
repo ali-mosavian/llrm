@@ -527,7 +527,7 @@ fn llvm_ir_symbols_are_decorated_as_the_object_format_spells_them() {
 /// module that calls qgl compiled.
 #[test]
 fn clangs_pascal_number_is_llrms_basic_convention() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n\
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n\
                 target triple = \"i386-unknown-unknown-code16\"\n\
                 declare cc232 i16 @QGL(i16) addrspace(1)\n\
                 define i16 @f() addrspace(1) {\n  %1 = call cc232 addrspace(1) i16 @QGL(i16 7)\n  ret i16 %1\n}\n";
@@ -539,7 +539,7 @@ fn clangs_pascal_number_is_llrms_basic_convention() {
 /// asm block compiled.
 #[test]
 fn inline_code_intrinsics_keep_their_names() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n\
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n\
                 target triple = \"i386-unknown-unknown-code16\"\n\
                 declare i32 @\"llrm.ia16.code.89a60170c3.2p0\"(ptr)\n\
                 define i16 @f() addrspace(1) {\n  %a = alloca i16\n  %r = call i32 @\"llrm.ia16.code.89a60170c3.2p0\"(ptr %a)\n  ret i16 0\n}\n";
@@ -551,7 +551,7 @@ fn inline_code_intrinsics_keep_their_names() {
 /// reference" (QCport).
 #[test]
 fn defined_globals_are_public_and_internal_ones_are_not() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n\
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n\
                 target triple = \"i386-unknown-unknown-code16\"\n\
                 @a = dso_local global i16 5\n\
                 @b = dso_local addrspace(1) constant i16 7\n\
@@ -571,7 +571,7 @@ fn defined_globals_are_public_and_internal_ones_are_not() {
 /// the `llrm.ia16.in`/`out` intrinsics.
 #[test]
 fn borlands_port_functions_are_the_port_intrinsics() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n\
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n\
                 target triple = \"i386-unknown-unknown-code16\"\n\
                 declare cc1000 i8 @__outportb__(i16, i8) addrspace(1)\n\
                 declare i8 @__inportb__(i16) addrspace(1)\n\
@@ -582,4 +582,86 @@ fn borlands_port_functions_are_the_port_intrinsics() {
         listing.contains("out dx") && listing.contains("in al, dx") && !listing.contains("__outportb__"),
         "{listing}"
     );
+}
+
+/// With `-mabi=watcom` a clang function (no stated convention) was still
+/// spelled `_main`, so Open Watcom's start-up, which calls `main_`, could not
+/// find it.
+#[test]
+fn the_chosen_abi_spells_clang_functions_without_a_convention() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define i32 @main() {\n  ret i32 0\n}\n";
+    let flags = flags(&["-fobject-format=omf", "-mabi=watcom"]);
+    let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("public main_") && !listing.contains("_main"), "{listing}");
+}
+
+/// `-mabi=watcom` renamed clang's functions but still passed their arguments on
+/// the stack, so a callback handed to Open Watcom's `qsort` (which calls it in
+/// registers) was never sorted by.
+#[test]
+fn the_chosen_abi_passes_arguments_of_functions_without_a_convention() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                declare i32 @ext(i32, i32)\n\
+                define i32 @main() {\n  %1 = call i32 @ext(i32 11, i32 22)\n  ret i32 %1\n}\n";
+    let flags = flags(&["-fobject-format=omf", "-mabi=watcom"]);
+    let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(
+        listing.contains("mov eax, 11") && listing.contains("mov edx, 22") && !listing.contains("pushd"),
+        "{listing}"
+    );
+}
+
+/// Under `-mabi=watcom` a variable was spelled `__iob_` like a function; Open
+/// Watcom's data symbols take only the leading underscore (`__iob`), so
+/// `stdout` was an undefined reference.
+#[test]
+fn variables_keep_the_leading_underscore_under_the_watcom_abi() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                @counter = global i32 5\n\
+                @__iob = external global i32\n\
+                define i32 @main() {\n  %1 = load i32, ptr @__iob\n  ret i32 %1\n}\n";
+    let flags = flags(&["-fobject-format=omf", "-mabi=watcom"]);
+    let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(
+        listing.contains("public _counter") && listing.contains("__iob") && !listing.contains("__iob_"),
+        "{listing}"
+    );
+}
+
+/// An asm label (`\01NAME`, what `#pragma aux NAME "NAME"` becomes) was
+/// decorated like any other symbol (`_NAME`), so a runtime routine spelled
+/// `B$SINCOS` was an undefined reference.
+#[test]
+fn an_asm_label_is_the_symbol_as_written() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                declare void @\"\\01B$SINCOS\"()\n\
+                define void @main() {\n  call void @\"\\01B$SINCOS\"()\n  ret void\n}\n";
+    let flags = flags(&["-fobject-format=omf"]);
+    let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("B$SINCOS") && !listing.contains("_B$SINCOS"), "{listing}");
+}
+
+/// `section "NAME"` (`#pragma data_seg`, `#pragma code_seg`) stopped the import
+/// ("sections are outside MIR's subset"), then would have put the object in
+/// `_DATA` and the module's own code segment.
+#[test]
+fn a_section_names_the_segment_of_a_variable_and_a_function() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                @in_xib = global i32 3, section \"XIB\", align 4\n\
+                define i32 @hot() section \"HOT_TEXT\" {\n  %1 = load i32, ptr @in_xib\n  ret i32 %1\n}\n\
+                define i32 @main() {\n  %1 = call i32 @hot()\n  ret i32 %1\n}\n";
+    let flags = flags(&["-fobject-format=omf"]);
+    let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
+    assert!(built.data.iter().any(|(name, items)| name == "XIB" && !items.is_empty()), "{:?}", built.data);
+    assert_eq!(built.code_segments.values().collect::<Vec<_>>(), ["HOT_TEXT"], "{:?}", built.code_segments);
 }
