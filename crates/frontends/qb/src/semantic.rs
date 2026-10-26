@@ -3621,6 +3621,20 @@ impl Compiler {
                         self.select_block(continuation);
                     }
                     "BLOAD" | "BSAVE" => self.binary_memory_statement(name, arguments)?,
+                    "KILL" | "MKDIR" | "CHDIR" | "RMDIR" | "ENVIRON" => {
+                        let [path] = arguments.as_slice() else {
+                            return self.fail(format!("{name} takes one file or directory name"));
+                        };
+                        let path = self.string_descriptor(path)?;
+                        let routine = match name.as_str() {
+                            "KILL" => "B$KILL",
+                            "ENVIRON" => "B$SENV",
+                            "MKDIR" => "B$MDIR",
+                            "CHDIR" => "B$CDIR",
+                            _ => "B$RDIR",
+                        };
+                        self.emit_runtime_call(routine, Vec::new(), vec![path]);
+                    }
                     "LSET" | "RSET" => {
                         let [Expr::Binary { op: Binary::Eq, left, right, .. }] = arguments.as_slice() else {
                             return self
@@ -4068,6 +4082,34 @@ impl Compiler {
                     self.select_block(continuation);
                 }
                 Statement::Runtime { name, arguments, .. } => match name.as_str() {
+                    "NAME" => {
+                        let [old, new] = arguments.as_slice() else {
+                            return self.fail("NAME takes the old and the new file name, as in `NAME \"A\" AS \"B\"`");
+                        };
+                        let old = self.string_descriptor(old)?;
+                        let new = self.string_descriptor(new)?;
+                        self.emit_runtime_call("B$NAME", Vec::new(), vec![old, new]);
+                    }
+                    "FILES" => {
+                        if arguments.len() > 1 {
+                            return self.fail("FILES takes one file pattern, as in `FILES \"*.BAS\"`");
+                        }
+                        // BC passes the pattern's descriptor, an empty string's
+                        // for a bare FILES.
+                        let empty = Expr::Literal(Literal::String(String::new()), Span::default());
+                        let pattern = self.string_descriptor(arguments.first().unwrap_or(&empty))?;
+                        self.emit_runtime_call("B$FILS", Vec::new(), vec![pattern]);
+                    }
+                    "SHELL" => {
+                        if arguments.len() > 1 {
+                            return self.fail("SHELL takes one command, as in `SHELL \"DIR\"`");
+                        }
+                        // BC passes the command's descriptor, an empty string's
+                        // for a bare SHELL.
+                        let empty = Expr::Literal(Literal::String(String::new()), Span::default());
+                        let command = self.string_descriptor(arguments.first().unwrap_or(&empty))?;
+                        self.emit_runtime_call("B$SSHL", Vec::new(), vec![command]);
+                    }
                     "BEEP" => {
                         if !arguments.is_empty() {
                             return self.fail("BEEP takes no arguments");
@@ -7388,6 +7430,18 @@ impl Compiler {
             let file = self.convert(file, file_type, INTEGER)?;
             let result = self.value(LONG);
             self.emit_runtime_call("B$FLOF", vec![result], vec![file]);
+            return Ok(Some((Operand::Value(result), LONG)));
+        }
+        if intrinsic.lowering == Lowering::FileAttribute {
+            // B$FATR(channel, field): field 1 is the file's mode, 2 its DOS
+            // handle.
+            let mut operands = Vec::new();
+            for argument in &arguments[..2] {
+                let (value, value_type) = self.expression(argument)?;
+                operands.push(self.convert(value, value_type, INTEGER)?);
+            }
+            let result = self.value(LONG);
+            self.emit_runtime_call("B$FATR", vec![result], operands);
             return Ok(Some((Operand::Value(result), LONG)));
         }
         if intrinsic.lowering == Lowering::Timer {
