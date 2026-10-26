@@ -103,12 +103,7 @@ impl ModulePass for GlobalOpt {
 /// The internal, initialized, not yet constant globals every use of which,
 /// through address arithmetic and casts, is a load's address.
 pub fn never_stored(module: &Module) -> Vec<GlobalId> {
-    let mut held = std::collections::BTreeSet::new();
-    for global in &module.globals {
-        if let GlobalKind::Variable(variable) = &global.kind {
-            variable.initializer.iter().for_each(|&one| embedded(&module.context, one, &mut held));
-        }
-    }
+    let held = held_by_live(module);
     let candidates = module.globals.iter().enumerate().filter_map(|(at, global)| {
         let GlobalKind::Variable(variable) = &global.kind else { return None };
         let internal = matches!(global.linkage, Linkage::Internal | Linkage::Private);
@@ -116,6 +111,50 @@ pub fn never_stored(module: &Module) -> Vec<GlobalId> {
             .then_some(GlobalId(at as u32))
     });
     only_used(module, candidates.collect(), &only_loaded)
+}
+
+/// The globals the initializers of the variables something reaches name. A
+/// variable nothing reaches (QB's `X$descriptor` of a variable no code takes
+/// the descriptor of) names nothing: LLVM's GlobalOpt deletes it and goes on
+/// with the rest in its next round, where this pass runs once.
+pub(crate) fn held_by_live(module: &Module) -> BTreeSet<GlobalId> {
+    let mut live: BTreeSet<GlobalId> = BTreeSet::new();
+    let mut pending: Vec<GlobalId> = Vec::new();
+    for (at, global) in module.globals.iter().enumerate() {
+        let id = GlobalId(at as u32);
+        match &global.kind {
+            GlobalKind::Function(function) => {
+                pending.push(id);
+                let mut named = BTreeSet::new();
+                function.personality.iter().for_each(|&one| embedded(&module.context, one, &mut named));
+                for (_, inst) in function.walk() {
+                    for operand in &function.instruction(inst).operands {
+                        if let Operand::Constant(one) = operand {
+                            embedded(&module.context, *one, &mut named);
+                        }
+                    }
+                }
+                pending.extend(named);
+            }
+            GlobalKind::Variable(_) if !matches!(global.linkage, Linkage::Internal | Linkage::Private) => {
+                pending.push(id);
+            }
+            GlobalKind::Variable(_) => {}
+        }
+    }
+    let mut held = BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        if !live.insert(id) {
+            continue;
+        }
+        if let GlobalKind::Variable(variable) = &module.global(id).kind {
+            let mut named = BTreeSet::new();
+            variable.initializer.iter().for_each(|&one| embedded(&module.context, one, &mut named));
+            held.extend(named.iter().copied());
+            pending.extend(named);
+        }
+    }
+    held
 }
 
 /// The `candidates` every use of which, in every function, `access` says is an
@@ -332,12 +371,7 @@ impl ModulePass for WriteOnly {
 /// The internal variables no body loads from, and whose every use is a
 /// non-volatile store's address.
 pub fn never_loaded(module: &Module) -> Vec<GlobalId> {
-    let mut held = std::collections::BTreeSet::new();
-    for global in &module.globals {
-        if let GlobalKind::Variable(variable) = &global.kind {
-            variable.initializer.iter().for_each(|&one| embedded(&module.context, one, &mut held));
-        }
-    }
+    let held = held_by_live(module);
     let stores = |op: &llrm_mir::module::Instruction, index: usize| {
         matches!(op.opcode, Opcode::Store { volatile: false, .. }) && index == 1
     };

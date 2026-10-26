@@ -106,6 +106,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [pin-slot-table](pin-slot-table.md) | Pin pipeline slots against llrm's pipeline |
 | [premise-peephole-sink-scheduler](premise-peephole-sink-scheduler.md) | Premise tests: Peephole, MachineSink, Machine Scheduler |
 | [process-implicit-defs-plan](process-implicit-defs-plan.md) | ProcessImplicitDefs: the translation |
+| [qb-host](qb-host.md) | The QB runtime on a Linux or macOS host with SDL: layout, build, what was checked, what is missing (#4669) |
 | [x-base64-ties](x-base64-ties.md) | x_base64: the two ties that flip in the shared-LiveIntervals landing |
 | [twoaddress-cost-plan](twoaddress-cost-plan.md) | TwoAddress and LiveIntervals compile cost against the pin: callgrind attribution, four steps |
 | [twoaddress-rest-plan](twoaddress-rest-plan.md) | Row 62: what of TwoAddressInstructionPass is left |
@@ -130,6 +131,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [selectiondag-far-builder](selectiondag-far-builder.md) | Far and huge pointers in the DAG builder (sdag-a) |
 | [old-selector-retirement](old-selector-retirement.md) | What the old selector leaves to retire after the DAG flip, surveyed by reading |
 | [selectiondag-default-readiness](selectiondag-default-readiness.md) | What must be true to make `--isel=dag` the default (sdag-a) |
+| [jumps-profile-d_faces](jumps-profile-d_faces.md) | Line profile of ControlFlow (`jumps`) on d_faces -O2 against the pin's BranchFolder (2026-10-25) |
 | [landing-batch-time](landing-batch-time.md) | Where a landing batch's wall clock goes: stages, the long pole, changes that keep the gate (2026-10-25) |
 | [d64-4-s3-inventory](d64-4-s3-inventory.md) | D64-4 S3 float programs for tests/llc and the pin asm each must match at m64 (sdag-a) |
 | [selectiondag-tail-calls](selectiondag-tail-calls.md) | Tail calls in the DAG path: pin functions, steps, dates (sdag-a) |

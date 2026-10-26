@@ -152,3 +152,15 @@ fn test_a_rounding_through_a_cell_read_later_stays() {
     let read = insn(3, Operation::FloatLoad, "fld", vec![fp(2)], vec![cell_at(-4)]);
     assert!(propagated(&body(vec![LirBlock::new(0, vec![first, again, home, read])])).is_none());
 }
+
+/// data_after_checked rounded a double through a cell and stored it back into
+/// the same cell (`fstp [t]; fld [t]; fstp [t]`): 926 B at m16 -Os.
+#[test]
+fn test_a_rounding_stored_back_into_its_cell_is_stored_once() {
+    let first = insn(0, Operation::FloatStore, "fstp", vec![cell_at(-8)], vec![fp(0)]);
+    let again = insn(1, Operation::FloatLoad, "fld", vec![fp(1)], vec![cell_at(-8)]);
+    let back = insn(2, Operation::FloatStore, "fstp", vec![cell_at(-8)], vec![fp(1)]);
+    let read = insn(3, Operation::FloatLoad, "fld", vec![fp(2)], vec![cell_at(-8)]);
+    let made = propagated(&body(vec![LirBlock::new(0, vec![first, again, back, read])])).expect("a rounding");
+    assert_eq!(names(&made), ["fstp", "fld"]);
+}

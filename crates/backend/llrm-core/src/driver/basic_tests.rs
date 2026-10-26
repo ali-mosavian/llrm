@@ -68,42 +68,40 @@ fn test_an_indexed_frame_cell_moves_into_the_static_module_frame() {
     );
 }
 
-/// `loading`, after a `mov ds, ax`: a body that holds a far selector in DS.
-fn loading_after_ds(cell: Mem) -> LirBody {
+/// The body of `loading` with a selector put in the data segment register
+/// first, as allocation does for a far pointer.
+fn holding_a_selector(cell: Mem) -> LirBody {
     let mut body = loading(cell);
-    let set = Insn::new(
-        2,
-        Some((2, 3)),
+    let put = Insn::new(
+        0,
+        Some((0, 1)),
         Some(Semantics {
             name: Some("mov".into()),
             dests: vec![Loc::Reg(ir::Reg { register: RegId::DS, width: 2 })],
-            sources: vec![Loc::Reg(ir::Reg { register: RegId::AX, width: 2 })],
+            sources: vec![Loc::Held(Held { value: 3, width: 2 })],
             ..Semantics::new(Operation::Move)
         }),
         vec![],
         vec![],
     );
-    let block = &body.blocks[0];
-    let mut insns: Vec<Arc<Insn>> = block.insns.iter().cloned().collect();
-    insns.insert(0, Arc::new(set));
-    let blocks = vec![block.with_insns(insns)];
-    body = body.with_blocks(blocks);
+    let mut insns = vec![Arc::new(put)];
+    insns.extend(body.blocks[0].insns.iter().cloned());
+    body.blocks = vec![body.blocks[0].with_insns(insns)].into();
     body
 }
 
-/// The static module frame's cells read through SS where the body writes DS,
-/// which allocation held a far pointer's selector in (particle.bas, #2585):
-/// spills went into an array.
+/// The static module frame's cells read through DS, where allocation held a
+/// far pointer's selector (particle.bas, #2585): spills went into an array.
 #[test]
 fn test_a_static_frame_cell_stays_on_the_stack_segment_where_the_stack_is_data() {
-    let cell = loaded(&_static_frame(&loading_after_ds(indexed_frame_cell()), 46, Some(RegId::SS)));
+    let cell = loaded(&_static_frame(&holding_a_selector(indexed_frame_cell()), 46, Some(RegId::SS)));
     assert_eq!(RegId::from(cell.addr.unwrap().segment), RegId::SS);
 }
 
-/// A body that never writes DS kept `ss:` on every frame cell: nbody 46 bytes
-/// at -Os in a program with ON ERROR, where DS is the data group throughout.
+/// Every cell of a module frame carried `ss:` where the body never wrote DS:
+/// a byte each, 728 over tests/run/qb (pow_unrolled 770 B against main's 684).
 #[test]
-fn test_a_static_frame_cell_has_no_override_where_the_body_never_writes_ds() {
+fn test_a_static_frame_cell_has_no_override_where_the_body_leaves_ds_alone() {
     let cell = loaded(&_static_frame(&loading(indexed_frame_cell()), 46, Some(RegId::SS)));
     assert_eq!(RegId::from(cell.addr.unwrap().segment), RegId::None);
 }

@@ -14,6 +14,7 @@ fn qb() -> HirAbi {
         objects: Default::default(),
         preserved: Default::default(),
         stack_check: None,
+        hosted: false,
     }
 }
 
@@ -55,6 +56,7 @@ fn borland() -> HirAbi {
         objects: Default::default(),
         preserved: EVERY.iter().copied().filter(|one| !clobbered.contains(one)).collect(),
         stack_check: None,
+        hosted: false,
     }
 }
 
@@ -3741,7 +3743,7 @@ b1:
             "shl ebx, 16",
             "mov eax, ebx",
             "idiv esi",
-            "xor ecx, esi",
+            "xor ecx, 196608",
             "sar ecx, 31",
             "imul esi, eax",
             "sub ebx, esi",
@@ -6361,7 +6363,7 @@ define i1 @f(i16 %x) addrspace(1) {
 }
 ";
     let got = listing(text, "f");
-    assert!(got.contains(&"mov ax, offset messages".to_owned()) && got.contains(&"add ax, 8".to_owned()), "{got:?}");
+    assert!(got.contains(&"mov ax, offset messages+8".to_owned()), "{got:?}");
 }
 
 /// A GEP off a segment's far pointer (`A000:0`, plus 1) was refused, "an
@@ -6976,4 +6978,26 @@ fn test_a_signed_compare_of_i1_orders_true_below_false() {
     ] {
         assert!(unsigned.contains(&branch(signed).as_str()), "icmp {signed} i1: {}", branch(signed));
     }
+}
+
+/// The far address of a near global plus a constant, passed twice in one
+/// block, shared one `mov si, offset x` and made each argument `lea`/`add`
+/// from it, a register held across both calls (16 instructions for 11, m16
+/// -Os nestud and C `use(&X[2]); use(&X[3])`). Each is `push offset x+n`.
+#[test]
+fn test_a_far_global_plus_a_constant_is_passed_as_a_symbol_and_offset() {
+    let text = "@x = external addrspace(0) global [0 x i8]
+
+declare void @use(ptr addrspace(1), i16) addrspace(1)
+
+define void @f() addrspace(1) {
+  call addrspace(1) void @use(ptr addrspace(1) addrspacecast (ptr getelementptr inbounds (i8, ptr @x, i16 4) to ptr addrspace(1)), i16 2)
+  call addrspace(1) void @use(ptr addrspace(1) addrspacecast (ptr getelementptr inbounds (i8, ptr @x, i16 6) to ptr addrspace(1)), i16 2)
+  ret void
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line == "push offset x+4"), "{got:?}");
+    assert!(got.iter().any(|line| line == "push offset x+6"), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("lea") || line.starts_with("add si")), "{got:?}");
 }

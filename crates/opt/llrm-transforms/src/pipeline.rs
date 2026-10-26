@@ -1582,11 +1582,10 @@ impl FunctionPass for Fixed {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         self.runs += 1;
-        let promotes = analyses
+        let promotes = !analyses
             .get::<cfg::Shape>(unit.context, unit.layout, unit.function)
             .dominance
-            .irreducible(unit.function)
-            .is_empty();
+            .is_irreducible(unit.function);
         let dump = self.dump.as_ref().map(|directory| directory.join(format!("{:02}", self.runs)));
         let mut run = Run {
             version: 0,
