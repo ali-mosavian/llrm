@@ -1219,3 +1219,18 @@ def test_the_always_on_scanners_run_before_the_lib_tests_of_a_batch():
     assert 0 <= early < lib, (early, lib)
     assert "landing_scanner_failures(changed, False)" in source[early:lib]
     assert source.find('stage("scanners")') > lib, "the full scanner set still runs after the lib tests"
+
+
+def test_a_page_a_pr_leaves_stale_is_named_even_when_the_head_already_has_stale_pages():
+    """#5031, #5049 and #4988 changed a `//!` header, passed alone and landed with six pages stale: the head's red docs_in_sync was excused, so no check saw a new one."""
+    why, now = ps.docs_refusal({"docs/a.md"}, Path("."), docs=lambda: {"docs/a.md", "docs/b.md", "docs/c.md"})
+    assert "docs/b.md" in why and "docs/c.md" in why and "docs/a.md" not in why and now == {"docs/a.md", "docs/b.md", "docs/c.md"}
+    assert ps.docs_refusal({"docs/a.md"}, Path("."), docs=lambda: {"docs/a.md"})[0] == ""
+    assert ps.docs_refusal({"docs/a.md"}, Path("."), docs=lambda: set())[0] == "", "a PR that regenerates a page is not refused"
+
+
+def test_the_batch_checks_the_generated_pages_after_each_pr_it_merges():
+    import inspect
+
+    source = inspect.getsource(ps.merge_batch)
+    assert source.index("docs_refusal(docs_before") > source.index("refusals(git(") and 'git("reset", "-q", "--hard", before)' in source.split("docs_refusal(docs_before")[1][:200]

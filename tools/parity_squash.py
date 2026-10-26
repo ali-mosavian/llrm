@@ -1229,6 +1229,14 @@ def docs_stale(root: Path) -> set[str]:
     return {line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip().startswith("docs/")} or {"docsbuild --check failed"}
 
 
+def docs_refusal(before: set[str], root: Path, docs=docs_stale) -> tuple[str, set[str]]:
+    """(why, stale now): a refusal naming the pages `root` has out of date that `before` did not. #5031, #5049 and #4988 each changed a `//!` header, passed alone and landed
+    with six pages stale: the head's red docs_in_sync was excused, so the batch never saw a new one."""
+    now = docs()
+    new = sorted(now - before)
+    return (f"generated docs out of date (tools/docsbuild/build.py --sync): {', '.join(new[:5])}" if new else ""), now
+
+
 def _alone_base_docs(base: str, target: Path | None) -> set[str]:
     work = (target or Path(tempfile.mkdtemp(prefix="alone-base-"))) / "base"
     _alone_checkout(work, base)
@@ -1359,7 +1367,10 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         git("fetch", "-q", "origin", "feat/parity")
         clean_checkout(BASE)
 
+        docs_before = docs_stale(ROOT)
+
         def merge_one(number: str) -> str:
+            nonlocal docs_before
             before = git("rev-parse", "HEAD").strip()
             git("fetch", "-q", "origin", infos[number]["headRefOid"])
             merge = subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True, text=True, errors="replace")
@@ -1373,6 +1384,11 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             if why := refusals(git("rev-parse", "HEAD").strip(), infos[number]["body"] or "", base=before, title=infos[number]["title"]):
                 git("reset", "-q", "--hard", before)
                 return "; ".join(why)
+            why, now = docs_refusal(docs_before, ROOT)
+            if why:
+                git("reset", "-q", "--hard", before)
+                return why
+            docs_before = now
             return ""
 
         failed_units.clear()
