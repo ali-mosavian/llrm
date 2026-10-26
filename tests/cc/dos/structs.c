@@ -1,7 +1,7 @@
 #include "report.h"
 struct node { long key; struct node *next; short tag; char flag; };
 #ifdef __DOS__
-_Static_assert(sizeof(struct node) == 12, "i386 layout");
+_Static_assert(sizeof(struct node) == (sizeof(int) == 2 ? 9 : 12), "target layout");
 #endif
 static struct node pool[6];
 static long sum(const struct node *n) { long s = 0; for (; n; n = n->next) s += n->key * n->tag + n->flag; return s; }
