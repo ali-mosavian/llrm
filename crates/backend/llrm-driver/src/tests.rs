@@ -584,8 +584,9 @@ fn borlands_port_functions_are_the_port_intrinsics() {
     );
 }
 
-/// With `-mabi=watcom` a clang function (no stated convention) was still spelled `_main`, so Open Watcom's start-up, which
-/// calls `main_`, could not find it.
+/// With `-mabi=watcom` a clang function (no stated convention) was still
+/// spelled `_main`, so Open Watcom's start-up, which calls `main_`, could not
+/// find it.
 #[test]
 fn the_chosen_abi_spells_clang_functions_without_a_convention() {
     let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
@@ -595,4 +596,41 @@ fn the_chosen_abi_spells_clang_functions_without_a_convention() {
     let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
     let listing = llrm_core::backend::masm::text(&built).unwrap();
     assert!(listing.contains("public main_") && !listing.contains("_main"), "{listing}");
+}
+
+/// `-mabi=watcom` renamed clang's functions but still passed their arguments on
+/// the stack, so a callback handed to Open Watcom's `qsort` (which calls it in
+/// registers) was never sorted by.
+#[test]
+fn the_chosen_abi_passes_arguments_of_functions_without_a_convention() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                declare i32 @ext(i32, i32)\n\
+                define i32 @main() {\n  %1 = call i32 @ext(i32 11, i32 22)\n  ret i32 %1\n}\n";
+    let flags = flags(&["-fobject-format=omf", "-mabi=watcom"]);
+    let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    assert!(
+        listing.contains("mov eax, 11") && listing.contains("mov edx, 22") && !listing.contains("pushd"),
+        "{listing}"
+    );
+}
+
+/// Under `-mabi=watcom` a variable was spelled `__iob_` like a function; Open
+/// Watcom's data symbols take only the leading underscore (`__iob`), so
+/// `stdout` was an undefined reference.
+#[test]
+fn variables_keep_the_leading_underscore_under_the_watcom_abi() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                @counter = global i32 5\n\
+                @__iob = external global i32\n\
+                define i32 @main() {\n  %1 = load i32, ptr @__iob\n  ret i32 %1\n}\n";
+    let flags = flags(&["-fobject-format=omf", "-mabi=watcom"]);
+    let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    assert!(
+        listing.contains("public _counter") && listing.contains("__iob") && !listing.contains("__iob_"),
+        "{listing}"
+    );
 }
