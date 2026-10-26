@@ -16,9 +16,9 @@ printf '%-10s %-6s %8s %8s   (.text bytes)\n' prog result clang llrm
 bad=0
 for p in $progs; do
   src=$root/tests/llc/$p.c
-  "$clang" -target $triple -O2 -c "$src" -o "$out/$p.ref.o" && gcc "$out/$p.ref.o" -o "$out/$p.ref" || { echo "$p: reference failed"; bad=1; continue; }
+  "$clang" -target $triple -O2 -c "$src" -o "$out/$p.ref.o" && gcc "$out/$p.ref.o" -o "$out/$p.ref" -lm || { echo "$p: reference failed"; bad=1; continue; }
   "$clang" -target $triple -O2 -Xclang -disable-llvm-passes -S -emit-llvm "$src" -o "$out/$p.ll"
-  if "$llc" -O2 "$out/$p.ll" -o "$out/$p.o" 2> "$out/$p.err" && gcc "$out/$p.o" -o "$out/$p.llrm" 2>> "$out/$p.err"; then
+  if "$llc" -O2 "$out/$p.ll" -o "$out/$p.o" 2> "$out/$p.err" && gcc "$out/$p.o" -o "$out/$p.llrm" -lm 2>> "$out/$p.err"; then
     "$out/$p.ref" > "$out/$p.ref.out" 2>&1; rr=$?
     "$out/$p.llrm" > "$out/$p.llrm.out" 2>&1; lr=$?
     if [ $rr = $lr ] && cmp -s "$out/$p.ref.out" "$out/$p.llrm.out"; then r=ok; else r=DIFF; bad=1; fi

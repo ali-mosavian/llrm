@@ -1,0 +1,18 @@
+# flags: -Os --isel=dag
+# The i64 divide routine is one procedure of the module, called from every divide: its own return
+# once skipped the frame the procedure opened and nbody_fixed ran into an invalid instruction.
+type Q = fixed i32, fraction=9
+
+fn a(x: i32, y: i32) -> i32:
+    return i32(Q(x) / Q(y) * 512)
+
+fn b(x: i32, y: i32) -> i32:
+    let w: Q = Q(x) / Q(y)
+    return i32(w * 512)
+
+fn main() -> i16:
+    print(a(7, 3))
+    print(a(-7, 3))
+    print(b(100, -7))
+    print(b(5, 2))
+    return 0

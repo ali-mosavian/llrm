@@ -109,6 +109,12 @@ static _AUDITED_GRAPHICS_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(||
         ("B$PNR4", 8),
         ("B$GGET", 6),
         ("B$GPUT", 8),
+        // grview.asm: seven Pascal words; `void pascal B$VEW0()`.
+        ("B$VIEW", 14),
+        ("B$VEW0", 0),
+        // grwindow.asm: four R4 and a word; `void pascal B$WIN0()`.
+        ("B$WIND", 18),
+        ("B$WIN0", 0),
         ("B$FTAB", 2),
     ])
 });
@@ -125,6 +131,29 @@ static _AUDITED_STATEMENT_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|
         // dkopen.asm B$OPEN at 0224 returns with RETF 8 at 0252.
         ("B$OPEN", 8),
         ("B$SLEP", 4),
+        // Measured in BC output (QB 4.5, PDS 7.1, VBDOS): `call far B$STOP`
+        // and `call far B$REST`, nothing pushed.
+        ("B$STOP", 0),
+        ("B$REST", 0),
+        // QB45 rt/dkstmt.asm B$FILS(parmW fname): the pattern's descriptor.
+        ("B$FILS", 2),
+        // QB45 rt/osstmt.asm B$SSHL(parmSD sdExec): the command's descriptor.
+        ("B$SSHL", 2),
+        // QB45 rt/dvstmt.asm B$FATR(parmW channel, parmW fieldid).
+        ("B$FATR", 4),
+        // QB45 rt/osstmt.asm B$SENV(parmSD sdEnviron).
+        ("B$SENV", 2),
+        // QB45 rt/dkstmt.asm B$KILL(parmSD fname), B$NAME(parmSD oldname,
+        // parmSD newname); rt/directry.asm `pascal far B$MDIR(psdDirectory)`,
+        // B$CDIR and B$RDIR alike.
+        ("B$KILL", 2),
+        ("B$NAME", 4),
+        ("B$MDIR", 2),
+        ("B$CDIR", 2),
+        ("B$RDIR", 2),
+        // QB45 rt/rlset.asm: parmW psdSource, parmD psdDest, parmW cbDest.
+        ("B$LSET", 8),
+        ("B$RSET", 8),
         ("B$SOND", 6),
         ("B$DRAW", 2),
         ("B$VARP", 4),
@@ -635,14 +664,14 @@ fn _contract_keeping(
             ),
         ));
     }
-    if name == "B$CSCN" && pushed == 6 {
+    if name == "B$CSCN" && (2..=18).contains(&pushed) && pushed % 2 == 0 {
         return Ok(returns(
-            6,
+            pushed,
             format!(
-                "{evidence} The audited one-mode SCREEN source form emits \
-                 two count-led parameter words plus the count; SYS.OBJ 0787..0792 \
-                 shows six bytes and the shared cleanup removes exactly that block. \
-                 Display, alias and error effects remain conservative."
+                "{evidence} SCREEN emits a count-led block like COLOR: a presence word (and the value when given) per \
+                 argument, then their count; this site supplies {pushed} bytes. SYS.OBJ 0787..0792 shows the \
+                 one-mode form as six bytes; the shared cleanup removes the whole block. Display, alias and error \
+                 effects remain conservative."
             ),
         ));
     }
@@ -686,7 +715,7 @@ fn _contract_keeping(
             ),
         ));
     }
-    if name == "B$FLOF" && pushed == 2 {
+    if matches!(name, "B$FLOF" | "B$FLOC" | "B$FSEK") && pushed == 2 {
         return Ok(returns(
             2,
             format!(
@@ -855,6 +884,8 @@ pub struct HirAbi {
     /// The runtime's stack limit and overflow handler, where the program checks
     /// its stack.
     pub stack_check: Option<model::StackCheck>,
+    /// The runtime is a host's (`RuntimePromises::hosted`).
+    pub hosted: bool,
 }
 
 impl HirAbi {
@@ -866,9 +897,15 @@ impl HirAbi {
             objects: functions.filter_map(|one| Some((one.name.clone(), one.symbol.clone()?))).collect(),
             preserved: program.preserved.iter().map(|one| runtime::Reg::from_value(one)).collect::<Result<_, _>>()?,
             stack_check: program.stack_check.clone(),
+            hosted: program.promises.hosted,
         })
     }
 }
+
+/// The stack-block routines a host's runtime defines as C varargs
+/// (runtime/qb/posix/blockentries.c): called as BASIC pushes them, the caller
+/// removes what it pushed.
+pub const HOST_STACK_BLOCKS: [&str; 7] = ["B$DDIM", "B$RDIM", "B$RDMP", "B$CLOS", "B$COLR", "B$LOCT", "B$CSCN"];
 
 /// A routine of llrm's runtime, called as the target calls any function: the
 /// table's effects (what it reads and writes, whether it raises an error or
@@ -880,11 +917,12 @@ fn native_contract(
     pops: bool,
     pushed: i64,
     family: model::RuntimeProfile,
+    hosted: bool,
 ) -> Contract {
     // A routine that keeps BASIC's pushes pops its whole block, however many
     // words the call pushes, so the words beyond its declaration are not
     // the caller's to remove.
-    let pops = pops || runtime::semantics::keeps_stack_abi(name);
+    let pops = pops || (runtime::semantics::keeps_stack_abi(name) && !(hosted && HOST_STACK_BLOCKS.contains(&name)));
     let found = runtime::per_call(&IndexMap::from_iter([(0, name.to_owned())]), family.tables(), &BTreeSet::new())
         .swap_remove(&0)
         .expect("one call in, one contract out");
@@ -939,7 +977,7 @@ impl crate::backend::assemble::Abi for HirAbi {
         let name = callee.strip_prefix(crate::hir::mir::RUNTIME).unwrap_or(callee);
         let runtime_call = callee.starts_with(crate::hir::mir::RUNTIME);
         if self.runtime.calls_natively() && runtime_call {
-            return Ok(native_contract(name, pops, pushed, self.runtime));
+            return Ok(native_contract(name, pops, pushed, self.runtime, self.hosted));
         }
         _contract_keeping(name, runtime_call, cleanup, pushed, self.runtime, &self.preserved).map_err(|error| error.0)
     }
@@ -997,6 +1035,14 @@ impl llrm_mir::target::Machine for LoweredTarget {
 
     fn size_costs(&self) -> llrm_mir::target::OperationCosts {
         self.machine.size_costs()
+    }
+
+    fn keeps_division(
+        &self,
+        bits: u32,
+        size: bool,
+    ) -> bool {
+        self.machine.keeps_division(bits, size)
     }
 
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {

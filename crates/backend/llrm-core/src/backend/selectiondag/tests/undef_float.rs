@@ -17,7 +17,7 @@ fn an_undef_float_is_zero() {
         let info = MemInfo { mem_vt: vt, align: 4, volatile: false, base: MemBase::Stack(1), ext: None, space: 0 };
         let store = dag.get_store(chain, undef, ptr, info);
         dag.set_root(store);
-        DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false }).run().unwrap();
+        DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false }).run().unwrap();
         let root = dag.get_root();
         assert!(!reaches_undef(&dag, root), "{vt:?}: an undef is left");
     }

@@ -110,6 +110,9 @@ const NO_OP: &str = "'NoneType' object has no attribute 'op'";
 /// than by their estimated frequencies (-Os).
 pub struct ControlFlow<'a> {
     pub cpu: &'a cpu::Profile,
+    /// The routine each call goes to, by the call's position: two calls are
+    /// the same instruction only where it is the same.
+    pub calls: Option<IndexMap<i64, String>>,
 }
 
 impl LIRTransform for ControlFlow<'_> {
@@ -144,8 +147,11 @@ impl ControlFlow<'_> {
     ) -> Result<LirBody, masm::Unprintable> {
         // -O0 keeps the blocks in source order and drops the jumps that order
         // makes redundant: no tails merged, no block copied, no trace chosen.
-        let placed =
-            if self.cpu.optimized { optimized(body, self.cpu)? } else { threaded(&body.with_blocks(_explicit(body)?)) };
+        let placed = if self.cpu.optimized {
+            optimized(body, self.cpu, self.calls.as_ref())?
+        } else {
+            threaded(&body.with_blocks(_explicit(body)?))
+        };
         if crate::support::debug::enabled("blocks") {
             let frequency = crate::analysis::frequency::Frequency::of(&placed);
             for block in &placed.blocks {
@@ -168,6 +174,7 @@ impl ControlFlow<'_> {
 pub fn optimized(
     body: &LirBody,
     cpu: &cpu::Profile,
+    calls: Option<&IndexMap<i64, String>>,
 ) -> Result<LirBody, masm::Unprintable> {
     let size = cpu.size;
     let mut placed = threaded(&_placed(&_hoisted(body), size, cpu.aggressive)?);
@@ -176,13 +183,8 @@ pub fn optimized(
     // `BranchFolder::OptimizeFunction` after placement: the tails merged, then
     // the branches optimised (`threaded`), until neither changes anything. A
     // merge can leave a compare nothing selects on; LLVM leaves it (T6).
-    for _round in 0..std::cmp::max(1, placed.blocks.len() + placed.insns().len()) {
-        let explicit = placed.with_blocks(_explicit(&placed)?);
-        let Some(merged) = tailmerge::merged(&explicit, size)? else {
-            break;
-        };
-        placed = machinedce::eliminated(threaded(&merged));
-    }
+    let (merged, _) = tails_merged(placed, size, calls)?;
+    placed = merged;
     let done = aligned(&inverted(&placed, size), cpu);
     // Every block leaves by a way the printer can read.
     #[cfg(test)]
@@ -190,6 +192,49 @@ pub fn optimized(
         masm::_falls_to(block, &done.name).expect("a block with no instruction choosing its way out");
     }
     Ok(done)
+}
+
+/// `TailMergeBlocks` and the branch optimisation to a fixed point; whether
+/// anything merged.
+fn tails_merged(
+    mut placed: LirBody,
+    size: bool,
+    calls: Option<&IndexMap<i64, String>>,
+) -> Result<(LirBody, bool), masm::Unprintable> {
+    let mut any = false;
+    for _round in 0..std::cmp::max(1, placed.blocks.len() + placed.insns().len()) {
+        let explicit = placed.with_blocks(_explicit(&placed)?);
+        let Some(merged) = tailmerge::merged(&explicit, size, calls)? else {
+            break;
+        };
+        any = true;
+        placed = machinedce::eliminated(threaded(&merged));
+    }
+    Ok((placed, any))
+}
+
+/// The tails merged once more after the frame's exit became instructions
+/// (`masm::exits_inserted`): the pin's `BranchFolder` sees the pops of the
+/// epilogue as instructions, so returns that share them share a tail. A body
+/// nothing merged in is returned as it was.
+pub fn tails_merged_after_exits(
+    body: LirBody,
+    size: bool,
+    calls: Option<&IndexMap<i64, String>>,
+) -> Result<LirBody, masm::Unprintable> {
+    // Only the blocks that return gained something to share.
+    let returns = body
+        .blocks
+        .iter()
+        .filter(|block| {
+            block.insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Return))
+        })
+        .count();
+    if returns < 2 {
+        return Ok(body);
+    }
+    let (merged, any) = tails_merged(body.clone(), size, calls)?;
+    Ok(if any { inverted(&merged, size) } else { body })
 }
 
 /// `alignBlocks`: a block of a loop that is entered other than by falling
@@ -476,15 +521,20 @@ pub fn _hoisted(body: &LirBody) -> LirBody {
         let Some(&other) = before.succ.iter().find(|at| **at != block.at) else {
             continue;
         };
-        let (reads, _) = live.get_or_insert_with(|| {
-            let mut by_value: IndexMap<u32, BTreeSet<i64>> = IndexMap::default();
-            for (at, values) in _live_values(&blocks) {
-                for value in values {
-                    by_value.entry(value).or_default().insert(at);
-                }
+        // Only the values these anchors define are asked: each is worked out
+        // when first asked, from the blocks that name it, not for every value
+        // of the function (one solve, 2.3 M Ir on d_faces -O2).
+        let (reads, mentions) = live.get_or_insert_with(|| (IndexMap::default(), Mentions::of(&blocks)));
+        let unknown: BTreeSet<u32> =
+            anchors.iter().flat_map(|one| &one.defines).copied().filter(|value| !reads.contains_key(value)).collect();
+        if !unknown.is_empty() {
+            for (value, entering) in mentions.live_in_of(&blocks, &unknown) {
+                reads.insert(value, entering);
             }
-            (by_value, Mentions::of(&blocks))
-        });
+            for value in &unknown {
+                reads.entry(*value).or_default();
+            }
+        }
         if anchors
             .iter()
             .flat_map(|one| &one.defines)
@@ -534,11 +584,9 @@ pub fn _hoisted(body: &LirBody) -> LirBody {
                 let fresh = _live_values(&blocks);
                 assert!(
                     blocks.iter().all(|block| {
+                        let live = fresh.get(&block.at);
                         held.iter()
-                            .filter(|(_, at)| at.contains(&block.at))
-                            .map(|(value, _)| *value)
-                            .collect::<BTreeSet<u32>>()
-                            == fresh.get(&block.at).cloned().unwrap_or_default()
+                            .all(|(value, at)| at.contains(&block.at) == live.is_some_and(|live| live.contains(value)))
                     }),
                     "{}: the values live on entry to the blocks, patched past a hoist, are not those of a new solve",
                     body.name
@@ -679,8 +727,16 @@ impl Mentions {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many times every value's liveness was solved at once.
+    pub(crate) static LIVE_SOLVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Per block, the virtual values live on entry.
 fn _live_values(blocks: &[Block]) -> IndexMap<i64, BTreeSet<u32>> {
+    #[cfg(test)]
+    LIVE_SOLVES.with(|solves| solves.set(solves.get() + 1));
     let by_at: IndexMap<i64, &Block> = blocks.iter().map(|block| (block.at, block)).collect();
     let mut carried: IndexMap<i64, BTreeSet<u32>> = IndexMap::default();
     for block in blocks {
@@ -904,10 +960,15 @@ fn _real_tail(block: &LirBlock) -> (Option<Arc<Insn>>, Option<Arc<Insn>>) {
 /// The instructions that print.
 /// The block's work: neither meta instructions nor source `nop`s.
 pub fn _real(block: &LirBlock) -> Vec<Arc<Insn>> {
+    _work(block).cloned().collect()
+}
+
+/// [`_real`], not copied: the block's work in place.
+fn _work(block: &LirBlock) -> impl Iterator<Item = &Arc<Insn>> {
     let nop = |one: &Insn| {
         one.what.as_ref().is_some_and(|what| what.op == Operation::Nothing && what.name.as_deref() == Some("nop"))
     };
-    block.insns.iter().filter(|one| !one.is_meta() && !nop(one)).cloned().collect()
+    block.insns.iter().filter(move |one| !one.is_meta() && !nop(one))
 }
 
 /// Where a block with no work goes.
@@ -920,14 +981,15 @@ pub fn _passage(block: &LirBlock) -> Option<i64> {
     if !block.phis.is_empty() {
         return None;
     }
-    let real = _real(block);
-    if real.is_empty() && block.succ.len() == 1 {
-        return Some(block.succ[0]);
+    // At most two are looked at: none, or exactly one that jumps.
+    let mut work = _work(block);
+    match (work.next(), work.next()) {
+        (None, _) if block.succ.len() == 1 => Some(block.succ[0]),
+        (Some(only), None) if only.what.as_ref().is_some_and(|what| what.op == Operation::Jump) => {
+            only.what.as_ref().and_then(|what| what.target)
+        }
+        _ => None,
     }
-    if real.len() == 1 && real[0].what.as_ref().is_some_and(|what| what.op == Operation::Jump) {
-        return real[0].what.as_ref().and_then(|what| what.target);
-    }
-    None
 }
 
 pub fn _predecessors(blocks: &[Block]) -> IndexMap<i64, BTreeSet<i64>> {

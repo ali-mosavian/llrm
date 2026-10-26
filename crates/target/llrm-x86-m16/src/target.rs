@@ -148,6 +148,7 @@ impl Machine for Dos {
             registers: self.registers as u32,
             scaled_index_insns: scaled_index_insns as u32,
             huge_space: crate::spaces().huge,
+            inline_size_guard: true,
         };
         let layout = crate::layout();
         llrm_x86::tti::X86::described(layout.tti.as_deref()?, layout.llvm_cpu.as_deref()?)
@@ -198,6 +199,14 @@ impl Machine for Dos {
 
     fn costs(&self) -> OperationCosts {
         self.costs.clone()
+    }
+
+    fn keeps_division(
+        &self,
+        bits: u32,
+        size: bool,
+    ) -> bool {
+        llrm_target::keeps_division(i64::from(bits / 8), size)
     }
 
     fn size_costs(&self) -> OperationCosts {

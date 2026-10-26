@@ -157,19 +157,20 @@ impl Ast<'_> {
             Kw::STOP => self.implicit_call("STOP", Vec::new(), span),
             Kw::RESET => self.implicit_call("RESET", Vec::new(), span),
             Kw::ENDIF => self.runtime("ENDIF", Vec::new(), span),
-            Kw::CLS | Kw::SLEEP | Kw::FILES | Kw::RUN => {
+            Kw::CLS | Kw::SLEEP | Kw::FILES | Kw::RUN | Kw::SHELL => {
                 let arguments = self.optional_exp()?;
                 let name = match k {
                     Kw::CLS => "CLS",
                     Kw::SLEEP => "SLEEP",
                     Kw::FILES => "FILES",
+                    Kw::SHELL => "SHELL",
                     _ => "RUN",
                 };
                 self.runtime(name, arguments, span);
             }
-            Kw::RANDOMIZE | Kw::SHELL => {
+            Kw::RANDOMIZE => {
                 let arguments = self.optional_exp()?;
-                self.implicit_call(if k == Kw::RANDOMIZE { "RANDOMIZE" } else { "SHELL" }, arguments, span);
+                self.implicit_call("RANDOMIZE", arguments, span);
             }
             Kw::COLOR | Kw::LOCATE | Kw::SCREEN => {
                 let arguments = self.argument_list(false)?;

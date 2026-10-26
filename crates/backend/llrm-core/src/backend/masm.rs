@@ -220,6 +220,46 @@ pub struct Procedure {
     pub registers: llrm_target::FrameRegisters,
 }
 
+/// A near procedure of `code` and a return, called by name: a routine of the
+/// target's that the module holds once.
+pub fn routine_procedure(
+    name: &str,
+    code: Vec<u8>,
+    registers: llrm_target::FrameRegisters,
+    regs: Regs,
+) -> Procedure {
+    let what = Semantics { name: Some(name.into()), ..Semantics::new(Operation::Call) };
+    let instruction = lir::Insn::new(1, None, Some(what), vec![], vec![]);
+    // The return is an instruction, so the frame the printer opens is closed
+    // before it: a `ret` among the bytes would skip the epilogue.
+    let back = Semantics { name: Some("ret".into()), ..Semantics::new(Operation::Return) };
+    let back = lir::Insn::new(2, None, Some(back), vec![], vec![]);
+    let mut body = lir::LirBody::new(
+        name,
+        1,
+        vec![lir::LirBlock::new(1, vec![std::sync::Arc::new(instruction), std::sync::Arc::new(back)]).into()],
+        Default::default(),
+        Default::default(),
+    );
+    body.registers = Some(regs);
+    Procedure {
+        name: name.into(),
+        public: false,
+        far: false,
+        body,
+        reserve: 0,
+        callees: IndexMap::from_iter([(
+            1,
+            Callee { name: name.into(), far: false, pops: 0, code: vec![InlinePart::Bytes(code)], tail: false },
+        )]),
+        interrupt: None,
+        size: false,
+        entry: 0,
+        stack_check: None,
+        registers,
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Label {
     pub name: String,
@@ -636,6 +676,9 @@ fn moves_stack(body: &crate::model::lir::LirBody) -> bool {
 /// than this one's (cdecl's ECX and EDX under Watcom's) takes the caller's
 /// value.
 fn saved_of(procedure: &Procedure) -> Vec<RegId> {
+    if let Some(saved) = &procedure.body.frame_saved {
+        return saved.clone();
+    }
     let found = procedure.body.facts.0.get::<BodyRoots>(&procedure.body);
     let mut roots = if procedure.registers.free {
         found.of_values(procedure.body.regs(), procedure.registers.pointer)
@@ -652,7 +695,7 @@ fn saved_of(procedure: &Procedure) -> Vec<RegId> {
 
 /// Where `procedure` saves them, and sets up its frame where `frame`, when that
 /// is not its entry (`shrinkwrap`).
-fn wrap_of(
+pub(crate) fn wrap_of(
     procedure: &Procedure,
     body: &crate::model::lir::LirBody,
     frame: bool,
@@ -676,6 +719,7 @@ fn wrap_of(
         &kept,
         (frame && movable).then_some((registers.pointer, registers.stack)),
         stack_addressed,
+        procedure.size,
     )
 }
 
@@ -723,6 +767,53 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
         },
         None => procedure,
     }
+}
+
+/// `procedure` with what each return takes back as instructions before the
+/// return, as the pin has them when `BranchFolder` runs
+/// (`PrologEpilogInserter` runs first): the saved registers' pops and the
+/// frame's teardown, which tail merging then counts. Unchanged where the
+/// entry or a piece of the frame is set up elsewhere (runtime-built,
+/// interrupt) or placed by `shrinkwrap`: those stay in the printer.
+pub fn exits_inserted(procedure: Procedure) -> Procedure {
+    if procedure.entry != 0 || procedure.interrupt.is_some() || procedure.body.frame_exit.is_some() {
+        return procedure;
+    }
+    let held = frame_held(&procedure);
+    let omit = frame_omitted(&procedure, 0, held).is_some();
+    if !omit && held {
+        return procedure;
+    }
+    let sequences = Sequences::of(&procedure, omit);
+    if sequences.wrap.as_ref().is_some_and(|wrap| !wrap.wrapped.is_empty()) || sequences.exit.is_empty() {
+        return procedure;
+    }
+    let saved = saved_of(&procedure);
+    let blocks: Vec<crate::model::lir::Block> = procedure
+        .body
+        .blocks
+        .iter()
+        .map(|block| {
+            if !block.insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Return)) {
+                return block.clone();
+            }
+            let mut made = lir::LirBlock::clone(block);
+            let mut insns: Vec<Arc<lir::Insn>> = Vec::with_capacity(block.insns.len() + sequences.exit.len());
+            for one in block.insns.iter() {
+                if one.what.as_ref().is_some_and(|what| what.op == Operation::Return) {
+                    let at = one.covers.map_or(one.at, |covers| covers.0);
+                    insns.extend(sequences.exit.iter().map(|what| {
+                        Arc::new(lir::Insn::new(one.at, Some((at, at)), Some(what.clone()), Vec::new(), Vec::new()))
+                    }));
+                }
+                insns.push(Arc::clone(one));
+            }
+            made.insns = insns.into();
+            made.into()
+        })
+        .collect();
+    let body = procedure.body.with_blocks(blocks);
+    Procedure { body: lir::LirBody { frame_exit: Some(omit), frame_saved: Some(saved), ..body }, ..procedure }
 }
 
 /// The stack-limit comparison once the frame is allocated, if the procedure
@@ -1015,6 +1106,10 @@ pub fn listing(
 ) -> Result<Vec<Item>, Unprintable> {
     let registers = &procedure.registers;
     let held = frame_held(procedure);
+    if procedure.body.frame_exit == Some(false) {
+        let registers = llrm_target::FrameRegisters { free: false, ..registers.clone() };
+        return Ok(built(procedure, number, false)?.into_iter().map(|item| spelled(item, &registers)).collect());
+    }
     let (items, registers) = match frame_omitted(procedure, number, held) {
         Some(items) => (items, registers.clone()),
         None if held => {
@@ -1029,6 +1124,98 @@ pub fn listing(
     Ok(items.into_iter().map(|item| spelled(item, &registers)).collect())
 }
 
+/// What a procedure sets up and takes back, and where: the frame and each
+/// callee-saved register are set up at the entry, or where `shrinkwrap` put
+/// them, and taken back on the returns that path reaches. A function of the
+/// procedure and whether its frame register is omitted, so `built` prints it
+/// and a phase that makes it instructions asks the same question.
+struct Sequences {
+    /// Where the pieces go when not at the entry.
+    wrap: Option<crate::backend::shrinkwrap::Wrap>,
+    /// What the entry sets up: every piece no block sets up later.
+    entry: Vec<Semantics>,
+    /// What each return takes back of what the entry set up, the registers
+    /// last set up first, then the frame.
+    exit: Vec<Semantics>,
+    enter: Vec<Semantics>,
+    leave: Vec<Semantics>,
+    kept: Vec<Semantics>,
+    restores: Vec<Semantics>,
+    saved: Vec<RegId>,
+    count: usize,
+    first: bool,
+}
+
+impl Sequences {
+    fn of(
+        procedure: &Procedure,
+        omit: bool,
+    ) -> Self {
+        let (mut enter, mut leave) = parts(procedure, omit);
+        // The registers a `saved_first` frame pushes are part of `enter`.
+        let first = procedure.body.saved_first;
+        let lows = if first { Vec::new() } else { saved_of(procedure) };
+        let count = lows.len();
+        // Decided before the exits became instructions, which name the saved
+        // registers in every return.
+        let wrap = if procedure.body.frame_exit.is_some() {
+            None
+        } else {
+            wrap_of(procedure, &procedure.body, enter.len() > count, omit)
+        };
+        let kept = enter.split_off(enter.len() - count);
+        let restores: Vec<Semantics> = leave.drain(..count).collect();
+        let saved: Vec<RegId> =
+            procedure.registers.saved.iter().filter(|(_, low)| lows.contains(low)).map(|(whole, _)| *whole).collect();
+        let mut sequences =
+            Self { wrap, entry: Vec::new(), exit: Vec::new(), enter, leave, kept, restores, saved, count, first };
+        let wrapped = |sequences: &Self, piece: crate::backend::shrinkwrap::Piece| {
+            sequences.wrap.as_ref().is_some_and(|wrap| wrap.wrapped.contains(&piece))
+        };
+        let mut entry_items: Vec<Semantics> = Vec::new();
+        let mut entry_leave: Vec<Semantics> = Vec::new();
+        if !wrapped(&sequences, crate::backend::shrinkwrap::Piece::Frame) {
+            entry_items.extend(sequences.enter.iter().cloned());
+        }
+        for (at, whole) in sequences.saved.iter().enumerate() {
+            if !wrapped(&sequences, crate::backend::shrinkwrap::Piece::Saved(*whole)) {
+                entry_items.push(sequences.kept[at].clone());
+            }
+        }
+        // Taken back in the reverse of that order.
+        for (at, whole) in sequences.saved.iter().enumerate().rev() {
+            if !wrapped(&sequences, crate::backend::shrinkwrap::Piece::Saved(*whole)) {
+                entry_leave.push(sequences.restores[sequences.count - 1 - at].clone());
+            }
+        }
+        if !wrapped(&sequences, crate::backend::shrinkwrap::Piece::Frame) {
+            entry_leave.extend(sequences.leave.iter().cloned());
+        }
+        sequences.entry = entry_items;
+        sequences.exit = if procedure.body.frame_exit.is_some() { Vec::new() } else { entry_leave };
+        sequences
+    }
+
+    /// The items that set a piece up and take it back.
+    fn piece(
+        &self,
+        piece: &crate::backend::shrinkwrap::Piece,
+    ) -> (Vec<Semantics>, Vec<Semantics>) {
+        match piece {
+            crate::backend::shrinkwrap::Piece::Frame => (self.enter.clone(), self.leave.clone()),
+            // A `saved_first` frame's registers are in the frame's own
+            // sequence.
+            crate::backend::shrinkwrap::Piece::Saved(_) if self.first => (Vec::new(), Vec::new()),
+            crate::backend::shrinkwrap::Piece::Saved(whole) => {
+                let at = self.saved.iter().position(|one| one == whole).expect("a kept register");
+                // `kept` is in the order of `saved_of`; `restores` is the
+                // reverse.
+                (vec![self.kept[at].clone()], vec![self.restores[self.count - 1 - at].clone()])
+            }
+        }
+    }
+}
+
 /// The procedure's items with the frame register LIR names BP, or not where
 /// `omit`.
 fn built(
@@ -1037,59 +1224,9 @@ fn built(
     omit: bool,
 ) -> Result<Vec<Item>, Unprintable> {
     let regs = procedure.body.regs();
-    let (mut enter, mut leave) = parts(procedure, omit);
-    // Each piece (the frame, a register kept) is set up where it is first
-    // needed and taken back on the returns that path reaches, not at the entry
-    // and every return (`shrinkwrap`).
-    // The registers a `saved_first` frame pushes are part of `enter`.
-    let first = procedure.body.saved_first;
-    let lows = if first { Vec::new() } else { saved_of(procedure) };
-    let count = lows.len();
-    let wrap = wrap_of(procedure, &procedure.body, enter.len() > count, omit);
-    let kept = enter.split_off(enter.len() - count);
-    let restores: Vec<Semantics> = leave.drain(..count).collect();
-    let saved: Vec<RegId> =
-        procedure.registers.saved.iter().filter(|(_, low)| lows.contains(low)).map(|(whole, _)| *whole).collect();
-    // The items that set a piece up and take it back.
-    let item = |piece: &crate::backend::shrinkwrap::Piece| -> (Vec<Semantics>, Vec<Semantics>) {
-        match piece {
-            crate::backend::shrinkwrap::Piece::Frame => (enter.clone(), leave.clone()),
-            // A `saved_first` frame's registers are in the frame's own
-            // sequence.
-            crate::backend::shrinkwrap::Piece::Saved(_) if first => (Vec::new(), Vec::new()),
-            crate::backend::shrinkwrap::Piece::Saved(whole) => {
-                let at = saved.iter().position(|one| one == whole).expect("a kept register");
-                // `kept` is in the order of `saved_of`; `restores` is the
-                // reverse.
-                (vec![kept[at].clone()], vec![restores[count - 1 - at].clone()])
-            }
-        }
-    };
-    let wrapped =
-        |piece: crate::backend::shrinkwrap::Piece| wrap.as_ref().is_some_and(|wrap| wrap.wrapped.contains(&piece));
-    // What the entry sets up: every piece no block sets up later.
-    let mut entry_items: Vec<Semantics> = Vec::new();
-    let mut entry_leave: Vec<Semantics> = Vec::new();
-    if !wrapped(crate::backend::shrinkwrap::Piece::Frame) {
-        entry_items.extend(enter.iter().cloned());
-    }
-    for (at, whole) in saved.iter().enumerate() {
-        if !wrapped(crate::backend::shrinkwrap::Piece::Saved(*whole)) {
-            entry_items.push(kept[at].clone());
-        }
-    }
-    // Taken back in the reverse of that order: the registers last set up
-    // first, then the frame.
-    for (at, whole) in saved.iter().enumerate().rev() {
-        if !wrapped(crate::backend::shrinkwrap::Piece::Saved(*whole)) {
-            entry_leave.push(restores[count - 1 - at].clone());
-        }
-    }
-    if !wrapped(crate::backend::shrinkwrap::Piece::Frame) {
-        entry_leave.extend(leave.iter().cloned());
-    }
-    let enter = entry_items;
-    let unwrapped_leave = entry_leave;
+    let sequences = Sequences::of(procedure, omit);
+    let (wrap, enter, unwrapped_leave) = (&sequences.wrap, sequences.entry.clone(), sequences.exit.clone());
+    let item = |piece: &crate::backend::shrinkwrap::Piece| sequences.piece(piece);
     let blocks = &procedure.body.blocks;
     let lined = || blocks.iter().flat_map(|block| &block.insns).filter(|one| one.line.is_some());
     let first = lined().next();
@@ -1134,7 +1271,22 @@ fn built(
         }
         let following = if index + 1 < blocks.len() { Some(blocks[index + 1].at) } else { None };
         let fallthrough = _fallthrough_jump(block, following);
+        // The edge into the restore that `shrinkwrap` split: what the path took
+        // on is taken back at the end of this block, before the jump that
+        // leaves it (printed or not), or where it falls into the restore. The
+        // paths that took nothing reach the restore's label past it.
+        let closing = wrap.as_ref().and_then(|wrap| wrap.closes_after.get(&block.at));
+        let last_printed = block.insns.iter().rev().find(|one| prints(one));
+        let ends_in_jump =
+            last_printed.is_some_and(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Jump));
+        let mut closed = false;
         for one in &block.insns {
+            if let Some(pieces) =
+                closing.filter(|_| ends_in_jump && last_printed.is_some_and(|last| Arc::ptr_eq(last, one)))
+            {
+                out.extend(pieces.iter().flat_map(|piece| item(piece).1).map(Item::Semantics));
+                closed = true;
+            }
             if first.is_some_and(|first| Arc::ptr_eq(first, one)) {
                 out.push(Item::Mark(Mark::BodyStart));
             }
@@ -1256,6 +1408,9 @@ fn built(
                 out.push(Item::Mark(Mark::BodyEnd));
             }
         }
+        if let Some(pieces) = closing.filter(|_| !closed) {
+            out.extend(pieces.iter().flat_map(|piece| item(piece).1).map(Item::Semantics));
+        }
         let fall = _falls_to(block, &procedure.name)?;
         if let Some(fall) = fall {
             if index + 1 == blocks.len() || blocks[index + 1].at != fall {
@@ -1283,7 +1438,9 @@ fn frame_omitted(
     held: bool,
 ) -> Option<Vec<Item>> {
     let omitted = stack_addressed(procedure, number)?;
-    if !procedure.size || held {
+    // Where allocation freed the frame register the pin's `hasFP` said no, and
+    // the pin omits it whatever the bytes (BASIC, which never asks, compares).
+    if !procedure.size || held || procedure.registers.free {
         return Some(omitted);
     }
     let bytes = |items: &[Item]| -> usize {
@@ -1571,21 +1728,26 @@ fn addressed_pass(
                         depth = None;
                     }
                     Operation::Jump | Operation::Branch => {
-                        if what.indirect {
+                        // A jump table's targets are all the labels it names.
+                        if what.indirect && what.table.is_empty() {
                             return Err(stop(procedure, "an indirect jump"));
                         }
-                        let target = name_of(what.target.ok_or(Stop::Refused)?);
-                        match known.get(&target) {
-                            _ if in_dead => {}
-                            Some(&there) if there != here => {
-                                return Err(stop(
-                                    procedure,
-                                    &format!("a jump to {target} at depth {here} and {there}"),
-                                ));
-                            }
-                            Some(_) => {}
-                            None => {
-                                known.insert(target, here);
+                        let targets: Vec<i64> =
+                            if what.indirect { what.table.clone() } else { vec![what.target.ok_or(Stop::Refused)?] };
+                        for target in targets {
+                            let target = name_of(target);
+                            match known.get(&target) {
+                                _ if in_dead => {}
+                                Some(&there) if there != here => {
+                                    return Err(stop(
+                                        procedure,
+                                        &format!("a jump to {target} at depth {here} and {there}"),
+                                    ));
+                                }
+                                Some(_) => {}
+                                None => {
+                                    known.insert(target, here);
+                                }
                             }
                         }
                         if what.op == Operation::Jump {
@@ -2020,7 +2182,22 @@ pub fn _instruction(
                 vec![name.to_owned()]
             }
         }
+        // The allocator names every copy `mov`; between xmm registers it
+        // is `movaps`.
+        Operation::Move
+            if name == "mov"
+                && matches!(
+                    (&what.dests[0], &what.sources[0]),
+                    (Loc::Reg(into), Loc::Reg(outof)) if into.register.is_xmm() && outof.register.is_xmm()
+                ) =>
+        {
+            vec![format!("movaps {}, {}", dests[0], sources[0])]
+        }
         Operation::Move | Operation::Address => vec![format!("{name} {}, {}", dests[0], sources[0])],
+        // JWasm refuses `rep bsf`; the pin prints it, so the prefix is a byte.
+        Operation::Binary if name == "bsf" && what.repeat => {
+            vec!["db 0F3h".to_owned(), format!("bsf {}, {}", dests[0], sources[1])]
+        }
         Operation::Binary | Operation::Select => vec![format!("{name} {}, {}", dests[0], sources[1])],
         Operation::Unary => vec![format!("{name} {}", dests[0])],
         Operation::Compare if name.starts_with('f') => {
@@ -2271,6 +2448,41 @@ mod tests {
 
     fn ax() -> Loc {
         Loc::Reg(ir::Reg { register: RegId::AX, width: 2 })
+    }
+
+    /// A copy between xmm registers printed as `mov xmm0, xmm2`, which no
+    /// assembler takes: it is `movaps`.
+    #[test]
+    fn test_a_copy_between_xmm_registers_prints_movaps() {
+        let regs = crate::backend::registerinfo::test_regs();
+        let xmm = |register| Loc::Reg(ir::Reg { register, width: 16 });
+        let copy = Semantics {
+            name: Some("mov".into()),
+            dests: vec![xmm(RegId::XMM0)],
+            sources: vec![xmm(RegId::XMM2)],
+            ..Semantics::new(Operation::Move)
+        };
+        assert_eq!(_instruction(regs, &copy, &no_names(), 0).unwrap(), ["movaps xmm0, xmm2"]);
+    }
+
+    /// A `bsf` marked `repeat` carries the pin's `rep` prefix, which JWasm
+    /// refuses before anything but a string instruction: it is the byte,
+    /// then the `bsf`.
+    #[test]
+    fn test_bsf_prints_its_rep_prefix_as_a_byte() {
+        let regs = crate::backend::registerinfo::test_regs();
+        let eax = Loc::Reg(ir::Reg { register: RegId::EAX, width: 4 });
+        let ecx = Loc::Reg(ir::Reg { register: RegId::ECX, width: 4 });
+        let scan = |name: &str, repeat| Semantics {
+            name: Some(name.into()),
+            dests: vec![eax.clone()],
+            sources: vec![eax.clone(), ecx.clone()],
+            repeat,
+            ..Semantics::new(Operation::Binary)
+        };
+        assert_eq!(_instruction(regs, &scan("bsf", true), &no_names(), 0).unwrap(), ["db 0F3h", "bsf eax, ecx"]);
+        assert_eq!(_instruction(regs, &scan("bsf", false), &no_names(), 0).unwrap(), ["bsf eax, ecx"]);
+        assert_eq!(_instruction(regs, &scan("bsr", false), &no_names(), 0).unwrap(), ["bsr eax, ecx"]);
     }
 
     /// A string move prints as the instruction it is: `rep` where it has a
@@ -3137,9 +3349,10 @@ mod tests {
     }
 
     /// Reached around the block that names it as well, a return cannot pop what
-    /// was not pushed: the entry saves, as before.
+    /// was not pushed: the late block pops at its end, before it falls into the
+    /// return the early exit jumps to.
     #[test]
-    fn test_a_return_reached_around_the_save_keeps_the_save_at_the_entry() {
+    fn test_a_return_reached_around_the_save_has_the_pop_at_the_end_of_the_late_path() {
         let branch = Semantics { target: Some(3), ..semantics(Operation::Branch, "je", vec![], vec![]) };
         let si = || Loc::Reg(ir::Reg { register: RegId::SI, width: 2 });
         let blocks = vec![
@@ -3170,11 +3383,10 @@ mod tests {
         };
         let lines: Vec<String> =
             _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
-        assert!(
-            lines.iter().position(|one| one == "push si").unwrap()
-                < lines.iter().position(|one| one == "L0_1:").unwrap(),
-            "{lines:?}"
-        );
+        let at = |wanted: &str| lines.iter().position(|one| one == wanted).unwrap();
+        assert!(at("L0_2:") < at("push si"), "{lines:?}");
+        assert!(at("pop si") < at("L0_3:"), "{lines:?}");
+        assert_eq!(lines.iter().filter(|one| *one == "pop si").count(), 1, "{lines:?}");
     }
 
     /// peephole's multiply by three has no address, only base, index and scale.
