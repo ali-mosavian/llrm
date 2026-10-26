@@ -2084,7 +2084,31 @@ impl Compiler {
         Ok(())
     }
 
+    /// A TYPE's STRING * n and array bounds may name a CONST declared above it,
+    /// but the module's constants are collected after the types: the numeric
+    /// ones are lent to the types and taken back.
     fn type_declarations(
+        &mut self,
+        module: &Module,
+    ) -> Result<(), SemanticError> {
+        let mut lent = Vec::new();
+        for statement in &module.statements {
+            if let Statement::Const { name, value, .. } = statement {
+                if let Ok(constant) = self.constant(value) {
+                    if self.constants.insert(canonical(name).into(), constant).is_none() {
+                        lent.push(canonical(name).to_owned());
+                    }
+                }
+            }
+        }
+        let result = self.type_declarations_with_constants(module);
+        for name in lent {
+            self.constants.remove(&name);
+        }
+        result
+    }
+
+    fn type_declarations_with_constants(
         &mut self,
         module: &Module,
     ) -> Result<(), SemanticError> {
