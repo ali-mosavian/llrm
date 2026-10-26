@@ -6342,7 +6342,7 @@ define i1 @f(i16 %x) addrspace(1) {
 }
 ";
     let got = listing(text, "f");
-    assert!(got.contains(&"mov ax, offset messages".to_owned()) && got.contains(&"add ax, 8".to_owned()), "{got:?}");
+    assert!(got.contains(&"mov ax, offset messages+8".to_owned()), "{got:?}");
 }
 
 /// A GEP off a segment's far pointer (`A000:0`, plus 1) was refused, "an
