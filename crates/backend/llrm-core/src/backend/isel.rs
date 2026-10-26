@@ -3612,6 +3612,18 @@ impl Selector<'_, '_, '_> {
             out.push(insn(at, semantics(Operation::Extend, "movzx", vec![Loc::Held(wide)], vec![Loc::Held(word)])));
             return Ok(wide);
         }
+        // `ptrtoint` of a near pointer constant to an integer wider than the pointer: the address, zero-extended.
+        if let Operand::Constant(id) = operand
+            && let ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::PtrToInt, value }) =
+                self.module.context.get(id).kind.clone()
+            && matches!(self.types().get(self.module.context.get(value).ty), Type::Pointer(0))
+            && width > self.address_bytes()
+        {
+            let word = self.held(Operand::Constant(value), self.module.context.get(value).ty, at, out)?;
+            let wide = Held { value: self.fresh(), width };
+            out.push(insn(at, semantics(Operation::Extend, "movzx", vec![Loc::Held(wide)], vec![Loc::Held(word)])));
+            return Ok(wide);
+        }
         let operand = self.through_ptrtoint(operand);
         let pointer = match operand {
             Operand::Value(value) => self.folded(value)?,

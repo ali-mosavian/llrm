@@ -6291,6 +6291,24 @@ define i32 @f() addrspace(1) {
     );
 }
 
+/// A function's address handed on as a dword (`qglDspCallback( (unsigned long) snd_dsp_callback )` in QCport, compiled by clang):
+/// `ptrtoint (ptr @cb to i32)` was refused, "an address of no global". It is the near address, zero-extended.
+#[test]
+fn test_ptrtoint_of_a_near_global_to_a_dword_is_its_zero_extended_address() {
+    let text = "@g = internal global [8 x i8] zeroinitializer
+declare void @take(i32)
+define void @f() {
+  call void @take(i32 ptrtoint (ptr @g to i32))
+  ret void
+}
+";
+    let got = listing(text, "f");
+    assert!(
+        got.iter().any(|line| line.contains("offset g")) && got.iter().any(|line| line.starts_with("movzx ")),
+        "{got:?}"
+    );
+}
+
 /// Constant expressions as operands, the shapes `simplifyCastInst` and the GEP
 /// fold make since #2614/#2610: each was refused, "an address of no global".
 /// `ptrtoint` of a global (and of a GEP off one) is its link-time address; a

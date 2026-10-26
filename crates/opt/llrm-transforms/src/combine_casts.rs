@@ -1,5 +1,5 @@
-//! InstCombine's `visitTrunc`, `visitZExt`, `visitSExt` and the helpers they
-//! call, from
+//! InstCombine's `visitTrunc`, `visitZExt`, `visitSExt`, `visitPtrToInt`,
+//! `visitIntToPtr` and the helpers they call, from
 //! [`InstCombineCasts.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp)
 //! at d1106deb71cc.
 //!
@@ -705,6 +705,41 @@ fn is_eliminable_cast_pair(
         return None;
     }
     Some(result)
+}
+
+/// `visitPtrToInt`: a pointer cast to an integer wider than the pointer is the pointer-sized cast, then a zero extension. The
+/// backend selects a cast only at the pointer's own width (or a far pointer's two words), so this is where the width is settled.
+pub fn visit_ptr_to_int(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Visit {
+    let operation = c.function.instruction(inst).clone();
+    let src = operation.operands[0];
+    let Type::Pointer(space) = c.context.types.get(c.type_of(src)).clone() else { return Visit::None };
+    let pointer_bits = c.env.layout.pointer(space).bits;
+    if bits_of(c, operation.ty) <= pointer_bits {
+        return Visit::None;
+    }
+    let int_ptr = c.context.types.int(pointer_bits);
+    let same = c.create_cast(inst, CastOp::PtrToInt, src, int_ptr, Flags::default());
+    replace_with_int_cast(c, inst, same, operation.ty, false, Flags::default())
+}
+
+/// `visitIntToPtr`: an integer of another width than the pointer reaches it through the pointer-sized integer.
+pub fn visit_int_to_ptr(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Visit {
+    let operation = c.function.instruction(inst).clone();
+    let src = operation.operands[0];
+    let Type::Pointer(space) = c.context.types.get(operation.ty).clone() else { return Visit::None };
+    let pointer_bits = c.env.layout.pointer(space).bits;
+    if width(c, src) == pointer_bits {
+        return Visit::None;
+    }
+    let int_ptr = c.context.types.int(pointer_bits);
+    let sized = create_int_cast(c, inst, src, int_ptr, false);
+    c.replace_with_new(inst, Opcode::Cast(CastOp::IntToPtr), operation.ty, vec![sized], Flags::default())
 }
 
 /// `commonCastTransforms` (:223): the transforms common to all cast visitors.

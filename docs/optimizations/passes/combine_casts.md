@@ -1,10 +1,10 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_casts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_casts.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_casts.rs sha256:bf331e32b083a4530cf8d93274ef2e34ebfb9bbb20ee050d82f006af08eb992c -->
+<!-- src: crates/opt/llrm-transforms/src/combine_casts.rs sha256:e123fa57332a6c6915139fc7d8522454eb094e73c9ec1fa3f6b8380a0db37238 -->
 
 # combine_casts
 
-InstCombine's `visitTrunc`, `visitZExt`, `visitSExt` and the helpers they
-call, from
+InstCombine's `visitTrunc`, `visitZExt`, `visitSExt`, `visitPtrToInt`,
+`visitIntToPtr` and the helpers they call, from
 [`InstCombineCasts.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp)
 at d1106deb71cc.
 

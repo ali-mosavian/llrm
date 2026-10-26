@@ -3,7 +3,7 @@ use llrm_mir::module::InstId;
 use llrm_mir::opcode::{CastOp, Opcode};
 
 use crate::combine::{Combiner, Visit, combine_with};
-use crate::combine_casts::{visit_sext, visit_trunc, visit_zext};
+use crate::combine_casts::{visit_int_to_ptr, visit_ptr_to_int, visit_sext, visit_trunc, visit_zext};
 use crate::testing::{parsed, printed};
 
 /// The casts' `visit*` alone, through the driver.
@@ -15,6 +15,8 @@ fn visit(
         Opcode::Cast(CastOp::Trunc) => visit_trunc(c, inst),
         Opcode::Cast(CastOp::ZExt) => visit_zext(c, inst),
         Opcode::Cast(CastOp::SExt) => visit_sext(c, inst),
+        Opcode::Cast(CastOp::PtrToInt) => visit_ptr_to_int(c, inst),
+        Opcode::Cast(CastOp::IntToPtr) => visit_int_to_ptr(c, inst),
         _ => Visit::None,
     }
 }
@@ -406,5 +408,26 @@ fn a_sext_of_a_trunc_is_a_sext_or_a_shift_pair() {
         "i32 %x",
         "  %t = trunc i32 %x to i8\n  %a = ashr i8 %t, 7\n  %r = sext i8 %a to i32\n  ret i32 %r\n",
         "  %0 = shl i32 %x, 24\n  %1 = ashr i32 %0, 31\n  ret i32 %1\n",
+    );
+}
+
+/// `p - q` on 16-bit pointers came from clang as `ptrtoint ptr to i32` twice: the backend refused it ("ptrtoint") at every
+/// level, which failed `cmd_enqueue` of QCport. A pointer cast to a wider integer is the pointer-sized cast, then a zero extension.
+#[test]
+fn a_ptrtoint_wider_than_the_pointer_is_a_pointer_sized_cast_then_a_zext() {
+    let text = "define i32 @f(ptr %p) {\nb0:\n  %a = ptrtoint ptr %p to i32\n  ret i32 %a\n}\n";
+    assert_eq!(
+        combined_under("p:16:16", text),
+        "define i32 @f(ptr %p) {\nb0:\n  %0 = ptrtoint ptr %p to i16\n  %1 = zext i16 %0 to i32\n  ret i32 %1\n}\n"
+    );
+}
+
+/// The same for the other direction: an integer of another width reaches the pointer through the pointer-sized integer.
+#[test]
+fn an_inttoptr_of_another_width_goes_through_the_pointer_sized_integer() {
+    let text = "define ptr @f(i32 %x) {\nb0:\n  %a = inttoptr i32 %x to ptr\n  ret ptr %a\n}\n";
+    assert_eq!(
+        combined_under("p:16:16", text),
+        "define ptr @f(i32 %x) {\nb0:\n  %0 = trunc i32 %x to i16\n  %1 = inttoptr i16 %0 to ptr\n  ret ptr %1\n}\n"
     );
 }
