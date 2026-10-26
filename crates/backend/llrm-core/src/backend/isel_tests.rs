@@ -6958,3 +6958,25 @@ fn test_a_signed_compare_of_i1_orders_true_below_false() {
         assert!(unsigned.contains(&branch(signed).as_str()), "icmp {signed} i1: {}", branch(signed));
     }
 }
+
+/// The far address of a near global plus a constant, passed twice in one
+/// block, shared one `mov si, offset x` and made each argument `lea`/`add`
+/// from it, a register held across both calls (16 instructions for 11, m16
+/// -Os nestud and C `use(&X[2]); use(&X[3])`). Each is `push offset x+n`.
+#[test]
+fn test_a_far_global_plus_a_constant_is_passed_as_a_symbol_and_offset() {
+    let text = "@x = external addrspace(0) global [0 x i8]
+
+declare void @use(ptr addrspace(1), i16) addrspace(1)
+
+define void @f() addrspace(1) {
+  call addrspace(1) void @use(ptr addrspace(1) addrspacecast (ptr getelementptr inbounds (i8, ptr @x, i16 4) to ptr addrspace(1)), i16 2)
+  call addrspace(1) void @use(ptr addrspace(1) addrspacecast (ptr getelementptr inbounds (i8, ptr @x, i16 6) to ptr addrspace(1)), i16 2)
+  ret void
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line == "push offset x+4"), "{got:?}");
+    assert!(got.iter().any(|line| line == "push offset x+6"), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("lea") || line.starts_with("add si")), "{got:?}");
+}

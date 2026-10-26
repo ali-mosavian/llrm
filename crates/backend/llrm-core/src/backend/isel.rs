@@ -1115,6 +1115,7 @@ pub fn selected_with<'c>(
         current: None,
         symbol_registers: BTreeMap::new(),
         far_globals: IndexMap::default(),
+        far_symbols: IndexMap::default(),
         materialized: Vec::new(),
         edges: IndexMap::default(),
         chains: IndexMap::default(),
@@ -1744,6 +1745,10 @@ pub struct Selector<'m, 'c, 'p> {
     symbol_registers: BTreeMap<(Space, i64, i64), (Option<BlockId>, Held)>,
     /// Each far global's offset and selector, where a block made them.
     far_globals: IndexMap<(BlockId, GlobalId, i64), (Held, Held)>,
+    /// The symbol each `far_globals` base register holds, by its value: a
+    /// base read as a value is `mov r, sym+offset`, not an `add` held across
+    /// the block.
+    far_symbols: IndexMap<u32, (Space, i64)>,
     /// What `global` made for the instruction being selected, placed before it.
     materialized: Vec<Arc<Insn>>,
     /// The LIR blocks each MIR edge leaves from: a switch's cases leave
@@ -3799,6 +3804,15 @@ impl Selector<'_, '_, '_> {
                 };
                 semantics(Operation::Address, "lea", vec![Loc::Held(held)], vec![Loc::Address(address)])
             }
+            Pointer::Far { base: Some(base), offset, .. } if self.far_symbols.contains_key(&base.value) => {
+                let (space, index) = self.far_symbols[&base.value];
+                let symbol = Loc::Imm(Imm {
+                    value: 0,
+                    width: held.width,
+                    address: Some(Addr { index, ..Addr::new(space, offset) }),
+                });
+                semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![symbol])
+            }
             // A far pointer's offset.
             Pointer::Based { base, offset, .. } | Pointer::Far { base: Some(base), offset, .. } => {
                 let step = Loc::Imm(Imm { value: offset, width: held.width, address: None });
@@ -4035,6 +4049,7 @@ impl Selector<'_, '_, '_> {
                         self.materialized
                             .push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![from])));
                     }
+                    self.far_symbols.insert(base.value, (space, i64::from(global.0)));
                     if carry != 0 {
                         let Some(shift) = self.segments.huge_shift else {
                             return refuse("a huge pointer on a machine that states no selector stride");
