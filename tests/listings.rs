@@ -209,13 +209,19 @@ fn gap(
 /// The loops of a program that differ from BASIC's, by (program, loop,
 /// language): how many instructions differ. Lower an entry as its cause is
 /// fixed; the test fails when one is too high or too low.
-const KNOWN: [(&str, usize, &str, usize); 6] = [
-    // copy1d: the three-value pointer rotation keeps two copies in C and Nib
-    // (loop 2), and loop 1 differs by 10.
-    ("copy1d", 1, "c", 10),
-    ("copy1d", 2, "c", 2),
-    ("copy1d", 1, "nib", 10),
-    ("copy1d", 2, "nib", 2),
+const KNOWN: [(&str, usize, &str, usize); 8] = [
+    // copy1d: BASIC keeps the segment count in frame cells before the second
+    // loop (`mov [F0], R0`, `add R8, [F0]`), C and Nib in registers (loop 2,
+    // 10), and C and Nib copy a pointer with `mov ; add 4` where BASIC has
+    // a `lea` (loop 3, 2).
+    ("copy1d", 2, "c", 10),
+    ("copy1d", 3, "c", 2),
+    ("copy1d", 2, "nib", 10),
+    ("copy1d", 3, "nib", 2),
+    // pairs: C and Nib spill two registers around the segment arithmetic
+    // before the inner loop (loop 0, 7); BASIC does not.
+    ("pairs", 0, "c", 7),
+    ("pairs", 0, "nib", 7),
     // tri: C widens each operand before the subtract; BASIC subtracts in 16
     // bits (width choice, w10).
     ("tri", 2, "c", 8),
