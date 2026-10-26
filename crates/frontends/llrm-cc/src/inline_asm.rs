@@ -32,23 +32,13 @@ pub fn translate(
     let mut declares: Vec<String> = Vec::new();
     let mut at = 0;
     while at < lines.len() {
-        if lines[at].starts_with("declare ") && lines[at].contains("@__emit__(") {
-            at += 1;
-            continue;
-        }
         if !is_asm(lines[at]) {
             out.push(lines[at].to_owned());
             at += 1;
             continue;
         }
         let mut run = Vec::new();
-        // `__emit__` answers an unused number; the replacing call keeps it so
-        // the numbering stays dense.
-        let mut numbered = None;
         while at < lines.len() && is_asm(lines[at]) {
-            if is_emit(lines[at]) && numbered.is_none() {
-                numbered = lines[at].trim().split_once(" = ").map(|(name, _)| name.to_owned());
-            }
             run.push(parse(lines[at])?);
             at += 1;
         }
@@ -58,7 +48,7 @@ pub fn translate(
         if result.is_some() {
             at += 1;
         }
-        let (call, declare) = block(&run, result.as_ref(), numbered, declares.len(), assemble)?;
+        let (call, declare) = block(&run, result.as_ref(), declares.len(), assemble)?;
         out.extend(call);
         declares.push(declare);
     }
@@ -74,29 +64,6 @@ pub fn translate(
 fn is_asm(line: &str) -> bool {
     let line = line.trim_start();
     line.starts_with("call ") && line.contains(" asm sideeffect ")
-        || is_emit(line) && (line.starts_with("call ") || line.contains(" = call "))
-}
-
-/// Borland's `__emit__(bytes...)`, a call to the library's declaration rather
-/// than an asm statement.
-fn is_emit(line: &str) -> bool {
-    line.contains("@__emit__(")
-}
-
-/// The bytes an `__emit__` call lists, as `.byte` text.
-fn emit_bytes(line: &str) -> Result<String, String> {
-    let args = line.split_once("@__emit__(").and_then(|(_, rest)| rest.split_once(')')).ok_or("asm: __emit__")?.0;
-    let bytes: Result<Vec<String>, String> = args
-        .split(',')
-        .map(|one| {
-            let value = one.split_whitespace().last().ok_or("asm: __emit__ argument")?;
-            value
-                .parse::<i64>()
-                .map(|n| (n & 0xff).to_string())
-                .map_err(|_| "asm: __emit__ needs constant bytes".to_owned())
-        })
-        .collect();
-    Ok(format!(".byte {}", bytes?.join(", ")))
 }
 
 /// `(destination, type)` of a function's result loaded from a slot and
@@ -149,9 +116,6 @@ fn quoted(
 }
 
 fn parse(line: &str) -> Result<Call, String> {
-    if is_emit(line) {
-        return Ok(Call { text: emit_bytes(line)?, constraints: String::new(), operands: Vec::new() });
-    }
     if line.contains(" = call ") {
         return Err("asm: a block that answers a value is not carried".into());
     }
@@ -189,7 +153,6 @@ fn parse(line: &str) -> Result<Call, String> {
 fn block(
     run: &[Call],
     result: Option<&(String, String)>,
-    numbered: Option<String>,
     number: usize,
     assemble: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
 ) -> Result<(Vec<String>, String), String> {
@@ -232,12 +195,9 @@ fn block(
     let name = format!("llrm.ia16.code.{hex}{placed}");
     let declare = format!("declare i32 @\"{name}\"({types})");
     let call = |destination: &str| format!("  {destination}call i32 @\"{name}\"({pointers})");
-    let unused = numbered.unwrap_or_else(|| format!("%asm.{number}"));
+    let unused = format!("%asm.{number}");
     let lines = match result {
-        Some((value, ty)) if ty == "i32" && unused.starts_with("%asm.") => vec![call(&format!("{value} = "))],
-        Some((value, ty)) if ty == "i32" => {
-            vec![call(&format!("{unused} = ")), format!("  {value} = add i32 {unused}, 0")]
-        }
+        Some((value, ty)) if ty == "i32" => vec![call(&format!("{value} = "))],
         Some((value, ty)) if ty == "i16" => {
             vec![call(&format!("{unused} = ")), format!("  {value} = trunc i32 {unused} to i16")]
         }

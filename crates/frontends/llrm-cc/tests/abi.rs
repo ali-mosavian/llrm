@@ -13,7 +13,7 @@ fn compile(
     let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
         .env("LLRM_CC_TARGET", target)
         .env("LLRM_LLC", root.join("target/release/llrm-llc"))
-        .args(["-c", "-O1", "-o", "/dev/null"])
+        .arg("-fsyntax-only")
         .arg(root.join("tests/cc/abi").join(file))
         .output()
         .unwrap();
@@ -21,12 +21,26 @@ fn compile(
 }
 
 #[test]
-fn m16_sizes_and_layouts_are_the_ones_llrm_expects() {
-    if std::env::var_os("LLRM_CLANG_M16").is_none() {
-        eprintln!("skipped: LLRM_CLANG_M16 names no i8086 clang");
-        return;
+fn every_target_compiles_the_sizes_and_layouts_it_states() {
+    let m16 = std::env::var_os("LLRM_CLANG_M16").is_some();
+    for (target, file) in [
+        ("x86_64-linux", "x86_64_linux.c"),
+        ("arm64-linux", "arm64_linux.c"),
+        ("arm64-glibc", "arm64_glibc.c"),
+        ("x86_32-linux", "x86_32_linux.c"),
+        ("x86_32-dos", "x86_32_dos.c"),
+        ("x86_32-wat", "x86_32_wat.c"),
+        ("x86_32-wat", "x86_32_wat_records.c"),
+        ("x86_16-dos", "x86_16.c"),
+        ("x86_16-bcc", "x86_16_bcc.c"),
+        ("x86_16-wat", "x86_16_wat.c"),
+    ] {
+        if target.starts_with("x86_16") && !m16 {
+            eprintln!("skipped {target}: LLRM_CLANG_M16 names no i8086 clang");
+            continue;
+        }
+        compile(target, file).unwrap_or_else(|error| panic!("{target} {file}: {error}"));
     }
-    compile("x86_16-dos", "x86_16.c").unwrap();
 }
 
 /// Every module's code went to one `0_TEXT` segment (the IR file was named by
