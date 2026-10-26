@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/simpleloopunswitch.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/simpleloopunswitch.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/simpleloopunswitch.rs sha256:01b4186f0351e2996987cfb23a170f4223c7f1494145712bb61bcfee584d0832 -->
+<!-- src: crates/opt/llrm-transforms/src/simpleloopunswitch.rs sha256:e64b0d32dcb38d54c2ce739e383d5401c3d24ef6623b47e1606086aab4d81f67 -->
 
 # simpleloopunswitch
 

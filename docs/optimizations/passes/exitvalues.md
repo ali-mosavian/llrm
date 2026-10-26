@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/exitvalues.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/exitvalues.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/exitvalues.rs sha256:4c64df04454d90b191e6c8eb3717798ff0baca27663703cdd80e3d66f4f046fe -->
+<!-- src: crates/opt/llrm-transforms/src/exitvalues.rs sha256:9fa8b0113259e1a2a451191512eba8e0a77fa7a1b3eb4fe453d6a75b6aa8f7d9 -->
 
 # exitvalues
 

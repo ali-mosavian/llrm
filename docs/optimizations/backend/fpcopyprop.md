@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/fpcopyprop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/fpcopyprop.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/fpcopyprop.rs sha256:d26231bd328d099b58583a003cd50964a11481bdaa85eafa86f1b2ce2ddb7a4b -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/fpcopyprop.rs sha256:e4e538463a85685f89048fa7286463ec98d704f4ce9677744a09a40e96ba3f1d -->
 
 # fpcopyprop
 
@@ -19,6 +19,20 @@ before it is written or the block ends, and that is not live out.
 ```
 
 A removed copy becomes an anchor (`lir::anchor`), as in `machinedce`.
+
+A float rounded through a cell and stored on, `fstp [t]; fld [t]; fstp [h]`
+with both cells the same width, rounds once into `h` as the first store
+does: the first store is dropped and `h` takes its source, where nothing
+reads `t` before a store rewrites it. pow_stack_depth rounded each of its
+six doubles twice (m16 -Os 1644 B against main's 1462).
+
+Stored back into `t`, the reload and second store go and the first stays.
+
+```text
+  [t] := fstp fp0             [h] := fstp fp0
+  fp1 := fld [t]       =>
+  [h] := fstp fp1
+```
 
 DEVIATE 1: `machinecp` tracks the byte lanes of the general registers from
 the decoded effects of an instruction. An x87 operation here has no

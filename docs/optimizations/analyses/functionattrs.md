@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/functionattrs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/functionattrs.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/functionattrs.rs sha256:522ca881e4f8b801c8f1a1ce9da0033b2b43d921e46eb4cdaee910917a666936 -->
+<!-- src: crates/opt/llrm-analysis/src/functionattrs.rs sha256:6cb97db858d380954949e5a43b40721f80841d9b2358380107fef1c7aac18314 -->
 
 # functionattrs
 

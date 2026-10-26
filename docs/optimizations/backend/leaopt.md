@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/leaopt.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/leaopt.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/leaopt.rs sha256:f86ec9410770f6e16dda343584d721eb4cd3ab3ee21190cb937893d78c0eb805 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/leaopt.rs sha256:c96b16b5f622730c82341835b3d20ff4ae06343ba7d2708cb44a21bafd0b6599 -->
 
 # leaopt
 

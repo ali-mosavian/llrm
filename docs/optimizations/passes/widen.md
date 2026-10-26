@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/widen.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/widen.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/widen.rs sha256:8aa101f4b774d4be9ce57a1d0f963961a39db41a087fd5f99ee6294aea676fcc -->
+<!-- src: crates/opt/llrm-transforms/src/widen.rs sha256:acd5d5e488c2accc6c342d76f4fdda7a50a5caa4b90fcd9e54e5f7c8bdee7c5d -->
 
 # widen
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/peephole.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/peephole.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/peephole.rs sha256:dd2b082c5239b83b00440739a64aae2805f801aa2398fdfb77a4cedca5e8d16a -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/peephole.rs sha256:73d34b184d2039d12a33eeb312df3149b93152052eff0ab168cdccc805b1ef1a -->
 
 # peephole
 
@@ -29,9 +29,11 @@ of what the 16-bit target's 32-bit addresses need.
 
 ```text
  frame copies -> machinecp -> extensions -> copysink
-   -> postrasink -> storecombine -> pushed constants
+   -> postrasink -> forwarded reloads -> forwarded copies
+   -> storecombine -> pushed constants
    -> pushes, constants, commuted, transferred, high extracts, restored
-      copies, shuttles, overwritten, fused, fused calls, far loads
+      copies, shuttles, overwritten, fused, fused calls, far loads,
+      loaded segments
    -> exact addresses -> addresses (LEA) -> stepped after compare
    -> secondary bases -> increments, borrows, doubled, narrowed
    -> widened moves, zero extensions -> zeroed loads -> shared stores

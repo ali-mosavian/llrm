@@ -889,6 +889,9 @@ pub fn decide_with_split(
     let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
     let freq: Vec<f32> =
         (0..body.blocks.len()).map(|block| mbfi.get_block_freq_relative_to_entry_block(block) as f32).collect();
+    if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
+        eprintln!("block frequencies {:?}", freq);
+    }
     let loops = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
     let exiting: Vec<bool> = body
         .blocks

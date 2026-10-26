@@ -266,6 +266,23 @@ impl Query<'_> {
         self.binary(operand).filter(|&(op, ..)| op == wanted).map(|(_, a, b, flags)| (a, b, flags))
     }
 
+    /// `m_PtrToInt(m_Value(X))`: an instruction or a constant expression.
+    fn ptr_to_int_source(
+        &self,
+        operand: Operand,
+    ) -> Option<Operand> {
+        if let Some((CastOp::PtrToInt, source, _)) = self.cast(operand) {
+            return Some(source);
+        }
+        let Operand::Constant(id) = operand else { return None };
+        match &self.context.get(id).kind {
+            ConstantKind::Expr(crate::context::ConstantExpr::Cast { op: CastOp::PtrToInt, value }) => {
+                Some(Operand::Constant(*value))
+            }
+            _ => None,
+        }
+    }
+
     /// `m_Cast`: the opcode and source.
     fn cast(
         &self,
@@ -1736,6 +1753,15 @@ fn simplify_sub(
     {
         return Some(w);
     }
+    // ptrtoint(X) - ptrtoint(Y) -> the difference of their constant offsets,
+    // from one base.
+    if let Some(x) = q.ptr_to_int_source(op0)
+        && let Some(y) = q.ptr_to_int_source(op1)
+        && let Some(difference) = compute_pointer_difference(q, x, y)
+    {
+        let ty = q.ty(op0);
+        return Some(q.int(ty, difference));
+    }
     // trunc(X) - trunc(Y) -> trunc(X - Y) if everything simplifies.
     if max_recurse > 0
         && let Some((CastOp::Trunc, x, _)) = q.cast(op0)
@@ -1766,6 +1792,33 @@ fn simplify_sub(
         return Some(x);
     }
     None
+}
+
+/// `computePointerDifference`
+/// ([InstructionSimplify.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp)):
+/// `LHS - RHS` in the pointers' index width, when both are constant offsets
+/// (`gep`s with constant indices, bitcasts) from one base; the difference
+/// sign-extended, which the caller's `int` cuts to the integer
+/// (`getIntegerCast`). DEVIATE: a pointer whose offset carries into its
+/// selector (a huge one) has no such difference.
+fn compute_pointer_difference(
+    q: &Query,
+    lhs: Operand,
+    rhs: Operand,
+) -> Option<u128> {
+    let space = |operand: Operand| match q.context.types.get(q.ty(operand)) {
+        crate::types::Type::Pointer(space) => Some(*space),
+        _ => None,
+    };
+    let (lhs_space, rhs_space) = (space(lhs)?, space(rhs)?);
+    if lhs_space != rhs_space || q.layout.has_unstable_representation(lhs_space) {
+        return None;
+    }
+    let width = q.layout.pointer(lhs_space).index_bits;
+    let tracking = q.tracking();
+    let (lhs_base, lhs_offset) = nonzero::strip_and_accumulate_constant_offsets(&tracking, lhs, width, true);
+    let (rhs_base, rhs_offset) = nonzero::strip_and_accumulate_constant_offsets(&tracking, rhs, width, true);
+    (lhs_base == rhs_base).then(|| signed(lhs_offset.wrapping_sub(rhs_offset) & mask(width), width) as u128)
 }
 
 /// `simplifyMulInst`

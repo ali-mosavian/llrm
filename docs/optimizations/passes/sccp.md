@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/sccp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/sccp.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/sccp.rs sha256:9ebecd4caf1dbf677d1fe37fa6f1a9149e83839484fae9d6d48f7b83d416cd49 -->
+<!-- src: crates/opt/llrm-transforms/src/sccp.rs sha256:a241c469a912bfdce614ea7a80dee02041caaaa63a205e5632f6276cfb01638a -->
 
 # sccp
 
