@@ -281,13 +281,17 @@ fn test_a_masked_far_subscript_compiles() {
     );
     let program = parsed_as(&basic, "qb45", "qb45");
     object_bytes(&program, "MASKED.BAS").expect("compiles");
-    // The proven-exact `s(i)` addresses through a doubled 32-bit index, its
-    // shift gone and the upper halves zeroed once before the loop.
+    // The masked `s(i)` is a 16-bit offset doubled by an add and cut to the
+    // array's 1022 (no `shl`, no 32-bit index to widen), and the unmasked
+    // `u(x)` addresses through a doubled 32-bit index whose upper half is
+    // zeroed once before the loop.
     let text = listing(&program);
     let body = &text[text.find("T proc").expect("T proc")..text.find("T endp").expect("T endp")];
-    let index = regex::Regex::new(r"fs:\[(e\w\w)\+(e\w\w)(\*2)?\]").unwrap();
+    let mask = regex::Regex::new(r"and (\w+), 1022\n\s+mov \w+, word ptr fs:\[(\w+)\]").unwrap();
+    let masked = mask.captures(body).is_some_and(|one| one[1] == one[2]);
+    let index = regex::Regex::new(r"es:\[(e\w\w)\+(e\w\w)(\*2)?\]").unwrap();
     let doubled = index.captures_iter(body).any(|one| one.get(3).is_some() || one[1] == one[2]);
-    assert!(doubled && body.contains("movzx") && !body.contains("shl"), "{body}");
+    assert!(masked && doubled && body.contains("movzx") && !body.contains("shl"), "{body}");
 }
 
 /// The main body of `source`'s listing.
