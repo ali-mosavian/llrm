@@ -47,3 +47,33 @@ id = "unit llrm-qb::a_power_of_a_variable_base_covers_the_whole_domain"
 issue = 2848
 owner = "alim"
 date = "2026-10-27"
+[[xfail]]
+id = "integration header_copy::test_a_register_only_a_guarded_loop_uses_is_saved_after_the_early_return"
+issue = 2194
+owner = "w5"
+date = "2026-11-02"
+why = "recchop shrink-wrap (same root as #4900): main saves 2 registers before the early return, tip 4 (the pin 4); static instrs m16 -Os main 44 / tip 49, -O2 48 / 51; m32 -O1 -ftree-ch pushes main 2 / tip 4"
+[[xfail]]
+id = "integration header_copy::test_sum_three_loop_is_five_instructions_by_default"
+issue = 4899
+owner = "w3"
+date = "2026-11-02"
+why = "LSR no longer counts to zero at flat i486 -O2 -m32: loop per trip main 5 instrs, tip 6, pin 6; the m16 bounds variant is w2's hoisted-invariant pressure (w13)"
+[[xfail]]
+id = "integration header_copy::test_an_early_return_through_a_spilled_sum_sets_up_nothing"
+issue = 4900
+owner = "w5"
+date = "2026-11-02"
+why = "queens place -O2 m16 -ftree-ch: main sets up nothing on the base case, tip pays the full prologue, the pin too; shrink-wrap family of recchop"
+[[xfail]]
+id = "integration header_copy::test_a_fixed_point_product_in_a_rotated_loop_is_still_narrowed"
+issue = 4902
+owner = "unassigned"
+date = "2026-11-02"
+why = "mandel.nib -O2 m16 -ftree-ch: main 0 shrd / 50 instrs, tip 3 shrd / 70; the ranges lost x's bound behind the copy (no clang pin: nib)"
+[[xfail]]
+id = "integration header_copy::test_a_counted_exits_number_lets_its_counter_step_in_place"
+issue = 4903
+owner = "w3"
+date = "2026-11-02"
+why = "mandel.nib -O2 m16 -ftree-ch: main ends on inc; jne, tip on inc; cmp 32 (same LSR count-to-zero loss as #4899)"
