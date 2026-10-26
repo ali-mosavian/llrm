@@ -12,6 +12,7 @@ stops the run and is reported, never guessed.
 
 from __future__ import annotations
 
+import io
 import struct
 import sys
 from pathlib import Path
@@ -76,11 +77,12 @@ def _decode(raw: bytes) -> tuple[int, bool, bool]:
     return memory, one.mnemonic in RETURNS, one.has_rep_prefix or one.has_repe_prefix or one.has_repne_prefix
 
 
-def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch: set | None = None, only: tuple[int, int] | None = None) -> Run:
+def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch: set | None = None, only: tuple[int, int] | None = None, whole: bool = False, stdin: bytes | None = None) -> Run:
     """`exe` to its exit; `entry` is the linear address, from the image's first byte, of the function whose
     work is counted (None: count nothing, only run). `only` is a range of such addresses: of the region, what runs outside it
     (the scene around the code under test) is not counted, and the region still ends where `entry` returns. Files the program
-    opens live in `cwd`."""
+    opens live in `cwd`. `whole` counts the program from its first instruction to its exit (the start-up, the runtime and what it calls
+    included), `entry` unused; `stdin` is what handle 0 reads."""
     data = exe.read_bytes()
     (_, last, pages, nrel, header, _, _, ss, sp, _, ip, cs, relocations, _) = struct.unpack("<2sHHHHHHHHHHHHH", data[:28])
     size = (pages - 1) * 512 + (last or 512)
@@ -100,7 +102,7 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
         uc.reg_write(register, value)
 
     result = Run()
-    state = {"active": False, "done": False, "entry_sp": 0, "files": {}, "next": 5, "vectors": {}}
+    state = {"active": whole, "done": False, "entry_sp": -1 if whole else 0, "files": {0: io.BytesIO(stdin)} if stdin is not None else {}, "next": 5, "vectors": {}}
     counts = Counts()
     price, multiplier_of, _prefixes = _prices()
     decoded: dict[int, tuple[int, bool, bool]] = {}
@@ -292,7 +294,9 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
         result.error = result.error or f"emulator: {error} at {uc.reg_read(UC_X86_REG_CS):x}:{uc.reg_read(UC_X86_REG_IP):x}"
     for handle, file in state["files"].items():
         file.close()
-    if entry is not None and state["done"]:
+    if whole and result.exit_code is not None:
+        result.region = counts
+    elif entry is not None and state["done"]:
         result.region = counts
     elif entry is not None and not result.error:
         result.error = "the region was entered but never returned" if state["active"] else "the region was never entered"
