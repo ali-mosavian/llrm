@@ -35,7 +35,8 @@
 //!  %r = sub i16 %n, %m
 //! ```
 //!
-//! From unit test `test_the_narrowed_idiom_is_one_remainder_where_the_divide_is_kept`
+//! From unit test
+//! `test_the_narrowed_idiom_is_one_remainder_where_the_divide_is_kept`
 //! in `remidiom_tests.rs`, which asserts the `urem` and that no `udiv` or
 //! `mul` is left.
 //!

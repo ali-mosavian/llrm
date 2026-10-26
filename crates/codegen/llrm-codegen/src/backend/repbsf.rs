@@ -17,7 +17,8 @@
 //! ```
 //!
 //! Built for size, or with the flags read (`adc` next), the `bsf` is left as it
-//! is. From unit test `test_bsf_gets_the_rep_prefix_only_where_the_pin_gives_it`
+//! is. From unit test
+//! `test_bsf_gets_the_rep_prefix_only_where_the_pin_gives_it`
 //! in `peephole_tests.rs`, which runs the three cases.
 
 use std::sync::Arc;
