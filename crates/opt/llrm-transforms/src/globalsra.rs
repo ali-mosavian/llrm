@@ -146,7 +146,8 @@ pub fn split(
     let reached = reaching(module);
     for id in candidates {
         let Some(accesses) = accesses(module, layout, id, &reached) else { continue };
-        let pieces = sliced(module, layout, id, &accesses);
+        let localizes = localizing(module, layout, id, &reached, &mut BTreeMap::new());
+        let pieces = sliced(module, layout, id, &accesses, localizes);
         let Some(pieces) = pieces else { continue };
         let moved: BTreeMap<GlobalId, Vec<InstId>> = reached
             .iter()
@@ -229,6 +230,7 @@ fn sliced(
     layout: &DataLayout,
     id: GlobalId,
     accesses: &[Access],
+    localizes: bool,
 ) -> Option<Vec<(i64, TypeId, Constant)>> {
     let context = &module.context;
     let GlobalKind::Variable(variable) = &module.globals[id.0 as usize].kind else { return None };
@@ -243,14 +245,16 @@ fn sliced(
         return None;
     }
     // Not back to the same layout: one piece that is all of the variable (a
-    // scalar the frontend spelled as bytes) is no split.
+    // scalar the frontend spelled as bytes) is no split, unless it becomes a
+    // stack slot: renamed and moved in the data it cost d_faces 623 bytes.
     let whole = layout.alloc_size(&context.types, variable.ty) as i64;
     if pieces.len() == 1
         && (pieces.values().next() == Some(&variable.ty)
-            || pieces
-                .iter()
-                .next()
-                .is_some_and(|(&at, &ty)| at == 0 && layout.store_size(&context.types, ty) as i64 == whole))
+            || (!localizes
+                && pieces
+                    .iter()
+                    .next()
+                    .is_some_and(|(&at, &ty)| at == 0 && layout.store_size(&context.types, ty) as i64 == whole)))
     {
         return None;
     }
@@ -439,18 +443,17 @@ fn locals(module: &Module) -> Vec<GlobalId> {
         .collect()
 }
 
-/// Replaces `id` by a stack slot of the one function that uses it, if the
-/// function does not recurse and writes it before it reads it.
-fn localize(
-    module: &mut Module,
+/// The one function that could keep `id` on its stack and the loads and stores
+/// it makes of it: the function does not recurse and writes it before it reads
+/// it.
+fn slot_plan(
+    module: &Module,
     layout: &DataLayout,
     id: GlobalId,
     reached: &BTreeMap<GlobalId, BTreeMap<GlobalId, Option<Reach>>>,
     trees: &mut BTreeMap<GlobalId, DomTree>,
-) -> Option<GlobalId> {
+) -> Option<(GlobalId, Vec<InstId>, Vec<InstId>)> {
     let context = &module.context;
-    let GlobalKind::Variable(variable) = &module.globals[id.0 as usize].kind else { return None };
-    let (ty, initializer, align) = (variable.ty, variable.initializer?, variable.align);
     let mut owner: Option<GlobalId> = None;
     let mut loads: Vec<InstId> = Vec::new();
     let mut stores: Vec<InstId> = Vec::new();
@@ -498,6 +501,33 @@ fn localize(
             return None;
         }
     }
+    Some((owner, loads, stores))
+}
+
+/// Whether `id` could be a stack slot (`slot_plan`).
+fn localizing(
+    module: &Module,
+    layout: &DataLayout,
+    id: GlobalId,
+    reached: &BTreeMap<GlobalId, BTreeMap<GlobalId, Option<Reach>>>,
+    trees: &mut BTreeMap<GlobalId, DomTree>,
+) -> bool {
+    slot_plan(module, layout, id, reached, trees).is_some()
+}
+
+/// Replaces `id` by a stack slot of the one function that uses it, if the
+/// function does not recurse and writes it before it reads it.
+fn localize(
+    module: &mut Module,
+    layout: &DataLayout,
+    id: GlobalId,
+    reached: &BTreeMap<GlobalId, BTreeMap<GlobalId, Option<Reach>>>,
+    trees: &mut BTreeMap<GlobalId, DomTree>,
+) -> Option<GlobalId> {
+    let (owner, loads, stores) = slot_plan(module, layout, id, reached, trees)?;
+    let GlobalKind::Variable(variable) = &module.globals[id.0 as usize].kind else { return None };
+    let (ty, initializer, align) = (variable.ty, variable.initializer?, variable.align);
+    let GlobalKind::Function(function) = &module.globals[owner.0 as usize].kind else { return None };
     let entry = function.entry()?;
     let first = function.block(entry).first()?;
     let Module { context, globals, .. } = module;
