@@ -210,6 +210,46 @@ b3:
     }
 }
 
+/// qb stride.bas at -O2: a loop whose only effect was stores to a global
+/// nothing reads. The module step removed the stores and left the counting
+/// loop (`add ax, 5; cmp ax, 95; jbe`); no loop deletion followed it.
+#[test]
+fn a_loop_whose_stores_to_a_never_read_global_went_is_deleted() {
+    let mut module = llrm_analysis::testing::parsed(&format!(
+        "{}@b = internal global [402 x i8] zeroinitializer
+
+declare void @print(i16) nocallback
+
+define void @main() {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %n, %b1 ]
+  %q = udiv i16 %i, 5
+  %p = getelementptr i8, ptr @b, i16 %i
+  store i16 %q, ptr %p
+  %n = add nuw nsw i16 %i, 5
+  %go = icmp ugt i16 %i, 95
+  br i1 %go, label %b2, label %b1
+
+b2:
+  call void @print(i16 210)
+  ret void
+}}
+",
+        llrm_analysis::testing::DOS
+    ));
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+        program.exports.entries.insert("main".to_owned());
+        pipeline::applied(program, &Applied::default())
+    })
+    .and_then(|done| done)
+    .unwrap();
+    let text = llrm_mir::print::module(&module);
+    assert!(!text.contains("phi"), "{text}");
+}
+
 /// Zero stores merged into a memset mid-pipeline left a call in the loop
 /// that loop motion could not see past: nbodys' `accX = 0: accY = 0` kept
 /// posY's loads in its inner loop, 1.9% more instructions. The merge waits
