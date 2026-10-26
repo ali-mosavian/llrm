@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/cgpaddr.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/cgpaddr.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/cgpaddr.rs sha256:8034511e647a216129cef850d62b8e5913373b81c631f8fd6dd8bf51befa8005 -->
+<!-- src: crates/opt/llrm-transforms/src/cgpaddr.rs sha256:a96d4b8499e52f83b9b191fa6f30a173d07be99dce396f2bd8f963598313ce52 -->
 
 # cgpaddr
 

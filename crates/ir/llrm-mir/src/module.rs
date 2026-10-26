@@ -1225,6 +1225,9 @@ pub struct Module {
     pub globals: Vec<GlobalValue>,
     pub metadata: Vec<MetadataNode>,
     pub named_metadata: Vec<(String, Vec<MetadataId>)>,
+    /// The `section "NAME"` of a global, by its name (`#pragma data_seg`,
+    /// `#pragma code_seg`). Printing does not carry it.
+    pub sections: std::collections::BTreeMap<String, String>,
 }
 
 impl Module {

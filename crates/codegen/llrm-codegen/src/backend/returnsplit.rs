@@ -12,6 +12,23 @@
 //! then sets the frame up after the source (`shrinkwrap::wrapped`): a copy of a
 //! return whose epilogue still runs is a size cost with nothing skipped.
 //!
+//! # Example
+//! `place` of `bench/queens/queens.c` at m16 -O2 (abridged; the left column is
+//! `LLRM_NO_RETSPLIT=1`):
+//!
+//! ```text
+//!  without                           with
+//!  mov word ptr [bp-6], 1            cmp dx, cx
+//!  cmp dx, cx                        je early
+//!  je ret                            ...
+//!  ...                               early:
+//!  ret: mov ax, [bp-6]                 mov ax, 1
+//!       ...                            ret
+//! ```
+//!
+//! The store of 1 and the reload are gone, and the frame is set up after the
+//! test.
+//!
 //! # Runs
 //! In `assemble`, ahead of `jumps::duplicated_returns`, at -O1 and above.
 //!

@@ -1000,7 +1000,9 @@ impl ConstraintInfo {
             Some(llrm_mir::types::Type::Pointer(space)) => *space,
             _ => return Decomposition::variable(gep),
         };
-        if q.layout.offset_bits(space) > 64 {
+        // DEVIATE: a pointer whose offset carries into its selector (a huge
+        // one) is not a base plus a sum.
+        if q.layout.offset_bits(space) > 64 || q.layout.has_unstable_representation(space) {
             return Decomposition::variable(gep);
         }
 

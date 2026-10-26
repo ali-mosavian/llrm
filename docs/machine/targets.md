@@ -69,7 +69,7 @@ Files under `crates/target/llrm-x86-m32/src` (m16 has the same set):
 | `machines/datalayout.toml` | data layout, address-space kinds, address forms; the `f80` entry is the x87 `long double`'s alignment, so its size in memory (`Layout::long_double_bytes`: 10 at m16, 12 at m32; the front end is built with it, so `sizeof`, arrays and members of a `long double` lay out at that size) |
 | `machines/calling.toml` | conventions: slot size, argument registers, results, cleanup, preserved |
 | `machines/object.toml` | object writer and listing syntax |
-| `machines/dos.toml`, `dos32.toml` | the platform: memory map, ports (apart from the target) |
+| `machine/platform/dos/real16.toml`, `flat32.toml`, `ports.toml` | the platform: memory map, ports (apart from the target) |
 
 The family crate `llrm-x86` holds the forms and peephole rules every x86 target shares (`x86.instr`, `family.isel`, `peephole.peep`) and `helpers/*.asm`. `llrm-target` holds the parsers and the `Target` trait the passes query ([`lib.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/target/llrm-target/src/lib.rs#L210)): layout and address spaces, the frame register and where arguments lie, results, callee-saved registers, CPUs and `-march` names, operation costs per CPU, address forms, float stack depth.
 

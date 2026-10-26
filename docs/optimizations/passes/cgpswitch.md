@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/cgpswitch.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/cgpswitch.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/cgpswitch.rs sha256:b1f7c4df6de8b592f34b0aa1a168216ac7caff118b919e35cf7418c087ed2146 -->
+<!-- src: crates/opt/llrm-transforms/src/cgpswitch.rs sha256:cfe0b35721ac401dbc7e75a186c61e1e548c8fc5cdef4ed011cffeaa6982d558 -->
 
 # cgpswitch
 

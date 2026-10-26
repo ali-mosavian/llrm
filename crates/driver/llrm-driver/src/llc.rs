@@ -148,7 +148,7 @@ pub fn main(argv: &[String]) -> i32 {
 /// Every symbol as `format` spells it under its convention (`_main`, `main_`,
 /// `MAIN`): a C front end for these targets records decorated names, and the
 /// start-up and the OS layer call them so. A function takes its own
-/// convention's spelling, a variable the target's default. Intrinsics keep
+/// convention's spelling, a variable C's. Intrinsics keep
 /// theirs.
 fn decorate(
     module: &mut llrm_mir::module::Module,
@@ -157,13 +157,64 @@ fn decorate(
     format: &str,
 ) {
     for global in &mut module.globals {
-        let convention = global.function().and_then(|one| calling.by_number(one.calling_convention)).unwrap_or(default);
+        // A variable takes C's spelling (`_name`) under every ABI, Open
+        // Watcom's register one included.
+        let convention = match global.function() {
+            Some(one) => calling.by_number(one.calling_convention).unwrap_or(default),
+            None => calling.by_number(0).unwrap_or(default),
+        };
         let Some(name) = global.name.as_deref().filter(|name| !name.starts_with("llvm.") && !name.starts_with("llrm."))
         else {
             continue;
         };
-        if let Some(spelled) = convention.decorated(format, name) {
+        // LLVM's `\01` marker (an asm label, `#pragma aux NAME "LINK"`): the
+        // symbol as written.
+        let before = name.to_owned();
+        let spelled = match name.strip_prefix('\u{1}') {
+            Some(exact) => Some(exact.to_owned()),
+            None => convention.decorated(format, name),
+        };
+        if let Some(spelled) = spelled {
+            if let Some(section) = module.sections.remove(&before) {
+                module.sections.insert(spelled.clone(), section);
+            }
             global.name = Some(spelled).into();
+        }
+    }
+}
+
+/// Convention 0 is LLVM's `ccc`, which clang writes for every function it gave
+/// no convention: here the one `-mabi` chose, in the functions and in their
+/// calls. LLVM's and llrm's own intrinsics stay as they are.
+fn with_default_convention(
+    module: &mut llrm_mir::module::Module,
+    default: &llrm_target::calling::Convention,
+) {
+    let Some(number) = llrm_target::calling::Calling::number_of(default.cc.as_deref()).filter(|number| *number != 0)
+    else {
+        return;
+    };
+    for global in &mut module.globals {
+        if global.name.as_deref().is_some_and(|name| name.starts_with("llvm.") || name.starts_with("llrm.")) {
+            continue;
+        }
+        let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind else { continue };
+        if function.calling_convention == 0 {
+            function.calling_convention = number;
+        }
+        let calls: Vec<_> = function
+            .walk()
+            .filter_map(|(_, inst)| match &function.instruction(inst).opcode {
+                llrm_mir::opcode::Opcode::Call(info) | llrm_mir::opcode::Opcode::Invoke(info)
+                    if info.calling_convention == 0 =>
+                {
+                    Some(inst)
+                }
+                _ => None,
+            })
+            .collect();
+        for inst in calls {
+            function.set_call_convention(inst, number);
         }
     }
 }
@@ -180,7 +231,9 @@ pub fn compiled(
     let mut module = llrm_mir::parse::module(&text).map_err(|error| format!("{name}: {error}"))?;
     let machine = flags.machine(&*bound.target, bound.target.machine())?;
     let format = flags.format(&*bound.target)?;
-    decorate(&mut module, bound.target.calling(), flags.convention(&*bound.target)?, format.name());
+    let default = flags.convention(&*bound.target)?;
+    with_default_convention(&mut module, default);
+    decorate(&mut module, bound.target.calling(), default, format.name());
     let options = llrm_codegen::driver::Options { object_format: format.name(), ..bound.options(flags, machine) };
     Ok((llrm_codegen::driver::compiled_module(module, name, &options)?, format))
 }

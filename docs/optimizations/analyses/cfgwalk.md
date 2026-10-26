@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/cfgwalk.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/cfgwalk.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/cfgwalk.rs sha256:152f0797f66955f11845084d242aaeacc8b99d0d917dce091bd95f717fd27c5f -->
+<!-- src: crates/opt/llrm-analysis/src/cfgwalk.rs sha256:f91f1e5824d42fefb34fa2d33db4769b540594abe557e214f408dbe0fa60d6a0 -->
 
 # cfgwalk
 
