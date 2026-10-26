@@ -1156,7 +1156,7 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
 HITS = [0]  # verdicts read from the cache by this process
 
 
-def refusal_line(number: str, why: str, head: str, directory: Path, width: int = 300) -> str:
+def alone_refusal_line(number: str, why: str, head: str, directory: Path, width: int = 300) -> str:
     """The runner-log line of a refusal: all of `why` when it fits in `width`, else its start, its length and the file that holds all of it (#4991's list of failing tests was cut mid-name)."""
     if len(why) <= width:
         return f"{number}: REFUSED: alone: {why}"
@@ -1941,7 +1941,7 @@ def dispatch() -> int:
         with contextlib.redirect_stdout(sys.stderr):
             kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", ALONE_JOBS)), cap=float(os.environ.get("ALONE_CAP", "600")), current=_current_head)
         for number, why in dropped.items():
-            print(refusal_line(number, why, heads[number], Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-full"), file=sys.stderr)
+            print(alone_refusal_line(number, why, heads[number], Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-full"), file=sys.stderr)
         print(f"alone: {len(numbers)} PRs, {HITS[0]} cached, {len(numbers) - HITS[0]} checked, {len(dropped)} dropped", file=sys.stderr)
         print("\n".join(kept))
         return 0
