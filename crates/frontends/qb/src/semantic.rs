@@ -3621,6 +3621,40 @@ impl Compiler {
                         self.select_block(continuation);
                     }
                     "BLOAD" | "BSAVE" => self.binary_memory_statement(name, arguments)?,
+                    "KILL" | "MKDIR" | "CHDIR" | "RMDIR" | "ENVIRON" => {
+                        let [path] = arguments.as_slice() else {
+                            return self.fail(format!("{name} takes one file or directory name"));
+                        };
+                        let path = self.string_descriptor(path)?;
+                        let routine = match name.as_str() {
+                            "KILL" => "B$KILL",
+                            "ENVIRON" => "B$SENV",
+                            "MKDIR" => "B$MDIR",
+                            "CHDIR" => "B$CDIR",
+                            _ => "B$RDIR",
+                        };
+                        self.emit_runtime_call(routine, Vec::new(), vec![path]);
+                    }
+                    "LSET" | "RSET" => {
+                        let [Expr::Binary { op: Binary::Eq, left, right, .. }] = arguments.as_slice() else {
+                            return self
+                                .fail(format!("{name} takes a string variable and a value, as in `{name} a$ = b$`"));
+                        };
+                        let (destination, destination_type) = self.destination(left)?;
+                        let Some(width) = self.string_width(destination_type) else {
+                            return self.unsupported(&format!("{name} of a record"));
+                        };
+                        // B$LSET(source descriptor, far destination, fixed
+                        // length or 0 for a descriptor)
+                        let source = self.string_descriptor(right)?;
+                        let target = self.far_address(destination, destination_type);
+                        let routine = if name == "LSET" { "B$LSET" } else { "B$RSET" };
+                        self.emit_runtime_call(
+                            routine,
+                            Vec::new(),
+                            vec![source, Operand::Value(target), self.count(width as i64)],
+                        );
+                    }
                     "RANDOMIZE" => {
                         let [seed] = arguments.as_slice() else {
                             return self.fail("RANDOMIZE needs a seed here, as in `RANDOMIZE TIMER`");
@@ -4048,6 +4082,34 @@ impl Compiler {
                     self.select_block(continuation);
                 }
                 Statement::Runtime { name, arguments, .. } => match name.as_str() {
+                    "NAME" => {
+                        let [old, new] = arguments.as_slice() else {
+                            return self.fail("NAME takes the old and the new file name, as in `NAME \"A\" AS \"B\"`");
+                        };
+                        let old = self.string_descriptor(old)?;
+                        let new = self.string_descriptor(new)?;
+                        self.emit_runtime_call("B$NAME", Vec::new(), vec![old, new]);
+                    }
+                    "FILES" => {
+                        if arguments.len() > 1 {
+                            return self.fail("FILES takes one file pattern, as in `FILES \"*.BAS\"`");
+                        }
+                        // BC passes the pattern's descriptor, an empty string's
+                        // for a bare FILES.
+                        let empty = Expr::Literal(Literal::String(String::new()), Span::default());
+                        let pattern = self.string_descriptor(arguments.first().unwrap_or(&empty))?;
+                        self.emit_runtime_call("B$FILS", Vec::new(), vec![pattern]);
+                    }
+                    "SHELL" => {
+                        if arguments.len() > 1 {
+                            return self.fail("SHELL takes one command, as in `SHELL \"DIR\"`");
+                        }
+                        // BC passes the command's descriptor, an empty string's
+                        // for a bare SHELL.
+                        let empty = Expr::Literal(Literal::String(String::new()), Span::default());
+                        let command = self.string_descriptor(arguments.first().unwrap_or(&empty))?;
+                        self.emit_runtime_call("B$SSHL", Vec::new(), vec![command]);
+                    }
                     "BEEP" => {
                         if !arguments.is_empty() {
                             return self.fail("BEEP takes no arguments");
@@ -4509,31 +4571,42 @@ impl Compiler {
                         );
                     }
                     "SCREEN" => {
-                        if arguments.len() != 1 {
-                            return self.fail("SCREEN needs one mode here, as in `SCREEN 13`");
+                        if arguments.is_empty() || arguments.len() > 4 {
+                            return self.fail("SCREEN takes a mode, colorswitch, active page and visible page");
                         }
-                        let (mode, mode_type) = self.expression(&arguments[0])?;
-                        let mode = self.convert(mode, mode_type, INTEGER)?;
-                        // SYS.OBJ 0787..0792 shows SCREEN 0 as the VBDOS
-                        // count-led block [present=1, mode=0, count=2].
-                        self.emit_runtime_call(
-                            "B$CSCN",
-                            Vec::new(),
-                            vec![
-                                Operand::Constant(INTEGER, Number::Integer(1)),
-                                mode,
-                                Operand::Constant(INTEGER, Number::Integer(2)),
-                            ],
-                        );
+                        // BC pushes a count-led block (SYS.OBJ 0787..0792 shows
+                        // SCREEN 0 as [present=1, mode=0,
+                        // count=2]): for each argument a flag and, if it is
+                        // given, its value; then the count of words.
+                        let mut words = Vec::new();
+                        for argument in arguments {
+                            if matches!(argument, Expr::Omitted(_)) {
+                                words.push(Operand::Constant(INTEGER, Number::Integer(0)));
+                            } else {
+                                let (value, type_id) = self.expression(argument)?;
+                                let value = self.convert(value, type_id, INTEGER)?;
+                                words.push(Operand::Constant(INTEGER, Number::Integer(1)));
+                                words.push(value);
+                            }
+                        }
+                        words.push(Operand::Constant(INTEGER, Number::Integer(words.len() as i64)));
+                        self.emit_runtime_call("B$CSCN", Vec::new(), words);
                     }
                     "WIDTH" => {
-                        if arguments.len() != 2 {
-                            return self.fail("WIDTH needs columns and rows here, as in `WIDTH 80, 25`");
+                        if arguments.is_empty() || arguments.len() > 2 {
+                            return self.fail("WIDTH takes columns and rows, as in `WIDTH 80, 25`");
                         }
+                        // BC passes -1 for an argument left out: `WIDTH 80` is
+                        // (80, -1).
                         let mut operands = Vec::new();
-                        for argument in arguments {
-                            let (value, type_id) = self.expression(argument)?;
-                            operands.push(self.convert(value, type_id, INTEGER)?);
+                        for slot in 0..2 {
+                            match arguments.get(slot) {
+                                Some(argument) if !matches!(argument, Expr::Omitted(_)) => {
+                                    let (value, type_id) = self.expression(argument)?;
+                                    operands.push(self.convert(value, type_id, INTEGER)?);
+                                }
+                                _ => operands.push(Operand::Constant(INTEGER, Number::Integer(-1))),
+                            }
                         }
                         self.emit_runtime_call("B$WIDT", Vec::new(), operands);
                     }
@@ -7357,6 +7430,18 @@ impl Compiler {
             let file = self.convert(file, file_type, INTEGER)?;
             let result = self.value(LONG);
             self.emit_runtime_call("B$FLOF", vec![result], vec![file]);
+            return Ok(Some((Operand::Value(result), LONG)));
+        }
+        if intrinsic.lowering == Lowering::FileAttribute {
+            // B$FATR(channel, field): field 1 is the file's mode, 2 its DOS
+            // handle.
+            let mut operands = Vec::new();
+            for argument in &arguments[..2] {
+                let (value, value_type) = self.expression(argument)?;
+                operands.push(self.convert(value, value_type, INTEGER)?);
+            }
+            let result = self.value(LONG);
+            self.emit_runtime_call("B$FATR", vec![result], operands);
             return Ok(Some((Operand::Value(result), LONG)));
         }
         if intrinsic.lowering == Lowering::Timer {

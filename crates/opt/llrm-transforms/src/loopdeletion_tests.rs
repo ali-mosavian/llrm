@@ -269,7 +269,7 @@ b3:
     let nodes = |loopdeletion: bool| {
         let mut module = crate::testing::parsed(text);
         let mut manager = llrm_mir::passes::PassManager::default();
-        manager.add(crate::indvars::IndVars { lftr: true });
+        manager.add(crate::indvars::IndVars { lftr: true, size: false });
         if loopdeletion {
             manager.add(super::LoopDeletion);
         }

@@ -2106,6 +2106,7 @@ fn can_constant_fold_intrinsic(id: Folded) -> bool {
                 | UsubSat
                 | SmulFix
                 | SmulFixSat
+                | SdivFix
                 | Bitreverse
         ),
     }
@@ -2513,6 +2514,27 @@ fn constant_fold_scalar_call3(
             let product = smul_fix(c0, c1, width, scale as u32, id == IntrinsicId::SmulFixSat);
             let ty_width = context.types.int_bits(ty)?;
             Some(int(context, ty_width, product))
+        }
+        // DEVIATE: LLVM folds no `sdiv.fix`, so a front end that emits one for
+        // constants leaves a run-time `idiv`. Rounded toward negative infinity,
+        // as the backend's expansion is; a zero divisor or a quotient that does
+        // not fit is left alone.
+        IntrinsicId::SdivFix => {
+            let (c0, width) = as_int(context, ops[0])?;
+            let (c1, _) = as_int(context, ops[1])?;
+            let (scale, _) = as_int(context, ops[2])?;
+            let (a, b) = (signed(c0, width), signed(c1, width));
+            if b == 0 || scale > 64 || width > 64 {
+                return None;
+            }
+            let numerator = a << scale;
+            let mut quotient = numerator / b;
+            if numerator % b != 0 && (numerator < 0) != (b < 0) {
+                quotient -= 1;
+            }
+            let ty_width = context.types.int_bits(ty)?;
+            let fits = signed(quotient as u128 & mask(width), width) == quotient;
+            fits.then(|| int(context, ty_width, quotient as u128 & mask(width)))
         }
         IntrinsicId::Fshl | IntrinsicId::Fshr => {
             let (c0, width) = as_int(context, ops[0])?;
