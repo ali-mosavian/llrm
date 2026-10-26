@@ -234,8 +234,94 @@ pub fn compiled(
     let default = flags.convention(&*bound.target)?;
     with_default_convention(&mut module, default);
     decorate(&mut module, bound.target.calling(), default, format.name());
-    let options = llrm_codegen::driver::Options { object_format: format.name(), ..bound.options(flags, machine) };
+    let options = options_for(&bound, flags, machine, format.name(), default);
     Ok((llrm_codegen::driver::compiled_module(module, name, &options)?, format))
+}
+
+/// The driver's options for IR from the pinned clang: what the Watcom front
+/// end set for C, which `llrm-llc` now serves. The pin's float spills round to
+/// the type; the C runtime's library routines are called (`memcpy` as the
+/// convention spells it) and `strlen` is known where the convention is System
+/// V's (DEVIATE D11 of `pipeline::Options::library`).
+fn options_for(
+    bound: &Bound,
+    flags: &Flags,
+    machine: llrm_codegen::abi::machine::Machine,
+    format: &'static str,
+    default: &llrm_target::calling::Convention,
+) -> llrm_codegen::driver::Options {
+    let mut options = llrm_codegen::driver::Options {
+        object_format: format,
+        rounds_float_spills: true,
+        ..bound.options(flags, machine)
+    };
+    let number = llrm_target::calling::Calling::number_of(default.cc.as_deref());
+    let pattern = default.symbol.get(format).map_or("*", String::as_str);
+    if let (Some(number), Some(description)) = (number, bound.target.runtime("c")) {
+        let names = description
+            .table()
+            .ok()
+            .and_then(|table| table.get("libcalls").and_then(|one| one.as_array()).cloned())
+            .unwrap_or_default();
+        options.libcalls = names
+            .iter()
+            .filter_map(|one| one.as_str())
+            .map(|name| (name.to_owned(), number, pattern.replace('*', name)))
+            .collect();
+        if default.cc.as_deref() == Some("sysv") && default.symbol.contains_key(format) {
+            options.pipeline.library = vec![llrm_mir::libfunc::Routine {
+                standard: "strlen",
+                symbol: pattern.replace('*', "strlen"),
+                calling_convention: number,
+            }];
+        }
+    }
+    options
+}
+
+#[cfg(test)]
+mod options_tests {
+    use super::*;
+
+    fn options(
+        arguments: &[&str],
+        format: &'static str,
+    ) -> llrm_codegen::driver::Options {
+        let argv: Vec<String> = arguments.iter().map(|one| one.to_string()).collect();
+        let mut flags = Flags::default();
+        let mut at = 0;
+        while at < argv.len() {
+            assert!(flags.take(&argv, &mut at).unwrap());
+            at += 1;
+        }
+        let bound = bound(&flags, None).unwrap();
+        let machine = flags.machine(&*bound.target, bound.target.machine()).unwrap();
+        let default = flags.convention(&*bound.target).unwrap();
+        options_for(&bound, &flags, machine, format, default)
+    }
+
+    /// `llrm-cc` ran the backend with none of what the Watcom front end set
+    /// for C: float spills kept 80 bits, `memcpy` stayed `rep movs`, and no
+    /// loop became `strlen`.
+    #[test]
+    fn the_backend_serves_c_as_the_watcom_front_end_did() {
+        let watcom = options(&["-m32", "-mabi=watcom"], "omf");
+        assert!(watcom.rounds_float_spills);
+        assert!(
+            watcom.libcalls.iter().any(|(name, _, symbol)| name == "memcpy" && symbol == "memcpy_"),
+            "{:?}",
+            watcom.libcalls
+        );
+        assert!(watcom.pipeline.library.is_empty());
+        let sysv = options(&["-m32", "-mabi=sysv"], "omf");
+        assert!(
+            sysv.libcalls.iter().any(|(name, _, symbol)| name == "memcpy" && symbol == "_memcpy"),
+            "{:?}",
+            sysv.libcalls
+        );
+        assert_eq!(sysv.pipeline.library.len(), 1);
+        assert_eq!(sysv.pipeline.library[0].symbol, "_strlen");
+    }
 }
 
 fn compile(
