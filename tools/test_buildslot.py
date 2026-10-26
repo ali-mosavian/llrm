@@ -92,6 +92,14 @@ def test_a_test_that_allocates_past_the_cap_dies_alone(tmp_path):
     assert over.returncode != 0 and "ok" not in over.stdout and "MemoryError" in over.stderr, (over.returncode, over.stderr[-200:])
 
 
+def test_a_child_that_needs_more_than_the_cap_can_lift_it_for_itself(tmp_path):
+    """qb_dirty's ThreadSanitizer run maps 35 TB of shadow: under testcap's hard 16 GB limit it died with `can not mmap the shadow memory` and the test was moved to nightly."""
+    testcap = str(Path(__file__).resolve().parent / "testcap")
+    grab = ["python3", "-c", "b = bytearray(4 << 30); print('ok')"]
+    done = subprocess.run([testcap, "prlimit", "--data=unlimited", *grab], capture_output=True, text=True, env={**os.environ, "TEST_MEM_CAP_GB": "1"})
+    assert done.stdout.strip() == "ok", (done.returncode, done.stderr[-200:])
+
+
 def test_buildslot_hands_cargo_the_test_cap_unless_the_caller_has_a_runner(tmp_path):
     script = str(Path(__file__).resolve().parent / "buildslot")
     show = lambda env: subprocess.run([script, "sh", "-c", "echo $CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER"], capture_output=True, text=True, env=env).stdout.strip()  # noqa: E731

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopidioms.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopidioms.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopidioms.rs sha256:fd4066df4c26dc6ac3ac1208db1dcd63da56628ecffb39821efa1cf839a84ef6 -->
+<!-- src: crates/opt/llrm-transforms/src/loopidioms.rs sha256:eabb5369d823934f5353d151d37defc7b56e6691dae96025f9508d3475651d09 -->
 
 # loopidioms
 
@@ -21,9 +21,15 @@ these forms:
 - A fill: a store, or a memset, of a loop-invariant value that is one byte
   repeated, through an address `induction` derives as a GEP off an invariant
   pointer, striding by the element's size. A cell whose bytes do not repeat
-  is `llvm.experimental.memset.pattern`. A loop with several fills to bytes
-  no other reaches is a memset each; fills that tile adjacent bytes with the
-  same byte are one.
+  is `llvm.experimental.memset.pattern` (DEVIATE: the pin forms none off
+  Darwin,
+  [L1214](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/LoopIdiomRecognize.cpp#L1214);
+  here it is priced from the target's table, so a word fill is `rep stosw`
+  where its clocks beat the loop's at speed, and its bytes at `-Os`; m16
+  `fillw` of 100 words is 407 clocks against the loop's 500, break-even
+  near 16 trips with the segment setup; owner w-5). A loop with several
+  fills to bytes no other reaches is a memset each; fills that tile adjacent
+  bytes with the same byte are one.
 - A copy: a load and a store of one cell each trip, the stored value being
   the loaded one, from one pointer to another with the same step. Where the
   ranges are apart it is `llvm.memcpy`; where they overlap but each trip
@@ -131,9 +137,6 @@ costs (`profit`, `OperationCosts`).
 ## Keeps
 Blocks and edges change (a loop becomes one trip): every analysis is
 invalidated when anything was rewritten.
-
-## CRC loops
-A loop `HashRecognize` takes for a CRC becomes a 256-entry Sarwate table lookup (`crc.rs`, `optimizeCRCLoopUsingTableLookup`) when the TTI cost is lower and the trip count is a multiple of 8. The table is 256 elements of the CRC width, in rodata.
 
 ## See also
 [`crate::counting`](counting.md) builds the count and exit values;

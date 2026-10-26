@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/regclass.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/regclass.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/regclass.rs sha256:8976d304f2db8b4bc8a14bc9fdc360fa433a1dc6a7b8506f29b27d56c9154bdf -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/regclass.rs sha256:d2834c4c20011865dde03d47f96127762f546831d418c466f1026b66284592de -->
 
 # regclass
 
@@ -85,13 +85,15 @@ From unit test `test_a_segment_only_a_phi_reads_has_the_class_of_its_web` in
 sets.
 
 ## Runs
-Not a pass: queried on demand, by `coalesce`, `constrain`, `allocate`, at every -O level. `LLRM_DEBUG=regclass` also checks
-each body after the phases from `ssaspill` to `coalesce`.
+Not a pass: queried on demand, by `coalesce`, `constrain`, `allocate`, at
+every -O level. `LLRM_DEBUG=regclass` also checks each body after the phases
+from `ssaspill` to `coalesce`.
 
 ## Provides
 One answer to "which registers may this value be in", owned here (#441).
 Read by `crate::backend::ssaspill`, [`crate::backend::allocate`](allocate.md),
-[`crate::backend::coalesce`](coalesce.md), [`crate::backend::constrain`](constrain.md) and `target.rs`.
+[`crate::backend::coalesce`](coalesce.md), [`crate::backend::constrain`](constrain.md),
+and `target.rs`.
 
 ## Needs
 The target's register sets ([`crate::backend::classes`](classes.md),
