@@ -6,7 +6,7 @@
 Columns per level: clang (whole pipeline), pin-llc (clang IR through the pin's llc),
 ours (the same IR through llrm-arm64-llc). Cells are text bytes/instructions; run
 time is min of N runs. pin-llc vs ours is the backend gap; clang vs pin-llc is
-the noise of the instrument (should be 0). .ll inputs skip the clang column.
+the noise of the instrument (should be 0). For .ll inputs clang is `clang -x ir`, i.e. the\npin optimizer on the given IR (llrm-llc optimizes; the pin llc alone does not); a sibling .out is the expected output.
 Env: LLRM_PIN_ANY=1 (dry run with a non-pin clang), LLRM_PIN_BUILD (dir with bin/clang, bin/llc), LLRM_BIN (llrm binaries).
 """
 import argparse, hashlib, os, re, subprocess, sys, tempfile, time
@@ -66,8 +66,11 @@ def build_variants(src, lvl, tmp, ver):
         r = sh([str(PIN / "bin/clang"), f"-{lvl}", *TARGET, *FRONT, "-S", "-emit-llvm", str(src), "-o", str(ll)])
         if r.returncode:
             return v | {"pin-llc": "emit-llvm: " + r.stderr[:200], "ours": "emit-llvm"}
-    else:
+    else:  # IR in: clang's optimizer on it is the baseline; the pin's llc alone does not optimize
         ll = src
+        o = tmp / f"{name}.clang.o"
+        r = sh([str(PIN / "bin/clang"), f"-{lvl}", *TARGET, "-Wno-override-module", "-x", "ir", "-c", str(src), "-o", str(o)])
+        v["clang"] = o if r.returncode == 0 else "clang: " + r.stderr[:200]
     o = tmp / f"{name}.pin.o"
     r = sh([str(PIN / "bin/llc"), "-O2", "-mtriple=arm64-apple-macos", "-filetype=obj", str(ll), "-o", str(o)])
     v["pin-llc"] = o if r.returncode == 0 else "llc: " + r.stderr[:200]
@@ -94,11 +97,12 @@ def main():
     sh([str(PIN / "bin/clang"), *TARGET, "-isysroot", FRONT[-1], str(tmp / "empty.c"), "-o", str(tmp / "empty")])
     print(f"process-start floor (empty main, min of {a.runs}): {run(tmp / 'empty', a.runs)[0]*1000:.1f} ms; run times near it are noise")
     cols = ["clang", "pin-llc", "ours"]
-    print(f"{'prog':<14}{'lvl':<4}" + "".join(f"{c:>16}" for c in cols) + f"{'ours/pin':>10}  run(ms) clang/pin/ours  result")
+    print(f"{'prog':<14}{'lvl':<4}" + "".join(f"{c:>16}" for c in cols) + f"{'ours/clang':>11}  run(ms) clang/pin/ours  result")
     worse = 0
     for f in a.files:
+        lv = [l for l in a.O.split(",") if l == "O2" or Path(f).suffix == ".c"]
         src = Path(f).resolve()
-        for lvl in a.O.split(","):
+        for lvl in lv:
             v = build_variants(src, lvl, tmp, ver)
             cells, times, outs = [], [], {}
             for c in cols:
@@ -123,18 +127,19 @@ def main():
                 if a.md5:
                     print(f"  md5(.o) {exe.name} {hashlib.md5(o.read_bytes()).hexdigest()}", file=sys.stderr)
             ratio = "-"
-            if v.get("pin-llc") and isinstance(v["pin-llc"], Path) and isinstance(v.get("ours"), Path):
-                pb, ob = text_size(v["pin-llc"]), text_size(v["ours"])
+            base = v.get("clang") if isinstance(v.get("clang"), Path) else v.get("pin-llc")
+            if isinstance(base, Path) and isinstance(v.get("ours"), Path):
+                pb, ob = text_size(base), text_size(v["ours"])
                 ratio = f"{ob/pb:.3f}"
                 worse += ob > pb
             ref = outs.get("clang") or outs.get("pin-llc")
             exp = src.with_suffix(".out")
-            if ref is None and exp.exists():  # .ll with a recorded expectation
+            if exp.exists():  # the recorded output beats any build's  # .ll with a recorded expectation
                 st = src.with_suffix(".status")
                 ref = (exp.read_bytes(), int(st.read_text()) if st.exists() else 0)
             res = "-" if "ours" not in outs else ("ok" if outs["ours"] == ref else "DIFF")
-            print(f"{src.stem:<14}{lvl:<4}" + "".join(f"{c:>16}" for c in cells) + f"{ratio:>10}  " + "/".join(times) + f"  {res}")
-    print(f"programs worse than pin-llc (bytes): {worse}")
+            print(f"{src.stem:<14}{lvl:<4}" + "".join(f"{c:>16}" for c in cells) + f"{ratio:>11}  " + "/".join(times) + f"  {res}")
+    print(f"rows where ours is bigger than clang (bytes): {worse}")
 
 
 main()
