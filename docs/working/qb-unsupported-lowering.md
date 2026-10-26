@@ -43,7 +43,6 @@ would stop HELP.BAS compiling at all, a run-time error only the path that reache
 string descriptors, re-own their strings) is due 2026-11-06 with a fail-first `tests/run/qb` program under DOSBox.
 Order after #4329: PALETTE USING row, RESUME NEXT, string-array preserve.
 
-<<<<<<< HEAD
 ## KILL, NAME, MKDIR, CHDIR, RMDIR
 BC calls `B$KILL(psd)`, `B$NAME(psdOld, psdNew)`, `B$MDIR`, `B$CDIR`, `B$RDIR` (QB 4.5 `rt/dkstmt.asm`, `rt/directry.asm`;
 pascal far, callee cleanup 2, 4, 2, 2, 2). llrm's runtime runs them over the OS layer's `files` group
@@ -75,7 +74,6 @@ BC calls `B$SENV(psd)` (QB 4.5 `rt/osstmt.asm`). The runtime (`runtime/qb/enviro
 place over two OS-layer ops, `environment_read` and `environment_write`. As in QB, the table cannot grow past the end it had at
 start (`b$env_len`): a variable fits only where the table has shrunk, else Out of memory; an empty name or no delimiter is
 Illegal function call. `tests/qbrt/environ_statement.bas` matches BCOM45 at m16 and m32.
-=======
 ## VIEW
 BC calls `B$VIEW(x1, y1, x2, y2, fill, border, screen)` (seven words, -1 for a colour left out) or `B$VEW0()` for a bare VIEW
 (QB 4.5 `rt/grview.asm`). The runtime keeps a viewport in `gfx.c` that PSET, POINT, LINE, CIRCLE, PAINT, DRAW, GET, PUT and CLS
@@ -98,7 +96,6 @@ so numbers run about three times the files. Re-run after each PR (2026-10-25, on
 | WIDTH one-arg (#4722) | 9 |
 | SCREEN extra arguments | 9 |
 | NAME (#4667) | 9 |
->>>>>>> origin/feat/parity
 
 UDT array and a STRING array. The runtime preserves both: a string array's kept strings follow to the new elements
 (`str_owner_moved`) and only the cut-off ones are released. Tested on the host (`tests/hostarray/preserve_test.c`).
