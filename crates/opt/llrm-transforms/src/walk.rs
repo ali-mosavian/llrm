@@ -372,7 +372,7 @@ impl ProgramPass for Walk {
                                         credit
                                     );
                                 }
-                                if tried < best + credit {
+                                if tried <= best + credit {
                                     best = tried;
                                     accepted.extend(calls);
                                 } else {
