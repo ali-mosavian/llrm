@@ -179,7 +179,8 @@ pub fn loads_folded(body: &LirBody) -> LirBody {
 }
 
 /// `insns` with the call at `call` made to read the place its pointer was
-/// loaded from; `None` when it does not have that shape.
+/// loaded from; `None` when it does not have that shape, or the place is no
+/// symbol's.
 fn _fold_call(
     insns: &[Arc<Insn>],
     call: usize,
@@ -246,6 +247,12 @@ fn _fold_call(
         }
         (vec![low_at, high_at], vec![low_store, high_store], low_at.min(high_at), Mem { width: 4, ..low_place })
     };
+    // A call reads only a place a symbol names (a table entry): one reached
+    // by a register and an offset alone (`fill->line`) has no encoding the
+    // call can take, and `call dword ptr [ax+4]` was all the allocator left.
+    if place.addr.is_none() {
+        return None;
+    }
     // Nothing between the first load and the call may write memory, or the
     // call would read what the load did not.
     for (at, one) in insns.iter().enumerate().take(call).skip(first_load) {
@@ -512,6 +519,42 @@ mod tests {
     fn a_far_call_after_a_store_to_memory_keeps_its_cell() {
         let blocker = word_store(9, Mem::new(Some(Addr::new(Space::Far, 8)), 2), 7);
         let (insns, _entry) = far_call_after(Some(blocker));
+        let out = folded_calls(insns.clone());
+        assert_eq!(out, insns);
+    }
+
+    /// `fill->line(...)` in gline.c (`call dword ptr [bx+8]`) was folded to a
+    /// call through a register and an offset, which no symbol names: the
+    /// allocator left it `call dword ptr [ax+4]` and the object was refused
+    /// ("_line@3: Semantics(op=CALL ...)", every QB link). Such a call keeps
+    /// its cell.
+    #[test]
+    fn a_far_call_through_a_register_and_an_offset_keeps_its_cell() {
+        let field = |offset: i64, width: u32| Mem {
+            base: Some(Held { value: 10, width: 2 }),
+            through: iced_x86::Register::DS.into(),
+            offset,
+            ..Mem::new(None, width)
+        };
+        let slot = |disp: i64, width: u32| Mem::new(Some(Addr::new(Space::Frame, disp)), width);
+        let insns = vec![
+            word_load(1, 1, field(8, 2)),
+            word_load(2, 2, field(10, 2)),
+            word_store(3, slot(-2, 2), 2),
+            word_store(4, slot(-4, 2), 1),
+            Arc::new(Insn::new(
+                5,
+                Some((5, 5)),
+                Some(Semantics {
+                    name: Some("call".into()),
+                    sources: vec![Loc::Mem(slot(-4, 4))],
+                    indirect: true,
+                    ..Semantics::new(Operation::Call)
+                }),
+                vec![],
+                vec![],
+            )),
+        ];
         let out = folded_calls(insns.clone());
         assert_eq!(out, insns);
     }
