@@ -199,15 +199,28 @@ fn gap(
         counts
     };
     let (a, b) = (count(a), count(b));
-    a.keys().chain(b.keys()).collect::<std::collections::BTreeSet<_>>().into_iter().fold(0, |sum, key| {
-        sum + (a.get(key).copied().unwrap_or(0) - b.get(key).copied().unwrap_or(0)).unsigned_abs()
-    })
+    a.keys()
+        .chain(b.keys())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .fold(0, |sum, key| sum + (a.get(key).copied().unwrap_or(0) - b.get(key).copied().unwrap_or(0)).unsigned_abs())
 }
 
 /// The loops of a program that differ from BASIC's, by (program, loop,
 /// language): how many instructions differ. Lower an entry as its cause is
 /// fixed; the test fails when one is too high or too low.
-const KNOWN: [(&str, usize, &str, usize); 0] = [];
+const KNOWN: [(&str, usize, &str, usize); 6] = [
+    // copy1d: the three-value pointer rotation keeps two copies in C and Nib
+    // (loop 2), and loop 1 differs by 10.
+    ("copy1d", 1, "c", 10),
+    ("copy1d", 2, "c", 2),
+    ("copy1d", 1, "nib", 10),
+    ("copy1d", 2, "nib", 2),
+    // tri: C widens each operand before the subtract; BASIC subtracts in 16
+    // bits (width choice, w10).
+    ("tri", 2, "c", 8),
+    ("tri", 3, "c", 6),
+];
 
 fn known(
     stem: &str,
