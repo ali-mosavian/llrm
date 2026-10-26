@@ -72,13 +72,13 @@
 //!   of a local callee, which goes with it, is the pin's. No shape of callee
 //!   but the loop and the one smaller than its call is tested.
 //! - D12 (SZ2): a call the -Os bound (D11) alone refuses, that passes the
-//!   address of a stack slot the caller stored a constant to and whose callee
-//!   loads through that parameter, is inlined if the caller, simplified again
-//!   with the call inlined, is smaller by the target's size cost (`walk.rs`,
-//!   callers of at most 300 instructions; the sites of a private callee that
-//!   dies with its last call are tried together, its body credited). The pin's
-//!   cost does not follow a load through a pointer argument, so it never sees
-//!   the loop or the arithmetic fold.
+//!   address of a stack slot or a global the caller stored a constant to and
+//!   whose callee loads through that parameter, is inlined if the caller,
+//!   simplified again with the call inlined, is smaller by the target's size
+//!   cost (`walk.rs`, callers of at most 300 instructions; the sites of a
+//!   private callee that dies with its last call are tried together, its body
+//!   credited). The pin's cost does not follow a load through a pointer
+//!   argument, so it never sees the loop or the arithmetic fold.
 //! - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
 //!   attribute decision.
 //! - D7: the minsize loop penalty counts retreating-edge headers, not
@@ -2637,10 +2637,27 @@ fn root_of(
     }
 }
 
+/// The global a constant pointer is the address of, or a step or a cast of.
+fn global_of(
+    context: &llrm_mir::context::Context,
+    operand: llrm_mir::module::Operand,
+) -> Option<GlobalId> {
+    use llrm_mir::context::{ConstantExpr, ConstantKind};
+    let llrm_mir::module::Operand::Constant(mut at) = operand else { return None };
+    loop {
+        match &context.get(at).kind {
+            ConstantKind::Global(global) => return Some(*global),
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => at = *operands.first()?,
+            ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => at = *value,
+            _ => return None,
+        }
+    }
+}
+
 /// SZ2: whether a site refused by the -Os bound is worth inlining to see: the
-/// call passes the address of a stack slot the caller wrote a constant to, and
-/// the callee reads through that parameter, which the cost model does not
-/// follow (a constant argument it folds itself).
+/// call passes the address of a stack slot (or of a global) the caller wrote a
+/// constant to, and the callee reads through that parameter, which the cost
+/// model does not follow (a constant argument it folds itself).
 fn worth_a_trial(
     module: &Module,
     caller: &llrm_mir::module::Function,
@@ -2665,6 +2682,20 @@ fn worth_a_trial(
                 },
             )
     };
+    // A gate, not dataflow: the store may be to another field, or after the
+    // call; the trial decides on bytes.
+    let written_global = |global: GlobalId| {
+        caller
+            .walk()
+            .any(
+                |(_, inst)| {
+                    let store = caller.instruction(inst);
+                    matches!(store.opcode, Opcode::Store { .. })
+                        && matches!(store.operands[0], llrm_mir::module::Operand::Constant(_))
+                        && global_of(&module.context, store.operands[1]) == Some(global)
+                },
+            )
+    };
     let read_through: Vec<llrm_mir::module::ValueId> = callee
         .walk()
         .filter_map(|(_, inst)| {
@@ -2675,16 +2706,21 @@ fn worth_a_trial(
             }
         })
         .collect();
-    arguments
-        .iter()
-        .zip(callee.parameters())
-        .any(
-            |(argument, parameter)| read_through.contains(parameter)
-                && matches!(
+    // A callee that reads a global directly (its pointer arguments were
+    // propagated into it), one the caller has stored a constant to.
+    let reads_written_global = callee.walk().any(|(_, inst)| {
+        let load = callee.instruction(inst);
+        matches!(load.opcode, Opcode::Load { .. })
+            && load.operands.first().and_then(|ptr| global_of(&module.context, *ptr)).is_some_and(written_global)
+    });
+    reads_written_global
+        || arguments.iter().zip(callee.parameters()).any(|(argument, parameter)| {
+            read_through.contains(parameter)
+                && (matches!(
                     root_of(caller, *argument),
                     Some(Root::Slot(slot)) if written(slot)
-                ),
-        )
+                ) || global_of(&module.context, *argument).is_some_and(written_global))
+        })
 }
 
 /// What `decide` reads of the module besides the site.

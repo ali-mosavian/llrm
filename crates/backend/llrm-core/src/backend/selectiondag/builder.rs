@@ -118,6 +118,15 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with divides by constants kept as divides (`isIntDivCheap`).
+    pub fn with_int_div_cheap(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.dag.int_div_cheap = on;
+        self
+    }
+
     /// This target with jump tables on or off.
     pub fn with_jump_tables(
         mut self,

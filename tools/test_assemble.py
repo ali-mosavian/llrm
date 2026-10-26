@@ -378,3 +378,26 @@ def test_a_head_whose_tests_did_not_run_is_not_cached_as_its_failure_set(tmp_pat
     assert ps.head_failures("abc", compute, cache=tmp_path) == {"integration-did-not-run"}
     assert ps.head_failures("abc", compute, cache=tmp_path) == {"integration header_copy::t"}
     assert ps.head_failures("abc", compute, cache=tmp_path) == {"integration header_copy::t"} and len(calls) == 2
+
+
+def test_the_alone_command_runs_its_cargo_through_buildslot_with_two_jobs_whatever_the_runner_exports(monkeypatch):
+    """The runner exports BUILDSLOT_BYPASS=1 and main() ran every command at the landing's priority: six of eight cargo processes at load 108 were alone-0..5 outside every slot."""
+    import buildslot
+
+    seen = {}
+
+    def fake(numbers, heads, **kw):
+        seen["slotted"] = buildslot.slotted(["cargo", "build"])
+        seen["jobs"] = kw["jobs"]
+        return list(numbers), {}
+
+    monkeypatch.setenv("BUILDSLOT_BYPASS", "1")
+    monkeypatch.setenv(buildslot.LANDING, "1")
+    monkeypatch.delenv("ALONE_JOBS", raising=False)
+    monkeypatch.setattr(buildslot, "tool", lambda: "buildslot")
+    monkeypatch.setattr(ps, "alone", fake)
+    monkeypatch.setattr(ps, "git", lambda *args, **_: "deadbeef")
+    monkeypatch.setattr(ps, "preload_tools", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["parity_squash.py", "alone", "11"])
+    assert ps.main() == 0
+    assert seen == {"slotted": ["buildslot", "cargo", "build"], "jobs": 2}, seen
