@@ -24,7 +24,7 @@ RUNTIME = qbruntime.RUNTIME
 # The OS layer's directory is the target's to say; the QB runtime's code for it sits beside it under runtime/qb.
 SHARED = Path(dosbatch.os_layer(TARGET, "directory", "c"))
 PLATFORM = RUNTIME / SHARED.parent.name / SHARED.name
-START_FILES = [str((PLATFORM / "qbstart.asm").relative_to(dosbatch.ROOT)), str((SHARED / "start.asm").relative_to(dosbatch.ROOT))]
+START_FILES = [str((PLATFORM / "start.asm").relative_to(dosbatch.ROOT)), str((SHARED / "start.asm").relative_to(dosbatch.ROOT))]
 
 
 OBJECTS = Path.home() / ".cache" / "llrm" / "qb32-objs"
@@ -123,7 +123,7 @@ def build(work: Path) -> dict[str, Path]:
     failures = []
     tree, tools = _tree(), _stamp("llrm-c", "jwasm", "jwlink")
     for source in sorted([*RUNTIME.glob("*.c"), *qbruntime.platform_sources_of(PLATFORM)]):
-        if source.name == "qbstart.asm":
+        if source.name == "start.asm":
             continue
         obj = work / f"{source.stem}.obj"
 

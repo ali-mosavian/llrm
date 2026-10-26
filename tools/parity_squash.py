@@ -868,12 +868,16 @@ def new_link_failures(
     files: list[str],
     build=None,
     check=None,
+    inputs=None,
 ) -> list[str]:
     """The programs that do not link on the merged tree, when the batch changes what programs link against (`link_check.touches_runtime`): a QB program and C programs built
     and linked, not run. qbrt went 183/218 on 50387f114 and the gate was green because nothing linked the QB runtime (a `libcalls` fact made its C sources call `memcpy_`)."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import link_check  # noqa: PLC0415
 
+    if bad := (inputs or link_check.unreadable_inputs)():
+        print(f"link: {len(bad)} inputs unreadable, nothing built")
+        return bad
     if not link_check.touches_runtime(files):
         print("link: skipped (nothing the programs link against changed)")
         return []

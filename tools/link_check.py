@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import sys
+import subprocess
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -25,6 +26,22 @@ TOUCHING = ("runtime/", "runtime/qb/", "crates/target/", "crates/mc/")
 def touches_runtime(files: list[str]) -> bool:
     """A change to what a program links against, or to a fact that decides what the compiler calls: not docs, not a crate's code."""
     return any(f.startswith("runtime/") or f.endswith("c.toml") or ("/machines/" in f and f.endswith(".toml")) or f.startswith("runtime/qb/") for f in files)
+
+
+def unreadable_inputs(root: Path = ROOT, listing: list[str] | None = None) -> list[str]:
+    """One line per tracked symlink whose target is gone and per QB program source that cannot be read: found before any build, because the link stage crashed on them (#4972's batch, after the
+    re-org left two links dangling) instead of refusing with a name. `listing` is `git ls-files -s` of `root`."""
+    if listing is None:
+        listing = subprocess.run(["git", "ls-files", "-s"], cwd=root, capture_output=True, text=True, check=True).stdout.splitlines()
+    links = [line.split("\t", 1)[1] for line in listing if line.startswith("120000 ")]
+    lines = [f"dangling link {link} -> {Path(root / link).readlink()}" for link in links if not (root / link).exists()]
+    for name in QB_PROGRAMS:
+        source = root / "tests/qbrt" / f"{name}.bas"
+        try:
+            source.read_bytes()
+        except OSError as error:
+            lines.append(f"unreadable {source.relative_to(root)}: {error.strerror}")
+    return lines
 
 
 def link_failures(work: Path, qb=None, c=None) -> list[str]:
