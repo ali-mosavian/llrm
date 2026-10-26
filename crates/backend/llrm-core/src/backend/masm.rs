@@ -2142,6 +2142,17 @@ pub fn _instruction(
                 vec![name.to_owned()]
             }
         }
+        // The allocator names every copy `mov`; between xmm registers it
+        // is `movaps`.
+        Operation::Move
+            if name == "mov"
+                && matches!(
+                    (&what.dests[0], &what.sources[0]),
+                    (Loc::Reg(into), Loc::Reg(outof)) if into.register.is_xmm() && outof.register.is_xmm()
+                ) =>
+        {
+            vec![format!("movaps {}, {}", dests[0], sources[0])]
+        }
         Operation::Move | Operation::Address => vec![format!("{name} {}, {}", dests[0], sources[0])],
         Operation::Binary | Operation::Select => vec![format!("{name} {}, {}", dests[0], sources[1])],
         Operation::Unary => vec![format!("{name} {}", dests[0])],
@@ -2393,6 +2404,21 @@ mod tests {
 
     fn ax() -> Loc {
         Loc::Reg(ir::Reg { register: RegId::AX, width: 2 })
+    }
+
+    /// A copy between xmm registers printed as `mov xmm0, xmm2`, which no
+    /// assembler takes: it is `movaps`.
+    #[test]
+    fn test_a_copy_between_xmm_registers_prints_movaps() {
+        let regs = crate::backend::registerinfo::test_regs();
+        let xmm = |register| Loc::Reg(ir::Reg { register, width: 16 });
+        let copy = Semantics {
+            name: Some("mov".into()),
+            dests: vec![xmm(RegId::XMM0)],
+            sources: vec![xmm(RegId::XMM2)],
+            ..Semantics::new(Operation::Move)
+        };
+        assert_eq!(_instruction(regs, &copy, &no_names(), 0).unwrap(), ["movaps xmm0, xmm2"]);
     }
 
     /// A string move prints as the instruction it is: `rep` where it has a

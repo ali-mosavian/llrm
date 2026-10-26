@@ -2143,6 +2143,9 @@ fn scalar_sse(
 ) -> Option<Emitted> {
     let (dests, sources) = (&what.dests, &what.sources);
     let name = what.name.as_deref()?.trim_end_matches("_x");
+    // A copy between xmm registers is `movaps` (`X86InstrInfo::copyPhysReg`);
+    // the allocator names every copy `mov`.
+    let name = if name == "mov" && what.op == Operation::Move { "movaps" } else { name };
     let (first, second) = match (dests.len(), sources.len()) {
         (1, 2) => (&dests[0], &sources[1]),
         (1, 1) => (&dests[0], &sources[0]),
