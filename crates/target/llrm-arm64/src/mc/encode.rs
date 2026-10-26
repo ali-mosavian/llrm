@@ -336,8 +336,12 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
         Inst::Store { mem, addr } => load_store(mem, addr, false, &mut fixup)?,
         Inst::LoadPair { first, second, addr } => pair(first, second, addr, true)?,
         Inst::StorePair { first, second, addr } => pair(first, second, addr, false)?,
-        Inst::Adr { page, rd, target } => {
-            let kind = if *page { FixupKind::Page21 } else { FixupKind::Adr21 };
+        Inst::Adr { page, rd, target, got } => {
+            let kind = match (page, got) {
+                (true, true) => FixupKind::GotPage21,
+                (true, false) => FixupKind::Page21,
+                (false, _) => FixupKind::Adr21,
+            };
             let scale = if *page { 12 } else { 0 };
             let value = immediate_field(target, kind, 21, scale, &mut fixup)?;
             u32::from(*page) << 31 | (value & 3) << 29 | 0b10000 << 24 | (value >> 2) << 5 | reg(*rd)?
@@ -489,8 +493,9 @@ fn immediate_field(
 ) -> Result<u32, Error> {
     match target {
         Target::Offset(bytes) => {
-            let value = if kind == FixupKind::Page21 { bytes >> 12 } else { *bytes };
-            pc_field("a branch offset", value, bits, if kind == FixupKind::Page21 { 0 } else { scale })
+            let paged = matches!(kind, FixupKind::Page21 | FixupKind::GotPage21);
+            let value = if paged { bytes >> 12 } else { *bytes };
+            pc_field("a branch offset", value, bits, if paged { 0 } else { scale })
         }
         symbolic => {
             *fixup = Some(fixup_for(kind, symbolic)?);

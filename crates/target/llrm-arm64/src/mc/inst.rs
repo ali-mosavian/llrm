@@ -489,6 +489,8 @@ pub enum Inst {
         page: bool,
         rd: Gpr,
         target: Target,
+        /// `adrp` of the target's GOT slot (`@GOTPAGE`): the load that follows reads it at `@GOTPAGEOFF`.
+        got: bool,
     },
     FpUnary {
         op: FpUnary,

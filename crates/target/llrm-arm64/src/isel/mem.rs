@@ -115,7 +115,12 @@ impl Selector<'_> {
                 // the page and the page offset name the same address: a GOT
                 // slot has no offset
                 let addend = if *got { 0 } else { address.offset };
-                self.inst(Inst::Adr { page: true, rd: page, target: Target::Symbol { name: name.clone(), addend } });
+                self.inst(Inst::Adr {
+                    page: true,
+                    rd: page,
+                    target: Target::Symbol { name: name.clone(), addend },
+                    got: *got,
+                });
                 let dst = self.mf.gpr();
                 if *got {
                     self.inst(Inst::Load {
@@ -252,6 +257,7 @@ impl Selector<'_> {
                     page: true,
                     rd: page,
                     target: Target::Symbol { name: name.clone(), addend: address.offset },
+                    got: false,
                 });
                 Ok(Addr::PageOffset {
                     base: page,

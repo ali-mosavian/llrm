@@ -273,7 +273,7 @@ fn branches() {
     all.push(Inst::Brk { imm16: 1 });
     all.push(Inst::Nop);
     for (page, offset) in [(false, 0), (false, 1023), (false, -1048576), (true, 0), (true, 4096), (true, -8192)] {
-        all.push(Inst::Adr { page, rd: Gpr(1), target: Target::Offset(offset) });
+        all.push(Inst::Adr { page, rd: Gpr(1), target: Target::Offset(offset), got: false });
     }
     check(&all);
 }
@@ -283,8 +283,9 @@ fn symbolic_targets_leave_zero_fields() {
     let symbol = |name: &str, addend| Target::Symbol { name: name.into(), addend };
     check(&[
         Inst::Branch { link: true, target: symbol("_puts", 0) },
-        Inst::Adr { page: true, rd: Gpr(0), target: symbol("_msg", 0) },
-        Inst::Adr { page: true, rd: Gpr(0), target: symbol("_msg", 16) },
+        Inst::Adr { page: true, rd: Gpr(0), target: symbol("_msg", 0), got: false },
+        Inst::Adr { page: true, rd: Gpr(3), target: symbol("_ext", 0), got: true },
+        Inst::Adr { page: true, rd: Gpr(0), target: symbol("_msg", 16), got: false },
         Inst::AddPageOffset { rd: Gpr(0), rn: Gpr(0), target: symbol("_msg", 0) },
         Inst::Load {
             mem: Memory::Int { width: Width::W, bytes: 4, sign: false, reg: Gpr(2) },
@@ -443,4 +444,15 @@ fn floating_point() {
     all.push(Inst::FpToFp { to: FpSize::D, from: FpSize::S, rd: Vreg(1), rn: Vreg(2) });
     all.push(Inst::FpToFp { to: FpSize::S, from: FpSize::D, rd: Vreg(1), rn: Vreg(2) });
     check(&all);
+}
+
+/// The `adrp` before a GOT load was fixed up as a plain page (`ARM64_RELOC_PAGE21`), so `ld` refused
+/// `extdata` ("target ___stdoutp does not have address"); it takes the GOT page like its load.
+#[test]
+fn an_adrp_of_a_got_slot_is_fixed_up_as_a_got_page() {
+    let target = Target::Symbol { name: "_ext".into(), addend: 0 };
+    let adrp = |got| encode(&Inst::Adr { page: true, rd: Gpr(3), target: target.clone(), got }).unwrap().fixup.unwrap();
+    assert_eq!(adrp(true).kind, super::encode::FixupKind::GotPage21);
+    assert_eq!(adrp(false).kind, super::encode::FixupKind::Page21);
+    assert_eq!(Inst::Adr { page: true, rd: Gpr(3), target: target.clone(), got: true }.to_string(), "adrp x3, _ext@GOTPAGE");
 }

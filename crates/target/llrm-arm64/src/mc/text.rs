@@ -302,13 +302,13 @@ impl fmt::Display for Inst {
             Inst::Store { mem, addr } => memory_text(out, mem, addr, false),
             Inst::LoadPair { first, second, addr } => pair_text(out, first, second, addr, true),
             Inst::StorePair { first, second, addr } => pair_text(out, first, second, addr, false),
-            Inst::Adr { page, rd, target: to } => {
+            Inst::Adr { page, rd, target: to, got } => {
                 write!(
                     out,
                     "{} {}, {}",
                     if *page { "adrp" } else { "adr" },
                     gpr(*rd, Width::X, false),
-                    target(to, if *page { "@PAGE" } else { "" })
+                    target(to, match (page, got) { (true, true) => "@GOTPAGE", (true, false) => "@PAGE", _ => "" })
                 )
             }
             Inst::FpUnary { op, size, rd, rn } => {
