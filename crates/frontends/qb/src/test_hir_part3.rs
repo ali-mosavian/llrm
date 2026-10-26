@@ -3468,3 +3468,39 @@ fn test_erl_table_numbers_only_the_statements_that_raise() {
     let words = table_words(&text, "$QB$ERL$__main").unwrap_or_else(|| panic!("no table\n{text}"));
     assert!(words <= 4, "{words} words\n{text}");
 }
+
+/// Whether a listing compares something with -1: BC's LONG divide wraps MIN \
+/// -1 where the processor traps, so the front guards a divisor of -1.
+fn tests_against_minus_one(text: &str) -> bool {
+    text.lines().map(str::trim).any(|line| line.starts_with("cmp") && line.ends_with(", -1"))
+}
+
+/// `PULL \ d` with a constant dividend carried the divisor-is--1 guard
+/// (`cmp edi, -1 / je`, 6 B) though only MIN \ -1 traps: nbody_fixed.bas was 9
+/// B larger than main at -Os m16.
+#[test]
+fn a_constant_dividend_that_is_not_long_min_has_no_minus_one_guard() {
+    let text = listing_of(
+        "const_dividend",
+        "DEFINT A-Z\r\nDIM d AS LONG\r\nINPUT d\r\nPRINT 512& \\ d\r\nPRINT 512& MOD d\r\n",
+    );
+    assert!(!tests_against_minus_one(&text), "{text}");
+}
+
+/// The guard stays where the dividend may be LONG's minimum and the divisor -1.
+#[test]
+fn a_variable_dividend_keeps_the_minus_one_guard() {
+    let text = listing_of(
+        "variable_dividend",
+        "DEFINT A-Z\r\nDIM d AS LONG, x AS LONG\r\nINPUT d\r\nINPUT x\r\nPRINT x \\ d\r\n",
+    );
+    assert!(tests_against_minus_one(&text), "{text}");
+}
+
+/// A constant dividend of LONG's minimum still wraps.
+#[test]
+fn a_dividend_of_long_min_keeps_the_minus_one_guard() {
+    let text =
+        listing_of("min_dividend", "DEFINT A-Z\r\nDIM d AS LONG\r\nINPUT d\r\nPRINT (-2147483647& - 1&) \\ d\r\n");
+    assert!(tests_against_minus_one(&text), "{text}");
+}

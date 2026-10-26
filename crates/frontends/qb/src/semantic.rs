@@ -8995,9 +8995,14 @@ impl Compiler {
         divisor: Operand,
         type_id: u32,
     ) -> Result<(), SemanticError> {
+        // The processor traps only on LONG minimum divided by -1: any other
+        // dividend, as any other divisor, has the processor's own answer.
         if matches!(
             divisor,
             Operand::Constant(_, Number::Integer(value)) if value != -1
+        ) || matches!(
+            dividend,
+            Operand::Constant(_, Number::Integer(value)) if value != i64::from(i32::MIN)
         ) {
             self.emit(operation, vec![result], vec![dividend, divisor]);
             return Ok(());
