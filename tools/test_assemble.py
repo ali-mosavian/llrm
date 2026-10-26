@@ -168,6 +168,38 @@ def test_a_pr_whose_only_issue_is_a_fmt_difference_is_kept(tmp_path):
     assert why == [], why
 
 
+def test_a_test_the_base_fails_too_blames_no_pr_and_probes_none(tmp_path):
+    """Batch 2 (20:07) merged 16 PRs on a base red in two llrm-core tests and probed every PR alone: each fails the base's test, so each looked guilty."""
+    probed = []
+    by_package = {"llrm-core": {"dag_function_calls::a_red_test"}}
+    found = ps.unit_offenders(
+        [str(n) for n in range(1, 17)],
+        by_package,
+        merge_alone=lambda number: probed.append(number) or True,
+        failing=lambda package, tests: True,
+        base_red=lambda wanted: {("llrm-core", "dag_function_calls::a_red_test")},
+    )
+    assert found == [] and probed == [], (found, probed)
+
+
+def test_a_pr_is_probed_only_for_a_package_it_can_change_and_a_new_red_test_is_still_blamed(tmp_path):
+    graph = {"llrm-core": {"llrm-mir"}, "llrm-mir": set(), "llrm-x86": {"llrm-core"}, "llrm-nib": {"llrm-mir"}}
+    packages = {name: Path("/r/crates") / name for name in graph}
+    files = {"1": ["crates/llrm-nib/src/a.rs"], "2": ["crates/llrm-mir/src/b.rs"], "3": ["Cargo.toml"]}
+    root = Path("/r")
+    affects = lambda number, package: ps.can_affect(files[number], package, packages, graph, root)  # noqa: E731
+    probed = []
+    found = ps.unit_offenders(
+        ["1", "2", "3"],
+        {"llrm-core": {"t"}},
+        merge_alone=lambda number: probed.append(number) or True,
+        failing=lambda package, tests: probed[-1] == "2",
+        affects=affects,
+    )
+    assert probed == ["2", "3"], probed  # 1 changes llrm-nib, which llrm-core does not use; 3 is a file no package owns
+    assert found == ["2"], found
+
+
 def test_a_diff_with_non_utf8_bytes_is_read_not_a_crash(tmp_path):
     """The 20:07 batch ran unassembled: `added_names` died with UnicodeDecodeError 0xdb on a PR whose diff held CP437 bytes (a .BAS), and the runner fell back to the first 16."""
     repo = tmp_path / "repo"
@@ -182,3 +214,26 @@ def test_a_diff_with_non_utf8_bytes_is_read_not_a_crash(tmp_path):
     sh(repo, "commit", "-qm", "pr")
     assert ps.added_names("pr", "main", repo) == {"a_new_test"}
     assert ps.git("diff", "-U0", "main...pr", cwd=repo).count("PRINT") == 1
+
+
+def test_alone_checks_run_in_parallel_and_the_unfinished_at_the_cap_are_kept_unfiltered(tmp_path):
+    """Forty PRs at 3-5 minutes each, one after another, held the batch for hours: 4 checks of 0.4 s take about 0.4 s, and one still running at the cap goes to the batch."""
+    import time
+
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    heads = {str(n): branch(repo, f"b{n}", f"f{n}.txt", f"{n}\n") for n in range(1, 6)}
+
+    def refusals(head: str, base: str) -> list[str]:
+        time.sleep(30 if head == heads["5"] else 0.4)
+        return ["does not build"] if head == heads["2"] else []
+
+    started = time.monotonic()
+    kept, dropped = ps.alone(list(heads), heads, refusals=refusals, jobs=5, cap=2)
+    took = time.monotonic() - started
+    assert took < 4, took
+    assert kept == ["1", "3", "4", "5"], kept  # 5 never finished: unfiltered
+    assert list(dropped) == ["2"], dropped
