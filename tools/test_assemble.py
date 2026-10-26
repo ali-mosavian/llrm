@@ -109,6 +109,21 @@ def test_a_deleted_test_file_in_the_diff_is_not_a_scanner_target(tmp_path):
     assert ps.own_test_targets(files, tmp_path) == {"kept"}
 
 
+def test_a_refusal_of_a_head_the_pr_has_moved_off_does_not_drop_it(tmp_path):
+    """#4993 was dropped at 21:04 for a merge conflict its 21:02 head no longer had: the check had started on the 20:54 head."""
+    heads = {"4993": "old", "4991": "same"}
+    refuse = lambda head, base: ["conflicts in pressuresink.md"]  # noqa: E731
+    kept, dropped = ps.alone(["4993", "4991"], heads, refusals=refuse, current=lambda number: "new" if number == "4993" else "same")
+    assert kept == ["4993"] and list(dropped) == ["4991"], (kept, dropped)
+
+
+def test_a_docs_check_that_only_counts_lint_hits_is_not_a_failed_regeneration():
+    """#4993 was refused for `4 problem(s)`: the baseline `no # Example` hits, with every page current."""
+    lint = "crates/x/remidiom.rs: no # Example\n4 problem(s)\n"
+    stale = "generated docs are out of date; run python3 tools/docsbuild/build.py --sync\n  docs/optimizations/backend/a.md\n"
+    assert ps.docs_stale_lines(lint) == [] and ps.docs_stale_lines(stale) == ["docs/optimizations/backend/a.md"]
+
+
 def test_two_prs_adding_a_test_of_one_name_do_not_share_a_batch(tmp_path):
     """#4678 and #4680 added the same test in different places: no conflict, so both joined, and the batch failed 'defined multiple times'."""
     repo = tmp_path / "repo"

@@ -481,6 +481,11 @@ def land_lock(path: str = LAND_LOCK, wait: bool = True):
 GENERATED = ("docs/optimizations/passes/", "docs/optimizations/analyses/", "docs/optimizations/backend/", "docs/architecture/readme.md")  # what tools/docsbuild/build.py --sync writes
 
 
+def docs_stale_lines(output: str) -> list[str]:
+    """The generated pages `build.py --check` names as out of date (its `  docs/...` lines), not the lint problems it also counts."""
+    return [line.strip() for line in output.splitlines() if line.strip().startswith("docs/")]
+
+
 def regenerate(conflicts: list[str], cwd: Path = ROOT) -> str:
     """"" when every conflicted path is generated and `build.py --sync --force` on the merged tree made it current (then `--check` agrees) and the merge was committed;
     else why not. Two PRs that each add a page both rewrite the index: a hand merge of generated text is what blocked the decide flip, the LSR stack and indvars."""
@@ -491,7 +496,11 @@ def regenerate(conflicts: list[str], cwd: Path = ROOT) -> str:
     build = [sys.executable, "tools/docsbuild/build.py"]
     for flags in (["--sync", "--force"], ["--check"]):
         done = subprocess.run([*build, *flags], cwd=cwd, capture_output=True, text=True, errors="replace")
-        if done.returncode:
+        if flags == ["--check"]:
+            # the lint hits (`path: no # Example`) are the sources', not the pages': only a page still out of date after the sync is a failed regeneration (#4993 was refused for 4 baseline lint hits)
+            if stale := docs_stale_lines(done.stdout + done.stderr):
+                return f"docsbuild --check failed on the merged tree: pages still stale: {', '.join(stale[:3])}"
+        elif done.returncode:
             return f"docsbuild {' '.join(flags)} failed on the merged tree: {(done.stdout + done.stderr).strip().splitlines()[-1:] or ['no output']}"
     git("add", "-A", "docs", cwd=cwd)
     done = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "commit", "-q", "--no-edit"], cwd=cwd, capture_output=True, text=True, errors="replace")
@@ -1116,7 +1125,12 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
 HITS = [0]  # verdicts read from the cache by this process
 
 
-def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=None, cache: Path | None = None, jobs: int = 1, cap: float | None = None) -> tuple[list[str], dict[str, str]]:
+def _current_head(number: str) -> str:
+    git("fetch", "-q", "origin", f"refs/pull/{number}/head")
+    return git("rev-parse", "FETCH_HEAD").strip()
+
+
+def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=None, cache: Path | None = None, jobs: int = 1, cap: float | None = None, current=None) -> tuple[list[str], dict[str, str]]:
     """(the numbers that pass alone, {number: why} for those that fail). The verdict is kept per head sha in `cache`, so a PR checked while the previous batch squashed is not
     checked again. The uncached PRs run `jobs` at a time; the ones not finished `cap` seconds in are kept, unfiltered (a check of 40 PRs one after another took hours)."""
     verdicts: dict[str, str] = {}
@@ -1154,6 +1168,10 @@ def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=
     deadline = None if cap is None else time.monotonic() + cap
     for thread in threads:
         thread.join(None if deadline is None else max(0.0, deadline - time.monotonic()))
+    # a refusal of a head the PR has since moved off is of a PR that no longer exists (#4993 was dropped at 21:04 for a conflict its 21:02 head did not have): kept, and its new head is checked next pass
+    for number in [one for one in numbers if verdicts.get(one) and current]:
+        if (now := current(number)) and now != heads[number]:
+            del verdicts[number]
     kept = [number for number in numbers if not verdicts.get(number)]  # unchecked at the cap: kept
     return kept, {number: verdicts[number] for number in numbers if verdicts.get(number)}
 
@@ -1842,7 +1860,7 @@ def dispatch() -> int:
             heads[number] = git("rev-parse", "FETCH_HEAD").strip()
         # stdout is the survivors and nothing else: the scanners print their summary line, and the runner reads this output as PR numbers
         with contextlib.redirect_stdout(sys.stderr):
-            kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", ALONE_JOBS)), cap=float(os.environ.get("ALONE_CAP", "600")))
+            kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", ALONE_JOBS)), cap=float(os.environ.get("ALONE_CAP", "600")), current=_current_head)
         for number, why in dropped.items():
             print(f"{number}: REFUSED: alone: {why[:300]}", file=sys.stderr)
         print(f"alone: {len(numbers)} PRs, {HITS[0]} cached, {len(numbers) - HITS[0]} checked, {len(dropped)} dropped", file=sys.stderr)
