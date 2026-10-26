@@ -485,6 +485,9 @@ struct Tables<'h> {
     /// The facts stated of a place, by function and place: every access of it
     /// has them.
     place_facts: HashMap<(i64, i64), Vec<Fact>>,
+    /// The bytes a pointer parameter is promised dereferenceable for, by
+    /// function and parameter index.
+    parameter_bytes: HashMap<(i64, i64), i64>,
     /// The facts stated of a member of an aggregate type, by type and offset:
     /// every access of it has them.
     field_facts: HashMap<(i64, i64), Vec<Fact>>,
@@ -658,11 +661,17 @@ fn emit_module<'h>(
             }
         }
     }
+    let mut parameter_bytes: HashMap<(i64, i64), i64> = HashMap::default();
     let (mut place_facts, mut field_facts): (HashMap<(i64, i64), Vec<Fact>>, HashMap<(i64, i64), Vec<Fact>>) =
         (HashMap::default(), HashMap::default());
     for one in &hir.facts {
         match one.subject {
             Subject::Place { function, place } => place_facts.entry((function, place)).or_default().push(one.fact),
+            Subject::Param { function, index } => {
+                if let Fact::Dereferenceable(bytes) = one.fact {
+                    parameter_bytes.insert((function, index), bytes as i64);
+                }
+            }
             Subject::Field { owner, offset } => field_facts.entry((owner, offset)).or_default().push(one.fact),
             _ => {}
         }
@@ -691,6 +700,7 @@ fn emit_module<'h>(
         accesses: HashMap::default(),
         terminator_nodes: HashMap::default(),
         place_facts,
+        parameter_bytes,
         field_facts,
         variables: HashMap::default(),
     };
@@ -2495,7 +2505,14 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             passed: None,
             objects: Vec::new(),
             variables: Vec::new(),
-            addresses: HashMap::default(),
+            // A pointer parameter points into its variable: an access inside
+            // the promised bytes is a place's, never a far allocation's.
+            addresses: function
+                .parameters
+                .iter()
+                .enumerate()
+                .filter_map(|(at, &one)| Some((one, *tables.parameter_bytes.get(&(function.id, at as i64))?)))
+                .collect(),
             declared_addresses: HashSet::default(),
             declared_offsets: HashMap::default(),
             handling: None,
