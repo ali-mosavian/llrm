@@ -2439,6 +2439,17 @@ fn a_dim_as_in_a_procedure_may_reuse_a_name_the_module_shares_with_a_suffix() {
 }
 
 #[test]
+fn stop_and_reset_call_b_stop_and_b_rest() {
+    // STOP and RESET were refused as unknown procedures. BC calls B$STOP and
+    // B$REST, nothing pushed (measured in BC output of all three dialects);
+    // STOP does not return.
+    let module = parse("RESET\r\nPRINT 1\r\nSTOP\r\nPRINT 2\r\n", Dialect::QuickBasic45).unwrap();
+    let hir = compile(&module, "stop", Dialect::QuickBasic45, "qb45").unwrap();
+    assert_eq!(hir.matches("\"callee\":\"B$REST\"").count(), 1, "{hir}");
+    assert_eq!(hir.matches("\"callee\":\"B$STOP\"").count(), 1, "{hir}");
+}
+
+#[test]
 fn kill_name_and_the_directory_statements_call_their_runtime_routines() {
     // KILL, NAME, MKDIR, CHDIR and RMDIR were refused as unknown procedures. BC
     // calls B$KILL, B$NAME, B$MDIR, B$CDIR and B$RDIR with the names'
