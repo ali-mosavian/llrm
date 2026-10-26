@@ -6,6 +6,19 @@
 //! `!hasOptSize() && EFLAGS is dead`
 //! ([L516](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86MCInstLower.cpp#L516)).
 //! `Profile::size` stands for `hasOptSize`.
+//!
+//! # Example
+//! With the flags dead and the function built for speed:
+//!
+//! ```text
+//!  before                after
+//!  bsf eax, ecx          rep bsf eax, ecx     (tzcnt's encoding)
+//!  cmp esi, 0            cmp esi, 0
+//! ```
+//!
+//! Built for size, or with the flags read (`adc` next), the `bsf` is left as it
+//! is. From unit test `test_bsf_gets_the_rep_prefix_only_where_the_pin_gives_it`
+//! in `peephole_tests.rs`, which runs the three cases.
 
 use std::sync::Arc;
 

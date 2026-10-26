@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/peepholeopt.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/peepholeopt.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/peepholeopt.rs sha256:f4d512f7764bef2e7bd2aee270559b922d395867f16c61de09109191de13d463 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/peepholeopt.rs sha256:a09eec762e61c4698170c71e3fde192f098a35f8ff98d709d1d4a24932ed268f -->
 
 # peepholeopt
 
@@ -45,6 +45,19 @@ Not translated: a compare redundant with another compare or subtract
 (`popcnt`), `adc`/`sbb`/`shld`/`shrd`/`lzcnt`/`tzcnt` and the BMI group as
 the flag source, the backward scan into a single predecessor, `MOV32r0`
 motion and the NF variants (APX).
+
+## Example
+A subtract whose result nothing reads, ahead of a branch on the flags:
+
+```text
+ before                  after
+ d := sub a, b           cmp a, b
+ jl L                    jl L
+```
+
+From unit test `test_a_subtract_nothing_reads_is_a_compare` in
+`peepholeopt.rs`, which asserts the `sub` becomes a `cmp` with no
+destination.
 
 ## Runs
 A machine phase on SSA after MachineSink and ahead of MachineCombiner (the
