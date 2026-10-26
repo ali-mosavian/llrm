@@ -1,3 +1,2 @@
 d1106deb71cc81016406a1917d0508d2df296266
-# m16 fork (not pushed yet: the push was denied here): ali-mosavian/llvm-project branch llrm/clang-i8086
-# local commit d8d62de5928b74eecbfc12ffdff788dff4e50404 in ~/scratch/llvm-src-m16
+# m16: ali-mosavian/llvm-project branch llrm/clang-i8086 at d8d62de5928b74eecbfc12ffdff788dff4e50404 (push with --no-thin)
