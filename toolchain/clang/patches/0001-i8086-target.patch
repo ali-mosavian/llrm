@@ -87,10 +87,10 @@ index 000000000000..02366aff25f2
 +}
 diff --git a/clang/lib/Basic/Targets/I8086.h b/clang/lib/Basic/Targets/I8086.h
 new file mode 100644
-index 000000000000..ab6d3745e880
+index 000000000000..ac6a113d7fdb
 --- /dev/null
 +++ b/clang/lib/Basic/Targets/I8086.h
-@@ -0,0 +1,100 @@
+@@ -0,0 +1,114 @@
 +//===--- I8086.h - Declare I8086 target feature support ---------*- C++ -*-===//
 +//
 +// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -162,10 +162,24 @@ index 000000000000..ab6d3745e880
 +      return 16;
 +    }
 +  }
++  // A near pointer converts to a far one, and either to a huge one, as in C
++  // for real mode; the reverse needs a cast.
++  bool isAddressSpaceSupersetOf(LangAS A, LangAS B) const override {
++    auto Number = [](LangAS AS) {
++      return AS == LangAS::Default ? 0u : toTargetAddressSpace(AS);
++    };
++    unsigned To = Number(A), From = Number(B);
++    return To == From || ((To == 1 || To == 3) && From == 0) ||
++           (To == 3 && From == 1);
++  }
 +  uint64_t getPointerAlignV(LangAS AddrSpace) const override { return 16; }
 +
 +  // The driver names an x86 CPU for this triple; llrm-llc takes the real one.
 +  bool setCPU(StringRef Name) override { return true; }
++
++  CallingConvCheckResult checkCallingConvention(CallingConv CC) const override {
++    return CC == CC_C || CC == CC_X86Pascal ? CCCR_OK : CCCR_Warning;
++  }
 +
 +  bool allowsLargerPreferedTypeAlignment() const override { return false; }
 +
@@ -206,6 +220,21 @@ index 5a01779613c8..a76dc56f2a4f 100644
    const llvm::Target *TheTarget = TargetRegistry::lookupTarget(Triple, Error);
    if (!TheTarget) {
      if (MustCreateTM)
+diff --git a/clang/lib/CodeGen/CGCall.cpp b/clang/lib/CodeGen/CGCall.cpp
+index 2193a89203f2..1f5aae8e517a 100644
+--- a/clang/lib/CodeGen/CGCall.cpp
++++ b/clang/lib/CodeGen/CGCall.cpp
+@@ -88,6 +88,10 @@ unsigned CodeGenTypes::ClangCallConvToLLVMCallConv(CallingConv CC) {
+     return llvm::CallingConv::Intel_OCL_BI;
+   // TODO: Add support for __pascal to LLVM.
+   case CC_X86Pascal:
++    // i8086: llrm's "BASIC's own" (left to right, callee pops), numbered
++    // MIR's opcode::BASIC; its name is spelled `pascal` in Borland C.
++    if (Target.getTriple().getEnvironment() == llvm::Triple::CODE16)
++      return 1000;
+     return llvm::CallingConv::C;
+   // TODO: Add support for __vectorcall to LLVM.
+   case CC_X86VectorCall:
 diff --git a/clang/lib/CodeGen/CMakeLists.txt b/clang/lib/CodeGen/CMakeLists.txt
 index d3986ddecfe1..a854a22f36bc 100644
 --- a/clang/lib/CodeGen/CMakeLists.txt
@@ -319,3 +348,34 @@ index 000000000000..2fd1145a7352
 +CodeGen::createI8086TargetCodeGenInfo(CodeGenModule &CGM) {
 +  return std::make_unique<I8086TargetCodeGenInfo>(CGM.getTypes());
 +}
+diff --git a/clang/lib/Sema/SemaType.cpp b/clang/lib/Sema/SemaType.cpp
+index 2796ac2929f4..56454699c2e4 100644
+--- a/clang/lib/Sema/SemaType.cpp
++++ b/clang/lib/Sema/SemaType.cpp
+@@ -4890,6 +4890,11 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
+       // does not have a K&R-style identifier list), then the arguments are part
+       // of the type, otherwise the argument list is ().
+       DeclaratorChunk::FunctionTypeInfo &FTI = DeclType.Fun;
++      // i8086: `void far f(void)` is a far function, not a far void result.
++      if (T->isVoidType() && T.hasAddressSpace() &&
++          S.Context.getTargetInfo().getTriple().getEnvironment() ==
++              llvm::Triple::CODE16)
++        T = T.getUnqualifiedType();
+       IsQualifiedFunction =
+           FTI.hasMethodTypeQualifiers() || FTI.hasRefQualifier();
+ 
+@@ -6647,6 +6652,14 @@ static void HandleAddressSpaceTypeAttribute(QualType &Type,
+                                             TypeProcessingState &State) {
+   Sema &S = State.getSema();
+ 
++  // i8086: Borland's `void far f(void)` and `int (far *p)(void)` state a far
++  // function, which every function is in the medium model: an address space on
++  // a function type is dropped.
++  if (Type->isFunctionType() &&
++      S.Context.getTargetInfo().getTriple().getEnvironment() ==
++          llvm::Triple::CODE16)
++    return;
++
+   // ISO/IEC TR 18037 S5.3 (amending C99 6.7.3): "A function type shall not be
+   // qualified by an address-space qualifier."
+   if (Type->isFunctionType()) {

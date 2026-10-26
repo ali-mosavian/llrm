@@ -98,7 +98,13 @@ const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../..");
 const DEFAULT_TARGET: &str = "x86_64-linux";
 
 pub fn targets(text: &str) -> Result<BTreeMap<String, Target>, String> {
-    toml::from_str(text).map_err(|error| format!("targets.toml: {error}"))
+    let mut table: BTreeMap<String, Target> = toml::from_str(text).map_err(|error| format!("targets.toml: {error}"))?;
+    for target in table.values_mut() {
+        for word in target.clang.iter_mut().chain(&mut target.llc) {
+            *word = word.replace("{root}", ROOT);
+        }
+    }
+    Ok(table)
 }
 
 #[derive(Debug, PartialEq)]

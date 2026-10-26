@@ -38,3 +38,15 @@ Clang's `BackendUtil` builds these only when passes are enabled. llrm must suppl
 | Assignment tracking (`-g`, O1+) | `-g` refused |
 | Pipeline tuning that does not ride in IR: loop unrolling, interchange, fusion, interleaving, loop and SLP vectorization, merge-functions, call-graph profile | `-f[no-]unroll-loops` forwarded; llrm has no vectorizer |
 | TLI preset: `-fveclib`, `-fno-builtin` (the latter rides as `nobuiltin`) | not forwarded; no vector library calls without a vectorizer |
+
+## Status (2026-10-26)
+
+| Target | State |
+|---|---|
+| `x86_64-linux` | `tests/llc` programs run equal to clang's, except those needing SSE floats or hitting the allocator (backend gaps: aggregates, fcall, fcmp, fconst, fconv, fnbody, fneg, fselect, fsum, strings) |
+| `arm64-linux` | all 23 `llrm-arm64` test programs equal to clang's under qemu-aarch64; Mach-O on the Mac untested |
+| `x86_32-dos` | `tests/cc/dos` programs equal to the host's under dosrun |
+| `x86_16-dos` | `tests/cc/dos` and `sum_three` (far pointers, expected 1110) equal; needs the patched clang (`tools/build-clang-m16.sh`, `LLRM_CLANG_M16`) |
+| QCport m16 | 14 of 65 modules compile. Open: `interrupt` functions, far automatics, unknown `QSurf` (typedef via a far-qualified tag), a few far-to-near argument cases, `_asm` blocks |
+
+The i8086 patch (`toolchain/clang/patches`): target info with far/huge address spaces and far function pointers, Pascal convention as CC 1000, near/far/huge pointer conversions allowed, `far` dropped on function types and void results.

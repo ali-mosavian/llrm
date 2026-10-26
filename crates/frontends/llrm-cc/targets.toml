@@ -49,10 +49,7 @@ datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i3
 clang_env = "LLRM_CLANG_M16"
 clang = [
   "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-fno-pic",
-  "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1",
-  "-Dnear=", "-D__near=", "-D_near=", "-Dfar=__attribute__((address_space(1)))",
-  "-D__far=__attribute__((address_space(1)))", "-D_far=__attribute__((address_space(1)))",
-  "-Dhuge=__attribute__((address_space(3)))", "-D__huge=__attribute__((address_space(3)))",
+  "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-include", "{root}/toolchain/clang/borland.h",
 ]
 llc = ["-mabi=cdecl"]
 object = "omf"
