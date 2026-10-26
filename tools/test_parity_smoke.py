@@ -557,11 +557,20 @@ def test_every_integration_target_is_mapped_and_an_unmapped_one_is_refused():
     assert "header_copy" in ps.integration_targets_for(["tests/header_copy.rs"], set(), mapping)
 
 
+def test_a_runtime_change_runs_the_targets_that_build_the_runtime_with_cc_and_a_docs_change_does_not():
+    """posix_os, qb_dev_interface, qb_sdl and qb_dirty import no crate: unmapped, they ran for no change at all."""
+    mapping = ps.integration_map()
+    runtime = ps.integration_targets_for(["runtime/qb/dev/host/video.c"], set(), mapping)
+    assert {"posix_os", "qb_dev_interface", "qb_sdl"} <= set(runtime) and "qb_dirty" not in runtime
+    assert not {"posix_os", "qb_sdl"} & set(ps.integration_targets_for(["docs/arch.md"], set(), mapping))
+
+
 def test_the_check_target_is_mapped_to_every_compiler_its_run_lines_drive():
     """tests/check.rs names only llrm-qb (CARGO_BIN_EXE) but runs the tool of each file's RUN line: copy_idioms.c drives llrm-c, and a change to llrm-c ran no check."""
     mapping = ps.integration_map()
     packages, _ = ps.workspace_graph()
-    for tool, changed in (("llrm-c", "crates/frontends/llrm-c/src/lib.rs"), ("llrm-nib", "crates/frontends/nib/src/lib.rs"), ("llrm-qb", "crates/frontends/llrm-qb/src/lib.rs")):
+    # the crate directories come from the workspace: the re-org moved llrm-qb to crates/frontends/qb and the hard-coded path touched no package
+    for tool, changed in ((tool, f"{packages[tool].relative_to(ps.ROOT)}/src/lib.rs") for tool in ("llrm-c", "llrm-nib", "llrm-qb")):
         chosen = ps.integration_targets_for([changed], ps.touched_packages([changed], packages), mapping)
         assert "check" in chosen, f"a change to {tool} does not run tests/check"
 

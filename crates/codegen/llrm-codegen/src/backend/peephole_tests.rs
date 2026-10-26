@@ -4569,6 +4569,60 @@ fn test_two_cells_equal_but_spelled_through_other_registers_have_their_own_effec
     assert!(second.contains(&(RegId::ESI, 0)) && !second.contains(&(RegId::EBX, 0)), "[si+2] answered as [bx+2]");
 }
 
+/// d_faces -O2: 6,364 asks, 3,843 worked out, 12 M Ir of a 44 M peephole. The
+/// effects read neither an immediate (but a shift count that is a multiple of
+/// 32) nor a displacement, so instructions that differ in them were worked out
+/// one by one.
+#[test]
+fn test_instructions_differing_in_an_immediate_or_a_displacement_are_worked_out_once() {
+    let regs = crate::backend::registerinfo::test_regs();
+    let add = |value| {
+        insn(
+            0,
+            Some((0, 2)),
+            Some(sem(Operation::Binary, "add", vec![rl(RegId::AX, 2)], vec![rl(RegId::AX, 2), im(value, 2)])),
+            vec![],
+            vec![],
+        )
+    };
+    let load = |offset| {
+        insn(
+            0,
+            Some((0, 2)),
+            Some(sem(
+                Operation::Move,
+                "mov",
+                vec![rl(RegId::AX, 2)],
+                vec![Loc::Mem(mem(None, 2, RegId::BX, offset, 0))],
+            )),
+            vec![],
+            vec![],
+        )
+    };
+    let before = effects_computed();
+    let (add_first, load_first) =
+        (_register_effects(regs, 16, &add(1), false, true), _register_effects(regs, 16, &load(2), false, true));
+    for value in 2..6 {
+        assert_eq!(_register_effects(regs, 16, &add(value), false, true), add_first);
+        assert_eq!(_register_effects(regs, 16, &load(value * 2), false, true), load_first);
+    }
+    assert_eq!(effects_computed() - before, 2, "worked out again for an immediate or a displacement");
+    let shift = |count| {
+        insn(
+            0,
+            Some((0, 2)),
+            Some(sem(Operation::Binary, "shl", vec![rl(RegId::AX, 2)], vec![rl(RegId::AX, 2), im(count, 1)])),
+            vec![],
+            vec![],
+        )
+    };
+    assert_ne!(
+        _register_effects(regs, 16, &shift(32), false, true),
+        _register_effects(regs, 16, &shift(1), false, true),
+        "a shift by a multiple of 32 changes no flag"
+    );
+}
+
 /// The passes asked `_register_effects` of the same instruction again and
 /// again, each time lowering it to text and decoding it: 886,000 asks for
 /// 16,000 distinct instructions in one QCport module. An instruction equal to
