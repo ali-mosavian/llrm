@@ -572,7 +572,7 @@ pub fn compute_known_bits_from_context(
     let Some(cxt) = q.cxt else { return };
     if let (Some(conditions), Some(_)) = (q.dom_conditions, q.dt) {
         let cxt_block = q.block_of(cxt);
-        for &branch in conditions.conditions_for(v) {
+        for &branch in conditions.conditions_for(v).iter() {
             let instruction = q.function.instruction(branch);
             let (Some(start), Some(cxt_block), Operand::Block(taken), Operand::Block(otherwise)) =
                 (q.block_of(branch), cxt_block, instruction.operands[1], instruction.operands[2])
