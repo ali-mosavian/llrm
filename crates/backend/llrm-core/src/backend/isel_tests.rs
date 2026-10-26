@@ -6863,11 +6863,11 @@ b6:
 }
 ";
     let got = listing(text, "f");
-    // Each path loads its selector into ax and one `mov es, ax` in the join
-    // takes it, with no copy through ax between (which register holds each
-    // selector is the allocator's; the argument loads sink into the arms).
+    // Each path loads its selector straight into es from the argument cell
+    // (`loaded_segments`), with no copy through ax or bx between.
     let into_es: Vec<_> = got.iter().filter(|line| line.starts_with("mov es, ")).collect();
-    assert_eq!(into_es.len(), 1, "{got:?}");
+    assert_eq!(into_es.len(), 2, "{got:?}");
+    assert!(into_es.iter().all(|line| line.contains("[bp+")), "{got:?}");
     assert!(!got.iter().any(|line| line == "mov ax, bx"), "{got:?}");
 }
 
