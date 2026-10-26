@@ -43,10 +43,12 @@ Clang's `BackendUtil` builds these only when passes are enabled. llrm must suppl
 
 | Target | State |
 |---|---|
-| `x86_64-linux` | `tests/llc` programs run equal to clang's, except those needing SSE floats or hitting the allocator (backend gaps: aggregates, fcall, fcmp, fconst, fconv, fnbody, fneg, fselect, fsum, strings) |
-| `arm64-linux` | all 23 `llrm-arm64` test programs equal to clang's under qemu-aarch64; Mach-O on the Mac untested |
-| `x86_32-dos` | `tests/cc/dos` programs equal to the host's under dosrun |
-| `x86_16-dos` | `tests/cc/dos` and `sum_three` (far pointers, expected 1110) equal; needs the patched clang (`tools/build-clang-m16.sh`, `LLRM_CLANG_M16`) |
-| QCport m16 | 14 of 65 modules compile. Open: `interrupt` functions, far automatics, unknown `QSurf` (typedef via a far-qualified tag), a few far-to-near argument cases, `_asm` blocks |
+| `x86_64-linux` | `tests/llc`: 25 of 36 equal to clang's; the rest hit `llrm-llc` backend gaps (SSE floats, allocator, wide ops). Examples: 9 of 11 |
+| `arm64-glibc` | `tests/llc` 36 of 36, examples 11 of 11 under qemu-aarch64 against the glibc sysroot (`LLRM_ARM64_SYSROOT`); Mach-O on the Mac untested |
+| `x86_32-wat` | Open Watcom libc built from source (`tools/build-ow-clib.sh`): `tests/llc` 36 of 36, examples 11 of 11 |
+| `x86_16-wat` | same libc, 16-bit medium model: `tests/llc` 36 of 36, examples 11 of 11 (`sum_three` with far pointers); needs the patched clang (`tools/build-clang-m16.sh`, `LLRM_CLANG_M16`) |
+| `x86_16-bcc` | Borland headers and medium libc |
+| `x86_32-dos`, `x86_16-dos` | `tests/cc/dos` programs against the llrm OS layer |
+| QCport m16 | 65 of 65 modules compile at -Os and draw the Borland build's frames, polys and BMP md5 (`tools/qcport-run-cc.py`) |
 
 The i8086 patch (the fork branch `llrm/clang-i8086`): target info with far/huge address spaces and far function pointers, Pascal convention as CC 1000, near/far/huge pointer conversions allowed, `far` dropped on function types and void results.
