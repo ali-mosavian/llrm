@@ -3,8 +3,11 @@
 
 use super::super::actions::LoadExt;
 use super::super::dag_combiner::{CombineLevel, NoCombines, combine};
+use super::super::mvt::MVT;
 use super::super::{MemBase, MemInfo};
 use super::*;
+
+const F64: EVT = EVT::Simple(MVT::F64);
 
 fn info(
     vt: EVT,
@@ -73,4 +76,23 @@ fn a_narrow_load_of_a_wide_store_is_the_low_bits() {
     assert_eq!(dag.opcode(stored), ISD::And);
     assert_eq!(dag.operand(stored, 0), value);
     assert_eq!(dag.constant(dag.operand(stored, 1)), Some(0xffff));
+}
+
+/// A stored double read back stayed a load: forwarding the x87 value to its
+/// second reader made deedlines.bas fail to compile ("floating stack input is
+/// unavailable" in CREATEOBJECT).
+#[test]
+fn a_stored_double_is_not_forwarded() {
+    let mut dag = dag();
+    let entry = dag.entry_node();
+    let ptr = dag.get_register(EVT::I32, 7);
+    let out = dag.get_register(EVT::I32, 8);
+    let value = dag.get_register(F64, 5);
+    let store = dag.get_store(entry, value, ptr, info(F64, 1));
+    let loaded = dag.get_load(F64, store, ptr, info(F64, 1));
+    let last = dag.get_store(SDValue { node: loaded.node, res: 1 }, loaded, out, info(F64, 9));
+    dag.set_root(last);
+    combine(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes);
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(dag.operand(root, 1)), ISD::Load);
 }

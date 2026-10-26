@@ -107,6 +107,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let (ld_mem, st_mem) = (ld.mem_vt, st.mem_vt);
         let value = self.dag.operand(store, 1);
         let st_type = self.dag.value_type(value);
+        // An x87 value lives on a stack that one stored value read twice cannot
+        // share: only integers are forwarded.
+        if ![ld_type, ld_mem, st_type, st_mem].iter().all(|vt| vt.is_integer()) {
+            return None;
+        }
         // Little endian: offset 0 is the stored value's least significant byte.
         // Check that the stored value covers all bits that are loaded.
         let covers = offset >= 0 && offset * 8 + i64::from(ld_mem.size_in_bits()) <= i64::from(st_mem.size_in_bits());
