@@ -1,7 +1,7 @@
 //! The draft's features, run on the host HIR interpreter.
 
-use llrm_core::hir::codec;
-use llrm_core::hir::execute;
+use llrm_codegen::hir::codec;
+use llrm_codegen::hir::execute;
 
 /// What `main` prints.
 pub(crate) fn output(source: &str) -> String {
@@ -1107,7 +1107,7 @@ fn main() -> i16:
     assert_eq!((executed.output.as_str(), executed.panic.as_deref()), ("6 7\n", Some("index out of bounds")));
     assert!(refused(&source.replace("stack[0]", "table[3]")).contains("outside 0..3"));
     let unchecked = source.replace("    return values[i]", "    unsafe:\n        return values[i]");
-    let checks = |hir: &str| hir.matches(&format!("\"callee\":\"{}\"", llrm_core::abi::nib::ERROR_BOUNDS)).count();
+    let checks = |hir: &str| hir.matches(&format!("\"callee\":\"{}\"", llrm_codegen::abi::nib::ERROR_BOUNDS)).count();
     assert_eq!(checks(&hir) - checks(&super::compile(&unchecked, "t").expect("compiles")), 1);
 }
 
@@ -1590,8 +1590,8 @@ fn a_main_returning_result_exits_0_on_ok_and_1_on_err() {
         let executed = execute::run(&codec::decode(&hir).expect("decodes"), "main", &[]).expect("runs");
         (executed.output, executed.value)
     };
-    assert_eq!(exit(".ok()"), ("hi\n".into(), Some(llrm_core::hir::model::Number::Int(0))));
-    assert_eq!(exit(".err(.bad(3))"), ("hi\n".into(), Some(llrm_core::hir::model::Number::Int(1))));
+    assert_eq!(exit(".ok()"), ("hi\n".into(), Some(llrm_codegen::hir::model::Number::Int(0))));
+    assert_eq!(exit(".err(.bad(3))"), ("hi\n".into(), Some(llrm_codegen::hir::model::Number::Int(1))));
 }
 
 #[test]
@@ -2521,7 +2521,7 @@ fn a_slice_past_the_end_or_reversed_panics() {
     let checks = |source: &str| {
         super::compile(source, "t")
             .expect("compiles")
-            .matches(&format!("\"callee\":\"{}\"", llrm_core::abi::nib::ERROR_BOUNDS))
+            .matches(&format!("\"callee\":\"{}\"", llrm_codegen::abi::nib::ERROR_BOUNDS))
             .count()
     };
     let constant = "fn main() -> i16:\n    let table: i16[4] = [4, 5, 6, 7]\n    let h = &table[1:3]\n    print(h.len)\n    return 0\n";
@@ -3400,7 +3400,7 @@ fn the_panic_routines_are_stated_to_end_the_program() {
 /// read)`.
 #[test]
 fn the_runtime_routines_state_what_they_touch() {
-    use llrm_core::abi::nib;
+    use llrm_codegen::abi::nib;
     let hir = super::compile("fn main() -> i16:\n    print(1)\n    return 0\n", "t")
         .unwrap_or_else(|error| panic!("{}", error.message));
     let stated = |fact: &str| hir.matches(&format!("\"fact\":\"{fact}\"")).count();
@@ -3519,11 +3519,11 @@ fn an_integer_literal_is_int_then_i32_then_u32() {
     let printed = |literal: &str| {
         let source =
             format!("fn main() -> i16:\n    let x = {literal}\n    let y = x + 1\n    print(y)\n    return 0\n");
-        let program = llrm_core::hir::codec::decode(
+        let program = llrm_codegen::hir::codec::decode(
             &super::compile(&source, "t").unwrap_or_else(|error| panic!("{}", error.message)),
         )
         .unwrap();
-        llrm_core::hir::execute::run(&program, "main", &[]).unwrap().output
+        llrm_codegen::hir::execute::run(&program, "main", &[]).unwrap().output
     };
     assert_eq!(printed("0x7FFF"), "-32768\n");
     assert_eq!(printed("0x8000"), "32769\n");

@@ -1,4 +1,4 @@
-use llrm_core::driver::flags::Flags;
+use llrm_codegen::driver::flags::Flags;
 
 use super::*;
 
@@ -149,8 +149,8 @@ fn a_target_is_found_by_the_m_number_its_description_declares() {
 /// once flat string ops are written, would have left its own unpinned.
 #[test]
 fn a_targets_pins_come_from_its_own_forms() {
-    use llrm_core::backend::classes::RegisterClasses;
-    use llrm_core::model::ir::{Held, Loc, Mem, Operation, Semantics};
+    use llrm_codegen::backend::classes::RegisterClasses;
+    use llrm_codegen::model::ir::{Held, Loc, Mem, Operation, Semantics};
 
     let held = |value: u32| Loc::Held(Held { value, width: 2 });
     // `stosd` as real mode lowers it: a placeholder cell and the pointer after;
@@ -171,7 +171,7 @@ fn a_targets_pins_come_from_its_own_forms() {
 /// frame.
 #[test]
 fn a_targets_registers_come_from_its_description() {
-    use llrm_core::backend::classes::RegisterClasses;
+    use llrm_codegen::backend::classes::RegisterClasses;
     use llrm_lir::registers::RegId;
 
     let flat = RegisterClasses::of(&llrm_x86_m32::M32);
@@ -205,7 +205,7 @@ fn no_list_lets_any_registered_target_through() {
 /// which a new CPU or target would have had to edit).
 #[test]
 fn the_audited_bounds_come_from_the_targets_timings() {
-    use llrm_core::backend::timing::{Clocks, signed_divide, signed_multiply};
+    use llrm_codegen::backend::timing::{Clocks, signed_divide, signed_multiply};
     let profile = |arguments: &[&str]| {
         let flags = flags(arguments);
         let bound = target(&flags, Some(&["x86-m16", "x86-m32"])).unwrap();
@@ -233,7 +233,7 @@ fn llvm_ir_is_found_by_its_triple_and_optimized() {
                 define dso_local i32 @main() {\n  %1 = alloca i32, align 4\n  store i32 0, ptr %1, align 4\n  \
                 %2 = add i32 40, 2\n  ret i32 %2\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&[]), text, "main").unwrap();
-    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let body: Vec<&str> =
         listing.lines().map(str::trim).filter(|line| line.starts_with("mov") || *line == "ret").collect();
     assert_eq!(body, ["mov eax, 42", "ret"], "{listing}");
@@ -249,7 +249,7 @@ fn a_variadic_call_sets_al_to_the_vector_registers_it_uses() {
                 declare i32 @printf(ptr, ...)\n\
                 define i32 @f(ptr %s, i32 %a) {\n  %r = call i32 (ptr, ...) @printf(ptr %s, i32 %a)\n  ret i32 %r\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&[]), text, "f").unwrap();
-    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let call = listing.lines().position(|line| line.trim() == "call printf").expect("the call");
     let before: Vec<&str> = listing.lines().take(call).map(str::trim).collect();
     assert!(
@@ -271,7 +271,7 @@ fn a_struct_of_two_quadwords_returns_in_rax_and_rdx() {
                 define i64 @sum(i64 %a, i64 %b) {\n  %r = call { i64, i64 } @mk(i64 %a, i64 %b)\n\
                   %p = extractvalue { i64, i64 } %r, 0\n  %q = extractvalue { i64, i64 } %r, 1\n  %s = add i64 %p, %q\n  ret i64 %s\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "pair").unwrap();
-    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let mut lines = listing.lines().map(str::trim);
     let pair: Vec<&str> =
         lines.by_ref().skip_while(|line| *line != "pair proc near").take_while(|line| *line != "pair endp").collect();
@@ -296,7 +296,7 @@ fn a_freed_frame_register_holding_a_value_is_saved() {
                   %x = call i32 @g(i32 %a)\n\
                   %1 = add i32 %x, %a\n  %2 = add i32 %1, %b\n  %3 = add i32 %2, %c\n  %4 = add i32 %3, %d\n  %5 = add i32 %4, %e\n  %6 = add i32 %5, %h\n  ret i32 %6\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "f").unwrap();
-    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let body: Vec<&str> = listing.lines().map(str::trim).collect();
     let uses_rbp = body.iter().any(|line| line.contains("ebp") && !line.starts_with("push"));
     let saved = body.contains(&"push rbp") && body.contains(&"pop rbp");
@@ -316,7 +316,7 @@ fn an_alloca_with_the_pins_lifetime_markers_is_promoted() {
                 declare void @llvm.lifetime.end.p0(ptr captures(none))\n\
                 define i32 @f() {\n  %p = alloca i32, align 4\n  call void @llvm.lifetime.start.p0(ptr %p)\n  store i32 5, ptr %p, align 4\n  %v = load i32, ptr %p, align 4\n  call void @llvm.lifetime.end.p0(ptr %p)\n  ret i32 %v\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&[]), text, "f").unwrap();
-    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let body: Vec<&str> =
         listing.lines().map(str::trim).filter(|line| line.starts_with("mov") || *line == "ret").collect();
     assert_eq!(body, ["mov eax, 5", "ret"], "{listing}");
@@ -333,7 +333,7 @@ fn va_start_saves_the_unnamed_argument_registers_and_fills_the_list() {
                 declare void @llvm.va_end.p0(ptr)\n\
                 define i32 @f(i32 %n, ...) {\n  %ap = alloca [24 x i8], align 8\n  call void @llvm.va_start.p0(ptr %ap)\n  %g = load i32, ptr %ap, align 8\n  call void @llvm.va_end.p0(ptr %ap)\n  ret i32 %g\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "f").unwrap();
-    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     // One argument is named: rsi, rdx, rcx, r8 and r9 are saved; the list
     // starts with gp_offset 8.
     for register in ["rsi", "rdx", "rcx", "r8", "r9"] {
@@ -357,7 +357,7 @@ fn an_alloca_with_a_variable_count_lowers_the_stack_pointer() {
                 declare void @use(ptr)\n\
                 define void @f(i64 %n) {\n  %p = alloca i32, i64 %n, align 16\n  call void @use(ptr %p)\n  ret void\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "f").unwrap();
-    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let lines: Vec<&str> = listing.lines().map(str::trim).collect();
     assert!(lines.iter().any(|line| line.starts_with("sub rsp, r")), "the run-time size is subtracted\n{listing}");
     assert!(lines.contains(&"push rbp") && lines.contains(&"leave"), "the frame register is kept\n{listing}");
@@ -371,7 +371,7 @@ fn an_alloca_with_a_constant_count_reserves_all_its_elements() {
                 declare void @use(ptr)\n\
                 define void @f() {\n  %p = alloca i64, i32 8, align 8\n  call void @use(ptr %p)\n  ret void\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "f").unwrap();
-    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let reserved: i64 =
         listing.lines().map(str::trim).find_map(|line| line.strip_prefix("sub rsp, ")?.parse().ok()).expect("a frame");
     assert!(reserved >= 64, "{reserved} bytes for eight quadwords\n{listing}");
@@ -387,7 +387,7 @@ fn a_select_is_one_conditional_move() {
                 define i64 @pick(i1 %c, i64 %a, i64 %b) {\n  %r = select i1 %c, i64 %a, i64 %b\n  ret i64 %r\n}\n";
     for (name, cmov) in [("min", "cmovl"), ("pick", "cmovne")] {
         let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, name).unwrap();
-        let listing = llrm_core::backend::masm::text(&built).unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
         assert!(listing.lines().any(|line| line.trim().starts_with(cmov)), "{name}: {cmov}\n{listing}");
         assert!(!listing.lines().any(|line| line.trim().starts_with('j')), "{name}: no branch\n{listing}");
     }
@@ -402,7 +402,7 @@ fn a_global_holding_a_pointer_lists_as_a_quadword() {
                 @x = global i32 0\n@p = global ptr @x\n\
                 define ptr @f() {\n  %v = load ptr, ptr @p\n  ret ptr %v\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "f").unwrap();
-    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("dq x"), "{listing}");
 }
 
@@ -416,7 +416,7 @@ fn accesses_to_one_global_share_its_address_and_take_the_index_in_the_address() 
                 @a = global [64 x i32] zeroinitializer\n\
                 define void @f(i64 %i) {\n  %p = getelementptr [64 x i32], ptr @a, i64 0, i64 %i\n  store i32 1, ptr %p\n  %q = getelementptr [64 x i32], ptr @a, i64 1, i64 %i\n  store i32 2, ptr %q\n  ret void\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, "f").unwrap();
-    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let lines: Vec<&str> = listing.lines().map(str::trim).collect();
     let leas = lines.iter().filter(|line| line.ends_with("offset a")).count();
     let adds = lines.iter().filter(|line| line.starts_with("add")).count();
@@ -431,7 +431,7 @@ fn a_multiply_by_a_constant_is_one_imul_at_x86_64() {
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 define i32 @f(i32 %x) {\n  %r = mul i32 %x, 100\n  ret i32 %r\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, "f").unwrap();
-    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.lines().any(|line| line.trim().starts_with("imul")), "{listing}");
     assert!(!listing.lines().any(|line| line.trim().starts_with("shl")), "{listing}");
 }
@@ -447,7 +447,7 @@ fn values_live_across_a_call_take_the_callee_saved_registers() {
                 declare i32 @g(i32)\n\
                 define i32 @f(i32 %a, i32 %b, i32 %c, i32 %d) {\n  %1 = call i32 @g(i32 %a)\n  %2 = add i32 %1, %b\n  %3 = add i32 %2, %c\n  %4 = add i32 %3, %d\n  ret i32 %4\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, "f").unwrap();
-    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("[rsp"), "no value goes to the stack\n{listing}");
 }
 
@@ -460,7 +460,7 @@ fn a_quadword_zero_is_a_dword_xor() {
                 declare i64 @g(i64)\n\
                 define i64 @f() {\n  %r = call i64 @g(i64 0)\n  ret i64 0\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, "f").unwrap();
-    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("xor edi, edi") && !listing.contains(", 0\n"), "{listing}");
 }
 
@@ -468,7 +468,7 @@ fn a_quadword_zero_is_a_dword_xor() {
 /// is a general register, and the 32-bit targets have none.
 #[test]
 fn xmm_registers_are_a_class_apart_from_the_general_ones() {
-    use llrm_core::backend::classes::RegisterClasses;
+    use llrm_codegen::backend::classes::RegisterClasses;
     let m64 = RegisterClasses::of(&*crate::by_triple("x86_64-unknown-linux-gnu").unwrap());
     assert_eq!(m64.xmm.len(), 16);
     assert!(m64.xmm.iter().all(|one| !m64.available.contains(one)));
@@ -482,10 +482,10 @@ fn xmm_registers_are_a_class_apart_from_the_general_ones() {
 /// confines nothing.
 #[test]
 fn an_operand_of_an_sse_form_is_confined_to_xmm_registers() {
-    use llrm_core::backend::classes::RegisterClasses;
-    use llrm_core::backend::regclass::{Confinement, Sets, confinement_of};
-    use llrm_core::model::ir::{Held, Loc, Operation, Semantics};
-    use llrm_core::model::lir::Insn;
+    use llrm_codegen::backend::classes::RegisterClasses;
+    use llrm_codegen::backend::regclass::{Confinement, Sets, confinement_of};
+    use llrm_codegen::model::ir::{Held, Loc, Operation, Semantics};
+    use llrm_codegen::model::lir::Insn;
     let held = |value, width| Loc::Held(Held { value, width });
     let add = |name: &str, width| {
         let what = Semantics {
@@ -518,7 +518,7 @@ fn llvm_ir_symbols_are_decorated_as_the_object_format_spells_them() {
                 define i32 @main() {\n  call void @report(i32 7)\n  ret i32 0\n}\n";
     let flags = flags(&["-fobject-format=omf", "-mabi=sysv"]);
     let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
-    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("_main") && listing.contains("_report"), "{listing}");
 }
 
@@ -558,7 +558,7 @@ fn defined_globals_are_public_and_internal_ones_are_not() {
                 @c = internal global i16 9\n\
                 define i16 @f() addrspace(1) {\n  ret i16 0\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&["-mabi=cdecl"]), text, "f").unwrap();
-    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(
         listing.contains("public _a") && listing.contains("public _b") && !listing.contains("public _c"),
         "{listing}"
@@ -577,7 +577,7 @@ fn borlands_port_functions_are_the_port_intrinsics() {
                 declare i8 @__inportb__(i16) addrspace(1)\n\
                 define i8 @f(i8 %v) addrspace(1) {\n  %1 = call addrspace(1) i8 @__outportb__(i16 noundef 968, i8 noundef zeroext %v)\n  %2 = call addrspace(1) i8 @__inportb__(i16 noundef 969)\n  ret i8 %2\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&["-mabi=cdecl"]), text, "f").unwrap();
-    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(
         listing.contains("out dx") && listing.contains("in al, dx") && !listing.contains("__outportb__"),
         "{listing}"

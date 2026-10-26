@@ -1,7 +1,7 @@
 //! `vec[T]`: an owned, growable sequence. Its value is a near pointer to its
 //! elements behind the descriptor a string has, so one runtime serves both.
 
-use llrm_core::abi::nib as rt;
+use llrm_codegen::abi::nib as rt;
 
 use super::*;
 

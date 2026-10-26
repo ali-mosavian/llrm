@@ -5,8 +5,8 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-use llrm_core::backend::overlap::may_overlap;
-use llrm_core::objectfile::module::{Addr, Space};
+use llrm_codegen::backend::overlap::may_overlap;
+use llrm_codegen::objectfile::module::{Addr, Space};
 
 struct Counting;
 

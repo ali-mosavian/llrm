@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/funnel.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/funnel.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/funnel.rs sha256:32fde49192e72fffbdc10efc648a41a6de2159e9be383bc7ab189f8257f94a77 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/funnel.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/funnel.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/funnel.rs sha256:32fde49192e72fffbdc10efc648a41a6de2159e9be383bc7ab189f8257f94a77 -->
 
 # funnel
 

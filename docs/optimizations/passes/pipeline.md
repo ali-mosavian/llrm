@@ -88,7 +88,7 @@ each stage (`NN-stage.ll`) and, for each body, each changed step of the
 fixed point (`N/NNN-rRR-pass.ll`); the pass examples come from those.
 
 ## Runs
-Options are `Options`; `Level::options` in llrm-core's `driver/flags.rs`
+Options are `Options`; `Level::options` in llrm-codegen's `driver/flags.rs`
 maps `-O0`, `-O1`, `-O2`, `-O3`, `-Omax`, `-Os`, `-Oz`, `-Og` to
 `Options::none`, `basic`, `standard`, `speed`, `aggressive`, `size`,
 `min_size` (`-Og`: `basic` without `loopidioms`). `-f` flags set single

@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `optimize/inline_tests.rs`, the port of
+//! Adapted from llrm-codegen's `optimize/inline_tests.rs`, the port of
 //! `tests/test_inline.py`, each body now MIR text.
 //!
 //! Skipped: `test_inline_refuses_a_live_unmodelled_call_result`, since a call

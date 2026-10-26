@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use llrm_core::hir::model::{self, Number, Operand, Storage, TypeKind};
+use llrm_codegen::hir::model::{self, Number, Operand, Storage, TypeKind};
 
 /// The local place a leading entry store of zero writes, if it is one.
 fn zeroed_place(

@@ -4,7 +4,7 @@
 use std::fmt;
 use std::path::Path;
 
-use llrm_core::hir::{codec, model};
+use llrm_codegen::hir::{codec, model};
 
 /// Source parsing or semantic analysis failed above HIR.
 #[derive(Clone, Debug, Eq, PartialEq)]

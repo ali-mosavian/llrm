@@ -108,7 +108,7 @@ def test_a_scoped_lib_run_includes_the_root_crate_that_turns_on_the_features_the
 
 
 def test_a_backend_change_takes_the_fast_tier_with_every_codegen_step_and_no_debugger_session():
-    p = gate.plan(["crates/backend/llrm-core/src/backend/isel.rs"])
+    p = gate.plan(["crates/codegen/llrm-codegen/src/backend/isel.rs"])
     assert p.tier == "fast"
     assert {"run", "qcport", "pytest-programs", "bench", "torture"} <= set(p.steps)
     assert p.languages == ["qb", "c", "nib"]
@@ -116,7 +116,7 @@ def test_a_backend_change_takes_the_fast_tier_with_every_codegen_step_and_no_deb
 
 
 def test_a_change_to_the_debug_info_emitter_runs_the_debugger_sessions():
-    p = gate.plan(["crates/backend/llrm-core/src/backend/debuginfo.rs"])
+    p = gate.plan(["crates/codegen/llrm-codegen/src/backend/debuginfo.rs"])
     assert {"turbo", "cv4"} <= set(p.steps), p.steps
 
 
@@ -334,7 +334,7 @@ def test_the_perf_probe_reads_a_count_not_the_exit_status(tmp_path):
 
 
 def test_a_backend_change_runs_the_measure_step_and_a_frontend_only_change_does_not():
-    assert "measure" in gate.plan(["crates/backend/llrm-core/src/backend/isel.rs"]).steps
+    assert "measure" in gate.plan(["crates/codegen/llrm-codegen/src/backend/isel.rs"]).steps
     assert "measure" in gate.plan(["crates/opt/llrm-transforms/src/gvn.rs"]).steps
     assert "measure" in gate.plan(["crates/ir/llrm-mir/src/lib.rs"]).steps  # full
     assert "measure" not in gate.plan(["tests/run.rs"]).steps
@@ -365,7 +365,7 @@ def test_a_one_line_change_to_any_source_runs_every_source_scan_in_the_fast_tier
     """#1057 and #1071 gated fast and skipped llrm-mir's dense-key ratchet (a lib test of a crate they did not touch); main's full run went
     red. A ratchet reads every crate's source, so any .rs change selects it, whichever crate holds the test."""
     cfg = gate.load()
-    for touched in ("crates/opt/llrm-analysis/src/ranges.rs", "crates/backend/llrm-core/src/backend/spiller.rs", "crates/frontends/llrm-c/src/lib.rs"):
+    for touched in ("crates/opt/llrm-analysis/src/ranges.rs", "crates/codegen/llrm-codegen/src/backend/spiller.rs", "crates/frontends/llrm-c/src/lib.rs"):
         p = gate.plan([touched])
         assert p.tier == "fast" and "scans" in p.steps, (touched, p.steps)
     command = gate.commands(gate.plan(["crates/opt/llrm-analysis/src/ranges.rs"]), cfg, gate.packages())["scans"]
@@ -941,7 +941,7 @@ def _repo(tmp_path):
 
 
 def test_smoke_plans_the_fast_tiers_steps_cut_to_the_smoke_list_with_docs_and_the_diffs_tests():
-    p = gate.plan(["crates/backend/llrm-core/src/a.rs", "tools/gate/test_gate.py"], "smoke")
+    p = gate.plan(["crates/codegen/llrm-codegen/src/a.rs", "tools/gate/test_gate.py"], "smoke")
     assert p.tier == "smoke" and p.steps[0] == "build"
     assert set(p.steps) <= set(gate.load()["smoke"]["steps"]) and {"docs", "changed-tests", "pytest-programs", "fmt"} <= set(p.steps)
     assert not {"run", "bench", "torture", "qcport", "measure", "identity", "turbo", "cv4", "dos-slow", "integration", "pytest"} & set(p.steps)
@@ -1088,7 +1088,7 @@ def test_smoke_fails_a_pr_that_tracks_build_products_and_does_not_build_for_it(t
     assert tuple(re.search(r"PRODUCTS: &\[&str\] = &\[(.*?)\]", rust).group(1).replace('"', "").replace(" ", "").split(",")) == gate.PRODUCTS
     assert tuple(re.search(r"FIXTURES: &\[&str\] = &\[(.*?)\]", rust).group(1).replace('"', "").replace(" ", "").split(",")) == gate.FIXTURES
     assert gate.strays(["d1.o", "src/x.OBJ", "tests/inputs/a.o", "a.rs", "Makefile", "x.map"]) == ["d1.o", "src/x.OBJ", "x.map"]
-    for files in (["docs/x.md"], ["tools/gate/gate.py"], ["crates/backend/llrm-core/src/lib.rs"]):
+    for files in (["docs/x.md"], ["tools/gate/gate.py"], ["crates/codegen/llrm-codegen/src/lib.rs"]):
         assert "products" in gate.plan(files, "smoke").steps, files
     git = _repo(tmp_path)
     assert gate.products_main(tmp_path) == 0
@@ -1103,7 +1103,7 @@ def test_smoke_runs_the_pytest_files_that_are_not_slow_and_the_full_step_does_no
     pytest step passed `tests/*.py` as explicit files, which run though `--ignore` names them: test_loops.py and test_programs_compile.py
     (pytest-programs' own) ran twice."""
     cfg, pkgs = gate.load(), gate.packages()
-    smoke = gate.plan(["crates/backend/llrm-core/src/lib.rs"], "smoke")
+    smoke = gate.plan(["crates/codegen/llrm-codegen/src/lib.rs"], "smoke")
     assert "pytest-quick" in smoke.steps and "pytest-quick" not in gate.plan(["docs/x.md"], "smoke").steps
     quick = gate.commands(smoke, cfg, pkgs)["pytest-quick"]
     for slow in cfg["smoke"]["slow_pytest"]:
@@ -1111,7 +1111,7 @@ def test_smoke_runs_the_pytest_files_that_are_not_slow_and_the_full_step_does_no
         assert f"--ignore={slow}" in quick or slow in ("tests/test_loops.py",), slow
     assert "tests/test_readme.py" in quick.split() and "--ignore=tools/test_identical.py" not in quick and " tools " in quick
     assert "pytest-quick-durations.json" in quick and "pytest-durations.json" not in quick, "its own durations file, not the full step's"
-    full = gate.commands(gate.plan(["crates/backend/llrm-core/src/lib.rs"], "full"), cfg, pkgs)
+    full = gate.commands(gate.plan(["crates/codegen/llrm-codegen/src/lib.rs"], "full"), cfg, pkgs)
     for step in ("pytest", "pytest-quick"):
         named = (full if step == "pytest" else {step: quick})[step].split()
         assert "tests/test_loops.py" not in named and "tests/test_programs_compile.py" not in named and "tests/*.py" not in named, step
@@ -1141,10 +1141,10 @@ def test_smoke_runs_the_source_scans_that_are_root_test_binaries_and_the_other_t
     cfg, pkgs = gate.load(), gate.packages()
     binaries = [Path(one["file"]).stem for one in cfg["scan"] if one.get("step") == "integration" and Path(one["file"]).stem != "target_facts"]
     assert "seeded_maps" in binaries and "no_local_paths" in binaries
-    smoke = gate.commands(gate.plan(["crates/backend/llrm-core/src/lib.rs"], "smoke"), cfg, pkgs)["scans"]
+    smoke = gate.commands(gate.plan(["crates/codegen/llrm-codegen/src/lib.rs"], "smoke"), cfg, pkgs)["scans"]
     assert all(f"--test {name} " in smoke for name in binaries) and "--test target_facts" not in smoke, smoke
     for tier in ("fast", "full"):
-        assert "--test seeded_maps" not in gate.commands(gate.plan(["crates/backend/llrm-core/src/lib.rs"], tier), cfg, pkgs)["scans"], tier
+        assert "--test seeded_maps" not in gate.commands(gate.plan(["crates/codegen/llrm-codegen/src/lib.rs"], tier), cfg, pkgs)["scans"], tier
 
 
 def test_the_facts_step_fails_on_a_failing_target_facts_and_on_a_run_that_ran_no_test(tmp_path):
@@ -1215,7 +1215,7 @@ def test_what_ci_runs_for_a_diff_is_what_gate_run_plans_for_it():
     import json
     import subprocess as sp
 
-    for files in (["docs/x.md"], ["tools/gate/gate.py"], ["bench/fib/fib.c"], ["crates/backend/llrm-core/src/lib.rs"], ["tests/turbo.rs"]):
+    for files in (["docs/x.md"], ["tools/gate/gate.py"], ["bench/fib/fib.c"], ["crates/codegen/llrm-codegen/src/lib.rs"], ["tests/turbo.rs"]):
         local = gate.plan(files)
         out = sp.run([sys.executable, str(Path(gate.__file__)), "plan", "--json", "--files", *files], capture_output=True, text=True, cwd=gate.ROOT)
         ci = json.loads(out.stdout)
@@ -1324,7 +1324,7 @@ def test_the_bench_step_is_cut_into_the_configured_shards_each_with_its_own_slic
 
 def test_the_measure_step_is_a_private_group_so_it_gets_qcports_modules():
     """Without QCPORT the cost rows of QCport's 65 modules are left out and measure judges the programs alone, as green."""
-    p = gate.plan(["crates/backend/llrm-core/src/backend/peephole.rs"])
+    p = gate.plan(["crates/codegen/llrm-codegen/src/backend/peephole.rs"])
     assert "measure" in p.steps and "cost" in gate.private_groups(p)
     assert gate.private_env("/p", "cost")["QCPORT"] == "/p/rm-quake/src"
 
@@ -1349,7 +1349,7 @@ def test_the_plan_keeps_the_perf_steps_the_planners_host_cannot_run_when_told_th
 
 def test_a_pull_request_that_changes_the_compiler_is_not_a_pass_when_the_perf_tests_ran_hosted():
     """#1890 let the scaling tests skip on a hosted fallback and print PASS; they just caught two real superlinears, so a compiler change waits for tinytim."""
-    assert gate.touches_compiler(["crates/backend/llrm-core/src/lib.rs"]) and not gate.touches_compiler(["tools/x.py", ".github/workflows/ci.yml", "docs/x.md"])
+    assert gate.touches_compiler(["crates/codegen/llrm-codegen/src/lib.rs"]) and not gate.touches_compiler(["tools/x.py", ".github/workflows/ci.yml", "docs/x.md"])
     workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
     assert 'PERF SKIPPED at ${head:0:12}' in workflow and 'needs.plan.outputs.compiler }}" = true' in workflow
     sys.path.insert(0, str(gate.ROOT / "tools" / "ci"))
@@ -1366,7 +1366,7 @@ def test_the_ci_line_names_the_parent_and_a_stale_workflow_is_never_a_pass():
 
 def test_a_group_of_tree_only_checks_has_no_build_and_a_group_that_runs_binaries_does():
     """#1882's static job built the workspace from cold (701 s) before the build job even started: it has no target dir to reuse."""
-    p = gate.plan(["crates/backend/llrm-core/src/lib.rs"], "full")
+    p = gate.plan(["crates/codegen/llrm-codegen/src/lib.rs"], "full")
     assert "build" not in gate.group_plan(p, "static").steps
     assert "build" in gate.group_plan(p, "unit").steps and "build" in gate.group_plan(p, "python").steps and gate.group_plan(p, "build").steps == ["build"]
     assert gate.TREE_ONLY == set(gate.load()["groups"]["static"])
@@ -1400,7 +1400,7 @@ def test_a_push_to_main_makes_no_perf_or_cost_job():
 
 def test_the_oracle_sweep_is_cut_into_slices_that_run_on_their_own_runners_and_the_premise_stays_on_perf():
     """No counters needed to compile 1,350 times: hosted, sharded; only 'did each oracle run' reads perf, once, on tinytim."""
-    p = gate.plan(["crates/backend/llrm-core/src/backend/peephole.rs"], "full")
+    p = gate.plan(["crates/codegen/llrm-codegen/src/backend/peephole.rs"], "full")
     groups = gate.groups_of(p, {})
     n = gate.load()["oracle"]["shards"]
     assert [g for g in groups if g.startswith("oracle")] == [f"oracle-{i}" for i in range(1, n + 1)] and groups["perf"][-1] == "oracle-premise"

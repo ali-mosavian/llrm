@@ -115,7 +115,7 @@ pub struct Os {
     /// system through, rendered from the OS layer's interface.
     pub module: String,
     /// What `-fsanitize=stack` compares and calls.
-    pub stack: llrm_core::hir::model::StackCheck,
+    pub stack: llrm_codegen::hir::model::StackCheck,
     /// The stack the start-up reserves; the object's own adds to it.
     pub stack_base: i64,
     /// What the runtime's routines, DOS and an interrupt use below the deepest
@@ -201,7 +201,7 @@ impl Os {
         defines.extend(description.defines()?);
         Ok(Self {
             module: layer.nib_module()?,
-            stack: llrm_core::hir::model::StackCheck::from_toml(&stack)?,
+            stack: llrm_codegen::hir::model::StackCheck::from_toml(&stack)?,
             stack_base: table
                 .get("stack_base")
                 .and_then(|one| one.as_integer())

@@ -163,7 +163,7 @@ pub struct Function {
     /// How it is entered and left, when not as a native function is.
     pub abi: Option<ProcedureAbi>,
     /// What the language promises of it, as the one API states it.
-    pub facts: Vec<llrm_core::hir::facts::Stated>,
+    pub facts: Vec<llrm_codegen::hir::facts::Stated>,
     /// `-g`: each source parameter's value and name.
     pub named_parameters: Vec<(u32, String)>,
 }
@@ -245,10 +245,10 @@ pub struct Program {
     pub functions: Vec<Function>,
     pub callables: Vec<Callable>,
     /// What the program states of its routines, apart from each function's own.
-    pub facts: Vec<llrm_core::hir::facts::Stated>,
+    pub facts: Vec<llrm_codegen::hir::facts::Stated>,
     pub data: Vec<DataObject>,
     /// `-g`: what a debugger names and how it reads it.
-    pub debug: Option<llrm_core::hir::model::Debug>,
+    pub debug: Option<llrm_codegen::hir::model::Debug>,
     /// The bytes of each word of a buffer's or view's descriptor: the target's
     /// near pointer, which the descriptor places' field type is.
     pub descriptor_word: u32,
@@ -303,7 +303,7 @@ impl Program {
         }
         out.push_str("],\"id\":1,\"name\":");
         string(&mut out, &self.module_name);
-        let mut stated = llrm_core::hir::facts::Builder::new("nib");
+        let mut stated = llrm_codegen::hir::facts::Builder::new("nib");
         for function in &self.functions {
             stated.extend(function.facts.iter().cloned());
             // A reference's place stays inside what it refers to, where the
@@ -321,7 +321,7 @@ impl Program {
                     });
                 if loaded {
                     stated.state(
-                        llrm_core::hir::facts::Subject::Instruction {
+                        llrm_codegen::hir::facts::Subject::Instruction {
                             function: i64::from(function.id),
                             id: i64::from(instruction.id),
                         },
@@ -330,7 +330,7 @@ impl Program {
                 }
                 if instruction.inbounds {
                     stated.state(
-                        llrm_core::hir::facts::Subject::Instruction {
+                        llrm_codegen::hir::facts::Subject::Instruction {
                             function: i64::from(function.id),
                             id: i64::from(instruction.id),
                         },
@@ -340,7 +340,7 @@ impl Program {
                 for (index, operand) in instruction.operands.iter().enumerate() {
                     if matches!(operand, Operand::IndirectPlace { inbounds: true, .. }) {
                         stated.state(
-                            llrm_core::hir::facts::Subject::Operand {
+                            llrm_codegen::hir::facts::Subject::Operand {
                                 function: i64::from(function.id),
                                 instruction: i64::from(instruction.id),
                                 operand: index as i64,
@@ -355,11 +355,11 @@ impl Program {
         let facts = stated.finish();
         if !facts.is_empty() {
             out.push_str(",\"facts\":");
-            out.push_str(&llrm_core::hir::codec::facts_json(&facts));
+            out.push_str(&llrm_codegen::hir::codec::facts_json(&facts));
         }
         if let Some(debug) = &self.debug {
             out.push_str(",\"debug\":");
-            out.push_str(&llrm_core::hir::codec::debug_json(debug));
+            out.push_str(&llrm_codegen::hir::codec::debug_json(debug));
         }
         out.push_str(",\"types\":[");
         for (index, type_) in self.types.iter().enumerate() {

@@ -3,8 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
-use llrm_core::driver as codegen;
-use llrm_core::hir;
+use llrm_codegen::driver as codegen;
+use llrm_codegen::hir;
 
 use super::compile as nib;
 use super::driver;
@@ -60,13 +60,13 @@ pub fn dumped(
 mod tests {
     //! The stage dump (`--dump DIR`).
 
-    use llrm_core::support::pyjson::{self, Json};
+    use llrm_codegen::support::pyjson::{self, Json};
 
     use super::dumped;
     use crate::test_nib_frontend::fixture;
 
-    fn options() -> llrm_core::driver::Options {
-        llrm_core::driver::Options {
+    fn options() -> llrm_codegen::driver::Options {
+        llrm_codegen::driver::Options {
             dump: None,
             ..llrm_driver::m16_options(crate::compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
         }

@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/intbits.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/intbits.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/intbits.rs sha256:bdf30fea22c072f0496166ee95854d56f21a9d8a505f452638e5854d741ec2b4 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/intbits.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/intbits.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/intbits.rs sha256:bdf30fea22c072f0496166ee95854d56f21a9d8a505f452638e5854d741ec2b4 -->
 
 # intbits
 

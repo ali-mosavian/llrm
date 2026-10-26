@@ -6,8 +6,8 @@
 use std::path::Path;
 use std::rc::Rc;
 
-use llrm_core::backend::{masm, objbuild};
-use llrm_core::driver::flags::{Flags, write_output};
+use llrm_codegen::backend::{masm, objbuild};
+use llrm_codegen::driver::flags::{Flags, write_output};
 use llrm_target::Target;
 
 use crate::Bound;
@@ -181,8 +181,8 @@ pub fn compiled(
     let machine = flags.machine(&*bound.target, bound.target.machine())?;
     let format = flags.format(&*bound.target)?;
     decorate(&mut module, bound.target.calling(), flags.convention(&*bound.target)?, format.name());
-    let options = llrm_core::driver::Options { object_format: format.name(), ..bound.options(flags, machine) };
-    Ok((llrm_core::driver::compiled_module(module, name, &options)?, format))
+    let options = llrm_codegen::driver::Options { object_format: format.name(), ..bound.options(flags, machine) };
+    Ok((llrm_codegen::driver::compiled_module(module, name, &options)?, format))
 }
 
 fn compile(

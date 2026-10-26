@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/bitcounts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/bitcounts.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/bitcounts.rs sha256:4ba4312025242689dcc7b2faa098cb54ff943ea458c4a60d3c8f901dedf9a8de -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/bitcounts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/bitcounts.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/bitcounts.rs sha256:4ba4312025242689dcc7b2faa098cb54ff943ea458c4a60d3c8f901dedf9a8de -->
 
 # bitcounts
 

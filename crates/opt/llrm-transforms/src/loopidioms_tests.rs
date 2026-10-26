@@ -1,4 +1,4 @@
-//! `loopidioms` had no tests of its own in llrm-core; these are behaviour
+//! `loopidioms` had no tests of its own in llrm-codegen; these are behaviour
 //! tests, each body MIR text run by llrm-mir's interpreter before and after.
 
 use llrm_analysis::testing::{DOS, layout};

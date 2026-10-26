@@ -2,7 +2,7 @@
 //! dict, function, pointer, address or bits value) is a diagnostic at the
 //! value, not a formatter to look up.
 
-use llrm_core::abi::nib as rt;
+use llrm_codegen::abi::nib as rt;
 
 use super::*;
 

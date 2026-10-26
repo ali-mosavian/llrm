@@ -37,10 +37,10 @@ fn _stack_of(fixture: &str) -> Result<(String, Vec<u8>), String> {
     let object = crate::compile::object(
         &module,
         &nib::fixture(&format!("{fixture}.nib")),
-        llrm_core::backend::objbuild::CodeLayout::OneSegment,
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
         llrm_target::object::Format::Omf,
     )?;
-    Ok((llrm_core::backend::masm::text(&module).expect("prints"), object))
+    Ok((llrm_codegen::backend::masm::text(&module).expect("prints"), object))
 }
 
 /// #356: an 8 KB local ran past the 4 KB stack `start.asm` links, and the
@@ -176,7 +176,7 @@ fn test_the_stack_check_names_what_the_nib_runtime_defines() {
     assert!(runtime("start.asm").contains(&"add ax, STACK_RESERVE".to_owned()));
     let mut program = nib::parsed(&nib::fixture("sum.nib"));
     program.stack_check =
-        Some(llrm_core::hir::model::StackCheck { limit: "FOO".into(), handler: "BAR".into(), ..check });
+        Some(llrm_codegen::hir::model::StackCheck { limit: "FOO".into(), handler: "BAR".into(), ..check });
     let sum = _procedure(&nib::listing(&program, "sum", &nib::O2()), "_sum");
     assert!(
         sum.contains("cmp sp, word ptr FOO") && sum.contains("call far ptr BAR") && !sum.contains("LL$STACK_LOW"),
@@ -201,7 +201,7 @@ fn test_a_loop_admitted_on_a_tie_in_counted_bytes_does_not_grow_the_object() {
     let object = crate::compile::object(
         &module,
         &source,
-        llrm_core::backend::objbuild::CodeLayout::OneSegment,
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
         llrm_target::object::Format::Omf,
     )
     .expect("an object")
@@ -315,7 +315,7 @@ fn test_usize_and_near_bytes_follow_the_targets_near_width() {
     };
     let run = |frontend: &crate::Frontend| {
         let hir = crate::compile_file(&path, frontend).unwrap_or_else(|(_, error)| panic!("{}", error.message));
-        llrm_core::hir::execute::run(&llrm_core::hir::codec::decode(&hir).expect("decodes"), "main", &[])
+        llrm_codegen::hir::execute::run(&llrm_codegen::hir::codec::decode(&hir).expect("decodes"), "main", &[])
             .expect("runs")
             .output
     };
@@ -374,7 +374,7 @@ fn test_the_interpreter_runs_strings_and_vectors_of_a_target_with_wide_words() {
     let run = |frontend: &crate::Frontend| {
         let hir = crate::compile_file(&path, frontend).unwrap_or_else(|(_, error)| panic!("{}", error.message));
         let executed =
-            llrm_core::hir::execute::run(&llrm_core::hir::codec::decode(&hir).expect("decodes"), "main", &[])
+            llrm_codegen::hir::execute::run(&llrm_codegen::hir::codec::decode(&hir).expect("decodes"), "main", &[])
                 .expect("runs");
         assert_eq!(executed.leaked, 0);
         executed.output
@@ -401,8 +401,9 @@ fn test_a_module_names_the_targets_physical_addresses() {
     .expect("written");
     let frontend = crate::real_mode();
     let hir = crate::compile_file(&path, &frontend).unwrap_or_else(|(_, error)| panic!("{}", error.message));
-    let executed = llrm_core::hir::execute::run(&llrm_core::hir::codec::decode(&hir).expect("decodes"), "main", &[])
-        .expect("runs");
+    let executed =
+        llrm_codegen::hir::execute::run(&llrm_codegen::hir::codec::decode(&hir).expect("decodes"), "main", &[])
+            .expect("runs");
     assert_eq!(executed.output, "753664\n");
     assert!(crate::Frontend { physical: Vec::new(), ..crate::real_mode() }.physical_constants().is_empty());
 }

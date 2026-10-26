@@ -7,9 +7,9 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::sync::Arc;
 
-use llrm_core::liveness::liveintervals::LiveIntervals;
-use llrm_core::model::ir::{Held, Loc, Operation, Semantics};
-use llrm_core::model::lir::{Insn, LirBlock, LirBody};
+use llrm_codegen::liveness::liveintervals::LiveIntervals;
+use llrm_codegen::model::ir::{Held, Loc, Operation, Semantics};
+use llrm_codegen::model::lir::{Insn, LirBlock, LirBody};
 
 struct Counting;
 

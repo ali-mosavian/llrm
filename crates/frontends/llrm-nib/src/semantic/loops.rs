@@ -448,7 +448,10 @@ impl<'a> FunctionCompiler<'a> {
             llrm_mir::facts::Fact::NoSignedWrap
         };
         self.stated.state(
-            llrm_core::hir::facts::Subject::Instruction { function: i64::from(self.signature.id), id: i64::from(add) },
+            llrm_codegen::hir::facts::Subject::Instruction {
+                function: i64::from(self.signature.id),
+                id: i64::from(add),
+            },
             wrap,
         );
         self.emit("store", Vec::new(), vec![hir::Operand::Place(counter_place), hir::Operand::Value(next_value)], None);

@@ -1,4 +1,4 @@
-//! Arrays: llrm-core's `raising_arrays`, DIM requests and what they leave
+//! Arrays: llrm-codegen's `raising_arrays`, DIM requests and what they leave
 //! in the descriptor.
 //!
 //! `B$DDIM` and `B$RDIM` take `lo1, hi1, ..., loN, hiN, element size,

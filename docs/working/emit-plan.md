@@ -4,7 +4,7 @@ Owner w-8. Ledger command (docs/working/ledger-command.md): qbq-llrm render/d_fa
 
 ## Attribution
 
-Taken with `valgrind --tool=callgrind --toggle-collect=llrm_core::backend::objbuild::written_in` on the ledger command: 15,483,373 Ir, equal to the ledger's inclusive `written_in`, so the toggle collects the bucket and nothing else. Self cost in the bucket, then inclusive of the pieces:
+Taken with `valgrind --tool=callgrind --toggle-collect=llrm_codegen::backend::objbuild::written_in` on the ledger command: 15,483,373 Ir, equal to the ledger's inclusive `written_in`, so the toggle collects the bucket and nothing else. Self cost in the bucket, then inclusive of the pieces:
 
 | Where | M Ir | Calls | What it is |
 | --- | --- | --- | --- |

@@ -5,8 +5,8 @@
 //! sees only wholes. Which registers a block may name is the target's register
 //! file's (`registers.regs`).
 
-use llrm_core::abi::runtime::Reg;
-use llrm_core::backend::inline_asm::{self, Part};
+use llrm_codegen::abi::runtime::Reg;
+use llrm_codegen::backend::inline_asm::{self, Part};
 
 use super::*;
 use crate::syntax::{Asm, AsmTarget};

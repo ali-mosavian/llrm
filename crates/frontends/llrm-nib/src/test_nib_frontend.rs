@@ -8,11 +8,11 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use llrm_core::abi::nib as rt;
-use llrm_core::backend::masm;
-use llrm_core::driver::Options;
-use llrm_core::hir::{self, model};
-use llrm_core::support::pyjson::{self, Json};
+use llrm_codegen::abi::nib as rt;
+use llrm_codegen::backend::masm;
+use llrm_codegen::driver::Options;
+use llrm_codegen::hir::{self, model};
+use llrm_codegen::support::pyjson::{self, Json};
 use regex::Regex;
 
 use super::compile as nib_compile;
@@ -42,7 +42,7 @@ fn refused(source: &Path) -> String {
 /// load a later change forgets to tag no longer loses the fact.
 #[test]
 fn every_load_of_an_enums_tag_has_its_range_from_one_statement() {
-    use llrm_core::hir::facts::Subject;
+    use llrm_codegen::hir::facts::Subject;
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
@@ -96,7 +96,7 @@ fn a_views_dimension_load_states_what_its_segment_holds() {
 /// names its member.
 #[test]
 fn a_fact_of_a_member_reaches_every_load_and_store_of_it() {
-    use llrm_core::hir::facts::Subject;
+    use llrm_codegen::hir::facts::Subject;
     use llrm_mir::facts::{Bounds, Fact};
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
@@ -140,7 +140,7 @@ fn a_fact_of_a_member_reaches_every_load_and_store_of_it() {
         .modules[0]
         .facts
         .push(
-            llrm_core::hir::facts::Stated {
+            llrm_codegen::hir::facts::Stated {
                 subject: Subject::Field { owner, offset: 2 },
                 fact: Fact::Range(Bounds { lo: 0, hi: 100 }),
                 source: None,
@@ -150,7 +150,7 @@ fn a_fact_of_a_member_reaches_every_load_and_store_of_it() {
         .modules[0]
         .facts
         .push(
-            llrm_core::hir::facts::Stated {
+            llrm_codegen::hir::facts::Stated {
                 subject: Subject::Field { owner, offset: 2 },
                 fact: Fact::Align(2),
                 source: None,
@@ -223,7 +223,7 @@ fn listing_on(
     cpu: &'static str,
 ) -> String {
     let options = Options {
-        machine: llrm_core::abi::machine::Machine { cpu: cpu.to_owned(), ..options.machine.clone() },
+        machine: llrm_codegen::abi::machine::Machine { cpu: cpu.to_owned(), ..options.machine.clone() },
         ..options.clone()
     };
     let module = nib_compile::assembled(program, entry, &options, &crate::real_mode().os).expect("assembles");
@@ -242,7 +242,7 @@ fn between<'t>(
 
 /// The driver's options at `-{name}` on Nib's machine.
 pub(crate) fn level(name: &str) -> Options {
-    let mut flags = llrm_core::driver::flags::Flags::default();
+    let mut flags = llrm_codegen::driver::flags::Flags::default();
     flags.take(&[format!("-{name}")], &mut 0).expect("a level");
     {
         let bound = llrm_driver::target(&flags, Some(&["x86-m16"])).unwrap();
@@ -272,8 +272,8 @@ fn optimized_mir(
     program: &model::Program,
     options: &Options,
 ) -> String {
-    let (mut mir, _) = llrm_core::driver::emitted(program, options).expect("emits");
-    llrm_core::driver::optimized(&mut mir, options).expect("optimizes");
+    let (mut mir, _) = llrm_codegen::driver::emitted(program, options).expect("emits");
+    llrm_codegen::driver::optimized(&mut mir, options).expect("optimizes");
     llrm_mir::print::module(&mir.modules[0])
 }
 
@@ -312,7 +312,7 @@ fn object_of(
     entry: &str,
     source: &Path,
     options: &Options,
-    layout: llrm_core::backend::objbuild::CodeLayout,
+    layout: llrm_codegen::backend::objbuild::CodeLayout,
 ) -> Result<Vec<u8>, String> {
     nib_compile::object(
         &nib_compile::assembled(program, entry, options, &crate::real_mode().os)?,
@@ -744,7 +744,7 @@ fn main() -> i16:
 ",
     );
     let bytes = |options: &Options| -> usize {
-        object_of(&parsed(&source), "main", &source, options, llrm_core::backend::objbuild::CodeLayout::OneSegment)
+        object_of(&parsed(&source), "main", &source, options, llrm_codegen::backend::objbuild::CodeLayout::OneSegment)
             .expect("writes")
             .len()
     };
@@ -824,9 +824,15 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
     assert!(Regex::new(r"    lea ax, \[bp-\d+\]\n    call _bump").unwrap().is_match(main), "{main}");
     assert!(bump.contains("es:["));
     assert!(
-        !object_of(&program, "main", &source, &O2_calls_kept(), llrm_core::backend::objbuild::CodeLayout::OneSegment)
-            .expect("writes")
-            .is_empty()
+        !object_of(
+            &program,
+            "main",
+            &source,
+            &O2_calls_kept(),
+            llrm_codegen::backend::objbuild::CodeLayout::OneSegment
+        )
+        .expect("writes")
+        .is_empty()
     );
 }
 
@@ -988,7 +994,7 @@ fn test_data_is_an_explicit_pointer_escape_hatch() {
     assert_eq!(types["addr"].kind, model::TypeKind::Pointer);
     assert_eq!((types["addr"].width, types["addr"].address), (4, model::AddressKind::Far));
     assert!(
-        !object_of(&program, "main", &source, &O2(), llrm_core::backend::objbuild::CodeLayout::OneSegment)
+        !object_of(&program, "main", &source, &O2(), llrm_codegen::backend::objbuild::CodeLayout::OneSegment)
             .expect("writes")
             .is_empty()
     );
@@ -1024,7 +1030,7 @@ fn test_return_inside_sequence_iteration_reaches_object_generation() {
 
     let program = parsed(&source);
     assert!(
-        !object_of(&program, "main", &source, &O2(), llrm_core::backend::objbuild::CodeLayout::OneSegment)
+        !object_of(&program, "main", &source, &O2(), llrm_codegen::backend::objbuild::CodeLayout::OneSegment)
             .expect("writes")
             .is_empty()
     );
@@ -1047,7 +1053,7 @@ fn test_bounded_comprehension_materializes_and_generator_fuses() {
             .all(|one| !["iter", "next", "collect", "append"].contains(&one.name.as_str()))
     );
     assert!(
-        !object_of(&program, "main", &source, &O2(), llrm_core::backend::objbuild::CodeLayout::OneSegment)
+        !object_of(&program, "main", &source, &O2(), llrm_codegen::backend::objbuild::CodeLayout::OneSegment)
             .expect("writes")
             .is_empty()
     );
@@ -1064,7 +1070,7 @@ fn test_dictionary_comprehension_deduplicates_and_has_explicit_lookup() {
 
     let program = parsed(&source);
     assert!(
-        !object_of(&program, "main", &source, &O2(), llrm_core::backend::objbuild::CodeLayout::OneSegment)
+        !object_of(&program, "main", &source, &O2(), llrm_codegen::backend::objbuild::CodeLayout::OneSegment)
             .expect("writes")
             .is_empty()
     );
@@ -1409,7 +1415,7 @@ fn test_a_vec_view_names_dgroup_in_the_object() {
         "view.nib",
         "fn total(values: &[i16]) -> i16:\n    let mut sum = 0\n    for value in values:\n        sum += value\n    return sum\n\nfn main() -> i16:\n    let values = [x * x for x in [1, 2, 3]]\n    return total(values)\n",
     );
-    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment)
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_codegen::backend::objbuild::CodeLayout::OneSegment)
         .expect("writes an object");
 }
 
@@ -1466,7 +1472,7 @@ fn test_float_arguments_comparisons_and_truncation_reach_the_object() {
         "floats.nib",
         "fn unused(x: f32) -> i16:\n    return 1\n\nfn above(x: f32) -> i16:\n    if x > 1.0:\n        return i16(x)\n    return 0\n\nfn main() -> i16:\n    return above(2.5) + unused(1.5)\n",
     );
-    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment)
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_codegen::backend::objbuild::CodeLayout::OneSegment)
         .expect("writes an object");
 }
 
@@ -1657,8 +1663,8 @@ fn test_an_unsigned_integer_converts_to_its_value() {
     );
     let program = parsed(&source);
     let options = llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os));
-    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
-    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let (mut mir, _) = llrm_codegen::driver::emitted(&program, &options).expect("emits");
+    llrm_codegen::driver::optimized(&mut mir, &options).expect("optimizes");
     for (name, width, bits, value) in
         [("byte", 8, 0xff, 255.0), ("word", 16, 0xffff, 65535.0), ("long", 32, 0xffff_ffff, 4294967295.0_f64)]
     {
@@ -1692,7 +1698,7 @@ fn test_small_aggregates_return_in_registers() {
         )
     };
     assert_eq!([shape("point"), shape("cell"), shape("box")], [(2, 4), (1, 4), (2, 0)]);
-    object_of(&program, "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment)
+    object_of(&program, "main", &source, &level("O2"), llrm_codegen::backend::objbuild::CodeLayout::OneSegment)
         .expect("writes an object");
 }
 
@@ -1723,7 +1729,7 @@ fn test_a_panic_path_reaches_the_object() {
         "checked.nib",
         "fn at(values: &[i16], i: u16) -> i16:\n    return values[i]\n\nfn main() -> i16:\n    let v: i16[3] = [1, 2, 3]\n    return at(&v, 1)\n",
     );
-    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment)
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_codegen::backend::objbuild::CodeLayout::OneSegment)
         .expect("writes an object");
 }
 
@@ -1746,7 +1752,7 @@ fn a_float_converts_to_every_integer_width() {
 /// test waited a minute for a release rebuild and every other one for its lock.
 #[test]
 fn test_parsing_runs_no_cargo() {
-    if llrm_core::support::env_flag!("LLRM_NO_CARGO") {
+    if llrm_codegen::support::env_flag!("LLRM_NO_CARGO") {
         parsed(&fixture("fixed.nib"));
         return;
     }
@@ -1825,11 +1831,11 @@ fn test_each_procedure_has_a_code_segment_the_linker_may_drop() {
         "main",
         &source,
         &level("O2"),
-        llrm_core::backend::objbuild::CodeLayout::PerProcedure,
+        llrm_codegen::backend::objbuild::CodeLayout::PerProcedure,
     )
     .expect("writes");
-    let records = llrm_core::objectfile::omf::parse(&object).expect("parses");
-    let segments = records.iter().filter(|one| one.r#type & 0xFE == llrm_core::objectfile::omf::SEGDEF).count();
+    let records = llrm_codegen::objectfile::omf::parse(&object).expect("parses");
+    let segments = records.iter().filter(|one| one.r#type & 0xFE == llrm_codegen::objectfile::omf::SEGDEF).count();
     // Two procedures, and _DATA.
     assert_eq!(segments, 3);
 }
@@ -1841,7 +1847,7 @@ fn test_each_procedure_has_a_code_segment_the_linker_may_drop() {
 /// a call between them through an external of that name.
 #[test]
 fn test_a_procedure_per_segment_is_a_comdat_each() {
-    use llrm_core::objectfile::omf;
+    use llrm_codegen::objectfile::omf;
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
@@ -1853,10 +1859,10 @@ fn test_a_procedure_per_segment_is_a_comdat_each() {
         "main",
         &source,
         &level("O0"),
-        llrm_core::backend::objbuild::CodeLayout::PerProcedure,
+        llrm_codegen::backend::objbuild::CodeLayout::PerProcedure,
     )
     .expect("writes");
-    let records = llrm_core::objectfile::omf::parse(&object).expect("parses");
+    let records = llrm_codegen::objectfile::omf::parse(&object).expect("parses");
     let count = |kind: u8| records.iter().filter(|one| one.r#type == kind).count();
     assert_eq!(count(0xC2), 3, "a COMDAT for each of the three procedures");
     let lengths: Vec<u16> = records
@@ -1891,11 +1897,11 @@ fn test_an_object_defines_each_segment_once_unless_asked_for_one_per_procedure()
         "main",
         &source,
         &level("O2"),
-        llrm_core::backend::objbuild::CodeLayout::OneSegment,
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
     )
     .expect("writes");
-    let records = llrm_core::objectfile::omf::parse(&object).expect("parses");
-    let segments = records.iter().filter(|one| one.r#type & 0xFE == llrm_core::objectfile::omf::SEGDEF).count();
+    let records = llrm_codegen::objectfile::omf::parse(&object).expect("parses");
+    let segments = records.iter().filter(|one| one.r#type & 0xFE == llrm_codegen::objectfile::omf::SEGDEF).count();
     // The code, and _DATA.
     assert_eq!(segments, 2);
 }
@@ -1909,7 +1915,7 @@ fn test_a_computed_float_argument_is_passed_through_memory() {
         "pushed.nib",
         "fn half(x: f64) -> f64:\n    return x / 2.0\n\n@export(\"cdecl16\")\nfn quarter(x: f32, y: f64) -> f64:\n    print(x * 2.0)\n    return half(y) / 2.0\n\nfn main() -> i16:\n    return 0\n",
     );
-    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment)
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_codegen::backend::objbuild::CodeLayout::OneSegment)
         .expect("writes an object");
 }
 
@@ -2020,7 +2026,7 @@ fn test_an_interrupt_handler_saves_every_register_and_returns_with_iret() {
     assert_eq!(lines[lines.len() - 6..], ["pop gs", "pop fs", "pop es", "pop ds", "popad", "iret"], "{text}");
     // Its name is a far address the linker fills, as segment and offset.
     assert!(text.contains("pushw seg _tick") && text.contains("push offset _tick"), "{text}");
-    object_of(&program, "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment)
+    object_of(&program, "main", &source, &level("O2"), llrm_codegen::backend::objbuild::CodeLayout::OneSegment)
         .expect("encodes");
 }
 
@@ -2426,7 +2432,7 @@ fn test_the_inliners_verdict_is_the_same_on_every_cpu() {
         let module = nib_compile::assembled(
             &parsed(&source),
             "main",
-            &llrm_driver::m16_options(llrm_core::abi::machine::Machine {
+            &llrm_driver::m16_options(llrm_codegen::abi::machine::Machine {
                 cpu: cpu.to_owned(),
                 ..nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)
             }),
@@ -2472,7 +2478,7 @@ fn test_a_borrowed_view_states_facts_of_its_descriptor() {
             .iter()
             .filter(|one| matches!(
                 one.subject,
-                llrm_core::hir::facts::Subject::Param { function, index: at } if function == multiply.id && at == index as i64
+                llrm_codegen::hir::facts::Subject::Param { function, index: at } if function == multiply.id && at == index as i64
             ))
             .map(|one| one.fact)
             .collect()
@@ -2496,18 +2502,17 @@ fn test_a_reference_states_what_the_language_guarantees_and_no_more() {
     let directory = tempfile::tempdir().unwrap();
     let program = parsed(&written(&directory, "refs.nib", source));
     let bump = function(&program, "bump");
-    let stated =
-        |index: i64| -> Vec<Fact> {
-            program.modules[0]
+    let stated = |index: i64| -> Vec<Fact> {
+        program.modules[0]
             .facts
             .iter()
             .filter(|one| matches!(
                 one.subject,
-                llrm_core::hir::facts::Subject::Param { function, index: at } if function == bump.id && at == index
+                llrm_codegen::hir::facts::Subject::Param { function, index: at } if function == bump.id && at == index
             ))
             .map(|one| one.fact)
             .collect()
-        };
+    };
     assert_eq!(stated(0), vec![Fact::NonNull, Fact::Dereferenceable(4), Fact::NoAlias, Fact::NoCapture]);
     assert_eq!(
         stated(1),
@@ -2534,7 +2539,7 @@ fn test_a_range_loops_counter_does_not_wrap() {
             .filter(|one| {
                 matches!(
                     one.subject,
-                    llrm_core::hir::facts::Subject::Instruction { function, .. } if function == total.id
+                    llrm_codegen::hir::facts::Subject::Instruction { function, .. } if function == total.id
                 )
             })
             .map(|one| one.fact)
@@ -2550,7 +2555,7 @@ fn test_a_range_loops_counter_does_not_wrap() {
         .facts
         .iter()
         .filter_map(|one| match one.subject {
-            llrm_core::hir::facts::Subject::Instruction { function, id } if function == total.id => Some(id),
+            llrm_codegen::hir::facts::Subject::Instruction { function, id } if function == total.id => Some(id),
             _ => None,
         })
         .collect();
@@ -2561,8 +2566,8 @@ fn test_a_range_loops_counter_does_not_wrap() {
         .flat_map(|block| &block.instructions)
         .find(|one| one.id == ids[0])
         .expect("the instruction");
-    assert_eq!(stated.op, llrm_core::hir::model::Op::Add);
-    assert!(matches!(stated.operands[1], llrm_core::hir::model::Operand::Constant(_)), "{:?}", stated.operands);
+    assert_eq!(stated.op, llrm_codegen::hir::model::Op::Add);
+    assert!(matches!(stated.operands[1], llrm_codegen::hir::model::Operand::Constant(_)), "{:?}", stated.operands);
 }
 
 /// A shared reference is not null and points at all of its struct, so the
@@ -2602,7 +2607,7 @@ fn test_a_fact_of_a_pruned_instruction_goes_with_it() {
     let source = "fn first(n: i16) -> i16:\n    for i in 0..n:\n        return i\n    return -1\n\nfn main() -> i16:\n    return 0\n";
     let program = parsed(&written(&directory, "first.nib", source));
     let first = function(&program, "first");
-    assert!(program.modules[0].facts.iter().all(|one| !matches!(one.subject, llrm_core::hir::facts::Subject::Instruction { function, .. } if function == first.id)));
+    assert!(program.modules[0].facts.iter().all(|one| !matches!(one.subject, llrm_codegen::hir::facts::Subject::Instruction { function, .. } if function == first.id)));
 }
 
 /// The rich route ran -O2 whatever `-O` said: `-Os` copied dice's loops as
@@ -2635,13 +2640,12 @@ fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() 
     let directory = tempfile::tempdir().unwrap();
     let program = parsed(&written(&directory, "bump.nib", source));
     let bump = function(&program, "bump");
-    let unaliased =
-        |index: i64| {
-            program.modules[0].facts.iter().any(|one| one.fact == Fact::NoAlias && matches!(
-                one.subject,
-                llrm_core::hir::facts::Subject::Param { function, index: at } if function == bump.id && at == index
-            ))
-        };
+    let unaliased = |index: i64| {
+        program.modules[0].facts.iter().any(|one| one.fact == Fact::NoAlias && matches!(
+            one.subject,
+            llrm_codegen::hir::facts::Subject::Param { function, index: at } if function == bump.id && at == index
+        ))
+    };
     assert!(unaliased(0) && unaliased(1), "the premise: both are stated noalias");
     // The memory operands of `bump`'s loop: from the label its backward
     // jump names to that jump.
@@ -2662,7 +2666,7 @@ fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() 
         peel: false,
         ..Default::default()
     };
-    let options = llrm_core::driver::Options {
+    let options = llrm_codegen::driver::Options {
         pipeline,
         ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
@@ -2680,7 +2684,7 @@ fn test_league_compiles_when_a_long_spiller_product_must_be_spilled() {
         &program,
         "main",
         &Options {
-            machine: llrm_core::abi::machine::Machine {
+            machine: llrm_codegen::abi::machine::Machine {
                 cpu: "386".to_owned(),
                 ..nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)
             },
@@ -2708,17 +2712,17 @@ fn test_mir_infers_what_a_nib_function_touches() {
     for function in &mut program.modules[0].functions {
         function.symbol = Some(function.name.clone());
         if function.name == "main" {
-            function.linkage = llrm_core::hir::model::FunctionLinkage::External;
+            function.linkage = llrm_codegen::hir::model::FunctionLinkage::External;
         }
     }
     let pipeline =
         llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
-    let options = llrm_core::driver::Options {
+    let options = llrm_codegen::driver::Options {
         pipeline,
         ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
-    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
-    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let (mut mir, _) = llrm_codegen::driver::emitted(&program, &options).expect("emits");
+    llrm_codegen::driver::optimized(&mut mir, &options).expect("optimizes");
     let module = &mir.modules[0];
     let memory = |name: &str| -> Vec<(Option<String>, String)> {
         let GlobalKind::Function(function) = &module
@@ -2761,7 +2765,7 @@ fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
     let program = parsed(&written(&directory, "trip.nib", source));
     let pipeline =
         llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
-    let options = llrm_core::driver::Options {
+    let options = llrm_codegen::driver::Options {
         pipeline,
         ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
@@ -2790,7 +2794,7 @@ fn test_a_range_loop_whose_bound_every_caller_passes_is_copied_out() {
     let program = parsed(&written(&directory, "copied.nib", source));
     let pipeline =
         llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
-    let options = llrm_core::driver::Options {
+    let options = llrm_codegen::driver::Options {
         pipeline,
         ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
@@ -2814,7 +2818,7 @@ fn test_a_nib_program_does_not_claim_zeroed_frames() {
     let program = parsed(&written(&directory, "zeroed.nib", source));
     assert!(!program.zeroed_locals, "the premise: the program says its frames are not zeroed");
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options {
+    let options = llrm_codegen::driver::Options {
         pipeline,
         ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
@@ -2867,19 +2871,19 @@ fn main() -> i16:
 ";
     let directory = tempfile::tempdir().unwrap();
     let mut program = parsed(&written(&directory, "booleans.nib", source));
-    let held = llrm_core::hir::execute::run(&program, "main", &[]).expect("runs").value;
-    assert_eq!(held, Some(llrm_core::hir::model::Number::Int(127)), "the HIR executor");
+    let held = llrm_codegen::hir::execute::run(&program, "main", &[]).expect("runs").value;
+    assert_eq!(held, Some(llrm_codegen::hir::model::Number::Int(127)), "the HIR executor");
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
     program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage =
-        llrm_core::hir::model::FunctionLinkage::External;
+        llrm_codegen::hir::model::FunctionLinkage::External;
     for optimize in [false, true] {
         let pipeline = llrm_transforms::pipeline::Options { optimize, ..Default::default() };
-        let options = llrm_core::driver::Options {
+        let options = llrm_codegen::driver::Options {
             pipeline,
             ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
         };
-        let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
-        llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+        let (mut mir, _) = llrm_codegen::driver::emitted(&program, &options).expect("emits");
+        llrm_codegen::driver::optimized(&mut mir, &options).expect("optimizes");
         let score =
             interpret::run(&mir.modules[0], "main", vec![], 1_000_000).unwrap_or_else(|trap| panic!("{trap:?}"));
         assert!(matches!(score, Val::Int { bits: 127, .. }), "optimize {optimize}: {score:?}");
@@ -2909,15 +2913,15 @@ fn main() -> i16:
     let mut program = parsed(&written(&directory, "views.nib", source));
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
     program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage =
-        llrm_core::hir::model::FunctionLinkage::External;
+        llrm_codegen::hir::model::FunctionLinkage::External;
     let pipeline =
         llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
-    let options = llrm_core::driver::Options {
+    let options = llrm_codegen::driver::Options {
         pipeline,
         ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
-    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
-    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let (mut mir, _) = llrm_codegen::driver::emitted(&program, &options).expect("emits");
+    llrm_codegen::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
     assert!(matches!(result, Ok(Val::Int { bits: 8, .. })), "{result:?}");
 }
@@ -2951,14 +2955,14 @@ fn main() -> i16:
     let mut program = parsed(&written(&directory, "enum.nib", source));
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
     program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage =
-        llrm_core::hir::model::FunctionLinkage::External;
+        llrm_codegen::hir::model::FunctionLinkage::External;
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options {
+    let options = llrm_codegen::driver::Options {
         pipeline,
         ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
-    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
-    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let (mut mir, _) = llrm_codegen::driver::emitted(&program, &options).expect("emits");
+    llrm_codegen::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
     assert!(matches!(result, Ok(Val::Int { bits: 7, .. })), "{result:?}");
 }
@@ -2992,14 +2996,14 @@ fn main() -> i16:
     let mut program = parsed(&written(&directory, "large.nib", source));
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
     program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage =
-        llrm_core::hir::model::FunctionLinkage::External;
+        llrm_codegen::hir::model::FunctionLinkage::External;
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options {
+    let options = llrm_codegen::driver::Options {
         pipeline,
         ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
-    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
-    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let (mut mir, _) = llrm_codegen::driver::emitted(&program, &options).expect("emits");
+    llrm_codegen::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
     assert!(matches!(result, Ok(Val::Int { bits: 7, .. })), "{result:?}");
 }
@@ -3033,14 +3037,14 @@ fn main() -> i16:
     let mut program = parsed(&written(&directory, "small.nib", source));
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
     program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage =
-        llrm_core::hir::model::FunctionLinkage::External;
+        llrm_codegen::hir::model::FunctionLinkage::External;
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options {
+    let options = llrm_codegen::driver::Options {
         pipeline,
         ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
-    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
-    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let (mut mir, _) = llrm_codegen::driver::emitted(&program, &options).expect("emits");
+    llrm_codegen::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
     assert!(matches!(result, Ok(Val::Int { bits: 7, .. })), "{result:?}");
 }
@@ -3077,14 +3081,14 @@ fn main() -> i16:
     let mut program = parsed(&written(&directory, "test_a_struct_holding_an_enum_copies_it_byte_for_byte.nib", source));
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
     program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage =
-        llrm_core::hir::model::FunctionLinkage::External;
+        llrm_codegen::hir::model::FunctionLinkage::External;
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options {
+    let options = llrm_codegen::driver::Options {
         pipeline,
         ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
-    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
-    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let (mut mir, _) = llrm_codegen::driver::emitted(&program, &options).expect("emits");
+    llrm_codegen::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
     assert!(matches!(result, Ok(Val::Int { bits: 7, .. })), "{result:?}");
 }
@@ -3118,14 +3122,14 @@ fn main() -> i16:
         parsed(&written(&directory, "test_an_enum_past_the_unrolled_copy_keeps_its_small_payload.nib", source));
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
     program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage =
-        llrm_core::hir::model::FunctionLinkage::External;
+        llrm_codegen::hir::model::FunctionLinkage::External;
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options {
+    let options = llrm_codegen::driver::Options {
         pipeline,
         ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
-    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
-    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let (mut mir, _) = llrm_codegen::driver::emitted(&program, &options).expect("emits");
+    llrm_codegen::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
     assert!(matches!(result, Ok(Val::Int { bits: 7, .. })), "{result:?}");
 }
@@ -3143,10 +3147,10 @@ fn test_a_far_pointer_literal_stores_at_its_segment_and_offset() {
     let directory = tempfile::tempdir().unwrap();
     let mut program = parsed(&written(&directory, "poke.nib", source));
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
-    program.modules[0].functions[0].linkage = llrm_core::hir::model::FunctionLinkage::External;
+    program.modules[0].functions[0].linkage = llrm_codegen::hir::model::FunctionLinkage::External;
     let options = llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os));
-    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
-    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let (mut mir, _) = llrm_codegen::driver::emitted(&program, &options).expect("emits");
+    llrm_codegen::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "poke", vec![], 1_000);
     assert_eq!(result, Err(Trap::Undefined("an access of 1 bytes at 0xb8000002, outside every object".to_owned())));
 }
@@ -3230,8 +3234,14 @@ fn test_a_near_call_reaches_a_procedure_in_another_code_segment_of_the_object() 
     // near call to _down in another code segment".
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "near.nib", RECURSIVE);
-    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::PerProcedure)
-        .expect("writes");
+    object_of(
+        &parsed(&source),
+        "main",
+        &source,
+        &level("O2"),
+        llrm_codegen::backend::objbuild::CodeLayout::PerProcedure,
+    )
+    .expect("writes");
 }
 
 /// A library cut to what an object names (`--used-by`) is still a library when

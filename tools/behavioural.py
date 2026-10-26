@@ -42,7 +42,7 @@ PROGRAMS = (
 
 def touches(files: list[str]) -> bool:
     """Whether a merge changes code the call-shaped programs depend on: backend source or a target's selection rule, not a doc, a test, or the DAG path."""
-    backend = lambda f: f.startswith(("crates/backend/", "crates/driver/llrm-driver/")) and f.endswith(".rs") and "/selectiondag" not in f  # noqa: E731
+    backend = lambda f: f.startswith(("crates/backend/", "crates/codegen/", "crates/driver/llrm-driver/")) and f.endswith(".rs") and "/selectiondag" not in f  # noqa: E731
     rule = lambda f: bool(TARGET_RULES.match(f)) and f.endswith((".rs", ".peep"))  # noqa: E731
     return any((backend(f) or rule(f)) and "_tests" not in f and "/tests/" not in f for f in files)
 

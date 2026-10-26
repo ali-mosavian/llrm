@@ -6,7 +6,7 @@
 //! slots does, and the runtime grows it by the stored hashes, calling no key
 //! method. The probe is compiled here, over the slots as that vec.
 
-use llrm_core::abi::nib as rt;
+use llrm_codegen::abi::nib as rt;
 
 use super::borrows::expression_owner;
 use super::vectors::GENERATED;

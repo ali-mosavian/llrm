@@ -5,7 +5,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-use llrm_core::backend::selectiondag::{DagConfig, EVT, SelectionDAG};
+use llrm_codegen::backend::selectiondag::{DagConfig, EVT, SelectionDAG};
 
 struct Counting;
 

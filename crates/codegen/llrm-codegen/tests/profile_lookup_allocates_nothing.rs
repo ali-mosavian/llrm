@@ -5,7 +5,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-use llrm_core::backend::cpu::tuned_for;
+use llrm_codegen::backend::cpu::tuned_for;
 
 struct Counting;
 

@@ -27,7 +27,7 @@ impl Default for Documents {
     /// Checking for the driver's default target until the editor names the
     /// project's.
     fn default() -> Self {
-        let bound = llrm_driver::target(&llrm_core::driver::flags::Flags::default(), None)
+        let bound = llrm_driver::target(&llrm_codegen::driver::flags::Flags::default(), None)
             .expect("the default target is built in");
         Self {
             open: BTreeMap::new(),

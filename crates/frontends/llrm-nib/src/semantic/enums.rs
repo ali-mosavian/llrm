@@ -39,7 +39,7 @@ impl TypeRegistry {
     /// The tag of each enum that carries payloads is within the tags its
     /// variants have: stated once of the tag member of the enum's struct,
     /// for every load of it.
-    pub(super) fn tag_ranges(&self) -> Vec<(llrm_core::hir::facts::Subject, llrm_mir::facts::Fact)> {
+    pub(super) fn tag_ranges(&self) -> Vec<(llrm_codegen::hir::facts::Subject, llrm_mir::facts::Fact)> {
         self.enums
             .values()
             .filter_map(|layout| {
@@ -50,7 +50,7 @@ impl TypeRegistry {
                     .fold((i64::MAX, i64::MIN), |(lo, hi), variant| (lo.min(variant.tag), hi.max(variant.tag)));
                 (lo <= hi).then(|| {
                     (
-                        llrm_core::hir::facts::Subject::Field { owner: i64::from(owner), offset: 0 },
+                        llrm_codegen::hir::facts::Subject::Field { owner: i64::from(owner), offset: 0 },
                         llrm_mir::facts::Fact::Range(llrm_mir::facts::Bounds { lo, hi }),
                     )
                 })

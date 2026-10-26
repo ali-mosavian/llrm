@@ -55,7 +55,7 @@ llrm-mir = { path = "crates/ir/llrm-mir" }
 llrm-lir = { path = "crates/ir/llrm-lir" }
 llrm-analysis = { path = "crates/opt/llrm-analysis" }
 llrm-transforms = { path = "crates/opt/llrm-transforms" }
-llrm-core = { path = "crates/backend/llrm-core" }
+llrm-codegen = { path = "crates/codegen/llrm-codegen" }
 llrm-driver = { path = "crates/driver/llrm-driver" }
 llrm-iselgen = { path = "crates/backend/llrm-iselgen" }
 llrm-peepgen = { path = "crates/backend/llrm-peepgen" }
@@ -74,7 +74,7 @@ default-run = "llrm-qb"
 
 [dependencies]
 llrm-alloc = { workspace = true }
-llrm-core = { workspace = true }
+llrm-codegen = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-analysis = { workspace = true }
 llrm-transforms = { workspace = true }

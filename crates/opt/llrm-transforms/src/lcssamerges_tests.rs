@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `optimize/lcssamerges_tests.rs`, the port of
+//! Adapted from llrm-codegen's `optimize/lcssamerges_tests.rs`, the port of
 //! `tests/test_lcssa_merges.py`, each body now MIR text; `==` on bodies is
 //! printed text.
 

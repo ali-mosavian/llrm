@@ -4,17 +4,17 @@
 
 use std::sync::Arc;
 
-use llrm_core::backend::framefree::{Pinned, has_fp, pinned_by};
-use llrm_core::model::ir::{Loc, Operation, Semantics};
-use llrm_core::model::lir::{Block, Insn, LirBlock, LirBody};
-use llrm_core::support::hash::IndexMap;
+use llrm_codegen::backend::framefree::{Pinned, has_fp, pinned_by};
+use llrm_codegen::model::ir::{Loc, Operation, Semantics};
+use llrm_codegen::model::lir::{Block, Insn, LirBlock, LirBody};
+use llrm_codegen::support::hash::IndexMap;
 use llrm_target::{FrameRegisters, Target};
 
 fn body_of(what: Semantics) -> LirBody {
     let insns = vec![Arc::new(Insn::new(0, Some((0, 1)), Some(what), vec![], vec![]))];
     LirBody {
         bits: 32,
-        registers: Some(llrm_core::backend::registerinfo::Regs(llrm_x86_m32::M32.registers())),
+        registers: Some(llrm_codegen::backend::registerinfo::Regs(llrm_x86_m32::M32.registers())),
         ..LirBody::new("f", 0, vec![Block::from(LirBlock::new(0, insns))], IndexMap::default(), IndexMap::default())
     }
 }
@@ -29,7 +29,7 @@ fn pinned(
 #[test]
 fn test_each_fact_that_keeps_the_frame_register_is_named() {
     let registers = llrm_x86_m32::M32.frame_registers();
-    let reg = |register| Loc::Reg(llrm_core::model::ir::Reg { register, width: 4 });
+    let reg = |register| Loc::Reg(llrm_codegen::model::ir::Reg { register, width: 4 });
     let sub_sp = |amount| Semantics {
         name: Some("sub".into()),
         dests: vec![reg(registers.stack)],
@@ -46,7 +46,7 @@ fn test_each_fact_that_keeps_the_frame_register_is_named() {
         Some(Pinned::OpaqueSpAdjustment)
     );
     assert_eq!(pinned(sub_sp(reg(other)), &registers), Some(Pinned::VarSizedObjects), "sub esp, reg");
-    let word = Loc::Imm(llrm_core::model::ir::Imm { value: 8, width: 4, address: None });
+    let word = Loc::Imm(llrm_codegen::model::ir::Imm { value: 8, width: 4, address: None });
     assert_eq!(pinned(sub_sp(word), &registers), None, "sub esp, 8 is a depth the walk follows");
 }
 
@@ -65,7 +65,7 @@ fn test_inline_code_keeps_the_frame_register() {
 #[test]
 fn test_call_frame_pseudos_are_a_depth_the_walk_follows() {
     let registers = llrm_x86_m32::M32.frame_registers();
-    let imm = |value| Loc::Imm(llrm_core::model::ir::Imm { value, width: 4, address: None });
+    let imm = |value| Loc::Imm(llrm_codegen::model::ir::Imm { value, width: 4, address: None });
     let pseudo =
         |name: &str, sources| Semantics { name: Some(name.into()), sources, ..Semantics::new(Operation::Barrier) };
     let insns =
@@ -78,7 +78,7 @@ fn test_call_frame_pseudos_are_a_depth_the_walk_follows() {
             .collect();
     let body = LirBody {
         bits: 32,
-        registers: Some(llrm_core::backend::registerinfo::Regs(llrm_x86_m32::M32.registers())),
+        registers: Some(llrm_codegen::backend::registerinfo::Regs(llrm_x86_m32::M32.registers())),
         ..LirBody::new("f", 0, vec![Block::from(LirBlock::new(0, insns))], IndexMap::default(), IndexMap::default())
     };
     assert_eq!(pinned_by(&body, &registers, &Default::default()), None);
@@ -91,7 +91,7 @@ fn test_call_frame_pseudos_are_a_depth_the_walk_follows() {
 #[test]
 fn test_a_pushed_value_does_not_keep_the_frame_register() {
     let registers = llrm_x86_m32::M32.frame_registers();
-    let held = Loc::Held(llrm_core::model::ir::Held { value: 1, width: 4 });
+    let held = Loc::Held(llrm_codegen::model::ir::Held { value: 1, width: 4 });
     let push = Semantics { name: Some("push".into()), sources: vec![held], ..Semantics::new(Operation::Push) };
     assert_eq!(pinned(push, &registers), None);
 }

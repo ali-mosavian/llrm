@@ -4,9 +4,9 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use llrm_core::backend::{masm, objbuild};
-use llrm_core::hir::model;
-use llrm_core::support::pyrepr;
+use llrm_codegen::backend::{masm, objbuild};
+use llrm_codegen::hir::model;
+use llrm_codegen::support::pyrepr;
 
 // DOS C symbols carry one leading underscore. Runtime builtins already
 // use their compact, mangled ABI names (for example `N$PS`), and an exported
@@ -24,7 +24,7 @@ fn object_name(function: &model::Function) -> String {
 pub fn assembled(
     program: &model::Program,
     entry: &str,
-    options: &llrm_core::driver::Options,
+    options: &llrm_codegen::driver::Options,
     os: &crate::Os,
 ) -> Result<masm::Module, String> {
     assembled_for(program, Some(entry), options, os)
@@ -35,7 +35,7 @@ pub fn assembled(
 /// a library, one with no export.
 pub fn assembled_library(
     program: &model::Program,
-    options: &llrm_core::driver::Options,
+    options: &llrm_codegen::driver::Options,
     os: &crate::Os,
 ) -> Result<masm::Module, String> {
     assembled_for(program, None, options, os)
@@ -44,7 +44,7 @@ pub fn assembled_library(
 fn assembled_for(
     program: &model::Program,
     entry: Option<&str>,
-    options: &llrm_core::driver::Options,
+    options: &llrm_codegen::driver::Options,
     os: &crate::Os,
 ) -> Result<masm::Module, String> {
     if program.modules.len() != 1 {
@@ -65,12 +65,12 @@ fn assembled_for(
         Some((entry, None)) => return Err(format!("entry function {} does not exist", pyrepr::string(entry))),
         None => {}
     }
-    let mut compiled = llrm_core::driver::compiled(&public, options)?.swap_remove(0);
-    compiled.stack = llrm_core::backend::stackusage::stack_to_add(
+    let mut compiled = llrm_codegen::driver::compiled(&public, options)?.swap_remove(0);
+    compiled.stack = llrm_codegen::backend::stackusage::stack_to_add(
         &compiled,
         os.stack_base,
         os.stack_reserve,
-        llrm_core::backend::stackusage::stack_limit(options.arch.layout().segment_bytes()),
+        llrm_codegen::backend::stackusage::stack_limit(options.arch.layout().segment_bytes()),
         &*options.arch,
     )?;
     Ok(compiled)
@@ -96,8 +96,8 @@ pub fn keep_exports(
 pub fn machine(
     target: &dyn llrm_target::Target,
     os: &crate::Os,
-) -> llrm_core::abi::machine::Machine {
-    llrm_core::abi::machine::Machine { far_bss: os.far_bss, ..target.machine() }
+) -> llrm_codegen::abi::machine::Machine {
+    llrm_codegen::abi::machine::Machine { far_bss: os.far_bss, ..target.machine() }
 }
 
 /// `module` as an object file of `format`, its code laid out as `layout` says.

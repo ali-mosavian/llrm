@@ -1,5 +1,5 @@
 //! Which consecutive nodes are the halves of one BC long: the fact the long
-//! recognizer and the carving of DGROUP share. Adapted from llrm-core's
+//! recognizer and the carving of DGROUP share. Adapted from llrm-codegen's
 //! `pairs` (shapes over values) and `raising_longs` (`_constant_stores`,
 //! `arguments`), found here over nodes by `model::ir::lift`'s classification.
 //!

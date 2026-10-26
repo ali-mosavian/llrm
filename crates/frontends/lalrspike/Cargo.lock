@@ -357,7 +357,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "llrm-core"
+name = "llrm-codegen"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
@@ -403,7 +403,7 @@ version = "0.1.0"
 name = "llrm-driver"
 version = "0.1.0"
 dependencies = [
- "llrm-core",
+ "llrm-codegen",
  "llrm-lir",
  "llrm-mir",
  "llrm-target",
@@ -509,7 +509,7 @@ name = "llrm-nib"
 version = "0.1.0"
 dependencies = [
  "indexmap",
- "llrm-core",
+ "llrm-codegen",
  "llrm-driver",
  "llrm-instr",
  "llrm-mir",
@@ -556,7 +556,7 @@ name = "llrm-qb"
 version = "0.1.0"
 dependencies = [
  "indexmap",
- "llrm-core",
+ "llrm-codegen",
  "llrm-driver",
  "llrm-hir",
  "llrm-mir",
@@ -672,7 +672,7 @@ name = "llrm-x86-m16-select"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
- "llrm-core",
+ "llrm-codegen",
  "llrm-iselgen",
  "llrm-x86",
 ]
@@ -695,7 +695,7 @@ name = "llrm-x86-m32-select"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
- "llrm-core",
+ "llrm-codegen",
  "llrm-iselgen",
  "llrm-x86",
 ]
@@ -718,7 +718,7 @@ name = "llrm-x86-m64-select"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
- "llrm-core",
+ "llrm-codegen",
  "llrm-iselgen",
  "llrm-x86",
 ]

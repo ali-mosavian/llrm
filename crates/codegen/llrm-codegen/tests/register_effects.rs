@@ -3,9 +3,9 @@
 //! description, at each width.
 
 use iced_x86::{Decoder, DecoderOptions, FlowControl, InstructionInfoFactory, Mnemonic, OpAccess, OpKind};
-use llrm_core::backend::lanes::Lanes;
-use llrm_core::backend::peephole::{_effects_by_table, _flag_lanes, _lanes, _moved_by, _moved_lanes};
-use llrm_core::model::lir::Insn;
+use llrm_codegen::backend::lanes::Lanes;
+use llrm_codegen::backend::peephole::{_effects_by_table, _flag_lanes, _lanes, _moved_by, _moved_lanes};
+use llrm_codegen::model::lir::Insn;
 use llrm_lir::registers::RegId;
 use llrm_lir::{Addr, AddressRef, Imm, Loc, Mem, Reg, Semantics, Space};
 use llrm_target::Target;
@@ -22,7 +22,7 @@ fn decoded(
     bits: u32,
     what: &Semantics,
 ) -> Option<Vec<iced_x86::Instruction>> {
-    let encoded = llrm_core::backend::select::priced_in(bits, what, 0, None, false, false, None)?;
+    let encoded = llrm_codegen::backend::select::priced_in(bits, what, 0, None, false, false, None)?;
     Some((&mut Decoder::new(bits, &encoded.code, DecoderOptions::NONE)).into_iter().collect())
 }
 
@@ -95,7 +95,7 @@ fn by_decoding(
 fn moved_by_decoding(
     bits: u32,
     what: &Semantics,
-) -> Option<(Vec<(llrm_core::backend::lanes::Lane, llrm_core::backend::lanes::Lane)>, Lanes)> {
+) -> Option<(Vec<(llrm_codegen::backend::lanes::Lane, llrm_codegen::backend::lanes::Lane)>, Lanes)> {
     let instructions = decoded(bits, what)?;
     let [insn] = instructions.as_slice() else { return None };
     let register = |index: u32| (insn.op_kind(index) == OpKind::Register).then(|| RegId::from(insn.op_register(index)));

@@ -397,7 +397,7 @@ def test_every_failing_qcport_module_is_listed_not_the_first(tmp_path, monkeypat
 
 def test_a_pr_touching_the_qb_frontend_x86_isel_or_the_runtime_spec_runs_every_tests_run_group():
     for path in ("crates/frontends/qb/src/compile.rs", "crates/frontends/qb/src/semantic.rs", "runtime/qb/src/runtime.toml", "runtime/qb/strconv.c",
-                 "crates/target/llrm-x86/src/select.rs", "crates/backend/llrm-core/src/backend/isel.rs"):
+                 "crates/target/llrm-x86/src/select.rs", "crates/codegen/llrm-codegen/src/backend/isel.rs"):
         assert ps.runs_whole_groups([path]), path
     for path in ("crates/opt/llrm-transforms/src/gvn.rs", "docs/arch.md", "tools/gate/gate.py", "crates/frontends/llrm-c/src/lib.rs"):
         assert not ps.runs_whole_groups([path]), path
@@ -477,17 +477,17 @@ def test_a_planted_qbrt_difference_is_a_failing_name_and_a_program_that_did_not_
     assert ps.qbrt_failures("/bins", run=lambda *a, **k: Silent()) == {"qbrt-did-not-finish"}
 
 
-def test_a_transforms_only_pr_runs_the_lib_tests_of_llrm_core_and_a_red_one_is_a_new_name():
-    """Five llrm-core isel tests were red on parity for days: a PR touching llrm-transforms never ran llrm-core's lib tests. The closure comes from cargo metadata, not a list."""
+def test_a_transforms_only_pr_runs_the_lib_tests_of_llrm_codegen_and_a_red_one_is_a_new_name():
+    """Five llrm-codegen isel tests were red on parity for days: a PR touching llrm-transforms never ran llrm-codegen's lib tests. The closure comes from cargo metadata, not a list."""
     import parity_squash as sq
 
     packages, graph = ps.workspace_graph()
     touched = ps.touched_packages(["crates/opt/llrm-transforms/src/gvn.rs", "docs/arch.md"], packages)
     assert touched == {"llrm-transforms"}
     closure = ps.dependants(touched, graph)
-    assert {"llrm-transforms", "llrm-core", "llrm-c", "llrm-qb"} <= closure and "llrm-support" not in closure, sorted(closure)
-    head = {"unit llrm-core::backend::isel_tests::test_old_red"}
-    merged = head | {"unit llrm-core::backend::isel_tests::test_made_red_by_transforms"}
+    assert {"llrm-transforms", "llrm-codegen", "llrm-c", "llrm-qb"} <= closure and "llrm-support" not in closure, sorted(closure)
+    head = {"unit llrm-codegen::backend::isel_tests::test_old_red"}
+    merged = head | {"unit llrm-codegen::backend::isel_tests::test_made_red_by_transforms"}
     why = sq.subset_refusals(head, merged, fixes=False)
     assert why and "test_made_red_by_transforms" in why[0] and "test_old_red" not in why[0].split(", which")[0], why
 
@@ -504,8 +504,8 @@ def test_dependants_lib_failures_name_each_failing_test_per_package():
         ran.append(command[-3:])
         return Done()
 
-    assert ps.dependants_lib_failures({"llrm-core"}, run=run) == {"unit llrm-core::backend::isel_tests::test_x"}
-    assert ran == [["-p", "llrm-core", "--lib"]]
+    assert ps.dependants_lib_failures({"llrm-codegen"}, run=run) == {"unit llrm-codegen::backend::isel_tests::test_x"}
+    assert ran == [["-p", "llrm-codegen", "--lib"]]
 
 
 def test_a_crate_that_did_not_run_shows_why_in_its_refusal():
@@ -520,14 +520,14 @@ def test_a_crate_that_did_not_run_shows_why_in_its_refusal():
         return lambda command, **kwargs: Done()
 
     ps.CAUSES.clear()
-    broken = "   Compiling llrm-core\nerror[E0432]: unresolved import `crate::nothing`\n --> src/lib.rs:1:5\nerror: could not compile `llrm-core` (lib test)\n"
-    assert ps.dependants_lib_failures({"llrm-core"}, run=failing(broken, 101)) == {"unit llrm-core::did-not-run"}
-    assert "unresolved import `crate::nothing`" in ps.causes_of({"unit llrm-core::did-not-run"})
+    broken = "   Compiling llrm-codegen\nerror[E0432]: unresolved import `crate::nothing`\n --> src/lib.rs:1:5\nerror: could not compile `llrm-codegen` (lib test)\n"
+    assert ps.dependants_lib_failures({"llrm-codegen"}, run=failing(broken, 101)) == {"unit llrm-codegen::did-not-run"}
+    assert "unresolved import `crate::nothing`" in ps.causes_of({"unit llrm-codegen::did-not-run"})
     ps.CAUSES.clear()
-    crashed = "running 3 tests\nerror: test failed, to rerun pass `-p llrm-core --lib`\n\nCaused by:\n  process didn't exit successfully (signal: 11, SIGSEGV)\n"
-    ps.dependants_lib_failures({"llrm-core"}, run=failing(crashed, 101))
-    assert "SIGSEGV" in ps.causes_of({"unit llrm-core::did-not-run"})
-    assert ps.causes_of({"unit llrm-core::some_test"}) == ""
+    crashed = "running 3 tests\nerror: test failed, to rerun pass `-p llrm-codegen --lib`\n\nCaused by:\n  process didn't exit successfully (signal: 11, SIGSEGV)\n"
+    ps.dependants_lib_failures({"llrm-codegen"}, run=failing(crashed, 101))
+    assert "SIGSEGV" in ps.causes_of({"unit llrm-codegen::did-not-run"})
+    assert ps.causes_of({"unit llrm-codegen::some_test"}) == ""
 
 
 def test_a_listed_test_that_passes_is_reported(monkeypatch):
@@ -608,7 +608,7 @@ def test_a_24th_docsbuild_line_is_a_new_name_when_the_head_already_has_23():
 def test_llrm_c_lib_tests_run_with_the_toolchain_feature_and_other_crates_without():
     """`cargo test -p llrm-c --lib` never ran the call-boundary and compile-listing tests (feature `toolchain`): an interrupt handler was refused from 10-19 to 10-23 and 16 listings went red unseen."""
     assert ps.lib_command("llrm-c") == ["cargo", "test", "--no-fail-fast", "-p", "llrm-c", "--lib", "--features", "toolchain"]
-    assert ps.lib_command("llrm-core") == ["cargo", "test", "--no-fail-fast", "-p", "llrm-core", "--lib"]
+    assert ps.lib_command("llrm-codegen") == ["cargo", "test", "--no-fail-fast", "-p", "llrm-codegen", "--lib"]
 
     class Done:
         returncode = 0
@@ -621,16 +621,16 @@ def test_llrm_c_lib_tests_run_with_the_toolchain_feature_and_other_crates_withou
         ran.append(command)
         return Done()
 
-    ps.dependants_lib_failures({"llrm-c", "llrm-core"}, run=run)
+    ps.dependants_lib_failures({"llrm-c", "llrm-codegen"}, run=run)
     assert any("--features" in command and "llrm-c" in command for command in ran)
-    assert not any("--features" in command and "llrm-core" in command for command in ran)
+    assert not any("--features" in command and "llrm-codegen" in command for command in ran)
 
 
 def test_a_selectiondag_change_runs_the_selectiondag_registry():
     """#3899 landed with tests/selectiondag_registry.rs red (SD403 had no row): the target read no crate, was in neither SCANNERS nor NIGHTLY_ONLY, so no selection
     of a PR's targets ever named it."""
     mapping = ps.integration_map()
-    files = ["crates/backend/llrm-core/src/backend/selectiondag/dag_function.rs"]
+    files = ["crates/codegen/llrm-codegen/src/backend/selectiondag/dag_function.rs"]
     packages, _ = ps.workspace_graph()
     chosen = ps.integration_targets_for(files, ps.touched_packages(files, packages), mapping)
     assert "selectiondag_registry" in chosen, chosen
@@ -653,7 +653,7 @@ failures:
 
 ---- backend::selectiondag::tests::legalize_types::the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector stdout ----
 
-thread 'backend::selectiondag::tests::legalize_types::the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector' (1924096) panicked at crates/backend/llrm-core/src/backend/selectiondag/legalize_types.rs:173:13:
+thread 'backend::selectiondag::tests::legalize_types::the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector' (1924096) panicked at crates/codegen/llrm-codegen/src/backend/selectiondag/legalize_types.rs:173:13:
 assertion `left == right` failed: a node on the worklist is ready
   left: Processed
  right: Ready

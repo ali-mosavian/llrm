@@ -1,8 +1,8 @@
-> Generated from the `//!` headers of `crates/backend/llrm-core/src/backend`; edit the headers, not this file.
+> Generated from the `//!` headers of `crates/codegen/llrm-codegen/src/backend`; edit the headers, not this file.
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 134 documented, 0 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|

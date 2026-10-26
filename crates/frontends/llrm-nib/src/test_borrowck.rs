@@ -1014,7 +1014,7 @@ fn main() -> i16:
 ";
     let text = super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message));
     let program = llrm_hir::codec::decode(&text).expect("HIR");
-    let module = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).remove(0).module;
+    let module = llrm_codegen::hir::mir::emit(&program, &llrm_x86_m16::layout()).remove(0).module;
     let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap_or("")).expect("a layout");
     let function = module
         .functions()

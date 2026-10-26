@@ -6,10 +6,10 @@ pub mod llc;
 
 use std::rc::Rc;
 
-use llrm_core::abi::machine::Machine;
-use llrm_core::backend::isel::Compiled;
-use llrm_core::driver::Options;
-use llrm_core::driver::flags::Flags;
+use llrm_codegen::abi::machine::Machine;
+use llrm_codegen::backend::isel::Compiled;
+use llrm_codegen::driver::Options;
+use llrm_codegen::driver::flags::Flags;
 use llrm_target::Target;
 
 /// The target a driver builds for when no `-m` is given.
@@ -48,7 +48,7 @@ pub fn mode_target(
         .and_then(|mode| all().into_iter().find(|one| one.layout().mode == mode))
         .ok_or("--mode N: no target with that mode")?;
     let cpu = target.default_cpu();
-    let machine = llrm_core::backend::cpu::tuned_for(&*target, cpu, size)?.target();
+    let machine = llrm_codegen::backend::cpu::tuned_for(&*target, cpu, size)?.target();
     // m16 states no TTI: llrm-c prices there by the generic rules, and so does
     // this.
     let tti = machine.tti().map_or("none", |tti| tti.name());

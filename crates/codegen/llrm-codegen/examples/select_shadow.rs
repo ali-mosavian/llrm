@@ -1,7 +1,7 @@
 //! Selects every block of an LLVM IR file with the DAG path and prints what it
 //! makes.
 //!
-//!     cargo run --release -p llrm-core --example select_shadow -- FILE.ll
+//!     cargo run --release -p llrm-codegen --example select_shadow -- FILE.ll
 //!
 //! Per function, one line: `FUNC name blocks=N built=B refused=R
 //! machine=OP:n,... unselected=NODE:n,...`. `machine` counts the machine nodes
@@ -13,13 +13,13 @@
 
 use std::collections::BTreeMap;
 
-use llrm_core::backend::selectiondag::actions::{Features, TargetLowering};
-use llrm_core::backend::selectiondag::builder::{BuilderTarget, build_block};
-use llrm_core::backend::selectiondag::dag_select::legalized;
-use llrm_core::backend::selectiondag::dagisel_adapter::DagisAdapter;
-use llrm_core::backend::selectiondag::function_lowering::FunctionLoweringInfo;
-use llrm_core::backend::selectiondag::x86_lowering::X86Lowering;
-use llrm_core::backend::selectiondag::{ISD, MVT, SDValue};
+use llrm_codegen::backend::selectiondag::actions::{Features, TargetLowering};
+use llrm_codegen::backend::selectiondag::builder::{BuilderTarget, build_block};
+use llrm_codegen::backend::selectiondag::dag_select::legalized;
+use llrm_codegen::backend::selectiondag::dagisel_adapter::DagisAdapter;
+use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
+use llrm_codegen::backend::selectiondag::x86_lowering::X86Lowering;
+use llrm_codegen::backend::selectiondag::{ISD, MVT, SDValue};
 use llrm_dagisel::generated::x86_i486 as table;
 use llrm_dagisel::interp::{Outcome, Selector};
 use llrm_dagisel::x86_addr::AddrMode;
@@ -56,7 +56,7 @@ fn main() {
         .collect();
     let mut module = llrm_mir::parse::module(&text).unwrap_or_else(|e| panic!("{path}: {e}"));
     // The driver expands `memset.pattern` for the DAG path before it selects.
-    llrm_core::backend::memsetpattern::expanded(&mut module).unwrap_or_else(|e| panic!("{path}: {e}"));
+    llrm_codegen::backend::memsetpattern::expanded(&mut module).unwrap_or_else(|e| panic!("{path}: {e}"));
     let layout =
         module.datalayout.as_deref().map_or_else(DataLayout::default, |t| DataLayout::parse(t).expect("a datalayout"));
     // `M16=1` selects for real mode: 16-bit pointers, the m16 table, real-mode
@@ -92,7 +92,7 @@ fn main() {
     });
 
     for (id, global, function) in module.functions() {
-        let convention = match llrm_core::backend::isel::convention(&module, &layout, id, arch) {
+        let convention = match llrm_codegen::backend::isel::convention(&module, &layout, id, arch) {
             Ok(c) => c,
             Err(why) => {
                 println!("REFUSED {}: convention: {why:?}", global.name.as_deref().unwrap_or("?"));
@@ -115,7 +115,7 @@ fn main() {
                 }
             };
             // The block's DAG and, for a switch, the blocks it made.
-            let dags: Vec<&mut llrm_core::backend::selectiondag::SelectionDAG> =
+            let dags: Vec<&mut llrm_codegen::backend::selectiondag::SelectionDAG> =
                 std::iter::once(&mut done.dag).chain(done.extra.iter_mut().map(|(_, b)| &mut b.dag)).collect();
             for dag in dags {
                 // The driver's own pipeline (`dag_select::legalized`): the
@@ -208,7 +208,7 @@ struct DagisAdapterView;
 
 impl DagisAdapterView {
     fn dead(
-        dag: &llrm_core::backend::selectiondag::SelectionDAG,
+        dag: &llrm_codegen::backend::selectiondag::SelectionDAG,
         node: u32,
     ) -> bool {
         let mut seen = llrm_support::hash::HashSet::default();

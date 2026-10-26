@@ -5,7 +5,7 @@
 //! llrm-nib SOURCE [--entry ENTRY] [--dump DIR] [--procedure-segments] [--used-by OBJ]... [--unchecked-bounds] [OPTIONS]
 //! ```
 //!
-//! OPTIONS are gcc's, as `llrm_core::driver::flags` takes them. Without
+//! OPTIONS are gcc's, as `llrm_codegen::driver::flags` takes them. Without
 //! `-o`, the object, or with `-S` the assembly, goes beside the source
 //! unless `--dump` is given.
 //! `--procedure-segments` gives each procedure a code segment, all of one
@@ -16,9 +16,9 @@
 
 use std::path::PathBuf;
 
-use llrm_core::backend::masm;
-use llrm_core::backend::objbuild::CodeLayout;
-use llrm_core::driver::{
+use llrm_codegen::backend::masm;
+use llrm_codegen::backend::objbuild::CodeLayout;
+use llrm_codegen::driver::{
     self as codegen,
     flags::{self, Flags},
 };
@@ -147,10 +147,10 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
 /// taken out of them: for the tools that run or declare a program and take no
 /// other target flag (`-mabi=` too: it says what `"c"` is).
 pub fn frontend_with_mode(arguments: &mut Vec<String>) -> Result<super::Frontend, String> {
-    let mut flags = llrm_core::driver::flags::Flags::default();
+    let mut flags = llrm_codegen::driver::flags::Flags::default();
     let mut rest = Vec::new();
     for argument in std::mem::take(arguments) {
-        if llrm_core::driver::flags::Flags::mode_flag(&argument).is_some() || argument.starts_with("-mabi=") {
+        if llrm_codegen::driver::flags::Flags::mode_flag(&argument).is_some() || argument.starts_with("-mabi=") {
             flags.take(&[argument], &mut 0)?;
         } else {
             rest.push(argument);
@@ -172,8 +172,8 @@ fn used(objects: &[PathBuf]) -> Result<std::collections::BTreeSet<String>, Strin
     for object in objects {
         let bytes = std::fs::read(object).map_err(|error| format!("{}: {error}", object.display()))?;
         let records =
-            llrm_core::objectfile::omf::parse(&bytes).map_err(|error| format!("{}: {error:?}", object.display()))?;
-        names.extend(llrm_core::objectfile::omf::imports(&records));
+            llrm_codegen::objectfile::omf::parse(&bytes).map_err(|error| format!("{}: {error:?}", object.display()))?;
+        names.extend(llrm_codegen::objectfile::omf::imports(&records));
     }
     Ok(names)
 }
@@ -220,7 +220,7 @@ pub fn main(argv: &[String]) -> i32 {
             (None, Some(_)) => return Ok(()),
         };
         let mut program =
-            llrm_core::support::debug::timed("frontend", || driver::parsed(&args.source, &args.frontend, None))
+            llrm_codegen::support::debug::timed("frontend", || driver::parsed(&args.source, &args.frontend, None))
                 .map_err(|error| error.0)?;
         for (file, warning) in args.frontend.reported.borrow().iter() {
             eprintln!("{}", driver::refused(file, warning).0);
@@ -240,8 +240,10 @@ pub fn main(argv: &[String]) -> i32 {
         } else {
             nib::object(&module, &args.source, args.layout, args.flags.format(&*args.codegen.arch)?)?
         };
-        llrm_core::support::debug::timed("write output", || llrm_core::driver::flags::write_output(&output, &bytes))
-            .map_err(|error| error.to_string())?;
+        llrm_codegen::support::debug::timed("write output", || {
+            llrm_codegen::driver::flags::write_output(&output, &bytes)
+        })
+        .map_err(|error| error.to_string())?;
         // Standard output is the output's, where it is asked for.
         if output != std::path::Path::new("-") {
             println!("{} ({} bytes)", output.display(), bytes.len());
@@ -259,7 +261,7 @@ pub fn main(argv: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use llrm_core::backend::registerinfo::RegId;
+    use llrm_codegen::backend::registerinfo::RegId;
     use llrm_target::Target;
 
     /// M16 without its Nib runtime: what a target not yet given one is.
@@ -269,13 +271,13 @@ mod tests {
         fn name(&self) -> &'static str {
             self.0.name()
         }
-        fn machine(&self) -> llrm_core::abi::machine::Machine {
+        fn machine(&self) -> llrm_codegen::abi::machine::Machine {
             self.0.machine()
         }
         fn cpus(&self) -> &'static [&'static str] {
             self.0.cpus()
         }
-        fn registers(&self) -> &'static llrm_core::backend::registerinfo::Info {
+        fn registers(&self) -> &'static llrm_codegen::backend::registerinfo::Info {
             self.0.registers()
         }
         fn march(

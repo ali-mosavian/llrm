@@ -13,9 +13,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use llrm_core::abi::machine::Machine;
-use llrm_core::driver::basic;
-use llrm_core::hir::model::RuntimeProfile;
+use llrm_codegen::abi::machine::Machine;
+use llrm_codegen::driver::basic;
+use llrm_codegen::hir::model::RuntimeProfile;
 use llrm_mir::GlobalId;
 use llrm_mir::program::SegmentLayout;
 use llrm_omf::module::{self as found_module, Family};
@@ -194,7 +194,7 @@ fn header(
 pub fn main(argv: &[String]) -> i32 {
     let mut inputs = Vec::new();
     let mut manifest = None;
-    let mut flags = llrm_core::driver::flags::Flags::default();
+    let mut flags = llrm_codegen::driver::flags::Flags::default();
     let mut at = 0;
     while at < argv.len() {
         match flags.take(argv, &mut at) {

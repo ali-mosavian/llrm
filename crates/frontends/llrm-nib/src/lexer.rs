@@ -247,7 +247,7 @@ fn code_unit(
         .and_then(|one| std::str::from_utf8(one).ok())
         .and_then(|one| one.chars().next())
         .ok_or_else(|| Diagnostic::new(Span::new(line, at + 1, at + 2), "source text is not UTF-8"))?;
-    let unit = llrm_core::support::codepage::encoded(character).ok_or_else(|| {
+    let unit = llrm_codegen::support::codepage::encoded(character).ok_or_else(|| {
         Diagnostic::new(Span::new(line, at + 1, at + 2), format!("{character:?} is not in the target code page"))
     })?;
     Ok((unit, width))

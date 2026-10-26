@@ -9,8 +9,8 @@ TOOL = Path(__file__).with_name("passtable.py")
 def test_a_pass_row_has_its_costs_and_the_totals_add_up(tmp_path):
     ours = tmp_path / "ours.incl"
     ours.write_text(
-        "     6,000,000 (10.0%)  ???:<llrm_core::backend::peephole::Peephole as llrm_core::model::passes::LIRTransform>::transform_raising [x]\n"
-        "     1,000,000 (1.0%)  ???:<llrm_core::backend::latecleanup::LateCleanup as llrm_core::model::passes::LIRTransform>::transform_raising [x]\n"
+        "     6,000,000 (10.0%)  ???:<llrm_codegen::backend::peephole::Peephole as llrm_codegen::model::passes::LIRTransform>::transform_raising [x]\n"
+        "     1,000,000 (1.0%)  ???:<llrm_codegen::backend::latecleanup::LateCleanup as llrm_codegen::model::passes::LIRTransform>::transform_raising [x]\n"
     )
     clang = tmp_path / "clang.incl"
     clang.write_text(

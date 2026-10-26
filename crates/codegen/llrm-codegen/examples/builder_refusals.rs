@@ -2,14 +2,14 @@
 //! `REFUSED name:block reason`, and `FILE path functions=N blocks=B refused=R`
 //! per file.
 //!
-//!     cargo run --release -p llrm-core --example builder_refusals -- m16|m32
-//! FILE.ll...
+//!     cargo run --release -p llrm-codegen --example builder_refusals --
+//! m16|m32 FILE.ll...
 //!
 //! `tools/dagisel/builder_corpus.py` runs it over a corpus and tabulates the
 //! reasons.
 
-use llrm_core::backend::selectiondag::builder::{BuilderTarget, build_block};
-use llrm_core::backend::selectiondag::function_lowering::FunctionLoweringInfo;
+use llrm_codegen::backend::selectiondag::builder::{BuilderTarget, build_block};
+use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
 use llrm_mir::datalayout::DataLayout;
 
 fn main() {
@@ -28,8 +28,8 @@ fn main() {
         };
         let arch: &dyn llrm_target::Target = if m16 { &llrm_x86_m16::M16 } else { &llrm_x86_m32::M32 };
         // the driver's MIR rewrites between the pipeline and selection
-        let _ = llrm_core::backend::ehprepare::prepared(&mut module, &llrm_target::Target::layout(arch));
-        let _ = llrm_core::backend::memsetpattern::expanded(&mut module);
+        let _ = llrm_codegen::backend::ehprepare::prepared(&mut module, &llrm_target::Target::layout(arch));
+        let _ = llrm_codegen::backend::memsetpattern::expanded(&mut module);
         let layout =
             module.datalayout.as_deref().map_or_else(DataLayout::default, |t| DataLayout::parse(t).unwrap_or_default());
         let target = if m16 { BuilderTarget::m16() } else { BuilderTarget::m32() };
@@ -40,7 +40,7 @@ fn main() {
             }
             functions += 1;
             let name = global.name.as_deref().unwrap_or("?");
-            let Ok(convention) = llrm_core::backend::isel::convention(&module, &layout, id, arch) else {
+            let Ok(convention) = llrm_codegen::backend::isel::convention(&module, &layout, id, arch) else {
                 println!("REFUSED {name}: the convention is not described");
                 refused += 1;
                 continue;

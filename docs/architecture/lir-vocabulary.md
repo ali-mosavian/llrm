@@ -4,7 +4,7 @@ architecture-order: 540
 ---
 # LIR vocabulary: one, target-generic
 
-Agreed by backend-two, arm64-spike and lir-cleanup-port. It is the shape llrm-core's machine
+Agreed by backend-two, arm64-spike and lir-cleanup-port. It is the shape llrm-codegen's machine
 layer reads, so that no pass names an x86 mnemonic, register or flag bit (the target-facts
 audit, #2862).
 

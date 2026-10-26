@@ -6,7 +6,7 @@
 //! not checked, nor any index or slice under `--unchecked-bounds`; a check a
 //! loop's range already proves is the optimizer's to fold.
 
-use llrm_core::abi::nib as rt;
+use llrm_codegen::abi::nib as rt;
 
 use super::*;
 
@@ -38,7 +38,7 @@ impl FunctionCompiler<'_> {
             if element_width > 1 {
                 let most = (self.types.sizes.max_object / u64::from(element_width)) as i64;
                 self.stated.state(
-                    llrm_core::hir::facts::Subject::Instruction {
+                    llrm_codegen::hir::facts::Subject::Instruction {
                         function: i64::from(self.signature.id),
                         id: i64::from(load),
                     },

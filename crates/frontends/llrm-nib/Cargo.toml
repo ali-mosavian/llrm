@@ -6,7 +6,7 @@ rust-version.workspace = true
 description = "The Nib language frontend and language server"
 
 [dependencies]
-llrm-core = { workspace = true }
+llrm-codegen = { workspace = true }
 llrm-driver = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-instr = { workspace = true }
@@ -29,5 +29,5 @@ iced-x86 = { workspace = true }
 llrm-analysis = { workspace = true }
 llrm-hir = { workspace = true }
 regex = { workspace = true }
-llrm-core = { workspace = true, features = ["testing"] }
+llrm-codegen = { workspace = true, features = ["testing"] }
 llrm-object = { workspace = true }

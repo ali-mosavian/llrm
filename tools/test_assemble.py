@@ -193,21 +193,21 @@ def test_a_pr_whose_only_issue_is_a_fmt_difference_is_kept(tmp_path):
 
 
 def test_a_test_the_base_fails_too_blames_no_pr_and_probes_none(tmp_path):
-    """Batch 2 (20:07) merged 16 PRs on a base red in two llrm-core tests and probed every PR alone: each fails the base's test, so each looked guilty."""
+    """Batch 2 (20:07) merged 16 PRs on a base red in two llrm-codegen tests and probed every PR alone: each fails the base's test, so each looked guilty."""
     probed = []
-    by_package = {"llrm-core": {"dag_function_calls::a_red_test"}}
+    by_package = {"llrm-codegen": {"dag_function_calls::a_red_test"}}
     found = ps.unit_offenders(
         [str(n) for n in range(1, 17)],
         by_package,
         merge_alone=lambda number: probed.append(number) or True,
         failing=lambda package, tests: True,
-        base_red=lambda wanted: {("llrm-core", "dag_function_calls::a_red_test")},
+        base_red=lambda wanted: {("llrm-codegen", "dag_function_calls::a_red_test")},
     )
     assert found == [] and probed == [], (found, probed)
 
 
 def test_a_pr_is_probed_only_for_a_package_it_can_change_and_a_new_red_test_is_still_blamed(tmp_path):
-    graph = {"llrm-core": {"llrm-mir"}, "llrm-mir": set(), "llrm-x86": {"llrm-core"}, "llrm-nib": {"llrm-mir"}}
+    graph = {"llrm-codegen": {"llrm-mir"}, "llrm-mir": set(), "llrm-x86": {"llrm-codegen"}, "llrm-nib": {"llrm-mir"}}
     packages = {name: Path("/r/crates") / name for name in graph}
     files = {"1": ["crates/llrm-nib/src/a.rs"], "2": ["crates/llrm-mir/src/b.rs"], "3": ["Cargo.toml"]}
     root = Path("/r")
@@ -215,12 +215,12 @@ def test_a_pr_is_probed_only_for_a_package_it_can_change_and_a_new_red_test_is_s
     probed = []
     found = ps.unit_offenders(
         ["1", "2", "3"],
-        {"llrm-core": {"t"}},
+        {"llrm-codegen": {"t"}},
         merge_alone=lambda number: probed.append(number) or True,
         failing=lambda package, tests: probed[-1] == "2",
         affects=affects,
     )
-    assert probed == ["2", "3"], probed  # 1 changes llrm-nib, which llrm-core does not use; 3 is a file no package owns
+    assert probed == ["2", "3"], probed  # 1 changes llrm-nib, which llrm-codegen does not use; 3 is a file no package owns
     assert found == ["2"], found
 
 
@@ -381,8 +381,8 @@ def test_a_pr_that_makes_a_listed_unit_test_pass_is_refused_alone_and_so_is_a_li
 
     monkeypatch.setattr(xfail, "load", lambda path=xfail.PATH: {"integration header_copy::t": {}})
     monkeypatch.setattr(smoke, "workspace_graph", lambda root: ({}, {}))
-    monkeypatch.setattr(smoke, "touched_packages", lambda files, packages, root: {"llrm-core"})
-    monkeypatch.setattr(smoke, "integration_map", lambda root=None: {"header_copy": {"llrm-core"}})
+    monkeypatch.setattr(smoke, "touched_packages", lambda files, packages, root: {"llrm-codegen"})
+    monkeypatch.setattr(smoke, "integration_map", lambda root=None: {"header_copy": {"llrm-codegen"}})
     monkeypatch.setattr(smoke, "integration_failures", lambda targets, root=None, **_: seen.extend(targets) or {"xpass integration header_copy::t"})
     monkeypatch.setattr(ps, "_scanners_failing_on_head", lambda targets: set())  # the real one reads and writes ~/scratch/results/headfail
     why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), units=lambda _: set())

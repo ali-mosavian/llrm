@@ -1,7 +1,7 @@
 //! The runtime routines compiled code calls, besides the formatters
 //! (crates/frontends/llrm-nib/src/runtime/*.nib).
 
-use llrm_core::abi::nib as rt;
+use llrm_codegen::abi::nib as rt;
 
 use super::*;
 

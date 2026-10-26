@@ -1,6 +1,6 @@
-use llrm_core::hir::codec;
-use llrm_core::hir::execute::{Executed, run};
-use llrm_core::hir::model::Number;
+use llrm_codegen::hir::codec;
+use llrm_codegen::hir::execute::{Executed, run};
+use llrm_codegen::hir::model::Number;
 
 use crate as nib;
 

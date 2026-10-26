@@ -6,7 +6,7 @@
 //! type with a `drop` method has no null, so its owners carry a flag
 //! (drops.rs).
 
-use llrm_core::abi::nib as rt;
+use llrm_codegen::abi::nib as rt;
 
 use super::*;
 

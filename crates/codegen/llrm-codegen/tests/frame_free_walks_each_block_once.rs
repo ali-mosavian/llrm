@@ -4,14 +4,14 @@
 
 use std::sync::Arc;
 
-use llrm_core::backend::framefree::{LOOKED, has_fp};
-use llrm_core::model::lir::{Block, Insn, LirBlock, LirBody};
-use llrm_core::support::hash::IndexMap;
+use llrm_codegen::backend::framefree::{LOOKED, has_fp};
+use llrm_codegen::model::lir::{Block, Insn, LirBlock, LirBody};
+use llrm_codegen::support::hash::IndexMap;
 use llrm_target::Target;
 
 /// A chain of `blocks` blocks, each a `nop` jumping to the next.
 fn chain(blocks: i64) -> LirBody {
-    let nop = llrm_core::model::ir::Semantics::new(llrm_core::model::ir::Operation::Nothing);
+    let nop = llrm_codegen::model::ir::Semantics::new(llrm_codegen::model::ir::Operation::Nothing);
     let all: Vec<Block> = (0..blocks)
         .map(|k| {
             let at = k * 0x10;
@@ -22,7 +22,7 @@ fn chain(blocks: i64) -> LirBody {
         .collect();
     LirBody {
         bits: 32,
-        registers: Some(llrm_core::backend::registerinfo::Regs(llrm_x86_m32::M32.registers())),
+        registers: Some(llrm_codegen::backend::registerinfo::Regs(llrm_x86_m32::M32.registers())),
         ..LirBody::new("chain", 0, all, IndexMap::default(), IndexMap::default())
     }
 }

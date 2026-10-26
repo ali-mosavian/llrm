@@ -9,7 +9,7 @@ fn main() {
     // Files, not `crates/target`: cargo scans a watched directory for the
     // newest mtime in it, and tools leave files there. A new target is a
     // new workspace member, so Cargo.lock says so.
-    for path in ["../llrm-iselgen/src", "../../../Cargo.lock"] {
+    for path in ["../../backend/llrm-iselgen/src", "../../../Cargo.lock"] {
         println!("cargo:rerun-if-changed={path}");
     }
     let family = build::family(std::path::Path::new("../../target/llrm-x86"));

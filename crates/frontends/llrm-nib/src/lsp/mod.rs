@@ -51,7 +51,7 @@ struct Server {
 
 /// The frontend for the target `-m<mode>` names.
 fn frontend_for(mode: u32) -> Result<crate::Frontend, String> {
-    let mut flags = llrm_core::driver::flags::Flags::default();
+    let mut flags = llrm_codegen::driver::flags::Flags::default();
     flags.take(&[format!("-m{mode}")], &mut 0)?;
     let bound = llrm_driver::target(&flags, None)?;
     crate::Frontend::for_target(&*bound.target)

@@ -56,12 +56,12 @@ paths = ["crates/**/*.rs"]
 [[heavy]]
 step = "turbo"
 why = "Turbo Debugger session over a program: 48 s"
-owners = ["crates/backend/llrm-core/src/backend/debuginfo.rs", "crates/backend/llrm-core/src/backend/frame.rs", "crates/backend/llrm-core/src/backend/cfi*.rs", "tests/turbo.rs", "tests/common/**", "crates/target/llrm-omf/**", "crates/target/llrm-coff*/**", "crates/target/llrm-dwarf/**", "toolchain/**", "tools/dosbatch/**", "tools/debug-gate.env"]
+owners = ["crates/codegen/llrm-codegen/src/backend/debuginfo.rs", "crates/codegen/llrm-codegen/src/backend/frame.rs", "crates/codegen/llrm-codegen/src/backend/cfi*.rs", "tests/turbo.rs", "tests/common/**", "crates/target/llrm-omf/**", "crates/target/llrm-coff*/**", "crates/target/llrm-dwarf/**", "toolchain/**", "tools/dosbatch/**", "tools/debug-gate.env"]
 
 [[heavy]]
 step = "cv4"
 why = "Microsoft link + CodeView sessions: 30 s"
-owners = ["crates/backend/llrm-core/src/backend/debuginfo.rs", "crates/backend/llrm-core/src/backend/frame.rs", "crates/backend/llrm-core/src/backend/cfi*.rs", "tests/cv4.rs", "crates/target/llrm-coff*/**", "crates/target/llrm-omf/**", "toolchain/**", "tools/dosbatch/**", "tools/debug-gate.env"]
+owners = ["crates/codegen/llrm-codegen/src/backend/debuginfo.rs", "crates/codegen/llrm-codegen/src/backend/frame.rs", "crates/codegen/llrm-codegen/src/backend/cfi*.rs", "tests/cv4.rs", "crates/target/llrm-coff*/**", "crates/target/llrm-omf/**", "toolchain/**", "tools/dosbatch/**", "tools/debug-gate.env"]
 
 [[heavy]]
 step = "identity"
@@ -71,12 +71,12 @@ owners = ["tests/toolchain.rs", "tools/identity.sh", "tools/g-identical.sh", "to
 [[heavy]]
 step = "pytest-programs"
 why = "compiles every program, and the loop cross-cases: 60 s"
-owners = ["tests/test_programs_compile.py", "tests/test_loops.py", "tests/test_innerloops.py", "tools/sizes*", "tools/loops/**", "tools/innerloops.py", "examples/**", "bench/**", "tests/run/**", "crates/frontends/**", "crates/driver/llrm-cc/**", "crates/backend/**", "crates/driver/llrm-driver/**", "crates/opt/**"]
+owners = ["tests/test_programs_compile.py", "tests/test_loops.py", "tests/test_innerloops.py", "tools/sizes*", "tools/loops/**", "tools/innerloops.py", "examples/**", "bench/**", "tests/run/**", "crates/frontends/**", "crates/driver/llrm-cc/**", "crates/backend/**", "crates/codegen/**", "crates/driver/llrm-driver/**", "crates/opt/**"]
 
 [[heavy]]
 step = "dos-slow"
 why = "NIBBLES and GORILLA played on dos32 against BCOM45, and the graphics sweeps: 5 to 8 minutes (tools/dosbatch/conftest.py's slow_dos tier)"
-owners = ["runtime/qb/**", "runtime/shared/dos/**", "crates/frontends/qb/**", "crates/frontends/qb/**", "runtime/qb/**", "crates/ir/llrm-hir/src/mir*", "crates/backend/llrm-core/src/driver/basic.rs", "tools/dosbatch/**", "toolchain/dosrunbuild.sh"]
+owners = ["runtime/qb/**", "runtime/shared/dos/**", "crates/frontends/qb/**", "crates/frontends/qb/**", "runtime/qb/**", "crates/ir/llrm-hir/src/mir*", "crates/codegen/llrm-codegen/src/driver/basic.rs", "tools/dosbatch/**", "toolchain/dosrunbuild.sh"]
 
 [[heavy]]
 step = "qcport"
@@ -96,7 +96,7 @@ owners = ["tools/rfmt-post/**", "tools/fmt.sh", "rustfmt.toml"]
 [[heavy]]
 step = "measure"
 why = "compile cost (QCport and the 66 programs at -O1/-O2/-O3/-Os) and its growth with size (axes at N and 2N, and each step of the compile) against the merge-base's measurement in ~/.cache/llrm/measure: 3-8 minutes when the base is not measured yet"
-owners = ["crates/backend/**", "crates/driver/llrm-driver/**", "crates/opt/**", "crates/frontends/llrm-c/**", "crates/target/llrm-x86-m32/**", "crates/target/llrm-x86/**", "tools/compile-cost.py", "tools/measure.py", "bench/**"]
+owners = ["crates/backend/**", "crates/codegen/**", "crates/driver/llrm-driver/**", "crates/opt/**", "crates/frontends/llrm-c/**", "crates/target/llrm-x86-m32/**", "crates/target/llrm-x86/**", "tools/compile-cost.py", "tools/measure.py", "bench/**"]
 
 # `run` always runs when code changed, on the languages the diff can affect (all, in a full tier).
 [run_languages]

@@ -1,11 +1,11 @@
 //! `-g`: Nib's side of the debug information. A source variable is a place
 //! whose name no compiler temporary's does (`$`), typed by the program's
-//! own HIR types; `llrm_core::hir::debug` builds the rest.
+//! own HIR types; `llrm_codegen::hir::debug` builds the rest.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_core::hir::debug::Builder;
-use llrm_core::hir::model::{Debug, DebugReach, DebugScalar};
+use llrm_codegen::hir::debug::Builder;
+use llrm_codegen::hir::model::{Debug, DebugReach, DebugScalar};
 
 use super::{TypeRegistry, hir};
 
@@ -96,8 +96,8 @@ pub(super) fn described(
     let mut described = Described {
         types,
         builder: Builder::for_language(
-            llrm_core::hir::model::DebugLanguage::Nib,
-            llrm_core::hir::model::DebugDialect::Cv4,
+            llrm_codegen::hir::model::DebugLanguage::Nib,
+            llrm_codegen::hir::model::DebugDialect::Cv4,
         ),
         made: BTreeMap::new(),
     };

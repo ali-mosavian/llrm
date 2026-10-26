@@ -10,7 +10,7 @@ on:
     paths:
       - "Cargo.toml"
       - "build.rs"
-      - "crates/backend/llrm-core/**"
+      - "crates/codegen/llrm-codegen/**"
       - "crates/driver/llrm-driver/**"
       - "crates/backend/llrm-iselgen/**"
       - "crates/backend/llrm-peepgen/**"

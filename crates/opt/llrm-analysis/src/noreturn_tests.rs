@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `analysis/noreturn_tests.rs`, the ports of the
+//! Adapted from llrm-codegen's `analysis/noreturn_tests.rs`, the ports of the
 //! `noreturn` tests in `tests/test_noreturn.py` and `tests/test_sccp.py`.
 
 use std::collections::BTreeSet;

@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 pub use facts::{Fact, Known};
-use llrm_core::abi::nib as rt;
+use llrm_codegen::abi::nib as rt;
 
 use super::arguments;
 use super::arguments::Formal;
@@ -1385,9 +1385,9 @@ struct Compiled {
     /// The module variables it lends to the calls it makes.
     lends: Vec<modref::Lend>,
     /// Its `&` and `&mut` parameters.
-    references: Vec<llrm_core::hir::facts::Subject>,
+    references: Vec<llrm_codegen::hir::facts::Subject>,
     /// Its borrowed parameters, views too, by ordinal.
-    borrowed: Vec<(usize, llrm_core::hir::facts::Subject)>,
+    borrowed: Vec<(usize, llrm_codegen::hir::facts::Subject)>,
     /// Where those parameters may go.
     escapes: Vec<captures::Escape>,
 }
@@ -1658,13 +1658,13 @@ fn program(
     callables.extend(templates.borrow().callables(&mut types));
     let functions = checked(compiled, &builtin_ids, &literals)?;
     // A module variable sits where its type's accesses are aligned.
-    let mut stated = llrm_core::hir::facts::Builder::new("nib");
+    let mut stated = llrm_codegen::hir::facts::Builder::new("nib");
     for (subject, fact) in types.tag_ranges() {
         stated.state(subject, fact);
     }
     for layout in types.statics.values().filter(|one| one.align > 1) {
         stated.state(
-            llrm_core::hir::facts::Subject::Object(i64::from(layout.symbol)),
+            llrm_codegen::hir::facts::Subject::Object(i64::from(layout.symbol)),
             llrm_mir::facts::Fact::Align(u64::from(layout.align)),
         );
     }
@@ -1672,8 +1672,8 @@ fn program(
     // program touches nothing a caller's loop reads back, and one that prints
     // a value touches only the runtime's own state.
     for callable in callables.iter().filter(|one| !one.defined) {
-        use llrm_core::abi::nib as routines;
-        let subject = llrm_core::hir::facts::Subject::Callable(i64::from(callable.id));
+        use llrm_codegen::abi::nib as routines;
+        let subject = llrm_codegen::hir::facts::Subject::Callable(i64::from(callable.id));
         let name = callable.name.as_str();
         if routines::TERMINATING.contains(&name) {
             stated.state(subject, llrm_mir::facts::Fact::NoReturn);
@@ -1685,7 +1685,7 @@ fn program(
         }
     }
     for id in no_ipa {
-        stated.state(llrm_core::hir::facts::Subject::Callable(i64::from(id)), llrm_mir::facts::Fact::NoIpa);
+        stated.state(llrm_codegen::hir::facts::Subject::Callable(i64::from(id)), llrm_mir::facts::Fact::NoIpa);
     }
     let debug = frontend.debug.then(|| debug::described(&functions, &types));
     let program = hir::Program {
@@ -1717,7 +1717,7 @@ fn checked(
     let kept = captures::kept(&compiled);
     let mut functions = Vec::new();
     for Compiled { mut function, references, borrowed, .. } in compiled {
-        let mut stated = llrm_core::hir::facts::Builder::new("nib");
+        let mut stated = llrm_codegen::hir::facts::Builder::new("nib");
         if !entry(&function) {
             for subject in references {
                 stated.state(subject, llrm_mir::facts::Fact::NoAlias);
@@ -1822,7 +1822,7 @@ struct FunctionCompiler<'a> {
     blocks: Vec<BlockBuilder>,
     current: u32,
     parameters: Vec<u32>,
-    stated: llrm_core::hir::facts::Builder,
+    stated: llrm_codegen::hir::facts::Builder,
     calls: Vec<hir::CallSite>,
     scopes: Vec<BTreeMap<String, Binding>>,
     /// The scopes of the code a lambda is inlined into, innermost last: its
@@ -1909,9 +1909,9 @@ struct FunctionCompiler<'a> {
     /// used after it.
     across: Vec<liveness::Across>,
     /// Its `&` and `&mut` parameters.
-    references: Vec<llrm_core::hir::facts::Subject>,
+    references: Vec<llrm_codegen::hir::facts::Subject>,
     /// Its borrowed parameters, views too, by ordinal, with their subjects.
-    borrowed: Vec<(usize, llrm_core::hir::facts::Subject)>,
+    borrowed: Vec<(usize, llrm_codegen::hir::facts::Subject)>,
     /// The ordinal of each borrowed parameter, by its binding's identity.
     borrowed_ordinals: BTreeMap<borrows::BorrowKey, usize>,
     /// Where its borrowed parameters may go.
@@ -1964,7 +1964,7 @@ impl<'a> FunctionCompiler<'a> {
             blocks: vec![BlockBuilder { id: 1, instructions: Vec::new(), terminator: None }],
             current: 1,
             parameters: Vec::new(),
-            stated: llrm_core::hir::facts::Builder::new("nib"),
+            stated: llrm_codegen::hir::facts::Builder::new("nib"),
             calls: Vec::new(),
             scopes: vec![BTreeMap::new()],
             enclosing: Vec::new(),
@@ -2055,7 +2055,7 @@ impl<'a> FunctionCompiler<'a> {
         for (ordinal, (parameter, resolved)) in function.parameters.iter().zip(&signature.parameters).enumerate() {
             let value = compiler.value_type(resolved.hir_type());
             compiler.parameters.push(value);
-            let subject = llrm_core::hir::facts::Subject::Param {
+            let subject = llrm_codegen::hir::facts::Subject::Param {
                 function: i64::from(signature.id),
                 index: compiler.parameters.len() as i64 - 1,
             };
@@ -2272,7 +2272,7 @@ impl<'a> FunctionCompiler<'a> {
         let function = i64::from(self.signature.id);
         self.stated.retain(|one| !matches!(
             one.subject,
-            llrm_core::hir::facts::Subject::Instruction { function: owner, id } if owner == function && !instructions.contains(&(id as u32))
+            llrm_codegen::hir::facts::Subject::Instruction { function: owner, id } if owner == function && !instructions.contains(&(id as u32))
         ));
 
         let mut defined = self.parameters.iter().copied().collect::<BTreeSet<_>>();
