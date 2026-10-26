@@ -114,3 +114,9 @@ issue = 4932
 owner = "w6"
 date = "2026-11-02"
 why = "main forwards the stored 5 (1 instr fewer); tip and the pin reload g; first bad 26d6c9e9a3"
+[[xfail]]
+id = "integration header_copy::test_a_loop_entered_behind_a_folded_guard_is_still_counted_by_the_ranges"
+issue = 4952
+owner = "w2"
+date = "2026-11-02"
+why = "x_insertion -ftree-ch inner loop ends dec esi; lea edi,[esi+2]; cmp edi,1; jg (was dec; jge after #4890, pin add -4; cmp 1; jg); regressed in 277c2651b0..7d7515ce7, not bisected"
