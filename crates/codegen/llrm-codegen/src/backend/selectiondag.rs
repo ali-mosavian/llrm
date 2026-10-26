@@ -133,6 +133,7 @@ pub mod opcodes;
 mod reassociate;
 pub mod schedule;
 pub mod switchcg;
+pub mod x86_carry;
 pub mod x86_lowering;
 pub mod x86_preprocess;
 

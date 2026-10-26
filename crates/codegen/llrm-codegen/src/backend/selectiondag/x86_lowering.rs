@@ -338,7 +338,7 @@ impl Hooks for X86Lowering {
     }
 }
 
-fn cond_code(
+pub(super) fn cond_code(
     dag: &mut SelectionDAG,
     code: u128,
 ) -> SDValue {
@@ -570,7 +570,7 @@ fn get_bt(
 /// of `x`; the carry flag is the bit, so `!= 0` is `B` and `== 0` is `AE`.
 /// (The reassociated three-way `and` and the immediate forms are not taken,
 /// SD200.)
-fn lower_and_to_bt(
+pub(super) fn lower_and_to_bt(
     dag: &mut SelectionDAG,
     and: SDValue,
     cc: CondCode,
@@ -1041,7 +1041,7 @@ fn combine_add(
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
     if vt != EVT::I32 {
-        return None;
+        return super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node);
     }
     // `m_Add` matches either operand as the difference.
     let hidden_lea = |difference: SDValue, z: SDValue| {
@@ -1055,7 +1055,9 @@ fn combine_add(
         Some((shift, y, z))
     };
     let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
-    let (shift, y, z) = hidden_lea(a, b).or_else(|| hidden_lea(b, a))?;
+    let Some((shift, y, z)) = hidden_lea(a, b).or_else(|| hidden_lea(b, a)) else {
+        return super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node);
+    };
     let sum = dag.get_node(ISD::Add, vt, &[shift, z]);
     Some(dag.get_node(ISD::Sub, vt, &[sum, y]))
 }
@@ -1130,32 +1132,13 @@ fn combine_x86_add_sub(
     None
 }
 
-/// `combineSub` through `combineAddOrSubToADCOrSBB`, the zero case: `0 - (and
-/// (srl x, n), 1)` is `-1` when bit `n` of `x` is set: `bt x, n; sbb r, r`
-/// (`SETCC_CARRY`), where `and; neg` took two instructions and a mask. (The
-/// `adc`/`sbb` forms with a variable first operand, the `cmp`/`neg` carry
-/// forms and `-1 + setae` are not translated.)
+/// `combineSub`: `combineAddOrSubToADCOrSBB` ([`super::x86_carry`]). (The
+/// `SUB(…, SBB)` and `~A - ~B` folds are not translated, SD219.)
 fn combine_sub(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    let vt = dag.value_type(node);
-    if vt != EVT::I32 || !dag.is_null_constant(dag.operand(node, 0)) {
-        return None;
-    }
-    let mut y = dag.operand(node, 1);
-    if dag.opcode(y) == ISD::ZeroExtend && dag.use_count(y.node) == 1 {
-        y = dag.operand(y, 0);
-    }
-    if dag.opcode(y) != ISD::And || dag.use_count(y.node) != 1 || dag.constant(dag.operand(y, 1)) != Some(1) {
-        return None;
-    }
-    let (flags, code) = lower_and_to_bt(dag, y, CondCode::SetNe)?;
-    if code != cond::B {
-        return None;
-    }
-    let code = cond_code(dag, cond::B);
-    Some(dag.get_node(x86isd::SETCC_CARRY, vt, &[code, flags]))
+    super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node)
 }
 
 /// `combineCMov`, up to the constant selects: `cmov x, x` is `x`; a select
