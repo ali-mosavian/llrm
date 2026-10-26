@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/machinesink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/machinesink.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/machinesink.rs sha256:7c86265a2be9aec0c779404c55e3094af73897510bb4608604904d01ee7673f9 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/machinesink.rs sha256:9184f614bae310f583888e415335c0d5296a7550e65caa068a7b5762bc7b77c0 -->
 
 # machinesink
 
@@ -55,7 +55,8 @@ clocks, matmul -2.9% clocks and -5.3% code; objects -Os: x_mergesort m16
 263235 -> 263448 (+213 B, +0.081%, 40 modules changed; -O1 to -O3
 identical). The rule had bought -85 B of QCport -Os on the old allocator.
 
-DEVIATE M5 (#2903): in a build for size no edge is broken. The block
+DEVIATE M5 (#2903): in a build for size no edge is broken, except one that
+leaves the loop its instruction runs in (row M6, below). The block
 costs a jump (`bench/recpow` -Os +5 bytes with the edge split; over the
 834-object sweep at head 1b78847ae, breaking it at -Os is 37 objects larger,
 +228 bytes, and 26 smaller, -106 bytes). `bench/hanoi` -Os m32 keeps the
@@ -63,6 +64,13 @@ costs a jump (`bench/recpow` -Os +5 bytes with the edge split; over the
 constant (195 bytes against 190 with the edge broken). Exit, decided
 2026-10-22 with jumps' block-by-block diff: a placement rule jumps names,
 or sinking with shrink-wrapping (lir-cleanup-port for the sinking half).
+
+Row M6: the edge that leaves a loop is broken in a build for size too: the
+pin's `mov ecx, 32` of an exit phi runs once, in a block of its own, not
+every trip in the latch. Measured (own dist pair, sizes.py, clocksweep, m16
+-Os, 312 programs): 185933 -> 185910 B, 10 programs changed (6 smaller, 4
+larger by 1 to 2 B), no program slower; mandel.nib 185 -> 178 B and
+-3.96% clocks, mandel.c -2.2%, mandel.bas -1.5%.
 
 DEVIATE M6 (no number): an instruction that reads or writes any physical
 register stays, where `FindSuccToSinkTo` lets a physical def marked dead
