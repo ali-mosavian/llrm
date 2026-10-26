@@ -28,6 +28,11 @@ pub fn env_set(name: &str) -> bool {
     llrm_env::set(name)
 }
 
+/// The value of the variable `name`, from the same snapshot as `env_set`.
+pub fn env_var(name: &str) -> Option<&'static std::ffi::OsStr> {
+    llrm_env::var(name)
+}
+
 /// `env_set` of a literal name, asked once at the call site that names it:
 /// `env_set` hashes the name at every call, and a check on a step's path is
 /// asked thousands of times.
@@ -72,8 +77,7 @@ pub fn reached_checks() -> Vec<(&'static str, u32)> {
 /// `LLRM_CHECK_CACHES` on: every identity-cache hit is recomputed and must
 /// equal what was cached.
 pub fn checking_caches() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| env_set("LLRM_CHECK_CACHES"))
+    env_flag!("LLRM_CHECK_CACHES")
 }
 
 #[cfg(test)]

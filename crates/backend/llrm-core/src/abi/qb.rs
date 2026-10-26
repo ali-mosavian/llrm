@@ -107,6 +107,12 @@ static _AUDITED_GRAPHICS_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(||
         ("B$PNR4", 8),
         ("B$GGET", 6),
         ("B$GPUT", 8),
+        // grview.asm: seven Pascal words; `void pascal B$VEW0()`.
+        ("B$VIEW", 14),
+        ("B$VEW0", 0),
+        // grwindow.asm: four R4 and a word; `void pascal B$WIN0()`.
+        ("B$WIND", 18),
+        ("B$WIN0", 0),
         ("B$FTAB", 2),
     ])
 });
@@ -620,6 +626,16 @@ fn _contract_keeping(
                  find-first entry and supplies its one descriptor word; VBDCL10E \
                  rt/dkdir.asm's saved nonzero mode selects the shared RETF 2 exit. \
                  Filesystem, heap, alias and error effects remain conservative."
+            ),
+        ));
+    }
+    if matches!(name, "B$PCCY" | "B$PSCY" | "B$PECY") && pushed == 8 {
+        return Ok(returns(
+            8,
+            format!(
+                "{evidence} PDS 7.1 BC pushes a CURRENCY item as four words, [bx+6] first, then calls the entry; \
+                 the entry is B$PER8's shape (type byte, terminator, B$PRINT), which pops the whole value. \
+                 Device dispatch and error effects remain conservative."
             ),
         ));
     }

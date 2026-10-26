@@ -7,16 +7,6 @@ issue = 2848
 owner = "unassigned"
 date = "2026-10-19"
 [[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_a_register_live_through_a_loop_is_parked_for_its_counters"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_affine_terms_of_one_counter_share_its_scaled_value"
-issue = 3075
-owner = "hir-branch-icmp-2211"
-date = "2026-10-23"
-[[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_element_stores_leave_descriptors_unread"
 issue = 3994
 owner = "funcattrs-port"
@@ -33,12 +23,6 @@ issue = 2848
 owner = "funcattrs-port"
 date = "2026-10-27"
 why = "red on parity, not bisected; family: other, not yet put in a family; a regression unless triage says stale (qb-reds-parity.md)"
-[[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_a_counter_stepped_before_other_work_is_tested_against_its_end"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: counted-loop strength reduction; a regression unless triage says stale (qb-reds-parity.md)"
 [[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_a_dividend_two_instructions_require_is_copied_into_its_register_once"
 issue = 2848
@@ -63,12 +47,6 @@ issue = 2848
 owner = "funcattrs-port"
 date = "2026-10-27"
 why = "red on parity, not bisected; family: other, not yet put in a family; a regression unless triage says stale (qb-reds-parity.md)"
-[[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_a_masked_use_keeps_the_counter_and_its_end_test"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: counted-loop strength reduction; a regression unless triage says stale (qb-reds-parity.md)"
 [[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_a_negative_static_subscript_stays_16_bit"
 issue = 2848
@@ -99,12 +77,6 @@ issue = 3994
 owner = "funcattrs-port"
 date = "2026-10-27"
 why = "stale expectation: 4f82e22e1 (MemorySSA queries ask the AA stack with TBAA) leaves a volatile store through a far pointer as the pin does, so the cells it may reach are read every trip; the memory-space model of #3994 is the tuning that restores the hoist"
-[[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_loops_count_to_zero_once_their_other_counters_are_settled"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: counted-loop strength reduction; a regression unless triage says stale (qb-reds-parity.md)"
 [[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_the_first_dimension_is_not_rank_checked"
 issue = 2848

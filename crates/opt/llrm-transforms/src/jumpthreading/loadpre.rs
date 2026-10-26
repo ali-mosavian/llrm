@@ -85,7 +85,7 @@ impl State<'_, '_> {
         load: InstId,
     ) -> bool {
         // Don't hack volatile and ordered loads.
-        let Opcode::Load { align, volatile: false } = self.opcode(load) else { return false };
+        let Opcode::Load { align, volatile: false } = *self.opcode(load) else { return false };
 
         // If the load is defined in a block with exactly one predecessor, it
         // can't be partially redundant. Nor in an EH pad, whose edges cannot
@@ -100,7 +100,7 @@ impl State<'_, '_> {
         let loaded_ptr = self.op(load, 0);
         if let Some(def) = self.instruction_of(loaded_ptr)
             && self.function().parent(def) == Some(load_bb)
-            && self.opcode(def) != Opcode::Phi
+            && *self.opcode(def) != Opcode::Phi
         {
             return false;
         }

@@ -8,6 +8,7 @@ pub mod machine;
 pub mod object;
 pub mod opcosts;
 pub mod os;
+pub mod pressure;
 pub mod registers;
 pub mod routines;
 pub mod runtime;
