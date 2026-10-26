@@ -26,7 +26,7 @@ def test_the_headline_counts_and_every_row_has_an_empty_owner_column():
     sized = {"-Os": ([("quicksort.nib", 24, 39)], 2, 50, 70)}
     lines = readiness.report(["h"], sized, ([("fib.bas", 100, 110)], 5))
     assert "HEADLINE m16 -Os: 50 -> 70 B (+20); 1 of 2 programs larger" in lines
-    assert "HEADLINE m16 -Os clocks: 1 of 5 programs slower" in lines
+    assert any(line.startswith("HEADLINE m16 -Os clocks: 1 of 5 programs slower") for line in lines)
     rows = [line for line in lines if line.startswith("  ")]
     assert len(rows) == 2 and all(row.endswith("|") for row in rows) and "+15" in rows[0]
 
@@ -42,3 +42,11 @@ def test_a_table_is_measured_once_per_dist(tmp_path):
 def test_cells_counts_the_distinct_bp_cells_of_one_function_only():
     text = "_sort proc near\n mov [bp-2], ax\n mov [bp-2], bx\n mov [bp-4], cx\n_sort endp\n_other proc near\n mov [bp-6], ax\n_other endp\n"
     assert readiness.cells(text, "_sort") == 2
+
+
+def test_a_program_folded_on_main_is_marked_tiny_not_listed_as_a_12x_slowdown():
+    """x87_arguments.c: main folded the whole program (237 clocks, the start-up), the tip keeps the loop like the pin (2893): the table read it as +1120%."""
+    rows = {name: {"clocks": 1, "instructions": n, "language": ".c"} for name, n in {"floor.c": 100, "folded.c": 150, "real.c": 5000}.items()}
+    assert readiness.tiny({"rows": rows}) == {"floor.c", "folded.c"}
+    lines = readiness.report(["h"], {}, ([("folded.c", 237, 2893)], 3), {"folded.c"})
+    assert any(line.startswith("  folded.c tiny") for line in lines) and "1 of them tiny" in " ".join(lines)

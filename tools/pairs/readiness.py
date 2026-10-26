@@ -96,20 +96,29 @@ def slower(base: dict, new: dict) -> tuple[list[tuple[str, int, int]], int]:
     return sorted(rows, key=lambda row: row[1] / row[2]), len(good)
 
 
-def report(header: list[str], sized: dict[str, tuple], clocks: tuple | None) -> list[str]:
+def tiny(base: dict) -> set[str]:
+    """Programs whose main run is under twice the least instruction count of their language (clocksweep's rule): within the start-up, or folded to a constant, so a ratio on them says nothing (x87_arguments.c: main folds the whole program, 237 clocks)."""
+    good = {name: row for name, row in base["rows"].items() if "clocks" in row}
+    floor: dict[str, int] = {}
+    for row in good.values():
+        floor[row["language"]] = min(floor.get(row["language"], 1 << 60), row["instructions"])
+    return {name for name, row in good.items() if row["instructions"] < 2 * floor[row["language"]]}
+
+
+def report(header: list[str], sized: dict[str, tuple], clocks: tuple | None, tiny_rows: set[str] = frozenset()) -> list[str]:
     """The file: the headline first (totals, growers, slower), then one table per level and one for clocks; every table row ends in an empty owner column."""
     lines = list(header)
     for level, (larger, count, was, now) in sized.items():
         lines.append(f"HEADLINE m16 {level}: {was} -> {now} B ({now - was:+}); {len(larger)} of {count} programs larger")
     if clocks:
         rows, count = clocks
-        lines.append(f"HEADLINE m16 -Os clocks: {len(rows)} of {count} programs slower")
+        lines.append(f"HEADLINE m16 -Os clocks: {len(rows)} of {count} programs slower ({sum(name in tiny_rows for name, _, _ in rows)} of them tiny: near the start-up or folded on main)")
     for level, (larger, count, was, now) in sized.items():
         lines += ["", f"larger at {level} (program | main B | new B | delta | % | owner):"]
         lines += [f"  {name:42} | {a:>7} | {b:>7} | {b - a:+6} | {(b - a) / a * 100:+6.1f}% |" for name, a, b in larger]
     if clocks:
         lines += ["", "slower at -Os (program | main clocks | new clocks | delta | % | owner):"]
-        lines += [f"  {name:42} | {a:>11} | {b:>11} | {b - a:+10} | {(b - a) / a * 100:+6.1f}% |" for name, a, b in clocks[0]]
+        lines += [f"  {name + (' tiny' if name in tiny_rows else ''):42} | {a:>11} | {b:>11} | {b - a:+10} | {(b - a) / a * 100:+6.1f}% |" for name, a, b in clocks[0]]
     return lines
 
 
@@ -126,8 +135,9 @@ def main() -> int:
     base_dist, new_dist = dist_of(args.base, args.scratch), dist_of(args.new, args.scratch)
     header = [f"main-merge readiness: main {git('rev-parse', args.base)[:10]} -> {git('rev-parse', args.new)[:10]}", f"dists {base_dist} {new_dist}"]
     sized = {level: growers(size_table(base_dist, level, cache), size_table(new_dist, level, cache)) for level in args.levels}
-    clocks = None if args.no_clocks else slower(clock_rows(base_dist, cache), clock_rows(new_dist, cache))
-    text = "\n".join(report(header, sized, clocks)) + "\n"
+    base_clocks = None if args.no_clocks else clock_rows(base_dist, cache)
+    clocks = None if args.no_clocks else slower(base_clocks, clock_rows(new_dist, cache))
+    text = "\n".join(report(header, sized, clocks, tiny(base_clocks) if base_clocks else set())) + "\n"
     if args.out:
         args.out.write_text(text)
     print(text)
