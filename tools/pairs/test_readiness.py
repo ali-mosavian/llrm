@@ -57,9 +57,9 @@ def test_the_larger_list_is_grouped_by_owner_from_the_causes_file_then_the_flag_
     rules = [{"match": "nbody_fixed/*", "owner": "w-10"}, {"match": "*/x.c", "owner": "unassigned"}]
     larger = [("nbody_fixed/a.nib", 10, 30), ("m/x.c", 10, 20), ("q/y.bas", 10, 15), ("z/w.c", 1, 2)]
     groups = readiness.by_owner(larger, rules, {"q/y.bas": "tree-ch"})
-    assert list(groups) == ["w-10", "(none)", "w5"] and [r[0] for r in groups["(none)"]] == ["m/x.c", "z/w.c"]
+    assert list(groups) == ["w10", "(none)", "w5"] and [r[0] for r in groups["(none)"]] == ["m/x.c", "z/w.c"]
     lines = readiness.report(["h"], {"-Os": (larger, 4, 0, 0)}, None, owners=(rules, {"q/y.bas": "tree-ch"}))
-    assert "  w-10: 1 programs, +20 B" in lines and "  (none): 2 programs, +11 B" in lines
+    assert "  w10: 1 programs, +20 B" in lines and "  (none): 2 programs, +11 B" in lines
 
 
 def test_flag_first_reads_both_ablation_json_layouts():
