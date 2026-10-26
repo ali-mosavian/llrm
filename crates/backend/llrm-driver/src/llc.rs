@@ -29,10 +29,49 @@ fn without_triple(text: &str) -> (Option<String>, String) {
             continue;
         }
         let line = line.replace(" dso_local", "").replace(CLANG_PASCAL, " cc1000 ");
-        kept.push_str(&lifetime_markers_with_a_size(&line));
+        kept.push_str(&port_intrinsic(&lifetime_markers_with_a_size(&line)));
         kept.push('\n');
     }
     (triple, kept)
+}
+
+/// Borland's port functions and the intrinsics that are them: name, MIR's name, whether it writes.
+const PORTS: [(&str, &str, bool); 4] = [
+    ("__inportb__", "llrm.ia16.in.i8", false),
+    ("__inportw__", "llrm.ia16.in.i16", false),
+    ("__outportb__", "llrm.ia16.out.i8", true),
+    ("__outportw__", "llrm.ia16.out.i16", true),
+];
+
+/// `line` with a Borland port function written as its intrinsic. An `out` answers the value written, which the C
+/// function returns and clang numbers even when unused, so the numbering stays dense.
+fn port_intrinsic(line: &str) -> String {
+    for (borland, intrinsic, writes) in PORTS {
+        let Some(at) = line.find(&format!("@{borland}(")) else { continue };
+        let width = intrinsic.rsplit('.').next().unwrap_or("i16");
+        let parameters = if writes { format!("i16, {width}") } else { "i16".to_owned() };
+        if line.starts_with("declare") {
+            let result = if writes { "void" } else { width };
+            return format!("declare {result} @{intrinsic}({parameters})");
+        }
+        let arguments = line[at..].split_once('(').and_then(|(_, rest)| rest.split_once(')')).map_or("", |(inside, _)| inside);
+        let typed: Vec<String> = arguments
+            .split(',')
+            .filter_map(|one| Some(format!("{} {}", one.split_whitespace().next()?, one.split_whitespace().last()?)))
+            .collect();
+        let call = typed.join(", ");
+        let destination = line.split_once(" = ").map(|(name, _)| name.trim().to_owned());
+        return match (writes, destination) {
+            (true, Some(name)) => {
+                let value = typed.last().and_then(|one| one.split_whitespace().last()).unwrap_or("0");
+                format!("  call void @{intrinsic}({call})\n  {name} = add {width} {value}, 0")
+            }
+            (true, None) => format!("  call void @{intrinsic}({call})"),
+            (false, Some(name)) => format!("  {name} = call {width} @{intrinsic}({call})"),
+            (false, None) => format!("  call {width} @{intrinsic}({call})"),
+        };
+    }
+    line.to_owned()
 }
 
 /// The pin's `llvm.lifetime.start.p0(ptr)` as MIR's `(i64 size, ptr)`: MIR's

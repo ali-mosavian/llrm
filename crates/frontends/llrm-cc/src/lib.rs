@@ -417,7 +417,7 @@ fn build(
                 objects.push(object);
             }
             Input::Source(path) => {
-                let ir = scratch.join(format!("{number}.ll"));
+                let ir = scratch.join(format!("{}.ll", stem(path)));
                 let mut args = target.clang.clone();
                 args.extend(build.clang.iter().cloned());
                 args.extend(
