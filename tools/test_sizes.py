@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import pytest  # noqa: E402
-from sizes import code_bytes, data_bytes  # noqa: E402
+from sizes import code_bytes, data_bytes, selected  # noqa: E402
 
 
 def record(kind: int, body: bytes) -> bytes:
@@ -177,3 +177,12 @@ def test_sizes_reports_bytes_and_no_cost_estimate(monkeypatch, tmp_path, capsys)
     assert re.search(r"a/a\.c\s+bytes\s+100 ->\s+120 \(\+20\)", out), out
     assert "b/b.c" not in out, "an unchanged program is not listed"
     assert " ins " not in out and " mem " not in out and "TOTAL bytes 150 -> 170" in out, out
+
+
+def test_the_isel_variable_reaches_the_compiler_command(monkeypatch):
+    """`LLRM_ISEL=dag python3 tools/sizes.py` measured the old selector twice (185238 -> 185238 bytes): the variable was never passed on."""
+    command = ["llrm-c", "x.c", "-Os"]
+    monkeypatch.delenv("LLRM_ISEL", raising=False)
+    assert selected(command) == command
+    monkeypatch.setenv("LLRM_ISEL", "dag")
+    assert selected(command) == ["llrm-c", "--isel=dag", "x.c", "-Os"]

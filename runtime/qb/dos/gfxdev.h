@@ -9,6 +9,9 @@
 
 /* Sets the BIOS video mode, and says whether the screen is in it. */
 int gd_set_mode(unsigned mode);
+/* The page drawing goes to and the one shown (SCREEN's last two arguments): 0 when the mode has no such pages. A mode
+   starts on page 0 for both. */
+int gd_set_pages(unsigned active, unsigned visible);
 /* Gives palette entry `index` the adapter's colour `color`. */
 void gd_palette(unsigned index, unsigned color);
 /* The CGA modes' colour select: the background 0 to 15, and which palette, 0 or

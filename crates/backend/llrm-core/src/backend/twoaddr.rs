@@ -1438,6 +1438,39 @@ mod tests {
         assert!(!names_of(&tied(&of(flags_live), All)).contains(&"lea".to_owned()));
     }
 
+    /// `add; inc; jb`: `inc` leaves CF alone, so `jb` reads the add's carry.
+    /// The add went to an `lea` (no flags) because `inc` "wrote the flags",
+    /// and `jb` read the carry of whatever came before.
+    #[test]
+    fn test_an_add_whose_carry_a_later_inc_leaves_for_a_jb_stays_an_add() {
+        let step = |at: i64, name: &str, dest: u32, source: u32| {
+            let what = Semantics {
+                name: Some(name.into()),
+                dests: vec![held(dest, 4)],
+                sources: vec![held(source, 4)],
+                ..Semantics::new(Operation::Unary)
+            };
+            Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![dest], vec![source]))
+        };
+        let jb = Arc::new(Insn::new(
+            3,
+            Some((3, 3)),
+            Some(Semantics { name: Some("jb".into()), target: Some(0), ..Semantics::new(Operation::Branch) }),
+            vec![],
+            vec![],
+        ));
+        let insns = vec![
+            imm_def(0, 7),
+            live_source_add(-1, "add")[1].clone(),
+            step(2, "inc", 9, 8),
+            jb,
+            read(4, 7),
+            read(5, 9),
+        ];
+        let names = names_of(&tied(&of(insns), All));
+        assert!(!names.contains(&"lea".to_owned()), "the add became an lea: {names:?}");
+    }
+
     // ------------------------------------------------------ tests/test_lir.py
 
     fn imm(
