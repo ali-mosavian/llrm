@@ -424,4 +424,24 @@ mod tests {
         let loads = reachable(&dag, root, ISD::Load);
         assert_eq!(dag.opcode(dag.operand(loads[0], 0)), ISD::Store, "{}", dag.dump());
     }
+
+    /// histo's `counts[i]++`: the load read through an older chain and the
+    /// store on a better one left the old store a reader of the sum, so the
+    /// sum looked shared and the 16-bit read-modify-write was promoted to
+    /// 32 bits (`inc word ptr` became load, `inc`, store).
+    #[test]
+    fn a_replaced_store_is_no_user_of_its_value() {
+        let (dag, root) = combined(|dag| {
+            let entry = dag.entry_node();
+            let (slot0, slot1) = (dag.get_frame_index(EVT::I32, 0), dag.get_frame_index(EVT::I32, 1));
+            let other = dag.get_load(EVT::I32, entry, slot1, info());
+            let load = dag.get_load(EVT::I32, SDValue { node: other.node, res: 1 }, slot0, info());
+            let one = dag.get_constant(1, EVT::I32);
+            let sum = dag.get_node(ISD::Add, EVT::I32, &[load, one]);
+            vec![dag.get_store(SDValue { node: load.node, res: 1 }, sum, slot0, info())]
+        });
+        for sum in reachable(&dag, root, ISD::Add) {
+            assert_eq!(dag.users(sum).count(), 1, "{}", dag.dump());
+        }
+    }
 }

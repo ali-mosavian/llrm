@@ -268,6 +268,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 self.add_to_worklist_with_users(result.node);
             }
             self.dag.delete_dead(n);
+            self.dag.delete_replaced(n);
         }
         // `RemoveDeadNodes` before selection: a node a fold left behind must
         // not count as a user of what it read (a load folds into its one user).
