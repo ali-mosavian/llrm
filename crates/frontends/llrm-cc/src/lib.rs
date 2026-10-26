@@ -96,7 +96,8 @@ const TARGETS: &str = include_str!("../targets.toml");
 /// written for this driver.
 const PIN_FILE: &str = include_str!("../../../../toolchain/clang/pin");
 
-/// The pin file's first line. The lines after it are builds of the pin that carry patches, and report their own commit.
+/// The pin file's first line. The lines after it are builds of the pin that
+/// carry patches, and report their own commit.
 fn pin() -> &'static str {
     PIN_FILE.lines().next().unwrap_or_default().trim()
 }
@@ -307,7 +308,8 @@ pub fn llc_args(
     args
 }
 
-/// `word` with each `{env:NAME}` that is set replaced by its value; one that is not stays, and `unset` names it.
+/// `word` with each `{env:NAME}` that is set replaced by its value; one that is
+/// not stays, and `unset` names it.
 fn with_environment(word: &str) -> String {
     let mut out = word.to_owned();
     while let Some(open) = out.find("{env:") {
@@ -417,7 +419,8 @@ fn build(
     if build.output.is_some() && build.stop != Stop::Executable && build.inputs.len() > 1 {
         return Err(fail("cannot specify -o with -c or -S and several inputs".into()));
     }
-    // `-nostdinc` drops clang's own freestanding headers (`stdint.h`, `stdarg.h`); they go back after the target's.
+    // `-nostdinc` drops clang's own freestanding headers (`stdint.h`,
+    // `stdarg.h`); they go back after the target's.
     let resource: Vec<String> = if target.clang.iter().any(|word| word == "-nostdinc") {
         Command::new(&clang)
             .arg("-print-resource-dir")
@@ -500,8 +503,11 @@ fn build(
                         }
                         std::fs::read(&b).map_err(|error| error.to_string())
                     };
-                    let translated = inline_asm::translate(&std::fs::read_to_string(&ir).map_err(|e| fail(e.to_string()))?, &mut assemble)
-                        .map_err(|why| fail(format!("{path}: {why}")))?;
+                    let translated = inline_asm::translate(
+                        &std::fs::read_to_string(&ir).map_err(|e| fail(e.to_string()))?,
+                        &mut assemble,
+                    )
+                    .map_err(|why| fail(format!("{path}: {why}")))?;
                     std::fs::write(&ir, translated).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 }
                 let object = want(if build.stop == Stop::Assembly { "s" } else { "o" });

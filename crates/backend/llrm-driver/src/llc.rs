@@ -12,7 +12,8 @@ use llrm_target::Target;
 
 use crate::Bound;
 
-/// How the i8086 clang writes llrm's BASIC convention (1000, `opcode::BASIC`): clang keeps a convention in 8 bits.
+/// How the i8086 clang writes llrm's BASIC convention (1000, `opcode::BASIC`):
+/// clang keeps a convention in 8 bits.
 const CLANG_PASCAL: &str = " cc232 ";
 
 /// `text` without the lines and words MIR's reader leaves out of LLVM (`target
@@ -35,7 +36,8 @@ fn without_triple(text: &str) -> (Option<String>, String) {
     (triple, kept)
 }
 
-/// Borland's port functions and the intrinsics that are them: name, MIR's name, whether it writes.
+/// Borland's port functions and the intrinsics that are them: name, MIR's name,
+/// whether it writes.
 const PORTS: [(&str, &str, bool); 4] = [
     ("__inportb__", "llrm.ia16.in.i8", false),
     ("__inportw__", "llrm.ia16.in.i16", false),
@@ -43,8 +45,9 @@ const PORTS: [(&str, &str, bool); 4] = [
     ("__outportw__", "llrm.ia16.out.i16", true),
 ];
 
-/// `line` with a Borland port function written as its intrinsic. An `out` answers the value written, which the C
-/// function returns and clang numbers even when unused, so the numbering stays dense.
+/// `line` with a Borland port function written as its intrinsic. An `out`
+/// answers the value written, which the C function returns and clang numbers
+/// even when unused, so the numbering stays dense.
 fn port_intrinsic(line: &str) -> String {
     for (borland, intrinsic, writes) in PORTS {
         let Some(at) = line.find(&format!("@{borland}(")) else { continue };
@@ -54,7 +57,8 @@ fn port_intrinsic(line: &str) -> String {
             let result = if writes { "void" } else { width };
             return format!("declare {result} @{intrinsic}({parameters})");
         }
-        let arguments = line[at..].split_once('(').and_then(|(_, rest)| rest.split_once(')')).map_or("", |(inside, _)| inside);
+        let arguments =
+            line[at..].split_once('(').and_then(|(_, rest)| rest.split_once(')')).map_or("", |(inside, _)| inside);
         let typed: Vec<String> = arguments
             .split(',')
             .filter_map(|one| Some(format!("{} {}", one.split_whitespace().next()?, one.split_whitespace().last()?)))
@@ -154,7 +158,10 @@ fn decorate(
 ) {
     for global in &mut module.globals {
         let convention = global.function().and_then(|one| calling.by_number(one.calling_convention)).unwrap_or(default);
-        let Some(name) = global.name.as_deref().filter(|name| !name.starts_with("llvm.") && !name.starts_with("llrm.")) else { continue };
+        let Some(name) = global.name.as_deref().filter(|name| !name.starts_with("llvm.") && !name.starts_with("llrm."))
+        else {
+            continue;
+        };
         if let Some(spelled) = convention.decorated(format, name) {
             global.name = Some(spelled).into();
         }

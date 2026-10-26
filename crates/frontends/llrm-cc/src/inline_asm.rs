@@ -1,11 +1,16 @@
-//! Clang's inline assembly (`call void asm sideeffect ...`) as llrm's inline-code intrinsics.
+//! Clang's inline assembly (`call void asm sideeffect ...`) as llrm's
+//! inline-code intrinsics.
 //!
-//! A run of adjacent asm calls is one block, assembled to bytes by the caller. Each memory operand (`$n` in the text)
-//! becomes a placeholder displacement that the intrinsic's name patches back: a local is a frame place of
-//! `llrm.ia16.code.*`, which answers `dx:ax`; a global is a symbol fixup of `llrm.ia16.asm.*`. A run that ends a function
-//! (the result is loaded from a slot nothing stored) is the function's result, as Borland leaves it in `dx:ax`.
+//! A run of adjacent asm calls is one block, assembled to bytes by the caller.
+//! Each memory operand (`$n` in the text) becomes a placeholder displacement
+//! that the intrinsic's name patches back: a local is a frame place of
+//! `llrm.ia16.code.*`, which answers `dx:ax`; a global is a symbol fixup of
+//! `llrm.ia16.asm.*`. A run that ends a function (the result is loaded from a
+//! slot nothing stored) is the function's result, as Borland leaves it in
+//! `dx:ax`.
 
-/// A displacement no real instruction of the block carries; operand `k` takes `PLACE + 4 * k`.
+/// A displacement no real instruction of the block carries; operand `k` takes
+/// `PLACE + 4 * k`.
 const PLACE: u32 = 0x7001;
 
 #[derive(Debug, PartialEq)]
@@ -16,7 +21,8 @@ struct Call {
     operands: Vec<(String, String)>,
 }
 
-/// `text` with every asm run replaced; `assemble` turns Intel-syntax source (16-bit code) into bytes.
+/// `text` with every asm run replaced; `assemble` turns Intel-syntax source
+/// (16-bit code) into bytes.
 pub fn translate(
     text: &str,
     assemble: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
@@ -36,7 +42,8 @@ pub fn translate(
             continue;
         }
         let mut run = Vec::new();
-        // `__emit__` answers an unused number; the replacing call keeps it so the numbering stays dense.
+        // `__emit__` answers an unused number; the replacing call keeps it so
+        // the numbering stays dense.
         let mut numbered = None;
         while at < lines.len() && is_asm(lines[at]) {
             if is_emit(lines[at]) && numbered.is_none() {
@@ -45,7 +52,8 @@ pub fn translate(
             run.push(parse(lines[at])?);
             at += 1;
         }
-        // The function's result: `%v = load iN, ptr %slot` then `ret iN %v` right after the run.
+        // The function's result: `%v = load iN, ptr %slot` then `ret iN %v`
+        // right after the run.
         let result = lines.get(at).zip(lines.get(at + 1)).and_then(|(load, ret)| result_of(load, ret));
         if result.is_some() {
             at += 1;
@@ -65,10 +73,12 @@ pub fn translate(
 
 fn is_asm(line: &str) -> bool {
     let line = line.trim_start();
-    line.starts_with("call ") && line.contains(" asm sideeffect ") || is_emit(line) && (line.starts_with("call ") || line.contains(" = call "))
+    line.starts_with("call ") && line.contains(" asm sideeffect ")
+        || is_emit(line) && (line.starts_with("call ") || line.contains(" = call "))
 }
 
-/// Borland's `__emit__(bytes...)`, a call to the library's declaration rather than an asm statement.
+/// Borland's `__emit__(bytes...)`, a call to the library's declaration rather
+/// than an asm statement.
 fn is_emit(line: &str) -> bool {
     line.contains("@__emit__(")
 }
@@ -80,13 +90,17 @@ fn emit_bytes(line: &str) -> Result<String, String> {
         .split(',')
         .map(|one| {
             let value = one.split_whitespace().last().ok_or("asm: __emit__ argument")?;
-            value.parse::<i64>().map(|n| (n & 0xff).to_string()).map_err(|_| "asm: __emit__ needs constant bytes".to_owned())
+            value
+                .parse::<i64>()
+                .map(|n| (n & 0xff).to_string())
+                .map_err(|_| "asm: __emit__ needs constant bytes".to_owned())
         })
         .collect();
     Ok(format!(".byte {}", bytes?.join(", ")))
 }
 
-/// `(destination, type)` of a function's result loaded from a slot and returned.
+/// `(destination, type)` of a function's result loaded from a slot and
+/// returned.
 fn result_of(
     load: &str,
     ret: &str,
@@ -195,8 +209,9 @@ fn block(
     let mut places = Vec::new();
     for (k, _) in operands.iter().enumerate() {
         let want = (PLACE + 4 * k as u32) as u16;
-        let found: Vec<usize> =
-            (0..bytes.len().saturating_sub(1)).filter(|&at| u16::from_le_bytes([bytes[at], bytes[at + 1]]) == want).collect();
+        let found: Vec<usize> = (0..bytes.len().saturating_sub(1))
+            .filter(|&at| u16::from_le_bytes([bytes[at], bytes[at + 1]]) == want)
+            .collect();
         match found[..] {
             [at] => places.push(at),
             _ => return Err(format!("asm: operand {k} appears {} times in the assembled bytes", found.len())),
@@ -208,7 +223,10 @@ fn block(
     if globals != 0 {
         let fixups: String = places.iter().map(|at| format!(".f{at}_offset_0")).collect();
         let name = format!("llrm.ia16.asm.{hex}.-.-.-.m{fixups}");
-        return Ok((vec![format!("  call void @\"{name}\"({pointers})")], format!("declare void @\"{name}\"({types})")));
+        return Ok((
+            vec![format!("  call void @\"{name}\"({pointers})")],
+            format!("declare void @\"{name}\"({types})"),
+        ));
     }
     let placed: String = places.iter().map(|at| format!(".{at}p0")).collect();
     let name = format!("llrm.ia16.code.{hex}{placed}");
@@ -217,15 +235,20 @@ fn block(
     let unused = numbered.unwrap_or_else(|| format!("%asm.{number}"));
     let lines = match result {
         Some((value, ty)) if ty == "i32" && unused.starts_with("%asm.") => vec![call(&format!("{value} = "))],
-        Some((value, ty)) if ty == "i32" => vec![call(&format!("{unused} = ")), format!("  {value} = add i32 {unused}, 0")],
-        Some((value, ty)) if ty == "i16" => vec![call(&format!("{unused} = ")), format!("  {value} = trunc i32 {unused} to i16")],
+        Some((value, ty)) if ty == "i32" => {
+            vec![call(&format!("{unused} = ")), format!("  {value} = add i32 {unused}, 0")]
+        }
+        Some((value, ty)) if ty == "i16" => {
+            vec![call(&format!("{unused} = ")), format!("  {value} = trunc i32 {unused} to i16")]
+        }
         Some((_, ty)) => return Err(format!("asm: a result of type {ty} is not carried")),
         None => vec![call(&format!("{unused} = "))],
     };
     Ok((lines, declare))
 }
 
-/// `text` with `$n` (n among this call's operands) replaced by the placeholder of operand `base + n`.
+/// `text` with `$n` (n among this call's operands) replaced by the placeholder
+/// of operand `base + n`.
 fn renumber(
     text: &str,
     base: usize,
@@ -247,7 +270,11 @@ fn renumber(
             let k = base + n;
             let displacement = PLACE + 4 * k as u32;
             let _ = (all, own);
-            out.push_str(&if all[k].0.starts_with('@') { format!("[{displacement:#x}]") } else { format!("[bp+{displacement:#x}]") });
+            out.push_str(&if all[k].0.starts_with('@') {
+                format!("[{displacement:#x}]")
+            } else {
+                format!("[bp+{displacement:#x}]")
+            });
             at = end;
         } else {
             out.push(chars[at]);
@@ -271,7 +298,12 @@ mod tests {
         let ir = "define i32 @f() {\n  %1 = alloca i16\n  call void asm sideeffect inteldialect \"mov word ptr $0, sp\", \"=*m\"(ptr elementtype(i16) %1)\n  %2 = load i32, ptr %9, align 2\n  ret i32 %2\n}\n";
         let out = translate(ir, &mut fake).unwrap();
         assert!(out.contains("%2 = call i32 @\"llrm.ia16.code.89a60170c3.2p0\"(ptr %1)"), "{out}");
-        assert!(out.contains("ret i32 %2") && out.contains("declare i32 @\"llrm.ia16.code.89a60170c3.2p0\"(ptr)") && !out.contains("load"), "{out}");
+        assert!(
+            out.contains("ret i32 %2")
+                && out.contains("declare i32 @\"llrm.ia16.code.89a60170c3.2p0\"(ptr)")
+                && !out.contains("load"),
+            "{out}"
+        );
     }
 
     #[test]

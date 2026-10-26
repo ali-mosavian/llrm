@@ -137,7 +137,8 @@ pub struct Registers {
     pub results: Vec<RegId>,
 }
 
-/// The address spaces the i8086 target gives far and huge pointers (clang's `address_space(1)` and `(3)`).
+/// The address spaces the i8086 target gives far and huge pointers (clang's
+/// `address_space(1)` and `(3)`).
 const FAR_SPACE: u32 = 1;
 const HUGE_SPACE: u32 = 3;
 
@@ -214,7 +215,8 @@ pub fn assembled_by(
         let name = global.name.as_deref().unwrap_or_default();
         match &global.kind {
             GlobalKind::Variable(variable) if variable.initializer.is_some() => {
-                // A far or huge object lies outside DGROUP, in a segment of the module's own.
+                // A far or huge object lies outside DGROUP, in a segment of the
+                // module's own.
                 let datums = globals::datums(module, id, &names)?;
                 if matches!(global.address_space, FAR_SPACE | HUGE_SPACE) {
                     far_data.extend(datums);

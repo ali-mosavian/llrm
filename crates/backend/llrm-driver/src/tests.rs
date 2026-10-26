@@ -522,8 +522,9 @@ fn llvm_ir_symbols_are_decorated_as_the_object_format_spells_them() {
     assert!(listing.contains("_main") && listing.contains("_report"), "{listing}");
 }
 
-/// The i8086 clang writes Pascal functions as `cc232` (8 bits hold no 1000); llrm-llc refused the module with
-/// "calling convention 232", so no QCport module that calls qgl compiled.
+/// The i8086 clang writes Pascal functions as `cc232` (8 bits hold no 1000);
+/// llrm-llc refused the module with "calling convention 232", so no QCport
+/// module that calls qgl compiled.
 #[test]
 fn clangs_pascal_number_is_llrms_basic_convention() {
     let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n\
@@ -533,8 +534,9 @@ fn clangs_pascal_number_is_llrms_basic_convention() {
     crate::llc::compiled(&flags(&["-mabi=cdecl"]), text, "f").unwrap();
 }
 
-/// Inline-code intrinsics (`llrm.ia16.code.*`) were decorated to `_llrm.ia16.code.*` and then "no assembler symbol":
-/// no QCport module with an asm block compiled.
+/// Inline-code intrinsics (`llrm.ia16.code.*`) were decorated to
+/// `_llrm.ia16.code.*` and then "no assembler symbol": no QCport module with an
+/// asm block compiled.
 #[test]
 fn inline_code_intrinsics_keep_their_names() {
     let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n\
@@ -544,8 +546,9 @@ fn inline_code_intrinsics_keep_their_names() {
     crate::llc::compiled(&flags(&["-mabi=cdecl"]), text, "f").unwrap();
 }
 
-/// A global defined by clang IR was written as `_tbl label byte` with no `public`, so a module that used it
-/// linked with "_mon_facts is an undefined reference" (QCport).
+/// A global defined by clang IR was written as `_tbl label byte` with no
+/// `public`, so a module that used it linked with "_mon_facts is an undefined
+/// reference" (QCport).
 #[test]
 fn defined_globals_are_public_and_internal_ones_are_not() {
     let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n\
@@ -556,11 +559,16 @@ fn defined_globals_are_public_and_internal_ones_are_not() {
                 define i16 @f() addrspace(1) {\n  ret i16 0\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&["-mabi=cdecl"]), text, "f").unwrap();
     let listing = llrm_core::backend::masm::text(&built).unwrap();
-    assert!(listing.contains("public _a") && listing.contains("public _b") && !listing.contains("public _c"), "{listing}");
+    assert!(
+        listing.contains("public _a") && listing.contains("public _b") && !listing.contains("public _c"),
+        "{listing}"
+    );
 }
 
-/// Borland's `outportb`/`inportb` are the library's `__outportb__`/`__inportb__`; they were left as calls to a symbol
-/// nothing defines ("___outportb__ is an undefined reference"), where llrm has the `llrm.ia16.in`/`out` intrinsics.
+/// Borland's `outportb`/`inportb` are the library's
+/// `__outportb__`/`__inportb__`; they were left as calls to a symbol
+/// nothing defines ("___outportb__ is an undefined reference"), where llrm has
+/// the `llrm.ia16.in`/`out` intrinsics.
 #[test]
 fn borlands_port_functions_are_the_port_intrinsics() {
     let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n\
@@ -570,5 +578,8 @@ fn borlands_port_functions_are_the_port_intrinsics() {
                 define i8 @f(i8 %v) addrspace(1) {\n  %1 = call addrspace(1) i8 @__outportb__(i16 noundef 968, i8 noundef zeroext %v)\n  %2 = call addrspace(1) i8 @__inportb__(i16 noundef 969)\n  ret i8 %2\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&["-mabi=cdecl"]), text, "f").unwrap();
     let listing = llrm_core::backend::masm::text(&built).unwrap();
-    assert!(listing.contains("out dx") && listing.contains("in al, dx") && !listing.contains("__outportb__"), "{listing}");
+    assert!(
+        listing.contains("out dx") && listing.contains("in al, dx") && !listing.contains("__outportb__"),
+        "{listing}"
+    );
 }
