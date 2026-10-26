@@ -59,7 +59,9 @@ use crate::backend::isel::{Parameter, Selected, Unselected};
 use crate::model::ir::{Addr, Held, Mem, Space};
 use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 
-struct Info;
+struct Info {
+    source_order: bool,
+}
 
 impl SchedInfo for Info {
     fn num_defs(
@@ -81,6 +83,10 @@ impl SchedInfo for Info {
         opcode: u32,
     ) -> bool {
         llrm_dagisel::instr::desc(opcode as u16).is_some_and(|d| d.is_call())
+    }
+
+    fn source_order(&self) -> bool {
+        self.source_order
     }
 
     fn has_cross_copy_class(
@@ -273,7 +279,9 @@ fn modelled(
     if contract.control == llrm_qbruntime::Control::InlineTable {
         return Err("QB runtime routine that returns to an inline table");
     }
-    if contract.cleanup != Some(plan.popped) || plan.popped != pushed {
+    // The callee pops all it was pushed (16/32-bit routines), or the caller
+    // pops it and the routine cleans nothing (SysV, where QB calls are C).
+    if contract.cleanup != Some(plan.popped) || (plan.popped != pushed && plan.popped != 0) {
         return Err("QB runtime routine whose stack cleanup the convention does not model");
     }
     Ok(if contract.flags_result { RuntimeAnswer::Flags } else { RuntimeAnswer::Registers })
@@ -682,7 +690,7 @@ fn selected_in(
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)
         .with_jump_tables(cpu.target().costs().jump_table != 0)
-        .with_tail_calls(std::env::var_os("LLRM_TAIL_CALLS").is_some() || TAIL_CALLS.get())
+        .with_tail_calls(llrm_support::env_set("LLRM_TAIL_CALLS") || TAIL_CALLS.get())
         .with_tti(cpu.target().tti())
         .with_runtime_call_verdicts(
             contracts
@@ -865,7 +873,7 @@ fn selected_in(
             &mut X86Lowering { cmov: false, sse2: false },
             &selector,
             &mut hooks,
-            &Info,
+            &Info { source_order: bitness == 32 },
             &ctx,
             &mut state,
             block_at[&block.0],

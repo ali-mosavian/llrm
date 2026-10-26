@@ -17,13 +17,10 @@
 //!   slots   B E R D B E R D ...
 //! ```
 //!
-//! DEVIATE (representation, number): a `SlotIndex` also carries the entry's
-//! number and the arena epoch it was read in (LLVM's is only the tagged pointer
-//! and reads the entry's number on every compare). Two indexes of one epoch
-//! compare by those numbers; a renumbering bumps the epoch and a stale index is
-//! compared through the arena. Reading the arena was 16.4 M of 97 M
-//! instructions of the shadow allocator on chain-8 (17%); with the numbers
-//! carried it is inlined away. The index is 12 bytes, not 4.
+//! DEVIATE (representation): a `SlotIndex` is the entry's number cell, a
+//! reference to storage that is never freed, and the slot, so it compares by
+//! reading the cell as LLVM's reads the entry through its tagged pointer. The
+//! index is 16 bytes, not 8, and not `Send`.
 //!
 //! DEVIATE (container, no number): the entries live in a per-thread arena
 //! (parallel columns indexed by `EntryId`, `prev`/`next` links) instead of an
@@ -43,7 +40,7 @@
 //! # Used by
 //! `liverange` (the points of a live range), and the allocator's shadow core.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::fmt;
 use std::mem::ManuallyDrop;
@@ -63,11 +60,11 @@ const NONE: EntryId = u32::MAX;
 /// held in the arena as parallel columns.
 #[derive(Default)]
 struct Arena {
-    /// Bumped whenever entries are renumbered: a `SlotIndex` made in an earlier
-    /// epoch may carry a number the entry no longer has.
-    epoch: u16,
     instr: Vec<Option<InstrKey>>,
-    index: Vec<u32>,
+    /// The entry's number, in a cell a `SlotIndex` holds.
+    index: Vec<&'static Cell<u32>>,
+    /// Cells cut from the last chunk and not yet given to an entry.
+    spare: Vec<&'static Cell<u32>>,
     prev: Vec<EntryId>,
     next: Vec<EntryId>,
     free: Vec<EntryId>,
@@ -82,14 +79,13 @@ thread_local! {
     /// the list moves every index held anywhere without touching them.
     ///
     /// Never dropped: a type with a destructor makes every access check and
-    /// register its state through a call, which a stale compare pays 131 K
-    /// times on d_faces. The columns are emptied by `SlotIndexes::clear`; the
-    /// capacity is kept to the thread's end.
+    /// register its state through a call. The columns are emptied
+    /// by `SlotIndexes::clear`; the capacity is kept to the thread's end.
     static ARENA: ArenaCell = const {
         ManuallyDrop::new(RefCell::new(Arena {
-            epoch: 0,
             instr: Vec::new(),
             index: Vec::new(),
+            spare: Vec::new(),
             prev: Vec::new(),
             next: Vec::new(),
             free: Vec::new(),
@@ -100,7 +96,20 @@ thread_local! {
     static ANALYSED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
+/// How many number cells one chunk holds.
+const CHUNK: usize = 256;
+
 impl Arena {
+    /// A cell for a new entry. Chunks are leaked: an entry's cell outlives
+    /// every `SlotIndex` that holds it, and is reused with the entry's id.
+    fn cell(&mut self) -> &'static Cell<u32> {
+        if self.spare.is_empty() {
+            let chunk: &'static [Cell<u32>] = Box::leak((0..CHUNK).map(|_| Cell::new(0)).collect());
+            self.spare.extend(chunk);
+        }
+        self.spare.pop().expect("a chunk was just cut")
+    }
+
     fn create(
         &mut self,
         instr: Option<InstrKey>,
@@ -109,13 +118,15 @@ impl Arena {
         if let Some(id) = self.free.pop() {
             let at = id as usize;
             self.instr[at] = instr;
-            self.index[at] = index;
+            self.index[at].set(index);
             self.prev[at] = NONE;
             self.next[at] = NONE;
             return id;
         }
+        let cell = self.cell();
+        cell.set(index);
         self.instr.push(instr);
-        self.index.push(index);
+        self.index.push(cell);
         self.prev.push(NONE);
         self.next.push(NONE);
         (self.index.len() - 1) as EntryId
@@ -155,19 +166,15 @@ impl Slot {
 #[derive(Clone, Copy)]
 pub struct SlotIndex {
     lie: EntryId,
-    /// The entry's number when this was made and the epoch it was read in: two
-    /// indexes of one epoch compare by these without reading the arena (a
-    /// renumbering changes the epoch, and a stale index is compared through the
-    /// arena).
-    number: u32,
-    epoch: u16,
+    /// The entry's number, read on every compare (`IndexListEntry::getIndex`).
+    cell: Option<&'static Cell<u32>>,
     slot: u8,
 }
 
 impl Default for SlotIndex {
     /// An invalid index.
     fn default() -> Self {
-        Self { lie: NONE, number: 0, epoch: 0, slot: 0 }
+        Self { lie: NONE, cell: None, slot: 0 }
     }
 }
 
@@ -181,7 +188,7 @@ impl SlotIndex {
     ) -> Self {
         ARENA.with(|arena| {
             let arena = arena.borrow();
-            Self { lie: entry, number: arena.index[entry as usize], epoch: arena.epoch, slot: slot as u8 }
+            Self { lie: entry, cell: Some(arena.index[entry as usize]), slot: slot as u8 }
         })
     }
 
@@ -200,7 +207,7 @@ impl SlotIndex {
     }
 
     fn entry_index(&self) -> u32 {
-        ARENA.with(|arena| arena.borrow().index[self.list_entry() as usize])
+        self.cell.expect("Attempt to compare reserved index.").get()
     }
 
     /// The number: the entry's index with the slot in the low bits.
@@ -235,7 +242,7 @@ impl SlotIndex {
         a: &SlotIndex,
         b: &SlotIndex,
     ) -> bool {
-        if a.epoch == b.epoch { a.number < b.number } else { a.entry_index() < b.entry_index() }
+        a.entry_index() < b.entry_index()
     }
 
     pub fn is_earlier_equal_instr(
@@ -356,35 +363,13 @@ impl PartialOrd for SlotIndex {
 }
 
 impl Ord for SlotIndex {
-    /// Two indexes of one epoch compare by the numbers they carry, inline like
-    /// `SlotIndex::operator<`'s two loads; a stale one goes to the arena.
+    /// `SlotIndex::operator<`: the two entries' numbers.
     #[inline(always)]
     fn cmp(
         &self,
         other: &Self,
     ) -> Ordering {
-        debug_assert!(self.lie != NONE && other.lie != NONE, "Attempt to compare reserved index.");
-        if self.epoch == other.epoch {
-            return (self.number | u32::from(self.slot)).cmp(&(other.number | u32::from(other.slot)));
-        }
-        self.cmp_stale(other)
-    }
-}
-
-impl SlotIndex {
-    /// `cmp` after a renumbering: one borrow of the arena for both numbers.
-    #[cold]
-    #[inline(never)]
-    fn cmp_stale(
-        &self,
-        other: &Self,
-    ) -> Ordering {
-        ARENA.with(|arena| {
-            let arena = arena.borrow();
-            let a = arena.index[self.list_entry() as usize] | u32::from(self.slot);
-            let b = arena.index[other.list_entry() as usize] | u32::from(other.slot);
-            a.cmp(&b)
-        })
+        self.get_index().cmp(&other.get_index())
     }
 }
 
@@ -749,8 +734,8 @@ impl SlotIndexes {
             };
             // Get a number for the new instr, or 0 if there's no room
             // currently.
-            let dist = ((arena.index[next_entry as usize] - arena.index[prev_entry as usize]) / 2) & !3u32;
-            let new_number = arena.index[prev_entry as usize] + dist;
+            let dist = ((arena.index[next_entry as usize].get() - arena.index[prev_entry as usize].get()) / 2) & !3u32;
+            let new_number = arena.index[prev_entry as usize].get() + dist;
             let entry = arena.create(Some(instr), new_number);
             arena.prev[entry as usize] = prev_entry;
             arena.next[entry as usize] = next_entry;
@@ -833,18 +818,17 @@ impl SlotIndexes {
         // quickly.
         const SPACE: u32 = SlotIndex::INSTR_DIST / 2;
         let (begin_index, index) = ARENA.with(|arena| {
-            let mut arena = arena.borrow_mut();
-            arena.epoch = arena.epoch.wrapping_add(1);
+            let arena = arena.borrow_mut();
             let start = arena.prev[cur as usize];
-            let mut index = arena.index[start as usize];
+            let mut index = arena.index[start as usize].get();
             let begin_index = index;
             let mut at = cur;
             loop {
                 index += SPACE;
-                arena.index[at as usize] = index;
+                arena.index[at as usize].set(index);
                 at = arena.next[at as usize];
                 // If the next index is bigger, we have caught up.
-                if at == NONE || arena.index[at as usize] > index {
+                if at == NONE || arena.index[at as usize].get() > index {
                     break;
                 }
             }
@@ -862,12 +846,11 @@ impl SlotIndexes {
     /// `packIndexes`: renumbers all indexes using the default distance.
     pub fn pack_indexes(&mut self) {
         ARENA.with(|arena| {
-            let mut arena = arena.borrow_mut();
-            arena.epoch = arena.epoch.wrapping_add(1);
+            let arena = arena.borrow_mut();
             let mut at = self.first;
             let mut number = 0u32;
             while at != NONE {
-                arena.index[at as usize] = number * SlotIndex::INSTR_DIST;
+                arena.index[at as usize].set(number * SlotIndex::INSTR_DIST);
                 number += 1;
                 at = arena.next[at as usize];
             }
@@ -943,7 +926,7 @@ impl SlotIndexes {
             while at != NONE {
                 out.push_str(&format!(
                     "{} {}\n",
-                    arena.index[at as usize],
+                    arena.index[at as usize].get(),
                     arena.instr[at as usize].map_or("-".to_owned(), |one| one.to_string())
                 ));
                 at = arena.next[at as usize];
@@ -963,6 +946,22 @@ mod tests {
     use super::*;
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
+
+    /// Comparing and numbering read the entry's cell, not the arena: with the
+    /// arena borrowed for writing they still work. Through the arena each
+    /// `get_index` was a thread-local access and a borrow (10 M Ir on d_faces
+    /// -O2, and a panic here).
+    #[test]
+    fn test_compare_and_number_do_not_read_the_arena() {
+        let body = body(&[3]);
+        let indexes = SlotIndexes::new(&body);
+        let (a, b) = (indexes.get_zero_index(), indexes.get_last_index());
+        ARENA.with(|arena| {
+            let _held = arena.borrow_mut();
+            assert!(a < b && a.distance(&b) > 0 && SlotIndex::is_earlier_instr(&a, &b));
+            assert_eq!(a.get_index() | 3, a.get_boundary_index().get_index());
+        });
+    }
 
     /// A thread-local with a destructor is reached through a registration
     /// check and a call on every access: 48 Ir a stale compare, 131 K of them
