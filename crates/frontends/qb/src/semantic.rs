@@ -601,6 +601,7 @@ pub fn compile_debugged(
     }
     shapes::applied(&mut compiler);
     absolute::applied(&mut compiler);
+    absolute::varseg(&mut compiler);
     Ok((compiler.json(), std::mem::take(&mut compiler.warnings)))
 }
 
@@ -3621,6 +3622,20 @@ impl Compiler {
                         self.select_block(continuation);
                     }
                     "BLOAD" | "BSAVE" => self.binary_memory_statement(name, arguments)?,
+                    "STOP" | "RESET" => {
+                        if !arguments.is_empty() {
+                            return self.fail(format!("{name} takes no arguments"));
+                        }
+                        if name == "RESET" {
+                            self.emit_runtime_call("B$REST", Vec::new(), Vec::new());
+                        } else {
+                            // B$STOP does not return, as B$CEND does not.
+                            self.emit_runtime_call("B$STOP", Vec::new(), Vec::new());
+                            self.terminate("unreachable", Vec::new(), Vec::new())?;
+                            let continuation = self.new_block();
+                            self.select_block(continuation);
+                        }
+                    }
                     "KILL" | "MKDIR" | "CHDIR" | "RMDIR" | "ENVIRON" => {
                         let [path] = arguments.as_slice() else {
                             return self.fail(format!("{name} takes one file or directory name"));
