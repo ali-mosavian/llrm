@@ -594,7 +594,7 @@ fn the_chosen_abi_spells_clang_functions_without_a_convention() {
                 define i32 @main() {\n  ret i32 0\n}\n";
     let flags = flags(&["-fobject-format=omf", "-mabi=watcom"]);
     let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
-    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("public main_") && !listing.contains("_main"), "{listing}");
 }
 
@@ -609,7 +609,7 @@ fn the_chosen_abi_passes_arguments_of_functions_without_a_convention() {
                 define i32 @main() {\n  %1 = call i32 @ext(i32 11, i32 22)\n  ret i32 %1\n}\n";
     let flags = flags(&["-fobject-format=omf", "-mabi=watcom"]);
     let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
-    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(
         listing.contains("mov eax, 11") && listing.contains("mov edx, 22") && !listing.contains("pushd"),
         "{listing}"
@@ -628,7 +628,7 @@ fn variables_keep_the_leading_underscore_under_the_watcom_abi() {
                 define i32 @main() {\n  %1 = load i32, ptr @__iob\n  ret i32 %1\n}\n";
     let flags = flags(&["-fobject-format=omf", "-mabi=watcom"]);
     let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
-    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(
         listing.contains("public _counter") && listing.contains("__iob") && !listing.contains("__iob_"),
         "{listing}"
@@ -646,7 +646,7 @@ fn an_asm_label_is_the_symbol_as_written() {
                 define void @main() {\n  call void @\"\\01B$SINCOS\"()\n  ret void\n}\n";
     let flags = flags(&["-fobject-format=omf"]);
     let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
-    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("B$SINCOS") && !listing.contains("_B$SINCOS"), "{listing}");
 }
 
