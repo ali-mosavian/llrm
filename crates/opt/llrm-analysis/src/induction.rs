@@ -862,6 +862,50 @@ fn _proven(
             }
         }
     }
+    // A wide counter tested through a truncation, which equality sees as the
+    // narrow counter of the same low bits: LSR keeps the wide value a store
+    // reads and tests `trunc(i + 1) == 20000`. Only a loop tested at its
+    // latch, for equality, so no wrap promise of the wide step is read.
+    let mut narrow: BTreeMap<ValueId, bool> = BTreeMap::new();
+    if shape.posttested && continuing == IntPredicate::Ne {
+        for (counter, source) in counters.clone() {
+            let Some(phi) = defining(function, source).filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
+            else {
+                continue;
+            };
+            let Some(Operand::Value(update)) = incoming(function, phi, cfg::block(latch)) else { continue };
+            let (AffineOperand::Const(start), AffineOperand::Const(step)) = (&counter.start, &counter.step) else {
+                continue;
+            };
+            if counter.value != source {
+                continue;
+            }
+            for (of, stepped) in [(source, false), (update, true)] {
+                for one in function.users(of) {
+                    let user = function.instruction(one.user);
+                    let Some(result) = user.result.filter(|_| user.opcode == Opcode::Cast(CastOp::Trunc)) else {
+                        continue;
+                    };
+                    let Some(width) = unit.int_bits(Operand::Value(result)).filter(|&width| width < start.width) else {
+                        continue;
+                    };
+                    if !function.parent(one.user).is_some_and(|block| inside.contains(&cfg::id(block))) {
+                        continue;
+                    }
+                    narrow.insert(result, stepped);
+                    counters.push((
+                        Affine {
+                            value: result,
+                            start: AffineOperand::constant(start.n.clone(), width),
+                            step: AffineOperand::constant(step.n.clone(), width),
+                            header: counter.header,
+                        },
+                        source,
+                    ));
+                }
+            }
+        }
+    }
     let mut proven = Vec::new();
     for (counter, source) in &counters {
         let Some(phi) = defining(function, *source).filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
@@ -869,8 +913,9 @@ fn _proven(
             continue;
         };
         let Some(Operand::Value(update)) = incoming(function, phi, cfg::block(latch)) else { continue };
-        let mut tested = BTreeMap::from([(counter.value, false)]);
-        if shape.posttested {
+        let narrowed = narrow.get(&counter.value).copied();
+        let mut tested = BTreeMap::from([(counter.value, narrowed.unwrap_or(false))]);
+        if shape.posttested && narrowed.is_none() {
             tested.insert(update, true);
         }
         let Some((width, bound, mirrored, stepped)) = _compared(unit, icmp, &tested) else { continue };
@@ -884,6 +929,9 @@ fn _proven(
             &bound,
             AffineOperand::Value(value, _) if !still.contains(*value)
         ) {
+            continue;
+        }
+        if narrowed.is_some() && test != IntPredicate::Ne {
             continue;
         }
         let zero = BigInt::from(0);
@@ -940,6 +988,7 @@ fn _proven(
         // equal.
         let mut equal = start.clone();
         if count.is_none()
+            && narrowed.is_none()
             && let Some((entry, rewinds)) = _carried(unit, loop_, &start, *source, update, width)
             && let (entered, Some(trips)) = counted_from(&entry)
             && rewinds.iter().all(|(stepped_root, offset)| {
