@@ -423,6 +423,25 @@ fn address_of(
     }
 }
 
+/// Whether folding `address` (made from the register `held` and a global)
+/// into an access in `block` extends no live range that is not folded away:
+/// `held` is read in `block`, or `address` is read only as memory addresses.
+fn register_free(
+    unit: &passes::Unit,
+    block: BlockId,
+    held: Operand,
+    address: Operand,
+) -> bool {
+    let live = match held {
+        Operand::Value(v) => unit.function.users(v).iter().any(|one| unit.function.parent(one.user) == Some(block)),
+        _ => true,
+    };
+    live || matches!(
+        address,
+        Operand::Value(v) if crate::spill::address_only(unit.function, v, DEPTH)
+    )
+}
+
 fn is_global(
     context: &Context,
     operand: Operand,
@@ -529,7 +548,14 @@ fn matched(
     let index = match (variable.first(), inner.index) {
         // `BaseGV + BaseReg + ScaledReg`: the earlier index is a register of
         // scale 1 beside the global.
-        (Some(&(at, scale)), Some((held, 1))) if reg.is_none() && is_global(unit.context, inner.base) => {
+        // `isProfitableToFoldIntoAddressingMode`: only when the register is
+        // read in the access's block already, or every read of the address it
+        // makes is a memory access that folds it too.
+        (Some(&(at, scale)), Some((held, 1)))
+            if reg.is_none()
+                && is_global(unit.context, inner.base)
+                && register_free(unit, block, held, instruction.operands[0]) =>
+        {
             reg = Some(held);
             Some((instruction.operands[1 + at], scale))
         }
