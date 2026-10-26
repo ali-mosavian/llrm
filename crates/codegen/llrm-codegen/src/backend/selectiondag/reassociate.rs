@@ -1,5 +1,6 @@
-//! `reassociateOps`: a commutative `op` of an `op` and a third value, grouped
-//! so constants meet and a node already built is reused.
+//! `reassociateOps` for add, mul, and, or and xor: a commutative `op` of an
+//! `op` and a third value, grouped so constants meet and a node already built
+//! is reused.
 //!
 //! `(add (add x, 4), y)` is `(add (add x, y), 4)`: the constant moves out where
 //! the matcher folds it into one `lea`. `(add (add x, 4), 5)` is `(add x, 9)`.
