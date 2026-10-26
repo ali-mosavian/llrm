@@ -77,6 +77,10 @@ pub struct RealMode {
     /// instructions, not bytes); 16-bit code names it so a size row never
     /// grows.
     pub inline_size_guard: bool,
+    /// What an instruction that touches a float takes in code, in percent of
+    /// its `CodeSize` units: x87 moves each operand through the register
+    /// stack (`qmove`: the model tied where the code grew 2 bytes).
+    pub float_code_size_percent: i64,
 }
 
 impl RealMode {
@@ -488,10 +492,8 @@ impl Tti for X86 {
         150
     }
 
-    /// x87 moves each operand through the register stack (`qmove`: the model
-    /// tied where the code grew 2 bytes).
     fn float_code_size_percent(&self) -> i64 {
-        if self.real_mode.is_some() { 200 } else { 100 }
+        self.real_mode.as_ref().map_or(100, |real| real.float_code_size_percent)
     }
 
     fn is_type_legal(
