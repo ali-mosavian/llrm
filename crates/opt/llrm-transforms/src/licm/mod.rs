@@ -706,10 +706,12 @@ fn promotion_round(
             if let Some(room) = room.as_mut()
                 && pressure::counts_type(unit, found.access_ty)
             {
-                if *room == 0 {
-                    continue;
+                if !promote::frees_addresses(unit, ctx, &candidate.pointers) {
+                    if *room == 0 {
+                        continue;
+                    }
+                    *room -= 1;
                 }
-                *room -= 1;
             }
             promote::take_out_of_loop(unit, ctx, preheader, &found);
             promoted.push(found);
