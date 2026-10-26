@@ -9,7 +9,7 @@ use super::function_lowering::FunctionLoweringInfo;
 
 #[test]
 fn an_invoke_is_a_call_then_a_branch_to_the_normal_block() {
-    let text = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"\n\
+    let text = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"\n\
         declare void @g()\ndeclare i32 @p(...)\n\
         define void @f() personality ptr @p {\n  invoke void @g() to label %ok unwind label %pad\n\
         ok:\n  ret void\n\

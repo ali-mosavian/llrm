@@ -141,3 +141,22 @@ fn the_object_format_goes_to_the_backend_and_omax_is_clangs_o3() {
     assert_eq!(one.clang, words("-O3"));
     assert_eq!(one.level, "max");
 }
+
+/// The m16 datalayout is stated in the target's `datalayout.toml` and again in
+/// every m16 row of the table, and clang's own (the fork's `I8086.h`). A row
+/// that drifted compiled with another `long double` layout than the backend
+/// laid out: clang refused `struct { char c; long double v; short s; }` with a
+/// static initializer ("cannot compile this static initializer yet") while the
+/// default `f80` was 128 bits.
+#[test]
+fn every_m16_row_states_the_targets_datalayout() {
+    let target: toml::Table =
+        include_str!("../../../target/llrm-x86-m16/src/machines/datalayout.toml").parse().unwrap();
+    let stated = target["datalayout"].as_str().unwrap();
+    let table = targets(TARGETS).unwrap();
+    for name in ["x86_16-dos", "x86_16-bcc", "x86_16-wat"] {
+        let row = table[name].datalayout.replace("-ni:2:3", "");
+        assert_eq!(row, stated, "{name}");
+    }
+    assert!(stated.contains("-f80:16-"), "{stated}");
+}

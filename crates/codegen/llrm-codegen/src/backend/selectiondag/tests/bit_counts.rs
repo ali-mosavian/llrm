@@ -142,7 +142,7 @@ fn cttz_of_a_word_at_m16_is_promoted_like_m32() {
 /// of the sentinel bit and a `bsf`. `ctlz` and `bswap` select too.
 #[test]
 fn bit_scans_and_bswap_select_at_m16() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 declare i16 @llvm.cttz.i16(i16, i1)
 declare i32 @llvm.ctlz.i32(i32, i1)
 declare i32 @llvm.bswap.i32(i32)

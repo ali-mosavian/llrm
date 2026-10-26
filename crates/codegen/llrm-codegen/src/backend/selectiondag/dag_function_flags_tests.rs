@@ -169,7 +169,7 @@ fn two_selects_on_one_compare_are_one_branch() {
     assert!(phis.contains(&2), "one sink block with both phis: {phis:?}");
 }
 
-const M16_SELECT_IN_ARGUMENT: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+const M16_SELECT_IN_ARGUMENT: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 declare void @g(i64)
 define void @f(i64 %x, i64 %n) {
 entry:
@@ -198,7 +198,7 @@ fn a_runtime_call_answering_in_the_flags_says_so() {
     assert_eq!(verdicts(true), [Ok(super::builder::RuntimeAnswer::Flags)]);
 }
 
-const DEAD_DEFAULT: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+const DEAD_DEFAULT: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define i16 @f(i16 %x) {
 entry:
   switch i16 %x, label %dead [ i16 1, label %a ]
@@ -209,7 +209,7 @@ dead:
 }
 ";
 
-const CONSTANT_BRANCH: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+const CONSTANT_BRANCH: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define i16 @f(i16 %x) {
 entry:
   br i1 false, label %a, label %b
@@ -250,7 +250,7 @@ fn a_block_no_edge_reaches_is_dropped() {
     assert_eq!(seen.len(), done.body.blocks.len(), "{} blocks, {} reached", done.body.blocks.len(), seen.len());
 }
 
-const I1_FREEZE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+const I1_FREEZE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define i16 @f(i1 %a, i16 %x) {
 entry:
   %f = freeze i1 %a
@@ -269,7 +269,7 @@ fn an_i1_freeze_is_selected() {
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
 
-const M16_REMAINDER_TWICE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+const M16_REMAINDER_TWICE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define i8 @f(ptr %p, i16 %a, i16 %b) {
 entry:
   %r = srem i16 %a, %b
@@ -685,7 +685,7 @@ fn a_fixed_point_multiply_is_a_widening_multiply_and_a_funnel_shift() {
     assert!(names.iter().any(|n| n == "shrd"), "{names:?}");
 }
 
-const ASM_TWO_OUTPUTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const ASM_TWO_OUTPUTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define i32 @f() addrspace(1) {
 entry:
   %r = call { i16, i16 } @llrm.ia16.asm.cd1a.-.cx_dx.ax.n()
@@ -711,7 +711,7 @@ fn an_inline_block_with_two_outputs_is_selected() {
     assert!(done.inline.values().any(|bytes| bytes[..] == [0xCD, 0x1A]), "{:?}", done.inline);
 }
 
-const COMPARE_WITH_ONE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+const COMPARE_WITH_ONE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 declare i16 @g()
 define i16 @f() {
 entry:
