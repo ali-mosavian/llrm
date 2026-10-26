@@ -121,3 +121,21 @@ def test_only_four_builds_hold_a_slot_at_once(tmp_path):
         p.wait(timeout=60)
     starts = sorted(float(x) for x in log.read_text().split())
     assert len(starts) == 5 and starts[4] - starts[0] >= 1.8 and starts[3] - starts[0] < 1.0, starts
+
+
+def test_waiters_get_a_slot_in_arrival_order_and_a_priority_ticket_jumps_the_queue(tmp_path):
+    """A dist build holding the shared dist lock waited 44 minutes for a slot while short tests kept taking it: random polling is not a queue."""
+    import time
+
+    script = str(Path(__file__).resolve().parent / "buildslot")
+    log = tmp_path / "order"
+    env = {**os.environ, "BUILDSLOT_DIR": str(tmp_path / "slots"), "BUILDSLOTS": "1", "BUILDSLOT_POLL": "0.1"}
+    holder = subprocess.Popen([script, "sh", "-c", "sleep 1.5"], env=env)
+    time.sleep(0.3)
+    waiters = []
+    for name, extra in (("first", {}), ("second", {}), ("urgent", {"BUILDSLOT_PRIORITY": "0"})):
+        waiters.append(subprocess.Popen([script, "sh", "-c", f"echo {name} >> {log}; sleep 0.2"], env={**env, **extra}))
+        time.sleep(0.2)
+    for p in (holder, *waiters):
+        p.wait(timeout=60)
+    assert log.read_text().split() == ["urgent", "first", "second"], log.read_text()
