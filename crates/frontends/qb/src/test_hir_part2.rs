@@ -888,7 +888,7 @@ fn test_on_error_registrations_follow_source_order() {
     assert_eq!(registered, ["push offset $QB$LANDING", "push offset $QB$LANDING", "pushd 0"], "{main}");
     let states: Vec<u32> = lines
         .iter()
-        .filter_map(|line| line.strip_prefix("mov word ptr ss:$QB$FRAME, "))
+        .filter_map(|line| line.strip_prefix("mov word ptr $QB$FRAME, "))
         .map(|state| state.parse().expect("a statement number"))
         .collect();
     assert!(states.len() == 3 && states.windows(2).all(|pair| pair[0] < pair[1]), "{main}");
