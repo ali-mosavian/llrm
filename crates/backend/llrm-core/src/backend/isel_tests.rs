@@ -863,7 +863,7 @@ fn test_initializers_are_bytes_and_relocations() {
 ";
     let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
     let names =
-        crate::backend::globals::names(&module, &llrm_x86_m16::spaces(), &|name| qb().linked(name)).expect("names");
+        crate::backend::globals::names(&module, &llrm_x86_m16::spaces(), &|name, _| qb().linked(name)).expect("names");
     let rec = module.named("rec").expect("@rec");
     let pointer = |name: &str, offset, far| {
         Datum::Pointer(Pointer { name: name.to_owned(), offset, far, bytes: if far { 4 } else { 2 } })
@@ -6020,7 +6020,7 @@ fn test_an_undef_initializer_is_zero_bytes() {
     let text = "@u = internal global i16 undef\n@s = internal global { i8, i16 } undef\n";
     let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
     let names =
-        crate::backend::globals::names(&module, &llrm_x86_m16::spaces(), &|name| qb().linked(name)).expect("names");
+        crate::backend::globals::names(&module, &llrm_x86_m16::spaces(), &|name, _| qb().linked(name)).expect("names");
     let datums = |name: &str| {
         crate::backend::globals::datums(&module, module.named(name).expect("a global"), &names).expect("data")
     };
@@ -6038,7 +6038,7 @@ fn test_a_poison_hole_in_a_lookup_table_is_a_zero_byte() {
     let text = "@t = private constant [4 x i8] [i8 1, i8 poison, i8 poison, i8 4]\n";
     let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
     let names =
-        crate::backend::globals::names(&module, &llrm_x86_m16::spaces(), &|name| qb().linked(name)).expect("names");
+        crate::backend::globals::names(&module, &llrm_x86_m16::spaces(), &|name, _| qb().linked(name)).expect("names");
     let datums = crate::backend::globals::datums(&module, module.named("t").expect("a global"), &names).expect("data");
     assert_eq!(datums, [Datum::Label(Label { name: "t".to_owned() }), Datum::Bytes(vec![1, 0, 0, 4])]);
 }

@@ -490,3 +490,16 @@ fn a_far_global_over_64k_runs_on_into_a_second_far_segment() {
     assert!(listing.contains("h_DATA segment para public 'FAR_DATA'"), "{listing}");
     assert!(listing.contains("h_DATA_1 segment para public 'FAR_DATA'"), "{listing}");
 }
+
+/// A function read from LLVM IR linked under its bare name whatever its
+/// convention, so a C function never met its callers' `_f` and a pascal one
+/// its assembly's `F`. The name is the convention's spelling (`calling.toml`).
+#[test]
+fn a_function_from_llvm_ir_is_named_as_its_calling_convention_spells_it() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n\
+                define i16 @f(i16 %a) {\n  ret i16 %a\n}\n\
+                define cc 1000 i16 @p(i16 %a) {\n  ret i16 %a\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m16"]), text, "m").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("public _f\n") && listing.contains("public P\n"), "{listing}");
+}

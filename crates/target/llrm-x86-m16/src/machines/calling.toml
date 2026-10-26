@@ -1,5 +1,5 @@
 # The ABI a program has without -mabi=, and, for each ABI, the convention an unmarked function has under it.
-default = "regparm3"
+default = "cdecl"
 
 [abi.cdecl]
 convention = "cdecl16"

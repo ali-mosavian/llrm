@@ -321,7 +321,7 @@ pub fn compiled_module(
     let assembled = timed("assemble", || {
         assemble::assembled_by(
             &program.modules[0],
-            &crate::abi::llvm::LlvmAbi,
+            &crate::abi::llvm::LlvmAbi { calling: options.arch.calling(), format: options.object_format },
             &format!("{}_TEXT", name.to_uppercase()),
             ProfileOrName::Profile(cpu),
             &segments,

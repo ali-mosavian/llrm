@@ -108,6 +108,15 @@ pub trait Abi {
         &self,
         name: &str,
     ) -> String;
+    /// The symbol of a function of calling convention `convention`: where the
+    /// convention spells names (`calling.toml`'s `symbol`), its spelling.
+    fn symbol(
+        &self,
+        name: &str,
+        _convention: u32,
+    ) -> String {
+        self.linked(name)
+    }
     /// Whether a call of a `llrm.qb.` routine has a contract of its own (stack
     /// arguments, flags results, the registers it keeps), which the DAG path
     /// checks against its convention call by call.
@@ -165,7 +174,7 @@ pub fn assembled_by(
     let cpu = crate::backend::cpu::profile(cpu)?;
     let module = &*timed("mir near code", || crate::backend::nearcode::placed(module, &arch.layout().spaces.roles));
     let mut names =
-        timed("global names", || globals::names(module, &arch.layout().spaces.roles, &|name| abi.linked(name)))?;
+        timed("global names", || globals::names(module, &arch.layout().spaces.roles, &|name, convention| abi.symbol(name, convention)))?;
     names.extend(crate::hir::symbols::symbol_names());
     let mut procedures = Vec::new();
     let mut referenced: IndexMap<String, bool> = IndexMap::default();

@@ -878,7 +878,7 @@ pub fn assembled(
     options: &Options,
 ) -> Result<masm::Module, String> {
     let abi = object_abi(object, runtime);
-    let mut names = globals::names(module, &options.arch.layout().spaces.roles, &|name| abi.linked(name))?;
+    let mut names = globals::names(module, &options.arch.layout().spaces.roles, &|name, _| abi.linked(name))?;
     // A symbol the frontend states stands as it is, BASIC's type suffix and
     // all.
     for (at, global) in module.globals.iter().enumerate() {

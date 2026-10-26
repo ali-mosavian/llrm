@@ -101,7 +101,7 @@ const SEGMENTS: i64 = 1 << 22;
 pub fn names(
     module: &Module,
     spaces: &llrm_mir::spaces::Spaces,
-    linked: &dyn Fn(&str) -> String,
+    linked: &dyn Fn(&str, u32) -> String,
 ) -> Result<IndexMap<(Space, i64), String>, String> {
     let mut out = IndexMap::default();
     for (at, global) in module.globals.iter().enumerate() {
@@ -110,7 +110,8 @@ pub fn names(
         if global.name.as_deref().is_some_and(llrm_mir::intrinsics::is_reserved) {
             continue;
         }
-        let name = linked(global.name.as_deref().unwrap_or_default());
+        let convention = global.function().map_or(0, |one| one.calling_convention);
+        let name = linked(global.name.as_deref().unwrap_or_default(), convention);
         let symbol = if is_symbol(&name) {
             name
         } else if global.linkage == llrm_mir::Linkage::External {
