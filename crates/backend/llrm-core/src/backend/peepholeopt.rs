@@ -451,8 +451,8 @@ fn constant_move(one: &Insn) -> Option<(u32, Imm)> {
 /// `foldImmediateImpl`'s `COPY` case: `d := mov c` of a register a `mov` set to
 /// a constant is a `mov` of the constant at the copy, where the register-class
 /// allows it (a 32-bit or 8-bit register, as the pin's `MOV32ri` and `MOV8ri`).
-/// A zero is `MOV32r0`, which clobbers the flags, so only where nothing reads
-/// them afterwards in the block.
+/// A zero is `MOV32r0`, which clobbers the flags, so only where the flags are
+/// written before they are read (`flags_dead`).
 fn copy_folded(
     one: &Insn,
     after: &[Arc<Insn>],
@@ -475,7 +475,7 @@ fn copy_folded(
         return None;
     }
     let (_, imm) = constants.get(&source.value)?;
-    if (size && reads.get(&source.value).copied().unwrap_or(0) > 1) || (imm.value == 0 && flags_read(after)) {
+    if (size && reads.get(&source.value).copied().unwrap_or(0) > 1) || (imm.value == 0 && !flags_dead(after)) {
         return None;
     }
     let mut folded = one.clone();
@@ -485,22 +485,29 @@ fn copy_folded(
     Some((folded, source.value))
 }
 
-/// Whether an instruction of `after` reads the flags: a conditional branch,
-/// `setcc`, `cmovcc`, `adc` or `sbb`.
-fn flags_read(after: &[Arc<Insn>]) -> bool {
-    after
-        .iter()
-        .any(
-            |one| one.what
-                .as_ref()
-                .is_some_and(
-                    |what| {
-                        let name = what.name.as_deref().unwrap_or("");
-                        (what.op == Operation::Branch && name != "jmp")
-                            || ["cmov", "set", "adc", "sbb"].iter().any(|prefix| name.starts_with(prefix))
-                    },
-                ),
+/// `computeRegisterLiveness(EFLAGS, UseMI) == LQR_Dead`: the flags are written
+/// before they are read, within the ten instructions after the copy. A block
+/// that ends first leaves them unknown, as the pin finds them.
+fn flags_dead(after: &[Arc<Insn>]) -> bool {
+    for one in after.iter().filter(|one| !one.is_meta()).take(10) {
+        let Some(what) = one.what.as_ref() else { continue };
+        let name = what.name.as_deref().unwrap_or("");
+        if (what.op == Operation::Branch && name != "jmp")
+            || ["cmov", "set", "adc", "sbb"].iter().any(|prefix| name.starts_with(prefix))
+        {
+            return false;
+        }
+        if matches!(
+            what.op,
+            Operation::Binary | Operation::Compare | Operation::Unary
         )
+            && ["add", "sub", "and", "or", "xor", "cmp", "test", "inc", "dec", "neg", "shl", "shr", "sar"]
+                .contains(&name)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// `one` with its first constant operand an immediate, and the register that
@@ -876,5 +883,30 @@ mod tests {
             insn(3, Operation::Branch, "jl", vec![], vec![], vec![], vec![]),
         ]);
         assert_eq!(immediates_folded(&body, false), body);
+    }
+
+    /// x_funcptr: the zero copies at the end of the preheader, ahead of the
+    /// jump table, stay copies (the flags are unknown there, as in the
+    /// pin), so the zero keeps its place at the head of the block.
+    #[test]
+    fn test_a_copy_of_zero_at_the_end_of_a_block_stays() {
+        let body = body_of(vec![
+            mov_const(0, 1, 0),
+            insn(1, Operation::Move, "mov", vec![held(2)], vec![held(1)], vec![2], vec![1]),
+            insn(2, Operation::Branch, "jmp", vec![], vec![], vec![], vec![]),
+        ]);
+        assert_eq!(immediates_folded(&body, false), body);
+    }
+
+    /// With an `and` after it that writes the flags, the zero copy is folded.
+    #[test]
+    fn test_a_copy_of_zero_ahead_of_a_flag_write_is_folded() {
+        let body = body_of(vec![
+            mov_const(0, 1, 0),
+            insn(1, Operation::Move, "mov", vec![held(2)], vec![held(1)], vec![2], vec![1]),
+            insn(2, Operation::Binary, "and", vec![held(4)], vec![held(3), constant(3)], vec![4], vec![3]),
+            insn(3, Operation::Branch, "jmp", vec![], vec![], vec![], vec![]),
+        ]);
+        assert_eq!(immediates_folded(&body, false).blocks[0].insns[1].what.as_ref().unwrap().sources, [constant(0)]);
     }
 }
