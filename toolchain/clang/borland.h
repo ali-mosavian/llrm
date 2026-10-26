@@ -3,7 +3,6 @@
    attribute, numbered for llrm. */
 #define __BORLANDC__ 0x0410
 #define __TURBOC__ 0x0410
-#define __MEDIUM__ 1
 #define __MSDOS__ 1
 #define near __near__
 #define __near __near__
