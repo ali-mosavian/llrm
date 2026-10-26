@@ -50,3 +50,31 @@ def test_a_program_folded_on_main_is_marked_tiny_not_listed_as_a_12x_slowdown():
     assert readiness.tiny({"rows": rows}) == {"floor.c", "folded.c"}
     lines = readiness.report(["h"], {}, ([("folded.c", 237, 2893)], 3), {"folded.c"})
     assert any(line.startswith("  folded.c tiny") for line in lines) and "1 of them tiny" in " ".join(lines)
+
+
+def test_the_larger_list_is_grouped_by_owner_from_the_causes_file_then_the_flag_owner_and_blank_rows_stay_visible():
+    """The coordinator asked for the 139 larger programs per owner; a program nobody holds is listed under (none), never dropped."""
+    rules = [{"match": "nbody_fixed/*", "owner": "w-10"}, {"match": "*/x.c", "owner": "unassigned"}]
+    larger = [("nbody_fixed/a.nib", 10, 30), ("m/x.c", 10, 20), ("q/y.bas", 10, 15), ("z/w.c", 1, 2)]
+    groups = readiness.by_owner(larger, rules, {"q/y.bas": "tree-ch"})
+    assert list(groups) == ["w-10", "(none)", "w5"] and [r[0] for r in groups["(none)"]] == ["m/x.c", "z/w.c"]
+    lines = readiness.report(["h"], {"-Os": (larger, 4, 0, 0)}, None, owners=(rules, {"q/y.bas": "tree-ch"}))
+    assert "  w-10: 1 programs, +20 B" in lines and "  (none): 2 programs, +11 B" in lines
+
+
+def test_flag_first_reads_both_ablation_json_layouts():
+    """The cache m16burndown writes is flag -> program -> bytes; w13's earlier file was program -> {tip, flag: bytes}. Read as the wrong one, no program got a flag owner (104 of 138 blank)."""
+    flag_first = {"-fno-tree-ch": {"a.c": 90}, "-fno-lsr": {"a.c": 99}}
+    program_first = {"a.c": {"base": 80, "tip": 100, "-fno-tree-ch": 90, "-fno-lsr": 99}}
+    assert readiness.flag_first(flag_first) == flag_first
+    assert readiness.flag_first(program_first) == flag_first
+
+
+def test_a_two_flag_cause_goes_to_the_first_flag_with_an_owner_and_a_program_no_flag_moves_is_ra_peephole_not_none():
+    """104 of 138 growers read `(none)`; 69 of them were programs no pass flag moves, 14 had two flags moving them equally."""
+    ablation = {"a": "multi: sroa+tree-pre", "b": "multi: gcse+tree-ch", "c": "RA/peephole", "d": "gcse"}
+    assert [readiness.owner_of(name, [], ablation) for name in "abcd"] == ["w14", "w5", "RA/peephole", ""]
+
+
+def test_the_causes_file_spelling_w_dash_n_is_the_same_owner_as_wn():
+    assert readiness.owner_of("a", [{"match": "a", "owner": "w-2"}], {}) == "w2" == readiness.owner_of("b", [], {"b": "move-loop-invariants"})

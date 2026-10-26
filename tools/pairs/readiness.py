@@ -105,7 +105,39 @@ def tiny(base: dict) -> set[str]:
     return {name for name, row in good.items() if row["instructions"] < 2 * floor[row["language"]]}
 
 
-def report(header: list[str], sized: dict[str, tuple], clocks: tuple | None, tiny_rows: set[str] = frozenset()) -> list[str]:
+FLAG_OWNERS = {"tree-ch": "w5", "lsr": "w3", "strength-reduce": "w3", "move-loop-invariants": "w2", "tree-pre": "w14", "sroa": "w14", "inline-functions": "w6"}  # the burn-down's flag -> owner sets (burndown-0652.md)
+
+
+def owner_of(name: str, rules: list[dict], ablation: dict[str, str]) -> str:
+    """The owner column: the causes file's owner for the program (m16burndown_causes.toml, first match wins), else the owner of the flag whose removal shrinks it most (the ablation), else blank. `unassigned` and `untriaged` are blank: nobody holds the row. `RA/peephole` marks a program no pass flag moves by 10 B: nobody holds it either, but it is not untested."""
+    import fnmatch
+
+    for rule in rules:
+        if fnmatch.fnmatch(name, rule["match"]) and rule.get("owner") not in (None, "unassigned"):
+            return re.sub(r"^w-(\d+)$", r"w\1", rule["owner"])  # the causes file says w-2, the flag owners w2: one owner
+    cause = ablation.get(name, "")
+    if cause.startswith("multi: "):  # two flags move it about as much: the first one with an owner holds it
+        return next((FLAG_OWNERS[flag] for flag in cause[len("multi: ") :].split("+") if flag in FLAG_OWNERS), "")
+    return FLAG_OWNERS.get(cause) or ("RA/peephole" if cause == "RA/peephole" else "")
+
+
+def flag_first(raw: dict) -> dict[str, dict[str, int | None]]:
+    """flag -> program -> bytes, from either json m16burndown wrote: that (`--ablation-cache`) or w13's program -> {base, tip, flag: bytes}."""
+    if all(key.startswith(("-", "LLRM_")) for key in raw):
+        return raw
+    flags = {flag for row in raw.values() for flag in row if flag.startswith(("-", "LLRM_"))}
+    return {flag: {name: row[flag] for name, row in raw.items() if flag in row} for flag in flags}
+
+
+def by_owner(larger: list[tuple[str, int, int]], rules: list[dict], ablation: dict[str, str]) -> dict[str, list[tuple[str, int, int]]]:
+    """owner -> its growers, the largest delta first; blank owners under `(none)`."""
+    groups: dict[str, list[tuple[str, int, int]]] = {}
+    for row in larger:
+        groups.setdefault(owner_of(row[0], rules, ablation) or "(none)", []).append(row)
+    return {owner: sorted(rows, key=lambda r: r[1] - r[2]) for owner, rows in sorted(groups.items(), key=lambda kv: sum(r[2] - r[1] for r in kv[1]), reverse=True)}
+
+
+def report(header: list[str], sized: dict[str, tuple], clocks: tuple | None, tiny_rows: set[str] = frozenset(), owners: tuple[list[dict], dict[str, str]] | None = None) -> list[str]:
     """The file: the headline first (totals, growers, slower), then one table per level and one for clocks; every table row ends in an empty owner column."""
     lines = list(header)
     for level, (larger, count, was, now) in sized.items():
@@ -114,6 +146,14 @@ def report(header: list[str], sized: dict[str, tuple], clocks: tuple | None, tin
         rows, count = clocks
         lines.append(f"HEADLINE m16 -Os clocks: {len(rows)} of {count} programs slower ({sum(name in tiny_rows for name, _, _ in rows)} of them tiny: near the start-up or folded on main)")
     for level, (larger, count, was, now) in sized.items():
+        if owners:
+            lines += ["", f"larger at {level}, per owner (owner: programs, bytes):"]
+            groups = by_owner(larger, *owners)
+            lines += [f"  {owner}: {len(rows)} programs, {sum(b - a for _, a, b in rows):+} B" for owner, rows in groups.items()]
+            for owner, rows in groups.items():
+                lines += ["", f"larger at {level}, owner {owner} (program | main B | new B | delta | %):"]
+                lines += [f"  {name:42} | {a:>7} | {b:>7} | {b - a:+6} | {(b - a) / a * 100:+6.1f}% |" for name, a, b in rows]
+            continue
         lines += ["", f"larger at {level} (program | main B | new B | delta | % | owner):"]
         lines += [f"  {name:42} | {a:>7} | {b:>7} | {b - a:+6} | {(b - a) / a * 100:+6.1f}% |" for name, a, b in larger]
     if clocks:
@@ -129,6 +169,8 @@ def main() -> int:
     parser.add_argument("--out", type=Path)
     parser.add_argument("--levels", nargs="+", default=["-Os", "-O2"])
     parser.add_argument("--no-clocks", action="store_true")
+    parser.add_argument("--causes", type=Path, help="m16burndown_causes.toml: fills the owner column and groups the larger lists by owner")
+    parser.add_argument("--ablation", type=Path, help="m16burndown's ablation json (flag -> program -> bytes, plus base and tip): the flag owner for a program the causes file does not name")
     parser.add_argument("--scratch", type=Path, default=Path.home() / "scratch")
     args = parser.parse_args()
     cache = args.scratch / "readiness-cache"
@@ -137,7 +179,17 @@ def main() -> int:
     sized = {level: growers(size_table(base_dist, level, cache), size_table(new_dist, level, cache)) for level in args.levels}
     base_clocks = None if args.no_clocks else clock_rows(base_dist, cache)
     clocks = None if args.no_clocks else slower(base_clocks, clock_rows(new_dist, cache))
-    text = "\n".join(report(header, sized, clocks, tiny(base_clocks) if base_clocks else set())) + "\n"
+    owners = None
+    if args.causes:
+        import tomllib
+
+        ablation = {}
+        if args.ablation:
+            from m16burndown import attribute  # noqa: PLC0415
+
+            ablation = attribute({k: v for k, v in size_table(new_dist, "-Os", cache).items() if v}, flag_first(json.loads(args.ablation.read_text())))
+        owners = (tomllib.loads(args.causes.read_text()).get("program", []), ablation)
+    text = "\n".join(report(header, sized, clocks, tiny(base_clocks) if base_clocks else set(), owners)) + "\n"
     if args.out:
         args.out.write_text(text)
     print(text)
