@@ -539,9 +539,10 @@ fn test_a_raise_under_an_error_handler_resumes_after_its_statement() {
     // The raise names its statement (in whichever frame slot: the frame also
     // holds the conversions' scratch cells), and RESUME NEXT from that
     // statement continues at the PRINT.
-    let raised =
-        regex::Regex::new(r"mov word ptr (?:ss:)?\$QB\$FRAME\+\d+, (\d+)\n(?:    fstp st\(0\)\n)*    pushw 5\n    call far ptr B\$SERR")
-            .unwrap();
+    let raised = regex::Regex::new(
+        r"mov word ptr (?:ss:)?\$QB\$FRAME\+\d+, (\d+)\n(?:    fstp st\(0\)\n)*    pushw 5\n    call far ptr B\$SERR",
+    )
+    .unwrap();
     let statement = &raised.captures(&assembly).unwrap_or_else(|| panic!("{assembly}"))[1];
     // The dispatch continues at the statement's resume point, laid next
     // (`jne` past it) or branched to (`je`) as the placement falls.
@@ -557,7 +558,8 @@ fn test_a_raise_under_an_error_handler_resumes_after_its_statement() {
         &tail[..tail.find("jmp ").unwrap_or(tail.len())]
     };
     let mut next = block(start).to_owned();
-    // A resume point may reload what the statement computed and jump on to the PRINT.
+    // A resume point may reload what the statement computed and jump on to the
+    // PRINT.
     let after = &assembly[start..];
     if let Some(target) = after[after.find("jmp ").map_or(after.len(), |at| at + 4)..].split_whitespace().next()
         && let Some(at) = assembly.find(&format!("\n{target}:\n"))
@@ -1330,7 +1332,11 @@ fn far_selectors_loaded(function: &str) -> Vec<bool> {
             // A constant address reloads nothing.
             let Some(address) = pointer.captures_iter(store).last() else { return false };
             let mut value = address[1].to_owned();
-            while let Some(defined) = definition(function, &value) {
+            // A phi can lead back to itself: stop on a name seen.
+            let mut seen = BTreeSet::new();
+            while seen.insert(value.clone())
+                && let Some(defined) = definition(function, &value)
+            {
                 if defined.starts_with("load i16, ptr @b$seg") {
                     return true;
                 }
