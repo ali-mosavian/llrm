@@ -161,7 +161,7 @@ pub fn lex(text: &str) -> Result<Vec<(Token, usize)>, ParseError> {
                     token => out.push((token, line)),
                 }
             }
-            b'=' | b',' | b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'<' | b'>' | b'*' | b':' => {
+            b'=' | b',' | b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'<' | b'>' | b'*' | b':' | b'|' => {
                 out.push((Token::Punct(c as char), line));
                 at += 1;
             }

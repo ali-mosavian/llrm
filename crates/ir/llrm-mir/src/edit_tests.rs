@@ -325,6 +325,8 @@ fn the_verifier_finds_a_record_before_an_erased_instruction() {
         before: x,
         variable: crate::MetadataId(0),
         what: crate::DebugWhat::Gone,
+        expression: None,
+        location: None,
     });
     let found = crate::verify::verify(&parsed);
     assert!(
