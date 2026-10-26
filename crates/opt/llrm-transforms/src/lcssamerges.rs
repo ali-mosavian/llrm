@@ -318,7 +318,16 @@ pub fn _merged(
         function.set_operands(phi, from_arms(&incoming));
     }
     let swap = |at: i64| BTreeMap::from([(value, replacements[&at])]);
+    // A phi reads `value` through a replaced parent only in a successor of one.
+    let reading = replacements
+        .keys()
+        .flat_map(|&at| cfg::successors_of(function, at))
+        .chain(replacements.keys().copied())
+        .collect::<BTreeSet<_>>();
     for block in function.layout().to_vec() {
+        if !reading.contains(&cfg::id(block)) {
+            continue;
+        }
         for phi in edges::phis(function, block) {
             let incoming = arms(function, phi)
                 .into_iter()
