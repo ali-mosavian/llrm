@@ -106,6 +106,10 @@ pub struct LoopIdiomRecognize {
     library: Library,
     /// The routines the compile states the program links (`strlen`).
     pub routines: Vec<llrm_mir::libfunc::Routine>,
+    /// The compile is -Os or -Oz: the pipeline's stand-in for the `optsize`
+    /// attribute clang puts on every function there. Read by the CRC table
+    /// only; the stores keep their own reading of the attribute.
+    pub for_size: bool,
     apply_code_size_heuristics: bool,
     has_memset: bool,
     has_memset_pattern: bool,
@@ -173,6 +177,7 @@ impl LoopIdiomRecognize {
             options,
             library,
             routines: Vec::new(),
+            for_size: false,
             apply_code_size_heuristics: false,
             has_memset: library.memset,
             has_memset_pattern: library.memset_pattern16,

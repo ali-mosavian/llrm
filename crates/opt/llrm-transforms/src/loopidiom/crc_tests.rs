@@ -33,9 +33,18 @@ fn after(
     text: &str,
     strategy: CrcStrategy,
 ) -> String {
+    after_sized(text, strategy, false)
+}
+
+fn after_sized(
+    text: &str,
+    strategy: CrcStrategy,
+    for_size: bool,
+) -> String {
     let mut module = llrm_mir::parse::module(text).expect("the fixture");
     let mut pass = LoopIdiom::new();
     pass.options.crc_strategy = strategy;
+    pass.for_size = for_size;
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.add(pass);
     manager.run_module(&mut module, Rc::new(crate::cgpaddr::tests::Flat)).unwrap();
@@ -81,4 +90,16 @@ fn test_the_loops_the_pin_tables_are_tabled_and_the_rest_are_not() {
 fn test_with_the_strategy_off_no_table_is_made() {
     let out = after(&fixture(), CrcStrategy::Disable);
     assert!(!out.contains(".crctable"), "{out}");
+}
+
+/// At -Os the table is 1024 B of data for a loop of a few instructions (m16
+/// -Os crc.c grew by 1,024 B in `tools/sizes.py`): the pin's
+/// `ApplyCodeSizeHeuristics` skips it under size, and the -Os pipeline has no
+/// `optsize` attribute to read, so the pass is told. -O2 still tables.
+#[test]
+fn test_the_auto_strategy_makes_no_table_for_size() {
+    let sized = after_sized(&fixture(), CrcStrategy::Auto, true);
+    assert!(!sized.contains(".crctable"), "{sized}");
+    let fast = after_sized(&fixture(), CrcStrategy::Auto, false);
+    assert!(fast.contains(".crctable"), "{fast}");
 }

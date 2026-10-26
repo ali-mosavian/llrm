@@ -183,7 +183,7 @@ impl LoopIdiomRecognize {
             CrcStrategy::Auto => {
                 // When using the auto strategy, bail if we are optimizing for
                 // size since there's usually not a clear size benefit.
-                if self.apply_code_size_heuristics {
+                if self.apply_code_size_heuristics || self.for_size {
                     return false;
                 }
                 // Only apply an optimization if there's a clear benefit to
