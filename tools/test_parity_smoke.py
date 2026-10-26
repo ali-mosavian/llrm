@@ -561,7 +561,7 @@ def test_a_runtime_change_runs_the_targets_that_build_the_runtime_with_cc_and_a_
     """posix_os, qb_dev_interface, qb_sdl and qb_dirty import no crate: unmapped, they ran for no change at all."""
     mapping = ps.integration_map()
     runtime = ps.integration_targets_for(["runtime/qb/dev/host/video.c"], set(), mapping)
-    assert {"posix_os", "qb_dev_interface", "qb_sdl"} <= set(runtime) and "qb_dirty" not in runtime
+    assert {"posix_os", "qb_dev_interface", "qb_sdl", "qb_dirty"} <= set(runtime)
     assert not {"posix_os", "qb_sdl"} & set(ps.integration_targets_for(["docs/arch.md"], set(), mapping))
 
 
