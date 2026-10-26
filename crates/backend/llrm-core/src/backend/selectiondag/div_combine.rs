@@ -6,9 +6,9 @@
 //! promoted-type multiply, no `BuildExactSDIV`/`BuildExactUDIV` for `exact`
 //! divides, no widened `MULHU` of an `i32`), no `DIVREM` merging, and
 //! `BuildSDIVPow2` is the generic shift sequence: the pin's `cmov` form for a
-//! CPU with `cmov` (P6 and later) is not ported. `isIntDivCheap` is false (no
-//! `minsize`). Exit: the promoted and exact forms, the `cmov` sequence.
-//! Owner sdag-b. Review 2026-11-27.
+//! CPU with `cmov` (P6 and later) is not ported. `isIntDivCheap` is
+//! `DagConfig::opt_for_size` (no `minsize`). Exit: the promoted and exact
+//! forms, the `cmov` sequence. Owner sdag-b. Review 2026-11-27.
 //!
 //! # See also
 //! LLVM's `DAGCombiner::visitSDIV`
@@ -166,8 +166,15 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         n1: SDValue,
         node: SDValue,
     ) -> Option<SDValue> {
+        // `!TLI.isIntDivCheap`: a size-tuned profile keeps the divide, as the
+        // old selector does (`division.rs`: the magic number is a
+        // 5-byte immediate, `cdq; idiv r` is 3). A byte divide has no selection
+        // (SD302), so it keeps the multiply.
         let vt = self.dag.value_type(node);
         let bits = vt.size_in_bits();
+        if self.dag.config().opt_for_size && bits > 8 {
+            return None;
+        }
         if self.dag.node(node).flags.0 & SDNodeFlags::EXACT.0 != 0 || !self.tli?.types.is_type_legal(vt) {
             return None;
         }
@@ -258,8 +265,15 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         n1: SDValue,
         node: SDValue,
     ) -> Option<SDValue> {
+        // `!TLI.isIntDivCheap`: a size-tuned profile keeps the divide, as the
+        // old selector does (`division.rs`: the magic number is a
+        // 5-byte immediate, `cdq; idiv r` is 3). A byte divide has no selection
+        // (SD302), so it keeps the multiply.
         let vt = self.dag.value_type(node);
         let bits = vt.size_in_bits();
+        if self.dag.config().opt_for_size && bits > 8 {
+            return None;
+        }
         if self.dag.node(node).flags.0 & SDNodeFlags::EXACT.0 != 0 || !self.tli?.types.is_type_legal(vt) {
             return None;
         }

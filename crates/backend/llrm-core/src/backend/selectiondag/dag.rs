@@ -154,13 +154,21 @@ pub struct DagConfig {
     pub offset_folding: bool,
     /// The pointer type (`TLI->getPointerTy`).
     pub pointer: EVT,
+    /// The profile is tuned for size (`-Os`): `isIntDivCheap`, as llrm's size
+    /// tuning has no separate `minsize`.
+    pub opt_for_size: bool,
 }
 
 impl Default for DagConfig {
     /// x86: 0 or 1; symbol offsets do not fold (`isOffsetFoldingLegal` is false
     /// for the default PIC model).
     fn default() -> DagConfig {
-        DagConfig { boolean_contents: BooleanContents::ZeroOrOne, offset_folding: false, pointer: EVT::I32 }
+        DagConfig {
+            boolean_contents: BooleanContents::ZeroOrOne,
+            offset_folding: false,
+            pointer: EVT::I32,
+            opt_for_size: false,
+        }
     }
 }
 

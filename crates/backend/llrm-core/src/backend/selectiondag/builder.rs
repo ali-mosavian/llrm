@@ -164,6 +164,15 @@ impl BuilderTarget {
         self
     }
 
+    /// The profile is tuned for size (`DagConfig::opt_for_size`).
+    pub fn with_opt_for_size(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.dag.opt_for_size = on;
+        self
+    }
+
     /// i486 and P5: 32-bit pointers, `i8`/`i16`/`i32` in registers.
     pub fn m32() -> BuilderTarget {
         BuilderTarget {
