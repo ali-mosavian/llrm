@@ -309,6 +309,14 @@ pub trait Tti {
         100
     }
 
+    /// How many percent of its `CodeSize` units an instruction that touches a
+    /// float takes in code, where the target's unit undercounts it (16-bit
+    /// x87: every operand moves through the register stack, a load or store
+    /// each side of an operation the unit counts once); 100: as counted.
+    fn float_code_size_percent(&self) -> i64 {
+        100
+    }
+
     /// The cost of an integer-to-float cast whose operand is a load, where the
     /// target prices it apart (X86: the extension of a narrow integer to i32 is
     /// free for a load, `FILD` reads it from memory); none: as any cast (T4).

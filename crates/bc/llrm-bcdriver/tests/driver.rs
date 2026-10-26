@@ -179,7 +179,7 @@ fn a_far_pointer_to_dgroup_names_dgroup() {
 fn fpdeep(name: &str) -> String {
     let found = llrm_omf::module::load(&fixture(name)).expect("reads").expect("an object");
     let raised =
-        llrm_x86_bc::raise(&found, &llrm_x86_m16::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}"));
+        llrm_bcobj::raise(&found, &llrm_x86_m16::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}"));
     let mut program = llrm_mir::program::Program::new(vec![raised.module], Rc::new(llrm_x86_m16::Dos::default()))
         .and_then(|one| one.with_runtime(raised.runtime))
         .unwrap();

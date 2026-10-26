@@ -108,6 +108,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [lsr-callees](lsr-callees.md) | LSR callees against the pin, same IR — w-3, 2026-10-22 |
 | [machine-scheduler-plan](machine-scheduler-plan.md) | Machine Instruction Scheduler (codegen row 65) |
 | [machine-cleanup-compile-plan](machine-cleanup-compile-plan.md) | Machine clean-up compile time: plan to 1.0x of the pin |
+| [shared-liveness-poc](shared-liveness-poc.md) | Shared liveness across the scheduler and allocator: worth under 0.5% of the compile |
 | [machinecombiner-translation-plan](machinecombiner-translation-plan.md) | Translating MachineCombiner (slot 40) |
 | [old-allocator-modules](old-allocator-modules.md) | Old allocator modules: last callers and the PR that deletes each |
 | [peephole-vs-pin](peephole-vs-pin.md) | Peephole cost by sub-pass against the pin on d_faces -O2 (2026-10-25) |

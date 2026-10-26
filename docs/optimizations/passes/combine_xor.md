@@ -17,8 +17,7 @@ DEVIATE 1: no vectors, and only integer constants (`ConstantExpr` and
 `undef` lanes are not matched or made).
 
 DEVIATE 2: the folds that call a helper not yet translated are left out,
-each named where it stood: `foldXorToXor`,
-`SimplifyDemandedInstructionBits` (`combine_demanded`), `foldNot`,
+each named where it stood: `foldXorToXor`, `foldNot`,
 `visitMaskedMerge`, the `ctlz`/`cttz` and
 `fneg` bitcast folds, the `i1` select form of `(A & B) ^ (A | C)`,
 `foldXorOfICmps`, `foldCastedBitwiseLogic`, `canonicalizeAbs`,

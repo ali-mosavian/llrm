@@ -184,14 +184,18 @@ fn sum_three(checked: bool) -> String {
 /// `_backward_loop`: from the first label a later jump returns to, through that
 /// jump.
 fn backward_loop(procedure: &str) -> String {
+    found_backward_loop(procedure).expect("no loop")
+}
+
+fn found_backward_loop(procedure: &str) -> Option<String> {
     for (start, end, label) in jumps(procedure, true) {
         if let Some(at) = procedure.find(&format!("{label}:\n")) {
             if at < start {
-                return procedure[at..end].to_owned();
+                return Some(procedure[at..end].to_owned());
             }
         }
     }
-    panic!("no loop")
+    None
 }
 
 #[test]
@@ -2051,13 +2055,30 @@ fn test_a_dividend_two_instructions_require_is_copied_into_its_register_once() {
 }
 
 #[test]
-fn test_a_constant_divisor_of_a_non_negative_counter_is_a_reciprocal_without_a_spill() {
-    // stride's `i \ 5` was `cdq; idiv` and spilled one of three recurrences;
-    // `i` is DEFINT and counts up from 0, so it was `mul` by the reciprocal.
-    // The division is a counter (`i \ 5` runs 0, 1, 2 ...), and with `t` and
-    // `b` out of memory the sum is the constant 210: the loop holds no
-    // division of either kind and no spill.
+fn test_a_constant_divisor_of_a_non_negative_counter_is_folded_away() {
+    // stride's `i \ 5` is a counter (0, 1, 2 ...), and with `t` and `b` out of
+    // memory the sum is the constant 210: the program holds no loop and no
+    // division of either kind. It once held a loop with a `mul` by the
+    // reciprocal, then one with a spill (the next test keeps that shape).
     let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/run/qb/stride.bas");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    assert!(found_backward_loop(&text).is_none(), "{text}");
+    assert!(!text.contains("idiv") && !text.contains("mul"), "{text}");
+}
+
+#[test]
+fn test_a_constant_divisor_of_a_non_negative_counter_is_a_reciprocal_without_a_spill() {
+    // The same stride loop with a sum the optimizer cannot fold (`m` is read
+    // at run time): `i` is DEFINT and counts up from 0, so `i \ 5` was
+    // `cdq; idiv` and spilled one of three recurrences; it is a counter, and
+    // the loop holds no division of either kind and no spill.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(
+        &directory,
+        "STRIDEM.BAS",
+        b"DEFINT A-Z\r\nDIM b(200)\r\nDIM i, t, m\r\nINPUT m\r\nt = 0\r\nFOR i = 0 TO m STEP 5\r\n    b(i) = i \\ 5\r\n    t = t + b(i)\r\nNEXT i\r\nPRINT \"T=\"; t\r\n",
+    );
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let body = backward_loop(&listing(&program));
     assert!(!body.contains("[bp") && !body.contains("idiv") && !body.contains("mul"), "{body}");
