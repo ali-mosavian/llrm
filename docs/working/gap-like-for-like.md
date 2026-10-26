@@ -10,8 +10,8 @@ isel is -18.0 M and clean-up +75.2 M; they are one bucket.
 | group | ours M | pin M | excess M | owner |
 |---|--:|--:|--:|---|
 | isel + combine + fixups (ours: isel 36.4, Peephole 37.0, peepholeopt 1.1, fixupbw 1.1, pushfold 0.8, cmpsub 0.3; pin: DAGToDAGISel 54.4, PeepholeOptimizer + FixupBW 2.1) | 76.7 | 56.5 | +20.2 | w-1 |
-| machine clean-up, the rest | 84.4 | 47.4 | +37.0 | below |
-| regalloc (RA, coalesce, phi-elim, two-address, parcopy) | 114.8 | 67.4 | +47.4 | w-13 |
+| machine clean-up, the rest | 70.1 | 47.4 | +22.7 | below |
+| regalloc (RA, coalesce, phi-elim, two-address, parcopy, and the float allocation of floatalloc and floatassign, 14.3) | 129.1 | 67.4 | +61.7 | w-13 |
 | loop passes | 112.7 | 87.1 | +25.6 | w-5 |
 | SimplifyCFG, JumpThreading, CVP | 62.8 | 33.6 | +29.2 | unassigned |
 | residual (pass-manager glue, analyses outside passes, allocation) | 64.6 | 20.9 | +43.7 | unassigned |
@@ -22,13 +22,15 @@ isel is -18.0 M and clean-up +75.2 M; they are one bucket.
 | llrm-only MIR passes, IPO | 16.3 | 13.3 | +3.0 | unassigned |
 | total | 742.2 | 508.1 | +234.1 | |
 
-The isel group is one row, +20.2 M, where the table read +75.2 and -18.0 apart: the clean-up excess is +37.0, not +75.2.
+The isel group is one row, +20.2 M, where the table read +75.2 and -18.0 apart. The float allocation of `floatalloc`/`floatassign` (valued, split_for_the_stack, live rows, live_among; w-2's split, ~14.3 M) has the pin's counterpart inside RAGreedy, so it counts with regalloc: the clean-up excess is +22.7, not +75.2.
 
 ## Machine clean-up, the rest (excess M, ours M / pin M)
 
+The FP stackifier is alone here (3.0 against the pin's 1.7); the 14.3 M of float allocation is in the regalloc row above.
+
 | pass | excess | ours / pin | owner |
 |---|--:|---|---|
-| FP stackifier (floatalloc 13.8, floatassign 2.7, floatfold 0.8) | +15.6 | 17.3 / 1.7 | w-2 |
+| FP stackifier proper (the `Fps` handlers and the stack conversion) | +1.3 | 3.0 / 1.7 | w-2 |
 | jumps::ControlFlow (BranchFolder, block placement) | +9.8 | 15.7 / 5.9 | w-3 |
 | MachineScheduler | +5.3 | 15.7 / 10.4 | w-2 |
 | MachineSink | +4.5 | 9.0 / 4.5 | w-2 |
