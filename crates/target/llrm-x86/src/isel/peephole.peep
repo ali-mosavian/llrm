@@ -140,6 +140,15 @@ rule transferred
             same_length(@0, $0)
     rewrite @0: =@0 r, r, l ; anchor @1
 
+// The same for a cell: `A = op(A, [C]); [C] = A` is `[C] = op([C], A)` when A
+// dies at the store. The spiller folds the reload into the operation and
+// leaves the store, where the pin's spill folding makes one read-modify-write.
+rule transferred_cell
+    match   op=commutative_alu l:reg, l, c:mem ; mov c2:mem, l
+    when    free(@0, exact), free(@1, dropped), same_width(l, c), !addresses(c, l), same_cell(c2, c),
+            dead(@1, lanes(l)), encodable($0)
+    rewrite @0: op c, c, l ; anchor @1
+
 
 // Remove a synthetic save/restore when the source survives between them:
 // nothing between writes the source or touches the temporary, and the

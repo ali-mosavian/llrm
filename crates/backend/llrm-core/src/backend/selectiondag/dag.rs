@@ -154,13 +154,20 @@ pub struct DagConfig {
     pub offset_folding: bool,
     /// The pointer type (`TLI->getPointerTy`).
     pub pointer: EVT,
+    /// `isIntDivCheap`: a divide by a constant stays a divide.
+    pub int_div_cheap: bool,
 }
 
 impl Default for DagConfig {
     /// x86: 0 or 1; symbol offsets do not fold (`isOffsetFoldingLegal` is false
     /// for the default PIC model).
     fn default() -> DagConfig {
-        DagConfig { boolean_contents: BooleanContents::ZeroOrOne, offset_folding: false, pointer: EVT::I32 }
+        DagConfig {
+            boolean_contents: BooleanContents::ZeroOrOne,
+            offset_folding: false,
+            pointer: EVT::I32,
+            int_div_cheap: false,
+        }
     }
 }
 

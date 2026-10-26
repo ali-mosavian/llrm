@@ -5091,6 +5091,32 @@ fn test_a_repeated_frame_address_after_allocation_is_made_again() {
     assert_eq!(leas, 2, "{:?}", names(&result.blocks[0].insns));
 }
 
+/// The pin gives `bsf` a `rep` prefix unless the function is optimised for size
+/// or the flags are read (`X86MCInstLower`). It was on every `bsf`, a byte at
+/// -Os m16 that main did not have.
+#[test]
+fn test_bsf_gets_the_rep_prefix_only_where_the_pin_gives_it() {
+    for (label, size, flags_read, expected) in [
+        ("speed, flags dead", false, false, true),
+        ("size, flags dead", true, false, false),
+        ("speed, flags read", false, true, false),
+    ] {
+        let scan = sem(Operation::Binary, "bsf", vec![rl(RegId::EAX, 4)], vec![rl(RegId::EAX, 4), rl(RegId::ECX, 4)]);
+        let first = Arc::new(insn(10, Some((10, 11)), Some(scan), vec![], vec![]));
+        let next = if flags_read {
+            sem(Operation::Binary, "adc", vec![rl(RegId::SI, 4)], vec![rl(RegId::SI, 4), im(0, 4)])
+        } else {
+            sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::SI, 4), im(0, 4)])
+        };
+        let second = Arc::new(insn(11, Some((11, 12)), Some(next), vec![], vec![]));
+        let input = body("scan", 0, vec![block(0, vec![first], vec![1]).into(), block(1, vec![second], vec![]).into()]);
+        let cpu = crate::backend::cpu::tuned("486", size).unwrap();
+        let result = crate::backend::repbsf::marked(&input, &cpu);
+        let got = result.blocks[0].insns[0].what.as_ref().unwrap().repeat;
+        assert_eq!(got, expected, "{label}");
+    }
+}
+
 /// PLASMA at m16: `mov [bp-14],di ; mov di,[bp-14]` -- a reload of what the
 /// register still held -- stood in each inner loop (a spilled one-instruction
 /// piece of a split range, then the copy that follows it).
@@ -5342,4 +5368,64 @@ fn a_doubling_add_keeps_the_carry_and_overflow_a_successor_reads() {
             "{width}"
         );
     }
+}
+
+/// `add eax,[bp-4]; mov [bp-4],eax`, the spiller's fold of a reload into an
+/// accumulating sum (m16 -Os qlight.c: 4 B and a second frame slot for 2
+/// instructions), is the read-modify-write `add [bp-4],eax` when eax dies at
+/// the store.
+fn _accumulated(
+    name: &str,
+    dies: bool,
+) -> (LirBody, Insn) {
+    let cell = Loc::Mem(mem(frame(-4), 4, RegId::BP, -4, 1));
+    let eax = rl(RegId::EAX, 4);
+    let sum = insn(
+        1,
+        Some((1, 3)),
+        Some(sem(Operation::Binary, name, vec![eax.clone()], vec![eax.clone(), cell.clone()])),
+        vec![10],
+        vec![1],
+    );
+    let stored =
+        insn(3, Some((3, 3)), Some(sem(Operation::Move, "mov", vec![cell], vec![eax.clone()])), vec![], vec![10]);
+    let after = insn(
+        4,
+        Some((4, 5)),
+        Some(sem(Operation::Move, "mov", vec![rl(RegId::EBX, 4)], vec![if dies { im(0, 4) } else { eax.clone() }])),
+        vec![12],
+        vec![],
+    );
+    let clear =
+        insn(5, Some((5, 6)), Some(sem(Operation::Move, "mov", vec![eax.clone()], vec![im(0, 4)])), vec![13], vec![]);
+    let insns = if dies {
+        vec![Arc::new(sum), Arc::new(stored.clone()), Arc::new(clear)]
+    } else {
+        vec![Arc::new(sum), Arc::new(stored.clone()), Arc::new(after)]
+    };
+    (body("sum", 0, vec![block(0, insns, vec![]).into()]), stored)
+}
+
+#[test]
+fn test_a_sum_stored_back_to_the_cell_it_added_is_a_read_modify_write() {
+    for name in ["add", "and", "or", "xor"] {
+        let (input, stored) = _accumulated(name, true);
+        let result = transferred(rules(), &input).insns();
+        let cell = Loc::Mem(mem(frame(-4), 4, RegId::BP, -4, 1));
+        assert_eq!(
+            result[0].what,
+            Some(sem(Operation::Binary, name, vec![cell.clone()], vec![cell, rl(RegId::EAX, 4)])),
+            "{name}"
+        );
+        assert_eq!(result[1].what.as_ref().unwrap().op, Operation::Nothing, "{name}");
+        assert_eq!(result[1].uses, stored.uses, "{name}");
+    }
+}
+
+#[test]
+fn test_a_sum_still_read_after_its_store_keeps_its_register_form() {
+    let (input, _) = _accumulated("add", false);
+    assert_eq!(transferred(rules(), &input).insns(), input.blocks[0].insns.to_vec());
+    let (input, _) = _accumulated("sub", true);
+    assert_eq!(transferred(rules(), &input).insns(), input.blocks[0].insns.to_vec());
 }
