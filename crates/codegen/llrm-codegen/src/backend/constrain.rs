@@ -993,10 +993,6 @@ mod tests {
         assert_eq!(emitted.unwrap().code, [0xDE, 0x34]); // fidiv word [si]
     }
 
-    fn _any_insn() -> crate::frontends::bc::declen::Insn {
-        crate::frontends::bc::declen::decode(&[0x89, 0xC0], 0).unwrap()
-    }
-
     fn _shift(count: u32) -> Insn {
         let what = semantics(Operation::Binary, "shl", vec![held(9, 2)], vec![held(9, 2), held(count, 2)]);
         _insn(what, &[9], &[9, count], 0x100)

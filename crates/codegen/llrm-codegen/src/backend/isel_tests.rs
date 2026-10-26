@@ -2586,7 +2586,7 @@ join:
         [
             "cmp byte ptr [bp+8], 0",
             "je L0_3",
-            "L0_4294967297:",
+            "L0_1_1:",
             "mov bx, word ptr [bp+6]",
             "add bx, bx",
             "add bx, offset a",
@@ -4838,12 +4838,12 @@ b:
             "mov bp, sp",
             "L0_0:",
             "cmp byte ptr [bp+6], 0",
-            "je L0_4294967297",
+            "je L0_1_1",
             "L0_1:",
             "mov ax, -4",
             "pop bp",
             "retf",
-            "L0_4294967297:",
+            "L0_1_1:",
             "mov ax, word ptr [bp+8]",
             "pop bp",
             "retf"

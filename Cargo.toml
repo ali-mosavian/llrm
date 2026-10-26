@@ -1,6 +1,6 @@
 [workspace]
-members = [".", "crates/*/llrm-*", "crates/frontends/nib", "crates/frontends/qb", "runtime/qb"]
-default-members = [".", "crates/*/llrm-*", "crates/frontends/nib", "crates/frontends/qb", "runtime/qb"]
+members = [".", "crates/*/llrm-*", "crates/frontends/bcobj", "crates/frontends/nib", "crates/frontends/qb", "runtime/qb"]
+default-members = [".", "crates/*/llrm-*", "crates/frontends/bcobj", "crates/frontends/nib", "crates/frontends/qb", "runtime/qb"]
 resolver = "3"
 
 [workspace.package]
@@ -47,8 +47,7 @@ llrm-coff64 = { path = "crates/target/llrm-coff64" }
 llrm-elf32 = { path = "crates/target/llrm-elf32" }
 llrm-elf64 = { path = "crates/target/llrm-elf64" }
 llrm-macho = { path = "crates/mc/llrm-macho" }
-llrm-x86-bcmachine = { path = "crates/target/llrm-x86-bcmachine" }
-llrm-x86-bc = { path = "crates/target/llrm-x86-bc" }
+llrm-bcobj = { path = "crates/frontends/bcobj" }
 llrm-bcdriver = { path = "crates/bc/llrm-bcdriver" }
 llrm-hir = { path = "crates/ir/llrm-hir" }
 llrm-mir = { path = "crates/ir/llrm-mir" }

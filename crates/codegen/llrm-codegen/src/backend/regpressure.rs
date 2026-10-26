@@ -33,7 +33,7 @@ use llrm_lir::registers::{RegId, Regs};
 use llrm_target::pressure::PressureSets;
 
 use crate::model::lir::Insn;
-use crate::support::hash::{HashMap, HashSet};
+use crate::support::hash::HashMap;
 
 /// A change of one set's pressure (`PressureChange`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -177,9 +177,50 @@ thread_local! {
     static WEIGHTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// A read whose def is not in the region (`VNInfo` of the live-in value).
+pub const LIVE_IN: u32 = u32::MAX;
+
+/// A region's operands with the def each read comes from. The pin tells the
+/// values of a register apart by live interval (`LiveQueryResult::valueIn`), so
+/// a tied `c := add c, b` reads the value the copy before it made and writes
+/// another; a name is not a value after two-address.
+pub struct Region {
+    /// Per node, the distinct values it reads with the node that wrote what it
+    /// reads (`LIVE_IN` for none in the region).
+    reads: Vec<Vec<(u32, u32)>>,
+    /// Per node, the distinct values it writes; the version is the node.
+    writes: Vec<Vec<u32>>,
+    /// The value each name holds at the region's end.
+    last_def: HashMap<u32, u32>,
+}
+
+impl Region {
+    pub fn of(insns: &[Arc<Insn>]) -> Self {
+        let mut current: HashMap<u32, u32> = HashMap::default();
+        let (mut reads, mut writes) = (Vec::with_capacity(insns.len()), Vec::with_capacity(insns.len()));
+        for (node, one) in insns.iter().enumerate() {
+            let mut read: Vec<u32> = one.uses.clone();
+            read.sort_unstable();
+            read.dedup();
+            reads
+                .push(read.into_iter().map(|value| (value, current.get(&value).copied().unwrap_or(LIVE_IN))).collect());
+            let mut write: Vec<u32> = one.defines.clone();
+            write.sort_unstable();
+            write.dedup();
+            for &value in &write {
+                current.insert(value, node as u32);
+            }
+            writes.push(write);
+        }
+        Self { reads, writes, last_def: current }
+    }
+}
+
 pub struct Tracker<'a> {
     model: &'a Model,
-    live: HashSet<u32>,
+    region: &'a Region,
+    /// The value (the node that wrote it) each live name holds.
+    live: HashMap<u32, u32>,
     /// `CurrSetPressure`.
     current: Vec<u32>,
     /// `P.MaxSetPressure`: the most each set has been since the region's end.
@@ -187,71 +228,38 @@ pub struct Tracker<'a> {
     /// `LiveThruPressure`: raises each set's limit.
     live_thru: Vec<u32>,
     /// `PressureDiff`s: per node of the region, in `sets` entries, what placing
-    /// it next does to each set. Empty for a tracker over no region.
+    /// it next does to each set. Empty when not kept.
     diffs: Vec<i32>,
-    /// Per value, the nodes that read (`.1`) or write (`.2`) it.
-    occurs: HashMap<u32, Vec<(u32, bool, bool)>>,
-}
-
-/// The distinct values `one` reads and writes, each once, with how.
-fn operands(one: &Insn) -> impl Iterator<Item = (u32, bool, bool)> {
-    let mut all: Vec<(u32, bool, bool)> = one
-        .uses
-        .iter()
-        .map(|&value| (value, true, false))
-        .chain(one.defines.iter().map(|&value| (value, false, true)))
-        .collect();
-    all.sort_unstable_by_key(|operand| operand.0);
-    all.dedup_by(|later, earlier| {
-        let same = later.0 == earlier.0;
-        if same {
-            earlier.1 |= later.1;
-            earlier.2 |= later.2;
-        }
-        same
-    });
-    all.into_iter()
-}
-
-/// What a node does to a set's pressure for one value: a read of a value not
-/// live raises it by its weight, a write of a live one lowers it.
-fn effect(
-    weight: u32,
-    reads: bool,
-    writes: bool,
-    live: bool,
-) -> i32 {
-    let mut inc = 0;
-    if reads && !live {
-        inc += weight as i32;
-    }
-    if writes && live {
-        inc -= weight as i32;
-    }
-    inc
+    /// The nodes that read each value (name and writer).
+    readers: HashMap<(u32, u32), Vec<u32>>,
 }
 
 impl<'a> Tracker<'a> {
     /// A tracker at the bottom of a region with `live_out` live below it
     /// (`closeBottom`); `live_thru` are the values live through the whole
-    /// region (`initLiveThru`).
-    pub fn new(
+    /// region (`initLiveThru`). With `diffs`, the `PressureDiff` of each node
+    /// is computed once (`buildDAGWithRegPressure`); [`Self::place`] keeps
+    /// them current and [`Self::delta`] reads one.
+    pub fn over(
         model: &'a Model,
+        region: &'a Region,
         live_out: impl IntoIterator<Item = u32>,
         live_thru: impl IntoIterator<Item = u32>,
+        diffs: bool,
     ) -> Self {
         let sets = model.limits.len();
         let mut tracker = Self {
             model,
-            live: HashSet::default(),
+            region,
+            live: HashMap::default(),
             current: vec![0; sets],
             max: vec![0; sets],
             live_thru: vec![0; sets],
             diffs: Vec::new(),
-            occurs: HashMap::default(),
+            readers: HashMap::default(),
         };
         for value in live_out {
-            tracker.make_live(value);
+            tracker.make_live(value, region.last_def.get(&value).copied().unwrap_or(LIVE_IN));
         }
         tracker.max.clone_from(&tracker.current);
         for value in live_thru {
@@ -261,60 +269,91 @@ impl<'a> Tracker<'a> {
                 }
             }
         }
-        tracker
-    }
-
-    /// A tracker over a region's `insns`, with the `PressureDiff` of each
-    /// computed once (`ScheduleDAGMILive::buildDAGWithRegPressure`);
-    /// [`Self::place`] keeps them current and [`Self::delta`] reads one.
-    pub fn over(
-        model: &'a Model,
-        live_out: impl IntoIterator<Item = u32>,
-        live_thru: impl IntoIterator<Item = u32>,
-        insns: &[Arc<Insn>],
-    ) -> Self {
-        let mut tracker = Self::new(model, live_out, live_thru);
-        let sets = model.limits.len();
-        tracker.diffs = vec![0; insns.len() * sets];
-        for (node, one) in insns.iter().enumerate() {
-            for (value, reads, writes) in operands(one) {
-                let Some((weight, in_sets)) = model.weight(value) else { continue };
-                tracker.occurs.entry(value).or_default().push((node as u32, reads, writes));
-                let inc = effect(weight, reads, writes, tracker.live.contains(&value));
-                for &set in in_sets {
-                    tracker.diffs[node * sets + set] += inc;
+        if diffs {
+            tracker.diffs = vec![0; region.reads.len() * sets];
+            for node in 0..region.reads.len() {
+                for (value, version) in region.reads[node].iter().copied() {
+                    let Some((weight, in_sets)) = model.weight(value) else { continue };
+                    tracker.readers.entry((value, version)).or_default().push(node as u32);
+                    if tracker.live.get(&value) != Some(&version) {
+                        for &set in in_sets {
+                            tracker.diffs[node * sets + set] += weight as i32;
+                        }
+                    }
                 }
-            }
-        }
-        tracker
-    }
-
-    /// `updatePressureDiffs` after `recede`: `one` is placed; each value whose
-    /// liveness it changed moves the diffs of the nodes that touch it.
-    pub fn place(
-        &mut self,
-        one: &Insn,
-    ) {
-        let touched: Vec<(u32, bool)> = operands(one).map(|(value, ..)| (value, self.live.contains(&value))).collect();
-        self.advance_upward(one);
-        let sets = self.current.len();
-        let occurs = std::mem::take(&mut self.occurs);
-        for (value, was) in touched {
-            let now = self.live.contains(&value);
-            let Some((weight, in_sets)) = self.model.weight(value) else { continue };
-            if was == now {
-                continue;
-            }
-            for &(other, reads, writes) in occurs.get(&value).into_iter().flatten() {
-                let inc = effect(weight, reads, writes, now) - effect(weight, reads, writes, was);
-                if inc != 0 {
-                    for &set in in_sets {
-                        self.diffs[other as usize * sets + set] += inc;
+                for &value in &region.writes[node] {
+                    let Some((weight, in_sets)) = model.weight(value) else { continue };
+                    if tracker.live.get(&value) == Some(&(node as u32)) {
+                        for &set in in_sets {
+                            tracker.diffs[node * sets + set] -= weight as i32;
+                        }
                     }
                 }
             }
         }
-        self.occurs = occurs;
+        tracker
+    }
+
+    pub fn current(&self) -> &[u32] {
+        &self.current
+    }
+
+    pub fn max(&self) -> &[u32] {
+        &self.max
+    }
+
+    fn make_live(
+        &mut self,
+        value: u32,
+        version: u32,
+    ) -> bool {
+        let Some((weight, sets)) = self.model.weight(value) else { return false };
+        if self.live.contains_key(&value) {
+            return false;
+        }
+        self.live.insert(value, version);
+        for &set in sets {
+            self.current[set] += weight;
+        }
+        true
+    }
+
+    /// `recede` and `updatePressureDiffs`: `node` is placed above everything
+    /// placed so far. The values it writes stop being live above it, those it
+    /// reads start; a value that just became live stops raising the diff of
+    /// every other reader of the same value.
+    pub fn place(
+        &mut self,
+        node: usize,
+    ) {
+        let region = self.region;
+        for &value in &region.writes[node] {
+            if let Some((weight, sets)) = self.model.weight(value) {
+                if self.live.get(&value) == Some(&(node as u32)) {
+                    self.live.remove(&value);
+                    for &set in sets {
+                        self.current[set] -= weight;
+                    }
+                }
+            }
+        }
+        let sets = self.current.len();
+        for &(value, version) in &region.reads[node] {
+            if self.make_live(value, version) && !self.diffs.is_empty() {
+                let (weight, in_sets) = self.model.weight(value).expect("made live");
+                // Its readers no longer raise pressure, and its writer now ends
+                // a live value.
+                let writer = (version != LIVE_IN).then_some(&version);
+                for &other in self.readers.get(&(value, version)).into_iter().flatten().chain(writer) {
+                    for &set in in_sets {
+                        self.diffs[other as usize * sets + set] -= weight as i32;
+                    }
+                }
+            }
+        }
+        for (max, &now) in self.max.iter_mut().zip(&self.current) {
+            *max = (*max).max(now);
+        }
     }
 
     /// `getUpwardPressureDelta` for a node of the region from its
@@ -329,72 +368,18 @@ impl<'a> Tracker<'a> {
         self.delta_of(&self.diffs[node * sets..(node + 1) * sets], critical, max_limit)
     }
 
-    pub fn current(&self) -> &[u32] {
-        &self.current
-    }
-
-    pub fn max(&self) -> &[u32] {
-        &self.max
-    }
-
-    fn make_live(
-        &mut self,
-        value: u32,
-    ) {
-        if let Some((weight, sets)) = self.model.weight(value) {
-            if self.live.insert(value) {
-                for &set in sets {
-                    self.current[set] += weight;
-                }
-            }
-        }
-    }
-
-    fn make_dead(
-        &mut self,
-        value: u32,
-    ) {
-        if let Some((weight, sets)) = self.model.weight(value) {
-            if self.live.remove(&value) {
-                for &set in sets {
-                    self.current[set] -= weight;
-                }
-            }
-        }
-    }
-
-    /// `recede`: `one` is placed above everything placed so far.
-    pub fn advance_upward(
-        &mut self,
-        one: &Insn,
-    ) {
-        for &value in &one.defines {
-            self.make_dead(value);
-        }
-        for &value in &one.uses {
-            self.make_live(value);
-        }
-        for (max, &now) in self.max.iter_mut().zip(&self.current) {
-            *max = (*max).max(now);
-        }
-    }
-
-    /// `getUpwardPressureDelta`: the set of each kind that placing `one` next
-    /// would raise first. `critical` is the region's critical sets with the
-    /// most each has reached while scheduling (`RegionCriticalPSets`), in
-    /// set order, and `max_limit` the region's max pressure before
-    /// scheduling (`getRegPressure().MaxSetPressure`).
-    pub fn upward_delta(
+    /// The same by looking at what `node` reads and writes against what is
+    /// live now (`getMaxUpwardPressureDelta`): the check on [`Self::delta`].
+    #[cfg(test)]
+    fn rescan(
         &self,
-        one: &Insn,
+        node: usize,
         critical: &[PressureChange],
         max_limit: &[u32],
     ) -> Delta {
         let mut change = vec![0i32; self.current.len()];
-        let mut seen: Vec<u32> = Vec::new();
-        for &value in &one.uses {
-            if !self.live.contains(&value) && !seen.contains(&value) {
-                seen.push(value);
+        for &(value, version) in &self.region.reads[node] {
+            if self.live.get(&value) != Some(&version) {
                 if let Some((weight, sets)) = self.model.weight(value) {
                     for &set in sets {
                         change[set] += weight as i32;
@@ -402,10 +387,8 @@ impl<'a> Tracker<'a> {
                 }
             }
         }
-        let mut defs: Vec<u32> = Vec::new();
-        for &value in &one.defines {
-            if self.live.contains(&value) && !defs.contains(&value) {
-                defs.push(value);
+        for &value in &self.region.writes[node] {
+            if self.live.get(&value) == Some(&(node as u32)) {
                 if let Some((weight, sets)) = self.model.weight(value) {
                     for &set in sets {
                         change[set] -= weight as i32;
@@ -487,8 +470,8 @@ mod tests {
     fn insn(
         defines: &[u32],
         uses: &[u32],
-    ) -> Insn {
-        Insn::new(0, None, None, defines.to_vec(), uses.to_vec())
+    ) -> Arc<Insn> {
+        Arc::new(Insn::new(0, None, None, defines.to_vec(), uses.to_vec()))
     }
 
     /// Values 1..=3 weigh 1 in set 0 (limit 2); value 4 weighs 2 in sets 0 and
@@ -502,9 +485,6 @@ mod tests {
         model
     }
 
-    /// The module header's example: pressure 2 of limit 2, a use of a third
-    /// value takes it one over; a def of a live value in the same instruction
-    /// keeps it at the limit.
     /// A model of a body asked the pressure sets for the class of every value
     /// (name strings, a scan of the classes): 8.6 M instructions of d_faces'
     /// 25 M in the scheduler. Values of one width and register list share one
@@ -521,14 +501,17 @@ mod tests {
         assert!(model.weight(1000).is_some(), "the values are counted");
     }
 
+    /// The module header's example: pressure 2 of limit 2, a use of a third
+    /// value takes it one over; a def of a live value in the same instruction
+    /// keeps it at the limit.
     #[test]
     fn an_instruction_that_raises_pressure_past_the_limit_has_excess() {
         let model = model();
-        let tracker = Tracker::new(&model, [1, 2], []);
-        let over = tracker.upward_delta(&insn(&[], &[3]), &[], &[2, 0]);
-        assert_eq!(over.excess, Some(PressureChange { set: 0, inc: 1 }));
-        let level = tracker.upward_delta(&insn(&[1], &[3]), &[], &[2, 0]);
-        assert_eq!(level.excess, None);
+        let insns = [insn(&[], &[3]), insn(&[1], &[3])];
+        let region = Region::of(&insns);
+        let tracker = Tracker::over(&model, &region, [1, 2], [], true);
+        assert_eq!(tracker.delta(0, &[], &[2, 0]).excess, Some(PressureChange { set: 0, inc: 1 }));
+        assert_eq!(tracker.delta(1, &[], &[2, 0]).excess, None);
     }
 
     /// A set already over its limit reports the drop an instruction would make,
@@ -536,11 +519,12 @@ mod tests {
     #[test]
     fn an_instruction_that_brings_pressure_under_the_limit_has_negative_excess() {
         let model = model();
-        let tracker = Tracker::new(&model, [1, 2, 3], []);
-        let under = tracker.upward_delta(&insn(&[1, 2], &[]), &[], &[3, 0]);
+        let insns = [insn(&[1, 2], &[])];
+        let region = Region::of(&insns);
+        let tracker = Tracker::over(&model, &region, [1, 2, 3], [], true);
         // 3 -> 1 against a limit of 2: the pin reports Limit - POld, not the
         // whole drop.
-        assert_eq!(under.excess.map(|change| change.inc), Some(-1));
+        assert_eq!(tracker.delta(0, &[], &[3, 0]).excess.map(|change| change.inc), Some(-1));
     }
 
     /// Values that pass through the region raise every limit of the sets they
@@ -549,18 +533,22 @@ mod tests {
     #[test]
     fn live_through_values_raise_the_limit() {
         let model = model();
-        let tracker = Tracker::new(&model, [1, 2], [1, 2]);
-        assert_eq!(tracker.upward_delta(&insn(&[], &[3]), &[], &[2, 0]).excess, None);
+        let insns = [insn(&[], &[3])];
+        let region = Region::of(&insns);
+        let tracker = Tracker::over(&model, &region, [1, 2], [1, 2], true);
+        assert_eq!(tracker.delta(0, &[], &[2, 0]).excess, None);
     }
 
     /// A weight-2 value in two sets is counted in both, at its weight.
     #[test]
     fn a_value_counts_its_weight_in_every_set_of_its_class() {
         let model = model();
-        let mut tracker = Tracker::new(&model, [], []);
-        tracker.advance_upward(&insn(&[], &[4]));
+        let insns = [insn(&[4], &[]), insn(&[], &[4])];
+        let region = Region::of(&insns);
+        let mut tracker = Tracker::over(&model, &region, [], [], false);
+        tracker.place(1);
         assert_eq!(tracker.current(), &[2, 2]);
-        tracker.advance_upward(&insn(&[4], &[]));
+        tracker.place(0);
         assert_eq!(tracker.current(), &[0, 0]);
         assert_eq!(tracker.max(), &[2, 2], "the most it has been stays");
     }
@@ -571,13 +559,14 @@ mod tests {
     #[test]
     fn the_max_questions_compare_with_the_critical_entry_and_the_region_max() {
         let model = model();
-        let tracker = Tracker::new(&model, [1], []);
+        let insns = [insn(&[], &[2])];
+        let region = Region::of(&insns);
+        let tracker = Tracker::over(&model, &region, [1], [], true);
         let critical = [PressureChange { set: 0, inc: 1 }];
-        let delta = tracker.upward_delta(&insn(&[], &[2]), &critical, &[1, 0]);
+        let delta = tracker.delta(0, &critical, &[1, 0]);
         assert_eq!(delta.critical_max, Some(PressureChange { set: 0, inc: 1 }));
         assert_eq!(delta.current_max, Some(PressureChange { set: 0, inc: 1 }));
-        let quiet = tracker.upward_delta(&insn(&[], &[2]), &critical, &[2, 0]);
-        assert_eq!(quiet.current_max, None);
+        assert_eq!(tracker.delta(0, &critical, &[2, 0]).current_max, None);
     }
 
     /// A word confined to ax and bx has the class that holds just them, a
@@ -595,14 +584,16 @@ mod tests {
         let three: &[RegId] = &[ax, bx, cx];
         let model =
             Model::of_values(&sets, regs, |set| sets.sets[set].limit, [(1, 2, both), (2, 2, three), (3, 1, both)]);
-        let tracker = Tracker::new(&model, [1, 2, 3], []);
+        let region = Region::of(&[]);
+        let tracker = Tracker::over(&model, &region, [1, 2, 3], [], false);
         // value 1: PAIR (weight 2, sets 0 and 1); value 2: ALL (2, set 0);
         // value 3: BYTES (1, set 0).
         assert_eq!(tracker.current(), &[5, 2]);
     }
 
     /// Each distinct value of a region's nodes has an operand set; `n` nodes of
-    /// `seed`-chosen reads and writes over values 1..=12.
+    /// `seed`-chosen reads and writes over values 1..=12, a name often both
+    /// read and written (a tied def).
     fn region(
         seed: u64,
         n: usize,
@@ -616,7 +607,7 @@ mod tests {
             .map(|_| {
                 let defines: Vec<u32> = (0..next(3)).map(|_| 1 + next(12) as u32).collect();
                 let uses: Vec<u32> = (0..next(4)).map(|_| 1 + next(12) as u32).collect();
-                Arc::new(insn(&defines, &uses))
+                insn(&defines, &uses)
             })
             .collect()
     }
@@ -634,32 +625,50 @@ mod tests {
     }
 
     /// The `PressureDiff`s kept current by `place` must give the delta that
-    /// rescanning the node against the live values gives, at every step of any
-    /// placement order: an update that missed a value turning live or dead
-    /// would pick by a stale count.
+    /// looking at the node against the live values gives, at every step of any
+    /// order the graph allows (a node waits for every later node it conflicts
+    /// with): an update that missed a value turning live would pick by a stale
+    /// count.
     #[test]
     fn the_kept_diffs_give_the_delta_a_rescan_gives_after_each_placement() {
         let model = wide_model();
         for seed in 1..=20u64 {
             let insns = region(seed, 30);
-            let live_out = [1, 5, 9];
-            let mut kept = Tracker::over(&model, live_out, [2], &insns);
-            let mut scanned = Tracker::new(&model, live_out, [2]);
+            let region = Region::of(&insns);
+            let n = insns.len();
+            let touches = |node: usize| -> (Vec<u32>, Vec<u32>) {
+                (region.reads[node].iter().map(|read| read.0).collect(), region.writes[node].clone())
+            };
+            // `later[i]`: the nodes after i that must be placed before it.
+            let later: Vec<Vec<usize>> = (0..n)
+                .map(|i| {
+                    let (reads, writes) = touches(i);
+                    (i + 1..n)
+                        .filter(|&j| {
+                            let (other_reads, other_writes) = touches(j);
+                            writes.iter().any(|v| other_reads.contains(v) || other_writes.contains(v))
+                                || reads.iter().any(|v| other_writes.contains(v))
+                        })
+                        .collect()
+                })
+                .collect();
+            let mut kept = Tracker::over(&model, &region, [1, 5, 9], [2], true);
             let critical = [PressureChange { set: 0, inc: 1 }];
-            // 7 is coprime to 30: every node once.
-            let order = (0..insns.len()).map(|step| (step * 7 + seed as usize) % insns.len());
-            let mut placed = HashSet::default();
-            for node in order {
-                placed.insert(node);
-                for other in (0..insns.len()).filter(|other| !placed.contains(other)) {
+            let mut placed = vec![false; n];
+            let mut state = seed;
+            for _ in 0..n {
+                let ready: Vec<usize> = (0..n).filter(|&i| !placed[i] && later[i].iter().all(|&j| placed[j])).collect();
+                for &other in &ready {
                     assert_eq!(
                         kept.delta(other, &critical, &[1, 1]),
-                        scanned.upward_delta(&insns[other], &critical, &[1, 1]),
-                        "seed {seed}, node {other} after placing {node}"
+                        kept.rescan(other, &critical, &[1, 1]),
+                        "seed {seed}, node {other}"
                     );
                 }
-                kept.place(&insns[node]);
-                scanned.advance_upward(&insns[node]);
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                let node = ready[(state >> 33) as usize % ready.len()];
+                placed[node] = true;
+                kept.place(node);
             }
         }
     }
@@ -674,15 +683,38 @@ mod tests {
         for value in 1..=300 {
             model.count(value, 1, Rc::from(vec![0]));
         }
-        let wide = Arc::new(insn(&[], &(1..=300).collect::<Vec<u32>>()));
-        let insns = [wide, Arc::new(insn(&[], &[1]))];
-        let tracker = Tracker::over(&model, [], [], &insns);
+        let insns = [insn(&[], &(1..=300).collect::<Vec<u32>>()), insn(&[], &[1])];
+        let region = Region::of(&insns);
+        let tracker = Tracker::over(&model, &region, [], [], true);
         WEIGHTS.with(|count| count.set(0));
         let delta = tracker.delta(0, &[], &[0]);
         assert_eq!(WEIGHTS.with(std::cell::Cell::get), 0, "no weight asked at pick time");
         assert_eq!(delta.excess, Some(PressureChange { set: 0, inc: 300 - 2 }));
-        tracker.upward_delta(&insns[0], &[], &[0]);
+        tracker.rescan(0, &[], &[0]);
         assert!(WEIGHTS.with(std::cell::Cell::get) >= 300, "premise: the rescan asks for every read");
+    }
+
+    /// After two-address, `c := mov a; c := add c, b; use c` has one name for
+    /// two values. Placing the add above the use takes c (the copy's) live and
+    /// ends c (its own): pressure goes from {c} to {c, b}, one up. Counting by
+    /// name saw c live below and above and reported no rise, so a scheduler
+    /// after the coalescer chose by a pressure one too low at every tied
+    /// add (lru m32 -Os grew 27 bytes).
+    #[test]
+    fn a_tied_def_and_use_of_one_name_are_two_values() {
+        let mut model = Model::new(vec![1]);
+        for value in 1..=3 {
+            model.count(value, 1, Rc::from(vec![0]));
+        }
+        // a = 1, b = 2, c = 3.
+        let insns = [insn(&[3], &[1]), insn(&[3], &[3, 2]), insn(&[], &[3])];
+        let region = Region::of(&insns);
+        let mut tracker = Tracker::over(&model, &region, [], [], true);
+        tracker.place(2);
+        assert_eq!(tracker.current(), &[1]);
+        let delta = tracker.delta(1, &[], &[1]);
+        assert_eq!(delta.excess, Some(PressureChange { set: 0, inc: 1 }), "the add raises {{c}} to {{c, b}}");
+        assert_eq!(delta, tracker.rescan(1, &[], &[1]));
     }
 
     fn change(

@@ -248,6 +248,16 @@ rule fused_push
     when    free(@0, dropped), free(@1, settled), same_width(r, c), width_in(c, [16, 32]), dead(@1, lanes(r)), encodable($1)
     rewrite anchor @0 ; @1: push c
 
+// A constant whose only reader is a push is the push's immediate: `mov cx,8;
+// push cx` is `push 8` (4 bytes to 2). The selector hoists a constant of
+// several uses into a register, as the pin does at -Os, and a call between
+// the uses makes the register be made again for each.
+rule fused_immediate_push
+    match   mov r:reg, lit:imm ; ... delays(@0, *) ; push r
+    when    free(@0, dropped), free(@1, settled), same_width(r, lit), width_in(lit, [16, 32]), dead(@1, lanes(r)),
+            encodable($1)
+    rewrite anchor @0 ; @1: push lit
+
 rule fused_unary
     match   mov r:reg, c:mem ; ... delays(@0, *) ; op=unary_rmw r, r ; mov c2:mem, r
     when    free(@0, dropped), free(@1, settled), free(@2, dropped), same_width(r, c),
