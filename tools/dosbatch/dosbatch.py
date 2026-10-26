@@ -219,6 +219,12 @@ def link_files(source: Path, names: Iterable[str], target: str) -> list[Path]:
     return out
 
 
+def link_loaders(target: str) -> tuple[Path, ...]:
+    """The files `target`'s executable needs beside it (an extender's loader)."""
+    link = target_link(target)
+    return (Path(link["loader"].replace("{ow}", str(ow_root()))),) if "loader" in link else ()
+
+
 def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = (), runtime: tuple[list[str], list[str]] | None = None, objects_after: tuple[Path, ...] = (), defines: tuple[str, ...] | None = None, image: Path | None = None) -> tuple[Path, ...]:
     """A C object with its start-up and `report(long)`, which prints a signed decimal and a newline, linked as
     `target` says; the files its executable needs beside it (an extender's loader). `image`: the same objects linked again as a flat ELF,
@@ -244,7 +250,7 @@ def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | N
         cut = lambda count: [every.pop(0) for _ in range(count)]  # noqa: E731
         copies = (cut(len(first)), cut(1)[0], cut(len(objects_after)), cut(len(last)), cut(len(final)))
         _host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={image.with_suffix('.map')}", "format", "elf", "name", str(image), *files(copies[0]), "file", str(copies[1]), *files(copies[2]), *files(copies[3]), *after, *files(copies[4])])
-    return (Path(fill(link["loader"])),) if "loader" in link else ()
+    return link_loaders(target)
 
 
 # The 16-bit target the loop corpus and the C helpers build for.

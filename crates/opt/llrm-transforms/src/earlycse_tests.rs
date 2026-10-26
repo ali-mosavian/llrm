@@ -336,3 +336,27 @@ b0:
     assert_eq!(with.matches("load").count(), 1, "premise: with MemorySSA the second load goes:\n{with}");
     assert_eq!(without.matches("load").count(), 2, "{without}");
 }
+
+/// A load of a constant table is the one before a call that may write
+/// anything (`pointsToConstantMemory`, `opt` agrees). QCport's
+/// `config.c` kept the second `load [_fields + i + 4]` after a `strncpy`
+/// when EarlyCSE read unannotated accesses: +34 B over three modules.
+#[test]
+fn test_a_load_of_a_constant_table_survives_a_call() {
+    let after = run("@fields = internal constant [4 x i16] [i16 1, i16 2, i16 3, i16 4]
+
+declare ptr @strncpy_(ptr, ptr, i16)
+
+define i16 @f(ptr noundef %base, ptr noundef %src, i16 %i) {
+b0:
+  %p = getelementptr inbounds i16, ptr @fields, i16 %i
+  %a = load i16, ptr %p
+  %d = getelementptr inbounds i8, ptr %base, i16 %a
+  %c = call ptr @strncpy_(ptr %d, ptr %src, i16 63)
+  %b = load i16, ptr %p
+  %r = add i16 %a, %b
+  ret i16 %r
+}
+");
+    assert_eq!(after.matches("load i16").count(), 1, "{after}");
+}
