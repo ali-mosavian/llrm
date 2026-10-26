@@ -583,6 +583,37 @@ entry:
     assert!(zero);
 }
 
+/// A `double` argument at m64 went to the stack (`Convention::kind` made every
+/// float `Memory`), so `printf("%f", x)` read garbage and `al` was 0. It goes
+/// in `xmm0`, with `al` 1.
+#[test]
+fn a_double_argument_at_m64_is_passed_in_xmm0_and_counted_in_al() {
+    use crate::model::ir::Loc;
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare i32 @printf(ptr, ...)
+define i32 @f(ptr %s, double %d) {
+entry:
+  %r = call i32 (ptr, ...) @printf(ptr %s, double %d)
+  ret i32 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let insns = done.body.insns();
+    let call = insns.iter().find(|i| i.call.is_some()).expect("a call");
+    assert_eq!(call.requires.len(), 3, "rdi, xmm0 and al: {:?}", call.requires);
+    let al = call.requires.iter().find(|(_, register)| *register == llrm_lir::registers::RegId::AL).expect("al").0;
+    let one = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .any(
+            |w| matches!(w.dests.first(), Some(Loc::Held(h)) if h.value == al.value)
+                && matches!(w.sources.first(), Some(Loc::Imm(imm)) if imm.value == 1),
+        );
+    assert!(one, "al is the count of vector registers");
+}
+
 /// A `double` copied through memory at m64 stopped at emit with
 /// `Unmapped("MOVSDrm_alt")` (the pin's name for the scalar load), and once
 /// mapped came out as 10-byte x87 cells. It is a `movsd` load and store of
