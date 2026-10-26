@@ -898,7 +898,7 @@ b5:
 fn a_run_that_edits_a_loop_does_not_sweep_the_function_for_dead_code() {
     let mut module = parsed(&two_counters(0, 1));
     crate::dead::SCANNED.with(|scanned| scanned.set(0));
-    managed(&mut module, IndVars { lftr: true });
+    managed(&mut module, IndVars { lftr: true, size: false });
     assert_eq!(header_phis(&mut module), 1, "{}", printed(&module));
     assert_eq!(crate::dead::SCANNED.with(std::cell::Cell::get), 0);
 }
