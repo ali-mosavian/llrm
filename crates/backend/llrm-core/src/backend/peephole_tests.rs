@@ -4635,6 +4635,26 @@ fn test_the_dead_lanes_of_a_body_no_pass_changed_are_worked_out_once() {
     assert_eq!(liveness::exits_computed() - before, 2, "a changed body was given the last answer");
 }
 
+/// `high_extracts` solved the function's liveness and walked every block for
+/// the dead lanes after each instruction, though none held a shift to extract
+/// (3.0 M Ir of d_faces -O2). A body with nothing to extract is answered
+/// unchanged without a solve.
+#[test]
+fn test_a_body_with_nothing_to_extract_is_not_solved_for_high_extracts() {
+    let mov = Arc::new(insn(
+        0,
+        Some((0, 2)),
+        Some(sem(Operation::Move, "mov", vec![rl(RegId::AX, 4)], vec![rl(RegId::BX, 4)])),
+        vec![],
+        vec![],
+    ));
+    let input = body("f", 0, vec![block(0, vec![mov], vec![]).into()]);
+    let before = liveness::exits_computed();
+    let done = high_extracts(&input, "386").unwrap();
+    assert_eq!(done, input);
+    assert_eq!(liveness::exits_computed() - before, 0, "solved for a body with nothing to extract");
+}
+
 /// `addresses` solved the flags live out of every block and the registers live
 /// out of the function for each body, though no instruction in it starts a
 /// chain to fold into an address (7.5 M Ir of d_faces -O2). A body with nothing

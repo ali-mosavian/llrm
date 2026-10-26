@@ -6936,3 +6936,25 @@ no:
     assert!(got.iter().any(|line| line.starts_with("test ")), "{got:?}");
     assert!(!got.iter().any(|line| line.starts_with("and ")), "{got:?}");
 }
+
+/// An i1 true is -1 signed, but its byte is 1: `icmp slt i1 %a, %b` read as
+/// `cmp al, bl; jl` was false for a = true, b = false, where it holds.
+#[test]
+fn test_a_signed_compare_of_i1_orders_true_below_false() {
+    let branch = |predicate: &str| {
+        let text = format!(
+            "define i16 @f(i1 %a, i1 %b) addrspace(1) {{\n  %c = icmp {predicate} i1 %a, %b\n  br i1 %c, label %y, label %n\ny:\n  ret i16 1\nn:\n  ret i16 0\n}}\n"
+        );
+        inner(&text)[2].split(' ').next().unwrap().to_owned()
+    };
+    // The branch or its inverse, whichever block falls through.
+    for (signed, unsigned) in [
+        ("slt", ["ja", "jbe"]),
+        ("sle", ["jae", "jb"]),
+        ("sgt", ["jb", "jae"]),
+        ("sge", ["jbe", "ja"]),
+        ("ult", ["jb", "jae"]),
+    ] {
+        assert!(unsigned.contains(&branch(signed).as_str()), "icmp {signed} i1: {}", branch(signed));
+    }
+}

@@ -324,6 +324,20 @@ impl llrm_target::Target for M64 {
 
 #[cfg(test)]
 mod tests {
+    /// x86-64 described no x87 registers, so an x87 value (a QB `fatan`, a
+    /// `long double`) had no register class and the DAG path refused it.
+    #[test]
+    fn test_the_x87_stack_and_its_seven_rfp_registers_are_described() {
+        use llrm_target::Target;
+        let file = llrm_target::registers::parse(&M64.registers_text()).unwrap();
+        let named = |class: &str| -> Vec<&str> {
+            file.iter().filter(|one| one.is(class)).map(|one| one.name.as_str()).collect()
+        };
+        assert_eq!(named("x87"), ["st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7"]);
+        assert_eq!(named("rfp"), ["mm0", "mm1", "mm2", "mm3", "mm4", "mm5", "mm6"]);
+        assert_eq!(M64.float_stack(), 8);
+    }
+
     /// `object()` and the runtime tables are parsed once and kept; each must
     /// equal a fresh parse of its toml (35 parses of object.toml and 4 of the
     /// runtime table cost 3.3 M Ir of every compile).

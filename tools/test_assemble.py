@@ -120,7 +120,7 @@ def test_the_scanners_of_an_alone_check_run_in_the_scratch_tree_not_the_runners(
     seen = []
     smoke = ps.parity_smoke_module()
     monkeypatch.setattr(smoke, "integration_failures", lambda targets, root=None, **_: seen.append(root) or set())
-    assert ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set()) == []
+    assert ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), units=lambda _: set()) == []
     assert seen == [repo], seen
 
 
@@ -164,7 +164,7 @@ def test_a_pr_whose_only_issue_is_a_fmt_difference_is_kept(tmp_path):
     sh(repo, "commit", "-qm", "base")
     head = branch(repo, "pr", "emit.rs", "fn  f( ){}\n")
     sh(repo, "checkout", "-q", "main")
-    why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: {"emit.rs"}, scanners=lambda _: set())
+    why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: {"emit.rs"}, scanners=lambda _: set(), units=lambda _: set())
     assert why == [], why
 
 
@@ -237,3 +237,59 @@ def test_alone_checks_run_in_parallel_and_the_unfinished_at_the_cap_are_kept_unf
     assert took < 4, took
     assert kept == ["1", "3", "4", "5"], kept  # 5 never finished: unfiltered
     assert list(dropped) == ["2"], dropped
+
+
+def _clean_pr(tmp_path):
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    head = branch(repo, "pr", "x.rs", "fn x() {}\n")
+    sh(repo, "checkout", "-q", "main")
+    return repo, head
+
+
+def test_a_unit_test_that_fails_on_the_pr_and_passes_on_the_base_blames_the_pr_alone(tmp_path):
+    """Round 3 died on llrm-nib::test_pipeline::test_a_frame_larger_than_the_start_stack_adds_a_stack_segment and no PR was blamed: alone ran a build and scanners, no unit test."""
+    repo, head = _clean_pr(tmp_path)
+    red = "unit llrm-nib::test_pipeline::test_a_frame_larger_than_the_start_stack_adds_a_stack_segment"
+    why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda _: set(), units=lambda files: {red}, on_base=lambda wanted: set())
+    assert why and red in why[0], why
+
+
+def test_a_unit_test_the_base_fails_too_does_not_blame_the_pr(tmp_path):
+    repo, head = _clean_pr(tmp_path)
+    why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda _: set(), units=lambda files: {"unit llrm-nib::t"}, on_base=lambda wanted: {("llrm-nib", "t")})
+    assert why == [], why
+
+
+def test_a_batch_that_fails_with_no_pr_blamed_is_halved_until_the_pair_is_named():
+    """Two PRs that only fail together: no offender is named, the halves are tried, and the second of the pair is the one refused."""
+    landed, refused = [], []
+    prs = ["1", "2", "3", "4"]
+
+    def passes(group: list[str]) -> bool:
+        return not ({"2", "3"} <= set(landed) | set(group))
+
+    ps.batch(prs, passes, landed.append, refused.append, offenders=lambda group: [])
+    assert refused == ["3"] and landed == ["1", "2", "4"], (landed, refused)
+
+
+def test_a_slot_checkout_keeps_its_path_and_two_processes_never_share_a_slot(tmp_path):
+    """A fresh directory per PR made cargo rebuild everything (2-3 min a PR): the slot's checkout is reused; the filter and the warm-up each hold a slot of their own."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    work = tmp_path / "slots" / "alone-0" / "w"
+    ps._alone_checkout(work, "main", repo)
+    (work / "stray.txt").write_text("left by the last PR\n")
+    ps._alone_checkout(work, "main", repo)
+    assert work.is_dir() and not (work / "stray.txt").exists()
+    first, lock_a = ps._claim_slot(tmp_path / "slots", 2)
+    second, lock_b = ps._claim_slot(tmp_path / "slots", 2)
+    assert {first, second} == {0, 1}
+    lock_a.close()
+    lock_b.close()
