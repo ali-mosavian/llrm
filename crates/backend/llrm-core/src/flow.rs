@@ -282,7 +282,7 @@ pub fn machine_with<'a>(
         Box::new(schedule::Scheduler::new(target)?),
         // Last: this physical order decides which explicit edge is now
         // fall-through.
-        Box::new(jumps::ControlFlow { cpu: target }),
+        Box::new(jumps::ControlFlow { cpu: target, calls: calls.cloned() }),
         // The pin runs MachineCopyPropagation again after tail duplication.
         Box::new(crate::backend::machinecp::CopyPropagation),
     ];

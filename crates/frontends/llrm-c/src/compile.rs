@@ -2601,7 +2601,9 @@ mod tests {
         assert!(lines.iter().any(|one| one.starts_with("dd _show")), "{asm}");
         let from = asm.find("_run proc").expect("_run");
         let run: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
-        assert!(run.iter().any(|one| one.starts_with("call dword ptr [")), "{run:#?}");
+        // The far table's entry is read by the call itself (`call dword ptr
+        // _notices`, or through an index register), not copied out first.
+        assert!(run.iter().any(|one| one.starts_with("call dword ptr ")), "{run:#?}");
         // The near table call is folded to `_twice` and inlined (`add si, si`).
         assert!(run.iter().any(|one| *one == "add si, si"), "{run:#?}");
     }

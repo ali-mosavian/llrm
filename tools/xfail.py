@@ -28,6 +28,13 @@ def load(path: Path = PATH) -> dict[str, dict]:
     return found
 
 
+def load_for(root: Path) -> dict[str, dict]:
+    """The list of the tree under test: `root`/tools/xfail.toml, else the one beside this script. The landing runs from its own checkout, whose list is parity's: a PR that fixes a listed
+    test and deletes its row was refused as an xpass because the row it deleted was still read (#4681, #4946, #4936, #4945)."""
+    beside = Path(root) / "tools" / "xfail.toml"
+    return load(beside if beside.exists() else PATH)
+
+
 def issue_of(test_id: str, listed: dict[str, dict] | None = None) -> str | None:
     """`#N` for a listed id, else None (run_tests' `known` mark: a listed program that passes is its XPASS)."""
     entry = (load() if listed is None else listed).get(test_id)
