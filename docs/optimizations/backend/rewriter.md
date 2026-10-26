@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/rewriter.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/rewriter.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/rewriter.rs sha256:6269b54f7f9e5d02e6d03a4adb9a54fc7e1c6c23feb47264f16f81a9c8534245 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/rewriter.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/rewriter.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/rewriter.rs sha256:ac56265324b8411c09d2d0793427b5a1dc14fc7ec221e4f7f8ee07b05781db94 -->
 
 # rewriter
 

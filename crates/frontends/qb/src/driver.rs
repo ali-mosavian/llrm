@@ -4,7 +4,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use llrm_core::hir::{codec, model};
+use llrm_codegen::hir::{codec, model};
 
 #[allow(non_snake_case)]
 pub fn ROOT() -> PathBuf {
@@ -190,7 +190,7 @@ pub fn parsed(
     if frontend.checked_stack {
         let family = program.runtime.tables();
         program.stack_check = Some(
-            llrm_core::abi::runtime::semantics::stack(family)
+            llrm_codegen::abi::runtime::semantics::stack(family)
                 .ok_or_else(|| FrontendError(format!("the {family} runtime states no stack limit")))?,
         );
     }
@@ -209,7 +209,8 @@ pub fn decoded(
         codec::decode(text).map_err(|error| FrontendError(format!("qbfront produced invalid HIR: {error}")))?;
     let family = program.runtime.tables();
     for object_ in program.modules.iter_mut().flat_map(|module| &mut module.data) {
-        if object_.linkage == model::DataLinkage::External && llrm_core::abi::runtime::named_only(&object_.name, family)
+        if object_.linkage == model::DataLinkage::External
+            && llrm_codegen::abi::runtime::named_only(&object_.name, family)
         {
             object_.addressed = false;
         }
@@ -221,27 +222,29 @@ pub fn decoded(
         program.modules.iter().flat_map(|module| &module.functions).any(|function| function.error_handler.is_some());
     if !handles {
         program.promises = model::RuntimePromises::of(
-            llrm_core::abi::runtime::ENTERS_USER_CODE.iter().copied(),
-            llrm_core::abi::runtime::writers(family),
+            llrm_codegen::abi::runtime::ENTERS_USER_CODE.iter().copied(),
+            llrm_codegen::abi::runtime::writers(family),
             [],
         );
     }
     // Where an error is handled the routine raises it, as the checks the
     // frontend writes do.
     program.promises.checked = checked || handles;
-    program.promises.descriptor = llrm_core::abi::runtime::semantics::descriptor(
+    program.promises.descriptor = llrm_codegen::abi::runtime::semantics::descriptor(
         program.runtime.value(),
         if near_bytes == 0 { 2 } else { near_bytes },
     );
-    program.promises.routines = llrm_core::abi::runtime::semantics::routines();
-    program.promises.nounwind = llrm_core::abi::runtime::CONTRACTS
+    program.promises.routines = llrm_codegen::abi::runtime::semantics::routines();
+    program.promises.nounwind = llrm_codegen::abi::runtime::CONTRACTS
         .iter()
         .filter(|(_, contract)| !contract.raises_error)
         .map(|(name, _)| name.clone())
         .collect();
-    program.promises.no_retain = llrm_core::abi::runtime::captures_nothing().into_iter().map(str::to_owned).collect();
-    program.promises.flags_results = llrm_core::abi::runtime::flags_results().into_iter().map(str::to_owned).collect();
-    program.promises.no_return = llrm_core::abi::runtime::never_returning().into_iter().map(str::to_owned).collect();
+    program.promises.no_retain =
+        llrm_codegen::abi::runtime::captures_nothing().into_iter().map(str::to_owned).collect();
+    program.promises.flags_results =
+        llrm_codegen::abi::runtime::flags_results().into_iter().map(str::to_owned).collect();
+    program.promises.no_return = llrm_codegen::abi::runtime::never_returning().into_iter().map(str::to_owned).collect();
     Ok(program)
 }
 
@@ -254,8 +257,9 @@ pub fn natively_called(
     native_cc: Option<&str>,
 ) {
     let named = native_cc.filter(|cc| *cc != "cdecl").map(str::to_owned);
+    let hosted = program.promises.hosted;
     for function in program.modules.iter_mut().flat_map(|module| &mut module.functions) {
-        let called: llrm_core::support::hash::HashMap<i64, String> = function
+        let called: llrm_codegen::support::hash::HashMap<i64, String> = function
             .blocks
             .iter()
             .flat_map(|block| &block.instructions)
@@ -265,9 +269,22 @@ pub fn natively_called(
             call.callee.is_none()
                 && !called
                     .get(&call.instruction)
-                    .is_some_and(|name| llrm_core::abi::runtime::semantics::keeps_stack_abi(name))
+                    .is_some_and(|name| llrm_codegen::abi::runtime::semantics::keeps_stack_abi(name))
         };
         let natives: Vec<bool> = function.calls.iter().map(native).collect();
+        // A host's stack-block routines are C varargs: they keep the order
+        // BASIC pushes them in, and the caller removes them.
+        if hosted {
+            for call in function.calls.iter_mut().filter(|call| {
+                call.callee.is_none()
+                    && called
+                        .get(&call.instruction)
+                        .is_some_and(|name| llrm_codegen::abi::qb::HOST_STACK_BLOCKS.contains(&name.as_str()))
+            }) {
+                call.cleanup = model::StackCleanup::Caller;
+                call.convention = named.clone();
+            }
+        }
         for call in function.calls.iter_mut().zip(natives).filter_map(|(call, native)| native.then_some(call)) {
             call.cleanup = model::StackCleanup::Caller;
             call.order.reverse();

@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `optimize/profit_tests.rs`: the `profit`-only
+//! Adapted from llrm-codegen's `optimize/profit_tests.rs`: the `profit`-only
 //! cases of `tests/test_unroll_budget.py`, each body now MIR text. A body
 //! of one block has nothing live out.
 

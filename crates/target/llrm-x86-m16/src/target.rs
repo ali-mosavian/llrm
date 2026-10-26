@@ -148,6 +148,7 @@ impl Machine for Dos {
             registers: self.registers as u32,
             scaled_index_insns: scaled_index_insns as u32,
             huge_space: crate::spaces().huge,
+            inline_size_guard: true,
         };
         let layout = crate::layout();
         llrm_x86::tti::X86::described(layout.tti.as_deref()?, layout.llvm_cpu.as_deref()?)
@@ -186,7 +187,7 @@ impl Machine for Dos {
         crate::spaces()
     }
 
-    /// The description's foreign memory: `dos.toml` states it once.
+    /// The description's foreign memory: `real16.toml` states it once.
     fn foreign_span(
         &self,
         selectors: (i64, i64),
@@ -251,7 +252,7 @@ impl Machine for Dos {
         self.address_forms.clone()
     }
 
-    /// The description's: `dos.toml` states when an access faults.
+    /// The description's: `real16.toml` states when an access faults.
     fn load_may_trap(
         &self,
         width: u64,
@@ -267,7 +268,7 @@ impl Machine for Dos {
         Some((crate::spaces().far, (1 << 16) - (step - 1)))
     }
 
-    /// The description's: `dos.toml` states each device's reach.
+    /// The description's: `real16.toml` states each device's reach.
     fn port_touches_memory(
         &self,
         ports: (i64, i64),

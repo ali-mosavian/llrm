@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `optimize/loopsimplify_tests.rs`, the port of
+//! Adapted from llrm-codegen's `optimize/loopsimplify_tests.rs`, the port of
 //! `tests/test_loopsimplify.py`, each body now MIR text.
 //!
 //! The BC corpora's test_adjacent_angle_loops_reach_a_fixed_point

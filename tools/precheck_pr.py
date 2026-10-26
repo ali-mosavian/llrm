@@ -45,7 +45,7 @@ ROWS = re.compile(r"^Rows:\s*\S+", re.M)
 # Built from pieces: this file must not itself name what it looks for (the runner refuses an added line that does).
 CONFIG_DIR = re.compile(r"\." + "clau" + r"de\b")
 # Files whose change can leave the slot lists out of step: the machine phases and the parity registry.
-SLOT_FILES = re.compile(r"^crates/backend/llrm-core/src/flow\.rs$|^crates/opt/llrm-transforms/src/parity[^/]*\.rs$")
+SLOT_FILES = re.compile(r"^crates/codegen/llrm-codegen/src/flow\.rs$|^crates/opt/llrm-transforms/src/parity[^/]*\.rs$")
 
 
 def git(

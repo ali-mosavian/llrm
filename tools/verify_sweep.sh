@@ -5,11 +5,11 @@
 #
 #   tools/verify_sweep.sh [LLRM_C] [EXTRA.c ...]
 #
-# LLRM_C defaults to target/release/llrm-c. EXTRA sources (d_faces, a QCport
+# LLRM_C defaults to the resolver's llrm-c (tools/llrmbin.py). EXTRA sources (d_faces, a QCport
 # sample) are compiled as m32 sysv i486 too. At most 40 compiles.
 set -u
 cd "$(dirname "$0")/.."
-llrm_c=${1:-${CARGO_TARGET_DIR:-target}/release/llrm-c}
+llrm_c=${1:-$(python3 tools/llrmbin.py bin)/llrm-c}
 [ $# -gt 0 ] && shift
 kernels=$(printf "%s\n" crates/target/*/vsgcc/kernels | head -1)  # the target that ships the kernels
 sources=()

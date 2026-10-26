@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use llrm_core::testing::boundary::{self, Byte, Procedure};
+use llrm_codegen::testing::boundary::{self, Byte, Procedure};
 
 const CONVENTIONS: [&str; 4] = ["cf", "cn", "pf", "pn"];
 const MODULES: [(&str, &str); 2] = [("callee", "caller"), ("aggee", "agger")];
@@ -244,18 +244,19 @@ fn agrees(
 
 /// `source` recorded and compiled as Borland's compiler has it: the cdecl ABI,
 /// which these tests compare llrm with.
-fn borland(source: &Path) -> Result<llrm_core::backend::masm::Module, String> {
+fn borland(source: &Path) -> Result<llrm_codegen::backend::masm::Module, String> {
     let profile = crate::compile::Profile::for_abi(&llrm_x86_m16::M16, Some("cdecl"))?;
     let stream = crate::compile::recorded_for(source, &[], false, &[], &profile).map_err(|error| error.0)?;
-    let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
-    let options = llrm_core::driver::Options { abi: Some("cdecl".to_owned()), ..llrm_driver::m16_options_old(machine) };
+    let machine =
+        llrm_codegen::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+    let options = llrm_codegen::driver::Options { abi: Some("cdecl".to_owned()), ..llrm_driver::m16_options_old(machine) };
     crate::compile::selected(&stream, &source.file_stem().unwrap().to_string_lossy(), None, &options)
         .map_err(|error| format!("{error:?}"))
 }
 
 fn llrm(file: &str) -> Result<BTreeMap<String, Procedure>, String> {
     let built = borland(&fixtures().join(format!("{file}.c")))?;
-    Ok(boundary::procedures(&llrm_core::backend::masm::text(&built).map_err(|error| format!("{error:?}"))?))
+    Ok(boundary::procedures(&llrm_codegen::backend::masm::text(&built).map_err(|error| format!("{error:?}"))?))
 }
 
 fn bcc(file: &str) -> BTreeMap<String, Procedure> {
@@ -367,7 +368,7 @@ fn llrm_text(text: &str) -> BTreeMap<String, Procedure> {
     let source = directory.path().join("probe.c");
     std::fs::write(&source, text).unwrap();
     let built = borland(&source).unwrap();
-    boundary::procedures(&llrm_core::backend::masm::text(&built).unwrap())
+    boundary::procedures(&llrm_codegen::backend::masm::text(&built).unwrap())
 }
 
 /// A signed char passed through `...` is promoted to int: llrm zero-extended
@@ -419,5 +420,5 @@ fn test_an_interrupt_handler_with_the_nine_saved_registers_compiles() {
     )
     .unwrap();
     let built = borland(&source).unwrap_or_else(|error| panic!("{error}"));
-    assert!(llrm_core::backend::masm::text(&built).unwrap().contains("handler proc"));
+    assert!(llrm_codegen::backend::masm::text(&built).unwrap().contains("handler proc"));
 }

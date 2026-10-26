@@ -1,7 +1,7 @@
 //! What the raise knows of a module's machine code before any MIR exists:
 //! its bodies, blocks, decoded nodes and call contracts, and which registers
-//! each node defines and reads. Adapted from llrm-core's `model/mir/raise.rs`
-//! (`touched`, `call_touches`, `bodies`' preamble) and
+//! each node defines and reads. Adapted from llrm-codegen's
+//! `model/mir/raise.rs` (`touched`, `call_touches`, `bodies`' preamble) and
 //! `frontends/bc/raising_carried.rs`.
 
 use std::collections::{BTreeMap, BTreeSet};

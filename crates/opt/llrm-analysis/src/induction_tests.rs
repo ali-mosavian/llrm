@@ -1,4 +1,4 @@
-//! llrm-core's `induction_tests.rs` and `counted_loops_tests.rs`, and what
+//! llrm-codegen's `induction_tests.rs` and `counted_loops_tests.rs`, and what
 //! they leave untested, as loops the interpreter runs.
 //!
 //! Skipped: the BC and OMF fixture tests (NDARR, MATRIX, HARR, NESTED),
@@ -2623,4 +2623,34 @@ out:
         invariant(function, &llrm_mir::forest::Body::from_blocks([])).contains(parsed.value("j")),
         "no loop defines nothing"
     );
+}
+
+/// LSR left `store i; trunc(i + 1) == 20000` on a wide counter, which stopped
+/// the proof: copy1d's first loop kept the borrow-mask step instead of
+/// 16380-trip windows.
+#[test]
+fn test_a_wide_counter_tested_through_a_truncation_is_counted() {
+    let parsed = Parsed::new(
+        "define void @f(ptr %p) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b1 ]
+  %q = phi ptr [ %p, %b0 ], [ %q2, %b1 ]
+  store i32 %i, ptr %q
+  %next = add nuw nsw i32 %i, 1
+  %q2 = getelementptr i8, ptr %q, i32 4
+  %low = trunc i32 %next to i16
+  %done = icmp eq i16 %low, 20000
+  br i1 %done, label %b2, label %b1
+
+b2:
+  ret void
+}
+",
+    );
+    let proofs = parsed.counted(false);
+    let [proof] = &proofs[..] else { panic!("one proof") };
+    assert_eq!(proof.count, Some(BigInt::from(20000)));
 }

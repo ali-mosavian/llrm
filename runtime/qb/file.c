@@ -4,6 +4,8 @@
 #include "file.h"
 #include "nhstutil.h"
 #include "rtinit.h"
+#include "dev.h"
+#include "error.h"
 #include "llrm_os.h"
 
 enum { MAX_CHANNEL = 15, DEFAULT_RECORD = 128, PATH_MAX = 128, ORIGIN_START = 0, ORIGIN_END = 2, LINE_MAX = 1023 };
@@ -94,6 +96,105 @@ void B_OPEN(SD *name, short channel, short record_length, unsigned short mode)
     if (mode == MD_APPEND)
         llrm_os_seek(handle, 0, ORIGIN_END);
 }
+
+/* B$KILL: KILL "name". One file: no wildcards. As the QB 4.5 runtime's KILL does, it first looks for the file (a
+   missing one is File not found whatever DOS would answer to the delete); a refusal is then Path/File access error,
+   any other failure File not found. */
+/* KILL's wildcard: every file that matches, found and deleted in turn; none is File not found. */
+static void kill_matches(const char *path)
+{
+    unsigned char entry[43];
+    char target[PATH_MAX + 14];
+    unsigned prefix = 0, at;
+    long result;
+
+    for (at = 0; path[at]; at++)
+        if (path[at] == '\\' || path[at] == ':')
+            prefix = at + 1;
+    result = llrm_os_find_first((os_path)path, 0, entry);
+    if (result < 0)
+        qb_error(BE_NOFILE);
+    do {
+        copy_bytes(target, path, prefix);
+        for (at = 0; (target[prefix + at] = entry[30 + at]) != 0; at++)
+            ;
+        result = llrm_os_delete((os_path)target);
+        if (result < 0)
+            qb_error(-result == LLRM_OS_DENIED ? BE_ACCESS : BE_NOFILE);
+    } while (llrm_os_find_next(entry) >= 0);
+}
+
+void B_KILL(SD *name)
+{
+    char path[PATH_MAX];
+    unsigned at;
+    long result;
+
+    path_of(name, path);
+    str_tmp_free(name);
+    for (at = 0; path[at]; at++)
+        if (path[at] == '*' || path[at] == '?') {
+            kill_matches(path);
+            return;
+        }
+    result = llrm_os_open((os_path)path, 0);
+    if (result < 0)
+        qb_error(BE_NOFILE);
+    llrm_os_close(result);
+    result = llrm_os_delete((os_path)path);
+    if (result < 0)
+        qb_error(-result == LLRM_OS_DENIED ? BE_ACCESS : BE_NOFILE);
+}
+
+/* B$NAME: NAME old AS new. An existing new name is File already exists, as the QB 4.5 runtime's NAME answers; a
+   different drive is Rename across disks. */
+void B_NAME(SD *old, SD *new_name)
+{
+    char from[PATH_MAX], to[PATH_MAX];
+    long result;
+
+    path_of(old, from);
+    path_of(new_name, to);
+    str_tmp_free(old);
+    str_tmp_free(new_name);
+    result = llrm_os_rename((os_path)from, (os_path)to);
+    if (result >= 0)
+        return;
+    switch (-result) {
+    case LLRM_OS_NOT_FOUND:
+        qb_error(BE_NOFILE);
+    case LLRM_OS_PATH_NOT_FOUND:
+        qb_error(BE_NOTFOUND);
+    case 17:
+        qb_error(BE_RENAMEDISK);
+    default:
+        qb_error(BE_EXISTS);
+    }
+}
+
+/* The directory statements: a missing path is Path not found, a refusal Path/File access error. */
+enum DirectoryCall { DIR_MAKE, DIR_CHANGE, DIR_REMOVE };
+
+static void directory_call(SD *name, enum DirectoryCall call)
+{
+    char path[PATH_MAX];
+    long result;
+
+    path_of(name, path);
+    str_tmp_free(name);
+    if (call == DIR_MAKE)
+        result = llrm_os_mkdir((os_path)path);
+    else if (call == DIR_CHANGE)
+        result = llrm_os_chdir((os_path)path);
+    else
+        result = llrm_os_rmdir((os_path)path);
+    if (result < 0)
+        qb_error(-result == LLRM_OS_DENIED ? BE_ACCESS : BE_NOTFOUND);
+}
+
+void B_MDIR(SD *name) { directory_call(name, DIR_MAKE); }
+void B_CDIR(SD *name) { directory_call(name, DIR_CHANGE); }
+void B_RDIR(SD *name) { directory_call(name, DIR_REMOVE); }
 
 /* One buffer serves whichever file is being read or written by character: the
    other operations on the file first give back what it holds. */
@@ -193,6 +294,51 @@ long B_FLOF(short channel)
     size = llrm_os_seek(fdb->handle, 0, ORIGIN_END);
     llrm_os_seek(fdb->handle, here, ORIGIN_START);
     return size;
+}
+
+/* The file's position as the program sees it: what the buffers hold is first given back. */
+static long position_of(Fdb *fdb)
+{
+    buffer_release();
+    return llrm_os_seek(fdb->handle, 0, 1);
+}
+
+/* B$FLOC: LOC(#channel): the last record read or written of a RANDOM file, the last byte of a BINARY one, else the
+   position in 128-byte blocks. */
+long B_FLOC(short channel)
+{
+    Fdb *fdb = open_fdb(channel);
+    long at = position_of(fdb);
+
+    if (fdb->mode == MD_RANDOM)
+        return at / fdb->record_length;
+    if (fdb->mode == MD_BINARY)
+        return at;
+    /* A sequential file moves in 128-byte blocks: an input file counts the blocks it has read, a part of the last one
+       included; an output file the blocks it has written. */
+    return fdb->mode == MD_INPUT ? (at + 127) / 128 : at / 128;
+}
+
+/* B$FSEK: SEEK(#channel): the next record of a RANDOM file, else the next byte. */
+long B_FSEK(short channel)
+{
+    Fdb *fdb = open_fdb(channel);
+    long at = position_of(fdb);
+
+    return fdb->mode == MD_RANDOM ? at / fdb->record_length + 1 : at + 1;
+}
+
+/* B$FATR: FILEATTR(#channel, field): 1 is the open mode, 2 the DOS handle. */
+long B_FATR(short channel, short field)
+{
+    Fdb *fdb = open_fdb(channel);
+
+    if (field == 1)
+        return fdb->mode;
+    if (field == 2)
+        return fdb->handle;
+    qb_error(BE_ILLFUN);
+    return 0;
 }
 
 /* A record variable of `length` bytes, or the data of a string descriptor when
@@ -306,7 +452,7 @@ SD *B_FINP(short count, short channel)
             text[at] = (char)c;
         } else if (scan_code_waiting) {
             scan_code_waiting = 0;
-            text[at] = (char)llrm_os_console_read_key();
+            text[at] = (char)dev_key_read();
         } else {
             byte code = cn_wait_key();
 
@@ -514,6 +660,12 @@ static void close_all(void)
     file_close(NULL, 0);
 }
 
+/* B$REST: RESET closes every open file. */
+void B_REST(void)
+{
+    close_all();
+}
+
 static Comp comp = {0, C_DK, {0, 0, 0, 0, close_all}};
 
 #define XI_FN file_xinit
@@ -526,9 +678,18 @@ void file_xinit(void)
 }
 
 #pragma aux B_OPEN "B$OPEN"
+#pragma aux B_FLOC "B$FLOC"
+#pragma aux B_FSEK "B$FSEK"
+#pragma aux B_REST "B$REST"
+#pragma aux B_KILL "B$KILL"
+#pragma aux B_NAME "B$NAME"
+#pragma aux B_MDIR "B$MDIR"
+#pragma aux B_CDIR "B$CDIR"
+#pragma aux B_RDIR "B$RDIR"
 #pragma aux B_GET3 "B$GET3"
 #pragma aux B_PUT3 "B$PUT3"
 #pragma aux B_FLOF "B$FLOF"
+#pragma aux B_FATR "B$FATR"
 #pragma aux file_close "@file_close@4"
 #pragma aux B_GET4 "B$GET4"
 #pragma aux B_PUT4 "B$PUT4"

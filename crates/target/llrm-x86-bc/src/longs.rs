@@ -1,4 +1,4 @@
-//! BC's longs as `i32` values. Adapted from llrm-core's `raising_longs`
+//! BC's longs as `i32` values. Adapted from llrm-codegen's `raising_longs`
 //! (`scalar`, `unary`, `arguments`, `_constant_stores`, `sign_fills`): a
 //! pair of word operations `pairs` found is one operation on the long, its
 //! words the halves of the answer. One whose source words are not known

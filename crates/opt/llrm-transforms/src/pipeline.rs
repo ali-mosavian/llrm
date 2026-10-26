@@ -83,7 +83,7 @@
 //! fixed point (`N/NNN-rRR-pass.ll`); the pass examples come from those.
 //!
 //! # Runs
-//! Options are `Options`; `Level::options` in llrm-core's `driver/flags.rs`
+//! Options are `Options`; `Level::options` in llrm-codegen's `driver/flags.rs`
 //! maps `-O0`, `-O1`, `-O2`, `-O3`, `-Omax`, `-Os`, `-Oz`, `-Og` to
 //! `Options::none`, `basic`, `standard`, `speed`, `aggressive`, `size`,
 //! `min_size` (`-Og`: `basic` without `loopidioms`). `-f` flags set single
@@ -1107,6 +1107,13 @@ pub fn recorded(
     // none of its stores, as LLVM's GlobalOpt and gcc's ipa find a variable
     // only written; the dead-code pass then finds nothing names it.
     manager.add_module(globalopt::WriteOnly);
+    // A loop whose only effect was those stores is dead now: LLVM's second
+    // function round (LoopDeletion, PassBuilderPipelines.cpp:1628) follows its
+    // GlobalOpt.
+    // It reads the live-outs from exit phis, so the bodies are closed first.
+    manager.add(loopsimplify::LoopSimplify);
+    manager.add(lcssa::LoopClosedSSA);
+    manager.add(loopdeletion::LoopDeletion);
     // What no live code names any more goes before selection, as LLVM runs
     // GlobalDCE after inlining.
     manager.add_program(globaldce::GlobalDce);
@@ -1582,11 +1589,10 @@ impl FunctionPass for Fixed {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         self.runs += 1;
-        let promotes = analyses
+        let promotes = !analyses
             .get::<cfg::Shape>(unit.context, unit.layout, unit.function)
             .dominance
-            .irreducible(unit.function)
-            .is_empty();
+            .is_irreducible(unit.function);
         let dump = self.dump.as_ref().map(|directory| directory.join(format!("{:02}", self.runs)));
         let mut run = Run {
             version: 0,
@@ -1951,6 +1957,7 @@ impl Run {
             globals,
             metadata: unit.metadata.to_vec(),
             named_metadata: Vec::new(),
+            sections: Default::default(),
         };
         std::fs::create_dir_all(file.parent().expect("a file in a directory"))
             .and_then(|()| std::fs::write(file, llrm_mir::print::module(&module)))

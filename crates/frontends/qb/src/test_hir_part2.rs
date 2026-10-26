@@ -3,11 +3,11 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use llrm_core::hir::model::Operand;
-use llrm_core::hir::{self};
-use llrm_core::objectfile::module::CALL_FAR;
-use llrm_core::objectfile::omf;
-use llrm_core::support::hash::IndexMap;
+use llrm_codegen::hir::model::Operand;
+use llrm_codegen::hir::{self};
+use llrm_codegen::objectfile::module::CALL_FAR;
+use llrm_codegen::objectfile::omf;
+use llrm_codegen::support::hash::IndexMap;
 
 use super::driver as qb_driver;
 use super::test_hir::*;
@@ -661,13 +661,9 @@ fn test_dynamic_string_array_formal_uses_adjusted_near_descriptor_base() {
     let payloads: Vec<&hir::Place> =
         source.modules[0].functions[1].places.iter().filter(|one| one.name.ends_with("$payload")).collect();
     assert!(!payloads.is_empty() && payloads.iter().all(|one| one.address == hir::AddressKind::Far));
-    let records = records(&source, "string-array-parameter.bas");
-    let fsl = by_name(&records)["FSL_CONST"].0;
-    assert!(
-        omf::fixups(&records)
-            .iter()
-            .any(|fixup| fixup.seg == Some(1) && fixup.target == "segment" && fixup.index == fsl)
-    );
+    // The literal's descriptor is built in DGROUP; no far address is computed
+    // by adding two offsets and no segment of FSL_CONST is read.
+    assert!(!procedure.contains("seg "), "{procedure}");
 }
 
 /// D_SURF applied a one-based array's lower bound twice and hung before its
@@ -892,10 +888,12 @@ fn test_on_error_registrations_follow_source_order() {
     assert_eq!(registered, ["push offset $QB$LANDING", "push offset $QB$LANDING", "pushd 0"], "{main}");
     let states: Vec<u32> = lines
         .iter()
-        .filter_map(|line| line.strip_prefix("mov word ptr ss:$QB$FRAME, "))
+        .filter_map(|line| line.strip_prefix("mov word ptr $QB$FRAME, "))
         .map(|state| state.parse().expect("a statement number"))
         .collect();
-    assert!(states.len() == 3 && states.windows(2).all(|pair| pair[0] < pair[1]), "{main}");
+    // Sites are numbered from 0 among the statements that raise; the first
+    // registration's 0 is the frame cell's initial value, so it is not stored.
+    assert_eq!(states, [1, 2], "{main}");
     let last = before.rsplit_once("\n    call far ptr B$OEGA").expect("a registration").0;
     assert!(last.ends_with("pushd 0"), "{main}");
 }

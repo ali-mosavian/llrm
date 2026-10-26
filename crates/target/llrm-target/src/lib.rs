@@ -8,6 +8,8 @@ pub mod machine;
 pub mod object;
 pub mod opcosts;
 pub mod os;
+#[cfg(test)]
+mod os_tests;
 pub mod pressure;
 pub mod registers;
 pub mod routines;
@@ -381,6 +383,12 @@ pub trait Target {
     /// The register a frame's cells are addressed through.
     fn frame_register(&self) -> RegId;
 
+    /// The pressure sets of the register classes and each set's limit, for a
+    /// target that has them (the pre-RA scheduler tracks pressure per set).
+    fn pressure(&self) -> Option<(&'static pressure::PressureSets, Vec<u32>)> {
+        None
+    }
+
     /// Where the first argument lies from the frame register: past the saved
     /// frame register and the return address, which a far call makes longer.
     fn first_argument_offset(
@@ -663,4 +671,4 @@ impl FrameRegisters {
 
 /// The I/O ports of a PC: a `[[ports]]`-only description that a platform
 /// appends to its own text.
-pub const PC_PORTS: &str = include_str!("machines/pc-ports.toml");
+pub const PC_PORTS: &str = include_str!("../../../../machine/platform/dos/ports.toml");

@@ -463,7 +463,7 @@ WHOLE_GROUP_TRIGGERS = (
     "runtime/qb/",
     "runtime/qb/",
     "crates/target/llrm-x86/",
-    "crates/backend/llrm-core/",
+    "crates/codegen/llrm-codegen/",
 )
 
 
@@ -543,7 +543,7 @@ def dependants_lib_failures(
     failed = set()
     # A listed test that passed: its fix removes its entry, and the list says otherwise (17 entries of llrm-nib, qb and transforms stood after their tests passed or went).
     stale = set()
-    listed = xfail.load()
+    listed = xfail.load_for(root)
     started = time.monotonic()
     passed, names = 0, []
     for package in sorted(packages):
@@ -574,6 +574,19 @@ NIGHTLY_ONLY = {
     "cv4": "30 s of CodeView debug-info checks",
     "run": "every tests/run program: the tests/run groups run it on the PRs that matter",
 }
+# Targets that build the runtime's C sources with cc and import no crate: run on a PR that changes runtime/ or tests/qbhost/.
+RUNTIME_C = {
+    "posix_os": "the POSIX os layer",
+    "qb_dev_interface": "the device interface headers",
+    "qb_sdl": "the SDL device",
+}
+# Targets that build the runtime's C sources with cc and import no crate: run on a PR that changes runtime/ or tests/qbhost/.
+RUNTIME_C = {
+    "posix_os": "the POSIX os layer",
+    "qb_dev_interface": "the device interface headers",
+    "qb_sdl": "the SDL device",
+    "qb_dirty": "the dirty-line protocol under ThreadSanitizer (its child lifts testcap's soft data limit)",
+}
 # Targets that read files, not crates: scans of sources and docs, run on every PR (all together about 2 s).
 SCANNERS = {
     "block_list_ratchet": "counts a pattern in sources",
@@ -581,6 +594,7 @@ SCANNERS = {
     "core_depends_on_no_target": "reads crates' manifests",
     "core_fixtures_are_for_core_tests": "reads test fixtures",
     "descriptions_are_read": "reads the target descriptions",
+    "docs_in_sync": "regenerates the doc pages and compares",
     "docs_links": "reads markdown",
     "dosbox_progress": "reads the harness",
     "no_kill_by_pattern": "scans scripts",
@@ -629,7 +643,7 @@ def integration_map(
 
 def unmapped_targets(mapping: dict[str, set[str]]) -> list[str]:
     """The targets with no crate behind them that SCANNERS and NIGHTLY_ONLY do not name."""
-    return sorted(name for name, reach in mapping.items() if not reach and name not in SCANNERS and name not in NIGHTLY_ONLY)
+    return sorted(name for name, reach in mapping.items() if not reach and name not in SCANNERS and name not in NIGHTLY_ONLY and name not in RUNTIME_C)
 
 
 def integration_targets_for(
@@ -640,6 +654,8 @@ def integration_targets_for(
     """The root integration targets a PR runs: those whose crates include a touched one, every scanner, and a target whose own tests/NAME.rs changed; never NIGHTLY_ONLY."""
     own = {Path(path).stem for path in files if path.startswith("tests/") and path.endswith(".rs") and "/" not in path[len("tests/"):]}
     chosen = {name for name, reach in mapping.items() if reach & touched} | set(SCANNERS) | own
+    if any(path.startswith(("runtime/", "tests/qbhost/")) for path in files):
+        chosen |= set(RUNTIME_C)
     return sorted(name for name in chosen if name in mapping and name not in NIGHTLY_ONLY)
 
 
@@ -684,7 +700,7 @@ def integration_failures(
     if done.returncode and not found:
         found = {"integration-did-not-run"}
         CAUSES["integration-did-not-run"] = did_not_run_cause(done.stdout, done.returncode)
-    listed = xfail.load().keys()
+    listed = xfail.load_for(root).keys()
     # a listed test that passes is as much a gate failure as an unlisted one that fails: its fix removes its entry
     passing = {f"xpass {one}" for one in test_outcomes(done.stdout, "ok") if one in listed}
     return (found - listed) | passing
@@ -749,7 +765,7 @@ def unit_step(package: str, allowance: float):
         code, output = run_cut(slotted(command), allowance + CARGO_OVERHEAD, ROOT)
         if code is None:
             return "ok", f"{package}: no ranking yet, cut at {allowance:.1f} s without a failure"
-        listed = xfail.load()
+        listed = xfail.load_for(ROOT)
         failed = {f"unit {package}::{test}" for test in failed_tests(output)}
         ran = {f"unit {package}::{name}" for name in names} if names else {one for one in listed if one.startswith(f"unit {package}::")}
         unexpected, expected, passing = xfail.classify(failed, ran, listed)

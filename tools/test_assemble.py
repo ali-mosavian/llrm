@@ -87,6 +87,99 @@ def test_a_pr_that_merges_but_does_not_build_alone_is_refused_with_the_compiler_
     assert why and "does not build as a whole" in why[0] and "expected identifier" in why[0], why
 
 
+def test_a_did_not_run_scanner_red_alone_names_its_cause(tmp_path, monkeypatch):
+    """Eleven PRs were dropped with `integration-did-not-run` and no reason: the cause was recorded but the alone refusal never printed it."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    head = branch(repo, "ok", "b.txt", "b\n")
+    sh(repo, "checkout", "-q", "main")
+    monkeypatch.setitem(ps.parity_smoke_module().CAUSES, "integration-did-not-run", "No space left on device")
+    why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda _: {"integration-did-not-run"})
+    assert why and "No space left on device" in why[0], why
+
+
+def test_a_deleted_test_file_in_the_diff_is_not_a_scanner_target(tmp_path):
+    """#4784 forked before tests/fill_loop_at_os.rs landed: its diff listed the file, `--test fill_loop_at_os` found no target, and the PR was dropped as integration-did-not-run."""
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "kept.rs").write_text("")
+    files = ["tests/kept.rs", "tests/fill_loop_at_os.rs", "tests/sub/x.rs", "src/a.rs"]
+    assert ps.own_test_targets(files, tmp_path) == {"kept"}
+
+
+def test_a_refusal_of_a_head_the_pr_has_moved_off_does_not_drop_it(tmp_path):
+    """#4993 was dropped at 21:04 for a merge conflict its 21:02 head no longer had: the check had started on the 20:54 head."""
+    heads = {"4993": "old", "4991": "same"}
+    refuse = lambda head, base: ["conflicts in pressuresink.md"]  # noqa: E731
+    kept, dropped = ps.alone(["4993", "4991"], heads, refusals=refuse, current=lambda number: "new" if number == "4993" else "same")
+    assert kept == ["4993"] and list(dropped) == ["4991"], (kept, dropped)
+
+
+def test_a_docs_check_that_only_counts_lint_hits_is_not_a_failed_regeneration():
+    """#4993 was refused for `4 problem(s)`: the baseline `no # Example` hits, with every page current."""
+    lint = "crates/x/remidiom.rs: no # Example\n4 problem(s)\n"
+    stale = "generated docs are out of date; run python3 tools/docsbuild/build.py --sync\n  docs/optimizations/backend/a.md\n"
+    assert ps.docs_stale_lines(lint) == [] and ps.docs_stale_lines(stale) == ["docs/optimizations/backend/a.md"]
+
+
+def test_a_long_alone_refusal_is_written_whole_to_a_file_the_log_line_names(tmp_path):
+    """#4991's refusal printed three failing tests and cut the third mid-name; the author could not tell which others failed."""
+    why = "unit tests fail alone: " + ", ".join(f"unit llrm-qb::test_{i}_a_long_enough_name_to_need_cutting" for i in range(12))
+    line = ps.refusal_line("4991", why, "9c833bc12abc", tmp_path)
+    assert len(line) < 400
+    path = next(tmp_path.glob("4991-*.txt"))
+    assert path.read_text().strip() == why and str(path) in line and f"{len(why)} chars" in line
+    assert ps.refusal_line("1", "short", "abc", tmp_path) == "1: REFUSED: alone: short"
+def test_a_pr_that_leaves_generated_docs_stale_alone_is_refused_but_not_for_what_the_base_has_stale(tmp_path):
+    """#4972 landed with 411 stale pages: LAND_FAST skips the precheck and the alone layer had no docs check."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    head = branch(repo, "ok", "b.txt", "b\n")
+    sh(repo, "checkout", "-q", "main")
+    kw = dict(base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda _: set(), units=lambda _: set())
+    why = ps.alone_refusals(head, docs=lambda root: {"docs/a.md", "docs/b.md"}, docs_on_base=lambda: {"docs/a.md"}, **kw)
+    assert why and "docs/b.md" in why[0] and "docs/a.md" not in why[0], why
+    assert ps.alone_refusals(head, docs=lambda root: {"docs/a.md"}, docs_on_base=lambda: {"docs/a.md"}, **kw) == []
+
+
+def test_an_alone_check_that_dies_with_system_exit_is_a_refusal_not_a_silent_pass():
+    """A thread drops SystemExit without a word: #5008 got no verdict, was kept as checked (`4 checked, 0 dropped`) and its unreachable doc broke the 21:53 batch."""
+    def refuse(head, base):
+        if head == "bad":
+            raise SystemExit("no failure set is cached for the head")
+        return []
+
+    kept, dropped = ps.alone(["1", "2"], {"1": "ok", "2": "bad"}, refusals=refuse, jobs=2)
+    assert kept == ["1"] and "alone check crashed: SystemExit" in dropped["2"], (kept, dropped)
+
+
+def test_a_batch_scanner_refusal_can_name_the_markdown_each_pr_adds(tmp_path):
+    """#5008 added docs/working/combine-forward-load-rows.md and nothing linked it: the refusal said `docs_links` and named no PR or doc."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "readme.md").write_text("r\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    page = branch(repo, "page", "new.md", "x\n")
+    other = branch(repo, "other", "src.rs", "y\n")
+    assert ps.batch_blame({"5008": page, "5007": other}, "main", repo) == ["  #5008: A new.md"]
+def test_a_head_failure_is_named_every_cycle_and_refused_once_it_is_two_hours_old(tmp_path, capsys):
+    """docs_in_sync was red on the parity tip for hours behind `1 red`: the head's reds excused every PR without a name or an owner."""
+    seen = tmp_path / "seen.json"
+    red = "integration docs_in_sync::test_no_generated_page_is_stale"
+    assert ps.excused_head_failures({red}, seen, 1000.0) == set()
+    assert f"excused head failure: {red} (red on the head for 0.0 h" in capsys.readouterr().out
+    assert ps.excused_head_failures({red}, seen, 1000.0 + 3600) == set()
+    assert ps.excused_head_failures({red}, seen, 1000.0 + 3 * 3600) == {red}
+    assert ps.excused_head_failures(set(), seen, 1000.0 + 4 * 3600) == set()
+    assert ps.excused_head_failures({red}, seen, 1000.0 + 5 * 3600) == set(), "a name that went green is forgotten"
+
+
 def test_two_prs_adding_a_test_of_one_name_do_not_share_a_batch(tmp_path):
     """#4678 and #4680 added the same test in different places: no conflict, so both joined, and the batch failed 'defined multiple times'."""
     repo = tmp_path / "repo"
@@ -171,21 +264,21 @@ def test_a_pr_whose_only_issue_is_a_fmt_difference_is_kept(tmp_path):
 
 
 def test_a_test_the_base_fails_too_blames_no_pr_and_probes_none(tmp_path):
-    """Batch 2 (20:07) merged 16 PRs on a base red in two llrm-core tests and probed every PR alone: each fails the base's test, so each looked guilty."""
+    """Batch 2 (20:07) merged 16 PRs on a base red in two llrm-codegen tests and probed every PR alone: each fails the base's test, so each looked guilty."""
     probed = []
-    by_package = {"llrm-core": {"dag_function_calls::a_red_test"}}
+    by_package = {"llrm-codegen": {"dag_function_calls::a_red_test"}}
     found = ps.unit_offenders(
         [str(n) for n in range(1, 17)],
         by_package,
         merge_alone=lambda number: probed.append(number) or True,
         failing=lambda package, tests: True,
-        base_red=lambda wanted: {("llrm-core", "dag_function_calls::a_red_test")},
+        base_red=lambda wanted: {("llrm-codegen", "dag_function_calls::a_red_test")},
     )
     assert found == [] and probed == [], (found, probed)
 
 
 def test_a_pr_is_probed_only_for_a_package_it_can_change_and_a_new_red_test_is_still_blamed(tmp_path):
-    graph = {"llrm-core": {"llrm-mir"}, "llrm-mir": set(), "llrm-x86": {"llrm-core"}, "llrm-nib": {"llrm-mir"}}
+    graph = {"llrm-codegen": {"llrm-mir"}, "llrm-mir": set(), "llrm-x86": {"llrm-codegen"}, "llrm-nib": {"llrm-mir"}}
     packages = {name: Path("/r/crates") / name for name in graph}
     files = {"1": ["crates/llrm-nib/src/a.rs"], "2": ["crates/llrm-mir/src/b.rs"], "3": ["Cargo.toml"]}
     root = Path("/r")
@@ -193,12 +286,12 @@ def test_a_pr_is_probed_only_for_a_package_it_can_change_and_a_new_red_test_is_s
     probed = []
     found = ps.unit_offenders(
         ["1", "2", "3"],
-        {"llrm-core": {"t"}},
+        {"llrm-codegen": {"t"}},
         merge_alone=lambda number: probed.append(number) or True,
         failing=lambda package, tests: probed[-1] == "2",
         affects=affects,
     )
-    assert probed == ["2", "3"], probed  # 1 changes llrm-nib, which llrm-core does not use; 3 is a file no package owns
+    assert probed == ["2", "3"], probed  # 1 changes llrm-nib, which llrm-codegen does not use; 3 is a file no package owns
     assert found == ["2"], found
 
 
@@ -359,8 +452,8 @@ def test_a_pr_that_makes_a_listed_unit_test_pass_is_refused_alone_and_so_is_a_li
 
     monkeypatch.setattr(xfail, "load", lambda path=xfail.PATH: {"integration header_copy::t": {}})
     monkeypatch.setattr(smoke, "workspace_graph", lambda root: ({}, {}))
-    monkeypatch.setattr(smoke, "touched_packages", lambda files, packages, root: {"llrm-core"})
-    monkeypatch.setattr(smoke, "integration_map", lambda root=None: {"header_copy": {"llrm-core"}})
+    monkeypatch.setattr(smoke, "touched_packages", lambda files, packages, root: {"llrm-codegen"})
+    monkeypatch.setattr(smoke, "integration_map", lambda root=None: {"header_copy": {"llrm-codegen"}})
     monkeypatch.setattr(smoke, "integration_failures", lambda targets, root=None, **_: seen.extend(targets) or {"xpass integration header_copy::t"})
     monkeypatch.setattr(ps, "_scanners_failing_on_head", lambda targets: set())  # the real one reads and writes ~/scratch/results/headfail
     why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), units=lambda _: set())
@@ -378,3 +471,64 @@ def test_a_head_whose_tests_did_not_run_is_not_cached_as_its_failure_set(tmp_pat
     assert ps.head_failures("abc", compute, cache=tmp_path) == {"integration-did-not-run"}
     assert ps.head_failures("abc", compute, cache=tmp_path) == {"integration header_copy::t"}
     assert ps.head_failures("abc", compute, cache=tmp_path) == {"integration header_copy::t"} and len(calls) == 2
+
+
+def test_the_alone_command_runs_its_cargo_through_buildslot_with_two_jobs_whatever_the_runner_exports(monkeypatch):
+    """The runner exports BUILDSLOT_BYPASS=1 and main() ran every command at the landing's priority: six of eight cargo processes at load 108 were alone-0..5 outside every slot."""
+    import buildslot
+
+    seen = {}
+
+    def fake(numbers, heads, **kw):
+        seen["slotted"] = buildslot.slotted(["cargo", "build"])
+        seen["jobs"] = kw["jobs"]
+        return list(numbers), {}
+
+    monkeypatch.setenv("BUILDSLOT_BYPASS", "1")
+    monkeypatch.setenv(buildslot.LANDING, "1")
+    monkeypatch.delenv("ALONE_JOBS", raising=False)
+    monkeypatch.setattr(buildslot, "tool", lambda: "buildslot")
+    monkeypatch.setattr(ps, "alone", fake)
+    monkeypatch.setattr(ps, "git", lambda *args, **_: "deadbeef")
+    monkeypatch.setattr(ps, "preload_tools", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["parity_squash.py", "alone", "11"])
+    assert ps.main() == 0
+    assert seen == {"slotted": ["buildslot", "cargo", "build"], "jobs": 2}, seen
+
+
+def test_each_offender_is_named_by_the_tests_that_failed_on_its_own_probe_with_its_own_panic():
+    """The 10:24 batch refused #4898 #4918 #4926 #4927 #4936 with one identical list (the batch's whole failure set and a stale panic): five different failures read as one cause."""
+    failed = {"1": {"a"}, "2": {"b"}, "3": set()}
+    probed = []
+    panics = {}
+
+    def failing(package, tests):
+        panics.clear()
+        mine = failed[probed[-1]] & tests
+        panics.update({t: f"panic of {t} on #{probed[-1]}" for t in mine})
+        return mine
+
+    own, reasons = {}, {}
+    found = ps.unit_offenders(
+        ["1", "2", "3"],
+        {"llrm-x": {"a", "b", "c"}},
+        merge_alone=lambda number: probed.append(number) or True,
+        failing=failing,
+        own=own,
+        reasons=reasons,
+        why=lambda names: "; ".join(panics[name.split("::", 1)[1]] for name in names),
+    )
+    assert found == ["1", "2"] and own == {"1": ["unit llrm-x::a"], "2": ["unit llrm-x::b"]}, (found, own)
+    assert reasons == {"1": "panic of a on #1", "2": "panic of b on #2"}, reasons
+
+
+def test_an_alone_check_runs_the_lib_tests_of_the_crates_that_depend_on_the_one_the_pr_changes(tmp_path, monkeypatch):
+    """#4927 changed llrm-transforms, passed alone (only llrm-transforms ran), and failed four llrm-qb tests in the batch: a refusal at 10:24 and a clean precheck for the same PR."""
+    repo, head = alone_scratch(tmp_path)
+    smoke = ps.parity_smoke_module()
+    ran = []
+    monkeypatch.setattr(smoke, "workspace_graph", lambda root: ({}, {"llrm-qb": {"llrm-transforms"}, "llrm-x86": {"llrm-transforms"}, "llrm-transforms": set(), "llrm-nib": set()}))
+    monkeypatch.setattr(smoke, "touched_packages", lambda files, packages, root: {"llrm-transforms"})
+    monkeypatch.setattr(smoke, "dependants_lib_failures", lambda packages, **_: ran.append(set(packages)) or set())
+    ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda f: set())
+    assert ran and {"llrm-transforms", "llrm-qb"} <= ran[0] and not {"llrm-nib", "llrm-x86"} & ran[0], ran  # qb depends on the change; nib does not; x86 does, but only qb, c and nib are probed

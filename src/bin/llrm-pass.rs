@@ -19,11 +19,12 @@ static ALLOCATOR: llrm_alloc::Slab = llrm_alloc::Slab;
 
 fn main() -> ExitCode {
     let mut arguments: Vec<String> = std::env::args().skip(1).collect();
-    if llrm_core::support::version::asked(&arguments, "llrm-pass", env!("LLRM_BUILD_SHA"), env!("LLRM_BUILD_DIRTY")) {
+    if llrm_codegen::support::version::asked(&arguments, "llrm-pass", env!("LLRM_BUILD_SHA"), env!("LLRM_BUILD_DIRTY"))
+    {
         return ExitCode::SUCCESS;
     }
     let level = match arguments.first().filter(|one| one.starts_with("-O")) {
-        Some(flag) => match llrm_core::driver::flags::Level::parse(&flag[2..]) {
+        Some(flag) => match llrm_codegen::driver::flags::Level::parse(&flag[2..]) {
             Ok(level) => {
                 arguments.remove(0);
                 level
@@ -33,7 +34,7 @@ fn main() -> ExitCode {
                 return ExitCode::from(2);
             }
         },
-        None => llrm_core::driver::flags::Level::O2,
+        None => llrm_codegen::driver::flags::Level::O2,
     };
     // `--mode N`: the module gets the datalayout of the target whose
     // `datalayout.toml` says `mode = N`, so pointer-width answers (a memset's
@@ -44,7 +45,7 @@ fn main() -> ExitCode {
     if arguments.first().is_some_and(|one| one == "--mode") {
         let size = matches!(
             level,
-            llrm_core::driver::flags::Level::Os | llrm_core::driver::flags::Level::Oz
+            llrm_codegen::driver::flags::Level::Os | llrm_codegen::driver::flags::Level::Oz
         );
         let target = match llrm_driver::mode_target(arguments.get(1).map_or("", String::as_str), size) {
             Ok(target) => target,

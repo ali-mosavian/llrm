@@ -232,6 +232,16 @@ fn the_other_scalar_sse_forms_encode() {
     assert_eq!(bytes(&xor), [0x0f, 0x57, 0xc0]);
 }
 
+/// The allocator names a copy between xmm registers `mov`, which has no xmm
+/// form: `printf("%f", a + b)` stopped at encode on `mov xmm0, xmm2`. It is
+/// `movaps` (`X86InstrInfo::copyPhysReg`).
+#[test]
+fn a_copy_between_xmm_registers_is_movaps() {
+    let x = |n: u8| RegId::from(Register::XMM0 + u32::from(n));
+    let copy = sem(Operation::Move, Some("mov"), vec![rg(x(0), 16)], vec![rg(x(2), 16)], None, false);
+    assert_eq!(bytes(&copy), [0x0f, 0x28, 0xc2]);
+}
+
 /// A `double` negated or cleared is `xorps` over a value of 8 bytes: the
 /// encoder looked for `Xorps_xmm_xmmm64` and found no form.
 #[test]

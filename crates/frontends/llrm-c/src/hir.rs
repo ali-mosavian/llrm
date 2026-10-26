@@ -7,8 +7,8 @@
 
 use std::fmt;
 
-use llrm_core::support::hash::IndexMap;
-use llrm_core::support::pyrepr::{self, Repr, Tuple};
+use llrm_codegen::support::hash::IndexMap;
+use llrm_codegen::support::pyrepr::{self, Repr, Tuple};
 
 use super::stream::Record;
 

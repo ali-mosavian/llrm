@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopdeletion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopdeletion.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopdeletion.rs sha256:2e0f812f8a38c1d312562812b67519249ec3adae598f16ea9ef9c474f7a32065 -->
+<!-- src: crates/opt/llrm-transforms/src/loopdeletion.rs sha256:cc50d61acf2cc7aa8c4f5bec7839c9811f7a3c185c3fbb163dce3bb717a841a2 -->
 
 # loopdeletion
 

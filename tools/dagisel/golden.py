@@ -9,7 +9,7 @@ import re
 import subprocess
 from pathlib import Path
 
-GOLDEN = Path("crates/backend/llrm-core/src/backend/selectiondag/golden")
+GOLDEN = Path("crates/codegen/llrm-codegen/src/backend/selectiondag/golden")
 LLC = os.environ.get("LLC") or str(Path.home() / "scratch/llvm-build-assert/bin/llc")
 
 

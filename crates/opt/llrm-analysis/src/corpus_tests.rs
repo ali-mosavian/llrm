@@ -1,4 +1,4 @@
-//! The rich-MIR corpus, and the corpus tests of llrm-core's
+//! The rich-MIR corpus, and the corpus tests of llrm-codegen's
 //! `analysis/loops_tests.rs` asked of it through `cfg::graph`.
 
 use std::collections::BTreeSet;
@@ -111,6 +111,11 @@ dead:
             );
             assert_eq!(shape.dominance.frontiers(function), loops::frontiers(&graph, None), "{name}");
             assert_eq!(shape.dominance.irreducible(function), loops::irreducible(&graph, None), "{name}");
+            assert_eq!(
+                shape.dominance.is_irreducible(function),
+                !loops::irreducible(&graph, None).is_empty(),
+                "{name}"
+            );
         }
     }
 }

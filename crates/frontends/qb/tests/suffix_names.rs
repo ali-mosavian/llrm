@@ -28,19 +28,16 @@ fn an_array_suffix_of_another_type_than_the_declared_one_is_a_duplicate_definiti
     assert!(compiled("DIM a(5) AS LONG\na(1) = 3\nPRINT a&(1)\n").is_ok());
 }
 
-/// The compiler has no CURRENCY type, so a name with `@` is refused rather than
-/// compiled as an untyped one, which `suffix()` would otherwise make it.
+/// A name with `@` is a CURRENCY variable, converted from its integer value.
 #[test]
-fn a_currency_name_is_refused() {
+fn a_currency_name_compiles() {
     let module = parse("DIM det@\ndet@ = 1\n", Dialect::VbDos).expect("parses");
-    let error = compile_with_options(&module, "t", Dialect::VbDos, "llrm", &Options::default()).expect_err("refused");
-    assert!(format!("{error:?}").contains("CURRENCY"), "{error:?}");
+    compile_with_options(&module, "t", Dialect::VbDos, "llrm", &Options::default()).expect("compiles");
 }
 
-/// A CURRENCY literal is refused the same way, not read as a SINGLE.
+/// A CURRENCY literal is read as CURRENCY, not as a SINGLE.
 #[test]
-fn a_currency_literal_is_refused() {
+fn a_currency_literal_compiles() {
     let module = parse("x = 1@\n", Dialect::VbDos).expect("a CURRENCY literal is BC's");
-    let error = compile_with_options(&module, "t", Dialect::VbDos, "llrm", &Options::default()).expect_err("refused");
-    assert!(format!("{error:?}").contains("CURRENCY"), "{error:?}");
+    compile_with_options(&module, "t", Dialect::VbDos, "llrm", &Options::default()).expect("compiles");
 }

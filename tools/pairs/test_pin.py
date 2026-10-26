@@ -77,3 +77,12 @@ def test_llrms_own_attributes_are_written_in_the_dialect_the_pin_reads(tmp_path)
     text = "define i32 @f(i32 %x) threeway {\n  ret i32 %x\n}\n"
     done = pin.llc(["-O2"], text, pin.target("m32"), bin_dir=tmp_path)
     assert '"threeway"' in done.stdout and "threeway {" not in done.stdout
+
+
+def test_backend_ir_is_the_switchconv_stage_whatever_its_number(tmp_path):
+    """pincount and ambt_pin read `30-switchconv.ll`; the pipeline numbered it `31-` and every pin-clock row died with FileNotFoundError."""
+    (tmp_path / "07-lsr.ll").write_text("")
+    (tmp_path / "31-switchconv.ll").write_text("")
+    pin = load()
+    assert pin.backend_ir(tmp_path) == tmp_path / "31-switchconv.ll"
+    assert pin.backend_ir(tmp_path / "missing") is None

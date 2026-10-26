@@ -2,13 +2,13 @@ import re, sys, collections
 # Self cost by callee, attributed to the pin pass the callee's module is the counterpart of
 # (not by call site). Shared leaves (alloc, libc, llrm_mir core) stay as their own rows.
 RULES = [
- (r"llrm_core::(twoaddress|backend::twoaddr)", "TwoAddress"),
- (r"llrm_core::(coalescer|backend::coalesce)", "RegisterCoalescer"),
- (r"llrm_core::greedy|backend::allocate|backend::spiller|backend::lifetimes|backend::regalloc", "RAGreedy + SplitKit + InlineSpiller"),
- (r"llrm_core::liveness|backend::liveness|backend::lanes|backend::incremental", "LiveIntervals/LiveVariables"),
- (r"llrm_core::phielimination|backend::phielim|backend::optimizephis", "PHIElimination, OptimizePHIs"),
+ (r"llrm_codegen::(twoaddress|backend::twoaddr)", "TwoAddress"),
+ (r"llrm_codegen::(coalescer|backend::coalesce)", "RegisterCoalescer"),
+ (r"llrm_codegen::greedy|backend::allocate|backend::spiller|backend::lifetimes|backend::regalloc", "RAGreedy + SplitKit + InlineSpiller"),
+ (r"llrm_codegen::liveness|backend::liveness|backend::lanes|backend::incremental", "LiveIntervals/LiveVariables"),
+ (r"llrm_codegen::phielimination|backend::phielim|backend::optimizephis", "PHIElimination, OptimizePHIs"),
  (r"backend::(peephole|peep::|machinecse|precse|sharedstores|regthrash|machinedce|latecleanup|machinecp|copysink|spillforward|upperzero|exactaddress|leaopt|fixupsetcc)", "Peephole, MachineCSE, DCE, late cleanup"),
- (r"backend::(machinesink|pressuresink)", "MachineSink, LiveRangeShrink"),
+ (r"backend::(machinesink)", "MachineSink, LiveRangeShrink"),
  (r"backend::(jumps|schedule|loopslots|shrinkwrap|frame|prologue|masm)", "branch folding/placement, scheduler, PEI"),
  (r"backend::(floatalloc|floatassign|floatfold|fpstack|fpregs|fpcopyprop)", "X86FloatingPoint"),
  (r"backend::(isel|selectiondag|lower|legalize|matcher|arithmetic|division|selects|booleans)|llrm_dagisel|llrm_iselgen", "isel (SelectionDAG)"),

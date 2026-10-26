@@ -1,6 +1,6 @@
 //! Recognizers: what a node means where the core raise would otherwise
 //! emit it as the machine does. Each is consulted in order before the core;
-//! the first to answer owns the node. Ported from llrm-core's
+//! the first to answer owns the node. Ported from llrm-codegen's
 //! `model/mir/sites.rs`: the runtime's long arithmetic, which MIR computes
 //! instead of calling.
 

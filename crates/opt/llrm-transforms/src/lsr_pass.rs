@@ -382,6 +382,7 @@ pub fn reduced_held(
                         rewriter: &mut rewriter,
                         tti,
                         l: header,
+                        body: &lp_blocks,
                         iv_inc_insert_pos: plan.iv_inc_insert_pos,
                         dead: Vec::new(),
                         changed: false,

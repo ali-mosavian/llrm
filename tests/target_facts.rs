@@ -19,8 +19,18 @@ const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 const BASELINE: &str = "tests/target_facts.baseline";
 /// Shared code: everything but the target crates, the tests and the build
 /// products.
-const SHARED: [&str; 8] =
-    ["crates/backend", "crates/ir", "crates/opt", "crates/support", "crates/bc", "crates/frontends", "src", "tools"];
+const SHARED: [&str; 10] = [
+    "crates/backend",
+    "crates/codegen",
+    "crates/driver",
+    "crates/ir",
+    "crates/opt",
+    "crates/support",
+    "crates/bc",
+    "crates/frontends",
+    "src",
+    "tools",
+];
 
 /// `a1b2` as a case-insensitive pattern that accepts `_` between digits.
 fn number(value: u64) -> String {
@@ -84,7 +94,7 @@ fn facts() -> Regex {
 
 /// The one place that names the targets built in, which is its job
 /// (docs/machine/targets.md, the first principle).
-const REGISTRY: &str = "crates/backend/llrm-driver/src/lib.rs";
+const REGISTRY: &str = "crates/driver/llrm-driver/src/lib.rs";
 
 fn is_test_file(path: &Path) -> bool {
     // `path` is relative to the root: the root itself may sit under a
@@ -287,7 +297,7 @@ fn problems(
 #[test]
 fn shared_code_holds_no_copy_of_a_target_fact() {
     let root = Path::new(ROOT);
-    if llrm_core::support::env_set("LLRM_BLESS") {
+    if llrm_codegen::support::env_set("LLRM_BLESS") {
         let mut text =
             String::from("# Copies of target facts left in shared code, per file: count path. Only shrinks.\n");
         for (path, n) in &counts(root) {
@@ -522,7 +532,7 @@ fn a_size_written_beside_long_double_is_a_copy() {
 /// target).
 #[test]
 fn runs_of_this_binary_side_by_side_do_not_share_a_tree() {
-    if llrm_core::support::env_set("LLRM_TARGET_FACTS_CHILD") {
+    if llrm_codegen::support::env_set("LLRM_TARGET_FACTS_CHILD") {
         return;
     }
     let tests = [

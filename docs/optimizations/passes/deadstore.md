@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/deadstore.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/deadstore.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/deadstore.rs sha256:66a6ba6131c2bb553ebe2d26489348db0dc22a0cafd9b509d49428f104c4260a -->
+<!-- src: crates/opt/llrm-transforms/src/deadstore.rs sha256:cde1146c4da6df45eb5f6d763d7a6a72067052426ad6fda1a465cb2bba92e5fc -->
 
 # deadstore
 

@@ -24,15 +24,18 @@ const NAMED: &[(&str, &str)] = &[
     ("calling.toml", "*.result.*"),
     ("platform.toml", "physical.*"),
     ("datalayout.toml", "pointers.*"),
-    ("pc-ports.toml", "port.*"),
-    ("dos.toml", "port.*"),
-    ("pc-ports.toml", "ports.*"),
-    ("dos.toml", "foreign.*"),
+    ("ports.toml", "port.*"),
+    ("real16.toml", "port.*"),
+    ("ports.toml", "ports.*"),
+    ("real16.toml", "foreign.*"),
     // Every integer of an OS facts file is defined for the assembler
     // as -DDOS_<KEY>: the mechanism reads them all.
     ("facts.toml", "*"),
     ("facts.toml", "errors.*"),
     ("os.toml", "heap_bytes"),
+    // The standard handles are the interface's `handles` names, each looked up
+    // here.
+    ("os.toml", "handles.*"),
     // The error codes are a table the interface maps over, whatever their
     // names.
     ("interface.toml", "errors.*"),
@@ -61,16 +64,13 @@ fn tracked(
 }
 
 fn descriptions() -> Vec<PathBuf> {
-    let mut found: Vec<PathBuf> = tracked(Path::new(ROOT), &["crates/target", "runtime"])
+    let mut found: Vec<PathBuf> = tracked(Path::new(ROOT), &["crates/target", "runtime", "machine"])
         .into_iter()
         .filter(|path| {
             let name = path.file_name().unwrap().to_string_lossy();
-            // The QB runtime's own routine table, rows named by routine; its
-            // crate reads it whole, as the frontend crate did before it moved.
-            if path.ends_with("runtime/qb/src/runtime.toml") {
-                return false;
-            }
-            let in_src = path.components().any(|one| one.as_os_str() == "src" || one.as_os_str() == "runtime")
+            let in_src = path
+                .components()
+                .any(|one| one.as_os_str() == "src" || one.as_os_str() == "runtime" || one.as_os_str() == "machine")
                 || name == "platform.toml";
             in_src
                 && (matches!(

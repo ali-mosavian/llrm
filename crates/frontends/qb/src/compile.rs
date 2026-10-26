@@ -8,16 +8,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 
-use llrm_core::backend::stackusage::stack_to_add;
-use llrm_core::backend::{masm, objbuild};
-use llrm_core::driver::{
+use llrm_codegen::backend::stackusage::stack_to_add;
+use llrm_codegen::backend::{masm, objbuild};
+use llrm_codegen::driver::{
     self,
-    basic::{self, written_basic},
+    basic::{self, written_basic_in},
 };
-use llrm_core::hir::{self, model};
-use llrm_core::objectfile::module::Space;
-use llrm_core::support::hash::IndexMap;
-use llrm_core::support::pyrepr::{self, Repr};
+use llrm_codegen::hir::{self, model};
+use llrm_codegen::objectfile::module::Space;
+use llrm_codegen::support::hash::IndexMap;
+use llrm_codegen::support::pyrepr::{self, Repr};
 
 use super::abi::AbiError;
 
@@ -135,7 +135,7 @@ fn _placed(module: &model::Module) -> impl Iterator<Item = &model::DataObject> {
 
 /// Each data object's symbol, by its HIR id: its own name where external.
 fn _data_names(module: &model::Module) -> Names {
-    let mut names: Names = llrm_core::hir::symbols::symbol_names();
+    let mut names: Names = llrm_codegen::hir::symbols::symbol_names();
     let mut taken: BTreeSet<String> = BTreeSet::new();
     for object_ in &module.data {
         if [_READ_DATA_OBJECT, _STATEMENT_TABLE_OBJECT].contains(&object_.name.as_str()) {
@@ -175,7 +175,7 @@ fn _segment(object_: &model::DataObject) -> &'static str {
 /// only the text lines in this reserved object.  The OMF adapter supplies a
 /// relocated, valid code address before every line and the measured
 /// `FFFF 01` out-of-DATA sentinel after the last one.
-fn _read_data_lines(module: &model::Module) -> Result<Vec<Vec<u8>>, CompileError> {
+pub(super) fn _read_data_lines(module: &model::Module) -> Result<Vec<Vec<u8>>, CompileError> {
     let objects: Vec<&model::DataObject> = module.data.iter().filter(|one| one.name == _READ_DATA_OBJECT).collect();
     if objects.is_empty() {
         return Ok(Vec::new());
@@ -304,14 +304,17 @@ fn _header(
     // pointer is a dword the words are dwords (`HeaderWords`), and the 48
     // bytes keep the marker and the switches where they were.
     let words = driver::basic::HeaderWords::of(bitness);
-    let mut out: Vec<u8> = [b"bl".to_vec(), name, vec![0; 34], vec![0xff, 0xff]].concat();
+    // The marker and the switches are the header's last four bytes.
+    let mut out: Vec<u8> = [b"bl".to_vec(), name].concat();
+    out.resize(words.size - 4, 0);
+    out.extend([0xff, 0xff]);
     out.extend((_compiler_switches(program)? as u16).to_le_bytes());
-    if out.len() != 48 {
+    if out.len() != words.size {
         return Err(CompileError::Value("MODULE_CODE is exactly O_ENT bytes".into()));
     }
     // The addends live in the image. The remaining words are zero.
     // OF_DS is BC_DS + 2.
-    out[words.segments[0]..words.segments[0] + words.width].copy_from_slice(&2u32.to_le_bytes()[..words.width]);
+    out[words.segments[0]..words.segments[0] + words.width].copy_from_slice(&2u64.to_le_bytes()[..words.width]);
     Ok(out)
 }
 
@@ -330,7 +333,7 @@ pub(super) fn _inline_frame(
 /// frontend does for a near function: no other module can call it, and every
 /// caller shares its code segment. One on the runtime's frame stays far,
 /// whose chain is only known to hold far returns.
-fn _near_procedures(
+pub(super) fn _near_procedures(
     program: &model::Program,
     flat: bool,
 ) -> model::Program {
@@ -429,7 +432,7 @@ fn rich_assembled(
     program: &model::Program,
     codegen: &driver::Options,
 ) -> Result<masm::Module, CompileError> {
-    let program = &llrm_core::support::debug::timed("hir positional data", || _positional_data(program))?;
+    let program = &llrm_codegen::support::debug::timed("hir positional data", || _positional_data(program))?;
     let module = &program.modules[0];
     let functions = module.functions.iter().map(|one| (one.name.clone(), _object_name(&one.name)));
     let symbols: BTreeMap<String, String> =
@@ -444,11 +447,15 @@ fn rich_assembled(
     for object_ in _placed(module) {
         placed[_segment(object_)].push(basic::Item::Object(object_.id));
     }
+    // A host has no B$ENRA: every procedure frames itself (the zero fill above
+    // covers what the runtime's frame would have cleared).
+    let hosted = llrm_target::object::Format::parse(codegen.object_format)
+        .is_ok_and(|one| one != llrm_target::object::Format::Omf);
     let frames = module
         .functions
         .iter()
         .map(|function| {
-            let frame = if _inline_frame(program, module, function) {
+            let frame = if hosted || _inline_frame(program, module, function) {
                 basic::Frame::Own
             } else {
                 basic::Frame::Runtime { strings: module.local_strings(function) }
@@ -545,13 +552,14 @@ fn rich_assembled(
         frames,
         line_numbers: module.line_numbers.iter().copied().collect(),
         stack_check: program.stack_check.clone(),
+        hosted: program.promises.hosted,
     };
     let mut compiled = basic::compiled(program, &object, codegen)?;
     compiled.stack = stack_to_add(
         &compiled,
         STACK_BASE,
         STACK_RESERVE,
-        llrm_core::backend::stackusage::stack_limit(codegen.arch.layout().segment_bytes()),
+        llrm_codegen::backend::stackusage::stack_limit(codegen.arch.layout().segment_bytes()),
         &*codegen.arch,
     )?;
     Ok(compiled)
@@ -572,17 +580,17 @@ pub fn assembled(
     observer: Option<&mut HirObserver<'_>>,
     codegen: &driver::Options,
 ) -> Result<masm::Module, CompileError> {
-    if llrm_core::support::debug::verifying() {
-        llrm_core::support::debug::timed("hir verify", || hir::verify::verify(program))
+    if llrm_codegen::support::debug::verifying() {
+        llrm_codegen::support::debug::timed("hir verify", || hir::verify::verify(program))
             .map_err(|error| CompileError::Value(error.0))?;
     }
     if let Some(observe) = observer {
         observe(program)?;
     }
-    let laid_out = llrm_core::support::debug::timed("hir zero fill", || {
+    let laid_out = llrm_codegen::support::debug::timed("hir zero fill", || {
         super::zero_fill::laid_out(program, |module, function| !_inline_frame(program, module, function))
     });
-    let program = &llrm_core::support::debug::timed("hir near procedures", || {
+    let program = &llrm_codegen::support::debug::timed("hir near procedures", || {
         _near_procedures(&laid_out, codegen.arch.layout().spaces.far_is_near())
     });
     if program.modules.len() != 1 {
@@ -609,5 +617,6 @@ pub fn object_bytes(
     let module = objbuild::live(&assembled(program, observer, codegen)?)
         .map_err(|error| CompileError::Value(error.to_string()))?;
     let name = source.file_name().map_or_else(String::new, |one| one.to_string_lossy().into_owned());
-    Ok(written_basic(&module, _header(program, codegen.arch.layout().mode)?, &name)?)
+    let format = llrm_target::object::Format::parse(codegen.object_format).map_err(CompileError::Value)?;
+    Ok(written_basic_in(&module, _header(program, codegen.arch.layout().mode)?, &name, format)?)
 }

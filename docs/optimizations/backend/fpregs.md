@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/fpregs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/fpregs.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/fpregs.rs sha256:bc2809c10936a5d128c863465937e11bf38bd7fae76163ec379df6d4cc1752e1 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/fpregs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/fpregs.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/fpregs.rs sha256:6d6b3f40733610634cdb2bbf71b274c042b559b3cbddcb3fdd6322d692b55b9d -->
 
 # fpregs
 

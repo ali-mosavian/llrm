@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/compares.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/compares.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/compares.rs sha256:d9115db7f60e9283fabf2d5543ba7bbd205997dbacd4ee022cb05cd16d06f79a -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/compares.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/compares.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/compares.rs sha256:a54ebf2f3f7857011f83de42613b968146ea49ee98e4fdd5be3e03893057843a -->
 
 # compares
 
@@ -30,12 +30,12 @@ After:
 
 ```mir
 define i8 @f(i16 %a, i16 %b) {
-  %0 = icmp ugt i16 %a, %b
-  %1 = zext i1 %0 to i8
-  %2 = icmp ult i16 %a, %b
-  %3 = zext i1 %2 to i8
-  %4 = sub i8 %1, %3
-  ret i8 %4
+  %1 = icmp ugt i16 %a, %b
+  %2 = zext i1 %1 to i8
+  %3 = icmp ult i16 %a, %b
+  %4 = zext i1 %3 to i8
+  %5 = sub i8 %2, %4
+  ret i8 %5
 }
 ```
 

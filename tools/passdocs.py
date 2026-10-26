@@ -22,7 +22,7 @@ SKIP = {"lib", "mod", "testing"}
 PAGES = [
     ("passes", "Passes", "crates/opt/llrm-transforms/src", "Runs"),
     ("analyses", "Analyses", "crates/opt/llrm-analysis/src", "Provides"),
-    ("backend", "Backend phases", "crates/backend/llrm-core/src/backend", "Runs"),
+    ("backend", "Backend phases", "crates/codegen/llrm-codegen/src/backend", "Runs"),
 ]
 
 

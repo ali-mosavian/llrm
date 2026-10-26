@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use llrm_core::testing::boundary::{self, Byte, Procedure};
+use llrm_codegen::testing::boundary::{self, Byte, Procedure};
 
 use super::compile as qb_compile;
 use super::driver as qb_driver;
@@ -206,7 +206,7 @@ fn llrm(
     .map_err(|error| error.0)?;
     let codegen = llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone());
     let assembled = qb_compile::assembled(&program, None, &codegen).map_err(|error| error.to_string())?;
-    let text = llrm_core::driver::basic::text(&assembled)?;
+    let text = llrm_codegen::driver::basic::text(&assembled)?;
     Ok(boundary::procedures(&text).into_iter().map(|(name, one)| (name.to_uppercase(), one)).collect())
 }
 

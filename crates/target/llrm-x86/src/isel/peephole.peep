@@ -179,6 +179,19 @@ rule forwarded_reload
     rewrite @0 ; anchor @1
 
 
+// The same reload into another register is a copy of the register that
+// filled the cell: it still holds the value, and a register copy is shorter
+// and faster than the load.
+group forwarded_copies
+    walk gap
+
+rule forwarded_copy
+    match   mov c:mem, r:reg ; ... holds_after(@0, *) ; mov d:reg, c
+    when    free(@0, forwarded), free(@1, forwarded), same_width(r, c), same_width(d, c), width_in(d, [8, 16, 32]),
+            !same_root(r, d)
+    rewrite @0 ; @1: mov d, r
+
+
 // `T = S; T = op(T); S = T` is `S = op(S); T = S`: the same registers and
 // flags, one move fewer.
 group shuttles

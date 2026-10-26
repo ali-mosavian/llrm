@@ -596,6 +596,31 @@ void B_PALU(qb_data_ptr data, const AD *ad)
 #pragma aux B_PSTC "B$PSTC"
 #pragma aux B_PSET "B$PSET"
 #pragma aux B_PRST "B$PRST"
+/* B$PMAP: PMAP(expr, funct) -- 0 and 1 map a logical x or y to the viewport's pixel, 2 and 3 a pixel to the logical
+   point; the pixel is counted from the viewport's corner. With no window the points are the pixels. */
+float *B_PMAP(float expr, short funct)
+{
+    static float result;
+    int pixel;
+
+    need_graphics();
+    if (funct < 0 || funct > 3)
+        qb_error(BE_ILLFUN);
+    pixel = rounded(expr);
+    if (!gfx_window_on)
+        result = (float)(funct < 2 ? scaled_round(expr, 0.0, 1.0) : pixel);
+    else if (funct == 0)
+        result = (float)scaled_round(expr, wxmin, lxdif);
+    else if (funct == 1)
+        result = (float)(window_screen ? scaled_round(expr, wymin, lydif) : -scaled_round(expr, wymax, lydif));
+    else if (funct == 2)
+        result = (float)(pixel * pxdif + wxmin);
+    else
+        result = (float)(window_screen ? pixel * pydif + wymin : -(pixel * pydif) + wymax);
+    return &result;
+}
+
+#pragma aux B_PMAP "B$PMAP"
 #pragma aux B_PNR4 "B$PNR4"
 #pragma aux B_PNI2 "B$PNI2"
 #pragma aux B_PAL2 "B$PAL2"

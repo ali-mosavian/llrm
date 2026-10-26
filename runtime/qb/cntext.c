@@ -2,7 +2,7 @@
    memory, the BIOS asked only to scroll and clear; the screen statements for
    it.  Linked by a program that uses them. */
 #include "cndriver.h"
-#include "device.h"
+#include "dev.h"
 #include "rtinit.h"
 
 enum {
@@ -13,9 +13,6 @@ enum {
     BLINK = 0x80,
     BELL = 7,
     HOME = 11,
-    BEEP_HERTZ = 800,
-    BEEP_LENGTH = 25, /* hundredths of a second */
-    DAY = 8640000L,
     CURSOR_RIGHT = 28,
     CURSOR_LEFT = 29,
     CURSOR_UP = 30,
@@ -74,17 +71,6 @@ static void text_clear(void)
     cursor_stale = 1;
 }
 
-/* The bell: a tone for a quarter of a second. */
-static void bell(void)
-{
-    long start = dev_clock();
-
-    dev_tone(BEEP_HERTZ);
-    while ((dev_clock() - start + DAY) % DAY < BEEP_LENGTH)
-        ;
-    dev_tone(0);
-}
-
 /* A control character of the console. */
 static void control(char c)
 {
@@ -124,7 +110,7 @@ static void control(char c)
             row++;
         break;
     case BELL:
-        bell();
+        cn_bell();
         break;
     default:
         break;
