@@ -11,7 +11,7 @@ on:
       - "Cargo.toml"
       - "build.rs"
       - "crates/backend/llrm-core/**"
-      - "crates/backend/llrm-driver/**"
+      - "crates/driver/llrm-driver/**"
       - "crates/backend/llrm-iselgen/**"
       - "crates/backend/llrm-peepgen/**"
       - "crates/bc/llrm-bcdriver/**"
