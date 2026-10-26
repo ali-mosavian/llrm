@@ -44,6 +44,10 @@ const NAMED: &[(&str, &str)] = &[
     ("dialect.toml", "flags.*"),
 ];
 
+/// A tune file names its instruction forms: `Timings::parse_tuned` looks each
+/// one up by the form a target's `timings.times` row names.
+const TUNE_NAMED: &[&str] = &["clocks.*", "latency.*"];
+
 /// The files git tracks under `directories` of `root`: what the repository
 /// holds, not what a build, a virtualenv or an editor left beside it (a
 /// `tools/.venv` held every key's name and let a key nobody reads pass).
@@ -185,7 +189,8 @@ fn every_toml_key_has_a_reader() {
         let mut all = Vec::new();
         keys("", &toml::Value::Table(value), &mut all);
         for (at, key) in all {
-            let named = NAMED.iter().any(|(file, pattern)| *file == name && matches(pattern, &at));
+            let named = NAMED.iter().any(|(file, pattern)| *file == name && matches(pattern, &at))
+                || (path.to_string_lossy().contains("/machine/tune/") && TUNE_NAMED.iter().any(|pattern| matches(pattern, &at)));
             // A reader that takes the key through a closure or a helper:
             // `name("code")`, `number("fixed")`.
             let called = regex::Regex::new(&format!(r#"(?:\w\(|,\s*)"{}"\s*[,)]"#, regex::escape(&key))).unwrap();

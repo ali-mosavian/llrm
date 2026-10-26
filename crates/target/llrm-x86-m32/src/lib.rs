@@ -55,7 +55,7 @@ static OPCOSTS: LazyLock<llrm_target::opcosts::Description> = LazyLock::new(|| {
 
 /// The CPUs' timings: `timings.times`.
 static TIMINGS: LazyLock<llrm_target::timings::Timings> = LazyLock::new(|| {
-    llrm_target::timings::Timings::parse(include_str!("timings.times")).expect("timings.times parses")
+    llrm_target::timings::Timings::parse_tuned(include_str!("timings.times"), llrm_target::tune::X86).expect("timings.times parses")
 });
 
 /// The pin's register pressure sets for the registers described above:

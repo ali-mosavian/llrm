@@ -15,6 +15,7 @@ pub mod registers;
 pub mod routines;
 pub mod runtime;
 pub mod timings;
+pub mod tune;
 
 use std::rc::Rc;
 
