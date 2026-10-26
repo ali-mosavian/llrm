@@ -14,6 +14,12 @@
 # pointer argument past its return; it needs the source to show it.
 #
 # `cleanup = -1` is "not known", which is not the same as zero.
+#
+# For `llrm-qb` a row changes a listing only through `captures = "NONE"` (a
+# pointer argument the routine keeps no copy of) or `raises_error = false`
+# (the call is nounwind): any routine without a row already writes only
+# runtime cells when the program handles no errors. Rows for B$PECY, B$PSR8,
+# B$PCR8, B$PSR4 and B$PEOS were measured to leave the listing identical.
 
 ["B$HARY"]
 cleanup = -1
