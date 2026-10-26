@@ -514,9 +514,11 @@ fn nbody_emitted() -> String {
 #[test]
 fn test_fixed_i32_product_stays_a_storage_width_operation() {
     // Native nbody used to route every Q23.9 product through generic i64 MIR.
+    // The quotient is the one i64 operation: a truncating divide of the shifted
+    // dividend (`sdiv.fix` floors and cost a correction per divide).
     let nbody = nbody_emitted();
-    assert!(nbody.contains("@llvm.smul.fix.i32(") && nbody.contains("@llvm.sdiv.fix.i32("), "{nbody}");
-    assert!(!nbody.contains("i64"), "{nbody}");
+    assert!(nbody.contains("@llvm.smul.fix.i32(") && !nbody.contains("sdiv.fix"), "{nbody}");
+    assert!(nbody.contains(" sdiv i64 ") && !nbody.contains("mul i64"), "{nbody}");
 }
 
 #[test]
@@ -570,15 +572,9 @@ fn test_nbody_arrays_strings_and_print_cross_hir_and_verify_in_mir() {
     );
 
     let nbody = nbody_emitted();
-    for one in [
-        "getelementptr",
-        "br i1 ",
-        "addrspace(1) void @N$",
-        "@llvm.sdiv.fix.i32(",
-        "@llvm.smul.fix.i32(",
-        " = load ",
-        "store ",
-    ] {
+    for one in
+        ["getelementptr", "br i1 ", "addrspace(1) void @N$", " sdiv i64 ", "@llvm.smul.fix.i32(", " = load ", "store "]
+    {
         assert!(nbody.contains(one), "{one}\n{nbody}");
     }
 
