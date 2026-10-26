@@ -51,12 +51,16 @@ use iced_x86::RflagsBits;
 
 use crate::backend::lanes::Lanes;
 use crate::backend::precse::flag_lanes;
-use crate::model::ir::{Loc, Operation, Semantics};
-use crate::model::lir::{Insn, LirBody};
+use crate::model::ir::{Imm, Loc, Operation, Semantics};
+use crate::model::lir::{self, Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet};
 
-pub struct PeepholeOptimizer;
+/// `size`: the function is built for size, where an immediate is not folded
+/// into more than one reader (it is longer than the register).
+pub struct PeepholeOptimizer {
+    pub size: bool,
+}
 
 impl LIRTransform for PeepholeOptimizer {
     fn class_name(&self) -> &'static str {
@@ -71,7 +75,7 @@ impl LIRTransform for PeepholeOptimizer {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(compared(&body))
+        Ok(compared(&immediates_folded(&body, self.size)))
     }
 }
 
@@ -368,6 +372,182 @@ fn successor_overwrites_flags(
     false
 }
 
+/// `PeepholeOptimizer`'s `foldImmediate` (`X86InstrInfo::foldImmediateImpl`,
+/// [L6012](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L6012)):
+/// a register an earlier `mov` of the same block set to a constant, read as
+/// the operand of an `add`, `sub`, `and`, `or` or `xor`, is that constant in
+/// the immediate form. The first operand that is such a register is the one
+/// folded; a commutative instruction swaps it to the second place, `sub` takes
+/// the constant only as its second operand. The `mov` goes when nothing else
+/// reads it. Built for size, a constant several instructions read stays a
+/// register.
+///
+/// Not translated: the `COPY` and shift forms, `cmp`/`test`/`adc`/`sbb` and the
+/// 64-bit range check.
+pub fn immediates_folded(
+    body: &LirBody,
+    size: bool,
+) -> LirBody {
+    let mut reads: HashMap<u32, usize> = HashMap::default();
+    for block in &body.blocks {
+        for phi in block.phis.iter() {
+            for &(_from, value) in &phi.incoming {
+                *reads.entry(value).or_default() += 1;
+            }
+        }
+        for one in &block.insns {
+            for value in one.uses.iter().copied().chain(one.requires.iter().map(|(held, _)| held.value)) {
+                *reads.entry(value).or_default() += 1;
+            }
+        }
+    }
+    let mut out = body.clone();
+    for block in &mut out.blocks {
+        let mut constants: HashMap<u32, (usize, Imm)> = HashMap::default();
+        let mut insns: Vec<Arc<Insn>> = block.insns.iter().cloned().collect();
+        let mut changed = false;
+        for at in 0..insns.len() {
+            if let Some((value, imm)) = constant_move(&insns[at]) {
+                constants.insert(value, (at, imm));
+                continue;
+            }
+            let Some((folded, value)) = copy_folded(&insns[at], &insns[at + 1..], &constants, &reads, size)
+                .or_else(|| folded_use(&insns[at], &constants, &reads, size))
+            else {
+                continue;
+            };
+            insns[at] = Arc::new(folded);
+            changed = true;
+            let count = reads.entry(value).or_default();
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                let (def, _) = constants[&value];
+                insns[def] = lir::bytes_only(&insns[def]);
+                constants.remove(&value);
+            }
+        }
+        if changed {
+            block.insns = insns.into();
+        }
+    }
+    out
+}
+
+/// The register and constant of a plain `mov reg, imm`.
+fn constant_move(one: &Insn) -> Option<(u32, Imm)> {
+    let what = one.what.as_ref()?;
+    let ([Loc::Held(dest)], [Loc::Imm(imm)]) = (&what.dests[..], &what.sources[..]) else { return None };
+    (what.op == Operation::Move
+        && what.name.as_deref() == Some("mov")
+        && imm.address.is_none()
+        && one.defines == [dest.value]
+        && one.group.is_none()
+        && one.requires.is_empty()
+        && one.delivers.is_empty()
+        && one.clobbers.is_empty())
+    .then_some((dest.value, imm.clone()))
+}
+
+/// `foldImmediateImpl`'s `COPY` case: `d := mov c` of a register a `mov` set to
+/// a constant is a `mov` of the constant at the copy, where the register-class
+/// allows it (a 32-bit or 8-bit register, as the pin's `MOV32ri` and `MOV8ri`).
+/// A zero is `MOV32r0`, which clobbers the flags, so only where nothing reads
+/// them afterwards in the block.
+fn copy_folded(
+    one: &Insn,
+    after: &[Arc<Insn>],
+    constants: &HashMap<u32, (usize, Imm)>,
+    reads: &HashMap<u32, usize>,
+    size: bool,
+) -> Option<(Insn, u32)> {
+    let what = one.what.as_ref()?;
+    let ([Loc::Held(dest)], [Loc::Held(source)]) = (&what.dests[..], &what.sources[..]) else { return None };
+    if what.op != Operation::Move
+        || what.name.as_deref() != Some("mov")
+        || one.defines != [dest.value]
+        || one.group.is_some()
+        || !one.requires.is_empty()
+        || !one.delivers.is_empty()
+        || !one.clobbers.is_empty()
+        || ![1, 4].contains(&dest.width)
+        || dest.width != source.width
+    {
+        return None;
+    }
+    let (_, imm) = constants.get(&source.value)?;
+    if (size && reads.get(&source.value).copied().unwrap_or(0) > 1) || (imm.value == 0 && flags_read(after)) {
+        return None;
+    }
+    let mut folded = one.clone();
+    folded.what = Some(Semantics { sources: vec![Loc::Imm(Imm { width: dest.width, ..imm.clone() })], ..what.clone() });
+    folded.uses.retain(|&used| used != source.value);
+    folded.widths.retain(|&(used, _)| used != source.value);
+    Some((folded, source.value))
+}
+
+/// Whether an instruction of `after` reads the flags: a conditional branch,
+/// `setcc`, `cmovcc`, `adc` or `sbb`.
+fn flags_read(after: &[Arc<Insn>]) -> bool {
+    after
+        .iter()
+        .any(
+            |one| one.what
+                .as_ref()
+                .is_some_and(
+                    |what| {
+                        let name = what.name.as_deref().unwrap_or("");
+                        (what.op == Operation::Branch && name != "jmp")
+                            || ["cmov", "set", "adc", "sbb"].iter().any(|prefix| name.starts_with(prefix))
+                    },
+                ),
+        )
+}
+
+/// `one` with its first constant operand an immediate, and the register that
+/// was.
+fn folded_use(
+    one: &Insn,
+    constants: &HashMap<u32, (usize, Imm)>,
+    reads: &HashMap<u32, usize>,
+    size: bool,
+) -> Option<(Insn, u32)> {
+    let what = one.what.as_ref()?;
+    let commutes = match (what.op, what.name.as_deref()?) {
+        (Operation::Binary, "add" | "and" | "or" | "xor") => true,
+        (Operation::Binary, "sub") => false,
+        _ => return None,
+    };
+    let ([Loc::Held(_)], [Loc::Held(first), Loc::Held(second)]) = (&what.dests[..], &what.sources[..]) else {
+        return None;
+    };
+    if what.indirect
+        || one.group.is_some()
+        || !one.requires.is_empty()
+        || !one.delivers.is_empty()
+        || first.value == second.value
+    {
+        return None;
+    }
+    let (kept, constant, swapped) = if let Some((_, imm)) = constants.get(&first.value).filter(|_| commutes) {
+        (*second, (first.value, imm.clone()), true)
+    } else if let Some((_, imm)) = constants.get(&second.value) {
+        (*first, (second.value, imm.clone()), false)
+    } else {
+        return None;
+    };
+    let (value, imm) = constant;
+    if (size && reads.get(&value).copied().unwrap_or(0) > 1) || imm.width != kept.width && imm.width != second.width {
+        return None;
+    }
+    let _ = swapped;
+    let sources = vec![Loc::Held(kept), Loc::Imm(Imm { width: kept.width, ..imm })];
+    let mut folded = one.clone();
+    folded.what = Some(Semantics { sources, ..what.clone() });
+    folded.uses.retain(|&used| used != value);
+    folded.widths.retain(|&(used, _)| used != value);
+    Some((folded, value))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -604,5 +784,97 @@ mod tests {
             insn(3, Operation::Branch, "jb", vec![], vec![], vec![], vec![]),
         ]);
         assert_eq!(names(&compared(&body), true), ["shr", "test", "inc", "jb"]);
+    }
+
+    fn constant(value: i64) -> Loc {
+        Loc::Imm(Imm { value, width: 4, address: None })
+    }
+
+    fn mov_const(
+        at: i64,
+        dest: u32,
+        value: i64,
+    ) -> Arc<Insn> {
+        insn(at, Operation::Move, "mov", vec![held(dest)], vec![constant(value)], vec![dest], vec![])
+    }
+
+    /// `x_funcptr` at m32: the tail-duplicated dispatch read `1` and `0` from
+    /// two `mov`s and added them (`lea esi, [edx+ebx]`); the pin makes it
+    /// `add v2, 1`, which leaves the `mov 1` for no one, so the block's
+    /// first instruction is the `xor eax, eax` of the loop-exit edge's
+    /// block and the two are hoisted.
+    #[test]
+    fn test_an_add_of_a_constant_register_takes_the_immediate_form() {
+        let body = body_of(vec![
+            mov_const(0, 1, 1),
+            mov_const(1, 2, 0),
+            insn(2, Operation::Binary, "add", vec![held(3)], vec![held(1), held(2)], vec![3], vec![1, 2]),
+            insn(3, Operation::Branch, "jl", vec![], vec![], vec![], vec![]),
+        ]);
+        let done = immediates_folded(&body, false);
+        let insns = &done.blocks[0].insns;
+        let add = insns[2].what.as_ref().unwrap();
+        assert_eq!(
+            add.sources,
+            [held(2), constant(1)],
+            "the first constant operand is the immediate, swapped to the end"
+        );
+        assert_eq!(insns[2].uses, [2]);
+        assert!(insns[0].defines.is_empty(), "the mov of 1 has no reader left");
+        assert_eq!(insns[1].defines, [2], "the mov of 0 is still read");
+    }
+
+    /// `sub` takes the immediate only as its second operand.
+    #[test]
+    fn test_a_subtract_from_a_constant_register_keeps_it() {
+        let body = body_of(vec![
+            mov_const(0, 1, 5),
+            insn(1, Operation::Binary, "sub", vec![held(3)], vec![held(1), held(2)], vec![3], vec![1, 2]),
+            insn(2, Operation::Branch, "jl", vec![], vec![], vec![], vec![]),
+        ]);
+        assert_eq!(immediates_folded(&body, false), body);
+    }
+
+    /// For size a constant two instructions read stays a register.
+    #[test]
+    fn test_for_size_a_constant_read_twice_stays_a_register() {
+        let body = body_of(vec![
+            mov_const(0, 1, 7),
+            insn(1, Operation::Binary, "add", vec![held(3)], vec![held(2), held(1)], vec![3], vec![2, 1]),
+            insn(2, Operation::Binary, "and", vec![held(4)], vec![held(2), held(1)], vec![4], vec![2, 1]),
+            insn(3, Operation::Branch, "jl", vec![], vec![], vec![], vec![]),
+        ]);
+        assert_eq!(immediates_folded(&body, true), body);
+        assert_ne!(immediates_folded(&body, false), body);
+    }
+
+    /// The pin's `COPY` fold: the copy of a constant register is a `mov` of the
+    /// constant where the copy is, and the first `mov` goes when no one else
+    /// reads it (x_funcptr: the `mov 1` that started the preheader moves to the
+    /// end of it, behind the `add` that read it, and the `xor` is first).
+    #[test]
+    fn test_a_copy_of_a_constant_register_is_the_constant() {
+        let body = body_of(vec![
+            mov_const(0, 1, 1),
+            insn(1, Operation::Move, "mov", vec![held(2)], vec![held(1)], vec![2], vec![1]),
+            insn(2, Operation::Branch, "jmp", vec![], vec![], vec![], vec![]),
+        ]);
+        let done = immediates_folded(&body, false);
+        let insns = &done.blocks[0].insns;
+        assert_eq!(insns[1].what.as_ref().unwrap().sources, [constant(1)]);
+        assert!(insns[0].defines.is_empty(), "the first mov has no reader left");
+    }
+
+    /// A zero is `xor`, which clobbers the flags: not ahead of a branch that
+    /// reads them.
+    #[test]
+    fn test_a_copy_of_zero_before_a_flag_reader_stays() {
+        let body = body_of(vec![
+            mov_const(0, 1, 0),
+            insn(1, Operation::Compare, "cmp", vec![], vec![held(4), held(5)], vec![], vec![4, 5]),
+            insn(2, Operation::Move, "mov", vec![held(2)], vec![held(1)], vec![2], vec![1]),
+            insn(3, Operation::Branch, "jl", vec![], vec![], vec![], vec![]),
+        ]);
+        assert_eq!(immediates_folded(&body, false), body);
     }
 }
