@@ -961,3 +961,13 @@ fn a_falling_word_copy_eighty_cells_up_is_never_a_memcpy_whatever_its_addresses_
         }
     }
 }
+
+/// QCport m16 -Os, loop and fill bytes as the model sums them: mod_tex's two
+/// fills (loop 28) beat its loop, which grew the module 8 bytes at the
+/// table's 18 a fill; snd_mix's (24) and lru's four (42) lose to theirs.
+#[test]
+fn a_fill_is_priced_at_three_quarters_of_the_table() {
+    assert!(super::fills_cheaper(28, 2, 18));
+    assert!(!super::fills_cheaper(24, 2, 18));
+    assert!(!super::fills_cheaper(42, 4, 18));
+}

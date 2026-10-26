@@ -137,6 +137,11 @@ pub struct Registers {
     pub results: Vec<RegId>,
 }
 
+/// The address spaces the i8086 target gives far and huge pointers (clang's
+/// `address_space(1)` and `(3)`).
+const FAR_SPACE: u32 = 1;
+const HUGE_SPACE: u32 = 3;
+
 /// `module` as masm, its code in the segment `code`, selected by the 16-bit x86
 /// selector: what the tests of this crate are written for.
 #[cfg(test)]
@@ -175,6 +180,8 @@ pub fn assembled_by(
     let mut shared: IndexMap<String, Vec<u8>> = IndexMap::default();
     let mut shared_registers = None;
     let mut data = Vec::new();
+    let mut far_data = Vec::new();
+    let mut data_publics = Vec::new();
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
     let classes = Rc::new(RegisterClasses::of(arch));
     let (facts, order) = calleefacts::CalleeFacts::of(module);
@@ -208,7 +215,17 @@ pub fn assembled_by(
         let name = global.name.as_deref().unwrap_or_default();
         match &global.kind {
             GlobalKind::Variable(variable) if variable.initializer.is_some() => {
-                data.extend(globals::datums(module, id, &names)?)
+                // A far or huge object lies outside DGROUP, in a segment of the
+                // module's own.
+                let datums = globals::datums(module, id, &names)?;
+                if matches!(global.address_space, FAR_SPACE | HUGE_SPACE) {
+                    far_data.extend(datums);
+                } else {
+                    data.extend(datums);
+                }
+                if global.linkage == llrm_mir::Linkage::External {
+                    data_publics.push(names[&(globals::space(module, id), at as i64)].clone());
+                }
             }
             GlobalKind::Function(function) if !function.is_declaration() => {
                 let unselected = |error: isel::Unselected| format!("@{name}: {}", error.0);
@@ -428,7 +445,8 @@ pub fn assembled_by(
     externs.extend(module.globals.iter().enumerate().filter_map(|(at, global)| {
         let GlobalKind::Variable(variable) = &global.kind else { return None };
         let name = names.get(&(globals::space(module, GlobalId(at as u32)), at as i64))?;
-        (variable.initializer.is_none() && !defined.contains(name.as_str())).then(|| (name.clone(), "byte".to_owned()))
+        let kind = if matches!(global.address_space, FAR_SPACE | HUGE_SPACE) { "far-byte" } else { "byte" };
+        (variable.initializer.is_none() && !defined.contains(name.as_str())).then(|| (name.clone(), kind.to_owned()))
     }));
     externs.extend(masm::stack_externs(&procedures, &mut names));
     externs.sort();
@@ -436,15 +454,19 @@ pub fn assembled_by(
     let debug = timed("debug info", || {
         crate::backend::debuginfo::described(module, &names, llrm_object::debug::Producer::Native, arch)
     })?;
+    let has_far = !far_data.is_empty();
+    let far_segment = format!("{}_FARDATA", code.strip_suffix("_TEXT").unwrap_or(code));
     Ok(masm::Module {
         registers: Regs(arch.registers()),
         code: code.to_owned(),
         names,
         externs,
-        publics: procedures.iter().filter(|one| one.public).map(|one| one.name.clone()).collect(),
-        data: vec![("_DATA".to_owned(), data)],
+        publics: procedures.iter().filter(|one| one.public).map(|one| one.name.clone()).chain(data_publics).collect(),
+        data: std::iter::once(("_DATA".to_owned(), data))
+            .chain(has_far.then(|| (far_segment.clone(), far_data)))
+            .collect(),
         procedures,
-        private: BTreeSet::new(),
+        private: BTreeSet::from_iter(has_far.then(|| far_segment.clone())),
         requests: BTreeSet::new(),
         debug,
         far_bss: BTreeSet::new(),

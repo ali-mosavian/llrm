@@ -4416,10 +4416,10 @@ impl Compiler {
                         self.graphics_coordinate(1, &arguments[0], &arguments[1])?;
                         let omitted = Operand::Constant(INTEGER, Number::Integer(-1));
                         let fill = arguments.get(2).filter(|one| !matches!(one, Expr::Omitted(_)));
-                        if fill.is_some_and(|one| self.string_syntax(one)) {
-                            return self.unsupported("PAINT with a tile string");
-                        }
                         if arguments.len() > 4 {
+                            if fill.is_some_and(|one| self.string_syntax(one)) {
+                                return self.unsupported("PAINT with a background tile");
+                            }
                             return self.fail("a PAINT background needs a tile string");
                         }
                         let number = |this: &mut Self, argument: Option<&Expr>| match argument {
@@ -4429,9 +4429,15 @@ impl Compiler {
                                 this.convert(value, type_id, INTEGER)
                             }
                         };
-                        let paint = number(self, fill)?;
-                        let border = number(self, arguments.get(3))?;
-                        self.emit_runtime_call("B$PAIN", Vec::new(), vec![paint, border]);
+                        if let Some(tile) = fill.filter(|one| self.string_syntax(one)) {
+                            let tile = self.string_descriptor(tile)?;
+                            let border = number(self, arguments.get(3))?;
+                            self.emit_runtime_call("B$PNTC", Vec::new(), vec![tile, border, omitted]);
+                        } else {
+                            let paint = number(self, fill)?;
+                            let border = number(self, arguments.get(3))?;
+                            self.emit_runtime_call("B$PAIN", Vec::new(), vec![paint, border]);
+                        }
                     }
                     "PSET" | "PRESET" => {
                         if !(2..=3).contains(&arguments.len()) {
@@ -7924,6 +7930,24 @@ impl Compiler {
             );
             let result = self.convert(Operand::Value(byte), BYTE, INTEGER)?;
             return Ok(Some((result, INTEGER)));
+        }
+        if intrinsic.lowering == Lowering::Pmap {
+            // PMAP(expr, funct): BC passes the SINGLE and the function code and
+            // reads the result back through the pointer in AX, as RND does.
+            let (value, value_type) = self.expression(&arguments[0])?;
+            let value = self.stored_float_argument(value, value_type, SINGLE)?;
+            let (function, function_type) = self.expression(&arguments[1])?;
+            let function = self.convert(function, function_type, INTEGER)?;
+            let pointer_type = self.pointer_type(SINGLE);
+            let pointer = self.value(pointer_type);
+            self.emit_runtime_call("B$PMAP", vec![pointer], vec![value, function]);
+            let result = self.value(SINGLE);
+            self.emit(
+                "load",
+                vec![result],
+                vec![Operand::Indirect { base: pointer, offset: 0, type_id: SINGLE, volatile: false, inbounds: false }],
+            );
+            return Ok(Some((Operand::Value(result), SINGLE)));
         }
         if intrinsic.lowering == Lowering::Point {
             let (x, x_type) = self.expression(&arguments[0])?;
