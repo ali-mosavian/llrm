@@ -3377,3 +3377,43 @@ fn a_string_compare_tested_against_minus_one_compiles_optimized() {
         assert_eq!(crate::cli::main(&argv), 0, "{level}");
     }
 }
+
+/// The words of the table `label` names in `listing`.
+fn table_words(
+    listing: &str,
+    label: &str,
+) -> Option<usize> {
+    let mut rows = listing.lines().skip_while(|one| !one.starts_with(&format!("{label} label byte"))).skip(1);
+    let mut bytes = 0;
+    for row in rows.by_ref() {
+        match row.trim_start().split_once(' ') {
+            Some(("db", list)) => bytes += list.split(',').count(),
+            Some(("dw", _)) => bytes += 2,
+            _ => break,
+        }
+    }
+    Some(bytes / 2).filter(|_| listing.contains(&format!("{label} label byte")))
+}
+
+/// ERL read a table of one word per statement (sixteen, 32 bytes at -Os), all
+/// zero where the program numbers no line.
+#[test]
+fn test_erl_without_line_numbers_has_no_table() {
+    let text = listing_of(
+        "erl_plain",
+        "ON ERROR GOTO h\r\nFOR i% = 1 TO 3\r\nx# = EXP(30000# * i%)\r\nPRINT i%\r\nNEXT\r\nEND\r\nh:\r\nPRINT ERL\r\nRESUME NEXT\r\n",
+    );
+    assert!(!text.contains("$QB$ERL$"), "{text}");
+}
+
+/// ERL read a word per statement, though only the statements that can raise
+/// are ever the site: ten statements here, two of them PRINTs.
+#[test]
+fn test_erl_table_numbers_only_the_statements_that_raise() {
+    let text = listing_of(
+        "erl_sites",
+        "10 ON ERROR GOTO 100\r\n20 a% = 1: b% = 2: c% = a% + b%\r\n30 d% = c% * 3: e% = d% - a%\r\n40 PRINT e%\r\n50 f% = e% + 1: g% = f% * 2\r\n60 PRINT g%\r\n70 END\r\n100 PRINT ERL\r\n110 RESUME NEXT\r\n",
+    );
+    let words = table_words(&text, "$QB$ERL$__main").unwrap_or_else(|| panic!("no table\n{text}"));
+    assert!(words <= 4, "{words} words\n{text}");
+}

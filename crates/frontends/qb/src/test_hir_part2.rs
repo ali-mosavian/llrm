@@ -895,7 +895,9 @@ fn test_on_error_registrations_follow_source_order() {
         .filter_map(|line| line.strip_prefix("mov word ptr ss:$QB$FRAME, "))
         .map(|state| state.parse().expect("a statement number"))
         .collect();
-    assert!(states.len() == 3 && states.windows(2).all(|pair| pair[0] < pair[1]), "{main}");
+    // Sites are numbered from 0 among the statements that raise; the first
+    // registration's 0 is the frame cell's initial value, so it is not stored.
+    assert_eq!(states, [1, 2], "{main}");
     let last = before.rsplit_once("\n    call far ptr B$OEGA").expect("a registration").0;
     assert!(last.ends_with("pushd 0"), "{main}");
 }
