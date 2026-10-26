@@ -636,9 +636,12 @@ fn machined_once(
     let (first, frame) = timed("candidate first frame", || cheaper(&first_stage, name, pool, target))?;
     let spilled = frame.floor + first.reserve;
     // The allocas move down by the hole: a multiple of the stack alignment, or
-    // an 8-aligned array lands at 4 mod 8 (nbody -O2: 18,404 operands).
+    // an 8-aligned array lands at 4 mod 8 (nbody -O2: 18,404 operands). Shared
+    // spill slots can end on a word, so a 4-aligned frame needs it too: the
+    // backend run again aligns the allocas and the frame moved by the hole
+    // did not (reserve 286 against 288).
     let spilled =
-        if frame.align > 4 { (spilled + frame.align - 1).div_euclid(frame.align) * frame.align } else { spilled };
+        if frame.align > 1 { (spilled + frame.align - 1).div_euclid(frame.align) * frame.align } else { spilled };
     let far = far_frame(&first.body);
     if target.basic || frame.native.is_some() || spilled <= 0 || frame.floor == 0 || far == 0 {
         return Ok(first);
