@@ -84,6 +84,9 @@ pub enum Intrinsic {
     /// `llvm.assume`: its condition holds here, which a pass may use and no
     /// code checks. Undefined where it does not.
     Assume,
+    /// `llvm.prefetch`: a hint to bring an address into the cache; no code is
+    /// needed where the target has no prefetch instruction.
+    Prefetch,
     /// `llvm.expect`: its first argument, which the second says it is expected
     /// to be: a hint `lower-expect` turns into branch weights and removes
     /// (LowerExpectIntrinsic.cpp); no code runs it.
@@ -427,7 +430,7 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 52] = [
+const TABLE: [Spec; 53] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -528,6 +531,14 @@ const TABLE: [Spec; 52] = [
         overloads: &[],
         returns: Slot::Void,
         parameters: &[Slot::Int(1)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.prefetch",
+        intrinsic: Intrinsic::Prefetch,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Void,
+        parameters: &[Slot::Any(0), Slot::Int(32), Slot::Int(32), Slot::Int(32)],
         own: None,
     },
     Spec {

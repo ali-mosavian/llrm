@@ -70,7 +70,7 @@ impl Builder<'_> {
                 }
                 Ok(())
             }
-            Intrinsic::Assume => Ok(()),
+            Intrinsic::Assume | Intrinsic::Prefetch => Ok(()),
             // a hint the passes read: its value is its argument
             Intrinsic::Expect | Intrinsic::Restrict => {
                 let value = self.get_value(instruction.operands[0])?;

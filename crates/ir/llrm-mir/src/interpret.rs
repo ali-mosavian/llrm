@@ -568,7 +568,7 @@ impl<'m> Machine<'m> {
                 self.poison[to..to + length].copy_from_slice(&poison);
                 void
             }
-            Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd | Intrinsic::Assume => void,
+            Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd | Intrinsic::Assume | Intrinsic::Prefetch => void,
             Intrinsic::Expect => argument(0),
             // Flat memory: the address difference, wrapped to the result.
             Intrinsic::PtrDiff => match (argument(0), argument(1), self.types().int_bits(returns)) {

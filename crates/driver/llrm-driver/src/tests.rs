@@ -665,3 +665,18 @@ fn a_section_names_the_segment_of_a_variable_and_a_function() {
     assert!(built.data.iter().any(|(name, items)| name == "XIB" && !items.is_empty()), "{:?}", built.data);
     assert_eq!(built.code_segments.values().collect::<Vec<_>>(), ["HOT_TEXT"], "{:?}", built.code_segments);
 }
+
+/// `__builtin_prefetch` is `llvm.prefetch`; the 386/486 have no instruction for
+/// it and `llrm-llc` refused the module ("@f_: @llvm.prefetch.p0"), so
+/// `builtins_table.c` never compiled through `llrm-cc`. The hint compiles to
+/// nothing.
+#[test]
+fn a_prefetch_hint_compiles_to_no_code() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                declare void @llvm.prefetch.p0(ptr, i32, i32, i32)\n\
+                define void @f(ptr %p) {\n  call void @llvm.prefetch.p0(ptr %p, i32 0, i32 3, i32 1)\n  ret void\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m32"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("prefetch"), "{listing}");
+}
