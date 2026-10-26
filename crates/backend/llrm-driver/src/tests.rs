@@ -506,3 +506,18 @@ fn an_operand_of_an_sse_form_is_confined_to_xmm_registers() {
     let integer = confinement_of(regs, std::iter::once(&*add("add", 16)), 2, &sets);
     assert!(matches!(integer, Confinement::Free));
 }
+
+/// An OMF object from LLVM IR named `main` and `report` plain: the m32 start-up
+/// calls `_main` and the OS layer defines `_report`, so the link failed with
+/// both undefined. Names take the convention's spelling for the format.
+#[test]
+fn llvm_ir_symbols_are_decorated_as_the_object_format_spells_them() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                declare void @report(i32)\n\
+                define i32 @main() {\n  call void @report(i32 7)\n  ret i32 0\n}\n";
+    let flags = flags(&["-fobject-format=omf", "-mabi=sysv"]);
+    let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("_main") && listing.contains("_report"), "{listing}");
+}
