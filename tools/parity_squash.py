@@ -1033,7 +1033,7 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
         import xfail  # noqa: PLC0415
 
         packages, _ = smoke.workspace_graph(cwd)
-        listed = {one.split()[1].split("::")[0] for one in xfail.load() if one.startswith("integration ")}
+        listed = {one.split()[1].split("::")[0] for one in xfail.load_for(cwd) if one.startswith("integration ")}
         reach = set(smoke.integration_targets_for(changed, smoke.touched_packages(changed, packages, cwd), smoke.integration_map(cwd))) & listed
         own = {Path(f).stem for f in changed if f.startswith("tests/") and f.endswith(".rs") and "/" not in f[len("tests/") :]}
         only = (set(smoke.SCANNERS) | own | reach) - set(smoke.NIGHTLY_ONLY)
