@@ -118,6 +118,15 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with divides by constants kept as divides (`isIntDivCheap`).
+    pub fn with_int_div_cheap(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.dag.int_div_cheap = on;
+        self
+    }
+
     /// This target with jump tables on or off.
     pub fn with_jump_tables(
         mut self,
@@ -161,15 +170,6 @@ impl BuilderTarget {
         names: &[&str],
     ) -> BuilderTarget {
         self.libcalls = Some(names.iter().map(|name| ((*name).to_owned(), 0, (*name).to_owned())).collect());
-        self
-    }
-
-    /// The profile is tuned for size (`DagConfig::opt_for_size`).
-    pub fn with_opt_for_size(
-        mut self,
-        on: bool,
-    ) -> BuilderTarget {
-        self.dag.opt_for_size = on;
         self
     }
 

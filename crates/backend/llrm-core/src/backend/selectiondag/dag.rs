@@ -154,9 +154,8 @@ pub struct DagConfig {
     pub offset_folding: bool,
     /// The pointer type (`TLI->getPointerTy`).
     pub pointer: EVT,
-    /// The profile is tuned for size (`-Os`): `isIntDivCheap`, as llrm's size
-    /// tuning has no separate `minsize`.
-    pub opt_for_size: bool,
+    /// `isIntDivCheap`: a divide by a constant stays a divide.
+    pub int_div_cheap: bool,
 }
 
 impl Default for DagConfig {
@@ -167,7 +166,7 @@ impl Default for DagConfig {
             boolean_contents: BooleanContents::ZeroOrOne,
             offset_folding: false,
             pointer: EVT::I32,
-            opt_for_size: false,
+            int_div_cheap: false,
         }
     }
 }

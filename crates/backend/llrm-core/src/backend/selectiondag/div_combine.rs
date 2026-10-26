@@ -6,9 +6,11 @@
 //! promoted-type multiply, no `BuildExactSDIV`/`BuildExactUDIV` for `exact`
 //! divides, no widened `MULHU` of an `i32`), no `DIVREM` merging, and
 //! `BuildSDIVPow2` is the generic shift sequence: the pin's `cmov` form for a
-//! CPU with `cmov` (P6 and later) is not ported. `isIntDivCheap` is
-//! `DagConfig::opt_for_size` (no `minsize`). Exit: the promoted and exact
-//! forms, the `cmov` sequence. Owner sdag-b. Review 2026-11-27.
+//! CPU with `cmov` (P6 and later) is not ported. `isIntDivCheap` is the
+//! configured `int_div_cheap` (the pin's `minsize`; the `-Os` rule of the
+//! target is not wired). Exit: the promoted and exact forms, the `cmov`
+//! sequence, the `-Os` rule.
+//! Owner sdag-b. Review 2026-11-27.
 //!
 //! # See also
 //! LLVM's `DAGCombiner::visitSDIV`
@@ -125,6 +127,15 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         super::known_bits::known_bits(self.dag, value).zero >> (bits - 1) & 1 == 1
     }
 
+    /// `isIntDivCheap(VT)`. DEVIATE SD206: never for `i8`, whose `DIV8r` the
+    /// selector does not translate (SD302): the divide would be unselectable.
+    fn int_div_cheap(
+        &self,
+        vt: EVT,
+    ) -> bool {
+        self.dag.config().int_div_cheap && vt != EVT::I8
+    }
+
     /// `visitSDIVLike`.
     pub(super) fn visit_sdiv_like(
         &mut self,
@@ -153,7 +164,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 return Some(if negative { self.dag.get_negative(quotient, vt) } else { quotient });
             }
         }
-        if self.dag.constant(n1).is_some() {
+        if self.dag.constant(n1).is_some() && !self.int_div_cheap(vt) {
             return self.build_sdiv(n0, n1, node);
         }
         None
@@ -166,15 +177,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         n1: SDValue,
         node: SDValue,
     ) -> Option<SDValue> {
-        // `!TLI.isIntDivCheap`: a size-tuned profile keeps the divide, as the
-        // old selector does (`division.rs`: the magic number is a
-        // 5-byte immediate, `cdq; idiv r` is 3). A byte divide has no selection
-        // (SD302), so it keeps the multiply.
         let vt = self.dag.value_type(node);
         let bits = vt.size_in_bits();
-        if self.dag.config().opt_for_size && bits > 8 {
-            return None;
-        }
         if self.dag.node(node).flags.0 & SDNodeFlags::EXACT.0 != 0 || !self.tli?.types.is_type_legal(vt) {
             return None;
         }
@@ -251,7 +255,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 return Some(self.dag.get_node(ISD::Srl, vt, &[n0, total]));
             }
         }
-        if self.dag.constant(n1).is_some() {
+        if self.dag.constant(n1).is_some() && !self.int_div_cheap(vt) {
             return self.build_udiv(n0, n1, node);
         }
         None
@@ -265,15 +269,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         n1: SDValue,
         node: SDValue,
     ) -> Option<SDValue> {
-        // `!TLI.isIntDivCheap`: a size-tuned profile keeps the divide, as the
-        // old selector does (`division.rs`: the magic number is a
-        // 5-byte immediate, `cdq; idiv r` is 3). A byte divide has no selection
-        // (SD302), so it keeps the multiply.
         let vt = self.dag.value_type(node);
         let bits = vt.size_in_bits();
-        if self.dag.config().opt_for_size && bits > 8 {
-            return None;
-        }
         if self.dag.node(node).flags.0 & SDNodeFlags::EXACT.0 != 0 || !self.tli?.types.is_type_legal(vt) {
             return None;
         }
@@ -328,6 +325,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             return Some(self.dag.get_node(ISD::And, vt, &[n0, below]));
         }
         if self.dag.constant(n1).is_none_or(|c| c == 0) {
+            return None;
+        }
+        // "Checking cheapness here makes sense since the simplification
+        // results in fatter code."
+        if self.int_div_cheap(vt) {
             return None;
         }
         let quotient = if signed { self.visit_sdiv_like(n0, n1, node) } else { self.visit_udiv_like(n0, n1, node) }?;
