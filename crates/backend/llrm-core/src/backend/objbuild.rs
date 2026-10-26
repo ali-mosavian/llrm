@@ -517,20 +517,28 @@ pub fn written_in(
 ) -> Result<Vec<u8>, Error> {
     llrm_support::debug::timed("object write", || {
         let object = built_inner(module, source, layout, format)?;
-        match format {
-            Format::Omf => Ok(llrm_omf::write::write(&object)?),
-            Format::Elf if object.arch == Arch::I386 => Ok(llrm_elf32::write(&object)?),
-            Format::Elf if object.arch == Arch::X8664 => Ok(llrm_elf64::write(&object)?),
-            Format::MachO if object.arch == Arch::X8664 => Ok(llrm_macho::write(&object)?),
-            Format::Coff if object.arch == Arch::I386 => Ok(llrm_coff32::write(&object)?),
-            Format::Coff if object.arch == Arch::X8664 => Ok(llrm_coff64::write(&object)?),
-            Format::Elf | Format::MachO | Format::Coff => Err(Error::Unsupported(llrm_object::Unsupported(format!(
-                "no {} writer for {:?} yet",
-                format.name(),
-                object.arch
-            )))),
-        }
+        serialized(&object, format)
     })
+}
+
+/// `object` as a file of `format`.
+pub fn serialized(
+    object: &Object,
+    format: Format,
+) -> Result<Vec<u8>, Error> {
+    match format {
+        Format::Omf => Ok(llrm_omf::write::write(object)?),
+        Format::Elf if object.arch == Arch::I386 => Ok(llrm_elf32::write(object)?),
+        Format::Elf if object.arch == Arch::X8664 => Ok(llrm_elf64::write(object)?),
+        Format::MachO if object.arch == Arch::X8664 => Ok(llrm_macho::write(object)?),
+        Format::Coff if object.arch == Arch::I386 => Ok(llrm_coff32::write(object)?),
+        Format::Coff if object.arch == Arch::X8664 => Ok(llrm_coff64::write(object)?),
+        Format::Elf | Format::MachO | Format::Coff => Err(Error::Unsupported(llrm_object::Unsupported(format!(
+            "no {} writer for {:?} yet",
+            format.name(),
+            object.arch
+        )))),
+    }
 }
 
 /// `module` laid out as an object.

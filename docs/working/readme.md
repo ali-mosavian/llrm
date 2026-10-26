@@ -106,6 +106,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [pin-slot-table](pin-slot-table.md) | Pin pipeline slots against llrm's pipeline |
 | [premise-peephole-sink-scheduler](premise-peephole-sink-scheduler.md) | Premise tests: Peephole, MachineSink, Machine Scheduler |
 | [process-implicit-defs-plan](process-implicit-defs-plan.md) | ProcessImplicitDefs: the translation |
+| [qb-host](qb-host.md) | The QB runtime on a Linux or macOS host with SDL: layout, build, what was checked, what is missing (#4669) |
 | [x-base64-ties](x-base64-ties.md) | x_base64: the two ties that flip in the shared-LiveIntervals landing |
 | [twoaddress-cost-plan](twoaddress-cost-plan.md) | TwoAddress and LiveIntervals compile cost against the pin: callgrind attribution, four steps |
 | [twoaddress-rest-plan](twoaddress-rest-plan.md) | Row 62: what of TwoAddressInstructionPass is left |
