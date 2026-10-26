@@ -47,14 +47,20 @@
 
 use std::sync::Arc;
 
-use llrm_lir::registers::RegId;
+use iced_x86::RflagsBits;
 
-use crate::model::ir::{Loc, Operation, Semantics};
-use crate::model::lir::{Insn, LirBody};
+use crate::backend::lanes::Lanes;
+use crate::backend::precse::flag_lanes;
+use crate::model::ir::{Imm, Loc, Operation, Semantics};
+use crate::model::lir::{self, Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet};
 
-pub struct PeepholeOptimizer;
+/// `size`: the function is built for size, where an immediate is not folded
+/// into more than one reader (it is longer than the register).
+pub struct PeepholeOptimizer {
+    pub size: bool,
+}
 
 impl LIRTransform for PeepholeOptimizer {
     fn class_name(&self) -> &'static str {
@@ -69,7 +75,7 @@ impl LIRTransform for PeepholeOptimizer {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(compared(&body))
+        Ok(compared(&immediates_folded(&body, self.size)))
     }
 }
 
@@ -221,14 +227,16 @@ fn flags_reused(body: &LirBody) -> LirBody {
             }
         }
     }
-    let flags = |one: &Insn| -> Option<(bool, bool)> {
+    // The flag lanes `one` reads and writes.
+    let flags = |one: &Insn| -> Option<(Lanes, Lanes)> {
         let Some(effect) = crate::backend::liveness::effect(body.regs(), body.bits, one) else {
             // a conditional branch reads the flags and writes nothing
             let branch = one.what.as_ref().filter(|what| what.op == Operation::Branch && !what.indirect);
-            return branch.filter(|what| what.name.as_deref().and_then(condition_of).is_some()).map(|_| (true, false));
+            return branch
+                .filter(|what| what.name.as_deref().and_then(condition_of).is_some())
+                .map(|_| (Lanes::flags(u32::MAX), Lanes::new()));
         };
-        let on = |lanes: crate::backend::lanes::Lanes| lanes.iter().any(|lane| lane.0 == RegId::None);
-        Some((on(effect.reads), on(effect.writes)))
+        Some((flag_lanes(&effect.reads), flag_lanes(&effect.writes)))
     };
     let mut changed = false;
     let blocks: Vec<_> = body
@@ -283,7 +291,7 @@ fn reusable(
     at: usize,
     value: u32,
     reads: &HashMap<u32, usize>,
-    flags: &dyn Fn(&Insn) -> Option<(bool, bool)>,
+    flags: &dyn Fn(&Insn) -> Option<(Lanes, Lanes)>,
 ) -> bool {
     // the scan back from the compare: no other writer of the flags before the
     // definition of the value
@@ -298,7 +306,7 @@ fn reusable(
             continue;
         }
         match flags(one) {
-            Some((_, false)) => {}
+            Some((_, writes)) if writes.is_empty() => {}
             _ => return false,
         }
     }
@@ -313,47 +321,251 @@ fn reusable(
         return false;
     }
     // the scan forward from the compare: the readers of the flags read only
-    // what the definition sets, until something writes them again
-    let mut killed = false;
+    // what the definition sets, until something writes them again. A write of
+    // some flags (`inc` leaves CF) kills only those.
+    let mut pending =
+        Lanes::flags((RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::CF | RflagsBits::PF) as u32);
     for one in &insns[at + 1..] {
         if one.is_meta() {
             continue;
         }
-        let Some((reads_flags, writes_flags)) = flags(one) else { return false };
-        if reads_flags {
+        let Some((reads, writes)) = flags(one) else {
+            return false;
+        };
+        if !reads.is_disjoint(&pending) {
             let named = one.what.as_ref().and_then(|what| what.name.as_deref());
             if !named.is_some_and(|name| reads_what_it_sets(name, sets)) {
                 return false;
             }
         }
-        if writes_flags {
-            killed = true;
-            break;
+        pending = pending.minus(&writes);
+        if pending.is_empty() {
+            return true;
         }
     }
-    // not written again in the block: the flags must not be read in a successor
-    // before they are written there
-    killed || block.succ.iter().all(|next| successor_overwrites_flags(body, *next, flags))
+    // not written again in the block: a successor must write them before it
+    // reads them
+    block.succ.iter().all(|next| successor_overwrites_flags(body, *next, flags, pending))
 }
 
-/// Whether the block at `at` writes the flags before it reads them.
+/// Whether the block at `at` writes every one of `pending` before it reads any.
 fn successor_overwrites_flags(
     body: &LirBody,
     at: i64,
-    flags: &dyn Fn(&Insn) -> Option<(bool, bool)>,
+    flags: &dyn Fn(&Insn) -> Option<(Lanes, Lanes)>,
+    mut pending: Lanes,
 ) -> bool {
     let Some(block) = body.blocks.iter().find(|one| one.at == at) else { return false };
     for one in &block.insns {
         if one.is_meta() {
             continue;
         }
-        match flags(one) {
-            Some((true, _)) | None => return false,
-            Some((false, true)) => return true,
-            Some((false, false)) => {}
+        let Some((reads, writes)) = flags(one) else { return false };
+        if !reads.is_disjoint(&pending) {
+            return false;
+        }
+        pending = pending.minus(&writes);
+        if pending.is_empty() {
+            return true;
         }
     }
     false
+}
+
+/// `PeepholeOptimizer`'s `foldImmediate` (`X86InstrInfo::foldImmediateImpl`,
+/// [L6012](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L6012)):
+/// a register an earlier `mov` of the same block set to a constant, read as
+/// the operand of an `add`, `sub`, `and`, `or` or `xor`, is that constant in
+/// the immediate form. The first operand that is such a register is the one
+/// folded; a commutative instruction swaps it to the second place, `sub` takes
+/// the constant only as its second operand. The `mov` goes when nothing else
+/// reads it. Built for size, a constant several instructions read stays a
+/// register.
+///
+/// Not translated: the `COPY` and shift forms, `cmp`/`test`/`adc`/`sbb` and the
+/// 64-bit range check.
+pub fn immediates_folded(
+    body: &LirBody,
+    size: bool,
+) -> LirBody {
+    let mut reads: HashMap<u32, usize> = HashMap::default();
+    for block in &body.blocks {
+        for phi in block.phis.iter() {
+            for &(_from, value) in &phi.incoming {
+                *reads.entry(value).or_default() += 1;
+            }
+        }
+        for one in &block.insns {
+            for value in one.uses.iter().copied().chain(one.requires.iter().map(|(held, _)| held.value)) {
+                *reads.entry(value).or_default() += 1;
+            }
+        }
+    }
+    // A value with no definition is an undefined read (`ProcessImplicitDefs`
+    // removed its `IMPLICIT_DEF`): swapping it into the tied first place
+    // would make the instruction read a register nothing wrote.
+    let mut defined: HashSet<u32> = HashSet::default();
+    for block in &body.blocks {
+        defined.extend(block.phis.iter().map(|phi| phi.result));
+        for one in &block.insns {
+            defined.extend(one.defines.iter().copied().chain(one.delivers.iter().map(|(held, _)| held.value)));
+        }
+    }
+    let mut out = body.clone();
+    for block in &mut out.blocks {
+        let mut constants: HashMap<u32, (usize, Imm)> = HashMap::default();
+        let mut insns: Vec<Arc<Insn>> = block.insns.iter().cloned().collect();
+        let mut changed = false;
+        for at in 0..insns.len() {
+            if let Some((value, imm)) = constant_move(&insns[at]) {
+                constants.insert(value, (at, imm));
+                continue;
+            }
+            let Some((folded, value)) = copy_folded(&insns[at], &insns[at + 1..], &constants, &reads, size)
+                .or_else(|| folded_use(&insns[at], &constants, &reads, &defined, size))
+            else {
+                continue;
+            };
+            insns[at] = Arc::new(folded);
+            changed = true;
+            let count = reads.entry(value).or_default();
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                let (def, _) = constants[&value];
+                insns[def] = lir::bytes_only(&insns[def]);
+                constants.remove(&value);
+            }
+        }
+        if changed {
+            block.insns = insns.into();
+        }
+    }
+    out
+}
+
+/// The register and constant of a plain `mov reg, imm`.
+fn constant_move(one: &Insn) -> Option<(u32, Imm)> {
+    let what = one.what.as_ref()?;
+    let ([Loc::Held(dest)], [Loc::Imm(imm)]) = (&what.dests[..], &what.sources[..]) else { return None };
+    (what.op == Operation::Move
+        && what.name.as_deref() == Some("mov")
+        && imm.address.is_none()
+        && one.defines == [dest.value]
+        && one.group.is_none()
+        && one.requires.is_empty()
+        && one.delivers.is_empty()
+        && one.clobbers.is_empty())
+    .then_some((dest.value, imm.clone()))
+}
+
+/// `foldImmediateImpl`'s `COPY` case: `d := mov c` of a register a `mov` set to
+/// a constant is a `mov` of the constant at the copy, where the register-class
+/// allows it (a 32-bit or 8-bit register, as the pin's `MOV32ri` and `MOV8ri`).
+/// A zero is `MOV32r0`, which clobbers the flags, so only where the flags are
+/// written before they are read (`flags_dead`).
+fn copy_folded(
+    one: &Insn,
+    after: &[Arc<Insn>],
+    constants: &HashMap<u32, (usize, Imm)>,
+    reads: &HashMap<u32, usize>,
+    size: bool,
+) -> Option<(Insn, u32)> {
+    let what = one.what.as_ref()?;
+    let ([Loc::Held(dest)], [Loc::Held(source)]) = (&what.dests[..], &what.sources[..]) else { return None };
+    if what.op != Operation::Move
+        || what.name.as_deref() != Some("mov")
+        || one.defines != [dest.value]
+        || one.group.is_some()
+        || !one.requires.is_empty()
+        || !one.delivers.is_empty()
+        || !one.clobbers.is_empty()
+        || ![1, 4].contains(&dest.width)
+        || dest.width != source.width
+    {
+        return None;
+    }
+    let (_, imm) = constants.get(&source.value)?;
+    if (size && reads.get(&source.value).copied().unwrap_or(0) > 1) || (imm.value == 0 && !flags_dead(after)) {
+        return None;
+    }
+    let mut folded = one.clone();
+    folded.what = Some(Semantics { sources: vec![Loc::Imm(Imm { width: dest.width, ..imm.clone() })], ..what.clone() });
+    folded.uses.retain(|&used| used != source.value);
+    folded.widths.retain(|&(used, _)| used != source.value);
+    Some((folded, source.value))
+}
+
+/// `computeRegisterLiveness(EFLAGS, UseMI) == LQR_Dead`: the flags are written
+/// before they are read, within the ten instructions after the copy. A block
+/// that ends first leaves them unknown, as the pin finds them.
+fn flags_dead(after: &[Arc<Insn>]) -> bool {
+    for one in after.iter().filter(|one| !one.is_meta()).take(10) {
+        let Some(what) = one.what.as_ref() else { continue };
+        let name = what.name.as_deref().unwrap_or("");
+        if (what.op == Operation::Branch && name != "jmp")
+            || ["cmov", "set", "adc", "sbb"].iter().any(|prefix| name.starts_with(prefix))
+        {
+            return false;
+        }
+        if matches!(
+            what.op,
+            Operation::Binary | Operation::Compare | Operation::Unary
+        )
+            && ["add", "sub", "and", "or", "xor", "cmp", "test", "inc", "dec", "neg", "shl", "shr", "sar"]
+                .contains(&name)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// `one` with its first constant operand an immediate, and the register that
+/// was.
+fn folded_use(
+    one: &Insn,
+    constants: &HashMap<u32, (usize, Imm)>,
+    reads: &HashMap<u32, usize>,
+    defined: &HashSet<u32>,
+    size: bool,
+) -> Option<(Insn, u32)> {
+    let what = one.what.as_ref()?;
+    let commutes = match (what.op, what.name.as_deref()?) {
+        (Operation::Binary, "add" | "and" | "or" | "xor") => true,
+        (Operation::Binary, "sub") => false,
+        _ => return None,
+    };
+    let ([Loc::Held(_)], [Loc::Held(first), Loc::Held(second)]) = (&what.dests[..], &what.sources[..]) else {
+        return None;
+    };
+    if what.indirect
+        || one.group.is_some()
+        || !one.requires.is_empty()
+        || !one.delivers.is_empty()
+        || first.value == second.value
+    {
+        return None;
+    }
+    let (kept, constant, swapped) = if let Some((_, imm)) = constants.get(&first.value).filter(|_| commutes) {
+        (*second, (first.value, imm.clone()), true)
+    } else if let Some((_, imm)) = constants.get(&second.value) {
+        (*first, (second.value, imm.clone()), false)
+    } else {
+        return None;
+    };
+    let (value, imm) = constant;
+    if (size && reads.get(&value).copied().unwrap_or(0) > 1) || imm.width != kept.width && imm.width != second.width {
+        return None;
+    }
+    if swapped && !defined.contains(&kept.value) {
+        return None;
+    }
+    let sources = vec![Loc::Held(kept), Loc::Imm(Imm { width: kept.width, ..imm })];
+    let mut folded = one.clone();
+    folded.what = Some(Semantics { sources, ..what.clone() });
+    folded.uses.retain(|&used| used != value);
+    folded.widths.retain(|&(used, _)| used != value);
+    Some((folded, value))
 }
 
 #[cfg(test)]
@@ -525,5 +737,189 @@ mod tests {
             insn(2, Operation::Branch, "jne", vec![], vec![], vec![], vec![]),
         ]);
         assert_eq!(names(&compared(&body), true), ["shr", "test", "jne"], "a count of 32 is zero");
+    }
+
+    fn narrow(
+        value: u32,
+        width: u32,
+    ) -> Loc {
+        Loc::Held(Held { value, width })
+    }
+
+    /// `v2 := shr v1, 2` (a dword) read as a word by `test v2w, v2w`: the
+    /// shift's ZF and SF are the dword's, the test's are the word's, and the
+    /// test went.
+    #[test]
+    fn test_a_word_test_of_a_dword_shift_keeps_its_test() {
+        let body = body_of(vec![
+            insn(0, Operation::Binary, "shr", vec![held(2)], vec![held(1), imm(2)], vec![2], vec![1]),
+            insn(1, Operation::Compare, "test", vec![], vec![narrow(2, 2), narrow(2, 2)], vec![], vec![2, 2]),
+            insn(2, Operation::Branch, "jne", vec![], vec![], vec![], vec![]),
+        ]);
+        assert_eq!(names(&compared(&body), true), ["shr", "test", "jne"]);
+    }
+
+    /// The other way: a word shift read as a dword by `cmp v2, 0` (the upper
+    /// half is stale).
+    #[test]
+    fn test_a_dword_compare_of_a_word_shift_keeps_its_compare() {
+        let zero = Loc::Imm(Imm { value: 0, width: 4, address: None });
+        let body = body_of(vec![
+            insn(0, Operation::Binary, "shr", vec![narrow(2, 2)], vec![narrow(1, 2), imm(2)], vec![2], vec![1]),
+            insn(1, Operation::Compare, "cmp", vec![], vec![held(2), zero], vec![], vec![2]),
+            insn(2, Operation::Branch, "jne", vec![], vec![], vec![], vec![]),
+        ]);
+        assert_eq!(names(&compared(&body), true), ["shr", "cmp", "jne"]);
+    }
+
+    /// A word subtract nothing reads is a word compare, not a dword one.
+    #[test]
+    fn test_a_word_subtract_is_a_word_compare() {
+        let body = body_of(vec![
+            insn(
+                0,
+                Operation::Binary,
+                "sub",
+                vec![narrow(3, 2)],
+                vec![narrow(1, 2), narrow(2, 2)],
+                vec![3],
+                vec![1, 2],
+            ),
+            insn(1, Operation::Branch, "ja", vec![], vec![], vec![], vec![]),
+        ]);
+        let done = compared(&body);
+        assert_eq!(names(&done, true), ["cmp", "ja"]);
+        assert_eq!(done.blocks[0].insns[0].what.as_ref().unwrap().sources, [narrow(1, 2), narrow(2, 2)]);
+    }
+
+    /// `shr; test; inc; jb`: `inc` leaves CF alone, so `jb` reads the carry of
+    /// the `test` (clear), not of the shift. The test went because `inc`
+    /// "wrote the flags".
+    #[test]
+    fn test_a_carry_read_after_an_inc_keeps_the_test() {
+        let body = body_of(vec![
+            insn(0, Operation::Binary, "shr", vec![held(2)], vec![held(1), imm(2)], vec![2], vec![1]),
+            insn(1, Operation::Compare, "test", vec![], vec![held(2), held(2)], vec![], vec![2, 2]),
+            insn(2, Operation::Unary, "inc", vec![held(4)], vec![held(3)], vec![4], vec![3]),
+            insn(3, Operation::Branch, "jb", vec![], vec![], vec![], vec![]),
+        ]);
+        assert_eq!(names(&compared(&body), true), ["shr", "test", "inc", "jb"]);
+    }
+
+    fn constant(value: i64) -> Loc {
+        Loc::Imm(Imm { value, width: 4, address: None })
+    }
+
+    fn mov_const(
+        at: i64,
+        dest: u32,
+        value: i64,
+    ) -> Arc<Insn> {
+        insn(at, Operation::Move, "mov", vec![held(dest)], vec![constant(value)], vec![dest], vec![])
+    }
+
+    /// `x_funcptr` at m32: the tail-duplicated dispatch read `1` and `0` from
+    /// two `mov`s and added them (`lea esi, [edx+ebx]`); the pin makes it
+    /// `add v2, 1`, which leaves the `mov 1` for no one, so the block's
+    /// first instruction is the `xor eax, eax` of the loop-exit edge's
+    /// block and the two are hoisted.
+    #[test]
+    fn test_an_add_of_a_constant_register_takes_the_immediate_form() {
+        let body = body_of(vec![
+            mov_const(0, 1, 1),
+            mov_const(1, 2, 0),
+            insn(2, Operation::Binary, "add", vec![held(3)], vec![held(1), held(2)], vec![3], vec![1, 2]),
+            insn(3, Operation::Branch, "jl", vec![], vec![], vec![], vec![]),
+        ]);
+        let done = immediates_folded(&body, false);
+        let insns = &done.blocks[0].insns;
+        let add = insns[2].what.as_ref().unwrap();
+        assert_eq!(
+            add.sources,
+            [held(2), constant(1)],
+            "the first constant operand is the immediate, swapped to the end"
+        );
+        assert_eq!(insns[2].uses, [2]);
+        assert!(insns[0].defines.is_empty(), "the mov of 1 has no reader left");
+        assert_eq!(insns[1].defines, [2], "the mov of 0 is still read");
+    }
+
+    /// `sub` takes the immediate only as its second operand.
+    #[test]
+    fn test_a_subtract_from_a_constant_register_keeps_it() {
+        let body = body_of(vec![
+            mov_const(0, 1, 5),
+            insn(1, Operation::Binary, "sub", vec![held(3)], vec![held(1), held(2)], vec![3], vec![1, 2]),
+            insn(2, Operation::Branch, "jl", vec![], vec![], vec![], vec![]),
+        ]);
+        assert_eq!(immediates_folded(&body, false), body);
+    }
+
+    /// For size a constant two instructions read stays a register.
+    #[test]
+    fn test_for_size_a_constant_read_twice_stays_a_register() {
+        let body = body_of(vec![
+            mov_const(0, 1, 7),
+            insn(1, Operation::Binary, "add", vec![held(3)], vec![held(2), held(1)], vec![3], vec![2, 1]),
+            insn(2, Operation::Binary, "and", vec![held(4)], vec![held(2), held(1)], vec![4], vec![2, 1]),
+            insn(3, Operation::Branch, "jl", vec![], vec![], vec![], vec![]),
+        ]);
+        assert_eq!(immediates_folded(&body, true), body);
+        assert_ne!(immediates_folded(&body, false), body);
+    }
+
+    /// The pin's `COPY` fold: the copy of a constant register is a `mov` of the
+    /// constant where the copy is, and the first `mov` goes when no one else
+    /// reads it (x_funcptr: the `mov 1` that started the preheader moves to the
+    /// end of it, behind the `add` that read it, and the `xor` is first).
+    #[test]
+    fn test_a_copy_of_a_constant_register_is_the_constant() {
+        let body = body_of(vec![
+            mov_const(0, 1, 1),
+            insn(1, Operation::Move, "mov", vec![held(2)], vec![held(1)], vec![2], vec![1]),
+            insn(2, Operation::Branch, "jmp", vec![], vec![], vec![], vec![]),
+        ]);
+        let done = immediates_folded(&body, false);
+        let insns = &done.blocks[0].insns;
+        assert_eq!(insns[1].what.as_ref().unwrap().sources, [constant(1)]);
+        assert!(insns[0].defines.is_empty(), "the first mov has no reader left");
+    }
+
+    /// A zero is `xor`, which clobbers the flags: not ahead of a branch that
+    /// reads them.
+    #[test]
+    fn test_a_copy_of_zero_before_a_flag_reader_stays() {
+        let body = body_of(vec![
+            mov_const(0, 1, 0),
+            insn(1, Operation::Compare, "cmp", vec![], vec![held(4), held(5)], vec![], vec![4, 5]),
+            insn(2, Operation::Move, "mov", vec![held(2)], vec![held(1)], vec![2], vec![1]),
+            insn(3, Operation::Branch, "jl", vec![], vec![], vec![], vec![]),
+        ]);
+        assert_eq!(immediates_folded(&body, false), body);
+    }
+
+    /// x_funcptr: the zero copies at the end of the preheader, ahead of the
+    /// jump table, stay copies (the flags are unknown there, as in the
+    /// pin), so the zero keeps its place at the head of the block.
+    #[test]
+    fn test_a_copy_of_zero_at_the_end_of_a_block_stays() {
+        let body = body_of(vec![
+            mov_const(0, 1, 0),
+            insn(1, Operation::Move, "mov", vec![held(2)], vec![held(1)], vec![2], vec![1]),
+            insn(2, Operation::Branch, "jmp", vec![], vec![], vec![], vec![]),
+        ]);
+        assert_eq!(immediates_folded(&body, false), body);
+    }
+
+    /// With an `and` after it that writes the flags, the zero copy is folded.
+    #[test]
+    fn test_a_copy_of_zero_ahead_of_a_flag_write_is_folded() {
+        let body = body_of(vec![
+            mov_const(0, 1, 0),
+            insn(1, Operation::Move, "mov", vec![held(2)], vec![held(1)], vec![2], vec![1]),
+            insn(2, Operation::Binary, "and", vec![held(4)], vec![held(3), constant(3)], vec![4], vec![3]),
+            insn(3, Operation::Branch, "jmp", vec![], vec![], vec![], vec![]),
+        ]);
+        assert_eq!(immediates_folded(&body, false).blocks[0].insns[1].what.as_ref().unwrap().sources, [constant(0)]);
     }
 }

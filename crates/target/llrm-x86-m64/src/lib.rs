@@ -324,6 +324,20 @@ impl llrm_target::Target for M64 {
 
 #[cfg(test)]
 mod tests {
+    /// x86-64 described no x87 registers, so an x87 value (a QB `fatan`, a
+    /// `long double`) had no register class and the DAG path refused it.
+    #[test]
+    fn test_the_x87_stack_and_its_seven_rfp_registers_are_described() {
+        use llrm_target::Target;
+        let file = llrm_target::registers::parse(&M64.registers_text()).unwrap();
+        let named = |class: &str| -> Vec<&str> {
+            file.iter().filter(|one| one.is(class)).map(|one| one.name.as_str()).collect()
+        };
+        assert_eq!(named("x87"), ["st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7"]);
+        assert_eq!(named("rfp"), ["mm0", "mm1", "mm2", "mm3", "mm4", "mm5", "mm6"]);
+        assert_eq!(M64.float_stack(), 8);
+    }
+
     /// `object()` and the runtime tables are parsed once and kept; each must
     /// equal a fresh parse of its toml (35 parses of object.toml and 4 of the
     /// runtime table cost 3.3 M Ir of every compile).
@@ -369,5 +383,22 @@ mod tests {
             layout.datalayout,
             "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
         );
+    }
+
+    /// A `double` argument went to the stack (floats were not placed in
+    /// registers): it must take XMM0-7 beside the integer registers, and a
+    /// ninth leave on the stack.
+    #[test]
+    fn sysv_places_floats_in_xmm_registers_and_returns_one_in_xmm0() {
+        use llrm_target::calling::{Kind, Place};
+        let convention = M64.calling().named("sysv64").unwrap();
+        let mut arguments = vec![Kind::Word, Kind::Float(8), Kind::Float(8), Kind::Word];
+        arguments.extend([Kind::Float(8); 7]);
+        let placement = convention.place(&arguments);
+        let register = |name: &str| Place::Registers(vec![name.to_owned()]);
+        assert_eq!(placement.places[..4], [register("rdi"), register("xmm0"), register("xmm1"), register("rsi")]);
+        assert_eq!(placement.places[10], Place::Stack(0));
+        assert_eq!(convention.float_result_register(), Some("xmm0"));
+        assert!(convention.clobbered.iter().any(|one| one == "xmm15"));
     }
 }

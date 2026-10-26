@@ -153,9 +153,20 @@ impl LoopIdiomRecognize {
             made_change |= self.run_on_loop_block(run, block, be_count, &exit_blocks);
         }
 
-        // Attempt to optimize a CRC loop if one is detected by HashRecognize
-        // (D9, temporary, https://github.com/ali-mosavian/llrm/issues/2313:
-        // not translated).
+        // Attempt to optimize a CRC loop if one is detected by HashRecognize.
+        if !self.options.disable_hash_recognize
+            && self.options.crc_strategy != super::CrcStrategy::Disable
+            && let Some(tti) = run.tti
+        {
+            let found = {
+                let cx = cx!(run);
+                super::hashrecognize::recognize_crc(&cx, run.se, run.cur_loop)
+            };
+            if let Ok(info) = found {
+                made_change |= self.optimize_crc_loop(run, &info, tti);
+            }
+        }
+
         made_change
     }
 

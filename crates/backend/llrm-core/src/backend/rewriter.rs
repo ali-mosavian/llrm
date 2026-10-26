@@ -47,7 +47,7 @@ use crate::analysis::intervals as ranges;
 use crate::backend::allocate::{_g, Assignment, Error, Spilled, Unplaced};
 use crate::backend::classes::RegisterClasses;
 use crate::backend::target;
-use crate::model::ir::{Addr, Loc, Mem, Operation, Reg, Semantics, Space};
+use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Reg, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::support::hash::IndexMap;
 use crate::support::pyrepr::Repr;
@@ -268,7 +268,12 @@ pub(crate) fn _placed(
     let in_rfp = |value: &u32| held.get(value).is_some_and(|at| regs.in_class(*at, llrm_lir::registers::class::RFP));
     made.uses.retain(|value| !in_rfp(value));
     made.defines.retain(|value| !in_rfp(value));
-    made.what = Some(Semantics { name, dests, sources, ..what.clone() });
+    // The copy's own operands are replaced in place: building a `Semantics`
+    // from `what.clone()` copied both lists again to drop them.
+    let own = made.what.as_mut().expect("an instruction with semantics");
+    own.name = name;
+    own.dests = dests;
+    own.sources = sources;
     Ok(Arc::new(made))
 }
 
@@ -279,6 +284,12 @@ pub(crate) fn _settled(
     classes: &RegisterClasses,
 ) -> Result<Loc, Unplaced> {
     let regs = classes.registers;
+    // A value or any operand but a cell is not copied to be looked at.
+    match place {
+        Loc::Held(value) => return _register_of(value, held, classes),
+        Loc::Mem(_) => {}
+        _ => return Ok(place.clone()),
+    }
     let mut place = place.clone();
     if let Loc::Mem(cell) = &place {
         if let Some(selector) = cell.selector {
@@ -324,6 +335,16 @@ pub(crate) fn _settled(
     let Loc::Held(value) = &place else {
         return Ok(place);
     };
+    _register_of(value, held, classes)
+}
+
+/// A value at its width, in the register holding it.
+fn _register_of(
+    value: &Held,
+    held: &IndexMap<u32, RegId>,
+    classes: &RegisterClasses,
+) -> Result<Loc, Unplaced> {
+    let regs = classes.registers;
     let Some(register) = held.get(&value.value) else {
         return Err(Unplaced(format!("value#{} at width {} has no register", value.value, value.width)));
     };

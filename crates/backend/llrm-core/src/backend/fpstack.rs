@@ -94,6 +94,37 @@ use crate::model::ir::{Held, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{Block, Insn, LirBody};
 use crate::support::hash::{HashMap, HashSet, IndexMap};
 
+/// A store to a cell with no non-popping form (`fstp tbyte`), the first of a
+/// pair `swapped_with` may join.
+fn _unkept_store(what: Option<&Semantics>) -> bool {
+    what.is_some_and(|what| {
+        what.op == Operation::FloatStore
+            && matches!(what.name.as_deref(), Some("fst" | "fstp"))
+            && matches!(
+                what.dests.as_slice(),
+                [Loc::Mem(cell)] if !matches!(cell.width, 4 | 8)
+            )
+    })
+}
+
+/// The two cells share no byte: the same kind of address, a displacement
+/// range apart. Anything else may overlap.
+fn _apart(
+    one: &llrm_lir::Mem,
+    other: &llrm_lir::Mem,
+) -> bool {
+    let (Some(a), Some(b)) = (one.addr, other.addr) else { return false };
+    a.space == b.space
+        && a.base == b.base
+        && a.segment == b.segment
+        && one.base == other.base
+        && one.index == other.index
+        && one.selector == other.selector
+        && one.scale == other.scale
+        && (a.space == llrm_lir::Space::Frame || a.index == b.index)
+        && (a.disp + i64::from(one.width) <= b.disp || b.disp + i64::from(other.width) <= a.disp)
+}
+
 /// What one step (an instruction, or a group of copies taken together) reads
 /// and writes of the floating values, and what is live after it.
 struct Step {
@@ -150,6 +181,12 @@ struct Fps<'a> {
     /// Pops after a comparison that no popping form takes: they wait for the
     /// status word to be read.
     deferred: Option<Vec<usize>>,
+    /// The step after the one converted, when a store to a cell without a
+    /// non-popping form may swap with it: its position, what is live after it
+    /// and what it writes.
+    next: Option<(usize, HashSet<u32>, Vec<u32>)>,
+    /// Positions of stores already emitted with the one before them.
+    swallowed: BTreeSet<usize>,
 }
 
 /// `getNextFPInstruction`-free `PopTable` of the names this port emits: the
@@ -494,7 +531,7 @@ impl Fps<'_> {
         {
             self.copy_group(step, block)?;
         } else if what.op == Operation::FloatStore && operands.len() == 1 && results.is_empty() {
-            self.handle_one_arg_fp(step, operands[0])?;
+            self.handle_one_arg_fp(step, block, operands[0])?;
         } else if what.op == Operation::FloatUnary && operands.len() == 1 && !results.is_empty() {
             let what = Semantics { dests: vec![st(0)], sources: vec![st(0)], ..what };
             self.handle_one_arg_fprw(step, operands[0], what, results[0])?;
@@ -541,10 +578,42 @@ impl Fps<'_> {
         Ok(())
     }
 
+    /// The next instruction as `fst` (a store of `source` that kills it, to a
+    /// 4 or 8 byte cell apart from `first`'s), which then emits in the place of
+    /// both; marks it swallowed. None when the pair does not fit.
+    fn swapped_with(
+        &mut self,
+        block: &Block,
+        source: u32,
+        first: &Semantics,
+    ) -> Option<Semantics> {
+        let (position, live_after, defs) = self.next.take()?;
+        if defs.contains(&source) || live_after.contains(&source) {
+            return None;
+        }
+        let next = block.insns[position].what.as_ref()?;
+        let stores_source = next.op == Operation::FloatStore
+            && matches!(
+                next.sources.as_slice(),
+                [Loc::Held(held)] if held.value == source && held.width == 10
+            );
+        let (Some("fst" | "fstp"), [Loc::Mem(to)], [Loc::Mem(from)]) =
+            (next.name.as_deref(), next.dests.as_slice(), first.dests.as_slice())
+        else {
+            return None;
+        };
+        if !stores_source || !matches!(to.width, 4 | 8) || !_apart(to, from) {
+            return None;
+        }
+        self.swallowed.insert(position);
+        Some(Semantics { name: Some("fst".into()), sources: vec![st(0)], ..next.clone() })
+    }
+
     /// `handleOneArgFP`: a store of the top.
     fn handle_one_arg_fp(
         &mut self,
         step: &Step,
+        block: &Block,
         source: u32,
     ) -> Result<(), Raised> {
         let what = self.one().what.clone().expect("a floating instruction has semantics");
@@ -572,6 +641,16 @@ impl Fps<'_> {
             };
             if let Some(kept) = kept {
                 self.emit(Semantics { name: Some(kept.into()), sources: vec![st(0)], ..what });
+                return Ok(());
+            }
+            // DEVIATE 8: a store with no non-popping form (`fstp tbyte`) of a
+            // value the very next instruction stores and kills: that store
+            // keeps the value (`fst`) and this one pops it, where `fld st(0)`
+            // would copy the value first. The cells must be apart.
+            if let Some(next) = self.swapped_with(block, source, &what) {
+                self.emit(next);
+                self.emit(Semantics { name, sources: vec![st(0)], ..what });
+                self.values.remove(0);
                 return Ok(());
             }
             let scratch = self.take_fresh();
@@ -1129,6 +1208,8 @@ pub(super) fn converted(
         fresh,
         status_word,
         deferred: None,
+        next: None,
+        swallowed: BTreeSet::new(),
     };
     let border = |at: i64| Arc::new(inserted(at, semantics(Operation::Nothing, "", Vec::new(), Vec::new())));
     let mut made: IndexMap<i64, Block> = IndexMap::default();
@@ -1144,9 +1225,9 @@ pub(super) fn converted(
         entered?;
         let cut = _terminators(block);
         let steps = steps(block, cut, &floats(&live_out[&at]));
-        for step in &steps {
+        for (at_step, step) in steps.iter().enumerate() {
             let one = &block.insns[step.positions[0]];
-            if step.absorbed {
+            if step.absorbed || fps.swallowed.contains(&step.positions[0]) {
                 fps.one = Some(Arc::clone(one));
                 fps.vacate();
                 continue;
@@ -1166,6 +1247,10 @@ pub(super) fn converted(
                 }
                 fps.out.push(Arc::clone(one));
             } else {
+                fps.next = steps
+                    .get(at_step + 1)
+                    .filter(|_| _unkept_store(one.what.as_ref()))
+                    .map(|next| (next.positions[0], next.live_after.clone(), next.defs.clone()));
                 fps.convert(step, block)?;
             }
         }

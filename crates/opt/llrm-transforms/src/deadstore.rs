@@ -90,6 +90,7 @@
 
 use std::rc::Rc;
 
+use llrm_analysis::manager::MemorySsa;
 use llrm_analysis::memory::{MemoryKind, Unit as View};
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::mssa::alias::{AliasQuery, Location};
@@ -160,23 +161,26 @@ impl FunctionPass for DeadStoreElimination {
         if !writes {
             return PreservedAnalyses::all();
         }
-        let accesses = match Accesses::managed(unit.context, unit.layout, unit.function, analyses) {
-            Ok(accesses) => accesses,
-            Err(error) => panic!("dse: {error}"),
-        };
-        // MemorySSA describes the function as it is now; the removals go to
-        // `unit.function` at the end, and the graph follows them through its
-        // updater.
-        let before = unit.function.fork();
-        let frozen = unit.context.clone();
+        // Nothing is made up front: each access is asked of the unit.
+        let accesses = Accesses::lazy();
+        // MemorySSA describes the function as it is now; the removals are
+        // collected and applied to `unit.function` once the state is done
+        // with it, and the graph follows them through its updater.
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
-        let view = View::within(&frozen, unit.layout, &before, &outer).with_shape(&shape);
+        let (frozen, before): (&Context, &Function) = (unit.context, unit.function);
+        let view = View::within(frozen, unit.layout, before, &outer).with_shape(&shape);
         let shape = view.shape();
-        let mssa = Mssa::build(&before, &shape.dominance, &shadow::effect_of(&accesses, &before));
-        let tree = DomTree::of(&before);
+        // The manager's graph of this body, cloned: the removals update the
+        // clone, so the held one stays as the body it describes.
+        let held = analyses.get::<MemorySsa>(unit.context, unit.layout, unit.function);
+        let mssa = match &*held {
+            Ok(held) => held.mssa.clone(),
+            Err(_) => Mssa::build(before, &shape.dominance, &shadow::effect_of_in(&accesses, &view)),
+        };
+        let tree = DomTree::of(before);
         let mut post = PostDomTree::new();
-        post.recalculate(&before);
-        let mut state = Dse::new(&frozen, &before, &view, &accesses, outer.callees(), mssa, &tree, &post, &shape.loops);
+        post.recalculate(before);
+        let mut state = Dse::new(frozen, before, &view, &accesses, outer.callees(), mssa, &tree, &post, &shape.loops);
         let changed = state.run();
         let gone = std::mem::take(&mut state.to_remove);
         let shortened = std::mem::take(&mut state.shortened);
@@ -255,9 +259,10 @@ struct Dse<'a> {
     updater: MemorySsaUpdater,
     dt: &'a DomTree,
     pdt: &'a PostDomTree,
-    loops: &'a [llrm_analysis::graph::loops::Loop],
     /// Post-order numbers of the reachable blocks.
     post_order: IdMap<BlockId, u32>,
+    /// Each loop block's innermost loop header (`LI.getLoopFor`).
+    cycles: IdMap<BlockId, i64>,
     /// All the defs that could kill others.
     mem_defs: Vec<AccessId>,
     /// Defs already deleted.
@@ -305,8 +310,8 @@ impl<'a> Dse<'a> {
             updater: MemorySsaUpdater::new(),
             dt,
             pdt,
-            loops,
             post_order: IdMap::new(),
+            cycles: innermost_headers(loops),
             mem_defs: Vec::new(),
             skip_stores: HashSet::default(),
             any_unreachable_exit: false,
@@ -325,7 +330,7 @@ impl<'a> Dse<'a> {
                 let Some(access) = state.mssa.get_memory_access(inst) else { continue };
                 if state.mssa.access(access).kind == Kind::Def
                     && state.mem_defs.len() < DEFS_PER_BLOCK_LIMIT
-                    && (state.killing_loc(inst).is_some() || !state.accesses.fills(inst).is_empty())
+                    && (state.killing_loc(inst).is_some() || !state.accesses.fills_in(state.aa.unit(), inst).is_empty())
                 {
                     state.mem_defs.push(access);
                 }
@@ -356,7 +361,11 @@ impl<'a> Dse<'a> {
         &self,
         inst: InstId,
     ) -> bool {
-        self.accesses.writes(inst).is_none_or(|writes| !writes.is_empty())
+        // A load or store is its own bytes (`own_bytes`): no list to derive.
+        if let Some(own) = llrm_analysis::memory::own_bytes(&self.function.instruction(inst).opcode) {
+            return own.writes;
+        }
+        self.accesses.writes_in(self.aa.unit(), inst).is_none_or(|writes| !writes.is_empty())
     }
 
     /// `mayReadFromMemory`.
@@ -364,7 +373,10 @@ impl<'a> Dse<'a> {
         &self,
         inst: InstId,
     ) -> bool {
-        self.accesses.reads(inst).is_none_or(|reads| !reads.is_empty())
+        if let Some(own) = llrm_analysis::memory::own_bytes(&self.function.instruction(inst).opcode) {
+            return own.reads;
+        }
+        self.accesses.reads_in(self.aa.unit(), inst).is_none_or(|reads| !reads.is_empty())
     }
 
     fn is_store(
@@ -398,7 +410,7 @@ impl<'a> Dse<'a> {
         let filled = llrm_analysis::memory::MemRef::filled(self.aa.unit(), inst)?;
         // The provenance the accesses annotated, with the bytes the memset
         // fills.
-        let provenance = match self.accesses.writes(inst) {
+        let provenance = match self.accesses.writes_in(self.aa.unit(), inst).as_deref() {
             Some([written]) => written.provenance.clone(),
             _ => filled.provenance.clone(),
         };
@@ -441,7 +453,7 @@ impl<'a> Dse<'a> {
         let width = u32::try_from(size).ok().filter(|&one| one > 0)?;
         let at = llrm_analysis::memory::MemRef::at(self.aa.unit(), pointer, width);
         // The provenance the accesses annotated, as for a memset.
-        let provenance = match self.accesses.writes(inst) {
+        let provenance = match self.accesses.writes_in(self.aa.unit(), inst).as_deref() {
             Some([written]) => written.provenance.clone(),
             _ => at.provenance.clone(),
         };
@@ -530,7 +542,7 @@ impl<'a> Dse<'a> {
             .count();
         let filled = self
             .accesses
-            .fills(call)
+            .fills_in(self.aa.unit(), call)
             .iter()
             .filter(|fill| {
                 fill.pointer.is_some_and(|one| {
@@ -627,11 +639,7 @@ impl<'a> Dse<'a> {
         &self,
         block: BlockId,
     ) -> Option<i64> {
-        self.loops
-            .iter()
-            .filter(|one| one.body.contains(&llrm_analysis::cfg::id(block)))
-            .min_by_key(|one| one.body.len())
-            .map(|one| one.header)
+        self.cycles.get(&block).copied()
     }
 
     /// `isGuaranteedLoopInvariant`: the pointer is made outside every loop.
@@ -1676,7 +1684,8 @@ impl<'a> Dse<'a> {
             // call fills before it reads (`initializes`).
             let mut locations: Vec<(Rc<Location>, bool)> =
                 self.killing_loc(killing_inst).into_iter().map(|loc| (loc, false)).collect();
-            let fills: Vec<llrm_analysis::memory::MemRef> = self.accesses.fills(killing_inst).to_vec();
+            let fills: Vec<llrm_analysis::memory::MemRef> =
+                self.accesses.fills_in(self.aa.unit(), killing_inst).into_owned();
             locations.extend(fills.iter().map(|fill| (self.aa.location_for(fill, false), true)));
             for (killing_loc, init) in locations {
                 let (did, deleted_killing) = self.eliminate_dead_defs_of(killing_def, Rc::clone(&killing_loc), init);
@@ -1699,6 +1708,22 @@ impl<'a> Dse<'a> {
 }
 
 /// The reachable blocks in post-order.
+/// Each block's smallest loop's header, the first of equal ones.
+fn innermost_headers(loops: &[llrm_analysis::graph::loops::Loop]) -> IdMap<BlockId, i64> {
+    let mut sizes: IdMap<BlockId, usize> = IdMap::new();
+    let mut headers = IdMap::new();
+    for one in loops {
+        for at in one.body.iter() {
+            let block = llrm_analysis::cfg::block(*at);
+            if sizes.get(&block).is_none_or(|&size| one.body.len() < size) {
+                sizes.insert(block, one.body.len());
+                headers.insert(block, one.header);
+            }
+        }
+    }
+    headers
+}
+
 fn post_order_of(function: &Function) -> Vec<BlockId> {
     let Some(entry) = function.entry() else { return Vec::new() };
     let mut seen: IdSet<BlockId> = IdSet::new();

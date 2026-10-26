@@ -77,6 +77,11 @@ pub enum Event {
     LoopExitScans,
     /// A pattern of an `icmp` operand tried by LVI (`match_icmp_operand`).
     LviIcmpPatterns,
+    /// A callee looked up to tell whether a user of a sinking candidate is an
+    /// assume (`sink_block`).
+    SinkAssumeLookups,
+    /// A list of a block's predecessors LVI built (`predecessors`).
+    LviPredecessorLists,
     /// The position of every instruction in its block worked out
     /// (`Function::positions`).
     Positions,
@@ -86,7 +91,7 @@ pub enum Event {
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 27] = [
+const NAMES: [&str; 29] = [
     "function_clones",
     "function_forks",
     "machinings",
@@ -112,6 +117,8 @@ const NAMES: [&str; 27] = [
     "exitsink_phis",
     "loop_exit_scans",
     "lvi_icmp_patterns",
+    "sink_assume_lookups",
+    "lvi_predecessor_lists",
     "positions",
     "scev_keys_owned",
 ];
@@ -130,7 +137,7 @@ thread_local! {
     static PASSES: RefCell<Vec<PassRow>> = const { RefCell::new(Vec::new()) };
     /// (pass, analysis, misses): the analyses a pass made the manager compute.
     static ASKS: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    static EVENTS: [Cell<u64>; 27] = const { [const { Cell::new(0) }; 27] };
+    static EVENTS: [Cell<u64>; 29] = const { [const { Cell::new(0) }; 29] };
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };
