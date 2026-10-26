@@ -1086,6 +1086,7 @@ pub fn selected_with<'c>(
         ats: IndexMap::default(),
         fused: BTreeSet::new(),
         covered: IndexMap::default(),
+        inverted: false,
         words: IndexMap::default(),
         joins: IndexMap::default(),
         consumed: BTreeSet::new(),
@@ -1685,6 +1686,8 @@ pub struct Selector<'m, 'c, 'p> {
     fused: BTreeSet<InstId>,
     /// Instructions a pattern rooted elsewhere selects: each one's root.
     covered: IndexMap<InstId, InstId>,
+    /// The next `compare` makes the opposite condition: a `not` of it.
+    inverted: bool,
     /// Dword loads read only as words: each word's offset and the value it is.
     words: IndexMap<InstId, Vec<(i64, ValueId)>>,
     /// A dword joined from two words: those words, low then high.
@@ -7611,6 +7614,7 @@ impl Selector<'_, '_, '_> {
         at: i64,
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<Test, Unselected> {
+        let inverted = std::mem::take(&mut self.inverted);
         let instruction = self.function.instruction(inst);
         if instruction.opcode == Opcode::Cast(CastOp::Trunc) {
             let operand = instruction.operands[0];
@@ -7619,17 +7623,24 @@ impl Selector<'_, '_, '_> {
             let low = Loc::Held(Held { width: 1, ..held });
             let one = Loc::Imm(Imm { value: 1, width: 1, address: None });
             out.push(insn(at, semantics(Operation::Compare, "test", vec![], vec![low, one])));
-            return Ok(Test::One("jne"));
+            return Ok(Test::One(if inverted { "je" } else { "jne" }));
         }
         if let Opcode::FCmp(predicate) = instruction.opcode {
-            return self.float_compare(predicate, inst, at, out);
+            return self.float_compare(if inverted { predicate.inverse() } else { predicate }, inst, at, out);
         }
         let Opcode::ICmp(mut predicate) = instruction.opcode else { unreachable!("a comparison") };
+        if inverted {
+            predicate = predicate.inverse();
+        }
         let (mut a, mut b) = (instruction.operands[0], instruction.operands[1]);
         let ty = self.function.operand_type(&self.module.context, a).expect("a typed operand");
         if matches!(a, Operand::Constant(_)) {
             std::mem::swap(&mut a, &mut b);
             predicate = swapped(predicate);
+        }
+        // An i1 is a byte of 0 or 1 but true is -1 signed: the order reverses.
+        if self.types().int_bits(ty) == Some(1) {
+            predicate = unsigned_of_i1(predicate);
         }
         // A call's flags are its result compared with zero.
         if let Operand::Value(value) = a
@@ -8101,6 +8112,19 @@ fn condition_code(predicate: IntPredicate) -> &'static str {
         IntPredicate::Ule => "jbe",
         IntPredicate::Ugt => "ja",
         IntPredicate::Uge => "jae",
+    }
+}
+
+/// `predicate` on an i1's byte (0 or 1): a signed order is the unsigned order
+/// reversed, true being -1.
+fn unsigned_of_i1(predicate: IntPredicate) -> IntPredicate {
+    use IntPredicate::*;
+    match predicate {
+        Slt => Ugt,
+        Sle => Uge,
+        Sgt => Ult,
+        Sge => Ule,
+        other => other,
     }
 }
 

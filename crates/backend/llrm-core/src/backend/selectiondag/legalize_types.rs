@@ -1800,7 +1800,7 @@ impl<'a> TypeLegalizer<'a> {
     /// True if no reachable node has an illegal result or operand type
     /// (the pin's final check in `run`).
     pub fn all_legal(&self) -> bool {
-        let mut seen = HashSet::default();
+        let mut seen = HashSet::with_capacity_and_hasher(self.dag.nodes().len(), Default::default());
         let mut stack = vec![self.dag.get_root().node];
         while let Some(n) = stack.pop() {
             if !seen.insert(n) {

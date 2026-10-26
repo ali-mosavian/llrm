@@ -1,7 +1,7 @@
 """The XFAIL list (tools/xfail.toml): tests expected to fail, each with its issue, owner and date.
 
 A listed test that fails is not a new failure; a listed test that passes fails the gate (its fix removes its entry). ids:
-`unit <crate>::<test>` (a cargo lib test, by name) and `run <program name>` (a tests/run program as run_tests prints it).
+`unit <crate>::<test>` (a cargo lib test, by name), `integration <target>::<test>` (a root tests/TARGET.rs test) and `run <program name>` (a tests/run program as run_tests prints it).
 """
 from __future__ import annotations
 
