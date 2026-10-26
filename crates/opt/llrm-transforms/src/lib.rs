@@ -124,6 +124,7 @@ pub mod combine_icmp_const;
 pub mod combine_icmp_logic;
 pub mod combine_loadstore;
 pub mod combine_memintrinsics;
+pub mod combine_minmax;
 pub mod combine_muldivrem;
 #[cfg(test)]
 mod combine_muldivrem_tests;
@@ -297,6 +298,7 @@ pub mod reassociate_optimize;
 pub mod reassociate_pairs;
 pub mod reassociate_rank;
 pub mod reassociate_tree;
+pub mod remidiom;
 pub mod rotate;
 pub mod runtimechecks;
 pub mod sccp;

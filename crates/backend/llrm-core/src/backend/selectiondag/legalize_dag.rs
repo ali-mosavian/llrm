@@ -81,7 +81,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         tli: &'a TargetLowering,
         hooks: &'a mut H,
     ) -> DagLegalizer<'a, H> {
-        DagLegalizer { dag, tli, hooks, legalized: HashSet::default() }
+        let legalized = HashSet::with_capacity_and_hasher(dag.nodes().len(), Default::default());
+        DagLegalizer { dag, tli, hooks, legalized }
     }
 
     /// `SelectionDAG::Legalize`.
@@ -105,7 +106,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     /// The nodes reachable from the root, users before their operands.
     fn reverse_topological(&self) -> Vec<u32> {
         let mut order = Vec::new();
-        let mut seen = HashSet::default();
+        let mut seen = HashSet::with_capacity_and_hasher(self.dag.nodes().len(), Default::default());
         let mut stack = vec![(self.dag.get_root().node, false)];
         while let Some((n, expanded)) = stack.pop() {
             if expanded {

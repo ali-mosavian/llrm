@@ -12,6 +12,11 @@ end type
 declare sub plGroundAccel (vel as Vec3, wishdir as Vec3, wishspeed as single, dt as single)
 declare function BenchQmove& ()
 
+' Read from DATA so no build folds the kernel to a constant.
+dim shared inVx as single, inVy as single, inWx as single, inSpeed as single, inDt as single
+read inVx, inVy, inWx, inSpeed, inDt
+data 3.0, 4.0, 1.0, 10.0, 0.25
+
 print ltrim$(str$(BenchQmove&))
 end
 
@@ -37,13 +42,13 @@ function BenchQmove&
     dim vel as Vec3
     dim wishdir as Vec3
 
-    vel.x = 3.0
-    vel.y = 4.0
+    vel.x = inVx
+    vel.y = inVy
     vel.z = 5.0
-    wishdir.x = 1.0
+    wishdir.x = inWx
     wishdir.y = 0.0
     wishdir.z = 0.0
-    plGroundAccel vel, wishdir, 10.0, 0.25
+    plGroundAccel vel, wishdir, inSpeed, inDt
 
     BenchQmove& = clng(vel.x) * 10000 + clng(vel.y) * 100 + clng(vel.z)
 end function

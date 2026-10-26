@@ -110,6 +110,9 @@ static _AUDITED_GRAPHICS_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(||
         // grview.asm: seven Pascal words; `void pascal B$VEW0()`.
         ("B$VIEW", 14),
         ("B$VEW0", 0),
+        // grwindow.asm: four R4 and a word; `void pascal B$WIN0()`.
+        ("B$WIND", 18),
+        ("B$WIN0", 0),
         ("B$FTAB", 2),
     ])
 });
@@ -998,6 +1001,14 @@ impl llrm_mir::target::Machine for LoweredTarget {
 
     fn size_costs(&self) -> llrm_mir::target::OperationCosts {
         self.machine.size_costs()
+    }
+
+    fn keeps_division(
+        &self,
+        bits: u32,
+        size: bool,
+    ) -> bool {
+        self.machine.keeps_division(bits, size)
     }
 
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
