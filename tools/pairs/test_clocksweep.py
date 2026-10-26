@@ -52,11 +52,13 @@ class CompareTests(unittest.TestCase):
         self.assertIn("tests/a.c", report)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class LimitTests(unittest.TestCase):
     def test_the_default_limit_holds_grep_bas_at_186_million_instructions(self):
         """grep.bas (186 M) and stft_single.bas (62 M) ended at the 60 M limit as `never exited`: no clock row."""
         self.assertGreaterEqual(clocksweep.LIMIT, 186_438_379)
+
+
+if __name__ == "__main__":
+    unittest.main()
