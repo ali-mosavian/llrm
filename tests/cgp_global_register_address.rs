@@ -1,4 +1,5 @@
-//! A global indexed by two registers is one memory operand, not a `lea` made outside the loop.
+//! A global indexed by two registers is one memory operand, not a `lea` made
+//! outside the loop.
 
 use std::process::Command;
 

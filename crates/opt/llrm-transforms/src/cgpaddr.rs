@@ -427,7 +427,10 @@ fn is_global(
     context: &Context,
     operand: Operand,
 ) -> bool {
-    matches!(operand, Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Global(_)))
+    matches!(
+        operand,
+        Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Global(_))
+    )
 }
 
 fn integer(
