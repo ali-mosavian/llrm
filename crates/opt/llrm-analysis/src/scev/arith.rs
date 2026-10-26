@@ -1,6 +1,7 @@
 //! The arithmetic folds: `getAddExpr`, `getMulExpr`, their helpers and the
 //! flag strengthening they share.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use llrm_mir::hash::HashMap;
@@ -9,7 +10,7 @@ use llrm_mir::opcode::BinaryOp;
 
 use super::ap::Ap;
 use super::expr::{Kind, Scev, Ty, Type, Use, flags};
-use super::{Cx, Flags, Key, ScalarEvolution};
+use super::{Cx, Flags, Key, KeyLike, ScalarEvolution};
 
 /// `scev-mulops-inline-threshold`.
 const MUL_OPS_INLINE_THRESHOLD: usize = 32;
@@ -234,8 +235,8 @@ impl ScalarEvolution {
         tag: Type,
         ops: &[Use],
     ) -> Option<Scev> {
-        let key = Key { tag, ops: ops.to_vec(), ty: None, constant: None, value: None, header: None };
-        self.unique.get(&key).copied()
+        let key = Key { tag, ops: Cow::Borrowed(ops), ty: None, constant: None, value: None, header: None };
+        self.unique.get(&key as &dyn KeyLike).copied()
     }
 
     /// The node `new (SCEVAllocator) SCEV{Add,Mul}Expr` makes, found or made,
@@ -246,7 +247,7 @@ impl ScalarEvolution {
         ops: &[Use],
         f: u8,
     ) -> Scev {
-        let key = Key { tag, ops: ops.to_vec(), ty: None, constant: None, value: None, header: None };
+        let key = Key { tag, ops: Cow::Borrowed(ops), ty: None, constant: None, value: None, header: None };
         let ty = match tag {
             // The type of an add is that of its first pointer operand, else of
             // its first operand.

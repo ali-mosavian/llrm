@@ -262,8 +262,10 @@ fn an_f80_zero_and_one_are_selected_as_the_x87_constants() {
 #[test]
 fn every_own_node_has_a_pin_id() {
     use super::dagisel_adapter::pin_opcode;
-    use super::x86isd::{LLRM_ASM, LLRM_CODE, LLRM_FARCALL, LLRM_PORT, LLRM_PTRDIFF, LLRM_WINDOW, SEGMENT_OF};
-    for node in [LLRM_ASM, LLRM_CODE, LLRM_FARCALL, LLRM_PORT, LLRM_PTRDIFF, LLRM_WINDOW, SEGMENT_OF] {
+    use super::x86isd::{
+        LLRM_ASM, LLRM_CODE, LLRM_FARCALL, LLRM_PORT, LLRM_PTRDIFF, LLRM_TC_RETURN, LLRM_WINDOW, SEGMENT_OF,
+    };
+    for node in [LLRM_ASM, LLRM_CODE, LLRM_FARCALL, LLRM_PORT, LLRM_TC_RETURN, LLRM_PTRDIFF, LLRM_WINDOW, SEGMENT_OF] {
         assert_ne!(pin_opcode(node), u16::MAX, "{node:?}");
     }
 }
@@ -419,4 +421,58 @@ fn a_float_load_from_the_constant_pool_folds_the_entry_into_the_address() {
         !ops.iter().any(|op| matches!(dag.nodes()[op.node as usize].opcode, ISD::Machine(_))),
         "no register-materialized address"
     );
+}
+
+/// The use queries read the use list, not the arena: the counts and the
+/// "only user" answer are the same as a scan of every live node gives.
+#[test]
+fn use_queries_agree_with_a_scan_of_the_live_nodes() {
+    use llrm_dagisel::dag::Dag;
+
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let a = input(&mut dag, 40);
+    let twice = dag.get_node(ISD::Add, EVT::I32, &[a, a]);
+    dag.set_root(twice);
+    let adapter = DagisAdapter::new(&mut dag);
+    let pin_a = llrm_dagisel::dag::SDValue::new(a.node, 0);
+    assert!(adapter.has_live_users(a.node));
+    assert!(adapter.has_n_uses_of_value(pin_a, 2));
+    assert!(!adapter.has_one_use(pin_a));
+    assert!(adapter.is_only_user_of(twice.node, a.node));
+    assert!(adapter.use_empty(twice.node));
+    assert!(!adapter.use_empty(a.node));
+}
+
+/// `pin_opcode` built a `String` (`x86isd::name` and `format!`) for each target
+/// node, 16 K times on d_faces, and the use queries collected and sorted a
+/// `Vec` of the users on each call. A query answers from the use list without
+/// an allocation.
+#[test]
+fn pin_opcode_and_the_use_queries_allocate_nothing() {
+    use llrm_dagisel::dag::Dag;
+
+    let (_, made) = llrm_support::alloc_count::counted(|| {
+        (0..1024u16)
+            .map(|code| super::dagisel_adapter::pin_opcode(ISD::Target(code)))
+            .fold(0u32, |sum, op| sum + u32::from(op))
+    });
+    assert_eq!(made, 0, "{made} allocations to number 1,024 target opcodes");
+
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let a = input(&mut dag, 40);
+    let twice = dag.get_node(ISD::Add, EVT::I32, &[a, a]);
+    dag.set_root(twice);
+    let adapter = DagisAdapter::new(&mut dag);
+    let pin_a = llrm_dagisel::dag::SDValue::new(a.node, 0);
+    let (answers, made) = llrm_support::alloc_count::counted(|| {
+        (
+            adapter.has_live_users(a.node),
+            adapter.has_n_uses_of_value(pin_a, 2),
+            adapter.has_one_use(pin_a),
+            adapter.is_only_user_of(twice.node, a.node),
+            adapter.use_empty(twice.node),
+        )
+    });
+    assert_eq!(answers, (true, true, false, true, true), "premise: the answers are the scan's");
+    assert_eq!(made, 0, "{made} allocations to ask five use questions");
 }

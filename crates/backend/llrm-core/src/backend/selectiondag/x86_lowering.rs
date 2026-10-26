@@ -83,6 +83,8 @@ pub mod x86isd {
     pub const SBB: ISD = ISD::Target(728);
     pub const SUB: ISD = ISD::Target(762);
     pub const WRAPPER: ISD = ISD::Target(953);
+    /// `X86ISD::WrapperRIP`: a symbol addressed from `%rip`.
+    pub const WRAPPER_RIP: ISD = ISD::Target(954);
     /// `X86ISD::FP_TO_INT_IN_MEM`: `fist` of an x87 value to a stack slot.
     pub const FP_TO_INT_IN_MEM: ISD = ISD::Target(617);
     /// `X86ISD::FILD`: `fild` of an integer in memory to an x87 value.
@@ -93,6 +95,11 @@ pub mod x86isd {
     /// `sahf` on a 486).
     pub const FCMP: ISD = ISD::Target(576);
     pub const XOR: ISD = ISD::Target(955);
+    /// `X86ISD::FAND`/`FOR`/`FXOR`: `andps`/`orps`/`xorps` on a scalar float
+    /// and a 16-byte pool mask.
+    pub const FAND: ISD = ISD::Target(574);
+    pub const FOR: ISD = ISD::Target(615);
+    pub const FXOR: ISD = ISD::Target(634);
 }
 
 /// `X86::ES`, the segment `les` loads.
@@ -121,6 +128,8 @@ pub mod cond {
 /// The custom lowerings, for a CPU with or without CMOV.
 pub struct X86Lowering {
     pub cmov: bool,
+    /// Scalar floats live in xmm registers (`isScalarFPTypeInSSEReg`).
+    pub sse2: bool,
 }
 
 impl CombineHooks for X86Lowering {
@@ -128,7 +137,14 @@ impl CombineHooks for X86Lowering {
         &self,
         op: ISD,
     ) -> bool {
-        op == ISD::Mul || op == ISD::Sub || op == x86isd::CMOV || op == x86isd::SETCC || op == x86isd::BRCOND
+        op == ISD::Mul
+            || op == ISD::Add
+            || op == ISD::Sub
+            || op == x86isd::CMOV
+            || op == x86isd::SETCC
+            || op == x86isd::BRCOND
+            || op == x86isd::ADC
+            || op == x86isd::SBB
     }
 
     fn perform_dag_combine(
@@ -139,10 +155,12 @@ impl CombineHooks for X86Lowering {
     ) -> Option<SDValue> {
         match dag.opcode(node) {
             ISD::Mul => combine_mul(dag, node, level),
+            ISD::Add => combine_add(dag, node),
             ISD::Sub => combine_sub(dag, node),
             x86isd::CMOV => combine_cmov(dag, node),
             x86isd::SETCC => combine_setcc(dag, node),
             x86isd::BRCOND => combine_brcond(dag, node),
+            x86isd::ADC | x86isd::SBB => combine_adc_sbb(dag, node),
             _ => None,
         }
     }
@@ -286,13 +304,28 @@ impl Hooks for X86Lowering {
             ISD::UAddOCarry | ISD::USubOCarry => Some(lower_addsub_carry(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
             ISD::VAStart => lower_vastart(dag, node),
-            ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node),
+            ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node, self.sse2),
             ISD::LRint => lower_lrint(dag, node),
-            ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node),
+            ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node, self.sse2),
             ISD::ConstantPool => lower_constant_pool(dag, node),
             ISD::JumpTable => lower_jump_table(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
             ISD::Abs => Some(lower_abs(dag, node)),
+            ISD::FNeg | ISD::FAbs => lower_fabs_or_fneg(dag, node),
+            ISD::FCopySign => lower_fcopysign(dag, node),
+            ISD::DynamicStackAlloc => lower_dynamic_stackalloc(dag, node),
+            ISD::StackSave => {
+                let (chain, vt) = (dag.operand(node, 0), dag.value_type(node));
+                Some(dag.get_copy_from_phys_reg_plain(chain, llrm_lir::registers::RegId::SP, vt))
+            }
+            ISD::StackRestore => {
+                let (chain, saved) = (dag.operand(node, 0), dag.operand(node, 1));
+                let sp = dag.get_phys_register(dag.value_type(saved), llrm_lir::registers::RegId::SP);
+                Some(dag.get_node(ISD::CopyToReg, EVT::OTHER, &[chain, sp, saved]))
+            }
+            // `LowerFP_EXTEND`: the Custom arm exists for `f16`; a scalar
+            // `f32` to `f64` is returned as is and selected by pattern.
+            ISD::FpExtend if dag.value_type(dag.operand(node, 0)) == EVT::Simple(MVT::F32) => Some(node),
             ISD::CtLz | ISD::CtLzZeroPoison => Some(lower_ctlz(dag, node)),
             ISD::CtTz => Some(lower_cttz(dag, node)),
             ISD::Parity => Some(lower_parity(dag, node)),
@@ -767,12 +800,17 @@ fn lower_select(
         code = cond_code(dag, cond::NE);
         flags = emit_test(dag, cond, cond::NE);
     }
-    let (op1, op2, result_vt) =
-        if (vt == EVT::I8 && can_cmov) || (vt == EVT::I16 && !may_fold_load(dag, op1) && !may_fold_load(dag, op2)) {
-            (dag.get_node(ISD::AnyExtend, EVT::I32, &[op1]), dag.get_node(ISD::AnyExtend, EVT::I32, &[op2]), EVT::I32)
-        } else {
-            (op1, op2, vt)
-        };
+    // DEVIATE SD313: where the pointer is a word (m16) an `i16` select stays
+    // a word: widened to `i32` every move takes an operand-size prefix. Owner
+    // w10. Exit: none (machine fact). Review 2026-12-10.
+    let word16 = dag.config.pointer == EVT::I16;
+    let (op1, op2, result_vt) = if (vt == EVT::I8 && can_cmov)
+        || (vt == EVT::I16 && !word16 && !may_fold_load(dag, op1) && !may_fold_load(dag, op2))
+    {
+        (dag.get_node(ISD::AnyExtend, EVT::I32, &[op1]), dag.get_node(ISD::AnyExtend, EVT::I32, &[op2]), EVT::I32)
+    } else {
+        (op1, op2, vt)
+    };
     let cmov = dag.get_node(x86isd::CMOV, result_vt, &[op2, op1, code, flags]);
     Some(if result_vt == vt { cmov } else { dag.get_node(ISD::Truncate, vt, &[cmov]) })
 }
@@ -918,6 +956,50 @@ fn combine_setcc(
     Some(dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags]))
 }
 
+/// `combineCarryThroughADD`: flags of `(add carry, -1)`, where the carry is a
+/// `setb` (through extends, truncates and `and 1`), are the flags the `setb`
+/// read. DEVIATE SD315: the `COND_A` form (a swapped `sub`) is not
+/// translated. Reason: nothing produces it at 32 bits yet. Exit: with
+/// `combineSBB`'s remaining folds. Owner: sdag-b. Review 2026-12-10.
+fn carry_through_add(
+    dag: &SelectionDAG,
+    flags: SDValue,
+) -> Option<SDValue> {
+    if dag.opcode(flags) != x86isd::ADD {
+        return None;
+    }
+    let minus_one = dag.operand(flags, 1);
+    if dag.constant(minus_one) != Some(super::fold::mask(dag.value_type(minus_one).size_in_bits())) {
+        return None;
+    }
+    let mut carry = dag.operand(flags, 0);
+    while matches!(
+        dag.opcode(carry),
+        ISD::Truncate | ISD::ZeroExtend | ISD::AnyExtend
+    )
+        || (dag.opcode(carry) == ISD::And && dag.constant(dag.operand(carry, 1)) == Some(1))
+    {
+        carry = dag.operand(carry, 0);
+    }
+    if !matches!(dag.opcode(carry), x86isd::SETCC | x86isd::SETCC_CARRY) {
+        return None;
+    }
+    (dag.constant(dag.operand(carry, 0))? == cond::B).then(|| dag.operand(carry, 1))
+}
+
+/// `combineADC` and `combineSBB`, the carry-through-add part: the carry in
+/// comes from the flags the `setb` read, so `setb; add al, -1; adc` is `adc`.
+/// (The `ADC 0, 0` and `SBB` constant folds are not translated.)
+fn combine_adc_sbb(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let flags = carry_through_add(dag, dag.operand(node, 2))?;
+    let (opcode, vt) = (dag.opcode(node), dag.node(node).values.clone());
+    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    Some(dag.get_node_multi(opcode, &vt, &[lhs, rhs, flags]))
+}
+
 /// `combineBrCond`: the same for a branch.
 fn combine_brcond(
     dag: &mut SelectionDAG,
@@ -928,6 +1010,35 @@ fn combine_brcond(
     let code = cond_code(dag, code);
     let (chain, dest) = (dag.operand(node, 0), dag.operand(node, 1));
     Some(dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags]))
+}
+
+/// `combineAdd`, the hidden LEA pattern: `(add (sub (shl x, c), y), z)` with
+/// `c < 4` is `(sub (add (shl x, c), z), y)`, so the `shl` and the `add` are
+/// one `lea` (`y * 7 + z` is `lea z + y*8; sub y`). (The vector, `cmov`,
+/// `psadbw` and `sbb` folds are not translated.)
+fn combine_add(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    if vt != EVT::I32 {
+        return None;
+    }
+    // `m_Add` matches either operand as the difference.
+    let hidden_lea = |difference: SDValue, z: SDValue| {
+        if dag.opcode(difference) != ISD::Sub || dag.use_count(difference.node) != 1 || dag.constant(z).is_some() {
+            return None;
+        }
+        let (shift, y) = (dag.operand(difference, 0), dag.operand(difference, 1));
+        if dag.opcode(shift) != ISD::Shl || !dag.constant(dag.operand(shift, 1)).is_some_and(|amount| amount < 4) {
+            return None;
+        }
+        Some((shift, y, z))
+    };
+    let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
+    let (shift, y, z) = hidden_lea(a, b).or_else(|| hidden_lea(b, a))?;
+    let sum = dag.get_node(ISD::Add, vt, &[shift, z]);
+    Some(dag.get_node(ISD::Sub, vt, &[sum, y]))
 }
 
 /// `combineSub` through `combineAddOrSubToADCOrSBB`, the zero case: `0 - (and
@@ -1020,6 +1131,12 @@ fn combine_cmov(
     None
 }
 
+/// `getGlobalWrapperKind`: every symbol is addressed from `%rip` in 64-bit
+/// mode (small code model), the absolute `Wrapper` elsewhere.
+fn wrapper_kind(vt: EVT) -> ISD {
+    if vt == EVT::I64 { x86isd::WRAPPER_RIP } else { x86isd::WRAPPER }
+}
+
 /// `LowerGlobalOrExternal` for a static, non-PIC global: `Wrapper
 /// (TargetGlobalAddress sym+offset)`. A non-negative offset folds into the
 /// symbol; a negative one is added after.
@@ -1037,7 +1154,7 @@ fn lower_global_address(
         SDNodeFlags::default(),
         NodeData::Global { symbol, offset: folded },
     );
-    let wrapped = dag.get_node(x86isd::WRAPPER, vt, &[target]);
+    let wrapped = dag.get_node(wrapper_kind(vt), vt, &[target]);
     Some(if rest == 0 {
         wrapped
     } else {
@@ -1054,7 +1171,7 @@ fn lower_constant_pool(
     let NodeData::PoolIndex(index) = dag.node(node).data else { return None };
     let vt = dag.value_type(node);
     let target = dag.intern(ISD::TargetConstantPool, &[vt], &[], SDNodeFlags::default(), NodeData::PoolIndex(index));
-    Some(dag.get_node(x86isd::WRAPPER, vt, &[target]))
+    Some(dag.get_node(wrapper_kind(vt), vt, &[target]))
 }
 
 /// `LowerJumpTable`: `Wrapper (TargetJumpTable)`.
@@ -1065,7 +1182,7 @@ fn lower_jump_table(
     let NodeData::JumpTable(index) = dag.node(node).data else { return None };
     let vt = dag.value_type(node);
     let target = dag.intern(ISD::TargetJumpTable, &[vt], &[], SDNodeFlags::default(), NodeData::JumpTable(index));
-    Some(dag.get_node(x86isd::WRAPPER, vt, &[target]))
+    Some(dag.get_node(wrapper_kind(vt), vt, &[target]))
 }
 
 /// `LowerXALUO` for the unsigned add and subtract with overflow: the flags of
@@ -1115,12 +1232,30 @@ fn lower_addsub_carry(
 fn lower_fp_to_int(
     dag: &mut SelectionDAG,
     node: SDValue,
+    sse2: bool,
 ) -> Option<SDValue> {
     let signed = dag.opcode(node) == ISD::FpToSInt;
     let result_vt = dag.value_type(node);
     let mut value = dag.operand(node, 0);
     let value_vt = dag.value_type(value);
     let EVT::Simple(float @ (MVT::F32 | MVT::F64 | MVT::F80)) = value_vt else { return None };
+    if sse2 && matches!(float, MVT::F32 | MVT::F64) {
+        // `cvttss2si`/`cvttsd2si` truncate to i32 (and i64 at m64); the other
+        // widths convert through the next one up.
+        let pointer = dag.config().pointer;
+        let via = match (signed, result_vt) {
+            (true, EVT::I32) => return Some(node),
+            (true, EVT::I64) if pointer == EVT::I64 => return Some(node),
+            (true, _) => Some(EVT::I32),
+            (false, EVT::I64) => None,
+            (false, _) if pointer == EVT::I64 => Some(EVT::I64),
+            (false, _) => None,
+        };
+        if let Some(via) = via {
+            let wide = dag.get_node(ISD::FpToSInt, via, &[value]);
+            return Some(dag.get_node(ISD::Truncate, result_vt, &[wide]));
+        }
+    }
     let unsigned_fixup = !signed && result_vt == EVT::I64;
     let stored_vt = if !signed && result_vt != EVT::I64 { EVT::I64 } else { result_vt };
     let size = stored_vt.size_in_bits() / 8;
@@ -1201,6 +1336,7 @@ fn build_fild(
 fn lower_int_to_fp(
     dag: &mut SelectionDAG,
     node: SDValue,
+    sse2: bool,
 ) -> Option<SDValue> {
     let signed = dag.opcode(node) == ISD::SIntToFp;
     let dst = dag.value_type(node);
@@ -1210,6 +1346,20 @@ fn lower_int_to_fp(
         return None;
     }
     let pointer = dag.config().pointer;
+    if sse2 && matches!(dst, EVT::Simple(MVT::F32 | MVT::F64)) {
+        let in_reg = |bits| src_vt.size_in_bits() == bits;
+        if signed && (in_reg(32) || (in_reg(64) && pointer == EVT::I64)) {
+            return Some(node);
+        }
+        if signed && in_reg(16) {
+            let wide = dag.get_node(ISD::SignExtend, EVT::I32, &[src]);
+            return Some(dag.get_node(ISD::SIntToFp, dst, &[wide]));
+        }
+        if !signed && in_reg(32) && pointer == EVT::I64 {
+            let wide = dag.get_node(ISD::ZeroExtend, EVT::I64, &[src]);
+            return Some(dag.get_node(ISD::SIntToFp, dst, &[wide]));
+        }
+    }
     let chain = dag.entry_node();
     let store_info = |index: i32, vt: EVT, size: u32| MemInfo {
         mem_vt: vt,
@@ -1270,8 +1420,9 @@ fn lower_int_to_fp(
     Some(rounded)
 }
 
-/// `LowerVASTART` for the 32-bit ABI: a `va_list` is a pointer, so the start
-/// is a store of the first variadic argument's address through it.
+/// `LowerVASTART`: at 32 bits a `va_list` is a pointer, so the start is a
+/// store of the first variadic argument's address through it; the SysV
+/// x86-64 one is `{gp_offset, fp_offset, overflow_arg_area, reg_save_area}`.
 fn lower_vastart(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -1279,14 +1430,32 @@ fn lower_vastart(
     let index = dag.var_args_frame_index?;
     let (chain, list) = (dag.operand(node, 0), dag.operand(node, 1));
     let pointer = dag.config().pointer;
-    let first = dag.get_frame_index(pointer, index);
     let base = match dag.node(list).data {
         NodeData::FrameIndex(slot) => MemBase::Stack(slot),
         _ => MemBase::Unknown,
     };
-    let info =
-        MemInfo { mem_vt: pointer, align: pointer.size_in_bits() / 8, volatile: false, base, ext: None, space: 0 };
-    Some(dag.get_store(chain, first, list, info))
+    if pointer != EVT::I64 {
+        let first = dag.get_frame_index(pointer, index);
+        let info =
+            MemInfo { mem_vt: pointer, align: pointer.size_in_bits() / 8, volatile: false, base, ext: None, space: 0 };
+        return Some(dag.get_store(chain, first, list, info));
+    }
+    let (save, gp_offset) = dag.var_args_save?;
+    let mut stores = Vec::new();
+    let fields: [(u128, EVT, SDValue); 4] = [
+        (0, EVT::I32, dag.get_constant(u128::from(gp_offset), EVT::I32)),
+        // 6 * 8: the vector registers' part of the area starts there
+        (4, EVT::I32, dag.get_constant(48, EVT::I32)),
+        (8, pointer, dag.get_frame_index(pointer, index)),
+        (16, pointer, dag.get_frame_index(pointer, save)),
+    ];
+    for (offset, vt, value) in fields {
+        let at = dag.get_constant(offset, pointer);
+        let address = dag.get_node(ISD::Add, pointer, &[list, at]);
+        let info = MemInfo { mem_vt: vt, align: 4, volatile: false, base, ext: None, space: 0 };
+        stores.push(dag.get_store(chain, value, address, info));
+    }
+    Some(dag.get_node(ISD::TokenFactor, EVT::OTHER, &stores))
 }
 
 fn is_pow2(value: u128) -> bool {
@@ -1492,6 +1661,98 @@ fn is_known_never_zero(
 /// `KnownBits::countMinLeadingZeros`.
 fn min_leading_zeros(known: &super::known_bits::KnownBits) -> u32 {
     (!known.zero & super::fold::mask(known.width)).leading_zeros() - (128 - known.width)
+}
+
+/// `LowerFABSorFNEG` for a scalar: no scalar bitwise SSE instruction exists, so
+/// the sign bit is cleared (`FAND`), flipped (`FXOR`) or set (`FOR`, for
+/// `fneg (fabs x)`) by a 16-byte pool mask whose low lane is the sign mask.
+fn lower_fabs_or_fneg(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let sign = match vt {
+        EVT::Simple(MVT::F32) => 1u128 << 31,
+        EVT::Simple(MVT::F64) => 1u128 << 63,
+        _ => return None,
+    };
+    let is_fabs = dag.opcode(node) == ISD::FAbs;
+    // `fabs` under an `fneg` is left to the `fneg`, which sets the sign.
+    if is_fabs && dag.users(node).any(|user| dag.opcode(SDValue { node: user, res: 0 }) == ISD::FNeg) {
+        return Some(node);
+    }
+    let mut x = dag.operand(node, 0);
+    let negated_abs = !is_fabs && dag.opcode(x) == ISD::FAbs;
+    if negated_abs {
+        x = dag.operand(x, 0);
+    }
+    let (op, mask) = match (is_fabs, negated_abs) {
+        (true, _) => (x86isd::FAND, sign - 1),
+        (false, true) => (x86isd::FOR, sign),
+        (false, false) => (x86isd::FXOR, sign),
+    };
+    let pointer = dag.config().pointer;
+    let pool = dag.get_constant_pool(pointer, mask, EVT::Simple(MVT::I128), false);
+    let address = dag.get_node(wrapper_kind(pointer), pointer, &[pool]);
+    Some(dag.get_node(op, vt, &[x, address]))
+}
+
+/// `LowerFCOPYSIGN` for a scalar: `(mag & ~sign) | (sgn & sign)`, the sign
+/// operand first extended or rounded to the magnitude's type.
+fn lower_fcopysign(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let sign = match vt {
+        EVT::Simple(MVT::F32) => 1u128 << 31,
+        EVT::Simple(MVT::F64) => 1u128 << 63,
+        _ => return None,
+    };
+    let (mag, mut sgn) = (dag.operand(node, 0), dag.operand(node, 1));
+    let sgn_vt = dag.value_type(sgn);
+    if sgn_vt != vt {
+        sgn = if sgn_vt.size_in_bits() < vt.size_in_bits() {
+            dag.get_node(ISD::FpExtend, vt, &[sgn])
+        } else {
+            let zero = dag.get_constant_with(0, EVT::I32, true, false);
+            dag.get_node(ISD::FpRound, vt, &[sgn, zero])
+        };
+    }
+    let pointer = dag.config().pointer;
+    let masked = |dag: &mut SelectionDAG, op, value, mask| {
+        let pool = dag.get_constant_pool(pointer, mask, EVT::Simple(MVT::I128), false);
+        let address = dag.get_node(wrapper_kind(pointer), pointer, &[pool]);
+        dag.get_node(op, vt, &[value, address])
+    };
+    let magnitude = masked(dag, x86isd::FAND, mag, sign - 1);
+    let sign_bit = masked(dag, x86isd::FAND, sgn, sign);
+    Some(dag.get_node(x86isd::FOR, vt, &[magnitude, sign_bit]))
+}
+
+/// `LowerDYNAMIC_STACKALLOC` without probes or split stacks: the stack pointer
+/// lowered by the size, rounded down to the alignment when that is more than
+/// the stack's (operand 2, else 0), is the address. Bracketed by a
+/// `CALLSEQ` pair so nothing else moves the stack pointer meanwhile.
+fn lower_dynamic_stackalloc(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let (chain, size) = (dag.operand(node, 0), dag.operand(node, 1));
+    let alignment = dag.constant(dag.operand(node, 2)).unwrap_or(0);
+    let start = dag.get_callseq_start(chain, 0);
+    let sp = dag.get_copy_from_phys_reg_plain(SDValue { node: start.node, res: 0 }, llrm_lir::registers::RegId::SP, vt);
+    let mut result = dag.get_node(ISD::Sub, vt, &[sp, size]);
+    let mut chain = SDValue { node: sp.node, res: 1 };
+    if alignment != 0 {
+        let mask = dag.get_constant(!(alignment - 1) & ((1u128 << vt.size_in_bits()) - 1), vt);
+        result = dag.get_node(ISD::And, vt, &[result, mask]);
+    }
+    chain = dag.get_copy_to_phys_reg(chain, llrm_lir::registers::RegId::SP, result, None);
+    let chain = SDValue { node: chain.node, res: 0 };
+    let end = dag.get_callseq_end(chain, 0, 0, SDValue { node: chain.node, res: 1 });
+    Some(dag.get_node_multi(ISD::MergeValues, &[vt, EVT::OTHER], &[result, SDValue { node: end.node, res: 0 }]))
 }
 
 /// `LowerABS` for `i16`/`i32`: `x < 0 ? -x : x` as `cmov` on the flags of `0 -

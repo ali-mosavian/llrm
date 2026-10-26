@@ -379,6 +379,11 @@ pub fn live(body: &LirBody) -> (Live, Live) {
     (rows.sets(true), rows.sets(false))
 }
 
+/// `live`'s exit sets alone: one pass over the rows, not two.
+pub fn live_out(body: &LirBody) -> Live {
+    live_rows(body).sets(false)
+}
+
 /// `live` for the values `keep` names only: no other value is numbered,
 /// followed or put in a set.
 pub fn live_among(
@@ -487,8 +492,9 @@ impl DenseRows {
         rows: &'a [u64],
         block: usize,
     ) -> impl Iterator<Item = u32> + 'a {
-        rows[block * self.words..(block + 1) * self.words].iter().enumerate().flat_map(move |(word, bits)| {
-            (0..64).filter(move |bit| bits >> bit & 1 == 1).map(move |bit| self.numbered[word * 64 + bit])
+        rows[block * self.words..(block + 1) * self.words].iter().enumerate().flat_map(move |(word, &bits)| {
+            std::iter::successors((bits != 0).then_some(bits), |left| Some(left & (left - 1)).filter(|rest| *rest != 0))
+                .map(move |left| self.numbered[word * 64 + left.trailing_zeros() as usize])
         })
     }
 
@@ -1231,8 +1237,19 @@ pub fn explicit_selectors(
     segments: &Segments,
     registers: &RegisterClasses,
 ) -> LirBody {
-    let regs = body.regs();
     let confined = classes(body, &BTreeSet::new(), segments, registers);
+    explicit_selectors_given(body, pinned, segments, &confined).unwrap_or_else(|| body.clone())
+}
+
+/// `explicit_selectors`, given the body's classes: None where no cell is
+/// rewritten.
+pub fn explicit_selectors_given(
+    body: &LirBody,
+    pinned: Option<&IndexMap<u32, RegId>>,
+    segments: &Segments,
+    confined: &crate::backend::regclass::Classes,
+) -> Option<LirBody> {
+    let regs = body.regs();
     let selectors: BTreeSet<RegId> = segments.selectors.iter().copied().collect();
     let empty = IndexMap::default();
     let pinned = pinned.unwrap_or(&empty);
@@ -1256,7 +1273,7 @@ pub fn explicit_selectors(
         }
     }
     if conflicted.is_empty() {
-        return body.clone();
+        return None;
     }
 
     let through_es = |place: &Loc| -> Loc {
@@ -1310,7 +1327,7 @@ pub fn explicit_selectors(
         }
         blocks.push(block.with_insns(insns));
     }
-    body.with_blocks(blocks)
+    Some(body.with_blocks(blocks))
 }
 
 /// The values an instruction is a plain same-width copy between, if it is.
@@ -1393,7 +1410,7 @@ pub fn allocate(
     classes: &RegisterClasses,
 ) -> Result<Assignment, Error> {
     let mut frame = Frame::new(0);
-    Ok(greedy_rewritten(body, pinned, unspillable, protected, cpu, segments, classes, &mut frame)?.0)
+    Ok(greedy_rewritten(body, pinned, unspillable, protected, cpu, segments, classes, &[], &mut frame)?.0)
 }
 
 thread_local! {
@@ -1415,6 +1432,7 @@ pub fn greedy_rewritten(
     cpu: ProfileOrName<'_>,
     segments: &Segments,
     classes: &RegisterClasses,
+    saved: &[RegId],
     frame: &mut Frame,
 ) -> Result<(Assignment, LirBody, BTreeSet<u32>), Error> {
     targets::profile(cpu).map_err(Error::Value)?;
@@ -1443,6 +1461,7 @@ pub fn greedy_rewritten(
         data: Some(segments.data),
         sets: Some(&sets),
         stable_loads: targets::profile(cpu).map_or(true, |profile| profile.stable_loads),
+        saved,
     };
     let mode = crate::greedy::shadow::Mode::Inline { frame: &mut *frame, classes };
     let decided = crate::greedy::shadow::decide_with(&inputs, mode);
@@ -1451,7 +1470,7 @@ pub fn greedy_rewritten(
             eprintln!("greedy-inline {}: failed {} spill_failed {}", body.name, d.report.stats.failed, d.spill_failed);
         }
     }
-    if let (Some(d), true) = (&decided, std::env::var("LLRM_EDITED_DUMP").is_ok_and(|n| n == body.name)) {
+    if let (Some(d), true) = (&decided, llrm_support::env_var("LLRM_EDITED_DUMP").is_some_and(|n| n == &*body.name)) {
         if let Some(edited) = &d.edited {
             for (b, block) in edited.blocks.iter().enumerate() {
                 for (at, one) in block.insns.iter().enumerate() {
@@ -2494,6 +2513,10 @@ pub struct RegAlloc {
     pub cpu: Profile,
     pub segments: Segments,
     pub classes: Rc<RegisterClasses>,
+    /// The registers the function's convention keeps, whole: the first use of
+    /// one costs a `push` and a `pop` (`tryAssignCSRFirstTime`). None: it
+    /// costs nothing.
+    pub saved: Vec<RegId>,
 }
 
 impl RegAlloc {
@@ -2512,7 +2535,17 @@ impl RegAlloc {
             cpu: targets::profile(cpu)?.clone(),
             segments: segments.clone(),
             classes: Rc::clone(classes),
+            saved: Vec::new(),
         })
+    }
+
+    /// With the registers the function's convention keeps.
+    pub fn with_saved(
+        mut self,
+        saved: Vec<RegId>,
+    ) -> Self {
+        self.saved = saved;
+        self
     }
 
     /// Assign; where that spills, make the spill real and assign again.
@@ -2546,9 +2579,20 @@ impl RegAlloc {
             );
         }
         let floor = self.pinned.keys().copied().max().map_or(0, |one| one + 1);
-        let mut body = constrain::distinct_classes(&body, floor, &segments, &self.classes);
-        body = explicit_selectors(&body, Some(&self.pinned), &segments, &self.classes);
-        let confined = classes(&body, &BTreeSet::new(), &segments, &self.classes);
+        // One scan of the body's classes serves the three steps when none of
+        // them changes it.
+        let (uses, mut confined) = crate::backend::regclass::confining(&body, &segments, &self.classes);
+        let mut body = match constrain::distinct_classes_given(&body, floor, &uses) {
+            Some(peeled) => {
+                confined = classes(&peeled, &BTreeSet::new(), &segments, &self.classes);
+                peeled
+            }
+            None => body,
+        };
+        if let Some(rewritten) = explicit_selectors_given(&body, Some(&self.pinned), &segments, &confined) {
+            confined = classes(&rewritten, &BTreeSet::new(), &segments, &self.classes);
+            body = rewritten;
+        }
         let incompatible: BTreeSet<u32> = self
             .pinned
             .iter()
@@ -2598,13 +2642,15 @@ impl RegAlloc {
             .map(ranges::key)
             .collect();
         body = removed_unread(&body, &abandoned);
+        // Asked once: the body is the same at the next use.
+        let required = constrain::required(&body, &self.classes);
         self.pinned = prefer.clone();
-        self.pinned.extend(constrain::required(&body, &self.classes));
+        self.pinned.extend(required.iter().map(|(value, register)| (*value, *register)));
         let frame = Rc::clone(self.frame.as_ref().expect("made above"));
         drop(prepare);
         let base = llrm_support::debug::span("regalloc base");
         let mut pins = prefer.clone();
-        pins.extend(constrain::required(&body, &self.classes));
+        pins.extend(required);
         let before = last_resorts();
         // Each spill gets a slot of its own; they are shared once, over the
         // allocation (`crate::backend::slots::slots_colored`).
@@ -2617,6 +2663,7 @@ impl RegAlloc {
             (&cpu).into(),
             &segments,
             &self.classes,
+            &self.saved,
             &mut frame.borrow_mut(),
         );
         frame.borrow_mut().defer_colours = false;
@@ -2950,6 +2997,7 @@ mod tests {
             ProfileOrName::Name("386"),
             &target::BUILT_IN,
             &crate::backend::classes::RegisterClasses::m16(),
+            &[],
             &mut Frame::new(0),
         );
         let message = got.err().map(|error| error.to_string()).expect("an error, not a fallback allocation");
@@ -3127,6 +3175,27 @@ mod tests {
         .expect("a cpu");
         RegAlloc::transform(&mut phase, body).expect("allocates");
         assert!(!frame.borrow().slots.is_empty());
+    }
+
+    /// RegAlloc scanned a body for its classes three times before it changed
+    /// anything (`distinct_classes`, `explicit_selectors`, the classes it
+    /// keeps): 5 scans of d_faces's functions' worth of reads a function, 7
+    /// M Ir. A body they leave alone is scanned once for the three.
+    #[test]
+    fn a_body_the_class_steps_leave_alone_is_scanned_once_for_them() {
+        let mut insns = Vec::new();
+        for value in 1..=3u32 {
+            insns.push(_mov(value, i64::from(value), 0x100 + 2 * i64::from(value)));
+        }
+        for value in 1..=3u32 {
+            let at = 0x200 + 2 * i64::from(value);
+            let what = semantics(Operation::Push, "push", vec![], vec![held(value, 2)]);
+            insns.push(Insn::new(at, Some((at, at + 2)), Some(what), vec![], vec![value]));
+        }
+        let before = crate::backend::regclass::SCANS.with(std::cell::Cell::get);
+        let _ = _through_regalloc(_one_block(insns), &[]);
+        let scans = crate::backend::regclass::SCANS.with(std::cell::Cell::get) - before;
+        assert!(scans <= 2, "{scans} scans of the classes in one allocation");
     }
 
     fn _through_regalloc(

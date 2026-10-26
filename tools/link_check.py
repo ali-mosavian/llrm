@@ -19,12 +19,12 @@ ROOT = HERE.parent
 QB_PROGRAMS = ("arena_type", "color_masks", "bc_draw")  # the three the memcpy_ fact broke: fin.c, varptr.c
 C_PROGRAMS = ("memcpy_runtime", "memfuncs_runtime")  # the C runtime's ext.asm, in both conventions
 
-TOUCHING = ("runtime/", "crates/frontends/llrm-qbruntime/", "crates/target/")
+TOUCHING = ("runtime/", "runtime/qb/", "crates/target/")
 
 
 def touches_runtime(files: list[str]) -> bool:
     """A change to what a program links against, or to a fact that decides what the compiler calls: not docs, not a crate's code."""
-    return any(f.startswith("runtime/") or f.endswith("c.toml") or ("/machines/" in f and f.endswith(".toml")) or f.startswith("crates/frontends/llrm-qbruntime/") for f in files)
+    return any(f.startswith("runtime/") or f.endswith("c.toml") or ("/machines/" in f and f.endswith(".toml")) or f.startswith("runtime/qb/") for f in files)
 
 
 def link_failures(work: Path, qb=None, c=None) -> list[str]:

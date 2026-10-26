@@ -37,6 +37,8 @@ pub enum Event {
     Allocations,
     /// A dominator tree built.
     Dominators,
+    /// A dominator tree copied from one built for the same CFG.
+    DominatorsReused,
     /// A loop forest built (MIR).
     Forests,
     /// The natural loops of a LIR body found.
@@ -75,20 +77,25 @@ pub enum Event {
     LoopExitScans,
     /// A pattern of an `icmp` operand tried by LVI (`match_icmp_operand`).
     LviIcmpPatterns,
+    /// A list of a block's predecessors LVI built (`predecessors`).
+    LviPredecessorLists,
     /// The position of every instruction in its block worked out
     /// (`Function::positions`).
     Positions,
+    /// A `UniqueSCEVs` key made to own its operands (a node was made).
+    ScevKeysOwned,
 }
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 25] = [
+const NAMES: [&str; 28] = [
     "function_clones",
     "function_forks",
     "machinings",
     "selections",
     "allocations",
     "dominators_built",
+    "dominators_reused",
     "forests_built",
     "lir_loops_found",
     "shapes_derived",
@@ -107,7 +114,9 @@ const NAMES: [&str; 25] = [
     "exitsink_phis",
     "loop_exit_scans",
     "lvi_icmp_patterns",
+    "lvi_predecessor_lists",
     "positions",
+    "scev_keys_owned",
 ];
 
 /// A pass's runs and the instructions of the functions it ran over.
@@ -124,7 +133,7 @@ thread_local! {
     static PASSES: RefCell<Vec<PassRow>> = const { RefCell::new(Vec::new()) };
     /// (pass, analysis, misses): the analyses a pass made the manager compute.
     static ASKS: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    static EVENTS: [Cell<u64>; 25] = const { [const { Cell::new(0) }; 25] };
+    static EVENTS: [Cell<u64>; 28] = const { [const { Cell::new(0) }; 28] };
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };

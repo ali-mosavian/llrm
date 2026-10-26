@@ -1112,6 +1112,9 @@ pub struct LirBody {
     /// It calls a routine that returns twice (`setjmp`): no frame slot is
     /// shared.
     pub returns_twice: bool,
+    /// The function is `minsize` (`-Oz`, `Function::hasMinSize`): the passes
+    /// that ask it take size over speed.
+    pub min_size: bool,
     /// (load, write) by `at`: the optimizer proved the write leaves the load's
     /// cell as it was (`!llrm.spares`).
     pub spares: Arc<BTreeSet<(i64, i64)>>,
@@ -1143,6 +1146,13 @@ pub struct LirBody {
     /// allocated (the pin's order), so every local lies that much lower
     /// (`masm::saved_first`).
     pub saved_first: bool,
+    /// What each return takes back is instructions of the body, made while the
+    /// frame register was omitted (`true`) or kept (`false`)
+    /// (`masm::exits_inserted`); the printer adds nothing at a return.
+    pub frame_exit: Option<bool>,
+    /// The registers the frame saved, found before its exit was made: the
+    /// exit's own pops name them and the frame register.
+    pub frame_saved: Option<Vec<RegId>>,
     /// What `-g` says of its variables at points in the code, by the numbers
     /// `DebugTags::before` holds.
     pub notes: Arc<Vec<DebugNote>>,
@@ -1312,6 +1322,7 @@ impl LirBody {
             odds: BlockOdds::default(),
             frequencies: None,
             returns_twice: false,
+            min_size: false,
             spares: Arc::default(),
             float_stack: 0,
             homes: Arc::default(),
@@ -1321,6 +1332,8 @@ impl LirBody {
             slotted: false,
             cfa_variables: false,
             saved_first: false,
+            frame_exit: None,
+            frame_saved: None,
             notes: Arc::default(),
             arguments_in_cells: Arc::default(),
             facts: Default::default(),
@@ -1377,6 +1390,7 @@ impl LirBody {
             odds: self.odds.clone(),
             frequencies,
             returns_twice: self.returns_twice,
+            min_size: self.min_size,
             spares: Arc::clone(&self.spares),
             float_stack: self.float_stack,
             homes: Arc::clone(&self.homes),
@@ -1386,6 +1400,8 @@ impl LirBody {
             slotted: self.slotted,
             cfa_variables: self.cfa_variables,
             saved_first: self.saved_first,
+            frame_exit: self.frame_exit,
+            frame_saved: self.frame_saved.clone(),
             notes: Arc::clone(&self.notes),
             arguments_in_cells: Arc::clone(&self.arguments_in_cells),
             facts: self.facts.clone(),

@@ -538,7 +538,17 @@ fn fixed_point_arithmetic_is_the_fixed_point_intrinsics() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    let body = "  %2 = call i32 @llvm.smul.fix.i32(i32 %0, i32 %1, i32 16)\n  %3 = call i32 @llvm.sdiv.fix.i32(i32 %2, i32 %1, i32 16)\n  ret i32 %3\n";
+    // A fixed-point `/` truncates toward zero and `llvm.sdiv.fix` rounds down:
+    // the 32-bit divide is the spec's `(a << 16) / b` in 64 bits, which
+    // truncates by itself.
+    let body = "  %2 = call i32 @llvm.smul.fix.i32(i32 %0, i32 %1, i32 16)
+  %3 = sext i32 %2 to i64
+  %4 = sext i32 %1 to i64
+  %5 = shl i64 %3, 16
+  %6 = sdiv i64 %5, %4
+  %7 = trunc i64 %6 to i32
+  ret i32 %7
+";
     assert!(text.contains(body), "{text}");
 }
 
@@ -2060,4 +2070,35 @@ fn a_lowered_function_says_its_float_math_is_extended() {
     let emitted = emit(&program(difference())).remove(0);
     let text = llrm_mir::print::module(&emitted.module);
     assert!(text.contains("\"llrm-fp-eval\"=\"x87-extended\""), "{text}");
+}
+
+/// `declare_outside` skips the value types of every op `names_intrinsic`
+/// refuses (8,571 type lookups a compile, 1.4 M Ir); no op it refuses may name
+/// a callee on any pair of types, or that callee would go undeclared.
+#[test]
+fn test_names_intrinsic_covers_every_op_that_names_a_callee() {
+    use llrm_mir::types::{FloatKind, Type, Types};
+    let mut types = Types::default();
+    let kinds = [
+        types.intern(Type::Float(FloatKind::Float)),
+        types.intern(Type::Float(FloatKind::Double)),
+        types.int(8),
+        types.int(16),
+        types.int(32),
+        types.ptr(0),
+        types.ptr(1),
+    ];
+    for op in Op::ALL {
+        for from in kinds {
+            for to in kinds {
+                let named = crate::mir::intrinsic(&types, *op, from, to).is_some()
+                    || crate::mir::fixed(&mut types, *op, from).is_some()
+                    || crate::mir::ptrdiff(&types, from, to).is_some() && *op == Op::PtrDiff;
+                assert!(
+                    !named || crate::mir::names_intrinsic(*op),
+                    "{op:?} names a callee but names_intrinsic refuses it"
+                );
+            }
+        }
+    }
 }

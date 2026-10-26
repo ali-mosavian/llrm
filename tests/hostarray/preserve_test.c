@@ -1,5 +1,6 @@
 /* REDIM PRESERVE (array.c, m32 ad.c) on the host: growing keeps the old elements and zeroes the new, shrinking
-   truncates, and a change of a dimension but the outermost is Subscript out of range. Exits 0, or 1 with what broke. */
+   truncates, and a change of a dimension but the outermost is Subscript out of range. A string array's kept strings
+   follow to the new elements and only the cut-off ones are released. Exits 0, or 1 with what broke. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <setjmp.h>
@@ -9,7 +10,13 @@
 static jmp_buf failed;
 static unsigned raised;
 void qb_error(unsigned n) { raised = n; longjmp(failed, 1); }
-void str_release(SD *sd) { (void)sd; }
+/* A string is a nonzero ptr; the moves and the releases are counted. */
+static unsigned released, moves;
+static int last_delta;
+void str_release(SD *sd) { if (sd->ptr) released++; }
+void str_owner_moved(SD *owner, int delta) { if (owner->ptr) { moves++; last_delta = delta; } }
+/* block.asm's B$COPY on the host: a forward byte copy. */
+void copy_bytes(char *to, const char *from, unsigned n) { while (n--) *to++ = *from++; }
 void lh_on_move(enum LhType type, LhMoved moved) { (void)type; (void)moved; }
 char *heap_low, *heap_top;
 void *lh_alloc(uword bytes, enum LhType type, void *owner, byte file)
@@ -64,6 +71,33 @@ int main(void)
     dim(DIM_REALLOCATE, ad, 1, 0, 3, 0);  /* plain REDIM clears */
     e = ad->data;
     for (i = 0; i <= 3; i++) if (e[i] != 0) return fail("REDIM kept an element");
+
+    /* a string array: keep three strings through a grow, cut one off by a shrink */
+    {
+        static char room[sizeof(AD) + 4 * sizeof(DM)];
+        AD *sa = (AD *)room;
+        Call c = { { sa, 1 | (FADF_SD << 8), sizeof(SD), { { 3, 0 } } }, { 0, 0 } };
+        SD *old, *now;
+        static char text[4];
+
+        array_dim(DIM_ALLOCATE, &c.call);
+        old = sa->data;
+        for (i = 0; i < 3; i++) old[i].len = 1, old[i].ptr = text + i;
+        c.call.bounds[0].upper = 8;
+        array_dim(DIM_PRESERVE, &c.call);
+        now = sa->data;
+        if (now == old) return fail("a string array grew in place");
+        for (i = 0; i < 3; i++) if (now[i].len != 1 || now[i].ptr != text + i) return fail("a grow lost a string");
+        for (i = 3; i <= 8; i++) if (now[i].ptr) return fail("a grow left a new string nonzero");
+        if (moves != 3 || last_delta != (int)((long)now - (long)old)) return fail("the kept strings did not follow");
+        if (released) return fail("a grow released a kept string");
+        for (i = 0; i < 3; i++) if (!now[i].ptr) return fail("a kept string was cleared");
+        c.call.bounds[0].upper = 1;
+        array_dim(DIM_PRESERVE, &c.call);
+        now = sa->data;
+        if (now[0].ptr != text || now[1].ptr != text + 1) return fail("a shrink lost a kept string");
+        if (released != 1) return fail("a shrink did not release exactly the cut-off string");
+    }
     printf("ok\n");
     return 0;
 }

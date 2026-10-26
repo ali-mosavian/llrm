@@ -147,7 +147,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "instcombine",
         "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); the opcodes of foldICmpBinOpWithConstant not yet translated (xor, or, mul, shl, shr, srem, div, sub, add: InstCombineCompares.cpp:4124; only and is, combine_icmp_const.rs) are owed by llrm-w-4, 2026-10-24 onward; on by default, LLRM_NO_COMBINE turns it off",
     ),
-    entry("dead@677", Simplify, "instcombine", Old, "instcombine-port"),
     partial(
         "aggressive-instcombine@678",
         Simplify,
@@ -165,6 +164,8 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("constraint-elimination@699", Simplify, "constraint-elimination", Translated, ""),
     entry("loopsimplify@764", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@764", Simplify, "lcssa", Old, "lcssa-port"),
+    entry("loop-instsimplify@715", Simplify, "loop-instsimplify", Translated, ""),
+    entry("loop-simplifycfg@716", Simplify, "loop-simplifycfg", Translated, ""),
     entry("floatloop@724", Simplify, "licm", Old, "licm-port"),
     entry("licm@724", Simplify, "licm<no-allowspeculation>", Translated, ""),
     entry("licm@730", Simplify, "licm<allowspeculation>", Translated, ""),
@@ -181,7 +182,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "instcombine",
         "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); the opcodes of foldICmpBinOpWithConstant not yet translated (xor, or, mul, shl, shr, srem, div, sub, add: InstCombineCompares.cpp:4124; only and is, combine_icmp_const.rs) are owed by llrm-w-4, 2026-10-24 onward; on by default, LLRM_NO_COMBINE turns it off",
     ),
-    entry("dead@768", Simplify, "instcombine", Old, "instcombine-port"),
     entry("loopsimplify@772", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@772", Simplify, "lcssa", Old, "lcssa-port"),
     entry("loopidiom@737", Simplify, "loop-idiom", Translated, ""),
@@ -212,7 +212,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "instcombine",
         "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); the opcodes of foldICmpBinOpWithConstant not yet translated (xor, or, mul, shl, shr, srem, div, sub, add: InstCombineCompares.cpp:4124; only and is, combine_icmp_const.rs) are owed by llrm-w-4, 2026-10-24 onward; on by default, LLRM_NO_COMBINE turns it off",
     ),
-    entry("dead@801", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dfajumpthreading@806", Simplify, "dfa-jump-threading", Translated, ""),
     entry(
         "jumpthreading@809",
@@ -221,7 +220,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         Translated,
         "jumpthreading.rs + jumpthreading/loadpre.rs; deviations J2 (guards: no deopt bundles in MIR), J3 (!prof/BFI/BPI), J15 (isSafeToSpeculativelyExecute reuse); see docs/architecture/jumpthreading-translation.md",
     ),
-    entry("decide@809", Simplify, "jump-threading, correlated-propagation", Old, "simplifycfg-port"),
     entry("cvp@810", Simplify, "correlated-propagation", Translated, ""),
     entry("adce@815", Simplify, "adce", Translated, ""),
     entry("memcpyopt@818", Simplify, "memcpyopt", Translated, ""),
@@ -271,7 +269,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "instcombine",
         "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); the opcodes of foldICmpBinOpWithConstant not yet translated (xor, or, mul, shl, shr, srem, div, sub, add: InstCombineCompares.cpp:4124; only and is, combine_icmp_const.rs) are owed by llrm-w-4, 2026-10-24 onward; on by default, LLRM_NO_COMBINE turns it off",
     ),
-    entry("dead@837", Simplify, "instcombine", Old, "instcombine-port"),
     // Not slots: SimplifyCFG at PassBuilderPipelines.cpp#L873
     // (`addPreInlinerPasses`, PGO instrumentation or use only) and #L1424
     // (`ExtraVectorizerPasses`, after the vectorizer) are not in the default
@@ -314,8 +311,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "simplifycfg",
         "translated SimplifyCfg at the default options runs here; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting; criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those translated (llrm-w-4, 2026-10-30)",
     ),
-    entry("loop-instsimplify", Simplify, "loop-instsimplify", Missing, ""),
-    entry("loop-simplifycfg", Simplify, "loop-simplifycfg", Missing, ""),
     // LSR runs in llc's IR preparation (`TargetPassConfig::addIRPasses`,
     // l.874), after this pipeline, so a Module slot (it follows the
     // interprocedural step):
@@ -342,7 +337,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "machinecse@4",
         Backend,
         "machine-cse",
-        "criterion: a repeated pure computation before phi elimination is made once, rows identical or better and the post-RA machinecse step deletable; exit: PerformSimplePRE and the invariant-load candidate",
+        "criterion: a repeated pure computation before phi elimination is made once, rows identical or better, the post-RA machinecse step deleted (row CSE5); exit: PerformSimplePRE and the invariant-load candidate",
     ),
     partial(
         "machinesink@4",
@@ -419,7 +414,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "TailMergeBlocks (#2241), block placement chains and loops (#2629); criterion: rows vs min(gcc,pin) per bench pair + oracle sweep (J1, #2307); exit: identity vs llc after placement, branch folding and tail duplication; open: trellises and tail duplication (#2745) and alignBlocks/optimizeBranches (#2760) once landed, irreducible loops after tail dup (D16), BranchFolder merge parts, MBFI/MBPI replaced by BlockOdds (D7)",
     ),
     entry("copyprop@18", Backend, "machine-cp (run 2, after tail duplication)", Translated, ""),
-    entry("early-tailduplication", Backend, "early-tailduplication", Missing, ""),
+    partial(
+        "earlytaildup@1",
+        Backend,
+        "early-tailduplication",
+        "criterion: a join of at most two instructions (its jump counted) goes into every predecessor that jumps to it alone, a one-jump block is bypassed, phis and read-outside values get an SSA update; exit: the pin's merge into the layout predecessor is the same result here (ET3); EH pads and INLINEASM_BR have no counterpart (ET2)",
+    ),
     // X86TargetLowering::EmitLoweredSelect: the diamond at selection
     // (lir-cleanup-port, 2026-11-13).
     entry("emit-lowered-select", Backend, "x86-emit-lowered-select", Missing, ""),
@@ -673,6 +673,12 @@ pub const ANALYSES: &[AnalysisEntry] = &[
     ),
     old_analysis("plain-accesses", "PlainAccesses", "MemorySSA", "mssa (memoryssa-port)"),
     old_analysis("accesses", "Accesses", "MemorySSA", "mssa (memoryssa-port)"),
+    old_analysis(
+        "base-accesses",
+        "BaseAccesses",
+        "MemorySSA",
+        "mssa (memoryssa-port): MemorySSA's clients read the AA stack, not provenance",
+    ),
     old_analysis("through-memory", "ThroughMemory", "MemorySSA + GVN value numbering", "mssa and the GVN translation"),
     old_analysis(
         "float-facts",

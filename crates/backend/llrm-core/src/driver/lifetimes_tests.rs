@@ -75,9 +75,16 @@ fn program(markers: bool) -> Program {
 
 /// The bytes `F%` reserves below BP.
 fn frame(markers: bool) -> i64 {
+    frame_by(markers, Default::default())
+}
+
+/// The bytes `F%` reserves below BP, selected by `isel`.
+fn frame_by(
+    markers: bool,
+    isel: crate::backend::shadow::Selector,
+) -> i64 {
     let machine = Machine { cpu: "486".to_owned(), ..BUILT_IN.clone() };
-    // The old selector shares the slots; the DAG path has no StackColoring yet.
-    let options = Options { isel: crate::backend::shadow::Selector::Old, ..Options::m16(machine) };
+    let options = Options { isel, ..Options::m16(machine) };
     let built = compiled(&program(markers), &options).expect("compiles");
     let text = masm::text(&built[0]).expect("prints");
     text.lines().find_map(|line| line.trim().strip_prefix("sub sp, ")?.parse().ok()).unwrap_or(0)
@@ -88,4 +95,29 @@ fn frame(markers: bool) -> i64 {
 #[test]
 fn test_sibling_scopes_share_their_locals_slot_through_the_whole_pipeline() {
     assert_eq!((frame(false), frame(true)), (4, 2));
+}
+
+/// The DAG selector gave each static alloca a frame object of its own: the
+/// siblings' frame was 4 bytes with markers (the old selector: 2), the markers
+/// reaching the DAG as chain nodes and nothing merging the objects the pin's
+/// StackColoring would.
+#[test]
+fn test_sibling_scopes_share_their_locals_slot_under_the_dag_selector() {
+    use crate::backend::shadow::Selector;
+    assert_eq!((frame_by(false, Selector::Dag), frame_by(true, Selector::Dag)), (4, 2));
+}
+
+/// `-Oz` is `Function::hasMinSize` on every function (clang marks them): the
+/// machine profile says so, which the selectors hand to `LirBody::min_size`
+/// and MachineCSE's `isProfitableToHoistInto` reads. The profile had no such
+/// flag, so no machine pass could tell -Oz from -Os.
+#[test]
+fn test_the_machine_profile_knows_minsize_at_oz_only() {
+    let machine = Machine { cpu: "486".to_owned(), ..BUILT_IN.clone() };
+    let with = |pipeline: llrm_transforms::pipeline::Options| {
+        Options { pipeline, ..Options::m16(machine.clone()) }.cpu().expect("the 486 profile").min_size
+    };
+    assert!(with(llrm_transforms::pipeline::Options::min_size()));
+    assert!(!with(llrm_transforms::pipeline::Options::size()));
+    assert!(!with(llrm_transforms::pipeline::Options::standard()));
 }

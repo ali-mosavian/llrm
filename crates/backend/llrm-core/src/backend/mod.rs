@@ -80,7 +80,7 @@
 //! `registerinfo` and `datagroup` for what each value may be assigned.
 //! `peephole` calls the sub-passes `regthrash`, `machinecp`, `copysink`,
 //! `postrasink`, `storecombine`, `sharedstores`,
-//! `exactaddress`, `machinecse`, `machinedce` and `upperzero`, and the rule
+//! `exactaddress`, `machinedce` and `upperzero`, and the rule
 //! groups of `peep`.
 //!
 //! The analyses the phases share: `liveness` and `lanes` (register and flag
@@ -191,6 +191,7 @@ pub mod selectors {
 pub mod booleans;
 pub mod callframe;
 pub mod cmpsub;
+pub mod earlytaildup;
 pub mod edges;
 pub mod fixupbw;
 pub mod fixupleas;
@@ -215,7 +216,6 @@ pub mod liveunion;
 pub mod loopslots;
 pub mod lower_int64;
 pub mod machinecp;
-pub mod machinecse;
 pub mod machinedce;
 pub mod machinelicm;
 pub mod machinesched;
@@ -241,13 +241,13 @@ pub mod peephole;
 pub mod peepholeopt;
 pub mod phiconst;
 pub mod phielim;
-pub mod pointers;
 pub mod postings;
 pub mod postrasink;
 pub mod precse;
 pub mod pressuresink;
 pub mod prologue;
 pub mod pushfold;
+pub mod regpressure;
 pub mod regthrash;
 pub mod relayout;
 pub mod rmw;
@@ -330,6 +330,7 @@ pub mod select {
 pub mod bodyfacts;
 pub mod regclass;
 pub mod registerinfo;
+pub mod repbsf;
 pub mod rewriter;
 pub mod sharedstores;
 pub mod spillplacement;

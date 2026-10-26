@@ -405,8 +405,18 @@ pub fn distinct_classes(
     registers: &RegisterClasses,
 ) -> LirBody {
     let uses = regclass::confining_uses(body, segments, registers);
+    distinct_classes_given(body, floor, &uses).unwrap_or_else(|| body.clone())
+}
+
+/// `distinct_classes`, given the body's confining reads: None where no value
+/// needs a copy.
+pub fn distinct_classes_given(
+    body: &LirBody,
+    floor: u32,
+    uses: &[regclass::Use],
+) -> Option<LirBody> {
     let mut by_value: IndexMap<u32, Vec<&regclass::Use>> = IndexMap::default();
-    for one in &uses {
+    for one in uses {
         by_value.entry(one.value).or_default().push(one);
     }
     // Which (block, instruction, value, role) reads take a copy.
@@ -441,7 +451,7 @@ pub fn distinct_classes(
         }
     }
     if peeled.is_empty() {
-        return body.clone();
+        return None;
     }
     // The widest any instruction names a value at: a phi's result has no
     // defining operand.
@@ -522,7 +532,12 @@ pub fn distinct_classes(
         }
         blocks.push(block.with_insns(insns));
     }
-    body.with_blocks(blocks)
+    Some(body.with_blocks(blocks))
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static REQUIRED_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Where each value the body's instructions require has to live.
@@ -530,6 +545,8 @@ pub fn required(
     body: &LirBody,
     classes: &RegisterClasses,
 ) -> IndexMap<u32, RegId> {
+    #[cfg(test)]
+    REQUIRED_ASKED.with(|asked| asked.set(asked.get() + 1));
     required_in(body, classes, &(0..body.blocks.len()).collect::<Vec<_>>())
 }
 

@@ -27,11 +27,10 @@
 //! `DoInstructionSelection`
 //! ([L1281](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L1281)).
 
-use std::collections::HashSet;
-
 use llrm_dagisel::interp::{Outcome, Selector};
 use llrm_dagisel::x86_hooks::X86Hooks;
 use llrm_dagisel::x86_select::select_node;
+use llrm_support::hash::HashSet;
 
 use super::actions::TargetLowering;
 use super::dag_combiner::{CombineLevel, DagCombiner};
@@ -76,7 +75,7 @@ pub fn select_block(
         debug_assert_eq!(made, dag.first_temporary + at as i32);
     }
     // `PreprocessISelDAG`: the rewrites that need no matcher.
-    super::x86_preprocess::preprocess(dag, temporaries);
+    super::x86_preprocess::preprocess(dag, temporaries, lowering.sse2);
     do_instruction_selection(dag, selector, hooks)?;
     let root = dag.get_root();
     let units = schedule(dag, root, info);
@@ -98,6 +97,10 @@ pub fn legalized(
     let legal = DagLegalizer::new(dag, tli, lowering).run();
     legal.map_err(|e| refused_legalize(dag, &format!("{e:?}")))?;
     DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeDag).with_tli(tli).run();
+    // `LLRM_DAGDUMP=all` prints every block's DAG as selection will see it.
+    if llrm_support::env_var("LLRM_DAGDUMP").is_some_and(|mode| mode == "all") {
+        eprintln!("legalized:\n{}", dag.dump());
+    }
     Ok(())
 }
 
@@ -107,7 +110,7 @@ fn refused_legalize(
     dag: &SelectionDAG,
     why: &str,
 ) -> Refusal {
-    if std::env::var_os("LLRM_DAGDUMP").is_some() {
+    if llrm_support::env_set("LLRM_DAGDUMP") {
         eprintln!("legalize refused: {why}\n{}", dag.dump());
     }
     Refusal::Legalize(why.to_owned())
@@ -140,6 +143,7 @@ pub(crate) fn do_instruction_selection(
             continue;
         }
         let before = adapter.dag.nodes().len();
+        adapter.dag.cur_order = adapter.dag.nodes()[node as usize].order;
         if select_node(selector, &mut adapter, hooks, node) == Outcome::CannotSelect {
             return Err(Refusal::CannotSelect(format!("{:?}", adapter.dag.nodes()[node as usize].opcode)));
         }
@@ -152,7 +156,7 @@ pub(crate) fn do_instruction_selection(
 /// everything it reads.
 pub(crate) fn users_first(dag: &SelectionDAG) -> Vec<u32> {
     let mut order = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut stack = vec![(dag.get_root().node, false)];
     while let Some((n, expanded)) = stack.pop() {
         if expanded {

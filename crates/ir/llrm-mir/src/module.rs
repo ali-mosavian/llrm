@@ -703,6 +703,16 @@ impl Function {
         Some((block, numbers.at[inst.0 as usize]))
     }
 
+    /// `inst`'s index in its block, a block's numbers made once and kept until
+    /// an edit of it: with the block's place in the layout, `inst`'s place in
+    /// program order, without walking the function (`positions`).
+    pub fn number_in_block(
+        &self,
+        inst: InstId,
+    ) -> Option<u32> {
+        self.number_of(inst).map(|(_, number)| number)
+    }
+
     /// `Instruction::getNextNode`: what follows `inst` in its block.
     pub fn next_in_block(
         &self,
@@ -795,6 +805,8 @@ impl Function {
         &self,
         block: BlockId,
     ) -> Option<InstId> {
+        #[cfg(test)]
+        TERMINATOR_LOOKUPS.with(|count| count.set(count.get() + 1));
         self.blocks[block.0 as usize].last().filter(|&last| self.instruction(last).opcode.is_terminator())
     }
 
@@ -967,7 +979,7 @@ impl Function {
     pub fn attributes_stamp(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         STAMPS.with(|count| count.set(count.get() + 1));
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = crate::hash::Fx::default();
         self.ty.hash(&mut hasher);
         self.parameter_attrs.hash(&mut hasher);
         self.return_attrs.hash(&mut hasher);
@@ -1290,3 +1302,9 @@ impl Module {
 
 /// Operands scanned for a repeat before a set is used.
 const SCAN: usize = 16;
+
+#[cfg(test)]
+thread_local! {
+    /// `Function::terminator` calls, for the tests that count them.
+    pub(crate) static TERMINATOR_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}

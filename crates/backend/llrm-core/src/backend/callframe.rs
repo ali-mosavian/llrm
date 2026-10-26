@@ -73,7 +73,7 @@ use llrm_lir::registers::RegId;
 
 use crate::backend::liveness;
 use crate::backend::storedhomes::may_write;
-use crate::model::ir::{Loc, Operation, Semantics};
+use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 
@@ -104,6 +104,144 @@ impl LIRTransform for CallFrameOpt {
         body: LirBody,
     ) -> Result<LirBody, String> {
         Ok(self.run(&body))
+    }
+}
+
+/// Where the frame pseudos go, after allocation and before the prologue is
+/// made (the pin's `eliminateCallFramePseudoInstr`, from PEI). A function with
+/// no variable-sized object and no pushed call reserves its largest call area
+/// in the prologue (`hasReservedCallFrame`): the pseudos go, and what a callee
+/// popped is reserved again with `sub sp, M`. Any other function adjusts for
+/// every call (`LowerCallFrame`). Runs at every level.
+pub struct ReserveCallFrame {
+    /// `RegInfo.getStackRegister()`.
+    pub stack: RegId,
+    /// The width of the stack pointer.
+    pub width: u32,
+    /// The frame the prologue reserves; a function with none lowers every call.
+    pub frame: Option<std::rc::Rc<std::cell::RefCell<crate::backend::frame::Frame>>>,
+}
+
+impl LIRTransform for ReserveCallFrame {
+    fn class_name(&self) -> &'static str {
+        "ReserveCallFrame"
+    }
+
+    fn name(&self) -> &str {
+        "reservecallframe"
+    }
+
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
+        let pseudos = |one: &Arc<Insn>| matches!(name_of(one), Some("call_frame_setup" | "call_frame_destroy"));
+        if !body.blocks.iter().flat_map(|block| block.insns.iter()).any(pseudos) {
+            return Ok(body);
+        }
+        let pushed = body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Push));
+        let probe =
+            CallFrameOpt { slot: 0, align: 0, stack: self.stack, has_var_sized: false, slow_two_mem_ops: false };
+        let mut lowering = LowerCallFrame { stack: self.stack, width: self.width };
+        let Some(frame) = self.frame.as_ref().filter(|_| !pushed && !probe.allocates_dynamically(&body)) else {
+            return lowering.transform(body);
+        };
+        let area = body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter(|one| name_of(one) == Some("call_frame_setup"))
+            .filter_map(|one| imm_of(one, 0))
+            .max()
+            .unwrap_or(0);
+        // The destroys that re-reserve what a callee popped become `sub`.
+        let mut out = body.clone();
+        for block in &mut out.blocks {
+            let insns: Vec<Arc<Insn>> = block
+                .insns
+                .iter()
+                .filter_map(|one| match name_of(one) {
+                    Some("call_frame_setup") => None,
+                    Some("call_frame_destroy") => {
+                        let popped = imm_of(one, 1).filter(|&popped| popped != 0)?;
+                        let sp = Loc::Reg(Reg { register: self.stack, width: self.width });
+                        let what = Semantics {
+                            name: Some("sub".into()),
+                            dests: vec![sp.clone()],
+                            sources: vec![sp, Loc::Imm(Imm { value: popped, width: self.width, address: None })],
+                            ..Semantics::new(Operation::Binary)
+                        };
+                        Some(Arc::new(Insn::new(one.at, one.covers, Some(what), vec![], vec![])))
+                    }
+                    _ => Some(Arc::clone(one)),
+                })
+                .collect();
+            *block = block.with_insns(insns);
+        }
+        frame.borrow_mut().call_area = area;
+        Ok(out)
+    }
+}
+
+/// What the pin's `eliminateCallFramePseudoInstr` makes of the frame pseudos
+/// where no call frame is reserved: `call_frame_setup N, 0, A` is `sub sp, N -
+/// A` (the pushes made A of it) and `call_frame_destroy N, M` is `add sp, N -
+/// M` (the callee popped M). [`ReserveCallFrame`] runs it for the functions
+/// that cannot reserve one.
+struct LowerCallFrame {
+    /// `RegInfo.getStackRegister()`.
+    pub stack: RegId,
+    /// The width of the stack pointer.
+    pub width: u32,
+}
+
+impl LIRTransform for LowerCallFrame {
+    fn class_name(&self) -> &'static str {
+        "LowerCallFrame"
+    }
+
+    fn name(&self) -> &str {
+        "lowercallframe"
+    }
+
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
+        let mut out = body.clone();
+        for (at, block) in body.blocks.iter().enumerate() {
+            if !block.insns.iter().any(|one| matches!(name_of(one), Some("call_frame_setup" | "call_frame_destroy"))) {
+                continue;
+            }
+            let mut insns: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len());
+            for one in block.insns.iter() {
+                let (verb, count) = match name_of(one) {
+                    Some("call_frame_setup") => ("sub", imm_of(one, 0).unwrap_or(0) - imm_of(one, 2).unwrap_or(0)),
+                    Some("call_frame_destroy") => ("add", imm_of(one, 0).unwrap_or(0) - imm_of(one, 1).unwrap_or(0)),
+                    _ => {
+                        insns.push(Arc::clone(one));
+                        continue;
+                    }
+                };
+                if count != 0 {
+                    let sp = Loc::Reg(Reg { register: self.stack, width: self.width });
+                    let amount = Loc::Imm(Imm { value: count, width: self.width, address: None });
+                    let what = Semantics {
+                        name: Some(verb.into()),
+                        dests: vec![sp.clone()],
+                        sources: vec![sp, amount],
+                        ..Semantics::new(Operation::Binary)
+                    };
+                    insns.push(Arc::new(Insn::new(one.at, one.covers, Some(what), vec![], vec![])));
+                }
+            }
+            out.blocks[at] = block.with_insns(insns);
+        }
+        Ok(out)
     }
 }
 
@@ -158,7 +296,7 @@ impl CallFrameOpt {
                 }
             }
         }
-        if !self.is_profitable(&contexts) {
+        if !self.is_profitable(&contexts, self.has_var_sized || self.allocates_dynamically(body)) {
             return body.clone();
         }
         let mut out = body.clone();
@@ -202,15 +340,35 @@ impl CallFrameOpt {
         true
     }
 
+    /// `MFI.hasVarSizedObjects()`: a `sub sp, reg`, as `framefree` reads it.
+    fn allocates_dynamically(
+        &self,
+        body: &LirBody,
+    ) -> bool {
+        body.blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter_map(|one| one.what.as_ref())
+            .any(
+                |what| matches!(what.name.as_deref(), Some("add" | "sub"))
+                    && matches!(
+                        (&what.dests[..], &what.sources[..]),
+                        ([Loc::Reg(dest)], [Loc::Reg(source), Loc::Reg(_)])
+                            if dest.register == self.stack && source.register == self.stack
+                    ),
+            )
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86CallFrameOptimization.cpp#L205
     /// `isProfitable`: the bytes saved against those of the adjustments the
     /// pushes need, over every call site.
     fn is_profitable(
         &self,
         contexts: &[CallContext],
+        has_var_sized: bool,
     ) -> bool {
         // Always a win when no call frame can be reserved.
-        if self.has_var_sized {
+        if has_var_sized {
             return true;
         }
         let mut advantage: i64 = 0;
@@ -641,5 +799,81 @@ mod tests {
         assert_eq!(names(&pass().run(&one)), ["call_frame_setup", "mov", "call", "call_frame_destroy"]);
         let var_sized = CallFrameOpt { has_var_sized: true, ..pass() };
         assert_eq!(names(&var_sized.run(&one)), ["call_frame_setup", "push", "call", "call_frame_destroy"]);
+    }
+
+    /// A function that allocates dynamically reserves no frame, so the pin
+    /// pushes its area whatever the heuristic says: one push stays a store in
+    /// a function without
+    /// (`one_push_is_not_worth_the_adjustments_but_two_are`).
+    #[test]
+    fn a_function_with_a_dynamic_allocation_pushes_every_area() {
+        let sp = || Loc::Reg(Reg { register: RegId::SP, width: 4 });
+        let alloca = insn(
+            0,
+            Operation::Binary,
+            "sub",
+            vec![sp()],
+            vec![sp(), Loc::Reg(Reg { register: RegId::AX, width: 4 })],
+            vec![],
+            vec![],
+        );
+        let one = body(vec![alloca, setup(4), store(0, imm(1), vec![]), call(), destroy(4)]);
+        assert_eq!(names(&pass().run(&one)), ["sub", "call_frame_setup", "push", "call", "call_frame_destroy"]);
+    }
+
+    fn reserve(insns: Vec<Arc<Insn>>) -> (Vec<String>, i64) {
+        let frame = std::rc::Rc::new(std::cell::RefCell::new(crate::backend::frame::Frame::new(0)));
+        let mut pass = ReserveCallFrame { stack: RegId::SP, width: 4, frame: Some(frame.clone()) };
+        let after = pass.transform(body(insns)).expect("reserves");
+        let area = frame.borrow().call_area;
+        (names(&after), area)
+    }
+
+    /// Calls that push nothing left a `sub`/`add` pair each; a function with
+    /// none pushed reserves the largest area once, in the prologue.
+    #[test]
+    fn a_function_with_no_pushed_call_reserves_its_largest_area() {
+        let first = vec![setup(8), store(0, held(1), vec![1]), store(4, held(2), vec![2]), call(), destroy(8)];
+        let second = vec![setup(16), store(0, held(1), vec![1]), call(), destroy(16)];
+        let (after, area) = reserve([first, second].concat());
+        assert_eq!(after, ["mov", "mov", "call", "mov", "call"]);
+        assert_eq!(area, 16);
+    }
+
+    /// One pushed call un-reserves the function (`hasPushSequences`): every
+    /// call adjusts for itself and the frame grows by nothing.
+    #[test]
+    fn a_pushed_call_keeps_the_per_call_adjustments() {
+        let pushed = insn(0, Operation::Push, "push", vec![], vec![imm(1)], vec![], vec![]);
+        let plain = vec![setup(8), store(0, held(1), vec![1]), call(), destroy(8)];
+        let made =
+            insn(0, Operation::Barrier, "call_frame_setup", vec![], vec![imm(4), imm(0), imm(4)], vec![], vec![]);
+        let (after, area) = reserve([vec![made, pushed, call(), destroy(4)], plain].concat());
+        assert_eq!(after, ["push", "call", "add", "sub", "mov", "call", "add"]);
+        assert_eq!(area, 0);
+    }
+
+    fn lower(insns: Vec<Arc<Insn>>) -> Vec<String> {
+        let mut lowering = LowerCallFrame { stack: RegId::SP, width: 4 };
+        let after = lowering.transform(body(insns)).expect("lowers");
+        names(&after)
+    }
+
+    /// The frame pseudos that no push replaced were `sub`/`add` in the DAG
+    /// emitter; at -O0 nothing converts them, and every level lowers them.
+    #[test]
+    fn a_frame_nothing_pushed_is_a_sub_and_an_add() {
+        let before = vec![setup(8), store(0, held(1), vec![1]), store(4, held(2), vec![2]), call(), destroy(8)];
+        assert_eq!(lower(before), ["sub", "mov", "mov", "call", "add"]);
+    }
+
+    /// Pushed bytes are not subtracted again, and what the callee pops is not
+    /// added back.
+    #[test]
+    fn what_the_pushes_made_and_the_callee_pops_is_not_adjusted_again() {
+        let pushed =
+            insn(0, Operation::Barrier, "call_frame_setup", vec![], vec![imm(8), imm(0), imm(8)], vec![], vec![]);
+        let popped = insn(9, Operation::Barrier, "call_frame_destroy", vec![], vec![imm(8), imm(8)], vec![], vec![]);
+        assert_eq!(lower(vec![pushed, call(), popped]), ["call"]);
     }
 }

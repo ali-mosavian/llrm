@@ -2,15 +2,15 @@
 //! subset (arithmetic, casts, `icmp`, `select`, `br`, `load`, `store`,
 //! `getelementptr`, and the register copies a `phi` needs).
 
-use std::collections::HashMap;
-
 use llrm_mir::context::{ConstantId, ConstantKind};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::types::{Type, TypeId};
+use llrm_support::hash::HashMap;
 
+mod aggregates;
 mod asmcall;
 mod codecall;
 mod mathops;
@@ -81,6 +81,9 @@ pub struct BuilderTarget {
     /// `-fexcess-precision=standard`: an integer too wide for its float type's
     /// mantissa is rounded to that type (x87 would keep it exact).
     pub float_store: bool,
+    /// A dense switch may be a jump table: the target prices one (the MIR pass
+    /// reads the same cost).
+    pub jump_tables: bool,
     /// For a program whose ABI gives its runtime routines contracts: whether
     /// the convention models each call of a `llrm.qb.` routine, by call. A call
     /// not listed, or listed with a reason, is refused.
@@ -112,6 +115,15 @@ impl BuilderTarget {
         on: bool,
     ) -> BuilderTarget {
         self.float_store = on;
+        self
+    }
+
+    /// This target with jump tables on or off.
+    pub fn with_jump_tables(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.jump_tables = on;
         self
     }
 
@@ -161,9 +173,19 @@ impl BuilderTarget {
             libcalls: None,
             stack_align: None,
             float_store: false,
+            jump_tables: true,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
+        }
+    }
+
+    /// x86-64: 64-bit pointers, `i8`..`i64` in registers.
+    pub fn m64() -> BuilderTarget {
+        BuilderTarget {
+            dag: DagConfig { pointer: EVT::I64, offset_folding: true, ..DagConfig::default() },
+            legal_ints: vec![8, 16, 32, 64],
+            ..BuilderTarget::m32()
         }
     }
 
@@ -177,10 +199,22 @@ impl BuilderTarget {
             libcalls: None,
             stack_align: None,
             float_store: false,
+            jump_tables: true,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
         }
+    }
+}
+
+/// The stack pointer the pointer type names: `sp`, `esp` or `rsp`.
+pub(super) fn stack_pointer_name(pointer: EVT) -> &'static str {
+    if pointer == EVT::I16 {
+        "sp"
+    } else if pointer == EVT::I64 {
+        "rsp"
+    } else {
+        "esp"
     }
 }
 
@@ -290,7 +324,7 @@ fn dag_name(
     dag: &SelectionDAG,
     block: BlockId,
 ) -> String {
-    dag.block_names.get(block.0 as usize).cloned().unwrap_or_default()
+    dag.block_name(block.0).to_owned()
 }
 
 impl<'a> Builder<'a> {
@@ -309,25 +343,41 @@ impl<'a> Builder<'a> {
         synthetic_name: Option<String>,
     ) -> Builder<'a> {
         let mut dag = SelectionDAG::new(target.dag);
-        dag.global_names =
-            module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect();
-        // `isOffsetFoldingLegal`: `shouldAssumeDSOLocal` holds for the globals
-        // the IR marks local, an ELF target's only ones
-        dag.local_symbols = module
-            .globals
-            .iter()
-            .map(|global| {
-                matches!(
-                    global.linkage,
-                    llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
-                )
+        let tables = info
+            .tables
+            .get_or_insert_with(|| {
+                // `isOffsetFoldingLegal`: `shouldAssumeDSOLocal` holds for the
+                // globals the IR marks local, an ELF target's only ones
+                super::function_lowering::Tables {
+                    global_names: std::rc::Rc::new(
+                        module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect(),
+                    ),
+                    local_symbols: std::rc::Rc::new(
+                        module
+                            .globals
+                            .iter()
+                            .map(|global| {
+                                matches!(
+                                    global.linkage,
+                                    llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
+                                )
+                            })
+                            .collect(),
+                    ),
+                    block_names: std::rc::Rc::new(
+                        (0..function.block_capacity())
+                            .map(|at| {
+                                function.block(BlockId(at as u32)).name.clone().unwrap_or_else(|| format!("bb{at}"))
+                            })
+                            .collect(),
+                    ),
+                }
             })
-            .collect();
-        dag.block_names = (0..function.block_capacity())
-            .map(|at| function.block(BlockId(at as u32)).name.clone().unwrap_or_else(|| format!("bb{at}")))
-            .collect();
-        let name = synthetic_name.unwrap_or_else(|| dag_name(&dag, block));
-        dag.block_names.resize(next_synthetic as usize, name);
+            .clone();
+        dag.global_names = tables.global_names;
+        dag.local_symbols = tables.local_symbols;
+        dag.block_names = tables.block_names;
+        dag.synthetic_fill = synthetic_name.unwrap_or_else(|| dag_name(&dag, block));
         Builder {
             current: None,
             prelowered: Default::default(),
@@ -343,12 +393,14 @@ impl<'a> Builder<'a> {
             node_map: IdMap::new(),
             pending_loads: Vec::new(),
             pending_exports: Vec::new(),
-            constants_out: HashMap::new(),
+            constants_out: HashMap::default(),
             phi_updates: Vec::new(),
             tail_calls: Vec::new(),
             tail_candidate: None,
             sibcall: false,
+            variadic_call: false,
             had_tail_call: false,
+            volatile_memory: false,
             block,
             order,
             deferred: Vec::new(),
@@ -384,8 +436,13 @@ struct Builder<'a> {
     /// The call `visit_call` is lowering is a sibling call: `lower_call` makes
     /// a `TC_RETURN`.
     sibcall: bool,
+    /// The call `visit_call` is lowering is to a variadic function: at m64
+    /// `lower_call` sets `al` to the vector registers it uses.
+    variadic_call: bool,
     /// A `TC_RETURN` ended the block: nothing after the call is built.
     had_tail_call: bool,
+    /// The memory intrinsic being lowered is volatile.
+    volatile_memory: bool,
     block: BlockId,
     /// The blocks in layout order, with the ones a switch lowering adds.
     order: Vec<BlockId>,
@@ -620,6 +677,20 @@ impl Builder<'_> {
         }
     }
 
+    /// The word register of a dword one: `EAX` -> `AX`.
+    fn word_register(reg: llrm_lir::registers::RegId) -> Option<llrm_lir::registers::RegId> {
+        use llrm_lir::registers::RegId;
+        Some(match reg {
+            RegId::EAX => RegId::AX,
+            RegId::EBX => RegId::BX,
+            RegId::ECX => RegId::CX,
+            RegId::EDX => RegId::DX,
+            RegId::ESI => RegId::SI,
+            RegId::EDI => RegId::DI,
+            _ => return None,
+        })
+    }
+
     /// `LowerArguments` with X86's `LowerFormalArguments` over the target's
     /// `Convention`: a stack parameter is a load from a fixed object (indices
     /// -1, -2, ... in parameter order), a register parameter the copy of a
@@ -627,7 +698,7 @@ impl Builder<'_> {
     /// also copied to a register of its own.
     fn lower_arguments(&mut self) -> Result<(), Refused> {
         let entry = self.function.entry();
-        let mut outside = std::collections::HashSet::new();
+        let mut outside = llrm_support::hash::HashSet::default();
         for &block in self.function.layout() {
             for inst in self.function.iter_block(block) {
                 let instruction = self.function.instruction(inst);
@@ -662,7 +733,13 @@ impl Builder<'_> {
                     for _ in 0..parts {
                         fixed += 1;
                         let ptr = self.dag.get_frame_index(self.target.dag.pointer, -fixed);
-                        let align = self.layout.align(&self.module.context.types, self.function.value(arg).ty) as u32;
+                        // The fixed object is a whole stack slot
+                        // (`CreateFixedObject`),
+                        // aligned as one: a narrow argument's load is as
+                        // aligned as the slot, which
+                        // lets it widen (`loadi32` of an any-extend).
+                        let align = (self.layout.align(&self.module.context.types, self.function.value(arg).ty) as u32)
+                            .max(self.target.dag.pointer.size_in_bits() / 8);
                         let info = MemInfo {
                             mem_vt: part_vt,
                             align,
@@ -723,7 +800,85 @@ impl Builder<'_> {
         // fixed object, which `va_start` stores the address of
         if self.module.signature(self.function.ty).2 {
             self.dag.var_args_frame_index = Some(-(fixed + 1));
+            if self.target.dag.pointer == EVT::I64 {
+                self.save_variadic_registers()?;
+            }
         }
+        Ok(())
+    }
+
+    /// X86's `LowerFormalArguments` for a SysV x86-64 variadic function: the
+    /// argument registers the named parameters did not take are stored in the
+    /// register save area (one 8-byte slot each, in order) that `va_start`
+    /// names. The vector registers' half of the area (48..176) is left
+    /// unwritten until floating point is selected at m64 (DEVIATE SD313: a
+    /// `double` passed to such a function is not read back).
+    fn save_variadic_registers(&mut self) -> Result<(), Refused> {
+        let calling = self.arch.calling();
+        let Some(found) = calling.by_number(self.function.calling_convention) else {
+            return Err(Refused("va_start at m64 in a function with no convention"));
+        };
+        let named: usize = self
+            .convention
+            .parameters
+            .iter()
+            .map(|parameter| match parameter {
+                Parameter::Registers(regs) => regs.len(),
+                _ => 0,
+            })
+            .sum();
+        let registers: Vec<RegId> =
+            found.argument_registers.iter().map(|name| self.arch.register_named(name)).collect();
+        let Some(save) = self.info.variadic_save else {
+            return Err(Refused("va_start at m64 with no register save area"));
+        };
+        let pointer = self.target.dag.pointer;
+        for (at, &register) in registers.iter().enumerate().skip(named) {
+            let vreg = self.info.new_reg();
+            self.live_ins.push((register, vreg));
+            let entry = self.dag.entry_node();
+            let value = self.dag.get_copy_from_reg(entry, vreg, pointer);
+            let base = self.dag.get_frame_index(pointer, save);
+            let slot = self.dag.get_constant(at as u128 * 8, pointer);
+            let address = self.dag.get_node(ISD::Add, pointer, &[base, slot]);
+            let info =
+                MemInfo { mem_vt: pointer, align: 8, volatile: false, base: MemBase::Stack(save), ext: None, space: 0 };
+            let root = self.control_root();
+            let store = self.dag.get_store(root, value, address, info);
+            self.dag.set_root(store);
+        }
+        // The vector argument registers named parameters did not take go to
+        // the other half of the area, if `al` says any were used
+        // (`VASTART_SAVE_XMM_REGS`).
+        let vector_registers = found.float_argument_registers.len();
+        let named_vectors = self
+            .convention
+            .parameters
+            .iter()
+            .map(|parameter| match parameter {
+                Parameter::Registers(regs) => regs.iter().filter(|reg| reg.is_xmm()).count(),
+                _ => 0,
+            })
+            .sum::<usize>();
+        if vector_registers > named_vectors {
+            let vreg = self.info.new_reg();
+            self.live_ins.push((RegId::AL, vreg));
+            let entry = self.dag.entry_node();
+            let al = self.dag.get_copy_from_reg(entry, vreg, EVT::I8);
+            let frame = self.dag.get_constant_with(save as u128, EVT::I32, true, false);
+            let first = self
+                .dag
+                .get_constant_with(
+                    (found.argument_registers.len() * 8 + named_vectors * 16) as u128,
+                    EVT::I32,
+                    true,
+                    false,
+                );
+            let root = self.control_root();
+            let saved = self.dag.get_node(super::x86isd::VASTART_SAVE_XMM_REGS, EVT::OTHER, &[root, al, frame, first]);
+            self.dag.set_root(saved);
+        }
+        self.dag.var_args_save = Some((save, named as u32 * 8));
         Ok(())
     }
 
@@ -743,6 +898,14 @@ impl Builder<'_> {
         call.operands.truncate(instruction.operands.len() - 3);
         call.operands.push(callee);
         self.visit_call(&call, info)?;
+        // `visitInvoke`: the result, if read outside this block, is made a
+        // virtual register here (a terminator is skipped by the export in
+        // `visit`).
+        if let Some(result) = instruction.result {
+            if let Some(reg) = self.info.value_regs.get(&result).copied() {
+                self.copy_value_to_register(Operand::Value(result), reg, ISD::AnyExtend)?;
+            }
+        }
         let root = self.control_root();
         let dest = self.dag.get_basic_block(normal.0);
         let node = self.dag.get_node(ISD::Br, EVT::OTHER, &[root, dest]);
@@ -764,7 +927,9 @@ impl Builder<'_> {
         let direct = match *callee {
             Operand::Constant(id) => match self.module.context.get(id).kind {
                 ConstantKind::Global(global) => Some(global),
-                _ => return Err(Refused("call of a constant expression")),
+                // a constant expression (`inttoptr`, a cast of a global): the
+                // value is the callee, as for a pointer in a register
+                _ => None,
             },
             _ => None,
         };
@@ -820,7 +985,7 @@ impl Builder<'_> {
         )
         .map_err(|_| Refused("call the convention does not describe"))?;
         if let Some(tail) = self.tail_candidate.take()
-            && self.eligible_for_sibling_call(info, &plan, variadic, direct.is_some(), arguments)
+            && self.eligible_for_sibling_call(info, &plan, variadic, direct, first, arguments)
         {
             self.tail_calls.push(tail);
             self.sibcall = self.target.tail_calls;
@@ -920,6 +1085,7 @@ impl Builder<'_> {
                 return Err(Refused("a runtime routine's flags read other than by a compare with zero"));
             }
         }
+        self.variadic_call = variadic;
         let result =
             self.lower_call(callee_node, values, &extends, &byvals, &plan, first, result_type, flags_answer)?;
         if let (true, Some(answer)) = (flags_answer, result) {
@@ -1018,15 +1184,7 @@ impl Builder<'_> {
                             *piece
                         };
                         let sp = *stack_pointer.get_or_insert_with(|| {
-                            let sp = self
-                                .arch
-                                .register_named(
-                                    if self.target.dag.pointer == EVT::I16 {
-                                        "sp"
-                                    } else {
-                                        "esp"
-                                    },
-                                );
+                            let sp = self.arch.register_named(stack_pointer_name(self.target.dag.pointer));
                             self.dag.get_copy_from_phys_reg_plain(chain, sp, self.target.dag.pointer)
                         });
                         let part_bytes = i64::from(part_vt.size_in_bits() / 8);
@@ -1055,8 +1213,7 @@ impl Builder<'_> {
                     let (size, align) =
                         byvals.get(at).copied().flatten().ok_or(Refused("byval argument of an unknown size"))?;
                     let sp = *stack_pointer.get_or_insert_with(|| {
-                        let sp =
-                            self.arch.register_named(if self.target.dag.pointer == EVT::I16 { "sp" } else { "esp" });
+                        let sp = self.arch.register_named(stack_pointer_name(self.target.dag.pointer));
                         self.dag.get_copy_from_phys_reg_plain(chain, sp, self.target.dag.pointer)
                     });
                     let offset = self.dag.get_constant((displacement - first) as u128, self.target.dag.pointer);
@@ -1073,6 +1230,17 @@ impl Builder<'_> {
                         // (`CCPromoteToType`)
                         let width = self.arch.registers().bytes(reg).map_or(0, |bytes| bytes as u32 * 8);
                         let vt = self.dag.value_type(piece);
+                        // At -m16 a word argument goes in the word register
+                        // (`AX`, not `EAX`): the callee reads AX, and a word
+                        // required in a dword register is a dword to the
+                        // allocator.
+                        let word = (vt == EVT::I16 && self.target.dag.pointer == EVT::I16)
+                            .then(|| Self::word_register(reg))
+                            .flatten();
+                        if let Some(word) = word {
+                            copies.push((word, piece));
+                            continue;
+                        }
                         let piece = if vt.is_integer() && vt.size_in_bits() < width {
                             let code = extends.get(at).copied().unwrap_or(ISD::AnyExtend);
                             self.dag.get_node(code, EVT::integer(width), &[piece])
@@ -1084,6 +1252,20 @@ impl Builder<'_> {
                 }
                 _ => return Err(Refused("argument passed in several places or by value")),
             }
+        }
+        // X86's `LowerCall`: a variadic call under SysV x86-64 passes the
+        // number of vector registers it uses in `al`
+        if std::mem::take(&mut self.variadic_call) && self.target.dag.pointer == EVT::I64 {
+            let vectors = plan
+                .parameters
+                .iter()
+                .map(|parameter| match parameter {
+                    Parameter::Registers(regs) => regs.iter().filter(|reg| reg.is_xmm()).count(),
+                    _ => 0,
+                })
+                .sum::<usize>();
+            let count = self.dag.get_constant(vectors as u128, EVT::I8);
+            copies.push((RegId::AL, count));
         }
         if !stores.is_empty() {
             chain = self.dag.get_token_factor(&stores);
@@ -1105,7 +1287,13 @@ impl Builder<'_> {
             // arguments are in place), the registers
             let fpdiff = self.dag.get_constant_with(0, EVT::I32, true, false);
             ops.insert(2, fpdiff);
-            let tc = self.dag.get_node_multi(super::x86isd::TC_RETURN, &[EVT::OTHER], &ops);
+            // the pin has no 16-bit pattern: m16 has a node of its own
+            let node = if self.target.dag.pointer == EVT::I16 {
+                super::x86isd::LLRM_TC_RETURN
+            } else {
+                super::x86isd::TC_RETURN
+            };
+            let tc = self.dag.get_node_multi(node, &[EVT::OTHER], &ops);
             self.dag.set_root(tc);
             self.had_tail_call = true;
             return Ok(None);
@@ -1124,6 +1312,26 @@ impl Builder<'_> {
         if types.is_void(result_type) {
             self.dag.set_root(chain);
             return Ok(None);
+        }
+        if self.is_aggregate(result_type) {
+            // `LowerCallResult` over the leaves `ComputeValueVTs` gives: one
+            // return register each
+            let leaves = self.leaves(result_type)?;
+            if plan.returns.len() != leaves.len() {
+                return Err(Refused("an aggregate result that is not one register a member"));
+            }
+            let mut glue = glue;
+            let mut pieces = Vec::new();
+            for ((leaf, _), reg) in leaves.into_iter().zip(plan.returns.clone()) {
+                let leaf_vt = self.type_of(leaf)?;
+                let reg = self.sized_register(reg, leaf_vt);
+                let copy = self.dag.get_copy_from_phys_reg(chain, reg, leaf_vt, glue);
+                chain = SDValue { node: copy.node, res: 1 };
+                glue = SDValue { node: copy.node, res: 2 };
+                pieces.push(copy);
+            }
+            self.dag.set_root(chain);
+            return Ok(Some(self.merge(&pieces)));
         }
         let vt = self.type_of(result_type)?;
         if flags_answer {
@@ -1180,7 +1388,26 @@ impl Builder<'_> {
         let mut chain = self.control_root();
         let mut ops = Vec::new();
         let mut glue = None;
-        if let Some(&operand) = instruction.operands.first() {
+        let aggregate = instruction
+            .operands
+            .first()
+            .and_then(|&operand| self.function.operand_type(&self.module.context, operand))
+            .is_some_and(|ty| self.is_aggregate(ty));
+        if let (true, Some(&operand)) = (aggregate, instruction.operands.first()) {
+            // `LowerReturn` over the leaves: one return register each
+            let parts = self.value_parts(operand)?;
+            if parts.len() != self.convention.returns.len() {
+                return Err(Refused("an aggregate result that is not one register a member"));
+            }
+            for (piece, reg) in parts.into_iter().zip(self.convention.returns.clone()) {
+                let piece_vt = self.dag.value_type(piece);
+                let reg = self.sized_register(reg, piece_vt);
+                let copy = self.dag.get_copy_to_phys_reg(chain, reg, piece, glue);
+                chain = SDValue { node: copy.node, res: 0 };
+                glue = Some(SDValue { node: copy.node, res: 1 });
+                ops.push(self.dag.get_phys_register(piece_vt, reg));
+            }
+        } else if let Some(&operand) = instruction.operands.first() {
             let value = self.get_value(operand)?;
             let vt = self.dag.value_type(value);
             if vt.is_floating_point() {
@@ -1260,6 +1487,9 @@ impl Builder<'_> {
         id: ConstantId,
     ) -> Result<SDValue, Refused> {
         let constant = self.module.context.get(id);
+        if self.is_aggregate(constant.ty) {
+            return self.aggregate_constant(constant.ty, id);
+        }
         let vt = self.type_of(constant.ty)?;
         match &constant.kind {
             // A far constant is its offset and its selector (a null pointer is
@@ -1336,7 +1566,11 @@ impl Builder<'_> {
             // register
             ValueDef::Instruction(_) => {
                 let reg = *self.info.value_regs.get(&value).ok_or(Refused("value with no register"))?;
-                let vt = self.type_of(self.function.value(value).ty)?;
+                let ty = self.function.value(value).ty;
+                if self.is_aggregate(ty) {
+                    return self.copy_aggregate_from_regs(reg, ty);
+                }
+                let vt = self.type_of(ty)?;
                 Ok(self.copy_from_reg(reg, vt)?)
             }
         }
@@ -1347,7 +1581,11 @@ impl Builder<'_> {
         value: ValueId,
     ) -> Result<Option<SDValue>, Refused> {
         let Some(reg) = self.info.value_regs.get(&value).copied() else { return Ok(None) };
-        let vt = self.type_of(self.function.value(value).ty)?;
+        let ty = self.function.value(value).ty;
+        if self.is_aggregate(ty) {
+            return Ok(Some(self.copy_aggregate_from_regs(reg, ty)?));
+        }
+        let vt = self.type_of(ty)?;
         Ok(Some(self.copy_from_reg(reg, vt)?))
     }
 
@@ -1378,7 +1616,20 @@ impl Builder<'_> {
         reg: u32,
         extend: ISD,
     ) -> Result<(), Refused> {
+        if self.function.operand_type(&self.module.context, operand).is_some_and(|ty| self.is_aggregate(ty)) {
+            return self.copy_aggregate_to_registers(operand, reg);
+        }
         let value = self.non_register_value(operand)?;
+        self.copy_leaf_to_register(value, reg, extend)
+    }
+
+    /// `copy_value_to_register` of one scalar value.
+    fn copy_leaf_to_register(
+        &mut self,
+        value: SDValue,
+        reg: u32,
+        extend: ISD,
+    ) -> Result<(), Refused> {
         let vt = self.dag.value_type(value);
         let (reg_vt, parts) = self.register_parts(vt)?;
         let entry = self.dag.entry_node();
@@ -1412,6 +1663,8 @@ impl Builder<'_> {
         inst: InstId,
     ) -> Result<(), Refused> {
         self.current = Some(inst);
+        // `++SDNodeOrder`: what the nodes built for this instruction carry.
+        self.dag.cur_order += 1;
         if self.prelowered.contains(&inst) {
             return Ok(());
         }
@@ -1428,6 +1681,7 @@ impl Builder<'_> {
             Opcode::Select => self.visit_select(&instruction)?,
             Opcode::Freeze => self.visit_freeze(&instruction)?,
             Opcode::ExtractValue(indices) => self.visit_extract_value(&instruction, indices)?,
+            Opcode::InsertValue(indices) => self.visit_insert_value(&instruction, indices)?,
             Opcode::Load { align, volatile } => self.visit_load(inst, &instruction, *align, *volatile)?,
             Opcode::Store { align, volatile } => self.visit_store(&instruction, *align, *volatile)?,
             Opcode::GetElementPtr { source } => self.visit_gep(&instruction, *source)?,
@@ -1816,21 +2070,6 @@ impl Builder<'_> {
         Ok(())
     }
 
-    fn visit_extract_value(
-        &mut self,
-        instruction: &llrm_mir::module::Instruction,
-        indices: &[u32],
-    ) -> Result<(), Refused> {
-        let &[index] = indices else { return Err(Refused("extractvalue of a nested aggregate")) };
-        let aggregate = self.get_value(instruction.operands[0])?;
-        if aggregate.res as usize + index as usize >= self.dag.node(aggregate).values.len() {
-            return Err(Refused("extractvalue of an aggregate that is not a node's results"));
-        }
-        let picked = SDValue { node: aggregate.node, res: aggregate.res + index as u8 };
-        self.set_value(instruction.result.expect("an extractvalue has a result"), picked);
-        Ok(())
-    }
-
     fn visit_freeze(
         &mut self,
         instruction: &llrm_mir::module::Instruction,
@@ -1846,6 +2085,9 @@ impl Builder<'_> {
         &mut self,
         instruction: &llrm_mir::module::Instruction,
     ) -> Result<(), Refused> {
+        if self.is_aggregate(instruction.ty) {
+            return self.visit_aggregate_select(instruction);
+        }
         let cond = self.get_value(instruction.operands[0])?;
         let then = self.get_value(instruction.operands[1])?;
         let other = self.get_value(instruction.operands[2])?;
@@ -1893,6 +2135,9 @@ impl Builder<'_> {
         align: Option<u64>,
         volatile: bool,
     ) -> Result<(), Refused> {
+        if self.is_aggregate(instruction.ty) {
+            return self.visit_aggregate_load(instruction, align, volatile);
+        }
         let ptr = self.get_value(instruction.operands[0])?;
         let info = self.mem_info(instruction.ty, align, volatile, instruction.operands[0])?;
         // `DAG.getRoot()`, not the builder's: a non-volatile load leaves the
@@ -1920,6 +2165,13 @@ impl Builder<'_> {
         align: Option<u64>,
         volatile: bool,
     ) -> Result<(), Refused> {
+        if self
+            .function
+            .operand_type(&self.module.context, instruction.operands[0])
+            .is_some_and(|ty| self.is_aggregate(ty))
+        {
+            return self.visit_aggregate_store(instruction, align, volatile);
+        }
         let value_type = self
             .function
             .operand_type(&self.module.context, instruction.operands[0])
@@ -2094,6 +2346,10 @@ impl Builder<'_> {
             return Ok(());
         }
         let mut cond = self.get_value(instruction.operands[0])?;
+        let (true_prob, false_prob) =
+            (self.edge_probability(self.block, on_true), self.edge_probability(self.block, on_false));
+        self.add_successor_with_prob(self.block, on_true, true_prob);
+        self.add_successor_with_prob(self.block, on_false, false_prob);
         let (mut on_true, mut on_false) = (on_true, on_false);
         if Some(on_true) == next {
             std::mem::swap(&mut on_true, &mut on_false);
@@ -2107,6 +2363,39 @@ impl Builder<'_> {
         let node = self.dag.get_node(ISD::Br, EVT::OTHER, &[brcond, fall]);
         self.dag.set_root(node);
         Ok(())
+    }
+
+    /// `getEdgeProbability(Src, Dst)` of the IR's `BranchProbabilityInfo`.
+    fn edge_probability(
+        &mut self,
+        from: BlockId,
+        to: BlockId,
+    ) -> super::switchcg::BranchProbability {
+        let bpi = self
+            .info
+            .bpi
+            .get_or_insert_with(
+                || llrm_analysis::bpi::BranchProbabilityInfo::of(
+                    llrm_analysis::bpi::Module {
+                        context: &self.module.context,
+                        declarations: &self.module.globals,
+                        metadata: &self.module.metadata,
+                        layout: self.layout,
+                    },
+                    self.function,
+                ),
+            );
+        super::switchcg::BranchProbability(bpi.get_edge_probability_to(self.function, from, to).get_numerator())
+    }
+
+    /// `addSuccessorWithProb`: the edge `from` to `to` of the machine CFG.
+    fn add_successor_with_prob(
+        &mut self,
+        from: BlockId,
+        to: BlockId,
+        probability: super::switchcg::BranchProbability,
+    ) {
+        self.info.edge_probs.push((from, to, probability.0));
     }
 
     fn next_block(&self) -> Option<BlockId> {
@@ -2160,8 +2449,12 @@ impl Builder<'_> {
                     },
                     Operand::Block(_) => return Err(Refused("block as a phi input")),
                 };
-                let phi_type = self.type_of(instruction.ty)?;
-                let (_, parts) = self.register_parts(phi_type)?;
+                let parts = if self.is_aggregate(instruction.ty) {
+                    self.aggregate_registers(instruction.ty)?.iter().map(|(_, parts)| parts).sum()
+                } else {
+                    let phi_type = self.type_of(instruction.ty)?;
+                    self.register_parts(phi_type)?.1
+                };
                 for reg in self.info.part_regs(reg, parts) {
                     self.phi_updates.push((result, reg));
                 }

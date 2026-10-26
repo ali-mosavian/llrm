@@ -36,7 +36,7 @@
 //! and `X86TargetLowering::X86TargetLowering`
 //! ([L131](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L131)).
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use super::isd::{CondCode, ISD};
 use super::lowering::TargetLoweringInfo;
@@ -61,6 +61,8 @@ pub struct Features {
     pub popcnt: bool,
     pub movbe: bool,
     pub shld_slow: bool,
+    /// `hasSSE2()`: f32 and f64 live in xmm registers (m64; D64-4).
+    pub sse2: bool,
 }
 
 /// `ISD::LoadExtType`.
@@ -85,6 +87,9 @@ pub struct TargetLowering {
     cond_code: HashMap<(CondCode, MVT), Action>,
     /// `addLegalFPImmediate`: the float constants an instruction makes.
     legal_fp_immediates: Vec<(MVT, u128)>,
+    /// `ShouldShrinkFPConstant` is false for `f64`: with SSE2 `cvtss2sd` costs
+    /// more than a straight `movsd`.
+    keeps_f64_constants: bool,
 }
 
 impl TargetLowering {
@@ -92,12 +97,13 @@ impl TargetLowering {
     pub fn empty(types: TargetLoweringInfo) -> TargetLowering {
         TargetLowering {
             types,
-            operations: HashMap::new(),
-            promoted_to: HashMap::new(),
-            load_ext: HashMap::new(),
-            trunc_store: HashMap::new(),
-            cond_code: HashMap::new(),
+            operations: HashMap::default(),
+            promoted_to: HashMap::default(),
+            load_ext: HashMap::default(),
+            trunc_store: HashMap::default(),
+            cond_code: HashMap::default(),
             legal_fp_immediates: Vec::new(),
+            keeps_f64_constants: false,
         }
     }
 
@@ -170,6 +176,14 @@ impl TargetLowering {
         self.legal_fp_immediates.push((vt, bits));
     }
 
+    /// `ShouldShrinkFPConstant`.
+    pub fn should_shrink_fp_constant(
+        &self,
+        vt: MVT,
+    ) -> bool {
+        vt == MVT::F80 || !self.keeps_f64_constants
+    }
+
     /// `isFPImmLegal`.
     pub fn is_fp_imm_legal(
         &self,
@@ -177,6 +191,24 @@ impl TargetLowering {
         bits: u128,
     ) -> bool {
         self.legal_fp_immediates.contains(&(vt, bits))
+    }
+
+    /// `isMultiStoresCheaperThanBitsMerge`: the pin says so for a float and
+    /// an integer half only.
+    ///
+    /// DEVIATE SD312: a target with the far pointer (m16) says so for two
+    /// integer halves too. A far pointer or a `long` stored from its two
+    /// words is two word stores, where merging them took `shl; movzx; add`
+    /// (QCport -Os: 131 stack arguments built so). Owner w10. Exit: none
+    /// while the DAG keeps `BUILD_PAIR`. Review 2026-12-10.
+    pub fn is_multi_stores_cheaper_than_bits_merge(
+        &self,
+        lo: EVT,
+        hi: EVT,
+    ) -> bool {
+        (lo.is_floating_point() && hi.is_integer())
+            || (lo.is_integer() && hi.is_floating_point())
+            || (self.types.has_far_pointer() && lo.is_integer() && hi.is_integer())
     }
 
     /// `getOperationAction`: a type with no simple form is expanded.
@@ -279,7 +311,16 @@ impl TargetLowering {
         features: Features,
         ptr: MVT,
     ) -> TargetLowering {
-        Self::x86(TargetLoweringInfo::x86_32(), features, ptr)
+        Self::x86(TargetLoweringInfo::x86_32(), features, ptr, false)
+    }
+
+    /// m64: the constructor's `is64Bit()` arms (L183..L533, the scalar integer
+    /// ones); the x87 and SSE conversions stay as m32 until D64-4.
+    pub fn x86_64(
+        features: Features,
+        ptr: MVT,
+    ) -> TargetLowering {
+        Self::x86(TargetLoweringInfo::x86_64(), features, ptr, true)
     }
 
     /// m16: the same constructor calls over the 386 register file, with `i16`
@@ -296,19 +337,23 @@ impl TargetLowering {
         features: Features,
         ptr: MVT,
     ) -> TargetLowering {
-        Self::x86(TargetLoweringInfo::x86_16(), features, ptr)
+        Self::x86(TargetLoweringInfo::x86_16(), features, ptr, false)
     }
 
     fn x86(
         types: TargetLoweringInfo,
         features: Features,
         ptr: MVT,
+        is64: bool,
     ) -> TargetLowering {
         use Action::*;
         use ISD::*;
         let mut t = TargetLowering::empty(types);
         t.init_actions();
         let ints = [MVT::I8, MVT::I16, MVT::I32];
+        // `if (VT == MVT::i64 && !Subtarget.is64Bit()) continue;`
+        let native: &[MVT] = if is64 { &[MVT::I8, MVT::I16, MVT::I32, MVT::I64] } else { &ints };
+        let words: &[MVT] = if is64 { &[MVT::I32, MVT::I64] } else { &[MVT::I32] };
         let ints64 = [MVT::I8, MVT::I16, MVT::I32, MVT::I64];
 
         // L186..L203
@@ -332,14 +377,14 @@ impl TargetLowering {
         }
         // L205..L240
         if features.cmov {
-            t.set_ops(&[Abs], &[MVT::I16, MVT::I32], Custom);
+            t.set_ops(&[Abs], &native[1..], Custom);
         }
-        t.set_ops(&[SSubSat], &ints, Custom);
+        t.set_ops(&[SSubSat], native, Custom);
         let shld = if features.shld_slow { Custom } else { Legal };
         t.set_ops(&[FShl, FShr], &[MVT::I8, MVT::I16], Custom);
-        t.set_ops(&[FShl, FShr], &[MVT::I32], shld);
+        t.set_ops(&[FShl, FShr], words, shld);
         // L508: the double-width shifts (i64 at 32 bits)
-        t.set_ops(&[ShlParts, SraParts, SrlParts], &[MVT::I32], Custom);
+        t.set_ops(&[ShlParts, SraParts, SrlParts], words, Custom);
         // L241..L300: the x87 conversions
         t.set_ops(&[UIntToFp], &[MVT::I8, MVT::I16], Promote);
         t.set_ops(&[UIntToFp], &[MVT::I32, MVT::I64], Custom);
@@ -351,8 +396,15 @@ impl TargetLowering {
         t.set_ops(&[FpToUInt], &[MVT::I32, MVT::I64], Custom);
         // L300-L303, L850: `lrint` of an x87 value is `fist`
         t.set_ops(&[LRint], &[MVT::F32, MVT::F64, MVT::F80], Custom);
-        // L316: no SSE2
-        t.set_ops(&[BitCast], &[MVT::F32, MVT::I32], Expand);
+        // L316
+        if !features.sse2 {
+            t.set_ops(&[BitCast], &[MVT::F32, MVT::I32], Expand);
+            if is64 {
+                t.set_ops(&[BitCast], &[MVT::F64, MVT::I64], Expand);
+            }
+        } else if !is64 {
+            t.set_operation_action(BitCast, MVT::I64, Custom);
+        }
         // L337..L370
         t.set_ops(&[MulHS, MulHU, SDiv, UDiv, SRem, URem], &ints64, Expand);
         // The pin divides an i8 or i16 by a constant with a widened multiply
@@ -365,6 +417,9 @@ impl TargetLowering {
         t.set_operation_action(BrJT, MVT::Other, Expand);
         t.set_operation_action(BrCond, MVT::Other, Custom);
         t.set_ops(&[BrCC, SelectCC], &[MVT::F32, MVT::F64, MVT::F80, MVT::I8, MVT::I16, MVT::I32, MVT::I64], Expand);
+        if is64 {
+            t.set_operation_action(SignExtendInReg, MVT::I32, Legal);
+        }
         t.set_ops(&[SignExtendInReg], &[MVT::I16, MVT::I8], Legal);
         t.set_operation_action(SignExtendInReg, MVT::I1, Expand);
         t.set_ops(&[FRem], &FLOATS, LibCall);
@@ -374,16 +429,16 @@ impl TargetLowering {
             t.set_operation_promoted_to_type(op, MVT::I16, MVT::I32);
         }
         if !features.bmi {
-            t.set_operation_action(CtTz, MVT::I32, Custom);
-            t.set_operation_action(CtTzZeroPoison, MVT::I32, Legal);
+            t.set_ops(&[CtTz], words, Custom);
+            t.set_ops(&[CtTzZeroPoison], words, Legal);
         }
         if features.lzcnt {
             t.set_operation_promoted_to_type(CtLz, MVT::I8, MVT::I32);
             t.set_operation_promoted_to_type(CtLzZeroPoison, MVT::I8, MVT::I32);
         } else {
-            t.set_ops(&[CtLz, CtLzZeroPoison], &ints, Custom);
+            t.set_ops(&[CtLz, CtLzZeroPoison], native, Custom);
         }
-        t.set_ops(&[Parity], &ints, Custom);
+        t.set_ops(&[Parity], native, Custom);
         if features.popcnt {
             t.set_operation_promoted_to_type(CtPop, MVT::I8, MVT::I32);
             t.set_operation_promoted_to_type(CtPop, MVT::I16, MVT::I32);
@@ -395,33 +450,71 @@ impl TargetLowering {
             t.set_operation_action(BSwap, MVT::I16, Expand);
         }
         t.set_ops(&[Select, SetCC], &FLOATS, Custom);
-        t.set_ops(&[Select, SetCC], &ints, Custom);
+        t.set_ops(&[Select, SetCC], native, Custom);
         t.set_ops(&[ConstantPool, GlobalAddress, ExternalSymbol, JumpTable], &[ptr], Custom);
+        if is64 {
+            t.set_ops(&[ConstantPool, GlobalAddress, ExternalSymbol, JumpTable], words, Custom);
+        }
         t.set_operation_action(Trap, MVT::Other, Legal);
         t.set_operation_action(DynamicStackAlloc, ptr, Custom);
+        // The pin expands these to a stack pointer copy; the same, as Custom.
+        t.set_operation_action(StackSave, ptr, Custom);
+        t.set_operation_action(StackRestore, MVT::Other, Custom);
         // L559..L566: 32-bit va_list is a pointer
         t.set_operation_action(VAStart, MVT::Other, Custom);
         t.set_ops(&[VAEnd, VACopy], &[MVT::Other], Expand);
-        // L720..L760: x87 float classes (no SSE)
-        for vt in [MVT::F32, MVT::F64] {
-            t.set_ops(&[Undef, Poison], &[vt], Expand);
-            t.set_operation_action(FCopySign, vt, Expand);
+        if features.sse2 {
+            // L618..L674: f32 and f64 use SSE
+            t.set_load_ext_action(LoadExt::ExtLoad, MVT::F64, MVT::F32, Expand);
+            for vt in [MVT::F32, MVT::F64] {
+                // ANDPD simulates FABS, XORP FNEG, ANDPD and ORPD FCOPYSIGN
+                t.set_ops(&[FAbs, FNeg, FCopySign], &[vt], Custom);
+                t.set_ops(&[FAdd, FSub], &[vt], Custom);
+                // (no FSINCOS node here: nothing builds one)
+                t.set_ops(&[FSin, FCos], &[vt], Expand);
+            }
+            t.set_ops(&[FpExtend], &[MVT::F32, MVT::F64], Custom);
+        } else {
+            // L720..L760: x87 float classes (no SSE)
+            for vt in [MVT::F32, MVT::F64] {
+                t.set_ops(&[Undef, Poison], &[vt], Expand);
+                t.set_operation_action(FCopySign, vt, Expand);
+            }
         }
         // L806..L870: f80
         t.set_ops(&[Undef, Poison], &[MVT::F80], Expand);
         t.set_operation_action(FCopySign, MVT::F80, Expand);
+        t.keeps_f64_constants = features.sse2;
         // L764..L860: the x87 loads of 0.0 and 1.0 (`fldz`, `fld1`, and `fchs`)
+        // L690..L706: SSE has only +0.0 (`xorps`, `xorpd`)
         for (vt, one, sign) in [
             (MVT::F32, 0x3F80_0000u128, 1u128 << 31),
             (MVT::F64, 0x3FF0_0000_0000_0000, 1u128 << 63),
             (MVT::F80, (0x3FFFu128 << 64) | (1u128 << 63), 1u128 << 79),
         ] {
+            if features.sse2 && vt != MVT::F80 {
+                t.add_legal_fp_immediate(vt, 0);
+                continue;
+            }
             for bits in [0, sign, one, one | sign] {
                 t.add_legal_fp_immediate(vt, bits);
             }
         }
         // L2757..L2776
-        t.set_ops(&[SAddO, UAddO, SSubO, USubO, SMulO, UMulO, UAddOCarry, USubOCarry], &ints, Custom);
+        t.set_ops(&[SAddO, UAddO, SSubO, USubO, SMulO, UMulO, UAddOCarry, USubOCarry], native, Custom);
         t
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The action tables were std maps: SipHash on every `(op, type)` asked.
+    /// Does not compile for any other hasher.
+    #[test]
+    fn test_action_tables_are_keyed_with_the_fixed_key_hasher() {
+        let table = TargetLowering::empty(TargetLoweringInfo::new(&[MVT::I32], false));
+        let _: &llrm_support::hash::HashMap<(ISD, MVT), Action> = &table.operations;
     }
 }

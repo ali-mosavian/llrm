@@ -23,23 +23,25 @@
 //! # Runs
 //! `assemble::staged` when `--isel=dag`.
 //!
-//! DEVIATE SD403: no branch probabilities (`odds`) or counted-loop trip
-//! counts, so the executed-work estimate of a loop is lower than the old
-//! selector's until they are carried; and no calls, locals, register arguments,
+//! DEVIATE SD403: no counted-loop trip counts, so the executed-work estimate of
+//! a loop is lower than the old selector's until they are carried; branch
+//! probabilities (`odds`) are the builder's (`addSuccessorWithProb`: a branch's
+//! two edges, a merged condition's cases, `set_odds`); a switch's edges have
+//! none yet; and no calls, locals, register arguments,
 //! switch lowering or multi-register phis yet. Reason: they need the call
 //! sequence and frame objects in the emitter (D1e). Exit: D1e. Owner: sdag-d.
 //! Review 2026-12-03.
 
-use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 
 use indexmap::IndexMap;
-use llrm_dagisel::generated::{x86_i486, x86_m16};
+use llrm_dagisel::generated::{x86_i486, x86_m16, x86_x64};
 use llrm_dagisel::interp::Selector;
 use llrm_dagisel::x86_addr::AddrMode;
 use llrm_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Module, ValueDef, ValueId};
+use llrm_support::hash::{HashMap, HashSet};
 use llrm_target::Target;
 
 use super::actions::{Features, TargetLowering};
@@ -57,7 +59,9 @@ use crate::backend::isel::{Parameter, Selected, Unselected};
 use crate::model::ir::{Addr, Held, Mem, Space};
 use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 
-struct Info;
+struct Info {
+    source_order: bool,
+}
 
 impl SchedInfo for Info {
     fn num_defs(
@@ -79,6 +83,10 @@ impl SchedInfo for Info {
         opcode: u32,
     ) -> bool {
         llrm_dagisel::instr::desc(opcode as u16).is_some_and(|d| d.is_call())
+    }
+
+    fn source_order(&self) -> bool {
+        self.source_order
     }
 
     fn has_cross_copy_class(
@@ -196,6 +204,10 @@ struct CallConventions<'a> {
 pub struct RuntimeContracts<'a> {
     pub abi: &'a dyn crate::backend::assemble::Abi,
     pub segments: &'a crate::backend::target::Segments,
+    /// Whether the program's runtime routines have contracts of their own
+    /// (QB's); a call of any other routine reads the ABI's for what it
+    /// destroys.
+    pub runtime: bool,
 }
 
 /// For each call in `function` of a `llrm.qb.` routine: `Ok` when the
@@ -267,10 +279,56 @@ fn modelled(
     if contract.control == llrm_qbruntime::Control::InlineTable {
         return Err("QB runtime routine that returns to an inline table");
     }
-    if contract.cleanup != Some(plan.popped) || plan.popped != pushed {
+    // The callee pops all it was pushed (16/32-bit routines), or the caller
+    // pops it and the routine cleans nothing (SysV, where QB calls are C).
+    if contract.cleanup != Some(plan.popped) || (plan.popped != pushed && plan.popped != 0) {
         return Err("QB runtime routine whose stack cleanup the convention does not model");
     }
     Ok(if contract.flags_result { RuntimeAnswer::Flags } else { RuntimeAnswer::Registers })
+}
+
+impl CallConventions<'_> {
+    /// The contract of a call of `callee` where its convention has no
+    /// description: the ABI's, named by the routine (`call_clobbers`).
+    fn contract(
+        &self,
+        callee: Option<&Callee>,
+    ) -> Option<crate::abi::runtime::Contract> {
+        let (contracts, Some(Callee::Global(id))) = (self.contracts?, callee) else { return None };
+        let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned().unwrap_or_default();
+        contracts.abi.contract(&name, false, 0).ok()
+    }
+
+    fn contract_clobbers(
+        &self,
+        callee: Option<&Callee>,
+    ) -> Option<std::collections::BTreeSet<llrm_lir::registers::RegId>> {
+        let contract = self.contract(callee)?;
+        Some(crate::backend::callregs::call_clobbers(&contract, self.contracts?.segments, self.general))
+    }
+
+    /// `call_clobbered_high_keeping`: what the callee keeps only the 16-bit
+    /// half of, less the registers it keeps whole.
+    fn contract_high(
+        &self,
+        callee: Option<&Callee>,
+    ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
+        let Some(contract) = self.contract(callee) else { return Default::default() };
+        let regs = llrm_lir::registers::Regs(self.arch.registers());
+        let whole: std::collections::BTreeSet<_> = self
+            .arch
+            .callee_saved()
+            .into_iter()
+            .filter(|(full, pushed)| full == pushed)
+            .map(|(full, _)| regs.root(full))
+            .collect();
+        crate::backend::callregs::call_clobbered_high_keeping(
+            &contract,
+            self.contracts.expect("a contract implies contracts").segments,
+            self.general,
+            &whole,
+        )
+    }
 }
 
 impl super::emit::Conventions for CallConventions<'_> {
@@ -284,7 +342,7 @@ impl super::emit::Conventions for CallConventions<'_> {
             }
             _ => 0,
         };
-        let Some(found) = self.arch.calling().by_number(number) else { return Default::default() };
+        let Some(found) = self.arch.calling().by_number(number) else { return self.contract_high(callee) };
         let regs = llrm_lir::registers::Regs(self.arch.registers());
         self.arch
             .convention_callee_saved(found)
@@ -327,7 +385,9 @@ impl super::emit::Conventions for CallConventions<'_> {
             }
             _ => 0,
         };
-        let found = self.arch.calling().by_number(number)?;
+        // BASIC's convention (and any other with no row in calling.toml) is
+        // the ABI's contract of the routine, as the old selector reads it.
+        let Some(found) = self.arch.calling().by_number(number) else { return self.contract_clobbers(callee) };
         let regs = llrm_lir::registers::Regs(self.arch.registers());
         let mut out: std::collections::BTreeSet<_> = found
             .clobbered
@@ -335,6 +395,14 @@ impl super::emit::Conventions for CallConventions<'_> {
             .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
             .map(|name| regs.root(self.arch.register_named(name)))
             .collect();
+        // the contract names no FS or GS, yet the callee may use them
+        if let (Some(contract), Some(contracts)) = (self.contract(callee), self.contracts) {
+            out.extend(crate::backend::callregs::unnamed_selectors_clobbered(
+                &contract,
+                contracts.segments,
+                self.general,
+            ));
+        }
         // a runtime routine also destroys what its contract says
         if let (Some(contracts), Some(Callee::Global(id))) = (self.contracts, callee) {
             let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned().unwrap_or_default();
@@ -356,7 +424,7 @@ struct Tables {
 }
 
 /// One per target width.
-static TABLES: LazyLock<Mutex<HashMap<u32, std::sync::Arc<Tables>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static TABLES: LazyLock<Mutex<HashMap<u32, std::sync::Arc<Tables>>>> = LazyLock::new(|| Mutex::new(HashMap::default()));
 
 fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
     let bits = arch.object().bitness;
@@ -365,7 +433,11 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
         .entry(bits)
         .or_insert_with(|| {
             let forms = llrm_instr::parse(&arch.forms_text(), arch.dialect()).expect("x86.instr parses");
-            let opcodes = if bits == 16 { x86_m16::MACHINE_OPCODES } else { x86_i486::MACHINE_OPCODES };
+            let opcodes = match bits {
+                16 => x86_m16::MACHINE_OPCODES,
+                64 => x86_x64::MACHINE_OPCODES,
+                _ => x86_i486::MACHINE_OPCODES,
+            };
             std::sync::Arc::new(Tables {
                 map: OpcodeMap::new(forms),
                 names: opcodes
@@ -376,6 +448,7 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
                         (llrm_dagisel::x86_llrm::FARCALL_OPCODE, "CALL_FAR"),
                         (llrm_dagisel::x86_llrm::CODE_OPCODE, "CALL_CODE"),
                         (llrm_dagisel::x86_llrm::PORT_OPCODE, "PORT_IO"),
+                        (llrm_dagisel::x86_llrm::TC_RETURN_OPCODE, "TCRETURN_16"),
                         (llrm_dagisel::x86_llrm::FLN_OPCODE, "LN_Fp80"),
                         (llrm_dagisel::x86_llrm::FEXP_OPCODE, "EXP_Fp80"),
                         (llrm_dagisel::x86_llrm::FLOG2_OPCODE, "LOG2_Fp80"),
@@ -502,6 +575,12 @@ fn refuse<T>(why: impl Into<String>) -> Result<T, Unselected> {
     Err(Unselected(format!("--isel=dag: {}", why.into())))
 }
 
+thread_local! {
+    /// Sibling calls on for this thread: what `LLRM_TAIL_CALLS` does for the
+    /// process, for a test that cannot set the environment.
+    pub(super) static TAIL_CALLS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// `name` of `module` selected by the DAG path. A panic in a stage (a builder
 /// meeting a type it does not know) is a refusal of the function, as any other
 /// gap: it stopped 18 QCport modules from compiling in the shadow. Constants it
@@ -562,11 +641,13 @@ fn selected_in(
     contracts: Option<&RuntimeContracts<'_>>,
     pool: &mut Pool,
 ) -> Result<Selected, Unselected> {
-    let m16 = match arch.object().bitness {
+    let bitness = arch.object().bitness;
+    let m16 = match bitness {
         16 => true,
-        32 => false,
-        _ => return refuse("only m16 and m32 are built so far"),
+        32 | 64 => false,
+        _ => return refuse("only m16, m32 and m64 are built so far"),
     };
+    let m64 = bitness == 64;
     let Some(id) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(id).function().filter(|one| !one.is_declaration()) else {
         return refuse(format!("@{name} has no body"));
@@ -577,6 +658,8 @@ fn selected_in(
     let mut info = FunctionLoweringInfo::new(function);
     let mut tli = if m16 {
         TargetLowering::x86_16(Features::default(), MVT::I16)
+    } else if m64 {
+        TargetLowering::x86_64(Features::default(), MVT::I64)
     } else {
         TargetLowering::x86_32(Features::default(), MVT::I32)
     };
@@ -598,15 +681,21 @@ fn selected_in(
             }
         }
     }
-    let (builder_target, address_mode) =
-        if m16 { (BuilderTarget::m16(), AddrMode::Real16) } else { (BuilderTarget::m32(), AddrMode::Flat32) };
+    let (builder_target, address_mode) = match bitness {
+        16 => (BuilderTarget::m16(), AddrMode::Real16),
+        64 => (BuilderTarget::m64(), AddrMode::Flat64),
+        _ => (BuilderTarget::m32(), AddrMode::Flat32),
+    };
     let builder_target = builder_target
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)
-        .with_tail_calls(!m16 && std::env::var_os("LLRM_TAIL_CALLS").is_some())
+        .with_jump_tables(cpu.target().costs().jump_table != 0)
+        .with_tail_calls(llrm_support::env_set("LLRM_TAIL_CALLS") || TAIL_CALLS.get())
         .with_tti(cpu.target().tti())
         .with_runtime_call_verdicts(
-            contracts.map(|contracts| runtime_call_verdicts(module, function, &layout, arch, contracts.abi)),
+            contracts
+                .filter(|contracts| contracts.runtime)
+                .map(|contracts| runtime_call_verdicts(module, function, &layout, arch, contracts.abi)),
         );
     let tables = tables(arch);
     // The builder numbers the fixed objects the stack parameters make: a byval
@@ -625,12 +714,10 @@ fn selected_in(
     let frame = Frame::new(cells);
     // The function's static allocas are frame objects 0, 1, ... in the order
     // `FunctionLoweringInfo` numbered them: laid out below BP, each on its
-    // type's alignment.
-    let mut allocas: Vec<(i32, llrm_mir::module::ValueId)> =
-        info.static_allocas.iter().map(|(value, index)| (*index, value.clone())).collect();
-    allocas.sort();
-    let alloca_count = allocas.len() as i32;
-    for (index, value) in allocas {
+    // type's alignment. Locals whose lifetime markers say they are never live
+    // together are one object (StackColoring).
+    let mut sizes: Vec<(llrm_mir::module::ValueId, i64, i64)> = Vec::new();
+    for (value, _) in info.static_allocas.iter() {
         let ValueDef::Instruction(def) = function.value(value).def else {
             return refuse("an alloca that is not an instruction");
         };
@@ -638,25 +725,67 @@ fn selected_in(
         let llrm_mir::opcode::Opcode::Alloca { allocated, .. } = instruction.opcode else {
             return refuse("an alloca that is not an alloca");
         };
-        if !instruction.operands.is_empty() {
-            return refuse("an alloca with a count");
-        }
+        // `FunctionLoweringInfo`: a constant count multiplies the type's size
+        let count = match instruction.operands.first() {
+            None => 1,
+            Some(llrm_mir::module::Operand::Constant(id)) => match module.context.get(*id).kind {
+                llrm_mir::context::ConstantKind::Int(count) => count,
+                _ => return refuse("an alloca whose count is not a number"),
+            },
+            Some(_) => return refuse("an alloca with a count that is not a constant"),
+        };
         let types = &module.context.types;
         let size = layout.alloc_size(types, allocated) as i64;
+        let Some(size) = i64::try_from(count)
+            .ok()
+            .and_then(|count| size.checked_mul(count))
+            .filter(|size| *size <= i64::from(i32::MAX))
+        else {
+            return refuse("an alloca too large for the frame");
+        };
         let align =
             crate::backend::isel::natural_align(types, &layout, allocated).max(size & size.wrapping_neg()).clamp(1, 4);
+        sizes.push((value, size, align));
+    }
+    sizes.sort_by_key(|(value, _, _)| info.static_allocas[value]);
+    let groups = shared_allocas(module, function, &sizes);
+    let alloca_count = groups.iter().map(|(_, group)| *group + 1).max().unwrap_or(0);
+    info.share_allocas(groups.iter().cloned(), alloca_count);
+    let mut objects: Vec<(i64, i64)> = vec![(0, 1); alloca_count as usize];
+    for ((_, size, align), (_, group)) in sizes.iter().zip(&groups) {
+        let object = &mut objects[*group as usize];
+        *object = (object.0.max(*size), object.1.max(*align));
+    }
+    for (index, (size, align)) in objects.into_iter().enumerate() {
         let made = Temporaries(&frame).create_stack_temporary(size as u32, align as u32);
-        debug_assert_eq!(made, index, "frame objects are numbered as the builder numbered them");
+        debug_assert_eq!(made, index as i32, "frame objects are numbered as the builder numbered them");
+    }
+    // `LowerFormalArguments`' register save area: 6 * 8 bytes of integer
+    // registers and 8 * 16 of vector ones.
+    if m64 && module.signature(function.ty).2 {
+        info.variadic_save = Some(Temporaries(&frame).create_stack_temporary(176, 16));
     }
     let mut hooks = X86Hooks::new(Options {
-        cpu: if m16 { Cpu::M16 } else { Cpu::I486 },
+        cpu: if m16 {
+            Cpu::M16
+        } else if m64 {
+            Cpu::X64
+        } else {
+            Cpu::I486
+        },
         opt_none: false,
         opt_for_size: cpu.size,
         min_size: false,
         has_frame_pointer: true,
         address_mode,
     });
-    let selector = Selector::new(if m16 { x86_m16::TABLE } else { x86_i486::TABLE });
+    let selector = Selector::new(if m16 {
+        x86_m16::TABLE
+    } else if m64 {
+        x86_x64::TABLE
+    } else {
+        x86_i486::TABLE
+    });
     let mut state = EmitState::default();
     // A block's address is fixed before any block is emitted: a branch names
     // the blocks after it.
@@ -718,6 +847,7 @@ fn selected_in(
         block_at: &block_at,
         frame: &frame,
         address_mode,
+        call_alignment: if arch.aligned_calls() { (arch.stack_alignment() as i64).max(1) } else { 1 },
         map: &tables.map,
         names: &tables.names,
     };
@@ -725,12 +855,12 @@ fn selected_in(
     let mut calls = IndexMap::default();
     // the landing pad the runtime enters, which no edge reaches
     let mut landing: Option<i64> = None;
-    let mut sinks: HashSet<i64> = HashSet::new();
+    let mut sinks: HashSet<i64> = HashSet::default();
     let mut inline_places = IndexMap::default();
     // the call sites whose callee is far code (address space 1): a far call
     let mut far = std::collections::BTreeSet::new();
     // The LIR blocks each MIR block became, and the phi inputs each exports.
-    let mut made: HashMap<u32, std::ops::Range<usize>> = HashMap::new();
+    let mut made: HashMap<u32, std::ops::Range<usize>> = HashMap::default();
     let mut exports: Vec<(BlockId, Vec<(ValueId, u32)>)> = Vec::new();
     for (block, parent, mut built) in work {
         if !built.live_ins.is_empty() && block != function.layout()[0] {
@@ -740,10 +870,10 @@ fn selected_in(
         let done = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: false },
+            &mut X86Lowering { cmov: false, sse2: false },
             &selector,
             &mut hooks,
-            &Info,
+            &Info { source_order: bitness == 32 },
             &ctx,
             &mut state,
             block_at[&block.0],
@@ -798,7 +928,7 @@ fn selected_in(
         inline_places.extend(done.inline_places.iter().cloned());
         emitted.extend(done.blocks);
         if block == parent && is_pad(function, block) {
-            let Some(contracts) = contracts else {
+            let Some(contracts) = contracts.filter(|contracts| contracts.runtime) else {
                 return refuse("a landing pad of a program with no runtime contracts");
             };
             if landing.replace(emitted[from].at).is_some() {
@@ -868,7 +998,7 @@ fn selected_in(
     // an integer's bits taken from an x87 register (`bitcast` of a double to
     // its words, reaching the matcher as a no-op), which no code can do.
     {
-        let floating: std::collections::HashSet<u32> = emitted
+        let floating: llrm_support::hash::HashSet<u32> = emitted
             .iter()
             .flat_map(|block| block.insns.iter())
             .filter_map(|insn| insn.what.as_ref())
@@ -950,13 +1080,18 @@ fn selected_in(
             state.float_bytes.iter().map(|(number, bytes)| (*number, if cpu.spills_extended { 10 } else { *bytes }));
         body.float_bytes = std::sync::Arc::new(table.collect());
     }
+    body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
+    body.min_size = cpu.min_size || llrm_mir::memory::has(&function.attrs, "minsize");
     body.sealed_arguments = true;
     body.ordered = true;
+    set_odds(&mut body, &info.edge_probs, &block_at);
     body.frequencies = Some(crate::analysis::frequency::Frequency::over(&body, &body.blocks).table());
     // The inline routines the calls name (`ExpandDivRemLibCall`'s `divN_s`):
     // their bytes are laid down at the call, as the old route did.
     let mut inline = IndexMap::default();
-    for (at, name) in &calls {
+    // (assembling a routine costs 1.8 M instructions, so only a call that
+    // names one asks for it)
+    for (at, name) in calls.iter().filter(|(_, name)| name.starts_with(llrm_target::routines::DIVIDE_PREFIX)) {
         for signed in [true, false] {
             for wide in [true, false] {
                 if let Ok(routine) = arch.divide_routine(signed, wide) {
@@ -984,7 +1119,7 @@ fn selected_in(
     }
     // The huge-pointer routines the calls name (`huge_memory`): their bytes
     // are laid down at the call as well.
-    for (at, name) in &calls {
+    for (at, name) in calls.iter().filter(|(_, name)| name.starts_with(llrm_target::routines::HUGE_PREFIX)) {
         let fills = [1u32, 2, 4].into_iter().filter_map(|cell| arch.huge_fill_routine(cell).ok());
         let copies = [false, true].into_iter().filter_map(|backward| arch.huge_copy_routine(backward).ok());
         if let Some(routine) = fills.chain(copies).find(|routine| routine.name == name.as_str()) {
@@ -1032,7 +1167,7 @@ fn without_unreachable(
     if reached.iter().all(|one| *one) {
         return (emitted, succ);
     }
-    let gone: std::collections::HashSet<i64> =
+    let gone: llrm_support::hash::HashSet<i64> =
         emitted.iter().zip(&reached).filter(|(_, kept)| !**kept).map(|(block, _)| block.at).collect();
     let succ: Vec<Vec<i64>> = succ.into_iter().zip(&reached).filter(|(_, kept)| **kept).map(|(s, _)| s).collect();
     let mut kept = reached.iter();
@@ -1084,16 +1219,87 @@ fn landing_pad_insn(
     }
 }
 
+/// A set of values, one bit each: values are dense per body (`fresh` counts
+/// up), so a block's set is a few words, not a hash table.
+#[derive(Clone, PartialEq, Eq)]
+struct Values(Vec<u64>);
+
+impl Values {
+    fn new(bits: usize) -> Self {
+        Values(vec![0; bits.div_ceil(64)])
+    }
+
+    fn insert(
+        &mut self,
+        value: u32,
+    ) {
+        self.0[value as usize / 64] |= 1 << (value % 64);
+    }
+
+    fn contains(
+        &self,
+        value: u32,
+    ) -> bool {
+        self.0[value as usize / 64] >> (value % 64) & 1 == 1
+    }
+
+    fn union(
+        &self,
+        other: &Values,
+    ) -> Values {
+        Values(self.0.iter().zip(&other.0).map(|(a, b)| a | b).collect())
+    }
+
+    fn intersection(
+        &self,
+        other: &Values,
+    ) -> Values {
+        Values(self.0.iter().zip(&other.0).map(|(a, b)| a & b).collect())
+    }
+}
+
+/// The branch probabilities of the body: the edges the builder stated
+/// (`addSuccessorWithProb`: a conditional branch's two, a merged condition's
+/// cases), on the blocks whose machine edges they are. An edge nobody stated
+/// has none.
+fn set_odds(
+    body: &mut LirBody,
+    edges: &[(llrm_mir::module::BlockId, llrm_mir::module::BlockId, u32)],
+    block_at: &HashMap<u32, i64>,
+) {
+    let mut stated: IndexMap<(i64, i64), u64> = IndexMap::default();
+    for &(from, to, probability) in edges {
+        let (Some(&at), Some(&to_at)) = (block_at.get(&from.0), block_at.get(&to.0)) else { continue };
+        let Some(lir) = body.blocks.iter().find(|one| one.at == at) else { continue };
+        if lir.succ.len() < 2 || !lir.succ.contains(&to_at) {
+            continue;
+        }
+        *stated.entry((at, to_at)).or_insert(0) += u64::from(probability);
+    }
+    // `normalizeSuccProbs`: the edges of a block share one.
+    let mut total: IndexMap<i64, u64> = IndexMap::default();
+    for (&(at, _), &probability) in &stated {
+        *total.entry(at).or_insert(0) += probability;
+    }
+    for (&(at, to_at), &probability) in &stated {
+        let sum = total[&at];
+        if sum == 0 {
+            continue;
+        }
+        let scaled = u128::from(probability) * (1u128 << 31) / u128::from(sum);
+        body.odds.taken.insert((at, to_at), scaled.min(1 << 31) as u32);
+    }
+}
+
 /// A value read where some path to it defines nothing: (value, instruction).
-fn read_before_defined(
+pub(super) fn read_before_defined(
     blocks: &[EmitBlock],
     succ: &[Vec<i64>],
     landing: Option<i64>,
 ) -> Option<(u32, Option<String>)> {
-    use std::collections::HashSet;
-    let index: std::collections::HashMap<i64, usize> = blocks.iter().enumerate().map(|(i, b)| (b.at, i)).collect();
+    let index: llrm_support::hash::HashMap<i64, usize> = blocks.iter().enumerate().map(|(i, b)| (b.at, i)).collect();
+    // A copy of a value to itself defines nothing.
     let defines = |insn: &Insn| -> Vec<u32> {
-        // A copy of a value to itself defines nothing.
         let itself = insn
             .what
             .as_ref()
@@ -1105,48 +1311,74 @@ fn read_before_defined(
             );
         if itself { Vec::new() } else { insn.defines.clone() }
     };
-    let own: Vec<HashSet<u32>> = blocks
+    let highest = blocks
+        .iter()
+        .flat_map(|block| {
+            block
+                .phis
+                .iter()
+                .flat_map(|phi| std::iter::once(phi.result).chain(phi.incoming.iter().map(|&(_, v)| v)))
+                .chain(block.insns.iter().flat_map(|insn| insn.defines.iter().chain(&insn.uses).copied()))
+        })
+        .max()
+        .unwrap_or(0) as usize;
+    let bits = highest + 1;
+    let own: Vec<Values> = blocks
         .iter()
         .map(|block| {
-            block.phis.iter().map(|phi| phi.result).chain(block.insns.iter().flat_map(|insn| defines(insn))).collect()
+            let mut set = Values::new(bits);
+            for phi in &block.phis {
+                set.insert(phi.result);
+            }
+            for insn in &block.insns {
+                for value in defines(insn) {
+                    set.insert(value);
+                }
+            }
+            set
         })
         .collect();
     // What is defined on every path to the start of each block (`None`: no
     // path has reached it yet).
-    let mut entry: Vec<Option<HashSet<u32>>> = vec![None; blocks.len()];
-    entry[0] = Some(HashSet::new());
+    let mut entry: Vec<Option<Values>> = vec![None; blocks.len()];
+    entry[0] = Some(Values::new(bits));
     // The runtime enters a landing pad with no value defined: a root of its
     // own.
     if let Some(&pad) = landing.and_then(|at| index.get(&at)) {
-        entry[pad] = Some(HashSet::new());
+        entry[pad] = Some(Values::new(bits));
     }
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for at in 0..blocks.len() {
-            let Some(here) = entry[at].clone() else { continue };
-            let out: HashSet<u32> = here.union(&own[at]).copied().collect();
-            for next in &succ[at] {
-                let Some(&to) = index.get(next) else { continue };
-                let merged = match &entry[to] {
-                    None => out.clone(),
-                    Some(known) => known.intersection(&out).copied().collect(),
-                };
-                if entry[to].as_ref() != Some(&merged) {
-                    entry[to] = Some(merged);
-                    changed = true;
+    let mut work: std::collections::VecDeque<usize> = (0..blocks.len()).filter(|&at| entry[at].is_some()).collect();
+    let mut queued: Vec<bool> = (0..blocks.len()).map(|at| entry[at].is_some()).collect();
+    while let Some(at) = work.pop_front() {
+        queued[at] = false;
+        let out = entry[at].as_ref().expect("a reached block").union(&own[at]);
+        for next in &succ[at] {
+            let Some(&to) = index.get(next) else { continue };
+            let merged = match &entry[to] {
+                None => out.clone(),
+                Some(known) => known.intersection(&out),
+            };
+            if entry[to].as_ref() != Some(&merged) {
+                entry[to] = Some(merged);
+                if !queued[to] {
+                    queued[to] = true;
+                    work.push_back(to);
                 }
             }
         }
     }
     for (at, block) in blocks.iter().enumerate() {
         let Some(mut known) = entry[at].clone() else { continue };
-        known.extend(block.phis.iter().map(|phi| phi.result));
+        for phi in &block.phis {
+            known.insert(phi.result);
+        }
         for insn in &block.insns {
-            if let Some(value) = insn.uses.iter().find(|value| !known.contains(value)) {
+            if let Some(value) = insn.uses.iter().find(|value| !known.contains(**value)) {
                 return Some((*value, insn.what.as_ref().and_then(|what| what.name.as_ref().map(|n| n.to_string()))));
             }
-            known.extend(defines(insn));
+            for value in defines(insn) {
+                known.insert(value);
+            }
         }
         // What a phi takes from an edge is defined at the end of that edge's
         // block.
@@ -1154,11 +1386,81 @@ fn read_before_defined(
             for (edge, value) in &phi.incoming {
                 let Some(&from) = index.get(edge) else { continue };
                 let Some(start) = entry[from].as_ref() else { continue };
-                if !start.contains(value) && !own[from].contains(value) {
+                if !start.contains(*value) && !own[from].contains(*value) {
                     return Some((*value, Some("phi".to_owned())));
                 }
             }
         }
     }
     None
+}
+
+/// DEVIATE SC1 (owner w-2): the pin's StackColoring runs on MIR after selection
+/// and merges the frame objects its LIFETIME_START/END pseudos bound; this
+/// groups the allocas on the IR, with the old selector's rule, before the
+/// objects are made. Same frames on the shapes measured ((4,4) -> (4,2)); exit:
+/// the MIR-level pass over the markers the DAG builder keeps.
+///
+/// StackColoring over the IR's lifetime markers (`llvm.lifetime.start` and
+/// `.end`, which the builder keeps as chain nodes): the frame object of each
+/// static alloca in `sizes` (value, bytes, alignment), locals never live
+/// together sharing one, the largest first. Without markers, or after a
+/// second return from `setjmp`, each has its own.
+fn shared_allocas(
+    module: &llrm_mir::module::Module,
+    function: &llrm_mir::module::Function,
+    sizes: &[(llrm_mir::module::ValueId, i64, i64)],
+) -> Vec<(llrm_mir::module::ValueId, i32)> {
+    use llrm_mir::intrinsics::Intrinsic;
+    let own = || sizes.iter().enumerate().map(|(at, (value, _, _))| (*value, at as i32)).collect::<Vec<_>>();
+    if llrm_mir::memory::calls_returns_twice(module, function) {
+        return own();
+    }
+    let layout: Vec<llrm_mir::module::BlockId> = function.layout().to_vec();
+    let positions: crate::support::hash::IndexMap<_, i64> = layout
+        .iter()
+        .flat_map(|&block| function.iter_block(block))
+        .enumerate()
+        .map(|(at, inst)| (inst, at as i64))
+        .collect();
+    let live = crate::backend::lifetimes::intervals(function, &layout, &positions, |inst| {
+        let global = llrm_mir::memory::callee(&module.context, function, inst)?;
+        let starts = match module.global(global).intrinsic()? {
+            Intrinsic::LifetimeStart => true,
+            Intrinsic::LifetimeEnd => false,
+            _ => return None,
+        };
+        let llrm_mir::module::Operand::Value(object) = *function.instruction(inst).operands.get(1)? else {
+            return None;
+        };
+        Some(crate::backend::lifetimes::Marker { object, starts })
+    });
+    let mut order: Vec<usize> = (0..sizes.len()).collect();
+    order.sort_by_key(|&at| (-sizes[at].1, at));
+    let mut colors: Vec<crate::backend::slots::Color> = Vec::new();
+    let mut group_of = vec![0i32; sizes.len()];
+    for at in order {
+        let (value, size, _) = &sizes[at];
+        let interval = live.get(value);
+        let size = (*size + *size % 2) as u32;
+        let color = interval.and_then(|interval| crate::backend::slots::choose(&colors, interval, size, &[]));
+        let color = color.unwrap_or_else(|| {
+            colors.push((colors.len() as i64, size, Vec::new()));
+            colors.len() - 1
+        });
+        colors[color]
+            .2
+            .push(
+                match interval {
+                    Some(interval) => interval.clone(),
+                    // Live throughout: it fits no other.
+                    None => crate::analysis::intervals::Interval::new(
+                        0,
+                        vec![crate::analysis::intervals::Segment { start: i64::MIN, end: i64::MAX }],
+                    ),
+                },
+            );
+        group_of[at] = color as i32;
+    }
+    sizes.iter().zip(group_of).map(|((value, _, _), group)| (*value, group)).collect()
 }

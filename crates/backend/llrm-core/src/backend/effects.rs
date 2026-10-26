@@ -88,4 +88,46 @@ mod tests {
             assert_eq!(served(Regs(info), bits, &load).is_some(), known, "{bits} bits");
         }
     }
+    /// `mov edi, _a+4[v*4]` before registers are chosen: the effect was
+    /// unknown (the index names no register to encode), so MachineSink kept
+    /// every flag-setting instruction above such a load in its block
+    /// (x_bubble: the inner loop's `inc` stayed in the header).
+    #[test]
+    fn test_a_load_of_a_symbol_indexed_by_an_unplaced_value_has_known_effects() {
+        let cell = Mem {
+            index: Some(Held { value: 2, width: 4 }),
+            scale: 4,
+            ..Mem::new(Some(crate::model::ir::Addr::new(crate::model::ir::Space::Segment, 4)), 4)
+        };
+        let load = Semantics {
+            name: Some("mov".into()),
+            dests: vec![Loc::Held(Held { value: 1, width: 4 })],
+            sources: vec![Loc::Mem(cell)],
+            ..Semantics::new(Operation::Move)
+        };
+        let found = served(Regs(&llrm_x86_m32::REGISTER_INFO), 32, &load);
+        assert!(matches!(found, Some(llrm_x86::effects::Served::Known(_))), "{found:?}");
+    }
+
+    /// `movsx edi, byte ptr [ebp-1024+v]` with `v` unplaced: the effect was
+    /// unknown (the index names no register to encode), so every local-array
+    /// access cut the machine scheduler's region (matmul, shellsort: 9
+    /// instructions over 71 programs).
+    #[test]
+    fn test_a_frame_cell_indexed_by_an_unplaced_value_has_known_effects() {
+        let cell = Mem {
+            index: Some(Held { value: 2, width: 4 }),
+            through: llrm_lir::registers::RegId::EBP,
+            scale: 1,
+            ..Mem::new(Some(crate::model::ir::Addr::new(crate::model::ir::Space::Frame, -1024)), 1)
+        };
+        let load = Semantics {
+            name: Some("movsx".into()),
+            dests: vec![Loc::Held(Held { value: 1, width: 4 })],
+            sources: vec![Loc::Mem(cell)],
+            ..Semantics::new(Operation::Move)
+        };
+        let found = served(Regs(&llrm_x86_m32::REGISTER_INFO), 32, &load);
+        assert!(matches!(found, Some(llrm_x86::effects::Served::Known(_))), "{found:?}");
+    }
 }

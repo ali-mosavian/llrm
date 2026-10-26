@@ -312,7 +312,10 @@ impl ModuleAnalysis for Summaries {
             Some(held) => Result::as_ref(&**held).map_err(String::clone)?.tracked_globals(),
             None => &none,
         };
-        Ok(crate::attrsummary::summaries(module, &analyses.program().layout, tracked))
+        // The one `GlobalsAAResult` of the module, as the pin has: the held
+        // `GlobalsModRef`, not another made for each run.
+        let found = analyses.get::<GlobalsModRefAnalysis>(module);
+        Ok(crate::attrsummary::summaries(module, &analyses.program().layout, tracked, &found))
     }
 }
 
@@ -731,7 +734,11 @@ impl Analysis for ExposedFrames {
         };
         for change in changes {
             match change {
-                Change::BlockCreated(_) | Change::BlockErased(_) | Change::Parameters => return None,
+                Change::Parameters => return None,
+                // An exposed alloca is one of its address's uses, and a block
+                // has none: an erased one was emptied by `Erased` changes, a
+                // created one is filled by `Inserted` ones.
+                Change::BlockCreated(_) | Change::BlockErased(_) => {}
                 Change::Operand { was, .. } => read(was),
                 Change::Operands { was, .. } => was.iter().for_each(&mut read),
                 Change::Erased { inst, .. } => function.instruction(*inst).operands.iter().for_each(&mut read),
@@ -1244,10 +1251,65 @@ impl Analysis for PlainAccesses {
     }
 }
 
-/// A body's translated MemorySSA with the accesses it was made from.
+/// The body's accesses with each reference as it stands (`MemRef::of`), no
+/// provenance annotated: what MemorySSA's clients read once the AA stack
+/// answers every pair (`Annotated` and its inputs are not asked).
+pub struct BaseAccesses;
+
+impl Analysis for BaseAccesses {
+    type Result = Result<std::rc::Rc<memoryssa::Accesses>, String>;
+    const NAME: &'static str = "base-accesses";
+
+    fn run(
+        _: &Context,
+        _: &DataLayout,
+        _: &Function,
+        _: &mut Analyses,
+    ) -> Self::Result {
+        // Nothing is made up front: a reference, and what an instruction
+        // touches, are asked of the unit that reads them (`Accesses::lazy`).
+        Ok(std::rc::Rc::new(memoryssa::Accesses::lazy()))
+    }
+}
+
+/// A body's translated MemorySSA. The accesses it is read with are the
+/// manager's `BaseAccesses`, fetched by the first client that asks
+/// (`accesses`): building the graph needs none of their references.
 pub struct MssaGraph {
     pub mssa: crate::mssa::Mssa,
-    pub accesses: std::rc::Rc<memoryssa::Accesses>,
+    accesses: std::cell::OnceCell<std::rc::Rc<memoryssa::Accesses>>,
+}
+
+impl MssaGraph {
+    /// A graph with the accesses a pass that updated it kept, if it did.
+    pub fn new(
+        mssa: crate::mssa::Mssa,
+        accesses: Option<std::rc::Rc<memoryssa::Accesses>>,
+    ) -> Self {
+        Self { mssa, accesses: accesses.map(std::cell::OnceCell::from).unwrap_or_default() }
+    }
+
+    /// The accesses of the body this graph is of: the ones kept with it, else
+    /// the manager's.
+    pub fn accesses(
+        &self,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Result<std::rc::Rc<memoryssa::Accesses>, String> {
+        if let Some(held) = self.accesses.get() {
+            return Ok(std::rc::Rc::clone(held));
+        }
+        let base = analyses.get::<BaseAccesses>(context, layout, function);
+        let made = Result::as_ref(&*base).map_err(String::clone)?;
+        Ok(std::rc::Rc::clone(self.accesses.get_or_init(|| std::rc::Rc::clone(made))))
+    }
+
+    /// Whether the accesses have been fetched or kept.
+    pub fn has_accesses(&self) -> bool {
+        self.accesses.get().is_some()
+    }
 }
 
 /// Two graphs are equal when every access says the same (`shadow::said`): the
@@ -1305,12 +1367,18 @@ impl Analysis for MemorySsa {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Self::Result {
-        let plain = analyses.get::<PlainAccesses>(context, layout, function);
-        let accesses = Result::as_ref(&*plain).map_err(String::clone)?;
+        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         let shape = analyses.get::<Shape>(context, layout, function);
+        let unit = Unit::within(context, layout, function, analyses.outer()).with_exposed(&exposed);
+        // `AAResults::getModRefInfo(Call, nullptr)` over the pin's stack.
+        let mut stack = crate::aggregate::AggregateAA::new().with_unit(&unit);
+        stack.add_aa_result(crate::basicaa::BasicAA::new(&unit));
+        if let Some(info) = unit.globals_mr {
+            stack.add_aa_result(crate::globalsmodref::GlobalsAAResult::new(&unit, info));
+        }
         let mssa =
-            crate::mssa::Mssa::build(function, &shape.dominance, &crate::mssa::shadow::effect_of(accesses, function));
-        Ok(std::rc::Rc::new(MssaGraph { mssa, accesses: std::rc::Rc::clone(accesses) }))
+            crate::mssa::Mssa::build(function, &shape.dominance, &crate::mssa::shadow::effect_from_aa(&unit, stack));
+        Ok(std::rc::Rc::new(MssaGraph::new(mssa, None)))
     }
 }
 

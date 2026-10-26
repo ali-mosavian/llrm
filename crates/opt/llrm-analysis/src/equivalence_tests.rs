@@ -65,3 +65,11 @@ fn erasing_a_class_removes_its_members_only() {
     assert_eq!(classes.members(&2).copied().collect::<Vec<_>>(), [2]);
     assert_eq!(classes.classes(), 2);
 }
+
+/// The member map was a std map: SipHash on every operand of every access
+/// check. Does not compile for any other hasher.
+#[test]
+fn test_members_are_keyed_with_the_fixed_key_hasher() {
+    let classes = EquivalenceClasses::<i32>::default();
+    let _: &llrm_support::hash::HashMap<i32, usize> = &classes.mapping;
+}

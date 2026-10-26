@@ -80,8 +80,6 @@ and the user's ruling of 10-20 (no vector MIR until 32-bit parity) is what keeps
 |---|---|---|---|
 | Early | lower-expect | -O1,-O2,-O3,-Os | llvm.expect reaches MIR (hir/mir.rs) and nothing lowers it; ablation 0 of 12 IRs |
 | Simplify | libcalls-shrinkwrap | -O1,-O2,-O3,-Os | errno-setting libm calls; ablation 0 of 12 IRs |
-| Simplify | loop-instsimplify | -O1,-O2,-O3,-Os | registry Missing entry; ablation 0 of 12 IRs |
-| Simplify | loop-simplifycfg | -O1,-O2,-O3,-Os | registry Missing entry; ablation 0 of 12 IRs |
 | Late | drop-unnecessary-assumes | -O1,-O2,-O3,-Os | ablation 0 of 12 IRs |
 | Late | lower-constant-intrinsics | -O1,-O2,-O3,-Os | ablation 0 of 12 IRs |
 | Late | loop-rotate | -O1,-O2,-O3,-Os | the late loop nest's rotate; ablation 0 of 12 IRs (the early one: +51 instructions, matched) |
@@ -124,7 +122,7 @@ The metric is the pin's output instruction count, not object bytes. The instance
 | late loop-rotate | 3, -3 | 4, -2 | Late loop nest (MISSING, w-3) |
 | late sroa<preserve-cfg;aggregate-to-vector> | 1, -1 | 1, -1 | Late list (MISSING, w-4) |
 | infer-alignment | 1, +2 | none | Late list (MISSING, w-1) |
-| loop-instsimplify | 1, -1 | 1, -1 | loop-mssa nest (MISSING, w-3) |
+| loop-instsimplify | 1, -1 | 1, -1 | loop-mssa nest (translated, slot 715: w-5) |
 
 Nothing reaches 0.05% of the baseline except the late `loop-unroll` at -O2 (95 instructions, 0.15%: it makes code bigger, for speed):
 the next most is `constraint-elimination` at -Os, 13 of 51432 (0.025%). The ranking of the first table stands, with these eight as
@@ -328,8 +326,8 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Simplify | libcalls-shrinkwrap | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | errno-setting libm calls; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
 | -O1 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@690:Partial |  |  |
 | -O1 | Simplify | reassociate | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | reassociate@696:Translated |  |  |
-| -O1 | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
-| -O1 | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
+| -O1 | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | loop-instsimplify@715:Translated |  |  |
+| -O1 | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | loop-simplifycfg@716:Translated |  |  |
 | -O1 | Simplify | licm<no-allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | floatloop@724:Old + licm@724:Translated |  |  |
 | -O1 | Simplify | loop-rotate<header-duplication;no-prepare-for-lto;no-check-exit-count> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | rotate@728:Translated + loopsimplify@728:Old + lcssa@728:Old |  |  |
 | -O1 | Simplify | licm<allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | licm@730:Translated |  |  |
@@ -353,7 +351,6 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Simplify |  |  | DEVIATE | 764: loopsimplify@764 + lcssa@764 | llrm's loop-simplify/lcssa stand-ins that LLVM's loop pass adaptor makes implicit (parity.rs RUN_COUNTS_OPEN) |  |
 | -O1 | Simplify |  |  | DEVIATE | 772: loopsimplify@772 + lcssa@772 | as 764 |  |
 | -O1 | Simplify |  |  | DEVIATE | 787: inferspace@787 | -O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot) |  |
-| -O1 | Simplify |  |  | DEVIATE | 809: decide@809 | -O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot) |  |
 | -O1 | Simplify |  |  | DEVIATE | 810: cvp@810 | -O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot) |  |
 | -O1 | Simplify |  |  | DEVIATE | 820: dse@820 | -O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot) |  |
 | -O1 | Simplify |  |  | DEVIATE | 823: loopsimplify@823 + lcssa@823 + licm@823 | -O1 only, as 669 (unverified slot by slot) |  |
@@ -438,8 +435,8 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@690:Partial |  |  |
 | -O2 | Simplify | reassociate | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | reassociate@696:Translated |  |  |
 | -O2 | Simplify | constraint-elimination | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | constraint-elimination@699:Translated |  |  |
-| -O2 | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
-| -O2 | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
+| -O2 | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | loop-instsimplify@715:Translated |  |  |
+| -O2 | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | loop-simplifycfg@716:Translated |  |  |
 | -O2 | Simplify | licm<no-allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | floatloop@724:Old + licm@724:Translated |  |  |
 | -O2 | Simplify | loop-rotate<header-duplication;no-prepare-for-lto;no-check-exit-count> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | rotate@728:Translated + loopsimplify@728:Old + lcssa@728:Old |  |  |
 | -O2 | Simplify | licm<allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | licm@730:Translated |  |  |
@@ -459,7 +456,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Simplify | bdce | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | bdce@797:Translated |  |  |
 | -O2 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@801:Partial + fold@801:Old + dead@801:Old |  |  |
 | -O2 | Simplify | dfa-jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | dfajumpthreading@806:Translated |  |  |
-| -O2 | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@809:Translated + decide@809:Old |  |  |
+| -O2 | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@809:Translated |  |  |
 | -O2 | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | cvp@810:Translated |  |  |
 | -O2 | Simplify | adce | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | adce@815:Translated |  |  |
 | -O2 | Simplify | memcpyopt | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | memcpyopt@818:Translated + merge@818:Partial |  |  |
@@ -555,8 +552,8 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@690:Partial |  |  |
 | -O3 | Simplify | reassociate | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | reassociate@696:Translated |  |  |
 | -O3 | Simplify | constraint-elimination | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | constraint-elimination@699:Translated |  |  |
-| -O3 | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
-| -O3 | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
+| -O3 | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | loop-instsimplify@715:Translated |  |  |
+| -O3 | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | loop-simplifycfg@716:Translated |  |  |
 | -O3 | Simplify | licm<no-allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | floatloop@724:Old + licm@724:Translated |  |  |
 | -O3 | Simplify | loop-rotate<header-duplication;no-prepare-for-lto;no-check-exit-count> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | rotate@728:Translated + loopsimplify@728:Old + lcssa@728:Old |  |  |
 | -O3 | Simplify | licm<allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | licm@730:Translated |  |  |
@@ -576,7 +573,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Simplify | bdce | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | bdce@797:Translated |  |  |
 | -O3 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@801:Partial + fold@801:Old + dead@801:Old |  |  |
 | -O3 | Simplify | dfa-jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | dfajumpthreading@806:Translated |  |  |
-| -O3 | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@809:Translated + decide@809:Old |  |  |
+| -O3 | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@809:Translated |  |  |
 | -O3 | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | cvp@810:Translated |  |  |
 | -O3 | Simplify | adce | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | adce@815:Translated |  |  |
 | -O3 | Simplify | memcpyopt | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | memcpyopt@818:Translated + merge@818:Partial |  |  |
@@ -674,8 +671,8 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@690:Partial |  |  |
 | -Os | Simplify | reassociate | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | reassociate@696:Translated |  |  |
 | -Os | Simplify | constraint-elimination | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | constraint-elimination@699:Translated |  |  |
-| -Os | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
-| -Os | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
+| -Os | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | loop-instsimplify@715:Translated |  |  |
+| -Os | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | loop-simplifycfg@716:Translated |  |  |
 | -Os | Simplify | licm<no-allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | floatloop@724:Old + licm@724:Translated |  |  |
 | -Os | Simplify | loop-rotate<header-duplication;no-prepare-for-lto;no-check-exit-count> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | rotate@728:Translated + loopsimplify@728:Old + lcssa@728:Old |  |  |
 | -Os | Simplify | licm<allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | licm@730:Translated |  |  |
@@ -695,7 +692,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Simplify | bdce | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | bdce@797:Translated |  |  |
 | -Os | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@801:Partial + fold@801:Old + dead@801:Old |  |  |
 | -Os | Simplify | dfa-jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | dfajumpthreading@806:Translated |  |  |
-| -Os | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@809:Translated + decide@809:Old |  |  |
+| -Os | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@809:Translated |  |  |
 | -Os | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | cvp@810:Translated |  |  |
 | -Os | Simplify | adce | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | adce@815:Translated |  |  |
 | -Os | Simplify | memcpyopt | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | memcpyopt@818:Translated + merge@818:Partial |  |  |

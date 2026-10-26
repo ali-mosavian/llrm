@@ -19,6 +19,8 @@ done
 python3 $R/tools/stamp.py --expect-sha $B $S/sb-$N-base/dist/llrm-c && python3 $R/tools/stamp.py --expect-sha $W $S/sb-$N-new/dist/llrm-c || { echo "stamp refused" >> $D/status; exit 3; }
 { md5sum $S/sb-$N-base/dist/llrm-c $S/sb-$N-new/dist/llrm-c | awk '{print substr($1,1,12), $2}'; } > $D/md5.txt
 cd $R
+# The rows and sizes steps run this tree's llrm-run, llrm-qb ...: a stale one stopped both ("stale binaries", pair csr, 2026-10-25).
+cargo build --release --bins -q || { echo "bins build failed" >> $D/status; exit 3; }
 export ROWS_WORK=$S/rows-$N; mkdir -p $ROWS_WORK; ln -sfn $S/rows/main24d $ROWS_WORK/main24d
 nice -n 10 tools/rows/run.sh base $S/sb-$N-base/dist/llrm-c main24d > $ROWS_WORK/base.log 2>&1
 nice -n 10 tools/rows/run.sh main $S/sb-$N-new/dist/llrm-c main24d > $ROWS_WORK/main.log 2>&1

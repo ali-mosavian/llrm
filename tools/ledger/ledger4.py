@@ -29,22 +29,22 @@ clang_hts = [v for k, v in clang.items() if k.startswith("clang::BackendConsumer
 O = lambda name: r"<llrm_transforms::" + name + r" as llrm_mir::(passes::(Function|Module)Pass|program::ProgramPass)>::run$"
 OB = lambda name: r"<llrm_core::backend::" + name + r" as llrm_core::model::passes::LIRTransform>::transform_raising$"
 B = collections.OrderedDict()
-B["SimplifyCFG, JumpThreading, CVP"] = ([O(n) for n in ("simplifycfg::SimplifyCfg", "decide::Decide", "jumpthreading::JumpThreading", "cvp::Cvp", "dfajumpthreading::DfaJumpThreading")],
+B["SimplifyCFG, JumpThreading, CVP"] = ([O(n) for n in ("simplifycfg::SimplifyCfg", "decide::Decide", "jumpthreading::JumpThreading", "cvp::Cvp", "dfajumpthreading::DfaJumpThreading", "constraintelim::ConstraintElimination")],
     [r"^llvm::SimplifyCFGPass::run\(", r"^llvm::JumpThreadingPass::run\(", r"^llvm::CorrelatedValuePropagationPass::run\(", r"^llvm::ConstraintEliminationPass::run\("])
 B["InstCombine, InstSimplify, Reassociate"] = ([O(n) for n in ("combine_pass::Combine", "instsimplify::InstSimplify", "reassociate::Reassociate", "trunc_inst_combine::TruncInstCombine")],
     [r"^llvm::InstCombinePass::run\(", r"^llvm::InstSimplifyPass::run\(", r"^llvm::ReassociatePass::run\(", r"^llvm::AggressiveInstCombinePass::run\("])
-B["loop passes (LICM, IndVars, rotate, unroll, idiom, deletion, LCSSA, simplify, LSR front)"] = ([O(n) for n in ("licm::Licm", "indvars::IndVars", "looprotate::LoopRotate", "loopunrollpass::LoopFullUnroll", "loopidioms::LoopIdioms", "loopidiom::pass::LoopIdiom", "loopidioms::Merge", "loopdeletion::LoopDeletion", "lcssa::LoopClosedSSA", "lcssa::LoopOpened", "loopsimplify::LoopSimplify", "looploadelim::LoopLoadElim", "simpleloopunswitch::SimpleLoopUnswitch", "loopinterchange::Interchange", "floatloop::FloatLoop", "lsr_pass::LoopStrengthReduce", "rotate::Rotate")],
+B["loop passes (LICM, IndVars, rotate, unroll, idiom, deletion, LCSSA, simplify, LSR front)"] = ([O(n) for n in ("licm::Licm", "indvars::IndVars", "looprotate::LoopRotate", "loopunrollpass::LoopFullUnroll", "loopidioms::LoopIdioms", "loopidiom::pass::LoopIdiom", "loopidioms::Merge", "loopdeletion::LoopDeletion", "lcssa::LoopClosedSSA", "loopinstsimplify::LoopInstSimplify", "loopsimplifycfg::LoopSimplifyCfg", "lcssa::LoopOpened", "loopsimplify::LoopSimplify", "looploadelim::LoopLoadElim", "simpleloopunswitch::SimpleLoopUnswitch", "loopinterchange::Interchange", "floatloop::FloatLoop", "lsr_pass::LoopStrengthReduce", "rotate::Rotate")],
     [r"^llvm::LICMPass::run\(", r"^llvm::IndVarSimplifyPass::run\(", r"^llvm::LoopRotatePass::run\(", r"^llvm::LoopUnrollPass::run\(", r"^llvm::LoopFullUnrollPass::run\(", r"^llvm::LoopIdiomRecognizePass::run\(", r"^llvm::LoopDeletionPass::run\(", r"^llvm::LCSSAPass::run\(", r"^llvm::LoopSimplifyPass::run\(", r"^llvm::LoopLoadEliminationPass::run\(", r"^llvm::LoopInstSimplifyPass::run\(", r"^llvm::LoopSimplifyCFGPass::run\(", r"^llvm::SimpleLoopUnswitchPass::run\(", r"^llvm::LoopStrengthReducePass::run\(", r"LoopStrengthReduce::runOnLoop"])
 B["scalar: GVN, EarlyCSE, SROA, DSE, MemCpyOpt, SCCP, DCE, TRE"] = ([O(n) for n in ("gvn::Gvn", "earlycse::EarlyCse", "sroa::Sroa", "mem2reg::Mem2Reg", "deadstore::DeadStoreElimination", "memcpyopt::MemCpyOpt", "sccp::Sccp", "bdce::Bdce", "adce::Adce", "dead::Dead", "tailcallelim::TailCallElim", "float2int::Float2Int")],
     [r"^llvm::GVNPass::run\(", r"^llvm::EarlyCSEPass::run\(", r"^llvm::SROAPass::run\(", r"^llvm::DSEPass::run\(", r"^llvm::MemCpyOptPass::run\(", r"^llvm::SCCPPass::run\(", r"^llvm::BDCEPass::run\(", r"^llvm::ADCEPass::run\(", r"^llvm::TailCallElimPass::run\(", r"^llvm::Float2IntPass::run\(", r"^llvm::InferAlignmentPass::run\(", r"^llvm::SpeculativeExecutionPass::run\("])
 B["llrm-only MIR passes (fold, algebraic, ports, window, gepoffset, addresssink, fixednarrow, ...)"] = ([O(n) for n in ("fold::Fold", "algebraic::Algebraic", "algebraic::Differences", "ports::Ports", "window::Window", "gepoffset::GepOffset", "addresssink::AddressSink", "fixednarrow::FixedNarrow", "inferspace::InferAddressSpaces", "switchlower::SwitchLower")], [])
 B["module/IPO passes (interprocedural, ipo, globalopt, dce, stamp, homes, spares)"] = ([O(n) for n in ("interprocedural::Interprocedural", "walk::ModuleIpo", "interprocedural::Stamp", "globalopt::GlobalOpt", "globalopt::WriteOnly", "globaldce::GlobalDce", "homes::Homes", "spares::Spares", "calleepop::CalleePop")],
     [r"^llvm::IPSCCPPass::run\(", r"^llvm::GlobalOptPass::run\(", r"^llvm::GlobalDCEPass::run\(", r"^llvm::CalledValuePropagationPass::run\(", r"^llvm::PostOrderFunctionAttrsPass::run\(", r"^llvm::InlinerPass::run\(", r"^llvm::InferFunctionAttrsPass::run\(", r"^llvm::RecomputeGlobalsAAPass::run\(", r"^llvm::DeadArgumentEliminationPass::run\(", r"^llvm::ArgumentPromotionPass::run\("])
-B["isel"] = ([r"llrm_core::backend::isel::selected_with$"], [r"^\(anonymous namespace\)::X86DAGToDAGISel::runOnMachineFunction\("])
+B["isel"] = ([r"llrm_core::backend::isel::selected_with$", r"llrm_core::backend::selectiondag::dag_function::selected_in_pool$"], [r"^\(anonymous namespace\)::X86DAGToDAGISel::runOnMachineFunction\("])
 B["regalloc (RA, coalesce, phi-elim, two-address, parcopy)"] = ([OB(n) for n in ("allocate::RegAlloc", "coalesce::Coalescer", "phielim::PhiElimination", "twoaddr::TwoAddress", "parcopy::ParallelCopy", "optimizephis::OptimizePhis")] + [r"<llrm_core::processimpdefs::ProcessImplicitDefs as llrm_core::model::passes::LIRTransform>::transform_raising$"],
     [r"^\(anonymous namespace\)::RAGreedyLegacy::runOnMachineFunction\(", r"^\(anonymous namespace\)::RegisterCoalescerLegacy::runOnMachineFunction\(", r"^llvm::LiveIntervalsWrapperPass::runOnMachineFunction\(", r"^\(anonymous namespace\)::PHIElimination::runOnMachineFunction\(", r"^\(anonymous namespace\)::TwoAddressInstructionLegacyPass::runOnMachineFunction\(", r"^llvm::LiveVariablesWrapperPass::runOnMachineFunction\(", r"VirtRegRewriterLegacy::runOnMachineFunction\(", r"StackSlotColoringLegacy::runOnMachineFunction\(", r"OptimizePHIsLegacy::runOnMachineFunction\(", r"ProcessImplicitDefsLegacy::runOnMachineFunction\("])
-B["machine clean-up + FP stackifier (peephole, sink, jumps, cse, float*, frame)"] = ([OB(n) for n in ("peephole::Peephole", "machinesink::MachineSink", "jumps::ControlFlow", "precse::MachineCse", "floatalloc::FloatAlloc", "floatassign::FloatPrep", "floatfold::FloatFold", "pressuresink::PressureSink", "loopslots::LoopSlots", "phiconst::SharedConstants", "schedule::Scheduler", "farcall::FarIndirectCalls", "machinesched::MachineScheduler", "latecleanup::LateCleanup", "machinecp::CopyPropagation", "machinelicm::MachineLicm", "liverangeshrink::LiveRangeShrink", "fixupsetcc::FixupSetCc", "combiner::MachineCombiner", "fixupbw::FixupBw", "pushfold::LoadFold", "cmpsub::CmpAsSub", "leaopt::OptimizeLeas", "fixupleas::FixupLeas", "flagscopy::FlagsCopy", "callframe::CallFrameOpt")],
-    [r"MachineSchedulerLegacy::runOnMachineFunction\(", r"MachineLICMBase::runOnMachineFunction\(", r"MachineSinkingLegacy::runOnMachineFunction\(", r"MachineBlockPlacementLegacy::runOnMachineFunction\(", r"MachineCopyPropagationLegacy::runOnMachineFunction\(", r"MachineCSELegacy::runOnMachineFunction\(", r"BranchFolderLegacy::runOnMachineFunction\(", r"X86FPStackifierLegacy::runOnMachineFunction\(", r"PeepholeOptimizerLegacy::runOnMachineFunction\(", r"DeadMachineInstructionElim::runOnMachineFunction\(", r"MachineLateInstrsCleanupLegacy::runOnMachineFunction\(", r"PEILegacy::runOnMachineFunction\(", r"LiveRangeShrink::runOnMachineFunction\(", r"X86FixupBWInstLegacy::runOnMachineFunction\(", r"ShrinkWrapLegacy::runOnMachineFunction\(", r"ReachingDefInfoWrapperPass::runOnMachineFunction\(", r"ExecutionDomainFix::runOnMachineFunction\(", r"PostRAMachineSinkingLegacy::runOnMachineFunction\(", r"X86FixupSetCCPass::runOnMachineFunction\(", r"MachineCombiner::runOnMachineFunction\(", r"FixupLEAPass::runOnMachineFunction\(", r"OptimizeLEAPass::runOnMachineFunction\(", r"X86FlagsCopyLoweringPass::runOnMachineFunction\(", r"X86CallFrameOptimization::runOnMachineFunction\("])
+B["machine clean-up + FP stackifier (peephole, sink, jumps, cse, float*, frame)"] = ([OB(n) for n in ("peephole::Peephole", "peepholeopt::PeepholeOptimizer", "earlytaildup::EarlyTailDuplicate", "machinesink::MachineSink", "jumps::ControlFlow", "precse::MachineCse", "floatalloc::FloatAlloc", "floatassign::FloatPrep", "floatfold::FloatFold", "pressuresink::PressureSink", "loopslots::LoopSlots", "phiconst::SharedConstants", "schedule::Scheduler", "farcall::FarIndirectCalls", "machinesched::MachineScheduler", "latecleanup::LateCleanup", "machinecp::CopyPropagation", "machinelicm::MachineLicm", "liverangeshrink::LiveRangeShrink", "fixupsetcc::FixupSetCc", "combiner::MachineCombiner", "fixupbw::FixupBw", "pushfold::LoadFold", "cmpsub::CmpAsSub", "leaopt::OptimizeLeas", "fixupleas::FixupLeas", "flagscopy::FlagsCopy", "callframe::CallFrameOpt")],
+    [r"MachineSchedulerLegacy::runOnMachineFunction\(", r"MachineLICMBase::runOnMachineFunction\(", r"MachineSinkingLegacy::runOnMachineFunction\(", r"MachineBlockPlacementLegacy::runOnMachineFunction\(", r"MachineCopyPropagationLegacy::runOnMachineFunction\(", r"MachineCSELegacy::runOnMachineFunction\(", r"BranchFolderLegacy::runOnMachineFunction\(", r"X86FPStackifierLegacy::runOnMachineFunction\(", r"PeepholeOptimizerLegacy::runOnMachineFunction\(", r"EarlyTailDuplicateLegacy::runOnMachineFunction\(", r"DeadMachineInstructionElim::runOnMachineFunction\(", r"MachineLateInstrsCleanupLegacy::runOnMachineFunction\(", r"PEILegacy::runOnMachineFunction\(", r"LiveRangeShrink::runOnMachineFunction\(", r"X86FixupBWInstLegacy::runOnMachineFunction\(", r"ShrinkWrapLegacy::runOnMachineFunction\(", r"ReachingDefInfoWrapperPass::runOnMachineFunction\(", r"ExecutionDomainFix::runOnMachineFunction\(", r"PostRAMachineSinkingLegacy::runOnMachineFunction\(", r"X86FixupSetCCPass::runOnMachineFunction\(", r"MachineCombiner::runOnMachineFunction\(", r"FixupLEAPass::runOnMachineFunction\(", r"OptimizeLEAPass::runOnMachineFunction\(", r"X86FlagsCopyLoweringPass::runOnMachineFunction\(", r"X86CallFrameOptimization::runOnMachineFunction\("])
 B["emit (object writer; pin: asm printer + MC encode)"] = ([r"llrm_core::backend::objbuild::written_in$"], [r"^llvm::X86AsmPrinter::runOnMachineFunction\(", r"^llvm::AsmPrinter::doFinalization\("])
 FRONT = (OT - ours["llrm_core::driver::compiled"] - ours["llrm_core::backend::objbuild::written_in"] + ours["llrm_core::driver::emitted"], PT - clang_hts)
 def total(table, pats, label=None):
@@ -73,18 +73,46 @@ _listed_ours = {n for _name, (_op, _pp) in B.items() for n in total(ours, _op)[1
 _unlisted = sorted(n for n in _every - _listed_ours if ours[n] >= 100_000)
 if _unlisted:
     raise SystemExit("ledger4: backend passes in no bucket (their cost would read as residual): " + "; ".join(re.sub(r"<llrm_core::backend::(\w+::\w+) as .*", r"\1", n) for n in _unlisted))
+# An analysis a pass builds inside itself (ours: `Analyses::get`, MemorySSA's `Accesses::managed`) is the pin's `*Analysis::run` frame, which
+# callgrind cannot attribute to the pass that asked (every analysis is reached through the one shared `getResultImpl` frame). So ours moves out of
+# the pass buckets into its own bucket, exactly (the direct callees' costs, needs LEDGER_CALLING); the pin's is listed apart, inclusive and
+# unsummed: its nested analyses (MemorySSA's DomTree) are counted in both.
+ANALYSES = "analyses built inside passes (ours: moved out of the passes above; pin: listed below, not summed)"
+OUR_ANALYSIS = r"^<llrm_mir::passes::Analyses>::get::<|^<llrm_analysis::memoryssa::Accesses>::managed$"
+PIN_ANALYSIS = [r"^llvm::\w+Analysis::run\(", r"^llvm::AAManager::run\("]
+moved = collections.Counter(); analyses_ours = 0; analyses_detail = collections.Counter()
+if _calling:
+    _costs = nested.edge_costs(_calling)
+    for name, (op, pp) in B.items():
+        spent = nested.analyses_under(_costs, total(ours, op)[1], OUR_ANALYSIS, analyses_detail)
+        moved[name] = sum(spent.values())
+    analyses_ours = sum(moved.values())
 rows = []; so = sp = 0
 for name, (op, pp) in B.items():
     o, os_ = total(ours, op); p, ps = total(clang, pp)
+    o -= moved[name]
     rows.append((name, o / 1e6, p / 1e6)); so += o; sp += p
+if _calling:
+    rows.append((ANALYSES, analyses_ours / 1e6, 0.0)); so += analyses_ours
 print(f"{'bucket':92} {'ours M':>8} {'pin M':>8} {'ratio':>6} {'excess':>8}")
 for n, o, p in rows:
     print(f"{n:92} {o:8.1f} {p:8.1f} {(o/p if p else float('nan')):6.2f} {o-p:8.1f}")
 print(f"{'front end (parse, translate, HIR, HIR->MIR / clang parse+sema)':92} {FRONT[0]/1e6:8.1f} {FRONT[1]/1e6:8.1f} {FRONT[0]/FRONT[1]:6.2f} {(FRONT[0]-FRONT[1])/1e6:8.1f}")
 so += FRONT[0]; sp += FRONT[1]
+if _calling:
+    short = lambda sym, pattern: re.sub(pattern, r"\1", sym)
+    print("analyses inside passes, ours (direct callee cost under the pass frames):",
+          "; ".join(f"{short(k, r'.*::get::<(.*)>$')} {v / 1e6:.2f}" for k, v in analyses_detail.most_common(8)))
+    print("analyses, pin (inclusive, nested ones counted in both):",
+          "; ".join(f"{short(k, r'^llvm::(\w+)::run.*')} {v / 1e6:.2f}"
+                    for k, v in sorted(total(clang, PIN_ANALYSIS)[1].items(), key=lambda kv: -kv[1])[:8]))
 print(f"{'sum of the buckets':92} {so/1e6:8.1f} {sp/1e6:8.1f}")
 print(f"{'residual (pass-manager glue, analyses outside passes, walk own, allocation, lowering)':92} {(OT-so)/1e6:8.1f} {(PT-sp)/1e6:8.1f}")
 print(_double or "double-count check: not run (no LEDGER_CALLING)")
+# Instrument check: frames in no bucket read as residual (a dag run's isel read as 278 M of 1,040 M until its frames were listed).
+RESIDUAL_MAX = float(os.environ.get("LEDGER_RESIDUAL_MAX_PERCENT", "12"))
+if (OT - so) / OT * 100 > RESIDUAL_MAX:
+    raise SystemExit(f"ledger4: residual is {(OT - so) / 1e6:.1f} M, {(OT - so) / OT * 100:.1f}% of the total (limit {RESIDUAL_MAX}%): frames are in no bucket; list them (LEDGER_LISTED names the listed ones) or set LEDGER_RESIDUAL_MAX_PERCENT")
 print(f"{'total (callgrind Ir)':92} {OT/1e6:8.1f} {PT/1e6:8.1f} {OT/PT:6.2f}")
 if DETAIL:
     for name, (op, pp) in B.items():

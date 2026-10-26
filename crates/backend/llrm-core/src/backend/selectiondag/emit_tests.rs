@@ -1,8 +1,7 @@
-use std::collections::HashMap;
-
 use llrm_dagisel::generated::x86_i486::MACHINE_OPCODES;
 use llrm_dagisel::x86_addr::AddrMode;
 use llrm_lir::registers::RegId;
+use llrm_support::hash::HashMap;
 use llrm_target::Target;
 
 use super::emit::{EmitContext, EmitError, emit};
@@ -88,7 +87,7 @@ fn context_in(
     let target = llrm_x86_m32::M32;
     let map = OpcodeMap::new(llrm_instr::parse(&target.forms_text(), target.dialect()).expect("x86.instr"));
     let names: HashMap<u16, &str> = MACHINE_OPCODES.iter().copied().collect();
-    let no_blocks = HashMap::new();
+    let no_blocks = HashMap::default();
     f(&EmitContext {
         tables: &[],
         caller_saved: &Default::default(),
@@ -99,6 +98,7 @@ fn context_in(
         block_at: &no_blocks,
         frame: &NoFrame,
         address_mode: mode,
+        call_alignment: 1,
         map: &map,
         names: &names,
     });
@@ -182,15 +182,15 @@ fn a_copy_to_a_physical_register_is_a_mov() {
     });
 }
 
-/// A condition-coded opcode has no single form: it is refused, not guessed.
+/// An opcode with no form (an atomic exchange-add) is refused, not guessed.
 #[test]
 fn an_unmapped_opcode_is_an_error() {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let entry = dag.entry_node();
     let a = copy_from(&mut dag, entry, 10);
     let b = copy_from(&mut dag, entry, 11);
-    let bsf = machine(&mut dag, "BSF32rr", &[EVT::I32], &[a, b]);
-    let root = copy_to(&mut dag, entry, 12, bsf);
+    let cmov = machine(&mut dag, "LXADD32", &[EVT::I32], &[a, b]);
+    let root = copy_to(&mut dag, entry, 12, cmov);
     context(|ctx| {
         let units = schedule(&dag, root, &Info);
         assert!(matches!(emit(&dag, &units, ctx), Err(EmitError::Unmapped(_))));
@@ -222,8 +222,9 @@ fn a_select_without_cmov_becomes_a_branch_and_a_phi() {
         assert_eq!(phi.incoming.len(), 2);
         assert_eq!(phi.incoming[0].0, fallthrough.at, "the false value comes from the false block");
         assert_eq!(phi.incoming[1].0, this.at, "the true value from the block that branched");
-        let mov = sink.insns[0].what.as_ref().expect("the copy lands in the join block");
-        assert_eq!(mov.sources[0], Loc::Held(crate::model::ir::Held { value: phi.result, width: 4 }));
+        // The result is made in %12 itself (`CreateVirtualRegisters`): no
+        // export copy follows the select.
+        assert!(sink.insns.is_empty(), "{:?}", sink.insns);
     });
 }
 
@@ -290,5 +291,26 @@ fn a_shift_by_cl_reads_cl() {
         // nobody defines (the LIR verifier: "value defined N times")
         assert!(matches!(shl.sources.last(), Some(Loc::Held(_))), "{lines:?}");
         assert!(lines.iter().all(|line| !line.contains("CL")), "{lines:?}");
+    });
+}
+
+/// `lea ax, [index*4 + 160]` at m16 was refused ('a lea of a symbol and a
+/// scaled index at m16': QCport's menu.c and sbar.c under the DAG default):
+/// 16-bit addressing has no scale, so the index is shifted first.
+#[test]
+fn a_lea_of_a_constant_and_a_scaled_index_at_m16_shifts_the_index() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let index = copy_from(&mut dag, entry, 11);
+    let scale = dag.get_constant(4, EVT::I8);
+    let disp = dag.get_constant(160, EVT::I32);
+    let noreg = dag.get_register(EVT::I16, 0);
+    let lea = machine(&mut dag, "LEA32r", &[EVT::I32], &[noreg, scale, index, disp, noreg]);
+    let root = copy_to(&mut dag, entry, 12, lea);
+    context_in(AddrMode::Real16, |ctx| {
+        let units = schedule(&dag, root, &Info);
+        let emitted = emit(&dag, &units, ctx).expect("emits");
+        let names: Vec<_> = emitted.blocks[0].insns.iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+        assert_eq!(names.iter().map(|n| &**n).collect::<Vec<_>>(), ["shl", "lea", "mov"]);
     });
 }

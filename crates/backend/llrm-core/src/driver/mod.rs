@@ -103,7 +103,7 @@ impl Options {
         Self {
             machine,
             pipeline: Default::default(),
-            dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
+            dump: llrm_support::env_var("LLRM_MIR_STAGES").map(Into::into),
             stack_usage: false,
             stack_limit: None,
             selection,
@@ -166,6 +166,7 @@ impl Options {
             self.rounds_float_spills,
             self.spills_extended,
             self.pipeline.stable_loads,
+            self.pipeline.has_min_size,
         )
     }
 }
@@ -527,9 +528,10 @@ pub fn optimized(
         let profile = options.cpu()?;
         timed("mir selects", || {
             program.modules.iter_mut().try_for_each(|module| {
-                crate::backend::selects::priced(module, &*tti, &|ty| layout.expands_for("select", ty), &|name| {
-                    profile.cost(name).ok()
-                })
+                let wanted = |ty: &str| {
+                    layout.expands_for("select", ty) && !crate::backend::selects::kept_for_isel(options.isel, ty)
+                };
+                crate::backend::selects::priced(module, &*tti, &wanted, &|name| profile.cost(name).ok())
             })
         })?;
     }

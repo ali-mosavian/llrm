@@ -501,11 +501,13 @@ fn test_fixed_point_types_scale_literals_and_keep_storage_width_in_mir() {
 
     let text = emitted_text(&program);
     let (product, quotient) = (defined(&text, "product"), defined(&text, "quotient"));
-    // fixed8 uses a 32-bit intermediate; fixed16 is already based on i32 and
-    // stays one fixed-point operation, never widened to i64.
+    // fixed8 uses a 32-bit intermediate; fixed16's product is one fixed-point
+    // operation. Its quotient is the spec's `(a << s) / b` in 64 bits, which
+    // truncates toward zero where `llvm.sdiv.fix` rounds down and needed a
+    // correction (115 bytes a divide at m16 -Os).
     assert!(["sext i16", "mul i32", "ashr i32"].iter().all(|one| product.contains(one)), "{product}");
-    assert!(quotient.contains("@llvm.sdiv.fix.i32("), "{quotient}");
-    assert!(!["sext", "shl", " sdiv ", "i64"].iter().any(|one| quotient.contains(one)), "{quotient}");
+    assert!(["sext i32", "shl i64", " sdiv i64 ", "trunc i64"].iter().all(|one| quotient.contains(one)), "{quotient}");
+    assert!(!quotient.contains("sdiv.fix"), "{quotient}");
 }
 
 /// nbody's `nbody` as its HIR emits it.
@@ -517,9 +519,11 @@ fn nbody_emitted() -> String {
 #[test]
 fn test_fixed_i32_product_stays_a_storage_width_operation() {
     // Native nbody used to route every Q23.9 product through generic i64 MIR.
+    // The quotient is the one i64 operation: a truncating divide of the shifted
+    // dividend (`sdiv.fix` floors and cost a correction per divide).
     let nbody = nbody_emitted();
-    assert!(nbody.contains("@llvm.smul.fix.i32(") && nbody.contains("@llvm.sdiv.fix.i32("), "{nbody}");
-    assert!(!nbody.contains("i64"), "{nbody}");
+    assert!(nbody.contains("@llvm.smul.fix.i32(") && !nbody.contains("sdiv.fix"), "{nbody}");
+    assert!(nbody.contains(" sdiv i64 ") && !nbody.contains("mul i64"), "{nbody}");
 }
 
 #[test]
@@ -573,15 +577,9 @@ fn test_nbody_arrays_strings_and_print_cross_hir_and_verify_in_mir() {
     );
 
     let nbody = nbody_emitted();
-    for one in [
-        "getelementptr",
-        "br i1 ",
-        "addrspace(1) void @N$",
-        "@llvm.sdiv.fix.i32(",
-        "@llvm.smul.fix.i32(",
-        " = load ",
-        "store ",
-    ] {
+    for one in
+        ["getelementptr", "br i1 ", "addrspace(1) void @N$", " sdiv i64 ", "@llvm.smul.fix.i32(", " = load ", "store "]
+    {
         assert!(nbody.contains(one), "{one}\n{nbody}");
     }
 
@@ -650,7 +648,10 @@ fn test_nbody_velocity_fields_are_stored_once_per_update() {
     let assembly = listing(&parsed(&fixture("nbody.nib")), "main", &O2_calls_kept());
     let function = between(&assembly, "_nbody proc near", "_nbody endp");
     // The only stores through a body's index are its velocity's two fields.
-    let stored: Vec<String> = Regex::new(r"mov dword ptr (\[bp\+[sd]i[-+]\d+\]), e(?:ax|bx|cx|dx|si|di)\n")
+    // (a field is named by its displacement: the index register that reaches
+    // it is the allocator's to choose, `si` for the store and `di` for the
+    // load)
+    let stored: Vec<String> = Regex::new(r"mov dword ptr \[bp\+[sd]i([-+]\d+)\], e(?:ax|bx|cx|dx|si|di)\n")
         .unwrap()
         .captures_iter(function)
         .map(|found| found[1].to_owned())
@@ -658,7 +659,8 @@ fn test_nbody_velocity_fields_are_stored_once_per_update() {
 
     assert_eq!(stored.len(), 2, "{function}");
     for field in &stored {
-        let loads = Regex::new(&format!(r"e(?:ax|bx|cx|dx|si|di), dword ptr {}\n", regex::escape(field))).unwrap();
+        let loads =
+            Regex::new(&format!(r"e(?:ax|bx|cx|dx|si|di), dword ptr \[bp\+[sd]i{}\]\n", regex::escape(field))).unwrap();
         assert_eq!(loads.find_iter(function).count(), 1, "{field}\n{function}");
     }
 }
@@ -1749,7 +1751,7 @@ fn a_float_converts_to_every_integer_width() {
 /// test waited a minute for a release rebuild and every other one for its lock.
 #[test]
 fn test_parsing_runs_no_cargo() {
-    if llrm_core::support::env_set("LLRM_NO_CARGO") {
+    if llrm_core::support::env_flag!("LLRM_NO_CARGO") {
         parsed(&fixture("fixed.nib"));
         return;
     }
@@ -3307,4 +3309,23 @@ fn test_a_noipa_kernel_survives_o3_as_a_procedure_main_calls() {
     assert!(kept.contains("bench_crc proc"), "{kept}");
     let main = &kept[kept.find("_main proc").expect("main")..kept.find("_main endp").expect("main ends")];
     assert!(main.contains("call") && main.contains("_bench_crc"), "{kept}");
+}
+
+/// A fixed-point `/` was `llvm.sdiv.fix`, which the selector floored, then a
+/// correction back to the truncation the language states: `kdiv` at m16 -Os
+/// was 75 lines with a frame, `imul` and `setl`/`setne` after the divides
+/// (461 bytes, main's 346). The divide is the 64-bit quotient the spec writes.
+#[test]
+fn a_fixed_point_divide_is_one_truncating_divide() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "kdiv.nib",
+        "type Q = fixed i32, fraction=9\n\nfn kdiv(x: i32) -> i32:\n    let d: Q = Q(x + 1)\n    let w: Q = Q(1) / d\n    return i32(w * 512)\n\nfn main() -> i16:\n    print(kdiv(3))\n    print(kdiv(-4))\n    return 0\n",
+    );
+    let assembly = listing(&parsed(&source), "main", &os_calls_kept());
+    let kdiv = between(&assembly, "_kdiv proc near", "_kdiv endp");
+    assert!(!kdiv.contains("setl") && !kdiv.contains("setne"), "no floor correction after the divide: {kdiv}");
+    let lines = kdiv.lines().filter(|line| !line.trim().is_empty()).count();
+    assert!(lines <= 25, "{lines} lines: {kdiv}");
 }

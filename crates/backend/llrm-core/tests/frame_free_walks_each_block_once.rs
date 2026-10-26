@@ -33,7 +33,7 @@ fn test_each_block_is_looked_up_once_not_searched_for_by_every_way_into_it() {
     let looked = |blocks: i64| {
         let body = chain(blocks);
         let before = LOOKED.with(std::cell::Cell::get);
-        let kept = has_fp(&body, &registers, &Default::default(), false, false, false, false);
+        let kept = has_fp(&body, &registers, &Default::default(), false, false, false);
         assert!(!kept, "premise: a chain of nops needs no frame register");
         LOOKED.with(std::cell::Cell::get) - before
     };

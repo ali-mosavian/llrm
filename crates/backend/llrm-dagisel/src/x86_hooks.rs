@@ -78,8 +78,12 @@ impl X86Hooks {
 }
 
 impl PatternContext for X86Hooks {
+    // DEVIATE (m16): the pin's `OptForSize, Not64BitMode` patterns make 1, -1
+    // and word constants by `xor; inc`/`dec` or a dword `mov`, which are
+    // shorter than `mov r32, imm32` only in 32-bit code: with the 0x66 prefix
+    // at -m16 they are longer than `mov ax, imm16`.
     fn should_opt_for_size(&self) -> bool {
-        self.options.opt_for_size
+        self.options.opt_for_size && self.options.cpu != Cpu::M16
     }
     fn has_min_size(&self) -> bool {
         self.options.min_size
@@ -273,37 +277,59 @@ impl X86Hooks {
         flags: SDValue,
     ) -> bool {
         // COND_O..COND_G: the codes that read no carry.
-        let reads_carry = |cc: u64| !matches!(cc, 0 | 1 | 4 | 5 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15);
-        for (user, _) in dag.users(flags) {
-            if dag.opcode(user) == isd::CopyToReg {
-                // Only a copy to EFLAGS; the machine nodes that read it say
-                // their condition in the last use operand.
-                if dag.register_of(dag.operand(user, 1).node) != Some(x86::EFLAGS) {
+        has_no_flag_uses(dag, flags, |cc| !matches!(cc, 0 | 1 | 4 | 5 | 8..=15))
+    }
+
+    /// `hasNoSignFlagUses` ([L3636][sign]). Unlike the pin, a user that reads
+    /// the flags directly (`SETCC`, `CMOV`, `BRCOND`) is examined too.
+    ///
+    /// [sign]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3636
+    pub fn has_no_sign_flag_uses<D: AddrDag>(
+        &self,
+        dag: &D,
+        flags: SDValue,
+    ) -> bool {
+        // COND_S, COND_NS, COND_L, COND_GE, COND_LE, COND_G read the sign.
+        has_no_flag_uses(dag, flags, |cc| matches!(cc, 8 | 9 | 12..=15))
+    }
+}
+
+/// True when no user of `flags` has a condition code for which `reads` holds.
+fn has_no_flag_uses<D: AddrDag>(
+    dag: &D,
+    flags: SDValue,
+    reads: impl Fn(u64) -> bool,
+) -> bool {
+    for (user, _) in dag.users(flags) {
+        if dag.opcode(user) == isd::CopyToReg {
+            // Only a copy to EFLAGS; the machine nodes that read it say
+            // their condition in the last use operand.
+            if dag.register_of(dag.operand(user, 1).node) != Some(x86::EFLAGS) {
+                return false;
+            }
+            for (reader, _) in dag.users(SDValue::new(user, 1)) {
+                if !dag.is_machine(reader) {
                     return false;
                 }
-                for (reader, _) in dag.users(SDValue::new(user, 1)) {
-                    if !dag.is_machine(reader) {
-                        return false;
-                    }
-                    match machine_condition(dag, reader) {
-                        Some(cc) if !reads_carry(cc) => {}
-                        _ => return false,
-                    }
+                match machine_condition(dag, reader) {
+                    Some(cc) if !reads(cc) => {}
+                    _ => return false,
                 }
-                continue;
             }
-            let cc_operand = match dag.opcode(user) {
-                x86isd::SETCC | x86isd::SETCC_CARRY => 0,
-                x86isd::CMOV | x86isd::BRCOND => 2,
-                _ => return false,
-            };
-            match dag.constant(dag.operand(user, cc_operand)) {
-                Some(cc) if !reads_carry(cc as u64) => {}
-                _ => return false,
-            }
+            continue;
         }
-        true
+        let cc_operand = match dag.opcode(user) {
+            x86isd::SETCC | x86isd::SETCC_CARRY => 0,
+            x86isd::CMOV | x86isd::BRCOND => 2,
+            _ => return false,
+        };
+        match dag.constant(dag.operand(user, cc_operand)) {
+            Some(cc) if !reads(cc as u64) => {}
+            _ => return false,
+        }
     }
+    true
 }
 
 /// `getCondFromNode`: the condition a machine node reads, from its last use

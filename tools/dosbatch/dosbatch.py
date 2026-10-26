@@ -314,7 +314,7 @@ def link_nib(target: str, source: Path, obj: Path, exe: Path, work: Path, level:
     """A Nib program for `target`: its object, `runtime.nib` cut to what the program and the OS layer (`os_objects`) name, linked as the target says."""
     runtime = work / (obj.stem + "R.obj")
     used = [word for one in (obj, *foreign, *os_objects(target, "nib", work).values()) for word in ("--used-by", str(one))]
-    _host([str(BIN / "llrm-nib"), str(ROOT / "crates/frontends/llrm-nib/src/runtime/runtime.nib"), m_flag(target), *abi, "-o", str(runtime), level, "--procedure-segments", "-Wno-target-width", *used])
+    _host(with_isel([str(BIN / "llrm-nib"), str(ROOT / "crates/frontends/llrm-nib/src/runtime/runtime.nib"), m_flag(target), *abi, "-o", str(runtime), level, "--procedure-segments", "-Wno-target-width", *used]))
     return link_target(target, obj, exe, work, runtime=(os_start(target, "nib"), []), objects_after=(runtime, *foreign), defines=os_defines(target, "nib"))
 
 
@@ -560,6 +560,30 @@ def run(jobs: list[Job], work: Path, timeout: int | None = None, stall: int = 18
     if over is not None:
         return stopped_for_output(jobs, work, over, cap)
     return collect(jobs, work, events)
+
+
+def workers_for(count: int) -> int:
+    """How many DOSBox launches share `count` jobs: `LLRM_DOS_WORKERS`, at most 6 and four or more jobs each, 4 by default."""
+    wanted = int(os.environ.get("LLRM_DOS_WORKERS", "4"))
+    return max(1, min(wanted, 6, count // 4))
+
+
+def run_parallel(jobs: list[Job], work: Path, **options) -> dict[str, Result]:
+    """`run`, the jobs spread over several dosrun launches that run at once. Each launch builds and runs its own share in a
+    directory of its own under `work` (so files kept by `run` are in `work/launchN`); a job's result does not depend on the
+    others (virtual time)."""
+    launches = workers_for(len(jobs))
+    if launches == 1:
+        return run(jobs, work, **options)
+    if work.exists():
+        shutil.rmtree(work)
+    work.mkdir(parents=True)
+    shares = [jobs[at::launches] for at in range(launches)]
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(launches) as pool:
+        parts = list(pool.map(lambda at: run(shares[at], work / f"launch{at}", **options), range(launches)))
+    return {stem: result for part in parts for stem, result in part.items()}
 
 
 def stopped_for_output(jobs: list[Job], work: Path, over: str, cap: int) -> dict[str, Result]:

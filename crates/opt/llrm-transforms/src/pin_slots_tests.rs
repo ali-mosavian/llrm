@@ -229,20 +229,6 @@ const ROWS: &[Disposition] = &[
     ),
     row(
         Simplify,
-        "loop-instsimplify",
-        Why::Missing,
-        "registry Missing entry; ablation 0 of 12 IRs",
-        "w-3 (w-5 if silent at 09:00), 11-09",
-    ),
-    row(
-        Simplify,
-        "loop-simplifycfg",
-        Why::Missing,
-        "registry Missing entry; ablation 0 of 12 IRs",
-        "w-3 (w-5 if silent at 09:00), 11-09",
-    ),
-    row(
-        Simplify,
         "extra-simple-loop-unswitch-passes",
         Why::Missing,
         "ablation 0 of 12 IRs",
@@ -526,10 +512,6 @@ const OURS_ONLY: &[(&str, &str)] = &[
     ),
     (
         "787: inferspace@787",
-        "-O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot)",
-    ),
-    (
-        "809: decide@809",
         "-O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot)",
     ),
     (

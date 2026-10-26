@@ -451,6 +451,7 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
         Opcode::Select => &[|c, inst| c.visit_select(inst)],
         Opcode::Br => &[|c, inst| c.visit_cond_br(inst)],
         Opcode::Call(_) => &[|c, inst| c.visit_call(inst)],
+        Opcode::Phi => &[|c, inst| c.visit_phi(inst)],
         _ => &[],
     }
 }
@@ -512,13 +513,23 @@ pub fn visit(
     // comparison nor what reads it (`sext (icmp slt v, 0)`) is rewritten into
     // a user of `v` that is not a comparison.
     let compares_flags = |inst| llrm_mir::facts::compares_flags_result(c.context, env.globals, c.function, inst);
-    if compares_flags(inst)
-        || c.function.instruction(inst).operands.iter().any(|operand| {
+    // An `i1` add, subtract or multiply is a xor or an and of the compare
+    // (never a user of the flags): the selector refuses the arithmetic, so
+    // it is always rewritten.
+    let boolean_arithmetic =
+        matches!(
+            c.function.instruction(inst).opcode,
+            Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
+        )
+            && c.context.types.int_bits(c.function.instruction(inst).ty) == Some(1);
+    if !boolean_arithmetic
+        && (compares_flags(inst)
+            || c.function.instruction(inst).operands.iter().any(|operand| {
             matches!(
                 operand,
                 Operand::Value(value) if matches!(c.function.value(*value).def, ValueDef::Instruction(one) if compares_flags(one))
             )
-        })
+        }))
     {
         return Visit::None;
     }
@@ -644,9 +655,9 @@ pub(crate) fn combine_with_sinking(
     sinking: bool,
     declared: &mut Declared,
 ) -> bool {
-    // InstCombine's `SQ.DC`: what the branches dominating an instruction say.
-    let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function)
-        .with_dom_conditions_of(context, globals, metadata, function);
+    // InstCombine's `SQ.DC`: what the branches dominating an instruction say,
+    // those visited so far.
+    let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function).with_lazy_dom_conditions();
     let env = Env { globals, callees, layout, analyses, sinking, back_edges: Default::default() };
     let mut c = Combiner { context, function, env: &env, worklist: InstWorklist::default(), declared };
     let mut changed = prepare(&env, c.context, c.function, &mut c.worklist);

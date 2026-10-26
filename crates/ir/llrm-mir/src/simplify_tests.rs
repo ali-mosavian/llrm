@@ -848,6 +848,7 @@ declare { i16, i1 } @llvm.umul.with.overflow.i16(i16, i16)
 declare i16 @llvm.fshl.i16(i16, i16, i16)
 declare i16 @llvm.fshr.i16(i16, i16, i16)
 declare i16 @llvm.smul.fix.i16(i16, i16, i32 immarg)
+declare i16 @llvm.sdiv.fix.i16(i16, i16, i32 immarg)
 ";
     for (body, expected) in [
         // bswap(bswap(x)) -> x, bitreverse(bitreverse(x)) -> x
@@ -921,6 +922,11 @@ declare i16 @llvm.smul.fix.i16(i16, i16, i32 immarg)
         ("  %r = call i16 @llvm.smul.fix.i16(i16 %x, i16 4, i32 2)\n", Some("%x")),
         ("  %r = call i16 @llvm.smul.fix.i16(i16 4, i16 %x, i32 2)\n", Some("%x")),
         ("  %r = call i16 @llvm.smul.fix.i16(i16 %x, i16 4, i32 3)\n", None),
+        // fixed-point divide of constants (Nib's `Real(3.2) / Real(64)` was an
+        // `idiv` at run time, 50 bytes): rounded toward negative infinity
+        ("  %r = call i16 @llvm.sdiv.fix.i16(i16 7, i16 2, i32 1)\n", Some("7")),
+        ("  %r = call i16 @llvm.sdiv.fix.i16(i16 -7, i16 4, i32 1)\n", Some("65532")),
+        ("  %r = call i16 @llvm.sdiv.fix.i16(i16 7, i16 0, i32 1)\n", None),
     ] {
         assert_eq!(simplified(&format!("{decls}{}", of(body)), "r").as_deref(), expected, "{body}");
     }
@@ -1211,4 +1217,20 @@ fn a_load_of_a_constant_table_at_a_constant_offset_is_the_element() {
     assert_eq!(simplified(&table("constant", at), "v").as_deref(), Some("15"));
     assert_eq!(simplified(&table("constant", &at.replace("load i16", "load volatile i16")), "v"), None);
     assert_eq!(simplified(&table("global", at), "v"), None);
+}
+
+/// `simplifyICmpWithMinMax` matches intrinsic calls: an icmp of two values that
+/// are not calls asks no name. It made eight lookups an icmp, 1.4 K Ir each
+/// (2,264 asks of 3.1 M Ir in d_faces -O2; the pin's matchers cost 75).
+#[test]
+fn an_icmp_of_two_non_calls_asks_no_min_max_name() {
+    simplify::MIN_MAX_ASKS.with(|asks| asks.set(0));
+    let text = "define i1 @f(i16 %a, i16 %b) {
+b0:
+  %c = icmp slt i16 %a, %b
+  ret i1 %c
+}
+";
+    assert_eq!(simplified(text, "c"), None);
+    assert_eq!(simplify::MIN_MAX_ASKS.with(|asks| asks.get()), 0);
 }

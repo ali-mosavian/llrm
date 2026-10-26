@@ -1,10 +1,9 @@
-use std::collections::HashMap;
-
 use llrm_dagisel::generated::x86_i486::{MACHINE_OPCODES, TABLE};
 use llrm_dagisel::interp::Selector;
 use llrm_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 use llrm_lir::registers::RegId;
 use llrm_mir::datalayout::DataLayout;
+use llrm_support::hash::HashMap;
 use llrm_target::Target;
 
 use super::actions::{Features, TargetLowering};
@@ -127,9 +126,10 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         constants: &super::emit::NoConstants,
         stack_pointer: RegId::SP,
         globals: &NoGlobals,
-        block_at: &HashMap::new(),
+        block_at: &HashMap::default(),
         frame: &frame,
         address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32,
+        call_alignment: 1,
         map: &map,
         names: &names,
     };
@@ -142,7 +142,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         let emitted = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: false },
+            &mut X86Lowering { cmov: false, sse2: false },
             &selector,
             &mut hooks(),
             &Info,
@@ -198,9 +198,10 @@ fn the_combiner_runs_between_the_legalizers() {
         build_block(&module, function, &layout, &BuilderTarget::m32(), &machine, &convention, &mut info, block)
             .expect("builds");
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
-    super::dag_select::legalized(&mut built.dag, &tli, &mut X86Lowering { cmov: false }, &machine).expect("legalizes");
+    super::dag_select::legalized(&mut built.dag, &tli, &mut X86Lowering { cmov: false, sse2: false }, &machine)
+        .expect("legalizes");
     let root = built.dag.get_root();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = llrm_support::hash::HashSet::default();
     let mut work = vec![root.node];
     while let Some(n) = work.pop() {
         if seen.insert(n) {

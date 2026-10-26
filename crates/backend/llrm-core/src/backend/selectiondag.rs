@@ -104,6 +104,8 @@
 
 pub use llrm_x86::dag::{actions, isd, lowering, mvt, x86isd};
 pub mod builder;
+pub mod combine_load;
+pub mod combine_token_factor;
 mod dag;
 pub mod dag_combiner;
 pub mod dag_function;
@@ -115,6 +117,8 @@ pub mod div_const;
 pub mod dump;
 pub mod emit;
 pub mod fold;
+pub mod fp_combine;
+pub mod fp_value;
 pub mod function_lowering;
 pub mod inline_asm;
 pub mod known_bits;
@@ -144,6 +148,26 @@ mod asmcall_tests;
 mod bundle_tests;
 #[cfg(test)]
 mod codecall_tests;
+#[cfg(test)]
+mod dag_function_aggregates_tests;
+#[cfg(test)]
+mod dag_function_calls_tests;
+#[cfg(test)]
+mod dag_function_far_tests;
+#[cfg(test)]
+mod dag_function_flags_tests;
+#[cfg(test)]
+mod dag_function_float_tests;
+#[cfg(test)]
+mod dag_function_frame_tests;
+#[cfg(test)]
+mod dag_function_m64_tests;
+#[cfg(test)]
+mod dag_function_odds_tests;
+#[cfg(test)]
+mod dag_function_switch_tests;
+#[cfg(test)]
+mod dag_function_tail_tests;
 #[cfg(test)]
 mod dag_function_tests;
 #[cfg(test)]

@@ -22,6 +22,7 @@ use llrm_mir::tti::CostKind;
 use super::super::isd::{CondCode, ISD};
 use super::super::mvt::EVT;
 use super::{Builder, Refused};
+use crate::backend::selectiondag::switchcg::BranchProbability;
 
 /// A logical `and` or `or`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,6 +49,9 @@ pub(super) struct MergedCase {
     true_bb: BlockId,
     false_bb: BlockId,
     this_bb: BlockId,
+    /// `CaseBlock::TrueProb` and `FalseProb`.
+    t_prob: BranchProbability,
+    f_prob: BranchProbability,
 }
 
 impl MergedCase {
@@ -141,14 +145,26 @@ impl Builder<'_> {
         if self.keep_conditions_together(cond_inst, logic, lhs, rhs, on_true, on_false) {
             return Ok(false);
         }
-        let (order, next, names) = (self.order.clone(), self.next_synthetic, self.dag.block_names.clone());
+        let (order, next, names) = (self.order.clone(), self.next_synthetic, self.dag.synthetic_names.clone());
         let mut cases = Vec::new();
-        self.find_merged_conditions(cond, on_true, on_false, self.block, self.block, logic, false, &mut cases)?;
+        let (t_prob, f_prob) =
+            (self.edge_probability(self.block, on_true), self.edge_probability(self.block, on_false));
+        self.find_merged_conditions(
+            cond,
+            on_true,
+            on_false,
+            self.block,
+            self.block,
+            logic,
+            (t_prob, f_prob),
+            false,
+            &mut cases,
+        )?;
         if !self.should_emit_as_branches(&cases) {
             // remove the blocks the walk made
             self.order = order;
             self.next_synthetic = next;
-            self.dag.block_names = names;
+            self.dag.synthetic_names = names;
             return Ok(false);
         }
         for case in &cases[1..] {
@@ -291,6 +307,7 @@ impl Builder<'_> {
         cur_bb: BlockId,
         switch_bb: BlockId,
         opc: Logic,
+        (t_prob, f_prob): (BranchProbability, BranchProbability),
         invert: bool,
         cases: &mut Vec<MergedCase>,
     ) -> Result<(), Refused> {
@@ -302,7 +319,17 @@ impl Builder<'_> {
             && let Some(inner) = self.not_operand(inst)
             && self.in_block(inner)
         {
-            return self.find_merged_conditions(inner, true_bb, false_bb, cur_bb, switch_bb, opc, !invert, cases);
+            return self.find_merged_conditions(
+                inner,
+                true_bb,
+                false_bb,
+                cur_bb,
+                switch_bb,
+                opc,
+                (t_prob, f_prob),
+                !invert,
+                cases,
+            );
         }
         let tree = logical(self.function, &self.module.context, cond).map(|(inst, mut op, a, b)| {
             if invert {
@@ -318,7 +345,16 @@ impl Builder<'_> {
                 && self.in_block(*b)
         });
         let Some((_, _, op0, op1)) = in_tree else {
-            return self.emit_branch_for_merged_condition(cond, true_bb, false_bb, cur_bb, switch_bb, invert, cases);
+            return self.emit_branch_for_merged_condition(
+                cond,
+                true_bb,
+                false_bb,
+                cur_bb,
+                switch_bb,
+                (t_prob, f_prob),
+                invert,
+                cases,
+            );
         };
         // a block after the current one
         let at = self.order.iter().position(|one| *one == cur_bb).map_or(self.order.len(), |at| at + 1);
@@ -327,13 +363,21 @@ impl Builder<'_> {
         match opc {
             Logic::Or => {
                 // X | Y: jmp_if_X TBB, jmp TmpBB; TmpBB: jmp_if_Y TBB, jmp FBB
-                self.find_merged_conditions(op0, true_bb, tmp, cur_bb, switch_bb, opc, invert, cases)?;
-                self.find_merged_conditions(op1, true_bb, false_bb, tmp, switch_bb, opc, invert, cases)?;
+                // The probability of the first is TProb/2 to TBB and the rest
+                // to TmpBB; the second gets A/2 and B normalized.
+                let first = (t_prob.div(2), t_prob.div(2).saturating_add(f_prob));
+                self.find_merged_conditions(op0, true_bb, tmp, cur_bb, switch_bb, opc, first, invert, cases)?;
+                let second = normalize(t_prob.div(2), f_prob);
+                self.find_merged_conditions(op1, true_bb, false_bb, tmp, switch_bb, opc, second, invert, cases)?;
             }
             Logic::And => {
                 // X & Y: jmp_if_X TmpBB, jmp FBB; TmpBB: jmp_if_Y TBB, jmp FBB
-                self.find_merged_conditions(op0, tmp, false_bb, cur_bb, switch_bb, opc, invert, cases)?;
-                self.find_merged_conditions(op1, true_bb, false_bb, tmp, switch_bb, opc, invert, cases)?;
+                // TrueProb for BB1 + FalseProb for TmpBB = FalseProb for the
+                // original block.
+                let first = (t_prob.saturating_add(f_prob.div(2)), f_prob.div(2));
+                self.find_merged_conditions(op0, tmp, false_bb, cur_bb, switch_bb, opc, first, invert, cases)?;
+                let second = normalize(t_prob, f_prob.div(2));
+                self.find_merged_conditions(op1, true_bb, false_bb, tmp, switch_bb, opc, second, invert, cases)?;
             }
         }
         Ok(())
@@ -370,6 +414,7 @@ impl Builder<'_> {
         false_bb: BlockId,
         cur_bb: BlockId,
         switch_bb: BlockId,
+        (t_prob, f_prob): (BranchProbability, BranchProbability),
         invert: bool,
         cases: &mut Vec<MergedCase>,
     ) -> Result<(), Refused> {
@@ -391,12 +436,21 @@ impl Builder<'_> {
                     }
                     _ => unreachable!("a compare"),
                 };
-                cases.push(MergedCase { cc, lhs, rhs: Rhs::Operand(rhs), true_bb, false_bb, this_bb: cur_bb });
+                cases.push(MergedCase {
+                    cc,
+                    lhs,
+                    rhs: Rhs::Operand(rhs),
+                    true_bb,
+                    false_bb,
+                    this_bb: cur_bb,
+                    t_prob,
+                    f_prob,
+                });
                 return Ok(());
             }
         }
         let cc = if invert { CondCode::SetNe } else { CondCode::SetEq };
-        cases.push(MergedCase { cc, lhs: cond, rhs: Rhs::True, true_bb, false_bb, this_bb: cur_bb });
+        cases.push(MergedCase { cc, lhs: cond, rhs: Rhs::True, true_bb, false_bb, this_bb: cur_bb, t_prob, f_prob });
         Ok(())
     }
 
@@ -433,6 +487,8 @@ impl Builder<'_> {
         case: &MergedCase,
     ) -> Result<(), Refused> {
         let lhs = self.get_value(case.lhs)?;
+        self.add_successor_with_prob(case.this_bb, case.true_bb, case.t_prob);
+        self.add_successor_with_prob(case.this_bb, case.false_bb, case.f_prob);
         let test = match case.rhs {
             // fold `(X == true)` to X
             Rhs::True if case.cc == CondCode::SetEq => lhs,
@@ -459,6 +515,21 @@ impl Builder<'_> {
         self.dag.set_root(node);
         Ok(())
     }
+}
+
+/// `BranchProbability::normalizeProbabilities` of two: the pair scaled to sum
+/// to one, equal when both are zero.
+fn normalize(
+    a: BranchProbability,
+    b: BranchProbability,
+) -> (BranchProbability, BranchProbability) {
+    let sum = u64::from(a.0) + u64::from(b.0);
+    if sum == 0 {
+        let half = BranchProbability::new(1, 2);
+        return (half, half.compl());
+    }
+    let first = BranchProbability((u64::from(a.0) * (1 << 31) / sum) as u32);
+    (first, first.compl())
 }
 
 /// `value` has one use.
@@ -552,6 +623,54 @@ mod tests {
         .unwrap_or_else(|why| panic!("{}", why.0))
         .extra
         .len()
+    }
+
+    /// The probabilities the branch was lowered with: (from, to, 2^31sts).
+    fn edges_of(body: &str) -> Vec<(u32, u32, u32)> {
+        let text = format!(
+            "target datalayout = \"e-p:32:32-n8:16:32\"\ndefine i32 @f(i32 %a, i32 %b, i32 %c, i32 %d, ptr %p, i8 %e) {{\nentry:\n  %x = icmp slt i32 %a, %b\n{body}\n  br i1 %o, label %t, label %e2, !prof !0\nt:\n  ret i32 1\ne2:\n  ret i32 2\n}}\n!0 = !{{!\"branch_weights\", i32 3, i32 1}}\n"
+        );
+        let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
+        let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+        let (id, _, function) =
+            module.functions().find(|(_, g, f)| !f.is_declaration() && g.name.as_deref() == Some("f")).unwrap();
+        let convention =
+            crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
+        let mut info = FunctionLoweringInfo::new(function);
+        let target = BuilderTarget::m32().with_tti(Some(std::rc::Rc::new(llrm_x86::tti::X86::of_cpu("i486").unwrap())));
+        build_block(
+            &module,
+            function,
+            &layout,
+            &target,
+            &llrm_x86_m32::M32,
+            &convention,
+            &mut info,
+            function.entry().unwrap(),
+        )
+        .unwrap_or_else(|why| panic!("{}", why.0));
+        info.edge_probs.iter().map(|(from, to, p)| (from.0, to.0, *p)).collect()
+    }
+
+    /// A branch lowered as two (`a < b || c * d > 7`) was 50/50 on each edge in
+    /// the machine CFG, whatever the IR said; the pin's `FindMergedConditions`
+    /// shares the branch's probabilities out so that leaving by each target
+    /// has the probability the branch gave it (`TProb/2` to the first
+    /// compare's true edge, the rest on to the second).
+    #[test]
+    fn the_two_branches_of_a_merged_or_leave_by_each_target_with_the_branchs_probability() {
+        let edges = edges_of(MUL);
+        let total = 2_147_483_648.0_f64;
+        let of = |from: u32, to: u32| {
+            edges.iter().filter(|e| e.0 == from && e.1 == to).map(|e| f64::from(e.2) / total).sum::<f64>()
+        };
+        // blocks: entry, t, e2 (ids 0, 1, 2); the merged compare's block
+        // follows
+        let tmp = edges.iter().map(|e| e.0).find(|from| *from != 0).expect("a block of the second compare");
+        let to_t = of(0, 1) + of(0, tmp) * of(tmp, 1);
+        let to_e2 = of(0, 2) + of(0, tmp) * of(tmp, 2);
+        assert!((to_t - 0.75).abs() < 1e-3, "{edges:?}: leaves by t with {to_t}, the branch gave 3/4");
+        assert!((to_e2 - 0.25).abs() < 1e-3, "{edges:?}: leaves by e2 with {to_e2}, the branch gave 1/4");
     }
 
     const CHEAP: &str = "  %l = add i32 %c, 1\n  %y = icmp sgt i32 %l, 7\n  %o = or i1 %x, %y";

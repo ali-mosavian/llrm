@@ -194,6 +194,7 @@ pub enum Role {
     Byte,
     Base,
     Index,
+    Xmm,
 }
 
 /// One read of a value that confines it: where it is read, and the registers
@@ -222,6 +223,17 @@ pub fn confining_uses(
     uses
 }
 
+/// `confining_uses` and `classes` of one scan.
+pub fn confining(
+    body: &LirBody,
+    segments: &Segments,
+    registers: &RegisterClasses,
+) -> (Vec<Use>, Classes) {
+    let mut uses = Vec::new();
+    let found = collected(body, &BTreeSet::new(), segments, registers, false, Some(&mut uses), None);
+    (uses, found)
+}
+
 /// Which of the sets of registers an operand confines a value to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum Kind {
@@ -229,10 +241,12 @@ pub enum Kind {
     Addressing,
     WordBases,
     Bytes,
+    /// A 16-byte value: scalar `float` and `double` live in an SSE register.
+    Xmm,
 }
 
 impl Kind {
-    const ALL: [Kind; 4] = [Kind::WordIndexes, Kind::Addressing, Kind::WordBases, Kind::Bytes];
+    const ALL: [Kind; 5] = [Kind::WordIndexes, Kind::Addressing, Kind::WordBases, Kind::Bytes, Kind::Xmm];
 
     fn registers<'a>(
         self,
@@ -243,6 +257,7 @@ impl Kind {
             Kind::Addressing => &registers.addressing,
             Kind::WordBases => &registers.word_bases,
             Kind::Bytes => &registers.byte_words,
+            Kind::Xmm => &registers.xmm_set,
         }
     }
 }
@@ -272,7 +287,7 @@ pub enum Item {
 #[derive(Clone)]
 pub struct Sets {
     pub available: Vec<RegId>,
-    kinds: [BTreeSet<RegId>; 4],
+    kinds: [BTreeSet<RegId>; 5],
 }
 
 impl Sets {
@@ -329,6 +344,26 @@ pub fn confinement_of<'a>(
     only.map_or(Confinement::Free, Confinement::Only)
 }
 
+/// Whether the form of `what` fills operand `at` with an xmm register (its row
+/// has `x` there and no `r`), as LLVM's operand class `FR64`/`VR128` says. A
+/// width of the xmm register does not: a 16-byte integer pair is not one. An
+/// instruction with no row (a copy) is read by the width.
+fn xmm_filled(
+    regs: Regs,
+    what: &crate::model::ir::Semantics,
+    width: u32,
+    at: usize,
+    xmm: &mut std::cell::OnceCell<Option<u32>>,
+) -> bool {
+    if regs.xmm_bytes() == 0 {
+        return false;
+    }
+    match xmm.get_or_init(|| llrm_x86::effects::xmm_operands(&regs.effects, what)) {
+        Some(mask) => mask >> at & 1 != 0,
+        None => width == regs.xmm_bytes(),
+    }
+}
+
 /// The items of `one`, appended.
 pub fn contribution(
     regs: Regs,
@@ -349,7 +384,10 @@ pub fn contribution(
             items.push(Item::Selecting(held.value));
         }
     }
-    for place in what.dests.iter().chain(&what.sources) {
+    // Which operands the form fills with an xmm register, found once and only
+    // if a register operand asks.
+    let mut xmm = std::cell::OnceCell::new();
+    for (at, place) in what.dests.iter().chain(&what.sources).enumerate() {
         if let Loc::Mem(cell) = place {
             if let Some(selector) = cell.selector {
                 items.push(Item::Selecting(selector.value));
@@ -409,6 +447,14 @@ pub fn contribution(
                     defining: what.dests.contains(place),
                 });
             }
+            if xmm_filled(regs, what, held.width, at, &mut xmm) {
+                items.push(Item::Restrict {
+                    value: held.value,
+                    kind: Kind::Xmm,
+                    role: Role::Xmm,
+                    defining: what.dests.contains(place),
+                });
+            }
         }
     }
     if target::far_load(regs, what) {
@@ -432,7 +478,7 @@ pub struct Scan {
 
 #[derive(Clone, Copy, Default)]
 struct Counts {
-    kinds: [u32; 4],
+    kinds: [u32; 5],
     selecting: u32,
     numeric: u32,
     far: u32,
@@ -440,7 +486,7 @@ struct Counts {
 
 impl Counts {
     fn is_empty(&self) -> bool {
-        self.kinds == [0; 4] && self.selecting == 0 && self.numeric == 0 && self.far == 0
+        self.kinds == [0; 5] && self.selecting == 0 && self.numeric == 0 && self.far == 0
     }
 }
 
@@ -511,6 +557,7 @@ impl Scan {
                         Kind::Addressing => |c| &mut c.kinds[1],
                         Kind::WordBases => |c| &mut c.kinds[2],
                         Kind::Bytes => |c| &mut c.kinds[3],
+                        Kind::Xmm => |c| &mut c.kinds[4],
                     },
                 ),
                 Item::Numeric(value) => (value, |c| &mut c.numeric),
@@ -598,6 +645,13 @@ impl Scan {
     }
 }
 
+thread_local! {
+    /// Scans of a body for the classes its reads confine values to, counted
+    /// for the test that fixes how many one allocation makes.
+    #[cfg(test)]
+    pub(crate) static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn collected(
     body: &LirBody,
     prefer_indexes: &BTreeSet<u32>,
@@ -607,6 +661,8 @@ fn collected(
     mut uses: Option<&mut Vec<Use>>,
     found: Option<&Found>,
 ) -> Classes {
+    #[cfg(test)]
+    SCANS.with(|one| one.set(one.get() + 1));
     let regs = body.regs();
     let mut out: Classes = IndexMap::default();
     let mut selecting: BTreeSet<u32> = BTreeSet::new();
@@ -1258,6 +1314,30 @@ mod tests {
         let of = |value| recompute_class(&body, value, &target::BUILT_IN, &registers);
         assert_eq!(of(word), None);
         assert!(of(base).is_some_and(|class| class.contains(&RegId::BX) && !class.contains(&RegId::AX)));
+    }
+
+    /// What the form says fills an operand, not the register's width: an
+    /// `addsd` operand held 8 bytes got no xmm restriction (the value was
+    /// free to take a general register), and a 16-byte operand of an
+    /// integer `add` was confined to xmm.
+    #[test]
+    fn test_an_operand_is_xmm_by_its_form_not_its_width() {
+        let regs = Regs(&llrm_x86_m64::REGISTER_INFO);
+        let restricted = |name: &str, width: u32| {
+            let held = |value| Loc::Held(Held { value, width });
+            let what = Semantics {
+                name: Some(name.into()),
+                dests: vec![held(1)],
+                sources: vec![held(1), held(2)],
+                ..Semantics::new(Operation::Binary)
+            };
+            let mut items = Vec::new();
+            contribution(regs, &Insn::new(1, None, Some(what), vec![1], vec![1, 2]), &mut items);
+            items.iter().any(|item| matches!(item, Item::Restrict { kind: Kind::Xmm, .. }))
+        };
+        assert!(restricted("addsd", 8), "an xmm operand held 8 bytes");
+        assert!(restricted("addsd", 16));
+        assert!(!restricted("add", 16), "a 16-byte integer operand");
     }
 }
 

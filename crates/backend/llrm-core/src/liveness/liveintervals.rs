@@ -122,6 +122,43 @@ pub fn take_handed_over_edited_to(body: &LirBody) -> Option<LiveIntervals> {
     })
 }
 
+/// Where one instruction's operands of one value sit in the value's list:
+/// nearly always one, which then costs no allocation.
+enum Slots {
+    One(u32),
+    Many(Vec<u32>),
+}
+
+impl Slots {
+    fn push(
+        &mut self,
+        at: u32,
+    ) {
+        match self {
+            Slots::One(first) => *self = Slots::Many(vec![*first, at]),
+            Slots::Many(list) => list.push(at),
+        }
+    }
+
+    fn iter_mut(&mut self) -> std::slice::IterMut<'_, u32> {
+        match self {
+            Slots::One(one) => std::slice::from_mut(one).iter_mut(),
+            Slots::Many(list) => list.iter_mut(),
+        }
+    }
+
+    /// The positions, highest first.
+    fn descending(self) -> Vec<u32> {
+        match self {
+            Slots::One(one) => vec![one],
+            Slots::Many(mut list) => {
+                list.sort_unstable_by(|a, b| b.cmp(a));
+                list
+            }
+        }
+    }
+}
+
 /// `LiveIntervals` (LiveIntervals.h).
 pub struct LiveIntervals {
     pub indexes: SlotIndexes,
@@ -133,7 +170,7 @@ pub struct LiveIntervals {
     /// Where each instruction's operands of a value sit in `operands`, so
     /// removing them is not a scan of the list (the use-def chain of C++
     /// unlinks in O(1)).
-    slots: HashMap<(u32, InstrKey), Vec<u32>>,
+    slots: HashMap<(u32, InstrKey), Slots>,
     /// Every instruction by its key (`MachineInstr*`).
     insns: HashMap<InstrKey, Arc<Insn>>,
     /// The values defined on entry (parameters), which no instruction defines.
@@ -151,14 +188,20 @@ impl LiveIntervals {
         let indexes = SlotIndexes::new(body);
         let cfg = Cfg::of(body);
         let dom = DomTree::of(&cfg);
+        // The tables are sized once: an operand names one value, a value is
+        // named a few times.
+        let (insns, named) =
+            body.blocks.iter().flat_map(|block| block.insns.iter()).fold((0, 0), |(many, named), one| {
+                (many + 1, named + one.defines.len() + one.uses.len() + one.undefs.len())
+            });
         let mut found = Self {
             indexes,
             cfg,
             dom,
             blocks: Vec::with_capacity(body.blocks.len()),
-            operands: HashMap::default(),
-            slots: HashMap::default(),
-            insns: HashMap::default(),
+            operands: HashMap::with_capacity_and_hasher(named / 2, Default::default()),
+            slots: HashMap::with_capacity_and_hasher(named, Default::default()),
+            insns: HashMap::with_capacity_and_hasher(insns, Default::default()),
             inputs: body.inputs.clone(),
             intervals: HashMap::default(),
             calc: LiveIntervalCalc::new(),
@@ -201,7 +244,13 @@ impl LiveIntervals {
         operand: Operand,
     ) {
         let list = self.operands.entry(value).or_default();
-        self.slots.entry((value, operand.instr)).or_default().push(list.len() as u32);
+        let at = list.len() as u32;
+        match self.slots.entry((value, operand.instr)) {
+            std::collections::hash_map::Entry::Occupied(mut one) => one.get_mut().push(at),
+            std::collections::hash_map::Entry::Vacant(none) => {
+                none.insert(Slots::One(at));
+            }
+        }
         list.push(operand);
     }
 
@@ -212,11 +261,10 @@ impl LiveIntervals {
         let instr = one.id();
         for &value in one.defines.iter().chain(&one.uses).chain(&one.undefs) {
             // A value named twice finds its slots gone the second time.
-            let Some(mut mine) = self.slots.remove(&(value, instr)) else { continue };
+            let Some(mine) = self.slots.remove(&(value, instr)) else { continue };
             let list = self.operands.get_mut(&value).expect("a slot names a listed operand");
             // Highest first: the operand swapped in is then never one of ours.
-            mine.sort_unstable_by(|a, b| b.cmp(a));
-            for at in mine {
+            for at in mine.descending() {
                 let at = at as usize;
                 let last = list.len() - 1;
                 list.swap_remove(at);
@@ -1123,7 +1171,7 @@ impl LiveIntervals {
             let again = fresh.compute_virt_reg_interval(reg);
             let now = shape(&fresh, &again);
             if was != now {
-                if std::env::var("LLRM_AFRESH_DUMP").is_ok() {
+                if llrm_support::env_set("LLRM_AFRESH_DUMP") {
                     eprintln!(
                         "  held interval of v{reg}: {:?}",
                         self.intervals[&reg].segments.iter().map(|g| (g.start, g.end)).collect::<Vec<_>>()

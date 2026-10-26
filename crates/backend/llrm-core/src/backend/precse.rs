@@ -40,18 +40,16 @@
 //! two. A copy no one reads is dropped again (the pin leaves it to
 //! `DeadMachineInstructionElim`).
 //!
-//! DEVIATE CSE1 (owner w-2, exit with isel.rs I2): no `hasMinSize` shortcut
-//! (the machine phases have no minsize flag; it is -Oz only, which no sweep
-//! covers). `isLegalToHoistInto` is translated: a return block is no target;
-//! the pin's other two conditions cannot hold on this LIR (see
+//! `hasMinSize` is `LirBody::min_size` (the function's `minsize` attribute;
+//! CSE1 retired). `isLegalToHoistInto` is translated: a return block is no
+//! target; the pin's other two conditions cannot hold on this LIR (see
 //! `legal_to_hoist_into`).
 //!
-//! DEVIATE CSE2 (owner funcattrs-port, exit 2026-11-13): an operation with no
-//! register operand is not a candidate, a load of a constant global with a
-//! fixed address among them (the pin shares and rematerializes it; ours cannot
-//! once TwoAddress and the coalescer write over it in place: compare_to_int64.c
-//! -Os 346 to 361 bytes, grep -O2 -m32 +21.9% instructions). Exit: the
-//! allocator remakes a value with two defs. (This was E3.)
+//! Row CSE2 (was DEVIATE CSE2, retired 2026-10-25): a constant with no register
+//! operand is a candidate again. The address of a symbol stays out: the pin
+//! shares it and ours cannot make it again. 71 programs -O2 net 0 (lru -1,
+//! x_ll_div +1), -Os and m16 unchanged; the skip-edge zero of x_life waits on
+//! phi operands without a copy (DAG isel).
 //!
 //! DEVIATE CSE3 (owner w-1, exit 2026-11-08): both selectors mark a load
 //! invariant when it reads a constant global or says so (`!invariant.load`, a
@@ -60,11 +58,13 @@
 //! constant-pool loads, which ours lacks; the old selector reads an incoming
 //! argument as a memory operand of its reader, not a load of its own.
 //!
-//! DEVIATE CSE5 (owner funcattrs-port, exit 2026-11-13): `machinecse.rs`, the
-//! same elimination after allocation, is ours alone (the pin runs MachineCSE
-//! once, before allocation). Removed, 10 of 568 objects grow and none shrinks
-//! (shellsort m16 +15 B, x_mergesort m32 +34, m16 +187, same tree both sides):
-//! it stays until what it finds there is found before allocation.
+//! Row CSE5 (was DEVIATE CSE5, retired 2026-10-25): `machinecse.rs`, the same
+//! elimination after allocation, was ours alone (the pin runs MachineCSE once,
+//! before allocation). Deleted: d_faces -3.60 M Ir (dist). 7 of 568
+//! objects grow and none shrinks (x_mergesort +34 B at m32 -Os and m16 -O1 to
+//! -Os, shellsort m16 +22 at -O1/-O2), QCport (tools/rows/qcport.py) +0.030%
+//! -O1, +0.080% -O2, +0.116% -O3, +0.025% -Os, x_mergesort -Os +0.43% clocks.
+//! Exit: CSE2 and rematerialization of multi-def values in RA (w13/w14).
 //!
 //! # Example
 //! `v3 := add v1, v2` in a block and `v7 := add v1, v2` in a block it
@@ -143,8 +143,14 @@ fn candidate(
     if what.op == Operation::Move && matches!(what.sources.as_slice(), [Loc::Held(_)]) {
         return false;
     }
-    // CSE2: no register operand, so it can be made again where it is wanted.
-    if one.uses.is_empty() {
+    // A symbol's address stays out: it is a load of memory the pin shares and
+    // ours cannot make again (CSE2).
+    if one.uses.is_empty()
+        && !matches!(
+            what.sources.as_slice(),
+            [Loc::Imm(imm)] if imm.address.is_none()
+        )
+    {
         return false;
     }
     let held = |place: &Loc| matches!(place, Loc::Held(_) | Loc::Imm(_) | Loc::Address(_));
@@ -311,8 +317,11 @@ impl Walk<'_> {
             return true;
         }
         // Heuristic 1: a cheap computation is shared only when the definition
-        // is local or in an immediate predecessor.
-        if cheap(one) && shared_block != block {
+        // is local or in an immediate predecessor (`CSBB->isSuccessor(BB)`).
+        if cheap(one)
+            && shared_block != block
+            && !self.body.blocks[shared_block].succ.contains(&self.body.blocks[block].at)
+        {
             return false;
         }
         // Heuristic 2: no register operand and only copies read it: no use.
@@ -361,6 +370,59 @@ impl Walk<'_> {
     }
 }
 
+/// The flag lanes of `lanes`, but AF: nothing emitted reads it. An x87
+/// instruction names lanes past the six of EFLAGS (its status word, which
+/// `fnstsw; sahf` moves there): it counts as reading and writing all six.
+pub(crate) fn flag_lanes(lanes: &crate::backend::lanes::Lanes) -> crate::backend::lanes::Lanes {
+    use iced_x86::RflagsBits as F;
+    let six = (F::OF | F::SF | F::ZF | F::CF | F::PF) as u32;
+    let mask = lanes.mask() as u32;
+    let beyond = mask & !(six | F::AF as u32) != 0;
+    crate::backend::lanes::Lanes::flags(if beyond { six } else { mask & six })
+}
+
+/// What becomes of the flags `insns[index]` sets, walking `insns` after it.
+pub(crate) enum Flags {
+    /// One of them is read before every one is written again.
+    Read,
+    /// Every one is written again before any is read.
+    Dead,
+    /// Some are neither read nor written by the end of `insns`.
+    Out,
+}
+
+/// `Flags` of the instruction at `index`, per lane: `inc` writes every flag but
+/// CF, so a carry read after it is still the one `index` set. An instruction
+/// with no effect table reads them, unless it is a move and `moves_pass`.
+pub(crate) fn flags_after(
+    regs: llrm_lir::registers::Regs,
+    bits: u32,
+    insns: &[Arc<Insn>],
+    index: usize,
+    moves_pass: bool,
+) -> Flags {
+    let mut pending = match liveness::effect(regs, bits, &insns[index]) {
+        Some(effect) => flag_lanes(&effect.writes),
+        None => flag_lanes(&crate::backend::lanes::Lanes::flags(u32::MAX)),
+    };
+    for later in &insns[index + 1..] {
+        let Some(effect) = liveness::effect(regs, bits, later) else {
+            if moves_pass && later.what.as_ref().is_some_and(|what| what.op == Operation::Move) {
+                continue;
+            }
+            return Flags::Read;
+        };
+        if !flag_lanes(&effect.all_reads()).is_disjoint(&pending) {
+            return Flags::Read;
+        }
+        pending = pending.minus(&flag_lanes(&effect.writes));
+        if pending.is_empty() {
+            return Flags::Dead;
+        }
+    }
+    Flags::Out
+}
+
 /// Whether the flags the instruction at `index` sets are read before anything
 /// sets them again, in `insns`.
 pub(crate) fn flags_read_after(
@@ -369,26 +431,7 @@ pub(crate) fn flags_read_after(
     insns: &[Arc<Insn>],
     index: usize,
 ) -> bool {
-    for later in &insns[index + 1..] {
-        let Some(effect) = liveness::effect(regs, bits, later) else {
-            // A load through virtual address registers has no effect
-            // table yet; a move leaves the flags alone.
-            if later.what.as_ref().is_some_and(|what| what.op == Operation::Move) {
-                continue;
-            }
-            return true;
-        };
-        let flags = |lanes: &crate::backend::lanes::Lanes| {
-            lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
-        };
-        if flags(&effect.all_reads()) {
-            return true;
-        }
-        if flags(&effect.writes) {
-            return false;
-        }
-    }
-    false
+    matches!(flags_after(regs, bits, insns, index, true), Flags::Read)
 }
 
 /// Whether `one` writes the flags (an operation with no effect table is
@@ -532,11 +575,16 @@ fn hoisted(
             if !legal_to_hoist_into(&body.blocks[common]) {
                 continue;
             }
-            // `isProfitableToHoistInto`: `BlockFrequency` adds saturating.
-            let mbfi = frequencies.get_or_init(|| MachineBlockFrequencyInfo::of(body));
-            let freq = |block: usize| mbfi.get_block_freq(block).get_frequency();
-            if freq(common) > freq(number).saturating_add(freq(other)) {
-                continue;
+            // `isProfitableToHoistInto`
+            // ([#L922](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCSE.cpp#L922)):
+            // always under `hasMinSize`, else by `BlockFrequency`, which adds
+            // saturating.
+            if !body.min_size {
+                let mbfi = frequencies.get_or_init(|| MachineBlockFrequencyInfo::of(body));
+                let freq = |block: usize| mbfi.get_block_freq(block).get_frequency();
+                if freq(common) > freq(number).saturating_add(freq(other)) {
+                    continue;
+                }
             }
             if !(reaches(body, by_at, other, number) || reaches(body, by_at, number, other)) {
                 continue;
@@ -882,6 +930,55 @@ mod tests {
         assert_eq!(adds(&returning), 2);
     }
 
+    /// `isProfitableToHoistInto` answers yes at once under `hasMinSize`
+    /// (MachineCSE.cpp#L922): the shortcut was missing (DEVIATE CSE1), so a
+    /// minsize function kept two copies of an expression computed in two cold
+    /// arms because their common dominator, run by every call, was hotter than
+    /// the two together.
+    #[test]
+    fn test_a_minsize_function_hoists_an_expression_into_a_hotter_block() {
+        let make = |at: i64, result: u32| {
+            insn(at, Operation::Unary, "not", vec![held(result)], vec![held(1)], vec![result], vec![1])
+        };
+        let jump = |at: i64| insn(at, Operation::Branch, "jle", vec![], vec![], vec![], vec![]);
+        let read = |at: i64, value: u32| {
+            insn(at, Operation::Compare, "cmp", vec![], vec![held(value), held(value)], vec![], vec![value])
+        };
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let build = |min_size: bool| {
+            // 0 -> left (a tenth) | mid; left -> right; mid -> right (a tenth)
+            // | exit.
+            let mut body = LirBody::new(
+                "cold",
+                0,
+                vec![
+                    block(0, vec![1, 2], vec![jump(0)]).into(),
+                    block(1, vec![3], vec![make(1, 10), read(5, 10)]).into(),
+                    block(2, vec![3, 4], vec![jump(2)]).into(),
+                    block(3, vec![], vec![make(3, 11), read(6, 11)]).into(),
+                    block(4, vec![], vec![read(7, 1)]).into(),
+                ],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            let tenth = (0.1 * crate::model::lir::BlockOdds::CERTAIN) as u32;
+            let rest = crate::model::lir::BlockOdds::CERTAIN as u32 - tenth;
+            for (edge, odds) in [((0, 1), tenth), ((0, 2), rest), ((2, 3), tenth), ((2, 4), rest)] {
+                body.odds.taken.insert(edge, odds);
+            }
+            body.inputs = [1, 2].into_iter().collect();
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            body.min_size = min_size;
+            body
+        };
+        let in_entry = |body: &LirBody| {
+            body.blocks[0].insns.iter().any(|one| one.what.as_ref().and_then(|w| w.name.as_deref()) == Some("not"))
+        };
+        assert!(!in_entry(&shared(&build(false), &RegisterClasses::m16())), "the premise: hotter, so not hoisted");
+        assert!(in_entry(&shared(&build(true), &RegisterClasses::m16())), "minsize hoists it");
+    }
+
     /// `bt a, 1; sbb m1 := x, x` and later `bt b, 1; sbb m2 := x, x`: the
     /// second read another carry, and sharing them gave every step of a CRC
     /// the first step's mask (bench crc under `--isel=dag` returned
@@ -909,5 +1006,65 @@ mod tests {
             .filter(|one| one.what.as_ref().and_then(|what| what.name.as_deref()) == Some("sbb"))
             .count();
         assert_eq!(sbbs, 2);
+    }
+
+    /// A constant made in a block and again in its successor stayed two
+    /// instructions: `candidate` refused any operation with no register operand
+    /// (CSE2) and heuristic 1 shared a cheap operation only inside one block.
+    /// The pin shares it with a block that precedes by an edge (`x_life`'s
+    /// skip-edge zero and loop zero, a second return block); not with a block
+    /// two edges away.
+    #[test]
+    fn test_a_constant_is_shared_with_the_block_before_it_by_an_edge() {
+        let zero = |at: i64, result: u32| {
+            let imm = Loc::Imm(llrm_lir::Imm { value: 0, width: 4, address: None });
+            insn(at, Operation::Move, "mov", vec![held(result)], vec![imm], vec![result], vec![])
+        };
+        let read = |at: i64, value: u32, result: u32| {
+            insn(
+                at,
+                Operation::Binary,
+                "add",
+                vec![held(result)],
+                vec![held(value), held(1)],
+                vec![result],
+                vec![value, 1],
+            )
+        };
+        let build = |hops: usize| {
+            let mut blocks =
+                vec![LirBlock { succ: vec![1].into(), ..LirBlock::new(0, vec![zero(0, 10), read(1, 10, 11)]) }];
+            for hop in 1..=hops {
+                let last = hop == hops;
+                let insns =
+                    if last { vec![zero(10 * hop as i64, 20), read(10 * hop as i64 + 1, 20, 21)] } else { vec![] };
+                blocks.push(LirBlock {
+                    succ: if last { vec![].into() } else { vec![hop as i64 + 1].into() },
+                    ..LirBlock::new(hop as i64, insns)
+                });
+            }
+            let mut body = LirBody::new(
+                "zeros",
+                0,
+                blocks.into_iter().map(Into::<Block>::into).collect::<Vec<Block>>(),
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            body.inputs = [1].into_iter().collect();
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            body
+        };
+        let zeros = |body: &LirBody| {
+            body.blocks
+                .iter()
+                .flat_map(|block| block.insns.iter())
+                .filter(|one| one.what.as_ref().and_then(|what| what.name.as_deref()) == Some("mov"))
+                .count()
+        };
+        let next = build(1);
+        assert_eq!(zeros(&next), 2, "the premise: two zeros");
+        assert_eq!(zeros(&shared(&next, &RegisterClasses::m16())), 1, "the next block reads the first");
+        let far = build(2);
+        assert_eq!(zeros(&shared(&far, &RegisterClasses::m16())), 2, "two edges away stays two");
     }
 }
