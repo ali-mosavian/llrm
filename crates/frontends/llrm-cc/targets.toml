@@ -41,7 +41,7 @@ link = ["{root}/tools/arm64_link.sh", "{output}", "{objects}"]
 run = ["qemu-aarch64"]
 
 # Real-mode DOS, Borland medium model: far code (function pointers and `P1` functions), near data, byte-packed
-# structs. `far`, `huge`, `near` are Borland's keywords on clang's address spaces (toolchain/clang/patches).
+# structs. `far`, `huge`, `near` are Borland's keywords on clang's address spaces.
 # Needs the patched clang: tools/build-clang-m16.sh, then LLRM_CLANG_M16=<its path>.
 [x86_16-dos]
 triple = "i386-unknown-unknown-code16"

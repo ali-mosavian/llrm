@@ -1,6 +1,6 @@
 /* Borland C's keywords on clang's i8086 target, force-included for x86_16-dos. `far`, `huge` and `near` are address
    spaces 1, 3 and 0; a function is far in the medium model, which the target drops from `void`. `pascal` is clang's
-   attribute, numbered for llrm (toolchain/clang/patches). */
+   attribute, numbered for llrm. */
 #define __BORLANDC__ 0x0410
 #define __TURBOC__ 0x0410
 #define __MEDIUM__ 1

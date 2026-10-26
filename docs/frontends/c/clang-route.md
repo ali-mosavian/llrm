@@ -1,6 +1,6 @@
 # C through clang: `llrm-cc`
 
-TL;DR: `llrm-cc` is a `cc`-compatible driver. It runs the unmodified pinned clang as the front end, then `llrm-llc` for everything after. x86-64 and m32 DOS work end to end; m16 needs the carried clang patch.
+TL;DR: `llrm-cc` is a `cc`-compatible driver. It runs the unmodified pinned clang as the front end, then `llrm-llc` for everything after. x86-64 and m32 DOS work end to end; m16 needs the i8086 clang (fork branch `llrm/clang-i8086`, not yet pushed).
 
 ## How it runs
 
@@ -49,4 +49,4 @@ Clang's `BackendUtil` builds these only when passes are enabled. llrm must suppl
 | `x86_16-dos` | `tests/cc/dos` and `sum_three` (far pointers, expected 1110) equal; needs the patched clang (`tools/build-clang-m16.sh`, `LLRM_CLANG_M16`) |
 | QCport m16 | 14 of 65 modules compile. Open: `interrupt` functions, far automatics, unknown `QSurf` (typedef via a far-qualified tag), a few far-to-near argument cases, `_asm` blocks |
 
-The i8086 patch (`toolchain/clang/patches`): target info with far/huge address spaces and far function pointers, Pascal convention as CC 1000, near/far/huge pointer conversions allowed, `far` dropped on function types and void results.
+The i8086 patch (the fork branch `llrm/clang-i8086`): target info with far/huge address spaces and far function pointers, Pascal convention as CC 1000, near/far/huge pointer conversions allowed, `far` dropped on function types and void results.
