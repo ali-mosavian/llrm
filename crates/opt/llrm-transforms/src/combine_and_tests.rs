@@ -54,7 +54,8 @@ fn or_with_nots_pair_is_a_not_xor() {
 }
 
 /// `(1 >> x) & 1` loses the mask: `1 >> x` has no other bit, and
-/// SimplifyDemandedInstructionBits runs first (the zext/icmp form is visitLShr's).
+/// SimplifyDemandedInstructionBits runs first (the zext/icmp form is
+/// visitLShr's).
 #[test]
 fn one_shifted_right_and_one_drops_the_mask() {
     check(
@@ -165,7 +166,8 @@ fn a_binop_of_a_zext_masked_to_its_width_is_narrowed() {
 }
 
 /// `((a & 15) ^ y) & 15` drops the inner mask, which the outer one covers
-/// (SimplifyDemandedInstructionBits runs before the arm-mask fold, as in the pin).
+/// (SimplifyDemandedInstructionBits runs before the arm-mask fold, as in the
+/// pin).
 #[test]
 fn the_outer_mask_makes_the_inner_one_redundant() {
     check(
@@ -217,8 +219,9 @@ b2:
     assert!(after.contains("and i32 %i, 14"), "{after}");
 }
 
-/// A mask of a load with a second user crashed in `simplify_multiple_use_demanded_bits`,
-/// which read operand 1 of every opcode: index out of bounds on the load.
+/// A mask of a load with a second user crashed in
+/// `simplify_multiple_use_demanded_bits`, which read operand 1 of every opcode:
+/// index out of bounds on the load.
 #[test]
 fn a_mask_of_a_load_with_two_users_is_left_alone() {
     let body = "  %l = load i32, ptr %p\n  %a = and i32 %l, 255\n  %r = add i32 %l, %a\n  ret i32 %r\n";
