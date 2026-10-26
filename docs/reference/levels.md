@@ -89,7 +89,6 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | `candidate cost` | x | x | spill traffic >= 0.5% | spill traffic >= 0.5% | on | x |
 | `candidate allocator alone` | on | on | on | on | on | on |
 | `lir phielim` | on | on | on | on | on | on |
-| `lir pressuresink` | on | on | on | on | on | on |
 | `lir floatfold` | on | on | on | on | on | on |
 | `lir floatassign` | on | on | on | on | on | on |
 | `lir floatalloc` | on | on | on | on | on | on |
