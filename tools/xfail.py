@@ -1,7 +1,7 @@
 """The XFAIL list (tools/xfail.toml): tests expected to fail, each with its issue, owner and date.
 
 A listed test that fails is not a new failure; a listed test that passes fails the gate (its fix removes its entry). ids:
-`unit <crate>::<test>` (a cargo lib test, by name) and `run <program name>` (a tests/run program as run_tests prints it).
+`unit <crate>::<test>` (a cargo lib test, by name), `integration <target>::<test>` (a root tests/TARGET.rs test) and `run <program name>` (a tests/run program as run_tests prints it).
 """
 from __future__ import annotations
 
@@ -26,6 +26,13 @@ def load(path: Path = PATH) -> dict[str, dict]:
             raise SystemExit(f"{path.name}: {entry['id']} is listed twice")
         found[entry["id"]] = entry
     return found
+
+
+def load_for(root: Path) -> dict[str, dict]:
+    """The list of the tree under test: `root`/tools/xfail.toml, else the one beside this script. The landing runs from its own checkout, whose list is parity's: a PR that fixes a listed
+    test and deletes its row was refused as an xpass because the row it deleted was still read (#4681, #4946, #4936, #4945)."""
+    beside = Path(root) / "tools" / "xfail.toml"
+    return load(beside if beside.exists() else PATH)
 
 
 def issue_of(test_id: str, listed: dict[str, dict] | None = None) -> str | None:

@@ -15,4 +15,5 @@ docs/working/codegen-slot-table.md merge=union
 # PRs that each append a test to one area's test file merge as both, each block whole (merge=union dropped a closing brace, #4570). The driver is
 # configured per clone: tools/landing/merge-driver.sh; unconfigured, git merges the text and conflicts as before.
 *_tests.rs merge=tests-append
+crates/frontends/qb/tests/parser.rs merge=tests-append
 tests.rs merge=tests-append

@@ -53,6 +53,14 @@ class Red:
     probe: list[str] = field(default_factory=list)
 
 
+def parse_inventory(text: str) -> tuple[list[Red], str]:
+    """The reds of `test_inventory.py --run`: a `package/target: N s, RED` line is a test target the landing gate never runs failing (`greedy_inline` sat red a day), and
+    `inventory: N unrun targets run, M red` the count."""
+    reds = [Red(f"unrun:{m[1]}", OTHER, ["test_inventory.py", m[1]]) for line in text.splitlines() if (m := re.match(r"(\S+): [\d.]+ s, RED$", line))]
+    count = re.search(r"inventory: (\d+) unrun targets run, (\d+) red", text)
+    return reds, f"{int(count[1]) - int(count[2])}/{count[1]}" if count else "0/0"
+
+
 def parse_groups(text: str) -> tuple[list[Red], str]:
     """The reds of `run_groups.py` output, and `passed/total` programs."""
     reds: list[Red] = []
@@ -306,6 +314,13 @@ def steps(
     found, count = parse_demos(run(demos, env, logs / "demos.log", worktree))
     reds += found
     counts["demos"] = count
+    # the test targets the landing gate never runs (tests/*.rs of every package, bins' unit tests): its lib-only layer let greedy_inline sit red for a day
+    cargo = {k: v for k, v in env.items() if k != "RUSTFLAGS"} | {"CARGO_INCREMENTAL": "0", "CARGO_TARGET_DIR": str(TARGET)}
+    build_json = logs / "tests-build.json"
+    run(["nice", "-n", "10", str(Path.home() / ".local/bin/buildslot"), "cargo", "test", "--release", "--workspace", "--no-run", "--message-format=json"], cargo, build_json, worktree)
+    found, count = parse_inventory(run([sys.executable, str(tools / "test_inventory.py"), str(build_json), "--run", "--skip", "turbo,cv4,run"], cargo, logs / "inventory.log", worktree))
+    reds += found
+    counts["unrun"] = count
     return reds, counts
 
 

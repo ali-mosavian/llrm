@@ -189,3 +189,43 @@ b0:
     assert_eq!(found.len(), 3, "the three globals are only loaded");
     assert_eq!(crate::globalopt::scans() - before, 2, "one scan for each of the two bodies");
 }
+
+/// QB's `PTS$descriptor` names `PTS`, and nothing takes the descriptor: a
+/// variable only an unreached variable names was still "named by another
+/// initializer", so it kept its stores and its loads (udt.bas -Os m16: six
+/// `mov dword ptr PTS+n, imm`, 24 bytes of data and `push dword ptr PTS+n`
+/// where main pushes constants, +66 B).
+#[test]
+fn a_variable_only_an_unreached_descriptor_names_still_loses_its_stores() {
+    let after = piped(
+        "@a = internal global [8 x i8] zeroinitializer
+@a.d = internal constant <{ ptr }> <{ ptr @a }>
+
+define void @f() {
+b0:
+  store i32 5, ptr @a
+  ret void
+}
+",
+    );
+    assert!(!after.contains("@a"), "the variable or its store stayed:\n{after}");
+}
+
+/// A descriptor some code takes keeps what it names.
+#[test]
+fn a_variable_a_reached_descriptor_names_keeps_its_stores() {
+    let after = piped(
+        "@a = internal global [8 x i8] zeroinitializer
+@a.d = internal constant <{ ptr }> <{ ptr @a }>
+@out = global ptr null
+
+define void @f() {
+b0:
+  store i32 5, ptr @a
+  store volatile ptr @a.d, ptr @out
+  ret void
+}
+",
+    );
+    assert!(after.contains("store i32 5, ptr @a"), "a store to a variable a live descriptor names went:\n{after}");
+}

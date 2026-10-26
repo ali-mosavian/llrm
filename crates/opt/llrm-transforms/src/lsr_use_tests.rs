@@ -298,8 +298,13 @@ fn a_fixup_is_outside_the_loop_where_its_user_is() {
 #[test]
 fn a_scaled_index_costs_its_instructions_once_for_each_scaled_register() {
     with_loop(|cx, se, a, b, header, ar| {
-        let real =
-            RealMode { scale_costs: vec![(1, 0), (2, 2)], registers: 6, scaled_index_insns: 2, huge_space: None };
+        let real = RealMode {
+            scale_costs: vec![(1, 0), (2, 2)],
+            registers: 6,
+            scaled_index_insns: 2,
+            huge_space: None,
+            inline_size_guard: false,
+        };
         let real = X86::of_cpu("i486").unwrap().in_real_mode(real);
         let flat = X86::of_cpu("i486").unwrap();
         let lu = use_of(Kind::Address, &[0]);

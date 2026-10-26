@@ -1,5 +1,6 @@
 """`uv run --project tools python -m unittest discover -s tools/bench`"""
 
+import re
 import sys
 import json
 import unittest
@@ -267,6 +268,27 @@ class SizeTests(unittest.TestCase):
             with mock.patch.object(bench.maps, "locate", return_value=0), mock.patch.object(bench.icount, "run", return_value=run):
                 got = bench.measure(("p", exe, exe, "f", ["1"], obj))
         self.assertEqual((got["code_bytes"], got["data_bytes"], got["bss_bytes"]), (12, 0, 40))
+
+
+    def test_a_kernel_main_never_calls_because_its_value_folded_is_a_folded_row_not_an_error(self):
+        """parity/branch, loop and qlight (bas, bq16) printed the right value with BenchX never called (the call folded to a constant): 6 rows of the m16 -Os
+        table read "the region was never entered", an instrument fault listed beside real failures. The output decides: right is folded, wrong is an error."""
+        import tempfile
+        from unittest import mock
+
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        import test_sizes
+
+        with tempfile.TemporaryDirectory() as where:
+            obj, exe = Path(where) / "p.obj", Path(where) / "p.exe"
+            obj.write_bytes(test_sizes.object_with(12))
+            exe.write_bytes(b"MZ" + bytes(3000))
+            for printed, folded in ((b"1\n", True), (b"2\n", False)):
+                run = mock.Mock(error=bench.icount.NEVER_ENTERED, output=printed, region=None)
+                with mock.patch.object(bench.maps, "locate", return_value=0), mock.patch.object(bench.icount, "run", return_value=run):
+                    got = bench.measure(("p", exe, exe, "f", ["1"], obj))
+                self.assertEqual(bench.folded(got), folded)
+                self.assertEqual("error" in got, not folded)
 
 
 class OwnFramesTests(unittest.TestCase):
@@ -631,10 +653,11 @@ def test_two_prs_that_each_change_one_rows_count_are_judged_each_on_its_own_delt
     assert "instructions 95 > 90 (worse)" in judged(second, base_b)[0]  # rebased onto the first, it is judged on that base
 
 
-def _c_build_commands(monkeypatch, tmp_path, name):
+def _c_build_commands(monkeypatch, tmp_path, name, reads_attribute=True):
     """The llrm-c commands `bench.build` runs for the C benchmark `name` at -O2."""
     variant = next(one for directory in bench.benchmarks([name]) for one in bench.variants(directory) if one.language == "c")
     seen = []
+    monkeypatch.setattr(bench, "reads_noinline_attribute", lambda compiler: reads_attribute)
 
     def run(command, *args, **kwargs):
         seen.append(command)
@@ -661,6 +684,13 @@ def test_the_object_that_is_sized_has_no_pointer_in_it(monkeypatch, tmp_path):
     text = Path(sized[1]).read_text()
     assert "__attribute__((noinline)) long bench_rectwo(" in text and "volatile" not in text
     assert sized[sized.index("-o") + 1].endswith("x.obj") and counted[counted.index("-o") + 1].endswith("x.counted.obj")
+
+
+def test_a_compiler_that_cannot_read_the_noinline_attribute_gets_the_flag_not_a_failing_source(monkeypatch, tmp_path):
+    """The main dist's llrm-c hands C to wccq, which fails `__attribute__((noinline))` as E1169: all 48 C rows of the m16 -Os table were errors on main
+    and the C kernels went uncompared. Such a compiler is given the plain source and -fno-inline-functions."""
+    (sized,) = _c_build_commands(monkeypatch, tmp_path, "rectwo", reads_attribute=False)
+    assert "__attribute__" not in Path(sized[1]).read_text() and "-fno-inline-functions" in sized
 
 
 def test_the_m32_table_builds_llrm_with_no_inlining_flag_either():
@@ -775,3 +805,11 @@ def test_a_float_nib_row_is_compiled_with_excess_precision_standard_and_records_
     assert any("records None" in p and "nib -O2" in p for p in problems), problems
     measured[("nbody_single", "nib", "O2")] = {**row, "flags": [bench.FLOAT_FLAG]}
     assert not any("float row" in p for p in bench.judge(measured, ["nbody_single"], ["O2"], base={}))
+
+
+def test_the_parity_kernels_that_folded_to_a_constant_read_their_inputs_at_run_time():
+    """branch, loop, qlight and qmove took literal arguments: the optimiser returned the constant (0 to 2 instructions, a 0.03x "gain" at m16 -Os and
+    six "region never entered" rows). Their C inputs are volatile reads and their BASIC inputs READ from DATA, so every build runs the body."""
+    for name in ("branch", "loop", "qlight", "qmove"):
+        assert "volatile" in (bench.BENCH / "parity" / name / f"{name}.c").read_text()
+        assert re.search(r"^read ", (bench.BENCH / "parity" / name / f"{name}.bas").read_text(), re.M)

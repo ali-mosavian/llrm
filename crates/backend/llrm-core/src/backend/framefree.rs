@@ -268,7 +268,11 @@ pub fn pinned_by(
                     }
                     depth -= pops.get(&one.at).copied().unwrap_or(0);
                 }
-                Operation::Jump | Operation::Branch if what.indirect => return Some(Pinned::OpaqueSpAdjustment),
+                // A jump table's targets are the blocks it names, at the depth
+                // of the jump.
+                Operation::Jump | Operation::Branch if what.indirect && what.table.is_empty() => {
+                    return Some(Pinned::OpaqueSpAdjustment);
+                }
                 Operation::Return => leaves.insert(block.at, depth).map_or((), |_| ()),
                 _ if what.dests.iter().any(|place| matches!(
                     place,

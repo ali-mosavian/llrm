@@ -114,6 +114,7 @@ fn recompiled(
         frames: BTreeMap::new(),
         line_numbers: BTreeMap::new(),
         stack_check: None,
+        hosted: false,
     };
     let family = match found_module::family(&records) {
         Family::Quickbasic => RuntimeProfile::Qb45,
