@@ -19,28 +19,27 @@ fn listing(
     std::fs::read_to_string(scratch.path().join("a.s")).unwrap()
 }
 
-/// `for (j = i - 1; j >= 0 && a[j] > v; --j)` ends on the flags of the
-/// counter's own step (`dec ebx; jge`), with no `cmp ebx, 0; jl` after it:
-/// behind the copy the guard `j >= 0` is folded on the outer counter's range,
-/// and the loop's entry was no longer proven, so it kept `dec ebx; add esi, -4;
-/// cmp ebx, 0; jl` (x_insertion +8% clocks). The pin steps a pointer and tests
-/// it against a compare (`addl $-4; cmpl $1; jg`); the index form is shorter
-/// and has no spill.
+/// `for (j = i - 1; j >= 0 && a[j] > v; --j)` behind the copy: the phi combine
+/// (#4888) tests `j + 1 > 1`, so the step ends `dec; lea; cmp $1; jg`. The
+/// pin's best on the C is four instructions from the step to the branch (`dec;
+/// add -4; cmp $1; jg`); so is this. The IR before #4888 gave `dec; jge`; a
+/// fold past the pin (the compare on the biased counter) is a later row
+/// (#4952).
 #[test]
-fn test_a_loop_entered_behind_a_folded_guard_is_still_counted_by_the_ranges() {
+fn test_a_loop_entered_behind_a_folded_guard_steps_and_branches_in_the_pins_four() {
     let text = listing("x_insertion", &["-ftree-ch"]);
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
-    let on_the_step = lines
+    let branch = lines
         .windows(2)
-        .any(
-            |pair| (pair[0].starts_with("dec e") || (pair[0].starts_with("add ") && pair[0].ends_with(", -4")))
-                && (pair[1].starts_with("jge ") || pair[1].starts_with("je ") || pair[1].starts_with("jne ")),
-        );
-    assert!(on_the_step, "{text}");
-    let tested_again = lines
-        .windows(2)
-        .any(|pair| pair[0].starts_with("cmp e") && pair[0].ends_with(", 0") && pair[1].starts_with("jl "));
-    assert!(!tested_again, "the counter is compared again after its step: {text}");
+        .position(|pair| pair[0].starts_with("cmp e") && pair[0].ends_with(", 1") && pair[1].starts_with("jg "))
+        .map(|at| at + 1)
+        .unwrap_or_else(|| panic!("no `cmp r, 1; jg` ends the inner loop: {text}"));
+    let step = lines[..branch].iter().rposition(|line| line.starts_with("dec e")).unwrap();
+    assert!(
+        branch - step < 4,
+        "{} instructions from the step to the branch, the pin's best is 4: {text}",
+        branch - step + 1
+    );
 }
 
 /// gcc copies headers after `pass_ipa_inline` (passes.def:232), so the inliner
