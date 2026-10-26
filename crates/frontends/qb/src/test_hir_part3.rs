@@ -3410,3 +3410,14 @@ fn a_string_compare_tested_against_minus_one_compiles_optimized() {
         assert_eq!(crate::cli::main(&argv), 0, "{level}");
     }
 }
+
+/// Every cell of the module frame carried an `ss:` override in a program with
+/// ON ERROR (range_on_error: 24 bytes at -Os): the body never loads DS, so the
+/// data group is DS throughout.
+#[test]
+fn test_an_on_error_program_without_far_data_has_no_ss_override() {
+    let basic = root().join("tests/run/qb/range_on_error.bas");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    assert!(!text.contains("ss:"), "{text}");
+}
