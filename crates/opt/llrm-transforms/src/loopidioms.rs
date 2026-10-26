@@ -785,7 +785,10 @@ pub(crate) fn fills_pay(
     stores: i64,
     fills: i64,
 ) -> bool {
-    stores < 2 || trip_cost(context, layout, function, callees, blocks.iter(), costs, true) > fills * costs.fill
+    // The table doubles an operation that becomes more than one instruction;
+    // a fill's three immediate loads are 2 to 3 bytes each, not 6: three
+    // quarters of `fill` is its real size (12 to 13 of 18 bytes at m16).
+    stores < 2 || 4 * trip_cost(context, layout, function, callees, blocks.iter(), costs, true) > 3 * fills * costs.fill
 }
 
 /// What a copy of `length` bytes costs: the loads and stores isel expands it to
