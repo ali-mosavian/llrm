@@ -135,3 +135,15 @@ issue = 4900
 owner = "w5"
 date = "2026-11-02"
 why = "queens place -O2 m16 -ftree-ch: main sets up nothing on the base case, tip pays the full prologue, the pin too; shrink-wrap family of recchop"
+[[xfail]]
+id = "integration header_copy::test_a_fixed_point_product_in_a_rotated_loop_is_still_narrowed"
+issue = 4902
+owner = "unassigned"
+date = "2026-11-02"
+why = "mandel.nib -O2 m16 -ftree-ch: main 0 shrd / 50 instrs, tip 3 shrd / 70; the ranges lost x's bound behind the copy (no clang pin: nib)"
+[[xfail]]
+id = "integration header_copy::test_a_counted_exits_number_lets_its_counter_step_in_place"
+issue = 4903
+owner = "w3"
+date = "2026-11-02"
+why = "mandel.nib -O2 m16 -ftree-ch: main ends on inc; jne, tip on inc; cmp 32 (same LSR count-to-zero loss as #4899)"
