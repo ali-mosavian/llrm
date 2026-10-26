@@ -44,5 +44,5 @@ Pieces to make it the pin's (each a PR, priced by the 71-program static diff and
 
 ## Handover to w12 (2026-10-25)
 
-`machinesched.rs` moves to w12; w9 writes `regpressure.rs`. Branch `lir-cleanup-port/misched-faithful` holds piece 1 (live-through values counted in `scheduled`, the MS3 peak guard dropped; `peak` deleted). Its pair (`~/scratch/pair-misched1`, base 121f6f17ef) was not read: rows, sizes and objsweep are in `rows-report.txt`, `sizes.txt`, `objsweep.txt` there when it finishes. What is left is pieces 2 to 4 above: swap `pressure_after` for w9's tracker, then `ReduceLatency` and the exact `tryCandidate` order. The pin is bottom-up only on this target, so there is no top-down side to write.
+`machinesched.rs` moves to w12; w9 writes `regpressure.rs`. Branch `lir-cleanup-port/misched-faithful` holds piece 1 (live-through values counted in `scheduled`, the MS3 peak guard dropped; `peak` deleted). Its pair (base 121f6f17ef) was not read: its rows, sizes and objsweep were still running. What is left is pieces 2 to 4 above: swap `pressure_after` for w9's tracker, then `ReduceLatency` and the exact `tryCandidate` order. The pin is bottom-up only on this target, so there is no top-down side to write.
 
