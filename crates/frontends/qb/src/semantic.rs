@@ -3621,6 +3621,26 @@ impl Compiler {
                         self.select_block(continuation);
                     }
                     "BLOAD" | "BSAVE" => self.binary_memory_statement(name, arguments)?,
+                    "LSET" | "RSET" => {
+                        let [Expr::Binary { op: Binary::Eq, left, right, .. }] = arguments.as_slice() else {
+                            return self
+                                .fail(format!("{name} takes a string variable and a value, as in `{name} a$ = b$`"));
+                        };
+                        let (destination, destination_type) = self.destination(left)?;
+                        let Some(width) = self.string_width(destination_type) else {
+                            return self.unsupported(&format!("{name} of a record"));
+                        };
+                        // B$LSET(source descriptor, far destination, fixed
+                        // length or 0 for a descriptor)
+                        let source = self.string_descriptor(right)?;
+                        let target = self.far_address(destination, destination_type);
+                        let routine = if name == "LSET" { "B$LSET" } else { "B$RSET" };
+                        self.emit_runtime_call(
+                            routine,
+                            Vec::new(),
+                            vec![source, Operand::Value(target), self.count(width as i64)],
+                        );
+                    }
                     "RANDOMIZE" => {
                         let [seed] = arguments.as_slice() else {
                             return self.fail("RANDOMIZE needs a seed here, as in `RANDOMIZE TIMER`");

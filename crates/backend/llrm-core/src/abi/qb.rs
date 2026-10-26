@@ -129,6 +129,9 @@ static _AUDITED_STATEMENT_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|
         // dkopen.asm B$OPEN at 0224 returns with RETF 8 at 0252.
         ("B$OPEN", 8),
         ("B$SLEP", 4),
+        // QB45 rt/rlset.asm: parmW psdSource, parmD psdDest, parmW cbDest.
+        ("B$LSET", 8),
+        ("B$RSET", 8),
         ("B$SOND", 6),
         ("B$DRAW", 2),
         ("B$VARP", 4),
