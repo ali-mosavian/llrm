@@ -81,7 +81,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         tli: &'a TargetLowering,
         hooks: &'a mut H,
     ) -> DagLegalizer<'a, H> {
-        DagLegalizer { dag, tli, hooks, legalized: HashSet::default() }
+        let legalized = HashSet::with_capacity_and_hasher(dag.nodes().len(), Default::default());
+        DagLegalizer { dag, tli, hooks, legalized }
     }
 
     /// `SelectionDAG::Legalize`.
@@ -93,6 +94,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                     continue;
                 }
                 any = true;
+                self.dag.cur_order = self.dag.node(SDValue { node: n, res: 0 }).order;
                 self.legalize_op(n)?;
             }
             if !any {
@@ -104,7 +106,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     /// The nodes reachable from the root, users before their operands.
     fn reverse_topological(&self) -> Vec<u32> {
         let mut order = Vec::new();
-        let mut seen = HashSet::default();
+        let mut seen = HashSet::with_capacity_and_hasher(self.dag.nodes().len(), Default::default());
         let mut stack = vec![(self.dag.get_root().node, false)];
         while let Some((n, expanded)) = stack.pop() {
             if expanded {
@@ -132,7 +134,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             return false;
         }
         let results = self.dag.node(SDValue { node: n, res: 0 }).values.len() as u8;
-        (0..results).all(|res| self.dag.users(SDValue { node: n, res }).next().is_none())
+        !(0..results).any(|res| self.dag.has_users(SDValue { node: n, res }))
     }
 
     /// The type the action table is asked about for `value`'s node (the
@@ -637,7 +639,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         // `ShouldShrinkFPConstant` (no SSE2): a double that is exactly a float
         // is stored as one.
         let (pool_vt, pool_bits) = match mvt {
-            MVT::F64 => {
+            MVT::F64 if self.tli.should_shrink_fp_constant(mvt) => {
                 let value = f64::from_bits(bits as u64);
                 let narrow = value as f32;
                 if f64::from(narrow).to_bits() == bits as u64 && !value.is_nan() {

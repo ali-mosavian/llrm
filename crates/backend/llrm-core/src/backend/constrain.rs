@@ -535,11 +535,18 @@ pub fn distinct_classes_given(
     Some(body.with_blocks(blocks))
 }
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static REQUIRED_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Where each value the body's instructions require has to live.
 pub fn required(
     body: &LirBody,
     classes: &RegisterClasses,
 ) -> IndexMap<u32, RegId> {
+    #[cfg(test)]
+    REQUIRED_ASKED.with(|asked| asked.set(asked.get() + 1));
     required_in(body, classes, &(0..body.blocks.len()).collect::<Vec<_>>())
 }
 

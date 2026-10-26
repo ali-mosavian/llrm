@@ -532,7 +532,14 @@ pub fn convention_for(
             .filter(|(_, class)| **class != Some(llrm_mir::opcode::RESULT_POINTER))
             .map(|((&ty, &size), class)| entry.kind(argument_of(types, ty, size, *class), arch.stack_slot_bytes()))
             .collect();
-        let placed = entry.place(&kinds);
+        // A struct result's address held in a register is not one of the
+        // arguments, but takes that register.
+        let hidden_register: Vec<&str> = if classes.contains(&Some(llrm_mir::opcode::RESULT_POINTER)) {
+            entry.aggregate.as_ref().and_then(|one| one.pointer_register.as_deref()).into_iter().collect()
+        } else {
+            Vec::new()
+        };
+        let placed = entry.place_reserving(&kinds, &hidden_register);
         let mut places = placed.places.iter();
         let mut used = placed.used.clone();
         // A struct result's address the convention does not hold in a register
@@ -7624,6 +7631,10 @@ impl Selector<'_, '_, '_> {
             std::mem::swap(&mut a, &mut b);
             predicate = swapped(predicate);
         }
+        // An i1 is a byte of 0 or 1 but true is -1 signed: the order reverses.
+        if self.types().int_bits(ty) == Some(1) {
+            predicate = unsigned_of_i1(predicate);
+        }
         // A call's flags are its result compared with zero.
         if let Operand::Value(value) = a
             && self.flagged.contains(&value)
@@ -8094,6 +8105,19 @@ fn condition_code(predicate: IntPredicate) -> &'static str {
         IntPredicate::Ule => "jbe",
         IntPredicate::Ugt => "ja",
         IntPredicate::Uge => "jae",
+    }
+}
+
+/// `predicate` on an i1's byte (0 or 1): a signed order is the unsigned order
+/// reversed, true being -1.
+fn unsigned_of_i1(predicate: IntPredicate) -> IntPredicate {
+    use IntPredicate::*;
+    match predicate {
+        Slt => Ugt,
+        Sle => Uge,
+        Sgt => Ult,
+        Sge => Ule,
+        other => other,
     }
 }
 

@@ -101,7 +101,7 @@ fn test_the_outermost_steps_add_up_to_the_runs_cpu_time() {
 fn test_a_pass_manager_pass_and_its_analyses_are_in_the_report() {
     let report = compiled(Some("time"));
     for wanted in
-        ["mir gvn", "mir fold", "analysis ", "mir pipeline", "lir regalloc", "isel", "omf write", "frontend", "hits"]
+        ["mir gvn", "mir combine", "analysis ", "mir pipeline", "lir regalloc", "isel", "omf write", "frontend", "hits"]
     {
         assert!(report.contains(wanted), "no `{wanted}` in:\n{report}");
     }
