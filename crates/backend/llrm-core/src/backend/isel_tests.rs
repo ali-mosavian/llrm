@@ -389,9 +389,8 @@ fn a_va_copy_moves_the_list_pointer_and_a_va_end_is_no_code() {
             // arguments.
             "lea ax, [bp+8]",
             "mov word ptr [bp-2], ax",
-            "mov ax, word ptr [bp-2]",
-            // va_copy: the second list holds the same pointer; va_end is no
-            // code.
+            // va_copy: the second list holds the same pointer, still in ax
+            // (no reload of the first); va_end is no code.
             "mov word ptr [bp-4], ax",
             "mov ax, word ptr [bp+6]",
             "leave",
@@ -2997,6 +2996,26 @@ fn test_a_float_load_compared_second_is_the_comparisons_operand() {
         "{:?}",
         compared("olt double %x, %w")
     );
+}
+
+/// The `not` of a comparison was a `setg`, a byte copy and `xor 1` (x_mergesort
+/// at m16 -Os, 3 bytes per use): it is the `setle` of the opposite condition.
+#[test]
+fn test_the_not_of_a_comparison_is_the_opposite_setcc() {
+    let text = "define i16 @f(i16 %a, i16 %b) addrspace(1) {
+  %c = icmp sgt i16 %a, %b
+  %n = xor i1 %c, true
+  %x = zext i1 %c to i16
+  %y = zext i1 %n to i16
+  %s = shl i16 %y, 1
+  %r = add i16 %x, %s
+  ret i16 %r
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|one| one.starts_with("setle ")), "{got:?}");
+    assert!(got.iter().any(|one| one.starts_with("setg ")), "{got:?}");
+    assert!(!got.iter().any(|one| one.starts_with("xor ")), "{got:?}");
 }
 
 /// A comparison a branch reads is made beside the branch: a store between
@@ -6935,4 +6954,26 @@ no:
     let got = listing(text, "f");
     assert!(got.iter().any(|line| line.starts_with("test ")), "{got:?}");
     assert!(!got.iter().any(|line| line.starts_with("and ")), "{got:?}");
+}
+
+/// An i1 true is -1 signed, but its byte is 1: `icmp slt i1 %a, %b` read as
+/// `cmp al, bl; jl` was false for a = true, b = false, where it holds.
+#[test]
+fn test_a_signed_compare_of_i1_orders_true_below_false() {
+    let branch = |predicate: &str| {
+        let text = format!(
+            "define i16 @f(i1 %a, i1 %b) addrspace(1) {{\n  %c = icmp {predicate} i1 %a, %b\n  br i1 %c, label %y, label %n\ny:\n  ret i16 1\nn:\n  ret i16 0\n}}\n"
+        );
+        inner(&text)[2].split(' ').next().unwrap().to_owned()
+    };
+    // The branch or its inverse, whichever block falls through.
+    for (signed, unsigned) in [
+        ("slt", ["ja", "jbe"]),
+        ("sle", ["jae", "jb"]),
+        ("sgt", ["jb", "jae"]),
+        ("sge", ["jbe", "ja"]),
+        ("ult", ["jb", "jae"]),
+    ] {
+        assert!(unsigned.contains(&branch(signed).as_str()), "icmp {signed} i1: {}", branch(signed));
+    }
 }

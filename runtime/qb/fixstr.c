@@ -26,5 +26,48 @@ SD *B_LDFS(qb_data_ptr field, int length)
     return result;
 }
 
+/* LSET and RSET: `source` into the field at `destination` (`length` bytes, or the string whose descriptor it is when
+   `length` is 0), the shorter padded with blanks on the right (LSET) or the left (RSET), the longer cut to fit on the
+   right. A temporary source is freed. */
+static void justify(SD *source, qb_data_ptr destination, int length, int right)
+{
+    char *to = QB_NEAR_OF(destination);
+    int kept, pad;
+
+    if (length == 0) {
+        SD *target = (SD *)to;
+
+        to = target->ptr;
+        length = target->len;
+    }
+    kept = source->len < length ? source->len : length;
+    pad = length - kept;
+    if (right) {
+        char *at = to;
+        int count = pad;
+
+        for (; count; count--)
+            *at++ = ' ';
+        copy_bytes(to + pad, source->ptr, kept);
+    } else {
+        copy_bytes(to, source->ptr, kept);
+        for (to += kept; pad; pad--)
+            *to++ = ' ';
+    }
+    str_tmp_free(source);
+}
+
+void B_LSET(SD *source, qb_data_ptr destination, int length)
+{
+    justify(source, destination, length, 0);
+}
+
+void B_RSET(SD *source, qb_data_ptr destination, int length)
+{
+    justify(source, destination, length, 1);
+}
+
 #pragma aux B_ASSN "B$ASSN"
+#pragma aux B_LSET "B$LSET"
+#pragma aux B_RSET "B$RSET"
 #pragma aux B_LDFS "B$LDFS"
