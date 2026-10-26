@@ -362,5 +362,6 @@ def test_a_pr_that_makes_a_listed_unit_test_pass_is_refused_alone_and_so_is_a_li
     monkeypatch.setattr(smoke, "touched_packages", lambda files, packages, root: {"llrm-core"})
     monkeypatch.setattr(smoke, "integration_map", lambda root=None: {"header_copy": {"llrm-core"}})
     monkeypatch.setattr(smoke, "integration_failures", lambda targets, root=None, **_: seen.extend(targets) or {"xpass integration header_copy::t"})
+    monkeypatch.setattr(ps, "_scanners_failing_on_head", lambda targets: set())  # the real one reads and writes ~/scratch/results/headfail
     why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), units=lambda _: set())
     assert "header_copy" in seen and why and "xpass integration header_copy::t" in why[0], (seen, why)
