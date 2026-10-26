@@ -95,3 +95,17 @@ fn mabi_goes_to_the_backend_after_the_tables_own() {
     let last = args.iter().rposition(|arg| arg.starts_with("-mabi=")).unwrap();
     assert_eq!(args[last], "-mabi=regparm3");
 }
+
+/// The Watcom front end's tests pass the backend's switches (`-march`,
+/// `-fno-inline-functions-called-once`, `-mcode-segment=`) with the source;
+/// clang took them all and the backend saw none, so a program built with them
+/// came out as without.
+#[test]
+fn the_backends_switches_reach_the_backend() {
+    let one = built("-march=i486 -fno-inline-functions-called-once -fno-jump-tables -mcode-segment=X -fno-inline=f -c x.c");
+    assert_eq!(
+        one.llc,
+        words("-march=i486 -fno-inline-functions-called-once -fno-jump-tables -mcode-segment=X -fno-inline=f")
+    );
+    assert_eq!(one.clang, words("-march=i486"));
+}
