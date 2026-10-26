@@ -2,11 +2,6 @@
 # ids: "unit <crate>::<test>" (cargo lib test) and "run <program name>" (tests/run).
 
 [[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_a_raise_under_an_error_handler_resumes_after_its_statement"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_element_stores_leave_descriptors_unread"
 issue = 3994
 owner = "funcattrs-port"
@@ -55,12 +50,6 @@ date = "2026-10-27"
 why = "red on parity, not bisected; family: constant divisor / dividend; a regression unless triage says stale (qb-reds-parity.md)"
 [[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_a_fixed_length_argument_is_assigned_back_after_the_call"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: other, not yet put in a family; a regression unless triage says stale (qb-reds-parity.md)"
-[[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_a_masked_far_subscript_compiles"
 issue = 2848
 owner = "funcattrs-port"
 date = "2026-10-27"
