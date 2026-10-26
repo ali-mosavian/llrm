@@ -1490,6 +1490,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(split) = self.split_pair_store(node) {
             return Some(split);
         }
+        // "Keep trying to merge store sequences until we are unable to do so":
+        // the merged stores are dead, the node is returned as handled.
+        if self.merge_consecutive_stores(node) {
+            return Some(node);
+        }
         if self.dag.opcode(value) != ISD::ConstantFP || info.volatile || info.mem_vt != self.dag.value_type(value) {
             return None;
         }

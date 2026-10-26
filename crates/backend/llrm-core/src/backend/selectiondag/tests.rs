@@ -66,6 +66,7 @@ mod sext_in_reg;
 mod shift_simplify;
 mod srl_of_trunc;
 mod store_fp_const;
+mod store_merge;
 mod sub_sbb;
 mod sub_simplify;
 mod switch_dags;
