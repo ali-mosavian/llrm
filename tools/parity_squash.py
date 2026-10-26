@@ -1012,6 +1012,9 @@ def _in_target(target: Path | None, kind: str = "test"):
     return lambda command, **kw: subprocess.run(command, env={**os.environ, "CARGO_TARGET_DIR": str(target / kind)}, **kw)
 
 
+SOURCE_SCANNING_PACKAGES = {"llrm-mir"}  # lib tests that scan other crates' sources (no_file_gains_*): upstream of the crates they judge, so a dependants run never reaches them
+
+
 def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, scanners=None, differs=None, target: Path | None = None, units=None, on_base=None) -> list[str]:
     """Why the PR at `head`, alone on `base` (a scratch checkout at `base` in `cwd`), fails the cheap checks a batch would fail on: the merge, the workspace build, the
     always-on scanners (fmt differences only warn: the squash formats every PR). The 15:34 batch spent 62% of its time on reruns of PRs that failed these."""
@@ -1023,14 +1026,15 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
     if unformatted := sorted((differs or fmt_differs)(cwd, files)):
         print(f"alone: fmt.sh would change {', '.join(unformatted[:5])} (the squash formats it; not a refusal)", file=sys.stderr)
     # the scanners read the scratch tree: `integration_failures` defaults to ROOT, so every PR was judged on the tree the runner stands in
-    red = sorted((scanners or (lambda f: landing_scanner_failures(f, False, on_merged=lambda targets: smoke.integration_failures(targets, root=cwd, run=_in_target(target)))))(files))
+    # every scanner, not the always-on two: they read other crates' sources and docs, so a PR in one crate turns them red from outside it (#4871 added id-keyed maps in llrm-transforms; batch 18 died on llrm-mir's ratchet)
+    red = sorted((scanners or (lambda f: landing_scanner_failures(f, True, on_merged=lambda targets: smoke.integration_failures(targets, root=cwd, run=_in_target(target)))))(files))
     if red:
         return [f"scanner red alone: {', '.join(red[:5])}"]
     # the unit tests of the crates the PR changes, less what the base fails: round 3 died on llrm-nib::test_pipeline::... and no PR was blamed
     def lib_failures(changed: list[str]) -> set[str]:
         packages, _ = smoke.workspace_graph(cwd)
         touched = smoke.touched_packages(changed, packages, cwd)
-        return smoke.dependants_lib_failures(touched, root=cwd, run=_in_target(target, "lib")) if touched else set()
+        return smoke.dependants_lib_failures(touched | SOURCE_SCANNING_PACKAGES, root=cwd, run=_in_target(target, "lib")) if touched else set()
 
     failed = (units or lib_failures)(files)
     failed = {name for name in failed if not name.startswith("xpass ")}
