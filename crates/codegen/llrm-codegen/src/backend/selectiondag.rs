@@ -130,6 +130,7 @@ pub mod legalize_types;
 pub mod libcall;
 pub mod logic_setcc;
 pub mod opcodes;
+mod reassociate;
 pub mod schedule;
 pub mod switchcg;
 pub mod x86_lowering;

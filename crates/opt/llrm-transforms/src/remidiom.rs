@@ -15,7 +15,9 @@
 //! The quotient, its `trunc` and the product must have no other user (a second
 //! user is `DivRemPairs`' case, and a remainder beside a live quotient
 //! is a second divide). The subtrahend's left operand is `x` itself, or a
-//! counter ScalarEvolution proves is `trunc x`.
+//! counter ScalarEvolution proves is `trunc x + k` for a constant `k` (`x % c +
+//! 1` becomes `(x + 1) - (x / c) * c` once LSR picks the counter `x + 1`); the
+//! fold then adds `k` to the remainder.
 //!
 //! DEVIATE REM1: the pin has this fold in the DAG (`foldRemainderIdiom`,
 //! [DAGCombiner.cpp#L4215](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4215)),
@@ -29,7 +31,7 @@
 
 use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::scev::expr::{Ty, Use};
-use llrm_mir::context::{ConstantKind, Context};
+use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
@@ -148,34 +150,36 @@ fn matched(
     Some(Idiom { sub, mul, trunc, div, dividend, divisor, signed, wide, narrow, left })
 }
 
-/// Whether `left` is the dividend, or `trunc` of it: structurally, else as
-/// ScalarEvolution has it (a counter LSR chose beside the wide one).
-fn is_dividend(
+/// The constant `k` with `left` = `trunc x + k`: zero where `left` is the
+/// dividend (or its `trunc`) itself, structurally; else as ScalarEvolution has
+/// it (a counter LSR chose beside the wide one, one past it for `x % c + 1`).
+fn offset_of(
     context: &Context,
     function: &Function,
     idiom: &Idiom,
     session: &mut Option<ScevSession>,
     layout: &llrm_mir::datalayout::DataLayout,
     outer: &llrm_mir::passes::Outer,
-) -> bool {
+) -> Option<u128> {
     if idiom.left == idiom.dividend {
-        return idiom.narrow == idiom.wide;
-    }
-    if idiom.narrow == idiom.wide {
-        return false;
+        return (idiom.narrow == idiom.wide).then_some(0);
     }
     if let Some(def) = instruction_of(function, idiom.left)
+        && idiom.narrow != idiom.wide
         && function.instruction(def).opcode == Opcode::Cast(CastOp::Trunc)
         && function.instruction(def).operands[0] == idiom.dividend
     {
-        return true;
+        return Some(0);
     }
     let session = session.get_or_insert_with(|| ScevSession::of(context, function, outer));
-    let (left, dividend, narrow) = (idiom.left, idiom.dividend, idiom.narrow);
+    let (left, dividend, narrow, wide) = (idiom.left, idiom.dividend, idiom.narrow, idiom.wide);
     session.ask(context, layout, function, outer, |se, cx| {
         let wanted = se.get_scev(cx, dividend);
-        let wanted = se.get_truncate_expr(cx, Use::of(wanted), Ty::Int(narrow), 0);
-        se.get_scev(cx, left) == wanted
+        let wanted =
+            if narrow == wide { wanted } else { se.get_truncate_expr(cx, Use::of(wanted), Ty::Int(narrow), 0) };
+        let left = se.get_scev(cx, left);
+        let diff = se.get_minus_scev(cx, Use::of(left), Use::of(wanted), 0, 0);
+        se.as_constant(diff).map(|k| mask(k.zext_value(), narrow))
     })
 }
 
@@ -204,12 +208,13 @@ impl FunctionPass for RemainderIdiom {
         let mut session = None;
         let mut changed = false;
         for idiom in idioms {
-            if !outer.target().keeps_division(idiom.wide, self.size)
-                || !is_dividend(unit.context, unit.function, &idiom, &mut session, unit.layout, &outer)
-            {
+            if !outer.target().keeps_division(idiom.wide, self.size) {
                 continue;
             }
-            replace(unit.context, unit.function, &idiom);
+            let Some(offset) = offset_of(unit.context, unit.function, &idiom, &mut session, unit.layout, &outer) else {
+                continue;
+            };
+            replace(unit.context, unit.function, &idiom, offset);
             changed = true;
         }
         if changed {
@@ -220,12 +225,14 @@ impl FunctionPass for RemainderIdiom {
     }
 }
 
-/// `idiom` as one remainder (and a `trunc` where the product was narrowed); the
+/// `idiom` as one remainder (and a `trunc` where the product was narrowed, an
+/// `add` of `offset` where the counter ran that far past the dividend); the
 /// instructions it replaces erased.
 fn replace(
     context: &Context,
     function: &mut Function,
     idiom: &Idiom,
+    offset: u128,
 ) {
     let wide_ty = context.types.int(idiom.wide);
     let name = if idiom.signed { BinaryOp::SRem } else { BinaryOp::URem };
@@ -244,6 +251,14 @@ fn replace(
             function.create_instruction(Opcode::Cast(CastOp::Trunc), ty, vec![result], Flags::default(), None);
         function.insert(narrowed, Position::Before(idiom.sub)).expect("a position before the subtraction");
         result = Operand::Value(function.instruction(narrowed).result.expect("a trunc has a value"));
+    }
+    if offset != 0 {
+        let ty = function.instruction(idiom.sub).ty;
+        let k = Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Int(offset) }));
+        let shifted =
+            function.create_instruction(Opcode::Binary(BinaryOp::Add), ty, vec![result, k], Flags::default(), None);
+        function.insert(shifted, Position::Before(idiom.sub)).expect("a position before the subtraction");
+        result = Operand::Value(function.instruction(shifted).result.expect("an add has a value"));
     }
     let old = function.instruction(idiom.sub).result.expect("a subtraction has a value");
     function.replace_all_uses_with(old, result);

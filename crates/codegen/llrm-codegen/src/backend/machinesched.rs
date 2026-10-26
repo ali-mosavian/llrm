@@ -26,7 +26,7 @@
 //! load or the add.
 //!
 //! # Runs
-//! `MachineScheduler`, a machine phase after `pressuresink` and before
+//! `MachineScheduler`, a machine phase after `phielim` and before
 //! `floatfold` (`machinesched@5`): each region longer than half the allocatable
 //! registers is ordered by `bottom_up` (pieces 2 and 3 of
 //! docs/working/machine-scheduler-plan.md). DEVIATE MS3: values that pass
