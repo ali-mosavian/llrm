@@ -529,10 +529,10 @@ pub fn serialized(
     match format {
         Format::Omf => {
             if let Some(big) =
-                object.sections.iter().find(|section| section.image.len() > 0xFFFF && object.arch == Arch::I8086)
+                object.sections.iter().find(|section| section.image.len() > 0x10000 && object.arch == Arch::I8086)
             {
                 return Err(Error::Unsupported(llrm_object::Unsupported(format!(
-                    "segment `{}` is {} bytes: a 16-bit segment holds 65535, and a huge object of more must be allocated and reached through a huge pointer",
+                    "segment `{}` is {} bytes: a 16-bit segment holds 65536",
                     big.name,
                     big.image.len()
                 ))));

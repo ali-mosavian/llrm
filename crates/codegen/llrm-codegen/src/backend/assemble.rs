@@ -93,6 +93,10 @@ use crate::model::ir::{Addr, AddressRef, Loc, Semantics, Space};
 use crate::model::lir::LirBody;
 use crate::support::hash::IndexMap;
 
+/// A far object of more bytes than this is laid down in 64K segments.
+const HUGE_PIECE: i64 = 0xFFFF;
+const HUGE_PIECE_BYTES: i64 = 0x10000;
+
 /// What only the frontend knows: each call's contract, and the symbol each
 /// MIR name links as.
 pub trait Abi {
@@ -182,6 +186,7 @@ pub fn assembled_by(
     let mut data = Vec::new();
     let mut far_data = Vec::new();
     let mut sectioned: IndexMap<String, Vec<masm::Datum>> = IndexMap::default();
+    let mut huge_objects: Vec<(String, Vec<masm::Datum>)> = Vec::new();
     let mut data_publics = Vec::new();
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
     let classes = Rc::new(RegisterClasses::of(arch));
@@ -223,6 +228,12 @@ pub fn assembled_by(
                     // `#pragma data_seg`: a segment of the program's own
                     // naming.
                     sectioned.entry(section.clone()).or_default().extend(datums);
+                } else if matches!(global.address_space, FAR_SPACE | HUGE_SPACE)
+                    && masm::data_size(&datums, 0) > HUGE_PIECE
+                {
+                    // Past 64K: consecutive segments of 64K, which a huge
+                    // pointer steps through.
+                    huge_objects.push((name.to_owned(), datums));
                 } else if matches!(global.address_space, FAR_SPACE | HUGE_SPACE) {
                     far_data.extend(datums);
                 } else {
@@ -465,6 +476,14 @@ pub fn assembled_by(
         .collect();
     let has_far = !far_data.is_empty();
     let far_segment = format!("{}_FARDATA", code.strip_suffix("_TEXT").unwrap_or(code));
+    let mut huge_segments: Vec<(String, Vec<masm::Datum>)> = Vec::new();
+    for (name, datums) in huge_objects {
+        let pieces = masm::split_data(datums, HUGE_PIECE_BYTES).map_err(|why| format!("@{name}: {why}"))?;
+        for (at, piece) in pieces.into_iter().enumerate() {
+            huge_segments.push((format!("{far_segment}_{}${at}", name.trim_start_matches('_')), piece));
+        }
+    }
+    let huge_names: Vec<String> = huge_segments.iter().map(|(name, _)| name.clone()).collect();
     Ok(masm::Module {
         registers: Regs(arch.registers()),
         code: code.to_owned(),
@@ -473,10 +492,11 @@ pub fn assembled_by(
         publics: procedures.iter().filter(|one| one.public).map(|one| one.name.clone()).chain(data_publics).collect(),
         data: std::iter::once(("_DATA".to_owned(), data))
             .chain(has_far.then(|| (far_segment.clone(), far_data)))
+            .chain(huge_segments)
             .chain(sectioned)
             .collect(),
         procedures,
-        private: BTreeSet::from_iter(has_far.then(|| far_segment.clone())),
+        private: BTreeSet::from_iter(has_far.then(|| far_segment.clone()).into_iter().chain(huge_names)),
         requests: BTreeSet::new(),
         debug,
         far_bss: BTreeSet::new(),

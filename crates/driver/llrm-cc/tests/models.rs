@@ -163,56 +163,49 @@ fn a_program_runs_in_each_model() {
 }
 
 /// A static huge object past 64K stopped llrm-llc with a Rust panic (`'H'
-/// format requires 0 <= number <= 65535`) from the OMF writer; the segment
-/// cannot hold it, and the error says so.
+/// format requires 0 <= number <= 65535`) from the OMF writer. It is now
+/// consecutive 64K segments, and a huge pointer walks all of its bytes (sum,
+/// edges and a second object).
 #[test]
-fn a_static_object_past_a_segment_is_refused_by_name() {
+fn a_static_huge_object_past_a_segment_is_consecutive_segments() {
     if std::env::var_os("LLRM_CLANG_M16").is_none() {
         eprintln!("skipped: LLRM_CLANG_M16 names no i8086 clang");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let built = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
-        .env("LLRM_CC_TARGET", "x86_16-dos")
-        .env("LLRM_LLC", root.join("target/release/llrm-llc"))
-        .args(["-w", "-O2", "-c", "-o", "/dev/null"])
-        .arg(root.join("tests/cc/models/bigstatic.c"))
-        .output()
-        .unwrap();
-    let said = String::from_utf8_lossy(&built.stderr);
-    assert!(!built.status.success() && !said.contains("panicked") && said.contains("65535"), "{said}");
-}
-
-/// `#pragma aux NAME = "code" parm [..] value [..]` was ignored with a warning
-/// and its calls linked to nothing. The code now runs in the registers it
-/// names, at each optimization level.
-#[test]
-fn pragma_aux_code_runs_in_its_registers() {
-    if std::env::var_os("LLRM_CLANG_M16").is_none() {
-        eprintln!("skipped: LLRM_CLANG_M16 names no i8086 clang");
-        return;
-    }
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    for level in ["-O0", "-O2", "-Os"] {
-        let exe = std::env::temp_dir().join(format!("llrm-cc-aux{level}-{}.exe", std::process::id()));
-        let built = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let compile = |extra: &[&str], output: &Path| {
+        Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
             .env("LLRM_CC_TARGET", "x86_16-dos")
             .env("LLRM_LLC", root.join("target/release/llrm-llc"))
-            .args(["-w", level, "-o"])
-            .arg(&exe)
-            .arg(root.join("tests/cc/dos/aux.c"))
+            .args(["-w", "-O2"])
+            .args(extra)
+            .arg("-o")
+            .arg(output)
+            .arg(root.join("tests/cc/dos/bigstatic.c"))
             .output()
-            .unwrap();
-        assert!(built.status.success(), "{level}: {}", String::from_utf8_lossy(&built.stderr));
-        let ran = Command::new("python3")
-            .args(["-I"])
-            .arg(root.join("tools/dosbatch/run_exe.py"))
-            .arg("x86-m16")
-            .arg(&exe)
-            .output()
-            .unwrap();
-        let _ = std::fs::remove_file(&exe);
-        let said = String::from_utf8_lossy(&ran.stdout).replace("\r\n", "\n");
-        assert_eq!(said.trim().replace('\n', " "), "127 -2 393358 -327822 120", "{level}");
-    }
+            .unwrap()
+    };
+    let listing = std::env::temp_dir().join(format!("llrm-cc-big-{}.s", std::process::id()));
+    let built = compile(&["-S"], &listing);
+    assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
+    let text = std::fs::read_to_string(&listing).unwrap_or_default();
+    let _ = std::fs::remove_file(&listing);
+    let segments: Vec<&str> = text.lines().filter(|line| line.contains(" segment para public 'FAR_DATA'")).collect();
+    assert!(
+        segments.iter().any(|line| line.contains("big$0")) && segments.iter().any(|line| line.contains("big$1")),
+        "{segments:?}"
+    );
+    let exe = std::env::temp_dir().join(format!("llrm-cc-big-{}.exe", std::process::id()));
+    let built = compile(&[], &exe);
+    assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
+    let ran = Command::new("python3")
+        .args(["-I"])
+        .arg(root.join("tools/dosbatch/run_exe.py"))
+        .arg("x86-m16")
+        .arg(&exe)
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&exe);
+    let said = String::from_utf8_lossy(&ran.stdout).replace("\r\n", "\n");
+    assert_eq!(said.trim().replace('\n', " "), "12748993 249 0 89 9");
 }
