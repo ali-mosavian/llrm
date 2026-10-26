@@ -5162,6 +5162,7 @@ fn test_a_reload_stays_across_a_volatile_access() {
         )
     };
     assert_eq!(store_then_reload(vec![device]), 3);
+}
 
 // ------------------------------------------------------------ width and flag
 // audit of the width- and flag-changing rules
