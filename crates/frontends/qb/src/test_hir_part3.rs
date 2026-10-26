@@ -371,14 +371,17 @@ fn test_an_exact_static_subscript_folds_into_a_32_bit_symbolic_address() {
 }
 
 /// A negative subscript leaf, zero-extended, addressed `A%+20[esi+esi]`
-/// 128K past the element.
+/// 128K past the element. The address stays 16 bit; the scaled index may be
+/// computed in a 32-bit `lea` (its low half is the same, and no header copy
+/// reshapes the loop now).
 #[test]
 fn test_a_negative_static_subscript_stays_16_bit() {
     let body = main_listing(
         "NEGATIVE.BAS",
         b"DEFINT A-Z\r\nDIM a(-10 TO 10)\r\nFOR j = 0 TO 99\r\ni = (PEEK(j) AND 7) - 5\r\na(i) = j\r\nNEXT\r\nPRINT a(5)\r\n",
     );
-    assert!(!body.contains("[e"), "{body}");
+    let wide: Vec<&str> = body.lines().filter(|line| line.contains("A%") && line.contains("[e")).collect();
+    assert!(wide.is_empty(), "{wide:?}\n{body}");
 }
 
 /// D_SURF SC_FTAKE lost far-array address definitions during secondary folding.
@@ -1046,8 +1049,8 @@ fn test_an_error_statement_is_placed_after_the_hot_path() {
 /// LBOUND(a, 1) compared the rank against 1 before reading the descriptor.
 ///
 /// Every allocated array has a first dimension, so only the allocation
-/// test may branch to the runtime call. Distinct branches: tail
-/// duplication may copy that test, which is no second condition.
+/// test may branch to the runtime call: one branch (no header copy under
+/// LLVM's order duplicates it; a rank check would be a second).
 #[test]
 fn test_the_first_dimension_is_not_rank_checked() {
     let procedure = sum_three(true);
@@ -1058,7 +1061,7 @@ fn test_the_first_dimension_is_not_rank_checked() {
         .filter(|(_, _, label)| calls.contains(label))
         .map(|(start, end, _)| procedure[*start..*end].trim())
         .collect();
-    assert_eq!(branches.len(), 2, "{branches:?}");
+    assert_eq!(branches.len(), 1, "{branches:?}");
 }
 
 /// Without -fsanitize=bounds LBOUND trusts the descriptor: no B$LBND/B$UBND
@@ -1461,9 +1464,13 @@ SUB b\r\nPOKE 5, PEEK(4)\r\nEND SUB\r\n";
     assert_eq!(loads, 0, "{optimized}");
     let kept =
         optimized.lines().filter(|line| line.trim().starts_with("store i16 ") && line.contains("ptr @b$seg")).count();
-    // VARSEG's selector is now a constant address, so a's first b$seg store is
-    // dead too (-1 store, -3 instructions).
-    assert!(optimized.contains("addrspacecast (ptr @\"ARR%\"") && kept == 1, "{optimized}");
+    // VARSEG's selector is a constant address, but the PEEK/POKE offsets are
+    // relative to that segment's base, not to ARR%: they can reach any byte of
+    // the data segment, b$seg included. A forged-selector pointer is therefore
+    // no proven-disjoint access (188fd3905, DEVIATE C1, forging.rs), and a's
+    // first b$seg store is kept, as the second is (+1 store, +3 instructions
+    // against the earlier expectation that it was dead).
+    assert!(optimized.contains("addrspacecast (ptr @\"ARR%\"") && kept == 2, "{optimized}");
 }
 
 #[test]
