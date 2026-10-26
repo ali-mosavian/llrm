@@ -5250,3 +5250,63 @@ fn a_doubling_add_keeps_the_carry_and_overflow_a_successor_reads() {
         );
     }
 }
+
+/// `add eax,[bp-4]; mov [bp-4],eax`, the spiller's fold of a reload into an
+/// accumulating sum (m16 -Os qlight.c: 4 B and a second frame slot for 2
+/// instructions), is the read-modify-write `add [bp-4],eax` when eax dies at
+/// the store.
+fn _accumulated(
+    name: &str,
+    dies: bool,
+) -> (LirBody, Insn) {
+    let cell = Loc::Mem(mem(frame(-4), 4, RegId::BP, -4, 1));
+    let eax = rl(RegId::EAX, 4);
+    let sum = insn(
+        1,
+        Some((1, 3)),
+        Some(sem(Operation::Binary, name, vec![eax.clone()], vec![eax.clone(), cell.clone()])),
+        vec![10],
+        vec![1],
+    );
+    let stored =
+        insn(3, Some((3, 3)), Some(sem(Operation::Move, "mov", vec![cell], vec![eax.clone()])), vec![], vec![10]);
+    let after = insn(
+        4,
+        Some((4, 5)),
+        Some(sem(Operation::Move, "mov", vec![rl(RegId::EBX, 4)], vec![if dies { im(0, 4) } else { eax.clone() }])),
+        vec![12],
+        vec![],
+    );
+    let clear =
+        insn(5, Some((5, 6)), Some(sem(Operation::Move, "mov", vec![eax.clone()], vec![im(0, 4)])), vec![13], vec![]);
+    let insns = if dies {
+        vec![Arc::new(sum), Arc::new(stored.clone()), Arc::new(clear)]
+    } else {
+        vec![Arc::new(sum), Arc::new(stored.clone()), Arc::new(after)]
+    };
+    (body("sum", 0, vec![block(0, insns, vec![]).into()]), stored)
+}
+
+#[test]
+fn test_a_sum_stored_back_to_the_cell_it_added_is_a_read_modify_write() {
+    for name in ["add", "and", "or", "xor"] {
+        let (input, stored) = _accumulated(name, true);
+        let result = transferred(rules(), &input).insns();
+        let cell = Loc::Mem(mem(frame(-4), 4, RegId::BP, -4, 1));
+        assert_eq!(
+            result[0].what,
+            Some(sem(Operation::Binary, name, vec![cell.clone()], vec![cell, rl(RegId::EAX, 4)])),
+            "{name}"
+        );
+        assert_eq!(result[1].what.as_ref().unwrap().op, Operation::Nothing, "{name}");
+        assert_eq!(result[1].uses, stored.uses, "{name}");
+    }
+}
+
+#[test]
+fn test_a_sum_still_read_after_its_store_keeps_its_register_form() {
+    let (input, _) = _accumulated("add", false);
+    assert_eq!(transferred(rules(), &input).insns(), input.blocks[0].insns.to_vec());
+    let (input, _) = _accumulated("sub", true);
+    assert_eq!(transferred(rules(), &input).insns(), input.blocks[0].insns.to_vec());
+}
