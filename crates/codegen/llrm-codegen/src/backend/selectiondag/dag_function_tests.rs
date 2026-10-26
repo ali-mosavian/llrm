@@ -742,3 +742,69 @@ define i8 @f(i8 %a) {
     cpu.size = true;
     selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
 }
+
+const COPY_4000_BYTES: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+@a = global [2000 x i16] zeroinitializer, align 2
+@b = global [2000 x i16] zeroinitializer, align 2
+declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+define void @f() {
+  call void @llvm.memcpy.p0.p0.i16(ptr @b, ptr @a, i16 4000, i1 false)
+  ret void
+}
+";
+
+/// A 4000-byte copy at m16 with no `memcpy` in the runtime was `rep movsb`
+/// (4 times the iterations of the old selector's `rep movsd`; scroll.c).
+#[test]
+fn a_big_copy_without_a_memcpy_routine_moves_dwords() {
+    let module = llrm_mir::parse::module(COPY_4000_BYTES).expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<_> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(names.iter().any(|n| n == "movsd"), "{names:?}");
+}
+
+/// The dword copy used a pointer-typed count: a far destination made it
+/// "integer constant of Simple(Far)" and examples/level.nib stopped compiling.
+#[test]
+fn a_big_copy_to_a_far_pointer_still_selects() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+@b = global [100 x i16] zeroinitializer, align 2
+declare void @llvm.memcpy.p1.p0.i16(ptr addrspace(1), ptr, i16, i1)
+define void @f(ptr addrspace(1) %d) {
+  call void @llvm.memcpy.p1.p0.i16(ptr addrspace(1) %d, ptr @b, i16 202, i1 false)
+  ret void
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+}
+
+/// A copy of `n` bytes at m16 with no `memcpy` in the runtime was one `rep
+/// movsb`; the old selector moves `n / 4` dwords and then `n % 4` bytes
+/// (`copy_idioms.c`, 4 times the iterations of the old copy).
+#[test]
+fn a_copy_of_a_variable_size_moves_dwords_and_then_bytes() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+@a = global [100 x i16] zeroinitializer, align 2
+@b = global [100 x i16] zeroinitializer, align 2
+declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+define void @f(i16 %n) {
+  call void @llvm.memcpy.p0.p0.i16(ptr @a, ptr @b, i16 %n, i1 false)
+  ret void
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<_> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    let at = |name: &str| names.iter().position(|n| n == name);
+    assert!(at("movsd") < at("movsb") && at("movsd").is_some(), "{names:?}");
+}

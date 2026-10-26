@@ -2135,6 +2135,10 @@ impl Emitter<'_, '_> {
                     ],
                     vec![Loc::Held(count), Loc::Held(source), Loc::Held(destination), Loc::Held(from), Loc::Held(to)],
                 );
+                // a `rep` glued after this one goes on from where it stopped
+                self.accumulator.insert(RegId::CX, emptied);
+                self.accumulator.insert(RegId::SI, source_after);
+                self.accumulator.insert(RegId::DI, destination_after);
                 return Ok(Some(()));
             }
             "REP_MOVSB_32" | "REP_MOVSW_32" | "REP_MOVSD_32" | "REP_MOVSB_64" | "REP_MOVSW_64" | "REP_MOVSD_64"
