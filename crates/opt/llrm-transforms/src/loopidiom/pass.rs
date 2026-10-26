@@ -59,6 +59,8 @@ pub struct LoopIdiom {
     pub library: Library,
     /// The routines the compile states the program links.
     pub routines: Vec<llrm_mir::libfunc::Routine>,
+    /// -Os or -Oz.
+    pub for_size: bool,
 }
 
 impl LoopIdiom {
@@ -75,6 +77,7 @@ impl LoopIdiom {
             options: Options::default(),
             library: Library { memset: true, memset_pattern16: false, memcpy: true },
             routines,
+            for_size: false,
         }
     }
 }
@@ -156,6 +159,8 @@ impl FunctionPass for LoopIdiom {
             };
             let mut idiom = LoopIdiomRecognize::new(self.options, self.library);
             idiom.routines = self.routines.clone();
+            idiom.tti = outer.target().tti();
+            idiom.for_size = self.for_size;
             if idiom.run_on_loop(&mut run) == Some(true) {
                 changed = true;
                 let cx = env.cx(&*unit.context, &*unit.function);

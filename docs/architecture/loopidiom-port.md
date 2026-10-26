@@ -89,7 +89,8 @@ So the memset/memcpy half ports onto what exists. The noncountable half needs `c
 | `mayLoopAccessLocation`, `getStartForNegStride`, `getNumBytes`, `getMemSetPatternValue`, `isSameByteValueStore`, `getStoreStride` | the same names | alias queries on the translated MemorySSA; `induction` in place of `SCEV` until SCEV exists (D6) |
 | `runOnNoncountableLoop` and the six recognizers with their `detect*` and `transform*` | the same names | target hooks (D7); intrinsics first (section 3) |
 | `StrlenVerifier`, `recognizeAndInsertStrLen` | the same | emits a call only where the program's library holds it, as LLVM |
-| `optimizeCRCLoop*`, `HashRecognize` | none | D9 |
+| `optimizeCRCLoop`, `optimizeCRCLoopUsingTableLookup`, `HashRecognize` | `crc.rs`, `hashrecognize.rs` | D13, D14 |
+| `optimizeCRCLoopUsingClmul` | none | D14 |
 
 DEVIATEs. A deviation is kept only where it rests on something MIR or the target lacks, with that fact. Status: approved (fact), dropped, pending.
 
@@ -100,7 +101,8 @@ DEVIATEs. A deviation is kept only where it rests on something MIR or the target
 - D5. The loop cut to one trip with `counting::Seeds` exit values, where LLVM zaps the stores and leaves the empty loop to `LoopDeletion` and `IndVarSimplify`. Approved until `LoopDeletion` is translated (fact: no loop deletion in the pipeline); then mirrored.
 - D6. No `ScalarEvolution`: strides, counts and exit values come from `induction`/`counting`. Not a deviation to live with: a project-level dependency, sized separately.
 - D7. `getPopcntSupport` and the FFS cost as target hooks. Approved: x86 has no fast popcount before Nehalem (fact: `PSK_FastHardware` never holds on 486/P5). `ctlz`/`cttz` need MIR intrinsics and `bsf`/`bsr` selection, which i386 and later have: a later representation item, not never.
-- D9. CRC loops (`HashRecognize`, `Clmul`, table): not translated. Pending: no carry-less multiply on any target here; the table strategy is open.
+- D13. `isBigEndianBitShift` reads the shift or multiply instruction, where the pin asks ScalarEvolution.
+- D14. CRC loops take the table strategy only: no target here has `llvm.clmul`, so its cost is invalid and `optimizeCRCLoopUsingClmul` is not translated.
 
 (`isLibFuncEmittable` is LLVM's own rule, not a deviation: no `strlen` in the program's library, no call.)
 

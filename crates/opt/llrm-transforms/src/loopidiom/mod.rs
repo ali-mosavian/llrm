@@ -10,8 +10,8 @@
 //! ScalarEvolution does.
 //!
 //! # Deviations
-//! - D9 (temporary, [#2313](https://github.com/ali-mosavian/llrm/issues/2313)):
-//!   no CRC loops (`HashRecognize`, `optimizeCRCLoop*`).
+//! - D14: CRC loops take the table strategy only, no `clmul`; see [`crc`] and
+//!   [`hashrecognize`] (D13).
 //! - D10: see [`process`].
 //! Absent in MIR, so skipped (facts, not choices):
 //! - Atomics: a store or load is simple and unordered unless `volatile`, so
@@ -95,6 +95,12 @@ pub struct LoopIdiomRecognize {
     library: Library,
     /// The routines the compile states the program links (`strlen`).
     pub routines: Vec<llrm_mir::libfunc::Routine>,
+    /// The target's costs (`TTI`); the basic costs where there is none.
+    pub tti: Option<std::rc::Rc<dyn llrm_mir::tti::Tti>>,
+    /// The compile is -Os or -Oz: the pipeline's stand-in for the `optsize`
+    /// attribute clang puts on every function there. Read by the CRC table
+    /// only; the stores keep their own reading of the attribute.
+    pub for_size: bool,
     apply_code_size_heuristics: bool,
     has_memset: bool,
     has_memset_pattern: bool,
@@ -162,6 +168,8 @@ impl LoopIdiomRecognize {
             options,
             library,
             routines: Vec::new(),
+            tti: None,
+            for_size: false,
             apply_code_size_heuristics: false,
             has_memset: library.memset,
             has_memset_pattern: library.memset_pattern16,
@@ -494,10 +502,14 @@ fn push(
 }
 
 pub mod build;
+pub mod crc;
 pub mod driver;
+pub mod hashrecognize;
 pub mod pass;
 pub mod process;
 pub mod strlen;
 
+#[cfg(test)]
+mod hashrecognize_tests;
 #[cfg(test)]
 mod tests;
