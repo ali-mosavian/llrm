@@ -521,15 +521,20 @@ pub fn _hoisted(body: &LirBody) -> LirBody {
         let Some(&other) = before.succ.iter().find(|at| **at != block.at) else {
             continue;
         };
-        let (reads, _) = live.get_or_insert_with(|| {
-            let mut by_value: IndexMap<u32, BTreeSet<i64>> = IndexMap::default();
-            for (at, values) in _live_values(&blocks) {
-                for value in values {
-                    by_value.entry(value).or_default().insert(at);
-                }
+        // Only the values these anchors define are asked: each is worked out
+        // when first asked, from the blocks that name it, not for every value
+        // of the function (one solve, 2.3 M Ir on d_faces -O2).
+        let (reads, mentions) = live.get_or_insert_with(|| (IndexMap::default(), Mentions::of(&blocks)));
+        let unknown: BTreeSet<u32> =
+            anchors.iter().flat_map(|one| &one.defines).copied().filter(|value| !reads.contains_key(value)).collect();
+        if !unknown.is_empty() {
+            for (value, entering) in mentions.live_in_of(&blocks, &unknown) {
+                reads.insert(value, entering);
             }
-            (by_value, Mentions::of(&blocks))
-        });
+            for value in &unknown {
+                reads.entry(*value).or_default();
+            }
+        }
         if anchors
             .iter()
             .flat_map(|one| &one.defines)
@@ -579,11 +584,9 @@ pub fn _hoisted(body: &LirBody) -> LirBody {
                 let fresh = _live_values(&blocks);
                 assert!(
                     blocks.iter().all(|block| {
+                        let live = fresh.get(&block.at);
                         held.iter()
-                            .filter(|(_, at)| at.contains(&block.at))
-                            .map(|(value, _)| *value)
-                            .collect::<BTreeSet<u32>>()
-                            == fresh.get(&block.at).cloned().unwrap_or_default()
+                            .all(|(value, at)| at.contains(&block.at) == live.is_some_and(|live| live.contains(value)))
                     }),
                     "{}: the values live on entry to the blocks, patched past a hoist, are not those of a new solve",
                     body.name
@@ -724,8 +727,16 @@ impl Mentions {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many times every value's liveness was solved at once.
+    pub(crate) static LIVE_SOLVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Per block, the virtual values live on entry.
 fn _live_values(blocks: &[Block]) -> IndexMap<i64, BTreeSet<u32>> {
+    #[cfg(test)]
+    LIVE_SOLVES.with(|solves| solves.set(solves.get() + 1));
     let by_at: IndexMap<i64, &Block> = blocks.iter().map(|block| (block.at, block)).collect();
     let mut carried: IndexMap<i64, BTreeSet<u32>> = IndexMap::default();
     for block in blocks {
