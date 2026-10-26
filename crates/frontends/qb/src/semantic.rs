@@ -18,8 +18,8 @@ use crate::dialect::Dialect;
 use crate::front::quickr::{EACH, ON_SELECTOR, STEP_MARK, TUPLE};
 use crate::intrinsics::{self, Lowering, ResultClass};
 use crate::syntax::{
-    Binary, CaseItem, Declaration, ExitTarget, Expr, FileMode, Haystack, Literal, Module, Parameter, PrintKind,
-    PrintSeparator, Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
+    Binary, CaseItem, Declaration, ExitTarget, Expr, FileAccess, FileLock, FileMode, Haystack, Literal, Module,
+    Parameter, PrintKind, PrintSeparator, Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
 };
 
 const VOID: u32 = 0;
@@ -3687,35 +3687,42 @@ impl Compiler {
                 Statement::FormDeclaration(..) => return self.unsupported("a '$FORM declaration"),
                 Statement::OpenIsam { .. } => return self.unsupported("OPEN FOR ISAM"),
                 Statement::OpenClassic { .. } => return self.unsupported("the classic OPEN mode$, #file, path$ form"),
-                Statement::Open { access, lock, record_length, mode_written, mode, .. }
-                    if access.is_some()
-                        || lock.is_some()
-                        || record_length.is_some()
-                        || !mode_written
-                        || *mode == FileMode::Random =>
-                {
-                    return self.unsupported("OPEN with ACCESS, LOCK, LEN or RANDOM mode");
-                }
-                Statement::Open { path, mode, file, .. } => {
+                Statement::Open { path, mode, file, access, lock, record_length, .. } => {
                     let path = self.string_descriptor(path)?;
                     let (file, file_type) = self.expression(file)?;
                     let file = self.convert(file, file_type, INTEGER)?;
+                    let length = match record_length {
+                        Some(length) => {
+                            let (length, length_type) = self.expression(length)?;
+                            self.convert(length, length_type, INTEGER)?
+                        }
+                        None => Operand::Constant(INTEGER, Number::Integer(-1)),
+                    };
+                    // The mode word of rtps.inc: the mode (RANDOM when none is
+                    // written) in the low byte, ACCESS and
+                    // LOCK/SHARED in the high one.
                     let mode = match mode {
                         FileMode::Input => 1,
                         FileMode::Output => 2,
+                        FileMode::Random => 4,
                         FileMode::Append => 8,
                         FileMode::Binary => 0x20,
-                        FileMode::Random => unreachable!(),
+                    } | match access {
+                        None => 0,
+                        Some(FileAccess::Read) => 0x100,
+                        Some(FileAccess::Write) => 0x200,
+                        Some(FileAccess::ReadWrite) => 0x300,
+                    } | match lock {
+                        None => 0,
+                        Some(FileLock::Read) => 0x3000,
+                        Some(FileLock::Write) => 0x2000,
+                        Some(FileLock::ReadWrite) => 0x1000,
+                        Some(FileLock::Shared) => 0x4000,
                     };
                     self.emit_runtime_call(
                         "B$OPEN",
                         Vec::new(),
-                        vec![
-                            path,
-                            file,
-                            Operand::Constant(INTEGER, Number::Integer(-1)),
-                            Operand::Constant(INTEGER, Number::Integer(mode)),
-                        ],
+                        vec![path, file, length, Operand::Constant(INTEGER, Number::Integer(mode))],
                     );
                 }
                 Statement::Close { files, .. } => {

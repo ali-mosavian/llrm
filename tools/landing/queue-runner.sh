@@ -33,9 +33,9 @@ while true; do
     if [ "${LAND_FAST:-}" = 1 ]; then  # the user's call: no precheck, no smoke, up to 16 PRs in queue order; merge-batch leaves out the ones that cannot join
       # only PRs that merge one after another: one that conflicts with an earlier member waits a round instead of costing the others a smoke
       # closed PRs are dropped and a head younger than 15 minutes waits (a fix may be on its way) before the assembly
-      cand=($(open_only "${cand[@]:0:40}" 2>/dev/null)); cand=($(aged "${cand[@]}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log"))
+      cand=($(open_only "${cand[@]:0:16}" 2>/dev/null)); cand=($(aged "${cand[@]}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log"))
       # each PR alone on parity+PR (merge, build, fmt, scanners) under buildslot; one that fails is dropped here, with its REFUSED line, and never enters the batch
-      cand=($(alone_filter "${cand[@]:0:40}"))
+      cand=($(alone_filter "${cand[@]:0:16}"))
       asm_start=$(date +%s)
       batch=($(python3 "$HERE/../parity_squash.py" assemble 16 "${cand[@]:0:40}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log")); [ ${#batch[@]} -eq 0 ] && batch=("${cand[@]:0:16}")
       asm_s=$(( $(date +%s) - asm_start ))
@@ -45,8 +45,7 @@ while true; do
     fi
     [ ${#batch[@]} -eq 0 ] && { sleep 60; continue; }
   fi
-  for m in "${batch[@]}"; do sed -i "/^$m\$/d" $Q; done
-  open=($(open_only "${batch[@]}"))
+  open=($(pop_open $Q "${batch[@]}"))
   batch=("${open[@]}"); [ ${#batch[@]} -eq 0 ] && continue; n=${batch[0]}
   echo "== $(date +%H:%M) landing ${batch[*]}"
   if [ ${#batch[@]} -eq 1 ]; then "$HERE/land.sh" "$n" 2>&1 | cut -c1-260; continue; fi
