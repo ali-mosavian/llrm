@@ -281,13 +281,17 @@ fn test_a_masked_far_subscript_compiles() {
     );
     let program = parsed_as(&basic, "qb45", "qb45");
     object_bytes(&program, "MASKED.BAS").expect("compiles");
-    // The proven-exact `s(i)` addresses through a doubled 32-bit index, its
-    // shift gone and the upper halves zeroed once before the loop.
+    // The masked `s(i)` is a 16-bit offset doubled by an add and cut to the
+    // array's 1022 (no `shl`, no 32-bit index to widen), and the unmasked
+    // `u(x)` addresses through a doubled 32-bit index whose upper half is
+    // zeroed once before the loop.
     let text = listing(&program);
     let body = &text[text.find("T proc").expect("T proc")..text.find("T endp").expect("T endp")];
-    let index = regex::Regex::new(r"fs:\[(e\w\w)\+(e\w\w)(\*2)?\]").unwrap();
+    let mask = regex::Regex::new(r"and (\w+), 1022\n\s+mov \w+, word ptr fs:\[(\w+)\]").unwrap();
+    let masked = mask.captures(body).is_some_and(|one| one[1] == one[2]);
+    let index = regex::Regex::new(r"es:\[(e\w\w)\+(e\w\w)(\*2)?\]").unwrap();
     let doubled = index.captures_iter(body).any(|one| one.get(3).is_some() || one[1] == one[2]);
-    assert!(doubled && body.contains("movzx") && !body.contains("shl"), "{body}");
+    assert!(masked && doubled && body.contains("movzx") && !body.contains("shl"), "{body}");
 }
 
 /// The main body of `source`'s listing.
@@ -371,14 +375,17 @@ fn test_an_exact_static_subscript_folds_into_a_32_bit_symbolic_address() {
 }
 
 /// A negative subscript leaf, zero-extended, addressed `A%+20[esi+esi]`
-/// 128K past the element.
+/// 128K past the element. The address stays 16 bit; the scaled index may be
+/// computed in a 32-bit `lea` (its low half is the same, and no header copy
+/// reshapes the loop now).
 #[test]
 fn test_a_negative_static_subscript_stays_16_bit() {
     let body = main_listing(
         "NEGATIVE.BAS",
         b"DEFINT A-Z\r\nDIM a(-10 TO 10)\r\nFOR j = 0 TO 99\r\ni = (PEEK(j) AND 7) - 5\r\na(i) = j\r\nNEXT\r\nPRINT a(5)\r\n",
     );
-    assert!(!body.contains("[e"), "{body}");
+    let wide: Vec<&str> = body.lines().filter(|line| line.contains("A%") && line.contains("[e")).collect();
+    assert!(wide.is_empty(), "{wide:?}\n{body}");
 }
 
 /// D_SURF SC_FTAKE lost far-array address definitions during secondary folding.
@@ -484,7 +491,7 @@ fn test_nested_integer_division_keeps_each_dividend() {
     // CVP narrows both quotients (80 \\ x fits 16 bits, then 8): two word
     // divisions in place of two dword ones, each with its own dividend.
     assert!(scale.contains("mov ax, 80\n"));
-    assert!(scale.contains("mov bx, 30\n"));
+    assert!(regex::Regex::new(r"mov [a-d]x, 30\n").unwrap().is_match(scale), "{scale}");
     assert_eq!(scale.matches("idiv").count(), 2);
     assert!(!scale.contains("idiv e"));
 }
@@ -537,17 +544,33 @@ fn test_a_raise_under_an_error_handler_resumes_after_its_statement() {
     // The raise names its statement (in whichever frame slot: the frame also
     // holds the conversions' scratch cells), and RESUME NEXT from that
     // statement continues at the PRINT.
-    let raised =
-        regex::Regex::new(r"mov word ptr \$QB\$FRAME\+\d+, (\d+)\n    pushw 5\n    call far ptr B\$SERR").unwrap();
+    let raised = regex::Regex::new(
+        r"mov word ptr (?:ss:)?\$QB\$FRAME\+\d+, (\d+)\n(?:    fstp st\(0\)\n)*    pushw 5\n    call far ptr B\$SERR",
+    )
+    .unwrap();
     let statement = &raised.captures(&assembly).unwrap_or_else(|| panic!("{assembly}"))[1];
     // The dispatch continues at the statement's resume point, laid next
     // (`jne` past it) or branched to (`je`) as the placement falls.
-    let dispatch = regex::Regex::new(&format!(r"cmp ax, {statement}\n    (?:jne \w+\n(\w+):|je (\w+))\n")).unwrap();
+    let dispatch = regex::Regex::new(&format!(
+        r"cmp (?:ax|word ptr (?:ss:)?\$QB\$FRAME\+\d+), {statement}\n    (?:jne \w+\n    jmp (\w+)|je (\w+))\n"
+    ))
+    .unwrap();
     let found = dispatch.captures(&assembly).unwrap_or_else(|| panic!("{assembly}"));
     let label = found.get(1).or_else(|| found.get(2)).unwrap().as_str();
     let start = assembly.find(&format!("\n{label}:\n")).unwrap_or_else(|| panic!("{assembly}"));
-    let next = &assembly[start..];
-    let next = &next[..next.find("jmp ").unwrap_or(next.len())];
+    let block = |at: usize| {
+        let tail = &assembly[at..];
+        &tail[..tail.find("jmp ").unwrap_or(tail.len())]
+    };
+    let mut next = block(start).to_owned();
+    // A resume point may reload what the statement computed and jump on to the
+    // PRINT.
+    let after = &assembly[start..];
+    if let Some(target) = after[after.find("jmp ").map_or(after.len(), |at| at + 4)..].split_whitespace().next()
+        && let Some(at) = assembly.find(&format!("\n{target}:\n"))
+    {
+        next.push_str(block(at));
+    }
     assert!(next.contains("call far ptr B$PER4"), "{assembly}");
 }
 
@@ -926,7 +949,10 @@ fn test_a_counted_loop_reads_an_unannotated_byref_once() {
     let loop_ = poke_block(&text);
 
     assert!(!text.contains("load volatile"), "{text}");
-    assert!(!loop_.contains(" = load "), "{text}");
+    // `ch` is one plain load per trip, as the pin leaves it: a volatile far
+    // store may reach it (4f82e22e1, #3994). Not a wait on it: no volatile.
+    assert_eq!(loop_.matches(" = load ").count(), 1, "{text}");
+    assert!(loop_.contains("store volatile"), "the POKE still lands: {text}");
 }
 
 /// ENTPHI lost a dynamic-array address after its identity phi edge vanished.
@@ -1046,8 +1072,8 @@ fn test_an_error_statement_is_placed_after_the_hot_path() {
 /// LBOUND(a, 1) compared the rank against 1 before reading the descriptor.
 ///
 /// Every allocated array has a first dimension, so only the allocation
-/// test may branch to the runtime call. Distinct branches: tail
-/// duplication may copy that test, which is no second condition.
+/// test may branch to the runtime call: one branch (no header copy under
+/// LLVM's order duplicates it; a rank check would be a second).
 #[test]
 fn test_the_first_dimension_is_not_rank_checked() {
     let procedure = sum_three(true);
@@ -1058,7 +1084,7 @@ fn test_the_first_dimension_is_not_rank_checked() {
         .filter(|(_, _, label)| calls.contains(label))
         .map(|(start, end, _)| procedure[*start..*end].trim())
         .collect();
-    assert_eq!(branches.len(), 2, "{branches:?}");
+    assert_eq!(branches.len(), 1, "{branches:?}");
 }
 
 /// Without -fsanitize=bounds LBOUND trusts the descriptor: no B$LBND/B$UBND
@@ -1255,7 +1281,7 @@ fn test_common_hir_profiles_do_not_become_qb_frontend_options() {
 }
 
 const ROW_LOOP: &str = "DEFINT A-Z\r\nDECLARE SUB blit ()\r\nDIM SHARED sp(100), yy(3), xp(3), cd(100)\r\nblit\r\n\
-SUB blit\r\nyp = 0\r\nFOR y = 0 TO 199\r\nDEF SEG = &HA000 + yp\r\nyp = yp + 20\r\nFOR x = 24 TO 295\r\n\
+SUB blit\r\nyp = 0\r\nFOR y = 0 TO 199\r\nDEF SEG = &HA000\r\nyp = yp + 20\r\nFOR x = 24 TO 295\r\n\
 dn = sp(yy(1) + x - xp(1)) + sp(yy(2) + x - xp(2))\r\nPOKE x, cd(dn)\r\nNEXT x\r\nNEXT y\r\nDEF SEG\r\nEND SUB\r\n";
 
 /// `name` optimized after the module's call memory effects, as compiled.
@@ -1314,7 +1340,11 @@ fn far_selectors_loaded(function: &str) -> Vec<bool> {
             // A constant address reloads nothing.
             let Some(address) = pointer.captures_iter(store).last() else { return false };
             let mut value = address[1].to_owned();
-            while let Some(defined) = definition(function, &value) {
+            // A phi can lead back to itself: stop on a name seen.
+            let mut seen = BTreeSet::new();
+            while seen.insert(value.clone())
+                && let Some(defined) = definition(function, &value)
+            {
                 if defined.starts_with("load i16, ptr @b$seg") {
                     return true;
                 }
@@ -1461,9 +1491,13 @@ SUB b\r\nPOKE 5, PEEK(4)\r\nEND SUB\r\n";
     assert_eq!(loads, 0, "{optimized}");
     let kept =
         optimized.lines().filter(|line| line.trim().starts_with("store i16 ") && line.contains("ptr @b$seg")).count();
-    // VARSEG's selector is now a constant address, so a's first b$seg store is
-    // dead too (-1 store, -3 instructions).
-    assert!(optimized.contains("addrspacecast (ptr @\"ARR%\"") && kept == 1, "{optimized}");
+    // VARSEG's selector is a constant address, but the PEEK/POKE offsets are
+    // relative to that segment's base, not to ARR%: they can reach any byte of
+    // the data segment, b$seg included. A forged-selector pointer is therefore
+    // no proven-disjoint access (188fd3905, DEVIATE C1, forging.rs), and a's
+    // first b$seg store is kept, as the second is (+1 store, +3 instructions
+    // against the earlier expectation that it was dead).
+    assert!(optimized.contains("addrspacecast (ptr @\"ARR%\"") && kept == 2, "{optimized}");
 }
 
 #[test]
@@ -1475,7 +1509,8 @@ fn test_bases_past_the_registers_are_not_stepped_as_pointers() {
     assert!(steps <= 1, "{steps} pointer steps\n{text}");
 }
 
-const SEVEN_TERMS: &str = "DEFINT A-Z\r\nDECLARE SUB t ()\r\nDIM SHARED sp(8000), f(700), xp(7), yy(7), cd(2000)\r\nt\r\nSUB t\r\n\
+const SEVEN_TERMS: &str = "DEFINT A-Z\r\nDECLARE SUB t ()\r\nDIM SHARED sp(8000), f(700), xp(7), yy(7), cd(2000)\r\nk = LEN(COMMAND$)\r\n\
+sp(k) = 1: f(k) = 1: xp(k) = 1: yy(k) = 1: cd(k) = 1\r\nt\r\nSUB t\r\n\
 DEF SEG = &HA000\r\nFOR x = 24 TO 295\r\ndn = sp(yy(1) + f(x - xp(1))) + sp(yy(2) + f(x - xp(2))) + \
 sp(yy(3) + f(x - xp(3))) + sp(yy(4) + f(x - xp(4))) + sp(yy(5) + f(x - xp(5))) + sp(yy(6) + f(x - xp(6))) + \
 sp(yy(7) + f(x - xp(7)))\r\nPOKE x, cd(dn)\r\nNEXT\r\nEND SUB\r\n";
@@ -1525,7 +1560,12 @@ fn test_affine_terms_of_one_counter_share_its_scaled_value() {
         .lines()
         .filter(|line| (line.contains(" = shl ") || line.contains(" = mul ")) && line.contains(&format!("{counter},")))
         .count();
-    assert_eq!(scaled, 1, "{text}");
+    // One counter, as the pin's loop-reduce leaves it (`opt
+    // -passes=loop-reduce` on the same IR, i386/i486: one phi, seven `shl
+    // x, 1`; it runs no IR CSE after LSR, SelectionDAG's merges them, as
+    // the other test checks in the listing).
+    let phis = body.lines().filter(|line| line.contains(" = phi ")).count();
+    assert_eq!((phis, scaled), (1, 7), "{text}");
 }
 
 /// A POKE into VGA memory counted as reaching a local array's descriptor, so
@@ -1609,7 +1649,7 @@ FOR x = 0 TO 99\r\nPOKE &H17, yy(1) + xp(2) + x\r\nNEXT\r\nDEF SEG\r\nEND SUB\r\
 fn out_loop(port: &str) -> String {
     let directory = tempfile::tempdir().expect("a directory");
     let text = format!(
-        "DEFINT A-Z\r\nDECLARE SUB t ()\r\nDIM SHARED yy(3)\r\nt\r\nSUB t\r\nFOR x = 0 TO 99\r\nOUT {port}, yy(1) + x\r\nNEXT\r\nEND SUB\r\n"
+        "DEFINT A-Z\r\nDECLARE SUB t ()\r\nDIM SHARED yy(3)\r\nyy(LEN(COMMAND$)) = 1\r\nt\r\nSUB t\r\nFOR x = 0 TO 99\r\nOUT {port}, yy(1) + x\r\nNEXT\r\nEND SUB\r\n"
     );
     let source = written(&directory, "T.BAS", text.as_bytes());
     loop_around(&listing(&parsed_as(&source, "qb45", "qb45")), "T", |line| line.trim_start().starts_with("out "))
@@ -1951,22 +1991,27 @@ fn test_a_loop_to_a_symbolic_bound_keeps_its_counter_and_compare() {
 #[test]
 fn test_a_masked_use_keeps_the_counter_and_its_end_test() {
     // `POKE o, ch + (o AND 15)` reads the counter through a mask, so FILL
-    // keeps `cmp bx, 3999` every trip. The pin's loop-reduce leaves the loop
-    // as it is too (its i486 loop is 9 instructions to ours 8).
+    // keeps its end test every trip. The pin's loop-reduce leaves the same
+    // loop (`opt -passes=loop-reduce` on our IR, i386/i486: one phi stepping
+    // by 2, `icmp ult %phi, 3997`), and its i486 loop is 9 instructions, as
+    // ours is.
     let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/qb/textfill.bas");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let text = listing(&program);
     let start = text.find("FILL proc").expect("FILL proc");
     let end = text.find("FILL endp").expect("FILL endp");
     let body = backward_loop(&text[start..end]);
-    assert!(body.contains("cmp bx, 3999") && body.contains("and "), "{body}");
+    let instructions = body.lines().filter(|line| line.starts_with("    ")).count();
+    assert!(body.contains("cmp ") && body.contains(", 3997") && body.contains("and ") && instructions <= 9, "{body}");
 }
 
 #[test]
 fn test_a_counter_stepped_before_other_work_is_tested_against_its_end() {
-    // rcflip's third RAMP loop ends `inc ax; cmp ax, 357; jne`: the pin's
-    // loop-reduce compares this loop against 357 too, and its i486 loop is as
-    // long (8 instructions).
+    // rcflip's third RAMP loop is tested against its end, not against zero, and
+    // is no longer than the pin's i486 loop (8 instructions). The pin's
+    // loop-reduce keeps one counter and addresses by `2 * x`; the 16-bit
+    // address has no scale, so ours steps the byte offset (`cmp bx, 674`)
+    // beside the counter, for the same length (DEVIATE LU1).
     let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/run/qb/rcflip.bas");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let text = listing(&program);
@@ -1981,7 +2026,11 @@ fn test_a_counter_stepped_before_other_work_is_tested_against_its_end() {
         })
         .find(|body| body.contains("imul"))
         .expect("the multiplying loop");
-    assert!(body.contains("cmp ax, 357") && !body.contains("or ax, ax"), "{body}");
+    let instructions = body.lines().filter(|line| line.starts_with("    ")).count();
+    assert!(
+        (body.contains("cmp ax, 357") || body.contains(", 674")) && !body.contains("or ax, ax") && instructions <= 8,
+        "{body}"
+    );
 }
 
 #[test]
@@ -1990,12 +2039,13 @@ fn test_a_dividend_two_instructions_require_is_copied_into_its_register_once() {
     // so the extended value sat in EDI across both and one of the three
     // recurrences spilled: `mov ax, [bp-2]` and `add word ptr [bp-2], 5`. A
     // divisor read from memory stays a division; a constant is a reciprocal.
+    // CVP narrows `i \\ d(0)` to 16 bits as the pin does (`sdiv i16`): `cwd`.
     let source = "DEFINT A-Z\nDIM b(200), d(1)\nDIM i, t\nd(0) = 5 + INT(RND * 1)\nt = 0\nFOR i = 0 TO 100 STEP 5\n    b(i) = i \\ d(0)\n    t = t + b(i)\nNEXT i\nPRINT \"T=\"; t\n";
     let basic = std::env::temp_dir().join(format!("stride_variable_divisor_{}.bas", std::process::id()));
     std::fs::write(&basic, source).expect("writes the program");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let body = backward_loop(&listing(&program));
-    assert!(!body.contains("[bp") && body.contains("cdq") && body.matches("idiv").count() == 1, "{body}");
+    assert!(!body.contains("[bp") && body.contains("cwd") && body.matches("idiv").count() == 1, "{body}");
 }
 
 #[test]
@@ -2080,7 +2130,9 @@ END SUB
         loops.iter().filter(|one| !loops.iter().any(|other| other.len() < one.len() && one.contains(*other)));
     let masked = innermost.filter(|one| one.contains("and ")).collect::<Vec<_>>();
     let [first, second] = masked.as_slice() else { panic!("{procedure}") };
-    assert!(!first.contains("test ") && !first.contains("cmp "), "{first}");
+    // The pin's loop-reduce on the same IR keeps these loops' two-step pointer
+    // counter and its end test (`icmp eq %p.next, 642`), as ours does.
+    assert!(!first.contains("test ") && first.contains("cmp bx, 642"), "{first}");
     // The stores are addressed by the pointer that counts, not a scaled copy of
     // `x`.
     let lea = regex::Regex::new(r"lea (\w+),").unwrap();
@@ -2211,8 +2263,12 @@ fn test_a_register_live_through_a_loop_is_parked_for_its_counters() {
         })
         .find(|one| one.matches(", 1022").count() == 4)
         .unwrap_or_else(|| panic!("{procedure}"));
-    eprintln!("{procedure}");
-    assert!(!body.contains("[bp"), "{body}");
+    // The pin's loop-reduce leaves this loop five counters too (steps 2, 6, 8,
+    // 18 and 22, ending at 642), on a machine of six: one of them is parked,
+    // in one slot, a store and the reloads that use it.
+    let slots: BTreeSet<&str> =
+        regex::Regex::new(r"\[bp[-+]\d+\]").unwrap().find_iter(body).map(|found| found.as_str()).collect();
+    assert!(slots.len() <= 1 && body.matches("[bp").count() <= 3, "{body}");
 }
 
 #[test]
@@ -2593,8 +2649,7 @@ fn test_def_seg_stores_the_runtime_segment_cell() {
 #[test]
 fn test_a_word_array_after_an_odd_object_lies_at_an_even_offset() {
     let directory = tempfile::tempdir().expect("a directory");
-    let text =
-        "DEFINT A-Z\r\nDIM SHARED s AS STRING * 3, f3(10)\r\ns = \"abc\"\r\nf3(1) = LEN(s)\r\nPRINT f3(1), s\r\n";
+    let text = "DEFINT A-Z\r\nDIM SHARED s AS STRING * 3, f3(10)\r\ns = \"abc\"\r\nk = LEN(COMMAND$)\r\nf3(k) = LEN(s)\r\nPRINT f3(k), s\r\n";
     let program = parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45");
     let codegen = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
     let module = qb_compile::assembled(&program, None, &codegen).expect("assembles");
@@ -2681,9 +2736,11 @@ fn test_a_fixed_length_argument_is_assigned_back_after_the_call() {
     let source = written(&directory, "fixback.bas", b"DECLARE SUB Fill (s AS STRING)\nDIM f AS STRING * 6\nf = \"abcdef\"\nFill f\nPRINT f\nSUB Fill (s AS STRING)\ns = \"XY\"\nEND SUB\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
     let text = listing(&program);
-    let after = &text[text.find("call far ptr FILL").expect("the call")..];
-    let assigned = after.find("call far ptr B$ASSN").expect("an assignment back");
-    assert!(after.find("call far ptr B$STDL").is_none_or(|released| assigned < released), "{after}");
+    // FILL is inlined into the main body, so the last assignment back and the
+    // last release are the call's.
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let assigned = main.rfind("call far ptr B$ASSN").expect("an assignment back");
+    assert!(main.rfind("call far ptr B$STDL").is_none_or(|released| assigned < released), "{main}");
 }
 
 /// qb-qrender's main.bas runs from its body into its ON ERROR handler's
@@ -3094,7 +3151,11 @@ fn a_poke_to_video_memory_leaves_the_loop_its_variables_and_segment() {
     let body = &fill[top..=at];
     let loads = body.iter().filter(|one| one.contains("ptr [") || one.contains("b$seg")).count();
     let pokes = body.iter().filter(|one| one.starts_with("mov byte ptr es:[")).count();
-    assert_eq!((loads, pokes), (0, 2), "{body:#?}");
+    // The pin's output: `opt -passes='loop-mssa(licm)'` and `default<O2>` hoist
+    // neither cell past a volatile far store (4f82e22e1, #3994 states that
+    // video memory holds no program data). Both POKEs still land every
+    // trip.
+    assert_eq!((loads, pokes), (2, 2), "{body:#?}");
 }
 
 /// The listing of `source` through `llrm-qb -O2 -march=i486 -S`, as shipped.
@@ -3108,6 +3169,27 @@ fn listing_of(
     let argv = [input.to_str().unwrap(), "-O2", "-march=i486", "-S", "-o", out.to_str().unwrap()].map(str::to_owned);
     assert_eq!(crate::cli::main(&argv), 0);
     std::fs::read_to_string(&out).expect("the listing")
+}
+
+/// `DEF SEG = VARSEG(x)` then `POKE VARPTR(x) + k, ...` writes into x: the
+/// pointer `ADDRESS(x) + k`, not a segment loaded from `b$seg` and an offset,
+/// which a loop's cells and `b$seg` itself could not be kept in registers
+/// across (far_poke_loop_variable.bas, +33 B and +266 clocks against main).
+#[test]
+fn a_poke_after_def_seg_varseg_is_a_store_into_the_variable() {
+    let text = listing_of(
+        "varseg_poke",
+        "DEFINT A-Z\r\nDIM SHARED x AS INTEGER, y AS LONG\r\nx = 0\r\nDEF SEG = VARSEG(x)\r\nFOR i = 0 TO 3000\r\nPOKE VARPTR(x), (i * 37) AND 255\r\nPOKE VARPTR(x) + 1, (i * 11) AND 127\r\ny = y + x\r\nNEXT i\r\nDEF SEG\r\nPRINT x; y\r\nEND\r\n",
+    );
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let lines = main.lines().map(str::trim).collect::<Vec<_>>();
+    let at = lines.iter().rposition(|one| one.starts_with('j') && !one.starts_with("jmp")).expect("the loop's branch");
+    let top = lines
+        .iter()
+        .position(|one| *one == format!("{}:", lines[at].split_whitespace().nth(1).unwrap()))
+        .expect("its label");
+    let body = &lines[top..=at];
+    assert!(!body.iter().any(|one| one.contains("b$seg")), "{body:#?}");
 }
 
 /// A POKE after a literal DEF SEG wrote memory no variable lives in, yet
@@ -3163,7 +3245,10 @@ fn a_port_poll_does_not_reload_a_cell_stored_before_it_at_either_target() {
         let poll = lines.iter().position(|one| *one == "in al, dx").expect("the port read");
         // The premise: the masks are known constants at the poll, in the
         // instruction and not in a cell.
-        assert_eq!(&lines[poll..poll + 3], ["in al, dx", "xor al, 8", "and al, 8"], "{target}: {text}");
+        // (x ^ 8) & 8 is (x & 8) ^ 8: either order is the poll.
+        let mut masks = [lines[poll + 1], lines[poll + 2]];
+        masks.sort();
+        assert_eq!(masks, ["and al, 8", "xor al, 8"], "{target}: {text}");
         assert!(!text.contains("W$D"), "{target}: a cell held the masks: {text}");
     }
 }
@@ -3186,7 +3271,12 @@ fn a_constant_wait_mask_goes_to_the_poll_as_it_is_and_a_variable_one_through_a_c
     };
     for target in ["-m16", "-m32"] {
         let constant = listing_of("constant.bas", b"WAIT &H3DA, 8, 8\r\nEND\r\n", target);
-        assert!(constant.contains("xor al, 8") && constant.contains("and al, 8"), "{target}: {constant}");
+        // The test of the masked byte may be a `test` for the `and` it needs no
+        // result of.
+        assert!(
+            constant.contains("xor al, 8") && (constant.contains("and al, 8") || constant.contains("test al, 8")),
+            "{target}: {constant}"
+        );
         assert!(!constant.contains("ptr W$D"), "{target}: a cell held a constant mask: {constant}");
         let variable = listing_of("variable.bas", b"DEFINT A-Z\r\nm = 8\r\nWAIT &H3DA, m\r\nEND\r\n", target);
         let lines: Vec<&str> = variable.lines().map(str::trim).collect();

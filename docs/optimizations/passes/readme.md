@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 194 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 196 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -22,6 +22,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | cfg | Control-flow cleanup: a block that jumps unconditionally to a block only it reaches takes that block's instructions (LLVM's SimplifyCFG `MergeBlockIntoPredecessor`). | A library function, called by `decide` after it decides branches and by | [cfg](cfg.md) |
 | cgpaddr | CodeGenPrepare: comparison and address sinking, so isel sees one form: LLVM's `sinkCmpExpression`, `sinkAndCmp0Expression` and `optimizeMemoryInst` (address-mode sinking, below), and GVNSink's merge of equal arms. | Once, last of the function passes before `spares` and `homes`, after | [cgpaddr](cgpaddr.md) |
 | cgpbranch | CodeGenPrepare's `optimizeBranch`: a branch on a compare with a constant becomes a branch on a compare with zero of a value a successor computes anyway, where the target prefers one ([CodeGenPrepare.cpp#L8878](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L8878)). | In `cgpaddr`'s run, before the compare sinks. | [cgpbranch](cgpbranch.md) |
+| cgpswitch | CodeGenPrepare's `optimizeSwitchType`: a switch on an integer narrower than the target's preferred width is a switch on the extended condition ([CodeGenPrepare.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp)). | In `cgpaddr`'s run. | [cgpswitch](cgpswitch.md) |
 | cmpopt | CodeGenPrepare's `optimizeCmp` steps after the overflow combines: the power-of-two test of `ctpop` unfolded, an equality made the opposite of the signed compare that dominates it, and compare operands swapped to match a subtract ([CodeGenPrepare.cpp#L8805](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L8805)). | In `cgpaddr`'s run, after the compare sinks. | [cmpopt](cmpopt.md) |
 | combine | One worklist over a function's instructions: each is visited, simplified to a value it equals when its operands say so, and what read it is visited again. | `combine_pass::Combine`, the `combine@N` slots of LLVM's order. | [combine](combine.md) |
 | combine_add_idioms | `visitAdd` after `x + x`: the negation and not identities, the reassociations of an add with an add or sub, and the bitwise identities. | `combine_addsub::visit_add`. | [combine_add_idioms](combine_add_idioms.md) |
@@ -54,6 +55,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_select_ext_const | `foldSelectExtConst`: `select c, (ext x), C` as `ext (select c, x, C')`. |  | [combine_select_ext_const](combine_select_ext_const.md) |
 | combine_select_into_op | `foldSelectIntoOp`: `select c, (op x, y), x` as `op x, (select c, y, identity)`. |  | [combine_select_into_op](combine_select_into_op.md) |
 | combine_select_op_op | `foldSelectOpOp`: `select c, (op x, a), (op x, b)` as `op x, (select c, a, b)`. |  | [combine_select_op_op](combine_select_op_op.md) |
+| combine_select_spf | `foldSelectInstWithICmp`'s first step: a select that is a min, a max or an absolute value of a compare becomes the intrinsic. | `visitSelectInst`. | [combine_select_spf](combine_select_spf.md) |
 | combine_shared | What InstCombine's integer `visit*` functions share from `InstructionCombining.cpp`: the complexity order that puts constants on the right, and the reassociation of an associative or commutative operation. | `combine_addsub` (`visitAdd`, `visitSub`) and the families after it. | [combine_shared](combine_shared.md) |
 | combine_shift_binop | `InstCombinerImpl::foldBinOpShiftWithShift`: a shift of each arm of a bitwise operator or `add` is one shift of the operator. | `visit_and`, `visit_or`, `visit_xor`, `visit_add`. | [combine_shift_binop](combine_shift_binop.md) |
 | combine_shifts | InstCombine's `visitShl`, `visitLShr` and `visitAShr` and the helpers they call, from [`InstCombineShifts.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineShifts.cpp) at d1106deb71cc. | Not a pass: called by the combine driver once its slot is flipped. | [combine_shifts](combine_shifts.md) |

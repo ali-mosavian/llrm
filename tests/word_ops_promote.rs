@@ -29,8 +29,17 @@ fn a_word_and_or_xor_of_a_register_runs_on_the_whole_register() {
          unsigned fo(unsigned short x, unsigned y) { unsigned short t = x | 0x1234; return t + y + x; }\n\
          unsigned fa(unsigned short x, unsigned y) { unsigned short t = x & 0x7234; return t + y + x; }\n",
     );
-    for form in ["xor eax, 4660", "or eax, 4660", "and eax, 29236"] {
-        assert!(text.contains(form), "{form} is missing:\n{text}");
+    // On the whole register, whichever one the allocator gave it.
+    for (op, immediate) in [("xor", "4660"), ("or", "4660"), ("and", "29236")] {
+        let whole = text
+            .lines()
+            .map(str::trim)
+            .any(
+                |line| line.strip_prefix(op)
+                    .and_then(|rest| rest.strip_prefix(" e"))
+                    .is_some_and(|rest| rest.ends_with(&format!(", {immediate}"))),
+            );
+        assert!(whole, "{op} e?x, {immediate} is missing:\n{text}");
     }
     for word in ["xor ax,", "or ax,", "and ax,"] {
         assert!(!text.contains(word), "{word} is a word operation:\n{text}");
@@ -42,7 +51,9 @@ fn a_word_and_or_xor_of_a_register_runs_on_the_whole_register() {
 #[test]
 fn a_word_operation_with_a_memory_operand_stays_a_word() {
     let text = listing("unsigned short g(unsigned short x, unsigned short y) { return x ^ y; }\n");
-    assert!(text.contains("xor ax, word ptr [esp+8]"), "{text}");
+    // The pin loads the later argument and xors the earlier from memory
+    // (`movzwl 8(%esp), %eax; xorw 4(%esp), %ax`).
+    assert!(text.contains("xor ax, word ptr [esp+4]") || text.contains("xor ax, word ptr [esp+8]"), "{text}");
 }
 
 /// A word `add` of registers ran under the operand-size prefix (`add ax, 3;
@@ -58,7 +69,12 @@ fn a_word_add_of_registers_runs_on_the_whole_register() {
              return s;\n\
          }\n",
     );
-    let loop_body = text.split("L0_4:").nth(1).expect("the loop").split("jne").next().unwrap();
+    // The loop is what the first `jne` closes, from the label before it (the
+    // label's number is the allocator's to choose).
+    let lines: Vec<&str> = text.lines().collect();
+    let back_edge = lines.iter().position(|line| line.trim_start().starts_with("jne ")).expect("a back edge");
+    let top = lines[..back_edge].iter().rposition(|line| line.starts_with('L')).expect("the loop's label");
+    let loop_body = lines[top..back_edge].join("\n");
     let words = loop_body.lines().filter(|line| line.trim_start().starts_with("add ") && !line.contains('e')).count();
     assert_eq!(words, 0, "a word add is left in the loop:\n{text}");
     assert!(loop_body.contains("add ecx, 3"), "{text}");

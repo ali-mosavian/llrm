@@ -14,8 +14,8 @@ LIBGCC=$(gcc -m32 -print-libgcc-file-name)
 F="-Dfar= -m32 -march=i486 -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables"
 one(){ P=$1; o=$2
   cd $W/b
-  $CLANG $F -$o $X -c -o $P.clang$o.o $P.c 2>$P.clang$o.err || { echo "FAIL $P $o" >> $W/fails; return; }
-  $CLANG $F -$o $X -S -o $P.clang$o.s $P.c 2>/dev/null
+  $CLANG $F -mstack-alignment=4 -$o $X -c -o $P.clang$o.o $P.c 2>$P.clang$o.err || { echo "FAIL $P $o" >> $W/fails; return; }
+  $CLANG $F -mstack-alignment=4 -$o $X -S -o $P.clang$o.s $P.c 2>/dev/null
   ld -m $EMU -static -e 0 -Ttext=0x10000 --just-symbols=$W/stub.elf -Map=$P.clang$o.map -o $P.clang$o.elf $P.clang$o.o $LIBGCC 2>$P.clang$o.lderr || { echo "LINK $P $o" >> $W/fails; return; }
   j=$(VSGCC_WORK=$W uv run -q --project $R/tools python $H/harness.py $P clang$o 2>/dev/null | tail -1)
   sp=$(grep -c "Spill" $P.clang$o.s); rl=$(grep -c "Reload" $P.clang$o.s); cp=$(grep -cE "^\s+mov[lwb]\s+%[a-z]+, %[a-z]+$" $P.clang$o.s)

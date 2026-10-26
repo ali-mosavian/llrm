@@ -87,7 +87,7 @@ use crate::backend::cpu::{Profile, ProfileOrName};
 use crate::backend::isel::{self, Selected};
 use crate::backend::shadow::{self, Selector};
 use crate::backend::target::Segments;
-use crate::backend::{addressvalues, executed, frame, globals, jumps, masm, select};
+use crate::backend::{addressvalues, executed, frame, globals, jumps, masm, returnsplit, select};
 use crate::flow;
 use crate::model::ir::{Addr, AddressRef, Loc, Semantics, Space};
 use crate::model::lir::LirBody;
@@ -169,6 +169,11 @@ pub fn assembled_by(
     names.extend(crate::hir::symbols::symbol_names());
     let mut procedures = Vec::new();
     let mut referenced: IndexMap<String, bool> = IndexMap::default();
+    // The i64 divide routines the DAG route calls, once each:
+    // ExpandDivRemLibCall's `__divdi3` family, written here as a procedure
+    // of the module instead of pasted at every site.
+    let mut shared: IndexMap<String, Vec<u8>> = IndexMap::default();
+    let mut shared_registers = None;
     let mut data = Vec::new();
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
     let classes = Rc::new(RegisterClasses::of(arch));
@@ -217,8 +222,18 @@ pub fn assembled_by(
                     )
                 })?;
                 let mut callees = IndexMap::default();
+                shared_registers.get_or_insert(registers.clone());
                 for (at, callee) in &calls {
                     if let Some(code) = inline.get(at) {
+                        if !matches!(selector, Selector::Old)
+                            && callee.starts_with(llrm_target::routines::DIVIDE_PREFIX)
+                            && inline_symbols.get(at).is_none_or(Vec::is_empty)
+                        {
+                            let routine = format!("${callee}");
+                            shared.entry(routine.clone()).or_insert_with(|| code.clone());
+                            callees.insert(*at, masm::Callee::new(routine, false));
+                            continue;
+                        }
                         // The bytes between the words that name a symbol, and
                         // each of those as a fixup.
                         let mut parts = Vec::new();
@@ -316,6 +331,7 @@ pub fn assembled_by(
                 let procedure = if !cpu.optimized {
                     procedure
                 } else {
+                    let procedure = timed("lir split returns", || returnsplit::split(procedure));
                     // Asked only by a tail a copy could save a jump for.
                     let (overhead, unprintable) = (std::cell::OnceCell::new(), std::cell::RefCell::new(None));
                     let overhead = || {
@@ -335,12 +351,23 @@ pub fn assembled_by(
                     if let Some(error) = unprintable.take() {
                         return Err(error);
                     }
-                    masm::saved_first(masm::Procedure { body, ..procedure })
+                    let procedure = masm::exits_inserted(masm::saved_first(masm::Procedure { body, ..procedure }));
+                    if procedure.body.frame_exit.is_some() {
+                        let body = jumps::tails_merged_after_exits(procedure.body.clone(), cpu.size)
+                            .map_err(|error| error.to_string())?;
+                        masm::Procedure { body, ..procedure }
+                    } else {
+                        procedure
+                    }
                 };
                 procedures.push(procedure);
             }
             _ => {}
         }
+    }
+    for (name, code) in shared {
+        let registers = shared_registers.clone().expect("a routine is shared by a function");
+        procedures.push(masm::routine_procedure(&name, code, registers, Regs(arch.registers())));
     }
     for (bytes, id) in crate::backend::constpool::wide_first(pool.borrow().entries()) {
         let name = format!("$K{id}");
@@ -629,9 +656,12 @@ fn machined_once(
     let (first, frame) = timed("candidate first frame", || cheaper(&first_stage, name, pool, target))?;
     let spilled = frame.floor + first.reserve;
     // The allocas move down by the hole: a multiple of the stack alignment, or
-    // an 8-aligned array lands at 4 mod 8 (nbody -O2: 18,404 operands).
+    // an 8-aligned array lands at 4 mod 8 (nbody -O2: 18,404 operands). Shared
+    // spill slots can end on a word, so a 4-aligned frame needs it too: the
+    // backend run again aligns the allocas and the frame moved by the hole
+    // did not (reserve 286 against 288).
     let spilled =
-        if frame.align > 4 { (spilled + frame.align - 1).div_euclid(frame.align) * frame.align } else { spilled };
+        if frame.align > 1 { (spilled + frame.align - 1).div_euclid(frame.align) * frame.align } else { spilled };
     let far = far_frame(&first.body);
     if target.basic || frame.native.is_some() || spilled <= 0 || frame.floor == 0 || far == 0 {
         return Ok(first);
@@ -1049,7 +1079,8 @@ fn phased(
         }
     }
     let frame = frame.borrow().clone();
-    let reserve = -std::cmp::min(frame.slots.values().copied().min().unwrap_or(0), frame.floor);
+    // The reserved call area is the lowest bytes below the locals and spills.
+    let reserve = -std::cmp::min(frame.slots.values().copied().min().unwrap_or(0), frame.floor) + frame.call_area;
     if llrm_support::env_flag!("LLRM_FRAME_ORACLE") {
         eprintln!("{}", crate::backend::frameobjects::oracle_line(name, &frame, reserve));
     }

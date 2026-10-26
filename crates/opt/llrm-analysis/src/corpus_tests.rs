@@ -111,6 +111,11 @@ dead:
             );
             assert_eq!(shape.dominance.frontiers(function), loops::frontiers(&graph, None), "{name}");
             assert_eq!(shape.dominance.irreducible(function), loops::irreducible(&graph, None), "{name}");
+            assert_eq!(
+                shape.dominance.is_irreducible(function),
+                !loops::irreducible(&graph, None).is_empty(),
+                "{name}"
+            );
         }
     }
 }
