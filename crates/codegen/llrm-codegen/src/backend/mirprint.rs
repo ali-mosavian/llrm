@@ -158,6 +158,25 @@ fn condition(name: &str) -> Option<u8> {
 }
 
 /// One instruction as MIR lines.
+/// The last `$eflags` definition of the block being printed is read by the
+/// branch about to follow: it is not `dead`, which the pin's verifier refuses.
+fn flags_are_read(text: &mut String) {
+    let mut end = text.len();
+    while end > 0 {
+        let start = text[..end].rfind('\n').map_or(0, |at| at + 1);
+        let line = &text[start..end];
+        if line.starts_with("  bb.") {
+            return;
+        }
+        if line.contains("implicit-def") && line.contains("$eflags") {
+            let live = line.replace("implicit-def dead $eflags", "implicit-def $eflags");
+            text.replace_range(start..end, &live);
+            return;
+        }
+        end = start.saturating_sub(1);
+    }
+}
+
 fn instruction(
     one: &Insn,
     targets: &[usize],
@@ -338,6 +357,9 @@ pub fn mir(
                 register_only.insert(dest.value);
                 continue;
             }
+            if one.what.as_ref().and_then(|w| w.name.as_deref()).is_some_and(|name| condition(name).is_some()) {
+                flags_are_read(&mut text);
+            }
             instruction(one, &targets, &mut jumps, &mut symbols, &register_only, &mut text)
                 .map_err(|why| format!("block {n}: {why}"))?;
             // A value pinned to a register is that register from its
@@ -422,6 +444,24 @@ mod tests {
     /// `add`, an immediate compare, and a conditional jump whose fallthrough
     /// block is not the next one gets the `JMP_1` MIR needs (its absence was
     /// "CFG successors don't match" on every `jne` that skips a block).
+    /// A loop counter's `dec` sets the flags its `jne` reads. The printer wrote
+    /// `implicit-def dead $eflags`, and the pin's `llc` refused the MIR ("Using
+    /// an undefined physical register"), so no loop with a `dec; jne` could be
+    /// allocated by the pin.
+    #[test]
+    fn test_a_flag_setting_op_the_branch_reads_is_not_dead() {
+        let dec = insn("dec", Operation::Binary, vec![held(1)], vec![held(1)]);
+        let jne = insn("jne", Operation::Branch, vec![], vec![]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![
+            Block::from(LirBlock { succ: vec![0, 1].into(), ..LirBlock::new(0, vec![dec, jne]) }),
+            Block::from(LirBlock::new(1, vec![ret])),
+        ];
+        let body = LirBody::new("count", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("DEC32r %1, implicit-def $eflags\n    JCC_1"), "{text}");
+    }
+
     #[test]
     fn test_a_branch_to_a_far_block_gets_its_jump_and_forms_are_32_bit() {
         let imm = |value| Loc::Imm(Imm { value, width: 4, address: None });
