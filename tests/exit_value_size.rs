@@ -26,16 +26,33 @@ fn exit_value_listing(level: &str) -> String {
     std::fs::read_to_string(scratch.path().join("a.s")).unwrap()
 }
 
-/// The closed form (a 32-bit `imul` and a `shrd` by one) took 107 B where the
-/// loop is under half of that.
+/// Whether a jump goes to a label already defined above it: a loop.
+fn has_backward_branch(text: &str) -> bool {
+    let mut defined = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(label) = line.strip_suffix(':') {
+            defined.push(label.to_owned());
+        } else if let Some(target) = line.strip_prefix('j').and_then(|rest| rest.split_whitespace().nth(1)) {
+            if defined.iter().any(|label| label == target) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// The closed form took 107 B where the loop is under half of that.
 #[test]
 fn at_os_the_sum_stays_a_loop() {
     let text = exit_value_listing("-Os");
-    assert!(!text.contains("shrd"), "closed form at -Os:\n{text}");
+    assert!(has_backward_branch(&text), "no loop at -Os:\n{text}");
 }
 
+/// The sum is a product and a shift (`imul`; the width of the shift is the
+/// instruction selector's business), the loop gone.
 #[test]
 fn at_o2_the_sum_is_still_the_closed_form() {
     let text = exit_value_listing("-O2");
-    assert!(text.contains("shrd"), "no closed form at -O2:\n{text}");
+    assert!(!has_backward_branch(&text) && text.contains("imul"), "no closed form at -O2:\n{text}");
 }
