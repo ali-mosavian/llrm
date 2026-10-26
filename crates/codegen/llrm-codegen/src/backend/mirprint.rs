@@ -296,8 +296,16 @@ fn instruction(
             let op = if name == "cmp" { "CMP" } else { "TEST" };
             writeln!(out, "    {op}{}rr {}, {}, implicit-def $eflags", bits(a.width)?, vreg(a)?, vreg(b)?).unwrap()
         }
-        ("cmp", None, [Loc::Held(a), Loc::Imm(i)]) => {
-            writeln!(out, "    CMP{}ri {}, {}, implicit-def $eflags", bits(a.width)?, vreg(a)?, immediate(i)?).unwrap()
+        (op @ ("cmp" | "test"), None, [Loc::Held(a), Loc::Imm(i)]) => {
+            writeln!(
+                out,
+                "    {}{}ri {}, {}, implicit-def $eflags",
+                op.to_uppercase(),
+                bits(a.width)?,
+                vreg(a)?,
+                immediate(i)?
+            )
+            .unwrap()
         }
         (op @ ("add" | "sub" | "and" | "or" | "xor"), Some(Loc::Held(d)), [Loc::Held(a), rhs]) => {
             let upper = op.to_uppercase();
@@ -600,6 +608,23 @@ mod tests {
         let body = LirBody::new("arg", 0, blocks, IndexMap::default(), IndexMap::default());
         let text = mir(&body, &IndexMap::default()).expect("prints");
         assert!(text.contains(":: (load (s32) from %fixed-stack.0)"), "{text}");
+    }
+
+    /// `test r, imm` was refused ("`test` with 0 destinations and 2
+    /// sources"), so x_switch's function could not be allocated by the pin.
+    #[test]
+    fn test_a_test_against_an_immediate_prints() {
+        let imm = Loc::Imm(Imm { value: 4096, width: 4, address: None });
+        let test = insn("test", Operation::Compare, vec![], vec![held(1), imm]);
+        let jne = insn("jne", Operation::Branch, vec![], vec![]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![
+            Block::from(LirBlock { succ: vec![1, 0].into(), ..LirBlock::new(0, vec![test, jne]) }),
+            Block::from(LirBlock::new(1, vec![ret])),
+        ];
+        let body = LirBody::new("t", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("TEST32ri %1, 4096, implicit-def $eflags"), "{text}");
     }
 
     #[test]

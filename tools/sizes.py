@@ -39,6 +39,12 @@ def dialect(basic: bool, source: str) -> list[str]:
     return ["--dialect", "qb45", "--runtime", "qb45"] if basic and "dialect" not in header(Path(source)) else []
 
 
+def excess(basic: bool) -> list[str]:
+    """`-fexcess-precision=` of $SIZES_EXCESS (standard or fast) for a BASIC program: main compiled SINGLE as fast and the tip as standard, so a pair run
+    on the defaults reads the deliberate rounding as growth. Set it on both sides."""
+    return [f"-fexcess-precision={environ['SIZES_EXCESS']}"] if basic and environ.get("SIZES_EXCESS") else []
+
+
 def programs(bins: Path, demos: bool = True) -> list[tuple[str, list[str]]]:
     qb, cc, nib = (str(bins / name) for name in ("llrm-qb", "llrm-c", "llrm-nib"))
     out = []
@@ -48,7 +54,7 @@ def programs(bins: Path, demos: bool = True) -> list[tuple[str, list[str]]]:
         out = [(f"demo-{one}", [qb, str(DEMOS / one / "TSC.BAS"), "--dialect", "qb45", "--runtime", "qb45"]) for one in ("qbdemo", "oimad", "deedlines")]
     for files, tool in ((sorted(glob.glob(str(ROOT / "tests/run/qb/*.bas"))), qb), (benchlist.sources(".bas", ROOT / "bench"), qb), (benchlist.sources(".c", ROOT / "bench"), cc),
                         (benchlist.sources(".nib", ROOT / "bench"), nib), (sorted(glob.glob(str(ROOT / "examples/*.nib"))), nib)):
-        out += [(f"{Path(file).parent.name}/{Path(file).name}", [tool, str(file), *dialect(tool == qb, str(file)), *settings(str(file))]) for file in files]
+        out += [(f"{Path(file).parent.name}/{Path(file).name}", [tool, str(file), *dialect(tool == qb, str(file)), *settings(str(file)), *excess(tool == qb)]) for file in files]
     return out
 
 

@@ -508,7 +508,7 @@ pub fn bottom_up(
         }
         region_max = program.max().to_vec();
         critical = Tracker::critical_sets(tracking.model, &region_max);
-        Tracker::new(tracking.model, tracking.live_out.iter().copied(), tracking.live_thru.iter().copied())
+        Tracker::over(tracking.model, tracking.live_out.iter().copied(), tracking.live_thru.iter().copied(), insns)
     });
     while placed.len() < n {
         let mut best = 0;
@@ -517,9 +517,7 @@ pub fn bottom_up(
         if available.len() > 1 {
             why = "FIRST";
             let deltas: Vec<Delta> = match &tracker {
-                Some(tracker) => {
-                    available.iter().map(|&node| tracker.upward_delta(&insns[node], &critical, &region_max)).collect()
-                }
+                Some(tracker) => available.iter().map(|&node| tracker.delta(node, &critical, &region_max)).collect(),
                 None => vec![Delta::default(); available.len()],
             };
             for candidate in 1..available.len() {
@@ -540,7 +538,7 @@ pub fn bottom_up(
             eprintln!("machinesched pick {node} {:?} {why} tracked={}", insns[node].defines, tracker.is_some());
         }
         if let Some(tracker) = &mut tracker {
-            tracker.advance_upward(&insns[node]);
+            tracker.place(&insns[node]);
             // `updateScheduledPressure`.
             for entry in &mut critical {
                 let most = tracker.max()[entry.set] as i32;

@@ -337,6 +337,17 @@ pub fn absolute(
             }
             _ => None,
         },
+        // An offset from a huge pointer's bits is not their sum: the carry past
+        // the offset goes into the selector, which the caller that knows the
+        // stride adds.
+        ConstantKind::Expr(ConstantExpr::GetElementPtr { .. })
+            if matches!(
+                context.types.get(context.get(id).ty),
+                Type::Pointer(space) if layout.has_unstable_representation(*space)
+            ) =>
+        {
+            None
+        }
         ConstantKind::Expr(ConstantExpr::GetElementPtr { source, operands, .. }) => Some(
             absolute(module, layout, operands[0])? + constant_offset(module, layout, *source, &operands[1..]).ok()?,
         ),

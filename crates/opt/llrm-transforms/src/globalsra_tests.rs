@@ -150,3 +150,25 @@ b0:
     );
     assert!(!changed && after.contains("@c = internal global [2 x i8]") && !after.contains("@c.0"), "{after}");
 }
+
+/// A 16-bit scalar spelled as `[2 x i8]` (QB's `S%`) that one body writes
+/// before it reads kept its global: the whole-variable piece of another type
+/// was no split, so it never became a slot (hotlop.bas m16 -Os kept `S%`, +2 B
+/// of data and a store and a reload past the runtime's calls; hotlpx, lngmix,
+/// press and rotate likewise).
+#[test]
+fn a_scalar_spelled_as_bytes_is_localized() {
+    let text = "@s = internal global [2 x i8] zeroinitializer
+
+define i16 @f() norecurse {
+b0:
+  store i16 630, ptr @s
+  %r = load i16, ptr @s
+  ret i16 %r
+}
+";
+    let (after, changed) = splitted(text);
+    assert!(changed, "{after}");
+    assert!(!after.contains("ptr @s"), "{after}");
+    assert_eq!(after.matches("alloca i16").count(), 1, "{after}");
+}

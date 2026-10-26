@@ -41,6 +41,19 @@
 //! the flag source, the backward scan into a single predecessor, `MOV32r0`
 //! motion and the NF variants (APX).
 //!
+//! # Example
+//! A subtract whose result nothing reads, ahead of a branch on the flags:
+//!
+//! ```text
+//!  before                  after
+//!  d := sub a, b           cmp a, b
+//!  jl L                    jl L
+//! ```
+//!
+//! From unit test `test_a_subtract_nothing_reads_is_a_compare` in
+//! `peepholeopt.rs`, which asserts the `sub` becomes a `cmp` with no
+//! destination.
+//!
 //! # Runs
 //! A machine phase on SSA after MachineSink and ahead of MachineCombiner (the
 //! pin's `addMachineSSAOptimization` order), at every level but -O0.

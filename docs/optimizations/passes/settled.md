@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/settled.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/settled.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/settled.rs sha256:c7f4713ce4f404490f5380ba5cc4b71b1384f5767aa7cd1f5f7b2ae586ecea27 -->
+<!-- src: crates/opt/llrm-transforms/src/settled.rs sha256:6637827e724ecf3a306fdc3bff5a7801ac07a402185416cec433ba8a40fe14dc -->
 
 # settled
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/induction.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/induction.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/induction.rs sha256:c37e8d8bff137c736cd815c8260e6d2ab7460114287e98088a654cc6c4401f42 -->
+<!-- src: crates/opt/llrm-analysis/src/induction.rs sha256:0627049565471a9e4fa37580c0a07469b01178139dc7e311994c24eea4670763 -->
 
 # induction
 

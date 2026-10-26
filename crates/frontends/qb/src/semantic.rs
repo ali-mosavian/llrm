@@ -38,6 +38,8 @@ const UNSIGNED_INTEGER: u32 = 10;
 const UNSIGNED_LONG: u32 = 11;
 // PDS and VBDOS's CURRENCY: a 64-bit integer scaled by 10000.
 const CURRENCY: u32 = 12;
+// The x87's 80-bit format, in which BC scales a float into CURRENCY.
+const EXTENDED: u32 = 13;
 // BASCOM's declarative scanner reserves eight dimension records for an
 // array whose rank is not present in its declaration.  This is an ABI storage
 // rule, distinct from the language's 60-index parser ceiling.
@@ -1710,6 +1712,7 @@ impl Compiler {
             scalar(UNSIGNED_INTEGER, "unsigned integer", "integer", 2, Some(false), "none"),
             scalar(UNSIGNED_LONG, "unsigned long", "integer", 4, Some(false), "none"),
             scalar(CURRENCY, "currency", "integer", 8, Some(true), "none"),
+            scalar(EXTENDED, "extended", "float", 10, None, "extended80"),
         ];
         Self {
             dialect,
@@ -1772,7 +1775,7 @@ impl Compiler {
             error_handler_local: false,
             error_handlers: BTreeSet::new(),
             module_handled: false,
-            next_type: 13,
+            next_type: 14,
             common_repeats: BTreeSet::new(),
             common_arrays: BTreeSet::new(),
             next_value: 1,
@@ -8995,9 +8998,14 @@ impl Compiler {
         divisor: Operand,
         type_id: u32,
     ) -> Result<(), SemanticError> {
+        // The processor traps only on LONG minimum divided by -1: any other
+        // dividend, as any other divisor, has the processor's own answer.
         if matches!(
             divisor,
             Operand::Constant(_, Number::Integer(value)) if value != -1
+        ) || matches!(
+            dividend,
+            Operand::Constant(_, Number::Integer(value)) if value != i64::from(i32::MIN)
         ) {
             self.emit(operation, vec![result], vec![dividend, divisor]);
             return Ok(());
@@ -9371,8 +9379,13 @@ impl Compiler {
             }
             if matches!(from, SINGLE | DOUBLE) {
                 let operand = self.convert(operand, from, DOUBLE)?;
-                let factor = scale(self)?;
-                let scaled = self.computed("fmul", DOUBLE, vec![operand, factor]);
+                let wide = self.computed("convert", EXTENDED, vec![operand]);
+                // A SINGLE holds 10000 exactly, and a 4-byte constant is the
+                // pin's pool entry for it where a 10-byte one
+                // is not.
+                let factor = self.floating_literal("10000", SINGLE)?;
+                let factor = self.computed("convert", EXTENDED, vec![factor]);
+                let scaled = self.computed("fmul", EXTENDED, vec![wide, factor]);
                 return Ok(self.computed("convert", CURRENCY, vec![scaled]));
             }
         } else if from == CURRENCY && (integral(to) || matches!(to, SINGLE | DOUBLE)) {

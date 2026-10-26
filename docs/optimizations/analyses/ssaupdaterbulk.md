@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/ssaupdaterbulk.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/ssaupdaterbulk.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/ssaupdaterbulk.rs sha256:31ae14ed9bf93371bbc8a6c8b82d164a84f685ff4849218a8fadd457a79aa3cf -->
+<!-- src: crates/opt/llrm-analysis/src/ssaupdaterbulk.rs sha256:f67098961cfd6b584cbf81ada9b1d0be91febb776a912f8abae3bd92d9d0d5f3 -->
 
 # ssaupdaterbulk
 

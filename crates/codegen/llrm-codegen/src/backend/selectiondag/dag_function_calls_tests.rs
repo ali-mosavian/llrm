@@ -526,7 +526,7 @@ fn a_landing_pad_is_marked_and_reachable_from_the_entry() {
     assert_eq!(done.calls.get(&landing).map(String::as_str), Some("__LANDING"));
 }
 
-const INLINE_CODE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+const INLINE_CODE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 declare i32 @llrm.ia16.code.89a60000.2p0(ptr)
 define i32 @f() {
 entry:
@@ -552,7 +552,7 @@ fn inline_code_is_laid_down_at_its_site_with_its_frame_place() {
     assert_eq!(u16::from_le_bytes([bytes[2], bytes[3]]), (disp + addend) as u16);
 }
 
-const BYVAL_ODD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+const BYVAL_ODD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 declare void @g(ptr byval([41 x i8]) %p)
 define void @f(ptr %q) {
 entry:
@@ -687,7 +687,7 @@ fn a_split_condition_exports_what_the_later_blocks_read() {
     assert_eq!(done.body.blocks.len(), 5, "entry, the second compare, then, else, join");
 }
 
-const PORTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+const PORTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 declare i8 @llrm.ia16.in.i8(i16)
 declare void @llrm.ia16.out.i8(i16, i8)
 define i8 @f(i16 %p) {
@@ -764,7 +764,7 @@ fn a_fixed_point_divide_is_selected() {
     assert_eq!(made.iter().filter(|name| *name == "call").count(), 2, "{made:?}");
 }
 
-const TRUNCATED_LONG_RESULT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+const TRUNCATED_LONG_RESULT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 
 @_inbuf = global [512 x i8] zeroinitializer
 @_inpos = global [2 x i8] zeroinitializer
