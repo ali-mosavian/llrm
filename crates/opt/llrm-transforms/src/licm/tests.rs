@@ -263,6 +263,56 @@ fn test_a_slot_only_the_loop_touches_is_promoted_with_its_stores() {
     assert_eq!(promoted(&slot_loop("", "", "load i16, ptr %s")), [(vec!["s".to_owned()], true)]);
 }
 
+/// The loop of a global it only stores to, on one path.
+fn conditional_store_loop(test: &str) -> String {
+    format!(
+        "@g = internal global i32 0
+
+define i32 @f(i32 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %b4 ]
+  %c = icmp slt i32 %i, %n
+  br i1 %c, label %b2, label %b5
+
+b2:
+{test}  br i1 %t, label %b3, label %b4
+
+b3:
+  store i32 %i, ptr @g
+  br label %b4
+
+b4:
+  %i1 = add i32 %i, 1
+  br label %b1
+
+b5:
+  ret i32 %n
+}}
+"
+    )
+}
+
+/// Promoting a global the loop only stores to, on some paths, loads it in the
+/// preheader and stores it after the loop for no load saved, and keeps the
+/// global from being removed as write-only: nbody.bas promoted DELTAY&, DIST2&
+/// and DELTAX& once its division guard was gone, +43 B at -Os m16.
+#[test]
+fn test_a_global_stored_on_some_paths_and_never_loaded_is_not_promoted() {
+    assert_eq!(promoted(&conditional_store_loop("  %t = icmp eq i32 %i, 3\n")), Vec::<(Vec<String>, bool)>::new());
+}
+
+/// With a load in the loop the promotion saves it: promoted, stores and all.
+#[test]
+fn test_a_global_stored_on_some_paths_and_loaded_is_promoted() {
+    assert_eq!(
+        promoted(&conditional_store_loop("  %x = load i32, ptr @g\n  %t = icmp eq i32 %x, 3\n")),
+        [(vec!["constant".to_owned()], true)]
+    );
+}
+
 /// A call that is handed the slot's address may read or write it: no promotion.
 #[test]
 fn test_a_slot_a_call_may_touch_is_not_promoted() {

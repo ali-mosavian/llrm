@@ -9,7 +9,7 @@ use llrm_analysis::mssa::Mssa;
 use llrm_analysis::mssa::alias::{AliasQuery, Location};
 use llrm_mir::context::ConstantKind;
 use llrm_mir::dense::IdSet;
-use llrm_mir::module::{BlockId, GlobalKind, InstId, Operand, ValueDef, ValueId};
+use llrm_mir::module::{BlockId, GlobalKind, InstId, Linkage, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{self, Outer};
 
@@ -584,6 +584,22 @@ pub fn promote_loop_accesses_to_scalars(
         // If we cannot hoist the load either, give up.
         return None;
     }
+    // DEVIATE LP2 (no number): a global this function only stores to, on some
+    // paths, is left. Fact: promoting it loads it in the preheader and stores
+    // it after the loop for no load saved, and nothing here reads what that
+    // store leaves; `writeonly` removes the global when no body reads it,
+    // and a promoted one is read by the preheader load. nbody.bas promoted
+    // DELTAY&, DIST2& and DELTAX& once its division guard stopped taking a
+    // slot of `Pressure`, +43 B at -Os m16. LLVM's LICM promotes it. A body
+    // in another function may still read the global: its stores stay in the
+    // loop, which is correct and costs a store per trip. Exit: a module
+    // analysis of the globals no body loads, kept fresh across the walk.
+    if !found_load_to_promote
+        && !store_is_guaranteed_to_execute
+        && pointers.iter().all(|&one| is_only_stored_here(unit, outer, one))
+    {
+        return None;
+    }
     Some(Promotion {
         pointers: pointers.to_vec(),
         uses: loop_uses,
@@ -595,6 +611,55 @@ pub fn promote_loop_accesses_to_scalars(
         load_is_guaranteed_to_execute,
         tbaa: tbaa.flatten(),
     })
+}
+
+/// Whether the object `pointer` reaches is an internal global variable whose
+/// address this function uses only to store: nothing here reads any of it.
+fn is_only_stored_here(
+    unit: &passes::Unit,
+    outer: &Outer,
+    pointer: Operand,
+) -> bool {
+    let object = underlying_object(unit, pointer);
+    let Operand::Constant(id) = object else { return false };
+    let ConstantKind::Global(global) = unit.context.get(id).kind else { return false };
+    let Some(one) = outer.globals.get(global.0 as usize) else { return false };
+    let internal = matches!(one.linkage, Linkage::Internal | Linkage::Private);
+    if !internal
+        || !matches!(
+            &one.kind,
+            GlobalKind::Variable(variable) if !variable.constant
+        )
+    {
+        return false;
+    }
+    let function = &*unit.function;
+    function
+        .layout()
+        .iter()
+        .all(
+            |&block| function
+                .iter_block(block)
+                .all(
+                    |inst| {
+                        let instruction = function.instruction(inst);
+                        instruction
+                            .operands
+                            .iter()
+                            .enumerate()
+                            .all(
+                                |(at, operand)| {
+                                    if matches!(operand, Operand::Block(_)) {
+                                        return true;
+                                    }
+                                    let stored_through = matches!(instruction.opcode, Opcode::Store { .. }) && at == 1;
+                                    let address_arithmetic = matches!(instruction.opcode, Opcode::GetElementPtr { .. });
+                                    stored_through || address_arithmetic || underlying_object(unit, *operand) != object
+                                },
+                            )
+                    },
+                ),
+        )
 }
 
 /// The type of an operand.
