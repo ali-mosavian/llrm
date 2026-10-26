@@ -799,6 +799,37 @@ entry:
 }
 ";
 
+const M16_CLEAR_54: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+@g = global [54 x i8] zeroinitializer
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define void @f() {
+entry:
+  call void @llvm.memset.p0.i16(ptr @g, i8 0, i16 54, i1 false)
+  ret void
+}
+";
+
+/// A QB function with three `DIM x(3) AS DOUBLE` cleared its 54 bytes with 14
+/// dword stores at -Os, `nbody.bas` +309 B over the old selector: the size
+/// limit of an inline fill read the `optsize` attribute, which no front end
+/// sets, and not the build's level. At -Os the 54 bytes are one `rep stos`.
+#[test]
+fn at_os_a_54_byte_clear_is_a_rep_string_operation() {
+    let module = llrm_mir::parse::module(M16_CLEAR_54).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("386").expect("a cpu").clone();
+    cpu.size = true;
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let fills =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.op == crate::model::ir::Operation::Fill).count();
+    let stores = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
+        .count();
+    assert_eq!((fills, stores), (1, 0), "a fill and no store");
+}
+
 /// A 16-byte clear at m16 was eight word stores: the widest store was the
 /// pointer's. The pin's `getOptimalMemOpType` gives `i32` there, and clang
 /// `-m16 -O2` clears 16 bytes with four `movl $0` (rep_count: 1046 bytes
