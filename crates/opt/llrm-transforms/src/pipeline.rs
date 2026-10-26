@@ -538,7 +538,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // `LLRM_NO_MEM2REG` keeps the write-through stand-in instead of the
         // translated PromoteMemToReg.
         if applied.options.mem2reg { Box::new(mem2reg::Mem2Reg) } else { Box::new(promote::Promote) },
-        Box::new(indvars::IndVars { lftr: indvars::lftr_default() }),
+        Box::new(indvars::IndVars { lftr: indvars::lftr_default(), size: applied.options.prefers_size() }),
         Box::new(algebraic::Algebraic { size: applied.options.prefers_size(), llvm: false }),
         Box::new(dead::Dead),
         Box::new(loopidioms::LoopIdioms { size: applied.options.prefers_size() }),
@@ -866,10 +866,13 @@ pub(crate) fn llvm_order(
             list.extend([
                 slot(
                     "loopidiom@737",
-                    Box::new(crate::loopidiom::pass::LoopIdiom::with_routines(applied.options.library.clone())),
+                    Box::new(crate::loopidiom::pass::LoopIdiom {
+                        for_size: size,
+                        ..crate::loopidiom::pass::LoopIdiom::with_routines(applied.options.library.clone())
+                    }),
                 ),
                 slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
-                slot("indvars@738", Box::new(indvars::IndVars { lftr: indvars::lftr_default() })),
+                slot("indvars@738", Box::new(indvars::IndVars { lftr: indvars::lftr_default(), size })),
                 slot("loopdeletion@749", Box::new(loopdeletion::LoopDeletion)),
                 slot(
                     "unroll@753",
@@ -1260,7 +1263,7 @@ pub fn header_copied(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     passes.push(Box::new(algebraic::Algebraic { size: false, llvm: false }));
     // A counted exit's values are numbers where the copy made its test the one
     // that leaves.
-    passes.push(Box::new(indvars::IndVars { lftr: indvars::lftr_default() }));
+    passes.push(Box::new(indvars::IndVars { lftr: indvars::lftr_default(), size: false }));
     passes.push(Box::new(dead::Dead));
     if applied.options.wanted("hoist") {
         passes.push(Box::new(crate::licm::Licm { apply: true, speculate: true }));

@@ -188,7 +188,7 @@ fn extended(
 ) -> String {
     let mut module = parsed(text);
     let before = results(&module, inputs);
-    crate::testing::managed(&mut module, crate::indvars::IndVars { lftr: true });
+    crate::testing::managed(&mut module, crate::indvars::IndVars { lftr: true, size: false });
     let after = printed(&module);
     assert_eq!(results(&module, inputs), before, "{after}");
     after

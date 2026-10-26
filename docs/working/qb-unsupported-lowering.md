@@ -108,3 +108,9 @@ so numbers run about three times the files. Re-run after each PR (2026-10-25, on
 
 UDT array and a STRING array. The runtime preserves both: a string array's kept strings follow to the new elements
 (`str_owner_moved`) and only the cut-off ones are released. Tested on the host (`tests/hostarray/preserve_test.c`).
+
+## SCREEN mode, colorswitch, active page, visible page
+`B$CSCN` takes a count-led block like `B$COLR`: a presence word (and the value) per argument, then the count. The runtime
+sets the mode, then the pages (`gd_set_pages`: draws to page `apage`, shows `vpage` by INT 10h AH=05h). Not done: the
+colorswitch is ignored (QB with `SCREEN 0, 0` changes the video mode, and the screen is cleared at exit), and a text-mode page
+other than 0 is Illegal function call where QB has pages. Test: `tests/qbrt/args_screen.bas`.

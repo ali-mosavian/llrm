@@ -201,6 +201,16 @@ fn raised<T>(made: Result<T, String>) -> T {
     made.unwrap_or_else(|error| panic!("{error}"))
 }
 
+/// A `bsf` marked `repeat` carries the `rep` prefix (the TZCNT encoding, which
+/// older processors run as the same `bsf`); `bsr` has none.
+fn scan_prefixed(
+    what: &Semantics,
+    mut instruction: Instruction,
+) -> Instruction {
+    instruction.set_has_repe_prefix(what.repeat);
+    instruction
+}
+
 fn width_of(register: RegId) -> Option<i64> {
     crate::registers::WIDTHS.get(&register).copied()
 }
@@ -808,6 +818,7 @@ pub fn lowered(what: &Semantics) -> Option<Vec<Semantics>> {
         target: None,
         indirect: false,
         table: Vec::new(),
+        repeat: false,
     };
     let (push, pop) = (
         |source: &Loc| step(Operation::Push, "push", vec![], vec![source.clone()]),
@@ -2437,7 +2448,7 @@ pub fn emit_in(
                 } else {
                     code_of!("BSR_R", width * 8, "_RM", width * 8)
                 };
-                return _assemble(&raised(create_reg_reg(scan?, into, outof)), at, true);
+                return _assemble(&scan_prefixed(what, raised(create_reg_reg(scan?, into, outof))), at, true);
             }
             if let Some(code) = ["btc", "bts", "btr"].iter().position(|bit| name == *bit) {
                 let width = width_of(into)?;
@@ -2468,7 +2479,7 @@ pub fn emit_in(
                 } else {
                     code_of!("BSR_R", width * 8, "_RM", width * 8)
                 };
-                return _assemble(&raised(create_reg_mem(scan?, into, built)), at, relocated);
+                return _assemble(&scan_prefixed(what, raised(create_reg_mem(scan?, into, built))), at, relocated);
             }
             return arith_mem(name, into, cell, at);
         }
@@ -2924,7 +2935,7 @@ mod sweep_support {
         target: Option<i64>,
         indirect: bool,
     ) -> Semantics {
-        Semantics { op, name: name.map(Into::into), dests, sources, target, indirect, table: Vec::new() }
+        Semantics { op, name: name.map(Into::into), dests, sources, target, indirect, table: Vec::new(), repeat: false }
     }
 
     type Want = Option<(&'static str, Option<usize>, Option<usize>, Vec<usize>, bool)>;
