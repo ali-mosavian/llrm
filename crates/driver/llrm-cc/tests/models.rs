@@ -162,8 +162,9 @@ fn a_program_runs_in_each_model() {
     }
 }
 
-/// A static huge object past 64K stopped llrm-llc with a Rust panic (`'H' format requires 0 <= number <=
-/// 65535`) from the OMF writer; the segment cannot hold it, and the error says so.
+/// A static huge object past 64K stopped llrm-llc with a Rust panic (`'H'
+/// format requires 0 <= number <= 65535`) from the OMF writer; the segment
+/// cannot hold it, and the error says so.
 #[test]
 fn a_static_object_past_a_segment_is_refused_by_name() {
     if std::env::var_os("LLRM_CLANG_M16").is_none() {
