@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""The main-merge readiness table, one command: every m16 program larger (-Os, -O2) or slower (clocks) on a feat/parity commit than on main.
+
+    tools/pairs/readiness.py [NEW_SHA] [--base 854bb7efc4] [--out FILE] [--levels -Os -O2] [--no-clocks]
+
+NEW_SHA defaults to origin/feat/parity. Each commit's dist is tools/pairs/pair_build.sh's `SCRATCH/sbp-<full sha>/dist`, built only if absent (a dist
+already there is verified and kept, never rebuilt). Sizes are tools/sizes.py's (bytes of OMF code and data, demos left out); clocks are
+tools/pairs/clocksweep.py's (the 486-priced instruction stream of every runnable program at -Os). Measured tables are cached per dist sha under
+SCRATCH/readiness-cache, so a second run on the same two commits measures nothing. The owner column is left blank for the flag ablation.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import sys
+import json
+import argparse
+import subprocess
+import importlib.util
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
+sys.path.insert(0, str(ROOT / "tools" / "pairs"))
+BASE = "854bb7efc4"
+
+
+def git(*args: str) -> str:
+    return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
+
+
+def dist_of(sha: str, scratch: Path) -> Path:
+    """`SCRATCH/sbp-<full sha>/dist`, built by pair_build.sh if absent (it verifies and keeps one that is there)."""
+    full = git("rev-parse", sha)
+    done = subprocess.run(["bash", str(ROOT / "tools/pairs/pair_build.sh"), str(scratch), full], cwd=ROOT, capture_output=True, text=True)
+    if done.returncode:
+        sys.exit(f"readiness: no dist for {full[:10]}: {(done.stderr or done.stdout).strip()[-300:]}")
+    return scratch / f"sbp-{full}" / "dist"
+
+
+def sizes_module():
+    spec = importlib.util.spec_from_file_location("sizes", ROOT / "tools" / "sizes.py")
+    module = importlib.util.module_from_spec(spec)
+    argv, sys.argv = sys.argv, ["sizes"]
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.argv = argv
+    return module
+
+
+def cached(path: Path, compute):
+    """`path`'s JSON if it is there, else `compute()` stored in it: a table of a dist is measured once."""
+    if path.exists():
+        return json.loads(path.read_text())
+    value = compute()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value))
+    return value
+
+
+def size_table(dist: Path, level: str, cache: Path) -> dict:
+    return cached(cache / f"sizes{level}-{dist.parent.name}.json", lambda: {k: v for k, v in sizes_module().table(dist, level, demos=False).items()})
+
+
+def clock_rows(dist: Path, cache: Path) -> dict:
+    def measure() -> dict:
+        out = cache / f"clocks-{dist.parent.name}.tmp.json"
+        subprocess.run([sys.executable, str(ROOT / "tools/pairs/clocksweep.py"), "measure", str(out)], env={**os.environ, "LLRM_BIN": str(dist)}, check=True)
+        rows = json.loads(out.read_text())
+        out.unlink()
+        return rows
+
+    return cached(cache / f"clocks-{dist.parent.name}.json", measure)
+
+
+def cells(listing: str, function: str) -> int:
+    """Distinct `[bp-N]` stack cells of `function` in a -S listing: the diagnostic the flip-conditions note quotes (quicksort.nib `_sort`: main 24, tip 39). Not a size."""
+    body = listing.split(f"{function} proc", 1)[-1].split(f"{function} endp", 1)[0]
+    return len(set(re.findall(r"\[bp-(\d+)\]", body)))
+
+
+def growers(base: dict, new: dict) -> tuple[list[tuple[str, int, int]], int, int, int]:
+    """([(program, base bytes, new bytes) larger in new, worst first], programs compared, total base, total new). A program one side cannot compile is not compared."""
+    both = [name for name in base if base[name] and new.get(name)]
+    larger = sorted(((name, base[name], new[name]) for name in both if new[name] > base[name]), key=lambda row: row[1] - row[2])
+    return larger, len(both), sum(base[name] for name in both), sum(new[name] for name in both)
+
+
+def slower(base: dict, new: dict) -> tuple[list[tuple[str, int, int]], int]:
+    """([(program, base clocks, new clocks) slower in new, worst ratio first], programs measured on both). A program void on either side is not counted."""
+    before, after = base["rows"], new["rows"]
+    good = [name for name in sorted(set(before) & set(after)) if "clocks" in before[name] and "clocks" in after[name]]
+    rows = [(name, before[name]["clocks"], after[name]["clocks"]) for name in good if after[name]["clocks"] > before[name]["clocks"]]
+    return sorted(rows, key=lambda row: row[1] / row[2]), len(good)
+
+
+def report(header: list[str], sized: dict[str, tuple], clocks: tuple | None) -> list[str]:
+    """The file: the headline first (totals, growers, slower), then one table per level and one for clocks; every table row ends in an empty owner column."""
+    lines = list(header)
+    for level, (larger, count, was, now) in sized.items():
+        lines.append(f"HEADLINE m16 {level}: {was} -> {now} B ({now - was:+}); {len(larger)} of {count} programs larger")
+    if clocks:
+        rows, count = clocks
+        lines.append(f"HEADLINE m16 -Os clocks: {len(rows)} of {count} programs slower")
+    for level, (larger, count, was, now) in sized.items():
+        lines += ["", f"larger at {level} (program | main B | new B | delta | % | owner):"]
+        lines += [f"  {name:42} | {a:>7} | {b:>7} | {b - a:+6} | {(b - a) / a * 100:+6.1f}% |" for name, a, b in larger]
+    if clocks:
+        lines += ["", "slower at -Os (program | main clocks | new clocks | delta | % | owner):"]
+        lines += [f"  {name:42} | {a:>11} | {b:>11} | {b - a:+10} | {(b - a) / a * 100:+6.1f}% |" for name, a, b in clocks[0]]
+    return lines
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("new", nargs="?", default="origin/feat/parity")
+    parser.add_argument("--base", default=BASE)
+    parser.add_argument("--out", type=Path)
+    parser.add_argument("--levels", nargs="+", default=["-Os", "-O2"])
+    parser.add_argument("--no-clocks", action="store_true")
+    parser.add_argument("--scratch", type=Path, default=Path.home() / "scratch")
+    args = parser.parse_args()
+    cache = args.scratch / "readiness-cache"
+    base_dist, new_dist = dist_of(args.base, args.scratch), dist_of(args.new, args.scratch)
+    header = [f"main-merge readiness: main {git('rev-parse', args.base)[:10]} -> {git('rev-parse', args.new)[:10]}", f"dists {base_dist} {new_dist}"]
+    sized = {level: growers(size_table(base_dist, level, cache), size_table(new_dist, level, cache)) for level in args.levels}
+    clocks = None if args.no_clocks else slower(clock_rows(base_dist, cache), clock_rows(new_dist, cache))
+    text = "\n".join(report(header, sized, clocks)) + "\n"
+    if args.out:
+        args.out.write_text(text)
+    print(text)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
