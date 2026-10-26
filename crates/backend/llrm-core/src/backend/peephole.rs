@@ -24,7 +24,7 @@
 //!
 //! ```text
 //!  frame copies -> machinecp -> extensions -> copysink
-//!    -> postrasink -> storecombine -> pushed constants
+//!    -> postrasink -> forwarded reloads -> storecombine -> pushed constants
 //!    -> pushes, constants, commuted, transferred, high extracts, restored
 //!       copies, shuttles, overwritten, fused, fused calls, far loads
 //!    -> exact addresses -> addresses (LEA) -> stepped after compare
@@ -324,6 +324,7 @@ impl Peephole {
         // After the forwarding: a reload on the other path is gone, and the
         // store need not run there.
         let body = crate::backend::postrasink::latched(&crate::backend::postrasink::sunk(&body));
+        let body = forwarded_reloads(self.rules, &body);
         let body = storecombine::combined(&body);
         let body = pushed_constants(self.rules, &body);
         let body = far_loads(
@@ -372,6 +373,7 @@ impl Peephole {
             &compares_again(&tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))),
         );
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
+        let body = crate::backend::repbsf::marked(&body, &self.cpu);
         // Last: EBP zeroed above for each cell reading it 32 bits wide, where a
         // 32-bit address is the prefixed form of a 16-bit one. A native
         // one reads whole registers.
@@ -933,6 +935,15 @@ pub fn restored_copies(
     body: &LirBody,
 ) -> LirBody {
     peep::rewritten(rules.restored_copies, body, &Facts::new(body, None))
+}
+
+/// Drop the reload of a cell into the register that filled it
+/// (`peephole.peep`, `forwarded_reloads`).
+pub fn forwarded_reloads(
+    rules: &peep::Rules,
+    body: &LirBody,
+) -> LirBody {
+    peep::rewritten(rules.forwarded_reloads, body, &Facts::new(body, None))
 }
 
 /// Whether `register` in an operand at `addr` is the frame base, which the
