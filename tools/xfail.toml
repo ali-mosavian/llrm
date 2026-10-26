@@ -2,30 +2,11 @@
 # ids: "unit <crate>::<test>" (cargo lib test) and "run <program name>" (tests/run).
 
 [[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_a_raise_under_an_error_handler_resumes_after_its_statement"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_a_register_live_through_a_loop_is_parked_for_its_counters"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_affine_terms_of_one_counter_share_its_scaled_value"
-issue = 3075
-owner = "hir-branch-icmp-2211"
-date = "2026-10-23"
-[[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_element_stores_leave_descriptors_unread"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_nested_integer_division_keeps_each_dividend"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
+issue = 3994
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "stale expectation: 4f82e22e1 (MemorySSA queries ask the AA stack with TBAA) leaves a volatile store through a far pointer as the pin does, so the cells it may reach are read every trip; the memory-space model of #3994 is the tuning that restores the hoist"
 [[xfail]]
 id = "unit llrm-qb::test_hir_part2::test_dynamic_string_array_formal_uses_adjusted_near_descriptor_base"
 issue = 2848
@@ -33,53 +14,17 @@ owner = "funcattrs-port"
 date = "2026-10-27"
 why = "red on parity, not bisected; family: other, not yet put in a family; a regression unless triage says stale (qb-reds-parity.md)"
 [[xfail]]
-id = "unit llrm-qb::test_hir_part3::a_constant_wait_mask_goes_to_the_poll_as_it_is_and_a_variable_one_through_a_cell"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
-[[xfail]]
 id = "unit llrm-qb::test_hir_part3::a_poke_to_video_memory_leaves_the_loop_its_variables_and_segment"
-issue = 2848
+issue = 3994
 owner = "funcattrs-port"
 date = "2026-10-27"
-why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
-[[xfail]]
-id = "unit llrm-qb::test_hir_part3::a_port_poll_does_not_reload_a_cell_stored_before_it_at_either_target"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
+why = "stale expectation: 4f82e22e1 (MemorySSA queries ask the AA stack with TBAA) leaves a volatile store through a far pointer as the pin does, so the cells it may reach are read every trip; the memory-space model of #3994 is the tuning that restores the hoist"
 [[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_a_counted_loop_reads_an_unannotated_byref_once"
-issue = 2848
+issue = 3994
 owner = "funcattrs-port"
 date = "2026-10-27"
-why = "red on parity, not bisected; family: counted-loop strength reduction; a regression unless triage says stale (qb-reds-parity.md)"
-[[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_a_counter_stepped_before_other_work_is_tested_against_its_end"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: counted-loop strength reduction; a regression unless triage says stale (qb-reds-parity.md)"
-[[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_a_dividend_two_instructions_require_is_copied_into_its_register_once"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: constant divisor / dividend; a regression unless triage says stale (qb-reds-parity.md)"
-[[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_a_fixed_length_argument_is_assigned_back_after_the_call"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: other, not yet put in a family; a regression unless triage says stale (qb-reds-parity.md)"
-[[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_a_global_is_one_object_in_every_function"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
+why = "stale expectation: 4f82e22e1 (MemorySSA queries ask the AA stack with TBAA) leaves a volatile store through a far pointer as the pin does, so the cells it may reach are read every trip; the memory-space model of #3994 is the tuning that restores the hoist"
 [[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_a_masked_far_subscript_compiles"
 issue = 2848
@@ -87,53 +32,11 @@ owner = "funcattrs-port"
 date = "2026-10-27"
 why = "red on parity, not bisected; family: other, not yet put in a family; a regression unless triage says stale (qb-reds-parity.md)"
 [[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_a_masked_use_keeps_the_counter_and_its_end_test"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: counted-loop strength reduction; a regression unless triage says stale (qb-reds-parity.md)"
-[[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_a_negative_static_subscript_stays_16_bit"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: other, not yet put in a family; a regression unless triage says stale (qb-reds-parity.md)"
-[[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_a_poke_after_a_call_that_never_runs_def_seg_keeps_its_segment"
-issue = 2848
+issue = 3994
 owner = "funcattrs-port"
 date = "2026-10-27"
-why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
-[[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_a_poke_takes_its_segment_from_the_def_seg_before_it"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
-[[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_a_poke_through_a_counted_selector_leaves_invariant_globals_hoisted"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
-[[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_a_poke_to_video_memory_leaves_invariant_globals_hoisted"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
-[[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_loops_count_to_zero_once_their_other_counters_are_settled"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: counted-loop strength reduction; a regression unless triage says stale (qb-reds-parity.md)"
-[[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_the_first_dimension_is_not_rank_checked"
-issue = 2848
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "red on parity, not bisected; family: other, not yet put in a family; a regression unless triage says stale (qb-reds-parity.md)"
+why = "stale expectation: 4f82e22e1 (MemorySSA queries ask the AA stack with TBAA) leaves a volatile store through a far pointer as the pin does, so the cells it may reach are read every trip; the memory-space model of #3994 is the tuning that restores the hoist"
 [[xfail]]
 id = "run qcport-attract -O2"
 issue = 4325
@@ -145,3 +48,87 @@ id = "unit llrm-qb::a_power_of_a_variable_base_covers_the_whole_domain"
 issue = 2848
 owner = "alim"
 date = "2026-10-27"
+[[xfail]]
+id = "integration header_copy::test_a_register_only_a_guarded_loop_uses_is_saved_after_the_early_return"
+issue = 2194
+owner = "w5"
+date = "2026-11-02"
+why = "recchop shrink-wrap (same root as #4900): main saves 2 registers before the early return, tip 4 (the pin 4); static instrs m16 -Os main 44 / tip 49, -O2 48 / 51; m32 -O1 -ftree-ch pushes main 2 / tip 4"
+[[xfail]]
+id = "integration header_copy::test_sum_three_loop_is_five_instructions_by_default"
+issue = 4899
+owner = "w3"
+date = "2026-11-02"
+why = "LSR no longer counts to zero at flat i486 -O2 -m32: loop per trip main 5 instrs, tip 6, pin 6; the m16 bounds variant is w2's hoisted-invariant pressure (w13)"
+[[xfail]]
+id = "integration header_copy::test_an_early_return_through_a_spilled_sum_sets_up_nothing"
+issue = 4900
+owner = "w5"
+date = "2026-11-02"
+why = "queens place -O2 m16 -ftree-ch: main sets up nothing on the base case, tip pays the full prologue, the pin too; shrink-wrap family of recchop"
+[[xfail]]
+id = "integration header_copy::test_a_fixed_point_product_in_a_rotated_loop_is_still_narrowed"
+issue = 4902
+owner = "w5"
+date = "2026-11-02"
+why = "mandel.nib -O2 m16 -ftree-ch: main 0 shrd / 50 instrs, tip 3 shrd / 70; the ranges lost x's bound behind the copy (no clang pin: nib)"
+[[xfail]]
+id = "integration header_copy::test_a_counted_exits_number_lets_its_counter_step_in_place"
+issue = 4903
+owner = "w3"
+date = "2026-11-02"
+why = "mandel.nib -O2 m16 -ftree-ch: main ends on inc; jne, tip on inc; cmp 32 (same LSR count-to-zero loss as #4899)"
+[[xfail]]
+id = "integration demanded_bits::the_stages_of_a_bit_reversal_a_masked_byte_never_reads_are_not_computed"
+issue = 4919
+owner = "w4"
+date = "2026-11-02"
+why = "rev32(s)&255 at -O1/-O2: main 23 instrs, tip 31, pin 18; first bad cf87c539b8"
+[[xfail]]
+id = "integration loop_rotation::test_a_latch_that_ends_in_a_jump_elsewhere_is_not_priced_as_falling_through"
+issue = 4920
+owner = "w5"
+date = "2026-11-02"
+why = "x_binsearch -O2 m32: main 2 jumps/82 instrs, tip 6/140, pin 6/124; first bad 1e0ac1b1ff"
+[[xfail]]
+id = "integration coalesce_hot_copies::test_the_join_of_a_loop_variable_takes_its_register_not_the_registers_of_one_arm"
+issue = 4921
+owner = "w5"
+date = "2026-11-02"
+why = "binary search -O1: tip 2 jmp/26 instrs, main 1/26, pin 1/22; first bad a94491462c"
+[[xfail]]
+id = "integration division_nonnegative::tuned_for_size_the_division_stays_signed"
+issue = 4924
+owner = "w4"
+date = "2026-11-02"
+why = "(i*97)%211 -Os m32: main 23 instrs (one idiv), tip 35 (two div, spill), pin 38; first bad 2abaf530fa"
+[[xfail]]
+id = "integration greedy_inline::a_load_that_can_be_made_again_is_not_kept_in_a_register_at_the_cost_of_a_spill"
+issue = 4925
+owner = "w2"
+date = "2026-11-02"
+why = "sum_three.bas SUMTHREE -O2: main 56 instrs no spill, tip 74 with sub sp (no pin: BASIC); first bad 7ee16741c1"
+[[xfail]]
+id = "integration masked::test_a_masked_byte_widened_is_one_movzx_in_basic"
+issue = 4931
+owner = "w6"
+date = "2026-11-02"
+why = "main one movzx r32,r8; tip and bx,255 + movzx ebx,bx; first bad 26d6c9e9a3 (no pin: m16)"
+[[xfail]]
+id = "integration masked::test_a_masked_byte_widened_is_one_movzx_in_c"
+issue = 4931
+owner = "w6"
+date = "2026-11-02"
+why = "as masked basic"
+[[xfail]]
+id = "integration masked::test_a_masked_byte_widened_is_one_movzx_in_nib"
+issue = 4931
+owner = "w6"
+date = "2026-11-02"
+why = "as masked basic"
+[[xfail]]
+id = "integration flat_foreign::a_store_to_the_video_buffer_does_not_reload_a_variable"
+issue = 4932
+owner = "w6"
+date = "2026-11-02"
+why = "main forwards the stored 5 (1 instr fewer); tip and the pin reload g; first bad 26d6c9e9a3"

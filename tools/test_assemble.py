@@ -120,7 +120,9 @@ def test_the_scanners_of_an_alone_check_run_in_the_scratch_tree_not_the_runners(
     seen = []
     smoke = ps.parity_smoke_module()
     monkeypatch.setattr(smoke, "integration_failures", lambda targets, root=None, **_: seen.append(root) or set())
-    assert ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set()) == []
+    monkeypatch.setattr(smoke, "workspace_graph", lambda root: ({}, {}))
+    monkeypatch.setattr(smoke, "integration_map", lambda root=None: {})
+    assert ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), units=lambda _: set()) == []
     assert seen == [repo], seen
 
 
@@ -164,7 +166,7 @@ def test_a_pr_whose_only_issue_is_a_fmt_difference_is_kept(tmp_path):
     sh(repo, "commit", "-qm", "base")
     head = branch(repo, "pr", "emit.rs", "fn  f( ){}\n")
     sh(repo, "checkout", "-q", "main")
-    why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: {"emit.rs"}, scanners=lambda _: set())
+    why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: {"emit.rs"}, scanners=lambda _: set(), units=lambda _: set())
     assert why == [], why
 
 
@@ -237,3 +239,142 @@ def test_alone_checks_run_in_parallel_and_the_unfinished_at_the_cap_are_kept_unf
     assert took < 4, took
     assert kept == ["1", "3", "4", "5"], kept  # 5 never finished: unfiltered
     assert list(dropped) == ["2"], dropped
+
+
+def _clean_pr(tmp_path):
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    head = branch(repo, "pr", "x.rs", "fn x() {}\n")
+    sh(repo, "checkout", "-q", "main")
+    return repo, head
+
+
+def test_a_unit_test_that_fails_on_the_pr_and_passes_on_the_base_blames_the_pr_alone(tmp_path):
+    """Round 3 died on llrm-nib::test_pipeline::test_a_frame_larger_than_the_start_stack_adds_a_stack_segment and no PR was blamed: alone ran a build and scanners, no unit test."""
+    repo, head = _clean_pr(tmp_path)
+    red = "unit llrm-nib::test_pipeline::test_a_frame_larger_than_the_start_stack_adds_a_stack_segment"
+    why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda _: set(), units=lambda files: {red}, on_base=lambda wanted: set())
+    assert why and red in why[0], why
+
+
+def test_a_unit_test_the_base_fails_too_does_not_blame_the_pr(tmp_path):
+    repo, head = _clean_pr(tmp_path)
+    why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda _: set(), units=lambda files: {"unit llrm-nib::t"}, on_base=lambda wanted: {("llrm-nib", "t")})
+    assert why == [], why
+
+
+def test_a_batch_that_fails_with_no_pr_blamed_is_halved_until_the_pair_is_named():
+    """Two PRs that only fail together: no offender is named, the halves are tried, and the second of the pair is the one refused."""
+    landed, refused = [], []
+    prs = ["1", "2", "3", "4"]
+
+    def passes(group: list[str]) -> bool:
+        return not ({"2", "3"} <= set(landed) | set(group))
+
+    ps.batch(prs, passes, landed.append, refused.append, offenders=lambda group: [])
+    assert refused == ["3"] and landed == ["1", "2", "4"], (landed, refused)
+
+
+def test_a_slot_checkout_keeps_its_path_and_two_processes_never_share_a_slot(tmp_path):
+    """A fresh directory per PR made cargo rebuild everything (2-3 min a PR): the slot's checkout is reused; the filter and the warm-up each hold a slot of their own."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    work = tmp_path / "slots" / "alone-0" / "w"
+    ps._alone_checkout(work, "main", repo)
+    (work / "stray.txt").write_text("left by the last PR\n")
+    ps._alone_checkout(work, "main", repo)
+    assert work.is_dir() and not (work / "stray.txt").exists()
+    first, lock_a = ps._claim_slot(tmp_path / "slots", 2)
+    second, lock_b = ps._claim_slot(tmp_path / "slots", 2)
+    assert {first, second} == {0, 1}
+    lock_a.close()
+    lock_b.close()
+
+
+def test_the_alone_command_prints_the_surviving_numbers_on_stdout_and_nothing_else(monkeypatch, capsys):
+    """The scanners' `scanners: 2 targets, 0 red (tree ...)` reached stdout, the runner read it as PR numbers, and no batch formed for 70 minutes."""
+
+    def fake(numbers, heads, **_):
+        print("scanners: 2 targets, 0 red (tree abc123)")
+        return list(numbers), {}
+
+    monkeypatch.setattr(ps, "alone", fake)
+    monkeypatch.setattr(ps, "git", lambda *args, **_: "deadbeef")
+    monkeypatch.setattr(sys, "argv", ["parity_squash.py", "alone", "11", "12"])
+    assert ps.main() == 0
+    out = capsys.readouterr()
+    assert out.out.split() == ["11", "12"], out.out
+
+
+def alone_scratch(tmp_path):
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    head = branch(repo, "pr", "b.txt", "b\n")
+    sh(repo, "checkout", "-q", "main")
+    return repo, head
+
+
+def test_an_alone_check_runs_every_scanner_not_the_two_always_on(tmp_path, monkeypatch):
+    """Batch 18 died on llrm-mir's ratchet and selectiondag_registry in batches 16 and 17, and the alone pass passed their PRs: it ran docs_links and no_local_paths only."""
+    repo, head = alone_scratch(tmp_path)
+    seen = []
+    smoke = ps.parity_smoke_module()
+    monkeypatch.setattr(smoke, "integration_failures", lambda targets, root=None, **_: seen.extend(targets) or set())
+    monkeypatch.setattr(smoke, "workspace_graph", lambda root: ({}, {}))
+    monkeypatch.setattr(smoke, "integration_map", lambda root=None: {})
+    ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), units=lambda _: set())
+    assert {"selectiondag_registry", "no_todo", "docs_links"} <= set(seen), seen
+
+
+def test_an_alone_check_runs_the_source_scanning_lib_tests_of_a_crate_upstream_of_the_change(tmp_path, monkeypatch):
+    """#4871 added three id-keyed maps in llrm-transforms; the test that forbids them lives in llrm-mir, which transforms depends on, so a dependants run never ran it."""
+    repo, head = alone_scratch(tmp_path)
+    seen = []
+    smoke = ps.parity_smoke_module()
+    monkeypatch.setattr(smoke, "workspace_graph", lambda root: ({}, {}))
+    monkeypatch.setattr(smoke, "touched_packages", lambda files, packages, root: {"llrm-transforms"})
+    monkeypatch.setattr(smoke, "dependants_lib_failures", lambda packages, **_: seen.append(set(packages)) or set())
+    ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda f: set())
+    assert seen and "llrm-mir" in seen[0], seen
+
+
+def test_a_pr_that_makes_a_listed_unit_test_pass_is_refused_alone_and_so_is_a_listed_integration_target_it_reaches(tmp_path, monkeypatch):
+    """#4673 fixed a test without removing its xfail entry; alone dropped the `xpass` names and said clean, and batches 19 and 20 were refused for it."""
+    repo, head = alone_scratch(tmp_path)
+    smoke = ps.parity_smoke_module()
+    why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda f: set(), units=lambda _: {"xpass unit llrm-x::t_a"})
+    assert why and "xpass unit llrm-x::t_a" in why[0], why
+
+    seen = []
+    import xfail
+
+    monkeypatch.setattr(xfail, "load", lambda path=xfail.PATH: {"integration header_copy::t": {}})
+    monkeypatch.setattr(smoke, "workspace_graph", lambda root: ({}, {}))
+    monkeypatch.setattr(smoke, "touched_packages", lambda files, packages, root: {"llrm-core"})
+    monkeypatch.setattr(smoke, "integration_map", lambda root=None: {"header_copy": {"llrm-core"}})
+    monkeypatch.setattr(smoke, "integration_failures", lambda targets, root=None, **_: seen.extend(targets) or {"xpass integration header_copy::t"})
+    monkeypatch.setattr(ps, "_scanners_failing_on_head", lambda targets: set())  # the real one reads and writes ~/scratch/results/headfail
+    why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), units=lambda _: set())
+    assert "header_copy" in seen and why and "xpass integration header_copy::t" in why[0], (seen, why)
+
+
+def test_a_head_whose_tests_did_not_run_is_not_cached_as_its_failure_set(tmp_path):
+    """The head 277c2651b0 was cached as ["integration-did-not-run"]: its twelve real header_copy reds were never recorded, so batch 17 saw them as the batch's own."""
+    calls = []
+
+    def compute():
+        calls.append(1)
+        return {"integration-did-not-run"} if len(calls) == 1 else {"integration header_copy::t"}
+
+    assert ps.head_failures("abc", compute, cache=tmp_path) == {"integration-did-not-run"}
+    assert ps.head_failures("abc", compute, cache=tmp_path) == {"integration header_copy::t"}
+    assert ps.head_failures("abc", compute, cache=tmp_path) == {"integration header_copy::t"} and len(calls) == 2

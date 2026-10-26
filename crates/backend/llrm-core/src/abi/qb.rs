@@ -110,6 +110,9 @@ static _AUDITED_GRAPHICS_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(||
         // grview.asm: seven Pascal words; `void pascal B$VEW0()`.
         ("B$VIEW", 14),
         ("B$VEW0", 0),
+        // grwindow.asm: four R4 and a word; `void pascal B$WIN0()`.
+        ("B$WIND", 18),
+        ("B$WIN0", 0),
         ("B$FTAB", 2),
     ])
 });
@@ -126,6 +129,9 @@ static _AUDITED_STATEMENT_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|
         // dkopen.asm B$OPEN at 0224 returns with RETF 8 at 0252.
         ("B$OPEN", 8),
         ("B$SLEP", 4),
+        // QB45 rt/rlset.asm: parmW psdSource, parmD psdDest, parmW cbDest.
+        ("B$LSET", 8),
+        ("B$RSET", 8),
         ("B$SOND", 6),
         ("B$DRAW", 2),
         ("B$VARP", 4),
@@ -636,14 +642,14 @@ fn _contract_keeping(
             ),
         ));
     }
-    if name == "B$CSCN" && pushed == 6 {
+    if name == "B$CSCN" && (2..=18).contains(&pushed) && pushed % 2 == 0 {
         return Ok(returns(
-            6,
+            pushed,
             format!(
-                "{evidence} The audited one-mode SCREEN source form emits \
-                 two count-led parameter words plus the count; SYS.OBJ 0787..0792 \
-                 shows six bytes and the shared cleanup removes exactly that block. \
-                 Display, alias and error effects remain conservative."
+                "{evidence} SCREEN emits a count-led block like COLOR: a presence word (and the value when given) per \
+                 argument, then their count; this site supplies {pushed} bytes. SYS.OBJ 0787..0792 shows the \
+                 one-mode form as six bytes; the shared cleanup removes the whole block. Display, alias and error \
+                 effects remain conservative."
             ),
         ));
     }
@@ -998,6 +1004,14 @@ impl llrm_mir::target::Machine for LoweredTarget {
 
     fn size_costs(&self) -> llrm_mir::target::OperationCosts {
         self.machine.size_costs()
+    }
+
+    fn keeps_division(
+        &self,
+        bits: u32,
+        size: bool,
+    ) -> bool {
+        self.machine.keeps_division(bits, size)
     }
 
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {

@@ -1,9 +1,8 @@
 ' RUN: llrm-qb %s --dialect {qb45 | pds71 | vbdos} --runtime {qb45 | pds71 | vbdos} -O2 -march=i486 -S -o /dev/stdout
-' A loop storing one word that no one byte repeats is one rep stosw: the
-' loop cost a store and a branch a trip.
+' A loop storing one word that no one byte repeats stays a loop, as the pin's
+' does (no pattern fill off Darwin); `rep stosw` here was loopidioms' alone.
 ' CHECK-LABEL: FILLW proc
-' CHECK: rep stosw
-' CHECK-NOT: jne
+' CHECK-NOT: rep
 ' CHECK: FILLW endp
 DEFINT A-Z
 DECLARE SUB FillW (n)

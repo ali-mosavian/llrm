@@ -241,7 +241,6 @@ pub mod peephole;
 pub mod peepholeopt;
 pub mod phiconst;
 pub mod phielim;
-pub mod pointers;
 pub mod postings;
 pub mod postrasink;
 pub mod precse;
@@ -331,6 +330,7 @@ pub mod select {
 pub mod bodyfacts;
 pub mod regclass;
 pub mod registerinfo;
+pub mod repbsf;
 pub mod rewriter;
 pub mod sharedstores;
 pub mod spillplacement;

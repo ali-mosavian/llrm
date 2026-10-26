@@ -1649,6 +1649,30 @@ impl Selector<'_, '_, '_> {
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<(), Unselected> {
         let test = self.compare(m.inst, m.at, out)?;
+        self.set_condition(m, test, out)
+    }
+
+    /// SETcc of the opposite condition for a `not` of a comparison, as
+    /// DAGCombiner's `visitXOR` rewrites `(xor (setcc cc), 1)` to
+    /// `(setcc !cc)`.
+    pub fn hook_setcc_inverted(
+        &mut self,
+        m: &Match,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let Operand::Value(operand) = self.function.instruction(m.inst).operands[0] else { unreachable!("a value") };
+        let ValueDef::Instruction(compare) = self.function.value(operand).def else { unreachable!("a comparison") };
+        self.inverted = true;
+        let test = self.compare(compare, m.at, out)?;
+        self.set_condition(m, test, out)
+    }
+
+    fn set_condition(
+        &mut self,
+        m: &Match,
+        test: Test,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
         let result = Held { value: self.value(self.function.instruction(m.inst).result.expect("a result")), width: 1 };
         let at = m.at;
         let set = |code: &str, into: Held| {
