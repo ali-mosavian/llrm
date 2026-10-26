@@ -49,6 +49,22 @@ fn access_pointer(
     }
 }
 
+/// How many loads and stores of the loop go through `pointers`: what keeping
+/// them in a register saves, for ranking the promotions a register count
+/// allows.
+pub fn accesses_of(
+    unit: &passes::Unit,
+    ctx: &LoopCtx,
+    pointers: &[Operand],
+) -> usize {
+    ctx.loop_
+        .body
+        .iter()
+        .flat_map(|&at| unit.function.iter_block(cfg::block(at)))
+        .filter(|&inst| access_pointer(ctx, inst).is_some_and(|pointer| pointers.contains(&pointer)))
+        .count()
+}
+
 /// [`foreachMemoryAccess`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2011):
 /// the instructions of the loop's memory accesses (those still in it).
 fn memory_accesses(
