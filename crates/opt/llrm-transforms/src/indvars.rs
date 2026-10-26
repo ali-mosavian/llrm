@@ -113,6 +113,8 @@ use crate::dead;
 pub struct IndVars {
     /// Whether LFTR runs: on in the pipeline; `false` is `indvars<no-lftr>`.
     pub lftr: bool,
+    /// Whether code bytes are what counts (`-Os`, `-Oz`).
+    pub size: bool,
 }
 
 /// LFTR runs in the pipeline, as in the pin (`indvars<no-lftr>` is a pass
@@ -175,7 +177,7 @@ impl FunctionPass for IndVarsOnCreated {
             return PreservedAnalyses::all();
         }
         let _scope = crate::loopfilter::only(&headers);
-        IndVars { lftr: lftr_default() }.run(unit, analyses)
+        IndVars { lftr: lftr_default(), size: false }.run(unit, analyses)
     }
 }
 
@@ -226,6 +228,7 @@ impl FunctionPass for IndVars {
                 unit.function,
                 unit.declared,
                 &outer,
+                self.size,
             );
             settled(&mut session, &mut mark, unit, &outer, changed)
         };

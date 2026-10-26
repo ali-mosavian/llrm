@@ -129,6 +129,29 @@ static _AUDITED_STATEMENT_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|
         // dkopen.asm B$OPEN at 0224 returns with RETF 8 at 0252.
         ("B$OPEN", 8),
         ("B$SLEP", 4),
+        // Measured in BC output (QB 4.5, PDS 7.1, VBDOS): `call far B$STOP`
+        // and `call far B$REST`, nothing pushed.
+        ("B$STOP", 0),
+        ("B$REST", 0),
+        // QB45 rt/dkstmt.asm B$FILS(parmW fname): the pattern's descriptor.
+        ("B$FILS", 2),
+        // QB45 rt/osstmt.asm B$SSHL(parmSD sdExec): the command's descriptor.
+        ("B$SSHL", 2),
+        // QB45 rt/dvstmt.asm B$FATR(parmW channel, parmW fieldid).
+        ("B$FATR", 4),
+        // QB45 rt/osstmt.asm B$SENV(parmSD sdEnviron).
+        ("B$SENV", 2),
+        // QB45 rt/dkstmt.asm B$KILL(parmSD fname), B$NAME(parmSD oldname,
+        // parmSD newname); rt/directry.asm `pascal far B$MDIR(psdDirectory)`,
+        // B$CDIR and B$RDIR alike.
+        ("B$KILL", 2),
+        ("B$NAME", 4),
+        ("B$MDIR", 2),
+        ("B$CDIR", 2),
+        ("B$RDIR", 2),
+        // QB45 rt/rlset.asm: parmW psdSource, parmD psdDest, parmW cbDest.
+        ("B$LSET", 8),
+        ("B$RSET", 8),
         ("B$SOND", 6),
         ("B$DRAW", 2),
         ("B$VARP", 4),
@@ -639,14 +662,14 @@ fn _contract_keeping(
             ),
         ));
     }
-    if name == "B$CSCN" && pushed == 6 {
+    if name == "B$CSCN" && (2..=18).contains(&pushed) && pushed % 2 == 0 {
         return Ok(returns(
-            6,
+            pushed,
             format!(
-                "{evidence} The audited one-mode SCREEN source form emits \
-                 two count-led parameter words plus the count; SYS.OBJ 0787..0792 \
-                 shows six bytes and the shared cleanup removes exactly that block. \
-                 Display, alias and error effects remain conservative."
+                "{evidence} SCREEN emits a count-led block like COLOR: a presence word (and the value when given) per \
+                 argument, then their count; this site supplies {pushed} bytes. SYS.OBJ 0787..0792 shows the \
+                 one-mode form as six bytes; the shared cleanup removes the whole block. Display, alias and error \
+                 effects remain conservative."
             ),
         ));
     }

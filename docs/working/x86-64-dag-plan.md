@@ -81,3 +81,19 @@ selector gets none of it (it goes away). Order:
 
 Long double stays x87 (`f80`, as in the pin). Aggregates in `xmm` (a `{double,double}` return) join S3 after the
 integer aggregates (`rax:rdx`), which are D64-3.
+
+## QB at m64 (post-parity row, 2026-10-26)
+
+`llrm-qb --dialect qb45 --runtime qb45 -m64 --isel=dag -fobject-format=elf -O2` over `tests/run/qb` (136 programs, tree = parity + #4847):
+2 compile, 134 do not. Off the parity bar (m16 -Os and m32 gate main); unowned.
+
+| First error | Programs | Where |
+|---|---|---|
+| `@$stringN: a relocation past its data` | 84 | object writer, QB string constants; same with `--isel=old` |
+| `overlapping or pre-added relocations` | 24 | same writer |
+| `QB runtime routine whose stack cleanup the convention does not model` | 14 | `modelled()` in `dag_function.rs` |
+| `QB runtime routine with no contract` | 4 | `abi.contract` at m64 |
+| front-end rejections (`DEF SEG` non-constant, `ON` not a statement, `REDIM`, ...) | 8 | qbfront |
+
+NIBBLES.BAS and GORILLA.BAS stop in qbfront: `invalid HIR: pointer concat is not INTEGER:INTEGER to 16:16, or INTEGER:LONG to a flat pointer`.
+`fpext float to x86_fp80` is `CannotSelect("FpExtend")` while `sse2` is off at m64.

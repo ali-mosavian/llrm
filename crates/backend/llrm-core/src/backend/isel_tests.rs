@@ -2998,6 +2998,26 @@ fn test_a_float_load_compared_second_is_the_comparisons_operand() {
     );
 }
 
+/// The `not` of a comparison was a `setg`, a byte copy and `xor 1` (x_mergesort
+/// at m16 -Os, 3 bytes per use): it is the `setle` of the opposite condition.
+#[test]
+fn test_the_not_of_a_comparison_is_the_opposite_setcc() {
+    let text = "define i16 @f(i16 %a, i16 %b) addrspace(1) {
+  %c = icmp sgt i16 %a, %b
+  %n = xor i1 %c, true
+  %x = zext i1 %c to i16
+  %y = zext i1 %n to i16
+  %s = shl i16 %y, 1
+  %r = add i16 %x, %s
+  ret i16 %r
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|one| one.starts_with("setle ")), "{got:?}");
+    assert!(got.iter().any(|one| one.starts_with("setg ")), "{got:?}");
+    assert!(!got.iter().any(|one| one.starts_with("xor ")), "{got:?}");
+}
+
 /// A comparison a branch reads is made beside the branch: a store between
 /// them may change the cell, so the load stays where it was.
 #[test]
@@ -6341,7 +6361,7 @@ define i1 @f(i16 %x) addrspace(1) {
 }
 ";
     let got = listing(text, "f");
-    assert!(got.contains(&"mov ax, offset messages".to_owned()) && got.contains(&"add ax, 8".to_owned()), "{got:?}");
+    assert!(got.contains(&"mov ax, offset messages+8".to_owned()), "{got:?}");
 }
 
 /// A GEP off a segment's far pointer (`A000:0`, plus 1) was refused, "an
@@ -6956,4 +6976,26 @@ fn test_a_signed_compare_of_i1_orders_true_below_false() {
     ] {
         assert!(unsigned.contains(&branch(signed).as_str()), "icmp {signed} i1: {}", branch(signed));
     }
+}
+
+/// The far address of a near global plus a constant, passed twice in one
+/// block, shared one `mov si, offset x` and made each argument `lea`/`add`
+/// from it, a register held across both calls (16 instructions for 11, m16
+/// -Os nestud and C `use(&X[2]); use(&X[3])`). Each is `push offset x+n`.
+#[test]
+fn test_a_far_global_plus_a_constant_is_passed_as_a_symbol_and_offset() {
+    let text = "@x = external addrspace(0) global [0 x i8]
+
+declare void @use(ptr addrspace(1), i16) addrspace(1)
+
+define void @f() addrspace(1) {
+  call addrspace(1) void @use(ptr addrspace(1) addrspacecast (ptr getelementptr inbounds (i8, ptr @x, i16 4) to ptr addrspace(1)), i16 2)
+  call addrspace(1) void @use(ptr addrspace(1) addrspacecast (ptr getelementptr inbounds (i8, ptr @x, i16 6) to ptr addrspace(1)), i16 2)
+  ret void
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line == "push offset x+4"), "{got:?}");
+    assert!(got.iter().any(|line| line == "push offset x+6"), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("lea") || line.starts_with("add si")), "{got:?}");
 }
