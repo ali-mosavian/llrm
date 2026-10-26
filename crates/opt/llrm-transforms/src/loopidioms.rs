@@ -771,6 +771,25 @@ pub(crate) fn variable_copy_pays(
     trip_cost(context, layout, function, callees, blocks.iter(), costs, true) > costs.copy + costs.copy_variable
 }
 
+/// DEVIATE, for `loopidiom`: whether the fills for the stores of the loop over
+/// `blocks` are fewer code bytes than the loop. A loop of one store is always
+/// filled; of several, each is its own `rep stos` with ES set around it.
+pub(crate) fn fills_pay(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    callees: &Callees,
+    blocks: &[BlockId],
+    costs: &OperationCosts,
+) -> bool {
+    let stores = blocks
+        .iter()
+        .flat_map(|&block| operations(function, block))
+        .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Store { .. }))
+        .count() as i64;
+    stores < 2 || trip_cost(context, layout, function, callees, blocks.iter(), costs, true) > stores * costs.fill
+}
+
 /// What a copy of `length` bytes costs: the loads and stores isel expands it to
 /// (`MEMCPY_MOVES` of them, a dword each, the odd bytes by their set bits),
 /// else the string instruction.

@@ -230,6 +230,21 @@ impl LoopIdiomRecognize {
         if run.env.layout.carries(pointer_space(run.context, run.function, args.dest_ptr)) {
             return false;
         }
+        // DEVIATE: at -Os a loop of several stores stays one when a fill for
+        // each store is more bytes than the loop (lru.c: four stores a trip
+        // over three trips, five fills 33 bytes over it). Exit: none.
+        if let Some((costs, callees)) = run.bytes
+            && !crate::loopidioms::fills_pay(
+                run.context,
+                run.env.layout,
+                run.function,
+                callees,
+                &run.cur_loop.get_blocks(),
+                costs,
+            )
+        {
+            return false;
+        }
         // The trip count of the loop and the base pointer of the addrec SCEV
         // is guaranteed to be loop invariant, which means that it should
         // dominate the header. This allows us to insert code for it in the
