@@ -147,6 +147,29 @@ def test_a_pr_that_leaves_generated_docs_stale_alone_is_refused_but_not_for_what
     assert ps.alone_refusals(head, docs=lambda root: {"docs/a.md"}, docs_on_base=lambda: {"docs/a.md"}, **kw) == []
 
 
+def test_an_alone_check_that_dies_with_system_exit_is_a_refusal_not_a_silent_pass():
+    """A thread drops SystemExit without a word: #5008 got no verdict, was kept as checked (`4 checked, 0 dropped`) and its unreachable doc broke the 21:53 batch."""
+    def refuse(head, base):
+        if head == "bad":
+            raise SystemExit("no failure set is cached for the head")
+        return []
+
+    kept, dropped = ps.alone(["1", "2"], {"1": "ok", "2": "bad"}, refusals=refuse, jobs=2)
+    assert kept == ["1"] and "alone check crashed: SystemExit" in dropped["2"], (kept, dropped)
+
+
+def test_a_batch_scanner_refusal_can_name_the_markdown_each_pr_adds(tmp_path):
+    """#5008 added docs/working/combine-forward-load-rows.md and nothing linked it: the refusal said `docs_links` and named no PR or doc."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "readme.md").write_text("r\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    page = branch(repo, "page", "new.md", "x\n")
+    other = branch(repo, "other", "src.rs", "y\n")
+    assert ps.batch_blame({"5008": page, "5007": other}, "main", repo) == ["  #5008: A new.md"]
+
+
 def test_two_prs_adding_a_test_of_one_name_do_not_share_a_batch(tmp_path):
     """#4678 and #4680 added the same test in different places: no conflict, so both joined, and the batch failed 'defined multiple times'."""
     repo = tmp_path / "repo"
