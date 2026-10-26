@@ -365,3 +365,16 @@ def test_a_pr_that_makes_a_listed_unit_test_pass_is_refused_alone_and_so_is_a_li
     monkeypatch.setattr(ps, "_scanners_failing_on_head", lambda targets: set())  # the real one reads and writes ~/scratch/results/headfail
     why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), units=lambda _: set())
     assert "header_copy" in seen and why and "xpass integration header_copy::t" in why[0], (seen, why)
+
+
+def test_a_head_whose_tests_did_not_run_is_not_cached_as_its_failure_set(tmp_path):
+    """The head 277c2651b0 was cached as ["integration-did-not-run"]: its twelve real header_copy reds were never recorded, so batch 17 saw them as the batch's own."""
+    calls = []
+
+    def compute():
+        calls.append(1)
+        return {"integration-did-not-run"} if len(calls) == 1 else {"integration header_copy::t"}
+
+    assert ps.head_failures("abc", compute, cache=tmp_path) == {"integration-did-not-run"}
+    assert ps.head_failures("abc", compute, cache=tmp_path) == {"integration header_copy::t"}
+    assert ps.head_failures("abc", compute, cache=tmp_path) == {"integration header_copy::t"} and len(calls) == 2

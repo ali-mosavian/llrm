@@ -1542,6 +1542,9 @@ def head_failures(sha: str, compute=None, cache: Path = HEAD_FAILURES) -> set[st
     if compute is None:
         raise SystemExit(f"no failure set is cached for the head {sha[:9]}: check the head out, build its binaries, set PARITY_BIN to them and run `tools/parity_squash.py head-failures`")
     failed = compute()
+    # a head whose tests did not run says nothing about them: stored, it excused none of the head's real reds for good (277c2651b0, header_copy: batch 17)
+    if any(name.endswith("did-not-run") for name in failed):
+        return failed
     cache.mkdir(parents=True, exist_ok=True)
     file.write_text(json.dumps(sorted(failed)))
     return failed
