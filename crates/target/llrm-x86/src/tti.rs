@@ -488,6 +488,12 @@ impl Tti for X86 {
         150
     }
 
+    /// x87 moves each operand through the register stack (`qmove`: the model
+    /// tied where the code grew 2 bytes).
+    fn float_code_size_percent(&self) -> i64 {
+        if self.real_mode.is_some() { 200 } else { 100 }
+    }
+
     fn is_type_legal(
         &self,
         ty: Ty,
