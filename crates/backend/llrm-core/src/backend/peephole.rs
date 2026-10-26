@@ -978,6 +978,7 @@ pub fn unread_spill_stores(body: &LirBody) -> LirBody {
         let what = one.what.as_ref()?;
         let plain = what.op == Operation::Move
             && what.name.as_deref() == Some("mov")
+            && one.spill_store
             && one.group.is_none()
             && one.requires.is_empty()
             && one.delivers.is_empty()
