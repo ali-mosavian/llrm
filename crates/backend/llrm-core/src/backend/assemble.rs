@@ -181,6 +181,7 @@ pub fn assembled_by(
     let mut shared_registers = None;
     let mut data = Vec::new();
     let mut far_data = Vec::new();
+    let mut sectioned: IndexMap<String, Vec<masm::Datum>> = IndexMap::default();
     let mut data_publics = Vec::new();
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
     let classes = Rc::new(RegisterClasses::of(arch));
@@ -218,7 +219,11 @@ pub fn assembled_by(
                 // A far or huge object lies outside DGROUP, in a segment of the
                 // module's own.
                 let datums = globals::datums(module, id, &names)?;
-                if matches!(global.address_space, FAR_SPACE | HUGE_SPACE) {
+                if let Some(section) = module.sections.get(name) {
+                    // `#pragma data_seg`: a segment of the program's own
+                    // naming.
+                    sectioned.entry(section.clone()).or_default().extend(datums);
+                } else if matches!(global.address_space, FAR_SPACE | HUGE_SPACE) {
                     far_data.extend(datums);
                 } else {
                     data.extend(datums);
@@ -454,6 +459,10 @@ pub fn assembled_by(
     let debug = timed("debug info", || {
         crate::backend::debuginfo::described(module, &names, llrm_object::debug::Producer::Native, arch)
     })?;
+    let code_segments: std::collections::BTreeMap<String, String> = procedures
+        .iter()
+        .filter_map(|one| module.sections.get(&one.name).map(|section| (one.name.clone(), section.clone())))
+        .collect();
     let has_far = !far_data.is_empty();
     let far_segment = format!("{}_FARDATA", code.strip_suffix("_TEXT").unwrap_or(code));
     Ok(masm::Module {
@@ -464,12 +473,14 @@ pub fn assembled_by(
         publics: procedures.iter().filter(|one| one.public).map(|one| one.name.clone()).chain(data_publics).collect(),
         data: std::iter::once(("_DATA".to_owned(), data))
             .chain(has_far.then(|| (far_segment.clone(), far_data)))
+            .chain(sectioned)
             .collect(),
         procedures,
         private: BTreeSet::from_iter(has_far.then(|| far_segment.clone())),
         requests: BTreeSet::new(),
         debug,
         far_bss: BTreeSet::new(),
+        code_segments,
         stack: 0,
         object: arch.object(),
         padding: masm::Padding { function: arch.pref_function_alignment(), nop: arch.max_nop_bytes() },

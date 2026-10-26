@@ -1090,6 +1090,7 @@ pub fn assembled(
         private: object.private.clone(),
         requests: object.requests.clone(),
         far_bss: BTreeSet::new(),
+        code_segments: Default::default(),
         debug,
         stack: 0,
         object: options.arch.object(),

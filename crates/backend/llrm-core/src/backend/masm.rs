@@ -338,6 +338,9 @@ pub struct Module {
     /// Of those, the segments of uninitialised data: class FAR_BSS, which an
     /// image does not store.
     pub far_bss: BTreeSet<String>,
+    /// The code segment of a procedure that is not in `code` (`#pragma
+    /// code_seg`), by its name.
+    pub code_segments: std::collections::BTreeMap<String, String>,
     /// Externs nothing references, declared so LINK pulls in their module.
     pub requests: BTreeSet<String>,
     /// `-g`'s debug information.
@@ -2980,6 +2983,7 @@ mod tests {
             procedures: Vec::new(),
             private: BTreeSet::new(),
             far_bss: BTreeSet::new(),
+            code_segments: Default::default(),
             padding: Default::default(),
             requests: BTreeSet::new(),
             debug: None,

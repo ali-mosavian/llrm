@@ -59,5 +59,6 @@ The i8086 patch (the fork branch `llrm/clang-i8086`, all in-tree, no patch files
 - `__emit__(bytes...)` is a builtin that puts the bytes in the code stream.
 - Memory models: `-mcmodel=small|medium|compact|large|huge`. Code is far (`P1`) in medium, large and huge; data pointers are far by default in compact, large and huge, and `__near__` overrides. `ptrdiff_t` is `long` with far data. Default: medium.
 - A huge object lives in a far segment (address space 1); the difference of two huge pointers is `llrm.ia16.ptrdiff`.
-- Not done: `#pragma aux` and segment pragmas (nothing in QCport or the examples uses them; Watcom's headers only name inline-asm functions that the examples do not call), and an array subscript on a huge array indexes by 16 bits, so a huge array past 64K needs a pointer.
+- Pragmas: `#pragma aux NAME "LINK"` is the link name of NAME (an asm label, `\01LINK`, which llrm-llc does not decorate); `data_seg`, `code_seg`, `bss_seg`, `const_seg` take Watcom's `("NAME", "CLASS")` and give globals and functions `section "NAME"`, which llrm-llc places in a data or code segment of that name. The register and inline-code forms of `aux` are ignored.
+- Not done: an array subscript on a huge array indexes by 16 bits, so a huge array past 64K needs a pointer; MIR prints no `section`.
 - Tests: `clang/test/CodeGen/i8086-*.c` in the fork (no `llvm-lit` in the local build; run their RUN lines by hand), `crates/frontends/llrm-cc/tests/{abi,models}.rs` here.

@@ -634,3 +634,34 @@ fn variables_keep_the_leading_underscore_under_the_watcom_abi() {
         "{listing}"
     );
 }
+
+/// An asm label (`\01NAME`, what `#pragma aux NAME "NAME"` becomes) was
+/// decorated like any other symbol (`_NAME`), so a runtime routine spelled
+/// `B$SINCOS` was an undefined reference.
+#[test]
+fn an_asm_label_is_the_symbol_as_written() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                declare void @\"\\01B$SINCOS\"()\n\
+                define void @main() {\n  call void @\"\\01B$SINCOS\"()\n  ret void\n}\n";
+    let flags = flags(&["-fobject-format=omf"]);
+    let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("B$SINCOS") && !listing.contains("_B$SINCOS"), "{listing}");
+}
+
+/// `section "NAME"` (`#pragma data_seg`, `#pragma code_seg`) stopped the import
+/// ("sections are outside MIR's subset"), then would have put the object in
+/// `_DATA` and the module's own code segment.
+#[test]
+fn a_section_names_the_segment_of_a_variable_and_a_function() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                @in_xib = global i32 3, section \"XIB\", align 4\n\
+                define i32 @hot() section \"HOT_TEXT\" {\n  %1 = load i32, ptr @in_xib\n  ret i32 %1\n}\n\
+                define i32 @main() {\n  %1 = call i32 @hot()\n  ret i32 %1\n}\n";
+    let flags = flags(&["-fobject-format=omf"]);
+    let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
+    assert!(built.data.iter().any(|(name, items)| name == "XIB" && !items.is_empty()), "{:?}", built.data);
+    assert_eq!(built.code_segments.values().collect::<Vec<_>>(), ["HOT_TEXT"], "{:?}", built.code_segments);
+}

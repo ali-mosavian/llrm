@@ -68,3 +68,32 @@ fn the_borland_probes_compile_in_every_model() {
         }
     }
 }
+
+/// `#pragma aux NAME "LINK"` and the segment pragmas were ignored: the
+/// runtime's `B$` routines were `_name` references and every function and datum
+/// went to the module's own segments.
+#[test]
+fn watcom_pragmas_name_symbols_and_segments() {
+    if std::env::var_os("LLRM_CLANG_M16").is_none() {
+        eprintln!("skipped: LLRM_CLANG_M16 names no i8086 clang");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let out = std::env::temp_dir().join(format!("llrm-cc-pragmas-{}.obj", std::process::id()));
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_16-dos")
+        .env("LLRM_LLC", root.join("target/release/llrm-llc"))
+        .args(["-c", "-O1", "-o"])
+        .arg(&out)
+        .arg(root.join("tests/cc/pragmas/pragmas.c"))
+        .output()
+        .unwrap();
+    let object = std::fs::read(&out).unwrap_or_default();
+    let _ = std::fs::remove_file(&out);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let has = |text: &str| object.windows(text.len()).any(|window| window == text.as_bytes());
+    assert!(has("B$SINCOS") && !has("_B$SINCOS"), "link name");
+    assert!(has("CNT$") && !has("_CNT$"), "link name of a variable");
+    assert!(has("HOT_TEXT"), "code_seg");
+    assert!(has("XIB"), "data_seg");
+}

@@ -167,7 +167,17 @@ fn decorate(
         else {
             continue;
         };
-        if let Some(spelled) = convention.decorated(format, name) {
+        // LLVM's `\01` marker (an asm label, `#pragma aux NAME "LINK"`): the
+        // symbol as written.
+        let before = name.to_owned();
+        let spelled = match name.strip_prefix('\u{1}') {
+            Some(exact) => Some(exact.to_owned()),
+            None => convention.decorated(format, name),
+        };
+        if let Some(spelled) = spelled {
+            if let Some(section) = module.sections.remove(&before) {
+                module.sections.insert(spelled.clone(), section);
+            }
             global.name = Some(spelled).into();
         }
     }
