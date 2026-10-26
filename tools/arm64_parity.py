@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""arm64 Mac parity table: pinned clang vs llrm-arm64-llc, per program and level.
+"""arm64 Mac parity table: the pinned clang's optimizer+backend vs llrm-arm64-llc on one identical IR.
 
   tools/arm64_parity.py [-O O2,Os] [--runs N] [--md5] FILE.c|FILE.ll ...
 
-Columns per level: clang (whole pipeline), pin-llc (clang IR through the pin's llc),
-ours (the same IR through llrm-arm64-llc). Cells are text bytes/instructions; run
-time is min of N runs. pin-llc vs ours is the backend gap; clang vs pin-llc is
-the noise of the instrument (should be 0). For .ll inputs clang is `clang -x ir`, i.e. the\npin optimizer on the given IR (llrm-llc optimizes; the pin llc alone does not); a sibling .out is the expected output.
+A .c is made one unoptimized .ll (scalar: -fno-vectorize -fno-slp-vectorize, until vector MIR exists);
+a .ll is used as given. Both sides start from it: `clang -O<n> -x ir` and llrm-arm64-llc.
+Cells are __text bytes/instructions; ours/clang is the headline. Run time is the min of N runs
+and means nothing near the process-start floor. A sibling .out/.status is the expected output.
 Env: LLRM_PIN_ANY=1 (dry run with a non-pin clang), LLRM_PIN_BUILD (dir with bin/clang, bin/llc), LLRM_BIN (llrm binaries).
 """
 import argparse, hashlib, os, re, subprocess, sys, tempfile, time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-PIN = Path(os.environ.get("LLRM_PIN_BUILD", Path.home() / "work/other/llvm-project/build"))
+PIN = Path(os.environ.get("LLRM_PIN_BUILD", Path.home() / "work/other/llvm-pin/build"))
 BIN = Path(os.environ.get("LLRM_BIN", REPO / "target/release"))
 TARGET = ["-target", "arm64-apple-macos"]
-FRONT = ["-ffp-contract=off", "-ffreestanding"]
+FRONT = ["-ffp-contract=off", "-ffreestanding", "-fno-vectorize", "-fno-slp-vectorize"]  # "scalar clang": vector MIR is deferred
 
 
 def sh(cmd, **kw):
@@ -55,25 +55,19 @@ def run(exe, runs):
 
 
 def build_variants(src, lvl, tmp, ver):
-    """Returns {variant: obj path or error string}."""
+    """Returns {variant: obj path or error string}. One unoptimized .ll feeds both sides."""
     name = f"{src.stem}.{lvl}"
     v = {}
     if src.suffix == ".c":
-        o = tmp / f"{name}.clang.o"
-        r = sh([str(PIN / "bin/clang"), f"-{lvl}", *TARGET, *FRONT, "-c", str(src), "-o", str(o)])
-        v["clang"] = o if r.returncode == 0 else "clang: " + r.stderr[:200]
         ll = tmp / f"{name}.ll"
-        r = sh([str(PIN / "bin/clang"), f"-{lvl}", *TARGET, *FRONT, "-S", "-emit-llvm", str(src), "-o", str(ll)])
+        r = sh([str(PIN / "bin/clang"), f"-{lvl}", *TARGET, *FRONT, "-Xclang", "-disable-llvm-passes", "-S", "-emit-llvm", str(src), "-o", str(ll)])
         if r.returncode:
-            return v | {"pin-llc": "emit-llvm: " + r.stderr[:200], "ours": "emit-llvm"}
-    else:  # IR in: clang's optimizer on it is the baseline; the pin's llc alone does not optimize
+            return {"clang": "emit-llvm: " + r.stderr[:200], "ours": "emit-llvm"}
+    else:
         ll = src
-        o = tmp / f"{name}.clang.o"
-        r = sh([str(PIN / "bin/clang"), f"-{lvl}", *TARGET, "-Wno-override-module", "-x", "ir", "-c", str(src), "-o", str(o)])
-        v["clang"] = o if r.returncode == 0 else "clang: " + r.stderr[:200]
-    o = tmp / f"{name}.pin.o"
-    r = sh([str(PIN / "bin/llc"), "-O2", "-mtriple=arm64-apple-macos", "-filetype=obj", str(ll), "-o", str(o)])
-    v["pin-llc"] = o if r.returncode == 0 else "llc: " + r.stderr[:200]
+    o = tmp / f"{name}.clang.o"
+    r = sh([str(PIN / "bin/clang"), f"-{lvl}", *TARGET, "-Wno-override-module", "-x", "ir", "-c", str(ll), "-o", str(o)])
+    v["clang"] = o if r.returncode == 0 else "clang: " + r.stderr[:200]
     o = tmp / f"{name}.ours.o"
     r = sh([str(BIN / "llrm-arm64-llc"), "-o", str(o), str(ll)])
     v["ours"] = o if r.returncode == 0 else "ours: " + (r.stderr or r.stdout)[:200]
@@ -96,8 +90,8 @@ def main():
     (tmp / "empty.c").write_text("int main(void){return 0;}")
     sh([str(PIN / "bin/clang"), *TARGET, "-isysroot", FRONT[-1], str(tmp / "empty.c"), "-o", str(tmp / "empty")])
     print(f"process-start floor (empty main, min of {a.runs}): {run(tmp / 'empty', a.runs)[0]*1000:.1f} ms; run times near it are noise")
-    cols = ["clang", "pin-llc", "ours"]
-    print(f"{'prog':<14}{'lvl':<4}" + "".join(f"{c:>16}" for c in cols) + f"{'ours/clang':>11}  run(ms) clang/pin/ours  result")
+    cols = ["clang", "ours"]
+    print(f"{'prog':<14}{'lvl':<4}" + "".join(f"{c:>16}" for c in cols) + f"{'ours/clang':>11}  run(ms) clang/ours  result")
     worse = 0
     for f in a.files:
         lv = [l for l in a.O.split(",") if l == "O2" or Path(f).suffix == ".c"]
@@ -127,12 +121,12 @@ def main():
                 if a.md5:
                     print(f"  md5(.o) {exe.name} {hashlib.md5(o.read_bytes()).hexdigest()}", file=sys.stderr)
             ratio = "-"
-            base = v.get("clang") if isinstance(v.get("clang"), Path) else v.get("pin-llc")
+            base = v.get("clang")
             if isinstance(base, Path) and isinstance(v.get("ours"), Path):
                 pb, ob = text_size(base), text_size(v["ours"])
                 ratio = f"{ob/pb:.3f}"
                 worse += ob > pb
-            ref = outs.get("clang") or outs.get("pin-llc")
+            ref = outs.get("clang")
             exp = src.with_suffix(".out")
             if exp.exists():  # the recorded output beats any build's  # .ll with a recorded expectation
                 st = src.with_suffix(".status")
