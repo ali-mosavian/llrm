@@ -450,6 +450,7 @@ intrinsics! {
     UshlSat => "ushl.sat",
     SmulFix => "smul.fix",
     SmulFixSat => "smul.fix.sat",
+    SdivFix => "sdiv.fix",
     UmulFix => "umul.fix",
     UmulFixSat => "umul.fix.sat",
     Pow => "pow",

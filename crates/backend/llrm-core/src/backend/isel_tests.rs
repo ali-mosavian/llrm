@@ -2998,6 +2998,26 @@ fn test_a_float_load_compared_second_is_the_comparisons_operand() {
     );
 }
 
+/// The `not` of a comparison was a `setg`, a byte copy and `xor 1` (x_mergesort
+/// at m16 -Os, 3 bytes per use): it is the `setle` of the opposite condition.
+#[test]
+fn test_the_not_of_a_comparison_is_the_opposite_setcc() {
+    let text = "define i16 @f(i16 %a, i16 %b) addrspace(1) {
+  %c = icmp sgt i16 %a, %b
+  %n = xor i1 %c, true
+  %x = zext i1 %c to i16
+  %y = zext i1 %n to i16
+  %s = shl i16 %y, 1
+  %r = add i16 %x, %s
+  ret i16 %r
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|one| one.starts_with("setle ")), "{got:?}");
+    assert!(got.iter().any(|one| one.starts_with("setg ")), "{got:?}");
+    assert!(!got.iter().any(|one| one.starts_with("xor ")), "{got:?}");
+}
+
 /// A comparison a branch reads is made beside the branch: a store between
 /// them may change the cell, so the load stays where it was.
 #[test]
