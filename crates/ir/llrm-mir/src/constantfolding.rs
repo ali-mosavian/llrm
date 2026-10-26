@@ -2340,7 +2340,10 @@ fn exact_rint(
     operand: ConstantId,
     caller: Option<&Function>,
 ) -> Option<ConstantId> {
-    if matches!(context.types.get(ty_of(context, operand)), Type::Float(FloatKind::X86Fp80)) {
+    if matches!(
+        context.types.get(ty_of(context, operand)),
+        Type::Float(FloatKind::X86Fp80)
+    ) {
         return x87_rint(context, ty, operand, caller);
     }
     let value = match (&context.get(operand).kind, context.types.get(ty_of(context, operand))) {
@@ -2373,9 +2376,15 @@ fn x87_rint(
         return None;
     }
     let nearest = caller.is_some_and(|caller| {
-        caller.attrs.iter().any(|attr| {
-            matches!(attr, Attribute::Str(name, Some(value)) if name == FP_EVAL && value == FP_EVAL_EXTENDED)
-        })
+        caller
+            .attrs
+            .iter()
+            .any(
+                |attr| matches!(
+                    attr,
+                    Attribute::Str(name, Some(value)) if name == FP_EVAL && value == FP_EVAL_EXTENDED
+                ),
+            )
     });
     if !nearest {
         let mut whole = number;

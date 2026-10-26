@@ -263,9 +263,10 @@ fn the_builder_folds_float_casts_of_numbers() {
     let negative = constant(&mut b, double, (-1.0f64).to_bits());
     let unsigned = b.cast(CastOp::FPToUI, negative, i8, "g");
     assert_eq!(bits_of(&b, unsigned), Some(u64::MAX));
-    // An x87 constant and a NaN stay instructions.
+    // An x87 constant folds in its own format; a NaN stays an instruction.
     let extended = constant(&mut b, x87, 2.0f64.to_bits());
-    assert!(matches!(b.cast(CastOp::FPTrunc, extended, double, "h"), Operand::Value(_)));
+    let narrowed = b.cast(CastOp::FPTrunc, extended, double, "h");
+    assert_eq!(bits_of(&b, narrowed), Some(2.0f64.to_bits()));
     let nan = constant(&mut b, double, f64::NAN.to_bits());
     assert!(matches!(b.cast(CastOp::FPTrunc, nan, float, "i"), Operand::Value(_)));
     let zero = b.int(32, 0);

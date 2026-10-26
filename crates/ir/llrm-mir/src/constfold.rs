@@ -30,9 +30,9 @@
 use std::cmp::Ordering;
 
 use crate::apfloat::{CmpResult, IEEE_DOUBLE, IEEE_SINGLE};
+use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, mask, signed};
 use crate::fp80;
 use crate::fpclass::RoundingMode;
-use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, mask, signed};
 use crate::module::{GlobalKind, GlobalValue, Linkage, UnnamedAddr};
 use crate::opcode::{BinaryOp, CastOp, Flags, FloatPredicate, IntPredicate};
 use crate::types::{FloatKind, Type, TypeId};
@@ -261,7 +261,10 @@ fn is_x87(
     context: &Context,
     id: ConstantId,
 ) -> bool {
-    matches!(context.types.get(context.get(id).ty), Type::Float(FloatKind::X86Fp80))
+    matches!(
+        context.types.get(context.get(id).ty),
+        Type::Float(FloatKind::X86Fp80)
+    )
 }
 
 /// A floating constant's value as a double and its kind: `Float` bits are IEEE
@@ -353,9 +356,8 @@ pub fn cast(
             }
             let semantics = if kind == FloatKind::Float { IEEE_SINGLE } else { IEEE_DOUBLE };
             number.convert(semantics, RoundingMode::NearestTiesToEven);
-            (number.is_finite()).then(|| {
-                context.constant(Constant { ty: to, kind: ConstantKind::Float(number.to_bits() as u64) })
-            })
+            (number.is_finite())
+                .then(|| context.constant(Constant { ty: to, kind: ConstantKind::Float(number.to_bits() as u64) }))
         }
         (CastOp::FPToSI | CastOp::FPToUI, Type::Int(width)) if width <= 127 && is_x87(context, c) => {
             let number = fp80::value(&context.get(c).kind)?;

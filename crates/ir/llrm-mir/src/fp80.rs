@@ -1,9 +1,9 @@
 //! `x86_fp80` constants: how MIR holds a value of the x87 extended format and
 //! the arithmetic on it, in `APFloat`'s x87 semantics (64-bit significand).
 //!
-//! A value some double holds exactly is `ConstantKind::Float` with that double's
-//! bits; any other is `ConstantKind::Float80` with the 80 bits. One value has
-//! one form, so equal values are one interned constant.
+//! A value some double holds exactly is `ConstantKind::Float` with that
+//! double's bits; any other is `ConstantKind::Float80` with the 80 bits. One
+//! value has one form, so equal values are one interned constant.
 //!
 //! # Example
 //! 0.00005 times 10000 is `Float80(0x3ffe_ffff_ffff_ffff_ffff…)`, just under
@@ -39,21 +39,25 @@ pub fn to_double_bits(bits: u128) -> u64 {
     one.to_bits() as u64
 }
 
+/// The kind that holds `number`: the double's bits when a double holds it
+/// exactly, else all 80.
+pub fn kind(number: &ApFloat) -> ConstantKind {
+    let mut narrow = *number;
+    let (_, lost) = narrow.convert(IEEE_DOUBLE, RoundingMode::NearestTiesToEven);
+    if lost || number.is_nan() {
+        ConstantKind::Float80(number.to_bits())
+    } else {
+        ConstantKind::Float(narrow.to_bits() as u64)
+    }
+}
+
 /// The constant of type `ty` (an `x86_fp80`) holding `number`.
 pub fn constant(
     context: &Context,
     ty: TypeId,
     number: &ApFloat,
 ) -> ConstantId {
-    let bits = number.to_bits();
-    let mut narrow = *number;
-    let (_, lost) = narrow.convert(IEEE_DOUBLE, RoundingMode::NearestTiesToEven);
-    let kind = if lost || number.is_nan() {
-        ConstantKind::Float80(bits)
-    } else {
-        ConstantKind::Float(narrow.to_bits() as u64)
-    };
-    context.constant(Constant { ty, kind })
+    context.constant(Constant { ty, kind: kind(number) })
 }
 
 /// `left op right` in the x87's format, rounding to nearest even as the
