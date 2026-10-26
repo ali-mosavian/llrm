@@ -28,7 +28,7 @@ use llrm_analysis::scev::expr::Type as ScevType;
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::constantrange::Range;
 use llrm_mir::context::ConstantKind;
-use llrm_mir::hash::HashSet;
+use llrm_mir::dense::IdSet;
 use llrm_mir::loopinfo::Loop;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
@@ -241,7 +241,7 @@ impl Ctx<'_, '_> {
     ) -> Option<InstId> {
         let phi = self.result_of(rec.phi?);
         let mut worklist = vec![v];
-        let mut visited: HashSet<InstId> = HashSet::default();
+        let mut visited: IdSet<InstId> = IdSet::default();
         while let Some(inst) = worklist.pop() {
             // Skip this instruction if we have already visited it before.
             if !visited.insert(inst) {
@@ -375,7 +375,7 @@ impl Ctx<'_, '_> {
     ) -> bool {
         let function = self.function();
         let Some(latch) = self.l.get_loop_latch(function) else { return true };
-        let mut visited: HashSet<InstId> = HashSet::default();
+        let mut visited: IdSet<InstId> = IdSet::default();
         let mut worklist: Vec<InstId> = roots.to_vec();
         while let Some(inst) = worklist.pop() {
             if !visited.insert(inst) {
@@ -405,7 +405,7 @@ impl Ctx<'_, '_> {
     ) -> bool {
         let Some(cond) = self.inst_of(self.operands(select)[0]) else { return false };
         let mut worklist = vec![cond];
-        let mut visited: HashSet<InstId> = HashSet::default();
+        let mut visited: IdSet<InstId> = IdSet::default();
         while let Some(inst) = worklist.pop() {
             if !visited.insert(inst) {
                 continue;

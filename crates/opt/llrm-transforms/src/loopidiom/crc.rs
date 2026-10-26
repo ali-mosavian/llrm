@@ -105,7 +105,7 @@ fn delete_dead_cascade(
     first: InstId,
 ) {
     let mut worklist = vec![first];
-    let mut erased: llrm_mir::hash::HashSet<InstId> = Default::default();
+    let mut erased: llrm_mir::dense::IdSet<InstId> = Default::default();
     while let Some(inst) = worklist.pop() {
         if erased.contains(&inst) {
             continue;
