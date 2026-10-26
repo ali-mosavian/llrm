@@ -2415,6 +2415,7 @@ fn a_dim_as_in_a_procedure_may_reuse_a_name_the_module_shares_with_a_suffix() {
     assert!(parse(&sub("DIM x AS INTEGER"), Dialect::Pds71).is_ok());
     assert!(parse("DIM x% : DIM x AS INTEGER\r\n", Dialect::Pds71).is_err());
 }
+
 #[test]
 fn stop_and_reset_call_b_stop_and_b_rest() {
     // STOP and RESET were refused as unknown procedures. BC calls B$STOP and
