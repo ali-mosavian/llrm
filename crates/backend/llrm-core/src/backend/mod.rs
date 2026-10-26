@@ -250,6 +250,7 @@ pub mod pushfold;
 pub mod regpressure;
 pub mod regthrash;
 pub mod relayout;
+pub mod returnsplit;
 pub mod rmw;
 pub mod saverestore;
 pub mod schedule;
@@ -330,6 +331,7 @@ pub mod select {
 pub mod bodyfacts;
 pub mod regclass;
 pub mod registerinfo;
+pub mod repbsf;
 pub mod rewriter;
 pub mod sharedstores;
 pub mod spillplacement;
