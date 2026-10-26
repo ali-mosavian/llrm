@@ -333,27 +333,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "llrm-coff"
+name = "llrm-arm64"
 version = "0.1.0"
 dependencies = [
+ "llrm-elf-arm64",
+ "llrm-lir",
+ "llrm-macho",
+ "llrm-mir",
  "llrm-object",
  "llrm-support",
-]
-
-[[package]]
-name = "llrm-coff32"
-version = "0.1.0"
-dependencies = [
- "llrm-coff",
- "llrm-object",
-]
-
-[[package]]
-name = "llrm-coff64"
-version = "0.1.0"
-dependencies = [
- "llrm-coff",
- "llrm-object",
+ "llrm-target",
+ "llrm-transforms",
 ]
 
 [[package]]
@@ -396,8 +386,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-coff"
+version = "0.1.0"
+dependencies = [
+ "llrm-object",
+ "llrm-support",
+]
+
+[[package]]
+name = "llrm-coff32"
+version = "0.1.0"
+dependencies = [
+ "llrm-coff",
+ "llrm-object",
+]
+
+[[package]]
+name = "llrm-coff64"
+version = "0.1.0"
+dependencies = [
+ "llrm-coff",
+ "llrm-object",
+]
+
+[[package]]
 name = "llrm-dagisel"
 version = "0.1.0"
+
+[[package]]
+name = "llrm-debuginfo"
+version = "0.1.0"
+dependencies = [
+ "llrm-object",
+ "llrm-support",
+]
 
 [[package]]
 name = "llrm-driver"
@@ -417,18 +439,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "llrm-debuginfo"
-version = "0.1.0"
-dependencies = [
- "llrm-object",
- "llrm-support",
-]
-
-[[package]]
 name = "llrm-elf"
 version = "0.1.0"
 dependencies = [
  "llrm-debuginfo",
+ "llrm-object",
+]
+
+[[package]]
+name = "llrm-elf-arm64"
+version = "0.1.0"
+dependencies = [
+ "llrm-elf",
  "llrm-object",
 ]
 
@@ -556,12 +578,14 @@ name = "llrm-qb"
 version = "0.1.0"
 dependencies = [
  "indexmap",
+ "llrm-arm64",
  "llrm-codegen",
  "llrm-driver",
  "llrm-hir",
  "llrm-mir",
  "llrm-qbruntime",
  "llrm-support",
+ "llrm-target",
  "llrm-transforms",
  "logos",
  "num-bigint",

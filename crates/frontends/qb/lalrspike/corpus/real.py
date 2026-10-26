@@ -9,7 +9,7 @@ from pathlib import Path
 
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE.parent))
-REPO = HERE.parents[3]
+REPO = HERE.parents[4]
 TOOLS = Path(os.environ['LLRM_PRIVATE_TOOLS'])
 MGL = Path(os.environ['MGL_DIR'])
 FAMILIES = {"qb45": TOOLS / "qb45", "pds71": TOOLS / "pds71", "vbdos": TOOLS / "vbdos"}

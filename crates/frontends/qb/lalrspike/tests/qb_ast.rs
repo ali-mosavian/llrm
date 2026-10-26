@@ -9,7 +9,7 @@ use qbfront::Dialect;
 use qbfront::semantic::{Options, compile_with_options};
 
 fn tracked() -> Vec<PathBuf> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
     let output =
         Command::new("git").arg("-C").arg(&root).args(["ls-files", "*.bas", "*.BAS", "*.bi", "*.BI"]).output().unwrap();
     // corpus/ holds generated oracle programs, many of them deliberately

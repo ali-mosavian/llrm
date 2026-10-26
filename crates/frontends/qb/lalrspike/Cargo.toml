@@ -9,9 +9,9 @@ build = "build.rs"
 
 [dependencies]
 lalrpop-util = { version = "0.23", features = ["lexer"] }
-llrm-nib = { path = "../nib" }
+llrm-nib = { path = "../../nib" }
 logos = "0.16.1"
-qbfront = { package = "llrm-qb", path = "../qb" }
+qbfront = { package = "llrm-qb", path = ".." }
 
 [build-dependencies]
 lalrpop = "0.23"

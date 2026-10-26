@@ -68,8 +68,8 @@
 1 crates/backend/llrm-dagisel/src/x86_test.rs
 1 crates/backend/llrm-iselgen/src/build.rs
 3 crates/bc/llrm-bcdriver/src/lib.rs
-2 crates/frontends/lalrspike/corpus/more.py
-8 crates/frontends/lalrspike/corpus/programs.py
+2 crates/frontends/qb/lalrspike/corpus/more.py
+8 crates/frontends/qb/lalrspike/corpus/programs.py
 3 crates/frontends/llrm-c/src/compile.rs
 6 crates/frontends/llrm-c/src/translate.rs
 1 crates/frontends/nib/src/declarations.rs
