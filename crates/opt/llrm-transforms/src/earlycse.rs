@@ -1276,8 +1276,7 @@ impl FunctionPass for EarlyCse {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
-        let accesses =
-            self.memory_ssa.then(|| std::rc::Rc::new(Accesses::lazy()));
+        let accesses = self.memory_ssa.then(|| std::rc::Rc::new(Accesses::lazy()));
         let tree = analyses.get::<Dominators>(unit.context, unit.layout, unit.function);
         // MemorySSA describes the function as it is now; the walk changes
         // `unit.function`, which this copy and the context's copy do not
