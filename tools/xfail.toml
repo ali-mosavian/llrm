@@ -122,7 +122,7 @@ id = "integration header_copy::test_a_register_only_a_guarded_loop_uses_is_saved
 issue = 2194
 owner = "w5"
 date = "2026-11-02"
-why = "recchop shrink-wrap: main saves 2 registers before the early return, tip 4 (the pin 4); static instrs m16 -Os main 44 / tip 49, -O2 48 / 51; m32 -O1 -ftree-ch pushes main 2 / tip 4"
+why = "recchop shrink-wrap (same root as #4900): main saves 2 registers before the early return, tip 4 (the pin 4); static instrs m16 -Os main 44 / tip 49, -O2 48 / 51; m32 -O1 -ftree-ch pushes main 2 / tip 4"
 [[xfail]]
 id = "integration header_copy::test_sum_three_loop_is_five_instructions_by_default"
 issue = 4899
