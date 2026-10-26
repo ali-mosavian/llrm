@@ -689,7 +689,9 @@ fn selected_in(
     let builder_target = builder_target
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)
-        .with_int_div_cheap(cpu.min_size)
+        // llrm's -Os keeps the divide too, as the old selector does (the pin:
+        // minsize only)
+        .with_int_div_cheap(cpu.size || cpu.min_size)
         .with_jump_tables(cpu.target().costs().jump_table != 0)
         .with_tail_calls(llrm_support::env_set("LLRM_TAIL_CALLS") || TAIL_CALLS.get())
         .with_tti(cpu.target().tti())
