@@ -28,14 +28,14 @@ The isel group is one row, +20.2 M, where the table read +75.2 and -18.0 apart: 
 
 | pass | excess | ours / pin | owner |
 |---|--:|---|---|
-| FP stackifier (floatalloc 13.8, floatassign 2.7, floatfold 0.8) | +16.4 | 17.3 / 1.7 | w-2 |
+| FP stackifier (floatalloc 13.8, floatassign 2.7, floatfold 0.8) | +15.6 | 17.3 / 1.7 | w-2 |
 | jumps::ControlFlow (BranchFolder, block placement) | +9.8 | 15.7 / 5.9 | w-3 |
 | MachineScheduler | +5.3 | 15.7 / 10.4 | w-2 |
 | MachineSink | +4.5 | 9.0 / 4.5 | w-2 |
 | MachineCSE | +3.0 | 5.9 / 2.9 | w-2 |
 | LateCleanup | +2.2 | 3.4 / 1.2 | funcattrs-port |
 | fixupleas, leaopt, fixupsetcc, flagscopy, callframe | +3.6 | 3.6 / 0.0 | w-2 |
-| phiconst, loopslots, liverangeshrink, earlytaildup, combiner | +8.0 | 8.0 / 1.3 (pin: LRS) | w-3 |
+| phiconst, loopslots, liverangeshrink, earlytaildup, combiner | +6.7 | 8.0 / 1.3 (pin: LRS) | w-3 |
 | MachineLICM | -5.7 | 3.4 / 9.1 | |
 | MachineCP | -1.1 | 2.3 / 3.4 | |
 | pin only (ReachingDef 3.3, PEI 1.0, ShrinkWrap 0.3, ExecutionDomainFix 0.9, DeadMachineInstructionElim 1.4) | -6.9 | 0 / 6.9 | |
