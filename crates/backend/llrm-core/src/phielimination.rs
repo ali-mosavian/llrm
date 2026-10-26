@@ -219,12 +219,14 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
             *preds.entry(to).or_insert(0) += 1;
         }
     }
+    // `LoweredPHIs`: kept for the whole function, so identical phis of
+    // different blocks share the temporary.
+    let mut lowered_phis: HashMap<Vec<(i64, u32)>, u32> = HashMap::default();
     for block in &body.blocks {
         // If all incoming edges are critical, identical phis are lowered
         // through one register, so fewer copies are made.
         let all_critical = preds.get(&block.at).copied().unwrap_or(0) >= 2
             && body.blocks.iter().filter(|one| one.succ.contains(&block.at)).all(|one| one.succ.len() >= 2);
-        let mut lowered_phis: HashMap<Vec<(i64, u32)>, u32> = HashMap::default();
         for phi in block.phis.iter() {
             let width = widths[&phi.result];
             // `allPhiOperandsUndefined`: an `implicit_def` of the result, and
@@ -648,5 +650,30 @@ mod tests {
         lowered(&critical).expect("lowers");
         let after = ROWS_SOLVED.with(std::cell::Cell::get);
         assert_eq!((after.0 - before.0, after.1 - before.1), (1, 1), "one solve, of the one value the edge hands over");
+    }
+
+    /// x_funcptr at m32: the four cases of a jump-table dispatch each took the
+    /// same four phis from the dispatch and from its copy in the loop's
+    /// preheader, and each phi got its own temporary and copy there (16 copies
+    /// where the pin has 4, and the coalescer then joined the zero with the
+    /// wrong lane). `LoweredPHIs` lives for the whole function, so identical
+    /// phis of different blocks share the temporary.
+    #[test]
+    fn test_identical_phis_of_different_blocks_share_one_copy_on_each_edge() {
+        let phi = |result| Phi { result, incoming: vec![(0, 1), (3, 2)] };
+        let was = body(vec![
+            block(0, vec![def(1), branch(2), jump(1)], &[1, 2], vec![]),
+            block(1, vec![read(10)], &[], vec![phi(10)]),
+            block(2, vec![read(11)], &[], vec![phi(11)]),
+            block(3, vec![def(2), branch(2), jump(1)], &[1, 2], vec![]),
+        ]);
+        let now = lowered(&was).expect("lowers");
+        assert_eq!(
+            copies(&now.blocks[0]).len(),
+            1,
+            "one copy of 1 on the edge into both: {:?}",
+            copies(&now.blocks[0])
+        );
+        assert_eq!(copies(&now.blocks[3]).len(), 1, "{:?}", copies(&now.blocks[3]));
     }
 }
