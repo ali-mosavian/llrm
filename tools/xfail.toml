@@ -2,12 +2,6 @@
 # ids: "unit <crate>::<test>" (cargo lib test) and "run <program name>" (tests/run).
 
 [[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_element_stores_leave_descriptors_unread"
-issue = 3994
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "stale expectation: 4f82e22e1 (MemorySSA queries ask the AA stack with TBAA) leaves a volatile store through a far pointer as the pin does, so the cells it may reach are read every trip; the memory-space model of #3994 is the tuning that restores the hoist"
-[[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_a_poke_after_a_call_that_never_runs_def_seg_keeps_its_segment"
 issue = 3994
 owner = "funcattrs-port"
