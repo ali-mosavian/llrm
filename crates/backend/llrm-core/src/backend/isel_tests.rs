@@ -389,9 +389,8 @@ fn a_va_copy_moves_the_list_pointer_and_a_va_end_is_no_code() {
             // arguments.
             "lea ax, [bp+8]",
             "mov word ptr [bp-2], ax",
-            "mov ax, word ptr [bp-2]",
-            // va_copy: the second list holds the same pointer; va_end is no
-            // code.
+            // va_copy: the second list holds the same pointer, still in ax
+            // (no reload of the first); va_end is no code.
             "mov word ptr [bp-4], ax",
             "mov ax, word ptr [bp+6]",
             "leave",
