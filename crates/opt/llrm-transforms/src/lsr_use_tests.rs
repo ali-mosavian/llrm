@@ -155,9 +155,9 @@ fn fewer_instructions_win_before_fewer_registers() {
     let (mut few, mut many) = (Cost::new(), Cost::new());
     few.c = LsrCost { insns: 1, num_regs: 5, ..LsrCost::default() };
     many.c = LsrCost { insns: 2, num_regs: 1, ..LsrCost::default() };
-    assert!(few.is_less(&tti, &many) && !many.is_less(&tti, &few));
+    assert!(few.is_less(&tti, &many, false) && !many.is_less(&tti, &few, false));
     few.lose();
-    assert!(few.is_loser() && many.is_less(&tti, &few));
+    assert!(few.is_loser() && many.is_less(&tti, &few, false));
 }
 
 #[test]

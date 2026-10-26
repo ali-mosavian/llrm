@@ -461,6 +461,8 @@ pub struct Collection<'a, 'b> {
     pub hardware_loop_profitable: bool,
     /// General registers the loop's own state holds (DEVIATE P1, `lsr_pass`).
     pub reserved_registers: u32,
+    /// The function is `optsize` (DEVIATE, `Tti::lsr_registers_first`).
+    pub optsize: bool,
     /// Where the IV increments go: the latch's terminator, or a point that
     /// dominates the post-increment tests.
     pub iv_inc_insert_pos: InstId,
@@ -505,6 +507,16 @@ impl<'a, 'b> Collection<'a, 'b> {
             safe_to_expand,
             hardware_loop_profitable,
             reserved_registers: 0,
+            optsize: cx
+                .function
+                .attrs
+                .iter()
+                .any(
+                    |attr| matches!(
+                        attr,
+                        llrm_mir::opcode::Attribute::Flag(name) if name == "optsize"
+                    ),
+                ),
             iv_inc_block,
             iv_inc_insert_pos,
             uses: Vec::new(),

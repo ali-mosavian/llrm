@@ -222,7 +222,7 @@ impl Collection<'_, '_> {
                     let (mut cost_a, mut cost_b) = (Cost::new(), Cost::new());
                     self.rate(se, &mut cost_a, &f, &mut HashSet::default(), &visited, lu_idx, None);
                     self.rate(se, &mut cost_b, &best, &mut HashSet::default(), &visited, lu_idx, None);
-                    cost_a.is_less(self.tti, &cost_b)
+                    cost_a.is_less(self.tti, &cost_b, self.optsize)
                 };
                 if better {
                     self.uses[lu_idx].formulae.swap(f_idx, best_idx);

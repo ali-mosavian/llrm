@@ -67,7 +67,7 @@ impl Collection<'_, '_> {
             let mut new_cost = cur_cost.clone();
             let mut new_regs = cur_regs.clone();
             self.rate(se, &mut new_cost, f, &mut new_regs, visited, lu_idx, None);
-            if new_cost.is_less(self.tti, solution_cost) {
+            if new_cost.is_less(self.tti, solution_cost, self.optsize) {
                 workspace.push(f_idx);
                 if workspace.len() != self.uses.len() {
                     self.solve_recurse(se, solution, solution_cost, workspace, &new_cost, &new_regs, visited);
@@ -108,7 +108,7 @@ impl Collection<'_, '_> {
             return solution;
         }
         assert_eq!(solution.len(), self.uses.len(), "Malformed solution!");
-        if self.baseline_cost.is_less(self.tti, &solution_cost)
+        if self.baseline_cost.is_less(self.tti, &solution_cost, self.optsize)
             && self.tti.should_drop_lsr_solution_if_less_profitable()
         {
             solution.clear();

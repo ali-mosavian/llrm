@@ -1031,7 +1031,7 @@ impl Collection<'_, '_> {
                             let mut cost_best = Cost::new();
                             let mut regs = HashSet::default();
                             self.rate(se, &mut cost_best, &best, &mut regs, &visited, lu_idx, None);
-                            if cost_f.is_less(self.tti, &cost_best) {
+                            if cost_f.is_less(self.tti, &cost_best, self.optsize) {
                                 self.uses[lu_idx].formulae.swap(f_idx, best_idx);
                             }
                         }

@@ -809,6 +809,15 @@ impl Tti for X86 {
         key(a) < key(b)
     }
 
+    /// Real mode has six registers and a frame that costs a prefix per
+    /// access: at `optsize` the registers come first (DEVIATE).
+    fn lsr_registers_first(
+        &self,
+        optsize: bool,
+    ) -> bool {
+        optsize && self.real_mode.is_some()
+    }
+
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7211
     fn can_macro_fuse_cmp(&self) -> bool {
         self.macro_fusion

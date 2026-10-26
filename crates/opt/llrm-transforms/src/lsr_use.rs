@@ -541,7 +541,23 @@ impl Cost {
         &self,
         tti: &dyn Tti,
         other: &Cost,
+        optsize: bool,
     ) -> bool {
+        if tti.lsr_registers_first(optsize) {
+            let key = |c: &LsrCost| {
+                (
+                    c.num_regs,
+                    c.insns,
+                    c.add_rec_cost,
+                    c.num_iv_muls,
+                    c.num_base_adds,
+                    c.scale_cost,
+                    c.imm_cost,
+                    c.setup_cost,
+                )
+            };
+            return key(&self.c) < key(&other.c);
+        }
         if self.c.insns != other.c.insns {
             return self.c.insns < other.c.insns;
         }

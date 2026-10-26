@@ -228,7 +228,15 @@ fn plan_loop(
     };
     let safe_to_expand = |se: &mut ScalarEvolution, s: Scev| rewriter.is_safe_to_expand(&cx, se, s);
     let mut lsr = Collection::new(&cx, tti, header, &safe_to_expand, false, iv_inc_insert_pos);
-    let reserved = reserved_registers(context, layout, function, se, &cx, header, &lp.get_blocks().iter().copied().collect::<Vec<_>>());
+    let reserved = reserved_registers(
+        context,
+        layout,
+        function,
+        se,
+        &cx,
+        header,
+        &lp.get_blocks().iter().copied().collect::<Vec<_>>(),
+    );
     lsr.reserved_registers = reserved;
     lsr.chain_uses = chains.inc_set.clone();
     lsr.collect_interesting_types_and_factors(se, &users);
@@ -280,7 +288,10 @@ fn reserved_registers(
     };
     let in_frame = |value: llrm_mir::module::ValueId| match function.value(value).def {
         llrm_mir::module::ValueDef::Instruction(def) => {
-            matches!(function.instruction(def).opcode, llrm_mir::opcode::Opcode::Alloca { .. })
+            matches!(
+                function.instruction(def).opcode,
+                llrm_mir::opcode::Opcode::Alloca { .. }
+            )
         }
         _ => false,
     };

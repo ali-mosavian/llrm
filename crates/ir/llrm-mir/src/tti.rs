@@ -544,6 +544,19 @@ pub trait Tti {
         key(a) < key(b)
     }
 
+    /// DEVIATE: whether LSR ranks the registers a solution needs before its
+    /// instructions in a function `optsize` says is small. The pin's x86
+    /// order puts instructions first, so an induction variable that saves one
+    /// instruction wins even where it leaves no register for the loop's state
+    /// and the allocator spills it. False by default.
+    fn lsr_registers_first(
+        &self,
+        optsize: bool,
+    ) -> bool {
+        let _ = optsize;
+        false
+    }
+
     /// `isNumRegsMajorCostOfLSR`.
     fn is_num_regs_major_cost_of_lsr(&self) -> bool {
         true
