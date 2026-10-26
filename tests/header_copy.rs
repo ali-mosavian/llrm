@@ -30,12 +30,16 @@ fn listing(
 fn test_a_loop_entered_behind_a_folded_guard_is_still_counted_by_the_ranges() {
     let text = listing("x_insertion", &["-ftree-ch"]);
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
-    let on_the_step = lines.windows(2).any(|pair| {
-        (pair[0].starts_with("dec e") || (pair[0].starts_with("add ") && pair[0].ends_with(", -4")))
-            && (pair[1].starts_with("jge ") || pair[1].starts_with("je ") || pair[1].starts_with("jne "))
-    });
+    let on_the_step = lines
+        .windows(2)
+        .any(
+            |pair| (pair[0].starts_with("dec e") || (pair[0].starts_with("add ") && pair[0].ends_with(", -4")))
+                && (pair[1].starts_with("jge ") || pair[1].starts_with("je ") || pair[1].starts_with("jne ")),
+        );
     assert!(on_the_step, "{text}");
-    let tested_again = lines.windows(2).any(|pair| pair[0].starts_with("cmp e") && pair[0].ends_with(", 0") && pair[1].starts_with("jl "));
+    let tested_again = lines
+        .windows(2)
+        .any(|pair| pair[0].starts_with("cmp e") && pair[0].ends_with(", 0") && pair[1].starts_with("jl "));
     assert!(!tested_again, "the counter is compared again after its step: {text}");
 }
 
@@ -154,8 +158,9 @@ void f(int n, int cur, int y)
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
-    // The pin ends the loop on the equality of the stepped counter and the bound (`incl; cmpl; jne`),
-    // not on a `cmp; jl` of the counter: the trip count is known from the guard `n > 2`.
+    // The pin ends the loop on the equality of the stepped counter and the
+    // bound (`incl; cmpl; jne`), not on a `cmp; jl` of the counter: the
+    // trip count is known from the guard `n > 2`.
     let counted = lines
         .windows(3)
         .any(|trio| trio[0].starts_with("inc e") && trio[1].starts_with("cmp e") && trio[2].starts_with("jne "));
@@ -174,8 +179,9 @@ fn test_a_latch_test_of_a_counter_whose_step_nothing_else_reads_tests_the_step()
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(
         scratch.path().join("a.c"),
-        // The start is a parameter and `tab` is written elsewhere: with x = y = 0 the orbit is the fixed
-        // point (5, 3), and a table nothing writes is constant, so the loop folded to `mov eax, 32`.
+        // The start is a parameter and `tab` is written elsewhere: with x = y =
+        // 0 the orbit is the fixed point (5, 3), and a table nothing writes is
+        // constant, so the loop folded to `mov eax, 32`.
         "static short tab[8];
 long f(long x, long y)
 {
