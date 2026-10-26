@@ -1,0 +1,36 @@
+' LOC and SEEK as a function on a random, a binary and a sequential file, after GET, PUT, SEEK and reads
+DEFINT A-Z
+TYPE Rec
+  n AS INTEGER
+  s AS STRING * 6
+END TYPE
+DIM r AS Rec
+OPEN "FPOS.TMP" FOR RANDOM AS #1 LEN = LEN(r)
+PRINT LOC(1); SEEK(1)
+r.n = 1: r.s = "one"
+PUT #1, 1, r
+PRINT LOC(1); SEEK(1)
+r.n = 2: PUT #1, , r
+r.n = 3: PUT #1, , r
+PRINT LOC(1); SEEK(1)
+GET #1, 2, r
+PRINT LOC(1); SEEK(1); r.n
+SEEK #1, 1
+PRINT LOC(1); SEEK(1)
+CLOSE #1
+OPEN "FPOS.TMP" FOR BINARY AS #1
+PRINT LOC(1); SEEK(1)
+a$ = INPUT$(5, #1)
+PRINT LOC(1); SEEK(1)
+SEEK #1, 3
+PRINT LOC(1); SEEK(1)
+CLOSE #1
+OPEN "FPOS2.TMP" FOR OUTPUT AS #1
+PRINT #1, STRING$(200, "x")
+PRINT LOC(1); SEEK(1)
+CLOSE #1
+OPEN "FPOS2.TMP" FOR INPUT AS #1
+LINE INPUT #1, b$
+PRINT LOC(1); SEEK(1); LEN(b$)
+CLOSE #1
+END

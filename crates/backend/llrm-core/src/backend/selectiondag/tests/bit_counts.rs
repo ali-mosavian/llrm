@@ -27,12 +27,20 @@ fn legalized(
     op: ISD,
     vt: EVT,
 ) -> (SelectionDAG, SDValue) {
+    let tli = TargetLowering::x86_32(Features { cmov: true, ..Features::default() }, MVT::I32);
+    legalized_by(&tli, op, vt)
+}
+
+fn legalized_by(
+    tli: &TargetLowering,
+    op: ISD,
+    vt: EVT,
+) -> (SelectionDAG, SDValue) {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let x = load(&mut dag, vt);
     let count = dag.get_node(op, vt, &[x]);
     dag.set_root(count);
-    let tli = TargetLowering::x86_32(Features { cmov: true, ..Features::default() }, MVT::I32);
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true }).run().expect("legalizes");
+    DagLegalizer::new(&mut dag, tli, &mut X86Lowering { cmov: true, sse2: false }).run().expect("legalizes");
     let root = dag.get_root();
     (dag, root)
 }
@@ -110,11 +118,58 @@ fn abs_without_cmov_is_xor_with_the_sign_then_subtract_it() {
     let abs = dag.get_node(ISD::Abs, EVT::I32, &[x]);
     dag.set_root(abs);
     let tli = TargetLowering::x86_32(Features { cmov: false, ..Features::default() }, MVT::I32);
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false }).run().expect("legalizes");
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false }).run().expect("legalizes");
 
     let root = dag.get_root();
     assert_eq!(dag.opcode(root), ISD::Sub);
     let (flipped, sign) = (dag.operand(root, 0), dag.operand(root, 1));
     assert_eq!((dag.opcode(sign), dag.constant(dag.operand(sign, 1))), (ISD::Sra, Some(31)));
     assert_eq!((dag.opcode(flipped), dag.operand(flipped, 1)), (ISD::Xor, sign));
+}
+
+/// At m16 a word `cttz` is promoted to `i32` and made `bsf` as at m32: it was
+/// expanded to the parallel popcount (23 instructions for the pin's three).
+#[test]
+fn cttz_of_a_word_at_m16_is_promoted_like_m32() {
+    let tli = TargetLowering::x86_16(Features::default(), MVT::I16);
+    let (dag, root) = legalized_by(&tli, ISD::CtTz, EVT::I16);
+    assert_eq!(dag.opcode(root), ISD::Truncate, "{}", dag.dump());
+    assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::CtTzZeroPoison, "{}", dag.dump());
+}
+
+/// `cttz` of a word at m16 was refused at emit (`Unmapped("BSF32rr")`) and
+/// expanded to the 23-instruction parallel popcount; it is the pin's `or`
+/// of the sentinel bit and a `bsf`. `ctlz` and `bswap` select too.
+#[test]
+fn bit_scans_and_bswap_select_at_m16() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+declare i16 @llvm.cttz.i16(i16, i1)
+declare i32 @llvm.ctlz.i32(i32, i1)
+declare i32 @llvm.bswap.i32(i32)
+define i16 @ct(i16 %x) {
+  %r = call i16 @llvm.cttz.i16(i16 %x, i1 false)
+  ret i16 %r
+}
+define i32 @cl(i32 %x) {
+  %r = call i32 @llvm.ctlz.i32(i32 %x, i1 true)
+  ret i32 %r
+}
+define i32 @bs(i32 %x) {
+  %r = call i32 @llvm.bswap.i32(i32 %x)
+  ret i32 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    for (function, wanted, most) in [("ct", "bsf", 6), ("cl", "bsr", 8), ("bs", "bswap", 4)] {
+        let done = crate::backend::selectiondag::dag_function::selected(
+            &module,
+            function,
+            &llrm_x86_m16::M16,
+            crate::backend::cpu::profile("486").expect("a cpu"),
+            &[],
+        )
+        .unwrap_or_else(|why| panic!("{function}: {}", why.0));
+        let names: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+        assert!(names.iter().any(|name| &**name == wanted) && names.len() <= most, "{function}: {names:?}");
+    }
 }

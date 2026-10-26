@@ -113,7 +113,7 @@ pub(super) fn why_left(
     lis: &mut LiveIntervals,
     env: &dyn CoalescerEnv,
 ) -> Vec<&'static str> {
-    use std::collections::HashSet;
+    use llrm_support::hash::HashSet;
 
     use super::pair::full_copy;
     use super::register_coalescer::{JoinResult, State, join_copy};

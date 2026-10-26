@@ -550,6 +550,12 @@ impl SelectionDAG {
         {
             return Some(self.get_undef(vt));
         }
+        if vt.is_floating_point() {
+            return match *ops {
+                [n1, n2] => self.fold_constant_fp(opcode, vt, n1, n2),
+                _ => None,
+            };
+        }
         if !vt.is_integer() {
             return None;
         }
@@ -616,6 +622,40 @@ impl SelectionDAG {
             }
             _ => None,
         }
+    }
+
+    /// `foldConstantFPMath`: two constants fold to one; an undef operand
+    /// makes the result undef (both) or a NaN (one).
+    pub(super) fn fold_constant_fp(
+        &mut self,
+        opcode: ISD,
+        vt: EVT,
+        n1: SDValue,
+        n2: SDValue,
+    ) -> Option<SDValue> {
+        if !matches!(opcode, ISD::FAdd | ISD::FSub | ISD::FMul | ISD::FDiv) {
+            return None;
+        }
+        if let (NodeData::ConstFp { bits: a }, NodeData::ConstFp { bits: b }) = (self.node(n1).data, self.node(n2).data)
+        {
+            return super::fp_value::fold(opcode, vt, a, b).map(|bits| self.get_constant_fp(bits, vt));
+        }
+        let (undef1, undef2) = (self.is_undef(n1), self.is_undef(n2));
+        // -0.0 - undef --> undef (consistent with "fneg undef")
+        if opcode == ISD::FSub && undef2 {
+            if let NodeData::ConstFp { bits } = self.node(n1).data {
+                if super::fp_value::classify(vt, bits).is_some_and(|c| c.zero && c.negative) {
+                    return Some(self.get_undef(vt));
+                }
+            }
+        }
+        if undef1 && undef2 {
+            return Some(self.get_undef(vt));
+        }
+        if undef1 || undef2 {
+            return super::fp_value::quiet_nan(vt).map(|bits| self.get_constant_fp(bits, vt));
+        }
+        None
     }
 
     /// `FoldSymbolOffset`: `(add Sym, c)` and `(sub Sym, c)` as `Sym+c`.

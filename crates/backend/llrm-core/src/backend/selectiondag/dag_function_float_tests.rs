@@ -275,7 +275,7 @@ fn a_double_read_as_its_words_is_refused_not_emitted() {
     }
     // Whatever it is, no integer instruction reads a 10-byte floating value.
     if let Ok(done) = done {
-        let floating: std::collections::HashSet<u32> = done
+        let floating: llrm_support::hash::HashSet<u32> = done
             .body
             .insns()
             .iter()

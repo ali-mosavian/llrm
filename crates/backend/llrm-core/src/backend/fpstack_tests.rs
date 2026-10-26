@@ -112,6 +112,40 @@ fn test_a_store_of_a_live_value_keeps_it_and_of_a_dead_one_pops_it() {
     assert_eq!(names(&result), ["fld", "fst", "fstp"]);
 }
 
+/// A value spilled at 80 bits and then stored as a double (`b` of
+/// `b = a*2.5: PRINT b: PRINT b+1`, QB at m16 -Os): `fstp tbyte` has no
+/// non-popping form, so the pair was `fld st(0); fstp tbyte [spill]; fstp
+/// qword [arg]`, 2 bytes more than `fst qword [arg]; fstp tbyte [spill]`.
+#[test]
+fn test_an_extended_spill_beside_a_final_store_stores_the_double_first() {
+    let (source, spill, arg) = (frame_cell(-8, 8), frame_cell(-24, 10), frame_cell(-32, 8));
+    let body = _body(vec![_load(1, &source), _store(&spill, 1), _store(&arg, 1)]);
+    let result = fps(&body);
+    assert_eq!(names(&result), ["fld", "fst", "fstp"]);
+    let widths: Vec<u32> = result
+        .insns()
+        .iter()
+        .filter_map(|one| match one.what.as_ref()?.dests.as_slice() {
+            [crate::model::ir::Loc::Mem(cell)] => Some(cell.width),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(widths, [8, 10], "the double first, the extended last (the pop)");
+    let insns = result.insns();
+    let (_, stack, stores) = _x87_traced(&insns, &[(&source, 3.5)]);
+    assert_eq!(stores.iter().map(|(_, value)| *value).collect::<Vec<_>>(), vec![3.5, 3.5]);
+    assert!(stack.is_empty());
+}
+
+/// The same pair into overlapping cells keeps its order: the last write wins.
+#[test]
+fn test_stores_to_overlapping_cells_are_not_swapped() {
+    let (source, spill, arg) = (frame_cell(-8, 8), frame_cell(-24, 10), frame_cell(-20, 8));
+    let body = _body(vec![_load(1, &source), _store(&spill, 1), _store(&arg, 1)]);
+    let result = fps(&body);
+    assert_eq!(names(&result), ["fld", "fld", "fstp", "fstp"]);
+}
+
 /// `adjustLiveRegs`, `shuffleStackTop`: a value live across a branch to a join
 /// is where the first exit put it on the other path too, by an exchange there.
 #[test]
@@ -263,6 +297,7 @@ fn test_a_value_stays_on_the_stack_across_a_port_write() {
         target: None,
         indirect: false,
         table: vec![],
+        repeat: false,
     };
     let body = _body(vec![_load(1, &cell), out, _store(&cell, 1)]);
     let converted = converted(&body, &RegisterClasses::of(&llrm_x86_m16::M16)).expect("a value across an out");

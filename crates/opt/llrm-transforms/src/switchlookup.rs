@@ -685,15 +685,13 @@ impl Plan {
         // A few conditions prevent the generation of lookup tables: the target
         // does not support them, or the function says "no-jump-tables". Other
         // replacements, like the bit map, are not stopped by them.
-        let no_jump_tables = function
-            .attrs
-            .iter()
-            .any(
-                |attr| matches!(
+        let no_jump_tables = options.no_jump_tables
+            || function.attrs.iter().any(|attr| {
+                matches!(
                     attr,
                     Attribute::Str(name, Some(value)) if name == "no-jump-tables" && value == "true"
-                ),
-            );
+                )
+            });
         if any_tables && (!spec.tti.should_build_lookup_tables() || no_jump_tables) {
             return None;
         }
