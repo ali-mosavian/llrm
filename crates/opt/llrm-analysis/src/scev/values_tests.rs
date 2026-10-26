@@ -251,3 +251,21 @@ fn test_the_key_of_a_sum_is_hashed_in_a_few_writes() {
     key.hash(&mut writes);
     assert!(writes.0 <= 4, "{} writes", writes.0);
 }
+
+/// The difference of two huge pointers was an address difference
+/// (`ptrtoaddr %a - ptrtoaddr %b`), and a loop up to one was counted by it:
+/// their packed bits are no addresses (a 64K step wraps the offset into the
+/// selector), so tests/cc/dos/huge.c summed 268 million bytes of 100000.
+#[test]
+fn test_the_difference_of_huge_pointers_is_not_an_address_difference() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p3:32:16:16:32-i32:16-ni:2:3\"\n\
+        define i32 @f(ptr addrspace(3) %a, ptr addrspace(3) %b) {\n\
+          %x = ptrtoint ptr addrspace(3) %a to i32\n\
+          %y = ptrtoint ptr addrspace(3) %b to i32\n\
+          %d = sub i32 %x, %y\n\
+          ret i32 %d\n\
+        }\n";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let printed = print_module_values(&module);
+    assert!(!printed.contains("ptrtoaddr"), "{printed}");
+}

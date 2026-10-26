@@ -3,6 +3,8 @@
 //! for the rest. Only phase flags are understood; every other flag goes to
 //! clang. Preprocess, dependency and query jobs run clang as is.
 
+mod inline_asm;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -92,7 +94,13 @@ fn yes() -> bool {
 const TARGETS: &str = include_str!("../targets.toml");
 /// The clang commit llrm's passes were translated from; the one place it is
 /// written for this driver.
-const PIN: &str = include_str!("../../../../toolchain/clang/pin");
+const PIN_FILE: &str = include_str!("../../../../toolchain/clang/pin");
+
+/// The pin file's first line. The lines after it are builds of the pin that
+/// carry patches, and report their own commit.
+fn pin() -> &'static str {
+    PIN_FILE.lines().next().unwrap_or_default().trim()
+}
 /// The llrm checkout this driver was built in, for the tools the recipes name.
 const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../..");
 const DEFAULT_TARGET: &str = "x86_64-linux";
@@ -102,6 +110,9 @@ pub fn targets(text: &str) -> Result<BTreeMap<String, Target>, String> {
     for target in table.values_mut() {
         for word in target.clang.iter_mut().chain(&mut target.llc) {
             *word = word.replace("{root}", ROOT);
+        }
+        for word in target.clang.iter_mut().chain(&mut target.llc).chain(&mut target.link) {
+            *word = with_environment(word);
         }
     }
     Ok(table)
@@ -218,6 +229,10 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
                 other => other.to_owned(),
             };
             build.clang.push(flag.to_owned());
+        } else if flag.starts_with("-mabi=") {
+            // The backend's convention (clang's own -mabi is for other
+            // targets); it follows the table's.
+            build.llc.push(flag.to_owned());
         } else if flag == "-funroll-loops" || flag == "-fno-unroll-loops" {
             build.clang.push(flag.to_owned());
             build.llc.push(flag.to_owned());
@@ -297,6 +312,24 @@ pub fn llc_args(
     args
 }
 
+/// `word` with each `{env:NAME}` that is set replaced by its value; one that is
+/// not stays, and `unset` names it.
+fn with_environment(word: &str) -> String {
+    let mut out = word.to_owned();
+    while let Some(open) = out.find("{env:") {
+        let Some(close) = out[open..].find('}') else { break };
+        let name = &out[open + 5..open + close];
+        let Some(value) = std::env::var_os(name) else { break };
+        out.replace_range(open..=open + close, &value.to_string_lossy());
+    }
+    out
+}
+
+fn unset(word: &str) -> String {
+    let name = word.split("{env:").nth(1).and_then(|rest| rest.split('}').next()).unwrap_or(word);
+    format!("llrm-cc: the target needs the environment variable {name}")
+}
+
 /// The link command: the recipe with its placeholders expanded.
 pub fn link_command(
     target: &Target,
@@ -313,6 +346,9 @@ pub fn link_command(
             other if other.contains("{root}") => command.push(other.replace("{root}", ROOT)),
             other => command.push(other.to_owned()),
         }
+    }
+    if let Some(open) = command.iter().find(|word| word.contains("{env:")) {
+        return Err(unset(open));
     }
     if command.is_empty() {
         return Err("empty link recipe".into());
@@ -355,10 +391,11 @@ fn run(
 
 fn check_pin(clang: &Path) -> Result<(), String> {
     let out = Command::new(clang).arg("--version").output().map_err(|error| format!("{}: {error}", clang.display()))?;
-    if String::from_utf8_lossy(&out.stdout).contains(PIN.trim()) {
+    let said = String::from_utf8_lossy(&out.stdout);
+    if PIN_FILE.lines().filter_map(|line| line.split_whitespace().next()).any(|sha| said.contains(sha)) {
         Ok(())
     } else {
-        Err(format!("{} is not the pinned clang {}", clang.display(), PIN.trim()))
+        Err(format!("{} is not the pinned clang {}", clang.display(), pin()))
     }
 }
 
@@ -380,9 +417,25 @@ fn build(
         eprintln!("llrm-cc: {why}");
         1
     };
+    if let Some(open) = target.clang.iter().chain(&target.llc).find(|word| word.contains("{env:")) {
+        return Err(fail(unset(open)));
+    }
     if build.output.is_some() && build.stop != Stop::Executable && build.inputs.len() > 1 {
         return Err(fail("cannot specify -o with -c or -S and several inputs".into()));
     }
+    // `-nostdinc` drops clang's own freestanding headers (`stdint.h`,
+    // `stdarg.h`); they go back after the target's.
+    let resource: Vec<String> = if target.clang.iter().any(|word| word == "-nostdinc") {
+        Command::new(&clang)
+            .arg("-print-resource-dir")
+            .output()
+            .ok()
+            .and_then(|out| String::from_utf8(out.stdout).ok())
+            .map(|dir| vec!["-idirafter".to_owned(), format!("{}/include", dir.trim())])
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let mut objects = vec![];
     for (number, input) in build.inputs.iter().enumerate() {
         let single = build.inputs.len() == 1;
@@ -409,8 +462,9 @@ fn build(
                 objects.push(object);
             }
             Input::Source(path) => {
-                let ir = scratch.join(format!("{number}.ll"));
+                let ir = scratch.join(format!("{}.ll", stem(path)));
                 let mut args = target.clang.clone();
+                args.extend(resource.iter().cloned());
                 args.extend(build.clang.iter().cloned());
                 args.extend(
                     ["-S", "-emit-llvm", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", "-o"]
@@ -432,6 +486,34 @@ fn build(
                     let fixed = text.replacen(&line, &format!("target datalayout = \"{}\"", target.datalayout), 1);
                     std::fs::write(&ir, fixed).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 }
+                if text.contains(" asm sideeffect ") {
+                    let mut scratch_number = 0;
+                    let mut assemble = |source: &str| -> Result<Vec<u8>, String> {
+                        scratch_number += 1;
+                        let (s, o, b) = (
+                            scratch.join(format!("{number}.{scratch_number}.s")),
+                            scratch.join(format!("{number}.{scratch_number}.o")),
+                            scratch.join(format!("{number}.{scratch_number}.bin")),
+                        );
+                        std::fs::write(&s, source).map_err(|error| error.to_string())?;
+                        let ran = |program: &Path, args: &[&str]| {
+                            Command::new(program).args(args).status().map(|one| one.success()).unwrap_or(false)
+                        };
+                        let (sp, op, bp) = (s.display().to_string(), o.display().to_string(), b.display().to_string());
+                        if !ran(&clang, &["-target", "i386-unknown-none", "-x", "assembler", "-c", &sp, "-o", &op])
+                            || !ran(Path::new("objcopy"), &["-O", "binary", "--only-section=.text", &op, &bp])
+                        {
+                            return Err(format!("asm: could not assemble\n{source}"));
+                        }
+                        std::fs::read(&b).map_err(|error| error.to_string())
+                    };
+                    let translated = inline_asm::translate(
+                        &std::fs::read_to_string(&ir).map_err(|e| fail(e.to_string()))?,
+                        &mut assemble,
+                    )
+                    .map_err(|why| fail(format!("{path}: {why}")))?;
+                    std::fs::write(&ir, translated).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
+                }
                 let object = want(if build.stop == Stop::Assembly { "s" } else { "o" });
                 run(&llc_path(&target.llc_program), &llc_args(target, build, &ir, Path::new(&object)))?;
                 objects.push(object);
@@ -441,7 +523,22 @@ fn build(
     if build.stop == Stop::Executable {
         let output = build.output.clone().unwrap_or_else(|| "a.out".into());
         let command = link_command(target, &objects, &build.link, &output).map_err(fail)?;
-        run(Path::new(&command[0]), &command[1..])?;
+        // The start-up and the externals are linked near where the model's code
+        // is near.
+        let near_code = build.clang.iter().any(|flag| matches!(flag.as_str(), "-mcmodel=small" | "-mcmodel=compact"));
+        let mut link = Command::new(&command[0]);
+        link.args(&command[1..]);
+        if near_code {
+            link.env("LLRM_NEAR_CODE", "1");
+        }
+        match link.status() {
+            Ok(status) if status.success() => {}
+            Ok(status) => return Err(status.code().unwrap_or(1)),
+            Err(error) => {
+                eprintln!("llrm-cc: {}: {error}", command[0]);
+                return Err(127);
+            }
+        }
     }
     Ok(())
 }

@@ -15,6 +15,6 @@ static void step(Body *b, int n, double dt) {
 int main(void) {
     Body b[4] = {{0, 0, 0, 0, 0, 0, 10}, {1, 0, 0, 0, 1, 0, 1}, {0, 2, 0, -1, 0, 0, 0.5}, {3, 3, 1, 0, 0, 0.2, 0.1}};
     for (int s = 0; s < 1000; s++) step(b, 4, 0.01);
-    for (int i = 0; i < 4; i++) printf("%ld %ld %ld\n", (long)(b[i].x * 1e6), (long)(b[i].y * 1e6), (long)(b[i].z * 1e6));
+    for (int i = 0; i < 4; i++) printf("%ld %ld %ld\n", (long)(b[i].x * 1e3), (long)(b[i].y * 1e3), (long)(b[i].z * 1e3));
     return 0;
 }

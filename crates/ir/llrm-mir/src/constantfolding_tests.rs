@@ -120,6 +120,23 @@ fn a_gep_in_a_non_integral_address_space_is_not_an_inttoptr() {
     assert!(out.contains("inttoptr (i64 50"), "{out}");
 }
 
+/// A huge pointer's packed bits are not an address: `6000:0000 + 70000` folded
+/// to the integer `6001:1170`, which is 16 bytes past the start, not 70000 (a
+/// carry past the offset goes 0x1000 into the selector). A huge space marked
+/// non-integral keeps the GEP.
+#[test]
+fn a_gep_of_a_huge_pointer_is_not_added_as_an_integer() {
+    let text = |datalayout: &str| {
+        format!(
+            "target datalayout = \"{datalayout}\"\ndefine ptr addrspace(3) @f() {{\n  %p = getelementptr i8, ptr addrspace(3) inttoptr (i32 1610612736 to ptr addrspace(3)), i32 70000\n  ret ptr addrspace(3) %p\n}}\n"
+        )
+    };
+    let flat = dump(&text("e-p:16:16-p3:32:16:32")).expect("parses");
+    let kept = dump(&text("e-p:16:16-p3:32:16:32-ni:3")).expect("parses");
+    assert!(flat.contains("inttoptr (i32 1610682736"), "{flat}");
+    assert!(!kept.contains("1610682736"), "{kept}");
+}
+
 /// far3.bas (a PEEK/POKE loop on `SADD(a$)` after `DEF SEG = VARSEG(a$)`)
 /// printed the string unchanged and n = 0 at -O1: the pair near -> selector ->
 /// far was folded to near -> far, which keeps the offset of the global (the
