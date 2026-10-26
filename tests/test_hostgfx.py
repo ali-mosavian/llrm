@@ -1,4 +1,4 @@
-"""The span fills of the QB runtime's graphics (runtime/qb/dos/gfxdev.c) on the host: each fill, for every operation, leaves the video
+"""The span fills of the QB runtime's graphics (runtime/qb/dev/dos/gfxdev.c) on the host: each fill, for every operation, leaves the video
 memory the pixel plot would."""
 
 import shutil
@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 def test_span_fills_leave_the_video_memory_the_pixel_plot_does(tmp_path):
     exe = tmp_path / "fill_test"
     build = subprocess.run(
-        ["gcc", "-O1", "-g", "-w", "-I", str(ROOT / "tests/hostgfx/shim"), "-I", str(ROOT / "runtime/qb/dos"), str(ROOT / "tests/hostgfx/fill_test.c"), "-o", str(exe)],
+        ["gcc", "-O1", "-g", "-w", "-I", str(ROOT / "tests/hostgfx/shim"), "-I", str(ROOT / "runtime/qb/dev"), "-I", str(ROOT / "runtime/qb/dev/dos"), str(ROOT / "tests/hostgfx/fill_test.c"), "-o", str(exe)],
         capture_output=True,
         text=True,
     )

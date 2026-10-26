@@ -4,6 +4,8 @@
 #include "file.h"
 #include "nhstutil.h"
 #include "rtinit.h"
+#include "dev.h"
+#include "error.h"
 #include "llrm_os.h"
 
 enum { MAX_CHANNEL = 15, DEFAULT_RECORD = 128, PATH_MAX = 128, ORIGIN_START = 0, ORIGIN_END = 2, LINE_MAX = 1023 };
@@ -450,7 +452,7 @@ SD *B_FINP(short count, short channel)
             text[at] = (char)c;
         } else if (scan_code_waiting) {
             scan_code_waiting = 0;
-            text[at] = (char)llrm_os_console_read_key();
+            text[at] = (char)dev_key_read();
         } else {
             byte code = cn_wait_key();
 

@@ -10,6 +10,9 @@ use std::collections::BTreeMap;
 /// The interface's declaration.
 pub const INTERFACE: &str = include_str!("../../../../runtime/shared/interface.toml");
 
+/// The POSIX host's `os.toml`.
+pub const POSIX_LAYER: &str = include_str!("../../../../runtime/shared/posix/os.toml");
+
 /// One operation of the interface.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Op {
@@ -99,6 +102,59 @@ impl Interface {
         op: &Op,
     ) -> String {
         format!("{}{}", self.prefix, op.name.to_uppercase())
+    }
+
+    /// The C header of the interface for the POSIX host layer
+    /// (`runtime/shared/posix/llrm_os.h`): each operation of the groups its
+    /// `os.toml` declares as `llrm_os_<name>`, in the host's C, with fixed
+    /// widths where the interface says a width.
+    pub fn posix_c_header(&self) -> Result<String, String> {
+        let layer: toml::Table =
+            POSIX_LAYER.parse().map_err(|error: toml::de::Error| format!("posix os.toml: {error}"))?;
+        let groups: Vec<String> = layer
+            .get("groups")
+            .and_then(toml::Value::as_array)
+            .ok_or("posix os.toml has no groups")?
+            .iter()
+            .filter_map(|one| one.as_str().map(str::to_owned))
+            .collect();
+        let kind = |name: &str| -> Option<&'static str> {
+            Some(match name {
+                "handle" => "int",
+                "bool" | "u8" => "unsigned char",
+                "path" => "const char *",
+                "bytes" => "const unsigned char *",
+                "bytes_mut" | "heap" => "unsigned char *",
+                "i16" => "int16_t",
+                "i32" => "int32_t",
+                "isize" => "intptr_t",
+                "usize" => "size_t",
+                "void" => "void",
+                _ => return None,
+            })
+        };
+        let mut text = String::from(
+            "/* The OS layer's interface for a POSIX host (runtime/shared/interface.toml), rendered by\n   llrm-target's os.rs; regenerate with LLRM_BLESS=1 cargo test -p llrm-target the_posix_header. */\n#ifndef LLRM_OS_H\n#define LLRM_OS_H\n\n#include <stddef.h>\n#include <stdint.h>\n\n",
+        );
+        for op in self.ops.iter().filter(|op| groups.contains(&op.group)) {
+            let types: Option<Vec<&str>> = op.args.iter().map(|(_, one)| kind(one)).collect();
+            let (Some(types), Some(returns)) = (types, kind(&op.returns)) else {
+                return Err(format!("the POSIX header has no C type for an argument or the result of {}", op.name));
+            };
+            let args = if types.is_empty() { "void".to_owned() } else { types.join(", ") };
+            text += &format!("{returns} llrm_os_{}({args});\n", op.name);
+        }
+        for (name, code) in &self.errors {
+            text += &format!("#define LLRM_OS_{} {code}\n", name.to_uppercase());
+        }
+        let handles = layer.get("handles").and_then(toml::Value::as_table).ok_or("posix os.toml has no handles")?;
+        for name in &self.handles {
+            let number =
+                handles.get(name).and_then(toml::Value::as_integer).ok_or_else(|| format!("no handle {name}"))?;
+            text += &format!("#define LLRM_OS_{} {number}\n", name.to_uppercase());
+        }
+        text += "\n/* The program's arguments, which os.c answers command_line and environment from; called once by main. */\nvoid llrm_os_set_arguments(int argc, char **argv);\n/* What llrm_os_exit calls, with the code, instead of exit(): a host that runs the program on a thread stops its other threads here. */\nvoid llrm_os_set_exit_hook(void (*hook)(int code));\n\n#endif\n";
+        Ok(text)
     }
 
     /// The operations of the groups a target implements.

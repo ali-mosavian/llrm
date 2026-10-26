@@ -6,7 +6,7 @@
    the speaker; music in the foreground makes the program wait until the queue
    is empty (the last note has begun), music in the background only while it is
    full. */
-#include "device.h"
+#include "dev.h"
 #include "nhstutil.h"
 #include "varptr.h"
 #include "rtinit.h"
@@ -153,7 +153,7 @@ static void play_note(Player *p, int note, long time)
     Note *at;
 
     if (!tick_started) {
-        dev_ticker_start();
+        dev_tick_start();
         tick_started = 1;
     }
     /* in the foreground a note waits for the queue ahead of it and for the
@@ -325,17 +325,17 @@ void B_SOND(short hertz, float duration)
         illegal();
     ticks = (long)(duration + 0.5f);
     if (ticks == 0) {
-        dev_interrupts_off();
+        dev_tick_hold();
         tail = head;
         sound_left = quiet_left = 0;
         dev_tone(0);
-        dev_interrupts_on();
+        dev_tick_release();
         return;
     }
     if (hertz < 37)
         illegal();
     if (!tick_started) {
-        dev_ticker_start();
+        dev_tick_start();
         tick_started = 1;
     }
     if (player.foreground)
@@ -359,7 +359,7 @@ static void music_stop(void)
     sound_left = quiet_left = 0;
     dev_tone(0);
     if (tick_started)
-        dev_ticker_stop();
+        dev_tick_stop();
 }
 
 static Comp comp = {0, C_SN, {0, 0, 0, 0, music_stop}};

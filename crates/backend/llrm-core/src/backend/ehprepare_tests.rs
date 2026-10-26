@@ -141,6 +141,7 @@ fn the_pad_is_selected_last_and_the_landing_is_its_own_procedure() {
         objects: Default::default(),
         preserved: Default::default(),
         stack_check: None,
+        hosted: false,
     };
     let assembled = super::super::assemble::assembled(
         &module,
