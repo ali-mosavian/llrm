@@ -10,8 +10,8 @@
    it is over 1 (the radius then being the y radius).  An arc counts the points
    round the circle, n to an octant, and keeps those from the start's count to
    the end's. */
-#include "device.h"
 #include "gfx.h"
+#include "mathops.h"
 #include "gfxdev.h"
 
 enum { OCTANTS = 8, FIXED = 256, TURN_COUNTS = 8 };
@@ -90,7 +90,7 @@ static unsigned long count_of(const Circle *c, double angle)
     int octant = (int)(angle * 4 / pi);
     long base = 2 * ((octant + 1) / 2) * c->points;
 
-    dev_sincos(&angle, &sine, &cosine);
+    qb_sincos(&angle, &sine, &cosine);
     /* octants 1, 2, 5 and 6 are measured from the vertical axis */
     along = (((octant + 1) / 2) & 1 ? cosine : sine) * c->radius;
     if (along < 0)
@@ -240,7 +240,7 @@ void B_CIRC(float radius, short color)
     gd_fill_select(&c.fill, c.color, OP_SET);
     if (radius < 0 || (!has_aspect && ratio <= 0))
         qb_error(BE_ILLFUN);
-    c.radius = (long)(radius + 0.5);
+    c.radius = gfx_window_on ? (long)(radius * gfx_window_scale() + 0.5) : (long)(radius + 0.5);
     c.points = (long)(c.radius * 0.7071067811865476 + 0.5);
     if (has_aspect) {
         c.scale_x = aspect_x;

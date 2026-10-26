@@ -59,8 +59,8 @@ pub struct LoopIdiom {
     pub library: Library,
     /// The routines the compile states the program links.
     pub routines: Vec<llrm_mir::libfunc::Routine>,
-    /// Code bytes outrank speed (`-Os`).
-    pub size: bool,
+    /// -Os or -Oz.
+    pub for_size: bool,
 }
 
 impl LoopIdiom {
@@ -77,7 +77,7 @@ impl LoopIdiom {
             options: Options::default(),
             library: Library { memset: true, memset_pattern16: false, memcpy: true },
             routines,
-            size: false,
+            for_size: false,
         }
     }
 }
@@ -142,9 +142,10 @@ impl FunctionPass for LoopIdiom {
             tree: &tree,
             assumptions: &assumptions,
         };
+        let tti = outer.target().tti();
         let provider = BasicAaProvider { layout: unit.layout, metadata: unit.metadata, globals: &outer.globals };
         let mut se = ScalarEvolution::new();
-        let size_costs = self.size.then(|| outer.target().size_costs());
+        let size_costs = self.for_size.then(|| outer.target().size_costs());
         let mut changed = false;
         for header in headers {
             let cur_loop = loops.get_loop_for(header).expect("a loop");
@@ -158,9 +159,11 @@ impl FunctionPass for LoopIdiom {
                 declared: &mut *unit.declared,
                 cur_loop,
                 bytes: size_costs.as_ref().map(|costs| (costs, outer.callees())),
+                tti: tti.as_deref(),
             };
             let mut idiom = LoopIdiomRecognize::new(self.options, self.library);
             idiom.routines = self.routines.clone();
+            idiom.for_size = self.for_size;
             if idiom.run_on_loop(&mut run) == Some(true) {
                 changed = true;
                 let cx = env.cx(&*unit.context, &*unit.function);

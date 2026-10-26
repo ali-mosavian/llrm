@@ -593,9 +593,11 @@ def can_affect(files: list[str], package: str, packages: dict, graph: dict[str, 
     return len(inside) < len(files) or bool(owned & needs(package, graph))
 
 
-def unit_offenders(group: list[str], by_package: dict[str, set[str]], merge_alone, failing, base_red=None, affects=None) -> list[str]:
+def unit_offenders(group: list[str], by_package: dict[str, set[str]], merge_alone, failing, base_red=None, affects=None, own=None, reasons=None, why=None) -> list[str]:
     """The PRs of `group` whose merge alone fails a unit test of `by_package`. A test the base fails too (`base_red(by_package)` -> {(package, test)}) is no PR's: every PR merged
-    on a red base fails it alone, and batch 2 refused or probed all 16. A PR that `affects(number, package)` says cannot change the package is not probed (a merge and a cargo run each)."""
+    on a red base fails it alone, and batch 2 refused or probed all 16. A PR that `affects(number, package)` says cannot change the package is not probed (a merge and a cargo run each).
+    `own[number]` gets the `unit package::test` names that failed on that PR's probe (what `failing` returns; every probed test if it only says True), `reasons[number]` the `why(names)` read right
+    after it: the 10:24 refusals of five PRs all carried the batch's whole list, so five different failures read as one."""
     red = base_red(by_package) if base_red else set()
     probe = {package: tests - {test for pkg, test in red if pkg == package} for package, tests in by_package.items()}
     probe = {package: tests for package, tests in probe.items() if tests}
@@ -604,8 +606,18 @@ def unit_offenders(group: list[str], by_package: dict[str, set[str]], merge_alon
     found = []
     for number in group:
         mine = {package: tests for package, tests in probe.items() if affects is None or affects(number, package)}
-        if mine and merge_alone(number) and any(failing(package, tests) for package, tests in mine.items()):
-            found.append(number)
+        if not (mine and merge_alone(number)):
+            continue
+        for package, tests in mine.items():
+            got = failing(package, tests)
+            if got:
+                found.append(number)
+                names = sorted(f"unit {package}::{test}" for test in (tests if got is True else got))
+                if own is not None:
+                    own[number] = names
+                if reasons is not None and why is not None:
+                    reasons[number] = why(names)
+                break
     return found
 
 
@@ -739,6 +751,23 @@ def run_smoke(known: dict[str, str] | None = None) -> tuple[bool, str]:
 
 
 FAST = os.environ.get("LAND_FAST") == "1"  # the user's call (2026-10-19): no smoke, no tests, no precheck; each PR is merged in order and squashed; only a build of the combined tree can halve a batch
+
+OVERLAP = os.environ.get("LAND_OVERLAP") == "1"  # the link check and the behavioural programs (release binaries) run beside the lib tests (debug); same checks, same order of refusal
+
+
+def beside(background, foreground):
+    """`foreground()`'s result and `background()`'s, the second running on a thread meanwhile; both are finished on return, also when `foreground` raises, as the next pass reuses the checkout."""
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(background)
+        try:
+            front = foreground()
+        finally:
+            back = future.exception()
+        if back is not None:
+            raise back
+        return front, future.result()
+
+
 MAX_BATCH = 16 if FAST else 8  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
 
 
@@ -1005,14 +1034,19 @@ def fast_merge(numbers: list[str], merge_one) -> tuple[list[str], dict[str, str]
     return kept, left_out
 
 
-def _in_target(target: Path | None):
-    """`subprocess.run` with CARGO_TARGET_DIR set to `target/test`; the plain one when there is no target."""
+def _in_target(target: Path | None, kind: str = "test"):
+    """`subprocess.run` with CARGO_TARGET_DIR set to `target/<kind>`; the plain one when there is no target."""
     if target is None:
         return subprocess.run
-    return lambda command, **kw: subprocess.run(command, env={**os.environ, "CARGO_TARGET_DIR": str(target / "test")}, **kw)
+    return lambda command, **kw: subprocess.run(command, env={**os.environ, "CARGO_TARGET_DIR": str(target / kind)}, **kw)
 
 
-def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, scanners=None, differs=None, target: Path | None = None) -> list[str]:
+ALONE_DEPENDANTS = {"llrm-qb", "llrm-c", "llrm-nib"}  # the dependants whose lib tests failed batches that passed alone (#4927); the rest of the closure is the batch's to run
+ALONE_JOBS = "2"  # PRs checked at once: three took 6 of 8 cargo processes beside the batch's tests
+SOURCE_SCANNING_PACKAGES = {"llrm-mir"}  # lib tests that scan other crates' sources (no_file_gains_*): upstream of the crates they judge, so a dependants run never reaches them
+
+
+def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, scanners=None, differs=None, target: Path | None = None, units=None, on_base=None) -> list[str]:
     """Why the PR at `head`, alone on `base` (a scratch checkout at `base` in `cwd`), fails the cheap checks a batch would fail on: the merge, the workspace build, the
     always-on scanners (fmt differences only warn: the squash formats every PR). The 15:34 batch spent 62% of its time on reruns of PRs that failed these."""
     smoke = parity_smoke_module()
@@ -1023,8 +1057,50 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
     if unformatted := sorted((differs or fmt_differs)(cwd, files)):
         print(f"alone: fmt.sh would change {', '.join(unformatted[:5])} (the squash formats it; not a refusal)", file=sys.stderr)
     # the scanners read the scratch tree: `integration_failures` defaults to ROOT, so every PR was judged on the tree the runner stands in
-    red = sorted((scanners or (lambda f: landing_scanner_failures(f, False, on_merged=lambda targets: smoke.integration_failures(targets, root=cwd, run=_in_target(target)))))(files))
-    return [f"scanner red alone: {', '.join(red[:5])}"] if red else []
+    # every scanner, not the always-on two: they read other crates' sources and docs, so a PR in one crate turns them red from outside it (#4871 added id-keyed maps in llrm-transforms; batch 18 died on llrm-mir's ratchet)
+    def default_scanners(changed: list[str]) -> set[str]:
+        # the scanners, the PR's own test files, and the integration targets xfail.toml lists that the PR can reach: one it makes pass is an xpass the gate refuses (#4673 cost batches 19 and 20)
+        import xfail  # noqa: PLC0415
+
+        packages, _ = smoke.workspace_graph(cwd)
+        listed = {one.split()[1].split("::")[0] for one in xfail.load_for(cwd) if one.startswith("integration ")}
+        reach = set(smoke.integration_targets_for(changed, smoke.touched_packages(changed, packages, cwd), smoke.integration_map(cwd))) & listed
+        own = {Path(f).stem for f in changed if f.startswith("tests/") and f.endswith(".rs") and "/" not in f[len("tests/") :]}
+        only = (set(smoke.SCANNERS) | own | reach) - set(smoke.NIGHTLY_ONLY)
+        merged: set[str] = set()
+
+        def on_merged(targets: list[str]) -> set[str]:
+            merged.update(smoke.integration_failures(targets, root=cwd, run=_in_target(target)))
+            return merged
+
+        # an xpass is not the head's to excuse: the entry goes
+        return new_scanner_failures(changed, on_merged, only=tuple(sorted(only))) | {name for name in merged if name.startswith("xpass ")}
+
+    red = sorted((scanners or default_scanners)(files))
+    if red:
+        return [f"scanner red alone: {', '.join(red[:5])}{smoke.causes_of(red)}"]
+    # the unit tests of the crates the PR changes, less what the base fails: round 3 died on llrm-nib::test_pipeline::... and no PR was blamed
+    def lib_failures(changed: list[str]) -> set[str]:
+        packages, graph = smoke.workspace_graph(cwd)
+        touched = smoke.touched_packages(changed, packages, cwd)
+        # the crates that depend on a touched one too: #4927 changed llrm-transforms, passed alone, and failed four llrm-qb tests in the batch
+        return smoke.dependants_lib_failures((touched | smoke.dependants(touched, graph) & ALONE_DEPENDANTS) | SOURCE_SCANNING_PACKAGES, root=cwd, run=_in_target(target, "lib")) if touched else set()
+
+    failed = (units or lib_failures)(files)
+    # a listed test that now passes is the PR's to unlist: the gate refuses the batch for it
+    xpass = sorted(name for name in failed if name.startswith("xpass "))
+    failed = {name for name in failed if not name.startswith("xpass ")}
+    if xpass:
+        return [f"xfail entry whose test passes (remove it): {', '.join(xpass[:5])}"]
+    if not failed:
+        return []
+    by_package: dict[str, set[str]] = {}
+    for name in failed:
+        package, test = name[len("unit ") :].split("::", 1)
+        by_package.setdefault(package, set()).add(test)
+    red_on_base = (on_base or (lambda wanted: _alone_base_red(wanted, base, target)))(by_package)
+    new = sorted(f"unit {package}::{test}" for package, tests in by_package.items() for test in tests - {t for p, t in red_on_base if p == package})
+    return [f"unit tests fail alone: {', '.join(new[:5])}"] if new else []
 
 
 HITS = [0]  # verdicts read from the cache by this process
@@ -1072,15 +1148,46 @@ def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=
     return kept, {number: verdicts[number] for number in numbers if verdicts.get(number)}
 
 
+def _alone_base_red(by_package: dict[str, set[str]], base: str, target: Path | None) -> set[tuple[str, str]]:
+    """{(package, test)} of `by_package` that fail on `base` itself: a checkout of its own beside the slot's, so the batch's tree is never touched."""
+    work = (target or Path(tempfile.mkdtemp(prefix="alone-base-"))) / "base"
+    _alone_checkout(work, base)
+    env = {**os.environ, "CARGO_TARGET_DIR": str((target or work.parent) / "lib")}
+    return {(package, test) for package, tests in by_package.items() for test in failing_on_checkout(package, tests, cwd=work, env=env)}
+
+
+def _alone_checkout(work: Path, ref: str, repo: Path = ROOT) -> None:
+    """A worktree at a path that stays: cargo fingerprints by path, so a fresh directory per PR rebuilt everything (2-3 min a PR); reused, only the files that differ rebuild."""
+    if (work / ".git").exists():
+        clean_checkout(ref, cwd=work)
+    else:
+        work.parent.mkdir(parents=True, exist_ok=True)
+        git("worktree", "add", "-q", "--detach", str(work), ref, cwd=repo)
+
+
+def _claim_slot(root: Path, count: int):
+    """(slot, lock file) of the first slot no other `alone` process holds; waits for one. Two processes (the filter and a warm-up) never share a checkout."""
+    while True:
+        for slot in range(count):
+            root.mkdir(parents=True, exist_ok=True)
+            handle = open(root / f"alone-{slot}.lock", "w")
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return slot, handle
+            except OSError:
+                handle.close()
+        time.sleep(2)
+
+
 def _alone_in_scratch(head: str, base: str, slot: int = 0) -> list[str]:
-    scratch = Path(tempfile.mkdtemp(prefix="alone-", dir=os.environ.get("LAND_TMP", "/tmp")))
-    git("worktree", "add", "-q", "--detach", str(scratch / "w"), base)
-    targets = Path(os.environ.get("ALONE_TARGETS", Path.home() / ".cache/llrm")) / f"alone-{slot}"  # one cargo target per slot: parallel checks on one target wait for its lock
+    root = Path(os.environ.get("ALONE_TARGETS", Path.home() / ".cache/llrm"))
+    slot, lock = _claim_slot(root, int(os.environ.get("ALONE_SLOTS", "6")))
+    targets = root / f"alone-{slot}"  # one cargo target and one checkout per slot
     try:
-        return alone_refusals(head, base, scratch / "w", target=targets)
+        _alone_checkout(targets / "w", base)
+        return alone_refusals(head, base, targets / "w", target=targets)
     finally:
-        subprocess.run(["git", "worktree", "remove", "--force", str(scratch / "w")], cwd=ROOT, capture_output=True)
-        shutil.rmtree(scratch, ignore_errors=True)
+        lock.close()
 
 
 ADDED_ITEM = re.compile(r"^\+\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:fn|def)\s+(\w+)", re.M)
@@ -1184,36 +1291,54 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             print(f"REFUSED: the batch does not build: {broken[:300]}")
             failed_build.append(broken)
             return False
-        # LAND_FAST_TESTS=1: also the lib tests of the crates the batch changes (the user's 10-19 call is no tests; this is the switch for the opposite call)
-        if os.environ.get("LAND_FAST_TESTS") == "1":
-            changed = git("diff", "--name-only", BASE, "HEAD").split()
-            # The always-on scanners read sources and docs (milliseconds): a red one refuses the batch before the minutes of lib tests it would otherwise wait for.
-            stage("scanners-early")
-            if new := sorted(landing_scanner_failures(changed, False)):
+        def tests_pass() -> bool:
+            """The lib tests and scanners on the merged tree; False after printing the refusal and noting the failed units."""
+            # LAND_FAST_TESTS=1: also the lib tests of the crates the batch changes (the user's 10-19 call is no tests; this is the switch for the opposite call)
+            if os.environ.get("LAND_FAST_TESTS") == "1":
+                changed = git("diff", "--name-only", BASE, "HEAD").split()
+                # The always-on scanners read sources and docs (milliseconds): a red one refuses the batch before the minutes of lib tests it would otherwise wait for.
+                stage("scanners-early")
+                if new := sorted(landing_scanner_failures(changed, False)):
+                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
+                    failed_units.update(new)
+                    return False
+                stage("lib-tests")
+                if new := sorted(new_lib_failures(changed)):
+                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
+                    failed_units.update(new)
+                    return False
+                stage("scanners")
+                if new := sorted(new_scanner_failures(changed)):
+                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
+                    failed_units.update(new)
+                    return False
+            if os.environ.get("LAND_FAST_TESTS") != "1" and (new := sorted(landing_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), False))):
                 print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
                 failed_units.update(new)
                 return False
-            stage("lib-tests")
-            if new := sorted(new_lib_failures(changed)):
-                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
-                failed_units.update(new)
-                return False
-            stage("scanners")
-            if new := sorted(new_scanner_failures(changed)):
-                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
-                failed_units.update(new)
-                return False
-        if os.environ.get("LAND_FAST_TESTS") != "1" and (new := sorted(landing_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), False))):
-            print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
-            failed_units.update(new)
+            return True
+
+        def release_pass() -> tuple[list[str], list[str]]:
+            """The link check, then the behavioural programs unless something does not link: (unlinked, red)."""
+            files = git("diff", "--name-only", BASE, "HEAD").split()
+            stage("link")
+            if unlinked := new_link_failures(files):
+                return unlinked, []
+            stage("behavioural")
+            return [], pre_merge_behavioural(files)
+
+        if OVERLAP:
+            tests_ok, (unlinked, red) = beside(release_pass, tests_pass)
+        else:
+            tests_ok = tests_pass()
+            unlinked, red = release_pass() if tests_ok else ([], [])
+        if not tests_ok:
             return False
-        stage("link")
-        if unlinked := new_link_failures(git("diff", "--name-only", BASE, "HEAD").split()):
+        if unlinked:
             print(f"REFUSED: the batch's runtime does not link: {'; '.join(unlinked)[:300]}")
             failed_units.update(f"link {line.split(':')[0]}" for line in unlinked)
             return False
-        stage("behavioural")
-        if red := pre_merge_behavioural(git("diff", "--name-only", BASE, "HEAD").split()):
+        if red:
             print(f"BEHAVIOURAL RED pre-merge: the batch, {' '.join(red)}")
             failed_units.update(f"behavioural {program}" for program in red)
             return False
@@ -1263,17 +1388,32 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         smoke = parity_smoke_module()
         packages, graph = smoke.workspace_graph()
         changed = {number: git("diff", "--name-only", f"{BASE}...{infos[number]['headRefOid']}").split() for number in group}
+        def probe(package: str, tests: set[str]) -> set[str]:
+            LAST_PANICS.clear()  # a panic read for another PR's probe is not this one's reason
+            return failing_on_checkout(package, tests)
+
+        own: dict[str, list[str]] = {}
+        reasons: dict[str, str] = {}
         culprits = unit_offenders(
             group,
             by_package,
             merge_alone,
-            failing_on_checkout,
+            probe,
             base_red=_base_red,
             affects=lambda number, package: can_affect(changed[number], package, packages, graph),
+            own=own,
+            reasons=reasons,
+            why=lambda names: "; ".join(
+                filter(
+                    None,
+                    [
+                        "; ".join(f"{test}: {LAST_PANICS[test]}" for test in (name[len("unit ") :].split("::", 1)[1] for name in names) if test in LAST_PANICS),
+                        parity_smoke_module().causes_of(set(names)).strip(" []"),
+                    ],
+                )
+            ),
         )
-        why = "; ".join(f"{test}: {LAST_PANICS[test]}" for _, test in sorted(units) if test in LAST_PANICS)
-        why = "; ".join(filter(None, [why, parity_smoke_module().causes_of(failed_units).strip(" []")]))
-        named.update({number: f"alone on the head it fails {', '.join(sorted(failed_units))[:160]}" + (f" [{why[:300]}]" if why else "") for number in culprits})
+        named.update({number: f"alone on the head it fails {', '.join(own[number])[:160]}" + (f" [{reasons[number][:300]}]" if reasons.get(number) else "") for number in culprits})
         return culprits
 
     def passes(group: list[str]) -> bool:
@@ -1407,14 +1547,14 @@ def head_expanded(head: set[str], merged: set[str], run_on_head) -> set[str]:
 LAST_PANICS: dict[str, str] = {}  # test name -> its first panic line, from the last `failing_on_checkout`
 
 
-def failing_on_checkout(crate: str, tests: set[str], cwd: Path = ROOT) -> set[str]:
+def failing_on_checkout(crate: str, tests: set[str], cwd: Path = ROOT, env: dict | None = None) -> set[str]:
     """Which of `tests` of `crate` fail on the checkout in `cwd` (exact names, release not needed: the smoke ran them as `cargo test -q --lib`)."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import parity_smoke
     from buildslot import slotted  # noqa: PLC0415
 
     command = parity_smoke.lib_command(crate)
-    done = subprocess.run(slotted([*command, "--", "--exact", *sorted(tests)]), cwd=cwd, capture_output=True, text=True, errors="replace")
+    done = subprocess.run(slotted([*command, "--", "--exact", *sorted(tests)]), cwd=cwd, capture_output=True, text=True, errors="replace", env=env)
     LAST_PANICS.update(parity_smoke.panic_reasons(done.stdout + done.stderr))
     return {name for name in tests if name in set(parity_smoke.failed_tests(done.stdout + done.stderr))}
 
@@ -1467,6 +1607,9 @@ def head_failures(sha: str, compute=None, cache: Path = HEAD_FAILURES) -> set[st
     if compute is None:
         raise SystemExit(f"no failure set is cached for the head {sha[:9]}: check the head out, build its binaries, set PARITY_BIN to them and run `tools/parity_squash.py head-failures`")
     failed = compute()
+    # a head whose tests did not run says nothing about them: stored, it excused none of the head's real reds for good (277c2651b0, header_copy: batch 17)
+    if any(name.endswith("did-not-run") for name in failed):
+        return failed
     cache.mkdir(parents=True, exist_ok=True)
     file.write_text(json.dumps(sorted(failed)))
     return failed
@@ -1647,8 +1790,14 @@ def preload_tools(names: tuple[str, ...] = TOOL_MODULES) -> None:
 def main() -> int:
     """The landing commands run at the landing's build priority (`buildslot.landing`); the others (audit, unlogged) start no cargo."""
     preload_tools()
-    from buildslot import landing  # noqa: PLC0415
+    from buildslot import LANDING, landing  # noqa: PLC0415
 
+    if sys.argv[1:2] == ["alone"]:
+        # the precheck of the next batch runs beside this one's tests: through buildslot like any cargo, not at the landing's priority (the runner exports BUILDSLOT_BYPASS=1,
+        # and six of eight cargo processes at load 108 were alone-0..5 outside every slot)
+        os.environ.pop("BUILDSLOT_BYPASS", None)
+        os.environ.pop(LANDING, None)
+        return dispatch()
     with landing():
         return dispatch()
 
@@ -1681,7 +1830,9 @@ def dispatch() -> int:
         for number in numbers:
             git("fetch", "-q", "origin", f"refs/pull/{number}/head")
             heads[number] = git("rev-parse", "FETCH_HEAD").strip()
-        kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", "3")), cap=float(os.environ.get("ALONE_CAP", "600")))
+        # stdout is the survivors and nothing else: the scanners print their summary line, and the runner reads this output as PR numbers
+        with contextlib.redirect_stdout(sys.stderr):
+            kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", ALONE_JOBS)), cap=float(os.environ.get("ALONE_CAP", "600")))
         for number, why in dropped.items():
             print(f"{number}: REFUSED: alone: {why[:300]}", file=sys.stderr)
         print(f"alone: {len(numbers)} PRs, {HITS[0]} cached, {len(numbers) - HITS[0]} checked, {len(dropped)} dropped", file=sys.stderr)

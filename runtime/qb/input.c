@@ -7,6 +7,7 @@
 #include "error.h"
 #include "fin.h"
 #include "rtinit.h"
+#include "dev.h"
 #include "llrm_os.h"
 #include "nhstutil.h"
 
@@ -48,7 +49,7 @@ static void read_line(void)
         if (key == ENTER)
             break;
         if (key == 0) {
-            llrm_os_console_read_key();
+            dev_key_read();
         } else if (key == BACKSPACE) {
             if (used) {
                 used--;

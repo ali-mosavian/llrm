@@ -843,6 +843,11 @@ impl<'a> TypeLegalizer<'a> {
                 (self.dag.get_node(ISD::Truncate, half, &[dword]), self.dag.get_node(ISD::Truncate, half, &[high]))
             }
             ISD::CtPop => self.expand_ctpop(value, half),
+            // `ExpandIntRes_BITREVERSE`: each half reversed, and swapped.
+            ISD::BitReverse => {
+                let (lo, hi) = self.expanded_integer(self.dag.operand(value, 0));
+                (self.dag.get_node(ISD::BitReverse, half, &[hi]), self.dag.get_node(ISD::BitReverse, half, &[lo]))
+            }
             op @ (ISD::CtLz | ISD::CtLzZeroPoison) => self.expand_ctlz(value, op, half),
             op @ (ISD::CtTz | ISD::CtTzZeroPoison) => self.expand_cttz(value, op, half),
             op @ (ISD::Add | ISD::Sub) => self.expand_add_sub(value, op, half)?,
@@ -1800,7 +1805,7 @@ impl<'a> TypeLegalizer<'a> {
     /// True if no reachable node has an illegal result or operand type
     /// (the pin's final check in `run`).
     pub fn all_legal(&self) -> bool {
-        let mut seen = HashSet::default();
+        let mut seen = HashSet::with_capacity_and_hasher(self.dag.nodes().len(), Default::default());
         let mut stack = vec![self.dag.get_root().node];
         while let Some(n) = stack.pop() {
             if !seen.insert(n) {
