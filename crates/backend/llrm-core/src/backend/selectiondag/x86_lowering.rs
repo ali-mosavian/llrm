@@ -140,6 +140,8 @@ impl CombineHooks for X86Lowering {
         op == ISD::Mul
             || op == ISD::Add
             || op == ISD::Sub
+            || op == x86isd::ADD
+            || op == x86isd::SUB
             || op == x86isd::CMOV
             || op == x86isd::SETCC
             || op == x86isd::BRCOND
@@ -157,6 +159,7 @@ impl CombineHooks for X86Lowering {
             ISD::Mul => combine_mul(dag, node, level),
             ISD::Add => combine_add(dag, node),
             ISD::Sub => combine_sub(dag, node),
+            x86isd::ADD | x86isd::SUB => combine_x86_add_sub(dag, node),
             x86isd::CMOV => combine_cmov(dag, node),
             x86isd::SETCC => combine_setcc(dag, node),
             x86isd::BRCOND => combine_brcond(dag, node),
@@ -1039,6 +1042,76 @@ fn combine_add(
     let (shift, y, z) = hidden_lea(a, b).or_else(|| hidden_lea(b, a))?;
     let sum = dag.get_node(ISD::Add, vt, &[shift, z]);
     Some(dag.get_node(ISD::Sub, vt, &[sum, y]))
+}
+
+/// `matchGenericOp`: a generic node made of the same operands reads the
+/// result of `node` instead (`negate`: its negation).
+fn match_generic_op(
+    dag: &mut SelectionDAG,
+    opcode: ISD,
+    node: SDValue,
+    lhs: SDValue,
+    rhs: SDValue,
+    negate: bool,
+) {
+    let vt = dag.value_type(node);
+    let Some(found) = dag.get_node_if_exists(opcode, &[vt], &[lhs, rhs]) else { return };
+    let generic = SDValue { node: found, res: 0 };
+    if !dag.has_users(generic) {
+        return;
+    }
+    let mut value = SDValue { node: node.node, res: 0 };
+    if negate {
+        // A generic node whose one user is also the only user of `node` would
+        // make a cycle, or an unprofitable replacement.
+        let users: Vec<u32> = dag.users(generic).collect();
+        if let ([user], 1) = (&users[..], dag.use_count(found)) {
+            let all = (0..dag.node(node).values.len() as u8)
+                .all(|res| dag.users(SDValue { node: node.node, res }).all(|other| other == *user));
+            if all {
+                return;
+            }
+        }
+        value = dag.get_negative(value, vt);
+    }
+    dag.combine_to(generic, value);
+}
+
+/// `combineX86AddSub` (the flags and generic-node parts): an `X86ISD::ADD` or
+/// `SUB` whose flags nothing reads is the generic node; one whose flags are
+/// read takes over the generic `add`/`sub` of the same operands, and
+/// `add x, -c` is `sub x, c`, so `a >= c ? a - c : a` is one `sub` and a
+/// branch where it was a `lea` and a `cmp`. (The `ADC`/`SBB` folds and the
+/// `combineX86SubCmpForFlags` are not translated.)
+fn combine_x86_add_sub(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    if !vt.is_integer() {
+        return None;
+    }
+    let is_sub = dag.opcode(node) == x86isd::SUB;
+    let generic = if is_sub { ISD::Sub } else { ISD::Add };
+    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    if !dag.has_users(SDValue { node: node.node, res: 1 }) {
+        return Some(dag.get_node(generic, vt, &[lhs, rhs]));
+    }
+    match_generic_op(dag, generic, node, lhs, rhs, false);
+    match_generic_op(dag, generic, node, rhs, lhs, is_sub);
+    let mask = super::fold::mask(vt.size_in_bits());
+    if let Some(c) = dag.constant(rhs) {
+        let negated = dag.get_constant(c.wrapping_neg() & mask, vt);
+        if is_sub {
+            match_generic_op(dag, ISD::Add, node, lhs, negated, false);
+        } else {
+            match_generic_op(dag, ISD::Sub, node, negated, lhs, true);
+        }
+    } else if let (Some(c), true) = (dag.constant(lhs), is_sub) {
+        let negated = dag.get_constant(c.wrapping_neg() & mask, vt);
+        match_generic_op(dag, ISD::Add, node, rhs, negated, true);
+    }
+    None
 }
 
 /// `combineSub` through `combineAddOrSubToADCOrSBB`, the zero case: `0 - (and

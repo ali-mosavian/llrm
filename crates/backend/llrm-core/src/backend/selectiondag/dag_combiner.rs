@@ -245,6 +245,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             self.dag.cur_order = self.dag.node(SDValue { node: n, res: 0 }).order;
             let before = self.dag.node_count();
             let result = self.combine(SDValue { node: n, res: 0 });
+            for (old, new) in self.dag.take_replacements() {
+                self.replace_value(old, new);
+                self.add_to_worklist_with_users(new.node);
+                self.dag.delete_dead(old.node);
+            }
             for made in before..self.dag.node_count() {
                 self.add_to_worklist(made as u32);
             }
