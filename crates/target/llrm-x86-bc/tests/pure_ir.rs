@@ -1,8 +1,8 @@
-//! BC objects are lifted to regular IR: no target intrinsic, no inline assembly and no
-//! target attribute in what the frontend emits, and every intrinsic it calls is on a short list.
-//! Address spaces (near, far and segment pointers; space 2 is the DGROUP selector) are the one
-//! target-flavoured element allowed, so they are not checked here.
-//! calls is on a short list.
+//! BC objects are lifted to regular IR: no target intrinsic, no inline assembly
+//! and no target attribute in what the frontend emits, and every intrinsic it
+//! calls is on a short list. Address spaces (near, far and segment pointers;
+//! space 2 is the DGROUP selector) are the one target-flavoured element
+//! allowed, so they are not checked here.
 
 use std::collections::BTreeSet;
 
