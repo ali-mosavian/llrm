@@ -902,6 +902,38 @@ fn test_two_blocks_that_return_share_their_last_three_instructions() {
     assert_eq!(count(&result, Operation::Return), 2);
 }
 
+/// jpeg_single emitted `push 11; call B$SERR` once per failed check, 8 copies
+/// (m16 -Os, tens of bytes each); a block ending in a call was never merged.
+#[test]
+fn test_blocks_ending_in_the_same_call_share_it() {
+    let fails = |at: i64| {
+        block(
+            at,
+            vec![
+                _inserted(_move(at, imm(11))),
+                _inserted(_insn(at + 1, Operation::Call, "call", vec![], vec![], None)),
+            ],
+            vec![],
+        )
+        .into()
+    };
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20), _jump(3, 10)], vec![20, 10]).into(),
+            fails(10),
+            fails(20),
+            block(30, vec![_inserted(_return(30))], vec![]).into(),
+        ],
+    );
+    assert_eq!(count(&source, Operation::Call), 2);
+
+    let result = tailmerge::merged(&source, false).unwrap().expect("nothing was merged");
+
+    assert_eq!(count(&result, Operation::Call), 1);
+}
+
 /// Decoded tails cannot share one copy without reconciling source maps.
 #[test]
 fn test_identical_source_owned_tails_keep_their_distinct_anchors() {

@@ -71,10 +71,7 @@ fn mergeable(one: &Insn) -> bool {
         return false;
     };
     one.inserted()
-        && !matches!(
-            what.op,
-            Operation::Barrier | Operation::Call | Operation::Data
-        )
+        && !matches!(what.op, Operation::Barrier | Operation::Data)
         && one.symbol != Some(true)
         && one.group.is_none()
 }
