@@ -21,6 +21,19 @@ intptr_t llrm_os_environment(size_t, unsigned char *, size_t);
 int32_t llrm_os_monotonic(void);
 intptr_t llrm_os_local_time(unsigned char *);
 void llrm_os_sleep(size_t);
+size_t llrm_os_environment_read(size_t, unsigned char *, size_t);
+intptr_t llrm_os_environment_write(size_t, const unsigned char *, size_t);
+intptr_t llrm_os_execute(const char *, const char *);
+intptr_t llrm_os_delete(const char *);
+intptr_t llrm_os_rename(const char *, const char *);
+intptr_t llrm_os_mkdir(const char *);
+intptr_t llrm_os_chdir(const char *);
+intptr_t llrm_os_rmdir(const char *);
+intptr_t llrm_os_find_first(const char *, size_t, unsigned char *);
+intptr_t llrm_os_find_next(unsigned char *);
+int32_t llrm_os_free_bytes(size_t);
+intptr_t llrm_os_current_directory(size_t, unsigned char *);
+intptr_t llrm_os_current_drive(void);
 #define LLRM_OS_DENIED 5
 #define LLRM_OS_NOT_FOUND 2
 #define LLRM_OS_PATH_NOT_FOUND 3

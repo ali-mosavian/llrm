@@ -4,7 +4,7 @@
 
 os = "posix"
 pointer = "flat"
-groups = ["core", "console", "process", "time"]
+groups = ["core", "console", "process", "files", "time"]
 implementation = "os.c"
 
 # The standard handles are the file descriptors.

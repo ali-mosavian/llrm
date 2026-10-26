@@ -4,6 +4,7 @@
 #include "llrm_os.h"
 #include "qb.h"
 #include "rtinit.h"
+#include "shell.h"
 
 /* The lowest stack address a checked function may reach: FRE(-2) counts down to it. */
 uword llrm_os_stack_low;
@@ -41,4 +42,13 @@ void qb_land(void)
     if (qb_host_frame_top)
         longjmp(*(jmp_buf *)qb_host_frame_top, 1);
     llrm_os_exit(1);
+}
+
+/* SHELL's memory: a host's child runs in its own process, so there is nothing to give up or take back. */
+void qb_shell_release(void)
+{
+}
+
+void qb_shell_reclaim(void)
+{
 }
