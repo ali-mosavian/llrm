@@ -42,6 +42,7 @@ static _AUDITED_STRING_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| {
         ("B$ASSN", 12),
         ("B$FASC", 2),
         ("B$FCHR", 2),
+        ("B$FCVC", 2),
         ("B$FCVD", 2),
         ("B$FCVI", 2),
         ("B$FCVL", 2),
@@ -49,6 +50,7 @@ static _AUDITED_STRING_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| {
         ("B$FHEX", 4),
         ("B$FLEN", 2),
         ("B$FMID", 6),
+        ("B$FMKC", 8),
         ("B$FMKD", 8),
         ("B$FMKI", 2),
         ("B$FMKL", 4),
@@ -615,7 +617,7 @@ fn _contract_keeping(
             ),
         ));
     }
-    if ["B$RDI2", "B$RDI4", "B$RDR4", "B$RDR8"].contains(&name) && pushed == 4 {
+    if ["B$RDI2", "B$RDI4", "B$RDR4", "B$RDR8", "B$RDCY"].contains(&name) && pushed == 4 {
         return Ok(returns(
             4,
             format!(
@@ -654,7 +656,7 @@ fn _contract_keeping(
             ),
         ));
     }
-    if matches!(name, "B$PCCY" | "B$PSCY" | "B$PECY") && pushed == 8 {
+    if matches!(name, "B$PCCY" | "B$PSCY" | "B$PECY" | "B$STCY") && pushed == 8 {
         return Ok(returns(
             8,
             format!(
