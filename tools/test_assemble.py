@@ -120,6 +120,8 @@ def test_the_scanners_of_an_alone_check_run_in_the_scratch_tree_not_the_runners(
     seen = []
     smoke = ps.parity_smoke_module()
     monkeypatch.setattr(smoke, "integration_failures", lambda targets, root=None, **_: seen.append(root) or set())
+    monkeypatch.setattr(smoke, "workspace_graph", lambda root: ({}, {}))
+    monkeypatch.setattr(smoke, "integration_map", lambda root=None: {})
     assert ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), units=lambda _: set()) == []
     assert seen == [repo], seen
 
@@ -327,6 +329,8 @@ def test_an_alone_check_runs_every_scanner_not_the_two_always_on(tmp_path, monke
     seen = []
     smoke = ps.parity_smoke_module()
     monkeypatch.setattr(smoke, "integration_failures", lambda targets, root=None, **_: seen.extend(targets) or set())
+    monkeypatch.setattr(smoke, "workspace_graph", lambda root: ({}, {}))
+    monkeypatch.setattr(smoke, "integration_map", lambda root=None: {})
     ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), units=lambda _: set())
     assert {"selectiondag_registry", "no_todo", "docs_links"} <= set(seen), seen
 
@@ -341,3 +345,59 @@ def test_an_alone_check_runs_the_source_scanning_lib_tests_of_a_crate_upstream_o
     monkeypatch.setattr(smoke, "dependants_lib_failures", lambda packages, **_: seen.append(set(packages)) or set())
     ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda f: set())
     assert seen and "llrm-mir" in seen[0], seen
+
+
+def test_a_pr_that_makes_a_listed_unit_test_pass_is_refused_alone_and_so_is_a_listed_integration_target_it_reaches(tmp_path, monkeypatch):
+    """#4673 fixed a test without removing its xfail entry; alone dropped the `xpass` names and said clean, and batches 19 and 20 were refused for it."""
+    repo, head = alone_scratch(tmp_path)
+    smoke = ps.parity_smoke_module()
+    why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda f: set(), units=lambda _: {"xpass unit llrm-x::t_a"})
+    assert why and "xpass unit llrm-x::t_a" in why[0], why
+
+    seen = []
+    import xfail
+
+    monkeypatch.setattr(xfail, "load", lambda path=xfail.PATH: {"integration header_copy::t": {}})
+    monkeypatch.setattr(smoke, "workspace_graph", lambda root: ({}, {}))
+    monkeypatch.setattr(smoke, "touched_packages", lambda files, packages, root: {"llrm-core"})
+    monkeypatch.setattr(smoke, "integration_map", lambda root=None: {"header_copy": {"llrm-core"}})
+    monkeypatch.setattr(smoke, "integration_failures", lambda targets, root=None, **_: seen.extend(targets) or {"xpass integration header_copy::t"})
+    monkeypatch.setattr(ps, "_scanners_failing_on_head", lambda targets: set())  # the real one reads and writes ~/scratch/results/headfail
+    why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), units=lambda _: set())
+    assert "header_copy" in seen and why and "xpass integration header_copy::t" in why[0], (seen, why)
+
+
+def test_a_head_whose_tests_did_not_run_is_not_cached_as_its_failure_set(tmp_path):
+    """The head 277c2651b0 was cached as ["integration-did-not-run"]: its twelve real header_copy reds were never recorded, so batch 17 saw them as the batch's own."""
+    calls = []
+
+    def compute():
+        calls.append(1)
+        return {"integration-did-not-run"} if len(calls) == 1 else {"integration header_copy::t"}
+
+    assert ps.head_failures("abc", compute, cache=tmp_path) == {"integration-did-not-run"}
+    assert ps.head_failures("abc", compute, cache=tmp_path) == {"integration header_copy::t"}
+    assert ps.head_failures("abc", compute, cache=tmp_path) == {"integration header_copy::t"} and len(calls) == 2
+
+
+def test_the_alone_command_runs_its_cargo_through_buildslot_with_two_jobs_whatever_the_runner_exports(monkeypatch):
+    """The runner exports BUILDSLOT_BYPASS=1 and main() ran every command at the landing's priority: six of eight cargo processes at load 108 were alone-0..5 outside every slot."""
+    import buildslot
+
+    seen = {}
+
+    def fake(numbers, heads, **kw):
+        seen["slotted"] = buildslot.slotted(["cargo", "build"])
+        seen["jobs"] = kw["jobs"]
+        return list(numbers), {}
+
+    monkeypatch.setenv("BUILDSLOT_BYPASS", "1")
+    monkeypatch.setenv(buildslot.LANDING, "1")
+    monkeypatch.delenv("ALONE_JOBS", raising=False)
+    monkeypatch.setattr(buildslot, "tool", lambda: "buildslot")
+    monkeypatch.setattr(ps, "alone", fake)
+    monkeypatch.setattr(ps, "git", lambda *args, **_: "deadbeef")
+    monkeypatch.setattr(ps, "preload_tools", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["parity_squash.py", "alone", "11"])
+    assert ps.main() == 0
+    assert seen == {"slotted": ["buildslot", "cargo", "build"], "jobs": 2}, seen
