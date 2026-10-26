@@ -54,7 +54,7 @@ use crate::backend::precse::flag_lanes;
 use crate::model::ir::{Loc, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
-use crate::support::hash::{HashMap, HashSet, IndexMap};
+use crate::support::hash::{HashMap, HashSet};
 
 pub struct PeepholeOptimizer;
 
@@ -234,7 +234,6 @@ fn flags_reused(body: &LirBody) -> LirBody {
         };
         Some((flag_lanes(&effect.reads), flag_lanes(&effect.writes)))
     };
-    let live_out = crate::backend::peephole::_flags_live_out(body).entering.clone();
     let mut changed = false;
     let blocks: Vec<_> = body
         .blocks
@@ -244,7 +243,7 @@ fn flags_reused(body: &LirBody) -> LirBody {
             let mut gone: Vec<usize> = Vec::new();
             for at in 0..insns.len() {
                 if let Some(value) = compared_with_zero(&insns[at])
-                    && reusable(body, block, &insns, at, value, &reads, &flags, &live_out)
+                    && reusable(body, block, &insns, at, value, &reads, &flags)
                 {
                     gone.push(at);
                 }
@@ -289,7 +288,6 @@ fn reusable(
     value: u32,
     reads: &HashMap<u32, usize>,
     flags: &dyn Fn(&Insn) -> Option<(Lanes, Lanes)>,
-    live_out: &IndexMap<i64, Lanes>,
 ) -> bool {
     // the scan back from the compare: no other writer of the flags before the
     // definition of the value
@@ -343,17 +341,15 @@ fn reusable(
     }
     // not written again in the block: a successor must write them before it
     // reads them
-    block.succ.iter().all(|next| successor_overwrites_flags(body, *next, flags, pending, live_out))
+    block.succ.iter().all(|next| successor_overwrites_flags(body, *next, flags, pending))
 }
 
-/// Whether the block at `at` writes every one of `pending` before it reads any;
-/// where it ends with some left, none of them is live out of it.
+/// Whether the block at `at` writes every one of `pending` before it reads any.
 fn successor_overwrites_flags(
     body: &LirBody,
     at: i64,
     flags: &dyn Fn(&Insn) -> Option<(Lanes, Lanes)>,
     mut pending: Lanes,
-    live_out: &IndexMap<i64, Lanes>,
 ) -> bool {
     let Some(block) = body.blocks.iter().find(|one| one.at == at) else { return false };
     for one in &block.insns {
@@ -369,7 +365,7 @@ fn successor_overwrites_flags(
             return true;
         }
     }
-    live_out.get(&at).is_some_and(|live| live.is_disjoint(&pending))
+    false
 }
 
 #[cfg(test)]
