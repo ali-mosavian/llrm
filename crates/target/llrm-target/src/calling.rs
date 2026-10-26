@@ -460,6 +460,11 @@ impl Convention {
     ) -> Kind {
         let register = self.register_bytes.unwrap_or(slot);
         match () {
+            // A convention with vector argument registers (SysV x86-64) passes
+            // a float in one.
+            _ if argument.floating && !argument.memory && !self.float_argument_registers.is_empty() => {
+                Kind::Float(argument.bytes)
+            }
             _ if argument.memory || argument.floating => Kind::Memory(argument.bytes),
             _ if argument.bytes <= slot => Kind::Word,
             _ if argument.bytes <= register && argument.integer => Kind::Sized(argument.bytes),
