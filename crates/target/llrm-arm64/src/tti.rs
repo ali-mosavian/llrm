@@ -477,6 +477,17 @@ impl Tti for AArch64 {
         AArch64::is_legal_addressing_mode_for(ACCESS_BYTES, base_gv, base_offset, has_base_reg, scale)
     }
 
+    fn is_legal_addressing_mode_for(
+        &self,
+        access_bytes: u64,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> bool {
+        AArch64::is_legal_addressing_mode_for(access_bytes, base_gv, base_offset, has_base_reg, scale)
+    }
+
     /// `isLegalAddImmediate`: 12-bit optionally shifted immediates, the same
     /// encoding for add and sub:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L20177

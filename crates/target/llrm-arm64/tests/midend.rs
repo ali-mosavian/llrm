@@ -122,3 +122,12 @@ fn a_product_added_or_subtracted_is_one_multiply_accumulate() {
         assert_eq!(mnemonics(&two), ["madd", "madd", "ret"], "{two}");
     }
 }
+
+/// A GEP stored through was priced for an 8-byte access, so a `float` store at a scale of 4 cost an
+/// instruction of address arithmetic LLVM does not count, the fill loop of `tests/llc/fsum.c` came to
+/// 162 against a limit of 150 and stayed a loop: 452 bytes where the pin folds `main` to two constants.
+#[test]
+fn a_float_array_fill_loop_is_unrolled_and_folded() {
+    let asm = driver::assembly(include_str!("data/fill_two_arrays.ll"), Platform::Darwin, true).expect("lowers");
+    assert!(!asm.contains("fmul") && !asm.contains("b."), "the fill loop was left:\n{asm}");
+}
