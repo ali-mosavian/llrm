@@ -167,3 +167,14 @@ fn a_fused_multiply_add_of_constants_is_a_constant() {
     let asm = driver::assembly(&text, Platform::Darwin, true).expect("lowers");
     assert!(!asm.contains("fmadd") && asm.contains("#7.0") && asm.contains("#9.0"), "{asm}");
 }
+
+/// A loop of constant-array reads and divisions feeding one hash was left as a loop: the exit value
+/// of its latch value was never computed by running the loop on constants (`getSCEVAtScope`'s fold
+/// of an instruction whose operands are constant at scope), so `tests/darwin/division.ll` came to
+/// 10640 bytes where the pin's is 284 (its hash loops stayed, unrolled).
+#[test]
+fn a_hash_loop_over_constants_is_computed_at_compile_time() {
+    let asm = driver::assembly(include_str!("darwin/division.ll"), Platform::Darwin, true).expect("lowers");
+    let lines = asm.lines().count();
+    assert!(lines < 300, "{lines} lines where the pin's is under 100:\n{asm}");
+}
