@@ -37,9 +37,11 @@ fn combined_with_loads(text: &str) -> String {
     let globals = module.globals.clone();
     let metadata = module.metadata.clone();
     let (context, function) = module.function_mut("f").expect("@f");
-    combine_with(context, &globals, &metadata, &DataLayout::default(), function, |c, inst| match c.function.instruction(inst).opcode {
-        Opcode::Load { .. } => c.visit_load(inst),
-        _ => Visit::None,
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, |c, inst| {
+        match c.function.instruction(inst).opcode {
+            Opcode::Load { .. } => c.visit_load(inst),
+            _ => Visit::None,
+        }
     });
     printed(&module)
 }

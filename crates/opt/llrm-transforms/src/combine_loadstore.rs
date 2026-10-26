@@ -71,17 +71,16 @@
 //! ```
 //! After, one store: `store i16 2, ptr %p`.
 
+use llrm_analysis::aa::BatchAAResults;
+use llrm_analysis::basicaa::BasicAA;
+use llrm_analysis::loads::{Available, DEF_MAX_INSTS_TO_SCAN, find_available_loaded_value_before};
+use llrm_analysis::memory::Unit;
 use llrm_mir::context::ConstantKind;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{CastOp, Flags, Opcode};
 use llrm_mir::types::Type;
 use llrm_mir::valuetracking::nonzero::null_pointer_is_defined;
-
-use llrm_analysis::aa::BatchAAResults;
-use llrm_analysis::basicaa::BasicAA;
-use llrm_analysis::loads::{Available, DEF_MAX_INSTS_TO_SCAN, find_available_loaded_value_before};
-use llrm_analysis::memory::Unit;
 
 use crate::combine::{Combiner, Visit, defining};
 use crate::combine_shared::{has_one_use, replace_operand};
