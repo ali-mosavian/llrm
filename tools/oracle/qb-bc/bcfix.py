@@ -3,17 +3,17 @@
 import json, os, re, sys
 from pathlib import Path
 HERE = Path(__file__).parent
-sys.path.insert(0, str(HERE.parent))
+CORPUS = HERE.parents[2] / "crates/frontends/qb/lalrspike/corpus"
 os.environ["BCRAW"] = "1"
 import bcprobe
 from tqdm import tqdm
 TOOLS = Path(os.environ['LLRM_PRIVATE_TOOLS'])
 DIRS = {"qb45": TOOLS / "qb45", "pds71": TOOLS / "pds71", "vbdos": TOOLS / "vbdos"}
 kind = sys.argv[1]
-target = HERE / ("bc_programs.json" if kind == "programs" else "real_bc.json")
+target = CORPUS / ("bc_programs.json" if kind == "programs" else "real_bc.json")
 data = json.loads(target.read_text())
 def path_of(key):
-    return HERE / "programs" / f"p{int(key):05d}.bas" if kind == "programs" else __import__("real").path_of(key)
+    return CORPUS / "programs" / f"p{int(key):05d}.bas" if kind == "programs" else __import__("real").path_of(key)
 pairs = [(key, fam) for key, v in data.items() for fam, m in v.items() if m == ["UNPLACED"]]
 print(len(pairs), "pairs", file=sys.stderr)
 roots = {}

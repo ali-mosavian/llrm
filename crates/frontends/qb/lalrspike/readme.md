@@ -1,6 +1,6 @@
 # lalrspike
 
-The QB front's only parser is the hand-written recursive-descent one in `crates/frontends/qb/src/front/ast`. This directory holds the Nib LALR spike and the QB oracle tools (BC.EXE programs, results, `bcprobe.py`, `verdict`, `checkfiles`); the QB LALR grammar and the first RD spike were deleted.
+The QB front's only parser is the hand-written recursive-descent one in `crates/frontends/qb/src/front/ast`. This directory holds the Nib LALR spike and the QB oracle tools (BC.EXE programs, results, `tools/oracle/qb-bc/bcprobe.py`, `verdict`, `checkfiles`); the QB LALR grammar and the first RD spike were deleted.
 
 Spike: LALR(1) grammars for Nib and the QB family. Wherever the grammar cannot
 tell two readings apart, one node keeps the written shape and a later pass
@@ -58,13 +58,13 @@ with a negative argument). Not done.
 
 Environment: `LLRM_PRIVATE_TOOLS` is the directory holding `qb45`, `pds71` and `vbdos` (each with `BC.EXE`);
 `DOSBOX_BIN` the dosrun fork's `dosbox-x` (else a `dosbox-x-fork` checkout beside the repository or in `$HOME`);
-`MGL_DIR` a checkout of `ali-mosavian/mgl` (`corpus/real.py`, `corpus/bcfix.py` only).
+`MGL_DIR` a checkout of `ali-mosavian/mgl` (`corpus/real.py`, `tools/oracle/qb-bc/bcfix.py` only).
 
-`python3 bcdiff.py [--root DIR] QB45,PDS71,VBDOS FILE.bas...` runs Microsoft's
+`python3 tools/oracle/qb-bc/bcdiff.py [--root DIR] QB45,PDS71,VBDOS FILE.bas...` runs Microsoft's
 `BC.EXE` of all three families (QB 4.5, PDS 7.1, VBDOS; the directories are
 `llrm-private-tools/qb45`, `/pds71`, `/vbdos`) and the grammar on each file
 and lists the disagreements. BC runs on the dosrun fork of DOSBox-X
-(`bcprobe.py`, a tqdm bar). Programs the grammar must take are those some BC
+(`tools/oracle/qb-bc/bcprobe.py`, a tqdm bar). Programs the grammar must take are those some BC
 takes:
 
 | corpus | some BC accepts | grammar takes them | grammar refuses |
@@ -91,8 +91,8 @@ reproduce.
 The first version of the runner took 3m50s for 128 files on three compilers,
 211 s of it PDS 7.1's. Its `BC.EXE` is an NE image and the fork's debug-symbol
 watch (`WatchForLoader`) rescans all of RAM for its 13 segments on every newly
-executed page, about 4.5 s of host CPU a job for 40 emulated ms. `bcprobe.py`
-sends `:nosymbols`, a job option added by `dosbox-nosymbols.patch` (apply it
+executed page, about 4.5 s of host CPU a job for 40 emulated ms. `tools/oracle/qb-bc/bcprobe.py`
+sends `:nosymbols`, a job option added by `tools/oracle/qb-bc/dosbox-nosymbols.patch` (apply it
 to the `dosrun` branch of the fork and rebuild; a fork without it runs the
 line as a shell command and PDS stays slow). With that, one shared queue of
 (compiler, file) pairs over four machines per core: 28 s.
@@ -153,8 +153,8 @@ asking it. The loop:
   types). `corpus/real.py` takes the **1,090 real programs**: the repo's `.bas` files, GORILLA,
   NIBBLES, QB 4.5's, PDS 7.1's and VBDOS's example sources, and mgl (run in place, so its
   `$INCLUDE`s resolve).
-* `bcbatch.py`, `bcfiles.py`, `real.py run` give each one to the three BCs (QB 4.5, PDS 7.1, VBDOS) on
-  the dosrun DOSBox-X (`bcprobe.py`, about 30 jobs a second), each alone. `bcquick.py 'LINE'…` asks
+* `tools/oracle/qb-bc/{bcbatch,bcfiles}.py`, `corpus/real.py run` give each one to the three BCs (QB 4.5, PDS 7.1, VBDOS) on
+  the dosrun DOSBox-X (`tools/oracle/qb-bc/bcprobe.py`, about 30 jobs a second), each alone. `tools/oracle/qb-bc/bcquick.py 'LINE'…` asks
   about a few lines; `gen_reserved.py` writes `qb_reserved.rs` from the verdicts.
 * `compare.py`, `compare_programs.py` and `real.py compare` set our parse-and-check against BC's:
   **gap** (BC takes it, we refuse), **leak** (BC refuses, we take it).

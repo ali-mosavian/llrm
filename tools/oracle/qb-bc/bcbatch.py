@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).parent
-sys.path.insert(0, str(HERE.parent))
+CORPUS = HERE.parents[2] / "crates/frontends/qb/lalrspike/corpus"
 from tqdm import tqdm  # noqa: E402
 
 import bcprobe  # noqa: E402
@@ -27,8 +27,8 @@ BATCH = int(os.environ.get("BCBATCH", "1"))
 
 def build(items):
     """[(file name, source, ids)]"""
-    prologue = (HERE / "prologue.bas").read_text()
-    epilogue = (HERE / "epilogue.bas").read_text()
+    prologue = (CORPUS / "prologue.bas").read_text()
+    epilogue = (CORPUS / "epilogue.bas").read_text()
     groups, loose = [], []
     for item in items:
         (groups if ISOLATED.match(item["text"]) else loose).append(item)
@@ -69,8 +69,8 @@ def complete(text):
 
 def run_items(items, tag):
     """{id: {family: [messages] | None}} for one pass over the items."""
-    prologue = (HERE / "prologue.bas").read_text()
-    epilogue = (HERE / "epilogue.bas").read_text()
+    prologue = (CORPUS / "prologue.bas").read_text()
+    epilogue = (CORPUS / "epilogue.bas").read_text()
     by_id = {item["id"]: item for item in items}
     groups = [item for item in items if ISOLATED.match(item["text"])]
     loose = [item for item in items if not ISOLATED.match(item["text"])]

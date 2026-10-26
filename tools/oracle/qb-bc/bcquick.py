@@ -2,17 +2,18 @@
 """Ask the three real BCs about a few lines: bcquick.py 'LINE' ... (or lines on stdin); each line is checked on its own in the prologue's module."""
 import os, tempfile, re, sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import bcprobe
 
 HERE = Path(__file__).parent
+CORPUS = HERE.parents[2] / "crates/frontends/qb/lalrspike/corpus"
 TOOLS = Path(os.environ['LLRM_PRIVATE_TOOLS'])
 
 
 def run(lines, prologue=True):
     """{family: {line index: [messages]}}, every line compiled alone."""
-    pro = (HERE / 'prologue.bas').read_text() if prologue else ''
-    epi = (HERE / 'epilogue.bas').read_text() if prologue else ''
+    pro = (CORPUS / 'prologue.bas').read_text() if prologue else ''
+    epi = (CORPUS / 'epilogue.bas').read_text() if prologue else ''
     path = Path(tempfile.mkdtemp()) / 'q.bas'
     m = bcprobe.Machine()
     result = {fam: {} for fam in ('qb45', 'pds71', 'vbdos')}

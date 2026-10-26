@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).parent
-sys.path.insert(0, str(HERE.parent))
+CORPUS = HERE.parents[2] / "crates/frontends/qb/lalrspike/corpus"
 from tqdm import tqdm  # noqa: E402
 
 import bcprobe  # noqa: E402
