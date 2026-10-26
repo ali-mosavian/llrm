@@ -44,7 +44,7 @@ use crate::backend::allocate::{LiveAt, live_rows};
 use crate::backend::classes::RegisterClasses;
 use crate::backend::liveness;
 use crate::backend::regclass;
-use crate::backend::regpressure::{Delta, Model, Pick, PressureChange, Tracker, try_pressure};
+use crate::backend::regpressure::{Delta, Model, Pick, PressureChange, Region, Tracker, try_pressure};
 use crate::backend::target::Segments;
 use crate::backend::twoaddr;
 use crate::model::ir::{Loc, Operation};
@@ -501,15 +501,26 @@ pub fn bottom_up(
     // `RegionPressure` (program order) and `RegionCriticalPSets`.
     let mut region_max: Vec<u32> = Vec::new();
     let mut critical: Vec<PressureChange> = Vec::new();
-    let mut tracker = tracking.map(|tracking| {
-        let mut program = Tracker::new(tracking.model, tracking.live_out.iter().copied(), []);
-        for one in insns.iter().rev() {
-            program.advance_upward(one);
-        }
-        region_max = program.max().to_vec();
-        critical = Tracker::critical_sets(tracking.model, &region_max);
-        Tracker::over(tracking.model, tracking.live_out.iter().copied(), tracking.live_thru.iter().copied(), insns)
-    });
+    let region = tracking.map(|_| Region::of(insns));
+    let mut tracker = tracking
+        .zip(region.as_ref())
+        .map(
+            |(tracking, region)| {
+                let mut program = Tracker::over(tracking.model, region, tracking.live_out.iter().copied(), [], false);
+                for node in (0..n).rev() {
+                    program.place(node);
+                }
+                region_max = program.max().to_vec();
+                critical = Tracker::critical_sets(tracking.model, &region_max);
+                Tracker::over(
+                    tracking.model,
+                    region,
+                    tracking.live_out.iter().copied(),
+                    tracking.live_thru.iter().copied(),
+                    true,
+                )
+            },
+        );
     while placed.len() < n {
         let mut best = 0;
         let mut why = "ONLY1";
@@ -538,7 +549,7 @@ pub fn bottom_up(
             eprintln!("machinesched pick {node} {:?} {why} tracked={}", insns[node].defines, tracker.is_some());
         }
         if let Some(tracker) = &mut tracker {
-            tracker.place(&insns[node]);
+            tracker.place(node);
             // `updateScheduledPressure`.
             for entry in &mut critical {
                 let most = tracker.max()[entry.set] as i32;
