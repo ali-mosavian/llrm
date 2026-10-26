@@ -12,6 +12,9 @@ use llrm_target::Target;
 
 use crate::Bound;
 
+/// How the i8086 clang writes llrm's BASIC convention (1000, `opcode::BASIC`): clang keeps a convention in 8 bits.
+const CLANG_PASCAL: &str = " cc232 ";
+
 /// `text` without the lines and words MIR's reader leaves out of LLVM (`target
 /// triple`, `dso_local`), and the triple the module stated.
 fn without_triple(text: &str) -> (Option<String>, String) {
@@ -25,7 +28,8 @@ fn without_triple(text: &str) -> (Option<String>, String) {
         if line.starts_with(';') {
             continue;
         }
-        kept.push_str(&lifetime_markers_with_a_size(&line.replace(" dso_local", "")));
+        let line = line.replace(" dso_local", "").replace(CLANG_PASCAL, " cc1000 ");
+        kept.push_str(&lifetime_markers_with_a_size(&line));
         kept.push('\n');
     }
     (triple, kept)

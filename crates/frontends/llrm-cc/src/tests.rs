@@ -66,3 +66,10 @@ fn clangs_i386_layout_is_m32s_but_double_alignment_is_not() {
     assert_eq!(layout_facts(clang), layout_facts(m32));
     assert_ne!(layout_facts(&clang.replace("f64:32:64", "f64:64:64")), layout_facts(m32));
 }
+
+/// The pin file grew comment lines after its SHA and every build was refused as "not the pinned clang".
+#[test]
+fn the_pin_is_the_first_line_alone() {
+    assert_eq!(pin().len(), 40, "{:?}", pin());
+    assert!(pin().bytes().all(|byte| byte.is_ascii_hexdigit()));
+}

@@ -92,7 +92,12 @@ fn yes() -> bool {
 const TARGETS: &str = include_str!("../targets.toml");
 /// The clang commit llrm's passes were translated from; the one place it is
 /// written for this driver.
-const PIN: &str = include_str!("../../../../toolchain/clang/pin");
+const PIN_FILE: &str = include_str!("../../../../toolchain/clang/pin");
+
+/// The pin file's first line. The lines after it are builds of the pin that carry patches, and report their own commit.
+fn pin() -> &'static str {
+    PIN_FILE.lines().next().unwrap_or_default().trim()
+}
 /// The llrm checkout this driver was built in, for the tools the recipes name.
 const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../..");
 const DEFAULT_TARGET: &str = "x86_64-linux";
@@ -355,10 +360,11 @@ fn run(
 
 fn check_pin(clang: &Path) -> Result<(), String> {
     let out = Command::new(clang).arg("--version").output().map_err(|error| format!("{}: {error}", clang.display()))?;
-    if String::from_utf8_lossy(&out.stdout).contains(PIN.trim()) {
+    let said = String::from_utf8_lossy(&out.stdout);
+    if PIN_FILE.lines().filter_map(|line| line.split_whitespace().next()).any(|sha| said.contains(sha)) {
         Ok(())
     } else {
-        Err(format!("{} is not the pinned clang {}", clang.display(), PIN.trim()))
+        Err(format!("{} is not the pinned clang {}", clang.display(), pin()))
     }
 }
 

@@ -521,3 +521,14 @@ fn llvm_ir_symbols_are_decorated_as_the_object_format_spells_them() {
     let listing = llrm_core::backend::masm::text(&built).unwrap();
     assert!(listing.contains("_main") && listing.contains("_report"), "{listing}");
 }
+
+/// The i8086 clang writes Pascal functions as `cc232` (8 bits hold no 1000); llrm-llc refused the module with
+/// "calling convention 232", so no QCport module that calls qgl compiled.
+#[test]
+fn clangs_pascal_number_is_llrms_basic_convention() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n\
+                target triple = \"i386-unknown-unknown-code16\"\n\
+                declare cc232 i16 @QGL(i16) addrspace(1)\n\
+                define i16 @f() addrspace(1) {\n  %1 = call cc232 addrspace(1) i16 @QGL(i16 7)\n  ret i16 %1\n}\n";
+    crate::llc::compiled(&flags(&["-mabi=cdecl"]), text, "f").unwrap();
+}
