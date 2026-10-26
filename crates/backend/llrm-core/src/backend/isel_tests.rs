@@ -14,6 +14,7 @@ fn qb() -> HirAbi {
         objects: Default::default(),
         preserved: Default::default(),
         stack_check: None,
+        hosted: false,
     }
 }
 
@@ -55,6 +56,7 @@ fn borland() -> HirAbi {
         objects: Default::default(),
         preserved: EVERY.iter().copied().filter(|one| !clobbered.contains(one)).collect(),
         stack_check: None,
+        hosted: false,
     }
 }
 
@@ -389,9 +391,8 @@ fn a_va_copy_moves_the_list_pointer_and_a_va_end_is_no_code() {
             // arguments.
             "lea ax, [bp+8]",
             "mov word ptr [bp-2], ax",
-            "mov ax, word ptr [bp-2]",
-            // va_copy: the second list holds the same pointer; va_end is no
-            // code.
+            // va_copy: the second list holds the same pointer, still in ax
+            // (no reload of the first); va_end is no code.
             "mov word ptr [bp-4], ax",
             "mov ax, word ptr [bp+6]",
             "leave",
@@ -2999,6 +3000,26 @@ fn test_a_float_load_compared_second_is_the_comparisons_operand() {
     );
 }
 
+/// The `not` of a comparison was a `setg`, a byte copy and `xor 1` (x_mergesort
+/// at m16 -Os, 3 bytes per use): it is the `setle` of the opposite condition.
+#[test]
+fn test_the_not_of_a_comparison_is_the_opposite_setcc() {
+    let text = "define i16 @f(i16 %a, i16 %b) addrspace(1) {
+  %c = icmp sgt i16 %a, %b
+  %n = xor i1 %c, true
+  %x = zext i1 %c to i16
+  %y = zext i1 %n to i16
+  %s = shl i16 %y, 1
+  %r = add i16 %x, %s
+  ret i16 %r
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|one| one.starts_with("setle ")), "{got:?}");
+    assert!(got.iter().any(|one| one.starts_with("setg ")), "{got:?}");
+    assert!(!got.iter().any(|one| one.starts_with("xor ")), "{got:?}");
+}
+
 /// A comparison a branch reads is made beside the branch: a store between
 /// them may change the cell, so the load stays where it was.
 #[test]
@@ -3722,7 +3743,7 @@ b1:
             "shl ebx, 16",
             "mov eax, ebx",
             "idiv esi",
-            "xor ecx, esi",
+            "xor ecx, 196608",
             "sar ecx, 31",
             "imul esi, eax",
             "sub ebx, esi",
@@ -6342,7 +6363,7 @@ define i1 @f(i16 %x) addrspace(1) {
 }
 ";
     let got = listing(text, "f");
-    assert!(got.contains(&"mov ax, offset messages".to_owned()) && got.contains(&"add ax, 8".to_owned()), "{got:?}");
+    assert!(got.contains(&"mov ax, offset messages+8".to_owned()), "{got:?}");
 }
 
 /// A GEP off a segment's far pointer (`A000:0`, plus 1) was refused, "an
@@ -6935,4 +6956,48 @@ no:
     let got = listing(text, "f");
     assert!(got.iter().any(|line| line.starts_with("test ")), "{got:?}");
     assert!(!got.iter().any(|line| line.starts_with("and ")), "{got:?}");
+}
+
+/// An i1 true is -1 signed, but its byte is 1: `icmp slt i1 %a, %b` read as
+/// `cmp al, bl; jl` was false for a = true, b = false, where it holds.
+#[test]
+fn test_a_signed_compare_of_i1_orders_true_below_false() {
+    let branch = |predicate: &str| {
+        let text = format!(
+            "define i16 @f(i1 %a, i1 %b) addrspace(1) {{\n  %c = icmp {predicate} i1 %a, %b\n  br i1 %c, label %y, label %n\ny:\n  ret i16 1\nn:\n  ret i16 0\n}}\n"
+        );
+        inner(&text)[2].split(' ').next().unwrap().to_owned()
+    };
+    // The branch or its inverse, whichever block falls through.
+    for (signed, unsigned) in [
+        ("slt", ["ja", "jbe"]),
+        ("sle", ["jae", "jb"]),
+        ("sgt", ["jb", "jae"]),
+        ("sge", ["jbe", "ja"]),
+        ("ult", ["jb", "jae"]),
+    ] {
+        assert!(unsigned.contains(&branch(signed).as_str()), "icmp {signed} i1: {}", branch(signed));
+    }
+}
+
+/// The far address of a near global plus a constant, passed twice in one
+/// block, shared one `mov si, offset x` and made each argument `lea`/`add`
+/// from it, a register held across both calls (16 instructions for 11, m16
+/// -Os nestud and C `use(&X[2]); use(&X[3])`). Each is `push offset x+n`.
+#[test]
+fn test_a_far_global_plus_a_constant_is_passed_as_a_symbol_and_offset() {
+    let text = "@x = external addrspace(0) global [0 x i8]
+
+declare void @use(ptr addrspace(1), i16) addrspace(1)
+
+define void @f() addrspace(1) {
+  call addrspace(1) void @use(ptr addrspace(1) addrspacecast (ptr getelementptr inbounds (i8, ptr @x, i16 4) to ptr addrspace(1)), i16 2)
+  call addrspace(1) void @use(ptr addrspace(1) addrspacecast (ptr getelementptr inbounds (i8, ptr @x, i16 6) to ptr addrspace(1)), i16 2)
+  ret void
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line == "push offset x+4"), "{got:?}");
+    assert!(got.iter().any(|line| line == "push offset x+6"), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("lea") || line.starts_with("add si")), "{got:?}");
 }

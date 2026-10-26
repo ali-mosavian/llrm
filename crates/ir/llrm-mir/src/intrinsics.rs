@@ -45,6 +45,8 @@ pub enum Intrinsic {
     BitCount(BitCount),
     /// `llvm.bswap`: the bytes of its argument in the opposite order.
     ByteSwap,
+    /// `llvm.bitreverse`: the bits of its argument in the opposite order.
+    BitReverse,
     /// `llvm.fshl` and `llvm.fshr`: the concatenation of the first two
     /// arguments shifted by the third modulo the width, the high half
     /// (`fshl`) or the low half (`fshr`) kept. Both arguments the same value,
@@ -425,7 +427,7 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 51] = [
+const TABLE: [Spec; 52] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -440,6 +442,7 @@ const TABLE: [Spec; 51] = [
     bit_count("llvm.cttz", BitCount::TrailingZeros),
     bit_count("llvm.ctpop", BitCount::Population),
     arithmetic("llvm.bswap", Intrinsic::ByteSwap, Slot::Any(0), UNARY, Kind::Int),
+    arithmetic("llvm.bitreverse", Intrinsic::BitReverse, Slot::Any(0), UNARY, Kind::Int),
     arithmetic("llvm.fshl", Intrinsic::FunnelShift { left: true }, Slot::Any(0), TERNARY, Kind::Int),
     arithmetic("llvm.fshr", Intrinsic::FunnelShift { left: false }, Slot::Any(0), TERNARY, Kind::Int),
     arithmetic("llvm.abs", Intrinsic::Abs, Slot::Any(0), ABS, Kind::Int),

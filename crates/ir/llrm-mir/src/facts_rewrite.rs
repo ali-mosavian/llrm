@@ -536,6 +536,10 @@ mod tests {
             // on the arm the select takes. It grants no flag to an
             // instruction that had none.
             "combine_select_spf.rs",
+            // LoopIdiomRecognize.cpp's `insertLoadTableForCRC` emits an
+            // `inbounds` GEP into the CRC table it just created, indexed by
+            // a byte. It reads no flag off an existing instruction.
+            "crc.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =
