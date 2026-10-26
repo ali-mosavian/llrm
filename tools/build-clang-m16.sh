@@ -3,7 +3,7 @@
 # Prints the clang path. Env: LLVM_SRC (a checkout holding the pin, default ~/scratch/llvm-src), M16_DIR (default ~/scratch).
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
-pin=$(tr -d '[:space:]' <"$root/toolchain/clang/pin")
+pin=$(head -1 "$root/toolchain/clang/pin" | tr -d '[:space:]')
 src=${LLVM_SRC:-$HOME/scratch/llvm-src}
 base=${M16_DIR:-$HOME/scratch}
 tree=$base/llvm-src-m16
