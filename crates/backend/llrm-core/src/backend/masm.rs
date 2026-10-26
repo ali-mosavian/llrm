@@ -220,6 +220,46 @@ pub struct Procedure {
     pub registers: llrm_target::FrameRegisters,
 }
 
+/// A near procedure of `code` and a return, called by name: a routine of the
+/// target's that the module holds once.
+pub fn routine_procedure(
+    name: &str,
+    code: Vec<u8>,
+    registers: llrm_target::FrameRegisters,
+    regs: Regs,
+) -> Procedure {
+    let what = Semantics { name: Some(name.into()), ..Semantics::new(Operation::Call) };
+    let instruction = lir::Insn::new(1, None, Some(what), vec![], vec![]);
+    // The return is an instruction, so the frame the printer opens is closed
+    // before it: a `ret` among the bytes would skip the epilogue.
+    let back = Semantics { name: Some("ret".into()), ..Semantics::new(Operation::Return) };
+    let back = lir::Insn::new(2, None, Some(back), vec![], vec![]);
+    let mut body = lir::LirBody::new(
+        name,
+        1,
+        vec![lir::LirBlock::new(1, vec![std::sync::Arc::new(instruction), std::sync::Arc::new(back)]).into()],
+        Default::default(),
+        Default::default(),
+    );
+    body.registers = Some(regs);
+    Procedure {
+        name: name.into(),
+        public: false,
+        far: false,
+        body,
+        reserve: 0,
+        callees: IndexMap::from_iter([(
+            1,
+            Callee { name: name.into(), far: false, pops: 0, code: vec![InlinePart::Bytes(code)], tail: false },
+        )]),
+        interrupt: None,
+        size: false,
+        entry: 0,
+        stack_check: None,
+        registers,
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Label {
     pub name: String,
@@ -655,7 +695,7 @@ fn saved_of(procedure: &Procedure) -> Vec<RegId> {
 
 /// Where `procedure` saves them, and sets up its frame where `frame`, when that
 /// is not its entry (`shrinkwrap`).
-fn wrap_of(
+pub(crate) fn wrap_of(
     procedure: &Procedure,
     body: &crate::model::lir::LirBody,
     frame: bool,
@@ -2143,6 +2183,10 @@ pub fn _instruction(
             }
         }
         Operation::Move | Operation::Address => vec![format!("{name} {}, {}", dests[0], sources[0])],
+        // JWasm refuses `rep bsf`; the pin prints it, so the prefix is a byte.
+        Operation::Binary if name == "bsf" && what.repeat => {
+            vec!["db 0F3h".to_owned(), format!("bsf {}, {}", dests[0], sources[1])]
+        }
         Operation::Binary | Operation::Select => vec![format!("{name} {}, {}", dests[0], sources[1])],
         Operation::Unary => vec![format!("{name} {}", dests[0])],
         Operation::Compare if name.starts_with('f') => {
@@ -2393,6 +2437,26 @@ mod tests {
 
     fn ax() -> Loc {
         Loc::Reg(ir::Reg { register: RegId::AX, width: 2 })
+    }
+
+    /// A `bsf` marked `repeat` carries the pin's `rep` prefix, which JWasm
+    /// refuses before anything but a string instruction: it is the byte,
+    /// then the `bsf`.
+    #[test]
+    fn test_bsf_prints_its_rep_prefix_as_a_byte() {
+        let regs = crate::backend::registerinfo::test_regs();
+        let eax = Loc::Reg(ir::Reg { register: RegId::EAX, width: 4 });
+        let ecx = Loc::Reg(ir::Reg { register: RegId::ECX, width: 4 });
+        let scan = |name: &str, repeat| Semantics {
+            name: Some(name.into()),
+            dests: vec![eax.clone()],
+            sources: vec![eax.clone(), ecx.clone()],
+            repeat,
+            ..Semantics::new(Operation::Binary)
+        };
+        assert_eq!(_instruction(regs, &scan("bsf", true), &no_names(), 0).unwrap(), ["db 0F3h", "bsf eax, ecx"]);
+        assert_eq!(_instruction(regs, &scan("bsf", false), &no_names(), 0).unwrap(), ["bsf eax, ecx"]);
+        assert_eq!(_instruction(regs, &scan("bsr", false), &no_names(), 0).unwrap(), ["bsr eax, ecx"]);
     }
 
     /// A string move prints as the instruction it is: `rep` where it has a

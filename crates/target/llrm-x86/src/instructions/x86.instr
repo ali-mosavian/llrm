@@ -54,6 +54,7 @@ shld      funnel     rm/^0,r,ri         16,32      shift_ri     s2=cx           
 shrd      funnel     rm/^0,r,ri         16,32      shift_ri     s2=cx                   -       count   -/OF,SF,ZF,AF,CF,PF  Shrd_rm{w}_r{w}_CL
 neg       unary      rm/^0              8,16,32    alu_rr       -                       -       -       -/OF,SF,ZF,AF,CF,PF  Neg_rm{w}
 not       unary      rm/^0              8,16,32    alu_rr       -                       -       -       -/-             Not_rm{w}
+# bsf, bsr, bswap: flat alu_rr; the pin has no per-CPU model at i486/P5 (cost row BSF-1).
 bsf       binary     r/^0,rm            16,32      alu_rr       -                       -       -       -/OF,SF,ZF,AF,CF,PF  Bsf_r{w}_rm{w}
 bsr       binary     r/^0,rm            16,32      alu_rr       -                       -       -       -/OF,SF,ZF,AF,CF,PF  Bsr_r{w}_rm{w}
 bswap     unary      r/^0               32         alu_rr       -                       -       -       -/-             Bswap_r32

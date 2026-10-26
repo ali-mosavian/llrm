@@ -375,6 +375,7 @@ impl Peephole {
             &compares_again(&tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))),
         );
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
+        let body = crate::backend::repbsf::marked(&body, &self.cpu);
         // Last: EBP zeroed above for each cell reading it 32 bits wide, where a
         // 32-bit address is the prefixed form of a 16-bit one. A native
         // one reads whole registers.
@@ -603,10 +604,18 @@ pub fn high_extracts<'a>(
             }
         }
     }
-    let exits = liveness::dead_at_exit(body);
+    // Worked out for the first window that gets as far as asking.
+    let exits = std::cell::OnceCell::new();
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let dead_after = regthrash::_dead_after(regs, body.bits, block, exits[&block.at].clone());
+        let dead = std::cell::OnceCell::new();
+        let dead_after = |at: usize| -> Lanes {
+            dead.get_or_init(|| {
+                let exits = exits.get_or_init(|| liveness::dead_at_exit(body));
+                regthrash::_dead_after(regs, body.bits, block, exits[&block.at].clone())
+            })[&at]
+                .clone()
+        };
         let insns = _code_windows(&block.insns, 3, |run| -> Result<_, String> {
             if run.len() == 3 {
                 if let Some(changed) =
@@ -633,7 +642,7 @@ fn _register_high_extract(
     regs: Regs,
     bits: u32,
     parts: &[Arc<Insn>],
-    dead_after: &DeadAfter,
+    dead_after: &dyn Fn(usize) -> Lanes,
     virtual_uses: &Counter,
     cpu: &Profile,
 ) -> Result<Option<Vec<Arc<Insn>>>, String> {
@@ -685,7 +694,7 @@ fn _register_high_extract(
     };
     let upper: Lanes = _lanes(regs, wide_high.register).minus(&_lanes(regs, high.register));
     let flags: Lanes = effects.1.and(&_flag_lanes(0xFFFF_FFFF));
-    if !upper.or(&flags).is_subset(&dead_after[&id(kept)]) {
+    if !upper.or(&flags).is_subset(&dead_after(id(kept))) {
         return Ok(None);
     }
     let old_cost = cpu.cost("push_r")? + 2 * cpu.cost("pop_r")?;
@@ -697,7 +706,7 @@ fn _register_high_extract(
             .difference(&_lanes(regs, high.register))
             .copied()
             .collect::<Lanes>()
-            .is_subset(&dead_after[&id(kept)])
+            .is_subset(&dead_after(id(kept)))
             && cpu.cost("shift_ri")? <= old_cost
             && emit(bits, &shift).is_some()
         {
@@ -735,7 +744,7 @@ fn _selected_register_high_extract(
     regs: Regs,
     bits: u32,
     parts: &[Arc<Insn>],
-    dead_after: &DeadAfter,
+    dead_after: &dyn Fn(usize) -> Lanes,
     virtual_uses: &Counter,
     cpu: &Profile,
 ) -> Result<Option<Vec<Arc<Insn>>>, String> {
@@ -819,7 +828,7 @@ fn _selected_register_high_extract(
         .intersection(&_flag_lanes(0xFFFF_FFFF))
         .copied()
         .collect();
-    if !upper.or(&flags).is_subset(&dead_after[&id(shift)]) {
+    if !upper.or(&flags).is_subset(&dead_after(id(shift))) {
         return Ok(None);
     }
     let new_cost = cpu.cost("shift_ri")?;
@@ -841,7 +850,7 @@ fn _high_extract(
     regs: Regs,
     bits: u32,
     parts: &[Arc<Insn>],
-    dead_after: &DeadAfter,
+    dead_after: &dyn Fn(usize) -> Lanes,
 ) -> Option<Vec<Arc<Insn>>> {
     let (load, shift) = (&parts[0], &parts[1]);
     if parts.iter().any(|one| {
@@ -899,7 +908,7 @@ fn _high_extract(
     let preserved: Lanes = _lanes(regs, wide.register).minus(&_lanes(regs, low.register));
     let effects = _register_effects(regs, bits, shift, false, true)?;
     let flags: Lanes = effects.1.and(&_flag_lanes(0xFFFF_FFFF));
-    if !preserved.or(&flags).is_subset(&dead_after[&id(shift)]) {
+    if !preserved.or(&flags).is_subset(&dead_after(id(shift))) {
         return None;
     }
 

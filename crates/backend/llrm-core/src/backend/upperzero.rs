@@ -1005,4 +1005,34 @@ mod tests {
         let [whole_now, partly_now, same_now] = super::asks();
         assert_eq!((whole_now - whole, partly_now - partly, same_now - same), (1, 1, 1));
     }
+
+    /// Only a write that leaves nothing above bit 15 counts as zeroing: a
+    /// dword constant or mask past a word, `xor` of two registers, `movsx`,
+    /// `or` and a word-wide destination each claimed a zero upper half that a
+    /// 32-bit address then read through.
+    #[test]
+    fn test_only_a_write_that_clears_the_upper_half_is_counted_zero() {
+        let reg = |register, width| Loc::Reg(Reg { register, width });
+        let imm = |value| Loc::Imm(Imm { value, width: 4, address: None });
+        let (eax, ebx, ax, bx) = (reg(RegId::EAX, 4), reg(RegId::EBX, 4), reg(RegId::AX, 2), reg(RegId::BX, 2));
+        let zeroes = |op, name: &str, dest: &Loc, sources: Vec<Loc>| {
+            super::zeroing(&one(0, op, name, vec![dest.clone()], sources, None)) != 0
+        };
+        for (op, name, sources, expect) in [
+            (Operation::Move, "mov", vec![imm(0xFFFF)], true),
+            (Operation::Move, "mov", vec![imm(0x10000)], false),
+            (Operation::Move, "mov", vec![imm(-1)], false),
+            (Operation::Binary, "and", vec![eax.clone(), imm(0xFFFF)], true),
+            (Operation::Binary, "and", vec![eax.clone(), imm(0x1FFFF)], false),
+            (Operation::Binary, "or", vec![eax.clone(), imm(0)], false),
+            (Operation::Binary, "xor", vec![eax.clone(), eax.clone()], true),
+            (Operation::Binary, "xor", vec![eax.clone(), ebx.clone()], false),
+            (Operation::Binary, "sub", vec![eax.clone(), ebx.clone()], false),
+            (Operation::Extend, "movzx", vec![bx.clone()], true),
+            (Operation::Extend, "movsx", vec![bx.clone()], false),
+        ] {
+            assert_eq!(zeroes(op, name, &eax, sources.clone()), expect, "{name} {sources:?}");
+        }
+        assert!(!zeroes(Operation::Move, "mov", &ax, vec![imm(5)]), "a word write leaves the upper half as it was");
+    }
 }

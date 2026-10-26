@@ -33,9 +33,9 @@ while true; do
     if [ "${LAND_FAST:-}" = 1 ]; then  # the user's call: no precheck, no smoke, up to 16 PRs in queue order; merge-batch leaves out the ones that cannot join
       # only PRs that merge one after another: one that conflicts with an earlier member waits a round instead of costing the others a smoke
       # closed PRs are dropped and a head younger than 15 minutes waits (a fix may be on its way) before the assembly
-      cand=($(open_only "${cand[@]:0:40}" 2>/dev/null)); cand=($(aged "${cand[@]}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log"))
+      cand=($(open_only "${cand[@]:0:16}" 2>/dev/null)); cand=($(aged "${cand[@]}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log"))
       # each PR alone on parity+PR (merge, build, fmt, scanners) under buildslot; one that fails is dropped here, with its REFUSED line, and never enters the batch
-      cand=($(alone_filter "${cand[@]:0:40}"))
+      cand=($(alone_filter "${cand[@]:0:16}"))
       asm_start=$(date +%s)
       batch=($(python3 "$HERE/../parity_squash.py" assemble 16 "${cand[@]:0:40}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log")); [ ${#batch[@]} -eq 0 ] && batch=("${cand[@]:0:16}")
       asm_s=$(( $(date +%s) - asm_start ))
@@ -45,8 +45,7 @@ while true; do
     fi
     [ ${#batch[@]} -eq 0 ] && { sleep 60; continue; }
   fi
-  for m in "${batch[@]}"; do sed -i "/^$m\$/d" $Q; done
-  open=($(open_only "${batch[@]}"))
+  open=($(pop_open $Q "${batch[@]}"))
   batch=("${open[@]}"); [ ${#batch[@]} -eq 0 ] && continue; n=${batch[0]}
   echo "== $(date +%H:%M) landing ${batch[*]}"
   if [ ${#batch[@]} -eq 1 ]; then "$HERE/land.sh" "$n" 2>&1 | cut -c1-260; continue; fi
@@ -57,10 +56,12 @@ while true; do
     [ "$2" = true ] && gh pr ready $m --repo $R >/dev/null
   done
   log=${LAND_TMP:-/tmp/landing}/sqb-${batch[0]}.log
-  [ "${LAND_FAST:-}" = 1 ] && alone_warm $(sed -n '1,16p' $Q)  # warms the verdict cache while the batch squashes
+  rm -f "$log.done"
+  [ "${LAND_FAST:-}" = 1 ] && alone_warm_at_squash "$log" $(sed -n '1,16p' $Q)  # warms the verdict cache while the batch squashes, not while it tests
   ( flock -n 9 || { echo "waiting for the landing lock (another landing holds the checkout)" >&2; flock -x 9; }; cd $W && git fetch -q origin && git reset -q --hard && git clean -fdq && git checkout -q --detach ${LAND_TOOLS_REF:-origin/feat/parity} \
     && { echo "STAGE assemble ${asm_s:-0}s"; WAITS=${WAITS:-$HERE/waits.txt} PARITY_BIN=$T/release CARGO_TARGET_DIR=$T CARGO_INCREMENTAL=0 PYTHONUNBUFFERED=1 uv run --project tools python tools/parity_squash.py merge-batch "${batch[@]}"; } 2>&1 \
       | stamp_lines > $log ) 9>"$W.checkout.lock"
+  touch "$log.done"
   for m in "${batch[@]}"; do
     if [ "$(gh pr view $m --repo $R --json state -q .state)" = MERGED ]; then echo "$m: MERGED  $(gh pr view $m --repo $R --json title -q .title)"
     else why=$(grep -E "#$m: REFUSED" $log | head -1); [ -n "$why" ] || why=$(grep -E "#$m|REFUSED" $log | head -2 | tr '\n' ' '); echo "$m: REFUSED: batch $log: $(echo "$why" | cut -c1-400)"; fi
