@@ -496,6 +496,14 @@ pub fn optimized(
             .iter_mut()
             .try_for_each(|module| crate::backend::bytes::expanded(module, |operation| options.arch.expands(operation)))
     })?;
+    if options.isel == crate::backend::shadow::Selector::Old {
+        timed("mir bit reversals", || {
+            program
+                .modules
+                .iter_mut()
+                .try_for_each(|module| crate::backend::bytes::bits_reversed(module, |op| options.arch.expands(op)))
+        })?;
+    }
     timed("mir funnel shifts", || {
         program
             .modules

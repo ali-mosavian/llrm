@@ -104,6 +104,13 @@ class CountTests(unittest.TestCase):
         result = icount.run(self.exe, entry, self.directory)
         self.assertEqual((result.region.instructions, result.region.memory_operands), (3 + 1, 0))
 
+    def test_a_whole_program_is_counted_from_its_first_instruction_to_its_exit(self):
+        """A program with no region to name (tests/run's, for the clocks sweep) counted nothing: `entry=None` only ran it.
+        `whole` counts the 34 of `region`, the 4 of `other` and the 7 of the start-up, the exit's `int 21h` included."""
+        result = icount.run(self.exe, None, self.directory, whole=True)
+        self.assertEqual((result.error, result.exit_code), ("", 0))
+        self.assertEqual(result.region.instructions, 34 + 4 + 7)
+
     def test_a_function_the_program_never_calls_is_reported_not_counted_as_zero(self):
         result = icount.run(self.exe, 0x7000, self.directory)
         self.assertIsNone(result.region)

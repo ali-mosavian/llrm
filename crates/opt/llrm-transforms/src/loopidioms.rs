@@ -16,9 +16,15 @@
 //! - A fill: a store, or a memset, of a loop-invariant value that is one byte
 //!   repeated, through an address `induction` derives as a GEP off an invariant
 //!   pointer, striding by the element's size. A cell whose bytes do not repeat
-//!   stays a loop, as in the pin (`memset_pattern16` is Darwin's). A loop with
-//!   several fills to bytes no other reaches is a memset each; fills that tile
-//!   adjacent bytes with the same byte are one.
+//!   is `llvm.experimental.memset.pattern` (DEVIATE: the pin forms none off
+//!   Darwin,
+//!   [L1214](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/LoopIdiomRecognize.cpp#L1214);
+//!   here it is priced from the target's table, so a word fill is `rep stosw`
+//!   where its clocks beat the loop's at speed, and its bytes at `-Os`; m16
+//!   `fillw` of 100 words is 407 clocks against the loop's 500, break-even
+//!   near 16 trips with the segment setup; owner w-5). A loop with several
+//!   fills to bytes no other reaches is a memset each; fills that tile adjacent
+//!   bytes with the same byte are one.
 //! - A copy: a load and a store of one cell each trip, the stored value being
 //!   the loaded one, from one pointer to another with the same step. Where the
 //!   ranges are apart it is `llvm.memcpy`; where they overlap but each trip
@@ -34,7 +40,7 @@
 //! (`isel/huge.rs`; Owner: clib-huge-fill-2256). A volatile access, a call, or
 //! a value the loop changes keeps the loop.
 //!
-//! A loop with one fill of constant bytes is rewritten always. A
+//! A loop with one fill of constant bytes is rewritten always. A pattern, a
 //! copy or a loop of several fills is priced (`_pays`, `_cheaper_by`) against
 //! what the loop costs for its trips (the proven count, or the profit model's
 //! estimate): the target's string-instruction setup and per-cell cost against
@@ -375,6 +381,8 @@ pub(crate) enum How {
 enum Byte {
     Operand(Operand),
     Number(u128),
+    /// A cell whose bytes do not repeat: `memset.pattern`.
+    Pattern(Operand),
 }
 
 /// The fill `loop_` is, if it is one.
@@ -491,6 +499,10 @@ fn _fill(
     {
         return None;
     }
+    let pattern = match &stored {
+        Stored::Fill(byte) => matches!(byte, Byte::Pattern(..)),
+        Stored::Copy(_) => false,
+    };
     if let Stored::Copy(copy) = &mut stored {
         copy.descending = descending;
         let Operand::Value(source) = copy.source else { return None };
@@ -501,6 +513,8 @@ fn _fill(
         }
         copy.how = _overlap(unit, copy.load, effect, from, to, &proof, &bytes, descending)?;
     }
+    // A pattern is `rep stosw` or `stosd`: priced, as a short loop beats its
+    // setup.
     let moved = match &stored {
         Stored::Copy(copy) => Some((bytes.to_i64()?, copy.descending && copy.how == How::Overlapping)),
         Stored::Fill(_) => None,
@@ -517,7 +531,7 @@ fn _fill(
         _ => None,
     };
     let body = if posttested { &chain[1..] } else { &chain };
-    if (moved.is_some() || fills > 1 || merged)
+    if (pattern || moved.is_some() || fills > 1 || merged)
         && !_pays(unit, callees, body, header, &proof, costs, size, moved, fills, filled)
     {
         return None;
@@ -611,6 +625,9 @@ fn _several(
     let mut fills = Vec::new();
     for &effect in effects {
         let (pointer, byte, bytes) = _stored(unit, callees, effect, still)?;
+        if matches!(byte, Byte::Pattern(..)) {
+            return None;
+        }
         let Operand::Value(address) = pointer else { return None };
         let formula = walk.values.get(&address).filter(|one| one.pointer.is_some())?;
         if formula.step.known()? != bytes {
@@ -704,12 +721,34 @@ fn _pays(
     fills: i64,
     stored: Option<(i64, bool)>,
 ) -> bool {
-    let function = unit.function;
-    let each: i64 = std::iter::once(&header)
-        .chain(chain)
+    let each = trip_cost(
+        unit.context,
+        unit.layout,
+        unit.function,
+        callees,
+        std::iter::once(&header).chain(chain),
+        costs,
+        size,
+    );
+    let known = proof.count.as_ref().and_then(ToPrimitive::to_i64);
+    let most = proof.maximum.as_ref().and_then(ToPrimitive::to_i64);
+    _cheaper_by(each, known, most, costs, size, moved, fills, stored)
+}
+
+/// What one trip of the loop through `blocks` costs, in `costs`' units. In
+/// bytes the loop's counter work is the step and its branch: the phi is a
+/// register, the address an operand, the test the step's flags.
+fn trip_cost<'a>(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    callees: &Callees,
+    blocks: impl Iterator<Item = &'a BlockId>,
+    costs: &OperationCosts,
+    size: bool,
+) -> i64 {
+    blocks
         .flat_map(|&block| operations(function, block))
-        // In bytes the loop's counter work is the step and its branch: the phi
-        // is a register, the address an operand, the test the step's flags.
         .filter(|&inst| {
             !size
                 || !matches!(
@@ -717,11 +756,62 @@ fn _pays(
                     Opcode::Phi | Opcode::GetElementPtr { .. } | Opcode::ICmp(_)
                 )
         })
-        .map(|inst| profit::operation(unit.context, unit.layout, function, callees, inst, costs).unwrap_or(costs.add))
-        .sum();
-    let known = proof.count.as_ref().and_then(ToPrimitive::to_i64);
-    let most = proof.maximum.as_ref().and_then(ToPrimitive::to_i64);
-    _cheaper_by(each, known, most, costs, size, moved, fills, stored)
+        .map(|inst| profit::operation(context, layout, function, callees, inst, costs).unwrap_or(costs.add))
+        .sum()
+}
+
+/// DEVIATE, for `loopidiom`: whether `rep movs` over a length known only at
+/// run time is fewer code bytes than the loop over `blocks` it replaces. The
+/// pin lowers that copy to a libc call, which llrm has none of: the string
+/// instruction takes ES, three registers, the count split in dwords and odd
+/// bytes, and a second `rep movs` (x_mergesort msort at m16 -Os: three sites,
+/// 16 bytes over the loop each).
+pub(crate) fn variable_copy_pays(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    callees: &Callees,
+    blocks: &[BlockId],
+    costs: &OperationCosts,
+) -> bool {
+    trip_cost(context, layout, function, callees, blocks.iter(), costs, true) > costs.copy + costs.copy_variable
+}
+
+/// DEVIATE, for `loopidiom`: whether `fills` fills, for the `stores` stores of
+/// the loop over `blocks`, are fewer code bytes than the loop. A loop of one
+/// store is always filled; of several, each fill is a `rep stos` with ES set
+/// around it, and the stores of one object with one value merge into one.
+pub(crate) fn fills_pay(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    callees: &Callees,
+    blocks: &[BlockId],
+    costs: &OperationCosts,
+    stores: i64,
+    fills: i64,
+    kept: i64,
+) -> bool {
+    // The loop stays for the stores of computed values: a fill saves one
+    // store, less than itself.
+    if kept > 0 {
+        return false;
+    }
+    // The table doubles an operation that becomes more than one instruction;
+    // a fill's three immediate loads are 2 to 3 bytes each, not 6: three
+    // quarters of `fill` is its real size (12 to 13 of 18 bytes at m16).
+    stores < 2
+        || fills_cheaper(trip_cost(context, layout, function, callees, blocks.iter(), costs, true), fills, costs.fill)
+}
+
+/// Whether a loop of `loop_bytes` is more than `fills` fills of `fill` bytes by
+/// the table, three quarters of which is their real size.
+fn fills_cheaper(
+    loop_bytes: i64,
+    fills: i64,
+    fill: i64,
+) -> bool {
+    4 * loop_bytes > 3 * fills * fill
 }
 
 /// What a copy of `length` bytes costs: the loads and stores isel expands it to
@@ -793,7 +883,7 @@ fn _cheaper_by(
     };
     let copy = match known {
         Some(count) => copy_price(costs, count * bytes, backward),
-        None => string_copy(costs, trips * bytes, backward),
+        None => string_copy(costs, trips * bytes, backward) + if size { costs.copy_variable } else { 0 },
     };
     trips * each > copy
 }
@@ -812,6 +902,23 @@ pub(crate) fn _memset(
     let ty =
         types.intern(Type::Function { returns: void, parameters: vec![pointer, byte, length, flag], variadic: false });
     (declared.declare(&format!("llvm.memset.p{space}.i{width}"), ty), ty)
+}
+
+/// `llvm.experimental.memset.pattern` of cells of type `cell` for pointers of
+/// `space` and counts `width` bits wide, declared where the module has none.
+fn _pattern(
+    context: &mut Context,
+    declared: &mut Declared,
+    space: u32,
+    cell: TypeId,
+    width: u32,
+) -> (GlobalId, TypeId) {
+    let bits = context.types.int_bits(cell).expect("an integer cell");
+    let types = &mut context.types;
+    let (void, pointer, count, flag) = (types.void(), types.ptr(space), types.int(width), types.int(1));
+    let ty =
+        types.intern(Type::Function { returns: void, parameters: vec![pointer, cell, count, flag], variadic: false });
+    (declared.declare(&format!("llvm.experimental.memset.pattern.p{space}.i{bits}.i{width}"), ty), ty)
 }
 
 /// `llvm.memcpy`, or `llvm.memmove` where the ranges overlap, from pointers of
@@ -854,7 +961,8 @@ fn _filled(
     let counted = trips.clone();
     let trips = seeds.widened(&trips, width);
     seeds.width = width;
-    let count = if found.bytes == BigInt::from(1) {
+    let cells = matches!(found.stored, Stored::Fill(Byte::Pattern(..)));
+    let count = if found.bytes == BigInt::from(1) || cells {
         trips.clone()
     } else {
         seeds.computed(BinaryOp::Mul, vec![trips.clone(), AffineOperand::constant(found.bytes.clone(), width)])
@@ -896,10 +1004,17 @@ fn _filled(
     let off = counting::constant(seeds.context, &BigInt::from(0), 1);
     let (callee, function_type, mut operands, direction) = match &found.stored {
         Stored::Fill(byte) => {
-            let (callee, function_type) = _memset(seeds.context, declared, found.memset.0, found.memset.1);
+            let (callee, function_type) = match byte {
+                Byte::Pattern(value) => {
+                    let cell = seeds.function.operand_type(seeds.context, *value).expect("a typed cell");
+                    _pattern(seeds.context, declared, found.memset.0, cell, found.memset.1)
+                }
+                _ => _memset(seeds.context, declared, found.memset.0, found.memset.1),
+            };
             let byte = match *byte {
                 Byte::Operand(byte) => byte,
                 Byte::Number(byte) => counting::constant(seeds.context, &BigInt::from(byte), 8),
+                Byte::Pattern(value) => value,
             };
             (callee, function_type, vec![found.pointer, byte, count], None)
         }
@@ -970,6 +1085,7 @@ fn _filled(
         let byte = match extra.byte {
             Byte::Operand(byte) => byte,
             Byte::Number(byte) => counting::constant(context, &BigInt::from(byte), 8),
+            Byte::Pattern(value) => value,
         };
         let pointer_type = context.types.ptr(0);
         let callee =
@@ -1138,7 +1254,9 @@ fn _stored(
     if let Some(byte) = _repeated(unit, value, width) {
         return Some((pointer, Byte::Number(byte), bytes));
     }
-    None
+    // LLVM's memset_pattern16: the cell is a word or dword; the stored value
+    // need not be a constant.
+    matches!(width, 16 | 32).then_some((pointer, Byte::Pattern(value), bytes))
 }
 
 /// The store and load of `one` and `other`, where the store writes the loaded

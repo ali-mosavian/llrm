@@ -181,7 +181,7 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::machinesink::MachineSink { size: target.size, limit: classes.available.len() }),
         // On SSA, after sinking (the pin's PeepholeOptimizer): a subtract
         // nothing reads is a compare (optimizeCompareInstr).
-        Box::new(crate::backend::peepholeopt::PeepholeOptimizer),
+        Box::new(crate::backend::peepholeopt::PeepholeOptimizer { size: target.size }),
         // On SSA, before the pin allocates: two addresses that differ in a
         // displacement are one (X86OptimizeLEAs, pre-RA).
         Box::new(crate::backend::leaopt::OptimizeLeas { size: target.size }),
@@ -218,7 +218,10 @@ pub fn machine_with<'a>(
         }),
         // Before any value is placed: the pin's pre-RA scheduler, bottom-up by
         // pressure.
-        Box::new(crate::backend::machinesched::MachineScheduler { classes: Rc::clone(classes) }),
+        Box::new(crate::backend::machinesched::MachineScheduler {
+            classes: Rc::clone(classes),
+            segments: segments.clone(),
+        }),
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
         Box::new(crate::backend::fixupsetcc::FixupSetCc),
@@ -282,7 +285,7 @@ pub fn machine_with<'a>(
         Box::new(schedule::Scheduler::new(target)?),
         // Last: this physical order decides which explicit edge is now
         // fall-through.
-        Box::new(jumps::ControlFlow { cpu: target }),
+        Box::new(jumps::ControlFlow { cpu: target, calls: calls.cloned() }),
         // The pin runs MachineCopyPropagation again after tail duplication.
         Box::new(crate::backend::machinecp::CopyPropagation),
     ];

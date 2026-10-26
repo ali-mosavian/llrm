@@ -93,6 +93,24 @@ impl llrm_target::Target for M32 {
         "x86-m32"
     }
 
+    fn pressure(&self) -> Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)> {
+        Some((
+            M32::pressure_sets(),
+            (0..PRESSURE.sets.len())
+                // A set whose largest class the table leaves out holds no value
+                // here (a class is described when a register of the target is
+                // in it): its raw limit stands.
+                .map(|set| {
+                    if PRESSURE.class(&PRESSURE.sets[set].largest).is_some() {
+                        M32::pressure_limit(set)
+                    } else {
+                        PRESSURE.sets[set].limit
+                    }
+                })
+                .collect(),
+        ))
+    }
+
     fn machine(&self) -> Machine {
         Machine::parse(DOS32, TIMINGS.default_cpu().expect("timings.times states a default CPU"))
             .expect("the flat DOS description parses")
@@ -396,6 +414,18 @@ mod tests {
         let limits: Vec<(usize, u32)> =
             [35, 1, 3, 13, 26].iter().map(|&set| (set, super::M32::pressure_limit(set))).collect();
         assert_eq!(limits, [(35, 10), (1, 6), (3, 6), (13, 10), (26, 10)]);
+    }
+
+    /// `Target::pressure()` panicked ("the largest class of a set is
+    /// described") on the sets whose largest class the table leaves out, so
+    /// every m32 compile with a tracked region failed. It gives one limit
+    /// per set.
+    #[test]
+    fn pressure_gives_a_limit_to_every_set() {
+        use llrm_target::Target;
+        let (sets, limits) = super::M32.pressure().expect("m32 has pressure sets");
+        assert_eq!(limits.len(), sets.sets.len());
+        assert_eq!(limits[35], 10);
     }
 
     /// `object()` and the runtime tables are parsed once and kept; each must

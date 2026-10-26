@@ -281,13 +281,17 @@ fn test_a_masked_far_subscript_compiles() {
     );
     let program = parsed_as(&basic, "qb45", "qb45");
     object_bytes(&program, "MASKED.BAS").expect("compiles");
-    // The proven-exact `s(i)` addresses through a doubled 32-bit index, its
-    // shift gone and the upper halves zeroed once before the loop.
+    // The masked `s(i)` is a 16-bit offset doubled by an add and cut to the
+    // array's 1022 (no `shl`, no 32-bit index to widen), and the unmasked
+    // `u(x)` addresses through a doubled 32-bit index whose upper half is
+    // zeroed once before the loop.
     let text = listing(&program);
     let body = &text[text.find("T proc").expect("T proc")..text.find("T endp").expect("T endp")];
-    let index = regex::Regex::new(r"fs:\[(e\w\w)\+(e\w\w)(\*2)?\]").unwrap();
+    let mask = regex::Regex::new(r"and (\w+), 1022\n\s+mov \w+, word ptr fs:\[(\w+)\]").unwrap();
+    let masked = mask.captures(body).is_some_and(|one| one[1] == one[2]);
+    let index = regex::Regex::new(r"es:\[(e\w\w)\+(e\w\w)(\*2)?\]").unwrap();
     let doubled = index.captures_iter(body).any(|one| one.get(3).is_some() || one[1] == one[2]);
-    assert!(doubled && body.contains("movzx") && !body.contains("shl"), "{body}");
+    assert!(masked && doubled && body.contains("movzx") && !body.contains("shl"), "{body}");
 }
 
 /// The main body of `source`'s listing.
@@ -945,7 +949,10 @@ fn test_a_counted_loop_reads_an_unannotated_byref_once() {
     let loop_ = poke_block(&text);
 
     assert!(!text.contains("load volatile"), "{text}");
-    assert!(!loop_.contains(" = load "), "{text}");
+    // `ch` is one plain load per trip, as the pin leaves it: a volatile far
+    // store may reach it (4f82e22e1, #3994). Not a wait on it: no volatile.
+    assert_eq!(loop_.matches(" = load ").count(), 1, "{text}");
+    assert!(loop_.contains("store volatile"), "the POKE still lands: {text}");
 }
 
 /// ENTPHI lost a dynamic-array address after its identity phi edge vanished.
@@ -1502,7 +1509,8 @@ fn test_bases_past_the_registers_are_not_stepped_as_pointers() {
     assert!(steps <= 1, "{steps} pointer steps\n{text}");
 }
 
-const SEVEN_TERMS: &str = "DEFINT A-Z\r\nDECLARE SUB t ()\r\nDIM SHARED sp(8000), f(700), xp(7), yy(7), cd(2000)\r\nt\r\nSUB t\r\n\
+const SEVEN_TERMS: &str = "DEFINT A-Z\r\nDECLARE SUB t ()\r\nDIM SHARED sp(8000), f(700), xp(7), yy(7), cd(2000)\r\nk = LEN(COMMAND$)\r\n\
+sp(k) = 1: f(k) = 1: xp(k) = 1: yy(k) = 1: cd(k) = 1\r\nt\r\nSUB t\r\n\
 DEF SEG = &HA000\r\nFOR x = 24 TO 295\r\ndn = sp(yy(1) + f(x - xp(1))) + sp(yy(2) + f(x - xp(2))) + \
 sp(yy(3) + f(x - xp(3))) + sp(yy(4) + f(x - xp(4))) + sp(yy(5) + f(x - xp(5))) + sp(yy(6) + f(x - xp(6))) + \
 sp(yy(7) + f(x - xp(7)))\r\nPOKE x, cd(dn)\r\nNEXT\r\nEND SUB\r\n";
@@ -1641,7 +1649,7 @@ FOR x = 0 TO 99\r\nPOKE &H17, yy(1) + xp(2) + x\r\nNEXT\r\nDEF SEG\r\nEND SUB\r\
 fn out_loop(port: &str) -> String {
     let directory = tempfile::tempdir().expect("a directory");
     let text = format!(
-        "DEFINT A-Z\r\nDECLARE SUB t ()\r\nDIM SHARED yy(3)\r\nt\r\nSUB t\r\nFOR x = 0 TO 99\r\nOUT {port}, yy(1) + x\r\nNEXT\r\nEND SUB\r\n"
+        "DEFINT A-Z\r\nDECLARE SUB t ()\r\nDIM SHARED yy(3)\r\nyy(LEN(COMMAND$)) = 1\r\nt\r\nSUB t\r\nFOR x = 0 TO 99\r\nOUT {port}, yy(1) + x\r\nNEXT\r\nEND SUB\r\n"
     );
     let source = written(&directory, "T.BAS", text.as_bytes());
     loop_around(&listing(&parsed_as(&source, "qb45", "qb45")), "T", |line| line.trim_start().starts_with("out "))
@@ -2031,6 +2039,7 @@ fn test_a_dividend_two_instructions_require_is_copied_into_its_register_once() {
     // so the extended value sat in EDI across both and one of the three
     // recurrences spilled: `mov ax, [bp-2]` and `add word ptr [bp-2], 5`. A
     // divisor read from memory stays a division; a constant is a reciprocal.
+    // CVP narrows `i \\ d(0)` to 16 bits as the pin does (`sdiv i16`): `cwd`.
     let source = "DEFINT A-Z\nDIM b(200), d(1)\nDIM i, t\nd(0) = 5 + INT(RND * 1)\nt = 0\nFOR i = 0 TO 100 STEP 5\n    b(i) = i \\ d(0)\n    t = t + b(i)\nNEXT i\nPRINT \"T=\"; t\n";
     let basic = std::env::temp_dir().join(format!("stride_variable_divisor_{}.bas", std::process::id()));
     std::fs::write(&basic, source).expect("writes the program");
@@ -2200,7 +2209,10 @@ fn test_a_selector_the_loop_never_changes_is_loaded_before_it() {
             procedure.find(&format!("{label}:\n")).filter(|begun| *begun < at).map(|begun| &procedure[begun..end])
         })
         .collect::<Vec<_>>();
-    let reload = regex::Regex::new(r"mov [c-gs]s, word ptr \[bp").unwrap();
+    // Direct (`mov es, [bp-N]`) or through a register (`mov cx, [bp-N]; mov es,
+    // cx`).
+    let reload =
+        regex::Regex::new(r"mov [c-gs]s, word ptr \[bp|mov (\w+), word ptr \[bp[^\n]*\n\s*mov [c-gs]s, \1\b").unwrap();
     for one in loops.iter().filter(|one| !loops.iter().any(|other| other.len() < one.len() && one.contains(*other))) {
         assert!(!reload.is_match(one), "{one}");
     }
@@ -2640,8 +2652,7 @@ fn test_def_seg_stores_the_runtime_segment_cell() {
 #[test]
 fn test_a_word_array_after_an_odd_object_lies_at_an_even_offset() {
     let directory = tempfile::tempdir().expect("a directory");
-    let text =
-        "DEFINT A-Z\r\nDIM SHARED s AS STRING * 3, f3(10)\r\ns = \"abc\"\r\nf3(1) = LEN(s)\r\nPRINT f3(1), s\r\n";
+    let text = "DEFINT A-Z\r\nDIM SHARED s AS STRING * 3, f3(10)\r\ns = \"abc\"\r\nk = LEN(COMMAND$)\r\nf3(k) = LEN(s)\r\nPRINT f3(k), s\r\n";
     let program = parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45");
     let codegen = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
     let module = qb_compile::assembled(&program, None, &codegen).expect("assembles");
@@ -3143,7 +3154,11 @@ fn a_poke_to_video_memory_leaves_the_loop_its_variables_and_segment() {
     let body = &fill[top..=at];
     let loads = body.iter().filter(|one| one.contains("ptr [") || one.contains("b$seg")).count();
     let pokes = body.iter().filter(|one| one.starts_with("mov byte ptr es:[")).count();
-    assert_eq!((loads, pokes), (0, 2), "{body:#?}");
+    // The pin's output: `opt -passes='loop-mssa(licm)'` and `default<O2>` hoist
+    // neither cell past a volatile far store (4f82e22e1, #3994 states that
+    // video memory holds no program data). Both POKEs still land every
+    // trip.
+    assert_eq!((loads, pokes), (2, 2), "{body:#?}");
 }
 
 /// The listing of `source` through `llrm-qb -O2 -march=i486 -S`, as shipped.
@@ -3157,6 +3172,27 @@ fn listing_of(
     let argv = [input.to_str().unwrap(), "-O2", "-march=i486", "-S", "-o", out.to_str().unwrap()].map(str::to_owned);
     assert_eq!(crate::cli::main(&argv), 0);
     std::fs::read_to_string(&out).expect("the listing")
+}
+
+/// `DEF SEG = VARSEG(x)` then `POKE VARPTR(x) + k, ...` writes into x: the
+/// pointer `ADDRESS(x) + k`, not a segment loaded from `b$seg` and an offset,
+/// which a loop's cells and `b$seg` itself could not be kept in registers
+/// across (far_poke_loop_variable.bas, +33 B and +266 clocks against main).
+#[test]
+fn a_poke_after_def_seg_varseg_is_a_store_into_the_variable() {
+    let text = listing_of(
+        "varseg_poke",
+        "DEFINT A-Z\r\nDIM SHARED x AS INTEGER, y AS LONG\r\nx = 0\r\nDEF SEG = VARSEG(x)\r\nFOR i = 0 TO 3000\r\nPOKE VARPTR(x), (i * 37) AND 255\r\nPOKE VARPTR(x) + 1, (i * 11) AND 127\r\ny = y + x\r\nNEXT i\r\nDEF SEG\r\nPRINT x; y\r\nEND\r\n",
+    );
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let lines = main.lines().map(str::trim).collect::<Vec<_>>();
+    let at = lines.iter().rposition(|one| one.starts_with('j') && !one.starts_with("jmp")).expect("the loop's branch");
+    let top = lines
+        .iter()
+        .position(|one| *one == format!("{}:", lines[at].split_whitespace().nth(1).unwrap()))
+        .expect("its label");
+    let body = &lines[top..=at];
+    assert!(!body.iter().any(|one| one.contains("b$seg")), "{body:#?}");
 }
 
 /// A POKE after a literal DEF SEG wrote memory no variable lives in, yet
@@ -3376,6 +3412,17 @@ fn a_string_compare_tested_against_minus_one_compiles_optimized() {
         let argv = [source.to_str().unwrap(), level, "-S", "-o", out.to_str().unwrap()].map(str::to_owned);
         assert_eq!(crate::cli::main(&argv), 0, "{level}");
     }
+}
+
+/// Every cell of the module frame carried an `ss:` override in a program with
+/// ON ERROR (range_on_error: 24 bytes at -Os): the body never loads DS, so the
+/// data group is DS throughout.
+#[test]
+fn test_an_on_error_program_without_far_data_has_no_ss_override() {
+    let basic = root().join("tests/run/qb/range_on_error.bas");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    assert!(!text.contains("ss:"), "{text}");
 }
 
 /// The words of the table `label` names in `listing`.

@@ -661,13 +661,9 @@ fn test_dynamic_string_array_formal_uses_adjusted_near_descriptor_base() {
     let payloads: Vec<&hir::Place> =
         source.modules[0].functions[1].places.iter().filter(|one| one.name.ends_with("$payload")).collect();
     assert!(!payloads.is_empty() && payloads.iter().all(|one| one.address == hir::AddressKind::Far));
-    let records = records(&source, "string-array-parameter.bas");
-    let fsl = by_name(&records)["FSL_CONST"].0;
-    assert!(
-        omf::fixups(&records)
-            .iter()
-            .any(|fixup| fixup.seg == Some(1) && fixup.target == "segment" && fixup.index == fsl)
-    );
+    // The literal's descriptor is built in DGROUP; no far address is computed
+    // by adding two offsets and no segment of FSL_CONST is read.
+    assert!(!procedure.contains("seg "), "{procedure}");
 }
 
 /// D_SURF applied a one-based array's lower bound twice and hung before its
@@ -892,7 +888,7 @@ fn test_on_error_registrations_follow_source_order() {
     assert_eq!(registered, ["push offset $QB$LANDING", "push offset $QB$LANDING", "pushd 0"], "{main}");
     let states: Vec<u32> = lines
         .iter()
-        .filter_map(|line| line.strip_prefix("mov word ptr ss:$QB$FRAME, "))
+        .filter_map(|line| line.strip_prefix("mov word ptr $QB$FRAME, "))
         .map(|state| state.parse().expect("a statement number"))
         .collect();
     // Sites are numbered from 0 among the statements that raise; the first

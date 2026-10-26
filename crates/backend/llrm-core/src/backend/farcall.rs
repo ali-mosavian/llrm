@@ -46,12 +46,14 @@
 //! The phase map: [`crate::backend`]
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use crate::backend::farload::{_next_word, _plain};
 use crate::backend::frame::{self as frames, Frame};
-use crate::model::ir::{Held, Loc, Operation, Semantics};
-use crate::model::lir::{Insn, LirBody};
+use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
+use crate::model::lir::{self, Insn, LirBody};
 use crate::model::passes::LIRTransform;
 
 /// Python holds the one mutable frame every machine phase shares.
@@ -79,7 +81,8 @@ impl LIRTransform for FarIndirectCalls {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        materialized(&body, &mut self.frame.borrow_mut()).map_err(|refused| refused.0)
+        let body = materialized(&body, &mut self.frame.borrow_mut()).map_err(|refused| refused.0)?;
+        Ok(loads_folded(&body))
     }
 }
 
@@ -139,6 +142,143 @@ pub fn materialized(
     Ok(out)
 }
 
+/// A far call through a cell that two word loads (or one dword load) of the
+/// same place were stored to calls through that place instead: `call dword
+/// ptr table[bx]` for `mov cx,table[bx]; mov dx,table+2[bx]; mov [bp-2],dx;
+/// mov [bp-4],cx; call [bp-4]`. The loads and the stores read nothing else.
+pub fn loads_folded(body: &LirBody) -> LirBody {
+    if body.regs().far_segment.is_none() {
+        return body.clone();
+    }
+    let mut reads: BTreeMap<u32, usize> = BTreeMap::new();
+    for block in &body.blocks {
+        for phi in block.phis.iter() {
+            for (_from, value) in &phi.incoming {
+                *reads.entry(*value).or_default() += 1;
+            }
+        }
+        for one in block.insns.iter() {
+            for value in one.uses.iter().copied().chain(one.requires.iter().map(|(held, _)| held.value)) {
+                *reads.entry(value).or_default() += 1;
+            }
+        }
+    }
+    let mut out = body.clone();
+    for block in &mut out.blocks {
+        let mut insns: Vec<Arc<Insn>> = block.insns.iter().cloned().collect();
+        let mut at = 0;
+        while at < insns.len() {
+            if let Some(folded) = _fold_call(&insns, at, &reads) {
+                insns = folded;
+            }
+            at += 1;
+        }
+        block.insns = insns.into();
+    }
+    out
+}
+
+/// `insns` with the call at `call` made to read the place its pointer was
+/// loaded from; `None` when it does not have that shape, or the place is no
+/// symbol's.
+fn _fold_call(
+    insns: &[Arc<Insn>],
+    call: usize,
+    reads: &BTreeMap<u32, usize>,
+) -> Option<Vec<Arc<Insn>>> {
+    let what = insns[call].what.as_ref()?;
+    let [Loc::Mem(cell)] = what.sources.as_slice() else { return None };
+    if what.op != Operation::Call || !what.indirect || cell.width != 4 || cell.selector.is_some() || cell.base.is_some()
+    {
+        return None;
+    }
+    let high_cell = Mem { width: 2, ..cell.clone() };
+    let low_cell = Mem { width: 2, ..cell.clone() };
+    let (mut low, mut high, mut whole) = (None, None, None);
+    for (at, one) in insns[..call].iter().enumerate().rev() {
+        let Some(one_what) = one.what.as_ref() else { continue };
+        let stored = match one_what.dests.as_slice() {
+            [Loc::Mem(dest)] if one_what.op == Operation::Move && one_what.name.as_deref() == Some("mov") => dest,
+            [] => continue,
+            _ if one_what.dests.iter().all(|place| !matches!(place, Loc::Mem(_))) && one_what.op != Operation::Call => {
+                continue;
+            }
+            _ => break,
+        };
+        let [Loc::Held(source)] = one_what.sources.as_slice() else { break };
+        if stored.same_place(cell) && stored.width == 4 {
+            whole = Some((at, source.value));
+        } else if stored.same_place(&low_cell) {
+            low = Some((at, source.value));
+        } else if _next_word(&low_cell, stored) && stored.width == 2 {
+            high = Some((at, source.value));
+        } else {
+            break;
+        }
+        if whole.is_some() || (low.is_some() && high.is_some()) {
+            break;
+        }
+    }
+    let _ = high_cell;
+    let loaded = |value: u32, before: usize| -> Option<(usize, Mem)> {
+        let at = insns[..before].iter().rposition(|one| one.defines.contains(&value))?;
+        let one = &insns[at];
+        let what = one.what.as_ref()?;
+        let (true, [Loc::Mem(place)]) =
+            (what.op == Operation::Move && what.name.as_deref() == Some("mov"), what.sources.as_slice())
+        else {
+            return None;
+        };
+        (reads.get(&value) == Some(&1) && !one.volatile() && _plain(one) && one.defines.len() == 1)
+            .then(|| (at, place.clone()))
+    };
+    let (sources, stores, first_load, place) = if let Some((store, value)) = whole {
+        let (at, place) = loaded(value, store)?;
+        if place.width != 4 {
+            return None;
+        }
+        (vec![at], vec![store], at, place)
+    } else {
+        let ((low_store, low_value), (high_store, high_value)) = (low?, high?);
+        let (low_at, low_place) = loaded(low_value, low_store)?;
+        let (high_at, high_place) = loaded(high_value, high_store)?;
+        if !_next_word(&low_place, &high_place) || low_place.width != 2 || high_place.width != 2 {
+            return None;
+        }
+        (vec![low_at, high_at], vec![low_store, high_store], low_at.min(high_at), Mem { width: 4, ..low_place })
+    };
+    // A call reads only a place a symbol names (a table entry): one reached
+    // by a register and an offset alone (`fill->line`) has no encoding the
+    // call can take, and `call dword ptr [ax+4]` was all the allocator left.
+    if place.addr.is_none() {
+        return None;
+    }
+    // Nothing between the first load and the call may write memory, or the
+    // call would read what the load did not.
+    for (at, one) in insns.iter().enumerate().take(call).skip(first_load) {
+        if sources.contains(&at) || stores.contains(&at) {
+            continue;
+        }
+        let one_what = one.what.as_ref()?;
+        if one.volatile()
+            || one_what.op == Operation::Call
+            || one_what.dests.iter().any(|place| matches!(place, Loc::Mem(_)))
+            || !one.clobbers.is_empty()
+        {
+            return None;
+        }
+    }
+    let mut folded: Vec<Arc<Insn>> = insns.to_vec();
+    for at in sources.iter().chain(&stores) {
+        folded[*at] = lir::bytes_only(&insns[*at]);
+    }
+    let mut called = (*insns[call]).clone();
+    called.uses.extend(ir::values(&Loc::Mem(place.clone())).iter().map(|held| held.value));
+    called.what = Some(Semantics { sources: vec![Loc::Mem(place)], ..what.clone() });
+    folded[call] = Arc::new(called);
+    Some(folded)
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -149,7 +289,7 @@ mod tests {
 
     use super::FarIndirectCalls;
     use crate::backend::frame::{Frame, SlotKey};
-    use crate::model::ir::{Held, Loc, Operation, Semantics};
+    use crate::model::ir::{self, Addr, Held, Loc, Mem, Operation, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::model::passes::LIRTransform;
     use crate::support::hash::IndexMap;
@@ -281,5 +421,141 @@ mod tests {
             let out = super::materialized(&body, &mut Frame::new(-16)).unwrap();
             assert_eq!(out.insns().len(), calls_made, "{:?}", out.insns());
         }
+    }
+
+    fn word_load(
+        at: i64,
+        value: u32,
+        cell: Mem,
+    ) -> Arc<Insn> {
+        let uses = ir::values(&Loc::Mem(cell.clone())).iter().map(|held| held.value).collect();
+        Arc::new(Insn::new(
+            at,
+            Some((at, at)),
+            Some(Semantics {
+                name: Some("mov".into()),
+                dests: vec![Loc::Held(Held { value, width: 2 })],
+                sources: vec![Loc::Mem(cell)],
+                ..Semantics::new(Operation::Move)
+            }),
+            vec![value],
+            uses,
+        ))
+    }
+
+    fn word_store(
+        at: i64,
+        cell: Mem,
+        value: u32,
+    ) -> Arc<Insn> {
+        Arc::new(Insn::new(
+            at,
+            Some((at, at)),
+            Some(Semantics {
+                name: Some("mov".into()),
+                dests: vec![Loc::Mem(cell)],
+                sources: vec![Loc::Held(Held { value, width: 2 })],
+                ..Semantics::new(Operation::Move)
+            }),
+            vec![],
+            vec![value],
+        ))
+    }
+
+    fn far_call_after(between: Option<Arc<Insn>>) -> (Vec<Arc<Insn>>, Mem) {
+        let table = |disp: i64| Mem {
+            base: Some(Held { value: 10, width: 2 }),
+            ..Mem::new(Some(Addr::new(Space::Far, disp)), 2)
+        };
+        let slot = |disp: i64, width: u32| Mem::new(Some(Addr::new(Space::Frame, disp)), width);
+        let mut insns = vec![
+            word_load(1, 1, table(0)),
+            word_load(2, 2, table(2)),
+            word_store(3, slot(-2, 2), 2),
+            word_store(4, slot(-4, 2), 1),
+        ];
+        insns.extend(between);
+        insns.push(Arc::new(Insn::new(
+            5,
+            Some((5, 5)),
+            Some(Semantics {
+                name: Some("call".into()),
+                sources: vec![Loc::Mem(slot(-4, 4))],
+                indirect: true,
+                ..Semantics::new(Operation::Call)
+            }),
+            vec![],
+            vec![],
+        )));
+        (insns, Mem { width: 4, ..table(0) })
+    }
+
+    fn folded_calls(insns: Vec<Arc<Insn>>) -> Vec<Arc<Insn>> {
+        let block = LirBlock::new(0, insns);
+        let body = LirBody::new("far", 0, vec![block.into()], IndexMap::default(), IndexMap::default());
+        super::loads_folded(&body).insns().to_vec()
+    }
+
+    /// `x_funcptr` at m16 stored the table entry's two words to a frame cell
+    /// and called through the cell (`mov cx,_table[bx]; mov
+    /// dx,_table+2[bx]; mov [bp-2],dx; mov [bp-4],cx; call dword ptr
+    /// [bp-4]`): four instructions and a cell where `call dword ptr
+    /// _table[bx]` is one.
+    #[test]
+    fn a_far_call_reads_the_table_entry_its_pointer_was_loaded_from() {
+        let (insns, entry) = far_call_after(None);
+        let out = folded_calls(insns);
+        let call = out.last().unwrap().what.as_ref().unwrap();
+        assert_eq!(call.sources, vec![Loc::Mem(entry)]);
+        assert!(
+            out[..4].iter().all(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Nothing)),
+            "loads and stores left: {out:?}"
+        );
+    }
+
+    /// A store between the loads and the call may change the entry: the call
+    /// keeps its cell.
+    #[test]
+    fn a_far_call_after_a_store_to_memory_keeps_its_cell() {
+        let blocker = word_store(9, Mem::new(Some(Addr::new(Space::Far, 8)), 2), 7);
+        let (insns, _entry) = far_call_after(Some(blocker));
+        let out = folded_calls(insns.clone());
+        assert_eq!(out, insns);
+    }
+
+    /// `fill->line(...)` in gline.c (`call dword ptr [bx+8]`) was folded to a
+    /// call through a register and an offset, which no symbol names: the
+    /// allocator left it `call dword ptr [ax+4]` and the object was refused
+    /// ("_line@3: Semantics(op=CALL ...)", every QB link). Such a call keeps
+    /// its cell.
+    #[test]
+    fn a_far_call_through_a_register_and_an_offset_keeps_its_cell() {
+        let field = |offset: i64, width: u32| Mem {
+            base: Some(Held { value: 10, width: 2 }),
+            through: iced_x86::Register::DS.into(),
+            offset,
+            ..Mem::new(None, width)
+        };
+        let slot = |disp: i64, width: u32| Mem::new(Some(Addr::new(Space::Frame, disp)), width);
+        let insns = vec![
+            word_load(1, 1, field(8, 2)),
+            word_load(2, 2, field(10, 2)),
+            word_store(3, slot(-2, 2), 2),
+            word_store(4, slot(-4, 2), 1),
+            Arc::new(Insn::new(
+                5,
+                Some((5, 5)),
+                Some(Semantics {
+                    name: Some("call".into()),
+                    sources: vec![Loc::Mem(slot(-4, 4))],
+                    indirect: true,
+                    ..Semantics::new(Operation::Call)
+                }),
+                vec![],
+                vec![],
+            )),
+        ];
+        let out = folded_calls(insns.clone());
+        assert_eq!(out, insns);
     }
 }

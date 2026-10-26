@@ -87,6 +87,28 @@ def test_a_pr_that_merges_but_does_not_build_alone_is_refused_with_the_compiler_
     assert why and "does not build as a whole" in why[0] and "expected identifier" in why[0], why
 
 
+def test_a_did_not_run_scanner_red_alone_names_its_cause(tmp_path, monkeypatch):
+    """Eleven PRs were dropped with `integration-did-not-run` and no reason: the cause was recorded but the alone refusal never printed it."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    head = branch(repo, "ok", "b.txt", "b\n")
+    sh(repo, "checkout", "-q", "main")
+    monkeypatch.setitem(ps.parity_smoke_module().CAUSES, "integration-did-not-run", "No space left on device")
+    why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda _: {"integration-did-not-run"})
+    assert why and "No space left on device" in why[0], why
+
+
+def test_a_deleted_test_file_in_the_diff_is_not_a_scanner_target(tmp_path):
+    """#4784 forked before tests/fill_loop_at_os.rs landed: its diff listed the file, `--test fill_loop_at_os` found no target, and the PR was dropped as integration-did-not-run."""
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "kept.rs").write_text("")
+    files = ["tests/kept.rs", "tests/fill_loop_at_os.rs", "tests/sub/x.rs", "src/a.rs"]
+    assert ps.own_test_targets(files, tmp_path) == {"kept"}
+
+
 def test_two_prs_adding_a_test_of_one_name_do_not_share_a_batch(tmp_path):
     """#4678 and #4680 added the same test in different places: no conflict, so both joined, and the batch failed 'defined multiple times'."""
     repo = tmp_path / "repo"
@@ -378,3 +400,64 @@ def test_a_head_whose_tests_did_not_run_is_not_cached_as_its_failure_set(tmp_pat
     assert ps.head_failures("abc", compute, cache=tmp_path) == {"integration-did-not-run"}
     assert ps.head_failures("abc", compute, cache=tmp_path) == {"integration header_copy::t"}
     assert ps.head_failures("abc", compute, cache=tmp_path) == {"integration header_copy::t"} and len(calls) == 2
+
+
+def test_the_alone_command_runs_its_cargo_through_buildslot_with_two_jobs_whatever_the_runner_exports(monkeypatch):
+    """The runner exports BUILDSLOT_BYPASS=1 and main() ran every command at the landing's priority: six of eight cargo processes at load 108 were alone-0..5 outside every slot."""
+    import buildslot
+
+    seen = {}
+
+    def fake(numbers, heads, **kw):
+        seen["slotted"] = buildslot.slotted(["cargo", "build"])
+        seen["jobs"] = kw["jobs"]
+        return list(numbers), {}
+
+    monkeypatch.setenv("BUILDSLOT_BYPASS", "1")
+    monkeypatch.setenv(buildslot.LANDING, "1")
+    monkeypatch.delenv("ALONE_JOBS", raising=False)
+    monkeypatch.setattr(buildslot, "tool", lambda: "buildslot")
+    monkeypatch.setattr(ps, "alone", fake)
+    monkeypatch.setattr(ps, "git", lambda *args, **_: "deadbeef")
+    monkeypatch.setattr(ps, "preload_tools", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["parity_squash.py", "alone", "11"])
+    assert ps.main() == 0
+    assert seen == {"slotted": ["buildslot", "cargo", "build"], "jobs": 2}, seen
+
+
+def test_each_offender_is_named_by_the_tests_that_failed_on_its_own_probe_with_its_own_panic():
+    """The 10:24 batch refused #4898 #4918 #4926 #4927 #4936 with one identical list (the batch's whole failure set and a stale panic): five different failures read as one cause."""
+    failed = {"1": {"a"}, "2": {"b"}, "3": set()}
+    probed = []
+    panics = {}
+
+    def failing(package, tests):
+        panics.clear()
+        mine = failed[probed[-1]] & tests
+        panics.update({t: f"panic of {t} on #{probed[-1]}" for t in mine})
+        return mine
+
+    own, reasons = {}, {}
+    found = ps.unit_offenders(
+        ["1", "2", "3"],
+        {"llrm-x": {"a", "b", "c"}},
+        merge_alone=lambda number: probed.append(number) or True,
+        failing=failing,
+        own=own,
+        reasons=reasons,
+        why=lambda names: "; ".join(panics[name.split("::", 1)[1]] for name in names),
+    )
+    assert found == ["1", "2"] and own == {"1": ["unit llrm-x::a"], "2": ["unit llrm-x::b"]}, (found, own)
+    assert reasons == {"1": "panic of a on #1", "2": "panic of b on #2"}, reasons
+
+
+def test_an_alone_check_runs_the_lib_tests_of_the_crates_that_depend_on_the_one_the_pr_changes(tmp_path, monkeypatch):
+    """#4927 changed llrm-transforms, passed alone (only llrm-transforms ran), and failed four llrm-qb tests in the batch: a refusal at 10:24 and a clean precheck for the same PR."""
+    repo, head = alone_scratch(tmp_path)
+    smoke = ps.parity_smoke_module()
+    ran = []
+    monkeypatch.setattr(smoke, "workspace_graph", lambda root: ({}, {"llrm-qb": {"llrm-transforms"}, "llrm-x86": {"llrm-transforms"}, "llrm-transforms": set(), "llrm-nib": set()}))
+    monkeypatch.setattr(smoke, "touched_packages", lambda files, packages, root: {"llrm-transforms"})
+    monkeypatch.setattr(smoke, "dependants_lib_failures", lambda packages, **_: ran.append(set(packages)) or set())
+    ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda f: set())
+    assert ran and {"llrm-transforms", "llrm-qb"} <= ran[0] and not {"llrm-nib", "llrm-x86"} & ran[0], ran  # qb depends on the change; nib does not; x86 does, but only qb, c and nib are probed

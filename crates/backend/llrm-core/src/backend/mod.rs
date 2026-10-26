@@ -250,6 +250,7 @@ pub mod pushfold;
 pub mod regpressure;
 pub mod regthrash;
 pub mod relayout;
+pub mod returnsplit;
 pub mod rmw;
 pub mod saverestore;
 pub mod schedule;
@@ -260,6 +261,7 @@ pub mod shadow;
 #[cfg(test)]
 mod shadow_tests;
 pub mod shrinkwrap;
+pub mod slotcopies;
 pub mod slots;
 pub mod stackusage;
 pub mod stepflags;
@@ -330,6 +332,7 @@ pub mod select {
 pub mod bodyfacts;
 pub mod regclass;
 pub mod registerinfo;
+pub mod repbsf;
 pub mod rewriter;
 pub mod sharedstores;
 pub mod spillplacement;

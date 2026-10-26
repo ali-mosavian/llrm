@@ -506,3 +506,80 @@ fn an_operand_of_an_sse_form_is_confined_to_xmm_registers() {
     let integer = confinement_of(regs, std::iter::once(&*add("add", 16)), 2, &sets);
     assert!(matches!(integer, Confinement::Free));
 }
+
+/// An OMF object from LLVM IR named `main` and `report` plain: the m32 start-up
+/// calls `_main` and the OS layer defines `_report`, so the link failed with
+/// both undefined. Names take the convention's spelling for the format.
+#[test]
+fn llvm_ir_symbols_are_decorated_as_the_object_format_spells_them() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                declare void @report(i32)\n\
+                define i32 @main() {\n  call void @report(i32 7)\n  ret i32 0\n}\n";
+    let flags = flags(&["-fobject-format=omf", "-mabi=sysv"]);
+    let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("_main") && listing.contains("_report"), "{listing}");
+}
+
+/// The i8086 clang writes Pascal functions as `cc232` (8 bits hold no 1000);
+/// llrm-llc refused the module with "calling convention 232", so no QCport
+/// module that calls qgl compiled.
+#[test]
+fn clangs_pascal_number_is_llrms_basic_convention() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n\
+                target triple = \"i386-unknown-unknown-code16\"\n\
+                declare cc232 i16 @QGL(i16) addrspace(1)\n\
+                define i16 @f() addrspace(1) {\n  %1 = call cc232 addrspace(1) i16 @QGL(i16 7)\n  ret i16 %1\n}\n";
+    crate::llc::compiled(&flags(&["-mabi=cdecl"]), text, "f").unwrap();
+}
+
+/// Inline-code intrinsics (`llrm.ia16.code.*`) were decorated to
+/// `_llrm.ia16.code.*` and then "no assembler symbol": no QCport module with an
+/// asm block compiled.
+#[test]
+fn inline_code_intrinsics_keep_their_names() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n\
+                target triple = \"i386-unknown-unknown-code16\"\n\
+                declare i32 @\"llrm.ia16.code.89a60170c3.2p0\"(ptr)\n\
+                define i16 @f() addrspace(1) {\n  %a = alloca i16\n  %r = call i32 @\"llrm.ia16.code.89a60170c3.2p0\"(ptr %a)\n  ret i16 0\n}\n";
+    crate::llc::compiled(&flags(&["-mabi=cdecl"]), text, "f").unwrap();
+}
+
+/// A global defined by clang IR was written as `_tbl label byte` with no
+/// `public`, so a module that used it linked with "_mon_facts is an undefined
+/// reference" (QCport).
+#[test]
+fn defined_globals_are_public_and_internal_ones_are_not() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n\
+                target triple = \"i386-unknown-unknown-code16\"\n\
+                @a = dso_local global i16 5\n\
+                @b = dso_local addrspace(1) constant i16 7\n\
+                @c = internal global i16 9\n\
+                define i16 @f() addrspace(1) {\n  ret i16 0\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-mabi=cdecl"]), text, "f").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    assert!(
+        listing.contains("public _a") && listing.contains("public _b") && !listing.contains("public _c"),
+        "{listing}"
+    );
+}
+
+/// Borland's `outportb`/`inportb` are the library's
+/// `__outportb__`/`__inportb__`; they were left as calls to a symbol
+/// nothing defines ("___outportb__ is an undefined reference"), where llrm has
+/// the `llrm.ia16.in`/`out` intrinsics.
+#[test]
+fn borlands_port_functions_are_the_port_intrinsics() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n\
+                target triple = \"i386-unknown-unknown-code16\"\n\
+                declare cc1000 i8 @__outportb__(i16, i8) addrspace(1)\n\
+                declare i8 @__inportb__(i16) addrspace(1)\n\
+                define i8 @f(i8 %v) addrspace(1) {\n  %1 = call addrspace(1) i8 @__outportb__(i16 noundef 968, i8 noundef zeroext %v)\n  %2 = call addrspace(1) i8 @__inportb__(i16 noundef 969)\n  ret i8 %2\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-mabi=cdecl"]), text, "f").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    assert!(
+        listing.contains("out dx") && listing.contains("in al, dx") && !listing.contains("__outportb__"),
+        "{listing}"
+    );
+}

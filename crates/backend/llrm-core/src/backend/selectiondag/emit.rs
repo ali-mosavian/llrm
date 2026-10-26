@@ -1661,7 +1661,7 @@ impl Emitter<'_, '_> {
         let held = self.accumulated(register)?;
         let Some(&origin) = self.origins.get(&register) else { return Ok(held) };
         let joined = ["OR32rr", "ADD32rr", "ADD32rr_DB"].iter().any(|name| self.is_machine_named(origin, name));
-        if !joined || self.huge_selector(origin).is_none() {
+        if !joined || (self.huge_selector(origin).is_none() && self.high_half_of(origin).is_none()) {
             return Ok(held);
         }
         let low = self.dag.node(origin).ops.iter().copied().find(|&op| self.is_machine_named(op, "MOVZX32rr16"));
@@ -1725,11 +1725,23 @@ impl Emitter<'_, '_> {
                     // A huge pointer built as `offset | (selector << 16)`, or
                     // as the same sum (the halves are disjoint, so the combiner
                     // may turn the or into an add).
-                    let selector = self
-                        .huge_selector(origin)
-                        .ok_or_else(
-                            || EmitError::Unsupported("a string operation on a pointer of no known segment".to_owned()),
-                        )?;
+                    let Some(selector) = self.huge_selector(origin) else {
+                        // `offset + (x & 0xFFFF0000)`: the segment is in the
+                        // high word of the dword `x`.
+                        let whole = self.high_half_of(origin).ok_or_else(|| {
+                            EmitError::Unsupported("a string operation on a pointer of no known segment".to_owned())
+                        })?;
+                        let value = self.held_operand(whole)?;
+                        let shifted = self.fresh(4);
+                        let sixteen = Imm { value: 16, width: 1, address: None };
+                        self.push(
+                            Operation::Binary,
+                            "shr",
+                            vec![Loc::Held(shifted)],
+                            vec![Loc::Held(value), Loc::Imm(sixteen)],
+                        );
+                        return Ok(Held { width: 2, ..shifted });
+                    };
                     // The selector is a word: the low word of a dword whose
                     // high half it is (`x >> 16`), or the word itself.
                     let mut held = self.held_operand(selector)?;
@@ -1756,6 +1768,17 @@ impl Emitter<'_, '_> {
             NodeData::Global { symbol, .. } => Some(symbol),
             _ => None,
         }
+    }
+
+    /// The dword `x` of a pointer `origin` = `offset + (x & 0xFFFF0000)`: a far
+    /// pointer a call returned, with its offset replaced.
+    fn high_half_of(
+        &self,
+        origin: SDValue,
+    ) -> Option<SDValue> {
+        let masked = *self.dag.node(origin).ops.iter().find(|op| self.is_machine_named(**op, "AND32ri"))?;
+        let [whole, mask] = self.dag.node(masked).ops[..] else { return None };
+        (self.constant(mask).ok()? as u32 == 0xFFFF_0000).then_some(whole)
     }
 
     /// The 16-bit selector of a huge pointer `origin` = `or(offset,

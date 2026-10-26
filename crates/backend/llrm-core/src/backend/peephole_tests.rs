@@ -5091,6 +5091,32 @@ fn test_a_repeated_frame_address_after_allocation_is_made_again() {
     assert_eq!(leas, 2, "{:?}", names(&result.blocks[0].insns));
 }
 
+/// The pin gives `bsf` a `rep` prefix unless the function is optimised for size
+/// or the flags are read (`X86MCInstLower`). It was on every `bsf`, a byte at
+/// -Os m16 that main did not have.
+#[test]
+fn test_bsf_gets_the_rep_prefix_only_where_the_pin_gives_it() {
+    for (label, size, flags_read, expected) in [
+        ("speed, flags dead", false, false, true),
+        ("size, flags dead", true, false, false),
+        ("speed, flags read", false, true, false),
+    ] {
+        let scan = sem(Operation::Binary, "bsf", vec![rl(RegId::EAX, 4)], vec![rl(RegId::EAX, 4), rl(RegId::ECX, 4)]);
+        let first = Arc::new(insn(10, Some((10, 11)), Some(scan), vec![], vec![]));
+        let next = if flags_read {
+            sem(Operation::Binary, "adc", vec![rl(RegId::SI, 4)], vec![rl(RegId::SI, 4), im(0, 4)])
+        } else {
+            sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::SI, 4), im(0, 4)])
+        };
+        let second = Arc::new(insn(11, Some((11, 12)), Some(next), vec![], vec![]));
+        let input = body("scan", 0, vec![block(0, vec![first], vec![1]).into(), block(1, vec![second], vec![]).into()]);
+        let cpu = crate::backend::cpu::tuned("486", size).unwrap();
+        let result = crate::backend::repbsf::marked(&input, &cpu);
+        let got = result.blocks[0].insns[0].what.as_ref().unwrap().repeat;
+        assert_eq!(got, expected, "{label}");
+    }
+}
+
 /// PLASMA at m16: `mov [bp-14],di ; mov di,[bp-14]` -- a reload of what the
 /// register still held -- stood in each inner loop (a spilled one-instruction
 /// piece of a split range, then the copy that follows it).
@@ -5112,6 +5138,57 @@ fn store_then_reload(between: Vec<Insn>) -> usize {
     )));
     let done = forwarded_reloads(rules(), &body("forwarded-reload", 0, vec![block(0, insns, vec![]).into()]));
     whats(&done.blocks[0].insns).iter().filter(|what| what.name.as_deref() == Some("mov")).count()
+}
+
+/// huge_copy.c at m16 -Os: the forwarding dropped the reload `mov bl, [bp-2]`
+/// and left `mov [bp-2], bl` in the loop, a store to a slot nothing reads
+/// (the loop ran a dead byte store a trip, 5.1M clocks of a 17M run).
+fn spill_slot_program(reload: bool) -> LirBody {
+    spill_slot_program_of(reload, true)
+}
+
+fn spill_slot_program_of(
+    reload: bool,
+    spill: bool,
+) -> LirBody {
+    let cell = |disp: i64| Loc::Mem(mem(Some(Addr::new(Space::Frame, disp).in_slot(disp)), 2, RegId::BP, disp, 1));
+    let mov = |at: i64, dests: Vec<Loc>, sources: Vec<Loc>| Insn {
+        spill_store: spill && dests.iter().any(|d| matches!(d, Loc::Mem(_))),
+        ..insn(at, Some((at, at + 2)), Some(sem(Operation::Move, "mov", dests, sources)), vec![], vec![])
+    };
+    let mut insns = vec![Arc::new(mov(0, vec![cell(-14)], vec![rl(RegId::DI, 2)]))];
+    if reload {
+        insns.push(Arc::new(mov(100, vec![rl(RegId::AX, 2)], vec![cell(-14)])));
+    }
+    insns.push(Arc::new(insn(
+        200,
+        Some((200, 200)),
+        Some(sem(Operation::Return, "ret", vec![], vec![])),
+        vec![],
+        vec![],
+    )));
+    body("unread-store", 0, vec![block(0, insns, vec![]).into()])
+}
+
+#[test]
+fn test_a_store_to_a_spill_slot_nothing_reads_is_dropped() {
+    let done = unread_spill_stores(&spill_slot_program(false));
+    // The store's bytes stay on an anchor, no `mov` is left.
+    assert_eq!(names(&done.blocks[0].insns), ["", "ret"]);
+}
+
+#[test]
+fn test_a_store_to_a_spill_slot_something_reads_stays() {
+    let done = unread_spill_stores(&spill_slot_program(true));
+    assert_eq!(names(&done.blocks[0].insns), ["mov", "mov", "ret"]);
+}
+
+/// An alloca's store nothing reads is the program's own: va_copy, null and
+/// pattern-fill listings in `isel_tests` lost theirs to the spill-slot pass.
+#[test]
+fn test_a_store_to_an_alloca_nothing_reads_stays() {
+    let done = unread_spill_stores(&spill_slot_program_of(false, false));
+    assert_eq!(names(&done.blocks[0].insns), ["mov", "ret"]);
 }
 
 #[test]
@@ -5182,6 +5259,103 @@ fn test_a_reload_stays_across_a_volatile_access() {
         )
     };
     assert_eq!(store_then_reload(vec![device]), 3);
+}
+
+/// quicksort `_sort` at m16 -Os: `mov [bp-2],cx ; ... ; mov bx,[bp-2]` read a
+/// cell back into another register while `cx` still held it. Returns the
+/// reload's source register, or `None` when it still reads the cell.
+fn store_then_reload_elsewhere(between: Vec<Insn>) -> Option<RegId> {
+    let cell = || Loc::Mem(mem(frame(-2), 2, RegId::BP, -2, 1));
+    let mov = |at: i64, dests: Vec<Loc>, sources: Vec<Loc>| Insn {
+        spill_store: dests.iter().any(|d| matches!(d, Loc::Mem(_))),
+        ..insn(at, Some((at, at + 2)), Some(sem(Operation::Move, "mov", dests, sources)), vec![], vec![])
+    };
+    let mut insns = vec![Arc::new(mov(0, vec![cell()], vec![rl(RegId::CX, 2)]))];
+    insns.extend(between.into_iter().map(Arc::new));
+    insns.push(Arc::new(mov(100, vec![rl(RegId::BX, 2)], vec![cell()])));
+    insns.push(Arc::new(insn(
+        200,
+        Some((200, 200)),
+        Some(sem(Operation::Return, "ret", vec![], vec![])),
+        vec![],
+        vec![],
+    )));
+    let done = forwarded_copies(rules(), &body("forwarded-copy", 0, vec![block(0, insns, vec![]).into()]));
+    let reload = whats(&done.blocks[0].insns).into_iter().rev().nth(1)?.clone();
+    match reload.sources.as_slice() {
+        [Loc::Reg(held)] => Some(held.register),
+        _ => None,
+    }
+}
+
+#[test]
+fn test_a_reload_into_another_register_copies_the_register_that_filled_the_cell() {
+    assert_eq!(store_then_reload_elsewhere(vec![]), Some(RegId::CX));
+}
+
+#[test]
+fn test_a_reload_into_another_register_stays_where_the_filling_register_is_written() {
+    let write = insn(
+        10,
+        Some((10, 12)),
+        Some(sem(Operation::Binary, "add", vec![rl(RegId::CX, 2)], vec![rl(RegId::CX, 2), im(1, 2)])),
+        vec![],
+        vec![],
+    );
+    assert_eq!(store_then_reload_elsewhere(vec![write]), None);
+}
+
+/// x87 `lrint` at m16 -Os: `fistp [bp-4] ; mov eax,[bp-4] ; mov [bp-8],eax`
+/// kept the value in a second cell across a call, 4 bytes of frame and one
+/// instruction more than main. Returns the cells the reloads at the end read
+/// and the stores to a frame cell that are left.
+fn copied_cell(between: Vec<Insn>) -> Option<(Vec<i64>, usize)> {
+    let cell = |at: i64| Loc::Mem(mem(frame(at), 4, RegId::BP, at, 1));
+    let mov = |at: i64, dests: Vec<Loc>, sources: Vec<Loc>| Insn {
+        spill_store: dests.iter().any(|d| matches!(d, Loc::Mem(_))),
+        ..insn(at, Some((at, at + 2)), Some(sem(Operation::Move, "mov", dests, sources)), vec![], vec![])
+    };
+    let mut insns = vec![
+        Arc::new(mov(0, vec![rl(RegId::EAX, 4)], vec![cell(-4)])),
+        Arc::new(mov(2, vec![cell(-8)], vec![rl(RegId::EAX, 4)])),
+    ];
+    insns.extend(between.into_iter().map(Arc::new));
+    insns.push(Arc::new(mov(100, vec![rl(RegId::EAX, 4)], vec![cell(-8)])));
+    insns.push(Arc::new(insn(
+        200,
+        Some((200, 200)),
+        Some(sem(Operation::Return, "ret", vec![], vec![])),
+        vec![],
+        vec![],
+    )));
+    let done = crate::backend::slotcopies::merged(&body("slot-copy", 0, vec![block(0, insns, vec![]).into()]))?;
+    let all = whats(&done.blocks[0].insns);
+    let reads = all
+        .iter()
+        .filter_map(|what| match what.sources.as_slice() {
+            [Loc::Mem(cell)] => cell.addr.map(|addr| addr.disp),
+            _ => None,
+        })
+        .collect();
+    let stores = all.iter().filter(|what| matches!(what.dests.as_slice(), [Loc::Mem(_)])).count();
+    Some((reads, stores))
+}
+
+#[test]
+fn test_a_spill_copied_from_a_cell_reads_that_cell() {
+    assert_eq!(copied_cell(vec![]), Some((vec![-4, -4], 0)));
+}
+
+#[test]
+fn test_a_spill_copied_from_a_cell_stays_where_the_cell_is_written_before_its_read() {
+    let rewrite = insn(
+        10,
+        Some((10, 12)),
+        Some(sem(Operation::Move, "mov", vec![Loc::Mem(mem(frame(-4), 4, RegId::BP, -4, 1))], vec![rl(RegId::ECX, 4)])),
+        vec![],
+        vec![],
+    );
+    assert_eq!(copied_cell(vec![rewrite]), None);
 }
 
 // ------------------------------------------------------------ width and flag

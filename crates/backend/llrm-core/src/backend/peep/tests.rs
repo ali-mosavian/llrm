@@ -176,7 +176,7 @@ fn the_rule_groups_come_from_one_list() {
     all.sort_unstable();
     assert_eq!(present, all);
     assert!(super::Rules::NONE.present().is_empty());
-    assert_eq!(super::Rules::GROUPS.len(), 24);
+    assert_eq!(super::Rules::GROUPS.len(), 26);
 }
 
 /// A window was built, and the group's first-pattern test run, at every

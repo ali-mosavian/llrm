@@ -74,6 +74,23 @@ Every layer prints its failures as names and the gate compares them with the hea
 | G4 | feature-gated lib tests: llrm-c's `toolchain` (44 `cfg(feature = "toolchain")` gates: compile.rs 33, translate.rs 7, callconv_tests.rs 4; 186 lib tests, 16 red on parity unseen, and the interrupt-handler refusal of #2936 for four days); llrm-core's `fixtures` gates no extra test (1588 lib tests with and without it, 636 s to build cold) | `cargo test --release -p llrm-c --lib --features toolchain` on a warm target: 12 s (2 s of tests); the cold build is the cost | the hourly sweep compiles tests/fixtures/callconv/c/*.c since #3812 | closed by this PR: llrm-c's lib run in the layer uses the feature (`parity_smoke.LIB_FEATURES`), and a change under crates/ir/llrm-hir or crates/frontends/llrm-c runs it |
 | G5 | root scanner targets (`tests/*.rs` that read sources and docs) at landing: the fast layer ran lib tests only, and `selectiondag_registry` (and later `no_partial_ecx_counts`) were in no map: #3899 landed with SD403 rowless, #3888 with an unmapped target | 13 scanner targets: 89 s cold on a loaded host; red on parity itself today: docs_links 3, no_local_paths 2, descriptions_are_read 1 (cached per head, so only new reds refuse) | `test_every_integration_target_is_mapped` (a pytest, run only when tools/ changes) | closed by this PR: `SCANNERS` lists both, and the layer runs the scanners and any `tests/*.rs` the batch changes (`parity_squash.new_scanner_failures`) |
 
+
+## Inventory of every test target (2026-10-26, parity 0aea1e46a0, `tools/test_inventory.py`)
+
+`cargo test --release --workspace --no-run --message-format=json` lists 227 test executables. The gate runs, per batch: the 42 lib targets of the packages a batch touches and their
+dependants, the 13 root scanners (`SCANNERS`, the always-on ones every batch, the rest with the lib tests) and a root test file the batch changes. It never runs the other
+169: 152 `tests/*.rs` targets (123 in the root crate `llrm`, 29 in other packages such as `llrm-qb`'s `parser`, `llrm-core`'s and `llrm-mir`'s) and 17 bins' unit tests; three more are
+nightly-only (turbo, cv4, run). Nothing schedules `tools/gate/nightly_integration.py`, and it covers the root crate only. So `greedy_inline` sat red from 7ee16741c (10-24) with no
+step looking at it.
+
+Running every unrun target once (172 executables, `nice`, cwd as cargo gives it): 320 s in all, 50 s without turbo (161 s), run (79 s) and cv4 (30 s); 48 of the 172 were red,
+3 of them listed in `xfail.toml`. `midend` and `nearcalls` were checked with `cargo test` and fail there too. Red: llrm-arm64/midend, llrm-bcdriver/driver, llrm-dagisel-gen/stale, llrm-support/no_uncached_env_checks, llrm/attribute, llrm/called_once, llrm/check, llrm/coalesce_hot_copies, llrm/cv4, llrm/demanded_bits, llrm/differential, llrm/division_multiplier, llrm/division_nonnegative, llrm/dwarf, llrm/env_read_once, llrm/flags, llrm/flat_foreign, llrm/frame_address_flat, llrm/frame_relayout, llrm/greedy_inline, llrm/header_copy, llrm/header_mir, llrm/jump_threading, llrm/listings, llrm/loop_rotation, llrm/loopidioms_name, llrm/lsr_candidates, llrm/masked, llrm/narrow_counter_offset, llrm/nearcalls, llrm/o0_phases, llrm/o1_fill, llrm/object_trips, llrm/phi_copies, llrm/register_convention, llrm/rfp_copies, llrm/seeded_maps, llrm/signed_counters, llrm/stack_alignment, llrm/step_flags, llrm/switch_lowering, llrm/target_facts, llrm/timing, llrm/toolchain, llrm/turbo, llrm/unroll_budget, llrm/unroll_early_exit, llrm/word_ops_promote.
+
+Per batch is not the place: building the test executables after a change in core or transforms is the cost (3 m 21 s for the whole workspace, warm target, load 20-30), more than the
+runs. The hourly sweep is: it builds them once per tip and runs the 169 unrun targets minus turbo, cv4 and run (about 50 s), so a red like this is a sweep red within the hour
+(`unrun:<package>/<target>` in the sweep line, a new one against the previous run). A target that is cheap and mapped to the touched crates (`integration_map`) can be added to a
+batch later, if its rebuild is shared with the lib tests' build.
+
 ## Ratchets with no per-test names
 
 `ratchet:docs`, `ratchet:prepush-docs|facts|fmt|scans|test docs_links`, `ratchet:warnings` and `workspace` print no test names; a second failure inside one is hidden. Each needs to print its items or be split.

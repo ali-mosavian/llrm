@@ -258,19 +258,32 @@ fn fold_binary(
         return Some(if undef(lhs) && undef(rhs) { lhs } else { canonical_nan(q, ty) });
     }
     let (mut a, b) = (value(q, lhs)?, value(q, rhs)?);
+    // DEVIATE 6: where the function evaluates at the x87's extended precision
+    // (`FP_EVAL`), a double operation is rounded once, at the store, so only a
+    // result the double holds exactly may be folded: 0.00005 * 10000 rounded
+    // to 0.5 at 53 bits is a tie where the 64-bit product is above it.
+    let extended = q
+        .function
+        .attrs
+        .iter()
+        .any(
+            |attr| matches!(
+                attr,
+                crate::Attribute::Str(name, Some(value)) if name == crate::constantfolding::FP_EVAL && value == crate::constantfolding::FP_EVAL_EXTENDED
+            ),
+        );
+    let status = match op {
+        BinaryOp::FAdd => a.add(&b, NEAREST_EVEN),
+        BinaryOp::FSub => a.subtract(&b, NEAREST_EVEN),
+        BinaryOp::FMul => a.multiply(&b, NEAREST_EVEN),
+        BinaryOp::FDiv => a.divide(&b, NEAREST_EVEN),
+        _ => crate::apfloat::OP_OK,
+    };
+    if extended && status & crate::apfloat::OP_INEXACT != 0 {
+        return None;
+    }
     match op {
-        BinaryOp::FAdd => {
-            a.add(&b, NEAREST_EVEN);
-        }
-        BinaryOp::FSub => {
-            a.subtract(&b, NEAREST_EVEN);
-        }
-        BinaryOp::FMul => {
-            a.multiply(&b, NEAREST_EVEN);
-        }
-        BinaryOp::FDiv => {
-            a.divide(&b, NEAREST_EVEN);
-        }
+        BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv => {}
         BinaryOp::FRem => {
             if a.is_nan() || b.is_nan() {
                 return None;

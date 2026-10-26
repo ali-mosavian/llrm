@@ -12,9 +12,11 @@ transferred body
 shuttles body
 restored_copies body
 forwarded_reloads body
+forwarded_copies body
 fused body
 fused_calls body
 far_loads body
+loaded_segments body
 increments body
 borrows body
 stepped_after_compare body

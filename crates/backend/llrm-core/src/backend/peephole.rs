@@ -24,9 +24,11 @@
 //!
 //! ```text
 //!  frame copies -> machinecp -> extensions -> copysink
-//!    -> postrasink -> forwarded reloads -> storecombine -> pushed constants
+//!    -> postrasink -> forwarded reloads -> forwarded copies
+//!    -> storecombine -> pushed constants
 //!    -> pushes, constants, commuted, transferred, high extracts, restored
-//!       copies, shuttles, overwritten, fused, fused calls, far loads
+//!       copies, shuttles, overwritten, fused, fused calls, far loads,
+//!       loaded segments
 //!    -> exact addresses -> addresses (LEA) -> stepped after compare
 //!    -> secondary bases -> increments, borrows, doubled, narrowed
 //!    -> widened moves, zero extensions -> zeroed loads -> shared stores
@@ -237,6 +239,18 @@ impl Peephole {
         Ok(Self { frame, cpu: targets::profile(cpu)?.clone(), rules, saved, classes })
     }
 
+    /// The frame without the spill slots no cell names, and the cells where
+    /// they moved to.
+    fn released(
+        &self,
+        body: LirBody,
+    ) -> LirBody {
+        match &self.frame {
+            Some(frame) => crate::backend::slots::released(&body, &mut frame.borrow_mut()),
+            None => body,
+        }
+    }
+
     /// Drop only synthetic reservations when no added stack storage remains.
     fn _frame(
         &self,
@@ -324,7 +338,13 @@ impl Peephole {
         // After the forwarding: a reload on the other path is gone, and the
         // store need not run there.
         let body = crate::backend::postrasink::latched(&crate::backend::postrasink::sunk(&body));
+        let body = match crate::backend::slotcopies::merged(&body) {
+            Some(merged) => self.released(merged),
+            None => body,
+        };
         let body = forwarded_reloads(self.rules, &body);
+        let body = forwarded_copies(self.rules, &body);
+        let body = unread_spill_stores(&body);
         let body = storecombine::combined(&body);
         let body = pushed_constants(self.rules, &body);
         let body = far_loads(
@@ -349,6 +369,7 @@ impl Peephole {
                 ),
             ),
         );
+        let body = loaded_segments(self.rules, &body);
         let body = gated(&mut seen, needs::EXACT_CELL, body, |body| {
             crate::backend::exactaddress::exact_addresses(&body, &self.cpu)
         })?;
@@ -373,6 +394,7 @@ impl Peephole {
             &compares_again(&tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))),
         );
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
+        let body = crate::backend::repbsf::marked(&body, &self.cpu);
         // Last: EBP zeroed above for each cell reading it 32 bits wide, where a
         // 32-bit address is the prefixed form of a 16-bit one. A native
         // one reads whole registers.
@@ -945,6 +967,79 @@ pub fn forwarded_reloads(
     peep::rewritten(rules.forwarded_reloads, body, &Facts::new(body, None))
 }
 
+/// `body` without the stores to a spill slot nothing reads. The forwarding
+/// above can drop the last reload of a slot and leave the store that filled
+/// it. A slot is read by any operand but the destination of a plain store; a
+/// slot a debug variable names stays.
+pub fn unread_spill_stores(body: &LirBody) -> LirBody {
+    let home = |place: &Loc| -> Option<i64> {
+        let Loc::Mem(cell) = place else { return None };
+        cell.addr.filter(|addr| addr.space == Space::Frame).and_then(|addr| addr.slot_home()).filter(|home| *home < 0)
+    };
+    let store_home = |one: &Insn| -> Option<i64> {
+        let what = one.what.as_ref()?;
+        let plain = what.op == Operation::Move
+            && what.name.as_deref() == Some("mov")
+            && one.spill_store
+            && one.group.is_none()
+            && one.requires.is_empty()
+            && one.delivers.is_empty()
+            && one.clobbers.is_empty()
+            && one.spread.is_empty()
+            && !one.volatile
+            && !one.frame_adjust
+            && one.symbol != Some(true);
+        match (&what.dests[..], &what.sources[..]) {
+            ([place @ Loc::Mem(cell)], [Loc::Reg(_) | Loc::Held(_) | Loc::Imm(_)])
+                if plain && cell.index.is_none() && cell.index_through == RegId::None =>
+            {
+                home(place)
+            }
+            _ => None,
+        }
+    };
+    let mut read: BTreeSet<i64> = BTreeSet::new();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        let Some(what) = one.what.as_ref() else { continue };
+        let skip = store_home(one).is_some();
+        for (at, place) in what.dests.iter().chain(&what.sources).enumerate() {
+            if skip && at == 0 {
+                continue;
+            }
+            match place {
+                Loc::Address(a) => {
+                    read.extend(a.addr.filter(|addr| addr.space == Space::Frame).and_then(|a| a.slot_home()))
+                }
+                other => read.extend(home(other)),
+            }
+        }
+    }
+    for variable in &body.variables {
+        if let lir::DebugPlace::At(addr) = &variable.place {
+            read.extend(addr.slot_home());
+        }
+    }
+    let dead = |one: &Arc<Insn>| store_home(one).is_some_and(|home| !read.contains(&home));
+    if !body.blocks.iter().flat_map(|block| block.insns.iter()).any(dead) {
+        return body.clone();
+    }
+    body.with_blocks(
+        body.blocks
+            .iter()
+            .map(|block| block.with_insns(lir::without(&block.insns, dead, None::<fn(&Arc<Insn>) -> Arc<Insn>>)))
+            .collect(),
+    )
+}
+
+/// Copy the register that filled a cell instead of reloading the cell into
+/// another register (`peephole.peep`, `forwarded_copies`).
+pub fn forwarded_copies(
+    rules: &peep::Rules,
+    body: &LirBody,
+) -> LirBody {
+    peep::rewritten(rules.forwarded_copies, body, &Facts::new(body, None))
+}
+
 /// Whether `register` in an operand at `addr` is the frame base, which the
 /// frame layout resolves: not a read of the frame register, so a copy of that
 /// register does not rename it.
@@ -1461,6 +1556,15 @@ pub fn far_loads(
     body: &LirBody,
 ) -> LirBody {
     peep::rewritten(rules.far_loads, body, &Facts::new(body, None))
+}
+
+/// Load a segment register straight from the cell a temporary was loaded from
+/// (`peephole.peep`, `loaded_segments`).
+pub fn loaded_segments(
+    rules: &peep::Rules,
+    body: &LirBody,
+) -> LirBody {
+    peep::rewritten(rules.loaded_segments, body, &Facts::new(body, None))
 }
 
 /// Replace a dead temporary's shift with a scaled 67h LEA.

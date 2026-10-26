@@ -701,3 +701,44 @@ define i64 @f(i64 %a, i64 %b) {
     let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
     assert!(seen.contains(&"adc") && !seen.contains(&"setb"), "{seen:?}");
 }
+
+const REMAINDER_BY_ELEVEN: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {
+  %r = srem i32 %a, 11
+  ret i32 %r
+}
+";
+
+/// `x % 11` at `-Os` was the multiply-by-reciprocal sequence on the DAG path
+/// (imul, shifts, a 5-byte magic immediate; recsum.c m16 -Os 1.53 times the old
+/// selector's clocks), where the old selector keeps the `idiv` at -Os.
+#[test]
+fn at_os_a_remainder_by_a_constant_keeps_its_idiv() {
+    let module = llrm_mir::parse::module(REMAINDER_BY_ELEVEN).expect("parses");
+    let names = |size: bool| {
+        let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+        cpu.size = size;
+        let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect::<Vec<_>>()
+    };
+    assert!(names(false).iter().all(|n| n != "idiv"), "speed: the reciprocal, as the pin");
+    assert!(names(true).iter().any(|n| n == "idiv"), "-Os: the divide stays: {:?}", names(true));
+}
+
+/// `u8 % 6` at `-Os` with the divide kept was `CannotSelect("UDivRem")` (SD302:
+/// no byte divide): examples/dice.nib and easing.nib stopped compiling.
+#[test]
+fn at_os_a_byte_remainder_by_a_constant_still_selects() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i8 @f(i8 %a) {
+  %r = urem i8 %a, 6
+  ret i8 %r
+}
+",
+    )
+    .expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    cpu.size = true;
+    selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+}

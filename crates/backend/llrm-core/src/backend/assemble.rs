@@ -87,7 +87,7 @@ use crate::backend::cpu::{Profile, ProfileOrName};
 use crate::backend::isel::{self, Selected};
 use crate::backend::shadow::{self, Selector};
 use crate::backend::target::Segments;
-use crate::backend::{addressvalues, executed, frame, globals, jumps, masm, select};
+use crate::backend::{addressvalues, executed, frame, globals, jumps, masm, returnsplit, select};
 use crate::flow;
 use crate::model::ir::{Addr, AddressRef, Loc, Semantics, Space};
 use crate::model::lir::LirBody;
@@ -137,6 +137,11 @@ pub struct Registers {
     pub results: Vec<RegId>,
 }
 
+/// The address spaces the i8086 target gives far and huge pointers (clang's
+/// `address_space(1)` and `(3)`).
+const FAR_SPACE: u32 = 1;
+const HUGE_SPACE: u32 = 3;
+
 /// `module` as masm, its code in the segment `code`, selected by the 16-bit x86
 /// selector: what the tests of this crate are written for.
 #[cfg(test)]
@@ -169,7 +174,14 @@ pub fn assembled_by(
     names.extend(crate::hir::symbols::symbol_names());
     let mut procedures = Vec::new();
     let mut referenced: IndexMap<String, bool> = IndexMap::default();
+    // The i64 divide routines the DAG route calls, once each:
+    // ExpandDivRemLibCall's `__divdi3` family, written here as a procedure
+    // of the module instead of pasted at every site.
+    let mut shared: IndexMap<String, Vec<u8>> = IndexMap::default();
+    let mut shared_registers = None;
     let mut data = Vec::new();
+    let mut far_data = Vec::new();
+    let mut data_publics = Vec::new();
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
     let classes = Rc::new(RegisterClasses::of(arch));
     let (facts, order) = calleefacts::CalleeFacts::of(module);
@@ -203,7 +215,17 @@ pub fn assembled_by(
         let name = global.name.as_deref().unwrap_or_default();
         match &global.kind {
             GlobalKind::Variable(variable) if variable.initializer.is_some() => {
-                data.extend(globals::datums(module, id, &names)?)
+                // A far or huge object lies outside DGROUP, in a segment of the
+                // module's own.
+                let datums = globals::datums(module, id, &names)?;
+                if matches!(global.address_space, FAR_SPACE | HUGE_SPACE) {
+                    far_data.extend(datums);
+                } else {
+                    data.extend(datums);
+                }
+                if global.linkage == llrm_mir::Linkage::External {
+                    data_publics.push(names[&(globals::space(module, id), at as i64)].clone());
+                }
             }
             GlobalKind::Function(function) if !function.is_declaration() => {
                 let unselected = |error: isel::Unselected| format!("@{name}: {}", error.0);
@@ -217,8 +239,18 @@ pub fn assembled_by(
                     )
                 })?;
                 let mut callees = IndexMap::default();
+                shared_registers.get_or_insert(registers.clone());
                 for (at, callee) in &calls {
                     if let Some(code) = inline.get(at) {
+                        if !matches!(selector, Selector::Old)
+                            && callee.starts_with(llrm_target::routines::DIVIDE_PREFIX)
+                            && inline_symbols.get(at).is_none_or(Vec::is_empty)
+                        {
+                            let routine = format!("${callee}");
+                            shared.entry(routine.clone()).or_insert_with(|| code.clone());
+                            callees.insert(*at, masm::Callee::new(routine, false));
+                            continue;
+                        }
                         // The bytes between the words that name a symbol, and
                         // each of those as a fixup.
                         let mut parts = Vec::new();
@@ -316,6 +348,7 @@ pub fn assembled_by(
                 let procedure = if !cpu.optimized {
                     procedure
                 } else {
+                    let procedure = timed("lir split returns", || returnsplit::split(procedure));
                     // Asked only by a tail a copy could save a jump for.
                     let (overhead, unprintable) = (std::cell::OnceCell::new(), std::cell::RefCell::new(None));
                     let overhead = || {
@@ -337,7 +370,7 @@ pub fn assembled_by(
                     }
                     let procedure = masm::exits_inserted(masm::saved_first(masm::Procedure { body, ..procedure }));
                     if procedure.body.frame_exit.is_some() {
-                        let body = jumps::tails_merged_after_exits(procedure.body.clone(), cpu.size)
+                        let body = jumps::tails_merged_after_exits(procedure.body.clone(), cpu.size, Some(&calls))
                             .map_err(|error| error.to_string())?;
                         masm::Procedure { body, ..procedure }
                     } else {
@@ -348,6 +381,10 @@ pub fn assembled_by(
             }
             _ => {}
         }
+    }
+    for (name, code) in shared {
+        let registers = shared_registers.clone().expect("a routine is shared by a function");
+        procedures.push(masm::routine_procedure(&name, code, registers, Regs(arch.registers())));
     }
     for (bytes, id) in crate::backend::constpool::wide_first(pool.borrow().entries()) {
         let name = format!("$K{id}");
@@ -408,7 +445,8 @@ pub fn assembled_by(
     externs.extend(module.globals.iter().enumerate().filter_map(|(at, global)| {
         let GlobalKind::Variable(variable) = &global.kind else { return None };
         let name = names.get(&(globals::space(module, GlobalId(at as u32)), at as i64))?;
-        (variable.initializer.is_none() && !defined.contains(name.as_str())).then(|| (name.clone(), "byte".to_owned()))
+        let kind = if matches!(global.address_space, FAR_SPACE | HUGE_SPACE) { "far-byte" } else { "byte" };
+        (variable.initializer.is_none() && !defined.contains(name.as_str())).then(|| (name.clone(), kind.to_owned()))
     }));
     externs.extend(masm::stack_externs(&procedures, &mut names));
     externs.sort();
@@ -416,15 +454,19 @@ pub fn assembled_by(
     let debug = timed("debug info", || {
         crate::backend::debuginfo::described(module, &names, llrm_object::debug::Producer::Native, arch)
     })?;
+    let has_far = !far_data.is_empty();
+    let far_segment = format!("{}_FARDATA", code.strip_suffix("_TEXT").unwrap_or(code));
     Ok(masm::Module {
         registers: Regs(arch.registers()),
         code: code.to_owned(),
         names,
         externs,
-        publics: procedures.iter().filter(|one| one.public).map(|one| one.name.clone()).collect(),
-        data: vec![("_DATA".to_owned(), data)],
+        publics: procedures.iter().filter(|one| one.public).map(|one| one.name.clone()).chain(data_publics).collect(),
+        data: std::iter::once(("_DATA".to_owned(), data))
+            .chain(has_far.then(|| (far_segment.clone(), far_data)))
+            .collect(),
         procedures,
-        private: BTreeSet::new(),
+        private: BTreeSet::from_iter(has_far.then(|| far_segment.clone())),
         requests: BTreeSet::new(),
         debug,
         far_bss: BTreeSet::new(),
@@ -636,9 +678,12 @@ fn machined_once(
     let (first, frame) = timed("candidate first frame", || cheaper(&first_stage, name, pool, target))?;
     let spilled = frame.floor + first.reserve;
     // The allocas move down by the hole: a multiple of the stack alignment, or
-    // an 8-aligned array lands at 4 mod 8 (nbody -O2: 18,404 operands).
+    // an 8-aligned array lands at 4 mod 8 (nbody -O2: 18,404 operands). Shared
+    // spill slots can end on a word, so a 4-aligned frame needs it too: the
+    // backend run again aligns the allocas and the frame moved by the hole
+    // did not (reserve 286 against 288).
     let spilled =
-        if frame.align > 4 { (spilled + frame.align - 1).div_euclid(frame.align) * frame.align } else { spilled };
+        if frame.align > 1 { (spilled + frame.align - 1).div_euclid(frame.align) * frame.align } else { spilled };
     let far = far_frame(&first.body);
     if target.basic || frame.native.is_some() || spilled <= 0 || frame.floor == 0 || far == 0 {
         return Ok(first);

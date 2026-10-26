@@ -1,0 +1,14 @@
+[package]
+name = "llrm-cc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "cc-compatible driver: the pinned clang's front end, llrm's optimizer and backend"
+
+[dependencies]
+serde = { workspace = true }
+toml = { workspace = true }
+
+[[bin]]
+name = "llrm-cc"
+path = "src/main.rs"

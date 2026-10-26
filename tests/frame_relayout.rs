@@ -8,9 +8,9 @@ use std::process::Command;
 
 /// (program, flags) whose frames reach past one-byte displacements and spill.
 // shellsort -m32 left the list: with EBP a value register (no frame pointer) it
-// no longer spills.
-const FAR: [(&str, &[&str]); 4] =
-    [("matmul", &["-m32", "-march=i486"]), ("matmul", &[]), ("nbody", &[]), ("sieve", &["-m32", "-march=i486"])];
+// no longer spills. sieve -m32 -march=i486 left it with the translated
+// coalescer (#2480): its frame no longer reaches past [bp-128].
+const FAR: [(&str, &[&str]); 3] = [("matmul", &["-m32", "-march=i486"]), ("matmul", &[]), ("nbody", &[])];
 
 fn compiled(
     program: &str,
