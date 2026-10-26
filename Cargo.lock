@@ -313,7 +313,7 @@ dependencies = [
  "llrm-coff32",
  "llrm-coff64",
  "llrm-dagisel",
- "llrm-dwarf",
+ "llrm-debuginfo",
  "llrm-elf32",
  "llrm-elf64",
  "llrm-hir",
@@ -385,6 +385,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-debuginfo"
+version = "0.1.0"
+dependencies = [
+ "llrm-elf32",
+ "llrm-elf64",
+ "llrm-macho",
+ "llrm-object",
+ "llrm-support",
+ "tempfile",
+]
+
+[[package]]
 name = "llrm-driver"
 version = "0.1.0"
 dependencies = [
@@ -403,22 +415,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "llrm-dwarf"
-version = "0.1.0"
-dependencies = [
- "llrm-elf32",
- "llrm-elf64",
- "llrm-macho",
- "llrm-object",
- "llrm-support",
- "tempfile",
-]
-
-[[package]]
 name = "llrm-elf"
 version = "0.1.0"
 dependencies = [
- "llrm-dwarf",
+ "llrm-debuginfo",
  "llrm-object",
 ]
 
@@ -494,7 +494,7 @@ dependencies = [
 name = "llrm-macho"
 version = "0.1.0"
 dependencies = [
- "llrm-dwarf",
+ "llrm-debuginfo",
  "llrm-object",
  "tempfile",
 ]
@@ -543,7 +543,7 @@ name = "llrm-omf"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
- "llrm-dwarf",
+ "llrm-debuginfo",
  "llrm-object",
  "llrm-support",
 ]

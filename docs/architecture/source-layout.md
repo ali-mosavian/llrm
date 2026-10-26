@@ -46,12 +46,12 @@ in [readme.md](readme.md).
 | `target/llrm-x86-m16-select` | Selector and peephole rules generated for m16 |
 | `target/llrm-x86-m32` | Flat 32-bit x86, the same descriptions |
 | `target/llrm-x86-m32-select` | Selector and peephole rules generated for m32 |
-| `target/llrm-object` | The format-neutral `Object` the backend produces ([object model](../formats/object-model.md)) |
-| `target/llrm-omf` | OMF records, writer and reader, CodeView debug info |
+| `mc/llrm-object` | The format-neutral `Object` the backend produces ([object model](../formats/object-model.md)) |
+| `mc/llrm-omf` | OMF records, writer and reader, CodeView debug info |
 | `target/llrm-elf`, `llrm-elf32`, `llrm-elf64` | ELF common part and the 32- and 64-bit writers |
 | `target/llrm-coff`, `llrm-coff32`, `llrm-coff64` | COFF common part and the 32- and 64-bit writers |
-| `target/llrm-macho` | Mach-O writer |
-| `target/llrm-dwarf` | DWARF 4 and 5 debug sections |
+| `mc/llrm-macho` | Mach-O writer |
+| `mc/llrm-debuginfo` | DWARF 4 and 5 debug sections |
 
 ## Other top-level paths
 

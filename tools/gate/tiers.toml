@@ -31,7 +31,7 @@ paths = ["docs/**", "**/*.md", "editors/**", ".gitignore", ".github/**", ".zed/*
 paths = [
   "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "build.rs", "src/**", "tests/common/**",
   "crates/ir/**", "crates/support/**",
-  "crates/target/llrm-target/**", "crates/target/llrm-object/**",
+  "crates/target/llrm-target/**", "crates/mc/llrm-object/**",
   "tools/gate/**",
 ]
 
@@ -56,12 +56,12 @@ paths = ["crates/**/*.rs"]
 [[heavy]]
 step = "turbo"
 why = "Turbo Debugger session over a program: 48 s"
-owners = ["crates/codegen/llrm-codegen/src/backend/debuginfo.rs", "crates/codegen/llrm-codegen/src/backend/frame.rs", "crates/codegen/llrm-codegen/src/backend/cfi*.rs", "tests/turbo.rs", "tests/common/**", "crates/target/llrm-omf/**", "crates/target/llrm-coff*/**", "crates/target/llrm-dwarf/**", "toolchain/**", "tools/dosbatch/**", "tools/debug-gate.env"]
+owners = ["crates/codegen/llrm-codegen/src/backend/debuginfo.rs", "crates/codegen/llrm-codegen/src/backend/frame.rs", "crates/codegen/llrm-codegen/src/backend/cfi*.rs", "tests/turbo.rs", "tests/common/**", "crates/mc/llrm-omf/**", "crates/mc/llrm-coff*/**", "crates/mc/llrm-debuginfo/**", "toolchain/**", "tools/dosbatch/**", "tools/debug-gate.env"]
 
 [[heavy]]
 step = "cv4"
 why = "Microsoft link + CodeView sessions: 30 s"
-owners = ["crates/codegen/llrm-codegen/src/backend/debuginfo.rs", "crates/codegen/llrm-codegen/src/backend/frame.rs", "crates/codegen/llrm-codegen/src/backend/cfi*.rs", "tests/cv4.rs", "crates/target/llrm-coff*/**", "crates/target/llrm-omf/**", "toolchain/**", "tools/dosbatch/**", "tools/debug-gate.env"]
+owners = ["crates/codegen/llrm-codegen/src/backend/debuginfo.rs", "crates/codegen/llrm-codegen/src/backend/frame.rs", "crates/codegen/llrm-codegen/src/backend/cfi*.rs", "tests/cv4.rs", "crates/mc/llrm-coff*/**", "crates/mc/llrm-omf/**", "toolchain/**", "tools/dosbatch/**", "tools/debug-gate.env"]
 
 [[heavy]]
 step = "identity"
@@ -81,7 +81,7 @@ owners = ["runtime/qb/**", "runtime/shared/dos/**", "crates/frontends/qb/**", "c
 [[heavy]]
 step = "qcport"
 why = "builds and runs QCport against the all-Borland build: 100 s"
-owners = ["tools/qcport*", "tools/qcport/**", "tools/linkrecipe.py", "crates/frontends/llrm-c/**", "crates/target/llrm-x86-m32/**", "crates/target/llrm-omf/**", "crates/target/llrm-x86/**", "crates/backend/**", "crates/opt/**", "runtime/**"]
+owners = ["tools/qcport*", "tools/qcport/**", "tools/linkrecipe.py", "crates/frontends/llrm-c/**", "crates/target/llrm-x86-m32/**", "crates/mc/llrm-omf/**", "crates/target/llrm-x86/**", "crates/backend/**", "crates/opt/**", "runtime/**"]
 
 [[heavy]]
 step = "oracle-qcport"

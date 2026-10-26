@@ -1,5 +1,5 @@
 [package]
-name = "llrm-dwarf"
+name = "llrm-debuginfo"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -22,7 +22,7 @@ def test_a_change_in_the_c_frontend_runs_the_c_programs_and_qcport_not_the_debug
 
 
 def test_a_change_in_the_omf_writer_runs_the_debugger_sessions():
-    p = gate.plan(["crates/target/llrm-omf/src/omf.rs"])
+    p = gate.plan(["crates/mc/llrm-omf/src/omf.rs"])
     assert p.tier == "fast"
     assert {"turbo", "cv4"} <= set(p.steps), p.steps
 

@@ -132,10 +132,10 @@ impl Options {
         use llrm_object::debug::Format;
         match (self.object_format, self.debug_format) {
             (_, Format::TurboDebugger) => llrm_omf::LOCATION_RANGES,
-            (_, Format::Dwarf { .. }) => llrm_dwarf::LOCATION_RANGES,
+            (_, Format::Dwarf { .. }) => llrm_debuginfo::LOCATION_RANGES,
             ("omf", _) => llrm_omf::LOCATION_RANGES,
             ("coff", _) => llrm_coff::LOCATION_RANGES,
-            _ => llrm_dwarf::LOCATION_RANGES,
+            _ => llrm_debuginfo::LOCATION_RANGES,
         }
     }
 
@@ -145,10 +145,10 @@ impl Options {
         use llrm_object::debug::Format;
         match (self.object_format, self.debug_format) {
             (_, Format::TurboDebugger) => llrm_omf::CFA_LOCATIONS,
-            (_, Format::Dwarf { .. }) => llrm_dwarf::CFA_LOCATIONS,
+            (_, Format::Dwarf { .. }) => llrm_debuginfo::CFA_LOCATIONS,
             ("omf", _) => llrm_omf::CFA_LOCATIONS,
             ("coff", _) => llrm_coff::CFA_LOCATIONS,
-            _ => llrm_dwarf::CFA_LOCATIONS,
+            _ => llrm_debuginfo::CFA_LOCATIONS,
         }
     }
 

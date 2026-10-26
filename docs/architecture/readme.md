@@ -85,7 +85,7 @@ flowchart TB
   tr["<b>llrm-transforms</b>"]:::mid
   tgt["<b>llrm-target</b><br/><small>llrm-lir</small>"]:::mid
   x86["<b>llrm-x86</b>"]:::mid
-  wr["<b>Writers: llrm-omf,</b><br/><small>llrm-elf*, llrm-coff*,<br/>llrm-macho, llrm-dwarf</small>"]:::out
+  wr["<b>Writers: llrm-omf,</b><br/><small>llrm-elf*, llrm-coff*,<br/>llrm-macho, llrm-debuginfo</small>"]:::out
   an["<b>llrm-analysis</b>"]:::mid
   obj["<b>llrm-object</b>"]:::mid
   mir["<b>llrm-mir</b><br/><small>(no dependencies)</small>"]:::mid

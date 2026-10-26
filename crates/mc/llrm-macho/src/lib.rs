@@ -224,7 +224,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
     let expanded;
     let object = match &object.debug {
         Some(info) => {
-            expanded = llrm_dwarf::expanded(object, info)?;
+            expanded = llrm_debuginfo::expanded(object, info)?;
             &expanded
         }
         None => object,
