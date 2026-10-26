@@ -20,7 +20,7 @@ def test_only_a_change_to_what_programs_link_against_or_a_target_fact_asks_for_t
     assert lc.touches_runtime(["runtime/c/x86-m32/c.toml"])
     assert lc.touches_runtime(["runtime/qb/dev/dos/m32/gdscan.asm"])
     assert lc.touches_runtime(["crates/target/llrm-x86-m32/src/machines/calling.toml"])
-    assert not lc.touches_runtime(["docs/working/readme.md", "crates/backend/llrm-core/src/backend/memcpycall.rs", "tools/parity_squash.py"])
+    assert not lc.touches_runtime(["docs/working/readme.md", "crates/codegen/llrm-codegen/src/backend/memcpycall.rs", "tools/parity_squash.py"])
 
 
 def test_the_landing_layer_links_for_a_runtime_change_and_refuses_what_does_not_link(capsys):

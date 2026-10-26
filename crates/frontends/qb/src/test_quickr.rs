@@ -1,12 +1,12 @@
 //! QuickrBASIC (`quickr`): sized integers and mandatory declarations.
 
-use llrm_core::hir::execute;
-use llrm_core::hir::model::Number;
+use llrm_codegen::hir::execute;
+use llrm_codegen::hir::model::Number;
 
 use super::driver as qb_driver;
 use super::test_hir::written;
 
-fn compiled(source: &str) -> Result<llrm_core::hir::model::Program, String> {
+fn compiled(source: &str) -> Result<llrm_codegen::hir::model::Program, String> {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "quickr.bas", source.as_bytes());
     qb_driver::parsed(&path, &qb_driver::Frontend::new("quickr", "vbdos"), None).map_err(|error| error.to_string())
@@ -474,7 +474,7 @@ fn locals_read_before_assignment_start_at_zero() {
     assert_eq!(printed(source), " 2  0  0  0  0 \n 2  0  0  0  0 \n");
 }
 
-fn quickr_program(source: &str) -> llrm_core::hir::model::Program {
+fn quickr_program(source: &str) -> llrm_codegen::hir::model::Program {
     compiled(source).unwrap_or_else(|error| panic!("{error}"))
 }
 
@@ -494,7 +494,7 @@ fn frame_after_layout(
     let mut frame: Vec<_> = function
         .places
         .iter()
-        .filter(|one| one.storage == llrm_core::hir::model::Storage::Local)
+        .filter(|one| one.storage == llrm_codegen::hir::model::Storage::Local)
         .map(|one| (one.name.clone(), one.offset, one.offset + one.extent.unwrap_or(widths[&one.r#type])))
         .collect();
     frame.sort_by_key(|one| -one.2);
@@ -528,7 +528,7 @@ fn a_runtime_framed_procedure_keeps_no_zero_stores() {
     let laid_out = super::zero_fill::laid_out(&program, |module, function| {
         !super::compile::_inline_frame(&program, module, function)
     });
-    let entry = |program: &llrm_core::hir::model::Program| {
+    let entry = |program: &llrm_codegen::hir::model::Program| {
         let function = program.modules[0].functions.iter().find(|one| one.name == "S").expect("S");
         function.blocks.iter().find(|block| block.id == function.entry).expect("entry").instructions.len()
     };

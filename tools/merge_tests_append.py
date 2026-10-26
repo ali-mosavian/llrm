@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Merge driver for a tests file two PRs append to: `merge_tests_append.py BASE OURS THEIRS`, the result in OURS, exit 1 on a conflict.
 
-`merge=union` kept both sides' lines but aligned the tail of one appended test with the tail of the other and dropped a closing `}` (#4570: llrm-core did not
+`merge=union` kept both sides' lines but aligned the tail of one appended test with the tail of the other and dropped a closing `}` (#4570: llrm-codegen did not
 compile, no conflict reported). Here the plain three-way merge runs, and a conflict hunk where BASE has nothing (both sides inserted at one place) becomes OURS's
 block and then THEIRS's, each whole, unless both blocks define the same item (a test two PRs add alike would be defined twice). Any other conflict stays one: the result keeps the markers and the exit is 1. Edits elsewhere in the file merge as git merges them.
 """

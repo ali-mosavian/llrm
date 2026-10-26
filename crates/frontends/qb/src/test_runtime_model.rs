@@ -1,7 +1,7 @@
 //! The HIR interpreter's model of the QB runtime, checked on QB programs.
 
-use llrm_core::hir::execute;
-use llrm_core::hir::model::Number;
+use llrm_codegen::hir::execute;
+use llrm_codegen::hir::model::Number;
 
 use super::driver as qb_driver;
 use super::test_hir::written;
@@ -10,7 +10,7 @@ fn program_on(
     source: &str,
     dialect: &str,
     runtime: &str,
-) -> llrm_core::hir::model::Program {
+) -> llrm_codegen::hir::model::Program {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "model.bas", source.as_bytes());
     qb_driver::parsed(&path, &qb_driver::Frontend::new(dialect, runtime), None)
@@ -20,7 +20,7 @@ fn program_on(
 fn program(
     source: &str,
     dialect: &str,
-) -> llrm_core::hir::model::Program {
+) -> llrm_codegen::hir::model::Program {
     program_on(source, dialect, "vbdos")
 }
 
@@ -243,7 +243,7 @@ fn flat_target_string_pointers_are_not_split() {
         .flat_map(|module| &module.functions)
         .flat_map(|function| &function.blocks)
         .flat_map(|block| &block.instructions)
-        .filter(|one| one.op == llrm_core::hir::model::Op::PointerOffset)
+        .filter(|one| one.op == llrm_codegen::hir::model::Op::PointerOffset)
         .count();
     assert_eq!(split, 0);
 }
@@ -266,7 +266,7 @@ fn flat_target_bare_print_passes_a_real_descriptor() {
         .flat_map(|block| &block.instructions)
         .find(|one| one.callee.as_deref() == Some("B$PESD"))
         .expect("a B$PESD call");
-    assert!(!matches!(call.operands[0], llrm_core::hir::model::Operand::Constant { .. }), "{:?}", call.operands);
+    assert!(!matches!(call.operands[0], llrm_codegen::hir::model::Operand::Constant { .. }), "{:?}", call.operands);
 }
 
 /// VARSEG and VARPTR split an address into a paragraph and a nibble: on a flat
@@ -288,7 +288,7 @@ fn flat_target_varptr_is_a_whole_address() {
         .blocks
         .iter()
         .flat_map(|block| &block.instructions)
-        .find(|one| one.op == llrm_core::hir::model::Op::PointerOffset)
+        .find(|one| one.op == llrm_codegen::hir::model::Op::PointerOffset)
         .expect("a VARPTR");
     let value = function.values.iter().find(|one| one.id == offset.results[0]).expect("its value");
     let width = module.types.iter().find(|one| one.id == value.r#type).expect("its type").width;

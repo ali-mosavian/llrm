@@ -1,8 +1,8 @@
 //! A procedure frames itself, not through B$ENRA/B$EXSA, where the runtime
 //! needs no frame of its own; `--runtime-frames` gives every one the runtime's.
 
-use llrm_core::hir::execute;
-use llrm_core::hir::model::Program;
+use llrm_codegen::hir::execute;
+use llrm_codegen::hir::model::Program;
 
 use super::driver as qb_driver;
 use super::test_hir::{between, listing, written};
@@ -158,7 +158,7 @@ fn a_runtime_framed_procedure_still_zeroes_its_frame_in_mir() {
         SUB own (n AS INTEGER)\nDIM k AS INTEGER\nPRINT k + n\nEND SUB\n";
     for (dialect, runtime) in DIALECTS {
         let text = llrm_mir::print::module(
-            &llrm_core::hir::mir::emit(&program(source, dialect, runtime, true), &llrm_x86_m16::layout())
+            &llrm_codegen::hir::mir::emit(&program(source, dialect, runtime, true), &llrm_x86_m16::layout())
                 .swap_remove(0)
                 .module,
         );

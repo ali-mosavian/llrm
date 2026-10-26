@@ -33,7 +33,7 @@ flowchart TB
   hir["<b>HIR</b><br/><small>llrm-hir: model, verify,<br/>JSON codec</small>"]:::mid
   mir["<b>MIR</b><br/><small>llrm-mir</small>"]:::mid
   opt["<b>Optimized MIR</b><br/><small>llrm-transforms: module<br/>steps, per-body fixed point</small>"]:::opt
-  lir["<b>LIR over virtual values</b><br/><small>llrm-lir, llrm-core backend</small>"]:::mid
+  lir["<b>LIR over virtual values</b><br/><small>llrm-lir, llrm-codegen backend</small>"]:::mid
   ph["<b>Machine phases (flow.rs)</b><br/><small>phi elimination, two-address,<br/>coalescing, register<br/>allocation, parallel copies,<br/>prologue, peephole,<br/>scheduling, jumps</small>"]:::mid
   obj["<b>llrm_object::Object</b><br/><small>format-neutral (objbuild.rs)</small>"]:::out
   wr["<b>Object writer</b><br/><small>omf, elf32, elf64, coff32,<br/>coff64, macho</small>"]:::out
@@ -54,7 +54,7 @@ flowchart TB
 | Tool | Frontend | Reaches MIR by |
 | --- | --- | --- |
 | `llrm-qb` | `qbfront` parses and resolves each dialect | HIR, emitted by `llrm_hir::mir::emit` |
-| `llrm-nib` | `crates/frontends/llrm-nib/src/` | the same HIR path |
+| `llrm-nib` | `crates/frontends/nib/src/` | the same HIR path |
 | `llrm-c` | a patched Open Watcom front end records its code-generator calls (`toolchain/owshim/`) | HIR from `crates/frontends/llrm-c/src/translate.rs` |
 | `llrm-omf` | objects QuickBASIC's BC wrote (a side input, [BC objects](../frontends/bc.md)) | `llrm-x86-bc` lifts their machine code; `llrm-bcdriver` compiles it afresh |
 
@@ -80,12 +80,12 @@ flowchart TB
   fe["<b>Tools (src/bin) and frontends</b><br/><small>llrm-qb llrm-nib llrm-c<br/>llrm-omf llrm-mir llrm-run<br/>nibfront nib-lsp<br/>llrm-bcdriver qbfront</small>"]:::src
   drv["<b>llrm-driver</b>"]:::mid
   sel["<b>llrm-x86-m16-select</b><br/><small>llrm-x86-m32-select<br/>(generated selector,<br/>peephole rules)</small>"]:::mid
-  core["<b>llrm-core</b><br/><small>driver, isel, machine phases,<br/>objbuild, HIR interpreter</small>"]:::opt
+  core["<b>llrm-codegen</b><br/><small>driver, isel, machine phases,<br/>objbuild, HIR interpreter</small>"]:::opt
   hir["<b>llrm-hir</b>"]:::mid
   tr["<b>llrm-transforms</b>"]:::mid
   tgt["<b>llrm-target</b><br/><small>llrm-lir</small>"]:::mid
   x86["<b>llrm-x86</b>"]:::mid
-  wr["<b>Writers: llrm-omf,</b><br/><small>llrm-elf*, llrm-coff*,<br/>llrm-macho, llrm-dwarf</small>"]:::out
+  wr["<b>Writers: llrm-omf,</b><br/><small>llrm-elf*, llrm-coff*,<br/>llrm-macho, llrm-debuginfo</small>"]:::out
   an["<b>llrm-analysis</b>"]:::mid
   obj["<b>llrm-object</b>"]:::mid
   mir["<b>llrm-mir</b><br/><small>(no dependencies)</small>"]:::mid
@@ -109,10 +109,10 @@ Three edges carry the architecture:
 
 - `llrm-mir`, `llrm-analysis` and `llrm-transforms` depend on no machine
   crate. A pass reaches the target only as `llrm_mir::target::Machine`.
-- `llrm-core` depends on no `llrm-x86-m*` crate
+- `llrm-codegen` depends on no `llrm-x86-m*` crate
   (`tests/core_depends_on_no_target.rs`); `llrm-driver` is the one place that
   matches on a target's name.
-- Frontends depend on `llrm-core` and `llrm-driver`, never on each other.
+- Frontends depend on `llrm-codegen` and `llrm-driver`, never on each other.
 
 [source-layout.md](source-layout.md) lists every crate.
 
@@ -263,7 +263,7 @@ flowchart TB
 unconstrained value, and `Peephole` runs after it because its rewrites depend
 on placement. Peephole rules are `peephole.peep` files compiled by
 `llrm-peepgen`; the groups that run are listed in
-`crates/backend/llrm-core/src/backend/peep/groups.list`. `ISEL_DUMP=1` prints
+`crates/codegen/llrm-codegen/src/backend/peep/groups.list`. `ISEL_DUMP=1` prints
 the LIR after each phase.
 
 Layout orders bodies and relaxes branches to a fixed point.
@@ -278,7 +278,7 @@ step or a reader consumes, not in code:
 
 | Description | Read by |
 | --- | --- |
-| `runtime/qb/src/runtime.toml` | HIR emission, the BC lift and lowering: routine contracts |
+| `crates/frontends/qb/runtime.toml` | HIR emission, the BC lift and lowering: routine contracts |
 | `patterns.isel`, `x86.instr` | `llrm-iselgen`: the selector |
 | `peephole.peep` | `llrm-peepgen`: rewrite rules |
 | `registers.regs`, `timings.times`, `opcosts.txt`, `*.toml` per target | the target crates: registers, costs, layout, ABI |

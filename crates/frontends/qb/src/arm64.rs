@@ -11,8 +11,8 @@
 use std::path::Path;
 
 use llrm_arm64::machine::Platform;
-use llrm_core::driver::Options;
-use llrm_core::hir::model;
+use llrm_codegen::driver::Options;
+use llrm_codegen::hir::model;
 
 use super::compile::{_inline_frame, _near_procedures, _positional_data, CompileError};
 
@@ -125,8 +125,8 @@ pub fn object_bytes(
         return Err(fail("one object represents exactly one QB module".into()));
     }
     let program = _positional_data(&program)?;
-    let (mut mir, _) = llrm_core::driver::emitted(&program, codegen).map_err(fail)?;
-    llrm_core::driver::optimized(&mut mir, codegen).map_err(fail)?;
+    let (mut mir, _) = llrm_codegen::driver::emitted(&program, codegen).map_err(fail)?;
+    llrm_codegen::driver::optimized(&mut mir, codegen).map_err(fail)?;
     let mut read_data = Vec::new();
     for (position, line) in super::compile::_read_data_lines(&program.modules[0])?.into_iter().enumerate() {
         read_data.extend((position as u16).to_le_bytes());

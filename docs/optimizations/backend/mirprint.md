@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/mirprint.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/mirprint.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/mirprint.rs sha256:eaa1da455363e1f22d6371ef4ee2051ec08d294cf17c184bc0d73802324520d8 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/mirprint.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/mirprint.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/mirprint.rs sha256:eaa1da455363e1f22d6371ef4ee2051ec08d294cf17c184bc0d73802324520d8 -->
 
 # mirprint
 

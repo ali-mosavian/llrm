@@ -9,7 +9,7 @@ QB 4.5's BC refuses PALETTE USING and RESUME NEXT; measure with PDS 7.1 (`/E /X`
 (`push ds; pop es; push es; push <p offset>`), `mov bx,<fixup>; mov [bx+2],ds; push bx`, `call far B$PALU`.
 Externs: B$GRPUSED, B$PALU. QB 4.5's `rt/gwpal.asm`: `B$PALU(fpData far, pAd near)`, cleanup 6, the same operands
 `graphics_array` builds for GET/PUT; the count of entries is what remains of the array from `fpData` (element size from the
-descriptor); -1 leaves an attribute alone. Needed: a contract row for B$PALU in `runtime/qb/src/runtime.toml`, a C `B$PALU` beside
+descriptor); -1 leaves an attribute alone. Needed: a contract row for B$PALU in `crates/frontends/qb/runtime.toml`, a C `B$PALU` beside
 `B$PAL2` in `runtime/qb/gfx.c` (attribute i takes element i; LONG array in DAC modes, INTEGER in EGA modes), the lowering
 at `"PALETTE_USING"` in `semantic.rs`, and the argument layout checked against BC's.
 

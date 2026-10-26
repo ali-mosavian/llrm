@@ -1,4 +1,4 @@
-//! The rich-MIR corpus, and the corpus tests of llrm-core's
+//! The rich-MIR corpus, and the corpus tests of llrm-codegen's
 //! `analysis/loops_tests.rs` asked of it through `cfg::graph`.
 
 use std::collections::BTreeSet;

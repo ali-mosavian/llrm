@@ -6,9 +6,9 @@
 use std::fmt::Write;
 
 fn main() {
-    println!("cargo::rerun-if-changed=src/runtime.toml");
+    println!("cargo::rerun-if-changed=../../crates/frontends/qb/runtime.toml");
     println!("cargo::rerun-if-changed=build.rs");
-    let text = std::fs::read_to_string("src/runtime.toml").expect("runtime.toml reads");
+    let text = std::fs::read_to_string("../../crates/frontends/qb/runtime.toml").expect("runtime.toml reads");
     let rows: toml::Table = text.parse().expect("runtime.toml parses");
     let string =
         |row: &toml::Table, key: &str| row[key].as_str().unwrap_or_else(|| panic!("{key} is a str")).to_owned();

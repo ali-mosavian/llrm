@@ -27,9 +27,9 @@ def test_a_red_integration_test_is_named_by_its_target_and_a_summary_line_is_not
 
 def test_a_red_nightly_test_names_the_prs_of_the_window_that_touch_what_it_reaches():
     """The G1 ruling keeps most root targets nightly: the morning report names the PR and its owner so the coordinator can route a red one."""
-    reach = {"attribute": {"llrm-core", "llrm-mir"}, "header_copy": {"llrm-transforms"}}
-    landed = [("a" * 40, ["crates/backend/llrm-core/src/x.rs"]), ("b" * 40, ["docs/x.md"]), ("c" * 40, ["tests/header_copy.rs"])]
-    crate_of = lambda path: "llrm-core" if "llrm-core" in path else None  # noqa: E731
+    reach = {"attribute": {"llrm-codegen", "llrm-mir"}, "header_copy": {"llrm-transforms"}}
+    landed = [("a" * 40, ["crates/codegen/llrm-codegen/src/x.rs"]), ("b" * 40, ["docs/x.md"]), ("c" * 40, ["tests/header_copy.rs"])]
+    crate_of = lambda path: "llrm-codegen" if "llrm-codegen" in path else None  # noqa: E731
     owners = {"a" * 40: ("3901", "w-3"), "c" * 40: ("3902", "w-8")}
     lines = n.attribution(
         ["integration attribute::t", "integration header_copy::t", "integration other::t"], reach, landed, crate_of, lambda sha: owners.get(sha, ("?", "?"))

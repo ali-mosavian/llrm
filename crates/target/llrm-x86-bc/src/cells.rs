@@ -1,5 +1,5 @@
 //! The runtime's cells a program names by EXTDEF, and what writes them:
-//! llrm-core's `raising_defseg` and `spared`.
+//! llrm-codegen's `raising_defseg` and `spared`.
 //!
 //! `DEF SEG = x` is `push x / call B$DSEG`, whose whole body stores the
 //! pushed word into `b$seg` and leaves it in AX: here, that store. Every

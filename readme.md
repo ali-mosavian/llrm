@@ -77,7 +77,7 @@ dialect is `vbdos`. `llrm-omf` takes every object of a program in LINK order, ig
 | Option | Does |
 |---|---|
 | `-O0` `-O1` `-O2` `-O3` `-Omax` `-Os` `-Oz` `-Og` | Optimization level; `-O2` is the default. What each level turns on: [levels](docs/reference/levels.md) |
-| `-f[no-]PASS` | One pass on or off by gcc's name, for example `unroll-loops`, `inline-functions`, `strength-reduce`, `gcse`, `tree-dse`; the names are the `PASSES` table in `crates/backend/llrm-core/src/driver/flags.rs` |
+| `-f[no-]PASS` | One pass on or off by gcc's name, for example `unroll-loops`, `inline-functions`, `strength-reduce`, `gcse`, `tree-dse`; the names are the `PASSES` table in `crates/codegen/llrm-codegen/src/driver/flags.rs` |
 | `-march=CPU`, `-mtune=CPU` | The processor, gcc's name for it (`i386` through `core2`) |
 | `-m16`, `-m32` | The target; `-fobject-format=omf\|elf\|macho\|coff` its object format |
 | `-fsanitize=CHECKS`, `-ftrapv`, `-fwrapv` | Run-time checks: `bounds`, `integer-divide-by-zero`, `signed-integer-overflow`, `stack`, or `undefined` (the first three); see [semantic switches](docs/reference/semantics/readme.md) |

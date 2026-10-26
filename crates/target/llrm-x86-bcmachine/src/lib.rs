@@ -1,7 +1,7 @@
 //! The machine layer of BC objects: x86 decoded into the machine IR
 //! (`Semantics`, `Loc`, `Mem`), blocks, extents, stack facts and the runtime
 //! ABI. A crate of its own so that nothing here can reach MIR. Module paths
-//! mirror `llrm-core`, which re-exports them.
+//! mirror `llrm-codegen`, which re-exports them.
 
 #![forbid(unsafe_code)]
 

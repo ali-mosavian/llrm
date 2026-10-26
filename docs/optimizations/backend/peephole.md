@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/peephole.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/peephole.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/peephole.rs sha256:dd2b082c5239b83b00440739a64aae2805f801aa2398fdfb77a4cedca5e8d16a -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/peephole.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/peephole.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/peephole.rs sha256:dd2b082c5239b83b00440739a64aae2805f801aa2398fdfb77a4cedca5e8d16a -->
 
 # peephole
 

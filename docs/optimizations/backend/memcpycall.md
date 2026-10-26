@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/memcpycall.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/memcpycall.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/memcpycall.rs sha256:3446bfdba7aae020366496bc8645caef67461237ef9b5f1bdf5c4c7f4bbb0971 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/memcpycall.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/memcpycall.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/memcpycall.rs sha256:3446bfdba7aae020366496bc8645caef67461237ef9b5f1bdf5c4c7f4bbb0971 -->
 
 # memcpycall
 

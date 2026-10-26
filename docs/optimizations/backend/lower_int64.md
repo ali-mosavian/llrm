@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/lower_int64.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/lower_int64.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/lower_int64.rs sha256:fde3f21f5ac65e394a3145127d87bc2f8d79332a3ea648074a2fab35e4d83a4d -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/lower_int64.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/lower_int64.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/lower_int64.rs sha256:fde3f21f5ac65e394a3145127d87bc2f8d79332a3ea648074a2fab35e4d83a4d -->
 
 # lower_int64
 

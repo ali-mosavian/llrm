@@ -5,13 +5,13 @@ use std::process::ExitCode;
 use llrm_qb::Dialect;
 
 fn main() -> ExitCode {
-    let mut flags = llrm_core::driver::flags::Flags::default();
+    let mut flags = llrm_codegen::driver::flags::Flags::default();
     let argv: Vec<String> = env::args().skip(1).collect();
     let mut taken = 0;
     let mut rest = Vec::new();
     while taken < argv.len() {
         // The target flags are the shared parser's: -m16, -m32, -m64.
-        if llrm_core::driver::flags::Flags::mode_flag(&argv[taken]).is_some() {
+        if llrm_codegen::driver::flags::Flags::mode_flag(&argv[taken]).is_some() {
             if let Err(why) = flags.take(&argv, &mut taken) {
                 eprintln!("qbfront: {why}");
                 return ExitCode::from(2);

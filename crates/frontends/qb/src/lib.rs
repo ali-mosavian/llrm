@@ -17,7 +17,7 @@ pub use dialect::Dialect;
 pub use error::LexError;
 pub use error::ParseError;
 pub use front::parse;
-pub use llrm_core::abi::qb as abi;
+pub use llrm_codegen::abi::qb as abi;
 pub use semantic::SemanticError;
 pub use semantic::compile;
 pub use syntax::Module;

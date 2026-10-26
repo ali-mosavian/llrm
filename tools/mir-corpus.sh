@@ -67,5 +67,5 @@ done
 for source in $(find "$root/tests/fixtures/nib" "$root/examples" -name '*.nib' | sort); do
   nib "nib-$(echo "${source#"$root"/}" | sed -e 's|^tests/fixtures/nib/||' -e 's|/|-|g' -e 's/\.nib$//')" "$source"
 done
-nib nib-runtime "$root/crates/frontends/llrm-nib/src/runtime/runtime.nib"
+nib nib-runtime "$root/crates/frontends/nib/src/runtime/runtime.nib"
 echo "emitted: $(ls "$out/emitted" | wc -l), optimized: $(ls "$out/optimized" | wc -l), $(du -sh "$out" | cut -f1)"

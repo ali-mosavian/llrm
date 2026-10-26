@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/postrasink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/postrasink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/postrasink.rs sha256:20144e43a1dc4f2fe2fb4e4de80aa3bab1a58f888bdb0502be35a9c9b90a6393 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/postrasink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/postrasink.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/postrasink.rs sha256:20144e43a1dc4f2fe2fb4e4de80aa3bab1a58f888bdb0502be35a9c9b90a6393 -->
 
 # postrasink
 

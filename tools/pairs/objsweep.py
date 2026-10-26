@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 # Code whose change moves the objects of the DAG selector or of the machine passes after it, not only of the old selector.
-SELECTOR_PATHS = re.compile(r"selectiondag|dagisel|/isel|isel\.rs|/shadow|crates/target/|schedul|crates/backend/llrm-core/src/backend/")
+SELECTOR_PATHS = re.compile(r"selectiondag|dagisel|/isel|isel\.rs|/shadow|crates/target/|schedul|crates/codegen/llrm-codegen/src/backend/")
 
 
 def selectors(named: str | None, changed: list[str] | None) -> list[str]:

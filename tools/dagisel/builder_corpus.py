@@ -3,7 +3,7 @@
 
     tools/dagisel/builder_corpus.py BIN_DIR EXAMPLE [--jobs N]
 
-BIN_DIR holds llrm-c, llrm-nib and llrm-qb; EXAMPLE is `cargo build --release -p llrm-core --example
+BIN_DIR holds llrm-c, llrm-nib and llrm-qb; EXAMPLE is `cargo build --release -p llrm-codegen --example
 builder_refusals`. Each source is compiled to the last IR its `--dump` writes (tests/run c/alias/huge at m16
 and m32, nib and qb at m16, tests/qbrt, the QCport modules at m16 -Os), and the example reports the refused
 blocks. Prints reasons with block and program counts. Needs the work dir on a disk, not tmpfs ($TMPDIR).

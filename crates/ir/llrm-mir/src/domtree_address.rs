@@ -12,7 +12,7 @@
 //! A diamond `0 -> {1, 2} -> 3` has 0 as the immediate dominator of 3.
 //!
 //! # Used by
-//! `llrm-hir`'s `dominance::check`, `llrm-core`'s `analysis::loops`.
+//! `llrm-hir`'s `dominance::check`, `llrm-codegen`'s `analysis::loops`.
 
 use std::collections::{BTreeMap, BTreeSet};
 

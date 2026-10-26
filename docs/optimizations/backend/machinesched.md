@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/machinesched.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/machinesched.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/machinesched.rs sha256:1dd246798496810da980ae6c2a716df32c00bf2c0fd73351a8c83f3b9ee71237 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/machinesched.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/machinesched.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/machinesched.rs sha256:1dd246798496810da980ae6c2a716df32c00bf2c0fd73351a8c83f3b9ee71237 -->
 
 # machinesched
 

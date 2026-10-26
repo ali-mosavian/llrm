@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/pressuresink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/pressuresink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/pressuresink.rs sha256:4d0b08d7c20190c46b799a12d512420d0ad706b56175665f38d62cffecdf9e19 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/pressuresink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/pressuresink.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/pressuresink.rs sha256:4d0b08d7c20190c46b799a12d512420d0ad706b56175665f38d62cffecdf9e19 -->
 
 # pressuresink
 

@@ -880,9 +880,7 @@ fn emit_module<'h>(
     let statements = hir.statements();
     let rows = statements.clone().unwrap_or_default();
     // A RESUME marker the body falls into raises; the handlers' markers do not.
-    let raises = |callee: &str| {
-        handling::resumes(callee) || (!handling::owns(callee) && !nounwind.iter().any(|one| one == callee))
-    };
+    let raises = |callee: &str| handling::raises(callee, nounwind);
     let outlined = match module_handler(&mut module, &tables.spaces, &functions, runtime, &rows, &raises) {
         Ok(outlined) => outlined,
         Err((name, why)) => {
@@ -896,7 +894,9 @@ fn emit_module<'h>(
         let handled = match (function.error_handler.is_some() || tables.module_handler.is_some(), &statements) {
             (false, _) => Ok(None),
             (true, Ok(rows)) => {
-                let lines: Vec<i64> = handling::numbered(rows, function.id).iter().map(|one| one.line).collect();
+                let numbered = handling::numbered(rows, function.id);
+                let lines: Vec<i64> =
+                    handling::sites(function, &numbered, nounwind).iter().map(|&site| numbered[site].line).collect();
                 onerror::handled(&mut module, tables.spaces.far, global, &lines, function.error_handler_local).map(Some)
             }
             (true, Err(why)) => Err(why.clone()),

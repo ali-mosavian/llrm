@@ -2,7 +2,7 @@
 
 Owner: w-1 from 2026-10-23 (handed over by w-2; PostRAMachineSink and the pressure steps 13/14/15 wait on w-2's row 65 piece 2). Pin d1106deb71cc81016406a1917d0508d2df296266, `llvm/lib/CodeGen/MachineSink.cpp`
 ([base](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineSink.cpp)).
-Ours: `crates/backend/llrm-core/src/backend/machinesink.rs`. Code lands after row 65 piece 3.
+Ours: `crates/codegen/llrm-codegen/src/backend/machinesink.rs`. Code lands after row 65 piece 3.
 
 Order is the pin's. Status: done, partial, todo, blocked (blocker, date).
 

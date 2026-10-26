@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/twoaddr.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/twoaddr.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/twoaddr.rs sha256:7cff574150f7c14db1364769cbf68b40318fe256c6fd5f9ab1b43d8f938c425c -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/twoaddr.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/twoaddr.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/twoaddr.rs sha256:7cff574150f7c14db1364769cbf68b40318fe256c6fd5f9ab1b43d8f938c425c -->
 
 # twoaddr
 

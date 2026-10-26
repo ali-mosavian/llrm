@@ -1,4 +1,4 @@
-//! llrm-core's `analysis/memoryssa_tests.rs`, written as rich MIR.
+//! llrm-codegen's `analysis/memoryssa_tests.rs`, written as rich MIR.
 //!
 //! Skipped: `test_entry_backedge_keeps_the_invocation_memory_state`, since
 //! nothing branches to an LLVM entry block.
