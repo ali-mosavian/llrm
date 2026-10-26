@@ -18,9 +18,7 @@ entry:
 #[test]
 fn a_sibling_call_through_a_pointer_jumps_through_a_register() {
     let module = llrm_mir::parse::module(INDIRECT_TAIL).expect("parses");
-    super::dag_function::TAIL_CALLS.set(true);
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[]);
-    super::dag_function::TAIL_CALLS.set(false);
     let done = done.unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
     let jump = insns
@@ -30,6 +28,19 @@ fn a_sibling_call_through_a_pointer_jumps_through_a_register() {
         .expect("a jmp that returns");
     assert!(jump.indirect && matches!(jump.sources.as_slice(), [crate::model::ir::Loc::Held(_)]), "{jump:?}");
     assert!(insns.iter().filter_map(|i| i.what.as_ref()).all(|w| w.op != Operation::Call), "no call remains");
+}
+
+/// `LLRM_TAIL_CALLS=0` keeps the call and the return, as before the default
+/// changed: a program that tail-jumped wrongly can be built without them.
+#[test]
+fn the_off_switch_keeps_a_call_and_a_return() {
+    let module = llrm_mir::parse::module(INDIRECT_TAIL).expect("parses");
+    super::dag_function::TAIL_CALLS_OFF.set(true);
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[]);
+    super::dag_function::TAIL_CALLS_OFF.set(false);
+    let done = done.unwrap_or_else(|e| panic!("{}", e.0));
+    let ops: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()).map(|w| w.op).collect();
+    assert!(ops.contains(&Operation::Call), "{ops:?}");
 }
 
 const M16_TAIL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
@@ -47,9 +58,7 @@ entry:
 #[test]
 fn an_m16_tail_call_jumps_to_the_callee() {
     let module = llrm_mir::parse::module(M16_TAIL).expect("parses");
-    super::dag_function::TAIL_CALLS.set(true);
     let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[]);
-    super::dag_function::TAIL_CALLS.set(false);
     let done = done.unwrap_or_else(|e| panic!("{}", e.0));
     assert_eq!(done.calls.values().collect::<Vec<_>>(), ["g"]);
     let insns = done.body.insns();
@@ -74,9 +83,7 @@ entry:
 #[test]
 fn an_m16_call_passing_its_stack_arguments_on_is_a_jump() {
     let module = llrm_mir::parse::module(M16_FORWARD_STACK).expect("parses");
-    super::dag_function::TAIL_CALLS.set(true);
     let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[]);
-    super::dag_function::TAIL_CALLS.set(false);
     let done = done.unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
     let whats: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref()).collect();
