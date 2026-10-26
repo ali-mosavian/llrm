@@ -58,3 +58,11 @@ fn the_link_recipe_expands_its_lists() {
     let command = link_command(&table["x86_64-linux"], &words("a.o b.o"), &words("-lm"), "prog").unwrap();
     assert_eq!(command, words("cc a.o b.o -lm -o prog"));
 }
+
+#[test]
+fn clangs_i386_layout_is_m32s_but_double_alignment_is_not() {
+    let clang = "e-m:e-p:32:32-p270:32:32-p271:32:32-p272:64:64-i128:128-f64:32:64-f80:32-n8:16:32-S128";
+    let m32 = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32";
+    assert_eq!(layout_facts(clang), layout_facts(m32));
+    assert_ne!(layout_facts(&clang.replace("f64:32:64", "f64:64:64")), layout_facts(m32));
+}

@@ -9,21 +9,74 @@ use std::process::Command;
 
 use serde::Deserialize;
 
+/// The facts of a data layout that decide a struct's shape and a call's frame:
+/// endianness, and each type's size and ABI alignment, with LLVM's defaults for
+/// what the string leaves out. Preferred alignments, stack alignment, mangling,
+/// integer widths past 64 and the address spaces clang adds (above 255) change
+/// no layout.
+pub fn layout_facts(datalayout: &str) -> BTreeMap<String, String> {
+    let mut facts: BTreeMap<String, String> = [
+        ("e", "big"),
+        ("p", "64:64"),
+        ("i8", "8"),
+        ("i16", "16"),
+        ("i32", "32"),
+        ("i64", "32"),
+        ("f32", "32"),
+        ("f64", "64"),
+        ("f80", "128"),
+    ]
+    .map(|(key, value)| (key.to_owned(), value.to_owned()))
+    .into();
+    for spec in datalayout.split('-') {
+        let parts: Vec<&str> = spec.split(':').collect();
+        let key = parts[0];
+        match key {
+            "e" => {
+                facts.insert("e".into(), "little".into());
+            }
+            _ if key.starts_with('p') => {
+                let space = key[1..].parse::<u32>().unwrap_or(0);
+                if space < 256 && parts.len() > 2 {
+                    facts
+                        .insert(if space == 0 { "p".into() } else { key.into() }, format!("{}:{}", parts[1], parts[2]));
+                }
+            }
+            _ if facts.contains_key(key) && parts.len() > 1 => {
+                facts.insert(key.into(), parts[1].into());
+            }
+            _ => {}
+        }
+    }
+    facts
+}
+
 /// Per-target facts; the file's header says what each field is.
 #[derive(Clone, Debug, Deserialize)]
 pub struct Target {
     pub triple: String,
+    /// What llrm-llc is told the module's layout is (its target's
+    /// `datalayout.toml`).
     pub datalayout: String,
+    /// What clang prints for the triple where it spells the same layout
+    /// differently; absent, `datalayout`.
+    pub clang_datalayout: Option<String>,
     pub clang: Vec<String>,
     pub llc: Vec<String>,
     pub object: String,
     pub link: Vec<String>,
+    /// The command that runs an executable of the target, the executable last;
+    /// absent where the host runs it.
+    #[serde(default)]
+    pub run: Vec<String>,
 }
 
 const TARGETS: &str = include_str!("../targets.toml");
 /// The clang commit llrm's passes were translated from; the one place it is
 /// written for this driver.
 const PIN: &str = include_str!("../../../../toolchain/clang/pin");
+/// The llrm checkout this driver was built in, for the tools the recipes name.
+const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../..");
 const DEFAULT_TARGET: &str = "x86_64-linux";
 
 pub fn targets(text: &str) -> Result<BTreeMap<String, Target>, String> {
@@ -230,6 +283,7 @@ pub fn link_command(
             "{objects}" => command.extend(objects.iter().cloned()),
             "{flags}" => command.extend(flags.iter().cloned()),
             "{output}" => command.push(output.to_owned()),
+            other if other.contains("{root}") => command.push(other.replace("{root}", ROOT)),
             other => command.push(other.to_owned()),
         }
     }
@@ -334,12 +388,18 @@ fn build(
                 args.extend([ir.display().to_string(), path.clone()]);
                 run(&clang, &args)?;
                 let text = std::fs::read_to_string(&ir).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
-                if datalayout_of(&text) != Some(target.datalayout.as_str()) {
+                let printed = datalayout_of(&text).unwrap_or_default();
+                let expected = target.clang_datalayout.as_deref().unwrap_or(&target.datalayout);
+                if printed != expected && layout_facts(printed) != layout_facts(&target.datalayout) {
                     return Err(fail(format!(
-                        "{path}: clang's datalayout {:?} is not the table's {:?}",
-                        datalayout_of(&text),
+                        "{path}: clang's datalayout `{printed}` lays types out differently from the table's `{}`",
                         target.datalayout
                     )));
+                }
+                if printed != target.datalayout {
+                    let line = format!("target datalayout = \"{printed}\"");
+                    let fixed = text.replacen(&line, &format!("target datalayout = \"{}\"", target.datalayout), 1);
+                    std::fs::write(&ir, fixed).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 }
                 let object = want(if build.stop == Stop::Assembly { "s" } else { "o" });
                 run(&llc_path(), &llc_args(target, build, &ir, Path::new(&object)))?;

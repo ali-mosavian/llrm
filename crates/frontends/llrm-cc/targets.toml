@@ -1,7 +1,7 @@
 # The per-target facts of llrm-cc, and the only place they are written. Keyed by name; `-target` takes a name or a
 # triple. `clang` are the arguments the pinned clang gets (triple, headers, macros), `llc` the ones llrm-llc gets.
 # `datalayout` is what clang must print for the triple: a mismatch is refused before llrm sees the IR.
-# `link` is the recipe for objects to an executable; `{objects}` and `{flags}` stand for lists, `{output}` for a path.
+# `link` is the recipe for objects to an executable; `{objects}` and `{flags}` stand for lists, `{output}` for a path, `{root}` for the llrm checkout.
 
 [x86_64-linux]
 triple = "x86_64-unknown-linux-gnu"
@@ -10,3 +10,18 @@ clang = ["-target", "x86_64-unknown-linux-gnu"]
 llc = []
 object = "elf"
 link = ["cc", "{objects}", "{flags}", "-o", "{output}"]
+
+# `run` (optional) is the command that runs an executable of the target, the executable last; the checks use it.
+
+# Flat DOS under DOS/32A. Clang's i386 layout differs from llrm's only in preferred alignments, so the module's layout
+# is replaced by `datalayout` once the facts that matter are equal. Functions are cdecl (`-mabi=sysv`).
+[x86_32-dos]
+triple = "i486-unknown-linux-gnu"
+datalayout = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"
+clang = ["-target", "i486-unknown-linux-gnu", "-ffreestanding", "-fno-pic", "-fno-stack-protector", "-fno-asynchronous-unwind-tables",
+  "-U__linux__", "-U__linux", "-U__gnu_linux__", "-Ulinux", "-D__DOS__=1"]
+llc = ["-fobject-format=omf", "-mabi=sysv"]
+object = "omf"
+link = ["python3", "-I", "{root}/tools/dosbatch/link_objects.py", "x86-m32", "{output}", "{objects}"]
+# How a program runs on the host: a command taking the executable last.
+run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m32"]
