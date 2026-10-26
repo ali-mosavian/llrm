@@ -703,6 +703,16 @@ impl Function {
         Some((block, numbers.at[inst.0 as usize]))
     }
 
+    /// `inst`'s index in its block, a block's numbers made once and kept until
+    /// an edit of it: with the block's place in the layout, `inst`'s place in
+    /// program order, without walking the function (`positions`).
+    pub fn number_in_block(
+        &self,
+        inst: InstId,
+    ) -> Option<u32> {
+        self.number_of(inst).map(|(_, number)| number)
+    }
+
     /// `Instruction::getNextNode`: what follows `inst` in its block.
     pub fn next_in_block(
         &self,
