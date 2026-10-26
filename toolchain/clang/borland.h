@@ -21,3 +21,4 @@
 #define pascal __attribute__((pascal))
 #define _pascal __attribute__((pascal))
 #define __pascal __attribute__((pascal))
+#define interrupt

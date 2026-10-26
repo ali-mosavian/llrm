@@ -532,3 +532,14 @@ fn clangs_pascal_number_is_llrms_basic_convention() {
                 define i16 @f() addrspace(1) {\n  %1 = call cc232 addrspace(1) i16 @QGL(i16 7)\n  ret i16 %1\n}\n";
     crate::llc::compiled(&flags(&["-mabi=cdecl"]), text, "f").unwrap();
 }
+
+/// Inline-code intrinsics (`llrm.ia16.code.*`) were decorated to `_llrm.ia16.code.*` and then "no assembler symbol":
+/// no QCport module with an asm block compiled.
+#[test]
+fn inline_code_intrinsics_keep_their_names() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n\
+                target triple = \"i386-unknown-unknown-code16\"\n\
+                declare i32 @\"llrm.ia16.code.89a60170c3.2p0\"(ptr)\n\
+                define i16 @f() addrspace(1) {\n  %a = alloca i16\n  %r = call i32 @\"llrm.ia16.code.89a60170c3.2p0\"(ptr %a)\n  ret i16 0\n}\n";
+    crate::llc::compiled(&flags(&["-mabi=cdecl"]), text, "f").unwrap();
+}

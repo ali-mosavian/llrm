@@ -115,7 +115,7 @@ fn decorate(
 ) {
     for global in &mut module.globals {
         let convention = global.function().and_then(|one| calling.by_number(one.calling_convention)).unwrap_or(default);
-        let Some(name) = global.name.as_deref().filter(|name| !name.starts_with("llvm.")) else { continue };
+        let Some(name) = global.name.as_deref().filter(|name| !name.starts_with("llvm.") && !name.starts_with("llrm.")) else { continue };
         if let Some(spelled) = convention.decorated(format, name) {
             global.name = Some(spelled).into();
         }

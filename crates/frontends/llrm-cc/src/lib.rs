@@ -3,6 +3,8 @@
 //! for the rest. Only phase flags are understood; every other flag goes to
 //! clang. Preprocess, dependency and query jobs run clang as is.
 
+mod inline_asm;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -437,6 +439,31 @@ fn build(
                     let line = format!("target datalayout = \"{printed}\"");
                     let fixed = text.replacen(&line, &format!("target datalayout = \"{}\"", target.datalayout), 1);
                     std::fs::write(&ir, fixed).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
+                }
+                if text.contains(" asm sideeffect ") {
+                    let mut scratch_number = 0;
+                    let mut assemble = |source: &str| -> Result<Vec<u8>, String> {
+                        scratch_number += 1;
+                        let (s, o, b) = (
+                            scratch.join(format!("{number}.{scratch_number}.s")),
+                            scratch.join(format!("{number}.{scratch_number}.o")),
+                            scratch.join(format!("{number}.{scratch_number}.bin")),
+                        );
+                        std::fs::write(&s, source).map_err(|error| error.to_string())?;
+                        let ran = |program: &Path, args: &[&str]| {
+                            Command::new(program).args(args).status().map(|one| one.success()).unwrap_or(false)
+                        };
+                        let (sp, op, bp) = (s.display().to_string(), o.display().to_string(), b.display().to_string());
+                        if !ran(&clang, &["-target", "i386-unknown-none", "-x", "assembler", "-c", &sp, "-o", &op])
+                            || !ran(Path::new("objcopy"), &["-O", "binary", "--only-section=.text", &op, &bp])
+                        {
+                            return Err(format!("asm: could not assemble\n{source}"));
+                        }
+                        std::fs::read(&b).map_err(|error| error.to_string())
+                    };
+                    let translated = inline_asm::translate(&std::fs::read_to_string(&ir).map_err(|e| fail(e.to_string()))?, &mut assemble)
+                        .map_err(|why| fail(format!("{path}: {why}")))?;
+                    std::fs::write(&ir, translated).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 }
                 let object = want(if build.stop == Stop::Assembly { "s" } else { "o" });
                 run(&llc_path(&target.llc_program), &llc_args(target, build, &ir, Path::new(&object)))?;
