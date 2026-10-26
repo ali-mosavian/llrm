@@ -370,9 +370,15 @@ impl Walk<'_> {
     }
 }
 
-/// The flag lanes of `lanes`.
+/// The flag lanes of `lanes`, but AF: nothing emitted reads it. An x87
+/// instruction names lanes past the six of EFLAGS (its status word, which
+/// `fnstsw; sahf` moves there): it counts as reading and writing all six.
 pub(crate) fn flag_lanes(lanes: &crate::backend::lanes::Lanes) -> crate::backend::lanes::Lanes {
-    crate::backend::lanes::Lanes::flags(lanes.mask() as u32)
+    use iced_x86::RflagsBits as F;
+    let six = (F::OF | F::SF | F::ZF | F::CF | F::PF) as u32;
+    let mask = lanes.mask() as u32;
+    let beyond = mask & !(six | F::AF as u32) != 0;
+    crate::backend::lanes::Lanes::flags(if beyond { six } else { mask & six })
 }
 
 /// What becomes of the flags `insns[index]` sets, walking `insns` after it.
@@ -397,7 +403,7 @@ pub(crate) fn flags_after(
 ) -> Flags {
     let mut pending = match liveness::effect(regs, bits, &insns[index]) {
         Some(effect) => flag_lanes(&effect.writes),
-        None => crate::backend::lanes::Lanes::flags(u32::MAX),
+        None => flag_lanes(&crate::backend::lanes::Lanes::flags(u32::MAX)),
     };
     for later in &insns[index + 1..] {
         let Some(effect) = liveness::effect(regs, bits, later) else {

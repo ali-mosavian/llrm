@@ -54,7 +54,7 @@ use crate::backend::precse::flag_lanes;
 use crate::model::ir::{Loc, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
-use crate::support::hash::{HashMap, HashSet};
+use crate::support::hash::{HashMap, HashSet, IndexMap};
 
 pub struct PeepholeOptimizer;
 
@@ -234,6 +234,7 @@ fn flags_reused(body: &LirBody) -> LirBody {
         };
         Some((flag_lanes(&effect.reads), flag_lanes(&effect.writes)))
     };
+    let live_out = crate::backend::peephole::_flags_live_out(body).entering.clone();
     let mut changed = false;
     let blocks: Vec<_> = body
         .blocks
@@ -243,7 +244,7 @@ fn flags_reused(body: &LirBody) -> LirBody {
             let mut gone: Vec<usize> = Vec::new();
             for at in 0..insns.len() {
                 if let Some(value) = compared_with_zero(&insns[at])
-                    && reusable(body, block, &insns, at, value, &reads, &flags)
+                    && reusable(body, block, &insns, at, value, &reads, &flags, &live_out)
                 {
                     gone.push(at);
                 }
@@ -288,6 +289,7 @@ fn reusable(
     value: u32,
     reads: &HashMap<u32, usize>,
     flags: &dyn Fn(&Insn) -> Option<(Lanes, Lanes)>,
+    live_out: &IndexMap<i64, Lanes>,
 ) -> bool {
     // the scan back from the compare: no other writer of the flags before the
     // definition of the value
@@ -319,14 +321,15 @@ fn reusable(
     // the scan forward from the compare: the readers of the flags read only
     // what the definition sets, until something writes them again. A write of
     // some flags (`inc` leaves CF) kills only those.
-    let mut pending = Lanes::flags(
-        (RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::AF | RflagsBits::CF | RflagsBits::PF) as u32,
-    );
+    let mut pending =
+        Lanes::flags((RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::CF | RflagsBits::PF) as u32);
     for one in &insns[at + 1..] {
         if one.is_meta() {
             continue;
         }
-        let Some((reads, writes)) = flags(one) else { return false };
+        let Some((reads, writes)) = flags(one) else {
+            return false;
+        };
         if !reads.is_disjoint(&pending) {
             let named = one.what.as_ref().and_then(|what| what.name.as_deref());
             if !named.is_some_and(|name| reads_what_it_sets(name, sets)) {
@@ -338,17 +341,19 @@ fn reusable(
             return true;
         }
     }
-    // not written again in the block: the flags must not be read in a successor
-    // before they are written there
-    block.succ.iter().all(|next| successor_overwrites_flags(body, *next, flags, pending))
+    // not written again in the block: a successor must write them before it
+    // reads them
+    block.succ.iter().all(|next| successor_overwrites_flags(body, *next, flags, pending, live_out))
 }
 
-/// Whether the block at `at` writes every one of `pending` before it reads any.
+/// Whether the block at `at` writes every one of `pending` before it reads any;
+/// where it ends with some left, none of them is live out of it.
 fn successor_overwrites_flags(
     body: &LirBody,
     at: i64,
     flags: &dyn Fn(&Insn) -> Option<(Lanes, Lanes)>,
     mut pending: Lanes,
+    live_out: &IndexMap<i64, Lanes>,
 ) -> bool {
     let Some(block) = body.blocks.iter().find(|one| one.at == at) else { return false };
     for one in &block.insns {
@@ -364,7 +369,7 @@ fn successor_overwrites_flags(
             return true;
         }
     }
-    false
+    live_out.get(&at).is_some_and(|live| live.is_disjoint(&pending))
 }
 
 #[cfg(test)]

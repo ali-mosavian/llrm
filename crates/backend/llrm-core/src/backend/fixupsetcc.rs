@@ -130,7 +130,6 @@ pub fn fixed(body: &LirBody) -> LirBody {
         (iced_x86::RflagsBits::OF
             | iced_x86::RflagsBits::SF
             | iced_x86::RflagsBits::ZF
-            | iced_x86::RflagsBits::AF
             | iced_x86::RflagsBits::CF
             | iced_x86::RflagsBits::PF) as u32,
     );
