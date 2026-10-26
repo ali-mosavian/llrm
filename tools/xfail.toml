@@ -43,12 +43,6 @@ owner = "w3"
 date = "2026-11-02"
 why = "LSR no longer counts to zero at flat i486 -O2 -m32: loop per trip main 5 instrs, tip 6, pin 6; the m16 bounds variant is w2's hoisted-invariant pressure (w13)"
 [[xfail]]
-id = "integration header_copy::test_an_early_return_through_a_spilled_sum_sets_up_nothing"
-issue = 4900
-owner = "w5"
-date = "2026-11-02"
-why = "queens place -O2 m16 -ftree-ch: main sets up nothing on the base case, tip pays the full prologue, the pin too; shrink-wrap family of recchop"
-[[xfail]]
 id = "integration header_copy::test_a_counted_exits_number_lets_its_counter_step_in_place"
 issue = 4903
 owner = "w3"
