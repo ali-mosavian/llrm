@@ -135,6 +135,14 @@ def measure(out: Path, select: list[str], limit: int, dosbox: bool = False) -> N
     print(f"{out}: {sum('clocks' in row for row in rows.values())} of {len(rows)} programs measured")
 
 
+LOCAL_PATH = re.compile(r"(?:/home|/Users|/tmp|~)/\S*")
+
+
+def scrub(text: str) -> str:
+    """Machine paths cut to their last two components: a report is committed, and a path names its machine."""
+    return LOCAL_PATH.sub(lambda found: "/".join(found.group().rstrip("/").split("/")[-2:]), text)
+
+
 def compare(base: dict, new: dict) -> list[str]:
     """The report: arms, void programs, then the programs slower in `new`, worst first."""
     before, after = base["rows"], new["rows"]
@@ -156,7 +164,7 @@ def compare(base: dict, new: dict) -> list[str]:
     for name in void:
         why = before[name].get("error") or after[name].get("error") or "?"
         lines.append(f"  void  {name}: {'base' if 'error' in before[name] else 'new'}: {why[:100]}")
-    return lines
+    return [scrub(line) for line in lines]
 
 
 def main() -> int:

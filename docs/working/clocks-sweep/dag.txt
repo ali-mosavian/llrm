@@ -1,4 +1,4 @@
-arms: base /home/alim/scratch/sbp-854bb7efc/dist isel=default; new /home/alim/scratch/sbp-d6d94ee7b0/dist isel=dag
+arms: base sbp-854bb7efc/dist isel=default; new sbp-d6d94ee7b0/dist isel=dag
 466 programs measured on both, 27 void (did not build, run or print the expected output on one side)
 249 slower, 202 faster, 114 tiny (near the start-up); geomean new/base = 1.0167
   +1070.89%       +2538 clocks  (237 -> 2775)  tiny  c/x87_arguments.c [-Os -march=i486]
@@ -251,18 +251,18 @@ arms: base /home/alim/scratch/sbp-854bb7efc/dist isel=default; new /home/alim/sc
     +0.00%          +1 clocks  (68903 -> 68904)  ring/ring.c [-Os -march=i486]
     +0.00%          +3 clocks  (456653 -> 456656)  qb/ndmax.bas
   void  c/bit_setclear.c [-Os -march=i486]: base: compile: /bit_setclear.c:
-/home/alim/work/personal/llrm/.claude/worktrees/cool-zhukovsky-b4940f/test
-  void  c/bit_test.c [-Os -march=i486]: base: compile: llrm-c: wccq failed on /home/alim/work/personal/llrm/.claude/worktrees/cool-zhukovsky-b4940
+cool-zhukovsky-b4940f/test
+  void  c/bit_test.c [-Os -march=i486]: base: compile: llrm-c: wccq failed on worktrees/cool-zhukovsky-b4940
   void  c/builtin_expect.c [-Os]: base: link: jwlink: Error! E2028: ___builtin_expect@3 is an undefined reference
-file /home/alim/work/perso
+file work/perso
   void  c/builtins_table.c [-Os]: base: link: jwlink: Error! E2028: ___builtin_abs@3 is an undefined reference
 Error! E2028: ___builtin_cons
-  void  c/high_byte.c: base: compile: llrm-c: wccq failed on /home/alim/work/personal/llrm/.claude/worktrees/cool-zhukovsky-b4940
-  void  c/huge_copy.c: base: compile: llrm-c: wccq failed on /home/alim/work/personal/llrm/.claude/worktrees/cool-zhukovsky-b4940
-  void  c/huge_fill.c: base: compile: llrm-c: wccq failed on /home/alim/work/personal/llrm/.claude/worktrees/cool-zhukovsky-b4940
+  void  c/high_byte.c: base: compile: llrm-c: wccq failed on worktrees/cool-zhukovsky-b4940
+  void  c/huge_copy.c: base: compile: llrm-c: wccq failed on worktrees/cool-zhukovsky-b4940
+  void  c/huge_fill.c: base: compile: llrm-c: wccq failed on worktrees/cool-zhukovsky-b4940
   void  c/huge_runs.c: base: compile: d __declspec declaration
-/home/alim/work/personal/llrm/.claude/worktrees/cool-zhukovsky-b49
-  void  c/inlined_tail_call_keeps_frame_stores.c [-Os]: base: compile: llrm-c: wccq failed on /home/alim/work/personal/llrm/.claude/worktrees/cool-zhukovsky-b4940
+worktrees/cool-zhukovsky-b49
+  void  c/inlined_tail_call_keeps_frame_stores.c [-Os]: base: compile: llrm-c: wccq failed on worktrees/cool-zhukovsky-b4940
   void  c/tail_calls_edges.c [-Os -march=i486 -fno-inline=_sum5@3 -fno-inline=_big_sum@3 -fno-inline=_make_big@3 -fno-inline=vsum_ -fno-inline=_half@3 -fno-inline=_twice@3]: base: compile: ce
 llrm-c: error: unknown option -fno-inline=_sum5@3; the passes are -fallocation-search, -
   void  c/tail_calls_edges.c [-Os -march=i486 -mabi=regparm3 -fno-inline=_sum5@3 -fno-inline=_big_sum@3 -fno-inline=_make_big@3 -fno-inline=vsum_ -fno-inline=_half@3 -fno-inline=_twice@3]: base: compile: ce
@@ -274,12 +274,12 @@ llrm-c: error: unknown option -fno-inline=_sum5@3; the passes are -fallocation-s
   void  grep/grep.nib: base: the program never exited (limit)
   void  jpeg_fixed/jpeg_fixed.bas: base: int 21h ah=0x19
   void  jpeg_single/jpeg_single.bas: base: int 21h ah=0x19
-  void  qb/currency_store_pds71.bas: base: compile: llrm-qb: /home/alim/work/personal/llrm/.claude/worktrees/cool-zhukovsky-b4940f/tests/run/qb
-  void  qb/data_big_literal.bas [-Os]: base: compile: llrm-qb: /home/alim/work/personal/llrm/.claude/worktrees/cool-zhukovsky-b4940f/tests/run/qb
-  void  qb/palette_using_pds71.bas: base: compile: llrm-qb: /home/alim/work/personal/llrm/.claude/worktrees/cool-zhukovsky-b4940f/tests/run/qb
-  void  qb/range_log_trig.bas [-Os]: base: compile: llrm-qb: /home/alim/work/personal/llrm/.claude/worktrees/cool-zhukovsky-b4940f/tests/run/qb
-  void  qb/redim_preserve_pds71.bas: base: compile: llrm-qb: /home/alim/work/personal/llrm/.claude/worktrees/cool-zhukovsky-b4940f/tests/run/qb
-  void  qb/resume0.bas: base: compile: llrm-qb: /home/alim/work/personal/llrm/.claude/worktrees/cool-zhukovsky-b4940f/tests/run/qb
+  void  qb/currency_store_pds71.bas: base: compile: llrm-qb: run/qb
+  void  qb/data_big_literal.bas [-Os]: base: compile: llrm-qb: run/qb
+  void  qb/palette_using_pds71.bas: base: compile: llrm-qb: run/qb
+  void  qb/range_log_trig.bas [-Os]: base: compile: llrm-qb: run/qb
+  void  qb/redim_preserve_pds71.bas: base: compile: llrm-qb: run/qb
+  void  qb/resume0.bas: base: compile: llrm-qb: run/qb
   void  stft_fixed/stft_fixed.bas: base: int 21h ah=0x19
   void  stft_fixed/stft_fixed.nib [-Os -march=i486]: new: the program never exited (limit)
   void  stft_single/stft_single.bas: base: int 21h ah=0x19
