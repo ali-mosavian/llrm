@@ -181,7 +181,7 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::machinesink::MachineSink { size: target.size, limit: classes.available.len() }),
         // On SSA, after sinking (the pin's PeepholeOptimizer): a subtract
         // nothing reads is a compare (optimizeCompareInstr).
-        Box::new(crate::backend::peepholeopt::PeepholeOptimizer),
+        Box::new(crate::backend::peepholeopt::PeepholeOptimizer { size: target.size }),
         // On SSA, before the pin allocates: two addresses that differ in a
         // displacement are one (X86OptimizeLEAs, pre-RA).
         Box::new(crate::backend::leaopt::OptimizeLeas { size: target.size }),
