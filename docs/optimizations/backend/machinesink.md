@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/machinesink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/machinesink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/machinesink.rs sha256:06c76cfd7fa1402660a549d6f3849d4347b6f056f88d3d52cef641461691e33c -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/machinesink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/machinesink.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/machinesink.rs sha256:06c76cfd7fa1402660a549d6f3849d4347b6f056f88d3d52cef641461691e33c -->
 
 # machinesink
 

@@ -2384,6 +2384,28 @@ fn redim_preserve_calls_b_rdmp_with_redims_operands() {
 }
 
 #[test]
+fn width_with_one_argument_or_a_gap_calls_b_widt() {
+    // WIDTH 80 and WIDTH , 25 were refused ("needs columns and rows"). BC
+    // passes -1 for the argument left out (measured in BC output, QB 4.5
+    // and PDS 7.1).
+    let module = parse("WIDTH 80\r\nWIDTH , 25\r\nWIDTH 80, 25\r\n", Dialect::QuickBasic45).unwrap();
+    let hir = compile(&module, "width", Dialect::QuickBasic45, "qb45").unwrap();
+    assert_eq!(hir.matches("\"callee\":\"B$WIDT\"").count(), 3, "{hir}");
+}
+
+#[test]
+fn lset_and_rset_call_their_runtime_routines_with_the_field_length() {
+    // LSET and RSET were refused as unknown procedures. BC calls B$LSET and
+    // B$RSET with the source descriptor, the destination's far address and
+    // its length (0 for a variable-length string).
+    let source = "a$ = \"abcd\"\r\nDIM c AS STRING * 5\r\nLSET a$ = \"x\"\r\nRSET c = a$\r\n";
+    let module = parse(source, Dialect::QuickBasic45).unwrap();
+    let hir = compile(&module, "justify", Dialect::QuickBasic45, "qb45").unwrap();
+    assert_eq!(hir.matches("\"callee\":\"B$LSET\"").count(), 1, "{hir}");
+    assert_eq!(hir.matches("\"callee\":\"B$RSET\"").count(), 1, "{hir}");
+}
+
+#[test]
 fn open_with_access_lock_len_or_random_passes_rtps_inc_mode_word() {
     // OPEN with ACCESS, LOCK, LEN or no FOR was refused. The mode word is
     // rtps.inc's: the mode in the low byte (RANDOM when none is written),
@@ -2414,4 +2436,61 @@ fn a_dim_as_in_a_procedure_may_reuse_a_name_the_module_shares_with_a_suffix() {
     }
     assert!(parse(&sub("DIM x AS INTEGER"), Dialect::Pds71).is_ok());
     assert!(parse("DIM x% : DIM x AS INTEGER\r\n", Dialect::Pds71).is_err());
+}
+
+#[test]
+fn loc_and_seek_functions_call_b_floc_and_b_fsek() {
+    // LOC and SEEK as functions were refused as valid but not generated. BC
+    // calls B$FLOC and B$FSEK with the channel, as it calls B$FLOF for LOF,
+    // and takes the long result.
+    let module =
+        parse("OPEN \"A\" FOR BINARY AS #1\r\nx& = LOC(1) + SEEK(1) + LOF(1)\r\n", Dialect::QuickBasic45).unwrap();
+    let hir = compile(&module, "position", Dialect::QuickBasic45, "qb45").unwrap();
+    for routine in ["B$FLOC", "B$FSEK", "B$FLOF"] {
+        assert_eq!(hir.matches(&format!("\"callee\":\"{routine}\"")).count(), 1, "{routine}: {hir}");
+    }
+}
+
+#[test]
+fn stop_and_reset_call_b_stop_and_b_rest() {
+    // STOP and RESET were refused as unknown procedures. BC calls B$STOP and
+    // B$REST, nothing pushed (measured in BC output of all three dialects);
+    // STOP does not return.
+    let module = parse("RESET\r\nPRINT 1\r\nSTOP\r\nPRINT 2\r\n", Dialect::QuickBasic45).unwrap();
+    let hir = compile(&module, "stop", Dialect::QuickBasic45, "qb45").unwrap();
+    assert_eq!(hir.matches("\"callee\":\"B$REST\"").count(), 1, "{hir}");
+    assert_eq!(hir.matches("\"callee\":\"B$STOP\"").count(), 1, "{hir}");
+}
+
+#[test]
+fn kill_name_and_the_directory_statements_call_their_runtime_routines() {
+    // KILL, NAME, MKDIR, CHDIR and RMDIR were refused as unknown procedures. BC
+    // calls B$KILL, B$NAME, B$MDIR, B$CDIR and B$RDIR with the names'
+    // descriptors (QB 4.5 rt/dkstmt.asm, directry.asm).
+    let source = "KILL \"A\"\r\nNAME \"A\" AS \"B\"\r\nMKDIR \"D\"\r\nCHDIR \"D\"\r\nRMDIR \"D\"\r\n";
+    let module = parse(source, Dialect::QuickBasic45).unwrap();
+    let hir = compile(&module, "names", Dialect::QuickBasic45, "qb45").unwrap();
+    for routine in ["B$KILL", "B$NAME", "B$MDIR", "B$CDIR", "B$RDIR"] {
+        assert_eq!(hir.matches(&format!("\"callee\":\"{routine}\"")).count(), 1, "{routine}: {hir}");
+    }
+}
+
+#[test]
+fn files_calls_b_fils_with_the_pattern_or_an_empty_string() {
+    // FILES was refused as valid but not generated. BC pushes the pattern's
+    // descriptor to B$FILS, an empty string's for a bare FILES (measured in
+    // BC output, QB 4.5).
+    let module = parse("FILES\r\nFILES \"*.BAS\"\r\n", Dialect::QuickBasic45).unwrap();
+    let hir = compile(&module, "files", Dialect::QuickBasic45, "qb45").unwrap();
+    assert_eq!(hir.matches("\"callee\":\"B$FILS\"").count(), 2, "{hir}");
+}
+
+#[test]
+fn shell_calls_b_sshl_with_the_command_or_an_empty_string() {
+    // SHELL was refused as valid but not generated. BC pushes the command's
+    // descriptor to B$SSHL, an empty string's for a bare SHELL (measured in
+    // BC output, QB 4.5 and PDS 7.1).
+    let module = parse("SHELL\r\nSHELL \"DIR\"\r\n", Dialect::QuickBasic45).unwrap();
+    let hir = compile(&module, "shell", Dialect::QuickBasic45, "qb45").unwrap();
+    assert_eq!(hir.matches("\"callee\":\"B$SSHL\"").count(), 2, "{hir}");
 }

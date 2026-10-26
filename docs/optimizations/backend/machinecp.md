@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/machinecp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/machinecp.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/machinecp.rs sha256:84143d6b468ec5a6d6abee99397303ab0ffd7c51e9aef7aca31b655f2cedbe15 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/machinecp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/machinecp.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/machinecp.rs sha256:84143d6b468ec5a6d6abee99397303ab0ffd7c51e9aef7aca31b655f2cedbe15 -->
 
 # machinecp
 

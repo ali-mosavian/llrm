@@ -78,5 +78,5 @@ are the ones selection sees. On whenever optimizing.
 Adds metadata only; no instruction changes.
 
 ## See also
-Consumers: the spillers, `floatassign` and `isel` in `llrm-core`. Tests:
+Consumers: the spillers, `floatassign` and `isel` in `llrm-codegen`. Tests:
 `homes_tests.rs`.

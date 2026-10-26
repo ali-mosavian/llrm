@@ -12,7 +12,7 @@ Ir is the caller's inclusive cost into `grow_one`, `do_reserve_and_handle` or th
 | 2 | `llrm-mir/src/module.rs:640` `Function::iter_block`, collected | `Vec<InstId>` | 8,278 | 1.18 | the block's `len`, kept by every edit: the iterator states it as its size hint |
 | 3 | `llrm-mir/src/facts.rs:534` `Facts::of` | `Vec<Fact>` | 20,727 | 1.47 | at most one fact per attribute; mostly a first allocation, so expected small |
 | 4 | `llrm-mir/src/domtree.rs:1973` `calculate_from_scratch` | `Vec<Option<BlockId>>` (`num_to_node`) | 3,104 | 0.53 | a full walk numbers at most every block, and the virtual root (LLVM's `SmallVector<NodePtr, 64>`) |
-| 5 | `llrm-core/src/greedy/matrix.rs:174` `LiveRegMatrix::new` | `Vec<LiveIntervalUnion>`, `Vec<Query>` | 36 | 0.43 | dropped: see Results |
+| 5 | `llrm-codegen/src/greedy/matrix.rs:174` `LiveRegMatrix::new` | `Vec<LiveIntervalUnion>`, `Vec<Query>` | 36 | 0.43 | dropped: see Results |
 
 ## Not pre-sized
 

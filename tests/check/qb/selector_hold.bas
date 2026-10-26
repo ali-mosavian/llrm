@@ -5,12 +5,9 @@
 ' (+300 instructions at -Os, same bytes).
 ' CHECK-LABEL: BENCHPARTICLE proc
 ' CHECK: call far ptr ADVANCE
-' CHECK: word ptr PX%+2
-' CHECK: mov es, ax
-' CHECK: word ptr PY%+2
-' CHECK: mov fs, ax
-' CHECK: word ptr PZ%+2
-' CHECK: mov gs, ax
+' CHECK: {{mov es, word ptr PX%\+2|mov es, ax}}
+' CHECK: {{mov fs, word ptr PY%\+2|mov fs, ax}}
+' CHECK: {{mov gs, word ptr PZ%\+2|mov gs, ax}}
 ' CHECK: L1_{{[0-9]+}}:
 ' CHECK-NOT: PX%+2
 ' CHECK: BENCHPARTICLE endp

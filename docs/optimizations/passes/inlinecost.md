@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inlinecost.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inlinecost.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:c9ac59255e858cc8cf529763d7a1b13f36c5eb7e001fbc13146b98f6c6688af9 -->
+<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:02fa4b23ce7573e8af906e844fb2b51b2639abafa625d5fea360bd94fe66548a -->
 
 # inlinecost
 
@@ -77,15 +77,14 @@ each site's cost and threshold beside the existing decision; with
   of a local callee, which goes with it, is the pin's. No shape of callee
   but the loop and the one smaller than its call is tested.
 - D12 (SZ2): a call the -Os bound (D11) alone refuses, that passes the
-  address of a stack slot the caller stored a constant to and whose callee
-  loads through that parameter, is inlined if the caller, simplified again
-  with the call inlined, is smaller by the target's size cost (`walk.rs`,
-  callers of at most 300 instructions; the sites of a private callee that
-  dies with its last call are tried together, its body credited; so are the
-  sites of a private callee called only from this caller, whatever they pass).
-  The pin's
-  cost does not follow a load through a pointer argument, so it never sees
-  the loop or the arithmetic fold.
+  address of a stack slot or a global the caller stored a constant to and
+  whose callee loads through that parameter, is inlined if the caller,
+  simplified again with the call inlined, is smaller by the target's size
+  cost (`walk.rs`, callers of at most 300 instructions; the sites of a
+  private callee that dies with its last call are tried together, its body
+  credited; so are the sites of a private callee called only from this
+  caller, whatever they pass). The pin's cost does not follow a load through
+  a pointer argument, so it never sees the loop or the arithmetic fold.
 - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
   attribute decision.
 - D7: the minsize loop penalty counts retreating-edge headers, not

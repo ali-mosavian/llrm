@@ -83,7 +83,7 @@
 //! fixed point (`N/NNN-rRR-pass.ll`); the pass examples come from those.
 //!
 //! # Runs
-//! Options are `Options`; `Level::options` in llrm-core's `driver/flags.rs`
+//! Options are `Options`; `Level::options` in llrm-codegen's `driver/flags.rs`
 //! maps `-O0`, `-O1`, `-O2`, `-O3`, `-Omax`, `-Os`, `-Oz`, `-Og` to
 //! `Options::none`, `basic`, `standard`, `speed`, `aggressive`, `size`,
 //! `min_size` (`-Og`: `basic` without `loopidioms`). `-f` flags set single
@@ -538,7 +538,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // `LLRM_NO_MEM2REG` keeps the write-through stand-in instead of the
         // translated PromoteMemToReg.
         if applied.options.mem2reg { Box::new(mem2reg::Mem2Reg) } else { Box::new(promote::Promote) },
-        Box::new(indvars::IndVars { lftr: indvars::lftr_default() }),
+        Box::new(indvars::IndVars { lftr: indvars::lftr_default(), size: applied.options.prefers_size() }),
         Box::new(algebraic::Algebraic { size: applied.options.prefers_size(), llvm: false }),
         Box::new(dead::Dead),
         Box::new(loopidioms::LoopIdioms { size: applied.options.prefers_size() }),
@@ -872,7 +872,7 @@ pub(crate) fn llvm_order(
                     }),
                 ),
                 slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
-                slot("indvars@738", Box::new(indvars::IndVars { lftr: indvars::lftr_default() })),
+                slot("indvars@738", Box::new(indvars::IndVars { lftr: indvars::lftr_default(), size })),
                 slot("loopdeletion@749", Box::new(loopdeletion::LoopDeletion)),
                 slot(
                     "unroll@753",
@@ -1263,7 +1263,7 @@ pub fn header_copied(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     passes.push(Box::new(algebraic::Algebraic { size: false, llvm: false }));
     // A counted exit's values are numbers where the copy made its test the one
     // that leaves.
-    passes.push(Box::new(indvars::IndVars { lftr: indvars::lftr_default() }));
+    passes.push(Box::new(indvars::IndVars { lftr: indvars::lftr_default(), size: false }));
     passes.push(Box::new(dead::Dead));
     if applied.options.wanted("hoist") {
         passes.push(Box::new(crate::licm::Licm { apply: true, speculate: true }));
@@ -1582,11 +1582,10 @@ impl FunctionPass for Fixed {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         self.runs += 1;
-        let promotes = analyses
+        let promotes = !analyses
             .get::<cfg::Shape>(unit.context, unit.layout, unit.function)
             .dominance
-            .irreducible(unit.function)
-            .is_empty();
+            .is_irreducible(unit.function);
         let dump = self.dump.as_ref().map(|directory| directory.join(format!("{:02}", self.runs)));
         let mut run = Run {
             version: 0,

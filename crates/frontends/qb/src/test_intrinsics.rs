@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use llrm_core::hir::model::Program;
+use llrm_codegen::hir::model::Program;
 
 use super::compile as qb_compile;
 use super::driver as qb_driver;

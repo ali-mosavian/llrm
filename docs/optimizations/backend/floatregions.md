@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/floatregions.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/floatregions.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/floatregions.rs sha256:cad530db1608ab3375aabb2e86a8730e2a038d6c0774d01490094fda8b9e5c76 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/floatregions.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/floatregions.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/floatregions.rs sha256:cad530db1608ab3375aabb2e86a8730e2a038d6c0774d01490094fda8b9e5c76 -->
 
 # floatregions
 

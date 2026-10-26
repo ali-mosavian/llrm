@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/memsetpattern.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/memsetpattern.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/memsetpattern.rs sha256:0760d456c77aa5416d7a98507b90de85d03983dd7d9a020746f482bddde8b0c9 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/memsetpattern.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/memsetpattern.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/memsetpattern.rs sha256:0760d456c77aa5416d7a98507b90de85d03983dd7d9a020746f482bddde8b0c9 -->
 
 # memsetpattern
 

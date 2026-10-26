@@ -43,8 +43,8 @@ def test_a_backend_pass_in_no_bucket_is_refused_not_left_to_the_residual(tmp_pat
     for weeks, so the ledger's residual held them and the clean-up bucket read 28.7 M low."""
     ours = tmp_path / "ours.incl"
     ours.write_text(
-        "     500,000 (50.0%)  ???:llrm_core::backend::objbuild::written_in [x]\n"
-        "     400,000 (40.0%)  ???:<llrm_core::backend::newpass::NewPass as llrm_core::model::passes::LIRTransform>::transform_raising [x]\n"
+        "     500,000 (50.0%)  ???:llrm_codegen::backend::objbuild::written_in [x]\n"
+        "     400,000 (40.0%)  ???:<llrm_codegen::backend::newpass::NewPass as llrm_codegen::model::passes::LIRTransform>::transform_raising [x]\n"
     )
     clang = tmp_path / "clang.incl"
     clang.write_text("     300,000 (30.0%)  /x/y.cpp:clang::BackendConsumer::HandleTranslationUnit(int) [x]\n")
@@ -94,21 +94,21 @@ def profile(tmp_path, lines_ours, **env):
     )
 
 
-COMPILED = (900_000_000, "???:llrm_core::driver::compiled")
-WRITTEN = (10_000_000, "???:llrm_core::backend::objbuild::written_in")
-EMITTED = (20_000_000, "???:llrm_core::driver::emitted")
+COMPILED = (900_000_000, "???:llrm_codegen::driver::compiled")
+WRITTEN = (10_000_000, "???:llrm_codegen::backend::objbuild::written_in")
+EMITTED = (20_000_000, "???:llrm_codegen::driver::emitted")
 
 
 def test_a_residual_over_the_limit_is_refused(tmp_path):
     """A dag run's selection frames were in no bucket: 278 M of 1,040 M read as residual and the flip's numbers were unattributed."""
-    done = profile(tmp_path, [COMPILED, WRITTEN, EMITTED, (800_000_000, "???:llrm_core::backend::some::unlisted_frame")])
+    done = profile(tmp_path, [COMPILED, WRITTEN, EMITTED, (800_000_000, "???:llrm_codegen::backend::some::unlisted_frame")])
     assert done.returncode != 0
     assert "residual is" in done.stderr and "frames are in no bucket" in done.stderr
 
 
 def test_the_dag_selection_frame_is_in_the_isel_bucket(tmp_path):
     """`dag_function::selected_in_pool` is the dag isel as `isel::selected_with` is the old one: the same bucket."""
-    done = profile(tmp_path, [COMPILED, WRITTEN, EMITTED, (850_000_000, "???:llrm_core::backend::selectiondag::dag_function::selected_in_pool")])
+    done = profile(tmp_path, [COMPILED, WRITTEN, EMITTED, (850_000_000, "???:llrm_codegen::backend::selectiondag::dag_function::selected_in_pool")])
     assert done.returncode == 0, done.stderr
     isel = next(line for line in done.stdout.splitlines() if line.startswith("isel"))
     assert "850.0" in isel

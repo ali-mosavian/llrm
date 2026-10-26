@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/division.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/division.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/division.rs sha256:374e89eb5796502eaacb55249eefd141a38d1f64dbaf19557d8c63a74caea5aa -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/division.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/division.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/division.rs sha256:374e89eb5796502eaacb55249eefd141a38d1f64dbaf19557d8c63a74caea5aa -->
 
 # division
 

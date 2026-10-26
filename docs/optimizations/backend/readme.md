@@ -1,8 +1,8 @@
-> Generated from the `//!` headers of `crates/backend/llrm-core/src/backend`; edit the headers, not this file.
+> Generated from the `//!` headers of `crates/codegen/llrm-codegen/src/backend`; edit the headers, not this file.
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 131 documented, 0 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -36,6 +36,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 131 documented
 | datagroup | Make the data segment register a fourth selector register where the stack lives in the data group. | Register allocation (`allocate.rs`): `names_data_segment` before it, | [datagroup](datagroup.md) |
 | debuginfo | `-g`: build a module's debug information as [`llrm_object::debug::Info`], the format-neutral model each object format's writer encodes. | `described` when a module is assembled (`assemble.rs`; `driver/basic.rs` | [debuginfo](debuginfo.md) |
 | division | Select a dword division by a constant as a multiply by its reciprocal, where the CPU's prices make that cheaper. | `isel.rs` (`divide`), for each division by a constant. | [division](division.md) |
+| earlytaildup | Which blocks early tail duplication may copy, and into which predecessors: `shouldTailDuplicate`, `isSimpleBB`, `canCompletelyDuplicateBB` and `canTailDuplicate` of [TailDuplicator.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TailDuplicator.cpp) with `PreRegAlloc` set and `LayoutMode` clear. | `flow::machine_with`, first of the machine phases. | [earlytaildup](earlytaildup.md) |
 | edges | Breaks one edge of a body: a block of its own that jumps on. | `machinesink`. | [edges](edges.md) |
 | effects | The registers and flags an instruction reads and writes, from its `x86.instr` row. | `peephole.rs` (`_effects_by_table`), which adds the instruction's | [effects](effects.md) |
 | ehprepare | Make a QB personality's landing pad one the runtime can enter, before instruction selection. | In `driver::optimized` (`mir ehprepare`), once per module after the MIR | [ehprepare](ehprepare.md) |
@@ -99,6 +100,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 131 documented
 | overlap | Whether two machine memory operands may overlap, read from their addresses alone. | `spiller`, `floatassign`, `storedhomes`. | [overlap](overlap.md) |
 | parcopy | Writes each parallel copy group (the copies a phi becomes on an edge, which happen at once) as a sequence of moves that computes the same thing. | After `regalloc`, before `prologue` and the peephole, once per body, at | [parcopy](parcopy.md) |
 | peephole | Local rewrites of allocated LIR that need the final physical registers. | Once per body, as the machine phase after `prologue` and before `loopslots` | [peephole](peephole.md) |
+| peepholeopt | A subtract whose difference nothing reads is a compare. | A machine phase on SSA after MachineSink and ahead of MachineCombiner (the | [peepholeopt](peepholeopt.md) |
 | phiconst | One value for a constant that several edges of a phi carry. | Phase 1 of the machine phases, before `SsaSpill`, so both allocation routes | [phiconst](phiconst.md) |
 | phielim | Takes LIR out of SSA: each phi becomes parallel copies on its incoming edges. | A machine phase after `ssaspill` (spiller route only) and before | [phielim](phielim.md) |
 | pointers | Advances a packed huge pointer by a displacement as arithmetic on its 32-bit form. | Nothing outside the file's own tests: a grep finds no caller. Isel states | [pointers](pointers.md) |
@@ -111,8 +113,10 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 131 documented
 | regalloc_input | Test support: the machine-phase list and the LIR a fixture has reached just before a chosen phase. | Tests of [`crate::backend::allocate`](allocate.md), `crate::backend::ssaspill`, | [regalloc_input](regalloc_input.md) |
 | regclass | The register class of each value: the set of registers an instruction's operands allow it to be in. | Not a pass: queried on demand, by `coalesce`, `constrain`, `allocate` and | [regclass](regclass.md) |
 | registerinfo | The backend's view of a target's register file: re-exports of the types a target's `registers.regs` description generates. | [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md), | [registerinfo](registerinfo.md) |
+| regpressure | Register pressure per pressure set, for the pre-RA scheduler: `RegPressureTracker` of the pin (RegisterPressure.cpp) as `GenericScheduler` asks it of a bottom-up region. |  | [regpressure](regpressure.md) |
 | regthrash | Renames a definition's register so that a copy after it is a copy of a register to itself. | First sub-pass of [`crate::backend::peephole`](peephole.md), gated on a register copy | [regthrash](regthrash.md) |
 | relayout | Lays a function's frame out a second time, with a hole for the spill slots, by moving each frame cell of the first layout. | In `machined_once` (`assemble.rs`), after the first layout is chosen, unless | [relayout](relayout.md) |
+| returnsplit | Gives a return that reloads a spilled constant its own block on the edges that stored the constant, where that lets the frame be set up later. | In `assemble`, ahead of `jumps::duplicated_returns`, at -O1 and above. | [returnsplit](returnsplit.md) |
 | rewriter | `VirtRegRewriter`: the allocation put into the function. | `allocate::RegAlloc`. | [rewriter](rewriter.md) |
 | rmw | Selects a private load, update and store of one cell as a single memory-destination instruction, before register allocation. | During instruction selection, in the combining step of `isel/combined.rs`, | [rmw](rmw.md) |
 | saverestore | Where a procedure's frame and kept registers are set up and taken back: one Save block and one Restore block, from `ShrinkWrapImpl` in llvm/lib/CodeGen/ShrinkWrap.cpp at d1106deb71cc. |  | [saverestore](saverestore.md) |

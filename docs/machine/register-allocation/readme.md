@@ -2,7 +2,7 @@
 
 Audience: an engineer who must change or debug the register allocator. This page is the index and the story from a function's virtual values to its registers and frame slots; each stage has a page of its own.
 
-The code is in `crates/backend/llrm-core/src/backend`. The allocator is LLVM's greedy allocator (`RAGreedy`, with its `SplitKit`, `SpillPlacement`, `InlineSpiller` and last-chance recoloring) with these differences: pricing is by `executed::work` and block frequencies, the search runs the allocation on several shapes of a body and keeps the cheapest, and a second route puts an SSA spiller in front.
+The code is in `crates/codegen/llrm-codegen/src/backend`. The allocator is LLVM's greedy allocator (`RAGreedy`, with its `SplitKit`, `SpillPlacement`, `InlineSpiller` and last-chance recoloring) with these differences: pricing is by `executed::work` and block frequencies, the search runs the allocation on several shapes of a body and keeps the cheapest, and a second route puts an SSA spiller in front.
 
 | Page | Holds |
 |---|---|

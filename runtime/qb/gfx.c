@@ -60,6 +60,8 @@ void gfx_clear(void)
              (unsigned)(gfx_view_bottom - gfx_view_top + 1));
 }
 
+static int active_page, visible_page;
+
 void gfx_screen(int mode)
 {
     unsigned at;
@@ -82,6 +84,7 @@ void gfx_screen(int mode)
                 gfx_last_y = (int)modes[at].height / 2;
             }
             gfx_current = &modes[at];
+            active_page = visible_page = 0;
             gfx_window_on = 0;
             view_reset();
             gfx_foreground = modes[at].colors < 16 ? modes[at].colors - 1 : DEFAULT_FOREGROUND;
@@ -593,6 +596,31 @@ void B_PALU(qb_data_ptr data, const AD *ad)
 #pragma aux B_PSTC "B$PSTC"
 #pragma aux B_PSET "B$PSET"
 #pragma aux B_PRST "B$PRST"
+/* B$PMAP: PMAP(expr, funct) -- 0 and 1 map a logical x or y to the viewport's pixel, 2 and 3 a pixel to the logical
+   point; the pixel is counted from the viewport's corner. With no window the points are the pixels. */
+float *B_PMAP(float expr, short funct)
+{
+    static float result;
+    int pixel;
+
+    need_graphics();
+    if (funct < 0 || funct > 3)
+        qb_error(BE_ILLFUN);
+    pixel = rounded(expr);
+    if (!gfx_window_on)
+        result = (float)(funct < 2 ? scaled_round(expr, 0.0, 1.0) : pixel);
+    else if (funct == 0)
+        result = (float)scaled_round(expr, wxmin, lxdif);
+    else if (funct == 1)
+        result = (float)(window_screen ? scaled_round(expr, wymin, lydif) : -scaled_round(expr, wymax, lydif));
+    else if (funct == 2)
+        result = (float)(pixel * pxdif + wxmin);
+    else
+        result = (float)(window_screen ? pixel * pydif + wymin : -(pixel * pydif) + wymax);
+    return &result;
+}
+
+#pragma aux B_PMAP "B$PMAP"
 #pragma aux B_PNR4 "B$PNR4"
 #pragma aux B_PNI2 "B$PNI2"
 #pragma aux B_PAL2 "B$PAL2"
@@ -600,11 +628,28 @@ void B_PALU(qb_data_ptr data, const AD *ad)
 
 /* SCREEN is taken here once a program has this linked (screen.c). */
 extern void (*screen_set_mode)(int mode);
+extern int (*screen_set_pages)(int active, int visible);
 extern void (*screen_set_colors)(int foreground, int background);
 
 /* The graphics screen's text driver goes with it. */
 extern void cn_gfx_xinit(void);
 void (*const gfx_needs_text)(void) = cn_gfx_xinit;
+
+/* SCREEN's pages: -1 keeps the one in use. The text screen has page 0 only here. */
+static int gfx_set_pages(int active, int visible)
+{
+    if (active < 0)
+        active = active_page;
+    if (visible < 0)
+        visible = visible_page;
+    if (!gfx_current)
+        return active == 0 && visible == 0;
+    if (!gd_set_pages((unsigned)active, (unsigned)visible))
+        return 0;
+    active_page = active;
+    visible_page = visible;
+    return 1;
+}
 
 /* The program ends in the text mode it began in. */
 static void gfx_term(void)
@@ -621,6 +666,7 @@ void gfx_xinit(void)
 {
     screen_set_mode = gfx_screen;
     screen_set_colors = gfx_set_colors;
+    screen_set_pages = gfx_set_pages;
     qb_comp_add(&gfx_comp);
 }
 

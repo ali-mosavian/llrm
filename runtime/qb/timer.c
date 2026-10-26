@@ -1,15 +1,15 @@
 /* TIMER (QB rt/ostimer.asm B$TIMR). */
-#include "device.h"
+#include "dev.h"
 #include "qb.h"
 
-enum { HUNDREDTHS = 100 };
+enum { TENTHS_OF_A_MILLISECOND = 10000 };
 
 static float seconds;
 
 /* B$TIMR: the seconds since midnight, a SINGLE whose address is returned. */
 float *B_TIMR(void)
 {
-    seconds = (float)((double)dev_clock() / HUNDREDTHS);
+    seconds = (float)((double)dev_clock_fine() / TENTHS_OF_A_MILLISECOND);
     return &seconds;
 }
 

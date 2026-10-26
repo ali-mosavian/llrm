@@ -731,6 +731,7 @@ fn is_vector_intrinsic_call(
                 | Intrinsic::Fixed { .. }
                 | Intrinsic::BitCount(_)
                 | Intrinsic::ByteSwap
+                | Intrinsic::BitReverse
                 | Intrinsic::FunnelShift { .. }
                 | Intrinsic::Abs
                 | Intrinsic::Compare { .. }

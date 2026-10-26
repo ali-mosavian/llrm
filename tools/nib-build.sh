@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build one Nib module into a DOS executable on the host:
-# llrm-nib compiles the program and crates/frontends/llrm-nib/src/runtime/runtime.nib, jwasm
+# llrm-nib compiles the program and crates/frontends/nib/src/runtime/runtime.nib, jwasm
 # assembles, jwlink links, with any C or assembly files the program imports
 # from. Those C files may include SOURCE's generated declarations as
 # "NAME.h". Running it is a separate, visible DOSBox step.
@@ -53,7 +53,7 @@ for line in $(python3 "$root/tools/dosbatch/os_objects.py" "$target" nib "$work"
 done
 # jwlink keeps whatever any segment references, even one it drops, so the
 # runtime keeps only the routines the other objects name.
-"$bin/llrm-nib" $isel "$root/crates/frontends/llrm-nib/src/runtime/runtime.nib" -o "$work/runtime.obj" "$level" --procedure-segments $abi $used >/dev/null
+"$bin/llrm-nib" $isel "$root/crates/frontends/nib/src/runtime/runtime.nib" -o "$work/runtime.obj" "$level" --procedure-segments $abi $used >/dev/null
 objects="file $work/runtime.obj$objects"
 "$toolchain/jwlink" option quiet option eliminate ${NIB_MAP:+option map=$NIB_MAP} $(recipe format) name "$work/program.exe" \
     file "$work/start.obj" ${hookobj:-} file "$work/program.obj" $objects \

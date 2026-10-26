@@ -1,5 +1,5 @@
 //! The x87 stack as SSA float values, and the runtime's float helpers as
-//! what they compute. Adapted from llrm-core's `raising_floats` (formats),
+//! what they compute. Adapted from llrm-codegen's `raising_floats` (formats),
 //! `fpstack` and `raising_float_values` (the stack as values),
 //! `raising_float_calls` (`B$FILD`, `B$FIL2`, `B$FCMP`) and
 //! `raising_float_results` (`B$FIST`, `B$FIS2`).

@@ -1,4 +1,4 @@
-//! llrm-core's `rotate_tests.rs` (tests/test_countdown.py and
+//! llrm-codegen's `rotate_tests.rs` (tests/test_countdown.py and
 //! tests/test_rotate.py), each body now MIR text run by the interpreter
 //! before and after.
 //!
