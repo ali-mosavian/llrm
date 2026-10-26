@@ -45,7 +45,7 @@ run = ["qemu-aarch64"]
 # Needs the patched clang: tools/build-clang-m16.sh, then LLRM_CLANG_M16=<its path>.
 [x86_16-dos]
 triple = "i386-unknown-unknown-code16"
-datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2"
+datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
 clang = ["-ffp-contract=off", 
   "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-fno-pic",
@@ -60,7 +60,7 @@ run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m16"]
 # lower-case mirror tools/lowercase-includes.sh makes of its INCLUDE, LLRM_BORLAND_LIB its LIB.
 [x86_16-bcc]
 triple = "i386-unknown-unknown-code16"
-datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2"
+datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
 clang = ["-ffp-contract=off",
   "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-fno-pic",
@@ -76,7 +76,7 @@ run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m16"]
 # tree it built in. Calls are Watcom's register convention, as the library's.
 [x86_16-wat]
 triple = "i386-unknown-unknown-code16"
-datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2"
+datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
 clang = ["-ffp-contract=off",
   "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-fno-pic",

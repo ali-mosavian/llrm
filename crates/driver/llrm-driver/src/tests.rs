@@ -527,7 +527,7 @@ fn llvm_ir_symbols_are_decorated_as_the_object_format_spells_them() {
 /// module that calls qgl compiled.
 #[test]
 fn clangs_pascal_number_is_llrms_basic_convention() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n\
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n\
                 target triple = \"i386-unknown-unknown-code16\"\n\
                 declare cc232 i16 @QGL(i16) addrspace(1)\n\
                 define i16 @f() addrspace(1) {\n  %1 = call cc232 addrspace(1) i16 @QGL(i16 7)\n  ret i16 %1\n}\n";
@@ -539,7 +539,7 @@ fn clangs_pascal_number_is_llrms_basic_convention() {
 /// asm block compiled.
 #[test]
 fn inline_code_intrinsics_keep_their_names() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n\
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n\
                 target triple = \"i386-unknown-unknown-code16\"\n\
                 declare i32 @\"llrm.ia16.code.89a60170c3.2p0\"(ptr)\n\
                 define i16 @f() addrspace(1) {\n  %a = alloca i16\n  %r = call i32 @\"llrm.ia16.code.89a60170c3.2p0\"(ptr %a)\n  ret i16 0\n}\n";
@@ -551,7 +551,7 @@ fn inline_code_intrinsics_keep_their_names() {
 /// reference" (QCport).
 #[test]
 fn defined_globals_are_public_and_internal_ones_are_not() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n\
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n\
                 target triple = \"i386-unknown-unknown-code16\"\n\
                 @a = dso_local global i16 5\n\
                 @b = dso_local addrspace(1) constant i16 7\n\
@@ -571,7 +571,7 @@ fn defined_globals_are_public_and_internal_ones_are_not() {
 /// the `llrm.ia16.in`/`out` intrinsics.
 #[test]
 fn borlands_port_functions_are_the_port_intrinsics() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n\
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n\
                 target triple = \"i386-unknown-unknown-code16\"\n\
                 declare cc1000 i8 @__outportb__(i16, i8) addrspace(1)\n\
                 declare i8 @__inportb__(i16) addrspace(1)\n\
