@@ -183,6 +183,18 @@ impl Builder<'_> {
         Ok(())
     }
 
+    /// The pin's `hasOptSize`: clang puts `optsize` on every function of a
+    /// `-Os` build, llrm's front ends do not, so the build's level stands for
+    /// it.
+    pub(super) fn has_opt_size(&self) -> bool {
+        self.target.opt_size || self.function_has("optsize") || self.function_has("minsize")
+    }
+
+    /// The pin's `hasMinSize` (`-Oz`), as [`Self::has_opt_size`].
+    pub(super) fn has_min_size(&self) -> bool {
+        self.target.min_size || self.function_has("minsize")
+    }
+
     pub(super) fn function_has(
         &self,
         name: &str,
@@ -642,7 +654,7 @@ impl Builder<'_> {
         let alignment = dst_align.min(src_align);
         let root = self.memory_root();
 
-        let opt_size = self.function_has("optsize") || self.function_has("minsize");
+        let opt_size = self.has_opt_size();
         let constant = self.constant_size(size);
         if constant == Some(0) {
             return Ok(());
@@ -659,21 +671,29 @@ impl Builder<'_> {
                 };
                 match (inline, which, constant) {
                     (Some(chain), _, _) => chain,
-                    (None, Intrinsic::MemCpy, Some(bytes)) if self.function_has("minsize") => {
+                    (None, Intrinsic::MemCpy, Some(bytes)) if self.has_min_size() => {
                         self.rep_movs(root, dst, other, bytes, 1, dst_align, src_align)?
                     }
                     (None, Intrinsic::MemCpy, Some(bytes)) if bytes <= MAX_INLINE_SIZE && alignment >= 4 => {
                         self.rep_movs(root, dst, other, bytes, alignment.min(4), dst_align, src_align)?
                     }
+                    // no `memcpy` to call for a copy the pin leaves to one
+                    // (alignment under 4): dwords, as the old selector copies;
+                    // x86 takes them unaligned
+                    (None, Intrinsic::MemCpy, Some(bytes))
+                        if !self.runtime_has("memcpy") && !self.is_far(dst) && !self.is_far(other) =>
+                    {
+                        self.rep_movs(root, dst, other, bytes, 4, dst_align, src_align)?
+                    }
                     _ if matches!(which, Intrinsic::MemCpy) && !self.runtime_has("memcpy") => {
-                        self.rep_movsb(root, dst, other, size)
+                        self.rep_movs_dwords(root, dst, other, size)
                     }
                     // a move a pass proved forward, past the inline limit, with
                     // no
                     // `memmove` in the runtime: `rep movs` ascends, as the move
                     // needs
                     _ if forward && matches!(which, Intrinsic::MemMove) && !self.runtime_has("memmove") => {
-                        self.rep_movsb(root, dst, other, size)
+                        self.rep_movs_dwords(root, dst, other, size)
                     }
                     // proved backward, no `memmove`: from the last byte down
                     _ if backward && matches!(which, Intrinsic::MemMove) && !self.runtime_has("memmove") => {
@@ -706,9 +726,7 @@ impl Builder<'_> {
                 };
                 match (inline, constant) {
                     (Some(chain), _) => chain,
-                    (None, Some(bytes))
-                        if self.function_has("minsize") || (bytes <= MAX_INLINE_SIZE && alignment >= 4) =>
-                    {
+                    (None, Some(bytes)) if self.has_min_size() || (bytes <= MAX_INLINE_SIZE && alignment >= 4) => {
                         self.rep_stos(root, dst, other, bytes, alignment)?
                     }
                     _ if !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
@@ -734,6 +752,55 @@ impl Builder<'_> {
             .and_then(|description| description.table().ok())
             .and_then(|table| table.get("libcalls").and_then(|calls| calls.as_array()).cloned())
             .is_some_and(|calls| calls.iter().any(|one| one.as_str() == Some(name)))
+    }
+
+    /// `rep movsd` of `size / 4` and then `rep movsb` of `size % 4`, the old
+    /// selector's copy of a size not known at compile time. The second block
+    /// goes on from where the first left `si`, `di` (the emitter carries them).
+    fn rep_movs_dwords(
+        &mut self,
+        chain: SDValue,
+        dst: SDValue,
+        src: SDValue,
+        size: SDValue,
+    ) -> SDValue {
+        let pointer = self.target.dag.pointer;
+        if self.is_far(dst) || self.is_far(src) {
+            return self.rep_movsb(chain, dst, src, size);
+        }
+        let (cx, di, si) = (self.reg("ecx", "cx"), self.reg("edi", "di"), self.reg("esi", "si"));
+        let count = self.dag.get_zext_or_trunc(size, pointer);
+        let two = self.dag.get_constant(2, EVT::I8);
+        let dwords = self.dag.get_node(ISD::Srl, pointer, &[count, two]);
+        let copy = self.dag.get_copy_to_phys_reg(chain, cx, dwords, None);
+        let mut glue = SDValue { node: copy.node, res: 1 };
+        let mut chain = SDValue { node: copy.node, res: 0 };
+        for (reg, value) in [(di, dst), (si, src)] {
+            let copy = self.dag.get_copy_to_phys_reg(chain, reg, value, Some(glue));
+            chain = SDValue { node: copy.node, res: 0 };
+            glue = SDValue { node: copy.node, res: 1 };
+        }
+        let dword = self.dag.get_value_type_node(EVT::I32);
+        let rep = self.dag.get_node_multi(x86isd::REP_MOVS, &[EVT::OTHER, EVT::GLUE], &[chain, dword, glue]);
+        let three = self.dag.get_constant(3, pointer);
+        let bytes = self.dag.get_node(ISD::And, pointer, &[count, three]);
+        let copy = self
+            .dag
+            .get_copy_to_phys_reg(
+                SDValue { node: rep.node, res: 0 },
+                cx,
+                bytes,
+                Some(SDValue { node: rep.node, res: 1 }),
+            );
+        let byte = self.dag.get_value_type_node(EVT::I8);
+        let rep = self
+            .dag
+            .get_node_multi(
+                x86isd::REP_MOVS,
+                &[EVT::OTHER, EVT::GLUE],
+                &[SDValue { node: copy.node, res: 0 }, byte, SDValue { node: copy.node, res: 1 }],
+            );
+        SDValue { node: rep.node, res: 0 }
     }
 
     /// `rep movsb` of a size not known at compile time: `cx` bytes from `si`
@@ -878,6 +945,13 @@ impl Builder<'_> {
         self.arch.register_named(if self.target.dag.pointer == EVT::I16 { narrow } else { wide })
     }
 
+    fn is_far(
+        &self,
+        pointer: SDValue,
+    ) -> bool {
+        self.dag.value_type(pointer) == EVT::Simple(super::super::mvt::MVT::Far)
+    }
+
     /// `emitRepmovs` with the block width of `emitConstantSizeRepmov`.
     fn rep_movs(
         &mut self,
@@ -891,7 +965,7 @@ impl Builder<'_> {
     ) -> Result<SDValue, Refused> {
         let chain_in = chain;
         let pointer = self.target.dag.pointer;
-        let block = if self.function_has("minsize") { 1 } else { alignment.min(u64::from(pointer.size_in_bits() / 8)) };
+        let block = if self.has_min_size() { 1 } else { alignment };
         let (count, left) = (size / block, size % block);
         let (cx, di, si) = (self.reg("ecx", "cx"), self.reg("edi", "di"), self.reg("esi", "si"));
         let count = self.dag.get_constant(u128::from(count), pointer);
@@ -944,7 +1018,7 @@ impl Builder<'_> {
         alignment: u64,
     ) -> Result<SDValue, Refused> {
         let pointer = self.target.dag.pointer;
-        let minsize = self.function_has("minsize");
+        let minsize = self.has_min_size();
         let word = u64::from(pointer.size_in_bits() / 8);
         let chain_in = chain;
         let (block, count, mut val) = if minsize {

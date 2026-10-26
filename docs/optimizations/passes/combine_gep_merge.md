@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_gep_merge.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_gep_merge.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_gep_merge.rs sha256:d5d535421326d0c234bee6944fee135db5e0f062b56313b3b689b4fca76ae7d5 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_gep_merge.rs sha256:d8018da703ecc2d272c624881ddef0ecea977cf657ae628482b255c398634868 -->
 
 # combine_gep_merge
 

@@ -690,6 +690,7 @@ impl<'a> RAGreedy<'a> {
                     Select::Fail => "FAIL".to_owned(),
                     Select::None => format!("split/spill into {split_vregs:?}"),
                 };
+                eprintln!("  hint {:?} prio {:#x}", self.simple_hint(virt_reg.reg()), self.get_priority(&virt_reg));
                 eprintln!(
                     "{}",
                     decision_line(

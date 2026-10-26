@@ -1234,3 +1234,13 @@ b0:
     assert_eq!(simplified(text, "c"), None);
     assert_eq!(simplify::MIN_MAX_ASKS.with(|asks| asks.get()), 0);
 }
+
+/// `strlen("hello, arm64")` inlined left `sub (ptrtoint (gep @s, 12)),
+/// (ptrtoint @s)` in the function, which llrm-arm64-llc refused as "a constant
+/// cast". It is 12.
+#[test]
+fn the_difference_of_two_offsets_from_one_global_is_their_distance() {
+    let text = "@s = internal constant [13 x i8] zeroinitializer\n\
+        define i64 @f() {\nb0:\n  %r = sub i64 ptrtoint (ptr getelementptr inbounds (i8, ptr @s, i64 12) to i64), ptrtoint (ptr @s to i64)\n  ret i64 %r\n}\n";
+    assert_eq!(simplified(text, "r").as_deref(), Some("12"));
+}

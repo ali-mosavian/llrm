@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/forging.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/forging.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/forging.rs sha256:85c2b3108078cd0faa4fc94286b474ce81ad02c250259b9d87e0214875aa257c -->
+<!-- src: crates/opt/llrm-analysis/src/forging.rs sha256:f7d4c4ecc4195262a6a55ce94705f323583040ca0575e04899e8e4f4abbf3882 -->
 
 # forging
 

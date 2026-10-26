@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/loopunrollanalyzer.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/loopunrollanalyzer.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/loopunrollanalyzer.rs sha256:e2637df2f588b868be01657f0579f8ef8ab5cf8ad3c5a255131957ff423fe3bc -->
+<!-- src: crates/opt/llrm-analysis/src/loopunrollanalyzer.rs sha256:54177cd6f3410d17f1d91a853d133817dbb82ba895bb24b284d94b6e0d86b60a -->
 
 # loopunrollanalyzer
 

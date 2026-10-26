@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/liveunion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/liveunion.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/liveunion.rs sha256:3b283619593c7cd50d26b0470e0c56cc59af055083ee2198cb6143cc2403d233 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/liveunion.rs sha256:b1102836450f7e17863d34fa9180a895c61526d004345d14cd813fe97898f053 -->
 
 # liveunion
 

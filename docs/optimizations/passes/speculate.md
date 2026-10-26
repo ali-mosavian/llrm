@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/speculate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/speculate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/speculate.rs sha256:2e30b88fe4199cd866c65dd3e92287bfe8087e3b969ec90ea6e0aa100a788e08 -->
+<!-- src: crates/opt/llrm-transforms/src/speculate.rs sha256:c16c5d9df388c888be9709180e53977033380df23654782b5d79b0fb21c1484f -->
 
 # speculate
 
