@@ -13,4 +13,9 @@ DUMP = """=== Coalescer
 
 def test_a_store_of_a_register_is_no_copy():
     """A store `[bp-N] := mov vN` was counted as a copy: nightmare_selftest read 68 left copies, the real count was 13."""
-    assert copywhy.our_counts(DUMP) == {("Coalescer", "f@3"): 1}
+    assert copywhy.our_counts(DUMP) == {("Coalescer", "f"): 1}
+
+
+def test_a_function_header_without_an_id_is_read():
+    """The dump names a function `_f: N instructions`, not `f@3:`: every count was None and x_switch's copies read as no data."""
+    assert copywhy.our_counts(DUMP.replace("f@3", "_f")) == {("Coalescer", "_f"): 1}

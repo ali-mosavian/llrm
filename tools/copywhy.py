@@ -37,7 +37,7 @@ def our_counts(text: str) -> dict:
     for line in text.splitlines():
         if m := re.match(r"=== (\w+)", line):
             stage = m.group(1)
-        elif m := re.match(r"  (\S+@\d+): ", line):
+        elif m := re.match(r"  (\S+?)(?:@\d+)?: \d+ instructions", line):
             fn = m.group(1)
         elif fn and re.match(r"\s+0x\w+\s+[A-Za-z]\w*(@\w+)? := mov [A-Za-z][\w@]*\s*(;|$)", line):
             out[(stage, fn)] += 1
