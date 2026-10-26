@@ -99,6 +99,8 @@ static _AUDITED_GRAPHICS_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(||
         ("B$CIRC", 6),
         ("B$LINE", 6),
         ("B$PAIN", 4),
+        // paint.asm: parmSD sdTile, parmW Border, parmSD sdBkgd (-1 for none).
+        ("B$PNTC", 6),
         ("B$PSTC", 2),
         // grpoint.asm: `void pascal B$PSET()` and B$PRST, no parameters.
         ("B$PSET", 0),
@@ -730,6 +732,15 @@ fn _contract_keeping(
                 "{evidence} VBDCL10E.LIB random.asm B$RNZP at 0079 \
                  reads its R8 seed at [BP+0Ah] and returns with RETF 8; \
                  MAIN.OBJ 07fe..080c pushes the high and low dwords before the call."
+            ),
+        ));
+    }
+    if name == "B$PMAP" && pushed == 6 {
+        return Ok(returns(
+            6,
+            format!(
+                "{evidence} QB45 grpmap.asm B$PMAP(parmD expr, parmW funct) returns the \
+                 address of its R4 result in AX with RETF 6; BC pushes the dword, then the word."
             ),
         ));
     }
