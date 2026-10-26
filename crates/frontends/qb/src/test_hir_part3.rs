@@ -2209,7 +2209,10 @@ fn test_a_selector_the_loop_never_changes_is_loaded_before_it() {
             procedure.find(&format!("{label}:\n")).filter(|begun| *begun < at).map(|begun| &procedure[begun..end])
         })
         .collect::<Vec<_>>();
-    let reload = regex::Regex::new(r"mov [c-gs]s, word ptr \[bp").unwrap();
+    // Direct (`mov es, [bp-N]`) or through a register (`mov cx, [bp-N]; mov es,
+    // cx`).
+    let reload =
+        regex::Regex::new(r"mov [c-gs]s, word ptr \[bp|mov (\w+), word ptr \[bp[^\n]*\n\s*mov [c-gs]s, \1\b").unwrap();
     for one in loops.iter().filter(|one| !loops.iter().any(|other| other.len() < one.len() && one.contains(*other))) {
         assert!(!reload.is_match(one), "{one}");
     }

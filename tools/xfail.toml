@@ -2,11 +2,11 @@
 # ids: "unit <crate>::<test>" (cargo lib test) and "run <program name>" (tests/run).
 
 [[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_element_stores_leave_descriptors_unread"
-issue = 3994
-owner = "funcattrs-port"
-date = "2026-10-27"
-why = "stale expectation: 4f82e22e1 (MemorySSA queries ask the AA stack with TBAA) leaves a volatile store through a far pointer as the pin does, so the cells it may reach are read every trip; the memory-space model of #3994 is the tuning that restores the hoist"
+id = "unit llrm-qb::test_hir_part3::test_a_selector_the_loop_never_changes_is_loaded_before_it"
+issue = 4958
+owner = "llrm-w3"
+date = "2026-11-02"
+why = "qbdemo FRACTALEFFECT: the loop-invariant selector is reloaded every trip as `mov cx,[bp-20]; mov es,cx` (parity) or `mov es,[bp-20]` (loaded_segments); the test only matched the direct form"
 [[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_a_poke_after_a_call_that_never_runs_def_seg_keeps_its_segment"
 issue = 3994
@@ -24,6 +24,12 @@ id = "unit llrm-qb::a_power_of_a_variable_base_covers_the_whole_domain"
 issue = 2848
 owner = "alim"
 date = "2026-10-27"
+[[xfail]]
+id = "run currency_tie_pds71"
+issue = 4778
+owner = "w15"
+date = "2026-10-28"
+why = "a DOUBLE constant times 10000 folds at 53 bits, BC rounds at 64; products within 1e-16 of a .5 tie differ by 1e-4 (BC .0001, .0003; compiler 0 for 0.00005#)"
 [[xfail]]
 id = "integration header_copy::test_a_register_only_a_guarded_loop_uses_is_saved_after_the_early_return"
 issue = 2194
@@ -60,12 +66,6 @@ issue = 4921
 owner = "w5"
 date = "2026-11-02"
 why = "binary search -O1: tip 2 jmp/26 instrs, main 1/26, pin 1/22; first bad a94491462c"
-[[xfail]]
-id = "integration division_nonnegative::tuned_for_size_the_division_stays_signed"
-issue = 4924
-owner = "w4"
-date = "2026-11-02"
-why = "(i*97)%211 -Os m32: main 23 instrs (one idiv), tip 35 (two div, spill), pin 38; first bad 2abaf530fa"
 [[xfail]]
 id = "integration flat_foreign::a_store_to_the_video_buffer_does_not_reload_a_variable"
 issue = 4932
