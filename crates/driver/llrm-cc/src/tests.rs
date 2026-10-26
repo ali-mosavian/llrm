@@ -102,7 +102,8 @@ fn mabi_goes_to_the_backend_after_the_tables_own() {
 /// came out as without.
 #[test]
 fn the_backends_switches_reach_the_backend() {
-    let one = built("-march=i486 -fno-inline-functions-called-once -fno-jump-tables -mcode-segment=X -fno-inline=f -c x.c");
+    let one =
+        built("-march=i486 -fno-inline-functions-called-once -fno-jump-tables -mcode-segment=X -fno-inline=f -c x.c");
     assert_eq!(
         one.llc,
         words("-march=i486 -fno-inline-functions-called-once -fno-jump-tables -mcode-segment=X -fno-inline=f")

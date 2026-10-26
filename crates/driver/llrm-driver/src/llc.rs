@@ -353,10 +353,18 @@ mod options_tests {
     fn the_backend_serves_c_as_the_watcom_front_end_did() {
         let watcom = options(&["-m32", "-mabi=watcom"], "omf");
         assert!(watcom.rounds_float_spills);
-        assert!(watcom.libcalls.iter().any(|(name, _, symbol)| name == "memcpy" && symbol == "memcpy_"), "{:?}", watcom.libcalls);
+        assert!(
+            watcom.libcalls.iter().any(|(name, _, symbol)| name == "memcpy" && symbol == "memcpy_"),
+            "{:?}",
+            watcom.libcalls
+        );
         assert!(watcom.pipeline.library.is_empty());
         let sysv = options(&["-m32", "-mabi=sysv"], "omf");
-        assert!(sysv.libcalls.iter().any(|(name, _, symbol)| name == "memcpy" && symbol == "_memcpy"), "{:?}", sysv.libcalls);
+        assert!(
+            sysv.libcalls.iter().any(|(name, _, symbol)| name == "memcpy" && symbol == "_memcpy"),
+            "{:?}",
+            sysv.libcalls
+        );
         assert_eq!(sysv.pipeline.library.len(), 1);
         assert_eq!(sysv.pipeline.library[0].symbol, "_strlen");
     }
