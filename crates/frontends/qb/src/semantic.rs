@@ -9147,15 +9147,47 @@ impl Compiler {
                 // BC converts the float, not its text: 1.00005 is a SINGLE just
                 // under the half.
                 let value = parse_real(text)?;
-                let value = if from == SINGLE { f64::from(value as f32) } else { value } * SCALE as f64;
-                (value.abs() < i64::MAX as f64).then(|| value.round_ties_even() as i64)
+                Some(scaled_float(if from == SINGLE { f64::from(value as f32) } else { value }))
             }
-            _ => return self.unsupported("a CURRENCY conversion"),
+            _ => return self.currency_runtime_conversion(operand, from, to),
         };
         match scaled {
             Some(value) => Ok(Operand::Constant(CURRENCY, Number::Integer(value))),
             None => self.fail("Overflow"),
         }
+    }
+
+    /// A conversion of a value known only at run time: BC's B$I2CY..B$CYFP
+    /// are an integer scaling by 10000 and, for a float, that scaling in the
+    /// extended format and a round to nearest even with the x87 fist, whose
+    /// overflow is the integer indefinite and no error.
+    fn currency_runtime_conversion(
+        &mut self,
+        operand: Operand,
+        from: u32,
+        to: u32,
+    ) -> Result<Operand, SemanticError> {
+        let scale = |this: &mut Self| this.floating_literal("10000", DOUBLE);
+        if to == CURRENCY {
+            if integral(from) {
+                let wide = self.value(CURRENCY);
+                self.emit("convert", vec![wide], vec![operand]);
+                let factor = Operand::Constant(CURRENCY, Number::Integer(10_000));
+                return Ok(self.computed("mul", CURRENCY, vec![Operand::Value(wide), factor]));
+            }
+            if matches!(from, SINGLE | DOUBLE) {
+                let operand = self.convert(operand, from, DOUBLE)?;
+                let factor = scale(self)?;
+                let scaled = self.computed("fmul", DOUBLE, vec![operand, factor]);
+                return Ok(self.computed("convert", CURRENCY, vec![scaled]));
+            }
+        } else if from == CURRENCY && (integral(to) || matches!(to, SINGLE | DOUBLE)) {
+            let wide = self.computed("convert", DOUBLE, vec![operand]);
+            let factor = scale(self)?;
+            let quotient = self.computed("fdiv", DOUBLE, vec![wide, factor]);
+            return if to == DOUBLE { Ok(quotient) } else { self.convert(quotient, DOUBLE, to) };
+        }
+        self.fail(format!("cannot convert {} to {} here", self.name(from), self.name(to)))
     }
 
     fn convert(
@@ -10705,6 +10737,49 @@ fn integer_range(type_id: u32) -> Option<std::ops::RangeInclusive<i64>> {
         LONG => Some(i32::MIN as i64..=i32::MAX as i64),
         UNSIGNED_LONG => Some(0..=u32::MAX as i64),
         _ => None,
+    }
+}
+
+/// `x * 10000` as the x87 does it for B$FPCY: the product rounded to the
+/// extended format's 64 bits, then to the nearest integer, ties to even. A
+/// product beyond 64 bits, or a NaN, is the integer indefinite, i64::MIN, and
+/// no error.
+fn scaled_float(x: f64) -> i64 {
+    if !x.is_finite() {
+        return i64::MIN;
+    }
+    let bits = x.to_bits();
+    let (negative, exponent, fraction) = (bits >> 63 != 0, ((bits >> 52) & 0x7ff) as i32, bits & ((1 << 52) - 1));
+    let (mantissa, exponent) = if exponent == 0 { (fraction, -1074) } else { (fraction | 1 << 52, exponent - 1075) };
+    let shift_right = |value: u128, by: u32| -> u128 {
+        if by == 0 {
+            return value;
+        }
+        if by > 127 {
+            return 0;
+        }
+        let (quotient, rest, half) = (value >> by, value & ((1 << by) - 1), 1u128 << (by - 1));
+        quotient + u128::from(rest > half || rest == half && quotient & 1 == 1)
+    };
+    let mut product = u128::from(mantissa) * 10_000;
+    let mut exponent = exponent;
+    let length = 128 - product.leading_zeros() as i32;
+    if length > 64 {
+        product = shift_right(product, (length - 64) as u32);
+        exponent += length - 64;
+    }
+    let magnitude = if exponent >= 0 {
+        if exponent > 64 {
+            return i64::MIN;
+        }
+        product << exponent
+    } else {
+        shift_right(product, (-exponent) as u32)
+    };
+    match i64::try_from(magnitude) {
+        Ok(value) if negative => -value,
+        Ok(value) => value,
+        Err(_) => i64::MIN,
     }
 }
 
