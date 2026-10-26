@@ -175,6 +175,7 @@ impl ProgramPass for Walk {
         let roots = roots(program);
         let params = crate::inlinecost::InlineParams {
             allow_recursive_call: self.inline.recursive,
+            last_call_to_static: self.inline.last,
             ..crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 })
         };
         let size = if self.inline.single {

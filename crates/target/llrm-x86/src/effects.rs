@@ -95,6 +95,17 @@ fn used(
                 let named =
                     one.through != RegId::None || one.index_through != RegId::None || (one.addr.is_some() && !unplaced);
                 match select::operand_of(one, bits) {
+                    // A frame cell indexed by a value the allocator has not
+                    // placed cannot be encoded yet, and reads the registers
+                    // it does name (the frame register, its segment).
+                    None if named && unplaced => {
+                        add(reads, one.through);
+                        add(reads, one.index_through);
+                        if [RegId::BP, RegId::EBP, RegId::SP, RegId::ESP].contains(&one.through) {
+                            add(reads, RegId::SS);
+                        }
+                        continue;
+                    }
                     // An address that cannot be encoded (`[sp]` in real mode)
                     // is an instruction that cannot be.
                     None if named => return false,
@@ -148,6 +159,7 @@ fn bytes_of(place: &Loc) -> Option<u32> {
 fn kind_of(place: &Loc) -> char {
     match place {
         Loc::Reg(one) if one.register.is_st() => 's',
+        Loc::Reg(one) if one.register.is_xmm() => 'x',
         Loc::Reg(_) | Loc::Held(_) => 'r',
         Loc::Mem(_) => 'm',
         Loc::Imm(_) => 'i',
@@ -174,6 +186,30 @@ fn form_of(
         .min_by_key(|row| row.ties.len())
         .or_else(|| candidates.first())
         .copied()
+}
+
+/// The operands (dests, then sources: bit `n` is operand `n`) that only an xmm
+/// register can fill, from the kinds of every row of the mnemonic: some row
+/// takes `x` there and none takes `r`. None where the table has no row.
+pub fn xmm_operands(
+    rows: &dyn Fn(&str, usize, usize) -> &'static [Row],
+    what: &Semantics,
+) -> Option<u32> {
+    let candidates = rows(what.name.as_deref().filter(|name| !name.is_empty())?, what.dests.len(), what.sources.len());
+    if candidates.is_empty() {
+        return None;
+    }
+    let count = what.dests.len() + what.sources.len();
+    Some(
+        (0..count.min(32))
+            .filter(|at| {
+                let takes = |letter: char| {
+                    candidates.iter().any(|row| row.kinds.get(*at).is_some_and(|kinds| kinds.contains(letter)))
+                };
+                takes('x') && !takes('r')
+            })
+            .fold(0, |mask, at| mask | 1 << at),
+    )
 }
 
 /// The register `root` names at `bytes`, as a pinned operand is.

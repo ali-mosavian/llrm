@@ -643,6 +643,17 @@ def integration_targets_for(
     return sorted(name for name in chosen if name in mapping and name not in NIGHTLY_ONLY)
 
 
+def test_outcomes(output: str, status: str) -> list[str]:
+    """`integration <target>::<test>` of each `test NAME ... STATUS` line, by the `Running tests/TARGET.rs` line above it."""
+    target, found = "?", []
+    for line in output.splitlines():
+        if match := re.match(r"\s+Running (?:unittests )?(?:tests/)?(\w+?)(?:\.rs)?\s", line):
+            target = match[1]
+        if match := re.match(rf"test (?!result:)(\S+) \.\.\. {status}", line):
+            found.append(f"integration {target}::{match[1]}")
+    return sorted(dict.fromkeys(found))
+
+
 def red_tests(output: str) -> list[str]:
     """`integration <target>::<test>` of each `test NAME ... FAILED` line, by the `Running tests/TARGET.rs` line above it. The `test result: FAILED. N passed; M failed`
     summary line of each binary is not a test: counting it read 94 red where 63 were."""
@@ -673,7 +684,10 @@ def integration_failures(
     if done.returncode and not found:
         found = {"integration-did-not-run"}
         CAUSES["integration-did-not-run"] = did_not_run_cause(done.stdout, done.returncode)
-    return found - xfail.load().keys()
+    listed = xfail.load().keys()
+    # a listed test that passes is as much a gate failure as an unlisted one that fails: its fix removes its entry
+    passing = {f"xpass {one}" for one in test_outcomes(done.stdout, "ok") if one in listed}
+    return (found - listed) | passing
 
 
 def qbrt_failures(

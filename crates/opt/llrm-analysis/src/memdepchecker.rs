@@ -22,10 +22,9 @@
 //! stride (`getPtrStride` with a `Predicates` argument) the access has no
 //! stride here and the pair is `IndirectUnsafe`.
 
-use std::collections::{HashMap, HashSet};
-
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::IntPredicate;
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::loopaccess::{
     SymbolicStrideMap, get_ptr_stride, load_store_pointer_operand, load_store_type, visit_pointers,
@@ -249,7 +248,7 @@ impl MemoryDepChecker {
     ) -> Self {
         Self {
             innermost_loop,
-            accesses: HashMap::new(),
+            accesses: HashMap::default(),
             inst_map: Vec::new(),
             access_idx: 0,
             min_dep_dist_bytes: 0,
@@ -518,7 +517,7 @@ impl MemoryDepChecker {
             return Err(DepType::Unknown);
         }
 
-        let strides = SymbolicStrideMap::new();
+        let strides = SymbolicStrideMap::default();
         let mut stride_a_ptr = get_ptr_stride(se, cx, a_ty, a_ptr, lp, &strides, true);
         let mut stride_b_ptr = get_ptr_stride(se, cx, b_ty, b_ptr, lp, &strides, true);
 
@@ -837,7 +836,7 @@ impl MemoryDepChecker {
         check_deps: &[MemAccessInfo],
     ) -> bool {
         self.min_dep_dist_bytes = u64::MAX;
-        let mut visited: HashSet<MemAccessInfo> = HashSet::new();
+        let mut visited: HashSet<MemAccessInfo> = HashSet::default();
         for &cur_access in check_deps {
             if visited.contains(&cur_access) {
                 continue;

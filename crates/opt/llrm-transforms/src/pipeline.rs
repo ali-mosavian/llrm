@@ -538,7 +538,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // `LLRM_NO_MEM2REG` keeps the write-through stand-in instead of the
         // translated PromoteMemToReg.
         if applied.options.mem2reg { Box::new(mem2reg::Mem2Reg) } else { Box::new(promote::Promote) },
-        Box::new(indvars::IndVars { lftr: indvars::lftr_default() }),
+        Box::new(indvars::IndVars { lftr: indvars::lftr_default(), size: applied.options.prefers_size() }),
         Box::new(algebraic::Algebraic { size: applied.options.prefers_size(), llvm: false }),
         Box::new(dead::Dead),
         Box::new(loopidioms::LoopIdioms { size: applied.options.prefers_size() }),
@@ -671,9 +671,13 @@ pub(crate) fn llvm_order(
     let size = applied.options.prefers_size();
     let slot =
         |name: &'static str, inner: Box<dyn FunctionPass>| -> Box<dyn FunctionPass> { Box::new(Slot { name, inner }) };
-    let decide = |name| slot(name, Box::new(decide::Decide { constants: false }));
+    // `-fno-jump-tables`: clang's "no-jump-tables" on every function, which
+    // stops SimplifyCFG's lookup tables as well as the jump tables.
+    let no_jump_tables = !applied.options.jump_tables;
     let simplify_cfg = |name| slot(name, Box::new(simplifycfg::SimplifyCfg::default()));
-    let simplify_cfg_with = |name, options| slot(name, Box::new(simplifycfg::SimplifyCfg { options }));
+    let simplify_cfg_with = |name, options: simplifycfg::Options| {
+        slot(name, Box::new(simplifycfg::SimplifyCfg { options: simplifycfg::Options { no_jump_tables, ..options } }))
+    };
     let combine = |name| slot(name, Box::new(crate::combine_pass::Combine { enabled: applied.options.combine }));
     let dead = |name| slot(name, Box::new(dead::Dead));
     // SROA runs mem2reg on what it splits: one slot, nothing between
@@ -805,7 +809,6 @@ pub(crate) fn llvm_order(
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@675"),
                 combine("combine@677"),
-                dead("dead@677"),
                 slot("aggressive-instcombine@678", Box::new(crate::trunc_inst_combine::TruncInstCombine)),
                 slot("tailrec@688", Box::new(tailcallelim::TailCallElim)),
                 // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L691:
@@ -839,6 +842,7 @@ pub(crate) fn llvm_order(
                     "rotate@728",
                     Box::new(looprotate::LoopRotate {
                         duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
+                        size: applied.options.prefers_size(),
                     }),
                 ));
                 list.extend(canonical("loopsimplify@728", "lcssa@728"));
@@ -855,7 +859,6 @@ pub(crate) fn llvm_order(
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@766"),
                 combine("combine@768"),
-                dead("dead@768"),
             ]);
             list.extend(canonical("loopsimplify@772", "lcssa@772"));
             // What the unroll makes, for the slot after it.
@@ -863,10 +866,13 @@ pub(crate) fn llvm_order(
             list.extend([
                 slot(
                     "loopidiom@737",
-                    Box::new(crate::loopidiom::pass::LoopIdiom::with_routines(applied.options.library.clone())),
+                    Box::new(crate::loopidiom::pass::LoopIdiom {
+                        for_size: size,
+                        ..crate::loopidiom::pass::LoopIdiom::with_routines(applied.options.library.clone())
+                    }),
                 ),
                 slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
-                slot("indvars@738", Box::new(indvars::IndVars { lftr: indvars::lftr_default() })),
+                slot("indvars@738", Box::new(indvars::IndVars { lftr: indvars::lftr_default(), size })),
                 slot("loopdeletion@749", Box::new(loopdeletion::LoopDeletion)),
                 slot(
                     "unroll@753",
@@ -889,7 +895,6 @@ pub(crate) fn llvm_order(
                 slot("sccp@792", Box::new(sccp::Sccp)),
                 slot("bdce@797", Box::new(bdce::Bdce)),
                 combine("combine@801"),
-                dead("dead@801"),
                 // DFAJumpThreadingPass, PassBuilderPipelines.cpp#L806.
                 slot(
                     "dfajumpthreading@806",
@@ -898,7 +903,6 @@ pub(crate) fn llvm_order(
                     ),
                 ),
                 slot("jumpthreading@809", Box::new(crate::jumpthreading::JumpThreading::from_env())),
-                decide("decide@809"),
                 slot("cvp@810", Box::new(crate::cvp::Cvp)),
                 slot("adce@815", Box::new(adce::Adce)),
                 slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt)),
@@ -920,7 +924,6 @@ pub(crate) fn llvm_order(
                     },
                 ),
                 combine("combine@837"),
-                dead("dead@837"),
             ]);
             list
         }
@@ -1233,6 +1236,9 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // counter rebased by it), as LLVM's LSR cleans with
         // SimplifyInstructions.
         passes.push(Box::new(algebraic::Differences));
+        // The remainder LSR wrote out as a quotient and a product, back to one
+        // where the divide stays.
+        passes.push(Box::new(crate::remidiom::RemainderIdiom { size: applied.options.prefers_size() }));
     }
     passes
 }
@@ -1257,7 +1263,7 @@ pub fn header_copied(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     passes.push(Box::new(algebraic::Algebraic { size: false, llvm: false }));
     // A counted exit's values are numbers where the copy made its test the one
     // that leaves.
-    passes.push(Box::new(indvars::IndVars { lftr: indvars::lftr_default() }));
+    passes.push(Box::new(indvars::IndVars { lftr: indvars::lftr_default(), size: false }));
     passes.push(Box::new(dead::Dead));
     if applied.options.wanted("hoist") {
         passes.push(Box::new(crate::licm::Licm { apply: true, speculate: true }));
@@ -1981,7 +1987,7 @@ mod pipeline_tests;
 fn order_seed() -> Option<u64> {
     static SEED: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
     *SEED.get_or_init(|| {
-        llrm_support::env_set("LLRM_CHECK_ORDER")
+        llrm_support::env_flag!("LLRM_CHECK_ORDER")
             .then(|| std::env::var("LLRM_CHECK_ORDER").ok().and_then(|value| value.parse().ok()))
             .flatten()
     })

@@ -20,7 +20,7 @@ fn lowered(
         None => best,
     };
     dag.set_root(root);
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false }).run().unwrap();
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false }).run().unwrap();
     let root = dag.get_root();
     (dag, root, [x, y])
 }

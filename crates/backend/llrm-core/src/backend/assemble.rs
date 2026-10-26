@@ -335,7 +335,14 @@ pub fn assembled_by(
                     if let Some(error) = unprintable.take() {
                         return Err(error);
                     }
-                    masm::saved_first(masm::Procedure { body, ..procedure })
+                    let procedure = masm::exits_inserted(masm::saved_first(masm::Procedure { body, ..procedure }));
+                    if procedure.body.frame_exit.is_some() {
+                        let body = jumps::tails_merged_after_exits(procedure.body.clone(), cpu.size)
+                            .map_err(|error| error.to_string())?;
+                        masm::Procedure { body, ..procedure }
+                    } else {
+                        procedure
+                    }
                 };
                 procedures.push(procedure);
             }
@@ -629,9 +636,12 @@ fn machined_once(
     let (first, frame) = timed("candidate first frame", || cheaper(&first_stage, name, pool, target))?;
     let spilled = frame.floor + first.reserve;
     // The allocas move down by the hole: a multiple of the stack alignment, or
-    // an 8-aligned array lands at 4 mod 8 (nbody -O2: 18,404 operands).
+    // an 8-aligned array lands at 4 mod 8 (nbody -O2: 18,404 operands). Shared
+    // spill slots can end on a word, so a 4-aligned frame needs it too: the
+    // backend run again aligns the allocas and the frame moved by the hole
+    // did not (reserve 286 against 288).
     let spilled =
-        if frame.align > 4 { (spilled + frame.align - 1).div_euclid(frame.align) * frame.align } else { spilled };
+        if frame.align > 1 { (spilled + frame.align - 1).div_euclid(frame.align) * frame.align } else { spilled };
     let far = far_frame(&first.body);
     if target.basic || frame.native.is_some() || spilled <= 0 || frame.floor == 0 || far == 0 {
         return Ok(first);
@@ -933,7 +943,6 @@ fn staged(
             },
             false,
             landing.is_some(),
-            target.cpu.size,
         ) {
         registers.free = true;
         // Saved as any kept register is: its root, and the register a prologue
@@ -1050,7 +1059,8 @@ fn phased(
         }
     }
     let frame = frame.borrow().clone();
-    let reserve = -std::cmp::min(frame.slots.values().copied().min().unwrap_or(0), frame.floor);
+    // The reserved call area is the lowest bytes below the locals and spills.
+    let reserve = -std::cmp::min(frame.slots.values().copied().min().unwrap_or(0), frame.floor) + frame.call_area;
     if llrm_support::env_flag!("LLRM_FRAME_ORACLE") {
         eprintln!("{}", crate::backend::frameobjects::oracle_line(name, &frame, reserve));
     }

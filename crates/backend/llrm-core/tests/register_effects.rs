@@ -262,6 +262,7 @@ fn the_table_gives_the_effects_the_decoder_does() {
                             target: None,
                             indirect: false,
                             table: Vec::new(),
+                            repeat: false,
                         };
                         let one = Insn::new(0, None, None, vec![], vec![]);
                         let with = Insn::new(0, None, Some(what.clone()), vec![], vec![]);
@@ -339,6 +340,7 @@ fn the_table_follows_the_encoder_into_what_it_lowers_to() {
         target: None,
         indirect: false,
         table: Vec::new(),
+        repeat: false,
     };
     let cases = [
         step(

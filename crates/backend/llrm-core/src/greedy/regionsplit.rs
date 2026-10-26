@@ -49,7 +49,7 @@ use llrm_lir::registers::RegId;
 use llrm_mir::blockfrequency::frequency::BlockFrequency;
 
 use super::edgebundles::EdgeBundles;
-use super::greedy::{AllocationOrder, ExtraRegInfo, GreedyEnv, LiveRangeStage};
+use super::greedy::{AllocationOrder, ExtraRegInfo, GreedyEnv, LiveRangeStage, is_unused_callee_saved_reg};
 use super::interferencecache::{Cursor, Env, InterferenceCache};
 use super::liverangeedit::{LiveRangeEdit, NoDelegate};
 use super::matrix::LiveRegMatrix;
@@ -60,7 +60,7 @@ use crate::liveness::blockfrequency::MachineBlockFrequencyInfo;
 use crate::liveness::calcspillweights::{Hint, VirtRegAuxInfo, normalize_spill_weight};
 use crate::liveness::liveintervals::LiveIntervals;
 use crate::liveness::liverange::LiveInterval;
-use crate::liveness::slotindex::SlotIndex;
+use crate::liveness::slotindex::{InstrKey, SlotIndex};
 use crate::support::hash::HashMap;
 
 /// `NoCand`.
@@ -834,7 +834,7 @@ impl Splitter<'_> {
             best_cost = spill_cost;
         }
 
-        let best_cand = self.calculate_region_split_cost(order, &mut best_cost, &mut num_cands);
+        let best_cand = self.calculate_region_split_cost(order, &mut best_cost, &mut num_cands, false);
 
         // No solutions found, fall back to single block splitting.
         if !has_compact && best_cand == NO_CAND {
@@ -945,12 +945,80 @@ impl Splitter<'_> {
         order: &AllocationOrder,
         best_cost: &mut BlockFrequency,
         num_cands: &mut usize,
+        ignore_csr: bool,
     ) -> usize {
         let mut best_cand = NO_CAND;
         for (phys, _) in order.iter() {
+            if ignore_csr && is_unused_callee_saved_reg(self.env, &*self.matrix, phys) {
+                continue;
+            }
             self.calculate_region_split_cost_around_reg(phys, best_cost, num_cands, &mut best_cand);
         }
         best_cand
+    }
+
+    /// `calcSpillCost` (RegAllocGreedy.cpp#L2356): what spilling `virt` would
+    /// cost, a reload or store for each instruction that reads or writes it,
+    /// at its block's frequency.
+    fn calc_spill_cost(
+        &self,
+        virt: &Rc<LiveInterval>,
+    ) -> BlockFrequency {
+        let mut cost = 0u64;
+        let mut seen: Vec<(InstrKey, bool, bool)> = Vec::new();
+        for operand in self.lis.operands(virt.reg()) {
+            let reads = operand.reads_reg || !operand.is_def;
+            match seen.iter_mut().find(|(key, ..)| *key == operand.instr) {
+                Some(one) => {
+                    one.1 |= reads;
+                    one.2 |= operand.is_def;
+                }
+                None => seen.push((operand.instr, reads, operand.is_def)),
+            }
+        }
+        for (key, reads, writes) in seen {
+            let at = self.lis.indexes.get_instruction_index(key);
+            let block = self.lis.indexes.get_mbb_from_index(&at) as u32;
+            cost += (u64::from(reads) + u64::from(writes)) * self.block_freq(block).get_frequency();
+        }
+        BlockFrequency(cost)
+    }
+
+    /// The `RS_Spill` half of `tryAssignCSRFirstTime`
+    /// (RegAllocGreedy.cpp#L2388): whether the callee-saved register is used
+    /// (the spill costs `csr_cost` or more), else `virt` is spilled.
+    pub fn csr_spill_is_dearer(
+        &mut self,
+        virt: &Rc<LiveInterval>,
+        csr_cost: BlockFrequency,
+    ) -> bool {
+        self.analyze(virt);
+        self.calc_spill_cost(virt) >= csr_cost
+    }
+
+    /// The `RS_New`/`RS_Assign` half of `tryAssignCSRFirstTime`
+    /// (RegAllocGreedy.cpp#L2399): split `virt` around a region that costs
+    /// less than `csr_cost` with the callee-saved registers ignored, if there
+    /// is one (the ranges are in `new_vregs`). Whether to use the callee-saved
+    /// register instead.
+    pub fn csr_pre_split(
+        &mut self,
+        virt: &Rc<LiveInterval>,
+        order: &AllocationOrder,
+        csr_cost: BlockFrequency,
+        new_vregs: &mut Vec<u32>,
+    ) -> bool {
+        self.analyze(virt);
+        let mut num_cands = 0usize;
+        let mut best_cost = csr_cost; // Don't modify CSRCost.
+        let best_cand = self.calculate_region_split_cost(order, &mut best_cost, &mut num_cands, true);
+        if best_cand == NO_CAND {
+            // Use the CSR if we can't find a region split below CSRCost.
+            return true;
+        }
+        // Perform the actual pre-splitting.
+        self.do_region_split(virt, best_cand, false, new_vregs);
+        false
     }
 
     /// `doRegionSplit`

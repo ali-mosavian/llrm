@@ -30,6 +30,25 @@ pub fn effect_of<'a>(
     }
 }
 
+/// [`effect_of`] for accesses that may be lazy: asked of `unit`.
+pub fn effect_of_in<'a>(
+    accesses: &'a Accesses,
+    unit: &'a Unit<'a>,
+) -> impl Fn(InstId) -> Effect + 'a {
+    let function = unit.function;
+    move |inst| Effect {
+        reads: accesses.reads_in(unit, inst).is_none_or(|reads| !reads.is_empty()),
+        writes: accesses.writes_in(unit, inst).is_none_or(|writes| !writes.is_empty()),
+        // `isOrdered`: a volatile access is a def, so it is ordered against the
+        // other defs.
+        ordered: matches!(
+            function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Load { volatile: true, .. }
+                | llrm_mir::opcode::Opcode::Store { volatile: true, .. }
+        ),
+    }
+}
+
 /// `effect_of` for `Accesses::plain(unit, calls)`, without making it: what an
 /// instruction reads and writes follows from its opcode (a load reads, a
 /// store writes: every load and store has a reference) and, for a call, from
@@ -63,6 +82,39 @@ pub fn effect_from_opcodes<'a>(
             _ => (false, false),
         };
         Effect { reads, writes, ordered }
+    }
+}
+
+/// What the build reads of each instruction, as `buildMemorySSA` has it: a load
+/// reads and a store writes (every load and store has a reference), a call as
+/// the AA stack's `getMemoryEffects` says (`getModRefInfo(Call, nullptr)`:
+/// attributes, `GlobalsModRef`), and a volatile access is ordered. No access
+/// list is read, nor the calls' write footprints: over the corpus the two
+/// agree on every call.
+pub fn effect_from_aa<'a>(
+    unit: &'a Unit<'a>,
+    stack: crate::aggregate::AggregateAA<'a>,
+) -> impl Fn(InstId) -> Effect + 'a {
+    let stack = std::cell::RefCell::new(stack);
+    move |inst| {
+        use crate::aa::{AAQueryInfo, AAResults};
+        let opcode = &unit.function.instruction(inst).opcode;
+        let ordered = matches!(
+            opcode,
+            llrm_mir::opcode::Opcode::Load { volatile: true, .. }
+                | llrm_mir::opcode::Opcode::Store { volatile: true, .. }
+        );
+        if let Some(own) = crate::memory::own_bytes(opcode) {
+            return Effect { reads: own.reads, writes: own.writes, ordered };
+        }
+        if matches!(
+            opcode,
+            llrm_mir::opcode::Opcode::Call(_) | llrm_mir::opcode::Opcode::Invoke(_)
+        ) {
+            let asked = stack.borrow_mut().get_memory_effects(inst, &mut AAQueryInfo::default()).overall();
+            return Effect { reads: asked.is_ref_set(), writes: asked.is_mod_set(), ordered };
+        }
+        Effect { reads: false, writes: false, ordered }
     }
 }
 

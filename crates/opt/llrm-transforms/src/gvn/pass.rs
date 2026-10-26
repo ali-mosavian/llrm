@@ -780,13 +780,22 @@ impl GvnPass<'_> {
         // cells ran worse without.
         // `simplifyInstruction` has no arm of MIR's for the other kinds, and
         // building its operands costs.
-        let simplified = if !matches!(
-            self.function.instruction(inst).opcode,
-            Opcode::Binary(_) | Opcode::ICmp(_) | Opcode::Select | Opcode::Cast(_)
-        ) {
-            None
-        } else {
-            llrm_mir::simplify::simplify_instruction(self.context, self.layout, self.function, inst)
+        let simplified = match self.function.instruction(inst).opcode {
+            Opcode::Binary(_) | Opcode::ICmp(_) | Opcode::Select | Opcode::Cast(_) => {
+                llrm_mir::simplify::simplify_instruction(self.context, self.layout, self.function, inst)
+            }
+            // A call to an intrinsic (`umax` of two constants a load
+            // forwarded):
+            // `simplifyCall` knows the callees by `globals`.
+            Opcode::Call(_) => llrm_mir::simplify::simplify_instruction_in(
+                self.context,
+                &self.outer.globals,
+                self.layout,
+                None,
+                self.function,
+                inst,
+            ),
+            _ => None,
         };
         if let Some(simplified) = simplified {
             let mut changed = false;

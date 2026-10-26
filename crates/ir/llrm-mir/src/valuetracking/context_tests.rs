@@ -309,3 +309,41 @@ fn affected_values_of_a_wide_condition_are_each_found_once() {
     want.sort_by_key(|v| format!("{v:?}"));
     assert_eq!(found, want);
 }
+
+fn skipped_walks() -> u32 {
+    crate::valuetracking::query::SKIPPED_WALKS.with(std::cell::Cell::get)
+}
+
+/// The assumption cache walked every instruction of every function for a call
+/// to `llvm.assume`, 1.0 M Ir over the 90 caches of one d_faces compile, where
+/// the module declares none.
+#[test]
+fn a_module_that_declares_no_assume_has_its_bodies_left_unwalked() {
+    let module = crate::parse::module(
+        "declare i32 @g(i32)\ndefine i32 @f(i32 %x) {\n  %y = add i32 %x, 1\n  %z = call i32 @g(i32 %y)\n  ret i32 %z\n}\n",
+    )
+    .expect("parses");
+    let crate::module::GlobalKind::Function(function) = &module.global(module.named("f").expect("@f")).kind else {
+        unreachable!()
+    };
+    let before = skipped_walks();
+    let cache = crate::valuetracking::AssumptionCache::new(&module, function);
+    assert_eq!(skipped_walks() - before, 1, "no walk");
+    assert!(cache.assumptions_for(crate::module::Operand::Value(function.parameters()[0])).is_empty());
+}
+
+/// What the skip must not do: lose an assume of a module that declares one.
+#[test]
+fn a_module_that_declares_an_assume_still_finds_it() {
+    let module = crate::parse::module(
+        "declare void @llvm.assume(i1)\ndefine i32 @f(i32 %x) {\n  %c = icmp ult i32 %x, 16\n  call void @llvm.assume(i1 %c)\n  ret i32 %x\n}\n",
+    )
+    .expect("parses");
+    let crate::module::GlobalKind::Function(function) = &module.global(module.named("f").expect("@f")).kind else {
+        unreachable!()
+    };
+    let before = skipped_walks();
+    let cache = crate::valuetracking::AssumptionCache::new(&module, function);
+    assert_eq!(skipped_walks() - before, 0, "walked");
+    assert_eq!(cache.assumptions_for(crate::module::Operand::Value(function.parameters()[0])).len(), 1);
+}
