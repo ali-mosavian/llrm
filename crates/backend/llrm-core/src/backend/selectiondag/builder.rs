@@ -84,6 +84,9 @@ pub struct BuilderTarget {
     /// A dense switch may be a jump table: the target prices one (the MIR pass
     /// reads the same cost).
     pub jump_tables: bool,
+    /// The function is tuned for size (`-Os`, `optsize`, `minsize`: the pin's
+    /// `hasOptSize`): a jump table needs 40% density.
+    pub opt_size: bool,
     /// For a program whose ABI gives its runtime routines contracts: whether
     /// the convention models each call of a `llrm.qb.` routine, by call. A call
     /// not listed, or listed with a reason, is refused.
@@ -136,6 +139,15 @@ impl BuilderTarget {
         self
     }
 
+    /// This target tuned for size or not.
+    pub fn with_opt_size(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.opt_size = on;
+        self
+    }
+
     /// This target with a stack alignment, whatever the target's is.
     pub fn with_stack_alignment(
         mut self,
@@ -183,6 +195,7 @@ impl BuilderTarget {
             stack_align: None,
             float_store: false,
             jump_tables: true,
+            opt_size: false,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -209,6 +222,7 @@ impl BuilderTarget {
             stack_align: None,
             float_store: false,
             jump_tables: true,
+            opt_size: false,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
