@@ -3221,10 +3221,11 @@ fn a_port_poll_does_not_reload_a_cell_stored_before_it_at_either_target() {
         let poll = lines.iter().position(|one| *one == "in al, dx").expect("the port read");
         // The premise: the masks are known constants at the poll, in the
         // instruction and not in a cell.
-        // (x ^ 8) & 8 is (x & 8) ^ 8: either order is the poll.
+        // (x ^ 8) & 8 is (x & 8) ^ 8, either order, or (x & 8) == 8 as a `cmp`:
+        // the DAG selector's form.
         let mut masks = [lines[poll + 1], lines[poll + 2]];
         masks.sort();
-        assert_eq!(masks, ["and al, 8", "xor al, 8"], "{target}: {text}");
+        assert!(masks == ["and al, 8", "xor al, 8"] || masks == ["and al, 8", "cmp al, 8"], "{target}: {text}");
         assert!(!text.contains("W$D"), "{target}: a cell held the masks: {text}");
     }
 }
@@ -3250,7 +3251,8 @@ fn a_constant_wait_mask_goes_to_the_poll_as_it_is_and_a_variable_one_through_a_c
         // The test of the masked byte may be a `test` for the `and` it needs no
         // result of.
         assert!(
-            constant.contains("xor al, 8") && (constant.contains("and al, 8") || constant.contains("test al, 8")),
+            (constant.contains("xor al, 8") || constant.contains("cmp al, 8") || constant.contains("not al"))
+                && (constant.contains("and al, 8") || constant.contains("test al, 8")),
             "{target}: {constant}"
         );
         assert!(!constant.contains("ptr W$D"), "{target}: a cell held a constant mask: {constant}");
