@@ -593,9 +593,11 @@ def can_affect(files: list[str], package: str, packages: dict, graph: dict[str, 
     return len(inside) < len(files) or bool(owned & needs(package, graph))
 
 
-def unit_offenders(group: list[str], by_package: dict[str, set[str]], merge_alone, failing, base_red=None, affects=None) -> list[str]:
+def unit_offenders(group: list[str], by_package: dict[str, set[str]], merge_alone, failing, base_red=None, affects=None, own=None, reasons=None, why=None) -> list[str]:
     """The PRs of `group` whose merge alone fails a unit test of `by_package`. A test the base fails too (`base_red(by_package)` -> {(package, test)}) is no PR's: every PR merged
-    on a red base fails it alone, and batch 2 refused or probed all 16. A PR that `affects(number, package)` says cannot change the package is not probed (a merge and a cargo run each)."""
+    on a red base fails it alone, and batch 2 refused or probed all 16. A PR that `affects(number, package)` says cannot change the package is not probed (a merge and a cargo run each).
+    `own[number]` gets the `unit package::test` names that failed on that PR's probe (what `failing` returns; every probed test if it only says True), `reasons[number]` the `why(names)` read right
+    after it: the 10:24 refusals of five PRs all carried the batch's whole list, so five different failures read as one."""
     red = base_red(by_package) if base_red else set()
     probe = {package: tests - {test for pkg, test in red if pkg == package} for package, tests in by_package.items()}
     probe = {package: tests for package, tests in probe.items() if tests}
@@ -604,8 +606,18 @@ def unit_offenders(group: list[str], by_package: dict[str, set[str]], merge_alon
     found = []
     for number in group:
         mine = {package: tests for package, tests in probe.items() if affects is None or affects(number, package)}
-        if mine and merge_alone(number) and any(failing(package, tests) for package, tests in mine.items()):
-            found.append(number)
+        if not (mine and merge_alone(number)):
+            continue
+        for package, tests in mine.items():
+            got = failing(package, tests)
+            if got:
+                found.append(number)
+                names = sorted(f"unit {package}::{test}" for test in (tests if got is True else got))
+                if own is not None:
+                    own[number] = names
+                if reasons is not None and why is not None:
+                    reasons[number] = why(names)
+                break
     return found
 
 
@@ -1012,6 +1024,7 @@ def _in_target(target: Path | None, kind: str = "test"):
     return lambda command, **kw: subprocess.run(command, env={**os.environ, "CARGO_TARGET_DIR": str(target / kind)}, **kw)
 
 
+ALONE_DEPENDANTS = {"llrm-qb", "llrm-c", "llrm-nib"}  # the dependants whose lib tests failed batches that passed alone (#4927); the rest of the closure is the batch's to run
 ALONE_JOBS = "2"  # PRs checked at once: three took 6 of 8 cargo processes beside the batch's tests
 SOURCE_SCANNING_PACKAGES = {"llrm-mir"}  # lib tests that scan other crates' sources (no_file_gains_*): upstream of the crates they judge, so a dependants run never reaches them
 
@@ -1051,9 +1064,10 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
         return [f"scanner red alone: {', '.join(red[:5])}"]
     # the unit tests of the crates the PR changes, less what the base fails: round 3 died on llrm-nib::test_pipeline::... and no PR was blamed
     def lib_failures(changed: list[str]) -> set[str]:
-        packages, _ = smoke.workspace_graph(cwd)
+        packages, graph = smoke.workspace_graph(cwd)
         touched = smoke.touched_packages(changed, packages, cwd)
-        return smoke.dependants_lib_failures(touched | SOURCE_SCANNING_PACKAGES, root=cwd, run=_in_target(target, "lib")) if touched else set()
+        # the crates that depend on a touched one too: #4927 changed llrm-transforms, passed alone, and failed four llrm-qb tests in the batch
+        return smoke.dependants_lib_failures((touched | smoke.dependants(touched, graph) & ALONE_DEPENDANTS) | SOURCE_SCANNING_PACKAGES, root=cwd, run=_in_target(target, "lib")) if touched else set()
 
     failed = (units or lib_failures)(files)
     # a listed test that now passes is the PR's to unlist: the gate refuses the batch for it
@@ -1339,17 +1353,32 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         smoke = parity_smoke_module()
         packages, graph = smoke.workspace_graph()
         changed = {number: git("diff", "--name-only", f"{BASE}...{infos[number]['headRefOid']}").split() for number in group}
+        def probe(package: str, tests: set[str]) -> set[str]:
+            LAST_PANICS.clear()  # a panic read for another PR's probe is not this one's reason
+            return failing_on_checkout(package, tests)
+
+        own: dict[str, list[str]] = {}
+        reasons: dict[str, str] = {}
         culprits = unit_offenders(
             group,
             by_package,
             merge_alone,
-            failing_on_checkout,
+            probe,
             base_red=_base_red,
             affects=lambda number, package: can_affect(changed[number], package, packages, graph),
+            own=own,
+            reasons=reasons,
+            why=lambda names: "; ".join(
+                filter(
+                    None,
+                    [
+                        "; ".join(f"{test}: {LAST_PANICS[test]}" for test in (name[len("unit ") :].split("::", 1)[1] for name in names) if test in LAST_PANICS),
+                        parity_smoke_module().causes_of(set(names)).strip(" []"),
+                    ],
+                )
+            ),
         )
-        why = "; ".join(f"{test}: {LAST_PANICS[test]}" for _, test in sorted(units) if test in LAST_PANICS)
-        why = "; ".join(filter(None, [why, parity_smoke_module().causes_of(failed_units).strip(" []")]))
-        named.update({number: f"alone on the head it fails {', '.join(sorted(failed_units))[:160]}" + (f" [{why[:300]}]" if why else "") for number in culprits})
+        named.update({number: f"alone on the head it fails {', '.join(own[number])[:160]}" + (f" [{reasons[number][:300]}]" if reasons.get(number) else "") for number in culprits})
         return culprits
 
     def passes(group: list[str]) -> bool:

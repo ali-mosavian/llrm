@@ -1,5 +1,7 @@
 //! `x & 255` widened is `movzx r32, r8`: BASIC, C and Nib each compiled
-//! `and r16, 0FFh` after a register copy, then `movzx r32, r16`.
+//! `and r16, 0FFh` after a register copy, then `movzx r32, r16`. The DAG
+//! selector's shape: the old selector still emits the pair (the flip closes
+//! it).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -16,7 +18,7 @@ fn compiled(
     let done = Command::new(bin.join(tool))
         .arg(root.join("tests/inputs/masked").join(source))
         .args(arguments)
-        .args(["-O2", "-march=i486", "-S", "-o"])
+        .args(["--isel=dag", "-O2", "-march=i486", "-S", "-o"])
         .arg(&out)
         .output()
         .unwrap();

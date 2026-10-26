@@ -1509,7 +1509,8 @@ fn test_bases_past_the_registers_are_not_stepped_as_pointers() {
     assert!(steps <= 1, "{steps} pointer steps\n{text}");
 }
 
-const SEVEN_TERMS: &str = "DEFINT A-Z\r\nDECLARE SUB t ()\r\nDIM SHARED sp(8000), f(700), xp(7), yy(7), cd(2000)\r\nt\r\nSUB t\r\n\
+const SEVEN_TERMS: &str = "DEFINT A-Z\r\nDECLARE SUB t ()\r\nDIM SHARED sp(8000), f(700), xp(7), yy(7), cd(2000)\r\nk = LEN(COMMAND$)\r\n\
+sp(k) = 1: f(k) = 1: xp(k) = 1: yy(k) = 1: cd(k) = 1\r\nt\r\nSUB t\r\n\
 DEF SEG = &HA000\r\nFOR x = 24 TO 295\r\ndn = sp(yy(1) + f(x - xp(1))) + sp(yy(2) + f(x - xp(2))) + \
 sp(yy(3) + f(x - xp(3))) + sp(yy(4) + f(x - xp(4))) + sp(yy(5) + f(x - xp(5))) + sp(yy(6) + f(x - xp(6))) + \
 sp(yy(7) + f(x - xp(7)))\r\nPOKE x, cd(dn)\r\nNEXT\r\nEND SUB\r\n";
@@ -1648,7 +1649,7 @@ FOR x = 0 TO 99\r\nPOKE &H17, yy(1) + xp(2) + x\r\nNEXT\r\nDEF SEG\r\nEND SUB\r\
 fn out_loop(port: &str) -> String {
     let directory = tempfile::tempdir().expect("a directory");
     let text = format!(
-        "DEFINT A-Z\r\nDECLARE SUB t ()\r\nDIM SHARED yy(3)\r\nt\r\nSUB t\r\nFOR x = 0 TO 99\r\nOUT {port}, yy(1) + x\r\nNEXT\r\nEND SUB\r\n"
+        "DEFINT A-Z\r\nDECLARE SUB t ()\r\nDIM SHARED yy(3)\r\nyy(LEN(COMMAND$)) = 1\r\nt\r\nSUB t\r\nFOR x = 0 TO 99\r\nOUT {port}, yy(1) + x\r\nNEXT\r\nEND SUB\r\n"
     );
     let source = written(&directory, "T.BAS", text.as_bytes());
     loop_around(&listing(&parsed_as(&source, "qb45", "qb45")), "T", |line| line.trim_start().starts_with("out "))
@@ -2038,6 +2039,7 @@ fn test_a_dividend_two_instructions_require_is_copied_into_its_register_once() {
     // so the extended value sat in EDI across both and one of the three
     // recurrences spilled: `mov ax, [bp-2]` and `add word ptr [bp-2], 5`. A
     // divisor read from memory stays a division; a constant is a reciprocal.
+    // CVP narrows `i \\ d(0)` to 16 bits as the pin does (`sdiv i16`): `cwd`.
     let source = "DEFINT A-Z\nDIM b(200), d(1)\nDIM i, t\nd(0) = 5 + INT(RND * 1)\nt = 0\nFOR i = 0 TO 100 STEP 5\n    b(i) = i \\ d(0)\n    t = t + b(i)\nNEXT i\nPRINT \"T=\"; t\n";
     let basic = std::env::temp_dir().join(format!("stride_variable_divisor_{}.bas", std::process::id()));
     std::fs::write(&basic, source).expect("writes the program");
@@ -2647,8 +2649,7 @@ fn test_def_seg_stores_the_runtime_segment_cell() {
 #[test]
 fn test_a_word_array_after_an_odd_object_lies_at_an_even_offset() {
     let directory = tempfile::tempdir().expect("a directory");
-    let text =
-        "DEFINT A-Z\r\nDIM SHARED s AS STRING * 3, f3(10)\r\ns = \"abc\"\r\nf3(1) = LEN(s)\r\nPRINT f3(1), s\r\n";
+    let text = "DEFINT A-Z\r\nDIM SHARED s AS STRING * 3, f3(10)\r\ns = \"abc\"\r\nk = LEN(COMMAND$)\r\nf3(k) = LEN(s)\r\nPRINT f3(k), s\r\n";
     let program = parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45");
     let codegen = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
     let module = qb_compile::assembled(&program, None, &codegen).expect("assembles");

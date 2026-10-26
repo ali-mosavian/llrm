@@ -17,6 +17,7 @@ fn qb() -> HirAbi {
         objects: Default::default(),
         preserved: Default::default(),
         stack_check: None,
+        hosted: false,
     }
 }
 

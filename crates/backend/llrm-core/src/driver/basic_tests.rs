@@ -3,20 +3,11 @@ use std::sync::Arc;
 use llrm_lir::registers::RegId;
 
 use super::*;
-use crate::model::ir::{Held, Mem, Reg};
+use crate::model::ir::{Held, Mem};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 
 /// A load of `cell`, then a return: a body as the frame rewriters receive it.
 fn loading(cell: Mem) -> LirBody {
-    loading_with(cell, false)
-}
-
-/// `loading`, after a load of the data segment register where `writes_ds`:
-/// allocation held a selector in it.
-fn loading_with(
-    cell: Mem,
-    writes_ds: bool,
-) -> LirBody {
     let semantics = |op, name: &str, dests, sources| {
         Some(Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) })
     };
@@ -28,15 +19,13 @@ fn loading_with(
         vec![],
     );
     let leave = Insn::new(1, Some((1, 2)), semantics(Operation::Return, "retf", vec![], vec![]), vec![], vec![]);
-    let mut insns = vec![Arc::new(load)];
-    if writes_ds {
-        let selector = Loc::Reg(Reg { register: RegId::DS, width: 2 });
-        let set =
-            semantics(Operation::Move, "mov", vec![selector], vec![Loc::Reg(Reg { register: RegId::AX, width: 2 })]);
-        insns.push(Arc::new(Insn::new(2, Some((2, 3)), set, vec![], vec![])));
-    }
-    insns.push(Arc::new(leave));
-    LirBody::new("procedure", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default())
+    LirBody::new(
+        "procedure",
+        0,
+        vec![LirBlock::new(0, vec![Arc::new(load), Arc::new(leave)]).into()],
+        IndexMap::default(),
+        IndexMap::default(),
+    )
 }
 
 /// The loaded cell, after a rewrite.
@@ -79,19 +68,40 @@ fn test_an_indexed_frame_cell_moves_into_the_static_module_frame() {
     );
 }
 
+/// The body of `loading` with a selector put in the data segment register
+/// first, as allocation does for a far pointer.
+fn holding_a_selector(cell: Mem) -> LirBody {
+    let mut body = loading(cell);
+    let put = Insn::new(
+        0,
+        Some((0, 1)),
+        Some(Semantics {
+            name: Some("mov".into()),
+            dests: vec![Loc::Reg(ir::Reg { register: RegId::DS, width: 2 })],
+            sources: vec![Loc::Held(Held { value: 3, width: 2 })],
+            ..Semantics::new(Operation::Move)
+        }),
+        vec![],
+        vec![],
+    );
+    let mut insns = vec![Arc::new(put)];
+    insns.extend(body.blocks[0].insns.iter().cloned());
+    body.blocks = vec![body.blocks[0].with_insns(insns)].into();
+    body
+}
+
 /// The static module frame's cells read through DS, where allocation held a
 /// far pointer's selector (particle.bas, #2585): spills went into an array.
 #[test]
 fn test_a_static_frame_cell_stays_on_the_stack_segment_where_the_stack_is_data() {
-    let body = loading_with(indexed_frame_cell(), true);
-    let cell = loaded(&_static_frame(&body, 46, Some(RegId::SS)));
+    let cell = loaded(&_static_frame(&holding_a_selector(indexed_frame_cell()), 46, Some(RegId::SS)));
     assert_eq!(RegId::from(cell.addr.unwrap().segment), RegId::SS);
 }
 
-/// Nothing writes DS, so it holds the data group: a frame cell needs no `ss:`
-/// (pow_stack_depth carried 52 of them, a byte each).
+/// Every cell of a module frame carried `ss:` where the body never wrote DS:
+/// a byte each, 728 over tests/run/qb (pow_unrolled 770 B against main's 684).
 #[test]
-fn test_a_static_frame_cell_has_no_segment_prefix_where_ds_is_never_written() {
+fn test_a_static_frame_cell_has_no_override_where_the_body_leaves_ds_alone() {
     let cell = loaded(&_static_frame(&loading(indexed_frame_cell()), 46, Some(RegId::SS)));
     assert_eq!(RegId::from(cell.addr.unwrap().segment), RegId::None);
 }
