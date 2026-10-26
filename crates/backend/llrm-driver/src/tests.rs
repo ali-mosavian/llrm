@@ -475,3 +475,18 @@ fn xmm_registers_are_a_class_apart_from_the_general_ones() {
     assert_eq!(m64.available.len(), 14);
     assert!(RegisterClasses::of(&llrm_x86_m16::M16).xmm.is_empty());
 }
+
+/// A far global read from LLVM IR went into the near data segment, so an 80400
+/// byte one ran past 64K there and the OMF writer panicked ("'H' format
+/// requires 0 <= number <= 65535"). It is an object of a far segment of its
+/// own, continued in a second where it passes 64K.
+#[test]
+fn a_far_global_over_64k_runs_on_into_a_second_far_segment() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n\
+                @h = addrspace(1) global [80400 x i8] zeroinitializer\n\
+                define i8 @f() {\n  %1 = load i8, ptr addrspace(1) @h\n  ret i8 %1\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m16"]), text, "f").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("h_DATA segment para public 'FAR_DATA'"), "{listing}");
+    assert!(listing.contains("h_DATA_1 segment para public 'FAR_DATA'"), "{listing}");
+}

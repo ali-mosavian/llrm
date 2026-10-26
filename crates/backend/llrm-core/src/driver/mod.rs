@@ -331,6 +331,19 @@ pub fn compiled_module(
             &options.libcalls,
         )
     })?;
+    let mut assembled = assembled;
+    timed("data layout", || {
+        Placed::of_spaces(&program.modules[0], program.segments.data_space).lay_out(
+            &mut assembled,
+            &program.modules[0],
+            program.segments.data_space,
+            None,
+            &[],
+            options.machine.far_bss,
+            options.machine.bss_begin,
+            options.arch.layout().segment_bytes(),
+        )
+    })?;
     stage_files(options, "", &assembled)?;
     Ok(assembled)
 }

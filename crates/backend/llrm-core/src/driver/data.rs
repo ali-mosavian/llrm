@@ -46,6 +46,24 @@ impl Placed {
         Self { segments, private: far.filter_map(|one| one.segment.clone()).collect() }
     }
 
+    /// A module read from LLVM IR, which names no segments: each initialized
+    /// global outside the data space is an object of a far segment of its own,
+    /// so one past 64K runs on through further segments.
+    pub fn of_spaces(
+        module: &Module,
+        data_space: u32,
+    ) -> Self {
+        let mut segments = Vec::new();
+        for global in &module.globals {
+            let GlobalKind::Variable(variable) = &global.kind else { continue };
+            let Some(name) = global.name.owned().filter(|_| variable.initializer.is_some()) else { continue };
+            if global.address_space != data_space {
+                segments.push((format!("{name}_DATA"), vec![name]));
+            }
+        }
+        Self { private: segments.iter().map(|(segment, _)| segment.clone()).collect(), segments }
+    }
+
     /// `built`'s data laid out: the default segment first, then each placed
     /// one; the compiler's constants in `constants`, else the default. Each
     /// variable aligned as `AsmPrinter::getGVAlignment` says
