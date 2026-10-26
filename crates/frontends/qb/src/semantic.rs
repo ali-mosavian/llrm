@@ -4593,13 +4593,20 @@ impl Compiler {
                         self.emit_runtime_call("B$CSCN", Vec::new(), words);
                     }
                     "WIDTH" => {
-                        if arguments.len() != 2 {
-                            return self.fail("WIDTH needs columns and rows here, as in `WIDTH 80, 25`");
+                        if arguments.is_empty() || arguments.len() > 2 {
+                            return self.fail("WIDTH takes columns and rows, as in `WIDTH 80, 25`");
                         }
+                        // BC passes -1 for an argument left out: `WIDTH 80` is
+                        // (80, -1).
                         let mut operands = Vec::new();
-                        for argument in arguments {
-                            let (value, type_id) = self.expression(argument)?;
-                            operands.push(self.convert(value, type_id, INTEGER)?);
+                        for slot in 0..2 {
+                            match arguments.get(slot) {
+                                Some(argument) if !matches!(argument, Expr::Omitted(_)) => {
+                                    let (value, type_id) = self.expression(argument)?;
+                                    operands.push(self.convert(value, type_id, INTEGER)?);
+                                }
+                                _ => operands.push(Operand::Constant(INTEGER, Number::Integer(-1))),
+                            }
                         }
                         self.emit_runtime_call("B$WIDT", Vec::new(), operands);
                     }
