@@ -15,7 +15,7 @@
 //! stays LLVM's. The owed steps, with their exits:
 //! `foldICmpTruncWithTruncOrExt`,
 //! `foldICmpWithConstant`, `foldICmpUsingBoolRange`,
-//! `foldIsMultipleOfAPowerOfTwo`, `foldICmpBinOp`, `foldICmpInstWithConstant`,
+//! `foldIsMultipleOfAPowerOfTwo`, `foldICmpInstWithConstant`,
 //! `foldSignBitTest`, `foldOpIntoPhi`, `foldICmpInstWithConstantNotInt`,
 //! `foldICmpCommutative`, `foldCmpSelectOfConstants` and the select pair fold,
 //! the zero folds `foldIRemByPowerOfTwoToBitTest` and `stripNullTest`, and the
@@ -208,7 +208,9 @@ pub fn visit_icmp(
             return new_icmp(c, inst, IntPredicate::Sgt, op0, ones);
         }
     }
-    // OWED: foldICmpBinOp.
+    if let Some(r) = crate::combine_icmp_binop::fold_icmp_bin_op(c, inst, pred, op0, op1) {
+        return r;
+    }
     if let Some(r) = fold_icmp_inst_with_constant(c, inst, pred, op0, op1) {
         return r;
     }

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_compares.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_compares.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_compares.rs sha256:217661a771647b01a4e27cd8da1307e1bdf222533e763271a3d1514b96f046ac -->
+<!-- src: crates/opt/llrm-transforms/src/combine_compares.rs sha256:68def8667b00b3d46f7da35da9a59d1d3ba8943aa21aa0edac864a1dfbb5a000 -->
 
 # combine_compares
 
@@ -20,7 +20,7 @@ its place as a `// OWED:` comment naming the C++ function, so the order
 stays LLVM's. The owed steps, with their exits:
 `foldICmpTruncWithTruncOrExt`,
 `foldICmpWithConstant`, `foldICmpUsingBoolRange`,
-`foldIsMultipleOfAPowerOfTwo`, `foldICmpBinOp`, `foldICmpInstWithConstant`,
+`foldIsMultipleOfAPowerOfTwo`, `foldICmpInstWithConstant`,
 `foldSignBitTest`, `foldOpIntoPhi`, `foldICmpInstWithConstantNotInt`,
 `foldICmpCommutative`, `foldCmpSelectOfConstants` and the select pair fold,
 the zero folds `foldIRemByPowerOfTwoToBitTest` and `stripNullTest`, and the

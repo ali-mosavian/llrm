@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 200 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 201 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -41,6 +41,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_gep_index | The rewrites of `visitGetElementPtrInst` that read its indices and flags (:3513-3705): a scaled single index, `inbounds` and `nuw` the object or the indices prove, a sum split in two GEPs, a select of constants, and `srem` as `urem`. |  | [combine_gep_index](combine_gep_index.md) |
 | combine_gep_merge | `visitGEPOfGEP`: a `getelementptr` of a `getelementptr` as one. |  | [combine_gep_merge](combine_gep_merge.md) |
 | combine_gep_phi | `foldGEPOfPhi`: a `getelementptr` of a phi of `getelementptr`s as a `getelementptr` of a phi of the one index they differ in. |  | [combine_gep_phi](combine_gep_phi.md) |
+| combine_icmp_binop | InstCombine's `foldICmpBinOp`: the compare of a binary operation, from [`InstCombineCompares.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L5301) at d1106deb71cc. | [`crate::combine_compares::visit_icmp`](combine_compares.md), between the `x >u INT_MAX` fold | [combine_icmp_binop](combine_icmp_binop.md) |
 | combine_icmp_const | `icmp (binop ...), C`: the folds of a compare of a binary operator with a constant, so far the `and` family. | `combine_compares::visit_icmp`. | [combine_icmp_const](combine_icmp_const.md) |
 | combine_icmp_logic | `foldBooleanAndOr`: an `and` or `or` of two `i1` compares, folded to one compare. | `visit_and` and `visit_or` (the bitwise forms). | [combine_icmp_logic](combine_icmp_logic.md) |
 | combine_loadstore | InstCombine's stores and allocas: the store that cannot matter is erased, the one that cannot execute stores poison; an alloca's count is an array type and a zero-size alloca is one at the top of the entry block. | `combine` (its `visit`). | [combine_loadstore](combine_loadstore.md) |
