@@ -1,0 +1,132 @@
+//! `combine_phi_args`: a phi of one operation is the operation of a phi.
+
+use llrm_mir::datalayout::DataLayout;
+
+use crate::combine::{combine_with, visit};
+use crate::testing::{parsed, printed};
+
+fn combined(text: &str) -> String {
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::parse("e-n8:16:32").expect("parses"), function, visit);
+    printed(&module)
+}
+
+/// clip_w: `phi i32` of `zext i1` kept an `icmp eq i32 %p, 0` per use where
+/// the pin's phi is of the `i1`s: inline cost 235 against the pin's 220.
+#[test]
+fn a_phi_of_zexts_of_booleans_is_a_zext_of_a_boolean_phi() {
+    let after = combined(
+        "define i1 @f(i1 %c, i1 %x, i1 %y) {
+b0:
+  br i1 %c, label %l, label %r
+l:
+  %a = zext i1 %x to i32
+  br label %m
+r:
+  %b = zext i1 %y to i32
+  br label %m
+m:
+  %p = phi i32 [ %a, %l ], [ %b, %r ]
+  %e = icmp eq i32 %p, 0
+  ret i1 %e
+}
+",
+    );
+    assert!(after.contains("phi i1"), "{after}");
+    assert!(!after.contains("phi i32") && !after.contains("icmp eq i32"), "{after}");
+}
+
+/// Three or more arms, zexts of one type and a constant that fits it: a
+/// narrow phi.
+#[test]
+fn zexts_and_a_fitting_constant_make_a_narrow_phi() {
+    let after = combined(
+        "define i32 @f(i2 %s, i8 %x, i8 %y) {
+b0:
+  switch i2 %s, label %d [ i2 0, label %l i2 1, label %r ]
+l:
+  %a = zext i8 %x to i32
+  br label %m
+r:
+  %b = zext i8 %y to i32
+  br label %m
+d:
+  br label %m
+m:
+  %p = phi i32 [ %a, %l ], [ %b, %r ], [ 7, %d ]
+  ret i32 %p
+}
+",
+    );
+    assert!(after.contains("phi i8 [ %x, %l ], [ %y, %r ], [ 7, %d ]"), "{after}");
+    assert!(after.contains("zext i8 %"), "{after}");
+}
+
+/// A constant past the narrow type, or a zext with a second user, stays.
+#[test]
+fn an_unfitting_constant_or_a_shared_zext_keeps_the_wide_phi() {
+    let wide = combined(
+        "define i32 @f(i2 %s, i8 %x, i8 %y) {
+b0:
+  switch i2 %s, label %d [ i2 0, label %l i2 1, label %r ]
+l:
+  %a = zext i8 %x to i32
+  br label %m
+r:
+  %b = zext i8 %y to i32
+  br label %m
+d:
+  br label %m
+m:
+  %p = phi i32 [ %a, %l ], [ %b, %r ], [ 300, %d ]
+  ret i32 %p
+}
+",
+    );
+    assert!(wide.contains("phi i32"), "{wide}");
+    let shared = combined(
+        "define i32 @f(i1 %c, i8 %x, i8 %y, ptr %g) {
+b0:
+  br i1 %c, label %l, label %r
+l:
+  %a = zext i8 %x to i32
+  store i32 %a, ptr %g
+  br label %m
+r:
+  %b = zext i8 %y to i32
+  br label %m
+m:
+  %p = phi i32 [ %a, %l ], [ %b, %r ]
+  ret i32 %p
+}
+",
+    );
+    assert!(shared.contains("phi i32"), "{shared}");
+}
+
+/// The same binary operator with one constant right operand moves past the
+/// phi.
+#[test]
+fn a_phi_of_adds_of_one_constant_is_an_add_of_a_phi() {
+    let after = combined(
+        "define i32 @f(i1 %c, i32 %x, i32 %y) {
+b0:
+  br i1 %c, label %l, label %r
+l:
+  %a = add i32 %x, 5
+  br label %m
+r:
+  %b = add i32 %y, 5
+  br label %m
+m:
+  %p = phi i32 [ %a, %l ], [ %b, %r ]
+  ret i32 %p
+}
+",
+    );
+    assert!(after.contains("phi i32 [ %x, %l ], [ %y, %r ]") && after.contains("add i32 %"), "{after}");
+    assert!(after.matches("add i32").count() == 1, "{after}");
+}
