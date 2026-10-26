@@ -88,3 +88,20 @@ def test_owner_deltas_list_only_the_owners_that_moved_new_and_gone_owners_count_
         "  w3: programs 4 -> 0 (-4), bytes +75 -> +0 (-75)",
         "  w6: programs 0 -> 1 (+1), bytes +0 -> +14 (+14)",
     ]
+
+
+def test_a_dist_built_under_a_shortened_name_is_reused_only_when_its_ok_names_the_full_sha(tmp_path):
+    """w9 built sbp-36ad593b8; looking only for sbp-<full> queued a second 40-minute build of the same commit."""
+    full = "36ad593b8f77b17352ad5e1f9df4191f599fd8ab"
+    (tmp_path / "sbp-36ad593b8" / "dist").mkdir(parents=True)
+    (tmp_path / "sbp-36ad593b8" / "dist" / "llrm-c").write_text("x")
+    (tmp_path / "sbp-36ad593b8" / "ok").write_text(f"sha: {full}\n")
+    assert readiness.existing_dist(full, tmp_path) == tmp_path / "sbp-36ad593b8" / "dist"
+    (tmp_path / "sbp-36ad593b8" / "ok").write_text("sha: 0000000000000000000000000000000000000000\n")
+    assert readiness.existing_dist(full, tmp_path) is None
+
+
+def test_attribution_uses_the_sizes_of_the_commit_the_ablation_was_taken_on():
+    new, old = {"a.c": 90, "b.c": 0}, {"a.c": 100, "b.c": 50}
+    assert readiness.ablation_baseline(new) == {"a.c": 90}
+    assert readiness.ablation_baseline(new, lambda: old) == old

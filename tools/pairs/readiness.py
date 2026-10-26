@@ -30,9 +30,20 @@ def git(*args: str) -> str:
     return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
 
 
+def existing_dist(full: str, scratch: Path) -> Path | None:
+    """A dist of `full` another session built under a shortened name (sbp-36ad593b8): its `ok` names the full sha it was built from, which is the proof; the directory name alone is not."""
+    for name in (full, full[:10], full[:9], full[:8]):
+        ok = scratch / f"sbp-{name}" / "ok"
+        if ok.is_file() and (scratch / f"sbp-{name}" / "dist" / "llrm-c").is_file() and f"sha: {full}" in ok.read_text().splitlines():
+            return scratch / f"sbp-{name}" / "dist"
+    return None
+
+
 def dist_of(sha: str, scratch: Path) -> Path:
     """`SCRATCH/sbp-<full sha>/dist`, built by pair_build.sh if absent (it verifies and keeps one that is there)."""
     full = git("rev-parse", sha)
+    if found := existing_dist(full, scratch):
+        return found
     done = subprocess.run(["bash", str(ROOT / "tools/pairs/pair_build.sh"), str(scratch), full], cwd=ROOT, capture_output=True, text=True)
     if done.returncode:
         sys.exit(f"readiness: no dist for {full[:10]}: {(done.stderr or done.stdout).strip()[-300:]}")
@@ -132,6 +143,11 @@ def flag_first(raw: dict) -> dict[str, dict[str, int | None]]:
     return {flag: {name: row[flag] for name, row in raw.items() if flag in row} for flag in flags}
 
 
+def ablation_baseline(new_sizes: dict, ablation_sizes=None) -> dict:
+    """The sizes attribution subtracts the ablated sizes from: those of the commit the ablation was taken on (`ablation_sizes()`), else the new commit's. Against another commit's, a program that moved reads as a flag's gain: w14 showed +6 programs (+130 B) that were not there."""
+    return {name: size for name, size in (ablation_sizes() if ablation_sizes else new_sizes).items() if size}
+
+
 def by_owner(larger: list[tuple[str, int, int]], rules: list[dict], ablation: dict[str, str]) -> dict[str, list[tuple[str, int, int]]]:
     """owner -> its growers, the largest delta first; blank owners under `(none)`."""
     groups: dict[str, list[tuple[str, int, int]]] = {}
@@ -189,6 +205,7 @@ def main() -> int:
     parser.add_argument("--no-clocks", action="store_true")
     parser.add_argument("--previous", type=Path, help="the OUT.owners.json of an earlier run: the report ends with the per-owner delta (written beside every --out)")
     parser.add_argument("--causes", type=Path, help="m16burndown_causes.toml: fills the owner column and groups the larger lists by owner")
+    parser.add_argument("--ablation-sha", help="the commit the --ablation file was taken on (default: NEW): attribution subtracts its sizes, so against another commit's sizes every program that moved reads as a flag's gain")
     parser.add_argument("--ablation", type=Path, help="m16burndown's ablation json (flag -> program -> bytes, plus base and tip): the flag owner for a program the causes file does not name")
     parser.add_argument("--scratch", type=Path, default=Path.home() / "scratch")
     args = parser.parse_args()
@@ -206,7 +223,7 @@ def main() -> int:
         if args.ablation:
             from m16burndown import attribute  # noqa: PLC0415
 
-            ablation = attribute({k: v for k, v in size_table(new_dist, "-Os", cache).items() if v}, flag_first(json.loads(args.ablation.read_text())))
+            ablation = attribute(ablation_baseline(size_table(new_dist, "-Os", cache), (lambda: size_table(dist_of(args.ablation_sha, args.scratch), "-Os", cache)) if args.ablation_sha else None), flag_first(json.loads(args.ablation.read_text())))
         owners = (tomllib.loads(args.causes.read_text()).get("program", []), ablation)
     lines = report(header, sized, clocks, tiny(base_clocks) if base_clocks else set(), owners)
     if owners and "-Os" in sized:
