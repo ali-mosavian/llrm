@@ -427,3 +427,15 @@ def test_each_offender_is_named_by_the_tests_that_failed_on_its_own_probe_with_i
     )
     assert found == ["1", "2"] and own == {"1": ["unit llrm-x::a"], "2": ["unit llrm-x::b"]}, (found, own)
     assert reasons == {"1": "panic of a on #1", "2": "panic of b on #2"}, reasons
+
+
+def test_an_alone_check_runs_the_lib_tests_of_the_crates_that_depend_on_the_one_the_pr_changes(tmp_path, monkeypatch):
+    """#4927 changed llrm-transforms, passed alone (only llrm-transforms ran), and failed four llrm-qb tests in the batch: a refusal at 10:24 and a clean precheck for the same PR."""
+    repo, head = alone_scratch(tmp_path)
+    smoke = ps.parity_smoke_module()
+    ran = []
+    monkeypatch.setattr(smoke, "workspace_graph", lambda root: ({}, {"llrm-qb": {"llrm-transforms"}, "llrm-transforms": set(), "llrm-nib": set()}))
+    monkeypatch.setattr(smoke, "touched_packages", lambda files, packages, root: {"llrm-transforms"})
+    monkeypatch.setattr(smoke, "dependants_lib_failures", lambda packages, **_: ran.append(set(packages)) or set())
+    ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda f: set())
+    assert ran and {"llrm-transforms", "llrm-qb"} <= ran[0] and "llrm-nib" not in ran[0], ran

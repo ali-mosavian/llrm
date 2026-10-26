@@ -1063,9 +1063,10 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
         return [f"scanner red alone: {', '.join(red[:5])}"]
     # the unit tests of the crates the PR changes, less what the base fails: round 3 died on llrm-nib::test_pipeline::... and no PR was blamed
     def lib_failures(changed: list[str]) -> set[str]:
-        packages, _ = smoke.workspace_graph(cwd)
+        packages, graph = smoke.workspace_graph(cwd)
         touched = smoke.touched_packages(changed, packages, cwd)
-        return smoke.dependants_lib_failures(touched | SOURCE_SCANNING_PACKAGES, root=cwd, run=_in_target(target, "lib")) if touched else set()
+        # the crates that depend on a touched one too: #4927 changed llrm-transforms, passed alone, and failed four llrm-qb tests in the batch
+        return smoke.dependants_lib_failures(smoke.dependants(touched, graph) | SOURCE_SCANNING_PACKAGES, root=cwd, run=_in_target(target, "lib")) if touched else set()
 
     failed = (units or lib_failures)(files)
     # a listed test that now passes is the PR's to unlist: the gate refuses the batch for it
