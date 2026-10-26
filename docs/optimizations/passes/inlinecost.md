@@ -88,8 +88,9 @@ each site's cost and threshold beside the existing decision; with
   simplified again with the call inlined, is smaller by the target's size
   cost (`walk.rs`, callers of at most 300 instructions; the sites of a
   private callee that dies with its last call are tried together, its body
-  credited). The pin's cost does not follow a load through a pointer
-  argument, so it never sees the loop or the arithmetic fold.
+  credited; so are the sites of a private callee called only from this
+  caller, whatever they pass). The pin's cost does not follow a load through
+  a pointer argument, so it never sees the loop or the arithmetic fold.
 - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
   attribute decision.
 - D7: the minsize loop penalty counts retreating-edge headers, not
