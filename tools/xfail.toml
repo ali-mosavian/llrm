@@ -117,3 +117,9 @@ id = "unit llrm-qb::a_power_of_a_variable_base_covers_the_whole_domain"
 issue = 2848
 owner = "alim"
 date = "2026-10-27"
+[[xfail]]
+id = "integration header_copy::test_a_register_only_a_guarded_loop_uses_is_saved_after_the_early_return"
+issue = 2194
+owner = "w5"
+date = "2026-11-02"
+why = "recchop shrink-wrap: main saves 2 registers before the early return, tip 4 (the pin 4); static instrs m16 -Os main 44 / tip 49, -O2 48 / 51; m32 -O1 -ftree-ch pushes main 2 / tip 4"
