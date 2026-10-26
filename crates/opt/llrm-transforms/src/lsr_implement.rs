@@ -572,14 +572,14 @@ impl Implement<'_, '_> {
             // DEVIATE: a loop's exit phi with one input sits in a block of its
             // own here, where LLVM's sits in the exit block with the paths
             // that skip the loop, so the edge is split and the code lands
-            // there. The code goes ahead of this block's end, not into the
-            // loop, and the phi's readers read it (#4924).
+            // there. The code goes at the top of this block, not into the loop,
+            // and the phi's readers read it (#4924).
             let parent = self.function.parent(pn).expect("a placed phi");
             if count == 1
                 && self.body.contains(&bb)
                 && !self.body.contains(&parent)
                 && self.function.predecessors(parent).len() == 1
-                && let Some(exit) = self.function.terminator(parent)
+                && let Some(&exit) = crate::lcssa::operations(self.function, parent).first()
                 && let Some(result) = self.function.instruction(pn).result
             {
                 let mut full = self.expand(lu, lf, f, exit);
