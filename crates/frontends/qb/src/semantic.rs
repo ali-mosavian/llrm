@@ -7922,6 +7922,24 @@ impl Compiler {
             let result = self.convert(Operand::Value(byte), BYTE, INTEGER)?;
             return Ok(Some((result, INTEGER)));
         }
+        if intrinsic.lowering == Lowering::Pmap {
+            // PMAP(expr, funct): BC passes the SINGLE and the function code and
+            // reads the result back through the pointer in AX, as RND does.
+            let (value, value_type) = self.expression(&arguments[0])?;
+            let value = self.stored_float_argument(value, value_type, SINGLE)?;
+            let (function, function_type) = self.expression(&arguments[1])?;
+            let function = self.convert(function, function_type, INTEGER)?;
+            let pointer_type = self.pointer_type(SINGLE);
+            let pointer = self.value(pointer_type);
+            self.emit_runtime_call("B$PMAP", vec![pointer], vec![value, function]);
+            let result = self.value(SINGLE);
+            self.emit(
+                "load",
+                vec![result],
+                vec![Operand::Indirect { base: pointer, offset: 0, type_id: SINGLE, volatile: false, inbounds: false }],
+            );
+            return Ok(Some((Operand::Value(result), SINGLE)));
+        }
         if intrinsic.lowering == Lowering::Point {
             let (x, x_type) = self.expression(&arguments[0])?;
             let (y, y_type) = self.expression(&arguments[1])?;
