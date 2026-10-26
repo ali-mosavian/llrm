@@ -433,7 +433,7 @@ fn use_queries_agree_with_a_scan_of_the_live_nodes() {
     let a = input(&mut dag, 40);
     let twice = dag.get_node(ISD::Add, EVT::I32, &[a, a]);
     dag.set_root(twice);
-    let mut adapter = DagisAdapter::new(&mut dag);
+    let adapter = DagisAdapter::new(&mut dag);
     let pin_a = llrm_dagisel::dag::SDValue::new(a.node, 0);
     assert!(adapter.has_live_users(a.node));
     assert!(adapter.has_n_uses_of_value(pin_a, 2));
@@ -462,7 +462,7 @@ fn pin_opcode_and_the_use_queries_allocate_nothing() {
     let a = input(&mut dag, 40);
     let twice = dag.get_node(ISD::Add, EVT::I32, &[a, a]);
     dag.set_root(twice);
-    let mut adapter = DagisAdapter::new(&mut dag);
+    let adapter = DagisAdapter::new(&mut dag);
     let pin_a = llrm_dagisel::dag::SDValue::new(a.node, 0);
     let (answers, made) = llrm_support::alloc_count::counted(|| {
         (

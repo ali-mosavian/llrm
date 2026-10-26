@@ -103,7 +103,7 @@ fn all_legal_sizes_its_visited_set_once() {
     }
     dag.set_root(level[0]);
     assert!(dag.node_count() > 500, "premise: a DAG of several hundred nodes");
-    let mut legalizer = TypeLegalizer::new(&mut dag, &tli);
+    let legalizer = TypeLegalizer::new(&mut dag, &tli);
     let (legal, made) = llrm_support::alloc_count::counted(|| legalizer.all_legal());
     assert!(legal, "premise: nothing illegal is reachable");
     assert!(made <= 6, "{made} allocations to visit 500 nodes");
