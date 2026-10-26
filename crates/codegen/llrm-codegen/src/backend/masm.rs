@@ -1945,10 +1945,16 @@ pub fn line_starts(
         .collect())
 }
 
+/// A block's label: its offset, or for a block made after layout (an edge's
+/// landing, `(entry + 1) << 32` and up) the two halves of its id, which stays
+/// readable instead of ten digits (`L0_1_1`, not `L0_4294967297`).
 pub fn label(
     number: usize,
     at: i64,
 ) -> String {
+    if at >= 1 << 32 {
+        return format!("L{number}_{}_{}", at >> 32, at & 0xffff_ffff);
+    }
     format!("L{number}_{at}")
 }
 
