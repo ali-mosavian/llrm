@@ -434,8 +434,8 @@ def test_an_alone_check_runs_the_lib_tests_of_the_crates_that_depend_on_the_one_
     repo, head = alone_scratch(tmp_path)
     smoke = ps.parity_smoke_module()
     ran = []
-    monkeypatch.setattr(smoke, "workspace_graph", lambda root: ({}, {"llrm-qb": {"llrm-transforms"}, "llrm-transforms": set(), "llrm-nib": set()}))
+    monkeypatch.setattr(smoke, "workspace_graph", lambda root: ({}, {"llrm-qb": {"llrm-transforms"}, "llrm-x86": {"llrm-transforms"}, "llrm-transforms": set(), "llrm-nib": set()}))
     monkeypatch.setattr(smoke, "touched_packages", lambda files, packages, root: {"llrm-transforms"})
     monkeypatch.setattr(smoke, "dependants_lib_failures", lambda packages, **_: ran.append(set(packages)) or set())
     ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda f: set())
-    assert ran and {"llrm-transforms", "llrm-qb"} <= ran[0] and "llrm-nib" not in ran[0], ran
+    assert ran and {"llrm-transforms", "llrm-qb"} <= ran[0] and not {"llrm-nib", "llrm-x86"} & ran[0], ran  # qb depends on the change; nib does not; x86 does, but only qb, c and nib are probed
