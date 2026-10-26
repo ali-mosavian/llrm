@@ -209,12 +209,6 @@ pub fn machine_with<'a>(
         // (X86FlagsCopyLowering, every level).
         Box::new(crate::backend::flagscopy::FlagsCopy),
         Box::new(phielim::PhiElimination),
-        // Before any value is placed: the pin's pre-RA scheduler, bottom-up by
-        // pressure.
-        Box::new(crate::backend::machinesched::MachineScheduler {
-            classes: Rc::clone(classes),
-            segments: segments.clone(),
-        }),
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
         Box::new(crate::backend::fixupsetcc::FixupSetCc),
@@ -237,6 +231,12 @@ pub fn machine_with<'a>(
             },
         }),
         Box::new(coalesce::Coalescer { size: target.size, ..coalesce::Coalescer::new(None, segments, classes) }),
+        // After the coalescer, before allocation, as the pin orders them: the
+        // pre-RA scheduler, bottom-up by pressure.
+        Box::new(crate::backend::machinesched::MachineScheduler {
+            classes: Rc::clone(classes),
+            segments: segments.clone(),
+        }),
         Box::new(
             allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments, classes)?
                 .with_saved(registers.saved.iter().map(|(whole, _)| *whole).collect()),
