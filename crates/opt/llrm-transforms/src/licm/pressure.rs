@@ -15,8 +15,7 @@
 //! each, the most-accessed locations first. Floating values are not counted:
 //! they live in the target's float file.
 
-use std::collections::HashSet;
-
+use llrm_mir::dense::IdSet;
 use llrm_mir::module::{InstId, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{self, Outer};
@@ -29,7 +28,7 @@ pub struct Pressure {
     limit: usize,
     phis: usize,
     /// The values defined outside the loop that it reads.
-    held: HashSet<ValueId>,
+    held: IdSet<ValueId>,
 }
 
 impl Pressure {
@@ -43,7 +42,8 @@ impl Pressure {
         if limit == 0 {
             return None;
         }
-        let mut reads: HashSet<ValueId> = HashSet::new();
+        let mut reads = IdSet::<ValueId>::new();
+        let mut order: Vec<ValueId> = Vec::new();
         let mut phis = 0;
         let header = llrm_analysis::cfg::block(ctx.loop_.header);
         let mut count = |inst: InstId| {
@@ -51,7 +51,9 @@ impl Pressure {
                 if let Operand::Value(value) = *operand
                     && counted(unit, value)
                 {
-                    reads.insert(value);
+                    if reads.insert(value) {
+                        order.push(value);
+                    }
                 }
             }
         };
@@ -75,8 +77,10 @@ impl Pressure {
                 count(inst);
             }
         }
-        let held: HashSet<ValueId> =
-            reads.into_iter().filter(|&value| ctx.is_loop_invariant(Operand::Value(value))).collect();
+        let mut held = IdSet::<ValueId>::new();
+        for value in order.into_iter().filter(|&value| ctx.is_loop_invariant(Operand::Value(value))) {
+            held.insert(value);
+        }
         Some(Self { limit, phis, held })
     }
 
