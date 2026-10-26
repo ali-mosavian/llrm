@@ -130,3 +130,21 @@ issue = 4903
 owner = "w3"
 date = "2026-11-02"
 why = "mandel.nib -O2 m16 -ftree-ch: main ends on inc; jne, tip on inc; cmp 32 (same LSR count-to-zero loss as #4899)"
+[[xfail]]
+id = "integration demanded_bits::the_stages_of_a_bit_reversal_a_masked_byte_never_reads_are_not_computed"
+issue = 4919
+owner = "unassigned"
+date = "2026-11-02"
+why = "rev32(s)&255 at -O1/-O2: main 23 instrs, tip 31, pin 18; first bad cf87c539b8"
+[[xfail]]
+id = "integration loop_rotation::test_a_latch_that_ends_in_a_jump_elsewhere_is_not_priced_as_falling_through"
+issue = 4920
+owner = "w5"
+date = "2026-11-02"
+why = "x_binsearch -O2 m32: main 2 jumps/82 instrs, tip 6/140, pin 6/124; first bad 1e0ac1b1ff"
+[[xfail]]
+id = "integration coalesce_hot_copies::test_the_join_of_a_loop_variable_takes_its_register_not_the_registers_of_one_arm"
+issue = 4921
+owner = "w5"
+date = "2026-11-02"
+why = "binary search -O1: tip 2 jmp/26 instrs, main 1/26, pin 1/22; first bad a94491462c"
