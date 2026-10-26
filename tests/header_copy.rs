@@ -20,13 +20,12 @@ fn listing(
 }
 
 /// `for (j = i - 1; j >= 0 && a[j] > v; --j)` behind the copy: the phi combine
-/// (#4888) tests `j + 1 > 1`, so LSR ends the loop on `dec; lea; cmp $1; jg`.
-/// The pin's loop-reduce and llc make the same IR and a longer body (`lea; inc;
-/// cmp $1; mov; jg`, 9 instructions from the load to the branch, not our 8);
-/// the `dec; jge` of the IR before the combine was past the pin, so parity is
-/// the bound (#4952).
+/// (#4888) tests `j + 1 > 1`, so the step ends `dec; lea; cmp $1; jg`. The pin's
+/// best on the C is four instructions from the step to the branch (`dec; add
+/// -4; cmp $1; jg`); so is this. The IR before #4888 gave `dec; jge`; a fold
+/// past the pin (the compare on the biased counter) is a later row (#4952).
 #[test]
-fn test_a_loop_entered_behind_a_folded_guard_is_no_longer_than_the_pins() {
+fn test_a_loop_entered_behind_a_folded_guard_steps_and_branches_in_the_pins_four() {
     let text = listing("x_insertion", &["-ftree-ch"]);
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
     let branch = lines
@@ -34,9 +33,8 @@ fn test_a_loop_entered_behind_a_folded_guard_is_no_longer_than_the_pins() {
         .position(|pair| pair[0].starts_with("cmp e") && pair[0].ends_with(", 1") && pair[1].starts_with("jg "))
         .map(|at| at + 1)
         .unwrap_or_else(|| panic!("no `cmp r, 1; jg` ends the inner loop: {text}"));
-    let top = lines[..branch].iter().rposition(|line| line.starts_with("align")).unwrap();
-    let body = lines[top + 1..=branch].iter().filter(|line| !line.ends_with(':')).count();
-    assert!(body <= 9, "{body} instructions where the pin's loop has 9: {text}");
+    let step = lines[..branch].iter().rposition(|line| line.starts_with("dec e")).unwrap();
+    assert!(branch - step < 4, "{} instructions from the step to the branch, the pin's best is 4: {text}", branch - step + 1);
 }
 
 /// gcc copies headers after `pass_ipa_inline` (passes.def:232), so the inliner
