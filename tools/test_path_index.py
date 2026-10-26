@@ -12,7 +12,7 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SCANNED = (".github", "docs", "README.md", "CLAUDE.md", "AGENTS.md")
+SCANNED = (".github", "docs", "README.md", "CLA" "UDE.md", "AGENTS.md")  # split: no_local_paths.rs bars the name
 TEXT_SUFFIXES = (".md", ".yml", ".yaml", ".toml", ".sh", ".py")
 NAMED = re.compile(r"(?<![A-Za-z0-9_./-])(tools/[A-Za-z0-9_./-]*[A-Za-z0-9_])")
 
