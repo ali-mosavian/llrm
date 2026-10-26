@@ -2,6 +2,12 @@
 # ids: "unit <crate>::<test>" (cargo lib test) and "run <program name>" (tests/run).
 
 [[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_a_selector_the_loop_never_changes_is_loaded_before_it"
+issue = 4958
+owner = "llrm-w3"
+date = "2026-11-02"
+why = "qbdemo FRACTALEFFECT: the loop-invariant selector is reloaded every trip as `mov cx,[bp-20]; mov es,cx` (parity) or `mov es,[bp-20]` (loaded_segments); the test only matched the direct form"
+[[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_a_poke_after_a_call_that_never_runs_def_seg_keeps_its_segment"
 issue = 3994
 owner = "funcattrs-port"
