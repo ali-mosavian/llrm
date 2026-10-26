@@ -32,6 +32,13 @@ use crate::support::hash::IndexMap;
 thread_local! {
     /// The widest each value is named at, for the body being printed.
     static WIDEST: std::cell::RefCell<std::collections::BTreeMap<u32, u32>> = Default::default();
+    /// The displacement of the first incoming argument from BP: the saved
+    /// frame register and the return address (8 near in m32, 4 near in m16).
+    static ARGUMENTS_AT: std::cell::Cell<i64> = const { std::cell::Cell::new(8) };
+    /// The local frame objects of the body being printed, by the slot they
+    /// were laid out in: first byte and one past the last, in BP-relative
+    /// displacements. Their position in this list is the `%stack.N`.
+    static LOCALS: std::cell::RefCell<Vec<(i64, i64, i64)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// A value as an operand: whole, or its low 16 or 8 bits where it is read
@@ -98,10 +105,15 @@ fn cell(
     let addr = mem.addr.as_ref();
     match addr.map(|a| a.space) {
         Some(Space::Frame) if mem.base.is_none() && mem.index.is_none() => {
-            let at = addr.map_or(0, |a| a.disp) + mem.offset - 8;
-            if at < 0 {
-                return Err("a local frame cell".to_owned());
+            let disp = addr.map_or(0, |a| a.disp) + mem.offset;
+            if disp < 0 {
+                let home = addr.and_then(|a| a.slot_home()).unwrap_or(disp);
+                let found =
+                    LOCALS.with(|l| l.borrow().iter().position(|(h, ..)| *h == home).map(|k| (k, l.borrow()[k].1)));
+                let Some((object, start)) = found else { return Err("a local frame cell".to_owned()) };
+                return Ok(format!("%stack.{object}, 1, $noreg, {}, $noreg", disp - start));
             }
+            let at = disp - ARGUMENTS_AT.with(|a| a.get());
             Ok(format!("%fixed-stack.{}, 1, $noreg, {}, $noreg", at / 4, at % 4))
         }
         Some(Space::Segment) => {
@@ -219,11 +231,14 @@ fn instruction(
             immediate(adjust)?
         )
         .unwrap(),
-        ("push", None, [Loc::Held(s)]) if s.width == 4 => {
-            writeln!(out, "    PUSH32r {}, implicit-def $esp, implicit $esp", vreg(s)?).unwrap()
+        ("push", None, [Loc::Held(s)]) if matches!(s.width, 2 | 4) => {
+            writeln!(out, "    PUSH{}r {}, implicit-def $esp, implicit $esp", bits(s.width)?, vreg(s)?).unwrap()
         }
         ("push", None, [Loc::Imm(i)]) if i.address.is_none() => {
             writeln!(out, "    PUSH32i {}, implicit-def $esp, implicit $esp", immediate(i)?).unwrap()
+        }
+        ("push", None, [Loc::Imm(i)]) => {
+            writeln!(out, "    PUSH32i {}, implicit-def $esp, implicit $esp", symbolic(i, symbols)?).unwrap()
         }
         ("call", None, []) if !what.indirect => {
             let callee = what.target.unwrap_or_default();
@@ -278,6 +293,11 @@ fn instruction(
         }
         ("lea", Some(Loc::Held(d)), [Loc::Mem(m)]) => {
             writeln!(out, "    {} = LEA{}r {}", vreg(d)?, bits(d.width)?, cell(m, symbols)?).unwrap()
+        }
+        ("lea", Some(Loc::Held(d)), [Loc::Address(a)]) => {
+            let mut place = Mem::new(a.addr, 1);
+            place.offset = a.offset;
+            writeln!(out, "    {} = LEA{}r {}", vreg(d)?, bits(d.width)?, cell(&place, symbols)?).unwrap()
         }
         (op @ ("neg" | "inc" | "dec" | "not"), Some(Loc::Held(d)), [Loc::Held(s)]) => {
             let flags = if op == "not" { "" } else { ", implicit-def dead $eflags" };
@@ -335,7 +355,7 @@ fn instruction(
             vreg(a)?
         )
         .unwrap(),
-        _ => return Err(format!("`{name}` with {} destinations and {} sources", what.dests.len(), what.sources.len())),
+        _ => return Err(format!("`{name}` with {} destinations and {} sources: {:?} <- {:?}", what.dests.len(), what.sources.len(), what.dests, what.sources)),
     }
     Ok(())
 }
@@ -356,6 +376,55 @@ pub fn mir(
     let mut indexed = BTreeSet::new();
     let value_widths = widths_of(body)?;
     WIDEST.with(|w| *w.borrow_mut() = value_widths.clone());
+    let first_argument = body
+        .insns()
+        .iter()
+        .filter_map(|one| one.what.as_ref())
+        .flat_map(|w| w.dests.iter().chain(&w.sources))
+        .filter_map(|loc| match loc {
+            Loc::Mem(m) if m.base.is_none() && m.index.is_none() => {
+                m.addr.filter(|a| a.space == Space::Frame).map(|a| a.disp + m.offset)
+            }
+            _ => None,
+        })
+        .filter(|at| *at >= 0)
+        .min()
+        .unwrap_or(8);
+    ARGUMENTS_AT.with(|a| a.set(first_argument));
+    let mut locals: Vec<(i64, i64, i64)> = Vec::new();
+    for loc in body.insns().iter().filter_map(|one| one.what.as_ref()).flat_map(|w| w.dests.iter().chain(&w.sources)) {
+        let named;
+        let m = match loc {
+            Loc::Mem(m) => m,
+            Loc::Address(a) => {
+                named = {
+                    let mut m = Mem::new(a.addr, 1);
+                    m.offset = a.offset;
+                    m.width = 1;
+                    m
+                };
+                &named
+            }
+            _ => continue,
+        };
+        let Some(a) = m.addr.filter(|a| a.space == Space::Frame && m.base.is_none() && m.index.is_none()) else {
+            continue;
+        };
+        let disp = a.disp + m.offset;
+        if disp >= 0 {
+            continue;
+        }
+        let home = a.slot_home().unwrap_or(disp);
+        let end = disp + i64::from(m.width);
+        match locals.iter_mut().find(|(h, ..)| *h == home) {
+            Some(known) => {
+                known.1 = known.1.min(disp);
+                known.2 = known.2.max(end);
+            }
+            None => locals.push((home, disp, end)),
+        }
+    }
+    LOCALS.with(|l| *l.borrow_mut() = locals);
     // A value read as its low byte needs a register that has one.
     let byte_read: BTreeSet<u32> = body
         .insns()
@@ -488,8 +557,23 @@ pub fn mir(
         };
         writeln!(out, "  - {{ id: {v}, class: {class} }}").unwrap();
     }
-    writeln!(out, "fixedStack:\n  - {{ id: 0, offset: 0, size: 4, alignment: 4, isImmutable: true }}\nbody: |")
-        .unwrap();
+    let objects = text
+        .match_indices("%fixed-stack.")
+        .filter_map(
+            |(at, home)| text[at + home.len()..].split(|c: char| !c.is_ascii_digit()).next()?.parse::<usize>().ok(),
+        );
+    writeln!(out, "fixedStack:").unwrap();
+    for id in 0..=objects.max().unwrap_or(0) {
+        writeln!(out, "  - {{ id: {id}, offset: {}, size: 4, alignment: 4, isImmutable: true }}", id * 4).unwrap();
+    }
+    let locals = LOCALS.with(|l| l.borrow().clone());
+    if !locals.is_empty() {
+        writeln!(out, "stack:").unwrap();
+        for (id, (_, start, end)) in locals.iter().enumerate() {
+            writeln!(out, "  - {{ id: {id}, offset: {start}, size: {}, alignment: 4 }}", end - start).unwrap();
+        }
+    }
+    writeln!(out, "body: |").unwrap();
     out.push_str(&text);
     writeln!(out, "...").unwrap();
     Ok(out)
@@ -600,6 +684,57 @@ mod tests {
         let body = LirBody::new("arg", 0, blocks, IndexMap::default(), IndexMap::default());
         let text = mir(&body, &IndexMap::default()).expect("prints");
         assert!(text.contains(":: (load (s32) from %fixed-stack.0)"), "{text}");
+    }
+
+    /// m16 passes its stack arguments at BP+4 (not +8) and a function may read
+    /// several: the printer refused the first as "a local frame cell" and
+    /// declared one fixed-stack object for all.
+    #[test]
+    fn test_stack_arguments_of_an_m16_frame_are_each_a_fixed_stack_object() {
+        use llrm_lir::{Addr, Mem, Space};
+        let arg = |disp| Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, disp)), 4));
+        let first = insn("mov", Operation::Move, vec![held(1)], vec![arg(4)]);
+        let second = insn("mov", Operation::Move, vec![held(2)], vec![arg(8)]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![first, second, ret]))];
+        let body = LirBody::new("args", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("MOV32rm %fixed-stack.0,"), "{text}");
+        assert!(text.contains("MOV32rm %fixed-stack.1,"), "{text}");
+        assert!(text.contains("id: 1, offset: 4"), "{text}");
+    }
+
+    /// A local array's cells (`[bp-8]`, `[bp-4]`) were refused as "a local
+    /// frame cell", so no function with a stack object reached the pin.
+    #[test]
+    fn test_local_frame_cells_are_stack_objects() {
+        use llrm_lir::{Addr, Mem, Space};
+        let cell = |disp| Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, disp).in_slot(-8)), 4));
+        let store = insn("mov", Operation::Move, vec![cell(-8)], vec![held(1)]);
+        let load = insn("mov", Operation::Move, vec![held(2)], vec![cell(-4)]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![store, load, ret]))];
+        let body = LirBody::new("local", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("stack:\n  - { id: 0, offset: -8, size: 8"), "{text}");
+        assert!(text.contains("MOV32mr %stack.0, 1, $noreg, 0, $noreg, %1"), "{text}");
+        assert!(text.contains("MOV32rm %stack.0, 1, $noreg, 4, $noreg"), "{text}");
+    }
+
+    /// A local array's address (`lea ax, [bp-98]`) and a 16-bit push were
+    /// refused, so no m16 call taking an array reached the pin.
+    #[test]
+    fn test_a_frame_address_and_a_word_push_print() {
+        use llrm_lir::{Addr, AddressRef, Mem, Space};
+        let place = Addr::new(Space::Frame, -8).in_slot(-8);
+        let store = insn("mov", Operation::Move, vec![Loc::Mem(Mem::new(Some(place), 4))], vec![held(1)]);
+        let lea = insn("lea", Operation::Move, vec![held(2)], vec![Loc::Address(AddressRef::new(Some(place)))]);
+        let push = insn("push", Operation::Push, vec![], vec![held(2)]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![store, lea, push, ret]))];
+        let body = LirBody::new("addr", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("LEA32r %stack.0, 1, $noreg, 0, $noreg"), "{text}");
     }
 
     #[test]
