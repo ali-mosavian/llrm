@@ -82,3 +82,16 @@ fn an_environment_placeholder_is_filled_when_set_and_named_when_not() {
     assert_eq!(with_environment("-I{env:LLRM_CC_TEST_DIR}/x"), "-I/inc/x");
     assert!(unset(&with_environment("{env:LLRM_CC_TEST_UNSET}")).ends_with("LLRM_CC_TEST_UNSET"));
 }
+
+/// `-mabi=regparm3` reached clang ("unsupported option '-mabi=' for target
+/// i386-unknown-unknown-code16") instead of the backend, so the Nib interop
+/// example could not link a C library in the Nib program's convention.
+#[test]
+fn mabi_goes_to_the_backend_after_the_tables_own() {
+    let table = targets(TARGETS).unwrap();
+    let one = built("-mabi=regparm3 x.c");
+    assert!(one.clang.is_empty());
+    let args = llc_args(&table["x86_16-dos"], &one, Path::new("x.ll"), Path::new("x.obj"));
+    let last = args.iter().rposition(|arg| arg.starts_with("-mabi=")).unwrap();
+    assert_eq!(args[last], "-mabi=regparm3");
+}

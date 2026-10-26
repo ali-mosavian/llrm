@@ -20,7 +20,7 @@ toolchain=${TOOLCHAIN:-$HOME/work/other/d32x/toolchains/native/bin}
 # The ABI the program is built for is the runtime's and the foreign C's too: their calls cross it.
 abi=""
 for flag in ${NIB_FLAGS:-}; do
-    case $flag in -mabi=*) abi="$abi $flag" ;; esac
+    case $flag in -mabi=*) abi="$abi $flag"; abi_name=${flag#-mabi=} ;; esac
 done
 # The instruction selector a run asks for (LLRM_ISEL=dag): the program, the foreign C and the runtime go through it.
 isel=${LLRM_ISEL:+--isel=$LLRM_ISEL}
@@ -40,7 +40,12 @@ for part in "$@"; do
     case $part in
     *.asm) "$toolchain/jwasm" -q -c -Cp -Zg $omf $defines "-Fo$work/$name.obj" "$part" ;;
     # shellcheck disable=SC2086
-    *) "$bin/llrm-c" $isel "$part" -I "$work" -o "$work/$name.obj" "$level" $abi >/dev/null ;;
+    # NIB_CC=llrm-cc compiles the foreign C by clang (LLRM_CLANG_M16 names the i8086 build).
+    *) if [ "${NIB_CC:-}" = llrm-cc ]; then
+        LLRM_CC_TARGET=x86_16-dos "$bin/llrm-cc" -c "$part" -I "$work" -o "$work/$name.obj" "$level" -mabi="${abi_name:-regparm3}" >/dev/null
+    else
+        "$bin/llrm-c" $isel "$part" -I "$work" -o "$work/$name.obj" "$level" $abi >/dev/null
+    fi ;;
     esac
     objects="$objects file $work/$name.obj"
     used="$used --used-by $work/$name.obj"

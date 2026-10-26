@@ -229,6 +229,10 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
                 other => other.to_owned(),
             };
             build.clang.push(flag.to_owned());
+        } else if flag.starts_with("-mabi=") {
+            // The backend's convention (clang's own -mabi is for other
+            // targets); it follows the table's.
+            build.llc.push(flag.to_owned());
         } else if flag == "-funroll-loops" || flag == "-fno-unroll-loops" {
             build.clang.push(flag.to_owned());
             build.llc.push(flag.to_owned());
