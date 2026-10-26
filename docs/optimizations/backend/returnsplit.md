@@ -1,5 +1,9 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/returnsplit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/returnsplit.rs); edit the header, not this file.
+<<<<<<< HEAD
 <!-- src: crates/codegen/llrm-codegen/src/backend/returnsplit.rs sha256:aa4809a5c62f3d2ccdb48fbacdc2c4c39795d90b7179e9bc20e62fad88beb538 -->
+=======
+<!-- src: crates/codegen/llrm-codegen/src/backend/returnsplit.rs sha256:9c790bb67a1cfdd91e977752ec2047f7864b9a79215646cf41d56d7e13645b3a -->
+>>>>>>> origin/feat/parity
 
 # returnsplit
 

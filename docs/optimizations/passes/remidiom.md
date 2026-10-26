@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/remidiom.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/remidiom.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/remidiom.rs sha256:ba5862bfe05e7067e15a14f9d8ddb52981eb5572e8711d113187ebbb288b1d0b -->
+<!-- src: crates/opt/llrm-transforms/src/remidiom.rs sha256:cb7fa1cd0b3d79d4d179e999eb4259defe7666869380cddfa7e0dce2b5c03144 -->
 
 # remidiom
 
@@ -20,7 +20,9 @@ divide's remainder.
 The quotient, its `trunc` and the product must have no other user (a second
 user is `DivRemPairs`' case, and a remainder beside a live quotient
 is a second divide). The subtrahend's left operand is `x` itself, or a
-counter ScalarEvolution proves is `trunc x`.
+counter ScalarEvolution proves is `trunc x + k` for a constant `k` (`x % c +
+1` becomes `(x + 1) - (x / c) * c` once LSR picks the counter `x + 1`); the
+fold then adds `k` to the remainder.
 
 DEVIATE REM1: the pin has this fold in the DAG (`foldRemainderIdiom`,
 [DAGCombiner.cpp#L4215](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4215)),
@@ -40,7 +42,8 @@ makes of it (schematic: names are the printer's):
  %r = sub i16 %n, %m
 ```
 
-From unit test `test_the_narrowed_idiom_is_one_remainder_where_the_divide_is_kept`
+From unit test
+`test_the_narrowed_idiom_is_one_remainder_where_the_divide_is_kept`
 in `remidiom_tests.rs`, which asserts the `urem` and that no `udiv` or
 `mul` is left.
 

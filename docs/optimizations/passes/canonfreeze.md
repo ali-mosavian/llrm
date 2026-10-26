@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/canonfreeze.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/canonfreeze.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/canonfreeze.rs sha256:73501d66babe4f5920a6759b66d4e44d3db0b883b0dbf66dc67131b98afa4656 -->
+<!-- src: crates/opt/llrm-transforms/src/canonfreeze.rs sha256:4f9fd4dbfdc6135556526a6199af2cebad0c965d4705c0e8fe2c181af8c673c5 -->
 
 # canonfreeze
 

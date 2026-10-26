@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/repbsf.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/repbsf.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/repbsf.rs sha256:93ef436138c77ef96ab1d1233dee649957f6048212e939e1c28d8adf1caa45b9 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/repbsf.rs sha256:ce5b4a57f87fcd411962d4735bd6e3c0fbaea0b2ec9ed17597013620092bcdca -->
 
 # repbsf
 
@@ -22,5 +22,6 @@ With the flags dead and the function built for speed:
 ```
 
 Built for size, or with the flags read (`adc` next), the `bsf` is left as it
-is. From unit test `test_bsf_gets_the_rep_prefix_only_where_the_pin_gives_it`
+is. From unit test
+`test_bsf_gets_the_rep_prefix_only_where_the_pin_gives_it`
 in `peephole_tests.rs`, which runs the three cases.

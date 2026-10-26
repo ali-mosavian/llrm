@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/predicateinfo.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/predicateinfo.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/predicateinfo.rs sha256:46ebd6cb7a1fd23b2d0a553f17dc56d097c3eac6bc022c9c38668bd02b769f42 -->
+<!-- src: crates/opt/llrm-transforms/src/predicateinfo.rs sha256:ed334074fb4578b7bce882728648ece18fed3d1d6ab91349fedd9b3a62316cc2 -->
 
 # predicateinfo
 

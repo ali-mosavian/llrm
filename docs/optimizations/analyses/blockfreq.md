@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/blockfreq.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/blockfreq.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/blockfreq.rs sha256:b63a5061423a964412f3a5cd514d44854fd3e43036ae9469e29f178ba27942c2 -->
+<!-- src: crates/opt/llrm-analysis/src/blockfreq.rs sha256:1cfa5c3b76eeabd7304c55b744dc3d74dad039df027ea0a99343c5b4970648ac -->
 
 # blockfreq
 

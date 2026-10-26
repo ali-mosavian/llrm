@@ -109,6 +109,21 @@ def test_a_deleted_test_file_in_the_diff_is_not_a_scanner_target(tmp_path):
     assert ps.own_test_targets(files, tmp_path) == {"kept"}
 
 
+def test_a_pr_that_leaves_generated_docs_stale_alone_is_refused_but_not_for_what_the_base_has_stale(tmp_path):
+    """#4972 landed with 411 stale pages: LAND_FAST skips the precheck and the alone layer had no docs check."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    head = branch(repo, "ok", "b.txt", "b\n")
+    sh(repo, "checkout", "-q", "main")
+    kw = dict(base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda _: set(), units=lambda _: set())
+    why = ps.alone_refusals(head, docs=lambda root: {"docs/a.md", "docs/b.md"}, docs_on_base=lambda: {"docs/a.md"}, **kw)
+    assert why and "docs/b.md" in why[0] and "docs/a.md" not in why[0], why
+    assert ps.alone_refusals(head, docs=lambda root: {"docs/a.md"}, docs_on_base=lambda: {"docs/a.md"}, **kw) == []
+
+
 def test_two_prs_adding_a_test_of_one_name_do_not_share_a_batch(tmp_path):
     """#4678 and #4680 added the same test in different places: no conflict, so both joined, and the batch failed 'defined multiple times'."""
     repo = tmp_path / "repo"

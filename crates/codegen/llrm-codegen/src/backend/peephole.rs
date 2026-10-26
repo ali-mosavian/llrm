@@ -1262,13 +1262,56 @@ impl EffectKey<'_> {
         use std::hash::{Hash, Hasher};
         #[cfg(test)]
         EFFECTS_HASHED.with(|count| count.set(count.get() + 1));
-        let fields = (self.bits, self.may_write, self.flags, self.what, self.requires, self.delivers);
+        let fields = (self.bits, self.may_write, self.flags, self.requires, self.delivers);
         let mut first = rustc_hash::FxHasher::default();
         fields.hash(&mut first);
+        shape(self.what, &mut first);
         let mut second = rustc_hash::FxHasher::default();
         0x9e37_79b9_7f4a_7c15_u64.hash(&mut second);
         fields.hash(&mut second);
+        shape(self.what, &mut second);
         (first.finish(), second.finish())
+    }
+}
+
+/// What `_register_effects_of` reads of `what`: the operation, the registers
+/// and widths of its operands and the registers an address is reached through.
+/// Not the value numbers of unplaced values, an immediate (but whether a shift
+/// count is a multiple of 32), or the displacement and symbol of a cell.
+fn shape<H: std::hash::Hasher>(
+    what: &Semantics,
+    into: &mut H,
+) {
+    use std::hash::Hash;
+    what.op.hash(into);
+    what.name.hash(into);
+    what.target.is_some().hash(into);
+    what.indirect.hash(into);
+    what.repeat.hash(into);
+    for list in [&what.dests, &what.sources] {
+        list.len().hash(into);
+        for place in list {
+            match place {
+                Loc::Reg(one) => (0u8, one).hash(into),
+                Loc::Held(one) => (1u8, one.width).hash(into),
+                Loc::Imm(one) => (2u8, one.width, one.value & 31 == 0).hash(into),
+                Loc::Mem(one) => (
+                    3u8,
+                    one.addr.map(|addr| (addr.space, addr.base, addr.segment, addr.index & 1)),
+                    one.width,
+                    one.through,
+                    one.base.map(|held| held.width),
+                    one.selector.map(|held| held.width),
+                    one.index.map(|held| held.width),
+                    one.scale,
+                    one.index_through,
+                    one.disp_width,
+                    one.offset == 0,
+                )
+                    .hash(into),
+                other => (4u8, other).hash(into),
+            }
+        }
     }
 }
 

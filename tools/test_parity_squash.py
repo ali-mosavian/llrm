@@ -1017,7 +1017,7 @@ def test_the_tool_modules_are_loaded_before_a_landing_can_change_them(tmp_path, 
     assert {"parity_smoke", "xfail", "buildslot"} <= set(ps.TOOL_MODULES)
 
 
-def test_the_scanner_layer_refuses_a_red_scanner_the_head_passes_and_runs_the_registry(capsys):
+def test_the_scanner_layer_refuses_a_red_scanner_the_head_passes_and_runs_the_registry(capsys, tmp_path, monkeypatch):
     """#3899 landed with tests/selectiondag_registry.rs red: the fast layer ran lib tests only. It now runs the root scanners and a test file the batch changes."""
     asked = []
     red = {"integration selectiondag_registry::a_number_with_no_row_is_reported"}
@@ -1026,6 +1026,10 @@ def test_the_scanner_layer_refuses_a_red_scanner_the_head_passes_and_runs_the_re
         asked.append(list(targets))
         return set(red)
 
+    # a test file the PR lacks is not a target (#4965): the new scanner must exist in the tree under test
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "new_scan.rs").write_text("")
+    monkeypatch.setattr(ps, "ROOT", tmp_path)
     files = ["crates/codegen/llrm-codegen/src/backend/selectiondag/dag_function.rs", "tests/new_scan.rs"]
     assert ps.new_scanner_failures(files, on_merged=merged, on_head=lambda targets: set()) == red
     assert "selectiondag_registry" in asked[0] and "new_scan" in asked[0] and "turbo" not in asked[0]
@@ -1062,7 +1066,7 @@ def test_the_docs_scanner_runs_at_landing_without_the_lib_tests_switch():
         return {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}
 
     assert ps.landing_scanner_failures(["docs/working/x.md"], False, on_merged=on_merged, on_head=lambda t: set()) == {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}
-    assert asked == [["docs_links", "no_local_paths"]]
+    assert asked == [["docs_in_sync", "docs_links", "no_local_paths"]]
     asked.clear()
     ps.landing_scanner_failures(["docs/working/x.md"], True, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
     assert "docs_links" in asked[0] and len(asked[0]) > 1
