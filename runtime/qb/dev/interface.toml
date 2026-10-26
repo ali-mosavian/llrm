@@ -53,6 +53,11 @@ doc = "Sets the video mode; says whether the screen is in it."
 
 [[op]]
 group = "graphics"
+name = "gd_set_pages"
+doc = "Sets the page drawn on and the one shown; says whether the mode has them."
+
+[[op]]
+group = "graphics"
 name = "gd_palette"
 doc = "Gives a palette entry the adapter's colour."
 
