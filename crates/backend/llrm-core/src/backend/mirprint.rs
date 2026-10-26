@@ -253,7 +253,8 @@ fn instruction(
         )
         .unwrap(),
         ("imul", Some(Loc::Held(d)), [Loc::Held(a), Loc::Imm(i)]) => {
-            writeln!(out, "    {} = IMUL{}rri {}, {}, {eflags}", vreg(d)?, bits(d.width)?, vreg(a)?, immediate(i)?).unwrap()
+            writeln!(out, "    {} = IMUL{}rri {}, {}, {eflags}", vreg(d)?, bits(d.width)?, vreg(a)?, immediate(i)?)
+                .unwrap()
         }
         ("imul", Some(Loc::Held(d)), [Loc::Held(a), Loc::Held(b)]) => {
             writeln!(out, "    {} = IMUL{}rr {}, {}, {eflags}", vreg(d)?, bits(d.width)?, vreg(a)?, vreg(b)?).unwrap()
@@ -322,14 +323,18 @@ pub fn mir(
         let mut jumps = 0;
         for one in block.insns.iter() {
             widths.extend(one.defines.iter().chain(&one.uses).copied());
-            // A copy into a pinned value is the pin's own `$cl = COPY %k.sub_8bit`:
-            // the register is the destination, no virtual register stands between.
-            if let Some((dest, source)) = one.what.as_ref().and_then(|w| match (w.name.as_deref(), &w.dests[..], &w.sources[..]) {
-                (Some("mov"), [Loc::Held(d)], [Loc::Held(s)]) if pins.contains_key(&d.value) => Some((d, s)),
-                _ => None,
-            }) {
+            // A copy into a pinned value is the pin's own `$cl = COPY
+            // %k.sub_8bit`: the register is the destination, no
+            // virtual register stands between.
+            if let Some((dest, source)) =
+                one.what.as_ref().and_then(|w| match (w.name.as_deref(), &w.dests[..], &w.sources[..]) {
+                    (Some("mov"), [Loc::Held(d)], [Loc::Held(s)]) if pins.contains_key(&d.value) => Some((d, s)),
+                    _ => None,
+                })
+            {
                 let register = physical(pins[&dest.value], dest.width).map_err(|why| format!("block {n}: {why}"))?;
-                writeln!(text, "    ${register} = COPY {}", vreg(source).map_err(|why| format!("block {n}: {why}"))?).unwrap();
+                writeln!(text, "    ${register} = COPY {}", vreg(source).map_err(|why| format!("block {n}: {why}"))?)
+                    .unwrap();
                 register_only.insert(dest.value);
                 continue;
             }
@@ -444,7 +449,10 @@ mod tests {
             text.contains("successors: %bb.1(0x"),
             "the edges carry llrm's odds; without them the pin weighs both 50/50: {text}"
         );
-        assert!(mir(&LirBody::new("none", 0, vec![], IndexMap::default(), IndexMap::default()), &IndexMap::default()).is_ok());
+        assert!(
+            mir(&LirBody::new("none", 0, vec![], IndexMap::default(), IndexMap::default()), &IndexMap::default())
+                .is_ok()
+        );
     }
 
     /// A copy into a pinned value was printed with a virtual register between
@@ -455,7 +463,8 @@ mod tests {
     fn a_copy_into_a_pinned_value_is_a_copy_into_its_register() {
         let k = Loc::Held(Held { value: 1, width: 4 });
         let count = Loc::Held(Held { value: 2, width: 4 });
-        let start = insn("mov", Operation::Move, vec![held(1)], vec![Loc::Imm(Imm { value: 0, width: 4, address: None })]);
+        let start =
+            insn("mov", Operation::Move, vec![held(1)], vec![Loc::Imm(Imm { value: 0, width: 4, address: None })]);
         let copy = insn("mov", Operation::Move, vec![count.clone()], vec![k]);
         let ret = insn("", Operation::Return, vec![], vec![]);
         let body = LirBody::new(
@@ -465,7 +474,8 @@ mod tests {
             IndexMap::default(),
             IndexMap::default(),
         );
-        let pins: IndexMap<u32, llrm_lir::registers::RegId> = [(2, llrm_lir::registers::RegId::ECX)].into_iter().collect();
+        let pins: IndexMap<u32, llrm_lir::registers::RegId> =
+            [(2, llrm_lir::registers::RegId::ECX)].into_iter().collect();
         let text = mir(&body, &pins).expect("prints");
         assert!(text.contains("$ecx = COPY %1"), "{text}");
         assert!(!text.contains("%2"), "the pinned value stands between: {text}");
