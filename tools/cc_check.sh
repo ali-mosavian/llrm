@@ -11,14 +11,21 @@ export LLRM_LLC=${LLRM_LLC:-$root/target/release/llrm-llc}
 opt=${LLRM_CC_OPT:--O2}
 dir=${LLRM_CC_DIR:-$root/tests/llc}
 runner=${LLRM_CC_RUN:-}
+# A reference that is not the host's (arm64 under qemu): LLRM_CC_REF_CLANG -target LLRM_CC_REF_TRIPLE, linked by LLRM_CC_REF_LINK.
+reftriple=${LLRM_CC_REF_TRIPLE:-}
 out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
 progs=${*:-$(cd "$dir" && ls *.c | sed 's/\.c$//')}
 bad=0
 for p in $progs; do
   src=$dir/$p.c
-  "$clang" $opt "$src" -o "$out/ref" -lm 2>/dev/null || { echo "$p: reference failed"; bad=1; continue; }
+  if [ -n "$reftriple" ]; then
+    "${LLRM_CC_REF_CLANG:-$clang}" -target "$reftriple" -ffreestanding -fno-builtin $opt -c "$src" -o "$out/ref.o" 2>/dev/null &&
+      $LLRM_CC_REF_LINK "$out/ref" "$out/ref.o" 2>/dev/null || { echo "$p: reference failed"; bad=1; continue; }
+  else
+    "$clang" $opt "$src" -o "$out/ref" -lm 2>/dev/null || { echo "$p: reference failed"; bad=1; continue; }
+  fi
   if "$cc" $opt "$src" -o "$out/llrm.exe" -lm 2> "$out/err"; then
-    "$out/ref" > "$out/ref.out" 2>/dev/null; rr=$?
+    $runner "$out/ref" > "$out/ref.out" 2>/dev/null; rr=$?
     $runner "$out/llrm.exe" > "$out/llrm.out" 2>/dev/null; lr=$?
     if [ $rr = $lr ] && cmp -s "$out/ref.out" "$out/llrm.out"; then echo "ok    $p"; else echo "DIFF  $p"; bad=1; fi
   else echo "FAIL  $p: $(head -c 200 "$out/err")"; bad=1; fi

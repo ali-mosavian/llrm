@@ -1,6 +1,7 @@
 # The per-target facts of llrm-cc, and the only place they are written. Keyed by name; `-target` takes a name or a
 # triple. `clang` are the arguments the pinned clang gets (triple, headers, macros), `llc` the ones llrm-llc gets.
 # `datalayout` is what clang must print for the triple: a mismatch is refused before llrm sees the IR.
+# `llc_program` (default llrm-llc) and `llc_level` (default true: it takes -O<n>) say how the backend is run.
 # `link` is the recipe for objects to an executable; `{objects}` and `{flags}` stand for lists, `{output}` for a path, `{root}` for the llrm checkout.
 
 [x86_64-linux]
@@ -25,3 +26,15 @@ object = "omf"
 link = ["python3", "-I", "{root}/tools/dosbatch/link_objects.py", "x86-m32", "{output}", "{objects}"]
 # How a program runs on the host: a command taking the executable last.
 run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m32"]
+
+# arm64 Linux, run under qemu-aarch64 against the freestanding runtime of the arm64 tests (tools/arm64_link.sh).
+[arm64-linux]
+triple = "aarch64-unknown-linux-gnu"
+datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
+clang = ["-target", "aarch64-unknown-linux-gnu", "-ffreestanding"]
+llc = []
+llc_program = "llrm-arm64-llc"
+llc_level = false
+object = "elf"
+link = ["{root}/tools/arm64_link.sh", "{output}", "{objects}"]
+run = ["qemu-aarch64"]

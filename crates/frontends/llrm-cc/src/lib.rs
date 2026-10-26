@@ -63,12 +63,27 @@ pub struct Target {
     pub clang_datalayout: Option<String>,
     pub clang: Vec<String>,
     pub llc: Vec<String>,
+    /// The backend program beside this driver; `llrm-llc` unless the target has
+    /// its own.
+    #[serde(default = "default_llc")]
+    pub llc_program: String,
+    /// Whether the backend takes `-O<n>`.
+    #[serde(default = "yes")]
+    pub llc_level: bool,
     pub object: String,
     pub link: Vec<String>,
     /// The command that runs an executable of the target, the executable last;
     /// absent where the host runs it.
     #[serde(default)]
     pub run: Vec<String>,
+}
+
+fn default_llc() -> String {
+    "llrm-llc".into()
+}
+
+fn yes() -> bool {
+    true
 }
 
 const TARGETS: &str = include_str!("../targets.toml");
@@ -260,7 +275,10 @@ pub fn llc_args(
     ir: &Path,
     output: &Path,
 ) -> Vec<String> {
-    let mut args = vec![format!("-O{}", build.level)];
+    let mut args = vec![];
+    if target.llc_level {
+        args.push(format!("-O{}", build.level));
+    }
     args.extend(target.llc.iter().cloned());
     args.extend(build.llc.iter().cloned());
     if build.stop == Stop::Assembly {
@@ -301,11 +319,14 @@ fn clang_path() -> PathBuf {
         )
 }
 
-fn llc_path() -> PathBuf {
-    std::env::var_os("LLRM_LLC")
-        .map(PathBuf::from)
-        .or_else(|| std::env::current_exe().ok().map(|one| one.with_file_name("llrm-llc")))
-        .unwrap_or_else(|| "llrm-llc".into())
+/// `LLRM_LLC` names the default backend; another program is looked for beside
+/// this driver.
+fn llc_path(program: &str) -> PathBuf {
+    let beside = || std::env::current_exe().ok().map(|one| one.with_file_name(program));
+    match std::env::var_os("LLRM_LLC").map(PathBuf::from).filter(|_| program == default_llc()) {
+        Some(path) => path,
+        None => beside().unwrap_or_else(|| program.into()),
+    }
 }
 
 fn run(
@@ -402,7 +423,7 @@ fn build(
                     std::fs::write(&ir, fixed).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 }
                 let object = want(if build.stop == Stop::Assembly { "s" } else { "o" });
-                run(&llc_path(), &llc_args(target, build, &ir, Path::new(&object)))?;
+                run(&llc_path(&target.llc_program), &llc_args(target, build, &ir, Path::new(&object)))?;
                 objects.push(object);
             }
         }
