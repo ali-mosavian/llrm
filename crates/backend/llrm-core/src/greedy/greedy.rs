@@ -477,6 +477,8 @@ pub struct RAGreedy<'a> {
     /// require one (pre-assigned): nothing recolors them (DEVIATE: LLVM
     /// models a fixed register as the reg units of a physical register).
     pub pinned: HashSet<u32>,
+    /// Pinned values that are fixed ranges, not allocated (`LLRM_FIXED_PINS`).
+    pub fixed: HashSet<u32>,
     queue: BinaryHeap<(u32, u32)>,
     spiller: Box<dyn Spiller + 'a>,
     pub stats: Stats,
@@ -503,6 +505,7 @@ impl<'a> RAGreedy<'a> {
             hints: BTreeMap::new(),
             extra: ExtraRegInfo::default(),
             pinned: HashSet::default(),
+            fixed: HashSet::default(),
             queue: BinaryHeap::new(),
             spiller,
             stats: Stats::default(),
@@ -571,6 +574,9 @@ impl<'a> RAGreedy<'a> {
     /// `seedLiveRegs` (RegAllocBase.cpp#L75).
     fn seed_live_regs(&mut self) {
         for reg in self.lis.virt_regs() {
+            if self.fixed.contains(&reg) {
+                continue;
+            }
             let li = self.lis.interval_rc(reg);
             self.enqueue(&li);
         }

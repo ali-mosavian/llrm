@@ -11,6 +11,7 @@ commuted body
 transferred body
 shuttles body
 restored_copies body
+forwarded_reloads body
 fused body
 fused_calls body
 far_loads body
