@@ -80,3 +80,5 @@ Until step 5 the Mac builds and runs the existing test suite only; the first use
 ## Risk
 
 Step 2 decides cost: if LIR cannot carry 3-address and NZCV, the generic layer changes first.
+
+`llrm-arm64-llc` takes `-O0`..`-O3`, `-Os` and `-Oz` (default `-O2`); `llrm-cc` passes the level of the `arm64-macos` target row, and `tools/targets/qb-runtime-check.sh` builds the QB host runtime through it.

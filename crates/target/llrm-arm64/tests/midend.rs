@@ -174,3 +174,13 @@ define i32 @f(ptr %t) {\n  %r = call i32 @\"\\01_pthread_join\"(ptr %t, ptr null
     assert!(names.contains(&"_pthread_join"), "{names:?}");
     assert!(!names.contains(&"__pthread_join"), "{names:?}");
 }
+
+/// `llrm-arm64-llc` had no `-Os`: clang's `-Os` IR (`optsize` functions) went through the -O2
+/// pipeline, so `tests/llc/list.c` came out 452 bytes where the pin's `clang -Os` makes 120.
+#[test]
+fn the_size_level_makes_smaller_code_than_the_speed_level() {
+    let text = include_str!("data/list_optsize.ll");
+    let lines = |level| driver::assembly(text, Platform::Darwin, level).expect("lowers").lines().count();
+    assert!(lines(driver::Level::Os) * 2 < lines(driver::Level::O2), "-Os is no smaller than -O2");
+    assert!(driver::Level::parse("s") == Ok(driver::Level::Os) && driver::Level::parse("q").is_err());
+}
