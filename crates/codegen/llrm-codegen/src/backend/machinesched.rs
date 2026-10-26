@@ -599,16 +599,13 @@ impl LIRTransform for MachineScheduler {
                 }
             }
             let everywhere: Vec<RegId> = registers.available.iter().map(|&reg| body.regs().root(reg)).collect();
-            let allowed: Vec<(u32, i64, Vec<RegId>)> = widths
+            // A value no register list confines takes `everywhere`: shared, not
+            // copied.
+            let allowed: Vec<(u32, i64, Option<Vec<RegId>>)> = widths
                 .iter()
                 .filter(|&(&value, _)| counted(value))
                 .map(|(&value, &width)| {
-                    let roots = confined
-                        .get(&value)
-                        .map_or_else(
-                            || everywhere.clone(),
-                            |set| set.iter().map(|&reg| body.regs().root(reg)).collect(),
-                        );
+                    let roots = confined.get(&value).map(|set| set.iter().map(|&reg| body.regs().root(reg)).collect());
                     (value, width, roots)
                 })
                 .collect();
@@ -626,7 +623,7 @@ impl LIRTransform for MachineScheduler {
                 sets,
                 body.regs(),
                 |set| limits[set],
-                allowed.iter().map(|(value, width, roots)| (*value, *width, &roots[..])),
+                allowed.iter().map(|(value, width, roots)| (*value, *width, roots.as_deref().unwrap_or(&everywhere))),
             )
         }))
     }

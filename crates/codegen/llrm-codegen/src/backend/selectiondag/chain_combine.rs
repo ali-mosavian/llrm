@@ -76,7 +76,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
 
     /// `GatherAllAliases`: walk up the chain from `original` past the nodes
     /// `node` does not alias, collecting those it does.
-    fn gather_all_aliases(
+    pub(super) fn gather_all_aliases(
         &self,
         node: SDValue,
         original: SDValue,
