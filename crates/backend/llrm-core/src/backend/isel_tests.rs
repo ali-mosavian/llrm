@@ -3741,7 +3741,7 @@ b1:
             "shl ebx, 16",
             "mov eax, ebx",
             "idiv esi",
-            "xor ecx, esi",
+            "xor ecx, 196608",
             "sar ecx, 31",
             "imul esi, eax",
             "sub ebx, esi",
