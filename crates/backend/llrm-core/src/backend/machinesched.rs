@@ -390,12 +390,15 @@ pub fn graph(
                 by_lane[bit].1.push(later);
             }
             for bit in bits_of(writes) {
+                // A dead write leaves the defs and readers standing: a later
+                // write still comes after the readers of the
+                // live def before it.
                 let entry = &mut by_lane[bit];
                 if dead[later] >> bit & 1 == 0 {
                     entry.0.clear();
+                    entry.1.clear();
                 }
                 entry.0.push(later);
-                entry.1.clear();
             }
         } else {
             unknown = Some(later);
@@ -871,6 +874,29 @@ mod tests {
         let found = graph(&insns, regs, 32);
         assert!(found.preds[1].is_empty(), "the second add waits for the first only through flags: {:?}", found.preds);
         assert_eq!(found.preds[2], [0, 1], "the third reads both");
+    }
+
+    /// A dead flag write keeps the readers of the def before it: a second dead
+    /// write moved above the `adc` that reads the `cmp`'s carry and clobbered
+    /// it (call_keeps and regparm3_matrix_4 printed wrong values with the
+    /// first version of the dead-def rule, which cleared the readers).
+    #[test]
+    fn test_a_dead_flag_write_stays_after_the_reader_of_the_def_before_it() {
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m32::REGISTER_INFO);
+        let add = |at: i64, out: u32, a: u32, b: u32| {
+            insn(
+                at,
+                semantics(Operation::Binary, "add", vec![held(out)], vec![held(a), held(b)]),
+                vec![out],
+                vec![a, b],
+            )
+        };
+        let compare = insn(0, semantics(Operation::Compare, "cmp", vec![], vec![held(1), held(2)]), vec![], vec![1, 2]);
+        let carry =
+            insn(1, semantics(Operation::Binary, "adc", vec![held(5)], vec![held(5), held(6)]), vec![5], vec![5, 6]);
+        let insns = vec![compare, carry, add(2, 10, 11, 12), add(3, 13, 14, 15), add(4, 16, 17, 18)];
+        let g = graph(&insns, regs, 32);
+        assert!(g.preds[3].contains(&1), "the second dead write stays after the adc: {g:?}");
     }
 
     /// `push` writes the stack pointer, which no lane orders: the scheduler put
