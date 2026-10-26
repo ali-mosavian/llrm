@@ -5070,3 +5070,96 @@ fn test_a_repeated_frame_address_after_allocation_is_made_again() {
     let leas = whats(&result.blocks[0].insns).iter().filter(|what| what.name.as_deref() == Some("lea")).count();
     assert_eq!(leas, 2, "{:?}", names(&result.blocks[0].insns));
 }
+
+/// PLASMA at m16: `mov [bp-14],di ; mov di,[bp-14]` -- a reload of what the
+/// register still held -- stood in each inner loop (a spilled one-instruction
+/// piece of a split range, then the copy that follows it).
+fn store_then_reload(between: Vec<Insn>) -> usize {
+    let cell = || Loc::Mem(mem(frame(-14), 2, RegId::BP, -14, 1));
+    let mov = |at: i64, dests: Vec<Loc>, sources: Vec<Loc>| Insn {
+        spill_store: dests.iter().any(|d| matches!(d, Loc::Mem(_))),
+        ..insn(at, Some((at, at + 2)), Some(sem(Operation::Move, "mov", dests, sources)), vec![], vec![])
+    };
+    let mut insns = vec![Arc::new(mov(0, vec![cell()], vec![rl(RegId::DI, 2)]))];
+    insns.extend(between.into_iter().map(Arc::new));
+    insns.push(Arc::new(mov(100, vec![rl(RegId::DI, 2)], vec![cell()])));
+    insns.push(Arc::new(insn(
+        200,
+        Some((200, 200)),
+        Some(sem(Operation::Return, "ret", vec![], vec![])),
+        vec![],
+        vec![],
+    )));
+    let done = forwarded_reloads(rules(), &body("forwarded-reload", 0, vec![block(0, insns, vec![]).into()]));
+    whats(&done.blocks[0].insns).iter().filter(|what| what.name.as_deref() == Some("mov")).count()
+}
+
+#[test]
+fn test_a_reload_straight_after_its_store_is_dropped() {
+    assert_eq!(store_then_reload(vec![]), 1);
+}
+
+#[test]
+fn test_a_reload_after_instructions_that_leave_the_register_and_cell_is_dropped() {
+    let other = insn(
+        10,
+        Some((10, 12)),
+        Some(sem(Operation::Binary, "add", vec![rl(RegId::AX, 2)], vec![rl(RegId::AX, 2), rl(RegId::DI, 2)])),
+        vec![],
+        vec![],
+    );
+    assert_eq!(store_then_reload(vec![other]), 1);
+}
+
+#[test]
+fn test_a_reload_stays_where_the_register_is_written_between() {
+    let write = insn(
+        10,
+        Some((10, 12)),
+        Some(sem(Operation::Binary, "add", vec![rl(RegId::DI, 2)], vec![rl(RegId::DI, 2), im(1, 2)])),
+        vec![],
+        vec![],
+    );
+    assert_eq!(store_then_reload(vec![write]), 2);
+}
+
+#[test]
+fn test_a_reload_stays_where_the_cell_is_written_between() {
+    let write = insn(
+        10,
+        Some((10, 12)),
+        Some(sem(
+            Operation::Move,
+            "mov",
+            vec![Loc::Mem(mem(frame(-14), 2, RegId::BP, -14, 1))],
+            vec![rl(RegId::AX, 2)],
+        )),
+        vec![],
+        vec![],
+    );
+    assert_eq!(store_then_reload(vec![write]), 3);
+}
+
+#[test]
+fn test_a_reload_stays_across_a_call() {
+    let call = Insn {
+        clobbers: [RegId::AX, RegId::CX, RegId::DX].into_iter().collect(),
+        ..insn(10, Some((10, 13)), Some(sem(Operation::Call, "call", vec![], vec![])), vec![], vec![])
+    };
+    assert_eq!(store_then_reload(vec![call]), 2);
+}
+
+#[test]
+fn test_a_reload_stays_across_a_volatile_access() {
+    let device = Insn {
+        volatile: true,
+        ..insn(
+            10,
+            Some((10, 12)),
+            Some(sem(Operation::Move, "mov", vec![rl(RegId::AX, 2)], vec![Loc::Mem(mem(None, 2, RegId::BX, 0, 0))])),
+            vec![],
+            vec![],
+        )
+    };
+    assert_eq!(store_then_reload(vec![device]), 3);
+}
