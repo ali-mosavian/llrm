@@ -26,7 +26,7 @@ def found(tmp_path_factory):
     include = dosbatch.c_include(qb32.TARGET, work)
     obj, stub, exe = work / "s32.obj", work / "dirty.obj", work / "s32.exe"
     dosbatch._host(
-        [str(dosbatch.BIN / "llrm-c"), str(SOURCES / "scan_ecx.c"), dosbatch.m_flag(qb32.TARGET), "-Os", "-I", str(include), "-I", str(qbruntime.RUNTIME), "-I", str(qb32.PLATFORM), "-I", str(qbruntime.RUNTIME / "dos"), "-o", str(obj)]
+        [str(dosbatch.BIN / "llrm-c"), str(SOURCES / "scan_ecx.c"), dosbatch.m_flag(qb32.TARGET), "-Os", "-I", str(include), "-I", str(qbruntime.RUNTIME), "-I", str(qb32.PLATFORM), *qbruntime.device_includes(qb32.PLATFORM), "-o", str(obj)]
     )
     dosbatch.assemble(SOURCES / "scan_ecx.asm", stub)
     runtime = qb32.build(work / "rt32")

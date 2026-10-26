@@ -118,6 +118,15 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with divides by constants kept as divides (`isIntDivCheap`).
+    pub fn with_int_div_cheap(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.dag.int_div_cheap = on;
+        self
+    }
+
     /// This target with jump tables on or off.
     pub fn with_jump_tables(
         mut self,
@@ -725,13 +734,20 @@ impl Builder<'_> {
             match self.convention.parameters.get(at) {
                 // a byval parameter is its bytes in the caller's frame: the
                 // value is their address
-                Some(Parameter::Bytes(_)) => {
+                Some(Parameter::Bytes(offset)) => {
                     fixed += 1;
+                    self.dag.fixed_offsets.insert(-fixed, *offset);
                     pieces.push(self.dag.get_frame_index(self.target.dag.pointer, -fixed));
                 }
-                Some(Parameter::Cell(_)) => {
-                    for _ in 0..parts {
+                Some(Parameter::Cell(offset)) => {
+                    for part in 0..parts {
                         fixed += 1;
+                        self.dag
+                            .fixed_offsets
+                            .insert(
+                                -fixed,
+                                offset + part as i64 * i64::from(self.target.dag.pointer.size_in_bits() / 8),
+                            );
                         let ptr = self.dag.get_frame_index(self.target.dag.pointer, -fixed);
                         // The fixed object is a whole stack slot
                         // (`CreateFixedObject`),

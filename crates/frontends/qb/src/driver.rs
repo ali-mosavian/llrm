@@ -254,6 +254,7 @@ pub fn natively_called(
     native_cc: Option<&str>,
 ) {
     let named = native_cc.filter(|cc| *cc != "cdecl").map(str::to_owned);
+    let hosted = program.promises.hosted;
     for function in program.modules.iter_mut().flat_map(|module| &mut module.functions) {
         let called: llrm_core::support::hash::HashMap<i64, String> = function
             .blocks
@@ -268,6 +269,19 @@ pub fn natively_called(
                     .is_some_and(|name| llrm_core::abi::runtime::semantics::keeps_stack_abi(name))
         };
         let natives: Vec<bool> = function.calls.iter().map(native).collect();
+        // A host's stack-block routines are C varargs: they keep the order
+        // BASIC pushes them in, and the caller removes them.
+        if hosted {
+            for call in function.calls.iter_mut().filter(|call| {
+                call.callee.is_none()
+                    && called
+                        .get(&call.instruction)
+                        .is_some_and(|name| llrm_core::abi::qb::HOST_STACK_BLOCKS.contains(&name.as_str()))
+            }) {
+                call.cleanup = model::StackCleanup::Caller;
+                call.convention = named.clone();
+            }
+        }
         for call in function.calls.iter_mut().zip(natives).filter_map(|(call, native)| native.then_some(call)) {
             call.cleanup = model::StackCleanup::Caller;
             call.order.reverse();

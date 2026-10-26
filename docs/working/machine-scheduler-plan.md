@@ -24,3 +24,25 @@ target: i486-unknown-linux-gnu, cpu i486 (no schedule model, no itinerary): the 
 - P5 pairing is the post-RA `schedule.rs`; the pre-RA pass has no P5 model either (the pin's i486 and P5 differ only in the model, which P5 would add).
 
 Rows: x_list, sieve, matmul (the pin's largest scheduler effects), the 71 rows in clocks, QCport -Os bytes, spill marks in our listing (a queued instrument) before and after.
+
+## Against the pin, 2026-10-25 (w12's list checked)
+
+| Claim | Verdict |
+|---|---|
+| Ours is bottom-up only, the pin bidirectional | Wrong. `initPolicy` sets `OnlyBottomUp = true` (#L3711) and X86 has no `overrideSchedPolicy`, so the pin is bottom-up on this target too. |
+| A region of at most half the allocatable registers is ordered only if it has a load | Intended, same result. Without a schedule model and without tracked pressure every candidate is ready at once and `NodeOrder` (latest first) gives source order; a load's latency 4 is the one thing that changes it. |
+| DEVIATE MS3: a reorder is kept only if it lowers the peak | A real deviation: the pin takes the order its heuristics make. |
+| Live-through values not counted | A real deviation: the pin's tracker starts from every value live out of the region. |
+| One limit for every set | Partly: the GR32 sets of the x86-32 table have limits 6 (before reserved registers), so one limit is near; x87 (RFP32 7) and the 8/16-bit sets differ. |
+
+Pieces to make it the pin's (each a PR, priced by the 71-program static diff and AM-BT with `OBJSWEEP_FLAGS=--isel=dag`):
+
+1. Count live-through values and take the order the heuristics make (drop the MS3 guard).
+2. A `RegPressureTracker` per pressure set from the target's table (`RegExcess`, `RegCritical`, `RegMax` on the set deltas, not the total).
+3. `ReduceLatency` and the `tryCandidate` order exactly (`tryBiasPhysRegs`, cluster, weak edges stay out: MS2).
+4. Delete the remaining shortcuts (skip of regions without a load) once 1 to 3 show the same lists.
+
+## Handover to w12 (2026-10-25)
+
+`machinesched.rs` moves to w12; w9 writes `regpressure.rs`. Branch `lir-cleanup-port/misched-faithful` holds piece 1 (live-through values counted in `scheduled`, the MS3 peak guard dropped; `peak` deleted). Its pair (base 121f6f17ef) was not read: its rows, sizes and objsweep were still running. What is left is pieces 2 to 4 above: swap `pressure_after` for w9's tracker, then `ReduceLatency` and the exact `tryCandidate` order. The pin is bottom-up only on this target, so there is no top-down side to write.
+

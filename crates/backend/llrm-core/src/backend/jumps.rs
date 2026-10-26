@@ -110,6 +110,9 @@ const NO_OP: &str = "'NoneType' object has no attribute 'op'";
 /// than by their estimated frequencies (-Os).
 pub struct ControlFlow<'a> {
     pub cpu: &'a cpu::Profile,
+    /// The routine each call goes to, by the call's position: two calls are
+    /// the same instruction only where it is the same.
+    pub calls: Option<IndexMap<i64, String>>,
 }
 
 impl LIRTransform for ControlFlow<'_> {
@@ -144,8 +147,11 @@ impl ControlFlow<'_> {
     ) -> Result<LirBody, masm::Unprintable> {
         // -O0 keeps the blocks in source order and drops the jumps that order
         // makes redundant: no tails merged, no block copied, no trace chosen.
-        let placed =
-            if self.cpu.optimized { optimized(body, self.cpu)? } else { threaded(&body.with_blocks(_explicit(body)?)) };
+        let placed = if self.cpu.optimized {
+            optimized(body, self.cpu, self.calls.as_ref())?
+        } else {
+            threaded(&body.with_blocks(_explicit(body)?))
+        };
         if crate::support::debug::enabled("blocks") {
             let frequency = crate::analysis::frequency::Frequency::of(&placed);
             for block in &placed.blocks {
@@ -168,6 +174,7 @@ impl ControlFlow<'_> {
 pub fn optimized(
     body: &LirBody,
     cpu: &cpu::Profile,
+    calls: Option<&IndexMap<i64, String>>,
 ) -> Result<LirBody, masm::Unprintable> {
     let size = cpu.size;
     let mut placed = threaded(&_placed(&_hoisted(body), size, cpu.aggressive)?);
@@ -176,7 +183,7 @@ pub fn optimized(
     // `BranchFolder::OptimizeFunction` after placement: the tails merged, then
     // the branches optimised (`threaded`), until neither changes anything. A
     // merge can leave a compare nothing selects on; LLVM leaves it (T6).
-    let (merged, _) = tails_merged(placed, size)?;
+    let (merged, _) = tails_merged(placed, size, calls)?;
     placed = merged;
     let done = aligned(&inverted(&placed, size), cpu);
     // Every block leaves by a way the printer can read.
@@ -192,11 +199,12 @@ pub fn optimized(
 fn tails_merged(
     mut placed: LirBody,
     size: bool,
+    calls: Option<&IndexMap<i64, String>>,
 ) -> Result<(LirBody, bool), masm::Unprintable> {
     let mut any = false;
     for _round in 0..std::cmp::max(1, placed.blocks.len() + placed.insns().len()) {
         let explicit = placed.with_blocks(_explicit(&placed)?);
-        let Some(merged) = tailmerge::merged(&explicit, size)? else {
+        let Some(merged) = tailmerge::merged(&explicit, size, calls)? else {
             break;
         };
         any = true;
@@ -212,6 +220,7 @@ fn tails_merged(
 pub fn tails_merged_after_exits(
     body: LirBody,
     size: bool,
+    calls: Option<&IndexMap<i64, String>>,
 ) -> Result<LirBody, masm::Unprintable> {
     // Only the blocks that return gained something to share.
     let returns = body
@@ -224,7 +233,7 @@ pub fn tails_merged_after_exits(
     if returns < 2 {
         return Ok(body);
     }
-    let (merged, any) = tails_merged(body.clone(), size)?;
+    let (merged, any) = tails_merged(body.clone(), size, calls)?;
     Ok(if any { inverted(&merged, size) } else { body })
 }
 

@@ -297,6 +297,9 @@ struct Compiler {
     /// where it stands.
     seen: BTreeSet<String>,
     constants: BTreeMap<String, (u32, Number)>,
+    /// CONST names of string literals, which BC substitutes where they are
+    /// used.
+    string_constants: BTreeMap<String, String>,
     signatures: BTreeMap<String, Signature>,
     callables: Vec<Callable>,
     udts: BTreeMap<String, Udt>,
@@ -601,6 +604,7 @@ pub fn compile_debugged(
     }
     shapes::applied(&mut compiler);
     absolute::applied(&mut compiler);
+    absolute::varseg(&mut compiler);
     Ok((compiler.json(), std::mem::take(&mut compiler.warnings)))
 }
 
@@ -1716,6 +1720,7 @@ impl Compiler {
             variables: BTreeMap::new(),
             seen: BTreeSet::new(),
             constants: BTreeMap::new(),
+            string_constants: BTreeMap::new(),
             signatures: BTreeMap::new(),
             callables: Vec::new(),
             udts: BTreeMap::new(),
@@ -2079,7 +2084,31 @@ impl Compiler {
         Ok(())
     }
 
+    /// A TYPE's STRING * n and array bounds may name a CONST declared above it,
+    /// but the module's constants are collected after the types: the numeric
+    /// ones are lent to the types and taken back.
     fn type_declarations(
+        &mut self,
+        module: &Module,
+    ) -> Result<(), SemanticError> {
+        let mut lent = Vec::new();
+        for statement in &module.statements {
+            if let Statement::Const { name, value, .. } = statement {
+                if let Ok(constant) = self.constant(value) {
+                    if self.constants.insert(canonical(name).into(), constant).is_none() {
+                        lent.push(canonical(name).to_owned());
+                    }
+                }
+            }
+        }
+        let result = self.type_declarations_with_constants(module);
+        for name in lent {
+            self.constants.remove(&name);
+        }
+        result
+    }
+
+    fn type_declarations_with_constants(
         &mut self,
         module: &Module,
     ) -> Result<(), SemanticError> {
@@ -2557,6 +2586,15 @@ impl Compiler {
                         if let Some(variable) = self.variables.get_mut(&key) {
                             variable.rank = Some(item.bounds.len());
                         }
+                    }
+                }
+                Statement::Const { name, value, .. } if self.string_constant(value).is_some() => {
+                    let text = self.string_constant(value).unwrap_or_default();
+                    if self.string_constants.insert(canonical(name).into(), text).is_some()
+                        || self.constants.contains_key(canonical(name))
+                        || self.variables.contains_key(&self.variable_key(name))
+                    {
+                        return self.fail(format!("duplicate declaration {name}"));
                     }
                 }
                 Statement::Const { name, value, .. } => {
@@ -3621,6 +3659,34 @@ impl Compiler {
                         self.select_block(continuation);
                     }
                     "BLOAD" | "BSAVE" => self.binary_memory_statement(name, arguments)?,
+                    "STOP" | "RESET" => {
+                        if !arguments.is_empty() {
+                            return self.fail(format!("{name} takes no arguments"));
+                        }
+                        if name == "RESET" {
+                            self.emit_runtime_call("B$REST", Vec::new(), Vec::new());
+                        } else {
+                            // B$STOP does not return, as B$CEND does not.
+                            self.emit_runtime_call("B$STOP", Vec::new(), Vec::new());
+                            self.terminate("unreachable", Vec::new(), Vec::new())?;
+                            let continuation = self.new_block();
+                            self.select_block(continuation);
+                        }
+                    }
+                    "KILL" | "MKDIR" | "CHDIR" | "RMDIR" | "ENVIRON" => {
+                        let [path] = arguments.as_slice() else {
+                            return self.fail(format!("{name} takes one file or directory name"));
+                        };
+                        let path = self.string_descriptor(path)?;
+                        let routine = match name.as_str() {
+                            "KILL" => "B$KILL",
+                            "ENVIRON" => "B$SENV",
+                            "MKDIR" => "B$MDIR",
+                            "CHDIR" => "B$CDIR",
+                            _ => "B$RDIR",
+                        };
+                        self.emit_runtime_call(routine, Vec::new(), vec![path]);
+                    }
                     "LSET" | "RSET" => {
                         let [Expr::Binary { op: Binary::Eq, left, right, .. }] = arguments.as_slice() else {
                             return self
@@ -4068,6 +4134,34 @@ impl Compiler {
                     self.select_block(continuation);
                 }
                 Statement::Runtime { name, arguments, .. } => match name.as_str() {
+                    "NAME" => {
+                        let [old, new] = arguments.as_slice() else {
+                            return self.fail("NAME takes the old and the new file name, as in `NAME \"A\" AS \"B\"`");
+                        };
+                        let old = self.string_descriptor(old)?;
+                        let new = self.string_descriptor(new)?;
+                        self.emit_runtime_call("B$NAME", Vec::new(), vec![old, new]);
+                    }
+                    "FILES" => {
+                        if arguments.len() > 1 {
+                            return self.fail("FILES takes one file pattern, as in `FILES \"*.BAS\"`");
+                        }
+                        // BC passes the pattern's descriptor, an empty string's
+                        // for a bare FILES.
+                        let empty = Expr::Literal(Literal::String(String::new()), Span::default());
+                        let pattern = self.string_descriptor(arguments.first().unwrap_or(&empty))?;
+                        self.emit_runtime_call("B$FILS", Vec::new(), vec![pattern]);
+                    }
+                    "SHELL" => {
+                        if arguments.len() > 1 {
+                            return self.fail("SHELL takes one command, as in `SHELL \"DIR\"`");
+                        }
+                        // BC passes the command's descriptor, an empty string's
+                        // for a bare SHELL.
+                        let empty = Expr::Literal(Literal::String(String::new()), Span::default());
+                        let command = self.string_descriptor(arguments.first().unwrap_or(&empty))?;
+                        self.emit_runtime_call("B$SSHL", Vec::new(), vec![command]);
+                    }
                     "BEEP" => {
                         if !arguments.is_empty() {
                             return self.fail("BEEP takes no arguments");
@@ -5850,12 +5944,35 @@ impl Compiler {
         Operand::Value(address)
     }
 
+    /// The text of a CONST's string value; BC takes only a literal.
+    fn string_constant(
+        &self,
+        expression: &Expr,
+    ) -> Option<String> {
+        match expression {
+            Expr::Literal(Literal::String(text), _) => Some(text.clone()),
+            _ => None,
+        }
+    }
+
+    /// A use of a string constant is its literal.
+    fn string_constant_use(
+        &self,
+        expression: &Expr,
+    ) -> Option<Expr> {
+        let Expr::Name(name, span) = expression else { return None };
+        let text = self.string_constants.get(canonical(name))?;
+        Some(Expr::Literal(Literal::String(text.clone()), *span))
+    }
+
     fn string_assignment(
         &mut self,
         destination: Operand,
         destination_type: u32,
         source: &Expr,
     ) -> Result<(), SemanticError> {
+        let constant_source = self.string_constant_use(source);
+        let source = constant_source.as_ref().unwrap_or(source);
         let destination_width = self
             .string_width(destination_type)
             .ok_or_else(|| SemanticError { message: "string assignment destination lost its type".into() })?;
@@ -6026,6 +6143,9 @@ impl Compiler {
         &mut self,
         expression: &Expr,
     ) -> Result<Operand, SemanticError> {
+        if let Some(literal) = self.string_constant_use(expression) {
+            return self.string_descriptor(&literal);
+        }
         if let Expr::Slice { base, start, end, step, span } = expression {
             let call = slice_call("SLICE$", base, start, end, step, Vec::new(), *span);
             return self.string_descriptor(&call);
@@ -6438,6 +6558,9 @@ impl Compiler {
         &mut self,
         expression: &Expr,
     ) -> Result<(Operand, u32), SemanticError> {
+        if let Some(literal) = self.string_constant_use(expression) {
+            return self.expression(&literal);
+        }
         match expression {
             Expr::Omitted(_) => self.fail("omitted argument used as an expression"),
             Expr::Literal(Literal::Integer(value, type_name), _) => {
@@ -7383,11 +7506,23 @@ impl Compiler {
             self.emit_runtime_call("B$FRI2", vec![result], vec![selector]);
             return Ok(Some((Operand::Value(result), LONG)));
         }
-        if intrinsic.lowering == Lowering::FileLength {
+        if let Lowering::FileQuery(routine) = intrinsic.lowering {
             let (file, file_type) = self.expression(&arguments[0])?;
             let file = self.convert(file, file_type, INTEGER)?;
             let result = self.value(LONG);
-            self.emit_runtime_call("B$FLOF", vec![result], vec![file]);
+            self.emit_runtime_call(routine, vec![result], vec![file]);
+            return Ok(Some((Operand::Value(result), LONG)));
+        }
+        if intrinsic.lowering == Lowering::FileAttribute {
+            // B$FATR(channel, field): field 1 is the file's mode, 2 its DOS
+            // handle.
+            let mut operands = Vec::new();
+            for argument in &arguments[..2] {
+                let (value, value_type) = self.expression(argument)?;
+                operands.push(self.convert(value, value_type, INTEGER)?);
+            }
+            let result = self.value(LONG);
+            self.emit_runtime_call("B$FATR", vec![result], operands);
             return Ok(Some((Operand::Value(result), LONG)));
         }
         if intrinsic.lowering == Lowering::Timer {
@@ -8702,6 +8837,9 @@ impl Compiler {
         &self,
         expression: &Expr,
     ) -> bool {
+        if self.string_constant_use(expression).is_some() {
+            return true;
+        }
         if let Expr::Unary { op: Unary::Grouped, operand, .. } = expression {
             return self.string_syntax(operand);
         }
