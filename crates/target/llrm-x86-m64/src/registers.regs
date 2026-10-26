@@ -85,6 +85,24 @@ ss    16 ss   0 segment,reserved,stack_segment  52 27
 ds    16 ds   0 segment,reserved,data_segment  53 28
 fs    16 fs   0 segment,reserved  54 29
 gs    16 gs   0 segment,reserved  55 30
+# x87: st(i) are positions in the float stack (DWARF 33-40, CodeView 128-135), the same classes as x86-m32's.
+st0    80 st0  0 x87,positional  33 128
+st1    80 st1  0 x87,positional  34 129
+st2    80 st2  0 x87,positional  35 130
+st3    80 st3  0 x87,positional  36 131
+st4    80 st4  0 x87,positional  37 132
+st5    80 st5  0 x87,positional  38 133
+st6    80 st6  0 x87,positional  39 134
+st7    80 st7  0 x87,positional  40 135
+# LLVM's RFP registers FP0..FP6, which greedy allocates and the stackifier maps to stack positions (FP7 is
+# the stackifier's scratch). Named by iced's MM0..MM6, the physical x87 registers; never encoded.
+mm0    80 mm0  0 rfp  -  -
+mm1    80 mm1  0 rfp  -  -
+mm2    80 mm2  0 rfp  -  -
+mm3    80 mm3  0 rfp  -  -
+mm4    80 mm4  0 rfp  -  -
+mm5    80 mm5  0 rfp  -  -
+mm6    80 mm6  0 rfp  -  -
 # SSE: xmm0-15, caller-saved in System V AMD64. A scalar float or double is the low 4 or 8 bytes. DWARF 17-32.
 xmm0  128 xmm0  0 xmm  17 154
 xmm1  128 xmm1  0 xmm  18 155

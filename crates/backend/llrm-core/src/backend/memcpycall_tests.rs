@@ -48,7 +48,7 @@ fn test_a_short_aligned_constant_copy_stays_for_the_selector() {
 fn test_a_long_or_misaligned_constant_copy_is_a_call() {
     assert!(expanded(4, "129").contains("call ptr @memcpy("), "129 bytes");
     assert!(expanded(4, "128").contains("call void @llvm.memcpy"), "128 bytes stay");
-    assert!(expanded(1, "16").contains("call ptr @memcpy("), "alignment 1");
+    assert!(expanded(1, "64").contains("call ptr @memcpy("), "alignment 1, past the inline limit");
 }
 
 /// A length of another width than the call's `i32` (a copy of 200 bytes the
@@ -66,4 +66,15 @@ fn test_a_length_of_another_width_is_made_the_calls_i32() {
     let after = llrm_mir::print::module(&module);
     assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new(), "{after}");
     assert!(after.contains("zext i16 %n to i32"), "{after}");
+}
+
+/// A 12-byte copy of pointers with no `align` was a call of `memcpy`: the pin
+/// copies by loads and stores first and calls only past its limit (QCport
+/// weapons.c: 16 calls where the pin has none, `_pl_spikes_tick` +55
+/// instructions at -Os).
+#[test]
+fn test_a_short_constant_copy_of_unaligned_pointers_stays_for_the_selector() {
+    assert!(!expanded(1, "12").contains("call ptr @memcpy("), "{}", expanded(1, "12"));
+    assert!(!expanded(1, "32").contains("call ptr @memcpy("), "eight 4-byte moves");
+    assert!(expanded(1, "36").contains("call ptr @memcpy("), "nine moves");
 }

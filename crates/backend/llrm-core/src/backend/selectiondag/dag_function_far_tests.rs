@@ -635,6 +635,155 @@ fn a_far_pointer_from_a_call_result_has_its_selector_for_a_fill() {
     assert!(shifts_by_16);
 }
 
+/// A run of `drow[px] = color` over the pointer a call returned (QCport
+/// `part.c` at -O3, `part_raster` inlined): the fill's address is `offset +
+/// (x & 0xFFFF0000)` for the dword `x` the call returned, and it stopped at
+/// "a string operation on a pointer of no known segment".
+const FILL_INTO_A_CALL_RESULT_IN_A_LOOP: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+
+define cc 1005 void @\"_frame@3\"(i32 noundef %0, i32 noundef %1, i16 noundef %2) addrspace(1) \"llrm-fp-eval\"=\"x87-extended\" {
+b1:
+  %3 = tail call cc 1005 addrspace(1) i32 @\"_acc@3\"(i32 noundef %0, i16 noundef 0, i16 noundef 3)
+  %4 = inttoptr i32 %3 to ptr addrspace(1)
+  %5 = ptrtoint ptr addrspace(1) %4 to i32
+  %6 = icmp eq i32 %5, 0
+  br i1 %6, label %b4, label %7
+
+7:
+  %8 = icmp sgt i16 %2, 0
+  br i1 %8, label %9, label %12
+
+9:
+  %10 = inttoptr i32 %3 to ptr addrspace(1)
+  %11 = getelementptr i8, ptr addrspace(1) %10, i16 7
+  br label %17
+
+12:
+  br label %13
+
+13:
+  %14 = phi i16 [ %16, %13 ], [ 0, %12 ]
+  %15 = tail call cc 1005 addrspace(1) i32 @\"_acc@3\"(i32 noundef %1, i16 noundef %14, i16 noundef 1)
+  %16 = add nuw nsw i16 %14, 1
+  %exitcond2 = icmp eq i16 %16, 101
+  br i1 %exitcond2, label %b4, label %13
+
+17:
+  %18 = phi i16 [ %59, %58 ], [ 0, %9 ]
+  %19 = tail call cc 1005 addrspace(1) i32 @\"_acc@3\"(i32 noundef %1, i16 noundef %18, i16 noundef 1)
+  %20 = inttoptr i32 %19 to ptr addrspace(1)
+  %21 = ptrtoint ptr addrspace(1) %20 to i32
+  %22 = icmp eq i32 %21, 0
+  br i1 %22, label %58, label %23
+
+23:
+  br label %24
+
+24:
+  %25 = phi ptr addrspace(1) [ %11, %23 ], [ %57, %55 ]
+  %26 = phi i16 [ %2, %23 ], [ %56, %55 ]
+  %27 = getelementptr i8, ptr addrspace(1) %25, i16 -2
+  %28 = load i8, ptr addrspace(1) %27, !tbaa !7
+  %29 = zext i8 %28 to i16
+  %30 = icmp samesign ult i16 %18, %29
+  br i1 %30, label %55, label %31
+
+31:
+  %32 = getelementptr i8, ptr addrspace(1) %25, i16 -1
+  %33 = load i8, ptr addrspace(1) %32, !tbaa !7
+  %34 = zext i8 %33 to i16
+  %35 = icmp samesign ugt i16 %18, %34
+  br i1 %35, label %55, label %36
+
+36:
+  %37 = getelementptr i8, ptr addrspace(1) %25, i16 -7
+  %38 = load i16, ptr addrspace(1) %37, !tbaa !9
+  %39 = getelementptr i8, ptr addrspace(1) %25, i16 -3
+  %40 = load i8, ptr addrspace(1) %39, !tbaa !7
+  %41 = zext i8 %40 to i16
+  %42 = add i16 %38, %41
+  %43 = icmp sgt i16 %38, %42
+  br i1 %43, label %55, label %44
+
+44:
+  %45 = inttoptr i32 %19 to ptr addrspace(1)
+  %46 = load i8, ptr addrspace(1) %25, !tbaa !7
+  %47 = getelementptr i8, ptr addrspace(1) %45, i16 %38
+  %48 = sext i16 %42 to i32
+  %49 = add nsw i32 %48, 1
+  %50 = add i16 %38, 1
+  %51 = sext i16 %50 to i32
+  %52 = tail call i32 @llvm.smax.i32(i32 %49, i32 %51)
+  %53 = trunc i32 %52 to i16
+  %54 = sub i16 %53, %38
+  tail call void @llvm.memset.p1.i16(ptr addrspace(1) align 1 %47, i8 %46, i16 %54, i1 false)
+  br label %55
+
+55:
+  %56 = add i16 %26, -1
+  %57 = getelementptr i8, ptr addrspace(1) %25, i16 8
+  %exitcond = icmp eq i16 %56, 0
+  br i1 %exitcond, label %58, label %24
+
+58:
+  %59 = add nuw nsw i16 %18, 1
+  %exitcond1 = icmp eq i16 %59, 101
+  br i1 %exitcond1, label %b4, label %17
+
+b4:
+  ret void
+}
+
+declare cc 1005 i32 @\"_acc@3\"(i32, i16, i16) addrspace(1)
+declare i32 @llvm.smax.i32(i32, i32) nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare void @llvm.memset.p1.i16(ptr addrspace(1) nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nosync nounwind willreturn memory(argmem: write)
+
+!0 = !{!\"llrm hir\"}
+!1 = !{!\"place\", !0, i64 0}
+!2 = !{!1, !1, i64 0}
+!3 = !{!\"allocation\", !0, i64 0}
+!4 = !{!3, !3, i64 0}
+!5 = !{!\"Simple C/C++ TBAA\"}
+!6 = !{!\"omnipotent char\", !5, i64 0}
+!7 = !{!6, !6, i64 0}
+!8 = !{!\"int2\", !6, i64 0}
+!9 = !{!8, !8, i64 0}
+!10 = !{!\"int4\", !6, i64 0}
+!11 = !{!10, !10, i64 0}
+!12 = !{!\"int8\", !6, i64 0}
+!13 = !{!12, !12, i64 0}
+!14 = !{!\"float4\", !6, i64 0}
+!15 = !{!14, !14, i64 0}
+!16 = !{!\"float8\", !6, i64 0}
+!17 = !{!16, !16, i64 0}
+!18 = !{!\"float10\", !6, i64 0}
+!19 = !{!18, !18, i64 0}
+!20 = !{!\"pointer2\", !6, i64 0}
+!21 = !{!20, !20, i64 0}
+!22 = !{!\"pointer4\", !6, i64 0}
+!23 = !{!22, !22, i64 0}";
+
+#[test]
+fn a_fill_at_an_offset_into_a_call_result_has_the_results_selector() {
+    let module = llrm_mir::parse::module(FILL_INTO_A_CALL_RESULT_IN_A_LOOP).expect("parses");
+    let done =
+        selected(&module, "_frame@3", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+            .unwrap_or_else(|why| panic!("{}", why.0));
+    let shifts_by_16 = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .any(
+            |w| w.name.as_deref() == Some("shr")
+                && matches!(
+                    w.sources.last(),
+                    Some(crate::model::ir::Loc::Imm(imm)) if imm.value == 16
+                ),
+        );
+    assert!(shifts_by_16);
+}
+
 /// A far pointer from a near one (`addrspacecast`) with a constant byte
 /// offset added: the offset was built as a constant of the far type, which
 /// has none (`nbody.bas`: "integer constant of Simple(Far)").

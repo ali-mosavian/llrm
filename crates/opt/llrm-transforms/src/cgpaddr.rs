@@ -38,7 +38,8 @@
 //!
 //! DEVIATE C1 (m32): the rest of CodeGenPrepare's work is done by isel, which
 //! rebuilds an address expression in the block that uses it, and by the select
-//! and switch lowering; this file is the compare and address-phi part.
+//! lowering; the width of a switch condition is `cgpswitch`'s
+//! (`optimizeSwitchType`); this file is the compare and address-phi part.
 //! Evidence, 2026-10-23, per function on the same IR against the pin's `llc`
 //! with and without the pass (`docs/working/codegenprepare.md`): at m32 the
 //! pass changes 16-17 of about 160 functions in the pin and ours is at its
@@ -144,7 +145,7 @@ pub struct CgpAddr;
 
 #[cfg(test)]
 #[path = "cgpaddr_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(test)]
 #[path = "cgpaddr_sink_tests.rs"]
@@ -174,6 +175,13 @@ impl FunctionPass for CgpAddr {
             unit.function,
             analyses.outer().target().lowering().as_deref(),
         );
+        // `optimizeSwitchInst`'s `optimizeSwitchType`.
+        let switches = match analyses.outer().target().lowering() {
+            Some(lowering) => {
+                crate::cgpswitch::switch_types_widened(unit.context, unit.layout, &*lowering, unit.function)
+            }
+            None => false,
+        };
         // Blocks and edges are as they were.
         let one_flag = !analyses.outer().target().multiple_condition_registers();
         let sunk_compares = one_flag && compares_sunk(unit.function);
@@ -234,6 +242,7 @@ impl FunctionPass for CgpAddr {
             || split
             || remainders
             || compares
+            || switches
         {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else if closed {
