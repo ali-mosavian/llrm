@@ -599,6 +599,11 @@ fn build(
         let near_code = build.clang.iter().any(|flag| matches!(flag.as_str(), "-mcmodel=small" | "-mcmodel=compact"));
         let mut link = Command::new(&command[0]);
         link.args(&command[1..]);
+        // The link script compiles the float helpers with this same driver,
+        // wherever cargo put it.
+        if let Ok(own) = std::env::current_exe() {
+            link.env("LLRM_CC", own);
+        }
         if near_code {
             link.env("LLRM_NEAR_CODE", "1");
         }
@@ -617,6 +622,10 @@ fn build(
 /// Exit status: the failing tool's, 1 for a refusal of the driver's own.
 pub fn run_main(argv: &[String]) -> i32 {
     let go = || -> Result<(), i32> {
+        llrm_mir::dumpdir::refuse(argv).map_err(|why| {
+            eprintln!("llrm-cc: {why}");
+            2
+        })?;
         let table = targets(TARGETS).map_err(|why| {
             eprintln!("llrm-cc: {why}");
             1

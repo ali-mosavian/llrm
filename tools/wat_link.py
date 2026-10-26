@@ -3,6 +3,7 @@
     wat_link.py m16|m32 OWDIR EXE OBJECT...
 
 OWDIR is the tree the build ran in; WATCOM names an installed Open Watcom (its wlink and its math libraries).
+LLRM_CC names the llrm-cc that compiles floatm.c (llrm-cc sets it to itself).
 m16: DOS .EXE, medium model; m32: DOS/32A LE.
 """
 import os
@@ -29,7 +30,7 @@ else:
     sys.exit(__doc__)
 ROOT = Path(__file__).resolve().parent.parent
 floatm = Path(tempfile.mkdtemp()) / "floatm.obj"
-compiled = subprocess.run([str(ROOT / "target/release/llrm-cc"), "-O1", "-c", str(ROOT / "toolchain/clang/floatm.c"), "-o", str(floatm)], capture_output=True, text=True, env={**os.environ, "LLRM_CC_TARGET": f"x86_{'16' if model == 'm16' else '32'}-wat"})
+compiled = subprocess.run([os.environ.get("LLRM_CC", str(ROOT / "target/release/llrm-cc")), "-O1", "-c", str(ROOT / "toolchain/clang/floatm.c"), "-o", str(floatm)], capture_output=True, text=True, env={**os.environ, "LLRM_CC_TARGET": f"x86_{'16' if model == 'm16' else '32'}-wat"})
 if compiled.returncode:
     sys.exit(compiled.stderr)
 objects.append(floatm)
