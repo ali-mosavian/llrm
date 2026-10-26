@@ -1,3 +1,0 @@
-DIM x%
-1a:
-RESTORE a

@@ -1,3 +1,0 @@
-SUB p
-REDIM x%(5)
-END SUB

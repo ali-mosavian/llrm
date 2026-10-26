@@ -1,3 +1,0 @@
-SUB q
-DECLARE SUB p
-END SUB

@@ -1,3 +1,0 @@
-DIM x%
-END: 
-GOTO 65536

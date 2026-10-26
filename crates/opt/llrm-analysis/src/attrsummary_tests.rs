@@ -9,7 +9,11 @@ fn of(
 ) -> Summary {
     let module = parsed(text);
     let tracked = std::collections::BTreeSet::new();
-    summaries(&module, &crate::testing::layout(&module), &tracked).get(name).expect("a defined function").clone()
+    let found = crate::globalsmodref::compute(&module);
+    summaries(&module, &crate::testing::layout(&module), &tracked, &found)
+        .get(name)
+        .expect("a defined function")
+        .clone()
 }
 
 fn parameters(slices: &crate::sliceset::SliceSet) -> Vec<i64> {

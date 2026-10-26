@@ -62,6 +62,9 @@ pub struct ShadowInputs<'a> {
     pub sets: Option<&'a crate::backend::regclass::Sets>,
     /// `Profile::stable_loads`: rematerialize loads of cells nothing writes.
     pub stable_loads: bool,
+    /// The callee-saved registers, whole (`getLastCalleeSavedAlias`): none
+    /// turns the first-use cost of one off.
+    pub saved: &'a [RegId],
 }
 
 /// What the shadow allocator decided.
@@ -83,6 +86,7 @@ struct BodyEnv {
     pins: IndexMap<u32, RegId>,
     freq: Vec<f32>,
     exiting: Vec<bool>,
+    saved: Vec<RegId>,
 }
 
 impl SpillWeightEnv for BodyEnv {
@@ -183,6 +187,18 @@ impl GreedyEnv for BodyEnv {
         _virt: u32,
     ) -> bool {
         false
+    }
+
+    fn callee_saved_alias(
+        &self,
+        phys: RegId,
+    ) -> Option<RegId> {
+        self.saved.contains(&phys).then_some(phys)
+    }
+
+    fn csr_first_use_cost(&self) -> u32 {
+        // push + pop (`X86RegisterInfo::getCSRFirstUseCost`).
+        if self.saved.is_empty() { 0 } else { 2 }
     }
 }
 
@@ -724,13 +740,13 @@ pub fn decide_with_split(
     if body.blocks.iter().any(|block| !block.phis.is_empty()) || body.blocks.is_empty() {
         return None;
     }
-    if std::env::var("LLRM_MIR_PRINT").is_ok_and(|n| n == body.name) {
-        match crate::backend::mirprint::mir(body) {
+    if llrm_support::env_var("LLRM_MIR_PRINT").is_some_and(|n| n == &*body.name) {
+        match crate::backend::mirprint::mir(body, inputs.pins) {
             Ok(text) => eprintln!("{text}"),
             Err(why) => eprintln!("MIR-PRINT-REFUSED {}: {why}", body.name),
         }
     }
-    if std::env::var("LLRM_INPUT_DUMP").is_ok_and(|n| n == body.name) {
+    if llrm_support::env_var("LLRM_INPUT_DUMP").is_some_and(|n| n == &*body.name) {
         for (b, block) in body.blocks.iter().enumerate() {
             for (at, one) in block.insns.iter().enumerate() {
                 eprintln!(
@@ -803,7 +819,13 @@ pub fn decide_with_split(
         .filter(|(reg, _)| !floats.contains(reg))
         .map(|(&reg, &phys)| (reg, crate::model::ir::root(phys)))
         .collect();
-    let env = BodyEnv { orders: Rc::clone(&tables), pins, freq, exiting };
+    let env = BodyEnv {
+        orders: Rc::clone(&tables),
+        pins,
+        freq,
+        exiting,
+        saved: inputs.saved.iter().map(|one| crate::model::ir::root(*one)).collect(),
+    };
     // The calls.
     let mut calls = Vec::new();
     let mut blocks = Vec::with_capacity(body.blocks.len());
@@ -918,7 +940,7 @@ pub fn decide_with_split(
         }
     }
     let (reloads, stores, folded) = greedy.spill_counts();
-    if std::env::var("LLRM_MIR_PRINT").is_ok_and(|n| n == body.name) {
+    if llrm_support::env_var("LLRM_MIR_PRINT").is_some_and(|n| n == &*body.name) {
         eprintln!("SPILL-COUNTS {} stores={stores} reloads={reloads} folded={folded}", body.name);
     }
     let mut placed: Vec<(u32, RegId)> = Vec::new();
@@ -927,7 +949,7 @@ pub fn decide_with_split(
             placed.push((reg, phys));
         }
     }
-    if std::env::var("LLRM_PLACED_DEBUG").is_ok() {
+    if llrm_support::env_set("LLRM_PLACED_DEBUG") {
         for reg in greedy.lis.values().collect::<Vec<_>>() {
             if greedy.matrix.vrm.get_phys(reg).is_none() {
                 eprintln!(
@@ -1030,6 +1052,7 @@ mod tests {
             data: None,
             sets: None,
             stable_loads: true,
+            saved: &[],
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("greedy allocated the body");
         let rfp = crate::backend::allocate::RFP;
@@ -1066,6 +1089,7 @@ mod tests {
             data: None,
             sets: None,
             stable_loads: true,
+            saved: &[],
         };
         let before = crate::analysis::frequency::OF_CALLS.with(std::cell::Cell::get);
         assert!(decide_with(&inputs, Mode::Simple).is_some(), "premise: greedy allocated the body");
@@ -1234,6 +1258,7 @@ mod tests {
                 data: Some(RegId::DS),
                 sets: None,
                 stable_loads: true,
+                saved: &[],
             };
             let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
             decided
@@ -1287,6 +1312,7 @@ mod tests {
             data: None,
             sets: None,
             stable_loads: true,
+            saved: &[],
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
         assert_eq!(decided.report.stats.spilled_ranges, 0, "{:?}", decided.report.stats);
@@ -1384,6 +1410,7 @@ mod tests {
             data: None,
             sets: None,
             stable_loads: true,
+            saved: &[],
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
@@ -1429,6 +1456,7 @@ mod tests {
             data: None,
             sets: None,
             stable_loads: true,
+            saved: &[],
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");

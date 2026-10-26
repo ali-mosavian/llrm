@@ -1,3 +1,0 @@
-SUB p
-DIM x
-END SUB

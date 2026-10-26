@@ -1,3 +1,0 @@
-TYPE T2
-a AS T2
-END TYPE

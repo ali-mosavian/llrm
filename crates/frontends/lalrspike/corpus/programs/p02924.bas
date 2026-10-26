@@ -1,2 +1,0 @@
-DEFSTR X
-DIM SHARED x%(5)

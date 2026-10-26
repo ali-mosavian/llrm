@@ -1,2 +1,0 @@
-DIM x AS INTEGER
-DIM SHARED x%(5)

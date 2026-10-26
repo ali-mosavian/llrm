@@ -1,5 +1,0 @@
-DIM x%
-FUNCTION f%
-DECLARE SUB q
-f% = 1
-END FUNCTION

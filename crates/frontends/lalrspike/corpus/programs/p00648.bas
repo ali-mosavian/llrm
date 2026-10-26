@@ -1,4 +1,0 @@
-DIM p%
-CALL p
-SUB p
-END SUB

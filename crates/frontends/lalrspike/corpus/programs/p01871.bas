@@ -1,2 +1,0 @@
-DIM x(1 TO 5)
-DIM x AS STRING

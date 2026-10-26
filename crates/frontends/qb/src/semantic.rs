@@ -18,8 +18,8 @@ use crate::dialect::Dialect;
 use crate::front::quickr::{EACH, ON_SELECTOR, STEP_MARK, TUPLE};
 use crate::intrinsics::{self, Lowering, ResultClass};
 use crate::syntax::{
-    Binary, CaseItem, Declaration, ExitTarget, Expr, FileMode, Haystack, Literal, Module, Parameter, PrintKind,
-    PrintSeparator, Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
+    Binary, CaseItem, Declaration, ExitTarget, Expr, FileAccess, FileLock, FileMode, Haystack, Literal, Module,
+    Parameter, PrintKind, PrintSeparator, Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
 };
 
 const VOID: u32 = 0;
@@ -36,6 +36,8 @@ const BYTE: u32 = 8;
 const SIGNED_BYTE: u32 = 9;
 const UNSIGNED_INTEGER: u32 = 10;
 const UNSIGNED_LONG: u32 = 11;
+// PDS and VBDOS's CURRENCY: a 64-bit integer scaled by 10000.
+const CURRENCY: u32 = 12;
 // BASCOM's declarative scanner reserves eight dimension records for an
 // array whose rank is not present in its declaration.  This is an ABI storage
 // rule, distinct from the language's 60-index parser ceiling.
@@ -341,6 +343,10 @@ struct Compiler {
     /// procedure raises, on that procedure's frame, and RESUMEs there.
     module_handled: bool,
     next_type: u32,
+    /// The COMMON items that repeat a DIM: declared once.
+    common_repeats: BTreeSet<(usize, usize)>,
+    /// The arrays COMMON declared without bounds, which a later DIM dimensions.
+    common_arrays: BTreeSet<String>,
     next_value: u32,
     next_place: u32,
     next_instruction: u32,
@@ -353,6 +359,8 @@ struct Compiler {
     def_segment_base_symbol: Option<u32>,
     far_string_segment_symbol: Option<u32>,
     floating_literals: BTreeMap<(u32, Vec<u8>), u32>,
+    /// The loaded values that are floating literals, which CURRENCY folds.
+    literal_values: BTreeMap<u32, (u32, Number)>,
     // The table each DEFtype leaves, by source position. BC reads the file
     // once: a DEFtype governs every name from it to the next one, across
     // SUB and FUNCTION boundaries, and `c` either side of `DEFINT C` is two
@@ -1449,10 +1457,71 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
         }
     }
 
+    /// A GOSUB to a label no RETURN follows (`500 END`) never comes back: it is
+    /// a GOTO.
+    fn never_returns(
+        statements: &mut [Statement],
+        endless: &BTreeSet<String>,
+    ) {
+        for statement in statements {
+            match statement {
+                Statement::Call { name, arguments, span, .. } if name == "GOSUB" => {
+                    if let [Expr::Name(target, _)] = arguments.as_slice() {
+                        if endless.contains(canonical(target)) {
+                            *statement = Statement::Goto(target.clone(), *span);
+                        }
+                    }
+                }
+                Statement::If { then_branch, else_branch, .. } => {
+                    never_returns(then_branch, endless);
+                    never_returns(else_branch, endless);
+                }
+                Statement::For { body, .. } | Statement::While { body, .. } | Statement::Do { body, .. } => {
+                    never_returns(body, endless)
+                }
+                Statement::Select { arms, otherwise, .. } => {
+                    for (_, body) in arms {
+                        never_returns(body, endless);
+                    }
+                    never_returns(otherwise, endless);
+                }
+                _ => {}
+            }
+        }
+    }
+
     let mut targets = BTreeSet::new();
     visit(&module.statements, &mut targets);
     if targets.is_empty() {
         return Ok(module.clone());
+    }
+    let endless = targets
+        .iter()
+        .filter(|target| {
+            let Some(start) = module.statements.iter().position(|statement| {
+                matches!(
+                    statement,
+                    Statement::Label(name, _) if canonical(name) == target.as_str()
+                )
+            }) else {
+                return false;
+            };
+            !module
+                .statements[start + 1..]
+                .iter()
+                .any(
+                    |statement| matches!(
+                        statement,
+                        Statement::Call { name, arguments, .. } if name == "RETURN" && arguments.is_empty()
+                    ),
+                )
+        })
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !endless.is_empty() {
+        let mut jumped = module.clone();
+        never_returns(&mut jumped.statements, &endless);
+        return outline_module_gosubs(&jumped);
     }
 
     // A module GOSUB shares the module frame, variables, and error handler.
@@ -1636,6 +1705,7 @@ impl Compiler {
             scalar(SIGNED_BYTE, "signed byte", "integer", 1, Some(true), "none"),
             scalar(UNSIGNED_INTEGER, "unsigned integer", "integer", 2, Some(false), "none"),
             scalar(UNSIGNED_LONG, "unsigned long", "integer", 4, Some(false), "none"),
+            scalar(CURRENCY, "currency", "integer", 8, Some(true), "none"),
         ];
         Self {
             dialect,
@@ -1697,7 +1767,9 @@ impl Compiler {
             error_handler_local: false,
             error_handlers: BTreeSet::new(),
             module_handled: false,
-            next_type: 12,
+            next_type: 13,
+            common_repeats: BTreeSet::new(),
+            common_arrays: BTreeSet::new(),
             next_value: 1,
             next_place: 1,
             next_instruction: 1,
@@ -1714,6 +1786,7 @@ impl Compiler {
             def_segment_base_symbol: None,
             far_string_segment_symbol: None,
             floating_literals: BTreeMap::new(),
+            literal_values: BTreeMap::new(),
             default_changes: Vec::new(),
             position: (0, 0),
             module_variables: BTreeMap::new(),
@@ -2248,7 +2321,7 @@ impl Compiler {
         // `v&` names the variable `DIM v AS LONG` declared (BC: one variable);
         // a suffix of another type is a Duplicate definition,
         // refused where the name is looked up.
-        if let Some(sign) = name.strip_suffix(['%', '&', '!', '#', '$']).map(|base| &name[base.len()..]) {
+        if let Some(sign) = name.strip_suffix(['%', '&', '!', '#', '$', '@']).map(|base| &name[base.len()..]) {
             let base = format!("{}{marker}", canonical(name));
             if self.variables.get(&base).is_some_and(|one| type_suffix(one.element.unwrap_or(one.type_id)) == sign) {
                 return base;
@@ -2386,6 +2459,38 @@ impl Compiler {
             match statement {
                 Statement::Dim(items) | Statement::Common { declarations: items, .. } => {
                     for item in items {
+                        // BC takes a COMMON that names what a DIM declared
+                        // already as that declaration,
+                        // a static array staying static (it calls no B$DDIM).
+                        if matches!(statement, Statement::Common { .. })
+                            && self.variables.contains_key(&self.declaration_key(item)?)
+                        {
+                            self.common_repeats.insert((item.span.line, item.span.start));
+                            continue;
+                        }
+                        // A DIM of an array COMMON declared without bounds
+                        // gives it its bounds (BC calls
+                        // B$DDIM for it), as the first REDIM would.
+                        if matches!(statement, Statement::Dim(_))
+                            && item.array
+                            && !item.bounds.is_empty()
+                            && self.common_arrays.contains(&self.declaration_key(item)?)
+                        {
+                            let key = self.declaration_key(item)?;
+                            if let Some(variable) = self.variables.get_mut(&key) {
+                                variable.rank.get_or_insert(item.bounds.len());
+                                if let (Some(place), Some(element)) = (variable.descriptor_place, variable.element) {
+                                    let descriptor_type = self.places.iter().find(|p| p.id == place).map(|p| p.type_id);
+                                    if let Some(descriptor_type) = descriptor_type {
+                                        self.pending_allocations.insert(
+                                            (self.position, key),
+                                            (item.clone(), place, descriptor_type, element),
+                                        );
+                                    }
+                                }
+                            }
+                            continue;
+                        }
                         let each = item.name.strip_prefix(EACH);
                         let item = &Declaration { name: each.unwrap_or(&item.name).into(), ..item.clone() };
                         if each.is_some() && !self.each_declared.insert(self.declaration_key(item)?) {
@@ -2413,6 +2518,9 @@ impl Compiler {
                             self.declare_as(&dynamic, storage)?;
                         } else {
                             self.declare_as(item, storage)?;
+                        }
+                        if matches!(statement, Statement::Common { .. }) && item.array && item.bounds.is_empty() {
+                            self.common_arrays.insert(self.declaration_key(item)?);
                         }
                     }
                 }
@@ -2747,7 +2855,7 @@ impl Compiler {
         let runtime_bounds = declaration.array
             && !declaration.bounds.is_empty()
             && storage != "static"
-            && (element == STRING || declaration.dynamic || spills);
+            && (element == STRING || declaration.dynamic || spills || !self.constant_bounds(declaration));
         let bounds = if runtime_bounds {
             Vec::new()
         } else {
@@ -3320,6 +3428,9 @@ impl Compiler {
                 }
                 Statement::Dim(items) | Statement::Common { declarations: items, .. } => {
                     for item in items {
+                        if self.common_repeats.contains(&(item.span.line, item.span.start)) {
+                            continue;
+                        }
                         self.allocate(item)?;
                         self.rezero(item)?;
                     }
@@ -3596,35 +3707,42 @@ impl Compiler {
                 Statement::FormDeclaration(..) => return self.unsupported("a '$FORM declaration"),
                 Statement::OpenIsam { .. } => return self.unsupported("OPEN FOR ISAM"),
                 Statement::OpenClassic { .. } => return self.unsupported("the classic OPEN mode$, #file, path$ form"),
-                Statement::Open { access, lock, record_length, mode_written, mode, .. }
-                    if access.is_some()
-                        || lock.is_some()
-                        || record_length.is_some()
-                        || !mode_written
-                        || *mode == FileMode::Random =>
-                {
-                    return self.unsupported("OPEN with ACCESS, LOCK, LEN or RANDOM mode");
-                }
-                Statement::Open { path, mode, file, .. } => {
+                Statement::Open { path, mode, file, access, lock, record_length, .. } => {
                     let path = self.string_descriptor(path)?;
                     let (file, file_type) = self.expression(file)?;
                     let file = self.convert(file, file_type, INTEGER)?;
+                    let length = match record_length {
+                        Some(length) => {
+                            let (length, length_type) = self.expression(length)?;
+                            self.convert(length, length_type, INTEGER)?
+                        }
+                        None => Operand::Constant(INTEGER, Number::Integer(-1)),
+                    };
+                    // The mode word of rtps.inc: the mode (RANDOM when none is
+                    // written) in the low byte, ACCESS and
+                    // LOCK/SHARED in the high one.
                     let mode = match mode {
                         FileMode::Input => 1,
                         FileMode::Output => 2,
+                        FileMode::Random => 4,
                         FileMode::Append => 8,
                         FileMode::Binary => 0x20,
-                        FileMode::Random => unreachable!(),
+                    } | match access {
+                        None => 0,
+                        Some(FileAccess::Read) => 0x100,
+                        Some(FileAccess::Write) => 0x200,
+                        Some(FileAccess::ReadWrite) => 0x300,
+                    } | match lock {
+                        None => 0,
+                        Some(FileLock::Read) => 0x3000,
+                        Some(FileLock::Write) => 0x2000,
+                        Some(FileLock::ReadWrite) => 0x1000,
+                        Some(FileLock::Shared) => 0x4000,
                     };
                     self.emit_runtime_call(
                         "B$OPEN",
                         Vec::new(),
-                        vec![
-                            path,
-                            file,
-                            Operand::Constant(INTEGER, Number::Integer(-1)),
-                            Operand::Constant(INTEGER, Number::Integer(mode)),
-                        ],
+                        vec![path, file, length, Operand::Constant(INTEGER, Number::Integer(mode))],
                     );
                 }
                 Statement::Close { files, .. } => {
@@ -3748,10 +3866,15 @@ impl Compiler {
                             match type_id {
                                 INTEGER | BOOLEAN | BYTE => ("I2", self.convert(operand, type_id, INTEGER)?),
                                 LONG => ("I4", operand),
-                                SINGLE | DOUBLE => {
+                                SINGLE | DOUBLE | CURRENCY => {
                                     let place = self.temporary(type_id)?;
                                     self.emit("store", Vec::new(), vec![Operand::Place(place), operand]);
-                                    (if type_id == SINGLE { "R4" } else { "R8" }, Operand::Place(place))
+                                    let suffix = match type_id {
+                                        SINGLE => "R4",
+                                        DOUBLE => "R8",
+                                        _ => "CY",
+                                    };
+                                    (suffix, Operand::Place(place))
                                 }
                                 _ => return self.fail("PRINT item has an unsupported type"),
                             }
@@ -4036,6 +4159,47 @@ impl Compiler {
                         };
                         self.emit_runtime_call("B$SCLS", Vec::new(), vec![selector]);
                     }
+                    "VIEW" | "VIEW_SCREEN" => {
+                        if arguments.is_empty() {
+                            self.emit_runtime_call("B$VEW0", Vec::new(), Vec::new());
+                        } else {
+                            // BC passes the corners, the fill and border
+                            // colours (-1 for one left out) and
+                            // whether it is VIEW SCREEN.
+                            let mut operands = Vec::new();
+                            for slot in 0..6 {
+                                match arguments.get(slot) {
+                                    Some(argument) if !matches!(argument, Expr::Omitted(_)) => {
+                                        let (value, type_id) = self.expression(argument)?;
+                                        operands.push(self.convert(value, type_id, INTEGER)?);
+                                    }
+                                    _ => operands.push(Operand::Constant(INTEGER, Number::Integer(-1))),
+                                }
+                            }
+                            let screen = i64::from(name == "VIEW_SCREEN");
+                            operands.push(Operand::Constant(INTEGER, Number::Integer(screen)));
+                            self.emit_runtime_call("B$VIEW", Vec::new(), operands);
+                        }
+                    }
+                    "WINDOW" | "WINDOW_SCREEN" => {
+                        if arguments.is_empty() {
+                            self.emit_runtime_call("B$WIN0", Vec::new(), Vec::new());
+                        } else {
+                            if arguments.len() != 4 {
+                                return self.fail("WINDOW takes two corners, as in `WINDOW (0, 0)-(1, 1)`");
+                            }
+                            // BC passes the four corner values as SINGLEs and
+                            // whether it is WINDOW SCREEN.
+                            let mut operands = Vec::new();
+                            for argument in arguments {
+                                let (value, type_id) = self.expression(argument)?;
+                                operands.push(self.stored_float_argument(value, type_id, SINGLE)?);
+                            }
+                            let screen = i64::from(name == "WINDOW_SCREEN");
+                            operands.push(Operand::Constant(INTEGER, Number::Integer(screen)));
+                            self.emit_runtime_call("B$WIND", Vec::new(), operands);
+                        }
+                    }
                     "VIEW_PRINT" => {
                         // VBDOS prview.asm's B$VWPT takes (top, bottom) as
                         // INTEGERs, cleans four bytes, and uses -1, -1 for
@@ -4145,19 +4309,32 @@ impl Compiler {
                         );
                     }
                     "PAINT" => {
-                        if !(3..=4).contains(&arguments.len()) {
-                            return self.fail("PAINT expects coordinates, fill, and optional border");
+                        // PAINT (x, y) [, paint [, border [, background]]]: a
+                        // numeric paint or none is
+                        // B$PAIN(paint, border), a tile string B$PNTC; a
+                        // left-out one is -1.
+                        if !(2..=5).contains(&arguments.len()) {
+                            return self.fail("PAINT expects coordinates, fill, border and background");
                         }
                         self.graphics_coordinate(1, &arguments[0], &arguments[1])?;
-                        let (fill, fill_type) = self.expression(&arguments[2])?;
-                        let fill = self.convert(fill, fill_type, INTEGER)?;
-                        let border = if let Some(argument) = arguments.get(3) {
-                            let (value, type_id) = self.expression(argument)?;
-                            self.convert(value, type_id, INTEGER)?
-                        } else {
-                            Operand::Constant(INTEGER, Number::Integer(-1))
+                        let omitted = Operand::Constant(INTEGER, Number::Integer(-1));
+                        let fill = arguments.get(2).filter(|one| !matches!(one, Expr::Omitted(_)));
+                        if fill.is_some_and(|one| self.string_syntax(one)) {
+                            return self.unsupported("PAINT with a tile string");
+                        }
+                        if arguments.len() > 4 {
+                            return self.fail("a PAINT background needs a tile string");
+                        }
+                        let number = |this: &mut Self, argument: Option<&Expr>| match argument {
+                            Some(Expr::Omitted(_)) | None => Ok(omitted.clone()),
+                            Some(argument) => {
+                                let (value, type_id) = this.expression(argument)?;
+                                this.convert(value, type_id, INTEGER)
+                            }
                         };
-                        self.emit_runtime_call("B$PAIN", Vec::new(), vec![fill, border]);
+                        let paint = number(self, fill)?;
+                        let border = number(self, arguments.get(3))?;
+                        self.emit_runtime_call("B$PAIN", Vec::new(), vec![paint, border]);
                     }
                     "PSET" | "PRESET" => {
                         if !(2..=3).contains(&arguments.len()) {
@@ -6188,6 +6365,18 @@ impl Compiler {
         self.convert(value, type_id, INTEGER)
     }
 
+    /// Whether every bound of `declaration` is a constant; a DIM with a
+    /// variable bound is a dynamic array, dimensioned where the DIM runs.
+    fn constant_bounds(
+        &self,
+        declaration: &Declaration,
+    ) -> bool {
+        declaration
+            .bounds
+            .iter()
+            .all(|one| one.lower.iter().chain([&one.upper]).all(|bound| self.constant(bound).is_ok()))
+    }
+
     /// REDIM, or REDIM PRESERVE: PDS 7.1 BC passes B$RDMP the operands B$RDIM
     /// takes.
     fn redim(
@@ -6348,6 +6537,19 @@ impl Compiler {
                     self.raise_if(lowest, 6)?;
                 }
                 let result = self.value(type_id);
+                if *op == Unary::Negative {
+                    let negated = match &operand {
+                        Operand::Value(literal) => match self.literal_values.get(literal) {
+                            Some((_, Number::Real(text))) => Some(Number::Real(format!("-{text}"))),
+                            _ => None,
+                        },
+                        Operand::Constant(_, Number::Integer(value)) => value.checked_neg().map(Number::Integer),
+                        _ => None,
+                    };
+                    if let Some(negated) = negated {
+                        self.literal_values.insert(result, (type_id, negated));
+                    }
+                }
                 self.emit(operation, vec![result], vec![operand]);
                 Ok((Operand::Value(result), type_id))
             }
@@ -7495,6 +7697,16 @@ impl Compiler {
                         // evaluating an effectful expression a second time.
                         let common = common_type(numerator_type, right_type, Binary::Divide)?;
                         let numerator = self.convert(numerator, numerator_type, common)?;
+                        // the `+ c` set aside above belongs to the numerator
+                        let numerator = if let Some(additive) = additive {
+                            let step =
+                                self.convert(Operand::Constant(INTEGER, Number::Integer(additive)), INTEGER, common)?;
+                            let sum = self.value(common);
+                            self.emit("fadd", vec![sum], vec![numerator, step]);
+                            Operand::Value(sum)
+                        } else {
+                            numerator
+                        };
                         let denominator =
                             self.convert(Operand::Constant(right_type, Number::Integer(divisor)), right_type, common)?;
                         let divided = self.value(common);
@@ -8765,6 +8977,38 @@ impl Compiler {
         Ok((load(self, result), common))
     }
 
+    /// A constant becomes CURRENCY's scaled integer, as BC folds it; anything
+    /// else needs the runtime's conversions, which are not attached yet.
+    fn currency_conversion(
+        &mut self,
+        operand: Operand,
+        from: u32,
+        to: u32,
+    ) -> Result<Operand, SemanticError> {
+        const SCALE: i64 = 10_000;
+        let operand = match operand {
+            Operand::Value(value) if self.literal_values.contains_key(&value) => {
+                Operand::Constant(from, self.literal_values[&value].1.clone())
+            }
+            other => other,
+        };
+        let scaled = match (&operand, to) {
+            (Operand::Constant(_, Number::Integer(value)), CURRENCY) if integral(from) => value.checked_mul(SCALE),
+            (Operand::Constant(_, Number::Real(text)), CURRENCY) if matches!(from, SINGLE | DOUBLE) => {
+                // BC converts the float, not its text: 1.00005 is a SINGLE just
+                // under the half.
+                let value = parse_real(text)?;
+                let value = if from == SINGLE { f64::from(value as f32) } else { value } * SCALE as f64;
+                (value.abs() < i64::MAX as f64).then(|| value.round_ties_even() as i64)
+            }
+            _ => return self.unsupported("a CURRENCY conversion"),
+        };
+        match scaled {
+            Some(value) => Ok(Operand::Constant(CURRENCY, Number::Integer(value))),
+            None => self.fail("Overflow"),
+        }
+    }
+
     fn convert(
         &mut self,
         operand: Operand,
@@ -8773,6 +9017,9 @@ impl Compiler {
     ) -> Result<Operand, SemanticError> {
         if from == to {
             return Ok(operand);
+        }
+        if from == CURRENCY || to == CURRENCY {
+            return self.currency_conversion(operand, from, to);
         }
         let numeric = |type_id| integral(type_id) || matches!(type_id, SINGLE | DOUBLE);
         let allowed = numeric(from) && numeric(to);
@@ -8846,9 +9093,6 @@ impl Compiler {
     ) -> Result<(), SemanticError> {
         if intrinsics::unsupported(name, self.dialect) {
             return self.unsupported(name);
-        }
-        if name.ends_with('@') {
-            return self.unsupported(&format!("{name} with a CURRENCY value"));
         }
         Ok(())
     }
@@ -9017,12 +9261,38 @@ impl Compiler {
         type_id: u32,
     ) -> Result<u32, SemanticError> {
         let extent = self.width(type_id);
-        let storage = self.implicit_storage;
+        // A by-reference argument temporary is passed by address. In the
+        // module block it would make the whole block escape, and every call
+        // would then be taken to write the loop limits and the rest of it.
+        let storage =
+            if self.implicit_storage == "module" && prefix == "$arg" { "static" } else { self.implicit_storage };
         if storage != "static" && self.beyond_segment(self.data_offset + extent) {
             return self
                 .fail(format!("a temporary value does not fit: the stack frame ({} KiB) is full", self.segment_kib()));
         }
-        let (offset, symbol) = if storage == "static" {
+        let (offset, symbol) = if storage == "static" && self.implicit_storage == "module" {
+            // One object for them all, so neighbouring constants still store
+            // as one wider move.
+            if let Some(block) = self.data.iter_mut().find(|object| object.name.starts_with("$arguments")) {
+                let offset = block.bytes.len();
+                block.bytes.resize(offset + extent, 0);
+                (offset as isize, block.id)
+            } else {
+                let symbol = self.next_data;
+                self.next_data += 1;
+                self.data.push(DataObject {
+                    align: 1,
+                    id: symbol,
+                    name: format!("$arguments${}", self.next_place),
+                    bytes: vec![0; extent],
+                    readonly: false,
+                    relocations: Vec::new(),
+                    linkage: "internal",
+                    address: "near",
+                });
+                (0, symbol)
+            }
+        } else if storage == "static" {
             let symbol = self.next_data;
             self.next_data += 1;
             self.data.push(DataObject {
@@ -9174,6 +9444,13 @@ impl Compiler {
         text: &str,
         type_id: u32,
     ) -> Result<Operand, SemanticError> {
+        if type_id == CURRENCY {
+            return match scaled_decimal(text) {
+                Some(Some(value)) => Ok(Operand::Constant(CURRENCY, Number::Integer(value))),
+                Some(None) => self.fail("Overflow"),
+                None => self.fail(format!("invalid CURRENCY constant {text}")),
+            };
+        }
         let bytes = match type_id {
             SINGLE => text
                 .parse::<f32>()
@@ -9224,6 +9501,7 @@ impl Compiler {
         });
         let value = self.value(type_id);
         self.emit("load", vec![value], vec![Operand::Place(place)]);
+        self.literal_values.insert(value, (type_id, Number::Real(text.into())));
         Ok(Operand::Value(value))
     }
 
@@ -10174,7 +10452,7 @@ fn type_id(type_name: Option<&TypeName>) -> Result<u32, SemanticError> {
         TypeName::Named(name) => {
             return Err(SemanticError { message: format!("user-defined type {name} is not attached yet") });
         }
-        TypeName::Currency => return Err(SemanticError { message: "CURRENCY is not attached yet".into() }),
+        TypeName::Currency => CURRENCY,
         TypeName::Tuple(_) | TypeName::Array(_) => return Err(tuple_misplaced()),
     })
 }
@@ -10185,6 +10463,7 @@ fn type_name(type_id: u32) -> TypeName {
         LONG => TypeName::Long,
         SINGLE => TypeName::Single,
         DOUBLE => TypeName::Double,
+        CURRENCY => TypeName::Currency,
         STRING => TypeName::String,
         BYTE | SIGNED_BYTE | UNSIGNED_INTEGER | UNSIGNED_LONG => {
             TypeName::Integral { width: integer_width(type_id) as u8, signed: !unsigned(type_id) }
@@ -10200,6 +10479,7 @@ fn suffix(name: &str) -> Option<TypeName> {
         Some(b'!') => Some(TypeName::Single),
         Some(b'#') => Some(TypeName::Double),
         Some(b'$') => Some(TypeName::String),
+        Some(b'@') => Some(TypeName::Currency),
         _ => None,
     }
 }
@@ -10209,7 +10489,7 @@ fn source_position(span: Span) -> (usize, usize) {
 }
 
 fn canonical(name: &str) -> &str {
-    name.trim_end_matches(['%', '&', '!', '#', '$'])
+    name.trim_end_matches(['%', '&', '!', '#', '$', '@'])
 }
 
 fn type_suffix(type_id: u32) -> &'static str {
@@ -10218,6 +10498,7 @@ fn type_suffix(type_id: u32) -> &'static str {
         LONG => "&",
         SINGLE => "!",
         DOUBLE => "#",
+        CURRENCY => "@",
         STRING => "$",
         _ => "",
     }
@@ -10276,6 +10557,42 @@ fn integer_range(type_id: u32) -> Option<std::ops::RangeInclusive<i64>> {
         UNSIGNED_LONG => Some(0..=u32::MAX as i64),
         _ => None,
     }
+}
+
+/// A decimal literal's value times 10000, rounded half away from zero, exact
+/// where a float is not (922337203685477.5807). None where it is no number,
+/// `Some(None)` where it does not fit.
+fn scaled_decimal(text: &str) -> Option<Option<i64>> {
+    let upper = text.trim().to_ascii_uppercase().replace('D', "E");
+    let (negative, body) = match upper.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, upper.strip_prefix('+').unwrap_or(&upper)),
+    };
+    let (mantissa, exponent) = match body.split_once('E') {
+        Some((mantissa, exponent)) => (mantissa, exponent.parse::<i32>().ok()?),
+        None => (body, 0),
+    };
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    if whole.is_empty() && fraction.is_empty()
+        || ![whole, fraction].iter().all(|part| part.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return None;
+    }
+    // digits with the decimal point after `point` of them, scaled by 10^4
+    let digits: Vec<u32> = whole.chars().chain(fraction.chars()).map(|c| c.to_digit(10).unwrap_or(0)).collect();
+    let point = whole.len() as i32 + exponent + 4;
+    let mut value: i128 = 0;
+    for (at, digit) in digits.iter().enumerate() {
+        // the digit's power of ten after scaling
+        let place = point - at as i32 - 1;
+        if place >= 0 {
+            value = value.checked_add(i128::from(*digit) * 10i128.checked_pow(place as u32)?)?;
+        } else if place == -1 && *digit >= 5 {
+            value += 1;
+        }
+    }
+    let value = if negative { -value } else { value };
+    Some(i64::try_from(value).ok())
 }
 
 fn parse_real(value: &str) -> Result<f64, SemanticError> {

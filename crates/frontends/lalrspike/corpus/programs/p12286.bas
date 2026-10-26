@@ -1,5 +1,0 @@
-DIM x%
-DIM a(10)
-REM $STATIC
-REDIM a(20)
-a(1) = 1

@@ -1,2 +1,0 @@
-DECLARE SUB p ALIAS "q" (a%)
-CALL p(1)

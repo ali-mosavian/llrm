@@ -1,2 +1,0 @@
-STATIC x%
-CONST y = 2

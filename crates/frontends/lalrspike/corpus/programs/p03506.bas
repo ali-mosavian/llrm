@@ -1,3 +1,0 @@
-SUB p
-DIM x(5) AS INTEGER
-END SUB

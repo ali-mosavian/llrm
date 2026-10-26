@@ -1,2 +1,0 @@
-STATIC x%
-PRINT x%(1)

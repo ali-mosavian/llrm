@@ -1,2 +1,0 @@
-CONST y = 2
-REDIM x(5) AS LONG

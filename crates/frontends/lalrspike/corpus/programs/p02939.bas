@@ -1,2 +1,0 @@
-DEFSTR X
-DEFSTR X

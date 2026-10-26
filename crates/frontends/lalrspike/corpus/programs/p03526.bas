@@ -1,3 +1,0 @@
-SUB p
-COMMON x%
-END SUB

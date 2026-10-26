@@ -1,3 +1,0 @@
-SUB p
-INPUT x%
-END SUB

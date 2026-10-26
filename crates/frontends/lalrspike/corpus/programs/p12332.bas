@@ -1,4 +1,0 @@
-SUB p
-'$LINES
-DIM a(10)
-END SUB

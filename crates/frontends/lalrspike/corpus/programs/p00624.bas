@@ -1,6 +1,0 @@
-DIM x%
-SUB q
-ON ERROR GOTO h
-h:
-RESUME NEXT
-END SUB

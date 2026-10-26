@@ -1,4 +1,0 @@
-SUB p
-'$LINESIZE
-DIM a(10)
-END SUB

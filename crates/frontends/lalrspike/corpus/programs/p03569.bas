@@ -1,4 +1,0 @@
-DIM SHARED x%, x%(5)
-SUB p
-FOR x% = 1 TO 2: NEXT
-END SUB

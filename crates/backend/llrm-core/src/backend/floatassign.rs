@@ -121,7 +121,7 @@ use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
 
-use crate::backend::allocate::{Live, live};
+use crate::backend::allocate::{Live, live_among};
 use crate::backend::constpool::{self, Pool};
 use crate::backend::cpu::Profile;
 use crate::backend::floatalloc::{
@@ -873,7 +873,7 @@ fn _live_after(
 
 /// Later loads of a cell nothing wrote since are its first load's value.
 fn _aliased(body: &LirBody) -> LirBody {
-    _aliased_by(body, &live(body).1).0
+    _aliased_by(body, &crate::backend::allocate::live_out(body)).0
 }
 
 /// `_aliased` with the body's liveness at block exits given; whether any load
@@ -1075,6 +1075,12 @@ fn _rereadable_across(
         && body.blocks.iter().filter(|one| live_in[&one.at].contains(&value)).all(|one| quiet_until_read(&one.insns))
 }
 
+// The values `prepared` asked liveness of.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static ROWS_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 // Blocks `_crowded` looked at, for a test that a round resumes where the last
 // left off.
 #[cfg(test)]
@@ -1211,7 +1217,10 @@ pub fn prepared(
     if floating.is_empty() {
         return Ok(body);
     }
-    let (live_in, live_out) = live(&body);
+    // Only the floating values are asked of: no other value is followed.
+    #[cfg(test)]
+    ROWS_ASKED.with(|one| one.set(floating.len()));
+    let (live_in, live_out) = live_among(&body, |value| floating.contains(&value));
     if live_in[&body.entry].iter().any(|value| floating.contains(&value)) {
         return Err(unlowered("floating stack input is unavailable"));
     }

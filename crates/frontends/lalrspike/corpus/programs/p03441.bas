@@ -1,2 +1,0 @@
-INPUT x%
-REDIM x%(5)

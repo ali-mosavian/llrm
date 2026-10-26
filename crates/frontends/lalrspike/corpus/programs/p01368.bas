@@ -1,2 +1,0 @@
-DIM x AS INTEGER
-CONST x = 1

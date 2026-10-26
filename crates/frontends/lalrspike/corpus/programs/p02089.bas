@@ -1,2 +1,0 @@
-DIM SHARED x%
-REDIM x%(5)

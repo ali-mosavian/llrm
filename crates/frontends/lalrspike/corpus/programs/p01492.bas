@@ -1,2 +1,0 @@
-DIM x AS STRING
-SWAP x%, x

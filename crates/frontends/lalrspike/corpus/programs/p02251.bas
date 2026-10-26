@@ -1,2 +1,0 @@
-COMMON x%
-COMMON SHARED x%

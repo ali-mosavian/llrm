@@ -1,2 +1,0 @@
-DIM x AS INTEGER
-FOR x% = 1 TO 2: NEXT

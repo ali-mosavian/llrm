@@ -1,2 +1,0 @@
-DEFSTR X
-PRINT x%(1)

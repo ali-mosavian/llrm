@@ -1,6 +1,0 @@
-DIM x%
-GOSUB a
-END
-SUB p
-a:
-END SUB

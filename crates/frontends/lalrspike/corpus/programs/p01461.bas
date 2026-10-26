@@ -1,2 +1,0 @@
-DIM x AS STRING
-DIM x(5) AS LONG

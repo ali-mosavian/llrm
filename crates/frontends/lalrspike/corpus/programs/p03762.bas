@@ -1,3 +1,0 @@
-DIM x%
-IF x% THEN 10
-10 PRINT 1

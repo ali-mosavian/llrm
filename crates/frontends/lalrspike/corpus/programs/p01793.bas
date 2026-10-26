@@ -1,2 +1,0 @@
-DIM x(5) AS LONG
-PRINT x%(1)

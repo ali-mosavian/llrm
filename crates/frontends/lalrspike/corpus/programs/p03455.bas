@@ -1,2 +1,0 @@
-INPUT x%
-PRINT x$

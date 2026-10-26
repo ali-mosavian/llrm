@@ -1,6 +1,0 @@
-DIM x%, l&, a%(5)
-DECLARE SUB pp (z AS INTEGER)
-l& = SGN(40000)
-END
-SUB pp (z AS INTEGER)
-END SUB

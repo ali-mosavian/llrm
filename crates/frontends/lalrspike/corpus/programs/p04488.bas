@@ -1,3 +1,0 @@
-DIM x%
-IF x% THEN GOTO a
-65536 PRINT

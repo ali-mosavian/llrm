@@ -1,6 +1,0 @@
-'$DYNAMIC
-DIM a(10)
-'$DYNAMIC
-DIM b(10)
-REDIM a(20)
-ERASE b

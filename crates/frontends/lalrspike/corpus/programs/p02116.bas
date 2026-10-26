@@ -1,2 +1,0 @@
-DIM SHARED x%
-SWAP x%, x

@@ -1,3 +1,0 @@
-DIM x%
-0 PRINT
-GOTO 65536

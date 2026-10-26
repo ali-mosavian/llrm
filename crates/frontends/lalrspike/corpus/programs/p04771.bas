@@ -1,3 +1,0 @@
-DIM x%
-REM: 
-IF x% THEN 10

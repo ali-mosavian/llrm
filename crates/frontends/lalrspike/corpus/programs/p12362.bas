@@ -1,4 +1,0 @@
-SUB p
-'$SUBTITLE: 'x'
-DIM a(10)
-END SUB

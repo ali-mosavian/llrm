@@ -1,2 +1,0 @@
-DEFDBL A-Z
-DIM x AS LONG

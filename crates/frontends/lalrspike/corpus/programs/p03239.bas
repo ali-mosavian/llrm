@@ -1,2 +1,0 @@
-ERASE x%
-COMMON SHARED x%

@@ -1,2 +1,0 @@
-REDIM x(5) AS LONG
-FOR x% = 1 TO 2: NEXT

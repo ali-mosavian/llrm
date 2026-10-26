@@ -1,2 +1,0 @@
-INPUT x%
-DIM x AS INTEGER

@@ -1,6 +1,0 @@
-DIM x%, l&, a%(5)
-DECLARE SUB pp (z AS INTEGER)
-l& = 0 MOD 70000&
-END
-SUB pp (z AS INTEGER)
-END SUB

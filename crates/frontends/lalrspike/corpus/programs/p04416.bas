@@ -1,3 +1,0 @@
-DIM x%
-GOSUB a
-65535 PRINT

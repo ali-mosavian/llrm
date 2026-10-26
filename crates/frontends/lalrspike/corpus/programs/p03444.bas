@@ -1,2 +1,0 @@
-INPUT x%
-DIM SHARED x%(5)

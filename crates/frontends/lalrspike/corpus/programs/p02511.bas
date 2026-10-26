@@ -1,2 +1,0 @@
-CONST x = y
-COMMON SHARED x%

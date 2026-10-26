@@ -1,4 +1,0 @@
-SUB p
-'$DYNAMIC: PRINT
-DIM a(10)
-END SUB

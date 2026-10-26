@@ -1,8 +1,0 @@
-TYPE R
-a(3) AS INTEGER
-END TYPE
-DIM r AS R
-SUB s
-SHARED r
-r.a(1) = 1
-END SUB

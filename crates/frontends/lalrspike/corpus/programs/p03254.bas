@@ -1,2 +1,0 @@
-ERASE x%
-OPTION BASE 0

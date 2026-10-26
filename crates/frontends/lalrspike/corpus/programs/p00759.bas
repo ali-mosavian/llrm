@@ -1,4 +1,0 @@
-DIM r AS RecT
-TYPE RecT
-a AS INTEGER
-END TYPE

@@ -1,7 +1,0 @@
-DIM SHARED x%, y%, i%, j%, s$
-SUB p
-IF x% THEN
-ELSEIF y% THEN
-ELSE
-END IF
-END SUB

@@ -1,4 +1,0 @@
-DIM SHARED x%, x%(5)
-SUB p
-DIM x$(5)
-END SUB

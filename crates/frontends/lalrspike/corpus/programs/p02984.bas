@@ -1,2 +1,0 @@
-DEFDBL A-Z
-CONST y = 2

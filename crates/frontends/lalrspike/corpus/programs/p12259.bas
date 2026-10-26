@@ -1,6 +1,0 @@
-DIM x%, y%, i%
-IF y% THEN
-SELECT CASE x%
-CASE 1
-END IF
-END SELECT

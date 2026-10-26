@@ -1,2 +1,0 @@
-DEFDBL A-Z
-FOR x% = 1 TO 2: NEXT

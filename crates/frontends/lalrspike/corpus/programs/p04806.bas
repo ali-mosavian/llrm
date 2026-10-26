@@ -1,6 +1,0 @@
-DIM x%
-GOTO a
-END
-SUB p
-a:
-END SUB

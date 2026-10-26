@@ -1,4 +1,0 @@
-SUB p
-$DYNAMIC
-DIM a(10)
-END SUB

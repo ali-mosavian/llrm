@@ -1,2 +1,0 @@
-DEFDBL A-Z
-DEFDBL A-Z

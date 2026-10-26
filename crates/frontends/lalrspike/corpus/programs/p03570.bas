@@ -1,3 +1,0 @@
-SUB p
-SWAP x%, x
-END SUB

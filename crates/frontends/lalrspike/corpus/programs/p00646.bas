@@ -1,3 +1,0 @@
-SUB p
-END SUB
-PRINT 1

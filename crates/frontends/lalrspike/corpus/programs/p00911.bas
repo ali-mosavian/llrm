@@ -1,2 +1,0 @@
-x$ = "a"
-DEFSTR X

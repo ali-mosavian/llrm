@@ -1,3 +1,0 @@
-DIM x%
-x:
-ON ERROR GOTO 0

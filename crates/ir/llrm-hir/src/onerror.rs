@@ -147,7 +147,8 @@ pub fn last_erl_global(module: &mut Module) -> Result<ConstantId, String> {
 }
 
 /// ON ERROR GOTO the handler numbered `handler`, 0 for none. Inside the
-/// handler trapping stays off until RESUME turns on what this names.
+/// handler trapping stays off until RESUME turns on what this names; there
+/// ON ERROR GOTO 0 also raises the error handled again, which ends the program.
 pub fn goto(
     b: &mut Builder,
     handled: &Handled,
@@ -158,12 +159,7 @@ pub fn goto(
     let number = b.int(16, i128::from(handler));
     b.store(number, active, false);
     if inside {
-        return if handler == 0 {
-            Err("ON ERROR GOTO 0 in the handler, which ends the program with the error it handles: not selected yet"
-                .to_owned())
-        } else {
-            Ok(())
-        };
+        return Ok(());
     }
     let on = b.int(1, i128::from(handler != 0));
     b.call_as(BASIC, handled.onerror_type, Operand::Constant(handled.onerror), &[on], "");
@@ -180,7 +176,7 @@ pub fn landed(
 }
 
 /// Before RESUME: trapping on again. A handler is named there: trapping was
-/// on to land, and `goto` refuses ON ERROR GOTO 0 inside the handler.
+/// on to land, and ON ERROR GOTO 0 inside the handler never gets here.
 pub fn resuming(
     b: &mut Builder,
     handled: &Handled,

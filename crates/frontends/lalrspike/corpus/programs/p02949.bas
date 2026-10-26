@@ -1,2 +1,0 @@
-DEFSTR X
-INPUT x%

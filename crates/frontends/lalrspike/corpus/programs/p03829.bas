@@ -1,3 +1,0 @@
-DIM x%
-A:
-RESTORE 10

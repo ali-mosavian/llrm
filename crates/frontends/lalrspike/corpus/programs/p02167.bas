@@ -1,2 +1,0 @@
-DIM SHARED x%(5)
-FOR x% = 1 TO 2: NEXT

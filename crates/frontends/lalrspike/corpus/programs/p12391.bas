@@ -1,3 +1,0 @@
-'$STATIC
-DIM a(100)
-REDIM a(200)

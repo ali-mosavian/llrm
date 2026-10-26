@@ -1,3 +1,0 @@
-DIM x%
-RUN a
-0 PRINT

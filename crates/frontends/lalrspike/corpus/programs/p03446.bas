@@ -1,2 +1,0 @@
-INPUT x%
-COMMON x%

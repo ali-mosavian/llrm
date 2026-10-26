@@ -1,6 +1,0 @@
-DECLARE FUNCTION f$ ()
-PRINT f$
-END
-FUNCTION f$
-f$ = "a"
-END FUNCTION

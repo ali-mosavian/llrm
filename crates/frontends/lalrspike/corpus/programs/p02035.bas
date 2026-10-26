@@ -1,2 +1,0 @@
-REDIM x(5) AS LONG
-DIM x(1 TO 5)
