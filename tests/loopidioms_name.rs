@@ -21,7 +21,11 @@ fn test_the_trace_names_the_idiom_pass_loopidioms_not_fill() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let trace = String::from_utf8_lossy(&output.stderr);
     let steps: Vec<&str> = trace.lines().filter_map(|line| line.strip_prefix("[runs] step ")).collect();
-    let named = |name: &str| steps.iter().any(|step| step.split(' ').next().is_some_and(|one| one.ends_with(name)));
+    let named = |name: &str| {
+        steps.iter().any(|step| {
+            step.split(' ').next().is_some_and(|one| one.split('@').next().is_some_and(|pass| pass.ends_with(name)))
+        })
+    };
     assert!(named("-loopidioms"), "no loopidioms step in:\n{trace}");
     assert!(!named("-fill"), "a step still named fill in:\n{trace}");
 }

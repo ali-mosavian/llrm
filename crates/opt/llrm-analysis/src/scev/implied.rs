@@ -25,7 +25,7 @@
 //! loop's entry.
 
 use llrm_mir::constantrange::ConstantRange;
-use llrm_mir::module::{BlockId, InstId, Operand};
+use llrm_mir::module::{BlockId, GlobalKind, InstId, Operand};
 use llrm_mir::opcode::{IntPredicate, Opcode};
 use llrm_mir::valuetracking::pattern;
 
@@ -36,6 +36,16 @@ use super::{Cx, Flags, ScalarEvolution};
 
 /// `MaxSCEVOperationsImplicationDepth`.
 const MAX_SCEV_OPERATIONS_IMPLICATION_DEPTH: u32 = 2;
+
+thread_local! {
+    static GUARD_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many function bodies were read for guard calls on this thread: a test
+/// counts what a module without the declaration costs.
+pub fn guard_scans() -> usize {
+    GUARD_SCANS.with(std::cell::Cell::get)
+}
 
 /// What the guard queries keep between calls: the conditions being analyzed,
 /// the phis being merged, and whether a backedge query is on the stack.
@@ -131,12 +141,24 @@ impl ScalarEvolution {
     ) -> Vec<InstId> {
         use llrm_mir::valuetracking::pattern::{IntrinsicId, call_intrinsic};
         if self.guards.guard_calls.is_none() {
-            let query = cx.query(None);
             let mut found = Vec::new();
-            for &block in cx.function.layout() {
-                for inst in cx.function.iter_block(block) {
-                    if call_intrinsic(&query, inst) == Some(IntrinsicId::ExperimentalGuard) {
-                        found.push(inst);
+            // The pin asks the module for the declaration; with none, no body
+            // is read.
+            let declared = cx
+                .globals
+                .iter()
+                .any(
+                    |global| matches!(global.kind, GlobalKind::Function(_))
+                        && global.name.intrinsic_id() == Some(IntrinsicId::ExperimentalGuard),
+                );
+            if declared {
+                GUARD_SCANS.with(|one| one.set(one.get() + 1));
+                let query = cx.query(None);
+                for &block in cx.function.layout() {
+                    for inst in cx.function.iter_block(block) {
+                        if call_intrinsic(&query, inst) == Some(IntrinsicId::ExperimentalGuard) {
+                            found.push(inst);
+                        }
                     }
                 }
             }
