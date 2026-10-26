@@ -233,17 +233,41 @@ impl LoopIdiomRecognize {
         // DEVIATE: at -Os a loop of several stores stays one when a fill for
         // each store is more bytes than the loop (lru.c: four stores a trip
         // over three trips, five fills 33 bytes over it). Exit: none.
-        if let Some((costs, callees)) = run.bytes
-            && !crate::loopidioms::fills_pay(
+        if let Some((costs, callees)) = run.bytes {
+            let blocks = run.cur_loop.get_blocks();
+            let cx = cx!(run);
+            let mut groups: Vec<(Operand, Operand)> = Vec::new();
+            let mut stores = 0;
+            for &block in blocks {
+                for inst in run.function.iter_block(block) {
+                    let instruction = run.function.instruction(inst);
+                    if !matches!(instruction.opcode, Opcode::Store { .. }) {
+                        continue;
+                    }
+                    stores += 1;
+                    let object = llrm_mir::valuetracking::underlying::get_underlying_object(
+                        &cx.query(Some(inst)),
+                        instruction.operands[1],
+                        0,
+                    );
+                    let group = (object, instruction.operands[0]);
+                    if !groups.contains(&group) {
+                        groups.push(group);
+                    }
+                }
+            }
+            if !crate::loopidioms::fills_pay(
                 run.context,
                 run.env.layout,
                 run.function,
                 callees,
-                &run.cur_loop.get_blocks(),
+                &blocks,
                 costs,
-            )
-        {
-            return false;
+                stores,
+                groups.len() as i64,
+            ) {
+                return false;
+            }
         }
         // The trip count of the loop and the base pointer of the addrec SCEV
         // is guaranteed to be loop invariant, which means that it should

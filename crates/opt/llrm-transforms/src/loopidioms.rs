@@ -771,9 +771,10 @@ pub(crate) fn variable_copy_pays(
     trip_cost(context, layout, function, callees, blocks.iter(), costs, true) > costs.copy + costs.copy_variable
 }
 
-/// DEVIATE, for `loopidiom`: whether the fills for the stores of the loop over
-/// `blocks` are fewer code bytes than the loop. A loop of one store is always
-/// filled; of several, each is its own `rep stos` with ES set around it.
+/// DEVIATE, for `loopidiom`: whether `fills` fills, for the `stores` stores of
+/// the loop over `blocks`, are fewer code bytes than the loop. A loop of one
+/// store is always filled; of several, each fill is a `rep stos` with ES set
+/// around it, and the stores of one object with one value merge into one.
 pub(crate) fn fills_pay(
     context: &Context,
     layout: &DataLayout,
@@ -781,13 +782,10 @@ pub(crate) fn fills_pay(
     callees: &Callees,
     blocks: &[BlockId],
     costs: &OperationCosts,
+    stores: i64,
+    fills: i64,
 ) -> bool {
-    let stores = blocks
-        .iter()
-        .flat_map(|&block| operations(function, block))
-        .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Store { .. }))
-        .count() as i64;
-    stores < 2 || trip_cost(context, layout, function, callees, blocks.iter(), costs, true) > stores * costs.fill
+    stores < 2 || trip_cost(context, layout, function, callees, blocks.iter(), costs, true) > fills * costs.fill
 }
 
 /// What a copy of `length` bytes costs: the loads and stores isel expands it to
