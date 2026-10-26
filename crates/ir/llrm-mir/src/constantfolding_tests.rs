@@ -265,3 +265,15 @@ fn an_fp_binary_op_folds_only_when_its_result_is_exact_in_the_format() {
     let folds: Vec<bool> = got.iter().map(|one| one != "-").collect();
     assert_eq!(folds, [true, false, true, false, true, true, false, true, true, false, false], "{got:?}");
 }
+
+/// DEVIATE 9: the pin leaves `lrint` of a constant; an integral one is exact
+/// in every rounding mode and folds, a fractional one waits for the mode.
+/// fpemu's constant `CLNG`s were `fld; fistp` at m16 -Os (1,378 B, main's
+/// 1,231).
+#[test]
+fn an_lrint_of_an_integral_constant_folds_and_a_fractional_one_does_not() {
+    let text = "define void @f() {\n  %a = call i32 @llvm.lrint.i32.f64(double 1.049600e+06)\n  %b = call i32 @llvm.lrint.i32.f64(double 2.5)\n  %c = call i32 @llvm.lrint.i32.f64(double 3.000000e+10)\n  %d = call i64 @llvm.llrint.i64.f64(double -4.0)\n  ret void\n}\ndeclare i32 @llvm.lrint.i32.f64(double)\ndeclare i64 @llvm.llrint.i64.f64(double)\n";
+    let folded = dump(text).unwrap();
+    let lines: Vec<&str> = folded.lines().collect();
+    assert_eq!(lines, ["f 0 call i32 1049600", "f 1 call -", "f 2 call -", "f 3 call i64 18446744073709551612"]);
+}

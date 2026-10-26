@@ -1612,6 +1612,35 @@ fn test_the_liveness_of_some_values_is_what_the_solve_of_all_of_them_gives() {
     }
 }
 
+/// An edge block's anchor moves up before the branch into it, and what is live
+/// on entry is worked out for the value that anchor defines alone: the solve of
+/// every value of the function ran once for the first anchor (2.3 M Ir on
+/// d_faces -O2).
+#[test]
+fn test_hoisting_an_anchor_solves_the_liveness_of_its_value_alone() {
+    let anchor = |at: i64| {
+        let one = _inserted(nothing(at, None));
+        Arc::new(Insn { defines: vec![500], ..(*one).clone() })
+    };
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20), _jump(3, 10)], vec![20, 10]).into(),
+            block(10, vec![_return(10)], vec![]).into(),
+            block(20, vec![anchor(20), _jump(21, 30)], vec![30]).into(),
+            block(30, vec![_return(30)], vec![]).into(),
+        ],
+    );
+    let before = super::LIVE_SOLVES.with(std::cell::Cell::get);
+    let hoisted = _hoisted(&source);
+    // `LLRM_CHECK_JUMPS` solves it whole on purpose, to compare.
+    let solves = super::LIVE_SOLVES.with(std::cell::Cell::get) - before;
+    assert!(solves == 0 || llrm_support::env_flag!("LLRM_CHECK_JUMPS"), "every value's liveness was solved");
+    let parent = hoisted.blocks.iter().find(|block| block.at == 1).expect("the compare's block");
+    assert!(parent.insns.iter().any(|one| one.defines == [500]), "the anchor stayed in its edge block");
+}
+
 /// A loop of one block left by `je exit; jmp top` when the exit was laid out
 /// elsewhere: the trip that goes on paid a branch not taken and a jump. The
 /// likelier way is the conditional jump, `jne top`, and the exit is the jump.

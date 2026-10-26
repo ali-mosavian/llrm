@@ -462,6 +462,7 @@ pub struct AluNames {
 pub fn lea_base_index(one: &Insn) -> Option<(RegId, RegId)> {
     match one.what.as_ref()?.sources.as_slice() {
         [Loc::Address(address)] => Some((address.through, address.index_through)),
+        [Loc::Mem(cell)] => Some((cell.through, cell.index_through)),
         _ => None,
     }
 }
@@ -836,6 +837,25 @@ mod tests {
             found,
             RegUsageCheck { base_index_def: true, alu_dest_ref: false, killed_base: Some(1), killed_index: None }
         );
+    }
+
+    /// A lea whose source is a `Mem` cell (as allocation leaves it) has a base
+    /// and index: a def of the base between it and the add was missed, the adds
+    /// were put after `mov edx, ecx` and read the new edx (call_keeps m16
+    /// printed 905759280 for 686444454).
+    #[test]
+    fn check_reg_usage_sees_the_base_of_a_lea_with_a_cell_source() {
+        let cell = Loc::Mem(Mem { through: RegId::EDX, index_through: RegId::ECX, scale: 1, ..Mem::new(None, 4) });
+        let b = block(
+            vec![
+                insn(0, Operation::Address, "lea", vec![reg(RegId::EBX, 4)], vec![cell]),
+                mov(1, RegId::EDX, RegId::ECX),
+                add(2, RegId::ESI, RegId::EBX),
+            ],
+            vec![],
+        );
+        let found = check_reg_usage(regs(), &b, 0, 2, &dead_after(&b, &[]));
+        assert!(found.base_index_def, "{found:?}");
     }
 
     #[test]
