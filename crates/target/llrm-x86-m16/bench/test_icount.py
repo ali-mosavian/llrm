@@ -111,6 +111,14 @@ class CountTests(unittest.TestCase):
         self.assertEqual((result.error, result.exit_code), ("", 0))
         self.assertEqual(result.region.instructions, 34 + 4 + 7)
 
+    def test_a_profile_counts_each_address_as_often_as_it_ran(self):
+        """A hot loop in grep.bas (2.1x the clocks of main) was found by reading two listings: `profile` names the addresses that ran, and how often."""
+        entry = maps.find(maps.symbols(self.listing), "region")
+        profile = {}
+        icount.run(self.exe, None, self.directory, whole=True, profile=profile)
+        # `mov cx, 5` (3 bytes), then `dec cx`: the loop body runs five times
+        self.assertEqual((profile[entry], profile[entry + 3]), (1, 5))
+
     def test_a_function_the_program_never_calls_is_reported_not_counted_as_zero(self):
         result = icount.run(self.exe, 0x7000, self.directory)
         self.assertIsNone(result.region)
