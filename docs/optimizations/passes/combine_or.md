@@ -17,8 +17,7 @@ other order), and the one-use conditions.
 DEVIATE 1: no vectors, and only integer constants.
 
 DEVIATE 2: the folds that call a helper not yet translated are left out,
-each named where it stood: `SimplifyDemandedInstructionBits`
-(`combine_demanded`), `foldOrToXor`, `foldComplexAndOrPatterns`,
+each named where it stood: `foldOrToXor`, `foldComplexAndOrPatterns`,
 `foldIntegerPackFromVector`, `foldOrOfInversions`, the `i1` select folds
 (`foldAndOrOfSelectUsingImpliedCond`, `FoldOrOfLogicalAnds`),
 `matchBSwapOrBitReverse`, `matchOrConcat`,

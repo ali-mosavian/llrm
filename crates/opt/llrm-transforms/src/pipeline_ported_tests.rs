@@ -803,3 +803,32 @@ b1:
     assert!(!out.contains("alloca") && !out.contains("memset(") && !out.contains("store"), "{out}");
     assert!(out.contains("ret i16 7"), "{out}");
 }
+
+/// textfill.flat.bas `POKE &HB8000 + i` under `i < 3999`: the 16-bit offset is
+/// `i + 0x8000`, which was left `xor i, -32768` or a flagless `or`, so the old
+/// selector could not fold it into the store (`or bx, -32768` for
+/// `es:[di-28768]`, +20 B at -Os m16). The pin's
+/// `SimplifyDemandedInstructionBits` in `visitXor` and `visitOr` makes it `or
+/// disjoint`, an address add.
+#[test]
+fn a_sign_mask_offset_of_a_value_a_branch_bounds_is_a_disjoint_or() {
+    let after = piped(
+        "declare void @g(i16)
+define i16 @f(i16 %i) {
+b0:
+  %c = icmp ult i16 %i, 3999
+  br i1 %c, label %b5, label %b6
+b5:
+  %s = sext i16 %i to i32
+  %a = add i32 753664, %s
+  %t = trunc i32 %a to i16
+  call void @g(i16 %t)
+  ret i16 %t
+b6:
+  ret i16 0
+}
+",
+    );
+    assert!(after.contains("or disjoint i16 %i, -32768"), "{after}");
+    assert!(!after.contains("xor"), "{after}");
+}
