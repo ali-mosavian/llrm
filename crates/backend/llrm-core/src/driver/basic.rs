@@ -76,18 +76,22 @@ pub fn _RUNTIME_FRAME_HEADER(
     }
 }
 
-/// Whether any instruction of `body` writes DS; an escape (raw bytes) may.
+/// Whether any instruction of `body` writes DS; an escape (raw bytes) may. A
+/// return is declared to write every register nothing reads after it, and a
+/// call every one it clobbers: both leave DS as they found it (a callee
+/// keeps the caller's DS, and the caller sets it again before a call that needs
+/// the data group).
 fn writes_data_segment(body: &lir::LirBody) -> bool {
     let regs = body.regs();
+    let writes = |one: &lir::Insn| match crate::backend::liveness::effect(regs, body.bits, one) {
+        Some(effect) => effect.writes.iter().any(|&(register, _)| register == RegId::DS),
+        None => one.what.as_ref().is_some_and(|what| what.op == Operation::Escape),
+    };
     body.blocks
         .iter()
         .flat_map(|block| &block.insns)
-        .any(
-            |one| match crate::backend::liveness::effect(regs, body.bits, one) {
-                Some(effect) => effect.writes.iter().any(|&(register, _)| register == RegId::DS),
-                None => one.what.as_ref().is_some_and(|what| what.op == Operation::Escape),
-            },
-        )
+        .filter(|one| one.what.as_ref().is_none_or(|what| !matches!(what.op, Operation::Return | Operation::Call)))
+        .any(|one| writes(one))
 }
 
 /// Enter and leave a BASIC runtime frame.
