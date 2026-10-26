@@ -434,7 +434,7 @@ fn test_a_block_that_jumps_to_itself_stays() {
 
 /// `optimized`'s round: the tails merged, then the branches settled.
 fn merged(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
-    let merged = tailmerge::merged(body, false)?.unwrap_or_else(|| body.clone());
+    let merged = tailmerge::merged(body, false, None)?.unwrap_or_else(|| body.clone());
     Ok(machinedce::eliminated(threaded(&merged)))
 }
 
@@ -560,7 +560,7 @@ fn test_a_tail_of_three_shared_by_two_arms_is_split_off_and_shared() {
     let source = arms_sharing_a_tail(3);
     assert_eq!((count(&source, Operation::Move), count(&source, Operation::Compare)), (7, 3));
 
-    let result = tailmerge::merged(&source, false).unwrap().expect("nothing was merged");
+    let result = tailmerge::merged(&source, false, None).unwrap().expect("nothing was merged");
 
     assert_eq!((count(&result, Operation::Move), count(&result, Operation::Compare)), (5, 2));
 }
@@ -571,7 +571,7 @@ fn test_a_tail_of_three_shared_by_two_arms_is_split_off_and_shared() {
 fn test_a_tail_of_one_is_not_shared() {
     let source = arms_sharing_a_tail(1);
 
-    assert!(tailmerge::merged(&source, false).unwrap().is_none());
+    assert!(tailmerge::merged(&source, false, None).unwrap().is_none());
 }
 
 /// A tail of one move and two zero-code anchors was shared: `x_cordic` -O3
@@ -606,7 +606,7 @@ fn test_anchors_that_emit_no_code_do_not_count_toward_a_shared_tail() {
         ],
     );
 
-    assert!(tailmerge::merged(&source, false).unwrap().is_none());
+    assert!(tailmerge::merged(&source, false, None).unwrap().is_none());
 }
 
 /// An anchor just before the shared tail stayed in the arm that now only jumps,
@@ -636,7 +636,7 @@ fn test_an_anchor_before_the_shared_tail_leaves_the_arm_with_it() {
         ],
     );
 
-    let result = tailmerge::merged(&source, false).unwrap().expect("nothing was merged");
+    let result = tailmerge::merged(&source, false, None).unwrap().expect("nothing was merged");
 
     let anchors = result.blocks.iter().flat_map(|block| block.insns.iter()).filter(|one| super::_inert(one)).count();
     assert_eq!(anchors, 1, "the arm that now jumps still holds its anchor");
@@ -671,7 +671,7 @@ fn test_a_sahf_is_not_an_anchor_and_stays_on_every_path() {
         ],
     );
 
-    let result = tailmerge::merged(&source, true).unwrap().expect("nothing was merged");
+    let result = tailmerge::merged(&source, true, None).unwrap().expect("nothing was merged");
 
     let sahfs = |at: i64| {
         let mut path = 0;
@@ -746,7 +746,7 @@ fn test_a_branch_before_the_shared_tail_keeps_its_target_a_successor() {
         ],
     );
 
-    let result = tailmerge::merged(&source, false).unwrap().expect("nothing was merged");
+    let result = tailmerge::merged(&source, false, None).unwrap().expect("nothing was merged");
 
     for block in &result.blocks {
         for one in &block.insns {
@@ -848,9 +848,9 @@ fn test_speed_keeps_a_cycle_block_that_ends_in_a_branch_whole() {
             block(99, vec![_return(99)], vec![]).into(),
         ],
     );
-    assert!(tailmerge::merged(&source, true).unwrap().is_some(), "the premise: for size the merge applies here");
+    assert!(tailmerge::merged(&source, true, None).unwrap().is_some(), "the premise: for size the merge applies here");
 
-    let result = optimized(&source, cpu::profile("486").unwrap()).unwrap();
+    let result = optimized(&source, cpu::profile("486").unwrap(), None).unwrap();
 
     assert_eq!(
         count(&result, Operation::Compare),
@@ -897,15 +897,12 @@ fn test_two_blocks_that_return_share_their_last_three_instructions() {
     );
     assert_eq!(count(&source, Operation::Return), 3);
 
-    let result = tailmerge::merged(&source, false).unwrap().expect("nothing was merged");
+    let result = tailmerge::merged(&source, false, None).unwrap().expect("nothing was merged");
 
     assert_eq!(count(&result, Operation::Return), 2);
 }
 
-/// jpeg_single emitted `push 11; call B$SERR` once per failed check, 8 copies
-/// (m16 -Os, tens of bytes each); a block ending in a call was never merged.
-#[test]
-fn test_blocks_ending_in_the_same_call_share_it() {
+fn failing_blocks() -> LirBody {
     let fails = |at: i64| {
         block(
             at,
@@ -917,7 +914,7 @@ fn test_blocks_ending_in_the_same_call_share_it() {
         )
         .into()
     };
-    let source = body(
+    body(
         "f",
         1,
         vec![
@@ -926,12 +923,31 @@ fn test_blocks_ending_in_the_same_call_share_it() {
             fails(20),
             block(30, vec![_inserted(_return(30))], vec![]).into(),
         ],
-    );
-    assert_eq!(count(&source, Operation::Call), 2);
+    )
+}
 
-    let result = tailmerge::merged(&source, false).unwrap().expect("nothing was merged");
+/// jpeg_single emitted `push 11; call B$SERR` once per failed check, 8 copies
+/// (m16 -Os, tens of bytes each); a block ending in a call was never merged.
+#[test]
+fn test_blocks_ending_in_a_call_to_the_same_routine_share_it() {
+    let source = failing_blocks();
+    assert_eq!(count(&source, Operation::Call), 2);
+    let calls = IndexMap::from_iter([(11, "B$SERR".to_owned()), (21, "B$SERR".to_owned())]);
+
+    let result = tailmerge::merged(&source, false, Some(&calls)).unwrap().expect("nothing was merged");
 
     assert_eq!(count(&result, Operation::Call), 1);
+}
+
+/// The callee is not in the instruction: examples/channels merged `call N$PS`
+/// into `call N$PU2` (the same registers, the same clobbers) and ran wrong.
+#[test]
+fn test_blocks_ending_in_calls_to_different_routines_are_not_merged() {
+    let source = failing_blocks();
+    let calls = IndexMap::from_iter([(11, "N$PS".to_owned()), (21, "N$PU2".to_owned())]);
+
+    assert!(tailmerge::merged(&source, false, Some(&calls)).unwrap().is_none());
+    assert!(tailmerge::merged(&source, false, None).unwrap().is_none(), "no names: nothing is known to match");
 }
 
 /// Decoded tails cannot share one copy without reconciling source maps.
@@ -1912,7 +1928,7 @@ fn loop_nest() -> LirBody {
 /// weights: entry pre0 e1 l1 h1 pre1 e2 l2 h2 pre2 h3 pre3 s l3 e3 done.
 #[test]
 fn test_a_loop_is_not_rotated_where_its_exit_only_ties_the_top_fall_through() {
-    let made = optimized(&loop_nest(), cpu::profile("486").unwrap()).unwrap();
+    let made = optimized(&loop_nest(), cpu::profile("486").unwrap(), None).unwrap();
     let order: Vec<i64> = made.blocks.iter().map(|one| one.at).collect();
     assert_eq!(order, [1, 10, 101, 103, 100, 102, 201, 203, 200, 202, 300, 302, 7000, 303, 301, 9999], "{order:?}");
 }

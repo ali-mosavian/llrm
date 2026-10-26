@@ -82,11 +82,20 @@ fn mergeable(one: &Insn) -> bool {
 fn identical(
     one: &Item,
     other: &Item,
+    calls: &IndexMap<i64, String>,
 ) -> bool {
     if one.fixed || other.fixed {
         return false;
     }
     let (a, b) = (&one.insn, &other.insn);
+    // The callee is not in the instruction: it is the routine the call's
+    // position names (`Procedure::callees`).
+    if a.what.as_ref().is_some_and(|what| what.op == Operation::Call) {
+        match (calls.get(&a.at), calls.get(&b.at)) {
+            (Some(x), Some(y)) if x == y => {}
+            _ => return false,
+        }
+    }
     a.what == b.what
         && a.clobbers == b.clobbers
         && a.clobbers_high == b.clobbers_high
@@ -190,11 +199,14 @@ fn seq_of(
 fn common(
     one: &Seq,
     other: &Seq,
+    calls: &IndexMap<i64, String>,
 ) -> usize {
-    one.items.iter().rev().zip(other.items.iter().rev()).take_while(|(x, y)| identical(x, y)).count()
+    one.items.iter().rev().zip(other.items.iter().rev()).take_while(|(x, y)| identical(x, y, calls)).count()
 }
 
 struct Folder {
+    /// The routine each call goes to, by position.
+    calls: IndexMap<i64, String>,
     order: Vec<crate::model::lir::Block>,
     pos: IndexMap<i64, usize>,
     odds: BlockOdds,
@@ -383,7 +395,7 @@ impl Folder {
         onward: Option<i64>,
         pred: Option<i64>,
     ) -> (Option<usize>, &'static str) {
-        let length = common(&one.seq, &other.seq);
+        let length = common(&one.seq, &other.seq, &self.calls);
         if length == 0 {
             return (None, "none");
         }
@@ -820,6 +832,7 @@ fn _leaving(
 pub fn merged(
     body: &LirBody,
     size: bool,
+    calls: Option<&IndexMap<i64, String>>,
 ) -> Result<Option<LirBody>, masm::Unprintable> {
     // A body presented before `_placed` has jumps that are fall-throughs.
     for block in &body.blocks {
@@ -832,6 +845,7 @@ pub fn merged(
         return Ok(None);
     }
     let mut folder = Folder {
+        calls: calls.cloned().unwrap_or_default(),
         order: body.blocks.clone(),
         pos: IndexMap::default(),
         odds: body.odds.clone(),
