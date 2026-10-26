@@ -109,3 +109,13 @@ llc_level = false
 object = "elf"
 link = ["{root}/tools/arm64_glibc_link.sh", "{output}", "{objects}"]
 run = ["qemu-aarch64"]
+
+# 32-bit Linux on the host's glibc (multilib), ELF32 objects linked by the system clang.
+[x86_32-linux]
+triple = "i486-unknown-linux-gnu"
+datalayout = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"
+clang = ["-ffp-contract=off", "-target", "i486-unknown-linux-gnu", "-fno-pic", "-fno-stack-protector", "-fno-asynchronous-unwind-tables"]
+llc = ["-fobject-format=elf", "-mabi=sysv"]
+object = "elf"
+link = ["clang", "-m32", "-no-pie", "-o", "{output}", "{objects}", "-lm"]
+run = []

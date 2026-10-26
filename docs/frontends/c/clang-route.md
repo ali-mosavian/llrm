@@ -45,6 +45,7 @@ Clang's `BackendUtil` builds these only when passes are enabled. llrm must suppl
 |---|---|
 | `x86_64-linux` | `tests/llc`: 25 of 36 equal to clang's; the rest hit `llrm-llc` backend gaps (SSE floats, allocator, wide ops). Examples: 9 of 11 |
 | `arm64-glibc` | `tests/llc` 36 of 36, examples 11 of 11 under qemu-aarch64 against the glibc sysroot (`LLRM_ARM64_SYSROOT`); Mach-O on the Mac untested |
+| `x86_32-linux` | ELF32 on the host's glibc (`clang -m32` links and is the reference): `tests/llc` 36 of 36, examples 11 of 11 |
 | `x86_32-wat` | Open Watcom libc built from source (`tools/build-ow-clib.sh`): `tests/llc` 36 of 36, examples 11 of 11 |
 | `x86_16-wat` | same libc, 16-bit medium model: `tests/llc` 36 of 36, examples 11 of 11 (`sum_three` with far pointers); needs the patched clang (`tools/build-clang-m16.sh`, `LLRM_CLANG_M16`) |
 | `x86_16-bcc` | Borland headers and medium libc |

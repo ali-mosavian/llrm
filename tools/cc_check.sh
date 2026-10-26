@@ -11,6 +11,7 @@ export LLRM_LLC=${LLRM_LLC:-$root/target/release/llrm-llc}
 opt=${LLRM_CC_OPT:--O2}
 dir=${LLRM_CC_DIR:-$root/tests/llc}
 runner=${LLRM_CC_RUN:-}
+# LLRM_CC_REF_FLAGS: flags for the host reference (-m32 for x86_32-linux).
 # A reference that is not the host's (arm64 under qemu): LLRM_CC_REF_CLANG -target LLRM_CC_REF_TRIPLE, linked by LLRM_CC_REF_LINK.
 reftriple=${LLRM_CC_REF_TRIPLE:-}
 refrun=; [ -z "$reftriple" ] || refrun=$runner
@@ -27,7 +28,7 @@ for p in $progs; do
     "${LLRM_CC_REF_CLANG:-$clang}" -target "$reftriple" -ffreestanding -fno-builtin $opt -c "$src" -o "$out/ref.o" 2>/dev/null &&
       $LLRM_CC_REF_LINK "$out/ref" "$out/ref.o" 2>/dev/null || { echo "$p: reference failed"; bad=1; continue; }
   else
-    "$clang" $opt -Dfar= -Dnear= -Dhuge= "$src" $extra -o "$out/ref" -lm 2>/dev/null || { echo "$p: reference failed"; bad=1; continue; }
+    "$clang" ${LLRM_CC_REF_FLAGS:-} $opt -Dfar= -Dnear= -Dhuge= "$src" $extra -o "$out/ref" -lm 2>/dev/null || { echo "$p: reference failed"; bad=1; continue; }
   fi
   if "$cc" $opt $farless "$src" $extra -o "$out/llrm.exe" -lm 2> "$out/err"; then
     $refrun "$out/ref" > "$out/ref.out" 2>/dev/null; rr=$?
