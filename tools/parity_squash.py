@@ -1196,6 +1196,8 @@ def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=
             slot = slots.get()
             try:
                 why = "; ".join(refusals(heads[number], base) if refusals else _alone_in_scratch(heads[number], base, slot))
+            except BaseException as error:  # a thread drops SystemExit silently: #5008 was kept with no verdict, unchecked and counted as checked, and broke the 21:53 batch
+                why = f"alone check crashed: {type(error).__name__}: {str(error)[-200:]}"
             finally:
                 slots.put(slot)
             if cache:
@@ -1320,6 +1322,17 @@ def assemble(numbers: list[str], heads: dict[str, str], base: str = BASE, cwd: P
     return kept, waits
 
 
+def batch_blame(heads: dict[str, str], base: str, cwd: Path = ROOT) -> list[str]:
+    """One line per PR of a batch naming the markdown files it adds, deletes or moves: the doc a `docs_*` scanner finds unreachable or stale is one of them (#5008 added a page nothing linked
+    and the refusal named only the test)."""
+    lines = []
+    for number, head in heads.items():
+        out = subprocess.run(["git", "diff", "--name-status", f"{base}...{head}", "--", "*.md"], cwd=cwd, capture_output=True, text=True, errors="replace").stdout.splitlines()
+        if out:
+            lines.append(f"  #{number}: " + ", ".join(" ".join(line.split()) for line in out[:8]))
+    return lines
+
+
 def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
     """`parity_squash.py merge-batch N1..N8`: the PRs in order, one smoke on the base with all of them merged in, each squashed with its head lease."""
     known = known or {}
@@ -1376,6 +1389,11 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             print(f"REFUSED: the batch does not build: {broken[:300]}")
             failed_build.append(broken)
             return False
+        def blame(new: list[str]) -> None:
+            if any(name.startswith("integration docs") for name in new):
+                for line in batch_blame({number: infos[number]["headRefOid"] for number in group}, BASE):
+                    print(line)
+
         def tests_pass() -> bool:
             """The lib tests and scanners on the merged tree; False after printing the refusal and noting the failed units."""
             # LAND_FAST_TESTS=1: also the lib tests of the crates the batch changes (the user's 10-19 call is no tests; this is the switch for the opposite call)
@@ -1386,20 +1404,24 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 if new := sorted(landing_scanner_failures(changed, False)):
                     print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
                     failed_units.update(new)
+                    blame(new)
                     return False
                 stage("lib-tests")
                 if new := sorted(new_lib_failures(changed)):
                     print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
                     failed_units.update(new)
+                    blame(new)
                     return False
                 stage("scanners")
                 if new := sorted(new_scanner_failures(changed)):
                     print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
                     failed_units.update(new)
+                    blame(new)
                     return False
             if os.environ.get("LAND_FAST_TESTS") != "1" and (new := sorted(landing_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), False))):
                 print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
                 failed_units.update(new)
+                blame(new)
                 return False
             return True
 
