@@ -7,10 +7,10 @@
 use iced_x86::Register;
 use llrm_mir::{BinaryOp, CastOp};
 use llrm_qbruntime as runtime;
-use llrm_x86_bcmachine::model::ir::nodes::Node;
 
 use crate::emit::{Desc, Emit, Emitter, Kind};
 use crate::machine::{FLAGS, from_contract};
+use crate::model::ir::nodes::Node;
 
 /// Owns a node's meaning, or passes (`None`).
 pub trait Recognizer: Sync {

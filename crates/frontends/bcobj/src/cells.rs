@@ -13,11 +13,11 @@ use llrm_hir::model::RuntimePromises;
 use llrm_mir::{ConstantId, ConstantKind, Module, Operand};
 use llrm_qbruntime::{self as runtime, Control};
 use llrm_support::hash::HashMap;
-use llrm_x86_bcmachine::model::ir::nodes::Node;
-use llrm_x86_bcmachine::objectfile::omf;
 
 use crate::emit::{Emit, Emitter};
 use crate::machine::Facts;
+use crate::model::ir::nodes::Node;
+use crate::objectfile::omf;
 use crate::objects::Objects;
 use crate::sites::Recognizer;
 

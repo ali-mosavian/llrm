@@ -4,11 +4,11 @@
 //! 32-by-16 division leaves it.
 
 use llrm_mir::BinaryOp;
-use llrm_x86_bcmachine::model::ir::Operation;
-use llrm_x86_bcmachine::model::ir::nodes::Node;
 
 use crate::emit::{Emit, Emitter};
 use crate::longs::extended;
+use crate::model::ir::Operation;
+use crate::model::ir::nodes::Node;
 use crate::sites::Recognizer;
 
 pub struct Division;

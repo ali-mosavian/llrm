@@ -12,12 +12,12 @@
 
 use llrm_mir::{BinaryOp, CastOp};
 use llrm_support::hash::HashMap;
-use llrm_x86_bcmachine::model::ir::nodes::Node;
-use llrm_x86_bcmachine::model::ir::{Imm, Loc, Operation};
-use llrm_x86_bcmachine::objectfile::module::{Family, Space};
 
 use crate::emit::{Emit, Emitter};
 use crate::machine::{Facts, tracked};
+use crate::model::ir::nodes::Node;
+use crate::model::ir::{Imm, Loc, Operation};
+use crate::objectfile::module::{Family, Space};
 use crate::sites::Recognizer;
 
 pub const DIM: &str = "B$DDIM";

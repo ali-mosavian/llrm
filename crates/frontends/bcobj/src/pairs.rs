@@ -10,12 +10,13 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use iced_x86::{Code, Register};
-use llrm_x86_bcmachine::frontends::bc::blocks::Block;
-use llrm_x86_bcmachine::model::ir::Loc;
-use llrm_x86_bcmachine::model::ir::lift::{self, Decoded, Kind as Lifted};
-use llrm_x86_bcmachine::model::ir::nodes::{Long, Node, span};
-use llrm_x86_bcmachine::objectfile::module::{Addr, Space};
-use llrm_x86_bcmachine::support::hash::IndexMap;
+
+use crate::frontends::bc::blocks::Block;
+use crate::model::ir::Loc;
+use crate::model::ir::lift::{self, Decoded, Kind as Lifted};
+use crate::model::ir::nodes::{Long, Node, span};
+use crate::objectfile::module::{Addr, Space};
+use crate::support::hash::IndexMap;
 
 /// What a pair computes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -234,12 +235,11 @@ fn pushes(
 
 #[cfg(test)]
 mod tests {
-    use llrm_x86_bcmachine::frontends::bc::blocks::Ends;
-    use llrm_x86_bcmachine::frontends::bc::declen::decode;
-    use llrm_x86_bcmachine::model::ir::Effects;
-    use llrm_x86_bcmachine::objectfile::module::literal_only;
-
     use super::*;
+    use crate::frontends::bc::blocks::Ends;
+    use crate::frontends::bc::declen::decode;
+    use crate::model::ir::Effects;
+    use crate::objectfile::module::literal_only;
 
     /// The pairs in one block of these instructions.
     fn found_in(code: &[u8]) -> Vec<Shape> {
