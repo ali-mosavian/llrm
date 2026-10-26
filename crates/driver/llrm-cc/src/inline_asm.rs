@@ -32,6 +32,16 @@ pub fn translate(
     let mut declares: Vec<String> = Vec::new();
     let mut at = 0;
     while at < lines.len() {
+        if is_register_asm(lines[at]) {
+            let (call, declare) = register_block(lines[at], assemble)?;
+            out.push(call);
+            // Equal blocks share a name, which is declared once.
+            if !declares.contains(&declare) {
+                declares.push(declare);
+            }
+            at += 1;
+            continue;
+        }
         if !is_asm(lines[at]) {
             out.push(lines[at].to_owned());
             at += 1;
@@ -59,6 +69,104 @@ pub fn translate(
         joined.push('\n');
     }
     Ok(joined)
+}
+
+/// An asm call that names registers: `%r = call { i16, i16 } asm sideeffect
+/// "..", "={dx},={ax},{ax}"(i16 %x)`, which `#pragma aux` code comes out as.
+fn is_register_asm(line: &str) -> bool {
+    let line = line.trim_start();
+    if !(line.contains("call ") && line.contains(" asm sideeffect ")) {
+        return false;
+    }
+    let Some(from) = line.find(" asm sideeffect ") else { return false };
+    let mut at = from + " asm sideeffect ".len();
+    for word in ["inteldialect ", "alignstack ", "unwind "] {
+        if line[at..].starts_with(word) {
+            at += word.len();
+        }
+    }
+    let Ok((_, next)) = quoted(line, at) else { return false };
+    let Ok((constraints, _)) = quoted(line, next + 2) else { return false };
+    constraints.split(',').any(|one| one.starts_with("={") || one.starts_with('{'))
+}
+
+/// A register's name as the backend takes it: its width is the name's.
+fn register_name(name: &str) -> Result<&str, String> {
+    Ok(match name {
+        "al" | "bl" | "cl" | "dl" | "ax" | "bx" | "cx" | "dx" | "si" | "di" | "eax" | "ebx" | "ecx" | "edx" | "esi"
+        | "edi" => name,
+        other => return Err(format!("asm: register {other} is not carried")),
+    })
+}
+
+/// One register-declared asm call as a call of `llrm.ia16.asm.*`, and the
+/// declaration of that.
+fn register_block(
+    line: &str,
+    assemble: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+) -> Result<(String, String), String> {
+    let line = line.trim();
+    let (destination, call) = match line.split_once(" = call ") {
+        Some((destination, rest)) => (Some(destination), rest),
+        None => (None, line.strip_prefix("call ").ok_or("asm: not a call")?),
+    };
+    let (ret, rest) = call.split_once(" asm sideeffect ").ok_or("asm: no asm")?;
+    let ret = ret.trim_start_matches("addrspace(0) ").trim();
+    let mut at = 0;
+    for word in ["inteldialect ", "alignstack ", "unwind "] {
+        if rest[at..].starts_with(word) {
+            at += word.len();
+        }
+    }
+    let (text, next) = quoted(rest, at)?;
+    let (constraints, next) = quoted(rest, next + 2)?;
+    let arguments = rest[next..].strip_prefix('(').ok_or("asm: no arguments")?;
+    let mut depth = 0;
+    let end = arguments
+        .char_indices()
+        .find(|&(_, one)| {
+            depth += i32::from(one == '(') - i32::from(one == ')');
+            depth < 0
+        })
+        .map(|(at, _)| at)
+        .ok_or("asm: unclosed arguments")?;
+    let arguments = &arguments[..end];
+    let (mut inputs, mut outputs, mut clobbers, mut memory) = (Vec::new(), Vec::new(), Vec::new(), false);
+    for item in constraints.split(',') {
+        if let Some(name) = item.strip_prefix("={").and_then(|one| one.strip_suffix('}')) {
+            outputs.push(register_name(name)?.to_owned());
+        } else if let Some(name) = item.strip_prefix('{').and_then(|one| one.strip_suffix('}')) {
+            inputs.push(register_name(name)?.to_owned());
+        } else if let Some(name) = item.strip_prefix("~{").and_then(|one| one.strip_suffix('}')) {
+            if name == "memory" {
+                memory = true;
+            } else if !["dirflag", "fpsr", "flags"].contains(&name) {
+                clobbers.push(register_name(name)?.to_owned());
+            }
+        } else {
+            return Err(format!("asm: constraint {item} is not carried"));
+        }
+    }
+    let bytes = assemble(&format!(".intel_syntax noprefix\n.code16\n{}\n", unescape(text)?))?;
+    let name = llrm_mir::intrinsics::asm_name(&llrm_mir::intrinsics::AsmBlock {
+        code: bytes,
+        inputs,
+        outputs,
+        clobbers,
+        memory,
+        fixups: Vec::new(),
+    });
+    let types = arguments
+        .split(", ")
+        .filter(|one| !one.is_empty())
+        .map(|one| one.split_once(' ').map_or(one, |(ty, _)| ty).to_owned())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let call = format!(
+        "  {}call {ret} @\"{name}\"({arguments})",
+        destination.map_or(String::new(), |one| format!("{one} = "))
+    );
+    Ok((call, format!("declare {ret} @\"{name}\"({types})")))
 }
 
 fn is_asm(line: &str) -> bool {
@@ -283,5 +391,35 @@ mod tests {
         };
         translate(ir, &mut record).unwrap();
         assert!(seen.contains("push ebx\n") && seen.contains("mov [bp+0x7001], ax"), "{seen}");
+    }
+}
+
+#[cfg(test)]
+mod register_tests {
+    use super::*;
+
+    /// `#pragma aux split = "cwd" "idiv cx" parm [ax] [cx] value [dx ax]` came
+    /// out of clang as an asm call with registers
+    /// and was dropped ("a block that answers a value is not carried"); it is
+    /// now the register-declared block.
+    #[test]
+    fn a_call_with_registers_is_a_register_declared_block() {
+        let ir = "  %2 = call addrspace(0) { i16, i16, i16 } asm sideeffect inteldialect \"cwd\\0Aidiv cx\\0A\", \"={dx},={ax},={cx},{ax},{cx},~{memory}\"(i16 %0, i16 %1)\n";
+        let out = translate(ir, &mut |source: &str| {
+            assert!(source.contains("cwd\nidiv cx"), "{source}");
+            Ok(vec![0x99, 0xf7, 0xf9])
+        })
+        .unwrap();
+        let name = "llrm.ia16.asm.99f7f9.ax_cx.dx_ax_cx.-.m";
+        assert!(out.contains(&format!("%2 = call {{ i16, i16, i16 }} @\"{name}\"(i16 %0, i16 %1)")), "{out}");
+        assert!(out.contains(&format!("declare {{ i16, i16, i16 }} @\"{name}\"(i16, i16)")), "{out}");
+        assert!(llrm_mir::intrinsics::asm(name).is_some());
+    }
+
+    #[test]
+    fn a_byte_register_keeps_its_width_in_the_name() {
+        let ir = "  %2 = call addrspace(0) i8 asm sideeffect inteldialect \"add al,bl\\0A\", \"={al},{al},{bl},~{memory}\"(i8 %0, i8 %1)\n";
+        let out = translate(ir, &mut |_| Ok(vec![0x00, 0xd8])).unwrap();
+        assert!(out.contains("llrm.ia16.asm.00d8.al_bl.al.-.m"), "{out}");
     }
 }

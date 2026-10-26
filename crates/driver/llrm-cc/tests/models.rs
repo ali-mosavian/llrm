@@ -182,3 +182,37 @@ fn a_static_object_past_a_segment_is_refused_by_name() {
     let said = String::from_utf8_lossy(&built.stderr);
     assert!(!built.status.success() && !said.contains("panicked") && said.contains("65535"), "{said}");
 }
+
+/// `#pragma aux NAME = "code" parm [..] value [..]` was ignored with a warning
+/// and its calls linked to nothing. The code now runs in the registers it
+/// names, at each optimization level.
+#[test]
+fn pragma_aux_code_runs_in_its_registers() {
+    if std::env::var_os("LLRM_CLANG_M16").is_none() {
+        eprintln!("skipped: LLRM_CLANG_M16 names no i8086 clang");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    for level in ["-O0", "-O2", "-Os"] {
+        let exe = std::env::temp_dir().join(format!("llrm-cc-aux{level}-{}.exe", std::process::id()));
+        let built = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", "x86_16-dos")
+            .env("LLRM_LLC", root.join("target/release/llrm-llc"))
+            .args(["-w", level, "-o"])
+            .arg(&exe)
+            .arg(root.join("tests/cc/dos/aux.c"))
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{level}: {}", String::from_utf8_lossy(&built.stderr));
+        let ran = Command::new("python3")
+            .args(["-I"])
+            .arg(root.join("tools/dosbatch/run_exe.py"))
+            .arg("x86-m16")
+            .arg(&exe)
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_file(&exe);
+        let said = String::from_utf8_lossy(&ran.stdout).replace("\r\n", "\n");
+        assert_eq!(said.trim().replace('\n', " "), "127 -2 393358 -327822 120", "{level}");
+    }
+}
