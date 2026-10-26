@@ -157,7 +157,12 @@ fn decorate(
     format: &str,
 ) {
     for global in &mut module.globals {
-        let convention = global.function().and_then(|one| calling.by_number(one.calling_convention)).unwrap_or(default);
+        // Convention 0 is LLVM's `ccc`: no convention stated, so the one `-mabi` chose.
+        let convention = global
+            .function()
+            .filter(|one| one.calling_convention != 0)
+            .and_then(|one| calling.by_number(one.calling_convention))
+            .unwrap_or(default);
         let Some(name) = global.name.as_deref().filter(|name| !name.starts_with("llvm.") && !name.starts_with("llrm."))
         else {
             continue;

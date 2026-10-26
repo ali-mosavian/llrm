@@ -1,6 +1,6 @@
 """Open Watcom's DOS C library as one GNU Makefile: wmake's dry run of each library directory, flattened, so `make -jN` builds it.
 
-    ow-clib-make.py OWROOT OUT.mk VARIANT...      VARIANT: msdos.086/mm, msdos.386/ms_s ...
+    ow-clib-make.py OWROOT OUT.mk VARIANT...      VARIANT: msdos.086/mm, msdos.386/ms_s ...; mathlib:msdos.387/ms_r for the math library
 
 OWROOT is a copy of the Open Watcom tree (objects are written into it); the environment has WATCOM, and wmake and the
 build tools on PATH (the `bw*` compilers). The generated headers (`bld/hdr/dos`) must be built once with wmake.
@@ -34,11 +34,16 @@ def steps(directory: Path) -> list[tuple[str, str]]:
 
 rules, libs = [], []
 for variant in variants:
-    base = root / "bld/clib/library" / variant
-    categories = re.findall(r"\$\(pfx__\)(\w+)\$\(__sfx\)", (base.parent / "libs.mif").read_text())
+    project, _, variant = variant.rpartition(":")
+    project = project or "clib"
+    base = root / "bld" / project / "library" / variant
+    if project == "clib":
+        categories = re.findall(r"\$\(pfx__\)(\w+)\$\(__sfx\)", (base.parent / "libs.mif").read_text())
+    else:
+        categories = ["alias"]  # mathlib builds its one category, `alias`, from its c and a directories
     merged = []
     for category in categories:
-        directory = root / "bld/clib" / category / "library" / variant
+        directory = root / "bld" / project / category / "library" / variant
         if not (directory / "makefile").exists():
             continue
         objects = []
@@ -66,9 +71,10 @@ for variant in variants:
         target = final / name
         if name.endswith(".lib"):
             # wmake's `%create`/`%append` lines: the response file lists the category libraries, then this directory's objects.
-            response = re.search(r"@(\S+\.lbc)", command).group(1)
+            response = re.search(r"@(\S+\.lbc)", command)
             entries = "".join(f"+{one}\\n" for one in [*merged, *own])
-            rules.append(f"{target}: {' '.join(map(str, [*merged, *own]))}\n\t@rm -f {target}\n\t@printf '{entries}' > {final / response}\n\tcd {final} && {command}\n")
+            write = f"\t@printf '{entries}' > {final / response.group(1)}\n" if response else ""
+            rules.append(f"{target}: {' '.join(map(str, [*merged, *own]))}\n\t@rm -f {target}\n{write}\tcd {final} && {command}\n")
             libs.append(target)
         else:
             source = re.search(r"\S+\.(?:c|asm|gas)\b", command)

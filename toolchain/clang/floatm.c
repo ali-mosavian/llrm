@@ -1,4 +1,4 @@
-/* The single-precision math functions clang calls for its float intrinsics; Borland's MATHM.LIB has the double ones only. */
+/* The single-precision math functions clang calls for its float intrinsics; the DOS C libraries (Borland, Open Watcom) have the double ones only. */
 #include <math.h>
 
 float fabsf(float x) { return (float)fabs(x); }

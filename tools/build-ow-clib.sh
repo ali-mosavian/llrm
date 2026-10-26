@@ -12,6 +12,7 @@ export OWBLDVER=20 OWBLDVERSTR=2.0 OWBLDVERTOOL=1300 DEVDIR=$ow/bld
 export PATH=$ow/build/binbuild:$ow/build:$WATCOM/binl64:$PATH
 (cd "$ow/bld/hdr/dos" && wmake -h >/dev/null)
 # wmake's dry run lists only what is out of date: generate from clean directories.
-find "$ow/bld/clib" \( -name '*.obj' -o -name '*.lib' -o -name '*.lbc' \) -path '*library/msdos*' -delete
-python3 "$root/tools/ow-clib-make.py" "$ow" "$ow/clib.mk" msdos.086/mm msdos.386/ms_r msdos.386/ms_s
+find "$ow/bld/clib" "$ow/bld/mathlib" \( -name '*.obj' -o -name '*.lib' -o -name '*.lbc' \) -path '*library/msdos*' -delete
+python3 "$root/tools/ow-clib-make.py" "$ow" "$ow/clib.mk" msdos.086/mm msdos.386/ms_r msdos.386/ms_s \
+  mathlib:msdos.387/ms_r mathlib:msdos.287/mm
 make -f "$ow/clib.mk" -j"${JOBS:-8}" -k
