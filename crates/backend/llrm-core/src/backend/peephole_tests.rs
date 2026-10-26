@@ -5140,6 +5140,57 @@ fn store_then_reload(between: Vec<Insn>) -> usize {
     whats(&done.blocks[0].insns).iter().filter(|what| what.name.as_deref() == Some("mov")).count()
 }
 
+/// huge_copy.c at m16 -Os: the forwarding dropped the reload `mov bl, [bp-2]`
+/// and left `mov [bp-2], bl` in the loop, a store to a slot nothing reads
+/// (the loop ran a dead byte store a trip, 5.1M clocks of a 17M run).
+fn spill_slot_program(reload: bool) -> LirBody {
+    spill_slot_program_of(reload, true)
+}
+
+fn spill_slot_program_of(
+    reload: bool,
+    spill: bool,
+) -> LirBody {
+    let cell = |disp: i64| Loc::Mem(mem(Some(Addr::new(Space::Frame, disp).in_slot(disp)), 2, RegId::BP, disp, 1));
+    let mov = |at: i64, dests: Vec<Loc>, sources: Vec<Loc>| Insn {
+        spill_store: spill && dests.iter().any(|d| matches!(d, Loc::Mem(_))),
+        ..insn(at, Some((at, at + 2)), Some(sem(Operation::Move, "mov", dests, sources)), vec![], vec![])
+    };
+    let mut insns = vec![Arc::new(mov(0, vec![cell(-14)], vec![rl(RegId::DI, 2)]))];
+    if reload {
+        insns.push(Arc::new(mov(100, vec![rl(RegId::AX, 2)], vec![cell(-14)])));
+    }
+    insns.push(Arc::new(insn(
+        200,
+        Some((200, 200)),
+        Some(sem(Operation::Return, "ret", vec![], vec![])),
+        vec![],
+        vec![],
+    )));
+    body("unread-store", 0, vec![block(0, insns, vec![]).into()])
+}
+
+#[test]
+fn test_a_store_to_a_spill_slot_nothing_reads_is_dropped() {
+    let done = unread_spill_stores(&spill_slot_program(false));
+    // The store's bytes stay on an anchor, no `mov` is left.
+    assert_eq!(names(&done.blocks[0].insns), ["", "ret"]);
+}
+
+#[test]
+fn test_a_store_to_a_spill_slot_something_reads_stays() {
+    let done = unread_spill_stores(&spill_slot_program(true));
+    assert_eq!(names(&done.blocks[0].insns), ["mov", "mov", "ret"]);
+}
+
+/// An alloca's store nothing reads is the program's own: va_copy, null and
+/// pattern-fill listings in `isel_tests` lost theirs to the spill-slot pass.
+#[test]
+fn test_a_store_to_an_alloca_nothing_reads_stays() {
+    let done = unread_spill_stores(&spill_slot_program_of(false, false));
+    assert_eq!(names(&done.blocks[0].insns), ["mov", "ret"]);
+}
+
 #[test]
 fn test_a_reload_straight_after_its_store_is_dropped() {
     assert_eq!(store_then_reload(vec![]), 1);

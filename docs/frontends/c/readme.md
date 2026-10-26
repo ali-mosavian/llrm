@@ -38,6 +38,8 @@ generates code there. What the stream carries and what `llrm-c` does with it
 is in [the front end contract](ow-contract.md). `llrm-c` also accepts a
 recorded stream (`.cgs`) as its input.
 
+[`llrm-cc`](clang-route.md) is the same pipeline from clang's front end instead of Open Watcom's.
+
 ## Targets and ABI
 
 `-m16` compiles for real-mode DOS and `-m32` for flat 32-bit DOS; the target
