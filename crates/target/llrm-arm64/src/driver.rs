@@ -6,7 +6,7 @@
 use std::rc::Rc;
 
 use llrm_mir::program::Program;
-use llrm_transforms::pipeline::Applied;
+use llrm_transforms::pipeline::{Applied, Options};
 
 use crate::machine::{Arm64Machine, Platform};
 
@@ -101,10 +101,62 @@ pub fn program(
     Program::new(vec![module], Rc::new(Arm64Machine { platform }))
 }
 
+/// How far the mid-end goes: gcc's and clang's `-O` levels, as `llc` takes them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Level {
+    O0,
+    O1,
+    O2,
+    O3,
+    Os,
+    Oz,
+}
+
+impl Level {
+    /// The level `-O<text>` names.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        Ok(match text {
+            "0" => Self::O0,
+            "" | "1" => Self::O1,
+            "2" => Self::O2,
+            "3" => Self::O3,
+            "s" => Self::Os,
+            "z" => Self::Oz,
+            _ => return Err(format!("unknown optimization level -O{text}; choose -O0, -O1, -O2, -O3, -Os or -Oz")),
+        })
+    }
+
+    fn options(self) -> Options {
+        match self {
+            Self::O0 => Options::none(),
+            Self::O1 => Options::basic(),
+            Self::O2 => Options::default(),
+            Self::O3 => Options::speed(),
+            Self::Os => Options::size(),
+            Self::Oz => Options::min_size(),
+        }
+    }
+}
+
+/// `true` is -O2 and `false` no mid-end, as the callers that predate levels pass it.
+impl From<bool> for Level {
+    fn from(optimize: bool) -> Self {
+        if optimize { Self::O2 } else { Self::O0 }
+    }
+}
+
 /// `program` through the shared mid-end at -O2.
 pub fn optimized(program: &mut Program) -> Result<(), String> {
+    optimized_at(program, Level::O2)
+}
+
+/// `program` through the shared mid-end at `level`.
+pub fn optimized_at(
+    program: &mut Program,
+    level: Level,
+) -> Result<(), String> {
     let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
-    llrm_transforms::pipeline::applied(program, &Applied { dump, ..Applied::default() })
+    llrm_transforms::pipeline::applied(program, &Applied { dump, options: level.options(), ..Applied::default() })
 }
 
 /// Every defined function of `program`'s one module, selected, allocated and
@@ -152,11 +204,12 @@ pub fn object(
     text: &str,
     platform: Platform,
     name: &str,
-    optimize: bool,
+    level: impl Into<Level>,
 ) -> Result<llrm_object::Object, String> {
     let mut program = program(text, platform)?;
-    if optimize {
-        optimized(&mut program)?;
+    let level = level.into();
+    if level != Level::O0 {
+        optimized_at(&mut program, level)?;
     }
     let lowered = functions(&program)?;
     crate::emit::object(&program.modules[0], &program.layout, platform, name, &lowered)
@@ -166,11 +219,12 @@ pub fn object(
 pub fn assembly(
     text: &str,
     platform: Platform,
-    optimize: bool,
+    level: impl Into<Level>,
 ) -> Result<String, String> {
     let mut program = program(text, platform)?;
-    if optimize {
-        optimized(&mut program)?;
+    let level = level.into();
+    if level != Level::O0 {
+        optimized_at(&mut program, level)?;
     }
     let mut out = String::new();
     for function in functions(&program)? {
@@ -190,9 +244,9 @@ pub fn object_file(
     text: &str,
     platform: Platform,
     name: &str,
-    optimize: bool,
+    level: impl Into<Level>,
 ) -> Result<Vec<u8>, String> {
-    let object = object(text, platform, name, optimize)?;
+    let object = object(text, platform, name, level)?;
     match platform {
         Platform::Darwin => llrm_macho::write(&object).map_err(|error| error.to_string()),
         Platform::Linux => llrm_elf_arm64::write(&object).map_err(|error| error.to_string()),

@@ -60,7 +60,7 @@ def build_variants(src, lvl, tmp, ver):
     v = {}
     if src.suffix == ".c":
         ll = tmp / f"{name}.ll"
-        r = sh([str(PIN / "bin/clang"), f"-{lvl}", *TARGET, *FRONT, "-Xclang", "-disable-llvm-passes", "-S", "-emit-llvm", str(src), "-o", str(ll)])
+        r = sh([str(PIN / "bin/clang"), f"-{lvl}", *TARGET, *FRONT, "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-lifetime-markers", "-S", "-emit-llvm", str(src), "-o", str(ll)])
         if r.returncode:
             return {"clang": "emit-llvm: " + r.stderr[:200], "ours": "emit-llvm"}
     else:
@@ -69,7 +69,7 @@ def build_variants(src, lvl, tmp, ver):
     r = sh([str(PIN / "bin/clang"), f"-{lvl}", *TARGET, "-Wno-override-module", "-x", "ir", "-c", str(ll), "-o", str(o)])
     v["clang"] = o if r.returncode == 0 else "clang: " + r.stderr[:200]
     o = tmp / f"{name}.ours.o"
-    r = sh([str(BIN / "llrm-arm64-llc"), "-o", str(o), str(ll)])
+    r = sh([str(BIN / "llrm-arm64-llc"), f"-{lvl}", "-o", str(o), str(ll)])
     v["ours"] = o if r.returncode == 0 else "ours: " + (r.stderr or r.stdout)[:200]
     return v
 
