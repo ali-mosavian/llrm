@@ -117,7 +117,7 @@
 //! access, has the address made again just before it; a `select` of two offsets
 //! of one base selects the offsets. DEVIATE CGP1: no promoted extensions
 //! (`TypePromotionTransaction`), no phi combiner (the phi of equal addresses is
-//! merged above), no base-register-and-global form and no matching through
+//! merged above) and no matching through
 //! `ptrtoint`/`inttoptr`. Exit: those translated.
 
 use std::collections::BTreeMap;
@@ -403,6 +403,9 @@ fn ext_uses(
 /// is made of.
 struct Mode {
     base: Operand,
+    /// A second register, scale 1, under a global base (`BaseGV` with `BaseReg`
+    /// and `ScaledReg`: `@g + reg + scale * index`).
+    reg: Option<Operand>,
     offset: i128,
     index: Option<(Operand, u64)>,
     insts: Vec<InstId>,
@@ -418,6 +421,35 @@ fn address_of(
         Opcode::Store { .. } => Some(1),
         _ => None,
     }
+}
+
+/// Whether folding `address` (made from the register `held` and a global)
+/// into an access in `block` extends no live range that is not folded away:
+/// `held` is read in `block`, or `address` is read only as memory addresses.
+fn register_free(
+    unit: &passes::Unit,
+    block: BlockId,
+    held: Operand,
+    address: Operand,
+) -> bool {
+    let live = match held {
+        Operand::Value(v) => unit.function.users(v).iter().any(|one| unit.function.parent(one.user) == Some(block)),
+        _ => true,
+    };
+    live || matches!(
+        address,
+        Operand::Value(v) if crate::spill::address_only(unit.function, v, DEPTH)
+    )
+}
+
+fn is_global(
+    context: &Context,
+    operand: Operand,
+) -> bool {
+    matches!(
+        operand,
+        Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Global(_))
+    )
 }
 
 fn integer(
@@ -485,7 +517,7 @@ fn matched(
     address: Operand,
     depth: u32,
 ) -> Mode {
-    let plain = || Mode { base: address, offset: 0, index: None, insts: Vec::new() };
+    let plain = || Mode { base: address, reg: None, offset: 0, index: None, insts: Vec::new() };
     let Operand::Value(value) = address else { return plain() };
     let ValueDef::Instruction(gep) = unit.function.value(value).def else { return plain() };
     let instruction = unit.function.instruction(gep);
@@ -512,7 +544,21 @@ fn matched(
     }
     let inner = matched(unit, tti, space, block, instruction.operands[0], depth - 1);
     let mut insts = inner.insts;
+    let mut reg = inner.reg;
     let index = match (variable.first(), inner.index) {
+        // `BaseGV + BaseReg + ScaledReg`: the earlier index is a register of
+        // scale 1 beside the global.
+        // `isProfitableToFoldIntoAddressingMode`: only when the register is
+        // read in the access's block already, or every read of the address it
+        // makes is a memory access that folds it too.
+        (Some(&(at, scale)), Some((held, 1)))
+            if reg.is_none()
+                && is_global(unit.context, inner.base)
+                && register_free(unit, block, held, instruction.operands[0]) =>
+        {
+            reg = Some(held);
+            Some((instruction.operands[1 + at], scale))
+        }
         (Some(_), Some(_)) => return plain(),
         (Some(&(at, scale)), None) => {
             let operand = instruction.operands[1 + at];
@@ -531,11 +577,11 @@ fn matched(
     let total = offset + inner.offset;
     let scale = index.map_or(0, |(_, scale)| i64::try_from(scale).unwrap_or(i64::MAX));
     let Ok(displacement) = i64::try_from(total) else { return plain() };
-    if !tti.is_legal_addressing_mode_in(space, false, displacement, true, scale) {
+    if !tti.is_legal_addressing_mode_in(space, reg.is_some(), displacement, true, scale) {
         return plain();
     }
     insts.push(gep);
-    Mode { base: inner.base, offset: total, index, insts }
+    Mode { base: inner.base, reg, offset: total, index, insts }
 }
 
 /// Each load and store whose address is made in another block, with the address
@@ -623,7 +669,13 @@ fn select_combined(
     let (condition, first, second) = (chosen.operands[0], chosen.operands[1], chosen.operands[2]);
     let (one, other) =
         (matched(unit, tti, space, block, first, DEPTH), matched(unit, tti, space, block, second, DEPTH));
-    if one.base != other.base || one.index.is_some() || other.index.is_some() || one.offset == other.offset {
+    if one.base != other.base
+        || one.reg.is_some()
+        || other.reg.is_some()
+        || one.index.is_some()
+        || other.index.is_some()
+        || one.offset == other.offset
+    {
         return None;
     }
     if !tti.is_legal_addressing_mode_in(space, false, 0, true, 1) {
@@ -671,7 +723,7 @@ fn remade(
         unit.function.insert(inst, Position::Before(access)).expect("a position before the access");
         Operand::Value(unit.function.instruction(inst).result.expect("a value"))
     };
-    if let Some((index, scale)) = mode.index {
+    for (index, scale) in mode.reg.map(|reg| (reg, 1)).into_iter().chain(mode.index) {
         let width = unit
             .function
             .operand_type(unit.context, index)
