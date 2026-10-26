@@ -378,3 +378,29 @@ def test_a_head_whose_tests_did_not_run_is_not_cached_as_its_failure_set(tmp_pat
     assert ps.head_failures("abc", compute, cache=tmp_path) == {"integration-did-not-run"}
     assert ps.head_failures("abc", compute, cache=tmp_path) == {"integration header_copy::t"}
     assert ps.head_failures("abc", compute, cache=tmp_path) == {"integration header_copy::t"} and len(calls) == 2
+
+
+def test_each_offender_is_named_by_the_tests_that_failed_on_its_own_probe_with_its_own_panic():
+    """The 10:24 batch refused #4898 #4918 #4926 #4927 #4936 with one identical list (the batch's whole failure set and a stale panic): five different failures read as one cause."""
+    failed = {"1": {"a"}, "2": {"b"}, "3": set()}
+    probed = []
+    panics = {}
+
+    def failing(package, tests):
+        panics.clear()
+        mine = failed[probed[-1]] & tests
+        panics.update({t: f"panic of {t} on #{probed[-1]}" for t in mine})
+        return mine
+
+    own, reasons = {}, {}
+    found = ps.unit_offenders(
+        ["1", "2", "3"],
+        {"llrm-x": {"a", "b", "c"}},
+        merge_alone=lambda number: probed.append(number) or True,
+        failing=failing,
+        own=own,
+        reasons=reasons,
+        why=lambda names: "; ".join(panics[name.split("::", 1)[1]] for name in names),
+    )
+    assert found == ["1", "2"] and own == {"1": ["unit llrm-x::a"], "2": ["unit llrm-x::b"]}, (found, own)
+    assert reasons == {"1": "panic of a on #1", "2": "panic of b on #2"}, reasons
