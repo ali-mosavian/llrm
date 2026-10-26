@@ -28,6 +28,21 @@ NOT_PATHS = {
 }
 
 
+MACHINE_DOC = "docs/architecture/machine-description.md"
+MACHINE_NAMED = re.compile(r"(?<![A-Za-z0-9_./-])(machine/[A-Za-z0-9_./-]*[A-Za-z0-9_])")
+MACHINE_NOT_YET = {
+    "machine/isa": "instruction-set files arrive in M3",
+    "machine/isa/x86/features.toml": "M3",
+    "machine/isa/x86/i386.toml": "M3",
+    "machine/isa/x86/i486.toml": "M3",
+    "machine/isa/x86/pentium.toml": "M3",
+    "machine/isa/x86/i686.toml": "M3",
+    "machine/isa/x86/pentium3.toml": "M3",
+    "machine/tune": "tuning files arrive in M3",
+    "machine/platform/darwin/flat64.toml": "the arm64 darwin files are datalayout and object, not a platform file: not moved yet",
+}
+
+
 def exists(path: str) -> bool:
     target = ROOT / path
     if target.exists():
@@ -80,3 +95,15 @@ def test_every_tools_path_named_in_docs_or_ci_exists():
 def test_no_not_paths_entry_has_become_a_real_path():
     stale = [p for p in NOT_PATHS if exists(p)]
     assert not stale, f"drop from NOT_PATHS, the path exists now: {stale}"
+
+
+def test_every_machine_path_named_in_the_machine_doc_exists():
+    """M1 moved the platform files; a path the doc names must be there, or listed as not yet made."""
+    named = set(MACHINE_NAMED.findall((ROOT / MACHINE_DOC).read_text()))
+    missing = sorted(p for p in named if not (ROOT / p).exists() and p not in MACHINE_NOT_YET)
+    assert not missing, f"machine/ paths named in {MACHINE_DOC} but absent: {missing}"
+
+
+def test_no_machine_not_yet_entry_has_become_a_real_path():
+    stale = [p for p in MACHINE_NOT_YET if (ROOT / p).exists()]
+    assert not stale, f"drop from MACHINE_NOT_YET, the path exists now: {stale}"
