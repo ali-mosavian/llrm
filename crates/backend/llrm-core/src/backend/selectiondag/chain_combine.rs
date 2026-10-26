@@ -29,24 +29,6 @@ use super::address_analysis::{BaseIndexOffset, compute_aliasing};
 use super::dag::{NodeData, Rauw, SDValue};
 use super::dag_combiner::{CombineHooks, DagCombiner};
 use super::isd::ISD;
-use super::mvt::EVT;
-
-/// `getInputChainForNode`: the chain operand of `node`.
-fn input_chain(
-    dag: &super::dag::SelectionDAG,
-    node: u32,
-) -> Option<SDValue> {
-    let ops = &dag.node(SDValue { node, res: 0 }).ops;
-    let is_chain = |op: &SDValue| dag.value_type(*op) == EVT::OTHER;
-    let last = ops.len().checked_sub(1)?;
-    if is_chain(&ops[0]) {
-        return Some(ops[0]);
-    }
-    if is_chain(&ops[last]) {
-        return Some(ops[last]);
-    }
-    ops.iter().take(last).skip(1).find(|op| is_chain(op)).copied()
-}
 
 /// `GatherAllAliasesMaxDepth`.
 const GATHER_ALL_ALIASES_MAX_DEPTH: usize = 6;
