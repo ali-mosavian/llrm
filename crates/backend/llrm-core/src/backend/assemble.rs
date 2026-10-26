@@ -353,7 +353,7 @@ pub fn assembled_by(
                     }
                     let procedure = masm::exits_inserted(masm::saved_first(masm::Procedure { body, ..procedure }));
                     if procedure.body.frame_exit.is_some() {
-                        let body = jumps::tails_merged_after_exits(procedure.body.clone(), cpu.size)
+                        let body = jumps::tails_merged_after_exits(procedure.body.clone(), cpu.size, Some(&calls))
                             .map_err(|error| error.to_string())?;
                         masm::Procedure { body, ..procedure }
                     } else {
