@@ -1327,7 +1327,7 @@ impl LirBody {
             float_stack: 0,
             homes: Arc::default(),
             float_bytes: Arc::default(),
-            bits: crate::frontends::bc::declen::BITNESS,
+            bits: 16,
             registers: Self::default_registers(),
             slotted: false,
             cfa_variables: false,

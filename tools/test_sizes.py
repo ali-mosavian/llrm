@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import pytest  # noqa: E402
+import sizes  # noqa: E402
 from sizes import code_bytes, data_bytes, selected  # noqa: E402
 
 
@@ -186,3 +187,11 @@ def test_the_isel_variable_reaches_the_compiler_command(monkeypatch):
     assert selected(command) == command
     monkeypatch.setenv("LLRM_ISEL", "dag")
     assert selected(command) == ["llrm-c", "--isel=dag", "x.c", "-Os"]
+
+
+def test_a_basic_program_takes_the_excess_precision_a_pair_names(tmp_path, monkeypatch):
+    """main compiled SINGLE as fast and the tip as standard: a pair on the defaults read +39 B on stft_single.bas as growth. SIZES_EXCESS sets both sides."""
+    monkeypatch.setenv("SIZES_EXCESS", "fast")
+    listed = dict(sizes.programs(tmp_path, demos=False))
+    assert "-fexcess-precision=fast" in listed["stft_single/stft_single.bas"]
+    assert not any("-fexcess-precision" in word for word in listed["stft_single/stft_single.c"])

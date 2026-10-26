@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/fixednarrow.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/fixednarrow.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/fixednarrow.rs sha256:538e0533f406c3c7647c7c3e690b71aef632471c591a2cb77a8717aecc4421d6 -->
+<!-- src: crates/opt/llrm-transforms/src/fixednarrow.rs sha256:7aeb1cb1d4081ab444770bbcce05409734d7473a65c9b9263cde99b2c123f774 -->
 
 # fixednarrow
 
@@ -22,8 +22,14 @@ taken.
 DEVIATE 1: not an LLVM pass. LazyValueInfo answers from definitions and
 the branches on the edges to the call, not from trip counts or from a
 test on a derived value, so a factor bounded only by a loop's escape test
-(`examples/mandel`: `zr^2 + zi^2 > 4`) keeps its wide form, where the
-`ranges` engine this replaced narrowed it.
+(`examples/mandel`: `zr^2 + zi^2 > 4`) would keep its wide form, where the
+`ranges` engine this replaced narrowed it. `Query` adds that engine's
+reach for Q-format squares only: a square is not negative and, where the
+branch to the call bounds a sum of two squares, at most the bound; a
+square at most `M` bounds its factor by `isqrt(((M + 1) << s) - 1)`; and
+sums, differences, shifts, products, sign extensions and phis of bounded
+values are bounded, a counter `start, start + 1, ...` that leaves on
+`next == end` by `[start, end - 1]`.
 
 A factor `v << k` or `v + v` whose interval keeps it from wrapping leaves
 the product for the scale: `(v * 2^k * b) >> s` is `(v * b) >> (s - k)`, so

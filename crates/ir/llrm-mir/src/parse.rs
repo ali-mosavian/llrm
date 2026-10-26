@@ -491,7 +491,10 @@ impl Parser {
             if self.eat_word("align") {
                 align = Some(self.unsigned()?);
             } else if self.eat_word("section") {
-                return self.fail("sections are outside MIR's subset of LLVM");
+                let section = self.string()?;
+                if let Some(name) = self.module.globals[id.0 as usize].name.owned() {
+                    self.module.sections.insert(name, section);
+                }
             } else {
                 return self.fail(format!("unexpected {} after a global", self.describe()));
             }
@@ -587,6 +590,12 @@ impl Parser {
         let unnamed_addr = self.unnamed_addr();
         let address_space = self.address_space()?;
         local.function.attrs = self.attributes(true)?;
+        if self.eat_word("section") {
+            let section = self.string()?;
+            if let Some(name) = self.module.globals[id.0 as usize].name.owned() {
+                self.module.sections.insert(name, section);
+            }
+        }
         if self.eat_word("personality") {
             let ty = self.ty()?;
             local.function.personality = Some(self.constant(ty)?);

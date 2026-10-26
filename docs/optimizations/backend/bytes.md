@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/bytes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/bytes.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/bytes.rs sha256:88bf276c83e16a03c3deec9beff24d7a24d928a746ba2c6f12f21bb0cdc987d3 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/bytes.rs sha256:2155c04ef6e5f25414c09cda27a09011fec0d617627bef16b0c1e9d6d392b617 -->
 
 # bytes
 
@@ -31,12 +31,12 @@ After, in the order the instructions are made:
 
 ```mir
 define i16 @f(i16 %x) {
-  %0 = shl i16 %x, 8
-  %1 = and i16 %0, -256
-  %2 = lshr i16 %x, 8
-  %3 = and i16 %2, 255
-  %4 = or i16 %1, %3
-  ret i16 %4
+  %1 = shl i16 %x, 8
+  %2 = and i16 %1, -256
+  %3 = lshr i16 %x, 8
+  %4 = and i16 %3, 255
+  %5 = or i16 %2, %4
+  ret i16 %5
 }
 ```
 

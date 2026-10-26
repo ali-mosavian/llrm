@@ -101,7 +101,7 @@ fn a_float_compare_is_an_fcom_and_a_set() {
     assert!(whats[compare..].iter().any(|w| w.name.as_deref().is_some_and(|n| n.starts_with("set"))));
 }
 
-const FLOAT_COMPARE_AND_ADD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+const FLOAT_COMPARE_AND_ADD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 
 define internal cc 1000 void @f() addrspace(1) \"llrm-fp-eval\"=\"x87-extended\" norecurse {
 b1:
@@ -354,6 +354,39 @@ fn a_pool_entry_is_read_at_its_own_width() {
     assert!(multiply.sources.iter().any(|l| matches!(l, Loc::Mem(m) if m.width == 4)), "{multiply:?}");
 }
 
+const LONG_DOUBLE_POOL_CONSTANT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define x86_fp80 @f(x86_fp80 %x) {
+entry:
+  %m = fmul x86_fp80 %x, CONSTANT
+  ret x86_fp80 %m
+}
+";
+
+/// The width at which `x * constant` reads its `f80` constant from the pool.
+fn long_double_constant_width(constant: &str) -> u32 {
+    use crate::model::ir::{Loc, Operation};
+    let text = LONG_DOUBLE_POOL_CONSTANT.replace("CONSTANT", constant);
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let multiply = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.op == Operation::FloatArith && w.name.as_deref() == Some("fmul"))
+        .expect("an fmul");
+    multiply.sources.iter().find_map(|l| if let Loc::Mem(m) = l { Some(m.width.into()) } else { None }).unwrap_or(10)
+}
+
+/// An `f80` constant a float or double holds exactly sits in the pool at that
+/// width (`ExpandConstantFP` steps f80, f64, f32): 10000 took ten bytes, and
+/// QB's float-to-CURRENCY programs grew 8 to 22 bytes at m16 -Os.
+#[test]
+fn a_long_double_constant_is_read_at_the_narrowest_exact_width() {
+    assert_eq!(long_double_constant_width("10000.0"), 4);
+    assert_eq!(long_double_constant_width("0.00005"), 8);
+}
+
 const LONG_DOUBLE_SUM: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define x86_fp80 @f(x86_fp80 %x, x86_fp80 %y) {
 entry:
@@ -463,7 +496,7 @@ fn a_double_argument_is_stored_through_a_copy_of_sp_at_m16() {
     assert!(cell.base.is_some() && cell.through == llrm_lir::registers::RegId::None, "{cell:?}");
 }
 
-const FPROUND_F32: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+const FPROUND_F32: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 define cc 1000 ptr @h(ptr %0, ptr %1) addrspace(1) {
 b1:
   %2 = load float, ptr %0

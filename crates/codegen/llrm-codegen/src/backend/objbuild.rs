@@ -527,7 +527,18 @@ pub fn serialized(
     format: Format,
 ) -> Result<Vec<u8>, Error> {
     match format {
-        Format::Omf => Ok(llrm_omf::write::write(object)?),
+        Format::Omf => {
+            if let Some(big) =
+                object.sections.iter().find(|section| section.image.len() > 0x10000 && object.arch == Arch::I8086)
+            {
+                return Err(Error::Unsupported(llrm_object::Unsupported(format!(
+                    "segment `{}` is {} bytes: a 16-bit segment holds 65536",
+                    big.name,
+                    big.image.len()
+                ))));
+            }
+            Ok(llrm_omf::write::write(object)?)
+        }
         Format::Elf if object.arch == Arch::I386 => Ok(llrm_elf32::write(object)?),
         Format::Elf if object.arch == Arch::X8664 => Ok(llrm_elf64::write(object)?),
         Format::MachO if object.arch == Arch::X8664 => Ok(llrm_macho::write(object)?),
@@ -557,12 +568,27 @@ fn built_inner(
     format: Format,
 ) -> Result<Object, Error> {
     let module = &live(module)?;
+    // A procedure the program put in a segment of its own naming (`code_seg`)
+    // is in that one, the rest in `code`.
+    let segment_of = |procedure: usize| -> &str {
+        module.code_segments.get(&module.procedures[procedure].name).map_or(module.code.as_str(), String::as_str)
+    };
     let groups: Vec<Vec<usize>> = match layout {
-        CodeLayout::OneSegment => vec![(0..module.procedures.len()).collect()],
+        CodeLayout::OneSegment => {
+            let mut by_name: IndexMap<&str, Vec<usize>> = IndexMap::default();
+            by_name.entry(module.code.as_str()).or_default();
+            for one in 0..module.procedures.len() {
+                by_name.entry(segment_of(one)).or_default().push(one);
+            }
+            by_name.into_values().collect()
+        }
         CodeLayout::PerProcedure => (0..module.procedures.len()).map(|one| vec![one]).collect(),
     };
     // A flat target has no group: every segment is reached by its own offset.
-    let mut segments: Vec<Segment> = groups.iter().map(|_| Segment::new(&module.code, Role::Text, true)).collect();
+    let mut segments: Vec<Segment> = groups
+        .iter()
+        .map(|group| Segment::new(group.first().map_or(module.code.as_str(), |&one| segment_of(one)), Role::Text, true))
+        .collect();
     let mut named: IndexMap<String, Segment> =
         IndexMap::from_iter([("_DATA".to_owned(), Segment::new("_DATA", Role::Data, true))]);
     for (name, _items) in &module.data {
@@ -1473,6 +1499,7 @@ mod tests {
             )],
             private: BTreeSet::new(),
             far_bss: BTreeSet::new(),
+            code_segments: Default::default(),
             padding: Default::default(),
             object: llrm_target::Target::object(&llrm_x86_m16::M16),
             requests: BTreeSet::new(),
@@ -1512,6 +1539,7 @@ mod tests {
                 procedures: vec![],
                 private: BTreeSet::new(),
                 far_bss: BTreeSet::new(),
+                code_segments: Default::default(),
                 padding: Default::default(),
                 object: llrm_target::Target::object(&llrm_x86_m16::M16),
                 requests: BTreeSet::new(),
@@ -1620,6 +1648,7 @@ mod tests {
             ],
             private: BTreeSet::from(["FAR_SEG".to_owned()]),
             far_bss: BTreeSet::new(),
+            code_segments: Default::default(),
             padding: Default::default(),
             object: llrm_target::Target::object(&llrm_x86_m16::M16),
             requests: BTreeSet::new(),
@@ -1719,6 +1748,7 @@ mod tests {
                     .collect(),
                 private: BTreeSet::new(),
                 far_bss: BTreeSet::new(),
+                code_segments: Default::default(),
                 padding: masm::Padding { function: 4, nop: 1 },
                 object: llrm_target::Target::object(&llrm_x86_m32::M32),
                 requests: BTreeSet::new(),

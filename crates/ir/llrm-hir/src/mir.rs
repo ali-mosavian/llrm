@@ -2073,6 +2073,7 @@ pub(crate) fn intrinsic(
     let float = match types.get(from) {
         Type::Float(FloatKind::Float) => "f32",
         Type::Float(FloatKind::Double) => "f64",
+        Type::Float(FloatKind::X86Fp80) => "f80",
         _ => return None,
     };
     let function = match op {

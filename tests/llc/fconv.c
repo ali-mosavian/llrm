@@ -1,12 +1,15 @@
 #include <stdio.h>
-volatile int vi = -123456; volatile long vl = 1234567890123L; volatile unsigned vu = 4000000000u;
+#include <stdint.h>
+volatile int32_t vi = -123456; volatile int64_t vl = 1234567890123LL; volatile uint32_t vu = 4000000000u;
 volatile double vd = -1234.75; volatile float vf = 98765.5f;
 int main(void) {
-    int i = vi; long l = vl; unsigned u = vu; double d = vd; float f = vf;
-    printf("%ld %ld %ld\n", (long)((double)i * 4), (long)((double)l / 3), (long)((double)u));
-    printf("%ld %ld %ld\n", (long)((float)i), (long)((float)u / 16), (long)((float)l / 1000000));
-    printf("%d %ld %u\n", (int)d, (long)(d * 1000000), (unsigned)(-d));
-    printf("%d %ld\n", (int)f, (long)(f * 100));
-    printf("%ld %ld\n", (long)((double)f * 1000), (long)((float)d * 1000));
+    int32_t i = vi; int64_t l = vl; uint32_t u = vu; double d = vd; float f = vf;
+    printf("%lld %lld %lld\n", (long long)((double)i * 4), (long long)((double)l / 3), (long long)((double)u));
+    volatile float lf = (float)l, q;  /* x87 keeps a float wider than 24 bits until it is stored */
+    q = lf / 1000000;
+    printf("%lld %lld %lld\n", (long long)((float)i), (long long)((float)u / 16), (long long)q);
+    printf("%d %lld %lu\n", (int)d, (long long)(d * 1000000), (unsigned long)(uint32_t)(-d));
+    printf("%ld %lld\n", (long)(int32_t)f, (long long)(f * 100));
+    printf("%lld %lld\n", (long long)((double)f * 1000), (long long)((float)d * 1000));
     return 0;
 }

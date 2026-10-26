@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/extload.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/extload.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/extload.rs sha256:cd485025dfdf5dfb80dc6798e60f6078f51a5810d3bdfddc06a7915677e957b2 -->
+<!-- src: crates/opt/llrm-transforms/src/extload.rs sha256:57f8b70a7e431d6d8b7903f633a2c7bbe969d16c0d899a1e59143998e293d735 -->
 
 # extload
 
