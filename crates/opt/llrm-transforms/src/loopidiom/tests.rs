@@ -237,6 +237,7 @@ fn run_on_loop(
     let mut se = ScalarEvolution::new();
     let mut declared = llrm_mir::passes::Declared::of(&module);
     let mut run = Run {
+        bytes: None,
         name,
         env: &env,
         context: &mut context,
@@ -245,6 +246,7 @@ fn run_on_loop(
         aa: &NoAa,
         declared: &mut declared,
         cur_loop,
+        tti: None,
     };
     LoopIdiomRecognize::new(Options::default(), LIBRARY).run_on_loop(&mut run)
 }

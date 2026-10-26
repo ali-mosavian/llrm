@@ -848,6 +848,7 @@ declare { i16, i1 } @llvm.umul.with.overflow.i16(i16, i16)
 declare i16 @llvm.fshl.i16(i16, i16, i16)
 declare i16 @llvm.fshr.i16(i16, i16, i16)
 declare i16 @llvm.smul.fix.i16(i16, i16, i32 immarg)
+declare i16 @llvm.sdiv.fix.i16(i16, i16, i32 immarg)
 ";
     for (body, expected) in [
         // bswap(bswap(x)) -> x, bitreverse(bitreverse(x)) -> x
@@ -921,6 +922,11 @@ declare i16 @llvm.smul.fix.i16(i16, i16, i32 immarg)
         ("  %r = call i16 @llvm.smul.fix.i16(i16 %x, i16 4, i32 2)\n", Some("%x")),
         ("  %r = call i16 @llvm.smul.fix.i16(i16 4, i16 %x, i32 2)\n", Some("%x")),
         ("  %r = call i16 @llvm.smul.fix.i16(i16 %x, i16 4, i32 3)\n", None),
+        // fixed-point divide of constants (Nib's `Real(3.2) / Real(64)` was an
+        // `idiv` at run time, 50 bytes): rounded toward negative infinity
+        ("  %r = call i16 @llvm.sdiv.fix.i16(i16 7, i16 2, i32 1)\n", Some("7")),
+        ("  %r = call i16 @llvm.sdiv.fix.i16(i16 -7, i16 4, i32 1)\n", Some("65532")),
+        ("  %r = call i16 @llvm.sdiv.fix.i16(i16 7, i16 0, i32 1)\n", None),
     ] {
         assert_eq!(simplified(&format!("{decls}{}", of(body)), "r").as_deref(), expected, "{body}");
     }
