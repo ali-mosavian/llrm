@@ -210,6 +210,29 @@ fn no_inlined(
     Ok(())
 }
 
+/// Every function with a body marked `optsize`, as clang marks them at -Os
+/// and -Oz: the passes that read the attribute (LSR's register order, the
+/// memcpy-to-call and switch lowering thresholds, loop idiom, load
+/// elimination) saw none, so they chose as for speed.
+fn size_marked(
+    program: &mut Program,
+    pipeline: &llrm_transforms::pipeline::Options,
+) {
+    if !pipeline.prefers_size() {
+        return;
+    }
+    for module in &mut program.modules {
+        for global in &mut module.globals {
+            if let llrm_mir::GlobalKind::Function(function) = &mut global.kind
+                && !function.is_declaration()
+                && !llrm_mir::memory::has(&function.attrs, "optsize")
+            {
+                function.attrs.push(llrm_mir::opcode::Attribute::Flag("optsize".into()));
+            }
+        }
+    }
+}
+
 /// `program` compiled for the machine: emitted, optimized, then each module
 /// selected and assembled, its code in `<MODULE>_TEXT`, each function linked
 /// by its symbol and its data where the frontend put it. Each module's
@@ -449,6 +472,7 @@ pub fn optimized(
     options: &Options,
 ) -> Result<(), String> {
     no_inlined(program, &options.no_inline)?;
+    size_marked(program, &options.pipeline);
     let mut pipeline = options.pipeline.clone();
     // The DAG builder lowers the switches that remain, as the pin's
     // SelectionDAGBuilder does; the shadow run keeps the old selector's
@@ -658,6 +682,9 @@ pub fn statement_table(
 
 #[cfg(test)]
 mod lifetimes_tests;
+
+#[cfg(test)]
+mod size_tests;
 
 #[cfg(test)]
 mod location_ranges_tests {
