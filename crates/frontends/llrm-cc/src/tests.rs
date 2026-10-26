@@ -73,3 +73,11 @@ fn the_pin_is_the_first_line_alone() {
     assert_eq!(pin().len(), 40, "{:?}", pin());
     assert!(pin().bytes().all(|byte| byte.is_ascii_hexdigit()));
 }
+
+#[test]
+fn an_environment_placeholder_is_filled_when_set_and_named_when_not() {
+    // SAFETY: the variable is this test's own.
+    unsafe { std::env::set_var("LLRM_CC_TEST_DIR", "/inc") };
+    assert_eq!(with_environment("-I{env:LLRM_CC_TEST_DIR}/x"), "-I/inc/x");
+    assert!(unset(&with_environment("{env:LLRM_CC_TEST_UNSET}")).ends_with("LLRM_CC_TEST_UNSET"));
+}

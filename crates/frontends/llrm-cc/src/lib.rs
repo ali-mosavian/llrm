@@ -110,6 +110,9 @@ pub fn targets(text: &str) -> Result<BTreeMap<String, Target>, String> {
         for word in target.clang.iter_mut().chain(&mut target.llc) {
             *word = word.replace("{root}", ROOT);
         }
+        for word in target.clang.iter_mut().chain(&mut target.llc).chain(&mut target.link) {
+            *word = with_environment(word);
+        }
     }
     Ok(table)
 }
@@ -304,6 +307,23 @@ pub fn llc_args(
     args
 }
 
+/// `word` with each `{env:NAME}` that is set replaced by its value; one that is not stays, and `unset` names it.
+fn with_environment(word: &str) -> String {
+    let mut out = word.to_owned();
+    while let Some(open) = out.find("{env:") {
+        let Some(close) = out[open..].find('}') else { break };
+        let name = &out[open + 5..open + close];
+        let Some(value) = std::env::var_os(name) else { break };
+        out.replace_range(open..=open + close, &value.to_string_lossy());
+    }
+    out
+}
+
+fn unset(word: &str) -> String {
+    let name = word.split("{env:").nth(1).and_then(|rest| rest.split('}').next()).unwrap_or(word);
+    format!("llrm-cc: the target needs the environment variable {name}")
+}
+
 /// The link command: the recipe with its placeholders expanded.
 pub fn link_command(
     target: &Target,
@@ -320,6 +340,9 @@ pub fn link_command(
             other if other.contains("{root}") => command.push(other.replace("{root}", ROOT)),
             other => command.push(other.to_owned()),
         }
+    }
+    if let Some(open) = command.iter().find(|word| word.contains("{env:")) {
+        return Err(unset(open));
     }
     if command.is_empty() {
         return Err("empty link recipe".into());
@@ -388,9 +411,24 @@ fn build(
         eprintln!("llrm-cc: {why}");
         1
     };
+    if let Some(open) = target.clang.iter().chain(&target.llc).find(|word| word.contains("{env:")) {
+        return Err(fail(unset(open)));
+    }
     if build.output.is_some() && build.stop != Stop::Executable && build.inputs.len() > 1 {
         return Err(fail("cannot specify -o with -c or -S and several inputs".into()));
     }
+    // `-nostdinc` drops clang's own freestanding headers (`stdint.h`, `stdarg.h`); they go back after the target's.
+    let resource: Vec<String> = if target.clang.iter().any(|word| word == "-nostdinc") {
+        Command::new(&clang)
+            .arg("-print-resource-dir")
+            .output()
+            .ok()
+            .and_then(|out| String::from_utf8(out.stdout).ok())
+            .map(|dir| vec!["-idirafter".to_owned(), format!("{}/include", dir.trim())])
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let mut objects = vec![];
     for (number, input) in build.inputs.iter().enumerate() {
         let single = build.inputs.len() == 1;
@@ -419,6 +457,7 @@ fn build(
             Input::Source(path) => {
                 let ir = scratch.join(format!("{}.ll", stem(path)));
                 let mut args = target.clang.clone();
+                args.extend(resource.iter().cloned());
                 args.extend(build.clang.iter().cloned());
                 args.extend(
                     ["-S", "-emit-llvm", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", "-o"]

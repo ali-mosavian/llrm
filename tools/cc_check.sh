@@ -11,15 +11,21 @@ export LLRM_LLC=${LLRM_LLC:-$root/target/release/llrm-llc}
 opt=${LLRM_CC_OPT:--O2}
 dir=${LLRM_CC_DIR:-$root/tests/llc}
 runner=${LLRM_CC_RUN:-}
+# A Borland reference (16-bit ints): LLRM_CC_REF_BCC=<qclight tools/bcc.sh>, linked by tools/bcc_link.py (needs LLRM_BORLAND_LIB);
+# a program Borland C++ 3.1 cannot compile has no reference and is reported `noref`.
+bcc=${LLRM_CC_REF_BCC:-}
 # A reference that is not the host's (arm64 under qemu): LLRM_CC_REF_CLANG -target LLRM_CC_REF_TRIPLE, linked by LLRM_CC_REF_LINK.
 reftriple=${LLRM_CC_REF_TRIPLE:-}
-refrun=; [ -z "$reftriple" ] || refrun=$runner
+refrun=; [ -z "$reftriple" ] && [ -z "$bcc" ] || refrun=$runner
 out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
 progs=${*:-$(cd "$dir" && ls *.c | sed 's/\.c$//')}
 bad=0
 for p in $progs; do
   src=$dir/$p.c
-  if [ -n "$reftriple" ]; then
+  if [ -n "$bcc" ]; then
+    "$bcc" "$src" "$out/ref.obj" >/dev/null 2>&1 && [ -s "$out/ref.obj" ] &&
+      python3 -I "$root/tools/bcc_link.py" --plain "$LLRM_BORLAND_LIB" "$out/ref" "$out/ref.obj" >/dev/null 2>&1 || { echo "noref $p"; continue; }
+  elif [ -n "$reftriple" ]; then
     "${LLRM_CC_REF_CLANG:-$clang}" -target "$reftriple" -ffreestanding -fno-builtin $opt -c "$src" -o "$out/ref.o" 2>/dev/null &&
       $LLRM_CC_REF_LINK "$out/ref" "$out/ref.o" 2>/dev/null || { echo "$p: reference failed"; bad=1; continue; }
   else
