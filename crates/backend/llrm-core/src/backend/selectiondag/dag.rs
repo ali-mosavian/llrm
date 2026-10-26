@@ -219,6 +219,9 @@ pub struct SelectionDAG {
     deleted: Vec<bool>,
     /// The `IROrder` of the `SDLoc` in force: nodes made now carry it.
     pub cur_order: u32,
+    /// `CombineTo` calls a target hook made: the combiner replaces each and
+    /// looks at the users again.
+    replacements: Vec<(SDValue, SDValue)>,
     pub(super) config: DagConfig,
     entry: SDValue,
     root: SDValue,
@@ -303,6 +306,7 @@ impl SelectionDAG {
             cse: Cse::default(),
             deleted: Vec::new(),
             cur_order: 0,
+            replacements: Vec::new(),
             config,
             entry: zero,
             root: zero,
@@ -404,6 +408,38 @@ impl SelectionDAG {
             }
             self.deleted[n as usize] = true;
             work.extend(self.nodes[n as usize].ops.iter().map(|op| op.node));
+        }
+    }
+
+    /// A load or store a combine replaced (`CombineTo`): the pin removes it at
+    /// once, and what it read no longer counts it among its users.
+    /// `delete_dead` keeps chain nodes, so a replaced store stayed a reader
+    /// of its value and an `add` the store was the only user of looked
+    /// shared (a second store of it made `IsFoldableRMW` false and the
+    /// `i16` read-modify-write was promoted to `i32`).
+    pub fn delete_replaced(
+        &mut self,
+        node: u32,
+    ) {
+        if node == self.root.node
+            || node == self.entry.node
+            || self.is_deleted(node)
+            || !matches!(self.nodes[node as usize].opcode, ISD::Load | ISD::Store)
+        {
+            return;
+        }
+        let results = self.nodes[node as usize].values.len() as u8;
+        if (0..results).any(|res| self.has_users(SDValue { node, res })) {
+            return;
+        }
+        self.cse_forget(node);
+        if self.deleted.len() <= node as usize {
+            self.deleted.resize(self.nodes.len(), false);
+        }
+        self.deleted[node as usize] = true;
+        let operands: Vec<u32> = self.nodes[node as usize].ops.iter().map(|op| op.node).collect();
+        for op in operands {
+            self.delete_dead(op);
         }
     }
 
@@ -554,6 +590,30 @@ impl SelectionDAG {
         if let Some(hash) = self.key_of(node) {
             self.cse_unlink(hash, node);
         }
+    }
+
+    /// `getNodeIfExists(Opcode, VTList, Ops)`: the filed node, if one is.
+    pub fn get_node_if_exists(
+        &self,
+        opcode: ISD,
+        values: &[EVT],
+        ops: &[SDValue],
+    ) -> Option<u32> {
+        self.cse_find(opcode, values, ops, &NodeData::None)
+    }
+
+    /// `DAGCombinerInfo::CombineTo` from a target hook: the users of `from`
+    /// read `to` once the hook returns.
+    pub fn combine_to(
+        &mut self,
+        from: SDValue,
+        to: SDValue,
+    ) {
+        self.replacements.push((from, to));
+    }
+
+    pub(super) fn take_replacements(&mut self) -> Vec<(SDValue, SDValue)> {
+        std::mem::take(&mut self.replacements)
     }
 
     /// `ReplaceAllUsesWith(From, To)`: every operand `from` becomes `to`. A

@@ -245,6 +245,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             self.dag.cur_order = self.dag.node(SDValue { node: n, res: 0 }).order;
             let before = self.dag.node_count();
             let result = self.combine(SDValue { node: n, res: 0 });
+            for (old, new) in self.dag.take_replacements() {
+                self.replace_value(old, new);
+                self.add_to_worklist_with_users(new.node);
+                self.dag.delete_dead(old.node);
+            }
             for made in before..self.dag.node_count() {
                 self.add_to_worklist(made as u32);
             }
@@ -268,6 +273,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 self.add_to_worklist_with_users(result.node);
             }
             self.dag.delete_dead(n);
+            self.dag.delete_replaced(n);
         }
         // `RemoveDeadNodes` before selection: a node a fold left behind must
         // not count as a user of what it read (a load folds into its one user).
@@ -1491,6 +1497,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> Option<SDValue> {
         let (chain, value, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
         let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+        // Walk up the chain skipping the memory nodes this store does not
+        // alias, on it and on the stores chained below it.
+        if let Some(better) = self.find_better_neighbor_chains(node) {
+            return Some(better);
+        }
         if let Some(split) = self.split_pair_store(node) {
             return Some(split);
         }

@@ -101,6 +101,14 @@ def test_a_did_not_run_scanner_red_alone_names_its_cause(tmp_path, monkeypatch):
     assert why and "No space left on device" in why[0], why
 
 
+def test_a_deleted_test_file_in_the_diff_is_not_a_scanner_target(tmp_path):
+    """#4784 forked before tests/fill_loop_at_os.rs landed: its diff listed the file, `--test fill_loop_at_os` found no target, and the PR was dropped as integration-did-not-run."""
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "kept.rs").write_text("")
+    files = ["tests/kept.rs", "tests/fill_loop_at_os.rs", "tests/sub/x.rs", "src/a.rs"]
+    assert ps.own_test_targets(files, tmp_path) == {"kept"}
+
+
 def test_two_prs_adding_a_test_of_one_name_do_not_share_a_batch(tmp_path):
     """#4678 and #4680 added the same test in different places: no conflict, so both joined, and the batch failed 'defined multiple times'."""
     repo = tmp_path / "repo"

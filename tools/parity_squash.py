@@ -855,7 +855,7 @@ def new_scanner_failures(
     passes. #3899 landed with `tests/selectiondag_registry.rs` red (SD403 had no row): the layer ran lib tests only, and the target was in no map. `on_merged(targets)` and
     `on_head(targets)` -> the failing names."""
     smoke = parity_smoke_module()
-    own = {Path(f).stem for f in files if f.startswith("tests/") and f.endswith(".rs") and "/" not in f[len("tests/") :]}
+    own = own_test_targets(files, ROOT)
     targets = sorted((set(only) if only else set(smoke.SCANNERS) | own) - set(smoke.NIGHTLY_ONLY))
     failed = (on_merged or smoke.integration_failures)(targets)
     print(scanner_tests_line(targets, failed, git("rev-parse", "HEAD").strip()[:9]))
@@ -1046,6 +1046,12 @@ ALONE_JOBS = "2"  # PRs checked at once: three took 6 of 8 cargo processes besid
 SOURCE_SCANNING_PACKAGES = {"llrm-mir"}  # lib tests that scan other crates' sources (no_file_gains_*): upstream of the crates they judge, so a dependants run never reaches them
 
 
+def own_test_targets(files: list[str], root: Path) -> set[str]:
+    """The integration targets of the `tests/<t>.rs` among `files` that exist in `root`: a PR forked before a test file landed lists it as deleted, and `cargo test --test <t>` of a missing
+    target fails the whole run (#4784 was dropped as integration-did-not-run for `fill_loop_at_os`)."""
+    return {Path(f).stem for f in files if f.startswith("tests/") and f.endswith(".rs") and "/" not in f[len("tests/") :] and (root / f).exists()}
+
+
 def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, scanners=None, differs=None, target: Path | None = None, units=None, on_base=None) -> list[str]:
     """Why the PR at `head`, alone on `base` (a scratch checkout at `base` in `cwd`), fails the cheap checks a batch would fail on: the merge, the workspace build, the
     always-on scanners (fmt differences only warn: the squash formats every PR). The 15:34 batch spent 62% of its time on reruns of PRs that failed these."""
@@ -1065,7 +1071,7 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
         packages, _ = smoke.workspace_graph(cwd)
         listed = {one.split()[1].split("::")[0] for one in xfail.load_for(cwd) if one.startswith("integration ")}
         reach = set(smoke.integration_targets_for(changed, smoke.touched_packages(changed, packages, cwd), smoke.integration_map(cwd))) & listed
-        own = {Path(f).stem for f in changed if f.startswith("tests/") and f.endswith(".rs") and "/" not in f[len("tests/") :]}
+        own = own_test_targets(changed, cwd)
         only = (set(smoke.SCANNERS) | own | reach) - set(smoke.NIGHTLY_ONLY)
         merged: set[str] = set()
 

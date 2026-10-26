@@ -42,6 +42,7 @@ static _AUDITED_STRING_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| {
         ("B$ASSN", 12),
         ("B$FASC", 2),
         ("B$FCHR", 2),
+        ("B$FCVC", 2),
         ("B$FCVD", 2),
         ("B$FCVI", 2),
         ("B$FCVL", 2),
@@ -49,6 +50,7 @@ static _AUDITED_STRING_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| {
         ("B$FHEX", 4),
         ("B$FLEN", 2),
         ("B$FMID", 6),
+        ("B$FMKC", 8),
         ("B$FMKD", 8),
         ("B$FMKI", 2),
         ("B$FMKL", 4),
@@ -99,6 +101,8 @@ static _AUDITED_GRAPHICS_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(||
         ("B$CIRC", 6),
         ("B$LINE", 6),
         ("B$PAIN", 4),
+        // paint.asm: parmSD sdTile, parmW Border, parmSD sdBkgd (-1 for none).
+        ("B$PNTC", 6),
         ("B$PSTC", 2),
         // grpoint.asm: `void pascal B$PSET()` and B$PRST, no parameters.
         ("B$PSET", 0),
@@ -613,7 +617,7 @@ fn _contract_keeping(
             ),
         ));
     }
-    if ["B$RDI2", "B$RDI4", "B$RDR4", "B$RDR8"].contains(&name) && pushed == 4 {
+    if ["B$RDI2", "B$RDI4", "B$RDR4", "B$RDR8", "B$RDCY"].contains(&name) && pushed == 4 {
         return Ok(returns(
             4,
             format!(
@@ -652,7 +656,7 @@ fn _contract_keeping(
             ),
         ));
     }
-    if matches!(name, "B$PCCY" | "B$PSCY" | "B$PECY") && pushed == 8 {
+    if matches!(name, "B$PCCY" | "B$PSCY" | "B$PECY" | "B$STCY") && pushed == 8 {
         return Ok(returns(
             8,
             format!(
@@ -730,6 +734,15 @@ fn _contract_keeping(
                 "{evidence} VBDCL10E.LIB random.asm B$RNZP at 0079 \
                  reads its R8 seed at [BP+0Ah] and returns with RETF 8; \
                  MAIN.OBJ 07fe..080c pushes the high and low dwords before the call."
+            ),
+        ));
+    }
+    if name == "B$PMAP" && pushed == 6 {
+        return Ok(returns(
+            6,
+            format!(
+                "{evidence} QB45 grpmap.asm B$PMAP(parmD expr, parmW funct) returns the \
+                 address of its R4 result in AX with RETF 6; BC pushes the dword, then the word."
             ),
         ));
     }

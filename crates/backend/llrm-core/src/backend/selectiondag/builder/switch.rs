@@ -189,6 +189,7 @@ impl Builder<'_> {
         // MIR pass reads the same cost).
         let target = SwitchTarget {
             jump_tables: self.target.jump_tables,
+            opt_size: self.target.opt_size || self.function_has("optsize") || self.function_has("minsize"),
             ..SwitchTarget::x86(self.target.dag.pointer.size_in_bits())
         };
         let plan = switchcg::plan_with(&cases, default.0, &target);
