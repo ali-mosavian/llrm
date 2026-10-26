@@ -92,3 +92,33 @@ fn an_i32_argument_is_used_in_the_register_it_arrives_in() {
         .expect("lowers");
     assert!(!asm.contains("orr"), "an argument was copied:\n{asm}");
 }
+
+/// `a*b + c` and `c - a*b` were a `mul` and an `add`/`sub`, one instruction more than the `madd`/`msub`
+/// the pin's `clang -O2` makes; of two added products, one is fused and the other stays a `mul`.
+#[test]
+fn a_product_added_or_subtracted_is_one_multiply_accumulate() {
+    let asm = |body: &str, bits: u32| {
+        let text = format!(
+            "target datalayout = \"{}\"\ndefine i{bits} @f(i{bits} %a, i{bits} %b, i{bits} %c) {{\n{body}  ret i{bits} %r\n}}\n",
+            Platform::Darwin.datalayout()
+        );
+        driver::assembly(&text, Platform::Darwin, true).expect("lowers")
+    };
+    let mnemonics = |asm: &str| -> Vec<String> {
+        asm.lines().filter(|l| l.starts_with('\t')).map(|l| l.split_whitespace().next().unwrap().to_owned()).collect()
+    };
+    for bits in [32, 64] {
+        let add = asm(&format!("  %m = mul i{bits} %a, %b\n  %r = add i{bits} %m, %c\n"), bits);
+        assert_eq!(mnemonics(&add), ["madd", "ret"], "{add}");
+        let sub = asm(&format!("  %m = mul i{bits} %a, %b\n  %r = sub i{bits} %c, %m\n"), bits);
+        assert_eq!(mnemonics(&sub), ["msub", "ret"], "{sub}");
+        // The product on the left of a subtract is not an `msub`.
+        let neg = asm(&format!("  %m = mul i{bits} %a, %b\n  %r = sub i{bits} %m, %c\n"), bits);
+        assert_eq!(mnemonics(&neg), ["madd", "sub", "ret"], "{neg}");
+        let two = asm(
+            &format!("  %m = mul i{bits} %a, %b\n  %n = mul i{bits} %c, %c\n  %r = add i{bits} %m, %n\n"),
+            bits,
+        );
+        assert_eq!(mnemonics(&two), ["madd", "madd", "ret"], "{two}");
+    }
+}

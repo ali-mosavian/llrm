@@ -166,6 +166,16 @@ impl Selector<'_> {
                 .insert(super::value_def(self.function, instruction.result.expect("checked")).expect("an instruction"));
             return Ok(());
         }
+        if op == BinaryOp::Mul && result.is_some_and(|result| self.accumulated(result)) {
+            // `madd` or `msub` reads the operands where the add or subtract is.
+            self.fused.insert(super::value_def(self.function, result.expect("checked")).expect("an instruction"));
+            return Ok(());
+        }
+        if matches!(op, BinaryOp::Add | BinaryOp::Sub)
+            && let Some(done) = self.multiply_accumulate(op == BinaryOp::Sub, bits, instruction)?
+        {
+            return self.define(result, Src::Val(Val::Int(done)));
+        }
         let (lhs, rhs) = (self.src(instruction.operands[0])?, self.src(instruction.operands[1])?);
         // Division by a constant is shifts and multiplies.
         if let (BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem, Src::Int { value, .. }) = (op, &rhs)
@@ -247,6 +257,80 @@ impl Selector<'_> {
         };
         self.inst(Inst::AddSubShifted { op: flags, width, rd, rn, rm: b.reg, shift: Shift::Lsl, amount: 0 });
         Ok(G { reg: rd, bits, known })
+    }
+
+    /// Whether the product `value` is read only by an `add` or `sub` of its own block that can
+    /// take it as the multiply of a `madd` or `msub`: 32 or 64 bits, neither factor a constant
+    /// (a constant factor is a shift or an add), the other addend not a constant, and, for a
+    /// `sub`, the product subtracted.
+    pub(super) fn accumulated(
+        &self,
+        value: llrm_mir::ValueId,
+    ) -> bool {
+        if self.use_count(value) != 1 {
+            return false;
+        }
+        let Some(def) = super::value_def(self.function, value) else { return false };
+        let product = self.function.instruction(def);
+        if !matches!(self.types().int_bits(product.ty), Some(32 | 64))
+            || product.operands.iter().any(|one| matches!(one, Operand::Constant(_)))
+        {
+            return false;
+        }
+        let Some(user) = self.function.users(value).into_iter().next() else { return false };
+        let reader = self.function.instruction(user.user);
+        let [first, second] = reader.operands[..] else { return false };
+        let other = match reader.opcode {
+            // Of two products added, the second is the one accumulated onto the first.
+            llrm_mir::Opcode::Binary(BinaryOp::Add)
+                if first == Operand::Value(value) && !self.is_product(second) =>
+            {
+                second
+            }
+            llrm_mir::Opcode::Binary(BinaryOp::Add | BinaryOp::Sub) if second == Operand::Value(value) => first,
+            _ => return false,
+        };
+        self.function.parent(def) == self.function.parent(user.user) && !matches!(other, Operand::Constant(_))
+    }
+
+    fn is_product(
+        &self,
+        operand: Operand,
+    ) -> bool {
+        let Operand::Value(value) = operand else { return false };
+        super::value_def(self.function, value).is_some_and(|def| {
+            self.function.instruction(def).opcode == llrm_mir::Opcode::Binary(BinaryOp::Mul)
+        })
+    }
+
+    /// `madd` or `msub` for an `add` or `sub` of a product left for it by [`Self::accumulated`].
+    fn multiply_accumulate(
+        &mut self,
+        subtract: bool,
+        bits: u32,
+        instruction: &Instruction,
+    ) -> Selected<Option<G>> {
+        let product = |operand: Operand| match operand {
+            Operand::Value(value) => super::value_def(self.function, value)
+                .filter(|def| self.fused.contains(def))
+                .map(|def| self.function.instruction(def).clone())
+                .filter(|one| one.opcode == llrm_mir::Opcode::Binary(BinaryOp::Mul)),
+            _ => None,
+        };
+        let [first, second] = instruction.operands[..] else { return Ok(None) };
+        let (found, other) = match (product(first), product(second)) {
+            (Some(found), _) if !subtract => (found, second),
+            (_, Some(found)) => (found, first),
+            _ => return Ok(None),
+        };
+        let (lhs, rhs) = (self.src(found.operands[0])?, self.src(found.operands[1])?);
+        let (a, b) = (self.gpr_of(lhs)?, self.gpr_of(rhs)?);
+        let addend = self.src(other)?;
+        let c = self.gpr_of(addend)?;
+        let (rd, known) = self.result_g(bits);
+        let op = if subtract { Mul3::Msub } else { Mul3::Madd };
+        self.inst(Inst::ThreeSource { op, width: width_of(bits), rd, rn: a.reg, rm: b.reg, ra: c.reg });
+        Ok(Some(G { reg: rd, bits, known }))
     }
 
     fn logic(
