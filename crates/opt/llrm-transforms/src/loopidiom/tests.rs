@@ -245,6 +245,7 @@ fn run_on_loop(
         aa: &NoAa,
         declared: &mut declared,
         cur_loop,
+        tti: None,
     };
     LoopIdiomRecognize::new(Options::default(), LIBRARY).run_on_loop(&mut run)
 }

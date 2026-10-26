@@ -200,6 +200,14 @@ impl Machine for Dos {
         self.costs.clone()
     }
 
+    fn keeps_division(
+        &self,
+        bits: u32,
+        size: bool,
+    ) -> bool {
+        llrm_target::keeps_division(i64::from(bits / 8), size)
+    }
+
     fn size_costs(&self) -> OperationCosts {
         // The by-pieces ratios are the CPU's, whichever table prices the rest.
         OperationCosts {

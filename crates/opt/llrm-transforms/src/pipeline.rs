@@ -866,7 +866,10 @@ pub(crate) fn llvm_order(
             list.extend([
                 slot(
                     "loopidiom@737",
-                    Box::new(crate::loopidiom::pass::LoopIdiom::with_routines(applied.options.library.clone())),
+                    Box::new(crate::loopidiom::pass::LoopIdiom {
+                        for_size: size,
+                        ..crate::loopidiom::pass::LoopIdiom::with_routines(applied.options.library.clone())
+                    }),
                 ),
                 slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
                 slot("indvars@738", Box::new(indvars::IndVars { lftr: indvars::lftr_default() })),
@@ -1233,6 +1236,9 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // counter rebased by it), as LLVM's LSR cleans with
         // SimplifyInstructions.
         passes.push(Box::new(algebraic::Differences));
+        // The remainder LSR wrote out as a quotient and a product, back to one
+        // where the divide stays.
+        passes.push(Box::new(crate::remidiom::RemainderIdiom { size: applied.options.prefers_size() }));
     }
     passes
 }
