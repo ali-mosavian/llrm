@@ -132,6 +132,7 @@ pub mod combine_negator;
 pub mod combine_or;
 pub mod combine_pass;
 pub mod combine_phi;
+pub mod combine_phi_args;
 pub mod combine_select;
 pub mod combine_select_bools;
 pub mod combine_select_ext_const;

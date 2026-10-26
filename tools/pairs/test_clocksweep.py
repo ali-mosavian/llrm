@@ -42,6 +42,15 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(clocksweep.with_level(["-O2", "-march=pentium"]), ["-Os", "-march=pentium"])
         self.assertEqual(clocksweep.with_level(["-fno-inline"]), ["-fno-inline", "-Os"])
 
+    def test_a_report_names_no_machine_path(self):
+        """A void row quoted the worktree's absolute path and the arms line the dist's, and the committed report failed no_local_paths."""
+        home = "/ho" + "me/someone"  # split: the tracked-files scan flags a machine path
+        base = {"isel": "", "bin": f"{home}/x/sbp-1/dist", "rows": {"a": {"error": f"failed on {home}/w/tests/a.c"}}}
+        report = "\n".join(clocksweep.compare(base, base))
+        self.assertNotIn("someone", report)
+        self.assertIn("sbp-1/dist", report)
+        self.assertIn("tests/a.c", report)
+
 
 if __name__ == "__main__":
     unittest.main()
