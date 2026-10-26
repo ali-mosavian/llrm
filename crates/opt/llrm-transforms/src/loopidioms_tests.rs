@@ -149,30 +149,20 @@ fn a_loop_with_a_volatile_store_is_kept() {
     kept(&looped("i8", "%n", body, "%e"), TRIPS);
 }
 
-/// A word whose bytes differ stayed a loop, `rep stosw` being isel's alone:
-/// each of its trips cost a store. It is one pattern fill of the cells.
+/// A word whose bytes differ, constant or not, stays a loop: the pin has no
+/// pattern fill off Darwin (`memset_pattern16`), and `rep stosw` here came from
+/// this pass alone (c/copy_idioms.c `palette` was `rep stosw`, the pin's a
+/// loop).
 #[test]
-fn a_word_of_two_bytes_is_one_pattern_fill() {
+fn a_word_of_two_bytes_stays_a_loop() {
     let body = "  %p = getelementptr inbounds [64 x i16], ptr @buf, i16 0, i16 %i\n  store i16 4660, ptr %p\n";
-    let text = looped("i16", "10", body, "0");
-    assert!(text.contains("store i16 4660"), "premise: a loop of word stores");
-    let after = managed_fill(&text, &[&[0, 0], &[0, 9], &[0, 10]]);
-    assert!(
-        after.contains("call void @llvm.experimental.memset.pattern.p0.i16.i16(ptr %p, i16 4660, i16 10, i1 false)"),
-        "{after}"
-    );
+    kept(&looped("i16", "10", body, "0"), TRIPS);
 }
 
-/// A loop-invariant word that is no constant is a pattern too, counted in
-/// cells: a count of `%n` is not doubled.
 #[test]
-fn an_invariant_word_is_one_pattern_fill() {
+fn an_invariant_word_stays_a_loop() {
     let body = "  %p = getelementptr inbounds [64 x i16], ptr @buf, i16 0, i16 %i\n  store i16 %q, ptr %p\n";
-    let after = managed_fill(&looped("i16", "%n", body, "%e"), &[&[0, 7], &[1, 7], &[40, 4660], &[-5, 3]]);
-    assert!(
-        after.contains("call void @llvm.experimental.memset.pattern.p0.i16.i16(ptr %p, i16 %q, i16 %1, i1 false)"),
-        "{after}"
-    );
+    kept(&looped("i16", "%n", body, "%e"), TRIPS);
 }
 
 #[test]
@@ -328,7 +318,7 @@ fn stores_that_are_not_one_fill_are_kept() {
     unchanged("  store i16 0, ptr %a\n  store i16 0, ptr %p2\n  store i8 9, ptr %p2\n");
 }
 
-/// A pattern fill set against a loop under the DOS target's own costs: a
+/// A fill set against a loop under the DOS target's own costs: a
 /// loop that costs less a trip than `rep stos` costs once stays a loop, on
 /// the 486's clocks and under -Os' bytes; one that costs more is filled.
 #[test]
@@ -348,7 +338,7 @@ fn a_fill_is_priced_against_its_loop() {
 /// A fill through a huge pointer is one fill in the pointer's space, with a
 /// count of 32 bits: the intrinsic carries the address space, and isel splits
 /// it at each 64K segment (`isel/huge.rs`). It was left a loop, ten
-/// instructions to a byte. A word of two different bytes is a pattern; a byte
+/// instructions to a byte. A word of two different bytes stays a loop; a byte
 /// is a memset.
 #[test]
 fn a_fill_through_a_huge_pointer_is_one_fill_in_its_space() {
@@ -374,8 +364,8 @@ b3:
 }
 ";
     assert!(text.contains("store i16 4660"), "premise: a loop of word stores");
-    let after = managed_fill(text, &[&[0], &[1], &[300]]);
-    assert!(after.contains("call void @llvm.experimental.memset.pattern.p3.i16.i32(ptr addrspace(3) "), "{after}");
+    let (loop_, changed) = fill(text, &[&[0], &[1], &[300]]);
+    assert!(!changed, "{loop_}");
     let bytes =
         text.replace("[40000 x i16]", "[40000 x i8]").replace("i16 4660", "i8 65").replace("store i16", "store i8");
     let after = managed_fill(&bytes, &[&[0], &[1], &[300]]);
