@@ -19,15 +19,21 @@ long parity_loop(short *count, short *seed)
 static short demo_count;
 static short demo_seed;
 
+/* Read through volatile so no build folds the kernel to a constant. */
+static volatile short input_count_a = 7;
+static volatile short input_seed_a = 5;
+static volatile short input_count_b = 4;
+static volatile short input_seed_b = -3;
+
 long bench_loop(void)
 {
     long first;
 
-    demo_count = 7;
-    demo_seed = 5;
+    demo_count = input_count_a;
+    demo_seed = input_seed_a;
     first = parity_loop(&demo_count, &demo_seed);
-    demo_count = 4;
-    demo_seed = -3;
+    demo_count = input_count_b;
+    demo_seed = input_seed_b;
     return first * 1000L + parity_loop(&demo_count, &demo_seed);
 }
 

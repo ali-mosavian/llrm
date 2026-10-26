@@ -741,7 +741,7 @@ pub fn decide_with_split(
         return None;
     }
     if llrm_support::env_var("LLRM_MIR_PRINT").is_some_and(|n| n == &*body.name) {
-        match crate::backend::mirprint::mir(body) {
+        match crate::backend::mirprint::mir(body, inputs.pins) {
             Ok(text) => eprintln!("{text}"),
             Err(why) => eprintln!("MIR-PRINT-REFUSED {}: {why}", body.name),
         }

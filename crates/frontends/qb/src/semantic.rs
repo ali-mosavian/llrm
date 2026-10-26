@@ -18,8 +18,8 @@ use crate::dialect::Dialect;
 use crate::front::quickr::{EACH, ON_SELECTOR, STEP_MARK, TUPLE};
 use crate::intrinsics::{self, Lowering, ResultClass};
 use crate::syntax::{
-    Binary, CaseItem, Declaration, ExitTarget, Expr, FileMode, Haystack, Literal, Module, Parameter, PrintKind,
-    PrintSeparator, Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
+    Binary, CaseItem, Declaration, ExitTarget, Expr, FileAccess, FileLock, FileMode, Haystack, Literal, Module,
+    Parameter, PrintKind, PrintSeparator, Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
 };
 
 const VOID: u32 = 0;
@@ -1457,10 +1457,71 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
         }
     }
 
+    /// A GOSUB to a label no RETURN follows (`500 END`) never comes back: it is
+    /// a GOTO.
+    fn never_returns(
+        statements: &mut [Statement],
+        endless: &BTreeSet<String>,
+    ) {
+        for statement in statements {
+            match statement {
+                Statement::Call { name, arguments, span, .. } if name == "GOSUB" => {
+                    if let [Expr::Name(target, _)] = arguments.as_slice() {
+                        if endless.contains(canonical(target)) {
+                            *statement = Statement::Goto(target.clone(), *span);
+                        }
+                    }
+                }
+                Statement::If { then_branch, else_branch, .. } => {
+                    never_returns(then_branch, endless);
+                    never_returns(else_branch, endless);
+                }
+                Statement::For { body, .. } | Statement::While { body, .. } | Statement::Do { body, .. } => {
+                    never_returns(body, endless)
+                }
+                Statement::Select { arms, otherwise, .. } => {
+                    for (_, body) in arms {
+                        never_returns(body, endless);
+                    }
+                    never_returns(otherwise, endless);
+                }
+                _ => {}
+            }
+        }
+    }
+
     let mut targets = BTreeSet::new();
     visit(&module.statements, &mut targets);
     if targets.is_empty() {
         return Ok(module.clone());
+    }
+    let endless = targets
+        .iter()
+        .filter(|target| {
+            let Some(start) = module.statements.iter().position(|statement| {
+                matches!(
+                    statement,
+                    Statement::Label(name, _) if canonical(name) == target.as_str()
+                )
+            }) else {
+                return false;
+            };
+            !module
+                .statements[start + 1..]
+                .iter()
+                .any(
+                    |statement| matches!(
+                        statement,
+                        Statement::Call { name, arguments, .. } if name == "RETURN" && arguments.is_empty()
+                    ),
+                )
+        })
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !endless.is_empty() {
+        let mut jumped = module.clone();
+        never_returns(&mut jumped.statements, &endless);
+        return outline_module_gosubs(&jumped);
     }
 
     // A module GOSUB shares the module frame, variables, and error handler.
@@ -3640,35 +3701,42 @@ impl Compiler {
                 Statement::FormDeclaration(..) => return self.unsupported("a '$FORM declaration"),
                 Statement::OpenIsam { .. } => return self.unsupported("OPEN FOR ISAM"),
                 Statement::OpenClassic { .. } => return self.unsupported("the classic OPEN mode$, #file, path$ form"),
-                Statement::Open { access, lock, record_length, mode_written, mode, .. }
-                    if access.is_some()
-                        || lock.is_some()
-                        || record_length.is_some()
-                        || !mode_written
-                        || *mode == FileMode::Random =>
-                {
-                    return self.unsupported("OPEN with ACCESS, LOCK, LEN or RANDOM mode");
-                }
-                Statement::Open { path, mode, file, .. } => {
+                Statement::Open { path, mode, file, access, lock, record_length, .. } => {
                     let path = self.string_descriptor(path)?;
                     let (file, file_type) = self.expression(file)?;
                     let file = self.convert(file, file_type, INTEGER)?;
+                    let length = match record_length {
+                        Some(length) => {
+                            let (length, length_type) = self.expression(length)?;
+                            self.convert(length, length_type, INTEGER)?
+                        }
+                        None => Operand::Constant(INTEGER, Number::Integer(-1)),
+                    };
+                    // The mode word of rtps.inc: the mode (RANDOM when none is
+                    // written) in the low byte, ACCESS and
+                    // LOCK/SHARED in the high one.
                     let mode = match mode {
                         FileMode::Input => 1,
                         FileMode::Output => 2,
+                        FileMode::Random => 4,
                         FileMode::Append => 8,
                         FileMode::Binary => 0x20,
-                        FileMode::Random => unreachable!(),
+                    } | match access {
+                        None => 0,
+                        Some(FileAccess::Read) => 0x100,
+                        Some(FileAccess::Write) => 0x200,
+                        Some(FileAccess::ReadWrite) => 0x300,
+                    } | match lock {
+                        None => 0,
+                        Some(FileLock::Read) => 0x3000,
+                        Some(FileLock::Write) => 0x2000,
+                        Some(FileLock::ReadWrite) => 0x1000,
+                        Some(FileLock::Shared) => 0x4000,
                     };
                     self.emit_runtime_call(
                         "B$OPEN",
                         Vec::new(),
-                        vec![
-                            path,
-                            file,
-                            Operand::Constant(INTEGER, Number::Integer(-1)),
-                            Operand::Constant(INTEGER, Number::Integer(mode)),
-                        ],
+                        vec![path, file, length, Operand::Constant(INTEGER, Number::Integer(mode))],
                     );
                 }
                 Statement::Close { files, .. } => {
@@ -4133,6 +4201,25 @@ impl Compiler {
                             let screen = i64::from(name == "VIEW_SCREEN");
                             operands.push(Operand::Constant(INTEGER, Number::Integer(screen)));
                             self.emit_runtime_call("B$VIEW", Vec::new(), operands);
+                        }
+                    }
+                    "WINDOW" | "WINDOW_SCREEN" => {
+                        if arguments.is_empty() {
+                            self.emit_runtime_call("B$WIN0", Vec::new(), Vec::new());
+                        } else {
+                            if arguments.len() != 4 {
+                                return self.fail("WINDOW takes two corners, as in `WINDOW (0, 0)-(1, 1)`");
+                            }
+                            // BC passes the four corner values as SINGLEs and
+                            // whether it is WINDOW SCREEN.
+                            let mut operands = Vec::new();
+                            for argument in arguments {
+                                let (value, type_id) = self.expression(argument)?;
+                                operands.push(self.stored_float_argument(value, type_id, SINGLE)?);
+                            }
+                            let screen = i64::from(name == "WINDOW_SCREEN");
+                            operands.push(Operand::Constant(INTEGER, Number::Integer(screen)));
+                            self.emit_runtime_call("B$WIND", Vec::new(), operands);
                         }
                     }
                     "VIEW_PRINT" => {
@@ -9208,12 +9295,38 @@ impl Compiler {
         type_id: u32,
     ) -> Result<u32, SemanticError> {
         let extent = self.width(type_id);
-        let storage = self.implicit_storage;
+        // A by-reference argument temporary is passed by address. In the
+        // module block it would make the whole block escape, and every call
+        // would then be taken to write the loop limits and the rest of it.
+        let storage =
+            if self.implicit_storage == "module" && prefix == "$arg" { "static" } else { self.implicit_storage };
         if storage != "static" && self.beyond_segment(self.data_offset + extent) {
             return self
                 .fail(format!("a temporary value does not fit: the stack frame ({} KiB) is full", self.segment_kib()));
         }
-        let (offset, symbol) = if storage == "static" {
+        let (offset, symbol) = if storage == "static" && self.implicit_storage == "module" {
+            // One object for them all, so neighbouring constants still store
+            // as one wider move.
+            if let Some(block) = self.data.iter_mut().find(|object| object.name.starts_with("$arguments")) {
+                let offset = block.bytes.len();
+                block.bytes.resize(offset + extent, 0);
+                (offset as isize, block.id)
+            } else {
+                let symbol = self.next_data;
+                self.next_data += 1;
+                self.data.push(DataObject {
+                    align: 1,
+                    id: symbol,
+                    name: format!("$arguments${}", self.next_place),
+                    bytes: vec![0; extent],
+                    readonly: false,
+                    relocations: Vec::new(),
+                    linkage: "internal",
+                    address: "near",
+                });
+                (0, symbol)
+            }
+        } else if storage == "static" {
             let symbol = self.next_data;
             self.next_data += 1;
             self.data.push(DataObject {
