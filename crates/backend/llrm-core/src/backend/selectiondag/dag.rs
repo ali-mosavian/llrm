@@ -154,13 +154,20 @@ pub struct DagConfig {
     pub offset_folding: bool,
     /// The pointer type (`TLI->getPointerTy`).
     pub pointer: EVT,
+    /// `isIntDivCheap`: a divide by a constant stays a divide.
+    pub int_div_cheap: bool,
 }
 
 impl Default for DagConfig {
     /// x86: 0 or 1; symbol offsets do not fold (`isOffsetFoldingLegal` is false
     /// for the default PIC model).
     fn default() -> DagConfig {
-        DagConfig { boolean_contents: BooleanContents::ZeroOrOne, offset_folding: false, pointer: EVT::I32 }
+        DagConfig {
+            boolean_contents: BooleanContents::ZeroOrOne,
+            offset_folding: false,
+            pointer: EVT::I32,
+            int_div_cheap: false,
+        }
     }
 }
 
@@ -248,6 +255,10 @@ pub struct SelectionDAG {
     /// it, so the set follows it into a machine node. A load a combine or the
     /// legalizer remakes is not in it.
     pub invariant_loads: HashSet<u32>,
+    /// The offset from the incoming stack pointer of each fixed object (the
+    /// negative frame indices the builder makes for stack arguments):
+    /// `MachineFrameInfo::getObjectOffset`.
+    pub fixed_offsets: std::collections::BTreeMap<i32, i64>,
     /// The loads and stores the program marks volatile: the LIR instructions
     /// they become keep the mark (`MachineMemOperand::isVolatile`).
     pub volatile_accesses: HashSet<u32>,
@@ -307,6 +318,7 @@ impl SelectionDAG {
             temporaries: Vec::new(),
             local_symbols: Default::default(),
             invariant_loads: HashSet::default(),
+            fixed_offsets: Default::default(),
             volatile_accesses: HashSet::default(),
         };
         dag.entry = dag.intern(ISD::EntryToken, &[EVT::OTHER, EVT::GLUE], &[], SDNodeFlags::default(), NodeData::None);

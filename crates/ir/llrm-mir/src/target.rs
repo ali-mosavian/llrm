@@ -52,6 +52,20 @@ pub trait Machine {
         self.costs()
     }
 
+    /// Whether a division by a constant stays a divide instruction on
+    /// `bits`-bit values, `size` saying the build is for size
+    /// (`isIntDivCheap`, read the other way): the remainder is then the
+    /// divide's own, not `x - (x / c) * c`. By default no: a division is a
+    /// multiply.
+    fn keeps_division(
+        &self,
+        bits: u32,
+        size: bool,
+    ) -> bool {
+        let _ = (bits, size);
+        false
+    }
+
     /// How many integer values fit in registers at once.
     fn registers(&self) -> i64;
 

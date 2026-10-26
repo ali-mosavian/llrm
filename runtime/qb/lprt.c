@@ -1,6 +1,6 @@
 /* LPRINT: PRINT to the printer (QB rt/iolpt.asm), DOS's standard printer
    handle written like a file's. */
-#include "device.h"
+#include "dev.h"
 #include "file.h"
 
 enum { PRINTER_HANDLE = 4 };

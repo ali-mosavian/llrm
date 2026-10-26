@@ -63,6 +63,8 @@ pub struct Run<'a> {
     pub cur_loop: Loop<'a>,
     /// The target's code-byte prices and the callees, at `-Os`.
     pub bytes: Option<(&'a OperationCosts, &'a llrm_mir::memory::Callees)>,
+    /// `TTI`: the target's costs, where it has them.
+    pub tti: Option<&'a dyn llrm_mir::tti::Tti>,
 }
 
 /// The arguments of `processLoopStridedStore`.

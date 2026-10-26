@@ -18,8 +18,8 @@ use crate::dialect::Dialect;
 use crate::front::quickr::{EACH, ON_SELECTOR, STEP_MARK, TUPLE};
 use crate::intrinsics::{self, Lowering, ResultClass};
 use crate::syntax::{
-    Binary, CaseItem, Declaration, ExitTarget, Expr, FileMode, Haystack, Literal, Module, Parameter, PrintKind,
-    PrintSeparator, Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
+    Binary, CaseItem, Declaration, ExitTarget, Expr, FileAccess, FileLock, FileMode, Haystack, Literal, Module,
+    Parameter, PrintKind, PrintSeparator, Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
 };
 
 const VOID: u32 = 0;
@@ -297,6 +297,9 @@ struct Compiler {
     /// where it stands.
     seen: BTreeSet<String>,
     constants: BTreeMap<String, (u32, Number)>,
+    /// CONST names of string literals, which BC substitutes where they are
+    /// used.
+    string_constants: BTreeMap<String, String>,
     signatures: BTreeMap<String, Signature>,
     callables: Vec<Callable>,
     udts: BTreeMap<String, Udt>,
@@ -601,6 +604,7 @@ pub fn compile_debugged(
     }
     shapes::applied(&mut compiler);
     absolute::applied(&mut compiler);
+    absolute::varseg(&mut compiler);
     Ok((compiler.json(), std::mem::take(&mut compiler.warnings)))
 }
 
@@ -1716,6 +1720,7 @@ impl Compiler {
             variables: BTreeMap::new(),
             seen: BTreeSet::new(),
             constants: BTreeMap::new(),
+            string_constants: BTreeMap::new(),
             signatures: BTreeMap::new(),
             callables: Vec::new(),
             udts: BTreeMap::new(),
@@ -2079,7 +2084,31 @@ impl Compiler {
         Ok(())
     }
 
+    /// A TYPE's STRING * n and array bounds may name a CONST declared above it,
+    /// but the module's constants are collected after the types: the numeric
+    /// ones are lent to the types and taken back.
     fn type_declarations(
+        &mut self,
+        module: &Module,
+    ) -> Result<(), SemanticError> {
+        let mut lent = Vec::new();
+        for statement in &module.statements {
+            if let Statement::Const { name, value, .. } = statement {
+                if let Ok(constant) = self.constant(value) {
+                    if self.constants.insert(canonical(name).into(), constant).is_none() {
+                        lent.push(canonical(name).to_owned());
+                    }
+                }
+            }
+        }
+        let result = self.type_declarations_with_constants(module);
+        for name in lent {
+            self.constants.remove(&name);
+        }
+        result
+    }
+
+    fn type_declarations_with_constants(
         &mut self,
         module: &Module,
     ) -> Result<(), SemanticError> {
@@ -2557,6 +2586,15 @@ impl Compiler {
                         if let Some(variable) = self.variables.get_mut(&key) {
                             variable.rank = Some(item.bounds.len());
                         }
+                    }
+                }
+                Statement::Const { name, value, .. } if self.string_constant(value).is_some() => {
+                    let text = self.string_constant(value).unwrap_or_default();
+                    if self.string_constants.insert(canonical(name).into(), text).is_some()
+                        || self.constants.contains_key(canonical(name))
+                        || self.variables.contains_key(&self.variable_key(name))
+                    {
+                        return self.fail(format!("duplicate declaration {name}"));
                     }
                 }
                 Statement::Const { name, value, .. } => {
@@ -3621,6 +3659,54 @@ impl Compiler {
                         self.select_block(continuation);
                     }
                     "BLOAD" | "BSAVE" => self.binary_memory_statement(name, arguments)?,
+                    "STOP" | "RESET" => {
+                        if !arguments.is_empty() {
+                            return self.fail(format!("{name} takes no arguments"));
+                        }
+                        if name == "RESET" {
+                            self.emit_runtime_call("B$REST", Vec::new(), Vec::new());
+                        } else {
+                            // B$STOP does not return, as B$CEND does not.
+                            self.emit_runtime_call("B$STOP", Vec::new(), Vec::new());
+                            self.terminate("unreachable", Vec::new(), Vec::new())?;
+                            let continuation = self.new_block();
+                            self.select_block(continuation);
+                        }
+                    }
+                    "KILL" | "MKDIR" | "CHDIR" | "RMDIR" | "ENVIRON" => {
+                        let [path] = arguments.as_slice() else {
+                            return self.fail(format!("{name} takes one file or directory name"));
+                        };
+                        let path = self.string_descriptor(path)?;
+                        let routine = match name.as_str() {
+                            "KILL" => "B$KILL",
+                            "ENVIRON" => "B$SENV",
+                            "MKDIR" => "B$MDIR",
+                            "CHDIR" => "B$CDIR",
+                            _ => "B$RDIR",
+                        };
+                        self.emit_runtime_call(routine, Vec::new(), vec![path]);
+                    }
+                    "LSET" | "RSET" => {
+                        let [Expr::Binary { op: Binary::Eq, left, right, .. }] = arguments.as_slice() else {
+                            return self
+                                .fail(format!("{name} takes a string variable and a value, as in `{name} a$ = b$`"));
+                        };
+                        let (destination, destination_type) = self.destination(left)?;
+                        let Some(width) = self.string_width(destination_type) else {
+                            return self.unsupported(&format!("{name} of a record"));
+                        };
+                        // B$LSET(source descriptor, far destination, fixed
+                        // length or 0 for a descriptor)
+                        let source = self.string_descriptor(right)?;
+                        let target = self.far_address(destination, destination_type);
+                        let routine = if name == "LSET" { "B$LSET" } else { "B$RSET" };
+                        self.emit_runtime_call(
+                            routine,
+                            Vec::new(),
+                            vec![source, Operand::Value(target), self.count(width as i64)],
+                        );
+                    }
                     "RANDOMIZE" => {
                         let [seed] = arguments.as_slice() else {
                             return self.fail("RANDOMIZE needs a seed here, as in `RANDOMIZE TIMER`");
@@ -3687,35 +3773,42 @@ impl Compiler {
                 Statement::FormDeclaration(..) => return self.unsupported("a '$FORM declaration"),
                 Statement::OpenIsam { .. } => return self.unsupported("OPEN FOR ISAM"),
                 Statement::OpenClassic { .. } => return self.unsupported("the classic OPEN mode$, #file, path$ form"),
-                Statement::Open { access, lock, record_length, mode_written, mode, .. }
-                    if access.is_some()
-                        || lock.is_some()
-                        || record_length.is_some()
-                        || !mode_written
-                        || *mode == FileMode::Random =>
-                {
-                    return self.unsupported("OPEN with ACCESS, LOCK, LEN or RANDOM mode");
-                }
-                Statement::Open { path, mode, file, .. } => {
+                Statement::Open { path, mode, file, access, lock, record_length, .. } => {
                     let path = self.string_descriptor(path)?;
                     let (file, file_type) = self.expression(file)?;
                     let file = self.convert(file, file_type, INTEGER)?;
+                    let length = match record_length {
+                        Some(length) => {
+                            let (length, length_type) = self.expression(length)?;
+                            self.convert(length, length_type, INTEGER)?
+                        }
+                        None => Operand::Constant(INTEGER, Number::Integer(-1)),
+                    };
+                    // The mode word of rtps.inc: the mode (RANDOM when none is
+                    // written) in the low byte, ACCESS and
+                    // LOCK/SHARED in the high one.
                     let mode = match mode {
                         FileMode::Input => 1,
                         FileMode::Output => 2,
+                        FileMode::Random => 4,
                         FileMode::Append => 8,
                         FileMode::Binary => 0x20,
-                        FileMode::Random => unreachable!(),
+                    } | match access {
+                        None => 0,
+                        Some(FileAccess::Read) => 0x100,
+                        Some(FileAccess::Write) => 0x200,
+                        Some(FileAccess::ReadWrite) => 0x300,
+                    } | match lock {
+                        None => 0,
+                        Some(FileLock::Read) => 0x3000,
+                        Some(FileLock::Write) => 0x2000,
+                        Some(FileLock::ReadWrite) => 0x1000,
+                        Some(FileLock::Shared) => 0x4000,
                     };
                     self.emit_runtime_call(
                         "B$OPEN",
                         Vec::new(),
-                        vec![
-                            path,
-                            file,
-                            Operand::Constant(INTEGER, Number::Integer(-1)),
-                            Operand::Constant(INTEGER, Number::Integer(mode)),
-                        ],
+                        vec![path, file, length, Operand::Constant(INTEGER, Number::Integer(mode))],
                     );
                 }
                 Statement::Close { files, .. } => {
@@ -4041,6 +4134,34 @@ impl Compiler {
                     self.select_block(continuation);
                 }
                 Statement::Runtime { name, arguments, .. } => match name.as_str() {
+                    "NAME" => {
+                        let [old, new] = arguments.as_slice() else {
+                            return self.fail("NAME takes the old and the new file name, as in `NAME \"A\" AS \"B\"`");
+                        };
+                        let old = self.string_descriptor(old)?;
+                        let new = self.string_descriptor(new)?;
+                        self.emit_runtime_call("B$NAME", Vec::new(), vec![old, new]);
+                    }
+                    "FILES" => {
+                        if arguments.len() > 1 {
+                            return self.fail("FILES takes one file pattern, as in `FILES \"*.BAS\"`");
+                        }
+                        // BC passes the pattern's descriptor, an empty string's
+                        // for a bare FILES.
+                        let empty = Expr::Literal(Literal::String(String::new()), Span::default());
+                        let pattern = self.string_descriptor(arguments.first().unwrap_or(&empty))?;
+                        self.emit_runtime_call("B$FILS", Vec::new(), vec![pattern]);
+                    }
+                    "SHELL" => {
+                        if arguments.len() > 1 {
+                            return self.fail("SHELL takes one command, as in `SHELL \"DIR\"`");
+                        }
+                        // BC passes the command's descriptor, an empty string's
+                        // for a bare SHELL.
+                        let empty = Expr::Literal(Literal::String(String::new()), Span::default());
+                        let command = self.string_descriptor(arguments.first().unwrap_or(&empty))?;
+                        self.emit_runtime_call("B$SSHL", Vec::new(), vec![command]);
+                    }
                     "BEEP" => {
                         if !arguments.is_empty() {
                             return self.fail("BEEP takes no arguments");
@@ -4152,6 +4273,25 @@ impl Compiler {
                             let screen = i64::from(name == "VIEW_SCREEN");
                             operands.push(Operand::Constant(INTEGER, Number::Integer(screen)));
                             self.emit_runtime_call("B$VIEW", Vec::new(), operands);
+                        }
+                    }
+                    "WINDOW" | "WINDOW_SCREEN" => {
+                        if arguments.is_empty() {
+                            self.emit_runtime_call("B$WIN0", Vec::new(), Vec::new());
+                        } else {
+                            if arguments.len() != 4 {
+                                return self.fail("WINDOW takes two corners, as in `WINDOW (0, 0)-(1, 1)`");
+                            }
+                            // BC passes the four corner values as SINGLEs and
+                            // whether it is WINDOW SCREEN.
+                            let mut operands = Vec::new();
+                            for argument in arguments {
+                                let (value, type_id) = self.expression(argument)?;
+                                operands.push(self.stored_float_argument(value, type_id, SINGLE)?);
+                            }
+                            let screen = i64::from(name == "WINDOW_SCREEN");
+                            operands.push(Operand::Constant(INTEGER, Number::Integer(screen)));
+                            self.emit_runtime_call("B$WIND", Vec::new(), operands);
                         }
                     }
                     "VIEW_PRINT" => {
@@ -4483,31 +4623,42 @@ impl Compiler {
                         );
                     }
                     "SCREEN" => {
-                        if arguments.len() != 1 {
-                            return self.fail("SCREEN needs one mode here, as in `SCREEN 13`");
+                        if arguments.is_empty() || arguments.len() > 4 {
+                            return self.fail("SCREEN takes a mode, colorswitch, active page and visible page");
                         }
-                        let (mode, mode_type) = self.expression(&arguments[0])?;
-                        let mode = self.convert(mode, mode_type, INTEGER)?;
-                        // SYS.OBJ 0787..0792 shows SCREEN 0 as the VBDOS
-                        // count-led block [present=1, mode=0, count=2].
-                        self.emit_runtime_call(
-                            "B$CSCN",
-                            Vec::new(),
-                            vec![
-                                Operand::Constant(INTEGER, Number::Integer(1)),
-                                mode,
-                                Operand::Constant(INTEGER, Number::Integer(2)),
-                            ],
-                        );
+                        // BC pushes a count-led block (SYS.OBJ 0787..0792 shows
+                        // SCREEN 0 as [present=1, mode=0,
+                        // count=2]): for each argument a flag and, if it is
+                        // given, its value; then the count of words.
+                        let mut words = Vec::new();
+                        for argument in arguments {
+                            if matches!(argument, Expr::Omitted(_)) {
+                                words.push(Operand::Constant(INTEGER, Number::Integer(0)));
+                            } else {
+                                let (value, type_id) = self.expression(argument)?;
+                                let value = self.convert(value, type_id, INTEGER)?;
+                                words.push(Operand::Constant(INTEGER, Number::Integer(1)));
+                                words.push(value);
+                            }
+                        }
+                        words.push(Operand::Constant(INTEGER, Number::Integer(words.len() as i64)));
+                        self.emit_runtime_call("B$CSCN", Vec::new(), words);
                     }
                     "WIDTH" => {
-                        if arguments.len() != 2 {
-                            return self.fail("WIDTH needs columns and rows here, as in `WIDTH 80, 25`");
+                        if arguments.is_empty() || arguments.len() > 2 {
+                            return self.fail("WIDTH takes columns and rows, as in `WIDTH 80, 25`");
                         }
+                        // BC passes -1 for an argument left out: `WIDTH 80` is
+                        // (80, -1).
                         let mut operands = Vec::new();
-                        for argument in arguments {
-                            let (value, type_id) = self.expression(argument)?;
-                            operands.push(self.convert(value, type_id, INTEGER)?);
+                        for slot in 0..2 {
+                            match arguments.get(slot) {
+                                Some(argument) if !matches!(argument, Expr::Omitted(_)) => {
+                                    let (value, type_id) = self.expression(argument)?;
+                                    operands.push(self.convert(value, type_id, INTEGER)?);
+                                }
+                                _ => operands.push(Operand::Constant(INTEGER, Number::Integer(-1))),
+                            }
                         }
                         self.emit_runtime_call("B$WIDT", Vec::new(), operands);
                     }
@@ -5793,12 +5944,35 @@ impl Compiler {
         Operand::Value(address)
     }
 
+    /// The text of a CONST's string value; BC takes only a literal.
+    fn string_constant(
+        &self,
+        expression: &Expr,
+    ) -> Option<String> {
+        match expression {
+            Expr::Literal(Literal::String(text), _) => Some(text.clone()),
+            _ => None,
+        }
+    }
+
+    /// A use of a string constant is its literal.
+    fn string_constant_use(
+        &self,
+        expression: &Expr,
+    ) -> Option<Expr> {
+        let Expr::Name(name, span) = expression else { return None };
+        let text = self.string_constants.get(canonical(name))?;
+        Some(Expr::Literal(Literal::String(text.clone()), *span))
+    }
+
     fn string_assignment(
         &mut self,
         destination: Operand,
         destination_type: u32,
         source: &Expr,
     ) -> Result<(), SemanticError> {
+        let constant_source = self.string_constant_use(source);
+        let source = constant_source.as_ref().unwrap_or(source);
         let destination_width = self
             .string_width(destination_type)
             .ok_or_else(|| SemanticError { message: "string assignment destination lost its type".into() })?;
@@ -5969,6 +6143,9 @@ impl Compiler {
         &mut self,
         expression: &Expr,
     ) -> Result<Operand, SemanticError> {
+        if let Some(literal) = self.string_constant_use(expression) {
+            return self.string_descriptor(&literal);
+        }
         if let Expr::Slice { base, start, end, step, span } = expression {
             let call = slice_call("SLICE$", base, start, end, step, Vec::new(), *span);
             return self.string_descriptor(&call);
@@ -6381,6 +6558,9 @@ impl Compiler {
         &mut self,
         expression: &Expr,
     ) -> Result<(Operand, u32), SemanticError> {
+        if let Some(literal) = self.string_constant_use(expression) {
+            return self.expression(&literal);
+        }
         match expression {
             Expr::Omitted(_) => self.fail("omitted argument used as an expression"),
             Expr::Literal(Literal::Integer(value, type_name), _) => {
@@ -7326,11 +7506,23 @@ impl Compiler {
             self.emit_runtime_call("B$FRI2", vec![result], vec![selector]);
             return Ok(Some((Operand::Value(result), LONG)));
         }
-        if intrinsic.lowering == Lowering::FileLength {
+        if let Lowering::FileQuery(routine) = intrinsic.lowering {
             let (file, file_type) = self.expression(&arguments[0])?;
             let file = self.convert(file, file_type, INTEGER)?;
             let result = self.value(LONG);
-            self.emit_runtime_call("B$FLOF", vec![result], vec![file]);
+            self.emit_runtime_call(routine, vec![result], vec![file]);
+            return Ok(Some((Operand::Value(result), LONG)));
+        }
+        if intrinsic.lowering == Lowering::FileAttribute {
+            // B$FATR(channel, field): field 1 is the file's mode, 2 its DOS
+            // handle.
+            let mut operands = Vec::new();
+            for argument in &arguments[..2] {
+                let (value, value_type) = self.expression(argument)?;
+                operands.push(self.convert(value, value_type, INTEGER)?);
+            }
+            let result = self.value(LONG);
+            self.emit_runtime_call("B$FATR", vec![result], operands);
             return Ok(Some((Operand::Value(result), LONG)));
         }
         if intrinsic.lowering == Lowering::Timer {
@@ -8351,6 +8543,9 @@ impl Compiler {
         }
         let (mut left_operand, mut left_type) = self.expression(left)?;
         let (mut right_operand, mut right_type) = self.expression(right)?;
+        if left_type == CURRENCY || right_type == CURRENCY {
+            return self.currency_binary(op, (left_operand, left_type), (right_operand, right_type));
+        }
         let sized = sized_integer(left_type) || sized_integer(right_type);
         let narrow_divmod = !sized
             && matches!(op, Binary::Modulo | Binary::IntegerDivide)
@@ -8455,6 +8650,143 @@ impl Compiler {
         } else {
             Ok((Operand::Value(result), result_type))
         }
+    }
+
+    /// An operator with a CURRENCY operand, by BC's rule: a float operand
+    /// makes it a DOUBLE operation; otherwise `+ - * ` and the comparisons are
+    /// CURRENCY's own (an integer operand scaled by 10000) and `/` is DOUBLE.
+    fn currency_binary(
+        &mut self,
+        op: Binary,
+        (left, left_type): (Operand, u32),
+        (right, right_type): (Operand, u32),
+    ) -> Result<(Operand, u32), SemanticError> {
+        let comparison = matches!(
+            op,
+            Binary::Eq | Binary::NotEqual | Binary::Less | Binary::LessEqual | Binary::Greater | Binary::GreaterEqual
+        );
+        if !comparison && !matches!(
+            op,
+            Binary::Add | Binary::Subtract | Binary::Multiply | Binary::Divide
+        ) {
+            return self.unsupported("an operator on a CURRENCY value");
+        }
+        let floating =
+            matches!(left_type, SINGLE | DOUBLE) || matches!(right_type, SINGLE | DOUBLE) || op == Binary::Divide;
+        let common = if floating { DOUBLE } else { CURRENCY };
+        let left = self.convert(left, left_type, common)?;
+        let right = self.convert(right, right_type, common)?;
+        if comparison {
+            return Ok((self.computed(binary_name(op), BOOLEAN, vec![left, right]), BOOLEAN));
+        }
+        if floating {
+            let operation = match op {
+                Binary::Add => "fadd",
+                Binary::Subtract => "fsub",
+                Binary::Multiply => "fmul",
+                _ => "fdiv",
+            };
+            return Ok((self.computed(operation, DOUBLE, vec![left, right]), DOUBLE));
+        }
+        if op == Binary::Multiply {
+            return Ok((self.currency_product(left, right)?, CURRENCY));
+        }
+        // BC raises Overflow whatever /D says.
+        let result = self.value(CURRENCY);
+        self.overflow_checked(binary_name(op), result, left, right, CURRENCY)?;
+        Ok((Operand::Value(result), CURRENCY))
+    }
+
+    /// `left * right / 10000` of two CURRENCY values as BC's `__aFcymul` gives
+    /// it: the exact product rounded to even, and the integer indefinite,
+    /// i64 minimum, where it does not fit, with no error. Neither 128 bits
+    /// nor a call are needed: with a = a1*10000 + a0 and b = b1*10000 + b0
+    /// the quotient is a1*b + a0*b1 + a0*b0/10000, whose sum may wrap and
+    /// whose last term is the only fraction. A double estimate of the
+    /// quotient says how many 2^64 the wrapped sum is off by.
+    fn currency_product(
+        &mut self,
+        left: Operand,
+        right: Operand,
+    ) -> Result<Operand, SemanticError> {
+        let constant = |value: i64| Operand::Constant(CURRENCY, Number::Integer(value));
+        let scale = constant(10_000);
+        let split = |this: &mut Self, value: Operand| {
+            let high = this.computed("div", CURRENCY, vec![value.clone(), scale.clone()]);
+            let multiple = this.computed("mul", CURRENCY, vec![high.clone(), scale.clone()]);
+            (high, this.computed("sub", CURRENCY, vec![value, multiple]))
+        };
+        let (left_high, left_low) = split(self, left.clone());
+        let (right_high, right_low) = split(self, right.clone());
+        let wide = self.computed("mul", CURRENCY, vec![left_high, right.clone()]);
+        let cross = self.computed("mul", CURRENCY, vec![left_low.clone(), right_high]);
+        let sum = self.computed("add", CURRENCY, vec![wide, cross]);
+        // the fraction: floor(low*low / 10000) joins the sum, the remainder in
+        // [0, 10000) rounds it
+        let fraction = self.computed("mul", CURRENCY, vec![left_low, right_low]);
+        let quotient = self.computed("div", CURRENCY, vec![fraction.clone(), scale.clone()]);
+        let multiple = self.computed("mul", CURRENCY, vec![quotient.clone(), scale.clone()]);
+        let remainder = self.computed("sub", CURRENCY, vec![fraction, multiple]);
+        let result = self.temporary(CURRENCY)?;
+        let negative = self.computed("lt", BOOLEAN, vec![remainder.clone(), constant(0)]);
+        let floor = self.computed("sub", CURRENCY, vec![quotient.clone(), constant(1)]);
+        let rounded_down = self.conditional_value(negative.clone(), floor, quotient);
+        let shifted = self.computed("add", CURRENCY, vec![remainder.clone(), scale.clone()]);
+        let remainder = self.conditional_value(negative, shifted, remainder);
+        let whole = self.computed("add", CURRENCY, vec![sum, rounded_down]);
+        let odd = {
+            let low_bit = self.computed("and", CURRENCY, vec![whole.clone(), constant(1)]);
+            self.computed("ne", BOOLEAN, vec![low_bit, constant(0)])
+        };
+        let above = self.computed("gt", BOOLEAN, vec![remainder.clone(), constant(5_000)]);
+        let tie = self.computed("eq", BOOLEAN, vec![remainder, constant(5_000)]);
+        let tie_odd = self.computed("and", BOOLEAN, vec![tie, odd]);
+        let up = self.computed("or", BOOLEAN, vec![above, tie_odd]);
+        let bumped = self.computed("add", CURRENCY, vec![whole.clone(), constant(1)]);
+        let value = self.conditional_value(up, bumped, whole);
+        // overflow: the true quotient is `value` plus k * 2^64, and a double
+        // knows k
+        let left_double = self.computed("convert", DOUBLE, vec![left]);
+        let right_double = self.computed("convert", DOUBLE, vec![right]);
+        let factor = self.floating_literal("10000", DOUBLE)?;
+        let product = self.computed("fmul", DOUBLE, vec![left_double, right_double]);
+        let estimate = self.computed("fdiv", DOUBLE, vec![product, factor]);
+        let wrapped = self.computed("convert", DOUBLE, vec![value.clone()]);
+        let difference = self.computed("fsub", DOUBLE, vec![estimate, wrapped]);
+        let modulus = self.floating_literal("18446744073709551616", DOUBLE)?;
+        let count = self.computed("fdiv", DOUBLE, vec![difference, modulus]);
+        let half = self.floating_literal("0.5", DOUBLE)?;
+        let low = self.floating_literal("-0.5", DOUBLE)?;
+        let above = self.computed("gt", BOOLEAN, vec![count.clone(), half]);
+        let below = self.computed("lt", BOOLEAN, vec![count, low]);
+        let overflowed = self.computed("or", BOOLEAN, vec![above, below]);
+        let value = self.conditional_value(overflowed, constant(i64::MIN), value);
+        self.emit("store", Vec::new(), vec![Operand::Place(result), value]);
+        let loaded = self.value(CURRENCY);
+        self.emit("load", vec![loaded], vec![Operand::Place(result)]);
+        Ok(Operand::Value(loaded))
+    }
+
+    /// `then` where `condition` holds, else `otherwise`, through a cell.
+    fn conditional_value(
+        &mut self,
+        condition: Operand,
+        then: Operand,
+        otherwise: Operand,
+    ) -> Operand {
+        let type_id = CURRENCY;
+        let cell = self.temporary(type_id).expect("a CURRENCY cell");
+        let (yes, no, join) = (self.new_block(), self.new_block(), self.new_block());
+        self.terminate("branch", vec![condition], vec![yes, no]).expect("an open block");
+        for (block, value) in [(yes, then), (no, otherwise)] {
+            self.select_block(block);
+            self.emit("store", Vec::new(), vec![Operand::Place(cell), value]);
+            self.terminate("jump", Vec::new(), vec![join]).expect("an open block");
+        }
+        self.select_block(join);
+        let loaded = self.value(type_id);
+        self.emit("load", vec![loaded], vec![Operand::Place(cell)]);
+        Operand::Value(loaded)
     }
 
     /// `operand` as BC's routine for `routine` takes it: ERROR where it is out
@@ -8645,6 +8977,9 @@ impl Compiler {
         &self,
         expression: &Expr,
     ) -> bool {
+        if self.string_constant_use(expression).is_some() {
+            return true;
+        }
         if let Expr::Unary { op: Unary::Grouped, operand, .. } = expression {
             return self.string_syntax(operand);
         }
@@ -8952,15 +9287,47 @@ impl Compiler {
                 // BC converts the float, not its text: 1.00005 is a SINGLE just
                 // under the half.
                 let value = parse_real(text)?;
-                let value = if from == SINGLE { f64::from(value as f32) } else { value } * SCALE as f64;
-                (value.abs() < i64::MAX as f64).then(|| value.round_ties_even() as i64)
+                Some(scaled_float(if from == SINGLE { f64::from(value as f32) } else { value }))
             }
-            _ => return self.unsupported("a CURRENCY conversion"),
+            _ => return self.currency_runtime_conversion(operand, from, to),
         };
         match scaled {
             Some(value) => Ok(Operand::Constant(CURRENCY, Number::Integer(value))),
             None => self.fail("Overflow"),
         }
+    }
+
+    /// A conversion of a value known only at run time: BC's B$I2CY..B$CYFP
+    /// are an integer scaling by 10000 and, for a float, that scaling in the
+    /// extended format and a round to nearest even with the x87 fist, whose
+    /// overflow is the integer indefinite and no error.
+    fn currency_runtime_conversion(
+        &mut self,
+        operand: Operand,
+        from: u32,
+        to: u32,
+    ) -> Result<Operand, SemanticError> {
+        let scale = |this: &mut Self| this.floating_literal("10000", DOUBLE);
+        if to == CURRENCY {
+            if integral(from) {
+                let wide = self.value(CURRENCY);
+                self.emit("convert", vec![wide], vec![operand]);
+                let factor = Operand::Constant(CURRENCY, Number::Integer(10_000));
+                return Ok(self.computed("mul", CURRENCY, vec![Operand::Value(wide), factor]));
+            }
+            if matches!(from, SINGLE | DOUBLE) {
+                let operand = self.convert(operand, from, DOUBLE)?;
+                let factor = scale(self)?;
+                let scaled = self.computed("fmul", DOUBLE, vec![operand, factor]);
+                return Ok(self.computed("convert", CURRENCY, vec![scaled]));
+            }
+        } else if from == CURRENCY && (integral(to) || matches!(to, SINGLE | DOUBLE)) {
+            let wide = self.computed("convert", DOUBLE, vec![operand]);
+            let factor = scale(self)?;
+            let quotient = self.computed("fdiv", DOUBLE, vec![wide, factor]);
+            return if to == DOUBLE { Ok(quotient) } else { self.convert(quotient, DOUBLE, to) };
+        }
+        self.fail(format!("cannot convert {} to {} here", self.name(from), self.name(to)))
     }
 
     fn convert(
@@ -10510,6 +10877,49 @@ fn integer_range(type_id: u32) -> Option<std::ops::RangeInclusive<i64>> {
         LONG => Some(i32::MIN as i64..=i32::MAX as i64),
         UNSIGNED_LONG => Some(0..=u32::MAX as i64),
         _ => None,
+    }
+}
+
+/// `x * 10000` as the x87 does it for B$FPCY: the product rounded to the
+/// extended format's 64 bits, then to the nearest integer, ties to even. A
+/// product beyond 64 bits, or a NaN, is the integer indefinite, i64::MIN, and
+/// no error.
+fn scaled_float(x: f64) -> i64 {
+    if !x.is_finite() {
+        return i64::MIN;
+    }
+    let bits = x.to_bits();
+    let (negative, exponent, fraction) = (bits >> 63 != 0, ((bits >> 52) & 0x7ff) as i32, bits & ((1 << 52) - 1));
+    let (mantissa, exponent) = if exponent == 0 { (fraction, -1074) } else { (fraction | 1 << 52, exponent - 1075) };
+    let shift_right = |value: u128, by: u32| -> u128 {
+        if by == 0 {
+            return value;
+        }
+        if by > 127 {
+            return 0;
+        }
+        let (quotient, rest, half) = (value >> by, value & ((1 << by) - 1), 1u128 << (by - 1));
+        quotient + u128::from(rest > half || rest == half && quotient & 1 == 1)
+    };
+    let mut product = u128::from(mantissa) * 10_000;
+    let mut exponent = exponent;
+    let length = 128 - product.leading_zeros() as i32;
+    if length > 64 {
+        product = shift_right(product, (length - 64) as u32);
+        exponent += length - 64;
+    }
+    let magnitude = if exponent >= 0 {
+        if exponent > 64 {
+            return i64::MIN;
+        }
+        product << exponent
+    } else {
+        shift_right(product, (-exponent) as u32)
+    };
+    match i64::try_from(magnitude) {
+        Ok(value) if negative => -value,
+        Ok(value) => value,
+        Err(_) => i64::MIN,
     }
 }
 

@@ -16,9 +16,15 @@
 //! - A fill: a store, or a memset, of a loop-invariant value that is one byte
 //!   repeated, through an address `induction` derives as a GEP off an invariant
 //!   pointer, striding by the element's size. A cell whose bytes do not repeat
-//!   is `llvm.experimental.memset.pattern`. A loop with several fills to bytes
-//!   no other reaches is a memset each; fills that tile adjacent bytes with the
-//!   same byte are one.
+//!   is `llvm.experimental.memset.pattern` (DEVIATE: the pin forms none off
+//!   Darwin,
+//!   [L1214](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/LoopIdiomRecognize.cpp#L1214);
+//!   here it is priced from the target's table, so a word fill is `rep stosw`
+//!   where its clocks beat the loop's at speed, and its bytes at `-Os`; m16
+//!   `fillw` of 100 words is 407 clocks against the loop's 500, break-even
+//!   near 16 trips with the segment setup; owner w-5). A loop with several
+//!   fills to bytes no other reaches is a memset each; fills that tile adjacent
+//!   bytes with the same byte are one.
 //! - A copy: a load and a store of one cell each trip, the stored value being
 //!   the loaded one, from one pointer to another with the same step. Where the
 //!   ranges are apart it is `llvm.memcpy`; where they overlap but each trip

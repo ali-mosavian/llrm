@@ -250,3 +250,23 @@ b2:
     assert_eq!(block.as_deref(), Some("b1"), "{after}");
     assert!(after.contains("call void @llvm.assume(i1 true)"), "{after}");
 }
+
+/// Old: `sink_block` looked up the callee of every user of every visited
+/// instruction to tell an assume from the rest (11,159 visits in d_faces -O2),
+/// and built a predecessor list for the user's block. `isDroppable` reads a
+/// callee only of a call.
+#[test]
+fn test_a_user_that_is_not_a_call_costs_no_callee_lookup() {
+    use llrm_mir::counts::{Event, get};
+    let plain = "define i32 @f(i32 %x) {\nentry:\n  %a = add i32 %x, 1\n  br label %b\nb:\n  ret i32 %a\n}\n";
+    let before = get(Event::SinkAssumeLookups);
+    let (_, moved) = sunk(plain, "a");
+    assert_eq!(moved.as_deref(), Some("b"));
+    assert_eq!(get(Event::SinkAssumeLookups), before);
+
+    let call = "declare void @use(i32)\ndefine void @f(i32 %x) {\nentry:\n  %a = add i32 %x, 1\n  br label %b\nb:\n  call void @use(i32 %a)\n  ret void\n}\n";
+    let before = get(Event::SinkAssumeLookups);
+    let (_, moved) = sunk(call, "a");
+    assert_eq!(moved.as_deref(), Some("b"));
+    assert_eq!(get(Event::SinkAssumeLookups), before + 1);
+}
