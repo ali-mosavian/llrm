@@ -130,6 +130,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [selectiondag-far-builder](selectiondag-far-builder.md) | Far and huge pointers in the DAG builder (sdag-a) |
 | [old-selector-retirement](old-selector-retirement.md) | What the old selector leaves to retire after the DAG flip, surveyed by reading |
 | [selectiondag-default-readiness](selectiondag-default-readiness.md) | What must be true to make `--isel=dag` the default (sdag-a) |
+| [jumps-profile-d_faces](jumps-profile-d_faces.md) | Line profile of ControlFlow (`jumps`) on d_faces -O2 against the pin's BranchFolder (2026-10-25) |
 | [landing-batch-time](landing-batch-time.md) | Where a landing batch's wall clock goes: stages, the long pole, changes that keep the gate (2026-10-25) |
 | [d64-4-s3-inventory](d64-4-s3-inventory.md) | D64-4 S3 float programs for tests/llc and the pin asm each must match at m64 (sdag-a) |
 | [selectiondag-tail-calls](selectiondag-tail-calls.md) | Tail calls in the DAG path: pin functions, steps, dates (sdag-a) |
