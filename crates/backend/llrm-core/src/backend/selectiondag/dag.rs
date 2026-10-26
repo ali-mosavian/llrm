@@ -219,6 +219,9 @@ pub struct SelectionDAG {
     deleted: Vec<bool>,
     /// The `IROrder` of the `SDLoc` in force: nodes made now carry it.
     pub cur_order: u32,
+    /// `CombineTo` calls a target hook made: the combiner replaces each and
+    /// looks at the users again.
+    replacements: Vec<(SDValue, SDValue)>,
     pub(super) config: DagConfig,
     entry: SDValue,
     root: SDValue,
@@ -303,6 +306,7 @@ impl SelectionDAG {
             cse: Cse::default(),
             deleted: Vec::new(),
             cur_order: 0,
+            replacements: Vec::new(),
             config,
             entry: zero,
             root: zero,
@@ -586,6 +590,30 @@ impl SelectionDAG {
         if let Some(hash) = self.key_of(node) {
             self.cse_unlink(hash, node);
         }
+    }
+
+    /// `getNodeIfExists(Opcode, VTList, Ops)`: the filed node, if one is.
+    pub fn get_node_if_exists(
+        &self,
+        opcode: ISD,
+        values: &[EVT],
+        ops: &[SDValue],
+    ) -> Option<u32> {
+        self.cse_find(opcode, values, ops, &NodeData::None)
+    }
+
+    /// `DAGCombinerInfo::CombineTo` from a target hook: the users of `from`
+    /// read `to` once the hook returns.
+    pub fn combine_to(
+        &mut self,
+        from: SDValue,
+        to: SDValue,
+    ) {
+        self.replacements.push((from, to));
+    }
+
+    pub(super) fn take_replacements(&mut self) -> Vec<(SDValue, SDValue)> {
+        std::mem::take(&mut self.replacements)
     }
 
     /// `ReplaceAllUsesWith(From, To)`: every operand `from` becomes `to`. A
