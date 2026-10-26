@@ -38,7 +38,7 @@
 //! coalescer has not merged: the two sides of a phi edge's copy also join, and
 //! address classes are read through webs. `classes_given` takes intervals and
 //! masks a caller already has. `confining_uses` lists each confining read
-//! (`Use`), for the pressure sink. `Scan` keeps per-value counts of what
+//! (`Use`), for `constrain`. `Scan` keeps per-value counts of what
 //! instructions say, so a rewrite takes the counts of the instructions it lost
 //! and gained and recomputes only the values they name.
 //!
@@ -80,15 +80,15 @@
 //! sets.
 //!
 //! # Runs
-//! Not a pass: queried on demand, by `coalesce`, `constrain`, `allocate` and
-//! the pressure sink, at every -O level. `LLRM_DEBUG=regclass` also checks
-//! each body after the phases from `ssaspill` to `coalesce`.
+//! Not a pass: queried on demand, by `coalesce`, `constrain`, `allocate`, at
+//! every -O level. `LLRM_DEBUG=regclass` also checks each body after the phases
+//! from `ssaspill` to `coalesce`.
 //!
 //! # Provides
 //! One answer to "which registers may this value be in", owned here (#441).
 //! Read by [`crate::backend::ssaspill`], [`crate::backend::allocate`],
 //! [`crate::backend::coalesce`], [`crate::backend::constrain`],
-//! [`crate::backend::pressuresink`] and `target.rs`.
+//! and `target.rs`.
 //!
 //! # Needs
 //! The target's register sets ([`crate::backend::classes`],

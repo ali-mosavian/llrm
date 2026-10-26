@@ -481,6 +481,11 @@ def land_lock(path: str = LAND_LOCK, wait: bool = True):
 GENERATED = ("docs/optimizations/passes/", "docs/optimizations/analyses/", "docs/optimizations/backend/", "docs/architecture/readme.md")  # what tools/docsbuild/build.py --sync writes
 
 
+def docs_stale_lines(output: str) -> list[str]:
+    """The generated pages `build.py --check` names as out of date (its `  docs/...` lines), not the lint problems it also counts."""
+    return [line.strip() for line in output.splitlines() if line.strip().startswith("docs/")]
+
+
 def regenerate(conflicts: list[str], cwd: Path = ROOT) -> str:
     """"" when every conflicted path is generated and `build.py --sync --force` on the merged tree made it current (then `--check` agrees) and the merge was committed;
     else why not. Two PRs that each add a page both rewrite the index: a hand merge of generated text is what blocked the decide flip, the LSR stack and indvars."""
@@ -491,7 +496,11 @@ def regenerate(conflicts: list[str], cwd: Path = ROOT) -> str:
     build = [sys.executable, "tools/docsbuild/build.py"]
     for flags in (["--sync", "--force"], ["--check"]):
         done = subprocess.run([*build, *flags], cwd=cwd, capture_output=True, text=True, errors="replace")
-        if done.returncode:
+        if flags == ["--check"]:
+            # the lint hits (`path: no # Example`) are the sources', not the pages': only a page still out of date after the sync is a failed regeneration (#4993 was refused for 4 baseline lint hits)
+            if stale := docs_stale_lines(done.stdout + done.stderr):
+                return f"docsbuild --check failed on the merged tree: pages still stale: {', '.join(stale[:3])}"
+        elif done.returncode:
             return f"docsbuild {' '.join(flags)} failed on the merged tree: {(done.stdout + done.stderr).strip().splitlines()[-1:] or ['no output']}"
     git("add", "-A", "docs", cwd=cwd)
     done = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "commit", "-q", "--no-edit"], cwd=cwd, capture_output=True, text=True, errors="replace")
@@ -832,7 +841,7 @@ def new_lib_failures(
 
 # Scanners the landing runner runs on every batch, whatever LAND_FAST_TESTS says (the user's call of 2026-10-19 is no tests at landing): reading docs costs milliseconds. A runner
 # without the switch ran no scanner; the live one has it, and still landed #4039 with docs_links red (see scanner_tests_line).
-ALWAYS_SCANNERS = ("docs_links", "no_local_paths")
+ALWAYS_SCANNERS = ("docs_in_sync", "docs_links", "no_local_paths")
 
 
 def landing_scanner_failures(
@@ -850,6 +859,8 @@ def new_scanner_failures(
     on_merged=None,
     on_head=None,
     only: tuple[str, ...] | None = None,
+    seen: Path | None = None,
+    now=time.time,
 ) -> set[str]:
     """The failing `integration <target>::<test>` of the root scanners (tests that read sources and docs, SCANNERS) and of a test file the batch changes, on the merged tree, that the head
     passes. #3899 landed with `tests/selectiondag_registry.rs` red (SD403 had no row): the layer ran lib tests only, and the target was in no map. `on_merged(targets)` and
@@ -861,7 +872,31 @@ def new_scanner_failures(
     print(scanner_tests_line(targets, failed, git("rev-parse", "HEAD").strip()[:9]))
     if not failed:
         return set()
-    return failed - (on_head or _scanners_failing_on_head)(targets)
+    head = (on_head or _scanners_failing_on_head)(targets)
+    # a red the head has is excused for the PR, but named every cycle with its age; one older than HEAD_RED_HOURS (and it has no xfail row, or it would not be here) refuses
+    stale = excused_head_failures(failed & head, seen or Path(os.environ.get("LAND_TMP", "/tmp")) / "head-failure-seen.json", now())
+    return (failed - head) | stale
+
+
+HEAD_RED_HOURS = 2
+
+
+def excused_head_failures(excused: set[str], path: Path, now: float) -> set[str]:
+    """Prints each name of `excused` on its own line with the hours it has been red on the head, and returns those red longer than HEAD_RED_HOURS. The first time a name is seen is kept in `path`;
+    a name no longer red is forgotten. #4993's docs_in_sync was red on the tip for hours behind a bare `1 red`."""
+    if not excused and not path.exists():
+        return set()
+    first = json.loads(path.read_text()) if path.exists() else {}
+    first = {name: first.get(name, now) for name in excused}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(first))
+    stale = set()
+    for name in sorted(excused):
+        hours = (now - first[name]) / 3600
+        print(f"excused head failure: {name} (red on the head for {hours:.1f} h; no xfail row)")
+        if hours > HEAD_RED_HOURS:
+            stale.add(name)
+    return stale
 
 
 def new_link_failures(
@@ -1056,7 +1091,7 @@ def own_test_targets(files: list[str], root: Path) -> set[str]:
     return {Path(f).stem for f in files if f.startswith("tests/") and f.endswith(".rs") and "/" not in f[len("tests/") :] and (root / f).exists()}
 
 
-def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, scanners=None, differs=None, target: Path | None = None, units=None, on_base=None) -> list[str]:
+def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, scanners=None, differs=None, target: Path | None = None, units=None, on_base=None, docs=None, docs_on_base=None) -> list[str]:
     """Why the PR at `head`, alone on `base` (a scratch checkout at `base` in `cwd`), fails the cheap checks a batch would fail on: the merge, the workspace build, the
     always-on scanners (fmt differences only warn: the squash formats every PR). The 15:34 batch spent 62% of its time on reruns of PRs that failed these."""
     smoke = parity_smoke_module()
@@ -1089,6 +1124,11 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
     red = sorted((scanners or default_scanners)(files))
     if red:
         return [f"scanner red alone: {', '.join(red[:5])}{smoke.causes_of(red)}"]
+    # the generated pages the PR leaves out of date, less what the base already has stale: #4972 landed with 411 stale pages because LAND_FAST skips the precheck and nothing else ran the docs check
+    if stale := (docs or docs_stale)(cwd):
+        new = sorted(stale - (docs_on_base or (lambda: _alone_base_docs(base, target)))())
+        if new:
+            return [f"generated docs out of date (tools/docsbuild/build.py --sync): {', '.join(new[:5])}"]
     # the unit tests of the crates the PR changes, less what the base fails: round 3 died on llrm-nib::test_pipeline::... and no PR was blamed
     def lib_failures(changed: list[str]) -> set[str]:
         packages, graph = smoke.workspace_graph(cwd)
@@ -1110,13 +1150,28 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
         by_package.setdefault(package, set()).add(test)
     red_on_base = (on_base or (lambda wanted: _alone_base_red(wanted, base, target)))(by_package)
     new = sorted(f"unit {package}::{test}" for package, tests in by_package.items() for test in tests - {t for p, t in red_on_base if p == package})
-    return [f"unit tests fail alone: {', '.join(new[:5])}"] if new else []
+    return [f"unit tests fail alone: {', '.join(new)}"] if new else []
 
 
 HITS = [0]  # verdicts read from the cache by this process
 
 
-def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=None, cache: Path | None = None, jobs: int = 1, cap: float | None = None) -> tuple[list[str], dict[str, str]]:
+def refusal_line(number: str, why: str, head: str, directory: Path, width: int = 300) -> str:
+    """The runner-log line of a refusal: all of `why` when it fits in `width`, else its start, its length and the file that holds all of it (#4991's list of failing tests was cut mid-name)."""
+    if len(why) <= width:
+        return f"{number}: REFUSED: alone: {why}"
+    directory.mkdir(parents=True, exist_ok=True)
+    full = directory / f"{number}-{head[:9]}.txt"
+    full.write_text(why + "\n")
+    return f"{number}: REFUSED: alone: {why[:width - 80]} ... ({len(why)} chars, all in {full})"
+
+
+def _current_head(number: str) -> str:
+    git("fetch", "-q", "origin", f"refs/pull/{number}/head")
+    return git("rev-parse", "FETCH_HEAD").strip()
+
+
+def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=None, cache: Path | None = None, jobs: int = 1, cap: float | None = None, current=None) -> tuple[list[str], dict[str, str]]:
     """(the numbers that pass alone, {number: why} for those that fail). The verdict is kept per head sha in `cache`, so a PR checked while the previous batch squashed is not
     checked again. The uncached PRs run `jobs` at a time; the ones not finished `cap` seconds in are kept, unfiltered (a check of 40 PRs one after another took hours)."""
     verdicts: dict[str, str] = {}
@@ -1154,8 +1209,28 @@ def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=
     deadline = None if cap is None else time.monotonic() + cap
     for thread in threads:
         thread.join(None if deadline is None else max(0.0, deadline - time.monotonic()))
+    # a refusal of a head the PR has since moved off is of a PR that no longer exists (#4993 was dropped at 21:04 for a conflict its 21:02 head did not have): kept, and its new head is checked next pass
+    for number in [one for one in numbers if verdicts.get(one) and current]:
+        if (now := current(number)) and now != heads[number]:
+            del verdicts[number]
     kept = [number for number in numbers if not verdicts.get(number)]  # unchecked at the cap: kept
     return kept, {number: verdicts[number] for number in numbers if verdicts.get(number)}
+
+
+def docs_stale(root: Path) -> set[str]:
+    """The generated pages `tools/docsbuild/build.py --check` reports out of date in `root` (`docsbuild --check failed` when it fails without naming one)."""
+    if not (root / "tools/docsbuild/build.py").is_file():
+        return set()
+    done = subprocess.run([sys.executable, "tools/docsbuild/build.py", "--check"], cwd=root, capture_output=True, text=True, errors="replace")
+    if not done.returncode:
+        return set()
+    return {line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip().startswith("docs/")} or {"docsbuild --check failed"}
+
+
+def _alone_base_docs(base: str, target: Path | None) -> set[str]:
+    work = (target or Path(tempfile.mkdtemp(prefix="alone-base-"))) / "base"
+    _alone_checkout(work, base)
+    return docs_stale(work)
 
 
 def _alone_base_red(by_package: dict[str, set[str]], base: str, target: Path | None) -> set[tuple[str, str]]:
@@ -1842,9 +1917,9 @@ def dispatch() -> int:
             heads[number] = git("rev-parse", "FETCH_HEAD").strip()
         # stdout is the survivors and nothing else: the scanners print their summary line, and the runner reads this output as PR numbers
         with contextlib.redirect_stdout(sys.stderr):
-            kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", ALONE_JOBS)), cap=float(os.environ.get("ALONE_CAP", "600")))
+            kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", ALONE_JOBS)), cap=float(os.environ.get("ALONE_CAP", "600")), current=_current_head)
         for number, why in dropped.items():
-            print(f"{number}: REFUSED: alone: {why[:300]}", file=sys.stderr)
+            print(refusal_line(number, why, heads[number], Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-full"), file=sys.stderr)
         print(f"alone: {len(numbers)} PRs, {HITS[0]} cached, {len(numbers) - HITS[0]} checked, {len(dropped)} dropped", file=sys.stderr)
         print("\n".join(kept))
         return 0

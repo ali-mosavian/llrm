@@ -109,6 +109,56 @@ def test_a_deleted_test_file_in_the_diff_is_not_a_scanner_target(tmp_path):
     assert ps.own_test_targets(files, tmp_path) == {"kept"}
 
 
+def test_a_refusal_of_a_head_the_pr_has_moved_off_does_not_drop_it(tmp_path):
+    """#4993 was dropped at 21:04 for a merge conflict its 21:02 head no longer had: the check had started on the 20:54 head."""
+    heads = {"4993": "old", "4991": "same"}
+    refuse = lambda head, base: ["conflicts in pressuresink.md"]  # noqa: E731
+    kept, dropped = ps.alone(["4993", "4991"], heads, refusals=refuse, current=lambda number: "new" if number == "4993" else "same")
+    assert kept == ["4993"] and list(dropped) == ["4991"], (kept, dropped)
+
+
+def test_a_docs_check_that_only_counts_lint_hits_is_not_a_failed_regeneration():
+    """#4993 was refused for `4 problem(s)`: the baseline `no # Example` hits, with every page current."""
+    lint = "crates/x/remidiom.rs: no # Example\n4 problem(s)\n"
+    stale = "generated docs are out of date; run python3 tools/docsbuild/build.py --sync\n  docs/optimizations/backend/a.md\n"
+    assert ps.docs_stale_lines(lint) == [] and ps.docs_stale_lines(stale) == ["docs/optimizations/backend/a.md"]
+
+
+def test_a_long_alone_refusal_is_written_whole_to_a_file_the_log_line_names(tmp_path):
+    """#4991's refusal printed three failing tests and cut the third mid-name; the author could not tell which others failed."""
+    why = "unit tests fail alone: " + ", ".join(f"unit llrm-qb::test_{i}_a_long_enough_name_to_need_cutting" for i in range(12))
+    line = ps.refusal_line("4991", why, "9c833bc12abc", tmp_path)
+    assert len(line) < 400
+    path = next(tmp_path.glob("4991-*.txt"))
+    assert path.read_text().strip() == why and str(path) in line and f"{len(why)} chars" in line
+    assert ps.refusal_line("1", "short", "abc", tmp_path) == "1: REFUSED: alone: short"
+def test_a_pr_that_leaves_generated_docs_stale_alone_is_refused_but_not_for_what_the_base_has_stale(tmp_path):
+    """#4972 landed with 411 stale pages: LAND_FAST skips the precheck and the alone layer had no docs check."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    head = branch(repo, "ok", "b.txt", "b\n")
+    sh(repo, "checkout", "-q", "main")
+    kw = dict(base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda _: set(), units=lambda _: set())
+    why = ps.alone_refusals(head, docs=lambda root: {"docs/a.md", "docs/b.md"}, docs_on_base=lambda: {"docs/a.md"}, **kw)
+    assert why and "docs/b.md" in why[0] and "docs/a.md" not in why[0], why
+    assert ps.alone_refusals(head, docs=lambda root: {"docs/a.md"}, docs_on_base=lambda: {"docs/a.md"}, **kw) == []
+
+
+def test_a_head_failure_is_named_every_cycle_and_refused_once_it_is_two_hours_old(tmp_path, capsys):
+    """docs_in_sync was red on the parity tip for hours behind `1 red`: the head's reds excused every PR without a name or an owner."""
+    seen = tmp_path / "seen.json"
+    red = "integration docs_in_sync::test_no_generated_page_is_stale"
+    assert ps.excused_head_failures({red}, seen, 1000.0) == set()
+    assert f"excused head failure: {red} (red on the head for 0.0 h" in capsys.readouterr().out
+    assert ps.excused_head_failures({red}, seen, 1000.0 + 3600) == set()
+    assert ps.excused_head_failures({red}, seen, 1000.0 + 3 * 3600) == {red}
+    assert ps.excused_head_failures(set(), seen, 1000.0 + 4 * 3600) == set()
+    assert ps.excused_head_failures({red}, seen, 1000.0 + 5 * 3600) == set(), "a name that went green is forgotten"
+
+
 def test_two_prs_adding_a_test_of_one_name_do_not_share_a_batch(tmp_path):
     """#4678 and #4680 added the same test in different places: no conflict, so both joined, and the batch failed 'defined multiple times'."""
     repo = tmp_path / "repo"

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/uremloop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/uremloop.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/uremloop.rs sha256:3644d1202d16df78280ce1b0acf1608d41d54330d30213af03c968703ee94294 -->
+<!-- src: crates/opt/llrm-transforms/src/uremloop.rs sha256:b7f3e57d3e8e3c5db8118db4f40d8d2b56889a01cb69f64b8a7f0e9b93a3485c -->
 
 # uremloop
 

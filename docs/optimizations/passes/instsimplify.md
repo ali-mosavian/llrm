@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/instsimplify.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/instsimplify.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/instsimplify.rs sha256:95cf454211bcc076f31296b1edfc88aa4d6384711f4d79a81dc674537a054c37 -->
+<!-- src: crates/opt/llrm-transforms/src/instsimplify.rs sha256:a519b48f4b38a3ca94a33f2a70a8fb52765b8829f76c97f4f93bf39601352c63 -->
 
 # instsimplify
 

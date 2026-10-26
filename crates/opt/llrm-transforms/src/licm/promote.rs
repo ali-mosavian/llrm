@@ -584,6 +584,22 @@ pub fn promote_loop_accesses_to_scalars(
         // If we cannot hoist the load either, give up.
         return None;
     }
+    // A location the loop only stores to, on some paths, is promoted only
+    // where the pin's `StoreSafety` allows the store after the loop
+    // ([L1921](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1921)):
+    // the pin (`ThreadModel::POSIX` for this triple,
+    // [L1672](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1672))
+    // calls only a function-local object thread-local, so a global is left:
+    // promoting it would load it in the preheader and store it after the
+    // loop for no load saved, and the load keeps `writeonly` from removing
+    // the global (nbody.bas, +43 B at -Os m16, once its division guard
+    // stopped taking a slot of `Pressure`).
+    if !found_load_to_promote
+        && !store_is_guaranteed_to_execute
+        && !is_alloca(unit, underlying_object(unit, first_pointer))
+    {
+        return None;
+    }
     Some(Promotion {
         pointers: pointers.to_vec(),
         uses: loop_uses,

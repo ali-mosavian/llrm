@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_branch.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_branch.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_branch.rs sha256:cf908512c23743451780d614e758380e85e0606592db308fa07124a2f0c0eb91 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_branch.rs sha256:1d717d61f9225378a5994ef16abe6c954f6650ea0f4614927972ad27cf20cca1 -->
 
 # combine_branch
 
@@ -19,10 +19,13 @@ visited before it and no others.
 
 DEVIATE 1 (temporary): not made: the logical-and-with-invert form (MIR has
 no logical `select` pattern here yet), the `fcmp` predicate canonical form
-(`isCanonicalPredicate`), the constant condition at visit time (the driver
-folds a branch on a number, and `combine::prepare` kills the edges of an
-undef or poison one, `combine.rs`), and the replacement of the uses
-of the condition dominated by an edge with true or false.
+(`isCanonicalPredicate`), and the constant condition at visit time (the
+driver folds a branch on a number, and `combine::prepare` kills the edges
+of an undef or poison one, `combine.rs`).
+
+MIRROR: every use of the condition that an edge dominates becomes `true`
+(the first edge) or `false` (the second): a second branch on the same
+compare, further down, reads a number.
 
 DEVIATE 2: branch weights are not swapped (MIR carries none on a branch).
 

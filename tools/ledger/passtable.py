@@ -18,7 +18,6 @@ PASSES = [
     ("machinesched::MachineScheduler", [r"MachineSchedulerLegacy::runOnMachineFunction\("], "w-2"),
     ("schedule::Scheduler", None, "w-2"),
     ("machinesink::MachineSink", [r"MachineSinkingLegacy::runOnMachineFunction\(", r"PostRAMachineSinkingLegacy::runOnMachineFunction\("], "w-2"),
-    ("pressuresink::PressureSink", None, "w-2"),
     ("floatalloc::FloatAlloc", [r"X86FPStackifierLegacy::runOnMachineFunction\("], "w-2"),
     ("floatassign::FloatPrep", None, "w-2"),
     ("floatfold::FloatFold", None, "w-2"),
