@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/fpcopyprop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/fpcopyprop.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/fpcopyprop.rs sha256:d26231bd328d099b58583a003cd50964a11481bdaa85eafa86f1b2ce2ddb7a4b -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/fpcopyprop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/fpcopyprop.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/fpcopyprop.rs sha256:d26231bd328d099b58583a003cd50964a11481bdaa85eafa86f1b2ce2ddb7a4b -->
 
 # fpcopyprop
 

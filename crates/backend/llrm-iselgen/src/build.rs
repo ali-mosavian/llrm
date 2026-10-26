@@ -3,7 +3,7 @@
 //! peephole rules as Rust (and `effect_rows`, the effect rows a data crate
 //! carries). `core` is the path of the crate whose `backend::isel::api` and
 //! `backend::peep` the generated code is written against: `crate` inside
-//! `llrm-core`, `llrm_core` outside it.
+//! `llrm-codegen`, `llrm_codegen` outside it.
 
 use std::path::{Path, PathBuf};
 

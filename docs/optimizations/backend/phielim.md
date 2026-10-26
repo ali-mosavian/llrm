@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/phielim.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/phielim.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/phielim.rs sha256:791d80558fdaeabd0d52abf597b2521ea9b3b5454bf61c62900e2ea760a77c9b -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/phielim.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/phielim.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/phielim.rs sha256:791d80558fdaeabd0d52abf597b2521ea9b3b5454bf61c62900e2ea760a77c9b -->
 
 # phielim
 
@@ -74,7 +74,7 @@ The new block's label is above every physical offset (`(entry + 1) << 32`),
 in a namespace of its own per body entry.
 
 `LLRM_PHIELIM_LLVM=1` lowers the phis that are not x87 by the translation of
-LLVM's `PHIElimination` ([`crate::phielimination`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/phielimination.rs)) first, and this pass the
+LLVM's `PHIElimination` ([`crate::phielimination`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/phielimination.rs)) first, and this pass the
 rest. Off by default: it leaves a cycle of loop-carried values to be broken
 by copies through a register, where the parallel copy here breaks it with an
 `xchg`, and the i64 Fibonacci loop

@@ -22,7 +22,7 @@ import cpulimit  # noqa: E402
 import dosbatch  # noqa: E402
 from dosbatch import QB45, Job  # noqa: E402,F401
 
-NIB_RUNTIME = ROOT / "crates/frontends/llrm-nib/src/runtime"
+NIB_RUNTIME = ROOT / "crates/frontends/nib/src/runtime"
 
 
 @dataclass

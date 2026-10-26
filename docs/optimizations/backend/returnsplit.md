@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/returnsplit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/returnsplit.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/returnsplit.rs sha256:09173702eff52d60627eddb020775bf3b20f42a55659b6bd99a976f61c990e9e -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/returnsplit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/returnsplit.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/returnsplit.rs sha256:09173702eff52d60627eddb020775bf3b20f42a55659b6bd99a976f61c990e9e -->
 
 # returnsplit
 

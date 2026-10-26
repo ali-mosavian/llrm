@@ -463,7 +463,7 @@ WHOLE_GROUP_TRIGGERS = (
     "runtime/qb/",
     "runtime/qb/",
     "crates/target/llrm-x86/",
-    "crates/backend/llrm-core/",
+    "crates/codegen/llrm-codegen/",
 )
 
 

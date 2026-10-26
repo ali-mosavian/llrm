@@ -38,7 +38,7 @@ def test_a_failure_no_rule_names_is_refused():
 
 
 M16 = """\
-FAIL  c/a.c [-O0]: compile: thread 'main' (1) panicked at crates/backend/llrm-core/src/backend/selectiondag/dag.rs:570:9:
+FAIL  c/a.c [-O0]: compile: thread 'main' (1) panicked at crates/codegen/llrm-codegen/src/backend/selectiondag/dag.rs:570:9:
 integer constant of Simple(Far)
 note: run with `RUST_BACKTRACE=1`
 FAIL  c/b.c [-O2]: compile: llrm-c: _main: Semantics(op=<Operation.CALL: 'call'>, name='call', dests=(), sources=(Imm(value=0, width=2, address=[seg:0+0x0]),), target=None, indirect=True)

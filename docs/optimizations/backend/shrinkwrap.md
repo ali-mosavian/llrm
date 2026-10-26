@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/shrinkwrap.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/shrinkwrap.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/shrinkwrap.rs sha256:b399c2e29487c2c153ac968f1da54fb5e6d97308ba36bbd89a318d6c7bd9e7ea -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/shrinkwrap.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/shrinkwrap.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/shrinkwrap.rs sha256:b399c2e29487c2c153ac968f1da54fb5e6d97308ba36bbd89a318d6c7bd9e7ea -->
 
 # shrinkwrap
 

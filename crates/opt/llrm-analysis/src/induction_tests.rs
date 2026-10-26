@@ -1,4 +1,4 @@
-//! llrm-core's `induction_tests.rs` and `counted_loops_tests.rs`, and what
+//! llrm-codegen's `induction_tests.rs` and `counted_loops_tests.rs`, and what
 //! they leave untested, as loops the interpreter runs.
 //!
 //! Skipped: the BC and OMF fixture tests (NDARR, MATRIX, HARR, NESTED),

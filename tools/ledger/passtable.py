@@ -76,7 +76,7 @@ def main():
     print("| our pass | ours M | pin M | ratio | proposed owner |\n|---|--:|--:|--:|---|")
     total_o = total_p = 0.0
     for name, counterparts, owner in PASSES:
-        o = sum_of(ours, [r"<llrm_core::backend::" + re.escape(name) + r" as llrm_core::model::passes::LIRTransform>::transform_raising$"]) / 1e6
+        o = sum_of(ours, [r"<llrm_codegen::backend::" + re.escape(name) + r" as llrm_codegen::model::passes::LIRTransform>::transform_raising$"]) / 1e6
         p = sum_of(pin, counterparts) / 1e6 if counterparts else None
         total_o += o
         total_p += p or 0

@@ -13,7 +13,7 @@ fn skipped(reason: &str) {
     // Written to the stderr itself, which the harness does not capture: seen
     // when the test passes.
     let _ = std::io::Write::write_all(&mut std::io::stderr(), format!("SKIPPED: {reason}\n").as_bytes());
-    assert!(!llrm_core::support::env_set("LLRM_REQUIRE_DWARF"), "LLRM_REQUIRE_DWARF is set, and: {reason}");
+    assert!(!llrm_codegen::support::env_set("LLRM_REQUIRE_DWARF"), "LLRM_REQUIRE_DWARF is set, and: {reason}");
 }
 
 /// `skipped`, for a tool that has its own requirement variable: the gate unsets
@@ -204,10 +204,10 @@ fn the_flavor_asked_for_is_the_formats_or_an_error() {
     assert!(refused(&["-m32", "-gtd"]).contains("16-bit"));
     let made = compile(&source, &["-m16", "-gtd"], &object);
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
-    let records = llrm_core::objectfile::omf::parse(&std::fs::read(&object).unwrap()).unwrap();
+    let records = llrm_codegen::objectfile::omf::parse(&std::fs::read(&object).unwrap()).unwrap();
     let classes: BTreeSet<u8> = records
         .iter()
-        .filter(|one| one.r#type == llrm_core::objectfile::omf::COMENT)
+        .filter(|one| one.r#type == llrm_codegen::objectfile::omf::COMENT)
         .filter_map(|one| one.body.get(1).copied())
         .collect();
     assert!(
@@ -373,8 +373,8 @@ fn a_struct_that_names_itself_keeps_the_member_that_does_in_both_formats() {
     let object = scratch.path().join("list.obj");
     let made = compile(&fixtures.join("list.c"), &["-m16", "-g"], &object);
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
-    let records = llrm_core::objectfile::omf::parse(&std::fs::read(&object).unwrap()).unwrap();
-    let shape = llrm_core::objectfile::cv4info::shape(&records);
+    let records = llrm_codegen::objectfile::omf::parse(&std::fs::read(&object).unwrap()).unwrap();
+    let shape = llrm_codegen::objectfile::cv4info::shape(&records);
     let head = shape.iter().find(|one| one.starts_with("DATA head")).unwrap_or_else(|| panic!("{shape:#?}"));
     assert!(head.contains("next +0") && head.contains("v +2"), "{head}");
     // DWARF, in an ELF object, and read by gdb.
@@ -818,8 +818,8 @@ fn cv4_names_a_local_of_a_function_without_a_frame_register_off_the_stack_pointe
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/matrix/known.c");
     let made = compile(&source, &["-m32", "-O0", "-g", "-fobject-format=omf"], &object);
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
-    let records = llrm_core::objectfile::omf::parse(&std::fs::read(&object).unwrap()).unwrap();
-    let shape = llrm_core::objectfile::cv4info::shape(&records);
+    let records = llrm_codegen::objectfile::omf::parse(&std::fs::read(&object).unwrap()).unwrap();
+    let shape = llrm_codegen::objectfile::cv4info::shape(&records);
     assert!(shape.iter().any(|one| one.starts_with("REGREL add.sum:")), "{shape:#?}");
 }
 

@@ -3,8 +3,8 @@
 use std::path::Path;
 use std::rc::Rc;
 
-use llrm_core::backend::objbuild;
-use llrm_core::objectfile::{cv4info, omf};
+use llrm_codegen::backend::objbuild;
+use llrm_codegen::objectfile::{cv4info, omf};
 
 /// tests/fixtures/c/debug.cgs, recorded from debug.c (and its debug.h)
 /// with -d2, compiled as the CLI compiles it.
@@ -16,11 +16,12 @@ fn object() -> Vec<Rc<omf::Record>> {
 fn object_of(name: &str) -> Vec<Rc<omf::Record>> {
     let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{name}.cgs")))
         .expect("reads");
-    let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+    let machine =
+        llrm_codegen::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
     // Not inlined: `twice` is a symbol to read.
     let pipeline =
         llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(machine) };
+    let options = llrm_codegen::driver::Options { pipeline, ..llrm_driver::m16_options(machine) };
     let built = super::compile::selected(&text, name, None, &options).expect("compiles");
     omf::parse(&objbuild::written(&built, &format!("{name}.c")).expect("writes")).expect("parses")
 }
@@ -88,12 +89,12 @@ fn bit_field_members_round_trip_through_the_codec_and_others_are_unchanged() {
         )
         .unwrap()
     };
-    let plain = llrm_core::hir::codec::encode(&hir("debug"), None).unwrap();
+    let plain = llrm_codegen::hir::codec::encode(&hir("debug"), None).unwrap();
     assert!(!plain.contains("bit_start") && plain.contains("\"members\""), "premise: debug members, none a bit field");
     let fields = hir("debugbf");
-    let encoded = llrm_core::hir::codec::encode(&fields, None).unwrap();
+    let encoded = llrm_codegen::hir::codec::encode(&fields, None).unwrap();
     assert!(encoded.contains("\"bit_start\""), "premise: a bit field member");
-    assert_eq!(llrm_core::hir::codec::decode(&encoded).unwrap(), fields);
+    assert_eq!(llrm_codegen::hir::codec::decode(&encoded).unwrap(), fields);
 }
 
 /// A bit field read as its whole base type: `DBBitField`'s first bit and
@@ -121,7 +122,7 @@ fn a_debug_member_with_half_a_bit_field_is_refused() {
         &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap(),
     )
     .unwrap();
-    assert!(llrm_core::hir::verify::verify(&program).is_ok(), "premise: valid as raised");
+    assert!(llrm_codegen::hir::verify::verify(&program).is_ok(), "premise: valid as raised");
     let member = program.modules[0]
         .debug
         .as_mut()
@@ -132,7 +133,7 @@ fn a_debug_member_with_half_a_bit_field_is_refused() {
         .find(|one| one.bit_width.is_some())
         .expect("premise: a bit field");
     member.bit_width = None;
-    let why = llrm_core::hir::verify::verify(&program).unwrap_err();
+    let why = llrm_codegen::hir::verify::verify(&program).unwrap_err();
     assert!(why.0.contains("start or width alone"), "{why:?}");
 }
 
@@ -145,10 +146,11 @@ fn a_debug_member_with_half_a_bit_field_is_refused() {
 fn the_model_tells_parameters_from_locals_and_places_the_code() {
     use llrm_object::debug::Kind;
     let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/debug.cgs")).expect("reads");
-    let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+    let machine =
+        llrm_codegen::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
     let pipeline =
         llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(machine) };
+    let options = llrm_codegen::driver::Options { pipeline, ..llrm_driver::m16_options(machine) };
     let built = super::compile::selected(&text, "debug", None, &options).expect("compiles");
     let object = objbuild::built(&built, "debug.c", objbuild::CodeLayout::OneSegment).expect("builds");
     let info = object.debug.expect("-g's information rides on the object");
@@ -188,11 +190,11 @@ fn a_parameters_home_round_trips_through_the_codec_and_others_are_unchanged() {
         &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap(),
     )
     .unwrap();
-    let encoded = llrm_core::hir::codec::encode(&program, None).unwrap();
+    let encoded = llrm_codegen::hir::codec::encode(&program, None).unwrap();
     assert!(encoded.contains("\"parameter\""), "premise: debug.c has parameters");
-    assert_eq!(llrm_core::hir::codec::decode(&encoded).unwrap(), program);
+    assert_eq!(llrm_codegen::hir::codec::decode(&encoded).unwrap(), program);
     for one in program.modules[0].debug.as_mut().unwrap().functions.iter_mut().flat_map(|one| &mut one.variables) {
         one.parameter = false;
     }
-    assert!(!llrm_core::hir::codec::encode(&program, None).unwrap().contains("\"parameter\""));
+    assert!(!llrm_codegen::hir::codec::encode(&program, None).unwrap().contains("\"parameter\""));
 }

@@ -1,6 +1,6 @@
 //! Compiles llrm's peephole rules (`.peep`) against the instruction
 //! description (`x86.instr`) into Rust: one decision automaton per rule
-//! group and the rules at its accepting states. llrm-core's build script
+//! group and the rules at its accepting states. llrm-codegen's build script
 //! runs it.
 
 pub mod automaton;

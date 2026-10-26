@@ -1,5 +1,5 @@
 //! `movsw` and `movsb` as a load, a store and two pointer steps, adapted
-//! from llrm-core's `raising_copies`; and `rep stosw` / `rep stosb` as a
+//! from llrm-codegen's `raising_copies`; and `rep stosw` / `rep stosb` as a
 //! memset.
 //!
 //! Only where ES is proven DS's, by `push ds / pop es` (or `push ss`, where

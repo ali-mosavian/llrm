@@ -6,7 +6,7 @@ architecture-order: 277
 
 TL;DR: `cfg::Shape` is three parts, and two are already the translated stack: `dominance` is the lazy `DomTree` handle, `loops` is `natural()` over `LoopInfo`. Only `reaching` (one reader) has no translation yet. Retire it as: `isPotentiallyReachable` (R1), the readers move to `Dominators`/`Loops` directly in three groups (R2 analyses, R3 loop transforms, R4 the rest), then delete `Shape` and the manager's accessors (R5).
 
-Counts are textual (greps of `Shape::of`, `.shape()`, `get::<Shape>`, `.dominance`, `.loops`, `.reaching` per file), taken at the head of `feat/parity`; llrm-core's `analysis/graph.rs` `Shape` is another type (LIR labels and successors) and out of scope. The reader PR re-counts with the compiler by deleting the field.
+Counts are textual (greps of `Shape::of`, `.shape()`, `get::<Shape>`, `.dominance`, `.loops`, `.reaching` per file), taken at the head of `feat/parity`; llrm-codegen's `analysis/graph.rs` `Shape` is another type (LIR labels and successors) and out of scope. The reader PR re-counts with the compiler by deleting the field.
 
 ## Parts and replacements
 

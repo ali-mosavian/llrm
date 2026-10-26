@@ -35,7 +35,7 @@ fn the_arm64_patterns_generate_against_the_arm64_forms() {
         include_str!("../src/instructions/arm64.instr"),
         include_str!("../src/isel/patterns.isel"),
         "arm64",
-        "llrm_core",
+        "llrm_codegen",
         &dialect,
     )
     .unwrap_or_else(|why| panic!("{why}"));
