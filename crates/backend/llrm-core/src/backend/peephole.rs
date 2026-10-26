@@ -325,6 +325,7 @@ impl Peephole {
         // store need not run there.
         let body = crate::backend::postrasink::latched(&crate::backend::postrasink::sunk(&body));
         let body = forwarded_reloads(self.rules, &body);
+        let body = unread_spill_stores(&body);
         let body = storecombine::combined(&body);
         let body = pushed_constants(self.rules, &body);
         let body = far_loads(
@@ -944,6 +945,69 @@ pub fn forwarded_reloads(
     body: &LirBody,
 ) -> LirBody {
     peep::rewritten(rules.forwarded_reloads, body, &Facts::new(body, None))
+}
+
+/// `body` without the stores to a spill slot nothing reads. The forwarding
+/// above can drop the last reload of a slot and leave the store that filled
+/// it. A slot is read by any operand but the destination of a plain store; a
+/// slot a debug variable names stays.
+pub fn unread_spill_stores(body: &LirBody) -> LirBody {
+    let home = |place: &Loc| -> Option<i64> {
+        let Loc::Mem(cell) = place else { return None };
+        cell.addr.filter(|addr| addr.space == Space::Frame).and_then(|addr| addr.slot_home()).filter(|home| *home < 0)
+    };
+    let store_home = |one: &Insn| -> Option<i64> {
+        let what = one.what.as_ref()?;
+        let plain = what.op == Operation::Move
+            && what.name.as_deref() == Some("mov")
+            && one.group.is_none()
+            && one.requires.is_empty()
+            && one.delivers.is_empty()
+            && one.clobbers.is_empty()
+            && one.spread.is_empty()
+            && !one.volatile
+            && !one.frame_adjust
+            && one.symbol != Some(true);
+        match (&what.dests[..], &what.sources[..]) {
+            ([place @ Loc::Mem(cell)], [Loc::Reg(_) | Loc::Held(_) | Loc::Imm(_)])
+                if plain && cell.index.is_none() && cell.index_through == RegId::None =>
+            {
+                home(place)
+            }
+            _ => None,
+        }
+    };
+    let mut read: BTreeSet<i64> = BTreeSet::new();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        let Some(what) = one.what.as_ref() else { continue };
+        let skip = store_home(one).is_some();
+        for (at, place) in what.dests.iter().chain(&what.sources).enumerate() {
+            if skip && at == 0 {
+                continue;
+            }
+            match place {
+                Loc::Address(a) => {
+                    read.extend(a.addr.filter(|addr| addr.space == Space::Frame).and_then(|a| a.slot_home()))
+                }
+                other => read.extend(home(other)),
+            }
+        }
+    }
+    for variable in &body.variables {
+        if let lir::DebugPlace::At(addr) = &variable.place {
+            read.extend(addr.slot_home());
+        }
+    }
+    let dead = |one: &Arc<Insn>| store_home(one).is_some_and(|home| !read.contains(&home));
+    if !body.blocks.iter().flat_map(|block| block.insns.iter()).any(dead) {
+        return body.clone();
+    }
+    body.with_blocks(
+        body.blocks
+            .iter()
+            .map(|block| block.with_insns(lir::without(&block.insns, dead, None::<fn(&Arc<Insn>) -> Arc<Insn>>)))
+            .collect(),
+    )
 }
 
 /// Whether `register` in an operand at `addr` is the frame base, which the
