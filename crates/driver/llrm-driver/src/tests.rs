@@ -680,3 +680,17 @@ fn a_prefetch_hint_compiles_to_no_code() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("prefetch"), "{listing}");
 }
+
+/// `-Og` makes clang write `llvm.fake.use` (a debugger keeps a value live);
+/// `llrm-llc` refused the module, "@f_: @llvm.fake.use", and `-Og` compiled
+/// nothing through `llrm-cc`.
+#[test]
+fn a_fake_use_compiles_to_no_code() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                declare void @llvm.fake.use(...)\n\
+                define i32 @f(i32 %a) {\n  %b = add i32 %a, 1\n  call void (...) @llvm.fake.use(i32 %b)\n  ret i32 %a\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m32"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("fake"), "{listing}");
+}

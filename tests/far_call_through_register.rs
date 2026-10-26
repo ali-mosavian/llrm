@@ -1,5 +1,7 @@
 //! A far call through a function pointer in a struct, reached by a register.
 
+mod common;
+
 use std::process::Command;
 
 const KERNEL: &str = "
@@ -16,10 +18,7 @@ void g(S *p, unsigned x) { p->f(p, x, 1); }
 fn test_a_call_through_a_struct_field_writes_an_object() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
-        .current_dir(scratch.path())
-        .args(["-m16", "-Os", "-o", "a.obj", "a.c"])
-        .output()
-        .unwrap();
+    let output =
+        common::cc::llrm_c().current_dir(scratch.path()).args(["-m16", "-Os", "-o", "a.obj", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
 }

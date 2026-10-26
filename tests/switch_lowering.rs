@@ -1,6 +1,8 @@
 //! A switch is not a chain of compares: x_switch_dense was 11 in a row (445 B,
 //! 1.23x gcc's clocks) and x_switch_ranges 58 (770 B, 3.2x).
 
+mod common;
+
 use std::process::Command;
 
 fn compares(
@@ -9,7 +11,7 @@ fn compares(
 ) -> usize {
     let scratch = tempfile::tempdir().unwrap();
     let source = format!("{}/crates/target/llrm-x86-m32/vsgcc/kernels/{kernel}/{kernel}.c", env!("CARGO_MANIFEST_DIR"));
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486", "-fobject-format=elf", "-S", "-o", "a.s"])
         .args(flags)
@@ -52,7 +54,7 @@ fn without_switch_conversion_the_constants_are_a_table_or_compares() {
 fn listing(flags: &[&str]) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let source = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/run/c/switch_jump_table.c");
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(flags)
         .args(["-march=i486", "-S", "-o", "a.s", source])

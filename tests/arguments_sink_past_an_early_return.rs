@@ -1,5 +1,7 @@
 //! Incoming stack arguments are loaded where they are used.
 
+mod common;
+
 use std::process::Command;
 
 /// x_hanoi2's `mv`, as cdecl: `n` is tested at once, and `from`, `to` and `via`
@@ -23,7 +25,7 @@ void mv(int n, int from, int to, int via)
 fn an_argument_is_not_loaded_before_the_early_return_that_does_not_use_it() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), SOURCE).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486", "-O2", "--isel=dag", "-S", "-o", "a.s", "a.c"])
         .output()

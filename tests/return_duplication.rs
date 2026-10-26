@@ -1,6 +1,8 @@
 //! gcc's bb-reorder `copy_bb_p`: a branch to a block that only returns gets its
 //! own copy of it.
 
+mod common;
+
 use std::process::Command;
 
 // The arguments are read (`a`), so the two calls stay two: with the swapped
@@ -18,12 +20,8 @@ int f(int n) { return hanoi(n, 1, 3, 2); }
 fn listing(flags: &[&str]) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
-        .current_dir(scratch.path())
-        .args(flags)
-        .args(["-S", "-o", "a.s", "a.c"])
-        .output()
-        .unwrap();
+    let output =
+        common::cc::llrm_c().current_dir(scratch.path()).args(flags).args(["-S", "-o", "a.s", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     std::fs::read_to_string(scratch.path().join("a.s")).unwrap()
 }

@@ -3,6 +3,8 @@
 //! flag_expensive_optimizations`); -O1 has only the early threader, which
 //! copies nothing.
 
+mod common;
+
 use std::process::Command;
 
 const MACHINE: &str = "extern void report(long value);\n\
@@ -31,11 +33,8 @@ fn copies_of_the_step(level: &str) -> usize {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), MACHINE).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
-        .current_dir(directory)
-        .args(["-m32", level, "-S", "-o", "a.s", "a.c"])
-        .output()
-        .unwrap();
+    let output =
+        common::cc::llrm_c().current_dir(directory).args(["-m32", level, "-S", "-o", "a.s", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     std::fs::read_to_string(directory.join("a.s")).unwrap().matches("12345").count()
 }

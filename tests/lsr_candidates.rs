@@ -1,5 +1,7 @@
 //! lsr's candidates for the uses of a loop.
 
+mod common;
+
 use std::process::Command;
 
 /// x_life's generation step: the 3 x 3 neighbour sum is two loops of three
@@ -35,7 +37,7 @@ fn test_an_address_use_adds_no_candidate_for_its_constant_and_the_exit_counts_to
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         // Without the unroller: since the pin's LoopFullUnroll cost
         // (7761d2b672) the `dy` loop may be copied out at -O2, and what this

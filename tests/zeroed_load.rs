@@ -2,6 +2,8 @@
 //! target's own prices decide, so a CPU where the extension is one clock, or
 //! that stalls on the partial register, keeps `movzx`.
 
+mod common;
+
 use std::process::Command;
 
 fn listing(flags: &[&str]) -> String {
@@ -12,7 +14,7 @@ fn listing(flags: &[&str]) -> String {
         "unsigned h(unsigned char *p, unsigned char *q, int n) { unsigned s = 0; int i; for (i = 0; i < n; i++) s += p[i] * q[i]; return s; }\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .args(["-m32"])
         .args(flags)

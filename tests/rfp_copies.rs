@@ -1,5 +1,7 @@
 //! The copies between x87 registers are propagated before the stack form.
 
+mod common;
+
 use std::process::Command;
 
 /// nbody at -O2 under RFP kept every `fp := fp` RegAlloc made, and
@@ -12,7 +14,7 @@ fn test_nbody_keeps_no_copy_between_x87_registers() {
     let scratch = tempfile::tempdir().unwrap();
     let source = concat!(env!("CARGO_MANIFEST_DIR"), "/bench/nbody/nbody.c");
     let listing = scratch.path().join("nbody.s");
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .args(["-m32", "-O2", "-march=i486", "-S", "-o"])
         .arg(&listing)
         .arg(source)

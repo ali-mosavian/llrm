@@ -1,5 +1,7 @@
 //! An object is one number whatever facts a result about it was made with.
 
+mod common;
+
 use std::process::Command;
 
 /// `i64_param_home.c` at -O2 -m32: a frame slot whose address an edit stopped
@@ -11,7 +13,7 @@ use std::process::Command;
 fn test_a_kept_result_and_a_fresh_one_name_a_frame_slot_alike() {
     let source = format!("{}/tests/run/c/i64_param_home.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .env("LLRM_CHECK_REPLAY", "1")
         .args(["-O2", "-march=i486", "-m32", "-S", "-o", "a.s", &source])

@@ -20,7 +20,7 @@ fn body(flags: &[&str]) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .args(flags)
         .args(["-O2", "-fno-inline-functions", "-S", "-o", "a.s", "a.c"])

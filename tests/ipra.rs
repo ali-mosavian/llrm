@@ -17,7 +17,7 @@ fn compiled(
     let path = directory.path().join("t.c");
     std::fs::write(&path, source).unwrap();
     let out = directory.path().join("t.asm");
-    let done = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let done = common::cc::llrm_c()
         .env("LLRM_DEBUG", "facts")
         .args(flags)
         .args(["-O2", "-fno-inline-functions", "-fno-inline-functions-called-once", "-S"])

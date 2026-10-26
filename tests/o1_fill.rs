@@ -4,6 +4,8 @@
 //! L653). The user's decision of 2026-10-10, recorded in
 //! docs/reference/levels.md; -Og keeps the loops.
 
+mod common;
+
 use std::process::Command;
 
 /// bench/scroll's four row loops: up a row, blank the last, down a row, copy to
@@ -19,7 +21,7 @@ fn listing(flags: &[&str]) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), SCROLL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .args(["-m32", "-mabi=sysv", "-march=i486"])
         .args(flags)

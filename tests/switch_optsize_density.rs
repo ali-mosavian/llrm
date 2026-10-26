@@ -1,5 +1,7 @@
 //! A jump table is dense enough at 40% when tuned for size, 10% otherwise.
 
+mod common;
+
 use std::process::Command;
 
 const KERNEL: &str = "
@@ -18,7 +20,7 @@ void f(int x)
 fn listing(level: &str) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["--isel=dag", "-m16", "-march=i386", level, "-S", "-o", "-", "a.c"])
         .output()

@@ -1,5 +1,7 @@
 //! A double passed on the stack in flat code is stored through `[esp]`.
 
+mod common;
+
 use std::process::Command;
 
 /// Under `LLRM_VERIFY` (the gate's) `fstp qword [esp]` had no byte price: the
@@ -56,7 +58,7 @@ void fout_digits(double v, int is_double, Decimal *d, int *exponent)\n\
 }\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .env("LLRM_VERIFY", "1")
         .args(["-m32", "-Os", "-o", "a.obj", "a.c"])

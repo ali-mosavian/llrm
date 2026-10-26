@@ -1,5 +1,7 @@
 //! A local's address in flat code is a frame address, never a 16-bit register.
 
+mod common;
+
 use std::process::Command;
 
 fn listing(
@@ -9,7 +11,7 @@ fn listing(
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .env("LLRM_VERIFY", "1")
         .args(flags)

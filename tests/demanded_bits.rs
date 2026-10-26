@@ -3,6 +3,8 @@
 //! read one byte of it, and x_funcptr masked `x & 3` under a sum that is masked
 //! by `& 3` again.
 
+mod common;
+
 use std::process::Command;
 
 fn listing(
@@ -12,7 +14,7 @@ fn listing(
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .args(["-m32", "-mabi=sysv", "-march=i486", level, "-S", "-o", "a.s", "a.c"])
         .output()

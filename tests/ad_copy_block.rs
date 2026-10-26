@@ -3,6 +3,8 @@
 //! `movzx eax, byte ptr [..]; mov byte ptr [..], al` per byte; at -m16, the
 //! same over two far pointers.
 
+mod common;
+
 use std::process::Command;
 
 fn listing(
@@ -11,7 +13,7 @@ fn listing(
 ) -> String {
     let root = env!("CARGO_MANIFEST_DIR");
     let scratch = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(flags)
         .args(["-O2", "-S", "-o", "ad.s"])

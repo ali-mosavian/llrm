@@ -1,6 +1,8 @@
 //! A far pointer's segment half carried round a loop that reads only its
 //! offset.
 
+mod common;
+
 use std::process::Command;
 
 const KERNEL: &str = "
@@ -23,7 +25,7 @@ void walk(char far *p, int n)
 fn test_a_segment_half_nothing_reads_is_not_carried_round_the_loop() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .env("LLRM_CHECK_LIVEINTERVALS", "1")
         .args(["-m16", "-march=i386", "-Os", "-S", "-o", "a.s", "a.c"])

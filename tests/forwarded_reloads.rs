@@ -1,6 +1,8 @@
 //! A reload of the slot a store just filled, into the register that filled it,
 //! is gone (`peephole.peep`, `forwarded_reloads`).
 
+mod common;
+
 use std::process::Command;
 
 /// PLASMA's loop: eight values live across the inner loop at m16.
@@ -19,7 +21,7 @@ void p(short n)
 fn listing() -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), SOURCE).unwrap();
-    let done = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let done = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-m16", "-march=i386", "-O2", "-S", "-o", "a.s", "a.c"])
         .output()

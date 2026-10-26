@@ -188,7 +188,8 @@ const LLC_FLAGS: &[&str] = &[
     "-ffloat-store",
     "-fno-float-store",
 ];
-const LLC_PREFIXES: &[&str] = &["--isel=", "-mcode-segment=", "-fno-inline=", "-Wstack-usage=", "-fexcess-precision="];
+const LLC_PREFIXES: &[&str] =
+    &["--isel=", "-fobject-format=", "-mcode-segment=", "-fno-inline=", "-Wstack-usage=", "-fexcess-precision="];
 /// The passes `-f[no-]PASS` switches in the backend's pipeline.
 const BACKEND_PASSES: &[&str] = &[
     "allocation-search",
@@ -278,7 +279,8 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
                 "g" => "1".into(),
                 other => other.to_owned(),
             };
-            build.clang.push(flag.to_owned());
+            // clang has no -Omax: its top level is -O3.
+            build.clang.push(if level == "max" { "-O3".to_owned() } else { flag.to_owned() });
         } else if flag.starts_with("-mabi=") {
             // The backend's convention (clang's own -mabi is for other
             // targets); it follows the table's.

@@ -1,6 +1,8 @@
 //! At -Os a loop of several stores stays one where a fill for each store is
 //! more bytes than the loop.
 
+mod common;
+
 use std::process::Command;
 
 fn fill_listing(
@@ -10,7 +12,7 @@ fn fill_listing(
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .args(flags)
         .args(["-m16", "-march=i386", "-S", "-o", "a.s", "a.c"])

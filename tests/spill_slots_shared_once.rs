@@ -1,5 +1,7 @@
 //! Spill slots are shared once, over the allocation kept.
 
+mod common;
+
 use std::process::Command;
 
 const KERNEL: &str = "
@@ -33,7 +35,7 @@ fn test_slots_coloured_once_over_the_kept_allocation_make_a_smaller_frame() {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .args(["-m32", "-mabi=sysv", "-O2", "-march=i486", "-S", "-o", "a.s", "a.c"])
         .output()

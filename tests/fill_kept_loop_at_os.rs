@@ -1,13 +1,15 @@
 //! At -Os a loop that keeps stores of computed values keeps its zero stores
 //! too, unless a memset or an initializer has set the object already.
 
+mod common;
+
 use std::process::Command;
 
 fn kept_listing(source: &str) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .args(["-m16", "-march=i386", "-Os", "-S", "-o", "a.s", "a.c"])
         .output()

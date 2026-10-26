@@ -1,5 +1,7 @@
 //! A spill store runs only on the path that reads the slot.
 
+mod common;
+
 use std::process::Command;
 
 /// hanoi's `n == 0` exit stored the slot of the accumulator before the test, a
@@ -34,7 +36,7 @@ fn test_a_spill_store_ahead_of_a_branch_is_made_on_the_path_that_reads_the_slot(
     let scratch = tempfile::tempdir().unwrap();
     let source = scratch.path().join("hanoi.c");
     std::fs::write(&source, SOURCE).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .env("LLRM_CANDIDATES", "spiller")
         .args(["-O2", "-m32", "-mabi=sysv", "-march=i486", "-S", "-o", "a.s"])

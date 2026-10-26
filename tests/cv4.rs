@@ -38,7 +38,7 @@ fn linked(
 ) -> Vec<u8> {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codeview");
     std::fs::copy(fixtures.join("m.c"), scratch.join("m.c")).unwrap();
-    let made = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let made = common::cc::llrm_c()
         .args(["-m16", "-g", "-O0"])
         .arg(scratch.join("m.c"))
         .arg("-o")
@@ -255,7 +255,7 @@ fn codeview_reads_an_enum_a_const_a_register_variable_and_a_block_scope() {
 
 /// What `llrm-nib --os-layer FIELD` says of the real-mode target's OS layer.
 fn os_layer(field: &str) -> String {
-    let out = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap().join("llrm-nib"))
+    let out = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-cc")).parent().unwrap().join("llrm-nib"))
         .args(["-m16", "--os-layer", field])
         .output()
         .unwrap();
@@ -312,7 +312,7 @@ fn ms_link_links_a_comdat_per_procedure_and_the_program_runs() {
         skipped("needs VB/DOS's LINK (VBDOS_DIR)");
         return;
     };
-    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap().to_owned();
+    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-cc")).parent().unwrap().to_owned();
     if !dosbox::binary().exists() || !bin.join("jwasm").exists() {
         skipped("needs the DOSBox-X this crate builds and jwasm beside the compiler");
         return;
@@ -393,7 +393,7 @@ fn nib_in_codeview(
 ) -> Option<String> {
     let (Some(microsoft), bin) = (
         directory("VBDOS_DIR", "work/other/d32x/toolchains/vbdos", "BIN/CV.EXE"),
-        Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap().to_owned(),
+        Path::new(env!("CARGO_BIN_EXE_llrm-cc")).parent().unwrap().to_owned(),
     ) else {
         skipped("needs VB/DOS's LINK, CVPACK and CV (VBDOS_DIR)");
         return None;

@@ -1,5 +1,7 @@
 //! A constant that several edges of a phi carry is made once.
 
+mod common;
+
 use std::process::Command;
 
 fn listing(
@@ -9,7 +11,7 @@ fn listing(
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .args(["-m32", "-mabi=sysv", "-march=i486", level, "-S", "-o", "a.s", "a.c"])
         .output()

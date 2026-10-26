@@ -120,3 +120,24 @@ fn dump_reaches_the_backend_with_its_directory() {
     assert_eq!(one.inputs.len(), 1);
     assert_eq!(built("--dump=d -c x.c").llc, words("--dump=d"));
 }
+
+/// `huge_array.c` (flags `-m32`) failed at m32 with "expected ';' after top
+/// level declarator": the flat header emptied `near` and `far` but not `huge`.
+#[test]
+fn the_flat_header_empties_every_segment_keyword() {
+    let flat =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../toolchain/clang/flat.h")).unwrap();
+    for keyword in ["__near", "__far", "__huge", "near", "far", "huge"] {
+        assert!(flat.lines().any(|line| line.trim() == format!("#define {keyword}")), "{keyword}");
+    }
+}
+
+/// The tests that spawned llrm-c pass `-fobject-format=elf` and `-Omax`; clang
+/// refused both ("unknown argument", "invalid integral value 'max'").
+#[test]
+fn the_object_format_goes_to_the_backend_and_omax_is_clangs_o3() {
+    let one = built("-fobject-format=elf -Omax -c x.c");
+    assert_eq!(one.llc, words("-fobject-format=elf"));
+    assert_eq!(one.clang, words("-O3"));
+    assert_eq!(one.level, "max");
+}

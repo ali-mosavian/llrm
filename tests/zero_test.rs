@@ -5,8 +5,12 @@ mod common;
 fn listing(flags: &[&str]) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let source = concat!(env!("CARGO_MANIFEST_DIR"), "/bench/parity/sum_three/sum_three.c");
-    let output =
-        common::cc::llrm_c(flags).current_dir(scratch.path()).args(["-S", "-o", "a.s", source]).output().unwrap();
+    let output = common::cc::llrm_c()
+        .args(flags)
+        .current_dir(scratch.path())
+        .args(["-S", "-o", "a.s", source])
+        .output()
+        .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     std::fs::read_to_string(scratch.path().join("a.s")).unwrap()
 }

@@ -6148,7 +6148,7 @@ impl Selector<'_, '_, '_> {
                 // A fact for the passes: no code.
                 Some(Intrinsic::Assume) => Ok(()),
                 // A hint; the 386 and 486 have no prefetch instruction.
-                Some(Intrinsic::Prefetch) => Ok(()),
+                Some(Intrinsic::Prefetch | Intrinsic::FakeUse) => Ok(()),
                 _ => refuse(format!("@{name}")),
             };
         }

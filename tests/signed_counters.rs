@@ -2,13 +2,15 @@
 //! writes through it, and the address that counter makes is one addressing
 //! mode.
 
+mod common;
+
 use std::process::Command;
 
 fn listing(source: &str) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         // The loops are the premise: at 40 trips the pin's order copies them
         // out.

@@ -1,6 +1,8 @@
 //! A byte or word load whose register's other bytes are dead is the zero
 //! extending dword load, as `X86FixupBWInsts` makes it.
 
+mod common;
+
 use std::process::Command;
 
 fn asm(
@@ -9,12 +11,8 @@ fn asm(
 ) -> Vec<String> {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
-        .current_dir(scratch.path())
-        .args(flags)
-        .args(["-S", "-o", "a.s", "a.c"])
-        .output()
-        .unwrap();
+    let output =
+        common::cc::llrm_c().current_dir(scratch.path()).args(flags).args(["-S", "-o", "a.s", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     std::fs::read_to_string(scratch.path().join("a.s")).unwrap().lines().map(|one| one.trim().to_owned()).collect()
 }

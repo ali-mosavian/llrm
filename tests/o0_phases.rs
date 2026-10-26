@@ -3,17 +3,16 @@
 //! copying, the reads folded at their use) are left out, which was 48% of
 //! qbq-llrm's d_faces.c compile at -O0 (1031 M instructions against gcc's 256).
 
+mod common;
+
 use std::process::Command;
 
 fn listing(level: &str) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), "int f(int x) { if (x) return 1; return 2; }\n").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
-        .current_dir(directory)
-        .args(["-m32", level, "-S", "-o", "a.s", "a.c"])
-        .output()
-        .unwrap();
+    let output =
+        common::cc::llrm_c().current_dir(directory).args(["-m32", level, "-S", "-o", "a.s", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     std::fs::read_to_string(directory.join("a.s")).unwrap()
 }

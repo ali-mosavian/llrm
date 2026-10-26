@@ -3,6 +3,8 @@
 //! `always_inline`) reach the optimizer; those that change no meaning are read
 //! and dropped; the rest are an error, not ignored.
 
+mod common;
+
 use std::process::{Command, Output};
 
 fn compile(source: &str) -> (Output, String) {
@@ -15,7 +17,7 @@ fn compiled(
 ) -> (Output, String) {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("t.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args([target, "-O2", "-S", "-o", "t.s", "t.c"])
         .output()
