@@ -143,3 +143,13 @@ fn a_member_read_from_an_aggregate_built_of_constants_is_the_constant() {
     let after = llrm_mir::print::module(&program.modules[0]);
     assert!(!after.contains("insertvalue") && !after.contains("extractvalue"), "{after}");
 }
+
+/// A function passed to an inlined helper became the copy's callee without the walk looking again,
+/// so `apply(plus, 6, 7)` left `bl plus` in `main` where the pin folds it to a constant
+/// (`tests/darwin/manyargs.ll`: 296 bytes against 156).
+#[test]
+fn a_call_the_inlining_of_a_helper_makes_direct_is_inlined_too() {
+    let asm = driver::assembly(include_str!("data/apply_function_pointer.ll"), Platform::Darwin, true).expect("lowers");
+    let calls: Vec<&str> = asm.lines().filter(|l| l.trim_start().starts_with("bl ")).collect();
+    assert_eq!(calls.len(), 1, "only printf is called: {calls:?}");
+}

@@ -299,7 +299,6 @@ impl ProgramPass for Walk {
                         let spliced_body = (!trials.is_empty()
                             && function_mut(module, id).1.walk().count() <= TRIAL_CALLER)
                             .then(|| function_mut(module, id).1.clone());
-                        let mid = calls_of(&module.context, module.global(id).function().expect("a procedure"));
                         (self.simplify)(module, &mut modules[at], id, "walk.");
                         if let (Some(before), Some(tti)) = (spliced_body, tti.as_deref()) {
                             // SZ2: each refused site is inlined into the body
@@ -388,21 +387,19 @@ impl ProgramPass for Walk {
                         // elimination makes a recursive body a loop), as
                         // CGSCC updates its call graph.
                         let now = calls_of(&module.context, module.global(id).function().expect("a procedure"));
+                        // A callee the splices or the simplification added, with a body: a parameter
+                        // that was a function became the copy's callee, or the call was devirtualized
+                        // (a table of functions made a switch of calls by `jumptableswitch`).
+                        let exposed = now.iter().any(|(callee, _)| {
+                            !was.iter().any(|(seen, _)| seen == callee)
+                                && module.global(*callee).function().is_some_and(|one| !one.layout().is_empty())
+                        });
                         live.spliced(module, &mut modules[at], was, now.clone());
                         if recursive.contains(&id) {
                             recursive = crate::inline::recursive(module);
                         }
-                        // A callee the simplification added, with a body: the
-                        // call was devirtualized (a table of functions made a
-                        // switch of calls by `jumptableswitch`).
                         repeats += 1;
-                        let devirtualized = now
-                            .iter()
-                            .any(
-                                |(callee, _)| !mid.iter().any(|(seen, _)| seen == callee)
-                                    && module.global(*callee).function().is_some_and(|one| !one.layout().is_empty()),
-                            );
-                        if repeats >= DEVIRT_REPEATS || !devirtualized {
+                        if repeats >= DEVIRT_REPEATS || !exposed {
                             break;
                         }
                     }
