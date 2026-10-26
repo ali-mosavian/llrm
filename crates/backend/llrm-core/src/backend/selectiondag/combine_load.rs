@@ -1,7 +1,7 @@
 //! `visitLOAD`, the dead-load half: a simple load nothing reads is bypassed
 //! in the chain.
 //!
-//! DEVIATE SD321: the rest of `visitLOAD` (store-to-load forwarding,
+//! DEVIATE SD216: the rest of `visitLOAD` (store-to-load forwarding,
 //! `FindBetterChain`, alignment inference, indexed and sliced loads) is not
 //! translated: it needs `BaseIndexOffset` and the alias queries. Exit: those
 //! ports. Owner w10. Review 2026-11-13.
