@@ -554,6 +554,12 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LU3: whether a rewrite the cost model rates worse than the loop
+    /// as written is dropped when it needs more registers than exist.
+    fn lsr_drops_spilling_solution(&self) -> bool {
+        false
+    }
+
     /// `canMacroFuseCmp`: a compare fuses with the branch that reads it.
     fn can_macro_fuse_cmp(&self) -> bool {
         false

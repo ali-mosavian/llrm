@@ -826,6 +826,10 @@ impl Tti for X86 {
     }
 
     /// Real mode forms a scaled index with an address-size prefix.
+    fn lsr_drops_spilling_solution(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
     fn scaled_index_insns(&self) -> u32 {
         self.real_mode.as_ref().map_or(0, |real| real.scaled_index_insns)
     }
