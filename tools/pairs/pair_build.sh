@@ -28,7 +28,7 @@ flock "$S/tgt-dist.lock" bash -c '
   git -C "$REPO" worktree add -q --detach "$W" "$FULL"
   at() { [ "$(git -C "$W" rev-parse HEAD)" = "$FULL" ] || { echo "pair_build: $W is at $(git -C "$W" rev-parse --short HEAD), not $FULL $1" >&2; exit 1; }; }
   at "before the build"
-  (cd "$W" && nice -n 10 env SOURCE_DATE_EPOCH=0 RUSTFLAGS="--remap-path-prefix=$W=/llrm --remap-path-prefix=$B=/target --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo" CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=$B ${PAIR_CARGO:-buildslot cargo} build --profile dist -q --bin llrm-c --bin llrm-qb --bin llrm-nib --bin nibfront)
+  (cd "$W" && nice -n 10 env SOURCE_DATE_EPOCH=0 RUSTFLAGS="--remap-path-prefix=$W=/llrm --remap-path-prefix=$B=/target --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo" CARGO_INCREMENTAL=0 BUILDSLOT_PRIORITY=0 CARGO_TARGET_DIR=$B ${PAIR_CARGO:-buildslot cargo} build --profile dist -q --bin llrm-c --bin llrm-qb --bin llrm-nib --bin nibfront)
   at "after the build"
   # a build that left the previous one in place (cargo found nothing to do, or failed quietly) is copied under this sha otherwise: 4 dists (5e4cac094d, aa8170fbbd, 8cb8ed34df, 3d22dc1faa) held another commit'"'"'s binary
   grep -q "wt-pair-$FULL/" $B/dist/llrm-c.d 2>/dev/null || { echo "pair_build: $B/dist/llrm-c.d does not name $W: the binary was not built from $FULL" >&2; exit 1; }
