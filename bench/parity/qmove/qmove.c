@@ -27,18 +27,25 @@ void pl_ground_accel(Vec3 *vel, Vec3 *wishdir, float wishspeed, float dt)
     vel->y += accelspeed * wishdir->y;
 }
 
+/* Read through volatile so no build folds the kernel to a constant. */
+static volatile float input_vx = 3.0f;
+static volatile float input_vy = 4.0f;
+static volatile float input_wx = 1.0f;
+static volatile float input_speed = 10.0f;
+static volatile float input_dt = 0.25f;
+
 long bench_qmove(void)
 {
     Vec3 vel;
     Vec3 wishdir;
 
-    vel.x = 3.0f;
-    vel.y = 4.0f;
+    vel.x = input_vx;
+    vel.y = input_vy;
     vel.z = 5.0f;
-    wishdir.x = 1.0f;
+    wishdir.x = input_wx;
     wishdir.y = 0.0f;
     wishdir.z = 0.0f;
-    pl_ground_accel(&vel, &wishdir, 10.0f, 0.25f);
+    pl_ground_accel(&vel, &wishdir, input_speed, input_dt);
 
     return (long)vel.x * 10000L + (long)vel.y * 100L + (long)vel.z;
 }

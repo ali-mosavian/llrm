@@ -917,8 +917,10 @@ pub fn process_loop(
 pub fn rotate_loops(run: &mut Run) -> bool {
     let analyze = |run: &Run| LoopInfo::analyze(run.function, || llrm_mir::domtree::DomTree::of(run.function));
     let mut info = analyze(run);
+    // The loop pass manager's worklist is popped from the back: a loop's
+    // children before it, siblings in program order.
     let headers: Vec<BlockId> =
-        info.get_loops_in_reverse_sibling_preorder().iter().map(|one| one.get_header()).collect();
+        info.get_loops_in_reverse_sibling_preorder().iter().rev().map(|one| one.get_header()).collect();
     let mut stale = IdSet::<BlockId>::new();
     let mut changed = false;
     for header in headers {
@@ -944,12 +946,23 @@ pub fn rotate_loops(run: &mut Run) -> bool {
     changed
 }
 
+/// DEVIATE: under `-Os` a header is copied only when it has four instructions
+/// or fewer (`RotationMaxHeaderSize` is 16 in the pin, `hasMinSize` alone
+/// lowers it). Code bytes m16 -Os, QCport 65 modules + 71 vsgcc programs, by
+/// limit: 16 = 262435 + 14831, 4 = 262098 + 14745 with no object larger than
+/// at 16; 3 and 2 save more (261979, 260491) but x_mergesort +21 and, at 2,
+/// x_base64 +23 and d_alias +20: an unrotated counted loop loses its trip
+/// count to SCEV (a `div` appears), which no header size predicts.
+const SIZE_MAX_HEADER: u32 = 4;
+
 /// `LoopRotatePass`: every loop of the function rotated with header
 /// duplication on (`EnableHeaderDuplication`), whose limit is the pass's
-/// default of 16 header instructions, or none where the function is optimized
-/// for size or `-fno-tree-ch` says so.
+/// default of 16 header instructions (`SIZE_MAX_HEADER` at -Os), or none where
+/// the function is optimized for size or `-fno-tree-ch` says so.
 pub struct LoopRotate {
     pub duplicate_headers: bool,
+    /// Code bytes outrank speed (`-Os`): the header is copied only when small.
+    pub size: bool,
 }
 
 impl FunctionPass for LoopRotate {
@@ -969,7 +982,13 @@ impl FunctionPass for LoopRotate {
         let outer = std::rc::Rc::clone(analyses.outer());
         let tti = target_tti(outer.target());
         let options = Options {
-            max_header_size: if self.duplicate_headers { 16 } else { 0 },
+            max_header_size: if !self.duplicate_headers {
+                0
+            } else if self.size {
+                SIZE_MAX_HEADER
+            } else {
+                16
+            },
             rotation_only: false,
             is_util_mode: false,
             prepare_for_lto: false,

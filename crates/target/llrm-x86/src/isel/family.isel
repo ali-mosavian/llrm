@@ -233,8 +233,17 @@ pattern divide
   call divide
 end
 
+# An i1's byte is 0 or 1: its sum and difference are the xor, its product the
+# and. LSR's expander makes `add i1 x, true` of a `not`.
+pattern boolean_sum for add=xor sub=xor mul=and
+  match $mir.i1(a, b)
+  let x = held(a)
+  let y = source(b)
+  emit $x86 result <- x, y
+end
+
 pattern boolean_arithmetic
-  match add|sub|mul|shl|lshr|ashr.i1
+  match shl|lshr|ashr.i1
   refuse "arithmetic on an i1"
 end
 

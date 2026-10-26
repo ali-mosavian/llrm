@@ -111,6 +111,16 @@ impl Lanes {
         self.0
     }
 
+    /// How many lanes there are: the bits of a mask in use.
+    pub fn count() -> usize {
+        TABLE.lanes.len()
+    }
+
+    /// The lanes of a bit mask, as `mask` gives it.
+    pub const fn from_mask(mask: u128) -> Self {
+        Self(mask)
+    }
+
     /// The flag lanes of an rflags mask. `RegId::None` sorts first, so flag
     /// bit `i` is lane bit `i`.
     pub fn flags(mask: u32) -> Self {
