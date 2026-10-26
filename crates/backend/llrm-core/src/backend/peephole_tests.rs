@@ -5254,6 +5254,59 @@ fn test_a_reload_into_another_register_stays_where_the_filling_register_is_writt
     assert_eq!(store_then_reload_elsewhere(vec![write]), None);
 }
 
+/// x87 `lrint` at m16 -Os: `fistp [bp-4] ; mov eax,[bp-4] ; mov [bp-8],eax`
+/// kept the value in a second cell across a call, 4 bytes of frame and one
+/// instruction more than main. Returns the cells the reloads at the end read
+/// and the stores to a frame cell that are left.
+fn copied_cell(between: Vec<Insn>) -> Option<(Vec<i64>, usize)> {
+    let cell = |at: i64| Loc::Mem(mem(frame(at), 4, RegId::BP, at, 1));
+    let mov = |at: i64, dests: Vec<Loc>, sources: Vec<Loc>| Insn {
+        spill_store: dests.iter().any(|d| matches!(d, Loc::Mem(_))),
+        ..insn(at, Some((at, at + 2)), Some(sem(Operation::Move, "mov", dests, sources)), vec![], vec![])
+    };
+    let mut insns = vec![
+        Arc::new(mov(0, vec![rl(RegId::EAX, 4)], vec![cell(-4)])),
+        Arc::new(mov(2, vec![cell(-8)], vec![rl(RegId::EAX, 4)])),
+    ];
+    insns.extend(between.into_iter().map(Arc::new));
+    insns.push(Arc::new(mov(100, vec![rl(RegId::EAX, 4)], vec![cell(-8)])));
+    insns.push(Arc::new(insn(
+        200,
+        Some((200, 200)),
+        Some(sem(Operation::Return, "ret", vec![], vec![])),
+        vec![],
+        vec![],
+    )));
+    let done = crate::backend::slotcopies::merged(&body("slot-copy", 0, vec![block(0, insns, vec![]).into()]))?;
+    let all = whats(&done.blocks[0].insns);
+    let reads = all
+        .iter()
+        .filter_map(|what| match what.sources.as_slice() {
+            [Loc::Mem(cell)] => cell.addr.map(|addr| addr.disp),
+            _ => None,
+        })
+        .collect();
+    let stores = all.iter().filter(|what| matches!(what.dests.as_slice(), [Loc::Mem(_)])).count();
+    Some((reads, stores))
+}
+
+#[test]
+fn test_a_spill_copied_from_a_cell_reads_that_cell() {
+    assert_eq!(copied_cell(vec![]), Some((vec![-4, -4], 0)));
+}
+
+#[test]
+fn test_a_spill_copied_from_a_cell_stays_where_the_cell_is_written_before_its_read() {
+    let rewrite = insn(
+        10,
+        Some((10, 12)),
+        Some(sem(Operation::Move, "mov", vec![Loc::Mem(mem(frame(-4), 4, RegId::BP, -4, 1))], vec![rl(RegId::ECX, 4)])),
+        vec![],
+        vec![],
+    );
+    assert_eq!(copied_cell(vec![rewrite]), None);
+}
+
 // ------------------------------------------------------------ width and flag
 // audit of the width- and flag-changing rules
 

@@ -261,6 +261,7 @@ pub mod shadow;
 #[cfg(test)]
 mod shadow_tests;
 pub mod shrinkwrap;
+pub mod slotcopies;
 pub mod slots;
 pub mod stackusage;
 pub mod stepflags;

@@ -32,6 +32,8 @@ void file_close(const int *channels, unsigned count);
 void B_GET3(short channel, qb_data_ptr record, short length);
 void B_PUT3(short channel, qb_data_ptr record, short length);
 long B_FLOF(short channel);
+long B_FLOC(short channel);
+long B_FSEK(short channel);
 void B_CHOU(short channel);
 void file_print_to(Fdb *fdb);
 void B_DSKI(short channel);

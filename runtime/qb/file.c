@@ -4,6 +4,8 @@
 #include "file.h"
 #include "nhstutil.h"
 #include "rtinit.h"
+#include "dev.h"
+#include "error.h"
 #include "llrm_os.h"
 
 enum { MAX_CHANNEL = 15, DEFAULT_RECORD = 128, PATH_MAX = 128, ORIGIN_START = 0, ORIGIN_END = 2, LINE_MAX = 1023 };
@@ -294,6 +296,38 @@ long B_FLOF(short channel)
     return size;
 }
 
+/* The file's position as the program sees it: what the buffers hold is first given back. */
+static long position_of(Fdb *fdb)
+{
+    buffer_release();
+    return llrm_os_seek(fdb->handle, 0, 1);
+}
+
+/* B$FLOC: LOC(#channel): the last record read or written of a RANDOM file, the last byte of a BINARY one, else the
+   position in 128-byte blocks. */
+long B_FLOC(short channel)
+{
+    Fdb *fdb = open_fdb(channel);
+    long at = position_of(fdb);
+
+    if (fdb->mode == MD_RANDOM)
+        return at / fdb->record_length;
+    if (fdb->mode == MD_BINARY)
+        return at;
+    /* A sequential file moves in 128-byte blocks: an input file counts the blocks it has read, a part of the last one
+       included; an output file the blocks it has written. */
+    return fdb->mode == MD_INPUT ? (at + 127) / 128 : at / 128;
+}
+
+/* B$FSEK: SEEK(#channel): the next record of a RANDOM file, else the next byte. */
+long B_FSEK(short channel)
+{
+    Fdb *fdb = open_fdb(channel);
+    long at = position_of(fdb);
+
+    return fdb->mode == MD_RANDOM ? at / fdb->record_length + 1 : at + 1;
+}
+
 /* B$FATR: FILEATTR(#channel, field): 1 is the open mode, 2 the DOS handle. */
 long B_FATR(short channel, short field)
 {
@@ -418,7 +452,7 @@ SD *B_FINP(short count, short channel)
             text[at] = (char)c;
         } else if (scan_code_waiting) {
             scan_code_waiting = 0;
-            text[at] = (char)llrm_os_console_read_key();
+            text[at] = (char)dev_key_read();
         } else {
             byte code = cn_wait_key();
 
@@ -626,6 +660,12 @@ static void close_all(void)
     file_close(NULL, 0);
 }
 
+/* B$REST: RESET closes every open file. */
+void B_REST(void)
+{
+    close_all();
+}
+
 static Comp comp = {0, C_DK, {0, 0, 0, 0, close_all}};
 
 #define XI_FN file_xinit
@@ -638,6 +678,9 @@ void file_xinit(void)
 }
 
 #pragma aux B_OPEN "B$OPEN"
+#pragma aux B_FLOC "B$FLOC"
+#pragma aux B_FSEK "B$FSEK"
+#pragma aux B_REST "B$REST"
 #pragma aux B_KILL "B$KILL"
 #pragma aux B_NAME "B$NAME"
 #pragma aux B_MDIR "B$MDIR"

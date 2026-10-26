@@ -153,7 +153,7 @@ thread_local! {
 }
 
 /// The register a plain spill store writes to a fixed frame cell, and the cell.
-fn spill_store_of(one: &Insn) -> Option<(Reg, Mem)> {
+pub(crate) fn spill_store_of(one: &Insn) -> Option<(Reg, Mem)> {
     if !one.spill_store || !one.clobbers.is_empty() || !one.requires.is_empty() || !one.delivers.is_empty() {
         return None;
     }
@@ -170,7 +170,7 @@ fn spill_store_of(one: &Insn) -> Option<(Reg, Mem)> {
 
 /// Whether `one` may read a byte of `cell`: any mention but a plain store to
 /// it. An address of the frame taken may be read through.
-fn may_read(
+pub(crate) fn may_read(
     one: &Insn,
     cell: &Mem,
 ) -> bool {
@@ -187,7 +187,7 @@ fn may_read(
 
 /// Whether `one` may write a byte of `cell`: a store sunk past it would land
 /// over the newer value.
-fn overwrites(
+pub(crate) fn overwrites(
     one: &Insn,
     cell: &Mem,
 ) -> bool {
