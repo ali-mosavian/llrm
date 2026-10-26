@@ -126,14 +126,16 @@ pub fn names(
 }
 
 /// A far global's segment, named for `symbol`: a far pointer to code, as
-/// ON ERROR registers its handler, takes it.
+/// ON ERROR registers its handler, takes it. A near function's too: a far
+/// pointer made of its address is its code segment, never DGROUP.
 pub fn segment_name(
     module: &Module,
     id: GlobalId,
     symbol: &str,
     spaces: &llrm_mir::spaces::Spaces,
 ) -> Option<((Space, i64), String)> {
-    (module.global(id).address_space != spaces.near).then(|| ((Space::Group, segment_of(id)), format!("seg {symbol}")))
+    (module.global(id).address_space != spaces.near || module.global(id).function().is_some())
+        .then(|| ((Space::Group, segment_of(id)), format!("seg {symbol}")))
 }
 
 fn is_symbol(name: &str) -> bool {

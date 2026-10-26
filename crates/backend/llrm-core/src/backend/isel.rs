@@ -3481,6 +3481,23 @@ impl Selector<'_, '_, '_> {
         })
     }
 
+    /// The selector of a far pointer made from the near address `offset`: the
+    /// code segment where it is a function's, else DGROUP.
+    fn selector_of_near(
+        &self,
+        offset: &Loc,
+    ) -> (Space, i64) {
+        match offset {
+            Loc::Imm(Imm { address: Some(address), .. })
+                if usize::try_from(address.index).is_ok_and(|at| at < self.module.globals.len())
+                    && self.module.global(GlobalId(address.index as u32)).function().is_some() =>
+            {
+                (Space::Group, crate::backend::globals::segment_of(GlobalId(address.index as u32)))
+            }
+            _ => crate::hir::symbols::DGROUP,
+        }
+    }
+
     /// A far pointer's offset and selector words as immediates, where the
     /// pointer is a constant: a number, null among them, or near data's
     /// address in DGROUP.
@@ -3498,7 +3515,7 @@ impl Selector<'_, '_, '_> {
             return Ok(None);
         }
         let Some(offset) = self.symbol(instruction.operands[0])? else { return Ok(None) };
-        let (space, index) = crate::hir::symbols::DGROUP;
+        let (space, index) = self.selector_of_near(&offset);
         Ok(Some([offset, Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) })]))
     }
 
@@ -4041,7 +4058,7 @@ impl Selector<'_, '_, '_> {
                     for (into, from) in [
                         (
                             selector,
-                            if widened {
+                            if widened && self.module.global(global).function().is_none() {
                                 let (space, index) = crate::hir::symbols::DGROUP;
                                 symbol(space, index)
                             } else {

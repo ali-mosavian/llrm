@@ -503,3 +503,18 @@ fn a_function_from_llvm_ir_is_named_as_its_calling_convention_spells_it() {
     let listing = llrm_core::backend::masm::text(&built).unwrap();
     assert!(listing.contains("public _f\n") && listing.contains("public P\n"), "{listing}");
 }
+
+/// A near function's address cast to a far pointer took DGROUP as its
+/// selector, so a call through it jumped into the data segment. The selector
+/// is the function's own code segment.
+#[test]
+fn a_far_pointer_to_a_near_function_carries_its_code_segment() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n\
+                @ff = addrspace(1) global ptr addrspace(1) null\n\
+                define i16 @plain() {\n  ret i16 1\n}\n\
+                define void @set() {\n  store ptr addrspace(1) addrspacecast (ptr @plain to ptr addrspace(1)), ptr addrspace(1) @ff\n  ret void\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m16"]), text, "m").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("mov ax, seg _plain"), "{listing}");
+    assert!(!listing.contains("mov ax, DGROUP"), "{listing}");
+}
