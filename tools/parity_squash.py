@@ -1024,6 +1024,7 @@ def _in_target(target: Path | None, kind: str = "test"):
     return lambda command, **kw: subprocess.run(command, env={**os.environ, "CARGO_TARGET_DIR": str(target / kind)}, **kw)
 
 
+ALONE_JOBS = "2"  # PRs checked at once: three took 6 of 8 cargo processes beside the batch's tests
 SOURCE_SCANNING_PACKAGES = {"llrm-mir"}  # lib tests that scan other crates' sources (no_file_gains_*): upstream of the crates they judge, so a dependants run never reaches them
 
 
@@ -1752,8 +1753,14 @@ def preload_tools(names: tuple[str, ...] = TOOL_MODULES) -> None:
 def main() -> int:
     """The landing commands run at the landing's build priority (`buildslot.landing`); the others (audit, unlogged) start no cargo."""
     preload_tools()
-    from buildslot import landing  # noqa: PLC0415
+    from buildslot import LANDING, landing  # noqa: PLC0415
 
+    if sys.argv[1:2] == ["alone"]:
+        # the precheck of the next batch runs beside this one's tests: through buildslot like any cargo, not at the landing's priority (the runner exports BUILDSLOT_BYPASS=1,
+        # and six of eight cargo processes at load 108 were alone-0..5 outside every slot)
+        os.environ.pop("BUILDSLOT_BYPASS", None)
+        os.environ.pop(LANDING, None)
+        return dispatch()
     with landing():
         return dispatch()
 
@@ -1788,7 +1795,7 @@ def dispatch() -> int:
             heads[number] = git("rev-parse", "FETCH_HEAD").strip()
         # stdout is the survivors and nothing else: the scanners print their summary line, and the runner reads this output as PR numbers
         with contextlib.redirect_stdout(sys.stderr):
-            kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", "3")), cap=float(os.environ.get("ALONE_CAP", "600")))
+            kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", ALONE_JOBS)), cap=float(os.environ.get("ALONE_CAP", "600")))
         for number, why in dropped.items():
             print(f"{number}: REFUSED: alone: {why[:300]}", file=sys.stderr)
         print(f"alone: {len(numbers)} PRs, {HITS[0]} cached, {len(numbers) - HITS[0]} checked, {len(dropped)} dropped", file=sys.stderr)

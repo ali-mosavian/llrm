@@ -380,6 +380,29 @@ def test_a_head_whose_tests_did_not_run_is_not_cached_as_its_failure_set(tmp_pat
     assert ps.head_failures("abc", compute, cache=tmp_path) == {"integration header_copy::t"} and len(calls) == 2
 
 
+def test_the_alone_command_runs_its_cargo_through_buildslot_with_two_jobs_whatever_the_runner_exports(monkeypatch):
+    """The runner exports BUILDSLOT_BYPASS=1 and main() ran every command at the landing's priority: six of eight cargo processes at load 108 were alone-0..5 outside every slot."""
+    import buildslot
+
+    seen = {}
+
+    def fake(numbers, heads, **kw):
+        seen["slotted"] = buildslot.slotted(["cargo", "build"])
+        seen["jobs"] = kw["jobs"]
+        return list(numbers), {}
+
+    monkeypatch.setenv("BUILDSLOT_BYPASS", "1")
+    monkeypatch.setenv(buildslot.LANDING, "1")
+    monkeypatch.delenv("ALONE_JOBS", raising=False)
+    monkeypatch.setattr(buildslot, "tool", lambda: "buildslot")
+    monkeypatch.setattr(ps, "alone", fake)
+    monkeypatch.setattr(ps, "git", lambda *args, **_: "deadbeef")
+    monkeypatch.setattr(ps, "preload_tools", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["parity_squash.py", "alone", "11"])
+    assert ps.main() == 0
+    assert seen == {"slotted": ["buildslot", "cargo", "build"], "jobs": 2}, seen
+
+
 def test_each_offender_is_named_by_the_tests_that_failed_on_its_own_probe_with_its_own_panic():
     """The 10:24 batch refused #4898 #4918 #4926 #4927 #4936 with one identical list (the batch's whole failure set and a stale panic): five different failures read as one cause."""
     failed = {"1": {"a"}, "2": {"b"}, "3": set()}
