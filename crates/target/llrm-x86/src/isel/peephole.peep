@@ -154,6 +154,22 @@ rule restored_copy
     rewrite anchor @0 ; anchor @1
 
 
+// A reload of the cell a store just filled, into the register that filled it,
+// reads what the register still holds: nothing between writes the register,
+// the cell or what addresses it, and no call, volatile access or barrier
+// stands between. The pin's allocator never leaves the pair; the real-mode
+// register classes do (DEVIATE: no pin reference for them). The store stays:
+// the cell may be read later.
+meta forwarded = clobbers requires delivers spread group symbol frame_adjust volatile
+group forwarded_reloads
+    walk gap
+
+rule forwarded_reload
+    match   mov c:mem, r:reg ; ... holds_after(@0, *) ; mov r, c
+    when    free(@0, forwarded), free(@1, forwarded), same_width(r, c), width_in(r, [8, 16, 32])
+    rewrite @0 ; anchor @1
+
+
 // `T = S; T = op(T); S = T` is `S = op(S); T = S`: the same registers and
 // flags, one move fewer.
 group shuttles

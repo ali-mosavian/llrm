@@ -495,6 +495,46 @@ pub fn clear_of(
         .is_some_and(|(reads, writes)| reads.is_disjoint(&temporary) && writes.is_disjoint(&temporary.or(&source)))
 }
 
+/// What `crossed` leaves alone of a store `mov [cell], r`: the register `r`
+/// and what addresses the cell are not written, and the cell still holds what
+/// the store put there (`bodyfacts::_keeps`: a call, a volatile access, a
+/// barrier or any write that may reach the cell fails).
+pub fn holds_after(
+    cx: &Cx,
+    store: &Insn,
+    crossed: &Arc<Insn>,
+) -> bool {
+    let (Some(what), Some(stored)) = (&crossed.what, &store.what) else {
+        return false;
+    };
+    let ([Loc::Mem(cell)], [Loc::Reg(held)]) = (stored.dests.as_slice(), stored.sources.as_slice()) else {
+        return false;
+    };
+    if store.volatile
+        || crossed.volatile
+        || what.op == Operation::Barrier
+        || !crossed.clobbers.is_empty()
+        || !crossed.requires.is_empty()
+        || !crossed.delivers.is_empty()
+        || !crossed.spread.is_empty()
+        || crossed.group.is_some()
+        || crossed.symbol == Some(true)
+        || crossed.frame_adjust
+    {
+        return false;
+    }
+    let regs = cx.regs();
+    let Some((_, writes)) = _register_effects(regs, cx.bits(), crossed, false, true) else {
+        return false;
+    };
+    let mut guarded = BTreeSet::from([cell.through, cell.index_through, held.register]);
+    if let Some(addr) = cell.addr {
+        guarded.insert(RegId::from(addr.segment));
+    }
+    let guarded: Lanes = guarded.into_iter().flat_map(|one| _lanes(regs, one)).collect();
+    writes.is_disjoint(&guarded) && crate::backend::bodyfacts::_keeps(crossed, store, cell, true, cx.facts.body())
+}
+
 /// `load` may read its cell after `crossed`, which only materializes a
 /// register: it neither consumes nor replaces the loaded register nor
 /// changes anything the cell is addressed by. Instructions that write
