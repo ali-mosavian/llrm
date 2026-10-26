@@ -832,3 +832,21 @@ b6:
     assert!(after.contains("or disjoint i16 %i, -32768"), "{after}");
     assert!(!after.contains("xor"), "{after}");
 }
+
+/// A select arm under a compare of another width was rewritten to the
+/// compare's constant on every visit, never equal to it: the combine looped
+/// until memory ran out (jpeg_fixed.nib, `-Os`, 25 GB).
+#[test]
+fn a_select_arm_under_a_compare_of_another_width_does_not_loop() {
+    let after = piped(
+        "define i8 @f(i32 %x, i8 %y) {
+b0:
+  %c = icmp eq i32 %x, 256
+  %s = select i1 %c, i8 0, i8 %y
+  %r = xor i8 %s, 3
+  ret i8 %r
+}
+",
+    );
+    assert!(after.contains("ret"), "{after}");
+}
