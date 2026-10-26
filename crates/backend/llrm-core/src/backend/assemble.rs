@@ -335,7 +335,14 @@ pub fn assembled_by(
                     if let Some(error) = unprintable.take() {
                         return Err(error);
                     }
-                    masm::saved_first(masm::Procedure { body, ..procedure })
+                    let procedure = masm::exits_inserted(masm::saved_first(masm::Procedure { body, ..procedure }));
+                    if procedure.body.frame_exit.is_some() {
+                        let body = jumps::tails_merged_after_exits(procedure.body.clone(), cpu.size)
+                            .map_err(|error| error.to_string())?;
+                        masm::Procedure { body, ..procedure }
+                    } else {
+                        procedure
+                    }
                 };
                 procedures.push(procedure);
             }
@@ -933,7 +940,6 @@ fn staged(
             },
             false,
             landing.is_some(),
-            target.cpu.size,
         ) {
         registers.free = true;
         // Saved as any kept register is: its root, and the register a prologue
@@ -1050,7 +1056,8 @@ fn phased(
         }
     }
     let frame = frame.borrow().clone();
-    let reserve = -std::cmp::min(frame.slots.values().copied().min().unwrap_or(0), frame.floor);
+    // The reserved call area is the lowest bytes below the locals and spills.
+    let reserve = -std::cmp::min(frame.slots.values().copied().min().unwrap_or(0), frame.floor) + frame.call_area;
     if llrm_support::env_flag!("LLRM_FRAME_ORACLE") {
         eprintln!("{}", crate::backend::frameobjects::oracle_line(name, &frame, reserve));
     }

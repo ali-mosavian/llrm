@@ -193,3 +193,43 @@ fn test_an_assume_that_opens_the_header_is_not_a_guard_of_its_entry() {
 fn test_a_guard_that_opens_the_header_is_not_a_guard_of_its_entry() {
     assert!(!guarded_at_entry_by_header_start("call void (i1, ...) @llvm.experimental.guard(i1 %g)"));
 }
+
+/// `has_guards` read every instruction of the function for a call to
+/// `llvm.experimental.guard`, declared or not: 0.23 M Ir on d_faces -O2. The
+/// pin asks the module for the declaration.
+#[test]
+fn test_a_module_without_the_guard_declaration_reads_no_body_for_guards() {
+    let scans = |declaration: &str, call: &str| {
+        let text = format!(
+            "{declaration}
+define void @f(i1 %g) {{
+entry:
+  {call}
+  ret void
+}}
+"
+        );
+        let module = llrm_mir::parse::module(&text).expect("a module");
+        let (_, _, function) = module.functions().find(|(_, _, function)| !function.is_declaration()).expect("@f");
+        let layout = DataLayout::default();
+        let tree = DomTree::of(function);
+        let loops = LoopInfo::analyze(function, || &tree);
+        let assumptions = AssumptionCache::new(&module, function);
+        let cx = Cx {
+            context: &module.context,
+            globals: &module.globals,
+            metadata: &module.metadata,
+            function,
+            layout: &layout,
+            loops: &loops,
+            tree: &tree,
+            assumptions: &assumptions,
+        };
+        let before = super::implied::guard_scans();
+        let has = ScalarEvolution::new().has_guards(&cx);
+        (has, super::implied::guard_scans() - before)
+    };
+    assert_eq!(scans("declare void @h()", "call void @h()"), (false, 0));
+    let declared = "declare void @llvm.experimental.guard(i1, ...)";
+    assert_eq!(scans(declared, "call void (i1, ...) @llvm.experimental.guard(i1 %g)"), (true, 1));
+}

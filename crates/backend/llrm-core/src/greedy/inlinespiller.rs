@@ -366,6 +366,26 @@ impl<'a> InlineSpiller<'a> {
                 self.folded += 1;
                 continue;
             }
+            // `reMaterializeFor`: before making a load again in a register for
+            // one instruction, fold it into the instruction
+            // (`canFoldAsLoad`, `foldMemoryOperand` with the load as LoadMI),
+            // which asks for no register.
+            if let ([key], [Loc::Mem(cell)]) = (members.as_slice(), what.sources.as_slice())
+                && what.op == Operation::Move
+                && what.name.as_deref() == Some("mov")
+                && let Some(mut folded) =
+                    fold_memory_operand(&Arc::clone(lis.instr(*key)), reg, cell, self.template.bits, self.classes)
+            {
+                let reads = Arc::make_mut(&mut folded);
+                for read in &def.uses {
+                    if !reads.uses.contains(read) {
+                        reads.uses.push(*read);
+                    }
+                }
+                lis.rewrite_instr(block, *key, folded);
+                self.folded += 1;
+                continue;
+            }
             let value = lis.next_virtual_register();
             lis.reserve_virtual_register(value);
             // It stands beside the unit and claims none of the def's bytes,
@@ -1330,9 +1350,8 @@ impl Spiller for InlineSpiller<'_> {
         crate::liveness::liveintervals::COMPUTED.with(|one| one.borrow_mut().clear());
         let first_new = new_vregs.len();
         // Bisection aid: only the first N spills are written inline.
-        if std::env::var("LLRM_GREEDY_SPILLS")
-            .ok()
-            .and_then(|n| n.parse::<usize>().ok())
+        if llrm_support::env_var("LLRM_GREEDY_SPILLS")
+            .and_then(|n| n.to_str()?.parse::<usize>().ok())
             .is_some_and(|n| self.spilled.len() > n)
         {
             self.failed = true;
