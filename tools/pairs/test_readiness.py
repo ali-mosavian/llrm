@@ -73,8 +73,18 @@ def test_flag_first_reads_both_ablation_json_layouts():
 def test_a_two_flag_cause_goes_to_the_first_flag_with_an_owner_and_a_program_no_flag_moves_is_ra_peephole_not_none():
     """104 of 138 growers read `(none)`; 69 of them were programs no pass flag moves, 14 had two flags moving them equally."""
     ablation = {"a": "multi: sroa+tree-pre", "b": "multi: gcse+tree-ch", "c": "RA/peephole", "d": "gcse"}
-    assert [readiness.owner_of(name, [], ablation) for name in "abcd"] == ["w14", "w5", "RA/peephole", ""]
+    assert [readiness.owner_of(name, [], ablation) for name in "abcd"] == ["w14", "w5", readiness.RA_OWNER, ""]
 
 
 def test_the_causes_file_spelling_w_dash_n_is_the_same_owner_as_wn():
     assert readiness.owner_of("a", [{"match": "a", "owner": "w-2"}], {}) == "w2" == readiness.owner_of("b", [], {"b": "move-loop-invariants"})
+
+
+def test_owner_deltas_list_only_the_owners_that_moved_new_and_gone_owners_count_from_zero():
+    before = {"w2": [18, 788], "w5": [9, 388], "w3": [4, 75]}
+    after = {"w2": [16, 700], "w5": [9, 388], "w6": [1, 14]}
+    assert readiness.owner_deltas(before, after) == [
+        "  w2: programs 18 -> 16 (-2), bytes +788 -> +700 (-88)",
+        "  w3: programs 4 -> 0 (-4), bytes +75 -> +0 (-75)",
+        "  w6: programs 0 -> 1 (+1), bytes +0 -> +14 (+14)",
+    ]

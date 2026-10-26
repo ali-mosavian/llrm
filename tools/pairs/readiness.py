@@ -108,6 +108,9 @@ def tiny(base: dict) -> set[str]:
 FLAG_OWNERS = {"tree-ch": "w5", "lsr": "w3", "strength-reduce": "w3", "move-loop-invariants": "w2", "tree-pre": "w14", "sroa": "w14", "inline-functions": "w6"}  # the burn-down's flag -> owner sets (burndown-0652.md)
 
 
+RA_OWNER = "w13 (RA/peephole)"  # coordinator's routing of the programs no pass flag moves; the peephole-class ones go to w1 after its bisect
+
+
 def owner_of(name: str, rules: list[dict], ablation: dict[str, str]) -> str:
     """The owner column: the causes file's owner for the program (m16burndown_causes.toml, first match wins), else the owner of the flag whose removal shrinks it most (the ablation), else blank. `unassigned` and `untriaged` are blank: nobody holds the row. `RA/peephole` marks a program no pass flag moves by 10 B: nobody holds it either, but it is not untested."""
     import fnmatch
@@ -118,7 +121,7 @@ def owner_of(name: str, rules: list[dict], ablation: dict[str, str]) -> str:
     cause = ablation.get(name, "")
     if cause.startswith("multi: "):  # two flags move it about as much: the first one with an owner holds it
         return next((FLAG_OWNERS[flag] for flag in cause[len("multi: ") :].split("+") if flag in FLAG_OWNERS), "")
-    return FLAG_OWNERS.get(cause) or ("RA/peephole" if cause == "RA/peephole" else "")
+    return FLAG_OWNERS.get(cause) or (RA_OWNER if cause == "RA/peephole" else "")
 
 
 def flag_first(raw: dict) -> dict[str, dict[str, int | None]]:
@@ -135,6 +138,21 @@ def by_owner(larger: list[tuple[str, int, int]], rules: list[dict], ablation: di
     for row in larger:
         groups.setdefault(owner_of(row[0], rules, ablation) or "(none)", []).append(row)
     return {owner: sorted(rows, key=lambda r: r[1] - r[2]) for owner, rows in sorted(groups.items(), key=lambda kv: sum(r[2] - r[1] for r in kv[1]), reverse=True)}
+
+
+def owner_totals(larger: list[tuple[str, int, int]], rules: list[dict], ablation: dict[str, str]) -> dict[str, list[int]]:
+    """owner -> [programs, bytes] of the larger list: what a later run is compared with."""
+    return {owner: [len(rows), sum(b - a for _, a, b in rows)] for owner, rows in by_owner(larger, rules, ablation).items()}
+
+
+def owner_deltas(before: dict[str, list[int]], after: dict[str, list[int]]) -> list[str]:
+    """One line per owner whose programs or bytes moved between two runs, `owner: programs 12 -> 10 (-2), bytes +401 -> +300 (-101)`; owners new or gone count from zero."""
+    lines = []
+    for owner in sorted(set(before) | set(after)):
+        (n0, b0), (n1, b1) = before.get(owner, [0, 0]), after.get(owner, [0, 0])
+        if (n0, b0) != (n1, b1):
+            lines.append(f"  {owner}: programs {n0} -> {n1} ({n1 - n0:+}), bytes {b0:+} -> {b1:+} ({b1 - b0:+})")
+    return lines
 
 
 def report(header: list[str], sized: dict[str, tuple], clocks: tuple | None, tiny_rows: set[str] = frozenset(), owners: tuple[list[dict], dict[str, str]] | None = None) -> list[str]:
@@ -169,6 +187,7 @@ def main() -> int:
     parser.add_argument("--out", type=Path)
     parser.add_argument("--levels", nargs="+", default=["-Os", "-O2"])
     parser.add_argument("--no-clocks", action="store_true")
+    parser.add_argument("--previous", type=Path, help="the OUT.owners.json of an earlier run: the report ends with the per-owner delta (written beside every --out)")
     parser.add_argument("--causes", type=Path, help="m16burndown_causes.toml: fills the owner column and groups the larger lists by owner")
     parser.add_argument("--ablation", type=Path, help="m16burndown's ablation json (flag -> program -> bytes, plus base and tip): the flag owner for a program the causes file does not name")
     parser.add_argument("--scratch", type=Path, default=Path.home() / "scratch")
@@ -189,7 +208,15 @@ def main() -> int:
 
             ablation = attribute({k: v for k, v in size_table(new_dist, "-Os", cache).items() if v}, flag_first(json.loads(args.ablation.read_text())))
         owners = (tomllib.loads(args.causes.read_text()).get("program", []), ablation)
-    text = "\n".join(report(header, sized, clocks, tiny(base_clocks) if base_clocks else set(), owners)) + "\n"
+    lines = report(header, sized, clocks, tiny(base_clocks) if base_clocks else set(), owners)
+    if owners and "-Os" in sized:
+        totals = owner_totals(sized["-Os"][0], *owners)
+        if args.out:
+            args.out.with_suffix(".owners.json").write_text(json.dumps({"sha": git("rev-parse", args.new)[:10], "-Os": totals}))
+        if args.previous:
+            earlier = json.loads(args.previous.read_text())
+            lines += ["", f"-Os larger, per owner, {earlier['sha']} -> {git('rev-parse', args.new)[:10]}:", *(owner_deltas(earlier["-Os"], totals) or ["  no owner moved"])]
+    text = "\n".join(lines) + "\n"
     if args.out:
         args.out.write_text(text)
     print(text)
