@@ -153,7 +153,6 @@ pub fn has_fp(
     inline: bool,
     far: bool,
     landing: bool,
-    size: bool,
 ) -> bool {
     if !registers.optional
         || body.bits < 32
@@ -165,7 +164,7 @@ pub fn has_fp(
     {
         return true;
     }
-    let pinned = pinned_by(body, registers, pops, size);
+    let pinned = pinned_by(body, registers, pops);
     llrm_support::debug!(
         "frame",
         "{}: {}",
@@ -181,7 +180,6 @@ pub fn pinned_by(
     body: &LirBody,
     registers: &llrm_target::FrameRegisters,
     pops: &BTreeMap<i64, i64>,
-    size: bool,
 ) -> Option<Pinned> {
     let regs = body.regs();
     let pointer = registers.pointer;
@@ -223,9 +221,7 @@ pub fn pinned_by(
                     let [place] = &places[..] else { return Some(Pinned::OpaqueSpAdjustment) };
                     let width = match place {
                         Loc::Reg(reg) => reg.register.size() as i64,
-                        // Tuned for size a push of a value keeps the frame, for
-                        // masm to compare the two forms in bytes.
-                        Loc::Held(held) if !size => i64::from(held.width),
+                        Loc::Held(held) => i64::from(held.width),
                         Loc::Imm(imm) => i64::from(imm.width),
                         Loc::Mem(cell) => i64::from(cell.width),
                         _ => return Some(Pinned::OpaqueSpAdjustment),
@@ -258,12 +254,6 @@ pub fn pinned_by(
                         _ => 0,
                     };
                     if what.name.as_deref() == Some("call_frame_setup") {
-                        // Tuned for size the arguments' pushes of values keep
-                        // the frame (above); they are not made yet, so any
-                        // frame area does (DEVIATE CF5).
-                        if size && imm(0) != 0 {
-                            return Some(Pinned::OpaqueSpAdjustment);
-                        }
                         depth += imm(0) - imm(2);
                     } else {
                         depth -= imm(0) - imm(1);
@@ -278,7 +268,11 @@ pub fn pinned_by(
                     }
                     depth -= pops.get(&one.at).copied().unwrap_or(0);
                 }
-                Operation::Jump | Operation::Branch if what.indirect => return Some(Pinned::OpaqueSpAdjustment),
+                // A jump table's targets are the blocks it names, at the depth
+                // of the jump.
+                Operation::Jump | Operation::Branch if what.indirect && what.table.is_empty() => {
+                    return Some(Pinned::OpaqueSpAdjustment);
+                }
                 Operation::Return => leaves.insert(block.at, depth).map_or((), |_| ()),
                 _ if what.dests.iter().any(|place| matches!(
                     place,

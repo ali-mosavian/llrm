@@ -112,7 +112,7 @@ impl Builder<'_> {
     }
 
     /// `MERGE_VALUES` of the leaves: one result each.
-    fn merge(
+    pub(super) fn merge(
         &mut self,
         parts: &[SDValue],
     ) -> SDValue {
@@ -132,7 +132,7 @@ impl Builder<'_> {
     }
 
     /// `operand`'s leaves: itself for a scalar.
-    fn value_parts(
+    pub(super) fn value_parts(
         &mut self,
         operand: Operand,
     ) -> Result<Vec<SDValue>, Refused> {

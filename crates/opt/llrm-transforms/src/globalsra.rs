@@ -74,7 +74,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::globalsaa::embedded;
 use llrm_analysis::memory::constant_bytes;
 use llrm_mir::context::{Constant, ConstantKind, GlobalId};
 use llrm_mir::datalayout::DataLayout;
@@ -107,73 +106,13 @@ struct Access {
     constant: Option<u128>,
 }
 
-/// Every global's uses in `function`, found in one scan: as `globalopt::reach`
-/// finds one global's, none for a global one of whose uses is not its address.
-fn reach_all(
-    context: &llrm_mir::context::Context,
-    function: &llrm_mir::module::Function,
-    named: &mut BTreeMap<llrm_mir::context::ConstantId, BTreeSet<GlobalId>>,
-) -> BTreeMap<GlobalId, Option<Reach>> {
-    let mut work: BTreeMap<GlobalId, Vec<(InstId, usize)>> = BTreeMap::new();
-    let mut bad: BTreeSet<GlobalId> = BTreeSet::new();
-    for (_, inst) in function.walk() {
-        for (index, &operand) in function.instruction(inst).operands.iter().enumerate() {
-            let Operand::Constant(id) = operand else { continue };
-            let globals = named
-                .entry(id)
-                .or_insert_with(
-                    || {
-                        let mut found = BTreeSet::new();
-                        embedded(context, id, &mut found);
-                        found
-                    },
-                );
-            for &global in globals.iter() {
-                if crate::globalopt::addresses(context, id, global) {
-                    work.entry(global).or_default().push((inst, index));
-                } else {
-                    bad.insert(global);
-                }
-            }
-        }
-    }
-    let mut out = BTreeMap::new();
-    for (global, mut work) in work {
-        if bad.contains(&global) {
-            out.insert(global, None);
-            continue;
-        }
-        let mut found = Reach { uses: Vec::new(), moved: Vec::new() };
-        while let Some((inst, index)) = work.pop() {
-            let op = function.instruction(inst);
-            match op.opcode {
-                Opcode::GetElementPtr { .. }
-                | Opcode::Cast(llrm_mir::opcode::CastOp::BitCast | llrm_mir::opcode::CastOp::AddrSpaceCast)
-                    if index == 0 =>
-                {
-                    found.moved.push(inst);
-                    if let Some(value) = op.result {
-                        work.extend(function.users(value).iter().map(|one| (one.user, one.index as usize)));
-                    }
-                }
-                _ => found.uses.push((inst, index)),
-            }
-        }
-        out.insert(global, Some(found));
-    }
-    for global in bad {
-        out.insert(global, None);
-    }
-    out
-}
-
 /// Each function's uses of each global.
 fn reaching(module: &Module) -> BTreeMap<GlobalId, BTreeMap<GlobalId, Option<Reach>>> {
     let mut named = BTreeMap::new();
     let mut all = BTreeMap::new();
     for (function_id, _, function) in module.functions() {
         if !function.is_declaration() {
-            all.insert(function_id, reach_all(&module.context, function, &mut named));
+            all.insert(function_id, crate::globalopt::reach_all(&module.context, function, &mut named));
         }
     }
     all
@@ -226,13 +165,7 @@ pub fn split(
 
 /// The globals another global's initializer names.
 fn held(module: &Module) -> BTreeSet<GlobalId> {
-    let mut held = BTreeSet::new();
-    for global in &module.globals {
-        if let GlobalKind::Variable(variable) = &global.kind {
-            variable.initializer.iter().for_each(|&one| embedded(&module.context, one, &mut held));
-        }
-    }
-    held
+    crate::globalopt::held_by_live(module)
 }
 
 /// Every use of `id`, or none where one is not a plain load or store at a

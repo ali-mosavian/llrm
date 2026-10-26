@@ -266,6 +266,29 @@ fn a_shifted_difference_plus_a_value_is_a_lea_and_a_sub() {
     assert!(!names.iter().any(|n| n == "shl"), "{names:?}");
 }
 
+const SUM_PLUS_TIMES_SEVEN: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %s, i32 %u, i32 %y) {
+  %b = add i32 %s, %u
+  %m = mul i32 %y, 7
+  %t = add i32 %b, %m
+  ret i32 %t
+}
+";
+
+/// The pin's `m_Add` is commutative: `b + y * 7` is the hidden LEA whichever
+/// operand is the difference. Ours took only `y * 7 + b`, so x_dct (`5a + 3c +
+/// 7(b - d)`) kept `lea; sub; add; add` and ran 23 instructions over the pin.
+#[test]
+fn a_value_plus_a_shifted_difference_is_a_lea_and_a_sub() {
+    let module = llrm_mir::parse::module(SUM_PLUS_TIMES_SEVEN).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(!names.iter().any(|n| n == "shl"), "{names:?}");
+    assert_eq!(names.iter().filter(|n| matches!(n.as_str(), "add" | "sub" | "lea")).count(), 3, "{names:?}");
+}
+
 const WORD_CHAIN: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f(i16 %x) {
   %m = mul i16 %x, 25173
@@ -491,6 +514,35 @@ fn a_zero_extended_byte_read_as_a_dword_too_stays_a_dword() {
     assert!(matches!(extend.dests.as_slice(), [Loc::Held(h)] if h.width == 4), "{extend:?}");
 }
 
+const SIGN_SELECTS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %x) {
+  %c = icmp sgt i32 %x, -1
+  %r = select i1 %c, i32 1, i32 -1
+  ret i32 %r
+}
+define i32 @g(i32 %x) {
+  %c = icmp slt i32 %x, 0
+  %r = select i1 %c, i32 -6, i32 5
+  ret i32 %r
+}
+";
+
+/// `x > -1 ? 1 : -1` and `x < 0 ? ~5 : 5` were a test and a branch (`mov; test;
+/// jns; mov`); the pin's `SimplifySelectCC` makes the sign mask:
+/// `sar eax, 31; or eax, 1` and `sar eax, 31; xor eax, 5`.
+#[test]
+fn a_select_on_the_sign_is_the_sign_mask_not_a_branch() {
+    let module = llrm_mir::parse::module(SIGN_SELECTS).expect("parses");
+    for name in ["f", "g"] {
+        let done =
+            selected(&module, name, &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+                .unwrap_or_else(|e| panic!("{}", e.0));
+        let insns = done.body.insns();
+        let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+        assert!(seen.contains(&"sar") && !seen.iter().any(|n| n.starts_with('j')), "{name}: {seen:?}");
+    }
+}
+
 /// `if (c & 1) g(); else h();` written as a compare of the masked value, in
 /// both polarities and both arm orders, was `mov eax, [esp+4]; and al, 1; je`:
 /// only the truncate form narrowed. The pin's `X86ISD::CMP` case makes every
@@ -567,4 +619,126 @@ entry:
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .expect("selects");
     assert!(!done.body.returns_twice);
+}
+
+/// A constant a phi receives was `mov v3, 0; mov v4, v3`: the constant load
+/// made a value of its own and a copy carried it to the phi's register. The
+/// pin's `MOV32r0` defines that register, so `precse` sees one zero on both
+/// edges (x_life kept a second return block, +5 instructions).
+#[test]
+fn a_constant_a_phi_receives_is_defined_in_the_phis_register() {
+    let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(ptr %p, i32 %n, i32 %k) {
+b1:
+  %c = icmp ne i32 %k, 0
+  br i1 %c, label %pre, label %b2
+pre:
+  br label %b6
+b2:
+  %s = phi i32 [ 0, %b1 ], [ %v11, %b6 ]
+  ret i32 %s
+b6:
+  %p7 = phi ptr [ %p, %pre ], [ %p13, %b6 ]
+  %n8 = phi i32 [ %n, %pre ], [ %n12, %b6 ]
+  %a9 = phi i32 [ %v11, %b6 ], [ 0, %pre ]
+  %v10 = load i32, ptr %p7
+  %v11 = add i32 %v10, %a9
+  %n12 = add i32 %n8, -1
+  %p13 = getelementptr i8, ptr %p7, i32 4
+  %e = icmp eq i32 %n12, 0
+  br i1 %e, label %b2, label %b6
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let copies = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.name.as_deref() == Some("mov"))
+        .filter(|w| matches!(w.sources.as_slice(), [crate::model::ir::Loc::Held(_)]))
+        .count();
+    assert_eq!(copies, 0, "{} register copies", copies);
+}
+
+/// `a << (i & 31)` on 64 bits kept the select on bit 5 of the amount as `xor
+/// ecx, ecx; test cl, cl; je` after `shld; shl` (100 vs the pin's 72 insns in
+/// x_ll_arith): bit 5 of `i & 31` is known zero, so the pin has no fixup.
+#[test]
+fn a_wide_shift_by_a_masked_amount_has_no_fixup_branch() {
+    let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i64 %a, i32 %i) {
+  %m = and i32 %i, 31
+  %z = zext i32 %m to i64
+  %r = shl i64 %a, %z
+  ret i64 %r
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+    assert!(!seen.iter().any(|n| n.starts_with('j') || *n == "test"), "{seen:?}");
+}
+
+/// A 64-bit add made the carry a byte and put it back (`add; setb al; add al,
+/// -1; adc`, three instructions more than the pin's `add; adc`): the pin's
+/// `combineCarryThroughADD` reads the flags the `setb` read.
+#[test]
+fn a_wide_add_passes_the_carry_in_the_flags() {
+    let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i64 %a, i64 %b) {
+  %r = add i64 %a, %b
+  ret i64 %r
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+    assert!(seen.contains(&"adc") && !seen.contains(&"setb"), "{seen:?}");
+}
+
+const REMAINDER_BY_ELEVEN: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {
+  %r = srem i32 %a, 11
+  ret i32 %r
+}
+";
+
+/// `x % 11` at `-Os` was the multiply-by-reciprocal sequence on the DAG path
+/// (imul, shifts, a 5-byte magic immediate; recsum.c m16 -Os 1.53 times the old
+/// selector's clocks), where the old selector keeps the `idiv` at -Os.
+#[test]
+fn at_os_a_remainder_by_a_constant_keeps_its_idiv() {
+    let module = llrm_mir::parse::module(REMAINDER_BY_ELEVEN).expect("parses");
+    let names = |size: bool| {
+        let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+        cpu.size = size;
+        let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect::<Vec<_>>()
+    };
+    assert!(names(false).iter().all(|n| n != "idiv"), "speed: the reciprocal, as the pin");
+    assert!(names(true).iter().any(|n| n == "idiv"), "-Os: the divide stays: {:?}", names(true));
+}
+
+/// `u8 % 6` at `-Os` with the divide kept was `CannotSelect("UDivRem")` (SD302:
+/// no byte divide): examples/dice.nib and easing.nib stopped compiling.
+#[test]
+fn at_os_a_byte_remainder_by_a_constant_still_selects() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i8 @f(i8 %a) {
+  %r = urem i8 %a, 6
+  ret i8 %r
+}
+",
+    )
+    .expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    cpu.size = true;
+    selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
 }

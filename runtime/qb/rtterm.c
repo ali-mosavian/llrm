@@ -29,6 +29,12 @@ void B_CEND(void)
     qb_end();
 }
 
+/* B$STOP: STOP in a compiled program ends it as END does. */
+void B_STOP(void)
+{
+    qb_end();
+}
+
 /* B$CENP: the end of the module; an ON ERROR handler still running is a No
    RESUME error. */
 void B_CENP(void)
@@ -39,4 +45,5 @@ void B_CENP(void)
 }
 
 #pragma aux B_CEND "B$CEND"
+#pragma aux B_STOP "B$STOP"
 #pragma aux B_CENP "B$CENP"

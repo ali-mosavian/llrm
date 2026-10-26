@@ -27,13 +27,12 @@
 //! debug location on a remark ("Memory location is the same as accessed at"
 //! is not added), and no vector function database (`VFDatabase`).
 
-use std::collections::HashSet;
-
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::loopinfo::LoopGraph;
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::valuetracking::guarantee::{may_read_from_memory, may_write_to_memory};
+use llrm_support::hash::HashSet;
 
 use crate::aa::{AAInfo, AAResults, LocationSize, MemoryLocation};
 use crate::accessanalysis::AccessAnalysis;
@@ -105,7 +104,7 @@ impl LoopAccessInfo {
             stores_to_invariant_addresses: Vec::new(),
             has_complete_ptr_rt_checking: false,
             allow_partial,
-            symbolic_strides: SymbolicStrideMap::new(),
+            symbolic_strides: SymbolicStrideMap::default(),
             report: None,
         };
         if info.can_analyze_loop(se, cx) {
@@ -352,11 +351,11 @@ impl LoopAccessInfo {
         // once (on the write list). This is okay, since we are going to check
         // for conflicts between writes and between reads and writes, but not
         // between reads and reads.
-        let mut seen: HashSet<(Operand, llrm_mir::types::TypeId)> = HashSet::new();
+        let mut seen: HashSet<(Operand, llrm_mir::types::TypeId)> = HashSet::default();
 
         // Record uniform store addresses to identify if we have multiple
         // stores to the same address.
-        let mut uniform_stores: HashSet<Operand> = HashSet::new();
+        let mut uniform_stores: HashSet<Operand> = HashSet::default();
 
         for &st in &stores {
             let ptr = load_store_pointer_operand(cx, st).expect("a store");
@@ -732,6 +731,7 @@ fn is_vector_intrinsic_call(
                 | Intrinsic::Fixed { .. }
                 | Intrinsic::BitCount(_)
                 | Intrinsic::ByteSwap
+                | Intrinsic::BitReverse
                 | Intrinsic::FunnelShift { .. }
                 | Intrinsic::Abs
                 | Intrinsic::Compare { .. }

@@ -172,7 +172,7 @@ fn _pair(
     Some(Arc::new(joined))
 }
 
-fn _plain(one: &Insn) -> bool {
+pub(crate) fn _plain(one: &Insn) -> bool {
     !(!one.clobbers.is_empty()
         || !one.clobbers_high.is_empty()
         || !one.requires.is_empty()
@@ -187,7 +187,7 @@ fn _plain(one: &Insn) -> bool {
 }
 
 /// Whether `high` is the word immediately after `low` by one address.
-fn _next_word(
+pub(crate) fn _next_word(
     low: &Mem,
     high: &Mem,
 ) -> bool {

@@ -97,13 +97,17 @@ pub fn sink_block(
     let mut user_parent = None;
     let mut users = 0;
     for one in function.users(value) {
-        if q.intrinsic(one.user) == Some(Intrinsic::Assume) {
-            continue;
+        let user = function.instruction(one.user);
+        // `User::isDroppable` reads the callee only of a call.
+        if matches!(user.opcode, Opcode::Call(_)) {
+            llrm_mir::counts::bump(llrm_mir::counts::Event::SinkAssumeLookups);
+            if q.intrinsic(one.user) == Some(Intrinsic::Assume) {
+                continue;
+            }
         }
         if users > MAX_SINK_NUM_USERS {
             return None;
         }
-        let user = function.instruction(one.user);
         let mut in_block = function.parent(one.user)?;
         if user.opcode == Opcode::Phi {
             let Operand::Block(from) = user.operands[one.index as usize | 1] else { unreachable!("a phi's block") };
@@ -117,22 +121,13 @@ pub fn sink_block(
             if in_block == block || !q.dt?.is_reachable_from_entry(in_block) {
                 return None;
             }
-            if unique_predecessor(function, in_block) != Some(block) && !function.successors(in_block).is_empty() {
+            if function.sole_predecessor(in_block) != Some(block) && !function.successors(in_block).is_empty() {
                 return None;
             }
         }
         users += 1;
     }
     user_parent
-}
-
-/// `BasicBlock::getUniquePredecessor`.
-fn unique_predecessor(
-    function: &Function,
-    block: BlockId,
-) -> Option<BlockId> {
-    let predecessors = function.predecessors(block);
-    (predecessors.len() == 1).then(|| predecessors[0])
 }
 
 /// Whether `inst` may move to `dest`; the checks of `tryToSinkInstruction`.
@@ -163,7 +158,7 @@ pub fn sinkable(
     }
     if may_read(q, inst) && !instruction.metadata.iter().any(|(kind, _)| kind == "invariant.load") {
         let Some(block) = function.parent(inst) else { return false };
-        if unique_predecessor(function, dest) != Some(block) {
+        if function.sole_predecessor(dest) != Some(block) {
             return false;
         }
         let mut scan = function.next_in_block(inst);
