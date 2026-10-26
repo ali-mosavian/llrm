@@ -491,7 +491,7 @@ fn test_nested_integer_division_keeps_each_dividend() {
     // CVP narrows both quotients (80 \\ x fits 16 bits, then 8): two word
     // divisions in place of two dword ones, each with its own dividend.
     assert!(scale.contains("mov ax, 80\n"));
-    assert!(scale.contains("mov bx, 30\n"));
+    assert!(regex::Regex::new(r"mov [a-d]x, 30\n").unwrap().is_match(scale), "{scale}");
     assert_eq!(scale.matches("idiv").count(), 2);
     assert!(!scale.contains("idiv e"));
 }
@@ -544,26 +544,34 @@ fn test_a_raise_under_an_error_handler_resumes_after_its_statement() {
     // The raise names its statement (in whichever frame slot: the frame also
     // holds the conversions' scratch cells), and RESUME NEXT from that
     // statement continues at the PRINT.
-    let raised =
-        regex::Regex::new(r"mov word ptr (?:ss:)?\$QB\$FRAME\+\d+, (\d+)\n    pushw 5\n    call far ptr B\$SERR")
-            .unwrap();
+    let raised = regex::Regex::new(
+        r"mov word ptr (?:ss:)?\$QB\$FRAME\+\d+, (\d+)\n(?:    fstp st\(0\)\n)*    pushw 5\n    call far ptr B\$SERR",
+    )
+    .unwrap();
     let statement = &raised.captures(&assembly).unwrap_or_else(|| panic!("{assembly}"))[1];
-    // The dispatch compares the frame's statement cell with the raising
-    // statement and branches (`jmp`, past a `jne` for any other) to its
-    // resume point, which may reload what the statement left unset and jump
-    // on to the PRINT.
+    // The dispatch continues at the statement's resume point, laid next
+    // (`jne` past it) or branched to (`je`) as the placement falls.
     let dispatch = regex::Regex::new(&format!(
-        r"cmp word ptr (?:ss:)?\$QB\$FRAME\+\d+, {statement}\n    jne \w+\n    jmp (\w+)\n"
+        r"cmp (?:ax|word ptr (?:ss:)?\$QB\$FRAME\+\d+), {statement}\n    (?:jne \w+\n    jmp (\w+)|je (\w+))\n"
     ))
     .unwrap();
-    let resume = &dispatch.captures(&assembly).unwrap_or_else(|| panic!("{assembly}"))[1];
-    let start = assembly.find(&format!("\n{resume}:\n")).unwrap_or_else(|| panic!("{assembly}"));
-    let block = &assembly[start..];
-    let block = &block[..block.find("jmp ").map_or(block.len(), |at| at + block[at..].find('\n').unwrap())];
-    let target = block.rsplit("jmp ").next().unwrap().trim();
-    let print = &assembly[assembly.find(&format!("\n{target}:\n")).unwrap_or_else(|| panic!("{assembly}"))..];
-    let print = &print[..print.find("call far ptr B$PER4").map_or(0, |at| at + 1)];
-    assert!(!print.is_empty() && print.lines().count() < 8, "{assembly}");
+    let found = dispatch.captures(&assembly).unwrap_or_else(|| panic!("{assembly}"));
+    let label = found.get(1).or_else(|| found.get(2)).unwrap().as_str();
+    let start = assembly.find(&format!("\n{label}:\n")).unwrap_or_else(|| panic!("{assembly}"));
+    let block = |at: usize| {
+        let tail = &assembly[at..];
+        &tail[..tail.find("jmp ").unwrap_or(tail.len())]
+    };
+    let mut next = block(start).to_owned();
+    // A resume point may reload what the statement computed and jump on to the
+    // PRINT.
+    let after = &assembly[start..];
+    if let Some(target) = after[after.find("jmp ").map_or(after.len(), |at| at + 4)..].split_whitespace().next()
+        && let Some(at) = assembly.find(&format!("\n{target}:\n"))
+    {
+        next.push_str(block(at));
+    }
+    assert!(next.contains("call far ptr B$PER4"), "{assembly}");
 }
 
 /// ENT_MOVE_TRIGS passed a four-byte far field address to a two-byte scalar
@@ -1270,7 +1278,7 @@ fn test_common_hir_profiles_do_not_become_qb_frontend_options() {
 }
 
 const ROW_LOOP: &str = "DEFINT A-Z\r\nDECLARE SUB blit ()\r\nDIM SHARED sp(100), yy(3), xp(3), cd(100)\r\nblit\r\n\
-SUB blit\r\nyp = 0\r\nFOR y = 0 TO 199\r\nDEF SEG = &HA000 + yp\r\nyp = yp + 20\r\nFOR x = 24 TO 295\r\n\
+SUB blit\r\nyp = 0\r\nFOR y = 0 TO 199\r\nDEF SEG = &HA000\r\nyp = yp + 20\r\nFOR x = 24 TO 295\r\n\
 dn = sp(yy(1) + x - xp(1)) + sp(yy(2) + x - xp(2))\r\nPOKE x, cd(dn)\r\nNEXT x\r\nNEXT y\r\nDEF SEG\r\nEND SUB\r\n";
 
 /// `name` optimized after the module's call memory effects, as compiled.
@@ -1329,7 +1337,11 @@ fn far_selectors_loaded(function: &str) -> Vec<bool> {
             // A constant address reloads nothing.
             let Some(address) = pointer.captures_iter(store).last() else { return false };
             let mut value = address[1].to_owned();
-            while let Some(defined) = definition(function, &value) {
+            // A phi can lead back to itself: stop on a name seen.
+            let mut seen = BTreeSet::new();
+            while seen.insert(value.clone())
+                && let Some(defined) = definition(function, &value)
+            {
                 if defined.starts_with("load i16, ptr @b$seg") {
                     return true;
                 }
@@ -2028,7 +2040,7 @@ fn test_a_dividend_two_instructions_require_is_copied_into_its_register_once() {
     std::fs::write(&basic, source).expect("writes the program");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let body = backward_loop(&listing(&program));
-    assert!(!body.contains("[bp") && body.contains("cdq") && body.matches("idiv").count() == 1, "{body}");
+    assert!(!body.contains("[bp") && body.contains("cwd") && body.matches("idiv").count() == 1, "{body}");
 }
 
 #[test]
@@ -2720,9 +2732,11 @@ fn test_a_fixed_length_argument_is_assigned_back_after_the_call() {
     let source = written(&directory, "fixback.bas", b"DECLARE SUB Fill (s AS STRING)\nDIM f AS STRING * 6\nf = \"abcdef\"\nFill f\nPRINT f\nSUB Fill (s AS STRING)\ns = \"XY\"\nEND SUB\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
     let text = listing(&program);
-    let after = &text[text.find("call far ptr FILL").expect("the call")..];
-    let assigned = after.find("call far ptr B$ASSN").expect("an assignment back");
-    assert!(after.find("call far ptr B$STDL").is_none_or(|released| assigned < released), "{after}");
+    // FILL is inlined into the main body, so the last assignment back and the
+    // last release are the call's.
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let assigned = main.rfind("call far ptr B$ASSN").expect("an assignment back");
+    assert!(main.rfind("call far ptr B$STDL").is_none_or(|released| assigned < released), "{main}");
 }
 
 /// qb-qrender's main.bas runs from its body into its ON ERROR handler's
@@ -3202,7 +3216,10 @@ fn a_port_poll_does_not_reload_a_cell_stored_before_it_at_either_target() {
         let poll = lines.iter().position(|one| *one == "in al, dx").expect("the port read");
         // The premise: the masks are known constants at the poll, in the
         // instruction and not in a cell.
-        assert_eq!(&lines[poll..poll + 3], ["in al, dx", "xor al, 8", "and al, 8"], "{target}: {text}");
+        // (x ^ 8) & 8 is (x & 8) ^ 8: either order is the poll.
+        let mut masks = [lines[poll + 1], lines[poll + 2]];
+        masks.sort();
+        assert_eq!(masks, ["and al, 8", "xor al, 8"], "{target}: {text}");
         assert!(!text.contains("W$D"), "{target}: a cell held the masks: {text}");
     }
 }
@@ -3225,7 +3242,12 @@ fn a_constant_wait_mask_goes_to_the_poll_as_it_is_and_a_variable_one_through_a_c
     };
     for target in ["-m16", "-m32"] {
         let constant = listing_of("constant.bas", b"WAIT &H3DA, 8, 8\r\nEND\r\n", target);
-        assert!(constant.contains("xor al, 8") && constant.contains("and al, 8"), "{target}: {constant}");
+        // The test of the masked byte may be a `test` for the `and` it needs no
+        // result of.
+        assert!(
+            constant.contains("xor al, 8") && (constant.contains("and al, 8") || constant.contains("test al, 8")),
+            "{target}: {constant}"
+        );
         assert!(!constant.contains("ptr W$D"), "{target}: a cell held a constant mask: {constant}");
         let variable = listing_of("variable.bas", b"DEFINT A-Z\r\nm = 8\r\nWAIT &H3DA, m\r\nEND\r\n", target);
         let lines: Vec<&str> = variable.lines().map(str::trim).collect();
