@@ -1726,7 +1726,7 @@ def test_the_workspace_check_runs_beside_the_scanners_and_a_broken_build_wins():
     import inspect
 
     source = inspect.getsource(ps.merge_batch)
-    assert "beside(timed(took" in source and "overlap_verdict()" in source
+    assert "check_and_scan(" in source and "overlap_verdict()" in source
     assert "failed_units.clear()" in source[source.find("def build_refused") :][:400]
 
 
@@ -1801,4 +1801,12 @@ def test_every_scanner_is_in_the_default_scan_the_conditional_one_or_nightly():
     smoke = ps.parity_smoke_module()
     placed = set(ps.ALWAYS_SCANNERS) | {"build_script_reruns"} | set(smoke.NIGHTLY_ONLY)
     assert set(smoke.SCANNERS) <= placed, sorted(set(smoke.SCANNERS) - placed)
+
+
+def test_the_overlapped_check_returns_its_error_text_and_the_scan_verdict_not_each_others(tmp_path, monkeypatch):
+    """sq-5420.log 15:14: `broken` held the scan's True and the build's text was lost (`True[:300]` TypeError); #5420 was refused for a crash, and every later PR whose check failed would have been."""
+    monkeypatch.setenv("LAND_TMP", str(tmp_path))
+    assert ps.check_and_scan(lambda: "error[E0425]: cannot find value", lambda: True) == ("error[E0425]: cannot find value", True)
+    assert ps.check_and_scan(lambda: "", lambda: False) == ("", False)
+    assert ps.check_and_scan(lambda: "", lambda: True) == ("", True)
 
