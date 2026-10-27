@@ -251,6 +251,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD240 | sdag-b | `isMultiStoresCheaperThanBitsMerge` is true for two integer halves at m16 (the pin: a float and an integer half only): a far pointer or `long` is two word stores, not `shl; movzx; add`. Exit: none while the DAG keeps `BUILD_PAIR` | `x86/dag/actions.rs` |
 | SD241 | sdag-b | `ExpandShiftWithKnownAmountBit`: a clear amount bit without a legal or custom funnel shift stays a parts node (the pin shifts, subtracts and ors) | `selectiondag/legalize_types.rs` |
 | SD242 | sdag-b | `combineCarryThroughADD`: the `COND_A` form (a swapped `sub`) is not translated; nothing produces it at 32 bits yet. Exit: with `combineSBB`'s remaining folds | `selectiondag/x86_lowering.rs` |
+| SD243 | sdag-b | w12, m16: tuned for size, a dword constant argument with a byte-sized half is two `pushw`, not `pushd imm32`; the pin has no 16-bit push | `selectiondag/emit.rs` |
 
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |
 | SD101 | sdag-a | `freeze` folds away only for a constant or a `freeze` (`isGuaranteedNotToBeUndefOrPoison` is partial) | `selectiondag/fold.rs` |

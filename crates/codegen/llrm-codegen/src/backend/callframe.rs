@@ -218,7 +218,18 @@ impl LIRTransform for LowerCallFrame {
                 continue;
             }
             let mut insns: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len());
+            // The indirect call of the frame open now, to be told what its
+            // callee pops.
+            let mut open_call: Option<i64> = None;
             for one in block.insns.iter() {
+                if one.what.as_ref().is_some_and(|what| what.op == Operation::Call && what.indirect) {
+                    open_call = Some(one.at);
+                }
+                if name_of(one) == Some("call_frame_destroy")
+                    && let Some(call) = open_call.take()
+                {
+                    Arc::make_mut(&mut out.call_pops).insert(call, imm_of(one, 1).unwrap_or(0));
+                }
                 let (verb, count) = match name_of(one) {
                     Some("call_frame_setup") => ("sub", imm_of(one, 0).unwrap_or(0) - imm_of(one, 2).unwrap_or(0)),
                     Some("call_frame_destroy") => ("add", imm_of(one, 0).unwrap_or(0) - imm_of(one, 1).unwrap_or(0)),
