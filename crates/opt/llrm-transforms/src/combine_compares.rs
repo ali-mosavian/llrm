@@ -16,7 +16,7 @@
 //! `foldICmpTruncWithTruncOrExt`,
 //! `foldICmpWithConstant`, `foldICmpUsingBoolRange`,
 //! `foldIsMultipleOfAPowerOfTwo`, `foldICmpBinOp`, `foldICmpInstWithConstant`,
-//! `foldSignBitTest`, `foldOpIntoPhi`, `foldICmpInstWithConstantNotInt`,
+//! `foldSignBitTest`, `foldICmpInstWithConstantNotInt`,
 //! `foldICmpCommutative`, `foldCmpSelectOfConstants` and the select pair fold,
 //! the zero folds `foldIRemByPowerOfTwoToBitTest` and `stripNullTest`, and the
 //! `dyn_castNegVal` select fold.
@@ -49,7 +49,7 @@
 
 use llrm_mir::context::{mask, signed};
 use llrm_mir::knownbits::KnownBits;
-use llrm_mir::module::{InstId, Operand};
+use llrm_mir::module::{InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::simplify::simplify_instruction_in;
 use llrm_mir::valuetracking::range::{self, SelectOperand, SelectPatternFlavor};
@@ -212,16 +212,79 @@ pub fn visit_icmp(
     if let Some(r) = fold_icmp_inst_with_constant(c, inst, pred, op0, op1) {
         return r;
     }
+    if let Some(r) = fold_sign_bit_test(c, inst, pred, op0, op1) {
+        return r;
+    }
     if let Some(r) = fold_icmp_with_ext_of_ext(c, inst, pred, op0, op1) {
         return r;
     }
     if let Some(r) = fold_icmp_with_cast_op_of_constant(c, inst, pred, op0, op1) {
         return r;
     }
-    // OWED: foldSignBitTest, foldOpIntoPhi, foldICmpInstWithConstantNotInt,
-    // foldICmpCommutative, matchSymmetricPair, foldCmpSelectOfConstants and
-    // the two-select fold.
+    for operand in [op0, op1] {
+        if let Operand::Value(value) = operand
+            && let ValueDef::Instruction(phi) = c.function.value(value).def
+            && c.function.instruction(phi).opcode == Opcode::Phi
+        {
+            match c.fold_op_into_phi(inst, phi, false) {
+                Visit::None => {}
+                found => return found,
+            }
+        }
+    }
+    // OWED: foldICmpInstWithConstantNotInt, foldICmpCommutative,
+    // matchSymmetricPair, foldCmpSelectOfConstants and the two-select fold.
     if changed { Visit::Changed } else { Visit::None }
+}
+
+/// `foldSignBitTest`
+/// ([:1193](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L1193)):
+/// `icmp eq/ne (trunc? (X >> (bits-1))), 0` tests the sign of `X`, as does the
+/// base of two right shifts that sum to the width less one.
+///
+/// DEVIATE: no vectors.
+fn fold_sign_bit_test(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    use llrm_mir::opcode::CastOp;
+    if !matches!(pred, IntPredicate::Eq | IntPredicate::Ne) || constant(c, op1)?.0 != 0 {
+        return None;
+    }
+    let val = c.definition_of(op0)?;
+    let x = {
+        let q = query(c, Some(inst));
+        // m_TruncOrSelf(m_Shr(m_Value(X), m_Constant(C)))
+        let shifted = pattern::cast(&q, op0, CastOp::Trunc).map_or(op0, |(_, _, inner)| inner);
+        let shr = q.instruction_of(shifted).and_then(|(_, instruction)| match instruction.opcode {
+            Opcode::Binary(BinaryOp::LShr | BinaryOp::AShr) => Some((instruction.operands[0], instruction.operands[1])),
+            _ => None,
+        });
+        // `m_Constant(C)`: a shift by a value is the other arm's.
+        shr.filter(|&(_, amount)| constant(c, amount).is_some())
+    };
+    let x = match x {
+        Some((x, amount)) => {
+            let bits = c.context.types.int_bits(c.type_of(x))?;
+            let (shift, _) = constant(c, amount)?;
+            if shift != u128::from(bits) - 1 {
+                return None;
+            }
+            x
+        }
+        None => {
+            if !matches!(c.function.instruction(val).opcode, Opcode::Binary(_)) {
+                return None;
+            }
+            crate::combine_shifts::reassociate_shift_amts_of_two_same_direction_shifts(c, val, true)?
+        }
+    };
+    let zero = c.int(c.type_of(x), 0);
+    let sign = if pred == IntPredicate::Eq { IntPredicate::Sge } else { IntPredicate::Slt };
+    Some(new_icmp(c, inst, sign, x, zero))
 }
 
 /// `foldICmpWithZextOrSext`'s extension-against-extension arm
