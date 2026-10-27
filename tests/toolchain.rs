@@ -592,30 +592,38 @@ fn test_the_generated_header_is_far_only_where_far_code_is() {
 /// A flat target's block clears and copies are `rep stos`/`rep movs` on dwords
 /// through DS=ES, as m16's are through ES: the lowering took segment operands
 /// and 16-bit counts (a departure row), and a constant fill or copy on m32 was
-/// a loop. Neither sets a segment register here.
+/// a loop. Neither sets a segment register here. As the pin does, only arrays
+/// declared aligned are inlined; byte-aligned ones call the runtime.
 #[test]
 fn test_m32_block_operations_are_rep_string_instructions_without_segments() {
     let scratch = tempfile::tempdir().unwrap();
-    let source = scratch.path().join("m.c");
-    std::fs::write(&source, "char a[300], b[300];\nvoid clear(void) { unsigned i; for (i = 0; i < 300; i++) a[i] = 0; }\nvoid copy(void) { int i; for (i = 0; i < 300; i++) b[i] = a[i]; }\nint main(void) { clear(); copy(); return b[5]; }\n").unwrap();
-    let listing = |target: &str| {
+    let write = |name: &str, align: &str| {
+        let source = scratch.path().join(name);
+        std::fs::write(&source, format!("char a[300] {align}, b[300] {align};\nvoid clear(void) {{ unsigned i; for (i = 0; i < 300; i++) a[i] = 0; }}\nvoid copy(void) {{ int i; for (i = 0; i < 300; i++) b[i] = a[i]; }}\nint main(void) {{ clear(); copy(); return b[5]; }}\n")).unwrap();
+        source
+    };
+    let aligned = write("aligned.c", "__attribute__((aligned(4)))");
+    let bytes = write("bytes.c", "");
+    let listing = |source: &Path, target: &str| {
         let out = scratch.path().join(format!("{target}.asm"));
         let done = common::cc::llrm_c()
-            .arg(&source)
+            .arg(source)
             .args([&mode(target), "-O2", "-S", "-o", out.to_str().unwrap()])
             .output()
             .unwrap();
         assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
         std::fs::read_to_string(out).unwrap()
     };
-    let flat = listing("x86-m32");
+    let flat = listing(&aligned, "x86-m32");
     assert!(flat.contains("rep stosd") && flat.contains("rep movsd"), "{flat}");
     assert!(
         !flat.contains("DGROUP")
             && flat.lines().all(|line| !matches!(line.trim(), "pop es" | "push es") && !line.trim().ends_with(", es")),
         "{flat}"
     );
-    let real = listing("x86-m16");
+    let called = listing(&bytes, "x86-m32");
+    assert!(called.contains("call memset_") && called.contains("call memcpy_"), "{called}");
+    let real = listing(&aligned, "x86-m16");
     assert!(real.contains("rep stosd") && real.lines().any(|line| line.trim() == "pop es"), "{real}");
 }
 

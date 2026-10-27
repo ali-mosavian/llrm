@@ -137,6 +137,7 @@ impl SelectionDAG {
                     MemBase::Unknown => "unknown-address".to_string(),
                     MemBase::Global(id) => format!("@{}", self.global_names[id as usize]),
                     MemBase::Stack(index) => format!("%stack.{index}"),
+                    MemBase::CallArgument(offset) => format!("call-argument+{offset}"),
                     MemBase::ConstantPool(_) => "constant-pool".to_string(),
                     MemBase::JumpTable => "jump-table".to_string(),
                 };

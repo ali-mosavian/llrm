@@ -140,21 +140,37 @@ pub fn named(
     regs: Regs,
     one: &Insn,
 ) -> BTreeSet<RegId> {
-    let mut found: BTreeSet<RegId> =
-        one.call.iter().flat_map(|call| call.disturbs.iter().copied().map(|register| regs.root(register))).collect();
-    let Some(what) = &one.what else { return found };
-    for place in what.dests.iter().chain(&what.sources) {
-        match place {
-            Loc::Reg(ir::Reg { register, .. }) => {
-                found.insert(regs.root(*register));
-            }
-            Loc::Mem(ir::Mem { through, index_through, .. }) => {
-                found.extend([*through, *index_through].map(|register| regs.root(register)));
-            }
-            _ => {}
-        }
-    }
+    let mut found = BTreeSet::new();
+    any_named(regs, one, |register| {
+        found.insert(register);
+        false
+    });
     found
+}
+
+/// Whether `test` holds of a register `one` names (`named`'s, as it finds
+/// them, none collected): what `useOrDefCSROrFI` asks of each operand.
+fn any_named(
+    regs: Regs,
+    one: &Insn,
+    mut test: impl FnMut(RegId) -> bool,
+) -> bool {
+    if one.call.iter().flat_map(|call| call.disturbs.iter()).any(|register| test(regs.root(*register))) {
+        return true;
+    }
+    let Some(what) = &one.what else { return false };
+    what.dests
+        .iter()
+        .chain(&what.sources)
+        .any(
+            |place| match place {
+                Loc::Reg(ir::Reg { register, .. }) => test(regs.root(*register)),
+                Loc::Mem(ir::Mem { through, index_through, .. }) => {
+                    test(regs.root(*through)) || test(regs.root(*index_through))
+                }
+                _ => false,
+            },
+        )
 }
 
 /// Whether `one` reads or writes the frame or the stack pointer: a frame cell
@@ -343,6 +359,11 @@ struct Uses<'a> {
     kept: &'a BTreeSet<RegId>,
     frame_registers: BTreeSet<RegId>,
     framed: bool,
+    /// Per block, whether it touches: asked again by every pass over the
+    /// blocks, scanned once.
+    touched: std::cell::RefCell<Vec<Option<bool>>>,
+    /// How many blocks were scanned.
+    scans: std::cell::Cell<usize>,
 }
 
 impl<'a> Uses<'a> {
@@ -354,16 +375,24 @@ impl<'a> Uses<'a> {
         let regs = body.regs();
         let frame_registers =
             frame.iter().flat_map(|(pointer, stack)| [regs.root(*pointer), regs.root(*stack)]).collect();
-        Self { body, kept, frame_registers, framed: frame.is_some() }
+        Self {
+            body,
+            kept,
+            frame_registers,
+            framed: frame.is_some(),
+            touched: std::cell::RefCell::new(vec![None; body.blocks.len()]),
+            scans: std::cell::Cell::new(0),
+        }
     }
 
     fn insn_needs(
         &self,
         one: &Insn,
     ) -> bool {
-        let names = named(self.body.regs(), one);
-        (self.framed && (touches_frame(one) || names.iter().any(|register| self.frame_registers.contains(register))))
-            || names.iter().any(|register| self.kept.contains(register))
+        let regs = self.body.regs();
+        (self.framed
+            && (touches_frame(one) || any_named(regs, one, |register| self.frame_registers.contains(&register))))
+            || any_named(regs, one, |register| self.kept.contains(&register))
     }
 
     fn block(
@@ -380,7 +409,13 @@ impl Frame for Uses<'_> {
         block: BlockId,
         _: bool,
     ) -> bool {
-        self.block(block).insns.iter().any(|one| self.insn_needs(one))
+        if let Some(known) = self.touched.borrow()[block.0 as usize] {
+            return known;
+        }
+        self.scans.set(self.scans.get() + 1);
+        let found = self.block(block).insns.iter().any(|one| self.insn_needs(one));
+        self.touched.borrow_mut()[block.0 as usize] = Some(found);
+        found
     }
 
     fn terminators_touch(
@@ -478,6 +513,34 @@ mod tests {
     fn body(blocks: Vec<LirBlock>) -> LirBody {
         let blocks = crate::model::lir::shared(blocks);
         LirBody::new("wrap", blocks[0].at, blocks, IndexMap::default(), IndexMap::default())
+    }
+
+    /// The placement asks of each block twice (the walk, then the dirty
+    /// set): the second ask rescanned its instructions, 4596 scans of d_faces
+    /// where the blocks held half.
+    #[test]
+    fn test_a_block_asked_twice_is_scanned_once() {
+        let blocks = vec![block(0, vec![touch(0, RegId::EBX), ret(2)], vec![])];
+        let kept = BTreeSet::from([RegId::EBX]);
+        let body = body(blocks);
+        let uses = Uses::of(&body, &kept, None);
+        assert!(uses.touches(BlockId(0), false) && uses.touches(BlockId(0), true));
+        assert_eq!(uses.scans.get(), 1);
+    }
+
+    /// A register named only as the base or the index of a memory operand is
+    /// a use: `any_named` must find both, as `named`'s set did.
+    #[test]
+    fn test_a_register_named_as_an_address_base_or_index_is_found() {
+        let place = Loc::Mem(ir::Mem { through: RegId::ESI, index_through: RegId::EBX, ..ir::Mem::new(None, 4) });
+        let one =
+            insn(0, Semantics { name: Some("mov".into()), dests: vec![place], ..Semantics::new(ir::Operation::Move) });
+        let regs = body(vec![block(0, vec![], vec![])]).regs();
+        for register in [RegId::ESI, RegId::EBX] {
+            assert!(any_named(regs, &one, |named| named == regs.root(register)), "{register:?} not found");
+            assert!(named(regs, &one).contains(&regs.root(register)));
+        }
+        assert!(!any_named(regs, &one, |named| named == regs.root(RegId::EDI)));
     }
 
     /// The early exit saved every register the late path uses, and popped them

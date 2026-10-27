@@ -380,6 +380,50 @@ fn test_word_push_pair_joins_tuned_for_size_only_where_the_dword_is_no_longer() 
     }
 }
 
+/// `mov cx, 8; push cx` with `cx` dead after the push is `push 8`: the dag
+/// pushed each constant of a QB runtime call through a register, 15 bytes
+/// where the old selector's pushes were 8 (nbody.bas, +309 B under dag).
+#[test]
+fn test_a_constant_made_only_to_be_pushed_is_the_pushes_immediate() {
+    let cx = rl(RegId::CX, 2);
+    let made = plain(0, Operation::Move, "mov", vec![cx.clone()], vec![im(8, 2)], None);
+    let pushed = plain(1, Operation::Push, "push", vec![], vec![cx], None);
+    let finish = Arc::new(Insn {
+        reads_complete: true,
+        ..insn(2, None, Some(sem(Operation::Return, "retf", vec![], vec![])), vec![], vec![])
+    });
+    let input = body("argument", 0, vec![block(0, vec![made, pushed, finish], vec![]).into()]);
+
+    let result = fused(rules(), &input).insns();
+
+    let whats: Vec<_> = result.iter().filter_map(|one| one.what.as_ref()).collect();
+    assert!(whats.iter().all(|what| what.name.as_deref() != Some("mov")), "{whats:?}");
+    let push = whats.iter().find(|what| what.op == Operation::Push).expect("the push stays");
+    assert!(matches!(push.sources.as_slice(), [Loc::Imm(Imm { value: 8, .. })]), "{push:?}");
+}
+
+/// `mov eax, 0; push ax`: a zero made wide and pushed narrow stayed a register
+/// (`xor ax, ax; push ax`, 3 bytes against 2 for `push 0`; cmpord.bas: 24 of
+/// them, 559 `xor` over the corpus under dag).
+#[test]
+fn test_a_wide_constant_pushed_narrow_is_the_pushes_immediate() {
+    let eax = rl(RegId::AX, 4);
+    let made = plain(0, Operation::Move, "mov", vec![eax], vec![im(0, 4)], None);
+    let pushed = plain(1, Operation::Push, "push", vec![], vec![rl(RegId::AX, 2)], None);
+    let finish = Arc::new(Insn {
+        reads_complete: true,
+        ..insn(2, None, Some(sem(Operation::Return, "retf", vec![], vec![])), vec![], vec![])
+    });
+    let input = body("argument", 0, vec![block(0, vec![made, pushed, finish], vec![]).into()]);
+
+    let result = fused(rules(), &input).insns();
+
+    let whats: Vec<_> = result.iter().filter_map(|one| one.what.as_ref()).collect();
+    assert!(whats.iter().all(|what| what.name.as_deref() != Some("mov")), "{whats:?}");
+    let push = whats.iter().find(|what| what.op == Operation::Push).expect("the push stays");
+    assert!(matches!(push.sources.as_slice(), [Loc::Imm(Imm { value: 0, .. })]), "{push:?}");
+}
+
 #[test]
 fn test_constant_push_pair_preserves_stack_bytes() {
     for (high, low) in [(0x43F3i64, 0xC000i64), (-1, -2), (0, 0), (0x8000, 0x7FFF)] {
@@ -806,8 +850,8 @@ fn test_scaled_lea_does_not_require_another_shift() {
                 };
                 assert_eq!(names(&result), expected, "{amount} {following} {width}");
                 if following == "cmp" {
-                    let emitted =
-                        crate::frontends::bc::declen::decode(&code(result[0].what.as_ref().unwrap()), 0).unwrap().insn;
+                    let bytes = code(result[0].what.as_ref().unwrap());
+                    let emitted = iced_x86::Decoder::with_ip(16, &bytes, 0, iced_x86::DecoderOptions::NONE).decode();
                     assert_eq!(emitted.memory_index_scale(), 1 << amount);
                 }
             }

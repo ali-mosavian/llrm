@@ -12,8 +12,7 @@
 //! DEVIATE 1: no vectors, and only integer constants.
 //!
 //! DEVIATE 2: the folds that call a helper not yet translated are left out,
-//! each named where it stood: `SimplifyDemandedInstructionBits`
-//! (`combine_demanded`), `foldOrToXor`, `foldComplexAndOrPatterns`,
+//! each named where it stood: `foldOrToXor`, `foldComplexAndOrPatterns`,
 //! `foldIntegerPackFromVector`, `foldOrOfInversions`, the `i1` select folds
 //! (`foldAndOrOfSelectUsingImpliedCond`, `FoldOrOfLogicalAnds`),
 //! `matchBSwapOrBitReverse`, `matchOrConcat`,
@@ -263,9 +262,14 @@ pub fn visit_or(
     if !matches!(found, Visit::None) {
         return found;
     }
-    // DEVIATE 2: SimplifyDemandedInstructionBits, foldOrToXor,
-    // foldComplexAndOrPatterns, foldIntegerPackFromVector, foldOrOfInversions,
-    // and the i1 select folds.
+    // See if we can simplify any instructions used by the instruction whose
+    // sole purpose is to compute bits we don't care about.
+    let found = c.simplify_demanded_instruction_bits(inst);
+    if !matches!(found, Visit::None) {
+        return found;
+    }
+    // DEVIATE 2: foldOrToXor, foldComplexAndOrPatterns,
+    // foldIntegerPackFromVector, foldOrOfInversions, and the i1 select folds.
     if let Some(v) = fold_using_distributive_laws(c, inst) {
         return Visit::Replace(v);
     }
