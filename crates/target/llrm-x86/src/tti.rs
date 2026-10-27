@@ -81,6 +81,9 @@ pub struct RealMode {
     /// its `CodeSize` units: x87 moves each operand through the register
     /// stack (`qmove`: the model tied where the code grew 2 bytes).
     pub float_code_size_percent: i64,
+    /// (trips, bar): an `optsize` loop of at most that many trips is fully
+    /// unrolled under that unrolled size (DEVIATE U1). (0, 0): the pin's.
+    pub unroll_size_few_trips: (u32, u32),
 }
 
 impl RealMode {
@@ -475,6 +478,11 @@ fn intrinsic_price(
 impl Tti for X86 {
     fn name(&self) -> &'static str {
         "X86"
+    }
+
+    fn unroll_size_few_trips(&self) -> Option<(u32, u32)> {
+        let real = self.real_mode.as_ref().filter(|real| real.unroll_size_few_trips.0 != 0)?;
+        Some(real.unroll_size_few_trips)
     }
 
     /// SZ1: an inline that stays must not grow the code, where the target
