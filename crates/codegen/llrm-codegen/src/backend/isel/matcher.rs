@@ -100,6 +100,34 @@ pub struct Compiled {
     pub emit: Emits,
     /// The target's peephole rules, generated from the same directory.
     pub rules: &'static crate::backend::peep::Rules,
+    /// Where each name sits in its domain, built on first use.
+    pub index: std::sync::OnceLock<Index>,
+}
+
+/// The position of each name in the opcode, type and kind domains.
+pub struct Index {
+    opcodes: crate::support::hash::HashMap<&'static str, u16>,
+    types: crate::support::hash::HashMap<&'static str, u16>,
+    kinds: crate::support::hash::HashMap<&'static str, u16>,
+}
+
+/// The first position of each name, as a scan finds it.
+fn positions(names: &[&'static str]) -> crate::support::hash::HashMap<&'static str, u16> {
+    let mut out = crate::support::hash::HashMap::default();
+    for (at, &name) in names.iter().enumerate() {
+        out.entry(name).or_insert(at as u16);
+    }
+    out
+}
+
+impl Index {
+    fn of(compiled: &Compiled) -> Self {
+        Self {
+            opcodes: positions(compiled.opcodes),
+            types: positions(compiled.types),
+            kinds: positions(compiled.kinds),
+        }
+    }
 }
 
 impl Compiled {
@@ -293,16 +321,17 @@ impl Selector<'_, '_, '_> {
         m: &Match,
     ) -> [u16; 2 + 2 * OPERANDS] {
         let instruction = self.function.instruction(m.inst);
-        let position = |domain: &[&str], name: &str| {
-            domain.iter().position(|one| *one == name).expect("a name the generator knows") as u16
+        let at = self.compiled.index.get_or_init(|| Index::of(self.compiled));
+        let position = |domain: &crate::support::hash::HashMap<&'static str, u16>, name: &str| {
+            *domain.get(name).expect("a name the generator knows")
         };
         let mut out = [0; 2 + 2 * OPERANDS];
-        out[0] = position(self.compiled.opcodes, instruction.opcode.mnemonic());
-        out[1] = position(self.compiled.types, self.class(Some(instruction.ty)));
+        out[0] = position(&at.opcodes, instruction.opcode.mnemonic());
+        out[1] = position(&at.types, self.class(Some(instruction.ty)));
         for (index, &operand) in m.ops.iter().take(OPERANDS).enumerate() {
-            out[2 + 2 * index] = position(self.compiled.kinds, self.kind(operand));
+            out[2 + 2 * index] = position(&at.kinds, self.kind(operand));
             out[3 + 2 * index] =
-                position(self.compiled.types, self.class(self.function.operand_type(&self.module.context, operand)));
+                position(&at.types, self.class(self.function.operand_type(&self.module.context, operand)));
         }
         out
     }
@@ -1817,4 +1846,28 @@ mod tests {
 #[cfg(test)]
 thread_local! {
     pub(crate) static HOOKED: std::cell::RefCell<Vec<llrm_mir::BinaryOp>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+mod index_tests {
+    use super::*;
+
+    /// The hashed index replaced a scan: a repeated name must keep its first
+    /// position, or the automaton tests the wrong feature value.
+    #[test]
+    fn a_repeated_name_keeps_its_first_position_and_the_selector_domains_agree_with_a_scan() {
+        let at = positions(&["a", "b", "a"]);
+        assert_eq!((at["a"], at["b"]), (0, 1));
+        let compiled = m16();
+        for (domain, found) in [
+            (compiled.opcodes, positions(compiled.opcodes)),
+            (compiled.types, positions(compiled.types)),
+            (compiled.kinds, positions(compiled.kinds)),
+        ] {
+            assert!(!domain.is_empty());
+            for (scan, name) in domain.iter().enumerate() {
+                assert_eq!(found[name], domain.iter().position(|one| one == name).unwrap() as u16, "{scan} {name}");
+            }
+        }
+    }
 }

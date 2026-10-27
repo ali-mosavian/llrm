@@ -414,6 +414,7 @@ pub static SELECTOR: Compiled = Compiled {{
     cost: {ident}_cost,
     emit: {ident}_emit,
     rules: &RULES,
+    index: std::sync::OnceLock::new(),
 }};"
     )
     .unwrap();
