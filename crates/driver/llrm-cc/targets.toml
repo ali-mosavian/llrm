@@ -18,6 +18,8 @@ link = ["cc", "{objects}", "{flags}", "-o", "{output}"]
 # Flat DOS under DOS/32A. Clang's i386 layout differs from llrm's only in preferred alignments, so the module's layout
 # is replaced by `datalayout` once the facts that matter are equal. Functions are cdecl (`-mabi=sysv`).
 [x86_32-dos]
+# The i8086 fork's clang reads `#pragma aux NAME "LINK"`, which the OS layer's header (llrm_os.h) names its routines with.
+clang_env = "LLRM_CLANG_M16"
 triple = "i486-unknown-linux-gnu"
 datalayout = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"
 clang = ["-ffp-contract=off", "-target", "i486-unknown-linux-gnu", "-ffreestanding", "-fno-pic", "-fno-stack-protector", "-fno-asynchronous-unwind-tables",
