@@ -1173,6 +1173,24 @@ entry:
     assert!(names.iter().any(|n| n == "inc"), "{names:?}");
 }
 
+/// At -O2 the same copy is three dword load and store pairs, as the pin's
+/// `MaxStoresPerMemcpy` (8) allows; only -Os (SD225, limit 2) uses `rep movsd`.
+#[test]
+fn at_o2_a_12_byte_copy_is_inline_dword_moves() {
+    let module = llrm_mir::parse::module(M16_COPY_12).expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let copies =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.op == crate::model::ir::Operation::Copy).count();
+    let stores = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
+        .count();
+    assert_eq!((copies, stores), (0, 3), "three stores and no string move");
+}
+
 const M16_FAR_COPY_12: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
 
 @far = addrspace(1) global [12 x i8] zeroinitializer
