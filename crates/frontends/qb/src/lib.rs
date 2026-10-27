@@ -66,4 +66,6 @@ mod test_runtime_model;
 #[cfg(test)]
 mod callconv_tests;
 #[cfg(test)]
+mod test_lines;
+#[cfg(test)]
 mod test_pipeline;
