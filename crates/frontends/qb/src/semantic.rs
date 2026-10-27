@@ -3665,8 +3665,11 @@ impl Compiler {
                     // B$SCLR(stack, stack given) zeroes BC_DATA, closes the
                     // files and starts the heaps afresh.
                     "CLEAR" => {
-                        // CLEAR [,[bytes][,stack]]: only the stack size is lowered.
-                        if arguments.iter().take(2).any(|argument| !matches!(argument, Expr::Omitted(_))) || arguments.len() > 3 {
+                        // CLEAR [,[bytes][,stack]]: only the stack size is
+                        // lowered.
+                        if arguments.iter().take(2).any(|argument| !matches!(argument, Expr::Omitted(_)))
+                            || arguments.len() > 3
+                        {
                             return self.unsupported("CLEAR with a memory size");
                         }
                         let (stack, given) = match arguments.get(2) {
