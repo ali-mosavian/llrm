@@ -1340,6 +1340,45 @@ b0:
     assert!(!top.contains("@pick"), "the dense switch callee stayed a call:\n{top}");
 }
 
+/// A private callee with a stack frame, called once from a recursive function,
+/// stayed a call because `fits_with` never copies a body that allocates into a
+/// recursive caller; its only call goes with it, so the copy shrinks the code
+/// and the recursive path is no deeper than before (QCport
+/// `ent_lightning_` into `ent_use_targets_`: the pin inlines it).
+#[test]
+fn test_an_o2_last_call_to_a_private_callee_with_a_frame_is_inlined_into_a_recursive_caller() {
+    let top = at_o2(
+        "declare void @sink(ptr)
+
+define internal void @leaf(i16 %v) {
+b0:
+  %buf = alloca [16 x i8]
+  store i16 %v, ptr %buf
+  call void @sink(ptr %buf)
+  ret void
+}
+
+define i16 @rec(i16 %n) {
+b0:
+  %c = icmp sgt i16 %n, 0
+  br i1 %c, label %go, label %out
+
+go:
+  call void @leaf(i16 %n)
+  %m = sub i16 %n, 1
+  %r = call i16 @rec(i16 %m)
+  %s = add i16 %r, %n
+  ret i16 %s
+
+out:
+  ret i16 0
+}
+",
+        "@rec(",
+    );
+    assert!(!top.contains("@leaf"), "the last call stayed a call:\n{top}");
+}
+
 /// The pin's `GlobalOpt` runs between IPSCCP and the walk (pass 20 of
 /// `default<O2>` on sum_three): a static a norecurse function writes before it
 /// reads is a register when the loop passes run. Ours split and localized after
