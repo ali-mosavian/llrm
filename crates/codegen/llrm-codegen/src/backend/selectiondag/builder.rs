@@ -1283,9 +1283,8 @@ impl Builder<'_> {
                     let offset = self.dag.get_constant((displacement - first) as u128, self.target.dag.pointer);
                     let address = self.dag.get_node(ISD::Add, self.target.dag.pointer, &[sp, offset]);
                     let _size = self.dag.get_constant(u128::from(size), self.target.dag.pointer);
-                    let copy = self
-                        .inline_memcpy(chain, address, *value, size, usize::MAX, align, align)?
-                        .ok_or(Refused("byval copy"))?;
+                    let copy =
+                        self.always_inline_memcpy(chain, address, *value, size, align)?.ok_or(Refused("byval copy"))?;
                     stores.push(copy);
                 }
                 Parameter::Registers(regs) if regs.len() == pieces.len() => {
