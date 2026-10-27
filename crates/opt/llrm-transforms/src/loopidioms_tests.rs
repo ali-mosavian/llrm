@@ -393,6 +393,37 @@ b3:
     assert!(after.contains("call void @llvm.memset.p3.i32(ptr addrspace(3) "), "{after}");
 }
 
+/// At -Os a word fill through a huge pointer stays a loop: isel inlines the
+/// segment-splitting routine at the site, 90 bytes where the loop is a dozen
+/// (m16 `fillw`: code 86 -> 176).
+#[test]
+fn a_huge_pattern_fill_at_size_stays_a_loop() {
+    let text = "@big = addrspace(3) global [40000 x i16] zeroinitializer
+
+define i16 @f(i32 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b2 ]
+  %c = icmp slt i32 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %p = getelementptr inbounds [40000 x i16], ptr addrspace(3) @big, i32 0, i32 %i
+  store i16 4660, ptr addrspace(3) %p
+  %next = add i32 %i, 1
+  br label %b1
+
+b3:
+  ret i16 0
+}
+";
+    let mut module = parsed(&format!("{DOS}{text}"));
+    let after = managed(&mut module, LoopIdioms { size: true });
+    assert!(!after.contains("memset.pattern"), "{after}");
+}
+
 /// Two arrays of 64 words, each cell its own number, and @f(n, q): `body`
 /// run for `i` from 0 below `n`, or, where `down`, from `n - 1` to 0; then
 /// cell `q` of @a. Each cell is read back by some input, so a copy that

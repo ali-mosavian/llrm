@@ -295,6 +295,7 @@ pub fn filled_with(
     }
     let costs = if size { outer.target().size_costs() } else { outer.target().costs() };
     let bytes = outer.target().size_costs();
+    let huge = outer.target().spaces().huge;
     let mut changed = false;
     'again: loop {
         let shape = cfg::Shape::of(function);
@@ -302,7 +303,7 @@ pub fn filled_with(
             let found = {
                 let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
                 let facts = standing.of(&unit);
-                _fill(&unit.with_registers(facts), callees, &loop_, &costs, &bytes, size)
+                _fill(&unit.with_registers(facts), callees, &loop_, &costs, &bytes, size, huge)
             };
             if let Some(found) = found {
                 _filled(context, declared, function, &found);
@@ -402,6 +403,7 @@ fn _fill(
     costs: &OperationCosts,
     bytes_costs: &OperationCosts,
     size: bool,
+    huge: Option<u32>,
 ) -> Option<_Found> {
     let function = unit.function;
     let header = cfg::block(loop_.header);
@@ -512,6 +514,12 @@ fn _fill(
         Stored::Fill(byte) => matches!(byte, Byte::Pattern(..)),
         Stored::Copy(_) => false,
     };
+    // DEVIATE: isel inlines a huge fill as its segment-splitting routine, about
+    // 90 bytes at each site, against the loop's dozen (m16 `fillw` -Os: 86 ->
+    // 176).
+    if size && pattern && huge.is_some() && huge == unit.space(pointer) {
+        return None;
+    }
     if let Stored::Copy(copy) = &mut stored {
         copy.descending = descending;
         let Operand::Value(source) = copy.source else { return None };
