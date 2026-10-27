@@ -88,13 +88,14 @@ def show(nodes) -> str:
 
 
 def pin_text_of(text: str) -> str:
-    """`text` as the pin parses it."""
+    """`text` as the pin parses it; a QB program's `__main` is internal with no caller, so it is made a root."""
+    text = re.sub(r"define internal (.*@__main\()", r"define \1", text)
     return re.sub(r" (threeway|flagsresult)\b", "", text)
 
 
 def pin_text(path: Path) -> str:
-    """The IR as the pin parses it: llrm's own attributes (`threeway`, `flagsresult`) are not LLVM's."""
-    return re.sub(r" (threeway|flagsresult)\b", "", path.read_text())
+    """The IR as the pin parses it (see `pin_text_of`)."""
+    return pin_text_of(path.read_text())
 
 
 def instructions(ir: str) -> int:
