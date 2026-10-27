@@ -255,6 +255,8 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |
 | SD101 | sdag-a | `freeze` folds away only for a constant or a `freeze` (`isGuaranteedNotToBeUndefOrPoison` is partial) | `selectiondag/fold.rs` |
 | SD102 | sdag-a | an `invoke` has no `EH_LABEL`s and a `landingpad` builds nothing (QB's pad is entered by the runtime) | `selectiondag.rs` |
+| SD103 | sdag-a | `ExpandIntRes_MULFIX` takes its pieces from `forceExpandMultiply`, never `expandMUL_LOHI` | `selectiondag/legalize_types.rs` |
+| SD104 | sdag-a | an unsigned `ExpandIntRes_MULFIXSAT` scale above a half shifts `HH`, where the pin shifts `HL` (upstream fixed it) | `selectiondag/legalize_types.rs` |
 | SD300 | sdag-c | the adapter answers conservatively: no known bits, extending loads or memory operands on machine nodes | `selectiondag/dagisel_adapter.rs` |
 | SD301 | sdag-c | Select hand cases beyond shifts, stores and DIVREM (AND/OR/XOR shrink, MUL_LOHI, intrinsics, atomics) come with their patterns | `crates/backend/llrm-dagisel/src/x86_select.rs` |
 | SD302 | sdag-c | the i8 DIVREM remainder is `shr ax, 8` then `movzx` of the byte, not `movzx` of AH (the LIR has no AH) | `crates/backend/llrm-dagisel/src/x86_divrem.rs` |

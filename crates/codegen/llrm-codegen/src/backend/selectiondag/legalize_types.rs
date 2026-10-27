@@ -1227,12 +1227,12 @@ impl<'a> TypeLegalizer<'a> {
     /// half-width pieces, shifted right by the scale, and for the saturating
     /// forms clamped by the bits above the result.
     ///
-    /// DEVIATE SD330: the pieces come from `forceExpandMultiply`, never
+    /// DEVIATE SD103: the pieces come from `forceExpandMultiply`, never
     /// `expandMUL_LOHI` (which uses a legal `UMUL_LOHI` of the half when there
     /// is one): the same value, more instructions. Exit: translate
     /// `expandMUL_LOHI`. Owner sdag-a. Review 2026-11-27.
     ///
-    /// DEVIATE SD331: an unsigned scale above a half shifts `HH`, where the
+    /// DEVIATE SD104: an unsigned scale above a half shifts `HH`, where the
     /// pin shifts `HL` (its own comment says `HH`; upstream main fixed it):
     /// bits `64 + scale` and up of the product lie in `HH`. Exit: the next
     /// pin bump. Owner sdag-a. Review 2026-11-27.
