@@ -3,6 +3,7 @@
 
 pub mod addressing;
 pub mod calling;
+pub mod isa;
 pub mod layout;
 pub mod machine;
 pub mod object;
@@ -15,6 +16,7 @@ pub mod registers;
 pub mod routines;
 pub mod runtime;
 pub mod timings;
+pub mod tune;
 
 use std::rc::Rc;
 

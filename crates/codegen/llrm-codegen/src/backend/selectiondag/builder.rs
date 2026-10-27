@@ -89,6 +89,15 @@ pub struct BuilderTarget {
     pub opt_size: bool,
     /// The build is for the least size (`-Oz`, the pin's `minsize`).
     pub min_size: bool,
+    /// At size, the most stores a constant memset is inline for; 0 where the
+    /// pin's limit stands. Real mode: a dword store is 4 bytes (prefix, opcode,
+    /// ModRM, disp8) against 13 for the fill (`lea di`, `mov es,ss`, `mov cx`,
+    /// `rep stos`, the zero) that also takes ax, cx and di from the code
+    /// around it, so four.
+    pub memset_stores_size: usize,
+    /// The same for the load and store pairs of a constant memcpy: a dword
+    /// pair is 8 bytes against about 16 for `rep movs`, so two.
+    pub memcpy_moves_size: usize,
     /// For a program whose ABI gives its runtime routines contracts: whether
     /// the convention models each call of a `llrm.qb.` routine, by call. A call
     /// not listed, or listed with a reason, is refused.
@@ -159,6 +168,24 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with its size limit of memcpy pairs.
+    pub fn with_memcpy_moves_size(
+        mut self,
+        moves: usize,
+    ) -> BuilderTarget {
+        self.memcpy_moves_size = moves;
+        self
+    }
+
+    /// This target with its size limit of memset stores.
+    pub fn with_memset_stores_size(
+        mut self,
+        stores: usize,
+    ) -> BuilderTarget {
+        self.memset_stores_size = stores;
+        self
+    }
+
     /// This target with a stack alignment, whatever the target's is.
     pub fn with_stack_alignment(
         mut self,
@@ -208,6 +235,8 @@ impl BuilderTarget {
             jump_tables: true,
             opt_size: false,
             min_size: false,
+            memset_stores_size: 0,
+            memcpy_moves_size: 0,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -236,6 +265,8 @@ impl BuilderTarget {
             jump_tables: true,
             opt_size: false,
             min_size: false,
+            memset_stores_size: 0,
+            memcpy_moves_size: 0,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -711,6 +742,18 @@ impl Builder<'_> {
                 Ok(made)
             }
         }
+    }
+
+    /// The byte register of a dword one: `EAX` -> `AL`; none for `ESI`, `EDI`.
+    fn byte_register(reg: llrm_lir::registers::RegId) -> Option<llrm_lir::registers::RegId> {
+        use llrm_lir::registers::RegId;
+        Some(match reg {
+            RegId::EAX => RegId::AL,
+            RegId::EBX => RegId::BL,
+            RegId::ECX => RegId::CL,
+            RegId::EDX => RegId::DL,
+            _ => return None,
+        })
     }
 
     /// The word register of a dword one: `EAX` -> `AX`.
@@ -1243,7 +1286,7 @@ impl Builder<'_> {
                             mem_vt: vt,
                             align: 1,
                             volatile: false,
-                            base: MemBase::Unknown,
+                            base: MemBase::CallArgument((displacement - first + index as i64 * part_bytes) as i32),
                             ext: None,
                             space: 0,
                         };
@@ -1282,6 +1325,17 @@ impl Builder<'_> {
                             .flatten();
                         if let Some(word) = word {
                             copies.push((word, piece));
+                            continue;
+                        }
+                        // and a byte one in the byte register (`DL`, not
+                        // `EDX`): the callee truncates
+                        // it, so extending it is a 6-byte
+                        // `mov edx, 12` for a 2-byte `mov dl, 12`
+                        let byte = (vt == EVT::I8 && self.target.dag.pointer == EVT::I16)
+                            .then(|| Self::byte_register(reg))
+                            .flatten();
+                        if let Some(byte) = byte {
+                            copies.push((byte, piece));
                             continue;
                         }
                         let piece = if vt.is_integer() && vt.size_in_bits() < width {

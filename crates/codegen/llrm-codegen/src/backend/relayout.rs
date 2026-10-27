@@ -321,6 +321,10 @@ impl Moves<'_> {
         &self,
         private: &[(Addr, u32)],
     ) -> Option<Vec<(Addr, u32)>> {
+        // A call that may reach the whole frame has no private range to move.
+        if private.is_empty() {
+            return Some(Vec::new());
+        }
         let (whole, size) = WHOLE_FRAME;
         let (low, high) = (whole.disp, whole.disp + i64::from(size));
         let mut reach = std::collections::BTreeSet::new();
@@ -473,6 +477,19 @@ mod tests {
         let moves = Moves { frame: Some(&frame), homes: &homes, hole: 6 };
         let reach = |ranges: &[(i64, i64)]| crate::model::lir::outside(&ranges.iter().copied().collect());
         assert_eq!(moves.private(&reach(&[(-40, -8), (4, 12)])), Some(reach(&[(-46, -14), (4, 12)])));
+    }
+
+    /// A call that reaches the whole frame (no private range) made the second
+    /// layout give up: dag grep.nib -Os kept every spill below its 1 KiB
+    /// buffer, 56 far operands against the old selector's 5.
+    #[test]
+    fn test_a_call_that_reaches_the_whole_frame_moves_with_the_slots() {
+        use super::Moves;
+        use crate::backend::frame::Frame;
+        let frame = Frame::new(0);
+        let homes = crate::support::hash::IndexMap::default();
+        let moves = Moves { frame: Some(&frame), homes: &homes, hole: 6 };
+        assert_eq!(moves.private(&[]), Some(Vec::new()));
     }
 
     /// The second layout moved a cell but kept its old slot's tag, so the tags

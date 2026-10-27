@@ -77,8 +77,9 @@
 //!   simplified again with the call inlined, is smaller by the target's size
 //!   cost (`walk.rs`, callers of at most 300 instructions; the sites of a
 //!   private callee that dies with its last call are tried together, its body
-//!   credited). The pin's cost does not follow a load through a pointer
-//!   argument, so it never sees the loop or the arithmetic fold.
+//!   credited; so are the sites of a private callee called only from this
+//!   caller, whatever they pass). The pin's cost does not follow a load through
+//!   a pointer argument, so it never sees the loop or the arithmetic fold.
 //! - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
 //!   attribute decision.
 //! - D7: the minsize loop penalty counts retreating-edge headers, not
@@ -2549,7 +2550,8 @@ pub fn sites(
 }
 
 /// `sites`, and the sites the target's -Os bound alone refused whose call
-/// passes a constant or a stack slot (SZ2): `trials`
+/// passes a constant or a stack slot, or whose private callee has no call but
+/// these (SZ2): `trials`
 /// takes their copies, for the walk to try inlined against not.
 #[allow(clippy::too_many_arguments)]
 pub fn sites_with_trials(
@@ -2570,13 +2572,31 @@ pub fn sites_with_trials(
     let GlobalKind::Function(caller) = &module.global(caller_id).kind else { return out };
     let context = DecideContext { counts, addressed, recursive, params, size, always_only, tti };
     let frequencies = caller_frequencies(module, layout, caller);
+    // The calls to each callee here: a private callee all of whose calls are
+    // here goes with the last one inlined.
+    let mut here: llrm_support::hash::IndexMap<GlobalId, i64> = Default::default();
+    if trials.is_some() {
+        for (_, inst) in caller.walk() {
+            if let Some(callee) = llrm_mir::memory::callee(&module.context, caller, inst) {
+                *here.entry(callee).or_default() += 1;
+            }
+        }
+    }
+    let goes = |callee: GlobalId| {
+        local_linkage(module.global(callee).linkage)
+            && !addressed.contains(&callee)
+            && counts.get(&callee).is_some_and(|all| here.get(&callee) == Some(all))
+    };
     for (_, inst) in caller.walk() {
         let Some(decision) = decide(module, layout, caller_id, inst, &context, &frequencies) else { continue };
         if let Some(decided) = decided.as_deref_mut() {
             decided.push((inst, decision.callee, decision.cost.clone()));
         }
         let blocked = matches!(decision.cost, InlineCost::Cost { blocked: true, .. });
-        if !decision.inline && !(blocked && trials.is_some() && worth_a_trial(module, caller, inst, decision.callee)) {
+        let worth = blocked
+            && trials.is_some()
+            && (goes(decision.callee) || worth_a_trial(module, caller, inst, decision.callee));
+        if !decision.inline && !worth {
             continue;
         }
         let GlobalKind::Function(callee) = &module.global(decision.callee).kind else { continue };

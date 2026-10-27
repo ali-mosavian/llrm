@@ -95,6 +95,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [algebraic-696-note](algebraic-696-note.md) | algebraic@696 deleted: the pair by bucket, the costs and what is owed |
 | [qcport-o2-size](qcport-o2-size.md) | AM-QC-1: QCport -O2 size by cause (unrolling, inlining) and module |
 | [cleanup-bucket-by-pass](cleanup-bucket-by-pass.md) | The machine clean-up bucket (172.3 M vs the pin's 49.4) one row per pass, with a proposed owner |
+| [gap-like-for-like](gap-like-for-like.md) | The d_faces m32 -O2 gap to the pin by group, with the isel and combine work counted once, and an owner per row |
 | [compile-time-plan-scalar-ipo](compile-time-plan-scalar-ipo.md) | Scalar and module/IPO compile time: dated plan to the pin |
 | [emit-baselines](emit-baselines.md) | Compile costs measured to an object: old and new |
 | [emit-plan](emit-plan.md) | Emit compile-time bucket: dated plan to the pin's AsmPrinter and MC |
@@ -108,6 +109,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [lsr-callees](lsr-callees.md) | LSR callees against the pin, same IR — w-3, 2026-10-22 |
 | [machine-scheduler-plan](machine-scheduler-plan.md) | Machine Instruction Scheduler (codegen row 65) |
 | [machine-cleanup-compile-plan](machine-cleanup-compile-plan.md) | Machine clean-up compile time: plan to 1.0x of the pin |
+| [shared-liveness-poc](shared-liveness-poc.md) | Shared liveness across the scheduler and allocator: worth under 0.5% of the compile |
 | [machinecombiner-translation-plan](machinecombiner-translation-plan.md) | Translating MachineCombiner (slot 40) |
 | [old-allocator-modules](old-allocator-modules.md) | Old allocator modules: last callers and the PR that deletes each |
 | [peephole-vs-pin](peephole-vs-pin.md) | Peephole cost by sub-pass against the pin on d_faces -O2 (2026-10-25) |
@@ -140,6 +142,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [selectiondag-switch-plan](selectiondag-switch-plan.md) | SelectionDAG switch plan, revised 2026-10-22 |
 | [selectiondag-builder-gaps](selectiondag-builder-gaps.md) | What the pin's `visit*` has that the DAG builder lacks (sdag-a) |
 | [selectiondag-far-builder](selectiondag-far-builder.md) | Far and huge pointers in the DAG builder (sdag-a) |
+| [old-selector-reds](old-selector-reds.md) | The 11 old-selector tests ignored since #4992, with the delta and m16 size of each |
 | [old-selector-retirement](old-selector-retirement.md) | What the old selector leaves to retire after the DAG flip, surveyed by reading |
 | [selectiondag-default-readiness](selectiondag-default-readiness.md) | What must be true to make `--isel=dag` the default (sdag-a) |
 | [jumps-profile-d_faces](jumps-profile-d_faces.md) | Line profile of ControlFlow (`jumps`) on d_faces -O2 against the pin's BranchFolder (2026-10-25) |
