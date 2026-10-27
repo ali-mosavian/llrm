@@ -205,3 +205,25 @@ fn a_compare_of_extensions_of_different_widths_extends_the_narrower_source() {
         "  %0 = sext i8 %y to i16\n  %1 = icmp slt i16 %x, %0\n  ret i1 %1\n",
     );
 }
+
+/// `foldSignBitTest`: the sign bit shifted down and compared with zero is a
+/// compare of the value with zero (a `shr` by the width less one, a `trunc` of
+/// it, or two shifts that add up to it).
+#[test]
+fn test_a_sign_bit_extraction_compared_with_zero_is_a_sign_test() {
+    check(
+        "i32 %x",
+        "  %s = lshr i32 %x, 31\n  %r = icmp eq i32 %s, 0\n  ret i1 %r\n",
+        "  %0 = icmp sgt i32 %x, -1\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x",
+        "  %s = ashr i32 %x, 31\n  %r = icmp ne i32 %s, 0\n  ret i1 %r\n",
+        "  %0 = icmp slt i32 %x, 0\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x",
+        "  %s = lshr i32 %x, 31\n  %t = trunc i32 %s to i8\n  %r = icmp eq i8 %t, 0\n  ret i1 %r\n",
+        "  %0 = icmp sgt i32 %x, -1\n  ret i1 %0\n",
+    );
+}
