@@ -146,3 +146,42 @@ fn a_switch_compare_leaves_for_its_case_with_the_odds_of_one_case_among_the_rest
     }
     assert!(compares > 0, "a compare that leaves for a case");
 }
+
+const SELECT_LOOP: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %n) {
+entry:
+  br label %loop
+loop:
+  %x = phi i32 [ %n, %entry ], [ %next, %loop ]
+  %odd = and i32 %x, 1
+  %is = icmp eq i32 %odd, 0
+  %half = lshr i32 %x, 1
+  %up = mul i32 %x, 3
+  %next = select i1 %is, i32 %half, i32 %up
+  %more = icmp ne i32 %next, 1
+  br i1 %more, label %loop, label %done
+done:
+  ret i32 %next
+}
+";
+
+/// x_collatz's loop at -O1 on the 486 (no `cmov`): the select splits the loop
+/// block, and the branch with the IR's 97% back edge ends its last piece. The
+/// edges were stated on the first piece, found no such successor and were
+/// dropped, so the back edge was 50% and placement did not rotate the loop:
+/// 28348 taken branches against the pin's 14767.
+#[test]
+fn a_back_edge_of_a_block_split_by_a_select_keeps_the_ir_odds() {
+    let module = llrm_mir::parse::module(SELECT_LOOP).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let body = &done.body;
+    let back = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.succ.iter().filter(|to| **to < block.at).map(move |to| (block.at, *to)))
+        .filter_map(|edge| body.odds.taken.get(&edge).copied())
+        .max()
+        .expect("a back edge with odds");
+    assert!(f64::from(back) > 0.9 * f64::from(crate::model::lir::BlockOdds::CERTAIN), "the back edge is {back}");
+}

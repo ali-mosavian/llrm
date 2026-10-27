@@ -227,3 +227,36 @@ fn test_a_sign_bit_extraction_compared_with_zero_is_a_sign_test() {
         "  %0 = icmp sgt i32 %x, -1\n  ret i1 %0\n",
     );
 }
+
+/// A compare of a phi of constants against a constant stayed a compare: the
+/// phi's block ended in `br (icmp eq (phi [1, 1, 0]), 0)` that SimplifyCFG
+/// cannot thread (its fold needs the phi itself as the condition), so queens
+/// -O1 kept a materialised flag through its inner loop, +16% where the pin
+/// exits straight to the two targets. `foldOpIntoPhi` makes it a phi of i1.
+#[test]
+fn a_compare_of_a_phi_of_constants_becomes_a_phi_of_the_answers() {
+    let text = "define i32 @f(i1 %c, i1 %d) {
+b0:
+  br i1 %c, label %a, label %m
+
+a:
+  br i1 %d, label %m, label %b
+
+b:
+  br label %m
+
+m:
+  %p = phi i32 [ 1, %b0 ], [ 1, %a ], [ 0, %b ]
+  %z = icmp eq i32 %p, 0
+  br i1 %z, label %x, label %y
+
+x:
+  ret i32 5
+
+y:
+  ret i32 6
+}
+";
+    let out = combined(text);
+    assert!(out.contains("phi i1") && !out.contains("icmp"), "{out}");
+}
