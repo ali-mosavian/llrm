@@ -232,7 +232,7 @@ pub fn simplified_in(
     // The `size` rows are 16-bit rows: the pin's CVP turns a non-negative
     // `sdiv` by any constant into `udiv` whatever the optsize, and no pin fold
     // reads it for an address.
-    let size = size && layout.pointer(0).bits == 16;
+    let size = size && layout.pointer(0).bits < layout.largest_legal_integer();
     // A number proved before stays proved: every rewrite keeps each
     // surviving value's meaning, and none divides by a value.
     let divided_by_values = function
