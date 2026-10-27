@@ -369,3 +369,18 @@ fn asking_whether_a_load_or_store_writes_derives_no_list() {
     assert!(!after.contains("store i16 1"), "{after}");
     assert_eq!(llrm_analysis::memoryssa::lazy_lists(), before, "lists derived for loads and stores");
 }
+
+/// A store's place was worked out again at every ask (603 times for about a
+/// hundred stores on d_faces). A chain of n stores works out at most one place
+/// for each of its instructions.
+#[test]
+fn a_place_is_worked_out_once_for_each_instruction() {
+    let stores: String = (0..50).map(|k| format!("  store i16 {k}, ptr @g\n")).collect();
+    let body = format!(
+        "@g = global i16 0\n\ndefine i16 @f(i16 %x) {{\nb0:\n{stores}  %r = load i16, ptr @g\n  ret i16 %r\n}}\n"
+    );
+    let before = super::locations();
+    eliminated(&body, &[&[1]]);
+    let made = super::locations() - before;
+    assert!(made <= 52, "{made} places worked out for 52 instructions");
+}

@@ -333,6 +333,17 @@ fn re_materialize_def(
     if !env.rematerializable(&def_insn) {
         return false;
     }
+    // `LiveRangeEdit::allUsesAvailableAt`: each register the definition reads
+    // holds the value it read, at the copy.
+    let def_use = lis.indexes.get_instruction_index(def).get_reg_slot(true);
+    let copy_use = at.get_reg_slot(true);
+    if !def_insn.uses.iter().all(|&used| {
+        let li = lis.interval(used);
+        li.get_vn_info_at(&def_use)
+            .is_none_or(|read| li.get_vn_info_at(&copy_use).is_some_and(|now| Rc::ptr_eq(&read, &now)))
+    }) {
+        return false;
+    }
     // DEVIATE C10: in a build for size the copy (2 bytes) becomes the move
     // (3 to 5) and pays for itself only where the source's own move goes.
     if env.tuned_for_size() && lis.operands(src.value).len() > 2 {
