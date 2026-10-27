@@ -90,6 +90,9 @@ pub enum NodeData {
     /// A constant pool node's entry, an index into
     /// [`SelectionDAG::constant_pool`].
     PoolIndex(u32),
+    /// A target constant pool node with a displacement
+    /// (`getTargetConstantPool`'s offset): the entry and the bytes into it.
+    PoolAt(u32, i32),
     Mem(MemInfo),
     JumpTable(u32),
     /// `SrcValueSDNode`: which IR value, by a key the builder makes.

@@ -2709,7 +2709,10 @@ impl Emitter<'_, '_> {
                 let mnemonic = if rest.starts_with('0') { "fldz" } else { "fld1" };
                 self.lazy.insert(result, (mnemonic, None));
             }
-            "LD" if matches!(self.dag.node(group(0)?[3]).data, NodeData::PoolIndex(_)) => {
+            "LD" if matches!(
+                self.dag.node(group(0)?[3]).data,
+                NodeData::PoolIndex(_) | NodeData::PoolAt(..)
+            ) => {
                 let (first, _) = digits(rest);
                 let cell = self.cell(&group(0)?, first / 8)?;
                 self.lazy.insert(result, ("fld", Some(cell)));
@@ -2991,7 +2994,12 @@ impl Emitter<'_, '_> {
             address.index = table.id;
             return Ok(Mem { base, index, scale, disp_width: 2, ..Mem::new(Some(address), cell_width) });
         }
-        if let NodeData::PoolIndex(entry) = self.dag.node(group[3]).data {
+        let pool = match self.dag.node(group[3]).data {
+            NodeData::PoolIndex(entry) => Some((entry, 0)),
+            NodeData::PoolAt(entry, at) => Some((entry, at)),
+            _ => None,
+        };
+        if let Some((entry, at)) = pool {
             if self.address_register(group[4], Role::Segment)?.is_some() {
                 return Err(EmitError::Unsupported("a segment override".to_owned()));
             }
@@ -3001,14 +3009,15 @@ impl Emitter<'_, '_> {
             // +4, is the lowering's choice) (a double that is exactly a float
             // is a float entry the legalizer loads without saying
             // it extends).
-            if cell_width > pooled.width {
+            if cell_width > pooled.width || at < 0 || at as u32 + cell_width > pooled.width {
                 return Err(EmitError::Unsupported(format!(
-                    "a pool entry of {} bytes read as {cell_width}",
+                    "a pool entry of {} bytes read as {cell_width} at {at}",
                     pooled.width
                 )));
             }
             // as wide as the read, which may be inside the entry
-            return Ok(Mem { base, index, scale, width: cell_width, ..pooled });
+            let addr = pooled.addr.map(|place| Addr { disp: place.disp + i64::from(at), ..place });
+            return Ok(Mem { base, index, scale, width: cell_width, addr, ..pooled });
         }
         let disp = self.displacement(group[3])?;
         if self.address_register(group[4], Role::Segment)?.is_some() {

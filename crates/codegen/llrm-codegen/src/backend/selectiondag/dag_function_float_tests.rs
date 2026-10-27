@@ -631,3 +631,30 @@ fn a_bitcast_between_a_float_and_an_integer_goes_through_the_stack() {
             .unwrap_or_else(|e| panic!("{name}: {}", e.0));
     }
 }
+
+/// An unsigned 64-bit integer converted to a double reads the fudge constant
+/// at +0 or +4 of its pool entry: the address carried no offset, and
+/// `(double)big` panicked in the adapter ("a constant pool entry plus a
+/// displacement is not in our DAG"; `c/zz_f.c` at -O0 m32).
+#[test]
+fn an_unsigned_i64_converts_to_a_double_through_the_pool_at_an_offset() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @report(i32)
+define i32 @f() {
+  %1 = alloca i64, align 8
+  %2 = alloca double, align 8
+  store i64 -1, ptr %1, align 8
+  %3 = load i64, ptr %1, align 8
+  %4 = uitofp i64 %3 to double
+  store double %4, ptr %2, align 8
+  %5 = load double, ptr %2, align 8
+  %6 = fcmp oeq double %5, 1.000000e+00
+  %7 = zext i1 %6 to i32
+  call void @report(i32 %7)
+  ret i32 0
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}
