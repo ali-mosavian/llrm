@@ -1,7 +1,7 @@
 //! `MachineLICM` hoists a constant out of a loop (`IsProfitableToHoist`:
 //! "Trivially rematerializable instructions should always be hoisted").
 
-use std::process::Command;
+mod common;
 
 /// bench/recsum at -O1: the multiplier of `n % 11` was made again every trip
 /// (`mov edx, 780903145` ahead of the `imul`); the pin keeps it in a register
@@ -11,7 +11,7 @@ use std::process::Command;
 fn a_constant_the_loop_reads_is_made_ahead_of_it() {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/recsum/recsum.c");
     let scratch = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486", "-O1", "--isel=dag", "-S", "-o", "a.s"])
         .arg(&source)
