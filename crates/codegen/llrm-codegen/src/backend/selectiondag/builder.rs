@@ -409,7 +409,17 @@ impl<'a> Builder<'a> {
         next_synthetic: u32,
         synthetic_name: Option<String>,
     ) -> Builder<'a> {
-        let mut dag = SelectionDAG::new(target.dag);
+        let fp_extended = function
+            .attrs
+            .iter()
+            .any(
+                |attr| matches!(
+                    attr,
+                    llrm_mir::Attribute::Str(name, Some(value))
+                        if name == llrm_mir::constantfolding::FP_EVAL && value == llrm_mir::constantfolding::FP_EVAL_EXTENDED
+                ),
+            );
+        let mut dag = SelectionDAG::new(DagConfig { fp_extended, ..target.dag });
         let tables = info
             .tables
             .get_or_insert_with(|| {
@@ -1283,9 +1293,8 @@ impl Builder<'_> {
                     let offset = self.dag.get_constant((displacement - first) as u128, self.target.dag.pointer);
                     let address = self.dag.get_node(ISD::Add, self.target.dag.pointer, &[sp, offset]);
                     let _size = self.dag.get_constant(u128::from(size), self.target.dag.pointer);
-                    let copy = self
-                        .inline_memcpy(chain, address, *value, size, usize::MAX, align, align)?
-                        .ok_or(Refused("byval copy"))?;
+                    let copy =
+                        self.always_inline_memcpy(chain, address, *value, size, align)?.ok_or(Refused("byval copy"))?;
                     stores.push(copy);
                 }
                 Parameter::Registers(regs) if regs.len() == pieces.len() => {

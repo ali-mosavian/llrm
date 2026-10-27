@@ -449,7 +449,10 @@ pub fn of(
                         continue;
                     }
                 }
-                floor = floor.min(addr.disp);
+                // A cell that says which object it was made from and lies
+                // below it (an index that makes up the rest) reaches no deeper
+                // than the object.
+                floor = floor.min(addr.slot_home().map_or(addr.disp, |home| addr.disp.max(home)));
             }
         }
     }

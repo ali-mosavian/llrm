@@ -1133,3 +1133,39 @@ b2:
     simplify(&mut module);
     assert_eq!(get(Event::LoopExitScans) - before, 0);
 }
+
+/// `FindFunctionBackedges`: the targets of back edges only, a join and a
+/// forward edge into a loop are not headers, and a switch's cases are walked.
+#[test]
+fn test_loop_headers_are_the_targets_of_back_edges() {
+    let module = crate::testing::parsed(
+        "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  switch i16 %x, label %b3 [
+    i16 1, label %b4
+  ]
+
+b3:
+  br i1 %c, label %b3, label %b4
+
+b4:
+  br i1 %c, label %b1, label %b5
+
+b5:
+  ret i16 0
+}
+",
+    );
+    let mut module = module;
+    let (_, function) = module.function_mut("f").expect("@f");
+    let blocks: Vec<_> = function.layout().to_vec();
+    let headers = super::loop_headers(function);
+    let got: Vec<usize> = (0..blocks.len()).filter(|&at| headers.contains(&blocks[at])).collect();
+    assert_eq!(got, [1, 3]);
+}

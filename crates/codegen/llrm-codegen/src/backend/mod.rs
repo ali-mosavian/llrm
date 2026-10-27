@@ -153,7 +153,7 @@ pub mod effects;
 pub mod ehprepare;
 pub mod exactaddress;
 pub mod executed;
-pub mod expansion;
+pub use llrm_transforms::expansion;
 pub mod farcall;
 pub mod farload;
 pub mod floatalloc;
@@ -205,6 +205,9 @@ pub mod latecleanup;
 pub mod layout;
 pub mod leaopt;
 pub mod legalize;
+pub mod libmcalls;
+#[cfg(test)]
+mod libmcalls_tests;
 pub mod lifetimes;
 pub mod lirtext;
 pub mod live;

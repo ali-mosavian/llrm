@@ -3,7 +3,6 @@
 
 mod common;
 
-
 const KERNEL: &str = "
 static short tile[64][64];
 

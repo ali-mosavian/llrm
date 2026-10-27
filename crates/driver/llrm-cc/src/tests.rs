@@ -151,6 +151,25 @@ fn fverify_ir_reaches_the_backend() {
     assert!(one.clang.is_empty(), "{:?}", one.clang);
 }
 
+/// The m16 datalayout is stated in the target's `datalayout.toml` and again in
+/// every m16 row of the table, and clang's own (the fork's `I8086.h`). A row
+/// that drifted compiled with another `long double` layout than the backend
+/// laid out: clang refused `struct { char c; long double v; short s; }` with a
+/// static initializer ("cannot compile this static initializer yet") while the
+/// default `f80` was 128 bits.
+#[test]
+fn every_m16_row_states_the_targets_datalayout() {
+    let target: toml::Table =
+        include_str!("../../../target/llrm-x86-m16/src/machines/datalayout.toml").parse().unwrap();
+    let stated = target["datalayout"].as_str().unwrap();
+    let table = targets(TARGETS).unwrap();
+    for name in ["x86_16-dos", "x86_16-bcc", "x86_16-wat"] {
+        let row = table[name].datalayout.replace("-ni:2:3", "");
+        assert_eq!(row, stated, "{name}");
+    }
+    assert!(stated.contains("-f80:16-"), "{stated}");
+}
+
 /// `-Og` reached the backend as `-Og`, so the loops of o1_fill.rs stayed
 /// loops: clang's -Og is its -O1, which has LoopIdiomRecognize.
 #[test]

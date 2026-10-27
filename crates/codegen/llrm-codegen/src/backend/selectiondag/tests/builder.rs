@@ -196,7 +196,7 @@ fn calls_match_the_pins_initial_dag() {
 /// left them on the stack would show `store` nodes instead.
 #[test]
 fn a_watcom_call_copies_ax_dx_bx_cx_in_order() {
-    let text = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"\n\
+    let text = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"\n\
         declare watcallcc i16 @w(i16, i16, i16, i16)\n\
         define i16 @f(i16 %a, i16 %b, i16 %c, i16 %d) {\n  %r = call watcallcc i16 @w(i16 %a, i16 %b, i16 %c, i16 %d)\n  ret i16 %r\n}\n";
     let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
@@ -230,7 +230,7 @@ fn a_watcom_call_copies_ax_dx_bx_cx_in_order() {
 /// legalizer saw a pair for every `long`.
 #[test]
 fn an_i32_is_one_register_and_an_i64_two_at_m16() {
-    let text = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"\n\
+    let text = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"\n\
         define i16 @narrow(i32 %a, i32 %b) {\n  %r = add i32 %a, %b\n  %t = trunc i32 %r to i16\n  ret i16 %t\n}\n\
         define i16 @wide(i64 %a, i64 %b) {\n  %r = add i64 %a, %b\n  %t = trunc i64 %r to i16\n  ret i16 %t\n}\n";
     let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
@@ -269,7 +269,7 @@ fn an_i32_is_one_register_and_an_i64_two_at_m16() {
 /// stopped at "result in registers the value does not fill" (14 QB blocks).
 #[test]
 fn an_i32_returned_in_dx_ax_is_two_halves_at_m16() {
-    let text = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"\n\
+    let text = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"\n\
         declare i32 @g(i16)\n\
         define i32 @f(i16 %a) {\n  %r = call i32 @g(i16 %a)\n  %s = add i32 %r, 1\n  ret i32 %s\n}\n";
     let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));

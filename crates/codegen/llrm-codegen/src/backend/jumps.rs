@@ -19,9 +19,9 @@
 //!    `L` is next becomes `j!cc M`. Unreachable blocks go.
 //! 4. `tailmerge::merged` (LLVM's `BranchFolder::TailMergeBlocks`) gives the
 //!    blocks that share the last instructions one copy of them, splitting a
-//!    block where no one holds only the tail; `machinedce::eliminated` then
-//!    removes what the merge made dead (a compare nothing selects on), and the
-//!    body is threaded again. Both repeat until nothing merges.
+//!    block where no one holds only the tail, and the body is threaded again; a
+//!    compare the merge left nothing to select on stays, as in LLVM. Both
+//!    repeat until nothing merges.
 //! 5. `inverted` flips each `jcc L; jmp M` the copying left where `L` is next;
 //!    where neither way is next, it makes the likelier way the conditional
 //!    jump, so the trip that goes on pays one taken branch, not a branch not
@@ -95,7 +95,7 @@ use crate::analysis::dataflow::{self, Direction};
 use crate::analysis::frequency::Frequency;
 use crate::analysis::loops::{self as loopy, Loop};
 use crate::backend::layout::_OPPOSITE;
-use crate::backend::{cpu, machinedce, masm, select};
+use crate::backend::{cpu, masm, select};
 use crate::model::ir::{Operation, Semantics};
 use crate::model::lir::{self, Block, Insn, LirBlock, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
@@ -208,7 +208,7 @@ fn tails_merged(
             break;
         };
         any = true;
-        placed = machinedce::eliminated(threaded(&merged));
+        placed = threaded(&merged);
     }
     Ok((placed, any))
 }

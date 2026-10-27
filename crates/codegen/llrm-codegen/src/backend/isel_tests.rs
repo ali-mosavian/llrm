@@ -6,7 +6,7 @@ use crate::backend::isel::{self, Unselected};
 use crate::backend::masm;
 
 const LAYOUT: &str =
-    "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"\n";
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-f80:16-n8:16:32\"\n";
 
 fn qb() -> HirAbi {
     HirAbi {
@@ -388,14 +388,13 @@ fn a_va_copy_moves_the_list_pointer_and_a_va_end_is_no_code() {
             "mov bp, sp",
             "sub sp, 4",
             "L0_0:",
-            // va_start: the first list holds the address of the variadic
-            // arguments.
-            "lea ax, [bp+8]",
-            "mov word ptr [bp-2], ax",
-            // va_copy: the second list holds the same pointer, still in ax
-            // (no reload of the first); va_end is no code.
-            "mov word ptr [bp-4], ax",
+            // The return value is read first. va_start: the first list holds
+            // the address of the variadic arguments; va_copy: the second holds
+            // the same pointer, still in cx; va_end is no code.
             "mov ax, word ptr [bp+6]",
+            "lea cx, [bp+8]",
+            "mov word ptr [bp-2], cx",
+            "mov word ptr [bp-4], cx",
             "leave",
             "retf",
         ]
@@ -846,10 +845,10 @@ define i16 @f(i16 %i) addrspace(1) {
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "add word ptr count, 1",
             "mov bx, word ptr [bp+6]",
-            "add bx, bx",
+            "add word ptr count, 1",
             "mov ax, word ptr table+4",
+            "add bx, bx",
             "add ax, word ptr table[bx]",
             "pop bp",
             "retf"
@@ -937,6 +936,7 @@ define cc1000 void @MAIN() addrspace(1) {
             "",
             "public MAIN",
             ".data",
+            "align 2",
             "count label byte",
             "db 005h,000h",
             "extern B$PEI2:far",
@@ -1748,8 +1748,9 @@ done:
             "push bp",
             "mov bp, sp",
             "L0_0:",
+            "mov ax, word ptr [bp+6]",
             "fldz",
-            "cmp word ptr [bp+6], 0",
+            "test ax, ax",
             "jle L0_3",
             "L0_2:",
             "fstp st(0)",
@@ -3305,7 +3306,7 @@ done:
     assert_eq!(
         (&got[body + 1..body + 3], steps, &got[body + 5..body + 7]),
         (
-            &["mov cl, byte ptr es:[bx]".to_owned(), "mov byte ptr [si], cl".to_owned()][..],
+            &["mov cl, byte ptr es:[si]".to_owned(), "mov byte ptr [bx], cl".to_owned()][..],
             vec!["inc bx".to_owned(), "inc si".to_owned()],
             &["dec ax".to_owned(), "jne L0_2".to_owned()][..]
         ),
@@ -3816,11 +3817,12 @@ define void @f(double %a) addrspace(1) {
     let got = listing(text, "f");
     let call = got.iter().position(|line| line.starts_with("call")).expect("the call");
     assert!(!got[call..].iter().any(|line| line.starts_with("fld") && line.contains("[bp-8]")), "{got:?}");
-    // A cell no call can reach is still read again rather than saved.
+    // A cell no call can reach: with the pin's scheduler the value is saved
+    // to a spill cell and loaded back (old selector: read the cell again).
     let private = text.replace("declare void @g(ptr)", "declare void @g()").replace("@g(ptr %x)", "@g()");
     let got = listing(&private, "f");
     let call = got.iter().position(|line| line.starts_with("call")).expect("the call");
-    assert!(got[call..].iter().any(|line| line.starts_with("fld") && line.contains("[bp-8]")), "{got:?}");
+    assert!(got[call..].iter().any(|line| line.starts_with("fld") && line.contains("[bp-18]")), "{got:?}");
 }
 
 /// A store of poison stores nothing, as LLVM's DAGCombiner drops it: the
@@ -4647,6 +4649,7 @@ fn test_dbg_lines_become_linnum() {
         nodes: Default::default(),
         procedures: Default::default(),
         globals: Vec::new(),
+        source: None,
     });
     let records = records(&assembled);
     let lines: Vec<(u16, u16)> = records
@@ -4758,8 +4761,8 @@ fn test_far_pointers_compare_by_words() {
             "mov bp, sp",
             "L0_0:",
             "mov ax, word ptr [bp+6]",
-            "xor ax, word ptr [bp+10]",
             "mov cx, word ptr [bp+8]",
+            "xor ax, word ptr [bp+10]",
             "xor cx, word ptr [bp+12]",
             "or cx, ax",
             "sete al",
@@ -4957,10 +4960,10 @@ fn test_huge_pointers_compare_by_selector_then_offset() {
             "mov bp, sp",
             "L0_0:",
             "mov ax, word ptr [bp+6]",
-            "cmp ax, word ptr [bp+10]",
-            "mov ax, word ptr [bp+12]",
             "mov cx, word ptr [bp+8]",
-            "sbb cx, ax",
+            "mov dx, word ptr [bp+12]",
+            "cmp ax, word ptr [bp+10]",
+            "sbb cx, dx",
             "setb al",
             "movzx ax, al",
             "pop bp",
@@ -4985,17 +4988,21 @@ define i32 @f(ptr addrspace(3) %a, ptr addrspace(3) %b) addrspace(1) {
         [
             "push bp",
             "mov bp, sp",
+            "push si",
             "L0_0:",
             "movzx ecx, word ptr [bp+6]",
+            "mov dx, word ptr [bp+8]",
             "movzx eax, word ptr [bp+10]",
+            "mov si, word ptr [bp+12]",
             "sub ecx, eax",
-            "movzx eax, word ptr [bp+8]",
-            "movzx edx, word ptr [bp+12]",
+            "movzx eax, dx",
+            "movzx edx, si",
             "sub eax, edx",
             "sar eax, 12",
             "shl eax, 16",
             "add eax, ecx",
             "shld edx, eax, 16",
+            "pop si",
             "pop bp",
             "retf"
         ]
@@ -5175,7 +5182,7 @@ fn test_a_fixed_address_pointer_selects_as_a_far_one() {
             "define i16 @f(ptr addrspace({space}) %p, i16 %i) addrspace(1) {{\n  %q = getelementptr i16, ptr addrspace({space}) %p, i16 %i\n  %v = load volatile i16, ptr addrspace({space}) %q\n  ret i16 %v\n}}\n"
         )
     };
-    let layout = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"\n";
+    let layout = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"\n";
     let listing = |space| {
         let module = llrm_mir::parse::module(&format!("{layout}{}", body(space))).expect("parses");
         let chosen = isel::selected(
@@ -5651,7 +5658,7 @@ fn test_m16_emits_386_forms() {
         "define i32 @f(i8 %a, i16 %b) addrspace(1) {\n  %x = sext i8 %a to i32\n  %y = zext i16 %b to i32\n  %z = add i32 %x, %y\n  ret i32 %z\n}\n",
         "f",
     );
-    for want in ["movsx ecx, byte ptr [bp+6]", "movzx eax, word ptr [bp+8]", "add eax, ecx"] {
+    for want in ["movsx edx, byte ptr [bp+6]", "movzx eax, word ptr [bp+8]", "add eax, edx"] {
         assert!(extends.contains(&want.to_owned()), "{want}: {extends:?}");
     }
 
@@ -6373,7 +6380,7 @@ define i1 @f(i16 %x) addrspace(1) {
 }
 ";
     let got = listing(text, "f");
-    assert!(got.contains(&"mov ax, offset messages+8".to_owned()), "{got:?}");
+    assert!(got.iter().any(|one| one.starts_with("mov ") && one.ends_with(", offset messages+8")), "{got:?}");
 }
 
 /// A GEP off a segment's far pointer (`A000:0`, plus 1) was refused, "an
@@ -6783,7 +6790,8 @@ define float @f(float %x, float %y) addrspace(1) {
 ";
     let got = listing(text, "f");
     let call = got.iter().position(|line| line.starts_with("call ")).expect("the premise: a call");
-    assert!(got[call..].iter().any(|line| line.starts_with("fadd dword ptr [bp+")), "{got:?}");
+    assert!(got[call..].iter().any(|line| line.starts_with("fld dword ptr [bp+")), "{got:?}");
+    assert!(got[call..].iter().any(|line| line.starts_with("faddp")), "{got:?}");
     assert!(!got.iter().any(|line| line.starts_with("fstp")), "{got:?}");
 }
 
@@ -7026,6 +7034,22 @@ define void @f() addrspace(1) {
     assert!(got.iter().any(|line| line == "push offset x+4"), "{got:?}");
     assert!(got.iter().any(|line| line == "push offset x+6"), "{got:?}");
     assert!(!got.iter().any(|line| line.starts_with("lea") || line.starts_with("add si")), "{got:?}");
+}
+
+/// `llvm.abs` of an i64 is expanded with a `freeze` of its operand; where i64
+/// is two words the old selector refused it ("freeze"), which stopped the QB
+/// runtime's `_i8_output` from building. A frozen value is the value.
+#[test]
+fn test_a_frozen_i64_is_its_two_words() {
+    let text = "define i64 @frozen(i64 %0) addrspace(1) {
+b1:
+  %1 = freeze i64 %0
+  %2 = add i64 %1, 1
+  ret i64 %2
+}
+";
+    let got = selected(text, "frozen").unwrap_or_else(|why| panic!("{}", why.0));
+    assert!(!got.body.insns().is_empty());
 }
 
 /// `candidates` found each instruction's opcode, types and kinds by string
