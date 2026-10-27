@@ -46,7 +46,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
     }
 
     /// `isOperationLegalOrCustom(op, vt)`; false without a table.
-    fn fp_op_legal_or_custom(
+    pub(super) fn fp_op_legal_or_custom(
         &self,
         op: ISD,
         vt: EVT,

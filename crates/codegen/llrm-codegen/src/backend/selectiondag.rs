@@ -130,6 +130,7 @@ pub mod legalize_dag;
 pub mod legalize_types;
 pub mod libcall;
 pub mod logic_setcc;
+mod match_rotate;
 pub mod opcodes;
 mod reassociate;
 pub mod schedule;
