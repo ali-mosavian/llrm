@@ -320,16 +320,18 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::FAdd => self.visit_fadd(node),
             ISD::FSub => self.visit_fsub(node),
             ISD::FMul => self.visit_fmul(node),
+            ISD::FNeg => self.visit_fneg(node),
+            ISD::FAbs => self.visit_fabs(node),
             ISD::FDiv => self.visit_fdiv(node),
             ISD::Shl | ISD::Srl => self.visit_shift(node).or_else(|| self.simplify_demanded(node)),
             ISD::Sra => self.visit_sra(node).or_else(|| self.visit_shift(node)),
-            ISD::BSwap => self.visit_bswap(node),
             ISD::SDiv => self.visit_sdiv(node),
             ISD::UDiv => self.visit_udiv(node),
             ISD::SRem | ISD::URem => self.visit_rem(node),
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => {
                 self.fold_extend_of_cast(node).or_else(|| self.visit_extend(node))
             }
+            ISD::BSwap => self.visit_bswap(node),
             ISD::Truncate => self.visit_truncate(node).or_else(|| self.simplify_demanded(node)),
             ISD::SignExtendInReg => self.visit_sext_in_reg(node),
             _ => None,
@@ -491,6 +493,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if cond_vt != EVT::I1 {
             return None;
         }
+        if let Some(math) = self.fold_select_of_constants(n0, n1, n2, vt) {
+            return Some(math);
+        }
         let arm_vt = self.dag.value_type(n1);
         // `select c0, (select c1, x, y), y` is `select (and c0, c1), x, y`.
         if self.dag.opcode(n1) == ISD::Select && self.dag.use_count(n1.node) == 1 {
@@ -509,6 +514,65 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         self.select_sign_folds(n0, n1, n2).or_else(|| self.select_single_bit_test(n0, n1, n2))
+    }
+
+    /// `foldSelectOfConstants` ([L13011][pin]) for an `i1` condition before
+    /// operations are legal: a select of two constants is an extend of the
+    /// condition, plus or or-ed with a constant, instead of a branch. X86's
+    /// `convertSelectOfConstantsToMath` is true for scalars and it has no
+    /// `SELECT_CC`, so `shouldConvertSelectOfConstantsToMath` always holds. The
+    /// non-`i1` condition arm and `foldSelectOfConstantsUsingSra` are not
+    /// translated (the latter is covered by [`Self::select_sign_folds`]).
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L13011
+    fn fold_select_of_constants(
+        &mut self,
+        cond: SDValue,
+        then: SDValue,
+        other: SDValue,
+        vt: EVT,
+    ) -> Option<SDValue> {
+        if !vt.is_integer() || self.level >= CombineLevel::AfterLegalizeVectorOps {
+            return None;
+        }
+        let (c1, c2) = (self.dag.constant(then)?, self.dag.constant(other)?);
+        let mask = super::fold::mask(vt.size_in_bits());
+        let (c1, c2) = (c1 & mask, c2 & mask);
+        let dag = &mut *self.dag;
+        if c1 == 1 && c2 == 0 {
+            return Some(dag.get_zext_or_trunc(cond, vt));
+        }
+        if c1 == mask && c2 == 0 {
+            return Some(dag.get_sext_or_trunc(cond, vt));
+        }
+        if c1 == 0 && (c2 == 1 || c2 == mask) {
+            let not = dag.get_not(cond, EVT::I1);
+            return Some(if c2 == 1 { dag.get_zext_or_trunc(not, vt) } else { dag.get_sext_or_trunc(not, vt) });
+        }
+        if c1.wrapping_sub(1) & mask == c2 {
+            let cond = dag.get_zext_or_trunc(cond, vt);
+            return Some(dag.get_node(ISD::Add, vt, &[cond, other]));
+        }
+        if c1.wrapping_add(1) & mask == c2 {
+            let cond = dag.get_sext_or_trunc(cond, vt);
+            return Some(dag.get_node(ISD::Add, vt, &[cond, other]));
+        }
+        if c1.is_power_of_two() && c2 == 0 {
+            let cond = dag.get_zext_or_trunc(cond, vt);
+            let amount = dag.get_constant(u128::from(c1.trailing_zeros()), EVT::I8);
+            return Some(dag.get_node(ISD::Shl, vt, &[cond, amount]));
+        }
+        if c1 == mask {
+            let cond = dag.get_sext_or_trunc(cond, vt);
+            return Some(dag.get_node(ISD::Or, vt, &[cond, other]));
+        }
+        if c2 == mask {
+            let not = dag.get_not(cond, EVT::I1);
+            let not = dag.get_sext_or_trunc(not, vt);
+            return Some(dag.get_node(ISD::Or, vt, &[not, then]));
+        }
+        None
     }
 
     /// `SimplifySelectCC`, the sign folds: `select (x > -1), C, ~C` is
@@ -1181,6 +1245,21 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(folded);
             }
         }
+        // `shl (sra x, c), c` is `and x, (-1 << c)` ([L11245][pin]).
+        //
+        // [pin]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L11245
+        if op == ISD::Shl && self.dag.opcode(n0) == ISD::Sra && self.dag.operand(n0, 1) == n1 {
+            if let Some(c) = self.dag.constant(n1).filter(|&c| c < width) {
+                let mask = self
+                    .dag
+                    .get_constant(
+                        (super::fold::mask(vt.size_in_bits()) << c) & super::fold::mask(vt.size_in_bits()),
+                        vt,
+                    );
+                return Some(self.dag.get_node(ISD::And, vt, &[self.dag.operand(n0, 0), mask]));
+            }
+        }
         if self.dag.opcode(n0) != op {
             return None;
         }
@@ -1691,47 +1770,6 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(self.dag.get_node(ISD::And, vt, &[n0, mask]));
         }
         self.simplify_demanded(node)
-    }
-
-    /// `visitBSWAP` ([L12530][pin]): `bswap (shl/srl x, 8k)` is the inverse
-    /// shift of `bswap x`, and an operand with one possibly nonzero byte is a
-    /// shift to the mirror byte. SD312: not the half-width `shl` fold nor
-    /// `foldBitOrderCrossLogicOp`.
-    ///
-    /// [pin]:
-    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L12530
-    fn visit_bswap(
-        &mut self,
-        node: SDValue,
-    ) -> Option<SDValue> {
-        let n0 = self.dag.operand(node, 0);
-        let vt = self.dag.value_type(node);
-        let width = vt.size_in_bits();
-        if matches!(self.dag.opcode(n0), ISD::Shl | ISD::Srl) && self.dag.use_count(n0.node) == 1 {
-            let amount = self.dag.operand(n0, 1);
-            if self.dag.constant(amount).is_some_and(|a| a < u128::from(width) && a % 8 == 0) {
-                let inner = self.dag.operand(n0, 0);
-                let swapped = self.dag.get_node(ISD::BSwap, vt, &[inner]);
-                let inverse = if self.dag.opcode(n0) == ISD::Shl { ISD::Srl } else { ISD::Shl };
-                return Some(self.dag.get_node(inverse, vt, &[swapped, amount]));
-            }
-        }
-        let known = super::known_bits::known_bits(self.dag, n0);
-        let maybe = !known.zero & super::fold::mask(width);
-        if maybe == 0 {
-            return Some(self.dag.get_constant(0, vt));
-        }
-        let leading = (maybe.leading_zeros() - (128 - width)) / 8 * 8;
-        let trailing = maybe.trailing_zeros() / 8 * 8;
-        if width - (leading + trailing) == 8 {
-            let op = if leading > trailing { ISD::Shl } else { ISD::Srl };
-            if !self.legal_operations() || self.fp_op_legal(op, vt) {
-                let amount = self.dag.get_constant(u128::from(leading.abs_diff(trailing)), EVT::I8);
-                let flags = if op == ISD::Shl { SDNodeFlags::NO_UNSIGNED_WRAP } else { SDNodeFlags::EXACT };
-                return Some(self.dag.get_node_flags(op, vt, &[n0, amount], flags));
-            }
-        }
-        None
     }
 }
 
