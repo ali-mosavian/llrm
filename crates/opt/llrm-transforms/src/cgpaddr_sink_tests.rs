@@ -399,3 +399,31 @@ fn test_31_bit_tests_held_across_the_chain_are_none_after() {
     assert!(before >= 31, "premise: the bit tests are read across blocks, {before}");
     assert_eq!(read_across_blocks(&after), 0, "{after}");
 }
+
+/// `sinkCmpExpression` made the compare of B$SCMP's flags again in the block
+/// of its select, apart from the call: isel refused the function ("a call's
+/// flags read apart from its compare with zero", `string_compare_shapes.bas`
+/// at -O2). A compare of a flags result stays by its call.
+#[test]
+fn test_a_compare_of_a_flags_result_is_not_made_again_in_its_users_block() {
+    let text = "declare i16 @llrm.qb.B$SCMP(ptr, ptr) flagsresult
+
+define i16 @f(ptr %a, ptr %b, i1 %p) {
+b0:
+  %s = call i16 @llrm.qb.B$SCMP(ptr %a, ptr %b)
+  %c = icmp slt i16 %s, 0
+  br i1 %p, label %b1, label %b2
+
+b1:
+  %r = select i1 %c, i16 2, i16 3
+  ret i16 %r
+
+b2:
+  ret i16 0
+}
+";
+    let mut module = parsed(&format!("{HEAD}{text}"));
+    let after = managed(&mut module, AddressSink);
+    let b1 = after.split("b1:").nth(1).expect("b1");
+    assert!(!b1.contains("icmp"), "{after}");
+}

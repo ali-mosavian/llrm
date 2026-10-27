@@ -24,7 +24,7 @@ Lines are `wc -l`. "Callers" are non-test callers outside the file's own tests.
 | `llrm-x86-m{16,32,64}-select` crates, `llrm-driver/src/lib.rs:62-64`, `llrm-codegen/build.rs` selectors | - | bind `SELECTOR`; DAG never reads `Compiled`. `llrm-iselgen` stays: arm64 uses it (`llrm-arm64/Cargo.toml:24`, `tests/dialect.rs:34`) and the m16/m32/m64 `build.rs` call `build::forms` and `effect_rows` for `effects.rs` |
 | `switchlower` (`llrm-transforms`, 991 + 431 test) and `Pipeline::lower_switches` | 1422 | `pipeline.rs:186` says it is for the old selector; `driver/mod.rs:456` turns it off under dag. arm64 use: check |
 | `float_across_call` | - | no symbol of that name in `crates/`; readiness means a DAG refusal, not an old pass (check) |
-| `legalize.rs`, `bitcounts`, `funnel`, `compares`, `bytes`, `fpconvert` | - | run in `driver::optimized` for every selector, gated by `arch.expands`. Plan says they go once the DAG table covers them; **unverified** |
+| `legalize.rs` (skipped under `--isel=dag` since 2026-10-27: the DAG type legalizer promotes odd widths), `bitcounts`, `funnel`, `compares`, `bytes`, `fpconvert` | - | run in `driver::optimized` for every selector, gated by `arch.expands`. Plan says they go once the DAG table covers them; **unverified** |
 
 **What the DAG path uses from `isel.rs` and must move first** (to a `convention.rs` / `selected.rs`; a pure move):
 
@@ -61,13 +61,13 @@ Lines are `wc -l`. "Callers" are non-test callers outside the file's own tests.
 | Where | Row | Exits with the deletion? |
 |---|---|---|
 | `isel.rs:6942` (I1, AM-I1), `:6958` (I2), `:6986` (memmove) | `rep movs` past 128 B, `-Oz`, memmove refusal | I1 is priced and live (`memcpycall.rs:12`, `above-main-rows.md:45`): the DAG expansion must carry it first (check). I2 and memmove go with the file |
-| `isel/wide.rs:121` D-SB1 (`parity-pipeline.md:98`) | divisions keep the old sign-bit count | yes, if the DAG's own division lowering is the pin's |
+| `isel/wide.rs:121` D-SB1 (`parity-pipeline.md:98`) | divisions keep the old sign-bit count | yes, if the DAG's own division lowering is the pin's. Verified 2026-10-27: `long long f(long long a,int b){return a/b;}` at m16 -Os is two inline `div` in old and a `$div64_s` call in dag; the pin llc on the same IR calls `__divdi3`. |
 | `isel/huge.rs:20` | loop emitted inline, exit #2284 | yes; SD311 (`memops.rs:554`) stays but must stop citing `isel/huge.rs` |
 | `llrm-x86/src/isel/family.isel:275` F1 | `arithmetic_cell` guard | yes |
 | `precse.rs:55`, `precse.md:61` CSE3 | "both selectors", old reads args as memory operands | no: the DAG half stands; rewrite the text; its 2026-11-08 date may pass first |
 | `precse.md:48` CSE1 | "exit with isel.rs I2" | exit condition vanishes with I2; give it a new one |
 | `codegen-slot-table.md:4,30,34,87,88` (rows 2, 28, 32, 85, 86) | CG1 and "executed by isel.rs" | yes: row 28 becomes MATCH; the others cite `isel.rs` and need a DAG owner |
-| `pushfold.rs:24` CF1, `pushfold.md:33` | "ours pushes at selection already" | check: DAG emits `mov [esp+k]` stores (`callframe-translation-plan.md:33`) |
+| `pushfold.rs:24` CF1, `pushfold.md:33` | "ours pushes at selection already" | Verified 2026-10-27 at m16 -Os: `g(*p,h,*q,k,7)` pushes `pushw 7` and `push word ptr _k` from memory in both selectors, the same instructions; the DAG carries it. |
 
 ## 4. Order
 

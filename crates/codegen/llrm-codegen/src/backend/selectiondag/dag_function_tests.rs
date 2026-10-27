@@ -727,6 +727,31 @@ fn at_os_a_remainder_by_a_constant_keeps_its_idiv() {
     assert!(names(true).iter().any(|n| n == "idiv"), "-Os: the divide stays: {:?}", names(true));
 }
 
+/// `x * 24` at `-Os` was `shl 3` then `imul 3` (two 4-byte instructions at m16)
+/// where the pin keeps the one `imul` (`combineMul`: `hasMinSize` returns
+/// first): bench/mandel.nib m16 -Os, +8 B.
+#[test]
+fn at_os_a_multiply_by_a_constant_stays_one_imul() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {
+  %r = mul i32 %a, 24
+  ret i32 %r
+}
+",
+    )
+    .expect("parses");
+    let names = |size: bool| {
+        let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+        cpu.size = size;
+        let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect::<Vec<_>>()
+    };
+    let count = |names: &[String], one: &str| names.iter().filter(|n| *n == one).count();
+    assert_eq!((count(&names(false), "imul"), count(&names(false), "shl")), (0, 1), "speed: lea and shift");
+    assert_eq!((count(&names(true), "imul"), count(&names(true), "shl")), (1, 0), "-Os: {:?}", names(true));
+}
+
 /// `u8 % 6` at `-Os` with the divide kept was `CannotSelect("UDivRem")` (SD302:
 /// no byte divide): examples/dice.nib and easing.nib stopped compiling.
 #[test]
@@ -839,4 +864,59 @@ define void @f(i16 %n) {
         let from = &copy.sources[copy.sources.len() - 2];
         assert!(matches!(from, Loc::Reg(r) if r.register == llrm_lir::registers::RegId::DS), "{from:?}");
     }
+}
+
+fn move_3840_at_m16(metadata: &str) -> crate::backend::isel::Selected {
+    let module = llrm_mir::parse::module(&format!(
+        "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+@s = global [2000 x i16] zeroinitializer, align 2
+declare void @llvm.memmove.p0.p0.i16(ptr, ptr, i16, i1)
+define void @f() {{
+  call void @llvm.memmove.p0.p0.i16(ptr @s, ptr getelementptr (i8, ptr @s, i16 160), i16 3840, i1 false){metadata}
+  ret void
+}}
+!0 = !{{}}
+"
+    ))
+    .expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0))
+}
+
+/// A memmove a pass proved forward or backward was a call of the runtime's
+/// `memmove` at m16 (scroll.c: 2.2x the old selector's clocks, a frame for the
+/// value kept across the call); the old selector moves it inline, `rep movsd`
+/// up or `std; rep movsd; cld` down.
+#[test]
+fn a_proved_move_at_m16_is_inline_string_code() {
+    let up = move_3840_at_m16(", !llrm.forward !0");
+    let names: Vec<_> =
+        up.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(names.iter().any(|n| n == "movsd") && names.iter().all(|n| n != "call"), "{names:?}");
+    let down = move_3840_at_m16(", !llrm.backward !0");
+    assert!(down.inline.values().any(|bytes| bytes[..] == [0xFD, 0xF3, 0x66, 0xA5, 0xFC]), "{:?}", down.inline);
+}
+
+/// A byte argument was extended to the dword register (`mov edx, 12`, 6 bytes
+/// at m16) though the callee truncates it; the old selector writes `dl`
+/// (mandel.nib: 4 bytes a call).
+#[test]
+fn a_byte_argument_at_m16_goes_in_the_byte_register() {
+    use llrm_lir::registers::RegId;
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+declare cc 1005 void @g(i32, i8 zeroext)
+define void @f() {
+  call cc 1005 void @g(i32 204, i8 zeroext 12)
+  ret void
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let call = insns.iter().find(|i| i.call.is_some()).expect("a call");
+    let registers: Vec<RegId> = call.requires.iter().map(|(_, register)| *register).collect();
+    assert!(registers.contains(&RegId::DL) && !registers.contains(&RegId::EDX), "{registers:?}");
 }

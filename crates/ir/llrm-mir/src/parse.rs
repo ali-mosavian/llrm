@@ -517,6 +517,7 @@ impl Parser {
             | Token::Float(..)
             | Token::FloatBits { .. }
             | Token::HexFloat(_)
+            | Token::Float80(_)
             | Token::Bytes(_)
             | Token::Global(_) => !matches!(self.peek_at(1), Token::Punct('=')),
             Token::Punct('[' | '{' | '<') => true,
@@ -925,6 +926,12 @@ impl Parser {
                     return self.fail_on(line, format!("f0x{bits:0digits$X} is not a {name}'s {width} hex digits"));
                 }
                 _ => return self.fail_on(line, "a floating constant given a non-floating type"),
+            },
+            Token::Float80(bits) => match shape {
+                Type::Float(FloatKind::X86Fp80) => {
+                    crate::fp80::kind(&crate::apfloat::ApFloat::from_bits(crate::apfloat::X87_DOUBLE_EXTENDED, bits))
+                }
+                _ => return self.fail_on(line, "`0xK` is an x86_fp80"),
             },
             Token::HexFloat(bits) => self.float(&shape, f64::from_bits(bits), line)?,
             Token::Word(word) if word == "null" => {

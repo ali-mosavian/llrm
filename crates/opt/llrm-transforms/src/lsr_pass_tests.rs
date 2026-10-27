@@ -361,6 +361,7 @@ fn a_scaled_address_is_not_formed_in_real_mode_and_the_fill_steps_a_pointer() {
         scaled_index_insns: 2,
         huge_space: None,
         inline_size_guard: false,
+        float_code_size_percent: 100,
     };
     let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
     let mut module = parsed(&format!("{DOS}{FILL}"));
@@ -561,6 +562,7 @@ b3:
         scaled_index_insns: 2,
         huge_space: None,
         inline_size_guard: false,
+        float_code_size_percent: 100,
     };
     let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
     let mut module = parsed(&text);
@@ -620,6 +622,7 @@ b5:
         scaled_index_insns: 2,
         huge_space: Some(3),
         inline_size_guard: false,
+        float_code_size_percent: 100,
     };
     let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
     let mut module = parsed(&text);
@@ -771,4 +774,88 @@ b4:
     let exit = after.split("exit:").nth(1).unwrap().split("b3:").next().unwrap();
     let (stored, defined) = (exit.find("store").unwrap(), exit.find("urem").or(exit.find("udiv")).unwrap());
     assert!(defined < stored, "{after}");
+}
+
+/// The inner loop of an insertion sort, `for (j = i - 1; j >= 0 && a[j] > v;
+/// --j)` as the strength stage gets it: the countdown's `add nsw %j, -1` sits
+/// in the header beside the loads LSR rewrites. The pin moves the increment to
+/// the latch once those uses are gone (`ImplementSolution`: delete the dead
+/// instructions, then move the simple recurrences' increments), so the
+/// decrement and the compare share a block and isel emits `dec; cmp; jg`. Here
+/// the move ran before the deletion, saw the header gep as a user the latch
+/// does not dominate, and left `lea edi, [ebx-1]; cmp ebx, 1; mov ebx, edi`.
+#[test]
+fn a_countdown_loop_decrements_in_the_block_that_tests_it() {
+    let mut module = parsed(include_str!("lsr_insertion.ll"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let tti = X86::of_cpu("i486").unwrap();
+    let changed = crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
+    let after = printed(&module);
+    assert!(changed, "{after}");
+    let block = after
+        .split("\n\n")
+        .find(|block| block.contains("add nsw i32") && block.contains(", -1"))
+        .unwrap_or_else(|| panic!("no decrement: {after}"));
+    assert!(
+        block.contains("icmp sgt i32") && block.contains(", 1\n"),
+        "the compare is in another block than the decrement: {after}"
+    );
+}
+
+/// particle.bas ADVANCE at m16 -Os with `foldICmpBinOp`: six far arrays read at
+/// one index. The rewrite to six pointer recurrences costs two instructions
+/// more than the loop as written and needs more registers than exist: six
+/// pointers reloaded and stored back every trip, +79 B and 344,761 -> 530,461
+/// clocks. The loop is kept.
+#[test]
+fn six_far_arrays_at_one_index_are_not_six_recurrences_in_real_mode() {
+    let arrays = ["a", "b", "c", "d", "e", "g"];
+    let mut globals = String::new();
+    let mut loads = String::new();
+    let mut body = String::new();
+    for name in arrays {
+        globals += &format!("@{name} = internal global [2 x i8] zeroinitializer\n");
+        loads += &format!(
+            "  %w{name} = load i16, ptr @{name}\n  %i{name} = inttoptr i16 %w{name} to ptr addrspace(2)\n  %f{name} = addrspacecast ptr addrspace(2) %i{name} to ptr addrspace(1)\n"
+        );
+        body += &format!(
+            "  %p{name} = getelementptr i8, ptr addrspace(1) %f{name}, i16 %o\n  %v{name} = load i16, ptr addrspace(1) %p{name}\n  %x{name} = add i16 %v{name}, 1\n  store i16 %x{name}, ptr addrspace(1) %p{name}\n"
+        );
+    }
+    let text = format!(
+        "{DOS}{globals}define void @f(i16 %n) {{
+b1:
+  %neg = sub i16 0, %n
+{loads}  br label %b5
+b5:
+  %i = phi i16 [ %neg, %b1 ], [ %i2, %b5 ]
+  %s = shl i16 %i, 1
+  %o = add i16 %s, 100
+{body}  %i2 = add i16 %i, 1
+  %done = icmp eq i16 %i, %n
+  br i1 %done, label %b6, label %b5
+b6:
+  ret void
+}}
+"
+    );
+    let real = RealMode {
+        scale_costs: vec![(1, 0)],
+        registers: 6,
+        scaled_index_insns: 0,
+        huge_space: None,
+        inline_size_guard: false,
+        float_code_size_percent: 100,
+    };
+    let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
+    let mut module = parsed(&text);
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
+    let after = printed(&module);
+    let body = after.split("b5:").nth(1).unwrap().split("b6:").next().unwrap();
+    assert!(body.matches(" = phi ptr").count() == 0, "the loop is kept: {after}");
 }

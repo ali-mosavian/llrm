@@ -1,0 +1,22 @@
+[package]
+name = "llrm-bcobj"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The BC object frontend: BC OMF objects decoded and lifted onto llrm-mir"
+
+[dependencies]
+llrm-support = { workspace = true }
+llrm-omf = { workspace = true }
+llrm-target = { workspace = true }
+llrm-qbruntime = { workspace = true }
+llrm-mir = { workspace = true }
+llrm-analysis = { workspace = true }
+llrm-hir = { workspace = true }
+llrm-lir = { workspace = true }
+llrm-x86-m16 = { workspace = true }
+iced-x86 = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+llrm-omf = { workspace = true, features = ["testing"] }

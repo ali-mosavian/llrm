@@ -304,6 +304,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     ),
     entry("float2int@1594", Late, "float2int", Translated, ""),
     entry("instsimplify@1662", Late, "instsimplify", Translated, ""),
+    entry("divrempairs@1667", Late, "div-rem-pairs", Translated, ""),
     entry("tailrec@1677", Late, "tailcallelim", Translated, ""),
     partial(
         "simplifycfg@1682",
@@ -321,8 +322,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("canonfreeze", Module, "canon-freeze", Translated, ""),
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
     entry("indvars@753", Simplify, "indvars (LPM2 worklist: the loops the unroll made)", Translated, ""),
-    entry("loopsimplify@728", Simplify, "loop-simplify", Old, "loopsimplify-port"),
-    entry("lcssa@728", Simplify, "lcssa", Old, "lcssa-port"),
     entry("vector-combine", Simplify, "vector-combine", Missing, ""),
     // The machine phases of `llc`, one slot per phase of `flow::machine_with`
     // (`module@row`, the row of the table in `backend/mod.rs`).

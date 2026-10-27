@@ -160,3 +160,10 @@ fn every_m16_row_states_the_targets_datalayout() {
     }
     assert!(stated.contains("-f80:16-"), "{stated}");
 }
+
+/// `-Og` reached the backend as `-Og`, so the loops of o1_fill.rs stayed
+/// loops: clang's -Og is its -O1, which has LoopIdiomRecognize.
+#[test]
+fn og_reaches_the_backend_as_o1_like_clang() {
+    assert_eq!(built("-Og -c x.c").level, "1");
+}

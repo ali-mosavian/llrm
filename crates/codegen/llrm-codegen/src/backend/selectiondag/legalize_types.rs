@@ -619,16 +619,13 @@ impl<'a> TypeLegalizer<'a> {
                 self.dag.get_node(ISD::AnyExtend, vt, &[promoted])
             }
             ISD::SignExtend => {
-                // `PromoteIntOp_SIGN_EXTEND`: `getNode(ISD::SIGN_EXTEND_INREG)`
-                // as a shift left and an arithmetic one right.
+                // `PromoteIntOp_SIGN_EXTEND`.
                 let src = self.dag.operand(node, 0);
                 let promoted = self.promoted_integer(src);
                 let vt = self.dag.value_type(node);
                 let wide = self.dag.get_node(ISD::AnyExtend, vt, &[promoted]);
-                let unused = vt.size_in_bits() - self.dag.value_type(src).size_in_bits();
-                let amount = self.dag.get_constant(u128::from(unused), EVT::I8);
-                let high = self.dag.get_node(ISD::Shl, vt, &[wide, amount]);
-                self.dag.get_node(ISD::Sra, vt, &[high, amount])
+                let inner = self.dag.get_value_type_node(self.dag.value_type(src));
+                self.dag.get_node(ISD::SignExtendInReg, vt, &[wide, inner])
             }
             ISD::Select if at == 0 => {
                 // The condition becomes the target's boolean type
@@ -762,6 +759,7 @@ impl<'a> TypeLegalizer<'a> {
                     (lo, self.dag.get_node(ISD::SignExtendInReg, half, &[hi, ty]))
                 }
             }
+            ISD::Load if vt == EVT::Simple(MVT::Far) && !self.addresses_memory(value) => self.expand_load(value, half),
             ISD::Load if vt == EVT::Simple(MVT::Far) => {
                 // A far pointer is `les`: the offset, with the selector left in
                 // `ES` and read back on the chain (SD2).
@@ -1381,6 +1379,21 @@ impl<'a> TypeLegalizer<'a> {
         let chains = self.dag.get_token_factor(&[SDValue { node: lo.node, res: 1 }, SDValue { node: hi.node, res: 1 }]);
         self.replace_value_with(SDValue { node: value.node, res: 1 }, chains);
         (lo, hi)
+    }
+
+    /// Whether a far pointer may be addressed, so its selector must be in `ES`
+    /// (`les`). Only a pointer every user of which ends in this block as data,
+    /// a huge-pointer difference, is loaded as two words, which a `movzx`
+    /// folds. Any other user (a store, a call, a register copy to another
+    /// block) may address it later.
+    fn addresses_memory(
+        &self,
+        pointer: SDValue,
+    ) -> bool {
+        let value = SDValue { node: pointer.node, res: 0 };
+        let mut users = self.dag.users(value).peekable();
+        users.peek().is_none()
+            || users.any(|user| self.dag.opcode(SDValue { node: user, res: 0 }) != x86isd::LLRM_PTRDIFF)
     }
 
     /// `ptr + step` for the second half of a split access. A far pointer moves

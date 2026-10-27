@@ -182,6 +182,7 @@ const LLC_FLAGS: &[&str] = &[
     "-mno-stack-is-data",
     "-mfar-bss",
     "-mno-far-bss",
+    "-mregcall-default",
     "-mbss-begin",
     "-mno-bss-begin",
     "-fstack-usage",
