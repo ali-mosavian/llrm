@@ -1271,21 +1271,24 @@ def _current_head(number: str) -> str:
     return git("rev-parse", "FETCH_HEAD").strip()
 
 
-def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=None, cache: Path | None = None, jobs: int = 1, cap: float | None = None, current=None, recheck=None) -> tuple[list[str], dict[str, str]]:
-    """(the numbers that pass alone, {number: why} for those that fail). The verdict is kept per head sha in `cache`, so a PR checked while the previous batch squashed is not
-    checked again, except for `recheck(head, base)` (seconds: the head merged with the base as it is now, the generated pages): a cached pass was made against an older base, and a page
-    a landing since made stale only shows on the merge. The uncached PRs run `jobs` at a time; the ones not finished `cap` seconds in are kept, unfiltered (a check of 40 PRs one after another took hours)."""
+def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=None, cache: Path | None = None, jobs: int = 1, cap: float | None = None, current=None, base_sha: str = "", recheck=None) -> tuple[list[str], dict[str, str]]:
+    """(the numbers that pass alone, {number: why} for those that fail). A pass is kept per head sha in `cache`, so a PR checked while the previous batch squashed is not
+    checked again; a refusal per head sha AND `base_sha`: it names what the base lacked (a conflict, a red scanner the base now fixes), and #5092 was refused at 02:31 for two reds
+    the head had, then again at 02:53 and 03:03 from the cache. Except for `recheck(head, base)` (seconds: the head merged with the base as it is now, the generated pages), a pass is not run again: it was made against an older base, and a page a landing since made stale only shows on the merge. The uncached PRs run `jobs` at a time; the ones not finished `cap` seconds in are kept, unfiltered (a check of 40 PRs one after another took hours)."""
     verdicts: dict[str, str] = {}
     waiting: queue.Queue[str] = queue.Queue()
     rechecked: set[str] = set()
     for number in numbers:
-        stored = cache / heads[number] if cache else None
-        if stored and stored.exists():
+        passed, refused = (cache / heads[number], cache / f"{heads[number]}@{base_sha[:12]}") if cache else (None, None)
+        if passed and passed.exists() and not passed.read_text():
             HITS[0] += 1
-            verdicts[number] = stored.read_text()
-            if recheck and not verdicts[number]:
+            verdicts[number] = ""
+            if recheck:
                 rechecked.add(number)
                 waiting.put(number)
+        elif refused and base_sha and refused.exists():
+            HITS[0] += 1
+            verdicts[number] = refused.read_text()
         else:
             waiting.put(number)
     slots: queue.Queue[int] = queue.Queue()
@@ -1310,7 +1313,7 @@ def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=
                 slots.put(slot)
             if cache and number not in rechecked:
                 cache.mkdir(parents=True, exist_ok=True)
-                (cache / heads[number]).write_text(why)
+                (cache / (heads[number] if not why else f"{heads[number]}@{base_sha[:12]}")).write_text(why)
             verdicts[number] = why
 
     threads = [threading.Thread(target=worker, daemon=True) for _ in range(max(1, jobs))]
@@ -2185,7 +2188,7 @@ def dispatch() -> int:
             heads[number] = git("rev-parse", "FETCH_HEAD").strip()
         # stdout is the survivors and nothing else: the scanners print their summary line, and the runner reads this output as PR numbers
         with contextlib.redirect_stdout(sys.stderr):
-            kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", ALONE_JOBS)), cap=float(os.environ.get("ALONE_CAP", "600")), current=_current_head, recheck=_alone_docs_recheck)
+            kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", ALONE_JOBS)), cap=float(os.environ.get("ALONE_CAP", "600")), current=_current_head, recheck=_alone_docs_recheck, base_sha=git("rev-parse", BASE).strip())
         for number, why in dropped.items():
             print(alone_refusal_line(number, why, heads[number], Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-full"), file=sys.stderr)
         print(f"alone: {len(numbers)} PRs, {HITS[0]} cached, {len(numbers) - HITS[0] - len(UNCHECKED)} checked, {len(UNCHECKED)} UNCHECKED at the cap{' (' + ' '.join(UNCHECKED) + ')' if UNCHECKED else ''}, {len(dropped)} dropped", file=sys.stderr)
