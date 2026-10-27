@@ -57,14 +57,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::context::GlobalId;
-use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::module::{Function, InstId, Linkage, Module, Operand, Use};
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::types::Type;
+use llrm_mir::valuetracking::Query;
 use llrm_mir::valuetracking::guarantee::is_guaranteed_to_transfer_execution_to_successor;
 use llrm_mir::valuetracking::nonzero::null_pointer_is_defined;
-use llrm_mir::valuetracking::Query;
 use llrm_support::hash::HashSet;
 
 use crate::aa::{IRMemLocation, MemoryEffects};
@@ -426,7 +426,14 @@ fn has_non_null_attr(
     if facts.non_null() && (allow_undef_or_poison || facts.no_undef()) {
         return true;
     }
-    let dereferenceable = attrs.iter().any(|one| matches!(one, Attribute::Int(name, bytes) if name == "dereferenceable" && *bytes > 0));
+    let dereferenceable = attrs
+        .iter()
+        .any(
+            |one| matches!(
+                one,
+                Attribute::Int(name, bytes) if name == "dereferenceable" && *bytes > 0
+            ),
+        );
     let space = match module.context.types.get(function.value(function.parameters()[index]).ty) {
         Type::Pointer(space) => *space,
         _ => return false,
@@ -449,8 +456,8 @@ fn non_null_from_callsites(
     for inst in function.iter_block(entry) {
         let instruction = function.instruction(inst);
         if matches!(instruction.opcode, Opcode::Call(_) | Opcode::Invoke(_))
-            && let Some(callee) = llrm_mir::memory::callee(&module.context, function, inst)
-                .and_then(|one| module.global(one).function())
+            && let Some(callee) =
+                llrm_mir::memory::callee(&module.context, function, inst).and_then(|one| module.global(one).function())
         {
             for index in 0..callee.parameters().len().min(instruction.operands.len().saturating_sub(1)) {
                 let Operand::Value(value) = instruction.operands[index] else { continue };
