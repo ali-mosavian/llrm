@@ -266,7 +266,11 @@ pub fn lines(
         if one.file != 0 {
             return refused(format!("line {} is in file {}: one file per module", one.line, one.file));
         }
-        out[one.section].push((one.line, one.offset));
+        // Line 0 is DWARF's "no line" (a merged location): LINNUM and CodeView
+        // have none, and the bytes belong to the line before.
+        if one.line != 0 {
+            out[one.section].push((one.line, one.offset));
+        }
     }
     Ok(out)
 }
@@ -366,6 +370,19 @@ mod tests {
             ["LOCAL f.y: INTEGER", "PARAM f.x: INTEGER", "PROC f flags 0 (INTEGER) -> INTEGER"],
             "{shape:#?}"
         );
+        let lines: Vec<(u16, u16)> =
+            records.iter().filter(|one| one.r#type == omf::LINNUM).flat_map(|one| omf::lines(one).1).collect();
+        assert_eq!(lines, [(3, 0), (4, 4)]);
+    }
+
+    /// An instruction standing for two lines has line 0 (`merged_line`); the
+    /// LINNUM record named line 0 there, which Watcom's debugger reads as a
+    /// line, not as none.
+    #[test]
+    fn a_line_zero_row_is_left_out_of_linnum() {
+        let mut made = object(Vec::new(), vec![int(), procedure()]);
+        made.debug.as_mut().unwrap().lines.insert(1, Line { section: 0, offset: 2, file: 0, line: 0, column: 0 });
+        let records = omf::parse(&write::write(&made).unwrap()).unwrap();
         let lines: Vec<(u16, u16)> =
             records.iter().filter(|one| one.r#type == omf::LINNUM).flat_map(|one| omf::lines(one).1).collect();
         assert_eq!(lines, [(3, 0), (4, 4)]);

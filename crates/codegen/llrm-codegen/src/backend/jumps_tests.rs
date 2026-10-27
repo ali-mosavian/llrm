@@ -2114,6 +2114,76 @@ fn test_a_zeroing_xor_both_ways_begin_with_is_hoisted_above_the_compare() {
     assert!(at < lines.iter().position(|line| line.starts_with("cmp")).unwrap(), "{lines:?}");
 }
 
+fn lined(
+    one: Arc<Insn>,
+    line: u32,
+) -> Arc<Insn> {
+    Arc::new(Insn { line: Some(line), ..(*one).clone() })
+}
+
+fn zero_lines(
+    one: u32,
+    other: u32,
+) -> Vec<Option<u32>> {
+    let zero =
+        |at, line| lined(_inserted(_insn(at, Operation::Binary, "xor", vec![cx()], vec![cx(), cx()], None)), line);
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+            block(4, vec![zero(4, one), _move(5, bx()), _return(6)], vec![]).into(),
+            block(9, vec![zero(9, other), _move(10, bx()), _return(11)], vec![]).into(),
+        ],
+    );
+    let result = threaded(&source);
+    result
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|insn| insn.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("xor")))
+        .map(|insn| insn.line)
+        .collect()
+}
+
+/// A hoisted instruction took the line of the taken arm, so a debugger told
+/// line 3 for code that also runs for line 7; the pin merges the two
+/// (`getMergedLocation`, BranchFolding.cpp:2251) into line 0.
+#[test]
+fn test_the_instruction_hoisted_from_arms_of_different_lines_has_line_zero() {
+    assert_eq!(zero_lines(3, 7), [Some(0)]);
+}
+
+#[test]
+fn test_the_instruction_hoisted_from_arms_of_one_line_keeps_it() {
+    assert_eq!(zero_lines(3, 3), [Some(3)]);
+}
+
+/// The kept tail of two arms of different lines took one arm's line.
+#[test]
+fn test_merged_tails_of_different_lines_have_line_zero() {
+    let arm = |at: i64, line: u32| vec![lined(_inserted(_move(at, imm(0))), line), _inserted(_jump(at + 1, 30))];
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]).into(),
+            block(10, arm(10, 3), vec![30]).into(),
+            block(20, arm(20, 7), vec![30]).into(),
+            block(30, vec![_compare(30), _compare(31), _compare(32), _return(33)], vec![]).into(),
+        ],
+    );
+    let result = merged(&placed(&source).unwrap()).unwrap();
+    let lines: Vec<Option<u32>> = result
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|insn| insn.what.as_ref().is_some_and(|what| what.op == Operation::Move))
+        .map(|insn| insn.line)
+        .collect();
+    assert_eq!(lines, [Some(0)]);
+}
+
 /// A branch whose flags come from an earlier instruction, not a compare in
 /// front of it, reads what a hoisted `xor` would clobber.
 #[test]

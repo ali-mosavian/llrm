@@ -407,6 +407,19 @@ impl LirBody {
     }
 }
 
+/// The line of one instruction standing for two
+/// (`DILocation::getMergedLocation`): the line both have, none where either has
+/// none, else line 0, which a debugger does not stop at.
+pub fn merged_line(
+    one: Option<u32>,
+    other: Option<u32>,
+) -> Option<u32> {
+    match (one, other) {
+        (Some(a), Some(b)) => Some(if a == b { a } else { 0 }),
+        _ => None,
+    }
+}
+
 impl Insn {
     /// The (written, read) pair this instruction is a plain move of
     /// (`TargetInstrInfo::isCopyInstr`).
