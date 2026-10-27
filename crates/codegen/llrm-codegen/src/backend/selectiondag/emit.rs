@@ -2945,6 +2945,36 @@ impl Emitter<'_, '_> {
         }
     }
 
+    /// The register an x87 result is defined in: the one a `CopyToReg` of it
+    /// names (`CreateVirtualRegisters`), else a fresh value. Made apart, the
+    /// result and its export were two values with a copy between them, and the
+    /// coalescer's terminal rule kept a loop's copy of the old value
+    /// (`recfloat` -O2: 10 instructions a trip against the pin's 9).
+    fn x87_result(
+        &mut self,
+        result: SDValue,
+    ) -> Held {
+        let exported = self
+            .dag
+            .users(result)
+            .find_map(
+                |user| {
+                    let node = self.dag.node(SDValue { node: user, res: 0 });
+                    if self.dag.opcode(SDValue { node: user, res: 0 }) != ISD::CopyToReg || node.ops[2] != result {
+                        return None;
+                    }
+                    match self.dag.node(node.ops[1]).data {
+                        NodeData::Register(reg) => Some(reg),
+                        _ => None,
+                    }
+                },
+            );
+        match exported {
+            Some(reg) => Held { value: self.vreg(reg), width: 10 },
+            None => self.fresh(10),
+        }
+    }
+
     /// The pin's x87 pseudos (`LD_Fp64m`, `ST_Fp64m32`, `ADD_Fp80m64`,
     /// `ILD_Fp32m64`, `CHS_Fp32` ...) as the forms the stackifier reads:
     /// `FloatLoad` `fld` of a cell, `fldz`, `fld1`, `fild`; `FloatStore`
@@ -3005,7 +3035,7 @@ impl Emitter<'_, '_> {
             "LD" | "ILD" => {
                 let (first, _) = digits(rest);
                 let cell = self.cell(&group(0)?, first / 8)?;
-                let held = self.fresh(10);
+                let held = self.x87_result(result);
                 self.values.insert(result, held.value);
                 let mnemonic = if prefix == "LD" { "fld" } else { "fild" };
                 self.push(Operation::FloatLoad, mnemonic, vec![Loc::Held(held)], vec![Loc::Mem(cell)]);
@@ -3032,7 +3062,7 @@ impl Emitter<'_, '_> {
                 let Loc::Held(source) = self.operand(node.ops[0])? else {
                     return Err(EmitError::Unsupported(format!("{name}: an operand that is no register")));
                 };
-                let held = self.fresh(10);
+                let held = self.x87_result(result);
                 self.values.insert(result, held.value);
                 let mnemonic = format!("f{}", prefix.to_ascii_lowercase());
                 self.push(Operation::FloatUnary, &mnemonic, vec![Loc::Held(held)], vec![Loc::Held(source)]);
@@ -3052,7 +3082,7 @@ impl Emitter<'_, '_> {
                 let Loc::Held(left) = self.operand(node.ops[0])? else {
                     return Err(EmitError::Unsupported(format!("{name}: an operand that is no register")));
                 };
-                let held = self.fresh(10);
+                let held = self.x87_result(result);
                 self.values.insert(result, held.value);
                 let op = prefix.to_ascii_lowercase();
                 let (mnemonic, right) = if let Some(integer) = rest.strip_prefix('I') {
