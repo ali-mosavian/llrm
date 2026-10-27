@@ -101,7 +101,7 @@ fn a_float_compare_is_an_fcom_and_a_set() {
     assert!(whats[compare..].iter().any(|w| w.name.as_deref().is_some_and(|n| n.starts_with("set"))));
 }
 
-const FLOAT_COMPARE_AND_ADD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const FLOAT_COMPARE_AND_ADD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 
 define internal cc 1000 void @f() addrspace(1) \"llrm-fp-eval\"=\"x87-extended\" norecurse {
 b1:
@@ -462,7 +462,7 @@ fn an_unsigned_64_bit_integer_converts_to_a_double() {
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
 
-const M16_DOUBLE_ARGUMENT: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+const M16_DOUBLE_ARGUMENT: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 declare void @g(double)
 define void @f(double %x) {
 entry:
@@ -496,7 +496,7 @@ fn a_double_argument_is_stored_through_a_copy_of_sp_at_m16() {
     assert!(cell.base.is_some() && cell.through == llrm_lir::registers::RegId::None, "{cell:?}");
 }
 
-const FPROUND_F32: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const FPROUND_F32: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 define cc 1000 ptr @h(ptr %0, ptr %1) addrspace(1) {
 b1:
   %2 = load float, ptr %0
@@ -517,7 +517,7 @@ fn a_rounded_float_has_its_slot_in_the_frame() {
         .unwrap_or_else(|why| panic!("{}", why.0));
 }
 
-const ROUNDED_STORE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const ROUNDED_STORE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 define cc 1000 void @h(ptr %0, ptr %1, ptr %2) addrspace(1) {
 b1:
   %3 = load double, ptr %0
@@ -658,6 +658,33 @@ fn a_bitcast_between_a_float_and_an_integer_goes_through_the_stack() {
     }
 }
 
+/// An unsigned 64-bit integer converted to a double reads the fudge constant
+/// at +0 or +4 of its pool entry: the address carried no offset, and
+/// `(double)big` panicked in the adapter ("a constant pool entry plus a
+/// displacement is not in our DAG"; `c/zz_f.c` at -O0 m32).
+#[test]
+fn an_unsigned_i64_converts_to_a_double_through_the_pool_at_an_offset() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @report(i32)
+define i32 @f() {
+  %1 = alloca i64, align 8
+  %2 = alloca double, align 8
+  store i64 -1, ptr %1, align 8
+  %3 = load i64, ptr %1, align 8
+  %4 = uitofp i64 %3 to double
+  store double %4, ptr %2, align 8
+  %5 = load double, ptr %2, align 8
+  %6 = fcmp oeq double %5, 1.000000e+00
+  %7 = zext i1 %6 to i32
+  call void @report(i32 %7)
+  ret i32 0
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}
+
 const ROUNDED_DOUBLE_STORE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define void @f(double %x, ptr %p) {
 entry:
@@ -726,7 +753,7 @@ fn a_round_read_only_as_a_call_argument_is_not_stored_to_a_slot_first() {
     assert_eq!(count(ROUNDED_ARGUMENT), count(PLAIN_ARGUMENT));
 }
 
-const HUGE_DIFFERENCE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const HUGE_DIFFERENCE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 declare i32 @llrm.ia16.ptrdiff.i32.p3(ptr addrspace(3), ptr addrspace(3))
 define cc 1005 i32 @f(ptr addrspace(3) %0, ptr addrspace(3) %1) addrspace(1) {
 b1:

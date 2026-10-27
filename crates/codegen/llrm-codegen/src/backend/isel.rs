@@ -918,11 +918,6 @@ const MEMCPY_MOVES: i64 = 8;
 /// copy tuned for size is inline moves up to this many pairs, else `rep movs`.
 const MEMCPY_MOVES_SIZE: i64 = 4;
 
-/// The bytes of a constant memset's `rep stosb` through es:di, as
-/// `memset` makes it tuned for size: `lea di`, ES saved and set, the byte,
-/// the count, the fill, and DI's save in the frame.
-const FILL_BYTES: i64 = 3 + 4 + 2 + 3 + 2 + 2;
-
 /// The bytes a value of `ty` takes in memory or on the stack: a far
 /// pointer is its offset and selector, in two registers.
 pub(super) fn size_of(
@@ -1456,6 +1451,32 @@ fn noted(
     };
     // What the records say, by where each stands.
     let mut said_at: Vec<(i64, u32, Option<(u32, u32)>, NoteValue)> = Vec::new();
+    // A parameter whose every record says its own argument is said where the
+    // function is entered, wherever the passes left the records
+    // (`SelectionDAGBuilder::EmitFuncArgumentDbgValue`): the argument is in
+    // its register from the entry, and a record the code folded away from
+    // stands past the last use.
+    let entered = function
+        .entry()
+        .and_then(|entry| function.iter_block(entry).find(|&inst| function.instruction(inst).opcode != Opcode::Phi))
+        .and_then(|first| ats.get(&first).copied());
+    let own_argument = |record: &llrm_mir::DebugRecord| match record.what {
+        llrm_mir::DebugWhat::Value(llrm_mir::Operand::Value(one)) => function.parameters().contains(&one),
+        _ => false,
+    };
+    let at_entry: BTreeSet<_> = function
+        .debug_records()
+        .iter()
+        .map(|record| record.variable)
+        .filter(|&variable| {
+            llrm_mir::debuginfo::read_variable(module, variable).is_some_and(|one| one.parameter)
+                && function
+                    .debug_records()
+                    .iter()
+                    .filter(|record| record.variable == variable)
+                    .all(|record| own_argument(record))
+        })
+        .collect();
     for record in function.debug_records() {
         // A value held in two registers (an i64's dwords on a 32-bit target, a
         // long's words on a 16-bit one) is said as the two pieces it is.
@@ -1476,6 +1497,7 @@ fn noted(
             llrm_mir::DebugWhat::Gone => (NoteValue::Nothing, None),
         };
         let Some(&at) = ats.get(&record.before) else { continue };
+        let at = if at_entry.contains(&record.variable) { entered.unwrap_or(at) } else { at };
         said_at.push((at, record.variable.0, piece, value));
     }
     // Records of one variable that stand together and disagree (the statements
@@ -3785,7 +3807,11 @@ impl Selector<'_, '_, '_> {
             }
             Pointer::Frame { disp, index: None, .. } => {
                 let address = AddressRef {
-                    through: RegId::BP,
+                    // `FRAME` names the frame in every
+                    // width: `bodyfacts`, `remat` and `floatassign` find a
+                    // frame cell by it, and the prologue resolves it to the
+                    // target's frame register.
+                    through: llrm_lir::registers::FRAME,
                     disp_width: 2,
                     ..AddressRef::new(Some(Addr::new(Space::Frame, disp)))
                 };
@@ -6123,6 +6149,8 @@ impl Selector<'_, '_, '_> {
                 Some(Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd) => Ok(()),
                 // A fact for the passes: no code.
                 Some(Intrinsic::Assume) => Ok(()),
+                // A hint; the 386 and 486 have no prefetch instruction.
+                Some(Intrinsic::Prefetch | Intrinsic::FakeUse) => Ok(()),
                 _ => refuse(format!("@{name}")),
             };
         }
@@ -6497,10 +6525,10 @@ impl Selector<'_, '_, '_> {
                     // callee reads the next argument 12 bytes on.
                     let slot = (i64::from(size) + self.arch.stack_slot_bytes() - 1) / self.arch.stack_slot_bytes()
                         * self.arch.stack_slot_bytes();
-                    let sp = Loc::Reg(Reg { register: RegId::SP, width: 2 });
+                    let sp = Loc::Reg(Reg { register: self.arch.stack_pointer(), width: self.address_bytes() });
                     let count = Loc::Imm(Imm { value: slot, width: 2, address: None });
                     out.push(insn(at, semantics(Operation::Binary, "sub", vec![sp.clone()], vec![sp, count])));
-                    let top = Mem { through: RegId::SP, disp_width: 0, ..Mem::new(None, size) };
+                    let top = Mem { through: self.arch.stack_pointer(), disp_width: 0, ..Mem::new(None, size) };
                     out.push(insn(
                         at,
                         semantics(Operation::FloatStore, "fstp", vec![Loc::Mem(top)], vec![Loc::Held(held)]),
@@ -6848,7 +6876,7 @@ impl Selector<'_, '_, '_> {
             Callee::Indirect(_) => {}
         }
         if contract.caller_cleanup > 0 {
-            let sp = Loc::Reg(Reg { register: RegId::SP, width: 2 });
+            let sp = Loc::Reg(Reg { register: self.arch.stack_pointer(), width: self.address_bytes() });
             let count = Loc::Imm(Imm { value: contract.caller_cleanup, width: 2, address: None });
             out.push(insn(at, semantics(Operation::Binary, "add", vec![sp.clone()], vec![sp, count])));
         }
@@ -6895,7 +6923,7 @@ impl Selector<'_, '_, '_> {
         let bytes = i64::from(byval_bytes(self.module, &self.layout, self.arch, aggregate)?);
         let copy = self.layout.alloc_size(self.types(), aggregate) as i64;
         let from = self.pointer(source)?;
-        let sp = Loc::Reg(Reg { register: RegId::SP, width: 2 });
+        let sp = Loc::Reg(Reg { register: self.arch.stack_pointer(), width: self.address_bytes() });
         let count = Loc::Imm(Imm { value: bytes, width: if bytes > 0x7FFF { 4 } else { 2 }, address: None });
         out.push(insn(at, semantics(Operation::Binary, "sub", vec![sp.clone()], vec![sp.clone(), count])));
         let base = self.fresh_held(self.address_bytes());
@@ -6904,15 +6932,6 @@ impl Selector<'_, '_, '_> {
             Pointer::Based { base, index: None, scale: 1, offset: 0, segment: Some(regs.stack_segment_register()) };
         self.copied(to, from, Some(copy), None, false, false, at, out)?;
         Ok(bytes)
-    }
-
-    /// The bytes of the stores `memset` expands a constant `length` to,
-    /// each at a one-byte displacement: two or more dwords store a register.
-    fn stored_bytes(length: i64) -> i64 {
-        let dwords = length / 4;
-        let each = if dwords > 1 { 4 } else { 8 };
-        let setup = if dwords > 1 { 6 } else { 0 };
-        setup + dwords * each + if length % 4 >= 2 { 5 } else { 0 } + if length % 2 == 1 { 4 } else { 0 }
     }
 
     /// Whether a constant memset of `length` bytes is stores rather than a
@@ -6931,7 +6950,11 @@ impl Selector<'_, '_, '_> {
         let stores = length / 4 + (length % 4).count_ones() as i64;
         let ratio = self.cpu.operations.pieces(self.cpu.size, zero);
         match ratio {
-            0 => stores <= MEMSET_STORES && !(self.cpu.size && Self::stored_bytes(length) > FILL_BYTES),
+            0 => {
+                stores <= MEMSET_STORES
+                    && !(self.cpu.size
+                        && crate::backend::memcpycall::stored_bytes(length) > crate::backend::memcpycall::FILL_BYTES)
+            }
             ratio => stores < ratio,
         }
     }

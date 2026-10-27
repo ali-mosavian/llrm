@@ -231,12 +231,12 @@ def docs_failures(root: Path = ROOT, run=None) -> dict[str, str]:
     """`ratchet:docs` -> the generated pages that are out of date (or the figure problem) on the tree in `root`; none when `docsbuild --check` is clean. A header change
     that landed without `docsbuild --sync` (jumps.rs) refused every docs-touching PR after it (#2757, #2763, #2857, #2836) with nothing naming the page."""
     run = run or (lambda command: subprocess.run(command, cwd=root, capture_output=True, text=True))
-    done = run([sys.executable, "tools/docsbuild/build.py", "--check"])
+    done = run([sys.executable, "tools/docs/docsbuild/build.py", "--check"])
     if not done.returncode:
         return {}
     lines = [line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip()]
     pages = [line for line in lines if line.startswith("docs/")]
-    why = f"out of date: {', '.join(pages)}; run python3 tools/docsbuild/build.py --sync" if pages else " / ".join(lines[:2])
+    why = f"out of date: {', '.join(pages)}; run python3 tools/docs/docsbuild/build.py --sync" if pages else " / ".join(lines[:2])
     # one name per output line: docsbuild --check was red on the base with 23 lines, and a 24th hid behind the one `ratchet:docs`
     named = {f"ratchet:docs {line.replace(': ', ' - ').replace('; ', ' ')[:140]}": why[:300] for line in lines}
     return named or {"ratchet:docs": why[:300]}
@@ -607,10 +607,23 @@ SCANNERS = {
     "no_partial_ecx_counts": "scans the 32-bit runtime assembly",
     "selectiondag_registry": "reads the SD registry in the plan and every source's SD numbers",
     "no_local_paths": "scans docs",
+    "target_facts": "reads the target descriptions' facts",
     "no_todo": "scans sources",
     "tracked_build_products": "lists tracked files",
 }
 TOOL_COMPILERS = ("llrm-c", "llrm-qb", "llrm-nib", "nibfront")  # what tools/dosbatch and the run_tests scripts build programs with
+
+
+def with_common(
+    text: str,
+    root: Path = ROOT,
+) -> str:
+    """`text` of a target and, if it says `mod common;`, the text of tests/common/mod.rs and of each `common::NAME` submodule it names: what a target reaches through the helper."""
+    if not re.search(r"^\s*(?:pub\s+)?mod common;", text, re.M):
+        return text
+    common = root / "tests" / "common"
+    files = [common / "mod.rs", *(common / f"{name}.rs" for name in set(re.findall(r"\bcommon::(\w+)", text)))]
+    return "\n".join([text, *(one.read_text(errors="replace") for one in files if one.is_file())])
 
 
 def integration_map(
@@ -628,7 +641,7 @@ def integration_map(
     bins = {target["name"]: named(Path(target["src_path"]).read_text()) for one in metadata["packages"] if one["name"] == "llrm" for target in one["targets"] if target["kind"] == ["bin"]}
     out = {}
     for source in sorted((root / "tests").glob("*.rs")):
-        text = source.read_text(errors="replace")
+        text = with_common(source.read_text(errors="replace"), root)
         used = named(text)
         for name in set(re.findall(r"CARGO_BIN_EXE_([\w-]+)", text)):
             used |= {name} & bins.keys() and bins[name]

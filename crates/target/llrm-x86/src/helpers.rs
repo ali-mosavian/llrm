@@ -7,7 +7,7 @@ use std::sync::{LazyLock, Mutex};
 
 use llrm_lir::registers::RegId;
 use llrm_support::hash::HashMap;
-pub use llrm_target::routines::{Divide, HugeString};
+pub use llrm_target::routines::{Divide, HugeString, Used};
 
 use crate::asm::{self, Mode, Refusal};
 
@@ -18,6 +18,8 @@ const SIGNS: &str = include_str!("helpers/signs.asm");
 const UNSIGNS: &str = include_str!("helpers/unsigns.asm");
 const SIGNS32: &str = include_str!("helpers/signs32.asm");
 const UNSIGNS32: &str = include_str!("helpers/unsigns32.asm");
+const UNSIGNS32_QUOTIENT: &str = include_str!("helpers/unsigns32q.asm");
+const UNSIGNS32_REMAINDER: &str = include_str!("helpers/unsigns32r.asm");
 
 /// The divide of a `signed` or unsigned i64 by a divisor of `wide_divisor`
 /// (two dwords) or one dword, assembled for code of `bits` bits: real mode
@@ -27,9 +29,22 @@ pub fn divide(
     wide_divisor: bool,
     bits: u32,
 ) -> Result<Divide, Refusal> {
-    static CACHE: LazyLock<Mutex<HashMap<(bool, bool, u32), Result<Divide, Refusal>>>> =
+    divide_used(signed, wide_divisor, bits, Used::Both)
+}
+
+/// `divide` for a caller that reads only `used`: the signed routine by a dword
+/// divisor leaves the sign of the other result unfixed (SD232).
+pub fn divide_used(
+    signed: bool,
+    wide_divisor: bool,
+    bits: u32,
+    used: Used,
+) -> Result<Divide, Refusal> {
+    // only the signed dword-divisor routine has shorter forms
+    let used = if signed && !wide_divisor { used } else { Used::Both };
+    static CACHE: LazyLock<Mutex<HashMap<(bool, bool, u32, u8), Result<Divide, Refusal>>>> =
         LazyLock::new(Default::default);
-    memoized(&CACHE, (signed, wide_divisor, bits), || divided(signed, wide_divisor, bits))
+    memoized(&CACHE, (signed, wide_divisor, bits, used as u8), || divided(signed, wide_divisor, bits, used))
 }
 
 /// A cached routine: the source and mode fix it, and the compiler asks for it
@@ -51,6 +66,7 @@ fn divided(
     signed: bool,
     wide_divisor: bool,
     bits: u32,
+    used: Used,
 ) -> Result<Divide, Refusal> {
     let mode = if bits == 32 {
         Mode { bits: 32, segmented: false, address_bytes: 4, wide: true }
@@ -61,14 +77,28 @@ fn divided(
         (false, true) => [CHECK, NARROW, WIDE, "done:\n"].concat(),
         (true, true) => [SIGNS, CHECK, NARROW, WIDE, "done:\n", UNSIGNS].concat(),
         (false, false) => ["    xor ecx, ecx\n", NARROW, "done:\n"].concat(),
-        (true, false) => [SIGNS32, NARROW, "done:\n", UNSIGNS32].concat(),
+        (true, false) => [
+            SIGNS32,
+            NARROW,
+            "done:\n",
+            match used {
+                Used::Both => UNSIGNS32,
+                Used::Quotient => UNSIGNS32_QUOTIENT,
+                Used::Remainder => UNSIGNS32_REMAINDER,
+            },
+        ]
+        .concat(),
     };
     let lines: Vec<&str> = source.lines().collect();
     let name = match (signed, wide_divisor) {
         (false, true) => "div64_u",
         (true, true) => "div64_s",
         (false, false) => "div64_u32",
-        (true, false) => "div64_s32",
+        (true, false) => match used {
+            Used::Both => "div64_s32",
+            Used::Quotient => "div64_s32q",
+            Used::Remainder => "div64_s32r",
+        },
     };
     Ok(Divide {
         name,

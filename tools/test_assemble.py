@@ -69,9 +69,9 @@ def test_a_pr_whose_build_fails_alone_is_dropped_before_assembly_and_checked_onc
         return ["does not build as a whole: error[E0425]"] if head == bad else []
 
     heads = {"1": good, "2": bad}
-    kept, dropped = ps.alone(["1", "2"], heads, refusals=refusals, cache=tmp_path / "cache")
+    kept, dropped = ps.alone(["1", "2"], heads, refusals=refusals, cache=tmp_path / "cache", base_sha="b" * 40)
     assert kept == ["1"] and "E0425" in dropped["2"] and "2" not in kept
-    ps.alone(["1", "2"], heads, refusals=refusals, cache=tmp_path / "cache")
+    ps.alone(["1", "2"], heads, refusals=refusals, cache=tmp_path / "cache", base_sha="b" * 40)
     assert built == [good, bad], built
 
 
@@ -120,7 +120,7 @@ def test_a_refusal_of_a_head_the_pr_has_moved_off_does_not_drop_it(tmp_path):
 def test_a_docs_check_that_only_counts_lint_hits_is_not_a_failed_regeneration():
     """#4993 was refused for `4 problem(s)`: the baseline `no # Example` hits, with every page current."""
     lint = "crates/x/remidiom.rs: no # Example\n4 problem(s)\n"
-    stale = "generated docs are out of date; run python3 tools/docsbuild/build.py --sync\n  docs/optimizations/backend/a.md\n"
+    stale = "generated docs are out of date; run python3 tools/docs/docsbuild/build.py --sync\n  docs/optimizations/backend/a.md\n"
     assert ps.docs_stale_lines(lint) == [] and ps.docs_stale_lines(stale) == ["docs/optimizations/backend/a.md"]
 
 
@@ -532,6 +532,28 @@ def test_an_alone_check_runs_the_lib_tests_of_the_crates_that_depend_on_the_one_
     monkeypatch.setattr(smoke, "dependants_lib_failures", lambda packages, **_: ran.append(set(packages)) or set())
     ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda f: set())
     assert ran and {"llrm-transforms", "llrm-qb"} <= ran[0] and not {"llrm-nib", "llrm-x86"} & ran[0], ran  # qb depends on the change; nib does not; x86 does, but only qb, c and nib are probed
+
+
+def test_the_last_alone_slot_is_for_urgent_prs_only(tmp_path, monkeypatch):
+    import pytest  # noqa: PLC0415
+
+    """Every alone slot was held by checks of ordinary PRs (and by orphaned warm-ups) while landing fixes waited; the last slot is reserved for the PRs of urgent.txt."""
+    root = tmp_path / "slots"
+    held = [ps._claim_slot(root, 3) for _ in range(2)]
+    assert sorted(slot for slot, _ in held) == [0, 1]
+
+    def sleep(_):
+        raise TimeoutError("an ordinary PR waits for a slot")
+
+    monkeypatch.setattr(ps.time, "sleep", sleep)
+    with pytest.raises(TimeoutError):
+        ps._claim_slot(root, 3)
+    slot, lock = ps._claim_slot(root, 3, urgent=True)
+    assert slot == 2, "the reserved slot goes to an urgent PR"
+    lock.close()
+    (tmp_path / "urgent.txt").write_text("# fixes\n5073 5125 # docs\n5123\n")
+    assert ps.urgent_numbers({"LAND_TMP": str(tmp_path)}) == {"5073", "5125", "5123"}
+    assert ps.urgent_numbers({"LAND_TMP": str(tmp_path / "none")}) == set()
 
 
 def test_a_pr_that_does_not_link_alone_is_refused_and_only_a_runtime_or_frontend_pr_pays_for_the_check(tmp_path):

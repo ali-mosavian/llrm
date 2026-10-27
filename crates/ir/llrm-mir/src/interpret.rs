@@ -573,7 +573,11 @@ impl<'m> Machine<'m> {
                 self.poison[to..to + length].copy_from_slice(&poison);
                 void
             }
-            Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd | Intrinsic::Assume => void,
+            Intrinsic::LifetimeStart
+            | Intrinsic::LifetimeEnd
+            | Intrinsic::Assume
+            | Intrinsic::Prefetch
+            | Intrinsic::FakeUse => void,
             Intrinsic::Expect => argument(0),
             // Flat memory: the address difference, wrapped to the result.
             Intrinsic::PtrDiff => match (argument(0), argument(1), self.types().int_bits(returns)) {
@@ -591,6 +595,7 @@ impl<'m> Machine<'m> {
             Intrinsic::StackSave | Intrinsic::StackRestore => return unsupported("a stack pointer"),
             Intrinsic::Code => return unsupported("inline code"),
             Intrinsic::Asm => return unsupported("inline assembly"),
+            Intrinsic::IsConstant => return unsupported("a test for a constant"),
         })
     }
 

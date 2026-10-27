@@ -1,7 +1,7 @@
 //! A static function called from one place goes with that call, whatever its
 //! size.
 
-use std::process::Command;
+mod common;
 
 const KERNEL: &str = "
 static int sum(const int *a, int n)
@@ -32,7 +32,7 @@ fn listing(flags: &[&str]) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .args(["-m32", "-march=i486"])
         .args(flags)
@@ -75,7 +75,7 @@ fn survives(
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .args(["-m32", "-march=i486", "-O2", "-S", "-o", "a.s", "a.c"])
         .output()

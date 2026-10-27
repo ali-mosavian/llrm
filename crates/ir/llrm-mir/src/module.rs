@@ -270,6 +270,10 @@ pub struct DebugRecord {
     pub before: InstId,
     pub variable: MetadataId,
     pub what: DebugWhat,
+    /// Of clang's `#dbg_declare(ptr %x, !var, !DIExpression(), !loc)`: the
+    /// expression and the location it was written with.
+    pub expression: Option<MetadataId>,
+    pub location: Option<MetadataId>,
 }
 
 /// An operand slot: which instruction, and which of its operands.
@@ -453,6 +457,8 @@ pub struct Function {
     pub parameter_attrs: Vec<Vec<Attribute>>,
     pub return_attrs: Vec<Attribute>,
     pub attrs: Vec<Attribute>,
+    /// `define ... !dbg !10 {`: the function's metadata attachments.
+    pub metadata: Vec<(String, MetadataId)>,
     pub personality: Option<ConstantId>,
     /// LLVM's calling convention number; 0 is C's.
     pub calling_convention: u32,
@@ -522,6 +528,7 @@ impl Function {
             parameter_attrs: Vec::new(),
             return_attrs: Vec::new(),
             attrs: Vec::new(),
+            metadata: Vec::new(),
             personality: None,
             calling_convention: 0,
             void,
@@ -1249,12 +1256,25 @@ pub enum MetadataOperand {
     Node(MetadataId),
     String(String),
     Constant(ConstantId),
+    /// A bare word of a [`Special`] node, as written: an enumerator
+    /// (`DW_ATE_signed`), a flag set (`DIFlagA | DIFlagB`), `true`.
+    Ident(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MetadataNode {
     pub distinct: bool,
     pub operands: Vec<MetadataOperand>,
+}
+
+/// What a node written `!Kind(field: value, ...)` is (LLVM's specialized
+/// metadata, `DILocation`, `DISubprogram`...): its operands are the values in
+/// order, `fields` their names, empty for one given by position
+/// (`!DIExpression(DW_OP_plus_uconst, 4)`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Special {
+    pub kind: String,
+    pub fields: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1265,6 +1285,11 @@ pub struct Module {
     pub globals: Vec<GlobalValue>,
     pub metadata: Vec<MetadataNode>,
     pub named_metadata: Vec<(String, Vec<MetadataId>)>,
+    /// The nodes of `metadata` written as specialized metadata.
+    pub special: std::collections::BTreeMap<MetadataId, Special>,
+    /// The attachments of a variable (`@g = global i32 3, !dbg !0`), by the
+    /// global's index in `globals`.
+    pub global_metadata: std::collections::BTreeMap<u32, Vec<(String, MetadataId)>>,
     /// The `section "NAME"` of a global, by its name (`#pragma data_seg`,
     /// `#pragma code_seg`). Printing does not carry it.
     pub sections: std::collections::BTreeMap<String, String>,

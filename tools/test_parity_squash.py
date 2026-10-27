@@ -365,10 +365,10 @@ elif "--check" in sys.argv and index.read_text() != want:
 
 def generated_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "r"
-    (repo / "tools/docsbuild").mkdir(parents=True)
+    (repo / "tools/docs/docsbuild").mkdir(parents=True)
     (repo / "docs/optimizations/passes").mkdir(parents=True)
     sh(repo, "init", "-q", "-b", "main")
-    (repo / "tools/docsbuild/build.py").write_text(GENERATOR)
+    (repo / "tools/docs/docsbuild/build.py").write_text(GENERATOR)
     (repo / "docs/optimizations/passes/readme.md").write_text("- a\n")
     sh(repo, "add", "-A")
     sh(repo, "commit", "-qm", "base")
@@ -1072,7 +1072,7 @@ def test_the_docs_scanner_runs_at_landing_without_the_lib_tests_switch():
         return {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}
 
     assert ps.landing_scanner_failures(["docs/working/x.md"], False, on_merged=on_merged, on_head=lambda t: set()) == {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}
-    assert asked == [["docs_in_sync", "docs_links", "no_local_paths"]]
+    assert asked == [sorted(ps.ALWAYS_SCANNERS)] and {"docs_in_sync", "docs_links", "no_local_paths"} <= set(asked[0])
     asked.clear()
     ps.landing_scanner_failures(["docs/working/x.md"], True, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
     assert "docs_links" in asked[0] and len(asked[0]) > 1
@@ -1100,10 +1100,10 @@ def test_a_pr_is_rescanned_when_the_batch_dropped_one_after_its_scan():
 def test_a_squash_github_refuses_prints_the_reason(capsys):
     """`4108: REFUSED: #4108 ` named no reason: the log held GitHub's message on a line the summary does not carry, and the only REFUSED text left was the batch's summary."""
     info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b"}
-    refuse = lambda command, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)\n")  # noqa: E731
+    refuse = lambda command, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="GraphQL: Pull Request is not mergeable (mergePullRequest)\n")  # noqa: E731
     assert ps.squash("4108", info, "body", run=refuse) is False
     out = capsys.readouterr().out
-    assert "#4108: REFUSED: the squash was refused by GitHub: GraphQL: Head branch was modified" in out and "(mergePullRequest)" in out
+    assert "#4108: REFUSED: the squash was refused by GitHub: GraphQL: Pull Request is not mergeable" in out and "(mergePullRequest)" in out
 
 
 def test_a_doc_naming_a_path_of_one_machine_is_refused_at_landing_without_the_lib_tests_switch():
@@ -1282,6 +1282,52 @@ def test_a_squash_github_failed_on_its_side_is_retried_once_after_a_wait_not_ref
     assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Something went wrong")
 
 
+def test_a_squash_github_declines_for_a_moved_head_is_left_out_not_refused(capsys):
+    """#5087's squash was declined with `Head branch was modified` (its owner pushed during the batch) and counted as a REFUSAL in the summary and the exit code; the PR is left out and re-queued."""
+    run, calls = _gh(["GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)"])
+    info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b"}
+    ps.HEAD_MOVED.clear()
+    assert ps.squash("5087", info, "body", run=run, settle=0, retry_wait=0) is False
+    out = capsys.readouterr().out
+    assert "#5087: LEFT OUT (head moved)" in out and "REFUSED" not in out and "5087" in ps.HEAD_MOVED
+    assert ps.batch_summary(["1"], ["2"], [], ["5087"]) == "LANDED: #1  REFUSED: #2  LEFT OUT (head moved): #5087"
+    assert ps.batch_summary([], [], [], ["5087"]) == "LANDED: -  REFUSED: -  LEFT OUT (head moved): #5087"
+
+
+def test_a_docs_refusal_names_the_stale_pages_with_the_batch_and_head_blobs_and_the_prs_that_changed_the_source(tmp_path):
+    """Four refusals of the 03:03 batch said `docs_in_sync::test_no_generated_page_is_stale` and nothing else; owners guessed which page and which PR."""
+    def git(*args):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/a.md").write_text("head\n")
+    git("add", ".")
+    git("commit", "-qm", "base")
+    (tmp_path / "docs/a.md").write_text("<!-- src: crates/x/precse.rs sha256:0 -->\nstale in the batch\n")
+    head_blob, batch_blob = git("rev-parse", "main:docs/a.md")[:9], git("hash-object", "docs/a.md")[:9]
+    got = ps.docs_detail({"integration docs_in_sync::test_no_generated_page_is_stale"}, tmp_path, "main", stale=lambda root: {"docs/a.md", "docs/gone.md"}, members=lambda: {"5094": ["crates/x/precse.rs"], "5071": ["other.rs"]})
+    assert got == f" [stale pages: docs/a.md (batch tree {batch_blob}, head {head_blob}; source crates/x/precse.rs, changed by #5094); docs/gone.md (batch tree absent, head absent)]", got
+    assert ps.docs_detail({"integration docs_links::t"}, tmp_path, "main", stale=lambda root: pytest.fail("not a docs refusal")) == ""
+
+
+def test_an_alone_refusal_is_not_replayed_once_the_base_moved(tmp_path):
+    """#5092 was refused alone at 02:31 for two scanners the head already had red, and the cached refusal (keyed by the PR head only) was replayed at 02:53 and 03:03 while parity moved."""
+    ran = []
+
+    def refusals(head, base):
+        ran.append(base)
+        return ["scanner red alone: x"] if base == "old" else []
+
+    heads = {"5092": "h" * 40}
+    kept, dropped = ps.alone(["5092"], heads, refusals=refusals, cache=tmp_path, base="old", base_sha="a" * 40)
+    assert dropped == {"5092": "scanner red alone: x"} and ran == ["old"]
+    assert ps.alone(["5092"], heads, refusals=refusals, cache=tmp_path, base="old", base_sha="a" * 40)[1] and ran == ["old"], "the same base replays the refusal"
+    kept, dropped = ps.alone(["5092"], heads, refusals=refusals, cache=tmp_path, base="new", base_sha="b" * 40)
+    assert kept == ["5092"] and not dropped and ran == ["old", "new"], "a moved base checks the PR again"
+    assert ps.alone(["5092"], heads, refusals=refusals, cache=tmp_path, base="new", base_sha="c" * 40)[0] == ["5092"] and ran == ["old", "new"], "a pass is kept per head"
+
+
 def test_a_cached_pass_is_rechecked_for_stale_pages_against_the_base_as_it_is_now(tmp_path):
     """#5062, #5085 and #5088 passed alone against an older parity, the verdict was reused per head sha, and each made a generated page fail once merged with what landed since."""
     cache = tmp_path / "cache"
@@ -1342,8 +1388,8 @@ def test_a_docs_refusal_keeps_the_head_the_status_and_the_check_output_of_the_tr
         return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
 
     run("init", "-q", "-b", "main")
-    (tmp_path / "tools/docsbuild").mkdir(parents=True)
-    (tmp_path / "tools/docsbuild/build.py").write_text(
+    (tmp_path / "tools/docs/docsbuild").mkdir(parents=True)
+    (tmp_path / "tools/docs/docsbuild/build.py").write_text(
         "import sys, pathlib\nheader = pathlib.Path('a.rs').read_text().strip()\npage = pathlib.Path('docs/a.md').read_text().strip()\n"
         "if header != page:\n    print('generated docs are out of date')\n    print('  docs/a.md')\n    sys.exit(1)\n"
     )
@@ -1362,7 +1408,7 @@ def test_a_docs_refusal_keeps_the_head_the_status_and_the_check_output_of_the_tr
     assert ps.docs_recheck(head, base, tmp_path, {"docs/a.md"}) == "", "a page the base already has stale is not the PR's"
 
 
-    (tmp_path / "tools/docsbuild/build.py").write_text("print('generated docs are out of date')\\nprint('  docs/a.md')\\n")
+    (tmp_path / "tools/docs/docsbuild/build.py").write_text("print('generated docs are out of date')\\nprint('  docs/a.md')\\n")
     run("add", ".")
     run("commit", "-q", "-m", "x")
     (tmp_path / "stray.txt").write_text("left over")
@@ -1380,8 +1426,8 @@ def test_a_batch_docs_refusal_keeps_each_members_head_and_commit_time(tmp_path):
         return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
 
     run("init", "-q", "-b", "main")
-    (tmp_path / "tools/docsbuild").mkdir(parents=True)
-    (tmp_path / "tools/docsbuild/build.py").write_text("print('  docs/a.md')\n")
+    (tmp_path / "tools/docs/docsbuild").mkdir(parents=True)
+    (tmp_path / "tools/docs/docsbuild/build.py").write_text("print('  docs/a.md')\n")
     run("add", ".")
     run("commit", "-q", "-m", "x")
     head = run("rev-parse", "HEAD")
@@ -1399,6 +1445,158 @@ def test_docs_gated_with_the_default_docs_check_does_not_crash_and_a_crash_names
     assert gated("1") == "", "no build.py in the tree: nothing is stale, and nothing raises"
     line = ps.crash_line("5082", TypeError("docs_stale() missing 1 required positional argument: 'root'"))
     assert line == "#5082: REFUSED: the batch crashed (a tool fault, not this PR): TypeError: docs_stale() missing 1 required positional argument: 'root'"
+
+
+def test_a_rate_limited_squash_does_not_hold_the_pr_at_its_head(tmp_path):
+    """A 403 'API rate limit exceeded' at the squash read as the PR's own refusal and held it until its head changed: GitHub's quota, not the PR, cost the landing."""
+    state = tmp_path / "held.state"
+    reason = "the squash was refused by GitHub: GraphQL: API rate limit exceeded for user ID 1. (HTTP 403)"
+    assert ps.hold_own_refusals(["5290"], {"5290": reason}, {"5290": "abc123"}, state) == []
+    assert not state.exists()
+
+
+def test_a_403_at_the_squash_waits_for_the_reset_and_neither_refuses_nor_holds_the_pr(monkeypatch, tmp_path, capsys):
+    """09:2x: the quota ran out and a squash read `API rate limit exceeded` as the PR's own refusal: REFUSED line, held at its head. It waits for the reset and squashes."""
+    monkeypatch.setattr(ps, "FAST", True)
+    waits, merges = [], []
+    monkeypatch.setattr(ps, "rate_limit_wait", lambda *a, **k: waits.append(1) or 0)
+
+    def run(cmd, **_):
+        merges.append(cmd)
+        if len(merges) == 1:
+            return subprocess.CompletedProcess(cmd, 1, "", "GraphQL: API rate limit exceeded for user ID 1. (HTTP 403)")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    info = {"headRefOid": "abc123", "headRefName": "pr", "title": "t", "mergeable": "MERGEABLE"}
+    assert ps.squash("5290", info, "body", run=run, settle=0) is True
+    assert waits == [1] and len(merges) == 2
+    assert "REFUSED" not in capsys.readouterr().out
+    held = tmp_path / "held.state"
+    assert ps.hold_own_refusals([], {}, {"5290": "abc123"}, held) == [] and not held.exists()
+
+
+def test_pr_info_waits_out_a_403_instead_of_crashing_the_batch(monkeypatch):
+    """`pr_info` ran with check=True: a 403 raised CalledProcessError and the batch died 'a tool fault' for every member."""
+    waits, calls = [], []
+    monkeypatch.setattr(ps, "rate_limit_wait", lambda *a, **k: waits.append(1) or 0)
+
+    def fake(cmd, **_):
+        calls.append(cmd)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(cmd, 1, "", "gh: API rate limit exceeded (HTTP 403)")
+        return subprocess.CompletedProcess(cmd, 0, '{"headRefOid": "abc"}', "")
+
+    monkeypatch.setattr(ps.subprocess, "run", fake)
+    assert ps.pr_info("5290") == {"headRefOid": "abc"} and waits == [1]
+
+
+def test_a_check_failure_that_names_no_page_is_named_by_its_problem_line(tmp_path):
+    """b92ef6dd2 and #5119 were refused as 'docsbuild --check failed' while the cause was `no # Example` in a header: the sync cannot fix that, and the reason hid it."""
+    tool = tmp_path / "tools/docs/docsbuild/build.py"
+    tool.parent.mkdir(parents=True)
+    tool.write_text("import sys\nprint('1 problem(s)')\nprint('crates/x/src/a.rs: no # Example')\nsys.exit(1)\n")
+    assert ps.docs_stale(tmp_path) == {"docsbuild --check: crates/x/src/a.rs: no # Example"}
+
+
+def _fake_docs_repo(tmp_path):
+    """A repo whose tools/docs/docsbuild/build.py writes docs/a.md on --sync and calls it stale on --check until it exists."""
+    def git(*args, cwd=tmp_path):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
+
+    (tmp_path / "tools/docs/docsbuild").mkdir(parents=True)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "tools/docs/docsbuild/build.py").write_text(
+        "import sys\nfrom pathlib import Path\npage = Path('docs/a.md')\n"
+        "if '--sync' in sys.argv:\n    page.parent.mkdir(exist_ok=True)\n    page.write_text('generated\\n')\nelif not page.exists():\n    print('1 problem(s)')\n    print('  docs/a.md')\n    sys.exit(1)\n"
+    )
+    git("init", "-q", "-b", "main")
+    git("add", ".")
+    git("commit", "-qm", "base")
+    return git
+
+
+def test_a_stale_generated_page_is_synced_and_committed_not_refused(tmp_path):
+    """Generated docs out of date refused #5129, #5131 and #5119 (27 PRs were conflicting after each tip move): the batch regenerates the page (build.py --sync) and commits it on top."""
+    git = _fake_docs_repo(tmp_path)
+    assert ps.docs_stale(tmp_path) == {"docs/a.md"}
+    assert ps.docs_sync_commit(tmp_path) == ""
+    assert (tmp_path / "docs/a.md").read_text() == "generated\n" and git("log", "--format=%s", "-1").startswith("docs: ")
+    assert ps.docs_stale(tmp_path) == set()
+    git("reset", "-q", "--hard", "HEAD~1")
+    gated = ps.docs_gated(lambda number: "", set(), tmp_path)
+    assert gated("5129") == "" and "5129" in gated.synced and ps.docs_stale(tmp_path) == set(), "synced in the batch tree, not refused"
+    git("reset", "-q", "--hard", "HEAD~1")
+    refused = ps.docs_gated(lambda number: "", set(), tmp_path, sync=lambda root: "docsbuild --sync failed")
+    assert "docs/a.md" in refused("5131") and ps.docs_stale(tmp_path) == {"docs/a.md"} and not refused.synced, "a failed sync still refuses and resets"
+
+
+def test_the_append_only_rows_table_merges_without_a_conflict_when_two_prs_add_rows(tmp_path):
+    """Two PRs each adding a row at the end of docs/working/above-main-rows.md conflicted (#5282, #5156, #5242, #5294): the repo's .gitattributes says merge=union for it."""
+    def git(*args):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True)
+
+    git("init", "-q", "-b", "main")
+    (tmp_path / "docs/working").mkdir(parents=True)
+    (tmp_path / ".gitattributes").write_text((ps.ROOT / ".gitattributes").read_text())
+    table = tmp_path / "docs/working/above-main-rows.md"
+    table.write_text("| row | n |\n| a | 1 |\n")
+    git("add", ".")
+    git("commit", "-qm", "base")
+    for name, row in (("one", "| b | 2 |\n"), ("two", "| c | 3 |\n")):
+        git("checkout", "-q", "-b", name, "main")
+        table.write_text(table.read_text() + row)
+        git("commit", "-qam", name)
+    git("checkout", "-q", "one")
+    merged = git("merge", "--no-edit", "two")
+    assert merged.returncode == 0, merged.stdout + merged.stderr
+    assert "| b | 2 |" in table.read_text() and "| c | 3 |" in table.read_text()
+
+
+def test_a_head_that_leaves_a_page_stale_is_synced_on_its_branch_before_the_squash(tmp_path):
+    """The batch tree was synced, but the squash lands the PR head: the same sync is pushed to the PR's branch (as the formatted head is), or the squash would land the stale page."""
+    work = tmp_path / "work"
+    work.mkdir()
+    git = _fake_docs_repo(work)
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+    git("remote", "add", "origin", str(origin))
+    git("branch", "-M", "feat/parity")
+    git("push", "-q", "origin", "feat/parity")
+    git("checkout", "-q", "-b", "pr")
+    (work / "pr.txt").write_text("x\n")
+    git("add", ".")
+    git("commit", "-qm", "pr")
+    head = git("rev-parse", "HEAD")
+    sha, why = ps.sync_docs_head(head, "pr", "origin/feat/parity", work)
+    assert why == "" and sha and sha != head, (sha, why)
+    assert git("--git-dir", str(origin), "rev-parse", "refs/heads/pr") == sha, "pushed to the PR's branch"
+    assert git("--git-dir", str(origin), "show", f"{sha}:docs/a.md") == "generated"
+
+
+def _repo_with_commit(path):
+    path.mkdir(parents=True)
+    for cmd in (["init", "-q"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"]):
+        subprocess.run(["git", *cmd], cwd=path, check=True)
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=path, capture_output=True, text=True, check=True).stdout.strip()
+
+
+def test_the_scanner_line_names_the_tree_it_scanned_not_the_runners_checkout(tmp_path, capsys):
+    """alone.log said `tree 09f5219f1` for 16 minutes after parity moved on: the line printed the tooling checkout's HEAD, not the scratch tree the scanners ran in."""
+    scratch = _repo_with_commit(tmp_path / "scratch")
+    ps.new_scanner_failures([], on_merged=lambda targets: set(), only=("docs_links",), root=tmp_path / "scratch")
+    assert f"(tree {scratch[:9]})" in capsys.readouterr().out
+
+
+def test_an_alone_slot_logs_the_base_it_checked_out(tmp_path, monkeypatch, capsys):
+    """The coordinator could not tell which parity an alone slot judged a PR against: the log named no base."""
+    monkeypatch.setenv("ALONE_TARGETS", str(tmp_path))
+    monkeypatch.setenv("ALONE_SLOTS", "1")
+    base = []
+    monkeypatch.setattr(ps, "_alone_checkout", lambda work, ref, repo=None: base.append(_repo_with_commit(work)))
+    monkeypatch.setattr(ps, "alone_refusals", lambda *a, **k: [])
+    monkeypatch.setattr(ps, "keep_refused_evidence", lambda *a, **k: None)
+    ps._alone_in_scratch("deadbeef", "origin/feat/parity")
+    assert f"alone: slot 0 base {base[0][:9]}" in capsys.readouterr().err
 
 
 def test_land_skip_link_skips_the_link_stage_for_a_runtime_change(monkeypatch, capsys):
@@ -1438,14 +1636,31 @@ def test_a_drop_after_the_scan_costs_one_rescan_for_the_rest_not_one_per_pr():
     assert check("d", infos, ["x", "y"], ["d"]) == "" and len(groups) == 2, "a new drop is scanned again"
 
 
-def test_a_red_group_scan_falls_back_to_a_rescan_per_pr():
-    """When the remaining tree is red the culprit is still found one PR at a time, and the group is not rescanned for every PR."""
-    groups, ones = [], []
-    check = ps.make_rescan_check(rescan_group=lambda g, infos: groups.append(1) or {"integration x::t"}, rescan_one=lambda n, info: ones.append(n) or ({"integration x::t"} if n == "c" else set()))
+def test_a_red_group_scan_finds_its_culprit_by_halving_and_refuses_only_that_pr():
+    """11:35-11:43: a red group scan fell back to a rescan of every PR in turn (60-90 s each, a PR a minute); halving finds the one in log2(n) scans."""
+    scans, ones = [], []
+    red = {"integration x::t"}
+    rescan_group = lambda g, infos: scans.append(list(g)) or (red if "f" in g else set())
+    check = ps.make_rescan_check(rescan_group=rescan_group, rescan_one=lambda n, info: ones.append(n) or (red if n == "f" else set()))
+    group = list("bcdefghi")
+    infos = {n: {"headRefOid": n} for n in group}
+    whys = {n: check(n, infos, ["x"], group) for n in group}
+    assert [n for n, why in whys.items() if why] == ["f"] and "fails integration x::t" in whys["f"]
+    assert len(scans) <= 1 + 3, f"one group scan and log2(8) halvings, got {len(scans)}"
+    assert ones == ["f"], f"one alone check of the culprit, not one per PR: {ones}"
+
+
+def test_a_red_group_with_no_single_culprit_falls_back_to_a_rescan_per_pr():
+    """An interaction: no half is red alone, so each PR is rescanned alone, as before."""
+    ones = []
+    check = ps.make_rescan_check(rescan_group=lambda g, infos: {"integration x::t"} if len(g) > 2 else set(), rescan_one=lambda n, info: ones.append(n) or set())
     infos = {n: {"headRefOid": n} for n in "bcd"}
-    whys = [check(n, infos, ["x"], ["b", "c", "d"]) for n in "bcd"]
-    assert whys[0] == "" and "c lands on fails" in whys[1].replace("#c", "c") and whys[2] == ""
-    assert len(groups) == 1 and ones == ["b", "c", "d"]
+    assert [check(n, infos, ["x"], list("bcd")) for n in "bcd"] == ["", "", ""] and ones[1:] == ["b", "c", "d"], "after one alone check of the last candidate"
+
+
+def test_target_facts_is_a_scanner_every_batch_runs():
+    """Parity went red on tests/target_facts.rs (11:09) and no batch noticed: the always-on scanners were docs_in_sync, docs_links and no_local_paths, and target_facts was in prepush only."""
+    assert "target_facts" in ps.ALWAYS_SCANNERS
 
 
 def test_the_files_of_a_head_pushed_after_the_fetch_are_fetched_not_a_crash(tmp_path):
@@ -1467,3 +1682,131 @@ def test_the_files_of_a_head_pushed_after_the_fetch_are_fetched_not_a_crash(tmp_
     sh(origin, "config", "uploadpack.allowAnySHA1InWant", "true")
     base = sh(clone, "rev-parse", "origin/main")
     assert ps.head_files(head, base=base, cwd=clone) == ["b.txt"]
+
+
+def test_the_group_rescan_regenerates_the_pages_before_it_scans(monkeypatch):
+    """11:35, 11:38, 11:42, 11:49: the group scan was red while every member was green alone: the merged members' pass counts leave docs/optimizations/passes/readme.md stale, which only a sync fixes."""
+    order = []
+    monkeypatch.setattr(ps, "git", lambda *a, **k: "")
+    monkeypatch.setattr(ps, "clean_checkout", lambda *a, **k: None)
+    monkeypatch.setattr(ps.subprocess, "run", lambda cmd, **k: order.append("sync" if "--sync" in cmd else "git") or subprocess.CompletedProcess(cmd, 0))
+    monkeypatch.setattr(ps, "new_scanner_failures", lambda *a, **k: order.append("scan") or set())
+    assert ps.rescan_group_alone(["1", "2"], {"1": {"headRefOid": "a"}, "2": {"headRefOid": "b"}}) == set()
+    assert order[-2:] == ["sync", "scan"]
+
+
+def test_land_skip_rescan_is_read_where_the_rescan_check_is_made():
+    """12:03-12:12: every PR the squash refused (merge conflicts) cost a ~80 s group rescan, ~1 PR a minute for 40 PRs; the bulk order skips it with LAND_SKIP_RESCAN=1."""
+    import inspect  # noqa: PLC0415
+
+    source = inspect.getsource(ps.merge_batch)
+    assert 'os.environ.get("LAND_SKIP_RESCAN") == "1"' in source and "make_rescan_check()" in source
+
+
+def test_the_head_red_limit_is_read_from_the_environment():
+    """A target_facts red on parity (12:03) turns every batch into a refusal after HEAD_RED_HOURS (2 h, ~14:03) whatever the members do: the limit is the runner's to set."""
+    read = lambda env: subprocess.run([sys.executable, "-c", "import parity_squash as p; print(p.HEAD_RED_HOURS)"], cwd=Path(__file__).parent, env={**{k: v for k, v in os.environ.items() if k != "HEAD_RED_HOURS"}, **env}, capture_output=True, text=True).stdout.strip()
+    assert read({"HEAD_RED_HOURS": "6"}) == "6.0" and read({}) == "2.0"
+
+
+def test_the_scanner_run_has_its_own_stage_so_workspace_check_is_not_its_cost():
+    """Ten batches showed `workspace-check 58%`, but the scanners (a cargo test build of the integration targets) ran inside it with no stage line, so its split was a guess.
+    The default path now prints `STAGE scanners` after the build check."""
+    import inspect
+
+    source = inspect.getsource(ps.merge_batch)
+    gate = 'if os.environ.get("LAND_FAST_TESTS") != "1":\n                stage("scanners")'
+    assert gate in source, "the default path has a scanners stage"
+    assert source.find(gate) < source.find("landing_scanner_failures(git("), "and it comes before the always-on scanner run"
+
+
+def test_the_workspace_check_runs_beside_the_scanners_and_a_broken_build_wins():
+    """sqb-5342 spent 60 s on cargo check and then 100 s on the scanner build, one after the other, though they share no target dir. The default path now runs them together;
+    when the tree does not build, the scanner result (taken on a tree that does not compile) is dropped and the build is the refusal."""
+    import inspect
+
+    source = inspect.getsource(ps.merge_batch)
+    assert "check_and_scan(" in source and "overlap_verdict()" in source
+    assert "failed_units.clear()" in source[source.find("def build_refused") :][:400]
+
+
+def test_the_overlap_falls_back_to_serial_at_a_high_load_and_after_a_slower_run(tmp_path):
+    """The host runs at a load near 60: two cargo builds at once could be slower than one after the other. Above OVERLAP_MAX_LOAD the checks run in a row, and an overlapped run
+    that took longer than its halves' sum turns the overlap off for an hour."""
+    flag = tmp_path / "overlap-off"
+    assert ps.check_beside_scanners(load=lambda: (10.0, 0, 0), flag=flag, free=lambda: 64)
+    assert not ps.check_beside_scanners(load=lambda: (ps.OVERLAP_MAX_LOAD + 1, 0, 0), flag=flag, free=lambda: 64)
+    ps.note_overlap(100, 160, flag=flag)
+    assert not flag.exists(), "a faster overlap stays on"
+    ps.note_overlap(170, 160, flag=flag)
+    assert flag.exists() and not ps.check_beside_scanners(load=lambda: (10.0, 0, 0), flag=flag, free=lambda: 64)
+    later = flag.stat().st_mtime + ps.OVERLAP_OFF_SECONDS + 1
+    assert ps.check_beside_scanners(load=lambda: (10.0, 0, 0), now=lambda: later, flag=flag, free=lambda: 64)
+
+
+def test_a_batch_prints_its_stage_times_and_the_gap_after_log_is_pre_squash():
+    """The stage-times table was built by hand from the logs, and it blamed `log` (a one-line file append) for the next PR's work before its squash. The batch now ends with
+    `STAGES <total>s: ...`, biggest first, per-PR names without `#N`."""
+    import stages
+
+    stages._seen.clear()
+    for name, at in [("workspace-check", 0), ("scanners", 60), ("squash #1", 160), ("log #1", 166), ("squash #2", 170), ("log #2", 176)]:
+        stages.mark(name, at)
+    line = stages.summary(end=181)
+    assert line == "STAGES 181s: scanners 100s workspace-check 60s squash 12s pre-squash 9s", line
+    assert stages.summary() == "", "a summary starts the next batch afresh"
+    import inspect
+
+    assert "stage_summary()" in inspect.getsource(ps.merge_batch)
+
+
+def test_the_drift_prone_scanners_run_every_batch():
+    """A red scanner outside the default scan hid on parity for hours (the SD registry, 12:03 on). no_todo, tracked_build_products, block_list_ratchet and no_kill_by_pattern read
+    sources and the file list (0.02-5.6 s each on parity, all green) and are in the default scan."""
+    assert {"no_todo", "tracked_build_products", "block_list_ratchet", "no_kill_by_pattern"} <= set(ps.ALWAYS_SCANNERS)
+
+
+def test_build_script_reruns_runs_when_the_diff_touches_a_build_script_input_and_not_otherwise():
+    """It runs three release bin builds (67 s at load 80) and was in no default scan; it now runs on a diff that touches a build.rs, a Cargo.toml/lock or a selector-generator input,
+    and the full scan (tests=True) always runs it."""
+    assert "build_script_reruns" not in ps.scanners_for(["docs/a.md", "crates/opt/llrm-transforms/src/x.rs"])
+    for touched in ["crates/codegen/llrm-codegen/build.rs", "Cargo.lock", "crates/opt/llrm-x/Cargo.toml", "crates/target/llrm-x86/src/isel/patterns.isel", "crates/backend/llrm-iselgen/src/build.rs"]:
+        assert "build_script_reruns" in ps.scanners_for([touched]), touched
+    asked = []
+    ps.landing_scanner_failures(["crates/codegen/llrm-codegen/build.rs"], False, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
+    ps.landing_scanner_failures(["docs/a.md"], False, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
+    assert "build_script_reruns" in asked[0] and "build_script_reruns" not in asked[1]
+    asked.clear()
+    ps.landing_scanner_failures(["docs/a.md"], True, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
+    assert "build_script_reruns" in asked[0]
+
+
+def test_the_overlap_says_why_it_is_serial_and_keeps_to_memory_and_the_core_count(tmp_path):
+    """The audit of five landings showed check then scanners: the overlap never engaged (load 78 on 32 cores against a limit of 60) and nothing in the log said so. The limit is 3 x cores,
+    the verdict names its reason, and under 8 GB free (oomd kills sessions) the builds run in a row."""
+    flag = tmp_path / "overlap-off"
+    assert ps.OVERLAP_MAX_LOAD == 3 * (os.cpu_count() or 1) or "OVERLAP_MAX_LOAD" in os.environ
+    assert ps.overlap_verdict(load=lambda: (ps.OVERLAP_MAX_LOAD, 0, 0), flag=flag, free=lambda: 64) == "", "a load at the limit overlaps"
+    assert ps.overlap_verdict(load=lambda: (ps.OVERLAP_MAX_LOAD + 5, 0, 0), flag=flag, free=lambda: 64).startswith("load ")
+    assert ps.overlap_verdict(load=lambda: (1.0, 0, 0), flag=flag, free=lambda: 3.0) == "3 GB free is under 8"
+    assert ps.overlap_verdict(load=lambda: (1.0, 0, 0), flag=flag, free=lambda: 64) == ""
+    import inspect
+
+    assert "check beside scanners: {" in inspect.getsource(ps.merge_batch), "the decision is logged either way"
+
+
+def test_every_scanner_is_in_the_default_scan_the_conditional_one_or_nightly():
+    """The SD registry sat red on parity for two hours behind a default scan of four of the fifteen scanners. A scanner added to the full map without a place in the default scan
+    (or the build-input trigger, or NIGHTLY_ONLY) is now a failure here."""
+    smoke = ps.parity_smoke_module()
+    placed = set(ps.ALWAYS_SCANNERS) | {"build_script_reruns"} | set(smoke.NIGHTLY_ONLY)
+    assert set(smoke.SCANNERS) <= placed, sorted(set(smoke.SCANNERS) - placed)
+
+
+def test_the_overlapped_check_returns_its_error_text_and_the_scan_verdict_not_each_others(tmp_path, monkeypatch):
+    """sq-5420.log 15:14: `broken` held the scan's True and the build's text was lost (`True[:300]` TypeError); #5420 was refused for a crash, and every later PR whose check failed would have been."""
+    monkeypatch.setenv("LAND_TMP", str(tmp_path))
+    assert ps.check_and_scan(lambda: "error[E0425]: cannot find value", lambda: True) == ("error[E0425]: cannot find value", True)
+    assert ps.check_and_scan(lambda: "", lambda: False) == ("", False)
+    assert ps.check_and_scan(lambda: "", lambda: True) == ("", True)
+

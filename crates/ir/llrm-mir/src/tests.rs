@@ -126,6 +126,25 @@ fn a_float_decimal_is_read_as_a_float_and_f0x_takes_the_types_width() {
     );
 }
 
+/// The pin writes a `long double` as `f0x` and the 20 digits of x87's format
+/// (sign and exponent, then the 64-bit significand); MIR refused it ("expected
+/// a constant"), so `double_to_uint64.c` never compiled through `llrm-cc`. A
+/// constant of the type holds the double nearest its value.
+#[test]
+fn f0x_takes_the_twenty_digits_of_an_x86_fp80() {
+    // 2^64 - 2048 is a double; 1.0 is exponent 0x3FFF with the integer bit set.
+    assert_eq!(
+        round("@a = global x86_fp80 f0x403EFFFFFFFFFFFFF800\n"),
+        round("@a = global x86_fp80 0x43EFFFFFFFFFFFFF\n")
+    );
+    assert_eq!(round("@a = global x86_fp80 f0x3FFF8000000000000000\n"), round("@a = global x86_fp80 1.0\n"));
+    assert_eq!(round("@a = global x86_fp80 f0xC0008000000000000000\n"), round("@a = global x86_fp80 -2.0\n"));
+    assert_eq!(
+        refusal("@a = global double f0x3FFF8000000000000000\n"),
+        "line 1: f0x3FFF8000000000000000 is not a double's 16 hex digits"
+    );
+}
+
 #[test]
 fn integer_constants_hold_their_bits_and_print_signed() {
     assert_eq!(round("@a = global i16 65535\n"), "@a = global i16 -1\n");

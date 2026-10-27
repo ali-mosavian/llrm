@@ -14,6 +14,8 @@ fn eval(
         ISD::Register => x,
         ISD::Constant => dag.constant(v).unwrap() as u32,
         ISD::And => arg(0) & arg(1),
+        ISD::BSwap => arg(0).swap_bytes(),
+        ISD::BitReverse => arg(0).reverse_bits(),
         ISD::Shl => arg(0).checked_shl(arg(1)).unwrap_or(0),
         ISD::Srl => arg(0).checked_shr(arg(1)).unwrap_or(0),
         ISD::Sra => ((arg(0) as i32) >> arg(1).min(31)) as u32,
@@ -86,4 +88,41 @@ fn a_shift_of_known_zero_bits_is_zero() {
         shift(dag, ISD::Srl, low, 4)
     });
     assert_eq!(dag.constant(root), Some(0));
+}
+
+/// `visitBSWAP` did not exist: `bswap (x & 0xFF000000)`, what the bitreverse
+/// expansion builds for a top byte, stayed a `bswap` (+19 B in x_popcount).
+#[test]
+fn a_bswap_of_one_byte_is_a_shift_and_of_a_shift_is_the_inverse_shift() {
+    let (dag, root) = combined(|dag, x| {
+        let mask = dag.get_constant(0xFF00_0000, EVT::I32);
+        let top = dag.get_node(ISD::And, EVT::I32, &[x, mask]);
+        dag.get_node(ISD::BSwap, EVT::I32, &[top])
+    });
+    assert_eq!((dag.opcode(root), dag.constant(dag.operand(root, 1))), (ISD::Srl, Some(24)));
+    let (dag, root) = combined(|dag, x| {
+        let up = shift(dag, ISD::Shl, x, 8);
+        dag.get_node(ISD::BSwap, EVT::I32, &[up])
+    });
+    assert_eq!((dag.opcode(root), dag.opcode(dag.operand(root, 0))), (ISD::Srl, ISD::BSwap));
+}
+
+/// `visitBITREVERSE` did not exist: `bitreverse (bitreverse x)` and the shift
+/// of a reversed value reversed back stayed three nodes (the pin: `x`,
+/// `shl x, y` / `lshr x, y`).
+#[test]
+fn a_bitreverse_of_a_bitreverse_is_the_value_and_of_a_reversed_shift_the_opposite_shift() {
+    let (dag, root) = combined(|dag, x| {
+        let once = dag.get_node(ISD::BitReverse, EVT::I32, &[x]);
+        dag.get_node(ISD::BitReverse, EVT::I32, &[once])
+    });
+    assert_eq!(dag.opcode(root), ISD::Register);
+    for (op, want) in [(ISD::Srl, ISD::Shl), (ISD::Shl, ISD::Srl)] {
+        let (dag, root) = combined(|dag, x| {
+            let once = dag.get_node(ISD::BitReverse, EVT::I32, &[x]);
+            let moved = shift(dag, op, once, 3);
+            dag.get_node(ISD::BitReverse, EVT::I32, &[moved])
+        });
+        assert_eq!((dag.opcode(root), dag.opcode(dag.operand(root, 0))), (want, ISD::Register));
+    }
 }

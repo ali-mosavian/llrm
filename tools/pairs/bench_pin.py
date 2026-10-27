@@ -52,7 +52,7 @@ def build(prog):
             d = subprocess.run([LLC, f"-mtriple={of.triple}", f"-mcpu={of.cpu}", f"-mattr={of.features}", "-O2", "-filetype=obj", *extra, "-o", str(obj), "-"], input=text, capture_output=True, text=True)
             if d.returncode:
                 return False
-            link = subprocess.run(["ld", "-m", EMU, "-static", "-e", "0", "-Ttext=0x10000", f"--just-symbols={WORK / 'stub.elf'}", "-o", str(WORK / "b" / f"{prog}.{name}.elf"), str(obj), rt], capture_output=True, text=True)
+            link = subprocess.run(["ld", "-m", EMU, "-static", "-e", "0", f"-Ttext={pin.LINK_TEXT_BASE:#x}", f"--just-symbols={WORK / 'stub.elf'}", "-o", str(WORK / "b" / f"{prog}.{name}.elf"), str(obj), rt], capture_output=True, text=True)
             if link.returncode:
                 return False
         return True

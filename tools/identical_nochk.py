@@ -42,9 +42,9 @@ MODULES = ("host", "render", "model", "game", "sound", "ui")
 # needs no edit here: CHECKS was a list each PR appended to, and every PR that added an oracle conflicted with the others on it. An oracle
 # here is a gap the next dependency bug falls through (qcport/triggers -O1 sat behind one of the others for weeks): each of these fails on
 # the corpus on main today, and leaves with the fix named.
-#   COLORS, FRAME, SCOPES: fail on the corpus (634, 21 and 102 of 1,323 programs and modules; 0 with the oracle off).
+#   COLORS and FRAME: fail on the corpus (634 and 21 of 1,323 programs and modules; 0 with the oracle off).
 #   STALE: a pass that says it adds no memory operation outlives a frozen globals-aa (#2094).
-NOT_RUN = frozenset("COLORS FRAME SCOPES STALE CAPTURES_CALLS CAPTURES_BLIND CAPTURES_COUNT CAPTURES_MODULE".split())
+NOT_RUN = frozenset("COLORS FRAME STALE CAPTURES_CALLS CAPTURES_BLIND CAPTURES_COUNT CAPTURES_MODULE".split())
 
 
 def checks(root: Path = ROOT) -> tuple[str, ...]:

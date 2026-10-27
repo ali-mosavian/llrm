@@ -49,7 +49,7 @@ impl Placed {
     /// `built`'s data laid out: the default segment first, then each placed
     /// one; the compiler's constants in `constants`, else the default. Each
     /// variable aligned as `AsmPrinter::getGVAlignment` says
-    /// (`global_alignment`), public where external; each declared one
+    /// (`globals::alignment`), public where external; each declared one
     /// an extern, near where it is in `data_space`.
     pub fn lay_out(
         &self,
@@ -118,9 +118,13 @@ impl Placed {
             let mut items = Vec::new();
             for global in members {
                 let GlobalKind::Variable(variable) = &module.global(global).kind else { continue };
-                if let Some(to) =
-                    global_alignment(module, layout.as_ref(), variable, placed_here, segment_bytes.is_some())
-                {
+                if let Some(to) = crate::backend::globals::alignment(
+                    module,
+                    layout.as_ref(),
+                    variable,
+                    placed_here,
+                    segment_bytes.is_some(),
+                ) {
                     items.push(masm::Datum::Align(masm::Align { to }));
                 }
                 for datum in globals::datums(module, global, &built.names)? {
@@ -154,7 +158,13 @@ impl Placed {
             let mut items = Vec::new();
             for global in objects {
                 if let GlobalKind::Variable(variable) = &module.global(global).kind
-                    && let Some(to) = global_alignment(module, layout.as_ref(), variable, true, segment_bytes.is_some())
+                    && let Some(to) = crate::backend::globals::alignment(
+                        module,
+                        layout.as_ref(),
+                        variable,
+                        true,
+                        segment_bytes.is_some(),
+                    )
                 {
                     items.push(masm::Datum::Align(masm::Align { to }));
                 }
@@ -207,32 +217,50 @@ impl Placed {
     }
 }
 
-/// The alignment a variable is emitted at: `AsmPrinter::getGVAlignment` on the
-/// module's data layout, none where that is a byte. DEVIATE E1: MIR has no
-/// section attribute; a global the frontend placed in a named segment counts
-/// as one in a section (`in_section`). DEVIATE E2: where data lives in 64K
-/// segments (`segmented`), an initialized global over 16 bytes is not raised to
-/// 16 (`DataLayout::getPreferredAlign`, DataLayout.cpp#L1175): the object's
-/// segment would become paragraph aligned, up to 15 dead bytes of the scarce
-/// DGROUP per object (QB runtime `input.c`: +32 B, `dgroup_nearly_full`).
-fn global_alignment(
+/// A module read from LLVM IR names no segments, so its data is all `_DATA`:
+/// the variables of zeros that `getKindForGlobal` makes BSS move to `_BSS` (the
+/// rest of `built` stays as assembled), with `BSSB` ahead of it where
+/// `bss_begin`. A constant of zeros stays where it is.
+pub fn zero_to_bss(
+    built: &mut masm::Module,
     module: &Module,
-    layout: Option<&llrm_mir::datalayout::DataLayout>,
-    variable: &llrm_mir::module::GlobalVariable,
-    in_section: bool,
-    segmented: bool,
-) -> Option<i64> {
-    // A module with no data layout states its own alignments only.
-    let Some(layout) = layout else { return variable.align.map(|to| to as i64) };
-    let to = layout.global_align(
-        &module.context.types,
-        variable.ty,
-        variable.align,
-        in_section,
-        variable.initializer.is_some(),
-        !segmented,
-    );
-    (to > 1).then_some(to as i64)
+    data_space: u32,
+    bss_begin: bool,
+) {
+    let mut bss: Vec<masm::Datum> = Vec::new();
+    for (at, global) in module.globals.iter().enumerate() {
+        let GlobalKind::Variable(variable) = &global.kind else { continue };
+        let id = GlobalId(at as u32);
+        if variable.initializer.is_none()
+            || variable.constant
+            || global.address_space != data_space
+            || !stored_zero(module, id, &built.names)
+        {
+            continue;
+        }
+        let Some(label) = built.names.get(&(Space::Segment, at as i64)).cloned() else { continue };
+        let items = &mut built.data[0].1;
+        let Some(first) = items.iter().position(|one| matches!(one, masm::Datum::Label(l) if l.name == label)) else {
+            continue;
+        };
+        let start = if first > 0 && matches!(items[first - 1], masm::Datum::Align(_)) { first - 1 } else { first };
+        let mut end = first + 1;
+        let mut size = 0;
+        while let Some(masm::Datum::Bytes(bytes)) = items.get(end) {
+            size += bytes.len();
+            end += 1;
+        }
+        let object: Vec<masm::Datum> = items.drain(start..end).collect();
+        bss.extend(object.into_iter().filter(|one| matches!(one, masm::Datum::Align(_) | masm::Datum::Label(_))));
+        bss.push(masm::Datum::Fill(masm::Fill { size: size as i64, byte: None }));
+    }
+    if bss.is_empty() {
+        return;
+    }
+    if bss_begin {
+        built.data.push(("BSSB".to_owned(), Vec::new()));
+    }
+    built.data.push(("_BSS".to_owned(), bss));
 }
 
 /// What one segment can hold: a 16-bit offset's range.
@@ -369,7 +397,7 @@ mod tests {
             ["w", "big", "b", "s"].map(|name| {
                 let id = module.named(name).unwrap();
                 let GlobalKind::Variable(variable) = &module.global(id).kind else { unreachable!("a variable") };
-                global_alignment(&module, layout.as_ref(), variable, false, segmented)
+                crate::backend::globals::alignment(&module, layout.as_ref(), variable, false, segmented)
             })
         };
         let flat = "target datalayout = \"e-i32:32-i8:8\"\n";
