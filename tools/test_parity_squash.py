@@ -1447,6 +1447,49 @@ def test_docs_gated_with_the_default_docs_check_does_not_crash_and_a_crash_names
     assert line == "#5082: REFUSED: the batch crashed (a tool fault, not this PR): TypeError: docs_stale() missing 1 required positional argument: 'root'"
 
 
+def test_a_rate_limited_squash_does_not_hold_the_pr_at_its_head(tmp_path):
+    """A 403 'API rate limit exceeded' at the squash read as the PR's own refusal and held it until its head changed: GitHub's quota, not the PR, cost the landing."""
+    state = tmp_path / "held.state"
+    reason = "the squash was refused by GitHub: GraphQL: API rate limit exceeded for user ID 1. (HTTP 403)"
+    assert ps.hold_own_refusals(["5290"], {"5290": reason}, {"5290": "abc123"}, state) == []
+    assert not state.exists()
+
+
+def test_a_403_at_the_squash_waits_for_the_reset_and_neither_refuses_nor_holds_the_pr(monkeypatch, tmp_path, capsys):
+    """09:2x: the quota ran out and a squash read `API rate limit exceeded` as the PR's own refusal: REFUSED line, held at its head. It waits for the reset and squashes."""
+    monkeypatch.setattr(ps, "FAST", True)
+    waits, merges = [], []
+    monkeypatch.setattr(ps, "rate_limit_wait", lambda *a, **k: waits.append(1) or 0)
+
+    def run(cmd, **_):
+        merges.append(cmd)
+        if len(merges) == 1:
+            return subprocess.CompletedProcess(cmd, 1, "", "GraphQL: API rate limit exceeded for user ID 1. (HTTP 403)")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    info = {"headRefOid": "abc123", "headRefName": "pr", "title": "t", "mergeable": "MERGEABLE"}
+    assert ps.squash("5290", info, "body", run=run, settle=0) is True
+    assert waits == [1] and len(merges) == 2
+    assert "REFUSED" not in capsys.readouterr().out
+    held = tmp_path / "held.state"
+    assert ps.hold_own_refusals([], {}, {"5290": "abc123"}, held) == [] and not held.exists()
+
+
+def test_pr_info_waits_out_a_403_instead_of_crashing_the_batch(monkeypatch):
+    """`pr_info` ran with check=True: a 403 raised CalledProcessError and the batch died 'a tool fault' for every member."""
+    waits, calls = [], []
+    monkeypatch.setattr(ps, "rate_limit_wait", lambda *a, **k: waits.append(1) or 0)
+
+    def fake(cmd, **_):
+        calls.append(cmd)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(cmd, 1, "", "gh: API rate limit exceeded (HTTP 403)")
+        return subprocess.CompletedProcess(cmd, 0, '{"headRefOid": "abc"}', "")
+
+    monkeypatch.setattr(ps.subprocess, "run", fake)
+    assert ps.pr_info("5290") == {"headRefOid": "abc"} and waits == [1]
+
+
 def test_a_check_failure_that_names_no_page_is_named_by_its_problem_line(tmp_path):
     """b92ef6dd2 and #5119 were refused as 'docsbuild --check failed' while the cause was `no # Example` in a header: the sync cannot fix that, and the reason hid it."""
     tool = tmp_path / "tools/docsbuild/build.py"
@@ -1664,3 +1707,14 @@ def test_the_head_red_limit_is_read_from_the_environment():
     """A target_facts red on parity (12:03) turns every batch into a refusal after HEAD_RED_HOURS (2 h, ~14:03) whatever the members do: the limit is the runner's to set."""
     read = lambda env: subprocess.run([sys.executable, "-c", "import parity_squash as p; print(p.HEAD_RED_HOURS)"], cwd=Path(__file__).parent, env={**{k: v for k, v in os.environ.items() if k != "HEAD_RED_HOURS"}, **env}, capture_output=True, text=True).stdout.strip()
     assert read({"HEAD_RED_HOURS": "6"}) == "6.0" and read({}) == "2.0"
+
+
+def test_the_scanner_run_has_its_own_stage_so_workspace_check_is_not_its_cost():
+    """Ten batches showed `workspace-check 58%`, but the scanners (a cargo test build of the integration targets) ran inside it with no stage line, so its split was a guess.
+    The default path now prints `STAGE scanners` after the build check."""
+    import inspect
+
+    source = inspect.getsource(ps.merge_batch)
+    gate = 'if os.environ.get("LAND_FAST_TESTS") != "1":\n                stage("scanners")'
+    assert gate in source, "the default path has a scanners stage"
+    assert source.find(gate) < source.find("landing_scanner_failures(git("), "and it comes before the always-on scanner run"

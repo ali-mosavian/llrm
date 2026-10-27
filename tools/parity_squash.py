@@ -63,6 +63,51 @@ def with_merge_driver(env: dict[str, str]) -> None:
 with_merge_driver(os.environ)
 
 
+RATE_LIMITED = ("API rate limit exceeded", "rate limit exceeded")
+
+
+def rate_limited(text: str) -> bool:
+    """Whether `gh` failed on GitHub's quota (HTTP 403 or 429), not on the PR or the call."""
+    return any(one in text for one in RATE_LIMITED)
+
+
+def rate_limit_wait(cap: float = 3700) -> float:
+    """Sleeps until the core quota resets (`gh api rate_limit` costs none; 60 s when it cannot be read) and returns the seconds slept. A spent quota is nobody's refusal: the call waits and goes again."""
+    done = subprocess.run(["gh", "api", "rate_limit", "-q", ".resources.core.reset"], capture_output=True, text=True, errors="replace")
+    try:
+        wait = int(done.stdout.strip()) - time.time()
+    except ValueError:
+        wait = 60
+    wait = min(max(wait, 5) + 2, cap)
+    print(f"gh: rate limit spent; waiting {wait:.0f} s for the reset", file=sys.stderr)
+    time.sleep(wait)
+    return wait
+
+
+def rate_limit_proof(run=subprocess.run, tries: int = 3):
+    """`run` that, when `gh` fails on the rate limit, waits for the reset and runs the call again (`tries` times) instead of handing the failure on as a refusal or a crash."""
+
+    def proofed(cmd, **kwargs):
+        done = run(cmd, **kwargs)
+        for _ in range(tries):
+            if not done.returncode or not rate_limited(f"{done.stderr}{done.stdout}"):
+                break
+            rate_limit_wait()
+            done = run(cmd, **kwargs)
+        return done
+
+    return proofed
+
+
+def gh_run(cmd, **kwargs):
+    """`subprocess.run` for a `gh` call that waits out the rate limit (`check=True` raises only after that)."""
+    check = kwargs.pop("check", False)
+    done = rate_limit_proof(subprocess.run)(cmd, **kwargs)
+    if check:
+        done.check_returncode()
+    return done
+
+
 def git(*args: str, cwd: Path = ROOT) -> str:
     done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, errors="replace")
     if done.returncode:
@@ -325,7 +370,7 @@ def precheck(number: str, dev: Path = PRECHECK_DIR / "wt", target: Path = PRECHE
     """`N: PASS`, or `N: REFUSED: <names>` after merging PR N's head with feat/parity in the dev checkout and running the cheap static checks (ratchets, fmt, docs, the
     deletion rule) there: seconds, no dist build. #2836 cost a batch 26 minutes of halving for a failure these checks name. Only items NEW against feat/parity's own
     failures refuse (by check AND file/page): a red head file refused every PR, the fixes included. The verdict is cached per (PR head sha, feat/parity sha)."""
-    info = info or json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName"], capture_output=True, text=True, errors="replace", check=True).stdout)
+    info = info or json.loads(gh_run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName"], capture_output=True, text=True, errors="replace", check=True).stdout)
     if info["baseRefName"] != "feat/parity":
         return f"{number}: REFUSED: targets {info['baseRefName']}, not feat/parity"
     base_sha = base_sha or git("rev-parse", BASE).strip()
@@ -385,7 +430,7 @@ def audit(since: str, cwd: Path = ROOT) -> list[tuple[str, str, str]]:
 
 
 def pr_body(number: str) -> str:
-    done = subprocess.run(["gh", "pr", "view", number, "--json", "body", "--jq", ".body"], capture_output=True, text=True, errors="replace")
+    done = gh_run(["gh", "pr", "view", number, "--json", "body", "--jq", ".body"], capture_output=True, text=True, errors="replace")
     return done.stdout if done.returncode == 0 else ""
 
 
@@ -650,14 +695,14 @@ def refusal_line(number: str, named: dict[str, str], failed_build: list[str], fa
 HELD_STATE = Path(os.environ.get("LAND_TMP") or "/tmp/landing") / "held.state"  # `<PR> <head sha>` per line: the queue skips a PR at a head that was refused for itself
 
 
-GITHUB_TRANSIENT = ("Something went wrong", "502 Bad Gateway", "503 Service", "504 Gateway", "timed out")  # GitHub's side, not the PR's: #5039, 2026-10-27 00:14
+GITHUB_TRANSIENT = ("Something went wrong", "502 Bad Gateway", "API rate limit exceeded", "503 Service", "504 Gateway", "timed out")  # GitHub's side, not the PR's: #5039, 2026-10-27 00:14
 
 
 def own_refusal(reason: str) -> bool:
     """Whether a refusal is the PR's own (its build, a test it fails alone on the head, its docs or format), which the same head will meet again, and not the batch's or the
     head's (a conflict, a stale merge base, GitHub's "head modified", a rescan after another PR was dropped), which a retry may clear."""
     return bool(reason) and not any(
-        one in reason for one in ("conflicts with", "does not contain", "Head branch was modified", "Head branch is out of date", "does not merge into it cleanly", "not mergeable", "head moved", "Something went wrong", "the batch dropped", "waits.txt")
+        one in reason for one in ("conflicts with", "does not contain", "Head branch was modified", "Head branch is out of date", "does not merge into it cleanly", "not mergeable", "head moved", "Something went wrong", "API rate limit exceeded", "the batch dropped", "waits.txt")
     )
 
 
@@ -695,6 +740,7 @@ def waiting(number: str, path: str | None = None) -> bool:
 
 def squash(number: str, info: dict, body: str, run=subprocess.run, update=update_generated_only, settle: float = 5, merge=merge_parity, retry_wait: float = 60) -> bool | None:
     """Squash PR `number` into feat/parity; None, with nothing pushed, when waits.txt holds it now. In fast mode a PR GitHub calls conflicting (only generated pages, regenerated) is first brought up to date on its branch, and says so in a comment."""
+    run = rate_limit_proof(run)
     if waiting(number):
         print(f"#{number}: HELD: in waits.txt now; not pushed")
         return None
@@ -1643,20 +1689,44 @@ def batch_blame(heads: dict[str, str], base: str, cwd: Path = ROOT) -> list[str]
     return lines
 
 
+GQL_PR = "state isDraft headRefOid headRefName title body baseRefName mergeable commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } }"
+
+
+def graphql_prs(numbers: list[str], run=None) -> dict[str, dict]:
+    """{number: state, isDraft, headRefOid, headRefName, title, body, baseRefName, mergeable, committedDate, checks} for every PR GitHub knows in `numbers`, from one `gh api graphql` call
+    per 40 PRs. A `gh pr view` each cost a REST call per PR per stage: about 100 a cycle, and the quota ran out at 09:2x."""
+    owner, name = os.environ.get("R", "ali-mosavian/llrm").split("/")
+    found: dict[str, dict] = {}
+    for start in range(0, len(numbers), 40):
+        chunk = numbers[start : start + 40]
+        body = " ".join(f"p{n}: pullRequest(number: {n}) {{ {GQL_PR} }}" for n in chunk)
+        query = f'query {{ repository(owner: "{owner}", name: "{name}") {{ {body} }} }}'
+        done = (run or gh_run)(["gh", "api", "graphql", "-f", f"query={query}"], capture_output=True, text=True, errors="replace", check=True)
+        repository = json.loads(done.stdout)["data"]["repository"]
+        for number in chunk:
+            if pr := repository.get(f"p{number}"):
+                commit = (pr.pop("commits")["nodes"] or [{"commit": {}}])[0]["commit"]
+                found[number] = {**pr, "committedDate": commit.get("committedDate", ""), "checks": (commit.get("statusCheckRollup") or {}).get("state", "")}
+    return found
+
+
 PR_FIELDS = "headRefOid,headRefName,title,body,baseRefName,mergeable"
 
 
 def pr_info(number: str) -> dict:
-    return json.loads(subprocess.run(["gh", "pr", "view", number, "--json", PR_FIELDS], capture_output=True, text=True, errors="replace", check=True).stdout)
+    return json.loads(gh_run(["gh", "pr", "view", number, "--json", PR_FIELDS], capture_output=True, text=True, errors="replace", check=True).stdout)
 
 
-def refresh_heads(infos: dict[str, dict], numbers: list[str], view=pr_info) -> dict[str, tuple[str, str]]:
+def refresh_heads(infos: dict[str, dict], numbers: list[str], view=None) -> dict[str, tuple[str, str]]:
     """{number: (old head, new head)} of the PRs whose head moved since `infos` was read, which `infos` now holds. A batch that halves and runs again for an hour kept merging the
     heads it read at its start: at 02:34 the sub-batch merged #5088's 01:18 head with sinkcast.md stale, 30 min after w12 pushed the fix, and the squash of #5085 was refused for a head
     its owner had moved."""
     moved = {}
+    fetched = graphql_prs(numbers) if view is None else {}
     for number in numbers:
-        now = view(number)
+        if view is None and number not in fetched:
+            continue
+        now = fetched[number] if view is None else view(number)
         if now["headRefOid"] != infos[number]["headRefOid"]:
             moved[number] = (infos[number]["headRefOid"], now["headRefOid"])
             infos[number] = now
@@ -1688,8 +1758,11 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
     if len(numbers) > MAX_BATCH:
         raise SystemExit(f"merge-batch takes at most {MAX_BATCH} PRs per smoke, got {len(numbers)}: split the queue")
     infos = {}
+    known_prs = graphql_prs(numbers)
     for number in numbers:
-        info = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,headRefName,title,body,baseRefName,mergeable"], capture_output=True, text=True, errors="replace", check=True).stdout)
+        if number not in known_prs:
+            raise SystemExit(f"#{number} is not a PR GitHub knows")
+        info = known_prs[number]
         if info["baseRefName"] != "feat/parity":
             raise SystemExit(f"#{number} targets {info['baseRefName']}, not feat/parity")
         infos[number] = info
@@ -1777,6 +1850,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                     failed_units.update(new)
                     blame(new)
                     return False
+            if os.environ.get("LAND_FAST_TESTS") != "1":
+                stage("scanners")  # a cargo test build of the scanner targets: workspace-check's 58% of a batch hid it
             if os.environ.get("LAND_FAST_TESTS") != "1" and (new := sorted(landing_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), False))):
                 print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new, members=members_files)}")
                 failed_units.update(new)
@@ -1951,7 +2026,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             print(f"#{number}: formatted with tools/fmt.sh ({sha[:9]})")
             infos[number] = {**infos[number], "headRefOid": sha}
             for _ in range(12):  # GitHub takes the pushed head as the PR's before a --match-head-commit squash accepts it
-                seen = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid"], capture_output=True, text=True, errors="replace").stdout or "{}").get("headRefOid")
+                seen = json.loads(gh_run(["gh", "pr", "view", number, "--json", "headRefOid"], capture_output=True, text=True, errors="replace").stdout or "{}").get("headRefOid")
                 if seen == sha:
                     break
                 time.sleep(5)
@@ -2195,7 +2270,7 @@ def merge(number: str, known: dict[str, str] | None = None) -> int:
 
 def _merge(number: str, known: dict[str, str] | None = None) -> int:
     known = known or {}
-    info = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName"], capture_output=True, text=True, errors="replace", check=True).stdout)
+    info = json.loads(gh_run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName"], capture_output=True, text=True, errors="replace", check=True).stdout)
     if info["baseRefName"] != "feat/parity":
         raise SystemExit(f"#{number} targets {info['baseRefName']}, not feat/parity")
     git("fetch", "-q", "origin", "feat/parity")
@@ -2204,7 +2279,7 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
     git("fetch", "-q", "origin", info["headRefOid"])
     tested_base = git("rev-parse", BASE).strip()
     head_failed = head_failures(tested_base, lambda: compute_head_failures(known))
-    files = {f["path"] for f in json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "files"], capture_output=True, text=True, errors="replace", check=True).stdout)["files"]}
+    files = {f["path"] for f in json.loads(gh_run(["gh", "pr", "view", number, "--json", "files"], capture_output=True, text=True, errors="replace", check=True).stdout)["files"]}
     whole = parity_smoke_module().runs_whole_groups(files)
     if whole:
         head_failed = head_failed | head_failures(tested_base, compute_head_group_failures, cache=HEAD_FAILURES / "groups")
@@ -2259,11 +2334,11 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
     if git("rev-parse", BASE).strip() != tested_base:
         print(f"REFUSED: feat/parity moved from {tested_base[:9]} to {git('rev-parse', BASE).strip()[:9]} while the checks ran; run again")
         return 1
-    done = subprocess.run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", info["title"], "--body", known_red_line(known)])
+    done = gh_run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", info["title"], "--body", known_red_line(known)])
     if done.returncode:
         return done.returncode
     git("fetch", "-q", "origin", "feat/parity")
-    squash = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "mergeCommit"], capture_output=True, text=True, errors="replace", check=True).stdout)["mergeCommit"]["oid"]
+    squash = json.loads(gh_run(["gh", "pr", "view", number, "--json", "mergeCommit"], capture_output=True, text=True, errors="replace", check=True).stdout)["mergeCommit"]["oid"]
     git("fetch", "-q", "origin", squash)
     log_landed(squash, number, "gate-ok" + (f" (head red: {','.join(sorted(head_failed))})" if head_failed else ""))
     if strays := squash_strays(squash, files):
