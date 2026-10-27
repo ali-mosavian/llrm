@@ -1,0 +1,45 @@
+//! clang's `-g` types and globals were carried (PR 1) but nothing read them:
+//! `llrm.dbg.types` and `llrm.dbg.globals` stayed empty, so an object built
+//! from `-g` IR described no type and no variable.
+
+use llrm_mir::debuginfo::{self, Kind, Reach, Scalar};
+use llrm_mir::{dbgimport, parse};
+
+fn imported(text: &str) -> llrm_mir::module::Module {
+    let mut module = parse::module(text).expect("parses");
+    dbgimport::types_and_globals(&mut module);
+    module
+}
+
+#[test]
+fn test_a_struct_a_pointer_and_an_int_become_the_models_types() {
+    let module = imported(include_str!("clang/dbg_struct.ll"));
+    let types: Vec<_> =
+        debuginfo::types(&module).into_iter().filter_map(|id| debuginfo::read_type(&module, id)).collect();
+    let int = types.iter().find(|one| one.kind == Kind::Scalar && one.spelling.as_deref() == Some("int")).expect("int");
+    assert_eq!((int.name.as_str(), int.size), (Scalar::Int32.value(), 4));
+    let point = types.iter().find(|one| one.kind == Kind::Struct && one.name == "P").expect("struct P");
+    assert_eq!((point.size, point.members.len()), (8, 2));
+    assert_eq!(
+        point.members.iter().map(|one| (one.name.as_str(), one.offset)).collect::<Vec<_>>(),
+        [("x", 0), ("y", 4)]
+    );
+    let pointer = types.iter().find(|one| one.kind == Kind::Pointer).expect("a pointer");
+    assert_eq!((pointer.size, pointer.reach), (4, Reach::Near));
+}
+
+#[test]
+fn test_file_scope_variables_become_globals_with_their_types() {
+    let module = imported(include_str!("clang/dbg_types.ll"));
+    let globals = debuginfo::globals(&module);
+    let names: Vec<_> = globals.iter().map(|one| (one.global.as_str(), one.name.as_str())).collect();
+    assert_eq!(names, [("g", "g"), ("arr", "arr")]);
+    let array = debuginfo::read_type(&module, globals[1].r#type).expect("arr's type");
+    assert_eq!((array.kind, array.size), (Kind::Sized, 16));
+}
+
+#[test]
+fn test_a_module_without_debug_nodes_gains_none() {
+    let module = imported("define i32 @f() {\n  ret i32 0\n}\n");
+    assert!(module.named_metadata.is_empty());
+}
