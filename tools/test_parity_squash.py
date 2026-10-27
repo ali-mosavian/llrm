@@ -1338,3 +1338,38 @@ def test_a_rate_limited_squash_does_not_hold_the_pr_at_its_head(tmp_path):
     reason = "the squash was refused by GitHub: GraphQL: API rate limit exceeded for user ID 1. (HTTP 403)"
     assert ps.hold_own_refusals(["5290"], {"5290": reason}, {"5290": "abc123"}, state) == []
     assert not state.exists()
+
+
+def test_a_403_at_the_squash_waits_for_the_reset_and_neither_refuses_nor_holds_the_pr(monkeypatch, tmp_path, capsys):
+    """09:2x: the quota ran out and a squash read `API rate limit exceeded` as the PR's own refusal: REFUSED line, held at its head. It waits for the reset and squashes."""
+    monkeypatch.setattr(ps, "FAST", True)
+    waits, merges = [], []
+    monkeypatch.setattr(ps, "rate_limit_wait", lambda *a, **k: waits.append(1) or 0)
+
+    def run(cmd, **_):
+        merges.append(cmd)
+        if len(merges) == 1:
+            return subprocess.CompletedProcess(cmd, 1, "", "GraphQL: API rate limit exceeded for user ID 1. (HTTP 403)")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    info = {"headRefOid": "abc123", "headRefName": "pr", "title": "t", "mergeable": "MERGEABLE"}
+    assert ps.squash("5290", info, "body", run=run, settle=0) is True
+    assert waits == [1] and len(merges) == 2
+    assert "REFUSED" not in capsys.readouterr().out
+    held = tmp_path / "held.state"
+    assert ps.hold_own_refusals([], {}, {"5290": "abc123"}, held) == [] and not held.exists()
+
+
+def test_pr_info_waits_out_a_403_instead_of_crashing_the_batch(monkeypatch):
+    """`pr_info` ran with check=True: a 403 raised CalledProcessError and the batch died 'a tool fault' for every member."""
+    waits, calls = [], []
+    monkeypatch.setattr(ps, "rate_limit_wait", lambda *a, **k: waits.append(1) or 0)
+
+    def fake(cmd, **_):
+        calls.append(cmd)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(cmd, 1, "", "gh: API rate limit exceeded (HTTP 403)")
+        return subprocess.CompletedProcess(cmd, 0, '{"headRefOid": "abc"}', "")
+
+    monkeypatch.setattr(ps.subprocess, "run", fake)
+    assert ps.pr_info("5290") == {"headRefOid": "abc"} and waits == [1]
