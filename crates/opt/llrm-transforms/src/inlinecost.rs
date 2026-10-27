@@ -2609,6 +2609,9 @@ pub fn sites_with_trials(
             body: std::rc::Rc::new((**callee).clone()),
             frame: crate::inline::grown(&module.context, layout, callee),
             moved: false,
+            last_call: local_linkage(module.global(decision.callee).linkage)
+                && !addressed.contains(&decision.callee)
+                && counts.get(&decision.callee) == Some(&1),
             callee: Some(decision.callee),
             self_sites: own.len(),
             self_calls: (!own.is_empty()).then(|| {

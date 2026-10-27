@@ -52,10 +52,12 @@ returns, it is not recursive, not `noinline`, and does not call
 A copy is allowed (`fits_with`) only where
 
 - the call's function type is the callee's and the callee is not variadic;
-- no body that allocates is copied into a recursive caller;
+- no body that allocates is copied into a recursive caller, except the last call of a private callee (the copy takes its place; INL-REC-1 below);
 - a parameter the callee `releases` is passed an object the caller owns.
 
 Which sites are copied is `inlinecost::decide`'s (the walk's).
+
+**INL-REC-1 (DEVIATE).** The pin's inliner has no recursive-caller rule. Here a body that allocates is not copied into a recursive caller, because every level of the recursion would pay the copy's frame on the 16-bit stack. The exception is a private callee whose one call this is: the callee goes and the code shrinks. The cost is the callee's frame in every level of the recursion (before, it was paid once, at the deepest call): the ruling accepts that for a last call; measure the frame (`-fstack-usage`) of what it admits. QCport `ent_lightning_` into `ent_use_targets_`: the pin inlines it, the refusal was this rule.
 
 `expanded_all` decides every site of a caller first (`Plan`), tracking the
 caller's size and stack as they grow and including what is inlined into each
