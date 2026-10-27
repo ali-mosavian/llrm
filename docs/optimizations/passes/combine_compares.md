@@ -21,7 +21,7 @@ stays LLVM's. The owed steps, with their exits:
 `foldICmpTruncWithTruncOrExt`,
 `foldICmpWithConstant`, `foldICmpUsingBoolRange`,
 `foldIsMultipleOfAPowerOfTwo`, `foldICmpBinOp`, `foldICmpInstWithConstant`,
-`foldSignBitTest`, `foldOpIntoPhi`, `foldICmpInstWithConstantNotInt`,
+`foldSignBitTest`, `foldICmpInstWithConstantNotInt`,
 `foldICmpCommutative`, `foldCmpSelectOfConstants` and the select pair fold,
 the zero folds `foldIRemByPowerOfTwoToBitTest` and `stripNullTest`, and the
 `dyn_castNegVal` select fold.
