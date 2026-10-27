@@ -1529,3 +1529,11 @@ def test_the_group_rescan_regenerates_the_pages_before_it_scans(monkeypatch):
     monkeypatch.setattr(ps, "new_scanner_failures", lambda *a, **k: order.append("scan") or set())
     assert ps.rescan_group_alone(["1", "2"], {"1": {"headRefOid": "a"}, "2": {"headRefOid": "b"}}) == set()
     assert order[-2:] == ["sync", "scan"]
+
+
+def test_land_skip_rescan_is_read_where_the_rescan_check_is_made():
+    """12:03-12:12: every PR the squash refused (merge conflicts) cost a ~80 s group rescan, ~1 PR a minute for 40 PRs; the bulk order skips it with LAND_SKIP_RESCAN=1."""
+    import inspect  # noqa: PLC0415
+
+    source = inspect.getsource(ps.merge_batch)
+    assert 'os.environ.get("LAND_SKIP_RESCAN") == "1"' in source and "make_rescan_check()" in source
