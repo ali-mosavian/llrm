@@ -2,6 +2,7 @@ import re, sys, collections
 # Self cost by callee, attributed to the pin pass the callee's module is the counterpart of
 # (not by call site). Shared leaves (alloc, libc, llrm_mir core) stay as their own rows.
 RULES = [
+ (r"llrm_cc::|clang::|llvm::|/(clang|llvm)/(lib|include|tools)/", "clang (llrm-cc front end)"),
  (r"llrm_codegen::(twoaddress|backend::twoaddr)", "TwoAddress"),
  (r"llrm_codegen::(coalescer|backend::coalesce)", "RegisterCoalescer"),
  (r"llrm_codegen::greedy|backend::allocate|backend::spiller|backend::lifetimes|backend::regalloc", "RAGreedy + SplitKit + InlineSpiller"),
@@ -22,9 +23,8 @@ RULES = [
  (r"llrm_analysis::", "other analyses"),
  (r"llrm_mir::passes|llrm_mir::edit|llrm_mir::uselist", "pass manager, IR edits"),
  (r"llrm_mir::", "MIR core (shared: Function, Opcode, types)"),
- (r"llrm_cc::|clang::|/clang[-\d.]*:|llvm::", "clang (llrm-cc front end)"),
  (r"llrm_hir|llrm_c::|llrm_frontend|llrm_lexer|frontends", "front end"),
- (r"alloc::|core::|std::|hashbrown|libc|\.so|memmove|memcmp|memcpy|malloc|free|cfree", "alloc/libc/std (shared leaves)"),
+ (r"alloc::|core::|std::|hashbrown|libc|\.so|\./elf/|sysdeps/|__rustc::|memmove|memcmp|memcpy|malloc|free|cfree", "alloc/libc/std (shared leaves)"),
 ]
 R = [(re.compile(a), b) for a, b in RULES]
 def load(path):
