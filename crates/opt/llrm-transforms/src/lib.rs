@@ -93,6 +93,9 @@ pub mod canonical;
 pub mod cfg;
 pub mod cgpaddr;
 pub mod cgpbranch;
+pub mod cgpmemalign;
+#[cfg(test)]
+mod cgpmemalign_tests;
 pub mod cgpswitch;
 pub mod cmpopt;
 #[cfg(test)]

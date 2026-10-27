@@ -34,19 +34,9 @@ pub fn expand_calls<T>(
     pick: impl Fn(Intrinsic) -> Option<T>,
     mut rewrite: impl FnMut(&mut Context, &mut Function, InstId, T) -> Result<(), String>,
 ) -> Result<(), String> {
-    expand_calls_in(module, pick, |context, _, function, inst, what| rewrite(context, function, inst, what))
-}
-
-/// `expand_calls`, the rewrite also told the position of the function among the
-/// module's globals.
-pub fn expand_calls_in<T>(
-    module: &mut Module,
-    pick: impl Fn(Intrinsic) -> Option<T>,
-    mut rewrite: impl FnMut(&mut Context, usize, &mut Function, InstId, T) -> Result<(), String>,
-) -> Result<(), String> {
     let intrinsics: Vec<Option<Intrinsic>> = module.globals.iter().map(GlobalValue::intrinsic).collect();
     let context = &mut module.context;
-    for (at, global) in module.globals.iter_mut().enumerate() {
+    for global in &mut module.globals {
         let GlobalKind::Function(function) = &mut global.kind else { continue };
         let found: Vec<(InstId, T)> = function
             .walk()
@@ -56,7 +46,7 @@ pub fn expand_calls_in<T>(
             })
             .collect();
         for (inst, what) in found {
-            rewrite(context, at, function, inst, what)?;
+            rewrite(context, function, inst, what)?;
         }
     }
     Ok(())
