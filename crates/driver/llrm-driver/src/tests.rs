@@ -872,3 +872,18 @@ fn a_clang_units_source_file_reaches_the_debug_info() {
     let md5 = source.as_ref().and_then(|(_, md5)| md5.as_ref()).map(|bytes| bytes.len());
     assert_eq!((source.map(|(name, _)| name), md5), (Some("dbg.c".to_owned()), Some(16)));
 }
+
+/// `-fno-inline=sum5` named the function as the source does, but the module
+/// is decorated (`_sum5` under sysv, `sum5_` under watcom) before the flag is
+/// looked up: "the program defines no function of that name", so
+/// tail_calls_edges.c failed to compile under llrm-cc at every ABI.
+#[test]
+fn no_inline_takes_the_source_name_under_every_abi() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define i32 @sum5(i32 %a) {\n  %r = add i32 %a, 5\n  ret i32 %r\n}\n";
+    for abi in ["sysv", "watcom"] {
+        let flags = flags(&["-fobject-format=omf", &format!("-mabi={abi}"), "-fno-inline=sum5"]);
+        crate::llc::compiled(&flags, text, "sum5").unwrap_or_else(|why| panic!("{abi}: {why}"));
+    }
+}
