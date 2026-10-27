@@ -529,3 +529,46 @@ guard:
         function.layout().iter().map(|&one| function.block(one).name.as_deref().unwrap_or("new")).collect();
     assert_eq!(order, ["entry", "side", "new", "head", "new", "guard"]);
 }
+
+/// The first loop's exit is the second loop's header, so one new block is
+/// both its dedicated exit and the second's preheader. The pin works the last
+/// top-level loop first, so that block is made as a preheader and put right
+/// after the first loop's header: `entry h1 new b1 h2 b2 exit`. Taken in
+/// program order it was made as an exit, stood before `h2`, and bench
+/// x_transpose's late JumpThreading saw another layout than the pin's.
+#[test]
+fn a_loops_are_simplified_last_top_level_loop_first_so_the_preheader_follows_the_first_header() {
+    let mut module = parsed(
+        "define i32 @f(i32 %n) {
+entry:
+  br label %h1
+
+h1:
+  %i = phi i32 [ 0, %entry ], [ %i1, %b1 ]
+  %c1 = icmp slt i32 %i, %n
+  br i1 %c1, label %b1, label %h2
+
+b1:
+  %i1 = add i32 %i, 1
+  br label %h1
+
+h2:
+  %j = phi i32 [ 0, %h1 ], [ %j1, %b2 ]
+  %c2 = icmp slt i32 %j, %n
+  br i1 %c2, label %b2, label %exit
+
+b2:
+  %j1 = add i32 %j, 1
+  br label %h2
+
+exit:
+  ret i32 %j
+}
+",
+    );
+    let (_, function) = module.function_mut("f").expect("@f");
+    assert!(simplified(function));
+    let order: Vec<&str> =
+        function.layout().iter().map(|&one| function.block(one).name.as_deref().unwrap_or("new")).collect();
+    assert_eq!(order, ["entry", "h1", "new", "b1", "h2", "b2", "exit"]);
+}
