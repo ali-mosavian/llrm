@@ -89,7 +89,9 @@ pub enum NodeData {
     Symbol(u32),
     /// A constant pool node's entry, an index into
     /// [`SelectionDAG::constant_pool`].
-    PoolIndex(u32),
+    /// A constant pool entry and the displacement added to its address
+    /// (`ConstantPoolSDNode::getOffset`).
+    PoolIndex(u32, i32),
     Mem(MemInfo),
     JumpTable(u32),
     /// `SrcValueSDNode`: which IR value, by a key the builder makes.
@@ -163,6 +165,10 @@ pub struct DagConfig {
     pub pointer: EVT,
     /// `isIntDivCheap`: a divide by a constant stays a divide.
     pub int_div_cheap: bool,
+    /// The function evaluates floats at the x87's extended precision
+    /// (`FP_EVAL`): a constant operation folds only where its result is exact,
+    /// as the IR's folder does.
+    pub fp_extended: bool,
 }
 
 impl Default for DagConfig {
@@ -175,6 +181,7 @@ impl Default for DagConfig {
             dso_local_symbols: false,
             pointer: EVT::I32,
             int_div_cheap: false,
+            fp_extended: false,
         }
     }
 }
@@ -1163,7 +1170,7 @@ impl SelectionDAG {
             }
         } as u32;
         let opcode = if target { ISD::TargetConstantPool } else { ISD::ConstantPool };
-        self.intern(opcode, &[ptr], &[], SDNodeFlags::default(), NodeData::PoolIndex(index))
+        self.intern(opcode, &[ptr], &[], SDNodeFlags::default(), NodeData::PoolIndex(index, 0))
     }
 
     /// `CreateStackObject`: a frame object for a lowering's scratch value; its
