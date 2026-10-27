@@ -30,10 +30,10 @@
 //! `useOrDefCSROrFI` are the caller's [`Frame::touches`]: what is a kept
 //! register, a frame cell or the stack pointer is the target's to say.
 
-use llrm_mir::blocklist::BlockList;
-use llrm_mir::cycleinfo::{CycleInfo, FlowGraph};
-use llrm_mir::domtree::{DomGraph, DomTreeBase};
-use llrm_mir::module::BlockId;
+use crate::blocklist::BlockList;
+use crate::cycleinfo::{CycleInfo, FlowGraph};
+use crate::domtree::{DomGraph, DomTreeBase};
+use crate::module::BlockId;
 
 /// What the pass asks of the target and the body (`TargetFrameLowering` and
 /// `useOrDefCSROrFI`).

@@ -15,6 +15,7 @@ pub mod mfunc;
 pub mod pairs;
 pub mod prepass;
 pub mod regalloc;
+pub mod shrinkwrap;
 pub mod tti;
 #[cfg(test)]
 mod tti_tests;

@@ -6,11 +6,7 @@
 //! record (`x29`, `x30`) at the top. Offsets are from the stack pointer, which
 //! does not move in the body.
 //!
-//! Shrink wrapping (`ShrinkWrap.cpp`): when the blocks that need the frame
-//! (a call, a frame object, a callee-saved register) are all dominated by one
-//! block other than the entry, and that block's region is left only by
-//! returns, the prologue goes at the start of that block and the epilogue
-//! before the returns inside the region; the early exits cost nothing.
+//! Shrink wrapping: where the prologue and epilogue go is [`crate::shrinkwrap`]'s.
 
 use crate::mc::inst::*;
 use crate::mc::visit::Reg;
@@ -163,195 +159,23 @@ fn accessed_bytes(mem: &Memory) -> i64 {
     }
 }
 
-/// Whether `op` needs the frame: it calls, addresses a frame object or the
-/// caller's arguments, or touches a callee-saved register.
-fn needs_frame(op: &Op) -> bool {
-    match op {
-        Op::Call { .. } | Op::FrameAddress { .. } => true,
-        Op::I(Inst::Load { addr: Addr::Slot { .. }, .. } | Inst::Store { addr: Addr::Slot { .. }, .. }) => true,
-        _ => {
-            let (defs, uses) = op.defs_and_uses();
-            defs.iter().chain(&uses).any(|register| crate::regalloc::pool::callee_saved(*register))
-        }
-    }
-}
-
-/// `ShrinkWrap`'s save point: the block whose start gets the prologue, if it
-/// is not the entry. It is the nearest common dominator of the blocks that
-/// need the frame, and its region (the blocks it dominates) must be left by
-/// returns only and never branch back to it.
-fn save_point(function: &MFunc) -> Option<(usize, Vec<bool>)> {
-    let count = function.blocks.len();
-    if function.dynamic || count < 2 {
-        return None;
-    }
-    let labels: std::collections::HashMap<&str, usize> =
-        function.blocks.iter().enumerate().map(|(at, one)| (one.label.as_str(), at)).collect();
-    let successors: Vec<Vec<usize>> = function
-        .blocks
-        .iter()
-        .enumerate()
-        .map(|(at, block)| crate::mfunc::successors_of(block, at, count, &labels))
-        .collect();
-    // Immediate dominators over the blocks reachable from the entry, by the
-    // iterative algorithm on the reverse postorder.
-    let mut order = Vec::new();
-    let mut seen = vec![false; count];
-    let mut stack = vec![(0usize, 0usize)];
-    seen[0] = true;
-    while let Some((block, next)) = stack.pop() {
-        if next < successors[block].len() {
-            stack.push((block, next + 1));
-            let to = successors[block][next];
-            if !seen[to] {
-                seen[to] = true;
-                stack.push((to, 0));
-            }
-        } else {
-            order.push(block);
-        }
-    }
-    order.reverse();
-    let mut position = vec![usize::MAX; count];
-    for (at, &block) in order.iter().enumerate() {
-        position[block] = at;
-    }
-    let mut predecessors = vec![Vec::new(); count];
-    for &block in &order {
-        for &to in &successors[block] {
-            predecessors[to].push(block);
-        }
-    }
-    let mut idom: Vec<Option<usize>> = vec![None; count];
-    idom[0] = Some(0);
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for &block in order.iter().skip(1) {
-            let mut new: Option<usize> = None;
-            for &pred in &predecessors[block] {
-                if idom[pred].is_none() {
-                    continue;
-                }
-                new = Some(match new {
-                    None => pred,
-                    Some(mut a) => {
-                        let mut b = pred;
-                        while a != b {
-                            while position[a] > position[b] {
-                                a = idom[a].expect("reached");
-                            }
-                            while position[b] > position[a] {
-                                b = idom[b].expect("reached");
-                            }
-                        }
-                        a
-                    }
-                });
-            }
-            if new != idom[block] {
-                idom[block] = new;
-                changed = true;
-            }
-        }
-    }
-    let dominates = |a: usize, mut b: usize| loop {
-        if a == b {
-            return true;
-        }
-        match idom[b] {
-            Some(up) if up != b => b = up,
-            _ => return false,
-        }
-    };
-    let mut save: Option<usize> = None;
-    for &block in &order {
-        if !function.blocks[block].ops.iter().any(needs_frame) {
-            continue;
-        }
-        save = Some(match save {
-            None => block,
-            Some(mut a) => {
-                let mut b = block;
-                while a != b {
-                    while position[a] > position[b] {
-                        a = idom[a].expect("reached");
-                    }
-                    while position[b] > position[a] {
-                        b = idom[b].expect("reached");
-                    }
-                }
-                a
-            }
-        });
-    }
-    let save = save.filter(|&at| at != 0)?;
-    for &block in order.iter().filter(|&&one| dominates(save, one)) {
-        for &to in &successors[block] {
-            if !dominates(save, to) || to == save {
-                return None;
-            }
-        }
-    }
-    let mut region = vec![false; count];
-    for &block in &order {
-        region[block] = dominates(save, block);
-    }
-    Some((save, region))
-}
-
-/// A block that only returns is copied into the blocks that jump or fall to it
-/// (`TailDuplicator`'s return blocks), so that a frame-free path can return
-/// before the frame is made. The original goes unreachable.
-fn duplicate_returns(function: &MFunc) -> MFunc {
-    let mut function = function.clone();
-    let count = function.blocks.len();
-    for target in 1..count {
-        let ops = &function.blocks[target].ops;
-        if !matches!(ops.as_slice(), [Op::Return { .. }]) {
-            continue;
-        }
-        let label = function.blocks[target].label.clone();
-        let copy = ops.clone();
-        for at in 0..count {
-            if at == target {
-                continue;
-            }
-            let block = &mut function.blocks[at];
-            let ends_in_jump = matches!(
-                block.ops.last(),
-                Some(Op::I(Inst::Branch { link: false, target: Target::Label(to) })) if *to == label
-            );
-            if ends_in_jump {
-                block.ops.pop();
-                block.ops.extend(copy.clone());
-            } else if at + 1 == target && !matches!(block.ops.last(), Some(Op::Return { .. } | Op::I(Inst::Branch { .. }))) {
-                block.ops.extend(copy.clone());
-            }
-        }
-    }
-    function
-}
-
 /// `function`, its registers physical, as real instructions.
 pub fn lower(
     function: &MFunc,
     allocation: &Allocation,
 ) -> Result<Vec<Lowered>, String> {
     let frame = layout(function, allocation);
-    // The copies of the return blocks stay only where they let the frame be made later.
-    let duplicated = duplicate_returns(function);
-    let (function, save, wrapped) = match save_point(&duplicated).filter(|_| frame.size > 0) {
-        Some((at, region)) => (&duplicated, Some(at), Some(region)),
-        None => (function, None, None),
-    };
+    let wrapped = crate::shrinkwrap::place(function).filter(|_| frame.size > 0);
+    let save = wrapped.as_ref().map_or(0, |one| one.save);
     let mut out = Vec::new();
     for (index, block) in function.blocks.iter().enumerate() {
         let mut emitter = Emitter { insts: Vec::new() };
-        if index == save.unwrap_or(0) {
+        if index == save {
             prologue(&frame, &mut emitter);
         }
-        let framed = wrapped.as_ref().is_none_or(|region| region[index]);
+        // Without a placement every return takes the frame down; with one, the Restore's
+        // return does, or the blocks that end the frame at their end.
+        let framed = wrapped.as_ref().is_none_or(|one| !one.at_end && one.restores.contains(&index));
         for op in &block.ops {
             match op {
                 Op::I(inst) => lower_inst(inst, &frame, &mut emitter)?,
@@ -389,6 +213,25 @@ pub fn lower(
                     emitter.add_to(*dst, base, total < 0, total.unsigned_abs(), Gpr(16));
                 }
             }
+        }
+        if wrapped.as_ref().is_some_and(|one| one.at_end && one.restores.contains(&index)) {
+            // Before the branches that leave.
+            let at = emitter
+                .insts
+                .iter()
+                .rposition(|inst| {
+                    !matches!(
+                        inst,
+                        Inst::Branch { link: false, .. }
+                            | Inst::BranchCond { .. }
+                            | Inst::CompareBranch { .. }
+                            | Inst::TestBranch { .. }
+                    )
+                })
+                .map_or(0, |i| i + 1);
+            let mut tail = Emitter { insts: Vec::new() };
+            epilogue(&frame, &mut tail);
+            emitter.insts.splice(at..at, tail.insts);
         }
         out.push(Lowered { label: block.label.clone(), insts: emitter.insts });
     }

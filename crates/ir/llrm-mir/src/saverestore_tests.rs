@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_mir::blocklist::BlockList;
-use llrm_mir::cycleinfo::FlowGraph;
-use llrm_mir::domtree::DomGraph;
-use llrm_mir::module::BlockId;
+use crate::blocklist::BlockList;
+use crate::cycleinfo::FlowGraph;
+use crate::domtree::DomGraph;
+use crate::module::BlockId;
 
 use super::{Frame, Frequencies, Placement, run};
 

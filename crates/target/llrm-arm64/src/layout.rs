@@ -68,6 +68,23 @@ pub fn fold(mut blocks: Vec<Lowered>) -> Vec<Lowered> {
     if blocks.is_empty() {
         return blocks;
     }
+    // A branch to a block that only returns is the return (`TailDuplicator`'s return blocks).
+    let returns: HashSet<String> = blocks
+        .iter()
+        .filter(|block| matches!(block.insts.as_slice(), [Inst::Ret { .. }]))
+        .map(|block| block.label.clone())
+        .collect();
+    for at in 0..blocks.len() {
+        let ret = match blocks[at].insts.last() {
+            Some(Inst::Branch { link: false, target: Target::Label(label) }) if returns.contains(label) => {
+                blocks.iter().find(|block| &block.label == label).and_then(|block| block.insts.first().cloned())
+            }
+            _ => None,
+        };
+        if let Some(ret) = ret {
+            *blocks[at].insts.last_mut().expect("a branch") = ret;
+        }
+    }
     // A fall-through becomes a branch, so that blocks can move.
     for at in 0..blocks.len() - 1 {
         let ends = matches!(
