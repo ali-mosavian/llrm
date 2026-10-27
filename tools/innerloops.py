@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 
 import iced_x86 as ix
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "targets"))
 
 import msp430  # noqa: E402
 
