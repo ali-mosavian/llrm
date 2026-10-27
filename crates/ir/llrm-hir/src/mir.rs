@@ -1882,7 +1882,7 @@ fn declare_outside(
             && let Ok(to) =
                 value_type(&mut module.context.types, &tables.spaces, tables.types[&values[&instruction.results[0]]])
             && let Type::Pointer(space) = *module.context.types.get(to)
-            && (tables.layout.pointer(space).bits == 64 || tables.hosted)
+            && tables.hosted
         {
             let wide = module.context.types.int(tables.layout.pointer(space).bits);
             let ty = function_type(&mut module.context.types, to, vec![wide]);
@@ -3561,10 +3561,10 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let paragraph = self.b.binary(BinaryOp::Shl, selector, four, Flags::default(), "");
                 let offset = self.convert(offset, false, wide)?;
                 let address = self.b.binary(BinaryOp::Add, paragraph, offset, Flags::default(), "");
-                // A 64-bit host has no memory at the PC's low addresses: the
+                // A host has no memory at the PC's low addresses: the
                 // runtime gives the place of the byte `address` in its image
                 // of them.
-                let result = if bits == 64 || self.tables.hosted {
+                let result = if self.tables.hosted {
                     let callee = Value::Constant(
                         *self.tables.callees.get(REAL_ADDRESS).ok_or_else(|| format!("@{REAL_ADDRESS} undeclared"))?,
                     );
