@@ -3614,3 +3614,18 @@ fn test_field_is_a_preamble_and_one_call_per_variable() {
     assert_eq!(main.matches("call far ptr B$FIEL").count(), 2, "{main}");
     assert!(main.find("B$FLDP") < main.find("B$FIEL"), "{main}");
 }
+
+/// GET and PUT without a record variable were refused ("cannot generate code
+/// for it yet"): they transfer the FIELD buffer, B$GET1/B$PUT1 for the next
+/// record and B$GET2/B$PUT2 for a numbered one.
+#[test]
+fn test_get_and_put_without_a_variable_call_the_buffer_routines() {
+    let text = listing_of(
+        "getputbuffer",
+        "OPEN \"R\" FOR RANDOM AS #1 LEN = 16\r\nFIELD #1, 16 AS n$\r\nGET #1\r\nGET #1, 3\r\nLSET n$ = \"x\"\r\nPUT #1\r\nPUT #1, 4\r\nCLOSE\r\nEND\r\n",
+    );
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    for routine in ["B$GET1", "B$GET2", "B$PUT1", "B$PUT2"] {
+        assert_eq!(main.matches(&format!("call far ptr {routine}")).count(), 1, "{routine}: {main}");
+    }
+}
