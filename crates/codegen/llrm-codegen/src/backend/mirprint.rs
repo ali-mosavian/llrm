@@ -38,6 +38,7 @@ thread_local! {
     /// The local frame objects of the body being printed, by the slot they
     /// were laid out in: first byte and one past the last, in BP-relative
     /// displacements. Their position in this list is the `%stack.N`.
+    static JUMP_TABLES: std::cell::RefCell<Vec<Vec<usize>>> = const { std::cell::RefCell::new(Vec::new()) };
     static LOCALS: std::cell::RefCell<Vec<(i64, i64, i64)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -61,6 +62,12 @@ fn physical(
     let whole = format!("{register:?}").to_lowercase();
     match (width, whole.strip_prefix('e')) {
         (4, _) => Ok(whole),
+        // The m32 table also names the 16- and 8-bit registers.
+        (2, None) if matches!(
+            whole.as_str(),
+            "ax" | "cx" | "dx" | "bx" | "si" | "di" | "bp" | "sp"
+        ) => Ok(whole),
+        (1, None) if whole.len() == 2 && matches!(&whole[1..], "l" | "h") => Ok(whole),
         (2, Some(rest)) => Ok(rest.to_owned()),
         (1, Some(rest)) if rest.ends_with('x') => Ok(format!("{}l", &rest[..1])),
         _ => Err(format!("{width} bytes of {whole}")),
@@ -259,6 +266,15 @@ fn instruction(
                 writeln!(out, "    {} = COPY ${}", vreg(held)?, format!("{register:?}").to_lowercase()).unwrap();
             }
         }
+        // A switch: the table's entries are the block's successors.
+        ("jmp", None, [Loc::Mem(m)]) if m.base.is_none() && m.addr.is_some_and(|a| a.space == Space::Segment) => {
+            let index = m.index.as_ref().ok_or("a jump through a table without an index")?;
+            let table = JUMP_TABLES.with(|t| {
+                t.borrow_mut().push(targets.to_vec());
+                t.borrow().len() - 1
+            });
+            writeln!(out, "    JMP32m $noreg, {}, {}, %jump-table.{table}, $noreg", m.scale, vreg(index)?).unwrap();
+        }
         ("jmp", None, []) => {
             let to = targets.get(*jumps).or(targets.last()).ok_or("a jump without a successor")?;
             writeln!(out, "    JMP_1 %bb.{to}").unwrap();
@@ -443,6 +459,7 @@ pub fn mir(
         }
     }
     LOCALS.with(|l| *l.borrow_mut() = locals);
+    JUMP_TABLES.with(|t| t.borrow_mut().clear());
     // A value read as its low byte needs a register that has one.
     let byte_read: BTreeSet<u32> = body
         .insns()
@@ -589,6 +606,14 @@ pub fn mir(
         writeln!(out, "stack:").unwrap();
         for (id, (_, start, end)) in locals.iter().enumerate() {
             writeln!(out, "  - {{ id: {id}, offset: {start}, size: {}, alignment: 4 }}", end - start).unwrap();
+        }
+    }
+    let tables = JUMP_TABLES.with(|t| t.borrow().clone());
+    if !tables.is_empty() {
+        writeln!(out, "jumpTable:\n  kind: block-address\n  entries:").unwrap();
+        for (id, blocks) in tables.iter().enumerate() {
+            let list: Vec<String> = blocks.iter().map(|to| format!("'%bb.{to}'")).collect();
+            writeln!(out, "    - id: {id}\n      blocks: [ {} ]", list.join(", ")).unwrap();
         }
     }
     writeln!(out, "body: |").unwrap();
@@ -772,6 +797,37 @@ mod tests {
 
     /// A nameless instruction that is not a return (a marker) printed as
     /// `RET 0`, which ended the block early for the pin.
+    #[test]
+    fn test_a_switch_through_a_table_prints_its_jump_table() {
+        use llrm_lir::{Addr, Mem, Space};
+        let mut table = Mem::new(Some(Addr::new(Space::Segment, 7)), 4);
+        table.index = Some(Held { value: 1, width: 4 });
+        table.scale = 4;
+        let jump = insn("jmp", Operation::Branch, vec![], vec![Loc::Mem(table)]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![
+            Block::from(LirBlock { succ: vec![1, 2].into(), ..LirBlock::new(0, vec![jump]) }),
+            Block::from(LirBlock::new(1, vec![Arc::clone(&ret)])),
+            Block::from(LirBlock::new(2, vec![ret])),
+        ];
+        let body = LirBody::new("sw", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("a switch through a table prints");
+        assert!(text.contains("JMP32m $noreg, 4, %1, %jump-table.0, $noreg"), "{text}");
+        assert!(
+            text.contains(
+                "jumpTable:\n  kind: block-address\n  entries:\n    - id: 0\n      blocks: [ '%bb.1', '%bb.2' ]"
+            ),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn test_a_sixteen_bit_register_is_named_as_itself() {
+        use super::physical;
+        assert_eq!(physical(RegId::AX, 2).as_deref(), Ok("ax"));
+        assert_eq!(physical(RegId::EAX, 2).as_deref(), Ok("ax"));
+    }
+
     #[test]
     fn test_a_nameless_marker_is_not_printed_as_a_return() {
         let marker = insn("", Operation::Nothing, vec![], vec![]);
