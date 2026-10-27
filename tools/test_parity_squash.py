@@ -1707,3 +1707,14 @@ def test_the_head_red_limit_is_read_from_the_environment():
     """A target_facts red on parity (12:03) turns every batch into a refusal after HEAD_RED_HOURS (2 h, ~14:03) whatever the members do: the limit is the runner's to set."""
     read = lambda env: subprocess.run([sys.executable, "-c", "import parity_squash as p; print(p.HEAD_RED_HOURS)"], cwd=Path(__file__).parent, env={**{k: v for k, v in os.environ.items() if k != "HEAD_RED_HOURS"}, **env}, capture_output=True, text=True).stdout.strip()
     assert read({"HEAD_RED_HOURS": "6"}) == "6.0" and read({}) == "2.0"
+
+
+def test_the_scanner_run_has_its_own_stage_so_workspace_check_is_not_its_cost():
+    """Ten batches showed `workspace-check 58%`, but the scanners (a cargo test build of the integration targets) ran inside it with no stage line, so its split was a guess.
+    The default path now prints `STAGE scanners` after the build check."""
+    import inspect
+
+    source = inspect.getsource(ps.merge_batch)
+    gate = 'if os.environ.get("LAND_FAST_TESTS") != "1":\n                stage("scanners")'
+    assert gate in source, "the default path has a scanners stage"
+    assert source.find(gate) < source.find("landing_scanner_failures(git("), "and it comes before the always-on scanner run"

@@ -1850,6 +1850,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                     failed_units.update(new)
                     blame(new)
                     return False
+            if os.environ.get("LAND_FAST_TESTS") != "1":
+                stage("scanners")  # a cargo test build of the scanner targets: workspace-check's 58% of a batch hid it
             if os.environ.get("LAND_FAST_TESTS") != "1" and (new := sorted(landing_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), False))):
                 print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new, members=members_files)}")
                 failed_units.update(new)
