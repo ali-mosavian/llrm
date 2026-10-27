@@ -311,3 +311,59 @@ y:
     let out = combined(text);
     assert!(out.contains("phi i1") && !out.contains("icmp"), "{out}");
 }
+
+/// `foldICmpXorXX`: `x ^ nonzero` is never `x`, so the non-strict compare of
+/// the two is strict (`opt`: `icmp ugt i32 %a, %x`); a negative operand
+/// decides the compare by the sign of `x`.
+#[test]
+fn a_xor_compared_with_its_operand_is_decided_by_the_other_operand() {
+    check(
+        "i32 %x, i32 %y0",
+        "  %y = or i32 %y0, 1\n  %a = xor i32 %x, %y\n  %r = icmp uge i32 %a, %x\n  ret i1 %r\n",
+        "  %y = or i32 %y0, 1\n  %a = xor i32 %x, %y\n  %0 = icmp ugt i32 %a, %x\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x, i32 %y0",
+        "  %y = or i32 %y0, 1\n  %a = xor i32 %x, %y\n  %r = icmp sle i32 %x, %a\n  ret i1 %r\n",
+        "  %y = or i32 %y0, 1\n  %a = xor i32 %x, %y\n  %0 = icmp sgt i32 %a, %x\n  ret i1 %0\n",
+    );
+    // The pin goes on to `icmp slt i32 %x, 0` (`foldICmpBinOpWithConstant`,
+    // OWED).
+    check(
+        "i32 %x",
+        "  %a = xor i32 %x, -8\n  %r = icmp ult i32 %a, %x\n  ret i1 %r\n",
+        "  %a = xor i32 %x, -8\n  %0 = icmp sgt i32 %a, -1\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x",
+        "  %a = xor i32 %x, -8\n  %r = icmp sgt i32 %x, %a\n  ret i1 %r\n",
+        "  %a = xor i32 %x, -8\n  %0 = icmp slt i32 %a, 0\n  ret i1 %0\n",
+    );
+}
+
+/// `foldICmpOrXX`: `(x | y) u<= x` is an equality (`opt`: `icmp eq i32 %o,
+/// %x`).
+#[test]
+fn an_or_compared_with_its_operand_is_an_equality() {
+    check(
+        "i32 %x, i32 %y",
+        "  %o = or i32 %x, %y\n  %r = icmp ule i32 %o, %x\n  ret i1 %r\n",
+        "  %o = or i32 %x, %y\n  %0 = icmp eq i32 %o, %x\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x, i32 %y",
+        "  %o = or i32 %x, %y\n  %r = icmp ult i32 %x, %o\n  ret i1 %r\n",
+        "  %o = or i32 %x, %y\n  %0 = icmp ne i32 %o, %x\n  ret i1 %0\n",
+    );
+}
+
+/// `foldICmpBinOp`, `icmp (0-X) < cst --> x > -cst` (`opt`: `icmp sgt i32 %x,
+/// -5`).
+#[test]
+fn a_negation_compared_with_a_constant_is_the_negated_compare() {
+    check(
+        "i32 %x",
+        "  %n = sub nsw i32 0, %x\n  %r = icmp slt i32 %n, 5\n  ret i1 %r\n",
+        "  %0 = icmp sgt i32 %x, -5\n  ret i1 %0\n",
+    );
+}
