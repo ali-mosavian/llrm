@@ -4,7 +4,7 @@ paragraphs (split at blank lines) are filled again, keeping the first line's
 indent and the continuation indent.  A comment after code that runs past 80
 moves above the line.
 
-    python tools/wrapcomments.py FILE...
+    python tools/docs/wrapcomments.py FILE...
 """
 
 from __future__ import annotations

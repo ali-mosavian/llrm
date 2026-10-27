@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopsimplifycfg.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopsimplifycfg.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopsimplifycfg.rs sha256:124940e90fef145f7e2f13e2b971d8b40e54a311130b61cfc9b75096d413544b -->
+<!-- src: crates/opt/llrm-transforms/src/loopsimplifycfg.rs sha256:4fe06787800f68881cbb0bd8335e58dc04c0dfc9cdf178ca1b11e585b65d59a9 -->
 
 # loopsimplifycfg
 
@@ -41,3 +41,6 @@ DEVIATE 3: no branch weights on the dummy switch (MIR has none).
 A loop whose body tests a constant `false` and leaves for an exit on true
 loses the test: the exit's edge from the loop goes, the exit stays
 reachable from a `switch i32 0` in the preheader until SimplifyCFG.
+
+## Used by
+Named by `pipeline`.
