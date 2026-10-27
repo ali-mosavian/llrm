@@ -22,23 +22,33 @@ sys.path.insert(0, str(HERE))
 import pin  # noqa: E402
 import pin_ablate  # noqa: E402
 
+# the function simplification pipeline's SimplifyCFG (PassBuilderPipelines.cpp:675), as the printed pipeline spells it
+CFG = (
+    "simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;"
+    "no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables>"
+)
+
 # pass: (the pin's pipeline before it, the pin's spelling, ours: llrm-pass arguments)
 PREFIX = {
     "sroa": ("function(simplifycfg)", "function(sroa<modify-cfg>)", ["--order", "sroa@646"]),
     "early-cse": ("function(simplifycfg,sroa<modify-cfg>)", "function(early-cse<>)", ["--order", "earlycse@649"]),
     "instcombine": (
-        "function(simplifycfg,sroa<modify-cfg>,early-cse<>,jump-threading,correlated-propagation,simplifycfg)",
+        "function(simplifycfg,sroa<modify-cfg>,early-cse<>,jump-threading,correlated-propagation," + CFG + ")",
         "function(instcombine<no-verify-fixpoint>)",
         ["--order", "combine@677"],
     ),
-    "simplifycfg": ("function(sroa<modify-cfg>,early-cse<>,instcombine<no-verify-fixpoint>)", "function(simplifycfg)", ["simplifycfg"]),
+    "simplifycfg": (
+        "function(sroa<modify-cfg>,early-cse<>,jump-threading,correlated-propagation)",
+        "function(" + CFG + ")",
+        ["--order", "decide@675"],
+    ),
     "gvn": (
-        "function(simplifycfg,sroa<modify-cfg>,early-cse<>,instcombine<no-verify-fixpoint>,simplifycfg,loop-simplify,lcssa,loop-mssa(licm<allowspeculation>))",
+        "function(simplifycfg,sroa<modify-cfg>,early-cse<>,instcombine<no-verify-fixpoint>," + CFG + ",loop-simplify,lcssa,loop-mssa(licm<allowspeculation>))",
         "function(gvn<>)",
         ["--order", "gvn@787"],
     ),
     "licm": (
-        "function(simplifycfg,sroa<modify-cfg>,early-cse<>,instcombine<no-verify-fixpoint>,simplifycfg,loop-simplify,lcssa)",
+        "function(simplifycfg,sroa<modify-cfg>,early-cse<>,instcombine<no-verify-fixpoint>," + CFG + ",loop-simplify,lcssa)",
         "function(loop-mssa(licm<allowspeculation>))",
         ["--order", "licm@724"],
     ),
@@ -90,7 +100,7 @@ def run(ir: Path, name: str, of, llrm_pass: str, level: str):
         return ir, None, f"pin: {pin_out.stderr.strip().splitlines()[:1]}"
     tmp = Path(os.environ.get("TMPDIR", "/tmp")) / f"pid-{os.getpid()}-{ir.parent.name}-{name}.ll"
     tmp.write_text(ours_text(start.stdout))
-    cmd = [llrm_pass, level, *args, str(tmp)]
+    cmd = [llrm_pass, level, "--mode", "16" if of.triple.endswith("code16") else "32", *args, str(tmp)]
     ours = subprocess.run(cmd, capture_output=True, text=True)
     tmp.unlink(missing_ok=True)
     if ours.returncode:
