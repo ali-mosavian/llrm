@@ -517,6 +517,32 @@ fn a_rounded_float_has_its_slot_in_the_frame() {
         .unwrap_or_else(|why| panic!("{}", why.0));
 }
 
+const ROUNDED_STORE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+define cc 1000 void @h(ptr %0, ptr %1, ptr %2) addrspace(1) {
+b1:
+  %3 = load double, ptr %0
+  %4 = load double, ptr %1
+  %5 = fmul double %3, %4
+  %6 = fptrunc double %5 to float
+  store float %6, ptr %2
+  ret void
+}
+";
+
+/// A double rounded to a float and stored is one `fstp dword`: the store
+/// rounds. Store, reload and store again left a 4-byte frame temporary and two
+/// more instructions per rounded store (ACTIONS3D: 25 round trips).
+#[test]
+fn a_rounded_float_stored_is_one_truncating_store() {
+    use crate::model::ir::Operation;
+    let module = llrm_mir::parse::module(ROUNDED_STORE).expect("parses");
+    let done = selected(&module, "h", &llrm_x86_m16::M16, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+    let stores =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()).filter(|w| w.op == Operation::FloatStore).count();
+    assert_eq!(stores, 1);
+}
+
 const LRINT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f(double %x) {
 entry:
@@ -662,4 +688,24 @@ fn a_far_pointer_read_as_data_is_loaded_into_movzx() {
         .map(|i| i.what.as_ref().and_then(|w| w.name.as_deref().map(str::to_owned)).unwrap_or_default())
         .collect();
     assert!(!made.iter().any(|name| name == "mov"), "{made:?}");
+}
+
+const BITREVERSE_OF_A_HIGH_BYTE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare i32 @llvm.bitreverse.i32(i32)
+define i32 @f(i32 %x) {
+  %m = and i32 %x, -16777216
+  %r = call i32 @llvm.bitreverse.i32(i32 %m)
+  ret i32 %r
+}
+";
+
+/// The pin's `SimplifyDemandedBits` turns a `bswap` of which one byte is
+/// demanded into a shift (and the mask beneath it into nothing): the
+/// bit-reverse of a masked high byte kept `and; bswap` and full-width stage
+/// masks, 21 instructions against the pin's 17.
+#[test]
+fn a_bswap_of_which_one_byte_is_demanded_is_a_shift() {
+    let made = super::dag_function_tests::names(BITREVERSE_OF_A_HIGH_BYTE).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!made.iter().any(|name| name == "bswap"), "{made:?}");
+    assert!(made.len() <= 17, "{made:?}");
 }
