@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/machinesink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/machinesink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/machinesink.rs sha256:06c76cfd7fa1402660a549d6f3849d4347b6f056f88d3d52cef641461691e33c -->
+<!-- src: crates/backend/llrm-core/src/backend/machinesink.rs sha256:11bc34d2fdb8f984dc5006e1e844683152ccf9a40556af4621b34cbc865b0209 -->
 
 # machinesink
 
@@ -38,10 +38,11 @@ ordered access as one that may alias the load: no alias analysis reaches
 LIR (`mayAlias(AA, MI)` is always true). Retires M1, which sank no load
 along a critical edge. Exit: memory operands with an alias query on LIR.
 
-DEVIATE M2 (#2903): `isProfitableToSinkTo` ends by asking the register
-pressure of the target (`registerPressureSetExceedsLimit`) for an
-instruction inside a cycle; no instruction here sinks on that ground.
-Exit: the target description's pressure limits.
+Row M2 (was DEVIATE M2 #2903, retired 2026-10-25): inside a cycle an
+instruction goes to a post-dominating block when no in-cycle operand it
+reads would be held there past the block's pressure (the limit is the number
+of allocatable registers, one for every set). x_bubble -O2 m32: the inner
+loop's `inc` goes to the latch as the pin has it.
 
 Row M4 (was DEVIATE M4, retired 2026-10-25 on the greedy allocator): a build
 for size moves what the pin moves; the rule that kept an instruction in

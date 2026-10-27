@@ -1157,12 +1157,12 @@ impl<'a> TypeLegalizer<'a> {
             let by = self.dag.get_constant(u128::from(lhs_shift), EVT::I8);
             lhs = self.dag.get_node(ISD::Shl, vt, &[lhs, by]);
         }
-        // DEVIATE: a denominator that is a positive power of two divides by
-        // an arithmetic shift, which already rounds toward negative infinity.
-        // The pin leaves a divide and a remainder, which the type legalizer
-        // turns into two 64-bit library calls before the combiner can fold
-        // them (`sdiv.fix.i32(x, 1024, 9)`: 2 calls against a `sar`).
-        // Owner sdag-c (w11).
+        // DEVIATE SD322: a denominator that is a positive power of two divides
+        // by an arithmetic shift, which already rounds toward negative
+        // infinity. The pin leaves a divide and a remainder, which the
+        // type legalizer turns into two 64-bit library calls before the
+        // combiner can fold them (`sdiv.fix.i32(x, 1024, 9)`: 2 calls
+        // against a `sar`).
         let power = self
             .dag
             .constant(rhs)

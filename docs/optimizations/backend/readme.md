@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 131 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 132 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -36,6 +36,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 131 documented
 | datagroup | Make the data segment register a fourth selector register where the stack lives in the data group. | Register allocation (`allocate.rs`): `names_data_segment` before it, | [datagroup](datagroup.md) |
 | debuginfo | `-g`: build a module's debug information as [`llrm_object::debug::Info`], the format-neutral model each object format's writer encodes. | `described` when a module is assembled (`assemble.rs`; `driver/basic.rs` | [debuginfo](debuginfo.md) |
 | division | Select a dword division by a constant as a multiply by its reciprocal, where the CPU's prices make that cheaper. | `isel.rs` (`divide`), for each division by a constant. | [division](division.md) |
+| earlytaildup | Which blocks early tail duplication may copy, and into which predecessors: `shouldTailDuplicate`, `isSimpleBB`, `canCompletelyDuplicateBB` and `canTailDuplicate` of [TailDuplicator.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TailDuplicator.cpp) with `PreRegAlloc` set and `LayoutMode` clear. | Step 2 of `docs/working/early-taildup-plan.md`. | [earlytaildup](earlytaildup.md) |
 | edges | Breaks one edge of a body: a block of its own that jumps on. | `machinesink`. | [edges](edges.md) |
 | effects | The registers and flags an instruction reads and writes, from its `x86.instr` row. | `peephole.rs` (`_effects_by_table`), which adds the instruction's | [effects](effects.md) |
 | ehprepare | Make a QB personality's landing pad one the runtime can enter, before instruction selection. | In `driver::optimized` (`mir ehprepare`), once per module after the MIR | [ehprepare](ehprepare.md) |
@@ -99,6 +100,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 131 documented
 | overlap | Whether two machine memory operands may overlap, read from their addresses alone. | `spiller`, `floatassign`, `storedhomes`. | [overlap](overlap.md) |
 | parcopy | Writes each parallel copy group (the copies a phi becomes on an edge, which happen at once) as a sequence of moves that computes the same thing. | After `regalloc`, before `prologue` and the peephole, once per body, at | [parcopy](parcopy.md) |
 | peephole | Local rewrites of allocated LIR that need the final physical registers. | Once per body, as the machine phase after `prologue` and before `loopslots` | [peephole](peephole.md) |
+| peepholeopt | A subtract whose difference nothing reads is a compare. | A machine phase on SSA after MachineSink and ahead of MachineCombiner (the | [peepholeopt](peepholeopt.md) |
 | phiconst | One value for a constant that several edges of a phi carry. | Phase 1 of the machine phases, before `SsaSpill`, so both allocation routes | [phiconst](phiconst.md) |
 | phielim | Takes LIR out of SSA: each phi becomes parallel copies on its incoming edges. | A machine phase after `ssaspill` (spiller route only) and before | [phielim](phielim.md) |
 | pointers | Advances a packed huge pointer by a displacement as arithmetic on its 32-bit form. | Nothing outside the file's own tests: a grep finds no caller. Isel states | [pointers](pointers.md) |

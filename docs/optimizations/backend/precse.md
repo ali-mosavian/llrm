@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/precse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/precse.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/precse.rs sha256:711d45c651e91bce47130f772aaca691e762a703ced818004179fe73caefa220 -->
+<!-- src: crates/backend/llrm-core/src/backend/precse.rs sha256:055556c60558e1a7fbccd1a977763bce863cc69cd949a63fa82cec68a6984814 -->
 
 # precse
 
@@ -45,10 +45,9 @@ runs no more often than the two together); the walk above then removes the
 two. A copy no one reads is dropped again (the pin leaves it to
 `DeadMachineInstructionElim`).
 
-DEVIATE CSE1 (owner w-2, exit with isel.rs I2): no `hasMinSize` shortcut
-(the machine phases have no minsize flag; it is -Oz only, which no sweep
-covers). `isLegalToHoistInto` is translated: a return block is no target;
-the pin's other two conditions cannot hold on this LIR (see
+`hasMinSize` is `LirBody::min_size` (the function's `minsize` attribute;
+CSE1 retired). `isLegalToHoistInto` is translated: a return block is no
+target; the pin's other two conditions cannot hold on this LIR (see
 `legal_to_hoist_into`).
 
 DEVIATE CSE2 (owner funcattrs-port, exit 2026-11-13): an operation with no
@@ -67,11 +66,11 @@ argument as a memory operand of its reader, not a load of its own.
 
 Row CSE5 (was DEVIATE CSE5, retired 2026-10-25): `machinecse.rs`, the same
 elimination after allocation, was ours alone (the pin runs MachineCSE once,
-before allocation). Deleted: d_faces -3.60 M Ir (dist). 7 of 568 objects grow
-and none shrinks (x_mergesort +34 B at m32 -Os and m16 -O1 to -Os, shellsort
-m16 +22 at -O1/-O2), QCport (tools/rows/qcport.py) +0.030% -O1, +0.080% -O2,
-+0.116% -O3, +0.025% -Os, x_mergesort -Os +0.43% clocks. Exit: CSE2 and
-rematerialization of multi-def values in RA (w13/w14).
+before allocation). Deleted: d_faces -3.60 M Ir (dist). 7 of 568
+objects grow and none shrinks (x_mergesort +34 B at m32 -Os and m16 -O1 to
+-Os, shellsort m16 +22 at -O1/-O2), QCport (tools/rows/qcport.py) +0.030%
+-O1, +0.080% -O2, +0.116% -O3, +0.025% -Os, x_mergesort -Os +0.43% clocks.
+Exit: CSE2 and rematerialization of multi-def values in RA (w13/w14).
 
 ## Example
 `v3 := add v1, v2` in a block and `v7 := add v1, v2` in a block it
