@@ -121,7 +121,7 @@ fn main() {
                 // The driver's own pipeline (`dag_select::legalized`): the
                 // pin's order, with the target, the hooks and the action table
                 // the real route gives each stage.
-                let mut lowering = X86Lowering { cmov: false, sse2: false };
+                let mut lowering = X86Lowering { cmov: false, sse2: false, min_size: false };
                 if let Err(why) = legalized(dag, &tli, &mut lowering, arch) {
                     println!("REFUSED {name}:{block_name} legalize: {why:?}");
                     continue;
