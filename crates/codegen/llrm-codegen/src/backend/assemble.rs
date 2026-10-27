@@ -1068,6 +1068,7 @@ fn staged(
     }
     for (at, (disp, size)) in frame.extents.split_off(frame.extents.len() - temporaries).into_iter().enumerate() {
         frame.slots.insert(frame::SlotKey::Named("temporary".to_owned(), at as i64), disp);
+        frame.scratch.insert(disp);
         frame.capacities.insert(disp, size.max(frame::WORD));
     }
     Ok(Staged {
