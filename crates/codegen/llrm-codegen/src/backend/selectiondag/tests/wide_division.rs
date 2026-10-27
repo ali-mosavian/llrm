@@ -52,7 +52,7 @@ fn an_i64_unsigned_divide_by_a_wide_divisor_calls_the_wide_routine() {
 #[test]
 fn a_divisor_with_a_zero_high_dword_calls_the_dword_routine() {
     let (dag, _) = quotient_of(ISD::SDiv, true);
-    // a quotient read alone: the routine that fixes only its sign (SD315)
+    // a quotient read alone: the routine that fixes only its sign (SD232)
     assert_eq!(call_of(&dag), ("div64_s32q".to_owned(), 3), "no register for the divisor's high dword");
 }
 

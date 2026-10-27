@@ -1072,7 +1072,7 @@ def test_the_docs_scanner_runs_at_landing_without_the_lib_tests_switch():
         return {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}
 
     assert ps.landing_scanner_failures(["docs/working/x.md"], False, on_merged=on_merged, on_head=lambda t: set()) == {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}
-    assert asked == [list(ps.ALWAYS_SCANNERS)] and asked[0][:3] == ["docs_in_sync", "docs_links", "no_local_paths"]
+    assert asked == [sorted(ps.ALWAYS_SCANNERS)] and {"docs_in_sync", "docs_links", "no_local_paths"} <= set(asked[0])
     asked.clear()
     ps.landing_scanner_failures(["docs/working/x.md"], True, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
     assert "docs_links" in asked[0] and len(asked[0]) > 1
@@ -1718,3 +1718,95 @@ def test_the_scanner_run_has_its_own_stage_so_workspace_check_is_not_its_cost():
     gate = 'if os.environ.get("LAND_FAST_TESTS") != "1":\n                stage("scanners")'
     assert gate in source, "the default path has a scanners stage"
     assert source.find(gate) < source.find("landing_scanner_failures(git("), "and it comes before the always-on scanner run"
+
+
+def test_the_workspace_check_runs_beside_the_scanners_and_a_broken_build_wins():
+    """sqb-5342 spent 60 s on cargo check and then 100 s on the scanner build, one after the other, though they share no target dir. The default path now runs them together;
+    when the tree does not build, the scanner result (taken on a tree that does not compile) is dropped and the build is the refusal."""
+    import inspect
+
+    source = inspect.getsource(ps.merge_batch)
+    assert "check_and_scan(" in source and "overlap_verdict()" in source
+    assert "failed_units.clear()" in source[source.find("def build_refused") :][:400]
+
+
+def test_the_overlap_falls_back_to_serial_at_a_high_load_and_after_a_slower_run(tmp_path):
+    """The host runs at a load near 60: two cargo builds at once could be slower than one after the other. Above OVERLAP_MAX_LOAD the checks run in a row, and an overlapped run
+    that took longer than its halves' sum turns the overlap off for an hour."""
+    flag = tmp_path / "overlap-off"
+    assert ps.check_beside_scanners(load=lambda: (10.0, 0, 0), flag=flag, free=lambda: 64)
+    assert not ps.check_beside_scanners(load=lambda: (ps.OVERLAP_MAX_LOAD + 1, 0, 0), flag=flag, free=lambda: 64)
+    ps.note_overlap(100, 160, flag=flag)
+    assert not flag.exists(), "a faster overlap stays on"
+    ps.note_overlap(170, 160, flag=flag)
+    assert flag.exists() and not ps.check_beside_scanners(load=lambda: (10.0, 0, 0), flag=flag, free=lambda: 64)
+    later = flag.stat().st_mtime + ps.OVERLAP_OFF_SECONDS + 1
+    assert ps.check_beside_scanners(load=lambda: (10.0, 0, 0), now=lambda: later, flag=flag, free=lambda: 64)
+
+
+def test_a_batch_prints_its_stage_times_and_the_gap_after_log_is_pre_squash():
+    """The stage-times table was built by hand from the logs, and it blamed `log` (a one-line file append) for the next PR's work before its squash. The batch now ends with
+    `STAGES <total>s: ...`, biggest first, per-PR names without `#N`."""
+    import stages
+
+    stages._seen.clear()
+    for name, at in [("workspace-check", 0), ("scanners", 60), ("squash #1", 160), ("log #1", 166), ("squash #2", 170), ("log #2", 176)]:
+        stages.mark(name, at)
+    line = stages.summary(end=181)
+    assert line == "STAGES 181s: scanners 100s workspace-check 60s squash 12s pre-squash 9s", line
+    assert stages.summary() == "", "a summary starts the next batch afresh"
+    import inspect
+
+    assert "stage_summary()" in inspect.getsource(ps.merge_batch)
+
+
+def test_the_drift_prone_scanners_run_every_batch():
+    """A red scanner outside the default scan hid on parity for hours (the SD registry, 12:03 on). no_todo, tracked_build_products, block_list_ratchet and no_kill_by_pattern read
+    sources and the file list (0.02-5.6 s each on parity, all green) and are in the default scan."""
+    assert {"no_todo", "tracked_build_products", "block_list_ratchet", "no_kill_by_pattern"} <= set(ps.ALWAYS_SCANNERS)
+
+
+def test_build_script_reruns_runs_when_the_diff_touches_a_build_script_input_and_not_otherwise():
+    """It runs three release bin builds (67 s at load 80) and was in no default scan; it now runs on a diff that touches a build.rs, a Cargo.toml/lock or a selector-generator input,
+    and the full scan (tests=True) always runs it."""
+    assert "build_script_reruns" not in ps.scanners_for(["docs/a.md", "crates/opt/llrm-transforms/src/x.rs"])
+    for touched in ["crates/codegen/llrm-codegen/build.rs", "Cargo.lock", "crates/opt/llrm-x/Cargo.toml", "crates/target/llrm-x86/src/isel/patterns.isel", "crates/backend/llrm-iselgen/src/build.rs"]:
+        assert "build_script_reruns" in ps.scanners_for([touched]), touched
+    asked = []
+    ps.landing_scanner_failures(["crates/codegen/llrm-codegen/build.rs"], False, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
+    ps.landing_scanner_failures(["docs/a.md"], False, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
+    assert "build_script_reruns" in asked[0] and "build_script_reruns" not in asked[1]
+    asked.clear()
+    ps.landing_scanner_failures(["docs/a.md"], True, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
+    assert "build_script_reruns" in asked[0]
+
+
+def test_the_overlap_says_why_it_is_serial_and_keeps_to_memory_and_the_core_count(tmp_path):
+    """The audit of five landings showed check then scanners: the overlap never engaged (load 78 on 32 cores against a limit of 60) and nothing in the log said so. The limit is 3 x cores,
+    the verdict names its reason, and under 8 GB free (oomd kills sessions) the builds run in a row."""
+    flag = tmp_path / "overlap-off"
+    assert ps.OVERLAP_MAX_LOAD == 3 * (os.cpu_count() or 1) or "OVERLAP_MAX_LOAD" in os.environ
+    assert ps.overlap_verdict(load=lambda: (ps.OVERLAP_MAX_LOAD, 0, 0), flag=flag, free=lambda: 64) == "", "a load at the limit overlaps"
+    assert ps.overlap_verdict(load=lambda: (ps.OVERLAP_MAX_LOAD + 5, 0, 0), flag=flag, free=lambda: 64).startswith("load ")
+    assert ps.overlap_verdict(load=lambda: (1.0, 0, 0), flag=flag, free=lambda: 3.0) == "3 GB free is under 8"
+    assert ps.overlap_verdict(load=lambda: (1.0, 0, 0), flag=flag, free=lambda: 64) == ""
+    import inspect
+
+    assert "check beside scanners: {" in inspect.getsource(ps.merge_batch), "the decision is logged either way"
+
+
+def test_every_scanner_is_in_the_default_scan_the_conditional_one_or_nightly():
+    """The SD registry sat red on parity for two hours behind a default scan of four of the fifteen scanners. A scanner added to the full map without a place in the default scan
+    (or the build-input trigger, or NIGHTLY_ONLY) is now a failure here."""
+    smoke = ps.parity_smoke_module()
+    placed = set(ps.ALWAYS_SCANNERS) | {"build_script_reruns"} | set(smoke.NIGHTLY_ONLY)
+    assert set(smoke.SCANNERS) <= placed, sorted(set(smoke.SCANNERS) - placed)
+
+
+def test_the_overlapped_check_returns_its_error_text_and_the_scan_verdict_not_each_others(tmp_path, monkeypatch):
+    """sq-5420.log 15:14: `broken` held the scan's True and the build's text was lost (`True[:300]` TypeError); #5420 was refused for a crash, and every later PR whose check failed would have been."""
+    monkeypatch.setenv("LAND_TMP", str(tmp_path))
+    assert ps.check_and_scan(lambda: "error[E0425]: cannot find value", lambda: True) == ("error[E0425]: cannot find value", True)
+    assert ps.check_and_scan(lambda: "", lambda: False) == ("", False)
+    assert ps.check_and_scan(lambda: "", lambda: True) == ("", True)
+

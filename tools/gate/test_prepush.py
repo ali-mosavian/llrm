@@ -106,3 +106,10 @@ def test_trailing_whitespace_in_the_diff_turns_the_diff_check_red(damaged):
     assert prepushed(damaged, "diff check").stdout.splitlines()[0] == "PREPUSH FAIL: diff check"
     subprocess.run(["git", "rm", "-q", "-f", "--cached", str(notes)], cwd=damaged, check=True)
     notes.unlink()
+
+
+def test_a_command_whose_output_is_not_utf8_fails_the_step_not_the_prepush():
+    """`git diff --check` printed a byte 0xdb of a tracked binary-ish file and run_all died with a UnicodeDecodeError: no PREPUSH line at all, so the diff-check test read an empty stdout."""
+    results, _ = prepush.run_all({"bytes": "printf '\\333 bad\\n'; exit 1"}, dict(os.environ))
+    assert results[0][0] == "bytes" and results[0][1] == 1 and "bad" in results[0][3]
+    assert prepush.verdict(results) == "PREPUSH FAIL: bytes"
