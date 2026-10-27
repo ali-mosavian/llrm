@@ -7894,6 +7894,13 @@ impl Selector<'_, '_, '_> {
         // Poison is any value: +0.0.
         let bits = match self.module.context.get(id).kind {
             ConstantKind::Float(bits) => bits,
+            // An extended value no double holds is a 10-byte pool entry.
+            ConstantKind::Float80(bits) => {
+                let held = self.fresh_held(FLOAT);
+                let cell = self.pool.cell(llrm_mir::types::x87_image(bits).to_vec());
+                out.push(insn(at, semantics(Operation::FloatLoad, "fld", vec![Loc::Held(held)], vec![Loc::Mem(cell)])));
+                return Ok(held);
+            }
             ConstantKind::Poison | ConstantKind::Undef => 0,
             _ => return refuse("a float constant of no bits"),
         };
