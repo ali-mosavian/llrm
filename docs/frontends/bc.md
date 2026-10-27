@@ -36,7 +36,7 @@ The objects are one program in LINK order. `-o` names the output object, or a
 directory when there are several inputs. Libraries are the runtime and are
 not recompiled. `--manifest M` writes a small JSON note of the route.
 `-march` and the other target options are the shared ones. The driver is
-`crates/bc/llrm-bcdriver`.
+`crates/driver/llrm-bcdriver`.
 
 ## What it does
 
@@ -68,7 +68,7 @@ header word relocated other than as BASIC relocates it is refused.
 
 ## Tests
 
-`crates/bc/llrm-bcdriver/tests/driver.rs` recompiles BC fixtures and checks the
+`crates/driver/llrm-bcdriver/tests/driver.rs` recompiles BC fixtures and checks the
 header, constants, statement table, refusals and instruction sequences.
 `tests/differential/` compares llrm-qb with BC on source programs
 ([testing](../working/testing.md)).
