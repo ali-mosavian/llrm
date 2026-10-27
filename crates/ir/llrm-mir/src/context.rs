@@ -64,12 +64,24 @@ pub struct Constant {
     pub kind: ConstantKind,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct Context {
     pub types: Types,
     constants: Arena<Constant>,
     interned: Box<RefCell<HashMap<Constant, ConstantId>>>,
     extensions: Extensions,
+}
+
+impl Clone for Context {
+    fn clone(&self) -> Self {
+        crate::counts::bump(crate::counts::Event::ContextClones);
+        Self {
+            types: self.types.clone(),
+            constants: self.constants.clone(),
+            interned: self.interned.clone(),
+            extensions: self.extensions.clone(),
+        }
+    }
 }
 
 /// What a layer above MIR keeps in the context, one value per type, dropped
