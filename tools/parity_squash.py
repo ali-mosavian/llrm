@@ -794,7 +794,7 @@ def beside(background, foreground):
         return front, future.result()
 
 
-MAX_BATCH = 16 if FAST else 8  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
+MAX_BATCH = int(os.environ.get("BATCH_CAP") or (16 if FAST else 8))  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
 
 
 def batch(prs: list, passes, land, refuse, offenders=None) -> None:

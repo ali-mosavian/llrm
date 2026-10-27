@@ -1382,3 +1382,10 @@ def test_the_batch_age_limit_is_read_from_the_environment():
     """The 20-minute cap ended the 48-PR batches the user asked for; BATCH_MAX_SECONDS sets it per batch (the runner's env), 1200 by default."""
     read = lambda env: subprocess.run([sys.executable, "-c", "import parity_squash as p; print(p.BATCH_MAX_SECONDS)"], cwd=Path(__file__).parent, env={**os.environ, **env}, capture_output=True, text=True).stdout.strip()
     assert read({"BATCH_MAX_SECONDS": "2400"}) == "2400"
+
+
+def test_merge_batch_takes_as_many_prs_as_batch_cap_says():
+    """10:24: the runner assembled 100 PRs (BATCH_CAP=100) and merge-batch died at once with 'takes at most 16 PRs per smoke': MAX_BATCH was a literal."""
+    read = lambda env: subprocess.run([sys.executable, "-c", "import parity_squash as p; print(p.MAX_BATCH)"], cwd=Path(__file__).parent, env={**{k: v for k, v in os.environ.items() if k != "BATCH_CAP"}, **env}, capture_output=True, text=True).stdout.strip()
+    assert read({"LAND_FAST": "1", "BATCH_CAP": "100"}) == "100"
+    assert read({"LAND_FAST": "1"}) == "16" and read({}) == "8"
