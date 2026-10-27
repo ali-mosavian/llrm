@@ -749,11 +749,17 @@ def test_a_head_cached_with_a_bare_step_name_covers_that_steps_tests():
     assert ps.new_names({"ratchet:x"}, {"ratchet:x::t", "ratchet:y::t"}) == ["ratchet:y::t"]
 
 
-def test_a_listed_test_that_passes_refuses_the_batch_and_the_head_does_not_excuse_it():
-    """An `xpass unit ...` name from the lib layer is a refusal of its own: it is not a failure to compare with the head's."""
+def test_a_listed_test_that_passes_is_a_warning_and_a_report_line_not_a_refusal(tmp_path, monkeypatch, capsys):
+    """25 refusals and ~106 batch-minutes in 24 h (2026-10-27) were `xpass` names: an xfail row whose test now passes refused the batch; it warns, and the owner removes the row."""
+    monkeypatch.setenv("LAND_TMP", str(tmp_path))
     xpass = {"xpass unit llrm-nib::test_debug::fixed"}
     on_head = lambda by_package: pytest.fail("the head is asked about a pass")  # noqa: E731
-    assert ps.new_lib_failures(["crates/frontends/nib/src/lib.rs"], on_merged=lambda packages: set(xpass), on_head=on_head) == xpass
+    assert ps.new_lib_failures(["crates/frontends/nib/src/lib.rs"], on_merged=lambda packages: set(xpass), on_head=on_head) == set()
+    assert "WARNING xpass unit llrm-nib::test_debug::fixed" in capsys.readouterr().out
+    ps.new_lib_failures(["crates/frontends/nib/src/lib.rs"], on_merged=lambda packages: set(xpass), on_head=on_head)
+    assert (tmp_path / "xpass-report.txt").read_text() == "xpass unit llrm-nib::test_debug::fixed\n", "named once"
+    scanner = {"xpass integration masked::t", "integration docs_in_sync::t"}
+    assert ps.new_scanner_failures(["a.rs"], lambda targets: set(scanner), lambda targets: {"integration docs_in_sync::t"}, only=("x",), seen=tmp_path / "seen.json") == set()
 
 
 def _closure(path):

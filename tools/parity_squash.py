@@ -824,6 +824,21 @@ def batch(prs: list, passes, land, refuse, offenders=None) -> None:
 SCAN_CRATE = "llrm-mir"  # the crate whose lib tests scan the other crates' sources
 
 
+def warn_xpass(names, report: Path | None = None) -> None:
+    """A listed (xfail) test that now passes is a warning and a line in `report`, not a refusal: land tempo first, the owner removes the row next. 25 refusals and ~106 batch-minutes in 24 h
+    (2026-10-27) were these."""
+    names = sorted(name for name in names if name.startswith("xpass "))
+    if not names:
+        return
+    report = report or Path(os.environ.get("LAND_TMP", "/tmp")) / "xpass-report.txt"
+    seen = report.read_text().splitlines() if report.exists() else []
+    for name in names:
+        print(f"WARNING {name}: listed in xfail.toml but passes; its owner removes the row (not a refusal)")
+    report.parent.mkdir(parents=True, exist_ok=True)
+    with report.open("a") as out:
+        out.writelines(f"{name}\n" for name in names if name not in seen)
+
+
 def new_lib_failures(
     files: list[str],
     on_merged=None,
@@ -843,17 +858,18 @@ def new_lib_failures(
     smoke.LAST_LIB.clear()
     failed = (on_merged or smoke.dependants_lib_failures)(touched) if touched else set()
     print(lib_tests_line(touched, smoke.LAST_LIB))
-    # `xpass unit ...`: a listed test that passes. Not the head's to excuse: the entry goes.
+    # `xpass unit ...`: a listed test that passes: a warning and a report line
     xpass = {name for name in failed if name.startswith("xpass ")}
     failed -= xpass
+    warn_xpass(xpass)
     if not failed:
-        return xpass
+        return set()
     by_package: dict[str, set[str]] = {}
     for name in failed:
         package, test = name[len("unit "):].split("::", 1)
         by_package.setdefault(package, set()).add(test)
     also = (on_head or _failing_on_head)(by_package)
-    return (failed - also) | xpass
+    return failed - also
 
 
 # Scanners the landing runner runs on every batch, whatever LAND_FAST_TESTS says (the user's call of 2026-10-19 is no tests at landing): reading docs costs milliseconds. A runner
@@ -886,6 +902,8 @@ def new_scanner_failures(
     own = own_test_targets(files, ROOT)
     targets = sorted((set(only) if only else set(smoke.SCANNERS) | own) - set(smoke.NIGHTLY_ONLY))
     failed = (on_merged or smoke.integration_failures)(targets)
+    warn_xpass(failed)
+    failed = {name for name in failed if not name.startswith("xpass ")}
     print(scanner_tests_line(targets, failed, git("rev-parse", "HEAD").strip()[:9]))
     if not failed:
         return set()
@@ -1135,8 +1153,7 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
             merged.update(smoke.integration_failures(targets, root=cwd, run=_in_target(target)))
             return merged
 
-        # an xpass is not the head's to excuse: the entry goes
-        return new_scanner_failures(changed, on_merged, only=tuple(sorted(only))) | {name for name in merged if name.startswith("xpass ")}
+        return new_scanner_failures(changed, on_merged, only=tuple(sorted(only)))
 
     red = sorted((scanners or default_scanners)(files))
     if red:
@@ -1154,11 +1171,8 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
         return smoke.dependants_lib_failures((touched | smoke.dependants(touched, graph) & ALONE_DEPENDANTS) | SOURCE_SCANNING_PACKAGES, root=cwd, run=_in_target(target, "lib")) if touched else set()
 
     failed = (units or lib_failures)(files)
-    # a listed test that now passes is the PR's to unlist: the gate refuses the batch for it
-    xpass = sorted(name for name in failed if name.startswith("xpass "))
+    warn_xpass(failed)
     failed = {name for name in failed if not name.startswith("xpass ")}
-    if xpass:
-        return [f"xfail entry whose test passes (remove it): {', '.join(xpass[:5])}"]
     if not failed:
         return []
     by_package: dict[str, set[str]] = {}
