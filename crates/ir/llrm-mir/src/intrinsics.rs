@@ -84,6 +84,11 @@ pub enum Intrinsic {
     /// `llvm.assume`: its condition holds here, which a pass may use and no
     /// code checks. Undefined where it does not.
     Assume,
+    /// `llvm.is.constant`: whether its argument is a constant once the
+    /// optimizer is done, which `lower-constant-intrinsics` decides and
+    /// removes (LowerConstantIntrinsics.cpp); no code runs it. Only the
+    /// integer overload is known here.
+    IsConstant,
     /// `llvm.expect`: its first argument, which the second says it is expected
     /// to be: a hint `lower-expect` turns into branch weights and removes
     /// (LowerExpectIntrinsic.cpp); no code runs it.
@@ -427,7 +432,7 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 52] = [
+const TABLE: [Spec; 53] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -520,6 +525,14 @@ const TABLE: [Spec; 52] = [
         overloads: &[Kind::Int],
         returns: Slot::Any(0),
         parameters: INTS,
+        own: None,
+    },
+    Spec {
+        name: "llvm.is.constant",
+        intrinsic: Intrinsic::IsConstant,
+        overloads: &[Kind::Int],
+        returns: Slot::Int(1),
+        parameters: &[Slot::Any(0)],
         own: None,
     },
     Spec {

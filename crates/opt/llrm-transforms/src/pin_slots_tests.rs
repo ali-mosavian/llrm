@@ -258,7 +258,6 @@ const ROWS: &[Disposition] = &[
     ),
     row(Late, "drop-unnecessary-assumes", Why::Missing, "ablation 0 of 12 IRs", "w-1, 11-09"),
     row(Late, "alignment-from-assumptions", Why::Missing, "ablation 0 of 12 IRs", "w-1, 11-09"),
-    row(Late, "lower-constant-intrinsics", Why::Missing, "ablation 0 of 12 IRs", "w-1, 11-09"),
     row(
         Late,
         "loop-rotate",

@@ -665,3 +665,16 @@ fn a_section_names_the_segment_of_a_variable_and_a_function() {
     assert!(built.data.iter().any(|(name, items)| name == "XIB" && !items.is_empty()), "{:?}", built.data);
     assert_eq!(built.code_segments.values().collect::<Vec<_>>(), ["HOT_TEXT"], "{:?}", built.code_segments);
 }
+
+/// `__builtin_constant_p(x)` of a parameter reached the backend as
+/// `llvm.is.constant.i32` and was refused (`@f_: @llvm.is.constant.i16`): it is
+/// false, and the branch on it is gone.
+#[test]
+fn is_constant_of_a_parameter_is_lowered_before_selection() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                declare i1 @llvm.is.constant.i32(i32)\n\
+                define i32 @f(i32 %x) {\n  %c = call i1 @llvm.is.constant.i32(i32 %x)\n  %r = select i1 %c, i32 1, i32 2\n  ret i32 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m32", "-O0"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("is.constant"), "{listing}");
+}

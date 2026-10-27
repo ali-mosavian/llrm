@@ -1572,6 +1572,7 @@ fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
         late,
         [
             "float2int@1594",
+            "lower-constant-intrinsics@1597",
             "loop-interchange@1631",
             "loop-load-elim@1400",
             "combine@1403",
@@ -2373,6 +2374,7 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
         late,
         [
             "float2int@1594",
+            "lower-constant-intrinsics@1597",
             "loop-interchange@1631",
             "loop-load-elim@1400",
             "combine@1403",

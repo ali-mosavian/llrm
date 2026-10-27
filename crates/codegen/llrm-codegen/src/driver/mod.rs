@@ -477,6 +477,9 @@ pub fn optimized(
                 .try_for_each(|module| crate::backend::memcpycall::expanded(module, *convention, symbol))
         })?;
     }
+    timed("mir constant intrinsics", || {
+        program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)
+    })?;
     if crate::backend::memsetpattern::expands_for(options.isel) {
         timed("mir memset patterns", || {
             program.modules.iter_mut().try_for_each(crate::backend::memsetpattern::expanded)

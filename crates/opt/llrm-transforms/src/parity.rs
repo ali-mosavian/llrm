@@ -303,6 +303,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "translated SimplifyCfg at hoistCommonInsts, sinkCommonInsts and no canonical loops runs here; The jam follows at L1474 as at the pin; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting; criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those translated (llrm-w-4, 2026-10-30)",
     ),
     entry("float2int@1594", Late, "float2int", Translated, ""),
+    entry("lower-constant-intrinsics@1597", Late, "lower-constant-intrinsics", Translated, ""),
     entry("instsimplify@1662", Late, "instsimplify", Translated, ""),
     entry("divrempairs@1667", Late, "div-rem-pairs", Translated, ""),
     entry("tailrec@1677", Late, "tailcallelim", Translated, ""),
