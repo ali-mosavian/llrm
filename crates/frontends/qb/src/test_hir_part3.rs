@@ -3569,13 +3569,13 @@ fn test_a_call_that_never_returns_saves_no_register_under_the_dag_selector() {
 }
 
 /// CLEAR was refused ("cannot generate code for it yet"): it is
-/// B$SCLR(stack, stack-given), two zero words for the bare statement.
+/// B$SCLR(stack, stack given), two zero words for the bare statement.
 #[test]
 fn test_clear_calls_the_runtime_clear() {
     let text = listing_in("qb45", &[], "clearcall", "x% = 1\r\nCLEAR\r\nPRINT x%\r\nEND\r\n");
     let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
     let call = main.find("call far ptr B$SCLR").expect("the call");
-    assert!(main[..call].trim_end().ends_with("pushw 0\n    pushw 0"), "{main}");
+    assert!(main[..call].trim_end().ends_with("pushd 0"), "two zero words: {main}");
 }
 
 /// A variable set before CLEAR and printed after it was folded to its old
@@ -3670,4 +3670,13 @@ fn test_ccur_converts_as_an_assignment_to_currency_does() {
         between(text, "$QB$MAIN proc", "$QB$MAIN endp").replace("CCURASSIGN", "X").replace("CCURCALL", "X")
     };
     assert_eq!(body(&assigned), body(&converted));
+}
+
+/// `CLEAR ,,n` passes the stack size and says it was given: B$SCLR(n, -1).
+#[test]
+fn test_clear_with_a_stack_size_passes_it_and_the_flag() {
+    let text = listing_in("qb45", &[], "clearstack", "CLEAR , , 4096\r\nEND\r\n");
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let call = main.find("call far ptr B$SCLR").expect("the call");
+    assert!(main[..call].trim_end().ends_with("pushd 268500991"), "stack 4096, flag -1: {main}");
 }

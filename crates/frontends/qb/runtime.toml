@@ -1690,3 +1690,17 @@ established = false
 evidence = '''
 rt/bload.asm: `cProc B$BLOD,<PUBLIC,FAR>` with three ParmW (pFileName, Offs, third), so it returns with `ret 6`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
 '''
+
+["B$SCLR"]
+cleanup = 4
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+rt/clear.asm: `cProc B$SCLR,<FAR,PUBLIC>` with parmW stack and parmW fStack, so it returns with `ret 4`. It zeroes the program's data segment, closes the files, starts the heaps afresh and may move the stack, so every register and every byte of memory is conceded, as is a callback into the program.
+'''

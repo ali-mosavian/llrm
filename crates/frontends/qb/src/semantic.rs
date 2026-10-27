@@ -3665,14 +3665,18 @@ impl Compiler {
                     // B$SCLR(stack, stack given) zeroes BC_DATA, closes the
                     // files and starts the heaps afresh.
                     "CLEAR" => {
-                        if arguments.iter().any(|argument| !matches!(argument, Expr::Omitted(_))) {
-                            return self.unsupported("CLEAR with a memory or stack size");
+                        // CLEAR [,[bytes][,stack]]: only the stack size is lowered.
+                        if arguments.iter().take(2).any(|argument| !matches!(argument, Expr::Omitted(_))) || arguments.len() > 3 {
+                            return self.unsupported("CLEAR with a memory size");
                         }
-                        self.emit_runtime_call(
-                            "B$SCLR",
-                            Vec::new(),
-                            vec![Operand::Constant(INTEGER, Number::Integer(0)), Operand::Constant(INTEGER, Number::Integer(0))],
-                        );
+                        let (stack, given) = match arguments.get(2) {
+                            Some(size) if !matches!(size, Expr::Omitted(_)) => {
+                                let (size, size_type) = self.expression(size)?;
+                                (self.convert(size, size_type, INTEGER)?, Number::Integer(-1))
+                            }
+                            _ => (Operand::Constant(INTEGER, Number::Integer(0)), Number::Integer(0)),
+                        };
+                        self.emit_runtime_call("B$SCLR", Vec::new(), vec![stack, Operand::Constant(INTEGER, given)]);
                     }
                     "STOP" | "RESET" => {
                         if !arguments.is_empty() {
