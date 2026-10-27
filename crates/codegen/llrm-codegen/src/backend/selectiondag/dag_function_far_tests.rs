@@ -904,7 +904,7 @@ fn a_far_fill_takes_the_offset_word_not_the_joined_pointer() {
 fn an_i64_min_or_max_expands_to_its_halves() {
     for op in ["smin", "smax", "umin", "umax"] {
         let ir = format!(
-            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 declare i64 @llvm.{op}.i64(i64, i64)
 define i64 @f(i64 %a, i64 %b) {{
 entry:
@@ -919,7 +919,7 @@ entry:
     }
 }
 
-const SELECT_IN_CALL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const SELECT_IN_CALL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 @s = internal global [2 x i8] zeroinitializer
 declare cc 1000 void @g(i32) addrspace(1)
 declare cc 1000 void @h(ptr) addrspace(1)
@@ -947,7 +947,7 @@ fn a_select_between_an_argument_area_and_its_call_leaves_pushes() {
 /// { op: Freeze, ty: I64, what: "expand result" }` (vsgcc `x_ll_div`).
 #[test]
 fn a_frozen_i64_expands_to_two_frozen_halves() {
-    let ir = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+    let ir = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 define i64 @f(i64 %a) {
 entry:
   %b = freeze i64 %a
@@ -959,7 +959,7 @@ entry:
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
 
-const HUGE_STEP: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const HUGE_STEP: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 define ptr addrspace(3) @f(ptr addrspace(3) %p) {
 entry:
   %q = getelementptr i8, ptr addrspace(3) %p, i32 4
@@ -1023,7 +1023,7 @@ fn an_unsigned_overflow_flag_is_the_carry_of_the_whole_sum() {
         ("usub", 64, Some("sbb")),
     ] {
         let ir = format!(
-            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 declare {{i{width}, i1}} @llvm.{op}.with.overflow.i{width}(i{width}, i{width})
 define i1 @f(i{width} %a, i{width} %b) {{
 entry:
