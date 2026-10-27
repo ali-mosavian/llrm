@@ -13,8 +13,8 @@
 //!   `llvm.loop.decrement.reg` are not MIR intrinsics (`Intrinsic::named` is
 //!   none for them, tested), so a call to one is an unknown, as any call is.
 //! * No separate `ptrtoaddr`: MIR's `ptrtoint` is modelled as one.
-//! * Constant expressions are in global initializers only, so a function
-//!   operand is never one; one that is is an unknown.
+//! * Only a constant `getelementptr` expression has a SCEV; any other constant
+//!   expression is an unknown.
 //! * `PoisonValue::get(Ty)` as the SCEV of an unreachable instruction needs a
 //!   constant interned in the context, and the `Cx` holds it by `&`: the
 //!   unknown is of the instruction itself.
@@ -416,7 +416,7 @@ impl ScalarEvolution {
         } else if let Some(ap) = self.const_int(cx, Opnd::V(v)) {
             return Some(self.get_constant(ap));
         } else if let Operand::Constant(_) = v {
-            return Some(self.get_unknown(cx, v));
+            return Some(self.create_node_for_constant_gep(cx, v).unwrap_or_else(|| self.get_unknown(cx, v)));
         } else {
             // An argument.
             return Some(self.get_unknown(cx, v));

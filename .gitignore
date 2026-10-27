@@ -11,3 +11,6 @@ __pycache__/
 /*.err
 *.pyc
 /dosbox-crash.log
+
+# `--dump` at the repo root writes the stage dumps here
+/mir/
