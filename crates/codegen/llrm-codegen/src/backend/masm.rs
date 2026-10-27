@@ -792,14 +792,14 @@ pub(crate) fn wrap_of(
     let movable = procedure.entry == 0
         && procedure.interrupt.is_none()
         && procedure.stack_check.is_none()
-        && procedure.callees.values().all(|one| one.code.is_empty());
+        && procedure.callees.values().all(|one| !may_address_frame(&one.code));
     let registers = &procedure.registers;
     crate::backend::shrinkwrap::wrapped(
         body,
         &kept,
         (frame && movable).then_some((registers.pointer, registers.stack)),
         stack_addressed,
-        procedure.size,
+        procedure.size && !registers.wrap_split_size,
     )
 }
 
@@ -986,6 +986,33 @@ fn lowered(
     (enter, leave)
 }
 
+/// Whether inline code, bytes this printer cannot read, may address the frame.
+/// Not the string moves the selector writes itself (`push ds; pop es; std; rep
+/// movsd; cld`, `add si, 3; add di, 3; mov cx, dx; rep movsb`): of the few
+/// opcodes below, none has a memory operand, so a frame is not needed for them
+/// (scroll.c: `push bp; mov bp, sp` on a function with no locals).
+fn may_address_frame(parts: &[InlinePart]) -> bool {
+    let mut bytes = Vec::new();
+    for part in parts {
+        match part {
+            InlinePart::Bytes(more) => bytes.extend(more),
+            _ => return true,
+        }
+    }
+    let code = &bytes[..];
+    let mut at = 0;
+    while at < code.len() {
+        match code[at] {
+            0x1E | 0x07 | 0xFD | 0xFC | 0xF3 | 0x66 | 0xA4 | 0xA5 => at += 1,
+            // `add r, imm8`, `mov r, r`: register operands only (mod = 11)
+            0x83 if code.get(at + 1).is_some_and(|modrm| modrm >> 6 == 3) => at += 3,
+            0x89 | 0x8B if code.get(at + 1).is_some_and(|modrm| modrm >> 6 == 3) => at += 2,
+            _ => return true,
+        }
+    }
+    false
+}
+
 /// The implicit entry and return sequences shared by text and OMF emission.
 pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
     parts(procedure, frame_omitted(procedure, 0, frame_held(procedure)).is_some())
@@ -1012,7 +1039,7 @@ fn parts(
             && procedure.entry == 0
             && (reserve != 0
                 || roots.contains(&procedure.body.regs().root(procedure.registers.pointer))
-                || procedure.callees.values().any(|one| !one.code.is_empty()))
+                || procedure.callees.values().any(|one| may_address_frame(&one.code)))
     };
     let locals = reserve != 0;
     let held = |reserve: i64| if omit && locals { reserve + slot } else { reserve };
@@ -1407,7 +1434,8 @@ fn built(
                 }
                 Operation::Call => {
                     if what.indirect {
-                        out.push(Item::Semantics(what.clone()));
+                        let pops = procedure.body.call_pops.get(&one.at).copied();
+                        out.push(Item::Semantics(Semantics { pops, ..what.clone() }));
                     } else {
                         let Some(callee) = procedure.callees.get(&one.at) else {
                             return Err(Unprintable(format!(
@@ -1801,6 +1829,11 @@ fn addressed_pass(
                             what.name.as_deref(),
                             Some("fnstcw" | "fldcw" | "fnstsw" | "in" | "out")
                         ) => {}
+                    // An indirect call whose frame named the bytes its callee
+                    // pops (`callframe`).
+                    Operation::Call if what.indirect && what.pops.is_some() => {
+                        depth = Some(here - what.pops.unwrap_or(0));
+                    }
                     Operation::Leave
                     | Operation::Exchange
                     | Operation::Escape
@@ -2851,6 +2884,57 @@ mod tests {
         assert!(!lines.iter().any(|one| one == "ret"), "{lines:?}");
     }
 
+    /// x_hanoi2 `mv` -Os m32 pushed four registers before its `n == 0` exit:
+    /// the size refusal of a wrap around a shared return was the 16-bit
+    /// target's (a jump over the epilogue outgrows its short form), and applied
+    /// everywhere. The target description states it (`frame_wrap_split_size`).
+    #[test]
+    fn test_a_size_build_wraps_a_shared_return_only_where_the_target_allows() {
+        let esi = Loc::Reg(ir::Reg { register: RegId::ESI, width: 4 });
+        let jump = |at: i64, target: i64| {
+            insn(at, Semantics { name: Some("je".into()), target: Some(target), ..Semantics::new(Operation::Branch) })
+        };
+        let touch = insn(20, semantics(Operation::Move, "mov", vec![esi.clone()], vec![esi]));
+        let ret = |at: i64| insn(at, semantics(Operation::Return, "ret", vec![], vec![]));
+        let block = |at: i64, insns: Vec<Arc<lir::Insn>>, succ: Vec<i64>| lir::LirBlock {
+            succ: succ.into(),
+            ..lir::LirBlock::new(at, insns)
+        };
+        let blocks = vec![
+            block(0, vec![jump(1, 3)], vec![3, 2]),
+            block(2, vec![touch], vec![3]),
+            block(3, vec![ret(30)], vec![]),
+        ];
+        let wrapped = |target: &dyn llrm_target::Target, bits: u32| {
+            let body = lir::LirBody {
+                bits,
+                ..lir::LirBody::new(
+                    "f",
+                    0,
+                    crate::model::lir::shared(blocks.clone()),
+                    IndexMap::default(),
+                    IndexMap::default(),
+                )
+            };
+            let procedure = Procedure {
+                name: "_f".into(),
+                public: true,
+                far: false,
+                body: body.clone(),
+                reserve: 0,
+                callees: IndexMap::default(),
+                interrupt: None,
+                size: true,
+                entry: 0,
+                stack_check: None,
+                registers: target.frame_registers(),
+            };
+            wrap_of(&procedure, &body, false, false).is_some()
+        };
+        assert!(wrapped(&llrm_x86_m32::M32, 32), "m32 states it");
+        assert!(!wrapped(&llrm_x86_m16::M16, 16), "m16 does not");
+    }
+
     fn through_bp() -> Loc {
         Loc::Mem(ir::Mem { through: RegId::BP, ..ir::Mem::new(Some(Addr::new(Space::Frame, 6)), 2) })
     }
@@ -3151,6 +3235,7 @@ mod tests {
             align: 4,
             optional: false,
             enter: false,
+            wrap_split_size: false,
             free: false,
         };
         let procedure = Procedure {
@@ -3200,6 +3285,7 @@ mod tests {
                 align: 4,
                 optional: false,
                 enter,
+                wrap_split_size: false,
                 free: false,
             };
             let procedure = Procedure {
@@ -3244,8 +3330,22 @@ mod tests {
         blocks: Vec<lir::Block>,
         callees: IndexMap<i64, Callee>,
     ) -> Vec<String> {
-        let body =
-            lir::LirBody { bits: 32, ..lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default()) };
+        flat_popping(optional, reserve, blocks, callees, IndexMap::default())
+    }
+
+    /// `flat_blocks`, the bytes each indirect call's callee pops given.
+    fn flat_popping(
+        optional: bool,
+        reserve: i64,
+        blocks: Vec<lir::Block>,
+        callees: IndexMap<i64, Callee>,
+        call_pops: IndexMap<i64, i64>,
+    ) -> Vec<String> {
+        let body = lir::LirBody {
+            bits: 32,
+            call_pops: Arc::new(call_pops),
+            ..lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default())
+        };
         let registers = llrm_target::FrameRegisters {
             pointer: RegId::EBP,
             stack: RegId::ESP,
@@ -3254,6 +3354,7 @@ mod tests {
             align: 4,
             optional,
             enter: false,
+            wrap_split_size: false,
             free: false,
         };
         let procedure = Procedure {
@@ -3380,6 +3481,20 @@ mod tests {
             ret(),
         ];
         assert!(has(&flat(true, 8, indirect, IndexMap::default()), "push ebp"));
+        // The call frame named what the callee pops: the depth after it is
+        // known (tail_calls_edges `through` kept `ebp` for this call).
+        let framed = vec![
+            insn(0, Semantics { indirect: true, ..semantics(Operation::Call, "call", vec![], vec![eax()]) }),
+            ret(),
+        ];
+        let popping = flat_popping(
+            true,
+            8,
+            vec![lir::LirBlock::new(1, framed).into()],
+            IndexMap::default(),
+            IndexMap::from_iter([(0, 0)]),
+        );
+        assert!(!has(&popping, "push ebp"));
         let flags = vec![
             insn(0, semantics(Operation::Nothing, "pushf", vec![], vec![])),
             insn(1, semantics(Operation::Move, "mov", vec![eax()], vec![cell(8)])),
@@ -3410,6 +3525,7 @@ mod tests {
             align: 4,
             optional: false,
             enter: false,
+            wrap_split_size: false,
             free: false,
         };
         let procedure = Procedure {
