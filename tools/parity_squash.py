@@ -960,7 +960,7 @@ def new_lib_failures(
 
 # Scanners the landing runner runs on every batch, whatever LAND_FAST_TESTS says (the user's call of 2026-10-19 is no tests at landing): reading docs costs milliseconds. A runner
 # without the switch ran no scanner; the live one has it, and still landed #4039 with docs_links red (see scanner_tests_line).
-ALWAYS_SCANNERS = ("docs_in_sync", "docs_links", "no_local_paths", "target_facts")
+ALWAYS_SCANNERS = ("docs_in_sync", "docs_links", "no_local_paths", "target_facts", "selectiondag_registry")
 
 
 def landing_scanner_failures(

@@ -1718,3 +1718,14 @@ def test_the_scanner_run_has_its_own_stage_so_workspace_check_is_not_its_cost():
     gate = 'if os.environ.get("LAND_FAST_TESTS") != "1":\n                stage("scanners")'
     assert gate in source, "the default path has a scanners stage"
     assert source.find(gate) < source.find("landing_scanner_failures(git("), "and it comes before the always-on scanner run"
+
+
+def test_a_registry_clash_is_reported_by_the_default_scan():
+    """tests/selectiondag_registry.rs was red on parity from 12:03 (SD312 in sdag-c's block with an sdag-b row, later SD312-320 and a doubled SD219) and no batch said so: the default
+    scan ran four targets and the registry was only in the full map, scanned by a manual batch once."""
+    asked = []
+    clash = "integration selectiondag_registry::the_registry_has_no_clash_and_every_declared_number_is_in_it"
+    found = ps.landing_scanner_failures(["docs/working/selectiondag-plan.md"], False, on_merged=lambda targets: asked.append(list(targets)) or {clash}, on_head=lambda targets: set())
+    assert "selectiondag_registry" in asked[0]
+    assert found == {clash}
+
