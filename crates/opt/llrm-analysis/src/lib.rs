@@ -148,6 +148,7 @@ pub mod memdepchecker;
 pub mod memory;
 pub mod memoryssa;
 pub mod mssa;
+pub mod placealias;
 pub mod mustexecute;
 pub mod nearest;
 #[cfg(test)]
