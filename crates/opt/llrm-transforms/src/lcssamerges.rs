@@ -116,7 +116,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::cfg::Around;
 use llrm_analysis::graph::loops::{self, Loop};
 use llrm_analysis::{cfg, ssa};
 use llrm_mir::module::{Function, Operand, ValueId};
@@ -132,10 +131,18 @@ pub struct Flow {
     graph: Option<(Vec<cfg::Block>, llrm_support::graph::Predecessors)>,
 }
 
+impl Flow {
+    /// A flow that reads the dominators the caller holds.
+    pub fn with_dominance(dominance: cfg::Dominance) -> Self {
+        Self { dominance: Some(dominance), graph: None }
+    }
+}
+
 /// Whether anything changed.
 pub fn closed(
     function: &mut Function,
     loop_: &Loop,
+    exiting: &[(i64, i64)],
     flow: &mut Flow,
 ) -> Result<bool, String> {
     let (graph, predecessors) = flow
@@ -150,7 +157,7 @@ pub fn closed(
     let (graph, predecessors) = (&*graph, &*predecessors);
     let entry = function.entry().map(cfg::id);
     let dominance = &*flow.dominance.get_or_insert_with(|| cfg::Dominance::of(function));
-    let exits = loop_.exits(function).into_iter().map(|(_, to)| to).collect::<BTreeSet<_>>();
+    let exits = exiting.iter().map(|&(_, to)| to).collect::<BTreeSet<_>>();
     if exits.iter().any(|at| {
         predecessors
             .get(at)
@@ -311,7 +318,16 @@ pub fn _merged(
         function.set_operands(phi, from_arms(&incoming));
     }
     let swap = |at: i64| BTreeMap::from([(value, replacements[&at])]);
+    // A phi reads `value` through a replaced parent only in a successor of one.
+    let reading = replacements
+        .keys()
+        .flat_map(|&at| cfg::successors_of(function, at))
+        .chain(replacements.keys().copied())
+        .collect::<BTreeSet<_>>();
     for block in function.layout().to_vec() {
+        if !reading.contains(&cfg::id(block)) {
+            continue;
+        }
         for phi in edges::phis(function, block) {
             let incoming = arms(function, phi)
                 .into_iter()

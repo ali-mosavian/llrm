@@ -74,7 +74,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::globalsaa::embedded;
 use llrm_analysis::memory::constant_bytes;
 use llrm_mir::context::{Constant, ConstantKind, GlobalId};
 use llrm_mir::datalayout::DataLayout;
@@ -83,7 +82,7 @@ use llrm_mir::edit::Position;
 use llrm_mir::facts::Facts;
 use llrm_mir::module::{GlobalKind, GlobalValue, GlobalVariable, InstId, Linkage, Module, Operand};
 use llrm_mir::opcode::{Flags, Opcode};
-use llrm_mir::types::TypeId;
+use llrm_mir::types::{Type, TypeId};
 use llrm_mir::valuetracking::pointer_base_with_constant_offset;
 
 use crate::globalopt::Reach;
@@ -107,73 +106,13 @@ struct Access {
     constant: Option<u128>,
 }
 
-/// Every global's uses in `function`, found in one scan: as `globalopt::reach`
-/// finds one global's, none for a global one of whose uses is not its address.
-fn reach_all(
-    context: &llrm_mir::context::Context,
-    function: &llrm_mir::module::Function,
-    named: &mut BTreeMap<llrm_mir::context::ConstantId, BTreeSet<GlobalId>>,
-) -> BTreeMap<GlobalId, Option<Reach>> {
-    let mut work: BTreeMap<GlobalId, Vec<(InstId, usize)>> = BTreeMap::new();
-    let mut bad: BTreeSet<GlobalId> = BTreeSet::new();
-    for (_, inst) in function.walk() {
-        for (index, &operand) in function.instruction(inst).operands.iter().enumerate() {
-            let Operand::Constant(id) = operand else { continue };
-            let globals = named
-                .entry(id)
-                .or_insert_with(
-                    || {
-                        let mut found = BTreeSet::new();
-                        embedded(context, id, &mut found);
-                        found
-                    },
-                );
-            for &global in globals.iter() {
-                if crate::globalopt::addresses(context, id, global) {
-                    work.entry(global).or_default().push((inst, index));
-                } else {
-                    bad.insert(global);
-                }
-            }
-        }
-    }
-    let mut out = BTreeMap::new();
-    for (global, mut work) in work {
-        if bad.contains(&global) {
-            out.insert(global, None);
-            continue;
-        }
-        let mut found = Reach { uses: Vec::new(), moved: Vec::new() };
-        while let Some((inst, index)) = work.pop() {
-            let op = function.instruction(inst);
-            match op.opcode {
-                Opcode::GetElementPtr { .. }
-                | Opcode::Cast(llrm_mir::opcode::CastOp::BitCast | llrm_mir::opcode::CastOp::AddrSpaceCast)
-                    if index == 0 =>
-                {
-                    found.moved.push(inst);
-                    if let Some(value) = op.result {
-                        work.extend(function.users(value).iter().map(|one| (one.user, one.index as usize)));
-                    }
-                }
-                _ => found.uses.push((inst, index)),
-            }
-        }
-        out.insert(global, Some(found));
-    }
-    for global in bad {
-        out.insert(global, None);
-    }
-    out
-}
-
 /// Each function's uses of each global.
 fn reaching(module: &Module) -> BTreeMap<GlobalId, BTreeMap<GlobalId, Option<Reach>>> {
     let mut named = BTreeMap::new();
     let mut all = BTreeMap::new();
     for (function_id, _, function) in module.functions() {
         if !function.is_declaration() {
-            all.insert(function_id, reach_all(&module.context, function, &mut named));
+            all.insert(function_id, crate::globalopt::reach_all(&module.context, function, &mut named));
         }
     }
     all
@@ -206,7 +145,8 @@ pub fn split(
     let reached = reaching(module);
     for id in candidates {
         let Some(accesses) = accesses(module, layout, id, &reached) else { continue };
-        let pieces = sliced(module, layout, id, &accesses);
+        let localizes = localizing(module, layout, id, &reached, &mut BTreeMap::new());
+        let pieces = sliced(module, layout, id, &accesses, localizes);
         let Some(pieces) = pieces else { continue };
         let moved: BTreeMap<GlobalId, Vec<InstId>> = reached
             .iter()
@@ -221,18 +161,112 @@ pub fn split(
             changed.insert(function);
         }
     }
+    let reached = reaching(module);
+    changed.extend(forwarded(module, &reached, &mut trees));
     changed.into_iter().collect()
+}
+
+/// `forwardStoredOnceStore`: an internal variable stored once, a constant that
+/// is not its initializer, has each load in the storing function that the store
+/// dominates replaced by the constant.
+fn forwarded(
+    module: &mut Module,
+    reached: &BTreeMap<GlobalId, BTreeMap<GlobalId, Option<Reach>>>,
+    trees: &mut BTreeMap<GlobalId, DomTree>,
+) -> BTreeSet<GlobalId> {
+    let held = held(module);
+    let mut plans: Vec<(GlobalId, Vec<InstId>, llrm_mir::context::ConstantId)> = Vec::new();
+    for (at, global) in module.globals.iter().enumerate() {
+        let GlobalKind::Variable(variable) = &global.kind else { continue };
+        let id = GlobalId(at as u32);
+        let internal = matches!(global.linkage, Linkage::Internal | Linkage::Private);
+        let Some(initializer) = variable.initializer else { continue };
+        if !internal || variable.constant || variable.externally_initialized || held.contains(&id) {
+            continue;
+        }
+        // Every use a direct, simple load or store (`GlobalStatus`), one store.
+        let Some(direct) = direct_uses(module, id, reached) else { continue };
+        let mut stores = direct.iter().flat_map(|one| one.stores.iter().map(|&store| (one.function, store)));
+        let (Some((owner, store)), None) = (stores.next(), stores.next()) else { continue };
+        let GlobalKind::Function(owning) = &module.globals[owner.0 as usize].kind else { continue };
+        let Operand::Constant(value) = owning.instruction(store).operands[0] else { continue };
+        if value == initializer || direct.iter().all(|one| one.loads.is_empty()) {
+            continue;
+        }
+        let loads: Vec<(GlobalId, InstId)> =
+            direct.iter().flat_map(|one| one.loads.iter().map(|&load| (one.function, load))).collect();
+        let GlobalKind::Function(function) = &module.globals[owner.0 as usize].kind else { continue };
+        let value_ty = module.context.get(value).ty;
+        let tree = trees.entry(owner).or_insert_with(|| DomTree::of(function));
+        let dominated: Vec<InstId> = loads
+            .iter()
+            .filter(|&&(function_id, load)| {
+                function_id == owner
+                    && function.instruction(load).ty == value_ty
+                    && tree.instruction_dominates(function, store, load)
+            })
+            .map(|&(_, load)| load)
+            .collect();
+        if !dominated.is_empty() {
+            plans.push((owner, dominated, value));
+        }
+    }
+    let mut changed = BTreeSet::new();
+    for (owner, loads, value) in plans {
+        let GlobalKind::Function(function) = &mut module.globals[owner.0 as usize].kind else { continue };
+        for load in loads {
+            let Some(result) = function.instruction(load).result else { continue };
+            function.replace_all_uses_with(result, Operand::Constant(value));
+            if function.erase(load).is_ok() {
+                changed.insert(owner);
+            }
+        }
+        trees.remove(&owner);
+    }
+    changed
+}
+
+/// The loads and stores one function makes of a variable.
+struct Direct {
+    function: GlobalId,
+    loads: Vec<InstId>,
+    stores: Vec<InstId>,
+}
+
+/// The functions that use `id`, or none where a use is not a direct, simple
+/// load or store: a gep on the way is an offset another pass folds.
+fn direct_uses(
+    module: &Module,
+    id: GlobalId,
+    reached: &BTreeMap<GlobalId, BTreeMap<GlobalId, Option<Reach>>>,
+) -> Option<Vec<Direct>> {
+    let mut found = Vec::new();
+    for (&function_id, table) in reached {
+        let Some(reach) = table.get(&id) else { continue };
+        let reach = reach.as_ref()?;
+        let GlobalKind::Function(function) = &module.globals[function_id.0 as usize].kind else { continue };
+        if reach.uses.is_empty() {
+            continue;
+        }
+        if !reach.moved.is_empty() {
+            return None;
+        }
+        let mut direct = Direct { function: function_id, loads: Vec::new(), stores: Vec::new() };
+        for &(inst, index) in &reach.uses {
+            match function.instruction(inst).opcode {
+                Opcode::Load { volatile: false, .. } if index == 0 => direct.loads.push(inst),
+                Opcode::Store { volatile: false, .. } if index == 1 => direct.stores.push(inst),
+                _ => return None,
+            }
+        }
+        found.push(direct);
+    }
+    Some(found)
 }
 
 /// The globals another global's initializer names.
 fn held(module: &Module) -> BTreeSet<GlobalId> {
-    let mut held = BTreeSet::new();
-    for global in &module.globals {
-        if let GlobalKind::Variable(variable) = &global.kind {
-            variable.initializer.iter().for_each(|&one| embedded(&module.context, one, &mut held));
-        }
-    }
-    held
+    crate::globalopt::held_by_live(module)
 }
 
 /// Every use of `id`, or none where one is not a plain load or store at a
@@ -283,18 +317,34 @@ fn accesses(
     Some(found)
 }
 
+/// The bytes of a type a piece may be: an integer, a `float` or a `double`
+/// (`collectSRATypes` takes any first-class scalar; the x87 `fp80` is left).
+fn piece_bytes(
+    context: &llrm_mir::context::Context,
+    ty: TypeId,
+) -> Option<u64> {
+    use llrm_mir::types::{FloatKind, Type};
+    match context.types.get(ty) {
+        Type::Int(bits) => Some(u64::from(*bits).div_ceil(8)),
+        Type::Float(FloatKind::Float) => Some(4),
+        Type::Float(FloatKind::Double) => Some(8),
+        _ => None,
+    }
+}
+
 /// The pieces to split into, sorted by offset: (offset, type, initializer).
 fn sliced(
     module: &Module,
     layout: &DataLayout,
     id: GlobalId,
     accesses: &[Access],
+    localizes: bool,
 ) -> Option<Vec<(i64, TypeId, Constant)>> {
     let context = &module.context;
     let GlobalKind::Variable(variable) = &module.globals[id.0 as usize].kind else { return None };
     let mut pieces: BTreeMap<i64, TypeId> = BTreeMap::new();
     for access in accesses.iter().filter(|one| !one.store) {
-        context.types.int_bits(access.ty)?;
+        piece_bytes(context, access.ty)?;
         if *pieces.entry(access.offset).or_insert(access.ty) != access.ty {
             return None;
         }
@@ -303,14 +353,16 @@ fn sliced(
         return None;
     }
     // Not back to the same layout: one piece that is all of the variable (a
-    // scalar the frontend spelled as bytes) is no split.
+    // scalar the frontend spelled as bytes) is no split, unless it becomes a
+    // stack slot: renamed and moved in the data it cost d_faces 623 bytes.
     let whole = layout.alloc_size(&context.types, variable.ty) as i64;
     if pieces.len() == 1
         && (pieces.values().next() == Some(&variable.ty)
-            || pieces
-                .iter()
-                .next()
-                .is_some_and(|(&at, &ty)| at == 0 && layout.store_size(&context.types, ty) as i64 == whole))
+            || (!localizes
+                && pieces
+                    .iter()
+                    .next()
+                    .is_some_and(|(&at, &ty)| at == 0 && layout.store_size(&context.types, ty) as i64 == whole)))
     {
         return None;
     }
@@ -358,7 +410,12 @@ fn sliced(
             return None;
         }
         let bits = read.iter().rev().fold(0u128, |bits, &byte| (bits << 8) | u128::from(byte));
-        out.push((offset, ty, Constant { ty, kind: ConstantKind::Int(bits) }));
+        let kind = if context.types.int_bits(ty).is_some() {
+            ConstantKind::Int(bits)
+        } else {
+            ConstantKind::Float(bits as u64)
+        };
+        out.push((offset, ty, Constant { ty, kind }));
     }
     Some(out)
 }
@@ -372,7 +429,7 @@ fn rewrite(
     moved: &BTreeMap<GlobalId, Vec<InstId>>,
 ) -> BTreeSet<GlobalId> {
     let layout_sizes: Vec<i64> =
-        pieces.iter().map(|(_, ty, _)| i64::from(module.context.types.int_bits(*ty).unwrap_or(8)) / 8).collect();
+        pieces.iter().map(|(_, ty, _)| piece_bytes(&module.context, *ty).unwrap_or(1) as i64).collect();
     let name = module.globals[id.0 as usize].name.as_deref().unwrap_or("").to_owned();
     let (align, space) = match &module.globals[id.0 as usize].kind {
         GlobalKind::Variable(variable) => (variable.align, module.globals[id.0 as usize].address_space),
@@ -444,7 +501,12 @@ fn rewrite(
             let (offset, ty, _) = &pieces[n];
             let width = (layout_sizes[n] * 8) as u32;
             let part = (bits >> ((*offset - low) * 8)) & llrm_mir::context::mask(width);
-            let value = context.constant(Constant { ty: *ty, kind: ConstantKind::Int(part) });
+            let kind = if context.types.int_bits(*ty).is_some() {
+                ConstantKind::Int(part)
+            } else {
+                ConstantKind::Float(part as u64)
+            };
+            let value = context.constant(Constant { ty: *ty, kind });
             let store = function.create_instruction(
                 Opcode::Store { align: None, volatile: false },
                 void,
@@ -474,7 +536,8 @@ fn rewrite(
     changed
 }
 
-/// The internal single-value variables a body of one function could keep on
+/// The internal single-value variables (`isSingleValueType`: integer, float,
+/// pointer, vector) a body of one function could keep on
 /// its stack: every use a direct load or store.
 fn locals(module: &Module) -> Vec<GlobalId> {
     let held = held(module);
@@ -485,7 +548,10 @@ fn locals(module: &Module) -> Vec<GlobalId> {
         .filter_map(|(at, global)| {
             let GlobalKind::Variable(variable) = &global.kind else { return None };
             let internal = matches!(global.linkage, Linkage::Internal | Linkage::Private);
-            let single = module.context.types.int_bits(variable.ty).is_some();
+            let single = matches!(
+                module.context.types.get(variable.ty),
+                Type::Int(_) | Type::Float(_) | Type::Pointer(_) | Type::Vector { .. }
+            );
             let id = GlobalId(at as u32);
             (internal
                 && single
@@ -499,44 +565,18 @@ fn locals(module: &Module) -> Vec<GlobalId> {
         .collect()
 }
 
-/// Replaces `id` by a stack slot of the one function that uses it, if the
-/// function does not recurse and writes it before it reads it.
-fn localize(
-    module: &mut Module,
+/// The one function that could keep `id` on its stack and the loads and stores
+/// it makes of it: the function does not recurse and writes it before it reads
+/// it.
+fn slot_plan(
+    module: &Module,
     layout: &DataLayout,
     id: GlobalId,
     reached: &BTreeMap<GlobalId, BTreeMap<GlobalId, Option<Reach>>>,
     trees: &mut BTreeMap<GlobalId, DomTree>,
-) -> Option<GlobalId> {
+) -> Option<(GlobalId, Vec<InstId>, Vec<InstId>)> {
     let context = &module.context;
-    let GlobalKind::Variable(variable) = &module.globals[id.0 as usize].kind else { return None };
-    let (ty, initializer, align) = (variable.ty, variable.initializer?, variable.align);
-    let mut owner: Option<GlobalId> = None;
-    let mut loads: Vec<InstId> = Vec::new();
-    let mut stores: Vec<InstId> = Vec::new();
-    for (&function_id, table) in reached {
-        let Some(reached) = table.get(&id) else { continue };
-        let reached = reached.as_ref()?;
-        let GlobalKind::Function(function) = &module.globals[function_id.0 as usize].kind else { continue };
-        if reached.uses.is_empty() {
-            continue;
-        }
-        if owner.replace(function_id).is_some_and(|other| other != function_id) {
-            return None;
-        }
-        // Direct uses only: a gep on the way is an offset another pass folds.
-        if !reached.moved.is_empty() {
-            return None;
-        }
-        for &(inst, index) in &reached.uses {
-            match function.instruction(inst).opcode {
-                Opcode::Load { volatile: false, .. } if index == 0 => loads.push(inst),
-                Opcode::Store { volatile: false, .. } if index == 1 => stores.push(inst),
-                _ => return None,
-            }
-        }
-    }
-    let owner = owner?;
+    let [Direct { function: owner, loads, stores }] = direct_uses(module, id, reached)?.try_into().ok()?;
     if loads.len() * stores.len() > MAX_PAIRS {
         return None;
     }
@@ -558,6 +598,33 @@ fn localize(
             return None;
         }
     }
+    Some((owner, loads, stores))
+}
+
+/// Whether `id` could be a stack slot (`slot_plan`).
+fn localizing(
+    module: &Module,
+    layout: &DataLayout,
+    id: GlobalId,
+    reached: &BTreeMap<GlobalId, BTreeMap<GlobalId, Option<Reach>>>,
+    trees: &mut BTreeMap<GlobalId, DomTree>,
+) -> bool {
+    slot_plan(module, layout, id, reached, trees).is_some()
+}
+
+/// Replaces `id` by a stack slot of the one function that uses it, if the
+/// function does not recurse and writes it before it reads it.
+fn localize(
+    module: &mut Module,
+    layout: &DataLayout,
+    id: GlobalId,
+    reached: &BTreeMap<GlobalId, BTreeMap<GlobalId, Option<Reach>>>,
+    trees: &mut BTreeMap<GlobalId, DomTree>,
+) -> Option<GlobalId> {
+    let (owner, loads, stores) = slot_plan(module, layout, id, reached, trees)?;
+    let GlobalKind::Variable(variable) = &module.globals[id.0 as usize].kind else { return None };
+    let (ty, initializer, align) = (variable.ty, variable.initializer?, variable.align);
+    let GlobalKind::Function(function) = &module.globals[owner.0 as usize].kind else { return None };
     let entry = function.entry()?;
     let first = function.block(entry).first()?;
     let Module { context, globals, .. } = module;

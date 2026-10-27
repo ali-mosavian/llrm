@@ -135,6 +135,8 @@ pub struct Implement<'a, 'e> {
     pub tti: &'a dyn Tti,
     /// The header of the loop.
     pub l: BlockId,
+    /// The blocks of the loop.
+    pub body: &'a llrm_mir::dense::IdSet<BlockId>,
     /// Where the increments of the loop's induction variables go: the latch's
     /// terminator.
     pub iv_inc_insert_pos: InstId,
@@ -150,6 +152,29 @@ impl Implement<'_, '_> {
         ty: Option<Ty>,
     ) -> Operand {
         self.rewriter.expand_code_for(self.env, self.context, self.declared, self.function, self.se, s, ty)
+    }
+
+    /// DEVIATE: the compare's other operand when `reg` is that operand
+    /// zero-extended. The pin expands the wide register and truncates it back,
+    /// a second copy of a value the loop's exit already holds (lcexit.bas
+    /// m16 -Os: a 32-bit `umin` beside the 16-bit one). Exit: none.
+    fn narrow_original(
+        &mut self,
+        lf: &Fixup,
+        reg: Scev,
+        op_ty_id: TypeId,
+    ) -> Option<Operand> {
+        let other = self.function.instruction(lf.user).operands[1];
+        if !matches!(other, Operand::Value(_)) || self.operand_ty(other) != op_ty_id {
+            return None;
+        }
+        let cx = self.env.cx(&*self.context, &*self.function);
+        let wide = self.se.type_of(reg);
+        let narrow = self.se.get_scev(&cx, other);
+        if self.se.get_type_size_in_bits(&cx, self.se.type_of(narrow)) >= self.se.get_type_size_in_bits(&cx, wide) {
+            return None;
+        }
+        (self.se.get_zero_extend_expr(&cx, ScevUse::of(narrow), wide, 0) == reg).then_some(other)
     }
 
     fn unknown(
@@ -397,11 +422,23 @@ impl Implement<'_, '_> {
 
         // The operands that add to the full base.
         let mut ops: Vec<Scev> = Vec::new();
+        let mut original: Option<Operand> = None;
         for &reg in &f.base_regs {
             let reg = {
                 let cx = self.env.cx(&*self.context, &*self.function);
                 self.se.denormalize_for_post_inc_use(&cx, reg, &lf.post_inc_loops)
             };
+            if lu.kind == Kind::ICmpZero
+                && f.base_regs.len() == 1
+                && f.base_gv.is_none()
+                && !f.base_offset.add_unsigned(lf.offset).is_non_zero()
+                && !f.unfolded_offset.is_non_zero()
+            {
+                original = self.narrow_original(lf, reg, op_ty_id);
+                if original.is_some() {
+                    continue;
+                }
+            }
             let v = self.expand_code_for(reg, None);
             let u = self.unknown(v);
             ops.push(u);
@@ -512,7 +549,10 @@ impl Implement<'_, '_> {
         } else {
             self.add(&ops)
         };
-        let full_v = self.expand_code_for(full_s, Some(ty));
+        let full_v = match original {
+            Some(original) => original,
+            None => self.expand_code_for(full_s, Some(ty)),
+        };
         self.rewriter.clear_post_inc();
 
         // A compare against zero sets its other operand.
@@ -566,9 +606,30 @@ impl Implement<'_, '_> {
                 continue;
             }
             let term = self.function.terminator(bb).expect("a terminated block");
+            let op_ty = self.operand_ty(lf.operand);
+            // DEVIATE: a loop's exit phi with one input sits in a block of its
+            // own here, where LLVM's sits in the exit block with the paths
+            // that skip the loop, so the edge is split and the code lands
+            // there. The code goes at the top of this block, not into the loop,
+            // and the phi's readers read it (#4924).
+            let parent = self.function.parent(pn).expect("a placed phi");
+            if count == 1
+                && self.body.contains(&bb)
+                && !self.body.contains(&parent)
+                && self.function.predecessors(parent).len() == 1
+                && let Some(&exit) = crate::lcssa::operations(self.function, parent).first()
+                && let Some(result) = self.function.instruction(pn).result
+            {
+                let mut full = self.expand(lu, lf, f, exit);
+                if self.operand_ty(full) != op_ty {
+                    full = self.create_cast(full, op_ty, exit);
+                }
+                self.function.replace_all_uses_with(result, full);
+                self.dead.push(result);
+                return;
+            }
             let mut full = self.expand(lu, lf, f, term);
             // A reuse by no-op cast gets the cast.
-            let op_ty = self.operand_ty(lf.operand);
             if self.operand_ty(full) != op_ty {
                 full = self.create_cast(full, op_ty, term);
             }

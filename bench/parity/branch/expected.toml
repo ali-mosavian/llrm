@@ -1,90 +1,79 @@
-reason = "word add/sub/mul promotion: bytes down in most bq32 rows; four rows worse by +2 bytes / <=0.001% instructions"
-blessed = "2026-10-14"
+reason = "inputs read through volatile or DATA so no build folds the kernel; reference counts change with the source"
+blessed = "2026-10-25"
 
 [ow.O2]
-instructions = 92
-memory_operands = 6
-code_bytes = 128
-data_bytes = 0
+instructions = 94
+memory_operands = 8
+code_bytes = 130
+data_bytes = 4
 bss_bytes = 2
-kernel_ms = 0.0025
 
 [ow.Os]
-instructions = 92
-memory_operands = 6
-code_bytes = 128
-data_bytes = 0
+instructions = 94
+memory_operands = 8
+code_bytes = 130
+data_bytes = 4
 bss_bytes = 2
-kernel_ms = 0.0025
 
 [bcc.O2]
-instructions = 52
-memory_operands = 9
-code_bytes = 153
-data_bytes = 0
+instructions = 55
+memory_operands = 12
+code_bytes = 157
+data_bytes = 4
 bss_bytes = 2
-kernel_ms = 0.0017
 
 [bcc.Os]
-instructions = 53
-memory_operands = 9
-code_bytes = 131
-data_bytes = 0
+instructions = 56
+memory_operands = 12
+code_bytes = 135
+data_bytes = 4
 bss_bytes = 2
-kernel_ms = 0.0017
 
 [tc.O2]
-instructions = 111
-memory_operands = 10
-code_bytes = 140
-data_bytes = 0
+instructions = 113
+memory_operands = 13
+code_bytes = 143
+data_bytes = 4
 bss_bytes = 2
-kernel_ms = 0.0025
 
 [tc.Os]
-instructions = 106
-memory_operands = 10
-code_bytes = 135
-data_bytes = 0
+instructions = 110
+memory_operands = 13
+code_bytes = 138
+data_bytes = 4
 bss_bytes = 2
-kernel_ms = 0.0024
 
 [tcpp.O2]
-instructions = 115
-memory_operands = 12
+instructions = 117
+memory_operands = 14
 code_bytes = 158
-data_bytes = 0
+data_bytes = 4
 bss_bytes = 2
-kernel_ms = 0.0025
 
 [tcpp.Os]
-instructions = 113
-memory_operands = 12
+instructions = 115
+memory_operands = 14
 code_bytes = 152
-data_bytes = 0
+data_bytes = 4
 bss_bytes = 2
-kernel_ms = 0.0025
 
 [bc.O2]
-instructions = 229
-memory_operands = 90
-code_bytes = 287
-data_bytes = 7
-bss_bytes = 10
-kernel_ms = 0.0162
+instructions = 225
+memory_operands = 86
+code_bytes = 302
+data_bytes = 18
+bss_bytes = 14
 
 [pds71.O2]
-instructions = 244
-memory_operands = 93
-code_bytes = 284
-data_bytes = 7
-bss_bytes = 10
-kernel_ms = 0.0139
+instructions = 240
+memory_operands = 89
+code_bytes = 299
+data_bytes = 18
+bss_bytes = 14
 
 [vbdos.O2]
-instructions = 295
-memory_operands = 108
-code_bytes = 290
-data_bytes = 7
-bss_bytes = 10
-kernel_ms = 0.0113
+instructions = 291
+memory_operands = 104
+code_bytes = 305
+data_bytes = 18
+bss_bytes = 14

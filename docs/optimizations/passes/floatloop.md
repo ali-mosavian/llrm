@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/floatloop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/floatloop.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/floatloop.rs sha256:ea486c5e79d5a086ba28c2778f66ca0216cdbabc1a3074eee541cea1ac05ac45 -->
+<!-- src: crates/opt/llrm-transforms/src/floatloop.rs sha256:7da1bab69c65817e34f585aea52f48ee5e293a3c2e879dfec99b46259866b432 -->
 
 # floatloop
 

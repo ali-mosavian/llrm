@@ -304,16 +304,22 @@ fn test_floating_flags_license_the_folds_and_their_absence_keeps_the_operation()
         "{arcp}"
     );
     stays("  %r = fdiv double %x, 3.0\n  ret double %r", "fdiv double");
-    // reassoc, both operations
+    // reassoc: the pin's `Instruction::isAssociative` needs `reassoc` AND
+    // `nsz` on the outer operation (pinned `opt -passes=instcombine` and
+    // `default<O2>`: `(x + 1.0) + 2.0` with `reassoc` alone keeps both
+    // `fadd`; with `reassoc nsz` it is `x + 3.0`, flags of the outer one).
+    // The rule that folded on `reassoc` alone was `fold`'s own, which the
+    // LLVM order no longer runs.
     let chain = |first: &str, second: &str| {
         format!("  %a = fadd {first} double %x, 1.0\n  %r = fadd {second} double %a, 2.0\n  ret double %r")
     };
-    let both = said(&chain("reassoc", "reassoc"));
+    let both = said(&chain("reassoc nsz", "reassoc nsz"));
     assert!(
-        both.contains("fadd reassoc double") && both.contains("3.000000e+00") && both.matches("fadd").count() == 1,
+        both.contains("fadd reassoc nsz double") && both.contains("3.000000e+00") && both.matches("fadd").count() == 1,
         "{both}"
     );
-    assert_eq!(said(&chain("reassoc", "")).matches("fadd").count(), 2);
+    assert_eq!(said(&chain("reassoc", "reassoc")).matches("fadd").count(), 2);
+    assert_eq!(said(&chain("reassoc nsz", "")).matches("fadd").count(), 2);
     assert_eq!(said(&chain("", "reassoc")).matches("fadd").count(), 2);
     // nsz
     assert!(!said("  %r = fadd nsz double %x, 0.0\n  ret double %r").contains("fadd"));

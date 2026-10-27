@@ -194,6 +194,15 @@ impl<'a> Query<'a> {
         self.callee_function(inst)?.name.as_deref()
     }
 
+    /// The intrinsic of `pattern::IntrinsicId` a call reaches, from the name's
+    /// cached id.
+    pub(crate) fn callee_intrinsic_id(
+        &self,
+        inst: InstId,
+    ) -> Option<crate::valuetracking::pattern::IntrinsicId> {
+        self.callee_function(inst)?.name.intrinsic_id()
+    }
+
     /// The function global a call's callee names.
     fn callee_function(
         &self,
@@ -249,6 +258,19 @@ pub struct AssumptionCache {
     affected: HashMap<Operand, Vec<InstId>>,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The bodies `AssumptionCache::of` did not walk for assumes.
+    pub(crate) static SKIPPED_WALKS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// `LLRM_CHECK_ASSUME_SKIP` walks the body even where no `llvm.assume` is
+/// declared, and fails on an assume found.
+fn check_assume_skip() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_ASSUME_SKIP"))
+}
+
 impl AssumptionCache {
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/AssumptionCache.cpp#L261>
     pub fn new(
@@ -267,11 +289,24 @@ impl AssumptionCache {
     ) -> Self {
         let layout = DataLayout::default();
         let query = Query { globals, metadata, ..Query::bare(context, function, &layout) };
-        let assumes: Vec<InstId> = function
-            .walk()
-            .filter(|(_, inst)| query.intrinsic(*inst) == Some(Intrinsic::Assume))
-            .map(|(_, inst)| inst)
-            .collect();
+        // A call reaches `llvm.assume` only through a function of that name:
+        // with none declared there is nothing to find in the body.
+        let declared = globals.iter().any(|global| {
+            matches!(global.kind, GlobalKind::Function(_)) && global.intrinsic() == Some(Intrinsic::Assume)
+        });
+        let check = !declared && check_assume_skip();
+        let assumes: Vec<InstId> = if declared || check {
+            function
+                .walk()
+                .filter(|(_, inst)| query.intrinsic(*inst) == Some(Intrinsic::Assume))
+                .map(|(_, inst)| inst)
+                .collect()
+        } else {
+            #[cfg(test)]
+            SKIPPED_WALKS.with(|walks| walks.set(walks.get() + 1));
+            Vec::new()
+        };
+        assert!(!check || assumes.is_empty(), "an assume was found where none is declared");
         let mut cache = Self { assumes, affected: HashMap::default() };
         for assume in cache.assumes.clone() {
             cache.update_affected_values(&query, assume);
@@ -313,7 +348,9 @@ impl AssumptionCache {
 /// condition tells of it.
 #[derive(Clone, Debug, Default)]
 pub struct DomConditionCache {
-    affected: HashMap<Operand, Vec<InstId>>,
+    /// Behind a cell because InstCombine registers a branch as it visits it,
+    /// while its queries hold the cache.
+    affected: std::cell::RefCell<HashMap<Operand, Vec<InstId>>>,
 }
 
 impl DomConditionCache {
@@ -342,7 +379,7 @@ impl DomConditionCache {
         query: &Query,
         function: &Function,
     ) -> Self {
-        let mut cache = Self::default();
+        let cache = Self::default();
         for &block in function.layout() {
             if let Some(branch) = function.terminator(block)
                 && function.instruction(branch).opcode == Opcode::Br
@@ -356,15 +393,16 @@ impl DomConditionCache {
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/DomConditionCache.cpp#L19>
     pub fn register_branch(
-        &mut self,
+        &self,
         q: &Query,
         branch: InstId,
     ) {
         let mut affected = Vec::new();
         let condition = q.function.instruction(branch).operands[0];
         super::context::find_values_affected_by_condition(q, condition, false, &mut |v| affected.push(v));
+        let mut map = self.affected.borrow_mut();
         for value in affected {
-            let list = self.affected.entry(value).or_default();
+            let list = map.entry(value).or_default();
             if !list.contains(&branch) {
                 list.push(branch);
             }
@@ -375,8 +413,8 @@ impl DomConditionCache {
     pub fn conditions_for(
         &self,
         value: Operand,
-    ) -> &[InstId] {
-        self.affected.get(&value).map_or(&[], Vec::as_slice)
+    ) -> std::cell::Ref<'_, [InstId]> {
+        std::cell::Ref::map(self.affected.borrow(), |map| map.get(&value).map_or(&[][..], Vec::as_slice))
     }
 }
 
@@ -429,6 +467,14 @@ impl FunctionAnalyses {
         function: &Function,
     ) -> Self {
         self.dom_conditions = Some(DomConditionCache::new(module, function));
+        self
+    }
+
+    /// The same with an empty cache that the pass fills as it visits each
+    /// conditional branch (`DC.registerBranch` in `visitBranchInst`): a query
+    /// sees the branches visited before it, as LLVM's does.
+    pub fn with_lazy_dom_conditions(mut self) -> Self {
+        self.dom_conditions = Some(DomConditionCache::default());
         self
     }
 

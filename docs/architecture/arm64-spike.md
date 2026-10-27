@@ -9,7 +9,7 @@ TL;DR: POC, not for feat/parity until decided. Mach-O arm64 (Darwin AAPCS64) fir
 ## What exists
 
 - `crates/target/llrm-target`: the generic layer (`Target` trait, `Machine`, `calling`, `registers`, `layout`, `CpuPrices`); data-driven by toml/text descriptions.
-- x86 only: `llrm-x86` (`x86.instr` forms, `family.isel`, `peephole.peep`, TTI, lowering), `-m16`, `-m32`, `-bc`. isel, assembly and LIR forms in `backend/llrm-core` are driven by those tables; `llrm-lir` carries x86 notions (flags, two-address).
+- x86 only: `llrm-x86` (`x86.instr` forms, `family.isel`, `peephole.peep`, TTI, lowering), `-m16`, `-m32`, `-bc`. isel, assembly and LIR forms in `codegen/llrm-codegen` are driven by those tables; `llrm-lir` carries x86 notions (flags, two-address).
 - Objects: `llrm-object::Arch` is `I8086 | I386 | X8664`. `llrm-macho` and `llrm-elf64` write x86-64 only; `llrm-macho` is on this tree (650 lines), wired in `objbuild.rs` for `X8664`.
 
 ## A new target implements
@@ -60,9 +60,9 @@ Cost reading: items 1, 2 and 6 touch the shared backend and are the real price; 
 
 ## Decision: arm64 gets its own backend from MIR (2026-10-19)
 
-The shared backend (`llrm-core`: 146 K lines, isel tables, masm, assembler) is x86 end to end: selection patterns and hooks, 16/32-bit `LirBody`, an iced encoder behind `masm`. Generalizing it first would touch the files 30 sessions are landing in. The spike therefore takes MIR (after the shared mid-end) through arm64 modules of its own in `llrm-arm64`: isel, register allocation, frame lowering, MC encoding, object. Reuse is by interface: MIR and the mid-end, `Target`/`Machine` descriptions, `RegId` ids, `Object` and its writers. Whether the machine passes (greedy allocator, copy propagation) can later run on arm64 LIR is a separate question, answered by trying it on this selector's output. Front end: clang's IR (the shared `llrm-llc` door of the x86-64 spike).
+The shared backend (`llrm-codegen`: 146 K lines, isel tables, masm, assembler) is x86 end to end: selection patterns and hooks, 16/32-bit `LirBody`, an iced encoder behind `masm`. Generalizing it first would touch the files 30 sessions are landing in. The spike therefore takes MIR (after the shared mid-end) through arm64 modules of its own in `llrm-arm64`: isel, register allocation, frame lowering, MC encoding, object. Reuse is by interface: MIR and the mid-end, `Target`/`Machine` descriptions, `RegId` ids, `Object` and its writers. Whether the machine passes (greedy allocator, copy propagation) can later run on arm64 LIR is a separate question, answered by trying it on this selector's output. Front end: clang's IR (the shared `llrm-llc` door of the x86-64 spike).
 
-This private path duplicates what LLVM shares (one CodeGen over any target). It is a spike-only shortcut, not the merge design: the mirror is the shared machine passes (greedy allocator, copy propagation, sink) running on target LIR with target descriptions. The experiment that decides the merge, run as soon as the first three programs run: feed this selector's output to `llrm-core`'s machine passes, and list what breaks and what it costs to fix. Its result goes here, with the end-to-end numbers against the pinned `clang -O2` build.
+This private path duplicates what LLVM shares (one CodeGen over any target). It is a spike-only shortcut, not the merge design: the mirror is the shared machine passes (greedy allocator, copy propagation, sink) running on target LIR with target descriptions. The experiment that decides the merge, run as soon as the first three programs run: feed this selector's output to `llrm-codegen`'s machine passes, and list what breaks and what it costs to fix. Its result goes here, with the end-to-end numbers against the pinned `clang -O2` build.
 
 ## Mac (Mach-O arm64 runs)
 

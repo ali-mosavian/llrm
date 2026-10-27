@@ -1,6 +1,6 @@
 # Irreducible cycles in the corpora (BRIDGE-1)
 
-Owner: cycles-queue-quiet-host. 2026-10-23. Parity 7d12750b3f54, release build with a trace on the three places the compile asks for irreducible cycles (`executed`, `machinesink`, the MIR pipeline's promote check; patch ~/scratch/irr-trace.patch, not committed). A function counts once per compile.
+Owner: cycles-queue-quiet-host. 2026-10-23. Parity 7d12750b3f54, release build with a trace on the three places the compile asks for irreducible cycles (`executed`, `machinesink`, the MIR pipeline's promote check; patch irr-trace.patch, not committed). A function counts once per compile.
 
 | corpus | compiles | functions with an irreducible cycle |
 |---|--:|--:|

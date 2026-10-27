@@ -2,9 +2,4 @@
 # `reason`: the whole file differs; `functions.NAME`: one function differs (the corpus pins llrm's own output for it).
 
 ["pragma-explicit.ll".functions]
-function = "BasicAA has no aliasPHI/aliasSelect: DA keeps a dependence LLVM disproves, so llrm does not jam (D4)"
-function2 = "BasicAA has no aliasPHI/aliasSelect: DA keeps a dependence LLVM disproves, so llrm does not jam (D4)"
-
-["unroll-and-jam.ll".functions]
-test6 = "SE isKnownViaInduction is a stub (S5): the outer latch compare niter.next != 4 stays, opt folds it to false (D5)"
-test10 = "SE isKnownViaInduction is a stub (S5): the outer latch compare niter.next != 4 stays, opt folds it to false (D5)"
+function2 = "llrm's remainder keeps three more phis than the pin's (138 lines against 141); not the AA: BasicAA's aliasPHI/aliasSelect are translated and `function`, the same body, matches (D4, unclassified)"

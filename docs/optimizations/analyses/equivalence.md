@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/equivalence.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/equivalence.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/equivalence.rs sha256:0c5425f900516dbad69a3b56b44b87f29296cd2c427c65d4c56cfbdc8dd7d1a8 -->
+<!-- src: crates/opt/llrm-analysis/src/equivalence.rs sha256:61ff9d80a6cecc1d9b14672416f732b5b968ebea3a13fc3e5434fce7fe41af73 -->
 
 # equivalence
 
@@ -15,3 +15,6 @@ first class's members, then the second's, each in its own order.
 ## Example
 After `union_sets(1, 2)`, `insert(4)` and `union_sets(5, 1)`, `members(1)`
 gives `5, 1, 2` and `members(4)` gives `4`.
+
+## Used by
+Named by `runtimecheck`.

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_memintrinsics.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_memintrinsics.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_memintrinsics.rs sha256:6e4ad1549bc17c22a67d28a58772e620a06b81680b08f60cddd84de31bf6efcb -->
+<!-- src: crates/opt/llrm-transforms/src/combine_memintrinsics.rs sha256:967cbfdbce220979bbc0ab1c1e1d3226784c332ca4808f959f3769559f1adfec -->
 
 # combine_memintrinsics
 
@@ -29,8 +29,7 @@ volatile bit carried over.
 DEVIATE 1: MIR gives a transfer's pointers no `align` attribute, so the
 alignments are `pointer_alignment` of each side
 (`Value::getPointerAlignment`), not `getKnownAlignment` with the assumption
-cache and the dominator tree, and the pin's step that first raises the
-transfer's own alignments is not made. DEVIATE 2: no
+cache and the dominator tree. DEVIATE 2: no
 `isModSet(AA->getModRefInfoMask(Dest))` constant-memory test, and no atomic
 transfers (MIR has none); no TBAA or loop metadata to carry (MIR transfers
 have none).

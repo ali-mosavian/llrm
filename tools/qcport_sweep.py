@@ -11,6 +11,7 @@ named in the issue. The report goes to stdout for the coordinator. Hourly: one d
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import re
 import subprocess
@@ -33,6 +34,14 @@ MODULES = ("host", "render", "model", "game", "sound", "ui")
 KNOWN = HERE / "qcport_sweep_known.toml"
 
 
+@contextlib.contextmanager
+def object_file():
+    """An object path to compile to. llrm-c writes the object only for an `.o` or `.obj` output and the assembly text for any other, `/dev/null` included, so a
+    sweep that compiled to the null device never reached the encoder: ui/console.c died there for days while the sweep counted 0 failed."""
+    with tempfile.TemporaryDirectory(prefix="sweep-") as directory:
+        yield str(Path(directory) / "out.obj")
+
+
 def kind(message: str) -> str:
     """The failure's kind: its last line without numbers, `name@3` function names and L1_125-style labels."""
     lines = message.strip().splitlines()
@@ -40,7 +49,8 @@ def kind(message: str) -> str:
         if "panicked at" in line and i + 1 < len(lines):  # the message under a panic, not rustc's trailing backtrace note
             where = re.sub(r"^.*panicked at ", "", line).rstrip(":")
             return re.sub(r"\d+", "N", f"panic {where}: {lines[i + 1].strip()}")[:160]
-    last = next((line for line in reversed(lines) if line.strip() and not line.startswith("note: run with")), "no message")
+    last = next((line for line in reversed(lines) if "Error!" in line), None)  # a compiler's warnings follow its errors
+    last = last or next((line for line in reversed(lines) if line.strip() and not line.startswith("note: run with")), "no message")
     last = re.sub(r"@?\w+@\d+:?", "F", last)
     last = re.sub(r"\bL\d+_\d+\b", "L", last)
     last = re.sub(r"\(\s*[\d, ]+\)", "(...)", last)
@@ -55,7 +65,8 @@ def sweep(compiler: Path, qcport: Path, include: Path, levels=LEVELS, jobs: int 
     def one(job):
         source, level = job
         try:
-            done = cpulimit.run([str(compiler), level, *flags, str(source), "-o", os.devnull], 300, capture_output=True, text=True)
+            with object_file() as out:
+                done = cpulimit.run([str(compiler), level, *flags, str(source), "-o", out], 300, capture_output=True, text=True)
         except cpulimit.MemoryLimit as error:
             return (source.stem, level, f"memory limit: {error}")
         except subprocess.TimeoutExpired:
@@ -99,7 +110,9 @@ def extra_jobs(root: Path = ROOT) -> list[tuple[str, Path, str, str]]:
     found = {tomllib.loads(path.read_text())["mode"] for path in (root / "crates/target").glob("*/src/machines/datalayout.toml")}
     machines = [f"-m{mode}" for mode in sorted(found & set(FRONT_END_MODES))]
     benches = [(tool, root / f"bench/bintree/bintree.{ext}", machine, level) for tool, ext in (("llrm-nib", "nib"), ("llrm-qb", "bas")) for machine in machines for level in LEVELS]
-    return benches + [("llrm-qb", source, machine, level) for source in qb_flat_programs(root) for machine in machines if not (machine == "-m32" and m16_only(source)) for level in ("-O1", "-O2")]
+    # Borland's call-boundary fixtures (C): an `interrupt` handler with nine register parameters was refused for four days (#2936) because nothing compiled it outside a lib test.
+    callconv = [("llrm-c", source, "-m16", level) for source in sorted((root / "tests/fixtures/callconv/c").glob("*.c")) for level in ("-O1", "-O2")]
+    return benches + [("llrm-qb", source, machine, level) for source in qb_flat_programs(root) for machine in machines if not (machine == "-m32" and m16_only(source)) for level in ("-O1", "-O2")] + callconv
 
 
 # A refusal the compiler states as policy: a program that needs a second address space is not compiled for the flat target.
@@ -115,13 +128,15 @@ def program_flags(source: Path) -> list[str]:
     return run_tests.compiler_arguments(source) if source.suffix == ".bas" and "tests/run" in source.as_posix() else []
 
 
-def sweep_extra(bins: Path, jobs: int = 8, root: Path = ROOT) -> list[tuple[str, str, str]]:
+def sweep_extra(bins: Path, jobs: int = 8, root: Path = ROOT, include: Path | None = None) -> list[tuple[str, str, str]]:
     """(program, 'machine level', kind) of every failed compile of `extra_jobs`, oracles on."""
     env = {**os.environ, **{f"LLRM_CHECK_{name}": "1" for name in ORACLES}}
 
     def one(job):
         tool, source, machine, level = job
-        done = subprocess.run([str(bins / tool), str(source), *program_flags(source), level, machine, "-o", os.devnull], capture_output=True, text=True, env=env)
+        headers = ["-I", str(include)] if include and source.suffix == ".c" else []
+        with object_file() as out:
+            done = subprocess.run([str(bins / tool), str(source), *program_flags(source), *headers, level, machine, "-o", out], capture_output=True, text=True, env=env)
         if done.returncode == 0 or (machine == "-m32" and BY_DESIGN.search(done.stderr + done.stdout)):
             return None
         return (source.name, f"{machine} {level}", kind(done.stderr or done.stdout))
@@ -198,7 +213,7 @@ def issue_text(why: str, where: list[tuple[str, str]], head: str, first: tuple[s
     mods = ", ".join(sorted({f'{m} {l}' for m, l in where})[:12])
     body = (
         f"TL;DR: compiling QCport's {module}.c at {level} fails on feat/parity {head[:9]}: `{why}`.\n\n"
-        f"Repro: `llrm-c {level} -I $QCPORT/{{host,render,model,game,sound,ui,qgl}} -I $QCPORT_INC $QCPORT/<dir>/{module}.c -o /dev/null` "
+        f"Repro: `llrm-c {level} -I $QCPORT/{{host,render,model,game,sound,ui,qgl}} -I $QCPORT_INC $QCPORT/<dir>/{module}.c -o /tmp/out.obj` "
         f"(QCPORT=~/scratch/qcport/src, QCPORT_INC=~/scratch/qctc/inc).\n\nFails: {mods}{' ...' if len(where) > 12 else ''}.\n"
         + (f"\nFirst bad squash (first-parent bisection): {first[0][:9]} {first[1]}\n" if first else "")
     )
@@ -217,7 +232,7 @@ def main() -> int:
     compiler = (args.bin or llrmbin.bin_dir()) / "llrm-c"
     # The binary names what was swept: origin/feat/parity moves during a run, and a report must not name a sha it did not test.
     head, dirty = stamp.read(compiler)
-    failures = sweep(compiler, qcport, include, jobs=args.jobs) + sweep_extra(compiler.parent, jobs=args.jobs)
+    failures = sweep(compiler, qcport, include, jobs=args.jobs) + sweep_extra(compiler.parent, jobs=args.jobs, include=include)
     groups = grouped(failures)
     known = tomllib.loads(KNOWN.read_text()).get("known", []) if KNOWN.exists() else []
     fresh = new_kinds(groups, known)
@@ -231,7 +246,7 @@ def main() -> int:
         if args.bisect:
             module, level = where[0]
             src = next((qcport / p / f"{module}.c" for p in MODULES if (qcport / p / f"{module}.c").exists()), None)
-            flags = [level] + [f for part in (*MODULES, "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include), str(src), "-o", os.devnull]
+            flags = [level] + [f for part in (*MODULES, "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include), str(src), "-o", str(Path(tempfile.gettempdir()) / "sweep-bisect.obj")]
             first = bisect_one(args.bisect, flags, worktree_build)
             print(f"  first bad squash of '{why[:60]}': {first[0][:9]} {first[1]}")
         if args.issue:

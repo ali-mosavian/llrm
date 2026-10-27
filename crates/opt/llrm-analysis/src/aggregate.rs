@@ -47,11 +47,23 @@ use crate::aa::{AAQueryInfo, AAResults, AliasResult, MemoryEffects, MemoryLocati
 #[derive(Default)]
 pub struct AggregateAA<'a> {
     results: Vec<Box<dyn AAResults + 'a>>,
+    /// The body the loads and stores asked of are read in.
+    unit: Option<&'a crate::memory::Unit<'a>>,
 }
 
 impl<'a> AggregateAA<'a> {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// `self` answering `getModRefInfo(Load or Store, Loc)` itself, from its
+    /// own `alias` (AliasAnalysis.cpp), for the instructions of `unit`.
+    #[must_use]
+    pub fn with_unit(
+        self,
+        unit: &'a crate::memory::Unit<'a>,
+    ) -> Self {
+        Self { unit: Some(unit), ..self }
     }
 
     /// `addAAResult`: asked after those already added.
@@ -118,7 +130,62 @@ impl AAResults for AggregateAA<'_> {
         loc: Option<&MemoryLocation>,
         aaqi: &mut AAQueryInfo,
     ) -> ModRefInfo {
-        meet(&mut self.results, |result| result.get_mod_ref_info(inst, loc, aaqi))
+        // `AAResults::getModRefInfo(Load, Loc)` and `(Store, Loc)`: the
+        // aggregate's own `alias` decides, then a store to constant memory
+        // modifies nothing.
+        if let (Some(unit), Some(loc)) = (self.unit, loc) {
+            use llrm_mir::opcode::Opcode;
+            match unit.function.instruction(inst).opcode {
+                Opcode::Load { .. } => {
+                    if let Some(own) = MemoryLocation::get(unit, inst)
+                        && self.alias(&own, loc, aaqi, Some(inst)) == AliasResult::NoAlias
+                    {
+                        return ModRefInfo::NoModRef;
+                    }
+                    return ModRefInfo::Ref;
+                }
+                Opcode::Store { .. } => {
+                    if let Some(own) = MemoryLocation::get(unit, inst) {
+                        if self.alias(&own, loc, aaqi, Some(inst)) == AliasResult::NoAlias {
+                            return ModRefInfo::NoModRef;
+                        }
+                        if !self.get_mod_ref_info_mask(loc, aaqi, false).is_mod_set() {
+                            return ModRefInfo::NoModRef;
+                        }
+                    }
+                    return ModRefInfo::Mod;
+                }
+                _ => {}
+            }
+        }
+        // Each provider's arguments are asked of the others as well: LLVM's
+        // `AAQI.AAR.alias`, the aggregate.
+        let mut answer = ModRefInfo::ModRef;
+        for at in 0..self.results.len() {
+            let (before, rest) = self.results.split_at_mut(at);
+            let (this, after) = rest.split_first_mut().expect("a provider");
+            let mut others = |a: &MemoryLocation, b: &MemoryLocation, aaqi: &mut AAQueryInfo, ctx: Option<InstId>| {
+                for other in before.iter_mut().chain(after.iter_mut()) {
+                    let found = other.alias(a, b, aaqi, ctx);
+                    if found != AliasResult::MayAlias {
+                        return found;
+                    }
+                }
+                AliasResult::MayAlias
+            };
+            answer = answer.intersect(this.get_mod_ref_info_with(inst, loc, aaqi, &mut others));
+            if answer.is_no_mod_ref() {
+                break;
+            }
+        }
+        // Apply the ModRef mask (`AAResults::getModRefInfo(CB, Loc)`): a call
+        // cannot modify a constant location.
+        if !answer.is_no_mod_ref()
+            && let Some(loc) = loc
+        {
+            answer = answer.intersect(self.get_mod_ref_info_mask(loc, aaqi, false));
+        }
+        answer
     }
 
     fn get_mod_ref_info_call(

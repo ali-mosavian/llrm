@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_xor.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_xor.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_xor.rs sha256:2d1d689316468985ca2ac6b564de4d75edde39b72e1d9fb8df0e568dd30dd9ea -->
+<!-- src: crates/opt/llrm-transforms/src/combine_xor.rs sha256:222ddf8e2c3e85876a51cdeb0baf97eaeb0073f91cd73e2915130463079a3ce0 -->
 
 # combine_xor
 
@@ -17,8 +17,7 @@ DEVIATE 1: no vectors, and only integer constants (`ConstantExpr` and
 `undef` lanes are not matched or made).
 
 DEVIATE 2: the folds that call a helper not yet translated are left out,
-each named where it stood: `foldXorToXor`,
-`SimplifyDemandedInstructionBits` (`combine_demanded`), `foldNot`,
+each named where it stood: `foldXorToXor`, `foldNot`,
 `visitMaskedMerge`, the `ctlz`/`cttz` and
 `fneg` bitcast folds, the `i1` select form of `(A & B) ^ (A | C)`,
 `foldXorOfICmps`, `foldCastedBitwiseLogic`, `canonicalizeAbs`,
@@ -34,3 +33,6 @@ each named where it stood: `foldXorToXor`,
 %o = or i32 %x, %y
 %r = xor i32 %y, %o   ==>   %n = xor i32 %y, -1 ; %r = and i32 %x, %n
 ```
+
+## Used by
+Named by `combine`.

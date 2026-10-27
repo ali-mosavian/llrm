@@ -8,7 +8,7 @@
 
 use std::collections::BTreeSet;
 
-use llrm_core::abi::runtime;
+use llrm_codegen::abi::runtime;
 /// `WIDTHS.get(type_)`.
 use llrm_mir::types::FloatKind;
 use llrm_target::calling::Convention;
@@ -171,7 +171,7 @@ pub(crate) fn contract(
 
 // Addresses the raise holds before any of them is a value.
 
-pub use llrm_core::backend::masm::InlinePart;
+pub use llrm_codegen::backend::masm::InlinePart;
 
 #[cfg(test)]
 mod tests {

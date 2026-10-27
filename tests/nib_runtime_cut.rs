@@ -17,8 +17,7 @@ fn test_the_runtime_cut_for_a_program_that_names_none_of_it_is_made() {
     let program = directory.path().join("p.obj");
     let made = Command::new(compiler).args(["-m32", "-o"]).arg(&program).arg(&source).output().unwrap();
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
-    let runtime =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/frontends/llrm-nib/src/runtime/runtime.nib");
+    let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/frontends/nib/src/runtime/runtime.nib");
     let cut = Command::new(compiler)
         .args(["-m32", "-o"])
         .arg(directory.path().join("rt.obj"))

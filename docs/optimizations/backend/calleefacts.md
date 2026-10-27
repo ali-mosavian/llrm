@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/calleefacts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/calleefacts.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/calleefacts.rs sha256:89d7832eede626efbcd0af56a9f84104101a7c3ad4a656364d89f11730db0ee8 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/calleefacts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/calleefacts.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/calleefacts.rs sha256:87f0c9723ced672d912f70cdd80b1bef77c6225a2126b4531372f6a936b517d0 -->
 
 # calleefacts
 
@@ -54,7 +54,7 @@ call   requires v6@AX; delivers v7@EAX; clobbers EAX
 `mov bx, word ptr [si-4]` before the first and `cmp bx, 2` after the second.
 
 From `ISEL_DUMP=1 llrm-nib -O2 -fno-inline-functions
--fno-inline-functions-called-once -fno-ipa-cp-clone -fno-ipa-vrp
+-fno-inline-functions-called-once -fno-ipa-cp-clone
 -march=i386` of `examples/pass-docs/calleefacts.nib`, stage
 `FarIndirectCalls`.
 

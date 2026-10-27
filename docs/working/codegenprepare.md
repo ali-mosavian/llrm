@@ -4,7 +4,7 @@ The largest codegen gap: with the pin's pass off (`llc -disable-cgp`, 77 IRs: 12
 
 ## What the pass does on these inputs
 
-`print-before/after=codegenprepare` over the same 77 IRs (`~/scratch/w4-cgp/cgpclass.py`, one row per new value name): net IR +607 instructions and **-88 blocks**; new values `%sunkaddr` **881**, unnamed 105 (compare copies, casts), `%promoted` 7, `%math` 1, `%ov` 1; removed `%scevgep` 42. So the gap is address-mode sinking (`optimizeMemoryInst`) first, then empty-block merging and compare copies. The pin's own switches explain none of it (`-disable-cgp-branch-opts`, `-delete-phis`, `-store-extract`, `-complex-addr-modes` +0 B, `-disable-cgp-select2branch` +4 B, `-disable-cgp-ext-ld-promotion` -180 B), so the share of each transform was measured by patching a scratch copy of the pin's `llc` (the assert build's objects, `CodeGenPrepare.cpp` copied with `getenv("CGP_OFF")` returns at the top of `optimizeMemoryInst`, `eliminateMostlyEmptyBlocks`, `eliminateFallThrough`, `sinkCmpExpression`, `optimizeCmp`, `dupRetToEnableTailCallOpts`, `optimizeSelectInst`; `~/scratch/w4-cgp/abl.py`, same 77 IRs; the patched llc with nothing off reproduces 370340 / 312407 B and `-disable-cgp` +21337 / +19398 B):
+`print-before/after=codegenprepare` over the same 77 IRs (`cgpclass.py`, one row per new value name): net IR +607 instructions and **-88 blocks**; new values `%sunkaddr` **881**, unnamed 105 (compare copies, casts), `%promoted` 7, `%math` 1, `%ov` 1; removed `%scevgep` 42. So the gap is address-mode sinking (`optimizeMemoryInst`) first, then empty-block merging and compare copies. The pin's own switches explain none of it (`-disable-cgp-branch-opts`, `-delete-phis`, `-store-extract`, `-complex-addr-modes` +0 B, `-disable-cgp-select2branch` +4 B, `-disable-cgp-ext-ld-promotion` -180 B), so the share of each transform was measured by patching a scratch copy of the pin's `llc` (the assert build's objects, `CodeGenPrepare.cpp` copied with `getenv("CGP_OFF")` returns at the top of `optimizeMemoryInst`, `eliminateMostlyEmptyBlocks`, `eliminateFallThrough`, `sinkCmpExpression`, `optimizeCmp`, `dupRetToEnableTailCallOpts`, `optimizeSelectInst`; `abl.py`, same 77 IRs; the patched llc with nothing off reproduces 370340 / 312407 B and `-disable-cgp` +21337 / +19398 B):
 
 | transform off | -O2 bytes | -Os bytes | IRs that differ (-O2) |
 |---|--:|--:|--:|
@@ -22,7 +22,7 @@ Address-mode sinking is 97% of the pass's worth at -O2 (the parts sum to a littl
 
 ## The premise, tested on our backend (2026-10-23)
 
-The 21 KB is the pin's `llc` without its own pass; the question for us is whether our backend loses the same. Same IR for both: our mid-end's output at the switchconv stage of the 65 QCport modules (m16), compiled by our backend and by the pin's `llc` with and without the pass (`~/scratch/w4-cgp/leacmp.py`, instructions and `lea` counted in the assembly):
+The 21 KB is the pin's `llc` without its own pass; the question for us is whether our backend loses the same. Same IR for both: our mid-end's output at the switchconv stage of the 65 QCport modules (m16), compiled by our backend and by the pin's `llc` with and without the pass (`leacmp.py`, instructions and `lea` counted in the assembly):
 
 | -Os | instructions | `lea` |
 |---|--:|--:|
@@ -40,7 +40,7 @@ Our address folding matches the pin's with the pass on (about half the `lea` of 
 
 ## The whole effect, per function (2026-10-23)
 
-A `lea` count covers address folding only. Per function, on the same IR (`~/scratch/w4-cgp/perfn.py`: instructions of ours and of the pin's `llc` with the pass, with `-disable-cgp`, and with each patched sub-feature off), per corpus: ours / pin with the pass / pin without it; the functions where the pass removes instructions in the pin (ours / with / without); the functions where ours has more than the pin with the pass (the excess) and how much of it lies in functions where the pin's address-mode sinking is worth that much (capped per function); the functions where ours has fewer (the deficit).
+A `lea` count covers address folding only. Per function, on the same IR (`perfn.py`: instructions of ours and of the pin's `llc` with the pass, with `-disable-cgp`, and with each patched sub-feature off), per corpus: ours / pin with the pass / pin without it; the functions where the pass removes instructions in the pin (ours / with / without); the functions where ours has more than the pin with the pass (the excess) and how much of it lies in functions where the pin's address-mode sinking is worth that much (capped per function); the functions where ours has fewer (the deficit).
 
 | corpus | functions | all: ours / pin+CGP / pin-CGP | functions CGP changes: ours / with / without | excess over pin+CGP | deficit |
 |---|--:|---|---|---|--:|
@@ -119,7 +119,7 @@ Decision, to be confirmed: **m32** is matched, so for m32 the slot is a numbered
 
 ### C2 experiment result (2026-10-23)
 
-No implementation: the measurement says the lever is not address arithmetic. QCport m16 -Os, 65 IRs (`~/scratch/w4-cgp/addrforms.py`, `addrforms2.py`; the pin's `llc` with and without address sinking, `CGP_OFF=addr`):
+No implementation: the measurement says the lever is not address arithmetic. QCport m16 -Os, 65 IRs (`addrforms.py`, `addrforms2.py`; the pin's `llc` with and without address sinking, `CGP_OFF=addr`):
 
 | | instr | `lea` | spills | reloads |
 |---|--:|--:|--:|--:|

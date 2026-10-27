@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_and.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_and.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_and.rs sha256:40229db90a0c1bc991ddb253525c728aa3c729d37ee29f3d5a769839fa397a1a -->
+<!-- src: crates/opt/llrm-transforms/src/combine_and.rs sha256:ccfe0966e92f24cd85a7caacd4006eb2eca23e5daec7757dbae4f2861a0c8d68 -->
 
 # combine_and
 
@@ -15,8 +15,7 @@ MIRROR: the C++ order, including branches a later fold shadows.
 
 DEVIATE 1: no vectors (`foldVectorBinop`).
 
-DEVIATE 2: `SimplifyDemandedInstructionBits` (`combine_demanded`),
-`foldComplexAndOrPatterns` are the next strip or another family's.
+DEVIATE 2: `foldComplexAndOrPatterns` is the next strip or another family's.
 
 DEVIATE 3: of the shifted-power-of-two folds (:2688-:2740) only the
 single-shift one is translated; the two double-shift ones follow.

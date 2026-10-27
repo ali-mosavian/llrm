@@ -1,0 +1,399 @@
+//! Removes a pure allocated instruction whose whole result is dead.
+//!
+//! # How it works
+//! MIR dead-code elimination reasons about values before allocation. Lowering,
+//! splitting and physical rewrites can leave a machine computation whose
+//! virtual definition still exists but whose register and flag results nothing
+//! reads. This pass answers only that machine question, from the lane
+//! liveness of [`crate::backend::liveness`].
+//!
+//! Each block is walked backward from the lanes dead at its exit
+//! (`dead_at_exit`). An instruction is removed when every lane it writes is
+//! dead and it is pure: an operation from `_PURE` (move, exchange, address,
+//! binary, multiply, compare, unary, funnel, extend), with register,
+//! immediate or address operands (and a named frame slot as a source), no
+//! relocation, no stack or segment destination, no positional register (their
+//! effects are not lane-visible), no call or spill role. Otherwise the walk
+//! applies the instruction's effect and goes on. Memory reads, control flow,
+//! trapping arithmetic and x87 work are never removed.
+//!
+//! ```text
+//!   mov ax,bx        both write only ax and flags, and the
+//!   add ax,1         mov below overwrites ax: both become anchors
+//!   mov ax,si        (ax live after, flags dead)
+//! ```
+//!
+//! A removed instruction becomes an anchor (`lir::anchor`) that keeps source
+//! ownership and emits no bytes. A sweep can expose more dead work, so sweeps
+//! repeat, at most once per instruction, until one changes nothing.
+//!
+//! # Example
+//! No honest example: it is one sub-pass of `peephole`, whose `ISEL_DUMP=1`
+//! stage shows all the sub-passes' work together, and its tests build bodies by
+//! hand and assert on the operations. A removed instruction prints in the dump
+//! as an empty line (`0x0003     ; inserted`).
+//!
+//! # Runs
+//! The last body rewrite of `peephole` before `popped_arguments`, and
+//! `jumps::optimized` after each tail merge.
+
+use std::sync::Arc;
+
+use llrm_lir::registers::Regs;
+
+use crate::backend::liveness;
+use crate::backend::peephole::id;
+use crate::model::ir::{Loc, Operation, Space};
+use crate::model::lir::{self, Insn, LirBody};
+use crate::support::hash::HashSet;
+
+const _PURE: [Operation; 9] = [
+    Operation::Move,
+    Operation::Exchange,
+    Operation::Address,
+    Operation::Binary,
+    Operation::Multiply,
+    Operation::Compare,
+    Operation::Unary,
+    Operation::Funnel,
+    Operation::Extend,
+];
+fn _relocated(where_: &Loc) -> bool {
+    match where_ {
+        Loc::Imm(one) => one.address.is_some(),
+        Loc::Address(one) => one.addr.is_some_and(|addr| addr.space != Space::Frame),
+        _ => false,
+    }
+}
+
+/// Architectural state whose writes are not ordinary dead values.
+fn _stateful_destination(
+    regs: Regs,
+    where_: &Loc,
+) -> bool {
+    matches!(
+        where_,
+        Loc::Reg(one) if regs.is_stack(one.register) || regs.is_segment(one.register)
+    )
+}
+
+/// A register, an immediate or an address: not a positional register, whose
+/// exchanges and loads change it through no register a liveness walk sees.
+fn _general(
+    regs: Regs,
+    where_: &Loc,
+) -> bool {
+    match where_ {
+        Loc::Reg(one) => !regs.positional(one.register),
+        Loc::Imm(_) | Loc::Address(_) => true,
+        _ => false,
+    }
+}
+
+/// A frame slot read by name: no fault, nothing else stored through it.
+fn _slot(where_: &Loc) -> bool {
+    matches!(
+        where_,
+        Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame) && cell.base.is_none() && cell.index.is_none() && cell.selector.is_none()
+    )
+}
+
+/// Whether removing this occurrence can remove only registers and flags.
+pub(crate) fn pure(
+    regs: Regs,
+    one: &Insn,
+) -> bool {
+    let Some(what) = &one.what else {
+        return false;
+    };
+    _PURE.contains(&what.op)
+        && what.target.is_none()
+        && !what.indirect
+        && what.dests.iter().all(|place| _general(regs, place))
+        && what.sources.iter().all(|arg| _general(regs, arg) || _slot(arg))
+        && !what.dests.iter().chain(&what.sources).any(_relocated)
+        && !what.dests.iter().any(|place| _stateful_destination(regs, place))
+        && one.clobbers.is_empty()
+        && one.clobbers_high.is_empty()
+        && one.requires.is_empty()
+        && one.delivers.is_empty()
+        && one.spread.is_empty()
+        && one.group.is_none()
+        && one.symbol != Some(true)
+        && !one.frame_adjust
+        && !one.spill_reload
+        && !one.spill_store
+        && !one.barrier()
+}
+
+/// `body` with one sweep's dead work anchored, or None where Python returns
+/// `body` itself.
+fn _once(body: &LirBody) -> Option<LirBody> {
+    let regs = body.regs();
+    let exits = liveness::dead_at_exit(body);
+    let mut blocks = Vec::new();
+    let mut changed = false;
+    for block in &body.blocks {
+        let mut dead = exits[&block.at].clone();
+        let mut redundant: HashSet<usize> = HashSet::default();
+        for one in block.insns.iter().rev() {
+            let Some(effect) = liveness::effect(regs, body.bits, one) else {
+                dead.clear();
+                continue;
+            };
+            if !effect.writes.is_empty() && effect.writes.is_subset(&dead) && pure(regs, one) {
+                redundant.insert(id(one));
+                changed = true;
+                continue;
+            }
+            dead = effect.dead_before(&dead);
+        }
+        blocks.push(if redundant.is_empty() {
+            block.clone()
+        } else {
+            block.with_insns(
+                block
+                    .insns
+                    .iter()
+                    .map(
+                        |one| if redundant.contains(&id(one)) { lir::anchor(Arc::clone(one)) } else { Arc::clone(one) },
+                    )
+                    .collect(),
+            )
+        });
+    }
+    if changed { Some(body.with_blocks(blocks)) } else { None }
+}
+
+/// Remove dead pure machine work to a fixed point across CFG edges.
+pub fn eliminated(body: LirBody) -> LirBody {
+    let mut body = body;
+    for _round in 0..std::cmp::max(1, body.insns().len()) {
+        // `after is body`: `_once` answers None where it returned `body`
+        // itself.
+        match _once(&body) {
+            None => return body,
+            Some(after) => body = after,
+        }
+    }
+    body
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use llrm_lir::registers::RegId;
+
+    use super::eliminated;
+    use crate::model::ir::{Imm, Loc, Mem, Operation, Reg, Semantics};
+    use crate::model::lir::{Block, Insn, LirBlock, LirBody};
+    use crate::support::hash::IndexMap;
+
+    fn what(
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+    ) -> Option<Semantics> {
+        Some(Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) })
+    }
+
+    fn reg(register: RegId) -> Loc {
+        Loc::Reg(Reg { register, width: 2 })
+    }
+
+    fn _mov(
+        at: i64,
+        value: u32,
+        register: RegId,
+    ) -> Arc<Insn> {
+        Arc::new(Insn::new(
+            at,
+            Some((at, at + 3)),
+            what(
+                Operation::Move,
+                "mov",
+                vec![reg(register)],
+                vec![Loc::Imm(Imm { value: i64::from(value), width: 2, address: None })],
+            ),
+            vec![value],
+            vec![],
+        ))
+    }
+
+    fn block(
+        at: i64,
+        insns: Vec<Arc<Insn>>,
+        succ: Vec<i64>,
+    ) -> LirBlock {
+        LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) }
+    }
+
+    fn body(blocks: Vec<Block>) -> LirBody {
+        LirBody::new("machine-dce", 0, blocks, IndexMap::default(), IndexMap::default())
+    }
+
+    fn branch(
+        at: i64,
+        name: &str,
+        uses: Vec<u32>,
+    ) -> Arc<Insn> {
+        Arc::new(Insn::new(
+            at,
+            Some((at, at + 2)),
+            Some(Semantics { name: Some(name.into()), target: Some(10), ..Semantics::new(Operation::Branch) }),
+            vec![],
+            uses,
+        ))
+    }
+
+    #[test]
+    fn test_dead_register_definition_is_eliminated_across_a_cfg_edge() {
+        // An allocated result overwritten on every successor used to survive.
+        let dead = _mov(0, 1, RegId::AX);
+        let overwrite = _mov(5, 2, RegId::AX);
+        let result = eliminated(body(vec![
+            block(0, vec![Arc::clone(&dead)], vec![5]).into(),
+            block(5, vec![overwrite], vec![]).into(),
+        ]));
+        let first = result.blocks.iter().find(|block| block.at == 0).unwrap();
+        assert_eq!(first.insns[0].what.as_ref().unwrap().op, Operation::Nothing);
+        assert_eq!(first.insns[0].defines, dead.defines);
+    }
+
+    #[test]
+    fn test_definition_live_on_one_successor_is_kept() {
+        let definition = _mov(0, 1, RegId::AX);
+        let read = Arc::new(Insn::new(
+            10,
+            Some((10, 12)),
+            what(Operation::Move, "mov", vec![reg(RegId::BX)], vec![reg(RegId::AX)]),
+            vec![3],
+            vec![1],
+        ));
+        let result = eliminated(body(vec![
+            block(0, vec![Arc::clone(&definition)], vec![5, 10]).into(),
+            block(5, vec![_mov(5, 2, RegId::AX)], vec![]).into(),
+            block(10, vec![read], vec![]).into(),
+        ]));
+        assert_eq!(result.blocks[0].insns[0].what, definition.what);
+    }
+
+    #[test]
+    fn test_dead_compare_is_eliminated_when_the_next_compare_replaces_flags() {
+        let first = Arc::new(Insn::new(
+            0,
+            Some((0, 2)),
+            what(Operation::Compare, "cmp", vec![], vec![reg(RegId::AX), reg(RegId::BX)]),
+            vec![1],
+            vec![],
+        ));
+        let second = Arc::new(Insn { at: 2, covers: Some((2, 4)), defines: vec![2], ..(*first).clone() });
+        let result = eliminated(body(vec![
+            block(0, vec![first, Arc::clone(&second), branch(4, "je", vec![2])], vec![10, 20]).into(),
+            block(10, vec![], vec![]).into(),
+            block(20, vec![], vec![]).into(),
+        ]));
+        assert_eq!(result.blocks[0].insns[0].what.as_ref().unwrap().op, Operation::Nothing);
+        assert_eq!(result.blocks[0].insns[1].what, second.what);
+    }
+
+    #[test]
+    fn test_dead_value_is_kept_when_its_flags_feed_a_branch() {
+        let add = Arc::new(Insn::new(
+            0,
+            Some((0, 3)),
+            what(
+                Operation::Binary,
+                "add",
+                vec![reg(RegId::AX)],
+                vec![reg(RegId::AX), Loc::Imm(Imm { value: 1, width: 2, address: None })],
+            ),
+            vec![1],
+            vec![],
+        ));
+        let result = eliminated(body(vec![
+            block(0, vec![Arc::clone(&add), branch(3, "jne", vec![1])], vec![10, 20]).into(),
+            block(10, vec![], vec![]).into(),
+            block(20, vec![], vec![]).into(),
+        ]));
+        assert_eq!(result.blocks[0].insns[0].what, add.what);
+    }
+
+    /// Nib's quicksort left `mov bx, [bp+8]; mov bx, [bp+10]` on the loop exit:
+    /// reloads of two parameters, the second overwriting the first and
+    /// neither read, two instructions per call.
+    #[test]
+    fn test_dead_frame_slot_load_is_eliminated() {
+        let load = Arc::new(Insn::new(
+            0,
+            Some((0, 3)),
+            what(
+                Operation::Move,
+                "mov",
+                vec![reg(RegId::BX)],
+                vec![Loc::Mem(Mem::new(Some(crate::model::ir::Addr::new(crate::model::ir::Space::Frame, 8)), 2))],
+            ),
+            vec![1],
+            vec![],
+        ));
+        let result = eliminated(body(vec![
+            block(0, vec![Arc::clone(&load)], vec![5]).into(),
+            block(5, vec![_mov(5, 2, RegId::BX)], vec![]).into(),
+        ]));
+        assert_eq!(result.blocks[0].insns[0].what.as_ref().unwrap().op, Operation::Nothing);
+    }
+
+    #[test]
+    fn test_dead_memory_load_is_kept() {
+        let load = Arc::new(Insn::new(
+            0,
+            Some((0, 3)),
+            what(
+                Operation::Move,
+                "mov",
+                vec![reg(RegId::AX)],
+                vec![Loc::Mem(Mem { through: RegId::BX, ..Mem::new(None, 2) })],
+            ),
+            vec![1],
+            vec![],
+        ));
+        let result = eliminated(body(vec![
+            block(0, vec![Arc::clone(&load)], vec![5]).into(),
+            block(5, vec![_mov(5, 2, RegId::AX)], vec![]).into(),
+        ]));
+        assert_eq!(result.blocks[0].insns[0].what, load.what);
+    }
+
+    #[test]
+    fn test_call_stack_cleanup_is_never_dead_machine_work() {
+        // C calls lost `add sp,N` cleanup when a later compare killed its
+        // flags.
+        let cleanup = Arc::new(Insn::new(
+            0,
+            Some((0, 3)),
+            what(
+                Operation::Binary,
+                "add",
+                vec![reg(RegId::SP)],
+                vec![reg(RegId::SP), Loc::Imm(Imm { value: 4, width: 2, address: None })],
+            ),
+            vec![],
+            vec![],
+        ));
+        let compare = Arc::new(Insn::new(
+            3,
+            Some((3, 5)),
+            what(Operation::Compare, "cmp", vec![], vec![reg(RegId::AX), reg(RegId::BX)]),
+            vec![1],
+            vec![],
+        ));
+        let result = eliminated(body(vec![
+            block(0, vec![Arc::clone(&cleanup), compare, branch(5, "je", vec![1])], vec![10, 20]).into(),
+            block(10, vec![], vec![]).into(),
+            block(20, vec![], vec![]).into(),
+        ]));
+        assert_eq!(result.blocks[0].insns[0].what, cleanup.what);
+    }
+}

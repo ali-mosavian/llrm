@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/division.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/division.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/division.rs sha256:374e89eb5796502eaacb55249eefd141a38d1f64dbaf19557d8c63a74caea5aa -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/division.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/division.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/division.rs sha256:62abe7a311d5e50a5f8481567200cda91033775ed3e5c100c3d5caabd70e01f4 -->
 
 # division
 
@@ -18,7 +18,8 @@ is a 5-byte immediate; `cdq; idiv r` is 3 bytes).
 shift. The sequences, with `x` the dividend and `q`, `r` the results:
 
 ```text
-  signed (divisor d, 1 < d < 2^31)       unsigned (3 <= d < 2^31, not 2^k)
+  signed (divisor d, 1 < d < 2^31,       unsigned (3 <= d < 2^31, not 2^k)
+  not 2^k: shifts, `power_of_two`)
     m = MAGIC                              m = MAGIC
     (lo,hi) = imul m, x                    (lo,hi) = mul m, x
     hi += x          if MAGIC < 0          t  = x - hi        } if the

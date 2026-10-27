@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/constpool.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/constpool.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/constpool.rs sha256:66290209b5ff1582f65cb3a0e964814aa6006a208bf85e265bdc3a5e3a49b644 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/constpool.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/constpool.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/constpool.rs sha256:fd20d7fd5a7643f6cfd28944c0384b2e22c97654b85d60cfdde29a3c4795bf21 -->
 
 # constpool
 
@@ -50,7 +50,7 @@ db 000h,000h,0a0h,03fh
 `$K4` holds 2.5 and `$K5` 1.25, as f32 bytes.
 
 From `ISEL_DUMP=1 llrm-nib -O2 -fno-inline-functions
--fno-inline-functions-called-once -fno-ipa-cp-clone -fno-ipa-vrp
+-fno-inline-functions-called-once -fno-ipa-cp-clone
 -march=i386` of `fn scale(x: f32) -> f32`, stage `FarIndirectCalls` and
 `-S`.
 
