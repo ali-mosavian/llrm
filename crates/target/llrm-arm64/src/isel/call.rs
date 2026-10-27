@@ -550,6 +550,9 @@ impl Selector<'_> {
             | "log" | "log2" | "log10" | "pow" => self.libm_intrinsic(base, instruction, arguments),
             "bswap" | "bitreverse" | "ctlz" | "cttz" | "abs" => self.bit_intrinsic(base, instruction, arguments),
             "memcpy" | "memmove" | "memset" => {
+                if self.inline_memory(base, arguments)? {
+                    return Ok(());
+                }
                 // The last argument is the volatile flag; the call is
                 // `memcpy(dst, src, n)`.
                 let mut assigner = Assigner::new(self.platform);

@@ -418,6 +418,9 @@ fn floating_point() {
             all.push(Inst::FpCompare { signalling, size, rn: Vreg(1), rm: None });
         }
         all.push(Inst::FpSelect { size, rd: Vreg(1), rn: Vreg(2), rm: Vreg(3), cond: Cond::Mi });
+        for fill in [Fill::Zero, Fill::Byte(0x5A), Fill::Byte(0xFF), Fill::Gpr(Gpr(3))] {
+            all.push(Inst::VectorFill { rd: Vreg(1), fill });
+        }
         for imm8 in [0x00, 0x70, 0x80, 0xFF, 0x2A] {
             all.push(Inst::FpMoveImm { size, rd: Vreg(1), imm8 });
         }

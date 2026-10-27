@@ -12,7 +12,7 @@ use crate::mfunc::Op;
 
 /// What an access at `address` reaches, so that two accesses can be told apart later (`pairs`): the global or
 /// frame object it starts from and, where no index moves it, the byte offset in it.
-fn memory_operand(address: &AddrExpr) -> MemOperand {
+pub(super) fn memory_operand(address: &AddrExpr) -> MemOperand {
     let offset = address.index.is_none().then_some(address.offset);
     match &address.base {
         Base::Global { name, .. } => MemOperand { object: MemObject::Global(name.clone()), offset },

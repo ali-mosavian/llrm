@@ -322,6 +322,14 @@ pub enum Memory {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Fill {
+    Zero,
+    Byte(u8),
+    /// The low byte of a general register.
+    Gpr(Gpr),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FpUnary {
     Mov,
     Abs,
@@ -599,6 +607,11 @@ pub enum Inst {
         gpr: Gpr,
         fpr: Vreg,
         fbits: u8,
+    },
+    /// A 16-byte vector with every byte `fill`: `movi v.2d, #0`, `movi v.16b, #imm`, `dup v.16b, w`.
+    VectorFill {
+        rd: Vreg,
+        fill: Fill,
     },
     Svc {
         imm16: u16,
