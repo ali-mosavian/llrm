@@ -152,6 +152,9 @@ fn spelling(
         Role::Data => (".data", SCN_CNT_INITIALIZED_DATA | SCN_MEM_READ | SCN_MEM_WRITE),
         Role::Bss => (".bss", SCN_CNT_UNINITIALIZED_DATA | SCN_MEM_READ | SCN_MEM_WRITE),
         Role::Stack => return Err(unsupported(format!("{}: an OMF stack segment has no COFF section", section.name))),
+        Role::InitFunctions => {
+            return Err(unsupported(format!("{}: COFF has no init-function section here", section.name)));
+        }
         Role::Debug => (section.name.as_str(), SCN_CNT_INITIALIZED_DATA | SCN_MEM_READ | SCN_MEM_DISCARDABLE),
     };
     if !section.align.is_power_of_two() || section.align > 8192 {
